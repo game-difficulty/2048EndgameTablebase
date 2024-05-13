@@ -1,10 +1,16 @@
 
 截止发布时，生成速度最快、占用磁盘空间最小的2048残局库生成器. 
+
 the Fastest and the Most Space-efficient Endgame gen, significantly outperforming other generators at the time of release. 
+
 首个可以展示四个方向成功率的残局库.
+
 The First  Endgame Tablebase to show success rates in ALL Four directions.
+
 包含一个GUI界面帮助玩家进行训练.
+
 Includes a nice GUI interface to help players train.
+
 
 ![image](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/84096eb5-760f-4fc2-8a07-9f108cfdf364)
 
