@@ -6,7 +6,7 @@ The First  Endgame Tablebase to show success rates in ALL Four directions.
 包含一个GUI界面帮助玩家进行训练.
 Includes a nice GUI interface to help players train.
 
-![image](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/f94a9f4d-2b10-4b32-baee-db84d9203613)
+![image](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/84096eb5-760f-4fc2-8a07-9f108cfdf364)
 
 
 # 说明
