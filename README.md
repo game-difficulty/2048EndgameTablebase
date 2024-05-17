@@ -12,7 +12,7 @@ The First  Endgame Tablebase to show success rates in ALL Four directions.
 Includes a nice GUI interface to help players train.
 
 
-![image](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/84096eb5-760f-4fc2-8a07-9f108cfdf364)
+![image](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/723510f5-a434-4640-bc82-9eadde41a0ed)
 
 
 
