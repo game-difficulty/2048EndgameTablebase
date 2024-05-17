@@ -1,5 +1,5 @@
 
-截止发布时，生成速度最快、占用磁盘空间最小的2048残局库生成器. 
+截止发布时，计算速度最快、占用磁盘空间最小的2048残局库生成器. 
 
 the Fastest and the Most Space-efficient Endgame gen, significantly outperforming other generators at the time of release. 
 
@@ -13,6 +13,7 @@ Includes a nice GUI interface to help players train.
 
 
 ![image](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/84096eb5-760f-4fc2-8a07-9f108cfdf364)
+
 
 
 # 说明
@@ -206,6 +207,44 @@ L3
 
 
 l 
+t
+
+
+不支持位置参数
+
+
+□□□□
+
+
+□□□□
+
+
+☒□■■
+
+
+■□■■
+
+
+l 
+442
+
+
+不支持位置参数
+
+
+□□□□
+
+
+□□□□
+
+
+□□☒■
+
+
+■■■■
+
+
+l 
 4441
 
 
@@ -244,7 +283,7 @@ l 
 
 
 l 
-Free
+Free & Free w
 
 
 不支持位置参数
@@ -255,6 +294,7 @@ Free
 
 例：free9-256是指存在6个大数格子和一个256格子的情况下，使用剩下9个格子合成一个256并与已有256合并
 
+例：free9w-256是指存在7个大数格子的情况下，使用剩下9个格子在任意位置合成一个256
 
 l 
 典型定式大小参考（未压缩）：
@@ -515,6 +555,44 @@ Position parameter 2:
 
 
 l 
+t
+
+
+Position parameters are not supported
+
+
+□□□□
+
+
+□□□□
+
+
+☒□■■
+
+
+■□■■
+
+
+l 
+442
+
+
+Position parameters are not supported
+
+
+□□□□
+
+
+□□□□
+
+
+□□☒■
+
+
+■■■■
+
+
+l 
 4441
 
 
@@ -553,7 +631,7 @@ Position parameters are not supported
 
 
 l 
-Free
+Free & Free w
 
 
 Position parameters are not supported
@@ -566,6 +644,8 @@ Example: free9-256 means that in the case where there are 6 large
 number tiles and a 256 tile, the remaining 9 grids are used to build a 256 and
 merge it with the existing 256.
 
+Example: free9w-256 means that in the case where there are 7 large
+number tiles, the remaining 9 grids are used to build a 256 at any position.
 
 l 
 Typical size reference (uncompressed):
@@ -643,8 +723,3 @@ Does not support 65536 currently.
 
 
  
-
-
-
-
-
