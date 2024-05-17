@@ -6,7 +6,6 @@ from PyQt5 import QtCore, QtWidgets, QtGui
 
 from BookBuilder import start_build
 from Config import SingletonConfig
-from Trainer import TrainFrame
 
 
 # noinspection PyAttributeOutsideInit
@@ -56,7 +55,8 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.target_combo, 0, 2, 1, 1)
         self.pattern_combo = QtWidgets.QComboBox(self.centralwidget)
         self.pattern_combo.setObjectName("pattern_combo")
-        for i in ["444", "4431", "LL", "L3", "free8", "free9", "free10", "4441", "4432"]:
+        for i in ["444", "4431", "LL", "L3", "t", "442", "free8", "free9", "free10", "4441", "4432", "free8w", "free9w",
+                  "free10w", "free11w"]:
             self.pattern_combo.addItem(i)
         self.selfLayout.addWidget(self.pattern_combo, 0, 1, 1, 1)
         self.pos_combo = QtWidgets.QComboBox(self.centralwidget)
@@ -125,10 +125,10 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.demo_speed_box = QtWidgets.QSlider(QtCore.Qt.Horizontal, self.centralwidget)
         self.demo_speed_box.setMinimum(0)
         self.demo_speed_box.setMaximum(200)
-        self.demo_speed_box.setValue(config['demo_speed'])
+        self.demo_speed_box.setValue(config.get('demo_speed',10))
         self.demo_speed_box.setTickPosition(QtWidgets.QSlider.TicksBelow)
         self.demo_speed_box.setTickInterval(10)
-        self.demo_speed_box.valueChanged.connect(self.on_value_changed)
+        self.demo_speed_box.valueChanged.connect(self.demo_speed_changed)
         self.demo_speed_box.setObjectName("demo_speed_box")
         self.selfLayout.addWidget(self.demo_speed_box, 7, 1, 1, 3)
 
@@ -138,30 +138,32 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.anim_text, 8, 0, 1, 1)
         self.appear_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.appear_checkBox.setObjectName("appear_checkBox")
-        if config['do_animation'][0]:
+        if config.get('do_animation',(False, False))[0]:
             self.appear_checkBox.setCheckState(QtCore.Qt.Checked)
         else:
             self.appear_checkBox.setCheckState(QtCore.Qt.Unchecked)
         self.selfLayout.addWidget(self.appear_checkBox, 8, 1, 1, 1)
         self.pop_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.pop_checkBox.setObjectName("pop_checkBox")
-        if config['do_animation'][1]:
+        if config.get('do_animation',(False, False))[1]:
             self.pop_checkBox.setCheckState(QtCore.Qt.Checked)
         else:
             self.pop_checkBox.setCheckState(QtCore.Qt.Unchecked)
         self.selfLayout.addWidget(self.pop_checkBox, 8, 2, 1, 1)
 
-        self.dis32k_text = QtWidgets.QLabel(self.centralwidget)
-        self.dis32k_text.setObjectName("dis32k_text")
-        self.dis32k_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.dis32k_text, 9, 0, 1, 1)
-        self.dis32k_checkBox = QtWidgets.QCheckBox(self.centralwidget)
-        self.dis32k_checkBox.setObjectName("dis32k_checkBox")
-        self.selfLayout.addWidget(self.dis32k_checkBox, 9, 1, 1, 1)
-        if config['dis_32k']:
-            self.dis32k_checkBox.setCheckState(QtCore.Qt.Checked)
-        else:
-            self.dis32k_checkBox.setCheckState(QtCore.Qt.Unchecked)
+        self.tile_font_size_text = QtWidgets.QLabel(self.centralwidget)
+        self.tile_font_size_text.setObjectName("tile_font_size_text")
+        self.tile_font_size_text.setStyleSheet("font: 500 12pt \"Cambria\";")
+        self.selfLayout.addWidget(self.tile_font_size_text, 10, 0, 1, 1)
+        self.tile_font_size_box = QtWidgets.QSlider(QtCore.Qt.Horizontal, self.centralwidget)
+        self.tile_font_size_box.setMinimum(50)
+        self.tile_font_size_box.setMaximum(150)
+        self.tile_font_size_box.setValue(config.get('font_size_factor', 100))
+        self.tile_font_size_box.setTickPosition(QtWidgets.QSlider.TicksBelow)
+        self.tile_font_size_box.setTickInterval(5)
+        self.tile_font_size_box.valueChanged.connect(self.font_size_changed)
+        self.tile_font_size_box.setObjectName("demo_speed_box")
+        self.selfLayout.addWidget(self.tile_font_size_box, 10, 1, 1, 3)
 
         self.PageLayout.addLayout(self.selfLayout)
         self.save_bt = QtWidgets.QPushButton(self.centralwidget)
@@ -185,14 +187,13 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.set_filepath_bt.setText(_translate("Settings", "SET..."))
         self.pop_checkBox.setText(_translate("Settings", "Pop"))
         self.appear_checkBox.setText(_translate("Settings", "Appear"))
-        self.dis32k_checkBox.setText(_translate("Settings", "Show the Number"))
         self.colorset_text.setText(_translate("Settings", "Tile Color:"))
         self.color_bt.setText(_translate("Settings", "Choose Color"))
         self.color_default_bt.setText(_translate("Settings", "Default"))
         self.spawnrate_text.setText(_translate("Settings", "4 Spawn Rate:"))
         self.demo_speed_text.setText(_translate("Settings", "Demo Speed:"))
+        self.tile_font_size_text.setText(_translate("Settings", "Tile Font Size:"))
         self.anim_text.setText(_translate("Settings", "Do Animation:"))
-        self.dis32k_text.setText(_translate("Settings", "32k Tile:"))
         self.save_bt.setText(_translate("Settings", "SAVE"))
 
     def show_ColorDialog(self):
@@ -247,8 +248,11 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.build_bt.setText('BUILD')
         self.build_bt.setEnabled(True)
 
-    def on_value_changed(self):
+    def demo_speed_changed(self):
         SingletonConfig().config['demo_speed'] = self.demo_speed_box.value()
+
+    def font_size_changed(self):
+        SingletonConfig().config['font_size_factor'] = self.tile_font_size_box.value()
 
     def compress_state_changed(self):
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
@@ -256,10 +260,8 @@ class SettingsWindow(QtWidgets.QMainWindow):
     def save_all(self):
         SingletonConfig().config['4_spawn_rate'] = float(self.spawnrate_box.text())
         SingletonConfig().config['do_animation'] = [self.appear_checkBox.isChecked(), self.pop_checkBox.isChecked()]
-        SingletonConfig().config['dis_32k'] = self.dis32k_checkBox.isChecked()
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
         SingletonConfig.save_config(SingletonConfig().config)
-        TrainFrame.dis32k = self.dis32k_checkBox.isChecked()
 
 
 class BuildThread(QtCore.QThread):

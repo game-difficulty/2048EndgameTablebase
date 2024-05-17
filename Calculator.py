@@ -1,5 +1,5 @@
 import numpy as np
-from numba import njit, uint64
+from numba import njit, uint64, boolean
 
 
 @njit(uint64(uint64))
@@ -138,9 +138,23 @@ def is_442_pattern(encoded_board):
 
 
 @njit(nogil=True)
-def is_442_success(encoded_board, target, position):
-    position = max(position, 1)
-    return (np.uint64(encoded_board) >> np.uint64(28 - 4 * position) & np.uint64(0xf)) == np.uint64(target)
+def is_442_success(encoded_board, target, _):
+    return (np.uint64(encoded_board) >> np.uint64(24) & np.uint64(0xf)) == np.uint64(target)
+
+
+@njit(nogil=True)
+def is_t_pattern(encoded_board):
+    return (np.uint64(encoded_board) & np.uint64(4043305215)) == np.uint64(4043305215) or \
+        (np.uint64(encoded_board) & np.uint64(263886833910015)) == np.uint64(263886833910015) or \
+        (np.uint64(encoded_board) & np.uint64(17294086451910082815)) == np.uint64(17294086451910082815)
+
+
+@njit(nogil=True)
+def is_t_success(encoded_board, target, _):
+    return (np.uint64(encoded_board) >> np.uint64(8) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(32) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(44) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(24) & np.uint64(0xf)) == np.uint64(target)
 
 
 @njit(nogil=True)
@@ -180,10 +194,12 @@ def is_free_pattern(_):
 
 
 @njit(nogil=True)
-def is_free_success(encoded_board, target, _):
+def is_free_success(encoded_board, target, position):
+    if position == 0:
+        target += 1  # free要求合出更大一级的数字
     encoded_board = np.uint64(encoded_board)
     for i in range(16):
-        if (encoded_board >> np.uint64(4 * i)) & np.uint64(0xF) == np.uint64(target + 1):  # free要求合出更大一级的数字
+        if (encoded_board >> np.uint64(4 * i)) & np.uint64(0xF) == np.uint64(target):
             return True
     return False
 
@@ -217,3 +233,40 @@ def is_4432_success(encoded_board, target, _):
 @njit(nogil=True)
 def re_self(encoded_board):
     return np.uint64(encoded_board)
+
+
+@njit(nogil=True)
+def radix_sort(arr):
+    temp = np.empty_like(arr)
+    # 进行四轮排序，每轮对应一个16位的块
+    for shift in range(0, 64, 16):
+        # 计算每个元素在这一轮的桶编号
+        counts = np.zeros(65537, dtype=np.int32)
+        for i in arr:
+            counts[((i >> np.uint64(shift)) & np.uint64(65535))+1] += 1
+        # 计算累积和，用于确定元素在temp中的位置
+        counts = np.cumsum(counts)
+        # 分配元素到临时数组
+        for i in arr:
+            idx = i >> np.uint64(shift) & np.uint64(65535)
+            temp[counts[idx]] = i
+            counts[idx] += 1
+        # 将排序后的数组复制回原数组，进行下一轮
+        arr[:] = temp
+    return unique_sorted(arr)
+
+
+@njit(nogil=True)
+def unique_sorted(arr):
+    uniquer = np.empty(len(arr), dtype=boolean)
+    uniquer[1:] = arr[1:] != arr[:-1]
+    uniquer[0] = 1
+    return arr[uniquer]
+
+
+@njit(nogil=True)
+def unique(arr):
+    if len(arr) < 200000:
+        return np.unique(arr)
+    else:
+        return radix_sort(arr)

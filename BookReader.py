@@ -7,7 +7,7 @@ from BoardMover import BoardMoverWithScore
 from Config import SingletonConfig
 from TrieCompressor import trie_decompress_search
 from Calculator import min_all_symm, minUL, re_self, is_L3_pattern, is_4431_pattern, is_444_pattern, is_free_pattern, \
-    is_LL_pattern, is_4432_pattern, is_4441_pattern
+    is_LL_pattern, is_4432_pattern, is_4441_pattern, is_442_pattern, is_t_pattern
 
 
 class BookReader:
@@ -22,8 +22,14 @@ class BookReader:
         'free9': [-196608 - 18, is_free_pattern, min_all_symm],
         'free10': [-163840 - 20, is_free_pattern, min_all_symm],
         'L3': [-196608 - 8, is_L3_pattern, re_self],
+        '442': [-196608 - 8, is_442_pattern, re_self],
+        't': [-196608 - 8, is_t_pattern, re_self],
         '4441': [-98304 - 28, is_4441_pattern, re_self],
         '4432': [-98304 - 28, is_4432_pattern, minUL],
+        'free8w': [-262144 - 14, is_free_pattern, min_all_symm],
+        'free9w': [-229376 - 16, is_free_pattern, min_all_symm],
+        'free10w': [-196608 - 18, is_free_pattern, min_all_symm],
+        'free11w': [-163840 - 20, is_free_pattern, min_all_symm],
     }
 
     @staticmethod
@@ -31,7 +37,7 @@ class BookReader:
         nums_adjust, pattern_check_func, to_find_func = BookReader.pattern_map[pattern]
         path = SingletonConfig().config['filepath_map'].get(pattern_full, '')
         nums = (board.sum() + nums_adjust) / 2
-        if pattern[:4] == 'free':
+        if pattern[:4] == 'free' and pattern[-1] != 'w':
             nums -= int(target) / 2
         if pattern == 'LL':
             to_find_func = to_find_func[int(pos)]
@@ -155,13 +161,3 @@ class BookReader:
             file.seek(offset)
             state, _ = struct.unpack('QI', file.read(record_size))
             return np.uint64(BookReader.bm.gen_new_num(state)[0])
-
-
-'''
-print(BookReader.move_on_dic(np.array([
-    [0, 2, 0, 0],
-    [0, 2, 8, 4],
-    [4, 8, 32768, 32768],
-    [16, 32, 32768, 32768]
-], dtype=np.int64), 'LL_2048'))
-'''

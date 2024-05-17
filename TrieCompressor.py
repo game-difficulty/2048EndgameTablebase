@@ -190,7 +190,6 @@ def trie_decompress_search(filepath, board):
     ind = np.fromfile(filepath + 'i', dtype='uint8,uint32')
     segments = np.fromfile(filepath + 's', dtype='uint32')
     start, end, pos = search_tree(ind, segments, board)
-    #print(start, end, pos)
     if not start and not end:
         return 0.0  # 没找到
     with open(filepath + 'z', 'rb') as f:

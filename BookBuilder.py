@@ -1,5 +1,6 @@
 import os
 from itertools import combinations, permutations
+import time
 
 import numpy as np
 from numba import njit, prange
@@ -11,12 +12,13 @@ from TrieCompressor import trie_compress_progress
 
 
 @njit(nogil=True)
-def gen_boards(arr0, target, position, bm, pattern_check_func, success_check_func, to_find_func, do_check=True):
+def gen_boards(arr0, target, position, bm, pattern_check_func, success_check_func, to_find_func, do_check=True,
+               isfree=False):
     """
     根据arr0中的面板，先生成数字，再移动，如果移动后仍是定式范围内且移动有效，则根据生成的数字（2,4）分别填入
     """
     # 初始化两个arr，分别对应填充数字2和4后的棋盘状态
-    length = max(len(arr0) * 6, 99999999)
+    length = max(len(arr0) * 8, 99999999) if isfree else max(len(arr0) * 6, 99999999)
     arr1 = np.empty(length, dtype=np.uint64)
     arr2 = np.empty(length, dtype=np.uint64)
     c1t, c2t = 0, 0
@@ -42,65 +44,71 @@ def gen_boards(arr0, target, position, bm, pattern_check_func, success_check_fun
                         arr2[c2t] = to_find_func(newt)
                         c2t += 1
 
+    arr1 = arr1[:c1t]
+    arr2 = arr2[:c2t]
+    arr2 = Calculator.unique(arr2)
+    arr1 = Calculator.unique(arr1)
     # 返回包含可能的新棋盘状态的两个array
-    return np.unique(arr1[:c1t]), np.unique(arr2[:c2t])
+    return arr1, arr2
+
+
+def gen_boards_big(arr0, target, position, bm, pattern_check_func, success_check_func, to_find_func, d1, do_check=True,
+                   isfree=False):
+    segment_size = 69999999 if isfree else 99999999
+    arr1s = [d1]
+    arr2s = []
+    # 计算需要分段的数量
+    num_segments = int(np.ceil(arr0.size / segment_size))
+
+    for segment_index in range(num_segments):
+        start_index = segment_index * segment_size
+        end_index = min(start_index + segment_size, arr0.size)
+        arr0t = arr0[start_index:end_index].copy()
+        arr1t, arr2t = gen_boards(arr0t, target, position, bm, pattern_check_func, success_check_func, to_find_func,
+                                  do_check, isfree)
+        arr1s.append(arr1t)
+        arr2s.append(arr2t)
+    length = int(max(len(arr0) * 1.25, 199999999)) if isfree else int(max(len(arr0) * 1.2, 99999999))
+    arr1 = merge_deduplicate_all(arr1s, length)
+    del arr1s
+    arr2 = merge_deduplicate_all(arr2s, length)
+    del arr2s
+    return arr1, arr2
 
 
 @njit(nogil=True)
-def gen_boards_free(arr0, target, position, bm, pattern_check_func, success_check_func, to_find_func, do_check=True):
-    """
-    根据arr0中的面板，先生成数字，再移动，如果移动后仍是定式范围内且移动有效，则根据生成的数字（2,4）分别填入
-    """
-    # 初始化两个arr，分别对应填充数字2和4后的棋盘状态
-    n_length = 100000000
-    arr1 = np.empty(0, dtype=np.uint64)
-    arr2 = np.empty(0, dtype=np.uint64)
-    c1t, c2t = 0, 0
-    tmp1 = np.empty(n_length, dtype=np.uint64)
-    tmp2 = np.empty(n_length, dtype=np.uint64)
-    for t in arr0:
+def merge_deduplicate_all(arrays, length):
+    num_arrays = len(arrays)
+    indices = np.zeros(num_arrays, dtype='uint32')  # 每个数组的当前索引
+    merged_array = np.empty(length, dtype='uint64')  # 最终合并后且去重的数组
+    last_added = None  # 上一个添加到 merged_array 的元素
+    c = 0  # 已添加的元素数量
 
-        # 如果当前棋盘状态已经符合成功条件，将其成功概率设为1
-        if do_check and success_check_func(t, target, position):
-            continue  # 由于已成功，无需进一步处理这个棋盘状态，继续下一个
-        for i in range(16):  # 遍历每个位置
-            # 检查第i位置是否为空，如果为空，进行填充操作
-            if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):
-                # 分别用数字2和4填充当前空位，然后生成新的棋盘状态t1和t2
-                t1 = t | (np.uint64(1) << np.uint64(4 * i))  # 填充数字2（2的对数为1，即4位中的0001）
-                t2 = t | (np.uint64(2) << np.uint64(4 * i))  # 填充数字4（4的对数为2，即4位中的0010）
+    # 继续循环，直到所有数组都被完全处理
+    while True:
+        current_min = None
+        min_index = -1
 
-                # 尝试所有四个方向上的移动
-                for newt in bm.move_all_dir(t1):
-                    if newt != t1 and pattern_check_func(newt):
-                        min_newt = to_find_func(newt)
-                        if True:  # not binary_search2(arr1, min_newt):
-                            tmp1[c1t] = min_newt
-                            c1t += 1
-                            if c1t == n_length + 1:
-                                tmp1 = np.unique(tmp1)
-                                arr1 = merge_and_deduplicate(tmp1, arr1)
-                                tmp1 = np.empty(n_length, dtype=np.uint64)
-                                c1t = 0
-                                # print(len(arr1))
-                for newt in bm.move_all_dir(t2):
-                    if newt != t2 and pattern_check_func(newt):
-                        min_newt = to_find_func(newt)
-                        if True:  # not binary_search2(arr2, min_newt):
-                            tmp2[c2t] = min_newt
-                            c2t += 1
-                            if c2t == n_length + 1:
-                                tmp2 = np.unique(tmp2)
-                                arr2 = merge_and_deduplicate(tmp2, arr2)
-                                tmp2 = np.empty(n_length, dtype=np.uint64)
-                                c2t = 0
+        # 寻找当前可用元素中的最小值
+        for i in range(num_arrays):
+            if indices[i] < len(arrays[i]):  # 确保索引不超出数组长度
+                if current_min is None or arrays[i][indices[i]] < current_min:
+                    current_min = arrays[i][indices[i]]
+                    min_index = i
 
-    tmp2 = np.unique(tmp2[:c2t])
-    arr2 = merge_and_deduplicate(tmp2, arr2)
-    tmp1 = np.unique(tmp1[:c1t])
-    arr1 = merge_and_deduplicate(tmp1, arr1)
-    # 返回包含可能的新棋盘状态的两个array
-    return arr1, arr2
+        # 如果找不到最小值，说明所有数组都已处理完成
+        if current_min is None:
+            break
+
+        # 检查是否需要将当前最小值添加到结果数组中
+        if last_added is None or current_min != last_added:
+            merged_array[c] = current_min
+            last_added = current_min
+            c += 1
+
+        # 移动选中数组的索引
+        indices[min_index] += 1
+    return merged_array[:c]
 
 
 @njit(parallel=True, nogil=True)
@@ -175,7 +183,7 @@ def binary_search2(arr, target):
 @njit(nogil=True)
 def merge_and_deduplicate(sorted_arr1, sorted_arr2):
     # 结果数组的长度最多与两数组之和一样长
-    unique_array = np.empty(len(sorted_arr1) + len(sorted_arr2), dtype=sorted_arr1.dtype)
+    unique_array = np.empty(len(sorted_arr1) + len(sorted_arr2), dtype=np.uint64)
 
     i, j, k = 0, 0, 0  # i, j 分别是两数组的索引，k 是结果数组的索引
 
@@ -198,30 +206,34 @@ def merge_and_deduplicate(sorted_arr1, sorted_arr2):
             j += 1
 
     # 处理剩余的元素
-    while i < len(sorted_arr1):
-        if k == 0 or unique_array[k - 1] != sorted_arr1[i]:
-            unique_array[k] = sorted_arr1[i]
-            k += 1
-        i += 1
-
-    while j < len(sorted_arr2):
-        if k == 0 or unique_array[k - 1] != sorted_arr2[j]:
-            unique_array[k] = sorted_arr2[j]
-            k += 1
-        j += 1
+    if i < len(sorted_arr1):
+        unique_array[k:k + len(sorted_arr1) - i] = sorted_arr1[i:]
+        k += len(sorted_arr1) - i
+    if j < len(sorted_arr2):
+        unique_array[k:k + len(sorted_arr2) - j] = sorted_arr2[j:]
+        k += len(sorted_arr2) - j
 
     return unique_array[:k]  # 调整数组大小以匹配实际元素数
 
 
 def gen_lookup_table_big(arr_init, pattern_check_func, success_check_func, to_find_func, target, position, steps,
-                         pathname, docheck_step, flag=0):
+                         pathname, docheck_step, isfree=False):
     """
     传入包含所有初始局面的array，然后按照面板数字和依次生成下一阶段的所有局面。储存轮到系统生成数字时的面板。
     保障其中的每个arr储存的面板的数字和均相等
     """
     bm = BoardMover()
+    started, d0, d1 = generate_process(arr_init, pattern_check_func, success_check_func, to_find_func, target, position,
+                                       steps, pathname, docheck_step, bm, isfree)
+    d0, d1 = final_steps(started, d0, d1, pathname, steps, success_check_func, target, position)
+    recalculate_process(d0, d1, pattern_check_func, success_check_func, to_find_func, target, position, steps,
+                        pathname, docheck_step, bm)  # 这里的最后的两个book d0,d1就是回算的d1,d2
 
-    started = False
+
+def generate_process(arr_init, pattern_check_func, success_check_func, to_find_func, target, position, steps,
+                     pathname, docheck_step, bm, isfree):
+    started, big_mode = False, False
+    d0, d1 = None, None
     # 从前向后遍历，生成新的棋盘状态并保存到相应的array中
     for i in range(1, steps - 1):
         # 断点重连
@@ -238,44 +250,49 @@ def gen_lookup_table_big(arr_init, pattern_check_func, success_check_func, to_fi
             d1 = np.fromfile(pathname + str(i) + '.t', dtype=np.uint64)
             started = True
 
-        print(f"Processing step {i}")
+        segment_size = 69999999 if isfree else 99999999
+        if len(d0) > segment_size:
+            big_mode = True
+
+        t0 = time.time()
         # 生成新的棋盘状态
-        if flag == 0:
-            d1t, d2t = gen_boards(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func,
-                                  i > docheck_step)
+        if not big_mode:
+            d1t, d2 = gen_boards(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func,
+                                 i > docheck_step, isfree)
+            d1 = merge_and_deduplicate(d1, d1t)
+            del d1t
         else:
-            d1t, d2t = gen_boards_free(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func,
-                                       i > docheck_step)
+            d1, d2 = gen_boards_big(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func,
+                                    d1, i > docheck_step, isfree)
+        print(f"Processing step {i}", round(time.time() - t0),3)
         del d0
-        d1 = merge_and_deduplicate(d1, d1t)
-        del d1t
-        d2 = d2t
-        del d2t
         d2.tofile(pathname + str(i + 1) + '.t')
         d1.tofile(pathname + str(i))
-        d0, d1, d2 = d1, d2, np.empty(0, dtype=np.uint64)
+        d0, d1 = d1, d2
         if os.path.exists(pathname + str(i) + '.t'):
             os.remove(pathname + str(i) + '.t')
+    return started, d0, d1
 
+
+def final_steps(started, d0, d1, pathname, steps, success_check_func, target, position):
     if started:
-        count = 0
-        # 处理最后的局面
-        for d in (d0, d1):
-            expanded_arr0 = np.empty(len(d), dtype='uint64,uint32')
-            expanded_arr0['f0'] = d
-            for i in range(len(d)):
-                if success_check_func(expanded_arr0[i][0], target, position):
-                    expanded_arr0[i][1] = 4000000000
-                else:
-                    expanded_arr0[i][1] = 0
-            expanded_arr0 = expanded_arr0[expanded_arr0['f1'] != 0]
-            expanded_arr0.tofile(pathname + str(steps - 2 + count) + '.book')
-            count += 1
+        expanded_arr0 = np.empty(len(d0), dtype='uint64,uint32')
+        expanded_arr0['f0'] = d0
+        d0 = final_situation_process(expanded_arr0, success_check_func, target, position)
+        d0.tofile(pathname + str(steps - 2) + '.book')
+        expanded_arr0 = np.empty(len(d1), dtype='uint64,uint32')
+        expanded_arr0['f0'] = d1
+        d1 = final_situation_process(expanded_arr0, success_check_func, target, position)
+        d1.tofile(pathname + str(steps - 1) + '.book')
     if os.path.exists(pathname + str(steps - 1) + '.t'):
         os.remove(pathname + str(steps - 1) + '.t')
     if os.path.exists(pathname + str(steps - 2)):
         os.remove(pathname + str(steps - 2))
+    return d0, d1
 
+
+def recalculate_process(d1, d2, pattern_check_func, success_check_func, to_find_func, target, position, steps,
+                        pathname, docheck_step, bm):
     started = False
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
@@ -289,15 +306,19 @@ def gen_lookup_table_big(arr_init, pattern_check_func, success_check_func, to_fi
             continue
         elif not started:
             started = True
-            d1 = np.fromfile(pathname + str(i + 1) + '.book', dtype='uint64,uint32')
-            d2 = np.fromfile(pathname + str(i + 2) + '.book', dtype='uint64,uint32')
+            if i != steps - 3:
+                d1 = np.fromfile(pathname + str(i + 1) + '.book', dtype='uint64,uint32')
+                d2 = np.fromfile(pathname + str(i + 2) + '.book', dtype='uint64,uint32')
 
         d0 = np.fromfile(pathname + str(i), dtype=np.uint64)
+        t00=time.time()
         expanded_arr0 = np.empty(len(d0), dtype='uint64,uint32')
         expanded_arr0['f0'] = d0
         del d0
+        t0=time.time()
         d0 = recalculate(expanded_arr0, d1, d2, target, position, bm, pattern_check_func, success_check_func,
                          to_find_func, i > docheck_step)
+        t1=time.time()
         d0 = d0[d0['f1'] != 0]  # 去除活不了的局面
         d0.tofile(pathname + str(i) + '.book')
         if os.path.exists(pathname + str(i)):
@@ -305,7 +326,18 @@ def gen_lookup_table_big(arr_init, pattern_check_func, success_check_func, to_fi
         do_compress(pathname + str(i + 2) + '.book')  # 如果设置了压缩，则压缩i+2的book，其已经不需要再频繁查找
         if i > 0:
             d1, d2 = d0, d1
-        print(f"Updated step {i}")
+        print(f"Updated step {i}", round(t0 - t00,3), round(t1 - t0,3), round(time.time()-t1),3)
+
+
+@njit(nogil=True)
+def final_situation_process(expanded_arr0, success_check_func, target, position):
+    for i in prange(len(expanded_arr0)):
+        if success_check_func(expanded_arr0[i][0], target, position):
+            expanded_arr0[i][1] = 4000000000
+        else:
+            expanded_arr0[i][1] = 0
+    expanded_arr0 = expanded_arr0[expanded_arr0['f1'] != 0]
+    return expanded_arr0
 
 
 def do_compress(bookpath):
@@ -318,7 +350,7 @@ def do_compress(bookpath):
                 os.remove(bookpath)
 
 
-def generate_free_inits(target, t32ks):
+def generate_free_inits(target, t32ks, t2s):
     numbers = [target, ]
     generated = np.empty(86486400, dtype=np.uint64)
     c = 0
@@ -327,7 +359,7 @@ def generate_free_inits(target, t32ks):
         for p in poss:
             v |= np.uint64(15 << (p * 4))  # 填32k
         remain_pos = set(range(16)) - set(poss)
-        for poss_2 in combinations(remain_pos, (16 - len(numbers) - t32ks)):
+        for poss_2 in combinations(remain_pos, t2s):
             val = v
             for j in poss_2:
                 val |= np.uint64(1 << (j * 4))  # 填2
@@ -340,7 +372,7 @@ def generate_free_inits(target, t32ks):
                 generated[c] = value
                 c += 1
 
-    generated = np.unique(generated[:c])
+    generated = Calculator.unique(generated[:c])
     g2 = np.empty(10810800, dtype=np.uint64)
     c = 0
     bm = BoardMover()
@@ -350,18 +382,28 @@ def generate_free_inits(target, t32ks):
             if nb == np.uint64(Calculator.min_all_symm(nb)):
                 g2[c] = nb
                 c += 1
-    return np.unique(g2[:c])
+    return Calculator.unique(g2[:c])
 
 
 def start_build(pattern, target, position, pathname):
     if pattern[:4] == 'free':
-        steps = int(2 ** target / 2 + 24)
-        docheck_step = int(2 ** target / 2) - 5
-        arr_init = generate_free_inits(target, 15 - int(pattern[4:]))
-        gen_lookup_table_big(arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
-                             Calculator.min_all_symm, target, position, steps, pathname, docheck_step, 1)
+        if pattern[-1] != 'w':
+            steps = int(2 ** target / 2 + 24)
+            docheck_step = int(2 ** target / 2) - 5
+            free_tiles = int(pattern[4:])
+            arr_init = generate_free_inits(target, 15 - free_tiles, free_tiles)
+            gen_lookup_table_big(arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
+                                 Calculator.min_all_symm, target, 0, steps, pathname, docheck_step, isfree=True)
+        else:
+            steps = int(2 ** target / 2 + 24)
+            docheck_step = int(2 ** target / 2) - 5
+            free_tiles = int(pattern[4:-1])
+            arr_init = generate_free_inits(0, 16 - free_tiles, free_tiles-1)
+            gen_lookup_table_big(arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
+                                 Calculator.min_all_symm, target, 1, steps, pathname, docheck_step, isfree=True)
     else:
-        steps = int(2 ** target / 2 + {'444': 256, '4431': 128, 'LL': 96, 'L3': 36, '4441': 96, '4432': 96}[pattern])
+        steps = int(2 ** target / 2 + {'444': 256, '4431': 128, 'LL': 96, 'L3': 36, '4441': 96, '4432': 96, '442':36,
+                                       't':36, }[pattern])
         docheck_step = int(2 ** target / 2) - 10
         inits = {
             '444': np.array([np.uint64(0x100000000000ffff), np.uint64(0x000000010000ffff)], dtype=np.uint64),
@@ -370,6 +412,8 @@ def start_build(pattern, target, position, pathname):
             'L3': np.array([np.uint64(0x100000001fff2fff), np.uint64(0x000000011fff2fff)], dtype=np.uint64),
             '4441': np.array([np.uint64(0x0000100012323fff), np.uint64(0x0001000012323fff)], dtype=np.uint64),
             '4432': np.array([np.uint64(0x00001000123f23ff), np.uint64(0x00010000123f23ff)], dtype=np.uint64),
+            '442': np.array([np.uint64(0x1000000012ffffff), np.uint64(0x0000000112ffffff)], dtype=np.uint64),
+            't': np.array([np.uint64(0x10000000f1fff2ff), np.uint64(0x00000001f1fff2ff)], dtype=np.uint64),
         }
         ini = inits[pattern]
         if ((pattern == 'LL') and (position == 0)) or (pattern == '4432'):
@@ -377,5 +421,5 @@ def start_build(pattern, target, position, pathname):
         else:
             to_find_func = Calculator.re_self
         gen_lookup_table_big(ini, eval(f'Calculator.is_{pattern}_pattern'), eval(f'Calculator.is_{pattern}_success'),
-                             to_find_func, target, position, steps, pathname, docheck_step, 0)
-        return True
+                             to_find_func, target, position, steps, pathname, docheck_step)
+    return True

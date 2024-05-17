@@ -24,11 +24,7 @@ class SingletonConfig:
         else:
             return {
                 'filepath_map': {
-                    'LL_2048_0': r"E:\2048api\calculator\LL_2048_0",
-                    '4431_2048': r"E:\2048api\calculator\4431_2048",
-                    '444_2048_0': r"E:\2048api\calculator\444_2048_0",
-                    'free9_256': r"E:\2048api\calculator\free9_256",
-                    'L3_1024_0': r"E:\2048api\calculator\L3_1024_0",
+                    'LL_2048_0': r"E:\LL_2048_0",
                 },
                 'colors': ['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
                            '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'] + [
@@ -39,6 +35,7 @@ class SingletonConfig:
                 'game_state':[np.uint64(0), 0, 0],
                 'dis_32k': True,
                 'compress': True,
+                'font_size_factor': 100,
             }
 
     @staticmethod

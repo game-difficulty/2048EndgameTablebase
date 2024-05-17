@@ -28,7 +28,7 @@ class AutoplayS:
         self.diffs2, self.diffs2_r = self.calculates_for_estimate()
         self.node = 0
         self.interact = True
-        print('jit class init')
+        print('AI init')
 
     def reset_board(self, board):
         self.best_operation = ''

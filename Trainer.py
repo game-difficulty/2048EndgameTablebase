@@ -37,6 +37,13 @@ class TrainFrame(BaseBoardFrame):
         if value == 32768 and not self.dis32k:
             self.game_square.labels[row][col].setText('')
 
+    def set_new_num(self, new_tile_pos, val, do_anim=True):
+        self.board_encoded |= np.uint64(val) << np.uint64(4 * (15 - new_tile_pos))
+        self.board = self.mover.decode_board(self.board_encoded)
+        self.update_frame(2 ** val, new_tile_pos // 4, new_tile_pos % 4, anim=do_anim)
+        self.history.append((self.board_encoded, self.score))
+        self.newtile_pos, self.newtile = new_tile_pos, val
+
 
 # noinspection PyAttributeOutsideInit
 class TrainWindow(QtWidgets.QMainWindow):
@@ -46,11 +53,20 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.current_pattern = ''
         self.pattern_settings = ['', '', '0']
         self.isProcessing = False
-        self.result = dict()
-        self.ai_state = False
+        self.result = dict()  # 四个方向成功率字典
 
+        self.ai_state = False  # demo状态
         self.ai_timer = QTimer(self)
-        self.ai_timer.timeout.connect(self.one_step)
+        self.ai_timer.timeout.connect(self.one_step)  # demo状态定时自动走棋
+
+        self.recording_state = False  # 录制状态
+        self.records = np.empty(0, dtype='uint8,uint16,uint16,uint16,uint16')  # 录制的回放
+        self.record_length = 0  # 已录制的长度
+        self.playing_record_state = False  # 播放状态
+        self.record_loaded = None  # 已加载的回放
+        self.played_length = 0  # 已播放的长度
+        self.replay_timer = QTimer(self)
+        self.replay_timer.timeout.connect(self.replay_step)  # 回放状态定时自动走棋
 
         self.statusbar.showMessage("All features may be slow when used for the first time. Please be patient.", 8000)
 
@@ -70,7 +86,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gridLayout.addWidget(self.gameframe, 2, 0, 1, 1)
 
         self.operate = QtWidgets.QFrame(self.centralwidget)
-        self.operate.setMaximumSize(QtCore.QSize(16777215, 360))
+        self.operate.setMaximumSize(QtCore.QSize(16777215, 450))
         self.operate.setStyleSheet("QFrame{\n"
                                    "    border-color: rgb(167, 167, 167);\n"
                                    "    background-color: rgb(236, 236, 236);\n"
@@ -96,7 +112,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.board_state.setText('0000000000000000')
         self.setboard_Layout.addWidget(self.board_state)
         self.set_board_bt = QtWidgets.QPushButton(self.operate)
-        self.set_board_bt.setMaximumSize(QtCore.QSize(50, 16777215))
+        self.set_board_bt.setMaximumSize(QtCore.QSize(90, 16777215))
         self.set_board_bt.setObjectName("set_board_bt")
         self.set_board_bt.clicked.connect(self.handle_set_board)
         self.setboard_Layout.addWidget(self.set_board_bt)
@@ -130,50 +146,71 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gridLayout_bts.setContentsMargins(0, 0, 0, 0)
         self.gridLayout_bts.setObjectName("gridLayout_bts")
         self.RL = QtWidgets.QPushButton(self.operate)
-        self.RL.setMaximumSize(QtCore.QSize(120, 16777215))
+        self.RL.setMaximumSize(QtCore.QSize(180, 16777215))
         self.RL.setObjectName("RL")
         self.RL.clicked.connect(lambda: self.handle_rotate('RL'))
         self.gridLayout_bts.addWidget(self.RL, 1, 1, 1, 1)
         self.Demo = QtWidgets.QPushButton(self.operate)
-        self.Demo.setMaximumSize(QtCore.QSize(120, 16777215))
+        self.Demo.setMaximumSize(QtCore.QSize(180, 16777215))
         self.Demo.setObjectName("L90")
         self.Demo.clicked.connect(self.toggle_demo)
         self.gridLayout_bts.addWidget(self.Demo, 0, 1, 1, 1)
         self.R90 = QtWidgets.QPushButton(self.operate)
-        self.R90.setMaximumSize(QtCore.QSize(120, 16777215))
+        self.R90.setMaximumSize(QtCore.QSize(180, 16777215))
         self.R90.setObjectName("R90")
         self.R90.clicked.connect(lambda: self.handle_rotate('R90'))
         self.gridLayout_bts.addWidget(self.R90, 1, 2, 1, 1)
         self.undo = QtWidgets.QPushButton(self.operate)
-        self.undo.setMaximumSize(QtCore.QSize(120, 16777215))
+        self.undo.setMaximumSize(QtCore.QSize(180, 16777215))
         self.undo.setObjectName("undo")
         self.undo.clicked.connect(self.handleUndo)
         self.gridLayout_bts.addWidget(self.undo, 0, 0, 1, 1)
         self.UD = QtWidgets.QPushButton(self.operate)
-        self.UD.setMaximumSize(QtCore.QSize(120, 16777215))
+        self.UD.setMaximumSize(QtCore.QSize(180, 16777215))
         self.UD.setObjectName("UD")
         self.UD.clicked.connect(lambda: self.handle_rotate('UD'))
         self.gridLayout_bts.addWidget(self.UD, 1, 0, 1, 1)
         self.step = QtWidgets.QPushButton(self.operate)
-        self.step.setMaximumSize(QtCore.QSize(120, 16777215))
+        self.step.setMaximumSize(QtCore.QSize(180, 16777215))
         self.step.setObjectName("step")
-        self.step.clicked.connect(self.one_step)
+        self.step.clicked.connect(self.handle_step)
         self.gridLayout_bts.addWidget(self.step, 0, 2, 1, 1)
         self.default = QtWidgets.QPushButton(self.operate)
-        self.default.setMaximumSize(QtCore.QSize(120, 16777215))
+        self.default.setMaximumSize(QtCore.QSize(180, 16777215))
         self.default.setObjectName("default")
         self.default.clicked.connect(self.handle_set_default)
         self.gridLayout_bts.addWidget(self.default, 0, 3, 1, 1)
         self.L90 = QtWidgets.QPushButton(self.operate)
-        self.L90.setMaximumSize(QtCore.QSize(120, 16777215))
+        self.L90.setMaximumSize(QtCore.QSize(180, 16777215))
         self.L90.setObjectName("L90")
         self.L90.clicked.connect(lambda: self.handle_rotate('L90'))
         self.gridLayout_bts.addWidget(self.L90, 1, 3, 1, 1)
         self.left_Layout.addLayout(self.gridLayout_bts)
 
+        self.gridLayout_record = QtWidgets.QGridLayout()
+        self.gridLayout_record.setContentsMargins(0, 0, 0, 0)
+        self.gridLayout_record.setObjectName("gridLayout_bts")
+        self.record = QtWidgets.QPushButton(self.operate)
+        self.record.setMaximumSize(QtCore.QSize(240, 16777215))
+        self.record.setObjectName("record")
+        self.record.clicked.connect(self.handle_record)
+        self.gridLayout_record.addWidget(self.record, 0, 0, 1, 1)
+        self.load_record = QtWidgets.QPushButton(self.operate)
+        self.load_record.setMaximumSize(QtCore.QSize(240, 16777215))
+        self.load_record.setObjectName("record")
+        self.load_record.clicked.connect(self.handle_load_record)
+        self.gridLayout_record.addWidget(self.load_record, 0, 1, 1, 1)
+        self.play_record = QtWidgets.QPushButton(self.operate)
+        self.play_record.setMaximumSize(QtCore.QSize(240, 16777215))
+        self.play_record.setObjectName("record")
+        self.play_record.clicked.connect(self.handle_play_record)
+        self.gridLayout_record.addWidget(self.play_record, 0, 2, 1, 1)
+        self.left_Layout.addLayout(self.gridLayout_record)
         self.gridLayout_upper.addLayout(self.left_Layout, 0, 0, 1, 1)
+
         self.right_Layout = QtWidgets.QVBoxLayout()
-        self.right_Layout.setSpacing(12)
+        self.right_Layout.setSpacing(24)
+        self.right_Layout.setContentsMargins(0,12,0,8)
         self.right_Layout.setObjectName("right_Layout")
         self.horizontalLayout = QtWidgets.QHBoxLayout()
         self.horizontalLayout.setObjectName("horizontalLayout")
@@ -182,6 +219,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.results_text.setObjectName("results_text")
         self.horizontalLayout.addWidget(self.results_text)
         self.show_results_checkbox = QtWidgets.QCheckBox(self.operate)
+        self.show_results_checkbox.setStyleSheet("font: 360 10pt \"Cambria\";")
         self.show_results_checkbox.setObjectName("show_results_checkbox")
         self.show_results_checkbox.stateChanged.connect(self.show_results)
         self.horizontalLayout.addWidget(self.show_results_checkbox)
@@ -189,7 +227,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.results_label = QtWidgets.QLabel(self.operate)
         self.results_label.setMinimumSize(QtCore.QSize(0, 200))
         self.results_label.setStyleSheet("background-color: rgb(255, 255, 255);\n"
-                                         "border-color: rgb(0, 0, 0); font: 75 16pt \"Consolas\";")
+                                         "border-color: rgb(0, 0, 0); font: 75 18pt \"Consolas\";")
         self.results_label.setText("")
         self.results_label.setObjectName("results_label")
         self.right_Layout.addWidget(self.results_label)
@@ -204,11 +242,20 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.filepath.setObjectName("filepath")
         self.setpath_Layout.addWidget(self.filepath)
         self.set_filepath_bt = QtWidgets.QPushButton(self.operate)
-        self.set_filepath_bt.setMaximumSize(QtCore.QSize(100, 16777215))
+        self.set_filepath_bt.setMaximumSize(QtCore.QSize(120, 16777215))
         self.set_filepath_bt.setObjectName("set_filepath_bt")
         self.set_filepath_bt.clicked.connect(self.filepath_changed)
         self.setpath_Layout.addWidget(self.set_filepath_bt)
         self.right_Layout.addLayout(self.setpath_Layout)
+        self.dis32k_checkBox = QtWidgets.QCheckBox(self.operate)
+        self.dis32k_checkBox.setStyleSheet("font: 360 10pt \"Cambria\";")
+        self.dis32k_checkBox.setObjectName("dis32k_checkBox")
+        self.right_Layout.addWidget(self.dis32k_checkBox)
+        if SingletonConfig().config.get('dis_32k', True):
+            self.dis32k_checkBox.setCheckState(QtCore.Qt.Checked)
+        else:
+            self.dis32k_checkBox.setCheckState(QtCore.Qt.Unchecked)
+        self.dis32k_checkBox.stateChanged.connect(self.dis32k_state_change)
         self.gridLayout_upper.addLayout(self.right_Layout, 0, 1, 1, 1)
         self.gridLayout.addWidget(self.operate, 0, 0, 1, 1)
         self.setCentralWidget(self.centralwidget)
@@ -223,7 +270,8 @@ class TrainWindow(QtWidgets.QMainWindow):
 
         self.menu_ptn = QtWidgets.QMenu(self.menubar)
         self.menu_ptn.setObjectName("menuMENU")
-        for ptn in ['444', '4431', 'LL', 'L3', 'free8', 'free9', 'free10', "4441", "4432"]:
+        for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", 'free8', 'free9', 'free10', 'free8w',
+                    'free9w', 'free10w', "free11w"]:
             m = QtWidgets.QAction(ptn, self)
             m.triggered.connect(lambda: self.menu_selected(0))
             self.menu_ptn.addAction(m)
@@ -282,15 +330,25 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.undo.setText(_translate("Train", "UNDO"))
         self.UD.setText(_translate("Train", "UD"))
         self.L90.setText(_translate("Train", "L90"))
+        self.record.setText(_translate("Train", 'Record Demo'))
+        self.play_record.setText(_translate("Train", 'Play Record'))
+        self.load_record.setText(_translate("Train", 'Load Record'))
         self.step.setText(_translate("Train", "ONESTEP"))
         self.default.setText(_translate("Train", "Default"))
         self.results_text.setText(_translate("Train", "RESULTS:"))
         self.show_results_checkbox.setText(_translate("Train", "Show"))
         self.filepath_text.setText(_translate("Train", "FILEPATH:"))
         self.set_filepath_bt.setText(_translate("Train", "SET..."))
+        self.dis32k_checkBox.setText(_translate("Train", "Display numbers for 32k tile"))
         self.menu_ptn.setTitle(_translate("Train", "Pattern"))
         self.menu_pos.setTitle(_translate("Train", "Position"))
         self.menu_tgt.setTitle(_translate("Train", "Target"))
+
+    def dis32k_state_change(self):
+        SingletonConfig().config['dis_32k'] = self.dis32k_checkBox.isChecked()
+        self.gameframe.dis32k = SingletonConfig().config['dis_32k']
+        self.gameframe.update_all_frame(self.gameframe.board)
+        self.gameframe.setFocus()
 
     def menu_selected(self, i):
         self.pattern_settings[i] = self.sender().text()
@@ -306,6 +364,12 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.filepath.setText(SingletonConfig().config['filepath_map'].get(self.current_pattern, ''))
             self.show_results()
             self.pattern_text.setText(self.current_pattern)
+
+            self.gameframe.score = 0
+            self.gameframe.history = []
+            self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
+            self.played_length = 0
+            self.record_loaded = None
 
     def tiles_bt_on_click(self):
         sender = self.sender()
@@ -327,7 +391,7 @@ class TrainWindow(QtWidgets.QMainWindow):
 
     def show_results(self):
         if self.show_results_checkbox.isChecked():
-            board = self.gameframe.mover.decode_board(np.uint64(int('0x' + self.board_state.text().ljust(16, '0'), 16)))
+            board = self.gameframe.mover.decode_board(np.uint64(int('0x' + self.board_state.text().rjust(16, '0'), 16)))
             result = BookReader.move_on_dic(board, self.pattern_settings[0], self.pattern_settings[1],
                                             self.current_pattern, self.pattern_settings[2])
             if isinstance(result, dict):
@@ -356,15 +420,26 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.show_results()
 
     def handleUndo(self):
-        self.gameframe.undo()
-        self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
+        if not self.playing_record_state:
+            self.gameframe.undo()
+            self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
+            if self.record_loaded is not None and self.played_length > 1:
+                self.played_length -= 1
+                current_state = self.record_loaded[self.played_length]
+                self.decode_result_from_record(current_state)
+                results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in self.result.items())
+                self.results_label.setText(results_text)
+            else:
+                self.show_results()
+                
+    def handle_set_board(self):
+        self.textbox_reset_board()
         self.show_results()
 
-    def handle_set_board(self):
+    def textbox_reset_board(self):
         self.gameframe.board_encoded = np.uint64(int(self.board_state.text(), 16))
         self.gameframe.board = self.gameframe.mover.decode_board(self.gameframe.board_encoded)
         self.gameframe.update_all_frame(self.gameframe.board)
-        self.show_results()
 
     def handle_rotate(self, mode):
         rotate_func = {'UD': ReverseUD, 'RL': ReverseLR, 'R90': RotateR, 'L90': RotateL}[mode]
@@ -375,6 +450,12 @@ class TrainWindow(QtWidgets.QMainWindow):
         random_board = BookReader.get_random_state(self.filepath.text(), self.current_pattern)
         self.board_state.setText(hex(random_board)[2:].rjust(16, '0'))
         self.handle_set_board()
+
+        self.gameframe.score = 0
+        self.gameframe.history = []
+        self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
+        self.played_length = 0
+        self.record_loaded = None
 
     def keyPressEvent(self, event):
         if self.isProcessing:
@@ -397,6 +478,14 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.show_results()
         self.isProcessing = False
 
+    def handle_step(self):
+        if self.played_length == 0 or self.record_loaded is None:
+            self.one_step()
+        else:
+            self.playing_record_state = True
+            self.replay_step()
+            self.playing_record_state = False
+
     def one_step(self):
         if not self.isProcessing and self.result:
             move = list(self.result.keys())[0]
@@ -410,10 +499,13 @@ class TrainWindow(QtWidgets.QMainWindow):
                 self.gameframe.do_move(move.capitalize())
                 self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
                 self.show_results()
+                if self.recording_state:
+                    self.record_current_state(move)
                 self.isProcessing = False
 
     def toggle_demo(self):
-        if not self.ai_state:
+        if not self.ai_state and not self.playing_record_state:
+            self.played_length = 0
             self.ai_state = True
             self.Demo.setText('STOP')
             steps_per_second = SingletonConfig().config['demo_speed'] / 10
@@ -422,6 +514,117 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.ai_state = False
             self.Demo.setText('Demo')
             self.ai_timer.stop()
+
+    def handle_record(self):
+        if not self.recording_state:
+            self.recording_state = True
+            self.record.setText('Save')
+            self.records = np.empty(10000, dtype='uint8,uint16,uint16,uint16,uint16')
+            v = np.uint64(self.gameframe.board_encoded)
+            self.records[0] = (np.uint8(0), np.uint16(v & np.uint64(0xFFFF)),
+                               np.uint16((v >> np.uint64(16)) & np.uint64(0xFFFF)),
+                               np.uint16((v >> np.uint64(32)) & np.uint64(0xFFFF)),
+                               np.uint16((v >> np.uint64(48)) & np.uint64(0xFFFF)))
+            self.record_length = 1
+            self.statusbar.showMessage('Recording started', 3000)
+        else:
+            if self.ai_state:
+                self.toggle_demo()
+            if self.record_length > 2:
+                file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save Record", "",
+                                                                     "Record Files (*.rec);;All Files (*)")
+                if file_path:  # 用户选择了文件路径
+                    self.records[:self.record_length].tofile(file_path)
+            self.recording_state = False
+            self.record_length = 0
+            self.records = np.empty(0, dtype='uint8,uint16,uint16,uint16,uint16')
+            self.record.setText('Record Demo')
+
+    def record_current_state(self, move):
+        gen_pos, gen_num = self.gameframe.newtile_pos, self.gameframe.newtile
+        move = {'up': 0, 'down': 1, 'left': 2, 'right': 3}.get(move)
+        changes = np.uint8((move & 0b11) | ((gen_pos & 0b1111) << 2) | (((gen_num - 1) & 0b1) << 6))
+        success_rates = []
+        for direction in ('up', 'down', 'left', 'right'):
+            rate = self.result.get(direction, 0)
+            rate = rate if isinstance(rate, (float, int)) else 0
+            success_rates.append(np.uint16(rate * 16000))
+        self.records[self.record_length] = (changes, *success_rates)
+        self.record_length += 1
+
+    def handle_load_record(self):
+        if self.ai_state:
+            self.toggle_demo()
+        if self.playing_record_state:
+            self.handle_play_record()
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open Record File", "",
+                                                             "Record Files (*.rec);;All Files (*)")
+        if file_path:  # 检查用户是否选择了文件
+            try:
+                self.record_loaded = np.fromfile(file_path, dtype='uint8,uint16,uint16,uint16,uint16')
+                self.statusbar.showMessage("File loaded successfully")
+                board = np.uint64((np.uint64(self.record_loaded[0][4]) << np.uint16(48)) |
+                                  (np.uint64(self.record_loaded[0][3]) << np.uint16(32)) |
+                                  (np.uint64(self.record_loaded[0][2]) << np.uint16(16)) |
+                                  np.uint64(self.record_loaded[0][1]))
+                self.board_state.setText(hex(board)[2:].rjust(16,'0'))
+                self.results_label.setText('')
+                self.textbox_reset_board()
+                self.played_length = 1
+            except Exception as e:
+                self.statusbar.showMessage(f"Failed to load file: {e}")
+                self.record_loaded = None
+
+    def handle_play_record(self):
+        if self.playing_record_state:
+            self.playing_record_state = False
+            self.play_record.setText('Play Record')
+            self.replay_timer.stop()
+            self.isProcessing = False
+        elif self.record_loaded is None:
+            return
+        else:
+            self.isProcessing = True
+            self.playing_record_state = True
+            self.play_record.setText('Stop')
+            if self.played_length == 0:
+                board = np.uint64((np.uint64(self.record_loaded[0][4]) << np.uint16(48)) |
+                                  (np.uint64(self.record_loaded[0][3]) << np.uint16(32)) |
+                                  (np.uint64(self.record_loaded[0][2]) << np.uint16(16)) |
+                                  np.uint64(self.record_loaded[0][1]))
+                self.board_state.setText(hex(board)[2:])
+                self.textbox_reset_board()
+                self.played_length += 1
+            steps_per_second = SingletonConfig().config['demo_speed'] / 10
+            self.replay_timer.start(int(1000 / steps_per_second))
+
+    def replay_step(self):
+        if self.record_loaded is None or self.played_length >= len(self.record_loaded):
+            self.played_length = 0
+            self.playing_record_state = False
+            self.play_record.setText('Play Record')
+            self.replay_timer.stop()
+            self.isProcessing = False
+        elif self.playing_record_state:
+            current_state = self.record_loaded[self.played_length]
+            move = current_state[0] & 0b11
+            new_val_pos = (current_state[0] >> 2) & 0b1111
+            new_val = ((current_state[0] >> 6) & 0b1) + 1
+            move = {0: 'up', 1: 'down', 2: 'left', 3: 'right'}[move]
+            self.gameframe.do_move(move.capitalize(), False)
+            self.gameframe.set_new_num(new_val_pos, new_val, SingletonConfig().config['do_animation'][0])
+            self.decode_result_from_record(current_state)
+            results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in self.result.items())
+            self.results_label.setText(results_text)
+            self.played_length += 1
+
+    def decode_result_from_record(self, current_state):
+        result = {}
+        for i in range(4):
+            direction = ('up', 'down', 'left', 'right')[i]
+            result[direction] = round((current_state[i + 1] / 16000), 5)
+        result = dict(sorted(result.items(), key=lambda item: item[1], reverse=True))
+        self.result = result
 
 
 if __name__ == "__main__":

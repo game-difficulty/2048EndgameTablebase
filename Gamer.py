@@ -63,7 +63,7 @@ def find_merge_positions(current_board, move_direction):
 class SquareFrame(QtWidgets.QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.base_font_size = int(self.width() / 14.4)
+        self.base_font_size = int(self.width() / 14.4 * SingletonConfig().config.get('font_size_factor', 100) / 100)
         self.setupUi()
         self.colors = SingletonConfig().config['colors']
         '''['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
@@ -80,7 +80,7 @@ class SquareFrame(QtWidgets.QFrame):
             (self.parent().width() - new_size) // 2,
             (self.parent().height() - new_size) // 2
         )
-        self.base_font_size = int(self.width() / 14.4)
+        self.base_font_size = int(self.width() / 14.4 * SingletonConfig().config.get('font_size_factor', 100) / 100)
         layout = self.layout()
         if layout:
             margin = int(new_size / 32)
@@ -89,6 +89,7 @@ class SquareFrame(QtWidgets.QFrame):
             layout.setVerticalSpacing(int(margin / 1.2))
 
     def setupUi(self, num_rows=4, num_cols=4):
+        self.setMaximumSize(1000,1000)
         self.rows = num_rows
         self.cols = num_cols
         self.setStyleSheet("border-radius: 5px; background-color: rgb(209, 209, 209);")
@@ -198,6 +199,9 @@ class BaseBoardFrame(QtWidgets.QFrame):
         self.mover = BoardMoverWithScore()
         self.history = []
 
+        self.newtile_pos = 0
+        self.newtile = 1
+
     def setupUi(self):
         self.setMaximumSize(QtCore.QSize(100000, 100000))
         self.setMouseTracking(True)
@@ -243,8 +247,9 @@ class BaseBoardFrame(QtWidgets.QFrame):
         self.board = self.mover.decode_board(self.board_encoded)
         self.update_frame(2 ** val, new_tile_pos // 4, new_tile_pos % 4, anim=do_anim)
         self.history.append((self.board_encoded, self.score))
+        self.newtile_pos, self.newtile = new_tile_pos, val
 
-    def do_move(self, direction):
+    def do_move(self, direction, do_gen=True):
         do_anim = SingletonConfig().config['do_animation']
         board_encoded_new, new_score = self.mover.move_board(self.board_encoded, direction)
         board_encoded_new = np.uint64(board_encoded_new)
@@ -255,9 +260,8 @@ class BaseBoardFrame(QtWidgets.QFrame):
             self.board = self.mover.decode_board(self.board_encoded)
             self.update_all_frame(self.board)
             self.score += new_score
-            self.gen_new_num(do_anim[0])
-            # print(f'move: {direction} done')
-            # print('')
+            if do_gen:
+                self.gen_new_num(do_anim[0])
 
     def pop_merged(self, board, direction):
         merged_pos = find_merge_positions(board, direction)

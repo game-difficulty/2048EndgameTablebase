@@ -74,18 +74,60 @@ class MainMenuWindow(QtWidgets.QMainWindow):
             self.innerContainer.setFixedWidth(self.width())
             self.verticalLayout.setAlignment(QtCore.Qt.AlignTop)
 
+    @staticmethod
+    def show_and_center_window(window):
+        # 检测窗口位置
+        screen = QtWidgets.QApplication.desktop().screenNumber(QtWidgets.QApplication.desktop().cursor().pos())
+        screen_geometry = QtWidgets.QApplication.desktop().screenGeometry(screen)
+        window_geometry = window.frameGeometry()
+
+        # 检测窗口是否在屏幕之外
+        if (window_geometry.left() < screen_geometry.left() or
+                window_geometry.right() > screen_geometry.right() or
+                window_geometry.top() < screen_geometry.top() or
+                window_geometry.bottom() > screen_geometry.bottom()):
+            # 将窗口移动到屏幕中心
+            center_point = screen_geometry.center()
+            window_geometry.moveCenter(center_point)
+            window.move(window_geometry.topLeft())
+
     def openGameWindow(self):
+        if self.game_window.windowState() & QtCore.Qt.WindowMinimized:
+            self.game_window.setWindowState(
+                self.game_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
         self.game_window.show()
+        self.game_window.activateWindow()
+        self.game_window.raise_()
+        self.show_and_center_window(self.game_window)
         self.game_window.gameframe.update_all_frame(self.game_window.gameframe.board)
 
     def openTrainWindow(self):
+        if self.train_window.windowState() & QtCore.Qt.WindowMinimized:
+            self.train_window.setWindowState(
+                self.train_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
         self.train_window.show()
+        self.train_window.activateWindow()
+        self.train_window.raise_()
+        self.show_and_center_window(self.train_window)
+        self.train_window.gameframe.update_all_frame(self.train_window.gameframe.board)
 
     def openSettingsWindow(self):
+        if self.settings_window.windowState() & QtCore.Qt.WindowMinimized:
+            self.settings_window.setWindowState(
+                self.settings_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
         self.settings_window.show()
+        self.settings_window.activateWindow()
+        self.show_and_center_window(self.settings_window)
+        self.settings_window.raise_()
 
     def openHelpWindow(self):
+        if self.view_window.windowState() & QtCore.Qt.WindowMinimized:
+            self.view_window.setWindowState(
+                self.view_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
         self.view_window.show()
+        self.view_window.activateWindow()
+        self.show_and_center_window(self.view_window)
+        self.view_window.raise_()
 
     # noinspection PyTypeChecker
     def retranslateUi(self):
