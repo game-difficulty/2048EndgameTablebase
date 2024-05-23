@@ -1,6 +1,7 @@
 import os
 from itertools import combinations, permutations
 import time
+import gc
 
 import numpy as np
 from numba import njit, prange
@@ -18,7 +19,7 @@ def gen_boards(arr0, target, position, bm, pattern_check_func, success_check_fun
     根据arr0中的面板，先生成数字，再移动，如果移动后仍是定式范围内且移动有效，则根据生成的数字（2,4）分别填入
     """
     # 初始化两个arr，分别对应填充数字2和4后的棋盘状态
-    length = max(len(arr0) * 8, 99999999) if isfree else max(len(arr0) * 6, 99999999)
+    length = max(len(arr0) * 10, 99999999) if isfree else max(len(arr0) * 6, 99999999)
     arr1 = np.empty(length, dtype=np.uint64)
     arr2 = np.empty(length, dtype=np.uint64)
     c1t, c2t = 0, 0
@@ -54,25 +55,29 @@ def gen_boards(arr0, target, position, bm, pattern_check_func, success_check_fun
 
 def gen_boards_big(arr0, target, position, bm, pattern_check_func, success_check_func, to_find_func, d1, do_check=True,
                    isfree=False):
+    """将arr0分段放入gen_boards生成排序去重后的局面，然后归并"""
     segment_size = 69999999 if isfree else 99999999
     arr1s = [d1]
     arr2s = []
     # 计算需要分段的数量
     num_segments = int(np.ceil(arr0.size / segment_size))
-
+    t0 = time.time()
     for segment_index in range(num_segments):
         start_index = segment_index * segment_size
         end_index = min(start_index + segment_size, arr0.size)
         arr0t = arr0[start_index:end_index].copy()
         arr1t, arr2t = gen_boards(arr0t, target, position, bm, pattern_check_func, success_check_func, to_find_func,
                                   do_check, isfree)
+        del arr0t
         arr1s.append(arr1t)
         arr2s.append(arr2t)
+    t1 = time.time()
     length = int(max(len(arr0) * 1.25, 199999999)) if isfree else int(max(len(arr0) * 1.2, 99999999))
     arr1 = merge_deduplicate_all(arr1s, length)
-    del arr1s
+    del arr1s, arr1t
     arr2 = merge_deduplicate_all(arr2s, length)
-    del arr2s
+    del arr2s, arr2t
+    print(round(time.time()-t1,3),round(t1-t0,3),flush=True)
     return arr1, arr2
 
 
@@ -83,29 +88,24 @@ def merge_deduplicate_all(arrays, length):
     merged_array = np.empty(length, dtype='uint64')  # 最终合并后且去重的数组
     last_added = None  # 上一个添加到 merged_array 的元素
     c = 0  # 已添加的元素数量
-
     # 继续循环，直到所有数组都被完全处理
     while True:
         current_min = None
         min_index = -1
-
         # 寻找当前可用元素中的最小值
         for i in range(num_arrays):
             if indices[i] < len(arrays[i]):  # 确保索引不超出数组长度
                 if current_min is None or arrays[i][indices[i]] < current_min:
                     current_min = arrays[i][indices[i]]
                     min_index = i
-
         # 如果找不到最小值，说明所有数组都已处理完成
         if current_min is None:
             break
-
         # 检查是否需要将当前最小值添加到结果数组中
         if last_added is None or current_min != last_added:
             merged_array[c] = current_min
             last_added = current_min
             c += 1
-
         # 移动选中数组的索引
         indices[min_index] += 1
     return merged_array[:c]
@@ -165,22 +165,6 @@ def binary_search_arr(arr, target):
 
 
 @njit(nogil=True)
-def binary_search2(arr, target):
-    low = 0
-    high = len(arr) - 1
-    while low <= high:
-        mid = (low + high) // 2
-        mid_val = arr[mid]
-        if mid_val < target:
-            low = mid + 1
-        elif mid_val > target:
-            high = mid - 1
-        else:
-            return True  # 找到匹配
-    return False
-
-
-@njit(nogil=True)
 def merge_and_deduplicate(sorted_arr1, sorted_arr2):
     # 结果数组的长度最多与两数组之和一样长
     unique_array = np.empty(len(sorted_arr1) + len(sorted_arr2), dtype=np.uint64)
@@ -232,14 +216,14 @@ def gen_lookup_table_big(arr_init, pattern_check_func, success_check_func, to_fi
 
 def generate_process(arr_init, pattern_check_func, success_check_func, to_find_func, target, position, steps,
                      pathname, docheck_step, bm, isfree):
-    started, big_mode = False, False
+    started = False
     d0, d1 = None, None
     # 从前向后遍历，生成新的棋盘状态并保存到相应的array中
     for i in range(1, steps - 1):
         # 断点重连
         if os.path.exists(pathname + str(i)) or os.path.exists(pathname + str(i) + '.book') or \
                 os.path.exists(pathname + str(i) + '.z'):
-            print(f"skipping step {i}")
+            print(f"skipping step {i}",flush=True)
             continue
         if i == 1:
             arr_init.tofile(pathname + str(i - 1))
@@ -251,26 +235,22 @@ def generate_process(arr_init, pattern_check_func, success_check_func, to_find_f
             started = True
 
         segment_size = 69999999 if isfree else 99999999
-        if len(d0) > segment_size:
-            big_mode = True
-
-        t0 = time.time()
         # 生成新的棋盘状态
-        if not big_mode:
+        if len(d0) < segment_size:
             d1t, d2 = gen_boards(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func,
                                  i > docheck_step, isfree)
             d1 = merge_and_deduplicate(d1, d1t)
-            del d1t
+            d0, d1 = d1, d2
+            del d1t, d2
         else:
-            d1, d2 = gen_boards_big(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func,
+            d0, d1 = gen_boards_big(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func,
                                     d1, i > docheck_step, isfree)
-        print(f"Processing step {i}", round(time.time() - t0),3)
-        del d0
-        d2.tofile(pathname + str(i + 1) + '.t')
-        d1.tofile(pathname + str(i))
-        d0, d1 = d1, d2
+        print(f"Processing step {i}",flush=True)
+        d1.tofile(pathname + str(i + 1) + '.t')
+        d0.tofile(pathname + str(i))
         if os.path.exists(pathname + str(i) + '.t'):
             os.remove(pathname + str(i) + '.t')
+        gc.collect()
     return started, d0, d1
 
 
@@ -326,7 +306,7 @@ def recalculate_process(d1, d2, pattern_check_func, success_check_func, to_find_
         do_compress(pathname + str(i + 2) + '.book')  # 如果设置了压缩，则压缩i+2的book，其已经不需要再频繁查找
         if i > 0:
             d1, d2 = d0, d1
-        print(f"Updated step {i}", round(t0 - t00,3), round(t1 - t0,3), round(time.time()-t1),3)
+        print(f"Updated step {i}", round(t0 - t00,3), round(t1 - t0,3), round(time.time()-t1,3))
 
 
 @njit(nogil=True)
