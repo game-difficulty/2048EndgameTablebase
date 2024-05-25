@@ -19,7 +19,7 @@ def gen_boards(arr0, target, position, bm, pattern_check_func, success_check_fun
     根据arr0中的面板，先生成数字，再移动，如果移动后仍是定式范围内且移动有效，则根据生成的数字（2,4）分别填入
     """
     # 初始化两个arr，分别对应填充数字2和4后的棋盘状态
-    length = max(len(arr0) * 10, 99999999) if isfree else max(len(arr0) * 6, 99999999)
+    length = max(len(arr0) * 8, 499999999) if isfree else max(len(arr0) * 6, 199999999)
     arr1 = np.empty(length, dtype=np.uint64)
     arr2 = np.empty(length, dtype=np.uint64)
     c1t, c2t = 0, 0
@@ -47,8 +47,6 @@ def gen_boards(arr0, target, position, bm, pattern_check_func, success_check_fun
 
     arr1 = arr1[:c1t]
     arr2 = arr2[:c2t]
-    arr2 = Calculator.unique(arr2)
-    arr1 = Calculator.unique(arr1)
     # 返回包含可能的新棋盘状态的两个array
     return arr1, arr2
 
@@ -56,28 +54,39 @@ def gen_boards(arr0, target, position, bm, pattern_check_func, success_check_fun
 def gen_boards_big(arr0, target, position, bm, pattern_check_func, success_check_func, to_find_func, d1, do_check=True,
                    isfree=False):
     """将arr0分段放入gen_boards生成排序去重后的局面，然后归并"""
-    segment_size = 69999999 if isfree else 99999999
+    segment_size = 119999999
+    start_index, seg_index = 0, 0
     arr1s = [d1]
     arr2s = []
-    # 计算需要分段的数量
-    num_segments = int(np.ceil(arr0.size / segment_size))
+
     t0 = time.time()
-    for segment_index in range(num_segments):
-        start_index = segment_index * segment_size
-        end_index = min(start_index + segment_size, arr0.size)
+    while start_index < len(arr0):
+        tt0 = time.time()
+        seg_length = {0:39999999, 1:49999999, 2:69999999}.get(seg_index, segment_size)
+        end_index = min(start_index + seg_length, len(arr0))
         arr0t = arr0[start_index:end_index].copy()
         arr1t, arr2t = gen_boards(arr0t, target, position, bm, pattern_check_func, success_check_func, to_find_func,
                                   do_check, isfree)
         del arr0t
+        print(end_index-start_index, len(arr1t))
+        tt1 = time.time()
+        arr1t = np.unique(arr1t)
+        arr2t = np.unique(arr2t)
         arr1s.append(arr1t)
         arr2s.append(arr2t)
+        print(round(time.time()-tt1,3),round(tt1-tt0,3),len(arr1t),flush=True)
+        start_index = end_index
+        seg_index += 1
+
     t1 = time.time()
     length = int(max(len(arr0) * 1.25, 199999999)) if isfree else int(max(len(arr0) * 1.2, 99999999))
+    gc.collect()
     arr1 = merge_deduplicate_all(arr1s, length)
     del arr1s, arr1t
+    t2 = time.time()
     arr2 = merge_deduplicate_all(arr2s, length)
     del arr2s, arr2t
-    print(round(time.time()-t1,3),round(t1-t0,3),flush=True)
+    print(round(time.time()-t2,3),round(t2-t1,3),round(t1-t0,3),flush=True)
     return arr1, arr2
 
 
@@ -239,6 +248,8 @@ def generate_process(arr_init, pattern_check_func, success_check_func, to_find_f
         if len(d0) < segment_size:
             d1t, d2 = gen_boards(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func,
                                  i > docheck_step, isfree)
+            d1t = np.unique(d1t)
+            d2 = np.unique(d2)
             d1 = merge_and_deduplicate(d1, d1t)
             d0, d1 = d1, d2
             del d1t, d2
@@ -291,14 +302,11 @@ def recalculate_process(d1, d2, pattern_check_func, success_check_func, to_find_
                 d2 = np.fromfile(pathname + str(i + 2) + '.book', dtype='uint64,uint32')
 
         d0 = np.fromfile(pathname + str(i), dtype=np.uint64)
-        t00=time.time()
         expanded_arr0 = np.empty(len(d0), dtype='uint64,uint32')
         expanded_arr0['f0'] = d0
         del d0
-        t0=time.time()
         d0 = recalculate(expanded_arr0, d1, d2, target, position, bm, pattern_check_func, success_check_func,
                          to_find_func, i > docheck_step)
-        t1=time.time()
         d0 = d0[d0['f1'] != 0]  # 去除活不了的局面
         d0.tofile(pathname + str(i) + '.book')
         if os.path.exists(pathname + str(i)):
@@ -306,7 +314,7 @@ def recalculate_process(d1, d2, pattern_check_func, success_check_func, to_find_
         do_compress(pathname + str(i + 2) + '.book')  # 如果设置了压缩，则压缩i+2的book，其已经不需要再频繁查找
         if i > 0:
             d1, d2 = d0, d1
-        print(f"Updated step {i}", round(t0 - t00,3), round(t1 - t0,3), round(time.time()-t1,3))
+        print(f"Updated step {i}")
 
 
 @njit(nogil=True)
@@ -352,7 +360,7 @@ def generate_free_inits(target, t32ks, t2s):
                 generated[c] = value
                 c += 1
 
-    generated = Calculator.unique(generated[:c])
+    generated = np.unique(generated[:c])
     g2 = np.empty(10810800, dtype=np.uint64)
     c = 0
     bm = BoardMover()
@@ -362,7 +370,7 @@ def generate_free_inits(target, t32ks, t2s):
             if nb == np.uint64(Calculator.min_all_symm(nb)):
                 g2[c] = nb
                 c += 1
-    return Calculator.unique(g2[:c])
+    return np.unique(g2[:c])
 
 
 def start_build(pattern, target, position, pathname):

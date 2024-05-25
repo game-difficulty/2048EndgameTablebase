@@ -1,5 +1,5 @@
 import numpy as np
-from numba import njit, uint64, boolean
+from numba import njit, uint64
 
 
 @njit(uint64(uint64))
@@ -233,40 +233,3 @@ def is_4432_success(encoded_board, target, _):
 @njit(nogil=True)
 def re_self(encoded_board):
     return np.uint64(encoded_board)
-
-
-@njit(nogil=True)
-def radix_sort(arr):
-    temp = np.empty_like(arr)
-    # 进行四轮排序，每轮对应一个16位的块
-    for shift in range(0, 64, 16):
-        # 计算每个元素在这一轮的桶编号
-        counts = np.zeros(65537, dtype=np.int32)
-        for i in arr:
-            counts[((i >> np.uint64(shift)) & np.uint64(65535))+1] += 1
-        # 计算累积和，用于确定元素在temp中的位置
-        counts = np.cumsum(counts)
-        # 分配元素到临时数组
-        for i in arr:
-            idx = i >> np.uint64(shift) & np.uint64(65535)
-            temp[counts[idx]] = i
-            counts[idx] += 1
-        # 将排序后的数组复制回原数组，进行下一轮
-        arr[:] = temp
-    return unique_sorted(arr)
-
-
-@njit(nogil=True)
-def unique_sorted(arr):
-    uniquer = np.empty(len(arr), dtype=boolean)
-    uniquer[1:] = arr[1:] != arr[:-1]
-    uniquer[0] = 1
-    return arr[uniquer]
-
-
-@njit(nogil=True)
-def unique(arr):
-    if len(arr) < 200000:
-        return np.unique(arr)
-    else:
-        return radix_sort(arr)
