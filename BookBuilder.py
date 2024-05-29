@@ -321,7 +321,7 @@ def do_compress(bookpath):
     if bookpath[-4:] != 'book':
         return
     if SingletonConfig().config.get('compress', False) and os.path.exists(bookpath):
-        if os.path.getsize(bookpath) > 8388608:
+        if os.path.getsize(bookpath) > 16000:
             trie_compress_progress(*os.path.split(bookpath))
             if os.path.exists(bookpath):
                 os.remove(bookpath)

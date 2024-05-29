@@ -73,7 +73,7 @@ def compress_and_save(ind3, data, output_filename, lvl=1):
     current_size = 0
 
     c = 1
-    segments = np.empty(int(len(data) / 16000), dtype='uint32')
+    segments = np.empty(int(len(data) / 16000) + 2, dtype='uint32')
     segments[0] = 0
     # 将所有压缩后的数据写入一个文件
     with open(output_filename, 'wb') as f:
@@ -117,6 +117,9 @@ def trie_compress_progress(path, filename):
     book = np.fromfile(fullfilepath, dtype=np.dtype([
     ('f1', np.uint8), ('f2', np.uint8), ('f0', np.uint32), ('f3', np.uint8), ('f4', np.uint8), ('f5', np.uint64)]))
     ind0, ind1, ind2, ind3 = compress_data_how(book)
+
+    if len(ind3) <= 2:
+        return
 
     book_ = np.empty(len(book), dtype='uint32,uint64')
     book_['f0'] = book['f0']
