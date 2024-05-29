@@ -3,56 +3,39 @@ import struct
 
 import numpy as np
 
-from BoardMover import BoardMoverWithScore
+from BoardMover import BoardMover
 from Config import SingletonConfig
 from TrieCompressor import trie_decompress_search
-from Calculator import min_all_symm, minUL, re_self, is_L3_pattern, is_4431_pattern, is_444_pattern, is_free_pattern, \
-    is_LL_pattern, is_4432_pattern, is_4441_pattern, is_442_pattern, is_t_pattern
+import Calculator
 
 
 class BookReader:
-    bm = BoardMoverWithScore()
+    bm = BoardMover()
 
     pattern_map = {
-        '': [0, None, re_self],
-        'LL': [-131072 - 34, is_LL_pattern, (minUL, re_self)],
-        '4431': [-131072 - 20, is_4431_pattern, re_self],
-        '444': [-131072 - 2, is_444_pattern, re_self],
-        'free8': [-229376 - 16, is_free_pattern, min_all_symm],
-        'free9': [-196608 - 18, is_free_pattern, min_all_symm],
-        'free10': [-163840 - 20, is_free_pattern, min_all_symm],
-        'L3': [-196608 - 8, is_L3_pattern, re_self],
-        '442': [-196608 - 8, is_442_pattern, re_self],
-        't': [-196608 - 8, is_t_pattern, re_self],
-        '4441': [-98304 - 28, is_4441_pattern, re_self],
-        '4432': [-98304 - 28, is_4432_pattern, minUL],
-        'free8w': [-262144 - 14, is_free_pattern, min_all_symm],
-        'free9w': [-229376 - 16, is_free_pattern, min_all_symm],
-        'free10w': [-196608 - 18, is_free_pattern, min_all_symm],
-        'free11w': [-163840 - 20, is_free_pattern, min_all_symm],
+        '': [0, Calculator.re_self],
+        '24': [-262144 - 2, Calculator.is_24_pattern, Calculator.min24],
+        '34': [-131072 - 2, Calculator.is_34_pattern, Calculator.min34],
+        '33': [-229376 - 2, Calculator.is_33_pattern, Calculator.min33],
     }
 
     @staticmethod
-    def move_on_dic(board, pattern, target, pattern_full, pos='0'):
+    def move_on_dic(board, pattern):
         nums_adjust, pattern_check_func, to_find_func = BookReader.pattern_map[pattern]
-        path = SingletonConfig().config['filepath_map'].get(pattern_full, '')
+        path = SingletonConfig().config['filepath_map'].get(pattern, '')
         nums = (board.sum() + nums_adjust) / 2
-        if pattern[:4] == 'free' and pattern[-1] != 'w':
-            nums -= int(target) / 2
-        if pattern == 'LL':
-            to_find_func = to_find_func[int(pos)]
-        if not path or not pattern_check_func:
+        if not path or not pattern:
             return {'?':'?'}
         if nums < 0:
             return {'down': '', 'right': '', 'left': '', 'up': ''}
         for rotation, flip, t_board in BookReader.gen_all_mirror(board):
             encoded = np.uint64(BookReader.bm.encode_board(t_board))
             if pattern_check_func(encoded):
-                results = BookReader.get_best_move(path, f'{pattern_full}_{int(nums)}.book', encoded,
-                                                   pattern_check_func, BookReader.bm, to_find_func)
+                results = BookReader.get_best_move(path, f'{pattern}_{int(nums)}.book', encoded,
+                                                   BookReader.bm, to_find_func)
                 adjusted = {BookReader.adjust_direction(flip, rotation, direction): success_rate
                             for direction, success_rate in results.items()}
-                float_items = {k: round(v, 8) for k, v in adjusted.items() if isinstance(v, (int, float))}
+                float_items = {k: round(v, 12) for k, v in adjusted.items() if isinstance(v, (int, float))}
                 non_float_items = {k: v for k, v in adjusted.items() if not isinstance(v, (int, float))}
                 sorted_float_items = dict(sorted(float_items.items(), key=lambda item: item[1], reverse=True))
                 sorted_results = {**sorted_float_items, **non_float_items}
@@ -75,12 +58,12 @@ class BookReader:
         return operations
 
     @staticmethod
-    def get_best_move(pathname, filename, board, pattern_check_func, bm, to_find_func):
+    def get_best_move(pathname, filename, board, bm, to_find_func):
         result = {'down': None, 'right': None, 'left': None, 'up': None}
         for newt, d in zip(bm.move_all_dir(board), ('down', 'right', 'left', 'up')):
             # 只考虑有效的移动
             newt = np.uint64(newt)
-            if newt != board and pattern_check_func(newt):
+            if newt != board:
                 result[d] = BookReader.find_value(pathname, filename, to_find_func(newt))
         return result
 
@@ -126,7 +109,7 @@ class BookReader:
         if not os.path.exists(pathname + '\\' + filename):
             return '?'
         with open(pathname + '\\' + filename, 'rb') as f:
-            record_size = struct.calcsize('QI')
+            record_size = struct.calcsize('QQ')
             f.seek(0, 2)
             file_size = f.tell()
             num_records = file_size // record_size
@@ -135,13 +118,14 @@ class BookReader:
             while left <= right:
                 mid = (left + right) // 2
                 f.seek(mid * record_size)
-                key, value_int = struct.unpack('QI', f.read(record_size))
+                key, value_int = struct.unpack('QQ', f.read(record_size))
                 if np.uint64(key) == search_key:
-                    return value_int / 4000000000
+                    return value_int / 2 ** 42
                 elif np.uint64(key) < search_key:
                     left = mid + 1
                 else:
                     right = mid - 1
+        print(f'not found {search_key}')
         # 没有找到局面
         return 0
 
@@ -152,12 +136,12 @@ class BookReader:
         if not os.path.exists(filepath):
             return np.uint64(0)
         with open(filepath, 'rb')as file:
-            record_size = struct.calcsize('QI')
+            record_size = struct.calcsize('QQ')
             file.seek(0, 2)
             file_size = file.tell()
             num_records = file_size // record_size
             random_record_index = np.random.randint(0, num_records - 1)
             offset = random_record_index * record_size
             file.seek(offset)
-            state, _ = struct.unpack('QI', file.read(record_size))
+            state, _ = struct.unpack('QQ', file.read(record_size))
             return np.uint64(BookReader.bm.gen_new_num(state)[0])

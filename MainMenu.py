@@ -2,7 +2,6 @@ from PyQt5 import QtCore, QtWidgets
 from PyQt5 import QtGui
 
 
-from Gamer import GameWindow
 from Settings import SettingsWindow
 from Trainer import TrainWindow
 from Config import SingletonConfig
@@ -14,7 +13,6 @@ class MainMenuWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setupUi()
-        self.game_window = GameWindow()
         self.train_window = TrainWindow()
         self.settings_window = SettingsWindow()
         self.view_window = HTMLViewer('help.htm')
@@ -32,12 +30,6 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.innerContainerLayout = QtWidgets.QVBoxLayout(self.innerContainer)
         self.verticalLayout.addWidget(self.innerContainer, alignment=QtCore.Qt.AlignTop | QtCore.Qt.AlignHCenter)
 
-        self.Game = QtWidgets.QPushButton(self.centralwidget)
-        self.Game.setObjectName("Game")
-        self.Game.clicked.connect(self.openGameWindow)
-        self.Game.setMaximumSize(QtCore.QSize(480, 60))
-        self.Game.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.innerContainerLayout.addWidget(self.Game)
         self.Practise = QtWidgets.QPushButton(self.centralwidget)
         self.Practise.setObjectName("Practise")
         self.Practise.clicked.connect(self.openTrainWindow)
@@ -91,16 +83,6 @@ class MainMenuWindow(QtWidgets.QMainWindow):
             window_geometry.moveCenter(center_point)
             window.move(window_geometry.topLeft())
 
-    def openGameWindow(self):
-        if self.game_window.windowState() & QtCore.Qt.WindowMinimized:
-            self.game_window.setWindowState(
-                self.game_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
-        self.game_window.show()
-        self.game_window.activateWindow()
-        self.game_window.raise_()
-        self.show_and_center_window(self.game_window)
-        self.game_window.gameframe.update_all_frame(self.game_window.gameframe.board)
-
     def openTrainWindow(self):
         if self.train_window.windowState() & QtCore.Qt.WindowMinimized:
             self.train_window.setWindowState(
@@ -133,7 +115,6 @@ class MainMenuWindow(QtWidgets.QMainWindow):
     def retranslateUi(self):
         _translate = QtCore.QCoreApplication.translate
         self.setWindowTitle(_translate("MainMenu", "2048"))
-        self.Game.setText(_translate("MainMenu", "Game"))
         self.Practise.setText(_translate("MainMenu", "Practise"))
         self.Settings.setText(_translate("MainMenu", "Settings"))
         self.Help.setText(_translate("MainMenu", "Help"))

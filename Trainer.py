@@ -270,26 +270,11 @@ class TrainWindow(QtWidgets.QMainWindow):
 
         self.menu_ptn = QtWidgets.QMenu(self.menubar)
         self.menu_ptn.setObjectName("menuMENU")
-        for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", 'free8', 'free9', 'free10', 'free8w',
-                    'free9w', 'free10w', "free11w"]:
+        for ptn in ['24', '34', '33']:
             m = QtWidgets.QAction(ptn, self)
             m.triggered.connect(lambda: self.menu_selected(0))
             self.menu_ptn.addAction(m)
         self.menubar.addAction(self.menu_ptn.menuAction())
-        self.menu_tgt = QtWidgets.QMenu(self.menubar)
-        self.menu_tgt.setObjectName("menuMENU")
-        for ptn in ["128", "256", "512", "1024", "2048", "4096", "8192"]:
-            m = QtWidgets.QAction(ptn, self)
-            m.triggered.connect(lambda: self.menu_selected(1))
-            self.menu_tgt.addAction(m)
-        self.menubar.addAction(self.menu_tgt.menuAction())
-        self.menu_pos = QtWidgets.QMenu(self.menubar)
-        self.menu_pos.setObjectName("menuMENU")
-        for ptn in ["0", "1", "2"]:
-            m = QtWidgets.QAction(ptn, self)
-            m.triggered.connect(lambda: self.menu_selected(2))
-            self.menu_pos.addAction(m)
-        self.menubar.addAction(self.menu_pos.menuAction())
 
         self.retranslateUi()
         QtCore.QMetaObject.connectSlotsByName(self)
@@ -341,8 +326,6 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.set_filepath_bt.setText(_translate("Train", "SET..."))
         self.dis32k_checkBox.setText(_translate("Train", "Display numbers for 32k tile"))
         self.menu_ptn.setTitle(_translate("Train", "Pattern"))
-        self.menu_pos.setTitle(_translate("Train", "Position"))
-        self.menu_tgt.setTitle(_translate("Train", "Target"))
 
     def dis32k_state_change(self):
         SingletonConfig().config['dis_32k'] = self.dis32k_checkBox.isChecked()
@@ -351,25 +334,16 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gameframe.setFocus()
 
     def menu_selected(self, i):
-        self.pattern_settings[i] = self.sender().text()
-        self.pattern_text.setText('_'.join(self.pattern_settings[:2]))
-        if '' not in self.pattern_settings:
-            if self.pattern_settings[0] in ['444', 'LL', 'L3']:
-                if self.pattern_settings[0] != 'L3' and self.pattern_settings[2] == '2':
-                    self.pattern_settings[2] = '0'
-                self.current_pattern = '_'.join(self.pattern_settings)
-            else:
-                self.pattern_settings[2] = '0'
-                self.current_pattern = '_'.join(self.pattern_settings[:2])
-            self.filepath.setText(SingletonConfig().config['filepath_map'].get(self.current_pattern, ''))
-            self.show_results()
-            self.pattern_text.setText(self.current_pattern)
+        self.current_pattern = self.sender().text()
+        self.pattern_text.setText('Variant ' + '*'.join(self.current_pattern))
+        self.filepath.setText(SingletonConfig().config['filepath_map'].get(self.current_pattern, ''))
+        self.show_results()
 
-            self.gameframe.score = 0
-            self.gameframe.history = []
-            self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
-            self.played_length = 0
-            self.record_loaded = None
+        self.gameframe.score = 0
+        self.gameframe.history = []
+        self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
+        self.played_length = 0
+        self.record_loaded = None
 
     def tiles_bt_on_click(self):
         sender = self.sender()
@@ -392,8 +366,7 @@ class TrainWindow(QtWidgets.QMainWindow):
     def show_results(self):
         if self.show_results_checkbox.isChecked():
             board = self.gameframe.mover.decode_board(np.uint64(int('0x' + self.board_state.text().rjust(16, '0'), 16)))
-            result = BookReader.move_on_dic(board, self.pattern_settings[0], self.pattern_settings[1],
-                                            self.current_pattern, self.pattern_settings[2])
+            result = BookReader.move_on_dic(board, self.current_pattern)
             if isinstance(result, dict):
                 results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in result.items())
                 self.results_label.setText(results_text)

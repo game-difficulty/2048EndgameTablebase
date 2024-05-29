@@ -116,29 +116,55 @@ class BoardMover:
         return (
             self.move_down(board, board2), self.move_right(board), self.move_left(board), self.move_up(board, board2))
 
-    @staticmethod
-    def merge_line(line, reverse=False):
+    def merge_line(self, line, reverse=False):
         if reverse:
             line = line[::-1]
-        non_zero = [i for i in line if i != 0]  # 去掉所有的0
-        merged = []
+
+        parts = [[1]]
+        current_part = [1]
+        parts.pop()
+        current_part.pop()
+        # 按32K方块拆分行
+        for number in line:
+            if number == 32768:
+                if current_part:
+                    parts.append(current_part)
+                    current_part = [1]
+                    current_part.pop()
+                parts.append([32768])
+            else:
+                current_part.append(number)
+        if current_part:
+            parts.append(current_part)
+
+        # 合并每个子行，再将所有部分重新组合
+        merged_line = [item for part in [self.merge_subline(part) for part in parts] for item in part]
+
+        if reverse:
+            merged_line = merged_line[::-1]
+
+        return np.array(merged_line)
+
+    @staticmethod
+    def merge_subline(part):
+        if len(part) < 2:
+            return part
+        non_zero = [i for i in part if i != 0]
+        merged = [1]
+        merged.pop()
         skip = False
         for i in range(len(non_zero)):
             if skip:
                 skip = False
                 continue
-            if i + 1 < len(non_zero) and non_zero[i] == non_zero[i + 1] and non_zero[i] != 32768:
-                merged_value = 2 * non_zero[i]
-                merged.append(merged_value)
+            if i + 1 < len(non_zero) and non_zero[i] == non_zero[i + 1]:
+                merged.append(2 * non_zero[i])
                 skip = True
             else:
                 merged.append(non_zero[i])
-
-        # 补齐剩下的 0
-        merged += [0] * (len(line) - len(merged))
-        if reverse:
-            merged = merged[::-1]
-        return np.array(merged)
+        # 补齐剩下的0
+        merged += [0] * (len(part) - len(merged))
+        return merged
 
     def calculate_all_moves(self):
         # 初始化存储所有可能的行及其移动后结果差值的字典
@@ -301,31 +327,62 @@ class BoardMoverWithScore:
             total_score += self.score[line]
         return total_score
 
-    @staticmethod
-    def merge_line(line, reverse=False):
+    def merge_line(self, line, reverse=False):
         if reverse:
             line = line[::-1]
-        non_zero = [i for i in line if i != 0]  # 去掉所有的0
-        merged = []
+
+        parts = [[1]]
+        current_part = [1]
+        parts.pop()
+        current_part.pop()
+        # 按32K方块拆分行
+        for number in line:
+            if number == 32768:
+                if current_part:
+                    parts.append(current_part)
+                    current_part = [1]
+                    current_part.pop()
+                parts.append([32768])
+            else:
+                current_part.append(number)
+        if current_part:
+            parts.append(current_part)
+
+        scores = 0
+        merged_line=[1]
+        merged_line.pop()
+        for part in parts:
+            result = self.merge_subline(part)
+            scores += result[1]
+            merged_line += result[0]
+
+        if reverse:
+            merged_line = merged_line[::-1]
+
+        return np.array(merged_line), scores
+
+    @staticmethod
+    def merge_subline(part):
+        if len(part) < 2:
+            return part, 0
+        non_zero = [i for i in part if i != 0]
+        merged = [1]
+        merged.pop()
         score = 0
         skip = False
         for i in range(len(non_zero)):
             if skip:
                 skip = False
                 continue
-            if i + 1 < len(non_zero) and non_zero[i] == non_zero[i + 1] and non_zero[i] != 32768:
-                merged_value = 2 * non_zero[i]
-                score += merged_value
-                merged.append(merged_value)
+            if i + 1 < len(non_zero) and non_zero[i] == non_zero[i + 1]:
+                merged.append(2 * non_zero[i])
                 skip = True
+                score += non_zero[i] * 2
             else:
                 merged.append(non_zero[i])
-
-        # 补齐剩下的 0
-        merged += [0] * (len(line) - len(merged))
-        if reverse:
-            merged = merged[::-1]
-        return np.array(merged), score
+        # 补齐剩下的0
+        merged += [0] * (len(part) - len(merged))
+        return merged, score
 
     def calculate_all_moves(self):
         # 初始化存储所有可能的行及其移动后结果差值的字典

@@ -6,7 +6,7 @@ from numba import njit
 
 
 @njit(nogil=True)
-def compress_data_how(data):  # u32 u8 u8 u8 u8 u32
+def compress_data_how(data):  # u32 u8 u8 u8 u8 u64
     # 存储索引的列表
     ind0 = np.empty(255, dtype='uint8,uint32')  # f4,ind1_pos
     ind1 = np.empty(65535, dtype='uint8,uint32')  # f3,ind2_pos
@@ -114,10 +114,11 @@ def trie_compress_progress(path, filename):
         os.makedirs(target_file)
     except FileExistsError:
         pass
-    book = np.fromfile(fullfilepath, dtype="uint32,uint8,uint8,uint8,uint8,uint32")
+    book = np.fromfile(fullfilepath, dtype=np.dtype([
+    ('f1', np.uint8), ('f2', np.uint8), ('f0', np.uint32), ('f3', np.uint8), ('f4', np.uint8), ('f5', np.uint64)]))
     ind0, ind1, ind2, ind3 = compress_data_how(book)
 
-    book_ = np.empty(len(book), dtype='uint32,uint32')
+    book_ = np.empty(len(book), dtype='uint32,uint64')
     book_['f0'] = book['f0']
     book_['f1'] = book['f5']
     del book
@@ -138,8 +139,8 @@ def trie_compress_progress(path, filename):
 def search_tree(ind, segments, board):
     board_prefix = [np.uint8((board >> np.uint64(56)) & np.uint64(0xff)),
                     np.uint8((board >> np.uint64(48)) & np.uint64(0xff)),
-                    np.uint8((board >> np.uint64(40)) & np.uint64(0xff)),
-                    np.uint8((board >> np.uint64(32)) & np.uint64(0xff))]
+                    np.uint8((board >> np.uint64(8)) & np.uint64(0xff)),
+                    np.uint8((board >> np.uint64(0)) & np.uint64(0xff))]
 
     mid = 1
     for f in range(4):
@@ -178,7 +179,7 @@ def search_block(block, target):
     while low <= high:
         mid = (low + high) // 2
         if block[mid]['f0'] == target:
-            return block[mid]['f1'] / 4000000000
+            return block[mid]['f1'] / 2 ** 42
         elif block[mid]['f0'] < target:
             low = mid + 1
         else:
@@ -196,8 +197,8 @@ def trie_decompress_search(filepath, board):
         f.seek(start)  # 定位到块的起始位置
         compressed_data = f.read(end - start)  # 读取压缩数据块
         decompressed_data = lzma.decompress(compressed_data)  # 解压数据块
-    block = np.frombuffer(decompressed_data, dtype='uint32,uint32')
-    target = np.uint32(board & np.uint64(0xffffffff))
+    block = np.frombuffer(decompressed_data, dtype='uint32,uint64')
+    target = np.uint32((board & np.uint64(0xffffffff0000)) >> np.uint64(16))
     high = ind[pos]['f1']
     low = ind[pos - 1]['f1']
     if low >= high:
@@ -206,6 +207,6 @@ def trie_decompress_search(filepath, board):
     if result:
         return result
     elif target == block[0]['f0']:
-        return block[0]['f1'] / 4000000000
+        return block[0]['f1'] / 2 ** 42
     else:
         return 0.0

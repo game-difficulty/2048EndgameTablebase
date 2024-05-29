@@ -48,22 +48,11 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.set_filepath_bt.setObjectName("set_filepath_bt")
         self.set_filepath_bt.clicked.connect(self.filepath_changed)
         self.selfLayout.addWidget(self.set_filepath_bt, 1, 2, 1, 1)
-        self.target_combo = QtWidgets.QComboBox(self.centralwidget)
-        self.target_combo.setObjectName("target_combo")
-        for i in ["128", "256", "512", "1024", "2048", "4096", "8192"]:
-            self.target_combo.addItem(i)
-        self.selfLayout.addWidget(self.target_combo, 0, 2, 1, 1)
         self.pattern_combo = QtWidgets.QComboBox(self.centralwidget)
         self.pattern_combo.setObjectName("pattern_combo")
-        for i in ["444", "4431", "LL", "L3", "t", "442", "free8", "free9", "free10", "4441", "4432", "free8w", "free9w",
-                  "free10w", "free11w"]:
+        for i in ["24", "34", "33"]:
             self.pattern_combo.addItem(i)
         self.selfLayout.addWidget(self.pattern_combo, 0, 1, 1, 1)
-        self.pos_combo = QtWidgets.QComboBox(self.centralwidget)
-        self.pos_combo.setObjectName("target_combo")
-        for i in ["0", "1", "2"]:
-            self.pos_combo.addItem(i)
-        self.selfLayout.addWidget(self.pos_combo, 0, 3, 1, 1)
         self.build_bt = QtWidgets.QPushButton(self.centralwidget)
         self.build_bt.setObjectName("build_bt")
         self.build_bt.clicked.connect(self.build_book)
@@ -222,25 +211,14 @@ class SettingsWindow(QtWidgets.QMainWindow):
             self.filepath_edit.setText(filepath)
 
     def build_book(self):
-        position = self.pos_combo.currentText()
         pattern = self.pattern_combo.currentText()
-        target = self.target_combo.currentText()
         pathname = self.filepath_edit.toPlainText()
-        if pattern and target and pathname and position and os.path.exists(pathname):
+        if pattern and pathname and os.path.exists(pathname):
             config = SingletonConfig().config
-            if pattern in ['444', 'LL', 'L3']:
-                ptn = pattern + '_' + target + '_' + position
-                config['filepath_map'][ptn] = pathname
-                pathname = os.path.join(pathname, ptn + '_')
-            else:
-                ptn = pattern + '_' + target
-                config['filepath_map'][ptn] = pathname
-                pathname = os.path.join(pathname, ptn + '_')
-            target = np.log2(int(target))
-            position = int(position)
+            pathname = os.path.join(pathname, pattern + '_')
             self.build_bt.setText('Building...')
             self.build_bt.setEnabled(False)
-            self.Building_thread = BuildThread(pattern, target, position, pathname)
+            self.Building_thread = BuildThread(pattern, pathname)
             self.Building_thread.finished.connect(self.on_build_finished)
             self.Building_thread.start()  # 启动线程
 
@@ -267,15 +245,13 @@ class SettingsWindow(QtWidgets.QMainWindow):
 class BuildThread(QtCore.QThread):
     finished = QtCore.pyqtSignal()
 
-    def __init__(self, pattern, target, position, pathname):
+    def __init__(self, pattern, pathname):
         super().__init__()
         self.pattern = pattern
-        self.target = target
-        self.position = position
         self.pathname = pathname
 
     def run(self):
-        start_build(self.pattern, self.target, self.position, self.pathname)
+        start_build(self.pattern, self.pathname)
         self.finished.emit()
 
 

@@ -23,9 +23,7 @@ class SingletonConfig:
                 return pickle.load(file)
         else:
             return {
-                'filepath_map': {
-                    'LL_2048_0': r"E:\LL_2048_0",
-                },
+                'filepath_map': dict(),
                 'colors': ['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
                            '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'] + [
                               '#ffffff'] * 20,
