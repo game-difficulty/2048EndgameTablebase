@@ -31,7 +31,7 @@ class BookReader:
         for rotation, flip, t_board in BookReader.gen_all_mirror(board):
             encoded = np.uint64(BookReader.bm.encode_board(t_board))
             if pattern_check_func(encoded):
-                results = BookReader.get_best_move(path, f'{pattern}_{int(nums)}.book', encoded,
+                results = BookReader.get_best_move(path, f'{pattern}_{int(nums)}.book', encoded, pattern_check_func,
                                                    BookReader.bm, to_find_func)
                 adjusted = {BookReader.adjust_direction(flip, rotation, direction): success_rate
                             for direction, success_rate in results.items()}
@@ -58,13 +58,20 @@ class BookReader:
         return operations
 
     @staticmethod
-    def get_best_move(pathname, filename, board, bm, to_find_func):
+    def get_best_move(pathname, filename, board, pattern_check_func, bm, to_find_func):
         result = {'down': None, 'right': None, 'left': None, 'up': None}
+        fullpath = os.path.join(pathname, filename.replace('.book', '.z'))
+        if os.path.exists(fullpath):
+            path = os.path.join(fullpath, filename.replace('.book', '.'))
+            ind = np.fromfile(path + 'i', dtype='uint8,uint32')
+            segments = np.fromfile(path + 's', dtype='uint32')
+        else:
+            ind = segments = None
+
         for newt, d in zip(bm.move_all_dir(board), ('down', 'right', 'left', 'up')):
-            # 只考虑有效的移动
             newt = np.uint64(newt)
-            if newt != board:
-                result[d] = BookReader.find_value(pathname, filename, to_find_func(newt))
+            if newt != board and pattern_check_func(newt):
+                result[d] = BookReader.find_value(pathname, filename, to_find_func(newt), ind, segments)
         return result
 
     @staticmethod
@@ -92,23 +99,28 @@ class BookReader:
         return direction
 
     @staticmethod
-    def find_value(pathname, filename, search_key):
+    def find_value(pathname, filename, search_key, ind=None, segments=None):
         search_key = np.uint64(search_key)
         fullpath = os.path.join(pathname, filename)
         if os.path.exists(fullpath):
             return BookReader.find_value_in_binary(pathname, filename, search_key)
-        elif os.path.exists(fullpath.replace('.book','.z')):
-            path = os.path.join(fullpath.replace('.book','.z'), filename.replace('.book','.'))
-            return trie_decompress_search(path, search_key)
+        elif ind is not None and segments is not None:
+            path = os.path.join(fullpath.replace('.book', '.z'), filename.replace('.book', '.'))
+            return trie_decompress_search(path, search_key, ind, segments)
+        elif os.path.exists(fullpath.replace('.book', '.z')):
+            path = os.path.join(fullpath.replace('.book', '.z'), filename.replace('.book', '.'))
+            ind = np.fromfile(path + 'i', dtype='uint8,uint32')
+            segments = np.fromfile(path + 's', dtype='uint32')
+            return trie_decompress_search(path, search_key, ind, segments)
 
     @staticmethod
     def find_value_in_binary(pathname, filename, search_key):
         """
         从二进制文件中读取数据，并根据给定的键查找对应的值。
         """
-        if not os.path.exists(pathname + '\\' + filename):
+        if not os.path.exists(os.path.join(pathname, filename)):
             return '?'
-        with open(pathname + '\\' + filename, 'rb') as f:
+        with open(os.path.join(pathname, filename), 'rb') as f:
             record_size = struct.calcsize('QQ')
             f.seek(0, 2)
             file_size = f.tell()
@@ -144,4 +156,5 @@ class BookReader:
             offset = random_record_index * record_size
             file.seek(offset)
             state, _ = struct.unpack('QQ', file.read(record_size))
-            return np.uint64(BookReader.bm.gen_new_num(state)[0])
+            state = np.uint64(BookReader.bm.gen_new_num(np.uint64(state))[0])
+            return state

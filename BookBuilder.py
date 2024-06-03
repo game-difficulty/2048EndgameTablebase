@@ -6,7 +6,7 @@ import numpy as np
 from numba import njit, prange
 
 import Calculator
-from BoardMover import BoardMover
+from BoardMover import BoardMover, BoardMoverWithScore
 from Config import SingletonConfig
 from TrieCompressor import trie_compress_progress
 
@@ -132,13 +132,11 @@ def recalculate(arr0, arr1, arr2, bm, to_find_func):
                     subs_arr = arr1 if new_value == 1 else arr2
                     t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
                     max_expected_score = 0  # 记录有效移动后的面板成功概率中的最大值
-                    for newt in bm.move_all_dir(t_gen):
+                    for newt, new_score in bm.move_all_dir(t_gen):
                         if newt != t_gen:  # 只考虑有效的移动
                             # 获取移动后的面板成功概率
-                            max_expected_score = max(max_expected_score, binary_search_arr(
+                            max_expected_score = max(max_expected_score, new_score * 2 ** 42 + binary_search_arr(
                                 subs_arr, to_find_func(newt)))
-                    if max_expected_score == 0:  # 游戏结束
-                        max_expected_score = total_score(t_gen)
                     # 对最佳移动下的成功概率加权平均
                     expected_score += np.uint64(max_expected_score * probability)
         # t是进行一次有效移动后尚未生成新数字时的面板，因此不可能没有空位置
@@ -208,6 +206,7 @@ def gen_lookup_table_big(arr_init, to_find_func, steps, pathname):
     bm = BoardMover()
     started, d0, d1 = generate_process(arr_init, to_find_func, steps, pathname, bm)
     d0, d1 = final_steps(started, d0, d1, pathname, steps)
+    bm = BoardMoverWithScore()
     recalculate_process(d0, d1, to_find_func, steps, pathname, bm)  # 这里的最后的两个book d0,d1就是回算的d1,d2
 
 
@@ -302,23 +301,14 @@ def recalculate_process(d1, d2, to_find_func, steps, pathname, bm):
 @njit(nogil=True, parallel=True)
 def final_situation_process(expanded_arr0):
     for i in prange(len(expanded_arr0)):
-        expanded_arr0[i][1] = total_score(expanded_arr0[i][0])
+        expanded_arr0[i][1] = 0
     return expanded_arr0
-
-
-@njit(nogil=True)
-def total_score(b, n=16):
-    score = 0
-    for i in range(n):  # 遍历所有位置
-        tile = (b >> np.uint64(4 * i)) & np.uint64(0xF)
-        if tile == np.uint64(15):
-            continue
-        score += (tile - 1) * 2 ** tile
-    return score * 2 ** 42
 
 
 def do_compress(bookpath):
     if bookpath[-4:] != 'book':
+        return
+    if os.path.basename(bookpath)[:2] == '24':
         return
     if SingletonConfig().config.get('compress', False) and os.path.exists(bookpath):
         if os.path.getsize(bookpath) > 16000:

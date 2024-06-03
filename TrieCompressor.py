@@ -115,11 +115,8 @@ def trie_compress_progress(path, filename):
     except FileExistsError:
         pass
     book = np.fromfile(fullfilepath, dtype=np.dtype([
-    ('f1', np.uint8), ('f2', np.uint8), ('f0', np.uint32), ('f3', np.uint8), ('f4', np.uint8), ('f5', np.uint64)]))
+        ('f1', np.uint8), ('f2', np.uint8), ('f0', np.uint32), ('f3', np.uint8), ('f4', np.uint8), ('f5', np.uint64)]))
     ind0, ind1, ind2, ind3 = compress_data_how(book)
-
-    if len(ind3) <= 2:
-        return
 
     book_ = np.empty(len(book), dtype='uint32,uint64')
     book_['f0'] = book['f0']
@@ -190,9 +187,7 @@ def search_block(block, target):
     return 0.0  # 没找到
 
 
-def trie_decompress_search(filepath, board):
-    ind = np.fromfile(filepath + 'i', dtype='uint8,uint32')
-    segments = np.fromfile(filepath + 's', dtype='uint32')
+def trie_decompress_search(filepath, board, ind, segments):
     start, end, pos = search_tree(ind, segments, board)
     if not start and not end:
         return 0.0  # 没找到
@@ -204,8 +199,13 @@ def trie_decompress_search(filepath, board):
     target = np.uint32((board & np.uint64(0xffffffff0000)) >> np.uint64(16))
     high = ind[pos]['f1']
     low = ind[pos - 1]['f1']
-    if low >= high:
+
+    # 边界条件，此时ind[pos]获取的值是记录压缩块位置的start/end值而不是索引块的相对位置，需要修正
+    if segments[np.searchsorted(segments, pos, side='left')] == pos:
+        high = len(block) - 1
+    if segments[np.searchsorted(segments, pos - 1, side='left')] == pos - 1:  # 边界条件
         low = -1
+
     result = search_block(block[low + 1:high + 1], target)
     if result:
         return result

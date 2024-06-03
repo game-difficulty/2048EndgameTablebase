@@ -317,8 +317,13 @@ class BoardMoverWithScore:
     def move_all_dir(self, board):
         board = np.uint64(board)
         board2 = self.reverse(board)
+        score1 = self.add_score(board)
+        score2 = self.add_score(board2)
         return (
-            self.move_down(board, board2), self.move_right(board), self.move_left(board), self.move_up(board, board2))
+            (self.move_down(board, board2), score2),
+            (self.move_right(board), score1),
+            (self.move_left(board), score1),
+            (self.move_up(board, board2), score2))
 
     def add_score(self, board):
         total_score = 0
