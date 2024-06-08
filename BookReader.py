@@ -3,14 +3,14 @@ import struct
 
 import numpy as np
 
-from BoardMover import BoardMover
+from BoardMover import BoardMoverWithScore
 from Config import SingletonConfig
 from TrieCompressor import trie_decompress_search
 import Calculator
 
 
 class BookReader:
-    bm = BoardMover()
+    bm = BoardMoverWithScore()
 
     pattern_map = {
         '': [0, Calculator.re_self],
@@ -68,10 +68,10 @@ class BookReader:
         else:
             ind = segments = None
 
-        for newt, d in zip(bm.move_all_dir(board), ('down', 'right', 'left', 'up')):
+        for (newt, new_score), d in zip(bm.move_all_dir(board), ('down', 'right', 'left', 'up')):
             newt = np.uint64(newt)
             if newt != board and pattern_check_func(newt):
-                result[d] = BookReader.find_value(pathname, filename, to_find_func(newt), ind, segments)
+                result[d] = BookReader.find_value(pathname, filename, to_find_func(newt), ind, segments) + new_score
         return result
 
     @staticmethod
