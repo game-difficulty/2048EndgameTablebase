@@ -93,7 +93,7 @@ Outperforming its contemporaries, this AI boasts the highest success rates for 3
 -  **free**: Provide optimal strategies for 32k and 65k endgames. However, their actual boost to LL is minimal.
 
 
-## Project structure
+## Project Structure
 
 ![Project Structure](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/b273c818-8985-4844-adef-350d00f6525c)
 
