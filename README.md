@@ -65,7 +65,7 @@ Outperforming its contemporaries, this AI boasts the highest success rates for 3
 
      | milestone     | success rate | comparable score |
      |---------------|--------------|------------------|
-  -  | 8k            | 100%         | 97000            |
+     | 8k            | 100%         | 97000            |
      | 16k           | 99.3%        | 210000           |
      | 32k           | 78.5%        | 453000           |
      | 32k+16k       | 65.6%        | 663000           |
