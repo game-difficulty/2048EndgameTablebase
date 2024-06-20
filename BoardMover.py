@@ -28,8 +28,8 @@ class BoardMover:
 
     @staticmethod
     def decode_board(encoded_board):
-        encoded_board = int(encoded_board)
-        board = np.zeros((4, 4), dtype=np.int64)
+        encoded_board = np.uint64(encoded_board)
+        board = np.zeros((4, 4), dtype=np.int32)
         for i in range(3,-1,-1):
             for j in range(3,-1,-1):
                 encoded_num = (encoded_board >> (4 * ((3 - i) * 4 + (3 - j)))) & 0xF
@@ -50,7 +50,7 @@ class BoardMover:
 
     @staticmethod
     def decode_row(encoded):
-        row = np.empty(4, dtype=np.uint64)
+        row = np.empty(4, dtype=np.uint32)
         for i in range(4):
             num = (np.uint64(encoded) >> np.uint64(4 * (3 - i))) & np.uint64(0xF)
             if num > 0:
@@ -96,14 +96,14 @@ class BoardMover:
         return board
 
     def move_board(self, board, direction):
-        if direction == 'Left':
+        if direction == 1:
             return self.move_left(board)
-        elif direction == 'Right':
+        elif direction == 2:
             return self.move_right(board)
-        elif direction == 'Up':
+        elif direction == 3:
             board2 = self.reverse(board)
             return self.move_up(board, board2)
-        elif direction == 'Down':
+        elif direction == 4:
             board2 = self.reverse(board)
             return self.move_down(board, board2)
         else:
@@ -206,8 +206,8 @@ class BoardMoverWithScore:
 
     @staticmethod
     def decode_board(encoded_board):
-        encoded_board = int(encoded_board)
-        board = np.zeros((4, 4), dtype=np.int64)
+        encoded_board = np.uint64(encoded_board)
+        board = np.zeros((4, 4), dtype=np.int32)
         for i in range(3,-1,-1):
             for j in range(3,-1,-1):
                 encoded_num = (encoded_board >> (4 * ((3 - i) * 4 + (3 - j)))) & 0xF
@@ -228,7 +228,7 @@ class BoardMoverWithScore:
 
     @staticmethod
     def decode_row(encoded):
-        row = np.empty(4, dtype=np.uint64)
+        row = np.empty(4, dtype=np.uint32)
         for i in range(4):
             num = (np.uint64(encoded) >> np.uint64(4 * (3 - i))) & np.uint64(0xF)
             if num > 0:
@@ -246,44 +246,48 @@ class BoardMoverWithScore:
         return board
 
     def move_left(self, board):
-        board ^= self.movel[board & np.uint64(0xffff)]
-        board ^= self.movel[board >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(16)
-        board ^= self.movel[board >> np.uint64(32) & np.uint64(0xffff)] << np.uint64(32)
-        board ^= self.movel[board >> np.uint64(48) & np.uint64(0xffff)] << np.uint64(48)
-        return board
+        total_score = 0
+        for i in range(4):
+            line = (board >> np.uint64(16 * i)) & np.uint64(0xFFFF)
+            total_score += self.score[line]
+            board ^= self.movel[line] << np.uint64(16 * i)
+        return board, total_score
 
     def move_right(self, board):
-        board ^= self.mover[board & np.uint64(0xffff)]
-        board ^= self.mover[board >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(16)
-        board ^= self.mover[board >> np.uint64(32) & np.uint64(0xffff)] << np.uint64(32)
-        board ^= self.mover[board >> np.uint64(48) & np.uint64(0xffff)] << np.uint64(48)
-        return board
+        total_score = 0
+        for i in range(4):
+            line = (board >> np.uint64(16 * i)) & np.uint64(0xFFFF)
+            total_score += self.score[line]
+            board ^= self.mover[line] << np.uint64(16 * i)
+        return board, total_score
 
     def move_up(self, board, board2):
-        board ^= self.moveu[board2 & np.uint64(0xffff)]
-        board ^= self.moveu[board2 >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(4)
-        board ^= self.moveu[board2 >> np.uint64(32) & np.uint64(0xffff)] << np.uint64(8)
-        board ^= self.moveu[board2 >> np.uint64(48) & np.uint64(0xffff)] << np.uint64(12)
-        return board
+        total_score = 0
+        for i in range(4):
+            line = (board2 >> np.uint64(16 * i)) & np.uint64(0xFFFF)
+            total_score += self.score[line]
+            board ^= self.moveu[line] << np.uint64(4 * i)
+        return board, total_score
 
     def move_down(self, board, board2):
-        board ^= self.moved[board2 & np.uint64(0xffff)]
-        board ^= self.moved[board2 >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(4)
-        board ^= self.moved[board2 >> np.uint64(32) & np.uint64(0xffff)] << np.uint64(8)
-        board ^= self.moved[board2 >> np.uint64(48) & np.uint64(0xffff)] << np.uint64(12)
-        return board
+        total_score = 0
+        for i in range(4):
+            line = (board2 >> np.uint64(16 * i)) & np.uint64(0xFFFF)
+            total_score += self.score[line]
+            board ^= self.moved[line] << np.uint64(4 * i)
+        return board, total_score
 
-    def move_board(self, board, direction):
-        if direction == 'Left':
-            return self.move_left(board), self.add_score(board)
-        elif direction == 'Right':
-            return self.move_right(board), self.add_score(board)
-        elif direction == 'Up':
+    def move_board(self, board: np.uint64, direction: np.uint8) -> tuple[np.uint64, np.uint32]:
+        if direction == 1:
+            return self.move_left(board)
+        elif direction == 2:
+            return self.move_right(board)
+        elif direction == 3:
             board2 = self.reverse(board)
-            return self.move_up(board, board2), self.add_score(board2)
-        elif direction == 'Down':
+            return self.move_up(board, board2)
+        elif direction == 4:
             board2 = self.reverse(board)
-            return self.move_down(board, board2), self.add_score(board2)
+            return self.move_down(board, board2)
         else:
             print(f'bad direction input:{direction}')
             return board, 0
@@ -292,14 +296,8 @@ class BoardMoverWithScore:
         board = np.uint64(board)
         board2 = self.reverse(board)
         return (
-            self.move_down(board, board2), self.move_right(board), self.move_left(board), self.move_up(board, board2))
-
-    def add_score(self, board):
-        total_score = 0
-        for i in range(4):
-            line = (board >> np.uint64(16 * i)) & np.uint64(0xFFFF)
-            total_score += self.score[line]
-        return total_score
+            self.move_down(board, board2)[0], self.move_right(board)[0],
+            self.move_left(board)[0], self.move_up(board, board2)[0])
 
     @staticmethod
     def merge_line(line, reverse=False):

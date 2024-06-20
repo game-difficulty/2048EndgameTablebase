@@ -20,6 +20,7 @@ class TrainFrame(BaseBoardFrame):
 
     def mousePressEvent(self, event):
         if self.num_to_set is None:
+            self.setFocus()
             return
         self.score = 0
         local_pos = self.game_square.mapFromParent(event.pos())
@@ -440,6 +441,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gameframe.board_encoded = np.uint64(int(self.board_state.text(), 16))
         self.gameframe.board = self.gameframe.mover.decode_board(self.gameframe.board_encoded)
         self.gameframe.update_all_frame(self.gameframe.board)
+        self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
 
     def handle_rotate(self, mode):
         rotate_func = {'UD': ReverseUD, 'RL': ReverseLR, 'R90': RotateR, 'L90': RotateL}[mode]

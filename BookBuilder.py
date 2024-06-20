@@ -79,7 +79,7 @@ def gen_boards_big(arr0, target, position, bm, pattern_check_func, success_check
         seg_index += 1
 
     t1 = time.time()
-    length = int(max(len(arr0) * 1.25, 199999999)) if isfree else int(max(len(arr0) * 1.2, 99999999))
+    length = int(max(len(arr0) * 1.25, 319999999)) if isfree else int(max(len(arr0) * 1.2, 119999999))
     gc.collect()
     arr1 = merge_deduplicate_all(arr1s, length)
     del arr1s, arr1t
@@ -91,10 +91,13 @@ def gen_boards_big(arr0, target, position, bm, pattern_check_func, success_check
 
 
 @njit(nogil=True)
-def merge_deduplicate_all(arrays, length):
+def merge_deduplicate_all(arrays, length=0):
+    if length == 0:
+        for arr in arrays:
+            length += len(arr)
     num_arrays = len(arrays)
     indices = np.zeros(num_arrays, dtype='uint32')  # 每个数组的当前索引
-    merged_array = np.empty(length, dtype='uint64')  # 最终合并后且去重的数组
+    merged_array = np.empty(length, dtype='uint64')  # 合并后且去重的数组
     last_added = None  # 上一个添加到 merged_array 的元素
     c = 0  # 已添加的元素数量
     # 继续循环，直到所有数组都被完全处理
@@ -128,31 +131,32 @@ def recalculate(arr0, arr1, arr2, target, position, bm, pattern_check_func, succ
     对于arr0中的每个面板，考虑在每个空位填充数字2或4（90%概率为2，10%概率为4），
     然后对于每个可能的填充，执行所有有效的移动操作，并基于移动结果的成功概率来更新当前面板的成功概率。
     """
-    for k in prange(len(arr0)):
-        t = arr0[k][0]
-        if do_check and success_check_func(t, target, position):
-            arr0[k][1] = 4000000000
-            continue
-        # 初始化概率和权重
-        success_probability = 0.0
-        empty_slots = 0
-        for i in range(16):  # 遍历所有位置
-            if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
-                empty_slots += 1
-                # 对于每个空位置，尝试填充2和4
-                for new_value, probability in [(1, 0.9), (2, 0.1)]:  # 填充2的概率为90%，填充4的概率为10%
-                    subs_arr = arr1 if new_value == 1 else arr2
-                    t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
-                    optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
-                    for newt in bm.move_all_dir(t_gen):
-                        if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
-                            # 获取移动后的面板成功概率
-                            optimal_success_rate = max(optimal_success_rate, binary_search_arr(
-                                subs_arr, to_find_func(newt)))
-                    # 对最佳移动下的成功概率加权平均
-                    success_probability += optimal_success_rate * probability
-        # t是进行一次有效移动后尚未生成新数字时的面板，因此不可能没有空位置
-        arr0[k][1] = np.uint32(success_probability / empty_slots)
+    for start, end in ((0,len(arr0)//10),(len(arr0)//10,len(arr0)//3),(len(arr0)//3,len(arr0))):  # 缓解负载不均衡问题
+        for k in prange(start, end):
+            t = arr0[k][0]
+            if do_check and success_check_func(t, target, position):
+                arr0[k][1] = 4000000000
+                continue
+            # 初始化概率和权重
+            success_probability = 0.0
+            empty_slots = 0
+            for i in range(16):  # 遍历所有位置
+                if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
+                    empty_slots += 1
+                    # 对于每个空位置，尝试填充2和4
+                    for new_value, probability in [(1, 0.9), (2, 0.1)]:  # 填充2的概率为90%，填充4的概率为10%
+                        subs_arr = arr1 if new_value == 1 else arr2
+                        t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
+                        optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
+                        for newt in bm.move_all_dir(t_gen):
+                            if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
+                                # 获取移动后的面板成功概率
+                                optimal_success_rate = max(optimal_success_rate, binary_search_arr(
+                                    subs_arr, to_find_func(newt)))
+                        # 对最佳移动下的成功概率加权平均
+                        success_probability += optimal_success_rate * probability
+            # t是进行一次有效移动后尚未生成新数字时的面板，因此不可能没有空位置
+            arr0[k][1] = np.uint32(success_probability / empty_slots)
     return arr0
 
 
@@ -256,7 +260,7 @@ def generate_process(arr_init, pattern_check_func, success_check_func, to_find_f
         else:
             d0, d1 = gen_boards_big(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func,
                                     d1, i > docheck_step, isfree)
-        print(f"Processing step {i}",flush=True)
+        # print(f"Processing step {i}",flush=True)
         d1.tofile(pathname + str(i + 1) + '.t')
         d0.tofile(pathname + str(i))
         if os.path.exists(pathname + str(i) + '.t'):
@@ -305,16 +309,24 @@ def recalculate_process(d1, d2, pattern_check_func, success_check_func, to_find_
         expanded_arr0 = np.empty(len(d0), dtype='uint64,uint32')
         expanded_arr0['f0'] = d0
         del d0
+        t0 = time.time()
         d0 = recalculate(expanded_arr0, d1, d2, target, position, bm, pattern_check_func, success_check_func,
                          to_find_func, i > docheck_step)
-        d0 = d0[d0['f1'] != 0]  # 去除活不了的局面
+        t1 = time.time()
+        d0 = Remove_died(d0)  # 去除活不了的局面
+        print(f"Updated step {i}", round(time.time() - t1, 3), round(t1 - t0, 3))
         d0.tofile(pathname + str(i) + '.book')
         if os.path.exists(pathname + str(i)):
             os.remove(pathname + str(i))
         do_compress(pathname + str(i + 2) + '.book')  # 如果设置了压缩，则压缩i+2的book，其已经不需要再频繁查找
         if i > 0:
             d1, d2 = d0, d1
-        print(f"Updated step {i}")
+
+
+@njit(nogil=True,parallel=True)
+def Remove_died(d):
+    d = d[d['f1'] != np.uint32(0)]
+    return d
 
 
 @njit(nogil=True)
@@ -390,24 +402,25 @@ def start_build(pattern, target, position, pathname):
             gen_lookup_table_big(arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
                                  Calculator.min_all_symm, target, 1, steps, pathname, docheck_step, isfree=True)
     else:
-        steps = int(2 ** target / 2 + {'444': 256, '4431': 128, 'LL': 96, 'L3': 36, '4441': 96, '4432': 96, '442':36,
+        steps = int(2 ** target / 2 + {'444': 96, '4431': 64, 'LL': 48, 'L3': 36, '4441': 48, '4432': 48, '442':36,
                                        't':36, }[pattern])
         docheck_step = int(2 ** target / 2) - 10
         inits = {
             '444': np.array([np.uint64(0x100000000000ffff), np.uint64(0x000000010000ffff)], dtype=np.uint64),
             '4431': np.array([np.uint64(0x10000000123f2fff), np.uint64(0x00000001123f2fff)], dtype=np.uint64),
             'LL': np.array([np.uint64(0x1000000023ff24ff), np.uint64(0x0000000123ff24ff)], dtype=np.uint64),
-            'L3': np.array([np.uint64(0x100000001fff2fff), np.uint64(0x000000011fff2fff)], dtype=np.uint64),
+            'L3': np.array([np.uint64(0xfff2fff110000000), np.uint64(0xfff2fff100000001)], dtype=np.uint64),
             '4441': np.array([np.uint64(0x0000100012323fff), np.uint64(0x0001000012323fff)], dtype=np.uint64),
             '4432': np.array([np.uint64(0x00001000123f23ff), np.uint64(0x00010000123f23ff)], dtype=np.uint64),
-            '442': np.array([np.uint64(0x1000000012ffffff), np.uint64(0x0000000112ffffff)], dtype=np.uint64),
-            't': np.array([np.uint64(0x10000000f1fff2ff), np.uint64(0x00000001f1fff2ff)], dtype=np.uint64),
+            '442': np.array([np.uint64(0xffffff2110000000), np.uint64(0xffffff2100000001)], dtype=np.uint64),
+            't': np.array([np.uint64(0xff2fff1f10000000), np.uint64(0xff2fff1f00000001)], dtype=np.uint64),
         }
         ini = inits[pattern]
         if ((pattern == 'LL') and (position == 0)) or (pattern == '4432'):
             to_find_func = Calculator.minUL
         else:
             to_find_func = Calculator.re_self
+        isfree = True if pattern in ['4441',] else False  # 4441太大了，4432暂时观望
         gen_lookup_table_big(ini, eval(f'Calculator.is_{pattern}_pattern'), eval(f'Calculator.is_{pattern}_success'),
-                             to_find_func, target, position, steps, pathname, docheck_step)
+                             to_find_func, target, position, steps, pathname, docheck_step, isfree)
     return True

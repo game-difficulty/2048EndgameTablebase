@@ -45,14 +45,14 @@ class BookReader:
             return {'?':'?'}
         if nums < 0:
             return {'down': '', 'right': '', 'left': '', 'up': ''}
-        for rotation, flip, t_board in BookReader.gen_all_mirror(board):
+        for rotation, flip, t_board in BookReader.gen_all_mirror(board, pattern):
             encoded = np.uint64(BookReader.bm.encode_board(t_board))
             if pattern_check_func(encoded):
                 results = BookReader.get_best_move(path, f'{pattern_full}_{int(nums)}.book', encoded,
                                                    pattern_check_func, BookReader.bm, to_find_func)
                 adjusted = {BookReader.adjust_direction(flip, rotation, direction): success_rate
                             for direction, success_rate in results.items()}
-                float_items = {k: round(v, 8) for k, v in adjusted.items() if isinstance(v, (int, float))}
+                float_items = {k: round(v, 10) for k, v in adjusted.items() if isinstance(v, (int, float))}
                 non_float_items = {k: v for k, v in adjusted.items() if not isinstance(v, (int, float))}
                 sorted_float_items = dict(sorted(float_items.items(), key=lambda item: item[1], reverse=True))
                 sorted_results = {**sorted_float_items, **non_float_items}
@@ -61,7 +61,7 @@ class BookReader:
         return {'down': '', 'right': '', 'left': '', 'up': ''}
 
     @staticmethod
-    def gen_all_mirror(board):
+    def gen_all_mirror(board, pattern):
         operations = [
             ('none', 'none', board),
             ('rotate_90', 'none', np.rot90(board)),
@@ -72,16 +72,23 @@ class BookReader:
             ('rotate_180', 'horizontal', np.flip(np.rot90(board, k=2), axis=1)),
             ('rotate_270', 'horizontal', np.flip(np.rot90(board, k=3), axis=1)),
         ]
-        return operations
+        return operations if pattern != 'LL' else operations[:4]
 
     @staticmethod
     def get_best_move(pathname, filename, board, pattern_check_func, bm, to_find_func):
         result = {'down': None, 'right': None, 'left': None, 'up': None}
+        fullpath = os.path.join(pathname, filename.replace('.book', '.z'))
+        if os.path.exists(fullpath):
+            path = os.path.join(fullpath, filename.replace('.book', '.'))
+            ind = np.fromfile(path + 'i', dtype='uint8,uint32')
+            segments = np.fromfile(path + 's', dtype='uint32,uint64')
+        else:
+            ind = segments = None
+
         for newt, d in zip(bm.move_all_dir(board), ('down', 'right', 'left', 'up')):
-            # 只考虑有效的移动
             newt = np.uint64(newt)
             if newt != board and pattern_check_func(newt):
-                result[d] = BookReader.find_value(pathname, filename, to_find_func(newt))
+                result[d] = BookReader.find_value(pathname, filename, to_find_func(newt), ind, segments)
         return result
 
     @staticmethod
@@ -109,23 +116,28 @@ class BookReader:
         return direction
 
     @staticmethod
-    def find_value(pathname, filename, search_key):
+    def find_value(pathname, filename, search_key, ind=None, segments=None):
         search_key = np.uint64(search_key)
         fullpath = os.path.join(pathname, filename)
         if os.path.exists(fullpath):
             return BookReader.find_value_in_binary(pathname, filename, search_key)
-        elif os.path.exists(fullpath.replace('.book','.z')):
-            path = os.path.join(fullpath.replace('.book','.z'), filename.replace('.book','.'))
-            return trie_decompress_search(path, search_key)
+        elif ind is not None and segments is not None:
+            path = os.path.join(fullpath.replace('.book', '.z'), filename.replace('.book', '.'))
+            return trie_decompress_search(path, search_key, ind, segments)
+        elif os.path.exists(fullpath.replace('.book', '.z')):
+            path = os.path.join(fullpath.replace('.book', '.z'), filename.replace('.book', '.'))
+            ind = np.fromfile(path + 'i', dtype='uint8,uint32')
+            segments = np.fromfile(path + 's', dtype='uint32,uint64')
+            return trie_decompress_search(path, search_key, ind, segments)
 
     @staticmethod
     def find_value_in_binary(pathname, filename, search_key):
         """
         从二进制文件中读取数据，并根据给定的键查找对应的值。
         """
-        if not os.path.exists(pathname + '\\' + filename):
+        if not os.path.exists(os.path.join(pathname, filename)):
             return '?'
-        with open(pathname + '\\' + filename, 'rb') as f:
+        with open(os.path.join(pathname, filename), 'rb') as f:
             record_size = struct.calcsize('QI')
             f.seek(0, 2)
             file_size = f.tell()
@@ -147,17 +159,21 @@ class BookReader:
 
     @staticmethod
     def get_random_state(pathname, pattern_full):
-        book_id = np.random.randint(0, 1)
-        filepath = os.path.join(pathname, pattern_full + f'_{book_id}.Book')
-        if not os.path.exists(filepath):
-            return np.uint64(0)
-        with open(filepath, 'rb')as file:
-            record_size = struct.calcsize('QI')
-            file.seek(0, 2)
-            file_size = file.tell()
-            num_records = file_size // record_size
-            random_record_index = np.random.randint(0, num_records - 1)
-            offset = random_record_index * record_size
-            file.seek(offset)
-            state, _ = struct.unpack('QI', file.read(record_size))
-            return np.uint64(BookReader.bm.gen_new_num(state)[0])
+        book_index = [0,1,2,3,4,5,6,7,8,9]
+        while len(book_index) > 0:
+            book_id = np.random.choice(book_index)
+            book_index.remove(book_id)
+            filepath = os.path.join(pathname, pattern_full + f'_{book_id}.book')
+            if not os.path.exists(filepath):
+                continue
+            with open(filepath, 'rb')as file:
+                record_size = struct.calcsize('QI')
+                file.seek(0, 2)
+                file_size = file.tell()
+                num_records = file_size // record_size
+                random_record_index = np.random.randint(0, num_records - 1)
+                offset = random_record_index * record_size
+                file.seek(offset)
+                state, _ = struct.unpack('QI', file.read(record_size))
+                return np.uint64(BookReader.bm.gen_new_num(np.uint64(state))[0])
+        return np.uint64(0)

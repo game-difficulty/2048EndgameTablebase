@@ -258,7 +258,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
 
     def save_all(self):
-        SingletonConfig().config['4_spawn_rate'] = float(self.spawnrate_box.text())
+        SingletonConfig().config['4_spawn_rate'] = float(self.spawnrate_box.text().replace(',','.'))
         SingletonConfig().config['do_animation'] = [self.appear_checkBox.isChecked(), self.pop_checkBox.isChecked()]
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
         SingletonConfig.save_config(SingletonConfig().config)

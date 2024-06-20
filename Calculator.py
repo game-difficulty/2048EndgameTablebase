@@ -134,41 +134,47 @@ def is_444_success(encoded_board, target, position):
 
 @njit(nogil=True)
 def is_442_pattern(encoded_board):
-    return (np.uint64(encoded_board) & np.uint64(16777215)) == np.uint64(16777215)
+    return (np.uint64(encoded_board) & np.uint64(0xffffff0000000000)) == np.uint64(0xffffff0000000000) or \
+        (np.uint64(encoded_board) & np.uint64(0xfff0ff0f00000000)) == np.uint64(0xfff0ff0f00000000) or \
+        (np.uint64(encoded_board) & np.uint64(0xff0ffff000000000)) == np.uint64(0xff0ffff000000000) or \
+        (np.uint64(encoded_board) & np.uint64(0xff00ffff00000000)) == np.uint64(0xff00ffff00000000)
 
 
 @njit(nogil=True)
 def is_442_success(encoded_board, target, _):
-    return (np.uint64(encoded_board) >> np.uint64(24) & np.uint64(0xf)) == np.uint64(target)
+    return (np.uint64(encoded_board) >> np.uint64(36) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(32) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(20) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(16) & np.uint64(0xf)) == np.uint64(target)
 
 
 @njit(nogil=True)
 def is_t_pattern(encoded_board):
-    return (np.uint64(encoded_board) & np.uint64(4043305215)) == np.uint64(4043305215) or \
-        (np.uint64(encoded_board) & np.uint64(263886833910015)) == np.uint64(263886833910015) or \
-        (np.uint64(encoded_board) & np.uint64(17294086451910082815)) == np.uint64(17294086451910082815)
+    return (np.uint64(encoded_board) & np.uint64(0xff0fff0f00000000)) == np.uint64(0xff0fff0f00000000) or \
+        (np.uint64(encoded_board) & np.uint64(0xff00ff0f000f0000)) == np.uint64(0xff00ff0f000f0000) or \
+        (np.uint64(encoded_board) & np.uint64(0xff00ff00000f000f)) == np.uint64(0xff00ff00000f000f)
 
 
 @njit(nogil=True)
 def is_t_success(encoded_board, target, _):
-    return (np.uint64(encoded_board) >> np.uint64(8) & np.uint64(0xf)) == np.uint64(target) or \
-        (np.uint64(encoded_board) >> np.uint64(32) & np.uint64(0xf)) == np.uint64(target) or \
-        (np.uint64(encoded_board) >> np.uint64(44) & np.uint64(0xf)) == np.uint64(target) or \
-        (np.uint64(encoded_board) >> np.uint64(24) & np.uint64(0xf)) == np.uint64(target)
+    return (np.uint64(encoded_board) >> np.uint64(48) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(36) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(16) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(28) & np.uint64(0xf)) == np.uint64(target)
 
 
 @njit(nogil=True)
 def is_L3_pattern(encoded_board):
-    return (np.uint64(encoded_board) & np.uint64(268374015)) == np.uint64(268374015)
+    return (np.uint64(encoded_board) & np.uint64(0xfff0fff000000000)) == np.uint64(0xfff0fff000000000)
 
 
 @njit(nogil=True)
 def is_L3_success(encoded_board, target, position):
     if position > 0:
-        return (np.uint64(encoded_board) >> np.uint64(40 - 4 * position) & np.uint64(0xf)) == np.uint64(target)
+        return (np.uint64(encoded_board) >> np.uint64(20 + 4 * position) & np.uint64(0xf)) == np.uint64(target)
     else:
-        return (np.uint64(encoded_board) >> np.uint64(40) & np.uint64(0xf)) == np.uint64(target) or \
-            (np.uint64(encoded_board) >> np.uint64(28) & np.uint64(0xf)) == np.uint64(target)
+        return (np.uint64(encoded_board) >> np.uint64(32) & np.uint64(0xf)) == np.uint64(target) or \
+            (np.uint64(encoded_board) >> np.uint64(20) & np.uint64(0xf)) == np.uint64(target)
 
 
 @njit(nogil=True)
@@ -211,7 +217,7 @@ def is_4441_pattern(encoded_board):
 
 @njit(nogil=True)
 def is_4441_success(encoded_board, target, _):
-    for pos in (12, 16, 20, 24, 28):
+    for pos in (16,):
         if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
             return True
     return False
@@ -224,7 +230,7 @@ def is_4432_pattern(encoded_board):
 
 @njit(nogil=True)
 def is_4432_success(encoded_board, target, _):
-    for pos in (8, 20, 32):
+    for pos in (20,):
         if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
             return True
     return False

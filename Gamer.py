@@ -5,9 +5,8 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QPropertyAnimation, QRect, QEasingCurve, QTimer, QSize, QPoint
 from PyQt5.QtGui import QIcon
 
-from AIPlayer import AutoplayS
+from AIPlayer import AutoplayS, Dispatcher
 from BoardMover import BoardMoverWithScore
-from BookReader import BookReader
 from Config import SingletonConfig
 
 
@@ -89,7 +88,7 @@ class SquareFrame(QtWidgets.QFrame):
             layout.setVerticalSpacing(int(margin / 1.2))
 
     def setupUi(self, num_rows=4, num_cols=4):
-        self.setMaximumSize(1000,1000)
+        self.setMaximumSize(1000, 1000)
         self.rows = num_rows
         self.cols = num_cols
         self.setStyleSheet("border-radius: 5px; background-color: rgb(209, 209, 209);")
@@ -193,7 +192,7 @@ class BaseBoardFrame(QtWidgets.QFrame):
     def __init__(self, centralwidget=None):
         super(BaseBoardFrame, self).__init__(centralwidget)
         self.setupUi()
-        self.board = np.zeros((4, 4), dtype=np.int64)
+        self.board = np.zeros((4, 4), dtype=np.int32)
         self.board_encoded = np.uint64(0)
         self.score = 0
         self.mover = BoardMoverWithScore()
@@ -251,7 +250,8 @@ class BaseBoardFrame(QtWidgets.QFrame):
 
     def do_move(self, direction, do_gen=True):
         do_anim = SingletonConfig().config['do_animation']
-        board_encoded_new, new_score = self.mover.move_board(self.board_encoded, direction)
+        direct = {'Left':1, 'Right':2, 'Up':3, 'Down':4}[direction.capitalize()]
+        board_encoded_new, new_score = self.mover.move_board(self.board_encoded, direct)
         board_encoded_new = np.uint64(board_encoded_new)
         if board_encoded_new != self.board_encoded:
             if do_anim[1]:
@@ -309,7 +309,7 @@ class GameFrame(BaseBoardFrame):
         self.ai_thread.ai_player.board = self.board
 
     def do_ai_move(self, direction):
-        if direction == '':
+        if not direction:
             self.died_when_ai_state = True
         else:
             self.died_when_ai_state = False
@@ -318,29 +318,62 @@ class GameFrame(BaseBoardFrame):
 
 
 class AIThread(QtCore.QThread):
-    updateBoard = QtCore.pyqtSignal(str)  # 传递更新的棋盘和得分
+    updateBoard = QtCore.pyqtSignal(str)  # 传递下一步操作
 
     def __init__(self, board):
         super(AIThread, self).__init__()
         self.ai_player = AutoplayS(board)
 
-    def run(self):
-        # AI 计算步骤
-        empty_slots = (self.ai_player.board == 0).sum()
-        big_nums = (self.ai_player.board > 256).sum()
-        if empty_slots > 10:
-            self.ai_player.start_search(1)
-        elif empty_slots > 4:
-            self.ai_player.start_search(2)
-        elif empty_slots > 2 or big_nums < 3:
-            self.ai_player.start_search(3)
+    def is_mess(self):
+        """检查是否乱阵"""
+        board = self.ai_player.board
+        large_tiles = (board > 64).sum()
+        board_flatten = board.flatten()
+        if large_tiles < 3:
+            return False
+        elif large_tiles > 3:
+            top4_pos = np.argpartition(board_flatten, -4)[-4:]
+            if len(np.unique(board_flatten[top4_pos])) < 4:
+                return False
+            top4_pos = tuple(sorted(top4_pos))
+            return top4_pos not in (
+                (10, 11, 14, 15), (11, 13, 14, 15), (3, 7, 11, 15), (8, 12, 13, 14), (4, 8, 12, 13), (8, 9, 12, 13),
+                (0, 1, 2, 4), (1, 2, 3, 7), (0, 1, 4, 5), (0, 1, 4, 8), (2, 3, 7, 11), (2, 3, 6, 7), (0, 1, 2, 3),
+                (0, 4, 8, 12), (3, 7, 11, 15), (12, 13, 14, 15))
         else:
-            depth = 4
+            top3_pos = np.argpartition(board_flatten, -3)[-3:]
+            if len(np.unique(board_flatten[top3_pos])) < 3:
+                return False
+            top3_pos = tuple(sorted(top3_pos))
+            return top3_pos not in (
+                (11, 14, 15), (13, 14, 15), (7, 11, 15), (12, 13, 14), (4, 8, 12), (8, 12, 13), (0, 1, 2), (1, 2, 3),
+                (0, 1, 4), (0, 4, 8), (3, 7, 11), (2, 3, 7))
+
+    def run(self):
+        # 根据局面设定搜索深度
+        empty_slots = (self.ai_player.board == 0).sum()
+        big_nums = (self.ai_player.board > 128).sum()
+        if self.is_mess():
+            big_nums2 = (self.ai_player.board > 512).sum()
+            depth = 6
             self.ai_player.start_search(depth)
-            while self.ai_player.node < 6000 * depth * big_nums ** 2 and depth < 7:
+            while self.ai_player.node < 320000 * big_nums2 ** 2 and depth < 9:
                 depth += 1
                 self.ai_player.start_search(depth)
-        self.updateBoard.emit(self.ai_player.best_operation)
+        elif empty_slots > 9 or big_nums < 1:
+            self.ai_player.start_search(1)
+        elif empty_slots > 4 and big_nums < 2:
+            self.ai_player.start_search(2)
+        elif (empty_slots > 2 and big_nums < 3) or (big_nums < 2):
+            self.ai_player.start_search(3)
+        else:
+            depth = 4 if big_nums < 4 else 5
+            self.ai_player.start_search(depth)
+            while self.ai_player.node < 20000 * depth and depth < 8:
+                depth += 1
+                self.ai_player.start_search(depth)
+            # print(depth, self.ai_player.node)
+        self.updateBoard.emit({1:'Left', 2:'Right', 3:'Up', 4:'Down'}.get(self.ai_player.best_operation, ''))
 
 
 # noinspection PyAttributeOutsideInit
@@ -355,6 +388,7 @@ class GameWindow(QtWidgets.QMainWindow):
 
         self.ai_timer = QTimer(self)
         self.ai_timer.timeout.connect(self.handleOneStep)
+        self.ai_dispatcher = Dispatcher(BoardMoverWithScore.decode_board(np.uint64(0)), np.uint64(0))
 
         self.statusbar.showMessage("All features may be slow when used for the first time. Please be patient.", 8000)
 
@@ -538,47 +572,30 @@ class GameWindow(QtWidgets.QMainWindow):
         if self.isProcessing or self.gameframe.ai_processing:
             return
         self.isProcessing = True
-        if best_move := self.check_reader_4(self.gameframe.board):
-            self.gameframe.do_move(best_move.capitalize())
-        else:
+        self.ai_dispatcher.reset(self.gameframe.board, self.gameframe.board_encoded)
+        best_move = self.ai_dispatcher.dispatcher()
+        if best_move == 'AI':
             self.gameframe.ai_step()
+        else:
+            self.gameframe.do_move(best_move.capitalize())
         self.update_score()
         if self.ai_state:
             if self.gameframe.died_when_ai_state:
                 self.ai_state = False
                 self.ai.setText("AI: ON")
                 self.ai_timer.stop()
+        # print(self.ai_dispatcher.last_operator)
         self.isProcessing = False
-
-    @staticmethod
-    def check_reader_4(board):
-        if (board >= 512).sum() < 4:
-            return ''
-        flat_arr = board.flatten()
-        if (board == np.partition(flat_arr, -4)[-4]).sum() > 1:
-            return ''
-        max_indices = np.argpartition(flat_arr, -4)[-4:]
-        flat_arr[max_indices] = 32768
-        masked_board = flat_arr.reshape(4, 4)
-        if 'LL_2048_0' in SingletonConfig().config['filepath_map'].keys():
-            r1 = BookReader.move_on_dic(masked_board, 'LL', '2048', 'LL_2048_0')
-            move = list(r1.keys())[0]
-            if isinstance(r1[move], float) and r1[move] > 0.2:
-                return move
-        if '4431_2048' in SingletonConfig().config['filepath_map'].keys():
-            r2 = BookReader.move_on_dic(masked_board, '4431', '2048', '4431_2048')
-            move = list(r2.keys())[0]
-            if isinstance(r2[move], float) and r2[move] > 0.2:
-                return move
-        return ''
 
     def handleUndo(self):
         self.gameframe.undo()
         self.update_score()
+        self.gameframe.died_when_ai_state = False
 
     def handleNewGame(self):
         self.gameframe.setup_new_game()
         self.update_score()
+        self.gameframe.died_when_ai_state = False
 
     def toggleAI(self):
         if not self.ai_state:
@@ -587,7 +604,7 @@ class GameWindow(QtWidgets.QMainWindow):
             self.ai_timer.start(20)
             if not SingletonConfig().config['filepath_map'].get('4431_2048_0', '') or \
                     not SingletonConfig().config['filepath_map'].get('LL_2048_0', ''):
-                self.statusbar.showMessage("Requires 4431_2048 and LL_2048_0 for best results", 3000)
+                self.statusbar.showMessage("Run LL_4096_0 for best performance.", 3000)
         else:
             self.ai.setText("AI: ON")
             self.ai_state = False

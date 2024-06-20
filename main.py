@@ -1,20 +1,21 @@
 import sys
+import time
 
 from PyQt5 import QtCore, QtWidgets, QtGui
 
+from MainMenu import MainMenuWindow
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
 
+    main_win = MainMenuWindow()
     splash_pix = QtGui.QPixmap("pic/cover.jpg")
     splash = QtWidgets.QSplashScreen(splash_pix, QtCore.Qt.WindowStaysOnTopHint)
     splash.setMask(splash_pix.mask())
     splash.show()
     app.processEvents()
 
-    from MainMenu import MainMenuWindow
-
-    main_win = MainMenuWindow()
+    time.sleep(3)
     main_win.show()
     splash.close()
 

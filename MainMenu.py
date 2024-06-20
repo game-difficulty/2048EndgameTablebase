@@ -1,23 +1,25 @@
+import numpy as np
+
 from PyQt5 import QtCore, QtWidgets
 from PyQt5 import QtGui
 
-
-from Gamer import GameWindow
-from Settings import SettingsWindow
-from Trainer import TrainWindow
 from Config import SingletonConfig
-from HTMLViewer import HTMLViewer
 
 
 # noinspection PyAttributeOutsideInit
 class MainMenuWindow(QtWidgets.QMainWindow):
     def __init__(self):
+        # 启动预加载线程
+        self.preload_thread = PreloadThread()
+        self.preload_thread.start()
+
         super().__init__()
         self.setupUi()
-        self.game_window = GameWindow()
-        self.train_window = TrainWindow()
-        self.settings_window = SettingsWindow()
-        self.view_window = HTMLViewer('help.htm')
+        self.game_window = None
+        self.train_window = None
+        self.test_window = None
+        self.settings_window = None
+        self.view_window = None
 
     def setupUi(self):
         self.setObjectName("self")
@@ -44,6 +46,12 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.Practise.setMaximumSize(QtCore.QSize(480, 60))
         self.Practise.setStyleSheet("font: 500 12pt \"Cambria\";")
         self.innerContainerLayout.addWidget(self.Practise)
+        self.Test = QtWidgets.QPushButton(self.centralwidget)
+        self.Test.setObjectName("Test")
+        self.Test.clicked.connect(self.openTestWindow)
+        self.Test.setMaximumSize(QtCore.QSize(480, 60))
+        self.Test.setStyleSheet("font: 500 12pt \"Cambria\";")
+        self.innerContainerLayout.addWidget(self.Test)
         self.Settings = QtWidgets.QPushButton(self.centralwidget)
         self.Settings.setObjectName("Settings")
         self.Settings.clicked.connect(self.openSettingsWindow)
@@ -92,6 +100,9 @@ class MainMenuWindow(QtWidgets.QMainWindow):
             window.move(window_geometry.topLeft())
 
     def openGameWindow(self):
+        if self.game_window is None:
+            from Gamer import GameWindow
+            self.game_window = GameWindow()
         if self.game_window.windowState() & QtCore.Qt.WindowMinimized:
             self.game_window.setWindowState(
                 self.game_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
@@ -102,6 +113,9 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.game_window.gameframe.update_all_frame(self.game_window.gameframe.board)
 
     def openTrainWindow(self):
+        if self.train_window is None:
+            from Trainer import TrainWindow
+            self.train_window = TrainWindow()
         if self.train_window.windowState() & QtCore.Qt.WindowMinimized:
             self.train_window.setWindowState(
                 self.train_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
@@ -111,7 +125,23 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.show_and_center_window(self.train_window)
         self.train_window.gameframe.update_all_frame(self.train_window.gameframe.board)
 
+    def openTestWindow(self):
+        if self.test_window is None:
+            from Tester import TestWindow
+            self.test_window = TestWindow()
+        if self.test_window.windowState() & QtCore.Qt.WindowMinimized:
+            self.test_window.setWindowState(
+                self.test_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
+        self.test_window.show()
+        self.test_window.activateWindow()
+        self.test_window.raise_()
+        self.show_and_center_window(self.test_window)
+        self.test_window.gameframe.update_all_frame(self.test_window.gameframe.board)
+
     def openSettingsWindow(self):
+        if self.settings_window is None:
+            from Settings import SettingsWindow
+            self.settings_window = SettingsWindow()
         if self.settings_window.windowState() & QtCore.Qt.WindowMinimized:
             self.settings_window.setWindowState(
                 self.settings_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
@@ -121,6 +151,9 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.settings_window.raise_()
 
     def openHelpWindow(self):
+        if self.view_window is None:
+            from MDViewer import MDViewer
+            self.view_window = MDViewer('help.md')
         if self.view_window.windowState() & QtCore.Qt.WindowMinimized:
             self.view_window.setWindowState(
                 self.view_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
@@ -135,9 +168,24 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(_translate("MainMenu", "2048"))
         self.Game.setText(_translate("MainMenu", "Game"))
         self.Practise.setText(_translate("MainMenu", "Practise"))
+        self.Test.setText(_translate("MainMenu", "Test"))
         self.Settings.setText(_translate("MainMenu", "Settings"))
         self.Help.setText(_translate("MainMenu", "Help"))
 
     def closeEvent(self, event):
         SingletonConfig().save_config(SingletonConfig().config)
-        event.accept()
+        if self.preload_thread.isRunning():
+            self.preload_thread.quit()
+            self.preload_thread.wait()
+        super().closeEvent(event)
+
+
+class PreloadThread(QtCore.QThread):
+    def run(self):
+        from BoardMover import BoardMoverWithScore  # , BoardMover
+        bm = BoardMoverWithScore()
+        bm.move_all_dir(np.uint64(0x010120342216902ac))
+        bm.move_board(np.uint64(0x010120342216902ac), 2)
+        # bm = BoardMover()
+        # bm.move_all_dir(np.uint64(0x010120342216902ac))
+        print("Preloading complete.")
