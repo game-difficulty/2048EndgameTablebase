@@ -61,7 +61,8 @@ Outperforming its contemporaries, this AI boasts the highest success rates for 3
      | depth    | games | score/game | moves/s | seconds/game |
      |----------|-------|------------|---------|--------------|
      | adaptive | 1200  | 720087     | 26      | 978          |
-   
+
+
      | milestone     | success rate | comparable score |
      |---------------|--------------|------------------|
   -  | 8k            | 100%         | 97000            |
@@ -72,6 +73,7 @@ Outperforming its contemporaries, this AI boasts the highest success rates for 3
      | 32k+16k+8k+4k | 43.0%        | 804000           |
      | final 1k      | 28.5%        | 833000           |
      | 65k           | 5.8%         | 971000           |
+
 
 ![survival rate](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/4b1a4bd8-3f3c-4fcb-9740-afde4f19889f)
 
