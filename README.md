@@ -55,7 +55,7 @@ Outperforming its contemporaries, this AI boasts the highest success rates for 3
    - Enable the AI by clicking the **AI: ON** button and watch the AI play
 
 ##  AI Performance
--  This AI reaches the 65536 tile 3.5% of the time and the 32768 tile 80.5% of the time without undos.
+-  This AI reaches the 65536 tile 5.8% (±1.3%) of the time and the 32768 tile 78.5% (±2.5%) of the time without undos.
   -  The following table gives the AI performance statistics and success rates by stage
    
      | depth    | games | score/game | moves/s | seconds/game |
