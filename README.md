@@ -91,3 +91,9 @@ Outperforming its contemporaries, this AI boasts the highest success rates for 3
 -  **4431**: Operates during the transitional stages where the four large tiles are not arranged in LL formations.
 -  **4432(4441)**: Preventing simple mistakes that could lead to unnecessary terminations.
 -  **free**: Provide optimal strategies for 32k and 65k endgames. However, their actual boost to LL is minimal.
+
+
+## Project structure
+
+![Project Structure](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/b273c818-8985-4844-adef-350d00f6525c)
+
