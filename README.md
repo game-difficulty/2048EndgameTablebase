@@ -20,7 +20,7 @@ Outperforming its contemporaries, this AI boasts the highest success rates for 3
 
 ## User Guide
 1. Get started
-   - Open **main.exe** or run **main.py**
+   - Open **main.exe** or run **main.py** (Make sure to use `numpy 2.0`) 
    - Wait for the program to start
    - Take note of the **help** documentation
 2. Calculate your first table:
