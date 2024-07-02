@@ -8,7 +8,6 @@ from BoardMover import BoardMoverWithScore
 from BookReader import BookReader
 from Config import SingletonConfig
 
-
 spec_c = {
     'length': uint64,
     'cache_board': from_dtype(np.dtype('uint64,int32'))[:],
@@ -19,13 +18,13 @@ spec_c = {
 @jitclass(spec_c)
 class Cache:
     def __init__(self):
-        self.length = 8388608  # 2的幂
-        self.cache_board = np.zeros(self.length, dtype='uint64,int32')
+        self.length = 8388607  # 2的幂-1
+        self.cache_board = np.zeros(self.length + 1, dtype='uint64,int32')
         self.lookup_count = 0
 
     def clear(self):
         self.lookup_count = 0
-        self.cache_board = np.zeros(self.length, dtype='uint64,int32')
+        self.cache_board = np.zeros(self.length + 1, dtype='uint64,int32')
 
     def lookup(self, board, depth):
         self.lookup_count += 1
@@ -38,7 +37,7 @@ class Cache:
 
     def hash(self, board, depth):
         board = (board ^ (board >> 27)) * 0x1A85EC53 + board >> 23
-        return np.uint64(board - (depth << 5)) & (self.length - 1)
+        return np.uint64(board - (depth << 5)) & self.length
 
 
 spec = {
@@ -400,7 +399,7 @@ class AutoplayS:
         elif depth == 9:
             return self.search9(board)
         else:
-            self.max_d = 2
+            self.max_d = 6
             return self.search2(board)
 
     def play(self, depth=2, max_step=1e6):
@@ -443,7 +442,7 @@ class Dispatcher:
         self.counts = self.frequency_count()
         self.board = board
         self.last_operator = 0  # 0:AI 1:LL 2:4431 3:4441 4:4432 5:free10 6:free9
-        self.transfer_control_count = [0,0,0,0,0]  # 4441, 4432, LL, free, AI
+        self.transfer_control_count = [0, 0, 0, 0, 0]  # 4441, 4432, LL, free, AI
 
     def reset(self, board, board_encoded):
         self.board_encoded = board_encoded
@@ -504,7 +503,7 @@ class Dispatcher:
             masked_board = np.array([[32768, 32768, 32768, 32768],
                                      [0, 32768, 32768, 0],
                                      [0, 32768, 32768, 0],
-                                     [32768, 32768, 32768, 32768]],dtype=np.int32)  # 其他数字太小让AI玩
+                                     [32768, 32768, 32768, 32768]], dtype=np.int32)  # 其他数字太小让AI玩
         return masked_board, nth_largest, nth_largest_pos
 
     def check_LL_4431(self):
@@ -518,7 +517,7 @@ class Dispatcher:
             else:
                 r1 = BookReader.move_on_dic(masked_board, 'LL', str(target), full_pattern, str(pos))
             move = list(r1.keys())[0]
-            success_rate_threshold = {4096:0.02,2048:0.1,1024:0.4,512:0.6}.get(target,0.05)
+            success_rate_threshold = {4096: 0.02, 2048: 0.1, 1024: 0.4, 512: 0.6}.get(target, 0.05)
             if isinstance(r1[move], float) and success_rate_threshold < r1[move]:
                 prob = r1[move]
                 if pos == 1 and nth_largest_pos in ((2, 3), (1, 0), (0, 2), (3, 1)):
@@ -578,7 +577,7 @@ class Dispatcher:
             if self.transfer_control_count[sender] >= n:
                 self.transfer_control_count[-1] += 1
                 if self.transfer_control_count[-1] >= m:
-                    self.transfer_control_count = [0,0,0,-1]
+                    self.transfer_control_count = [0, 0, 0, -1]
                 self.last_operator = 0
                 return 'AI'
             elif self.transfer_control_count[-1] == -1:
@@ -589,11 +588,11 @@ class Dispatcher:
                 return 'AI'
         else:
             if self.transfer_control_count[-1] <= 0:
-                self.transfer_control_count = [0,0,0,0]
+                self.transfer_control_count = [0, 0, 0, 0]
             else:
                 self.transfer_control_count[-1] += 1
                 if self.transfer_control_count[-1] >= m:
-                    self.transfer_control_count = [0,0,0,0]
+                    self.transfer_control_count = [0, 0, 0, 0]
                 self.last_operator = 0
                 return 'AI'
 
@@ -678,25 +677,248 @@ class Dispatcher:
         return 'AI'
 
 
+spec = {
+    'max_d': int32,
+    'hardest_pos': uint8,
+    'hardest_num': uint8,
+    'board': types.Array(int32, 2, 'C'),
+    'diffs': int32[:],
+    'diffs2': int32[:],
+    'bm': BoardMoverWithScore.class_type.instance_type,
+    'cache': Cache.class_type.instance_type,
+    'node': uint64,
+}
+
+
+@jitclass(spec)
+class EvilGen:
+    def __init__(self, board):
+        # 如果修改 init 需要同步修改 reset_board
+        self.max_d = 3
+        self.hardest_pos = 0
+        self.hardest_num = 1
+        self.board = board
+        self.bm = BoardMoverWithScore()
+        self.cache = Cache()
+        self.diffs, self.diffs2 = self.calculates_for_evaluate()
+        self.node = 0
+        print('Evil gen init')
+
+    def reset_board(self, board):
+        self.hardest_pos = 0
+        self.hardest_num = 1
+        self.board = board
+        self.node = 0
+
+    def calculates_for_evaluate(self):
+        diffs = np.empty(65536, dtype=np.int32)
+        diffs2 = np.empty(65536, dtype=np.int32)
+        # 生成所有可能的行
+        for i in range(65536):
+            line = [(i // (16 ** j)) % 16 for j in range(4)]
+            line = [1 << k if k else 0 for k in line]
+            diffs[i] = self.diffs_evaluation_func(line)
+            diffs2[i] = self.diffs_evaluation_func(line[::-1])
+        return diffs, diffs2
+
+    @staticmethod
+    def diffs_evaluation_func(line):
+        mask_num = [0, 128, 168, 180, 184, 188]
+        line_masked = [min(1024 + mask_num[int(np.log2(max(k >> 10, 1)))], k) for k in line]
+        score = line_masked[0]
+        for x in range(3):
+            if line_masked[x + 1] > line_masked[x]:
+                if line_masked[x] < 1080:
+                    score -= (line_masked[x + 1] - line_masked[x]) << 3
+                else:
+                    score += min(line_masked[x + 1], line_masked[x]) << 1
+            elif x < 2:
+                score += line_masked[x + 1] + line_masked[x]
+            else:
+                score += int((line_masked[x + 1] + line_masked[x]) * 0.75)
+        return int32(score / 4)
+
+    def evaluate(self, s):
+        self.node += 1
+        s_reverse = self.bm.reverse(s)
+        diffv1, diffv2, diffh1, diffh2 = np.int32(0), np.int32(0), np.int32(0), np.int32(0)
+        for i in range(4):
+            l1 = (s >> np.uint64(16 * i)) & np.uint64(0xFFFF)
+            l2 = (s_reverse >> np.uint64(16 * i)) & np.uint64(0xFFFF)
+            diffh1 += self.diffs[l1]
+            diffh2 += self.diffs2[l1]
+            diffv1 += self.diffs[l2]
+            diffv2 += self.diffs2[l2]
+        return max(diffv1, diffv2) + max(diffh1, diffh2)
+
+    def search1(self, b):
+        evil = 131072
+        for i in range(16):  # 遍历所有位置
+            if ((b >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
+                for num in (1, 2):
+                    t = np.uint64(b | (num << (4 * i)))
+                    best = -131072
+                    for d in [1, 3, 4, 2]:
+                        t1, score = self.bm.move_board(t, d)
+                        if t1 == t:
+                            continue
+                        temp = self.cache.lookup(t1, 1)
+                        if temp is None:
+                            temp = self.evaluate(t1)
+                            self.cache.update(t1, 1, temp)
+                        best = max(best, temp + score)  # 玩家通过操作最大化得分
+                    if best <= evil:
+                        evil = best
+                        if self.max_d == 1:
+                            self.hardest_pos = i
+                            self.hardest_num = num
+        return evil
+
+    def search2(self, b):
+        evil = 131072
+        for i in range(16):  # 遍历所有位置
+            if ((b >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
+                for num in (1, 2):
+                    t = np.uint64(b | (num << (4 * i)))
+                    best = -131072
+                    for d in [1, 3, 4, 2]:
+                        t1, score = self.bm.move_board(t, d)
+                        if t1 == t:
+                            continue
+                        temp = self.cache.lookup(t1, 2)
+                        if temp is None:
+                            temp = self.search1(t1)
+                            self.cache.update(t1, 2, temp)
+                        best = max(best, temp + score)  # 玩家通过操作最大化得分
+                    if best <= evil:
+                        evil = best
+                        if self.max_d == 2:
+                            self.hardest_pos = i
+                            self.hardest_num = num
+        return evil
+
+    def search3(self, b):
+        evil = 131072
+        for i in range(16):  # 遍历所有位置
+            if ((b >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
+                for num in (1, 2):
+                    t = np.uint64(b | (num << (4 * i)))
+                    best = -131072
+                    for d in [1, 3, 4, 2]:
+                        t1, score = self.bm.move_board(t, d)
+                        if t1 == t:
+                            continue
+                        temp = self.cache.lookup(t1, 3)
+                        if temp is None:
+                            temp = self.search2(t1)
+                            self.cache.update(t1, 3, temp)
+                        best = max(best, temp + score)  # 玩家通过操作最大化得分
+                    if best <= evil:
+                        evil = best
+                        if self.max_d == 3:
+                            self.hardest_pos = i
+                            self.hardest_num = num
+        return evil
+
+    def search4(self, b):
+        evil = 131072
+        for i in range(16):  # 遍历所有位置
+            if ((b >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
+                for num in (1, 2):
+                    t = np.uint64(b | (num << (4 * i)))
+                    best = -131072
+                    for d in [1, 3, 4, 2]:
+                        t1, score = self.bm.move_board(t, d)
+                        if t1 == t:
+                            continue
+                        temp = self.cache.lookup(t1, 4)
+                        if temp is None:
+                            temp = self.search3(t1)
+                            self.cache.update(t1, 4, temp)
+                        best = max(best, temp + score)  # 玩家通过操作最大化得分
+                    if best <= evil:
+                        evil = best
+                        if self.max_d == 4:
+                            self.hardest_pos = i
+                            self.hardest_num = num
+        return evil
+
+    def search5(self, b):
+        evil = 131072
+        for i in range(16):  # 遍历所有位置
+            if ((b >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
+                for num in (1, 2):
+                    t = np.uint64(b | (num << (4 * i)))
+                    best = -131072
+                    for d in [1, 3, 4, 2]:
+                        t1, score = self.bm.move_board(t, d)
+                        if t1 == t:
+                            continue
+                        temp = self.cache.lookup(t1, 5)
+                        if temp is None:
+                            temp = self.search4(t1)
+                            self.cache.update(t1, 5, temp)
+                        best = max(best, temp + score)  # 玩家通过操作最大化得分
+                    if best <= evil:
+                        evil = best
+                        if self.max_d == 5:
+                            self.hardest_pos = i
+                            self.hardest_num = num
+        return evil
+
+    def start_search(self, depth=3):
+        self.cache.clear()
+        self.max_d = depth
+        self.node = 0
+        self.dispatcher(self.bm.encode_board(self.board))
+
+    def dispatcher(self, board):
+        depth = self.max_d
+        if depth == 1:
+            return self.search1(board)
+        elif depth == 2:
+            return self.search2(board)
+        elif depth == 3:
+            return self.search3(board)
+        elif depth == 4:
+            return self.search4(board)
+        elif depth == 5:
+            return self.search5(board)
+        else:
+            self.max_d = 4
+            return self.search2(board)
+
+    def gen_new_num(self, depth=3):
+        self.start_search(depth)
+        board_encoded = self.bm.encode_board(self.board)
+        return board_encoded | (self.hardest_num << (4 * self.hardest_pos)), 15 - self.hardest_pos, self.hardest_num
+
+
 if __name__ == "__main__":
     b1 = np.array([
-        [0,8,0,4],
-        [0,16,2,128],
-        [2,4,4,512],
-        [2, 2, 256,4096]], dtype=np.int64)
+        [0, 0, 0, 0],
+        [0, 2, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 2]], dtype=np.int32)
     print(b1)
     s1 = AutoplayS(b1)
+    g1 = EvilGen(b1)
     s1.start_search(2)
     s1.start_search(3)
+    g1.gen_new_num(2)
+    g1.gen_new_num(3)
     b1 = np.uint64(s1.bm.encode_board(b1))
     t_start = time.time()
-    for steps in range(5):
+    for steps in range(500):
         s1.reset_board(s1.bm.decode_board(b1))
         t0 = time.time()
-        s1.start_search(3)
-        print(s1.cache.lookup_count/(time.time()-t0), s1.node/(time.time()-t0), time.time()-t0)
-        print({1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}[s1.best_operation])
+        s1.start_search(5)
+        # print(s1.cache.lookup_count / (time.time() - t0), s1.node / (time.time() - t0), time.time() - t0)
+        print({0:None, 1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}[s1.best_operation])
+        if not s1.best_operation:
+            break
         b1 = np.uint64(s1.bm.move_board(b1, s1.best_operation)[0])
-        b1 = np.uint64(s1.bm.gen_new_num(b1)[0])
+        g1.reset_board(g1.bm.decode_board(b1))
+        b1 = np.uint64(g1.gen_new_num(5))
         print(s1.bm.decode_board(b1))
     print(time.time() - t_start)

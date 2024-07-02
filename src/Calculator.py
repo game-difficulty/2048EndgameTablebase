@@ -2,7 +2,7 @@ import numpy as np
 from numba import njit, uint64
 
 
-@njit(uint64(uint64))
+@njit(nogil=True)
 def ReverseLR(board):
     board = np.uint64(board)
     board = (board & np.uint64(0xff00ff00ff00ff00)) >> np.uint64(8) | (
@@ -12,7 +12,7 @@ def ReverseLR(board):
     return board
 
 
-@njit(uint64(uint64))
+@njit(nogil=True)
 def ReverseUD(board):
     board = np.uint64(board)
     board = (board & np.uint64(0xffffffff00000000)) >> np.uint64(32) | (
@@ -22,7 +22,7 @@ def ReverseUD(board):
     return board
 
 
-@njit(uint64(uint64))
+@njit(nogil=True)
 def ReverseUL(board):
     board = np.uint64(board)
     board = (board & np.uint64(0xff00ff0000ff00ff)) | (board & np.uint64(0x00ff00ff00000000)) >> np.uint64(24) | (
@@ -32,7 +32,7 @@ def ReverseUL(board):
     return board
 
 
-@njit(uint64(uint64))
+@njit(nogil=True)
 def ReverseUR(board):
     board = np.uint64(board)
     board = (board & np.uint64(0x0f0ff0f00f0ff0f0)) | (board & np.uint64(0xf0f00000f0f00000)) >> np.uint64(20) | (
@@ -42,7 +42,7 @@ def ReverseUR(board):
     return board
 
 
-@njit(uint64(uint64))
+@njit(nogil=True)
 def Rotate180(board):
     board = np.uint64(board)
     board = (board & np.uint64(0xffffffff00000000)) >> np.uint64(32) | (
@@ -56,7 +56,7 @@ def Rotate180(board):
     return board
 
 
-@njit(uint64(uint64))
+@njit(nogil=True)
 def RotateL(board):
     board = np.uint64(board)
     board = (board & np.uint64(0xff00ff0000000000)) >> np.uint64(32) | (
@@ -70,7 +70,7 @@ def RotateL(board):
     return board
 
 
-@njit(uint64(uint64))
+@njit(nogil=True)
 def RotateR(board):
     board = np.uint64(board)
     board = (board & np.uint64(0xff00ff0000000000)) >> np.uint64(8) | (
@@ -84,14 +84,14 @@ def RotateR(board):
     return board
 
 
-@njit(uint64(uint64))
+@njit(nogil=True)
 def min_all_symm(board):
     board = np.uint64(board)
     return np.uint64(min(ReverseLR(board), ReverseUD(board), ReverseUL(board), ReverseUR(board),
                          Rotate180(board), RotateL(board), RotateR(board), board))
 
 
-@njit(uint64(uint64))
+@njit(nogil=True)
 def minUL(bd):
     board = np.uint64(bd)
     board = (board & np.uint64(0xff00ff0000ff00ff)) | (board & np.uint64(0x00ff00ff00000000)) >> np.uint64(24) | (

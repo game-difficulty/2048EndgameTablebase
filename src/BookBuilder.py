@@ -24,7 +24,6 @@ def gen_boards(arr0, target, position, bm, pattern_check_func, success_check_fun
     arr2 = np.empty(length, dtype=np.uint64)
     c1t, c2t = 0, 0
     for t in arr0:
-
         # 如果当前棋盘状态已经符合成功条件，将其成功概率设为1
         if do_check and success_check_func(t, target, position):
             continue  # 由于已成功，无需进一步处理这个棋盘状态，继续下一个

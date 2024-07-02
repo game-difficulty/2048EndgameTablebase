@@ -5,7 +5,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QPropertyAnimation, QRect, QEasingCurve, QTimer, QSize, QPoint
 from PyQt5.QtGui import QIcon
 
-from AIPlayer import AutoplayS, Dispatcher
+from AIPlayer import AutoplayS, Dispatcher, EvilGen
 from BoardMover import BoardMoverWithScore
 from Config import SingletonConfig
 
@@ -250,7 +250,7 @@ class BaseBoardFrame(QtWidgets.QFrame):
 
     def do_move(self, direction, do_gen=True):
         do_anim = SingletonConfig().config['do_animation']
-        direct = {'Left':1, 'Right':2, 'Up':3, 'Down':4}[direction.capitalize()]
+        direct = {'Left': 1, 'Right': 2, 'Up': 3, 'Down': 4}[direction.capitalize()]
         board_encoded_new, new_score = self.mover.move_board(self.board_encoded, direct)
         board_encoded_new = np.uint64(board_encoded_new)
         if board_encoded_new != self.board_encoded:
@@ -292,6 +292,10 @@ class GameFrame(BaseBoardFrame):
         self.ai_thread = AIThread(self.board)
         self.ai_thread.updateBoard.connect(self.do_ai_move)
 
+        # 困难模式
+        self.evil_gen = EvilGen(self.board)
+        self.difficulty = 0
+
         if self.board_encoded == 0:
             self.setup_new_game()
 
@@ -299,6 +303,7 @@ class GameFrame(BaseBoardFrame):
         self.board_encoded = np.uint64(self.mover.gen_new_num(self.mover.gen_new_num(np.uint64(0))[0])[0])
         self.board = self.mover.decode_board(self.board_encoded)
         self.ai_thread.ai_player.board = self.board
+        self.evil_gen.reset_board(self.board)
         self.update_all_frame(self.board)
         self.score = 0
         self.history = [(self.board_encoded, self.score)]
@@ -315,6 +320,18 @@ class GameFrame(BaseBoardFrame):
             self.died_when_ai_state = False
             self.do_move(direction)
         self.ai_processing = False
+
+    def gen_new_num(self, do_anim=True):
+        if np.random.rand() > self.difficulty:
+            self.board_encoded, _, new_tile_pos, val = self.mover.gen_new_num(self.board_encoded)
+        else:
+            self.evil_gen.reset_board(self.board)
+            self.board_encoded, new_tile_pos, val = self.evil_gen.gen_new_num(5)
+        self.board_encoded = np.uint64(self.board_encoded)
+        self.board = self.mover.decode_board(self.board_encoded)
+        self.update_frame(2 ** val, new_tile_pos // 4, new_tile_pos % 4, anim=do_anim)
+        self.history.append((self.board_encoded, self.score))
+        self.newtile_pos, self.newtile = new_tile_pos, val
 
 
 class AIThread(QtCore.QThread):
@@ -373,7 +390,7 @@ class AIThread(QtCore.QThread):
                 depth += 1
                 self.ai_player.start_search(depth)
             # print(depth, self.ai_player.node)
-        self.updateBoard.emit({1:'Left', 2:'Right', 3:'Up', 4:'Down'}.get(self.ai_player.best_operation, ''))
+        self.updateBoard.emit({1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}.get(self.ai_player.best_operation, ''))
 
 
 # noinspection PyAttributeOutsideInit
@@ -391,13 +408,13 @@ class GameWindow(QtWidgets.QMainWindow):
         self.ai_dispatcher = Dispatcher(BoardMoverWithScore.decode_board(np.uint64(0)), np.uint64(0))
 
         self.statusbar.showMessage("All features may be slow when used for the first time. Please be patient.", 8000)
-
         self.update_score()
+        self.gameframe.setFocus()
 
     def setupUi(self):
         self.setObjectName("self")
         self.setWindowIcon(QIcon(r"pic\2048.ico"))
-        self.resize(815, 888)
+        self.resize(800, 940)
         self.centralwidget = QtWidgets.QWidget(self)
         self.centralwidget.setObjectName("centralwidget")
         self.gridLayout = QtWidgets.QGridLayout(self.centralwidget)
@@ -408,20 +425,21 @@ class GameWindow(QtWidgets.QMainWindow):
         self.gameframe = GameFrame(self.centralwidget)
         self.gridLayout.addWidget(self.gameframe, 2, 0, 1, 1)
 
-        self.operate = QtWidgets.QFrame(self.centralwidget)
-        self.operate.setMaximumSize(QtCore.QSize(16777215, 160))
-        self.operate.setStyleSheet("QFrame{\n"
-                                   "    border-color: rgb(167, 167, 167);\n"
-                                   "    background-color: rgb(236, 236, 236);\n"
-                                   "}")
-        self.operate.setFrameShape(QtWidgets.QFrame.StyledPanel)
-        self.operate.setFrameShadow(QtWidgets.QFrame.Raised)
-        self.operate.setObjectName("operate")
-        self.grid1 = QtWidgets.QGridLayout(self.operate)
+        self.operate_frame = QtWidgets.QFrame(self.centralwidget)
+        self.operate_frame.setMaximumSize(QtCore.QSize(16777215, 180))
+        self.operate_frame.setMinimumSize(QtCore.QSize(120, 150))
+        self.operate_frame.setStyleSheet("QFrame{\n"
+                                         "    border-color: rgb(167, 167, 167);\n"
+                                         "    background-color: rgb(236, 236, 236);\n"
+                                         "}")
+        self.operate_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        self.operate_frame.setFrameShadow(QtWidgets.QFrame.Raised)
+        self.operate_frame.setObjectName("operate")
+        self.grid1 = QtWidgets.QGridLayout(self.operate_frame)
         self.grid1.setObjectName("grid1")
         self.scores = QtWidgets.QHBoxLayout()
         self.scores.setObjectName("scores")
-        self.score_frame = QtWidgets.QFrame(self.operate)
+        self.score_frame = QtWidgets.QFrame(self.operate_frame)
         self.score_frame.setStyleSheet("border-radius: 12px; \n"
                                        "background-color: rgb(244, 241, 232);")
         self.score_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
@@ -450,7 +468,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.score_group.addWidget(self.score_points, 1, 0, 1, 1)
         self.score_grid.addLayout(self.score_group, 0, 0, 1, 1)
         self.scores.addWidget(self.score_frame)
-        self.best_frame = QtWidgets.QFrame(self.operate)
+        self.best_frame = QtWidgets.QFrame(self.operate_frame)
         self.best_frame.setStyleSheet("border-radius: 12px; \n"
                                       "background-color: rgb(244, 241, 232);")
         self.best_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
@@ -483,40 +501,77 @@ class GameWindow(QtWidgets.QMainWindow):
 
         self.buttons = QtWidgets.QGridLayout()
         self.buttons.setObjectName("buttons")
-        self.one_step = QtWidgets.QPushButton(self.operate)
+        self.one_step = QtWidgets.QPushButton(self.operate_frame)
         self.one_step.setFocusPolicy(QtCore.Qt.NoFocus)  # 禁用按钮的键盘焦点
         self.one_step.setStyleSheet("font: 750 12pt \"Cambria\";")
         self.one_step.setObjectName("one_step")
         self.buttons.addWidget(self.one_step, 0, 3, 1, 1)
-        self.undo = QtWidgets.QPushButton(self.operate)
+        self.undo = QtWidgets.QPushButton(self.operate_frame)
         self.undo.setFocusPolicy(QtCore.Qt.NoFocus)
         self.undo.setStyleSheet("font: 750 12pt \"Cambria\";")
         self.undo.setObjectName("undo")
         self.buttons.addWidget(self.undo, 0, 2, 1, 1)
-        self.new_game = QtWidgets.QPushButton(self.operate)
+        self.new_game = QtWidgets.QPushButton(self.operate_frame)
         self.new_game.setFocusPolicy(QtCore.Qt.NoFocus)
         self.new_game.setStyleSheet("font: 750 12pt \"Cambria\";")
         self.new_game.setObjectName("new_game")
         self.buttons.addWidget(self.new_game, 0, 1, 1, 1)
-        self.ai = QtWidgets.QPushButton(self.operate)
+        self.ai = QtWidgets.QPushButton(self.operate_frame)
         self.ai.setFocusPolicy(QtCore.Qt.NoFocus)
         self.ai.setStyleSheet("font: 750 12pt \"Cambria\";")
         self.ai.setObjectName("ai")
         self.buttons.addWidget(self.ai, 0, 0, 1, 1)
         self.grid1.addLayout(self.buttons, 1, 0, 1, 1)
-        self.gridLayout.addWidget(self.operate, 1, 0, 1, 1)
-        self.setCentralWidget(self.centralwidget)
+        self.gridLayout.addWidget(self.operate_frame, 1, 0, 1, 1)
 
         self.one_step.clicked.connect(self.handleOneStep)
         self.undo.clicked.connect(self.handleUndo)
         self.new_game.clicked.connect(self.handleNewGame)
         self.ai.clicked.connect(self.toggleAI)
 
+        self.difficulty_frame = QtWidgets.QFrame(self.centralwidget)
+        self.difficulty_frame.setMaximumSize(QtCore.QSize(16777215, 30))
+        self.difficulty_frame.setMinimumSize(QtCore.QSize(120, 20))
+        self.difficulty_frame.setStyleSheet("QFrame{\n"
+                                            "    border-color: rgb(167, 167, 167);\n"
+                                            "    background-color: rgb(236, 236, 236);\n"
+                                            "}")
+        self.difficulty_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        self.difficulty_frame.setFrameShadow(QtWidgets.QFrame.Raised)
+        self.difficulty_frame.setObjectName("difficulty")
+        self.difficulty_layout = QtWidgets.QGridLayout(self.difficulty_frame)
+        self.difficulty_layout.setObjectName("difficulty_layout")
+        self.difficulty_frame.setMaximumSize(QtCore.QSize(16777215, 60))
+        self.difficulty_frame.setMinimumSize(QtCore.QSize(120, 45))
+        self.difficulty_text = QtWidgets.QLabel(self.centralwidget)
+        self.difficulty_text.setStyleSheet("font: 750 12pt \"Cambria\";")
+        self.difficulty_text.setScaledContents(False)
+        self.difficulty_text.setAlignment(QtCore.Qt.AlignCenter)
+        self.difficulty_text.setWordWrap(False)
+        self.difficulty_text.setObjectName("difficulty_text")
+        self.difficulty_layout.addWidget(self.difficulty_text, 0, 0, 1, 3)
+        self.difficulty_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal, self.centralwidget)
+        self.difficulty_slider.setMinimum(0)
+        self.difficulty_slider.setMaximum(100)
+        self.difficulty_slider.setValue(0)
+        self.difficulty_slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
+        self.difficulty_slider.setTickInterval(1)
+        self.difficulty_slider.valueChanged.connect(self.difficulty_changed)
+        self.difficulty_slider.setObjectName("difficulty_slider")
+        self.difficulty_layout.addWidget(self.difficulty_slider, 0, 3, 1, 8)
+        self.infoButton = QtWidgets.QPushButton()
+        self.infoButton.setIcon(QIcon(r'pic\OQM.png'))
+        self.infoButton.setIconSize(QSize(30, 30))
+        self.infoButton.setFlat(True)
+        self.difficulty_layout.addWidget(self.infoButton, 0, 11, 1, 1)
+        self.infoButton.clicked.connect(self.show_message)
+        self.gridLayout.addWidget(self.difficulty_frame, 3, 0, 1, 1)
+
+        self.setCentralWidget(self.centralwidget)
+
         self.statusbar = QtWidgets.QStatusBar(self)
         self.statusbar.setObjectName("statusbar")
         self.setStatusBar(self.statusbar)
-        self.action_2 = QtWidgets.QAction(self)
-        self.action_2.setObjectName("action_2")
 
         self.retranslateUi()
         QtCore.QMetaObject.connectSlotsByName(self)
@@ -540,7 +595,16 @@ class GameWindow(QtWidgets.QMainWindow):
         self.undo.setText(_translate("Game", "Undo"))
         self.new_game.setText(_translate("Game", "New Game"))
         self.ai.setText(_translate("Game", "AI: ON"))
-        self.action_2.setText(_translate("Game", "Settings"))
+        self.difficulty_text.setText(_translate("Game", "Difficulty"))
+
+    def difficulty_changed(self):
+        self.gameframe.difficulty = self.difficulty_slider.value() / 100
+        self.gameframe.setFocus()
+
+    def show_message(self):
+        QtWidgets.QMessageBox.information(self, 'Information', '''Probability of generating an EVIL number, default 0.
+Only effective for players''')
+        self.gameframe.setFocus()
 
     def update_score(self):
         score = self.gameframe.score
