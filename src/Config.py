@@ -23,18 +23,7 @@ class SingletonConfig:
                 return pickle.load(file)
         else:
             return {
-                'filepath_map': {
-                    'LL_4096_0': r"Q:\tables\LL_4096_0",
-                    'LL_512_0': r"Q:\tables\LL_512_0",
-                    'LL_1024_0': r"Q:\tables\LL_1024_0",
-                    'LL_512_1': r"Q:\tables\LL_512_1",
-                    'LL_1024_1': r"Q:\tables\LL_1024_1",
-                    '4431_2048': r"Q:\tables\4431_2048",
-                    'free10w_1024': r"Q:\tables\free10w_1024",
-                    'free9w_256': r"Q:\tables\free9w_256",
-                    '4432_512': r"Q:\tables\4432_512",
-                    '4441_512': r"Q:\tables\4441_512",
-                },
+                'filepath_map': dict(),
                 'colors': ['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
                            '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'] + [
                               '#ffffff'] * 20,

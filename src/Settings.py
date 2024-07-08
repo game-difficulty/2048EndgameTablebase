@@ -112,11 +112,17 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.spawnrate_text, 6, 0, 1, 1)
         self.spawnrate_box = QtWidgets.QDoubleSpinBox(self.centralwidget)
         self.spawnrate_box.setObjectName("spawnrate_box")
+        self.spawnrate_box.setRange(0.0, 1.0)
+        self.spawnrate_box.setSingleStep(0.01)
+        self.spawnrate_box.setValue(SingletonConfig().config['4_spawn_rate'])
+        self.spawnrate_box.valueChanged.connect(self.update_spawn_rate)
         self.selfLayout.addWidget(self.spawnrate_box, 6, 1, 1, 1)
-        self.spawnrate_warning = QtWidgets.QLabel(self.centralwidget)
-        self.spawnrate_warning.setObjectName("spawnrate_text")
-        self.spawnrate_warning.setText("Not supported yet")
-        self.selfLayout.addWidget(self.spawnrate_warning, 6, 2, 1, 1)
+        self.infoButton = QtWidgets.QPushButton()
+        self.infoButton.setIcon(QtGui.QIcon(r'pic\OQM.png'))
+        self.infoButton.setIconSize(QtCore.QSize(24, 24))
+        self.infoButton.setFlat(True)
+        self.selfLayout.addWidget(self.infoButton, 6, 2, 1, 1)
+        self.infoButton.clicked.connect(self.show_message)
 
         self.demo_speed_text = QtWidgets.QLabel(self.centralwidget)
         self.demo_speed_text.setObjectName("demo_speed_text")
@@ -125,7 +131,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.demo_speed_box = QtWidgets.QSlider(QtCore.Qt.Horizontal, self.centralwidget)
         self.demo_speed_box.setMinimum(0)
         self.demo_speed_box.setMaximum(200)
-        self.demo_speed_box.setValue(config.get('demo_speed',10))
+        self.demo_speed_box.setValue(config.get('demo_speed', 10))
         self.demo_speed_box.setTickPosition(QtWidgets.QSlider.TicksBelow)
         self.demo_speed_box.setTickInterval(10)
         self.demo_speed_box.valueChanged.connect(self.demo_speed_changed)
@@ -138,14 +144,14 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.anim_text, 8, 0, 1, 1)
         self.appear_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.appear_checkBox.setObjectName("appear_checkBox")
-        if config.get('do_animation',(False, False))[0]:
+        if config.get('do_animation', (False, False))[0]:
             self.appear_checkBox.setCheckState(QtCore.Qt.Checked)
         else:
             self.appear_checkBox.setCheckState(QtCore.Qt.Unchecked)
         self.selfLayout.addWidget(self.appear_checkBox, 8, 1, 1, 1)
         self.pop_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.pop_checkBox.setObjectName("pop_checkBox")
-        if config.get('do_animation',(False, False))[1]:
+        if config.get('do_animation', (False, False))[1]:
             self.pop_checkBox.setCheckState(QtCore.Qt.Checked)
         else:
             self.pop_checkBox.setCheckState(QtCore.Qt.Unchecked)
@@ -222,6 +228,18 @@ class SettingsWindow(QtWidgets.QMainWindow):
             self.filepath_edit.setText(filepath)
 
     def build_book(self):
+        spawn_rate = SingletonConfig().config['4_spawn_rate']
+        if spawn_rate != 0.1:
+            reply = QtWidgets.QMessageBox.warning(
+                self,
+                "Warning",
+                f"The current 4_spawn_rate is {spawn_rate}, which is not the default 0.1. Do you want to continue?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No
+            )
+            if reply == QtWidgets.QMessageBox.No:
+                return
+
         position = self.pos_combo.currentText()
         pattern = self.pattern_combo.currentText()
         target = self.target_combo.currentText()
@@ -257,8 +275,15 @@ class SettingsWindow(QtWidgets.QMainWindow):
     def compress_state_changed(self):
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
 
+    def update_spawn_rate(self):
+        SingletonConfig().config['4_spawn_rate'] = float(self.spawnrate_box.text().replace(',', '.'))
+
+    def show_message(self):
+        QtWidgets.QMessageBox.information(self, 'Information', 'This affects all modules of the program, ' +
+                                          '''make sure you know what you're doing''')
+
     def save_all(self):
-        SingletonConfig().config['4_spawn_rate'] = float(self.spawnrate_box.text().replace(',','.'))
+        SingletonConfig().config['4_spawn_rate'] = float(self.spawnrate_box.text().replace(',', '.'))
         SingletonConfig().config['do_animation'] = [self.appear_checkBox.isChecked(), self.pop_checkBox.isChecked()]
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
         SingletonConfig.save_config(SingletonConfig().config)

@@ -355,11 +355,11 @@ class BoardMoverWithScore:
         return movel, mover, moveu, moved, score
 
     @staticmethod
-    def gen_new_num(t, p=0.9):
+    def gen_new_num(t, p=0.1):
         empty_slots = [i for i in range(16) if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == 0]  # 找到所有空位
         if not empty_slots:
             return t, 0, 0, 0  # 如果没有空位，返回原面板
         i = int(np.random.choice(np.array(empty_slots)))  # 随机选择一个空位
-        val = 1 if np.random.random() < p else 2  # 生成2或4，其中2的概率为0.9
+        val = 2 if np.random.random() < p else 1  # 生成2或4，其中2的概率为0.9
         t |= np.uint64(val) << np.uint64(4 * i)  # 在选中的位置放置新值
         return t, len(empty_slots), 15 - i, val

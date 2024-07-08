@@ -61,19 +61,19 @@ def gen_boards_big(arr0, target, position, bm, pattern_check_func, success_check
     t0 = time.time()
     while start_index < len(arr0):
         tt0 = time.time()
-        seg_length = {0:39999999, 1:49999999, 2:69999999}.get(seg_index, segment_size)
+        seg_length = {0: 39999999, 1: 49999999, 2: 69999999}.get(seg_index, segment_size)
         end_index = min(start_index + seg_length, len(arr0))
         arr0t = arr0[start_index:end_index].copy()
         arr1t, arr2t = gen_boards(arr0t, target, position, bm, pattern_check_func, success_check_func, to_find_func,
                                   do_check, isfree)
         del arr0t
-        print(end_index-start_index, len(arr1t))
+        print(end_index - start_index, len(arr1t))
         tt1 = time.time()
         arr1t = np.unique(arr1t)
         arr2t = np.unique(arr2t)
         arr1s.append(arr1t)
         arr2s.append(arr2t)
-        print(round(time.time()-tt1,3),round(tt1-tt0,3),len(arr1t),flush=True)
+        print(round(time.time() - tt1, 3), round(tt1 - tt0, 3), len(arr1t), flush=True)
         start_index = end_index
         seg_index += 1
 
@@ -85,7 +85,7 @@ def gen_boards_big(arr0, target, position, bm, pattern_check_func, success_check
     t2 = time.time()
     arr2 = merge_deduplicate_all(arr2s, length)
     del arr2s, arr2t
-    print(round(time.time()-t2,3),round(t2-t1,3),round(t1-t0,3),flush=True)
+    print(round(time.time() - t2, 3), round(t2 - t1, 3), round(t1 - t0, 3), flush=True)
     return arr1, arr2
 
 
@@ -124,13 +124,14 @@ def merge_deduplicate_all(arrays, length=0):
 
 @njit(parallel=True, nogil=True)
 def recalculate(arr0, arr1, arr2, target, position, bm, pattern_check_func, success_check_func, to_find_func,
-                do_check=False):
+                do_check=False, spawn_rate4=0.1):
     """
     根据已经填充好成功概率的array回算前一批面板的成功概率。
     对于arr0中的每个面板，考虑在每个空位填充数字2或4（90%概率为2，10%概率为4），
     然后对于每个可能的填充，执行所有有效的移动操作，并基于移动结果的成功概率来更新当前面板的成功概率。
     """
-    for start, end in ((0,len(arr0)//10),(len(arr0)//10,len(arr0)//3),(len(arr0)//3,len(arr0))):  # 缓解负载不均衡问题
+    for start, end in (
+    (0, len(arr0) // 10), (len(arr0) // 10, len(arr0) // 3), (len(arr0) // 3, len(arr0))):  # 缓解负载不均衡问题
         for k in prange(start, end):
             t = arr0[k][0]
             if do_check and success_check_func(t, target, position):
@@ -143,7 +144,7 @@ def recalculate(arr0, arr1, arr2, target, position, bm, pattern_check_func, succ
                 if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
                     empty_slots += 1
                     # 对于每个空位置，尝试填充2和4
-                    for new_value, probability in [(1, 0.9), (2, 0.1)]:  # 填充2的概率为90%，填充4的概率为10%
+                    for new_value, probability in [(1, 1 - spawn_rate4), (2, spawn_rate4)]:  # 填充2的概率为90%，填充4的概率为10%
                         subs_arr = arr1 if new_value == 1 else arr2
                         t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
                         optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
@@ -213,7 +214,7 @@ def merge_and_deduplicate(sorted_arr1, sorted_arr2):
 
 
 def gen_lookup_table_big(arr_init, pattern_check_func, success_check_func, to_find_func, target, position, steps,
-                         pathname, docheck_step, isfree=False):
+                         pathname, docheck_step, isfree=False, spawn_rate4=0.1):
     """
     传入包含所有初始局面的array，然后按照面板数字和依次生成下一阶段的所有局面。储存轮到系统生成数字时的面板。
     保障其中的每个arr储存的面板的数字和均相等
@@ -223,7 +224,7 @@ def gen_lookup_table_big(arr_init, pattern_check_func, success_check_func, to_fi
                                        steps, pathname, docheck_step, bm, isfree)
     d0, d1 = final_steps(started, d0, d1, pathname, steps, success_check_func, target, position)
     recalculate_process(d0, d1, pattern_check_func, success_check_func, to_find_func, target, position, steps,
-                        pathname, docheck_step, bm)  # 这里的最后的两个book d0,d1就是回算的d1,d2
+                        pathname, docheck_step, bm, spawn_rate4)  # 这里的最后的两个book d0,d1就是回算的d1,d2
 
 
 def generate_process(arr_init, pattern_check_func, success_check_func, to_find_func, target, position, steps,
@@ -235,7 +236,7 @@ def generate_process(arr_init, pattern_check_func, success_check_func, to_find_f
         # 断点重连
         if os.path.exists(pathname + str(i)) or os.path.exists(pathname + str(i) + '.book') or \
                 os.path.exists(pathname + str(i) + '.z'):
-            print(f"skipping step {i}",flush=True)
+            print(f"skipping step {i}", flush=True)
             continue
         if i == 1:
             arr_init.tofile(pathname + str(i - 1))
@@ -286,7 +287,7 @@ def final_steps(started, d0, d1, pathname, steps, success_check_func, target, po
 
 
 def recalculate_process(d1, d2, pattern_check_func, success_check_func, to_find_func, target, position, steps,
-                        pathname, docheck_step, bm):
+                        pathname, docheck_step, bm, spawn_rate4=0.1):
     started = False
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
@@ -310,7 +311,7 @@ def recalculate_process(d1, d2, pattern_check_func, success_check_func, to_find_
         del d0
         t0 = time.time()
         d0 = recalculate(expanded_arr0, d1, d2, target, position, bm, pattern_check_func, success_check_func,
-                         to_find_func, i > docheck_step)
+                         to_find_func, i > docheck_step, spawn_rate4)
         t1 = time.time()
         d0 = Remove_died(d0)  # 去除活不了的局面
         print(f"Updated step {i}", round(time.time() - t1, 3), round(t1 - t0, 3))
@@ -322,7 +323,7 @@ def recalculate_process(d1, d2, pattern_check_func, success_check_func, to_find_
             d1, d2 = d0, d1
 
 
-@njit(nogil=True,parallel=True)
+@njit(nogil=True, parallel=True)
 def Remove_died(d):
     d = d[d['f1'] != np.uint32(0)]
     return d
@@ -385,6 +386,7 @@ def generate_free_inits(target, t32ks, t2s):
 
 
 def start_build(pattern, target, position, pathname):
+    spawn_rate4 = SingletonConfig().config['4_spawn_rate']
     if pattern[:4] == 'free':
         if pattern[-1] != 'w':
             steps = int(2 ** target / 2 + 24)
@@ -392,17 +394,19 @@ def start_build(pattern, target, position, pathname):
             free_tiles = int(pattern[4:])
             arr_init = generate_free_inits(target, 15 - free_tiles, free_tiles)
             gen_lookup_table_big(arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
-                                 Calculator.min_all_symm, target, 0, steps, pathname, docheck_step, isfree=True)
+                                 Calculator.min_all_symm, target, 0, steps, pathname, docheck_step, isfree=True,
+                                 spawn_rate4=spawn_rate4)
         else:
             steps = int(2 ** target / 2 + 24)
             docheck_step = int(2 ** target / 2) - 5
             free_tiles = int(pattern[4:-1])
-            arr_init = generate_free_inits(0, 16 - free_tiles, free_tiles-1)
+            arr_init = generate_free_inits(0, 16 - free_tiles, free_tiles - 1)
             gen_lookup_table_big(arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
-                                 Calculator.min_all_symm, target, 1, steps, pathname, docheck_step, isfree=True)
+                                 Calculator.min_all_symm, target, 1, steps, pathname, docheck_step, isfree=True,
+                                 spawn_rate4=spawn_rate4)
     else:
-        steps = int(2 ** target / 2 + {'444': 96, '4431': 64, 'LL': 48, 'L3': 36, '4441': 48, '4432': 48, '442':36,
-                                       't':36, }[pattern])
+        steps = int(2 ** target / 2 + {'444': 96, '4431': 64, 'LL': 48, 'L3': 36, '4441': 48, '4432': 48, '442': 36,
+                                       't': 36, }[pattern])
         docheck_step = int(2 ** target / 2) - 10
         inits = {
             '444': np.array([np.uint64(0x100000000000ffff), np.uint64(0x000000010000ffff)], dtype=np.uint64),
@@ -419,7 +423,7 @@ def start_build(pattern, target, position, pathname):
             to_find_func = Calculator.minUL
         else:
             to_find_func = Calculator.re_self
-        isfree = True if pattern in ['4441',] else False  # 4441太大了，4432暂时观望
+        isfree = True if pattern in ['4441', ] else False  # 4441太大了，4432暂时观望
         gen_lookup_table_big(ini, eval(f'Calculator.is_{pattern}_pattern'), eval(f'Calculator.is_{pattern}_success'),
-                             to_find_func, target, position, steps, pathname, docheck_step, isfree)
+                             to_find_func, target, position, steps, pathname, docheck_step, isfree, spawn_rate4)
     return True

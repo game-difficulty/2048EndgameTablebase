@@ -241,7 +241,8 @@ class BaseBoardFrame(QtWidgets.QFrame):
                 self.update_frame(values[i][j], i, j, anim=False)
 
     def gen_new_num(self, do_anim=True):
-        self.board_encoded, _, new_tile_pos, val = self.mover.gen_new_num(self.board_encoded)
+        self.board_encoded, _, new_tile_pos, val = self.mover.gen_new_num(
+            self.board_encoded, SingletonConfig().config['4_spawn_rate'])
         self.board_encoded = np.uint64(self.board_encoded)
         self.board = self.mover.decode_board(self.board_encoded)
         self.update_frame(2 ** val, new_tile_pos // 4, new_tile_pos % 4, anim=do_anim)
@@ -300,7 +301,9 @@ class GameFrame(BaseBoardFrame):
             self.setup_new_game()
 
     def setup_new_game(self):
-        self.board_encoded = np.uint64(self.mover.gen_new_num(self.mover.gen_new_num(np.uint64(0))[0])[0])
+        self.board_encoded = np.uint64(self.mover.gen_new_num(
+            self.mover.gen_new_num(np.uint64(0), SingletonConfig().config['4_spawn_rate'])[0],
+            SingletonConfig().config['4_spawn_rate'])[0])
         self.board = self.mover.decode_board(self.board_encoded)
         self.ai_thread.ai_player.board = self.board
         self.evil_gen.reset_board(self.board)
@@ -310,6 +313,7 @@ class GameFrame(BaseBoardFrame):
 
     def ai_step(self):
         self.ai_processing = True
+        self.ai_thread.ai_player.spawn_rate4 = SingletonConfig().config['4_spawn_rate']
         self.ai_thread.start()
         self.ai_thread.ai_player.board = self.board
 
@@ -323,7 +327,8 @@ class GameFrame(BaseBoardFrame):
 
     def gen_new_num(self, do_anim=True):
         if np.random.rand() > self.difficulty:
-            self.board_encoded, _, new_tile_pos, val = self.mover.gen_new_num(self.board_encoded)
+            self.board_encoded, _, new_tile_pos, val = self.mover.gen_new_num(self.board_encoded,
+                                                                              SingletonConfig().config['4_spawn_rate'])
         else:
             self.evil_gen.reset_board(self.board)
             self.board_encoded, new_tile_pos, val = self.evil_gen.gen_new_num(5)

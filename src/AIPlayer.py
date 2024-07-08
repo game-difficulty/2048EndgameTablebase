@@ -8,6 +8,7 @@ from BoardMover import BoardMoverWithScore
 from BookReader import BookReader
 from Config import SingletonConfig
 
+
 spec_c = {
     'length': uint64,
     'cache_board': from_dtype(np.dtype('uint64,int32'))[:],
@@ -49,7 +50,8 @@ spec = {
     'bm': BoardMoverWithScore.class_type.instance_type,
     'cache': Cache.class_type.instance_type,
     'node': uint64,
-    'min_prob': float32
+    'min_prob': float32,
+    'spawn_rate4': float32,
 }
 
 
@@ -65,6 +67,7 @@ class AutoplayS:
         self.diffs, self.diffs2 = self.calculates_for_evaluate()
         self.node = 0
         self.min_prob = 0.0001
+        self.spawn_rate4 = 0.1
         print('AI init')
 
     def reset_board(self, board):
@@ -144,8 +147,9 @@ class AutoplayS:
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
                         empty_slots_count += 1
                         temp_t = self.search0(np.uint64(t | (1 << (4 * i))))
-                        if prob * 0.1 > self.min_prob:
-                            temp_t = temp_t * 0.9 + self.search0(np.uint64(t | (2 << (4 * i)))) * 0.1
+                        if prob * self.spawn_rate4 > self.min_prob:
+                            temp_t = temp_t * (1-self.spawn_rate4) + self.search0(
+                                np.uint64(t | (2 << (4 * i)))) * self.spawn_rate4
                         temp += temp_t
                 temp = int32(temp / empty_slots_count)
                 self.cache.update(t, 1, temp)
@@ -170,9 +174,10 @@ class AutoplayS:
                 for i in range(16):  # 遍历所有位置
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
                         empty_slots_count += 1
-                        temp_t = self.search1(np.uint64(t | (1 << (4 * i))), prob * 0.9)
-                        if prob * 0.1 > self.min_prob:
-                            temp_t = temp_t * 0.9 + self.search1(np.uint64(t | (2 << (4 * i))), prob * 0.1) * 0.1
+                        temp_t = self.search1(np.uint64(t | (1 << (4 * i))), prob * (1-self.spawn_rate4))
+                        if prob * self.spawn_rate4 > self.min_prob:
+                            temp_t = temp_t * (1-self.spawn_rate4) + self.search1(
+                                np.uint64(t | (2 << (4 * i))), prob * self.spawn_rate4) * self.spawn_rate4
                         temp += temp_t
                 temp = int32(temp / empty_slots_count)
                 self.cache.update(t, 2, temp)
@@ -197,9 +202,10 @@ class AutoplayS:
                 for i in range(16):  # 遍历所有位置
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
                         empty_slots_count += 1
-                        temp_t = self.search2(np.uint64(t | (1 << (4 * i))), prob * 0.9)
-                        if prob * 0.1 > self.min_prob:
-                            temp_t = temp_t * 0.9 + self.search2(np.uint64(t | (2 << (4 * i))), prob * 0.1) * 0.1
+                        temp_t = self.search2(np.uint64(t | (1 << (4 * i))), prob * (1-self.spawn_rate4))
+                        if prob * self.spawn_rate4 > self.min_prob:
+                            temp_t = temp_t * (1-self.spawn_rate4) + self.search2(
+                                np.uint64(t | (2 << (4 * i))), prob * self.spawn_rate4) * self.spawn_rate4
                         temp += temp_t
                 temp = int32(temp / empty_slots_count)
                 self.cache.update(t, 3, temp)
@@ -224,9 +230,10 @@ class AutoplayS:
                 for i in range(16):  # 遍历所有位置
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
                         empty_slots_count += 1
-                        temp_t = self.search3(np.uint64(t | (1 << (4 * i))), prob * 0.9)
-                        if prob * 0.1 > self.min_prob:
-                            temp_t = temp_t * 0.9 + self.search3(np.uint64(t | (2 << (4 * i))), prob * 0.1) * 0.1
+                        temp_t = self.search3(np.uint64(t | (1 << (4 * i))), prob * (1-self.spawn_rate4))
+                        if prob * self.spawn_rate4 > self.min_prob:
+                            temp_t = temp_t * (1-self.spawn_rate4) + self.search3(
+                                np.uint64(t | (2 << (4 * i))), prob * self.spawn_rate4) * self.spawn_rate4
                         temp += temp_t
                 temp = int32(temp / empty_slots_count)
                 self.cache.update(t, 4, temp)
@@ -251,9 +258,10 @@ class AutoplayS:
                 for i in range(16):  # 遍历所有位置
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
                         empty_slots_count += 1
-                        temp_t = self.search4(np.uint64(t | (1 << (4 * i))), prob * 0.9)
-                        if prob * 0.1 > self.min_prob:
-                            temp_t = temp_t * 0.9 + self.search4(np.uint64(t | (2 << (4 * i))), prob * 0.1) * 0.1
+                        temp_t = self.search4(np.uint64(t | (1 << (4 * i))), prob * (1-self.spawn_rate4))
+                        if prob * self.spawn_rate4 > self.min_prob:
+                            temp_t = temp_t * (1-self.spawn_rate4) + self.search4(
+                                np.uint64(t | (2 << (4 * i))), prob * self.spawn_rate4) * self.spawn_rate4
                         temp += temp_t
                 temp = int32(temp / empty_slots_count)
                 self.cache.update(t, 5, temp)
@@ -278,9 +286,10 @@ class AutoplayS:
                 for i in range(16):  # 遍历所有位置
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
                         empty_slots_count += 1
-                        temp_t = self.search5(np.uint64(t | (1 << (4 * i))), prob * 0.9)
-                        if prob * 0.1 > self.min_prob:
-                            temp_t = temp_t * 0.9 + self.search5(np.uint64(t | (2 << (4 * i))), prob * 0.1) * 0.1
+                        temp_t = self.search5(np.uint64(t | (1 << (4 * i))), prob * (1-self.spawn_rate4))
+                        if prob * self.spawn_rate4 > self.min_prob:
+                            temp_t = temp_t * (1-self.spawn_rate4) + self.search5(
+                                np.uint64(t | (2 << (4 * i))), prob * self.spawn_rate4) * self.spawn_rate4
                         temp += temp_t
                 temp = int32(temp / empty_slots_count)
                 self.cache.update(t, 6, temp)
@@ -305,9 +314,10 @@ class AutoplayS:
                 for i in range(16):  # 遍历所有位置
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
                         empty_slots_count += 1
-                        temp_t = self.search6(np.uint64(t | (1 << (4 * i))), prob * 0.9)
-                        if prob * 0.1 > self.min_prob:
-                            temp_t = temp_t * 0.9 + self.search6(np.uint64(t | (2 << (4 * i))), prob * 0.1) * 0.1
+                        temp_t = self.search6(np.uint64(t | (1 << (4 * i))), prob * (1-self.spawn_rate4))
+                        if prob * self.spawn_rate4 > self.min_prob:
+                            temp_t = temp_t * (1-self.spawn_rate4) + self.search6(
+                                np.uint64(t | (2 << (4 * i))), prob * self.spawn_rate4) * self.spawn_rate4
                         temp += temp_t
                 temp = int32(temp / empty_slots_count)
                 self.cache.update(t, 7, temp)
@@ -332,9 +342,10 @@ class AutoplayS:
                 for i in range(16):  # 遍历所有位置
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
                         empty_slots_count += 1
-                        temp_t = self.search7(np.uint64(t | (1 << (4 * i))), prob * 0.9)
-                        if prob * 0.1 > self.min_prob:
-                            temp_t = temp_t * 0.9 + self.search7(np.uint64(t | (2 << (4 * i))), prob * 0.1) * 0.1
+                        temp_t = self.search7(np.uint64(t | (1 << (4 * i))), prob * (1-self.spawn_rate4))
+                        if prob * self.spawn_rate4 > self.min_prob:
+                            temp_t = temp_t * (1-self.spawn_rate4) + self.search7(
+                                np.uint64(t | (2 << (4 * i))), prob * self.spawn_rate4) * self.spawn_rate4
                         temp += temp_t
                 temp = int32(temp / empty_slots_count)
                 self.cache.update(t, 8, temp)
@@ -359,9 +370,10 @@ class AutoplayS:
                 for i in range(16):  # 遍历所有位置
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
                         empty_slots_count += 1
-                        temp_t = self.search8(np.uint64(t | (1 << (4 * i))), prob * 0.9)
-                        if prob * 0.1 > self.min_prob:
-                            temp_t = temp_t * 0.9 + self.search8(np.uint64(t | (2 << (4 * i))), prob * 0.1) * 0.1
+                        temp_t = self.search8(np.uint64(t | (1 << (4 * i))), prob * (1-self.spawn_rate4))
+                        if prob * self.spawn_rate4 > self.min_prob:
+                            temp_t = temp_t * (1-self.spawn_rate4) + self.search8(
+                                np.uint64(t | (2 << (4 * i))), prob * self.spawn_rate4) * self.spawn_rate4
                         temp += temp_t
                 temp = int32(temp / empty_slots_count)
                 self.cache.update(t, 9, temp)
@@ -400,7 +412,7 @@ class AutoplayS:
             return self.search9(board)
         else:
             self.max_d = 6
-            return self.search2(board)
+            return self.search6(board)
 
     def play(self, depth=2, max_step=1e6):
         board = np.uint64(17)
@@ -767,6 +779,8 @@ class EvilGen:
                             temp = self.evaluate(t1)
                             self.cache.update(t1, 1, temp)
                         best = max(best, temp + score)  # 玩家通过操作最大化得分
+                        if best >= evil:
+                            break  # Beta剪枝
                     if best <= evil:
                         evil = best
                         if self.max_d == 1:
@@ -790,6 +804,8 @@ class EvilGen:
                             temp = self.search1(t1)
                             self.cache.update(t1, 2, temp)
                         best = max(best, temp + score)  # 玩家通过操作最大化得分
+                        if best >= evil:
+                            break  # Beta剪枝
                     if best <= evil:
                         evil = best
                         if self.max_d == 2:
@@ -813,6 +829,8 @@ class EvilGen:
                             temp = self.search2(t1)
                             self.cache.update(t1, 3, temp)
                         best = max(best, temp + score)  # 玩家通过操作最大化得分
+                        if best >= evil:
+                            break  # Beta剪枝
                     if best <= evil:
                         evil = best
                         if self.max_d == 3:
@@ -836,6 +854,8 @@ class EvilGen:
                             temp = self.search3(t1)
                             self.cache.update(t1, 4, temp)
                         best = max(best, temp + score)  # 玩家通过操作最大化得分
+                        if best >= evil:
+                            break  # Beta剪枝
                     if best <= evil:
                         evil = best
                         if self.max_d == 4:
@@ -859,9 +879,61 @@ class EvilGen:
                             temp = self.search4(t1)
                             self.cache.update(t1, 5, temp)
                         best = max(best, temp + score)  # 玩家通过操作最大化得分
+                        if best >= evil:
+                            break  # Beta剪枝
                     if best <= evil:
-                        evil = best
+                        evil = best  # 数字生成机制减小得分
                         if self.max_d == 5:
+                            self.hardest_pos = i
+                            self.hardest_num = num
+        return evil
+
+    def search6(self, b):
+        evil = 131072
+        for i in range(16):  # 遍历所有位置
+            if ((b >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
+                for num in (1, 2):
+                    t = np.uint64(b | (num << (4 * i)))
+                    best = -131072
+                    for d in [1, 3, 4, 2]:
+                        t1, score = self.bm.move_board(t, d)
+                        if t1 == t:
+                            continue
+                        temp = self.cache.lookup(t1, 6)
+                        if temp is None:
+                            temp = self.search5(t1)
+                            self.cache.update(t1, 6, temp)
+                        best = max(best, temp + score)  # 玩家通过操作最大化得分
+                        if best >= evil:
+                            break  # Beta剪枝
+                    if best <= evil:
+                        evil = best  # 数字生成机制减小得分
+                        if self.max_d == 6:
+                            self.hardest_pos = i
+                            self.hardest_num = num
+        return evil
+
+    def search7(self, b):
+        evil = 131072
+        for i in range(16):  # 遍历所有位置
+            if ((b >> np.uint64(4 * i)) & np.uint64(0xF)) == 0:  # 如果当前位置为空
+                for num in (1, 2):
+                    t = np.uint64(b | (num << (4 * i)))
+                    best = -131072
+                    for d in [1, 3, 4, 2]:
+                        t1, score = self.bm.move_board(t, d)
+                        if t1 == t:
+                            continue
+                        temp = self.cache.lookup(t1, 7)
+                        if temp is None:
+                            temp = self.search6(t1)
+                            self.cache.update(t1, 7, temp)
+                        best = max(best, temp + score)  # 玩家通过操作最大化得分
+                        if best >= evil:
+                            break  # Beta剪枝
+                    if best <= evil:
+                        evil = best  # 数字生成机制减小得分
+                        if self.max_d == 7:
                             self.hardest_pos = i
                             self.hardest_num = num
         return evil
@@ -884,11 +956,15 @@ class EvilGen:
             return self.search4(board)
         elif depth == 5:
             return self.search5(board)
+        elif depth == 6:
+            return self.search6(board)
+        elif depth == 7:
+            return self.search7(board)
         else:
-            self.max_d = 4
-            return self.search2(board)
+            self.max_d = 5
+            return self.search5(board)
 
-    def gen_new_num(self, depth=3):
+    def gen_new_num(self, depth=5):
         self.start_search(depth)
         board_encoded = self.bm.encode_board(self.board)
         return board_encoded | (self.hardest_num << (4 * self.hardest_pos)), 15 - self.hardest_pos, self.hardest_num
@@ -912,13 +988,13 @@ if __name__ == "__main__":
     for steps in range(500):
         s1.reset_board(s1.bm.decode_board(b1))
         t0 = time.time()
-        s1.start_search(5)
+        s1.start_search(7)
         # print(s1.cache.lookup_count / (time.time() - t0), s1.node / (time.time() - t0), time.time() - t0)
         print({0:None, 1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}[s1.best_operation])
         if not s1.best_operation:
             break
         b1 = np.uint64(s1.bm.move_board(b1, s1.best_operation)[0])
         g1.reset_board(g1.bm.decode_board(b1))
-        b1 = np.uint64(g1.gen_new_num(5))
+        b1 = np.uint64(g1.gen_new_num(7)[0])
         print(s1.bm.decode_board(b1))
     print(time.time() - t_start)
