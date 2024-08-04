@@ -17,18 +17,18 @@ class SingletonConfig:
             cls._instance.config = cls.load_config()
         return cls._instance
 
-
     @classmethod
     def load_config(cls, filename=None):
         if filename is None:
             filename = cls.config_file_path
 
         if os.path.exists(filename):
-            with open(filename, 'rb') as file:
-                return pickle.load(file)
-        else:
-            return {
-                'filepath_map': dict(),
+            try:
+                with open(filename, 'rb') as file:
+                    return pickle.load(file)
+            except EOFError:
+                pass
+        return {'filepath_map': dict(),
                 'colors': ['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
                            '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'] + [
                               '#000000'] * 20,
@@ -41,7 +41,7 @@ class SingletonConfig:
                 'font_size_factor': 100,
                 'minigame_state': [dict(), dict()],  # [盘面，得分，最高分，最大数，是否曾过关, 新数位置], []
                 'power_ups_state': [dict(), dict()],
-                'minigame_difficulty': 0,
+                'minigame_difficulty': 1,
             }
 
     @classmethod
