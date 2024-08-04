@@ -631,6 +631,9 @@ class MinigameWindow(QtWidgets.QMainWindow):
         difficulty = self.gameframe.difficulty
         SingletonConfig().config['power_ups_state'][difficulty][self.minigame] = \
             tuple(self.powerup_grid.power_ups.values())
+        # 恢复所有被覆盖的光标
+        while QtWidgets.QApplication.overrideCursor() is not None:
+            QtWidgets.QApplication.restoreOverrideCursor()
         self.closed.emit()  # 发出信号
         event.accept()
 
@@ -849,7 +852,7 @@ class PowerUpGrid(QtWidgets.QFrame):
 
     def create_mouse_press_event(self, frame):
         def mousePressEvent(_):
-            if frame.count == 0:
+            if frame.count == 0 or self.parent_window.isProcessing or self.first_click_pos:
                 return
             self.parent_window.isProcessing = True
             frame.setStyleSheet("background-color: rgba(0, 0, 0, 0.2);")
@@ -918,7 +921,7 @@ class PowerUpGrid(QtWidgets.QFrame):
                 if frame.geometry().contains(local_pos):
                     if self.first_click_pos is None:
                         # 第一次点击，记录位置
-                        if self.parent_window.gameframe.board[i][j] != 0:
+                        if self.parent_window.gameframe.board[i][j] > 0:
                             self.first_click_pos = ((i, j), self.parent_window.gameframe.board[i][j])
                             pixmap = QtGui.QPixmap(frame.size())
                             frame.render(pixmap)
@@ -964,6 +967,8 @@ class PowerUpGrid(QtWidgets.QFrame):
         local_pos = self.parent_window.gameframe.game_square.mapFromParent(local_pos)
         i, j = self.find_2x2_subgrid_indices(local_pos)
         if i is None or j is None:
+            return False
+        elif i >= self.parent_window.gameframe.rows - 1 or j >= self.parent_window.gameframe.cols - 1:
             return False
         elif np.all(self.parent_window.gameframe.board[i: i + 2, j: j + 2] == 0) or \
                 np.any(self.parent_window.gameframe.board[i: i + 2, j: j + 2] == -1):

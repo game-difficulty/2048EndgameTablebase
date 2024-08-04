@@ -111,7 +111,7 @@ class ColumnChaosWindow(MinigameWindow):
         self.update_score()
         self.update_countdown_text()
         if self.gameframe.count_down == 40 - 10 * self.gameframe.difficulty:
-            QtCore.QTimer.singleShot(3050, self.allow_input)  # 配合gameframe.after_gen_num中动画的延迟
+            QtCore.QTimer.singleShot(3150, self.allow_input)  # 配合gameframe.after_gen_num中动画的延迟
         else:
             self.allow_input()
 

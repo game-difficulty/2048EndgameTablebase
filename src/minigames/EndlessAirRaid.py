@@ -276,6 +276,13 @@ class EndlessAirRaidFrame(MinigameFrame):
             message = f"You achieved {score} score!\n Let's go!"
         self.show_trophy(f'pic/{level}.png', message)
 
+    def has_possible_move(self):
+        for direct in (1, 2, 3, 4):
+            board_new, _, is_valid_move = self.move_and_check_validity(direct)
+            if is_valid_move:
+                return True
+        return False
+
 
 # noinspection PyAttributeOutsideInit
 class EndlessAirRaidWindow(MinigameWindow):
@@ -303,5 +310,9 @@ class EndlessAirRaidWindow(MinigameWindow):
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     main = EndlessAirRaidWindow(minigame='Endless AirRaid', frame_type=EndlessAirRaidFrame)
+    # main.gameframe.board = np.array([[2, 1, 0, -1],
+    #                                  [3, 1, -1, 0],
+    #                                  [6, 3, -1, -1],
+    #                                  [1, 5, 3, 2]])
     main.show()
     sys.exit(app.exec_())

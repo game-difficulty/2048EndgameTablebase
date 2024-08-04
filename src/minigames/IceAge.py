@@ -230,28 +230,30 @@ class IceAgeFrame(MinigameFrame):
         frozen_frames = self.frozen_frame[row][col]
         count_down = self.count_down[row][col]
         num = self.board[row][col]
+
+        def _update_frame(i, th):
+            if count_down >= th or num == -1:
+                if frozen_frames[i].isHidden():
+                    frozen_frames[i].show()
+            elif frozen_frames[i].isVisible():
+                frozen_frames[i].hide()
+
         if count_down == 0 and num != -1:
             for f in frozen_frames:
                 if f is not None and f.isVisible():
                     f.close()
-        elif count_down >= self.frozen_step or num == -1:
-            if frozen_frames[5].isHidden():
-                frozen_frames[5].show()
-        elif count_down >= self.frozen_step - 5:
-            if frozen_frames[4].isHidden():
-                frozen_frames[4].show()
-        elif count_down >= 64 + self.difficulty * 16:
-            if frozen_frames[3].isHidden():
-                frozen_frames[3].show()
-        elif count_down >= 50 + self.difficulty * 10:
-            if frozen_frames[2].isHidden():
-                frozen_frames[2].show()
-        elif count_down >= 36 + self.difficulty * 4:
-            if frozen_frames[1].isHidden():
-                frozen_frames[1].show()
-        elif count_down >= 20:
-            if frozen_frames[0].isHidden():
-                frozen_frames[0].show()
+
+        thresholds = [
+            (5, self.frozen_step),
+            (4, self.frozen_step - 5),
+            (3, 64 + self.difficulty * 16),
+            (2, 50 + self.difficulty * 10),
+            (1, 36 + self.difficulty * 4),
+            (0, 20)
+        ]
+
+        for index, threshold in thresholds:
+            _update_frame(index, threshold)
 
     @staticmethod
     def track_movement(line: np.ndarray, reverse: bool = False) -> np.ndarray:
@@ -394,6 +396,7 @@ class IceAgeWindow(MinigameWindow):
 
     def show(self):
         super().show()
+        print(self.gameframe.count_down)
         self.gameframe.update_frozen_frames()
 
 

@@ -113,7 +113,7 @@ class FerrisWheelWindow(MinigameWindow):
         self.update_score()
         self.update_countdown_text()
         if self.gameframe.count_down == 40 - self.gameframe.difficulty * 10:
-            QtCore.QTimer.singleShot(2050, self.allow_input)  # 配合gameframe.after_gen_num中动画的延迟
+            QtCore.QTimer.singleShot(2150, self.allow_input)  # 配合gameframe.after_gen_num中动画的延迟
         else:
             self.allow_input()
 

@@ -55,6 +55,7 @@ class MysteryMerge1Frame(MinigameFrame):
 
     def check_game_over(self):
         if self.has_possible_move():
+            print(self.peek_count)
             pass
         else:
             self.show_all_frame()
@@ -113,7 +114,7 @@ class MysteryMerge2Frame(MinigameFrame):
     def closeEvent(self, event):
         SingletonConfig().config['minigame_state'][self.difficulty][self.minigame] = \
             ([self.board, self.score, self.max_score, self.max_num, self.is_passed, self.newtile_pos], [
-                self.peek_count, self.mask])
+                self.peek_count, self.masked_])
         event.accept()
 
     @staticmethod
@@ -211,11 +212,11 @@ class MysteryMergeWindow(MinigameWindow):
         if self.gameframe.has_possible_move():
             self.gameframe.show_all_frame()
             self.gameframe.peek_count += 1
-            self.reset_peek_button_enabled()
 
     def handleUnpeek(self):
         if self.gameframe.has_possible_move():
             self.gameframe.update_all_frame(self.gameframe.board)
+            self.reset_peek_button_enabled()
 
     def handleNewGame(self):
         super().handleNewGame()
@@ -238,7 +239,7 @@ class MysteryMergeWindow(MinigameWindow):
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
-    main = MysteryMergeWindow(minigame='Mystery Merge2', frame_type=MysteryMerge2Frame)
+    main = MysteryMergeWindow(minigame='Mystery Merge1', frame_type=MysteryMerge1Frame)
     main.gameframe.board = np.array([[11, 10, 9, 8],
                                      [4, 5, 6, 7],
                                      [3, 2, 1, 1],
