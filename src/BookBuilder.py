@@ -2,6 +2,7 @@ import os
 from itertools import combinations, permutations
 import time
 import gc
+from typing import Callable, Tuple, List
 
 import numpy as np
 from numba import njit, prange
@@ -12,9 +13,21 @@ from Config import SingletonConfig
 from TrieCompressor import trie_compress_progress
 
 
+PatternCheckFunc = Callable[[np.uint64], bool]
+SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
+ToFindFunc = Callable[[np.uint64], np.uint64]
+
+
 @njit(nogil=True)
-def gen_boards(arr0, target, position, bm, pattern_check_func, success_check_func, to_find_func, do_check=True,
-               isfree=False):
+def gen_boards(arr0: np.ndarray[np.uint64],
+               target: int,
+               position: int,
+               bm: BoardMover,
+               pattern_check_func: PatternCheckFunc,
+               success_check_func: SuccessCheckFunc,
+               to_find_func: ToFindFunc,
+               do_check: bool = True,
+               isfree: bool = False) -> Tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
     """
     根据arr0中的面板，先生成数字，再移动，如果移动后仍是定式范围内且移动有效，则根据生成的数字（2,4）分别填入
     """
@@ -50,8 +63,16 @@ def gen_boards(arr0, target, position, bm, pattern_check_func, success_check_fun
     return arr1, arr2
 
 
-def gen_boards_big(arr0, target, position, bm, pattern_check_func, success_check_func, to_find_func, d1, do_check=True,
-                   isfree=False):
+def gen_boards_big(arr0: np.ndarray[np.uint64],
+                   target: int,
+                   position: int,
+                   bm: BoardMover,
+                   pattern_check_func: PatternCheckFunc,
+                   success_check_func: SuccessCheckFunc,
+                   to_find_func: ToFindFunc,
+                   d1: np.ndarray[np.uint64],
+                   do_check: bool = True,
+                   isfree: bool = False) -> Tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
     """将arr0分段放入gen_boards生成排序去重后的局面，然后归并"""
     segment_size = 119999999
     start_index, seg_index = 0, 0
@@ -90,7 +111,7 @@ def gen_boards_big(arr0, target, position, bm, pattern_check_func, success_check
 
 
 @njit(nogil=True)
-def merge_deduplicate_all(arrays, length=0):
+def merge_deduplicate_all(arrays: List[np.ndarray], length: int = 0) -> np.ndarray:
     if length == 0:
         for arr in arrays:
             length += len(arr)
@@ -123,15 +144,26 @@ def merge_deduplicate_all(arrays, length=0):
 
 
 @njit(parallel=True, nogil=True)
-def recalculate(arr0, arr1, arr2, target, position, bm, pattern_check_func, success_check_func, to_find_func,
-                do_check=False, spawn_rate4=0.1):
+def recalculate(
+    arr0: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+    arr1: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+    arr2: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+    target: int,
+    position: int,
+    bm: BoardMover,
+    pattern_check_func: PatternCheckFunc,
+    success_check_func: SuccessCheckFunc,
+    to_find_func: ToFindFunc,
+    do_check: bool = False,
+    spawn_rate4: float = 0.1
+) -> np.ndarray[Tuple[np.uint64, np.uint32]]:
     """
     根据已经填充好成功概率的array回算前一批面板的成功概率。
     对于arr0中的每个面板，考虑在每个空位填充数字2或4（90%概率为2，10%概率为4），
     然后对于每个可能的填充，执行所有有效的移动操作，并基于移动结果的成功概率来更新当前面板的成功概率。
     """
     for start, end in (
-    (0, len(arr0) // 10), (len(arr0) // 10, len(arr0) // 3), (len(arr0) // 3, len(arr0))):  # 缓解负载不均衡问题
+            (0, len(arr0) // 10), (len(arr0) // 10, len(arr0) // 3), (len(arr0) // 3, len(arr0))):  # 缓解负载不均衡问题
         for k in prange(start, end):
             t = arr0[k][0]
             if do_check and success_check_func(t, target, position):
@@ -161,7 +193,8 @@ def recalculate(arr0, arr1, arr2, target, position, bm, pattern_check_func, succ
 
 
 @njit(nogil=True)
-def binary_search_arr(arr, target):
+def binary_search_arr(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+                      target: np.uint64) -> np.uint32:
     low = 0
     high = len(arr) - 1
 
@@ -173,12 +206,12 @@ def binary_search_arr(arr, target):
         elif mid_val > target:
             high = mid - 1
         else:
-            return arr[mid][1]  # 找到匹配，返回对应的int32值
+            return arr[mid][1]  # 找到匹配，返回对应的uint32值
     return 0  # 如果没有找到匹配项
 
 
 @njit(nogil=True)
-def merge_and_deduplicate(sorted_arr1, sorted_arr2):
+def merge_and_deduplicate(sorted_arr1: np.ndarray, sorted_arr2: np.ndarray) -> np.ndarray:
     # 结果数组的长度最多与两数组之和一样长
     unique_array = np.empty(len(sorted_arr1) + len(sorted_arr2), dtype=np.uint64)
 
@@ -213,8 +246,19 @@ def merge_and_deduplicate(sorted_arr1, sorted_arr2):
     return unique_array[:k]  # 调整数组大小以匹配实际元素数
 
 
-def gen_lookup_table_big(arr_init, pattern_check_func, success_check_func, to_find_func, target, position, steps,
-                         pathname, docheck_step, isfree=False, spawn_rate4=0.1):
+def gen_lookup_table_big(
+    arr_init: np.ndarray[np.uint64],
+    pattern_check_func: PatternCheckFunc,
+    success_check_func: SuccessCheckFunc,
+    to_find_func: ToFindFunc,
+    target: int,
+    position: int,
+    steps: int,
+    pathname: str,
+    docheck_step: int,
+    isfree: bool = False,
+    spawn_rate4: float = 0.1
+) -> None:
     """
     传入包含所有初始局面的array，然后按照面板数字和依次生成下一阶段的所有局面。储存轮到系统生成数字时的面板。
     保障其中的每个arr储存的面板的数字和均相等
@@ -227,8 +271,19 @@ def gen_lookup_table_big(arr_init, pattern_check_func, success_check_func, to_fi
                         pathname, docheck_step, bm, spawn_rate4)  # 这里的最后的两个book d0,d1就是回算的d1,d2
 
 
-def generate_process(arr_init, pattern_check_func, success_check_func, to_find_func, target, position, steps,
-                     pathname, docheck_step, bm, isfree):
+def generate_process(
+    arr_init: np.ndarray[np.uint64],
+    pattern_check_func: PatternCheckFunc,
+    success_check_func: SuccessCheckFunc,
+    to_find_func: ToFindFunc,
+    target: int,
+    position: int,
+    steps: int,
+    pathname: str,
+    docheck_step: int,
+    bm: BoardMover,
+    isfree: bool
+) -> Tuple[bool, np.ndarray[np.uint64], np.ndarray[np.uint64]]:
     started = False
     d0, d1 = None, None
     # 从前向后遍历，生成新的棋盘状态并保存到相应的array中
@@ -269,7 +324,14 @@ def generate_process(arr_init, pattern_check_func, success_check_func, to_find_f
     return started, d0, d1
 
 
-def final_steps(started, d0, d1, pathname, steps, success_check_func, target, position):
+def final_steps(started: bool,
+                d0: np.ndarray[np.uint64],
+                d1: np.ndarray[np.uint64],
+                pathname: str,
+                steps: int,
+                success_check_func: SuccessCheckFunc,
+                target: int,
+                position: int):
     if started:
         expanded_arr0 = np.empty(len(d0), dtype='uint64,uint32')
         expanded_arr0['f0'] = d0
@@ -286,8 +348,20 @@ def final_steps(started, d0, d1, pathname, steps, success_check_func, target, po
     return d0, d1
 
 
-def recalculate_process(d1, d2, pattern_check_func, success_check_func, to_find_func, target, position, steps,
-                        pathname, docheck_step, bm, spawn_rate4=0.1):
+def recalculate_process(
+    d1: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+    d2: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+    pattern_check_func: PatternCheckFunc,
+    success_check_func: SuccessCheckFunc,
+    to_find_func: ToFindFunc,
+    target: int,
+    position: int,
+    steps: int,
+    pathname: str,
+    docheck_step: int,
+    bm: BoardMover,
+    spawn_rate4: float = 0.1
+) -> None:
     started = False
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
@@ -324,13 +398,16 @@ def recalculate_process(d1, d2, pattern_check_func, success_check_func, to_find_
 
 
 @njit(nogil=True, parallel=True)
-def Remove_died(d):
+def Remove_died(d: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])]
+                ) -> np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])]:
     d = d[d['f1'] != np.uint32(0)]
     return d
 
 
-@njit(nogil=True)
-def final_situation_process(expanded_arr0, success_check_func, target, position):
+@njit(nogil=True, parallel=True)
+def final_situation_process(expanded_arr0: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+                            success_check_func: SuccessCheckFunc, target: int, position: int
+                            ) -> np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])]:
     for i in prange(len(expanded_arr0)):
         if success_check_func(expanded_arr0[i][0], target, position):
             expanded_arr0[i][1] = 4000000000
@@ -340,7 +417,7 @@ def final_situation_process(expanded_arr0, success_check_func, target, position)
     return expanded_arr0
 
 
-def do_compress(bookpath):
+def do_compress(bookpath: str) -> None:
     if bookpath[-4:] != 'book':
         return
     if SingletonConfig().config.get('compress', False) and os.path.exists(bookpath):
@@ -350,7 +427,7 @@ def do_compress(bookpath):
                 os.remove(bookpath)
 
 
-def generate_free_inits(target, t32ks, t2s):
+def generate_free_inits(target: int, t32ks: int, t2s: int) -> np.ndarray[np.uint64]:
     numbers = [target, ]
     generated = np.empty(86486400, dtype=np.uint64)
     c = 0
@@ -385,7 +462,7 @@ def generate_free_inits(target, t32ks, t2s):
     return np.unique(g2[:c])
 
 
-def start_build(pattern, target, position, pathname):
+def start_build(pattern: str, target: int, position: int, pathname: str) -> bool:
     spawn_rate4 = SingletonConfig().config['4_spawn_rate']
     if pattern[:4] == 'free':
         if pattern[-1] != 'w':

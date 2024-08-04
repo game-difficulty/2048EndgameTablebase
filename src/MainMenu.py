@@ -1,5 +1,7 @@
-import numpy as np
+import sys
+import os
 
+import numpy as np
 from PyQt5 import QtCore, QtWidgets
 from PyQt5 import QtGui
 
@@ -16,6 +18,7 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setupUi()
         self.game_window = None
+        self.minigames_window = None
         self.train_window = None
         self.test_window = None
         self.settings_window = None
@@ -32,35 +35,42 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.verticalLayout = QtWidgets.QVBoxLayout(self.centralwidget)
         self.innerContainer = QtWidgets.QWidget(self.centralwidget)
         self.innerContainerLayout = QtWidgets.QVBoxLayout(self.innerContainer)
-        self.verticalLayout.addWidget(self.innerContainer, alignment=QtCore.Qt.AlignTop | QtCore.Qt.AlignHCenter)
+        self.verticalLayout.addWidget(self.innerContainer,
+                                      alignment=QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignHCenter)
 
         self.Game = QtWidgets.QPushButton(self.centralwidget)
         self.Game.setObjectName("Game")
-        self.Game.clicked.connect(self.openGameWindow)
+        self.Game.clicked.connect(self.openGameWindow)  # type: ignore
         self.Game.setMaximumSize(QtCore.QSize(480, 60))
         self.Game.setStyleSheet("font: 500 12pt \"Cambria\";")
         self.innerContainerLayout.addWidget(self.Game)
+        self.Minigames = QtWidgets.QPushButton(self.centralwidget)
+        self.Minigames.setObjectName("Minigames")
+        self.Minigames.clicked.connect(self.openMinigamesWindow)  # type: ignore
+        self.Minigames.setMaximumSize(QtCore.QSize(480, 60))
+        self.Minigames.setStyleSheet("font: 500 12pt \"Cambria\";")
+        self.innerContainerLayout.addWidget(self.Minigames)
         self.Practise = QtWidgets.QPushButton(self.centralwidget)
         self.Practise.setObjectName("Practise")
-        self.Practise.clicked.connect(self.openTrainWindow)
+        self.Practise.clicked.connect(self.openTrainWindow)  # type: ignore
         self.Practise.setMaximumSize(QtCore.QSize(480, 60))
         self.Practise.setStyleSheet("font: 500 12pt \"Cambria\";")
         self.innerContainerLayout.addWidget(self.Practise)
         self.Test = QtWidgets.QPushButton(self.centralwidget)
         self.Test.setObjectName("Test")
-        self.Test.clicked.connect(self.openTestWindow)
+        self.Test.clicked.connect(self.openTestWindow)  # type: ignore
         self.Test.setMaximumSize(QtCore.QSize(480, 60))
         self.Test.setStyleSheet("font: 500 12pt \"Cambria\";")
         self.innerContainerLayout.addWidget(self.Test)
         self.Settings = QtWidgets.QPushButton(self.centralwidget)
         self.Settings.setObjectName("Settings")
-        self.Settings.clicked.connect(self.openSettingsWindow)
+        self.Settings.clicked.connect(self.openSettingsWindow)  # type: ignore
         self.Settings.setMaximumSize(QtCore.QSize(480, 60))
         self.Settings.setStyleSheet("font: 500 12pt \"Cambria\";")
         self.innerContainerLayout.addWidget(self.Settings)
         self.Help = QtWidgets.QPushButton(self.centralwidget)
         self.Help.setObjectName("Settings")
-        self.Help.clicked.connect(self.openHelpWindow)
+        self.Help.clicked.connect(self.openHelpWindow)  # type: ignore
         self.Help.setMaximumSize(QtCore.QSize(480, 60))
         self.Help.setStyleSheet("font: 500 12pt \"Cambria\";")
         self.innerContainerLayout.addWidget(self.Help)
@@ -77,10 +87,10 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         super().resizeEvent(event)
         if self.width() > 360:
             self.innerContainer.setMaximumWidth(360)
-            self.verticalLayout.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignHCenter)
+            self.verticalLayout.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignHCenter)
         else:
             self.innerContainer.setFixedWidth(self.width())
-            self.verticalLayout.setAlignment(QtCore.Qt.AlignTop)
+            self.verticalLayout.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
 
     @staticmethod
     def show_and_center_window(window):
@@ -103,22 +113,48 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         if self.game_window is None:
             from Gamer import GameWindow
             self.game_window = GameWindow()
-        if self.game_window.windowState() & QtCore.Qt.WindowMinimized:
+        if self.game_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
             self.game_window.setWindowState(
-                self.game_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
+                self.game_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized
+                | QtCore.Qt.WindowState.WindowActive)
         self.game_window.show()
         self.game_window.activateWindow()
         self.game_window.raise_()
         self.show_and_center_window(self.game_window)
         self.game_window.gameframe.update_all_frame(self.game_window.gameframe.board)
 
+    def openMinigamesWindow(self):
+        if self.minigames_window is None:
+            if hasattr(sys, '_MEIPASS'):
+                # noinspection PyProtectedMember
+                current_dir = sys._MEIPASS
+            else:
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+
+            minigames_dir = os.path.join(current_dir, 'minigames')
+            if minigames_dir not in sys.path:
+                sys.path.insert(0, minigames_dir)
+
+            from minigames.MinigameMenu import MinigamesMainWindow
+            self.minigames_window = MinigamesMainWindow()
+
+        if self.minigames_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
+            self.minigames_window.setWindowState(
+                self.minigames_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized
+                | QtCore.Qt.WindowState.WindowActive)
+        self.minigames_window.show()
+        self.minigames_window.activateWindow()
+        self.minigames_window.raise_()
+        self.show_and_center_window(self.minigames_window)
+
     def openTrainWindow(self):
         if self.train_window is None:
             from Trainer import TrainWindow
             self.train_window = TrainWindow()
-        if self.train_window.windowState() & QtCore.Qt.WindowMinimized:
+        if self.train_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
             self.train_window.setWindowState(
-                self.train_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
+                self.train_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized
+                | QtCore.Qt.WindowState.WindowActive)
         self.train_window.show()
         self.train_window.activateWindow()
         self.train_window.raise_()
@@ -129,9 +165,10 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         if self.test_window is None:
             from Tester import TestWindow
             self.test_window = TestWindow()
-        if self.test_window.windowState() & QtCore.Qt.WindowMinimized:
+        if self.test_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
             self.test_window.setWindowState(
-                self.test_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
+                self.test_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized
+                | QtCore.Qt.WindowState.WindowActive)
         self.test_window.show()
         self.test_window.activateWindow()
         self.test_window.raise_()
@@ -142,9 +179,10 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         if self.settings_window is None:
             from Settings import SettingsWindow
             self.settings_window = SettingsWindow()
-        if self.settings_window.windowState() & QtCore.Qt.WindowMinimized:
+        if self.settings_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
             self.settings_window.setWindowState(
-                self.settings_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
+                self.settings_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized
+                | QtCore.Qt.WindowState.WindowActive)
         self.settings_window.show()
         self.settings_window.activateWindow()
         self.show_and_center_window(self.settings_window)
@@ -154,9 +192,10 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         if self.view_window is None:
             from MDViewer import MDViewer
             self.view_window = MDViewer('help.md')
-        if self.view_window.windowState() & QtCore.Qt.WindowMinimized:
+        if self.view_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
             self.view_window.setWindowState(
-                self.view_window.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
+                self.view_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized
+                | QtCore.Qt.WindowState.WindowActive)
         self.view_window.show()
         self.view_window.activateWindow()
         self.show_and_center_window(self.view_window)
@@ -167,6 +206,7 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         _translate = QtCore.QCoreApplication.translate
         self.setWindowTitle(_translate("MainMenu", "2048"))
         self.Game.setText(_translate("MainMenu", "Game"))
+        self.Minigames.setText(_translate("MainMenu", "Minigames"))
         self.Practise.setText(_translate("MainMenu", "Practise"))
         self.Test.setText(_translate("MainMenu", "Test"))
         self.Settings.setText(_translate("MainMenu", "Settings"))

@@ -1,61 +1,14 @@
 import sys
+from typing import Union, List
 
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QPropertyAnimation, QRect, QEasingCurve, QTimer, QSize, QPoint
-from PyQt5.QtGui import QIcon
 
 from AIPlayer import AutoplayS, Dispatcher, EvilGen
 from BoardMover import BoardMoverWithScore
 from Config import SingletonConfig
-
-
-def simulate_move_and_merge(line):
-    """模拟一行的移动和合并过程，返回新的行和合并发生的位置。"""
-    # 移除所有的0，保留非0元素
-    non_zero = [value for value in line if value != 0]
-    merged = [0] * len(line)  # 合并标记
-    new_line = []
-    skip = False
-
-    for i in range(len(non_zero)):
-        if skip:
-            skip = False
-            continue
-        if i + 1 < len(non_zero) and non_zero[i] == non_zero[i + 1] and non_zero[i] != 32768:
-            # 发生合并
-            new_line.append(2 * non_zero[i])
-            merged[len(new_line) - 1] = 1  # 标记合并发生的位置
-            skip = True
-        else:
-            new_line.append(non_zero[i])
-
-    # 用0填充剩余的空间
-    new_line.extend([0] * (len(line) - len(new_line)))
-    return new_line, merged
-
-
-def find_merge_positions(current_board, move_direction):
-    # 初始化合并位置数组
-    merge_positions = np.zeros_like(current_board)
-    move_direction = move_direction.lower()
-
-    for i in range(len(current_board)):
-        if move_direction in ['left', 'right']:
-            line = current_board[i, :]
-        else:
-            line = current_board[:, i]
-        line_to_process = line[::-1] if move_direction in ['down', 'right'] else line
-        processed_line, merge_line = simulate_move_and_merge(line_to_process)
-        if move_direction in ['right', 'down']:
-            merge_line = merge_line[::-1]
-
-        if move_direction in ['left', 'right']:
-            merge_positions[i, :] = merge_line
-        else:
-            merge_positions[:, i] = merge_line
-
-    return merge_positions
+from Calculator import find_merge_positions
 
 
 # noinspection PyAttributeOutsideInit
@@ -68,24 +21,24 @@ class SquareFrame(QtWidgets.QFrame):
         '''['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
             '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'] + [
             '#ffffff'] * 20'''
-        self.anims = [[None for _ in range(self.cols)] for __ in range(self.rows)]
+        self.anims: List[List[Union[None, QtCore.QAbstractAnimation]]] = [
+            [None for _ in range(self.cols)] for __ in range(self.rows)
+        ]
 
-    def resizeEvent(self, event):
-        new_size = min(self.width(), self.height())
-        self.resize(new_size, new_size)
-        super().resizeEvent(event)
-        # 更新位置以居中
-        self.move(
-            (self.parent().width() - new_size) // 2,
-            (self.parent().height() - new_size) // 2
-        )
+    def updateGeometry(self):
+        # 保持正方形尺寸并居中显示
+        parent_size = self.parent().size()
+        new_size = int(min(parent_size.width(), parent_size.height()) * 0.95)
+        new_x = (parent_size.width() - new_size) // 2
+        new_y = (parent_size.height() - new_size) // 2
+        self.setGeometry(new_x, new_y, new_size, new_size)
+
         self.base_font_size = int(self.width() / 14.4 * SingletonConfig().config.get('font_size_factor', 100) / 100)
-        layout = self.layout()
-        if layout:
-            margin = int(new_size / 32)
-            layout.setContentsMargins(margin, margin, margin, margin)
-            layout.setHorizontalSpacing(int(margin / 1.2))
-            layout.setVerticalSpacing(int(margin / 1.2))
+
+        margin = int(new_size / 32)
+        self.game_grid.setContentsMargins(margin, margin, margin, margin)
+        self.game_grid.setHorizontalSpacing(int(margin / 1.2))
+        self.game_grid.setVerticalSpacing(int(margin / 1.2))
 
     def setupUi(self, num_rows=4, num_cols=4):
         self.setMaximumSize(1000, 1000)
@@ -112,12 +65,15 @@ class SquareFrame(QtWidgets.QFrame):
 
                 layout = QtWidgets.QGridLayout(frame)
                 layout.setContentsMargins(0, 0, 0, 0)
-                layout.setAlignment(QtCore.Qt.AlignCenter)
+                layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
 
                 label = QtWidgets.QLabel(frame)
-                label.setAlignment(QtCore.Qt.AlignCenter)
-                label.setStyleSheet(
-                    f"font: {self.base_font_size}pt 'Calibri'; font-weight: bold; color: white;")
+                label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+                label.setStyleSheet(f"""
+                    font: {self.base_font_size}pt 'Calibri'; 
+                    font-weight: bold; color: white; 
+                    background-color: transparent;
+                """)
                 label.setText("")
                 layout.addWidget(label)
 
@@ -135,24 +91,28 @@ class SquareFrame(QtWidgets.QFrame):
         frame.setGraphicsEffect(opacity_effect)
 
         opacity_animation = QPropertyAnimation(opacity_effect, b"opacity")
-        opacity_animation.setDuration(240)
+        opacity_animation.setDuration(150)
         opacity_animation.setStartValue(0)
         opacity_animation.setEndValue(1)
         opacity_animation.setEasingCurve(QEasingCurve.OutCubic)
-        opacity_animation.finished.connect(lambda: self.cleanup_animation(r, c))
-        opacity_animation.start()
+        opacity_animation.finished.connect(lambda: self.cleanup_animation(r, c))  # type: ignore
 
         scale_animation = QPropertyAnimation(frame, b"geometry")
-        scale_animation.setDuration(240)
+        scale_animation.setDuration(150)
         original_rect = frame.geometry()
         start_rect = QRect(frame.geometry().center(), QSize(0, 0))
         scale_animation.setStartValue(start_rect)
         scale_animation.setEndValue(original_rect)
         scale_animation.setEasingCurve(QEasingCurve.OutCubic)
         # scale_animation.finished.connect(lambda: self.cleanup_animation(r, c))
-        scale_animation.start()
 
-        self.anims[r][c] = (opacity_animation, scale_animation)
+        animation_group = QtCore.QParallelAnimationGroup()
+        animation_group.addAnimation(opacity_animation)
+        animation_group.addAnimation(scale_animation)
+        animation_group.finished.connect(lambda: self.cleanup_animation(r, c))  # type: ignore
+        animation_group.start()
+
+        self.anims[r][c] = animation_group
 
     def animate_pop(self, r, c):
         frame = self.frames[r][c]
@@ -160,31 +120,28 @@ class SquareFrame(QtWidgets.QFrame):
             return
         original_rect = frame.geometry()
         center = original_rect.center()
-        big_scale_size = QSize(int(original_rect.width() * 1.2), int(original_rect.height() * 1.2))
-        small_scale_size = QSize(int(original_rect.width() * 0), int(original_rect.height() * 0))
+        big_scale_size = QSize(int(original_rect.width() * 1.15), int(original_rect.height() * 1.15))
+        small_scale_size = QSize(int(original_rect.width() * 1), int(original_rect.height() * 1))
         big_scale_rect = QRect(QPoint(center.x() - big_scale_size.width() // 2,
                                       center.y() - big_scale_size.height() // 2), big_scale_size)
         small_scale_rect = QRect(QPoint(center.x() - small_scale_size.width() // 2,
                                         center.y() - small_scale_size.height() // 2), small_scale_size)
 
         pop_animation = QPropertyAnimation(frame, b"geometry")
-        pop_animation.setDuration(240)
-        pop_animation.setEasingCurve(QEasingCurve.InOutQuad)
+        pop_animation.setDuration(120)
+        pop_animation.setEasingCurve(QEasingCurve.InOutCubic)
         pop_animation.setKeyValueAt(0, small_scale_rect)
         pop_animation.setKeyValueAt(0.5, big_scale_rect)
         pop_animation.setKeyValueAt(1.0, original_rect)
-        pop_animation.finished.connect(lambda: self.cleanup_animation(r, c))
+        pop_animation.finished.connect(lambda: self.cleanup_animation(r, c))  # type: ignore
 
         pop_animation.start()
         self.anims[r][c] = pop_animation
 
     def cleanup_animation(self, r, c):
-        if isinstance(self.anims[r][c], tuple):
-            self.anims[r][c][0].deleteLater()
-            self.anims[r][c][1].deleteLater()
-        else:
+        if self.anims[r][c]:
             self.anims[r][c].deleteLater()
-        self.anims[r][c] = None
+            self.anims[r][c] = None
 
 
 # noinspection PyAttributeOutsideInit
@@ -208,14 +165,11 @@ class BaseBoardFrame(QtWidgets.QFrame):
         self.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.setFrameShadow(QtWidgets.QFrame.Raised)
         self.setObjectName("gameframe")
-        self.grid = QtWidgets.QGridLayout(self)
-        self.grid.setObjectName("gameframe_grid")
         self.game_square = SquareFrame(self)
-
-        self.grid.addWidget(self.game_square, 0, 0, 1, 1)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self.game_square.updateGeometry()
         self.update_all_frame(self.board)
 
     def update_frame(self, value, row, col, anim=False):
@@ -245,9 +199,11 @@ class BaseBoardFrame(QtWidgets.QFrame):
             self.board_encoded, SingletonConfig().config['4_spawn_rate'])
         self.board_encoded = np.uint64(self.board_encoded)
         self.board = self.mover.decode_board(self.board_encoded)
-        self.update_frame(2 ** val, new_tile_pos // 4, new_tile_pos % 4, anim=do_anim)
         self.history.append((self.board_encoded, self.score))
         self.newtile_pos, self.newtile = new_tile_pos, val
+        self.update_all_frame(self.board)
+        if do_anim:
+            self.update_frame(2 ** val, new_tile_pos // 4, new_tile_pos % 4, anim=do_anim)
 
     def do_move(self, direction, do_gen=True):
         do_anim = SingletonConfig().config['do_animation']
@@ -259,10 +215,11 @@ class BaseBoardFrame(QtWidgets.QFrame):
                 self.pop_merged(self.board, direction)
             self.board_encoded = board_encoded_new
             self.board = self.mover.decode_board(self.board_encoded)
-            self.update_all_frame(self.board)
             self.score += new_score
             if do_gen:
                 self.gen_new_num(do_anim[0])
+            else:
+                self.update_all_frame(self.board)
 
     def pop_merged(self, board, direction):
         merged_pos = find_merge_positions(board, direction)
@@ -334,9 +291,11 @@ class GameFrame(BaseBoardFrame):
             self.board_encoded, new_tile_pos, val = self.evil_gen.gen_new_num(5)
         self.board_encoded = np.uint64(self.board_encoded)
         self.board = self.mover.decode_board(self.board_encoded)
-        self.update_frame(2 ** val, new_tile_pos // 4, new_tile_pos % 4, anim=do_anim)
         self.history.append((self.board_encoded, self.score))
         self.newtile_pos, self.newtile = new_tile_pos, val
+        self.update_all_frame(self.board)
+        if do_anim:
+            self.update_frame(2 ** val, new_tile_pos // 4, new_tile_pos % 4, anim=do_anim)
 
 
 class AIThread(QtCore.QThread):
@@ -407,6 +366,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.ai_state = False
 
         self.best_points.setText(str(SingletonConfig().config['game_state'][2]))
+        self.score_anims = []
 
         self.ai_timer = QTimer(self)
         self.ai_timer.timeout.connect(self.handleOneStep)
@@ -418,7 +378,7 @@ class GameWindow(QtWidgets.QMainWindow):
 
     def setupUi(self):
         self.setObjectName("self")
-        self.setWindowIcon(QIcon(r"pic\2048.ico"))
+        self.setWindowIcon(QtGui.QIcon(r"pic\2048.ico"))
         self.resize(800, 940)
         self.centralwidget = QtWidgets.QWidget(self)
         self.centralwidget.setObjectName("centralwidget")
@@ -457,7 +417,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.score_text = QtWidgets.QLabel(self.score_frame)
         self.score_text.setStyleSheet("font: 750 12pt \"Cambria\";")
         self.score_text.setScaledContents(False)
-        self.score_text.setAlignment(QtCore.Qt.AlignCenter)
+        self.score_text.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.score_text.setWordWrap(False)
         self.score_text.setObjectName("score_text")
         self.score_group.addWidget(self.score_text, 0, 0, 1, 1)
@@ -468,7 +428,7 @@ class GameWindow(QtWidgets.QMainWindow):
         font.setWeight(75)
         font.setPointSize(16)
         self.score_points.setFont(font)
-        self.score_points.setAlignment(QtCore.Qt.AlignCenter)
+        self.score_points.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.score_points.setObjectName("score_points")
         self.score_group.addWidget(self.score_points, 1, 0, 1, 1)
         self.score_grid.addLayout(self.score_group, 0, 0, 1, 1)
@@ -486,7 +446,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.best_text = QtWidgets.QLabel(self.best_frame)
         self.best_text.setStyleSheet("font: 750 12pt \"Cambria\";")
         self.best_text.setScaledContents(False)
-        self.best_text.setAlignment(QtCore.Qt.AlignCenter)
+        self.best_text.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.best_text.setWordWrap(False)
         self.best_text.setObjectName("best_text")
         self.best_group.addWidget(self.best_text, 0, 0, 1, 1)
@@ -497,7 +457,7 @@ class GameWindow(QtWidgets.QMainWindow):
         font.setWeight(75)
         font.setPointSize(16)
         self.best_points.setFont(font)
-        self.best_points.setAlignment(QtCore.Qt.AlignCenter)
+        self.best_points.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.best_points.setObjectName("best_points")
         self.best_group.addWidget(self.best_points, 1, 0, 1, 1)
         self.best_grid.addLayout(self.best_group, 0, 0, 1, 1)
@@ -507,32 +467,32 @@ class GameWindow(QtWidgets.QMainWindow):
         self.buttons = QtWidgets.QGridLayout()
         self.buttons.setObjectName("buttons")
         self.one_step = QtWidgets.QPushButton(self.operate_frame)
-        self.one_step.setFocusPolicy(QtCore.Qt.NoFocus)  # 禁用按钮的键盘焦点
+        self.one_step.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)  # 禁用按钮的键盘焦点
         self.one_step.setStyleSheet("font: 750 12pt \"Cambria\";")
         self.one_step.setObjectName("one_step")
         self.buttons.addWidget(self.one_step, 0, 3, 1, 1)
         self.undo = QtWidgets.QPushButton(self.operate_frame)
-        self.undo.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.undo.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.undo.setStyleSheet("font: 750 12pt \"Cambria\";")
         self.undo.setObjectName("undo")
         self.buttons.addWidget(self.undo, 0, 2, 1, 1)
         self.new_game = QtWidgets.QPushButton(self.operate_frame)
-        self.new_game.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.new_game.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.new_game.setStyleSheet("font: 750 12pt \"Cambria\";")
         self.new_game.setObjectName("new_game")
         self.buttons.addWidget(self.new_game, 0, 1, 1, 1)
         self.ai = QtWidgets.QPushButton(self.operate_frame)
-        self.ai.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.ai.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.ai.setStyleSheet("font: 750 12pt \"Cambria\";")
         self.ai.setObjectName("ai")
         self.buttons.addWidget(self.ai, 0, 0, 1, 1)
         self.grid1.addLayout(self.buttons, 1, 0, 1, 1)
         self.gridLayout.addWidget(self.operate_frame, 1, 0, 1, 1)
 
-        self.one_step.clicked.connect(self.handleOneStep)
-        self.undo.clicked.connect(self.handleUndo)
-        self.new_game.clicked.connect(self.handleNewGame)
-        self.ai.clicked.connect(self.toggleAI)
+        self.one_step.clicked.connect(self.handleOneStep)  # type: ignore
+        self.undo.clicked.connect(self.handleUndo)  # type: ignore
+        self.new_game.clicked.connect(self.handleNewGame)  # type: ignore
+        self.ai.clicked.connect(self.toggleAI)  # type: ignore
 
         self.difficulty_frame = QtWidgets.QFrame(self.centralwidget)
         self.difficulty_frame.setMaximumSize(QtCore.QSize(16777215, 30))
@@ -551,25 +511,25 @@ class GameWindow(QtWidgets.QMainWindow):
         self.difficulty_text = QtWidgets.QLabel(self.centralwidget)
         self.difficulty_text.setStyleSheet("font: 750 12pt \"Cambria\";")
         self.difficulty_text.setScaledContents(False)
-        self.difficulty_text.setAlignment(QtCore.Qt.AlignCenter)
+        self.difficulty_text.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.difficulty_text.setWordWrap(False)
         self.difficulty_text.setObjectName("difficulty_text")
         self.difficulty_layout.addWidget(self.difficulty_text, 0, 0, 1, 3)
-        self.difficulty_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal, self.centralwidget)
+        self.difficulty_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal, self.centralwidget)
         self.difficulty_slider.setMinimum(0)
         self.difficulty_slider.setMaximum(100)
         self.difficulty_slider.setValue(0)
         self.difficulty_slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
         self.difficulty_slider.setTickInterval(1)
-        self.difficulty_slider.valueChanged.connect(self.difficulty_changed)
+        self.difficulty_slider.valueChanged.connect(self.difficulty_changed)  # type: ignore
         self.difficulty_slider.setObjectName("difficulty_slider")
         self.difficulty_layout.addWidget(self.difficulty_slider, 0, 3, 1, 8)
         self.infoButton = QtWidgets.QPushButton()
-        self.infoButton.setIcon(QIcon(r'pic\OQM.png'))
+        self.infoButton.setIcon(QtGui.QIcon(r'pic\OQM.png'))
         self.infoButton.setIconSize(QSize(30, 30))
         self.infoButton.setFlat(True)
         self.difficulty_layout.addWidget(self.infoButton, 0, 11, 1, 1)
-        self.infoButton.clicked.connect(self.show_message)
+        self.infoButton.clicked.connect(self.show_message)  # type: ignore
         self.gridLayout.addWidget(self.difficulty_frame, 3, 0, 1, 1)
 
         self.setCentralWidget(self.centralwidget)
@@ -588,7 +548,6 @@ class GameWindow(QtWidgets.QMainWindow):
         self.gameframe.update_all_frame(self.gameframe.board)
         super().show()
 
-    # noinspection PyTypeChecker
     def retranslateUi(self):
         _translate = QtCore.QCoreApplication.translate
         self.setWindowTitle(_translate("Game", "Game"))
@@ -613,20 +572,68 @@ Only effective for players''')
 
     def update_score(self):
         score = self.gameframe.score
+        previous_score = int(self.score_points.text()) if self.score_points.text() else 0
+        if score > previous_score and not (previous_score == 0 and score > 8):
+            self.show_score_animation(score - previous_score)
         self.score_points.setText(str(score))
         if score > int(self.best_points.text()):
             self.best_points.setText(str(score))
 
+    def show_score_animation(self, increment):
+        # 获取 score_points 的相对于主窗口的坐标
+        score_rect = self.score_points.geometry()
+        local_pos = self.score_points.mapTo(self, score_rect.topLeft())
+        decoration_width = self.frameGeometry().height() - self.geometry().height()
+
+        # 在主窗口的坐标系上创建一个新的 QLabel
+        score_animation_label = QtWidgets.QLabel(f"+{increment}", self)
+        score_animation_label.setStyleSheet("font 750 12pt; color: green;")
+        score_animation_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        score_animation_label.setGeometry(local_pos.x(), local_pos.y() - decoration_width - 10,
+                                          score_rect.width(), score_rect.height())
+        score_animation_label.show()
+
+        # 获取初始位置和结束位置
+        start_pos = score_animation_label.pos()
+        end_pos = QtCore.QPoint(start_pos.x(), start_pos.y() - 50)
+
+        # 位置动画
+        pos_anim = QtCore.QPropertyAnimation(score_animation_label, b"pos")
+        pos_anim.setDuration(600)
+        pos_anim.setStartValue(start_pos)
+        pos_anim.setEndValue(end_pos)
+        pos_anim.setEasingCurve(QEasingCurve.InQuad)
+
+        # 透明度动画
+        opacity_effect = QtWidgets.QGraphicsOpacityEffect(score_animation_label)
+        score_animation_label.setGraphicsEffect(opacity_effect)
+        opacity_anim = QtCore.QPropertyAnimation(opacity_effect, b"opacity")
+        opacity_anim.setDuration(600)
+        opacity_anim.setStartValue(1)
+        opacity_anim.setEndValue(0)
+        opacity_anim.setEasingCurve(QEasingCurve.InQuad)
+
+        # 动画组
+        anim_group = QtCore.QParallelAnimationGroup()
+        anim_group.addAnimation(pos_anim)
+        anim_group.addAnimation(opacity_anim)
+        anim_group.finished.connect(score_animation_label.deleteLater)
+
+        self.score_anims.append(anim_group)
+        if len(self.score_anims) >= 200:
+            self.score_anims = self.score_anims[100:]
+        anim_group.start()
+
     def keyPressEvent(self, event, ):
         if self.isProcessing:
             return
-        if event.key() in (QtCore.Qt.Key_Up, QtCore.Qt.Key_W):
+        if event.key() in (QtCore.Qt.Key.Key_Up, QtCore.Qt.Key.Key_W):
             self.process_input('Up')
-        elif event.key() in (QtCore.Qt.Key_Down, QtCore.Qt.Key_S):
+        elif event.key() in (QtCore.Qt.Key.Key_Down, QtCore.Qt.Key.Key_S):
             self.process_input('Down')
-        elif event.key() in (QtCore.Qt.Key_Left, QtCore.Qt.Key_A):
+        elif event.key() in (QtCore.Qt.Key.Key_Left, QtCore.Qt.Key.Key_A):
             self.process_input('Left')
-        elif event.key() in (QtCore.Qt.Key_Right, QtCore.Qt.Key_D):
+        elif event.key() in (QtCore.Qt.Key.Key_Right, QtCore.Qt.Key.Key_D):
             self.process_input('Right')
         else:
             super().keyPressEvent(event)  # 其他键交给父类处理

@@ -1,5 +1,7 @@
+from typing import List, Tuple
+
 import numpy as np
-from numba import njit, uint64
+from numba import njit
 
 
 @njit(nogil=True)
@@ -239,3 +241,54 @@ def is_4432_success(encoded_board, target, _):
 @njit(nogil=True)
 def re_self(encoded_board):
     return np.uint64(encoded_board)
+
+
+def simulate_move_and_merge(line: np.ndarray) -> Tuple[List[int], List[int]]:
+    """模拟一行的移动和合并过程，返回新的行和合并发生的位置。"""
+    # 移除所有的0，保留非0元素
+    non_zero = [value for value in line if value != 0]
+    merged = [0] * len(line)  # 合并标记
+    new_line = []
+    skip = False
+
+    for i in range(len(non_zero)):
+        if skip:
+            skip = False
+            continue
+        if i + 1 < len(non_zero) and non_zero[i] == non_zero[i + 1] and non_zero[i] != -1:
+            # 发生合并
+            new_line.append(2 * non_zero[i])
+            merged[len(new_line) - 1] = 1  # 标记合并发生的位置
+            skip = True
+        else:
+            new_line.append(non_zero[i])
+
+    # 用0填充剩余的空间
+    new_line.extend([0] * (len(line) - len(new_line)))
+    return new_line, merged
+
+
+def find_merge_positions(current_board: np.ndarray, move_direction: str) -> np.ndarray:
+    """找到当前棋盘上即将发生合并的位置。"""
+    # 初始化合并位置数组
+    merge_positions = np.zeros_like(current_board)
+    move_direction = move_direction.lower()
+
+    rows, cols = current_board.shape
+
+    for i in range(rows if move_direction in ['left', 'right'] else cols):
+        if move_direction in ['left', 'right']:
+            line = current_board[i, :]
+        else:
+            line = current_board[:, i]
+        line_to_process = line[::-1] if move_direction in ['down', 'right'] else line
+        processed_line, merge_line = simulate_move_and_merge(line_to_process)
+        if move_direction in ['right', 'down']:
+            merge_line = merge_line[::-1]
+
+        if move_direction in ['left', 'right']:
+            merge_positions[i, :] = merge_line
+        else:
+            merge_positions[:, i] = merge_line
+
+    return merge_positions

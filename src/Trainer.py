@@ -115,7 +115,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.set_board_bt = QtWidgets.QPushButton(self.operate)
         self.set_board_bt.setMaximumSize(QtCore.QSize(90, 16777215))
         self.set_board_bt.setObjectName("set_board_bt")
-        self.set_board_bt.clicked.connect(self.handle_set_board)
+        self.set_board_bt.clicked.connect(self.handle_set_board)  # type: ignore
         self.setboard_Layout.addWidget(self.set_board_bt)
         self.left_Layout.addLayout(self.setboard_Layout)
 
@@ -138,7 +138,7 @@ class TrainWindow(QtWidgets.QMainWindow):
             button.setObjectName(f"t{num}")
             button.setText(f"{num}")
             button.setCheckable(True)
-            button.clicked.connect(self.tiles_bt_on_click)
+            button.clicked.connect(self.tiles_bt_on_click)  # type: ignore
             self.gridLayout_tiles.addWidget(button, index // 8, index % 8, 1, 1)
             self.tile_buttons.append(button)
         self.left_Layout.addWidget(self.tiles_frame)
@@ -149,42 +149,42 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.RL = QtWidgets.QPushButton(self.operate)
         self.RL.setMaximumSize(QtCore.QSize(180, 16777215))
         self.RL.setObjectName("RL")
-        self.RL.clicked.connect(lambda: self.handle_rotate('RL'))
+        self.RL.clicked.connect(lambda: self.handle_rotate('RL'))  # type: ignore
         self.gridLayout_bts.addWidget(self.RL, 1, 1, 1, 1)
         self.Demo = QtWidgets.QPushButton(self.operate)
         self.Demo.setMaximumSize(QtCore.QSize(180, 16777215))
         self.Demo.setObjectName("L90")
-        self.Demo.clicked.connect(self.toggle_demo)
+        self.Demo.clicked.connect(self.toggle_demo)  # type: ignore
         self.gridLayout_bts.addWidget(self.Demo, 0, 1, 1, 1)
         self.R90 = QtWidgets.QPushButton(self.operate)
         self.R90.setMaximumSize(QtCore.QSize(180, 16777215))
         self.R90.setObjectName("R90")
-        self.R90.clicked.connect(lambda: self.handle_rotate('R90'))
+        self.R90.clicked.connect(lambda: self.handle_rotate('R90'))  # type: ignore
         self.gridLayout_bts.addWidget(self.R90, 1, 2, 1, 1)
         self.undo = QtWidgets.QPushButton(self.operate)
         self.undo.setMaximumSize(QtCore.QSize(180, 16777215))
         self.undo.setObjectName("undo")
-        self.undo.clicked.connect(self.handleUndo)
+        self.undo.clicked.connect(self.handleUndo)  # type: ignore
         self.gridLayout_bts.addWidget(self.undo, 0, 0, 1, 1)
         self.UD = QtWidgets.QPushButton(self.operate)
         self.UD.setMaximumSize(QtCore.QSize(180, 16777215))
         self.UD.setObjectName("UD")
-        self.UD.clicked.connect(lambda: self.handle_rotate('UD'))
+        self.UD.clicked.connect(lambda: self.handle_rotate('UD'))  # type: ignore
         self.gridLayout_bts.addWidget(self.UD, 1, 0, 1, 1)
         self.step = QtWidgets.QPushButton(self.operate)
         self.step.setMaximumSize(QtCore.QSize(180, 16777215))
         self.step.setObjectName("step")
-        self.step.clicked.connect(self.handle_step)
+        self.step.clicked.connect(self.handle_step)  # type: ignore
         self.gridLayout_bts.addWidget(self.step, 0, 2, 1, 1)
         self.default = QtWidgets.QPushButton(self.operate)
         self.default.setMaximumSize(QtCore.QSize(180, 16777215))
         self.default.setObjectName("default")
-        self.default.clicked.connect(self.handle_set_default)
+        self.default.clicked.connect(self.handle_set_default)  # type: ignore
         self.gridLayout_bts.addWidget(self.default, 0, 3, 1, 1)
         self.L90 = QtWidgets.QPushButton(self.operate)
         self.L90.setMaximumSize(QtCore.QSize(180, 16777215))
         self.L90.setObjectName("L90")
-        self.L90.clicked.connect(lambda: self.handle_rotate('L90'))
+        self.L90.clicked.connect(lambda: self.handle_rotate('L90'))  # type: ignore
         self.gridLayout_bts.addWidget(self.L90, 1, 3, 1, 1)
         self.left_Layout.addLayout(self.gridLayout_bts)
 
@@ -194,17 +194,17 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.record = QtWidgets.QPushButton(self.operate)
         self.record.setMaximumSize(QtCore.QSize(240, 16777215))
         self.record.setObjectName("record")
-        self.record.clicked.connect(self.handle_record)
+        self.record.clicked.connect(self.handle_record)  # type: ignore
         self.gridLayout_record.addWidget(self.record, 0, 0, 1, 1)
         self.load_record = QtWidgets.QPushButton(self.operate)
         self.load_record.setMaximumSize(QtCore.QSize(240, 16777215))
         self.load_record.setObjectName("record")
-        self.load_record.clicked.connect(self.handle_load_record)
+        self.load_record.clicked.connect(self.handle_load_record)  # type: ignore
         self.gridLayout_record.addWidget(self.load_record, 0, 1, 1, 1)
         self.play_record = QtWidgets.QPushButton(self.operate)
         self.play_record.setMaximumSize(QtCore.QSize(240, 16777215))
         self.play_record.setObjectName("record")
-        self.play_record.clicked.connect(self.handle_play_record)
+        self.play_record.clicked.connect(self.handle_play_record)  # type: ignore
         self.gridLayout_record.addWidget(self.play_record, 0, 2, 1, 1)
         self.left_Layout.addLayout(self.gridLayout_record)
         self.gridLayout_upper.addLayout(self.left_Layout, 0, 0, 1, 1)
@@ -222,7 +222,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.show_results_checkbox = QtWidgets.QCheckBox(self.operate)
         self.show_results_checkbox.setStyleSheet("font: 360 10pt \"Cambria\";")
         self.show_results_checkbox.setObjectName("show_results_checkbox")
-        self.show_results_checkbox.stateChanged.connect(self.show_results)
+        self.show_results_checkbox.stateChanged.connect(self.show_results)  # type: ignore
         self.horizontalLayout.addWidget(self.show_results_checkbox)
         self.right_Layout.addLayout(self.horizontalLayout)
         self.results_label = QtWidgets.QLabel(self.operate)
@@ -245,7 +245,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.set_filepath_bt = QtWidgets.QPushButton(self.operate)
         self.set_filepath_bt.setMaximumSize(QtCore.QSize(120, 16777215))
         self.set_filepath_bt.setObjectName("set_filepath_bt")
-        self.set_filepath_bt.clicked.connect(self.filepath_changed)
+        self.set_filepath_bt.clicked.connect(self.filepath_changed)  # type: ignore
         self.setpath_Layout.addWidget(self.set_filepath_bt)
         self.right_Layout.addLayout(self.setpath_Layout)
         self.dis32k_checkBox = QtWidgets.QCheckBox(self.operate)
@@ -253,10 +253,10 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.dis32k_checkBox.setObjectName("dis32k_checkBox")
         self.right_Layout.addWidget(self.dis32k_checkBox)
         if SingletonConfig().config.get('dis_32k', True):
-            self.dis32k_checkBox.setCheckState(QtCore.Qt.Checked)
+            self.dis32k_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
         else:
-            self.dis32k_checkBox.setCheckState(QtCore.Qt.Unchecked)
-        self.dis32k_checkBox.stateChanged.connect(self.dis32k_state_change)
+            self.dis32k_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        self.dis32k_checkBox.stateChanged.connect(self.dis32k_state_change)  # type: ignore
         self.gridLayout_upper.addLayout(self.right_Layout, 0, 1, 1, 1)
         self.gridLayout.addWidget(self.operate, 0, 0, 1, 1)
         self.setCentralWidget(self.centralwidget)
@@ -274,21 +274,21 @@ class TrainWindow(QtWidgets.QMainWindow):
         for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", 'free8', 'free9', 'free10', 'free8w',
                     'free9w', 'free10w', "free11w"]:
             m = QtWidgets.QAction(ptn, self)
-            m.triggered.connect(lambda: self.menu_selected(0))
+            m.triggered.connect(lambda: self.menu_selected(0))  # type: ignore
             self.menu_ptn.addAction(m)
         self.menubar.addAction(self.menu_ptn.menuAction())
         self.menu_tgt = QtWidgets.QMenu(self.menubar)
         self.menu_tgt.setObjectName("menuMENU")
         for ptn in ["128", "256", "512", "1024", "2048", "4096", "8192"]:
             m = QtWidgets.QAction(ptn, self)
-            m.triggered.connect(lambda: self.menu_selected(1))
+            m.triggered.connect(lambda: self.menu_selected(1))  # type: ignore
             self.menu_tgt.addAction(m)
         self.menubar.addAction(self.menu_tgt.menuAction())
         self.menu_pos = QtWidgets.QMenu(self.menubar)
         self.menu_pos.setObjectName("menuMENU")
         for ptn in ["0", "1", "2"]:
             m = QtWidgets.QAction(ptn, self)
-            m.triggered.connect(lambda: self.menu_selected(2))
+            m.triggered.connect(lambda: self.menu_selected(2))  # type: ignore
             self.menu_pos.addAction(m)
         self.menubar.addAction(self.menu_pos.menuAction())
 
@@ -462,13 +462,13 @@ class TrainWindow(QtWidgets.QMainWindow):
     def keyPressEvent(self, event):
         if self.isProcessing:
             return
-        if event.key() in (QtCore.Qt.Key_Up, QtCore.Qt.Key_W):
+        if event.key() in (QtCore.Qt.Key.Key_Up, QtCore.Qt.Key.Key_W):
             self.process_input('Up')
-        elif event.key() in (QtCore.Qt.Key_Down, QtCore.Qt.Key_S):
+        elif event.key() in (QtCore.Qt.Key.Key_Down, QtCore.Qt.Key.Key_S):
             self.process_input('Down')
-        elif event.key() in (QtCore.Qt.Key_Left, QtCore.Qt.Key_A):
+        elif event.key() in (QtCore.Qt.Key.Key_Left, QtCore.Qt.Key.Key_A):
             self.process_input('Left')
-        elif event.key() in (QtCore.Qt.Key_Right, QtCore.Qt.Key_D):
+        elif event.key() in (QtCore.Qt.Key.Key_Right, QtCore.Qt.Key.Key_D):
             self.process_input('Right')
         else:
             super().keyPressEvent(event)  # 其他键交给父类处理

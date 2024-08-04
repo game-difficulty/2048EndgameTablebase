@@ -115,10 +115,10 @@ class TestWindow(QtWidgets.QMainWindow):
 
         self.save_bt = QtWidgets.QPushButton(self.centralwidget)
         self.gridLayout.addWidget(self.save_bt, 1, 1, 1, 1)
-        self.gridLayout.setAlignment(self.save_bt, QtCore.Qt.AlignCenter)
+        self.gridLayout.setAlignment(self.save_bt, QtCore.Qt.AlignmentFlag.AlignCenter)
         self.save_bt.setMaximumSize(300, 36)
         self.save_bt.setMinimumSize(80, 30)
-        self.save_bt.clicked.connect(self.save_logs_to_file)
+        self.save_bt.clicked.connect(self.save_logs_to_file)  # type: ignore
 
         self.menubar = QtWidgets.QMenuBar(self)
         self.menubar.setGeometry(QtCore.QRect(0, 0, 522, 22))
@@ -130,21 +130,21 @@ class TestWindow(QtWidgets.QMainWindow):
         for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", 'free8', 'free9', 'free10', 'free8w',
                     'free9w', 'free10w', "free11w", '?']:
             m = QtWidgets.QAction(ptn, self)
-            m.triggered.connect(lambda: self.menu_selected(0))
+            m.triggered.connect(lambda: self.menu_selected(0))  # type: ignore
             self.menu_ptn.addAction(m)
         self.menubar.addAction(self.menu_ptn.menuAction())
         self.menu_tgt = QtWidgets.QMenu(self.menubar)
         self.menu_tgt.setObjectName("menuMENU")
         for ptn in ["128", "256", "512", "1024", "2048", "4096", "8192", '?']:
             m = QtWidgets.QAction(ptn, self)
-            m.triggered.connect(lambda: self.menu_selected(1))
+            m.triggered.connect(lambda: self.menu_selected(1))  # type: ignore
             self.menu_tgt.addAction(m)
         self.menubar.addAction(self.menu_tgt.menuAction())
         self.menu_pos = QtWidgets.QMenu(self.menubar)
         self.menu_pos.setObjectName("menuMENU")
         for ptn in ["0", "1", "2", '?']:
             m = QtWidgets.QAction(ptn, self)
-            m.triggered.connect(lambda: self.menu_selected(2))
+            m.triggered.connect(lambda: self.menu_selected(2))  # type: ignore
             self.menu_pos.addAction(m)
         self.menubar.addAction(self.menu_pos.menuAction())
         QtCore.QMetaObject.connectSlotsByName(self)
@@ -226,13 +226,13 @@ class TestWindow(QtWidgets.QMainWindow):
     def keyPressEvent(self, event):
         if self.isProcessing:
             return
-        if event.key() in (QtCore.Qt.Key_Up, QtCore.Qt.Key_W):
+        if event.key() in (QtCore.Qt.Key.Key_Up, QtCore.Qt.Key.Key_W):
             self.process_input('Up')
-        elif event.key() in (QtCore.Qt.Key_Down, QtCore.Qt.Key_S):
+        elif event.key() in (QtCore.Qt.Key.Key_Down, QtCore.Qt.Key.Key_S):
             self.process_input('Down')
-        elif event.key() in (QtCore.Qt.Key_Left, QtCore.Qt.Key_A):
+        elif event.key() in (QtCore.Qt.Key.Key_Left, QtCore.Qt.Key.Key_A):
             self.process_input('Left')
-        elif event.key() in (QtCore.Qt.Key_Right, QtCore.Qt.Key_D):
+        elif event.key() in (QtCore.Qt.Key.Key_Right, QtCore.Qt.Key.Key_D):
             self.process_input('Right')
         else:
             super().keyPressEvent(event)  # 其他键交给父类处理

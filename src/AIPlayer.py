@@ -55,6 +55,7 @@ spec = {
 }
 
 
+# numba.jitclass的类型推断系统不支持复杂递归，搜索部分必须拆开
 @jitclass(spec)
 class AutoplayS:
     def __init__(self, board):
@@ -439,7 +440,7 @@ class AutoplayS:
             self.node = 0
             board = self.bm.move_board(board, self.best_operation)
             step += 1
-            board, empty_slots = self.bm.gen_new_num(board)
+            board, empty_slots, _, __ = self.bm.gen_new_num(board)
             if step % 1 == 0:
                 print(self.bm.decode_board(board))
                 print('')

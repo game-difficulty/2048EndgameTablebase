@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import numpy as np
 from numba import uint64
 from numba.experimental import jitclass
@@ -17,7 +19,7 @@ class BoardMover:
         print('BoardMover init')
 
     @staticmethod
-    def encode_board(board):
+    def encode_board(board: np.ndarray) -> np.uint64:
         encoded_board = np.uint64(0)
         tile_log2 = {0: 0, 2: 1, 4: 2, 8: 3, 16: 4, 32: 5, 64: 6, 128: 7, 256: 8, 512: 9, 1024: 10, 2048: 11,
                      4096: 12, 8192: 13, 16384: 14, 32768: 15, 65536: 16}
@@ -27,7 +29,7 @@ class BoardMover:
         return encoded_board
 
     @staticmethod
-    def decode_board(encoded_board):
+    def decode_board(encoded_board: np.uint64) -> np.ndarray:
         encoded_board = np.uint64(encoded_board)
         board = np.zeros((4, 4), dtype=np.int32)
         for i in range(3,-1,-1):
@@ -40,7 +42,7 @@ class BoardMover:
         return board
 
     @staticmethod
-    def encode_row(row):
+    def encode_row(row: np.ndarray) -> np.uint64:
         encoded = np.uint64(0)
         tile_log2 = {0: 0, 2: 1, 4: 2, 8: 3, 16: 4, 32: 5, 64: 6, 128: 7, 256: 8, 512: 9, 1024: 10, 2048: 11,
                      4096: 12, 8192: 13, 16384: 14, 32768: 15, 65536: 16}
@@ -49,7 +51,7 @@ class BoardMover:
         return encoded
 
     @staticmethod
-    def decode_row(encoded):
+    def decode_row(encoded: np.uint64) -> np.ndarray:
         row = np.empty(4, dtype=np.uint32)
         for i in range(4):
             num = (np.uint64(encoded) >> np.uint64(4 * (3 - i))) & np.uint64(0xF)
@@ -60,42 +62,42 @@ class BoardMover:
         return row
 
     @staticmethod
-    def reverse(board):
+    def reverse(board: np.uint64) -> np.uint64:
         board = (board & np.uint64(0xFF00FF0000FF00FF)) | ((board & np.uint64(0x00FF00FF00000000)) >> np.uint64(24)) | (
                 (board & np.uint64(0x00000000FF00FF00)) << np.uint64(24))
         board = (board & np.uint64(0xF0F00F0FF0F00F0F)) | ((board & np.uint64(0x0F0F00000F0F0000)) >> np.uint64(12)) | (
                 (board & np.uint64(0x0000F0F00000F0F0)) << np.uint64(12))
         return board
 
-    def move_left(self, board):
+    def move_left(self, board: np.uint64) -> np.uint64:
         board ^= self.movel[board & np.uint64(0xffff)]
         board ^= self.movel[board >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(16)
         board ^= self.movel[board >> np.uint64(32) & np.uint64(0xffff)] << np.uint64(32)
         board ^= self.movel[board >> np.uint64(48) & np.uint64(0xffff)] << np.uint64(48)
         return board
 
-    def move_right(self, board):
+    def move_right(self, board: np.uint64) -> np.uint64:
         board ^= self.mover[board & np.uint64(0xffff)]
         board ^= self.mover[board >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(16)
         board ^= self.mover[board >> np.uint64(32) & np.uint64(0xffff)] << np.uint64(32)
         board ^= self.mover[board >> np.uint64(48) & np.uint64(0xffff)] << np.uint64(48)
         return board
 
-    def move_up(self, board, board2):
+    def move_up(self, board: np.uint64, board2: np.uint64) -> np.uint64:
         board ^= self.moveu[board2 & np.uint64(0xffff)]
         board ^= self.moveu[board2 >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(4)
         board ^= self.moveu[board2 >> np.uint64(32) & np.uint64(0xffff)] << np.uint64(8)
         board ^= self.moveu[board2 >> np.uint64(48) & np.uint64(0xffff)] << np.uint64(12)
         return board
 
-    def move_down(self, board, board2):
+    def move_down(self, board: np.uint64, board2: np.uint64) -> np.uint64:
         board ^= self.moved[board2 & np.uint64(0xffff)]
         board ^= self.moved[board2 >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(4)
         board ^= self.moved[board2 >> np.uint64(32) & np.uint64(0xffff)] << np.uint64(8)
         board ^= self.moved[board2 >> np.uint64(48) & np.uint64(0xffff)] << np.uint64(12)
         return board
 
-    def move_board(self, board, direction):
+    def move_board(self, board: np.uint64, direction: int) -> np.uint64:
         if direction == 1:
             return self.move_left(board)
         elif direction == 2:
@@ -110,14 +112,14 @@ class BoardMover:
             print(f'bad direction input:{direction}')
             return board
 
-    def move_all_dir(self, board):
+    def move_all_dir(self, board: np.uint64) -> Tuple[np.uint64, np.uint64, np.uint64, np.uint64]:
         board = np.uint64(board)
         board2 = self.reverse(board)
         return (
             self.move_down(board, board2), self.move_right(board), self.move_left(board), self.move_up(board, board2))
 
     @staticmethod
-    def merge_line(line, reverse=False):
+    def merge_line(line: np.ndarray, reverse: bool = False) -> np.ndarray:
         if reverse:
             line = line[::-1]
         non_zero = [i for i in line if i != 0]  # 去掉所有的0
@@ -140,7 +142,7 @@ class BoardMover:
             merged = merged[::-1]
         return np.array(merged)
 
-    def calculate_all_moves(self):
+    def calculate_all_moves(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         # 初始化存储所有可能的行及其移动后结果差值的字典
         movel = np.empty(65536, dtype=np.uint64)
         mover = np.empty(65536, dtype=np.uint64)
@@ -169,12 +171,12 @@ class BoardMover:
         return movel, mover, moveu, moved
 
     @staticmethod
-    def gen_new_num(t, p=0.9):
+    def gen_new_num(t: np.uint64, p: float = 0.1) -> Tuple[np.uint64, int]:
         empty_slots = [i for i in range(16) if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == 0]  # 找到所有空位
         if not empty_slots:
             return t, 0  # 如果没有空位，返回原面板
         i = int(np.random.choice(np.array(empty_slots)))  # 随机选择一个空位
-        val = 1 if np.random.random() < p else 2  # 生成2或4，其中2的概率为0.9
+        val = 2 if np.random.random() < p else 1  # 生成2或4，其中2的概率为0.9
         t |= np.uint64(val) << np.uint64(4 * i)  # 在选中的位置放置新值
         return t, len(empty_slots)
 
@@ -195,7 +197,7 @@ class BoardMoverWithScore:
         print('BoardMover init')
 
     @staticmethod
-    def encode_board(board):
+    def encode_board(board: np.ndarray) -> np.uint64:
         encoded_board = np.uint64(0)
         tile_log2 = {0: 0, 2: 1, 4: 2, 8: 3, 16: 4, 32: 5, 64: 6, 128: 7, 256: 8, 512: 9, 1024: 10, 2048: 11,
                      4096: 12, 8192: 13, 16384: 14, 32768: 15, 65536: 16}
@@ -205,7 +207,7 @@ class BoardMoverWithScore:
         return encoded_board
 
     @staticmethod
-    def decode_board(encoded_board):
+    def decode_board(encoded_board: np.uint64) -> np.ndarray:
         encoded_board = np.uint64(encoded_board)
         board = np.zeros((4, 4), dtype=np.int32)
         for i in range(3,-1,-1):
@@ -218,7 +220,7 @@ class BoardMoverWithScore:
         return board
 
     @staticmethod
-    def encode_row(row):
+    def encode_row(row: np.ndarray) -> np.uint64:
         encoded = np.uint64(0)
         tile_log2 = {0: 0, 2: 1, 4: 2, 8: 3, 16: 4, 32: 5, 64: 6, 128: 7, 256: 8, 512: 9, 1024: 10, 2048: 11,
                      4096: 12, 8192: 13, 16384: 14, 32768: 15, 65536: 16}
@@ -227,7 +229,7 @@ class BoardMoverWithScore:
         return encoded
 
     @staticmethod
-    def decode_row(encoded):
+    def decode_row(encoded: np.uint64) -> np.ndarray:
         row = np.empty(4, dtype=np.uint32)
         for i in range(4):
             num = (np.uint64(encoded) >> np.uint64(4 * (3 - i))) & np.uint64(0xF)
@@ -238,14 +240,14 @@ class BoardMoverWithScore:
         return row
 
     @staticmethod
-    def reverse(board):
+    def reverse(board: np.uint64) -> np.uint64:
         board = (board & np.uint64(0xFF00FF0000FF00FF)) | ((board & np.uint64(0x00FF00FF00000000)) >> np.uint64(24)) | (
                 (board & np.uint64(0x00000000FF00FF00)) << np.uint64(24))
         board = (board & np.uint64(0xF0F00F0FF0F00F0F)) | ((board & np.uint64(0x0F0F00000F0F0000)) >> np.uint64(12)) | (
                 (board & np.uint64(0x0000F0F00000F0F0)) << np.uint64(12))
         return board
 
-    def move_left(self, board):
+    def move_left(self, board: np.uint64) -> Tuple[np.uint64, np.uint32]:
         total_score = 0
         for i in range(4):
             line = (board >> np.uint64(16 * i)) & np.uint64(0xFFFF)
@@ -253,7 +255,7 @@ class BoardMoverWithScore:
             board ^= self.movel[line] << np.uint64(16 * i)
         return board, total_score
 
-    def move_right(self, board):
+    def move_right(self, board: np.uint64) -> Tuple[np.uint64, np.uint32]:
         total_score = 0
         for i in range(4):
             line = (board >> np.uint64(16 * i)) & np.uint64(0xFFFF)
@@ -261,7 +263,7 @@ class BoardMoverWithScore:
             board ^= self.mover[line] << np.uint64(16 * i)
         return board, total_score
 
-    def move_up(self, board, board2):
+    def move_up(self, board: np.uint64, board2: np.uint64) -> Tuple[np.uint64, np.uint32]:
         total_score = 0
         for i in range(4):
             line = (board2 >> np.uint64(16 * i)) & np.uint64(0xFFFF)
@@ -269,7 +271,7 @@ class BoardMoverWithScore:
             board ^= self.moveu[line] << np.uint64(4 * i)
         return board, total_score
 
-    def move_down(self, board, board2):
+    def move_down(self, board: np.uint64, board2: np.uint64) -> Tuple[np.uint64, np.uint32]:
         total_score = 0
         for i in range(4):
             line = (board2 >> np.uint64(16 * i)) & np.uint64(0xFFFF)
@@ -277,7 +279,7 @@ class BoardMoverWithScore:
             board ^= self.moved[line] << np.uint64(4 * i)
         return board, total_score
 
-    def move_board(self, board: np.uint64, direction: np.uint8) -> tuple[np.uint64, np.uint32]:
+    def move_board(self, board: np.uint64, direction: np.uint8) -> Tuple[np.uint64, np.uint32]:
         if direction == 1:
             return self.move_left(board)
         elif direction == 2:
@@ -292,7 +294,7 @@ class BoardMoverWithScore:
             print(f'bad direction input:{direction}')
             return board, 0
 
-    def move_all_dir(self, board):
+    def move_all_dir(self, board: np.uint64) -> Tuple[np.uint64, np.uint64, np.uint64, np.uint64]:
         board = np.uint64(board)
         board2 = self.reverse(board)
         return (
@@ -300,7 +302,7 @@ class BoardMoverWithScore:
             self.move_left(board)[0], self.move_up(board, board2)[0])
 
     @staticmethod
-    def merge_line(line, reverse=False):
+    def merge_line(line: np.ndarray, reverse: bool = False) -> Tuple[np.ndarray, np.uint64]:
         if reverse:
             line = line[::-1]
         non_zero = [i for i in line if i != 0]  # 去掉所有的0
@@ -325,7 +327,7 @@ class BoardMoverWithScore:
             merged = merged[::-1]
         return np.array(merged), score
 
-    def calculate_all_moves(self):
+    def calculate_all_moves(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         # 初始化存储所有可能的行及其移动后结果差值的字典
         movel = np.empty(65536, dtype=np.uint64)
         mover = np.empty(65536, dtype=np.uint64)
@@ -355,7 +357,7 @@ class BoardMoverWithScore:
         return movel, mover, moveu, moved, score
 
     @staticmethod
-    def gen_new_num(t, p=0.1):
+    def gen_new_num(t: np.uint64, p: float = 0.1) -> Tuple[np.uint64, int, int, int]:
         empty_slots = [i for i in range(16) if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == 0]  # 找到所有空位
         if not empty_slots:
             return t, 0, 0, 0  # 如果没有空位，返回原面板

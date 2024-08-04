@@ -21,7 +21,7 @@ class MDViewer(QMainWindow):
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout()
 
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         self.text_browser = QTextBrowser()
         self.toc_list = QListWidget()
 
@@ -44,7 +44,7 @@ class MDViewer(QMainWindow):
             }
         """)
 
-        self.toc_list.currentRowChanged.connect(self.onTOCClicked)
+        self.toc_list.currentRowChanged.connect(self.onTOCClicked)  # type: ignore
         self.resize(1000, 600)
 
     def loadMarkdown(self):

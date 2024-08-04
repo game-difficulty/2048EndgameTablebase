@@ -46,7 +46,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.filepath_edit, 1, 1, 1, 1)
         self.set_filepath_bt = QtWidgets.QPushButton(self.centralwidget)
         self.set_filepath_bt.setObjectName("set_filepath_bt")
-        self.set_filepath_bt.clicked.connect(self.filepath_changed)
+        self.set_filepath_bt.clicked.connect(self.filepath_changed)  # type: ignore
         self.selfLayout.addWidget(self.set_filepath_bt, 1, 2, 1, 1)
         self.target_combo = QtWidgets.QComboBox(self.centralwidget)
         self.target_combo.setObjectName("target_combo")
@@ -66,7 +66,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.pos_combo, 0, 3, 1, 1)
         self.build_bt = QtWidgets.QPushButton(self.centralwidget)
         self.build_bt.setObjectName("build_bt")
-        self.build_bt.clicked.connect(self.build_book)
+        self.build_bt.clicked.connect(self.build_book)  # type: ignore
         self.selfLayout.addWidget(self.build_bt, 1, 3, 1, 1)
 
         self.options_text = QtWidgets.QLabel(self.centralwidget)
@@ -77,10 +77,10 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.compress_checkBox.setObjectName("compress_checkBox")
         self.selfLayout.addWidget(self.compress_checkBox, 2, 1, 1, 1)
         if config.get('compress', False):
-            self.compress_checkBox.setCheckState(QtCore.Qt.Checked)
+            self.compress_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
         else:
-            self.compress_checkBox.setCheckState(QtCore.Qt.Unchecked)
-        self.compress_checkBox.stateChanged.connect(self.compress_state_changed)
+            self.compress_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        self.compress_checkBox.stateChanged.connect(self.compress_state_changed)  # type: ignore
 
         self.hline = QtWidgets.QFrame(self.centralwidget)
         self.hline.setFrameShape(QtWidgets.QFrame.HLine)
@@ -98,11 +98,11 @@ class SettingsWindow(QtWidgets.QMainWindow):
             self.color_combo.addItem(str(2 ** i))
         self.selfLayout.addWidget(self.color_combo, 5, 1, 1, 1)
         self.color_bt = QtWidgets.QPushButton(self.centralwidget)
-        self.color_bt.clicked.connect(self.show_ColorDialog)
+        self.color_bt.clicked.connect(self.show_ColorDialog)  # type: ignore
         self.color_bt.setObjectName("color_bt")
         self.selfLayout.addWidget(self.color_bt, 5, 2, 1, 1)
         self.color_default_bt = QtWidgets.QPushButton(self.centralwidget)
-        self.color_default_bt.clicked.connect(self.set_default_color)
+        self.color_default_bt.clicked.connect(self.set_default_color)  # type: ignore
         self.color_default_bt.setObjectName("color_default_bt")
         self.selfLayout.addWidget(self.color_default_bt, 5, 3, 1, 1)
 
@@ -115,26 +115,26 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.spawnrate_box.setRange(0.0, 1.0)
         self.spawnrate_box.setSingleStep(0.01)
         self.spawnrate_box.setValue(SingletonConfig().config['4_spawn_rate'])
-        self.spawnrate_box.valueChanged.connect(self.update_spawn_rate)
+        self.spawnrate_box.valueChanged.connect(self.update_spawn_rate)  # type: ignore
         self.selfLayout.addWidget(self.spawnrate_box, 6, 1, 1, 1)
         self.infoButton = QtWidgets.QPushButton()
         self.infoButton.setIcon(QtGui.QIcon(r'pic\OQM.png'))
         self.infoButton.setIconSize(QtCore.QSize(24, 24))
         self.infoButton.setFlat(True)
         self.selfLayout.addWidget(self.infoButton, 6, 2, 1, 1)
-        self.infoButton.clicked.connect(self.show_message)
+        self.infoButton.clicked.connect(self.show_message)  # type: ignore
 
         self.demo_speed_text = QtWidgets.QLabel(self.centralwidget)
         self.demo_speed_text.setObjectName("demo_speed_text")
         self.demo_speed_text.setStyleSheet("font: 500 12pt \"Cambria\";")
         self.selfLayout.addWidget(self.demo_speed_text, 7, 0, 1, 1)
-        self.demo_speed_box = QtWidgets.QSlider(QtCore.Qt.Horizontal, self.centralwidget)
+        self.demo_speed_box = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal, self.centralwidget)
         self.demo_speed_box.setMinimum(0)
         self.demo_speed_box.setMaximum(200)
         self.demo_speed_box.setValue(config.get('demo_speed', 10))
         self.demo_speed_box.setTickPosition(QtWidgets.QSlider.TicksBelow)
         self.demo_speed_box.setTickInterval(10)
-        self.demo_speed_box.valueChanged.connect(self.demo_speed_changed)
+        self.demo_speed_box.valueChanged.connect(self.demo_speed_changed)  # type: ignore
         self.demo_speed_box.setObjectName("demo_speed_box")
         self.selfLayout.addWidget(self.demo_speed_box, 7, 1, 1, 3)
 
@@ -145,36 +145,36 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.appear_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.appear_checkBox.setObjectName("appear_checkBox")
         if config.get('do_animation', (False, False))[0]:
-            self.appear_checkBox.setCheckState(QtCore.Qt.Checked)
+            self.appear_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
         else:
-            self.appear_checkBox.setCheckState(QtCore.Qt.Unchecked)
+            self.appear_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.selfLayout.addWidget(self.appear_checkBox, 8, 1, 1, 1)
         self.pop_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.pop_checkBox.setObjectName("pop_checkBox")
         if config.get('do_animation', (False, False))[1]:
-            self.pop_checkBox.setCheckState(QtCore.Qt.Checked)
+            self.pop_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
         else:
-            self.pop_checkBox.setCheckState(QtCore.Qt.Unchecked)
+            self.pop_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.selfLayout.addWidget(self.pop_checkBox, 8, 2, 1, 1)
 
         self.tile_font_size_text = QtWidgets.QLabel(self.centralwidget)
         self.tile_font_size_text.setObjectName("tile_font_size_text")
         self.tile_font_size_text.setStyleSheet("font: 500 12pt \"Cambria\";")
         self.selfLayout.addWidget(self.tile_font_size_text, 10, 0, 1, 1)
-        self.tile_font_size_box = QtWidgets.QSlider(QtCore.Qt.Horizontal, self.centralwidget)
+        self.tile_font_size_box = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal, self.centralwidget)
         self.tile_font_size_box.setMinimum(50)
         self.tile_font_size_box.setMaximum(150)
         self.tile_font_size_box.setValue(config.get('font_size_factor', 100))
         self.tile_font_size_box.setTickPosition(QtWidgets.QSlider.TicksBelow)
         self.tile_font_size_box.setTickInterval(5)
-        self.tile_font_size_box.valueChanged.connect(self.font_size_changed)
+        self.tile_font_size_box.valueChanged.connect(self.font_size_changed)  # type: ignore
         self.tile_font_size_box.setObjectName("demo_speed_box")
         self.selfLayout.addWidget(self.tile_font_size_box, 10, 1, 1, 3)
 
         self.PageLayout.addLayout(self.selfLayout)
         self.save_bt = QtWidgets.QPushButton(self.centralwidget)
         self.save_bt.setObjectName("save_bt")
-        self.save_bt.clicked.connect(self.save_all)
+        self.save_bt.clicked.connect(self.save_all)  # type: ignore
         self.PageLayout.addWidget(self.save_bt)
         self.setCentralWidget(self.centralwidget)
 
