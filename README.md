@@ -3,7 +3,8 @@ Experience the pinnacle of AI and endgame generation with our 2048 tablebase gen
 Outperforming its contemporaries, this AI boasts the highest success rates for 32k and 65k challenges, approaching theoretical limits.
 
 ![Practise](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/723510f5-a434-4640-bc82-9eadde41a0ed)
-![Test](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/fcefff02-0742-42e1-9dfd-ae7230eacc17)
+![Minigames](https://github.com/user-attachments/assets/c08e4d0b-2767-4b99-8a66-dc8160bef9a6)
+
 
 
 ## Features
