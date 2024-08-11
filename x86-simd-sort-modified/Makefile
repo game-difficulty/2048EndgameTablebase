@@ -1,26 +1,13 @@
-test:
-	meson setup -Dbuild_tests=true -Duse_openmp=false --warnlevel 2 --werror --buildtype release builddir
-	cd builddir && ninja
+.PHONY: all sharedlib install clean
 
-test_openmp:
-	meson setup -Dbuild_tests=true -Duse_openmp=true --warnlevel 2 --werror --buildtype release builddir
-	cd builddir && ninja
-
-bench:
-	meson setup -Dbuild_benchmarks=true --warnlevel 2 --werror --buildtype release builddir
-	cd builddir && ninja
-
-debug:
-	meson setup -Dbuild_tests=true --warnlevel 2 --werror --buildtype debug debug
-	cd debug && ninja
+all: sharedlib
 
 sharedlib:
 	meson setup --warnlevel 2 --werror --buildtype release builddir
-	cd builddir && ninja
+	cd builddir && meson compile
 
-install:
-	meson setup --warnlevel 2 --werror --buildtype release builddir
+install: sharedlib
 	cd builddir && meson install
 
 clean:
-	$(RM) -rf $(TESTOBJS) $(BENCHOBJS) $(UTILOBJS) testexe benchexe builddir debug
+	rm -rf builddir debug
