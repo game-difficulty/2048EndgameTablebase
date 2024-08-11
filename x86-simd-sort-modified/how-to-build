@@ -1,0 +1,8 @@
+Build/Install: 
+Use the same commands as in the original project
+
+meson setup --buildtype release builddir && cd builddir
+meson compile
+meson install
+
+You get a libx86simdsortcpp-1.dll
