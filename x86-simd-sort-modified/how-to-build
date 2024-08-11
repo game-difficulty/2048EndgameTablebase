@@ -6,3 +6,4 @@ meson compile
 meson install
 
 You get a libx86simdsortcpp-1.dll
+then go build para sort
