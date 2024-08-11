@@ -1,1 +1,3 @@
- 
+Build/Install:
+
+clang++ -shared -o para_qsort.dll para_qsort.cpp -O3 -fopenmp -g -fPIC -I<path_to_include_directory> -L<path_to_lib_directory> -lx86simdsortcpp
