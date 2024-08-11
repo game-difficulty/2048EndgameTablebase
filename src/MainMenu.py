@@ -14,6 +14,8 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         # 启动预加载线程
         self.preload_thread = PreloadThread()
         self.preload_thread.start()
+        # 残局库计算预热线程
+        self.warmup_thread = WarmupThread()
 
         super().__init__()
         self.setupUi()
@@ -179,6 +181,7 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         if self.settings_window is None:
             from Settings import SettingsWindow
             self.settings_window = SettingsWindow()
+            self.warmup_thread.start()
         if self.settings_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
             self.settings_window.setWindowState(
                 self.settings_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized
@@ -222,10 +225,35 @@ class MainMenuWindow(QtWidgets.QMainWindow):
 
 class PreloadThread(QtCore.QThread):
     def run(self):
-        from BoardMover import BoardMoverWithScore  # , BoardMover
+        from BoardMover import BoardMoverWithScore
         bm = BoardMoverWithScore()
         bm.move_all_dir(np.uint64(0x010120342216902ac))
         bm.move_board(np.uint64(0x010120342216902ac), 2)
-        # bm = BoardMover()
-        # bm.move_all_dir(np.uint64(0x010120342216902ac))
         print("Preloading complete.")
+
+
+class WarmupThread(QtCore.QThread):
+    def run(self):
+        from BoardMover import BoardMover
+        from BookBuilder import gen_boards, recalculate, remove_died, final_situation_process, p_unique
+        from Calculator import is_L3_pattern, is_L3_success, p_re_self, re_self
+        bm = BoardMover()
+        arr = np.array([18442521884945818708, 18442521884945818960, 18442521884945827108,
+                        18442521884945830480, 18442521884945830948, 18442521884962599989,
+                        18442521884962600019, 18442521884962600244, 18442521884962600259,
+                        18442521884962604112, 18442521884962604352, 18442521884962608192,
+                        18442521884979373093, 18442521884979373138, 18442521884979373348,
+                        18442521884979373378], dtype=np.uint64)
+        arr1, arr2 = gen_boards(arr, 9, 0, bm, is_L3_pattern, is_L3_success, p_re_self, False, False)
+        arr1, arr2 = p_unique([arr1, arr2])
+        arr0 = np.empty(len(arr), dtype='uint64,uint32')
+        arr0['f0'] = arr
+        expanded_arr1 = np.empty(len(arr1), dtype='uint64,uint32')
+        expanded_arr1['f0'] = arr1
+        expanded_arr2 = np.empty(len(arr2), dtype='uint64,uint32')
+        expanded_arr2['f0'] = arr2
+        arr1 = remove_died(final_situation_process(expanded_arr1, is_L3_success, 9, 0))
+        arr2 = remove_died(final_situation_process(expanded_arr2, is_L3_success, 9, 0))
+        recalculate(arr0, arr1, arr2, 9, 0, bm, is_L3_pattern, is_L3_success, re_self, True, 0.1)
+        del arr0, arr1, arr2
+        print("Warm-up complete.")

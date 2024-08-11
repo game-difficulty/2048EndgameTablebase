@@ -35,14 +35,14 @@ class SingletonConfig:
                 'demo_speed': 40,
                 '4_spawn_rate': 0.1,
                 'do_animation': [True, True],
-                'game_state':[np.uint64(0), 0, 0],
+                'game_state': [np.uint64(0), 0, 0],
                 'dis_32k': True,
                 'compress': True,
                 'font_size_factor': 100,
                 'minigame_state': [dict(), dict()],  # [盘面，得分，最高分，最大数，是否曾过关, 新数位置], []
                 'power_ups_state': [dict(), dict()],
                 'minigame_difficulty': 1,
-            }
+                }
 
     @classmethod
     def save_config(cls, config, filename=None):

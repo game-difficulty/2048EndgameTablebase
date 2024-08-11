@@ -1,5 +1,6 @@
 import sys
 import time
+from multiprocessing import freeze_support
 
 from PyQt5 import QtCore, QtWidgets, QtGui
 
@@ -24,4 +25,5 @@ def main():
 
 
 if __name__ == '__main__':
+    freeze_support()
     main()

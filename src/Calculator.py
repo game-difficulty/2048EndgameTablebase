@@ -1,7 +1,7 @@
 from typing import List, Tuple
 
 import numpy as np
-from numba import njit
+from numba import njit, prange
 
 
 @njit(nogil=True)
@@ -243,6 +243,23 @@ def re_self(encoded_board):
     return np.uint64(encoded_board)
 
 
+@njit(nogil=True, parallel=True)
+def p_minUL(arr):
+    for i in prange(len(arr)):
+        arr[i] = minUL(arr[i])
+
+
+@njit(nogil=True, parallel=True)
+def p_min_all_symm(arr):
+    for i in prange(len(arr)):
+        arr[i] = min_all_symm(arr[i])
+
+
+@njit(nogil=True)
+def p_re_self(_):
+    pass
+
+
 def simulate_move_and_merge(line: np.ndarray) -> Tuple[List[int], List[int]]:
     """模拟一行的移动和合并过程，返回新的行和合并发生的位置。"""
     # 移除所有的0，保留非0元素
@@ -255,7 +272,7 @@ def simulate_move_and_merge(line: np.ndarray) -> Tuple[List[int], List[int]]:
         if skip:
             skip = False
             continue
-        if i + 1 < len(non_zero) and non_zero[i] == non_zero[i + 1] and non_zero[i] != -1:
+        if i + 1 < len(non_zero) and non_zero[i] == non_zero[i + 1] and non_zero[i] != -1 and non_zero[i] != 32768:
             # 发生合并
             new_line.append(2 * non_zero[i])
             merged[len(new_line) - 1] = 1  # 标记合并发生的位置

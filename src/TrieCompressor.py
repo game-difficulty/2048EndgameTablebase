@@ -1,5 +1,9 @@
 import os
 import lzma
+import concurrent.futures
+from typing import List
+from multiprocessing import shared_memory, freeze_support
+import time
 
 import numpy as np
 from numba import njit
@@ -69,6 +73,7 @@ def compress_data_how(data):  # u32 u8 u8 u8 u8 u32
     return ind0[:i0], ind1[:i1], ind2[:i2], ind3[:i3]
 
 
+# 单线程
 def compress_and_save(ind3, data, output_filename, lvl=1):
     start = 0
     current_size = 0
@@ -106,6 +111,99 @@ def compress_and_save(ind3, data, output_filename, lvl=1):
     return ind3, segments[:c]
 
 
+def compress_segment(segment_data, lvl):
+    compressor = lzma.LZMACompressor(preset=lvl)
+    block = compressor.compress(segment_data) + compressor.flush()
+    return block
+
+
+def worker(start_idx, end_idx, segments_info, shm_name, shape, dtype, lvl, temp_filename, worker_idx):
+    existing_shm = shared_memory.SharedMemory(name=shm_name)
+    data_slice = np.ndarray(shape, dtype=dtype, buffer=existing_shm.buf)
+    current_size = 0
+    segments = []
+
+    with open(temp_filename, 'wb') as f:
+        for i in range(start_idx, end_idx):
+            start = segments_info[i]['f0']
+            end = segments_info[i]['f1']
+            segment_data = data_slice[start:end].tobytes()
+            compressed_data = compress_segment(segment_data, lvl)
+            bytes_written = f.write(compressed_data)
+            current_size += bytes_written
+            segments.append((segments_info[i]['f2'], current_size))
+
+    existing_shm.close()
+    return segments, worker_idx
+
+
+@njit(nogil=True)
+def get_segment_pos(ind3, len_data):
+    segments_info = np.empty(ind3[-1]['f1'] // 16384, dtype='uint32,uint32,uint32')
+    c = 0
+    start = 0
+    for i in range(1, len(ind3) - 1):
+        end = int(ind3[i]['f1']) + 1
+        if end - start > 32768:  # 约每32768条打一个包
+            segments_info[c]['f0'], segments_info[c]['f1'], segments_info[c]['f2'] = start, end, i
+            start = end
+            ind3[i]['f1'] = 0  # 更新索引，表示block之间的切换节点
+            c += 1
+        else:
+            ind3[i]['f1'] -= start  # 更新索引为相对位置
+    ind3[len(ind3) - 1]['f1'] = 0
+    # 处理最后一批数据
+    segments_info[c]['f0'], segments_info[c]['f1'], segments_info[c]['f2'] = start, len_data, len(ind3) - 1
+    c += 1
+    segments_info = segments_info[:c]
+    return segments_info, ind3
+
+
+def compress_and_save_p(ind3, data, output_filename, lvl=1):
+    num_workers = max(2, os.cpu_count() // 2 + 1)
+
+    # 计算所有分段的位置
+    segments_info, ind3 = get_segment_pos(ind3, len(data))
+
+    # 创建共享内存
+    shm = shared_memory.SharedMemory(create=True, size=data.nbytes)
+    shm_data = np.ndarray(data.shape, dtype=data.dtype, buffer=shm.buf)
+    np.copyto(shm_data, data)
+
+    segment_size = len(segments_info) // num_workers
+    futures = []
+
+    # 并行压缩
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+        for worker_idx in range(num_workers):
+            start_idx = worker_idx * segment_size
+            end_idx = (worker_idx + 1) * segment_size if worker_idx < num_workers - 1 else len(segments_info)
+            temp_filename = output_filename + f"{worker_idx}"
+            futures.append(executor.submit(
+                worker, start_idx, end_idx, segments_info, shm.name, shm_data.shape, shm_data.dtype,
+                lvl, temp_filename, worker_idx))
+
+    # 处理分段数据
+    all_segments: List[np.ndarray | None] = [None] * num_workers
+    for future in concurrent.futures.as_completed(futures):
+        segments, worker_idx = future.result()
+        all_segments[worker_idx] = np.array(segments, dtype='uint32,uint64')
+    for i in range(1, num_workers):
+        all_segments[i]['f1'] += all_segments[i - 1][-1]['f1']
+    all_segments = [np.array([(0, 0)], dtype='uint32,uint64')] + all_segments
+    all_seg: np.ndarray = np.concatenate(all_segments)
+
+    # 合并所有临时文件
+    with open(output_filename, 'wb') as final_file:
+        for worker_idx in range(num_workers):
+            temp_filename = output_filename + f"{worker_idx}"
+            with open(temp_filename, 'rb') as temp_file:
+                final_file.write(temp_file.read())
+            os.remove(temp_filename)
+
+    return ind3, all_seg
+
+
 def trie_compress_progress(path, filename):
     target_file = os.path.join(path, filename[:-4] + 'zt')
     fullfilepath = os.path.join(path, filename)
@@ -113,12 +211,18 @@ def trie_compress_progress(path, filename):
 
     book = np.fromfile(fullfilepath, dtype="uint32,uint8,uint8,uint8,uint8,uint32")
     ind0, ind1, ind2, ind3 = compress_data_how(book)
+
     book_ = np.empty(len(book), dtype='uint32,uint32')  # 后32位和成功率，后面分块压缩
     book_['f0'] = book['f0']
     book_['f1'] = book['f5']
     del book
     target_dir = os.path.join(target_file, filename[:-4])
-    ind3, segments = compress_and_save(ind3, book_, target_dir + 'z', lvl=1)  # 分块压缩，更新索引并记录分块大小
+    if len(book_) >= 8388608:
+        func = compress_and_save_p
+    else:
+        func = compress_and_save
+    ind3, segments = func(ind3, book_, target_dir + 'z', lvl=1)  # 分块压缩，更新索引并记录分块大小
+
     ind0['f1'] += 1 + len(ind0)
     ind1['f1'] += 1 + len(ind0) + len(ind1)
     root = np.array([(0, 1)], dtype='uint8,uint32')
@@ -230,3 +334,10 @@ def trie_decompress_search(filepath, board, ind, segments):
         low += 1
     result = search_block(block[low:high], target)
     return result
+
+
+if __name__ == '__main__':
+    freeze_support()
+    t0 = time.time()
+    trie_compress_progress(r"D:\2048calculates\test", "free10w_1024_427.book")
+    print(time.time() - t0)

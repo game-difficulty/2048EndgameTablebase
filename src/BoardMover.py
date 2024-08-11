@@ -1,12 +1,12 @@
 from typing import Tuple
 
 import numpy as np
-from numba import uint64
+from numba import uint64, uint16
 from numba.experimental import jitclass
 
 spec = {
-    'movel': uint64[:],  # 表示一个uint64类型的一维数组
-    'mover': uint64[:],
+    'movel': uint16[:],  # 表示一个uint16类型的一维数组
+    'mover': uint16[:],
     'moveu': uint64[:],
     'moved': uint64[:],
 }
@@ -32,8 +32,8 @@ class BoardMover:
     def decode_board(encoded_board: np.uint64) -> np.ndarray:
         encoded_board = np.uint64(encoded_board)
         board = np.zeros((4, 4), dtype=np.int32)
-        for i in range(3,-1,-1):
-            for j in range(3,-1,-1):
+        for i in range(3, -1, -1):
+            for j in range(3, -1, -1):
                 encoded_num = (encoded_board >> (4 * ((3 - i) * 4 + (3 - j)))) & 0xF
                 if encoded_num > 0:
                     board[i, j] = 2 ** encoded_num
@@ -144,8 +144,8 @@ class BoardMover:
 
     def calculate_all_moves(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         # 初始化存储所有可能的行及其移动后结果差值的字典
-        movel = np.empty(65536, dtype=np.uint64)
-        mover = np.empty(65536, dtype=np.uint64)
+        movel = np.empty(65536, dtype=np.uint16)
+        mover = np.empty(65536, dtype=np.uint16)
         moveu = np.empty(65536, dtype=np.uint64)
         moved = np.empty(65536, dtype=np.uint64)
 
@@ -157,16 +157,16 @@ class BoardMover:
 
             # 向左移动
             merged_linel = self.merge_line(line, reverse=False)
-            movel[original_line] = self.encode_row(merged_linel) ^ original_line
+            movel[original_line] = np.uint16(self.encode_row(merged_linel) ^ original_line)
 
             # 向右移动
             merged_liner = self.merge_line(line, reverse=True)
-            mover[original_line] = self.encode_row(merged_liner) ^ original_line
+            mover[original_line] = np.uint16(self.encode_row(merged_liner) ^ original_line)
 
         # 使用reverse函数计算向上和向下的移动差值
         for i in range(16 ** 4):
-            moveu[i] = self.reverse(movel[i])
-            moved[i] = self.reverse(mover[i])
+            moveu[i] = self.reverse(np.uint64(movel[i]))
+            moved[i] = self.reverse(np.uint64(mover[i]))
 
         return movel, mover, moveu, moved
 
@@ -210,8 +210,8 @@ class BoardMoverWithScore:
     def decode_board(encoded_board: np.uint64) -> np.ndarray:
         encoded_board = np.uint64(encoded_board)
         board = np.zeros((4, 4), dtype=np.int32)
-        for i in range(3,-1,-1):
-            for j in range(3,-1,-1):
+        for i in range(3, -1, -1):
+            for j in range(3, -1, -1):
                 encoded_num = (encoded_board >> (4 * ((3 - i) * 4 + (3 - j)))) & 0xF
                 if encoded_num > 0:
                     board[i, j] = 2 ** encoded_num
@@ -365,3 +365,16 @@ class BoardMoverWithScore:
         val = 2 if np.random.random() < p else 1  # 生成2或4，其中2的概率为0.9
         t |= np.uint64(val) << np.uint64(4 * i)  # 在选中的位置放置新值
         return t, len(empty_slots), 15 - i, val
+
+
+if __name__ == "__main__":
+    b = np.array([[32, 8, 0, 2],
+                  [32, 32, 32, 32],
+                  [64, 16, 4, 16],
+                  [16384, 4096, 0, 4096]])
+    bm = BoardMover()
+    r = bm.move_all_dir(bm.encode_board(b))
+    print(b)
+    for rb, d in zip(r, ('d', 'r', 'l', 'u')):
+        print(d)
+        print(bm.decode_board(rb))
