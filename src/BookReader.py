@@ -8,7 +8,7 @@ from BoardMover import BoardMoverWithScore
 from Config import SingletonConfig
 from TrieCompressor import trie_decompress_search
 from Calculator import min_all_symm, minUL, re_self, is_L3_pattern, is_4431_pattern, is_444_pattern, is_free_pattern, \
-    is_LL_pattern, is_4432_pattern, is_4441_pattern, is_442_pattern, is_t_pattern
+    is_LL_pattern, is_4432_pattern, is_4441_pattern, is_442_pattern, is_t_pattern, is_4442_pattern
 
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -32,6 +32,7 @@ class BookReader:
         't': [-196608 - 8, is_t_pattern, re_self],
         '4441': [-98304 - 28, is_4441_pattern, re_self],
         '4432': [-98304 - 28, is_4432_pattern, minUL],
+        '4442': [-98304 - 52, is_4442_pattern, re_self],
         'free8w': [-262144 - 14, is_free_pattern, min_all_symm],
         'free9w': [-229376 - 16, is_free_pattern, min_all_symm],
         'free10w': [-196608 - 18, is_free_pattern, min_all_symm],

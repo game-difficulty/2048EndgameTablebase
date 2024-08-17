@@ -55,8 +55,8 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.target_combo, 0, 2, 1, 1)
         self.pattern_combo = QtWidgets.QComboBox(self.centralwidget)
         self.pattern_combo.setObjectName("pattern_combo")
-        for i in ["444", "4431", "LL", "L3", "t", "442", "free8", "free9", "free10", "4441", "4432", "free8w", "free9w",
-                  "free10w", "free11w"]:
+        for i in ["444", "4431", "LL", "L3", "t", "442", "free8", "free9", "free10", "4441", "4432", "4442", "free8w",
+                  "free9w", "free10w", "free11w"]:
             self.pattern_combo.addItem(i)
         self.selfLayout.addWidget(self.pattern_combo, 0, 1, 1, 1)
         self.pos_combo = QtWidgets.QComboBox(self.centralwidget)
