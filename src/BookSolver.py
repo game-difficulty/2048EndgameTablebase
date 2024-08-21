@@ -76,11 +76,11 @@ def recalculate_process(
                 d1 = np.fromfile(pathname + str(i + 1) + '.book', dtype='uint64,uint32')
                 d2 = np.fromfile(pathname + str(i + 2) + '.book', dtype='uint64,uint32')
 
+        d0 = np.fromfile(pathname + str(i), dtype=np.uint64)
+
         t0 = time.time()
 
-        d0 = np.fromfile(pathname + str(i), dtype=np.uint64)
-        expanded_arr0 = np.empty(len(d0), dtype='uint64,uint32')
-        expanded_arr0['f0'] = d0
+        expanded_arr0 = expand(d0)
         del d0
 
         # 创建、更新查找索引

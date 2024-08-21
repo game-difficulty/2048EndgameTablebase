@@ -17,9 +17,11 @@ def main():
     splash.show()
     app.processEvents()
 
-    time.sleep(3)
+    time.sleep(4)
     main_win.show()
     splash.close()
+    main_win.raise_()
+    main_win.activateWindow()
 
     sys.exit(app.exec_())
 

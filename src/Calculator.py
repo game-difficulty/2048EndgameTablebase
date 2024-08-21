@@ -216,7 +216,7 @@ def is_free_pattern(_):
 @njit(nogil=True)
 def is_free_success(encoded_board, target, position):
     if position == 0:
-        target += 1  # free要求合出更大一级的数字
+        target += 1  # free要求合出更大一级的数字，freew定式pos参数为1
     encoded_board = np.uint64(encoded_board)
     for i in range(16):
         if (encoded_board >> np.uint64(4 * i)) & np.uint64(0xF) == np.uint64(target):

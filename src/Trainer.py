@@ -13,6 +13,11 @@ from Config import SingletonConfig
 
 class TrainFrame(BaseBoardFrame):
     dis32k = SingletonConfig().config.get('dis_32k', False)
+    v_inits = {
+        '2x4': np.array([np.uint64(0xffff00000000ffff)], dtype=np.uint64),
+        '3x3': np.array([np.uint64(0x000f000f000fffff)], dtype=np.uint64),
+        '3x4': np.array([np.uint64(0x000000000000ffff)], dtype=np.uint64),
+    }
 
     def __init__(self, centralwidget=None):
         super(TrainFrame, self).__init__(centralwidget)
@@ -44,6 +49,19 @@ class TrainFrame(BaseBoardFrame):
         self.update_frame(2 ** val, new_tile_pos // 4, new_tile_pos % 4, anim=do_anim)
         self.history.append((self.board_encoded, self.score))
         self.newtile_pos, self.newtile = new_tile_pos, val
+
+    def set_to_variant(self, pattern: str):
+        self.set_use_variant(pattern)
+        self.board_encoded = self.v_inits[pattern][0]
+        self.board = self.mover.decode_board(self.board_encoded)
+        self.update_all_frame(self.board)
+
+    def set_to_44(self):
+        if self.use_variant_mover != 0:
+            self.set_use_variant('')
+            self.board = np.zeros((4, 4), dtype=np.int32)
+            self.board_encoded = self.mover.encode_board(self.board)
+            self.update_all_frame(self.board)
 
 
 # noinspection PyAttributeOutsideInit
@@ -271,8 +289,8 @@ class TrainWindow(QtWidgets.QMainWindow):
 
         self.menu_ptn = QtWidgets.QMenu(self.menubar)
         self.menu_ptn.setObjectName("menuMENU")
-        for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", 'free8', 'free9', 'free10', 'free8w',
-                    'free9w', 'free10w', "free11w"]:
+        for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", '4442', 'free8', 'free9', 'free10', 'free8w',
+                    'free9w', 'free10w', "free11w", '2x4', '3x3', '3x4']:
             m = QtWidgets.QAction(ptn, self)
             m.triggered.connect(lambda: self.menu_selected(0))  # type: ignore
             self.menu_ptn.addAction(m)
@@ -362,6 +380,12 @@ class TrainWindow(QtWidgets.QMainWindow):
             else:
                 self.pattern_settings[2] = '0'
                 self.current_pattern = '_'.join(self.pattern_settings[:2])
+
+            if self.pattern_settings[0] in ['2x4', '3x3', '3x4']:
+                self.gameframe.set_to_variant(self.pattern_settings[0])
+            else:
+                self.gameframe.set_to_44()
+
             self.filepath.setText(SingletonConfig().config['filepath_map'].get(self.current_pattern, ''))
             self.show_results()
             self.pattern_text.setText(self.current_pattern)

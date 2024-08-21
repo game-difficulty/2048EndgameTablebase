@@ -1,9 +1,11 @@
 import os
+import sys
 import pickle
 import logging
 
 import numpy as np
 import cpuinfo
+from PyQt5 import QtWidgets
 
 
 # noinspection PyAttributeOutsideInit
@@ -77,8 +79,26 @@ class SingletonConfig:
 logger = logging.getLogger('debug_logger')
 
 logger.setLevel(logging.DEBUG)
-
 console_handler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
+
+# 创建文件处理器，设置级别为WARNING，用于输出到文件
+file_handler = logging.FileHandler('logger.txt')
+file_handler.setLevel(logging.WARNING)
+file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(file_formatter)
+
+# 将处理器添加到日志记录器中
 logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+
+
+def handle_exception(exc_type, exc_value, exc_traceback):
+    logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+    # 防止应用崩溃
+    if not issubclass(exc_type, KeyboardInterrupt):
+        QtWidgets.QMessageBox.critical(None, "Error", f"An unexpected error occurred: {exc_value}\n {exc_traceback}")
+
+
+sys.excepthook = handle_exception

@@ -4,12 +4,12 @@ from typing import Callable, Dict, Tuple, Union, List, Optional
 
 import numpy as np
 
-from BoardMover import BoardMoverWithScore
+from BoardMover import SingletonBoardMover, BoardMoverWithScore
 from Config import SingletonConfig
 from TrieCompressor import trie_decompress_search
 from Calculator import min_all_symm, minUL, re_self, is_L3_pattern, is_4431_pattern, is_444_pattern, is_free_pattern, \
     is_LL_pattern, is_4432_pattern, is_4441_pattern, is_442_pattern, is_t_pattern, is_4442_pattern
-
+from Variants.vCalculator import is_variant_pattern, min24, min34, min33
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 ToFindFunc = Callable[[np.uint64], np.uint64]
@@ -17,7 +17,8 @@ SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
 
 
 class BookReader:
-    bm: BoardMoverWithScore = BoardMoverWithScore()
+    bm: BoardMoverWithScore = SingletonBoardMover(2)
+    vbm: BoardMoverWithScore = SingletonBoardMover(4)
 
     pattern_map: Dict[str, Tuple[int, PatternCheckFunc, Union[ToFindFunc, Tuple[ToFindFunc, ToFindFunc]]]] = {
         '': [0, None, re_self],
@@ -37,27 +38,33 @@ class BookReader:
         'free9w': [-229376 - 16, is_free_pattern, min_all_symm],
         'free10w': [-196608 - 18, is_free_pattern, min_all_symm],
         'free11w': [-163840 - 20, is_free_pattern, min_all_symm],
+        '2x4': [-262144, is_variant_pattern, min24],
+        '3x3': [-229376, is_variant_pattern, min33],
+        '3x4': [-131072, is_variant_pattern, min34],
     }
 
     @staticmethod
     def move_on_dic(board: np.ndarray, pattern: str, target: str, pattern_full: str, pos: str = '0'
                     ) -> Dict[str, Union[str, float, int]]:
+        bm = BookReader.bm if pattern not in ('2x4', '3x3', '3x4') else BookReader.vbm
         nums_adjust, pattern_check_func, to_find_func = BookReader.pattern_map[pattern]
         path = SingletonConfig().config['filepath_map'].get(pattern_full, '')
         nums = (board.sum() + nums_adjust) / 2
+
         if pattern[:4] == 'free' and pattern[-1] != 'w':
             nums -= int(target) / 2
         if pattern == 'LL':
             to_find_func = to_find_func[int(pos)]
         if not path or not pattern_check_func:
-            return {'?':'?'}
+            return {'?': '?'}
         if nums < 0:
             return {'down': '', 'right': '', 'left': '', 'up': ''}
+
         for rotation, flip, t_board in BookReader.gen_all_mirror(board, pattern):
-            encoded = np.uint64(BookReader.bm.encode_board(t_board))
+            encoded = np.uint64(bm.encode_board(t_board))
             if pattern_check_func(encoded):
                 results = BookReader.get_best_move(path, f'{pattern_full}_{int(nums)}.book', encoded,
-                                                   pattern_check_func, BookReader.bm, to_find_func)
+                                                   pattern_check_func, bm, to_find_func)
                 adjusted = {BookReader.adjust_direction(flip, rotation, direction): success_rate
                             for direction, success_rate in results.items()}
                 float_items = {k: round(v, 10) for k, v in adjusted.items() if isinstance(v, (int, float))}
@@ -70,6 +77,8 @@ class BookReader:
 
     @staticmethod
     def gen_all_mirror(board: np.ndarray, pattern: str) -> List[Tuple[str, str, np.ndarray]]:
+        if pattern in ('2x4', '3x3', '3x4'):
+            return [('none', 'none', board)]
         operations = [
             ('none', 'none', board),
             ('rotate_90', 'none', np.rot90(board)),
@@ -169,22 +178,31 @@ class BookReader:
 
     @staticmethod
     def get_random_state(pathname: str, pattern_full: str) -> np.uint64:
-        book_index = [0,1,2,3,4,5,6,7,8,9]
+        book_index = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
         while len(book_index) > 0:
             book_id = np.random.choice(book_index)
             book_index.remove(book_id)
             filepath = os.path.join(pathname, pattern_full + f'_{book_id}.book')
             if not os.path.exists(filepath):
                 continue
-            with open(filepath, 'rb')as file:
+            with open(filepath, 'rb') as file:
                 record_size = struct.calcsize('QI')
                 file.seek(0, 2)
                 file_size = file.tell()
                 num_records = file_size // record_size
-                random_record_index = np.random.randint(0, num_records - 1)
+                random_record_index = np.random.randint(0, num_records)
                 offset = random_record_index * record_size
                 file.seek(offset)
                 state, _ = struct.unpack('QI', file.read(record_size))
                 return np.uint64(BookReader.bm.gen_new_num(np.uint64(state),
                                                            SingletonConfig().config['4_spawn_rate'])[0])
         return np.uint64(0)
+
+
+if __name__ == "__main__":
+    _result = BookReader.move_on_dic(np.array([[2, 0, 4, 0],
+                                               [8, 0, 8, 0],
+                                               [16, 64, 32768, 32768],
+                                               [32768, 32768, 32768, 32768]]),
+                                     '442', '512', '442_512')
+    print(_result)

@@ -26,56 +26,76 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.settings_window = None
         self.view_window = None
 
+        if hasattr(sys, '_MEIPASS'):
+            # noinspection PyProtectedMember
+            current_dir = sys._MEIPASS
+        else:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+        variants_dir = os.path.join(current_dir, 'Variants')
+        if variants_dir not in sys.path:
+            sys.path.insert(0, variants_dir)
+
     def setupUi(self):
         self.setObjectName("self")
         self.setWindowIcon(QtGui.QIcon(r"pic\2048_2.ico"))
-        self.resize(360, 160)
+        self.resize(560, 480)
         self.setStyleSheet("")
         self.centralwidget = QtWidgets.QWidget(self)
         self.centralwidget.setObjectName("centralwidget")
         self.setCentralWidget(self.centralwidget)
         self.verticalLayout = QtWidgets.QVBoxLayout(self.centralwidget)
+        self.verticalLayout.setContentsMargins(10, 50, 10, 10)  # 左，上，右，下边距
         self.innerContainer = QtWidgets.QWidget(self.centralwidget)
         self.innerContainerLayout = QtWidgets.QVBoxLayout(self.innerContainer)
         self.verticalLayout.addWidget(self.innerContainer,
                                       alignment=QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignHCenter)
 
-        self.Game = QtWidgets.QPushButton(self.centralwidget)
+        self.Game = QtWidgets.QPushButton()
         self.Game.setObjectName("Game")
         self.Game.clicked.connect(self.openGameWindow)  # type: ignore
-        self.Game.setMaximumSize(QtCore.QSize(480, 60))
-        self.Game.setStyleSheet("font: 500 12pt \"Cambria\";")
+        self.Game.setMaximumSize(QtCore.QSize(600, 80))
+        self.Game.setStyleSheet("font: 640 14pt \"Cambria\";")
         self.innerContainerLayout.addWidget(self.Game)
         self.Minigames = QtWidgets.QPushButton(self.centralwidget)
         self.Minigames.setObjectName("Minigames")
         self.Minigames.clicked.connect(self.openMinigamesWindow)  # type: ignore
-        self.Minigames.setMaximumSize(QtCore.QSize(480, 60))
-        self.Minigames.setStyleSheet("font: 500 12pt \"Cambria\";")
+        self.Minigames.setMaximumSize(QtCore.QSize(600, 80))
+        self.Minigames.setStyleSheet("font: 640 14pt \"Cambria\";")
         self.innerContainerLayout.addWidget(self.Minigames)
         self.Practise = QtWidgets.QPushButton(self.centralwidget)
         self.Practise.setObjectName("Practise")
         self.Practise.clicked.connect(self.openTrainWindow)  # type: ignore
-        self.Practise.setMaximumSize(QtCore.QSize(480, 60))
-        self.Practise.setStyleSheet("font: 500 12pt \"Cambria\";")
+        self.Practise.setMaximumSize(QtCore.QSize(600, 80))
+        self.Practise.setStyleSheet("font: 640 14pt \"Cambria\";")
         self.innerContainerLayout.addWidget(self.Practise)
         self.Test = QtWidgets.QPushButton(self.centralwidget)
         self.Test.setObjectName("Test")
         self.Test.clicked.connect(self.openTestWindow)  # type: ignore
-        self.Test.setMaximumSize(QtCore.QSize(480, 60))
-        self.Test.setStyleSheet("font: 500 12pt \"Cambria\";")
+        self.Test.setMaximumSize(QtCore.QSize(600, 80))
+        self.Test.setStyleSheet("font: 640 14pt \"Cambria\";")
         self.innerContainerLayout.addWidget(self.Test)
         self.Settings = QtWidgets.QPushButton(self.centralwidget)
         self.Settings.setObjectName("Settings")
         self.Settings.clicked.connect(self.openSettingsWindow)  # type: ignore
-        self.Settings.setMaximumSize(QtCore.QSize(480, 60))
-        self.Settings.setStyleSheet("font: 500 12pt \"Cambria\";")
+        self.Settings.setMaximumSize(QtCore.QSize(600, 80))
+        self.Settings.setStyleSheet("font: 640 14pt \"Cambria\";")
         self.innerContainerLayout.addWidget(self.Settings)
         self.Help = QtWidgets.QPushButton(self.centralwidget)
         self.Help.setObjectName("Settings")
         self.Help.clicked.connect(self.openHelpWindow)  # type: ignore
-        self.Help.setMaximumSize(QtCore.QSize(480, 60))
-        self.Help.setStyleSheet("font: 500 12pt \"Cambria\";")
+        self.Help.setMaximumSize(QtCore.QSize(600, 80))
+        self.Help.setStyleSheet("font: 640 14pt \"Cambria\";")
         self.innerContainerLayout.addWidget(self.Help)
+        # 创建一个QLabel，用于显示引导文字
+        self.info_label = QtWidgets.QLabel(self.centralwidget)
+        self.info_label.setObjectName("InfoLabel")
+        self.info_label.setOpenExternalLinks(True)
+        self.info_label.setStyleSheet("font: 420 12pt \"Cambria\";")
+        self.info_label.setMaximumWidth(600)
+        self.info_label.setMinimumHeight(100)
+        self.info_label.setWordWrap(True)  # 启用自动换行
+        self.info_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.innerContainerLayout.addWidget(self.info_label)
         self.setCentralWidget(self.centralwidget)
 
         self.statusbar = QtWidgets.QStatusBar(self)
@@ -87,8 +107,8 @@ class MainMenuWindow(QtWidgets.QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self.width() > 360:
-            self.innerContainer.setMaximumWidth(360)
+        if self.width() > 600:
+            self.innerContainer.setMaximumWidth(600)
             self.verticalLayout.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignHCenter)
         else:
             self.innerContainer.setFixedWidth(self.width())
@@ -217,6 +237,10 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.Test.setText(_translate("MainMenu", "Test"))
         self.Settings.setText(_translate("MainMenu", "Settings"))
         self.Help.setText(_translate("MainMenu", "Help"))
+        self.info_label.setText(
+            'Support this project by giving it a star on '
+            '<a href="https://github.com/game-difficulty/2048EndgameTablebase">GitHub</a>.'
+        )
 
     def closeEvent(self, event):
         SingletonConfig().save_config(SingletonConfig().config)
@@ -228,24 +252,33 @@ class MainMenuWindow(QtWidgets.QMainWindow):
 
 class PreloadThread(QtCore.QThread):
     def run(self):
-        from BoardMover import BoardMoverWithScore, BoardMover
-        bm = BoardMoverWithScore()
-        bm.move_all_dir(np.uint64(0x010120342216902ac))
-        bm.move_board(np.uint64(0x010120342216902ac), 2)
-        bm = BoardMover()
-        bm.move_all_dir(np.uint64(0x010120342216902ac))
+        from Config import SingletonConfig
+        SingletonConfig()
+        from BoardMover import SingletonBoardMover
+        bm1 = SingletonBoardMover(1)
+        bm2 = SingletonBoardMover(2)
+        bm3 = SingletonBoardMover(3)
+        bm4 = SingletonBoardMover(4)
+        bm1.move_all_dir(np.uint64(0x010120342216902ac))
+        bm1.move_board(np.uint64(0x010120342216902ac), 2)
+        bm2.move_all_dir(np.uint64(0x010120342216902ac))
+        bm2.move_board(np.uint64(0x010120342216902ac), 2)
+        bm3.move_all_dir(np.uint64(0x010120342216902ac))
+        bm3.move_board(np.uint64(0x010120342216902ac), 2)
+        bm4.move_all_dir(np.uint64(0x010120342216902ac))
+        bm4.move_board(np.uint64(0x010120342216902ac), 2)
         print("Preloading complete.")
 
 
 class WarmupThread(QtCore.QThread):
     def run(self):
-        from BoardMover import BoardMover
+        from BoardMover import SingletonBoardMover
         from BookGenerator import gen_boards_simple, p_unique, gen_boards
         from BookBuilder import final_situation_process
         from BookSolver import recalculate, remove_died, create_index
         from Calculator import is_L3_pattern, is_L3_success, p_re_self, re_self
 
-        bm = BoardMover()
+        bm = SingletonBoardMover(1)
         arr = np.array([18442521884945818708, 18442521884945818960, 18442521884945827108,
                         18442521884945830480, 18442521884945830948, 18442521884962599989,
                         18442521884962600019, 18442521884962600244, 18442521884962600259,

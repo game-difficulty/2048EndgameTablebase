@@ -9,6 +9,7 @@ from PyQt5.QtGui import QIcon
 from BookReader import BookReader
 from Config import SingletonConfig
 from Gamer import BaseBoardFrame
+from Analyzer import AnalyzeWindow
 
 
 # noinspection PyAttributeOutsideInit
@@ -70,6 +71,12 @@ class ScrollTextDisplay(QWidget):
 
 
 class TestFrame(BaseBoardFrame):
+    v_inits = {
+        '2x4': np.array([np.uint64(0xffff00000000ffff)], dtype=np.uint64),
+        '3x3': np.array([np.uint64(0x000f000f000fffff)], dtype=np.uint64),
+        '3x4': np.array([np.uint64(0x000000000000ffff)], dtype=np.uint64),
+    }
+
     def __init__(self, centralwidget=None):
         super(TestFrame, self).__init__(centralwidget)
         self.combo = 0
@@ -84,6 +91,19 @@ class TestFrame(BaseBoardFrame):
     def mousePressEvent(self, event):
         self.setFocus()
 
+    def set_to_variant(self, pattern: str):
+        self.set_use_variant(pattern)
+        self.board_encoded = self.v_inits[pattern][0]
+        self.board = self.mover.decode_board(self.board_encoded)
+        self.update_all_frame(self.board)
+
+    def set_to_44(self):
+        if self.use_variant_mover != 0:
+            self.set_use_variant('')
+            self.board = np.zeros((4, 4), dtype=np.int32)
+            self.board_encoded = self.mover.encode_board(self.board)
+            self.update_all_frame(self.board)
+
 
 class TestWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -93,6 +113,8 @@ class TestWindow(QtWidgets.QMainWindow):
         self.result = {}
         self.pattern = ['?', '?', '?']
         self.full_pattern = None
+        # 分析verse replay的窗口
+        self.analyze_window = None
 
     def setupUi(self):
         self.setObjectName("self")
@@ -103,7 +125,8 @@ class TestWindow(QtWidgets.QMainWindow):
         self.centralwidget.setObjectName("centralwidget")
         self.gridLayout = QtWidgets.QGridLayout(self.centralwidget)
         self.gridLayout.setContentsMargins(6, 6, 6, 6)
-        self.gridLayout.setSpacing(0)
+        self.gridLayout.setVerticalSpacing(15)
+        self.gridLayout.setHorizontalSpacing(0)
         self.gridLayout.setObjectName("gridLayout")
 
         self.gameframe = TestFrame(self.centralwidget)
@@ -120,6 +143,13 @@ class TestWindow(QtWidgets.QMainWindow):
         self.save_bt.setMinimumSize(80, 30)
         self.save_bt.clicked.connect(self.save_logs_to_file)  # type: ignore
 
+        self.analyzer_bt = QtWidgets.QPushButton(self.centralwidget)
+        self.gridLayout.addWidget(self.analyzer_bt, 1, 0, 1, 1)
+        self.gridLayout.setAlignment(self.analyzer_bt, QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.analyzer_bt.setMaximumSize(300, 36)
+        self.analyzer_bt.setMinimumSize(80, 30)
+        self.analyzer_bt.clicked.connect(self.open_analyzer)  # type: ignore
+
         self.menubar = QtWidgets.QMenuBar(self)
         self.menubar.setGeometry(QtCore.QRect(0, 0, 522, 22))
         self.menubar.setObjectName("menubar")
@@ -127,8 +157,8 @@ class TestWindow(QtWidgets.QMainWindow):
 
         self.menu_ptn = QtWidgets.QMenu(self.menubar)
         self.menu_ptn.setObjectName("menuMENU")
-        for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", 'free8', 'free9', 'free10', 'free8w',
-                    'free9w', 'free10w', "free11w", '?']:
+        for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", '4442', 'free8', 'free9', 'free10', 'free8w',
+                    'free9w', 'free10w', "free11w", '2x4', '3x3', '3x4', '?']:
             m = QtWidgets.QAction(ptn, self)
             m.triggered.connect(lambda: self.menu_selected(0))  # type: ignore
             self.menu_ptn.addAction(m)
@@ -164,12 +194,19 @@ class TestWindow(QtWidgets.QMainWindow):
         self.menu_pos.setTitle(_translate("Tester", "Position"))
         self.menu_tgt.setTitle(_translate("Tester", "Target"))
         self.save_bt.setText(_translate("Tester", "Save Logs"))
+        self.analyzer_bt.setText(_translate("Tester", "Analyze Verse Replay"))
 
     def menu_selected(self, i):
         self.pattern[i] = self.sender().text()
         self.text_display.add_text('_'.join(self.pattern))
         self.text_display.update_text()
+
         if '?' not in self.pattern[:2]:
+            if self.pattern[0] in ['2x4', '3x3', '3x4']:
+                self.gameframe.set_to_variant(self.pattern[0])
+            else:
+                self.gameframe.set_to_44()
+
             if self.pattern[0] in ("444", "LL", "L3") and self.pattern[2] != '?':
                 self.full_pattern = '_'.join(self.pattern)
                 self.init()
@@ -223,6 +260,18 @@ class TestWindow(QtWidgets.QMainWindow):
                 for line in self.text_display.lines:
                     file.write(line.replace('**', '') + '\n')
 
+    def open_analyzer(self):
+        if self.analyze_window is None:
+            self.analyze_window = AnalyzeWindow()
+
+        if self.analyze_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
+            self.analyze_window.setWindowState(
+                self.analyze_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized
+                | QtCore.Qt.WindowState.WindowActive)
+        self.analyze_window.show()
+        self.analyze_window.activateWindow()
+        self.analyze_window.raise_()
+
     def keyPressEvent(self, event):
         if self.isProcessing:
             return
@@ -238,7 +287,7 @@ class TestWindow(QtWidgets.QMainWindow):
             super().keyPressEvent(event)  # 其他键交给父类处理
 
     def process_input(self, direction):
-        if self.result[direction.lower()] is None:
+        if self.result.get(direction.lower(), None) is None:
             return
         self.isProcessing = True  # 设置标志防止进一步的输入
         self.gameframe.do_move(direction)
@@ -259,7 +308,7 @@ class TestWindow(QtWidgets.QMainWindow):
             text_list.append(f"{key.ljust(5,' ')}: {value}")
         text_list.append('')
         best_move = list(self.result.keys())[0]
-        if move == best_move.capitalize():
+        if move == best_move.capitalize() or self.result[move.lower()] == 1:
             self.gameframe.combo += 1
             text_list.append(f"**Perfect! Combo: {self.gameframe.combo}x**")
             text_list.append(f"You pressed {move}. And the best move is **{best_move.capitalize()}**")

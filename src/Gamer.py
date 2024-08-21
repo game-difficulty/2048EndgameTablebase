@@ -6,7 +6,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QPropertyAnimation, QRect, QEasingCurve, QTimer, QSize, QPoint
 
 from AIPlayer import AutoplayS, Dispatcher, EvilGen
-from BoardMover import BoardMoverWithScore
+from BoardMover import SingletonBoardMover
 from Config import SingletonConfig
 from Calculator import find_merge_positions
 
@@ -152,11 +152,14 @@ class BaseBoardFrame(QtWidgets.QFrame):
         self.board = np.zeros((4, 4), dtype=np.int32)
         self.board_encoded = np.uint64(0)
         self.score = 0
-        self.mover = BoardMoverWithScore()
+        self.mover = SingletonBoardMover(2)
+        self.v_mover = SingletonBoardMover(4)
         self.history = []
 
         self.newtile_pos = 0
         self.newtile = 1
+
+        self.use_variant_mover = 0
 
     def setupUi(self):
         self.setMaximumSize(QtCore.QSize(100000, 100000))
@@ -206,9 +209,10 @@ class BaseBoardFrame(QtWidgets.QFrame):
             self.update_frame(2 ** val, new_tile_pos // 4, new_tile_pos % 4, anim=do_anim)
 
     def do_move(self, direction, do_gen=True):
+        mover = self.mover if self.use_variant_mover == 0 else self.v_mover
         do_anim = SingletonConfig().config['do_animation']
         direct = {'Left': 1, 'Right': 2, 'Up': 3, 'Down': 4}[direction.capitalize()]
-        board_encoded_new, new_score = self.mover.move_board(self.board_encoded, direct)
+        board_encoded_new, new_score = mover.move_board(self.board_encoded, direct)
         board_encoded_new = np.uint64(board_encoded_new)
         if board_encoded_new != self.board_encoded:
             if do_anim[1]:
@@ -235,6 +239,9 @@ class BaseBoardFrame(QtWidgets.QFrame):
             self.board_encoded = np.uint64(self.board_encoded)
             self.board = self.mover.decode_board(self.board_encoded)
             self.update_all_frame(self.board)
+
+    def set_use_variant(self, pattern: str = ''):
+        self.use_variant_mover = {'2x4': 1, '3x3': 2, '3x4': 3}.get(pattern, 0)
 
 
 # noinspection PyAttributeOutsideInit
@@ -370,7 +377,7 @@ class GameWindow(QtWidgets.QMainWindow):
 
         self.ai_timer = QTimer(self)
         self.ai_timer.timeout.connect(self.handleOneStep)
-        self.ai_dispatcher = Dispatcher(BoardMoverWithScore.decode_board(np.uint64(0)), np.uint64(0))
+        self.ai_dispatcher = Dispatcher(SingletonBoardMover(2).decode_board(np.uint64(0)), np.uint64(0))
 
         self.statusbar.showMessage("All features may be slow when used for the first time. Please be patient.", 8000)
         self.update_score()

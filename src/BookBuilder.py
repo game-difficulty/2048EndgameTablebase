@@ -6,7 +6,7 @@ import numpy as np
 from numba import njit, prange
 
 import Calculator
-from BoardMover import BoardMover
+from BoardMover import SingletonBoardMover, BoardMover
 from Config import SingletonConfig
 from BookSolver import recalculate_process, remove_died, expand
 from BookGenerator import generate_process
@@ -28,14 +28,15 @@ def gen_lookup_table_big(
         steps: int,
         pathname: str,
         docheck_step: int,
+        bm: BoardMover,
         isfree: bool = False,
-        spawn_rate4: float = 0.1
+        spawn_rate4: float = 0.1,
 ) -> None:
     """
     传入包含所有初始局面的array，然后按照面板数字和依次生成下一阶段的所有局面。储存轮到系统生成数字时的面板。
     保障其中的每个arr储存的面板的数字和均相等
     """
-    bm = BoardMover()
+
     started, d0, d1 = generate_process(arr_init, pattern_check_func, success_check_func, to_find_func, target, position,
                                        steps, pathname, docheck_step, bm, isfree)
     d0, d1 = final_steps(started, d0, d1, pathname, steps, success_check_func, target, position)
@@ -103,7 +104,7 @@ def generate_free_inits(target: int, t32ks: int, t2s: int) -> np.ndarray[np.uint
     generated = np.unique(generated[:c])
     g2 = np.empty(10810800, dtype=np.uint64)
     c = 0
-    bm = BoardMover()
+    bm = SingletonBoardMover(1)
     for b in generated:
         for nb in bm.move_all_dir(b):
             nb = np.uint64(nb)
@@ -114,6 +115,7 @@ def generate_free_inits(target: int, t32ks: int, t2s: int) -> np.ndarray[np.uint
 
 
 def start_build(pattern: str, target: int, position: int, pathname: str) -> bool:
+    bm = BoardMover()
     spawn_rate4 = SingletonConfig().config['4_spawn_rate']
     if pattern[:4] == 'free':
         if pattern[-1] != 'w':
@@ -123,15 +125,16 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
             arr_init = generate_free_inits(target, 15 - free_tiles, free_tiles)
             gen_lookup_table_big(arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
                                  Calculator.p_min_all_symm, Calculator.min_all_symm, target, 0, steps, pathname,
-                                 docheck_step, isfree=True, spawn_rate4=spawn_rate4)
+                                 docheck_step, bm, isfree=True, spawn_rate4=spawn_rate4)
         else:
+            # freew定式pos参数设为1，配合is_free_success中的设置
             steps = int(2 ** target / 2 + 24)
             docheck_step = int(2 ** target / 2) - 5
             free_tiles = int(pattern[4:-1])
             arr_init = generate_free_inits(0, 16 - free_tiles, free_tiles - 1)
             gen_lookup_table_big(arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
                                  Calculator.p_min_all_symm, Calculator.min_all_symm, target, 1, steps, pathname,
-                                 docheck_step, isfree=True, spawn_rate4=spawn_rate4)
+                                 docheck_step, bm, isfree=True, spawn_rate4=spawn_rate4)
     else:
         steps = int(2 ** target / 2 + {'444': 96, '4431': 64, 'LL': 48, 'L3': 36, '4441': 48, '4432': 48, '4442': 48,
                                        '442': 36, 't': 36, }[pattern])
@@ -154,7 +157,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
             to_find_func, to_find_func1 = Calculator.p_re_self, Calculator.re_self
         isfree = True if pattern in ('4442', '4432', '4441') else False
         gen_lookup_table_big(ini, eval(f'Calculator.is_{pattern}_pattern'), eval(f'Calculator.is_{pattern}_success'),
-                             to_find_func, to_find_func1, target, position, steps, pathname, docheck_step, isfree,
+                             to_find_func, to_find_func1, target, position, steps, pathname, docheck_step, bm, isfree,
                              spawn_rate4)
     return True
 

@@ -1,10 +1,14 @@
+"""
+VBoardMover VBoardMoverWithScore 与 BoardMover.py 中的两个类非常类似，仅有用于生成查找表的函数 merge_line 不同，其他功能和接口均相同
+没有采用将 merge_line 函数作为参数注入以尽可能复用代码的设计，这是因为那会导致 jitclass 编译严重变慢
+也没有采用继承，这是因为 jitclass 不支持继承
+"""
+
 from typing import Tuple
 
 import numpy as np
 from numba import uint64, uint16
 from numba.experimental import jitclass
-
-from Variants.vBoardMover import VBoardMoverWithScore, VBoardMover
 
 
 spec = {
@@ -16,7 +20,7 @@ spec = {
 
 
 @jitclass(spec)
-class BoardMover:
+class VBoardMover:
     def __init__(self):
         self.movel, self.mover, self.moveu, self.moved = self.calculate_all_moves()
         print('BoardMover init')
@@ -122,27 +126,51 @@ class BoardMover:
             self.move_down(board, board2), self.move_right(board), self.move_left(board), self.move_up(board, board2))
 
     @staticmethod
-    def merge_line(line: np.ndarray, reverse: bool = False) -> np.ndarray:
+    def v_merge_line(line: np.ndarray, reverse: bool = False) -> np.ndarray:
+        """32768不可移动与合并"""
         if reverse:
             line = line[::-1]
-        non_zero = [i for i in line if i != 0]  # 去掉所有的0
+
         merged = []
         skip = False
-        for i in range(len(non_zero)):
-            if skip:
-                skip = False
-                continue
-            if i + 1 < len(non_zero) and non_zero[i] == non_zero[i + 1] and non_zero[i] != 32768:
-                merged_value = 2 * non_zero[i]
-                merged.append(merged_value)
-                skip = True
-            else:
-                merged.append(non_zero[i])
 
-        # 补齐剩下的 0
-        merged += [0] * (len(line) - len(merged))
+        segments = []
+        current_segment = [int(x) for x in range(0)]  # define empty list, but instruct that the type is int
+
+        for value in line:
+            if value == 32768:
+                if current_segment:
+                    segments.append(current_segment)
+                segments.append([32768])
+                current_segment = [int(x) for x in range(0)]
+            else:
+                current_segment.append(value)
+
+        if current_segment:
+            segments.append(current_segment)
+
+        for segment in segments:
+            if segment == [32768]:
+                merged.append(32768)
+            else:
+                non_zero = [i for i in segment if i != 0]  # 去掉所有的0
+                temp_merged = []
+                for i in range(len(non_zero)):
+                    if skip:
+                        skip = False
+                        continue
+                    if i + 1 < len(non_zero) and non_zero[i] == non_zero[i + 1] and non_zero[i] != 32768:
+                        merged_value = non_zero[i] * 2
+                        temp_merged.append(merged_value)
+                        skip = True
+                    else:
+                        temp_merged.append(non_zero[i])
+                temp_merged += [0] * (len(segment) - len(temp_merged))
+                merged.extend(temp_merged)
+
         if reverse:
             merged = merged[::-1]
+
         return np.array(merged)
 
     def calculate_all_moves(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -159,11 +187,11 @@ class BoardMover:
             original_line = self.encode_row(line)  # 编码原始行为整数
 
             # 向左移动
-            merged_linel = self.merge_line(line, False)
+            merged_linel = self.v_merge_line(line, False)
             movel[original_line] = np.uint16(self.encode_row(merged_linel) ^ original_line)
 
             # 向右移动
-            merged_liner = self.merge_line(line, True)
+            merged_liner = self.v_merge_line(line, True)
             mover[original_line] = np.uint16(self.encode_row(merged_liner) ^ original_line)
 
         # 使用reverse函数计算向上和向下的移动差值
@@ -194,7 +222,7 @@ spec2 = {
 
 
 @jitclass(spec2)
-class BoardMoverWithScore:
+class VBoardMoverWithScore:
     def __init__(self):
         self.movel, self.mover, self.moveu, self.moved, self.score = self.calculate_all_moves()
         print('BoardMover init')
@@ -305,30 +333,54 @@ class BoardMoverWithScore:
             self.move_left(board)[0], self.move_up(board, board2)[0])
 
     @staticmethod
-    def merge_line_with_score(line: np.ndarray, reverse: bool = False) -> Tuple[np.ndarray, np.uint64]:
+    def v_merge_line_with_score(line: np.ndarray, reverse: bool = False) -> Tuple[np.ndarray, np.uint32]:
+        """32768不可移动与合并"""
         if reverse:
             line = line[::-1]
-        non_zero = [i for i in line if i != 0]  # 去掉所有的0
+
         merged = []
         score = 0
         skip = False
-        for i in range(len(non_zero)):
-            if skip:
-                skip = False
-                continue
-            if i + 1 < len(non_zero) and non_zero[i] == non_zero[i + 1] and non_zero[i] != 32768:
-                merged_value = 2 * non_zero[i]
-                score += merged_value
-                merged.append(merged_value)
-                skip = True
-            else:
-                merged.append(non_zero[i])
 
-        # 补齐剩下的 0
-        merged += [0] * (len(line) - len(merged))
+        segments = []
+        current_segment = [int(x) for x in range(0)]  # define empty list, but instruct that the type is int
+
+        for value in line:
+            if value == 32768:
+                if current_segment:
+                    segments.append(current_segment)
+                segments.append([32768])
+                current_segment = [int(x) for x in range(0)]  # define empty list, but instruct that the type is int
+            else:
+                current_segment.append(value)
+
+        if current_segment:
+            segments.append(current_segment)
+
+        for segment in segments:
+            if segment == [32768]:
+                merged.append(32768)
+            else:
+                non_zero = [i for i in segment if i != 0]  # 去掉所有的0
+                temp_merged = []
+                for i in range(len(non_zero)):
+                    if skip:
+                        skip = False
+                        continue
+                    if i + 1 < len(non_zero) and non_zero[i] == non_zero[i + 1] and non_zero[i] != 32768:
+                        merged_value = non_zero[i] * 2
+                        score += merged_value
+                        temp_merged.append(merged_value)
+                        skip = True
+                    else:
+                        temp_merged.append(non_zero[i])
+                temp_merged += [0] * (len(segment) - len(temp_merged))
+                merged.extend(temp_merged)
+
         if reverse:
             merged = merged[::-1]
-        return np.array(merged), score
+
+        return np.array(merged), np.uint32(score)
 
     def calculate_all_moves(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         # 初始化存储所有可能的行及其移动后结果差值的字典
@@ -344,11 +396,11 @@ class BoardMoverWithScore:
             original_line = self.encode_row(line)  # 编码原始行为整数
 
             # 向左移动
-            merged_linel, s = self.merge_line_with_score(line, False)
+            merged_linel, s = self.v_merge_line_with_score(line, False)
             movel[original_line] = self.encode_row(merged_linel) ^ original_line
 
             # 向右移动
-            merged_liner, s = self.merge_line_with_score(line, True)
+            merged_liner, s = self.v_merge_line_with_score(line, True)
             mover[original_line] = self.encode_row(merged_liner) ^ original_line
 
             score[original_line] = s
@@ -370,52 +422,22 @@ class BoardMoverWithScore:
         return t, len(empty_slots), 15 - i, val
 
 
-class SingletonBoardMover:
-    _bm = None      # 对应 bm_type = 1
-    _bmws = None    # 对应 bm_type = 2
-    _vbm = None     # 对应 bm_type = 3
-    _vbmws = None   # 对应 bm_type = 4
-
-    def __new__(cls, bm_type, *args, **kwargs):
-        if bm_type == 1:
-            if cls._bm is None:
-                cls._bm = BoardMover()
-            return cls._bm
-        elif bm_type == 2:
-            if cls._bmws is None:
-                cls._bmws = BoardMoverWithScore()
-            return cls._bmws
-        elif bm_type == 3:
-            if cls._vbm is None:
-                cls._vbm = VBoardMover()
-            return cls._vbm
-        elif bm_type == 4:
-            if cls._vbmws is None:
-                cls._vbmws = VBoardMoverWithScore()
-            return cls._vbmws
-        else:
-            raise ValueError("Invalid board_mover_type. Expected 1, 2, 3, or 4.")
-
-
 if __name__ == "__main__":
-    b = np.array([[32, 8, 0, 2],
-                  [32, 32, 32, 32],
-                  [64, 16, 4, 16],
-                  [16384, 4096, 0, 4096]])
-    bm = BoardMover()
-    r = bm.move_all_dir(bm.encode_board(b))
-    print(b)
-    for rb, d in zip(r, ('d', 'r', 'l', 'u')):
-        print(d)
-        print(bm.decode_board(rb))
-
-    b = np.array([[32, 8, 0, 2],
-                  [32, 32, 32, 32],
-                  [64, 16, 4, 16],
-                  [16384, 4096, 0, 4096]])
-    bm = BoardMoverWithScore()
-    r = bm.move_all_dir(bm.encode_board(b))
-    print(b)
-    for rb, d in zip(r, ('d', 'r', 'l', 'u')):
-        print(d)
-        print(bm.decode_board(rb))
+    pass
+    # b = np.array([[32, 8, 0, 2],
+    #               [32, 32, 32, 32],
+    #               [64, 32768, 4, 4],
+    #               [32768, 32768, 0, 4096]])
+    # bm = vBoardMover()
+    # r = bm.move_all_dir(bm.encode_board(b))
+    # print(b)
+    # for rb, d in zip(r, ('d', 'r', 'l', 'u')):
+    #     print(d)
+    #     print(bm.decode_board(rb))
+    #
+    # bm = vBoardMoverWithScore()
+    # r = bm.move_all_dir(bm.encode_board(b))
+    # print(b)
+    # for rb, d in zip(r, ('d', 'r', 'l', 'u')):
+    #     print(d)
+    #     print(bm.decode_board(rb))

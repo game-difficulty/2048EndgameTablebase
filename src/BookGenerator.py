@@ -5,6 +5,7 @@ import time
 from ctypes import c_uint64, c_size_t, POINTER
 from typing import Callable, Tuple, List
 import concurrent.futures
+import traceback
 
 import numpy as np
 from numba import njit, prange
@@ -19,17 +20,59 @@ ToFindFunc = Callable[[np.ndarray[np.uint64]], None]
 ToFindFunc1 = Callable[[np.uint64], np.uint64]
 
 
-# current_dir = os.path.dirname(__file__)
-# dll_path = os.path.join(current_dir, "psort", "para_qsort", "para_qsort.dll")
-# 加载DLL
-dll = ctypes.CDLL(r"_internal/para_qsort.dll")
-
-# 声明parallel_sort函数原型
-dll.parallel_sort.argtypes = (POINTER(c_uint64), c_size_t, POINTER(c_uint64), ctypes.c_bool)
-dll.parallel_sort.restype = None
-
 logger = Config.logger
-use_avx = SingletonConfig.use_avx
+use_avx = SingletonConfig().use_avx
+
+
+def initialize_sorting_library():
+    global use_avx
+    _dll = None
+    try:
+        # current_dir = os.path.dirname(__file__)
+        # dll_path = os.path.join(current_dir, "psort", "para_qsort", "para_qsort.dll")
+        dll_path = r"_internal/para_qsort.dll"
+        if not os.path.exists(dll_path):
+            raise FileNotFoundError(f"para_qsort.dll not found.")
+
+        # 加载DLL
+        _dll = ctypes.CDLL(dll_path)
+
+        # 声明parallel_sort函数原型
+        _dll.parallel_sort.argtypes = (POINTER(c_uint64), c_size_t, POINTER(c_uint64), ctypes.c_bool)
+        _dll.parallel_sort.restype = None
+
+        # 测试排序操作
+        _arr = np.random.randint(0, 1 << 64, 1000, dtype=np.uint64)
+        _pivots = np.array([2 ** 61, 2 ** 62, 2 ** 61 * 3, 2 ** 63, 2 ** 61 * 5, 2 ** 62 * 3, 2 ** 61 * 7],
+                           dtype=np.uint64)
+
+        _arr_ptr = _arr.ctypes.data_as(POINTER(c_uint64))
+        _pivots_ptr = (c_uint64 * 7)(*_pivots)
+        _use_avx512 = True if use_avx == 2 else False
+
+        # 调用DLL中的parallel_sort函数进行测试排序
+        _dll.parallel_sort(_arr_ptr, _arr.size, _pivots_ptr, _use_avx512)
+
+        # 验证排序结果是否正确
+        if not np.all(_arr[:-1] <= _arr[1:]):
+            raise ValueError("DLL sorting failed, results are not sorted correctly")
+        else:
+            if _use_avx512:
+                logger.info("Sorting successful using AVX512.")
+            else:
+                logger.info("Sorting successful using AVX2.")
+
+    except Exception as e:
+        # 如果加载DLL或排序出错，禁用AVX并记录日志
+        logger.warning(f"Failed to load DLL or test sorting failed: {e}. Falling back to numpy sort.")
+        logger.warning(traceback.format_exc())  # 输出完整的异常堆栈
+        use_avx = False
+
+    return _dll
+
+
+# 在模块加载时执行初始化函数
+dll = initialize_sorting_library()
 
 
 @njit(nogil=True)
@@ -139,10 +182,11 @@ def gen_boards_big(step: int,
         arr1t, arr2t, percents = gen_boards(arr0t, target, position, bm, pattern_check_func, success_check_func,
                                             to_find_func, scaled_seg, n, length_factor, do_check, isfree)
 
-        logger.debug(f'Actual multiplier {round(len(arr1t) / len(arr0t), 2)}, Predicted {round(length_factor, 2)}')
+        if len(arr0t) > 0:
+            logger.debug(f'Actual multiplier {round(len(arr1t) / len(arr0t), 2)}, Predicted {round(length_factor, 2)}')
 
         actual_lengths[(seg_index * n): ((seg_index + 1) * n)] = percents * len(arr1t)
-        length_factors_list[seg_index] = length_factors[1:] + [len(arr1t) / len(arr0t)]
+        length_factors_list[seg_index] = length_factors[1:] + [len(arr1t) / (1 + len(arr0t))]
 
         gen_time += time.time() - t_
 
@@ -179,9 +223,10 @@ def gen_boards_big(step: int,
 
     t3 = time.time()
 
-    logger.debug(f'step {step} (big) generated: {round(len(arr0) / (t3 - t0) / 1e6, 2)} mbps')
-    logger.debug(f'generate/sort/deduplicate: {round(gen_time / (t3 - t0), 2)}/'
-                 f'{round((t2 - t0 - gen_time) / (t3 - t0), 2)}/{round((t3 - t2) / (t3 - t0), 2)}\n')
+    if t3 > t0:
+        logger.debug(f'step {step} (big) generated: {round(len(arr0) / (t3 - t0) / 1e6, 2)} mbps')
+        logger.debug(f'generate/sort/deduplicate: {round(gen_time / (t3 - t0), 2)}/'
+                     f'{round((t2 - t0 - gen_time) / (t3 - t0), 2)}/{round((t3 - t2) / (t3 - t0), 2)}\n')
 
     return arr1, arr2, pivots_list, seg_list, length_factors_list
 
@@ -283,8 +328,8 @@ def generate_process(
         if len(d0) < segment_size:
             t0 = time.time()
 
-            if len(d0) < 10000:
-                # 数组较小的应用简单方法
+            if len(d0) < 10000 or arr_init[0] in (np.uint64(0xffff00000000ffff), np.uint64(0x000f000f000fffff)):
+                # 数组较小(或2x4，3x3)的应用简单方法
                 d1t, d2 = gen_boards_simple(d0, target, position, bm, pattern_check_func, success_check_func,
                                             to_find_func, i > docheck_step, isfree)
             else:
@@ -302,9 +347,10 @@ def generate_process(
                 seg = update_seg(seg, percents, 0.4)
                 seg_list = seg
 
-            logger.debug(f'Actual multiplier {round(len(d1t) / len(d0), 2)}, Predicted {round(length_factor, 2)}')
+            if len(d0) > 0:
+                logger.debug(f'Actual multiplier {round(len(d1t) / len(d0), 2)}, Predicted {round(length_factor, 2)}')
             # 更新数组长度乘数
-            length_factors = length_factors[1:] + [len(d1t) / len(d0)]
+            length_factors = length_factors[1:] + [len(d1t) / (1 + len(d0))]
             length_factors_list = [length_factors]
             t1 = time.time()
 

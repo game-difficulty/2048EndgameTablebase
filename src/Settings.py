@@ -5,6 +5,7 @@ import numpy as np
 from PyQt5 import QtCore, QtWidgets, QtGui
 
 from BookBuilder import start_build
+from Variants.vBookBuilder import v_start_build
 from Config import SingletonConfig
 
 
@@ -33,11 +34,11 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.setObjectName("selfLayout")
 
         self.pattern_text = QtWidgets.QLabel(self.centralwidget)
-        self.pattern_text.setObjectName("colorset_text")
+        self.pattern_text.setObjectName("pattern_text")
         self.pattern_text.setStyleSheet("font: 500 12pt \"Cambria\";")
         self.selfLayout.addWidget(self.pattern_text, 0, 0, 1, 1)
         self.filepath_text = QtWidgets.QLabel(self.centralwidget)
-        self.filepath_text.setObjectName("colorset_text")
+        self.filepath_text.setObjectName("filepath_text")
         self.filepath_text.setStyleSheet("font: 500 12pt \"Cambria\";")
         self.selfLayout.addWidget(self.filepath_text, 1, 0, 1, 1)
         self.filepath_edit = QtWidgets.QTextEdit(self.centralwidget)
@@ -56,11 +57,11 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.pattern_combo = QtWidgets.QComboBox(self.centralwidget)
         self.pattern_combo.setObjectName("pattern_combo")
         for i in ["444", "4431", "LL", "L3", "t", "442", "free8", "free9", "free10", "4441", "4432", "4442", "free8w",
-                  "free9w", "free10w", "free11w"]:
+                  "free9w", "free10w", "free11w", '2x4', '3x3', '3x4']:
             self.pattern_combo.addItem(i)
         self.selfLayout.addWidget(self.pattern_combo, 0, 1, 1, 1)
         self.pos_combo = QtWidgets.QComboBox(self.centralwidget)
-        self.pos_combo.setObjectName("target_combo")
+        self.pos_combo.setObjectName("pos_combo")
         for i in ["0", "1", "2"]:
             self.pos_combo.addItem(i)
         self.selfLayout.addWidget(self.pos_combo, 0, 3, 1, 1)
@@ -168,7 +169,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.tile_font_size_box.setTickPosition(QtWidgets.QSlider.TicksBelow)
         self.tile_font_size_box.setTickInterval(5)
         self.tile_font_size_box.valueChanged.connect(self.font_size_changed)  # type: ignore
-        self.tile_font_size_box.setObjectName("demo_speed_box")
+        self.tile_font_size_box.setObjectName("tile_font_size_box")
         self.selfLayout.addWidget(self.tile_font_size_box, 10, 1, 1, 3)
 
         self.PageLayout.addLayout(self.selfLayout)
@@ -254,7 +255,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
                 ptn = pattern + '_' + target
                 config['filepath_map'][ptn] = pathname
                 pathname = os.path.join(pathname, ptn + '_')
-            target = np.log2(int(target))
+            target = int(np.log2(int(target)))
             position = int(position)
             self.build_bt.setText('Building...')
             self.build_bt.setEnabled(False)
@@ -300,7 +301,10 @@ class BuildThread(QtCore.QThread):
         self.pathname = pathname
 
     def run(self):
-        start_build(self.pattern, self.target, self.position, self.pathname)
+        if self.pattern not in ('2x4', '3x3', '3x4'):
+            start_build(self.pattern, self.target, self.position, self.pathname)
+        else:
+            v_start_build(self.pattern, self.target, self.position, self.pathname)
         self.finished.emit()
 
 
