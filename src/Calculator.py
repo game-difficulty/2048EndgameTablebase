@@ -231,7 +231,7 @@ def is_4441_pattern(encoded_board):
 
 @njit(nogil=True)
 def is_4441_success(encoded_board, target, _):
-    for pos in (16, 20,):
+    for pos in (12, 16, 20,):
         if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
             return True
     return False
