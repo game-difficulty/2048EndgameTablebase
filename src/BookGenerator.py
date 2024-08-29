@@ -27,9 +27,9 @@ def initialize_sorting_library():
     global use_avx
     _dll = None
     try:
-        current_dir = os.path.dirname(__file__)
-        dll_path = os.path.join(current_dir, "psort", "para_qsort", "para_qsort.dll")
-        # dll_path = r"_internal/para_qsort.dll"
+        # current_dir = os.path.dirname(__file__)
+        # dll_path = os.path.join(current_dir, "psort", "para_qsort", "para_qsort.dll")
+        dll_path = r"_internal/para_qsort.dll"
         if not os.path.exists(dll_path):
             raise FileNotFoundError(f"para_qsort.dll not found.")
 
