@@ -257,7 +257,7 @@ def is_movingLL_pattern(encoded_board):
                     np.uint64(0xff00ff000000000), np.uint64(0xff00ff0000000000)):
         if (np.uint64(encoded_board) & pattern) == pattern:
             return True
-        return False
+    return False
 
 
 @njit(nogil=True)
