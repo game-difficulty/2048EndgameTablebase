@@ -312,7 +312,7 @@ def generate_process(
     # 实际分段情况
     percents = np.array([1/n for _ in range(n)])
     # 预分配的储存局面的数组长度乘数
-    length_factor = 6
+    length_factor = 10
     # 前几层的实际数组长度乘数，用于预测
     length_factors: List[float] = [length_factor, length_factor, length_factor]
     length_factors_list: List[List[float]] = [length_factors]
@@ -347,8 +347,9 @@ def generate_process(
         if len(d0) < segment_size:
             t0 = time.time()
 
-            if len(d0) < 100000 or arr_init[0] in (np.uint64(0xffff00000000ffff), np.uint64(0x000f000f000fffff)):
-                # 数组较小(或2x4，3x3)的应用简单方法
+            if len(d0) < 100000 or arr_init[0] in (np.uint64(0xffff00000000ffff), np.uint64(0x000f000f000fffff)) or \
+                    (10 in length_factors):
+                # 数组较小(或2x4，3x3或断点重连)的应用简单方法
                 d1t, d2 = gen_boards_simple(d0, target, position, bm, pattern_check_func, success_check_func,
                                             to_find_func, i > docheck_step, isfree)
             else:
@@ -356,6 +357,8 @@ def generate_process(
                 length_factor = predict_next_length_factor_quadratic(length_factors)
                 length_factor *= 1.8 if isfree else 1.5
                 length_factor *= max(percents) / np.mean(percents)
+                if np.all(percents == np.array([1/n for _ in range(n)])):  # 第一次使用gen_boards,没有分组经验，分组不平均
+                    length_factor *= 2
 
                 d1t, d2, percents = \
                     gen_boards(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func, seg,
@@ -366,7 +369,7 @@ def generate_process(
                     logger.critical(
                         f"length multiplier {length_factor:4f}, actual multiplier {(len(d2) / len(d0)):4f}"
                         f"percents {np.round(percents, 3)}")
-                    raise IndexError(f"The length multiplier is not big enough. Please restart.")
+                    raise IndexError(f"The length multiplier is not big enough. Please restart Or contact the author.")
                 # 根据上一层实际分段情况调整下一层分段间隔
                 logger.debug('Segmentation_pr ' + repr(np.round(seg, 3)))
                 logger.debug('Segmentation_ac ' + repr(np.round(percents, 3)))
