@@ -6,6 +6,10 @@ from PyQt5 import QtCore, QtWidgets, QtGui
 
 from BoardMover import SingletonBoardMover
 from BookReader import BookReader
+import Config
+
+
+logger = Config.logger
 
 
 class Analyzer:
@@ -30,7 +34,12 @@ class Analyzer:
         '2x4': 0,
         '3x3': 0,
         '3x4': 0,
-    }
+        "3433": 3,
+        "3442": 3,
+        "3432": 4,
+        "2433": 4,
+        "movingLL": 4,
+        }
 
     def __init__(self, file_path: str, pattern: str, target: int, full_pattern: str, target_path: str, position: str):
         self.full_pattern = full_pattern
@@ -80,13 +89,32 @@ class Analyzer:
         replay_text = replay_text[header:]
         self.record_list: np.ndarray = np.empty(len(replay_text) - 2, dtype='uint64,uint8')
 
-        PGN_map = ' !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}' \
-                  '~ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜø£Ø×ƒá'
+        PGN_map_dict = {
+            ' ': 0, '!': 1, '"': 2, '#': 3, '$': 4, '%': 5, '&': 6, "'": 7, '(': 8, ')': 9, '*': 10,
+            '+': 11, ',': 12, '-': 13, '.': 14, '/': 15, '0': 16, '1': 17, '2': 18, '3': 19, '4': 20,
+            '5': 21, '6': 22, '7': 23, '8': 24, '9': 25, ':': 26, ';': 27, '<': 28, '=': 29, '>': 30,
+            '?': 31, '@': 32, 'A': 33, 'B': 34, 'C': 35, 'D': 36, 'E': 37, 'F': 38, 'G': 39, 'H': 40,
+            'I': 41, 'J': 42, 'K': 43, 'L': 44, 'M': 45, 'N': 46, 'O': 47, 'P': 48, 'Q': 49, 'R': 50,
+            'S': 51, 'T': 52, 'U': 53, 'V': 54, 'W': 55, 'X': 56, 'Y': 57, 'Z': 58, '[': 59, '\\': 60,
+            ']': 61, '^': 62, '_': 63, '`': 64, 'a': 65, 'b': 66, 'c': 67, 'd': 68, 'e': 69, 'f': 70,
+            'g': 71, 'h': 72, 'i': 73, 'j': 74, 'k': 75, 'l': 76, 'm': 77, 'n': 78, 'o': 79, 'p': 80,
+            'q': 81, 'r': 82, 's': 83, 't': 84, 'u': 85, 'v': 86, 'w': 87, 'x': 88, 'y': 89, 'z': 90,
+            '{': 91, '|': 92, '}': 93, '~': 94, 'Ç': 95, 'ü': 96, 'é': 97, 'â': 98, 'ä': 99, 'à': 100,
+            'å': 101, 'ç': 102, 'ê': 103, 'ë': 104, 'è': 105, 'ï': 106, 'î': 107, 'ì': 108, 'Ä': 109,
+            'Å': 110, 'É': 111, 'æ': 112, 'Æ': 113, 'ô': 114, 'ö': 115, 'ò': 116, 'û': 117, 'ù': 118,
+            'ÿ': 119, 'Ö': 120, 'Ü': 121, 'ø': 122, '£': 123, 'Ø': 124, '×': 125, 'ƒ': 126, 'á': 127
+        }
         move_map = [3, 2, 4, 1]
         moves_made = 0
 
         for i in replay_text:
-            index_i = PGN_map.index(i)
+            try:
+                index_i = PGN_map_dict[i]
+            except KeyError:
+                index_i = 0
+                logger.warning(f"Character '{i}' not found in PGN_map_dict, defaulting to index 0."
+                               f"May cause errors in analysis.")
+
             replay_tile = ((index_i >> 4) & 1) + 1
             replay_move = move_map[index_i >> 5]
             replay_position = total_space - ((index_i & 3) << 2) - ((index_i & 15) >> 2)
@@ -192,6 +220,9 @@ class Analyzer:
             return False
 
         self.step_count += 1
+        # 残局一开始的局面小概率不在tables中，故不分析
+        if self.step_count < 5:
+            return True
 
         if move == best_move.capitalize() or self.result[move.lower()] == 1:
             self.combo += 1
@@ -325,8 +356,9 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.target_combo, 0, 2, 1, 1)
         self.pattern_combo = QtWidgets.QComboBox(self.centralwidget)
         self.pattern_combo.setObjectName("pattern_combo")
-        for i in ["444", "4431", "LL", "L3", "t", "442", "free8", "free9", "free10", "4441", "4432", "4442", "free8w",
-                  "free9w", "free10w", "free11w", '2x4', '3x3', '3x4']:
+        for i in ["444", "4431", "LL", "L3", "t", "442", "free8", "free9", "free10", "4441", "4432", "4442",
+                  "3433", "3442", "3432", "2433", "movingLL",
+                  "free8w", "free9w", "free10w", "free11w", '2x4', '3x3', '3x4']:
             self.pattern_combo.addItem(i)
         self.selfLayout.addWidget(self.pattern_combo, 0, 1, 1, 1)
         self.pos_combo = QtWidgets.QComboBox(self.centralwidget)

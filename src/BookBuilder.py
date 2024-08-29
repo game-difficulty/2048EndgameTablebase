@@ -120,7 +120,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
     if pattern[:4] == 'free':
         if pattern[-1] != 'w':
             steps = int(2 ** target / 2 + 24)
-            docheck_step = int(2 ** target / 2) - 5
+            docheck_step = int(2 ** target / 2) - 20
             free_tiles = int(pattern[4:])
             arr_init = generate_free_inits(target, 15 - free_tiles, free_tiles)
             gen_lookup_table_big(arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
@@ -129,7 +129,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
         else:
             # freew定式pos参数设为1，配合is_free_success中的设置
             steps = int(2 ** target / 2 + 24)
-            docheck_step = int(2 ** target / 2) - 5
+            docheck_step = int(2 ** target / 2) - 20
             free_tiles = int(pattern[4:-1])
             arr_init = generate_free_inits(0, 16 - free_tiles, free_tiles - 1)
             gen_lookup_table_big(arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
@@ -137,7 +137,8 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
                                  docheck_step, bm, isfree=True, spawn_rate4=spawn_rate4)
     else:
         steps = int(2 ** target / 2 + {'444': 96, '4431': 64, 'LL': 48, 'L3': 36, '4441': 48, '4432': 48, '4442': 48,
-                                       '442': 36, 't': 36, }[pattern])
+                                       '442': 36, 't': 36,
+                                       "3433": 48, "3442": 48, "3432": 48, "2433": 48, "movingLL": 48}[pattern])
         docheck_step = int(2 ** target / 2) - 16
         inits = {
             '444': np.array([np.uint64(0x100000000000ffff), np.uint64(0x000000010000ffff)], dtype=np.uint64),
@@ -149,13 +150,20 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
             '4442': np.array([np.uint64(0x00001000123424ff), np.uint64(0x00010000123424ff)], dtype=np.uint64),
             '442': np.array([np.uint64(0x1000000012ffffff), np.uint64(0x0000000112ffffff)], dtype=np.uint64),
             't': np.array([np.uint64(0x10000000f1fff2ff), np.uint64(0x00000001f1fff2ff)], dtype=np.uint64),
+            "3433": np.array([np.uint64(0x100000000000f2ff), np.uint64(0x000000000001f2ff)], dtype=np.uint64),
+            "3442": np.array([np.uint64(0x10000000000ff21f), np.uint64(0x00000000100ff21f)], dtype=np.uint64),
+            "3432": np.array([np.uint64(0x10000000000ff2ff), np.uint64(0x00000000100ff2ff)], dtype=np.uint64),
+            "2433": np.array([np.uint64(0x10000000f000f2ff), np.uint64(0x00000000f001f2ff)], dtype=np.uint64),
+            "movingLL": np.array([np.uint64(0x100000001ff12ff2), np.uint64(0x1000000012ff21ff)], dtype=np.uint64),
         }
         ini = inits[pattern]
         if ((pattern == 'LL') and (position == 0)) or (pattern == '4432'):
             to_find_func, to_find_func1 = Calculator.p_minUL, Calculator.minUL
+        elif pattern == 'movingLL':
+            to_find_func, to_find_func1 = Calculator.p_min_all_symm, Calculator.min_all_symm
         else:
             to_find_func, to_find_func1 = Calculator.p_re_self, Calculator.re_self
-        isfree = True if pattern in ('4442', '4432', '4441') else False
+        isfree = True if pattern in ('4442', '4432', '4441', "3433", "3442", "3432", "movingLL") else False
         gen_lookup_table_big(ini, eval(f'Calculator.is_{pattern}_pattern'), eval(f'Calculator.is_{pattern}_success'),
                              to_find_func, to_find_func1, target, position, steps, pathname, docheck_step, bm, isfree,
                              spawn_rate4)
@@ -164,73 +172,3 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
 
 if __name__ == "__main__":
     pass
-    # bm = BoardMover()
-    #
-    # from Calculator import is_4432_pattern, is_4432_success, p_minUL, minUL
-    # import time
-    #
-    # # 生成阶段
-    # arr = np.fromfile(r"C:\Users\ThinkPad\Desktop\新建文件夹\4432_128_46", dtype='uint64')
-    #
-    # # 预热
-    # arr1, arr2 = gen_boards(arr[:10], 10, 0, bm, is_4432_pattern, is_4432_success, p_minUL, False, False)
-    # arr1 = concatenate(arr1)
-    # arr2 = concatenate(arr2)
-    # arr1, arr2 = p_unique([arr1, arr2])
-    # del arr1, arr2
-    # arr1, arr2 = gen_boards(arr[:20], 10, 0, bm, is_4432_pattern, is_4432_success, p_minUL, False, False)
-    # arr1 = concatenate(arr1)
-    # arr2 = concatenate(arr2)
-    # arr1, arr2 = p_unique([arr1, arr2])
-    # del arr1, arr2
-    #
-    # # 生成
-    # t0 = time.time()
-    # arr1, arr2 = gen_boards(arr, 10, 0, bm, is_4432_pattern, is_4432_success, p_minUL, False, False)
-    # arr1 = concatenate(arr1)
-    # arr2 = concatenate(arr2)
-    # t1 = time.time()
-    # print(t1 - t0, len(arr), len(arr1), len(arr2))
-    #
-    # # 排序
-    # pivots = arr[[len(arr) // 8 * i for i in range(1, 8)]]
-    # sort_array(arr1, pivots)
-    # sort_array(arr2, pivots)
-    # print(time.time() - t1)
-    #
-    # # 去重
-    # arr1, arr2 = p_unique([arr1, arr2])
-    # t3 = time.time()
-    # print(t3 - t1, len(arr), len(arr1), len(arr2))
-    # print(t3 - t0)
-
-    # 回算阶段
-
-    # arr0 = np.fromfile(r"D:\2048calculates\test\LL_1024_0_459", dtype='uint64')
-    # arr1 = np.fromfile(r"D:\2048calculates\test\LL_1024_0_460.book", dtype='uint64,uint32')
-    # arr2 = np.fromfile(r"D:\2048calculates\test\LL_1024_0_461.book", dtype='uint64,uint32')
-    #
-    # # 预热
-    # arr_ = expand(arr0[:10])
-    # arr_ = recalculate(arr_, arr1, arr2, 10, 0, bm, is_LL_pattern, is_LL_success, minUL)
-    # remove_zeros_inplace(arr_)
-    # arr_ = expand(arr0[:20])
-    # arr_ = recalculate(arr_, arr1, arr2, 10, 0, bm, is_LL_pattern, is_LL_success, minUL)
-    # remove_zeros_inplace(arr_)
-    #
-    # # 扩充
-    # t0 = time.time()
-    # arr0 = expand(arr0)
-    # t1 = time.time()
-    # print(t1 - t0, len(arr0), len(arr1), len(arr2))
-    #
-    # # 回算
-    # arr0 = recalculate(arr0, arr1, arr2, 10, 0, bm, is_LL_pattern, is_LL_success, minUL)
-    # t3 = time.time()
-    # print(t3 - t1)
-    #
-    # # 清理
-    # arr0 = remove_zeros_inplace(arr0)
-    # t4 = time.time()
-    # print(t4 - t3, len(arr0))
-    # print(t4 - t0)

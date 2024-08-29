@@ -289,8 +289,9 @@ class TrainWindow(QtWidgets.QMainWindow):
 
         self.menu_ptn = QtWidgets.QMenu(self.menubar)
         self.menu_ptn.setObjectName("menuMENU")
-        for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", '4442', 'free8', 'free9', 'free10', 'free8w',
-                    'free9w', 'free10w', "free11w", '2x4', '3x3', '3x4']:
+        for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", '4442', 'free8', 'free9', 'free10',
+                    "3433", "3442", "3432", "2433", "movingLL",
+                    'free8w', 'free9w', 'free10w', "free11w", '2x4', '3x3', '3x4']:
             m = QtWidgets.QAction(ptn, self)
             m.triggered.connect(lambda: self.menu_selected(0))  # type: ignore
             self.menu_ptn.addAction(m)
@@ -387,14 +388,9 @@ class TrainWindow(QtWidgets.QMainWindow):
                 self.gameframe.set_to_44()
 
             self.filepath.setText(SingletonConfig().config['filepath_map'].get(self.current_pattern, ''))
+            self.handle_set_default()
             self.show_results()
             self.pattern_text.setText(self.current_pattern)
-
-            self.gameframe.score = 0
-            self.gameframe.history = []
-            self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
-            self.played_length = 0
-            self.record_loaded = None
 
     def tiles_bt_on_click(self):
         sender = self.sender()

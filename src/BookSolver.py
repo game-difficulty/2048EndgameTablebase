@@ -149,13 +149,15 @@ def create_index(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)]
     根据uint64数据的前24位的分段位置创建一个索引，长度16777216+1
     """
     n = 16777217
-    ind1 = np.zeros(n, dtype='uint32')
+    ind1: np.ndarray = np.full(n, 0xffffffff, dtype='uint32')
+    header = arr[0][0] >> np.uint32(40)
+    ind1[header] = 0
+
     for i in prange(1, len(arr)):
         header = arr[i][0] >> np.uint32(40)
         header_pre = arr[i - 1][0] >> np.uint32(40)
         if header != header_pre:
             ind1[header] = i
-
     # 向前填充
     num_threads = 8
     segment_size = (n + num_threads - 1) // num_threads
@@ -171,7 +173,7 @@ def create_index(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)]
         # 初始化 last_value 为段末尾的第一个非零值
         last_value = len(arr)
         for j in range(end - 1, start - 1, -1):
-            if ind1[j] != 0:
+            if ind1[j] != 0xffffffff:
                 last_value = ind1[j]
             else:
                 ind1[j] = last_value

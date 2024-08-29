@@ -231,7 +231,7 @@ def is_4441_pattern(encoded_board):
 
 @njit(nogil=True)
 def is_4441_success(encoded_board, target, _):
-    for pos in (16,):
+    for pos in (16, 20,):
         if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
             return True
     return False
@@ -245,6 +245,78 @@ def is_4432_pattern(encoded_board):
 @njit(nogil=True)
 def is_4432_success(encoded_board, target, _):
     for pos in (20,):
+        if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
+            return True
+    return False
+
+
+@njit(nogil=True)
+def is_movingLL_pattern(encoded_board):
+    for pattern in (np.uint64(0xff00ff), np.uint64(0xff00ff0), np.uint64(0xff00ff00), np.uint64(0xff00ff0000),
+                    np.uint64(0xff00ff00000), np.uint64(0xff00ff000000), np.uint64(0xff00ff00000000),
+                    np.uint64(0xff00ff000000000), np.uint64(0xff00ff0000000000)):
+        if (np.uint64(encoded_board) & pattern) == pattern:
+            return True
+        return False
+
+
+@njit(nogil=True)
+def is_movingLL_success(encoded_board, target, _):
+    for pos in (0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48):
+        if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
+            return True
+    return False
+
+
+@njit(nogil=True)
+def is_3433_pattern(encoded_board):
+    return (np.uint64(encoded_board) & np.uint64(0xf0ff)) == np.uint64(0xf0ff)
+
+
+@njit(nogil=True)
+def is_3433_success(encoded_board, target, _):
+    for pos in (8, 16, 20, 28):
+        if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
+            return True
+    return False
+
+
+@njit(nogil=True)
+def is_3442_pattern(encoded_board):
+    return (np.uint64(encoded_board) & np.uint64(0xff00f)) == np.uint64(0xff00f)
+
+
+@njit(nogil=True)
+def is_3442_success(encoded_board, target, _):
+    for pos in (4, 8, 28, 32):
+        if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
+            return True
+    return False
+
+
+@njit(nogil=True)
+def is_3432_pattern(encoded_board):
+    return (np.uint64(encoded_board) & np.uint64(0xff0ff)) == np.uint64(0xff0ff) or \
+        (np.uint64(encoded_board) & np.uint64(0xf00f00ff)) == np.uint64(0xf00f00ff) or \
+        (np.uint64(encoded_board) & np.uint64(0xf00000f00ff)) == np.uint64(0xf00000f00ff) or \
+        (np.uint64(encoded_board) & np.uint64(0xf0000000000f00ff)) == np.uint64(0xf0000000000f00ff)
+
+
+@njit(nogil=True)
+def is_3432_success(encoded_board, target, _):
+    return (np.uint64(encoded_board) >> np.uint64(8) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(20) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(28) & np.uint64(0xf)) == np.uint64(target)
+
+
+@njit(nogil=True)
+def is_2433_pattern(encoded_board):
+    return (np.uint64(encoded_board) & np.uint64(0xf000f0ff)) == np.uint64(0xf000f0ff)
+
+
+@njit(nogil=True)
+def is_2433_success(encoded_board, target, _):
+    for pos in (8, 16, 20, 44):
         if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
             return True
     return False

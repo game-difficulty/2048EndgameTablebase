@@ -8,7 +8,8 @@ from BoardMover import SingletonBoardMover, BoardMoverWithScore
 from Config import SingletonConfig
 from TrieCompressor import trie_decompress_search
 from Calculator import min_all_symm, minUL, re_self, is_L3_pattern, is_4431_pattern, is_444_pattern, is_free_pattern, \
-    is_LL_pattern, is_4432_pattern, is_4441_pattern, is_442_pattern, is_t_pattern, is_4442_pattern
+    is_LL_pattern, is_4432_pattern, is_4441_pattern, is_442_pattern, is_t_pattern, is_4442_pattern, \
+    is_movingLL_pattern, is_3433_pattern, is_2433_pattern, is_3432_pattern, is_3442_pattern
 from Variants.vCalculator import is_variant_pattern, min24, min34, min33
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -41,6 +42,11 @@ class BookReader:
         '2x4': [-262144, is_variant_pattern, min24],
         '3x3': [-229376, is_variant_pattern, min33],
         '3x4': [-131072, is_variant_pattern, min34],
+        "3433": [-98304 - 6, is_3433_pattern, re_self],
+        "3442": [-98304 - 8, is_3442_pattern, re_self],
+        "3432": [-131072 - 6, is_3432_pattern, re_self],
+        "2433": [-131072 - 6, is_2433_pattern, re_self],
+        "movingLL": [-131072 - 14, is_movingLL_pattern, min_all_symm],
     }
 
     @staticmethod
@@ -200,9 +206,9 @@ class BookReader:
 
 
 if __name__ == "__main__":
-    _result = BookReader.move_on_dic(np.array([[2, 0, 4, 0],
-                                               [8, 0, 8, 0],
-                                               [16, 64, 32768, 32768],
-                                               [32768, 32768, 32768, 32768]]),
-                                     '442', '512', '442_512')
+    _result = BookReader.move_on_dic(np.array([[2, 4, 0, 2],
+                                               [4, 8, 4, 4],
+                                               [512, 16, 1024, 32768],
+                                               [32768, 128, 32768, 32768]]),
+                                     '3432', '2048', '3432_2048')
     print(_result)

@@ -19,7 +19,6 @@ SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
 ToFindFunc = Callable[[np.ndarray[np.uint64]], None]
 ToFindFunc1 = Callable[[np.uint64], np.uint64]
 
-
 logger = Config.logger
 use_avx = SingletonConfig().use_avx
 
@@ -28,9 +27,9 @@ def initialize_sorting_library():
     global use_avx
     _dll = None
     try:
-        # current_dir = os.path.dirname(__file__)
-        # dll_path = os.path.join(current_dir, "psort", "para_qsort", "para_qsort.dll")
-        dll_path = r"_internal/para_qsort.dll"
+        current_dir = os.path.dirname(__file__)
+        dll_path = os.path.join(current_dir, "psort", "para_qsort", "para_qsort.dll")
+        # dll_path = r"_internal/para_qsort.dll"
         if not os.path.exists(dll_path):
             raise FileNotFoundError(f"para_qsort.dll not found.")
 
@@ -117,6 +116,17 @@ def unique_parallel_inplace(arr: np.ndarray[np.uint64]) -> np.ndarray[np.uint64]
     return arr[:final_end]
 
 
+@njit(nogil=True)
+def largest_power_of_2(n):
+    n |= n >> 1
+    n |= n >> 2
+    n |= n >> 4
+    n |= n >> 8
+    n |= n >> 16
+    n |= n >> 32
+    return n + 1
+
+
 @njit(nogil=True, parallel=True)
 def p_unique(arrs: List[np.ndarray[np.uint64]]
              ) -> List[np.ndarray[np.uint64]]:
@@ -182,18 +192,25 @@ def gen_boards_big(step: int,
         arr1t, arr2t, percents = gen_boards(arr0t, target, position, bm, pattern_check_func, success_check_func,
                                             to_find_func, scaled_seg, n, length_factor, do_check, isfree)
 
+        if len(arr0t) > 0 and len(arr2t) > 0 and \
+                max(percents) / np.mean(percents) >= length_factor / (len(arr2t) / len(arr0t)):
+            logger.critical(f"length multiplier {length_factor:4f}, actual multiplier {(len(arr2t) / len(arr0t)):4f}"
+                            f"percents {np.round(percents, 3)}")
+            raise IndexError(f"The length multiplier is not big enough. Please restart.")
+
         if len(arr0t) > 0:
-            logger.debug(f'Actual multiplier {round(len(arr1t) / len(arr0t), 2)}, Predicted {round(length_factor, 2)}')
+            logger.debug(f'Actual multiplier {round(len(arr2t) / len(arr0t), 2)}, Predicted {round(length_factor, 2)}')
 
         actual_lengths[(seg_index * n): ((seg_index + 1) * n)] = percents * len(arr1t)
-        length_factors_list[seg_index] = length_factors[1:] + [len(arr1t) / (1 + len(arr0t))]
+        length_factors_list[seg_index] = length_factors[1:] + [len(arr2t) / (1 + len(arr0t))]
 
         gen_time += time.time() - t_
 
         pivots = pivots_list[seg_index]
         sort_array(arr1t, pivots)
         sort_array(arr2t, pivots)
-        pivots_list[seg_index] = arr2t[[len(arr2t) // 8 * i for i in range(1, 8)]]
+        pivots_list[seg_index] = arr2t[[len(arr2t) // 8 * i for i in range(1, 8)]] if len(arr2t) > 0 else \
+            pivots_list[0].copy()
 
         arr1t, arr2t = p_unique([arr1t, arr2t])
         arr1s.append(arr1t.copy())  # 原地unique返回的是切片，不会释放数组后半部分占用的内存，这里需要复制
@@ -206,7 +223,7 @@ def gen_boards_big(step: int,
     percents = actual_lengths / actual_lengths.sum()
     logger.debug('Segmentation_pr ' + repr(np.round(seg_list, 3)))
     logger.debug('Segmentation_ac ' + repr(np.round(percents, 3)))
-    seg_list = update_seg(seg_list, percents, 0.4)
+    seg_list = update_seg(seg_list, percents, 0.5)
     # 如果每次循环生成的数组过长则进行一次细分
     if np.mean(actual_lengths) * n > 262144000:
         seg_list = split_seg(seg_list)
@@ -224,7 +241,7 @@ def gen_boards_big(step: int,
     t3 = time.time()
 
     if t3 > t0:
-        logger.debug(f'step {step} (big) generated: {round(len(arr0) / (t3 - t0) / 1e6, 2)} mbps')
+        logger.debug(f'step {step} (big) generated: {round(len(arr1) / (t3 - t0) / 1e6, 2)} mbps')
         logger.debug(f'generate/sort/deduplicate: {round(gen_time / (t3 - t0), 2)}/'
                      f'{round((t2 - t0 - gen_time) / (t3 - t0), 2)}/{round((t3 - t2) / (t3 - t0), 2)}\n')
 
@@ -292,8 +309,10 @@ def generate_process(
     # 并行分段间隔
     seg: np.ndarray = np.array([round(1 / n * i, 4) for i in range(n + 1)], dtype=float)
     seg_list: np.ndarray[float] = seg
+    # 实际分段情况
+    percents = np.array([1/n for _ in range(n)])
     # 预分配的储存局面的数组长度乘数
-    length_factor = 10
+    length_factor = 6
     # 前几层的实际数组长度乘数，用于预测
     length_factors: List[float] = [length_factor, length_factor, length_factor]
     length_factors_list: List[List[float]] = [length_factors]
@@ -328,7 +347,7 @@ def generate_process(
         if len(d0) < segment_size:
             t0 = time.time()
 
-            if len(d0) < 10000 or arr_init[0] in (np.uint64(0xffff00000000ffff), np.uint64(0x000f000f000fffff)):
+            if len(d0) < 1000000000 or arr_init[0] in (np.uint64(0xffff00000000ffff), np.uint64(0x000f000f000fffff)):
                 # 数组较小(或2x4，3x3)的应用简单方法
                 d1t, d2 = gen_boards_simple(d0, target, position, bm, pattern_check_func, success_check_func,
                                             to_find_func, i > docheck_step, isfree)
@@ -336,11 +355,18 @@ def generate_process(
                 # 先预测预分配数组的长度乘数
                 length_factor = predict_next_length_factor_quadratic(length_factors)
                 length_factor *= 1.8 if isfree else 1.5
+                length_factor *= max(percents) / np.mean(percents)
 
                 d1t, d2, percents = \
                     gen_boards(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func, seg,
                                n, length_factor, i > docheck_step, isfree)
 
+                if len(d0) > 0 and len(d2) > 0 and \
+                        max(percents) / np.mean(percents) >= length_factor / (len(d2) / len(d0)):
+                    logger.critical(
+                        f"length multiplier {length_factor:4f}, actual multiplier {(len(d2) / len(d0)):4f}"
+                        f"percents {np.round(percents, 3)}")
+                    raise IndexError(f"The length multiplier is not big enough. Please restart.")
                 # 根据上一层实际分段情况调整下一层分段间隔
                 logger.debug('Segmentation_pr ' + repr(np.round(seg, 3)))
                 logger.debug('Segmentation_ac ' + repr(np.round(percents, 3)))
@@ -348,9 +374,9 @@ def generate_process(
                 seg_list = seg
 
             if len(d0) > 0:
-                logger.debug(f'Actual multiplier {round(len(d1t) / len(d0), 2)}, Predicted {round(length_factor, 2)}')
+                logger.debug(f'Actual multiplier {round(len(d2) / len(d0), 2)}, Predicted {round(length_factor, 2)}')
             # 更新数组长度乘数
-            length_factors = length_factors[1:] + [len(d1t) / (1 + len(d0))]
+            length_factors = length_factors[1:] + [max(len(d2) / (1 + len(d0)), 0.8)]
             length_factors_list = [length_factors]
             t1 = time.time()
 
@@ -368,7 +394,7 @@ def generate_process(
 
             t3 = time.time()
             if t3 > t0:
-                logger.debug(f'step {i} generated: {round(len(d0) / (t3 - t0) / 1e6, 2)} mbps')
+                logger.debug(f'step {i} generated: {round(len(d1) / (t3 - t0) / 1e6, 2)} mbps')
                 logger.debug(f'generate/sort/deduplicate: {round((t1 - t0) / (t3 - t0), 2)}/'
                              f'{round((t2 - t1) / (t3 - t0), 2)}/{round((t3 - t2) / (t3 - t0), 2)}\n')
 
@@ -447,7 +473,7 @@ def gen_boards(arr0: np.ndarray[np.uint64],
     根据arr0中的面板，先生成数字，再移动，如果移动后仍是定式范围内且移动有效，则根据生成的数字（2,4）分别填入
     """
     # 初始化两个arr，分别对应填充数字2和4后的棋盘状态
-    min_length = 89999999 if isfree else 29999999
+    min_length = 99999999 if isfree else 69999999
     length = max(min_length, int(len(arr0) * length_factor))
     arr1 = np.empty(length, dtype=np.uint64)
     arr2 = np.empty(length, dtype=np.uint64)
@@ -482,8 +508,8 @@ def gen_boards(arr0: np.ndarray[np.uint64],
         c2[s] = c2t
 
     # 统计每个分段生成的新局面占比，用于平衡下一层的分组seg
-    all_length = c1 - starts
-    percents = all_length / all_length.sum()
+    all_length = c2 - starts
+    percents = all_length / all_length.sum() if all_length.sum() > 0 else np.array([1 / n * i for i in range(n+1)])
 
     arr1 = merge_inplace(arr1, c1, n, starts.copy())
     arr2 = merge_inplace(arr2, c2, n, starts.copy())
@@ -593,7 +619,7 @@ def merge_inplace(arr: np.ndarray, segment_ends: np.ndarray, n: int, segment_sta
 
 
 def predict_next_length_factor_quadratic(length_factors: List[float]) -> float:
-    if np.allclose(length_factors, length_factors[-1], atol=0.25):
+    if np.allclose(length_factors, length_factors[-1], atol=0.1):
         return length_factors[-1]
 
     n = len(length_factors)
@@ -602,7 +628,7 @@ def predict_next_length_factor_quadratic(length_factors: List[float]) -> float:
     coefficients = np.polyfit(x, length_factors, 2)
     # 使用拟合的二次模型预测下一个数据点
     next_length_factor = np.polyval(coefficients, n)
-    next_length_factor = min(max(next_length_factor, np.mean(length_factors)), length_factors[-1] * 2)  # type: ignore
+    next_length_factor = min(max(next_length_factor, np.mean(length_factors)), length_factors[-1] * 2.5)  # type: ignore
     return next_length_factor
 
 
@@ -612,6 +638,7 @@ def update_seg(seg: np.ndarray[float], percents: np.ndarray[float], learning_rat
     normalised = (seg_length / percents)
     seg_length_new = normalised / normalised.sum()
     seg[1:] = np.cumsum(seg_length_new * learning_rate + seg_length * (1 - learning_rate))
+    seg[0], seg[-1] = 0, 1  # 避免浮点数精度导致的bug
     return seg
 
 
