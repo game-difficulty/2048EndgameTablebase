@@ -347,7 +347,7 @@ def generate_process(
         if len(d0) < segment_size:
             t0 = time.time()
 
-            if len(d0) < 100000 or arr_init[0] in (np.uint64(0xffff00000000ffff), np.uint64(0x000f000f000fffff)) or \
+            if len(d0) < 10000 or arr_init[0] in (np.uint64(0xffff00000000ffff), np.uint64(0x000f000f000fffff)) or \
                     (10 in length_factors):
                 # 数组较小(或2x4，3x3或断点重连)的应用简单方法
                 d1t, d2 = gen_boards_simple(d0, target, position, bm, pattern_check_func, success_check_func,
