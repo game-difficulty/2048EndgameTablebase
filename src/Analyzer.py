@@ -65,6 +65,15 @@ class Analyzer:
         self.maximum_single_step_loss_relative = 0.0
         self.maximum_single_step_loss_absolute = 0.0
         self.step_count = 0
+        self.performance_stats = {
+            "**Perfect!**": 0,
+            "**Excellent!**": 0,
+            "**Nice try!**": 0,
+            "**Not bad!**": 0,
+            "**Mistake!**": 0,
+            "**Blunder!**": 0,
+            "**Terrible!**": 0,
+        }
 
     @staticmethod
     def read_replay(path):
@@ -135,6 +144,15 @@ class Analyzer:
         self.maximum_single_step_loss_relative = 0.0
         self.maximum_single_step_loss_absolute = 0.0
         self.step_count = 0
+        self.performance_stats = {
+            "**Perfect!**": 0,
+            "**Excellent!**": 0,
+            "**Nice try!**": 0,
+            "**Not bad!**": 0,
+            "**Mistake!**": 0,
+            "**Blunder!**": 0,
+            "**Terrible!**": 0,
+        }
 
     def check_nth_largest(self, board_encoded: np.uint64) -> bool:
         # 初始化一个大小为16的列表，记录0-15的出现次数
@@ -170,7 +188,14 @@ class Analyzer:
         for i in range(len(self.record_list)):
             is_endgame = self.analyze_one_step(i)
             if is_endgame is None:
+                self.write_error('''Table path not found, please make sure you have calculated the required table
+                and that it is working properly in the practise module.''')
                 break
+
+            elif not is_endgame:
+                if len(self.text_list) > 100:
+                    self.write_analysis(i)
+                self.clear_analysis()
 
         if len(self.text_list) > 100:
             self.write_analysis(len(self.record_list))
@@ -198,10 +223,10 @@ class Analyzer:
         self.result = BookReader.move_on_dic(masked_board, self.pattern, target, self.full_pattern, self.position)
 
         # 超出定式范围、没查到、死亡等情况
-        if not self.result[list(self.result.keys())[0]]:
+        best_move = list(self.result.keys())[0]
+        if not self.result[best_move]:
             return False
 
-        best_move = list(self.result.keys())[0]
         # 配置里没找到表路径
         if best_move == '?':
             return None
@@ -209,7 +234,7 @@ class Analyzer:
         self.print_board(board)
         self.text_list.append('')
         for key, value in self.result.items():
-            self.text_list.append(f"{key.ljust(5, ' ')}: {value}")
+            self.text_list.append(f"{key[0].upper()}: {value}")
         self.text_list.append('')
 
         # 移动有效但是形成超出定式范围的局面
@@ -227,6 +252,7 @@ class Analyzer:
         if move == best_move.capitalize() or self.result[move.lower()] == 1:
             self.combo += 1
             self.max_combo = max(self.max_combo, self.combo)
+            self.performance_stats["**Perfect!**"] += 1
             self.text_list.append(f"**Perfect! Combo: {self.combo}x**")
             self.text_list.append(f"You pressed {move}. And the best move is **{best_move.capitalize()}**")
         else:
@@ -237,7 +263,10 @@ class Analyzer:
             self.maximum_single_step_loss_absolute = max(self.maximum_single_step_loss_absolute, loss_abs)
             self.goodness_of_fit *= loss
             # 根据 loss 值提供不同级别的评价
-            self.text_list.append(self.evaluation_of_performance(loss))
+            evaluation = self.evaluation_of_performance(loss)
+            self.performance_stats[evaluation] += 1
+
+            self.text_list.append(evaluation)
             self.text_list.append(f"You pressed {move}. But the best move is **{best_move.capitalize()}**")
             self.text_list.append(f'relative one-step loss: {1 - loss:.4f}, absolute one-step loss: {loss_abs:.4f}pt')
             self.text_list.append(f'total goodness of fit: {self.goodness_of_fit:.4f}')
@@ -260,16 +289,6 @@ class Analyzer:
 
         move = ('Left', 'Right', 'Up', 'Down')[move_encoded - 1]
         is_endgame = self._analyze_one_step(board, masked_board, move)
-
-        if is_endgame is None:
-            self.write_error('''Table path not found, please make sure you have calculated the required table
-            and that it is working properly in the practise module.''')
-
-        elif not is_endgame and len(self.text_list) > 0:
-            if len(self.text_list) > 100:
-                self.write_analysis(i)
-            self.clear_analysis()
-
         return is_endgame
 
     def write_error(self, text: str):
@@ -293,6 +312,9 @@ class Analyzer:
             file.write(f'Maximum Combo: {self.max_combo}' + '\n')
             file.write(f'Maximum Single Step Loss (Relative, %): {self.maximum_single_step_loss_relative:.4f}' + '\n')
             file.write(f'Maximum Single Step Loss (Absolute, pt): {self.maximum_single_step_loss_absolute:.4f}' + '\n')
+            # 添加评价统计信息
+            for evaluation, count in self.performance_stats.items():
+                file.write(f'{evaluation}: {count}\n')
             file.write(f'End of analysis')
 
     @staticmethod

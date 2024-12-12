@@ -9,7 +9,7 @@ from Config import SingletonConfig
 from TrieCompressor import trie_decompress_search
 from Calculator import min_all_symm, minUL, re_self, is_L3_pattern, is_4431_pattern, is_444_pattern, is_free_pattern, \
     is_LL_pattern, is_4432_pattern, is_4441_pattern, is_442_pattern, is_t_pattern, is_4442_pattern, \
-    is_movingLL_pattern, is_3433_pattern, is_2433_pattern, is_3432_pattern, is_3442_pattern
+    is_movingLL_pattern, is_3433_pattern, is_2433_pattern, is_3432_pattern, is_3442_pattern, is_4432f_pattern
 from Variants.vCalculator import is_variant_pattern, min24, min34, min33
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -42,6 +42,7 @@ class BookReader:
         '2x4': [-262144, is_variant_pattern, min24],
         '3x3': [-229376, is_variant_pattern, min33],
         '3x4': [-131072, is_variant_pattern, min34],
+        '4432f': [-131072 - 20, is_4432f_pattern, minUL],
         "3433": [-98304 - 6, is_3433_pattern, re_self],
         "3442": [-98304 - 8, is_3442_pattern, re_self],
         "3432": [-131072 - 6, is_3432_pattern, re_self],

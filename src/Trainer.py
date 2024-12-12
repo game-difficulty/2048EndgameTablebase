@@ -3,7 +3,7 @@ import sys
 import numpy as np
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QCursor
 
 from BookReader import BookReader
 from Calculator import ReverseUD, ReverseLR, RotateR, RotateL
@@ -18,24 +18,65 @@ class TrainFrame(BaseBoardFrame):
         '3x3': np.array([np.uint64(0x000f000f000fffff)], dtype=np.uint64),
         '3x4': np.array([np.uint64(0x000000000000ffff)], dtype=np.uint64),
     }
+    update_results = QtCore.pyqtSignal()  # 手动模式查表更新
 
     def __init__(self, centralwidget=None):
         super(TrainFrame, self).__init__(centralwidget)
         self.num_to_set = None
+        self.manual_mode = False
+
+    def gen_new_num(self, do_anim=True):
+        if not self.manual_mode:
+            super().gen_new_num(do_anim)
+        else:
+            self.history.append((self.board_encoded, self.score))
+            self.update_all_frame(self.board)
 
     def mousePressEvent(self, event):
-        if self.num_to_set is None:
+        if self.num_to_set is None and not self.manual_mode:
             self.setFocus()
             return
+
         self.score = 0
         local_pos = self.game_square.mapFromParent(event.pos())
+        # 找到被点击的格子
+        i, j = 0, 0
         for i, row in enumerate(self.game_square.frames):
             for j, frame in enumerate(row):
                 if frame.geometry().contains(local_pos):
-                    self.update_frame(self.num_to_set, i, j, False)
-                    self.board[i][j] = self.num_to_set
-                    self.board_encoded = np.uint64(self.mover.encode_board(self.board))
+                    break  # 跳出内层循环
+            else:
+                continue  # 如果没有遇到 break，继续外层循环
+            break  # 如果内层循环遇到 break，这里就会跳出外层循环
+
+        if self.num_to_set is not None:
+            if event.button() == Qt.LeftButton:
+                num_to_set = self.num_to_set
+            elif event.button() == Qt.RightButton:
+                num_to_set = self.board[i][j] * 2 if self.board[i][j] > 0 else 2
+                num_to_set = 0 if num_to_set > 32768 else num_to_set
+            else:
+                num_to_set = self.board[i][j] // 2 if self.board[i][j] > 0 else 32768
+                num_to_set = 0 if num_to_set == 1 else num_to_set
+            self.update_frame(num_to_set, i, j, False)
+            self.board[i][j] = num_to_set
+            self.board_encoded = np.uint64(self.mover.encode_board(self.board))
+            return
+        else:  # 手动模式
+            if self.board[i][j] == 0:
+                if event.button() == Qt.LeftButton:
+                    num_to_set = 2
+                    self.newtile_pos, self.newtile = i * 4 + j, 1
+                elif event.button() == Qt.RightButton:
+                    num_to_set = 4
+                    self.newtile_pos, self.newtile = i * 4 + j, 2
+                else:
                     return
+                self.update_frame(num_to_set, i, j, False)
+                self.board[i][j] = num_to_set
+                self.board_encoded = np.uint64(self.mover.encode_board(self.board))
+                self.update_results.emit()
+                return
 
     def update_frame(self, value, row, col, anim=False):
         """重写方法以配合不显示32k格子数字的设置"""
@@ -103,6 +144,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gameframe = TrainFrame(self.centralwidget)
         self.gameframe.setFocusPolicy(Qt.StrongFocus)
         self.gridLayout.addWidget(self.gameframe, 2, 0, 1, 1)
+        self.gameframe.update_results.connect(self.manual_mode_update_results)
 
         self.operate = QtWidgets.QFrame(self.centralwidget)
         self.operate.setMaximumSize(QtCore.QSize(16777215, 450))
@@ -224,6 +266,12 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.play_record.setObjectName("record")
         self.play_record.clicked.connect(self.handle_play_record)  # type: ignore
         self.gridLayout_record.addWidget(self.play_record, 0, 2, 1, 1)
+        self.manual_checkBox = QtWidgets.QCheckBox(self.operate)
+        self.manual_checkBox.setStyleSheet("font: 360 10pt \"Cambria\";")
+        self.manual_checkBox.setObjectName("manual_checkBox")
+        self.gridLayout_record.addWidget(self.manual_checkBox, 0, 3, 1, 1)
+        self.manual_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        self.manual_checkBox.stateChanged.connect(self.manual_state_change)  # type: ignore
         self.left_Layout.addLayout(self.gridLayout_record)
         self.gridLayout_upper.addLayout(self.left_Layout, 0, 0, 1, 1)
 
@@ -290,7 +338,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.menu_ptn = QtWidgets.QMenu(self.menubar)
         self.menu_ptn.setObjectName("menuMENU")
         for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", '4442', 'free8', 'free9', 'free10',
-                    "3433", "3442", "3432", "2433",  "movingLL",
+                    "3433", "3442", "3432", "2433",  "movingLL", "4432f",
                     'free8w', 'free9w', 'free10w', "free11w", '2x4', '3x3', '3x4']:
             m = QtWidgets.QAction(ptn, self)
             m.triggered.connect(lambda: self.menu_selected(0))  # type: ignore
@@ -353,6 +401,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.record.setText(_translate("Train", 'Record Demo'))
         self.play_record.setText(_translate("Train", 'Play Record'))
         self.load_record.setText(_translate("Train", 'Load Record'))
+        self.manual_checkBox.setText(_translate("Train", "Manual"))
         self.step.setText(_translate("Train", "ONESTEP"))
         self.default.setText(_translate("Train", "Default"))
         self.results_text.setText(_translate("Train", "RESULTS:"))
@@ -368,6 +417,10 @@ class TrainWindow(QtWidgets.QMainWindow):
         SingletonConfig().config['dis_32k'] = self.dis32k_checkBox.isChecked()
         self.gameframe.dis32k = SingletonConfig().config['dis_32k']
         self.gameframe.update_all_frame(self.gameframe.board)
+        self.gameframe.setFocus()
+
+    def manual_state_change(self):
+        self.gameframe.manual_mode = self.manual_checkBox.isChecked()
         self.gameframe.setFocus()
 
     def menu_selected(self, i):
@@ -404,10 +457,13 @@ class TrainWindow(QtWidgets.QMainWindow):
             for button in self.tile_buttons:
                 if button != sender:
                     button.setChecked(False)
+            QtWidgets.QApplication.setOverrideCursor(QCursor(Qt.ClosedHandCursor))
         else:
+            QtWidgets.QApplication.setOverrideCursor(QCursor(Qt.ArrowCursor))
             self.isProcessing = False
             self.gameframe.num_to_set = None
             self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
+            self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
             self.show_results()
 
     def show_results(self):
@@ -429,6 +485,10 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.results_label.setText('')
             self.result = dict()
         self.gameframe.setFocus()
+
+    def manual_mode_update_results(self):
+        self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
+        self.show_results()
 
     def filepath_changed(self):
         options = QtWidgets.QFileDialog.Options()

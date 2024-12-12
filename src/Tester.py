@@ -51,16 +51,16 @@ class ScrollTextDisplay(QWidget):
             formatted_row = []
             for item in row:
                 if item == 0:
-                    formatted_element = '_'
+                    formatted_element = '_'  # 转义下划线
                 elif item == 32768:
                     formatted_element = 'x'
                 elif item >= 1024:
                     formatted_element = f"{item // 1024}k"
                 else:
                     formatted_element = str(item)
-                formatted_row.append(formatted_element.rjust(4, ' '))
+                formatted_row.append(formatted_element.rjust(4, ' ').replace(' ', '&nbsp;'))
             self.lines.append(' '.join(formatted_row))
-            self.update_text()
+        self.update_text()
 
     def add_text(self, text_list):
         if isinstance(text_list, str):
@@ -81,6 +81,15 @@ class TestFrame(BaseBoardFrame):
         super(TestFrame, self).__init__(centralwidget)
         self.combo = 0
         self.goodness_of_fit = 1
+        self.performance_stats = {
+            "**Perfect!**": 0,
+            "**Excellent!**": 0,
+            "**Nice try!**": 0,
+            "**Not bad!**": 0,
+            "**Mistake!**": 0,
+            "**Blunder!**": 0,
+            "**Terrible!**": 0,
+        }
 
     def update_frame(self, value, row, col, anim=False):
         """重写方法以配合不显示32k格子数字的设置"""
@@ -125,27 +134,43 @@ class TestWindow(QtWidgets.QMainWindow):
         self.centralwidget.setObjectName("centralwidget")
         self.gridLayout = QtWidgets.QGridLayout(self.centralwidget)
         self.gridLayout.setContentsMargins(6, 6, 6, 6)
-        self.gridLayout.setVerticalSpacing(15)
-        self.gridLayout.setHorizontalSpacing(0)
+        self.gridLayout.setVerticalSpacing(8)
+        self.gridLayout.setHorizontalSpacing(8)
         self.gridLayout.setObjectName("gridLayout")
 
+        self.setboard_Layout = QtWidgets.QHBoxLayout()
+        self.gridLayout.setVerticalSpacing(8)
+        self.setboard_Layout.setObjectName("setboard_Layout")
+        self.board_state = QtWidgets.QLineEdit(self.centralwidget)
+        self.board_state.setStyleSheet("background-color: rgb(255, 255, 255);")
+        self.board_state.setObjectName("board_state")
+        self.board_state.setText('0000000000000000')
+        self.setboard_Layout.addWidget(self.board_state)
+
+        self.set_board_bt = QtWidgets.QPushButton(self.centralwidget)
+        self.set_board_bt.setMaximumSize(QtCore.QSize(90, 16777215))
+        self.set_board_bt.setObjectName("set_board_bt")
+        self.set_board_bt.clicked.connect(self.set_board_init)  # type: ignore
+        self.setboard_Layout.addWidget(self.set_board_bt)
+        self.gridLayout.addLayout(self.setboard_Layout, 0, 0, 1, 1)
+
         self.gameframe = TestFrame(self.centralwidget)
-        self.gridLayout.addWidget(self.gameframe, 0, 0, 1, 1)
+        self.gridLayout.addWidget(self.gameframe, 1, 0, 1, 1)
         self.gameframe.setMinimumSize(240, 240)
         self.text_display = ScrollTextDisplay(max_lines=200)
-        self.gridLayout.addWidget(self.text_display, 0, 1, 1, 1)
+        self.gridLayout.addWidget(self.text_display, 0, 1, 2, 1)
         self.text_display.setMinimumSize(120, 240)
 
         self.save_bt = QtWidgets.QPushButton(self.centralwidget)
-        self.gridLayout.addWidget(self.save_bt, 1, 1, 1, 1)
-        self.gridLayout.setAlignment(self.save_bt, QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.gridLayout.addWidget(self.save_bt, 2, 1, 1, 1)
+        self.gridLayout.setAlignment(self.save_bt, QtCore.Qt.AlignmentFlag.AlignHCenter)
         self.save_bt.setMaximumSize(300, 36)
         self.save_bt.setMinimumSize(80, 30)
         self.save_bt.clicked.connect(self.save_logs_to_file)  # type: ignore
 
         self.analyzer_bt = QtWidgets.QPushButton(self.centralwidget)
-        self.gridLayout.addWidget(self.analyzer_bt, 1, 0, 1, 1)
-        self.gridLayout.setAlignment(self.analyzer_bt, QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.gridLayout.addWidget(self.analyzer_bt, 2, 0, 1, 1)
+        self.gridLayout.setAlignment(self.analyzer_bt, QtCore.Qt.AlignmentFlag.AlignHCenter)
         self.analyzer_bt.setMaximumSize(300, 36)
         self.analyzer_bt.setMinimumSize(80, 30)
         self.analyzer_bt.clicked.connect(self.open_analyzer)  # type: ignore
@@ -158,7 +183,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.menu_ptn = QtWidgets.QMenu(self.menubar)
         self.menu_ptn.setObjectName("menuMENU")
         for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", '4442', 'free8', 'free9', 'free10',
-                    "3433", "3442", "3432", "2433", "movingLL",
+                    "3433", "3442", "3432", "2433", "movingLL", "4432f",
                     'free8w', 'free9w', 'free10w', "free11w", '2x4', '3x3', '3x4', '?']:
             m = QtWidgets.QAction(ptn, self)
             m.triggered.connect(lambda: self.menu_selected(0))  # type: ignore
@@ -194,6 +219,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.menu_ptn.setTitle(_translate("Tester", "Pattern"))
         self.menu_pos.setTitle(_translate("Tester", "Position"))
         self.menu_tgt.setTitle(_translate("Tester", "Target"))
+        self.set_board_bt.setText(_translate("Tester", "SET"))
         self.save_bt.setText(_translate("Tester", "Save Logs"))
         self.analyzer_bt.setText(_translate("Tester", "Analyze Verse Replay"))
 
@@ -210,26 +236,43 @@ class TestWindow(QtWidgets.QMainWindow):
 
             if self.pattern[0] in ("444", "LL", "L3") and self.pattern[2] != '?':
                 self.full_pattern = '_'.join(self.pattern)
-                self.init()
+                path_found = self.init()
+                if path_found:
+                    self.init_random_state()
             elif self.pattern[0] not in ("444", "LL", "L3"):
                 self.full_pattern = '_'.join(self.pattern[:2])
-                self.init()
+                path_found = self.init()
+                if path_found:
+                    self.init_random_state()
 
     def init(self):
         self.text_display.clear_text()
         self.gameframe.score = 0
         self.gameframe.combo = 0
         self.gameframe.goodness_of_fit = 1
+        self.gameframe.performance_stats = {
+            "**Perfect!**": 0,
+            "**Excellent!**": 0,
+            "**Nice try!**": 0,
+            "**Not bad!**": 0,
+            "**Mistake!**": 0,
+            "**Blunder!**": 0,
+            "**Terrible!**": 0,
+        }
 
         path = SingletonConfig().config['filepath_map'].get(self.full_pattern, '')
         if not path:
             self.text_display.add_text('Table file path not found!')
             self.text_display.update_text()
-            return
+            return False
         else:
             self.text_display.add_text(f"You have selected: **{self.full_pattern}**. Loading...")
             self.text_display.update_text()
             QApplication.processEvents()
+            return True
+
+    def init_random_state(self):
+        path = SingletonConfig().config['filepath_map'].get(self.full_pattern, '')
         self.gameframe.board_encoded = BookReader.get_random_state(path, self.full_pattern)
         self.gameframe.board_encoded = self.do_random_rotate(self.gameframe.board_encoded)
         self.gameframe.board = BookReader.bm.decode_board(self.gameframe.board_encoded)
@@ -239,6 +282,19 @@ class TestWindow(QtWidgets.QMainWindow):
         self.text_display.print_board(self.gameframe.board)
         self.text_display.add_text('--------------------------------------------------')
         self.gameframe.update_all_frame(self.gameframe.board)
+        self.gameframe.setFocus()
+
+    def set_board_init(self):
+        path_found = self.init()
+        if path_found:
+            self.gameframe.board_encoded = np.uint64(int(self.board_state.text(), 16))
+            self.gameframe.board = self.gameframe.mover.decode_board(self.gameframe.board_encoded)
+            self.result = BookReader.move_on_dic(self.gameframe.board, self.pattern[0], self.pattern[1],
+                                                 self.full_pattern)
+            self.text_display.lines[0] = self.text_display.lines[0].replace(' Loading...', '')
+            self.text_display.add_text("We'll start from:")
+            self.text_display.print_board(self.gameframe.board)
+            self.gameframe.update_all_frame(self.gameframe.board)
         self.gameframe.setFocus()
 
     def do_random_rotate(self, board_encoded):
@@ -259,7 +315,7 @@ class TestWindow(QtWidgets.QMainWindow):
             # 如果用户选择了文件路径，写入文件
             with open(file_path, 'w', encoding='utf-8') as file:
                 for line in self.text_display.lines:
-                    file.write(line.replace('**', '') + '\n')
+                    file.write(line.replace('**', '').replace('&nbsp;', ' ') + '\n')
 
     def open_analyzer(self):
         if self.analyze_window is None:
@@ -298,6 +354,8 @@ class TestWindow(QtWidgets.QMainWindow):
         self.text_display.add_text('--------------------------------------------------')
         if not self.result[list(self.result.keys())[0]]:
             self.text_display.add_text("**Game Over**: NO possible moves left.")
+            for evaluation, count in self.gameframe.performance_stats.items():
+                self.text_display.add_text(f'{evaluation}: {count}\n')
         self.text_display.update_text()
         self.gameframe.update_all_frame(self.gameframe.board)
         self.gameframe.setFocus()
@@ -306,11 +364,12 @@ class TestWindow(QtWidgets.QMainWindow):
     def one_step(self, move):
         text_list = []
         for key, value in self.result.items():
-            text_list.append(f"{key.ljust(5,' ')}: {value}")
+            text_list.append(f"{key[0].upper()}: {value}")
         text_list.append('')
         best_move = list(self.result.keys())[0]
         if move == best_move.capitalize() or self.result[move.lower()] == 1:
             self.gameframe.combo += 1
+            self.gameframe.performance_stats["**Perfect!**"] += 1
             text_list.append(f"**Perfect! Combo: {self.gameframe.combo}x**")
             text_list.append(f"You pressed {move}. And the best move is **{best_move.capitalize()}**")
         else:
@@ -318,7 +377,10 @@ class TestWindow(QtWidgets.QMainWindow):
             loss = self.result[move.lower()] / self.result[best_move] if self.result[best_move] else 1
             self.gameframe.goodness_of_fit *= loss
             # 根据 loss 值提供不同级别的评价
-            text_list.append(self.evaluation_of_performance(loss))
+            evaluation = self.evaluation_of_performance(loss)
+            self.gameframe.performance_stats[evaluation] += 1
+
+            text_list.append(evaluation)
             text_list.append(f'one-step loss: {1 - loss:.4f}, goodness of fit: {self.gameframe.goodness_of_fit:.4f}')
             text_list.append(f"You pressed {move}. But the best move is **{best_move.capitalize()}**")
             text_list.append('')

@@ -4,7 +4,6 @@ import os
 import time
 from ctypes import c_uint64, c_size_t, POINTER
 from typing import Callable, Tuple, List
-import concurrent.futures
 import traceback
 
 import numpy as np
@@ -27,9 +26,9 @@ def initialize_sorting_library():
     global use_avx
     _dll = None
     try:
-        # current_dir = os.path.dirname(__file__)
-        # dll_path = os.path.join(current_dir, "psort", "para_qsort", "para_qsort.dll")
-        dll_path = r"_internal/para_qsort.dll"
+        current_dir = os.path.dirname(__file__)
+        dll_path = os.path.join(current_dir, "psort", "para_qsort", "para_qsort.dll")
+        # dll_path = r"_internal/para_qsort.dll"
         if not os.path.exists(dll_path):
             raise FileNotFoundError(f"para_qsort.dll not found.")
 
@@ -57,9 +56,9 @@ def initialize_sorting_library():
             raise ValueError("DLL sorting failed, results are not sorted correctly")
         else:
             if _use_avx512:
-                logger.info("Sorting successful using AVX512.")
+                logger.info("Sorting success using AVX512.")
             else:
-                logger.info("Sorting successful using AVX2.")
+                logger.info("Sorting success using AVX2.")
 
     except Exception as e:
         # 如果加载DLL或排序出错，禁用AVX并记录日志
@@ -75,45 +74,13 @@ dll = initialize_sorting_library()
 
 
 @njit(nogil=True)
-def unique(aux: np.ndarray[np.uint64], start: np.uint64, end: np.uint64) -> np.uint64:
-    c = start
-    for i in range(start, end):
+def unique(aux: np.ndarray[np.uint64]) -> np.uint64:
+    c = 0
+    for i in range(0, len(aux)):
         if aux[i] != aux[i - 1]:
             aux[np.uint64(c)] = aux[i]
             c += 1
-    return c
-
-
-@njit(nogil=True, parallel=True)
-def unique_parallel_inplace(arr: np.ndarray[np.uint64]) -> np.ndarray[np.uint64]:
-    if len(arr) < 1000:
-        c = unique(arr, 1, len(arr))
-        return arr[:c]
-
-    # 分段原地去重再原地归并
-    n = 16
-    segment_starts = np.array([np.uint64(len(arr) // n * i) for i in range(n)], dtype='uint64')
-    segment_ends = np.empty(n, dtype='uint64')
-    segment_starts[0] = 1
-
-    for i in prange(n):
-        start = segment_starts[i]
-        end = segment_starts[i + 1] if i < n - 1 else len(arr)
-        c = unique(arr, start, end)
-        segment_ends[i] = c
-    segment_starts[0] = 0
-
-    # 归并去重段
-    final_end = segment_ends[0]
-    for i in range(1, n):
-        start = segment_starts[i]
-        end = segment_ends[i]
-        length = end - start
-
-        arr[final_end: final_end + length] = arr[start: end]
-        final_end += length
-
-    return arr[:final_end]
+    return aux[:c].copy()
 
 
 @njit(nogil=True)
@@ -131,8 +98,106 @@ def largest_power_of_2(n):
 def p_unique(arrs: List[np.ndarray[np.uint64]]
              ) -> List[np.ndarray[np.uint64]]:
     for i in prange(2):
-        arrs[i] = unique_parallel_inplace(arrs[i])
+        arrs[i] = unique(arrs[i])
     return arrs
+
+
+@njit(nogil=True,parallel=True)
+def is_sorted_ascending(arr: np.ndarray) -> bool:
+    # 通过比较相邻元素来判断是否升序
+    return np.all(arr[:-1]<=arr[1:])
+
+
+@njit(nogil=True)
+def _merge_deduplicate_all(arrays: List[np.ndarray], length: int = 0) -> np.ndarray:
+    if len(arrays) == 1:
+        return arrays[0]
+    if length == 0:
+        for arr in arrays:
+            length += len(arr)
+    num_arrays = len(arrays)
+    indices = np.zeros(num_arrays, dtype='uint32')  # 每个数组的当前索引
+    merged_array = np.empty(length, dtype='uint64')  # 合并后且去重的数组
+    last_added = None  # 上一个添加到 merged_array 的元素
+    c = 0  # 已添加的元素数量
+    # 继续循环，直到所有数组都被完全处理
+    while True:
+        current_min = None
+        min_index = -1
+        # 寻找当前可用元素中的最小值
+        for i in range(num_arrays):
+            if indices[i] < len(arrays[i]):  # 确保索引不超出数组长度
+                if current_min is None or arrays[i][indices[i]] < current_min:
+                    current_min = arrays[i][indices[i]]
+                    min_index = i
+        # 如果找不到最小值，说明所有数组都已处理完成
+        if current_min is None:
+            break
+        # 检查是否需要将当前最小值添加到结果数组中
+        if last_added is None or current_min != last_added:
+            merged_array[c] = current_min
+            last_added = current_min
+            c += 1
+        # 移动选中数组的索引
+        indices[min_index] += 1
+    return merged_array[:c]
+
+
+@njit(nogil=True)
+def binary_search(arr, x):
+    left = 0
+    right = len(arr)
+    while left < right:
+        mid = (left + right) // 2
+        if arr[mid] < x:
+            left = mid + 1
+        else:
+            right = mid
+    return left
+
+
+def merge_deduplicate_all(arrays: List[np.ndarray], n_threads: int=8) -> list[np.ndarray]:
+    """
+    多线程合并并去重多个已排序的数组
+    """
+    num_arrays = len(arrays)
+    pivots = arrays[0][np.arange(1, n_threads) * len(arrays[0]) // n_threads]
+
+    # 在所有数组中找到每个枢轴的位置
+    split_positions = np.zeros((num_arrays, n_threads + 1), dtype=np.int64)
+    for a in range(num_arrays):
+        for t in range(n_threads - 1):
+            split_positions[a][t + 1] = binary_search(arrays[a], pivots[t])
+        split_positions[a][n_threads] = len(arrays[a])
+    return _merge_deduplicate_all_p(arrays, split_positions, n_threads)
+
+
+@njit(parallel=True, nogil=True)
+def _merge_deduplicate_all_p(arrays, split_positions, n_threads):
+    num_arrays = len(arrays)
+    res = [np.empty(0,dtype='uint64')] * n_threads
+    # 并行归并每个分区
+    for t in prange(n_threads):
+        temp_arrays = [np.empty(0,dtype='uint64')] * num_arrays
+        for a in range(num_arrays):
+            s = split_positions[a][t]
+            e = split_positions[a][t + 1]
+            temp_arrays[a] = arrays[a][s:e]
+        res[t] = _merge_deduplicate_all(temp_arrays)
+    return res
+
+
+@njit(parallel=True, nogil=True)
+def concatenate(arrays):
+    length = 0
+    for array in arrays:
+        length += len(array)
+    res = np.empty(length, dtype='uint64')
+    offset = 0
+    for array in arrays:
+        res[offset: len(array) + offset] = array
+        offset += len(array)
+    return res
 
 
 def sort_array(arr: np.ndarray[np.uint64], pivots: np.ndarray[np.uint64] | None = None) -> None:
@@ -161,11 +226,12 @@ def gen_boards_big(step: int,
                    pivots_list: List[np.ndarray[np.uint64]],
                    n: int,
                    length_factors_list: List[List[float]],
+                   length_factor_multiplier: float = 1.5,
                    do_check: bool = True,
                    isfree: bool = False,
                    ) -> Tuple[
     np.ndarray[np.uint64], np.ndarray[np.uint64], List[np.ndarray[np.uint64]], np.ndarray[float], List[
-        List[float]]]:
+        List[float]], float]:
     """
     将arr0分段放入gen_boards生成排序去重后的局面，然后归并
     """
@@ -187,19 +253,26 @@ def gen_boards_big(step: int,
 
         length_factors = length_factors_list[seg_index]
         length_factor = predict_next_length_factor_quadratic(length_factors)
-        length_factor *= 2.25 if isfree else 1.8
+        length_factor *= 2.4 if isfree else 2
+        length_factor *= length_factor_multiplier  # type: ignore
 
-        arr1t, arr2t, percents = gen_boards(arr0t, target, position, bm, pattern_check_func, success_check_func,
-                                            to_find_func, scaled_seg, n, length_factor, do_check, isfree)
+        arr1t, arr2t, percents, percents1 = gen_boards(arr0t, target, position, bm, pattern_check_func,
+                                                       success_check_func,
+                                                       to_find_func, scaled_seg, n, length_factor, do_check, isfree)
 
-        if len(arr0t) > 0 and len(arr2t) > 0 and \
-                max(percents) / np.mean(percents) >= length_factor / (len(arr2t) / len(arr0t)):
-            logger.critical(f"length multiplier {length_factor:4f}, actual multiplier {(len(arr2t) / len(arr0t)):4f}"
-                            f"percents {np.round(percents, 3)}")
-            raise IndexError(f"The length multiplier is not big enough. Please restart.")
+        if len(arr0t) > 2999999 and len(arr2t) > 2999999 and \
+                (max(percents) / np.mean(percents) >= length_factor / (len(arr2t) / len(arr0t)) or
+                 max(percents1) / np.mean(percents1) >= length_factor / (len(arr1t) / len(arr0t))):
+            logger.critical(
+                f"length multiplier {length_factor:2f}, "
+                f"actual multiplier {(len(arr2t) / len(arr0t)):2f}, {(len(arr1t) / len(arr0t)):2f}"
+                f"percents {np.round(percents, 3)} {np.round(percents1, 3)}")
+            raise IndexError("The length multiplier is not big enough. "
+                             "This does not indicate an error in the program. "
+                             "Please restart the program and continue running.")
 
         if len(arr0t) > 0:
-            logger.debug(f'Actual multiplier {round(len(arr2t) / len(arr0t), 2)}, Predicted {round(length_factor, 2)}')
+            logger.debug(f'Actual multiplier {round(len(arr2t) / len(arr0t), 2)}, Using {round(length_factor, 2)}')
 
         actual_lengths[(seg_index * n): ((seg_index + 1) * n)] = percents * len(arr1t)
         length_factors_list[seg_index] = length_factors[1:] + [len(arr2t) / (1 + len(arr0t))]
@@ -235,8 +308,12 @@ def gen_boards_big(step: int,
     gc.collect()
     arr1 = merge_deduplicate_all(arr1s)
     del arr1s
+    arr1 = concatenate(arr1)
+    check_sorted(arr1)
     arr2 = merge_deduplicate_all(arr2s)
     del arr2s
+    arr2 = concatenate(arr2)
+    check_sorted(arr2)
 
     t3 = time.time()
 
@@ -245,42 +322,18 @@ def gen_boards_big(step: int,
         logger.debug(f'generate/sort/deduplicate: {round(gen_time / (t3 - t0), 2)}/'
                      f'{round((t2 - t0 - gen_time) / (t3 - t0), 2)}/{round((t3 - t2) / (t3 - t0), 2)}\n')
 
-    return arr1, arr2, pivots_list, seg_list, length_factors_list
+    return arr1, arr2, pivots_list, seg_list, length_factors_list, max(percents) / np.mean(percents)
 
 
-@njit(nogil=True)
-def merge_deduplicate_all(arrays: List[np.ndarray], length: int = 0) -> np.ndarray:
-    if len(arrays) == 1:
-        return arrays[0]
-    if length == 0:
-        for arr in arrays:
-            length += len(arr)
-    num_arrays = len(arrays)
-    indices = np.zeros(num_arrays, dtype='uint32')  # 每个数组的当前索引
-    merged_array = np.empty(length, dtype='uint64')  # 合并后且去重的数组
-    last_added = None  # 上一个添加到 merged_array 的元素
-    c = 0  # 已添加的元素数量
-    # 继续循环，直到所有数组都被完全处理
-    while True:
-        current_min = None
-        min_index = -1
-        # 寻找当前可用元素中的最小值
-        for i in range(num_arrays):
-            if indices[i] < len(arrays[i]):  # 确保索引不超出数组长度
-                if current_min is None or arrays[i][indices[i]] < current_min:
-                    current_min = arrays[i][indices[i]]
-                    min_index = i
-        # 如果找不到最小值，说明所有数组都已处理完成
-        if current_min is None:
-            break
-        # 检查是否需要将当前最小值添加到结果数组中
-        if last_added is None or current_min != last_added:
-            merged_array[c] = current_min
-            last_added = current_min
-            c += 1
-        # 移动选中数组的索引
-        indices[min_index] += 1
-    return merged_array[:c]
+@njit(nogil=True,parallel=True)
+def is_sorted(arr: np.ndarray) -> bool:
+    return np.all(arr[:-1]<arr[1:])
+
+
+def check_sorted(arr):
+    if is_sorted(arr):
+        return
+    raise ValueError
 
 
 def generate_process(
@@ -307,23 +360,35 @@ def generate_process(
     # 并行线程数
     n = max(4, min(32, os.cpu_count()))
     # 并行分段间隔
-    seg: np.ndarray = np.array([round(1 / n * i, 4) for i in range(n + 1)], dtype=float)
-    seg_list: np.ndarray[float] = seg
+    seg_list_path = os.path.join(os.path.dirname(pathname), "seg_list.txt")
+    length_factors_list_path = os.path.join(os.path.dirname(pathname), 'length_factors_list.txt')
+    try:
+        seg_list: np.ndarray[float] = np.loadtxt(seg_list_path, delimiter=',', dtype=np.float64)
+        seg = extract_uniform_elements(n, seg_list)
+    except FileNotFoundError:
+        seg: np.ndarray = np.array([round(1 / n * i, 4) for i in range(n + 1)], dtype=float)
+        seg_list: np.ndarray[float] = seg
     # 实际分段情况
-    percents = np.array([1/n for _ in range(n)])
+    percents = np.array([1 / n for _ in range(n)])
     # 预分配的储存局面的数组长度乘数
-    length_factor = 10
-    # 前几层的实际数组长度乘数，用于预测
-    length_factors: List[float] = [length_factor, length_factor, length_factor]
-    length_factors_list: List[List[float]] = [length_factors]
-
-    executor = concurrent.futures.ThreadPoolExecutor()
-    future_to_file = None  # 异步文件io
+    length_factor_multiplier = 1.5
+    try:
+        # noinspection PyUnresolvedReferences
+        length_factors_list: List[List[float]] = \
+            np.loadtxt(length_factors_list_path, delimiter=',', dtype=np.float64).tolist()
+        length_factors: List[float] = harmonic_mean_by_column(length_factors_list)
+        length_factor: float = predict_next_length_factor_quadratic(length_factors) * 1.2
+    except FileNotFoundError:
+        length_factor = 3.2
+        length_factors: List[float] = [length_factor, length_factor, length_factor]
+        length_factors_list: List[List[float]] = [length_factors]
 
     # 从前向后遍历，生成新的棋盘状态并保存到相应的array中
     for i in range(1, steps - 1):
         # 断点重连
         if (os.path.exists(pathname + str(i + 1)) and os.path.exists(pathname + str(i))) \
+                or (os.path.exists(pathname + str(i + 1) + '.book') and os.path.exists(pathname + str(i))) \
+                or (os.path.exists(pathname + str(i + 1) + '.z') and os.path.exists(pathname + str(i))) \
                 or os.path.exists(pathname + str(i) + '.book') \
                 or os.path.exists(pathname + str(i) + '.z'):
             logger.debug(f"skipping step {i}")
@@ -339,7 +404,7 @@ def generate_process(
 
         if pivots is None:
             pivots = d0[[len(d0) // 8 * i for i in range(1, 8)]] if len(d0) > 0 else np.zeros(7, dtype='uint64')
-            pivots_list = [pivots]
+            pivots_list = [pivots] * int(len(seg_list) // n)
 
         # 决定是否使用gen_boards_big处理
         segment_size = 67108864 if isfree else 104857600
@@ -348,40 +413,47 @@ def generate_process(
             t0 = time.time()
 
             if len(d0) < 10000 or arr_init[0] in (np.uint64(0xffff00000000ffff), np.uint64(0x000f000f000fffff)) or \
-                    (10 in length_factors):
+                    (3.2 in length_factors):
                 # 数组较小(或2x4，3x3或断点重连)的应用简单方法
                 d1t, d2 = gen_boards_simple(d0, target, position, bm, pattern_check_func, success_check_func,
                                             to_find_func, i > docheck_step, isfree)
             else:
                 # 先预测预分配数组的长度乘数
                 length_factor = predict_next_length_factor_quadratic(length_factors)
-                length_factor *= 1.8 if isfree else 1.5
-                length_factor *= max(percents) / np.mean(percents)
-                if np.all(percents == np.array([1/n for _ in range(n)])):  # 第一次使用gen_boards,没有分组经验，分组不平均
-                    length_factor *= 2
+                length_factor *= 2.25 if isfree else 1.8
+                length_factor *= length_factor_multiplier
 
-                d1t, d2, percents = \
+                d1t, d2, percents, percents1 = \
                     gen_boards(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func, seg,
                                n, length_factor, i > docheck_step, isfree)
 
-                if len(d0) > 0 and len(d2) > 0 and \
-                        max(percents) / np.mean(percents) >= length_factor / (len(d2) / len(d0)):
+                if len(d0) > 2999999 and len(d2) > 2999999 and (
+                        max(percents) / np.mean(percents) >= length_factor / (len(d2) / len(d0)) or
+                        max(percents1) / np.mean(percents1) >= length_factor / (len(d1t) / len(d0))):
                     logger.critical(
-                        f"length multiplier {length_factor:4f}, actual multiplier {(len(d2) / len(d0)):4f}"
-                        f"percents {np.round(percents, 3)}")
-                    raise IndexError(f"The length multiplier is not big enough. Please restart Or contact the author.")
+                        f"length multiplier {length_factor:2f}, "
+                        f"actual multiplier {(len(d2) / len(d0)):2f}, {(len(d1t) / len(d0)):2f}"
+                        f"percents {np.round(percents, 3)} {np.round(percents1, 3)}")
+                    raise IndexError("The length multiplier is not big enough. "
+                                     "This does not indicate an error in the program. "
+                                     "Please restart the program and continue running.")
                 # 根据上一层实际分段情况调整下一层分段间隔
                 logger.debug('Segmentation_pr ' + repr(np.round(seg, 3)))
                 logger.debug('Segmentation_ac ' + repr(np.round(percents, 3)))
+                logger.debug('Segmentation_ac ' + repr(np.round(percents1, 3)))
                 seg = update_seg(seg, percents, 0.4)
                 seg_list = seg
 
             if len(d0) > 0:
-                logger.debug(f'Actual multiplier {round(len(d2) / len(d0), 2)}, Predicted {round(length_factor, 2)}')
+                logger.debug(f'Actual multiplier {round(len(d2) / len(d0), 2)}, Using {round(length_factor, 2)}')
             # 更新数组长度乘数
             length_factors = length_factors[1:] + [max(len(d2) / (1 + len(d0)), 0.8)]
             length_factors_list = [length_factors]
+            length_factor_multiplier = max(percents) / np.mean(percents)
             t1 = time.time()
+
+            np.savetxt(seg_list_path, seg_list, fmt='%.3f', delimiter=',')  # type: ignore
+            np.savetxt(length_factors_list_path, length_factors_list, fmt='%.3f', delimiter=',')  # type: ignore
 
             # 排序
             sort_array(d1t, pivots)
@@ -394,6 +466,7 @@ def generate_process(
             # 去重
             d1t, d2 = p_unique([d1t, d2])
             d1 = merge_and_deduplicate(d1, d1t)
+            check_sorted(d1)
 
             t3 = time.time()
             if t3 > t0:
@@ -404,20 +477,18 @@ def generate_process(
             d0, d1 = d1, d2
             del d1t, d2
         else:
-            d0, d1, pivots_list, seg_list, length_factors_list = \
+            d0, d1, pivots_list, seg_list, length_factors_list, length_factor_multiplier = \
                 gen_boards_big(i, d0, target, position, bm, pattern_check_func, success_check_func, to_find_func, d1,
-                               seg_list, pivots_list, n, length_factors_list,
+                               seg_list, pivots_list, n, length_factors_list, length_factor_multiplier,
                                i > docheck_step, isfree)
+            np.savetxt(seg_list_path, seg_list, fmt='%.3f', delimiter=',')  # type: ignore
+            np.savetxt(length_factors_list_path, length_factors_list, fmt='%.3f', delimiter=',')  # type: ignore
+            seg = extract_uniform_elements(n, seg_list)
+            length_factors = harmonic_mean_by_column(length_factors_list)
 
-        # 异步写入操作
-        if future_to_file is not None:
-            future_to_file.result()  # 确保上一次写入已完成
-        future_to_file = tofile_async(executor, d0, pathname + str(i))
-
+        d0.tofile(pathname + str(i))
         gc.collect()
 
-    # 确保线程池关闭
-    executor.shutdown()
     return started, d0, d1
 
 
@@ -466,12 +537,12 @@ def gen_boards(arr0: np.ndarray[np.uint64],
                success_check_func: SuccessCheckFunc,
                to_find_func: ToFindFunc,
                seg: np.ndarray[float],
-               n: int = 4,
+               n: int = 8,
                length_factor: float = 8,
                do_check: bool = True,
                isfree: bool = False
                ) -> \
-        Tuple[np.ndarray[np.uint64], np.ndarray[np.uint64], np.ndarray[float]]:
+        Tuple[np.ndarray[np.uint64], np.ndarray[np.uint64], np.ndarray[float], np.ndarray[float]]:
     """
     根据arr0中的面板，先生成数字，再移动，如果移动后仍是定式范围内且移动有效，则根据生成的数字（2,4）分别填入
     """
@@ -512,15 +583,18 @@ def gen_boards(arr0: np.ndarray[np.uint64],
 
     # 统计每个分段生成的新局面占比，用于平衡下一层的分组seg
     all_length = c2 - starts
-    percents = all_length / all_length.sum() if all_length.sum() > 0 else np.array([1 / n * i for i in range(n+1)])
+    percents2 = all_length / all_length.sum() if all_length.sum() > 0 else np.array([1 / n * i for i in range(n + 1)])
 
-    arr1 = merge_inplace(arr1, c1, n, starts.copy())
-    arr2 = merge_inplace(arr2, c2, n, starts.copy())
+    all_length = c1 - starts
+    percents1 = all_length / all_length.sum() if all_length.sum() > 0 else np.array([1 / n * i for i in range(n + 1)])
+
+    arr1 = merge_inplace(arr1, c1, starts.copy())
+    arr2 = merge_inplace(arr2, c2, starts.copy())
     # 求对称
     to_find_func(arr1)
     to_find_func(arr2)
     # 返回包含可能的新棋盘状态的两个array
-    return arr1, arr2, percents
+    return arr1, arr2, percents2, percents1
 
 
 @njit(nogil=True, parallel=True)
@@ -566,58 +640,37 @@ def gen_boards_simple(arr0: np.ndarray[np.uint64],
 
 
 @njit(nogil=True, parallel=True)
-def merge_inplace(arr: np.ndarray, segment_ends: np.ndarray, n: int, segment_starts: np.ndarray) -> np.ndarray:
+def merge_inplace(arr: np.ndarray, segment_ends: np.ndarray, segment_starts: np.ndarray) -> np.ndarray:
     """
-    合并数组 arr 中的各个有效段，段的结束位置由 c 数组给出。
-    c[i] 表示第 i 段的结束位置（不包含在段内）。
-    每个段的开始位置由 segment_starts 给出。
-    返回合并后的有效数据段的结束位置索引数组。
-    使用此函数要求结果对数据顺序不做要求
+    将每一段有效数据依次合并到前一段末尾。
+    如果读写区间产生重叠，则仅移动非重叠部分。
+
+    参数:
+    - arr: 需要合并的原始数组。
+    - segment_ends: 每个数据段的结束索引。
+    - n: 数组的总长度（可选，根据需要使用）。
+    - segment_starts: 每个数据段的起始索引。
+
+    返回:
+    - 合并后的数组切片。
     """
-    counts = segment_ends.sum() - segment_starts.sum()
+    counts = segment_ends[0]
+    num_segments = len(segment_starts)
 
-    # 用于填充的指针，从最后一段开始
-    fill_index = n - 1
-    # 用于寻找空隙的指针，从第一段的结束位置开始
-    gap_index = 0
+    for i in range(1, num_segments):
+        start = segment_starts[i]
+        end = segment_ends[i]
+        size = end - start
+        dest_start = counts
+        dest_end = counts + size
 
-    while gap_index < fill_index - 1:
-        # 当前空隙的起始和结束位置
-        gap_start = segment_ends[gap_index]
-        gap_end = segment_starts[gap_index + 1]
-        gap_size = gap_end - gap_start
-
-        # 当前需要填充的段的起始和结束位置
-        fill_start = segment_starts[fill_index]
-        fill_end = segment_ends[fill_index]
-        fill_size = fill_end - fill_start
-
-        if fill_size <= gap_size:
-            # 如果当前段可以完全填入空隙中
-            arr[gap_start:gap_start + fill_size] = arr[fill_start:fill_end]
-            # 更新空隙指针
-            segment_ends[gap_index] = gap_start + fill_size
-            # 移动填充指针
-            fill_index -= 1
+        # 检查读写区间是否重叠
+        if start < dest_end:
+            arr[dest_start: start] = arr[dest_end: end]
         else:
-            # 如果当前段不能完全填入空隙中，只填入一部分
-            arr[gap_start:gap_end] = arr[fill_start:fill_start + gap_size]
-            # 更新填充段的起始位置
-            segment_starts[fill_index] = fill_start + gap_size
-            # 更新空隙指针
-            gap_index += 1
+            arr[dest_start: dest_end] = arr[start: end]
+        counts += size
 
-    # 处理最后一个段的填充
-    gap_start = segment_ends[gap_index]
-    # gap_end = segment_starts[gap_index + 1]
-    fill_start = segment_starts[fill_index]
-    fill_end = segment_ends[fill_index]
-    fill_size = fill_end - fill_start
-
-    arr[gap_start:gap_start + fill_size] = arr[fill_start:fill_end]
-    segment_ends[gap_index] = gap_start + fill_size
-
-    # 返回合并后的有效数据段的结束位置索引
     return arr[:counts]
 
 
@@ -672,7 +725,17 @@ def split_pivots_list(pivots_list: List[np.ndarray[np.uint64]]) -> List[np.ndarr
     return pivots_list_new
 
 
-def tofile_async(executor, data, path):
-    """使用线程池执行文件写入操作"""
-    future = executor.submit(data.tofile, path)
-    return future
+def extract_uniform_elements(n: int, arr: np.ndarray) -> np.ndarray:
+    k = (len(arr) - 1) // n  # 计算 k
+    result = arr[::k]  # 每隔 k 个取一个，包括第一个和最后一个
+    return result
+
+
+def harmonic_mean_by_column(matrix: List[List[float]]) -> List[float]:
+    num_columns = len(matrix[0])
+    harmonic_means = []
+    for col in range(num_columns):
+        reciprocals = [1 / row[col] for row in matrix]
+        harmonic_mean = len(matrix) / sum(reciprocals)
+        harmonic_means.append(harmonic_mean)
+    return harmonic_means

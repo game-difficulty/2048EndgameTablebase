@@ -1,7 +1,6 @@
 import os
 import time
 from typing import Callable, Tuple
-import concurrent.futures
 
 import numpy as np
 from numba import njit, prange
@@ -18,24 +17,6 @@ ToFindFunc = Callable[[np.ndarray[np.uint64]], None]
 ToFindFunc1 = Callable[[np.uint64], np.uint64]
 
 logger = Config.logger
-
-
-@njit(nogil=True)
-def binary_search_arr(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
-                      target: np.uint64) -> np.uint32:
-    low = 0
-    high = len(arr) - 1
-
-    while low <= high:
-        mid = (low + high) // 2
-        mid_val = arr[mid][0]
-        if mid_val < target:
-            low = mid + 1
-        elif mid_val > target:
-            high = mid - 1
-        else:
-            return arr[mid][1]  # 找到匹配，返回对应的uint32值
-    return 0  # 如果没有找到匹配项
 
 
 def recalculate_process(
@@ -56,10 +37,6 @@ def recalculate_process(
     # 回算搜索时可能需要使用索引进行加速
     ind1: np.ndarray[np.uint32] | None = None
 
-    # 异步文件写入
-    executor = concurrent.futures.ThreadPoolExecutor()
-    future_to_file = None  # 异步文件io
-
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
         # 断点重连
@@ -72,7 +49,7 @@ def recalculate_process(
             continue
         elif not started:
             started = True
-            if i != steps - 3:
+            if i != steps - 3 or d1 is None or d2 is None:
                 d1 = np.fromfile(pathname + str(i + 1) + '.book', dtype='uint64,uint32')
                 d2 = np.fromfile(pathname + str(i + 2) + '.book', dtype='uint64,uint32')
 
@@ -107,18 +84,16 @@ def recalculate_process(
         if t3 > t0:
             logger.debug(f'step {i} recalculated: {round(length / (t3 - t0) / 1e6, 2)} mbps')
             logger.debug(f'index/solve/remove: {round((t1 - t0) / (t3 - t0), 2)}/'
-                         f'{round((t2 - t1) / (t3 - t0), 2)}/{round((t3 - t2) / (t3 - t0), 2)}\n')
+                         f'{round((t2 - t1) / (t3 - t0), 2)}/{round((t3 - t2) / (t3 - t0), 2)}')
 
-        if future_to_file is not None:
-            future_to_file.result()  # 确保上一次写入已完成
-        future_to_file = tofile_async(executor, d0, pathname + str(i))
+        d0.tofile(pathname + str(i) + '.book')
+        if os.path.exists(pathname + str(i)):
+            os.remove(pathname + str(i))
+        logger.debug(f'step {i} written\n')
 
         do_compress(pathname + str(i + 2) + '.book')  # 如果设置了压缩，则压缩i+2的book，其已经不需要再频繁查找
         if i > 0:
             d1, d2 = d0, d1
-
-    # 确保线程池关闭
-    executor.shutdown()
 
 
 @njit(nogil=True, parallel=True)
@@ -302,17 +277,7 @@ def do_compress(bookpath: str) -> None:
                 os.remove(bookpath)
 
 
-def tofile_async(executor, data, path):
-    """使用线程池执行文件写入操作"""
-    # 异步写入到book文件
-    future = executor.submit(data.tofile, path + '.book')
-
-    def replace_file(f):
-        """在写入完成后，将无后缀文件删除"""
-        f.result()  # 等待写入完成
-        if os.path.exists(path):
-            os.remove(path)
-
-    # 在写入完成后执行文件替换操作
-    future.add_done_callback(replace_file)
-    return future
+def tofile_(data, path):
+    data.tofile(path + '.book')
+    if os.path.exists(path):
+        os.remove(path)

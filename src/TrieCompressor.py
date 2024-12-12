@@ -160,7 +160,7 @@ def get_segment_pos(ind3, len_data):
 
 
 def compress_and_save_p(ind3, data, output_filename, lvl=1):
-    num_workers = max(2, os.cpu_count() // 2 + 1)
+    num_workers = min(2, os.cpu_count())
 
     # 计算所有分段的位置
     segments_info, ind3 = get_segment_pos(ind3, len(data))

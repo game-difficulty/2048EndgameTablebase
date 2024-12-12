@@ -137,7 +137,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
                                  docheck_step, bm, isfree=True, spawn_rate4=spawn_rate4)
     else:
         steps = int(2 ** target / 2 + {'444': 96, '4431': 64, 'LL': 48, 'L3': 36, '4441': 48, '4432': 48, '4442': 48,
-                                       '442': 36, 't': 36,
+                                       '442': 36, 't': 36, '4432f': 48,
                                        "3433": 48, "3442": 48, "3432": 48, "2433": 48, "movingLL": 48}[pattern])
         docheck_step = int(2 ** target / 2) - 16
         inits = {
@@ -150,6 +150,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
             '4442': np.array([np.uint64(0x00001000123424ff), np.uint64(0x00010000123424ff)], dtype=np.uint64),
             '442': np.array([np.uint64(0x1000000012ffffff), np.uint64(0x0000000112ffffff)], dtype=np.uint64),
             't': np.array([np.uint64(0x10000000f1fff2ff), np.uint64(0x00000001f1fff2ff)], dtype=np.uint64),
+            '4432f': np.array([np.uint64(0x00001000123f2fff), np.uint64(0x00010000123f2fff)], dtype=np.uint64),
             "3433": np.array([np.uint64(0x100000000000f2ff), np.uint64(0x000000000001f2ff)], dtype=np.uint64),
             "3442": np.array([np.uint64(0x10000000000ff21f), np.uint64(0x00000000100ff21f)], dtype=np.uint64),
             "3432": np.array([np.uint64(0x10000000000ff2ff), np.uint64(0x00000000100ff2ff)], dtype=np.uint64),
@@ -157,13 +158,13 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
             "movingLL": np.array([np.uint64(0x100000001ff12ff2), np.uint64(0x1000000012ff21ff)], dtype=np.uint64),
         }
         ini = inits[pattern]
-        if ((pattern == 'LL') and (position == 0)) or (pattern == '4432'):
+        if ((pattern == 'LL') and (position == 0)) or (pattern == '4432') or (pattern == '4432f'):
             to_find_func, to_find_func1 = Calculator.p_minUL, Calculator.minUL
         elif pattern == 'movingLL':
             to_find_func, to_find_func1 = Calculator.p_min_all_symm, Calculator.min_all_symm
         else:
             to_find_func, to_find_func1 = Calculator.p_re_self, Calculator.re_self
-        isfree = True if pattern in ('4442', '4432', '4441', "3433", "3442", "3432", "movingLL") else False
+        isfree = True if pattern in ('4442', '4432', '4441', "3433", "3442", "3432", "movingLL", '4432f') else False
         gen_lookup_table_big(ini, eval(f'Calculator.is_{pattern}_pattern'), eval(f'Calculator.is_{pattern}_success'),
                              to_find_func, to_find_func1, target, position, steps, pathname, docheck_step, bm, isfree,
                              spawn_rate4)
