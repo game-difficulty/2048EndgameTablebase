@@ -178,6 +178,31 @@ def is_4442_success(encoded_board, target, _):
 
 
 @njit(nogil=True)
+def is_4442f_pattern(encoded_board):
+    return (np.uint64(encoded_board) & np.uint64(255)) == np.uint64(255)
+
+
+@njit(nogil=True)
+def is_4442f_success(encoded_board, target, _):
+    return (np.uint64(encoded_board) >> np.uint64(16) & np.uint64(0xf)) == np.uint64(target)
+
+
+@njit(nogil=True)
+def is_L3t_pattern(encoded_board):
+    return (np.uint64(encoded_board) & np.uint64(268374015)) == np.uint64(268374015) or \
+            (np.uint64(encoded_board) & np.uint64(64692883440)) == np.uint64(64692883440) or \
+            (np.uint64(encoded_board) & np.uint64(4222189342560240)) == np.uint64(4222189342560240)
+
+
+@njit(nogil=True)
+def is_L3t_success(encoded_board, target, _):
+    return (np.uint64(encoded_board) >> np.uint64(28) & np.uint64(0xf)) == np.uint64(target) or \
+            (np.uint64(encoded_board) >> np.uint64(40) & np.uint64(0xf)) == np.uint64(target) or \
+            (np.uint64(encoded_board) >> np.uint64(36) & np.uint64(0xf)) == np.uint64(target) or \
+            (np.uint64(encoded_board) >> np.uint64(32) & np.uint64(0xf)) == np.uint64(target)
+
+
+@njit(nogil=True)
 def is_L3_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(268374015)) == np.uint64(268374015)
 

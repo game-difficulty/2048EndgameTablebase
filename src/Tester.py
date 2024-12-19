@@ -81,6 +81,7 @@ class TestFrame(BaseBoardFrame):
         super(TestFrame, self).__init__(centralwidget)
         self.combo = 0
         self.goodness_of_fit = 1
+        self.max_combo = 0
         self.performance_stats = {
             "**Perfect!**": 0,
             "**Excellent!**": 0,
@@ -182,8 +183,8 @@ class TestWindow(QtWidgets.QMainWindow):
 
         self.menu_ptn = QtWidgets.QMenu(self.menubar)
         self.menu_ptn.setObjectName("menuMENU")
-        for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", '4442', 'free8', 'free9', 'free10',
-                    "3433", "3442", "3432", "2433", "movingLL", "4432f",
+        for ptn in ['t', 'L3', 'L3t', '442', 'LL', '444', '4431', "4441", "4432", '4442', 'free8', 'free9', 'free10',
+                    "3433", "3442", "3432", "2433", "movingLL", "4432f", "4442f",
                     'free8w', 'free9w', 'free10w', "free11w", '2x4', '3x3', '3x4', '?']:
             m = QtWidgets.QAction(ptn, self)
             m.triggered.connect(lambda: self.menu_selected(0))  # type: ignore
@@ -250,6 +251,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.gameframe.score = 0
         self.gameframe.combo = 0
         self.gameframe.goodness_of_fit = 1
+        self.gameframe.max_combo = 0
         self.gameframe.performance_stats = {
             "**Perfect!**": 0,
             "**Excellent!**": 0,
@@ -280,7 +282,6 @@ class TestWindow(QtWidgets.QMainWindow):
         self.text_display.lines[0] = self.text_display.lines[0].replace(' Loading...', '')
         self.text_display.add_text("We'll start from:")
         self.text_display.print_board(self.gameframe.board)
-        self.text_display.add_text('--------------------------------------------------')
         self.gameframe.update_all_frame(self.gameframe.board)
         self.gameframe.setFocus()
 
@@ -350,12 +351,22 @@ class TestWindow(QtWidgets.QMainWindow):
         self.gameframe.do_move(direction)
         self.one_step(direction)
         self.result = BookReader.move_on_dic(self.gameframe.board, self.pattern[0], self.pattern[1], self.full_pattern)
-        self.text_display.print_board(self.gameframe.board)
         self.text_display.add_text('--------------------------------------------------')
+        self.text_display.print_board(self.gameframe.board)
+        self.text_display.add_text('')
+
         if not self.result[list(self.result.keys())[0]]:
             self.text_display.add_text("**Game Over**: NO possible moves left.")
             for evaluation, count in self.gameframe.performance_stats.items():
                 self.text_display.add_text(f'{evaluation}: {count}\n')
+            self.text_display.add_text(f'Total Goodness of Fit: {self.gameframe.goodness_of_fit:.4f}' + '\n')
+            self.text_display.add_text(f'Maximum Combo: {self.gameframe.max_combo}' + '\n')
+        elif self.result[list(self.result.keys())[0]] == 1:
+            self.text_display.add_text("**Congratulations!** You're about to reach the target tile.")
+            for evaluation, count in self.gameframe.performance_stats.items():
+                self.text_display.add_text(f'{evaluation}: {count}\n')
+            self.text_display.add_text(f'Total Goodness of Fit: {self.gameframe.goodness_of_fit:.4f}' + '\n')
+            self.text_display.add_text(f'Maximum Combo: {self.gameframe.max_combo}' + '\n')
         self.text_display.update_text()
         self.gameframe.update_all_frame(self.gameframe.board)
         self.gameframe.setFocus()
@@ -369,6 +380,7 @@ class TestWindow(QtWidgets.QMainWindow):
         best_move = list(self.result.keys())[0]
         if move == best_move.capitalize() or self.result[move.lower()] == 1:
             self.gameframe.combo += 1
+            self.gameframe.max_combo = max(self.gameframe.max_combo, self.gameframe.combo)
             self.gameframe.performance_stats["**Perfect!**"] += 1
             text_list.append(f"**Perfect! Combo: {self.gameframe.combo}x**")
             text_list.append(f"You pressed {move}. And the best move is **{best_move.capitalize()}**")
@@ -383,7 +395,6 @@ class TestWindow(QtWidgets.QMainWindow):
             text_list.append(evaluation)
             text_list.append(f'one-step loss: {1 - loss:.4f}, goodness of fit: {self.gameframe.goodness_of_fit:.4f}')
             text_list.append(f"You pressed {move}. But the best move is **{best_move.capitalize()}**")
-            text_list.append('')
         self.text_display.add_text(text_list)
 
     @staticmethod

@@ -14,8 +14,8 @@ def compress_data_how(data):  # u32 u8 u8 u8 u8 u32
     # 存储索引的列表
     ind0 = np.empty(255, dtype='uint8,uint32')  # f4,ind1_pos
     ind1 = np.empty(65535, dtype='uint8,uint32')  # f3,ind2_pos
-    ind2 = np.empty(1048575, dtype='uint8,uint32')  # f2,ind3_pos
-    ind3 = np.empty(16777215, dtype='uint8,uint64')  # f1,data_pos
+    ind2 = np.empty(4194303, dtype='uint8,uint32')  # f2,ind3_pos
+    ind3 = np.empty(134217727, dtype='uint8,uint64')  # f1,data_pos
     ind0[0]['f0'], ind0[0]['f1'] = 0, 0
     ind1[0]['f0'], ind1[0]['f1'] = 0, 0
     ind2[0]['f0'], ind2[0]['f1'] = 0, 0
@@ -160,7 +160,7 @@ def get_segment_pos(ind3, len_data):
 
 
 def compress_and_save_p(ind3, data, output_filename, lvl=1):
-    num_workers = min(2, os.cpu_count())
+    num_workers = max(2, os.cpu_count())
 
     # 计算所有分段的位置
     segments_info, ind3 = get_segment_pos(ind3, len(data))
@@ -336,8 +336,167 @@ def trie_decompress_search(filepath, board, ind, segments):
     return result
 
 
+"""
+以下代码用于根据压缩后的文件还原原始数组
+"""
+
+
+def restore_indices(i_file):
+    # 读取合并后的前三级索引 (root + ind0 + ind1 + ind2)
+    ind = np.fromfile(i_file, dtype=[('f0', 'uint8'), ('f1', 'uint32')])
+
+    # ind[0]为root节点, root = (0,1)
+
+    # 还原ind0:
+    idx = 2
+    # 我们期待f0从0开始递增，并在某处再次出现0代表ind0结束
+    while idx < len(ind):
+        if ind[idx - 1]['f0'] > ind[idx]['f0']:
+            break
+        idx += 1
+
+    ind0 = ind[1:idx].copy()
+
+    # 还原ind1:
+    # 当前idx位置为ind1的起始标记
+    # 在ind1中，f1字段递增，直到f1再度出现0时结束
+    start1 = idx
+    idx += 1
+    while idx < len(ind):
+        if ind[idx]['f1'] == 0 and ind[idx]['f1'] < ind[idx - 1]['f1']:
+            break
+        idx += 1
+
+    ind1 = ind[start1:idx].copy()
+
+    # 剩余的即为ind2
+    ind2 = ind[idx:].copy()
+
+    # 逆向处理偏移：
+    # 压缩时执行过：
+    # ind0['f1'] += 1 + len(ind0)
+    # ind1['f1'] += 1 + len(ind0) + len(ind1)
+    ind0['f1'] -= (1 + len(ind0))
+    ind1['f1'] -= (1 + len(ind0) + len(ind1))
+
+    return ind0, ind1, ind2
+
+
+def restore_book_and_ind3(z_file, s_file, ii_file):
+    # 1. 还原book_数组
+    # 读取segments
+    segments = np.fromfile(s_file, dtype=[('f0', 'uint32'), ('f1', 'uint64')])
+    # segments中: segments[0]=(0,0), segments[i]=(block_end_ind3, cumulative_size)
+    # 块数 = len(segments)-1
+
+    # 根据segments从z_file中解压所有块
+    block_lengths = []
+    decompressed_blocks = []
+
+    with open(z_file, 'rb') as f:
+        for i in range(1, len(segments)):
+            block_start = segments[i - 1]['f1']
+            block_end = segments[i]['f1']
+            block_size = block_end - block_start
+            f.seek(block_start)
+            block_data = f.read(block_size)
+            # 解压
+            decompressed_data = lzma.decompress(block_data)
+            # 每条记录8字节(uint32,uint32)
+            num_records = len(decompressed_data) // 8
+            block_lengths.append(num_records)
+            decompressed_blocks.append(decompressed_data)
+
+    # 拼接所有解压块形成原始数据数组book_
+    book_ = np.frombuffer(b''.join(decompressed_blocks), dtype=[('f0', 'uint32'), ('f5', 'uint32')])
+
+    # 2. 重建ind3
+    # 从ii_file中读取压缩后的ind3
+    ind3 = np.fromfile(ii_file, dtype=[('f0', 'uint8'), ('f1', 'uint16')]).astype('uint8,uint64')
+
+    # k为每块长度数组的累积和，用于重建绝对位置
+    k = np.array(block_lengths, dtype=np.uint64)
+    k_cumsum = np.cumsum(k)
+
+    # 在处理ind3时，如果f1=0表示块分界点，需要换下一个块索引
+    # 如果f1!=0 则f1 += 对应块的起始偏移 (前面块的总和)
+    block_idx = -1
+    offset = 0
+    for i in range(len(ind3)):
+        if ind3[i]['f1'] == 0:
+            is_boundary = i in segments['f0']
+            if is_boundary:
+                # 说明是块分界点，块索引加1
+                block_idx += 1
+                offset = 0 if block_idx == 0 else k_cumsum[block_idx - 1]
+            ind3[i]['f1'] += offset
+            if is_boundary and block_idx > 0:
+                ind3[i]['f1'] -= 1
+        else:
+            # 非0，说明这条记录在当前块内的offset，需要加上该块起始的行偏移量
+            # k_cumsum[block_idx-1]是当前块的起始偏移，但当block_idx=0时，没有前块，
+            # 因此对第一个块(block_idx=0)来说，起始偏移量为0，不用加。
+            offset = 0 if block_idx == 0 else k_cumsum[block_idx - 1]
+            ind3[i]['f1'] += offset
+
+    return book_, ind3
+
+
+def restore_book(path):
+    z_file, s_file = path + "z", path + "s"
+    ii_file = path + "ii"
+    i_file = path + "i"
+
+    book_, ind3 = restore_book_and_ind3(z_file, s_file, ii_file)
+    ind0, ind1, ind2 = restore_indices(i_file)
+    book = np.empty(len(book_), dtype='uint32,uint8,uint8,uint8,uint8,uint32')
+    # 先填充已知的列 f0, f5
+    book['f0'] = book_['f0']
+    book['f5'] = book_['f5']
+    book = _restore_book(ind0, ind1, ind2, ind3, book)
+    book.tofile(path+'book')
+
+
+@njit(nogil=True)
+def _restore_book(ind0, ind1, ind2, ind3, book):
+    # 对 ind0 层遍历 (f4)
+    for i0 in range(1, len(ind0)):
+        f4_val = ind0[i0]['f0']
+        i1_end = int(ind0[i0]['f1'] + 1)
+        i1_start = int(ind0[i0 - 1]['f1'] + 1)
+
+        # 对 ind1 层遍历 (f3)
+        for i1 in range(i1_start, i1_end):
+            f3_val = ind1[i1]['f0']
+            i2_end = int(ind1[i1]['f1'] + 1)
+            i2_start = int(ind1[i1 - 1]['f1'] + 1)
+
+            # 对 ind2 层遍历 (f2)
+            for i2 in range(i2_start, i2_end):
+                f2_val = ind2[i2]['f0']
+                i3_end = int(ind2[i2]['f1'] + 1)
+                i3_start = int(ind2[i2 - 1]['f1'] + 1)
+
+                # 对 ind3 层遍历 (f1)
+                for i3 in range(i3_start, i3_end):
+                    f1_val = ind3[i3]['f0']
+                    i3_end = int(ind3[i3]['f1'] + 1)
+                    i3_start = int(ind3[i3 - 1]['f1'] + 1) if i3 != 1 else 0
+                    # 填充 [start_line, end_line] 行的 f4,f3,f2,f1 值
+                    book['f4'][i3_start:i3_end] = f4_val
+                    book['f3'][i3_start:i3_end] = f3_val
+                    book['f2'][i3_start:i3_end] = f2_val
+                    book['f1'][i3_start:i3_end] = f1_val
+    return book
+
+
 if __name__ == '__main__':
     freeze_support()
     t0 = time.time()
-    trie_compress_progress(r"D:\2048calculates\test", "free10w_1024_427.book")
+    trie_compress_progress(r"Q:\tables\free10w_1024", "free10w_1024_120.book")
+    trie_compress_progress(r"Q:\tables\free10w_1024", "free10w_1024_131.book")
+    trie_compress_progress(r"Q:\tables\free10w_1024", "free10w_1024_132.book")
     print(time.time() - t0)
+
+# if __name__ == '__main__':
+#     restore_book(r"Q:\tables-test\4432f_2048_251.z\4432f_2048_251.")

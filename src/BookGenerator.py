@@ -8,6 +8,7 @@ import traceback
 
 import numpy as np
 from numba import njit, prange
+import psutil
 
 from BoardMover import BoardMover
 import Config
@@ -102,12 +103,6 @@ def p_unique(arrs: List[np.ndarray[np.uint64]]
     return arrs
 
 
-@njit(nogil=True,parallel=True)
-def is_sorted_ascending(arr: np.ndarray) -> bool:
-    # 通过比较相邻元素来判断是否升序
-    return np.all(arr[:-1]<=arr[1:])
-
-
 @njit(nogil=True)
 def _merge_deduplicate_all(arrays: List[np.ndarray], length: int = 0) -> np.ndarray:
     if len(arrays) == 1:
@@ -156,12 +151,13 @@ def binary_search(arr, x):
     return left
 
 
-def merge_deduplicate_all(arrays: List[np.ndarray], n_threads: int=8) -> list[np.ndarray]:
+def merge_deduplicate_all(arrays: List[np.ndarray], pivots_array, n_threads: int | None = None) -> list[np.ndarray]:
     """
     多线程合并并去重多个已排序的数组
     """
+    n_threads = os.cpu_count() if n_threads is None else n_threads
     num_arrays = len(arrays)
-    pivots = arrays[0][np.arange(1, n_threads) * len(arrays[0]) // n_threads]
+    pivots = pivots_array[np.arange(1, n_threads) * len(pivots_array) // n_threads]
 
     # 在所有数组中找到每个枢轴的位置
     split_positions = np.zeros((num_arrays, n_threads + 1), dtype=np.int64)
@@ -175,10 +171,10 @@ def merge_deduplicate_all(arrays: List[np.ndarray], n_threads: int=8) -> list[np
 @njit(parallel=True, nogil=True)
 def _merge_deduplicate_all_p(arrays, split_positions, n_threads):
     num_arrays = len(arrays)
-    res = [np.empty(0,dtype='uint64')] * n_threads
+    res = [np.empty(0, dtype='uint64')] * n_threads
     # 并行归并每个分区
     for t in prange(n_threads):
-        temp_arrays = [np.empty(0,dtype='uint64')] * num_arrays
+        temp_arrays = [np.empty(0, dtype='uint64')] * num_arrays
         for a in range(num_arrays):
             s = split_positions[a][t]
             e = split_positions[a][t + 1]
@@ -298,7 +294,7 @@ def gen_boards_big(step: int,
     logger.debug('Segmentation_ac ' + repr(np.round(percents, 3)))
     seg_list = update_seg(seg_list, percents, 0.5)
     # 如果每次循环生成的数组过长则进行一次细分
-    if np.mean(actual_lengths) * n > 262144000:
+    if np.mean(actual_lengths) * n > 16777216 * round(psutil.virtual_memory().total / (1024**3),0):
         seg_list = split_seg(seg_list)
         length_factors_list = split_length_factor_list(length_factors_list)
         pivots_list = split_pivots_list(pivots_list)
@@ -306,11 +302,12 @@ def gen_boards_big(step: int,
     t2 = time.time()
 
     gc.collect()
-    arr1 = merge_deduplicate_all(arr1s)
+
+    arr1 = merge_deduplicate_all(arr1s, arr0)
     del arr1s
     arr1 = concatenate(arr1)
     check_sorted(arr1)
-    arr2 = merge_deduplicate_all(arr2s)
+    arr2 = merge_deduplicate_all(arr2s, arr0)
     del arr2s
     arr2 = concatenate(arr2)
     check_sorted(arr2)
@@ -325,9 +322,9 @@ def gen_boards_big(step: int,
     return arr1, arr2, pivots_list, seg_list, length_factors_list, max(percents) / np.mean(percents)
 
 
-@njit(nogil=True,parallel=True)
+@njit(nogil=True, parallel=True)
 def is_sorted(arr: np.ndarray) -> bool:
-    return np.all(arr[:-1]<arr[1:])
+    return np.all(arr[:-1] < arr[1:])
 
 
 def check_sorted(arr):
@@ -376,6 +373,8 @@ def generate_process(
         # noinspection PyUnresolvedReferences
         length_factors_list: List[List[float]] = \
             np.loadtxt(length_factors_list_path, delimiter=',', dtype=np.float64).tolist()
+        if isinstance(length_factors_list[0], float):  # 如果length_factors_list_path是1*n二维数组，写入txt再读取会变成一维
+            length_factors_list = [length_factors_list]  # type:ignore
         length_factors: List[float] = harmonic_mean_by_column(length_factors_list)
         length_factor: float = predict_next_length_factor_quadratic(length_factors) * 1.2
     except FileNotFoundError:
@@ -407,7 +406,8 @@ def generate_process(
             pivots_list = [pivots] * int(len(seg_list) // n)
 
         # 决定是否使用gen_boards_big处理
-        segment_size = 67108864 if isfree else 104857600
+        segment_size = 4194304 if isfree else 6553600
+        segment_size *= round(psutil.virtual_memory().total / (1024**3),0)
         # 生成新的棋盘状态
         if len(d0) < segment_size:
             t0 = time.time()
@@ -568,12 +568,12 @@ def gen_boards(arr0: np.ndarray[np.uint64],
                 continue
             for i in range(16):  # 遍历每个位置
                 if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):
-                    t1 = t | (np.uint64(1) << np.uint64(4 * i))  # 填充数字2（2的对数为1，即4位中的0001）
+                    t1 = t | (np.uint64(1) << np.uint64(4 * i))  # 填充数字2
                     for newt in bm.move_all_dir(t1):
                         if newt != t1 and pattern_check_func(newt):
                             arr1[c1t] = newt
                             c1t += 1
-                    t1 = t | (np.uint64(2) << np.uint64(4 * i))  # 填充数字2（2的对数为1，即4位中的0001）
+                    t1 = t | (np.uint64(2) << np.uint64(4 * i))  # 填充数字4
                     for newt in bm.move_all_dir(t1):
                         if newt != t1 and pattern_check_func(newt):
                             arr2[c2t] = newt

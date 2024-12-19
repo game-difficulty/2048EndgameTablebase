@@ -8,8 +8,9 @@ from BoardMover import SingletonBoardMover, BoardMoverWithScore
 from Config import SingletonConfig
 from TrieCompressor import trie_decompress_search
 from Calculator import min_all_symm, minUL, re_self, is_L3_pattern, is_4431_pattern, is_444_pattern, is_free_pattern, \
-    is_LL_pattern, is_4432_pattern, is_4441_pattern, is_442_pattern, is_t_pattern, is_4442_pattern, \
-    is_movingLL_pattern, is_3433_pattern, is_2433_pattern, is_3432_pattern, is_3442_pattern, is_4432f_pattern
+    is_LL_pattern, is_4432_pattern, is_4441_pattern, is_442_pattern, is_t_pattern, is_4442_pattern, is_4442f_pattern,\
+    is_movingLL_pattern, is_3433_pattern, is_2433_pattern, is_3432_pattern, is_3442_pattern, is_4432f_pattern, \
+    is_L3t_pattern
 from Variants.vCalculator import is_variant_pattern, min24, min34, min33
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -30,11 +31,13 @@ class BookReader:
         'free9': [-196608 - 18, is_free_pattern, min_all_symm],
         'free10': [-163840 - 20, is_free_pattern, min_all_symm],
         'L3': [-196608 - 8, is_L3_pattern, re_self],
+        'L3t': [-196608 - 8, is_L3t_pattern, re_self],
         '442': [-196608 - 8, is_442_pattern, re_self],
         't': [-196608 - 8, is_t_pattern, re_self],
         '4441': [-98304 - 28, is_4441_pattern, re_self],
         '4432': [-98304 - 28, is_4432_pattern, minUL],
         '4442': [-98304 - 52, is_4442_pattern, re_self],
+        '4442f': [-98304 - 36, is_4442f_pattern, re_self],
         'free8w': [-262144 - 14, is_free_pattern, min_all_symm],
         'free9w': [-229376 - 16, is_free_pattern, min_all_symm],
         'free10w': [-196608 - 18, is_free_pattern, min_all_symm],

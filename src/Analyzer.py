@@ -22,11 +22,14 @@ class Analyzer:
         'free9': 6,
         'free10': 5,
         'L3': 6,
+        'L3t': 6,
         '442': 6,
         't': 6,
         '4441': 3,
         '4432': 3,
+        '4432f': 4,
         '4442': 2,
+        '4442f': 3,
         'free8w': 8,
         'free9w': 7,
         'free10w': 6,
@@ -378,7 +381,7 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.target_combo, 0, 2, 1, 1)
         self.pattern_combo = QtWidgets.QComboBox(self.centralwidget)
         self.pattern_combo.setObjectName("pattern_combo")
-        for i in ["444", "4431", "LL", "L3", "t", "442", "free8", "free9", "free10", "4441", "4432", "4442",
+        for i in ["444", "4431", "LL", "L3", "t", "442", "free8", "free9", "free10", "4441", "4432", "4442", "4442f",
                   "3433", "3442", "3432", "2433", "movingLL",
                   "free8w", "free9w", "free10w", "free11w", '2x4', '3x3', '3x4']:
             self.pattern_combo.addItem(i)

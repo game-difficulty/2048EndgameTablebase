@@ -41,13 +41,18 @@ class TrainFrame(BaseBoardFrame):
         local_pos = self.game_square.mapFromParent(event.pos())
         # 找到被点击的格子
         i, j = 0, 0
+        is_click_on_tiles = False
         for i, row in enumerate(self.game_square.frames):
             for j, frame in enumerate(row):
                 if frame.geometry().contains(local_pos):
+                    is_click_on_tiles = True
                     break  # 跳出内层循环
             else:
                 continue  # 如果没有遇到 break，继续外层循环
             break  # 如果内层循环遇到 break，这里就会跳出外层循环
+
+        if not is_click_on_tiles:  # 点击到的是间隙（不是任何一个tiles）
+            return
 
         if self.num_to_set is not None:
             if event.button() == Qt.LeftButton:
@@ -75,6 +80,7 @@ class TrainFrame(BaseBoardFrame):
                 self.update_frame(num_to_set, i, j, False)
                 self.board[i][j] = num_to_set
                 self.board_encoded = np.uint64(self.mover.encode_board(self.board))
+                self.history.append((self.board_encoded, self.score))
                 self.update_results.emit()
                 return
 
@@ -337,8 +343,8 @@ class TrainWindow(QtWidgets.QMainWindow):
 
         self.menu_ptn = QtWidgets.QMenu(self.menubar)
         self.menu_ptn.setObjectName("menuMENU")
-        for ptn in ['t', 'L3', '442', 'LL', '444', '4431', "4441", "4432", '4442', 'free8', 'free9', 'free10',
-                    "3433", "3442", "3432", "2433",  "movingLL", "4432f",
+        for ptn in ['t', 'L3', 'L3t', '442', 'LL', '444', '4431', "4441", "4432", '4442', 'free8', 'free9', 'free10',
+                    "3433", "3442", "3432", "2433",  "movingLL", "4432f", "4442f",
                     'free8w', 'free9w', 'free10w', "free11w", '2x4', '3x3', '3x4']:
             m = QtWidgets.QAction(ptn, self)
             m.triggered.connect(lambda: self.menu_selected(0))  # type: ignore
