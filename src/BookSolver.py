@@ -9,7 +9,7 @@ from BoardMover import BoardMover
 import Config
 from Config import SingletonConfig
 from TrieCompressor import trie_compress_progress
-
+from LzmaCompressor import compress_with_7z, decompress_with_7z
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
@@ -17,6 +17,29 @@ ToFindFunc = Callable[[np.ndarray[np.uint64]], None]
 ToFindFunc1 = Callable[[np.uint64], np.uint64]
 
 logger = Config.logger
+
+
+def handle_restart(i, pathname, steps, d1, d2, started):
+    """
+    处理断点重连逻辑
+    """
+    if os.path.exists(pathname + str(i) + '.book'):
+        logger.debug(f"skipping step {i}")
+        if not SingletonConfig().config.get('optimal_branch_only', False):
+            do_compress(pathname + str(i + 2) + '.book')
+        return False, None, None
+    elif os.path.exists(pathname + str(i) + '.z') or \
+            os.path.exists(pathname + str(i) + '.book.7z'):
+        logger.debug(f"skipping step {i}")
+        return False, None, None
+    elif not started:
+        started = True
+        if i != steps - 3 or d1 is None or d2 is None:
+            d1 = np.fromfile(pathname + str(i + 1) + '.book', dtype='uint64,uint32')
+            d2 = np.fromfile(pathname + str(i + 2) + '.book', dtype='uint64,uint32')
+        return started, d1, d2
+
+    return True, d1, d2
 
 
 def recalculate_process(
@@ -34,25 +57,18 @@ def recalculate_process(
         spawn_rate4: float = 0.1
 ) -> None:
     started = False
+    deletion_threshold = np.uint32(SingletonConfig().config.get('mini_table', 0) * 4e9)
     # 回算搜索时可能需要使用索引进行加速
     ind1: np.ndarray[np.uint32] | None = None
 
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
-        # 断点重连
-        if os.path.exists(pathname + str(i) + '.book'):
-            logger.debug(f"skipping step {i}")
-            do_compress(pathname + str(i + 2) + '.book')
+        started, d1, d2 = handle_restart(i, pathname, steps, d1, d2, started)
+        if not started:
             continue
-        elif os.path.exists(pathname + str(i) + '.z'):
-            logger.debug(f"skipping step {i}")
-            continue
-        elif not started:
-            started = True
-            if i != steps - 3 or d1 is None or d2 is None:
-                d1 = np.fromfile(pathname + str(i + 1) + '.book', dtype='uint64,uint32')
-                d2 = np.fromfile(pathname + str(i + 2) + '.book', dtype='uint64,uint32')
 
+        if SingletonConfig().config.get('compress_temp_files', False):
+            decompress_with_7z(pathname + str(i) + '.7z')
         d0 = np.fromfile(pathname + str(i), dtype=np.uint64)
 
         t0 = time.time()
@@ -78,7 +94,7 @@ def recalculate_process(
                          to_find_func, ind1, ind2, i > docheck_step, spawn_rate4)
         length = len(d0)
         t2 = time.time()
-        d0 = remove_died(d0)  # 去除活不了的局面
+        d0 = remove_died(d0).copy()  # 去除0成功率的局面
 
         t3 = time.time()
         if t3 > t0:
@@ -91,7 +107,14 @@ def recalculate_process(
             os.remove(pathname + str(i))
         logger.debug(f'step {i} written\n')
 
-        do_compress(pathname + str(i + 2) + '.book')  # 如果设置了压缩，则压缩i+2的book，其已经不需要再频繁查找
+        if deletion_threshold > 0:
+            remove_died(d2, deletion_threshold).tofile(pathname + str(i + 2) + '.book')  # 再写一次，把成功率低于阈值的局面去掉
+
+        if SingletonConfig().config.get('compress_temp_files', False):
+            compress_with_7z(pathname + str(i + 2) + '.book')
+        elif not SingletonConfig().config.get('optimal_branch_only', False):
+            do_compress(pathname + str(i + 2) + '.book')  # 如果设置了压缩，则压缩i+2的book，其已经不需要再频繁查找
+
         if i > 0:
             d1, d2 = d0, d1
 
@@ -106,12 +129,12 @@ def expand(arr: np.ndarray[np.uint64]) -> np.ndarray[np.dtype([('f0', np.uint64)
 
 @njit(nogil=True)
 def remove_died(
-        arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])]
+        arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])], deletion_threshold: np.uint32 = 0
 ) -> np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])]:
     count = 0
-    # 原地移动不为0的元素
+    # 原地移动成功率高于阈值的元素
     for i in range(len(arr)):
-        if arr[i]['f1'] != 0:
+        if arr[i]['f1'] > deletion_threshold:
             arr[count] = arr[i]
             count += 1
     return arr[:count]
@@ -270,8 +293,10 @@ def recalculate(
 def do_compress(bookpath: str) -> None:
     if bookpath[-4:] != 'book':
         return
+    if bookpath[-7:] in ['_0.book', '_1.book', '_2.book']:
+        return
     if SingletonConfig().config.get('compress', False) and os.path.exists(bookpath):
-        if os.path.getsize(bookpath) > 4194304:
+        if os.path.getsize(bookpath) > 2097152:
             trie_compress_progress(*os.path.split(bookpath))
             if os.path.exists(bookpath):
                 os.remove(bookpath)
@@ -281,3 +306,134 @@ def tofile_(data, path):
     data.tofile(path + '.book')
     if os.path.exists(path):
         os.remove(path)
+
+
+@njit(parallel=True, nogil=True)
+def find_optimal_branches(
+        arr0: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+        arr1: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+        bm: BoardMover,
+        result: np.ndarray[bool],
+        pattern_check_func: PatternCheckFunc,
+        to_find_func: ToFindFunc1,
+        ind1: np.ndarray[np.uint32] | None,
+        new_value: int,
+) -> np.ndarray[bool]:
+    for start, end in (
+            (0, len(arr0) // 10), (len(arr0) // 10, len(arr0) // 3), (len(arr0) // 3, len(arr0))):  # 缓解负载不均衡问题
+        for k in prange(start, end):
+            t = arr0[k][0]
+            for i in range(16):  # 遍历所有位置
+                if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
+                    t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
+                    optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
+                    optimal_pos_index = 0
+                    for newt in bm.move_all_dir(t_gen):
+                        if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
+                            # 获取移动后的面板成功概率
+                            success_rate, pos_index = search_arr2(arr1, to_find_func(newt), ind1)
+                            if success_rate > optimal_success_rate:
+                                optimal_success_rate = success_rate
+                                optimal_pos_index = pos_index
+                    result[optimal_pos_index] = True
+    return result
+
+
+@njit(nogil=True)
+def binary_search_arr2(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+                       target: np.uint64, low: np.uint32 | None = None, high: np.uint32 | None = None
+                       ) -> Tuple[np.uint32, np.uint64]:
+    """相比binary_search_arr，还会返回索引"""
+    if low is None:
+        low = 0
+        high = len(arr) - 1
+
+    while low <= high:
+        mid = np.uint32((low + high) // 2)
+        mid_val = arr[mid][0]
+        if mid_val < target:
+            low = mid + 1
+        elif mid_val > target:
+            high = mid - 1
+        else:
+            return arr[mid][1], mid  # 找到匹配，返回对应的uint32值和索引位置
+
+    return 0, 0  # 如果没有找到匹配项
+
+
+@njit(nogil=True)
+def search_arr2(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+                b: np.uint64, ind: np.ndarray[np.uint32] | None) -> Tuple[np.uint32, np.uint64]:
+    """
+    相比search_arr，还会返回索引
+    """
+    if ind is None:
+        return binary_search_arr2(arr, b)
+    header = b >> np.uint32(40)
+    low, high = ind[header], ind[header + 1] - 1
+    return binary_search_arr2(arr, b, low, high)
+
+
+def keep_only_optimal_branches(
+        pattern_check_func: PatternCheckFunc,
+        to_find_func: ToFindFunc1,
+        steps: int,
+        pathname: str,
+        bm: BoardMover):
+    d0, d1 = None, None
+    started = False
+    for i in range(0, steps):
+        started, d0, d1 = handle_restart_opt_only(i, started, d0, d1, pathname)
+        if SingletonConfig().config.get('compress_temp_files', False):
+            decompress_with_7z(pathname + str(i) + '.book.7z')
+        if i > 20 and started:
+            d2 = np.fromfile(pathname + str(i) + '.book', dtype='uint64,uint32')
+            ind = create_index(d2)
+            is_in_optimal_branches_mask = np.zeros(len(d2), dtype='bool')
+            is_in_optimal_branches_mask = find_optimal_branches(d0, d2, bm, is_in_optimal_branches_mask,
+                                                                pattern_check_func, to_find_func, ind, 2)
+            is_in_optimal_branches_mask = find_optimal_branches(d1, d2, bm, is_in_optimal_branches_mask,
+                                                                pattern_check_func, to_find_func, ind, 1)
+            d2 = d2[is_in_optimal_branches_mask].copy()
+            d2.tofile(pathname + str(i) + '.book')
+            d0, d1 = d1, d2
+            del is_in_optimal_branches_mask, d2
+            logger.debug(f'step {i} retains only the optimal branch\n')
+        do_compress(pathname + str(i - 2) + '.book')
+
+    do_compress(pathname + str(steps - 2) + '.book')
+    do_compress(pathname + str(steps - 1) + '.book')
+    if os.path.exists(pathname + 'optlayer'):
+        os.remove(pathname + 'optlayer')
+
+
+def handle_restart_opt_only(i, started, d0, d1, pathname):
+    if started and d0 is not None:
+        with open(pathname + 'optlayer', 'w') as f:
+            f.write(str(i - 1))
+        return True, d0, d1
+    try:
+        with open(pathname + 'optlayer', 'r') as f:
+            current_layer = int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        current_layer = i - 1
+    if current_layer >= i:
+        return False, None, None
+    else:
+        if (i > 20) & (d0 is None):
+            try:
+                d0 = np.fromfile(pathname + str(i - 2) + '.book', dtype='uint64,uint32')
+                d1 = np.fromfile(pathname + str(i - 1) + '.book', dtype='uint64,uint32')
+                return True, d0, d1
+            except FileNotFoundError:
+                pass
+        return False, d0, d1
+
+
+# if __name__ == "__main__":
+#     from Calculator import is_free_pattern, min_all_symm
+#     from BoardMover import BoardMover
+#
+#     bm0 = BoardMover()
+#     keep_only_optimal_branches(is_free_pattern, min_all_symm, 536,
+#                                r"D:\2048calculates\table\free10w_1024 - 副本\free10w_1024_", bm0)

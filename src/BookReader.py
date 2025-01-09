@@ -5,13 +5,9 @@ from typing import Callable, Dict, Tuple, Union, List, Optional
 import numpy as np
 
 from BoardMover import SingletonBoardMover, BoardMoverWithScore
-from Config import SingletonConfig
+from Config import SingletonConfig, formation_info
 from TrieCompressor import trie_decompress_search
-from Calculator import min_all_symm, minUL, re_self, is_L3_pattern, is_4431_pattern, is_444_pattern, is_free_pattern, \
-    is_LL_pattern, is_4432_pattern, is_4441_pattern, is_442_pattern, is_t_pattern, is_4442_pattern, is_4442f_pattern,\
-    is_movingLL_pattern, is_3433_pattern, is_2433_pattern, is_3432_pattern, is_3442_pattern, is_4432f_pattern, \
-    is_L3t_pattern
-from Variants.vCalculator import is_variant_pattern, min24, min34, min33
+from Calculator import re_self
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 ToFindFunc = Callable[[np.uint64], np.uint64]
@@ -22,42 +18,12 @@ class BookReader:
     bm: BoardMoverWithScore = SingletonBoardMover(2)
     vbm: BoardMoverWithScore = SingletonBoardMover(4)
 
-    pattern_map: Dict[str, Tuple[int, PatternCheckFunc, Union[ToFindFunc, Tuple[ToFindFunc, ToFindFunc]]]] = {
-        '': [0, None, re_self],
-        'LL': [-131072 - 34, is_LL_pattern, (minUL, re_self)],
-        '4431': [-131072 - 20, is_4431_pattern, re_self],
-        '444': [-131072 - 2, is_444_pattern, re_self],
-        'free8': [-229376 - 16, is_free_pattern, min_all_symm],
-        'free9': [-196608 - 18, is_free_pattern, min_all_symm],
-        'free10': [-163840 - 20, is_free_pattern, min_all_symm],
-        'L3': [-196608 - 8, is_L3_pattern, re_self],
-        'L3t': [-196608 - 8, is_L3t_pattern, re_self],
-        '442': [-196608 - 8, is_442_pattern, re_self],
-        't': [-196608 - 8, is_t_pattern, re_self],
-        '4441': [-98304 - 28, is_4441_pattern, re_self],
-        '4432': [-98304 - 28, is_4432_pattern, minUL],
-        '4442': [-98304 - 52, is_4442_pattern, re_self],
-        '4442f': [-98304 - 36, is_4442f_pattern, re_self],
-        'free8w': [-262144 - 14, is_free_pattern, min_all_symm],
-        'free9w': [-229376 - 16, is_free_pattern, min_all_symm],
-        'free10w': [-196608 - 18, is_free_pattern, min_all_symm],
-        'free11w': [-163840 - 20, is_free_pattern, min_all_symm],
-        '2x4': [-262144, is_variant_pattern, min24],
-        '3x3': [-229376, is_variant_pattern, min33],
-        '3x4': [-131072, is_variant_pattern, min34],
-        '4432f': [-131072 - 20, is_4432f_pattern, minUL],
-        "3433": [-98304 - 6, is_3433_pattern, re_self],
-        "3442": [-98304 - 8, is_3442_pattern, re_self],
-        "3432": [-131072 - 6, is_3432_pattern, re_self],
-        "2433": [-131072 - 6, is_2433_pattern, re_self],
-        "movingLL": [-131072 - 14, is_movingLL_pattern, min_all_symm],
-    }
-
     @staticmethod
     def move_on_dic(board: np.ndarray, pattern: str, target: str, pattern_full: str, pos: str = '0'
                     ) -> Dict[str, Union[str, float, int]]:
         bm = BookReader.bm if pattern not in ('2x4', '3x3', '3x4') else BookReader.vbm
-        nums_adjust, pattern_check_func, to_find_func = BookReader.pattern_map[pattern]
+        nums_adjust, pattern_check_func, to_find_func, success_check_func, _ = \
+            formation_info.get(pattern, [0, None, re_self, None, None])
         path = SingletonConfig().config['filepath_map'].get(pattern_full, '')
         nums = (board.sum() + nums_adjust) / 2
 
@@ -210,9 +176,9 @@ class BookReader:
 
 
 if __name__ == "__main__":
-    _result = BookReader.move_on_dic(np.array([[2, 4, 0, 2],
-                                               [4, 8, 4, 4],
-                                               [512, 16, 1024, 32768],
-                                               [32768, 128, 32768, 32768]]),
-                                     '3432', '2048', '3432_2048')
+    _result = BookReader.move_on_dic(np.array([[2, 8, 4, 2],
+                                               [64, 8, 4, 2],
+                                               [32768, 32768, 32768, 32768],
+                                               [32768, 32768, 32768, 32768]]),
+                                     'free8w', '128', 'free8w_128')
     print(_result)

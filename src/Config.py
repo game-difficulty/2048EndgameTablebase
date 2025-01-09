@@ -2,10 +2,99 @@ import os
 import sys
 import pickle
 import logging
+from typing import Callable, Dict, Tuple, Union
 
 import numpy as np
 import cpuinfo
 from PyQt5 import QtWidgets
+import Calculator
+import Variants.vCalculator as vCalculator
+
+PatternCheckFunc = Callable[[np.uint64], bool]
+ToFindFunc = Callable[[np.uint64], np.uint64]
+SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
+
+formation_info: Dict[str, Tuple[int, PatternCheckFunc, Union[ToFindFunc, Tuple[ToFindFunc, ToFindFunc]],
+                                SuccessCheckFunc, np.ndarray[np.uint64] | None]] = {
+    'LL': [-131072 - 34, Calculator.is_LL_pattern, (Calculator.minUL, Calculator.re_self), Calculator.is_LL_success,
+           np.array([np.uint64(0x1000000023ff24ff), np.uint64(0x0000000123ff24ff)], dtype=np.uint64)],
+    '4431': [-131072 - 20, Calculator.is_4431_pattern, Calculator.re_self, Calculator.is_4431_success,
+             np.array([np.uint64(0x10000000123f2fff), np.uint64(0x00000001123f2fff)], dtype=np.uint64)],
+    '444': [-131072 - 2, Calculator.is_444_pattern, Calculator.re_self, Calculator.is_444_success,
+            np.array([np.uint64(0x100000000000ffff), np.uint64(0x000000010000ffff)], dtype=np.uint64)],
+    'free8': [-229376 - 16, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'free9': [-196608 - 18, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'free10': [-163840 - 20, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'L3': [-196608 - 8, Calculator.is_L3_pattern, Calculator.re_self, Calculator.is_L3_success,
+           np.array([np.uint64(0x100000001fff2fff), np.uint64(0x000000011fff2fff)], dtype=np.uint64)],
+    'L3t': [-196608 - 8, Calculator.is_L3t_pattern, Calculator.re_self, Calculator.is_L3t_success,
+            np.array([np.uint64(0x100000001fff2fff), np.uint64(0x000000011fff2fff)], dtype=np.uint64)],
+    '442': [-196608 - 8, Calculator.is_442_pattern, Calculator.re_self, Calculator.is_442_success,
+            np.array([np.uint64(0x1000000012ffffff), np.uint64(0x0000000112ffffff)], dtype=np.uint64)],
+    't': [-196608 - 8, Calculator.is_t_pattern, Calculator.re_self, Calculator.is_t_success,
+          np.array([np.uint64(0x10000000f1fff2ff), np.uint64(0x00000001f1fff2ff)], dtype=np.uint64)],
+    '4441': [-98304 - 28, Calculator.is_4441_pattern, Calculator.re_self, Calculator.is_4441_success,
+             np.array([np.uint64(0x0000100012323fff), np.uint64(0x0001000012323fff)], dtype=np.uint64)],
+    '4432': [-98304 - 28, Calculator.is_4432_pattern, Calculator.minUL, Calculator.is_4432_success,
+             np.array([np.uint64(0x00001000123f23ff), np.uint64(0x00010000123f23ff)], dtype=np.uint64)],
+    '4442': [-98304 - 52, Calculator.is_4442_pattern, Calculator.re_self, Calculator.is_4442_success,
+             np.array([np.uint64(0x00001000123424ff), np.uint64(0x00010000123424ff)], dtype=np.uint64)],
+    '4442f': [-98304 - 36, Calculator.is_4442f_pattern, Calculator.re_self, Calculator.is_4442f_success,
+              np.array([np.uint64(0x00001000123f24ff), np.uint64(0x0001000012342fff)], dtype=np.uint64)],
+    'free8w': [-262144 - 14, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'free9w': [-229376 - 16, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'free10w': [-196608 - 18, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'free11w': [-163840 - 20, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    '2x4': [-262144, vCalculator.is_variant_pattern, vCalculator.min24, vCalculator.is_2x4_success,
+            np.array([np.uint64(0xffff00000000ffff)], dtype=np.uint64)],
+    '3x3': [-229376, vCalculator.is_variant_pattern, vCalculator.min33, vCalculator.is_3x3_success,
+            np.array([np.uint64(0x000f000f000fffff)], dtype=np.uint64)],
+    '3x4': [-131072, vCalculator.is_variant_pattern, vCalculator.min34, vCalculator.is_3x4_success,
+            np.array([np.uint64(0x000000000000ffff)], dtype=np.uint64)],
+    '4432f': [-131072 - 20, Calculator.is_4432f_pattern, Calculator.minUL, Calculator.is_4432f_success,
+              np.array([np.uint64(0x00001000123f2fff), np.uint64(0x00010000123f2fff)], dtype=np.uint64)],
+    "3433": [-98304 - 6, Calculator.is_3433_pattern, Calculator.re_self, Calculator.is_3433_success,
+             np.array([np.uint64(0x100000000000f2ff), np.uint64(0x000000000001f2ff)], dtype=np.uint64)],
+    "3442": [-98304 - 8, Calculator.is_3442_pattern, Calculator.re_self, Calculator.is_3442_success,
+             np.array([np.uint64(0x10000000000ff21f), np.uint64(0x00000000100ff21f)], dtype=np.uint64)],
+    "3432": [-131072 - 6, Calculator.is_3432_pattern, Calculator.minUL, Calculator.is_3432_success,
+             np.array([np.uint64(0x10000000000ff2ff), np.uint64(0x00000000100ff2ff)], dtype=np.uint64)],
+    "2433": [-131072 - 6, Calculator.is_2433_pattern, Calculator.re_self, Calculator.is_2433_success,
+             np.array([np.uint64(0x10000000f000f2ff), np.uint64(0x00000000f001f2ff)], dtype=np.uint64)],
+    "movingLL": [-131072 - 14, Calculator.is_movingLL_pattern, Calculator.min_all_symm, Calculator.is_movingLL_success,
+                 np.array([np.uint64(0x100000001ff12ff2), np.uint64(0x1000000012ff21ff)], dtype=np.uint64)],
+}
+
+pattern_32k_tiles_map: Dict[str, int] = {
+    '': 0,
+    'LL': 4,
+    '4431': 4,
+    '444': 4,
+    'free8': 7,
+    'free9': 6,
+    'free10': 5,
+    'L3': 6,
+    'L3t': 6,
+    '442': 6,
+    't': 6,
+    '4441': 3,
+    '4432': 3,
+    '4432f': 4,
+    '4442': 2,
+    '4442f': 3,
+    'free8w': 8,
+    'free9w': 7,
+    'free10w': 6,
+    'free11w': 5,
+    '2x4': 0,
+    '3x3': 0,
+    '3x4': 0,
+    "3433": 3,
+    "3442": 3,
+    "3432": 4,
+    "2433": 4,
+    "movingLL": 4,
+}
 
 
 # noinspection PyAttributeOutsideInit
@@ -42,8 +131,11 @@ class SingletonConfig:
                 '4_spawn_rate': 0.1,
                 'do_animation': [True, True],
                 'game_state': [np.uint64(0), 0, 0],
-                'dis_32k': True,
-                'compress': True,
+                'dis_32k': False,
+                'compress': False,
+                'optimal_branch_only': False,
+                'compress_temp_files': False,
+                'deletion_threshold': 0,
                 'font_size_factor': 100,
                 'minigame_state': [dict(), dict()],  # [盘面，得分，最高分，最大数，是否曾过关, 新数位置], []
                 'power_ups_state': [dict(), dict()],

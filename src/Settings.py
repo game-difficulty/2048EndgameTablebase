@@ -6,7 +6,7 @@ from PyQt5 import QtCore, QtWidgets, QtGui
 
 from BookBuilder import start_build
 from Variants.vBookBuilder import v_start_build
-from Config import SingletonConfig
+from Config import SingletonConfig, formation_info
 
 
 # noinspection PyAttributeOutsideInit
@@ -56,9 +56,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.target_combo, 0, 2, 1, 1)
         self.pattern_combo = QtWidgets.QComboBox(self.centralwidget)
         self.pattern_combo.setObjectName("pattern_combo")
-        for i in ["444", "4431", "LL", "L3", "L3t", "t", "442", "free8", "free9", "free10", "4441", "4432", "4442",
-                  "4432f", "3433", "3442", "3432", "2433", "movingLL", "4442f",
-                  "free8w", "free9w", "free10w", "free11w", '2x4', '3x3', '3x4']:
+        for i in formation_info.keys():
             self.pattern_combo.addItem(i)
         self.selfLayout.addWidget(self.pattern_combo, 0, 1, 1, 1)
         self.pos_combo = QtWidgets.QComboBox(self.centralwidget)
@@ -77,59 +75,87 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.options_text, 2, 0, 1, 1)
         self.compress_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.compress_checkBox.setObjectName("compress_checkBox")
-        self.selfLayout.addWidget(self.compress_checkBox, 2, 1, 1, 1)
+        self.selfLayout.addWidget(self.compress_checkBox, 2, 3, 1, 1)
         if config.get('compress', False):
             self.compress_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
         else:
             self.compress_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.compress_checkBox.stateChanged.connect(self.compress_state_changed)  # type: ignore
+        self.optimal_branch_only_checkBox = QtWidgets.QCheckBox(self.centralwidget)
+        self.optimal_branch_only_checkBox.setObjectName("optimal_branch_only_checkBox")
+        self.selfLayout.addWidget(self.optimal_branch_only_checkBox, 2, 2, 1, 1)
+        if config.get('optimal_branch_only', False):
+            self.optimal_branch_only_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
+        else:
+            self.optimal_branch_only_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        self.optimal_branch_only_checkBox.stateChanged.connect(self.optimal_branch_only_state_changed)  # type: ignore
+        self.compress_temp_files_checkBox = QtWidgets.QCheckBox(self.centralwidget)
+        self.compress_temp_files_checkBox.setObjectName("compress_temp_files_checkBox")
+        self.selfLayout.addWidget(self.compress_temp_files_checkBox, 2, 1, 1, 1)
+        if config.get('compress_temp_files', False):
+            self.compress_temp_files_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
+        else:
+            self.compress_temp_files_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        self.compress_temp_files_checkBox.stateChanged.connect(self.compress_temp_files_state_changed)  # type: ignore
+
+        self.mini_table_text = QtWidgets.QLabel(self.centralwidget)
+        self.mini_table_text.setObjectName("mini_table_text")
+        self.mini_table_text.setStyleSheet("font: 500 12pt \"Cambria\";")
+        self.selfLayout.addWidget(self.mini_table_text, 3, 0, 1, 2)
+        self.deletion_threshold_box = QtWidgets.QDoubleSpinBox(self.centralwidget)
+        self.deletion_threshold_box.setObjectName("deletion_threshold_box")
+        self.deletion_threshold_box.setRange(0.0, 1.0)
+        self.deletion_threshold_box.setSingleStep(0.00001)
+        self.deletion_threshold_box.setValue(config.get('deletion_threshold', 0))
+        self.deletion_threshold_box.valueChanged.connect(self.update_deletion_threshold_rate)  # type: ignore
+        self.selfLayout.addWidget(self.deletion_threshold_box, 3, 2, 1, 1)
 
         self.hline = QtWidgets.QFrame(self.centralwidget)
         self.hline.setFrameShape(QtWidgets.QFrame.HLine)
         self.hline.setStyleSheet("border-width: 3px; border-style: inset;")
         self.hline.setFrameShadow(QtWidgets.QFrame.Sunken)
-        self.selfLayout.addWidget(self.hline, 4, 0, 1, 4)
+        self.selfLayout.addWidget(self.hline, 5, 0, 1, 4)
 
         self.colorset_text = QtWidgets.QLabel(self.centralwidget)
         self.colorset_text.setObjectName("colorset_text")
         self.colorset_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.colorset_text, 5, 0, 1, 1)
+        self.selfLayout.addWidget(self.colorset_text, 6, 0, 1, 1)
         self.color_combo = QtWidgets.QComboBox(self.centralwidget)
         self.color_combo.setObjectName("color_combo")
         for i in range(1, 16):
             self.color_combo.addItem(str(2 ** i))
-        self.selfLayout.addWidget(self.color_combo, 5, 1, 1, 1)
+        self.selfLayout.addWidget(self.color_combo, 6, 1, 1, 1)
         self.color_bt = QtWidgets.QPushButton(self.centralwidget)
         self.color_bt.clicked.connect(self.show_ColorDialog)  # type: ignore
         self.color_bt.setObjectName("color_bt")
-        self.selfLayout.addWidget(self.color_bt, 5, 2, 1, 1)
+        self.selfLayout.addWidget(self.color_bt, 6, 2, 1, 1)
         self.color_default_bt = QtWidgets.QPushButton(self.centralwidget)
         self.color_default_bt.clicked.connect(self.set_default_color)  # type: ignore
         self.color_default_bt.setObjectName("color_default_bt")
-        self.selfLayout.addWidget(self.color_default_bt, 5, 3, 1, 1)
+        self.selfLayout.addWidget(self.color_default_bt, 6, 3, 1, 1)
 
         self.spawnrate_text = QtWidgets.QLabel(self.centralwidget)
         self.spawnrate_text.setObjectName("spawnrate_text")
         self.spawnrate_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.spawnrate_text, 6, 0, 1, 1)
+        self.selfLayout.addWidget(self.spawnrate_text, 7, 0, 1, 1)
         self.spawnrate_box = QtWidgets.QDoubleSpinBox(self.centralwidget)
         self.spawnrate_box.setObjectName("spawnrate_box")
         self.spawnrate_box.setRange(0.0, 1.0)
         self.spawnrate_box.setSingleStep(0.01)
         self.spawnrate_box.setValue(SingletonConfig().config['4_spawn_rate'])
         self.spawnrate_box.valueChanged.connect(self.update_spawn_rate)  # type: ignore
-        self.selfLayout.addWidget(self.spawnrate_box, 6, 1, 1, 1)
+        self.selfLayout.addWidget(self.spawnrate_box, 7, 1, 1, 1)
         self.infoButton = QtWidgets.QPushButton()
         self.infoButton.setIcon(QtGui.QIcon(r'pic\OQM.png'))
         self.infoButton.setIconSize(QtCore.QSize(24, 24))
         self.infoButton.setFlat(True)
-        self.selfLayout.addWidget(self.infoButton, 6, 2, 1, 1)
+        self.selfLayout.addWidget(self.infoButton, 7, 2, 1, 1)
         self.infoButton.clicked.connect(self.show_message)  # type: ignore
 
         self.demo_speed_text = QtWidgets.QLabel(self.centralwidget)
         self.demo_speed_text.setObjectName("demo_speed_text")
         self.demo_speed_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.demo_speed_text, 7, 0, 1, 1)
+        self.selfLayout.addWidget(self.demo_speed_text, 8, 0, 1, 1)
         self.demo_speed_box = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal, self.centralwidget)
         self.demo_speed_box.setMinimum(0)
         self.demo_speed_box.setMaximum(200)
@@ -138,26 +164,26 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.demo_speed_box.setTickInterval(10)
         self.demo_speed_box.valueChanged.connect(self.demo_speed_changed)  # type: ignore
         self.demo_speed_box.setObjectName("demo_speed_box")
-        self.selfLayout.addWidget(self.demo_speed_box, 7, 1, 1, 3)
+        self.selfLayout.addWidget(self.demo_speed_box, 8, 1, 1, 3)
 
         self.anim_text = QtWidgets.QLabel(self.centralwidget)
         self.anim_text.setObjectName("anim_text")
         self.anim_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.anim_text, 8, 0, 1, 1)
+        self.selfLayout.addWidget(self.anim_text, 9, 0, 1, 1)
         self.appear_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.appear_checkBox.setObjectName("appear_checkBox")
         if config.get('do_animation', (False, False))[0]:
             self.appear_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
         else:
             self.appear_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
-        self.selfLayout.addWidget(self.appear_checkBox, 8, 1, 1, 1)
+        self.selfLayout.addWidget(self.appear_checkBox, 9, 1, 1, 1)
         self.pop_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.pop_checkBox.setObjectName("pop_checkBox")
         if config.get('do_animation', (False, False))[1]:
             self.pop_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
         else:
             self.pop_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
-        self.selfLayout.addWidget(self.pop_checkBox, 8, 2, 1, 1)
+        self.selfLayout.addWidget(self.pop_checkBox, 9, 2, 1, 1)
 
         self.tile_font_size_text = QtWidgets.QLabel(self.centralwidget)
         self.tile_font_size_text.setObjectName("tile_font_size_text")
@@ -192,6 +218,9 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.build_bt.setText(_translate("Settings", "BUILD"))
         self.options_text.setText(_translate("Settings", "Options:"))
         self.compress_checkBox.setText(_translate("Settings", "Compress"))
+        self.optimal_branch_only_checkBox.setText(_translate("Settings", "Opt Only"))
+        self.compress_temp_files_checkBox.setText(_translate("Settings", "Compress Temp Files"))
+        self.mini_table_text.setText(_translate("Settings", "Remove boards with a success rate below:"))
         self.set_filepath_bt.setText(_translate("Settings", "SET..."))
         self.pop_checkBox.setText(_translate("Settings", "Pop"))
         self.appear_checkBox.setText(_translate("Settings", "Appear"))
@@ -277,6 +306,16 @@ class SettingsWindow(QtWidgets.QMainWindow):
     def compress_state_changed(self):
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
 
+    def optimal_branch_only_state_changed(self):
+        SingletonConfig().config['optimal_branch_only'] = self.optimal_branch_only_checkBox.isChecked()
+
+    def compress_temp_files_state_changed(self):
+        SingletonConfig().config['compress_temp_files'] = self.compress_temp_files_checkBox.isChecked()
+
+    def update_deletion_threshold_rate(self):
+        # 某些系统把小数点显示成逗号，需要先改回去
+        SingletonConfig().config['deletion_threshold'] = float(self.deletion_threshold_box.text().replace(',', '.'))
+
     def update_spawn_rate(self):
         SingletonConfig().config['4_spawn_rate'] = float(self.spawnrate_box.text().replace(',', '.'))
 
@@ -285,6 +324,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
                                           '''make sure you know what you're doing''')
 
     def save_all(self):
+        SingletonConfig().config['deletion_threshold'] = float(self.deletion_threshold_box.text().replace(',', '.'))
         SingletonConfig().config['4_spawn_rate'] = float(self.spawnrate_box.text().replace(',', '.'))
         SingletonConfig().config['do_animation'] = [self.appear_checkBox.isChecked(), self.pop_checkBox.isChecked()]
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()

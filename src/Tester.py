@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit
 from PyQt5.QtGui import QIcon
 
 from BookReader import BookReader
-from Config import SingletonConfig
+from Config import SingletonConfig, formation_info
 from Gamer import BaseBoardFrame
 from Analyzer import AnalyzeWindow
 
@@ -183,9 +183,7 @@ class TestWindow(QtWidgets.QMainWindow):
 
         self.menu_ptn = QtWidgets.QMenu(self.menubar)
         self.menu_ptn.setObjectName("menuMENU")
-        for ptn in ['t', 'L3', 'L3t', '442', 'LL', '444', '4431', "4441", "4432", '4442', 'free8', 'free9', 'free10',
-                    "3433", "3442", "3432", "2433", "movingLL", "4432f", "4442f",
-                    'free8w', 'free9w', 'free10w', "free11w", '2x4', '3x3', '3x4', '?']:
+        for ptn in list(formation_info.keys()) + ['?']:
             m = QtWidgets.QAction(ptn, self)
             m.triggered.connect(lambda: self.menu_selected(0))  # type: ignore
             self.menu_ptn.addAction(m)

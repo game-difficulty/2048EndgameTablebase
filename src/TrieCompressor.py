@@ -217,7 +217,7 @@ def trie_compress_progress(path, filename):
     book_['f1'] = book['f5']
     del book
     target_dir = os.path.join(target_file, filename[:-4])
-    if len(book_) >= 8388608:
+    if len(book_) >= 2097152:
         func = compress_and_save_p
     else:
         func = compress_and_save
@@ -262,12 +262,12 @@ def _search_trie(ind, board):
 def search_tree(filepath, ind, segments, board):
     low, high = _search_trie(ind, board)
     if low == 0 and high == 0:
-        return 0, 0, 0, np.empty(0,dtype='uint8,uint16')  # 没找到
-    ind3_seg = np.fromfile(filepath + 'ii', dtype='uint8,uint16', count=high-low+2, offset=low*3-3)  # 这里多读一组
+        return 0, 0, 0, np.empty(0, dtype='uint8,uint16')  # 没找到
+    ind3_seg = np.fromfile(filepath + 'ii', dtype='uint8,uint16', count=high - low + 2, offset=low * 3 - 3)  # 这里多读一组
 
     pos1 = search_block2(ind3_seg[1:], np.uint8((board >> np.uint64(32)) & np.uint64(0xff)))  # 最后一个前缀
     if not pos1[1]:
-        return 0, 0, 0, np.empty(0,dtype='uint8,uint16')   # 没找到
+        return 0, 0, 0, np.empty(0, dtype='uint8,uint16')  # 没找到
     start, end = _get_seg_position(segments, pos1[0] + low)
 
     return int(start), int(end), pos1[0], ind3_seg
@@ -329,6 +329,8 @@ def trie_decompress_search(filepath, board, ind, segments):
     high = ind3_seg[pos + 1]['f1'] + 1
     low = ind3_seg[pos]['f1']
     if high == 1:
+        if target == block['f0'][0]:
+            return block['f1'][0] / 4000000000
         high = len(block)
     if low != 0:
         low += 1
@@ -443,6 +445,7 @@ def restore_book_and_ind3(z_file, s_file, ii_file):
 
 
 def restore_book(path):
+    """把压缩后的book还原"""
     z_file, s_file = path + "z", path + "s"
     ii_file = path + "ii"
     i_file = path + "i"
@@ -454,7 +457,7 @@ def restore_book(path):
     book['f0'] = book_['f0']
     book['f5'] = book_['f5']
     book = _restore_book(ind0, ind1, ind2, ind3, book)
-    book.tofile(path+'book')
+    book.tofile(path + 'book')
 
 
 @njit(nogil=True)
@@ -490,13 +493,96 @@ def _restore_book(ind0, ind1, ind2, ind3, book):
     return book
 
 
-if __name__ == '__main__':
-    freeze_support()
-    t0 = time.time()
-    trie_compress_progress(r"Q:\tables\free10w_1024", "free10w_1024_120.book")
-    trie_compress_progress(r"Q:\tables\free10w_1024", "free10w_1024_131.book")
-    trie_compress_progress(r"Q:\tables\free10w_1024", "free10w_1024_132.book")
-    print(time.time() - t0)
+# if __name__ == '__main__':
+#     freeze_support()
+#     t0 = time.time()
+#     trie_compress_progress(r"Q:\tables\test", "444_2048_0_354.book")
+#     print(time.time() - t0)
 
 # if __name__ == '__main__':
-#     restore_book(r"Q:\tables-test\4432f_2048_251.z\4432f_2048_251.")
+# restore_book(r"D:\2048calculates\table\free10w_1024\free10w_1024_399.z\free10w_1024_399.")
+
+# if __name__ == '__main__':
+#     _path = r'D:/2048calculates/table/free8w_128\free8w_128_40.z\free8w_128_40.'
+#     _ind = np.fromfile(_path + 'i', dtype='uint8,uint32')
+#     _segments = np.fromfile(_path + 's', dtype='uint32,uint64')
+#     _result = trie_decompress_search(_path, np.uint64(320262826360831), _ind, _segments)
+#     print(_result)
+
+
+if __name__ == "__main__":
+    import os
+    import shutil
+
+
+    def process_file(base_folder, index, output_dir):
+        """
+        对单个文件夹执行 restore_book，并移动生成的 .book 文件到指定目录，同时删除文件夹
+        """
+        try:
+            # 构造路径，确保以 "." 结尾
+            z_folder = os.path.join(base_folder, f"free10w_1024_{index}.z")
+            restore_book(z_folder + f"\\free10w_1024_{index}.")
+
+            # 移动 .book 文件
+            book_file = os.path.join(z_folder, f"free10w_1024_{index}.book")
+            if os.path.exists(book_file):
+                shutil.move(book_file, output_dir)
+
+            filter_book_file(os.path.join(output_dir, f"free10w_1024_{index}.book"))
+
+            # 删除 z_folder 文件夹
+            if os.path.exists(z_folder):
+                shutil.rmtree(z_folder)
+
+            print(f"Processed: {z_folder}")
+        except Exception as e:
+            print(f"Error processing {index}: {e}")
+
+
+    @njit
+    def filter_inplace(data, threshold):
+        write_idx = 0
+
+        # 遍历数组（快指针）
+        for read_idx in range(len(data)):
+            if data[read_idx]['f1'] >= threshold:
+                # 将满足条件的行移动到当前慢指针位置
+                data[write_idx] = data[read_idx]
+                write_idx += 1  # 慢指针前移
+
+        # 返回保留下来的数据个数
+        return write_idx
+
+
+    def filter_book_file(book_file):
+        """
+        读取 .book 文件，删除其中 'f1' 部分小于 0.01 * 4e9 的数据，并写回文件。
+        """
+        try:
+            # 使用 numpy 读取 .book 文件，dtype 为 'uint64,uint32'
+            dtype = np.dtype([('f0', 'uint64'), ('f1', 'uint32')])
+            data = np.fromfile(book_file, dtype=dtype)
+
+            # 过滤掉 'f1' 值小于 0.01 * 4e9 的数据
+            threshold = int(0.01 * 4e9)
+            write_idx = filter_inplace(data, threshold)
+
+            # 将过滤后的数据写回 .book 文件
+            data[:write_idx].tofile(book_file)
+
+            print(f"Filtered and saved: {book_file} (Original: {len(data)}, Filtered: {write_idx})")
+        except Exception as e:
+            print(f"Error filtering {book_file}: {e}")
+
+
+    def main():
+        base_path = r"D:\2048calculates\table\free10w_1024"
+        output_dir = base_path  # .book 文件保存的路径
+
+        indices = range(179, 536)  # 文件夹范围
+        for i in indices:
+            process_file(base_path, i, output_dir)
+
+
+    main()

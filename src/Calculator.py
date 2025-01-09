@@ -139,7 +139,13 @@ def is_442_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(0xffffff)) == np.uint64(0xffffff) or \
         (np.uint64(encoded_board) & np.uint64(0xf0ff0fff)) == np.uint64(0xf0ff0fff) or \
         (np.uint64(encoded_board) & np.uint64(0xffff0ff)) == np.uint64(0xffff0ff) or \
-        (np.uint64(encoded_board) & np.uint64(0xffff00ff)) == np.uint64(0xffff00ff)
+        (np.uint64(encoded_board) & np.uint64(0xffff00ff)) == np.uint64(0xffff00ff) or \
+        (np.uint64(encoded_board) & np.uint64(0xf00fffff0)) == np.uint64(0xf00fffff0) or \
+        (np.uint64(encoded_board) & np.uint64(0xff0ff0ff0)) == np.uint64(0xff0ff0ff0) or \
+        (np.uint64(encoded_board) & np.uint64(0xf00000ff0fff)) == np.uint64(0xf00000ff0fff) or \
+        (np.uint64(encoded_board) & np.uint64(0xf0000fff00ff)) == np.uint64(0xf0000fff00ff) or \
+        (np.uint64(encoded_board) & np.uint64(0xf00f00ff0ff0)) == np.uint64(0xf00f00ff0ff0) or \
+        (np.uint64(encoded_board) & np.uint64(0xf00f0fff00f0)) == np.uint64(0xf00f0fff00f0)
 
 
 @njit(nogil=True)
@@ -189,9 +195,9 @@ def is_4442f_success(encoded_board, target, _):
 
 @njit(nogil=True)
 def is_L3t_pattern(encoded_board):
-    return (np.uint64(encoded_board) & np.uint64(268374015)) == np.uint64(268374015) or \
-            (np.uint64(encoded_board) & np.uint64(64692883440)) == np.uint64(64692883440) or \
-            (np.uint64(encoded_board) & np.uint64(4222189342560240)) == np.uint64(4222189342560240)
+    return (np.uint64(encoded_board) & np.uint64(0xfff0fff)) == np.uint64(0xfff0fff) or \
+            (np.uint64(encoded_board) & np.uint64(0xf0fff0ff0)) == np.uint64(0xf0fff0ff0) or \
+            (np.uint64(encoded_board) & np.uint64(0xf000f0ff00ff0)) == np.uint64(0xf000f0ff00ff0)
 
 
 @njit(nogil=True)
@@ -308,7 +314,9 @@ def is_movingLL_success(encoded_board, target, _):
 
 @njit(nogil=True)
 def is_3433_pattern(encoded_board):
-    return (np.uint64(encoded_board) & np.uint64(0xf0ff)) == np.uint64(0xf0ff)
+    return (np.uint64(encoded_board) & np.uint64(0xf0ff)) == np.uint64(0xf0ff) or \
+        (np.uint64(encoded_board) & np.uint64(0xf00000ff)) == np.uint64(0xf00000ff) or \
+        (np.uint64(encoded_board) & np.uint64(0xf000000000ff)) == np.uint64(0xf000000000ff)
 
 
 @njit(nogil=True)
@@ -336,9 +344,11 @@ def is_3442_success(encoded_board, target, _):
 def is_3432_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(0xff0ff)) == np.uint64(0xff0ff) or \
         (np.uint64(encoded_board) & np.uint64(0xf00f00ff)) == np.uint64(0xf00f00ff) or \
-        (np.uint64(encoded_board) & np.uint64(0xf00000f00ff)) == np.uint64(0xf00000f00ff) or \
-        (np.uint64(encoded_board) & np.uint64(0xf0000000000f00ff)) == np.uint64(0xf0000000000f00ff)
-
+        (np.uint64(encoded_board) & np.uint64(0xf000000f00ff)) == np.uint64(0xf000000f00ff) or \
+        (np.uint64(encoded_board) & np.uint64(0xf0000000000f00ff)) == np.uint64(0xf0000000000f00ff) or \
+        (np.uint64(encoded_board) & np.uint64(0x0f000000000f00ff)) == np.uint64(0x0f000000000f00ff) or \
+        (np.uint64(encoded_board) & np.uint64(0x00f00000000f00ff)) == np.uint64(0x00f00000000f00ff) or \
+        (np.uint64(encoded_board) & np.uint64(0x000f0000000f00ff)) == np.uint64(0x000f0000000f00ff)
 
 @njit(nogil=True)
 def is_3432_success(encoded_board, target, _):
@@ -349,7 +359,9 @@ def is_3432_success(encoded_board, target, _):
 
 @njit(nogil=True)
 def is_2433_pattern(encoded_board):
-    return (np.uint64(encoded_board) & np.uint64(0xf000f0ff)) == np.uint64(0xf000f0ff)
+    return (np.uint64(encoded_board) & np.uint64(0xf000f0ff)) == np.uint64(0xf000f0ff) or \
+        (np.uint64(encoded_board) & np.uint64(0xf000f00000ff)) == np.uint64(0xf000f00000ff) or \
+        (np.uint64(encoded_board) & np.uint64(0xf000f000000000ff)) == np.uint64(0xf000f000000000ff)
 
 
 @njit(nogil=True)

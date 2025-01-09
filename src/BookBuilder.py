@@ -7,8 +7,8 @@ from numba import njit, prange
 
 import Calculator
 from BoardMover import SingletonBoardMover, BoardMover
-from Config import SingletonConfig
-from BookSolver import recalculate_process, remove_died, expand
+from Config import SingletonConfig, formation_info
+from BookSolver import recalculate_process, remove_died, expand, keep_only_optimal_branches
 from BookGenerator import generate_process
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -36,13 +36,22 @@ def gen_lookup_table_big(
     传入包含所有初始局面的array，然后按照面板数字和依次生成下一阶段的所有局面。储存轮到系统生成数字时的面板。
     保障其中的每个arr储存的面板的数字和均相等
     """
-
-    started, d0, d1 = generate_process(arr_init, pattern_check_func, success_check_func, to_find_func, target, position,
+    save_config_to_txt(pathname + 'config.txt')
+    started, d0, d1 = generate_process(arr_init, pattern_check_func, success_check_func, to_find_func1, target, position,
                                        steps, pathname, docheck_step, bm, isfree)
     d0, d1 = final_steps(started, d0, d1, pathname, steps, success_check_func, target, position)
     recalculate_process(d0, d1, pattern_check_func, success_check_func, to_find_func1, target, position, steps,
                         pathname, docheck_step, bm, spawn_rate4)  # 这里的最后的两个book d0,d1就是回算的d1,d2
+    if SingletonConfig().config['optimal_branch_only']:
+        keep_only_optimal_branches(pattern_check_func, to_find_func1, steps, pathname, bm)
 
+
+def save_config_to_txt(output_path):
+    keys = ['compress', 'optimal_branch_only', 'compress_temp_files', 'deletion_threshold', '4_spawn_rate']
+    # 写入文件
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for key in keys:
+            f.write(f"{key}: {str(SingletonConfig().config.get(key, '?'))}\n")
 
 def final_steps(started: bool,
                 d0: np.ndarray[np.uint64],
@@ -140,26 +149,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
                                        '442': 36, 't': 36, '4432f': 48, 'L3t': 48, '4442f': 48,
                                        "3433": 48, "3442": 48, "3432": 48, "2433": 48, "movingLL": 48}[pattern])
         docheck_step = int(2 ** target / 2) - 16
-        inits = {
-            '444': np.array([np.uint64(0x100000000000ffff), np.uint64(0x000000010000ffff)], dtype=np.uint64),
-            '4431': np.array([np.uint64(0x10000000123f2fff), np.uint64(0x00000001123f2fff)], dtype=np.uint64),
-            'LL': np.array([np.uint64(0x1000000023ff24ff), np.uint64(0x0000000123ff24ff)], dtype=np.uint64),
-            'L3': np.array([np.uint64(0x100000001fff2fff), np.uint64(0x000000011fff2fff)], dtype=np.uint64),
-            'L3t': np.array([np.uint64(0x100000001fff2fff), np.uint64(0x000000011fff2fff)], dtype=np.uint64),
-            '4441': np.array([np.uint64(0x0000100012323fff), np.uint64(0x0001000012323fff)], dtype=np.uint64),
-            '4432': np.array([np.uint64(0x00001000123f23ff), np.uint64(0x00010000123f23ff)], dtype=np.uint64),
-            '4442': np.array([np.uint64(0x00001000123424ff), np.uint64(0x00010000123424ff)], dtype=np.uint64),
-            '4442f': np.array([np.uint64(0x00001000123f24ff), np.uint64(0x0001000012342fff)], dtype=np.uint64),
-            '442': np.array([np.uint64(0x1000000012ffffff), np.uint64(0x0000000112ffffff)], dtype=np.uint64),
-            't': np.array([np.uint64(0x10000000f1fff2ff), np.uint64(0x00000001f1fff2ff)], dtype=np.uint64),
-            '4432f': np.array([np.uint64(0x00001000123f2fff), np.uint64(0x00010000123f2fff)], dtype=np.uint64),
-            "3433": np.array([np.uint64(0x100000000000f2ff), np.uint64(0x000000000001f2ff)], dtype=np.uint64),
-            "3442": np.array([np.uint64(0x10000000000ff21f), np.uint64(0x00000000100ff21f)], dtype=np.uint64),
-            "3432": np.array([np.uint64(0x10000000000ff2ff), np.uint64(0x00000000100ff2ff)], dtype=np.uint64),
-            "2433": np.array([np.uint64(0x10000000f000f2ff), np.uint64(0x00000000f001f2ff)], dtype=np.uint64),
-            "movingLL": np.array([np.uint64(0x100000001ff12ff2), np.uint64(0x1000000012ff21ff)], dtype=np.uint64),
-        }
-        ini = inits[pattern]
+        _, pattern_check_func, to_find_func1, success_check_func, ini = formation_info[pattern]
         if ((pattern == 'LL') and (position == 0)) or (pattern == '4432') or (pattern == '4432f'):
             to_find_func, to_find_func1 = Calculator.p_minUL, Calculator.minUL
         elif pattern == 'movingLL':
@@ -170,9 +160,8 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
             isfree = True
         else:
             isfree = False
-        gen_lookup_table_big(ini, eval(f'Calculator.is_{pattern}_pattern'), eval(f'Calculator.is_{pattern}_success'),
-                             to_find_func, to_find_func1, target, position, steps, pathname, docheck_step, bm, isfree,
-                             spawn_rate4)
+        gen_lookup_table_big(ini, pattern_check_func, success_check_func, to_find_func, to_find_func1,
+                             target, position, steps, pathname, docheck_step, bm, isfree, spawn_rate4)
     return True
 
 

@@ -441,9 +441,10 @@ class AutoplayS:
             board = self.bm.move_board(board, self.best_operation)
             step += 1
             board, empty_slots, _, __ = self.bm.gen_new_num(board)
-            if step % 1 == 0:
-                print(self.bm.decode_board(board))
-                print('')
+            if step % 100 == 0:
+                # print(self.bm.decode_board(board))
+                # print('')
+                pass
             if empty_slots == 0:
                 break
         return self.bm.decode_board(board)

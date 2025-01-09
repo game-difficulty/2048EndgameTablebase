@@ -1,4 +1,3 @@
-from typing import Dict
 import os
 
 import numpy as np
@@ -13,36 +12,7 @@ logger = Config.logger
 
 
 class Analyzer:
-    pattern_map: Dict[str, int] = {
-        '': 0,
-        'LL': 4,
-        '4431': 4,
-        '444': 4,
-        'free8': 7,
-        'free9': 6,
-        'free10': 5,
-        'L3': 6,
-        'L3t': 6,
-        '442': 6,
-        't': 6,
-        '4441': 3,
-        '4432': 3,
-        '4432f': 4,
-        '4442': 2,
-        '4442f': 3,
-        'free8w': 8,
-        'free9w': 7,
-        'free10w': 6,
-        'free11w': 5,
-        '2x4': 0,
-        '3x3': 0,
-        '3x4': 0,
-        "3433": 3,
-        "3442": 3,
-        "3432": 4,
-        "2433": 4,
-        "movingLL": 4,
-        }
+    pattern_map = Config.pattern_32k_tiles_map
 
     def __init__(self, file_path: str, pattern: str, target: int, full_pattern: str, target_path: str, position: str):
         self.full_pattern = full_pattern
@@ -158,6 +128,7 @@ class Analyzer:
         }
 
     def check_nth_largest(self, board_encoded: np.uint64) -> bool:
+        is_free = (self.pattern[:4] == 'free' and self.pattern[-1] != 'w')
         # 初始化一个大小为16的列表，记录0-15的出现次数
         count = [0] * 16
 
@@ -173,16 +144,18 @@ class Analyzer:
                 if count[i] > 1:
                     return False
                 num_largest_found += 1
-                if num_largest_found == self.n_large_tiles:
+                if (num_largest_found == self.n_large_tiles and not is_free) or \
+                        (is_free and num_largest_found == self.n_large_tiles + 1):
                     return i == self.target
 
         return False
 
     def mask_large_tiles(self, board: np.ndarray) -> np.ndarray:
+        is_free = (self.pattern[:4] == 'free' and self.pattern[-1] != 'w')
         target = 2 ** self.target
         for i in range(4):
             for j in range(4):
-                if board[i][j] >= target:
+                if (board[i][j] >= target and not is_free) or (is_free and board[i][j] > target):
                     board[i][j] = 32768
         return board
 
@@ -381,9 +354,7 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.target_combo, 0, 2, 1, 1)
         self.pattern_combo = QtWidgets.QComboBox(self.centralwidget)
         self.pattern_combo.setObjectName("pattern_combo")
-        for i in ["444", "4431", "LL", "L3", "t", "442", "free8", "free9", "free10", "4441", "4432", "4442", "4442f",
-                  "3433", "3442", "3432", "2433", "movingLL",
-                  "free8w", "free9w", "free10w", "free11w", '2x4', '3x3', '3x4']:
+        for i in Config.formation_info.keys():
             self.pattern_combo.addItem(i)
         self.selfLayout.addWidget(self.pattern_combo, 0, 1, 1, 1)
         self.pos_combo = QtWidgets.QComboBox(self.centralwidget)
@@ -483,8 +454,8 @@ if __name__ == "__main__":
     #                 8, '2x4_256', r"D:\2048calculates\test\analysis", '0')
     # anlz.generate_reports()
 
-    # import sys
-    # app = QtWidgets.QApplication(sys.argv)
-    # main = AnalyzeWindow()
-    # main.show()
-    # sys.exit(app.exec_())
+    import sys
+    app = QtWidgets.QApplication(sys.argv)
+    main = AnalyzeWindow()
+    main.show()
+    sys.exit(app.exec_())

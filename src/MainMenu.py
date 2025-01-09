@@ -5,6 +5,7 @@ import numpy as np
 from PyQt5 import QtCore, QtWidgets
 from PyQt5 import QtGui
 
+from BookGenerator import parallel_unique
 from Config import SingletonConfig
 
 
@@ -273,10 +274,10 @@ class PreloadThread(QtCore.QThread):
 class WarmupThread(QtCore.QThread):
     def run(self):
         from BoardMover import SingletonBoardMover
-        from BookGenerator import gen_boards_simple, p_unique, gen_boards
+        from BookGenerator import gen_boards_simple, parallel_unique, gen_boards
         from BookBuilder import final_situation_process
         from BookSolver import recalculate, remove_died, create_index
-        from Calculator import is_L3_pattern, is_L3_success, p_re_self, re_self
+        from Calculator import is_L3_pattern, is_L3_success, re_self
 
         bm = SingletonBoardMover(1)
         arr = np.array([18442521884945818708, 18442521884945818960, 18442521884945827108,
@@ -286,9 +287,10 @@ class WarmupThread(QtCore.QThread):
                         18442521884979373093, 18442521884979373138, 18442521884979373348,
                         18442521884979373378], dtype=np.uint64)
 
-        gen_boards(arr, 9, 0, bm, is_L3_pattern, is_L3_success, p_re_self, np.array([0,0.2,0.4,0.7,1]),)
-        arr1, arr2 = gen_boards_simple(arr, 9, 0, bm, is_L3_pattern, is_L3_success, p_re_self, False, False)
-        arr1, arr2 = p_unique([arr1, arr2])
+        gen_boards(arr, 9, 0, bm, is_L3_pattern, is_L3_success, re_self, np.array([0,0.2,0.4,0.7,1]),
+                   np.empty(256, dtype='uint64'), np.empty(256, dtype='uint64'))
+        arr1, arr2 = gen_boards_simple(arr, 9, 0, bm, is_L3_pattern, is_L3_success, re_self, False, False)
+        arr1, arr2 = parallel_unique(arr1, 4), parallel_unique(arr2, 4)
         arr0 = np.empty(len(arr), dtype='uint64,uint32')
         arr0['f0'] = arr
         expanded_arr1 = np.empty(len(arr1), dtype='uint64,uint32')
