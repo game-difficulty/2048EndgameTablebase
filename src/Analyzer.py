@@ -454,8 +454,8 @@ if __name__ == "__main__":
     #                 8, '2x4_256', r"D:\2048calculates\test\analysis", '0')
     # anlz.generate_reports()
 
-    import sys
-    app = QtWidgets.QApplication(sys.argv)
-    main = AnalyzeWindow()
-    main.show()
-    sys.exit(app.exec_())
+    # import sys
+    # app = QtWidgets.QApplication(sys.argv)
+    # main = AnalyzeWindow()
+    # main.show()
+    # sys.exit(app.exec_())

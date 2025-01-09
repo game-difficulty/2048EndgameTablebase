@@ -1,15 +1,13 @@
 import sys
 import time
-from multiprocessing import freeze_support
+import multiprocessing
 
 from PyQt5 import QtCore, QtWidgets, QtGui
-
-from MainMenu import MainMenuWindow
 
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
-
+    from MainMenu import MainMenuWindow
     main_win = MainMenuWindow()
     splash_pix = QtGui.QPixmap("pic/cover.jpg")
     splash = QtWidgets.QSplashScreen(splash_pix, QtCore.Qt.WindowType.WindowStaysOnTopHint)
@@ -27,5 +25,5 @@ def main():
 
 
 if __name__ == '__main__':
-    freeze_support()
+    multiprocessing.freeze_support()
     main()

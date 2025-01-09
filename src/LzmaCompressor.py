@@ -3,7 +3,8 @@ import subprocess
 import lzma
 from Config import logger
 
-seven_zip_exe = r".\7zip\7z.exe"
+# seven_zip_exe = r".\7zip\7z.exe"
+seven_zip_exe = r"_internal\7z.exe"
 
 
 def is_seven_zip_available():
@@ -91,6 +92,6 @@ def decompress_with_7z(archive_file):
         decompress_with_lzma(archive_file, original_file)
 
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
     # compress_with_7z(r"Q:\tables\4431_2048_725.book", lvl=1)
-    decompress_with_7z(r"Q:\tables\4431_2048_725.book.7z")
+    # decompress_with_7z(r"Q:\tables\4431_2048_725.book.7z")
