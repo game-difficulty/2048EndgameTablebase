@@ -97,18 +97,26 @@ class SettingsWindow(QtWidgets.QMainWindow):
         else:
             self.compress_temp_files_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.compress_temp_files_checkBox.stateChanged.connect(self.compress_temp_files_state_changed)  # type: ignore
+        # self.advanced_algo_checkBox = QtWidgets.QCheckBox(self.centralwidget)
+        # self.advanced_algo_checkBox.setObjectName("compress_temp_files_checkBox")
+        # self.selfLayout.addWidget(self.advanced_algo_checkBox, 3, 1, 1, 1)
+        # if config.get('advanced_algo', False):
+        #     self.advanced_algo_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
+        # else:
+        #     self.advanced_algo_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        # self.advanced_algo_checkBox.stateChanged.connect(self.advanced_algo_state_changed)  # type: ignore
 
         self.mini_table_text = QtWidgets.QLabel(self.centralwidget)
         self.mini_table_text.setObjectName("mini_table_text")
         self.mini_table_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.mini_table_text, 3, 0, 1, 2)
+        self.selfLayout.addWidget(self.mini_table_text, 4, 0, 1, 2)
         self.deletion_threshold_box = QtWidgets.QDoubleSpinBox(self.centralwidget)
         self.deletion_threshold_box.setObjectName("deletion_threshold_box")
         self.deletion_threshold_box.setRange(0.0, 1.0)
         self.deletion_threshold_box.setSingleStep(0.00001)
         self.deletion_threshold_box.setValue(config.get('deletion_threshold', 0))
         self.deletion_threshold_box.valueChanged.connect(self.update_deletion_threshold_rate)  # type: ignore
-        self.selfLayout.addWidget(self.deletion_threshold_box, 3, 2, 1, 1)
+        self.selfLayout.addWidget(self.deletion_threshold_box, 4, 2, 1, 1)
 
         self.hline = QtWidgets.QFrame(self.centralwidget)
         self.hline.setFrameShape(QtWidgets.QFrame.HLine)
@@ -220,7 +228,8 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.compress_checkBox.setText(_translate("Settings", "Compress"))
         self.optimal_branch_only_checkBox.setText(_translate("Settings", "Opt Only"))
         self.compress_temp_files_checkBox.setText(_translate("Settings", "Compress Temp Files"))
-        self.mini_table_text.setText(_translate("Settings", "Remove boards with a success rate below:"))
+        # self.advanced_algo_checkBox.setText(_translate("Settings", "Advanced Algo"))
+        self.mini_table_text.setText(_translate("Settings", "Remove Boards with a Success Rate Below:"))
         self.set_filepath_bt.setText(_translate("Settings", "SET..."))
         self.pop_checkBox.setText(_translate("Settings", "Pop"))
         self.appear_checkBox.setText(_translate("Settings", "Appear"))
@@ -312,6 +321,9 @@ class SettingsWindow(QtWidgets.QMainWindow):
     def compress_temp_files_state_changed(self):
         SingletonConfig().config['compress_temp_files'] = self.compress_temp_files_checkBox.isChecked()
 
+    # def advanced_algo_state_changed(self):
+        # SingletonConfig().config['advanced_algo'] = self.advanced_algo_checkBox.isChecked()
+
     def update_deletion_threshold_rate(self):
         # 某些系统把小数点显示成逗号，需要先改回去
         SingletonConfig().config['deletion_threshold'] = float(self.deletion_threshold_box.text().replace(',', '.'))
@@ -328,6 +340,8 @@ class SettingsWindow(QtWidgets.QMainWindow):
         SingletonConfig().config['4_spawn_rate'] = float(self.spawnrate_box.text().replace(',', '.'))
         SingletonConfig().config['do_animation'] = [self.appear_checkBox.isChecked(), self.pop_checkBox.isChecked()]
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
+        # SingletonConfig().config['advanced_algo'] = self.advanced_algo_checkBox.isChecked()
+        SingletonConfig().config['compress_temp_files'] = self.compress_temp_files_checkBox.isChecked()
         SingletonConfig.save_config(SingletonConfig().config)
 
 

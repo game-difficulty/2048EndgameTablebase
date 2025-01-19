@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 import multiprocessing
@@ -8,6 +9,7 @@ from PyQt5 import QtCore, QtWidgets, QtGui
 def main():
     app = QtWidgets.QApplication(sys.argv)
     from MainMenu import MainMenuWindow
+
     main_win = MainMenuWindow()
     splash_pix = QtGui.QPixmap("pic/cover.jpg")
     splash = QtWidgets.QSplashScreen(splash_pix, QtCore.Qt.WindowType.WindowStaysOnTopHint)
@@ -22,6 +24,9 @@ def main():
     main_win.activateWindow()
 
     sys.exit(app.exec_())
+
+
+os.environ["NUMBA_SLP_VECTORIZE"] = "1"
 
 
 if __name__ == '__main__':

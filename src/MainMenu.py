@@ -5,7 +5,6 @@ import numpy as np
 from PyQt5 import QtCore, QtWidgets
 from PyQt5 import QtGui
 
-from BookGenerator import parallel_unique
 from Config import SingletonConfig
 
 
@@ -289,6 +288,7 @@ class WarmupThread(QtCore.QThread):
 
         gen_boards(arr, 9, 0, bm, is_L3_pattern, is_L3_success, re_self, np.array([0,0.2,0.4,0.7,1]),
                    np.empty(256, dtype='uint64'), np.empty(256, dtype='uint64'))
+
         arr1, arr2 = gen_boards_simple(arr, 9, 0, bm, is_L3_pattern, is_L3_success, re_self, False, False)
         arr1, arr2 = parallel_unique(arr1, 4), parallel_unique(arr2, 4)
         arr0 = np.empty(len(arr), dtype='uint64,uint32')

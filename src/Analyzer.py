@@ -19,7 +19,7 @@ class Analyzer:
         self.position = position
         self.pattern = pattern
         self.target = target
-        self.n_large_tiles = self.pattern_map[pattern]
+        self.n_large_tiles = self.pattern_map[pattern][0]
 
         self.bm = SingletonBoardMover(1)
         self.vbm = SingletonBoardMover(3)

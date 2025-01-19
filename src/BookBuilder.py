@@ -6,10 +6,11 @@ import numpy as np
 from numba import njit, prange
 
 import Calculator
-from BoardMover import SingletonBoardMover, BoardMover
-from Config import SingletonConfig, formation_info
+from BoardMover import SingletonBoardMover, BoardMover  # , MaskedBoardMover
+from Config import SingletonConfig, formation_info  # , pattern_32k_tiles_map
 from BookSolver import recalculate_process, remove_died, expand, keep_only_optimal_branches
 from BookGenerator import generate_process
+# from BookGeneratorAD import generate_process_ad, init_masker
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
@@ -18,6 +19,7 @@ ToFindFunc1 = Callable[[np.uint64], np.uint64]
 
 
 def gen_lookup_table_big(
+        pattern:str,
         arr_init: np.ndarray[np.uint64],
         pattern_check_func: PatternCheckFunc,
         success_check_func: SuccessCheckFunc,
@@ -37,21 +39,30 @@ def gen_lookup_table_big(
     保障其中的每个arr储存的面板的数字和均相等
     """
     save_config_to_txt(pathname + 'config.txt')
-    started, d0, d1 = generate_process(arr_init, pattern_check_func, success_check_func, to_find_func1, target, position,
-                                       steps, pathname, docheck_step, bm, isfree)
-    d0, d1 = final_steps(started, d0, d1, pathname, steps, success_check_func, target, position)
-    recalculate_process(d0, d1, pattern_check_func, success_check_func, to_find_func1, target, position, steps,
-                        pathname, docheck_step, bm, spawn_rate4)  # 这里的最后的两个book d0,d1就是回算的d1,d2
+    if not SingletonConfig().config.get('advanced_algo', False):
+        started, d0, d1 = generate_process(arr_init, pattern_check_func, success_check_func, to_find_func1, target,
+                                           position, steps, pathname, docheck_step, bm, isfree)
+        d0, d1 = final_steps(started, d0, d1, pathname, steps, success_check_func, target, position)
+        recalculate_process(d0, d1, pattern_check_func, success_check_func, to_find_func1, target, position, steps,
+                            pathname, docheck_step, bm, spawn_rate4)  # 这里的最后的两个book d0,d1就是回算的d1,d2
+    # else:
+    #     bm = MaskedBoardMover()
+    #     _, num_free_32k, pos_fixed_32k = pattern_32k_tiles_map[pattern]
+    #     lm = init_masker(num_free_32k, target, pos_fixed_32k)
+    #     started, d0, d1 = generate_process_ad(arr_init, pattern_check_func, success_check_func, to_find_func1, target,
+    #                                        position, steps, pathname, docheck_step, bm, lm, isfree)
     if SingletonConfig().config['optimal_branch_only']:
         keep_only_optimal_branches(pattern_check_func, to_find_func1, steps, pathname, bm)
 
 
 def save_config_to_txt(output_path):
-    keys = ['compress', 'optimal_branch_only', 'compress_temp_files', 'deletion_threshold', '4_spawn_rate']
+    keys = ['compress', 'optimal_branch_only', 'compress_temp_files', 'advanced_algo',
+            'deletion_threshold', '4_spawn_rate']
     # 写入文件
     with open(output_path, 'w', encoding='utf-8') as f:
         for key in keys:
             f.write(f"{key}: {str(SingletonConfig().config.get(key, '?'))}\n")
+
 
 def final_steps(started: bool,
                 d0: np.ndarray[np.uint64],
@@ -132,7 +143,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
             docheck_step = int(2 ** target / 2) - 20
             free_tiles = int(pattern[4:])
             arr_init = generate_free_inits(target, 15 - free_tiles, free_tiles)
-            gen_lookup_table_big(arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
+            gen_lookup_table_big(pattern, arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
                                  Calculator.p_min_all_symm, Calculator.min_all_symm, target, 0, steps, pathname,
                                  docheck_step, bm, isfree=True, spawn_rate4=spawn_rate4)
         else:
@@ -141,7 +152,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
             docheck_step = int(2 ** target / 2) - 20
             free_tiles = int(pattern[4:-1])
             arr_init = generate_free_inits(0, 16 - free_tiles, free_tiles - 1)
-            gen_lookup_table_big(arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
+            gen_lookup_table_big(pattern, arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
                                  Calculator.p_min_all_symm, Calculator.min_all_symm, target, 1, steps, pathname,
                                  docheck_step, bm, isfree=True, spawn_rate4=spawn_rate4)
     else:
@@ -160,7 +171,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
             isfree = True
         else:
             isfree = False
-        gen_lookup_table_big(ini, pattern_check_func, success_check_func, to_find_func, to_find_func1,
+        gen_lookup_table_big(pattern, ini, pattern_check_func, success_check_func, to_find_func, to_find_func1,
                              target, position, steps, pathname, docheck_step, bm, isfree, spawn_rate4)
     return True
 
