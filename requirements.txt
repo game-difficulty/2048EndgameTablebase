@@ -2,6 +2,7 @@ python
 numpy 2.0
 numba 0.60
 cpuinfo 
+psutil
 
 Python C++ Extension Module
 x86simdsort(modified)
