@@ -6,7 +6,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit
 from PyQt5.QtGui import QIcon
 
-from BookReader import BookReader
+from BookReader import BookReaderDispatcher
 from Config import SingletonConfig, formation_info
 from Gamer import BaseBoardFrame
 from Analyzer import AnalyzeWindow
@@ -125,6 +125,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.full_pattern = None
         # 分析verse replay的窗口
         self.analyze_window = None
+        self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
 
     def setupUi(self):
         self.setObjectName("self")
@@ -235,13 +236,15 @@ class TestWindow(QtWidgets.QMainWindow):
 
             if self.pattern[0] in ("444", "LL", "L3") and self.pattern[2] != '?':
                 self.full_pattern = '_'.join(self.pattern)
-                path_found = self.init()
+                path_found, path = self.init()
                 if path_found:
+                    self.book_reader.dispatch(path, self.pattern[0], self.pattern[1])
                     self.init_random_state()
             elif self.pattern[0] not in ("444", "LL", "L3"):
                 self.full_pattern = '_'.join(self.pattern[:2])
-                path_found = self.init()
+                path_found, path = self.init()
                 if path_found:
+                    self.book_reader.dispatch(path, self.pattern[0], self.pattern[1])
                     self.init_random_state()
 
     def init(self):
@@ -264,19 +267,20 @@ class TestWindow(QtWidgets.QMainWindow):
         if not path:
             self.text_display.add_text('Table file path not found!')
             self.text_display.update_text()
-            return False
+            return False, path
         else:
             self.text_display.add_text(f"You have selected: **{self.full_pattern}**. Loading...")
             self.text_display.update_text()
             QApplication.processEvents()
-            return True
+            return True, path
 
     def init_random_state(self):
         path = SingletonConfig().config['filepath_map'].get(self.full_pattern, '')
-        self.gameframe.board_encoded = BookReader.get_random_state(path, self.full_pattern)
+        self.gameframe.board_encoded = self.book_reader.get_random_state(path, self.full_pattern)
         self.gameframe.board_encoded = self.do_random_rotate(self.gameframe.board_encoded)
-        self.gameframe.board = BookReader.bm.decode_board(self.gameframe.board_encoded)
-        self.result = BookReader.move_on_dic(self.gameframe.board, self.pattern[0], self.pattern[1], self.full_pattern)
+        self.gameframe.board = self.book_reader.bm.decode_board(self.gameframe.board_encoded)
+        self.result = self.book_reader.move_on_dic(
+            self.gameframe.board, self.pattern[0], self.pattern[1], self.full_pattern)
         self.text_display.lines[0] = self.text_display.lines[0].replace(' Loading...', '')
         self.text_display.add_text("We'll start from:")
         self.text_display.print_board(self.gameframe.board)
@@ -284,11 +288,11 @@ class TestWindow(QtWidgets.QMainWindow):
         self.gameframe.setFocus()
 
     def set_board_init(self):
-        path_found = self.init()
+        path_found, path = self.init()
         if path_found:
             self.gameframe.board_encoded = np.uint64(int(self.board_state.text(), 16))
             self.gameframe.board = self.gameframe.mover.decode_board(self.gameframe.board_encoded)
-            self.result = BookReader.move_on_dic(self.gameframe.board, self.pattern[0], self.pattern[1],
+            self.result = self.book_reader.move_on_dic(self.gameframe.board, self.pattern[0], self.pattern[1],
                                                  self.full_pattern)
             self.text_display.lines[0] = self.text_display.lines[0].replace(' Loading...', '')
             self.text_display.add_text("We'll start from:")
@@ -297,8 +301,8 @@ class TestWindow(QtWidgets.QMainWindow):
         self.gameframe.setFocus()
 
     def do_random_rotate(self, board_encoded):
-        return np.uint64(BookReader.bm.encode_board(random.choice(BookReader.gen_all_mirror(
-            BookReader.bm.decode_board(board_encoded), self.pattern[0]))[-1]))
+        return np.uint64(self.book_reader.bm.encode_board(random.choice(self.book_reader._book_reader.gen_all_mirror(
+            self.book_reader.bm.decode_board(board_encoded), self.pattern[0]))[-1]))
 
     def save_logs_to_file(self):
         if self.full_pattern is None or len(self.text_display.lines) < 1:
@@ -348,7 +352,8 @@ class TestWindow(QtWidgets.QMainWindow):
         self.isProcessing = True  # 设置标志防止进一步的输入
         self.gameframe.do_move(direction)
         self.one_step(direction)
-        self.result = BookReader.move_on_dic(self.gameframe.board, self.pattern[0], self.pattern[1], self.full_pattern)
+        self.result = self.book_reader.move_on_dic(
+            self.gameframe.board, self.pattern[0], self.pattern[1], self.full_pattern)
         self.text_display.add_text('--------------------------------------------------')
         self.text_display.print_board(self.gameframe.board)
         self.text_display.add_text('')
@@ -376,7 +381,9 @@ class TestWindow(QtWidgets.QMainWindow):
             text_list.append(f"{key[0].upper()}: {value}")
         text_list.append('')
         best_move = list(self.result.keys())[0]
-        if move == best_move.capitalize() or self.result[move.lower()] == 1:
+        if self.result[best_move] == 0:
+            return
+        if self.result[move.lower()] is not None and self.result[move.lower()] / self.result[best_move] == 1:
             self.gameframe.combo += 1
             self.gameframe.max_combo = max(self.gameframe.max_combo, self.gameframe.combo)
             self.gameframe.performance_stats["**Perfect!**"] += 1

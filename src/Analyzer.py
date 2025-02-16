@@ -4,7 +4,7 @@ import numpy as np
 from PyQt5 import QtCore, QtWidgets, QtGui
 
 from BoardMover import SingletonBoardMover
-from BookReader import BookReader
+from BookReader import BookReaderDispatcher
 import Config
 
 
@@ -23,9 +23,12 @@ class Analyzer:
 
         self.bm = SingletonBoardMover(1)
         self.vbm = SingletonBoardMover(3)
+        self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
+        bookfile_path = Config.SingletonConfig().config['filepath_map'].get(full_pattern, '')
+        self.book_reader.dispatch(bookfile_path, pattern, target)
 
         replay_text = self.read_replay(file_path)
-        self.record_list: np.ndarray = np.empty(0, dtype='uint64,uint8')
+        self.record_list: np.typing.NDArray = np.empty(0, dtype='uint64,uint8')
         self.decode_replay(replay_text)
 
         self.target_path = target_path
@@ -69,9 +72,9 @@ class Analyzer:
             bm = self.vbm
 
         replay_text = replay_text[header:]
-        self.record_list: np.ndarray = np.empty(len(replay_text) - 2, dtype='uint64,uint8')
+        self.record_list: np.typing.NDArray = np.empty(len(replay_text) - 2, dtype='uint64,uint8')
 
-        PGN_map_dict = {
+        png_map_dict = {
             ' ': 0, '!': 1, '"': 2, '#': 3, '$': 4, '%': 5, '&': 6, "'": 7, '(': 8, ')': 9, '*': 10,
             '+': 11, ',': 12, '-': 13, '.': 14, '/': 15, '0': 16, '1': 17, '2': 18, '3': 19, '4': 20,
             '5': 21, '6': 22, '7': 23, '8': 24, '9': 25, ':': 26, ';': 27, '<': 28, '=': 29, '>': 30,
@@ -91,10 +94,10 @@ class Analyzer:
 
         for i in replay_text:
             try:
-                index_i = PGN_map_dict[i]
+                index_i = png_map_dict[i]
             except KeyError:
                 index_i = 0
-                logger.warning(f"Character '{i}' not found in PGN_map_dict, defaulting to index 0."
+                logger.warning(f"Character '{i}' not found in png_map_dict, defaulting to index 0."
                                f"May cause errors in analysis.")
 
             replay_tile = ((index_i >> 4) & 1) + 1
@@ -150,7 +153,7 @@ class Analyzer:
 
         return False
 
-    def mask_large_tiles(self, board: np.ndarray) -> np.ndarray:
+    def mask_large_tiles(self, board: np.typing.NDArray) -> np.typing.NDArray:
         is_free = (self.pattern[:4] == 'free' and self.pattern[-1] != 'w')
         target = 2 ** self.target
         for i in range(4):
@@ -177,7 +180,7 @@ class Analyzer:
             self.write_analysis(len(self.record_list))
         self.clear_analysis()
 
-    def print_board(self, board: np.ndarray):
+    def print_board(self, board: np.typing.NDArray):
         rows = {'2x4':(1,3), '3x3':(0,3), '3x4':(0,3)}.get(self.pattern, (0,4))
         items = 4 if self.pattern != '3x3' else 3
 
@@ -194,13 +197,13 @@ class Analyzer:
                 formatted_row.append(formatted_element.rjust(4, ' '))
             self.text_list.append(' '.join(formatted_row))
 
-    def _analyze_one_step(self, board: np.ndarray, masked_board: np.ndarray, move: str) -> bool | None:
+    def _analyze_one_step(self, board: np.typing.NDArray, masked_board: np.typing.NDArray, move: str) -> bool | None:
         target = str(int(2 ** self.target))
-        self.result = BookReader.move_on_dic(masked_board, self.pattern, target, self.full_pattern, self.position)
+        self.result = self.book_reader.move_on_dic(masked_board, self.pattern, target, self.full_pattern, self.position)
 
-        # 超出定式范围、没查到、死亡等情况
+        # 超出定式范围、没查到、死亡、成功等情况
         best_move = list(self.result.keys())[0]
-        if not self.result[best_move]:
+        if not self.result[best_move] or self.result[best_move] == 1:
             return False
 
         # 配置里没找到表路径
@@ -225,7 +228,7 @@ class Analyzer:
         if self.step_count < 5:
             return True
 
-        if move == best_move.capitalize() or self.result[move.lower()] == 1:
+        if self.result[move.lower()] is not None and self.result[move.lower()] / self.result[best_move] == 1:
             self.combo += 1
             self.max_combo = max(self.max_combo, self.combo)
             self.performance_stats["**Perfect!**"] += 1

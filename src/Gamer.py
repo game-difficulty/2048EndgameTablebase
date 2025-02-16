@@ -339,7 +339,7 @@ class AIThread(QtCore.QThread):
 
     def run(self):
         # 根据局面设定搜索深度
-        empty_slots = (self.ai_player.board == 0).sum()
+        empty_slots = np.sum(self.ai_player.board == 0)
         big_nums = (self.ai_player.board > 128).sum()
         if self.is_mess():
             big_nums2 = (self.ai_player.board > 512).sum()
@@ -376,7 +376,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.score_anims = []
 
         self.ai_timer = QTimer(self)
-        self.ai_timer.timeout.connect(self.handleOneStep)
+        self.ai_timer.timeout.connect(self.handleOneStep)  # type: ignore
         self.ai_dispatcher = Dispatcher(SingletonBoardMover(2).decode_board(np.uint64(0)), np.uint64(0))
 
         self.statusbar.showMessage("All features may be slow when used for the first time. Please be patient.", 8000)

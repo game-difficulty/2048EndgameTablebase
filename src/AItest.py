@@ -15,7 +15,7 @@ class AItest:
 
     def ai_step(self):
         # AI 计算步骤
-        empty_slots = (self.ai_player.board == 0).sum()
+        empty_slots = np.sum(self.ai_player.board == 0)
         big_nums = (self.ai_player.board > 128).sum()
         if self.is_mess():
             big_nums2 = (self.ai_player.board > 512).sum()
@@ -80,7 +80,7 @@ class AItest:
     def play(self):
         while not self.died:
             self.one_step()
-            if (self.board == 32768).sum() == 2:
+            if np.sum((self.board == 32768)) == 2:
                 positions = np.where(self.board == 32768)
                 first_position = (positions[0][0], positions[1][0])
                 self.board[first_position] = 2

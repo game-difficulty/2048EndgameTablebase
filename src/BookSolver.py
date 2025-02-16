@@ -3,6 +3,8 @@ import time
 from typing import Callable, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
+import numba as nb
 from numba import njit, prange
 
 from BoardMover import BoardMover
@@ -13,8 +15,7 @@ from LzmaCompressor import compress_with_7z, decompress_with_7z
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
-ToFindFunc = Callable[[np.ndarray[np.uint64]], None]
-ToFindFunc1 = Callable[[np.uint64], np.uint64]
+ToFindFunc = Callable[[np.uint64], np.uint64]
 
 logger = Config.logger
 
@@ -43,11 +44,11 @@ def handle_restart(i, pathname, steps, d1, d2, started):
 
 
 def recalculate_process(
-        d1: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
-        d2: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+        d1: NDArray[[np.uint64, np.uint32]],
+        d2: NDArray[[np.uint64, np.uint32]],
         pattern_check_func: PatternCheckFunc,
         success_check_func: SuccessCheckFunc,
-        to_find_func: ToFindFunc1,
+        to_find_func: ToFindFunc,
         target: int,
         position: int,
         steps: int,
@@ -57,9 +58,9 @@ def recalculate_process(
         spawn_rate4: float = 0.1
 ) -> None:
     started = False
-    deletion_threshold = np.uint32(SingletonConfig().config.get('mini_table', 0) * 4e9)
+    deletion_threshold = np.uint32(SingletonConfig().config.get('deletion_threshold', 0) * 4e9)
     # 回算搜索时可能需要使用索引进行加速
-    ind1: np.ndarray[np.uint32] | None = None
+    ind1: NDArray[np.uint32] | None = None
 
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
@@ -120,7 +121,7 @@ def recalculate_process(
 
 
 @njit(nogil=True, parallel=True)
-def expand(arr: np.ndarray[np.uint64]) -> np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])]:
+def expand(arr: NDArray[np.uint64]) -> NDArray[[np.uint64, np.uint32]]:
     arr0 = np.empty(len(arr), dtype='uint64,uint32')
     for i in prange(len(arr)):
         arr0[i]['f0'] = arr[i]
@@ -129,8 +130,8 @@ def expand(arr: np.ndarray[np.uint64]) -> np.ndarray[np.dtype([('f0', np.uint64)
 
 @njit(nogil=True)
 def remove_died(
-        arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])], deletion_threshold: np.uint32 = 0
-) -> np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])]:
+        arr: NDArray[[np.uint64, np.uint32]], deletion_threshold: np.uint32 = 0
+) -> NDArray[[np.uint64, np.uint32]]:
     count = 0
     # 原地移动成功率高于阈值的元素
     for i in range(len(arr)):
@@ -141,13 +142,13 @@ def remove_died(
 
 
 @njit(parallel=True, nogil=True)
-def create_index(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])]
-                 ) -> np.ndarray[np.uint32] | None:
+def create_index(arr: NDArray[[np.uint64, np.uint32]]
+                 ) -> NDArray[np.uint32] | None:
     """
     根据uint64数据的前24位的分段位置创建一个索引，长度16777216+1
     """
     n = 16777217
-    ind1: np.ndarray = np.full(n, 0xffffffff, dtype='uint32')
+    ind1: NDArray = np.full(n, 0xffffffff, dtype='uint32')
     header = arr[0][0] >> np.uint32(40)
     ind1[header] = 0
 
@@ -193,7 +194,7 @@ def create_index(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)]
 
 
 @njit(nogil=True)
-def binary_search_arr(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+def binary_search_arr(arr: NDArray[[np.uint64, np.uint32]],
                       target: np.uint64, low: np.uint32 | None = None, high: np.uint32 | None = None) -> np.uint32:
     if low is None:
         low = 0
@@ -209,12 +210,12 @@ def binary_search_arr(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uin
         else:
             return arr[mid][1]  # 找到匹配，返回对应的uint32值
 
-    return 0  # 如果没有找到匹配项
+    return np.uint32(0)  # 如果没有找到匹配项
 
 
 @njit(nogil=True)
-def search_arr(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
-               b: np.uint64, ind: np.ndarray[np.uint32] | None) -> np.uint32:
+def search_arr(arr: NDArray[[np.uint64, np.uint32]],
+               b: np.uint64, ind: NDArray[np.uint32] | None) -> np.uint32:
     """
     没有索引就直接二分查找，否则先从索引中确定一个更窄的范围再查找
     """
@@ -227,66 +228,65 @@ def search_arr(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])]
 
 @njit(parallel=True, nogil=True)
 def recalculate(
-        arr0: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
-        arr1: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
-        arr2: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+        arr0: NDArray[[np.uint64, np.uint32]],
+        arr1: NDArray[[np.uint64, np.uint32]],
+        arr2: NDArray[[np.uint64, np.uint32]],
         target: int,
         position: int,
         bm: BoardMover,
         pattern_check_func: PatternCheckFunc,
         success_check_func: SuccessCheckFunc,
-        to_find_func: ToFindFunc1,
-        ind1: np.ndarray[np.uint32] | None,
-        ind2: np.ndarray[np.uint32] | None,
+        to_find_func: ToFindFunc,
+        ind1: NDArray[np.uint32] | None,
+        ind2: NDArray[np.uint32] | None,
         do_check: bool = False,
         spawn_rate4: float = 0.1
-) -> np.ndarray[Tuple[np.uint64, np.uint32]]:
+) -> NDArray[[np.uint64, np.uint32]]:
     """
     根据已经填充好成功概率的array回算前一批面板的成功概率。
     对于arr0中的每个面板，考虑在每个空位填充数字2或4（90%概率为2，10%概率为4），
     然后对于每个可能的填充，执行所有有效的移动操作，并基于移动结果的成功概率来更新当前面板的成功概率。
     ind1, ind2是预先计算的索引，用于加速二分查找过程
     """
-    for start, end in (
-            (0, len(arr0) // 10), (len(arr0) // 10, len(arr0) // 3), (len(arr0) // 3, len(arr0))):  # 缓解负载不均衡问题
-        for k in prange(start, end):
-            t = arr0[k][0]
-            if do_check and success_check_func(t, target, position):
-                arr0[k][1] = 4000000000
-                continue
-            # 初始化概率和权重
-            success_probability = 0.0
-            empty_slots = 0
-            for i in range(16):  # 遍历所有位置
-                if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
-                    empty_slots += 1
+    nb.set_parallel_chunksize(max(1024, len(arr0) // 1024))
+    for k in prange(len(arr0)):
+        t: np.uint64 = arr0[k][0]
+        if do_check and success_check_func(t, target, position):
+            arr0[k][1] = 4000000000
+            continue
+        # 初始化概率和权重
+        success_probability = 0.0
+        empty_slots = 0
+        for i in range(16):  # 遍历所有位置
+            if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
+                empty_slots += 1
 
-                    # 对于每个空位置，尝试填充2和4
-                    new_value, probability = 1, 1 - spawn_rate4
-                    t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
-                    optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
-                    for newt in bm.move_all_dir(t_gen):
-                        if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
-                            # 获取移动后的面板成功概率
-                            optimal_success_rate = max(optimal_success_rate, search_arr(
-                                arr1, to_find_func(newt), ind1))
-                    # 对最佳移动下的成功概率加权平均
-                    success_probability += optimal_success_rate * probability
+                # 对于每个空位置，尝试填充2和4
+                new_value, probability = 1, 1 - spawn_rate4
+                t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
+                optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
+                for newt in bm.move_all_dir(t_gen):
+                    if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
+                        # 获取移动后的面板成功概率
+                        optimal_success_rate = max(optimal_success_rate, search_arr(
+                            arr1, to_find_func(newt), ind1))
+                # 对最佳移动下的成功概率加权平均
+                success_probability += optimal_success_rate * probability
 
-                    # 填4
-                    new_value, probability = 2, spawn_rate4
-                    t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
-                    optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
-                    for newt in bm.move_all_dir(t_gen):
-                        if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
-                            # 获取移动后的面板成功概率
-                            optimal_success_rate = max(optimal_success_rate, search_arr(
-                                arr2, to_find_func(newt), ind2))
-                    # 对最佳移动下的成功概率加权平均
-                    success_probability += optimal_success_rate * probability
+                # 填4
+                new_value, probability = 2, spawn_rate4
+                t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
+                optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
+                for newt in bm.move_all_dir(t_gen):
+                    if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
+                        # 获取移动后的面板成功概率
+                        optimal_success_rate = max(optimal_success_rate, search_arr(
+                            arr2, to_find_func(newt), ind2))
+                # 对最佳移动下的成功概率加权平均
+                success_probability += optimal_success_rate * probability
 
-            # t是进行一次有效移动后尚未生成新数字时的面板，因此不可能没有空位置
-            arr0[k][1] = np.uint32(success_probability / empty_slots)
+        # t是进行一次有效移动后尚未生成新数字时的面板，因此不可能没有空位置
+        arr0[k][1] = np.uint32(success_probability / empty_slots)
     return arr0
 
 
@@ -310,15 +310,15 @@ def tofile_(data, path):
 
 @njit(parallel=True, nogil=True)
 def find_optimal_branches(
-        arr0: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
-        arr1: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+        arr0: NDArray[[np.uint64, np.uint32]],
+        arr1: NDArray[[np.uint64, np.uint32]],
         bm: BoardMover,
-        result: np.ndarray[bool],
+        result: NDArray[bool],
         pattern_check_func: PatternCheckFunc,
-        to_find_func: ToFindFunc1,
-        ind1: np.ndarray[np.uint32] | None,
+        to_find_func: ToFindFunc,
+        ind1: NDArray[np.uint32] | None,
         new_value: int,
-) -> np.ndarray[bool]:
+) -> NDArray[bool]:
     for start, end in (
             (0, len(arr0) // 10), (len(arr0) // 10, len(arr0) // 3), (len(arr0) // 3, len(arr0))):  # 缓解负载不均衡问题
         for k in prange(start, end):
@@ -340,7 +340,7 @@ def find_optimal_branches(
 
 
 @njit(nogil=True)
-def binary_search_arr2(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+def binary_search_arr2(arr: NDArray[[np.uint64, np.uint32]],
                        target: np.uint64, low: np.uint32 | None = None, high: np.uint32 | None = None
                        ) -> Tuple[np.uint32, np.uint64]:
     """相比binary_search_arr，还会返回索引"""
@@ -358,12 +358,12 @@ def binary_search_arr2(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.ui
         else:
             return arr[mid][1], mid  # 找到匹配，返回对应的uint32值和索引位置
 
-    return 0, 0  # 如果没有找到匹配项
+    return np.uint32(0), np.uint64(0)  # 如果没有找到匹配项
 
 
 @njit(nogil=True)
-def search_arr2(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
-                b: np.uint64, ind: np.ndarray[np.uint32] | None) -> Tuple[np.uint32, np.uint64]:
+def search_arr2(arr: NDArray[[np.uint64, np.uint32]],
+                b: np.uint64, ind: NDArray[np.uint32] | None) -> Tuple[np.uint32, np.uint64]:
     """
     相比search_arr，还会返回索引
     """
@@ -376,7 +376,7 @@ def search_arr2(arr: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])
 
 def keep_only_optimal_branches(
         pattern_check_func: PatternCheckFunc,
-        to_find_func: ToFindFunc1,
+        to_find_func: ToFindFunc,
         steps: int,
         pathname: str,
         bm: BoardMover):

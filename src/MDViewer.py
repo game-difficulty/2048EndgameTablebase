@@ -8,9 +8,9 @@ import markdown
 
 # noinspection PyAttributeOutsideInit
 class MDViewer(QMainWindow):
-    def __init__(self, MD_file):
+    def __init__(self, md_file):
         super().__init__()
-        self.MD_file = MD_file
+        self.MD_file = md_file
         self.toc = []  # Table of contents list
         self.setupUI()
 
@@ -50,9 +50,9 @@ class MDViewer(QMainWindow):
 
     def loadMarkdown(self):
         with open(self.MD_file, 'r', encoding='utf-8') as file:
-            MD_content = file.read()
+            md_content = file.read()
 
-        html_text = markdown.markdown(MD_content, extensions=['tables'])
+        html_text = markdown.markdown(md_content, extensions=['tables'])
         # 为表格添加样式
         html_text = html_text.replace('<table>', '<table style="border-collapse: collapse; width: 100%;">')
         html_text = html_text.replace('<tr>', '<tr style="border: 1px solid black;">')

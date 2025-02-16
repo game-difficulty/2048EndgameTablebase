@@ -1,10 +1,13 @@
-from typing import List, Tuple
+from typing import List, Tuple, Callable
 
 import numpy as np
-from numba import njit, prange
+from numba import njit
 
 
-@njit(nogil=True)
+ToFindFunc = Callable[[np.uint64], np.uint64]
+
+
+@njit(nogil=True, inline='always')
 def ReverseLR(board):
     board = np.uint64(board)
     board = (board & np.uint64(0xff00ff00ff00ff00)) >> np.uint64(8) | (
@@ -14,7 +17,7 @@ def ReverseLR(board):
     return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def ReverseUD(board):
     board = np.uint64(board)
     board = (board & np.uint64(0xffffffff00000000)) >> np.uint64(32) | (
@@ -24,7 +27,7 @@ def ReverseUD(board):
     return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def ReverseUL(board):
     board = np.uint64(board)
     board = (board & np.uint64(0xff00ff0000ff00ff)) | (board & np.uint64(0x00ff00ff00000000)) >> np.uint64(24) | (
@@ -34,7 +37,7 @@ def ReverseUL(board):
     return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def ReverseUR(board):
     board = np.uint64(board)
     board = (board & np.uint64(0x0f0ff0f00f0ff0f0)) | (board & np.uint64(0xf0f00000f0f00000)) >> np.uint64(20) | (
@@ -44,7 +47,7 @@ def ReverseUR(board):
     return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def Rotate180(board):
     board = np.uint64(board)
     board = (board & np.uint64(0xffffffff00000000)) >> np.uint64(32) | (
@@ -58,7 +61,7 @@ def Rotate180(board):
     return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def RotateL(board):
     board = np.uint64(board)
     board = (board & np.uint64(0xff00ff0000000000)) >> np.uint64(32) | (
@@ -72,7 +75,7 @@ def RotateL(board):
     return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def RotateR(board):
     board = np.uint64(board)
     board = (board & np.uint64(0xff00ff0000000000)) >> np.uint64(8) | (
@@ -86,14 +89,14 @@ def RotateR(board):
     return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def min_all_symm(board):
     board = np.uint64(board)
     return np.uint64(min(ReverseLR(board), ReverseUD(board), ReverseUL(board), ReverseUR(board),
                          Rotate180(board), RotateL(board), RotateR(board), board))
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def minUL(bd):
     board = np.uint64(bd)
     board = (board & np.uint64(0xff00ff0000ff00ff)) | (board & np.uint64(0x00ff00ff00000000)) >> np.uint64(24) | (
@@ -103,38 +106,38 @@ def minUL(bd):
     return min(bd, board)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_44_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(4294967295)) == np.uint64(4294967295)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_44_success(encoded_board, target, position):
     return (np.uint64(encoded_board) >> np.uint64(44 - 4 * position) & np.uint64(0xf)) == np.uint64(target)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_4431_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(987135)) == np.uint64(987135)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_4431_success(encoded_board, target, _):
     return (np.uint64(encoded_board) >> np.uint64(20) & np.uint64(0xf)) == np.uint64(target)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_444_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(65535)) == np.uint64(65535)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_444_success(encoded_board, target, position):
     position = max(position, 1)
     return (np.uint64(encoded_board) >> np.uint64(28 - 4 * position) & np.uint64(0xf)) == np.uint64(target)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_442_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(0xffffff)) == np.uint64(0xffffff) or \
         (np.uint64(encoded_board) & np.uint64(0xf0ff0fff)) == np.uint64(0xf0ff0fff) or \
@@ -148,7 +151,7 @@ def is_442_pattern(encoded_board):
         (np.uint64(encoded_board) & np.uint64(0xf00f0fff00f0)) == np.uint64(0xf00f0fff00f0)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_442_success(encoded_board, target, _):
     return (np.uint64(encoded_board) >> np.uint64(36) & np.uint64(0xf)) == np.uint64(target) or \
         (np.uint64(encoded_board) >> np.uint64(32) & np.uint64(0xf)) == np.uint64(target) or \
@@ -156,14 +159,14 @@ def is_442_success(encoded_board, target, _):
         (np.uint64(encoded_board) >> np.uint64(24) & np.uint64(0xf)) == np.uint64(target)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_t_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(0xf0fff0ff)) == np.uint64(0xf0fff0ff) or \
         (np.uint64(encoded_board) & np.uint64(0xf000f0ff00ff)) == np.uint64(0xf000f0ff00ff) or \
         (np.uint64(encoded_board) & np.uint64(0xf000f00000ff00ff)) == np.uint64(0xf000f00000ff00ff)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_t_success(encoded_board, target, _):
     return (np.uint64(encoded_board) >> np.uint64(36) & np.uint64(0xf)) == np.uint64(target) or \
         (np.uint64(encoded_board) >> np.uint64(32) & np.uint64(0xf)) == np.uint64(target) or \
@@ -171,36 +174,56 @@ def is_t_success(encoded_board, target, _):
         (np.uint64(encoded_board) >> np.uint64(8) & np.uint64(0xf)) == np.uint64(target)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_4442_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(255)) == np.uint64(255)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_4442_success(encoded_board, target, _):
     return (np.uint64(encoded_board) >> np.uint64(8) & np.uint64(0xf)) == np.uint64(target) or \
         (np.uint64(encoded_board) >> np.uint64(20) & np.uint64(0xf)) == np.uint64(target) or \
         (np.uint64(encoded_board) >> np.uint64(16) & np.uint64(0xf)) == np.uint64(target)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_4442f_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(255)) == np.uint64(255)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_4442f_success(encoded_board, target, _):
-    return (np.uint64(encoded_board) >> np.uint64(16) & np.uint64(0xf)) == np.uint64(target)
+    return (np.uint64(encoded_board) >> np.uint64(8) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(12) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(16) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(20) & np.uint64(0xf)) == np.uint64(target)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
+def is_4442ff_pattern(encoded_board):
+    return (np.uint64(encoded_board) & np.uint64(255)) == np.uint64(255)
+
+
+@njit(nogil=True, inline='always')
+def is_4442ff_success(encoded_board, target, _):
+    return (np.uint64(encoded_board) >> np.uint64(8) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(12) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(16) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(20) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(32) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(36) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(48) & np.uint64(0xf)) == np.uint64(target) or \
+        (np.uint64(encoded_board) >> np.uint64(52) & np.uint64(0xf)) == np.uint64(target)
+
+
+@njit(nogil=True, inline='always')
 def is_L3t_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(0xfff0fff)) == np.uint64(0xfff0fff) or \
             (np.uint64(encoded_board) & np.uint64(0xf0fff0ff0)) == np.uint64(0xf0fff0ff0) or \
             (np.uint64(encoded_board) & np.uint64(0xf000f0ff00ff0)) == np.uint64(0xf000f0ff00ff0)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_L3t_success(encoded_board, target, _):
     return (np.uint64(encoded_board) >> np.uint64(28) & np.uint64(0xf)) == np.uint64(target) or \
             (np.uint64(encoded_board) >> np.uint64(40) & np.uint64(0xf)) == np.uint64(target) or \
@@ -208,12 +231,12 @@ def is_L3t_success(encoded_board, target, _):
             (np.uint64(encoded_board) >> np.uint64(32) & np.uint64(0xf)) == np.uint64(target)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_L3_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(268374015)) == np.uint64(268374015)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_L3_success(encoded_board, target, position):
     if position > 0:
         return (np.uint64(encoded_board) >> np.uint64(40 - 4 * position) & np.uint64(0xf)) == np.uint64(target)
@@ -222,12 +245,12 @@ def is_L3_success(encoded_board, target, position):
             (np.uint64(encoded_board) >> np.uint64(40) & np.uint64(0xf)) == np.uint64(target)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_LL_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(16711935)) == np.uint64(16711935)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_LL_success(encoded_board, target, position):
     encoded_board = np.uint64(encoded_board)
     if position == 0:
@@ -239,12 +262,12 @@ def is_LL_success(encoded_board, target, position):
         return (encoded_board >> np.uint64(8) & np.uint64(0xf)) == np.uint64(target)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_free_pattern(_):
     return True
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_free_success(encoded_board, target, position):
     if position == 0:
         target += 1  # free要求合出更大一级的数字，freew定式pos参数为1
@@ -255,12 +278,12 @@ def is_free_success(encoded_board, target, position):
     return False
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_4441_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(4095)) == np.uint64(4095)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_4441_success(encoded_board, target, _):
     for pos in (12, 16, 20,):
         if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
@@ -268,12 +291,12 @@ def is_4441_success(encoded_board, target, _):
     return False
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_4432_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(983295)) == np.uint64(983295)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_4432_success(encoded_board, target, _):
     for pos in (20,):
         if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
@@ -281,12 +304,12 @@ def is_4432_success(encoded_board, target, _):
     return False
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_4432f_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(983295)) == np.uint64(983295)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_4432f_success(encoded_board, target, _):
     for pos in (20,):
         if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
@@ -294,7 +317,7 @@ def is_4432f_success(encoded_board, target, _):
     return False
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_movingLL_pattern(encoded_board):
     for pattern in (np.uint64(0xff00ff), np.uint64(0xff00ff0), np.uint64(0xff00ff00), np.uint64(0xff00ff0000),
                     np.uint64(0xff00ff00000), np.uint64(0xff00ff000000), np.uint64(0xff00ff00000000),
@@ -304,7 +327,7 @@ def is_movingLL_pattern(encoded_board):
     return False
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_movingLL_success(encoded_board, target, _):
     for pos in (0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48):
         if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
@@ -312,14 +335,14 @@ def is_movingLL_success(encoded_board, target, _):
     return False
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_3433_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(0xf0ff)) == np.uint64(0xf0ff) or \
         (np.uint64(encoded_board) & np.uint64(0xf00000ff)) == np.uint64(0xf00000ff) or \
         (np.uint64(encoded_board) & np.uint64(0xf000000000ff)) == np.uint64(0xf000000000ff)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_3433_success(encoded_board, target, _):
     for pos in (8, 16, 20, 28):
         if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
@@ -327,12 +350,12 @@ def is_3433_success(encoded_board, target, _):
     return False
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_3442_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(0xff00f)) == np.uint64(0xff00f)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_3442_success(encoded_board, target, _):
     for pos in (4, 8, 28, 32):
         if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
@@ -340,7 +363,7 @@ def is_3442_success(encoded_board, target, _):
     return False
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_3432_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(0xff0ff)) == np.uint64(0xff0ff) or \
         (np.uint64(encoded_board) & np.uint64(0xf00f00ff)) == np.uint64(0xf00f00ff) or \
@@ -350,21 +373,22 @@ def is_3432_pattern(encoded_board):
         (np.uint64(encoded_board) & np.uint64(0x00f00000000f00ff)) == np.uint64(0x00f00000000f00ff) or \
         (np.uint64(encoded_board) & np.uint64(0x000f0000000f00ff)) == np.uint64(0x000f0000000f00ff)
 
-@njit(nogil=True)
+
+@njit(nogil=True, inline='always')
 def is_3432_success(encoded_board, target, _):
     return (np.uint64(encoded_board) >> np.uint64(8) & np.uint64(0xf)) == np.uint64(target) or \
         (np.uint64(encoded_board) >> np.uint64(20) & np.uint64(0xf)) == np.uint64(target) or \
         (np.uint64(encoded_board) >> np.uint64(28) & np.uint64(0xf)) == np.uint64(target)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_2433_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(0xf000f0ff)) == np.uint64(0xf000f0ff) or \
         (np.uint64(encoded_board) & np.uint64(0xf000f00000ff)) == np.uint64(0xf000f00000ff) or \
         (np.uint64(encoded_board) & np.uint64(0xf000f000000000ff)) == np.uint64(0xf000f000000000ff)
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def is_2433_success(encoded_board, target, _):
     for pos in (8, 16, 20, 44):
         if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
@@ -372,29 +396,70 @@ def is_2433_success(encoded_board, target, _):
     return False
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def re_self(encoded_board):
     return np.uint64(encoded_board)
 
 
-@njit(nogil=True, parallel=True)
-def p_minUL(arr):
-    for i in prange(len(arr)):
-        arr[i] = minUL(arr[i])
-
-
-@njit(nogil=True, parallel=True)
-def p_min_all_symm(arr):
-    for i in prange(len(arr)):
-        arr[i] = min_all_symm(arr[i])
+@njit(nogil=True, inline='always')
+def minUL_pair(bd1: np.uint64) -> Tuple[np.uint64, int]:
+    board = ReverseUL(bd1)
+    if bd1 <= board:
+        return bd1, 0
+    else:
+        return board, 3
 
 
 @njit(nogil=True)
-def p_re_self(_):
-    pass
+def min_all_symm_pair(bd1: np.uint64) -> Tuple[np.uint64, int]:
+    min_value_bd1 = bd1
+    best_symm = 0
+
+    # 展开对称操作
+    transformed_bd1 = ReverseLR(bd1)
+    if transformed_bd1 < min_value_bd1:
+        min_value_bd1 = transformed_bd1
+        best_symm = 1
+
+    transformed_bd1 = ReverseUD(bd1)
+    if transformed_bd1 < min_value_bd1:
+        min_value_bd1 = transformed_bd1
+        best_symm = 2
+
+    transformed_bd1 = ReverseUL(bd1)
+    if transformed_bd1 < min_value_bd1:
+        min_value_bd1 = transformed_bd1
+        best_symm = 3
+
+    transformed_bd1 = ReverseUR(bd1)
+    if transformed_bd1 < min_value_bd1:
+        min_value_bd1 = transformed_bd1
+        best_symm = 4
+
+    transformed_bd1 = Rotate180(bd1)
+    if transformed_bd1 < min_value_bd1:
+        min_value_bd1 = transformed_bd1
+        best_symm = 5
+
+    transformed_bd1 = RotateL(bd1)
+    if transformed_bd1 < min_value_bd1:
+        min_value_bd1 = transformed_bd1
+        best_symm = 6
+
+    transformed_bd1 = RotateR(bd1)
+    if transformed_bd1 < min_value_bd1:
+        min_value_bd1 = transformed_bd1
+        best_symm = 7
+
+    return min_value_bd1, best_symm
 
 
-def simulate_move_and_merge(line: np.ndarray) -> Tuple[List[int], List[int]]:
+@njit(nogil=True, inline='always')
+def re_self_pair(bd1: np.uint64) -> Tuple[np.uint64, int]:
+    return bd1, 0
+
+
+def simulate_move_and_merge(line: np.typing.NDArray) -> Tuple[List[int], List[int]]:
     """模拟一行的移动和合并过程，返回新的行和合并发生的位置。"""
     # 移除所有的0，保留非0元素
     non_zero = [value for value in line if value != 0]
@@ -419,7 +484,7 @@ def simulate_move_and_merge(line: np.ndarray) -> Tuple[List[int], List[int]]:
     return new_line, merged
 
 
-def find_merge_positions(current_board: np.ndarray, move_direction: str) -> np.ndarray:
+def find_merge_positions(current_board: np.typing.NDArray, move_direction: str) -> np.typing.NDArray:
     """找到当前棋盘上即将发生合并的位置。"""
     # 初始化合并位置数组
     merge_positions = np.zeros_like(current_board)
@@ -443,3 +508,9 @@ def find_merge_positions(current_board: np.ndarray, move_direction: str) -> np.n
             merge_positions[:, i] = merge_line
 
     return merge_positions
+
+
+if __name__ == '__main__':
+
+    x,y=min_all_symm_pair(np.uint64(0x1a0b00237970df21))
+    print(x,y)

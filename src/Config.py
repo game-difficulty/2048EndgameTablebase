@@ -14,9 +14,9 @@ PatternCheckFunc = Callable[[np.uint64], bool]
 ToFindFunc = Callable[[np.uint64], np.uint64]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
 
-formation_info: Dict[str, Tuple[int, PatternCheckFunc, Union[ToFindFunc, Tuple[ToFindFunc, ToFindFunc]],
-                                SuccessCheckFunc, np.ndarray[np.uint64] | None]] = {
-    'LL': [-131072 - 34, Calculator.is_LL_pattern, (Calculator.minUL, Calculator.re_self), Calculator.is_LL_success,
+formation_info: Dict[str, Tuple[int, PatternCheckFunc, ToFindFunc,
+                                SuccessCheckFunc, np.typing.NDArray[np.uint64] | None]] = {
+    'LL': [-131072 - 34, Calculator.is_LL_pattern, Calculator.minUL, Calculator.is_LL_success,
            np.array([np.uint64(0x1000000023ff24ff), np.uint64(0x0000000123ff24ff)], dtype=np.uint64)],
     '4431': [-131072 - 20, Calculator.is_4431_pattern, Calculator.re_self, Calculator.is_4431_success,
              np.array([np.uint64(0x10000000123f2fff), np.uint64(0x00000001123f2fff)], dtype=np.uint64)],
@@ -25,6 +25,10 @@ formation_info: Dict[str, Tuple[int, PatternCheckFunc, Union[ToFindFunc, Tuple[T
     'free8': [-229376 - 16, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
     'free9': [-196608 - 18, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
     'free10': [-163840 - 20, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'free11': [-131072 - 22, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'free12': [-98304 - 24, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'free13': [-65536 - 26, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'free14': [-32768 - 28, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
     'L3': [-196608 - 8, Calculator.is_L3_pattern, Calculator.re_self, Calculator.is_L3_success,
            np.array([np.uint64(0x100000001fff2fff), np.uint64(0x000000011fff2fff)], dtype=np.uint64)],
     'L3t': [-196608 - 8, Calculator.is_L3t_pattern, Calculator.re_self, Calculator.is_L3t_success,
@@ -41,10 +45,16 @@ formation_info: Dict[str, Tuple[int, PatternCheckFunc, Union[ToFindFunc, Tuple[T
              np.array([np.uint64(0x00001000123424ff), np.uint64(0x00010000123424ff)], dtype=np.uint64)],
     '4442f': [-98304 - 36, Calculator.is_4442f_pattern, Calculator.re_self, Calculator.is_4442f_success,
               np.array([np.uint64(0x00001000123f24ff), np.uint64(0x0001000012342fff)], dtype=np.uint64)],
+    '4442ff': [-131072 - 20, Calculator.is_4442ff_pattern, Calculator.re_self, Calculator.is_4442ff_success,
+              np.array([np.uint64(0x0000100012ff23ff), np.uint64(0x000100001232ffff)], dtype=np.uint64)],
     'free8w': [-262144 - 14, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
     'free9w': [-229376 - 16, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
     'free10w': [-196608 - 18, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
     'free11w': [-163840 - 20, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'free12w': [-131072 - 22, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'free13w': [-98304 - 24, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'free14w': [-65536 - 26, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
+    'free15w': [-32768 - 28, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
     '2x4': [-262144, vCalculator.is_variant_pattern, vCalculator.min24, vCalculator.is_2x4_success,
             np.array([np.uint64(0xffff00000000ffff)], dtype=np.uint64)],
     '3x3': [-229376, vCalculator.is_variant_pattern, vCalculator.min33, vCalculator.is_3x3_success,
@@ -65,7 +75,7 @@ formation_info: Dict[str, Tuple[int, PatternCheckFunc, Union[ToFindFunc, Tuple[T
                  np.array([np.uint64(0x100000001ff12ff2), np.uint64(0x1000000012ff21ff)], dtype=np.uint64)],
 }
 
-pattern_32k_tiles_map: Dict[str, int] = {
+pattern_32k_tiles_map: Dict[str, list] = {
     # 32k, free32k, fix32k_pos,
     '': [0, 0, np.array([], dtype=np.uint8)],
     'LL': [4, 0, np.array([0, 4, 16, 20], dtype=np.uint8)],
@@ -74,6 +84,10 @@ pattern_32k_tiles_map: Dict[str, int] = {
     'free8': [7, 7, np.array([], dtype=np.uint8)],
     'free9': [6, 6, np.array([], dtype=np.uint8)],
     'free10': [5, 5, np.array([], dtype=np.uint8)],
+    'free11': [4, 4, np.array([], dtype=np.uint8)],
+    'free12': [3, 3, np.array([], dtype=np.uint8)],
+    'free13': [2, 2, np.array([], dtype=np.uint8)],
+    'free14': [1, 1, np.array([], dtype=np.uint8)],
     'L3': [6, 0, np.array([0, 4, 8, 16, 20, 24], dtype=np.uint8)],
     'L3t': [6, 2, np.array([4, 8, 20, 24], dtype=np.uint8)],
     '442': [6, 3, np.array([4, 16, 20], dtype=np.uint8)],
@@ -83,10 +97,15 @@ pattern_32k_tiles_map: Dict[str, int] = {
     '4432f': [4, 1, np.array([0, 4, 16], dtype=np.uint8)],
     '4442': [2, 0, np.array([0, 4], dtype=np.uint8)],
     '4442f': [3, 1, np.array([0, 4], dtype=np.uint8)],
+    '4442ff': [4, 2, np.array([0, 4], dtype=np.uint8)],
     'free8w': [8, 8, np.array([], dtype=np.uint8)],
     'free9w': [7, 7, np.array([], dtype=np.uint8)],
     'free10w': [6, 6, np.array([], dtype=np.uint8)],
     'free11w': [5, 5, np.array([], dtype=np.uint8)],
+    'free12w': [4, 4, np.array([], dtype=np.uint8)],
+    'free13w': [3, 3, np.array([], dtype=np.uint8)],
+    'free14w': [2, 2, np.array([], dtype=np.uint8)],
+    'free15w': [1, 1, np.array([], dtype=np.uint8)],
     '2x4': [0, 0, np.array([], dtype=np.uint8)],
     '3x3': [0, 0, np.array([], dtype=np.uint8)],
     '3x4': [0, 0, np.array([], dtype=np.uint8)],

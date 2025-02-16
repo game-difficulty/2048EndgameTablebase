@@ -1,30 +1,40 @@
 import os
 from itertools import combinations, permutations
-from typing import Callable
+from typing import Callable, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 from numba import njit, prange
+from numba import types
+from numba.typed import Dict
 
 import Calculator
-from BoardMover import SingletonBoardMover, BoardMover  # , MaskedBoardMover
-from Config import SingletonConfig, formation_info  # , pattern_32k_tiles_map
+from BoardMover import SingletonBoardMover, BoardMover
+from BoardMoverAD import MaskedBoardMover
+from Config import SingletonConfig, formation_info, pattern_32k_tiles_map
 from BookSolver import recalculate_process, remove_died, expand, keep_only_optimal_branches
 from BookGenerator import generate_process
-# from BookGeneratorAD import generate_process_ad, init_masker
+from BookGeneratorAD import generate_process_ad, init_masker
+from BookSolverAD import recalculate_process_ad
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
-ToFindFunc = Callable[[np.ndarray[np.uint64]], None]
-ToFindFunc1 = Callable[[np.uint64], np.uint64]
+ToFindFunc = Callable[[np.uint64], np.uint64]
+SymFindFunc = Callable[[np.uint64], Tuple[np.uint64, int]]
+
+KeyType = types.int8
+ValueType1 = types.uint32[:, :]
+BookDictType = Dict[KeyType, ValueType1]
+ValueType2 = types.uint64[:]
+IndexDictType = Dict[KeyType, ValueType2]
 
 
 def gen_lookup_table_big(
-        pattern:str,
-        arr_init: np.ndarray[np.uint64],
+        pattern: str,
+        arr_init: NDArray[np.uint64],
         pattern_check_func: PatternCheckFunc,
         success_check_func: SuccessCheckFunc,
         to_find_func: ToFindFunc,
-        to_find_func1: ToFindFunc1,
         target: int,
         position: int,
         steps: int,
@@ -38,21 +48,28 @@ def gen_lookup_table_big(
     传入包含所有初始局面的array，然后按照面板数字和依次生成下一阶段的所有局面。储存轮到系统生成数字时的面板。
     保障其中的每个arr储存的面板的数字和均相等
     """
+    sym_func = {Calculator.re_self: Calculator.re_self_pair,
+                Calculator.minUL: Calculator.minUL_pair,
+                Calculator.min_all_symm: Calculator.min_all_symm_pair}[to_find_func]
     save_config_to_txt(pathname + 'config.txt')
     if not SingletonConfig().config.get('advanced_algo', False):
-        started, d0, d1 = generate_process(arr_init, pattern_check_func, success_check_func, to_find_func1, target,
+        #  存在断点重连的情况下，以下d0, d1均可能为None
+        started, d0, d1 = generate_process(arr_init, pattern_check_func, success_check_func, to_find_func, target,
                                            position, steps, pathname, docheck_step, bm, isfree)
         d0, d1 = final_steps(started, d0, d1, pathname, steps, success_check_func, target, position)
-        recalculate_process(d0, d1, pattern_check_func, success_check_func, to_find_func1, target, position, steps,
+        recalculate_process(d0, d1, pattern_check_func, success_check_func, to_find_func, target, position, steps,
                             pathname, docheck_step, bm, spawn_rate4)  # 这里的最后的两个book d0,d1就是回算的d1,d2
-    # else:
-    #     bm = MaskedBoardMover()
-    #     _, num_free_32k, pos_fixed_32k = pattern_32k_tiles_map[pattern]
-    #     lm = init_masker(num_free_32k, target, pos_fixed_32k)
-    #     started, d0, d1 = generate_process_ad(arr_init, pattern_check_func, success_check_func, to_find_func1, target,
-    #                                        position, steps, pathname, docheck_step, bm, lm, isfree)
+    else:
+        mbm = MaskedBoardMover()
+        _, num_free_32k, pos_fixed_32k = pattern_32k_tiles_map[pattern]
+        lm = init_masker(num_free_32k, target, pos_fixed_32k)
+        started, d0, d1 = generate_process_ad(arr_init, pattern_check_func, to_find_func,
+                                              steps, pathname, mbm, lm, isfree)
+        b1, b2, i1, i2 = final_steps_ad(started, pathname, steps)
+        recalculate_process_ad(arr_init, b1, b2, i1, i2, pattern_check_func, sym_func, steps,
+                               pathname, bm, mbm, lm, spawn_rate4)  # 这里的最后的两个book d0,d1就是回算的d1,d2
     if SingletonConfig().config['optimal_branch_only']:
-        keep_only_optimal_branches(pattern_check_func, to_find_func1, steps, pathname, bm)
+        keep_only_optimal_branches(pattern_check_func, to_find_func, steps, pathname, bm)
 
 
 def save_config_to_txt(output_path):
@@ -65,13 +82,13 @@ def save_config_to_txt(output_path):
 
 
 def final_steps(started: bool,
-                d0: np.ndarray[np.uint64],
-                d1: np.ndarray[np.uint64],
+                d0: NDArray[np.uint64],
+                d1: NDArray[np.uint64],
                 pathname: str,
                 steps: int,
                 success_check_func: SuccessCheckFunc,
                 target: int,
-                position: int):
+                position: int) -> Tuple[NDArray, NDArray]:
     if started:
         expanded_arr0 = expand(d0)
         d0 = final_situation_process(expanded_arr0, success_check_func, target, position)
@@ -86,10 +103,26 @@ def final_steps(started: bool,
     return d0, d1
 
 
+def final_steps_ad(started: bool,
+                   pathname: str,
+                   steps: int) -> Tuple:
+    if started:
+        b0, i0 = Dict.empty(KeyType, ValueType1), Dict.empty(KeyType, ValueType2)
+        b1, i1 = Dict.empty(KeyType, ValueType1), Dict.empty(KeyType, ValueType2)
+        os.makedirs(pathname + str(steps - 1) + 'b', exist_ok=True)
+        os.makedirs(pathname + str(steps - 2) + 'b', exist_ok=True)
+        if os.path.exists(pathname + str(steps - 2)):
+            os.remove(pathname + str(steps - 2))
+        return b0, b1, i0, i1
+    if os.path.exists(pathname + str(steps - 2)):
+        os.remove(pathname + str(steps - 2))
+    return None, None, None, None
+
+
 @njit(nogil=True, parallel=True)
-def final_situation_process(expanded_arr0: np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])],
+def final_situation_process(expanded_arr0: NDArray[[np.uint64, np.uint32]],
                             success_check_func: SuccessCheckFunc, target: int, position: int
-                            ) -> np.ndarray[np.dtype([('f0', np.uint64), ('f1', np.uint32)])]:
+                            ) -> NDArray[[np.uint64, np.uint32]]:
     for i in prange(len(expanded_arr0)):
         if success_check_func(expanded_arr0[i][0], target, position):
             expanded_arr0[i][1] = 4000000000
@@ -99,7 +132,7 @@ def final_situation_process(expanded_arr0: np.ndarray[np.dtype([('f0', np.uint64
     return expanded_arr0
 
 
-def generate_free_inits(target: int, t32ks: int, t2s: int) -> np.ndarray[np.uint64]:
+def generate_free_inits(target: int, t32ks: int, t2s: int) -> NDArray[np.uint64]:
     numbers = [target, ]
     generated = np.empty(86486400, dtype=np.uint64)
     c = 0
@@ -135,7 +168,7 @@ def generate_free_inits(target: int, t32ks: int, t2s: int) -> np.ndarray[np.uint
 
 
 def start_build(pattern: str, target: int, position: int, pathname: str) -> bool:
-    bm = BoardMover()
+    bm = SingletonBoardMover(1)
     spawn_rate4 = SingletonConfig().config['4_spawn_rate']
     if pattern[:4] == 'free':
         if pattern[-1] != 'w':
@@ -144,8 +177,8 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
             free_tiles = int(pattern[4:])
             arr_init = generate_free_inits(target, 15 - free_tiles, free_tiles)
             gen_lookup_table_big(pattern, arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
-                                 Calculator.p_min_all_symm, Calculator.min_all_symm, target, 0, steps, pathname,
-                                 docheck_step, bm, isfree=True, spawn_rate4=spawn_rate4)
+                                 Calculator.min_all_symm, target, 0, steps,
+                                 pathname, docheck_step, bm, isfree=True, spawn_rate4=spawn_rate4)
         else:
             # freew定式pos参数设为1，配合is_free_success中的设置
             steps = int(2 ** target / 2 + 24)
@@ -153,25 +186,21 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
             free_tiles = int(pattern[4:-1])
             arr_init = generate_free_inits(0, 16 - free_tiles, free_tiles - 1)
             gen_lookup_table_big(pattern, arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
-                                 Calculator.p_min_all_symm, Calculator.min_all_symm, target, 1, steps, pathname,
-                                 docheck_step, bm, isfree=True, spawn_rate4=spawn_rate4)
+                                 Calculator.min_all_symm, target, 1, steps,
+                                 pathname, docheck_step, bm, isfree=True, spawn_rate4=spawn_rate4)
     else:
         steps = int(2 ** target / 2 + {'444': 96, '4431': 64, 'LL': 48, 'L3': 36, '4441': 48, '4432': 48, '4442': 48,
                                        '442': 36, 't': 36, '4432f': 48, 'L3t': 48, '4442f': 48,
                                        "3433": 48, "3442": 48, "3432": 48, "2433": 48, "movingLL": 48}[pattern])
         docheck_step = int(2 ** target / 2) - 16
-        _, pattern_check_func, to_find_func1, success_check_func, ini = formation_info[pattern]
-        if ((pattern == 'LL') and (position == 0)) or (pattern == '4432') or (pattern == '4432f'):
-            to_find_func, to_find_func1 = Calculator.p_minUL, Calculator.minUL
-        elif pattern == 'movingLL':
-            to_find_func, to_find_func1 = Calculator.p_min_all_symm, Calculator.min_all_symm
-        else:
-            to_find_func, to_find_func1 = Calculator.p_re_self, Calculator.re_self
+        _, pattern_check_func, to_find_func, success_check_func, ini = formation_info[pattern]
+        if pattern == 'LL' and position == 1:
+            to_find_func = Calculator.re_self
         if pattern in ('4442', '4432', '4441', "3433", "3442", "3432", "movingLL", '4432f', '4442f'):
             isfree = True
         else:
             isfree = False
-        gen_lookup_table_big(pattern, ini, pattern_check_func, success_check_func, to_find_func, to_find_func1,
+        gen_lookup_table_big(pattern, ini, pattern_check_func, success_check_func, to_find_func,
                              target, position, steps, pathname, docheck_step, bm, isfree, spawn_rate4)
     return True
 

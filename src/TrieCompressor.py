@@ -119,7 +119,7 @@ def compress_segment(segment_data, lvl):
 
 def worker(start_idx, end_idx, segments_info, shm_name, shape, dtype, lvl, temp_filename, worker_idx):
     existing_shm = shared_memory.SharedMemory(name=shm_name)
-    data_slice = np.ndarray(shape, dtype=dtype, buffer=existing_shm.buf)
+    data_slice = np.typing.NDArray(shape, dtype=dtype, buffer=existing_shm.buf)
     current_size = 0
     segments = []
 
@@ -167,7 +167,7 @@ def compress_and_save_p(ind3, data, output_filename, lvl=1):
 
     # 创建共享内存
     shm = shared_memory.SharedMemory(create=True, size=data.nbytes)
-    shm_data = np.ndarray(data.shape, dtype=data.dtype, buffer=shm.buf)
+    shm_data = np.typing.NDArray(data.shape, dtype=data.dtype, buffer=shm.buf)
     np.copyto(shm_data, data)
 
     segment_size = len(segments_info) // num_workers
@@ -184,14 +184,14 @@ def compress_and_save_p(ind3, data, output_filename, lvl=1):
                 lvl, temp_filename, worker_idx))
 
     # 处理分段数据
-    all_segments: List[np.ndarray | None] = [None] * num_workers
+    all_segments: List[np.typing.NDArray | None] = [None] * num_workers
     for future in concurrent.futures.as_completed(futures):
         segments, worker_idx = future.result()
         all_segments[worker_idx] = np.array(segments, dtype='uint32,uint64')
     for i in range(1, num_workers):
         all_segments[i]['f1'] += all_segments[i - 1][-1]['f1']
     all_segments = [np.array([(0, 0)], dtype='uint32,uint64')] + all_segments
-    all_seg: np.ndarray = np.concatenate(all_segments)
+    all_seg: np.typing.NDArray = np.concatenate(all_segments)
 
     # 合并所有临时文件
     with open(output_filename, 'wb') as final_file:

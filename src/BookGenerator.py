@@ -4,51 +4,51 @@ import time
 from typing import Callable, Tuple, List
 
 import numpy as np
+from numpy.typing import NDArray
 from numba import njit, prange
 import psutil
 
 from BoardMover import BoardMover
 from BookGeneratorUtils import sort_array, parallel_unique, concatenate, merge_deduplicate_all, largest_power_of_2, \
-    hash_, check_sorted, merge_inplace, update_seg
+    hash_, merge_inplace, update_seg
 import Config
 from Config import SingletonConfig
 from LzmaCompressor import compress_with_7z
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
-ToFindFunc = Callable[[np.ndarray[np.uint64]], None]
-ToFindFunc1 = Callable[[np.uint64], np.uint64]
+ToFindFunc = Callable[[np.uint64], np.uint64]
 
 
 logger = Config.logger
 
 
-def gen_boards_big(arr0: np.ndarray[np.uint64],
+def gen_boards_big(arr0: NDArray[np.uint64],
                    target: int,
                    position: int,
                    bm: BoardMover,
                    pattern_check_func: PatternCheckFunc,
                    success_check_func: SuccessCheckFunc,
-                   to_find_func: ToFindFunc1,
-                   seg_list: np.ndarray[float],
-                   pivots_list: List[np.ndarray[np.uint64]],
-                   hashmap1: np.ndarray[np.uint64],
-                   hashmap2: np.ndarray[np.uint64],
+                   to_find_func: ToFindFunc,
+                   seg_list: NDArray[float],
+                   pivots_list: List[NDArray[np.uint64]],
+                   hashmap1: NDArray[np.uint64],
+                   hashmap2: NDArray[np.uint64],
                    n: int,
                    length_factors_list: List[List[float]],
                    length_factor_multiplier: float = 1.5,
                    do_check: bool = True,
                    isfree: bool = False,
                    ) -> Tuple[
-    List[np.ndarray[np.uint64]], List[np.ndarray[np.uint64]], List[np.ndarray[np.uint64]], np.ndarray[float], List[
-        List[float]], float, np.ndarray[np.uint64], np.ndarray[np.uint64], float, float, float]:
+    List[NDArray[np.uint64]], List[NDArray[np.uint64]], List[NDArray[np.uint64]], NDArray[float], List[
+        List[float]], float, NDArray[np.uint64], NDArray[np.uint64], float, float, float]:
     """
     将arr0分段放入gen_boards生成排序去重后的局面，然后归并
     """
-    arr1s: List[np.ndarray[np.uint64]] = []
-    arr2s: List[np.ndarray[np.uint64]] = []
-    actual_lengths2: np.ndarray[np.uint64] = np.empty(len(seg_list) - 1, dtype=np.uint64)
-    actual_lengths1: np.ndarray[np.uint64] = np.empty(len(seg_list) - 1, dtype=np.uint64)
+    arr1s: List[NDArray[np.uint64]] = []
+    arr2s: List[NDArray[np.uint64]] = []
+    actual_lengths2: NDArray[np.uint64] = np.empty(len(seg_list) - 1, dtype=np.uint64)
+    actual_lengths1: NDArray[np.uint64] = np.empty(len(seg_list) - 1, dtype=np.uint64)
     t0 = time.time()
 
     gen_time = 0
@@ -189,7 +189,7 @@ def handle_restart(i, pathname, arr_init, started, d0, d1):
 
 
 @njit(nogil=True, parallel=True)
-def update_hashmap_length(hashmap: np.ndarray[np.uint64], arr: np.ndarray[np.uint64]) -> np.ndarray[np.uint64]:
+def update_hashmap_length(hashmap: NDArray[np.uint64], arr: NDArray[np.uint64]) -> NDArray[np.uint64]:
     """根据当前layer大小调整哈希表大小"""
     length = max(largest_power_of_2(len(arr)), 1048576)
     if len(hashmap) < length:
@@ -205,10 +205,10 @@ def update_hashmap_length(hashmap: np.ndarray[np.uint64], arr: np.ndarray[np.uin
 
 
 def generate_process(
-        arr_init: np.ndarray[np.uint64],
+        arr_init: NDArray[np.uint64],
         pattern_check_func: PatternCheckFunc,
         success_check_func: SuccessCheckFunc,
-        to_find_func: ToFindFunc1,
+        to_find_func: ToFindFunc,
         target: int,
         position: int,
         steps: int,
@@ -216,7 +216,7 @@ def generate_process(
         docheck_step: int,
         bm: BoardMover,
         isfree: bool
-) -> Tuple[bool, np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+) -> Tuple[bool, NDArray[np.uint64], NDArray[np.uint64]]:
     started = False  # 是否进行了计算，如果是则需要进行final_steps处理最后一批局面
     d0, d1 = np.empty(0, dtype=np.uint64), np.empty(0, dtype=np.uint64)
     pivots, pivots_list = None, None  # 用于快排的分割点
@@ -248,7 +248,7 @@ def generate_process(
             else:
                 # 先预测预分配数组的长度乘数
                 length_factor = predict_next_length_factor_quadratic(length_factors)
-                length_factor *= 1.33 if isfree else 1.25
+                length_factor *= 1.5 if isfree else 1.33
                 length_factor *= length_factor_multiplier
                 if len(hashmap1) == 0:
                     hashmap1, hashmap2 = update_hashmap_length(hashmap1, d0), update_hashmap_length(hashmap2, d0)  # 初始化
@@ -376,23 +376,23 @@ def log_performance(i, t0, t1, t2, t3, d1):
 
 
 @njit(nogil=True, parallel=True)
-def gen_boards(arr0: np.ndarray[np.uint64],
+def gen_boards(arr0: NDArray[np.uint64],
                target: int,
                position: int,
                bm: BoardMover,
                pattern_check_func: PatternCheckFunc,
                success_check_func: SuccessCheckFunc,
-               to_find_func: ToFindFunc1,
-               seg: np.ndarray[float],
-               hashmap1: np.ndarray[np.uint64],
-               hashmap2: np.ndarray[np.uint64],
+               to_find_func: ToFindFunc,
+               seg: NDArray[float],
+               hashmap1: NDArray[np.uint64],
+               hashmap2: NDArray[np.uint64],
                n: int = 8,
                length_factor: float = 8,
                do_check: bool = True,
                isfree: bool = False
                ) -> \
-        Tuple[np.ndarray[np.uint64], np.ndarray[np.uint64], np.ndarray[float], np.ndarray[float],
-        np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+        Tuple[NDArray[np.uint64], NDArray[np.uint64], NDArray[float], NDArray[float],
+        NDArray[np.uint64], NDArray[np.uint64]]:
     """
     根据arr0中的面板，先生成数字，再移动，如果移动后仍是定式范围内且移动有效，则根据生成的数字（2,4）分别填入
     """
@@ -401,7 +401,8 @@ def gen_boards(arr0: np.ndarray[np.uint64],
     length = max(min_length, int(len(arr0) * length_factor))
     arr1 = np.empty(length, dtype=np.uint64)
     arr2 = np.empty(length, dtype=np.uint64)
-    c1, c2 = np.empty(n, dtype=np.uint64), np.empty(n, dtype=np.uint64)
+    starts = np.array([length // n * i for i in range(n)], dtype=np.uint64)
+    c1, c2 = starts.copy(),  starts.copy()
     hashmap1_length = len(hashmap1) - 1  # 要减一，这个长度用于计算哈希的时候取模
     hashmap2_length = len(hashmap2) - 1
 
@@ -409,13 +410,11 @@ def gen_boards(arr0: np.ndarray[np.uint64],
     # seg = [0, 0.13, 0.42, 0.72, 1]
     # seg = [0, 0.07, 0.21, 0.41, 0.61, 0.81, 1]
 
-    starts = np.array([length // n * i for i in range(n)])
-
     for s in prange(n):
         start, end = int(seg[s] * len(arr0)), int(seg[s + 1] * len(arr0))
         c1t, c2t = length // n * s, length // n * s
         for b in range(start, end):
-            t = arr0[b]
+            t: np.uint64 = arr0[b]
             if do_check and success_check_func(t, target, position):
                 continue
             for i in range(16):  # 遍历每个位置
@@ -458,16 +457,16 @@ def gen_boards(arr0: np.ndarray[np.uint64],
 
 
 @njit(nogil=True, parallel=True)
-def gen_boards_simple(arr0: np.ndarray[np.uint64],
+def gen_boards_simple(arr0: NDArray[np.uint64],
                       target: int,
                       position: int,
                       bm: BoardMover,
                       pattern_check_func: PatternCheckFunc,
                       success_check_func: SuccessCheckFunc,
-                      to_find_func: ToFindFunc1,
+                      to_find_func: ToFindFunc,
                       do_check: bool = True,
                       isfree: bool = False
-                      ) -> Tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+                      ) -> Tuple[NDArray[np.uint64], NDArray[np.uint64]]:
     """
     根据arr0中的面板，先生成数字，再移动，如果移动后仍是定式范围内且移动有效，则根据生成的数字（2,4）分别填入
     """
@@ -510,7 +509,7 @@ def predict_next_length_factor_quadratic(length_factors: List[float]) -> float:
     return next_length_factor
 
 
-def split_seg(seg: np.ndarray[float]) -> np.ndarray[float]:
+def split_seg(seg: NDArray[float]) -> NDArray[float]:
     new_seg = np.empty(len(seg) * 2 - 1, dtype=float)
     new_seg[-1] = 1
     for i in range(len(seg) - 1):
@@ -529,15 +528,15 @@ def split_length_factor_list(length_factor_list: List[List[float]]) -> List[List
     return length_factor_list_new
 
 
-def split_pivots_list(pivots_list: List[np.ndarray[np.uint64]]) -> List[np.ndarray[np.uint64]]:
-    pivots_list_new: List[np.ndarray[np.uint64]] = []
+def split_pivots_list(pivots_list: List[NDArray[np.uint64]]) -> List[NDArray[np.uint64]]:
+    pivots_list_new: List[NDArray[np.uint64]] = []
     for i in pivots_list:
         pivots_list_new.append(i)
         pivots_list_new.append(i)
     return pivots_list_new
 
 
-def reverse_split_seg(seg: np.ndarray[float]) -> np.ndarray[float]:
+def reverse_split_seg(seg: NDArray[float]) -> NDArray[float]:
     return seg[::2]
 
 
@@ -548,11 +547,11 @@ def reverse_split_length_factor_list(length_factor_list: List[List[float]]) -> L
     return length_factor_list_new
 
 
-def reverse_split_pivots_list(pivots_list: List[np.ndarray[np.uint64]]) -> List[np.ndarray[np.uint64]]:
+def reverse_split_pivots_list(pivots_list: List[NDArray[np.uint64]]) -> List[NDArray[np.uint64]]:
     return pivots_list[::2]
 
 
-def extract_uniform_elements(n: int, arr: np.ndarray) -> np.ndarray:
+def extract_uniform_elements(n: int, arr: NDArray) -> NDArray:
     k = (len(arr) - 1) // n  # 计算 k
     result = arr[::k]  # 每隔 k 个取一个，包括第一个和最后一个
     return result

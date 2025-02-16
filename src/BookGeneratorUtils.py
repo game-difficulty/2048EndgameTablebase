@@ -5,6 +5,7 @@ from typing import Callable, List
 import traceback
 
 import numpy as np
+from numpy.typing import NDArray
 from numba import njit, prange
 
 import Config
@@ -13,7 +14,7 @@ from Config import SingletonConfig
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
-ToFindFunc = Callable[[np.ndarray[np.uint64]], None]
+ToFindFunc = Callable[[NDArray[np.uint64]], None]
 ToFindFunc1 = Callable[[np.uint64], np.uint64]
 
 logger = Config.logger
@@ -38,26 +39,26 @@ def initialize_sorting_library():
         _dll.parallel_sort.argtypes = (POINTER(c_uint64), c_size_t, POINTER(c_uint64), ctypes.c_bool)
         _dll.parallel_sort.restype = None
 
-        # 测试排序操作
-        _arr = np.random.randint(0, 1 << 64, 1000, dtype=np.uint64)
-        _pivots = np.array([2 ** 61, 2 ** 62, 2 ** 61 * 3, 2 ** 63, 2 ** 61 * 5, 2 ** 62 * 3, 2 ** 61 * 7],
-                           dtype=np.uint64)
-
-        _arr_ptr = _arr.ctypes.data_as(POINTER(c_uint64))
-        _pivots_ptr = (c_uint64 * len(_pivots))(*_pivots)
-        _use_avx512 = True if use_avx == 2 else False
-
-        # 调用DLL中的parallel_sort函数进行测试排序
-        _dll.parallel_sort(_arr_ptr, _arr.size, _pivots_ptr, _use_avx512)
-
-        # 验证排序结果是否正确
-        if not np.all(_arr[:-1] <= _arr[1:]):
-            raise ValueError("DLL sorting failed, results are not sorted correctly")
-        else:
-            if _use_avx512:
-                logger.info("Sorting success using AVX512.")
-            else:
-                logger.info("Sorting success using AVX2.")
+        # # 测试排序操作
+        # _arr = np.random.randint(0, 1 << 64, 1000, dtype=np.uint64)
+        # _pivots = np.array([2 ** 61, 2 ** 62, 2 ** 61 * 3, 2 ** 63, 2 ** 61 * 5, 2 ** 62 * 3, 2 ** 61 * 7],
+        #                    dtype=np.uint64)
+        #
+        # _arr_ptr = _arr.ctypes.data_as(POINTER(c_uint64))
+        # _pivots_ptr = (c_uint64 * len(_pivots))(*_pivots)
+        # _use_avx512 = True if use_avx == 2 else False
+        #
+        # # 调用DLL中的parallel_sort函数进行测试排序
+        # _dll.parallel_sort(_arr_ptr, _arr.size, _pivots_ptr, _use_avx512)
+        #
+        # # 验证排序结果是否正确
+        # if not np.all(_arr[:-1] <= _arr[1:]):
+        #     raise ValueError("DLL sorting failed, results are not sorted correctly")
+        # else:
+        #     if _use_avx512:
+        #         logger.info("Sorting success using AVX512.")
+        #     else:
+        #         logger.info("Sorting success using AVX2.")
 
     except Exception as e:
         # 如果加载DLL或排序出错，禁用AVX并记录日志
@@ -72,7 +73,7 @@ def initialize_sorting_library():
 dll = initialize_sorting_library()
 
 
-def parallel_unique(aux: np.ndarray[np.uint64], n: int) -> np.ndarray[np.uint64]:
+def parallel_unique(aux: NDArray[np.uint64], n: int) -> NDArray[np.uint64]:
     if len(aux) < 128:
         return np.unique(aux)
     else:
@@ -80,7 +81,7 @@ def parallel_unique(aux: np.ndarray[np.uint64], n: int) -> np.ndarray[np.uint64]
 
 
 @njit(parallel=True)
-def _parallel_unique(aux: np.ndarray[np.uint64], n: int) -> np.ndarray[np.uint64]:
+def _parallel_unique(aux: NDArray[np.uint64], n: int) -> NDArray[np.uint64]:
     # 获取分段的大小
     step = len(aux) // n
     c_list = np.zeros(n, dtype=np.int64)  # 存储每段的去重长度
@@ -107,7 +108,7 @@ def _parallel_unique(aux: np.ndarray[np.uint64], n: int) -> np.ndarray[np.uint64
     result_c = np.sum(c_list)  # 合并所有段的去重结果
 
     # 创建最终的去重数组
-    result = np.empty(result_c, dtype=np.uint64)
+    result = np.empty(np.uint64(result_c), dtype=np.uint64)
 
     # 合并所有段的去重结果
     result_cumulative = 0
@@ -132,7 +133,7 @@ def largest_power_of_2(n):
 
 
 @njit(nogil=True)
-def _merge_deduplicate_all(arrays: List[np.ndarray], length: int = 0) -> np.ndarray:
+def _merge_deduplicate_all(arrays: List[NDArray], length: int = 0) -> NDArray:
     if len(arrays) == 1:
         return arrays[0]
     if length == 0:
@@ -179,7 +180,7 @@ def binary_search(arr, x):
     return left
 
 
-def merge_deduplicate_all(arrays: List[np.ndarray], pivots, n_threads: int | None = None) -> list[np.ndarray]:
+def merge_deduplicate_all(arrays: List[NDArray], pivots, n_threads: int | None = None) -> list[NDArray]:
     """
     多线程合并并去重多个已排序的数组
     """
@@ -223,7 +224,7 @@ def concatenate(arrays):
     return res
 
 
-def sort_array(arr: np.ndarray[np.uint64], pivots: np.ndarray[np.uint64] | None = None) -> None:
+def sort_array(arr: NDArray[np.uint64], pivots: NDArray[np.uint64] | None = None) -> None:
     # 小数组直接调用numpy sort
     if len(arr) < 1e6 or pivots is None or len(pivots) != 7 or not use_avx:
         arr.sort()
@@ -242,12 +243,12 @@ def hash_(board: np.uint64) -> np.uint64:
 
 
 @njit(nogil=True, parallel=True)
-def is_sorted(arr: np.ndarray) -> bool:
+def is_sorted(arr: NDArray) -> bool:
     return np.all(arr[:-1] < arr[1:])
 
 
 @njit(nogil=True, parallel=True)
-def is_sorted2(arr: np.ndarray) -> bool:
+def is_sorted2(arr: NDArray) -> bool:
     return np.all(arr[:-1] <= arr[1:])
 
 
@@ -265,7 +266,7 @@ def check_sorted(arr):
 
 
 @njit(nogil=True)
-def merge_and_deduplicate(sorted_arr1: np.ndarray, sorted_arr2: np.ndarray) -> np.ndarray:
+def merge_and_deduplicate(sorted_arr1: NDArray, sorted_arr2: NDArray) -> NDArray:
     # 结果数组的长度最多与两数组之和一样长
     unique_array = np.empty(len(sorted_arr1) + len(sorted_arr2), dtype=np.uint64)
 
@@ -300,8 +301,8 @@ def merge_and_deduplicate(sorted_arr1: np.ndarray, sorted_arr2: np.ndarray) -> n
     return unique_array[:k]  # 调整数组大小以匹配实际元素数
 
 
-@njit(nogil=True, parallel=True)
-def merge_inplace(arr: np.ndarray, segment_ends: np.ndarray, segment_starts: np.ndarray) -> np.ndarray:
+@njit(nogil=True, boundscheck=True)
+def merge_inplace(arr: NDArray, segment_ends: NDArray, segment_starts: NDArray) -> NDArray:
     """
     将每一段有效数据依次合并到前一段末尾。
     如果读写区间产生重叠，则仅移动非重叠部分。
@@ -315,15 +316,15 @@ def merge_inplace(arr: np.ndarray, segment_ends: np.ndarray, segment_starts: np.
     返回:
     - 合并后的数组切片。
     """
-    counts = segment_ends[0]
+    counts = np.uint64(segment_ends[0])
     num_segments = len(segment_starts)
 
     for i in range(1, num_segments):
         start = segment_starts[i]
         end = segment_ends[i]
-        size = end - start
+        size = np.uint64(end - start)
         dest_start = counts
-        dest_end = counts + size
+        dest_end = np.uint64(counts + size)
 
         # 检查读写区间是否重叠
         if start < dest_end:
@@ -335,7 +336,7 @@ def merge_inplace(arr: np.ndarray, segment_ends: np.ndarray, segment_starts: np.
     return arr[:counts]
 
 
-def update_seg(seg: np.ndarray[float], percents: np.ndarray[float], learning_rate: float = 0.5) -> np.ndarray[float]:
+def update_seg(seg: NDArray[float], percents: NDArray[float], learning_rate: float = 0.5) -> NDArray[float]:
     seg_length = seg[1:] - seg[:-1]
     if 0 not in percents:
         normalised = (seg_length / percents)

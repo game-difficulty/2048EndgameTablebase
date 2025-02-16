@@ -5,7 +5,7 @@ from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QIcon, QCursor
 
-from BookReader import BookReader
+from BookReader import BookReaderDispatcher
 from Calculator import ReverseUD, ReverseLR, RotateR, RotateL
 from Gamer import BaseBoardFrame
 from Config import SingletonConfig, formation_info
@@ -134,12 +134,14 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.replay_timer = QTimer(self)
         self.replay_timer.timeout.connect(self.replay_step)  # 回放状态定时自动走棋
 
+        self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
+
         self.statusbar.showMessage("All features may be slow when used for the first time. Please be patient.", 8000)
 
     def setupUi(self):
         self.setObjectName("self")
         self.setWindowIcon(QIcon(r'pic\2048.ico'))
-        self.resize(988, 1200)
+        self.resize(900, 1000)
         self.centralwidget = QtWidgets.QWidget(self)
         self.centralwidget.setObjectName("centralwidget")
         self.gridLayout = QtWidgets.QGridLayout(self.centralwidget)
@@ -153,7 +155,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gameframe.update_results.connect(self.manual_mode_update_results)
 
         self.operate = QtWidgets.QFrame(self.centralwidget)
-        self.operate.setMaximumSize(QtCore.QSize(16777215, 450))
+        self.operate.setMaximumSize(QtCore.QSize(16777215, 360))
         self.operate.setStyleSheet("QFrame{\n"
                                    "    border-color: rgb(167, 167, 167);\n"
                                    "    background-color: rgb(236, 236, 236);\n"
@@ -298,7 +300,8 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.horizontalLayout.addWidget(self.show_results_checkbox)
         self.right_Layout.addLayout(self.horizontalLayout)
         self.results_label = QtWidgets.QLabel(self.operate)
-        self.results_label.setMinimumSize(QtCore.QSize(0, 200))
+        self.results_label.setMinimumSize(QtCore.QSize(0, 150))
+        self.results_label.setMaximumSize(QtCore.QSize(16777215, 220))
         self.results_label.setStyleSheet("background-color: rgb(255, 255, 255);\n"
                                          "border-color: rgb(0, 0, 0); font: 75 18pt \"Consolas\";")
         self.results_label.setText("")
@@ -445,9 +448,10 @@ class TrainWindow(QtWidgets.QMainWindow):
                 self.gameframe.set_to_44()
 
             self.filepath.setText(SingletonConfig().config['filepath_map'].get(self.current_pattern, ''))
+            self.pattern_text.setText(self.current_pattern)
+            self.book_reader.dispatch(self.filepath.text(), self.pattern_settings[0], self.pattern_settings[1])
             self.handle_set_default()
             self.show_results()
-            self.pattern_text.setText(self.current_pattern)
 
     def tiles_bt_on_click(self):
         sender = self.sender()
@@ -473,7 +477,7 @@ class TrainWindow(QtWidgets.QMainWindow):
     def show_results(self):
         if self.show_results_checkbox.isChecked():
             board = self.gameframe.mover.decode_board(np.uint64(int('0x' + self.board_state.text().rjust(16, '0'), 16)))
-            result = BookReader.move_on_dic(board, self.pattern_settings[0], self.pattern_settings[1],
+            result = self.book_reader.move_on_dic(board, self.pattern_settings[0], self.pattern_settings[1],
                                             self.current_pattern, self.pattern_settings[2])
             if isinstance(result, dict):
                 results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in result.items())
@@ -533,7 +537,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.handle_set_board()
 
     def handle_set_default(self):
-        random_board = BookReader.get_random_state(self.filepath.text(), self.current_pattern)
+        random_board = self.book_reader.get_random_state(self.filepath.text(), self.current_pattern)
         self.board_state.setText(hex(random_board)[2:].rjust(16, '0'))
         self.handle_set_board()
 

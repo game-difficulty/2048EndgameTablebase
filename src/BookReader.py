@@ -4,10 +4,12 @@ from typing import Callable, Dict, Tuple, Union, List, Optional
 
 import numpy as np
 
-from BoardMover import SingletonBoardMover, BoardMoverWithScore
+from BoardMover import SingletonBoardMover, BoardMover
+from Variants.vBoardMover import VBoardMover
 from Config import SingletonConfig, formation_info
 from TrieCompressor import trie_decompress_search
 from Calculator import re_self
+from BookReaderAD import BookReaderAD
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 ToFindFunc = Callable[[np.uint64], np.uint64]
@@ -15,11 +17,11 @@ SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
 
 
 class BookReader:
-    bm: BoardMoverWithScore = SingletonBoardMover(2)
-    vbm: BoardMoverWithScore = SingletonBoardMover(4)
+    bm: BoardMover = SingletonBoardMover(1)
+    vbm: VBoardMover = SingletonBoardMover(3)
 
     @staticmethod
-    def move_on_dic(board: np.ndarray, pattern: str, target: str, pattern_full: str, pos: str = '0'
+    def move_on_dic(board: np.typing.NDArray, pattern: str, target: str, pattern_full: str, pos: str = '0'
                     ) -> Dict[str, Union[str, float, int]]:
         bm = BookReader.bm if pattern not in ('2x4', '3x3', '3x4') else BookReader.vbm
         nums_adjust, pattern_check_func, to_find_func, success_check_func, _ = \
@@ -52,7 +54,7 @@ class BookReader:
         return {'down': '', 'right': '', 'left': '', 'up': ''}
 
     @staticmethod
-    def gen_all_mirror(board: np.ndarray, pattern: str) -> List[Tuple[str, str, np.ndarray]]:
+    def gen_all_mirror(board: np.typing.NDArray, pattern: str) -> List[Tuple[str, str, np.typing.NDArray]]:
         if pattern in ('2x4', '3x3', '3x4'):
             return [('none', 'none', board)]
         operations = [
@@ -69,7 +71,7 @@ class BookReader:
 
     @staticmethod
     def get_best_move(pathname: str, filename: str, board: np.uint64, pattern_check_func: PatternCheckFunc,
-                      bm: BoardMoverWithScore, to_find_func: ToFindFunc) -> Dict[str, Optional[float]]:
+                      bm: BoardMover, to_find_func: ToFindFunc) -> Dict[str, Optional[float]]:
         result = {'down': None, 'right': None, 'left': None, 'up': None}
         fullpath = os.path.join(pathname, filename.replace('.book', '.z'))
         if os.path.exists(fullpath):
@@ -77,9 +79,9 @@ class BookReader:
             ind = np.fromfile(path + 'i', dtype='uint8,uint32')
             segments = np.fromfile(path + 's', dtype='uint32,uint64')
         else:
-            ind = segments = None
+            ind, segments = None, None
 
-        for newt, d in zip(bm.move_all_dir(board), ('down', 'right', 'left', 'up')):
+        for newt, d in zip(bm.move_all_dir(board), ('left', 'right', 'up', 'down')):
             newt = np.uint64(newt)
             if newt != board and pattern_check_func(newt):
                 result[d] = BookReader.find_value(pathname, filename, to_find_func(newt), ind, segments)
@@ -110,8 +112,8 @@ class BookReader:
         return direction
 
     @staticmethod
-    def find_value(pathname: str, filename: str, search_key: np.uint64, ind: np.ndarray = None,
-                   segments: np.ndarray = None) -> Union[int, float, str]:
+    def find_value(pathname: str, filename: str, search_key: np.uint64, ind: np.typing.NDArray = None,
+                   segments: np.typing.NDArray = None) -> Union[int, float, str, None]:
         search_key = np.uint64(search_key)
         fullpath = os.path.join(pathname, filename)
         if os.path.exists(fullpath):
@@ -169,10 +171,57 @@ class BookReader:
                 random_record_index = np.random.randint(0, num_records)
                 offset = random_record_index * record_size
                 file.seek(offset)
-                state, _ = struct.unpack('QI', file.read(record_size))
+                state = struct.unpack('QI', file.read(record_size))[0]
                 return np.uint64(BookReader.bm.gen_new_num(np.uint64(state),
                                                            SingletonConfig().config['4_spawn_rate'])[0])
         return np.uint64(0)
+
+
+class BookReaderDispatcher:
+    _book_reader: BookReader = BookReader
+    bm: BoardMover = SingletonBoardMover(1)
+
+    def __init__(self):
+        self.book_reader_ad: BookReaderAD | None = None
+        self.use_ad = False
+
+    def set_book_reader_ad(self, pattern: str, target: int):
+        if self.book_reader_ad is not None:
+            if pattern == self.book_reader_ad.pattern and target == self.book_reader_ad.target:
+                return
+        self.book_reader_ad = BookReaderAD(pattern, target)
+
+    def move_on_dic(self, board: np.typing.NDArray, pattern: str, target: str, pattern_full: str, pos: str = '0'
+                    ) -> Dict[str, Union[str, float, int]]:
+        if self.use_ad and self.book_reader_ad is not None:
+            return self.book_reader_ad.move_on_dic(board, pattern_full, pos)
+        else:
+            return self._book_reader.move_on_dic(board, pattern, target, pattern_full, pos)
+
+    def get_random_state(self, pathname: str, pattern_full: str):
+        if self.use_ad and self.book_reader_ad is not None:
+            return self.book_reader_ad.get_random_state(pathname, pattern_full)
+        else:
+            return self._book_reader.get_random_state(pathname, pattern_full)
+
+    def dispatch(self, pathname: str, pattern: str, target: str | int):
+        try:
+            target = int(target)
+            if target >= 128:
+                target = int(np.log2(target))
+        except ValueError:
+            return
+        if not pattern or not target:
+            return
+        bookpath1 = os.path.join(pathname, pattern + '_' + str(2 ** target) + f'_{str(2 ** target // 2)}b')
+        bookpath2 = os.path.join(pathname, pattern + '_' + str(2 ** target) + f'_{str(2 ** target // 4)}b')
+        if not os.path.exists(bookpath1) and not os.path.exists(bookpath2):
+            self.use_ad = False
+        else:
+            self.set_book_reader_ad(pattern, target)
+            if self.book_reader_ad is not None:
+                self.use_ad = True
+
 
 
 if __name__ == "__main__":

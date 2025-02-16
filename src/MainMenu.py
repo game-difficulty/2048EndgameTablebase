@@ -256,6 +256,7 @@ class PreloadThread(QtCore.QThread):
         SingletonConfig()
         from BoardMover import SingletonBoardMover
         bm1 = SingletonBoardMover(1)
+        return
         bm2 = SingletonBoardMover(2)
         bm3 = SingletonBoardMover(3)
         bm4 = SingletonBoardMover(4)
@@ -272,6 +273,7 @@ class PreloadThread(QtCore.QThread):
 
 class WarmupThread(QtCore.QThread):
     def run(self):
+        return
         from BoardMover import SingletonBoardMover
         from BookGenerator import gen_boards_simple, parallel_unique, gen_boards
         from BookBuilder import final_situation_process
