@@ -504,6 +504,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         filepath = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Folder", options=options)
         if filepath:
             self.filepath.setText(filepath)
+            self.book_reader.dispatch(self.filepath.text(), self.pattern_settings[0], self.pattern_settings[1])
             SingletonConfig().config['filepath_map'][self.current_pattern] = filepath
             SingletonConfig().save_config(SingletonConfig().config)
             self.show_results()
