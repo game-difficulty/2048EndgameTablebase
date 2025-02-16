@@ -256,7 +256,6 @@ class PreloadThread(QtCore.QThread):
         SingletonConfig()
         from BoardMover import SingletonBoardMover
         bm1 = SingletonBoardMover(1)
-        return
         bm2 = SingletonBoardMover(2)
         bm3 = SingletonBoardMover(3)
         bm4 = SingletonBoardMover(4)
@@ -276,8 +275,6 @@ class WarmupThread(QtCore.QThread):
         return
         from BoardMover import SingletonBoardMover
         from BookGenerator import gen_boards_simple, parallel_unique, gen_boards
-        from BookBuilder import final_situation_process
-        from BookSolver import recalculate, remove_died, create_index
         from Calculator import is_L3_pattern, is_L3_success, re_self
 
         bm = SingletonBoardMover(1)
@@ -292,17 +289,6 @@ class WarmupThread(QtCore.QThread):
                    np.empty(256, dtype='uint64'), np.empty(256, dtype='uint64'))
 
         arr1, arr2 = gen_boards_simple(arr, 9, 0, bm, is_L3_pattern, is_L3_success, re_self, False, False)
-        arr1, arr2 = parallel_unique(arr1, 4), parallel_unique(arr2, 4)
-        arr0 = np.empty(len(arr), dtype='uint64,uint32')
-        arr0['f0'] = arr
-        expanded_arr1 = np.empty(len(arr1), dtype='uint64,uint32')
-        expanded_arr1['f0'] = arr1
-        expanded_arr2 = np.empty(len(arr2), dtype='uint64,uint32')
-        expanded_arr2['f0'] = arr2
-        arr1 = remove_died(final_situation_process(expanded_arr1, is_L3_success, 9, 0))
-        arr2 = remove_died(final_situation_process(expanded_arr2, is_L3_success, 9, 0))
-        ind1 = create_index(arr1)
-        ind2 = create_index(arr2)
-        recalculate(arr0, arr1, arr2, 9, 0, bm, is_L3_pattern, is_L3_success, re_self, ind1, ind2, True, 0.1)
-        del arr0, arr1, arr2
+        parallel_unique(arr1, 4), parallel_unique(arr2, 4)
+        del arr, arr1, arr2
         print("Warm-up complete.")
