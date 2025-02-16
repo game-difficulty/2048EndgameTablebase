@@ -141,7 +141,7 @@ class TrainWindow(QtWidgets.QMainWindow):
     def setupUi(self):
         self.setObjectName("self")
         self.setWindowIcon(QIcon(r'pic\2048.ico'))
-        self.resize(900, 1000)
+        self.resize(900, 1080)
         self.centralwidget = QtWidgets.QWidget(self)
         self.centralwidget.setObjectName("centralwidget")
         self.gridLayout = QtWidgets.QGridLayout(self.centralwidget)
@@ -155,7 +155,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gameframe.update_results.connect(self.manual_mode_update_results)
 
         self.operate = QtWidgets.QFrame(self.centralwidget)
-        self.operate.setMaximumSize(QtCore.QSize(16777215, 360))
+        self.operate.setMaximumSize(QtCore.QSize(16777215, 420))
         self.operate.setStyleSheet("QFrame{\n"
                                    "    border-color: rgb(167, 167, 167);\n"
                                    "    background-color: rgb(236, 236, 236);\n"
