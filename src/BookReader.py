@@ -213,6 +213,8 @@ class BookReaderDispatcher:
             return
         if not pattern or not target:
             return
+        if not os.path.exists(pathname):
+            return
         found = False
         with os.scandir(pathname) as entries:
             for entry in entries:
