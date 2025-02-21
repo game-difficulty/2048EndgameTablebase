@@ -31,8 +31,8 @@ class BookReader:
 
         if pattern[:4] == 'free' and pattern[-1] != 'w':
             nums -= int(target) / 2
-        if pattern == 'LL':
-            to_find_func = to_find_func[int(pos)]
+        if pattern == 'LL' and pos == 1:
+            to_find_func = re_self
         if not path or not pattern_check_func:
             return {'?': '?'}
         if nums < 0:
