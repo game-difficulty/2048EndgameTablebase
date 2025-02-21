@@ -300,7 +300,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.horizontalLayout.addWidget(self.show_results_checkbox)
         self.right_Layout.addLayout(self.horizontalLayout)
         self.results_label = QtWidgets.QLabel(self.operate)
-        self.results_label.setMinimumSize(QtCore.QSize(0, 150))
+        self.results_label.setMinimumSize(QtCore.QSize(0, 180))
         self.results_label.setMaximumSize(QtCore.QSize(16777215, 220))
         self.results_label.setStyleSheet("background-color: rgb(255, 255, 255);\n"
                                          "border-color: rgb(0, 0, 0); font: 75 18pt \"Consolas\";")

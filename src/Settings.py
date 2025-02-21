@@ -19,7 +19,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         config = SingletonConfig().config
         self.setObjectName("self")
         self.setWindowIcon(QtGui.QIcon(r"pic\settings.ico"))
-        self.resize(840, 480)
+        self.resize(840, 600)
         self.setStyleSheet("QMainWindow{\n"
                            "    background-color: rgb(245, 245, 247);\n"
                            "}")
@@ -43,10 +43,12 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.filepath_text, 1, 0, 1, 1)
         self.filepath_edit = QtWidgets.QTextEdit(self.centralwidget)
         self.filepath_edit.setObjectName("filepath_edit")
-        self.filepath_edit.setMaximumSize(QtCore.QSize(600, 64))
+        self.filepath_edit.setMaximumSize(QtCore.QSize(600, 80))
+        self.filepath_edit.setMinimumSize(QtCore.QSize(420, 60))
         self.selfLayout.addWidget(self.filepath_edit, 1, 1, 1, 1)
         self.set_filepath_bt = QtWidgets.QPushButton(self.centralwidget)
         self.set_filepath_bt.setObjectName("set_filepath_bt")
+        self.set_filepath_bt.setMinimumSize(QtCore.QSize(180, 20))
         self.set_filepath_bt.clicked.connect(self.filepath_changed)  # type: ignore
         self.selfLayout.addWidget(self.set_filepath_bt, 1, 2, 1, 1)
         self.target_combo = QtWidgets.QComboBox(self.centralwidget)
@@ -66,6 +68,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.pos_combo, 0, 3, 1, 1)
         self.build_bt = QtWidgets.QPushButton(self.centralwidget)
         self.build_bt.setObjectName("build_bt")
+        self.build_bt.setMinimumSize(QtCore.QSize(180, 20))
         self.build_bt.clicked.connect(self.build_book)  # type: ignore
         self.selfLayout.addWidget(self.build_bt, 1, 3, 1, 1)
 
@@ -98,18 +101,22 @@ class SettingsWindow(QtWidgets.QMainWindow):
             self.compress_temp_files_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.compress_temp_files_checkBox.stateChanged.connect(self.compress_temp_files_state_changed)  # type: ignore
         self.advanced_algo_checkBox = QtWidgets.QCheckBox(self.centralwidget)
-        self.advanced_algo_checkBox.setObjectName("compress_temp_files_checkBox")
+        self.advanced_algo_checkBox.setObjectName("advanced_algo_checkBox")
+        self.advanced_algo_checkBox.setMinimumSize(QtCore.QSize(200, 36))
         self.selfLayout.addWidget(self.advanced_algo_checkBox, 3, 1, 1, 1)
+        self.smallTileSumLimitLabel = None
+        self.smallTileSumLimitSpinBox = None
         if config.get('advanced_algo', False):
             self.advanced_algo_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
+            self.advanced_algo_state_changed()
         else:
             self.advanced_algo_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.advanced_algo_checkBox.stateChanged.connect(self.advanced_algo_state_changed)  # type: ignore
 
         self.mini_table_text = QtWidgets.QLabel(self.centralwidget)
         self.mini_table_text.setObjectName("mini_table_text")
-        self.mini_table_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.mini_table_text, 4, 0, 1, 2)
+        # self.mini_table_text.setStyleSheet("font: 500 12pt \"Cambria\";")
+        self.selfLayout.addWidget(self.mini_table_text, 4, 1, 1, 2)
         self.deletion_threshold_box = QtWidgets.QDoubleSpinBox(self.centralwidget)
         self.deletion_threshold_box.setObjectName("deletion_threshold_box")
         self.deletion_threshold_box.setRange(0.0, 1.0)
@@ -314,9 +321,13 @@ class SettingsWindow(QtWidgets.QMainWindow):
         SingletonConfig().config['font_size_factor'] = self.tile_font_size_box.value()
 
     def compress_state_changed(self):
+        if self.advanced_algo_checkBox.isChecked() and self.compress_checkBox.isChecked():
+            self.compress_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
 
     def optimal_branch_only_state_changed(self):
+        if self.advanced_algo_checkBox.isChecked() and self.optimal_branch_only_checkBox.isChecked():
+            self.optimal_branch_only_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         SingletonConfig().config['optimal_branch_only'] = self.optimal_branch_only_checkBox.isChecked()
 
     def compress_temp_files_state_changed(self):
@@ -324,6 +335,45 @@ class SettingsWindow(QtWidgets.QMainWindow):
 
     def advanced_algo_state_changed(self):
         SingletonConfig().config['advanced_algo'] = self.advanced_algo_checkBox.isChecked()
+        if self.advanced_algo_checkBox.isChecked():
+            self.optimal_branch_only_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+            self.compress_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+            self.optimal_branch_only_state_changed()
+            self.compress_state_changed()
+
+            self.smallTileSumLimitLabel = QtWidgets.QLabel("SmallTileSumLimit:")
+            self.selfLayout.addWidget(self.smallTileSumLimitLabel, 3, 2, 1, 1)
+
+            self.smallTileSumLimitSpinBox = QtWidgets.QDoubleSpinBox(self.centralwidget)
+            self.smallTileSumLimitSpinBox.setMinimum(20)
+            self.smallTileSumLimitSpinBox.setMaximum(120)
+            self.smallTileSumLimitSpinBox.setDecimals(0)
+            self.smallTileSumLimitSpinBox.setSingleStep(2)
+            self.smallTileSumLimitSpinBox.setValue(SingletonConfig().config.get('smallTileSumLimit', 56))
+
+            self.smallTileSumLimitSpinBox.setWrapping(True)
+            self.smallTileSumLimitSpinBox.valueChanged.connect(self.smallTileSumLimitSpinBox_state_changed)  # type: ignore
+
+            self.selfLayout.addWidget(self.smallTileSumLimitSpinBox, 3, 3, 1, 1)
+        else:  # 如果复选框未被勾选
+            # 移除控件
+            if self.smallTileSumLimitLabel is not None:
+                self.selfLayout.removeWidget(self.smallTileSumLimitLabel)
+                self.smallTileSumLimitLabel.deleteLater()
+                self.smallTileSumLimitLabel = None
+
+            if self.smallTileSumLimitSpinBox is not None:
+                self.selfLayout.removeWidget(self.smallTileSumLimitSpinBox)
+                self.smallTileSumLimitSpinBox.deleteLater()
+                self.smallTileSumLimitSpinBox = None
+
+    def smallTileSumLimitSpinBox_state_changed(self):
+        val = self.smallTileSumLimitSpinBox.value()
+        # 确保值为最接近的2的倍数
+        adjusted_value = int(round(val / 2) * 2)
+        if self.smallTileSumLimitSpinBox.value() != adjusted_value:
+            self.smallTileSumLimitSpinBox.setValue(adjusted_value)
+        SingletonConfig().config['deletion_threshold'] = adjusted_value
 
     def update_deletion_threshold_rate(self):
         # 某些系统把小数点显示成逗号，需要先改回去

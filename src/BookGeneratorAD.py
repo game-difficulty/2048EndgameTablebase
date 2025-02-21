@@ -30,7 +30,7 @@ KeyType = types.UniTuple(types.uint8, 2)
 ValueType1 = types.uint8[:, :]
 ValueType2 = types.uint8[:]
 
-SmallTileSumLimit = 56
+SmallTileSumLimit = SingletonConfig().config.get('SmallTileSumLimit', 56)
 
 spec = {
     "target" : uint8,
@@ -152,7 +152,7 @@ class BoardMasker:
         在tiles_combinations最小两个数字相等的前提下，暴露这两个tiles，返回全部可能组合
         第一个返回值是board是否合法，第二个返回值是是否derive，第三个返回值是全部可能组合（如有，否则为空数组）
         """
-        total_sum, count_32k, pos_32k = self.tile_sum_and_32k_count(board)
+        total_sum, count_32k, pos_32k = self.tile_sum_and_32k_count2(board)
         if total_sum >= SmallTileSumLimit + 64:
             return False, False, np.empty(0, dtype=np.uint64)
         large_tiles_sum = original_board_sum - total_sum - ((self.num_free_32k + self.num_fixed_32k) << 15)

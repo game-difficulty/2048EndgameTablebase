@@ -10,7 +10,7 @@ from Variants.vBoardMover import VBoardMover
 from Config import SingletonConfig, formation_info, pattern_32k_tiles_map
 import Calculator
 from Calculator import re_self
-from BookGeneratorAD import init_masker, SmallTileSumLimit
+from BookGeneratorAD import init_masker
 from BookSolverAD import sym_like
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -132,8 +132,6 @@ class BookReaderAD:
     def find_value(self, pathname: str, filename: str, board: np.uint64, sym_func: SymFindFunc
                    ) -> Union[int, float, str, None]:
         total_sum, count_32k, pos_32k = self.lm.tile_sum_and_32k_count2(board)
-        if total_sum >= SmallTileSumLimit + 64:
-            return None
         original_board_sum = self.sum_board(board)
         large_tiles_sum = original_board_sum - total_sum - ((self.lm.num_free_32k + self.lm.num_fixed_32k) << 15)
         tiles_combinations = self.lm.tiles_combinations_dict.get((np.uint8(large_tiles_sum >> 6),

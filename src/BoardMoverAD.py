@@ -85,13 +85,13 @@ class MaskedBoardMover:
 
     def move_left2(self, board: np.uint64) -> Tuple[np.uint64, bool]:
         mnt = False
-        mnt ^= self.mask_new_tiles[board & np.uint64(0xffff)]
+        mnt |= self.mask_new_tiles[board & np.uint64(0xffff)]
         board ^= self.movel[board & np.uint64(0xffff)]
-        mnt ^= self.mask_new_tiles[board >> np.uint64(16) & np.uint64(0xffff)]
+        mnt |= self.mask_new_tiles[board >> np.uint64(16) & np.uint64(0xffff)]
         board ^= self.movel[board >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(16)
-        mnt ^= self.mask_new_tiles[board >> np.uint64(32) & np.uint64(0xffff)]
+        mnt |= self.mask_new_tiles[board >> np.uint64(32) & np.uint64(0xffff)]
         board ^= self.movel[board >> np.uint64(32) & np.uint64(0xffff)] << np.uint64(32)
-        mnt ^= self.mask_new_tiles[board >> np.uint64(48) & np.uint64(0xffff)]
+        mnt |= self.mask_new_tiles[board >> np.uint64(48) & np.uint64(0xffff)]
         board ^= self.movel[board >> np.uint64(48) & np.uint64(0xffff)] << np.uint64(48)
         return board, mnt
 
@@ -111,13 +111,13 @@ class MaskedBoardMover:
 
     def move_up2(self, board: np.uint64, board2: np.uint64) -> Tuple[np.uint64, bool]:
         mnt = False
-        mnt ^= self.mask_new_tiles[board2 & np.uint64(0xffff)]
+        mnt |= self.mask_new_tiles[board2 & np.uint64(0xffff)]
         board ^= self.moveu[board2 & np.uint64(0xffff)]
-        mnt ^= self.mask_new_tiles[board2 >> np.uint64(16) & np.uint64(0xffff)]
+        mnt |= self.mask_new_tiles[board2 >> np.uint64(16) & np.uint64(0xffff)]
         board ^= self.moveu[board2 >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(4)
-        mnt ^= self.mask_new_tiles[board2 >> np.uint64(32) & np.uint64(0xffff)]
+        mnt |= self.mask_new_tiles[board2 >> np.uint64(32) & np.uint64(0xffff)]
         board ^= self.moveu[board2 >> np.uint64(32) & np.uint64(0xffff)] << np.uint64(8)
-        mnt ^= self.mask_new_tiles[board2 >> np.uint64(48) & np.uint64(0xffff)]
+        mnt |= self.mask_new_tiles[board2 >> np.uint64(48) & np.uint64(0xffff)]
         board ^= self.moveu[board2 >> np.uint64(48) & np.uint64(0xffff)] << np.uint64(12)
         return board, mnt
 
