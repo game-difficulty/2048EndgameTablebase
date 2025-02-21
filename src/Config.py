@@ -158,7 +158,7 @@ class SingletonConfig:
                 'compress_temp_files': False,
                 'SmallTileSumLimit': 56,
                 'advanced_algo': False,
-                'deletion_threshold': 0,
+                'deletion_threshold': 0.0,
                 'font_size_factor': 100,
                 'minigame_state': [dict(), dict()],  # [盘面，得分，最高分，最大数，是否曾过关, 新数位置], []
                 'power_ups_state': [dict(), dict()],

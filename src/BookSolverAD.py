@@ -69,7 +69,7 @@ def recalculate_process_ad(
         spawn_rate4: float = 0.1
 ) -> None:
     started = False
-    deletion_threshold = np.uint32(SingletonConfig().config.get('deletion_threshold', 0) * 4e9)
+    deletion_threshold = np.uint32(SingletonConfig().config.get('deletion_threshold', 0.0) * 4e9)
     ini_board_sum = np.sum(mbm.decode_board(arr_init[0]))
     indind_dict1, indind_dict2 = None, None
     match_dict = None
