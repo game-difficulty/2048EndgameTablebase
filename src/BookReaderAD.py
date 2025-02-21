@@ -47,8 +47,8 @@ class BookReaderAD:
 
         if self.pattern[:4] == 'free' and self.pattern[-1] != 'w':
             nums -= int(self.target) / 2
-        if self.pattern == 'LL':
-            to_find_func = to_find_func[int(pos)]
+        if self.pattern == 'LL' and int(pos) == 1:
+            to_find_func = re_self
         if not path or not pattern_check_func:
             return {'?': '?'}
         if nums < 0:

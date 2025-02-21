@@ -213,9 +213,17 @@ class BookReaderDispatcher:
             return
         if not pattern or not target:
             return
-        bookpath1 = os.path.join(pathname, pattern + '_' + str(2 ** target) + f'_{str(2 ** target // 2)}b')
-        bookpath2 = os.path.join(pathname, pattern + '_' + str(2 ** target) + f'_{str(2 ** target // 4)}b')
-        if not os.path.exists(bookpath1) and not os.path.exists(bookpath2):
+        found = False
+        with os.scandir(pathname) as entries:
+            for entry in entries:
+                # 检查条目名称是否以新算法文件后缀结尾
+                if entry.name.endswith(f'_{str(2 ** target // 2)}b'):
+                    found = True
+                    break
+                if entry.name.endswith(f'_{str(2 ** target // 4)}b'):
+                    found = True
+                    break
+        if not found:
             self.use_ad = False
         else:
             self.set_book_reader_ad(pattern, target)

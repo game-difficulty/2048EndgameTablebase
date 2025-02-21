@@ -74,7 +74,7 @@ def recalculate_process_ad(
     indind_dict1, indind_dict2 = None, None
     match_dict = None
 
-        # 从后向前更新ds中的array
+    # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
         started, book_dict1, book_dict2, ind_dict1, ind_dict2 \
             = handle_solve_restart_ad(i, pathname, steps, book_dict1, book_dict2, ind_dict1, ind_dict2, started)
@@ -244,6 +244,7 @@ def recalculate_ad(
                         t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
                         board_rev = np.uint64(mbm.reverse(t_gen))
                         optimal_success_rate = np.uint32(0)
+                        board_sum = original_board_sum + np.uint32(2)
 
                         for direc, (newt, mnt) in enumerate(mbm.move_all_dir2(t_gen, board_rev)):
                             newt = np.uint64(newt)
@@ -255,7 +256,7 @@ def recalculate_ad(
                                     unmasked_newt = np.uint64(sym_like(unmasked_newt, symm_index))
                                     optimal_success_rate = update_mnt_osr_ad(book_dict1, newt, unmasked_newt, lm,
                                                                              ind_dict1, indind_dict1,
-                                                                             optimal_success_rate)
+                                                                             optimal_success_rate, board_sum)
                                 else:
                                     optimal_success_rate = update_osr_ad(book_mat1, newt, ind_arr1, indind_arr1,
                                                                          optimal_success_rate)
@@ -268,6 +269,7 @@ def recalculate_ad(
                         t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
                         board_rev = np.uint64(mbm.reverse(t_gen))
                         optimal_success_rate = np.uint32(0)
+                        board_sum = original_board_sum + np.uint32(4)
 
                         for direc, (newt, mnt) in enumerate(mbm.move_all_dir2(t_gen, board_rev)):
                             newt = np.uint64(newt)
@@ -279,7 +281,7 @@ def recalculate_ad(
                                     unmasked_newt = np.uint64(sym_like(unmasked_newt, symm_index))
                                     optimal_success_rate = update_mnt_osr_ad(book_dict2, newt, unmasked_newt, lm,
                                                                              ind_dict2, indind_dict2,
-                                                                             optimal_success_rate)
+                                                                             optimal_success_rate, board_sum)
                                 else:
                                     optimal_success_rate = update_osr_ad(book_mat2, newt, ind_arr2, indind_arr2,
                                                                          optimal_success_rate)
@@ -518,7 +520,6 @@ def update_mnt_osr_ad_arr2(book_dict: BookDictType, b: np.uint64, lm: BoardMaske
         arr_max(osr, book_mat[mid][permutations_match][ranked_array])
 
 
-
 @njit(nogil=True)  
 def update_mnt_osr_ad_arr1(book_dict: BookDictType, unmasked_b: np.uint64, ind_dict: IndexDictType,
                            indind_dict: IndexIndexDictType, board_derived: NDArray[np.uint64], osr: NDArray[np.uint64],
@@ -549,9 +550,8 @@ def update_mnt_osr_ad_arr1(book_dict: BookDictType, unmasked_b: np.uint64, ind_d
 
 @njit(nogil=True)  
 def update_mnt_osr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint64, lm: BoardMasker,
-                      ind_dict: IndexDictType, indind_dict: IndexIndexDictType, osr: np.uint64) -> np.uint64:
-    total_sum, count_32k, pos_32k = lm.tile_sum_and_32k_count(b)
-
+                      ind_dict: IndexDictType, indind_dict: IndexIndexDictType, osr: np.uint64, board_sum: np.uint32
+                      ) -> np.uint64:
     pos_rank = 0
     for i in range(60, -4, -4):
         tile_value = (unmasked_b >> i) & 0xf
@@ -563,13 +563,28 @@ def update_mnt_osr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint
         elif tile_value > 5:
             break
 
+    total_sum, count_32k, pos_32k = lm.tile_sum_and_32k_count(b)
+    large_tiles_sum = board_sum - total_sum - ((lm.num_free_32k + lm.num_fixed_32k) << 15)
+    tiles_combinations = lm.tiles_combinations_dict.get((np.uint8(large_tiles_sum >> 6),
+                                                         np.uint8(count_32k - lm.num_free_32k)), None)
+
+    if len(tiles_combinations) > 1 and tiles_combinations[0] == tiles_combinations[1]:
+        count_32k = -count_32k
+        b &= ~(np.uint64(0xf) << pos_32k[0])
+        b |= tiles_combinations[0] << pos_32k[0]
+        b &= ~(np.uint64(0xf) << pos_32k[1])
+        b |= tiles_combinations[1] << pos_32k[1]
+
     ind_arr = ind_dict.setdefault(count_32k, np.empty(0, dtype=np.uint64))
     indind_arr = indind_dict.setdefault(count_32k, np.empty(0, dtype=np.uint32))
 
     mid = search_arr_ad(ind_arr, b, indind_arr)
     if mid != 0xffffffff:
         book_mat = book_dict.setdefault(count_32k, np.empty((0, 1), dtype=np.uint32))
-        return max(osr, book_mat[mid][pos_rank])
+        if count_32k > 0:
+            return max(osr, book_mat[mid][pos_rank])
+        else:
+            return max(osr, book_mat[mid][0])
     return osr
 
 

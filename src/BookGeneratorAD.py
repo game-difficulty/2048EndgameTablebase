@@ -173,9 +173,9 @@ class BoardMasker:
             ind = 0
             for pos1 in range(count_32k - 1):
                 for pos2 in range(pos1 + 1, count_32k):
-                    derived = board & ~(0xf << pos_32k[pos1])
+                    derived = board & ~(np.uint64(0xf) << pos_32k[pos1])
                     derived |= tiles_combinations[0] << pos_32k[pos1]
-                    derived &= ~(0xf << pos_32k[pos2])
+                    derived &= ~(np.uint64(0xf) << pos_32k[pos2])
                     derived |= tiles_combinations[0] << pos_32k[pos2]
                     result[ind] = derived
                     ind += 1
