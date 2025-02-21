@@ -556,7 +556,8 @@ def update_mnt_osr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint
     for i in range(60, -4, -4):
         tile_value = (unmasked_b >> i) & 0xf
         if tile_value == 0xf:
-            pos_rank += 1
+            if i not in lm.pos_fixed_32k:
+                pos_rank += 1
         elif tile_value == lm.target:
             return np.uint64(4e9)
         elif tile_value > 5:
