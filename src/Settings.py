@@ -373,7 +373,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         adjusted_value = int(round(val / 2) * 2)
         if self.smallTileSumLimitSpinBox.value() != adjusted_value:
             self.smallTileSumLimitSpinBox.setValue(adjusted_value)
-        SingletonConfig().config['smallTileSumLimitSpinBox'] = adjusted_value
+        SingletonConfig().config['smallTileSumLimit'] = adjusted_value
 
     def update_deletion_threshold_rate(self):
         # 某些系统把小数点显示成逗号，需要先改回去
