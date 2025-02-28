@@ -10,7 +10,7 @@ from Variants.vBoardMover import VBoardMover
 from Config import SingletonConfig, formation_info, pattern_32k_tiles_map
 import Calculator
 from Calculator import re_self
-from BookGeneratorAD import init_masker
+from BoardMaskerAD import init_masker
 from BookSolverAD import sym_like
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -137,7 +137,10 @@ class BookReaderAD:
         tiles_combinations = self.lm.tiles_combinations_dict.get((np.uint8(large_tiles_sum >> 6),
                                                                   np.uint8(count_32k - self.lm.num_free_32k)), None)
         if tiles_combinations is not None:
-            if len(tiles_combinations) > 1 and tiles_combinations[0] == tiles_combinations[1]:
+            if len(tiles_combinations) > 2 and tiles_combinations[0] == tiles_combinations[2]:
+                count_32k = count_32k - 3 + 16
+                masked_board = np.uint64(self.lm.mask_board(board, 7))
+            elif len(tiles_combinations) > 1 and tiles_combinations[0] == tiles_combinations[1]:
                 count_32k = -count_32k
                 masked_board = np.uint64(self.lm.mask_board(board, tiles_combinations[0] + 1))
             else:

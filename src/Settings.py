@@ -349,7 +349,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
             self.smallTileSumLimitSpinBox.setMaximum(120)
             self.smallTileSumLimitSpinBox.setDecimals(0)
             self.smallTileSumLimitSpinBox.setSingleStep(2)
-            self.smallTileSumLimitSpinBox.setValue(SingletonConfig().config.get('smallTileSumLimit', 56))
+            self.smallTileSumLimitSpinBox.setValue(SingletonConfig().config.get('SmallTileSumLimit', 56))
 
             self.smallTileSumLimitSpinBox.setWrapping(True)
             self.smallTileSumLimitSpinBox.valueChanged.connect(self.smallTileSumLimitSpinBox_state_changed)  # type: ignore
@@ -373,7 +373,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         adjusted_value = int(round(val / 2) * 2)
         if self.smallTileSumLimitSpinBox.value() != adjusted_value:
             self.smallTileSumLimitSpinBox.setValue(adjusted_value)
-        SingletonConfig().config['smallTileSumLimit'] = adjusted_value
+        SingletonConfig().config['SmallTileSumLimit'] = adjusted_value
 
     def update_deletion_threshold_rate(self):
         # 某些系统把小数点显示成逗号，需要先改回去
@@ -393,6 +393,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
         SingletonConfig().config['advanced_algo'] = self.advanced_algo_checkBox.isChecked()
         SingletonConfig().config['compress_temp_files'] = self.compress_temp_files_checkBox.isChecked()
+        SingletonConfig().config['SmallTileSumLimit'] = int(round(self.smallTileSumLimitSpinBox.value() / 2) * 2)
         SingletonConfig.save_config(SingletonConfig().config)
 
 

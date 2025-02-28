@@ -14,7 +14,8 @@ from BoardMoverAD import MaskedBoardMover
 from Config import SingletonConfig, formation_info, pattern_32k_tiles_map
 from BookSolver import recalculate_process, remove_died, expand, keep_only_optimal_branches
 from BookGenerator import generate_process
-from BookGeneratorAD import generate_process_ad, init_masker
+from BookGeneratorAD import generate_process_ad
+from BoardMaskerAD import init_masker
 from BookSolverAD import recalculate_process_ad
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -63,8 +64,8 @@ def gen_lookup_table_big(
         mbm = MaskedBoardMover()
         _, num_free_32k, pos_fixed_32k = pattern_32k_tiles_map[pattern]
         lm = init_masker(num_free_32k, target, pos_fixed_32k)
-        started, d0, d1 = generate_process_ad(arr_init, pattern_check_func, to_find_func,
-                                              steps, pathname, mbm, lm, isfree)
+        started, d0, d1 = generate_process_ad(arr_init, pattern_check_func, to_find_func, sym_func,
+                                              steps, pathname, mbm, bm, lm, isfree)
         b1, b2, i1, i2 = final_steps_ad(started, pathname, steps)
         recalculate_process_ad(arr_init, b1, b2, i1, i2, pattern_check_func, sym_func, steps,
                                pathname, bm, mbm, lm, spawn_rate4)  # 这里的最后的两个book d0,d1就是回算的d1,d2

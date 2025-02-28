@@ -26,9 +26,9 @@ def main():
     sys.exit(app.exec_())
 
 
-#os.environ["NUMBA_SLP_VECTORIZE"] = "1"
+# os.environ["NUMBA_SLP_VECTORIZE"] = "1"
 # os.environ["NUMBA_DEVELOPER_MODE"] = "1"
-#os.environ['NUMBA_THREADING_LAYER']='tbb'
+# os.environ['NUMBA_THREADING_LAYER']='tbb'
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()
