@@ -190,19 +190,18 @@ def derive(lm: BoardMasker, board: np.uint64, original_board_sum: np.uint32, bm:
         if total_sum >= lm.small_tile_sum_limit:
             # 0
             return False, False, np.empty(0, dtype=np.uint64)
-        unmasked = np.uint64(bm.move_board(t_gen, direc))
-        unmasked = np.uint64(sym_like(unmasked, symm_index))
-        new_tile, pos = find_merge_pos(board, unmasked)
-        if new_tile == 0:
-            # 1.2
-            return False, False, np.empty(0, dtype=np.uint64)
-
         if len(tiles_combinations) > 2 and tiles_combinations[0] == tiles_combinations[2]:
             # 3
             if total_sum >= lm.small_tile_sum_limit - 64:
                 # 0
                 return False, False, np.empty(0, dtype=np.uint64)
             # 3 64 不需要 mask
+            unmasked = np.uint64(bm.move_board(t_gen, direc))
+            unmasked = np.uint64(sym_like(unmasked, symm_index))
+            new_tile, pos = find_merge_pos(board, unmasked)
+            if new_tile == 0:
+                # 1.2
+                return False, False, np.empty(0, dtype=np.uint64)
             return True, True, np.array([unmasked], dtype=np.uint64)
         else:
             # 1
