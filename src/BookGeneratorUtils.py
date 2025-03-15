@@ -39,26 +39,26 @@ def initialize_sorting_library():
         _dll.parallel_sort.argtypes = (POINTER(c_uint64), c_size_t, POINTER(c_uint64), ctypes.c_bool)
         _dll.parallel_sort.restype = None
 
-        # # 测试排序操作
-        # _arr = np.random.randint(0, 1 << 64, 1000, dtype=np.uint64)
-        # _pivots = np.array([2 ** 61, 2 ** 62, 2 ** 61 * 3, 2 ** 63, 2 ** 61 * 5, 2 ** 62 * 3, 2 ** 61 * 7],
-        #                    dtype=np.uint64)
-        #
-        # _arr_ptr = _arr.ctypes.data_as(POINTER(c_uint64))
-        # _pivots_ptr = (c_uint64 * len(_pivots))(*_pivots)
-        # _use_avx512 = True if use_avx == 2 else False
-        #
-        # # 调用DLL中的parallel_sort函数进行测试排序
-        # _dll.parallel_sort(_arr_ptr, _arr.size, _pivots_ptr, _use_avx512)
-        #
-        # # 验证排序结果是否正确
-        # if not np.all(_arr[:-1] <= _arr[1:]):
-        #     raise ValueError("DLL sorting failed, results are not sorted correctly")
-        # else:
-        #     if _use_avx512:
-        #         logger.info("Sorting success using AVX512.")
-        #     else:
-        #         logger.info("Sorting success using AVX2.")
+        # 测试排序操作
+        _arr = np.random.randint(0, 1 << 64, 1000, dtype=np.uint64)
+        _pivots = np.array([2 ** 61, 2 ** 62, 2 ** 61 * 3, 2 ** 63, 2 ** 61 * 5, 2 ** 62 * 3, 2 ** 61 * 7],
+                           dtype=np.uint64)
+
+        _arr_ptr = _arr.ctypes.data_as(POINTER(c_uint64))
+        _pivots_ptr = (c_uint64 * len(_pivots))(*_pivots)
+        _use_avx512 = True if use_avx == 2 else False
+
+        # 调用DLL中的parallel_sort函数进行测试排序
+        _dll.parallel_sort(_arr_ptr, _arr.size, _pivots_ptr, _use_avx512)
+
+        # 验证排序结果是否正确
+        if not np.all(_arr[:-1] <= _arr[1:]):
+            raise ValueError("DLL sorting failed, results are not sorted correctly")
+        else:
+            if _use_avx512:
+                logger.info("Sorting success using AVX512.")
+            else:
+                logger.info("Sorting success using AVX2.")
 
     except Exception as e:
         # 如果加载DLL或排序出错，禁用AVX并记录日志
@@ -301,7 +301,7 @@ def merge_and_deduplicate(sorted_arr1: NDArray, sorted_arr2: NDArray) -> NDArray
     return unique_array[:k]  # 调整数组大小以匹配实际元素数
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True, boundscheck=True, parallel=True)
 def merge_inplace(arr: NDArray, segment_ends: NDArray, segment_starts: NDArray) -> NDArray:
     """
     将每一段有效数据依次合并到前一段末尾。

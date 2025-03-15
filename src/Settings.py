@@ -173,7 +173,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.demo_speed_text.setStyleSheet("font: 500 12pt \"Cambria\";")
         self.selfLayout.addWidget(self.demo_speed_text, 8, 0, 1, 1)
         self.demo_speed_box = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal, self.centralwidget)
-        self.demo_speed_box.setMinimum(0)
+        self.demo_speed_box.setMinimum(1)
         self.demo_speed_box.setMaximum(200)
         self.demo_speed_box.setValue(config.get('demo_speed', 10))
         self.demo_speed_box.setTickPosition(QtWidgets.QSlider.TicksBelow)
@@ -333,6 +333,9 @@ class SettingsWindow(QtWidgets.QMainWindow):
     def compress_temp_files_state_changed(self):
         SingletonConfig().config['compress_temp_files'] = self.compress_temp_files_checkBox.isChecked()
 
+    def chunked_solve_state_changed(self):
+        SingletonConfig().config['chunked_solve'] = self.chunked_solve_checkBox.isChecked()
+
     def advanced_algo_state_changed(self):
         SingletonConfig().config['advanced_algo'] = self.advanced_algo_checkBox.isChecked()
         if self.advanced_algo_checkBox.isChecked():
@@ -353,8 +356,18 @@ class SettingsWindow(QtWidgets.QMainWindow):
 
             self.smallTileSumLimitSpinBox.setWrapping(True)
             self.smallTileSumLimitSpinBox.valueChanged.connect(self.smallTileSumLimitSpinBox_state_changed)  # type: ignore
-
             self.selfLayout.addWidget(self.smallTileSumLimitSpinBox, 3, 3, 1, 1)
+
+            self.chunked_solve_checkBox = QtWidgets.QCheckBox(self.centralwidget)
+            self.chunked_solve_checkBox.setObjectName("chunked_solve_checkBox")
+            self.chunked_solve_checkBox.setMinimumSize(QtCore.QSize(200, 36))
+            self.selfLayout.addWidget(self.chunked_solve_checkBox, 4, 3, 1, 1)
+            if SingletonConfig().config.get('chunked_solve', False):
+                self.chunked_solve_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
+            else:
+                self.chunked_solve_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+            self.chunked_solve_checkBox.stateChanged.connect(self.chunked_solve_state_changed)  # type: ignore
+            self.chunked_solve_checkBox.setText("Chunked Solve")
         else:  # 如果复选框未被勾选
             # 移除控件
             if self.smallTileSumLimitLabel is not None:
@@ -366,6 +379,11 @@ class SettingsWindow(QtWidgets.QMainWindow):
                 self.selfLayout.removeWidget(self.smallTileSumLimitSpinBox)
                 self.smallTileSumLimitSpinBox.deleteLater()
                 self.smallTileSumLimitSpinBox = None
+
+            if self.chunked_solve_checkBox is not None:
+                self.selfLayout.removeWidget(self.chunked_solve_checkBox)
+                self.chunked_solve_checkBox.deleteLater()
+                self.chunked_solve_checkBox = None
 
     def smallTileSumLimitSpinBox_state_changed(self):
         val = self.smallTileSumLimitSpinBox.value()
@@ -393,7 +411,10 @@ class SettingsWindow(QtWidgets.QMainWindow):
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
         SingletonConfig().config['advanced_algo'] = self.advanced_algo_checkBox.isChecked()
         SingletonConfig().config['compress_temp_files'] = self.compress_temp_files_checkBox.isChecked()
-        SingletonConfig().config['SmallTileSumLimit'] = int(round(self.smallTileSumLimitSpinBox.value() / 2) * 2)
+        if self.smallTileSumLimitSpinBox is not None:
+            SingletonConfig().config['SmallTileSumLimit'] = int(round(self.smallTileSumLimitSpinBox.value() / 2) * 2)
+        if self.chunked_solve_checkBox is not None:
+            SingletonConfig().config['chunked_solve'] = self.chunked_solve_checkBox.isChecked()
         SingletonConfig.save_config(SingletonConfig().config)
 
 

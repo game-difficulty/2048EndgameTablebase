@@ -2,7 +2,7 @@ import os
 import sys
 import pickle
 import logging
-from typing import Callable, Dict, Tuple, Union
+from typing import Callable, Dict, Tuple
 
 import numpy as np
 import cpuinfo
@@ -64,6 +64,8 @@ formation_info: Dict[str, Tuple[int, PatternCheckFunc, ToFindFunc,
             np.array([np.uint64(0x000000000000ffff)], dtype=np.uint64)],
     '4432f': [-131072 - 14, Calculator.is_4432f_pattern, Calculator.minUL, Calculator.is_4432f_success,
               np.array([np.uint64(0x00001000121f2fff), np.uint64(0x00010000121ff2ff)], dtype=np.uint64)],
+    '4432ff': [-163840 - 10, Calculator.is_4432ff_pattern, Calculator.minUL, Calculator.is_4432ff_success,
+              np.array([np.uint64(0x00001000112fffff), np.uint64(0x00001000f12ff1ff)], dtype=np.uint64)],
     "3433": [-98304 - 6, Calculator.is_3433_pattern, Calculator.re_self, Calculator.is_3433_success,
              np.array([np.uint64(0x100000000000f2ff), np.uint64(0x000000000001f2ff)], dtype=np.uint64)],
     "3442": [-98304 - 8, Calculator.is_3442_pattern, Calculator.re_self, Calculator.is_3442_success,
@@ -96,6 +98,7 @@ pattern_32k_tiles_map: Dict[str, list] = {
     '4441': [3, 0, np.array([0, 4, 8], dtype=np.uint8)],
     '4432': [3, 0, np.array([0, 4, 16], dtype=np.uint8)],
     '4432f': [4, 1, np.array([0, 4, 16], dtype=np.uint8)],
+    '4432ff': [5, 2, np.array([0, 4, 16], dtype=np.uint8)],
     '4442': [2, 0, np.array([0, 4], dtype=np.uint8)],
     '4442f': [3, 1, np.array([0, 4], dtype=np.uint8)],
     '4442ff': [4, 2, np.array([0, 4], dtype=np.uint8)],
@@ -158,6 +161,7 @@ class SingletonConfig:
                 'compress_temp_files': False,
                 'SmallTileSumLimit': 56,
                 'advanced_algo': False,
+                'chunked_solve': False,
                 'deletion_threshold': 0.0,
                 'font_size_factor': 100,
                 'minigame_state': [dict(), dict()],  # [盘面，得分，最高分，最大数，是否曾过关, 新数位置], []

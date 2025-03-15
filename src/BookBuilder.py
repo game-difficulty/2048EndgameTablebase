@@ -17,6 +17,7 @@ from BookGenerator import generate_process
 from BookGeneratorAD import generate_process_ad
 from BoardMaskerAD import init_masker
 from BookSolverAD import recalculate_process_ad
+from BookSolverChunkedAD import recalculate_process_ad_c
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
@@ -65,10 +66,14 @@ def gen_lookup_table_big(
         _, num_free_32k, pos_fixed_32k = pattern_32k_tiles_map[pattern]
         lm = init_masker(num_free_32k, target, pos_fixed_32k)
         started, d0, d1 = generate_process_ad(arr_init, pattern_check_func, to_find_func, sym_func,
-                                              steps, pathname, mbm, bm, lm, isfree)
+                                              steps, pathname, mbm, lm, isfree)
         b1, b2, i1, i2 = final_steps_ad(started, pathname, steps)
-        recalculate_process_ad(arr_init, b1, b2, i1, i2, pattern_check_func, sym_func, steps,
-                               pathname, bm, mbm, lm, spawn_rate4)  # 这里的最后的两个book d0,d1就是回算的d1,d2
+        if SingletonConfig().config['chunked_solve']:
+            recalculate_process_ad_c(arr_init, b1, b2, i1, i2, pattern_check_func, sym_func, steps,
+                                   pathname, bm, mbm, lm, spawn_rate4)
+        else:
+            recalculate_process_ad(arr_init, b1, b2, i1, i2, pattern_check_func, sym_func, steps,
+                                   pathname, bm, mbm, lm, spawn_rate4)
     if SingletonConfig().config['optimal_branch_only']:
         keep_only_optimal_branches(pattern_check_func, to_find_func, steps, pathname, bm)
 
@@ -191,13 +196,14 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
                                  pathname, docheck_step, bm, isfree=True, spawn_rate4=spawn_rate4)
     else:
         steps = int(2 ** target / 2 + {'444': 96, '4431': 64, 'LL': 48, 'L3': 36, '4441': 48, '4432': 48, '4442': 48,
-                                       '442': 36, 't': 36, '4432f': 48, 'L3t': 48, '4442f': 48, '4442ff': 48,
-                                       "3433": 48, "3442": 48, "3432": 48, "2433": 48, "movingLL": 48}[pattern])
+                                       '442': 36, 't': 36, '4432f': 48, '4432ff': 48, 'L3t': 48, '4442f': 48,
+                                       '4442ff': 48, "3433": 48, "3442": 48, "3432": 48, "2433": 48, "movingLL": 48
+                                       }[pattern])
         docheck_step = int(2 ** target / 2) - 16
         _, pattern_check_func, to_find_func, success_check_func, ini = formation_info[pattern]
         if pattern == 'LL' and position == 1:
             to_find_func = Calculator.re_self
-        if pattern in ('4442', '4432', '4441', "3433", "3442", "3432", "movingLL", '4432f', '4442f'):
+        if pattern in ('4442', '4432', '4441', "3433", "3442", "3432", "movingLL", '4432ff', '4432f', '4442f'):
             isfree = True
         else:
             isfree = False
@@ -207,4 +213,5 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
 
 
 if __name__ == "__main__":
+    start_build('t',10,0,r"C:\Apps\2048endgameTablebase\tables\t1k-118\t_1024_")
     pass

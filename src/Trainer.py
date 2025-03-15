@@ -2,7 +2,7 @@ import sys
 
 import numpy as np
 from PyQt5 import QtCore, QtWidgets
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer, Qt, QEvent, QCoreApplication
 from PyQt5.QtGui import QIcon, QCursor
 
 from BookReader import BookReaderDispatcher
@@ -123,7 +123,6 @@ class TrainWindow(QtWidgets.QMainWindow):
 
         self.ai_state = False  # demo状态
         self.ai_timer = QTimer(self)
-        self.ai_timer.timeout.connect(self.one_step)  # demo状态定时自动走棋
 
         self.recording_state = False  # 录制状态
         self.records = np.empty(0, dtype='uint8,uint16,uint16,uint16,uint16')  # 录制的回放
@@ -592,15 +591,20 @@ class TrainWindow(QtWidgets.QMainWindow):
                 self.show_results()
                 if self.recording_state:
                     self.record_current_state(move)
+                if self.ai_state:
+                    steps_per_second = SingletonConfig().config['demo_speed'] / 10
+                    QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ProcessEventsFlag.AllEvents)
+                    self.ai_timer.singleShot(int(1000 / steps_per_second), self.one_step)
+
                 self.isProcessing = False
 
     def toggle_demo(self):
+        self.ai_state = False
         if not self.ai_state and not self.playing_record_state:
             self.played_length = 0
             self.ai_state = True
             self.Demo.setText('STOP')
-            steps_per_second = SingletonConfig().config['demo_speed'] / 10
-            self.ai_timer.start(int(1000 / steps_per_second))
+            self.one_step()
         else:
             self.ai_state = False
             self.Demo.setText('Demo')
@@ -716,6 +720,11 @@ class TrainWindow(QtWidgets.QMainWindow):
             result[direction] = round((current_state[i + 1] / 16000), 5)
         result = dict(sorted(result.items(), key=lambda item: item[1], reverse=True))
         self.result = result
+
+    def closeEvent(self, event):
+        self.ai_state = False
+        self.Demo.setText('Demo')
+        event.accept()
 
 
 if __name__ == "__main__":

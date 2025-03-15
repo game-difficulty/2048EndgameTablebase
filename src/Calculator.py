@@ -318,6 +318,19 @@ def is_4432f_success(encoded_board, target, _):
 
 
 @njit(nogil=True, inline='always')
+def is_4432ff_pattern(encoded_board):
+    return (np.uint64(encoded_board) & np.uint64(983295)) == np.uint64(983295)
+
+
+@njit(nogil=True, inline='always')
+def is_4432ff_success(encoded_board, target, _):
+    for pos in (20,):
+        if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
+            return True
+    return False
+
+
+@njit(nogil=True, inline='always')
 def is_movingLL_pattern(encoded_board):
     for pattern in (np.uint64(0xff00ff), np.uint64(0xff00ff0), np.uint64(0xff00ff00), np.uint64(0xff00ff0000),
                     np.uint64(0xff00ff00000), np.uint64(0xff00ff000000), np.uint64(0xff00ff00000000),

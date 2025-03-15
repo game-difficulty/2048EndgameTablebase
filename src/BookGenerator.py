@@ -85,7 +85,8 @@ def gen_boards_big(arr0: NDArray[np.uint64],
         pivots_list[seg_index] = arr2t[[len(arr2t) // 8 * i for i in range(1, 8)]] if len(arr2t) > 0 else \
             pivots_list[0].copy()
 
-        arr1t, arr2t = parallel_unique(arr1t, n), parallel_unique(arr2t, n)
+        arr1t = parallel_unique(arr1t, n)
+        arr2t = parallel_unique(arr2t, n)
         arr1s.append(arr1t)
         arr2s.append(arr2t)
 
@@ -127,7 +128,7 @@ def update_parameters_big(actual_lengths2, actual_lengths1, seg_list, n, length_
     return seg_list, length_factors_list, pivots_list, length_factor_multiplier
 
 
-def initialize_parameters(n, pathname, isfree):
+def initialize_parameters(n, pathname, isfree, default_length_factor = 3.2):
     """
     初始化分段间隔和长度乘数
     """
@@ -152,7 +153,7 @@ def initialize_parameters(n, pathname, isfree):
         length_factors = harmonic_mean_by_column(length_factors_list)
         length_factor = predict_next_length_factor_quadratic(length_factors) * 1.2
     except FileNotFoundError:
-        length_factor = 3.2
+        length_factor = default_length_factor
         length_factors = [length_factor, length_factor, length_factor]
         length_factors_list = [length_factors]
 
@@ -271,7 +272,8 @@ def generate_process(
             t2 = time.time()
 
             # 去重
-            d1t, d2 = parallel_unique(d1t, n), parallel_unique(d2, n)
+            d1t = parallel_unique(d1t, n)
+            d2 = parallel_unique(d2, n)
             dedup_pivots = d0[np.arange(1, n) * len(d0) // n].copy() if len(d0) > 0 else \
                 (np.arange(1, n) * (1 << 50) // n).astype(np.uint64)
             d1 = merge_deduplicate_all([d1, d1t], dedup_pivots, n)
@@ -330,13 +332,17 @@ def generate_process(
 
 
 def validate_length_and_balance(d0, d2, d1t, seg, percents2, percents1, length_factor, isbig=False):
-    if len(d0) > 2999999 and len(d2) > 2999999 and (
-            max(percents2) / np.mean(percents2) >= length_factor / (len(d2) / len(d0)) or
-            max(percents1) / np.mean(percents1) >= length_factor / (len(d1t) / len(d0))):
+    if len(d0) < 1999999 or len(d2) < 1999999:
+        return
+    needed_multiplier2 = len(d2) / len(d0) * max(percents2) / np.mean(percents2)
+    needed_multiplier1 = len(d1t) / len(d0) * max(percents1) / np.mean(percents1)
+    if needed_multiplier2 >= length_factor or needed_multiplier1 >= length_factor:
         logger.critical(
-            f"length multiplier {length_factor:2f}, "
-            f"actual multiplier {(len(d2) / len(d0)):2f}, {(len(d1t) / len(d0)):2f}"
-            f"percents {np.round(percents2, 5)} {np.round(percents1, 5)}")
+            f"length multiplier {length_factor:2f}, \n"
+            f"need {needed_multiplier2:2f},"
+            f"{needed_multiplier1:2f}, \n"
+            f"percents {np.round(percents2, 5)}, \n"
+            f"{np.round(percents1, 5)}")
         raise IndexError("The length multiplier is not big enough. "
                          "This does not indicate an error in the program. "
                          "Please restart the program and continue running.")
@@ -346,9 +352,13 @@ def validate_length_and_balance(d0, d2, d1t, seg, percents2, percents1, length_f
         logger.debug('Segmentation_ac ' + repr(np.round(percents1, 5)))
     if len(d0) > 0:
         logger.debug(
-            f'length {len(d1t)}, Actual multiplier {round(len(d1t) / len(d0), 2)}, Using {round(length_factor, 2)}')
+            f'length {len(d1t)}, Actual {round(len(d1t) / len(d0), 2)}, '
+            f'Using {round(length_factor, 2)}, '
+            f'Need {round(needed_multiplier1, 2)}')
         logger.debug(
-            f'length {len(d2)}, Actual multiplier {round(len(d2) / len(d0), 2)}, Using {round(length_factor, 2)}')
+            f'length {len(d2)}, Actual {round(len(d2) / len(d0), 2)}, '
+            f'Using {round(length_factor, 2)}, '
+            f'Need {round(needed_multiplier2, 2)}')
 
 
 def update_parameters(d0, d2, seg, percents, percents1, length_factors, seg_list_path, length_factors_list_path):

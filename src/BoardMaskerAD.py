@@ -67,7 +67,7 @@ class BoardMasker:
         pos_32k = np.empty(16, dtype=np.uint64)
         pos_ind = 0
         for i in range(60, -4, -4):
-            tile_value = (masked_board >> i) & 0xf
+            tile_value = (masked_board >> np.uint64(i)) & np.uint64(0xf)
             if tile_value == 0xf:
                 if i not in self.pos_fixed_32k:
                     count_32k += 1
@@ -86,7 +86,7 @@ class BoardMasker:
         pos_32k = np.empty(16, dtype=np.uint64)
         pos_ind = 0
         for i in range(60, -4, -4):
-            tile_value = (masked_board >> i) & 0xf
+            tile_value = (masked_board >> np.uint64(i)) & np.uint64(0xf)
             if tile_value > 5:
                 if i not in self.pos_fixed_32k:
                     count_32k += 1
@@ -97,9 +97,9 @@ class BoardMasker:
         return total_sum, count_32k, pos_32k[:pos_ind]
 
     def tile_sum_and_32k_count3(self, masked_board: np.uint64
-                                ) -> Tuple[np.uint32, np.uint8, NDArray[np.uint64], np.uint64]:
+                                ) -> Tuple[np.uint32, np.uint8, NDArray[np.uint64], np.uint64, np.uint64]:
         """
-        仅用于生成阶段derive，需要判断不存在两个相同大数情况是否由3个64合并而来
+        仅用于生成阶段derive，需要判断不存在两个相同大数情况是否是3个64合并为128+64
         统计一个masked board中小数数字和、可移动大数数量和位置，同时如上述问题为是，则将64 mask掉，返回masked_board
         """
         total_sum = 0
@@ -109,7 +109,7 @@ class BoardMasker:
         tile64_count = 0
         tile64_pos = 0
         for i in range(60, -4, -4):
-            tile_value = (masked_board >> i) & 0xf
+            tile_value = (masked_board >> np.uint64(i)) & np.uint64(0xf)
             if tile_value > 5:
                 if i not in self.pos_fixed_32k:
                     count_32k += 1
@@ -123,7 +123,68 @@ class BoardMasker:
         if tile64_count == 1:
             # 证明由3个64合并而来
             masked_board |= (np.uint64(0xF) << tile64_pos)
-        return total_sum, count_32k, pos_32k[:pos_ind], masked_board
+        return total_sum, count_32k, pos_32k[:pos_ind], masked_board, tile64_count
+
+    def tile_sum_and_32k_count4(self, board: np.uint64
+                                ) -> Tuple[np.uint32, np.uint8, NDArray[np.uint64], int, int, bool]:
+        """
+        统计一个board中小数数字和、可移动大数数量和位置，同时专门统计合成数字位置和个数
+        """
+        total_sum = 0
+        count_32k = 0
+        pos_32k = np.empty(16, dtype=np.uint64)
+        pos_ind = 0
+        pos_rank = 0
+        merged_tile_found = 0
+        is_success = False
+        for i in range(60, -4, -4):
+            tile_value = (board >> np.uint64(i)) & np.uint64(0xf)
+            if tile_value > 5:
+                if tile_value == np.uint64(0xf):
+                    if i not in self.pos_fixed_32k and merged_tile_found == 0:
+                        pos_rank += 1
+                elif tile_value == self.target:
+                    is_success = True
+                else:
+                    merged_tile_found += 1
+
+                if i not in self.pos_fixed_32k:
+                    count_32k += 1
+                    pos_32k[pos_ind] = i
+                    pos_ind += 1
+            elif tile_value > 0:
+                total_sum += 2 ** tile_value
+        return total_sum, count_32k, pos_32k[:pos_ind], pos_rank, merged_tile_found, is_success
+
+    def tile_sum_and_32k_count5(self, board: np.uint64
+                                ) -> Tuple[np.uint32, np.uint8, NDArray[np.uint64], int, int, bool]:
+        """
+        统计一个board中小数数字和、可移动大数数量和位置，同时专门找到合数位置和值
+        """
+        total_sum = 0
+        count_32k = 0
+        pos_32k = np.empty(16, dtype=np.uint64)
+        pos_ind = 0
+        pos_rank = 0
+        tile_merged = 0
+        is_success = False
+        for i in range(60, -4, -4):
+            tile_value = (board >> np.uint64(i)) & np.uint64(0xf)
+            if tile_value > 5:
+                if tile_value == np.uint64(0xf):
+                    if i not in self.pos_fixed_32k and tile_merged == 0:
+                        pos_rank += 1
+                elif tile_value == self.target:
+                    is_success = True
+                else:
+                    tile_merged = tile_value
+                if i not in self.pos_fixed_32k:
+                    count_32k += 1
+                    pos_32k[pos_ind] = i
+                    pos_ind += 1
+            elif tile_value > 0:
+                total_sum += 2 ** tile_value
+        return total_sum, count_32k, pos_32k[:pos_ind], pos_rank, tile_merged, is_success
 
     @staticmethod
     def _masked_tiles_combinations(remaining_sum: np.uint64, remaining_count: int
@@ -141,13 +202,14 @@ class BoardMasker:
                 if remaining_count == 1:
                     result[index] = np.log2(tile)
                     return result[:index + 1].copy()
-            elif tile < remaining_sum:
+            else:  # tile < remaining_sum:
                 if (tile << 1) == remaining_sum and remaining_count == 2:
                     result[index] = np.log2(tile)
                     result[index + 1] = np.log2(tile)
                     return result[:index + 2].copy()
                 # 支持3个64
                 elif tile != 64 and remaining_sum == 192 and remaining_count == 3:
+                    # tile != 64 确保当前result中没有128（不支持有128的情况下还有三个64）
                     result[index] = 6
                     result[index + 1] = 6
                     result[index + 2] = 6

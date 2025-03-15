@@ -248,45 +248,50 @@ def recalculate(
     然后对于每个可能的填充，执行所有有效的移动操作，并基于移动结果的成功概率来更新当前面板的成功概率。
     ind1, ind2是预先计算的索引，用于加速二分查找过程
     """
-    nb.set_parallel_chunksize(max(1024, len(arr0) // 1024))
-    for k in prange(len(arr0)):
-        t: np.uint64 = arr0[k][0]
-        if do_check and success_check_func(t, target, position):
-            arr0[k][1] = 4000000000
-            continue
-        # 初始化概率和权重
-        success_probability = 0.0
-        empty_slots = 0
-        for i in range(16):  # 遍历所有位置
-            if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
-                empty_slots += 1
+    chunk_count = max(min(1024, len(arr0) // 1048576), 1)
+    chunk_size = len(arr0) // chunk_count
+    for chunk in range(chunk_count):
+        start, end = chunk_size * chunk, chunk_size * (chunk + 1)
+        if chunk == chunk_count - 1:
+            end = len(arr0)
+        for k in prange(start, end):
+            t: np.uint64 = arr0[k][0]
+            if do_check and success_check_func(t, target, position):
+                arr0[k][1] = 4000000000
+                continue
+            # 初始化概率和权重
+            success_probability = 0.0
+            empty_slots = 0
+            for i in range(16):  # 遍历所有位置
+                if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
+                    empty_slots += 1
 
-                # 对于每个空位置，尝试填充2和4
-                new_value, probability = 1, 1 - spawn_rate4
-                t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
-                optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
-                for newt in bm.move_all_dir(t_gen):
-                    if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
-                        # 获取移动后的面板成功概率
-                        optimal_success_rate = max(optimal_success_rate, search_arr(
-                            arr1, to_find_func(newt), ind1))
-                # 对最佳移动下的成功概率加权平均
-                success_probability += optimal_success_rate * probability
+                    # 对于每个空位置，尝试填充2和4
+                    new_value, probability = 1, 1 - spawn_rate4
+                    t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
+                    optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
+                    for newt in bm.move_all_dir(t_gen):
+                        if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
+                            # 获取移动后的面板成功概率
+                            optimal_success_rate = max(optimal_success_rate, search_arr(
+                                arr1, to_find_func(newt), ind1))
+                    # 对最佳移动下的成功概率加权平均
+                    success_probability += optimal_success_rate * probability
 
-                # 填4
-                new_value, probability = 2, spawn_rate4
-                t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
-                optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
-                for newt in bm.move_all_dir(t_gen):
-                    if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
-                        # 获取移动后的面板成功概率
-                        optimal_success_rate = max(optimal_success_rate, search_arr(
-                            arr2, to_find_func(newt), ind2))
-                # 对最佳移动下的成功概率加权平均
-                success_probability += optimal_success_rate * probability
+                    # 填4
+                    new_value, probability = 2, spawn_rate4
+                    t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
+                    optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
+                    for newt in bm.move_all_dir(t_gen):
+                        if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
+                            # 获取移动后的面板成功概率
+                            optimal_success_rate = max(optimal_success_rate, search_arr(
+                                arr2, to_find_func(newt), ind2))
+                    # 对最佳移动下的成功概率加权平均
+                    success_probability += optimal_success_rate * probability
 
-        # t是进行一次有效移动后尚未生成新数字时的面板，因此不可能没有空位置
-        arr0[k][1] = np.uint32(success_probability / empty_slots)
+            # t是进行一次有效移动后尚未生成新数字时的面板，因此不可能没有空位置
+            arr0[k][1] = np.uint32(success_probability / empty_slots)
     return arr0
 
 
