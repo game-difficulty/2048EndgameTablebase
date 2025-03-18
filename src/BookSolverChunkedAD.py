@@ -146,11 +146,11 @@ def iter_ind_dict4(ind_dict0_keys: list, lm: BoardMasker, book_dict2, ind_dict2,
     for count_32k in ind_dict0_keys:
         positions_array = np.fromfile(os.path.join(folder, f"{count_32k}.i"), dtype='uint64')
         if count_32k < 0:
-            derive_size = np.uint32(factorials[-count_32k - 2] // factorials[lm.num_free_32k])
+            derive_size = int(factorials[-count_32k - 2] // factorials[lm.num_free_32k])
         elif count_32k > 15:
-            derive_size = np.uint32(factorials[count_32k - 16] // factorials[lm.num_free_32k])
+            derive_size = int(factorials[count_32k - 16] // factorials[lm.num_free_32k])
         else:
-            derive_size = np.uint32(factorials[count_32k] // factorials[lm.num_free_32k])
+            derive_size = int(factorials[count_32k] // factorials[lm.num_free_32k])
 
         # 剩余可用物理内存（单位：字节）
         mem = psutil.virtual_memory()
