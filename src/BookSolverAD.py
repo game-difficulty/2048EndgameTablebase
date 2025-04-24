@@ -306,7 +306,7 @@ def recalculate_ad(
         ind_arr2 = ind_dict2.setdefault(count_32k, np.empty(0, dtype=np.uint64))
         indind_arr2 = indind_dict2.setdefault(count_32k, np.empty(0, dtype=np.uint32))
 
-        chunk_count = max(min(1024, len(index) // 1048576), 1)
+        chunk_count = max(min(1024, int(len(index) * round(np.log2(derive_size + 1)) // 1048576)), 1)
         chunk_size = len(index) // chunk_count
         for chunk in range(chunk_count):
             start, end = chunk_size * chunk, chunk_size * (chunk + 1)

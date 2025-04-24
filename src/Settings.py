@@ -296,11 +296,11 @@ class SettingsWindow(QtWidgets.QMainWindow):
             config = SingletonConfig().config
             if pattern in ['444', 'LL', 'L3']:
                 ptn = pattern + '_' + target + '_' + position
-                config['filepath_map'][ptn] = pathname
+                config['filepath_map'][ptn] = [pathname, ]
                 pathname = os.path.join(pathname, ptn + '_')
             else:
                 ptn = pattern + '_' + target
-                config['filepath_map'][ptn] = pathname
+                config['filepath_map'][ptn] = [pathname, ]
                 pathname = os.path.join(pathname, ptn + '_')
             target = int(np.log2(int(target)))
             position = int(position)
@@ -411,10 +411,14 @@ class SettingsWindow(QtWidgets.QMainWindow):
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
         SingletonConfig().config['advanced_algo'] = self.advanced_algo_checkBox.isChecked()
         SingletonConfig().config['compress_temp_files'] = self.compress_temp_files_checkBox.isChecked()
-        if self.smallTileSumLimitSpinBox is not None:
+        try:
             SingletonConfig().config['SmallTileSumLimit'] = int(round(self.smallTileSumLimitSpinBox.value() / 2) * 2)
-        if self.chunked_solve_checkBox is not None:
+        except AttributeError:
+            pass
+        try:
             SingletonConfig().config['chunked_solve'] = self.chunked_solve_checkBox.isChecked()
+        except AttributeError:
+            pass
         SingletonConfig.save_config(SingletonConfig().config)
 
 

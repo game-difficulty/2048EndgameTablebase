@@ -236,15 +236,15 @@ class TestWindow(QtWidgets.QMainWindow):
 
             if self.pattern[0] in ("444", "LL", "L3") and self.pattern[2] != '?':
                 self.full_pattern = '_'.join(self.pattern)
-                path_found, path = self.init()
+                path_found, path_list = self.init()
                 if path_found:
-                    self.book_reader.dispatch(path, self.pattern[0], self.pattern[1])
+                    self.book_reader.dispatch(path_list, self.pattern[0], self.pattern[1])
                     self.init_random_state()
             elif self.pattern[0] not in ("444", "LL", "L3"):
                 self.full_pattern = '_'.join(self.pattern[:2])
-                path_found, path = self.init()
+                path_found, path_list = self.init()
                 if path_found:
-                    self.book_reader.dispatch(path, self.pattern[0], self.pattern[1])
+                    self.book_reader.dispatch(path_list, self.pattern[0], self.pattern[1])
                     self.init_random_state()
 
     def init(self):
@@ -263,7 +263,7 @@ class TestWindow(QtWidgets.QMainWindow):
             "**Terrible!**": 0,
         }
 
-        path = SingletonConfig().config['filepath_map'].get(self.full_pattern, '')
+        path = SingletonConfig().config['filepath_map'].get(self.full_pattern, [])
         if not path:
             self.text_display.add_text('Table file path not found!')
             self.text_display.update_text()
@@ -275,8 +275,8 @@ class TestWindow(QtWidgets.QMainWindow):
             return True, path
 
     def init_random_state(self):
-        path = SingletonConfig().config['filepath_map'].get(self.full_pattern, '')
-        self.gameframe.board_encoded = self.book_reader.get_random_state(path, self.full_pattern)
+        path_list = SingletonConfig().config['filepath_map'].get(self.full_pattern, [])
+        self.gameframe.board_encoded = self.book_reader.get_random_state(path_list, self.full_pattern)
         self.gameframe.board_encoded = self.do_random_rotate(self.gameframe.board_encoded)
         self.gameframe.board = self.book_reader.bm.decode_board(self.gameframe.board_encoded)
         self.result = self.book_reader.move_on_dic(
@@ -288,7 +288,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.gameframe.setFocus()
 
     def set_board_init(self):
-        path_found, path = self.init()
+        path_found, path_list = self.init()
         if path_found:
             self.gameframe.board_encoded = np.uint64(int(self.board_state.text(), 16))
             self.gameframe.board = self.gameframe.mover.decode_board(self.gameframe.board_encoded)

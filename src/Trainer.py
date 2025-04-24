@@ -1,3 +1,4 @@
+import os.path
 import sys
 
 import numpy as np
@@ -446,9 +447,13 @@ class TrainWindow(QtWidgets.QMainWindow):
             else:
                 self.gameframe.set_to_44()
 
-            self.filepath.setText(SingletonConfig().config['filepath_map'].get(self.current_pattern, ''))
+            path_list = SingletonConfig().config['filepath_map'].get(self.current_pattern, [])
+            if path_list:
+                self.filepath.setText(path_list[-1])
+            else:
+                self.filepath.setText(' ')
             self.pattern_text.setText(self.current_pattern)
-            self.book_reader.dispatch(self.filepath.text(), self.pattern_settings[0], self.pattern_settings[1])
+            self.book_reader.dispatch(path_list, self.pattern_settings[0], self.pattern_settings[1])
             self.handle_set_default()
             self.show_results()
 
@@ -503,9 +508,20 @@ class TrainWindow(QtWidgets.QMainWindow):
         filepath = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Folder", options=options)
         if filepath:
             self.filepath.setText(filepath)
-            self.book_reader.dispatch(self.filepath.text(), self.pattern_settings[0], self.pattern_settings[1])
-            SingletonConfig().config['filepath_map'][self.current_pattern] = filepath
-            SingletonConfig().save_config(SingletonConfig().config)
+            current_path_list = SingletonConfig().config['filepath_map'].get(self.current_pattern, [])
+
+            # 清理无效路径
+            for path in current_path_list:
+                if not os.path.exists(path):
+                    current_path_list.remove(path)
+
+            if filepath not in current_path_list:
+                SingletonConfig().config['filepath_map'][self.current_pattern] = (
+                        current_path_list + [filepath])
+                SingletonConfig().save_config(SingletonConfig().config)
+
+            self.book_reader.dispatch(SingletonConfig().config['filepath_map'][self.current_pattern]
+                                      , self.pattern_settings[0], self.pattern_settings[1])
             self.show_results()
 
     def handleUndo(self):
@@ -537,7 +553,8 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.handle_set_board()
 
     def handle_set_default(self):
-        random_board = self.book_reader.get_random_state(self.filepath.text(), self.current_pattern)
+        path_list = SingletonConfig().config['filepath_map'].get(self.current_pattern, [])
+        random_board = self.book_reader.get_random_state(path_list, self.current_pattern)
         self.board_state.setText(hex(random_board)[2:].rjust(16, '0'))
         self.handle_set_board()
 

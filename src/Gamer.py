@@ -685,8 +685,8 @@ Only effective for players''')
             self.ai.setText("STOP")
             self.ai_state = True
             self.ai_timer.start(20)
-            if not SingletonConfig().config['filepath_map'].get('4431_2048_0', '') or \
-                    not SingletonConfig().config['filepath_map'].get('LL_2048_0', ''):
+            if not SingletonConfig().config['filepath_map'].get('4431_2048_0', []) or \
+                    not SingletonConfig().config['filepath_map'].get('LL_2048_0', []):
                 self.statusbar.showMessage("Run LL_4096_0 for best performance.", 3000)
         else:
             self.ai.setText("AI: ON")

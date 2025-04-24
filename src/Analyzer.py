@@ -24,8 +24,8 @@ class Analyzer:
         self.bm = SingletonBoardMover(1)
         self.vbm = SingletonBoardMover(3)
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
-        bookfile_path = Config.SingletonConfig().config['filepath_map'].get(full_pattern, '')
-        self.book_reader.dispatch(bookfile_path, pattern, target)
+        bookfile_path_list = Config.SingletonConfig().config['filepath_map'].get(full_pattern, [])
+        self.book_reader.dispatch(bookfile_path_list, pattern, target)
 
         replay_text = self.read_replay(file_path)
         self.record_list: np.typing.NDArray = np.empty(0, dtype='uint64,uint8')

@@ -16,7 +16,7 @@ from BookGenerator import predict_next_length_factor_quadratic, largest_power_of
     update_hashmap_length, validate_length_and_balance, log_performance, initialize_parameters, update_parameters, \
     harmonic_mean_by_column, update_parameters_big
 from BookGeneratorUtils import merge_inplace, hash_, parallel_unique, sort_array, concatenate, merge_deduplicate_all
-from Config import SingletonConfig
+from Config import SingletonConfig, clock
 from LzmaCompressor import compress_with_7z
 
 logger = Config.logger
@@ -47,7 +47,7 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
                   isfree: bool = False
                   ) -> \
         Tuple[NDArray[np.uint64], NDArray[np.uint64], NDArray[float], NDArray[float],
-              NDArray[np.uint64], NDArray[np.uint64]]:
+              NDArray[np.uint64], NDArray[np.uint64], NDArray[np.float64]]:
     """
     0.遍历生成新board
 
@@ -64,6 +64,8 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
     c1, c2 = starts.copy(), starts.copy()
     hashmap1_length = len(hashmap1) - 1  # 要减一，这个长度用于计算哈希的时候取模
     hashmap2_length = len(hashmap2) - 1
+    times = np.empty(n, dtype=np.float64)
+    t0 = clock()
 
     for s in prange(n):
         start, end = int(seg[s] * len(arr0)), int(seg[s + 1] * len(arr0))
@@ -127,6 +129,7 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
 
         c1[s] = np.uint64(c1t)
         c2[s] = np.uint64(c2t)
+        times[s] = clock() - t0
 
     # 统计每个分段生成的新局面占比，用于平衡下一层的分组seg
     all_length = c2 - starts
@@ -139,7 +142,7 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
     arr2 = merge_inplace(arr2, c2, starts.copy())
 
     # 返回包含可能的新棋盘状态的两个array
-    return arr1, arr2, percents2, percents1, hashmap1, hashmap2
+    return arr1, arr2, percents2, percents1, hashmap1, hashmap2, times
 
 
 @njit(nogil=True, parallel=True)
@@ -300,7 +303,7 @@ def generate_process_ad(
             if len(hashmap1) == 0:
                 hashmap1, hashmap2 = update_hashmap_length(hashmap1, d0), update_hashmap_length(hashmap2, d0)  # 初始化
 
-            d1t, d2, percents2, percents1, hashmap1, hashmap2 = \
+            d1t, d2, percents2, percents1, hashmap1, hashmap2, times = \
                 gen_boards_ad(d0, mbm, pattern_check_func, to_find_func, sym_func, seg,
                               hashmap1, hashmap2, lm, board_sum, n, length_factor, isfree)
 
@@ -424,7 +427,7 @@ def gen_boards_big_ad(arr0: NDArray[np.uint64],
         length_factor *= 1.5 if isfree else 1.33
         length_factor *= length_factor_multiplier  # type: ignore
 
-        arr1t, arr2t, percents2, percents1, hashmap1, hashmap2 = \
+        arr1t, arr2t, percents2, percents1, hashmap1, hashmap2, times = \
             gen_boards_ad(arr0t, mbm, pattern_check_func, to_find_func, sym_func, scaled_seg,
                        hashmap1, hashmap2, lm, board_sum, n, length_factor, isfree)
 

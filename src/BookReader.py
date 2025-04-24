@@ -26,32 +26,37 @@ class BookReader:
         bm = BookReader.bm if pattern not in ('2x4', '3x3', '3x4') else BookReader.vbm
         nums_adjust, pattern_check_func, to_find_func, success_check_func, _ = \
             formation_info.get(pattern, [0, None, re_self, None, None])
-        path = SingletonConfig().config['filepath_map'].get(pattern_full, '')
-        nums = (board.sum() + nums_adjust) / 2
-
+        path_list = SingletonConfig().config['filepath_map'].get(pattern_full, [])
+        nums = (board.sum() + nums_adjust) // 2
         if pattern[:4] == 'free' and pattern[-1] != 'w':
             nums -= int(target) / 2
         if pattern == 'LL' and pos == 1:
             to_find_func = re_self
-        if not path or not pattern_check_func:
+        if not path_list or not pattern_check_func:
             return {'?': '?'}
         if nums < 0:
             return {'down': '', 'right': '', 'left': '', 'up': ''}
+        sorted_results = {'down': '', 'right': '', 'left': '', 'up': ''}
 
-        for rotation, flip, t_board in BookReader.gen_all_mirror(board, pattern):
-            encoded = np.uint64(bm.encode_board(t_board))
-            if pattern_check_func(encoded):
-                results = BookReader.get_best_move(path, f'{pattern_full}_{int(nums)}.book', encoded,
-                                                   pattern_check_func, bm, to_find_func)
-                adjusted = {BookReader.adjust_direction(flip, rotation, direction): success_rate
-                            for direction, success_rate in results.items()}
-                float_items = {k: round(v, 10) for k, v in adjusted.items() if isinstance(v, (int, float))}
-                non_float_items = {k: v for k, v in adjusted.items() if not isinstance(v, (int, float))}
-                sorted_float_items = dict(sorted(float_items.items(), key=lambda item: item[1], reverse=True))
-                sorted_results = {**sorted_float_items, **non_float_items}
-                return sorted_results
+        for path in path_list:
+            if not os.path.exists(path):
+                continue
 
-        return {'down': '', 'right': '', 'left': '', 'up': ''}
+            for rotation, flip, t_board in BookReader.gen_all_mirror(board, pattern):
+                encoded = np.uint64(bm.encode_board(t_board))
+                if pattern_check_func(encoded):
+                    results = BookReader.get_best_move(path, f'{pattern_full}_{int(nums)}.book', encoded,
+                                                       pattern_check_func, bm, to_find_func)
+                    adjusted = {BookReader.adjust_direction(flip, rotation, direction): success_rate
+                                for direction, success_rate in results.items()}
+                    float_items = {k: round(v, 10) for k, v in adjusted.items() if isinstance(v, (int, float))}
+                    non_float_items = {k: v for k, v in adjusted.items() if not isinstance(v, (int, float))}
+                    sorted_float_items = dict(sorted(float_items.items(), key=lambda item: item[1], reverse=True))
+                    sorted_results = {**sorted_float_items, **non_float_items}
+                    if float_items:
+                        return sorted_results
+
+        return sorted_results
 
     @staticmethod
     def gen_all_mirror(board: np.typing.NDArray, pattern: str) -> List[Tuple[str, str, np.typing.NDArray]]:
@@ -155,25 +160,26 @@ class BookReader:
         return 0
 
     @staticmethod
-    def get_random_state(pathname: str, pattern_full: str) -> np.uint64:
-        book_index = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-        while len(book_index) > 0:
-            book_id = np.random.choice(book_index)
-            book_index.remove(book_id)
-            filepath = os.path.join(pathname, pattern_full + f'_{book_id}.book')
-            if not os.path.exists(filepath):
-                continue
-            with open(filepath, 'rb') as file:
-                record_size = struct.calcsize('QI')
-                file.seek(0, 2)
-                file_size = file.tell()
-                num_records = file_size // record_size
-                random_record_index = np.random.randint(0, num_records)
-                offset = random_record_index * record_size
-                file.seek(offset)
-                state = struct.unpack('QI', file.read(record_size))[0]
-                return np.uint64(BookReader.bm.gen_new_num(np.uint64(state),
-                                                           SingletonConfig().config['4_spawn_rate'])[0])
+    def get_random_state(path_list: list, pattern_full: str) -> np.uint64:
+        for path in path_list:
+            book_index = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+            while len(book_index) > 0:
+                book_id = np.random.choice(book_index)
+                book_index.remove(book_id)
+                filepath = os.path.join(path, pattern_full + f'_{book_id}.book')
+                if not os.path.exists(filepath):
+                    continue
+                with open(filepath, 'rb') as file:
+                    record_size = struct.calcsize('QI')
+                    file.seek(0, 2)
+                    file_size = file.tell()
+                    num_records = file_size // record_size
+                    random_record_index = np.random.randint(0, num_records)
+                    offset = random_record_index * record_size
+                    file.seek(offset)
+                    state = struct.unpack('QI', file.read(record_size))[0]
+                    return np.uint64(BookReader.bm.gen_new_num(np.uint64(state),
+                                                               SingletonConfig().config['4_spawn_rate'])[0])
         return np.uint64(0)
 
 
@@ -198,13 +204,13 @@ class BookReaderDispatcher:
         else:
             return self._book_reader.move_on_dic(board, pattern, target, pattern_full, pos)
 
-    def get_random_state(self, pathname: str, pattern_full: str):
+    def get_random_state(self, path_list: list, pattern_full: str):
         if self.use_ad and self.book_reader_ad is not None:
-            return self.book_reader_ad.get_random_state(pathname, pattern_full)
+            return self.book_reader_ad.get_random_state(path_list, pattern_full)
         else:
-            return self._book_reader.get_random_state(pathname, pattern_full)
+            return self._book_reader.get_random_state(path_list, pattern_full)
 
-    def dispatch(self, pathname: str, pattern: str, target: str | int):
+    def dispatch(self, path_list: list, pattern: str, target: str | int):
         try:
             target = int(target)
             if target >= 128:
@@ -213,25 +219,27 @@ class BookReaderDispatcher:
             return
         if not pattern or not target:
             return
-        if not os.path.exists(pathname):
-            return
+
         found = False
-        with os.scandir(pathname) as entries:
-            for entry in entries:
-                # 检查条目名称是否以新算法文件后缀结尾
-                if entry.name.endswith(f'_{str(2 ** target // 2)}b'):
-                    found = True
-                    break
-                if entry.name.endswith(f'_{str(2 ** target // 4)}b'):
-                    found = True
-                    break
+        for path in path_list:
+            if not os.path.exists(path):
+                continue
+
+            with os.scandir(path) as entries:
+                for entry in entries:
+                    # 检查条目名称是否以新算法文件后缀结尾
+                    if entry.name.endswith(f'_{str(2 ** target // 2)}b'):
+                        found = True
+                        break
+                    if entry.name.endswith(f'_{str(2 ** target // 4)}b'):
+                        found = True
+                        break
         if not found:
             self.use_ad = False
         else:
             self.set_book_reader_ad(pattern, target)
             if self.book_reader_ad is not None:
                 self.use_ad = True
-
 
 
 if __name__ == "__main__":
