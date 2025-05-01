@@ -10,7 +10,7 @@ import psutil
 
 from BoardMover import BoardMover
 from BookGeneratorUtils import sort_array, parallel_unique, concatenate, merge_deduplicate_all, largest_power_of_2, \
-    hash_, merge_inplace, update_seg
+    hash_, merge_inplace
 import Config
 from Config import SingletonConfig
 from LzmaCompressor import compress_with_7z
@@ -30,7 +30,6 @@ def gen_boards_big(arr0: NDArray[np.uint64],
                    pattern_check_func: PatternCheckFunc,
                    success_check_func: SuccessCheckFunc,
                    to_find_func: ToFindFunc,
-                   seg_list: NDArray[float],
                    pivots_list: List[NDArray[np.uint64]],
                    hashmap1: NDArray[np.uint64],
                    hashmap2: NDArray[np.uint64],
@@ -40,41 +39,40 @@ def gen_boards_big(arr0: NDArray[np.uint64],
                    do_check: bool = True,
                    isfree: bool = False,
                    ) -> Tuple[
-    List[NDArray[np.uint64]], List[NDArray[np.uint64]], List[NDArray[np.uint64]], NDArray[float], List[
+    List[NDArray[np.uint64]], List[NDArray[np.uint64]], List[NDArray[np.uint64]], List[
         List[float]], float, NDArray[np.uint64], NDArray[np.uint64], float, float, float]:
     """
     将arr0分段放入gen_boards生成排序去重后的局面，然后归并
     """
+    segs_count = len(length_factors_list)
     arr1s: List[NDArray[np.uint64]] = []
     arr2s: List[NDArray[np.uint64]] = []
-    actual_lengths2: NDArray[np.uint64] = np.empty(len(seg_list) - 1, dtype=np.uint64)
-    actual_lengths1: NDArray[np.uint64] = np.empty(len(seg_list) - 1, dtype=np.uint64)
-    t0 = time.time()
+    actual_lengths1: NDArray[np.uint64] = np.empty(segs_count * n, dtype=np.uint64)
+    actual_lengths2: NDArray[np.uint64] = np.empty(segs_count * n, dtype=np.uint64)
+    seg_start_end = allocate_seg(length_factors_list, len(arr0))
 
+    t0 = time.time()
     gen_time = 0
-    for seg_index in range(int(len(seg_list) // n)):
+    for seg_index in range(segs_count):
         t_ = time.time()
 
-        start_index = int(seg_list[seg_index * n] * len(arr0))
-        end_index = int(seg_list[(seg_index + 1) * n] * len(arr0))
+        start_index = seg_start_end[seg_index]
+        end_index = seg_start_end[seg_index + 1]
         arr0t = arr0[start_index:end_index]
-
-        seg = seg_list[(seg_index * n): ((seg_index + 1) * n + 1)]
-        scaled_seg = (seg - seg[0]) / (seg[-1] - seg[0])
 
         length_factors = length_factors_list[seg_index]
         length_factor = predict_next_length_factor_quadratic(length_factors)
-        length_factor *= 1.5 if isfree else 1.33
+        length_factor *= 1.25
         length_factor *= length_factor_multiplier  # type: ignore
 
-        arr1t, arr2t, percents2, percents1, hashmap1, hashmap2 = \
-            gen_boards(arr0t, target, position, bm, pattern_check_func, success_check_func, to_find_func, scaled_seg,
+        arr1t, arr2t, hashmap1, hashmap2, counts1, counts2 = \
+            gen_boards(arr0t, target, position, bm, pattern_check_func, success_check_func, to_find_func,
                        hashmap1, hashmap2, n, length_factor, do_check, isfree)
 
-        validate_length_and_balance(arr0t, arr2t, arr1t, seg, percents2, percents1, length_factor, True)
+        validate_length_and_balance(arr0t, arr2t, arr1t, counts1, counts2, length_factor, True)
 
-        actual_lengths2[(seg_index * n): ((seg_index + 1) * n)] = percents2 * len(arr2t)
-        actual_lengths1[(seg_index * n): ((seg_index + 1) * n)] = percents1 * len(arr1t)
+        actual_lengths2[(seg_index * n): ((seg_index + 1) * n)] = counts2
+        actual_lengths1[(seg_index * n): ((seg_index + 1) * n)] = counts1
         length_factors_list[seg_index] = length_factors[1:] + [len(arr2t) / (1 + len(arr0t))]
 
         gen_time += time.time() - t_
@@ -93,57 +91,45 @@ def gen_boards_big(arr0: NDArray[np.uint64],
         del arr1t, arr2t, arr0t
         gc.collect()
 
-    seg_list, length_factors_list, pivots_list, length_factor_multiplier \
-        = update_parameters_big(actual_lengths2, actual_lengths1, seg_list, n, length_factors_list, pivots_list)
+    length_factors_list, pivots_list, length_factor_multiplier \
+        = update_parameters_big(actual_lengths2, actual_lengths1, n, length_factors_list, pivots_list)
 
     t2 = time.time()
     gc.collect()
 
-    return (arr1s, arr2s, pivots_list, seg_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2, t0,
+    return (arr1s, arr2s, pivots_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2, t0,
             gen_time, t2)
 
 
-def update_parameters_big(actual_lengths2, actual_lengths1, seg_list, n, length_factors_list, pivots_list):
-    # 更新seg list
+def update_parameters_big(actual_lengths2, actual_lengths1, n, length_factors_list, pivots_list):
     percents2 = actual_lengths2 / actual_lengths2.sum()
     percents1 = actual_lengths1 / actual_lengths1.sum()
-    logger.debug('Segmentation_pr ' + repr(np.round(seg_list, 5)))
     logger.debug('Segmentation_ac ' + repr(np.round(percents2, 5)))
     logger.debug('Segmentation_ac ' + repr(np.round(percents1, 5)))
-    seg_list = update_seg(seg_list, percents2, 0.5)
     length_factor_multiplier = max(max(percents2) / np.mean(percents2), max(percents1) / np.mean(percents1))
 
     # 如果每次循环生成的数组过长则进行一次细分
     if np.mean(actual_lengths2) * n > 20971520 * (round(psutil.virtual_memory().total / (1024 ** 3), 0) * 0.75):
-        seg_list = split_seg(seg_list)
         length_factors_list = split_length_factor_list(length_factors_list)
         pivots_list = split_pivots_list(pivots_list)
 
     # 数组长度过短，则进行逆向细分操作
     if np.mean(actual_lengths2) * n < 524288 * (round(psutil.virtual_memory().total / (1024 ** 3), 0) * 0.75):
-        seg_list = reverse_split_seg(seg_list)
         length_factors_list = reverse_split_length_factor_list(length_factors_list)
         pivots_list = reverse_split_pivots_list(pivots_list)
 
-    return seg_list, length_factors_list, pivots_list, length_factor_multiplier
+    return length_factors_list, pivots_list, length_factor_multiplier
 
 
 def initialize_parameters(n, pathname, isfree, default_length_factor = 3.2):
     """
-    初始化分段间隔和长度乘数
+    初始化长度乘数
     """
-    seg_list_path = os.path.join(os.path.dirname(pathname), "seg_list.txt")
     length_factors_list_path = os.path.join(os.path.dirname(pathname), 'length_factors_list.txt')
-    try:
-        seg_list = np.loadtxt(seg_list_path, delimiter=',', dtype=np.float64)
-        seg = extract_uniform_elements(n, seg_list)
-    except FileNotFoundError:
-        seg = np.array([round(1 / n * i, 4) for i in range(n + 1)], dtype=float)
-        seg_list = seg
 
-    percents = np.array([1 / n for _ in range(n)])
+    counts2 = np.ones(n, dtype=np.uint64)
     # 预分配的储存局面的数组长度乘数
-    length_factor_multiplier = 2.5
+    length_factor_multiplier = 2.0
 
     try:
         # noinspection PyUnresolvedReferences
@@ -161,8 +147,8 @@ def initialize_parameters(n, pathname, isfree, default_length_factor = 3.2):
     segment_size = 5120000 if isfree else 8192000
     segment_size *= (round(psutil.virtual_memory().total / (1024 ** 3), 0) - 5)
 
-    return seg, seg_list, seg_list_path, length_factor, length_factors, length_factors_list, length_factors_list_path, \
-        percents, length_factor_multiplier, segment_size
+    return length_factor, length_factors, length_factors_list, length_factors_list_path, \
+        counts2, length_factor_multiplier, segment_size
 
 
 def handle_restart(i, pathname, arr_init, started, d0, d1):
@@ -223,9 +209,8 @@ def generate_process(
     pivots, pivots_list = None, None  # 用于快排的分割点
     hashmap1, hashmap2 = np.empty(0, dtype=np.uint64), np.empty(0, dtype=np.uint64)
     n = max(4, min(32, os.cpu_count()))  # 并行线程数
-    seg, seg_list, seg_list_path, length_factor, length_factors, length_factors_list, length_factors_list_path, \
-        percents2, length_factor_multiplier, segment_size = initialize_parameters(n, pathname, isfree)
-    percents1 = percents2.copy()
+    length_factor, length_factors, length_factors_list, length_factors_list_path, \
+        counts2, length_factor_multiplier, segment_size = initialize_parameters(n, pathname, isfree)
 
     # 从前向后遍历，生成新的棋盘状态并保存到相应的array中
     for i in range(1, steps - 1):
@@ -235,7 +220,7 @@ def generate_process(
 
         if pivots is None:
             pivots = d0[[len(d0) // 8 * i for i in range(1, 8)]] if len(d0) > 0 else np.zeros(7, dtype='uint64')
-            pivots_list = [pivots] * int(len(seg_list) // n)
+            pivots_list = [pivots] * len(length_factors_list)
 
         # 生成新的棋盘状态
         if len(d0) < segment_size:
@@ -249,25 +234,25 @@ def generate_process(
             else:
                 # 先预测预分配数组的长度乘数
                 length_factor = predict_next_length_factor_quadratic(length_factors)
-                length_factor *= 1.5 if isfree else 1.33
+                length_factor *= 1.25
                 length_factor *= length_factor_multiplier
                 if len(hashmap1) == 0:
                     hashmap1, hashmap2 = update_hashmap_length(hashmap1, d0), update_hashmap_length(hashmap2, d0)  # 初始化
 
-                d1t, d2, percents2, percents1, hashmap1, hashmap2 = \
-                    gen_boards(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func, seg,
+                d1t, d2, hashmap1, hashmap2, counts1, counts2 = \
+                    gen_boards(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func,
                                hashmap1, hashmap2, n, length_factor, i > docheck_step, isfree)
 
-                validate_length_and_balance(d0, d2, d1t, seg, percents2, percents1, length_factor)
+                validate_length_and_balance(d0, d2, d1t, counts1, counts2, length_factor, False)
 
             t1 = time.time()
             # 排序
             sort_array(d1t, pivots)
             sort_array(d2, pivots)
 
-            seg, seg_list, length_factors, length_factors_list, length_factor_multiplier, pivots, pivots_list \
-                = update_parameters(d0, d2, seg, percents2, percents1, length_factors, seg_list_path,
-                                    length_factors_list_path)
+            length_factors, length_factors_list, pivots, pivots_list \
+                = update_parameters(d0, d2, length_factors, length_factors_list_path)
+            length_factor_multiplier = max(counts2) / np.mean(counts2)
 
             t2 = time.time()
 
@@ -293,10 +278,10 @@ def generate_process(
                 hashmap_max_length = 20971520 * (round(psutil.virtual_memory().total / (1024 ** 3), 0) * 0.75)
                 hashmap1, hashmap2 = (np.empty(largest_power_of_2(hashmap_max_length), dtype=np.uint64),
                                       np.empty(largest_power_of_2(hashmap_max_length), dtype=np.uint64))  # 初始化
-            (d1s, d2s, pivots_list, seg_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2,
+            (d1s, d2s, pivots_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2,
              t0, gen_time, t2) = \
                 gen_boards_big(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func,
-                               seg_list, pivots_list, hashmap1, hashmap2, n, length_factors_list,
+                               pivots_list, hashmap1, hashmap2, n, length_factors_list,
                                length_factor_multiplier, i > docheck_step, isfree)
 
             dedup_pivots = d0[np.arange(1, n) * len(d0) // n].copy() if len(d0) > 0 else \
@@ -318,9 +303,7 @@ def generate_process(
             t3 = time.time()
             log_performance(i, t0, gen_time + t0, t2, t3, d0)
 
-            np.savetxt(seg_list_path, seg_list, fmt='%.6f', delimiter=',')  # type: ignore
             np.savetxt(length_factors_list_path, length_factors_list, fmt='%.6f', delimiter=',')  # type: ignore
-            seg = extract_uniform_elements(n, seg_list)
             length_factors = harmonic_mean_by_column(length_factors_list)
 
         d0.tofile(pathname + str(i))
@@ -331,51 +314,48 @@ def generate_process(
     return started, d0, d1
 
 
-def validate_length_and_balance(d0, d2, d1t, seg, percents2, percents1, length_factor, isbig=False):
+def validate_length_and_balance(d0, d2, d1t, counts1, counts2, length_factor, isbig):
     if len(d0) < 1999999 or len(d2) < 1999999:
         return
-    needed_multiplier2 = len(d2) / len(d0) * max(percents2) / np.mean(percents2)
-    needed_multiplier1 = len(d1t) / len(d0) * max(percents1) / np.mean(percents1)
-    if needed_multiplier2 >= length_factor or needed_multiplier1 >= length_factor:
+
+    length_needed = max(counts1.max(), counts2.max()) * len(counts1)
+    length_factor_actual = length_needed / len(d0)
+    length = max(69999999, int(len(d0) * length_factor))
+    is_valid_length = length_needed <= length
+    percents1 = counts1 / counts1.sum()
+    percents2 = counts2 / counts2.sum()
+
+    if not is_valid_length:
         logger.critical(
-            f"length multiplier {length_factor:2f}, \n"
-            f"need {needed_multiplier2:2f},"
-            f"{needed_multiplier1:2f}, \n"
-            f"percents {np.round(percents2, 5)}, \n"
-            f"{np.round(percents1, 5)}")
+            f"length multiplier {length_factor:2f}, "
+            f"need {length_factor_actual:2f}, \n"
+            f"counts1 {(counts1 / 1e6):2f}, \n"
+            f"counts2 {(counts2 / 1e6):2f}")
         raise IndexError("The length multiplier is not big enough. "
                          "This does not indicate an error in the program. "
                          "Please restart the program and continue running.")
     if not isbig:
-        logger.debug('Segmentation_pr ' + repr(np.round(seg, 5)))
-        logger.debug('Segmentation_ac ' + repr(np.round(percents2, 5)))
-        logger.debug('Segmentation_ac ' + repr(np.round(percents1, 5)))
+        logger.debug(f'length {len(d1t)}, {len(d2)}, '
+                     f'Using {round(length_factor, 2)}, '
+                     f'Need {round(length_factor_actual, 2)}')
+        logger.debug('Segmentation1_ac ' + repr(np.round(percents2, 5)))
+        logger.debug('Segmentation2_ac ' + repr(np.round(percents1, 5)))
     if len(d0) > 0:
         logger.debug(
-            f'length {len(d1t)}, Actual {round(len(d1t) / len(d0), 2)}, '
+            f'length {len(d1t)}, {len(d2)}, '
             f'Using {round(length_factor, 2)}, '
-            f'Need {round(needed_multiplier1, 2)}')
-        logger.debug(
-            f'length {len(d2)}, Actual {round(len(d2) / len(d0), 2)}, '
-            f'Using {round(length_factor, 2)}, '
-            f'Need {round(needed_multiplier2, 2)}')
+            f'Need {round(length_factor_actual, 2)}')
 
 
-def update_parameters(d0, d2, seg, percents, percents1, length_factors, seg_list_path, length_factors_list_path):
-    # 根据上一层实际分段情况调整下一层分段间隔
-    seg = update_seg(seg, percents, 0.4)
-    seg_list = seg
-    np.savetxt(seg_list_path, seg_list, fmt='%.6f', delimiter=',')  # type: ignore
-
+def update_parameters(d0, d2, length_factors, length_factors_list_path):
     # 更新数组长度乘数
-    length_factors = length_factors[1:] + [max(len(d2) / (1 + len(d0)), 0.8)]
+    length_factors = length_factors[1:] + [len(d2) / (len(d0) + 1)]
     length_factors_list = [length_factors]
-    length_factor_multiplier = max(max(percents) / np.mean(percents), max(percents1) / np.mean(percents1))
     np.savetxt(length_factors_list_path, length_factors_list, fmt='%.6f', delimiter=',')  # type: ignore
     # 选取更准确的分割点使下一次快排更有效
     pivots = d2[[len(d2) // 8 * i for i in range(1, 8)]].copy() if len(d2) > 0 else np.zeros(7, dtype='uint64')
     pivots_list = [pivots]
-    return seg, seg_list, length_factors, length_factors_list, length_factor_multiplier, pivots, pivots_list
+    return length_factors, length_factors_list, pivots, pivots_list
 
 
 def log_performance(i, t0, t1, t2, t3, d1):
@@ -393,7 +373,6 @@ def gen_boards(arr0: NDArray[np.uint64],
                pattern_check_func: PatternCheckFunc,
                success_check_func: SuccessCheckFunc,
                to_find_func: ToFindFunc,
-               seg: NDArray[float],
                hashmap1: NDArray[np.uint64],
                hashmap2: NDArray[np.uint64],
                n: int = 8,
@@ -401,7 +380,7 @@ def gen_boards(arr0: NDArray[np.uint64],
                do_check: bool = True,
                isfree: bool = False
                ) -> \
-        Tuple[NDArray[np.uint64], NDArray[np.uint64], NDArray[float], NDArray[float],
+        Tuple[NDArray[np.uint64], NDArray[np.uint64], NDArray[np.uint64], NDArray[np.uint64],
         NDArray[np.uint64], NDArray[np.uint64]]:
     """
     根据arr0中的面板，先生成数字，再移动，如果移动后仍是定式范围内且移动有效，则根据生成的数字（2,4）分别填入
@@ -416,54 +395,60 @@ def gen_boards(arr0: NDArray[np.uint64],
     hashmap1_length = len(hashmap1) - 1  # 要减一，这个长度用于计算哈希的时候取模
     hashmap2_length = len(hashmap2) - 1
 
-    # seg = [0, 0.055, 0.13, 0.28, 0.42, 0.57, 0.72, 0.86, 1]
-    # seg = [0, 0.13, 0.42, 0.72, 1]
-    # seg = [0, 0.07, 0.21, 0.41, 0.61, 0.81, 1]
+    total_tasks = len(arr0)
+    chunk_size = min(10 ** 6, total_tasks // (n * 5) + 1) * n
+    # 向上取整
+    chunks_count = (total_tasks + chunk_size - 1) // chunk_size
 
     for s in prange(n):
-        start, end = int(seg[s] * len(arr0)), int(seg[s + 1] * len(arr0))
         c1t, c2t = length // n * s, length // n * s
-        for b in range(start, end):
-            t: np.uint64 = arr0[b]
-            if do_check and success_check_func(t, target, position):
-                continue
-            for i in range(16):  # 遍历每个位置
-                if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):
-                    t1 = t | (np.uint64(1) << np.uint64(4 * i))  # 填充数字2
-                    for newt in bm.move_all_dir(t1):
-                        if newt != t1 and pattern_check_func(newt):
-                            newt = to_find_func(newt)
-                            hashed_newt = (hash_(newt)) & hashmap1_length
-                            if hashmap1[hashed_newt] != newt:
-                                hashmap1[hashed_newt] = newt
-                                arr1[c1t] = newt
-                                c1t += 1
+        for chunk in range(chunks_count):
+            chunk_start = chunk * chunk_size
+            chunk_end = min(chunk_start + chunk_size, total_tasks)
 
-                    t1 = t | (np.uint64(2) << np.uint64(4 * i))  # 填充数字4
-                    for newt in bm.move_all_dir(t1):
-                        if newt != t1 and pattern_check_func(newt):
-                            newt = to_find_func(newt)
-                            hashed_newt = (hash_(newt)) & hashmap2_length
-                            if hashmap2[hashed_newt] != newt:
-                                hashmap2[hashed_newt] = newt
-                                arr2[c2t] = newt
-                                c2t += 1
+            thread_start = chunk_start + s * chunk_size // n
+            thread_end = thread_start + chunk_size // n
+            start = max(thread_start, chunk_start)
+            end = min(thread_end, chunk_end)
+
+            # 确保有效区间存在
+            if not start < end:
+                continue
+
+            for b in range(start, end):
+                t: np.uint64 = arr0[b]
+                if do_check and success_check_func(t, target, position):
+                    continue
+                for i in range(16):  # 遍历每个位置
+                    if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):
+                        t1 = t | (np.uint64(1) << np.uint64(4 * i))  # 填充数字2
+                        for newt in bm.move_all_dir(t1):
+                            if newt != t1 and pattern_check_func(newt):
+                                newt = to_find_func(newt)
+                                hashed_newt = (hash_(newt)) & hashmap1_length
+                                if hashmap1[hashed_newt] != newt:
+                                    hashmap1[hashed_newt] = newt
+                                    arr1[c1t] = newt
+                                    c1t += 1
+
+                        t1 = t | (np.uint64(2) << np.uint64(4 * i))  # 填充数字4
+                        for newt in bm.move_all_dir(t1):
+                            if newt != t1 and pattern_check_func(newt):
+                                newt = to_find_func(newt)
+                                hashed_newt = (hash_(newt)) & hashmap2_length
+                                if hashmap2[hashed_newt] != newt:
+                                    hashmap2[hashed_newt] = newt
+                                    arr2[c2t] = newt
+                                    c2t += 1
 
         c1[s] = c1t
         c2[s] = c2t
-
-    # 统计每个分段生成的新局面占比，用于平衡下一层的分组seg
-    all_length = c2 - starts
-    percents2 = all_length / all_length.sum() if all_length.sum() > 0 else np.array([1 / n * i for i in range(n + 1)])
-
-    all_length = c1 - starts
-    percents1 = all_length / all_length.sum() if all_length.sum() > 0 else np.array([1 / n * i for i in range(n + 1)])
 
     arr1 = merge_inplace(arr1, c1, starts.copy())
     arr2 = merge_inplace(arr2, c2, starts.copy())
 
     # 返回包含可能的新棋盘状态的两个array
-    return arr1, arr2, percents2, percents1, hashmap1, hashmap2
+    return arr1, arr2, hashmap1, hashmap2, c1-starts, c2-starts
 
 
 @njit(nogil=True, parallel=True)
@@ -519,16 +504,6 @@ def predict_next_length_factor_quadratic(length_factors: List[float]) -> float:
     return next_length_factor
 
 
-def split_seg(seg: NDArray[float]) -> NDArray[float]:
-    new_seg = np.empty(len(seg) * 2 - 1, dtype=float)
-    new_seg[-1] = 1
-    for i in range(len(seg) - 1):
-        new_seg[i * 2] = seg[i]
-    for i in range(len(seg) - 1):
-        new_seg[i * 2 + 1] = (new_seg[i * 2] + new_seg[i * 2 + 2]) / 2
-    return new_seg
-
-
 def split_length_factor_list(length_factor_list: List[List[float]]) -> List[List[float]]:
     length_factor_list_new: List[List[float]] = [[i * 1.5 for i in length_factor_list[0]]]
     for i in length_factor_list:
@@ -546,10 +521,6 @@ def split_pivots_list(pivots_list: List[NDArray[np.uint64]]) -> List[NDArray[np.
     return pivots_list_new
 
 
-def reverse_split_seg(seg: NDArray[float]) -> NDArray[float]:
-    return seg[::2]
-
-
 def reverse_split_length_factor_list(length_factor_list: List[List[float]]) -> List[List[float]]:
     length_factor_list_new = []
     for sublist in length_factor_list:
@@ -561,12 +532,6 @@ def reverse_split_pivots_list(pivots_list: List[NDArray[np.uint64]]) -> List[NDA
     return pivots_list[::2]
 
 
-def extract_uniform_elements(n: int, arr: NDArray) -> NDArray:
-    k = (len(arr) - 1) // n  # 计算 k
-    result = arr[::k]  # 每隔 k 个取一个，包括第一个和最后一个
-    return result
-
-
 def harmonic_mean_by_column(matrix: List[List[float]]) -> List[float]:
     num_columns = len(matrix[0])
     harmonic_means = []
@@ -575,3 +540,15 @@ def harmonic_mean_by_column(matrix: List[List[float]]) -> List[float]:
         harmonic_mean = len(matrix) / sum(reciprocals)
         harmonic_means.append(harmonic_mean)
     return harmonic_means
+
+
+def allocate_seg(length_factors_list, arr_length):
+    if len(length_factors_list) == 1:
+        return [0, arr_length]
+    factors = np.array([_[-1] for _ in length_factors_list])
+    factors = 1 / (factors + 0.2)
+    factors /= np.sum(factors)
+    factors = (np.cumsum(factors) * arr_length).astype(np.uint64)
+    factors = [0] + list(factors)
+    factors[-1] = arr_length
+    return factors

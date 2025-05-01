@@ -12,11 +12,11 @@ from numpy.typing import NDArray
 import Config
 from BoardMaskerAD import BoardMasker
 from BoardMoverAD import MaskedBoardMover
-from BookGenerator import predict_next_length_factor_quadratic, largest_power_of_2, extract_uniform_elements, \
+from BookGenerator import predict_next_length_factor_quadratic, largest_power_of_2, \
     update_hashmap_length, validate_length_and_balance, log_performance, initialize_parameters, update_parameters, \
-    harmonic_mean_by_column, update_parameters_big
+    harmonic_mean_by_column, update_parameters_big, allocate_seg
 from BookGeneratorUtils import merge_inplace, hash_, parallel_unique, sort_array, concatenate, merge_deduplicate_all
-from Config import SingletonConfig, clock
+from Config import SingletonConfig  #, clock
 from LzmaCompressor import compress_with_7z
 
 logger = Config.logger
@@ -37,7 +37,6 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
                   pattern_check_func: PatternCheckFunc,
                   to_find_func: ToFindFunc,
                   sym_func: SymFindFunc,
-                  seg: NDArray[float],
                   hashmap1: NDArray[np.uint64],
                   hashmap2: NDArray[np.uint64],
                   lm: BoardMasker,
@@ -46,8 +45,8 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
                   length_factor: float = 8,
                   isfree: bool = False
                   ) -> \
-        Tuple[NDArray[np.uint64], NDArray[np.uint64], NDArray[float], NDArray[float],
-              NDArray[np.uint64], NDArray[np.uint64], NDArray[np.float64]]:
+        Tuple[NDArray[np.uint64], NDArray[np.uint64], NDArray[np.uint64], NDArray[np.uint64],
+              NDArray[np.uint64], NDArray[np.uint64]]:
     """
     0.遍历生成新board
 
@@ -64,85 +63,92 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
     c1, c2 = starts.copy(), starts.copy()
     hashmap1_length = len(hashmap1) - 1  # 要减一，这个长度用于计算哈希的时候取模
     hashmap2_length = len(hashmap2) - 1
-    times = np.empty(n, dtype=np.float64)
-    t0 = clock()
+
+    total_tasks = len(arr0)
+    chunk_size = min(10 ** 6, total_tasks // (n * 5) + 1) * n
+    # 向上取整
+    chunks_count = (total_tasks + chunk_size - 1) // chunk_size
 
     for s in prange(n):
-        start, end = int(seg[s] * len(arr0)), int(seg[s + 1] * len(arr0))
         c1t, c2t = length // n * s, length // n * s
-        for b in range(start, end):
-            t = arr0[b]
+        for chunk in range(chunks_count):
+            chunk_start = chunk * chunk_size
+            chunk_end = min(chunk_start + chunk_size, total_tasks)
 
-            for i in range(16):  # 遍历每个位置
-                if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):
-                    t1 = t | (np.uint64(1) << np.uint64(4 * i))  # 填充数字2
-                    for newt, mnt in mbm.move_all_dir(t1):
-                        if newt == t1 or not pattern_check_func(newt):
-                            continue
-                        newt, symm_index = sym_func(newt)
-                        hashed_newt = (hash_(newt) & hashmap1_length)
-                        if hashmap1[hashed_newt] == newt:
-                            continue
-                        hashmap1[hashed_newt] = newt
+            thread_start = chunk_start + s * chunk_size // n
+            thread_end = thread_start + chunk_size // n
+            start = max(thread_start, chunk_start)
+            end = min(thread_end, chunk_end)
 
-                        if not mnt:
-                            arr1[c1t] = newt
-                            c1t += 1
-                            continue
-                        is_valid, is_derived, derived_boards = derive(lm, newt, np.uint32(original_board_sum + 2))
-                        if not is_valid:
-                            continue
-                        if not is_derived:
-                            arr1[c1t] = newt
-                            c1t += 1
-                            continue
-                        for derived_board in derived_boards:
-                            if pattern_check_func(derived_board):
-                                arr1[c1t] = to_find_func(derived_board)
+            # 确保有效区间存在
+            if not start < end:
+                continue
+
+            for b in range(start, end):
+                t = arr0[b]
+
+                for i in range(16):  # 遍历每个位置
+                    if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):
+                        t1 = t | (np.uint64(1) << np.uint64(4 * i))  # 填充数字2
+                        for newt, mnt in mbm.move_all_dir(t1):
+                            if newt == t1 or not pattern_check_func(newt):
+                                continue
+                            newt, symm_index = sym_func(newt)
+                            hashed_newt = (hash_(newt) & hashmap1_length)
+                            if hashmap1[hashed_newt] == newt:
+                                continue
+                            hashmap1[hashed_newt] = newt
+
+                            if not mnt:
+                                arr1[c1t] = newt
                                 c1t += 1
+                                continue
+                            is_valid, is_derived, derived_boards = derive(lm, newt, np.uint32(original_board_sum + 2))
+                            if not is_valid:
+                                continue
+                            if not is_derived:
+                                arr1[c1t] = newt
+                                c1t += 1
+                                continue
+                            for derived_board in derived_boards:
+                                if pattern_check_func(derived_board):
+                                    arr1[c1t] = to_find_func(derived_board)
+                                    c1t += 1
 
-                    t1 = t | (np.uint64(2) << np.uint64(4 * i))  # 填4
-                    for newt, mnt in mbm.move_all_dir(t1):
-                        if newt == t1 or not pattern_check_func(newt):
-                            continue
-                        newt, symm_index = sym_func(newt)
-                        hashed_newt = (hash_(newt) & hashmap2_length)
-                        if hashmap2[hashed_newt] == newt:
-                            continue
-                        hashmap2[hashed_newt] = newt
+                        t1 = t | (np.uint64(2) << np.uint64(4 * i))  # 填4
+                        for newt, mnt in mbm.move_all_dir(t1):
+                            if newt == t1 or not pattern_check_func(newt):
+                                continue
+                            newt, symm_index = sym_func(newt)
+                            hashed_newt = (hash_(newt) & hashmap2_length)
+                            if hashmap2[hashed_newt] == newt:
+                                continue
+                            hashmap2[hashed_newt] = newt
 
-                        if not mnt:
-                            arr2[c2t] = newt
-                            c2t += 1
-                            continue
-                        is_valid, is_derived, derived_boards = derive(lm, newt, np.uint32(original_board_sum + 4))
-                        if not is_valid:
-                            continue
-                        if not is_derived:
-                            arr2[c2t] = newt
-                            c2t += 1
-                            continue
-                        for derived_board in derived_boards:
-                            if pattern_check_func(derived_board):
-                                arr2[c2t] = to_find_func(derived_board)
+                            if not mnt:
+                                arr2[c2t] = newt
                                 c2t += 1
+                                continue
+                            is_valid, is_derived, derived_boards = derive(lm, newt, np.uint32(original_board_sum + 4))
+                            if not is_valid:
+                                continue
+                            if not is_derived:
+                                arr2[c2t] = newt
+                                c2t += 1
+                                continue
+                            for derived_board in derived_boards:
+                                if pattern_check_func(derived_board):
+                                    arr2[c2t] = to_find_func(derived_board)
+                                    c2t += 1
 
         c1[s] = np.uint64(c1t)
         c2[s] = np.uint64(c2t)
-        times[s] = clock() - t0
-
-    # 统计每个分段生成的新局面占比，用于平衡下一层的分组seg
-    all_length = c2 - starts
-    percents2 = all_length / all_length.sum() if all_length.sum() > 0 else np.array([1 / n for _ in range(n)])
-
-    all_length = c1 - starts
-    percents1 = all_length / all_length.sum() if all_length.sum() > 0 else np.array([1 / n for _ in range(n)])
 
     arr1 = merge_inplace(arr1, c1, starts.copy())
     arr2 = merge_inplace(arr2, c2, starts.copy())
 
     # 返回包含可能的新棋盘状态的两个array
-    return arr1, arr2, percents2, percents1, hashmap1, hashmap2, times
+    return arr1, arr2, hashmap1, hashmap2, c1-starts, c2-starts
 
 
 @njit(nogil=True, parallel=True)
@@ -275,12 +281,11 @@ def generate_process_ad(
     pivots, pivots_list = None, None  # 用于快排的分割点
     hashmap1, hashmap2 = np.empty(0, dtype=np.uint64), np.empty(0, dtype=np.uint64)
     n = max(4, min(32, os.cpu_count()))  # 并行线程数
-    seg, seg_list, seg_list_path, length_factor, length_factors, length_factors_list, length_factors_list_path, \
-        percents2, length_factor_multiplier, segment_size = initialize_parameters(n, pathname, isfree)
+    length_factor, length_factors, length_factors_list, length_factors_list_path, \
+        counts2, length_factor_multiplier, segment_size = initialize_parameters(n, pathname, isfree)
     ini_board_sum = np.sum(mbm.decode_board(arr_init[0]))
     for b in range(len(arr_init)):
         arr_init[b] = lm.mask_board(arr_init[b])
-    small_tile_sum_limit = SingletonConfig().config.get('SmallTileSumLimit', 56)
 
     # 从前向后遍历，生成新的棋盘状态并保存到相应的array中
     for i in range(1, steps - 1):
@@ -290,33 +295,34 @@ def generate_process_ad(
 
         if pivots is None:
             pivots = d0[[len(d0) // 8 * i for i in range(1, 8)]] if len(d0) > 0 else np.zeros(7, dtype='uint64')
-            pivots_list = [pivots] * int(len(seg_list) // n)
+            pivots_list = [pivots] * len(length_factors_list)
 
+        small_tile_sum_limit = SingletonConfig().config.get('SmallTileSumLimit', 56)
         board_sum = 2 * i + ini_board_sum - 2
 
         if len(d0) < segment_size:
             t0 = time.time()
             # 先预测预分配数组的长度乘数
             length_factor = predict_next_length_factor_quadratic(length_factors)
-            length_factor *= 1.5 if isfree else 1.33
+            length_factor *= 1.25
             length_factor *= length_factor_multiplier
             if len(hashmap1) == 0:
                 hashmap1, hashmap2 = update_hashmap_length(hashmap1, d0), update_hashmap_length(hashmap2, d0)  # 初始化
 
-            d1t, d2, percents2, percents1, hashmap1, hashmap2, times = \
-                gen_boards_ad(d0, mbm, pattern_check_func, to_find_func, sym_func, seg,
+            d1t, d2, hashmap1, hashmap2, counts1, counts2 = \
+                gen_boards_ad(d0, mbm, pattern_check_func, to_find_func, sym_func,
                               hashmap1, hashmap2, lm, board_sum, n, length_factor, isfree)
 
-            validate_length_and_balance(d0, d2, d1t, seg, percents2, percents1, length_factor)
+            validate_length_and_balance(d0, d2, d1t, counts1, counts2, length_factor, False)
 
             t1 = time.time()
             # 排序
             sort_array(d1t, pivots)
             sort_array(d2, pivots)
 
-            seg, seg_list, length_factors, length_factors_list, length_factor_multiplier, pivots, pivots_list \
-                = update_parameters(d0, d2, seg, percents2, percents1, length_factors, seg_list_path,
-                                    length_factors_list_path)
+            length_factors, length_factors_list, pivots, pivots_list \
+                = update_parameters(d0, d2, length_factors, length_factors_list_path)
+            length_factor_multiplier = max(counts2) / np.mean(counts2)
 
             t2 = time.time()
 
@@ -343,10 +349,10 @@ def generate_process_ad(
                 hashmap_max_length = 20971520 * (round(psutil.virtual_memory().total / (1024 ** 3), 0) * 0.75)
                 hashmap1, hashmap2 = (np.empty(largest_power_of_2(hashmap_max_length), dtype=np.uint64),
                                       np.empty(largest_power_of_2(hashmap_max_length), dtype=np.uint64))  # 初始化
-            (d1s, d2s, pivots_list, seg_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2,
+            (d1s, d2s, pivots_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2,
              t0, gen_time, t2) = \
                 gen_boards_big_ad(d0, mbm, lm, pattern_check_func, sym_func, to_find_func,
-                               seg_list, pivots_list, hashmap1, hashmap2, board_sum, n, length_factors_list,
+                               pivots_list, hashmap1, hashmap2, board_sum, n, length_factors_list,
                                length_factor_multiplier, isfree)
 
             dedup_pivots = d0[np.arange(1, n) * len(d0) // n].copy() if len(d0) > 0 else \
@@ -366,9 +372,7 @@ def generate_process_ad(
             t3 = time.time()
             log_performance(i, t0, gen_time + t0, t2, t3, d0)
 
-            np.savetxt(seg_list_path, seg_list, fmt='%.6f', delimiter=',')  # type: ignore
             np.savetxt(length_factors_list_path, length_factors_list, fmt='%.6f', delimiter=',')  # type: ignore
-            seg = extract_uniform_elements(n, seg_list)
             length_factors = harmonic_mean_by_column(length_factors_list)
 
         if (i + ini_board_sum % 64 // 2) % 32 == (small_tile_sum_limit // 2) % 32 + 1:
@@ -390,7 +394,6 @@ def gen_boards_big_ad(arr0: NDArray[np.uint64],
                    pattern_check_func: PatternCheckFunc,
                    sym_func: SymFindFunc,
                    to_find_func: ToFindFunc,
-                   seg_list: NDArray[float],
                    pivots_list: List[NDArray[np.uint64]],
                    hashmap1: NDArray[np.uint64],
                    hashmap2: NDArray[np.uint64],
@@ -400,41 +403,40 @@ def gen_boards_big_ad(arr0: NDArray[np.uint64],
                    length_factor_multiplier: float = 1.5,
                    isfree: bool = False,
                    ) -> Tuple[
-    List[NDArray[np.uint64]], List[NDArray[np.uint64]], List[NDArray[np.uint64]], NDArray[float], List[
+    List[NDArray[np.uint64]], List[NDArray[np.uint64]], List[NDArray[np.uint64]], List[
         List[float]], float, NDArray[np.uint64], NDArray[np.uint64], float, float, float]:
     """
     将arr0分段放入gen_boards生成排序去重后的局面，然后归并
     """
+    segs_count = len(length_factors_list)
     arr1s: List[NDArray[np.uint64]] = []
     arr2s: List[NDArray[np.uint64]] = []
-    actual_lengths2: NDArray[np.uint64] = np.empty(len(seg_list) - 1, dtype=np.uint64)
-    actual_lengths1: NDArray[np.uint64] = np.empty(len(seg_list) - 1, dtype=np.uint64)
-    t0 = time.time()
+    actual_lengths1: NDArray[np.uint64] = np.empty(segs_count * n, dtype=np.uint64)
+    actual_lengths2: NDArray[np.uint64] = np.empty(segs_count * n, dtype=np.uint64)
+    seg_start_end = allocate_seg(length_factors_list, len(arr0))
 
+    t0 = time.time()
     gen_time = 0
-    for seg_index in range(int(len(seg_list) // n)):
+    for seg_index in range(segs_count):
         t_ = time.time()
 
-        start_index = int(seg_list[seg_index * n] * len(arr0))
-        end_index = int(seg_list[(seg_index + 1) * n] * len(arr0))
+        start_index = seg_start_end[seg_index]
+        end_index = seg_start_end[seg_index + 1]
         arr0t = arr0[start_index:end_index]
-
-        seg = seg_list[(seg_index * n): ((seg_index + 1) * n + 1)]
-        scaled_seg = (seg - seg[0]) / (seg[-1] - seg[0])
 
         length_factors = length_factors_list[seg_index]
         length_factor = predict_next_length_factor_quadratic(length_factors)
-        length_factor *= 1.5 if isfree else 1.33
+        length_factor *= 1.25
         length_factor *= length_factor_multiplier  # type: ignore
 
-        arr1t, arr2t, percents2, percents1, hashmap1, hashmap2, times = \
-            gen_boards_ad(arr0t, mbm, pattern_check_func, to_find_func, sym_func, scaled_seg,
+        arr1t, arr2t, hashmap1, hashmap2, counts1, counts2 = \
+            gen_boards_ad(arr0t, mbm, pattern_check_func, to_find_func, sym_func,
                        hashmap1, hashmap2, lm, board_sum, n, length_factor, isfree)
 
-        validate_length_and_balance(arr0t, arr2t, arr1t, seg, percents2, percents1, length_factor, True)
+        validate_length_and_balance(arr0t, arr2t, arr1t, counts1, counts2, length_factor, True)
 
-        actual_lengths2[(seg_index * n): ((seg_index + 1) * n)] = percents2 * len(arr2t)
-        actual_lengths1[(seg_index * n): ((seg_index + 1) * n)] = percents1 * len(arr1t)
+        actual_lengths2[(seg_index * n): ((seg_index + 1) * n)] = counts2
+        actual_lengths1[(seg_index * n): ((seg_index + 1) * n)] = counts1
         length_factors_list[seg_index] = length_factors[1:] + [len(arr2t) / (1 + len(arr0t))]
 
         gen_time += time.time() - t_
@@ -453,13 +455,13 @@ def gen_boards_big_ad(arr0: NDArray[np.uint64],
         del arr1t, arr2t, arr0t
         gc.collect()
 
-    seg_list, length_factors_list, pivots_list, length_factor_multiplier \
-        = update_parameters_big(actual_lengths2, actual_lengths1, seg_list, n, length_factors_list, pivots_list)
+    length_factors_list, pivots_list, length_factor_multiplier \
+        = update_parameters_big(actual_lengths2, actual_lengths1, n, length_factors_list, pivots_list)
 
     t2 = time.time()
     gc.collect()
 
-    return (arr1s, arr2s, pivots_list, seg_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2, t0,
+    return (arr1s, arr2s, pivots_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2, t0,
             gen_time, t2)
 
 

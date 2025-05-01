@@ -141,7 +141,6 @@ class TestWindow(QtWidgets.QMainWindow):
         self.gridLayout.setObjectName("gridLayout")
 
         self.setboard_Layout = QtWidgets.QHBoxLayout()
-        self.gridLayout.setVerticalSpacing(8)
         self.setboard_Layout.setObjectName("setboard_Layout")
         self.board_state = QtWidgets.QLineEdit(self.centralwidget)
         self.board_state.setStyleSheet("background-color: rgb(255, 255, 255);")

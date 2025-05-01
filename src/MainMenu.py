@@ -286,7 +286,7 @@ class WarmupThread(QtCore.QThread):
                         18442521884979373093, 18442521884979373138, 18442521884979373348,
                         18442521884979373378], dtype=np.uint64)
 
-        gen_boards(arr, 9, 0, bm, is_L3_pattern, is_L3_success, re_self, np.array([0,0.2,0.4,0.7,1]),
+        gen_boards(arr, 9, 0, bm, is_L3_pattern, is_L3_success, re_self,
                    np.empty(256, dtype='uint64'), np.empty(256, dtype='uint64'))
 
         arr1, arr2 = gen_boards_simple(arr, 9, 0, bm, is_L3_pattern, is_L3_success, re_self, False, False)

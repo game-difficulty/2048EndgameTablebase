@@ -334,15 +334,3 @@ def merge_inplace(arr: NDArray, segment_ends: NDArray, segment_starts: NDArray) 
         counts += size
 
     return arr[:counts]
-
-
-def update_seg(seg: NDArray[float], percents: NDArray[float], learning_rate: float = 0.5) -> NDArray[float]:
-    seg_length = seg[1:] - seg[:-1]
-    if 0 not in percents:
-        normalised = (seg_length / percents)
-    else:
-        normalised = (seg_length / (percents + 0.5 / len(percents)))
-    seg_length_new = normalised / normalised.sum()
-    seg[1:] = np.cumsum(seg_length_new * learning_rate + seg_length * (1 - learning_rate))
-    seg[0], seg[-1] = 0, 1  # 避免浮点数精度导致的bug
-    return seg

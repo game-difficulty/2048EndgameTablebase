@@ -141,21 +141,22 @@ class TrainWindow(QtWidgets.QMainWindow):
     def setupUi(self):
         self.setObjectName("self")
         self.setWindowIcon(QIcon(r'pic\2048.ico'))
-        self.resize(900, 1080)
+        self.resize(1280, 720)
         self.centralwidget = QtWidgets.QWidget(self)
         self.centralwidget.setObjectName("centralwidget")
         self.gridLayout = QtWidgets.QGridLayout(self.centralwidget)
-        self.gridLayout.setContentsMargins(0, 0, 0, 0)
-        self.gridLayout.setSpacing(0)
+        self.gridLayout.setContentsMargins(6, 6, 6, 6)
+        self.gridLayout.setVerticalSpacing(8)
+        self.gridLayout.setHorizontalSpacing(8)
         self.gridLayout.setObjectName("gridLayout")
 
         self.gameframe = TrainFrame(self.centralwidget)
         self.gameframe.setFocusPolicy(Qt.StrongFocus)
-        self.gridLayout.addWidget(self.gameframe, 2, 0, 1, 1)
+        self.gridLayout.addWidget(self.gameframe, 1, 0, 1, 2)
         self.gameframe.update_results.connect(self.manual_mode_update_results)
 
         self.operate = QtWidgets.QFrame(self.centralwidget)
-        self.operate.setMaximumSize(QtCore.QSize(16777215, 420))
+        self.operate.setMaximumSize(QtCore.QSize(560, 720))
         self.operate.setStyleSheet("QFrame{\n"
                                    "    border-color: rgb(167, 167, 167);\n"
                                    "    background-color: rgb(236, 236, 236);\n"
@@ -163,16 +164,17 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.operate.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.operate.setFrameShadow(QtWidgets.QFrame.Raised)
         self.operate.setObjectName("operate")
-        self.gridLayout_upper = QtWidgets.QGridLayout(self.operate)
-        self.gridLayout_upper.setContentsMargins(9, 9, 9, 9)
-        self.gridLayout_upper.setObjectName("gridLayout_upper")
-        self.left_Layout = QtWidgets.QVBoxLayout()
-        self.left_Layout.setSpacing(12)
-        self.left_Layout.setObjectName("left_Layout")
+        self.gridLayout_operate = QtWidgets.QGridLayout(self.operate)
+        self.gridLayout_operate.setContentsMargins(6, 6, 6, 6)
+        self.gridLayout_operate.setVerticalSpacing(8)
+        self.gridLayout_operate.setHorizontalSpacing(8)
+        self.gridLayout_operate.setObjectName("gridLayout_operate")
+
         self.pattern_text = QtWidgets.QLabel(self.operate)
         self.pattern_text.setStyleSheet("font: 2400 32pt \"Cambria\";")
         self.pattern_text.setObjectName("pattern_text")
-        self.left_Layout.addWidget(self.pattern_text)
+        self.pattern_text.setMaximumSize(QtCore.QSize(640, 80))
+        self.gridLayout_operate.addWidget(self.pattern_text, 0, 0, 1, 1)
         self.setboard_Layout = QtWidgets.QHBoxLayout()
         self.setboard_Layout.setObjectName("setboard_Layout")
         self.board_state = QtWidgets.QLineEdit(self.operate)
@@ -185,10 +187,19 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.set_board_bt.setObjectName("set_board_bt")
         self.set_board_bt.clicked.connect(self.handle_set_board)  # type: ignore
         self.setboard_Layout.addWidget(self.set_board_bt)
-        self.left_Layout.addLayout(self.setboard_Layout)
+        self.dis32k_checkBox = QtWidgets.QCheckBox(self.operate)
+        self.dis32k_checkBox.setStyleSheet("font: 360 10pt \"Cambria\";")
+        self.dis32k_checkBox.setObjectName("dis32k_checkBox")
+        self.setboard_Layout.addWidget(self.dis32k_checkBox)
+        if SingletonConfig().config.get('dis_32k', True):
+            self.dis32k_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
+        else:
+            self.dis32k_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        self.dis32k_checkBox.stateChanged.connect(self.dis32k_state_change)  # type: ignore
+        self.gridLayout.addLayout(self.setboard_Layout, 0, 0, 1, 2)
 
         self.tiles_frame = QtWidgets.QFrame(self.operate)
-        self.tiles_frame.setMaximumSize(QtCore.QSize(480, 120))
+        self.tiles_frame.setFixedSize(QtCore.QSize(544, 136))
         self.tiles_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.tiles_frame.setFrameShadow(QtWidgets.QFrame.Raised)
         self.tiles_frame.setObjectName("tiles_frame")
@@ -196,7 +207,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gridLayout_tiles.setContentsMargins(1, 1, 1, 1)
         self.gridLayout_tiles.setHorizontalSpacing(2)
         self.gridLayout_tiles.setVerticalSpacing(2)
-        self.gridLayout_tiles.setObjectName("gridLayout_2")
+        self.gridLayout_tiles.setObjectName("gridLayout_tiles")
 
         self.tile_buttons = []
         button_numbers = ['0', '2', '4', '8', '16', '32', '64', '128', '256', '512', '1k', '2k', '4k', '8k', '16k',
@@ -207,9 +218,10 @@ class TrainWindow(QtWidgets.QMainWindow):
             button.setText(f"{num}")
             button.setCheckable(True)
             button.clicked.connect(self.tiles_bt_on_click)  # type: ignore
+            button.setFixedSize(QtCore.QSize(66, 66))
             self.gridLayout_tiles.addWidget(button, index // 8, index % 8, 1, 1)
             self.tile_buttons.append(button)
-        self.left_Layout.addWidget(self.tiles_frame)
+        self.gridLayout_operate.addWidget(self.tiles_frame, 8, 0, 1, 1)
 
         self.gridLayout_bts = QtWidgets.QGridLayout()
         self.gridLayout_bts.setContentsMargins(0, 0, 0, 0)
@@ -254,7 +266,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.L90.setObjectName("L90")
         self.L90.clicked.connect(lambda: self.handle_rotate('L90'))  # type: ignore
         self.gridLayout_bts.addWidget(self.L90, 1, 3, 1, 1)
-        self.left_Layout.addLayout(self.gridLayout_bts)
+        self.gridLayout_operate.addLayout(self.gridLayout_bts, 5, 0, 1, 1)
 
         self.gridLayout_record = QtWidgets.QGridLayout()
         self.gridLayout_record.setContentsMargins(0, 0, 0, 0)
@@ -280,13 +292,8 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gridLayout_record.addWidget(self.manual_checkBox, 0, 3, 1, 1)
         self.manual_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.manual_checkBox.stateChanged.connect(self.manual_state_change)  # type: ignore
-        self.left_Layout.addLayout(self.gridLayout_record)
-        self.gridLayout_upper.addLayout(self.left_Layout, 0, 0, 1, 1)
+        self.gridLayout_operate.addLayout(self.gridLayout_record, 6, 0, 1, 1)
 
-        self.right_Layout = QtWidgets.QVBoxLayout()
-        self.right_Layout.setSpacing(24)
-        self.right_Layout.setContentsMargins(0,12,0,8)
-        self.right_Layout.setObjectName("right_Layout")
         self.horizontalLayout = QtWidgets.QHBoxLayout()
         self.horizontalLayout.setObjectName("horizontalLayout")
         self.results_text = QtWidgets.QLabel(self.operate)
@@ -298,7 +305,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.show_results_checkbox.setObjectName("show_results_checkbox")
         self.show_results_checkbox.stateChanged.connect(self.show_results)  # type: ignore
         self.horizontalLayout.addWidget(self.show_results_checkbox)
-        self.right_Layout.addLayout(self.horizontalLayout)
+        self.gridLayout_operate.addLayout(self.horizontalLayout, 1, 0, 1, 1)
         self.results_label = QtWidgets.QLabel(self.operate)
         self.results_label.setMinimumSize(QtCore.QSize(0, 180))
         self.results_label.setMaximumSize(QtCore.QSize(16777215, 220))
@@ -306,13 +313,14 @@ class TrainWindow(QtWidgets.QMainWindow):
                                          "border-color: rgb(0, 0, 0); font: 75 18pt \"Consolas\";")
         self.results_label.setText("")
         self.results_label.setObjectName("results_label")
-        self.right_Layout.addWidget(self.results_label)
+        self.gridLayout_operate.addWidget(self.results_label, 2, 0, 1, 1)
+
+        self.setpath_Layout = QtWidgets.QHBoxLayout()
+        self.setpath_Layout.setObjectName("setpath_Layout")
         self.filepath_text = QtWidgets.QLabel(self.operate)
         self.filepath_text.setStyleSheet("font: 750 12pt \"Cambria\";")
         self.filepath_text.setObjectName("filepath_text")
-        self.right_Layout.addWidget(self.filepath_text)
-        self.setpath_Layout = QtWidgets.QHBoxLayout()
-        self.setpath_Layout.setObjectName("setpath_Layout")
+        self.setpath_Layout.addWidget(self.filepath_text)
         self.filepath = QtWidgets.QLineEdit(self.operate)
         self.filepath.setStyleSheet("background-color: rgb(255, 255, 255);")
         self.filepath.setObjectName("filepath")
@@ -322,18 +330,8 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.set_filepath_bt.setObjectName("set_filepath_bt")
         self.set_filepath_bt.clicked.connect(self.filepath_changed)  # type: ignore
         self.setpath_Layout.addWidget(self.set_filepath_bt)
-        self.right_Layout.addLayout(self.setpath_Layout)
-        self.dis32k_checkBox = QtWidgets.QCheckBox(self.operate)
-        self.dis32k_checkBox.setStyleSheet("font: 360 10pt \"Cambria\";")
-        self.dis32k_checkBox.setObjectName("dis32k_checkBox")
-        self.right_Layout.addWidget(self.dis32k_checkBox)
-        if SingletonConfig().config.get('dis_32k', True):
-            self.dis32k_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
-        else:
-            self.dis32k_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
-        self.dis32k_checkBox.stateChanged.connect(self.dis32k_state_change)  # type: ignore
-        self.gridLayout_upper.addLayout(self.right_Layout, 0, 1, 1, 1)
-        self.gridLayout.addWidget(self.operate, 0, 0, 1, 1)
+        self.gridLayout_operate.addLayout(self.setpath_Layout, 3, 0, 1, 1)
+        self.gridLayout.addWidget(self.operate, 0, 2, 2, 1)
         self.setCentralWidget(self.centralwidget)
 
         self.menubar = QtWidgets.QMenuBar(self)
@@ -575,6 +573,13 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.process_input('Left')
         elif event.key() in (QtCore.Qt.Key.Key_Right, QtCore.Qt.Key.Key_D):
             self.process_input('Right')
+        elif event.key() in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
+            # 焦点在 board_state
+            if self.focusWidget() == self.board_state:
+                self.handle_set_board()
+                return
+            # 执行默认的 one_step
+            self.one_step()
         else:
             super().keyPressEvent(event)  # 其他键交给父类处理
 

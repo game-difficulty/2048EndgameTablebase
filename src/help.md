@@ -1,8 +1,8 @@
 # User Manual
 
 **Author**: game_difficulty  
-**Version**: 5.3  
-**Date**: 2025.1.20  
+**Version**: 6.4  
+**Date**: 2025.4.30  
 
 ---
 
@@ -175,6 +175,37 @@ Table calculation is a prerequisite for using important features such as the AI 
 **Note**:
 - All of the above options **do not** affect the accuracy of the success rates.
 - The **"Remove Boards with a Success Rate Below"** and **"Opt Only"** options will delete some boards (usually unreasonable ones) and display a success rate of 0, but **will not** affect other data.
+
+### Advanced Algorithm Option  
+When **Advanced Algo** is checked, the program will adopt an advanced algorithm. Tiles ≥64 and <32k are defined as *large numbers*, and those ≤32 as *small numbers*. 
+The algorithm will prune positions that do not meet the following conditions:   
+
+1. **Large number combinations**:  
+   a. Except for the smallest large number, all other large numbers may exist at most once.  
+   b. If the smallest large number is >64, it may exist at most twice.  
+   c. If the smallest large number is 64, it may exist at most three times.  
+   Examples: Valid combinations (4k 2k 512 128 128), (1k 512 256), (512 64 64 64); Invalid combinations (4k 2k 512 128 128 128), (4k 2k 512 128 128 64).  
+
+2. **Sum of small numbers**:  
+  Controlled by the hyperparameter **SmallTileSumLimit (stsl)**:  
+   a. Sum of small numbers ≤ stsl + 64  
+   b. If the board contains two identical large numbers: sum of small numbers ≤ stsl  
+   c. If the board contains three 64s: sum of small numbers ≤ stsl - 64  
+
+3. **Single-step merge limit**:  
+  Each operation produce at most one new large number.  
+
+**Advantages compared to the standard algorithm**:  
+- **Faster computation**: Larger formations (e.g., free10w, 4442ff and above) achieve over 10× speedup.  
+- **Memory optimization**: Peak memory usage reduced by 1-2 orders of magnitude. Up to 100× speedup under memory constraints.  
+- **Storage efficiency**: Smaller intermediate files (space savings increase with table size); book files require no compression.  
+
+**Usage limitations**:  
+- Designed specifically for extremely large formations, not suitable for small formations like L3 or T (may perform worse).  
+- Pruning reduces success rate accuracy. Accuracy loss increases with deviations from optimal paths, higher endgame difficulty, and stricter formations constraints. Typical loss is within 0.01%, with no impact on optimal paths.  
+- **opt only** and **compress** options are unsupported.  
+
+Using this algorithm, free12w-2048 was successfully computed on a 9950x 128GB RAM computer in ~15 days.   
 
 ## 6.2 Practise Interface Button Functions
 
