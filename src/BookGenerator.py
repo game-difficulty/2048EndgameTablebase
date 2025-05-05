@@ -62,7 +62,7 @@ def gen_boards_big(arr0: NDArray[np.uint64],
 
         length_factors = length_factors_list[seg_index]
         length_factor = predict_next_length_factor_quadratic(length_factors)
-        length_factor *= 1.25
+        length_factor *= 1.25 if len(arr0t) > 1e8 else 1.5
         length_factor *= length_factor_multiplier  # type: ignore
 
         arr1t, arr2t, hashmap1, hashmap2, counts1, counts2 = \
@@ -234,7 +234,7 @@ def generate_process(
             else:
                 # 先预测预分配数组的长度乘数
                 length_factor = predict_next_length_factor_quadratic(length_factors)
-                length_factor *= 1.25
+                length_factor *= 1.25 if len(d0) > 1e8 else 1.5
                 length_factor *= length_factor_multiplier
                 if len(hashmap1) == 0:
                     hashmap1, hashmap2 = update_hashmap_length(hashmap1, d0), update_hashmap_length(hashmap2, d0)  # 初始化
