@@ -329,8 +329,8 @@ def validate_length_and_balance(d0, d2, d1t, counts1, counts2, length_factor, is
         logger.critical(
             f"length multiplier {length_factor:2f}, "
             f"need {length_factor_actual:2f}, \n"
-            f"counts1 {(counts1 / 1e6):2f}, \n"
-            f"counts2 {(counts2 / 1e6):2f}")
+            f"counts1 {np.round(counts1 / 1e6, 2)}, \n"
+            f"counts2 {np.round(counts2 / 1e6, 2)}")
         raise IndexError("The length multiplier is not big enough. "
                          "This does not indicate an error in the program. "
                          "Please restart the program and continue running.")
