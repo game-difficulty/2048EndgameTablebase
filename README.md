@@ -2,8 +2,8 @@
 Experience the pinnacle of AI and endgame generation with our 2048 tablebase generator, the fastest and most space-efficient solution available. 
 Outperforming its contemporaries, this AI boasts the highest success rates for 32k and 65k challenges, approaching theoretical limits.
 
-![Practise](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/723510f5-a434-4640-bc82-9eadde41a0ed)
-![Minigames](https://github.com/user-attachments/assets/c08e4d0b-2767-4b99-8a66-dc8160bef9a6)
+success rate of getting a 2048 in 12 space (32k endgame)
+![Practise](https://github.com/user-attachments/assets/9bd553b8-6156-45b9-ad63-1e7157b641de)
 
 
 
@@ -12,16 +12,16 @@ Outperforming its contemporaries, this AI boasts the highest success rates for 3
 
 -  **Effective Training Interface**: Includes a user-friendly GUI that aids players in training and enhancing their skills.
 
--  **Advanced Data Compression**: Supports data storage in a compressed format, enabling efficient searching without compromising performance.
+-  **Advanced Algorithms**: Advanced algorithms and compressed file formats are built-in to support the computation of extremely large tables.
 
--  **Resource Requirements**: Ensure 32-64GB of virtual memory is available for processing large tables such as 4431_2048, free9_256.
+-  **Resource Requirements**: Ensure 32-128GB of virtual memory is available for processing large tables such as free11w_1024.
 
 -  **Patience Required**: All functions are highly optimized, yet require patience during initial use.
 
 
 ## User Guide
 1. Get started
-   - Open **main.exe** or run **main.py** (Make sure to use `numpy 2.0`) 
+   - Open **main.exe** or run **main.py**
    - Wait for the program to start
    - Take note of the **help** documentation
 2. Calculate your first table:
@@ -93,8 +93,4 @@ Outperforming its contemporaries, this AI boasts the highest success rates for 3
 -  **4432(4441)**: Preventing simple mistakes that could lead to unnecessary terminations.
 -  **free**: Provide optimal strategies for 32k and 65k endgames. However, their actual boost to LL is minimal.
 
-
-## Project Structure
-
-![Project Structure](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/b273c818-8985-4844-adef-350d00f6525c)
 
