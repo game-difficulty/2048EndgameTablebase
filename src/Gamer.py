@@ -672,7 +672,7 @@ Only effective for players''')
                 self.ai.setText("AI: ON")
                 self.gameframe.died_when_ai_state = False
             else:
-                self.ai_timer.singleShot(20, self.handleOneStep)
+                self.ai_timer.singleShot(80, self.handleOneStep)
         # print(self.ai_dispatcher.last_operator)
         self.isProcessing, self.gameframe.ai_processing = False, False
 
@@ -690,7 +690,7 @@ Only effective for players''')
         if not self.ai_state:
             self.ai.setText("STOP")
             self.ai_state = True
-            self.ai_timer.singleShot(20, self.handleOneStep)
+            self.ai_timer.singleShot(80, self.handleOneStep)
             if not SingletonConfig().config['filepath_map'].get('4431_2048_0', []) or \
                     not SingletonConfig().config['filepath_map'].get('LL_2048_0', []):
                 self.statusbar.showMessage("Run LL_4096_0 for best performance.", 3000)
