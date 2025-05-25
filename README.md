@@ -56,41 +56,39 @@ success rate of getting a 2048 in 12 space (32k endgame)
    - Enable the AI by clicking the **AI: ON** button and watch the AI play
 
 ##  AI Performance
--  This AI reaches the 65536 tile 5.8% (±1.3%) of the time and the 32768 tile 78.5% (±2.5%) of the time without undos.
+-  This AI reaches the 65536 tile 8.4% (±1.6%) of the time and the 32768 tile 86.1% (±2.0%) of the time without undos.
   -  The following table gives the AI performance statistics and success rates by stage
    
-     | depth    | games | score/game | moves/s | seconds/game |
-     |----------|-------|------------|---------|--------------|
-     | adaptive | 1200  | 720087     | 26      | 978          |
+     | search depth    | games | avg score  | median score | moves/s |
+     |-----------------|-------|------------|--------------|---------|
+     | 1~9 adaptive    | 1200  | 772353     | 819808       | 11      |
 
 
      | milestone     | success rate | comparable score |
      |---------------|--------------|------------------|
      | 8k            | 100%         | 97000            |
-     | 16k           | 99.3%        | 210000           |
-     | 32k           | 78.5%        | 453000           |
-     | 32k+16k       | 65.6%        | 663000           |
-     | 32k+16k+8k    | 53.4%        | 760000           |
-     | 32k+16k+8k+4k | 43.0%        | 804000           |
-     | final 1k      | 28.5%        | 833000           |
-     | 65k           | 5.8%         | 971000           |
+     | 16k           | 99.9%        | 210000           |
+     | 32k           | 86.1%        | 453000           |
+     | 32k+16k       | 72.8%        | 663000           |
+     | 32k+16k+8k    | 61.8%        | 760000           |
+     | 32k+16k+8k+4k | 53.3%        | 804000           |
+     | final 2k      | 46.3%        | 824000           |
+     | 65k           | 8.4%         | 971000           |
 
 
-![survival rate](https://github.com/game-difficulty/2048EndgameTablebase/assets/169589278/4b1a4bd8-3f3c-4fcb-9740-afde4f19889f)
+![survival rate](https://github.com/user-attachments/assets/8d708f06-4994-4878-8e27-2aa831db1a2b)
 
--  The tables used by the AI are LLs (mainly LL-4096), 4431-2048, 4441-512, 4432-512, free9w-256, free10w-1024.
--  If you want to run the AI, it is recommended to just calculate LL-4096 and 4432-512. This will take 1-2 days without compression.
+
+-  The tables used by the AI are
+   - **free12w-2048**
+   - **free11w-2048**
+   - **4442f-2048**
+   - **free11w-512**
+
 -  The following table shows how often each table is used.
-   
-     | Search | LL    | 4431 | 4441 | 4432  | free9 | free10 |
-     |--------|-------|------|------|-------|-------|--------|
-     | 12.5%  | 40.4% | 1.6% | 3.1% | 40.9% | 1.1%  | 0.4%   |
+     | Search | free12w-2k     | free11w-2k | 4442f-2k | free11w-512  |
+     |--------|----------------|------------|----------|--------------|
+     | 26.49% | 13.38%         | 1.41%      | 51.50%   | 7.22%        |
 
-### Role of AI components
--  **Search**: Utilizes an Expectimax search with a specially designed evaluation function to handle simple situations and bridge different formations effectively.
--  **LL**: The heart of the AI, enhancing T formations which are superior to DPDF and snake in 32k and 65k endgames.
--  **4431**: Operates during the transitional stages where the four large tiles are not arranged in LL formations.
--  **4432(4441)**: Preventing simple mistakes that could lead to unnecessary terminations.
--  **free**: Provide optimal strategies for 32k and 65k endgames. However, their actual boost to LL is minimal.
 
 
