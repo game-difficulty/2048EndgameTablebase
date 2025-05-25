@@ -676,6 +676,8 @@ Only effective for players''')
                 self.ai_state = False
                 self.ai.setText("AI: ON")
                 self.gameframe.died_when_ai_state = False
+            elif best_move != 'AI':
+                self.ai_timer.singleShot(20, self.handleOneStep)
         # print(self.ai_dispatcher.last_operator)
         self.isProcessing, self.gameframe.ai_processing = False, False
 
