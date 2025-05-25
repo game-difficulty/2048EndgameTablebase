@@ -246,6 +246,8 @@ class BaseBoardFrame(QtWidgets.QFrame):
 
 # noinspection PyAttributeOutsideInit
 class GameFrame(BaseBoardFrame):
+    AIMoveDone = QtCore.pyqtSignal(bool)  # 传递下一步操作
+
     def __init__(self, centralwidget=None):
         super(GameFrame, self).__init__(centralwidget)
         self.board_encoded, self.score, _ = SingletonConfig().config['game_state']
@@ -284,9 +286,11 @@ class GameFrame(BaseBoardFrame):
     def do_ai_move(self, direction):
         if not direction:
             self.died_when_ai_state = True
+            self.AIMoveDone.emit(False)
         else:
             self.died_when_ai_state = False
             self.do_move(direction)
+            self.AIMoveDone.emit(True)
         self.ai_processing = False
 
     def gen_new_num(self, do_anim=True):
@@ -347,7 +351,7 @@ class AIThread(QtCore.QThread):
         if self.is_mess():
             big_nums2 = (self.ai_player.board > 256).sum()
             depth = 5
-            if self.ai_player.check_corner(self.ai_player.bm.encode_board(self.ai_player.board)):
+            if self.ai_player.check_corner(np.uint64(self.ai_player.bm.encode_board(self.ai_player.board))):
                 depth = 8
             self.ai_player.start_search(depth)
             while self.ai_player.node < 200000 * big_nums2 ** 2 and depth < 9:
@@ -386,6 +390,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.statusbar.showMessage("All features may be slow when used for the first time. Please be patient.", 8000)
         self.update_score()
         self.gameframe.setFocus()
+        self.gameframe.AIMoveDone.connect(self.ai_move_done)
 
     def setupUi(self):
         self.setObjectName("self")
@@ -671,10 +676,12 @@ Only effective for players''')
                 self.ai_state = False
                 self.ai.setText("AI: ON")
                 self.gameframe.died_when_ai_state = False
-            else:
-                self.ai_timer.singleShot(80, self.handleOneStep)
         # print(self.ai_dispatcher.last_operator)
         self.isProcessing, self.gameframe.ai_processing = False, False
+
+    def ai_move_done(self, is_done):
+        if is_done and self.ai_state:
+            self.ai_timer.singleShot(20, self.handleOneStep)
 
     def handleUndo(self):
         self.gameframe.undo()
@@ -690,7 +697,7 @@ Only effective for players''')
         if not self.ai_state:
             self.ai.setText("STOP")
             self.ai_state = True
-            self.ai_timer.singleShot(80, self.handleOneStep)
+            self.ai_timer.singleShot(20, self.handleOneStep)
             if not SingletonConfig().config['filepath_map'].get('4431_2048_0', []) or \
                     not SingletonConfig().config['filepath_map'].get('LL_2048_0', []):
                 self.statusbar.showMessage("Run LL_4096_0 for best performance.", 3000)
@@ -703,6 +710,7 @@ Only effective for players''')
         self.ai_state = False
         SingletonConfig().config['game_state'] = [self.gameframe.board_encoded, self.gameframe.score,
                                                   int(self.best_points.text())]
+        SingletonConfig.save_config(SingletonConfig().config)
         event.accept()  # 确认关闭事件
 
 
