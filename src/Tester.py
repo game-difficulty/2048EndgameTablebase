@@ -300,8 +300,8 @@ class TestWindow(QtWidgets.QMainWindow):
         self.gameframe.setFocus()
 
     def do_random_rotate(self, board_encoded):
-        return np.uint64(self.book_reader.bm.encode_board(random.choice(self.book_reader._book_reader.gen_all_mirror(
-            self.book_reader.bm.decode_board(board_encoded), self.pattern[0]))[-1]))
+        operation_func = random.choice(self.book_reader._book_reader.gen_all_mirror(self.pattern[0]))[-1]
+        return np.uint64(self.book_reader.bm.encode_board(operation_func(self.book_reader.bm.decode_board(board_encoded))))
 
     def save_logs_to_file(self):
         if self.full_pattern is None or len(self.text_display.lines) < 1:

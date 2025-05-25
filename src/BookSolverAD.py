@@ -68,7 +68,6 @@ def recalculate_process_ad(
         spawn_rate4: float = 0.1
 ) -> None:
     started = False
-    deletion_threshold = np.uint32(SingletonConfig().config.get('deletion_threshold', 0.0) * 4e9)
     ini_board_sum = np.sum(mbm.decode_board(arr_init[0]))
     indind_dict1, indind_dict2 = None, None
     match_dict = None
@@ -84,6 +83,7 @@ def recalculate_process_ad(
             match_dict = Dict.empty(KeyType2, ValueType4)
 
         original_board_sum = 2 * i + ini_board_sum
+        deletion_threshold = np.uint32(SingletonConfig().config.get('deletion_threshold', 0.0) * 4e9)
 
         if SingletonConfig().config.get('compress_temp_files', False):
             decompress_with_7z(pathname + str(i) + '.7z')

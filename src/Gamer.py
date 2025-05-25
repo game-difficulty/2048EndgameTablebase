@@ -5,7 +5,7 @@ import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QPropertyAnimation, QRect, QEasingCurve, QTimer, QSize, QPoint
 
-from AIPlayer import AutoplayS, Dispatcher, EvilGen
+from AIPlayer import AIPlayer, Dispatcher, EvilGen
 from BoardMover import SingletonBoardMover
 from Config import SingletonConfig
 from Calculator import find_merge_positions
@@ -278,8 +278,8 @@ class GameFrame(BaseBoardFrame):
     def ai_step(self):
         self.ai_processing = True
         self.ai_thread.ai_player.spawn_rate4 = SingletonConfig().config['4_spawn_rate']
-        self.ai_thread.start()
         self.ai_thread.ai_player.board = self.board
+        self.ai_thread.start()
 
     def do_ai_move(self, direction):
         if not direction:
@@ -310,7 +310,7 @@ class AIThread(QtCore.QThread):
 
     def __init__(self, board):
         super(AIThread, self).__init__()
-        self.ai_player = AutoplayS(board)
+        self.ai_player = AIPlayer(board)
 
     def is_mess(self):
         """检查是否乱阵"""
@@ -324,40 +324,45 @@ class AIThread(QtCore.QThread):
             if len(np.unique(board_flatten[top4_pos])) < 4:
                 return False
             top4_pos = tuple(sorted(top4_pos))
-            return top4_pos not in (
-                (10, 11, 14, 15), (11, 13, 14, 15), (3, 7, 11, 15), (8, 12, 13, 14), (4, 8, 12, 13), (8, 9, 12, 13),
-                (0, 1, 2, 4), (1, 2, 3, 7), (0, 1, 4, 5), (0, 1, 4, 8), (2, 3, 7, 11), (2, 3, 6, 7), (0, 1, 2, 3),
-                (0, 4, 8, 12), (3, 7, 11, 15), (12, 13, 14, 15))
+            return top4_pos not in ((0, 1, 2, 3), (0, 4, 8, 12), (12, 13, 14, 15), (3, 7, 11, 15),
+                                    (0, 1, 2, 4), (4, 8, 12, 13), (11, 13, 14, 15), (2, 3, 7, 11),
+                                    (0, 1, 4, 8), (8, 12, 13, 14), (7, 11, 14, 15), (1, 2, 3, 7),
+                                    (0, 1, 4, 5), (8, 9, 12, 13), (10, 11, 14, 15), (2, 3, 6, 7),
+                                    (2, 3, 14, 15), (0, 1, 12, 13), (8, 11, 12, 15), (0, 3, 4, 7))
         else:
             top3_pos = np.argpartition(board_flatten, -3)[-3:]
             if len(np.unique(board_flatten[top3_pos])) < 3:
                 return False
             top3_pos = tuple(sorted(top3_pos))
             return top3_pos not in (
-                (11, 14, 15), (13, 14, 15), (7, 11, 15), (12, 13, 14), (4, 8, 12), (8, 12, 13), (0, 1, 2), (1, 2, 3),
-                (0, 1, 4), (0, 4, 8), (3, 7, 11), (2, 3, 7))
+                (0, 1, 2), (1, 2, 3), (3, 7, 11), (7, 11, 15), (13, 14, 15), (12, 13, 14), (4, 8, 12), (0, 4, 8),
+                (0, 1, 3), (0, 2, 3), (3, 7, 15), (3, 11, 15), (12, 14, 15), (12, 13, 15), (0, 8, 12), (0, 4, 12),
+                (0, 1, 12), (0, 3, 4), (0, 3, 7), (2, 3, 15), (3, 14, 15), (11, 12, 15), (8, 12 ,15), (0, 12, 13),
+                (0, 1, 4), (2, 3, 7), (11, 14, 15), (8, 12, 13))
 
     def run(self):
         # 根据局面设定搜索深度
         empty_slots = np.sum(self.ai_player.board == 0)
         big_nums = (self.ai_player.board > 128).sum()
         if self.is_mess():
-            big_nums2 = (self.ai_player.board > 512).sum()
-            depth = 6
+            big_nums2 = (self.ai_player.board > 256).sum()
+            depth = 5
+            if self.ai_player.check_corner(self.ai_player.bm.encode_board(self.ai_player.board)):
+                depth = 8
             self.ai_player.start_search(depth)
-            while self.ai_player.node < 320000 * big_nums2 ** 2 and depth < 9:
+            while self.ai_player.node < 200000 * big_nums2 ** 2 and depth < 9:
                 depth += 1
                 self.ai_player.start_search(depth)
         elif empty_slots > 9 or big_nums < 1:
             self.ai_player.start_search(1)
         elif empty_slots > 4 and big_nums < 2:
             self.ai_player.start_search(2)
-        elif (empty_slots > 2 and big_nums < 3) or (big_nums < 2):
-            self.ai_player.start_search(3)
+        elif (empty_slots > 3 > big_nums) or (big_nums < 2):
+            self.ai_player.start_search(4)
         else:
             depth = 4 if big_nums < 4 else 5
             self.ai_player.start_search(depth)
-            while self.ai_player.node < 20000 * depth and depth < 8:
+            while self.ai_player.node < 24000 * depth * big_nums ** 1.25 and depth < 9:
                 depth += 1
                 self.ai_player.start_search(depth)
             # print(depth, self.ai_player.node)
@@ -376,7 +381,6 @@ class GameWindow(QtWidgets.QMainWindow):
         self.score_anims = []
 
         self.ai_timer = QTimer(self)
-        self.ai_timer.timeout.connect(self.handleOneStep)  # type: ignore
         self.ai_dispatcher = Dispatcher(SingletonBoardMover(2).decode_board(np.uint64(0)), np.uint64(0))
 
         self.statusbar.showMessage("All features may be slow when used for the first time. Please be patient.", 8000)
@@ -666,9 +670,11 @@ Only effective for players''')
             if self.gameframe.died_when_ai_state:
                 self.ai_state = False
                 self.ai.setText("AI: ON")
-                self.ai_timer.stop()
+                self.gameframe.died_when_ai_state = False
+            else:
+                self.ai_timer.singleShot(20, self.handleOneStep)
         # print(self.ai_dispatcher.last_operator)
-        self.isProcessing = False
+        self.isProcessing, self.gameframe.ai_processing = False, False
 
     def handleUndo(self):
         self.gameframe.undo()
@@ -684,20 +690,17 @@ Only effective for players''')
         if not self.ai_state:
             self.ai.setText("STOP")
             self.ai_state = True
-            self.ai_timer.start(20)
+            self.ai_timer.singleShot(20, self.handleOneStep)
             if not SingletonConfig().config['filepath_map'].get('4431_2048_0', []) or \
                     not SingletonConfig().config['filepath_map'].get('LL_2048_0', []):
                 self.statusbar.showMessage("Run LL_4096_0 for best performance.", 3000)
         else:
             self.ai.setText("AI: ON")
             self.ai_state = False
-            self.ai_timer.stop()
 
     def closeEvent(self, event):
         self.ai.setText("AI: ON")
         self.ai_state = False
-        if self.ai_timer.isActive():
-            self.ai_timer.stop()
         SingletonConfig().config['game_state'] = [self.gameframe.board_encoded, self.gameframe.score,
                                                   int(self.best_points.text())]
         event.accept()  # 确认关闭事件

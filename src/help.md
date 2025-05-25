@@ -238,7 +238,84 @@ You can use the **Analyze Verse Log** button to analyze game replays from 2048ve
 
 ---
 
-# 7. Frequently Asked Questions
+# 7. About AI
+
+## 7.1 Prerequisites
+
+To fully utilize the AI's performance, the following tables need to be computed:
+   - **free12w-2048**
+   - **free11w-2048**
+   - **4442f-2048**
+   - **free11w-512**
+
+Ensure these tables can be properly loaded in the **Practise** before running the AI. As these tables require significant disk space, to minimize storage usage, it is recommended to:
+   - Set a higher **success rate threshold (Remove boards with a success rate below)** for the first three tables. The program allows modifying this parameter during computation to apply different thresholds for different endgame stages.
+   - Delete files numbered after half of the target value. For example, delete files from `free11w_2048_1024b` to `free11w_2048_1049b`.
+   - Enable advanced algorithm.
+
+## 7.2 AI Testing
+
+Basic programming knowledge is required. Run AItest.py separately, where the `run_test` function writes single-test gameplay records to a specified path.
+Record reading method:
+```
+import numpy as np
+
+rec=np.fromfile(r"C:\Users\Administrator\Desktop\record\0", dtype='uint64,uint32,uint8')
+
+def decode(encoded_board: np.uint64) -> np.ndarray:
+    encoded_board = np.uint64(encoded_board)
+    board = np.zeros((4, 4), dtype=np.int32)
+    for i in range(3, -1, -1):
+        for j in range(3, -1, -1):
+            encoded_num = (encoded_board >> np.uint64(4 * ((3 - i) * 4 + (3 - j)))) & np.uint64(0xF)
+            if encoded_num > 0:
+                board[i, j] = 2 ** encoded_num
+            else:
+                board[i, j] = 0
+    return board
+
+for board,score,operator in rec[:]:
+    print()
+    print(hex(board))
+    print(decode(board))
+    print({0:'AI',1:'free12',2:'free11_2k',3:'4442f',4:'free11_512'}[operator],'  ',score)
+```
+
+## 7.3 AI Performance
+-  This AI reaches the 65536 tile 8.4% (±1.6%) of the time and the 32768 tile 86.1% (±2.0%) of the time without undos.
+
+   
+| search depth    | games | avg score  | median score | moves/s |
+|-----------------|-------|------------|--------------|---------|
+| 1~9 adaptive    | 1200  | 772353     | 819808       | 11      |
+
+-  The following table gives the AI performance statistics and success rates by stage
+
+| milestone     | success rate | comparable score |
+|---------------|--------------|------------------|
+| 8k            | 100%         | 97000            |
+| 16k           | 99.9%        | 210000           |
+| 32k           | 86.1%        | 453000           |
+| 32k+16k       | 72.8%        | 663000           |
+| 32k+16k+8k    | 61.8%        | 760000           |
+| 32k+16k+8k+4k | 53.3%        | 804000           |
+| final 2k      | 46.3%        | 824000           |
+| 65k           | 8.4%         | 971000           |
+
+
+![survival rate](https://github.com/user-attachments/assets/8d708f06-4994-4878-8e27-2aa831db1a2b)
+
+
+-  The following table shows how often each table is used.
+
+ | Search | free12w-2k     | free11w-2k | 4442f-2k | free11w-512  |
+ |--------|----------------|------------|----------|--------------|
+ | 26.49% | 13.38%         | 1.41%      | 51.50%   | 7.22%        |
+
+
+---
+
+# 8. Frequently Asked Questions
 
 ### Q1: Why does the software take a long time to start?
 **A1**: It requires JIT (Just-In-Time) compilation. JIT compilation improves program performance, but it results in longer initialization times when using various features for the first time.
@@ -279,9 +356,9 @@ For experienced users, some parameters can be adjusted based on the calculation 
 
 ---
 
-# 8. Support and Feedback
+# 9. Support and Feedback
 
-## 8.1 Getting Support
+## 9.1 Getting Support
 
 If you encounter any issues while using the software, you can get technical support through the following channels:
 
@@ -295,7 +372,7 @@ If you encounter any issues while using the software, you can get technical supp
    - **QQ Group**: 94064339  
    - **Discord Channel**: 2048 Runs
 
-## 8.2 Submit Feedback
+## 9.2 Submit Feedback
 
 **Star the Project on GitHub**  
 
@@ -304,9 +381,9 @@ If you encounter any issues while using the software, you can get technical supp
 
 ---
 
-# 9. Appendix
+# 10. Appendix
 
-## 9.1 Common Formation Info
+## 10.1 Common Formation Info
 
 | Formation | Number of Empty Spaces | Description                                                                            | Final Formation | Large Number Movement Restrictions                                            | Special Notes                                                                                                                                                                                       |
 |-----------|------------------------|----------------------------------------------------------------------------------------|-----------------|-------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -341,7 +418,7 @@ If you encounter any issues while using the software, you can get technical supp
 | free9     | Arbitrary arrangement of large numbers                                 |
 | 3x3       | ```_ _ _ ```<br/>```_ _ 2 ```<br/>```_ _ _```                          |
 
-## 9.2 Table Size Reference
+## 10.2 Table Size Reference
 
 | Formation    | ~Size  | ~Compressed |
 |--------------|--------|-------------|

@@ -58,7 +58,6 @@ def recalculate_process(
         spawn_rate4: float = 0.1
 ) -> None:
     started = False
-    deletion_threshold = np.uint32(SingletonConfig().config.get('deletion_threshold', 0) * 4e9)
     # 回算搜索时可能需要使用索引进行加速
     ind1: NDArray[np.uint32] | None = None
 
@@ -68,6 +67,7 @@ def recalculate_process(
         if not started:
             continue
 
+        deletion_threshold = np.uint32(SingletonConfig().config.get('deletion_threshold', 0.0) * 4e9)
         if SingletonConfig().config.get('compress_temp_files', False):
             decompress_with_7z(pathname + str(i) + '.7z')
         d0 = np.fromfile(pathname + str(i), dtype=np.uint64)

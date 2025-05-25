@@ -3,6 +3,7 @@ import struct
 from typing import Callable, Dict, Tuple, Union, List, Optional
 
 import numpy as np
+from numpy.typing import NDArray
 
 from BoardMover import SingletonBoardMover, BoardMover
 from Variants.vBoardMover import VBoardMover
@@ -19,6 +20,7 @@ SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
 class BookReader:
     bm: BoardMover = SingletonBoardMover(1)
     vbm: VBoardMover = SingletonBoardMover(3)
+    last_operation = ('none', 'none', lambda x: x)
 
     @staticmethod
     def move_on_dic(board: np.typing.NDArray, pattern: str, target: str, pattern_full: str, pos: str = '0'
@@ -42,9 +44,12 @@ class BookReader:
             if not os.path.exists(path):
                 continue
 
-            for rotation, flip, t_board in BookReader.gen_all_mirror(board, pattern):
+            for operation in [BookReader.last_operation] + BookReader.gen_all_mirror(pattern):
+                rotation, flip, operation_func = operation
+                t_board = operation_func(board)
                 encoded = np.uint64(bm.encode_board(t_board))
                 if pattern_check_func(encoded):
+                    BookReader.last_operation = operation
                     results = BookReader.get_best_move(path, f'{pattern_full}_{int(nums)}.book', encoded,
                                                        pattern_check_func, bm, to_find_func)
                     adjusted = {BookReader.adjust_direction(flip, rotation, direction): success_rate
@@ -59,18 +64,18 @@ class BookReader:
         return sorted_results
 
     @staticmethod
-    def gen_all_mirror(board: np.typing.NDArray, pattern: str) -> List[Tuple[str, str, np.typing.NDArray]]:
+    def gen_all_mirror(pattern: str) -> List[Tuple[str, str, Callable[[np.ndarray], np.ndarray]]]:
         if pattern in ('2x4', '3x3', '3x4'):
-            return [('none', 'none', board)]
+            return [('none', 'none', lambda x: x)]
         operations = [
-            ('none', 'none', board),
-            ('rotate_90', 'none', np.rot90(board)),
-            ('rotate_180', 'none', np.rot90(board, k=2)),
-            ('rotate_270', 'none', np.rot90(board, k=3)),
-            ('none', 'horizontal', np.flip(board, axis=1)),
-            ('rotate_90', 'horizontal', np.flip(np.rot90(board), axis=1)),
-            ('rotate_180', 'horizontal', np.flip(np.rot90(board, k=2), axis=1)),
-            ('rotate_270', 'horizontal', np.flip(np.rot90(board, k=3), axis=1)),
+            ('none', 'none', lambda x: x),
+            ('rotate_90', 'none', lambda x: np.rot90(x)),
+            ('rotate_180', 'none', lambda x: np.rot90(x, k=2)),
+            ('rotate_270', 'none', lambda x: np.rot90(x, k=3)),
+            ('none', 'horizontal', lambda x: np.flip(x, axis=1)),
+            ('rotate_90', 'horizontal', lambda x: np.flip(np.rot90(x), axis=1)),
+            ('rotate_180', 'horizontal', lambda x: np.flip(np.rot90(x, k=2), axis=1)),
+            ('rotate_270', 'horizontal', lambda x: np.flip(np.rot90(x, k=3), axis=1)),
         ]
         return operations if pattern != 'LL' else operations[:4]
 

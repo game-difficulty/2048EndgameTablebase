@@ -1,7 +1,9 @@
-import numpy as np
 import multiprocessing
+import os
 
-from AIPlayer import AutoplayS, Dispatcher
+import numpy as np
+
+from AIPlayer import AIPlayer, Dispatcher
 from BoardMover import BoardMoverWithScore
 
 
@@ -15,13 +17,15 @@ class AItest:
 
     def ai_step(self):
         # AI 计算步骤
-        empty_slots = np.sum(self.ai_player.board == 0)
-        big_nums = (self.ai_player.board > 128).sum()
+        empty_slots = self.ai_dispatcher.counts[0]
+        big_nums = np.sum(self.ai_dispatcher.counts[8:])
         if self.is_mess():
-            big_nums2 = (self.ai_player.board > 512).sum()
-            depth = 6
+            big_nums2 = np.sum(self.ai_dispatcher.counts[9:])
+            depth = 5 if np.max(self.ai_dispatcher.counts[8:]) == 1 else 6
+            if self.ai_player.check_corner(self.board_encoded):
+                depth = 8
             self.ai_player.start_search(depth)
-            while self.ai_player.node < 320000 * big_nums2 ** 2 and depth < 9:
+            while self.ai_player.node < 200000 * big_nums2 ** 2 and depth < 9:
                 depth += 1
                 self.ai_player.start_search(depth)
         elif empty_slots > 9 or big_nums < 1:
@@ -29,11 +33,11 @@ class AItest:
         elif empty_slots > 4 and big_nums < 2:
             self.ai_player.start_search(2)
         elif (empty_slots > 3 > big_nums) or (big_nums < 2):
-            self.ai_player.start_search(3)
+            self.ai_player.start_search(4)
         else:
             depth = 4 if big_nums < 4 else 5
             self.ai_player.start_search(depth)
-            while self.ai_player.node < 20000 * depth and depth < 8:
+            while self.ai_player.node < 24000 * depth * big_nums ** 1.25 and depth < 8:
                 depth += 1
                 self.ai_player.start_search(depth)
         return {1:'Left', 2:'Right', 3:'Up', 4:'Down'}.get(self.ai_player.best_operation,'')
@@ -41,7 +45,7 @@ class AItest:
     def new_game(self):
         board_encoded = np.uint64(self.mover.gen_new_num(self.mover.gen_new_num(np.uint64(0))[0])[0])
         board = self.mover.decode_board(board_encoded)
-        ai_player = AutoplayS(board)
+        ai_player = AIPlayer(board)
         score = 0
         history = [(board_encoded, score, 0)]
         return board_encoded, board, ai_player, score, history
@@ -83,28 +87,33 @@ class AItest:
             if np.sum((self.board == 32768)) == 2:
                 positions = np.where(self.board == 32768)
                 first_position = (positions[0][0], positions[1][0])
-                self.board[first_position] = 2
-                self.board_encoded = np.uint64(self.mover.encode_board(self.board))
-                self.score += 65536
-                self.history.append((self.board_encoded, self.score, self.ai_dispatcher.last_operator))
+
+                if positions[0][0] == positions[0][1] and abs(positions[1][0] - positions[1][1]) == 1:
+                    self.board[first_position] = 0
+                    self.board_encoded = np.uint64(self.mover.encode_board(self.board))
+                    self.do_move('Right')
+                    self.score += 65536
+                    self.died = False
+
+                elif positions[1][0] == positions[1][1] and abs(positions[0][0] - positions[0][1]) == 1:
+                    self.board[first_position] = 0
+                    self.board_encoded = np.uint64(self.mover.encode_board(self.board))
+                    self.do_move('Down')
+                    self.score += 65536
+                    self.died = False
 
             if len(self.history) % 931==128:
-                if self.score > 1400000:
-                    print('$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$')
-                elif self.score > 900000:
-                    print('**************************************************')
                 print(self.score)
                 print(self.board)
-                print(self.path)
-                if self.score > 1400000:
-                    print('$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$')
-                elif self.score > 900000:
+                print(os.path.basename(self.path))
+                if self.score > 900000:
                     print('**************************************************')
+                else:
+                    print('                                                  ')
 
-        print('--------------------------------------------------')
         print(self.score)
         print(self.board)
-        print(self.path, 'died')
+        print(os.path.basename(self.path), 'died')
         print('--------------------------------------------------')
         record = np.array(self.history, dtype='uint64,uint32,uint8')
         record.tofile(self.path)
@@ -112,7 +121,7 @@ class AItest:
     def is_mess(self):
         """检查是否乱阵"""
         board = self.board
-        large_tiles = (board > 64).sum()
+        large_tiles = np.sum(self.ai_dispatcher.counts[7:])
         board_flatten = board.flatten()
         if large_tiles < 3:
             return False
@@ -121,31 +130,38 @@ class AItest:
             if len(np.unique(board_flatten[top4_pos])) < 4:
                 return False
             top4_pos = tuple(sorted(top4_pos))
-            return top4_pos not in (
-                (10, 11, 14, 15), (11, 13, 14, 15), (3, 7, 11, 15), (8, 12, 13, 14), (4, 8, 12, 13), (8, 9, 12, 13),
-                (0, 1, 2, 4), (1, 2, 3, 7), (0, 1, 4, 5), (0, 1, 4, 8), (2, 3, 7, 11), (2, 3, 6, 7), (0, 1, 2, 3),
-                (0, 4, 8, 12), (3, 7, 11, 15), (12, 13, 14, 15))
+            return top4_pos not in ((0, 1, 2, 3), (0, 4, 8, 12), (12, 13, 14, 15), (3, 7, 11, 15),
+                                    (0, 1, 2, 4), (4, 8, 12, 13), (11, 13, 14, 15), (2, 3, 7, 11),
+                                    (0, 1, 4, 8), (8, 12, 13, 14), (7, 11, 14, 15), (1, 2, 3, 7),
+                                    (0, 1, 4, 5), (8, 9, 12, 13), (10, 11, 14, 15), (2, 3, 6, 7),
+                                    (2, 3, 14, 15), (0, 1, 12, 13), (8, 11, 12, 15), (0, 3, 4, 7))
         else:
+            # [[0, 1, 2, 3],
+            #  [4, 5, 6, 7],
+            #  [8, 9,10,11],
+            #  [12,13,14,15]]
             top3_pos = np.argpartition(board_flatten, -3)[-3:]
             if len(np.unique(board_flatten[top3_pos])) < 3:
                 return False
             top3_pos = tuple(sorted(top3_pos))
             return top3_pos not in (
-                (11, 14, 15), (13, 14, 15), (7, 11, 15), (12, 13, 14), (4, 8, 12), (8, 12, 13), (0, 1, 2), (1, 2, 3),
-                (0, 1, 4), (0, 4, 8), (3, 7, 11), (2, 3, 7))
+                (0, 1, 2), (1, 2, 3), (3, 7, 11), (7, 11, 15), (13, 14, 15), (12, 13, 14), (4, 8, 12), (0, 4, 8),
+                (0, 1, 3), (0, 2, 3), (3, 7, 15), (3, 11, 15), (12, 14, 15), (12, 13, 15), (0, 8, 12), (0, 4, 12),
+                (0, 1, 12), (0, 3, 4), (0, 3, 7), (2, 3, 15), (3, 14, 15), (11, 12, 15), (8, 12 ,15), (0, 12, 13),
+                (0, 1, 4), (2, 3, 7), (11, 14, 15), (8, 12, 13))
 
 
 def run_test(index):
-    ai_test = AItest(f"{index}")
+    ai_test = AItest(fr"C:\Users\Administrator\Desktop\record\{index}")
     ai_test.play()
 
 
 def main():
     multiprocessing.freeze_support()
-    with multiprocessing.Pool(processes=10) as pool:
-        pool.map(run_test, range(0, 300))
+    with multiprocessing.Pool(processes=30) as pool:
+        pool.map(run_test, range(0, 1200))
 
 
 if __name__ == "__main__":
     main()
-# run_test(0)
+    #run_test(0)

@@ -298,6 +298,7 @@ def generate_process_ad(
             pivots_list = [pivots] * len(length_factors_list)
 
         small_tile_sum_limit = SingletonConfig().config.get('SmallTileSumLimit', 56)
+        lm.small_tile_sum_limit = small_tile_sum_limit
         board_sum = 2 * i + ini_board_sum - 2
 
         if len(d0) < segment_size:

@@ -121,7 +121,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.deletion_threshold_box.setObjectName("deletion_threshold_box")
         self.deletion_threshold_box.setRange(0.0, 1.0)
         self.deletion_threshold_box.setSingleStep(0.1)
-        self.deletion_threshold_box.setDecimals(3)
+        self.deletion_threshold_box.setDecimals(4)
         self.deletion_threshold_box.setValue(config.get('deletion_threshold', 0))
         self.deletion_threshold_box.valueChanged.connect(self.update_deletion_threshold_rate)  # type: ignore
         self.selfLayout.addWidget(self.deletion_threshold_box, 4, 2, 1, 1)

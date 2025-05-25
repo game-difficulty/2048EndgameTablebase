@@ -3,7 +3,7 @@ import sys
 
 import numpy as np
 from PyQt5 import QtCore, QtWidgets
-from PyQt5.QtCore import QTimer, Qt, QEvent, QCoreApplication
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QIcon, QCursor
 
 from BookReader import BookReaderDispatcher
@@ -132,7 +132,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.record_loaded = None  # 已加载的回放
         self.played_length = 0  # 已播放的长度
         self.replay_timer = QTimer(self)
-        self.replay_timer.timeout.connect(self.replay_step)  # 回放状态定时自动走棋
+        self.replay_timer.timeout.connect(self.replay_step)  # type: ignore # 回放状态定时自动走棋从
 
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
 
