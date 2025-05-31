@@ -8,7 +8,7 @@ success rate of getting a 2048 in 12 space (32k endgame)
 
 
 ## Features
--  **Highly Optimized Generator**: A robust endgame generator that significantly outperforms other available tools in terms of speed and efficiency.
+-  **Highly Optimized Generator**: A robust endgame generator delivering unmatched speed and efficiency.
 
 -  **Effective Training Interface**: Includes a user-friendly GUI that aids players in training and enhancing their skills.
 
