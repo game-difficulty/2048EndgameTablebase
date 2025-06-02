@@ -356,13 +356,13 @@ if __name__ == "__main__":
     bm = VBoardMover()
     r = bm.move_all_dir(bm.encode_board(b))
     print(b)
-    for rb, d in zip(r, ('d', 'r', 'l', 'u')):
+    for rb, d in zip(r, ('l', 'r', 'u', 'd')):
         print(d)
         print(bm.decode_board(rb))
 
     bm = VBoardMoverWithScore()
     r = bm.move_all_dir(bm.encode_board(b))
     print(b)
-    for rb, d in zip(r, ('d', 'r', 'l', 'u')):
+    for rb, d in zip(r, ('l', 'r', 'u', 'd')):
         print(d)
         print(bm.decode_board(rb))
