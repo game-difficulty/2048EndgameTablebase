@@ -89,7 +89,7 @@ class Cache:
         self.cache_board[index]['f0'], self.cache_board[index]['f1'] = board, score
 
     def hash(self, board, depth):
-        board = (board ^ (board >> 27)) * 0x1A85EC53 + (board >> 23)
+        board = (board ^ (board >> 27)) * 0x1A85EC53 + board >> 23
         return np.uint64(board - (depth << 5)) & self.length
 
 
