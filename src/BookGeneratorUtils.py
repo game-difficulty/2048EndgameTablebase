@@ -239,7 +239,7 @@ def sort_array(arr: NDArray[np.uint64], pivots: NDArray[np.uint64] | None = None
 
 @njit(nogil=True)
 def hash_(board: np.uint64) -> np.uint64:
-    return np.uint64((board ^ (board >> 27)) * 0x1A85EC53 + (board >> 23))
+    return np.uint64((board ^ (board >> 27)) * 0x1A85EC53 + board >> 23)
 
 
 @njit(nogil=True, parallel=True)
