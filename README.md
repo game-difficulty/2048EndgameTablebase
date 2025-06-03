@@ -50,7 +50,8 @@ success rate of getting a 2048 in 12 space (32k endgame)
    - Utilize the real-time analytics on the right-hand side to imporve your skills
    - Click **Save Logs** to keep a record of your game analysis
 6. Enjoy the AI：
-   - Calculate *LL_4096_0* & *4432_512* in **Settings**
+   - You will need 10TB+ space and 128GB+ RAM
+   - Calculate tables used by the AI in **Settings**
    - Go to **Game**
    - Click **New Game** to start a new game
    - Enable the AI by clicking the **AI: ON** button and watch the AI play
