@@ -2,7 +2,6 @@ python
 numpy 2.0+
 numba 0.60+
 cpuinfo 
-psutil
 pyqt5
 
 Python C++ Extension Module
