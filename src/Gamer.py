@@ -702,7 +702,8 @@ Only effective for players''')
             self.ai_timer.singleShot(20, self.handleOneStep)
             if not SingletonConfig().config['filepath_map'].get('4431_2048_0', []) or \
                     not SingletonConfig().config['filepath_map'].get('LL_2048_0', []):
-                self.statusbar.showMessage("Run LL_4096_0 for best performance.", 3000)
+                self.statusbar.showMessage(
+                    "Run free12w-2k free11w-2k 4442f-2k free11w-512 for best performance.", 5000)
         else:
             self.ai.setText("AI: ON")
             self.ai_state = False
