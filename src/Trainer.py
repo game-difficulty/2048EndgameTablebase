@@ -1,5 +1,6 @@
 import os.path
 import sys
+from typing import Dict, Tuple
 
 import numpy as np
 from PyQt5 import QtCore, QtWidgets
@@ -9,7 +10,7 @@ from PyQt5.QtGui import QIcon, QCursor
 from BookReader import BookReaderDispatcher
 from Calculator import ReverseUD, ReverseLR, RotateR, RotateL
 from Gamer import BaseBoardFrame
-from Config import SingletonConfig, formation_info
+from Config import SingletonConfig, category_info
 
 
 class TrainFrame(BaseBoardFrame):
@@ -21,20 +22,51 @@ class TrainFrame(BaseBoardFrame):
     }
     update_results = QtCore.pyqtSignal()  # 手动模式查表更新
 
-    def __init__(self, centralwidget=None):
+    def __init__(self, parents, centralwidget=None):
         super(TrainFrame, self).__init__(centralwidget)
+        self.parents = parents
         self.num_to_set = None
-        self.manual_mode = False
+        self.spawn_mode = 0  # 0:随机 1：最好 2：最坏 3:手动
 
     def gen_new_num(self, do_anim=True):
-        if not self.manual_mode:
+        if self.spawn_mode == 0:
             super().gen_new_num(do_anim)
-        else:
+        elif self.spawn_mode == 3:
             self.history.append((self.board_encoded, self.score))
             self.update_all_frame(self.board)
+        elif self.parents.book_reader:
+            results = self._spawns_success_rates()
+            print(results)
+            if not results:
+                super().gen_new_num(do_anim)
+            elif self.spawn_mode == 1:
+                new_tile_pos, val = max(results, key=results.get)
+                self.update_all_frame(self.board)
+                self.set_new_num(new_tile_pos, val, do_anim)
+            elif self.spawn_mode == 2:
+                new_tile_pos, val = min(results, key=results.get)
+                self.update_all_frame(self.board)
+                self.set_new_num(new_tile_pos, val, do_anim)
+
+    def _spawns_success_rates(self) -> Dict[Tuple[int, int], float | int]:
+        results = {}
+        for val in (1,2):
+            for new_tile_pos in range(16):
+                pos = 15 - new_tile_pos
+                if ((self.board_encoded >> np.uint64(4 * pos)) & np.uint64(0xF)) == np.uint64(0):
+                    board = self.board_encoded | np.uint64(val) << np.uint64(4 * pos)
+                    result = self.parents.book_reader.move_on_dic(self.mover.decode_board(board),
+                                                 self.parents.pattern_settings[0], self.parents.pattern_settings[1],
+                                            self.parents.current_pattern, self.parents.pattern_settings[2])
+                    if isinstance(result, dict):
+                        result0 = result[list(result.keys())[0]]
+                        if result0 is None or isinstance(result0, str):
+                            result0 = 0
+                        results[(new_tile_pos, val)] = result0
+        return results
 
     def mousePressEvent(self, event):
-        if self.num_to_set is None and not self.manual_mode:
+        if self.num_to_set is None and not self.spawn_mode:
             self.setFocus()
             return
 
@@ -135,6 +167,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.replay_timer.timeout.connect(self.replay_step)  # type: ignore # 回放状态定时自动走棋从
 
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
+        self.gameframe.book_reader = self.book_reader
 
         self.statusbar.showMessage("All features may be slow when used for the first time. Please be patient.", 8000)
 
@@ -150,7 +183,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gridLayout.setHorizontalSpacing(8)
         self.gridLayout.setObjectName("gridLayout")
 
-        self.gameframe = TrainFrame(self.centralwidget)
+        self.gameframe = TrainFrame(self, self.centralwidget)
         self.gameframe.setFocusPolicy(Qt.StrongFocus)
         self.gridLayout.addWidget(self.gameframe, 1, 0, 1, 2)
         self.gameframe.update_results.connect(self.manual_mode_update_results)
@@ -292,6 +325,18 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gridLayout_record.addWidget(self.manual_checkBox, 0, 3, 1, 1)
         self.manual_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.manual_checkBox.stateChanged.connect(self.manual_state_change)  # type: ignore
+        self.best_spawn_checkBox = QtWidgets.QCheckBox(self.operate)
+        self.best_spawn_checkBox.setStyleSheet("font: 360 10pt \"Cambria\";")
+        self.best_spawn_checkBox.setObjectName("best_spawn_checkBox")
+        self.gridLayout_record.addWidget(self.best_spawn_checkBox, 1, 0, 1, 2)
+        self.best_spawn_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        self.best_spawn_checkBox.stateChanged.connect(lambda: self.spawn_state_change(1))  # type: ignore
+        self.worst_spawn_checkBox = QtWidgets.QCheckBox(self.operate)
+        self.worst_spawn_checkBox.setStyleSheet("font: 360 10pt \"Cambria\";")
+        self.worst_spawn_checkBox.setObjectName("worst_spawn_checkBox")
+        self.gridLayout_record.addWidget(self.worst_spawn_checkBox, 1, 2, 1, 2)
+        self.worst_spawn_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        self.worst_spawn_checkBox.stateChanged.connect(lambda: self.spawn_state_change(2))  # type: ignore
         self.gridLayout_operate.addLayout(self.gridLayout_record, 6, 0, 1, 1)
 
         self.horizontalLayout = QtWidgets.QHBoxLayout()
@@ -342,13 +387,22 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.statusbar.setObjectName("statusbar")
         self.setStatusBar(self.statusbar)
 
+        category_info_t = category_info | {'?': ['?']}
         self.menu_ptn = QtWidgets.QMenu(self.menubar)
         self.menu_ptn.setObjectName("menuMENU")
-        for ptn in list(formation_info.keys()) + ['?']:
-            m = QtWidgets.QAction(ptn, self)
-            m.triggered.connect(lambda: self.menu_selected(0))  # type: ignore
-            self.menu_ptn.addAction(m)
+        # 遍历分类字典创建二级菜单
+        for category, patterns in category_info_t.items():
+            submenu = QtWidgets.QMenu(category, self.menu_ptn)
+            submenu.setObjectName(f"submenu_{category}")
+
+            for ptn in patterns:
+                action = QtWidgets.QAction(ptn, self)
+                action.triggered.connect(lambda: self.menu_selected(0))
+                submenu.addAction(action)
+
+            self.menu_ptn.addMenu(submenu)
         self.menubar.addAction(self.menu_ptn.menuAction())
+
         self.menu_tgt = QtWidgets.QMenu(self.menubar)
         self.menu_tgt.setObjectName("menuMENU")
         for ptn in ["128", "256", "512", "1024", "2048", "4096", "8192"]:
@@ -407,6 +461,8 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.play_record.setText(_translate("Train", 'Play Record'))
         self.load_record.setText(_translate("Train", 'Load Record'))
         self.manual_checkBox.setText(_translate("Train", "Manual"))
+        self.best_spawn_checkBox.setText(_translate("Train", "Always Best Spawn"))
+        self.worst_spawn_checkBox.setText(_translate("Train", "Always Worst Spawn"))
         self.step.setText(_translate("Train", "ONESTEP"))
         self.default.setText(_translate("Train", "Default"))
         self.results_text.setText(_translate("Train", "RESULTS:"))
@@ -425,7 +481,12 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gameframe.setFocus()
 
     def manual_state_change(self):
-        self.gameframe.manual_mode = self.manual_checkBox.isChecked()
+        if self.manual_checkBox.isChecked():
+            self.gameframe.spawn_mode = 3
+            self.worst_spawn_checkBox.setChecked(False)
+            self.best_spawn_checkBox.setChecked(False)
+        else:
+            self.gameframe.spawn_mode = 0
         self.gameframe.setFocus()
 
     def menu_selected(self, i):
@@ -521,6 +582,18 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.book_reader.dispatch(SingletonConfig().config['filepath_map'][self.current_pattern]
                                       , self.pattern_settings[0], self.pattern_settings[1])
             self.show_results()
+
+    def spawn_state_change(self, state):
+        if state == 1 and self.best_spawn_checkBox.isChecked():
+            self.manual_checkBox.setChecked(False)
+            self.worst_spawn_checkBox.setChecked(False)
+            self.gameframe.spawn_mode = 1
+        elif state == 2 and self.worst_spawn_checkBox.isChecked():
+            self.manual_checkBox.setChecked(False)
+            self.best_spawn_checkBox.setChecked(False)
+            self.gameframe.spawn_mode = 2
+        else:
+            self.gameframe.spawn_mode = 0
 
     def handleUndo(self):
         if not self.playing_record_state:

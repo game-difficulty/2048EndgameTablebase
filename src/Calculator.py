@@ -1,6 +1,7 @@
 from typing import List, Tuple, Callable
 
 import numpy as np
+from numpy.typing import NDArray
 from numba import njit
 
 
@@ -521,6 +522,50 @@ def find_merge_positions(current_board: np.typing.NDArray, move_direction: str) 
             merge_positions[:, i] = merge_line
 
     return merge_positions
+
+
+def _move_distance(line: np.typing.NDArray) -> np.typing.NDArray:
+    moved_distance = 0
+    last_tile = 0
+    move_distance = np.zeros_like(line)
+
+    for index, i in enumerate(line):
+        if i == 0:
+            moved_distance += 5
+        elif last_tile == i and i != 32768:
+            moved_distance += 5
+            move_distance[index] = moved_distance - 4
+            last_tile = 0
+        else:
+            move_distance[index] = moved_distance
+            last_tile = i
+
+    return move_distance
+
+
+def slide_distance(current_board: np.typing.NDArray, move_direction: str) -> np.typing.NDArray:
+    """当棋盘移动时各个格子需要移动几格"""
+    move_distance = np.zeros_like(current_board)
+    move_direction = move_direction.lower()
+
+    rows, cols = current_board.shape
+
+    for i in range(rows if move_direction in ['left', 'right'] else cols):
+        if move_direction in ['left', 'right']:
+            line = current_board[i, :]
+        else:
+            line = current_board[:, i]
+        line_to_process = line[::-1] if move_direction in ['down', 'right'] else line
+        line_move_distance = _move_distance(line_to_process)
+        if move_direction in ['right', 'down']:
+            line_move_distance = line_move_distance[::-1]
+
+        if move_direction in ['left', 'right']:
+            move_distance[i, :] = line_move_distance
+        else:
+            move_distance[:, i] = line_move_distance
+
+    return move_distance
 
 
 if __name__ == '__main__':

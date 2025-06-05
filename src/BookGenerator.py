@@ -340,7 +340,7 @@ def validate_length_and_balance(d0, d2, d1t, counts1, counts2, length_factor, is
                      f'Need {round(length_factor_actual, 2)}')
         logger.debug('Segmentation1_ac ' + repr(np.round(percents2, 5)))
         logger.debug('Segmentation2_ac ' + repr(np.round(percents1, 5)))
-    if len(d0) > 0:
+    elif len(d0) > 0:
         logger.debug(
             f'length {len(d1t)}, {len(d2)}, '
             f'Using {round(length_factor, 2)}, '

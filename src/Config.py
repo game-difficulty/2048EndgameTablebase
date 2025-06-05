@@ -5,6 +5,7 @@ import logging
 from typing import Callable, Dict, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 import cpuinfo
 from PyQt5 import QtWidgets
 import Calculator
@@ -13,6 +14,14 @@ import Variants.vCalculator as vCalculator
 PatternCheckFunc = Callable[[np.uint64], bool]
 ToFindFunc = Callable[[np.uint64], np.uint64]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
+
+category_info = {'10 space': ['L3', 'L3t', '442', 't'],
+                 '12 space': ['444', '4431', 'LL', '4432f', '4442ff'],
+                 'free': [f'free{i}w' for i in range(8, 15)],
+                 'free halfway': [f'free{i}' for i in range(8, 12)],
+                 'variant': ['2x4', '3x3', '3x4'],
+                 'others': ['4442', '4442f', '4441']}
+
 
 formation_info: Dict[str, Tuple[int, PatternCheckFunc, ToFindFunc,
                                 SuccessCheckFunc, np.typing.NDArray[np.uint64] | None]] = {
@@ -153,7 +162,7 @@ class SingletonConfig:
                               '#000000'] * 20,
                 'demo_speed': 40,
                 '4_spawn_rate': 0.1,
-                'do_animation': [True, True],
+                'do_animation': [False, False],
                 'game_state': [np.uint64(0), 0, 0],
                 'dis_32k': False,
                 'compress': False,

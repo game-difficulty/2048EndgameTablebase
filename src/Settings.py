@@ -3,10 +3,88 @@ import sys
 
 import numpy as np
 from PyQt5 import QtCore, QtWidgets, QtGui
+from PyQt5.QtWidgets import QToolButton, QMenu, QAction
 
 from BookBuilder import start_build
 from Variants.vBookBuilder import v_start_build
-from Config import SingletonConfig, formation_info
+from Config import SingletonConfig, category_info
+
+
+class TwoLevelComboBox(QToolButton):
+    currentTextChanged = QtCore.pyqtSignal(str)
+
+    def __init__(self, default_text='', parent=None):
+        super().__init__(parent)
+        self.setText(default_text)
+        self.setPopupMode(QToolButton.InstantPopup)
+        self.setMinimumSize(150, 20)
+        self.setMaximumSize(600, 30)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+
+        self.category_menu = QMenu(self)
+        self.setMenu(self.category_menu)
+        self.category_data = {}
+        self.currentText = ''
+
+    def add_category(self, category_name, items):
+        category_action = QAction(category_name, self)
+        submenu = QMenu(category_name, self)
+
+        for item in items:
+            item_action = QAction(item, self)
+            item_action.triggered.connect(lambda _, x=item: self._on_item_selected(x))
+            submenu.addAction(item_action)
+
+        category_action.setMenu(submenu)
+        self.category_menu.addAction(category_action)
+
+    def _on_item_selected(self, item):
+        self.setText(item)
+        self.currentText = item
+        self.currentTextChanged.emit(item)
+
+
+class SingleLevelComboBox(QToolButton):
+    currentTextChanged = QtCore.pyqtSignal(str)
+
+    def __init__(self, default_text='', parent=None):
+        super().__init__(parent)
+        self.setText(default_text)
+        self.setPopupMode(QToolButton.InstantPopup)
+        self.setMinimumSize(90, 20)
+        self.setMaximumSize(600, 30)
+        # self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+
+        self.category_menu = QMenu(self)
+        self.setMenu(self.category_menu)
+        self.category_data = {}
+        self.currentText = ''
+        self.items = []
+
+    def add_items(self, items):
+        for item in items:
+            self.add_item(item)
+
+    def add_item(self, item: str):
+        """添加单个菜单项"""
+        item_action = QAction(item, self)
+        item_action.triggered.connect(lambda _, x=item: self._on_item_selected(x))
+        self.category_menu.addAction(item_action)
+        self.items.append(item)
+
+    def remove_item(self, item: str):
+        """删除指定菜单项"""
+        for action in self.category_menu.actions():
+            if action.text() == item:
+                self.category_menu.removeAction(action)
+                action.deleteLater()  # 释放内存
+                self.items.remove(item)
+                break
+
+    def _on_item_selected(self, item):
+        self.setText(item)
+        self.currentText = item
+        self.currentTextChanged.emit(item)
 
 
 # noinspection PyAttributeOutsideInit
@@ -51,21 +129,25 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.set_filepath_bt.setMinimumSize(QtCore.QSize(180, 20))
         self.set_filepath_bt.clicked.connect(self.filepath_changed)  # type: ignore
         self.selfLayout.addWidget(self.set_filepath_bt, 1, 2, 1, 1)
-        self.target_combo = QtWidgets.QComboBox(self.centralwidget)
+
+        self.target_combo = SingleLevelComboBox("Target Tile", self.centralwidget)
         self.target_combo.setObjectName("target_combo")
-        for i in ["128", "256", "512", "1024", "2048", "4096", "8192"]:
-            self.target_combo.addItem(i)
+        self.target_combo.add_items(["128", "256", "512", "1024", "2048", "4096", "8192"])
         self.selfLayout.addWidget(self.target_combo, 0, 2, 1, 1)
-        self.pattern_combo = QtWidgets.QComboBox(self.centralwidget)
+
+        self.pattern_combo = TwoLevelComboBox("Select Formation", self.centralwidget)
         self.pattern_combo.setObjectName("pattern_combo")
-        for i in formation_info.keys():
-            self.pattern_combo.addItem(i)
+        for category, items in category_info.items():
+            self.pattern_combo.add_category(category, items)
         self.selfLayout.addWidget(self.pattern_combo, 0, 1, 1, 1)
-        self.pos_combo = QtWidgets.QComboBox(self.centralwidget)
+        self.pattern_combo.currentTextChanged.connect(self.update_pos_combo_visibility)
+
+        self.pos_combo = SingleLevelComboBox("Target Position", self.centralwidget)
         self.pos_combo.setObjectName("pos_combo")
-        for i in ["0", "1", "2"]:
-            self.pos_combo.addItem(i)
+        self.pos_combo.add_items(["0", "1", "2"])
         self.selfLayout.addWidget(self.pos_combo, 0, 3, 1, 1)
+        self.pos_combo.hide()
+
         self.build_bt = QtWidgets.QPushButton(self.centralwidget)
         self.build_bt.setObjectName("build_bt")
         self.build_bt.setMinimumSize(QtCore.QSize(180, 20))
@@ -275,6 +357,18 @@ class SettingsWindow(QtWidgets.QMainWindow):
         if filepath:
             self.filepath_edit.setText(filepath)
 
+    def update_pos_combo_visibility(self, pattern):
+        if pattern in ['444', 'LL']:
+            if '2' in self.pos_combo.items:
+                self.pos_combo.remove_item('2')
+            self.pos_combo.show()
+        elif pattern == 'L3':
+            if '2' not in self.pos_combo.items:
+                self.pos_combo.add_item('2')
+            self.pos_combo.show()
+        else:
+            self.pos_combo.hide()
+
     def build_book(self):
         spawn_rate = SingletonConfig().config['4_spawn_rate']
         if spawn_rate != 0.1:
@@ -288,11 +382,12 @@ class SettingsWindow(QtWidgets.QMainWindow):
             if reply == QtWidgets.QMessageBox.No:
                 return
 
-        position = self.pos_combo.currentText()
-        pattern = self.pattern_combo.currentText()
-        target = self.target_combo.currentText()
+        position = self.pos_combo.currentText
+        pattern = self.pattern_combo.currentText
+        target = self.target_combo.currentText
         pathname = self.filepath_edit.toPlainText()
-        if pattern and target and pathname and position and os.path.exists(pathname):
+        if pattern and target and pathname and os.path.exists(pathname):
+            position = position if position else 0
             config = SingletonConfig().config
             if pattern in ['444', 'LL', 'L3']:
                 ptn = pattern + '_' + target + '_' + position

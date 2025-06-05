@@ -3,12 +3,12 @@ from typing import Union, List
 
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtCore import QPropertyAnimation, QRect, QEasingCurve, QTimer, QSize, QPoint
+from PyQt5.QtCore import QEasingCurve, QTimer, QSize
 
 from AIPlayer import AIPlayer, Dispatcher, EvilGen
-from BoardMover import SingletonBoardMover
-from Config import SingletonConfig
+from BoardMover import SingletonBoardMover, BoardMoverWithScore
 from Calculator import find_merge_positions
+from Config import SingletonConfig
 
 
 # noinspection PyAttributeOutsideInit
@@ -22,8 +22,10 @@ class SquareFrame(QtWidgets.QFrame):
             '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'] + [
             '#ffffff'] * 20'''
         self.anims: List[List[Union[None, QtCore.QAbstractAnimation]]] = [
-            [None for _ in range(self.cols)] for __ in range(self.rows)
-        ]
+            [None for _ in range(self.cols)] for __ in range(self.rows)]
+        self.animation_config = {
+            'appear': {'duration': 150, 'curve': QtCore.QEasingCurve.OutCubic},
+            'pop': {'duration': 120, 'curve': QtCore.QEasingCurve.InOutCubic},}
 
     def updateGeometry(self):
         # 保持正方形尺寸并居中显示
@@ -84,64 +86,90 @@ class SquareFrame(QtWidgets.QFrame):
             self.labels.append(row_labels)
 
     def animate_appear(self, r, c):
-        frame = self.frames[r][c]
-        if self.anims[r][c] is not None:
+        if self._check_animation_running(r, c):
             return
-        opacity_effect = QtWidgets.QGraphicsOpacityEffect()
+
+        frame = self.frames[r][c]
+        opacity_effect = QtWidgets.QGraphicsOpacityEffect(frame)
         frame.setGraphicsEffect(opacity_effect)
 
-        opacity_animation = QPropertyAnimation(opacity_effect, b"opacity")
-        opacity_animation.setDuration(150)
-        opacity_animation.setStartValue(0)
-        opacity_animation.setEndValue(1)
-        opacity_animation.setEasingCurve(QEasingCurve.OutCubic)
-        opacity_animation.finished.connect(lambda: self.cleanup_animation(r, c))  # type: ignore
+        anim_group = QtCore.QParallelAnimationGroup()
 
-        scale_animation = QPropertyAnimation(frame, b"geometry")
-        scale_animation.setDuration(150)
-        original_rect = frame.geometry()
-        start_rect = QRect(frame.geometry().center(), QSize(0, 0))
-        scale_animation.setStartValue(start_rect)
-        scale_animation.setEndValue(original_rect)
-        scale_animation.setEasingCurve(QEasingCurve.OutCubic)
-        # scale_animation.finished.connect(lambda: self.cleanup_animation(r, c))
+        # 透明度动画
+        opacity_anim = QtCore.QPropertyAnimation(opacity_effect, b"opacity")
+        opacity_anim.setDuration(self.animation_config['appear']['duration'])
+        opacity_anim.setStartValue(0.0)
+        opacity_anim.setEndValue(1.0)
 
-        animation_group = QtCore.QParallelAnimationGroup()
-        animation_group.addAnimation(opacity_animation)
-        animation_group.addAnimation(scale_animation)
-        animation_group.finished.connect(lambda: self.cleanup_animation(r, c))  # type: ignore
-        animation_group.start()
+        # 缩放动画
+        scale_anim = QtCore.QPropertyAnimation(frame, b"geometry")
+        scale_anim.setDuration(self.animation_config['appear']['duration'])
+        scale_anim.setEasingCurve(self.animation_config['appear']['curve'])
+        start_size = QtCore.QSize(10, 10)
+        scale_anim.setStartValue(QtCore.QRect(frame.geometry().center(), start_size))
+        scale_anim.setEndValue(frame.geometry())
 
-        self.anims[r][c] = animation_group
+        anim_group.addAnimation(opacity_anim)
+        anim_group.addAnimation(scale_anim)
+        anim_group.finished.connect(lambda: self._finalize_appear(r, c))
+
+        self.anims[r][c] = anim_group
+        anim_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _finalize_appear(self, r, c):
+        """专用完成处理"""
+        self.frames[r][c].setGraphicsEffect(None)  # 必须解除效果关联
+        self.anims[r][c] = None
 
     def animate_pop(self, r, c):
-        frame = self.frames[r][c]
-        if self.anims[r][c] is not None:
+        """优化后的合并动画（脉冲缩放效果）"""
+        if self._check_animation_running(r, c):
             return
-        original_rect = frame.geometry()
-        center = original_rect.center()
-        big_scale_size = QSize(int(original_rect.width() * 1.15), int(original_rect.height() * 1.15))
-        small_scale_size = QSize(int(original_rect.width() * 1), int(original_rect.height() * 1))
-        big_scale_rect = QRect(QPoint(center.x() - big_scale_size.width() // 2,
-                                      center.y() - big_scale_size.height() // 2), big_scale_size)
-        small_scale_rect = QRect(QPoint(center.x() - small_scale_size.width() // 2,
-                                        center.y() - small_scale_size.height() // 2), small_scale_size)
 
-        pop_animation = QPropertyAnimation(frame, b"geometry")
-        pop_animation.setDuration(120)
-        pop_animation.setEasingCurve(QEasingCurve.InOutCubic)
-        pop_animation.setKeyValueAt(0, small_scale_rect)
-        pop_animation.setKeyValueAt(0.5, big_scale_rect)
-        pop_animation.setKeyValueAt(1.0, original_rect)
-        pop_animation.finished.connect(lambda: self.cleanup_animation(r, c))  # type: ignore
+        frame = self.frames[r][c]
+        anim = QtCore.QSequentialAnimationGroup()
 
-        pop_animation.start()
-        self.anims[r][c] = pop_animation
+        # 第一阶段：放大
+        enlarge = QtCore.QPropertyAnimation(frame, b"geometry")
+        enlarge.setDuration(self.animation_config['pop']['duration'] // 2)
+        enlarge.setEasingCurve(QtCore.QEasingCurve.OutCubic)
+        enlarge.setEndValue(self._scaled_rect(frame, 1.2))
 
-    def cleanup_animation(self, r, c):
-        if self.anims[r][c]:
-            self.anims[r][c].deleteLater()
-            self.anims[r][c] = None
+        # 第二阶段：恢复
+        shrink = QtCore.QPropertyAnimation(frame, b"geometry")
+        shrink.setDuration(self.animation_config['pop']['duration'] // 2)
+        shrink.setEasingCurve(QtCore.QEasingCurve.InCubic)
+        shrink.setEndValue(frame.geometry())
+
+        anim.addAnimation(enlarge)
+        anim.addAnimation(shrink)
+        anim.finished.connect(lambda: self._finalize_animation(r, c))
+
+        self.anims[r][c] = anim
+        anim.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _check_animation_running(self, r, c):
+        """检查当前单元格是否有未完成动画"""
+        return self.anims[r][c] and self.anims[r][c].state() == QtCore.QAbstractAnimation.State.Running
+
+    def _finalize_animation(self, r, c):
+        """统一动画完成处理"""
+        self.anims[r][c] = None
+        self.frames[r][c].setGraphicsEffect(None)
+
+    @staticmethod
+    def _scaled_rect(frame, factor):
+        """计算缩放后的几何矩形"""
+        original = frame.geometry()
+        center = original.center()
+        new_width = int(original.width() * factor)
+        new_height = int(original.height() * factor)
+        return QtCore.QRect(
+            center.x() - new_width // 2,
+            center.y() - new_height // 2,
+            new_width,
+            new_height
+        )
 
 
 # noinspection PyAttributeOutsideInit
@@ -152,7 +180,7 @@ class BaseBoardFrame(QtWidgets.QFrame):
         self.board = np.zeros((4, 4), dtype=np.int32)
         self.board_encoded = np.uint64(0)
         self.score = 0
-        self.mover = SingletonBoardMover(2)
+        self.mover: BoardMoverWithScore = SingletonBoardMover(2)
         self.v_mover = SingletonBoardMover(4)
         self.history = []
 
@@ -703,7 +731,7 @@ Only effective for players''')
             if not SingletonConfig().config['filepath_map'].get('4431_2048_0', []) or \
                     not SingletonConfig().config['filepath_map'].get('LL_2048_0', []):
                 self.statusbar.showMessage(
-                    "Run free12w-2k free11w-2k 4442f-2k free11w-512 for best performance.", 5000)
+                    "Run free12w-2k free11w-2k 4442f-2k free11w-512 for best performance.", 3000)
         else:
             self.ai.setText("AI: ON")
             self.ai_state = False

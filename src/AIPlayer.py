@@ -551,10 +551,10 @@ def search_evil_gen(evil_gen, b, depth):
 
 
 if __name__ == "__main__":
-    b1 = np.array([[   4 ,   8,  128, 1024],
- [   4  ,  8 ,  64,  512],
- [   2  ,  0 ,  32,  256],
- [   0  ,  0 ,   8,   64]], dtype=np.int32)
+    b1 = np.array([[   4 ,   0,  0,  2],
+ [   16  ,  8 ,  0,  0],
+ [   32  ,  512 ,  8,  2],
+ [   4096  ,  2 ,   32,   8]], dtype=np.int32)
     print(b1)
     s1 = AIPlayer(b1)
     #g1 = EvilGen(b1)
@@ -566,9 +566,9 @@ if __name__ == "__main__":
     for steps in range(5000):
         s1.reset_board(s1.bm.decode_board(b1))
         t0 = time.time()
-        s1.start_search(5)
-        print(round(s1.cache.lookup_count / (time.time() - t0) / 1e6, 1), round(s1.node / (time.time() - t0) / 1e6, 1),
-              s1.node, round(time.time() - t0, 4))
+        s1.start_search(6)
+        # print(round(s1.cache.lookup_count / (time.time() - t0) / 1e6, 1), round(s1.node / (time.time() - t0) / 1e6, 1),
+        #     s1.node, round(time.time() - t0, 4))
         print({0:None, 1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}[s1.best_operation])
         if not s1.best_operation:
             print((time.time() - t_start) / steps)

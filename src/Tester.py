@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit
 from PyQt5.QtGui import QIcon
 
 from BookReader import BookReaderDispatcher
-from Config import SingletonConfig, formation_info
+from Config import SingletonConfig, category_info
 from Gamer import BaseBoardFrame
 from Analyzer import AnalyzeWindow
 
@@ -181,13 +181,22 @@ class TestWindow(QtWidgets.QMainWindow):
         self.menubar.setObjectName("menubar")
         self.setMenuBar(self.menubar)
 
+        category_info_t = category_info | {'?': ['?']}
         self.menu_ptn = QtWidgets.QMenu(self.menubar)
         self.menu_ptn.setObjectName("menuMENU")
-        for ptn in list(formation_info.keys()) + ['?']:
-            m = QtWidgets.QAction(ptn, self)
-            m.triggered.connect(lambda: self.menu_selected(0))  # type: ignore
-            self.menu_ptn.addAction(m)
+        # 遍历分类字典创建二级菜单
+        for category, patterns in category_info_t.items():
+            submenu = QtWidgets.QMenu(category, self.menu_ptn)
+            submenu.setObjectName(f"submenu_{category}")
+
+            for ptn in patterns:
+                action = QtWidgets.QAction(ptn, self)
+                action.triggered.connect(lambda: self.menu_selected(0))
+                submenu.addAction(action)
+
+            self.menu_ptn.addMenu(submenu)
         self.menubar.addAction(self.menu_ptn.menuAction())
+
         self.menu_tgt = QtWidgets.QMenu(self.menubar)
         self.menu_tgt.setObjectName("menuMENU")
         for ptn in ["128", "256", "512", "1024", "2048", "4096", "8192", '?']:

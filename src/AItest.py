@@ -91,15 +91,15 @@ class AItest:
                 if positions[0][0] == positions[0][1] and abs(positions[1][0] - positions[1][1]) == 1:
                     self.board[first_position] = 0
                     self.board_encoded = np.uint64(self.mover.encode_board(self.board))
-                    self.do_move('Right')
                     self.score += 65536
+                    self.do_move('Right')
                     self.died = False
 
                 elif positions[1][0] == positions[1][1] and abs(positions[0][0] - positions[0][1]) == 1:
                     self.board[first_position] = 0
                     self.board_encoded = np.uint64(self.mover.encode_board(self.board))
-                    self.do_move('Down')
                     self.score += 65536
+                    self.do_move('Down')
                     self.died = False
 
             if len(self.history) % 931==128:
@@ -159,7 +159,7 @@ def run_test(index):
 def main():
     multiprocessing.freeze_support()
     with multiprocessing.Pool(processes=30) as pool:
-        pool.map(run_test, range(0, 1200))
+        pool.map(run_test, range(0, 1800))
 
 
 if __name__ == "__main__":
