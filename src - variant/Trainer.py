@@ -620,11 +620,6 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.menubar.addAction(self.menu_tgt.menuAction())
         self.menu_pos = QtWidgets.QMenu(self.menubar)
         self.menu_pos.setObjectName("menuMENU")
-        for ptn in ["0", "1", "2"]:
-            m = QtWidgets.QAction(ptn, self)
-            m.triggered.connect(lambda: self.menu_selected(2))  # type: ignore
-            self.menu_pos.addAction(m)
-        self.menubar.addAction(self.menu_pos.menuAction())
 
         self.retranslateUi()
         QtCore.QMetaObject.connectSlotsByName(self)
