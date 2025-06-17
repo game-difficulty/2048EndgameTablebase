@@ -80,7 +80,7 @@ class GameWidget(QtWidgets.QFrame):
         self.delete_trophy_widgets()
         if self.is_passed == 0:
             return
-        level = {1: 'bronze', 2: 'silver', 3: 'golden', 4: 'golden'}[self.is_passed]
+        level = {1: 'bronze', 2: 'silver', 3: 'gold', 4: 'gold'}[self.is_passed]
         self.trophy_bg = QtWidgets.QFrame(self)
         self.trophy_bg.setObjectName(f"f_{self.game_name.replace(' ', '')}_trophy_bg")
         self.trophy_bg.setStyleSheet(f"""

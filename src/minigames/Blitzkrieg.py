@@ -36,10 +36,10 @@ class BlitzkriegFrame(MinigameFrame):
                 super().check_game_over()
             else:
                 if self.score == self.max_score:
-                    level = {12: 'golden', 11: 'silver', 10: 'bronze'}.get(self.current_max_num, 'golden')
+                    level = {12: 'gold', 11: 'silver', 10: 'bronze'}.get(self.current_max_num, 'gold')
                     message = f'You achieved {self.score} score!\n You get a {level} trophy!'
                 else:
-                    level = {12: 'golden', 11: 'silver', 10: 'bronze'}.get(self.current_max_num, 'golden')
+                    level = {12: 'gold', 11: 'silver', 10: 'bronze'}.get(self.current_max_num, 'gold')
                     message = f'You achieved {self.score} score!\n Nice game!'
                 self.show_trophy(f'pic/{level}.png', message)
 

@@ -21,7 +21,7 @@ class EndlessFrame(MinigameFrame):
         
         self.levels = [
             (300000, 4, None),
-            (200000, 3, 'golden'),
+            (200000, 3, 'gold'),
             (100000, 2, 'silver'),
             (40000, 1, 'bronze')
         ]

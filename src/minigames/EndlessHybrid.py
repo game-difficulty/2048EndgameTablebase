@@ -23,7 +23,7 @@ class EndlessHybridFrame(EndlessFrame):
 
         self.levels = [
             (150000, 4, None),
-            (100000, 3, 'golden'),
+            (100000, 3, 'gold'),
             (50000, 2, 'silver'),
             (20000, 1, 'bronze')
         ]
