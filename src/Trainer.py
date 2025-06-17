@@ -1,6 +1,7 @@
 import os.path
 import sys
 from typing import Dict, Tuple
+import time
 
 import numpy as np
 from PyQt5 import QtCore, QtWidgets
@@ -36,7 +37,6 @@ class TrainFrame(BaseBoardFrame):
             self.update_all_frame(self.board)
         elif self.parents.book_reader:
             results = self._spawns_success_rates()
-            print(results)
             if not results:
                 super().gen_new_num(do_anim)
             elif self.spawn_mode == 1:
@@ -167,7 +167,8 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.replay_timer.timeout.connect(self.replay_step)  # type: ignore # 回放状态定时自动走棋从
 
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
-        self.gameframe.book_reader = self.book_reader
+        self.reader_thread = ReaderWorker(self.book_reader, np.uint64(0), self.pattern_settings, self.current_pattern)
+        self.reader_thread.result_ready.connect(self._show_results)
 
         self.statusbar.showMessage("All features may be slow when used for the first time. Please be patient.", 8000)
 
@@ -348,7 +349,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.show_results_checkbox = QtWidgets.QCheckBox(self.operate)
         self.show_results_checkbox.setStyleSheet("font: 360 10pt \"Cambria\";")
         self.show_results_checkbox.setObjectName("show_results_checkbox")
-        self.show_results_checkbox.stateChanged.connect(self.show_results)  # type: ignore
+        self.show_results_checkbox.stateChanged.connect(self.read_results)  # type: ignore
         self.horizontalLayout.addWidget(self.show_results_checkbox)
         self.gridLayout_operate.addLayout(self.horizontalLayout, 1, 0, 1, 1)
         self.results_label = QtWidgets.QLabel(self.operate)
@@ -426,20 +427,21 @@ class TrainWindow(QtWidgets.QMainWindow):
         button_numbers = ['0', '2', '4', '8', '16', '32', '64', '128', '256', '512', '1k', '2k', '4k', '8k', '16k',
                           '32k']
         for index, num in enumerate(button_numbers):
-            color = self.gameframe.game_square.colors[index - 1] if index != 0 else '#e5e5e5'
+            bg_color = self.gameframe.game_square.colors[index - 1] if index != 0 else '#e5e5e5'
+            color = '#776e65' if not SingletonConfig.font_colors[index - 1] else '#f9f6f2'
             button = self.tile_buttons[index]
             button.setStyleSheet(f"""
                         QPushButton {{
-                            background-color: {color};
+                            background-color: {bg_color};
                             font: 600 12pt 'Calibri';
-                            color: rgb(255, 255, 255);
+                            color: {color};
                             border: 2px solid transparent;
                             width: 56px; height: 56px; 
                         }}
                         QPushButton:checked {{
-                            background-color: {color};
+                            background-color: {bg_color};
                             font: 1350 16pt 'Calibri';
-                            color: rgb(255, 255, 255);
+                            color: {color};
                             border: 6px solid red;
                         }}
                     """)
@@ -490,6 +492,9 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gameframe.setFocus()
 
     def menu_selected(self, i):
+        if self.ai_state:
+            self.toggle_demo()  # 停止
+            time.sleep(0.05)
         self.pattern_settings[i] = self.sender().text()
         self.pattern_text.setText('_'.join(self.pattern_settings[:2]))
         if '' not in self.pattern_settings:
@@ -513,8 +518,12 @@ class TrainWindow(QtWidgets.QMainWindow):
                 self.filepath.setText(' ')
             self.pattern_text.setText(self.current_pattern)
             self.book_reader.dispatch(path_list, self.pattern_settings[0], self.pattern_settings[1])
+
+            self.reader_thread.current_pattern = self.current_pattern
+            self.reader_thread.pattern_settings = self.pattern_settings
+
             self.handle_set_default()
-            self.show_results()
+            self.read_results()
 
     def tiles_bt_on_click(self):
         sender = self.sender()
@@ -535,31 +544,38 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.gameframe.num_to_set = None
             self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
             self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
-            self.show_results()
+            self.read_results()
 
-    def show_results(self):
+    def read_results(self):
         if self.show_results_checkbox.isChecked():
-            board = self.gameframe.mover.decode_board(np.uint64(int('0x' + self.board_state.text().rjust(16, '0'), 16)))
-            result = self.book_reader.move_on_dic(board, self.pattern_settings[0], self.pattern_settings[1],
-                                            self.current_pattern, self.pattern_settings[2])
-            if isinstance(result, dict):
-                results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in result.items())
-                self.results_label.setText(results_text)
-                self.result = result
-                result0 = result[list(result.keys())[0]]
-                if not result0 or not isinstance(result0, (float, int)):
-                    self.statusbar.showMessage("State not found or 0 success rate", 1000)
-            else:
-                self.results_label.setText(str(result))
-                self.result = dict()
+            board = np.uint64(int('0x' + self.board_state.text().rjust(16, '0'), 16))
+            self.reader_thread.board_state = board
+            self.reader_thread.start()
         else:
             self.results_label.setText('')
             self.result = dict()
         self.gameframe.setFocus()
 
+    def _show_results(self, result:dict, state:str):
+        """ 绑定reader_thread信号 """
+        if result:
+            results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in result.items())
+            self.results_label.setText(results_text)
+            self.result = result
+            result0 = result[list(result.keys())[0]]
+            if not result0 or not isinstance(result0, (float, int)):
+                self.statusbar.showMessage("State not found or 0 success rate", 1000)
+        else:
+            self.results_label.setText(state)
+            self.result = dict()
+
+        if self.ai_state:
+            steps_per_second = SingletonConfig().config['demo_speed'] / 10
+            self.ai_timer.singleShot(int(1000 / steps_per_second), self.one_step)
+
     def manual_mode_update_results(self):
         self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
-        self.show_results()
+        self.read_results()
 
     def filepath_changed(self):
         options = QtWidgets.QFileDialog.Options()
@@ -581,7 +597,7 @@ class TrainWindow(QtWidgets.QMainWindow):
 
             self.book_reader.dispatch(SingletonConfig().config['filepath_map'][self.current_pattern]
                                       , self.pattern_settings[0], self.pattern_settings[1])
-            self.show_results()
+            self.read_results()
 
     def spawn_state_change(self, state):
         if state == 1 and self.best_spawn_checkBox.isChecked():
@@ -606,11 +622,11 @@ class TrainWindow(QtWidgets.QMainWindow):
                 results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in self.result.items())
                 self.results_label.setText(results_text)
             else:
-                self.show_results()
+                self.read_results()
                 
     def handle_set_board(self):
         self.textbox_reset_board()
-        self.show_results()
+        self.read_results()
 
     def textbox_reset_board(self):
         self.gameframe.board_encoded = np.uint64(int(self.board_state.text(), 16))
@@ -647,12 +663,16 @@ class TrainWindow(QtWidgets.QMainWindow):
         elif event.key() in (QtCore.Qt.Key.Key_Right, QtCore.Qt.Key.Key_D):
             self.process_input('Right')
         elif event.key() in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
-            # 焦点在 board_state
-            if self.focusWidget() == self.board_state:
+            if self.ai_state:
+                # 停止Demo
+                self.toggle_demo()
+            elif self.focusWidget() == self.board_state:
+                # 焦点在 board_state
                 self.handle_set_board()
                 return
-            # 执行默认的 one_step
-            self.one_step()
+            else:
+                # 默认执行最佳移动
+                self.one_step()
         else:
             super().keyPressEvent(event)  # 其他键交给父类处理
 
@@ -660,7 +680,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.isProcessing = True  # 设置标志防止进一步的输入
         self.gameframe.do_move(direction)
         self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
-        self.show_results()
+        self.read_results()
         self.isProcessing = False
 
     def handle_step(self):
@@ -673,6 +693,7 @@ class TrainWindow(QtWidgets.QMainWindow):
 
     def one_step(self):
         if not self.isProcessing and self.result:
+            self.isProcessing = True
             move = list(self.result.keys())[0]
             if self.ai_state and (self.result[move] == 0 or self.result[move] is None or self.result[move] == '?'):
                 self.ai_state = False
@@ -680,30 +701,23 @@ class TrainWindow(QtWidgets.QMainWindow):
                 self.ai_timer.stop()
                 self.isProcessing = False
             if isinstance(self.result[move], (int, float)):
-                self.isProcessing = True
                 self.gameframe.do_move(move.capitalize())
                 self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
-                self.show_results()
                 if self.recording_state:
                     self.record_current_state(move)
-                if self.ai_state:
-                    steps_per_second = SingletonConfig().config['demo_speed'] / 10
-                    QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ProcessEventsFlag.AllEvents)
-                    self.ai_timer.singleShot(int(1000 / steps_per_second), self.one_step)
-
+                self.read_results()
                 self.isProcessing = False
 
     def toggle_demo(self):
-        self.ai_state = False
         if not self.ai_state and not self.playing_record_state:
+            self.Demo.setText('Press Enter')
             self.played_length = 0
             self.ai_state = True
-            self.Demo.setText('STOP')
-            self.one_step()
+            self.ai_timer.singleShot(20, self.one_step)
+            self.statusbar.showMessage("Press Enter to Stop", 3000)
         else:
-            self.ai_state = False
             self.Demo.setText('Demo')
-            self.ai_timer.stop()
+            self.ai_state = False
 
     def handle_record(self):
         if not self.recording_state:
@@ -819,7 +833,31 @@ class TrainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event):
         self.ai_state = False
         self.Demo.setText('Demo')
+        np.array(self.gameframe.history, dtype='uint64, uint32').tofile(fr'C:\Users\Administrator\Desktop\record\0')
         event.accept()
+
+
+class ReaderWorker(QtCore.QThread):
+    """ 常驻工作线程，负责查表 """
+    result_ready = QtCore.pyqtSignal(dict, str)  # 信号：结果+状态消息
+
+    def __init__(self, reader: BookReaderDispatcher, board_state:np.uint64,
+                 pattern_settings: list, current_pattern: str):
+        super(ReaderWorker, self).__init__()
+        self.book_reader = reader
+        self.board_state = board_state
+        self.pattern_settings = pattern_settings
+        self.current_pattern = current_pattern
+
+    def run(self):
+        board = self.book_reader.bm.decode_board(self.board_state)
+        result = self.book_reader.move_on_dic(board, self.pattern_settings[0], self.pattern_settings[1],
+                                              self.current_pattern, self.pattern_settings[2])
+        state = ''
+        if not isinstance(result, dict):
+            state = str(result)
+            result = dict()
+        self.result_ready.emit(result, state)
 
 
 if __name__ == "__main__":

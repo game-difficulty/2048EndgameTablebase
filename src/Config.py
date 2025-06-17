@@ -1,19 +1,22 @@
-import os
-import sys
-import pickle
 import logging
+import os
+import pickle
+import sys
 from typing import Callable, Dict, Tuple
 
-import numpy as np
-from numpy.typing import NDArray
 import cpuinfo
+import numpy as np
 from PyQt5 import QtWidgets
+from PyQt5.QtGui import QFontDatabase
+from numpy.typing import NDArray
+
 import Calculator
 import Variants.vCalculator as vCalculator
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 ToFindFunc = Callable[[np.uint64], np.uint64]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
+
 
 category_info = {'10 space': ['L3', 'L3t', '442', 't'],
                  '12 space': ['444', '4431', 'LL', '4432f', '4442ff'],
@@ -87,6 +90,7 @@ formation_info: Dict[str, Tuple[int, PatternCheckFunc, ToFindFunc,
                  np.array([np.uint64(0x100000001ff12ff2), np.uint64(0x1000000012ff21ff)], dtype=np.uint64)],
 }
 
+
 pattern_32k_tiles_map: Dict[str, list] = {
     # 32k, free32k, fix32k_pos,
     '': [0, 0, np.array([], dtype=np.uint8)],
@@ -130,11 +134,108 @@ pattern_32k_tiles_map: Dict[str, list] = {
 }
 
 
+theme_map = {
+          'Default': ['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
+                      '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'],
+          'Chrome': ['#eee4da', '#ede0c7', '#f2b17a', '#f59563', '#ff7455', '#f55f44', '#f1cf5f', '#f3cb49',
+                     '#f3c82c', '#f3c300', '#ebb800', '#33b4a9', '#27a59a', '#12998d', '#24a7f5', '#24a7f5'],
+          'Classic': ['#eee4da', '#ede0c8', '#f2b179', '#f59563', '#f67c5f', '#f65e3b', '#edcf72', '#edcc61',
+                      '#edc850', '#edc53f', '#edc22e', '#3c3a32', '#3c3a32', '#3c3a32', '#3c3a32', '#3c3a32'],
+          'Coral cave': ['#eef5e8', '#dcedc8', '#aed581', '#6fab3c', '#4b942f', '#247538', '#195a3f', '#166b60',
+                         '#1b6e6e', '#1d8287', '#01949e', '#008bb3', '#007ec2', '#506ac1', '#8a4daa', '#8a4daa'],
+          'Dice': ['#40007f', '#4c0099', '#5900b2', '#6600cc', '#7300e5', '#8000ff', '#8c19ff', '#00418a',
+                   '#004b9e', '#0054b2', '#005ec6', '#196ecb', '#337ed1', '#4c8ed7', '#e4317f', '#e4317f'],
+          'Eclipse': ['#f4da98', '#cabb90', '#a09b89', '#767c81', '#6a7278', '#5e6770', '#525d67', '#47525e',
+                      '#3b4855', '#2f3d4d', '#233334', '#fffff0', '#ffffcb', '#ffffa5', '#000000', '#000000'],
+          'Eight': ['#eee4da', '#ede0c8', '#f2b179', '#f59563', '#f67c5f', '#f65e3b', '#edcf72', '#edcc61',
+                    '#edc850', '#edc53f', '#edc22e', '#77a136', '#2db388', '#2d83b3', '#2d2db3', '#2d2db3'],
+          'Estoty': ['#eee4da', '#ede0c8', '#f2b179', '#f59563', '#f67c5f', '#f65e3b', '#edcf72', '#edcc61',
+                     '#edc850', '#edc53f', '#edc22e', '#de6d6e', '#dc595f', '#d54e42', '#80b2d1', '#80b2d1'],
+          'Fruitsational': ['#eee6d6', '#eedab3', '#ffbd5b', '#f5982d', '#ed7520', '#e34e13', '#cf3e34', '#cc3a5a',
+                            '#bf3976', '#bd3b9f', '#7c18ff', '#2a7cd9', '#09a5cc', '#0cbfcc', '#15d4a1', '#15d4a1'],
+          'Galaxy': ['#eee4da', '#ede0c8', '#f2b179', '#f59563', '#f67c5f', '#f65e3b', '#edcf72', '#edcc61',
+                     '#edc850', '#edc53f', '#edc22e', '#e67272', '#d05480', '#bd398e', '#991399', '#991399'],
+          'Green': ['#eef5e8', '#dcedc8', '#aed581', '#8fc94c', '#6fab3c', '#4b942f', '#018c79', '#02a8b4',
+                    '#0992c4', '#0271c7', '#029acc', '#01949e', '#1d8287', '#1b6e6e', '#16666b', '#16666b'],
+          'Hobbel': ['#a4a3cb', '#8a8fb5', '#81799e', '#c599aa', '#e3998c', '#f3b177', '#6f4762', '#8e536f',
+                     '#a25670', '#ba5672', '#cd5b74', '#fe595d', '#f57246', '#e88d3a', '#f9c65b', '#f9c65b'],
+          'Holiday': ['#eee4da', '#fff18c', '#ffe840', '#ffe212', '#f5c300', '#f6af02', '#005e00', '#007400',
+                      '#008900', '#009f00', '#00b400', '#b11e31', '#c2182e', '#d4112a', '#e50b27', '#e50b27'],
+          'Icy': ['#8258ff', '#7649fc', '#6d38ff', '#632aff', '#5618ff', '#4400ff', '#003c7d', '#00418a', '#004b9e',
+                  '#0054b2', '#005ec6', '#5f5be4', '#9400ff', '#c236f8', '#fe52c1', '#fe52c1'],
+          'Kaiser': ['#186818', '#25a725', '#4cd64c', '#02e3a7', '#00e0e0', '#02bae3', '#4f70bd', '#3e5ca4',
+                     '#334b86', '#263864', '#1d2c4e', '#420e61', '#631492', '#8a1dcb', '#b359e8', '#b359e8'],
+          'Ketchapp': ['#eee4da', '#ede0c8', '#f2b179', '#f59563', '#f67c5f', '#f65e3b', '#edcf72', '#edcc61',
+                       '#edc850', '#edc53f', '#edc22e', '#00eb6d', '#00ba4e', '#00873b', '#00692d', '#00692d'],
+          'New Year': ['#4f3b36', '#633c3c', '#672422', '#822422', '#9c2220', '#b71d1d', '#672422', '#822422',
+                       '#9c2220', '#b71d1d', '#b81414', '#bd9a3a', '#cf9d1f', '#e6ae16', '#ffbb00', '#ffbb00'],
+          'Mint': ['#eee4da', '#ede0c8', '#f2b179', '#f59563', '#f67c5f', '#f65e3b', '#edcf72', '#edcc61',
+                   '#edc850', '#edc53f', '#edc22e', '#1a9b52', '#2ecc71', '#1dceaa', '#3498db', '#3498db'],
+          'Mochiica': ['#0a6669', '#07555f', '#0b3d4d', '#243861', '#332e6b', '#432b82', '#4c3699', '#5c45a6',
+                       '#7e5fb9', '#a777d3', '#cf99e3', '#e8aedb', '#febfbf', '#febe88', '#fdb070', '#fdb070'],
+          'Nebula': ['#eee4da', '#ede0c8', '#f2b179', '#f59563', '#f67c5f', '#f65e3b', '#edcf72', '#edcc61',
+                     '#edc850', '#edc53f', '#edc22e', '#9100cf', '#611ecc', '#303ec9', '#005ec6', '#005ec6'],
+          'Old Ketchapp': ['#eee4da', '#ece0c7', '#f2b079', '#ec8c54', '#f67b5e', '#ea5837', '#f2d86b', '#f0d04b',
+                           '#e4c02a', '#e1ba14', '#ebc302', '#5eda93', '#24bb64', '#228c50', '#206d3c', '#206d3c'],
+          'Pink': ['#c41197', '#d713a6', '#eb1bb7', '#f14593', '#f0464f', '#df0022', '#9122ff', '#8000ff',
+                   '#6600cc', '#5500aa', '#45008a', '#005ec6', '#0079ff', '#00acff', '#47c5ff', '#47c5ff'],
+          'Playful': ['#4285f4', '#ea4335', '#fbbc05', '#34a853', '#e84e9b', '#27a28b', '#f67c5f', '#2b5bad',
+                      '#edc850', '#b79473', '#976f43', '#3c3a32', '#ea4335', '#ea4335', '#ea4335', '#ea4335'],
+          'Rainbow': ['#dd2620', '#ed431a', '#fd6013', '#fb7f19', '#fa9e1f', '#f8bd25', '#bfb933', '#85b440',
+                      '#4cb04e', '#3e8c55', '#31685c', '#234463', '#4a3475', '#722387', '#991399', '#991399'],
+          'Royal': ['#fffdf8', '#fcf1d4', '#f9e5b0', '#f6da8d', '#f3ce69', '#f0c245', '#e67372', '#d35b7c',
+                    '#c04386', '#ac2b8f', '#991399', '#6469ee', '#5a83ee', '#4f9eee', '#45b8ee', '#45b8ee'],
+          'Spooky': ['#565656', '#5e3232', '#702626', '#781111', '#6e0909', '#560000', '#ff9041', '#fd7e24',
+                     '#db6400', '#aa4e00', '#8a4000', '#1e0076', '#14004f', '#0a0027', '#000000', '#000000'],
+          'Sunrise': ['#271732', '#50264a', '#6e3e70', '#905fae', '#b15beb', '#c163ff', '#b43f6c', '#ce577d',
+                      '#dc6581', '#e1758f', '#e38d94', '#dd4f39', '#e70127', '#b0022a', '#a90a40', '#a90a40'],
+          'Sunset': ['#eee6d6', '#eedab3', '#eec269', '#e09b43', '#db881f', '#c76c1e', '#ba4e39', '#b0402d',
+                     '#ad3136', '#8c1d55', '#732172', '#5b297d', '#562185', '#5f1d75', '#78194a', '#78194a'],
+          'Supernova': ['#eee4da', '#ede0c8', '#f2b179', '#f59563', '#f67c5f', '#f65e3b', '#edcf72', '#edcc61',
+                        '#edc850', '#edc53f', '#edc22e', '#e900ad', '#bf009c', '#94008a', '#6a0079', '#6a0079'],
+          'Tropical': ['#eef5e8', '#dcedc8', '#aed581', '#6fab3c', '#4b942f', '#247538', '#195a3f', '#166b60',
+                       '#1b6e6e', '#1d8287', '#01949e', '#ccb400', '#c79522', '#c66421', '#a11c20', '#a11c20'],
+          'Verse': ['#eee4da', '#ede0c8', '#f2b179', '#f59563', '#f67c5f', '#f65e3b', '#edcf72', '#edcc61',
+                    '#edc850', '#edc53f', '#edc22e', '#9100cf', '#590080', '#36004d', '#000000', '#000000'],
+          '10 years': ['#f57322', '#cf621f', '#bd5418', '#b0aad1', '#a29dbf', '#908cab', '#ffc832', '#ffc421',
+                       '#ffbb00', '#66e8ff', '#45e3ff', '#3698fa', '#187fed', '#b92fdb', '#d041e3', '#d041e3'],
+}
+
+
+def hex_to_rgb(hex_color):
+    """将十六进制颜色转换为RGB元组（0-255）"""
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def is_darker_than(color_hex, reference="#ede0c7"):
+    r, g, b = hex_to_rgb(color_hex)
+    r_ref, g_ref, b_ref = hex_to_rgb(reference)
+
+    # 计算亮度
+    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+    luminance_ref = 0.299 * r_ref + 0.587 * g_ref + 0.114 * b_ref
+
+    return luminance_ref > luminance
+
+
+def fill_mid_falses(lst):
+    if len(lst) < 3:
+        return lst
+    result = lst.copy()
+    for i in range(1, len(lst) - 1):
+        if not lst[i] and lst[i - 1] and lst[i + 1]:
+            result[i] = True
+
+    return result
+
+
 # noinspection PyAttributeOutsideInit
 class SingletonConfig:
     _instance = None  # 用于存储单例实例的类属性
     config_file_path = os.path.join(os.path.dirname(__file__), 'config')  # 配置文件路径
     use_avx = 1
+    font_colors = [True for _ in range(36)]
 
     def __new__(cls):
         # 检查是否已经有实例存在
@@ -142,8 +243,19 @@ class SingletonConfig:
             cls._instance = super(SingletonConfig, cls).__new__(cls)
             # 初始化配置数据
             cls._instance.config = cls.load_config()
+            cls.tile_font_colors()
             cls.check_cpuinfo()
         return cls._instance
+
+    @classmethod
+    def tile_font_colors(cls):
+        if not cls._instance:
+            return
+        font_colors = []
+        bg_colors = cls._instance.config['colors']
+        for color in bg_colors:
+            font_colors.append(is_darker_than(color))
+        cls.font_colors = fill_mid_falses(font_colors)
 
     @classmethod
     def load_config(cls, filename=None):
@@ -230,6 +342,22 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 
 
 sys.excepthook = handle_exception
+
+
+def _load_fonts():
+    """动态加载Clear Sans字体"""
+    font_files = [
+        r"font/ClearSans/ClearSans-Bold.ttf",
+        r"font/ClearSans/ClearSans-Regular.ttf"
+    ]
+
+    for font_file in font_files:
+        # 返回值为字体ID，负数表示失败
+        if QFontDatabase.addApplicationFont(font_file) < 0:
+            logger.warning(f"Font loading failure: {font_file}")
+
+
+_load_fonts()
 
 
 """ CPU-time returning clock() function which works from within njit-ted code """

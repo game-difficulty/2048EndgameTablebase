@@ -1,8 +1,10 @@
 import os
 import struct
+import time
 from typing import Callable, Dict, Tuple, Union, List, Optional
 
 import numpy as np
+from numpy.ma.core import shape
 from numpy.typing import NDArray
 
 from BoardMover import SingletonBoardMover, BoardMover
@@ -248,9 +250,19 @@ class BookReaderDispatcher:
 
 
 if __name__ == "__main__":
-    _result = BookReader.move_on_dic(np.array([[2, 8, 4, 2],
-                                               [64, 8, 4, 2],
-                                               [32768, 32768, 32768, 32768],
-                                               [32768, 32768, 32768, 32768]]),
-                                     'free8w', '128', 'free8w_128')
+    _result = BookReader.move_on_dic(np.array([[0, 2, 2, 4],
+                                               [2, 8, 32, 64],
+                                               [2, 32768, 32768, 32768],
+                                               [2, 32768, 32768, 32768]]),
+                                     'L3', '512', 'L3_512_0')
+    print(_result)
+
+    br = BookReaderDispatcher()
+    br.dispatch(SingletonConfig().config['filepath_map']['L3_512_0']
+                              , 'L3', '512')
+    _result = br.move_on_dic(np.array([[0, 2, 2, 4],
+                                               [2, 8, 32, 64],
+                                               [2, 32768, 32768, 32768],
+                                               [2, 32768, 32768, 32768]]),
+                                     'L3', '512', 'L3_512_0')
     print(_result)

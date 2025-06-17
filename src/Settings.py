@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import QToolButton, QMenu, QAction
 
 from BookBuilder import start_build
 from Variants.vBookBuilder import v_start_build
-from Config import SingletonConfig, category_info
+from Config import SingletonConfig, category_info, theme_map
 
 
 class TwoLevelComboBox(QToolButton):
@@ -32,7 +32,7 @@ class TwoLevelComboBox(QToolButton):
 
         for item in items:
             item_action = QAction(item, self)
-            item_action.triggered.connect(lambda _, x=item: self._on_item_selected(x))
+            item_action.triggered.connect(lambda _, x=item: self._on_item_selected(x))  # type: ignore
             submenu.addAction(item_action)
 
         category_action.setMenu(submenu)
@@ -68,7 +68,7 @@ class SingleLevelComboBox(QToolButton):
     def add_item(self, item: str):
         """添加单个菜单项"""
         item_action = QAction(item, self)
-        item_action.triggered.connect(lambda _, x=item: self._on_item_selected(x))
+        item_action.triggered.connect(lambda _, x=item: self._on_item_selected(x))  # type: ignore
         self.category_menu.addAction(item_action)
         self.items.append(item)
 
@@ -227,10 +227,22 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.color_bt.clicked.connect(self.show_ColorDialog)  # type: ignore
         self.color_bt.setObjectName("color_bt")
         self.selfLayout.addWidget(self.color_bt, 6, 2, 1, 1)
-        self.color_default_bt = QtWidgets.QPushButton(self.centralwidget)
-        self.color_default_bt.clicked.connect(self.set_default_color)  # type: ignore
-        self.color_default_bt.setObjectName("color_default_bt")
-        self.selfLayout.addWidget(self.color_default_bt, 6, 3, 1, 1)
+
+        # 创建主题选择按钮（下拉菜单）
+        self.theme_button = QtWidgets.QToolButton(self.centralwidget)
+        self.theme_button.setMinimumSize(150, 20)
+        self.theme_button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        self.theme_button.setObjectName("theme_button")
+        self.selfLayout.addWidget(self.theme_button, 6, 3, 1, 1)
+        self.theme_menu = QtWidgets.QMenu(self.theme_button)
+        self.theme_button.setMenu(self.theme_menu)
+
+        # 添加主题选项
+        for theme_name in theme_map.keys():
+            action = self.theme_menu.addAction(theme_name)
+            action.triggered.connect(  # type: ignore
+                lambda checked, theme=theme_name: self.apply_theme(theme)
+            )
 
         self.spawnrate_text = QtWidgets.QLabel(self.centralwidget)
         self.spawnrate_text.setObjectName("spawnrate_text")
@@ -325,7 +337,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.appear_checkBox.setText(_translate("Settings", "Appear"))
         self.colorset_text.setText(_translate("Settings", "Tile Color:"))
         self.color_bt.setText(_translate("Settings", "Choose Color"))
-        self.color_default_bt.setText(_translate("Settings", "Default"))
+        self.theme_button.setText(_translate("Settings", "Set Theme"))
         self.spawnrate_text.setText(_translate("Settings", "4 Spawn Rate:"))
         self.demo_speed_text.setText(_translate("Settings", "Demo Speed:"))
         self.tile_font_size_text.setText(_translate("Settings", "Tile Font Size:"))
@@ -335,7 +347,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
     def show_ColorDialog(self):
         config = SingletonConfig().config
         num = self.color_combo.currentText()
-        current_color = config['colors'][int(np.log2(int(num))) - 1] if num != '' else '#FFFFFF'
+        current_color = config['colors'][int(np.log2(int(num))) - 1] if num != '' else '#000000'
         color_dialog = QtWidgets.QColorDialog(self)
         color_dialog.setWindowIcon(self.windowIcon())
         color = color_dialog.getColor(QtGui.QColor(current_color))
@@ -343,12 +355,11 @@ class SettingsWindow(QtWidgets.QMainWindow):
             num = int(np.log2(int(num))) - 1
             config['colors'][num] = color.name()
 
-    def set_default_color(self):
-        default_colors = ['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
-                          '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'] + [
-                             '#ffffff'] * 20
-        num = int(np.log2(int(self.color_combo.currentText()))) - 1
-        SingletonConfig().config['colors'][num] = default_colors[num]
+    @staticmethod
+    def apply_theme(theme_name):
+        if theme_name in theme_map:
+            theme_colors = theme_map[theme_name]
+            SingletonConfig().config['colors'] = theme_colors.copy() + ['#000000'] * 20
 
     def filepath_changed(self):
         options = QtWidgets.QFileDialog.Options()
@@ -386,6 +397,21 @@ class SettingsWindow(QtWidgets.QMainWindow):
         pattern = self.pattern_combo.currentText
         target = self.target_combo.currentText
         pathname = self.filepath_edit.toPlainText()
+
+        if (self.advanced_algo_checkBox.isChecked() and pattern in [
+            'L3', 'L3t', '442', 't', '444', 'LL', 'free8w', 'free9w', 'free8', '2x4', '3x3', '3x4']):
+            reply = QtWidgets.QMessageBox.warning(
+                self,
+                "Warning",
+                "The advanced algorithm is designed for larger tables. "
+                f"The use of the advanced algorithm for {pattern} may result in slower calculations. "
+                "Do you want to continue?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No
+            )
+            if reply == QtWidgets.QMessageBox.No:
+                return
+
         if pattern and target and pathname and os.path.exists(pathname):
             position = position if position else 0
             config = SingletonConfig().config
@@ -403,7 +429,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
             self.build_bt.setEnabled(False)
             self.Building_thread = BuildThread(pattern, target, position, pathname)
             self.Building_thread.finished.connect(self.on_build_finished)
-            self.Building_thread.start()  # 启动线程
+            self.Building_thread.start()  # 启动计算线程
 
     def on_build_finished(self):
         self.build_bt.setText('BUILD')

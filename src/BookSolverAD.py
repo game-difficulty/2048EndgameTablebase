@@ -321,6 +321,7 @@ def recalculate_ad(
                     success_probability = 0
                     empty_slots = 0
 
+
                     for i in range(16):  # 遍历所有位置
                         if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
                             empty_slots += 1
@@ -436,7 +437,7 @@ def solve_optimal_success_rate_arr(t, new_value, i, rep_t, rep_t_rev, pos_rev, m
                                                   optimal_success_rate, ranked_array)
                     continue
                 need_process, tiles_combinations, pos_rank, pos_32k, tile_value, count32k = (
-                    dispatch_mnt_osr_ad_arr(newt, unmasked_newt, lm, board_sum,
+                    dispatch_mnt_osr_ad_arr(unmasked_newt, lm, board_sum,
                                             optimal_success_rate))
                 if not need_process:
                     # 4
@@ -578,7 +579,7 @@ def update_osr_ad(book_mat: NDArray[NDArray[np.uint32]], b: np.uint64, ind_arr: 
 
 
 @njit(nogil=True)
-def dispatch_mnt_osr_ad_arr(b: np.uint64, unmasked_b: np.uint64, lm: BoardMasker, original_board_sum: np.uint32,
+def dispatch_mnt_osr_ad_arr(unmasked_b: np.uint64, lm: BoardMasker, original_board_sum: np.uint32,
                             osr: NDArray[np.uint64]
                             ) -> Tuple[bool, NDArray[np.uint8], int, NDArray[np.uint64], int, np.uint8]:
     # 1、合成后不存在两个相同大数 2、合成后存在两个相同大数 3、合出第三个64 4、成功 5、3x64 -> 64 128 (已在之前处理)

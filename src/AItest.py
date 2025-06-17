@@ -84,21 +84,24 @@ class AItest:
     def play(self):
         while not self.died:
             self.one_step()
-            if np.sum((self.board == 32768)) == 2:
+            if self.score > 840000 and np.sum((self.board == 32768)) == 2:
                 positions = np.where(self.board == 32768)
                 first_position = (positions[0][0], positions[1][0])
+                second_position = (positions[0][1], positions[1][1])
 
                 if positions[0][0] == positions[0][1] and abs(positions[1][0] - positions[1][1]) == 1:
-                    self.board[first_position] = 0
+                    self.board[first_position] = 16384
+                    self.board[second_position] = 16384
                     self.board_encoded = np.uint64(self.mover.encode_board(self.board))
-                    self.score += 65536
+                    self.score += 32768
                     self.do_move('Right')
                     self.died = False
 
                 elif positions[1][0] == positions[1][1] and abs(positions[0][0] - positions[0][1]) == 1:
-                    self.board[first_position] = 0
+                    self.board[first_position] = 16384
+                    self.board[second_position] = 16384
                     self.board_encoded = np.uint64(self.mover.encode_board(self.board))
-                    self.score += 65536
+                    self.score += 32768
                     self.do_move('Down')
                     self.died = False
 

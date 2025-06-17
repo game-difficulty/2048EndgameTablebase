@@ -551,10 +551,10 @@ def search_evil_gen(evil_gen, b, depth):
 
 
 if __name__ == "__main__":
-    b1 = np.array([[   4 ,   0,  0,  2],
- [   16  ,  8 ,  0,  0],
- [   32  ,  512 ,  8,  2],
- [   4096  ,  2 ,   32,   8]], dtype=np.int32)
+    b1 = np.array([[   0 ,   4,  2,  0],
+ [   2  ,  8 ,  0,  0],
+ [   4  ,  2048 ,  16,  2],
+ [   32  ,  4 ,   8,   4]], dtype=np.int32)
     print(b1)
     s1 = AIPlayer(b1)
     #g1 = EvilGen(b1)

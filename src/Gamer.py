@@ -20,7 +20,7 @@ class SquareFrame(QtWidgets.QFrame):
         self.colors = SingletonConfig().config['colors']
         '''['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
             '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'] + [
-            '#ffffff'] * 20'''
+            '#000000'] * 20'''
         self.anims: List[List[Union[None, QtCore.QAbstractAnimation]]] = [
             [None for _ in range(self.cols)] for __ in range(self.rows)]
         self.animation_config = {
@@ -72,7 +72,7 @@ class SquareFrame(QtWidgets.QFrame):
                 label = QtWidgets.QLabel(frame)
                 label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
                 label.setStyleSheet(f"""
-                    font: {self.base_font_size}pt 'Calibri'; 
+                    font: {self.base_font_size}pt 'Clear Sans'; 
                     font-weight: bold; color: white; 
                     background-color: transparent;
                 """)
@@ -84,6 +84,23 @@ class SquareFrame(QtWidgets.QFrame):
                 row_labels.append(label)
             self.frames.append(row_frames)
             self.labels.append(row_labels)
+
+    @staticmethod
+    def get_label_style(fontsize, value):
+        try:
+            value = int(value)
+            value = 32768 if value <= 1 else value
+        except TypeError:
+            value = 32768
+
+        color = '#776e65' if not SingletonConfig.font_colors[int(np.log2(value)) - 1] else '#f9f6f2'
+
+        return f"""
+            font: {fontsize}pt 'Clear Sans';
+            font-weight: bold;
+            color: {color};
+            background-color: transparent;
+        """
 
     def animate_appear(self, r, c):
         if self._check_animation_running(r, c):
@@ -215,7 +232,7 @@ class BaseBoardFrame(QtWidgets.QFrame):
         fontsize = self.game_square.base_font_size if len(str(value)) < 3 else int(
             self.game_square.base_font_size * 3 / (0.5 + len(str(value))))
         frame.setStyleSheet(f"background-color: {color};")
-        label.setStyleSheet(f"font: {fontsize}pt 'Calibri'; font-weight: bold; color: white;")
+        label.setStyleSheet(self.game_square.get_label_style(fontsize, value))
 
         if anim:
             self.game_square.animate_appear(row, col)
@@ -236,7 +253,7 @@ class BaseBoardFrame(QtWidgets.QFrame):
         if do_anim:
             self.update_frame(2 ** val, new_tile_pos // 4, new_tile_pos % 4, anim=do_anim)
 
-    def do_move(self, direction, do_gen=True):
+    def do_move(self, direction: str, do_gen=True):
         mover = self.mover if self.use_variant_mover == 0 else self.v_mover
         do_anim = SingletonConfig().config['do_animation']
         direct = {'Left': 1, 'Right': 2, 'Up': 3, 'Down': 4}[direction.capitalize()]
@@ -283,6 +300,8 @@ class GameFrame(BaseBoardFrame):
         self.died_when_ai_state = False
         self.ai_processing = False
 
+        self.has_65k = self.score > 960000
+
         # 初始化 AI 线程
         self.ai_thread = AIThread(self.board)
         self.ai_thread.updateBoard.connect(self.do_ai_move)
@@ -303,6 +322,7 @@ class GameFrame(BaseBoardFrame):
         self.evil_gen.reset_board(self.board)
         self.update_all_frame(self.board)
         self.score = 0
+        self.has_65k = False
         self.history = [(self.board_encoded, self.score)]
 
     def ai_step(self):
@@ -335,6 +355,31 @@ class GameFrame(BaseBoardFrame):
         self.update_all_frame(self.board)
         if do_anim:
             self.update_frame(2 ** val, new_tile_pos // 4, new_tile_pos % 4, anim=do_anim)
+
+    def do_move(self, direction: str, do_gen=True):
+        """ 支持65536 """
+        if 840000 < self.score and not self.has_65k and np.sum((self.board == 32768)) == 2:
+            positions = np.where(self.board == 32768)
+            first_position = (positions[0][0], positions[1][0])
+            second_position = (positions[0][1], positions[1][1])
+
+            if (positions[0][0] == positions[0][1] and abs(positions[1][0] - positions[1][1]) == 1 and
+                direction.capitalize() in ('Right', 'Left')) or (positions[1][0] == positions[1][1] and
+                abs(positions[0][0] - positions[0][1]) == 1 and direction.capitalize() in ('Up', 'Down')):
+                    self.board[first_position] = 16384
+                    self.board[second_position] = 16384
+                    self.board_encoded = np.uint64(self.mover.encode_board(self.board))
+                    self.score += 32768
+                    self.has_65k = True
+
+        super().do_move(direction, do_gen)
+
+    def update_all_frame(self, values):
+        """ 支持65536 """
+        if self.has_65k:
+            values = values.copy()
+            values.flat[next((i for i, x in enumerate(values.flat) if x == 32768), None)] = 65536
+        super().update_all_frame(values)
 
 
 class AIThread(QtCore.QThread):
@@ -728,10 +773,12 @@ Only effective for players''')
             self.ai.setText("STOP")
             self.ai_state = True
             self.ai_timer.singleShot(20, self.handleOneStep)
-            if not SingletonConfig().config['filepath_map'].get('4431_2048_0', []) or \
-                    not SingletonConfig().config['filepath_map'].get('LL_2048_0', []):
+            if (not SingletonConfig().config['filepath_map'].get('free12w_2048', []) or
+                    not SingletonConfig().config['filepath_map'].get('4442f_2k', []) or
+                not SingletonConfig().config['filepath_map'].get('free11w_512', []) or
+                not SingletonConfig().config['filepath_map'].get('free11w_2k', [])):
                 self.statusbar.showMessage(
-                    "Run free12w-2k free11w-2k 4442f-2k free11w-512 for best performance.", 3000)
+                    "Run free12w-2k free11w-2k 4442f-2k free11w-512 for best performance.", 5000)
         else:
             self.ai.setText("AI: ON")
             self.ai_state = False
