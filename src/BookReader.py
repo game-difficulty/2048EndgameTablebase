@@ -4,7 +4,6 @@ import time
 from typing import Callable, Dict, Tuple, Union, List, Optional
 
 import numpy as np
-from numpy.ma.core import shape
 from numpy.typing import NDArray
 
 from BoardMover import SingletonBoardMover, BoardMover
