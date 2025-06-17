@@ -1,17 +1,16 @@
 import os
 import struct
-import time
 from typing import Callable, Dict, Tuple, Union, List, Optional
 
 import numpy as np
 from numpy.typing import NDArray
 
 from BoardMover import SingletonBoardMover, BoardMover
-from Variants.vBoardMover import VBoardMover
+from BookReaderAD import BookReaderAD
+from Calculator import re_self
 from Config import SingletonConfig, formation_info
 from TrieCompressor import trie_decompress_search
-from Calculator import re_self
-from BookReaderAD import BookReaderAD
+from Variants.vBoardMover import VBoardMover
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 ToFindFunc = Callable[[np.uint64], np.uint64]

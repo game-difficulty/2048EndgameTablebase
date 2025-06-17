@@ -17,15 +17,21 @@ class SquareFrame(QtWidgets.QFrame):
         super().__init__(parent)
         self.base_font_size = int(self.width() / 14.4 * SingletonConfig().config.get('font_size_factor', 100) / 100)
         self.setupUi()
-        self.colors = SingletonConfig().config['colors']
-        '''['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
-            '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'] + [
-            '#000000'] * 20'''
         self.anims: List[List[Union[None, QtCore.QAbstractAnimation]]] = [
             [None for _ in range(self.cols)] for __ in range(self.rows)]
         self.animation_config = {
             'appear': {'duration': 150, 'curve': QtCore.QEasingCurve.OutCubic},
             'pop': {'duration': 120, 'curve': QtCore.QEasingCurve.InOutCubic},}
+
+    @property
+    def colors(self):
+        """
+        默认主题
+        ['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
+        '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'] + [
+        '#000000'] * 20
+        """
+        return SingletonConfig().config['colors']
 
     def updateGeometry(self):
         # 保持正方形尺寸并居中显示
