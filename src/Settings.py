@@ -360,6 +360,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         if theme_name in theme_map:
             theme_colors = theme_map[theme_name]
             SingletonConfig().config['colors'] = theme_colors.copy() + ['#000000'] * 20
+            SingletonConfig.tile_font_colors()
 
     def filepath_changed(self):
         options = QtWidgets.QFileDialog.Options()
