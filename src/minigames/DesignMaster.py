@@ -45,10 +45,10 @@ class DesignMaster1Frame(MinigameFrame):
             if self.current_max_num > self.max_num:
                 self.max_num = self.current_max_num
                 self.is_passed = {10: 3, 9: 2, 8: 1}.get(self.max_num, 4)
-                level = {10: 'golden', 9: 'silver', 8: 'bronze'}.get(self.max_num, 'golden')
+                level = {10: 'gold', 9: 'silver', 8: 'bronze'}.get(self.max_num, 'gold')
                 message = f'You achieved {2 ** self.max_num}!\n You get a {level} trophy!'
             else:
-                level = {10: 'golden', 9: 'silver', 8: 'bronze'}.get(self.current_max_num, 'golden')
+                level = {10: 'gold', 9: 'silver', 8: 'bronze'}.get(self.current_max_num, 'gold')
                 message = f'You achieved {2 ** self.current_max_num}!\n Take it further!'
             self.show_trophy(f'pic/{level}.png', message)
 
@@ -79,7 +79,7 @@ class DesignMasterWindow(MinigameWindow):
 
     def show_message(self):
         text = 'Fit a particular pattern.\n'
-        target = self.gameframe.pattern[0] * max(self.gameframe.current_max_num, self.gameframe.max_num) * 2
+        target = self.gameframe.pattern * 2 ** (max(self.gameframe.current_max_num, self.gameframe.max_num) + 1)
         text += self.array_to_formatted_string(target)
 
         # 创建自定义的QMessageBox

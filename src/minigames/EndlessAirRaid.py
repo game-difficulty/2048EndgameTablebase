@@ -23,7 +23,7 @@ class EndlessAirRaidFrame(MinigameFrame):
 
         self.levels = [
             (300000, 4, None),
-            (200000, 3, 'golden'),
+            (200000, 3, 'gold'),
             (100000, 2, 'silver'),
             (40000, 1, 'bronze')
         ]
@@ -204,8 +204,7 @@ class EndlessAirRaidFrame(MinigameFrame):
             frame.setStyleSheet(f"background-color: {color};")
         fontsize = self.game_square.base_font_size if (value == -1 or len(str(2 ** value)) < 3) else int(
             self.game_square.base_font_size * 3 / (0.5 + len(str(2 ** value))))
-        label.setStyleSheet(
-            f"font: {fontsize}pt 'Calibri'; font-weight: bold; color: white; background-color: transparent;")
+        label.setStyleSheet(self.game_square.get_label_style(fontsize, value))
         self.update_frame_small_label(row, col)
 
         if anim:

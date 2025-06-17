@@ -99,8 +99,7 @@ class IceAgeFrame(MinigameFrame):
             color = 'rgba(229, 229, 229, 1)'
             frame.setStyleSheet(f"background-color: {color};")
             fontsize = self.game_square.base_font_size
-        label.setStyleSheet(
-            f"font: {fontsize}pt 'Calibri'; font-weight: bold; color: white; background-color: transparent;")
+        label.setStyleSheet(self.game_square.get_label_style(fontsize, value))
 
         self.update_frame_small_label(row, col)
         if anim:
@@ -382,7 +381,6 @@ class IceAgeWindow(MinigameWindow):
         animation.start()
 
         sparkle_frame.show()
-        print(x,y)
         self.sparkle_and_anim = (sparkle_frame, animation)
 
     def anim_ended(self):
@@ -396,7 +394,7 @@ class IceAgeWindow(MinigameWindow):
 
     def show(self):
         super().show()
-        print(self.gameframe.count_down)
+        # print(self.gameframe.count_down)
         self.gameframe.update_frozen_frames()
 
 

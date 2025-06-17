@@ -1,14 +1,14 @@
+import random
 import sys
 from typing import List, Union
-import random
 
 import numpy as np
 from PyQt5 import QtCore, QtWidgets, QtGui
-from PyQt5.QtCore import QPropertyAnimation, QRect, QEasingCurve, QSize, QPoint
+from PyQt5.QtCore import QEasingCurve
 
-from MinigameMover import MinigameBoardMover, MinigameBoardMover_mxn
-from Config import SingletonConfig
 from Calculator import find_merge_positions
+from Config import SingletonConfig
+from MinigameMover import MinigameBoardMover, MinigameBoardMover_mxn
 
 
 # noinspection PyAttributeOutsideInit
@@ -18,13 +18,15 @@ class MinigameSquareFrame(QtWidgets.QFrame):
         self.base_font_size = int(
             self.width() / (3.6 * shape[1]) * SingletonConfig().config.get('font_size_factor', 100) / 100)
         self.setupUi(shape)
-        self.colors = SingletonConfig().config['colors']
-        '''['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
-            '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'] + [
-            '#ffffff'] * 20'''
         self.anims: List[List[Union[None, QtCore.QAbstractAnimation]]] = [
-            [None for _ in range(self.cols)] for __ in range(self.rows)
-        ]
+            [None for _ in range(self.cols)] for __ in range(self.rows)]
+        self.animation_config = {
+            'appear': {'duration': 150, 'curve': QtCore.QEasingCurve.OutCubic},
+            'pop': {'duration': 120, 'curve': QtCore.QEasingCurve.InOutCubic},}
+
+    @property
+    def colors(self):
+        return SingletonConfig().config['colors']
 
     def setupUi(self, shape):
         self.setMaximumSize(1000, 1000)
@@ -58,7 +60,7 @@ class MinigameSquareFrame(QtWidgets.QFrame):
                 label = QtWidgets.QLabel(frame)
                 label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
                 label.setStyleSheet(f"""
-                            font: {int(self.width() / (3.6 * self.cols))}pt 'Calibri'; 
+                            font: {int(self.width() / (3.6 * self.cols))}pt 'Clear Sans'; 
                             font-weight: bold; color: white; 
                             background-color: transparent;
                         """)
@@ -121,65 +123,107 @@ class MinigameSquareFrame(QtWidgets.QFrame):
                         """)
                     small_label.adjustSize()  # 确保调整后大小正确
 
+    @staticmethod
+    def get_label_style(fontsize, value):
+        try:
+            value = int(value)
+            value = 15 if value <= 0 else value
+        except TypeError:
+            value = 15
+
+        color = '#776e65' if not SingletonConfig.font_colors[value - 1] else '#f9f6f2'
+        return f"""
+            font: {fontsize}pt 'Clear Sans';
+            font-weight: bold;
+            color: {color};
+            background-color: transparent;
+        """
+
     def animate_appear(self, r, c):
-        frame = self.frames[r][c]
-        if self.anims[r][c] is not None:
+        if self._check_animation_running(r, c):
             return
-        opacity_effect = QtWidgets.QGraphicsOpacityEffect()
+
+        frame = self.frames[r][c]
+        opacity_effect = QtWidgets.QGraphicsOpacityEffect(frame)
         frame.setGraphicsEffect(opacity_effect)
 
-        opacity_animation = QPropertyAnimation(opacity_effect, b"opacity")
-        opacity_animation.setDuration(150)
-        opacity_animation.setStartValue(0)
-        opacity_animation.setEndValue(1)
-        opacity_animation.setEasingCurve(QEasingCurve.OutCubic)
-        opacity_animation.finished.connect(lambda: self.cleanup_animation(r, c))  # type: ignore
+        anim_group = QtCore.QParallelAnimationGroup()
 
-        scale_animation = QPropertyAnimation(frame, b"geometry")
-        scale_animation.setDuration(150)
-        original_rect = frame.geometry()
-        start_rect = QRect(frame.geometry().center(), QSize(0, 0))
-        scale_animation.setStartValue(start_rect)
-        scale_animation.setEndValue(original_rect)
-        scale_animation.setEasingCurve(QEasingCurve.OutCubic)
-        # scale_animation.finished.connect(lambda: self.cleanup_animation(r, c))
+        # 透明度动画
+        opacity_anim = QtCore.QPropertyAnimation(opacity_effect, b"opacity")
+        opacity_anim.setDuration(self.animation_config['appear']['duration'])
+        opacity_anim.setStartValue(0.0)
+        opacity_anim.setEndValue(1.0)
 
-        animation_group = QtCore.QParallelAnimationGroup()
-        animation_group.addAnimation(opacity_animation)
-        animation_group.addAnimation(scale_animation)
-        animation_group.finished.connect(lambda: self.cleanup_animation(r, c))  # type: ignore
-        animation_group.start()
+        # 缩放动画
+        scale_anim = QtCore.QPropertyAnimation(frame, b"geometry")
+        scale_anim.setDuration(self.animation_config['appear']['duration'])
+        scale_anim.setEasingCurve(self.animation_config['appear']['curve'])
+        start_size = QtCore.QSize(10, 10)
+        scale_anim.setStartValue(QtCore.QRect(frame.geometry().center(), start_size))
+        scale_anim.setEndValue(frame.geometry())
 
-        self.anims[r][c] = animation_group
+        anim_group.addAnimation(opacity_anim)
+        anim_group.addAnimation(scale_anim)
+        anim_group.finished.connect(lambda: self._finalize_appear(r, c))
+
+        self.anims[r][c] = anim_group
+        anim_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _finalize_appear(self, r, c):
+        """专用完成处理"""
+        self.frames[r][c].setGraphicsEffect(None)  # 必须解除效果关联
+        self.anims[r][c] = None
 
     def animate_pop(self, r, c):
-        frame = self.frames[r][c]
-        if self.anims[r][c] is not None:
+        """优化后的合并动画（脉冲缩放效果）"""
+        if self._check_animation_running(r, c):
             return
-        original_rect = frame.geometry()
-        center = original_rect.center()
-        big_scale_size = QSize(int(original_rect.width() * 1.15), int(original_rect.height() * 1.15))
-        small_scale_size = QSize(int(original_rect.width() * 1), int(original_rect.height() * 1))
-        big_scale_rect = QRect(QPoint(center.x() - big_scale_size.width() // 2,
-                                      center.y() - big_scale_size.height() // 2), big_scale_size)
-        small_scale_rect = QRect(QPoint(center.x() - small_scale_size.width() // 2,
-                                        center.y() - small_scale_size.height() // 2), small_scale_size)
 
-        pop_animation = QPropertyAnimation(frame, b"geometry")
-        pop_animation.setDuration(120)
-        pop_animation.setEasingCurve(QEasingCurve.InOutCubic)
-        pop_animation.setKeyValueAt(0, small_scale_rect)
-        pop_animation.setKeyValueAt(0.5, big_scale_rect)
-        pop_animation.setKeyValueAt(1.0, original_rect)
-        pop_animation.finished.connect(lambda: self.cleanup_animation(r, c))  # type: ignore
+        frame = self.frames[r][c]
+        anim = QtCore.QSequentialAnimationGroup()
 
-        pop_animation.start()
-        self.anims[r][c] = pop_animation
+        # 第一阶段：放大
+        enlarge = QtCore.QPropertyAnimation(frame, b"geometry")
+        enlarge.setDuration(self.animation_config['pop']['duration'] // 2)
+        enlarge.setEasingCurve(QtCore.QEasingCurve.OutCubic)
+        enlarge.setEndValue(self._scaled_rect(frame, 1.2))
 
-    def cleanup_animation(self, r, c):
-        if self.anims[r][c]:
-            self.anims[r][c].deleteLater()
-            self.anims[r][c] = None
+        # 第二阶段：恢复
+        shrink = QtCore.QPropertyAnimation(frame, b"geometry")
+        shrink.setDuration(self.animation_config['pop']['duration'] // 2)
+        shrink.setEasingCurve(QtCore.QEasingCurve.InCubic)
+        shrink.setEndValue(frame.geometry())
+
+        anim.addAnimation(enlarge)
+        anim.addAnimation(shrink)
+        anim.finished.connect(lambda: self._finalize_animation(r, c))
+
+        self.anims[r][c] = anim
+        anim.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _check_animation_running(self, r, c):
+        """检查当前单元格是否有未完成动画"""
+        return self.anims[r][c] and self.anims[r][c].state() == QtCore.QAbstractAnimation.State.Running
+
+    def _finalize_animation(self, r, c):
+        """统一动画完成处理"""
+        self.anims[r][c] = None
+        self.frames[r][c].setGraphicsEffect(None)
+
+    @staticmethod
+    def _scaled_rect(frame, factor):
+        """计算缩放后的几何矩形"""
+        original = frame.geometry()
+        center = original.center()
+        new_width = int(original.width() * factor)
+        new_height = int(original.height() * factor)
+        return QtCore.QRect(
+            center.x() - new_width // 2,
+            center.y() - new_height // 2,
+            new_width,
+            new_height
+        )
 
 
 # minigame系列的棋盘基类，比BaseBoardFrame提供更多接口，以支持不同minigame的逻辑
@@ -257,8 +301,7 @@ class MinigameFrame(QtWidgets.QFrame):
             frame.setStyleSheet(f"background-color: {color};")
         fontsize = self.game_square.base_font_size if (value == -1 or len(str(2 ** value)) < 3) else int(
             self.game_square.base_font_size * 3 / (0.5 + len(str(2 ** value))))
-        label.setStyleSheet(
-            f"font: {fontsize}pt 'Calibri'; font-weight: bold; color: white; background-color: transparent;")
+        label.setStyleSheet(self.game_square.get_label_style(fontsize, value))
         self.update_frame_small_label(row, col)
 
         if anim:
@@ -300,11 +343,11 @@ class MinigameFrame(QtWidgets.QFrame):
             if self.current_max_num > self.max_num:
                 self.max_num = self.current_max_num
                 self.is_passed = {12: 3, 11: 2, 10: 1}.get(self.max_num, 4)
-                level = {12: 'golden', 11: 'silver', 10: 'bronze'}.get(self.current_max_num, 'golden')
+                level = {12: 'gold', 11: 'silver', 10: 'bronze'}.get(self.current_max_num, 'gold')
                 message = f'You achieved {2 ** self.max_num}!\n You get a {level} trophy!'
                 self.show_trophy(f'pic/{level}.png', message)
             else:
-                level = {12: 'golden', 11: 'silver', 10: 'bronze'}.get(self.current_max_num, 'golden')
+                level = {12: 'gold', 11: 'silver', 10: 'bronze'}.get(self.current_max_num, 'gold')
                 message = f'You achieved {2 ** self.current_max_num}!\n Take it further!'
                 self.show_trophy(f'pic/{level}.png', message)
 
@@ -321,7 +364,7 @@ class MinigameFrame(QtWidgets.QFrame):
             QtCore.QTimer().singleShot(500, self.game_over)
 
     def has_possible_move(self):
-        if (self.board == 0).sum() > 0:
+        if np.sum(self.board == 0) > 0:
             return True
         else:
             for direct in (1, 2, 3, 4):

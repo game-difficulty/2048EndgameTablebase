@@ -55,7 +55,7 @@ class MysteryMerge1Frame(MinigameFrame):
 
     def check_game_over(self):
         if self.has_possible_move():
-            print(self.peek_count)
+            # print(self.peek_count)
             pass
         else:
             self.show_all_frame()
