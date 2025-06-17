@@ -597,6 +597,7 @@ class TrainWindow(QtWidgets.QMainWindow):
 
             self.book_reader.dispatch(SingletonConfig().config['filepath_map'][self.current_pattern]
                                       , self.pattern_settings[0], self.pattern_settings[1])
+            self.handle_set_default()
             self.read_results()
 
     def spawn_state_change(self, state):
