@@ -834,7 +834,7 @@ class TrainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event):
         self.ai_state = False
         self.Demo.setText('Demo')
-        np.array(self.gameframe.history, dtype='uint64, uint32').tofile(fr'C:\Users\Administrator\Desktop\record\0')
+        # np.array(self.gameframe.history, dtype='uint64, uint32').tofile(fr'C:\Users\Administrator\Desktop\record\0')
         event.accept()
 
 
