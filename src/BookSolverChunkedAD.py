@@ -91,8 +91,6 @@ def recalculate_process_ad_c(
         if SingletonConfig().config.get('compress_temp_files', False):
             decompress_with_7z(pathname + str(i) + '.7z')
         d0 = np.fromfile(pathname + str(i), dtype=np.uint64)
-        if len(d0) == 0:
-            raise ValueError()
 
         book_dict0, ind_dict0 = expand_ad(d0, lm, original_board_sum, False)
         ind_dict0_keys = write_ind(ind_dict0, pathname, i)
