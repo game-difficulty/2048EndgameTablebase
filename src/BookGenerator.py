@@ -259,11 +259,14 @@ def generate_process(
             # 去重
             d1t = parallel_unique(d1t, n)
             d2 = parallel_unique(d2, n)
+
             dedup_pivots = d0[np.arange(1, n) * len(d0) // n].copy() if len(d0) > 0 else \
                 (np.arange(1, n) * (1 << 50) // n).astype(np.uint64)
+
             d1 = merge_deduplicate_all([d1, d1t], dedup_pivots, n)
             del d1t
             d1 = concatenate(d1)
+
             # check_sorted(d1)
 
             t3 = time.time()
@@ -535,10 +538,25 @@ def reverse_split_pivots_list(pivots_list: List[NDArray[np.uint64]]) -> List[NDA
 def harmonic_mean_by_column(matrix: List[List[float]]) -> List[float]:
     num_columns = len(matrix[0])
     harmonic_means = []
+
     for col in range(num_columns):
-        reciprocals = [1 / row[col] for row in matrix]
-        harmonic_mean = len(matrix) / sum(reciprocals)
+        # 收集非零值及其位置
+        non_zero_values = []
+        for row in matrix:
+            value = row[col]
+            if value != 0:  # 排除零值
+                non_zero_values.append(value)
+
+        # 处理全零列的情况
+        if not non_zero_values:
+            harmonic_means.append(1.5)
+            continue
+
+        # 计算调和平均数
+        reciprocals_sum = sum(1 / val for val in non_zero_values)
+        harmonic_mean = len(non_zero_values) / reciprocals_sum
         harmonic_means.append(harmonic_mean)
+
     return harmonic_means
 
 

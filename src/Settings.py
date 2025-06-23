@@ -400,7 +400,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         pathname = self.filepath_edit.toPlainText()
 
         if (self.advanced_algo_checkBox.isChecked() and pattern in [
-            'L3', 'L3t', '442', 't', '444', 'LL', 'free8w', 'free9w', 'free8', '2x4', '3x3', '3x4']):
+            'L3', 'L3t', '442', 't', '444', 'LL', 'free8w', 'free9w', 'free8']):
             reply = QtWidgets.QMessageBox.warning(
                 self,
                 "Warning",
@@ -412,9 +412,19 @@ class SettingsWindow(QtWidgets.QMainWindow):
             )
             if reply == QtWidgets.QMessageBox.No:
                 return
+        elif self.advanced_algo_checkBox.isChecked() and pattern in ['2x4', '3x3', '3x4']:
+            reply = QtWidgets.QMessageBox.warning(
+                self,
+                "Warning",
+                "Variant tables does not support the advanced algorithm. ",
+                QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel,
+                QtWidgets.QMessageBox.Cancel
+            )
+            if reply:
+                return
 
         if pattern and target and pathname and os.path.exists(pathname):
-            position = position if position else 0
+            position = position if position else '0'
             config = SingletonConfig().config
             if pattern in ['444', 'LL', 'L3']:
                 ptn = pattern + '_' + target + '_' + position
@@ -547,7 +557,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
 class BuildThread(QtCore.QThread):
     finished = QtCore.pyqtSignal()
 
-    def __init__(self, pattern, target, position, pathname):
+    def __init__(self, pattern, target: int, position: int, pathname):
         super().__init__()
         self.pattern = pattern
         self.target = target

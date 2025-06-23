@@ -234,7 +234,7 @@ class VBoardMover:
         board = np.uint64(board)
         board2 = self.reverse(board)
         return (
-            self.move_down(board, board2), self.move_right(board), self.move_left(board), self.move_up(board, board2))
+            self.move_left(board), self.move_right(board), self.move_up(board, board2), self.move_down(board, board2))
 
     @staticmethod
     def gen_new_num(t: np.uint64, p: float = 0.1) -> Tuple[np.uint64, int]:
@@ -333,8 +333,8 @@ class VBoardMoverWithScore:
         board = np.uint64(board)
         board2 = self.reverse(board)
         return (
-            self.move_down(board, board2)[0], self.move_right(board)[0],
-            self.move_left(board)[0], self.move_up(board, board2)[0])
+            self.move_left(board)[0], self.move_right(board)[0],
+            self.move_up(board, board2)[0], self.move_down(board, board2)[0])
 
     @staticmethod
     def gen_new_num(t: np.uint64, p: float = 0.1) -> Tuple[np.uint64, int, int, int]:

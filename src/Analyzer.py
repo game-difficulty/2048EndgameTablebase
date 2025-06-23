@@ -1,6 +1,7 @@
 import os
 
 import numpy as np
+from numpy.typing import NDArray
 from PyQt5 import QtCore, QtWidgets, QtGui
 
 from BoardMover import SingletonBoardMover

@@ -356,7 +356,6 @@ def _load_fonts():
         if QFontDatabase.addApplicationFont(font_file) < 0:
             logger.warning(f"Font loading failure: {font_file}")
 
-
 _load_fonts()
 
 

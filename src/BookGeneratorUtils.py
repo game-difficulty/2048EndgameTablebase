@@ -73,6 +73,30 @@ def initialize_sorting_library():
 dll = initialize_sorting_library()
 
 
+# def load_deduplicate_lib():
+#     lib_name = r"C:\Users\Administrator\Desktop\test2\libremove_duplicates.dll"
+#
+#     # 加载编译好的库
+#     lib = ctypes.CDLL(lib_name)
+#
+#     # 设置函数签名
+#     lib.remove_duplicates_avx512.argtypes = [
+#         np.ctypeslib.ndpointer(dtype=np.uint64, flags='C_CONTIGUOUS'),  # 数组指针
+#         ctypes.c_int  # 数组长度
+#     ]
+#     lib.remove_duplicates_avx512.restype = ctypes.c_int  # 返回元素数量
+#     return lib
+#
+#
+# lib = load_deduplicate_lib()
+#
+#
+# def parallel_unique2(arr: NDArray[np.uint64], _):
+#     count = lib.remove_duplicates_avx512(arr, len(arr))
+#
+#     return arr[:count].copy()
+
+
 def parallel_unique(aux: NDArray[np.uint64], n: int) -> NDArray[np.uint64]:
     if len(aux) < 128:
         return np.unique(aux)

@@ -50,9 +50,10 @@ def gen_lookup_table_big(
     传入包含所有初始局面的array，然后按照面板数字和依次生成下一阶段的所有局面。储存轮到系统生成数字时的面板。
     保障其中的每个arr储存的面板的数字和均相等
     """
+    # variant tables不支持进阶算法，用不到sym_func，随便返回一个
     sym_func = {Calculator.re_self: Calculator.re_self_pair,
                 Calculator.minUL: Calculator.minUL_pair,
-                Calculator.min_all_symm: Calculator.min_all_symm_pair}[to_find_func]
+                Calculator.min_all_symm: Calculator.min_all_symm_pair}.get(to_find_func, Calculator.re_self_pair)
     save_config_to_txt(pathname + 'config.txt')
     if not SingletonConfig().config.get('advanced_algo', False):
         #  存在断点重连的情况下，以下d0, d1均可能为None
