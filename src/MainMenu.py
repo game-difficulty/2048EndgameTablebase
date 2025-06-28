@@ -217,7 +217,10 @@ class MainMenuWindow(QtWidgets.QMainWindow):
     def openHelpWindow(self):
         if self.view_window is None:
             from MDViewer import MDViewer
-            self.view_window = MDViewer('help.md')
+            if SingletonConfig().config['language'] == 'zh':
+                self.view_window = MDViewer('helpZH.md')
+            else:
+                self.view_window = MDViewer('help.md')
         if self.view_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
             self.view_window.setWindowState(
                 self.view_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized
@@ -237,10 +240,10 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.Test.setText(_translate("MainMenu", "Test"))
         self.Settings.setText(_translate("MainMenu", "Settings"))
         self.Help.setText(_translate("MainMenu", "Help"))
-        self.info_label.setText(
+        self.info_label.setText(_translate("MainMenu",
             'Support this project by giving it a star on '
             '<a href="https://github.com/game-difficulty/2048EndgameTablebase">GitHub</a>.'
-        )
+        ))
 
     def closeEvent(self, event):
         SingletonConfig().save_config(SingletonConfig().config)

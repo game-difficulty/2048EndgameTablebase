@@ -162,7 +162,7 @@ def run_test(index):
 def main():
     multiprocessing.freeze_support()
     with multiprocessing.Pool(processes=30) as pool:
-        pool.map(run_test, range(0, 1800))
+        pool.map(run_test, range(0, 1200))
 
 
 if __name__ == "__main__":

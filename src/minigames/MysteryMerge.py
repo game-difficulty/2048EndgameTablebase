@@ -23,10 +23,11 @@ class MysteryMerge1Frame(MinigameFrame):
         super().setup_new_game()
         self.peek_count = 0
 
-    def update_frame(self, value, row, col, anim=False):
+    def update_frame(self, value, row, col):
         if self.board[row][col] == 0 or self.newtile_pos == col + row * 4 or self.masked_[row, col]:
-            super().update_frame(value, row, col, anim=False)
+            super().update_frame(value, row, col)
         else:
+            self.game_square.update_tile_frame(None, row, col)
             label = self.game_square.labels[row][col]
             frame = self.game_square.frames[row][col]
             label.setText('?')
@@ -38,14 +39,12 @@ class MysteryMerge1Frame(MinigameFrame):
             """)
             label.setStyleSheet(f"""font: {fontsize}pt 'Calibri'; font-weight: bold; color: white;
             background-color: transparent;""")
-
-            if anim:
-                self.game_square.animate_appear(row, col)
+            frame.show()
 
     def show_all_frame(self):
         for i in range(self.game_square.rows):
             for j in range(self.game_square.cols):
-                super().update_frame(self.board[i][j], i, j, anim=False)
+                super().update_frame(self.board[i][j], i, j)
 
     def closeEvent(self, event):
         SingletonConfig().config['minigame_state'][self.difficulty][self.minigame] = \
@@ -58,16 +57,14 @@ class MysteryMerge1Frame(MinigameFrame):
             # print(self.peek_count)
             pass
         else:
+            self.masked_ = np.ones((4, 4), dtype=bool)
             self.show_all_frame()
             QtCore.QTimer().singleShot(500, self.game_over)
 
-    def pop_merged(self, board, direction):
-        merged_pos = find_merge_positions(board, direction)
+    def before_move(self, direct):
+        direction = ('left', 'right', 'up', 'down')[direct - 1]
+        merged_pos = find_merge_positions(self._last_values, direction)
         self.masked_ = merged_pos
-        for row in range(self.game_square.rows):
-            for col in range(self.game_square.cols):
-                if merged_pos[row][col] == 1:
-                    self.game_square.animate_pop(row, col)
 
 
 class MysteryMerge2Frame(MinigameFrame):
@@ -87,10 +84,11 @@ class MysteryMerge2Frame(MinigameFrame):
         self.peek_count = 0
         self.after_gen_num()
 
-    def update_frame(self, value, row, col, anim=False):
+    def update_frame(self, value, row, col):
         if not self.masked_[row][col] and self.newtile_pos != col + row * 4:
-            super().update_frame(value, row, col, anim=False)
+            super().update_frame(value, row, col)
         else:
+            self.game_square.update_tile_frame(None, row, col)
             label = self.game_square.labels[row][col]
             frame = self.game_square.frames[row][col]
             label.setText('?')
@@ -102,14 +100,12 @@ class MysteryMerge2Frame(MinigameFrame):
             """)
             label.setStyleSheet(f"""font: {fontsize}pt 'Calibri'; font-weight: bold; color: white;
             background-color: transparent;""")
-
-            if anim:
-                self.game_square.animate_appear(row, col)
+            frame.show()
 
     def show_all_frame(self):
         for i in range(self.game_square.rows):
             for j in range(self.game_square.cols):
-                super().update_frame(self.board[i][j], i, j, anim=False)
+                super().update_frame(self.board[i][j], i, j)
 
     def closeEvent(self, event):
         SingletonConfig().config['minigame_state'][self.difficulty][self.minigame] = \
@@ -173,7 +169,10 @@ class MysteryMerge2Frame(MinigameFrame):
         if self.has_possible_move():
             pass
         else:
+            self.masked_ = np.zeros((4, 4), dtype=bool)
+            self.newtile_pos = -1
             self.show_all_frame()
+            self.newtile_pos = 0
             QtCore.QTimer().singleShot(500, self.game_over)
 
 
@@ -228,12 +227,12 @@ class MysteryMergeWindow(MinigameWindow):
 
     def show_message(self):
         if self.minigame == 'Mystery Merge1':
-            text = 'Show only empty spaces and newly generated tiles.'
+            text = self.tr('Show only empty spaces and newly generated tiles.')
         elif self.minigame == 'Mystery Merge2':
-            text = 'Not sure what newly generated tiles are unless a merge occurs.'
+            text = self.tr('Not sure what newly generated tiles are unless a merge occurs.')
         else:
             text = ''
-        QtWidgets.QMessageBox.information(self, 'Information', text)
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), text)
         self.gameframe.setFocus()
 
 

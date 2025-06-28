@@ -41,6 +41,7 @@ class ShapeShifterFrame(MinigameFrame):
         self.board, _, self.newtile_pos, self.newtile = self.mover.gen_new_num(
             self.mover.gen_new_num(self.board, SingletonConfig().config['4_spawn_rate'])[0],
             SingletonConfig().config['4_spawn_rate'])
+
         self.update_all_frame(self.board)
         self.score = 0
         self.current_max_num = self.board.max()
@@ -55,31 +56,20 @@ class ShapeShifterFrame(MinigameFrame):
         self.game_square.updateGeometry()
         self.game_square.show()
 
-    def update_frame(self, value, row, col, anim=False):
-        label = self.game_square.labels[row][col]
-        frame = self.game_square.frames[row][col]
+    def _set_special_frame(self, value, row, col):
         if value == -1:
+            label = self.game_square.labels[row][col]
+            frame = self.game_square.frames[row][col]
             label.setText('')
             frame.setStyleSheet(f"""
                         QFrame#f{row * self.cols + col} {{
                             background-color: rgb(209, 209, 209);
                         }}
                         """)
-        elif value != 0:
-            label.setText(str(2 ** value))
-            color = self.game_square.colors[value - 1]
-            frame.setStyleSheet(f"background-color: {color};")
-        else:
-            label.setText('')
-            color = 'rgba(229, 229, 229, 1)'
-            frame.setStyleSheet(f"background-color: {color};")
-        fontsize = self.game_square.base_font_size if (value == -1 or len(str(2 ** value)) < 3) else int(
-            self.game_square.base_font_size * 3 / (0.5 + len(str(2 ** value))))
-        label.setStyleSheet(self.game_square.get_label_style(fontsize, value))
-        self.update_frame_small_label(row, col)
-
-        if anim:
-            self.game_square.animate_appear(row, col)
+            fontsize = self.game_square.base_font_size if (value == -1 or len(str(2 ** value)) < 3) else int(
+                self.game_square.base_font_size * 3 / (0.5 + len(str(2 ** value))))
+            label.setStyleSheet(self.game_square.get_label_style(fontsize, value))
+            self.game_square.grids[row][col].setVisible(False)
 
     @staticmethod
     def is_valid(x, y, visited, n):
@@ -191,8 +181,8 @@ class ShapeShifterWindow(MinigameWindow):
         super().__init__(minigame=minigame, frame_type=frame_type)
 
     def show_message(self):
-        text = 'Every game begins with a unique and unexpected board shape!'
-        QtWidgets.QMessageBox.information(self, 'Information', text)
+        text = self.tr('Every game begins with a unique and unexpected board shape!')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), text)
         self.gameframe.setFocus()
 
 

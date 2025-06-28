@@ -305,7 +305,7 @@ def generate_process_ad(
             t0 = time.time()
             # 先预测预分配数组的长度乘数
             length_factor = predict_next_length_factor_quadratic(length_factors)
-            length_factor *= 1.25 if len(d0) > 1e8 else 1.5
+            length_factor *= 1.33 if len(d0) > 1e8 else 1.5
             length_factor *= length_factor_multiplier
             if len(hashmap1) == 0:
                 hashmap1, hashmap2 = update_hashmap_length(hashmap1, d0), update_hashmap_length(hashmap2, d0)  # 初始化
@@ -323,7 +323,7 @@ def generate_process_ad(
 
             length_factors, length_factors_list, pivots, pivots_list \
                 = update_parameters(d0, d2, length_factors, length_factors_list_path)
-            length_factor_multiplier = max(counts2) / np.mean(counts2)
+            length_factor_multiplier = max(counts2) / np.mean(counts2) if np.mean(counts2) > 0 else 1
 
             t2 = time.time()
 

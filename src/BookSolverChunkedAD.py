@@ -121,7 +121,7 @@ def recalculate_process_ad_c(
 
         if os.path.exists(pathname + str(i)):
             os.remove(pathname + str(i))
-        logger.debug(f'step {i} done, solving avg {round(_counter / max(_timer, 1) / 2e6, 2)} mbps\n')
+        logger.debug(f'step {i} done, solving avg {round(_counter / max(_timer, 0.0001) / 2e6, 2)} mbps\n')
 
         if SingletonConfig().config.get('compress_temp_files', False):
             compress_with_7z(pathname + str(i + 2) + 'b')
@@ -130,7 +130,7 @@ def recalculate_process_ad_c(
 
         book_dict2, ind_dict2 = book_dict1, ind_dict1
         del book_dict1, ind_dict1
-        _timer, _counter = 0, 0
+        _timer, _counter = 0.0, 0
 
 
 def iter_ind_dict4(ind_dict0_keys: list, lm: BoardMasker, book_dict2, ind_dict2, indind_dict2,

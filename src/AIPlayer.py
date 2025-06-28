@@ -539,7 +539,7 @@ def search_evil_gen(evil_gen, b, depth):
                     if temp is None:
                         temp = search_evil_gen(evil_gen, t1, depth-1) if depth > 1 else evil_gen.evaluate(t1)
                         evil_gen.cache.update(t1, depth, temp)
-                    best = max(best, temp + score)  # 玩家通过操作最大化得分
+                    best = max(best, temp + (score << 1))  # 玩家通过操作最大化得分
                     if best >= evil:
                         break  # Beta剪枝
                 if best <= evil:

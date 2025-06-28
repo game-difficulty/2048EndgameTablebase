@@ -1,90 +1,114 @@
 import random
 import sys
-from typing import List, Union
+from typing import List, Tuple, Dict
 
 import numpy as np
 from PyQt5 import QtCore, QtWidgets, QtGui
-from PyQt5.QtCore import QEasingCurve
+from PyQt5.QtCore import QEasingCurve, QTimer
 
-from Calculator import find_merge_positions
+from Calculator import find_merge_positions, slide_distance
 from Config import SingletonConfig
 from MinigameMover import MinigameBoardMover, MinigameBoardMover_mxn
+from Gamer import SquareFrame
 
 
 # noinspection PyAttributeOutsideInit
-class MinigameSquareFrame(QtWidgets.QFrame):
+class MinigameSquareFrame(SquareFrame):
     def __init__(self, parent=None, shape=(4, 4)):
-        super().__init__(parent)
-        self.base_font_size = int(
-            self.width() / (3.6 * shape[1]) * SingletonConfig().config.get('font_size_factor', 100) / 100)
-        self.setupUi(shape)
-        self.anims: List[List[Union[None, QtCore.QAbstractAnimation]]] = [
-            [None for _ in range(self.cols)] for __ in range(self.rows)]
+        QtWidgets.QFrame.__init__(self, parent)
+        self.rows, self.cols = shape
+        self.setupUi(self.rows, self.cols)
         self.animation_config = {
-            'appear': {'duration': 150, 'curve': QtCore.QEasingCurve.OutCubic},
-            'pop': {'duration': 120, 'curve': QtCore.QEasingCurve.InOutCubic},}
+            'appear': {'duration': 120, 'curve': QtCore.QEasingCurve.OutCubic},
+            'pop': {'duration': 120, 'curve': QtCore.QEasingCurve.InOutCubic},
+            'slide': {'duration': 120, 'curve1': QtCore.QEasingCurve.Linear},}
+        self.active_animations: Dict[Tuple, QtCore.QAbstractAnimation] = dict()  # 跟踪所有活动的动画对象
+
+    def update_tile_frame(self, value: int | None, row, col):
+        if not (0 <= row < self.rows and 0 <= col < self.cols):
+            raise IndexError(f"无效的位置 ({row}, {col})")
+        if value == 0:
+            if self.frames[row][col]:
+                self.labels[row][col].deleteLater()
+                self.frames[row][col].deleteLater()
+                self.labels[row][col] = None
+                self.frames[row][col] = None
+            return
+
+        if self.frames[row][col] is None:
+            self._create_tile_components(row, col)
+        if isinstance(value, (int, float, np.integer)) and value > 0:
+            self._update_tile_style(2 ** value, row, col)
+            self.frames[row][col].show()
 
     @property
-    def colors(self):
-        return SingletonConfig().config['colors']
+    def base_font_size(self):
+        return int(self.width() / (3.6 * self.cols) * SingletonConfig().config.get('font_size_factor', 100) / 100)
 
-    def setupUi(self, shape):
+    def setupUi(self, num_rows=4, num_cols=4):
         self.setMaximumSize(1000, 1000)
-        self.rows, self.cols = shape
+        self.setMinimumSize(120, 120)
         self.setStyleSheet("border-radius: 5px; background-color: rgb(209, 209, 209);")
         self.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.setFrameShadow(QtWidgets.QFrame.Raised)
         self.setObjectName("game_square")
         self.game_grid = QtWidgets.QGridLayout(self)
         self.game_grid.setObjectName("game_grid")
-        self.frames = []  # 存储QFrame对象
-        self.labels = []  # 存储QLabel对象
-        self.small_labels = []  # 存储右下角较小的QLabel对象
+        self.grids = []  # 存储QFrame对象
+        self.frames: List[List[None | QtWidgets.QFrame]] = [[None for _0 in range(self.cols)] for _1 in range(self.rows)]  # 存储QFrame对象
+        self.labels: List[List[None | QtWidgets.QLabel]] = [[None for _0 in range(self.cols)] for _1 in range(self.rows)]  # 存储QLabel对象
+        self.small_labels: List[List[QtWidgets.QLabel]] = []
 
         for i in range(self.rows):
-            row_frames = []
-            row_labels = []
+            row_grids = []
             row_small_labels = []
             for j in range(self.cols):
-                frame = QtWidgets.QFrame(self)
-                frame.setStyleSheet("border-radius: 3px; background-color: rgba(229, 229, 229, 1);")
-                frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
-                frame.setFrameShadow(QtWidgets.QFrame.Raised)
-                frame.setObjectName(f"f{i * self.cols + j}")
+                grid = QtWidgets.QFrame(self)
+                grid.setStyleSheet("border-radius: 8px; background-color: #cdc1b4;")
+                grid.setFrameShape(QtWidgets.QFrame.StyledPanel)
+                grid.setFrameShadow(QtWidgets.QFrame.Raised)
+                grid.setObjectName(f"grid{i * self.cols + j}")
 
-                layout = QtWidgets.QGridLayout(frame)
-                layout.setContentsMargins(0, 0, 0, 0)
-                layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-
-                # 主label
-                label = QtWidgets.QLabel(frame)
-                label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-                label.setStyleSheet(f"""
-                            font: {int(self.width() / (3.6 * self.cols))}pt 'Clear Sans'; 
-                            font-weight: bold; color: white; 
-                            background-color: transparent;
-                        """)
-                label.setText("")
-                layout.addWidget(label)
+                self.game_grid.addWidget(grid, i, j, 1, 1)
+                row_grids.append(grid)
 
                 # 右下角较小的label
-                small_label = QtWidgets.QLabel(frame)
-                small_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom)
+                small_label = QtWidgets.QLabel(self)
                 small_label.setStyleSheet(f"""
-                    font: {self.base_font_size // 4}pt 'Calibri'; 
-                    font-weight: bold; color: white; 
+                    font: {self.base_font_size // 4}pt 'Calibri';
+                    font-weight: bold; color: white;
                     background-color: transparent;
                 """)
                 small_label.setText("")
-
-                self.game_grid.addWidget(frame, i, j, 1, 1)
-                row_frames.append(frame)
-                row_labels.append(label)
                 row_small_labels.append(small_label)
 
-            self.frames.append(row_frames)
-            self.labels.append(row_labels)
+            self.grids.append(row_grids)
             self.small_labels.append(row_small_labels)
+
+    def update_small_label_position(self):
+        """计算并更新label的右下角位置"""
+        for i in range(self.rows):
+            for j in range(self.cols):
+                grid = self.grids[i][j]
+
+                label = self.small_labels[i][j]
+                grid_rect = grid.geometry()
+
+                # 计算右下角坐标
+                x = grid_rect.x() + grid_rect.width() - label.width()
+                y = grid_rect.y() + grid_rect.height() - label.height()
+                # 添加5px内边距避免贴边
+                label.move(x - 5, y - 5)
+                label.raise_()
+
+                new_font_size = self.base_font_size // 4
+                if label.font().pointSize() != new_font_size:
+                    label.setStyleSheet(f"""
+                            font: {new_font_size}pt 'Calibri'; 
+                            font-weight: bold; color: white; 
+                            background-color: transparent;
+                        """)
+                    label.adjustSize()
 
     def updateGeometry(self):
         # 保持正方形尺寸并居中显示
@@ -96,137 +120,63 @@ class MinigameSquareFrame(QtWidgets.QFrame):
         new_y = (parent_size.height() - new_size_y) // 2
         self.setGeometry(new_x, new_y, new_size_x, new_size_y)
 
-        self.base_font_size = int(self.width() / (3.6 * self.cols) *
-                                  SingletonConfig().config.get('font_size_factor', 100) / 100)
-
         margin = int(min(new_size_x, new_size_y) / (8 * min(self.rows, self.cols)))
         self.game_grid.setContentsMargins(margin, margin, margin, margin)
         self.game_grid.setHorizontalSpacing(int(margin / 1.2))
         self.game_grid.setVerticalSpacing(int(margin / 1.2))
-        self.update_small_labels_position()
+        self._adjust_tile_positions()
+        self.update_small_label_position()
 
-    def update_small_labels_position(self):
-        for row_small_labels in self.small_labels:
-            for small_label in row_small_labels:
-                # 计算位置
-                new_x = small_label.parent().width() - small_label.width()
-                new_y = small_label.parent().height() - small_label.height()
-                small_label.move(new_x, new_y)
-
-                # 更新样式表，只在字体大小改变时更新
-                new_font_size = self.base_font_size // 4
-                if small_label.font().pointSize() != new_font_size:
-                    small_label.setStyleSheet(f"""
-                            font: {new_font_size}pt 'Calibri'; 
-                            font-weight: bold; color: white; 
-                            background-color: transparent;
-                        """)
-                    small_label.adjustSize()  # 确保调整后大小正确
-
-    @staticmethod
-    def get_label_style(fontsize, value):
-        try:
-            value = int(value)
-            value = 15 if value <= 0 else value
-        except TypeError:
-            value = 15
-
-        color = '#776e65' if not SingletonConfig.font_colors[value - 1] else '#f9f6f2'
-        return f"""
-            font: {fontsize}pt 'Clear Sans';
-            font-weight: bold;
-            color: {color};
-            background-color: transparent;
-        """
-
-    def animate_appear(self, r, c):
+    def animate_appear(self, r, c, value):
+        """数字块出现动画"""
         if self._check_animation_running(r, c):
             return
 
+        if self.frames[r][c]:
+            self.frames[r][c].deleteLater()
+
+        self._create_tile_components(r, c)
+        self._update_tile_style(max(2, 2 ** value), r, c)
+
+        if self.parentWidget() and hasattr(self.parentWidget(), 'update_frame'):
+            parent_widget: MinigameWindow = self.parentWidget()
+            # noinspection PyProtectedMember
+            parent_widget._set_special_frame(value, r, c)
+
         frame = self.frames[r][c]
+        frame.show()
+
         opacity_effect = QtWidgets.QGraphicsOpacityEffect(frame)
         frame.setGraphicsEffect(opacity_effect)
 
         anim_group = QtCore.QParallelAnimationGroup()
 
-        # 透明度动画
         opacity_anim = QtCore.QPropertyAnimation(opacity_effect, b"opacity")
         opacity_anim.setDuration(self.animation_config['appear']['duration'])
         opacity_anim.setStartValue(0.0)
         opacity_anim.setEndValue(1.0)
 
-        # 缩放动画
         scale_anim = QtCore.QPropertyAnimation(frame, b"geometry")
         scale_anim.setDuration(self.animation_config['appear']['duration'])
         scale_anim.setEasingCurve(self.animation_config['appear']['curve'])
+
         start_size = QtCore.QSize(10, 10)
-        scale_anim.setStartValue(QtCore.QRect(frame.geometry().center(), start_size))
+        scale_anim.setStartValue(
+            QtCore.QRect(frame.geometry().center(), start_size)
+        )
         scale_anim.setEndValue(frame.geometry())
 
         anim_group.addAnimation(opacity_anim)
         anim_group.addAnimation(scale_anim)
-        anim_group.finished.connect(lambda: self._finalize_appear(r, c))
 
-        self.anims[r][c] = anim_group
+        anim_group.finished.connect(lambda: self._finalize_animation(r, c, 0))
         anim_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
-    def _finalize_appear(self, r, c):
-        """专用完成处理"""
-        self.frames[r][c].setGraphicsEffect(None)  # 必须解除效果关联
-        self.anims[r][c] = None
-
-    def animate_pop(self, r, c):
-        """优化后的合并动画（脉冲缩放效果）"""
-        if self._check_animation_running(r, c):
-            return
-
-        frame = self.frames[r][c]
-        anim = QtCore.QSequentialAnimationGroup()
-
-        # 第一阶段：放大
-        enlarge = QtCore.QPropertyAnimation(frame, b"geometry")
-        enlarge.setDuration(self.animation_config['pop']['duration'] // 2)
-        enlarge.setEasingCurve(QtCore.QEasingCurve.OutCubic)
-        enlarge.setEndValue(self._scaled_rect(frame, 1.2))
-
-        # 第二阶段：恢复
-        shrink = QtCore.QPropertyAnimation(frame, b"geometry")
-        shrink.setDuration(self.animation_config['pop']['duration'] // 2)
-        shrink.setEasingCurve(QtCore.QEasingCurve.InCubic)
-        shrink.setEndValue(frame.geometry())
-
-        anim.addAnimation(enlarge)
-        anim.addAnimation(shrink)
-        anim.finished.connect(lambda: self._finalize_animation(r, c))
-
-        self.anims[r][c] = anim
-        anim.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
-
-    def _check_animation_running(self, r, c):
-        """检查当前单元格是否有未完成动画"""
-        return self.anims[r][c] and self.anims[r][c].state() == QtCore.QAbstractAnimation.State.Running
-
-    def _finalize_animation(self, r, c):
-        """统一动画完成处理"""
-        self.anims[r][c] = None
-        self.frames[r][c].setGraphicsEffect(None)
-
-    @staticmethod
-    def _scaled_rect(frame, factor):
-        """计算缩放后的几何矩形"""
-        original = frame.geometry()
-        center = original.center()
-        new_width = int(original.width() * factor)
-        new_height = int(original.height() * factor)
-        return QtCore.QRect(
-            center.x() - new_width // 2,
-            center.y() - new_height // 2,
-            new_width,
-            new_height
-        )
+        self.active_animations[(r, c, 0)] = anim_group
 
 
 # minigame系列的棋盘基类，比BaseBoardFrame提供更多接口，以支持不同minigame的逻辑
+# 不再维护编码后棋盘，因为任意大小无法编码；board储存对数值
 # noinspection PyAttributeOutsideInit
 class MinigameFrame(QtWidgets.QFrame):
     new_game_signal = QtCore.pyqtSignal()
@@ -253,6 +203,9 @@ class MinigameFrame(QtWidgets.QFrame):
             self.current_max_num = self.board.max()
         self.newtile = self.board[self.newtile_pos // self.cols][self.newtile_pos % self.cols]
 
+        self.timer1, self.timer2, self.timer3 = QTimer(), QTimer(), QTimer()
+        self._last_values = self.board.copy()
+
     def setup_new_game(self):
         self.board, _, self.newtile_pos, self.newtile = self.mover.gen_new_num(
             self.mover.gen_new_num(np.zeros((self.rows, self.cols), dtype=np.int32),
@@ -265,6 +218,7 @@ class MinigameFrame(QtWidgets.QFrame):
     def new_game(self):
         #  仅在需要发射新游戏信号时使用此方法
         self.setup_new_game()
+        self._last_values = self.board.copy()
         self.new_game_signal.emit()
 
     def setupUi(self):
@@ -281,31 +235,22 @@ class MinigameFrame(QtWidgets.QFrame):
         self.game_square.updateGeometry()
         self.update_all_frame(self.board)
 
-    def update_frame(self, value, row, col, anim=False):
-        label = self.game_square.labels[row][col]
-        frame = self.game_square.frames[row][col]
+    def update_frame(self, value, row, col):
+        self.game_square.update_tile_frame(value, row, col)
+        self._set_special_frame(value, row, col)
+        self.update_frame_small_label(row, col)
+
+    def _set_special_frame(self, value, row, col):
         if value == -1:
+            label = self.game_square.labels[row][col]
+            frame = self.game_square.frames[row][col]
             label.setText('')
             frame.setStyleSheet(f"""
                         QFrame#f{row * self.cols + col} {{
                             border-image: url(pic//stop.png) 2 2 2 2 stretch stretch;
                         }}
                         """)
-        elif value != 0:
-            label.setText(str(2 ** value))
-            color = self.game_square.colors[value - 1]
-            frame.setStyleSheet(f"background-color: {color};")
-        else:
-            label.setText('')
-            color = 'rgba(229, 229, 229, 1)'
-            frame.setStyleSheet(f"background-color: {color};")
-        fontsize = self.game_square.base_font_size if (value == -1 or len(str(2 ** value)) < 3) else int(
-            self.game_square.base_font_size * 3 / (0.5 + len(str(2 ** value))))
-        label.setStyleSheet(self.game_square.get_label_style(fontsize, value))
-        self.update_frame_small_label(row, col)
-
-        if anim:
-            self.game_square.animate_appear(row, col)
+            self.frames[row][col].show()
 
     def update_frame_small_label(self, row, col):
         pass
@@ -315,14 +260,15 @@ class MinigameFrame(QtWidgets.QFrame):
             values = self.board
         for i in range(self.game_square.rows):
             for j in range(self.game_square.cols):
-                self.update_frame(values[i][j], i, j, anim=False)
+                self.update_frame(values[i][j], i, j)
 
     def gen_new_num(self, do_anim=True):
         self.board, _, new_tile_pos, val = self.mover.gen_new_num(
             self.board, SingletonConfig().config['4_spawn_rate'])
         self.newtile_pos, self.newtile = new_tile_pos, val
-        self.update_all_frame(self.board)
-        self.update_frame(val, new_tile_pos // self.cols, new_tile_pos % self.cols, anim=do_anim)
+        if do_anim:
+            self.timer1.singleShot(125, lambda: self.game_square.animate_appear(
+                new_tile_pos // self.cols, new_tile_pos % self.cols, val))
 
     def before_move(self, direct):
         pass
@@ -361,7 +307,7 @@ class MinigameFrame(QtWidgets.QFrame):
         if self.has_possible_move():
             pass
         else:
-            QtCore.QTimer().singleShot(500, self.game_over)
+            QTimer().singleShot(500, self.game_over)
 
     def has_possible_move(self):
         if np.sum(self.board == 0) > 0:
@@ -373,23 +319,34 @@ class MinigameFrame(QtWidgets.QFrame):
                     return True
             return False
 
-    def do_move(self, direction, do_gen=True):
+    def do_move(self, direction: str, do_gen=True):
+        if self.game_square.active_animations:
+            for timer in (self.timer1, self.timer2, self.timer3):
+                timer.stop()
+            self.game_square.cancel_all_animations()
+            self.update_all_frame(self._last_values)
         do_anim = SingletonConfig().config['do_animation']
         direct = {'Left': 1, 'Right': 2, 'Up': 3, 'Down': 4}[direction.capitalize()]
         self.before_move(direct)
         board_new, new_score, is_valid_move = self.move_and_check_validity(direct)
         if is_valid_move:
-            if do_anim[1]:
-                self.pop_merged(self.board, direction)
-            self.board = board_new
+            current_values = self.board
+            self.board = board_new.copy()
             self.score += new_score
             self.max_score = max(self.max_score, self.score)
             self.before_gen_num(direct)
             if do_gen:
-                self.gen_new_num(do_anim[0])
+                self.gen_new_num(do_anim)
+            if do_anim:
+                self.slide_tiles(current_values, direction)
+                self.timer2.singleShot(110, lambda: self.pop_merged(current_values, direction))
+                self.timer3.singleShot(100, lambda: self.update_all_frame(board_new))
+                self.after_gen_num()
             else:
                 self.update_all_frame(self.board)
-            self.after_gen_num()
+                self.after_gen_num()
+
+            self._last_values = self.board.copy()
             self.check_game_passed()
             self.check_game_over()
 
@@ -405,6 +362,12 @@ class MinigameFrame(QtWidgets.QFrame):
                 if merged_pos[row][col] == 1:
                     self.game_square.animate_pop(row, col)
 
+    def slide_tiles(self, board, direction):
+        slide_distances = slide_distance(board, direction)
+        for row in range(self.game_square.rows):
+            for col in range(self.game_square.cols):
+                self.game_square.animate_slide(row, col, direction, slide_distances[row][col])
+
     def game_over(self):
         dialog = GameOverDialog(self)
         dialog.newGameSignal.connect(self.new_game)
@@ -414,6 +377,10 @@ class MinigameFrame(QtWidgets.QFrame):
         SingletonConfig().config['minigame_state'][self.difficulty][self.minigame] = \
             ([self.board, self.score, self.max_score, self.max_num, self.is_passed, self.newtile_pos], [])
         event.accept()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.game_square.updateGeometry()
 
 
 # noinspection PyAttributeOutsideInit
@@ -578,7 +545,7 @@ class MinigameWindow(QtWidgets.QMainWindow):
         self.new_game.setText(_translate("Minigame", "New Game"))
 
     def show_message(self):
-        QtWidgets.QMessageBox.information(self, 'Information', 'More minigames.')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), self.tr('More minigames.'))
         self.gameframe.setFocus()
 
     def keyPressEvent(self, event, ):
@@ -596,6 +563,8 @@ class MinigameWindow(QtWidgets.QMainWindow):
             super().keyPressEvent(event)  # 其他键交给父类处理
 
     def process_input(self, direction):
+        if self.isProcessing:
+            return
         self.isProcessing = True  # 设置标志防止进一步的输入
         self.gameframe.do_move(direction)
         self.update_score()
@@ -667,7 +636,7 @@ class MinigameWindow(QtWidgets.QMainWindow):
         self.score_anims.append(anim_group)
         if len(self.score_anims) >= 200:
             self.score_anims = self.score_anims[100:]
-        anim_group.start()
+        anim_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def closeEvent(self, event):
         self.gameframe.close()  # 触发保存游戏状态的关闭事件
@@ -899,7 +868,7 @@ class PowerUpGrid(QtWidgets.QFrame):
                 return
             self.parent_window.isProcessing = True
             frame.setStyleSheet("background-color: rgba(0, 0, 0, 0.2);")
-            scale = self.parent_window.gameframe.game_square.labels[0][0].height()
+            scale = self.parent_window.gameframe.game_square.grids[0][0].height()
             scale *= 2 if frame.image_name == "pic//twist.png" else 1
             # 更新鼠标图案
             cursor_pixmap = QtGui.QPixmap(frame.image_name).scaled(
@@ -947,11 +916,12 @@ class PowerUpGrid(QtWidgets.QFrame):
         local_pos = self.parent_window.gameframe.game_square.mapFromParent(local_pos)
         for i, row in enumerate(self.parent_window.gameframe.game_square.frames):
             for j, frame in enumerate(row):
-                if frame.geometry().contains(local_pos):
+                if frame is not None and frame.geometry().contains(local_pos):
                     if self.parent_window.gameframe.board[i][j] <= 0:
                         return False
                     self.parent_window.gameframe.board[i][j] = 0
-                    self.parent_window.gameframe.update_frame(0, i, j, False)
+                    self.parent_window.gameframe._last_values = self.parent_window.gameframe.board.copy()
+                    self.parent_window.gameframe.update_frame(0, i, j)
                     self.trigger_powerup_explosion(i, j)
                     return True
         return False
@@ -959,19 +929,20 @@ class PowerUpGrid(QtWidgets.QFrame):
     def execute_glove_action(self, event):
         local_pos = self.parent_window.gameframe.mapFromParent(event.pos())
         local_pos = self.parent_window.gameframe.game_square.mapFromParent(local_pos)
-        for i, row in enumerate(self.parent_window.gameframe.game_square.frames):
-            for j, frame in enumerate(row):
-                if frame.geometry().contains(local_pos):
+        for i, row in enumerate(self.parent_window.gameframe.game_square.grids):
+            for j, grid in enumerate(row):
+                if grid.geometry().contains(local_pos):
                     if self.first_click_pos is None:
                         # 第一次点击，记录位置
-                        if self.parent_window.gameframe.board[i][j] > 0:
+                        frame = self.parent_window.gameframe.game_square.frames[i][j]
+                        if self.parent_window.gameframe.board[i][j] > 0 and frame is not None:
                             self.first_click_pos = ((i, j), self.parent_window.gameframe.board[i][j])
                             pixmap = QtGui.QPixmap(frame.size())
                             frame.render(pixmap)
                             cursor = QtGui.QCursor(pixmap.scaled(int(frame.width() // 1.8), int(frame.height() // 1.8),
                                                                  QtCore.Qt.AspectRatioMode.KeepAspectRatio))
                             QtWidgets.QApplication.setOverrideCursor(cursor)
-                            self.parent_window.gameframe.update_frame(0, i, j, False)
+                            self.parent_window.gameframe.update_frame(0, i, j)
                             return False
                     else:
                         (src_i, src_j), num = self.first_click_pos
@@ -979,19 +950,20 @@ class PowerUpGrid(QtWidgets.QFrame):
                         if self.parent_window.gameframe.board[i][j] == 0:
                             self.parent_window.gameframe.board[i][j] = num
                             self.parent_window.gameframe.board[src_i][src_j] = 0
-                            self.parent_window.gameframe.update_frame(0, src_i, src_j, False)
-                            self.parent_window.gameframe.update_frame(num, i, j, True)
+                            self.parent_window.gameframe._last_values = self.parent_window.gameframe.board.copy()
+                            self.parent_window.gameframe.update_frame(0, src_i, src_j)
+                            self.parent_window.gameframe.update_frame(num, i, j)
                             self.first_click_pos = None
                             return True
                         else:
-                            self.parent_window.gameframe.update_frame(num, src_i, src_j, True)
+                            self.parent_window.gameframe.update_frame(num, src_i, src_j)
                             # 第二次点击的目标位置不为空，重置第一次点击
                             self.first_click_pos = None
                             return False
         return False
 
     def find_2x2_subgrid_indices(self, click_pos):
-        frame_height = self.parent_window.gameframe.game_square.frames[0][0].height()
+        frame_height = self.parent_window.gameframe.game_square.grids[0][0].height()
         margin = self.parent_window.gameframe.game_square.game_grid.getContentsMargins()[0]
         spacing = self.parent_window.gameframe.game_square.game_grid.horizontalSpacing()
         i0, j0 = None, None
@@ -1022,7 +994,7 @@ class PowerUpGrid(QtWidgets.QFrame):
 
     def trigger_powerup_explosion(self, row, col):
         # 获取目标 QFrame
-        target_frame = self.parent_window.gameframe.game_square.frames[row][col]
+        target_frame = self.parent_window.gameframe.game_square.grids[row][col]
 
         # 获取 target_frame 相对于 self.parent_window.gameframe 的位置
         target_global_pos = target_frame.mapToGlobal(QtCore.QPoint(0, 0))
@@ -1066,20 +1038,28 @@ class PowerUpGrid(QtWidgets.QFrame):
         self.animation_group.addAnimation(size_animation)
         self.animation_group.addAnimation(opacity_animation)
 
+        def on_animation_finished():
+            self.animation_group = None
+            explosion_frame.deleteLater()
+
         # 在动画结束后移除临时 QFrame
-        self.animation_group.finished.connect(explosion_frame.deleteLater)
+        self.animation_group.finished.connect(on_animation_finished)
 
         # 显示爆炸效果
         explosion_frame.show()
-        self.animation_group.start()
+        self.animation_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def trigger_powerup_twist(self, i, j):
         game_square = self.parent_window.gameframe.game_square
         frames = game_square.frames
+        labels = game_square.labels
+        grids = game_square.grids
 
         self.animation_group = QtCore.QParallelAnimationGroup()
 
         def add_animation(tile_widget, start_rect, end_rect):
+            if not tile_widget:
+                return
             animation = QtCore.QPropertyAnimation(tile_widget, b"geometry")
             animation.setDuration(240)
             animation.setStartValue(start_rect)
@@ -1087,31 +1067,40 @@ class PowerUpGrid(QtWidgets.QFrame):
             self.animation_group.addAnimation(animation)
 
         start_positions = [
-            frames[i][j].geometry(),
-            frames[i][j + 1].geometry(),
-            frames[i + 1][j].geometry(),
-            frames[i + 1][j + 1].geometry()
+            grids[i][j].geometry(),
+            grids[i][j + 1].geometry(),
+            grids[i + 1][j].geometry(),
+            grids[i + 1][j + 1].geometry()
         ]
         end_positions = [start_positions[1], start_positions[3], start_positions[0], start_positions[2]]
 
+        anim_frames = [frames[i][j], frames[i][j + 1], frames[i + 1][j], frames[i + 1][j + 1]]
+        frames[i][j], frames[i][j + 1], frames[i + 1][j], frames[i + 1][j + 1] = None, None, None, None
+        labels[i][j], labels[i][j + 1], labels[i + 1][j], labels[i + 1][j + 1] = None, None, None, None
+
         # 创建动画
-        for widget, start_pos, end_pos in zip(
-                [frames[i][j], frames[i][j + 1], frames[i + 1][j], frames[i + 1][j + 1]], start_positions,
-                end_positions):
+        for widget, start_pos, end_pos in zip(anim_frames, start_positions, end_positions):
             add_animation(widget, start_pos, end_pos)
 
         # 在动画结束后更新棋盘并移除动画
         def on_animation_finished():
+            self.animation_group = None
+            for frame in anim_frames:
+                frame.deleteLater()
+
             sub_board = self.parent_window.gameframe.board[i:i + 2, j:j + 2].copy()
             rotated_sub_board = [
                 [sub_board[1, 0], sub_board[0, 0]],
                 [sub_board[1, 1], sub_board[0, 1]]
             ]
             self.parent_window.gameframe.board[i:i + 2, j:j + 2] = rotated_sub_board
+            self.parent_window.gameframe._last_values = self.parent_window.gameframe.board.copy()
             self.parent_window.gameframe.update_all_frame()
 
+            self.parent_window.gameframe.game_square.update_small_label_position()
+
         self.animation_group.finished.connect(on_animation_finished)
-        self.animation_group.start()
+        self.animation_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def set_power_ups_counts(self, counts_list):
         for i, power_up_name in enumerate(self.power_ups.keys()):
@@ -1144,8 +1133,14 @@ class PowerUpGrid(QtWidgets.QFrame):
         self.animation_group.addAnimation(grow_animation)
         self.animation_group.addAnimation(shrink_animation)
 
+        def on_animation_finished():
+            self.animation_group = None
+
+        # 在动画结束后移除临时 QFrame
+        self.animation_group.finished.connect(on_animation_finished)
+
         # 开始动画
-        self.animation_group.start()
+        self.animation_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
 if __name__ == "__main__":

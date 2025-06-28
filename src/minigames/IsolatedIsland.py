@@ -1,11 +1,11 @@
-import sys
 import random
+import sys
 
-from PyQt5 import QtCore, QtWidgets, QtGui
 import numpy as np
+from PyQt5 import QtWidgets
 
-from MiniGame import MinigameFrame, MinigameWindow
 from Config import SingletonConfig
+from MiniGame import MinigameFrame, MinigameWindow
 
 
 class IsolatedIslandFrame(MinigameFrame):
@@ -13,7 +13,7 @@ class IsolatedIslandFrame(MinigameFrame):
         super().__init__(centralwidget, minigame_type)
 
     def gen_new_num(self, do_anim=True):
-        if random.random() < 0.04 - (self.board == -3).sum() * 0.02 + self.difficulty * 0.01:
+        if random.random() < 0.04 - np.sum(self.board == -3) * 0.02 + self.difficulty * 0.01:
             zero_positions = np.where(self.board == 0)
             newtile_pos = random.choice(list(zip(zero_positions[0], zero_positions[1])))
             self.newtile_pos, self.newtile = newtile_pos[0] * 4 + newtile_pos[1], -3
@@ -22,28 +22,25 @@ class IsolatedIslandFrame(MinigameFrame):
             self.board, _, new_tile_pos, val = self.mover.gen_new_num(
                 self.board, SingletonConfig().config['4_spawn_rate'])
             self.newtile_pos, self.newtile = new_tile_pos, val
-        self.update_all_frame(self.board)
-        self.update_frame(self.newtile, self.newtile_pos // 4, self.newtile_pos % 4, anim=do_anim)
+        if do_anim:
+            self.timer1.singleShot(125, lambda: self.game_square.animate_appear(
+                self.newtile_pos // 4, self.newtile_pos % 4, self.newtile))
 
-    def update_frame(self, value, row, col, anim=False):
-        if self.board[row, col] != -3:
-            label = self.game_square.labels[row][col]
-            label.clear()
-            super().update_frame(value, row, col, anim=False)
-        else:
+    def _set_special_frame(self, value, row, col):
+        if value == -3:
             label = self.game_square.labels[row][col]
             frame = self.game_square.frames[row][col]
             label.setText('')
-            color = 'rgba(229, 229, 229, 1)'
-            frame.setStyleSheet(f"background-color: {color};")
-
-            label.setPixmap(QtGui.QPixmap('pic//portal.png').scaled(frame.width(), frame.height(
-            ), QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation))
-            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-            label.setStyleSheet(f"""background-color: transparent;""")
-            if anim:
-                self.game_square.animate_appear(row, col)
-
+            frame.setStyleSheet(f"""
+            QFrame#f{row * 4 + col} {{
+                border-image: url(pic//portal.png) 0 0 0 0 stretch stretch;
+            }}
+            """)
+            if (self.newtile_pos // self.cols != row or self.newtile_pos % self.cols != col
+            ) or not SingletonConfig().config['do_animation']:
+                frame.show()
+        else:
+            super()._set_special_frame(value, row, col)
 
 # noinspection PyAttributeOutsideInit
 class IsolatedIslandWindow(MinigameWindow):
@@ -51,8 +48,8 @@ class IsolatedIslandWindow(MinigameWindow):
         super().__init__(minigame=minigame, frame_type=frame_type)
 
     def show_message(self):
-        text = 'Discovered a tile that merges with none but itself.'
-        QtWidgets.QMessageBox.information(self, 'Information', text)
+        text = self.tr('Discovered a tile that merges with none but itself.')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), text)
         self.gameframe.setFocus()
 
 

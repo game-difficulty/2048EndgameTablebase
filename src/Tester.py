@@ -12,6 +12,14 @@ from Gamer import BaseBoardFrame
 from Analyzer import AnalyzeWindow
 
 
+direction_map = {
+    'u': "上",
+    'd': "下",
+    'l': "左",
+    'r': "右"
+}
+
+
 # noinspection PyAttributeOutsideInit
 class ScrollTextDisplay(QWidget):
     def __init__(self, max_lines=100, parent=None):
@@ -92,9 +100,9 @@ class TestFrame(BaseBoardFrame):
             "**Terrible!**": 0,
         }
 
-    def update_frame(self, value, row, col, anim=False):
+    def update_frame(self, value, row, col):
         """重写方法以配合不显示32k格子数字的设置"""
-        super().update_frame(value, row, col, anim)
+        super().update_frame(value, row, col)
         if value == 32768 and not SingletonConfig().config.get('dis_32k', False):
             self.game_square.labels[row][col].setText('')
 
@@ -273,11 +281,15 @@ class TestWindow(QtWidgets.QMainWindow):
 
         path = SingletonConfig().config['filepath_map'].get(self.full_pattern, [])
         if not path:
-            self.text_display.add_text('Table file path not found!')
+            self.text_display.add_text(self.tr('Table file path not found!'))
             self.text_display.update_text()
             return False, path
         else:
-            self.text_display.add_text(f"You have selected: **{self.full_pattern}**. Loading...")
+            self.text_display.add_text(
+                self.tr("You have selected: ") +
+                "**" + self.full_pattern + "**. " +
+                self.tr("Loading...")
+            )
             self.text_display.update_text()
             QApplication.processEvents()
             return True, path
@@ -289,8 +301,8 @@ class TestWindow(QtWidgets.QMainWindow):
         self.gameframe.board = self.book_reader.bm.decode_board(self.gameframe.board_encoded)
         self.result = self.book_reader.move_on_dic(
             self.gameframe.board, self.pattern[0], self.pattern[1], self.full_pattern)
-        self.text_display.lines[0] = self.text_display.lines[0].replace(' Loading...', '')
-        self.text_display.add_text("We'll start from:")
+        self.text_display.lines[0] = self.text_display.lines[0].replace(self.tr(' Loading...'), '')
+        self.text_display.add_text(self.tr("We'll start from:"))
         self.text_display.print_board(self.gameframe.board)
         self.gameframe.update_all_frame(self.gameframe.board)
         self.gameframe.setFocus()
@@ -302,8 +314,8 @@ class TestWindow(QtWidgets.QMainWindow):
             self.gameframe.board = self.gameframe.mover.decode_board(self.gameframe.board_encoded)
             self.result = self.book_reader.move_on_dic(self.gameframe.board, self.pattern[0], self.pattern[1],
                                                  self.full_pattern)
-            self.text_display.lines[0] = self.text_display.lines[0].replace(' Loading...', '')
-            self.text_display.add_text("We'll start from:")
+            self.text_display.lines[0] = self.text_display.lines[0].replace(self.tr(' Loading...'), '')
+            self.text_display.add_text(self.tr("We'll start from:"))
             self.text_display.print_board(self.gameframe.board)
             self.gameframe.update_all_frame(self.gameframe.board)
         self.gameframe.setFocus()
@@ -367,26 +379,29 @@ class TestWindow(QtWidgets.QMainWindow):
         self.text_display.add_text('')
 
         if not self.result[list(self.result.keys())[0]]:
-            self.text_display.add_text("**Game Over**: NO possible moves left.")
+            self.text_display.add_text(self.tr("**Game Over**: NO possible moves left."))
             for evaluation, count in self.gameframe.performance_stats.items():
                 self.text_display.add_text(f'{evaluation}: {count}\n')
-            self.text_display.add_text(f'Total Goodness of Fit: {self.gameframe.goodness_of_fit:.4f}' + '\n')
-            self.text_display.add_text(f'Maximum Combo: {self.gameframe.max_combo}' + '\n')
+
         elif self.result[list(self.result.keys())[0]] == 1:
-            self.text_display.add_text("**Congratulations!** You're about to reach the target tile.")
+            self.text_display.add_text(self.tr("**Congratulations!** You're about to reach the target tile."))
             for evaluation, count in self.gameframe.performance_stats.items():
                 self.text_display.add_text(f'{evaluation}: {count}\n')
-            self.text_display.add_text(f'Total Goodness of Fit: {self.gameframe.goodness_of_fit:.4f}' + '\n')
-            self.text_display.add_text(f'Maximum Combo: {self.gameframe.max_combo}' + '\n')
+
+        self.text_display.add_text(self.tr('Total Goodness of Fit: ') + f'{self.gameframe.goodness_of_fit:.4f}' + '\n')
+        self.text_display.add_text(self.tr('Maximum Combo: ') + f'{self.gameframe.max_combo}' + '\n')
         self.text_display.update_text()
-        self.gameframe.update_all_frame(self.gameframe.board)
         self.gameframe.setFocus()
         self.isProcessing = False
 
     def one_step(self, move):
         text_list = []
+        is_zh = (SingletonConfig().config['language'] == 'zh')
         for key, value in self.result.items():
-            text_list.append(f"{key[0].upper()}: {value}")
+            if is_zh:
+                text_list.append(f"{direction_map[key[0].lower()]}: {value}")
+            else:
+                text_list.append(f"{key[0].upper()}: {value}")
         text_list.append('')
         best_move = list(self.result.keys())[0]
         if self.result[best_move] == 0:
@@ -396,7 +411,11 @@ class TestWindow(QtWidgets.QMainWindow):
             self.gameframe.max_combo = max(self.gameframe.max_combo, self.gameframe.combo)
             self.gameframe.performance_stats["**Perfect!**"] += 1
             text_list.append(f"**Perfect! Combo: {self.gameframe.combo}x**")
-            text_list.append(f"You pressed {move}. And the best move is **{best_move.capitalize()}**")
+            if is_zh:
+                text_list.append(f"你走的是 {direction_map[move[0].lower()]} ，"
+                                 f"最优解正是 **{direction_map[best_move[0].lower()]}**")
+            else:
+                text_list.append(f"You pressed {move}. And the best move is **{best_move.capitalize()}**")
         else:
             self.gameframe.combo = 0
             loss = self.result[move.lower()] / self.result[best_move] if self.result[best_move] else 1
@@ -406,8 +425,13 @@ class TestWindow(QtWidgets.QMainWindow):
             self.gameframe.performance_stats[evaluation] += 1
 
             text_list.append(evaluation)
-            text_list.append(f'one-step loss: {1 - loss:.4f}, goodness of fit: {self.gameframe.goodness_of_fit:.4f}')
-            text_list.append(f"You pressed {move}. But the best move is **{best_move.capitalize()}**")
+            if is_zh:
+                text_list.append(f'单步损失: {1 - loss:.4f}, 吻合度: {self.gameframe.goodness_of_fit:.4f}')
+                text_list.append(f"你走的是 {direction_map[move[0].lower()]} ，"
+                                 f"但最优解是 **{direction_map[best_move[0].lower()]}**")
+            else:
+                text_list.append(f'one-step loss: {1 - loss:.4f}, goodness of fit: {self.gameframe.goodness_of_fit:.4f}')
+                text_list.append(f"You pressed {move}. But the best move is **{best_move.capitalize()}**")
         self.text_display.add_text(text_list)
 
     @staticmethod

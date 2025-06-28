@@ -16,7 +16,7 @@ class MDViewer(QMainWindow):
 
     def setupUI(self):
         self.setWindowIcon(QIcon(r"pic\2048_2.ico"))
-        self.setWindowTitle("Markdown Viewer")
+        self.setWindowTitle(self.tr("Help"))
 
         main_widget = QWidget()
         self.setCentralWidget(main_widget)

@@ -7,6 +7,7 @@ from PyQt5 import QtWidgets, QtCore, QtGui
 
 from MiniGame import MinigameFrame, MinigameWindow
 from Config import SingletonConfig
+from Calculator import count_zeros
 
 
 class EndlessFrame(MinigameFrame):
@@ -85,13 +86,16 @@ class EndlessFrame(MinigameFrame):
             if self.bomb:
                 self.board[*self.bomb] = 0
             self.newtile_pos, self.newtile = new_tile_pos, val
-        self.update_all_frame(self.board)
-        self.update_frame(self.newtile, self.newtile_pos // 4, self.newtile_pos % 4, anim=do_anim)
+        if do_anim:
+            self.timer1.singleShot(125, lambda: self.game_square.animate_appear(
+                self.newtile_pos // self.cols, self.newtile_pos % self.cols, self.newtile))
 
-    def update_frame(self, value, row, col, anim=False):
-        if not self.bomb or self.bomb[0] != row or self.bomb[1] != col:
-            super().update_frame(value, row, col, anim=False)
-        else:
+    def _set_special_frame(self, value, row, col):
+        if self.bomb and self.bomb[0] == row and self.bomb[1] == col:
+            if not self.game_square.frames[row][col]:
+                # 先创建控件
+                self.game_square.update_tile_frame(None, row, col)
+
             label = self.game_square.labels[row][col]
             frame = self.game_square.frames[row][col]
             label.setText('')
@@ -101,8 +105,9 @@ class EndlessFrame(MinigameFrame):
             }}
             """)
             label.setStyleSheet(f"""background-color: transparent;""")
-            if anim:
-                self.game_square.animate_appear(row, col)
+            if self.newtile > 0 or not SingletonConfig().config['do_animation']:
+                # 炸弹不是刚刚生成
+                frame.show()
 
     def move_and_check_validity(self, direct):
         is_valid_move = self.bomb_move(direct)
@@ -134,30 +139,44 @@ class EndlessFrame(MinigameFrame):
     def bomb_move(self, direct):
         if not self.bomb:
             return False
+        do_anim = SingletonConfig().config['do_animation']
         row, col = self.bomb
+
         if direct == 1:  # Left
+            if col != 0 and do_anim:
+                distance = count_zeros(self.board[row, :col][::-1])
+                self.game_square.animate_slide(row, col, 'Left', distance)
             if self._bomb_explode(range(col - 1, -1, -1), range(col + 1, 4), row, col, 0):
                 return True
             self.bomb = (row, 0)
             return col != 0
         elif direct == 2:  # Right
+            if col != 3 and do_anim:
+                distance = count_zeros(self.board[row, (col + 1):])
+                self.game_square.animate_slide(row, col, 'Right', distance)
             if self._bomb_explode(range(col + 1, 4), range(col - 1, -1, -1), row, col, 0):
                 return True
             self.bomb = (row, 3)
             return col != 3
         elif direct == 3:  # Up
+            if row != 0 and do_anim:
+                distance = count_zeros(self.board[:row, col][::-1])
+                self.game_square.animate_slide(row, col, 'Up', distance)
             if self._bomb_explode(range(row - 1, -1, -1), range(row + 1, 4), row, col, 1):
                 return True
             self.bomb = (0, col)
             return row != 0
         elif direct == 4:  # Down
+            if row != 3 and do_anim:
+                distance = count_zeros(self.board[(row + 1):, col])
+                self.game_square.animate_slide(row, col, 'Down', distance)
             if self._bomb_explode(range(row + 1, 4), range(row - 1, -1, -1), row, col, 1):
                 return True
             self.bomb = (3, col)
             return row != 3
 
     def has_possible_move(self):
-        if (self.board == 0).sum() > 0 or self.bomb:
+        if np.sum(self.board == 0) > 0 or self.bomb:
             return True
         else:
             for direct in (1, 2, 3, 4):
@@ -171,10 +190,9 @@ class EndlessFrame(MinigameFrame):
             pass
             self.has_just_exploded = False
 
-    # noinspection PyAttributeOutsideInit
     def trigger_explosion(self, row, col):
         # 获取目标 QFrame
-        target_frame = self.game_square.frames[row][col]
+        target_frame = self.game_square.grids[row][col]
 
         # 获取目标 QFrame 的全局几何位置
         target_global_pos = target_frame.mapToGlobal(QtCore.QPoint(0, 0))
@@ -215,12 +233,26 @@ class EndlessFrame(MinigameFrame):
         animation_group.addAnimation(size_animation)
         animation_group.addAnimation(opacity_animation)
 
-        # 在动画结束后移除临时 QFrame
-        animation_group.finished.connect(explosion_frame.deleteLater)
+        def on_animation_finished():
+            self.explosion_frame.remove(explosion_frame)
+            explosion_label.deleteLater()
+            explosion_frame.deleteLater()
+            self.animation_group.remove(animation_group)
 
-        # 显示爆炸效果
-        explosion_frame.show()
-        animation_group.start()
+        # 在动画结束后移除临时 QFrame
+        animation_group.finished.connect(on_animation_finished)
+
+        def start_anim():
+            # 显示爆炸效果
+            explosion_frame.show()
+            animation_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+        do_anim = SingletonConfig().config['do_animation']
+        if do_anim:
+            QtCore.QTimer.singleShot(100, start_anim)
+        else:
+            start_anim()
+
         self.animation_group.append(animation_group)
         self.explosion_frame.append(explosion_frame)
 
@@ -233,6 +265,7 @@ class EndlessExplosionsFrame(EndlessFrame):
     def explode_effect(self, r, c):
         self.board[r, c] = 0
         self.trigger_explosion(r, c)
+        self.update_frame(0, r, c)
 
 
 class EndlessGiftboxFrame(EndlessFrame):
@@ -251,14 +284,23 @@ class EndlessGiftboxFrame(EndlessFrame):
             positions = np.where(self.board == -2)
             positions_list = list(zip(positions[0], positions[1]))
 
+            r0, c0 = positions_list[0]
             exponents = np.arange(2, 11)
             weights = 1 / (exponents ** 1.5)
             weights /= weights.sum()
             new_value = original_value
             while new_value == original_value:
                 new_value = np.random.choice(exponents, p=weights)
-            self.board[*positions_list[0]] = new_value
-            self.trigger_explosion(*positions_list[0])
+            self.board[r0, c0] = new_value
+            self.trigger_explosion(r0, c0)
+
+            if SingletonConfig().config['do_animation']:
+                def update_new_value(val, r, c):
+                    self.game_square.update_tile_frame(val, r, c)
+                    self.game_square.frames[r][c].raise_()
+
+                QtCore.QTimer.singleShot(120, lambda: update_new_value(new_value, r0, c0))
+
             self.has_just_exploded = False
 
 
@@ -270,29 +312,47 @@ class EndlessFactorizationFrame(EndlessFrame):
 
     def explode_effect(self, r, c):
         self.has_just_exploded = self.board[r, c]
-        self.board[r, c] = -2
         if self.has_just_exploded != 1:
             self.board[*self.bomb] = -2
+        else:
+            self.board[*self.bomb] = 0  # 本来也是0
+        self.board[r, c] = -2
 
     def before_gen_num(self, direct):
         if self.has_just_exploded:
             positions = np.where(self.board == -2)
             positions_list = list(zip(positions[0], positions[1]))
             if self.has_just_exploded == 1:
-                self.board[*positions_list[0]] = 0
-                self.trigger_explosion(*positions_list[0])
+                r0, c0 = positions_list[0]
+                self.board[r0, c0] = 0
+                self.trigger_explosion(r0, c0)
+                self.update_frame(0, r0, c0)
             else:
-                factor1 = random.randint(1, self.has_just_exploded - 1)
-                self.board[*positions_list[0]] = factor1
-                self.board[*positions_list[1]] = self.has_just_exploded - factor1
-                self.trigger_explosion(*positions_list[0])
-                self.trigger_explosion(*positions_list[1])
+                r0, c0 = positions_list[0]
+                r1, c1 = positions_list[1]
+                factor1 = random.randint(1, max(self.has_just_exploded - 1, 1))
+                self.board[r0, c0] = factor1
+                self.board[r1, c1] = self.has_just_exploded - factor1
+                self.trigger_explosion(r0, c0)
+                self.trigger_explosion(r1, c1)
+
+                if SingletonConfig().config['do_animation']:
+                    def update_divided(val, r, c):
+                        self.game_square.update_tile_frame(val, r, c)
+                        self.game_square.frames[r][c].raise_()
+
+                    factor0 = self.has_just_exploded - factor1
+                    QtCore.QTimer.singleShot(120, lambda: update_divided(factor0, r1, c1))
+                    QtCore.QTimer.singleShot(120, lambda: update_divided(factor1, r0, c0))
+
             self.has_just_exploded = False
 
-    def update_frame(self, value, row, col, anim=False):
-        if not self.bomb or self.bomb[0] != row or self.bomb[1] != col:
-            super().update_frame(value, row, col, anim=False)
-        else:
+    def _set_special_frame(self, value, row, col):
+        if self.bomb and self.bomb[0] == row and self.bomb[1] == col:
+            if not self.game_square.frames[row][col]:
+                # 先创建控件
+                self.game_square.update_tile_frame(None, row, col)
+
             label = self.game_square.labels[row][col]
             frame = self.game_square.frames[row][col]
             label.setText('÷')
@@ -304,8 +364,9 @@ class EndlessFactorizationFrame(EndlessFrame):
             fontsize = self.game_square.base_font_size
             label.setStyleSheet(f"""font: {fontsize}pt 'Calibri'; font-weight: bold; color: white;
                                  background-color: transparent;""")
-            if anim:
-                self.game_square.animate_appear(row, col)
+            if self.newtile > 0 or not SingletonConfig().config['do_animation']:
+                # 炸弹不是刚刚生成
+                frame.show()
 
 
 # noinspection PyAttributeOutsideInit
@@ -314,8 +375,8 @@ class EndlessExplosionsWindow(MinigameWindow):
         super().__init__(minigame=minigame, frame_type=frame_type)
 
     def show_message(self):
-        text = 'A small chance of generating a bomb\n that destroys the first tile it encounters!'
-        QtWidgets.QMessageBox.information(self, 'Information', text)
+        text = self.tr('A small chance of generating a bomb\n that destroys the first tile it encounters!')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), text)
         self.gameframe.setFocus()
 
 
@@ -324,8 +385,8 @@ class EndlessFactorizationWindow(MinigameWindow):
         super().__init__(minigame=minigame, frame_type=frame_type)
 
     def show_message(self):
-        text = 'A small chance of generating a power-up\n that halves the first tile it encounters!'
-        QtWidgets.QMessageBox.information(self, 'Information', text)
+        text = self.tr('A small chance of generating a power-up\n that halves the first tile it encounters!')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), text)
         self.gameframe.setFocus()
 
 
@@ -334,8 +395,8 @@ class EndlessGiftboxWindow(MinigameWindow):
         super().__init__(minigame=minigame, frame_type=frame_type)
 
     def show_message(self):
-        text = 'A small chance of generating a gift box\n that magically changes the first tile it encounters!'
-        QtWidgets.QMessageBox.information(self, 'Information', text)
+        text = self.tr('A small chance of generating a gift box\n that magically changes the first tile it encounters!')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), text)
         self.gameframe.setFocus()
 
 

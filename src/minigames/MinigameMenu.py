@@ -357,7 +357,7 @@ class MenuWindow(QtWidgets.QWidget):
         self.title.setGraphicsEffect(shadow)
 
         # 添加困难模式复选框
-        self.hardmode_checkbox = CustomCheckBox('HardMode', self.font, self, 26)
+        self.hardmode_checkbox = CustomCheckBox(self.tr('HardMode'), self.font, self, 26)
         self.hardmode_checkbox.set_checked(SingletonConfig().config['minigame_difficulty'])
         self.hardmode_checkbox.state_changed.connect(self.update_difficulty)
 

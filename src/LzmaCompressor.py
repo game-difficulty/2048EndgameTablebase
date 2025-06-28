@@ -3,8 +3,15 @@ import subprocess
 import lzma
 from Config import logger
 
-# seven_zip_exe = r".\7zip\7z.exe"
-seven_zip_exe = r"_internal\7z.exe"
+
+internal_path = os.path.join("_internal", "7z.exe")
+
+if os.path.exists(internal_path):
+    seven_zip_exe = internal_path
+else:
+    seven_zip_exe = os.path.join("7zip", "7z.exe")
+    if not os.path.exists(seven_zip_exe):
+        logger.warning(f"7z executable not found!")
 
 
 def is_seven_zip_available():
@@ -32,7 +39,7 @@ def decompress_with_lzma(input_file, output_file):
     """
     with lzma.open(input_file, 'rb') as f_in, open(output_file, 'wb') as f_out:
         f_out.write(f_in.read())
-    logger.debug(f"文件已使用 lzma 解压到: {output_file}")
+    # logger.debug(f"文件已使用 lzma 解压到: {output_file}")
     # 删除压缩文件
     os.remove(input_file)
 

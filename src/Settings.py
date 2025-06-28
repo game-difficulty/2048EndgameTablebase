@@ -17,8 +17,8 @@ class TwoLevelComboBox(QToolButton):
         super().__init__(parent)
         self.setText(default_text)
         self.setPopupMode(QToolButton.InstantPopup)
-        self.setMinimumSize(150, 20)
-        self.setMaximumSize(600, 30)
+        self.setMinimumSize(150, 27)
+        self.setMaximumSize(600, 36)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
 
         self.category_menu = QMenu(self)
@@ -108,7 +108,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout = QtWidgets.QGridLayout()
         self.selfLayout.setContentsMargins(25, 25, 25, 25)
         self.selfLayout.setHorizontalSpacing(15)
-        self.selfLayout.setVerticalSpacing(40)
+        self.selfLayout.setVerticalSpacing(27)
         self.selfLayout.setObjectName("selfLayout")
 
         self.pattern_text = QtWidgets.QLabel(self.centralwidget)
@@ -130,19 +130,19 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.set_filepath_bt.clicked.connect(self.filepath_changed)  # type: ignore
         self.selfLayout.addWidget(self.set_filepath_bt, 1, 2, 1, 1)
 
-        self.target_combo = SingleLevelComboBox("Target Tile", self.centralwidget)
+        self.target_combo = SingleLevelComboBox(self.tr("Target Tile"), self.centralwidget)
         self.target_combo.setObjectName("target_combo")
         self.target_combo.add_items(["128", "256", "512", "1024", "2048", "4096", "8192"])
         self.selfLayout.addWidget(self.target_combo, 0, 2, 1, 1)
 
-        self.pattern_combo = TwoLevelComboBox("Select Formation", self.centralwidget)
+        self.pattern_combo = TwoLevelComboBox(self.tr("Select Formation"), self.centralwidget)
         self.pattern_combo.setObjectName("pattern_combo")
         for category, items in category_info.items():
             self.pattern_combo.add_category(category, items)
         self.selfLayout.addWidget(self.pattern_combo, 0, 1, 1, 1)
         self.pattern_combo.currentTextChanged.connect(self.update_pos_combo_visibility)
 
-        self.pos_combo = SingleLevelComboBox("Target Position", self.centralwidget)
+        self.pos_combo = SingleLevelComboBox(self.tr("Target Position"), self.centralwidget)
         self.pos_combo.setObjectName("pos_combo")
         self.pos_combo.add_items(["0", "1", "2"])
         self.selfLayout.addWidget(self.pos_combo, 0, 3, 1, 1)
@@ -160,6 +160,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.options_text, 2, 0, 1, 1)
         self.compress_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.compress_checkBox.setObjectName("compress_checkBox")
+        self.compress_checkBox.setToolTip(self.tr('Compress result files. Recommended.'))
         self.selfLayout.addWidget(self.compress_checkBox, 2, 3, 1, 1)
         if config.get('compress', False):
             self.compress_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
@@ -168,6 +169,8 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.compress_checkBox.stateChanged.connect(self.compress_state_changed)  # type: ignore
         self.optimal_branch_only_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.optimal_branch_only_checkBox.setObjectName("optimal_branch_only_checkBox")
+        self.optimal_branch_only_checkBox.setToolTip(self.tr(
+            'Post-computation pruning of suboptimal branches. Generally unnecessary.'))
         self.selfLayout.addWidget(self.optimal_branch_only_checkBox, 2, 2, 1, 1)
         if config.get('optimal_branch_only', False):
             self.optimal_branch_only_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
@@ -176,6 +179,9 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.optimal_branch_only_checkBox.stateChanged.connect(self.optimal_branch_only_state_changed)  # type: ignore
         self.compress_temp_files_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.compress_temp_files_checkBox.setObjectName("compress_temp_files_checkBox")
+        self.compress_temp_files_checkBox.setToolTip(self.tr(
+            'Compress intermediate files to reduce storage usage during computation, at the cost of processing duration. '
+            'Generally unnecessary.'))
         self.selfLayout.addWidget(self.compress_temp_files_checkBox, 2, 1, 1, 1)
         if config.get('compress_temp_files', False):
             self.compress_temp_files_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
@@ -184,6 +190,8 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.compress_temp_files_checkBox.stateChanged.connect(self.compress_temp_files_state_changed)  # type: ignore
         self.advanced_algo_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.advanced_algo_checkBox.setObjectName("advanced_algo_checkBox")
+        self.advanced_algo_checkBox.setToolTip(self.tr(
+            'The advanced algorithm optimizes processing speed and resource efficiency for massive tables (only)'))
         self.advanced_algo_checkBox.setMinimumSize(QtCore.QSize(200, 36))
         self.selfLayout.addWidget(self.advanced_algo_checkBox, 3, 1, 1, 1)
         self.smallTileSumLimitLabel = None
@@ -197,6 +205,9 @@ class SettingsWindow(QtWidgets.QMainWindow):
 
         self.mini_table_text = QtWidgets.QLabel(self.centralwidget)
         self.mini_table_text.setObjectName("mini_table_text")
+        self.mini_table_text.setToolTip(self.tr(
+            'Remove low success rate positions to reduce table size. '
+            'Does not affect calculation accuracy.'))
         # self.mini_table_text.setStyleSheet("font: 500 12pt \"Cambria\";")
         self.selfLayout.addWidget(self.mini_table_text, 4, 1, 1, 2)
         self.deletion_threshold_box = QtWidgets.QDoubleSpinBox(self.centralwidget)
@@ -280,20 +291,28 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.anim_text.setObjectName("anim_text")
         self.anim_text.setStyleSheet("font: 500 12pt \"Cambria\";")
         self.selfLayout.addWidget(self.anim_text, 9, 0, 1, 1)
-        self.appear_checkBox = QtWidgets.QCheckBox(self.centralwidget)
-        self.appear_checkBox.setObjectName("appear_checkBox")
-        if config.get('do_animation', (False, False))[0]:
-            self.appear_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
+        self.anim_checkBox = QtWidgets.QCheckBox(self.centralwidget)
+        self.anim_checkBox.setObjectName("anim_checkBox")
+        if config.get('do_animation', True):
+            self.anim_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
         else:
-            self.appear_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
-        self.selfLayout.addWidget(self.appear_checkBox, 9, 1, 1, 1)
-        self.pop_checkBox = QtWidgets.QCheckBox(self.centralwidget)
-        self.pop_checkBox.setObjectName("pop_checkBox")
-        if config.get('do_animation', (False, False))[1]:
-            self.pop_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
-        else:
-            self.pop_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
-        self.selfLayout.addWidget(self.pop_checkBox, 9, 2, 1, 1)
+            self.anim_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        self.selfLayout.addWidget(self.anim_checkBox, 9, 1, 1, 1)
+        # 创建语言选择按钮（下拉菜单）
+        self.lang_button = QtWidgets.QToolButton(self.centralwidget)
+        self.lang_button.setMinimumSize(150, 20)
+        self.lang_button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        self.lang_button.setObjectName("lang_button")
+        self.selfLayout.addWidget(self.lang_button, 9, 3, 1, 1)
+        self.lang_menu = QtWidgets.QMenu(self.lang_button)
+        self.lang_button.setMenu(self.lang_menu)
+
+        # 添加主题选项
+        for language in ('zh', 'en'):
+            action = self.lang_menu.addAction(language)
+            action.triggered.connect(  # type: ignore
+                lambda checked, lang=language: self.apply_language(lang)
+            )
 
         self.tile_font_size_text = QtWidgets.QLabel(self.centralwidget)
         self.tile_font_size_text.setObjectName("tile_font_size_text")
@@ -333,8 +352,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.advanced_algo_checkBox.setText(_translate("Settings", "Advanced Algo"))
         self.mini_table_text.setText(_translate("Settings", "Remove Boards with a Success Rate Below:"))
         self.set_filepath_bt.setText(_translate("Settings", "SET..."))
-        self.pop_checkBox.setText(_translate("Settings", "Pop"))
-        self.appear_checkBox.setText(_translate("Settings", "Appear"))
+        self.anim_checkBox.setText(_translate("Settings", "appear / pop / slide"))
         self.colorset_text.setText(_translate("Settings", "Tile Color:"))
         self.color_bt.setText(_translate("Settings", "Choose Color"))
         self.theme_button.setText(_translate("Settings", "Set Theme"))
@@ -342,6 +360,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.demo_speed_text.setText(_translate("Settings", "Demo Speed:"))
         self.tile_font_size_text.setText(_translate("Settings", "Tile Font Size:"))
         self.anim_text.setText(_translate("Settings", "Do Animation:"))
+        self.lang_button.setText("Language")
         self.save_bt.setText(_translate("Settings", "SAVE"))
 
     def show_ColorDialog(self):
@@ -361,6 +380,27 @@ class SettingsWindow(QtWidgets.QMainWindow):
             theme_colors = theme_map[theme_name]
             SingletonConfig().config['colors'] = theme_colors.copy() + ['#000000'] * 20
             SingletonConfig.tile_font_colors()
+
+    @staticmethod
+    def apply_language(lang):
+        app = QtWidgets.QApplication.instance()
+        SingletonConfig().config['language'] = lang
+
+        # 1. 清除旧翻译器
+        for translator in app.findChildren(QtCore.QTranslator):
+            app.removeTranslator(translator)
+
+        # 2. 加载新翻译（中文）
+        if lang == 'zh':
+            zh_translator = QtCore.QTranslator()
+            if zh_translator.load(os.path.join("translations", "app_zh_CN.qm")):
+                app.installTranslator(zh_translator)
+
+        # 3. 重新翻译所有窗口
+        # noinspection PyUnresolvedReferences
+        for widget in app.topLevelWidgets():
+            if hasattr(widget, 'retranslateUi'):
+                widget.retranslateUi()
 
     def filepath_changed(self):
         options = QtWidgets.QFileDialog.Options()
@@ -436,14 +476,14 @@ class SettingsWindow(QtWidgets.QMainWindow):
                 pathname = os.path.join(pathname, ptn + '_')
             target = int(np.log2(int(target)))
             position = int(position)
-            self.build_bt.setText('Building...')
+            self.build_bt.setText(self.tr('Building...'))
             self.build_bt.setEnabled(False)
             self.Building_thread = BuildThread(pattern, target, position, pathname)
             self.Building_thread.finished.connect(self.on_build_finished)
             self.Building_thread.start()  # 启动计算线程
 
     def on_build_finished(self):
-        self.build_bt.setText('BUILD')
+        self.build_bt.setText(self.tr('BUILD'))
         self.build_bt.setEnabled(True)
 
     def demo_speed_changed(self):
@@ -533,13 +573,13 @@ class SettingsWindow(QtWidgets.QMainWindow):
         SingletonConfig().config['4_spawn_rate'] = float(self.spawnrate_box.text().replace(',', '.'))
 
     def show_message(self):
-        QtWidgets.QMessageBox.information(self, 'Information', 'This affects all modules of the program, ' +
-                                          '''make sure you know what you're doing''')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'),
+        self.tr('''This affects all modules of the program, make sure you know what you're doing'''))
 
     def save_all(self):
         SingletonConfig().config['deletion_threshold'] = float(self.deletion_threshold_box.text().replace(',', '.'))
         SingletonConfig().config['4_spawn_rate'] = float(self.spawnrate_box.text().replace(',', '.'))
-        SingletonConfig().config['do_animation'] = [self.appear_checkBox.isChecked(), self.pop_checkBox.isChecked()]
+        SingletonConfig().config['do_animation'] = self.anim_checkBox.isChecked()
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
         SingletonConfig().config['advanced_algo'] = self.advanced_algo_checkBox.isChecked()
         SingletonConfig().config['compress_temp_files'] = self.compress_temp_files_checkBox.isChecked()

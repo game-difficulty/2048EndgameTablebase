@@ -6,8 +6,10 @@ from typing import Callable, Dict, Tuple
 
 import cpuinfo
 import numpy as np
-from PyQt5 import QtWidgets
+from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtGui import QFontDatabase
+from PyQt5.QtCore import QLocale
+from PyQt5.QtWidgets import QApplication
 from numpy.typing import NDArray
 
 import Calculator
@@ -274,7 +276,7 @@ class SingletonConfig:
                               '#000000'] * 20,
                 'demo_speed': 40,
                 '4_spawn_rate': 0.1,
-                'do_animation': [False, False],
+                'do_animation': True,
                 'game_state': [np.uint64(0), 0, 0],
                 'dis_32k': False,
                 'compress': False,
@@ -288,6 +290,7 @@ class SingletonConfig:
                 'minigame_state': [dict(), dict()],  # [盘面，得分，最高分，最大数，是否曾过关, 新数位置], []
                 'power_ups_state': [dict(), dict()],
                 'minigame_difficulty': 1,
+                'language': SingletonConfig.get_system_language(),
                 }
 
     @classmethod
@@ -314,6 +317,18 @@ class SingletonConfig:
             logger.info("CPU info: AVX512/AVX2 is not supported")
         return
 
+    @staticmethod
+    def get_system_language():
+        language_name = QLocale.languageToString(QLocale().language())
+        bcp47_name = QLocale().bcp47Name()
+
+        logger.info(f"Language name: {language_name}, BCP47 code: {bcp47_name}")
+
+        if bcp47_name.startswith("zh") or language_name.startswith("Chinese"):
+            return 'zh'
+        else:
+            return 'en'  # 默认英语
+
 
 # 创建日志记录
 logger = logging.getLogger('debug_logger')
@@ -338,25 +353,11 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
     # 防止应用崩溃
     if not issubclass(exc_type, KeyboardInterrupt):
-        QtWidgets.QMessageBox.critical(None, "Error", f"An unexpected error occurred: {exc_value}\n {exc_traceback}")
+        QtWidgets.QMessageBox.critical(None, "Error",
+                                       f"An unexpected error occurred: {exc_value}\n {exc_traceback}")
 
 
 sys.excepthook = handle_exception
-
-
-def _load_fonts():
-    """动态加载Clear Sans字体"""
-    font_files = [
-        r"font/ClearSans/ClearSans-Bold.ttf",
-        r"font/ClearSans/ClearSans-Regular.ttf"
-    ]
-
-    for font_file in font_files:
-        # 返回值为字体ID，负数表示失败
-        if QFontDatabase.addApplicationFont(font_file) < 0:
-            logger.warning(f"Font loading failure: {font_file}")
-
-_load_fonts()
 
 
 """ CPU-time returning clock() function which works from within njit-ted code """

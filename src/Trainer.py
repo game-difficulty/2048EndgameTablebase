@@ -1,17 +1,26 @@
 import os.path
 import sys
-from typing import Dict, Tuple
 import time
+from typing import Dict, Tuple
 
 import numpy as np
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtGui import QIcon, QCursor
+from PyQt5.QtGui import QIcon, QCursor, QKeySequence
+from PyQt5.QtWidgets import QShortcut, QApplication
 
 from BookReader import BookReaderDispatcher
 from Calculator import ReverseUD, ReverseLR, RotateR, RotateL
-from Gamer import BaseBoardFrame
 from Config import SingletonConfig, category_info
+from Gamer import BaseBoardFrame
+
+
+direction_map = {
+    'u': "上",
+    'd': "下",
+    'l': "左",
+    'r': "右"
+}
 
 
 class TrainFrame(BaseBoardFrame):
@@ -30,22 +39,19 @@ class TrainFrame(BaseBoardFrame):
         self.spawn_mode = 0  # 0:随机 1：最好 2：最坏 3:手动
 
     def gen_new_num(self, do_anim=True):
-        if self.spawn_mode == 0:
+        if self.spawn_mode == 0:  # 0:随机
             super().gen_new_num(do_anim)
-        elif self.spawn_mode == 3:
+        elif self.spawn_mode == 3:  # 3:手动
             self.history.append((self.board_encoded, self.score))
-            self.update_all_frame(self.board)
         elif self.parents.book_reader:
             results = self._spawns_success_rates()
             if not results:
                 super().gen_new_num(do_anim)
             elif self.spawn_mode == 1:
                 new_tile_pos, val = max(results, key=results.get)
-                self.update_all_frame(self.board)
                 self.set_new_num(new_tile_pos, val, do_anim)
             elif self.spawn_mode == 2:
                 new_tile_pos, val = min(results, key=results.get)
-                self.update_all_frame(self.board)
                 self.set_new_num(new_tile_pos, val, do_anim)
 
     def _spawns_success_rates(self) -> Dict[Tuple[int, int], float | int]:
@@ -75,9 +81,14 @@ class TrainFrame(BaseBoardFrame):
         # 找到被点击的格子
         i, j = 0, 0
         is_click_on_tiles = False
-        for i, row in enumerate(self.game_square.frames):
-            for j, frame in enumerate(row):
-                if frame.geometry().contains(local_pos):
+        # 遍历网格布局的所有单元格
+        for i in range(self.game_square.rows):
+            for j in range(self.game_square.cols):
+                # 获取背景网格的位置
+                grid_rect = self.game_square.grids[i][j].geometry()
+
+                # 检查点击位置是否在背景网格内
+                if grid_rect.contains(local_pos):
                     is_click_on_tiles = True
                     break  # 跳出内层循环
             else:
@@ -96,7 +107,7 @@ class TrainFrame(BaseBoardFrame):
             else:
                 num_to_set = self.board[i][j] // 2 if self.board[i][j] > 0 else 32768
                 num_to_set = 0 if num_to_set == 1 else num_to_set
-            self.update_frame(num_to_set, i, j, False)
+            self.update_frame(num_to_set, i, j)
             self.board[i][j] = num_to_set
             self.board_encoded = np.uint64(self.mover.encode_board(self.board))
             return
@@ -110,25 +121,26 @@ class TrainFrame(BaseBoardFrame):
                     self.newtile_pos, self.newtile = i * 4 + j, 2
                 else:
                     return
-                self.update_frame(num_to_set, i, j, False)
+                self.update_frame(num_to_set, i, j)
                 self.board[i][j] = num_to_set
                 self.board_encoded = np.uint64(self.mover.encode_board(self.board))
                 self.history.append((self.board_encoded, self.score))
                 self.update_results.emit()
                 return
 
-    def update_frame(self, value, row, col, anim=False):
+    def update_frame(self, value, row, col):
         """重写方法以配合不显示32k格子数字的设置"""
-        super().update_frame(value, row, col, anim)
+        super().update_frame(value, row, col)
         if value == 32768 and not self.dis32k:
             self.game_square.labels[row][col].setText('')
 
     def set_new_num(self, new_tile_pos, val, do_anim=True):
         self.board_encoded |= np.uint64(val) << np.uint64(4 * (15 - new_tile_pos))
         self.board = self.mover.decode_board(self.board_encoded)
-        self.update_frame(2 ** val, new_tile_pos // 4, new_tile_pos % 4, anim=do_anim)
         self.history.append((self.board_encoded, self.score))
         self.newtile_pos, self.newtile = new_tile_pos, val
+        if do_anim:
+            self.timer1.singleShot(125, lambda: self.game_square.animate_appear(new_tile_pos // 4, new_tile_pos % 4, 2 ** val))
 
     def set_to_variant(self, pattern: str):
         self.set_use_variant(pattern)
@@ -320,16 +332,24 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.play_record.setObjectName("record")
         self.play_record.clicked.connect(self.handle_play_record)  # type: ignore
         self.gridLayout_record.addWidget(self.play_record, 0, 2, 1, 1)
+
+        self.screenshot_btn = QtWidgets.QPushButton(self.operate)
+        self.screenshot_btn.clicked.connect(self.capture_and_copy)  # type: ignore
+        self.screenshot_btn.setToolTip("Ctrl+Z")
+        self.shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self.shortcut.activated.connect(self.capture_and_copy)  # type: ignore
+        self.gridLayout_record.addWidget(self.screenshot_btn, 0, 3, 1, 1)
+
         self.manual_checkBox = QtWidgets.QCheckBox(self.operate)
         self.manual_checkBox.setStyleSheet("font: 360 10pt \"Cambria\";")
         self.manual_checkBox.setObjectName("manual_checkBox")
-        self.gridLayout_record.addWidget(self.manual_checkBox, 0, 3, 1, 1)
+        self.gridLayout_record.addWidget(self.manual_checkBox, 1, 0, 1, 1)
         self.manual_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.manual_checkBox.stateChanged.connect(self.manual_state_change)  # type: ignore
         self.best_spawn_checkBox = QtWidgets.QCheckBox(self.operate)
         self.best_spawn_checkBox.setStyleSheet("font: 360 10pt \"Cambria\";")
         self.best_spawn_checkBox.setObjectName("best_spawn_checkBox")
-        self.gridLayout_record.addWidget(self.best_spawn_checkBox, 1, 0, 1, 2)
+        self.gridLayout_record.addWidget(self.best_spawn_checkBox, 1, 1, 1, 2)
         self.best_spawn_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.best_spawn_checkBox.stateChanged.connect(lambda: self.spawn_state_change(1))  # type: ignore
         self.worst_spawn_checkBox = QtWidgets.QCheckBox(self.operate)
@@ -462,6 +482,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.record.setText(_translate("Train", 'Record Demo'))
         self.play_record.setText(_translate("Train", 'Play Record'))
         self.load_record.setText(_translate("Train", 'Load Record'))
+        self.screenshot_btn.setText(_translate("Train", 'Screenshot(Z)'))
         self.manual_checkBox.setText(_translate("Train", "Manual"))
         self.best_spawn_checkBox.setText(_translate("Train", "Always Best Spawn"))
         self.worst_spawn_checkBox.setText(_translate("Train", "Always Worst Spawn"))
@@ -528,7 +549,7 @@ class TrainWindow(QtWidgets.QMainWindow):
     def tiles_bt_on_click(self):
         sender = self.sender()
         self.ai_state = False
-        self.Demo.setText('Demo')
+        self.Demo.setText(self.tr('Demo'))
         if sender.isChecked():
             self.isProcessing = True
             self.gameframe.num_to_set = \
@@ -543,6 +564,7 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.isProcessing = False
             self.gameframe.num_to_set = None
             self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
+            self.gameframe._last_values = self.gameframe.board.copy()
             self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
             self.read_results()
 
@@ -559,12 +581,16 @@ class TrainWindow(QtWidgets.QMainWindow):
     def _show_results(self, result:dict, state:str):
         """ 绑定reader_thread信号 """
         if result:
-            results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in result.items())
+            if SingletonConfig().config['language'] == 'zh':
+                results_text = "\n".join(f"  {direction_map[key[0].lower()]}: {value}" for key, value in result.items())
+            else:
+                results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in result.items())
+
             self.results_label.setText(results_text)
             self.result = result
             result0 = result[list(result.keys())[0]]
             if not result0 or not isinstance(result0, (float, int)):
-                self.statusbar.showMessage("State not found or 0 success rate", 1000)
+                self.statusbar.showMessage(self.tr("Table not found or 0 success rate"), 3000)
         else:
             self.results_label.setText(state)
             self.result = dict()
@@ -632,6 +658,7 @@ class TrainWindow(QtWidgets.QMainWindow):
     def textbox_reset_board(self):
         self.gameframe.board_encoded = np.uint64(int(self.board_state.text(), 16))
         self.gameframe.board = self.gameframe.mover.decode_board(self.gameframe.board_encoded)
+        self.gameframe._last_values = self.gameframe.board.copy()
         self.gameframe.update_all_frame(self.gameframe.board)
         self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
 
@@ -651,6 +678,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
         self.played_length = 0
         self.record_loaded = None
+        self.isProcessing = False
 
     def keyPressEvent(self, event):
         if self.isProcessing:
@@ -698,7 +726,7 @@ class TrainWindow(QtWidgets.QMainWindow):
             move = list(self.result.keys())[0]
             if self.ai_state and (self.result[move] == 0 or self.result[move] is None or self.result[move] == '?'):
                 self.ai_state = False
-                self.Demo.setText('Demo')
+                self.Demo.setText(self.tr('Demo'))
                 self.ai_timer.stop()
                 self.isProcessing = False
             if isinstance(self.result[move], (int, float)):
@@ -711,19 +739,19 @@ class TrainWindow(QtWidgets.QMainWindow):
 
     def toggle_demo(self):
         if not self.ai_state and not self.playing_record_state:
-            self.Demo.setText('Press Enter')
+            self.Demo.setText(self.tr('Press Enter'))
             self.played_length = 0
             self.ai_state = True
             self.ai_timer.singleShot(20, self.one_step)
-            self.statusbar.showMessage("Press Enter to Stop", 3000)
+            self.statusbar.showMessage(self.tr("Press Enter to Stop"), 3000)
         else:
-            self.Demo.setText('Demo')
+            self.Demo.setText(self.tr('Demo'))
             self.ai_state = False
 
     def handle_record(self):
         if not self.recording_state:
             self.recording_state = True
-            self.record.setText('Save')
+            self.record.setText(self.tr('Save'))
             self.records = np.empty(10000, dtype='uint8,uint16,uint16,uint16,uint16')
             v = np.uint64(self.gameframe.board_encoded)
             self.records[0] = (np.uint8(0), np.uint16(v & np.uint64(0xFFFF)),
@@ -731,7 +759,7 @@ class TrainWindow(QtWidgets.QMainWindow):
                                np.uint16((v >> np.uint64(32)) & np.uint64(0xFFFF)),
                                np.uint16((v >> np.uint64(48)) & np.uint64(0xFFFF)))
             self.record_length = 1
-            self.statusbar.showMessage('Recording started', 3000)
+            self.statusbar.showMessage(self.tr('Recording started'), 3000)
         else:
             if self.ai_state:
                 self.toggle_demo()
@@ -743,7 +771,7 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.recording_state = False
             self.record_length = 0
             self.records = np.empty(0, dtype='uint8,uint16,uint16,uint16,uint16')
-            self.record.setText('Record Demo')
+            self.record.setText(self.tr('Record Demo'))
 
     def record_current_state(self, move):
         gen_pos, gen_num = self.gameframe.newtile_pos, self.gameframe.newtile
@@ -767,7 +795,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         if file_path:  # 检查用户是否选择了文件
             try:
                 self.record_loaded = np.fromfile(file_path, dtype='uint8,uint16,uint16,uint16,uint16')
-                self.statusbar.showMessage("File loaded successfully")
+                self.statusbar.showMessage(self.tr("File loaded successfully"), 1000)
                 board = np.uint64((np.uint64(self.record_loaded[0][4]) << np.uint16(48)) |
                                   (np.uint64(self.record_loaded[0][3]) << np.uint16(32)) |
                                   (np.uint64(self.record_loaded[0][2]) << np.uint16(16)) |
@@ -777,13 +805,13 @@ class TrainWindow(QtWidgets.QMainWindow):
                 self.textbox_reset_board()
                 self.played_length = 1
             except Exception as e:
-                self.statusbar.showMessage(f"Failed to load file: {e}")
+                self.statusbar.showMessage(self.tr("Failed to load file: ") + str(e))
                 self.record_loaded = None
 
     def handle_play_record(self):
         if self.playing_record_state:
             self.playing_record_state = False
-            self.play_record.setText('Play Record')
+            self.play_record.setText(self.tr('Play Record'))
             self.replay_timer.stop()
             self.isProcessing = False
         elif self.record_loaded is None:
@@ -791,7 +819,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         else:
             self.isProcessing = True
             self.playing_record_state = True
-            self.play_record.setText('Stop')
+            self.play_record.setText(self.tr('Stop'))
             if self.played_length == 0:
                 board = np.uint64((np.uint64(self.record_loaded[0][4]) << np.uint16(48)) |
                                   (np.uint64(self.record_loaded[0][3]) << np.uint16(32)) |
@@ -807,7 +835,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         if self.record_loaded is None or self.played_length >= len(self.record_loaded):
             self.played_length = 0
             self.playing_record_state = False
-            self.play_record.setText('Play Record')
+            self.play_record.setText(self.tr('Play Record'))
             self.replay_timer.stop()
             self.isProcessing = False
         elif self.playing_record_state:
@@ -817,7 +845,7 @@ class TrainWindow(QtWidgets.QMainWindow):
             new_val = ((current_state[0] >> 6) & 0b1) + 1
             move = {0: 'up', 1: 'down', 2: 'left', 3: 'right'}[move]
             self.gameframe.do_move(move.capitalize(), False)
-            self.gameframe.set_new_num(new_val_pos, new_val, SingletonConfig().config['do_animation'][0])
+            self.gameframe.set_new_num(new_val_pos, new_val, SingletonConfig().config['do_animation'])
             self.decode_result_from_record(current_state)
             results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in self.result.items())
             self.results_label.setText(results_text)
@@ -831,10 +859,20 @@ class TrainWindow(QtWidgets.QMainWindow):
         result = dict(sorted(result.items(), key=lambda item: item[1], reverse=True))
         self.result = result
 
+    def capture_and_copy(self):
+        """捕获指定控件区域的截图并复制到剪贴板"""
+        target_widget = self.gameframe.game_square  # 获取目标控件
+        screenshot = target_widget.grab()
+        scaled = screenshot.scaled(300, 300, Qt.KeepAspectRatio)
+        clipboard = QApplication.clipboard()
+        clipboard.setPixmap(scaled)
+        self.statusbar.showMessage(self.tr("Screenshot saved to the clipboard"), 3000)
+
     def closeEvent(self, event):
         self.ai_state = False
-        self.Demo.setText('Demo')
-        # np.array(self.gameframe.history, dtype='uint64, uint32').tofile(fr'C:\Users\Administrator\Desktop\record\0')
+        self.Demo.setText(self.tr('Demo'))
+        np.array(self.gameframe.history, dtype='uint64, uint32').tofile(fr'C:\Users\Administrator\Desktop\record\0')
+        self.gameframe.history = []
         event.accept()
 
 

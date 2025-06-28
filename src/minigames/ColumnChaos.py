@@ -32,7 +32,11 @@ class ColumnChaosFrame(MinigameFrame):
         self.count_down -= 1
         if self.count_down == 0:
             self.count_down = 40 - 10 * self.difficulty
-            QtCore.QTimer.singleShot(120, self.swap_lines)
+            if SingletonConfig().config['do_animation']:
+                delay = 270
+            else:
+                delay = 90
+            QtCore.QTimer.singleShot(delay, self.swap_lines)
 
     def swap_lines(self):
         col1, col2 = random.sample(range(4), 2)
@@ -42,19 +46,27 @@ class ColumnChaosFrame(MinigameFrame):
             frame1 = self.game_square.frames[row][col1]
             frame2 = self.game_square.frames[row][col2]
 
-            # 创建 frame1 的动画
-            anim1 = QtCore.QPropertyAnimation(frame1, b"geometry")
-            anim1.setDuration(3000)
-            anim1.setStartValue(frame1.geometry())
-            anim1.setEndValue(frame2.geometry())
-            animations.append(anim1)
+            grid1 = self.game_square.grids[row][col1]
+            grid2 = self.game_square.grids[row][col2]
 
-            # 创建 frame2 的动画
-            anim2 = QtCore.QPropertyAnimation(frame2, b"geometry")
-            anim2.setDuration(3000)
-            anim2.setStartValue(frame2.geometry())
-            anim2.setEndValue(frame1.geometry())
-            animations.append(anim2)
+            if frame1 is not None:
+                # 创建 frame1 的动画
+                anim1 = QtCore.QPropertyAnimation(frame1, b"geometry")
+                anim1.setDuration(1250)
+                anim1.setStartValue(grid1.geometry())
+                anim1.setEndValue(grid2.geometry())
+                animations.append(anim1)
+            if frame2 is not None:
+                # 创建 frame2 的动画
+                anim2 = QtCore.QPropertyAnimation(frame2, b"geometry")
+                anim2.setDuration(1250)
+                anim2.setStartValue(grid2.geometry())
+                anim2.setEndValue(grid1.geometry())
+                animations.append(anim2)
+
+            self.game_square.frames[row][col1], self.game_square.frames[row][col2] = frame2, frame1
+            self.game_square.labels[row][col1], self.game_square.labels[row][col2] = (
+                self.game_square.labels[row][col2], self.game_square.labels[row][col1])
 
         # 创建一个动画组
         self.animation_group = QtCore.QParallelAnimationGroup()
@@ -64,11 +76,11 @@ class ColumnChaosFrame(MinigameFrame):
         # 在动画结束时交换标签的内容
         def swap_labels():
             self.board[:, [col1, col2]] = self.board[:, [col2, col1]]
-            self.update_all_frame()
+            self._last_values = self.board.copy()
             self.setFocus()
 
         self.animation_group.finished.connect(swap_labels)
-        self.animation_group.start()
+        self.animation_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
 # noinspection PyAttributeOutsideInit
@@ -102,25 +114,28 @@ class ColumnChaosWindow(MinigameWindow):
         self.update_countdown_text()
 
     def update_countdown_text(self):
-        text = f'The next chaos will occur in **{self.gameframe.count_down}** steps.'
+        text = self.tr('The next chaos will occur in **') + str(self.gameframe.count_down) + self.tr('** steps.')
         self.countdown_text.setMarkdown(text)
 
     def process_input(self, direction):
+        if self.isProcessing:
+            return
         self.isProcessing = True  # 设置标志防止进一步的输入
+        swap = True if self.gameframe.count_down == 1 else False
         self.gameframe.do_move(direction)
         self.update_score()
         self.update_countdown_text()
-        if self.gameframe.count_down == 40 - 10 * self.gameframe.difficulty:
-            QtCore.QTimer.singleShot(3150, self.allow_input)  # 配合gameframe.after_gen_num中动画的延迟
-        else:
+        if not swap:
             self.allow_input()
+        else:
+            QtCore.QTimer.singleShot(1500, self.allow_input)
 
     def allow_input(self):
         self.isProcessing = False
 
     def show_message(self):
-        text = 'Unpredictable shifts in columns are coming!'
-        QtWidgets.QMessageBox.information(self, 'Information', text)
+        text = self.tr('Unpredictable shifts in columns are coming!')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), text)
         self.gameframe.setFocus()
 
 

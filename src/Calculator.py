@@ -500,7 +500,6 @@ def simulate_move_and_merge(line: np.typing.NDArray) -> Tuple[List[int], List[in
 
 def find_merge_positions(current_board: np.typing.NDArray, move_direction: str) -> np.typing.NDArray:
     """找到当前棋盘上即将发生合并的位置。"""
-    # 初始化合并位置数组
     merge_positions = np.zeros_like(current_board)
     move_direction = move_direction.lower()
 
@@ -531,10 +530,16 @@ def _move_distance(line: np.typing.NDArray) -> np.typing.NDArray:
 
     for index, i in enumerate(line):
         if i == 0:
-            moved_distance += 5
+            moved_distance += 1
+        elif i == -1:
+            # minigame中代表无法移动、无法合并的格子
+            moved_distance = 0
+            last_tile = 0
+        elif i == -2:
+            last_tile = 0
         elif last_tile == i and i != 32768:
-            moved_distance += 5
-            move_distance[index] = moved_distance - 4
+            move_distance[index] = moved_distance + 1
+            moved_distance += 1
             last_tile = 0
         else:
             move_distance[index] = moved_distance
@@ -568,7 +573,18 @@ def slide_distance(current_board: np.typing.NDArray, move_direction: str) -> np.
     return move_distance
 
 
-if __name__ == '__main__':
+def count_zeros(line: np.typing.NDArray) -> int:
+    # 专用函数
+    """ line中0的个数，line长度不超过3；中途遇见非零格子直接爆炸 """
+    if len(line) > 0 and line[0] != 0:
+        return 1
+    if len(line) > 1 and line[1] != 0:
+        return 2
+    if len(line) > 2 and line[2] != 0:
+        return 3
+    return len(line)
 
+
+if __name__ == '__main__':
     x,y=min_all_symm_pair(np.uint64(0x1a0b00237970df21))
     print(x,y)

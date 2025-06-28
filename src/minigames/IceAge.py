@@ -24,6 +24,9 @@ class IceAgeFrame(MinigameFrame):
             [[[None] * 6 for _ in range(self.cols)] for __ in range(self.rows)]
 
         super().__init__(centralwidget, minigame_type)
+
+    def setupUi(self):
+        super().setupUi()
         self.init_frozen_frame()
 
     def clear_all_frozen_frame(self):
@@ -71,9 +74,7 @@ class IceAgeFrame(MinigameFrame):
                         self.count_down[i, j] = self.board[i, j]
                         self.board[i, j] = -1
 
-        self.update_frozen_frames()
-
-    def update_frame(self, value, row, col, anim=False):
+    def _set_special_frame(self, value, row, col):
         label = self.game_square.labels[row][col]
         frame = self.game_square.frames[row][col]
         if value == -1:
@@ -84,34 +85,20 @@ class IceAgeFrame(MinigameFrame):
             frame.setStyleSheet(f"""
                         QFrame#f{row * self.cols + col} {{
                             background-color: {color};
+                            border-radius: 8px;
                         }}
                         """)
             fontsize = self.game_square.base_font_size if len(str(2 ** died_value)) < 3 else int(
                 self.game_square.base_font_size * 3 / (0.5 + len(str(2 ** died_value))))
-        elif value != 0:
-            label.setText(str(2 ** value))
-            color = self.game_square.colors[value - 1]
-            frame.setStyleSheet(f"background-color: {color};")
-            fontsize = self.game_square.base_font_size if len(str(2 ** value)) < 3 else int(
-                self.game_square.base_font_size * 3 / (0.5 + len(str(2 ** value))))
-        else:
-            label.setText('')
-            color = 'rgba(229, 229, 229, 1)'
-            frame.setStyleSheet(f"background-color: {color};")
-            fontsize = self.game_square.base_font_size
-        label.setStyleSheet(self.game_square.get_label_style(fontsize, value))
-
-        self.update_frame_small_label(row, col)
-        if anim:
-            self.game_square.animate_appear(row, col)
+            label.setStyleSheet(self.game_square.get_label_style(fontsize, value))
+            frame.show()
+        self.update_frozen_frame(row, col)
 
     def init_frozen_frame(self):
         for row in range(self.rows):
             for col in range(self.cols):
-                frame = self.game_square.frames[row][col]
-
                 # Crystal1
-                crystal1 = QtWidgets.QFrame(frame)
+                crystal1 = QtWidgets.QFrame(self.game_square)
                 crystal1.setObjectName(f'f{row * self.cols + col}_0')
                 crystal1.setStyleSheet(f"""
                 QFrame#f{row * self.cols + col}_0 {{
@@ -121,7 +108,7 @@ class IceAgeFrame(MinigameFrame):
                 self.frozen_frame[row][col][0] = crystal1
 
                 # Crystal2
-                crystal2 = QtWidgets.QFrame(frame)
+                crystal2 = QtWidgets.QFrame(self.game_square)
                 crystal2.setObjectName(f'f{row * self.cols + col}_1')
                 crystal2.setStyleSheet(f"""
                 QFrame#f{row * self.cols + col}_1 {{
@@ -131,7 +118,7 @@ class IceAgeFrame(MinigameFrame):
                 self.frozen_frame[row][col][1] = crystal2
 
                 # Crystal3
-                crystal3 = QtWidgets.QFrame(frame)
+                crystal3 = QtWidgets.QFrame(self.game_square)
                 crystal3.setObjectName(f'f{row * self.cols + col}_2')
                 crystal3.setStyleSheet(f"""
                 QFrame#f{row * self.cols + col}_2 {{
@@ -141,7 +128,7 @@ class IceAgeFrame(MinigameFrame):
                 self.frozen_frame[row][col][2] = crystal3
 
                 # Crystal4
-                crystal4 = QtWidgets.QFrame(frame)
+                crystal4 = QtWidgets.QFrame(self.game_square)
                 crystal4.setObjectName(f'f{row * self.cols + col}_3')
                 crystal4.setStyleSheet(f"""
                 QFrame#f{row * self.cols + col}_3 {{
@@ -151,7 +138,7 @@ class IceAgeFrame(MinigameFrame):
                 self.frozen_frame[row][col][3] = crystal4
 
                 # Crystal5
-                crystal5 = QtWidgets.QFrame(frame)
+                crystal5 = QtWidgets.QFrame(self.game_square)
                 crystal5.setObjectName(f'f{row * self.cols + col}_4')
                 crystal5.setStyleSheet(f"""
                 QFrame#f{row * self.cols + col}_4 {{
@@ -161,7 +148,7 @@ class IceAgeFrame(MinigameFrame):
                 self.frozen_frame[row][col][4] = crystal5
 
                 # Crystal6
-                crystal6 = QtWidgets.QFrame(frame.parent())
+                crystal6 = QtWidgets.QFrame(self.game_square)
                 crystal6.setObjectName(f'f{row * self.cols + col}_5')
                 crystal6.setStyleSheet(f"""
                 QFrame#f{row * self.cols + col}_5 {{
@@ -173,57 +160,53 @@ class IceAgeFrame(MinigameFrame):
     def set_frozen_frame_positions(self):
         for row in range(self.rows):
             for col in range(self.cols):
-                frame = self.game_square.frames[row][col]
+                parent_grid = self.game_square.grids[row][col]
 
                 # 设置 Crystal1 位置
                 crystal1 = self.frozen_frame[row][col][0]
-                self.set_frame_position(crystal1, frame, (1 / 9, 1 / 9),
+                self.set_frame_position(crystal1, parent_grid, (1 / 9, 1 / 9),
                                         lambda pw, ph, fw, fh: (pw - 2 * fw, ph - 2 * fh))
 
                 # 设置 Crystal2 位置
                 crystal2 = self.frozen_frame[row][col][1]
-                self.set_frame_position(crystal2, frame, (1 / 6, 1 / 6),
+                self.set_frame_position(crystal2, parent_grid, (1 / 6, 1 / 6),
                                         lambda pw, ph, fw, fh: (pw - 3 * fw, ph - int(5.2 * fh)))
 
                 # 设置 Crystal3 位置
                 crystal3 = self.frozen_frame[row][col][2]
-                self.set_frame_position(crystal3, frame, (1 / 4, 1 / 4),
+                self.set_frame_position(crystal3, parent_grid, (1 / 4, 1 / 4),
                                         lambda pw, ph, fw, fh: (pw - int(3.75 * fw), ph - int(1.75 * fh)))
 
                 # 设置 Crystal4 位置
                 crystal4 = self.frozen_frame[row][col][3]
-                self.set_frame_position(crystal4, frame, (1, 1),
+                self.set_frame_position(crystal4, parent_grid, (1, 1),
                                         lambda pw, ph, fw, fh: (0, 0))
 
                 # 设置 Crystal5 位置
                 crystal5 = self.frozen_frame[row][col][4]
-                self.set_frame_position(crystal5, frame, (1, 1 / 4),
+                self.set_frame_position(crystal5, parent_grid, (1, 1 / 4),
                                         lambda pw, ph, fw, fh: (0, - int(0.33 * fh)))
 
                 # 设置 Crystal6 位置
                 crystal6 = self.frozen_frame[row][col][5]
-                parent_width = frame.width()
-                parent_height = frame.height()
+                parent_width = parent_grid.width()
+                parent_height = parent_grid.height()
                 crystal6.resize(int(parent_width * 1.2), parent_height // 2)
                 # 获取 frame 相对于其父控件的坐标
-                frame_pos = frame.pos()
+                frame_pos = parent_grid.pos()
                 new_x = frame_pos.x() + (parent_width - crystal6.width()) // 2  # 水平居中对齐
                 new_y = frame_pos.y() + int(parent_height // 1.8)
 
                 crystal6.move(new_x, new_y)
 
     @staticmethod
-    def set_frame_position(frame, parent, size_ratio, position_func):
-        parent_width = parent.width()
-        parent_height = parent.height()
-        frame.resize(int(parent_width * size_ratio[0]), int(parent_height * size_ratio[1]))
-        new_x, new_y = position_func(parent_width, parent_height, frame.width(), frame.height())
-        frame.move(new_x, new_y)
-
-    def update_frozen_frames(self):
-        for row in range(self.rows):
-            for col in range(self.cols):
-                self.update_frozen_frame(row, col)
+    def set_frame_position(frame, grid, size_ratio, position_func):
+        grid_width = grid.width()
+        grid_height = grid.height()
+        grid_rect = grid.geometry()
+        frame.resize(int(grid_width * size_ratio[0]), int(grid_height * size_ratio[1]))
+        new_x, new_y = position_func(grid_width, grid_height, frame.width(), frame.height())
+        frame.move(grid_rect.x() + new_x, grid_rect.y() + new_y)
 
     def update_frozen_frame(self, row, col):
         frozen_frames = self.frozen_frame[row][col]
@@ -234,6 +217,7 @@ class IceAgeFrame(MinigameFrame):
             if count_down >= th or num == -1:
                 if frozen_frames[i].isHidden():
                     frozen_frames[i].show()
+                frozen_frames[i].raise_()
             elif frozen_frames[i].isVisible():
                 frozen_frames[i].hide()
 
@@ -327,6 +311,12 @@ class IceAgeFrame(MinigameFrame):
 
         return movement_occurred
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.set_frozen_frame_positions()
+        for row in range(self.rows):
+            for col in range(self.cols):
+                self.update_frozen_frame(row, col)
 
 # noinspection PyAttributeOutsideInit
 class IceAgeWindow(MinigameWindow):
@@ -378,7 +368,7 @@ class IceAgeWindow(MinigameWindow):
         animation.setStartValue(1)
         animation.setEndValue(0)
         animation.finished.connect(self.anim_ended)  # 动画结束后删除 QFrame
-        animation.start()
+        animation.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
         sparkle_frame.show()
         self.sparkle_and_anim = (sparkle_frame, animation)
@@ -388,14 +378,9 @@ class IceAgeWindow(MinigameWindow):
         self.sparkle_and_anim = (None, None)
 
     def show_message(self):
-        text = 'Tiles left idle for too long will freeze in place!'
-        QtWidgets.QMessageBox.information(self, 'Information', text)
+        text = self.tr('Tiles left idle for too long will freeze in place!')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), text)
         self.gameframe.setFocus()
-
-    def show(self):
-        super().show()
-        # print(self.gameframe.count_down)
-        self.gameframe.update_frozen_frames()
 
 
 if __name__ == "__main__":

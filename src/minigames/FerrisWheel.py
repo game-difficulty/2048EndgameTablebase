@@ -31,7 +31,11 @@ class FerrisWheelFrame(MinigameFrame):
         self.count_down -= 1
         if self.count_down == 0:
             self.count_down = 40 - self.difficulty * 10
-            QtCore.QTimer.singleShot(120, self.spin)
+            if SingletonConfig().config['do_animation']:
+                delay = 270
+            else:
+                delay = 90
+            QtCore.QTimer.singleShot(delay, self.spin)
 
     def spin(self):
         # 定义外围 12 个方块的当前和目标坐标
@@ -49,13 +53,13 @@ class FerrisWheelFrame(MinigameFrame):
         # 创建动画
         for (start_row, start_col), (end_row, end_col) in zip(positions, target_positions):
             frame_start = self.game_square.frames[start_row][start_col]
-            frame_end = self.game_square.frames[end_row][end_col]
-
-            anim = QtCore.QPropertyAnimation(frame_start, b"geometry")
-            anim.setDuration(2000)
-            anim.setStartValue(frame_start.geometry())
-            anim.setEndValue(frame_end.geometry())
-            animations.append(anim)
+            frame_end = self.game_square.grids[end_row][end_col]
+            if frame_start:
+                anim = QtCore.QPropertyAnimation(frame_start, b"geometry")
+                anim.setDuration(1000)
+                anim.setStartValue(frame_start.geometry())
+                anim.setEndValue(frame_end.geometry())
+                animations.append(anim)
 
         self.animation_group = QtCore.QParallelAnimationGroup()
         for anim in animations:
@@ -63,14 +67,21 @@ class FerrisWheelFrame(MinigameFrame):
 
         # 在动画结束时更新棋盘并交换标签的内容
         def swap_labels():
+            tem_f, tem_l = self.game_square.frames[0][0], self.game_square.labels[0][0]
+            for (end_r, end_c) in target_positions[:-1]:
+                self.game_square.frames[end_r][end_c] , self.game_square.labels[end_r][end_c], tem_f, tem_l = (
+                    tem_f, tem_l, self.game_square.frames[end_r][end_c] , self.game_square.labels[end_r][end_c])
+            self.game_square.frames[0][0], self.game_square.labels[0][0] = tem_f, tem_l
+
             values = [self.board[row, col] for row, col in positions]
             values = values[-1:] + values[:-1]
             for (row, col), value in zip(positions, values):
                 self.board[row, col] = value
-            self.update_all_frame()
+            self._last_values = self.board.copy()
+            self.setFocus()
 
         self.animation_group.finished.connect(swap_labels)
-        self.animation_group.start()
+        self.animation_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
 # noinspection PyAttributeOutsideInit
@@ -104,25 +115,28 @@ class FerrisWheelWindow(MinigameWindow):
         self.update_countdown_text()
 
     def update_countdown_text(self):
-        text = f'The next rotation will occur in **{self.gameframe.count_down}** steps.'
+        text = self.tr('The next rotation will occur in **') + str(self.gameframe.count_down) + self.tr('** steps.')
         self.countdown_text.setMarkdown(text)
 
     def process_input(self, direction):
+        if self.isProcessing:
+            return
         self.isProcessing = True  # 设置标志防止进一步的输入
+        swap = True if self.gameframe.count_down == 1 else False
         self.gameframe.do_move(direction)
         self.update_score()
         self.update_countdown_text()
-        if self.gameframe.count_down == 40 - self.gameframe.difficulty * 10:
-            QtCore.QTimer.singleShot(2150, self.allow_input)  # 配合gameframe.after_gen_num中动画的延迟
-        else:
+        if not swap:
             self.allow_input()
+        else:
+            QtCore.QTimer.singleShot(1200, self.allow_input)
 
     def allow_input(self):
         self.isProcessing = False
 
     def show_message(self):
-        text = 'The Earth revolves around the Sun.'
-        QtWidgets.QMessageBox.information(self, 'Information', text)
+        text = self.tr('The Earth revolves around the Sun.')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), text)
         self.gameframe.setFocus()
 
 

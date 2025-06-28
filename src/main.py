@@ -11,8 +11,35 @@ def main():
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
     os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
 
+    # 加载默认字体
     QtWidgets.QApplication.setAttribute(QtCore.Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
     app = QtWidgets.QApplication(sys.argv)
+    if sys.platform == 'win32':
+        default_font = QtGui.QFont("Segoe UI")
+    else:
+        default_font = QtGui.QFont("Noto Sans")
+    app.setFont(default_font)
+
+    # 加载默认语言
+    from Config import SingletonConfig, logger
+    if SingletonConfig().config.get('language', 'en') == 'zh':
+        # 创建翻译器并加载.qm文件
+        translator = QtCore.QTranslator()
+        translator.load(os.path.join("translations", "app_zh_CN.qm"))
+
+        # 安装到应用程序
+        app.installTranslator(translator)
+
+    # 加载ClearSans字体
+    font_files = [
+        r"font/ClearSans/ClearSans-Bold.ttf",
+        r"font/ClearSans/ClearSans-Regular.ttf"
+    ]
+    for font_file in font_files:
+        # 返回值为字体ID，负数表示失败
+        if QtGui.QFontDatabase.addApplicationFont(font_file) < 0:
+            logger.warning(f"Font loading failure: {font_file}")
+
     from MainMenu import MainMenuWindow
 
     main_win = MainMenuWindow()

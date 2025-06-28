@@ -40,8 +40,8 @@ class TrickyTilesFrame(MinigameFrame):
             board_encoded, new_tile_pos, val = self.evil_gen.gen_new_num(depth)
             self.board[new_tile_pos // self.cols][new_tile_pos % self.cols] = val
         self.newtile_pos, self.newtile = new_tile_pos, val
-        self.update_all_frame(self.board)
-        self.update_frame(val, new_tile_pos // self.cols, new_tile_pos % self.cols, anim=do_anim)
+        if do_anim:
+            self.timer1.singleShot(125, lambda: self.game_square.animate_appear(new_tile_pos // self.cols, new_tile_pos % self.cols, val))
 
 
 # noinspection PyAttributeOutsideInit
@@ -50,8 +50,8 @@ class TrickyTilesWindow(MinigameWindow):
         super().__init__(minigame=minigame, frame_type=frame_type)
 
     def show_message(self):
-        text = 'Brace yourself! New numbers may appear in the most challenging spots!'
-        QtWidgets.QMessageBox.information(self, 'Information', text)
+        text = self.tr('Brace yourself! New numbers may appear in the most challenging spots!')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), text)
         self.gameframe.setFocus()
 
 

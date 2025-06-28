@@ -62,7 +62,7 @@ class EndlessHybridFrame(EndlessFrame):
         else:
             if self.bomb:
                 self.board[*self.bomb] = 1
-            if random.random() < 0.03 - (self.board == -3).sum() * 0.02 + self.difficulty * 0.015:
+            if random.random() < 0.03 - np.sum(self.board == -3) * 0.02 + self.difficulty * 0.015:
                 zero_positions = np.where(self.board == 0)
                 newtile_pos = random.choice(list(zip(zero_positions[0], zero_positions[1])))
                 self.newtile_pos, self.newtile = newtile_pos[0] * 4 + newtile_pos[1], -3
@@ -74,11 +74,12 @@ class EndlessHybridFrame(EndlessFrame):
             if self.bomb:
                 self.board[*self.bomb] = 0
 
-        self.update_all_frame(self.board)
-        self.update_frame(self.newtile, self.newtile_pos // 4, self.newtile_pos % 4, anim=do_anim)
+        if do_anim:
+            self.timer1.singleShot(125, lambda: self.game_square.animate_appear(
+                self.newtile_pos // self.cols, self.newtile_pos % self.cols, self.newtile))
 
-    def update_frame(self, value, row, col, anim=False):
-        if self.board[row, col] == -3:
+    def _set_special_frame(self, value, row, col):
+        if value == -3:
             label = self.game_square.labels[row][col]
             frame = self.game_square.frames[row][col]
             label.setText('')
@@ -89,13 +90,17 @@ class EndlessHybridFrame(EndlessFrame):
             ), QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation))
             label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             label.setStyleSheet(f"""background-color: transparent;""")
-            if anim:
-                self.game_square.animate_appear(row, col)
+            if (self.newtile_pos // self.cols != row or self.newtile_pos % self.cols != col
+            ) or not SingletonConfig().config['do_animation']:
+                frame.show()
 
         elif self.bomb == (row, col):
+            if not self.game_square.frames[row][col]:
+                # 先创建控件
+                self.game_square.update_tile_frame(None, row, col)
+
             label = self.game_square.labels[row][col]
             frame = self.game_square.frames[row][col]
-            label.clear()
 
             frame.setStyleSheet(f"""
             QFrame#f{row * 4 + col} {{
@@ -109,23 +114,22 @@ class EndlessHybridFrame(EndlessFrame):
                 label.setText('÷')
                 label.setStyleSheet(f"""font: {self.game_square.base_font_size}pt 'Calibri'; font-weight: bold;
                 color: white; background-color: transparent;""")
-            if anim:
-                self.game_square.animate_appear(row, col)
-
-        else:
-            label = self.game_square.labels[row][col]
-            label.clear()
-            super().update_frame(value, row, col, anim=False)
+            if (self.newtile_pos // self.cols != row or self.newtile_pos % self.cols != col
+            ) or not SingletonConfig().config['do_animation']:
+                frame.show()
 
     def explode_effect(self, r, c):
         if self.bomb_type == 0:
             self.board[r, c] = 0
             self.trigger_explosion(r, c)
+            self.update_frame(0, r, c)
         elif self.bomb_type == 1:
             self.has_just_exploded = self.board[r, c]
             self.board[r, c] = -2
             if self.has_just_exploded > 1:
                 self.board[*self.bomb] = -2
+            else:
+                self.board[*self.bomb] = 0  # 本来也是0
         elif self.bomb_type == 2:
             self.has_just_exploded = self.board[r, c]
             self.board[r, c] = -2
@@ -136,27 +140,50 @@ class EndlessHybridFrame(EndlessFrame):
                 positions = np.where(self.board == -2)
                 positions_list = list(zip(positions[0], positions[1]))
                 if self.has_just_exploded <= 1:
-                    self.board[*positions_list[0]] = 0
-                    self.trigger_explosion(*positions_list[0])
+                    r0, c0 = positions_list[0]
+                    self.board[r0, c0] = 0
+                    self.trigger_explosion(r0, c0)
+                    self.update_frame(0, r0, c0)
                 else:
-                    factor1 = random.randint(1, self.has_just_exploded - 1)
-                    self.board[*positions_list[0]] = factor1
-                    self.board[*positions_list[1]] = self.has_just_exploded - factor1
-                    self.trigger_explosion(*positions_list[0])
-                    self.trigger_explosion(*positions_list[1])
+                    r0, c0 = positions_list[0]
+                    r1, c1 = positions_list[1]
+                    factor1 = random.randint(1, max(self.has_just_exploded - 1, 1))
+                    self.board[r0, c0] = factor1
+                    self.board[r1, c1] = self.has_just_exploded - factor1
+                    self.trigger_explosion(r0, c0)
+                    self.trigger_explosion(r1, c1)
+
+                    if SingletonConfig().config['do_animation']:
+                        def update_divided(val, r, c):
+                            self.game_square.update_tile_frame(val, r, c)
+                            self.game_square.frames[r][c].raise_()
+
+                        factor0 = self.has_just_exploded - factor1
+                        QtCore.QTimer.singleShot(120, lambda: update_divided(factor0, r1, c1))
+                        QtCore.QTimer.singleShot(120, lambda: update_divided(factor1, r0, c0))
+
             elif self.bomb_type == 2:
                 original_value = self.has_just_exploded
                 positions = np.where(self.board == -2)
                 positions_list = list(zip(positions[0], positions[1]))
 
+                r0, c0 = positions_list[0]
                 exponents = np.arange(2, 11)
-                weights = 1 / (exponents ** 1.2)
+                weights = 1 / (exponents ** 1.5)
                 weights /= weights.sum()
                 new_value = original_value
                 while new_value == original_value:
                     new_value = np.random.choice(exponents, p=weights)
-                self.board[*positions_list[0]] = new_value
-                self.trigger_explosion(*positions_list[0])
+                self.board[r0, c0] = new_value
+                self.trigger_explosion(r0, c0)
+
+                if SingletonConfig().config['do_animation']:
+                    def update_new_value(val, r, c):
+                        self.game_square.update_tile_frame(val, r, c)
+                        self.game_square.frames[r][c].raise_()
+
+                    QtCore.QTimer.singleShot(120, lambda: update_new_value(new_value, r0, c0))
+
             self.has_just_exploded = False
 
     def after_gen_num(self):
@@ -169,8 +196,8 @@ class EndlessHybridWindow(MinigameWindow):
         super().__init__(minigame=minigame, frame_type=frame_type)
 
     def show_message(self):
-        text = 'All-Stars.'
-        QtWidgets.QMessageBox.information(self, 'Information', text)
+        text = self.tr('All-Stars.')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), text)
         self.gameframe.setFocus()
 
 

@@ -6,10 +6,20 @@ from PyQt5 import QtCore, QtWidgets, QtGui
 
 from BoardMover import SingletonBoardMover
 from BookReader import BookReaderDispatcher
+from Settings import TwoLevelComboBox, SingleLevelComboBox
 import Config
+from Config import category_info, SingletonConfig
 
 
 logger = Config.logger
+translate_ = QtCore.QCoreApplication.translate
+is_zh = (SingletonConfig().config['language'] == 'zh')
+direction_map = {
+    'u': "上",
+    'd': "下",
+    'l': "左",
+    'r': "右"
+}
 
 
 class Analyzer:
@@ -219,7 +229,7 @@ class Analyzer:
 
         # 移动有效但是形成超出定式范围的局面
         if self.result[move.lower()] is None:
-            self.text_list.append(f"The game goes beyond this formation")
+            self.text_list.append(translate_('Analyzer', "The game goes beyond this formation"))
             self.text_list.append('--------------------------------------------------')
             self.text_list.append('')
             return False
@@ -234,7 +244,11 @@ class Analyzer:
             self.max_combo = max(self.max_combo, self.combo)
             self.performance_stats["**Perfect!**"] += 1
             self.text_list.append(f"**Perfect! Combo: {self.combo}x**")
-            self.text_list.append(f"You pressed {move}. And the best move is **{best_move.capitalize()}**")
+            if is_zh:
+                self.text_list.append(f"你走的是 {direction_map[move[0].lower()]} ，"
+                                 f"最优解正是 **{direction_map[best_move[0].lower()]}**")
+            else:
+                self.text_list.append(f"You pressed {move}. And the best move is **{best_move.capitalize()}**")
         else:
             self.combo = 0
             loss = self.result[move.lower()] / self.result[best_move]
@@ -247,9 +261,15 @@ class Analyzer:
             self.performance_stats[evaluation] += 1
 
             self.text_list.append(evaluation)
-            self.text_list.append(f"You pressed {move}. But the best move is **{best_move.capitalize()}**")
-            self.text_list.append(f'relative one-step loss: {1 - loss:.4f}, absolute one-step loss: {loss_abs:.4f}pt')
-            self.text_list.append(f'total goodness of fit: {self.goodness_of_fit:.4f}')
+            if is_zh:
+                self.text_list.append(f"你走的是 {direction_map[move[0].lower()]} ，"
+                                 f"但最优解是 **{direction_map[best_move[0].lower()]}**")
+                self.text_list.append(f'单步相对损失: {1 - loss:.4f}, 单步绝对损失: {loss_abs:.4f}pt')
+                self.text_list.append(f'吻合度: {self.goodness_of_fit:.4f}')
+            else:
+                self.text_list.append(f"You pressed {move}. But the best move is **{best_move.capitalize()}**")
+                self.text_list.append(f'relative one-step loss: {1 - loss:.4f}, absolute one-step loss: {loss_abs:.4f}pt')
+                self.text_list.append(f'total goodness of fit: {self.goodness_of_fit:.4f}')
 
         self.text_list.append('--------------------------------------------------')
         self.text_list.append('')
@@ -287,15 +307,32 @@ class Analyzer:
             # 最后输出统计信息
             file.write('======================Stats======================' + '\n')
             file.write('\n')
-            file.write(f'in {self.full_pattern} endgame in {self.step_count} moves' + '\n')
-            file.write(f'Total Goodness of Fit: {self.goodness_of_fit:.4f}' + '\n')
-            file.write(f'Maximum Combo: {self.max_combo}' + '\n')
-            file.write(f'Maximum Single Step Loss (Relative, %): {self.maximum_single_step_loss_relative:.4f}' + '\n')
-            file.write(f'Maximum Single Step Loss (Absolute, pt): {self.maximum_single_step_loss_absolute:.4f}' + '\n')
+
+            file.write(
+                translate_('Analyzer', 'in ') + self.full_pattern +
+                translate_('Analyzer', ' endgame in ') + str(self.step_count) +
+                translate_('Analyzer', ' moves') + '\n'
+            )
+            file.write(
+                translate_('Analyzer', 'Total Goodness of Fit: ') +
+                f'{self.goodness_of_fit:.4f}' + '\n'
+            )
+            file.write(
+                translate_('Analyzer', 'Maximum Combo: ') +
+                str(self.max_combo) + '\n'
+            )
+            file.write(
+                translate_('Analyzer', 'Maximum Single Step Loss (Relative, %): ') +
+                f'{self.maximum_single_step_loss_relative:.4f}' + '\n'
+            )
+            file.write(
+                translate_('Analyzer', 'Maximum Single Step Loss (Absolute, pt): ') +
+                f'{self.maximum_single_step_loss_absolute:.4f}' + '\n'
+            )
             # 添加评价统计信息
             for evaluation, count in self.performance_stats.items():
                 file.write(f'{evaluation}: {count}\n')
-            file.write(f'End of analysis')
+            file.write(translate_('Analyzer', 'End of analysis'))
 
     @staticmethod
     def evaluation_of_performance(loss):
@@ -351,21 +388,23 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
         self.set_filepath_bt.setObjectName("set_filepath_bt")
         self.set_filepath_bt.clicked.connect(self.filepath_changed)  # type: ignore
         self.selfLayout.addWidget(self.set_filepath_bt, 1, 2, 1, 1)
-        self.target_combo = QtWidgets.QComboBox(self.centralwidget)
+
+        self.target_combo = SingleLevelComboBox(self.tr("Target Tile"), self.centralwidget)
         self.target_combo.setObjectName("target_combo")
-        for i in ["128", "256", "512", "1024", "2048", "4096", "8192"]:
-            self.target_combo.addItem(i)
+        self.target_combo.add_items(["128", "256", "512", "1024", "2048", "4096", "8192"])
         self.selfLayout.addWidget(self.target_combo, 0, 2, 1, 1)
-        self.pattern_combo = QtWidgets.QComboBox(self.centralwidget)
+        self.pattern_combo = TwoLevelComboBox(self.tr("Select Formation"), self.centralwidget)
         self.pattern_combo.setObjectName("pattern_combo")
-        for i in Config.formation_info.keys():
-            self.pattern_combo.addItem(i)
+        for category, items in category_info.items():
+            self.pattern_combo.add_category(category, items)
         self.selfLayout.addWidget(self.pattern_combo, 0, 1, 1, 1)
-        self.pos_combo = QtWidgets.QComboBox(self.centralwidget)
-        self.pos_combo.setObjectName("target_combo")
-        for i in ["0", "1", "2"]:
-            self.pos_combo.addItem(i)
+        self.pattern_combo.currentTextChanged.connect(self.update_pos_combo_visibility)
+        self.pos_combo = SingleLevelComboBox(self.tr("Target Position"), self.centralwidget)
+        self.pos_combo.setObjectName("pos_combo")
+        self.pos_combo.add_items(["0", "1", "2"])
         self.selfLayout.addWidget(self.pos_combo, 0, 3, 1, 1)
+        self.pos_combo.hide()
+
         self.analyze_bt = QtWidgets.QPushButton(self.centralwidget)
         self.analyze_bt.setObjectName("analyze_bt")
         self.analyze_bt.clicked.connect(self.start_analyze)  # type: ignore
@@ -399,7 +438,7 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
         # 打开文件选择窗口，只能选择 .txt 文件
         filepath, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
-            "Select a .txt file",
+            self.tr("Select a .txt file"),
             "",
             "Text Files (*.txt);;All Files (*)",
             options=options
@@ -419,15 +458,27 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
                 ptn = pattern + '_' + target
             target = int(np.log2(int(target)))
 
-            self.analyze_bt.setText('Analyzing...')
+            self.analyze_bt.setText(self.tr('Analyzing...'))
             self.analyze_bt.setEnabled(False)
             self.Analyze_thread = AnalyzeThread(pathname, pattern, target, ptn, os.path.dirname(pathname), position)
             self.Analyze_thread.finished.connect(self.on_analyze_finished)
             self.Analyze_thread.start()  # 启动线程
 
     def on_analyze_finished(self):
-        self.analyze_bt.setText('Analyze')
+        self.analyze_bt.setText(self.tr('Analyze'))
         self.analyze_bt.setEnabled(True)
+
+    def update_pos_combo_visibility(self, pattern):
+        if pattern in ['444', 'LL']:
+            if '2' in self.pos_combo.items:
+                self.pos_combo.remove_item('2')
+            self.pos_combo.show()
+        elif pattern == 'L3':
+            if '2' not in self.pos_combo.items:
+                self.pos_combo.add_item('2')
+            self.pos_combo.show()
+        else:
+            self.pos_combo.hide()
 
 
 class AnalyzeThread(QtCore.QThread):

@@ -64,8 +64,9 @@ class CountdownTimer(QtWidgets.QLabel):
     def __init__(self, initial_time_minutes=3):
         super().__init__()
         self.setStyleSheet("font: 30pt 'Consolas'; font-weight: bold; color: black; background-color: transparent;")
-        self.initial_time = initial_time_minutes * 60 * 1000  # 初始时间以毫秒为单位
-        self.remaining_time = self.initial_time
+        self.default_initial_time = initial_time_minutes * 60 * 1000  # 默认初始时间
+        self.current_initial_time = self.default_initial_time  # 当前计时基准
+        self.remaining_time = self.current_initial_time
         self.additional_time = 0
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.update_display)
@@ -86,7 +87,9 @@ class CountdownTimer(QtWidgets.QLabel):
 
     def reset(self):
         self.stop()
-        self.remaining_time = self.initial_time
+        # 同步重置当前计时基准
+        self.current_initial_time = self.default_initial_time
+        self.remaining_time = self.current_initial_time
         self.additional_time = 0
         self.update_display()
 
@@ -95,7 +98,9 @@ class CountdownTimer(QtWidgets.QLabel):
         self.update_display()
 
     def set_time(self, minutes):
-        self.remaining_time = minutes * 60 * 1000
+        self.current_initial_time = minutes * 60 * 1000
+        self.remaining_time = self.current_initial_time
+        self.additional_time = 0  # 重置额外时间
         self.update_display()
 
     def export_remaining_time(self):
@@ -104,7 +109,7 @@ class CountdownTimer(QtWidgets.QLabel):
     def update_display(self):
         if self.running:
             elapsed = self.elapsed_timer.elapsed()
-            self.remaining_time = self.initial_time - elapsed + self.additional_time
+            self.remaining_time = self.current_initial_time - elapsed + self.additional_time
             if self.remaining_time <= 0:
                 self.setText(f"00:00.00")
                 self.remaining_time, self.additional_time = 0, 0
@@ -122,8 +127,7 @@ class BlitzkriegWindow(MinigameWindow):
         self.timer_started = False
         self.timer: CountdownTimer | None = None
         super().__init__(minigame=minigame, frame_type=frame_type)
-        self.count_1k = (self.gameframe.board == 10).sum()
-        self.init_timer()
+        self.count_1k = np.sum(self.gameframe.board == 10)
         self.gameframe.gameover.connect(self.timer.stop)
         self.timer_anims: List[QtCore.QAbstractAnimation] = []
 
@@ -131,12 +135,13 @@ class BlitzkriegWindow(MinigameWindow):
         super().setupUi()
         self.operate_frame.setMaximumSize(QtCore.QSize(16777215, 280))
         self.operate_frame.setMinimumSize(QtCore.QSize(120, 200))
+        self.init_timer()
+
+    def init_timer(self):
         # 创建并添加倒计时器控件
         self.timer = CountdownTimer(initial_time_minutes=3)
         self.timer.timeout.connect(self.on_timeout)
         self.buttons.addWidget(self.timer, 1, 0, 1, 1)
-
-    def init_timer(self):
         self.timer.set_time(self.gameframe.time_left)
         self.timer.update_display()
 
@@ -145,6 +150,8 @@ class BlitzkriegWindow(MinigameWindow):
         self.gameframe.check_game_over()
 
     def process_input(self, direction):
+        if self.isProcessing:
+            return
         if self.gameframe.is_over:
             return
         if not self.timer_started:
@@ -160,13 +167,12 @@ class BlitzkriegWindow(MinigameWindow):
         self.powerup_grid.set_power_ups_counts([10,10,10])
         self.timer_started = False
         self.timer.reset()
-        self.timer_anims = \
-            [anim for anim in self.timer_anims if anim.state() != QtCore.QAbstractAnimation.State.Stopped]
+        self.timer_anims = []
         super().handleNewGame()
 
     def time_bonus(self):
         self.gameframe.time_left = self.timer.export_remaining_time()
-        count_1k = (self.gameframe.board == 10).sum()
+        count_1k = np.sum(self.gameframe.board == 10)
         if self.count_1k < count_1k:
             bonus = 1 if self.gameframe.difficulty == 0 else 0.75
             self.timer.add_time(bonus)
@@ -201,11 +207,11 @@ class BlitzkriegWindow(MinigameWindow):
         opacity_anim.finished.connect(label.deleteLater)
 
         self.timer_anims.append(opacity_anim)
-        opacity_anim.start()
+        opacity_anim.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def show_message(self):
-        text = 'Act quickly to earn bonus time and rack up the highest score!'
-        QtWidgets.QMessageBox.information(self, 'Information', text)
+        text = self.tr('Act quickly to earn bonus time and rack up the highest score!')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), text)
         self.gameframe.setFocus()
 
 

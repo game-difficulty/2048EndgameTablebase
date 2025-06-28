@@ -50,13 +50,13 @@ class EndlessAirRaidFrame(MinigameFrame):
         mask_just_zero = (self.count_down == 0) & mask
         self.board[mask_just_zero] = 0
         if self.target_pos:
-            self.animation_group.stop()
-            self.target_layout.deleteLater()
-            self.animation_group = None
-            self.target_layout = None
+            if self.animation_group:
+                self.animation_group.stop()
+                self.animation_group = None
+            if self.target_layout:
+                self.target_layout.deleteLater()
+                self.target_layout = None
             if self.board[*self.target_pos] != 0:
-                self.update_all_frame()
-                QtWidgets.QApplication.processEvents()
                 self.set_explode_layout()
             else:
                 self.target_pos = None
@@ -75,7 +75,7 @@ class EndlessAirRaidFrame(MinigameFrame):
     def create_fire_animation(self):
         # 获取目标 frame 的几何位置
         row, col = self.target_pos
-        frame = self.game_square.frames[row][col]
+        frame = self.game_square.grids[row][col]
         target_local_pos = self.mapToParent(self.game_square.mapToParent(frame.mapToParent(QtCore.QPoint(0, 0))))
 
         # 设置 fire_layout 初始位置
@@ -94,16 +94,16 @@ class EndlessAirRaidFrame(MinigameFrame):
         self.animation_group.finished.connect(self.trigger_explosion)
 
         # 开始动画
-        self.animation_group.start()
+        self.animation_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def trigger_explosion(self):
         self.clear_target_layout()
 
-        self.board[*self.target_pos] = -1
-        self.count_down[*self.target_pos] = 60 + self.difficulty * 40
-        self.update_all_frame()
-
         row, col = self.target_pos
+        self.board[row, col] = -1
+        self.count_down[row, col] = 60 + self.difficulty * 40
+        self.update_frame(-1, row, col)
+
         frame = self.game_square.frames[row][col]
 
         # 创建一个临时 QFrame 作为爆炸效果
@@ -144,9 +144,10 @@ class EndlessAirRaidFrame(MinigameFrame):
 
         # 显示爆炸效果
         self.target_layout.show()
-        self.animation_group.start()
+        self.animation_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def explode_anim_finish(self):
+        self.animation_group = None
         self.target_pos = None
         self.clear_target_layout()
         self.check_game_over()
@@ -154,7 +155,9 @@ class EndlessAirRaidFrame(MinigameFrame):
     def clear_target_layout(self):
         if self.target_layout is not None:
             # self.target_layout.close()
-            self.animation_group.stop()
+            if self.animation_group:
+                self.animation_group.stop()
+                self.animation_group.deleteLater()
             self.target_layout.deleteLater()
             self.animation_group = None
             self.target_layout = None
@@ -169,21 +172,22 @@ class EndlessAirRaidFrame(MinigameFrame):
         self.board, empty_count, new_tile_pos, val = self.mover.gen_new_num(
             self.board, SingletonConfig().config['4_spawn_rate'])
         self.newtile_pos, self.newtile = new_tile_pos, val
-        p = max(0.1 - (self.count_down > 0).sum() / 40, 0.01)
+        p = max(0.08 - (self.count_down > 0).sum() / 40, 0.01)
         if empty_count > 1 and self.target_pos is None and random.random() < p:
             self.gen_target()
-        self.update_all_frame(self.board)
-        self.update_frame(val, new_tile_pos // self.cols, new_tile_pos % self.cols, anim=do_anim)
+        if do_anim:
+            self.timer1.singleShot(125, lambda: self.game_square.animate_appear(
+                new_tile_pos // self.cols, new_tile_pos % self.cols, val))
 
     def gen_target(self):
         empty_positions = [(i, j) for i in range(4) for j in range(4) if self.board[i, j] == 0]
         self.target_pos = random.choice(empty_positions)
         self.set_target_layout()
 
-    def update_frame(self, value, row, col, anim=False):
-        label = self.game_square.labels[row][col]
-        frame = self.game_square.frames[row][col]
+    def _set_special_frame(self, value, row, col):
         if value == -1:
+            label = self.game_square.labels[row][col]
+            frame = self.game_square.frames[row][col]
             if self.count_down[row, col] > (60 + self.difficulty * 40) / 2:
                 pic_path = 'pic//crater1.png'
             else:
@@ -194,25 +198,14 @@ class EndlessAirRaidFrame(MinigameFrame):
                             border-image: url({pic_path}) 2 2 2 2 stretch stretch;
                         }}
                         """)
-        elif value != 0:
-            label.setText(str(2 ** value))
-            color = self.game_square.colors[value - 1]
-            frame.setStyleSheet(f"background-color: {color};")
-        else:
-            label.setText('')
-            color = 'rgba(229, 229, 229, 1)'
-            frame.setStyleSheet(f"background-color: {color};")
-        fontsize = self.game_square.base_font_size if (value == -1 or len(str(2 ** value)) < 3) else int(
-            self.game_square.base_font_size * 3 / (0.5 + len(str(2 ** value))))
-        label.setStyleSheet(self.game_square.get_label_style(fontsize, value))
-        self.update_frame_small_label(row, col)
-
-        if anim:
-            self.game_square.animate_appear(row, col)
+            fontsize = self.game_square.base_font_size if (value == -1 or len(str(2 ** value)) < 3) else int(
+                self.game_square.base_font_size * 3 / (0.5 + len(str(2 ** value))))
+            label.setStyleSheet(self.game_square.get_label_style(fontsize, value))
+            frame.show()
 
     def set_target_layout(self):
         row, col = self.target_pos
-        frame = self.game_square.frames[row][col]
+        frame = self.game_square.grids[row][col]
         self.target_layout = QtWidgets.QFrame(frame)
         self.target_layout.setObjectName(f'f_target_layout')
         self.target_layout.setStyleSheet(f"""
@@ -226,8 +219,8 @@ class EndlessAirRaidFrame(MinigameFrame):
 
     def reset_target_layout_pos(self):
         row, col = self.target_pos
-        frame = self.game_square.frames[row][col]
-        self.target_layout.resize(frame.width(), frame.height())
+        grid = self.game_square.grids[row][col]
+        self.target_layout.resize(grid.width(), grid.height())
         self.target_layout.move(0, 0)
 
     def create_breathing_animation(self):
@@ -253,7 +246,7 @@ class EndlessAirRaidFrame(MinigameFrame):
         self.animation_group.addAnimation(expand_animation)
         self.animation_group.setLoopCount(-1)  # 无限循环
 
-        self.animation_group.start()
+        self.animation_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def check_game_passed(self):
         self.current_max_num = max(self.current_max_num, self.board.max())
@@ -289,11 +282,13 @@ class EndlessAirRaidWindow(MinigameWindow):
         super().__init__(minigame=minigame, frame_type=frame_type)
 
     def process_input(self, direction):
+        if self.isProcessing:
+            return
         self.isProcessing = True  # 设置标志防止进一步的输入
         self.gameframe.do_move(direction)
         self.update_score()
         if self.gameframe.animation_group and self.gameframe.target_layout.objectName() != 'f_target_layout':
-            QtCore.QTimer.singleShot(480, self.allow_input)  # 配合gameframe中空袭动画的延迟
+            QtCore.QTimer.singleShot(500, self.allow_input)  # 配合gameframe中空袭动画的延迟
         else:
             self.allow_input()
 
@@ -301,8 +296,8 @@ class EndlessAirRaidWindow(MinigameWindow):
         self.isProcessing = False
 
     def show_message(self):
-        text = 'Airstrikes incoming! Avoid marked targets!'
-        QtWidgets.QMessageBox.information(self, 'Information', text)
+        text = self.tr('Airstrikes incoming! Avoid marked targets!')
+        QtWidgets.QMessageBox.information(self, self.tr('Information'), text)
         self.gameframe.setFocus()
 
 

@@ -67,6 +67,7 @@ class DesignMaster1Frame(MinigameFrame):
         target = int(self.pattern[row][col] * 2 ** (max(self.current_max_num, self.max_num) + 1))
         target = str(target) if target < 1000 else str(target // 1000) + 'k'
         small_label.setText(target)
+        small_label.raise_()
 
 
 DesignMaster2Frame, DesignMaster3Frame, DesignMaster4Frame = DesignMaster1Frame, DesignMaster1Frame, DesignMaster1Frame
@@ -78,13 +79,13 @@ class DesignMasterWindow(MinigameWindow):
         super().__init__(minigame=minigame, frame_type=frame_type)
 
     def show_message(self):
-        text = 'Fit a particular pattern.\n'
+        text = self.tr('Fit a particular pattern.\n')
         target = self.gameframe.pattern * 2 ** (max(self.gameframe.current_max_num, self.gameframe.max_num) + 1)
         text += self.array_to_formatted_string(target)
 
         # 创建自定义的QMessageBox
         msg_box = QtWidgets.QMessageBox(self)
-        msg_box.setWindowTitle('Information')
+        msg_box.setWindowTitle(self.tr('Information'))
         msg_box.setText(text)
         msg_box.setIcon(QtWidgets.QMessageBox.Information)
         font = QtGui.QFont("Consolas", 10)  # 设置等宽字体
