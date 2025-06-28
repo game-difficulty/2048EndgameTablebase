@@ -6,10 +6,8 @@ from typing import Callable, Dict, Tuple
 
 import cpuinfo
 import numpy as np
-from PyQt5 import QtWidgets, QtCore
-from PyQt5.QtGui import QFontDatabase
+from PyQt5 import QtWidgets
 from PyQt5.QtCore import QLocale
-from PyQt5.QtWidgets import QApplication
 from numpy.typing import NDArray
 
 import Calculator

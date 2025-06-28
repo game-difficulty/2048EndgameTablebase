@@ -1,5 +1,6 @@
 import sys
 from typing import List, Tuple, Dict
+from collections import defaultdict
 
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -302,12 +303,15 @@ class SquareFrame(QtWidgets.QFrame):
     @staticmethod
     def _calculate_new_position(r: int, c: int, direction: str, distance: int) -> tuple:
         """计算移动后的新坐标"""
-        direction_map = {
-            'Up': (-distance, 0),
-            'Down': (distance, 0),
-            'Left': (0, -distance),
-            'Right': (0, distance)
-        }
+        direction_map = defaultdict(lambda: "？")
+
+        direction_map.update({
+            'u': "上",
+            'd': "下",
+            'l': "左",
+            'r': "右",
+            '?': "？",
+        })
         dr, dc = direction_map[direction.capitalize()]
         return r + dr, c + dc
 

@@ -1,4 +1,5 @@
 import sys
+from collections import defaultdict
 
 import numpy as np
 import random
@@ -12,12 +13,15 @@ from Gamer import BaseBoardFrame
 from Analyzer import AnalyzeWindow
 
 
-direction_map = {
+direction_map = defaultdict(lambda: "？")
+
+direction_map.update({
     'u': "上",
     'd': "下",
     'l': "左",
-    'r': "右"
-}
+    'r': "右",
+    '?': "？",
+})
 
 
 # noinspection PyAttributeOutsideInit

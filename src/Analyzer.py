@@ -1,4 +1,5 @@
 import os
+from collections import defaultdict
 
 import numpy as np
 from numpy.typing import NDArray
@@ -14,12 +15,15 @@ from Config import category_info, SingletonConfig
 logger = Config.logger
 translate_ = QtCore.QCoreApplication.translate
 is_zh = (SingletonConfig().config['language'] == 'zh')
-direction_map = {
+direction_map = defaultdict(lambda: "？")
+
+direction_map.update({
     'u': "上",
     'd': "下",
     'l': "左",
-    'r': "右"
-}
+    'r': "右",
+    '?': "？",
+})
 
 
 class Analyzer:

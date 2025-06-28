@@ -2,6 +2,7 @@ import os.path
 import sys
 import time
 from typing import Dict, Tuple
+from collections import defaultdict
 
 import numpy as np
 from PyQt5 import QtCore, QtWidgets
@@ -15,12 +16,15 @@ from Config import SingletonConfig, category_info
 from Gamer import BaseBoardFrame
 
 
-direction_map = {
+direction_map = defaultdict(lambda: "？")
+
+direction_map.update({
     'u': "上",
     'd': "下",
     'l': "左",
-    'r': "右"
-}
+    'r': "右",
+    '?': "？",
+})
 
 
 class TrainFrame(BaseBoardFrame):
