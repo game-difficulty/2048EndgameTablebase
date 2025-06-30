@@ -222,7 +222,7 @@ class Analyzer:
             return False
 
         # 配置里没找到表路径
-        if best_move == '?':
+        if best_move == '?' or self.result[best_move] == '?':
             return None
 
         self.print_board(board)
@@ -451,10 +451,11 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
             self.filepath_edit.setText(filepath)
 
     def start_analyze(self):
-        position = self.pos_combo.currentText()
-        pattern = self.pattern_combo.currentText()
-        target = self.target_combo.currentText()
+        position = self.pos_combo.currentText
+        pattern = self.pattern_combo.currentText
+        target = self.target_combo.currentText
         pathname = self.filepath_edit.toPlainText()
+        position = '0' if not position else position
         if pattern and target and pathname and position and os.path.exists(pathname):
             if pattern in ['444', 'LL', 'L3']:
                 ptn = pattern + '_' + target + '_' + position
@@ -505,16 +506,16 @@ class AnalyzeThread(QtCore.QThread):
 
 if __name__ == "__main__":
     pass
-    # anlz = Analyzer(r"D:\2048calculates\test\analysis\game.txt", '442',
-    #                 9, '442_512', r"D:\2048calculates\test\analysis", '0')
+    # anlz = Analyzer(r"C:\Users\Administrator\Downloads\message.txt", 'free12w',
+    #                 12, 'free12w_2048', r"C:\Users\Administrator\Downloads", '0')
     # anlz.generate_reports()
-
+    #
     # anlz = Analyzer(r"D:\2048calculates\test\analysis\vgame.txt", '2x4',
     #                 8, '2x4_256', r"D:\2048calculates\test\analysis", '0')
     # anlz.generate_reports()
 
-    # import sys
-    # app = QtWidgets.QApplication(sys.argv)
-    # main = AnalyzeWindow()
-    # main.show()
-    # sys.exit(app.exec_())
+    import sys
+    app = QtWidgets.QApplication(sys.argv)
+    main = AnalyzeWindow()
+    main.show()
+    sys.exit(app.exec_())
