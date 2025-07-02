@@ -107,8 +107,8 @@ def recalculate_process(
             os.remove(pathname + str(i))
         logger.debug(f'step {i} written\n')
 
-        # if deletion_threshold > 0:  # todo
-        #     remove_died(d2, deletion_threshold).tofile(pathname + str(i + 2) + '.book')  # 再写一次，把成功率低于阈值的局面去掉
+        if deletion_threshold > 0:
+            remove_died(d2, deletion_threshold).tofile(pathname + str(i + 2) + '.book')  # 再写一次，把成功率低于阈值的局面去掉
 
         if SingletonConfig().config.get('compress_temp_files', False):
             compress_with_7z(pathname + str(i + 2) + '.book')

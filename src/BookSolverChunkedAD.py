@@ -119,9 +119,9 @@ def recalculate_process_ad_c(
 
         os.rename(pathname + str(i) + 'bt', pathname + str(i) + 'b')
 
-        # if os.path.exists(pathname + str(i)):
-        #     os.remove(pathname + str(i))
-        logger.debug(f'step {i} done, solving avg {round(_counter / max(_timer, 0.0001) / 2e6, 2)} mbps\n')  # todo
+        if os.path.exists(pathname + str(i)):
+            os.remove(pathname + str(i))
+        logger.debug(f'step {i} done, solving avg {round(_counter / max(_timer, 0.0001) / 2e6, 2)} mbps\n')
 
         if SingletonConfig().config.get('compress_temp_files', False):
             compress_with_7z(pathname + str(i + 2) + 'b')

@@ -120,9 +120,9 @@ def recalculate_process_ad(
         if deletion_threshold > 0:
             dict_tofile(book_dict2, ind_dict2, pathname, i + 2)  # 再写一次，把成功率低于阈值的局面去掉
         del book_dict2, ind_dict2
-        dict_tofile(book_dict0, ind_dict0, pathname, i)  # todo
-        # if os.path.exists(pathname + str(i)):
-        #     os.remove(pathname + str(i))
+        dict_tofile(book_dict0, ind_dict0, pathname, i)
+        if os.path.exists(pathname + str(i)):
+            os.remove(pathname + str(i))
         logger.debug(f'step {i} written\n')
 
         if SingletonConfig().config.get('compress_temp_files', False):
