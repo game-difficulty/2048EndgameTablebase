@@ -186,7 +186,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.reader_thread = ReaderWorker(self.book_reader, np.uint64(0), self.pattern_settings, self.current_pattern)
         self.reader_thread.result_ready.connect(self._show_results)
 
-        self.statusbar.showMessage("All features may be slow when used for the first time. Please be patient.", 8000)
+        self.statusbar.showMessage(self.tr("All features may be slow when used for the first time. Please be patient."), 8000)
 
     def setupUi(self):
         self.setObjectName("self")
@@ -695,6 +695,8 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.process_input('Left')
         elif event.key() in (QtCore.Qt.Key.Key_Right, QtCore.Qt.Key.Key_D):
             self.process_input('Right')
+        elif event.key() in (QtCore.Qt.Key.Key_Backspace, QtCore.Qt.Key.Key_Delete):
+            self.handleUndo()
         elif event.key() in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
             if self.ai_state:
                 # 停止Demo
@@ -875,7 +877,8 @@ class TrainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event):
         self.ai_state = False
         self.Demo.setText(self.tr('Demo'))
-
+        try: np.array(self.gameframe.history, dtype='uint64, uint32').tofile(fr'C:\Users\Administrator\Desktop\record\0')
+        except:pass
         self.gameframe.history = []
         event.accept()
 

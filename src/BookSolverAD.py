@@ -120,9 +120,9 @@ def recalculate_process_ad(
         if deletion_threshold > 0:
             dict_tofile(book_dict2, ind_dict2, pathname, i + 2)  # 再写一次，把成功率低于阈值的局面去掉
         del book_dict2, ind_dict2
-        dict_tofile(book_dict0, ind_dict0, pathname, i)
-        if os.path.exists(pathname + str(i)):
-            os.remove(pathname + str(i))
+        dict_tofile(book_dict0, ind_dict0, pathname, i)  # todo
+        # if os.path.exists(pathname + str(i)):
+        #     os.remove(pathname + str(i))
         logger.debug(f'step {i} written\n')
 
         if SingletonConfig().config.get('compress_temp_files', False):
@@ -296,7 +296,7 @@ def recalculate_ad(
         derive_size = len(book_dict0[count_32k][0])
 
         match_index, match_mat = match_dict.setdefault(
-            derive_size, (np.full(33331, np.uint64(0xffffffffffffffff), dtype=np.uint64),
+            np.uint32(derive_size), (np.full(33331, np.uint64(0xffffffffffffffff), dtype=np.uint64),
                           np.zeros((33331, derive_size), dtype=np.uint16)))
 
         book_mat1 = book_dict1.setdefault(count_32k, np.empty((0, derive_size), dtype=np.uint32))
@@ -315,12 +315,11 @@ def recalculate_ad(
             for k in prange(start, end):
 
                 if derive_size == 1:
-                    # derive_size有些计算可以省略，因此单独写逻辑
+                    # derive_size == 1有些计算可以省略，因此单独写逻辑
                     t = index[k]
                     # 初始化概率和权重
                     success_probability = 0
                     empty_slots = 0
-
 
                     for i in range(16):  # 遍历所有位置
                         if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
@@ -511,6 +510,7 @@ def solve_optimal_success_rate(t, new_value, mbm, i, board_sum, pattern_check_fu
         if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
             newt, symm_index = sym_func(newt)
             if mnt:
+
                 unmasked_newt = bm.move_board2(t_gen, board_rev, direc + 1)
                 unmasked_newt = np.uint64(sym_like(unmasked_newt, symm_index))
                 if count_32k < 16:
@@ -545,7 +545,7 @@ def update_rank_match(new_derived: NDArray[np.uint64], match_index: NDArray[np.u
     return ranked_array
 
 
-@njit(nogil=True)
+@njit(nogil=True, inline='always')
 def arr_max(arr1: NDArray, arr2: NDArray):
     # assert len(arr1) - len(arr2) == 0
     for i in range(len(arr1)):
@@ -554,7 +554,7 @@ def arr_max(arr1: NDArray, arr2: NDArray):
 
 @njit(nogil=True)
 def match_arr(a: NDArray) -> NDArray[np.uint16]:
-    sorted_indices = np.argsort(a)
+    sorted_indices = np.argsort(a)  # 事实上在Numba包装的函数内部调用np.argsort比原版更慢
     ranked_array = np.empty(len(a), dtype=np.uint16)
     ranked_array[sorted_indices] = np.arange(len(a))
     return ranked_array
@@ -820,26 +820,19 @@ def sym_arr_like(bd_arr: NDArray[np.uint64], symm_index: int):
     if symm_index == 0:
         return
     elif symm_index == 1:
-        for i in range(len(bd_arr)):
-            bd_arr[i] = ReverseLR(bd_arr[i])
+        ReverseLR(bd_arr)
     elif symm_index == 2:
-        for i in range(len(bd_arr)):
-            bd_arr[i] = ReverseUD(bd_arr[i])
+        ReverseUD(bd_arr)
     elif symm_index == 3:
-        for i in range(len(bd_arr)):
-            bd_arr[i] = ReverseUL(bd_arr[i])
+        ReverseUL(bd_arr)
     elif symm_index == 4:
-        for i in range(len(bd_arr)):
-            bd_arr[i] = ReverseUR(bd_arr[i])
+        ReverseUR(bd_arr)
     elif symm_index == 5:
-        for i in range(len(bd_arr)):
-            bd_arr[i] = Rotate180(bd_arr[i])
+        Rotate180(bd_arr)
     elif symm_index == 6:
-        for i in range(len(bd_arr)):
-            bd_arr[i] = RotateL(bd_arr[i])
+        RotateL(bd_arr)
     elif symm_index == 7:
-        for i in range(len(bd_arr)):
-            bd_arr[i] = RotateR(bd_arr[i])
+        RotateR(bd_arr)
 
 
 @njit(nogil=True)
@@ -899,48 +892,17 @@ def _create_index_ad(arr: NDArray[np.uint64]) -> NDArray[np.uint32]:
     根据uint64数据的前24位的分段位置创建一个索引，长度16777216+1
     """
     n = 16777217
-    ind1: NDArray[np.uint32] = np.full(n, 0xffffffff, dtype='uint32')
+    ind1: NDArray = np.empty(n, dtype='uint32')
     header = arr[0] >> np.uint32(40)
-    ind1[header] = 0
+    ind1[:header + 1] = 0
 
     for i in prange(1, len(arr)):
         header = arr[i] >> np.uint32(40)
         header_pre = arr[i - 1] >> np.uint32(40)
         if header != header_pre:
-            ind1[header] = i
-    # 向前填充
-    num_threads = 8
-    segment_size = (n + num_threads - 1) // num_threads
-
-    # 记录每个段最后一个非零值
-    last_values = np.empty(num_threads, dtype='uint32')
-
-    # 每段并行处理
-    for i in prange(num_threads):
-        start = i * segment_size
-        end = min(start + segment_size, n)
-
-        # 初始化 last_value 为段末尾的第一个非零值
-        last_value = len(arr)
-        for j in range(end - 1, start - 1, -1):
-            if ind1[j] != 0xffffffff:
-                last_value = ind1[j]
-            else:
-                ind1[j] = last_value
-
-        last_values[i] = last_value
-
-    # 处理边界，确保每段的填充是正确的
-    for i in prange(1, num_threads):
-        if last_values[i] != len(arr):
-            start = i * segment_size
-            for j in range(start - 1, start - segment_size, -1):
-                if ind1[j] == len(arr):
-                    ind1[j] = last_values[i]
-                else:
-                    break
-
-    ind1[0] = 0
+            ind1[header_pre + 1: header + 1] = i
+    header = arr[-1] >> np.uint32(40)
+    ind1[header + 1:] = len(arr)
     return ind1
 
 
@@ -970,30 +932,6 @@ def search_arr_ad(arr: NDArray[np.uint64],
     header = b >> np.uint32(40)
     low, high = ind[header], ind[header + 1] - 1
     return binary_search_arr_ad(arr, b, low, high)
-
-
-@njit(nogil=True)
-def replace_val(encoded_board: np.uint64) -> Tuple[np.uint64, np.uint64]:
-    replace_value = np.uint64(0xf)
-    for k in range(0, 64, 4):
-        encoded_num = (encoded_board >> np.uint64(k)) & np.uint64(0xf)
-        if encoded_num == np.uint64(0xf):
-            encoded_board &= ~(np.uint64(0xf) << np.uint64(k))  # 清除当前位置的值
-            encoded_board |= (replace_value << np.uint64(k))  # 设置新的值
-            replace_value -= np.uint64(1)
-    return encoded_board, replace_value
-
-
-@njit(nogil=True)
-def ind_match(encoded_board: np.uint64, replacement_value: np.uint64) -> np.uint64:
-    ind = 0
-    x = 0xf - replacement_value
-    for k in range(60, -4, -4):
-        encoded_num = (encoded_board >> np.uint64(k)) & np.uint64(0xf)
-        if encoded_num > replacement_value:
-            ind *= x
-            ind += (encoded_num - replacement_value)
-    return ind
 
 
 def length_count(book_dict: BookDictType) -> int:
@@ -1032,7 +970,7 @@ def dict_fromfile(path: str, step: int) -> (BookDictType, IndexDictType):
     # First, read all the .i files to populate ind_dict
     for filename in os.listdir(folder_path):
         if filename.endswith('.i'):
-            key = int(filename.split('.')[0])  # Extract key from filename (before .i)
+            key = np.int8(filename.split('.')[0])  # Extract key from filename (before .i)
             ind_data = np.fromfile(os.path.join(folder_path, filename), dtype=np.uint64)
             if len(ind_data) > 0:
                 ind_dict[key] = ind_data
@@ -1040,7 +978,7 @@ def dict_fromfile(path: str, step: int) -> (BookDictType, IndexDictType):
     # Now, read the .b files and use the corresponding ind_data to reshape book_data
     for filename in os.listdir(folder_path):
         if filename.endswith('.b'):
-            key = int(filename.split('.')[0])  # Extract key from filename (before .b)
+            key = np.int8(filename.split('.')[0])  # Extract key from filename (before .b)
             ind_length = len(
                 ind_dict.get(key, np.empty(0, dtype=np.uint64)))  # Get the length of the corresponding ind_data
             if ind_length > 0:
@@ -1049,6 +987,32 @@ def dict_fromfile(path: str, step: int) -> (BookDictType, IndexDictType):
                 book_dict[key] = book_data_reshaped
 
     return book_dict, ind_dict
+
+
+"""非查表实现"""
+@njit(nogil=True)
+def replace_val(encoded_board: np.uint64) -> Tuple[np.uint64, np.uint64]:
+    replace_value = np.uint64(0xf)
+    for k in range(0, 64, 4):
+        encoded_num = (encoded_board >> np.uint64(k)) & np.uint64(0xf)
+        if encoded_num == np.uint64(0xf):
+            encoded_board &= ~(np.uint64(0xf) << np.uint64(k))  # 清除当前位置的值
+            encoded_board |= (replace_value << np.uint64(k))  # 设置新的值
+            replace_value -= np.uint64(1)
+    return encoded_board, replace_value
+
+
+@njit(nogil=True)
+def ind_match(encoded_board: np.uint64, replacement_value: np.uint64) -> np.uint64:
+    ind = 0
+    x = np.uint64(0xf) - replacement_value
+    for k in range(60, -4, -4):
+        encoded_num = (encoded_board >> np.uint64(k)) & np.uint64(0xf)
+        if encoded_num > replacement_value:
+            ind *= x
+            ind += (encoded_num - replacement_value)
+    return ind
+
 
 
 if __name__ == '__main__':

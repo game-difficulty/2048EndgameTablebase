@@ -1,8 +1,8 @@
 # User Manual
 
 **Author**: game_difficulty  
-**Version**: 6.4  
-**Date**: 2025.4.30  
+**Version**: 7.4  
+**Date**: 2025.7.4  
 
 ---
 
@@ -235,6 +235,12 @@ You can use the **Analyze Verse Log** button to analyze game replays from 2048ve
    - Choose a formation to analyze. You must have calculated this table.
    - **If the file has been moved, it must be reset in the Practise interface.**
    - The program will analyze all endgames in the replay that meet the formation constraints and generate a text report.
+
+Use the **Review Replay** button to reexamine your gameplay on Testing screen or Verse.
+
+   - Entering the interface will allow you to reexamine the test you have just taken.
+   - You can select the replay file you want to review from the left side of the menu bar in the interface.
+   - Replay files will be generated when you analyze a Verse replay.
 
 ---
 

@@ -7,7 +7,7 @@ from typing import Callable, Dict, Tuple
 import cpuinfo
 import numpy as np
 from PyQt5 import QtWidgets
-from PyQt5.QtCore import QLocale
+from PyQt5.QtCore import QLocale, QTranslator
 from numpy.typing import NDArray
 
 import Calculator
@@ -236,6 +236,7 @@ class SingletonConfig:
     config_file_path = os.path.join(os.path.dirname(__file__), 'config')  # 配置文件路径
     use_avx = 1
     font_colors = [True for _ in range(36)]
+    _current_translator: None | QTranslator = None
 
     def __new__(cls):
         # 检查是否已经有实例存在
@@ -326,6 +327,28 @@ class SingletonConfig:
             return 'zh'
         else:
             return 'en'  # 默认英语
+
+    @staticmethod
+    def apply_language(lang):
+        app = QtWidgets.QApplication.instance()
+        SingletonConfig().config['language'] = lang
+
+        # 1. 清除旧翻译器
+        if SingletonConfig._current_translator:
+            SingletonConfig._current_translator = None
+
+        # 2. 加载新翻译（中文）
+        if lang == 'zh':
+            zh_translator = QTranslator()
+            if zh_translator.load(os.path.join("translations", "app_zh_CN.qm")):
+                SingletonConfig._current_translator = zh_translator
+                app.installTranslator(zh_translator)
+
+        # 3. 重新翻译所有窗口
+        # noinspection PyUnresolvedReferences
+        for widget in app.topLevelWidgets():
+            if hasattr(widget, 'retranslateUi'):
+                widget.retranslateUi()
 
 
 # 创建日志记录

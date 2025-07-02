@@ -43,7 +43,7 @@ class Analyzer:
         self.book_reader.dispatch(bookfile_path_list, pattern, target)
 
         replay_text = self.read_replay(file_path)
-        self.record_list: np.typing.NDArray = np.empty(0, dtype='uint64,uint8')
+        self.record_list: np.typing.NDArray = np.empty(0, dtype='uint64,uint8,uint8,uint8')
         self.decode_replay(replay_text)
 
         self.target_path = target_path
@@ -65,6 +65,8 @@ class Analyzer:
             "**Blunder!**": 0,
             "**Terrible!**": 0,
         }
+        self.record = np.empty(4000, dtype='uint64,uint8,uint32,uint32,uint32,uint32')
+        self.rec_step_count = 0
 
     @staticmethod
     def read_replay(path):
@@ -87,7 +89,7 @@ class Analyzer:
             bm = self.vbm
 
         replay_text = replay_text[header:]
-        self.record_list: np.typing.NDArray = np.empty(len(replay_text) - 2, dtype='uint64,uint8')
+        self.record_list: np.typing.NDArray = np.empty(len(replay_text) - 2, dtype='uint64,uint8,uint8,uint8')
 
         png_map_dict = {
             ' ': 0, '!': 1, '"': 2, '#': 3, '$': 4, '%': 5, '&': 6, "'": 7, '(': 8, ')': 9, '*': 10,
@@ -120,7 +122,7 @@ class Analyzer:
             replay_position = total_space - ((index_i & 3) << 2) - ((index_i & 15) >> 2)
 
             if moves_made >= 2:
-                self.record_list[moves_made - 2] = (board, replay_move)
+                self.record_list[moves_made - 2] = (board, replay_move, replay_tile, 15 - replay_position)
                 board = np.uint64(bm.move_board(board, replay_move))
 
             board |= np.uint64(replay_tile) << np.uint64(replay_position << 2)
@@ -189,10 +191,12 @@ class Analyzer:
             elif not is_endgame:
                 if len(self.text_list) > 100:
                     self.write_analysis(i)
+                    self.save_rec_to_file(i)
                 self.clear_analysis()
 
         if len(self.text_list) > 100:
             self.write_analysis(len(self.record_list))
+            self.save_rec_to_file(len(self.record_list))
         self.clear_analysis()
 
     def print_board(self, board: np.typing.NDArray):
@@ -212,7 +216,8 @@ class Analyzer:
                 formatted_row.append(formatted_element.rjust(4, ' '))
             self.text_list.append(' '.join(formatted_row))
 
-    def _analyze_one_step(self, board: np.typing.NDArray, masked_board: np.typing.NDArray, move: str) -> bool | None:
+    def _analyze_one_step(self, board: np.typing.NDArray, masked_board: np.typing.NDArray, move: str,
+                          new_tile: int, spawn_position:int) -> bool | None:
         target = str(int(2 ** self.target))
         self.result = self.book_reader.move_on_dic(masked_board, self.pattern, target, self.full_pattern, self.position)
 
@@ -239,7 +244,7 @@ class Analyzer:
             return False
 
         self.step_count += 1
-        # 残局一开始的局面小概率不在tables中，故不分析
+        # 残局一开始的局面小概率不在tables中，故不分析; 后面rec_step_count = self.step_count - 5也是这里造成的
         if self.step_count < 5:
             return True
 
@@ -277,10 +282,11 @@ class Analyzer:
 
         self.text_list.append('--------------------------------------------------')
         self.text_list.append('')
+        self.record_replay(board, move, new_tile, spawn_position)
         return True
 
     def analyze_one_step(self, i):
-        board_encoded, move_encoded = self.record_list[i]
+        board_encoded, move_encoded, new_tile, spawn_position = self.record_list[i]
         board = self.bm.decode_board(board_encoded)
 
         # 把大数字用32768代替，返回能够进行查找的board
@@ -292,7 +298,7 @@ class Analyzer:
             return False
 
         move = ('Left', 'Right', 'Up', 'Down')[move_encoded - 1]
-        is_endgame = self._analyze_one_step(board, masked_board, move)
+        is_endgame = self._analyze_one_step(board, masked_board, move, new_tile, spawn_position)
         return is_endgame
 
     def write_error(self, text: str):
@@ -302,7 +308,7 @@ class Analyzer:
             file.write(text + '\n')
 
     def write_analysis(self, step: int):
-        filename = self.full_pattern + '_' + str(step)
+        filename = self.full_pattern + '_' + str(step) + f'_{self.goodness_of_fit:.4f}' + '.txt'
         target_file_path = os.path.join(self.target_path, filename)
         with open(target_file_path, 'w', encoding='utf-8') as file:
             for line in self.text_list:
@@ -353,6 +359,34 @@ class Analyzer:
         else:
             text = "**Terrible!**"
         return text
+
+    def record_replay(self, board, direction: str, new_tile: int, spawn_position: int):
+        rec_step_count = self.step_count - 5
+        direct = {'Left': 0, 'Right': 1, 'Up': 2, 'Down': 3}[direction.capitalize()]
+        encoded = self.encode(direct, spawn_position, new_tile - 1)
+        success_rates = []
+        for d in ('left', 'right', 'up', 'down'):
+            rate = self.result[d]
+            if isinstance(rate, (int, float)):
+                success_rates.append(np.uint32(rate * 4e9))
+            else:
+                success_rates.append(np.uint32(0))
+        self.record[rec_step_count] = (np.uint64(self.bm.encode_board(board)), encoded, *success_rates)
+
+    @staticmethod
+    def encode(a, b, c):
+        return np.uint8(((a << 5) | (b << 1) | c) & 0xFF)
+
+    def save_rec_to_file(self, step: int):
+        rec_step_count = self.step_count - 5
+        if self.full_pattern is None or rec_step_count < 2:
+            return
+
+        filename = self.full_pattern + '_' + str(step) + f'_{self.goodness_of_fit:.4f}' + '.rpl'
+        target_file_path = os.path.join(self.target_path, filename)
+        self.record[rec_step_count] = (
+            0, 88, 666666666, 233333333, 314159265, 987654321)
+        self.record[:rec_step_count + 1].tofile(target_file_path)
 
 
 # noinspection PyAttributeOutsideInit
@@ -436,6 +470,9 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
         self.set_filepath_bt.setText(_translate("Analysis", "SET..."))
         self.notes_text.setText(_translate("Analysis", "*https://2048verse.com/ supports save game replay\n"
                                                        "*The analysis results will be saved to the same path"))
+        self.pattern_combo.retranslateUi(self.tr("Select Formation"))
+        self.target_combo.retranslateUi(self.tr("Target Tile"))
+        self.pos_combo.retranslateUi(self.tr("Target Position"))
 
     def filepath_changed(self):
         options = QtWidgets.QFileDialog.Options()

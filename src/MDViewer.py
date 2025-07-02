@@ -24,6 +24,7 @@ class MDViewer(QMainWindow):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.text_browser = QTextBrowser()
+        self.text_browser.setOpenExternalLinks(True)
         self.toc_list = QListWidget()
         self.toc_list.currentRowChanged.connect(self.onTOCClicked)  # type: ignore
 

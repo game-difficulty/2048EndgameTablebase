@@ -23,12 +23,7 @@ def main():
     # 加载默认语言
     from Config import SingletonConfig, logger
     if SingletonConfig().config.get('language', 'en') == 'zh':
-        # 创建翻译器并加载.qm文件
-        translator = QtCore.QTranslator()
-        translator.load(os.path.join("translations", "app_zh_CN.qm"))
-
-        # 安装到应用程序
-        app.installTranslator(translator)
+        SingletonConfig.apply_language('zh')
 
     # 加载ClearSans字体
     font_files = [

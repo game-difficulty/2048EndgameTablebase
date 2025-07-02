@@ -4,7 +4,6 @@ from typing import Callable, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
-import numba as nb
 from numba import njit, prange
 
 from BoardMover import BoardMover
@@ -108,8 +107,8 @@ def recalculate_process(
             os.remove(pathname + str(i))
         logger.debug(f'step {i} written\n')
 
-        if deletion_threshold > 0:
-            remove_died(d2, deletion_threshold).tofile(pathname + str(i + 2) + '.book')  # 再写一次，把成功率低于阈值的局面去掉
+        # if deletion_threshold > 0:  # todo
+        #     remove_died(d2, deletion_threshold).tofile(pathname + str(i + 2) + '.book')  # 再写一次，把成功率低于阈值的局面去掉
 
         if SingletonConfig().config.get('compress_temp_files', False):
             compress_with_7z(pathname + str(i + 2) + '.book')
@@ -148,48 +147,18 @@ def create_index(arr: NDArray[[np.uint64, np.uint32]]
     根据uint64数据的前24位的分段位置创建一个索引，长度16777216+1
     """
     n = 16777217
-    ind1: NDArray = np.full(n, 0xffffffff, dtype='uint32')
+    ind1: NDArray = np.empty(n, dtype='uint32')
     header = arr[0][0] >> np.uint32(40)
-    ind1[header] = 0
+    ind1[:header + 1] = 0
 
     for i in prange(1, len(arr)):
         header = arr[i][0] >> np.uint32(40)
         header_pre = arr[i - 1][0] >> np.uint32(40)
         if header != header_pre:
-            ind1[header] = i
-    # 向前填充
-    num_threads = 8
-    segment_size = (n + num_threads - 1) // num_threads
+            ind1[header_pre + 1 : header + 1] = i
 
-    # 记录每个段最后一个非零值
-    last_values = np.empty(num_threads, dtype='uint32')
-
-    # 每段并行处理
-    for i in prange(num_threads):
-        start = i * segment_size
-        end = min(start + segment_size, n)
-
-        # 初始化 last_value 为段末尾的第一个非零值
-        last_value = len(arr)
-        for j in range(end - 1, start - 1, -1):
-            if ind1[j] != 0xffffffff:
-                last_value = ind1[j]
-            else:
-                ind1[j] = last_value
-
-        last_values[i] = last_value
-
-    # 处理边界，确保每段的填充是正确的
-    for i in prange(1, num_threads):
-        if last_values[i] != len(arr):
-            start = i * segment_size
-            for j in range(start - 1, start - segment_size, -1):
-                if ind1[j] == len(arr):
-                    ind1[j] = last_values[i]
-                else:
-                    break
-
-    ind1[0] = 0
+    header = arr[-1][0] >> np.uint32(40)
+    ind1[header + 1:] = len(arr)
     return ind1
 
 
@@ -292,6 +261,7 @@ def recalculate(
 
             # t是进行一次有效移动后尚未生成新数字时的面板，因此不可能没有空位置
             arr0[k][1] = np.uint32(success_probability / empty_slots)
+
     return arr0
 
 

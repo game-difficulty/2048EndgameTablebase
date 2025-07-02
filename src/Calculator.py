@@ -10,7 +10,6 @@ ToFindFunc = Callable[[np.uint64], np.uint64]
 
 @njit(nogil=True, inline='always')
 def ReverseLR(board):
-    board = np.uint64(board)
     board = (board & np.uint64(0xff00ff00ff00ff00)) >> np.uint64(8) | (
                 board & np.uint64(0x00ff00ff00ff00ff)) << np.uint64(8)
     board = (board & np.uint64(0xf0f0f0f0f0f0f0f0)) >> np.uint64(4) | (
@@ -20,7 +19,6 @@ def ReverseLR(board):
 
 @njit(nogil=True, inline='always')
 def ReverseUD(board):
-    board = np.uint64(board)
     board = (board & np.uint64(0xffffffff00000000)) >> np.uint64(32) | (
                 board & np.uint64(0x00000000ffffffff)) << np.uint64(32)
     board = (board & np.uint64(0xffff0000ffff0000)) >> np.uint64(16) | (
@@ -30,7 +28,6 @@ def ReverseUD(board):
 
 @njit(nogil=True, inline='always')
 def ReverseUL(board):
-    board = np.uint64(board)
     board = (board & np.uint64(0xff00ff0000ff00ff)) | (board & np.uint64(0x00ff00ff00000000)) >> np.uint64(24) | (
                 board & np.uint64(0x00000000ff00ff00)) << np.uint64(24)
     board = (board & np.uint64(0xf0f00f0ff0f00f0f)) | (board & np.uint64(0x0f0f00000f0f0000)) >> np.uint64(12) | (
@@ -40,7 +37,6 @@ def ReverseUL(board):
 
 @njit(nogil=True, inline='always')
 def ReverseUR(board):
-    board = np.uint64(board)
     board = (board & np.uint64(0x0f0ff0f00f0ff0f0)) | (board & np.uint64(0xf0f00000f0f00000)) >> np.uint64(20) | (
                 board & np.uint64(0x00000f0f00000f0f)) << np.uint64(20)
     board = (board & np.uint64(0x00ff00ffff00ff00)) | (board & np.uint64(0xff00ff0000000000)) >> np.uint64(40) | (
@@ -50,7 +46,6 @@ def ReverseUR(board):
 
 @njit(nogil=True, inline='always')
 def Rotate180(board):
-    board = np.uint64(board)
     board = (board & np.uint64(0xffffffff00000000)) >> np.uint64(32) | (
                 board & np.uint64(0x00000000ffffffff)) << np.uint64(32)
     board = (board & np.uint64(0xffff0000ffff0000)) >> np.uint64(16) | (
@@ -64,7 +59,6 @@ def Rotate180(board):
 
 @njit(nogil=True, inline='always')
 def RotateL(board):
-    board = np.uint64(board)
     board = (board & np.uint64(0xff00ff0000000000)) >> np.uint64(32) | (
                 board & np.uint64(0x00ff00ff00000000)) << np.uint64(8) | \
             (board & np.uint64(0x00000000ff00ff00)) >> np.uint64(8) | (
@@ -78,7 +72,6 @@ def RotateL(board):
 
 @njit(nogil=True, inline='always')
 def RotateR(board):
-    board = np.uint64(board)
     board = (board & np.uint64(0xff00ff0000000000)) >> np.uint64(8) | (
                 board & np.uint64(0x00ff00ff00000000)) >> np.uint64(32) | \
             (board & np.uint64(0x00000000ff00ff00)) << np.uint64(32) | (
@@ -92,7 +85,6 @@ def RotateR(board):
 
 @njit(nogil=True, inline='always')
 def min_all_symm(board):
-    board = np.uint64(board)
     return np.uint64(min(ReverseLR(board), ReverseUD(board), ReverseUL(board), ReverseUR(board),
                          Rotate180(board), RotateL(board), RotateR(board), board))
 

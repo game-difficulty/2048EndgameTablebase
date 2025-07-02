@@ -43,6 +43,10 @@ class TwoLevelComboBox(QToolButton):
         self.currentText = item
         self.currentTextChanged.emit(item)
 
+    def retranslateUi(self, new_default_text):
+        if not self.currentText:
+            self.setText(new_default_text)
+
 
 class SingleLevelComboBox(QToolButton):
     currentTextChanged = QtCore.pyqtSignal(str)
@@ -85,6 +89,10 @@ class SingleLevelComboBox(QToolButton):
         self.setText(item)
         self.currentText = item
         self.currentTextChanged.emit(item)
+
+    def retranslateUi(self, new_default_text):
+        if not self.currentText:
+            self.setText(new_default_text)
 
 
 # noinspection PyAttributeOutsideInit
@@ -311,7 +319,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         for language in ('zh', 'en'):
             action = self.lang_menu.addAction(language)
             action.triggered.connect(  # type: ignore
-                lambda checked, lang=language: self.apply_language(lang)
+                lambda checked, lang=language: SingletonConfig.apply_language(lang)
             )
 
         self.tile_font_size_text = QtWidgets.QLabel(self.centralwidget)
@@ -360,8 +368,15 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.demo_speed_text.setText(_translate("Settings", "Demo Speed:"))
         self.tile_font_size_text.setText(_translate("Settings", "Tile Font Size:"))
         self.anim_text.setText(_translate("Settings", "Do Animation:"))
-        self.lang_button.setText("Language")
+        self.lang_button.setText("Language")  # 暂不翻译
         self.save_bt.setText(_translate("Settings", "SAVE"))
+        if self.smallTileSumLimitLabel is not None:
+            self.smallTileSumLimitLabel.setText(self.tr("SmallTileSumLimit:"))
+        if self.smallTileSumLimitLabel is not None:
+            self.chunked_solve_checkBox.setText(self.tr("Chunked Solve"))
+        self.pattern_combo.retranslateUi(self.tr("Select Formation"))
+        self.target_combo.retranslateUi(self.tr("Target Tile"))
+        self.pos_combo.retranslateUi(self.tr("Target Position"))
 
     def show_ColorDialog(self):
         config = SingletonConfig().config
@@ -380,27 +395,6 @@ class SettingsWindow(QtWidgets.QMainWindow):
             theme_colors = theme_map[theme_name]
             SingletonConfig().config['colors'] = theme_colors.copy() + ['#000000'] * 20
             SingletonConfig.tile_font_colors()
-
-    @staticmethod
-    def apply_language(lang):
-        app = QtWidgets.QApplication.instance()
-        SingletonConfig().config['language'] = lang
-
-        # 1. 清除旧翻译器
-        for translator in app.findChildren(QtCore.QTranslator):
-            app.removeTranslator(translator)
-
-        # 2. 加载新翻译（中文）
-        if lang == 'zh':
-            zh_translator = QtCore.QTranslator()
-            if zh_translator.load(os.path.join("translations", "app_zh_CN.qm")):
-                app.installTranslator(zh_translator)
-
-        # 3. 重新翻译所有窗口
-        # noinspection PyUnresolvedReferences
-        for widget in app.topLevelWidgets():
-            if hasattr(widget, 'retranslateUi'):
-                widget.retranslateUi()
 
     def filepath_changed(self):
         options = QtWidgets.QFileDialog.Options()
@@ -443,10 +437,10 @@ class SettingsWindow(QtWidgets.QMainWindow):
             'L3', 'L3t', '442', 't', '444', 'LL', 'free8w', 'free9w', 'free8']):
             reply = QtWidgets.QMessageBox.warning(
                 self,
-                "Warning",
-                "The advanced algorithm is designed for larger tables. "
-                f"The use of the advanced algorithm for {pattern} may result in slower calculations. "
-                "Do you want to continue?",
+                self.tr("Warning"),
+                (self.tr("The advanced algorithm is designed for larger tables. The use of the advanced algorithm for ")
+                + str(pattern) +
+                self.tr(" may result in slower calculations. Do you want to continue?")),
                 QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
                 QtWidgets.QMessageBox.No
             )
@@ -455,8 +449,8 @@ class SettingsWindow(QtWidgets.QMainWindow):
         elif self.advanced_algo_checkBox.isChecked() and pattern in ['2x4', '3x3', '3x4']:
             reply = QtWidgets.QMessageBox.warning(
                 self,
-                "Warning",
-                "Variant tables does not support the advanced algorithm. ",
+                self.tr("Warning"),
+                self.tr("Variant tables does not support the advanced algorithm. "),
                 QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel,
                 QtWidgets.QMessageBox.Cancel
             )
@@ -516,7 +510,9 @@ class SettingsWindow(QtWidgets.QMainWindow):
             self.optimal_branch_only_state_changed()
             self.compress_state_changed()
 
-            self.smallTileSumLimitLabel = QtWidgets.QLabel("SmallTileSumLimit:")
+            self.smallTileSumLimitLabel = QtWidgets.QLabel(self.centralwidget)
+            self.smallTileSumLimitLabel.setText(self.tr("SmallTileSumLimit:"))
+            self.smallTileSumLimitLabel.setObjectName("SmallTileSumLimitLabel")
             self.selfLayout.addWidget(self.smallTileSumLimitLabel, 3, 2, 1, 1)
 
             self.smallTileSumLimitSpinBox = QtWidgets.QDoubleSpinBox(self.centralwidget)
@@ -531,6 +527,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
             self.selfLayout.addWidget(self.smallTileSumLimitSpinBox, 3, 3, 1, 1)
 
             self.chunked_solve_checkBox = QtWidgets.QCheckBox(self.centralwidget)
+            self.chunked_solve_checkBox.setText(self.tr("Chunked Solve"))
             self.chunked_solve_checkBox.setObjectName("chunked_solve_checkBox")
             self.chunked_solve_checkBox.setMinimumSize(QtCore.QSize(200, 36))
             self.selfLayout.addWidget(self.chunked_solve_checkBox, 4, 3, 1, 1)
@@ -539,7 +536,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
             else:
                 self.chunked_solve_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
             self.chunked_solve_checkBox.stateChanged.connect(self.chunked_solve_state_changed)  # type: ignore
-            self.chunked_solve_checkBox.setText("Chunked Solve")
+
         else:  # 如果复选框未被勾选
             # 移除控件
             if self.smallTileSumLimitLabel is not None:

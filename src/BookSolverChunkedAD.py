@@ -119,14 +119,12 @@ def recalculate_process_ad_c(
 
         os.rename(pathname + str(i) + 'bt', pathname + str(i) + 'b')
 
-        if os.path.exists(pathname + str(i)):
-            os.remove(pathname + str(i))
-        logger.debug(f'step {i} done, solving avg {round(_counter / max(_timer, 0.0001) / 2e6, 2)} mbps\n')
+        # if os.path.exists(pathname + str(i)):
+        #     os.remove(pathname + str(i))
+        logger.debug(f'step {i} done, solving avg {round(_counter / max(_timer, 0.0001) / 2e6, 2)} mbps\n')  # todo
 
         if SingletonConfig().config.get('compress_temp_files', False):
             compress_with_7z(pathname + str(i + 2) + 'b')
-        # elif not SingletonConfig().config.get('optimal_branch_only', False):
-        # do_compress(pathname + str(i + 2) + '.book')
 
         book_dict2, ind_dict2 = book_dict1, ind_dict1
         del book_dict1, ind_dict1
@@ -269,7 +267,7 @@ def recalculate_ad_c(
     derive_size = len(book_chunk[0])
 
     match_index, match_mat = match_dict.setdefault(
-        derive_size, (np.full(33331, np.uint64(0xffffffffffffffff), dtype=np.uint64),
+        np.uint32(derive_size), (np.full(33331, np.uint64(0xffffffffffffffff), dtype=np.uint64),
                       np.zeros((33331, derive_size), dtype=np.uint16)))
 
     book_mat = book_dict.setdefault(count_32k, np.empty((0, derive_size), dtype=np.uint32))

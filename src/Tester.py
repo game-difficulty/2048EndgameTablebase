@@ -1,5 +1,6 @@
 import sys
 from collections import defaultdict
+from datetime import datetime
 
 import numpy as np
 import random
@@ -11,6 +12,7 @@ from BookReader import BookReaderDispatcher
 from Config import SingletonConfig, category_info
 from Gamer import BaseBoardFrame
 from Analyzer import AnalyzeWindow
+from RecordPlayer import ReplayWindow
 
 
 direction_map = defaultdict(lambda: "？")
@@ -137,7 +139,11 @@ class TestWindow(QtWidgets.QMainWindow):
         self.full_pattern = None
         # 分析verse replay的窗口
         self.analyze_window = None
+        self.replay_window = None
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
+        # 保存回放和相关信息
+        self.record = np.empty(4000, dtype='uint64,uint8,uint32,uint32,uint32,uint32')
+        self.step_count = 0
 
     def setupUi(self):
         self.setObjectName("self")
@@ -174,19 +180,35 @@ class TestWindow(QtWidgets.QMainWindow):
         self.gridLayout.addWidget(self.text_display, 0, 1, 2, 1)
         self.text_display.setMinimumSize(120, 240)
 
-        self.save_bt = QtWidgets.QPushButton(self.centralwidget)
-        self.gridLayout.addWidget(self.save_bt, 2, 1, 1, 1)
-        self.gridLayout.setAlignment(self.save_bt, QtCore.Qt.AlignmentFlag.AlignHCenter)
-        self.save_bt.setMaximumSize(300, 36)
-        self.save_bt.setMinimumSize(80, 30)
-        self.save_bt.clicked.connect(self.save_logs_to_file)  # type: ignore
+        self.bts_Layout = QtWidgets.QHBoxLayout()
+        self.replay_bt = QtWidgets.QPushButton(self.centralwidget)
+        self.bts_Layout.addWidget(self.replay_bt)
+        self.bts_Layout.setAlignment(self.replay_bt, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.replay_bt.setMaximumSize(300, 36)
+        self.replay_bt.setMinimumSize(80, 30)
+        self.replay_bt.clicked.connect(self.open_replay)  # type: ignore
 
         self.analyzer_bt = QtWidgets.QPushButton(self.centralwidget)
-        self.gridLayout.addWidget(self.analyzer_bt, 2, 0, 1, 1)
-        self.gridLayout.setAlignment(self.analyzer_bt, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.bts_Layout.addWidget(self.analyzer_bt)
+        self.bts_Layout.setAlignment(self.analyzer_bt, QtCore.Qt.AlignmentFlag.AlignHCenter)
         self.analyzer_bt.setMaximumSize(300, 36)
         self.analyzer_bt.setMinimumSize(80, 30)
         self.analyzer_bt.clicked.connect(self.open_analyzer)  # type: ignore
+
+        self.save_log_bt = QtWidgets.QPushButton(self.centralwidget)
+        self.bts_Layout.addWidget(self.save_log_bt)
+        self.bts_Layout.setAlignment(self.save_log_bt, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.save_log_bt.setMaximumSize(300, 36)
+        self.save_log_bt.setMinimumSize(80, 30)
+        self.save_log_bt.clicked.connect(self.save_logs_to_file)  # type: ignore
+
+        self.save_rec_bt = QtWidgets.QPushButton(self.centralwidget)
+        self.bts_Layout.addWidget(self.save_rec_bt)
+        self.bts_Layout.setAlignment(self.save_rec_bt, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.save_rec_bt.setMaximumSize(300, 36)
+        self.save_rec_bt.setMinimumSize(80, 30)
+        self.save_rec_bt.clicked.connect(self.save_rec_to_file)  # type: ignore
+        self.gridLayout.addLayout(self.bts_Layout, 2, 0, 1, 2)
 
         self.menubar = QtWidgets.QMenuBar(self)
         self.menubar.setGeometry(QtCore.QRect(0, 0, 522, 22))
@@ -240,8 +262,10 @@ class TestWindow(QtWidgets.QMainWindow):
         self.menu_pos.setTitle(_translate("Tester", "Position"))
         self.menu_tgt.setTitle(_translate("Tester", "Target"))
         self.set_board_bt.setText(_translate("Tester", "SET"))
-        self.save_bt.setText(_translate("Tester", "Save Logs"))
+        self.save_log_bt.setText(_translate("Tester", "Save Logs"))
+        self.save_rec_bt.setText(_translate("Tester", "Save Replay"))
         self.analyzer_bt.setText(_translate("Tester", "Analyze Verse Replay"))
+        self.replay_bt.setText(_translate("Tester", "Review Replay"))
 
     def menu_selected(self, i):
         self.pattern[i] = self.sender().text()
@@ -311,6 +335,9 @@ class TestWindow(QtWidgets.QMainWindow):
         self.gameframe.update_all_frame(self.gameframe.board)
         self.gameframe.setFocus()
 
+        self.step_count = 0
+        self.record[0][0] = self.gameframe.board_encoded
+
     def set_board_init(self):
         path_found, path_list = self.init()
         if path_found:
@@ -322,6 +349,10 @@ class TestWindow(QtWidgets.QMainWindow):
             self.text_display.add_text(self.tr("We'll start from:"))
             self.text_display.print_board(self.gameframe.board)
             self.gameframe.update_all_frame(self.gameframe.board)
+            self.gameframe.setFocus()
+
+            self.step_count = 0
+            self.record[0][0] = self.gameframe.board_encoded
         self.gameframe.setFocus()
 
     def do_random_rotate(self, board_encoded):
@@ -331,11 +362,13 @@ class TestWindow(QtWidgets.QMainWindow):
     def save_logs_to_file(self):
         if self.full_pattern is None or len(self.text_display.lines) < 1:
             return
+        current_time = datetime.now().strftime("%Y%m%d%H%M%S")
+        default_filename = f"{self.full_pattern}_{current_time}_{self.gameframe.goodness_of_fit:.4f}_log.txt"
         # 打开文件保存对话框
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
             "Save Logs",  # 对话框标题
-            self.full_pattern + " log",  # 默认文件名
+            default_filename,  # 默认文件名
             "Text Files (*.txt);;All Files (*)",  # 文件过滤器
         )
         if file_path:
@@ -343,6 +376,24 @@ class TestWindow(QtWidgets.QMainWindow):
             with open(file_path, 'w', encoding='utf-8') as file:
                 for line in self.text_display.lines:
                     file.write(line.replace('**', '').replace('&nbsp;', ' ') + '\n')
+
+    def save_rec_to_file(self):
+        if self.full_pattern is None or len(self.text_display.lines) < 1:
+            return
+        current_time = datetime.now().strftime("%Y%m%d%H%M%S")
+        default_filename = f"{self.full_pattern}_{current_time}_{self.gameframe.goodness_of_fit:.4f}_rec.rpl"
+        # 打开文件保存对话框
+        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Save Logs",  # 对话框标题
+            default_filename,  # 默认文件名
+            "Text Files (*.rpl);;All Files (*)",  # 文件过滤器
+        )
+        if file_path:
+            # 添加验证数据
+            self.record[self.step_count] = (
+                self.record[self.step_count][0], 88, 666666666, 233333333, 314159265, 987654321)
+            self.record[:self.step_count + 1].tofile(file_path)
 
     def open_analyzer(self):
         if self.analyze_window is None:
@@ -355,6 +406,25 @@ class TestWindow(QtWidgets.QMainWindow):
         self.analyze_window.show()
         self.analyze_window.activateWindow()
         self.analyze_window.raise_()
+
+    def open_replay(self):
+        # 添加验证数据
+        self.record[self.step_count] = (
+            self.record[self.step_count][0], 88, 666666666, 233333333, 314159265, 987654321)
+        record = self.record[:self.step_count + 1].copy()
+
+        if self.replay_window is None:
+            self.replay_window = ReplayWindow(record)
+        else:
+            self.replay_window.reset_record(record)
+
+        if self.replay_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
+            self.replay_window.setWindowState(
+                self.replay_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized
+                | QtCore.Qt.WindowState.WindowActive)
+        self.replay_window.show()
+        self.replay_window.activateWindow()
+        self.replay_window.raise_()
 
     def keyPressEvent(self, event):
         if self.isProcessing:
@@ -370,7 +440,7 @@ class TestWindow(QtWidgets.QMainWindow):
         else:
             super().keyPressEvent(event)  # 其他键交给父类处理
 
-    def process_input(self, direction):
+    def process_input(self, direction:str):
         if self.result.get(direction.lower(), None) is None:
             return
         self.isProcessing = True  # 设置标志防止进一步的输入
@@ -398,7 +468,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.gameframe.setFocus()
         self.isProcessing = False
 
-    def one_step(self, move):
+    def one_step(self, move: str):
         text_list = []
         is_zh = (SingletonConfig().config['language'] == 'zh')
         for key, value in self.result.items():
@@ -408,7 +478,7 @@ class TestWindow(QtWidgets.QMainWindow):
                 text_list.append(f"{key[0].upper()}: {value}")
         text_list.append('')
         best_move = list(self.result.keys())[0]
-        if self.result[best_move] == 0:
+        if not self.result[best_move] or isinstance(self.result[best_move], str):
             return
         if self.result[move.lower()] is not None and self.result[move.lower()] / self.result[best_move] == 1:
             self.gameframe.combo += 1
@@ -437,6 +507,7 @@ class TestWindow(QtWidgets.QMainWindow):
                 text_list.append(f'one-step loss: {1 - loss:.4f}, goodness of fit: {self.gameframe.goodness_of_fit:.4f}')
                 text_list.append(f"You pressed {move}. But the best move is **{best_move.capitalize()}**")
         self.text_display.add_text(text_list)
+        self.record_replay(move)
 
     @staticmethod
     def evaluation_of_performance(loss):
@@ -453,6 +524,24 @@ class TestWindow(QtWidgets.QMainWindow):
         else:
             text = "**Terrible!**"
         return text
+
+    def record_replay(self, direction: str):
+        direct = {'Left': 0, 'Right': 1, 'Up': 2, 'Down': 3}[direction.capitalize()]
+        encoded = self.encode(direct, self.gameframe.newtile_pos, self.gameframe.newtile - 1)
+        success_rates = []
+        for d in ('left', 'right', 'up', 'down'):
+            rate = self.result[d]
+            if isinstance(rate, (int, float)):
+                success_rates.append(np.uint32(rate * 4e9))
+            else:
+                success_rates.append(np.uint32(0))
+        self.record[self.step_count] = (self.record[self.step_count][0], encoded, *success_rates)
+        self.step_count += 1
+        self.record[self.step_count][0] = self.gameframe.board_encoded
+
+    @staticmethod
+    def encode(a, b, c):
+        return np.uint8(((a << 5) | (b << 1) | c) & 0xFF)
 
 
 if __name__ == "__main__":
