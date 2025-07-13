@@ -1093,7 +1093,8 @@ class PowerUpGrid(QtWidgets.QFrame):
         def on_animation_finished():
             self.animation_group = None
             for frame in anim_frames:
-                frame.deleteLater()
+                if frame:
+                    frame.deleteLater()
 
             sub_board = self.parent_window.gameframe.board[i:i + 2, j:j + 2].copy()
             rotated_sub_board = [
