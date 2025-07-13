@@ -221,7 +221,7 @@ def generate_process(
             pivots_list = [pivots] * len(length_factors_list)
 
         # 生成新的棋盘状态
-        if False:#len(d0) < segment_size:
+        if len(d0) < segment_size:
             t0 = time.time()
 
             if len(d0) < 10000 or arr_init[0] in (np.uint64(0xffff00000000ffff), np.uint64(0x000f000f000fffff)) or \

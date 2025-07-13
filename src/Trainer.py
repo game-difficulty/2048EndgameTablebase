@@ -581,6 +581,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         else:
             self.results_label.setText('')
             self.result = dict()
+            self.isProcessing = False
         self.gameframe.setFocus()
 
     def _show_results(self, result:dict, state:str):
@@ -603,6 +604,8 @@ class TrainWindow(QtWidgets.QMainWindow):
         if self.ai_state:
             steps_per_second = SingletonConfig().config['demo_speed'] / 10
             self.ai_timer.singleShot(int(1000 / steps_per_second), self.one_step)
+
+        self.isProcessing = False
 
     def manual_mode_update_results(self):
         self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
@@ -717,7 +720,6 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gameframe.do_move(direction)
         self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
         self.read_results()
-        self.isProcessing = False
 
     def handle_step(self):
         if self.played_length == 0 or self.record_loaded is None:
@@ -742,7 +744,6 @@ class TrainWindow(QtWidgets.QMainWindow):
                 if self.recording_state:
                     self.record_current_state(move)
                 self.read_results()
-                self.isProcessing = False
 
     def toggle_demo(self):
         if not self.ai_state and not self.playing_record_state:
@@ -878,8 +879,8 @@ class TrainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event):
         self.ai_state = False
         self.Demo.setText(self.tr('Demo'))
-        try: np.array(self.gameframe.history, dtype='uint64, uint32').tofile(fr'C:\Users\Administrator\Desktop\record\0')
-        except:pass
+        # try: np.array(self.gameframe.history, dtype='uint64, uint32').tofile(fr'C:\Users\Administrator\Desktop\record\0')
+        # except:pass
         self.gameframe.history = []
         event.accept()
 
