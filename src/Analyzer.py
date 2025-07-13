@@ -4,8 +4,8 @@ from collections import defaultdict
 import numpy as np
 from numpy.typing import NDArray
 from PyQt5 import QtCore, QtWidgets, QtGui
-
-from BoardMover import SingletonBoardMover
+import BoardMover as bm
+import Variants.vBoardMover as vbm
 from BookReader import BookReaderDispatcher
 from Settings import TwoLevelComboBox, SingleLevelComboBox
 import Config
@@ -36,8 +36,8 @@ class Analyzer:
         self.target = target
         self.n_large_tiles = self.pattern_map[pattern][0]
 
-        self.bm = SingletonBoardMover(1)
-        self.vbm = SingletonBoardMover(3)
+        self.bm = bm
+        self.vbm = vbm
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
         bookfile_path_list = Config.SingletonConfig().config['filepath_map'].get(full_pattern, [])
         self.book_reader.dispatch(bookfile_path_list, pattern, target)
