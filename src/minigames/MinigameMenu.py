@@ -434,7 +434,7 @@ class MinigamesMainWindow(QtWidgets.QMainWindow):
 
 class PreloadThread(QtCore.QThread):
     def run(self):
-        from AIPlayer import EvilGen  # , BoardMover
+        from AIPlayer import EvilGen
         board = np.array([[0, 0, 2, 2],
                           [0, 0, 2, 4],
                           [32, 2, 8, 16],

@@ -130,7 +130,14 @@ class MinigameSquareFrame(SquareFrame):
     def animate_appear(self, r, c, value):
         """数字块出现动画"""
         if self._check_animation_running(r, c):
-            return
+            for anim_id in (1,0):
+                anim = self.active_animations.pop((r, c, anim_id), None)
+                if anim:
+                    try:
+                        anim.setCurrentTime(anim.duration())
+                        anim.deleteLater()
+                    except RuntimeError:  # wrapped C/C++ object of type QParallelAnimationGroup has been deleted
+                        continue
 
         if self.frames[r][c]:
             self.frames[r][c].deleteLater()
