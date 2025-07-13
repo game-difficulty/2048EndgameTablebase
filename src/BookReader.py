@@ -5,12 +5,12 @@ from typing import Callable, Dict, Tuple, Union, List, Optional
 import numpy as np
 from numpy.typing import NDArray
 
-from BoardMover import SingletonBoardMover, BoardMover
 from BookReaderAD import BookReaderAD
 from Calculator import re_self
 from Config import SingletonConfig, formation_info
 from TrieCompressor import trie_decompress_search
-from Variants.vBoardMover import VBoardMover
+import Variants.vBoardMover as vbm
+import BoardMover as bm
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 ToFindFunc = Callable[[np.uint64], np.uint64]
@@ -18,14 +18,12 @@ SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
 
 
 class BookReader:
-    bm: BoardMover = SingletonBoardMover(1)
-    vbm: VBoardMover = SingletonBoardMover(3)
     last_operation = ('none', 'none', lambda x: x)
 
     @staticmethod
     def move_on_dic(board: np.typing.NDArray, pattern: str, target: str, pattern_full: str, pos: str = '0'
                     ) -> Dict[str, Union[str, float, int]]:
-        bm = BookReader.bm if pattern not in ('2x4', '3x3', '3x4') else BookReader.vbm
+        bm_ = bm if pattern not in ('2x4', '3x3', '3x4') else vbm
         nums_adjust, pattern_check_func, to_find_func, success_check_func, _ = \
             formation_info.get(pattern, [0, None, re_self, None, None])
         path_list = SingletonConfig().config['filepath_map'].get(pattern_full, [])
@@ -47,11 +45,11 @@ class BookReader:
             for operation in [BookReader.last_operation] + BookReader.gen_all_mirror(pattern):
                 rotation, flip, operation_func = operation
                 t_board = operation_func(board)
-                encoded = np.uint64(bm.encode_board(t_board))
+                encoded = np.uint64(bm_.encode_board(t_board))
                 if pattern_check_func(encoded):
                     BookReader.last_operation = operation
                     results = BookReader.get_best_move(path, f'{pattern_full}_{int(nums)}.book', encoded,
-                                                       pattern_check_func, bm, to_find_func)
+                                                       pattern_check_func, bm_, to_find_func)
                     adjusted = {BookReader.adjust_direction(flip, rotation, direction): success_rate
                                 for direction, success_rate in results.items()}
                     float_items = {k: round(v, 10) for k, v in adjusted.items() if isinstance(v, (int, float))}
@@ -81,7 +79,7 @@ class BookReader:
 
     @staticmethod
     def get_best_move(pathname: str, filename: str, board: np.uint64, pattern_check_func: PatternCheckFunc,
-                      bm: BoardMover, to_find_func: ToFindFunc) -> Dict[str, Optional[float]]:
+                      bm_, to_find_func: ToFindFunc) -> Dict[str, Optional[float]]:
         result = {'down': None, 'right': None, 'left': None, 'up': None}
         fullpath = os.path.join(pathname, filename.replace('.book', '.z'))
         if os.path.exists(fullpath):
@@ -91,7 +89,7 @@ class BookReader:
         else:
             ind, segments = None, None
 
-        for newt, d in zip(bm.move_all_dir(board), ('left', 'right', 'up', 'down')):
+        for newt, d in zip(bm_.move_all_dir(board), ('left', 'right', 'up', 'down')):
             newt = np.uint64(newt)
             if newt != board and pattern_check_func(newt):
                 result[d] = BookReader.find_value(pathname, filename, to_find_func(newt), ind, segments)
@@ -136,6 +134,7 @@ class BookReader:
             ind = np.fromfile(path + 'i', dtype='uint8,uint32')
             segments = np.fromfile(path + 's', dtype='uint32,uint64')
             return trie_decompress_search(path, search_key, ind, segments)
+        return None
 
     @staticmethod
     def find_value_in_binary(pathname: str, filename: str, search_key: np.uint64) -> Union[int, float, str]:
@@ -183,14 +182,13 @@ class BookReader:
                     offset = random_record_index * record_size
                     file.seek(offset)
                     state = struct.unpack('QI', file.read(record_size))[0]
-                    return np.uint64(BookReader.bm.gen_new_num(np.uint64(state),
+                    return np.uint64(bm.gen_new_num(np.uint64(state),
                                                                SingletonConfig().config['4_spawn_rate'])[0])
         return np.uint64(0)
 
 
 class BookReaderDispatcher:
     _book_reader: BookReader = BookReader
-    bm: BoardMover = SingletonBoardMover(1)
 
     def __init__(self):
         self.book_reader_ad: BookReaderAD | None = None

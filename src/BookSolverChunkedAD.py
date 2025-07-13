@@ -1,23 +1,24 @@
 import os
-import time
 import shutil
+import time
 from typing import Callable, Tuple
 
 import numpy as np
-from numpy.typing import NDArray
+import psutil
 from numba import njit, prange
 from numba import types
 from numba.typed import Dict
-import psutil
+from numpy.typing import NDArray
 
 import Config
-from BoardMover import BoardMover
-from BoardMoverAD import MaskedBoardMover
-from BoardMaskerAD import BoardMasker
-from Config import SingletonConfig
-from LzmaCompressor import compress_with_7z, decompress_with_7z
+from BoardMaskerAD import ParamType
+from BoardMoverAD import decode_board, reverse
 from BookSolverAD import remove_died_ad, create_index_ad, \
     solve_optimal_success_rate, solve_optimal_success_rate_arr, replace_val, dict_fromfile, expand_ad, dict_tofile
+from Config import SingletonConfig
+from LzmaCompressor import compress_with_7z, decompress_with_7z
+from BookSolverADUtils import (dict_to_structured_array1, dict_to_structured_array2, dict_to_structured_array3,
+                               get_array_view10, get_array_view11, get_array_view2, get_array_view3)
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
@@ -60,21 +61,24 @@ def recalculate_process_ad_c(
         book_dict2: BookDictType,
         _1: IndexDictType,
         ind_dict2: IndexDictType,
+        tiles_combinations_dict,
+        permutation_dict, 
+        param:ParamType,
         pattern_check_func: PatternCheckFunc,
         sym_func: SymFindFunc,
         steps: int,
         pathname: str,
-        bm: BoardMover,
-        mbm: MaskedBoardMover,
-        lm: BoardMasker,
         spawn_rate4: float = 0.1
 ) -> None:
     started = False
     deletion_threshold = np.uint32(SingletonConfig().config.get('deletion_threshold', 0.0) * 4e9)
-    ini_board_sum = np.sum(mbm.decode_board(arr_init[0]))
+    ini_board_sum = np.sum(decode_board(arr_init[0]))
     indind_dict1, indind_dict2 = None, None
     match_dict = None
     global _timer, _counter
+
+    permutation_arr = dict_to_structured_array2(permutation_dict)
+    tiles_combinations_arr = dict_to_structured_array3(tiles_combinations_dict)
 
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
@@ -92,7 +96,7 @@ def recalculate_process_ad_c(
             decompress_with_7z(pathname + str(i) + '.7z')
         d0 = np.fromfile(pathname + str(i), dtype=np.uint64)
 
-        book_dict0, ind_dict0 = expand_ad(d0, lm, original_board_sum, False)
+        book_dict0, ind_dict0 = expand_ad(d0, original_board_sum, tiles_combinations_arr, param, False)
         ind_dict0_keys = write_ind(ind_dict0, pathname, i)
         del d0, book_dict0, ind_dict0
 
@@ -103,7 +107,8 @@ def recalculate_process_ad_c(
             indind_dict2 = create_index_ad(ind_dict2)
 
         # 出4
-        iter_ind_dict4(ind_dict0_keys, lm, book_dict2, ind_dict2, indind_dict2, match_dict, bm, mbm, original_board_sum,
+        iter_ind_dict4(ind_dict0_keys, book_dict2, ind_dict2, indind_dict2, match_dict,
+                       tiles_combinations_arr, permutation_arr, param, original_board_sum,
                        pattern_check_func, sym_func, spawn_rate4, pathname, i)
         if deletion_threshold > 0:
             remove_died_ad(book_dict2, ind_dict2, deletion_threshold)
@@ -114,8 +119,9 @@ def recalculate_process_ad_c(
         book_dict1, ind_dict1 = dict_fromfile(pathname, i + 1)
         remove_died_ad(book_dict1, ind_dict1)
         indind_dict1 = create_index_ad(ind_dict1)
-        iter_ind_dict2(pathname, i, ind_dict0_keys, book_dict1, ind_dict1, indind_dict1, match_dict, bm, mbm, lm,
-                       original_board_sum, pattern_check_func, sym_func, spawn_rate4)
+        iter_ind_dict2(pathname, i, ind_dict0_keys, book_dict1, ind_dict1, indind_dict1, match_dict,
+                       tiles_combinations_arr, permutation_arr, param, original_board_sum,
+                       pattern_check_func, sym_func, spawn_rate4)
 
         os.rename(pathname + str(i) + 'bt', pathname + str(i) + 'b')
 
@@ -131,9 +137,9 @@ def recalculate_process_ad_c(
         _timer, _counter = 0.0, 0
 
 
-def iter_ind_dict4(ind_dict0_keys: list, lm: BoardMasker, book_dict2, ind_dict2, indind_dict2,
-                   match_dict, bm, mbm, original_board_sum, pattern_check_func, sym_func, spawn_rate4,
-                   path, step):
+def iter_ind_dict4(ind_dict0_keys: list, book_dict2, ind_dict2, indind_dict2,
+                   match_dict, tiles_combinations_dict, permutation_dict, param,
+                   original_board_sum, pattern_check_func, sym_func, spawn_rate4, path, step):
     """
     将输入字典拆分计算出4成功率
     chunk_length: 每个切片的最大长度
@@ -144,11 +150,11 @@ def iter_ind_dict4(ind_dict0_keys: list, lm: BoardMasker, book_dict2, ind_dict2,
     for count_32k in ind_dict0_keys:
         positions_array = np.fromfile(os.path.join(folder, f"{count_32k}.i"), dtype='uint64')
         if count_32k < 0:
-            derive_size = int(factorials[-count_32k - 2] // factorials[lm.num_free_32k])
+            derive_size = int(factorials[-count_32k - 2] // factorials[param.num_free_32k])
         elif count_32k > 15:
-            derive_size = int(factorials[count_32k - 16] // factorials[lm.num_free_32k])
+            derive_size = int(factorials[count_32k - 16] // factorials[param.num_free_32k])
         else:
-            derive_size = int(factorials[count_32k] // factorials[lm.num_free_32k])
+            derive_size = int(factorials[count_32k] // factorials[param.num_free_32k])
 
         # 剩余可用物理内存（单位：字节）
         mem = psutil.virtual_memory()
@@ -164,9 +170,13 @@ def iter_ind_dict4(ind_dict0_keys: list, lm: BoardMasker, book_dict2, ind_dict2,
             # 这里需要赋0，后面计算结果直接相加
             book_chunk = np.zeros((len(positions_chunk), derive_size), dtype=np.uint32)
 
-            recalculate_ad_c(count_32k, positions_chunk, book_chunk, book_dict2, ind_dict2, indind_dict2,
-                         match_dict, bm, mbm, lm, original_board_sum, pattern_check_func, sym_func, False,
-                         spawn_rate4)
+            book_arr2 = dict_to_structured_array1(book_dict2)
+            ind_arr2 = dict_to_structured_array1(ind_dict2)
+            indind_arr2 = dict_to_structured_array1(indind_dict2)
+
+            recalculate_ad_c(count_32k, positions_chunk, book_chunk, book_arr2, ind_arr2, indind_arr2,
+                             match_dict, tiles_combinations_dict, permutation_dict, param, original_board_sum,
+                             pattern_check_func, sym_func, False, spawn_rate4)
             t1 = time.time()
             if t1 > t0:
                 logger.debug(f'step {step}, gen4, count_32k {count_32k}, chunk {start_idx // chunk_length}, '
@@ -182,8 +192,8 @@ def iter_ind_dict4(ind_dict0_keys: list, lm: BoardMasker, book_dict2, ind_dict2,
 
 
 def iter_ind_dict2(path: str, step: int, ind_dict0_keys: list, book_dict1, ind_dict1, indind_dict1,
-                   match_dict, bm, mbm, lm, original_board_sum, pattern_check_func, sym_func,
-                   spawn_rate4):
+                   match_dict, tiles_combinations_dict, permutation_dict, param,
+                   original_board_sum, pattern_check_func, sym_func, spawn_rate4):
     """
     以迭代器方式分块读取成功率文件用于分块回算
     """
@@ -216,11 +226,14 @@ def iter_ind_dict2(path: str, step: int, ind_dict0_keys: list, book_dict1, ind_d
                 ).reshape(len(positions_chunk), derive_size)
 
                 t0 = time.time()
-                # 提取对应索引块
 
-                recalculate_ad_c(count_32k, positions_chunk, book_chunk, book_dict1, ind_dict1, indind_dict1,
-                             match_dict, bm, mbm, lm, original_board_sum, pattern_check_func, sym_func, True,
-                             spawn_rate4)
+                book_arr1 = dict_to_structured_array1(book_dict1)
+                ind_arr1 = dict_to_structured_array1(ind_dict1)
+                indind_arr1 = dict_to_structured_array1(indind_dict1)
+
+                recalculate_ad_c(count_32k, positions_chunk, book_chunk, book_arr1, ind_arr1, indind_arr1 ,
+                                 match_dict, tiles_combinations_dict, permutation_dict, param, original_board_sum,
+                                 pattern_check_func, sym_func, True, spawn_rate4)
                 t1 = time.time()
                 if t1 > t0:
                     logger.debug(f'step {step}, gen2, count_32k {count_32k}, chunk {start_idx // chunk_length}, '
@@ -241,7 +254,7 @@ def write_ind(ind_dict: IndexDictType, path: str, step: int) -> list:
     if os.path.exists(folder):
         shutil.rmtree(folder)
     os.makedirs(folder, exist_ok=True)
-    for k,v in ind_dict.items():
+    for k, v in ind_dict.items():
         if len(v) > 0:
             v.tofile(os.path.join(folder, f"{k}.i"))
             ind_dict0_keys.append(k)
@@ -254,9 +267,9 @@ def recalculate_ad_c(
         positions_chunk: ValueType2, book_chunk: ValueType1,
         book_dict: BookDictType, ind_dict: IndexDictType, indind_dict: IndexIndexDictType,
         match_dict: MatchDictType,
-        bm: BoardMover,
-        mbm: MaskedBoardMover,
-        lm: BoardMasker,
+        tiles_combinations_dict,
+        permutation_dict, 
+        param:ParamType,
         original_board_sum: np.uint32,
         pattern_check_func: PatternCheckFunc,
         sym_func: SymFindFunc,
@@ -264,15 +277,17 @@ def recalculate_ad_c(
         spawn_rate4: float = 0.1
 ):
     pos_rev = np.array([0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15], dtype=np.uint8)
+
+    book_mat = get_array_view11(book_dict, count_32k, np.uint32)
+    ind_arr = get_array_view10(ind_dict, count_32k, np.uint64)
+    indind_arr = get_array_view10(indind_dict, count_32k, np.uint32)
+
     derive_size = len(book_chunk[0])
 
     match_index, match_mat = match_dict.setdefault(
         np.uint32(derive_size), (np.full(33331, np.uint64(0xffffffffffffffff), dtype=np.uint64),
-                      np.zeros((33331, derive_size), dtype=np.uint16)))
+                                 np.zeros((33331, derive_size), dtype=np.uint16)))
 
-    book_mat = book_dict.setdefault(count_32k, np.empty((0, derive_size), dtype=np.uint32))
-    ind_arr = ind_dict.setdefault(count_32k, np.empty(0, dtype=np.uint64))
-    indind_arr = indind_dict.setdefault(count_32k, np.empty(0, dtype=np.uint32))
     if is_gen2_step:
         new_value, probability = np.uint64(1), 1 - spawn_rate4
         board_sum = original_board_sum + np.uint32(2)
@@ -296,10 +311,11 @@ def recalculate_ad_c(
                 for i in range(16):  # 遍历所有位置
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
                         empty_slots += 1
-                        optimal_success_rate = solve_optimal_success_rate(t, new_value, mbm, i, board_sum,
-                                                                          pattern_check_func, sym_func, bm,
-                                                                          count_32k, lm, book_dict, ind_dict,
-                                                                          indind_dict, book_mat, ind_arr, indind_arr)
+                        optimal_success_rate = solve_optimal_success_rate(t, new_value, i, board_sum,
+                                                                          pattern_check_func, sym_func,
+                                                                          count_32k, book_dict, ind_dict,
+                                                                          indind_dict, book_mat, ind_arr, indind_arr,
+                                                                          tiles_combinations_dict, param)
 
                         success_probability += optimal_success_rate
                 if is_gen2_step:
@@ -310,7 +326,7 @@ def recalculate_ad_c(
             else:
                 t = positions_chunk[k]
                 rep_t, rep_v = replace_val(t)
-                rep_t_rev = bm.reverse(rep_t)
+                rep_t_rev = reverse(rep_t)
                 success_probability = np.zeros(derive_size, dtype=np.float64)
                 empty_slots = 0
 
@@ -318,13 +334,15 @@ def recalculate_ad_c(
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
                         empty_slots += 1
                         optimal_success_rate = \
-                            solve_optimal_success_rate_arr(t, new_value, i, rep_t, rep_t_rev, pos_rev, mbm, derive_size,
-                                                           pattern_check_func, sym_func, bm, rep_v, count_32k, book_dict,
-                                                           lm, ind_dict, indind_dict, board_sum,
-                                                           match_index, match_mat, book_mat, ind_arr, indind_arr)
+                            solve_optimal_success_rate_arr(t, new_value, i, rep_t, rep_t_rev, pos_rev, derive_size,
+                                                           pattern_check_func, sym_func, rep_v, count_32k, book_dict,
+                                                           ind_dict, indind_dict, board_sum,
+                                                           match_index, match_mat, book_mat, ind_arr, indind_arr,
+                                                           tiles_combinations_dict, permutation_dict, param)
 
                         success_probability += optimal_success_rate
                 if is_gen2_step:
                     book_chunk[k] = book_chunk[k] * spawn_rate4 + success_probability * probability / empty_slots
                 else:
                     book_chunk[k] = success_probability / empty_slots
+

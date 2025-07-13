@@ -4,7 +4,7 @@ import numpy as np
 from numba import int32, types, uint64, from_dtype, float32, uint8, njit
 from numba.experimental import jitclass
 
-from BoardMover import BoardMoverWithScore
+from BoardMover import reverse, s_move_board, encode_board, s_gen_new_num, decode_board
 from BookReader import BookReaderDispatcher
 from Config import SingletonConfig
 
@@ -99,7 +99,6 @@ spec = {
     'board': types.Array(int32, 2, 'C'),  # board是二维整数数组
     'diffs': int32[:],
     'diffs2': int32[:],
-    'bm': BoardMoverWithScore.class_type.instance_type,  # type: ignore
     'cache': Cache.class_type.instance_type,  # type: ignore
     'node': uint64,
     'min_prob': float32,
@@ -115,7 +114,6 @@ class AIPlayer:
         self.max_d = 3
         self.best_operation = 0
         self.board: np.ndarray = board
-        self.bm = BoardMoverWithScore()
         self.cache = Cache()
         self.diffs, self.diffs2 = _diffs, _diffs2
         self.node = 0
@@ -130,7 +128,7 @@ class AIPlayer:
 
     def evaluate(self, s):
         self.node += 1
-        s_reverse = self.bm.reverse(s)
+        s_reverse = reverse(s)
         diffv1, diffv2, diffh1, diffh2 = np.int32(0), np.int32(0), np.int32(0), np.int32(0)
         for i in range(4):
             l1 = (s >> np.uint64(16 * i)) & np.uint64(0xFFFF)
@@ -160,7 +158,7 @@ class AIPlayer:
     def search0(self, b):
         best = -131072
         for d in [1, 3, 4, 2]:
-            t, score = self.bm.move_board(b, d)
+            t, score = s_move_board(b, d)
             if t == b:
                 continue
             score = max(0, (score >> 1) - 8) if score < 1000 else (1000 if score < 2000 else score * 2)
@@ -176,7 +174,7 @@ class AIPlayer:
         self.cache.clear()
         self.best_operation = 0
         self.max_d = depth
-        self.dispatcher(self.bm.encode_board(self.board))
+        self.dispatcher(encode_board(self.board))
 
     def dispatcher(self, board: np.uint64):
         self.node = 0
@@ -203,16 +201,16 @@ class AIPlayer:
                     self.max_d += 1
                     self.dispatcher(board)
 
-            board, score = self.bm.move_board(board, self.best_operation)
+            board, score = s_move_board(board, self.best_operation)
             step += 1
-            board, empty_slots, _, __ = self.bm.gen_new_num(board)
+            board, empty_slots, _, __ = s_gen_new_num(board)
             if step % 100 == 0:
-                # print(self.bm.decode_board(board))
+                # print(decode_board(board))
                 # print('')
                 pass
             if empty_slots == 0:
                 break
-        return self.bm.decode_board(board)
+        return decode_board(board)
 
 
 @njit()
@@ -221,7 +219,7 @@ def search_ai_player(player, b, prob, depth):
         return player.search0(b)
     best = -131072
     for d in [1, 2, 3, 4]:
-        t, score = player.bm.move_board(b, d)
+        t, score = s_move_board(b, d)
         if t == b:
             continue
         # 若更改需同步修改 player.search0
@@ -469,7 +467,6 @@ spec = {
     'board': types.Array(int32, 2, 'C'),
     'diffs': int32[:],
     'diffs2': int32[:],
-    'bm': BoardMoverWithScore.class_type.instance_type,  # type: ignore
     'cache': Cache.class_type.instance_type,  # type: ignore
     'node': uint64,
 }
@@ -483,7 +480,6 @@ class EvilGen:
         self.hardest_pos = 0
         self.hardest_num = 1
         self.board = board
-        self.bm = BoardMoverWithScore()
         self.cache = Cache()
         self.diffs, self.diffs2 = _diffs, _diffs2
         self.node = 0
@@ -497,7 +493,7 @@ class EvilGen:
 
     def evaluate(self, s):
         self.node += 1
-        s_reverse = self.bm.reverse(s)
+        s_reverse = reverse(s)
         diffv1, diffv2, diffh1, diffh2 = np.int32(0), np.int32(0), np.int32(0), np.int32(0)
         for i in range(4):
             l1 = (s >> np.uint64(16 * i)) & np.uint64(0xFFFF)
@@ -511,7 +507,7 @@ class EvilGen:
     def start_search(self, depth=3):
         self.cache.clear()
         self.max_d = depth
-        self.dispatcher(self.bm.encode_board(self.board))
+        self.dispatcher(encode_board(self.board))
 
     def dispatcher(self, board):
         self.node = 0
@@ -519,7 +515,7 @@ class EvilGen:
 
     def gen_new_num(self, depth=5):
         self.start_search(depth)
-        board_encoded = self.bm.encode_board(self.board)
+        board_encoded = encode_board(self.board)
         return board_encoded | (self.hardest_num << (4 * self.hardest_pos)), 15 - self.hardest_pos, self.hardest_num
 
 
@@ -532,7 +528,7 @@ def search_evil_gen(evil_gen, b, depth):
                 t = np.uint64(b | (num << (4 * i)))
                 best = -131072
                 for d in [1, 2, 3, 4]:
-                    t1, score = evil_gen.bm.move_board(t, d)
+                    t1, score = s_move_board(t, d)
                     if t1 == t:
                         continue
                     temp = evil_gen.cache.lookup(t1, depth)
@@ -551,42 +547,48 @@ def search_evil_gen(evil_gen, b, depth):
 
 
 if __name__ == "__main__":
-    b1 = np.array([[   0 ,   4,  2,  0],
- [   2  ,  8 ,  0,  0],
- [   4  ,  2048 ,  16,  2],
- [   32  ,  4 ,   8,   4]], dtype=np.int32)
+    history = np.empty(10000, dtype='uint64,uint32')
+    score_sum = 0
+
+    b1 = np.array([[   0 ,   0,  0,  0],
+ [   2  ,  8 ,  2,  4],
+ [   16  ,  32 ,  8,  2],
+ [   32768  ,  16384 ,   8192,   16]], dtype=np.int32)
     print(b1)
     s1 = AIPlayer(b1)
-    #g1 = EvilGen(b1)
+    g1 = EvilGen(b1)
     s1.start_search(2)
-    #g1.gen_new_num(2)
-    b1 = np.uint64(s1.bm.encode_board(b1))
+    g1.gen_new_num(2)
+    b1 = np.uint64(encode_board(b1))
     print(s1.evaluate(b1))
     t_start = time.time()
-    for steps in range(5000):
-        s1.reset_board(s1.bm.decode_board(b1))
+    for steps in range(100):
+        history[steps] = b1, score_sum
+        s1.reset_board(decode_board(b1))
         t0 = time.time()
-        s1.start_search(6)
+        s1.start_search(3)
         # print(round(s1.cache.lookup_count / (time.time() - t0) / 1e6, 1), round(s1.node / (time.time() - t0) / 1e6, 1),
         #     s1.node, round(time.time() - t0, 4))
         print({0:None, 1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}[s1.best_operation])
         if not s1.best_operation:
             print((time.time() - t_start) / steps)
             break
-        b1 = np.uint64(s1.bm.move_board(b1, s1.best_operation)[0])
-        #g1.reset_board(g1.bm.decode_board(b1))
-        #b1 = np.uint64(g1.gen_new_num(5)[0]) if np.random.rand() > 0.99 else np.uint64(s1.bm.gen_new_num(b1)[0])
-        b1 = np.uint64(s1.bm.gen_new_num(b1)[0])
-        print(s1.bm.decode_board(b1))
+        b1, score = s_move_board(b1, s1.best_operation)
+        score_sum += score
+        b1 = np.uint64(b1)
+        g1.reset_board(decode_board(b1))
+        b1 = np.uint64(g1.gen_new_num(4)[0]) if (steps < 2) else np.uint64(s_gen_new_num(b1)[0])
 
-    be = np.uint64(s1.bm.encode_board(b1))
-    ai_dispatcher = Dispatcher(b1, be)
-    ai_dispatcher.reset(b1, be)
-    best_move = ai_dispatcher.dispatcher()
-    print(best_move)
+        print(decode_board(b1))
 
-    s1.start_search(5)
-    print({0:None, 1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}[s1.best_operation])
-    print(s1.node)
+    # be = np.uint64(encode_board(b1))
+    # ai_dispatcher = Dispatcher(b1, be)
+    # ai_dispatcher.reset(b1, be)
+    # best_move = ai_dispatcher.dispatcher()
+    # print(best_move)
+    #
+    # s1.start_search(5)
+    # print({0:None, 1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}[s1.best_operation])
+    # print(s1.node)
 
-
+    history[:steps + 1].tofile(fr'C:\Users\Administrator\Desktop\record\0')

@@ -14,8 +14,6 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         # 启动预加载线程
         self.preload_thread = PreloadThread()
         self.preload_thread.start()
-        # 残局库计算预热线程
-        self.warmup_thread = WarmupThread()
 
         super().__init__()
         self.setupUi()
@@ -198,11 +196,9 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.test_window.gameframe.update_all_frame(self.test_window.gameframe.board)
 
     def openSettingsWindow(self):
-        do_warm_up = False
         if self.settings_window is None:
             from Settings import SettingsWindow
             self.settings_window = SettingsWindow()
-            do_warm_up = True
         if self.settings_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
             self.settings_window.setWindowState(
                 self.settings_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized
@@ -211,8 +207,6 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.settings_window.activateWindow()
         self.show_and_center_window(self.settings_window)
         self.settings_window.raise_()
-        if do_warm_up:
-            self.warmup_thread.start()
 
     def openHelpWindow(self):
         if self.view_window is None:
@@ -257,53 +251,12 @@ class PreloadThread(QtCore.QThread):
     def run(self):
         from Config import SingletonConfig
         SingletonConfig()
-        from BoardMover import SingletonBoardMover
-        bm1 = SingletonBoardMover(1)
-        bm2 = SingletonBoardMover(2)
-        bm3 = SingletonBoardMover(3)
-        bm4 = SingletonBoardMover(4)
-        bm1.move_all_dir(np.uint64(0x010120342216902ac))
-        bm1.move_board(np.uint64(0x010120342216902ac), 2)
-        bm2.move_all_dir(np.uint64(0x010120342216902ac))
-        bm2.move_board(np.uint64(0x010120342216902ac), 2)
-        bm3.move_all_dir(np.uint64(0x010120342216902ac))
-        bm3.move_board(np.uint64(0x010120342216902ac), 2)
-        bm4.move_all_dir(np.uint64(0x010120342216902ac))
-        bm4.move_board(np.uint64(0x010120342216902ac), 2)
+        import BoardMover as bm
+        bm.move_all_dir(np.uint64(0x10120342216902ac))
+        for d in (1, 2, 3, 4):
+            bm.decode_board(bm.s_move_board(np.uint64(0x10120342216902ac), d)[0])
+        import Variants.vBoardMover as vbm
+        vbm.move_all_dir(np.uint64(0x10120342216ff2ac))
+        for d in (1, 2, 3, 4):
+            vbm.decode_board(vbm.s_move_board(np.uint64(0x10120342216ff2ac), d)[0])
         print("Preloading complete.")
-
-
-class WarmupThread(QtCore.QThread):
-    def run(self):
-        from BoardMover import SingletonBoardMover
-        from BookGenerator import gen_boards_simple, parallel_unique, gen_boards
-        from BookBuilder import final_situation_process
-        from BookSolver import recalculate, remove_died, create_index
-        from Calculator import is_L3_pattern, is_L3_success, re_self
-
-        bm = SingletonBoardMover(1)
-        arr = np.array([18442521884945818708, 18442521884945818960, 18442521884945827108,
-                        18442521884945830480, 18442521884945830948, 18442521884962599989,
-                        18442521884962600019, 18442521884962600244, 18442521884962600259,
-                        18442521884962604112, 18442521884962604352, 18442521884962608192,
-                        18442521884979373093, 18442521884979373138, 18442521884979373348,
-                        18442521884979373378], dtype=np.uint64)
-
-        gen_boards(arr, 9, 0, bm, is_L3_pattern, is_L3_success, re_self,
-                   np.empty(256, dtype='uint64'), np.empty(256, dtype='uint64'))
-
-        arr1, arr2 = gen_boards_simple(arr, 9, 0, bm, is_L3_pattern, is_L3_success, re_self, False, False)
-        arr1, arr2 = parallel_unique(arr1, 4), parallel_unique(arr2, 4)
-        arr0 = np.empty(len(arr), dtype='uint64,uint32')
-        arr0['f0'] = arr
-        expanded_arr1 = np.empty(len(arr1), dtype='uint64,uint32')
-        expanded_arr1['f0'] = arr1
-        expanded_arr2 = np.empty(len(arr2), dtype='uint64,uint32')
-        expanded_arr2['f0'] = arr2
-        arr1 = remove_died(final_situation_process(expanded_arr1, is_L3_success, 9, 0))
-        arr2 = remove_died(final_situation_process(expanded_arr2, is_L3_success, 9, 0))
-        ind1 = create_index(arr1)
-        ind2 = create_index(arr2)
-        recalculate(arr0, arr1, arr2, 9, 0, bm, is_L3_pattern, is_L3_success, re_self, ind1, ind2, True, 0.1)
-        del arr0, arr1, arr2
-        print("Warm-up complete.")

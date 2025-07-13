@@ -80,7 +80,7 @@ def parallel_unique(aux: NDArray[np.uint64], n: int) -> NDArray[np.uint64]:
         return _parallel_unique(aux, n)
 
 
-@njit(parallel=True)
+@njit(nogil=True, parallel=True, cache=True)
 def _parallel_unique(aux: NDArray[np.uint64], n: int) -> NDArray[np.uint64]:
     # 获取分段的大小
     step = len(aux) // n
@@ -120,7 +120,7 @@ def _parallel_unique(aux: NDArray[np.uint64], n: int) -> NDArray[np.uint64]:
     return result
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def largest_power_of_2(n):
     n = np.uint64(n)
     n |= n >> 1
@@ -132,7 +132,7 @@ def largest_power_of_2(n):
     return n + 1
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def _merge_deduplicate_all(arrays: List[NDArray], length: int = 0) -> NDArray:
     if len(arrays) == 1:
         return arrays[0]
@@ -167,7 +167,7 @@ def _merge_deduplicate_all(arrays: List[NDArray], length: int = 0) -> NDArray:
     return merged_array[:c]
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def binary_search(arr, x):
     left = 0
     right = len(arr)
@@ -237,17 +237,17 @@ def sort_array(arr: NDArray[np.uint64], pivots: NDArray[np.uint64] | None = None
         dll.parallel_sort(arr_ptr, arr.size, pivots_ptr, use_avx512)
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def hash_(board: np.uint64) -> np.uint64:
     return np.uint64((board ^ (board >> 27)) * 0x1A85EC53 + board >> 23)
 
 
-@njit(nogil=True, parallel=True)
+@njit(nogil=True, parallel=True, cache=True)
 def is_sorted(arr: NDArray) -> bool:
     return np.all(arr[:-1] < arr[1:])
 
 
-@njit(nogil=True, parallel=True)
+@njit(nogil=True, parallel=True, cache=True)
 def is_sorted2(arr: NDArray) -> bool:
     return np.all(arr[:-1] <= arr[1:])
 
@@ -265,7 +265,7 @@ def check_sorted(arr):
         return arr
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def merge_and_deduplicate(sorted_arr1: NDArray, sorted_arr2: NDArray) -> NDArray:
     # 结果数组的长度最多与两数组之和一样长
     unique_array = np.empty(len(sorted_arr1) + len(sorted_arr2), dtype=np.uint64)
@@ -301,7 +301,7 @@ def merge_and_deduplicate(sorted_arr1: NDArray, sorted_arr2: NDArray) -> NDArray
     return unique_array[:k]  # 调整数组大小以匹配实际元素数
 
 
-@njit(nogil=True, boundscheck=True, parallel=True)
+@njit(nogil=True, boundscheck=False, parallel=True, cache=True)
 def merge_inplace(arr: NDArray, segment_ends: NDArray, segment_starts: NDArray) -> NDArray:
     """
     将每一段有效数据依次合并到前一段末尾。

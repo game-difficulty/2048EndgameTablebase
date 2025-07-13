@@ -6,7 +6,8 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QEasingCurve, QTimer, QSize
 
 from AIPlayer import AIPlayer, Dispatcher, EvilGen
-from BoardMover import SingletonBoardMover, BoardMoverWithScore
+import Variants.vBoardMover as vbm
+import BoardMover as bm
 from Calculator import find_merge_positions, slide_distance
 from Config import SingletonConfig
 
@@ -349,8 +350,6 @@ class BaseBoardFrame(QtWidgets.QFrame):
         self.board = np.zeros((4, 4), dtype=np.int32)
         self.board_encoded = np.uint64(0)
         self.score = 0
-        self.mover: BoardMoverWithScore = SingletonBoardMover(2)
-        self.v_mover = SingletonBoardMover(4)
         self.history = []
 
         self.newtile_pos = 0
@@ -384,10 +383,10 @@ class BaseBoardFrame(QtWidgets.QFrame):
                 self.update_frame(values[i][j], i, j)
 
     def gen_new_num(self, do_anim=True):
-        self.board_encoded, _, new_tile_pos, val = self.mover.gen_new_num(
+        self.board_encoded, _, new_tile_pos, val = bm.s_gen_new_num(
             self.board_encoded, SingletonConfig().config['4_spawn_rate'])
         self.board_encoded = np.uint64(self.board_encoded)
-        self.board = self.mover.decode_board(self.board_encoded)
+        self.board = bm.decode_board(self.board_encoded)
         self.history.append((self.board_encoded, self.score))
         self.newtile_pos, self.newtile = new_tile_pos, val
         if do_anim:
@@ -399,10 +398,10 @@ class BaseBoardFrame(QtWidgets.QFrame):
                 timer.stop()
             self.game_square.cancel_all_animations()
             self.update_all_frame(self._last_values)
-        mover = self.mover if self.use_variant_mover == 0 else self.v_mover
+        mover = bm if self.use_variant_mover == 0 else vbm
         do_anim = SingletonConfig().config['do_animation']
         direct = {'Left': 1, 'Right': 2, 'Up': 3, 'Down': 4}[direction.capitalize()]
-        board_encoded_new, new_score = mover.move_board(self.board_encoded, direct)
+        board_encoded_new, new_score = mover.s_move_board(self.board_encoded, direct)
         board_encoded_new = np.uint64(board_encoded_new)
         if board_encoded_new != self.board_encoded:
             self.board_encoded = board_encoded_new
@@ -410,12 +409,12 @@ class BaseBoardFrame(QtWidgets.QFrame):
             current_values = self.board
             if do_gen:
                 self.gen_new_num(do_anim)
-            self.board = self.mover.decode_board(self.board_encoded)
+            self.board = bm.decode_board(self.board_encoded)
             if do_anim:
                 self.slide_tiles(current_values, direction)
                 self.timer2.singleShot(110, lambda: self.pop_merged(current_values, direction))
                 # 生成新数字之前的局面
-                self.timer3.singleShot(100, lambda: self.update_all_frame((self.mover.decode_board(board_encoded_new))))
+                self.timer3.singleShot(100, lambda: self.update_all_frame((bm.decode_board(board_encoded_new))))
             else:
                 self.update_all_frame(self.board)
             self._last_values = self.board.copy()
@@ -440,7 +439,7 @@ class BaseBoardFrame(QtWidgets.QFrame):
             self.history.pop()
             self.board_encoded, self.score = self.history[-1]
             self.board_encoded = np.uint64(self.board_encoded)
-            self.board = self.mover.decode_board(self.board_encoded)
+            self.board = bm.decode_board(self.board_encoded)
             self.update_all_frame(self.board)
 
     def set_use_variant(self, pattern: str = ''):
@@ -458,7 +457,7 @@ class GameFrame(BaseBoardFrame):
     def __init__(self, centralwidget=None):
         super(GameFrame, self).__init__(centralwidget)
         self.board_encoded, self.score, _ = SingletonConfig().config['game_state']
-        self.board = self.mover.decode_board(self.board_encoded)
+        self.board = bm.decode_board(self.board_encoded)
         self.died_when_ai_state = False
         self.ai_processing = False
 
@@ -476,10 +475,10 @@ class GameFrame(BaseBoardFrame):
             self.setup_new_game()
 
     def setup_new_game(self):
-        self.board_encoded = np.uint64(self.mover.gen_new_num(
-            self.mover.gen_new_num(np.uint64(0), SingletonConfig().config['4_spawn_rate'])[0],
+        self.board_encoded = np.uint64(bm.gen_new_num(
+            bm.gen_new_num(np.uint64(0), SingletonConfig().config['4_spawn_rate'])[0],
             SingletonConfig().config['4_spawn_rate'])[0])
-        self.board = self.mover.decode_board(self.board_encoded)
+        self.board = bm.decode_board(self.board_encoded)
         self.ai_thread.ai_player.board = self.board
         self.evil_gen.reset_board(self.board)
         self.update_all_frame(self.board)
@@ -505,13 +504,13 @@ class GameFrame(BaseBoardFrame):
 
     def gen_new_num(self, do_anim=True):
         if np.random.rand() > self.difficulty:
-            self.board_encoded, _, new_tile_pos, val = self.mover.gen_new_num(self.board_encoded,
+            self.board_encoded, _, new_tile_pos, val = bm.s_gen_new_num(self.board_encoded,
                                                                               SingletonConfig().config['4_spawn_rate'])
         else:
-            self.evil_gen.reset_board(self.mover.decode_board(self.board_encoded))
+            self.evil_gen.reset_board(bm.decode_board(self.board_encoded))
             self.board_encoded, new_tile_pos, val = self.evil_gen.gen_new_num(5)
         self.board_encoded = np.uint64(self.board_encoded)
-        self.board = self.mover.decode_board(self.board_encoded)
+        self.board = bm.decode_board(self.board_encoded)
         self.history.append((self.board_encoded, self.score))
         self.newtile_pos, self.newtile = new_tile_pos, val
         if do_anim:
@@ -530,7 +529,7 @@ class GameFrame(BaseBoardFrame):
                 abs(positions[0][0] - positions[0][1]) == 1 and direction.capitalize() in ('Up', 'Down')):
                     self.board[first_position] = 16384
                     self.board[second_position] = 16384
-                    self.board_encoded = np.uint64(self.mover.encode_board(self.board))
+                    self.board_encoded = np.uint64(bm.encode_board(self.board))
                     self.score += 32768
                     self.has_65k = True
 
@@ -586,7 +585,7 @@ class AIThread(QtCore.QThread):
         if self.is_mess():
             big_nums2 = (self.ai_player.board > 256).sum()
             depth = 5
-            if self.ai_player.check_corner(np.uint64(self.ai_player.bm.encode_board(self.ai_player.board))):
+            if self.ai_player.check_corner(np.uint64(bm.encode_board(self.ai_player.board))):
                 depth = 8
             self.ai_player.start_search(depth)
             while self.ai_player.node < 200000 * big_nums2 ** 2 and depth < 9:
@@ -620,7 +619,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.score_anims = []
 
         self.ai_timer = QTimer(self)
-        self.ai_dispatcher = Dispatcher(SingletonBoardMover(2).decode_board(np.uint64(0)), np.uint64(0))
+        self.ai_dispatcher = Dispatcher(bm.decode_board(np.uint64(0)), np.uint64(0))
 
         self.statusbar.showMessage(self.tr(
             "All features may be slow when used for the first time. Please be patient."), 8000)

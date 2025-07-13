@@ -6,12 +6,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 import Config
-from BoardMover import SingletonBoardMover, BoardMover
-from Variants.vBoardMover import VBoardMover
+import Variants.vBoardMover as vbm
+import BoardMover as bm
+from BookSolverADUtils import dict_to_structured_array2, dict_to_structured_array3
 from Config import SingletonConfig, formation_info, pattern_32k_tiles_map
 import Calculator
 from Calculator import re_self
-from BoardMaskerAD import init_masker
+from BoardMaskerAD import init_masker, mask_board, tile_sum_and_32k_count2, unmask_board
 from BookSolverAD import sym_like
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -22,8 +23,6 @@ logger = Config.logger
 
 
 class BookReaderAD:
-    bm: BoardMover = SingletonBoardMover(1)
-    vbm: VBoardMover = SingletonBoardMover(3)
     last_operation = ('none', 'none', lambda x: x)
 
     def __new__(cls, pattern: str, target: int):
@@ -37,11 +36,14 @@ class BookReaderAD:
         self.pattern = pattern
         self.target = target
         _, num_free_32k, pos_fixed_32k = pattern_32k_tiles_map[pattern]
-        self.lm = init_masker(num_free_32k, target, pos_fixed_32k)
+        self._permutation_dict, self._tiles_combinations_dict, self.param = init_masker(num_free_32k, target, pos_fixed_32k)
+
+        self.permutation_dict = dict_to_structured_array2(self._permutation_dict)
+        self.tiles_combinations_dict = dict_to_structured_array3(self._tiles_combinations_dict)
 
     def move_on_dic(self, board: np.typing.NDArray, pattern_full: str, pos: str = '0'
                     ) -> Dict[str, Union[str, float, int]]:
-        bm = self.bm if self.pattern not in ('2x4', '3x3', '3x4') else self.vbm
+        bm_ = bm if self.pattern not in ('2x4', '3x3', '3x4') else vbm
         nums_adjust, pattern_check_func, to_find_func, success_check_func, _ = \
             formation_info.get(self.pattern, [0, None, re_self, None, None])
         path_list = SingletonConfig().config['filepath_map'].get(pattern_full, [])
@@ -66,11 +68,11 @@ class BookReaderAD:
             for operation in [self.last_operation] + self.gen_all_mirror(self.pattern):
                 rotation, flip, operation_func = operation
                 t_board = operation_func(board)
-                encoded = np.uint64(bm.encode_board(t_board))
+                encoded = np.uint64(bm_.encode_board(t_board))
                 if pattern_check_func(encoded):
                     self.last_operation = operation
                     results = self.get_best_move(path, f'{pattern_full}_{int(nums)}b', encoded,
-                                                 pattern_check_func, bm, sym_func)
+                                                 pattern_check_func, bm_, sym_func)
                     adjusted = {self.adjust_direction(flip, rotation, direction): success_rate
                                 for direction, success_rate in results.items()}
                     float_items = {k: round(v, 10) for k, v in adjusted.items() if isinstance(v, (int, float))}
@@ -99,9 +101,9 @@ class BookReaderAD:
         return operations if pattern != 'LL' else operations[:4]
 
     def get_best_move(self, pathname: str, filename: str, board: np.uint64, pattern_check_func: PatternCheckFunc,
-                      bm: BoardMover, sym_func: SymFindFunc) -> Dict[str, Optional[float]]:
+                      bm_, sym_func: SymFindFunc) -> Dict[str, Optional[float]]:
         result = {'down': None, 'right': None, 'left': None, 'up': None}
-        for newt, d in zip(bm.move_all_dir(board), ('left', 'right', 'up', 'down')):
+        for newt, d in zip(bm_.move_all_dir(board), ('left', 'right', 'up', 'down')):
             newt = np.uint64(newt)
             if newt != board and pattern_check_func(newt):
                 result[d] = self.find_value(pathname, filename, newt, sym_func)
@@ -141,20 +143,21 @@ class BookReaderAD:
 
     def find_value(self, pathname: str, filename: str, board: np.uint64, sym_func: SymFindFunc
                    ) -> Union[int, float, str, None]:
-        total_sum, count_32k, pos_32k = self.lm.tile_sum_and_32k_count2(board)
+        total_sum, count_32k, pos_32k = tile_sum_and_32k_count2(board, self.param)
         original_board_sum = self.sum_board(board)
-        large_tiles_sum = original_board_sum - total_sum - ((self.lm.num_free_32k + self.lm.num_fixed_32k) << 15)
-        tiles_combinations = self.lm.tiles_combinations_dict.get((np.uint8(large_tiles_sum >> 6),
-                                                                  np.uint8(count_32k - self.lm.num_free_32k)), None)
+        large_tiles_sum = original_board_sum - total_sum - ((self.param.num_free_32k + self.param.num_fixed_32k) << 15)
+        tiles_combinations = self._tiles_combinations_dict.get((np.uint8(large_tiles_sum >> 6),
+                                                                  np.uint8(count_32k - self.param.num_free_32k)), None)
+
         if tiles_combinations is not None:
             if len(tiles_combinations) > 2 and tiles_combinations[0] == tiles_combinations[2]:
                 count_32k = count_32k - 3 + 16
-                masked_board = np.uint64(self.lm.mask_board(board, 7))
+                masked_board = np.uint64(mask_board(board, 7))
             elif len(tiles_combinations) > 1 and tiles_combinations[0] == tiles_combinations[1]:
                 count_32k = -count_32k
-                masked_board = np.uint64(self.lm.mask_board(board, tiles_combinations[0] + 1))
+                masked_board = np.uint64(mask_board(board, tiles_combinations[0] + 1))
             else:
-                masked_board = np.uint64(self.lm.mask_board(board, 6))
+                masked_board = np.uint64(mask_board(board, 6))
             search_key, symm_index = sym_func(masked_board)
             search_key = np.uint64(search_key)
         else:
@@ -175,13 +178,24 @@ class BookReaderAD:
             return '?'
 
         if tiles_combinations is not None:
-            board_derived = self.lm.unmask_board(search_key, np.uint32(original_board_sum))
+            board_derived = unmask_board(search_key, np.uint32(original_board_sum), self.tiles_combinations_dict,
+                                         self.permutation_dict, self.param)
             symm_board = sym_like(board, symm_index)
             ind2 = np.searchsorted(board_derived, symm_board)
             with open(book_filepath, 'rb') as f:
                 record_size = struct.calcsize('I')
                 f.seek((ind2 + ind * len(board_derived)) * record_size)
-                return struct.unpack('I', f.read(record_size))[0] / 4e9
+                try:
+                    data = f.read(record_size)
+                    return struct.unpack('I', data)[0] / 4e9
+                except Exception as e:
+                    logger.critical(f"Full exception: {e}")
+                    logger.critical(f"Current file position: {f.tell()}")
+                    logger.critical(bm.decode_board(board))
+                    logger.critical(f'book filepath: {book_filepath}')
+                    logger.critical('This file may be corrupted.')
+                    return '?'
+
         else:
             with open(book_filepath, 'rb') as f:
                 record_size = struct.calcsize('I')
@@ -238,7 +252,7 @@ class BookReaderAD:
                     offset = random_record_index * record_size
                     file.seek(offset)
                     state = struct.unpack('Q', file.read(record_size))[0]
-                    return np.uint64(BookReaderAD.bm.gen_new_num(np.uint64(state),
+                    return np.uint64(bm.gen_new_num(np.uint64(state),
                                                                  SingletonConfig().config['4_spawn_rate'])[0])
         return np.uint64(0)
 

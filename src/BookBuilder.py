@@ -9,8 +9,7 @@ from numba import types
 from numba.typed import Dict
 
 import Calculator
-from BoardMover import SingletonBoardMover, BoardMover
-from BoardMoverAD import MaskedBoardMover
+from BoardMover import move_all_dir
 from Config import SingletonConfig, formation_info, pattern_32k_tiles_map
 from BookSolver import recalculate_process, remove_died, expand, keep_only_optimal_branches
 from BookGenerator import generate_process
@@ -42,7 +41,6 @@ def gen_lookup_table_big(
         steps: int,
         pathname: str,
         docheck_step: int,
-        bm: BoardMover,
         isfree: bool = False,
         spawn_rate4: float = 0.1,
 ) -> None:
@@ -58,25 +56,25 @@ def gen_lookup_table_big(
     if not SingletonConfig().config.get('advanced_algo', False):
         #  存在断点重连的情况下，以下d0, d1均可能为None
         started, d0, d1 = generate_process(arr_init, pattern_check_func, success_check_func, to_find_func, target,
-                                           position, steps, pathname, docheck_step, bm, isfree)
+                                           position, steps, pathname, docheck_step, isfree)
         d0, d1 = final_steps(started, d0, d1, pathname, steps, success_check_func, target, position)
         recalculate_process(d0, d1, pattern_check_func, success_check_func, to_find_func, target, position, steps,
-                            pathname, docheck_step, bm, spawn_rate4)  # 这里的最后的两个book d0,d1就是回算的d1,d2
+                            pathname, docheck_step, spawn_rate4)  # 这里的最后的两个book d0,d1就是回算的d1,d2
     else:
-        mbm = MaskedBoardMover()
         _, num_free_32k, pos_fixed_32k = pattern_32k_tiles_map[pattern]
-        lm = init_masker(num_free_32k, target, pos_fixed_32k)
+        permutation_dict, tiles_combinations_dict, param = init_masker(num_free_32k, target, pos_fixed_32k)
         started, d0, d1 = generate_process_ad(arr_init, pattern_check_func, to_find_func, sym_func,
-                                              steps, pathname, mbm, lm, isfree)
+                                              steps, pathname, isfree, tiles_combinations_dict, param)
         b1, b2, i1, i2 = final_steps_ad(started, pathname, steps)
+
         if SingletonConfig().config['chunked_solve']:
-            recalculate_process_ad_c(arr_init, b1, b2, i1, i2, pattern_check_func, sym_func, steps,
-                                   pathname, bm, mbm, lm, spawn_rate4)
+            recalculate_process_ad_c(arr_init, b1, b2, i1, i2, tiles_combinations_dict, permutation_dict, param,
+                                     pattern_check_func, sym_func, steps, pathname, spawn_rate4)
         else:
-            recalculate_process_ad(arr_init, b1, b2, i1, i2, pattern_check_func, sym_func, steps,
-                                   pathname, bm, mbm, lm, spawn_rate4)
+            recalculate_process_ad(arr_init, b1, b2, i1, i2, tiles_combinations_dict, permutation_dict, param,
+                                   pattern_check_func, sym_func, steps, pathname, spawn_rate4)
     if SingletonConfig().config['optimal_branch_only']:
-        keep_only_optimal_branches(pattern_check_func, to_find_func, steps, pathname, bm)
+        keep_only_optimal_branches(pattern_check_func, to_find_func, steps, pathname)
 
 
 def save_config_to_txt(output_path):
@@ -126,7 +124,7 @@ def final_steps_ad(started: bool,
     return None, None, None, None
 
 
-@njit(nogil=True, parallel=True)
+@njit(nogil=True, parallel=True, cache=True)
 def final_situation_process(expanded_arr0: NDArray[[np.uint64, np.uint32]],
                             success_check_func: SuccessCheckFunc, target: int, position: int
                             ) -> NDArray[[np.uint64, np.uint32]]:
@@ -164,9 +162,9 @@ def generate_free_inits(target: int, t32ks: int, t2s: int) -> NDArray[np.uint64]
     generated = np.unique(generated[:c])
     g2 = np.empty(10810800, dtype=np.uint64)
     c = 0
-    bm = SingletonBoardMover(1)
+
     for b in generated:
-        for nb in bm.move_all_dir(b):
+        for nb in move_all_dir(b):
             nb = np.uint64(nb)
             if nb == np.uint64(Calculator.min_all_symm(nb)):
                 g2[c] = nb
@@ -175,7 +173,6 @@ def generate_free_inits(target: int, t32ks: int, t2s: int) -> NDArray[np.uint64]
 
 
 def start_build(pattern: str, target: int, position: int, pathname: str) -> bool:
-    bm = SingletonBoardMover(1)
     spawn_rate4 = SingletonConfig().config['4_spawn_rate']
     if pattern[:4] == 'free':
         if pattern[-1] != 'w':
@@ -185,7 +182,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
             arr_init = generate_free_inits(target, 15 - free_tiles, free_tiles)
             gen_lookup_table_big(pattern, arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
                                  Calculator.min_all_symm, target, 0, steps,
-                                 pathname, docheck_step, bm, isfree=True, spawn_rate4=spawn_rate4)
+                                 pathname, docheck_step, isfree=True, spawn_rate4=spawn_rate4)
         else:
             # freew定式pos参数设为1，配合is_free_success中的设置
             steps = int(2 ** target / 2 + 24)
@@ -194,7 +191,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
             arr_init = generate_free_inits(0, 16 - free_tiles, free_tiles - 1)
             gen_lookup_table_big(pattern, arr_init, Calculator.is_free_pattern, Calculator.is_free_success,
                                  Calculator.min_all_symm, target, 1, steps,
-                                 pathname, docheck_step, bm, isfree=True, spawn_rate4=spawn_rate4)
+                                 pathname, docheck_step, isfree=True, spawn_rate4=spawn_rate4)
     else:
         steps = int(2 ** target / 2 + {'444': 96, '4431': 64, 'LL': 48, 'L3': 36, '4441': 48, '4432': 48, '4442': 48,
                                        '442': 36, 't': 36, '4432f': 48, '4432ff': 48, 'L3t': 48, '4442f': 48,
@@ -209,7 +206,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
         else:
             isfree = False
         gen_lookup_table_big(pattern, ini, pattern_check_func, success_check_func, to_find_func,
-                             target, position, steps, pathname, docheck_step, bm, isfree, spawn_rate4)
+                             target, position, steps, pathname, docheck_step, isfree, spawn_rate4)
     return True
 
 

@@ -10,6 +10,7 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QIcon, QCursor, QKeySequence
 from PyQt5.QtWidgets import QShortcut, QApplication
 
+import BoardMover as bm
 from BookReader import BookReaderDispatcher
 from Calculator import ReverseUD, ReverseLR, RotateR, RotateL
 from Config import SingletonConfig, category_info
@@ -65,7 +66,7 @@ class TrainFrame(BaseBoardFrame):
                 pos = 15 - new_tile_pos
                 if ((self.board_encoded >> np.uint64(4 * pos)) & np.uint64(0xF)) == np.uint64(0):
                     board = self.board_encoded | np.uint64(val) << np.uint64(4 * pos)
-                    result = self.parents.book_reader.move_on_dic(self.mover.decode_board(board),
+                    result = self.parents.book_reader.move_on_dic(bm.decode_board(board),
                                                  self.parents.pattern_settings[0], self.parents.pattern_settings[1],
                                             self.parents.current_pattern, self.parents.pattern_settings[2])
                     if isinstance(result, dict):
@@ -113,7 +114,7 @@ class TrainFrame(BaseBoardFrame):
                 num_to_set = 0 if num_to_set == 1 else num_to_set
             self.update_frame(num_to_set, i, j)
             self.board[i][j] = num_to_set
-            self.board_encoded = np.uint64(self.mover.encode_board(self.board))
+            self.board_encoded = np.uint64(bm.encode_board(self.board))
             return
         else:  # 手动模式
             if self.board[i][j] == 0:
@@ -127,7 +128,7 @@ class TrainFrame(BaseBoardFrame):
                     return
                 self.update_frame(num_to_set, i, j)
                 self.board[i][j] = num_to_set
-                self.board_encoded = np.uint64(self.mover.encode_board(self.board))
+                self.board_encoded = np.uint64(bm.encode_board(self.board))
                 self.history.append((self.board_encoded, self.score))
                 self.update_results.emit()
                 return
@@ -140,7 +141,7 @@ class TrainFrame(BaseBoardFrame):
 
     def set_new_num(self, new_tile_pos, val, do_anim=True):
         self.board_encoded |= np.uint64(val) << np.uint64(4 * (15 - new_tile_pos))
-        self.board = self.mover.decode_board(self.board_encoded)
+        self.board = bm.decode_board(self.board_encoded)
         self.history.append((self.board_encoded, self.score))
         self.newtile_pos, self.newtile = new_tile_pos, val
         if do_anim:
@@ -149,14 +150,14 @@ class TrainFrame(BaseBoardFrame):
     def set_to_variant(self, pattern: str):
         self.set_use_variant(pattern)
         self.board_encoded = self.v_inits[pattern][0]
-        self.board = self.mover.decode_board(self.board_encoded)
+        self.board = bm.decode_board(self.board_encoded)
         self.update_all_frame(self.board)
 
     def set_to_44(self):
         if self.use_variant_mover != 0:
             self.set_use_variant('')
             self.board = np.zeros((4, 4), dtype=np.int32)
-            self.board_encoded = self.mover.encode_board(self.board)
+            self.board_encoded = bm.encode_board(self.board)
             self.update_all_frame(self.board)
 
 
@@ -661,7 +662,7 @@ class TrainWindow(QtWidgets.QMainWindow):
 
     def textbox_reset_board(self):
         self.gameframe.board_encoded = np.uint64(int(self.board_state.text(), 16))
-        self.gameframe.board = self.gameframe.mover.decode_board(self.gameframe.board_encoded)
+        self.gameframe.board = bm.decode_board(self.gameframe.board_encoded)
         self.gameframe._last_values = self.gameframe.board.copy()
         self.gameframe.update_all_frame(self.gameframe.board)
         self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
@@ -896,7 +897,7 @@ class ReaderWorker(QtCore.QThread):
         self.current_pattern = current_pattern
 
     def run(self):
-        board = self.book_reader.bm.decode_board(self.board_state)
+        board = bm.decode_board(self.board_state)
         result = self.book_reader.move_on_dic(board, self.pattern_settings[0], self.pattern_settings[1],
                                               self.current_pattern, self.pattern_settings[2])
         state = ''

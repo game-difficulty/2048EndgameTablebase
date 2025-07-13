@@ -6,7 +6,7 @@ import numpy as np
 from numpy.typing import NDArray
 from numba import njit, prange
 
-from BoardMover import BoardMover
+from BoardMover import move_all_dir
 import Config
 from Config import SingletonConfig
 from TrieCompressor import trie_compress_progress
@@ -53,7 +53,6 @@ def recalculate_process(
         steps: int,
         pathname: str,
         docheck_step: int,
-        bm: BoardMover,
         spawn_rate4: float = 0.1
 ) -> None:
     started = False
@@ -90,7 +89,7 @@ def recalculate_process(
         t1 = time.time()
 
         # 回算
-        d0 = recalculate(expanded_arr0, d1, d2, target, position, bm, pattern_check_func, success_check_func,
+        d0 = recalculate(expanded_arr0, d1, d2, target, position, pattern_check_func, success_check_func,
                          to_find_func, ind1, ind2, i > docheck_step, spawn_rate4)
         length = len(d0)
         t2 = time.time()
@@ -119,7 +118,7 @@ def recalculate_process(
             d1, d2 = d0, d1
 
 
-@njit(nogil=True, parallel=True)
+@njit(nogil=True, parallel=True, cache=True)
 def expand(arr: NDArray[np.uint64]) -> NDArray[[np.uint64, np.uint32]]:
     arr0 = np.empty(len(arr), dtype='uint64,uint32')
     for i in prange(len(arr)):
@@ -127,7 +126,7 @@ def expand(arr: NDArray[np.uint64]) -> NDArray[[np.uint64, np.uint32]]:
     return arr0
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def remove_died(
         arr: NDArray[[np.uint64, np.uint32]], deletion_threshold: np.uint32 = 0
 ) -> NDArray[[np.uint64, np.uint32]]:
@@ -140,7 +139,7 @@ def remove_died(
     return arr[:count]
 
 
-@njit(parallel=True, nogil=True)
+@njit(parallel=True, nogil=True, cache=True)
 def create_index(arr: NDArray[[np.uint64, np.uint32]]
                  ) -> NDArray[np.uint32] | None:
     """
@@ -162,7 +161,7 @@ def create_index(arr: NDArray[[np.uint64, np.uint32]]
     return ind1
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def binary_search_arr(arr: NDArray[[np.uint64, np.uint32]],
                       target: np.uint64, low: np.uint32 | None = None, high: np.uint32 | None = None) -> np.uint32:
     if low is None:
@@ -182,7 +181,7 @@ def binary_search_arr(arr: NDArray[[np.uint64, np.uint32]],
     return np.uint32(0)  # 如果没有找到匹配项
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def search_arr(arr: NDArray[[np.uint64, np.uint32]],
                b: np.uint64, ind: NDArray[np.uint32] | None) -> np.uint32:
     """
@@ -195,14 +194,13 @@ def search_arr(arr: NDArray[[np.uint64, np.uint32]],
     return binary_search_arr(arr, b, low, high)
 
 
-@njit(parallel=True, nogil=True)
+@njit(parallel=True, nogil=True, cache=True)
 def recalculate(
         arr0: NDArray[[np.uint64, np.uint32]],
         arr1: NDArray[[np.uint64, np.uint32]],
         arr2: NDArray[[np.uint64, np.uint32]],
         target: int,
         position: int,
-        bm: BoardMover,
         pattern_check_func: PatternCheckFunc,
         success_check_func: SuccessCheckFunc,
         to_find_func: ToFindFunc,
@@ -239,7 +237,7 @@ def recalculate(
                     new_value, probability = 1, 1 - spawn_rate4
                     t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
                     optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
-                    for newt in bm.move_all_dir(t_gen):
+                    for newt in move_all_dir(t_gen):
                         if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
                             # 获取移动后的面板成功概率
                             optimal_success_rate = max(optimal_success_rate, search_arr(
@@ -251,7 +249,7 @@ def recalculate(
                     new_value, probability = 2, spawn_rate4
                     t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
                     optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
-                    for newt in bm.move_all_dir(t_gen):
+                    for newt in move_all_dir(t_gen):
                         if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
                             # 获取移动后的面板成功概率
                             optimal_success_rate = max(optimal_success_rate, search_arr(
@@ -283,11 +281,10 @@ def tofile_(data, path):
         os.remove(path)
 
 
-@njit(parallel=True, nogil=True)
+@njit(parallel=True, nogil=True, cache=True)
 def find_optimal_branches(
         arr0: NDArray[[np.uint64, np.uint32]],
         arr1: NDArray[[np.uint64, np.uint32]],
-        bm: BoardMover,
         result: NDArray[bool],
         pattern_check_func: PatternCheckFunc,
         to_find_func: ToFindFunc,
@@ -302,8 +299,8 @@ def find_optimal_branches(
                 if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
                     t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
                     optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
-                    optimal_pos_index = 0
-                    for newt in bm.move_all_dir(t_gen):
+                    optimal_pos_index = np.uint64(0)
+                    for newt in move_all_dir(t_gen):
                         if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
                             # 获取移动后的面板成功概率
                             success_rate, pos_index = search_arr2(arr1, to_find_func(newt), ind1)
@@ -314,7 +311,7 @@ def find_optimal_branches(
     return result
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def binary_search_arr2(arr: NDArray[[np.uint64, np.uint32]],
                        target: np.uint64, low: np.uint32 | None = None, high: np.uint32 | None = None
                        ) -> Tuple[np.uint32, np.uint64]:
@@ -336,7 +333,7 @@ def binary_search_arr2(arr: NDArray[[np.uint64, np.uint32]],
     return np.uint32(0), np.uint64(0)  # 如果没有找到匹配项
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def search_arr2(arr: NDArray[[np.uint64, np.uint32]],
                 b: np.uint64, ind: NDArray[np.uint32] | None) -> Tuple[np.uint32, np.uint64]:
     """
@@ -350,11 +347,11 @@ def search_arr2(arr: NDArray[[np.uint64, np.uint32]],
 
 
 def keep_only_optimal_branches(
-        pattern_check_func: PatternCheckFunc,
-        to_find_func: ToFindFunc,
-        steps: int,
-        pathname: str,
-        bm: BoardMover):
+    pattern_check_func: PatternCheckFunc,
+    to_find_func: ToFindFunc,
+    steps: int,
+    pathname: str,
+    ):
     d0, d1 = None, None
     started = False
     for i in range(0, steps):
@@ -365,9 +362,9 @@ def keep_only_optimal_branches(
             d2 = np.fromfile(pathname + str(i) + '.book', dtype='uint64,uint32')
             ind = create_index(d2)
             is_in_optimal_branches_mask = np.zeros(len(d2), dtype='bool')
-            is_in_optimal_branches_mask = find_optimal_branches(d0, d2, bm, is_in_optimal_branches_mask,
+            is_in_optimal_branches_mask = find_optimal_branches(d0, d2, is_in_optimal_branches_mask,
                                                                 pattern_check_func, to_find_func, ind, 2)
-            is_in_optimal_branches_mask = find_optimal_branches(d1, d2, bm, is_in_optimal_branches_mask,
+            is_in_optimal_branches_mask = find_optimal_branches(d1, d2, is_in_optimal_branches_mask,
                                                                 pattern_check_func, to_find_func, ind, 1)
             d2 = d2[is_in_optimal_branches_mask].copy()
             d2.tofile(pathname + str(i) + '.book')
@@ -409,6 +406,5 @@ def handle_restart_opt_only(i, started, d0, d1, pathname):
 #     from Calculator import is_free_pattern, min_all_symm
 #     from BoardMover import BoardMover
 #
-#     bm0 = BoardMover()
 #     keep_only_optimal_branches(is_free_pattern, min_all_symm, 536,
-#                                r"D:\2048calculates\table\free10w_1024 - 副本\free10w_1024_", bm0)
+#                                r"D:\2048calculates\table\free10w_1024 - 副本\free10w_1024_")

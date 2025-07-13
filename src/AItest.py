@@ -4,12 +4,11 @@ import os
 import numpy as np
 
 from AIPlayer import AIPlayer, Dispatcher
-from BoardMover import BoardMoverWithScore
+from BoardMover import gen_new_num, decode_board, encode_board, s_move_board
 
 
 class AItest:
     def __init__(self, path):
-        self.mover = BoardMoverWithScore()
         self.board_encoded, self.board, self.ai_player, self.score, self.history = self.new_game()
         self.ai_dispatcher = Dispatcher(self.board, self.board_encoded)
         self.died = False
@@ -43,8 +42,8 @@ class AItest:
         return {1:'Left', 2:'Right', 3:'Up', 4:'Down'}.get(self.ai_player.best_operation,'')
 
     def new_game(self):
-        board_encoded = np.uint64(self.mover.gen_new_num(self.mover.gen_new_num(np.uint64(0))[0])[0])
-        board = self.mover.decode_board(board_encoded)
+        board_encoded = np.uint64(0x010021004313ba86)# np.uint64(gen_new_num(gen_new_num(np.uint64(0))[0])[0])
+        board = decode_board(board_encoded)
         ai_player = AIPlayer(board)
         score = 0
         history = [(board_encoded, score, 0)]
@@ -66,19 +65,19 @@ class AItest:
     def do_move(self, direction):
         # print(direction)
         direction = {'Left':1, 'Right':2, 'Up':3, 'Down':4}[direction.capitalize()]
-        board_encoded_new, new_score = self.mover.move_board(self.board_encoded, direction)
+        board_encoded_new, new_score = s_move_board(self.board_encoded, direction)
         board_encoded_new = np.uint64(board_encoded_new)
         if board_encoded_new != self.board_encoded:
             self.board_encoded = board_encoded_new
-            self.board = self.mover.decode_board(self.board_encoded)
+            self.board = decode_board(self.board_encoded)
             self.score += new_score
             self.gen_new_num()
         else:
             self.died = True
 
     def gen_new_num(self):
-        self.board_encoded = np.uint64(self.mover.gen_new_num(self.board_encoded)[0])
-        self.board = self.mover.decode_board(self.board_encoded)
+        self.board_encoded = np.uint64(gen_new_num(self.board_encoded)[0])
+        self.board = decode_board(self.board_encoded)
         self.history.append((self.board_encoded, self.score, self.ai_dispatcher.last_operator))
 
     def play(self):
@@ -92,7 +91,7 @@ class AItest:
                 if positions[0][0] == positions[0][1] and abs(positions[1][0] - positions[1][1]) == 1:
                     self.board[first_position] = 16384
                     self.board[second_position] = 16384
-                    self.board_encoded = np.uint64(self.mover.encode_board(self.board))
+                    self.board_encoded = np.uint64(encode_board(self.board))
                     self.score += 32768
                     self.do_move('Right')
                     self.died = False
@@ -100,12 +99,12 @@ class AItest:
                 elif positions[1][0] == positions[1][1] and abs(positions[0][0] - positions[0][1]) == 1:
                     self.board[first_position] = 16384
                     self.board[second_position] = 16384
-                    self.board_encoded = np.uint64(self.mover.encode_board(self.board))
+                    self.board_encoded = np.uint64(encode_board(self.board))
                     self.score += 32768
                     self.do_move('Down')
                     self.died = False
 
-            if len(self.history) % 931==128:
+            if len(self.history) % 110 == 20:#931==128:
                 print(self.score)
                 print(self.board)
                 print(os.path.basename(self.path))
@@ -166,5 +165,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-    #run_test(0)
+    # main()
+    run_test(0)

@@ -8,6 +8,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit
 from PyQt5.QtGui import QIcon
 
+import BoardMover as bm
 from BookReader import BookReaderDispatcher
 from Config import SingletonConfig, category_info
 from Gamer import BaseBoardFrame
@@ -118,14 +119,14 @@ class TestFrame(BaseBoardFrame):
     def set_to_variant(self, pattern: str):
         self.set_use_variant(pattern)
         self.board_encoded = self.v_inits[pattern][0]
-        self.board = self.mover.decode_board(self.board_encoded)
+        self.board = bm.decode_board(self.board_encoded)
         self.update_all_frame(self.board)
 
     def set_to_44(self):
         if self.use_variant_mover != 0:
             self.set_use_variant('')
             self.board = np.zeros((4, 4), dtype=np.int32)
-            self.board_encoded = self.mover.encode_board(self.board)
+            self.board_encoded = bm.encode_board(self.board)
             self.update_all_frame(self.board)
 
 
@@ -326,7 +327,7 @@ class TestWindow(QtWidgets.QMainWindow):
         path_list = SingletonConfig().config['filepath_map'].get(self.full_pattern, [])
         self.gameframe.board_encoded = self.book_reader.get_random_state(path_list, self.full_pattern)
         self.gameframe.board_encoded = self.do_random_rotate(self.gameframe.board_encoded)
-        self.gameframe.board = self.book_reader.bm.decode_board(self.gameframe.board_encoded)
+        self.gameframe.board = bm.decode_board(self.gameframe.board_encoded)
         self.result = self.book_reader.move_on_dic(
             self.gameframe.board, self.pattern[0], self.pattern[1], self.full_pattern)
         self.text_display.lines[0] = self.text_display.lines[0].replace(self.tr(' Loading...'), '')
@@ -342,7 +343,7 @@ class TestWindow(QtWidgets.QMainWindow):
         path_found, path_list = self.init()
         if path_found:
             self.gameframe.board_encoded = np.uint64(int(self.board_state.text(), 16))
-            self.gameframe.board = self.gameframe.mover.decode_board(self.gameframe.board_encoded)
+            self.gameframe.board = bm.decode_board(self.gameframe.board_encoded)
             self.result = self.book_reader.move_on_dic(self.gameframe.board, self.pattern[0], self.pattern[1],
                                                  self.full_pattern)
             self.text_display.lines[0] = self.text_display.lines[0].replace(self.tr(' Loading...'), '')
@@ -357,7 +358,7 @@ class TestWindow(QtWidgets.QMainWindow):
 
     def do_random_rotate(self, board_encoded):
         operation_func = random.choice(self.book_reader._book_reader.gen_all_mirror(self.pattern[0]))[-1]
-        return np.uint64(self.book_reader.bm.encode_board(operation_func(self.book_reader.bm.decode_board(board_encoded))))
+        return np.uint64(bm.encode_board(operation_func(bm.decode_board(board_encoded))))
 
     def save_logs_to_file(self):
         if self.full_pattern is None or len(self.text_display.lines) < 1:

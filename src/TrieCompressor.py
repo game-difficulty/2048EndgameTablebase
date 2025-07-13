@@ -1,12 +1,13 @@
-import os
-import lzma
 import concurrent.futures
-from typing import List
-from multiprocessing import shared_memory, freeze_support
+import lzma
+import os
 import time
+from multiprocessing import shared_memory, freeze_support
+from typing import List
 
 import numpy as np
 from numba import njit
+from numpy.typing import NDArray
 
 
 @njit(nogil=True)
@@ -492,16 +493,16 @@ def _restore_book(ind0, ind1, ind2, ind3, book):
                     book['f1'][i3_start:i3_end] = f1_val
     return book
 
-
+#
 # if __name__ == '__main__':
 #     freeze_support()
 #     t0 = time.time()
 #     trie_compress_progress(r"Q:\tables\test", "444_2048_0_354.book")
 #     print(time.time() - t0)
-
+#
 # if __name__ == '__main__':
-# restore_book(r"D:\2048calculates\table\free10w_1024\free10w_1024_399.z\free10w_1024_399.")
-
+#     restore_book(r"D:\2048calculates\table\free10w_1024\free10w_1024_399.z\free10w_1024_399.")
+#
 # if __name__ == '__main__':
 #     _path = r'D:/2048calculates/table/free8w_128\free8w_128_40.z\free8w_128_40.'
 #     _ind = np.fromfile(_path + 'i', dtype='uint8,uint32')

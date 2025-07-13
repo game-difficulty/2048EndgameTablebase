@@ -10,12 +10,13 @@ from numba import types
 from numpy.typing import NDArray
 
 import Config
-from BoardMaskerAD import BoardMasker
-from BoardMoverAD import MaskedBoardMover
+from BoardMaskerAD import validate, tile_sum_and_32k_count3, mask_board, ParamType
+from BoardMoverAD import m_move_all_dir, decode_board
 from BookGenerator import predict_next_length_factor_quadratic, largest_power_of_2, \
     update_hashmap_length, validate_length_and_balance, log_performance, initialize_parameters, update_parameters, \
     harmonic_mean_by_column, update_parameters_big, allocate_seg
 from BookGeneratorUtils import merge_inplace, hash_, parallel_unique, sort_array, concatenate, merge_deduplicate_all
+from BookSolverADUtils import dict_to_structured_array3, get_array_view3
 from Config import SingletonConfig  #, clock
 from LzmaCompressor import compress_with_7z
 
@@ -33,14 +34,14 @@ ValueType2 = types.uint8[:]
 
 @njit(nogil=True, parallel=True)
 def gen_boards_ad(arr0: NDArray[np.uint64],
-                  mbm: MaskedBoardMover,
                   pattern_check_func: PatternCheckFunc,
                   to_find_func: ToFindFunc,
                   sym_func: SymFindFunc,
                   hashmap1: NDArray[np.uint64],
                   hashmap2: NDArray[np.uint64],
-                  lm: BoardMasker,
                   original_board_sum: np.uint32,
+                  tiles_combinations_dict,
+                  param:ParamType, 
                   n: int = 8,
                   length_factor: float = 8,
                   isfree: bool = False
@@ -56,7 +57,7 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
     """
     # 初始化两个arr，分别对应填充数字2和4后的棋盘状态
     min_length = 99999999 if isfree else 69999999
-    length = max(min_length, int(len(arr0) * length_factor))
+    length = int(max(min_length, int(len(arr0) * length_factor)))
     arr1 = np.empty(length, dtype=np.uint64)
     arr2 = np.empty(length, dtype=np.uint64)
     starts = np.array([length // n * i for i in range(n)], dtype=np.uint64)
@@ -90,7 +91,7 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
                 for i in range(16):  # 遍历每个位置
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):
                         t1 = t | (np.uint64(1) << np.uint64(4 * i))  # 填充数字2
-                        for newt, mnt in mbm.move_all_dir(t1):
+                        for newt, mnt in m_move_all_dir(t1):
                             if newt == t1 or not pattern_check_func(newt):
                                 continue
                             newt, symm_index = sym_func(newt)
@@ -103,7 +104,8 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
                                 arr1[c1t] = newt
                                 c1t += 1
                                 continue
-                            is_valid, is_derived, derived_boards = derive(lm, newt, np.uint32(original_board_sum + 2))
+                            is_valid, is_derived, derived_boards = derive(
+                                newt, np.uint32(original_board_sum + 2), tiles_combinations_dict, param)
                             if not is_valid:
                                 continue
                             if not is_derived:
@@ -116,7 +118,7 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
                                     c1t += 1
 
                         t1 = t | (np.uint64(2) << np.uint64(4 * i))  # 填4
-                        for newt, mnt in mbm.move_all_dir(t1):
+                        for newt, mnt in m_move_all_dir(t1):
                             if newt == t1 or not pattern_check_func(newt):
                                 continue
                             newt, symm_index = sym_func(newt)
@@ -129,7 +131,8 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
                                 arr2[c2t] = newt
                                 c2t += 1
                                 continue
-                            is_valid, is_derived, derived_boards = derive(lm, newt, np.uint32(original_board_sum + 4))
+                            is_valid, is_derived, derived_boards = derive(
+                                newt, np.uint32(original_board_sum + 4), tiles_combinations_dict, param)
                             if not is_valid:
                                 continue
                             if not is_derived:
@@ -152,16 +155,16 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
 
 
 @njit(nogil=True, parallel=True)
-def validate_layer(arr: NDArray[np.uint64], lm: BoardMasker, original_board_sum: np.uint32):
+def validate_layer(arr: NDArray[np.uint64], original_board_sum: np.uint32, tiles_combinations_dict, param:ParamType):
     """每隔n步检查一次所有局面合法性"""
     valid = np.empty(len(arr), dtype=np.bool_)
     for i in prange(len(arr)):
-        valid[i] = lm.validate(arr[i], original_board_sum)
+        valid[i] = validate(arr[i], original_board_sum, tiles_combinations_dict, param)
     return arr[valid]
 
 
 @njit(nogil=True)
-def derive(lm: BoardMasker, board: np.uint64, original_board_sum: np.uint32) -> Tuple[bool, bool, NDArray[np.uint64]]:
+def derive(board: np.uint64, original_board_sum: np.uint32, tiles_combinations_dict, param:ParamType) -> Tuple[bool, bool, NDArray[np.uint64]]:
     """
     在tiles_combinations最小两个数字相等的前提下，暴露这两个tiles，返回全部可能组合
     第一个返回值是board是否合法，第二个返回值是是否derive，第三个返回值是全部可能组合（如有，否则为空数组）
@@ -170,33 +173,32 @@ def derive(lm: BoardMasker, board: np.uint64, original_board_sum: np.uint32) -> 
     # 1.1 正常 1.2 一次合出两个64
     # 2.1 不由3个64合并而来 2.2 由3个64合并而来，需要把剩下的64 mask掉
     """
-    total_sum, count_32k, pos_32k, board_, tile64_count = lm.tile_sum_and_32k_count3(board)
+    total_sum, count_32k, pos_32k, board_, tile64_count = tile_sum_and_32k_count3(board, param)
 
-    if total_sum >= lm.small_tile_sum_limit + 64:
+    if total_sum >= param.small_tile_sum_limit + 64:
         # 0
         return False, False, np.empty(0, dtype=np.uint64)
-    large_tiles_sum = original_board_sum - total_sum - ((lm.num_free_32k + lm.num_fixed_32k) << 15)
+    large_tiles_sum = original_board_sum - total_sum - ((param.num_free_32k + param.num_fixed_32k) << 15)
 
     # assert large_tiles_sum % 64 == 0
-    tiles_combinations = lm.tiles_combinations_dict.get((np.uint8(large_tiles_sum >> 6),
-                                                         np.uint8(count_32k - lm.num_free_32k)), None)
+    tiles_combinations = get_array_view3(tiles_combinations_dict, np.uint8(large_tiles_sum >> 6), np.uint8(count_32k - param.num_free_32k))  # tiles_combinations_dict.get((np.uint8(large_tiles_sum >> 6), np.uint8(count_32k - param.num_free_32k)), None)
     if tiles_combinations is None:
         # 0
         return False, False, np.empty(0, dtype=np.uint64)
-    if tiles_combinations[-1] == lm.target:
+    if tiles_combinations[-1] == param.target:
         # 4
         return False, False, np.empty(0, dtype=np.uint64)
-    if count_32k - lm.num_free_32k < 2:
+    if count_32k - param.num_free_32k < 2:
         # 2.1
         return True, False, np.empty(0, dtype=np.uint64)
 
     if tiles_combinations[0] == tiles_combinations[1]:
-        if total_sum >= lm.small_tile_sum_limit:
+        if total_sum >= param.small_tile_sum_limit:
             # 0
             return False, False, np.empty(0, dtype=np.uint64)
         if len(tiles_combinations) > 2 and tiles_combinations[0] == tiles_combinations[2]:
             # 3
-            if total_sum >= lm.small_tile_sum_limit - 64:
+            if total_sum >= param.small_tile_sum_limit - 64:
                 # 0
                 return False, False, np.empty(0, dtype=np.uint64)
             if tile64_count == 0:
@@ -272,9 +274,9 @@ def generate_process_ad(
         sym_func: SymFindFunc,
         steps: int,
         pathname: str,
-        mbm: MaskedBoardMover,
-        lm: BoardMasker,
-        isfree: bool
+        isfree: bool,
+        tiles_combinations_dict,
+        param:ParamType,
 ) -> Tuple[bool, NDArray[np.uint64], NDArray[np.uint64]]:
     started = False  # 是否进行了计算，如果是则需要进行final_steps处理最后一批局面
     d0, d1 = np.empty(0, dtype=np.uint64), np.empty(0, dtype=np.uint64)
@@ -283,9 +285,10 @@ def generate_process_ad(
     n = max(4, min(32, os.cpu_count()))  # 并行线程数
     length_factor, length_factors, length_factors_list, length_factors_list_path, \
         counts2, length_factor_multiplier, segment_size = initialize_parameters(n, pathname, isfree)
-    ini_board_sum = np.sum(mbm.decode_board(arr_init[0]))
+    ini_board_sum = np.sum(decode_board(arr_init[0]))
     for b in range(len(arr_init)):
-        arr_init[b] = lm.mask_board(arr_init[b])
+        arr_init[b] = mask_board(arr_init[b])
+    tiles_combinations_arr = dict_to_structured_array3(tiles_combinations_dict)
 
     # 从前向后遍历，生成新的棋盘状态并保存到相应的array中
     for i in range(1, steps - 1):
@@ -297,8 +300,6 @@ def generate_process_ad(
             pivots = d0[[len(d0) // 8 * i for i in range(1, 8)]] if len(d0) > 0 else np.zeros(7, dtype='uint64')
             pivots_list = [pivots] * len(length_factors_list)
 
-        small_tile_sum_limit = SingletonConfig().config.get('SmallTileSumLimit', 56)
-        lm.small_tile_sum_limit = small_tile_sum_limit
         board_sum = 2 * i + ini_board_sum - 2
 
         if len(d0) < segment_size:
@@ -311,8 +312,8 @@ def generate_process_ad(
                 hashmap1, hashmap2 = update_hashmap_length(hashmap1, d0), update_hashmap_length(hashmap2, d0)  # 初始化
 
             d1t, d2, hashmap1, hashmap2, counts1, counts2 = \
-                gen_boards_ad(d0, mbm, pattern_check_func, to_find_func, sym_func,
-                              hashmap1, hashmap2, lm, board_sum, n, length_factor, isfree)
+                gen_boards_ad(d0, pattern_check_func, to_find_func, sym_func,
+                              hashmap1, hashmap2, board_sum, tiles_combinations_arr, param, n, length_factor, isfree)
 
             validate_length_and_balance(d0, d2, d1t, counts1, counts2, length_factor, False)
 
@@ -352,9 +353,9 @@ def generate_process_ad(
                                       np.empty(largest_power_of_2(hashmap_max_length), dtype=np.uint64))  # 初始化
             (d1s, d2s, pivots_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2,
              t0, gen_time, t2) = \
-                gen_boards_big_ad(d0, mbm, lm, pattern_check_func, sym_func, to_find_func,
-                               pivots_list, hashmap1, hashmap2, board_sum, n, length_factors_list,
-                               length_factor_multiplier, isfree)
+                gen_boards_big_ad(d0, pattern_check_func, sym_func, to_find_func,
+                               pivots_list, hashmap1, hashmap2, board_sum, tiles_combinations_arr, param, n,
+                               length_factors_list, length_factor_multiplier, isfree)
 
             dedup_pivots = d0[np.arange(1, n) * len(d0) // n].copy() if len(d0) > 0 else \
                 (np.arange(1, n) * (1 << 50) // n).astype(np.uint64)
@@ -376,9 +377,9 @@ def generate_process_ad(
             np.savetxt(length_factors_list_path, length_factors_list, fmt='%.6f', delimiter=',')  # type: ignore
             length_factors = harmonic_mean_by_column(length_factors_list)
 
-        if (i + ini_board_sum % 64 // 2) % 32 == (small_tile_sum_limit // 2) % 32 + 1:
-            d0 = validate_layer(d0, lm, board_sum + 2)
-            d1 = validate_layer(d1, lm, board_sum + 4)
+        if (i + ini_board_sum % 64 // 2) % 32 == (param.small_tile_sum_limit // 2) % 32 + 1:
+            d0 = validate_layer(d0, board_sum + 2, tiles_combinations_arr, param)
+            d1 = validate_layer(d1, board_sum + 4, tiles_combinations_arr, param)
             logger.debug(f'validate step {i}')
         hashmap1.fill(0)
         d0.tofile(pathname + str(i))
@@ -390,8 +391,6 @@ def generate_process_ad(
 
 
 def gen_boards_big_ad(arr0: NDArray[np.uint64],
-                   mbm: MaskedBoardMover,
-                   lm: BoardMasker,
                    pattern_check_func: PatternCheckFunc,
                    sym_func: SymFindFunc,
                    to_find_func: ToFindFunc,
@@ -399,6 +398,8 @@ def gen_boards_big_ad(arr0: NDArray[np.uint64],
                    hashmap1: NDArray[np.uint64],
                    hashmap2: NDArray[np.uint64],
                    board_sum: np.uint32,
+                   tiles_combinations_arr,
+                   param:ParamType,
                    n: int,
                    length_factors_list: List[List[float]],
                    length_factor_multiplier: float = 1.5,
@@ -431,8 +432,8 @@ def gen_boards_big_ad(arr0: NDArray[np.uint64],
         length_factor *= length_factor_multiplier  # type: ignore
 
         arr1t, arr2t, hashmap1, hashmap2, counts1, counts2 = \
-            gen_boards_ad(arr0t, mbm, pattern_check_func, to_find_func, sym_func,
-                       hashmap1, hashmap2, lm, board_sum, n, length_factor, isfree)
+            gen_boards_ad(arr0t, pattern_check_func, to_find_func, sym_func,
+                       hashmap1, hashmap2, board_sum, tiles_combinations_arr, param, n, length_factor, isfree)
 
         validate_length_and_balance(arr0t, arr2t, arr1t, counts1, counts2, length_factor, True)
 
@@ -469,24 +470,22 @@ def gen_boards_big_ad(arr0: NDArray[np.uint64],
 if __name__ == '__main__':
     pass
     # from BoardMaskerAD import init_masker
-    # lm_ = init_masker(0, 12, np.array([0, 4], dtype=np.uint8))  # 4442-4096
-    # b_ = np.uint64(0x10ff31203fff2fff)
-    # r = lm_.unmask_board(b_, 69660-64)
-    #
-    # lm_ = init_masker(4, 12, np.array([], dtype=np.uint8))  # free12w
+    # 
+    # _d1,_d2,param = init_masker(4, 12, np.array([], dtype=np.uint8))  # free12w
     # b_ = np.uint64(0x1fff2fff002432ff)
-    # r = lm_.unmask_board(b_, 132838+64)
-    #
-    # lm_ = init_masker(2, 10, np.array([0, 4, 16, 20], dtype=np.uint8))  # t
-    # bm=BoardMover()
-    # _1,_2,r = derive(lm_,np.uint64(0x201033ffffffffff), 918+131072,bm,4,np.uint64(0x231035fff5ffffff),0)
+    # r = unmask_board(b_, 131072+1024+512+128+128+38,_d2,_d1,param)
+    # for bd in r:
+    #     print(decode_board(bd))
+    #     print()
+    # print(len(r))
+    # print(np.all(r[1:] > r[:-1]))
+    # 
+    # 
+    # _d1,_d2,param = init_masker(2, 10, np.array([0, 4, 16, 20], dtype=np.uint8))  # t
+    # _1,_2,r = derive(np.uint64(0x201033ffffffffff), 918+131072,_d2,param)
     # print(_1,_2)
-    # for i in r:
-    #     print(d(i))
-    #
+    # for bd in r:
+    #     print(decode_board(bd))
+    #     print()
     # print(len(r))
     # print(np.all(r[1:]>r[:-1]))
-    # # r.sort()
-    # for _,ii in enumerate(r):
-    #     print(bm.decode_board(ii))
-    #     print()

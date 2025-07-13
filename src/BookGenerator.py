@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 from numba import njit, prange
 import psutil
 
-from BoardMover import BoardMover
+from BoardMover import move_all_dir
 from BookGeneratorUtils import sort_array, parallel_unique, concatenate, merge_deduplicate_all, largest_power_of_2, \
     hash_, merge_inplace
 import Config
@@ -26,7 +26,6 @@ logger = Config.logger
 def gen_boards_big(arr0: NDArray[np.uint64],
                    target: int,
                    position: int,
-                   bm: BoardMover,
                    pattern_check_func: PatternCheckFunc,
                    success_check_func: SuccessCheckFunc,
                    to_find_func: ToFindFunc,
@@ -66,7 +65,7 @@ def gen_boards_big(arr0: NDArray[np.uint64],
         length_factor *= length_factor_multiplier  # type: ignore
 
         arr1t, arr2t, hashmap1, hashmap2, counts1, counts2 = \
-            gen_boards(arr0t, target, position, bm, pattern_check_func, success_check_func, to_find_func,
+            gen_boards(arr0t, target, position, pattern_check_func, success_check_func, to_find_func,
                        hashmap1, hashmap2, n, length_factor, do_check, isfree)
 
         validate_length_and_balance(arr0t, arr2t, arr1t, counts1, counts2, length_factor, True)
@@ -175,7 +174,7 @@ def handle_restart(i, pathname, arr_init, started, d0, d1):
     return True, d0, d1
 
 
-@njit(nogil=True, parallel=True)
+@njit(nogil=True, parallel=True, cache=True)
 def update_hashmap_length(hashmap: NDArray[np.uint64], arr: NDArray[np.uint64]) -> NDArray[np.uint64]:
     """根据当前layer大小调整哈希表大小"""
     length = max(largest_power_of_2(len(arr)), 1048576)
@@ -201,7 +200,6 @@ def generate_process(
         steps: int,
         pathname: str,
         docheck_step: int,
-        bm: BoardMover,
         isfree: bool
 ) -> Tuple[bool, NDArray[np.uint64], NDArray[np.uint64]]:
     started = False  # 是否进行了计算，如果是则需要进行final_steps处理最后一批局面
@@ -223,13 +221,13 @@ def generate_process(
             pivots_list = [pivots] * len(length_factors_list)
 
         # 生成新的棋盘状态
-        if len(d0) < segment_size:
+        if False:#len(d0) < segment_size:
             t0 = time.time()
 
             if len(d0) < 10000 or arr_init[0] in (np.uint64(0xffff00000000ffff), np.uint64(0x000f000f000fffff)) or \
                     (3.2 in length_factors):
                 # 数组较小(或2x4，3x3或断点重连)的应用简单方法
-                d1t, d2 = gen_boards_simple(d0, target, position, bm, pattern_check_func, success_check_func,
+                d1t, d2 = gen_boards_simple(d0, target, position, pattern_check_func, success_check_func,
                                             to_find_func, i > docheck_step, isfree)
             else:
                 # 先预测预分配数组的长度乘数
@@ -240,7 +238,7 @@ def generate_process(
                     hashmap1, hashmap2 = update_hashmap_length(hashmap1, d0), update_hashmap_length(hashmap2, d0)  # 初始化
 
                 d1t, d2, hashmap1, hashmap2, counts1, counts2 = \
-                    gen_boards(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func,
+                    gen_boards(d0, target, position, pattern_check_func, success_check_func, to_find_func,
                                hashmap1, hashmap2, n, length_factor, i > docheck_step, isfree)
 
                 validate_length_and_balance(d0, d2, d1t, counts1, counts2, length_factor, False)
@@ -283,7 +281,7 @@ def generate_process(
                                       np.empty(largest_power_of_2(hashmap_max_length), dtype=np.uint64))  # 初始化
             (d1s, d2s, pivots_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2,
              t0, gen_time, t2) = \
-                gen_boards_big(d0, target, position, bm, pattern_check_func, success_check_func, to_find_func,
+                gen_boards_big(d0, target, position, pattern_check_func, success_check_func, to_find_func,
                                pivots_list, hashmap1, hashmap2, n, length_factors_list,
                                length_factor_multiplier, i > docheck_step, isfree)
 
@@ -368,11 +366,10 @@ def log_performance(i, t0, t1, t2, t3, d1):
                      f'{round((t2 - t1) / (t3 - t0), 2)}/{round((t3 - t2) / (t3 - t0), 2)}\n')
 
 
-@njit(nogil=True, parallel=True)
+@njit(nogil=True, parallel=True, cache=True)
 def gen_boards(arr0: NDArray[np.uint64],
                target: int,
                position: int,
-               bm: BoardMover,
                pattern_check_func: PatternCheckFunc,
                success_check_func: SuccessCheckFunc,
                to_find_func: ToFindFunc,
@@ -425,7 +422,7 @@ def gen_boards(arr0: NDArray[np.uint64],
                 for i in range(16):  # 遍历每个位置
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):
                         t1 = t | (np.uint64(1) << np.uint64(4 * i))  # 填充数字2
-                        for newt in bm.move_all_dir(t1):
+                        for newt in move_all_dir(t1):
                             if newt != t1 and pattern_check_func(newt):
                                 newt = to_find_func(newt)
                                 hashed_newt = (hash_(newt)) & hashmap1_length
@@ -435,7 +432,7 @@ def gen_boards(arr0: NDArray[np.uint64],
                                     c1t += 1
 
                         t1 = t | (np.uint64(2) << np.uint64(4 * i))  # 填充数字4
-                        for newt in bm.move_all_dir(t1):
+                        for newt in move_all_dir(t1):
                             if newt != t1 and pattern_check_func(newt):
                                 newt = to_find_func(newt)
                                 hashed_newt = (hash_(newt)) & hashmap2_length
@@ -454,11 +451,10 @@ def gen_boards(arr0: NDArray[np.uint64],
     return arr1, arr2, hashmap1, hashmap2, c1-starts, c2-starts
 
 
-@njit(nogil=True, parallel=True)
+@njit(nogil=True, parallel=True, cache=True)
 def gen_boards_simple(arr0: NDArray[np.uint64],
                       target: int,
                       position: int,
-                      bm: BoardMover,
                       pattern_check_func: PatternCheckFunc,
                       success_check_func: SuccessCheckFunc,
                       to_find_func: ToFindFunc,
@@ -484,7 +480,7 @@ def gen_boards_simple(arr0: NDArray[np.uint64],
                     # 分别用数字2和4填充当前空位，然后生成新的棋盘状态t1和t2
                     t1 = t | (np.uint64(p) << np.uint64(4 * i))  # 填充数字2（2的对数为1，即4位中的0001）
                     # 尝试所有四个方向上的移动
-                    for newt in bm.move_all_dir(t1):
+                    for newt in move_all_dir(t1):
                         if newt != t1 and pattern_check_func(newt):
                             arr[ct] = to_find_func(newt)
                             ct += 1

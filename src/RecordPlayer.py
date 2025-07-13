@@ -7,6 +7,7 @@ from PyQt5.QtCore import Qt, QPointF
 from PyQt5.QtGui import QPainter, QColor, QPolygonF
 from numpy.typing import NDArray
 
+import BoardMover as bm
 from Gamer import BaseBoardFrame
 from Config import SingletonConfig
 
@@ -162,7 +163,7 @@ class ReplayFrame(BaseBoardFrame):
             self.board_encoded = self.record[self.current_step + 1][0]
         else:
             self.board_encoded = self.board_encoded | np.uint64(self.newtile) << np.uint64(4 * self.newtile_pos)
-        self.board = self.mover.decode_board(self.board_encoded)
+        self.board = bm.decode_board(self.board_encoded)
         self.history.append((self.board_encoded, self.score))
         if do_anim:
             self.timer1.singleShot(125, lambda: self.game_square.animate_appear(
@@ -198,7 +199,7 @@ class ReplayFrame(BaseBoardFrame):
         if 0 < len(self.record):
             self.current_step = 0
             self.board_encoded = self.record[self.current_step][0]
-            self.board = self.mover.decode_board(self.board_encoded)
+            self.board = bm.decode_board(self.board_encoded)
             self.update_all_frame(self.board)
 
 
@@ -457,8 +458,8 @@ class ReplayWindow(QtWidgets.QMainWindow):
 
         self.gameframe.current_step = min(max(target_step, 0), max_steps)
         self.gameframe.board_encoded = self.gameframe.record[self.gameframe.current_step][0]
-        self.gameframe.board = self.gameframe.mover.decode_board(self.gameframe.board_encoded)
-        values = self.gameframe.mover.decode_board(self.gameframe.board_encoded)
+        self.gameframe.board = bm.decode_board(self.gameframe.board_encoded)
+        values = bm.decode_board(self.gameframe.board_encoded)
         self.gameframe.update_all_frame(values)
         self.update_results()
         self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
@@ -471,7 +472,7 @@ class ReplayWindow(QtWidgets.QMainWindow):
         with QtCore.QSignalBlocker(self.slider):
             self.slider.setValue(self.gameframe.current_step)
             self.gameframe.board_encoded = self.gameframe.record[self.gameframe.current_step][0]
-            self.gameframe.board = self.gameframe.mover.decode_board(self.gameframe.board_encoded)
+            self.gameframe.board = bm.decode_board(self.gameframe.board_encoded)
 
     def reset_record(self, record):
         self.gameframe.load_record(record)
@@ -517,7 +518,3 @@ if __name__ == "__main__":
     window = ReplayWindow(r"C:\Users\Administrator\Desktop\L3_512_0_20250702220058_0.2884_rec.txt")
     window.show()
     sys.exit(app.exec_())
-
-
-
-
