@@ -13,8 +13,9 @@ from PyQt5.QtWidgets import QShortcut, QApplication
 import BoardMover as bm
 from BookReader import BookReaderDispatcher
 from Calculator import ReverseUD, ReverseLR, RotateR, RotateL
-from Config import SingletonConfig, category_info
+from Config import SingletonConfig, category_info, pattern_32k_tiles_map
 from Gamer import BaseBoardFrame
+from SignalHub import practise_signal
 
 
 direction_map = defaultdict(lambda: "？")
@@ -186,6 +187,8 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
         self.reader_thread = ReaderWorker(self.book_reader, np.uint64(0), self.pattern_settings, self.current_pattern)
         self.reader_thread.result_ready.connect(self._show_results)
+
+        practise_signal.board_update.connect(self.handle_page_jump)
 
         self.statusbar.showMessage(self.tr("All features may be slow when used for the first time. Please be patient."), 8000)
 
@@ -875,6 +878,48 @@ class TrainWindow(QtWidgets.QMainWindow):
         clipboard = QApplication.clipboard()
         clipboard.setPixmap(scaled)
         self.statusbar.showMessage(self.tr("Screenshot saved to the clipboard"), 3000)
+
+    def handle_page_jump(self, board_encoded):
+        if not self.ai_state and not self.playing_record_state and not self.isProcessing:
+            pattern = self.pattern_settings[0]
+            if pattern and pattern != '?':
+                count_32ks = pattern_32k_tiles_map.get(pattern, [0])[0]
+                board_encoded = self.replace_largest_tiles(board_encoded, count_32ks)
+            self.board_state.setText(hex(board_encoded)[2:].rjust(16, '0'))
+            self.handle_set_board()
+
+            if self.windowState() & QtCore.Qt.WindowState.WindowMinimized:
+                self.setWindowState(
+                    self.windowState() & ~QtCore.Qt.WindowState.WindowMinimized | QtCore.Qt.WindowState.WindowActive)
+            self.show()
+            self.activateWindow()
+            self.raise_()
+
+    @staticmethod
+    def replace_largest_tiles(board_encoded, n):
+        if n == 0:
+            return board_encoded
+
+        tiles = []
+        for i in range(16):
+            tile_value = board_encoded & 0xF
+            tiles.append(tile_value)
+            board_encoded >>= 4
+
+        sorted_tiles = sorted(tiles, reverse=True)
+        threshold = sorted_tiles[n - 1]
+        count = 0
+        for i in range(len(tiles)):
+            if count < n and tiles[i] >= threshold:
+                if tiles[i] > threshold or count < n:
+                    tiles[i] = 0xF
+                    count += 1
+        result = 0
+        for i in range(15, -1, -1):
+            result <<= 4
+            result |= tiles[i]
+
+        return np.uint64(result)
 
     def closeEvent(self, event):
         self.ai_state = False

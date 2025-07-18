@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QToolButton, QMenu, QAction
 from BookBuilder import start_build
 from Variants.vBookBuilder import v_start_build
 from Config import SingletonConfig, category_info, theme_map
+from SignalHub import progress_signal
 
 
 class TwoLevelComboBox(QToolButton):
@@ -100,6 +101,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setupUi()
+        progress_signal.progress_updated.connect(self.update_progress)
 
     def setupUi(self):
         config = SingletonConfig().config
@@ -475,6 +477,9 @@ class SettingsWindow(QtWidgets.QMainWindow):
             self.Building_thread = BuildThread(pattern, target, position, pathname)
             self.Building_thread.finished.connect(self.on_build_finished)
             self.Building_thread.start()  # 启动计算线程
+
+    def update_progress(self, current_step, total_steps):
+        self.build_bt.setText(self.tr('Building...') + fr'({current_step}/{total_steps})')
 
     def on_build_finished(self):
         self.build_bt.setText(self.tr('BUILD'))

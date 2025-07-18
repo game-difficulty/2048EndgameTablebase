@@ -19,6 +19,7 @@ from BookGeneratorUtils import merge_inplace, hash_, parallel_unique, sort_array
 from BookSolverADUtils import dict_to_structured_array3, get_array_view3
 from Config import SingletonConfig  #, clock
 from LzmaCompressor import compress_with_7z
+from SignalHub import progress_signal
 
 logger = Config.logger
 
@@ -299,6 +300,8 @@ def generate_process_ad(
         if pivots is None:
             pivots = d0[[len(d0) // 8 * i for i in range(1, 8)]] if len(d0) > 0 else np.zeros(7, dtype='uint64')
             pivots_list = [pivots] * len(length_factors_list)
+
+        progress_signal.progress_updated.emit(i, steps * 2)
 
         board_sum = 2 * i + ini_board_sum - 2
 

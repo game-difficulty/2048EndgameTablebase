@@ -15,6 +15,7 @@ import Config
 from Config import SingletonConfig
 from LzmaCompressor import compress_with_7z
 from Variants.vCalculator import is_variant_pattern
+from SignalHub import progress_signal
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
@@ -227,6 +228,8 @@ def generate_process(
         if pivots is None:
             pivots = d0[[len(d0) // 8 * i for i in range(1, 8)]] if len(d0) > 0 else np.zeros(7, dtype='uint64')
             pivots_list = [pivots] * len(length_factors_list)
+
+        progress_signal.progress_updated.emit(i, steps * 2)
 
         # 生成新的棋盘状态
         if len(d0) < segment_size:

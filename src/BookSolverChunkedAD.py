@@ -19,6 +19,7 @@ from Config import SingletonConfig
 from LzmaCompressor import compress_with_7z, decompress_with_7z
 from BookSolverADUtils import (dict_to_structured_array1, dict_to_structured_array2, dict_to_structured_array3,
                                get_array_view10, get_array_view11, get_array_view2, get_array_view3)
+from SignalHub import progress_signal
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
@@ -86,6 +87,8 @@ def recalculate_process_ad_c(
             = handle_solve_restart_ad_c(i, pathname, steps, book_dict2, ind_dict2, started)
         if not started:
             continue
+
+        progress_signal.progress_updated.emit(steps * 2 - i - 2, steps * 2)
 
         if match_dict is None:
             match_dict = Dict.empty(KeyType2, ValueType4)

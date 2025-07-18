@@ -11,6 +11,7 @@ import Config
 from Config import SingletonConfig
 from TrieCompressor import trie_compress_progress
 from LzmaCompressor import compress_with_7z, decompress_with_7z
+from SignalHub import progress_signal
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
@@ -71,6 +72,8 @@ def recalculate_process(
         started, d1, d2 = handle_restart(i, pathname, steps, d1, d2, started)
         if not started:
             continue
+
+        progress_signal.progress_updated.emit(steps * 2 - i - 2, steps * 2)
 
         deletion_threshold = np.uint32(SingletonConfig().config.get('deletion_threshold', 0.0) * 4e9)
         if SingletonConfig().config.get('compress_temp_files', False):

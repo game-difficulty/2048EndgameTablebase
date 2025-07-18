@@ -10,6 +10,7 @@ from numpy.typing import NDArray
 import BoardMover as bm
 from Gamer import BaseBoardFrame
 from Config import SingletonConfig
+from SignalHub import practise_signal
 
 
 direction_map = defaultdict(lambda: "？")
@@ -252,12 +253,22 @@ class ReplayWindow(QtWidgets.QMainWindow):
         self.grid1.setSpacing(6)
         self.grid1.setObjectName("grid1")
 
+        self.board_state_layout = QtWidgets.QHBoxLayout()
+        self.board_state_layout.setObjectName("board_state_layout")
+
         self.board_state = QtWidgets.QLineEdit(self.operate)
         self.board_state.setReadOnly(True)
         self.board_state.setStyleSheet("background-color: rgb(255, 255, 255);")
         self.board_state.setObjectName("board_state")
         self.board_state.setText('0000000000000000')
-        self.grid1.addWidget(self.board_state, 0, 0, 1, 1)
+        self.board_state_layout.addWidget(self.board_state)
+        self.practise_button = QtWidgets.QPushButton(self.operate)
+        self.practise_button.setMaximumSize(QtCore.QSize(180, 16777215))
+        self.practise_button.setObjectName("practise_button")
+        self.practise_button.setStyleSheet("font: 750 12pt \"Cambria\";")
+        self.board_state_layout.addWidget(self.practise_button)
+
+        self.grid1.addLayout(self.board_state_layout, 0, 0, 1, 1)
 
         self.results_label = QtWidgets.QTextBrowser(self.operate)
         self.results_label.setReadOnly(True)
@@ -306,6 +317,7 @@ class ReplayWindow(QtWidgets.QMainWindow):
         self.grid1.addLayout(self.buttons, 1, 0, 1, 1)
         self.gridLayout.addWidget(self.operate, 0, 1, 2, 1)
 
+        self.practise_button.clicked.connect(self.jump_to_practise)  # type: ignore
         self.one_step.clicked.connect(lambda: self.handle_one_step(1))  # type: ignore
         self.f_10_step.clicked.connect(lambda: self.handle_one_step(10))   # type: ignore
         self.undo.clicked.connect(lambda: self.handle_undo(1))  # type: ignore
@@ -329,6 +341,7 @@ class ReplayWindow(QtWidgets.QMainWindow):
         self.b_10_step.setText(_translate("Replay", "-10 Step"))
         self.one_step.setText(_translate("Replay", "ONESTEP"))
         self.f_10_step.setText(_translate("Replay", "+10 Step"))
+        self.practise_button.setText(_translate("Replay", "Practise"))
 
     def toggle_demo(self):
         if not self.ai_state:
@@ -510,6 +523,9 @@ class ReplayWindow(QtWidgets.QMainWindow):
         if file_path:
             # 调用reset_record方法处理新文件
             self.reset_record(file_path)
+
+    def jump_to_practise(self):
+        practise_signal.board_update.emit(self.gameframe.board_encoded)
 
 
 if __name__ == "__main__":
