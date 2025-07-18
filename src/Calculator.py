@@ -285,6 +285,19 @@ def is_4441_success(encoded_board, target, _):
 
 
 @njit(nogil=True, inline='always')
+def is_4441f_pattern(encoded_board):
+    return (np.uint64(encoded_board) & np.uint64(4095)) == np.uint64(4095)
+
+
+@njit(nogil=True, inline='always')
+def is_4441f_success(encoded_board, target, _):
+    for pos in (12, 16, 20, 24):
+        if (np.uint64(encoded_board) >> np.uint64(pos) & np.uint64(0xf)) == np.uint64(target):
+            return True
+    return False
+
+
+@njit(nogil=True, inline='always')
 def is_4432_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(983295)) == np.uint64(983295)
 

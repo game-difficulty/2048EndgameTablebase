@@ -14,6 +14,7 @@ from BookGeneratorUtils import sort_array, parallel_unique, concatenate, merge_d
 import Config
 from Config import SingletonConfig
 from LzmaCompressor import compress_with_7z
+from Variants.vCalculator import is_variant_pattern
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
@@ -200,8 +201,15 @@ def generate_process(
         steps: int,
         pathname: str,
         docheck_step: int,
-        isfree: bool
+        isfree: bool,
+        is_variant: bool = False,
 ) -> Tuple[bool, NDArray[np.uint64], NDArray[np.uint64]]:
+    global move_all_dir
+    if is_variant:
+        from Variants.vBoardMover import move_all_dir
+    else:
+        from BoardMover import move_all_dir
+
     started = False  # 是否进行了计算，如果是则需要进行final_steps处理最后一批局面
     d0, d1 = np.empty(0, dtype=np.uint64), np.empty(0, dtype=np.uint64)
     pivots, pivots_list = None, None  # 用于快排的分割点
@@ -465,7 +473,7 @@ def gen_boards_simple(arr0: NDArray[np.uint64],
     根据arr0中的面板，先生成数字，再移动，如果移动后仍是定式范围内且移动有效，则根据生成的数字（2,4）分别填入
     """
     # 初始化两个arr，分别对应填充数字2和4后的棋盘状态
-    length = max(len(arr0) * 8, 499999999) if isfree else max(len(arr0) * 6, 199999999)
+    length = max(len(arr0) * 8, 19999999) if isfree else max(len(arr0) * 6, 9999999)
     arrs = [np.empty(0, dtype=np.uint64), np.empty(0, dtype=np.uint64)]
     for p in prange(1, 3):
         arr = np.empty(length, dtype=np.uint64)

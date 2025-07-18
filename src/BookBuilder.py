@@ -48,6 +48,7 @@ def gen_lookup_table_big(
     传入包含所有初始局面的array，然后按照面板数字和依次生成下一阶段的所有局面。储存轮到系统生成数字时的面板。
     保障其中的每个arr储存的面板的数字和均相等
     """
+    is_variant = pattern in ('2x4', '3x3', '3x4')
     # variant tables不支持进阶算法，用不到sym_func，随便返回一个
     sym_func = {Calculator.re_self: Calculator.re_self_pair,
                 Calculator.minUL: Calculator.minUL_pair,
@@ -56,10 +57,10 @@ def gen_lookup_table_big(
     if not SingletonConfig().config.get('advanced_algo', False):
         #  存在断点重连的情况下，以下d0, d1均可能为None
         started, d0, d1 = generate_process(arr_init, pattern_check_func, success_check_func, to_find_func, target,
-                                           position, steps, pathname, docheck_step, isfree)
+                                           position, steps, pathname, docheck_step, isfree, is_variant)
         d0, d1 = final_steps(started, d0, d1, pathname, steps, success_check_func, target, position)
         recalculate_process(d0, d1, pattern_check_func, success_check_func, to_find_func, target, position, steps,
-                            pathname, docheck_step, spawn_rate4)  # 这里的最后的两个book d0,d1就是回算的d1,d2
+                            pathname, docheck_step, spawn_rate4, is_variant)  # 这里的最后的两个book d0,d1就是回算的d1,d2
     else:
         _, num_free_32k, pos_fixed_32k = pattern_32k_tiles_map[pattern]
         permutation_dict, tiles_combinations_dict, param = init_masker(num_free_32k, target, pos_fixed_32k)
@@ -195,13 +196,13 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
     else:
         steps = int(2 ** target / 2 + {'444': 96, '4431': 64, 'LL': 48, 'L3': 36, '4441': 48, '4432': 48, '4442': 48,
                                        '442': 36, 't': 36, '4432f': 48, '4432ff': 48, 'L3t': 48, '4442f': 48,
-                                       '4442ff': 48, "3433": 48, "3442": 48, "3432": 48, "2433": 48, "movingLL": 48
+                                       '4442ff': 48, "3433": 48, "3442": 48, "3432": 48, "2433": 48, "4441f": 48
                                        }[pattern])
         docheck_step = int(2 ** target / 2) - 16
         _, pattern_check_func, to_find_func, success_check_func, ini = formation_info[pattern]
         if pattern == 'LL' and position == 1:
             to_find_func = Calculator.re_self
-        if pattern in ('4442', '4432', '4441', "3433", "3442", "3432", "movingLL", '4432ff', '4432f', '4442f'):
+        if pattern in ('4442', '4432', '4441', "3433", "3442", "3432", "4441f", '4432ff', '4432f', '4442f'):
             isfree = True
         else:
             isfree = False

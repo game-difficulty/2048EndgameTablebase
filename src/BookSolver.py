@@ -53,8 +53,15 @@ def recalculate_process(
         steps: int,
         pathname: str,
         docheck_step: int,
-        spawn_rate4: float = 0.1
+        spawn_rate4: float = 0.1,
+        is_variant:bool = False,
 ) -> None:
+    global move_all_dir
+    if is_variant:
+        from Variants.vBoardMover import move_all_dir
+    else:
+        from BoardMover import move_all_dir
+
     started = False
     # 回算搜索时可能需要使用索引进行加速
     ind1: NDArray[np.uint32] | None = None
