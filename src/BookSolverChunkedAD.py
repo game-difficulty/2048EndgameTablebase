@@ -16,7 +16,6 @@ from BoardMoverAD import decode_board, reverse
 from BookSolverAD import remove_died_ad, create_index_ad, \
     solve_optimal_success_rate, solve_optimal_success_rate_arr, replace_val, dict_fromfile, expand_ad, dict_tofile
 from Config import SingletonConfig
-from LzmaCompressor import compress_with_7z, decompress_with_7z
 from BookSolverADUtils import (dict_to_structured_array1, dict_to_structured_array2, dict_to_structured_array3,
                                get_array_view10, get_array_view11, get_array_view2, get_array_view3)
 from SignalHub import progress_signal
@@ -95,8 +94,6 @@ def recalculate_process_ad_c(
 
         original_board_sum = 2 * i + ini_board_sum
 
-        if SingletonConfig().config.get('compress_temp_files', False):
-            decompress_with_7z(pathname + str(i) + '.7z')
         d0 = np.fromfile(pathname + str(i), dtype=np.uint64)
 
         book_dict0, ind_dict0 = expand_ad(d0, original_board_sum, tiles_combinations_arr, param, False)
@@ -131,9 +128,6 @@ def recalculate_process_ad_c(
         if os.path.exists(pathname + str(i)):
             os.remove(pathname + str(i))
         logger.debug(f'step {i} done, solving avg {round(_counter / max(_timer, 0.0001) / 2e6, 2)} mbps\n')
-
-        if SingletonConfig().config.get('compress_temp_files', False):
-            compress_with_7z(pathname + str(i + 2) + 'b')
 
         book_dict2, ind_dict2 = book_dict1, ind_dict1
         del book_dict1, ind_dict1

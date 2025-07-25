@@ -54,7 +54,7 @@ class ColoredMarkSlider(QtWidgets.QSlider):
         self.points_rank = np.where((self.data_points < threshold) & (self.data_points < 1))[0]
         self.draw_values = self.data_points[self.points_rank]
 
-        min_val = np.min(self.data_points) - 0.00001
+        min_val = np.min(self.data_points[self.data_points > 0]) - 0.00001
         self.point_colors = []
         normalized_vals = (self.draw_values - min_val) / (1 - min_val)
         normalized_vals = np.clip(normalized_vals, 0.0, 1.0)
@@ -100,6 +100,60 @@ class ColoredMarkSlider(QtWidgets.QSlider):
             ])
             painter.drawPolygon(polygon)
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            opt = QtWidgets.QStyleOptionSlider()
+            self.initStyleOption(opt)
+
+            # 获取滑块区域
+            handle_rect = self.style().subControlRect(
+                QtWidgets.QStyle.CC_Slider,
+                opt,
+                QtWidgets.QStyle.SC_SliderHandle,
+                self
+            )
+
+            # 检查是否点击在滑块上
+            if handle_rect.contains(event.pos()):
+                # 在滑块上：调用基类方法（允许拖动）
+                return super().mousePressEvent(event)
+
+            # 获取滑轨区域
+            groove_rect = self.style().subControlRect(
+                QtWidgets.QStyle.CC_Slider,
+                opt,
+                QtWidgets.QStyle.SC_SliderGroove,
+                self
+            )
+
+            # 检查是否点击在滑轨上
+            if groove_rect.contains(event.pos()):
+                min_val = self.minimum()
+                max_val = self.maximum()
+                range_val = max_val - min_val
+
+                # 计算新值
+                if self.orientation() == Qt.Horizontal:
+                    # 水平滑块：计算点击位置相对于轨道的百分比
+                    pos = event.x() - groove_rect.x()
+                    new_value = min_val + (pos / groove_rect.width()) * range_val
+                else:
+                    # 垂直滑块：计算点击位置相对于轨道的百分比 (从底部开始)
+                    pos = groove_rect.bottom() - event.y()
+                    new_value = min_val + (pos / groove_rect.height()) * range_val
+
+                # 设置新值
+                self.setValue(int(new_value))
+
+                # 立即更新位置和触发信号
+                self.update()
+                self.sliderPressed.emit()
+                self.actionTriggered.emit(QtWidgets.QSlider.SliderMove)
+                return
+
+        # 非左键或非轨道区域点击：默认处理
+        super().mousePressEvent(event)
+
 
 # noinspection PyAttributeOutsideInit
 class ReplayFrame(BaseBoardFrame):
@@ -143,6 +197,7 @@ class ReplayFrame(BaseBoardFrame):
         self.moves = ((self.record['f1'] >> 5) & 3).astype(np.uint8)
         arr_rates = np.vstack((self.record['f2'], self.record['f3'], self.record['f4'], self.record['f5'])).T
         optimal_sr = np.max(arr_rates, axis=1)
+        optimal_sr[optimal_sr <= 0] = 1
         player_sr = arr_rates[np.arange(len(self.moves)), self.moves]
         self.losses = player_sr / optimal_sr
         self.goodness_of_fit = np.cumprod(self.losses)
@@ -165,7 +220,6 @@ class ReplayFrame(BaseBoardFrame):
         else:
             self.board_encoded = self.board_encoded | np.uint64(self.newtile) << np.uint64(4 * self.newtile_pos)
         self.board = bm.decode_board(self.board_encoded)
-        self.history.append((self.board_encoded, self.score))
         if do_anim:
             self.timer1.singleShot(125, lambda: self.game_square.animate_appear(
                 self.newtile_pos // 4, self.newtile_pos % 4, 2 ** self.newtile))
@@ -203,6 +257,11 @@ class ReplayFrame(BaseBoardFrame):
             self.board = bm.decode_board(self.board_encoded)
             self.update_all_frame(self.board)
 
+    def undo(self):
+        if self.current_step >= 0:
+            self.board_encoded = self.record[self.current_step][0]
+            self.board = bm.decode_board(self.board_encoded)
+            self.update_all_frame(self.board)
 
 # noinspection PyAttributeOutsideInit
 class ReplayWindow(QtWidgets.QMainWindow):

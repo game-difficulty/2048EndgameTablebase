@@ -479,6 +479,8 @@ class TestWindow(QtWidgets.QMainWindow):
                 text_list.append(f"{key[0].upper()}: {value}")
         text_list.append('')
         best_move = list(self.result.keys())[0]
+        self.record_replay(move)
+
         if not self.result[best_move] or isinstance(self.result[best_move], str):
             return
         if self.result[move.lower()] is not None and self.result[move.lower()] / self.result[best_move] == 1:
@@ -508,7 +510,6 @@ class TestWindow(QtWidgets.QMainWindow):
                 text_list.append(f'one-step loss: {1 - loss:.4f}, goodness of fit: {self.gameframe.goodness_of_fit:.4f}')
                 text_list.append(f"You pressed {move}. But the best move is **{best_move.capitalize()}**")
         self.text_display.add_text(text_list)
-        self.record_replay(move)
 
     @staticmethod
     def evaluation_of_performance(loss):

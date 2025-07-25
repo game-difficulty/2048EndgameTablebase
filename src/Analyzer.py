@@ -220,14 +220,15 @@ class Analyzer:
                           new_tile: int, spawn_position:int) -> bool | None:
         target = str(int(2 ** self.target))
         self.result = self.book_reader.move_on_dic(masked_board, self.pattern, target, self.full_pattern, self.position)
+        self.record_replay(board, move, new_tile, spawn_position)
 
         # 超出定式范围、没查到、死亡、成功等情况
         best_move = list(self.result.keys())[0]
-        if not self.result[best_move] or self.result[best_move] == 1:
+        if not self.result[best_move] or self.result[best_move] == 1 or self.result[best_move] == '?':
             return False
 
         # 配置里没找到表路径
-        if best_move == '?' or self.result[best_move] == '?':
+        if best_move == '?':
             return None
 
         self.print_board(board)
@@ -282,7 +283,6 @@ class Analyzer:
 
         self.text_list.append('--------------------------------------------------')
         self.text_list.append('')
-        self.record_replay(board, move, new_tile, spawn_position)
         return True
 
     def analyze_one_step(self, i):
@@ -384,9 +384,9 @@ class Analyzer:
 
         filename = self.full_pattern + '_' + str(step) + f'_{self.goodness_of_fit:.4f}' + '.rpl'
         target_file_path = os.path.join(self.target_path, filename)
-        self.record[rec_step_count] = (
+        self.record[rec_step_count + 1] = (
             0, 88, 666666666, 233333333, 314159265, 987654321)
-        self.record[:rec_step_count + 1].tofile(target_file_path)
+        self.record[:rec_step_count + 2].tofile(target_file_path)
 
 
 # noinspection PyAttributeOutsideInit

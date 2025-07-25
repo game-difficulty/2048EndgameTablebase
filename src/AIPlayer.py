@@ -550,10 +550,10 @@ if __name__ == "__main__":
     history = np.empty(1000, dtype='uint64,uint32')
     score_sum = 0
 
-    b1 = np.array([[   0 ,   0,  0,  0],
- [   2  ,  4 ,  2,  4],
- [   8  ,  2 ,  16,  1024],
- [   16384,   8192,   4096,   2048]], dtype=np.int32)
+    b1 = np.array([[   2 ,   0,  2,  2],
+ [   1024,   4 ,  8,  4],
+ [   2048  ,  16384 ,  128,  16],
+ [   4,   8192,   512,   2]], dtype=np.int32)
     print(b1)
     # s1 = AIPlayer(b1)
     # g1 = EvilGen(b1)
@@ -563,7 +563,7 @@ if __name__ == "__main__":
     # print(s1.evaluate(b1))
     #
     # t_start = time.time()
-    # for steps in range(160):
+    # for steps in range(240):
     #     history[steps] = b1, score_sum
     #     s1.reset_board(decode_board(b1))
     #     t0 = time.time()
@@ -581,13 +581,14 @@ if __name__ == "__main__":
     #     b1 = np.uint64(g1.gen_new_num(5)[0]) if (steps < 0 or (np.random.rand(1)[0] < 0.10) and steps < 0) else np.uint64(s_gen_new_num(b1)[0])
     #
     #     print(decode_board(b1))
+    #     print()
 
     be = np.uint64(encode_board(b1))
     ai_dispatcher = Dispatcher(b1, be)
     ai_dispatcher.reset(b1, be)
     best_move = ai_dispatcher.dispatcher()
     b1 = np.uint64(encode_board(b1))
-    for steps in range(160):
+    for steps in range(240):
         history[steps] = b1, score_sum
         ai_dispatcher.reset(decode_board(b1), b1)
         t0 = time.time()
@@ -598,6 +599,7 @@ if __name__ == "__main__":
         b1 = np.uint64(s_gen_new_num(b1)[0])
 
         print(decode_board(b1))
+        print()
 
 
     history[:steps + 1].tofile(fr'C:\Users\Administrator\Desktop\record\0')

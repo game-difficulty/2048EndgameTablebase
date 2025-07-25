@@ -19,7 +19,8 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.setupUi()
         self.game_window = None
         self.minigames_window = None
-        self.train_window = None
+        from Trainer import TrainWindow
+        self.train_window = TrainWindow()  # 方便回放直接跳转
         self.test_window = None
         self.settings_window = None
         self.view_window = None
@@ -168,9 +169,6 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.show_and_center_window(self.minigames_window)
 
     def openTrainWindow(self):
-        if self.train_window is None:
-            from Trainer import TrainWindow
-            self.train_window = TrainWindow()
         if self.train_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
             self.train_window.setWindowState(
                 self.train_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized

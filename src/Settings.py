@@ -436,7 +436,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         pathname = self.filepath_edit.toPlainText()
 
         if (self.advanced_algo_checkBox.isChecked() and pattern in [
-            'L3', 'L3t', '442', 't', '444', 'LL', 'free8w', 'free9w', 'free8']):
+            'L3', 'L3t', '442', '442t', 't', '444', 'LL', 'free8w', 'free9w', 'free8']):
             reply = QtWidgets.QMessageBox.warning(
                 self,
                 self.tr("Warning"),

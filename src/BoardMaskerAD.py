@@ -368,8 +368,8 @@ def validate(board: np.uint64, original_board_sum: np.uint32, tiles_combinations
     return True
 
 
-@njit(nogil=True)
-def unmask_board(board: np.uint64, original_board_sum: np.uint32, tiles_combinations_dict, permutation_dict, param:ParamType
+@njit(nogil=True, boundscheck=True )
+def unmask_board(board: np.int64, original_board_sum: np.uint32, tiles_combinations_dict, permutation_dict, param:ParamType
                  ) -> NDArray[np.uint64]:
     """
     将tiles_combinations的排列填回masked的格子

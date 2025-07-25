@@ -18,7 +18,7 @@ ToFindFunc = Callable[[np.uint64], np.uint64]
 SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
 
 
-category_info = {'10 space': ['L3', 'L3t', '442', 't'],
+category_info = {'10 space': ['L3', 'L3t', '442', '442t', 't'],
                  '12 space': ['444', '4431', 'LL', '4432f', '4442ff', '4441f'],
                  'free': [f'free{i}w' for i in range(8, 15)],
                  'free halfway': [f'free{i}' for i in range(8, 12)],
@@ -46,6 +46,8 @@ formation_info: Dict[str, Tuple[int, PatternCheckFunc, ToFindFunc,
     'L3t': [-196608 - 8, Calculator.is_L3t_pattern, Calculator.re_self, Calculator.is_L3t_success,
             np.array([np.uint64(0x100000001fff2fff), np.uint64(0x000000011fff2fff)], dtype=np.uint64)],
     '442': [-196608 - 8, Calculator.is_442_pattern, Calculator.re_self, Calculator.is_442_success,
+            np.array([np.uint64(0x1000000012ffffff), np.uint64(0x0000000112ffffff)], dtype=np.uint64)],
+    '442t': [-196608 - 8, Calculator.is_442t_pattern, Calculator.re_self, Calculator.is_442t_success,
             np.array([np.uint64(0x1000000012ffffff), np.uint64(0x0000000112ffffff)], dtype=np.uint64)],
     't': [-196608 - 8, Calculator.is_t_pattern, Calculator.re_self, Calculator.is_t_success,
           np.array([np.uint64(0x10000000f1fff2ff), np.uint64(0x00000001f1fff2ff)], dtype=np.uint64)],
@@ -108,7 +110,8 @@ pattern_32k_tiles_map: Dict[str, list] = {
     'free14': [1, 1, np.array([], dtype=np.uint8)],
     'L3': [6, 0, np.array([0, 4, 8, 16, 20, 24], dtype=np.uint8)],
     'L3t': [6, 2, np.array([4, 8, 20, 24], dtype=np.uint8)],
-    '442': [6, 3, np.array([4, 16, 20], dtype=np.uint8)],
+    '442': [6, 0, np.array([0, 4, 8, 12, 16, 20], dtype=np.uint8)],
+    '442t': [6, 3, np.array([4, 16, 20], dtype=np.uint8)],
     't': [6, 2, np.array([0, 4, 16, 20], dtype=np.uint8)],
     '4441': [3, 0, np.array([0, 4, 8], dtype=np.uint8)],
     '4432': [3, 0, np.array([0, 4, 16], dtype=np.uint8)],

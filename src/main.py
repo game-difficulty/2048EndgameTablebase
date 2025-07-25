@@ -35,9 +35,6 @@ def main():
         if QtGui.QFontDatabase.addApplicationFont(font_file) < 0:
             logger.warning(f"Font loading failure: {font_file}")
 
-    from MainMenu import MainMenuWindow
-
-    main_win = MainMenuWindow()
     splash_pix = QtGui.QPixmap("pic/cover.jpg")
     splash = QtWidgets.QSplashScreen(splash_pix, QtCore.Qt.WindowType.WindowStaysOnTopHint |
                                      QtCore.Qt.WindowType.FramelessWindowHint)
@@ -45,13 +42,16 @@ def main():
     splash.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
     splash.setMask(splash_pix.mask())
     splash.show()
-    app.processEvents()
+    QtWidgets.QApplication.processEvents()
 
-    time.sleep(4)
-    main_win.show()
-    splash.close()
-    main_win.raise_()
-    main_win.activateWindow()
+    from MainMenu import MainMenuWindow
+
+    main_win = MainMenuWindow()
+
+    splash.close()  # 关闭启动画面
+    main_win.show()  # 显示主窗口
+    main_win.raise_()  # 置顶窗口
+    main_win.activateWindow()  # 激活窗口获取焦点
 
     sys.exit(app.exec_())
 

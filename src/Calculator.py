@@ -132,6 +132,16 @@ def is_444_success(encoded_board, target, position):
 
 @njit(nogil=True, inline='always')
 def is_442_pattern(encoded_board):
+    return (np.uint64(encoded_board) & np.uint64(0xffffff)) == np.uint64(0xffffff)
+
+
+@njit(nogil=True, inline='always')
+def is_442_success(encoded_board, target, _):
+    return (np.uint64(encoded_board) >> np.uint64(24) & np.uint64(0xf)) == np.uint64(target)
+
+
+@njit(nogil=True, inline='always')
+def is_442t_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(0xffffff)) == np.uint64(0xffffff) or \
         (np.uint64(encoded_board) & np.uint64(0xf0ff0fff)) == np.uint64(0xf0ff0fff) or \
         (np.uint64(encoded_board) & np.uint64(0xffff0ff)) == np.uint64(0xffff0ff) or \
@@ -145,7 +155,7 @@ def is_442_pattern(encoded_board):
 
 
 @njit(nogil=True, inline='always')
-def is_442_success(encoded_board, target, _):
+def is_442t_success(encoded_board, target, _):
     return (np.uint64(encoded_board) >> np.uint64(36) & np.uint64(0xf)) == np.uint64(target) or \
         (np.uint64(encoded_board) >> np.uint64(32) & np.uint64(0xf)) == np.uint64(target) or \
         (np.uint64(encoded_board) >> np.uint64(28) & np.uint64(0xf)) == np.uint64(target) or \
