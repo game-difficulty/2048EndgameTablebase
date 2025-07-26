@@ -251,11 +251,6 @@ class TestWindow(QtWidgets.QMainWindow):
 
         self.retranslateUi()
 
-    def resizeEvent(self, event):
-        super(TestWindow, self).resizeEvent(event)
-        self.text_display.setMaximumWidth(self.width() - self.height() + 50)
-        self.gameframe.resize(self.height(), self.height())
-
     def retranslateUi(self):
         _translate = QtCore.QCoreApplication.translate
         self.setWindowTitle(_translate("Tester", "Tester"))
@@ -416,7 +411,7 @@ class TestWindow(QtWidgets.QMainWindow):
 
         if self.replay_window is None:
             self.replay_window = ReplayWindow(record)
-        else:
+        elif len(record) > 1 or len(self.replay_window.gameframe.record) == 0:
             self.replay_window.reset_record(record)
 
         if self.replay_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:

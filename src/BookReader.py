@@ -21,7 +21,7 @@ class BookReader:
     last_operation = ('none', 'none', lambda x: x)
 
     @staticmethod
-    def move_on_dic(board: np.typing.NDArray, pattern: str, target: str, pattern_full: str, pos: str = '0'
+    def move_on_dic(board: NDArray, pattern: str, target: str, pattern_full: str, pos: str = '0'
                     ) -> Dict[str, Union[str, float, int]]:
         bm_ = bm if pattern not in ('2x4', '3x3', '3x4') else vbm
         nums_adjust, pattern_check_func, to_find_func, success_check_func, _ = \
@@ -120,8 +120,8 @@ class BookReader:
         return direction
 
     @staticmethod
-    def find_value(pathname: str, filename: str, search_key: np.uint64, ind: np.typing.NDArray = None,
-                   segments: np.typing.NDArray = None) -> Union[int, float, str, None]:
+    def find_value(pathname: str, filename: str, search_key: np.uint64, ind: NDArray = None,
+                   segments: NDArray = None) -> Union[int, float, str, None]:
         search_key = np.uint64(search_key)
         fullpath = os.path.join(pathname, filename)
         if os.path.exists(fullpath):
@@ -200,7 +200,7 @@ class BookReaderDispatcher:
                 return
         self.book_reader_ad = BookReaderAD(pattern, target)
 
-    def move_on_dic(self, board: np.typing.NDArray, pattern: str, target: str, pattern_full: str, pos: str = '0'
+    def move_on_dic(self, board: NDArray, pattern: str, target: str, pattern_full: str, pos: str = '0'
                     ) -> Dict[str, Union[str, float, int]]:
         if self.use_ad and self.book_reader_ad is not None:
             return self.book_reader_ad.move_on_dic(board, pattern_full, pos)

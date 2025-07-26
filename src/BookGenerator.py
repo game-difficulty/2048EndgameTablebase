@@ -8,13 +8,12 @@ from numpy.typing import NDArray
 from numba import njit, prange
 import psutil
 
-from BoardMover import move_all_dir
+
 from BookGeneratorUtils import sort_array, parallel_unique, concatenate, merge_deduplicate_all, largest_power_of_2, \
     hash_, merge_inplace
 import Config
 from Config import SingletonConfig
 from LzmaCompressor import compress_with_7z
-from Variants.vCalculator import is_variant_pattern
 from SignalHub import progress_signal
 
 PatternCheckFunc = Callable[[np.uint64], bool]

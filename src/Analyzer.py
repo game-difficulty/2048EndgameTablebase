@@ -384,9 +384,9 @@ class Analyzer:
 
         filename = self.full_pattern + '_' + str(step) + f'_{self.goodness_of_fit:.4f}' + '.rpl'
         target_file_path = os.path.join(self.target_path, filename)
-        self.record[rec_step_count + 1] = (
+        self.record[rec_step_count] = (
             0, 88, 666666666, 233333333, 314159265, 987654321)
-        self.record[:rec_step_count + 2].tofile(target_file_path)
+        self.record[:rec_step_count + 1].tofile(target_file_path)
 
 
 # noinspection PyAttributeOutsideInit
