@@ -406,7 +406,7 @@ def recalculate_ad(
             # print(f'load {np.sum(match_index != np.uint64(0xffffffffffffffff))}')
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def solve_optimal_success_rate_arr(t, new_value, i, rep_t, rep_t_rev, pos_rev, derive_size, pattern_check_func,
                                    sym_func, rep_v, count_32k, book_dict, ind_dict, indind_dict, board_sum,
                                    match_index, match_mat, book_mat, ind_arr, indind_arr, tiles_combinations_dict,
@@ -419,7 +419,6 @@ def solve_optimal_success_rate_arr(t, new_value, i, rep_t, rep_t_rev, pos_rev, d
 
     #  mnt指移动后是否生成新大数
     for direc, (newt, mnt) in enumerate(m_move_all_dir2(t_gen, board_rev)):
-        newt = np.uint64(newt) # todo
         if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
             newt, symm_index = sym_func(newt)
             rep_t_gen_m = np.uint64(move_board2(rep_t_gen, rep_t_gen_rev, direc + 1))
@@ -455,7 +454,7 @@ def solve_optimal_success_rate_arr(t, new_value, i, rep_t, rep_t_rev, pos_rev, d
                 need_process, tiles_combinations, pos_rank, pos_32k, tile_value, count32k = (
                     dispatch_mnt_osr_ad_arr(unmasked_newt, board_sum,
                                             optimal_success_rate, tiles_combinations_dict, param))
-                pos_32k = np.uint64(pos_32k) # todo
+
                 if not need_process:
                     # 4
                     continue
@@ -521,7 +520,7 @@ def solve_optimal_success_rate_arr(t, new_value, i, rep_t, rep_t_rev, pos_rev, d
     return optimal_success_rate
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def solve_optimal_success_rate(t, new_value, i, board_sum, pattern_check_func, sym_func, count_32k,
                                book_dict, ind_dict, indind_dict, book_mat, ind_arr, indind_arr,
                                tiles_combinations_dict, param:ParamType):
@@ -550,7 +549,7 @@ def solve_optimal_success_rate(t, new_value, i, board_sum, pattern_check_func, s
     return optimal_success_rate
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def update_mnt_osr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint64,
                       ind_dict: IndexDictType, indind_dict: IndexIndexDictType, osr: np.uint64, board_sum: np.uint32,
                       tiles_combinations_dict, param:ParamType) -> np.uint64:
@@ -600,7 +599,7 @@ def update_mnt_osr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint
     return osr
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def process_derived(t_gen: np.uint64, board_sum: np.uint32, direc: int,
                     symm_index: int, tiles_combinations_dict, permutation_dict, param:ParamType) -> NDArray[np.uint64]:
     derived = unmask_board(t_gen, board_sum, tiles_combinations_dict, permutation_dict, param)
@@ -610,7 +609,7 @@ def process_derived(t_gen: np.uint64, board_sum: np.uint32, direc: int,
     return new_derived
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def update_rank_match(new_derived: NDArray[np.uint64], match_index: NDArray[np.uint64]
                       , hashed_match_ind: np.uint64, match_ind: np.uint64, match_mat) -> NDArray[np.uint32]:
     ranked_array = match_arr(new_derived)
@@ -627,7 +626,7 @@ def arr_max(arr1: NDArray, arr2: NDArray):
         arr1[i] = max(arr1[i], arr2[i])
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def match_arr(a: NDArray) -> NDArray[np.uint16]:
     sorted_indices = np.argsort(a)  # 事实上在Numba包装的函数内部调用np.argsort比原版更慢
     ranked_array = np.empty(len(a), dtype=np.uint16)
@@ -635,7 +634,7 @@ def match_arr(a: NDArray) -> NDArray[np.uint16]:
     return ranked_array
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def update_osr_ad_arr(book_mat: NDArray[NDArray[np.uint32]], b: np.uint64, ind_ar: NDArray[np.uint64],
                       indind_ar: NDArray[np.uint32], osr: NDArray[np.uint64], ranked_array: NDArray[np.uint16]):
     mid = search_arr_ad(ind_ar, b, indind_ar)
@@ -643,7 +642,7 @@ def update_osr_ad_arr(book_mat: NDArray[NDArray[np.uint32]], b: np.uint64, ind_a
         arr_max(osr, book_mat[mid][ranked_array])
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def update_osr_ad(book_mat: NDArray[NDArray[np.uint32]], b: np.uint64, ind_arr: NDArray[np.uint64],
                   indind_arr: NDArray[np.uint32], osr: np.uint64) -> np.uint64:
     mid = search_arr_ad(ind_arr, b, indind_arr)
@@ -653,7 +652,7 @@ def update_osr_ad(book_mat: NDArray[NDArray[np.uint32]], b: np.uint64, ind_arr: 
         return osr
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def dispatch_mnt_osr_ad_arr(unmasked_b: np.uint64, original_board_sum: np.uint32,
                             osr: NDArray[np.uint64], tiles_combinations_dict, param:ParamType, 
                             ) -> Tuple[bool, NDArray[np.uint8], int, NDArray[np.uint64], int, np.uint8]:
@@ -672,7 +671,7 @@ def dispatch_mnt_osr_ad_arr(unmasked_b: np.uint64, original_board_sum: np.uint32
     return True, tiles_combinations, pos_rank, pos_32k, tile_value, count_32k
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def update_mnt_osr_ad_arr3(book_dict: BookDictType, unmasked_b: np.uint64,
                            count_32k: np.uint8, ind_dict: IndexDictType, indind_dict: IndexIndexDictType,
                            ranked_array: NDArray[np.uint16], osr: NDArray[np.uint64]):
@@ -686,7 +685,7 @@ def update_mnt_osr_ad_arr3(book_dict: BookDictType, unmasked_b: np.uint64,
         arr_max(osr, book_mat[mid][ranked_array])
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def update_mnt_osr_ad_arr2(book_dict: BookDictType, b: np.uint64,
                            pos_rank: int, count_32k: np.uint8, ind_dict: IndexDictType, indind_dict: IndexIndexDictType,
                            ranked_array: NDArray[np.uint16], osr: NDArray[np.uint64], permutation_dict, param:ParamType):
@@ -701,7 +700,7 @@ def update_mnt_osr_ad_arr2(book_dict: BookDictType, b: np.uint64,
         arr_max(osr, book_mat[mid][permutations_match][ranked_array])
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def update_mnt_osr_ad_arr1(book_dict: BookDictType, unmasked_b: np.uint64, ind_dict: IndexDictType,
                            indind_dict: IndexIndexDictType, board_derived: NDArray[np.uint64], osr: NDArray[np.uint64],
                            sym_func: SymFindFunc, tiles_combinations: NDArray[np.uint8], pos_rank: int,
@@ -731,7 +730,7 @@ def update_mnt_osr_ad_arr1(book_dict: BookDictType, unmasked_b: np.uint64, ind_d
             osr[positions_match] = osr_match
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def update_mnt_osr_364_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint64,
                           ind_dict: IndexDictType, indind_dict: IndexIndexDictType, osr: np.uint64, 
                           param:ParamType
@@ -756,7 +755,7 @@ def update_mnt_osr_364_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.
     return osr
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def _permutations_mapping_364(x, y, n):
     if x < y:
         return 2 * n * x - x * x - 2 * x + y - 1
@@ -764,7 +763,7 @@ def _permutations_mapping_364(x, y, n):
         return 2 * n * y - y * y - 3 * y + n + x - 2
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def update_mnt_osr_364_arr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint64,
                               ind_dict: IndexDictType, indind_dict: IndexIndexDictType, osr: NDArray[np.uint64],
                               ranked_array: NDArray[np.uint16], permutation_dict, param:ParamType):
@@ -783,7 +782,7 @@ def update_mnt_osr_364_arr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b:
         arr_max(osr, book_mat[mid][permutations_match][ranked_array])
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def find_3x64_pos(unmasked_b: np.uint64, param:ParamType) -> Tuple[int, int, int, int]:
     pos_rank = 0
     for i in range(60, -4, -4):
@@ -803,7 +802,7 @@ def find_3x64_pos(unmasked_b: np.uint64, param:ParamType) -> Tuple[int, int, int
     return pos_rank64, pos_rank128, pos_rank, pos_64
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def reverse_arr(board: NDArray[np.uint64]) -> NDArray[np.uint64]:
     board = (board & np.uint64(0xFF00FF0000FF00FF)) | ((board & np.uint64(0x00FF00FF00000000)) >> np.uint64(24)) | (
             (board & np.uint64(0x00000000FF00FF00)) << np.uint64(24))
@@ -812,7 +811,7 @@ def reverse_arr(board: NDArray[np.uint64]) -> NDArray[np.uint64]:
     return board
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def move_arr(board: NDArray[np.uint64], direc: int, board_rev: NDArray[np.uint64]) -> NDArray[np.uint64]:
     moved = np.empty(len(board), dtype=np.uint64)
     for i in range(len(board)):
@@ -820,7 +819,7 @@ def move_arr(board: NDArray[np.uint64], direc: int, board_rev: NDArray[np.uint64
     return moved
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def sym_like(bd2: np.uint64, symm_index: int) -> np.uint64:
     if symm_index == 0:
         bd2 = bd2
@@ -841,7 +840,7 @@ def sym_like(bd2: np.uint64, symm_index: int) -> np.uint64:
     return bd2
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def sym_arr_like(bd_arr: NDArray[np.uint64], symm_index: int):
     if symm_index == 0:
         return
@@ -868,7 +867,7 @@ def sym_arr_like(bd_arr: NDArray[np.uint64], symm_index: int):
             bd_arr[i] = RotateR(bd_arr[i])
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def find_mnt_pos(unmasked: np.uint64) -> int:
     pos_rank = 0
     for i in range(60, -4, -4):
@@ -939,7 +938,7 @@ def _create_index_ad(arr: NDArray[np.uint64]) -> NDArray[np.uint32]:
     return ind1
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def binary_search_arr_ad(arr: NDArray[np.uint64],
                          target: np.uint64, low: np.uint32, high: np.uint32) -> np.uint32:
     while low <= high:
@@ -955,7 +954,7 @@ def binary_search_arr_ad(arr: NDArray[np.uint64],
     return np.uint32(0xffffffff)  # 如果没有找到匹配项
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def search_arr_ad(arr: NDArray[np.uint64],
                   b: np.uint64, ind: NDArray[np.uint32]) -> np.uint64:
     if arr is None or len(arr) == 0:
@@ -1025,7 +1024,7 @@ def dict_fromfile(path: str, step: int) -> (BookDictType, IndexDictType):
 """非查表实现"""
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def replace_val(encoded_board: np.uint64) -> Tuple[np.uint64, np.uint64]:
     replace_value = np.uint64(0xf)
     for k in range(0, 64, 4):
@@ -1037,7 +1036,7 @@ def replace_val(encoded_board: np.uint64) -> Tuple[np.uint64, np.uint64]:
     return encoded_board, replace_value
 
 
-@njit(nogil=True, boundscheck=True)
+@njit(nogil=True)
 def ind_match(encoded_board: np.uint64, replacement_value: np.uint64) -> np.uint64:
     ind = 0
     x = np.uint64(0xf) - replacement_value

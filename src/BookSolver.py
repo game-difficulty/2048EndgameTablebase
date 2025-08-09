@@ -119,7 +119,8 @@ def recalculate_process(
         if deletion_threshold > 0:
             remove_died(d2, deletion_threshold).tofile(pathname + str(i + 2) + '.book')  # 再写一次，把成功率低于阈值的局面去掉
 
-        if SingletonConfig().config.get('compress_temp_files', False):
+        if (SingletonConfig().config.get('compress_temp_files', False) and
+                SingletonConfig().config.get('optimal_branch_only', False)):
             compress_with_7z(pathname + str(i + 2) + '.book')
         elif not SingletonConfig().config.get('optimal_branch_only', False):
             do_compress(pathname + str(i + 2) + '.book')  # 如果设置了压缩，则压缩i+2的book，其已经不需要再频繁查找
@@ -179,7 +180,7 @@ def binary_search_arr(arr: NDArray[[np.uint64, np.uint32]],
         high = len(arr) - 1
 
     while low <= high:
-        mid = np.uint32((low + high) // 2)
+        mid = low + np.uint32((high - low) // 2)
         mid_val = arr[mid][0]
         if mid_val < target:
             low = mid + 1
@@ -331,7 +332,7 @@ def binary_search_arr2(arr: NDArray[[np.uint64, np.uint32]],
         high = len(arr) - 1
 
     while low <= high:
-        mid = np.uint32((low + high) // 2)
+        mid = low + np.uint32((high - low) // 2)
         mid_val = arr[mid][0]
         if mid_val < target:
             low = mid + 1

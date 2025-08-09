@@ -5,6 +5,7 @@ from datetime import datetime
 import numpy as np
 import random
 from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit
 from PyQt5.QtGui import QIcon
 
@@ -146,6 +147,9 @@ class TestWindow(QtWidgets.QMainWindow):
         self.record = np.empty(4000, dtype='uint64,uint8,uint32,uint32,uint32,uint32')
         self.step_count = 0
 
+        self.reader_thread = ReaderWorker(self.book_reader, np.zeros((4, 4)), ['?', '?', '?'], '')
+        self.reader_thread.result_ready.connect(self._show_results)
+
     def setupUi(self):
         self.setObjectName("self")
         self.setWindowIcon(QIcon(r"pic\2048.ico"))
@@ -264,6 +268,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.replay_bt.setText(_translate("Tester", "Review Replay"))
 
     def menu_selected(self, i):
+        self.isProcessing = False
         self.pattern[i] = self.sender().text()
         self.text_display.add_text('_'.join(self.pattern))
         self.text_display.update_text()
@@ -286,6 +291,9 @@ class TestWindow(QtWidgets.QMainWindow):
                 if path_found:
                     self.book_reader.dispatch(path_list, self.pattern[0], self.pattern[1])
                     self.init_random_state()
+
+            self.reader_thread.current_pattern = self.full_pattern
+            self.reader_thread.pattern_settings = self.pattern
 
     def init(self):
         self.text_display.clear_text()
@@ -335,6 +343,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.record[0][0] = self.gameframe.board_encoded
 
     def set_board_init(self):
+        self.isProcessing = False
         path_found, path_list = self.init()
         if path_found:
             self.gameframe.board_encoded = np.uint64(int(self.board_state.text(), 16))
@@ -422,6 +431,8 @@ class TestWindow(QtWidgets.QMainWindow):
         self.replay_window.activateWindow()
         self.replay_window.raise_()
 
+        self.replay_window.gameframe.set_use_variant(self.pattern[0])
+
     def keyPressEvent(self, event):
         if self.isProcessing:
             return
@@ -442,8 +453,16 @@ class TestWindow(QtWidgets.QMainWindow):
         self.isProcessing = True  # 设置标志防止进一步的输入
         self.gameframe.do_move(direction)
         self.one_step(direction)
-        self.result = self.book_reader.move_on_dic(
-            self.gameframe.board, self.pattern[0], self.pattern[1], self.full_pattern)
+
+        self.reader_thread.board_state = self.gameframe.board
+        self.reader_thread.start()  # type:ignore
+
+        self.gameframe.setFocus()
+
+    def _show_results(self, result: dict):
+        """ 绑定reader_thread信号 """
+        self.result = result
+
         self.text_display.add_text('--------------------------------------------------')
         self.text_display.print_board(self.gameframe.board)
         self.text_display.add_text('')
@@ -461,8 +480,8 @@ class TestWindow(QtWidgets.QMainWindow):
         self.text_display.add_text(self.tr('Total Goodness of Fit: ') + f'{self.gameframe.goodness_of_fit:.4f}' + '\n')
         self.text_display.add_text(self.tr('Maximum Combo: ') + f'{self.gameframe.max_combo}' + '\n')
         self.text_display.update_text()
-        self.gameframe.setFocus()
         self.isProcessing = False
+
 
     def one_step(self, move: str):
         text_list = []
@@ -478,7 +497,7 @@ class TestWindow(QtWidgets.QMainWindow):
 
         if not self.result[best_move] or isinstance(self.result[best_move], str):
             return
-        if self.result[move.lower()] is not None and self.result[move.lower()] / self.result[best_move] == 1:
+        if self.result[move.lower()] is not None and self.result[best_move] - self.result[move.lower()] <= 3e-10:
             self.gameframe.combo += 1
             self.gameframe.max_combo = max(self.gameframe.max_combo, self.gameframe.combo)
             self.gameframe.performance_stats["**Perfect!**"] += 1
@@ -539,6 +558,24 @@ class TestWindow(QtWidgets.QMainWindow):
     @staticmethod
     def encode(a, b, c):
         return np.uint8(((a << 5) | (b << 1) | c) & 0xFF)
+
+
+class ReaderWorker(QtCore.QThread):
+    """ 常驻工作线程，负责查表 """
+    result_ready = QtCore.pyqtSignal(dict)
+
+    def __init__(self, reader: BookReaderDispatcher, board_state:np.uint64,
+                 pattern_settings: list, current_pattern: str):
+        super(ReaderWorker, self).__init__()
+        self.book_reader = reader
+        self.board_state = board_state
+        self.pattern_settings = pattern_settings
+        self.current_pattern = current_pattern
+
+    def run(self):
+        result = self.book_reader.move_on_dic(self.board_state, self.pattern_settings[0], self.pattern_settings[1],
+                                              self.current_pattern, self.pattern_settings[2])
+        self.result_ready.emit(result)
 
 
 if __name__ == "__main__":

@@ -87,7 +87,7 @@ class ColoredMarkSlider(QtWidgets.QSlider):
         size = 10
 
         positions = groove_x_start + (
-                groove_width - int(size * 0.75)) * self.points_rank / len(self.data_points) + size // 2
+                groove_width - size * 0.75) * self.points_rank / (len(self.data_points) - 0.8) + size // 2
         for idx, x_pos in enumerate(positions):
             painter.setPen(Qt.NoPen)
             painter.setBrush(self.point_colors[idx])
@@ -170,6 +170,7 @@ class ReplayFrame(BaseBoardFrame):
         if isinstance(record, str):
             if os.path.exists(record):
                 self.record = np.fromfile(record, dtype='uint64,uint8,uint32,uint32,uint32,uint32')
+                self.set_use_variant(os.path.basename(record).split('_')[0])
         elif isinstance(record, np.ndarray):
             self.record = record
         else:

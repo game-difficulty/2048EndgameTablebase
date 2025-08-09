@@ -48,8 +48,16 @@ def initialize_sorting_library():
         _pivots_ptr = (c_uint64 * len(_pivots))(*_pivots)
         _use_avx512 = True if use_avx == 2 else False
 
-        # 调用DLL中的parallel_sort函数进行测试排序
-        _dll.parallel_sort(_arr_ptr, _arr.size, _pivots_ptr, _use_avx512)
+        try:
+            # 调用DLL中的parallel_sort函数进行测试排序
+            _dll.parallel_sort(_arr_ptr, _arr.size, _pivots_ptr, _use_avx512)
+        except Exception as e:
+            if _use_avx512:
+                _dll.parallel_sort(_arr_ptr, _arr.size, _pivots_ptr, False)
+                SingletonConfig().use_avx = 1
+                use_avx = 1
+            else:
+                raise e
 
         # 验证排序结果是否正确
         if not np.all(_arr[:-1] <= _arr[1:]):
@@ -62,6 +70,7 @@ def initialize_sorting_library():
 
     except Exception as e:
         # 如果加载DLL或排序出错，禁用AVX并记录日志
+        logger.warning(f"avx supports: {use_avx}")
         logger.warning(f"Failed to load DLL or test sorting failed: {e}. Falling back to numpy sort.")
         logger.warning(traceback.format_exc())  # 输出完整的异常堆栈
         use_avx = False

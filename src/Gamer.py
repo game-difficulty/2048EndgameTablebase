@@ -1,4 +1,5 @@
 import sys
+import time
 from typing import List, Tuple, Dict
 
 import numpy as np
@@ -359,6 +360,7 @@ class BaseBoardFrame(QtWidgets.QFrame):
 
         self.timer1, self.timer2, self.timer3 = QTimer(), QTimer(), QTimer()
         self._last_values = self.board.copy()
+        self.last_move_time = time.time()
 
     def setupUi(self):
         self.setMaximumSize(QtCore.QSize(100000, 100000))
@@ -400,6 +402,11 @@ class BaseBoardFrame(QtWidgets.QFrame):
             self.update_all_frame(self._last_values)
         mover = bm if self.use_variant_mover == 0 else vbm
         do_anim = SingletonConfig().config['do_animation']
+
+        time_now = time.time()
+        too_fast = time_now - self.last_move_time < 0.08
+        self.last_move_time = time_now
+
         direct = {'Left': 1, 'Right': 2, 'Up': 3, 'Down': 4}[direction.capitalize()]
         board_encoded_new, new_score = mover.s_move_board(self.board_encoded, direct)
         board_encoded_new = np.uint64(board_encoded_new)
@@ -410,7 +417,7 @@ class BaseBoardFrame(QtWidgets.QFrame):
             if do_gen:
                 self.gen_new_num(do_anim)
             self.board = bm.decode_board(self.board_encoded)
-            if do_anim:
+            if do_anim and not too_fast:
                 self.slide_tiles(current_values, direction)
                 self.timer2.singleShot(110, lambda: self.pop_merged(current_values, direction))
                 # 生成新数字之前的局面

@@ -513,9 +513,9 @@ class TrainWindow(QtWidgets.QMainWindow):
 
     def manual_state_change(self):
         if self.manual_checkBox.isChecked():
-            self.gameframe.spawn_mode = 3
             self.worst_spawn_checkBox.setChecked(False)
             self.best_spawn_checkBox.setChecked(False)
+            self.gameframe.spawn_mode = 3
         else:
             self.gameframe.spawn_mode = 0
         self.gameframe.setFocus()

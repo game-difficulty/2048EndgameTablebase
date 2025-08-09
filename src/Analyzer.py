@@ -35,6 +35,8 @@ class Analyzer:
         self.pattern = pattern
         self.target = target
         self.n_large_tiles = self.pattern_map[pattern][0]
+        self.is_free = self.pattern.startswith('free') and not self.pattern.endswith('w')
+        self.large_tile_sum = 0
 
         self.bm = bm
         self.vbm = vbm
@@ -148,7 +150,7 @@ class Analyzer:
         }
 
     def check_nth_largest(self, board_encoded: np.uint64) -> bool:
-        is_free = (self.pattern[:4] == 'free' and self.pattern[-1] != 'w')
+        is_free = self.is_free
         # 初始化一个大小为16的列表，记录0-15的出现次数
         count = [0] * 16
 
@@ -171,24 +173,28 @@ class Analyzer:
         return False
 
     def mask_large_tiles(self, board: np.typing.NDArray) -> np.typing.NDArray:
-        is_free = (self.pattern[:4] == 'free' and self.pattern[-1] != 'w')
-        target = 2 ** self.target
-        for i in range(4):
-            for j in range(4):
-                if (board[i][j] >= target and not is_free) or (is_free and board[i][j] > target):
-                    board[i][j] = 32768
+        target_value = 1 << self.target
+
+        # 创建条件掩码
+        if self.is_free:
+            mask = (board > target_value)
+        else:
+            mask = (board >= target_value)
+
+        # 批量应用掩码
+        np.copyto(board, 32768, where=mask)
         return board
 
     def generate_reports(self):
         """循环调用analyze_one_step，找到连续的定式范围内的局面，将分析结果写入报告"""
         for i in range(len(self.record_list)):
-            is_endgame = self.analyze_one_step(i)
+            is_endgame, large_tile_changed = self.analyze_one_step(i)
             if is_endgame is None:
                 self.write_error('''Table path not found, please make sure you have calculated the required table
                 and that it is working properly in the practise module.''')
                 break
 
-            elif not is_endgame:
+            elif large_tile_changed:
                 if len(self.text_list) > 100:
                     self.write_analysis(i)
                     self.save_rec_to_file(i)
@@ -222,14 +228,14 @@ class Analyzer:
         self.result = self.book_reader.move_on_dic(masked_board, self.pattern, target, self.full_pattern, self.position)
         self.record_replay(board, move, new_tile, spawn_position)
 
-        # 超出定式范围、没查到、死亡、成功等情况
         best_move = list(self.result.keys())[0]
-        if not self.result[best_move] or self.result[best_move] == 1 or self.result[best_move] == '?':
-            return False
 
         # 配置里没找到表路径
         if best_move == '?':
             return None
+        # 超出定式范围、没查到、死亡、成功等情况
+        if not self.result[best_move] or self.result[best_move] == 1 or self.result[best_move] == '?':
+            return False
 
         self.print_board(board)
         self.text_list.append('')
@@ -238,7 +244,7 @@ class Analyzer:
         self.text_list.append('')
 
         # 移动有效但是形成超出定式范围的局面
-        if self.result[move.lower()] is None:
+        if not isinstance(self.result[move.lower()], (int, float)):
             self.text_list.append(translate_('Analyzer', "The game goes beyond this formation"))
             self.text_list.append('--------------------------------------------------')
             self.text_list.append('')
@@ -249,7 +255,7 @@ class Analyzer:
         if self.step_count < 5:
             return True
 
-        if self.result[move.lower()] is not None and self.result[move.lower()] / self.result[best_move] == 1:
+        if self.result[move.lower()] is not None and self.result[best_move] - self.result[move.lower()] <= 3e-10:
             self.combo += 1
             self.max_combo = max(self.max_combo, self.combo)
             self.performance_stats["**Perfect!**"] += 1
@@ -265,7 +271,8 @@ class Analyzer:
             self.maximum_single_step_loss_relative = max(self.maximum_single_step_loss_relative, 1 - loss)
             loss_abs = self.result[best_move] - self.result[move.lower()]
             self.maximum_single_step_loss_absolute = max(self.maximum_single_step_loss_absolute, loss_abs)
-            self.goodness_of_fit *= loss
+            if loss != 0:
+                self.goodness_of_fit *= loss
             # 根据 loss 值提供不同级别的评价
             evaluation = self.evaluation_of_performance(loss)
             self.performance_stats[evaluation] += 1
@@ -295,11 +302,14 @@ class Analyzer:
         elif self.check_nth_largest(board_encoded):
             masked_board = self.mask_large_tiles(board.copy())
         else:
-            return False
+            return False, True
+        large_tile_sum = masked_board.sum() - board.sum()
+        large_tile_changed = large_tile_sum != self.large_tile_sum
+        self.large_tile_sum = large_tile_sum
 
         move = ('Left', 'Right', 'Up', 'Down')[move_encoded - 1]
         is_endgame = self._analyze_one_step(board, masked_board, move, new_tile, spawn_position)
-        return is_endgame
+        return is_endgame, large_tile_changed
 
     def write_error(self, text: str):
         filename = self.full_pattern + '_' + 'error'
@@ -366,7 +376,7 @@ class Analyzer:
         encoded = self.encode(direct, spawn_position, new_tile - 1)
         success_rates = []
         for d in ('left', 'right', 'up', 'down'):
-            rate = self.result[d]
+            rate = self.result.get(d, None)
             if isinstance(rate, (int, float)):
                 success_rates.append(np.uint32(rate * 4e9))
             else:
