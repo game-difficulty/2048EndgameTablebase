@@ -1,5 +1,6 @@
 import random
 import sys
+import time
 from typing import List, Tuple, Dict
 
 import numpy as np
@@ -212,6 +213,7 @@ class MinigameFrame(QtWidgets.QFrame):
 
         self.timer1, self.timer2, self.timer3 = QTimer(), QTimer(), QTimer()
         self._last_values = self.board.copy()
+        self.last_move_time = time.time()
 
     def setup_new_game(self):
         self.board, _, self.newtile_pos, self.newtile = self.mover.gen_new_num(
@@ -333,6 +335,11 @@ class MinigameFrame(QtWidgets.QFrame):
             self.game_square.cancel_all_animations()
             self.update_all_frame(self._last_values)
         do_anim = SingletonConfig().config['do_animation']
+
+        time_now = time.time()
+        too_fast = time_now - self.last_move_time < 0.08
+        self.last_move_time = time_now
+
         direct = {'Left': 1, 'Right': 2, 'Up': 3, 'Down': 4}[direction.capitalize()]
         self.before_move(direct)
         board_new, new_score, is_valid_move = self.move_and_check_validity(direct)
@@ -344,7 +351,7 @@ class MinigameFrame(QtWidgets.QFrame):
             self.before_gen_num(direct)
             if do_gen:
                 self.gen_new_num(do_anim)
-            if do_anim:
+            if do_anim and not too_fast:
                 self.slide_tiles(current_values, direction)
                 self.timer2.singleShot(110, lambda: self.pop_merged(current_values, direction))
                 self.timer3.singleShot(100, lambda: self.update_all_frame(board_new))
