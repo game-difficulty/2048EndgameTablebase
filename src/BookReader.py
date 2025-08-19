@@ -246,19 +246,19 @@ class BookReaderDispatcher:
 
 
 if __name__ == "__main__":
-    _result = BookReader.move_on_dic(np.array([[0, 2, 2, 4],
-                                               [2, 8, 32, 64],
-                                               [2, 32768, 32768, 32768],
-                                               [2, 32768, 32768, 32768]]),
-                                     'L3', '512', 'L3_512_0')
+    _result = BookReader.move_on_dic(np.array([[8, 8, 8, 4],
+                                               [64, 32, 2, 4],
+                                               [256, 128, 32768, 32768],
+                                               [32768, 32768, 32768, 32768]]),
+                                     '442t', '512', '442t_512')
     print(_result)
 
-    br = BookReaderDispatcher()
-    br.dispatch(SingletonConfig().config['filepath_map']['L3_512_0']
-                              , 'L3', '512')
-    _result = br.move_on_dic(np.array([[0, 2, 2, 4],
-                                               [2, 8, 32, 64],
-                                               [2, 32768, 32768, 32768],
-                                               [2, 32768, 32768, 32768]]),
-                                     'L3', '512', 'L3_512_0')
-    print(_result)
+    # br = BookReaderDispatcher()
+    # br.dispatch(SingletonConfig().config['filepath_map']['L3_512_0']
+    #                           , 'L3', '512')
+    # _result = br.move_on_dic(np.array([[0, 2, 2, 4],
+    #                                            [2, 8, 32, 64],
+    #                                            [2, 32768, 32768, 32768],
+    #                                            [2, 32768, 32768, 32768]]),
+    #                                  'L3', '512', 'L3_512_0')
+    # print(_result)

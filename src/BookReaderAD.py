@@ -107,6 +107,10 @@ class BookReaderAD:
             newt = np.uint64(newt)
             if newt != board and pattern_check_func(newt):
                 result[d] = self.find_value(pathname, filename, newt, sym_func)
+                # print(d)
+                # print(result[d])
+                # print(bm.decode_board(newt))
+                # print()
         return result
 
     @staticmethod
@@ -180,8 +184,10 @@ class BookReaderAD:
         if tiles_combinations is not None:
             board_derived = unmask_board(search_key, np.uint32(original_board_sum), self.tiles_combinations_dict,
                                          self.permutation_dict, self.param)
-            symm_board = sym_like(board, symm_index)
+            symm_board = np.uint64(sym_like(board, symm_index))
+
             ind2 = np.searchsorted(board_derived, symm_board)
+
             with open(book_filepath, 'rb') as f:
                 record_size = struct.calcsize('I')
                 f.seek((ind2 + ind * len(board_derived)) * record_size)

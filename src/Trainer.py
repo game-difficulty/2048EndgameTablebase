@@ -567,39 +567,61 @@ class TrainWindow(QtWidgets.QMainWindow):
                 if button != sender:
                     button.setChecked(False)
             QtWidgets.QApplication.setOverrideCursor(QCursor(Qt.ClosedHandCursor))
+            if self.show_results_checkbox.isChecked():
+                self.results_label.setText(self.tr('   Setting the board...'))
         else:
             QtWidgets.QApplication.setOverrideCursor(QCursor(Qt.ArrowCursor))
             self.isProcessing = False
             self.gameframe.num_to_set = None
-            self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
+
+            new_state = hex(self.gameframe.board_encoded)[2:].rjust(16, '0')
+            current_state = self.board_state.text()
+            self.board_state.setText(new_state)
+            # 摆盘后局面变化过大时重置历史记录
+            if count_match_positions(new_state, current_state) < 12:
+                self.gameframe.score = 0
+                self.gameframe.history = []
+                self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
+
             self.gameframe._last_values = self.gameframe.board.copy()
             self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
             self.read_results()
 
     def read_results(self):
         if self.show_results_checkbox.isChecked():
-            board = np.uint64(int('0x' + self.board_state.text().rjust(16, '0'), 16))
+            board = self.gameframe.board_encoded
             self.reader_thread.board_state = board
             self.reader_thread.start()
+            QTimer.singleShot(1000, lambda: self.check_reader_thread_state(board))
         else:
             self.results_label.setText('')
             self.result = dict()
             self.isProcessing = False
         self.gameframe.setFocus()
 
+    def check_reader_thread_state(self, board):
+        if (self.reader_thread.board_state == board and self.reader_thread.state == '?' and
+                self.show_results_checkbox.isChecked()):
+            self.results_label.setText(self.tr('   Reading...'))
+
     def _show_results(self, result:dict, state:str):
         """ 绑定reader_thread信号 """
         if result:
-            if SingletonConfig().config['language'] == 'zh':
-                results_text = "\n".join(f"  {direction_map[key[0].lower()]}: {value}" for key, value in result.items())
+            if self.reader_thread.board_state != self.gameframe.board_encoded:
+                self.results_label.setText('')
+                self.result = dict()
+                self.read_results()
             else:
-                results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in result.items())
+                if SingletonConfig().config['language'] == 'zh':
+                    results_text = "\n".join(f"  {direction_map[key[0].lower()]}: {value}" for key, value in result.items())
+                else:
+                    results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in result.items())
 
-            self.results_label.setText(results_text)
-            self.result = result
-            result0 = result[list(result.keys())[0]]
-            if not result0 or not isinstance(result0, (float, int)):
-                self.statusbar.showMessage(self.tr("Table not found or 0 success rate"), 3000)
+                self.results_label.setText(results_text)
+                self.result = result
+                result0 = result[list(result.keys())[0]]
+                if not result0 or not isinstance(result0, (float, int)):
+                    self.statusbar.showMessage(self.tr("Table not found or 0 success rate"), 3000)
         else:
             self.results_label.setText(state)
             self.result = dict()
@@ -671,6 +693,10 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gameframe.board = bm.decode_board(self.gameframe.board_encoded)
         self.gameframe._last_values = self.gameframe.board.copy()
         self.gameframe.update_all_frame(self.gameframe.board)
+
+        # 重置历史记录
+        self.gameframe.score = 0
+        self.gameframe.history = []
         self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
 
     def handle_rotate(self, mode):
@@ -679,6 +705,8 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.handle_set_board()
 
     def handle_set_default(self):
+        if self.ai_state:
+            return
         path_list = SingletonConfig().config['filepath_map'].get(self.current_pattern, [])
         random_board = self.book_reader.get_random_state(path_list, self.current_pattern)
         self.board_state.setText(hex(random_board)[2:].rjust(16, '0'))
@@ -941,16 +969,25 @@ class ReaderWorker(QtCore.QThread):
         self.board_state = board_state
         self.pattern_settings = pattern_settings
         self.current_pattern = current_pattern
+        self.state = ''
 
     def run(self):
         board = bm.decode_board(self.board_state)
+        self.state = '?'
         result = self.book_reader.move_on_dic(board, self.pattern_settings[0], self.pattern_settings[1],
                                               self.current_pattern, self.pattern_settings[2])
-        state = ''
         if not isinstance(result, dict):
-            state = str(result)
+            self.state = str(result)
             result = dict()
-        self.result_ready.emit(result, state)
+        else:
+            self.state = ''
+        self.result_ready.emit(result, self.state)
+
+
+def count_match_positions(s1: str, s2: str) -> int:
+    if len(s1) != len(s2):
+        return 0
+    return sum(1 for a, b in zip(s1, s2) if a == b)
 
 
 if __name__ == "__main__":

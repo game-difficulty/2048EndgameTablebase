@@ -177,7 +177,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
     spawn_rate4 = SingletonConfig().config['4_spawn_rate']
     if pattern[:4] == 'free':
         if pattern[-1] != 'w':
-            steps = int(2 ** target / 2 + 24)
+            steps = int(2 ** target / 2 + 36)
             docheck_step = int(2 ** target / 2) - 20
             free_tiles = int(pattern[4:])
             arr_init = generate_free_inits(target, 15 - free_tiles, free_tiles)
@@ -186,7 +186,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
                                  pathname, docheck_step, isfree=True, spawn_rate4=spawn_rate4)
         else:
             # freew定式pos参数设为1，配合is_free_success中的设置
-            steps = int(2 ** target / 2 + 24)
+            steps = int(2 ** target / 2 + 36)
             docheck_step = int(2 ** target / 2) - 20
             free_tiles = int(pattern[4:-1])
             arr_init = generate_free_inits(0, 16 - free_tiles, free_tiles - 1)

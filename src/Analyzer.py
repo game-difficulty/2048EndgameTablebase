@@ -91,7 +91,7 @@ class Analyzer:
             bm = self.vbm
 
         replay_text = replay_text[header:]
-        self.record_list: np.typing.NDArray = np.empty(len(replay_text) - 2, dtype='uint64,uint8,uint8,uint8')
+        self.record_list: np.typing.NDArray = np.empty(len(replay_text) - 2, dtype='uint64,uint32,uint8,uint8,uint8')
 
         png_map_dict = {
             ' ': 0, '!': 1, '"': 2, '#': 3, '$': 4, '%': 5, '&': 6, "'": 7, '(': 8, ')': 9, '*': 10,
@@ -110,6 +110,7 @@ class Analyzer:
         }
         move_map = [3, 2, 4, 1]
         moves_made = 0
+        current_score = 0
 
         for i in replay_text:
             try:
@@ -124,8 +125,9 @@ class Analyzer:
             replay_position = total_space - ((index_i & 3) << 2) - ((index_i & 15) >> 2)
 
             if moves_made >= 2:
-                self.record_list[moves_made - 2] = (board, replay_move, replay_tile, 15 - replay_position)
-                board = np.uint64(bm.move_board(board, replay_move))
+                self.record_list[moves_made - 2] = (board, current_score, replay_move, replay_tile, 15 - replay_position)
+                board, new_score = np.uint64(bm.s_move_board(board, replay_move))
+                current_score += new_score
 
             board |= np.uint64(replay_tile) << np.uint64(replay_position << 2)
             moves_made += 1
@@ -293,7 +295,7 @@ class Analyzer:
         return True
 
     def analyze_one_step(self, i):
-        board_encoded, move_encoded, new_tile, spawn_position = self.record_list[i]
+        board_encoded, current_score, move_encoded, new_tile, spawn_position = self.record_list[i]
         board = self.bm.decode_board(board_encoded)
 
         # 把大数字用32768代替，返回能够进行查找的board
