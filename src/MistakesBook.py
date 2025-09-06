@@ -474,3 +474,23 @@ class MistakeTrainingWindow(QtWidgets.QMainWindow):
     def showEvent(self, event):
         super().showEvent(event)
         self.update_pattern_menu()  # 更新模式菜单
+
+    def retranslateUi(self):
+        self.setWindowTitle(self.tr("Notebook"))
+        self.pattern_menu.setTitle(self.tr("Pattern"))
+        lang = SingletonConfig().config['language']
+        is_zh = lang == 'zh'
+        for direction, btn in self.direction_buttons.items():
+            if is_zh:
+                btn.setText(direction_map[direction])
+            else:
+                btn.setText(direction)
+        self.next_btn.setText(self.tr("Next"))
+        self.practice_btn.setText(self.tr("Practise"))
+        self.delete_btn.setText(self.tr("Delete"))
+        self.weight_combo.clear()
+        self.weight_combo.addItems([
+            self.tr("Mistake Count Priority"),
+            self.tr("Total Loss Priority"),
+            self.tr("Combined Weighted")
+        ])

@@ -705,7 +705,10 @@ class TrainWindow(QtWidgets.QMainWindow):
                 self.results_label.setText(results_text)
             else:
                 self.read_results()
-                
+
+            if self.gameframe.spawn_mode == 3:
+                self.gameframe.moved = 1 - self.gameframe.moved
+
     def handle_set_board(self):
         self.textbox_reset_board()
         self.read_results()
