@@ -107,10 +107,6 @@ class BookReaderAD:
             newt = np.uint64(newt)
             if newt != board and pattern_check_func(newt):
                 result[d] = self.find_value(pathname, filename, newt, sym_func)
-                # print(d)
-                # print(result[d])
-                # print(bm.decode_board(newt))
-                # print()
         return result
 
     @staticmethod

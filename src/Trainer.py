@@ -43,13 +43,25 @@ class TrainFrame(BaseBoardFrame):
         self.parents = parents
         self.num_to_set = None
         self.spawn_mode = 0  # 0:随机 1：最好 2：最坏 3:手动
+        self.moved = 0  # 手动模式下上一操作是否为移动
+
+    def do_move(self, direction: str, do_gen=True):
+        # 手动模式下移动后必须先出数
+        if self.spawn_mode == 3 and self.moved == 1:
+            return
+        current_board = self.board_encoded
+        super().do_move(direction, do_gen)
+        if self.board_encoded != current_board and self.spawn_mode == 3:
+            self.moved = 1
 
     def gen_new_num(self, do_anim=True):
         if self.spawn_mode == 0:  # 0:随机
+            self.moved = 0
             super().gen_new_num(do_anim)
         elif self.spawn_mode == 3:  # 3:手动
-            self.history.append((self.board_encoded, self.score))
+            self.history.append((self.board_encoded, self.score))  # 移动后摆数前局面是否加入history
         elif self.parents.book_reader:
+            self.moved = 0
             results = self._spawns_success_rates()
             if not results:
                 super().gen_new_num(do_anim)
@@ -78,7 +90,7 @@ class TrainFrame(BaseBoardFrame):
         return results
 
     def mousePressEvent(self, event):
-        if self.num_to_set is None and not self.spawn_mode:
+        if self.num_to_set is None and self.spawn_mode != 3:
             self.setFocus()
             return
 
@@ -118,6 +130,9 @@ class TrainFrame(BaseBoardFrame):
             self.board_encoded = np.uint64(bm.encode_board(self.board))
             return
         else:  # 手动模式
+            if self.moved == 0:
+                return
+
             if self.board[i][j] == 0:
                 if event.button() == Qt.LeftButton:
                     num_to_set = 2
@@ -127,6 +142,7 @@ class TrainFrame(BaseBoardFrame):
                     self.newtile_pos, self.newtile = i * 4 + j, 2
                 else:
                     return
+                self.moved = 0
                 self.update_frame(num_to_set, i, j)
                 self.board[i][j] = num_to_set
                 self.board_encoded = np.uint64(bm.encode_board(self.board))
@@ -526,33 +542,39 @@ class TrainWindow(QtWidgets.QMainWindow):
             time.sleep(0.05)
         self.pattern_settings[i] = self.sender().text()
         self.pattern_text.setText('_'.join(self.pattern_settings[:2]))
-        if '' not in self.pattern_settings:
-            if self.pattern_settings[0] in ['444', 'LL', 'L3']:
-                if self.pattern_settings[0] != 'L3' and self.pattern_settings[2] == '2':
-                    self.pattern_settings[2] = '0'
-                self.current_pattern = '_'.join(self.pattern_settings)
-            else:
+        self.set_to_new_pattern()
+
+    def set_to_new_pattern(self):
+        if '' in self.pattern_settings:
+            return
+
+        if self.pattern_settings[0] in ['444', 'LL', 'L3']:
+            if self.pattern_settings[0] != 'L3' and self.pattern_settings[2] == '2':
                 self.pattern_settings[2] = '0'
-                self.current_pattern = '_'.join(self.pattern_settings[:2])
+            self.current_pattern = '_'.join(self.pattern_settings)
+        else:
+            self.pattern_settings[2] = '0'
+            self.current_pattern = '_'.join(self.pattern_settings[:2])
 
-            if self.pattern_settings[0] in ['2x4', '3x3', '3x4']:
-                self.gameframe.set_to_variant(self.pattern_settings[0])
-            else:
-                self.gameframe.set_to_44()
+        if self.pattern_settings[0] in ['2x4', '3x3', '3x4']:
+            self.gameframe.set_to_variant(self.pattern_settings[0])
+        else:
+            self.gameframe.set_to_44()
 
-            path_list = SingletonConfig().config['filepath_map'].get(self.current_pattern, [])
-            if path_list:
-                self.filepath.setText(path_list[-1])
-            else:
-                self.filepath.setText(' ')
-            self.pattern_text.setText(self.current_pattern)
-            self.book_reader.dispatch(path_list, self.pattern_settings[0], self.pattern_settings[1])
+        path_list = SingletonConfig().config['filepath_map'].get(self.current_pattern, [])
+        if path_list:
+            self.filepath.setText(path_list[-1])
+        else:
+            self.filepath.setText(' ')
+        self.pattern_text.setText(self.current_pattern)
+        self.book_reader.dispatch(path_list, self.pattern_settings[0], self.pattern_settings[1])
 
-            self.reader_thread.current_pattern = self.current_pattern
-            self.reader_thread.pattern_settings = self.pattern_settings
+        self.reader_thread.current_pattern = self.current_pattern
+        self.reader_thread.pattern_settings = self.pattern_settings
+        self.reader_thread._32ks = pattern_32k_tiles_map.get(self.pattern_settings[0], [0])[0]
 
-            self.handle_set_default()
-            self.read_results()
+        self.handle_set_default()
+        self.read_results()
 
     def tiles_bt_on_click(self):
         sender = self.sender()
@@ -724,14 +746,19 @@ class TrainWindow(QtWidgets.QMainWindow):
             return
         if event.key() in (QtCore.Qt.Key.Key_Up, QtCore.Qt.Key.Key_W):
             self.process_input('Up')
+            event.accept()
         elif event.key() in (QtCore.Qt.Key.Key_Down, QtCore.Qt.Key.Key_S):
             self.process_input('Down')
+            event.accept()
         elif event.key() in (QtCore.Qt.Key.Key_Left, QtCore.Qt.Key.Key_A):
             self.process_input('Left')
+            event.accept()
         elif event.key() in (QtCore.Qt.Key.Key_Right, QtCore.Qt.Key.Key_D):
             self.process_input('Right')
+            event.accept()
         elif event.key() in (QtCore.Qt.Key.Key_Backspace, QtCore.Qt.Key.Key_Delete):
             self.handleUndo()
+            event.accept()
         elif event.key() in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
             if self.ai_state:
                 # 停止Demo
@@ -743,6 +770,7 @@ class TrainWindow(QtWidgets.QMainWindow):
             else:
                 # 默认执行最佳移动
                 self.one_step()
+            event.accept()
         else:
             super().keyPressEvent(event)  # 其他键交给父类处理
 
@@ -907,12 +935,13 @@ class TrainWindow(QtWidgets.QMainWindow):
         clipboard.setPixmap(scaled)
         self.statusbar.showMessage(self.tr("Screenshot saved to the clipboard"), 3000)
 
-    def handle_page_jump(self, board_encoded):
+    def handle_page_jump(self, board_encoded, full_pattern:str):
         if not self.ai_state and not self.playing_record_state and not self.isProcessing:
-            pattern = self.pattern_settings[0]
-            if pattern and pattern != '?':
-                count_32ks = pattern_32k_tiles_map.get(pattern, [0])[0]
-                board_encoded = self.replace_largest_tiles(board_encoded, count_32ks)
+            if full_pattern != '_         ' and ('' in self.pattern_settings or '?' in self.pattern_settings):
+                splits = full_pattern.split('_')
+                self.pattern_settings[:len(splits)] = splits
+                self.set_to_new_pattern()
+
             self.board_state.setText(hex(board_encoded)[2:].rjust(16, '0'))
             self.handle_set_board()
 
@@ -923,37 +952,11 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.activateWindow()
             self.raise_()
 
-    @staticmethod
-    def replace_largest_tiles(board_encoded, n):
-        if n == 0:
-            return board_encoded
-
-        tiles = []
-        for i in range(16):
-            tile_value = board_encoded & 0xF
-            tiles.append(tile_value)
-            board_encoded >>= 4
-
-        sorted_tiles = sorted(tiles, reverse=True)
-        threshold = sorted_tiles[n - 1]
-        count = 0
-        for i in range(len(tiles)):
-            if count < n and tiles[i] >= threshold:
-                if tiles[i] > threshold or count < n:
-                    tiles[i] = 0xF
-                    count += 1
-        result = 0
-        for i in range(15, -1, -1):
-            result <<= 4
-            result |= tiles[i]
-
-        return np.uint64(result)
-
     def closeEvent(self, event):
         self.ai_state = False
         self.Demo.setText(self.tr('Demo'))
-        # try: np.array(self.gameframe.history, dtype='uint64, uint32').tofile(fr'C:\Users\Administrator\Desktop\record\0')
-        # except:pass
+        try: np.array(self.gameframe.history, dtype='uint64, uint32').tofile(fr'C:\Users\Administrator\Desktop\record\0')
+        except:pass
         self.gameframe.history = []
         event.accept()
 
@@ -969,10 +972,13 @@ class ReaderWorker(QtCore.QThread):
         self.board_state = board_state
         self.pattern_settings = pattern_settings
         self.current_pattern = current_pattern
+        self._32ks = pattern_32k_tiles_map.get(self.pattern_settings[0], [0])[0]
         self.state = ''
 
     def run(self):
-        board = bm.decode_board(self.board_state)
+        board_encoded = replace_largest_tiles(self.board_state, self._32ks)
+
+        board = bm.decode_board(board_encoded)
         self.state = '?'
         result = self.book_reader.move_on_dic(board, self.pattern_settings[0], self.pattern_settings[1],
                                               self.current_pattern, self.pattern_settings[2])
@@ -988,6 +994,32 @@ def count_match_positions(s1: str, s2: str) -> int:
     if len(s1) != len(s2):
         return 0
     return sum(1 for a, b in zip(s1, s2) if a == b)
+
+
+def replace_largest_tiles(board_encoded, n):
+    if n == 0:
+        return board_encoded
+
+    tiles = []
+    for i in range(16):
+        tile_value = board_encoded & 0xF
+        tiles.append(tile_value)
+        board_encoded >>= 4
+
+    sorted_tiles = sorted(tiles, reverse=True)
+    threshold = sorted_tiles[n - 1]
+    count = 0
+    for i in range(len(tiles)):
+        if count < n and tiles[i] >= threshold:
+            if tiles[i] > threshold or count < n:
+                tiles[i] = 0xF
+                count += 1
+    result = 0
+    for i in range(15, -1, -1):
+        result <<= 4
+        result |= tiles[i]
+
+    return np.uint64(result)
 
 
 if __name__ == "__main__":

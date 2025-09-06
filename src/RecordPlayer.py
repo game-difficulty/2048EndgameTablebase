@@ -165,6 +165,7 @@ class ReplayFrame(BaseBoardFrame):
         self.goodness_of_fit = np.empty(0, dtype='float')
         self.combo = np.empty(0, dtype=np.uint16)
         self.current_step = 0
+        self.pattern = ''
 
     def load_record(self, record: NDArray | str):
         if isinstance(record, str):
@@ -206,7 +207,7 @@ class ReplayFrame(BaseBoardFrame):
         self.combo = np.empty(len(self.losses), dtype=np.uint16)
         count = 0
         for i in range(len(self.losses)):
-            if self.losses[i] == 1:
+            if self.losses[i] > 1 - 3e-10:
                 count += 1
             else:
                 count = 0
@@ -266,9 +267,9 @@ class ReplayFrame(BaseBoardFrame):
 
 # noinspection PyAttributeOutsideInit
 class ReplayWindow(QtWidgets.QMainWindow):
-    def __init__(self, record: NDArray | str):
+    def __init__(self):
         super().__init__()
-        self.setupUi(record)
+        self.setupUi()
         self.create_menu_bar()
         self.ai_state = False
         self.ai_timer = QtCore.QTimer(self)
@@ -278,7 +279,7 @@ class ReplayWindow(QtWidgets.QMainWindow):
         if 0 < len(self.gameframe.record):
             self.update_results()
 
-    def setupUi(self, record):
+    def setupUi(self):
         self.setObjectName("self")
         self.setWindowIcon(QtGui.QIcon(r"pic\2048.ico"))
         self.resize(1200, 720)
@@ -291,7 +292,6 @@ class ReplayWindow(QtWidgets.QMainWindow):
         self.gridLayout.setObjectName("gridLayout")
 
         self.gameframe = ReplayFrame(self.centralwidget)
-        self.gameframe.load_record(record)
         self.gridLayout.addWidget(self.gameframe, 1, 0, 1, 1)
         self.slider = ColoredMarkSlider(self.gameframe.losses)
         self.slider.setMinimumSize(QtCore.QSize(400, 60))
@@ -316,6 +316,11 @@ class ReplayWindow(QtWidgets.QMainWindow):
         self.board_state_layout = QtWidgets.QHBoxLayout()
         self.board_state_layout.setObjectName("board_state_layout")
 
+        self.table_state = QtWidgets.QLabel(self.operate)
+        self.table_state.setStyleSheet("font: 1800 16pt \"Cambria\";")
+        self.table_state.setObjectName("board_state")
+        self.table_state.setText('_         ')
+        self.board_state_layout.addWidget(self.table_state)
         self.board_state = QtWidgets.QLineEdit(self.operate)
         self.board_state.setReadOnly(True)
         self.board_state.setStyleSheet("background-color: rgb(255, 255, 255);")
@@ -395,6 +400,7 @@ class ReplayWindow(QtWidgets.QMainWindow):
 
     def retranslateUi(self):
         _translate = QtCore.QCoreApplication.translate
+        self.setWindowTitle(_translate("Replay", "Replay"))
         self.Demo.setText(_translate("Replay", "DEMO"))
         self.next_point.setText(_translate("Replay", "Next Inaccuracy"))
         self.undo.setText(_translate("Replay", "UNDO"))
@@ -418,8 +424,10 @@ class ReplayWindow(QtWidgets.QMainWindow):
             return
         if event.key() in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
             self.handle_one_step(1)
+            event.accept()
         elif event.key() in (QtCore.Qt.Key.Key_Backspace, QtCore.Qt.Key.Key_Delete):
             self.handle_undo(1)
+            event.accept()
         else:
             super().keyPressEvent(event)
 
@@ -547,8 +555,22 @@ class ReplayWindow(QtWidgets.QMainWindow):
             self.gameframe.board_encoded = self.gameframe.record[self.gameframe.current_step][0]
             self.gameframe.board = bm.decode_board(self.gameframe.board_encoded)
 
-    def reset_record(self, record):
+    def reset_record(self, record, full_pattern:str = '_         '):
         self.gameframe.load_record(record)
+        if isinstance(record, str):
+            self.statusbar.showMessage(record, 1000000)
+            try:
+                splits = os.path.basename(record).split('_')
+                pattern = '_'.join(splits[:3]) if len(splits) > 4 else '_'.join(splits[:2])
+                self.table_state.setText(pattern)
+                self.gameframe.pattern = pattern
+            except IndexError:
+                self.table_state.setText(full_pattern)
+                self.gameframe.pattern = full_pattern
+        else:
+            self.table_state.setText(full_pattern)
+            self.gameframe.pattern = full_pattern
+
         if 0 < len(self.gameframe.record):
             self.slider.deleteLater()
             self.slider = ColoredMarkSlider(self.gameframe.losses)
@@ -585,12 +607,13 @@ class ReplayWindow(QtWidgets.QMainWindow):
             self.reset_record(file_path)
 
     def jump_to_practise(self):
-        practise_signal.board_update.emit(self.gameframe.board_encoded)
+        practise_signal.board_update.emit(self.gameframe.board_encoded, self.table_state.text())
 
 
 if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
-    window = ReplayWindow(r"C:\Users\Administrator\Desktop\L3_512_0_20250702220058_0.2884_rec.txt")
+    window = ReplayWindow()
+    window.reset_record(r"C:\Users\Administrator\Desktop\L3_512_0_20250702220058_0.2884_rec.txt", 'L3_512_0')
     window.show()
     sys.exit(app.exec_())

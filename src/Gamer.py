@@ -888,12 +888,16 @@ class GameWindow(QtWidgets.QMainWindow):
             return
         if event.key() in (QtCore.Qt.Key.Key_Up, QtCore.Qt.Key.Key_W):
             self.process_input('Up')
+            event.accept()
         elif event.key() in (QtCore.Qt.Key.Key_Down, QtCore.Qt.Key.Key_S):
             self.process_input('Down')
+            event.accept()
         elif event.key() in (QtCore.Qt.Key.Key_Left, QtCore.Qt.Key.Key_A):
             self.process_input('Left')
+            event.accept()
         elif event.key() in (QtCore.Qt.Key.Key_Right, QtCore.Qt.Key.Key_D):
             self.process_input('Right')
+            event.accept()
         else:
             super().keyPressEvent(event)  # 其他键交给父类处理
 

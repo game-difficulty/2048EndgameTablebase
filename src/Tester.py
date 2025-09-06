@@ -15,6 +15,9 @@ from Config import SingletonConfig, category_info
 from Gamer import BaseBoardFrame
 from Analyzer import AnalyzeWindow
 from RecordPlayer import ReplayWindow
+from MistakesBook import mistakes_book
+from Calculator import min_all_symm
+from MistakesBook import MistakeTrainingWindow
 
 
 direction_map = defaultdict(lambda: "？")
@@ -142,6 +145,7 @@ class TestWindow(QtWidgets.QMainWindow):
         # 分析verse replay的窗口
         self.analyze_window = None
         self.replay_window = None
+        self.notebook_window = None
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
         # 保存回放和相关信息
         self.record = np.empty(4000, dtype='uint64,uint8,uint32,uint32,uint32,uint32')
@@ -200,6 +204,13 @@ class TestWindow(QtWidgets.QMainWindow):
         self.analyzer_bt.setMinimumSize(80, 30)
         self.analyzer_bt.clicked.connect(self.open_analyzer)  # type: ignore
 
+        self.notebook_bt = QtWidgets.QPushButton(self.centralwidget)
+        self.bts_Layout.addWidget(self.notebook_bt)
+        self.bts_Layout.setAlignment(self.notebook_bt, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.notebook_bt.setMaximumSize(300, 36)
+        self.notebook_bt.setMinimumSize(80, 30)
+        self.notebook_bt.clicked.connect(self.open_notebook)  # type: ignore
+
         self.save_log_bt = QtWidgets.QPushButton(self.centralwidget)
         self.bts_Layout.addWidget(self.save_log_bt)
         self.bts_Layout.setAlignment(self.save_log_bt, QtCore.Qt.AlignmentFlag.AlignHCenter)
@@ -216,7 +227,6 @@ class TestWindow(QtWidgets.QMainWindow):
         self.gridLayout.addLayout(self.bts_Layout, 2, 0, 1, 2)
 
         self.menubar = QtWidgets.QMenuBar(self)
-        self.menubar.setGeometry(QtCore.QRect(0, 0, 522, 22))
         self.menubar.setObjectName("menubar")
         self.setMenuBar(self.menubar)
 
@@ -265,6 +275,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.save_log_bt.setText(_translate("Tester", "Save Logs"))
         self.save_rec_bt.setText(_translate("Tester", "Save Replay"))
         self.analyzer_bt.setText(_translate("Tester", "Analyze Verse Replay"))
+        self.notebook_bt.setText(_translate("Tester", "Mistakes Notebook"))
         self.replay_bt.setText(_translate("Tester", "Review Replay"))
 
     def menu_selected(self, i):
@@ -412,6 +423,18 @@ class TestWindow(QtWidgets.QMainWindow):
         self.analyze_window.activateWindow()
         self.analyze_window.raise_()
 
+    def open_notebook(self):
+        if self.notebook_window is None:
+            self.notebook_window = MistakeTrainingWindow(mistakes_book)
+
+        if self.notebook_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
+            self.notebook_window.setWindowState(
+                self.notebook_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized
+                | QtCore.Qt.WindowState.WindowActive)
+        self.notebook_window.show()
+        self.notebook_window.activateWindow()
+        self.notebook_window.raise_()
+
     def open_replay(self):
         # 添加验证数据
         self.record[self.step_count] = (
@@ -419,9 +442,10 @@ class TestWindow(QtWidgets.QMainWindow):
         record = self.record[:self.step_count + 1].copy()
 
         if self.replay_window is None:
-            self.replay_window = ReplayWindow(record)
+            self.replay_window = ReplayWindow()
+            self.replay_window.reset_record(record, self.full_pattern)
         elif len(record) > 1 or len(self.replay_window.gameframe.record) == 0:
-            self.replay_window.reset_record(record)
+            self.replay_window.reset_record(record, self.full_pattern)
 
         if self.replay_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
             self.replay_window.setWindowState(
@@ -438,12 +462,16 @@ class TestWindow(QtWidgets.QMainWindow):
             return
         if event.key() in (QtCore.Qt.Key.Key_Up, QtCore.Qt.Key.Key_W):
             self.process_input('Up')
+            event.accept()
         elif event.key() in (QtCore.Qt.Key.Key_Down, QtCore.Qt.Key.Key_S):
             self.process_input('Down')
+            event.accept()
         elif event.key() in (QtCore.Qt.Key.Key_Left, QtCore.Qt.Key.Key_A):
             self.process_input('Left')
+            event.accept()
         elif event.key() in (QtCore.Qt.Key.Key_Right, QtCore.Qt.Key.Key_D):
             self.process_input('Right')
+            event.accept()
         else:
             super().keyPressEvent(event)  # 其他键交给父类处理
 
@@ -451,8 +479,9 @@ class TestWindow(QtWidgets.QMainWindow):
         if self.result.get(direction.lower(), None) is None:
             return
         self.isProcessing = True  # 设置标志防止进一步的输入
+        board_to_log = np.uint64(self.gameframe.board_encoded)
         self.gameframe.do_move(direction)
-        self.one_step(direction)
+        self.one_step(direction, board_to_log)
 
         self.reader_thread.board_state = self.gameframe.board
         self.reader_thread.start()  # type:ignore
@@ -467,23 +496,25 @@ class TestWindow(QtWidgets.QMainWindow):
         self.text_display.print_board(self.gameframe.board)
         self.text_display.add_text('')
 
-        if not self.result[list(self.result.keys())[0]]:
+        best_move = list(self.result.keys())[0]
+        if not self.result[best_move]:
             self.text_display.add_text(self.tr("**Game Over**: NO possible moves left."))
             for evaluation, count in self.gameframe.performance_stats.items():
                 self.text_display.add_text(f'{evaluation}: {count}\n')
+            mistakes_book.save_to_file()
 
-        elif self.result[list(self.result.keys())[0]] == 1:
+        elif self.result[best_move] == 1:
             self.text_display.add_text(self.tr("**Congratulations!** You're about to reach the target tile."))
             for evaluation, count in self.gameframe.performance_stats.items():
                 self.text_display.add_text(f'{evaluation}: {count}\n')
+            mistakes_book.save_to_file()
 
         self.text_display.add_text(self.tr('Total Goodness of Fit: ') + f'{self.gameframe.goodness_of_fit:.4f}' + '\n')
         self.text_display.add_text(self.tr('Maximum Combo: ') + f'{self.gameframe.max_combo}' + '\n')
         self.text_display.update_text()
-        self.isProcessing = False
+        QtCore.QTimer.singleShot(10, lambda: setattr(self, 'isProcessing', False))
 
-
-    def one_step(self, move: str):
+    def one_step(self, move: str, board_to_log):
         text_list = []
         is_zh = (SingletonConfig().config['language'] == 'zh')
         for key, value in self.result.items():
@@ -496,6 +527,8 @@ class TestWindow(QtWidgets.QMainWindow):
         self.record_replay(move)
 
         if not self.result[best_move] or isinstance(self.result[best_move], str):
+            return
+        if isinstance(self.result[move.lower()], str):
             return
         if self.result[move.lower()] is not None and self.result[best_move] - self.result[move.lower()] <= 3e-10:
             self.gameframe.combo += 1
@@ -514,6 +547,8 @@ class TestWindow(QtWidgets.QMainWindow):
             # 根据 loss 值提供不同级别的评价
             evaluation = self.evaluation_of_performance(loss)
             self.gameframe.performance_stats[evaluation] += 1
+
+            mistakes_book.add_mistake(self.full_pattern, board_to_log, loss, best_move)
 
             text_list.append(evaluation)
             if is_zh:
@@ -558,6 +593,10 @@ class TestWindow(QtWidgets.QMainWindow):
     @staticmethod
     def encode(a, b, c):
         return np.uint8(((a << 5) | (b << 1) | c) & 0xFF)
+
+    def closeEvent(self, event):
+        mistakes_book.save_to_file()
+        event.accept()
 
 
 class ReaderWorker(QtCore.QThread):

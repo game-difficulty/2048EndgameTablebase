@@ -273,7 +273,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.spawnrate_box.setObjectName("spawnrate_box")
         self.spawnrate_box.setRange(0.0, 1.0)
         self.spawnrate_box.setSingleStep(0.01)
-        self.spawnrate_box.setValue(SingletonConfig().config['4_spawn_rate'])
+        self.spawnrate_box.setValue(SingletonConfig().config.get('4_spawn_rate', 0.1))
         self.spawnrate_box.valueChanged.connect(self.update_spawn_rate)  # type: ignore
         self.selfLayout.addWidget(self.spawnrate_box, 7, 1, 1, 1)
         self.infoButton = QtWidgets.QPushButton()
@@ -283,10 +283,29 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.selfLayout.addWidget(self.infoButton, 7, 2, 1, 1)
         self.infoButton.clicked.connect(self.show_message)  # type: ignore
 
+        self.nb_th_text = QtWidgets.QLabel(self.centralwidget)
+        self.nb_th_text.setObjectName("nb_th_text")
+        self.nb_th_text.setStyleSheet("font: 500 12pt \"Cambria\";")
+        self.selfLayout.addWidget(self.nb_th_text, 8, 0, 1, 1)
+        self.nb_th_box = QtWidgets.QDoubleSpinBox(self.centralwidget)
+        self.nb_th_box.setObjectName("nb_th_box")
+        self.nb_th_box.setRange(0.0, 1.0)
+        self.nb_th_box.setSingleStep(0.0001)
+        self.nb_th_box.setDecimals(6)
+        self.nb_th_box.setValue(SingletonConfig().config.get('notebook_threshold', 0.999))
+        self.nb_th_box.valueChanged.connect(self.update_nb_th)  # type: ignore
+        self.selfLayout.addWidget(self.nb_th_box, 8, 1, 1, 1)
+        self.infoButton2 = QtWidgets.QPushButton()
+        self.infoButton2.setIcon(QtGui.QIcon(r'pic\OQM.png'))
+        self.infoButton2.setIconSize(QtCore.QSize(24, 24))
+        self.infoButton2.setFlat(True)
+        self.selfLayout.addWidget(self.infoButton2, 8, 2, 1, 1)
+        self.infoButton2.clicked.connect(self.show_message2)  # type: ignore
+
         self.demo_speed_text = QtWidgets.QLabel(self.centralwidget)
         self.demo_speed_text.setObjectName("demo_speed_text")
         self.demo_speed_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.demo_speed_text, 8, 0, 1, 1)
+        self.selfLayout.addWidget(self.demo_speed_text, 9, 0, 1, 1)
         self.demo_speed_box = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal, self.centralwidget)
         self.demo_speed_box.setMinimum(1)
         self.demo_speed_box.setMaximum(200)
@@ -295,25 +314,25 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.demo_speed_box.setTickInterval(10)
         self.demo_speed_box.valueChanged.connect(self.demo_speed_changed)  # type: ignore
         self.demo_speed_box.setObjectName("demo_speed_box")
-        self.selfLayout.addWidget(self.demo_speed_box, 8, 1, 1, 3)
+        self.selfLayout.addWidget(self.demo_speed_box, 9, 1, 1, 3)
 
         self.anim_text = QtWidgets.QLabel(self.centralwidget)
         self.anim_text.setObjectName("anim_text")
         self.anim_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.anim_text, 9, 0, 1, 1)
+        self.selfLayout.addWidget(self.anim_text, 10, 0, 1, 1)
         self.anim_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.anim_checkBox.setObjectName("anim_checkBox")
         if config.get('do_animation', True):
             self.anim_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
         else:
             self.anim_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
-        self.selfLayout.addWidget(self.anim_checkBox, 9, 1, 1, 1)
+        self.selfLayout.addWidget(self.anim_checkBox, 10, 1, 1, 1)
         # 创建语言选择按钮（下拉菜单）
         self.lang_button = QtWidgets.QToolButton(self.centralwidget)
         self.lang_button.setMinimumSize(150, 20)
         self.lang_button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
         self.lang_button.setObjectName("lang_button")
-        self.selfLayout.addWidget(self.lang_button, 9, 3, 1, 1)
+        self.selfLayout.addWidget(self.lang_button, 10, 3, 1, 1)
         self.lang_menu = QtWidgets.QMenu(self.lang_button)
         self.lang_button.setMenu(self.lang_menu)
 
@@ -327,7 +346,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.tile_font_size_text = QtWidgets.QLabel(self.centralwidget)
         self.tile_font_size_text.setObjectName("tile_font_size_text")
         self.tile_font_size_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.tile_font_size_text, 10, 0, 1, 1)
+        self.selfLayout.addWidget(self.tile_font_size_text, 11, 0, 1, 1)
         self.tile_font_size_box = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal, self.centralwidget)
         self.tile_font_size_box.setMinimum(50)
         self.tile_font_size_box.setMaximum(150)
@@ -336,7 +355,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.tile_font_size_box.setTickInterval(5)
         self.tile_font_size_box.valueChanged.connect(self.font_size_changed)  # type: ignore
         self.tile_font_size_box.setObjectName("tile_font_size_box")
-        self.selfLayout.addWidget(self.tile_font_size_box, 10, 1, 1, 3)
+        self.selfLayout.addWidget(self.tile_font_size_box, 11, 1, 1, 3)
 
         self.PageLayout.addLayout(self.selfLayout)
         self.save_bt = QtWidgets.QPushButton(self.centralwidget)
@@ -367,6 +386,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.color_bt.setText(_translate("Settings", "Choose Color"))
         self.theme_button.setText(_translate("Settings", "Set Theme"))
         self.spawnrate_text.setText(_translate("Settings", "4 Spawn Rate:"))
+        self.nb_th_text.setText(_translate("Settings", "Notebook Threshold:"))
         self.demo_speed_text.setText(_translate("Settings", "Demo Speed:"))
         self.tile_font_size_text.setText(_translate("Settings", "Tile Font Size:"))
         self.anim_text.setText(_translate("Settings", "Do Animation:"))
@@ -574,13 +594,23 @@ class SettingsWindow(QtWidgets.QMainWindow):
     def update_spawn_rate(self):
         SingletonConfig().config['4_spawn_rate'] = float(self.spawnrate_box.text().replace(',', '.'))
 
+    def update_nb_th(self):
+        SingletonConfig().config['notebook_threshold'] = float(self.nb_th_box.text().replace(',', '.'))
+
     def show_message(self):
         QtWidgets.QMessageBox.information(self, self.tr('Information'),
-        self.tr('''This affects all modules of the program, make sure you know what you're doing'''))
+        self.tr('''This affects all modules of the program, make sure you know what you're doing. 
+The original 2048 game has a 10% chance of generating a 4 tile. 
+It is recommended to keep the default settings.'''))
+
+    def show_message2(self):
+        QtWidgets.QMessageBox.information(self, self.tr('Information'),
+        self.tr('''In test mode, positions with a goodness-of-fit below the threshold will be automatically recorded in the mistakes notebook.'''))
 
     def save_all(self):
         SingletonConfig().config['deletion_threshold'] = float(self.deletion_threshold_box.text().replace(',', '.'))
         SingletonConfig().config['4_spawn_rate'] = float(self.spawnrate_box.text().replace(',', '.'))
+        SingletonConfig().config['notebook_threshold'] = float(self.nb_th_box.text().replace(',', '.'))
         SingletonConfig().config['do_animation'] = self.anim_checkBox.isChecked()
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
         SingletonConfig().config['advanced_algo'] = self.advanced_algo_checkBox.isChecked()

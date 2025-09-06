@@ -93,6 +93,8 @@ class Analyzer:
         replay_text = replay_text[header:]
         self.record_list: np.typing.NDArray = np.empty(len(replay_text) - 2, dtype='uint64,uint32,uint8,uint8,uint8')
 
+        record = np.empty(len(replay_text) - 2, dtype='uint64,uint32,uint8')
+
         png_map_dict = {
             ' ': 0, '!': 1, '"': 2, '#': 3, '$': 4, '%': 5, '&': 6, "'": 7, '(': 8, ')': 9, '*': 10,
             '+': 11, ',': 12, '-': 13, '.': 14, '/': 15, '0': 16, '1': 17, '2': 18, '3': 19, '4': 20,
@@ -131,6 +133,9 @@ class Analyzer:
 
             board |= np.uint64(replay_tile) << np.uint64(replay_position << 2)
             moves_made += 1
+
+            record[moves_made - 3] = (board, current_score, 0)
+        record.tofile(fr'C:\Users\Administrator\Desktop\record\0')
 
     def clear_analysis(self):
         self.text_list = []
