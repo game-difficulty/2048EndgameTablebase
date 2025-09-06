@@ -135,7 +135,7 @@ class Analyzer:
             moves_made += 1
 
             record[moves_made - 3] = (board, current_score, 0)
-        record.tofile(fr'C:\Users\Administrator\Desktop\record\0')
+        # record.tofile(fr'C:\Users\Administrator\Desktop\record\0')
 
     def clear_analysis(self):
         self.text_list = []
