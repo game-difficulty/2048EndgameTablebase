@@ -105,6 +105,8 @@ class MistakeTrainingWindow(QtWidgets.QMainWindow):
         self.current_best_move = None
         self.current_count = None
         self.combo = 0
+        self.correct = 0
+        self.incorrect = 0
         self.unseen_boards = list()  # 存储尚未出现的局面
         self.answered = 0
 
@@ -260,6 +262,8 @@ class MistakeTrainingWindow(QtWidgets.QMainWindow):
             p=normalized_weights
         )
         self.unseen_boards = [np.uint64(boards[i]) for i in shuffled_indices]
+        self.correct = 0
+        self.incorrect = 0
 
     def next_problem(self):
         """随机选择下一个问题"""
@@ -297,6 +301,10 @@ class MistakeTrainingWindow(QtWidgets.QMainWindow):
         # 重新启用所有方向按钮
         self.answered = 0
         self.setFocus()
+
+        self.statusbar.showMessage(self.tr('Correct: ') + str(self.correct) + self.tr('  Incorrect: ') +
+                                   str(self.incorrect) + self.tr('  Remaining: ') + str(len(self.unseen_boards))
+                                   , 3000)
 
     @staticmethod
     def calculate_weights(boards, mistakes, mode):
@@ -344,6 +352,7 @@ class MistakeTrainingWindow(QtWidgets.QMainWindow):
             # 减少错误次数（最小为1）
             # self.update_mistake_count(-1)
             self.combo += 1
+            self.correct += 1
         else:
             # 错误：选中的按钮变红
             self.direction_buttons[selected_direction].setStyleSheet("background-color: red;")
@@ -354,6 +363,7 @@ class MistakeTrainingWindow(QtWidgets.QMainWindow):
             # 增加错误次数
             self.update_mistake_count(1)
             self.combo = 0
+            self.incorrect += 1
 
         if self.combo:
             self.statusbar.showMessage(self.tr('Combo: ') + str(self.combo) + 'x', 1500)
@@ -472,8 +482,8 @@ class MistakeTrainingWindow(QtWidgets.QMainWindow):
         super().closeEvent(event)
 
     def showEvent(self, event):
-        super().showEvent(event)
         self.update_pattern_menu()  # 更新模式菜单
+        super().showEvent(event)
 
     def retranslateUi(self):
         self.setWindowTitle(self.tr("Notebook"))
