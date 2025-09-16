@@ -54,18 +54,35 @@ class ColoredMarkSlider(QtWidgets.QSlider):
         self.points_rank = np.where((self.data_points < threshold) & (self.data_points < 1))[0]
         self.draw_values = self.data_points[self.points_rank]
 
-        min_val = np.min(self.data_points[self.data_points > 0]) - 0.00001
         self.point_colors = []
-        normalized_vals = (self.draw_values - min_val) / (1 - min_val)
-        normalized_vals = np.clip(normalized_vals, 0.0, 1.0)
 
-        reds = np.where(normalized_vals <= 0.5, 255, 510 * (1 - normalized_vals))
-        greens = np.where(normalized_vals <= 0.5, 510 * normalized_vals, 255)
-        blues = np.zeros_like(reds)
+        # 定义评级阈值和对应的基准颜色
+        color_thresholds = [
+            (1.000, (127, 255, 127)),
+            (0.999, (128, 255, 0), (204, 255, 153)),  # Excellent! - 绿色
+            (0.99, (0, 255, 0), (102, 255, 102)),  # Nice try! - 绿色
+            (0.975, (255, 245, 0), (255, 245, 153)),  # Not bad! - 黄色
+            (0.9, (255, 165, 0), (255, 204, 153)),  # Mistake! - 橙色
+            (0.75, (255, 0, 127), (255, 153, 204)),  # Blunder! - 红粉
+            (0.0, (255, 0, 0), (255, 102, 102))  # Terrible! - 红色
+        ]
 
-        for r, g, b in zip(reds, greens, blues):
-            color = QColor(int(r), int(g), int(b), 160)
-            self.point_colors.append(color)
+        for value in self.draw_values:
+            # 确定评级区间
+            for i in range(1, 7):
+                low_threshold = color_thresholds[i][0]
+                high_threshold = color_thresholds[i - 1][0]
+                if low_threshold <= value:
+                    min_color, max_color = color_thresholds[i][1], color_thresholds[i][2]
+
+                    position = (value - low_threshold) / (high_threshold - low_threshold)
+                    r = int(min_color[0] + (max_color[0] - min_color[0]) * position)
+                    g = int(min_color[1] + (max_color[1] - min_color[1]) * position)
+                    b = int(min_color[2] + (max_color[2] - min_color[2]) * position)
+
+                    self.point_colors.append(QColor(r, g, b, 204))
+                    break
+
 
     def paintEvent(self, event):
         # 绘制默认滑块
@@ -513,11 +530,11 @@ class ReplayWindow(QtWidgets.QMainWindow):
                 if is_match:
                     action_text = f"\n\nYou pressed          **{move_dir}**.\n\nAnd the best move is **{best_dir}**"
                     stats_text = (f"\n\nCombo: {combo}x, "
-                                  f'goodness of fit: {gof:.4f}')
+                                  f'\n\ngoodness of fit: {gof:.4f}')
                 else:
                     action_text = f"\n\nYou pressed          **{move_dir}**.\n\nBut the best move is **{best_dir}**"
                     stats_text = (f'\n\none-step loss: {1 - loss:.4f}, '
-                                  f'goodness of fit: {gof:.4f}')
+                                  f'\n\ngoodness of fit: {gof:.4f}')
 
             results_text = f"{result_text}{separator}{action_text}{stats_text}"
 

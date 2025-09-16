@@ -5,7 +5,6 @@ from datetime import datetime
 import numpy as np
 import random
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit
 from PyQt5.QtGui import QIcon
 
@@ -16,8 +15,8 @@ from Gamer import BaseBoardFrame
 from Analyzer import AnalyzeWindow
 from RecordPlayer import ReplayWindow
 from MistakesBook import mistakes_book
-from Calculator import min_all_symm
 from MistakesBook import MistakeTrainingWindow
+from SignalHub import practise_signal
 
 
 direction_map = defaultdict(lambda: "？")
@@ -190,6 +189,13 @@ class TestWindow(QtWidgets.QMainWindow):
         self.text_display.setMinimumSize(120, 240)
 
         self.bts_Layout = QtWidgets.QHBoxLayout()
+        self.practise_button = QtWidgets.QPushButton(self.centralwidget)
+        self.bts_Layout.addWidget(self.practise_button)
+        self.bts_Layout.setAlignment(self.practise_button, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.practise_button.setMaximumSize(300, 36)
+        self.practise_button.setMinimumSize(80, 30)
+        self.practise_button.clicked.connect(self.jump_to_practise)  # type: ignore
+
         self.replay_bt = QtWidgets.QPushButton(self.centralwidget)
         self.bts_Layout.addWidget(self.replay_bt)
         self.bts_Layout.setAlignment(self.replay_bt, QtCore.Qt.AlignmentFlag.AlignHCenter)
@@ -277,6 +283,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.analyzer_bt.setText(_translate("Tester", "Analyze Verse Replay"))
         self.notebook_bt.setText(_translate("Tester", "Mistakes Notebook"))
         self.replay_bt.setText(_translate("Tester", "Review Replay"))
+        self.practise_button.setText(_translate("Tester", "Practise"))
 
     def menu_selected(self, i):
         self.isProcessing = False
@@ -589,6 +596,9 @@ class TestWindow(QtWidgets.QMainWindow):
         self.record[self.step_count] = (self.record[self.step_count][0], encoded, *success_rates)
         self.step_count += 1
         self.record[self.step_count][0] = self.gameframe.board_encoded
+
+    def jump_to_practise(self):
+        practise_signal.board_update.emit(self.gameframe.board_encoded, self.full_pattern)
 
     @staticmethod
     def encode(a, b, c):

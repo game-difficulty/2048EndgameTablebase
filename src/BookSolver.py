@@ -317,7 +317,7 @@ def find_optimal_branches(
                             success_rate, pos_index = search_arr2(arr1, to_find_func(newt), ind1)
                             if success_rate > optimal_success_rate:
                                 optimal_success_rate = success_rate
-                                optimal_pos_index = pos_index
+                                optimal_pos_index = np.uint64(pos_index)
                     result[optimal_pos_index] = True
     return result
 

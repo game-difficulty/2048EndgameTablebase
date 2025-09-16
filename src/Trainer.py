@@ -714,6 +714,8 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.read_results()
 
     def textbox_reset_board(self):
+        if not self.board_state.text():
+            return
         self.gameframe.board_encoded = np.uint64(int(self.board_state.text(), 16))
         self.gameframe.board = bm.decode_board(self.gameframe.board_encoded)
         self.gameframe._last_values = self.gameframe.board.copy()
