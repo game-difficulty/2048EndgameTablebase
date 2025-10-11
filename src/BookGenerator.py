@@ -64,6 +64,7 @@ def gen_boards_big(arr0: NDArray[np.uint64],
         length_factor = predict_next_length_factor_quadratic(length_factors)
         length_factor *= 1.25 if len(arr0t) > 1e8 else 1.5
         length_factor *= length_factor_multiplier  # type: ignore
+        length_factor = length_factor if ~np.isnan(length_factor) else 3
 
         arr1t, arr2t, hashmap1, hashmap2, counts1, counts2 = \
             gen_boards(arr0t, target, position, pattern_check_func, success_check_func, to_find_func,
@@ -244,6 +245,7 @@ def generate_process(
                 length_factor = predict_next_length_factor_quadratic(length_factors)
                 length_factor *= 1.25 if len(d0) > 1e8 else 1.5
                 length_factor *= length_factor_multiplier
+                length_factor = length_factor if ~np.isnan(length_factor) else 3
                 if len(hashmap1) == 0:
                     hashmap1, hashmap2 = update_hashmap_length(hashmap1, d0), update_hashmap_length(hashmap2, d0)  # 初始化
 

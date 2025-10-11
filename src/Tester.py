@@ -37,6 +37,7 @@ class ScrollTextDisplay(QWidget):
         self.max_lines = max_lines  # 最大行数
         self.setupUi()
         self.lines = []
+        self.show_text = True
 
     def setupUi(self):
         self.layout = QVBoxLayout()
@@ -56,12 +57,15 @@ class ScrollTextDisplay(QWidget):
         self.text_edit.clear()
 
     def update_text(self):
-        text = '\n\n'.join(self.lines[-self.max_lines:])
-        if len(self.lines) > self.max_lines:
-            text = self.lines[0] + '\n\n' + text
-        self.text_edit.setMarkdown(text)
-        # 保持滚动条在最下方
-        self.scroll_bar.setValue(self.scroll_bar.maximum())
+        if self.show_text:
+            text = '\n\n'.join(self.lines[-self.max_lines:])
+            if len(self.lines) > self.max_lines:
+                text = self.lines[0] + '\n\n' + text
+            self.text_edit.setMarkdown(text)
+            # 保持滚动条在最下方
+            self.scroll_bar.setValue(self.scroll_bar.maximum())
+        else:
+            self.text_edit.clear()
 
     def print_board(self, board):
         for row in board:
@@ -184,8 +188,19 @@ class TestWindow(QtWidgets.QMainWindow):
         self.gameframe = TestFrame(self.centralwidget)
         self.gridLayout.addWidget(self.gameframe, 1, 0, 1, 1)
         self.gameframe.setMinimumSize(240, 240)
+
+        self.dis_text_checkBox = QtWidgets.QCheckBox(self.centralwidget)
+        self.dis_text_checkBox.setStyleSheet("font: 360 10pt \"Cambria\";")
+        self.dis_text_checkBox.setObjectName("dis_text_checkBox")
+        self.gridLayout.addWidget(self.dis_text_checkBox, 0, 1, 1, 1)
+        if SingletonConfig().config.get('dis_text', True):
+            self.dis_text_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
+        else:
+            self.dis_text_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        self.dis_text_checkBox.stateChanged.connect(self.dis_text_state_change)  # type: ignore
+
         self.text_display = ScrollTextDisplay(max_lines=200)
-        self.gridLayout.addWidget(self.text_display, 0, 1, 2, 1)
+        self.gridLayout.addWidget(self.text_display, 1, 1, 1, 1)
         self.text_display.setMinimumSize(120, 240)
 
         self.bts_Layout = QtWidgets.QHBoxLayout()
@@ -284,6 +299,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.notebook_bt.setText(_translate("Tester", "Mistakes Notebook"))
         self.replay_bt.setText(_translate("Tester", "Review Replay"))
         self.practise_button.setText(_translate("Tester", "Practise"))
+        self.dis_text_checkBox.setText(_translate("Tester", "Display Text"))
 
     def menu_selected(self, i):
         self.isProcessing = False
@@ -599,6 +615,11 @@ class TestWindow(QtWidgets.QMainWindow):
 
     def jump_to_practise(self):
         practise_signal.board_update.emit(self.gameframe.board_encoded, self.full_pattern)
+
+    def dis_text_state_change(self):
+        self.text_display.show_text = self.dis_text_checkBox.isChecked()
+        self.text_display.update_text()
+        SingletonConfig().config['dis_text'] = self.dis_text_checkBox.isChecked()
 
     @staticmethod
     def encode(a, b, c):

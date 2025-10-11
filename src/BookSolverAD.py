@@ -16,6 +16,7 @@ from Calculator import ReverseLR, ReverseUD, ReverseUL, ReverseUR, Rotate180, Ro
 from Config import SingletonConfig
 from BookSolverADUtils import (dict_to_structured_array1, dict_to_structured_array2, dict_to_structured_array3,
                                get_array_view10, get_array_view11, get_array_view2, get_array_view3)
+from LzmaCompressor import decompress_with_7z
 from SignalHub import progress_signal
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -91,6 +92,8 @@ def recalculate_process_ad(
 
         original_board_sum = 2 * i + ini_board_sum
         deletion_threshold = np.uint32(SingletonConfig().config.get('deletion_threshold', 0.0) * 4e9)
+        if SingletonConfig().config.get('compress_temp_files', False):
+            decompress_with_7z(pathname + str(i) + '.7z')
         d0 = np.fromfile(pathname + str(i), dtype=np.uint64)
 
         t0 = time.time()

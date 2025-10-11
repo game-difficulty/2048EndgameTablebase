@@ -550,56 +550,56 @@ if __name__ == "__main__":
     history = np.empty(1000, dtype='uint64,uint32')
     score_sum = 0
 
-    b1 = np.array([[   2 ,   0,  2,  2],
- [   1024,   4 ,  8,  4],
- [   2048  ,  16384 ,  128,  16],
- [   4,   8192,   512,   2]], dtype=np.int32)
+    b1 = np.array([[   0 ,   0,  0,  8],
+ [   0,   2 ,  2,  4],
+ [   2  ,  8 ,  4096,  8],
+ [   8192,   2,   1024,   512]], dtype=np.int32)
     print(b1)
-    # s1 = AIPlayer(b1)
-    # g1 = EvilGen(b1)
-    # s1.start_search(2)
-    # g1.gen_new_num(2)
-    # b1 = np.uint64(encode_board(b1))
-    # print(s1.evaluate(b1))
-    #
-    # t_start = time.time()
-    # for steps in range(240):
-    #     history[steps] = b1, score_sum
-    #     s1.reset_board(decode_board(b1))
-    #     t0 = time.time()
-    #     s1.start_search(6)
-    #     # print(round(s1.cache.lookup_count / (time.time() - t0) / 1e6, 1), round(s1.node / (time.time() - t0) / 1e6, 1),
-    #     #     s1.node, round(time.time() - t0, 4))
-    #     print({0:None, 1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}[s1.best_operation])
-    #     if not s1.best_operation:
-    #         print((time.time() - t_start) / steps)
-    #         break
-    #     b1, score = s_move_board(b1, s1.best_operation)
-    #     score_sum += score
-    #     b1 = np.uint64(b1)
-    #     g1.reset_board(decode_board(b1))
-    #     b1 = np.uint64(g1.gen_new_num(5)[0]) if (steps < 0 or (np.random.rand(1)[0] < 0.10) and steps < 0) else np.uint64(s_gen_new_num(b1)[0])
-    #
-    #     print(decode_board(b1))
-    #     print()
-
-    be = np.uint64(encode_board(b1))
-    ai_dispatcher = Dispatcher(b1, be)
-    ai_dispatcher.reset(b1, be)
-    best_move = ai_dispatcher.dispatcher()
+    s1 = AIPlayer(b1)
+    g1 = EvilGen(b1)
+    s1.start_search(2)
+    g1.gen_new_num(2)
     b1 = np.uint64(encode_board(b1))
+    print(s1.evaluate(b1))
+
+    t_start = time.time()
     for steps in range(240):
         history[steps] = b1, score_sum
-        ai_dispatcher.reset(decode_board(b1), b1)
+        s1.reset_board(decode_board(b1))
         t0 = time.time()
-        best_move = ai_dispatcher.dispatcher().capitalize()
-        b1, score = s_move_board(b1, {'Left': 1, 'Right': 2, 'Up': 3, 'Down': 4}[best_move])
+        s1.start_search(6)
+        # print(round(s1.cache.lookup_count / (time.time() - t0) / 1e6, 1), round(s1.node / (time.time() - t0) / 1e6, 1),
+        #     s1.node, round(time.time() - t0, 4))
+        print({0:None, 1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}[s1.best_operation])
+        if not s1.best_operation:
+            print((time.time() - t_start) / steps)
+            break
+        b1, score = s_move_board(b1, s1.best_operation)
         score_sum += score
         b1 = np.uint64(b1)
-        b1 = np.uint64(s_gen_new_num(b1)[0])
+        g1.reset_board(decode_board(b1))
+        b1 = np.uint64(g1.gen_new_num(5)[0]) if (steps < 0 or (np.random.rand(1)[0] < 0.10) and steps < 0) else np.uint64(s_gen_new_num(b1)[0])
 
         print(decode_board(b1))
         print()
 
-
-    history[:steps + 1].tofile(fr'C:\Users\Administrator\Desktop\record\0')
+    # be = np.uint64(encode_board(b1))
+    # ai_dispatcher = Dispatcher(b1, be)
+    # ai_dispatcher.reset(b1, be)
+    # best_move = ai_dispatcher.dispatcher()
+    # b1 = np.uint64(encode_board(b1))
+    # for steps in range(240):
+    #     history[steps] = b1, score_sum
+    #     ai_dispatcher.reset(decode_board(b1), b1)
+    #     t0 = time.time()
+    #     best_move = ai_dispatcher.dispatcher().capitalize()
+    #     b1, score = s_move_board(b1, {'Left': 1, 'Right': 2, 'Up': 3, 'Down': 4}[best_move])
+    #     score_sum += score
+    #     b1 = np.uint64(b1)
+    #     b1 = np.uint64(s_gen_new_num(b1)[0])
+    #
+    #     print(decode_board(b1))
+    #     print()
+    #
+    #
+    # history[:steps + 1].tofile(fr'C:\Users\Administrator\Desktop\record\0')

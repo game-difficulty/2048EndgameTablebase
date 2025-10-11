@@ -284,6 +284,7 @@ class SingletonConfig:
                 'do_animation': True,
                 'game_state': [np.uint64(0), 0, 0],
                 'dis_32k': False,
+                'dis_text': True,
                 'compress': False,
                 'optimal_branch_only': False,
                 'compress_temp_files': False,

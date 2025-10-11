@@ -74,14 +74,19 @@ class TrainFrame(BaseBoardFrame):
 
     def _spawns_success_rates(self) -> Dict[Tuple[int, int], float | int]:
         results = {}
+        bd_encoded = self.board_encoded
+        _32ks = pattern_32k_tiles_map.get(self.parents.pattern_settings[0], [0])[0]
+        bd_encoded = replace_largest_tiles(bd_encoded, _32ks)
+
         for val in (1,2):
             for new_tile_pos in range(16):
                 pos = 15 - new_tile_pos
-                if ((self.board_encoded >> np.uint64(4 * pos)) & np.uint64(0xF)) == np.uint64(0):
-                    board = self.board_encoded | np.uint64(val) << np.uint64(4 * pos)
+                if ((bd_encoded >> np.uint64(4 * pos)) & np.uint64(0xF)) == np.uint64(0):
+                    board = bd_encoded | np.uint64(val) << np.uint64(4 * pos)
                     result = self.parents.book_reader.move_on_dic(bm.decode_board(board),
                                                  self.parents.pattern_settings[0], self.parents.pattern_settings[1],
                                             self.parents.current_pattern, self.parents.pattern_settings[2])
+
                     if isinstance(result, dict):
                         result0 = result[list(result.keys())[0]]
                         if result0 is None or isinstance(result0, str):
@@ -370,6 +375,9 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gridLayout_record.addWidget(self.manual_checkBox, 1, 0, 1, 1)
         self.manual_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.manual_checkBox.stateChanged.connect(self.manual_state_change)  # type: ignore
+        self.shortcut = QShortcut(QKeySequence("Ctrl+Q"), self)
+        self.shortcut.activated.connect(self.manual_state_change_shortcut)  # type: ignore
+
         self.best_spawn_checkBox = QtWidgets.QCheckBox(self.operate)
         self.best_spawn_checkBox.setStyleSheet("font: 360 10pt \"Cambria\";")
         self.best_spawn_checkBox.setObjectName("best_spawn_checkBox")
@@ -507,7 +515,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.play_record.setText(_translate("Train", 'Play Record'))
         self.load_record.setText(_translate("Train", 'Load Record'))
         self.screenshot_btn.setText(_translate("Train", 'Screenshot(Z)'))
-        self.manual_checkBox.setText(_translate("Train", "Manual"))
+        self.manual_checkBox.setText(_translate("Train", "Manual(Q)"))
         self.best_spawn_checkBox.setText(_translate("Train", "Always Best Spawn"))
         self.worst_spawn_checkBox.setText(_translate("Train", "Always Worst Spawn"))
         self.step.setText(_translate("Train", "ONESTEP"))
@@ -526,6 +534,12 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gameframe.dis32k = SingletonConfig().config['dis_32k']
         self.gameframe.update_all_frame(self.gameframe.board)
         self.gameframe.setFocus()
+
+    def manual_state_change_shortcut(self):
+        if self.manual_checkBox.isChecked():
+            self.manual_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        else:
+            self.manual_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
 
     def manual_state_change(self):
         if self.manual_checkBox.isChecked():

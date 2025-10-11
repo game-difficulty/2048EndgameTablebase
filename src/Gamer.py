@@ -179,7 +179,7 @@ class SquareFrame(QtWidgets.QFrame):
     def animate_appear(self, r, c, value):
         """数字块出现动画"""
         if self._check_animation_running(r, c):
-            for anim_id in (1,0):
+            for anim_id in (2, 1, 0):
                 anim = self.active_animations.pop((r, c, anim_id), None)
                 if anim:
                     try:
@@ -358,7 +358,7 @@ class BaseBoardFrame(QtWidgets.QFrame):
 
         self.use_variant_mover = 0
 
-        self.timer1, self.timer2, self.timer3 = QTimer(), QTimer(), QTimer()
+        self.timer1, self.timer2, self.timer3, self.timer4 = QTimer(), QTimer(), QTimer(), QTimer()
         self._last_values = self.board.copy()
         self.last_move_time = time.time()
 
@@ -392,7 +392,7 @@ class BaseBoardFrame(QtWidgets.QFrame):
         self.history.append((self.board_encoded, self.score))
         self.newtile_pos, self.newtile = new_tile_pos, val
         if do_anim:
-            self.timer1.singleShot(125, lambda: self.game_square.animate_appear(new_tile_pos // 4, new_tile_pos % 4, 2 ** val))
+            self.timer1.singleShot(125, lambda: self.game_square.animate_appear(new_tile_pos // 4, new_tile_pos % 4, 2 ** val))  # 125
 
     def do_move(self, direction: str, do_gen=True):
         if self.game_square.active_animations:
@@ -404,7 +404,7 @@ class BaseBoardFrame(QtWidgets.QFrame):
         do_anim = SingletonConfig().config['do_animation']
 
         time_now = time.time()
-        too_fast = time_now - self.last_move_time < 0.08
+        slow_move = (time_now - self.last_move_time > 0.08)
         self.last_move_time = time_now
 
         direct = {'Left': 1, 'Right': 2, 'Up': 3, 'Down': 4}[direction.capitalize()]
@@ -417,14 +417,18 @@ class BaseBoardFrame(QtWidgets.QFrame):
             if do_gen:
                 self.gen_new_num(do_anim)
             self.board = bm.decode_board(self.board_encoded)
-            if do_anim and not too_fast:
+            if do_anim:
                 self.slide_tiles(current_values, direction)
-                self.timer2.singleShot(110, lambda: self.pop_merged(current_values, direction))
+                self.timer2.singleShot(110, lambda: self.pop_merged(current_values, direction))  # 110
                 # 生成新数字之前的局面
-                self.timer3.singleShot(100, lambda: self.update_all_frame((bm.decode_board(board_encoded_new))))
+                self.timer3.singleShot(100, lambda: self.update_all_frame((bm.decode_board(board_encoded_new))))  # 100
+                if not slow_move:
+                    self.timer4.singleShot(250, lambda: self.update_all_frame(self.board))
             else:
                 self.update_all_frame(self.board)
             self._last_values = self.board.copy()
+        else:
+            self.update_all_frame(self.board)
 
     def pop_merged(self, board, direction):
         merged_pos = find_merge_positions(board, direction)

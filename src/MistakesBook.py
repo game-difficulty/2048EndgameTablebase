@@ -72,8 +72,8 @@ class MistakesBook:
 
         for bd in all_symm:
             if bd in pattern_dict:
-                count, total_loss, move = pattern_dict[board_encoded]
-                pattern_dict[board_encoded] = (count + 1, total_loss + (1 - loss), move)
+                count, total_loss, move = pattern_dict[bd]
+                pattern_dict[bd] = (count + 1, total_loss + (1 - loss), move)
                 break
         else:
             pattern_dict[board_encoded] = (1, 1 - loss, best_move)

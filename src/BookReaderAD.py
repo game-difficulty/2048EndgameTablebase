@@ -42,7 +42,7 @@ class BookReaderAD:
         self.tiles_combinations_dict = dict_to_structured_array3(self._tiles_combinations_dict)
 
     def move_on_dic(self, board: np.typing.NDArray, pattern_full: str, pos: str = '0'
-                    ) -> Dict[str, Union[str, float, int]]:
+                    ) -> Dict[str, Union[str, float, int, None]]:
         bm_ = bm if self.pattern not in ('2x4', '3x3', '3x4') else vbm
         nums_adjust, pattern_check_func, to_find_func, success_check_func, _ = \
             formation_info.get(self.pattern, [0, None, re_self, None, None])
