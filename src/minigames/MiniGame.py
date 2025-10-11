@@ -211,7 +211,7 @@ class MinigameFrame(QtWidgets.QFrame):
             self.current_max_num = self.board.max()
         self.newtile = self.board[self.newtile_pos // self.cols][self.newtile_pos % self.cols]
 
-        self.timer1, self.timer2, self.timer3 = QTimer(), QTimer(), QTimer()
+        self.timer1, self.timer2, self.timer3, self.timer4 = QTimer(), QTimer(), QTimer(), QTimer()
         self._last_values = self.board.copy()
         self.last_move_time = time.time()
 
@@ -337,7 +337,7 @@ class MinigameFrame(QtWidgets.QFrame):
         do_anim = SingletonConfig().config['do_animation']
 
         time_now = time.time()
-        too_fast = time_now - self.last_move_time < 0.08
+        slow_move = (time_now - self.last_move_time > 0.08)
         self.last_move_time = time_now
 
         direct = {'Left': 1, 'Right': 2, 'Up': 3, 'Down': 4}[direction.capitalize()]
@@ -351,7 +351,7 @@ class MinigameFrame(QtWidgets.QFrame):
             self.before_gen_num(direct)
             if do_gen:
                 self.gen_new_num(do_anim)
-            if do_anim and not too_fast:
+            if do_anim:
                 self.slide_tiles(current_values, direction)
                 self.timer2.singleShot(110, lambda: self.pop_merged(current_values, direction))
                 self.timer3.singleShot(100, lambda: self.update_all_frame(board_new))
@@ -363,6 +363,8 @@ class MinigameFrame(QtWidgets.QFrame):
             self._last_values = self.board.copy()
             self.check_game_passed()
             self.check_game_over()
+        else:
+            self.update_all_frame(self.board)
 
     def move_and_check_validity(self, direct):
         board_new, new_score = self.mover.move_board(self.board, direct)
