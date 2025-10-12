@@ -3,6 +3,7 @@ import sys
 import time
 from typing import Dict, Tuple
 from collections import defaultdict
+from datetime import datetime
 
 import numpy as np
 from PyQt5 import QtCore, QtWidgets
@@ -197,13 +198,14 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.ai_timer = QTimer(self)
 
         self.recording_state = False  # 录制状态
-        self.records = np.empty(0, dtype='uint8,uint16,uint16,uint16,uint16')  # 录制的回放
+        self.records = np.empty(0, dtype='uint8,uint32,uint32,uint32,uint32')  # 录制的回放
         self.record_length = 0  # 已录制的长度
         self.playing_record_state = False  # 播放状态
         self.record_loaded = None  # 已加载的回放
         self.played_length = 0  # 已播放的长度
         self.replay_timer = QTimer(self)
         self.replay_timer.timeout.connect(self.replay_step)  # type: ignore # 回放状态定时自动走棋从
+        self.last_used_directory = ""
 
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
         self.reader_thread = ReaderWorker(self.book_reader, np.uint64(0), self.pattern_settings, self.current_pattern)
@@ -838,25 +840,28 @@ class TrainWindow(QtWidgets.QMainWindow):
         if not self.recording_state:
             self.recording_state = True
             self.record.setText(self.tr('Save'))
-            self.records = np.empty(10000, dtype='uint8,uint16,uint16,uint16,uint16')
+            self.records = np.empty(10000, dtype='uint8,uint32,uint32,uint32,uint32')
             v = np.uint64(self.gameframe.board_encoded)
-            self.records[0] = (np.uint8(0), np.uint16(v & np.uint64(0xFFFF)),
-                               np.uint16((v >> np.uint64(16)) & np.uint64(0xFFFF)),
-                               np.uint16((v >> np.uint64(32)) & np.uint64(0xFFFF)),
-                               np.uint16((v >> np.uint64(48)) & np.uint64(0xFFFF)))
+            self.records[0] = (np.uint8(0), np.uint32(v & np.uint64(0xFFFF)),
+                               np.uint32((v >> np.uint64(16)) & np.uint64(0xFFFF)),
+                               np.uint32((v >> np.uint64(32)) & np.uint64(0xFFFF)),
+                               np.uint32((v >> np.uint64(48)) & np.uint64(0xFFFF)))
             self.record_length = 1
             self.statusbar.showMessage(self.tr('Recording started'), 3000)
         else:
             if self.ai_state:
                 self.toggle_demo()
             if self.record_length > 2:
-                file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save Record", "",
+                default_filename = self.current_pattern + '_' + datetime.now().strftime("%Y%m%d_%H%M%S") + ".rec"
+                initial_path = os.path.join(self.last_used_directory, default_filename)
+                file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save Record", initial_path,
                                                                      "Record Files (*.rec);;All Files (*)")
                 if file_path:  # 用户选择了文件路径
                     self.records[:self.record_length].tofile(file_path)
+                    self.last_used_directory = os.path.dirname(file_path)
             self.recording_state = False
             self.record_length = 0
-            self.records = np.empty(0, dtype='uint8,uint16,uint16,uint16,uint16')
+            self.records = np.empty(0, dtype='uint8,uint32,uint32,uint32,uint32')
             self.record.setText(self.tr('Record Demo'))
 
     def record_current_state(self, move):
@@ -867,7 +872,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         for direction in ('up', 'down', 'left', 'right'):
             rate = self.result.get(direction, 0)
             rate = rate if isinstance(rate, (float, int)) else 0
-            success_rates.append(np.uint16(rate * 16000))
+            success_rates.append(np.uint32(rate * 4e9))
         self.records[self.record_length] = (changes, *success_rates)
         self.record_length += 1
 
@@ -880,14 +885,20 @@ class TrainWindow(QtWidgets.QMainWindow):
                                                              "Record Files (*.rec);;All Files (*)")
         if file_path:  # 检查用户是否选择了文件
             try:
-                self.record_loaded = np.fromfile(file_path, dtype='uint8,uint16,uint16,uint16,uint16')
+                self.record_loaded = np.fromfile(file_path, dtype='uint8,uint32,uint32,uint32,uint32')
                 self.statusbar.showMessage(self.tr("File loaded successfully"), 1000)
                 board = np.uint64((np.uint64(self.record_loaded[0][4]) << np.uint16(48)) |
                                   (np.uint64(self.record_loaded[0][3]) << np.uint16(32)) |
                                   (np.uint64(self.record_loaded[0][2]) << np.uint16(16)) |
                                   np.uint64(self.record_loaded[0][1]))
                 self.board_state.setText(hex(board)[2:].rjust(16,'0'))
-                self.results_label.setText('')
+
+                results_state = self.record_loaded[1]
+                self.decode_result_from_record(results_state)
+                results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in self.result.items())
+                if self.show_results_checkbox.isChecked():
+                    self.results_label.setText(results_text)
+
                 self.textbox_reset_board()
                 self.played_length = 1
             except Exception as e:
@@ -932,16 +943,25 @@ class TrainWindow(QtWidgets.QMainWindow):
             move = {0: 'up', 1: 'down', 2: 'left', 3: 'right'}[move]
             self.gameframe.do_move(move.capitalize(), False)
             self.gameframe.set_new_num(new_val_pos, new_val, SingletonConfig().config['do_animation'])
-            self.decode_result_from_record(current_state)
+
+            if self.played_length < len(self.record_loaded) - 1:
+                results_state = self.record_loaded[self.played_length + 1]
+            else:
+                results_state = None
+            self.decode_result_from_record(results_state)
             results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in self.result.items())
-            self.results_label.setText(results_text)
+            if self.show_results_checkbox.isChecked():
+                self.results_label.setText(results_text)
             self.played_length += 1
 
-    def decode_result_from_record(self, current_state):
+    def decode_result_from_record(self, results_state):
+        if results_state is None:
+            self.result = dict()
+            return
         result = {}
         for i in range(4):
             direction = ('up', 'down', 'left', 'right')[i]
-            result[direction] = round((current_state[i + 1] / 16000), 5)
+            result[direction] = results_state[i + 1] / 4e9
         result = dict(sorted(result.items(), key=lambda item: item[1], reverse=True))
         self.result = result
 
