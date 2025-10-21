@@ -715,10 +715,7 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
             if self.record_loaded is not None and self.played_length > 1:
                 self.played_length -= 1
-                current_state = self.record_loaded[self.played_length]
-                self.decode_result_from_record(current_state)
-                results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in self.result.items())
-                self.results_label.setText(results_text)
+                self.update_record_results(1)
             else:
                 self.read_results()
 
@@ -790,7 +787,7 @@ class TrainWindow(QtWidgets.QMainWindow):
                 return
             else:
                 # 默认执行最佳移动
-                self.one_step()
+                self.handle_step()
             event.accept()
         else:
             super().keyPressEvent(event)  # 其他键交给父类处理
@@ -892,15 +889,10 @@ class TrainWindow(QtWidgets.QMainWindow):
                                   (np.uint64(self.record_loaded[0][2]) << np.uint16(16)) |
                                   np.uint64(self.record_loaded[0][1]))
                 self.board_state.setText(hex(board)[2:].rjust(16,'0'))
-
-                results_state = self.record_loaded[1]
-                self.decode_result_from_record(results_state)
-                results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in self.result.items())
-                if self.show_results_checkbox.isChecked():
-                    self.results_label.setText(results_text)
-
+                self.played_length = 0
+                self.update_record_results()
                 self.textbox_reset_board()
-                self.played_length = 1
+                self.played_length += 1
             except Exception as e:
                 self.statusbar.showMessage(self.tr("Failed to load file: ") + str(e))
                 self.record_loaded = None
@@ -944,15 +936,18 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.gameframe.do_move(move.capitalize(), False)
             self.gameframe.set_new_num(new_val_pos, new_val, SingletonConfig().config['do_animation'])
 
-            if self.played_length < len(self.record_loaded) - 1:
-                results_state = self.record_loaded[self.played_length + 1]
-            else:
-                results_state = None
-            self.decode_result_from_record(results_state)
-            results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in self.result.items())
-            if self.show_results_checkbox.isChecked():
-                self.results_label.setText(results_text)
+            self.update_record_results()
             self.played_length += 1
+
+    def update_record_results(self, lag=0):
+        if self.played_length - lag < len(self.record_loaded) - 1:
+            results_state = self.record_loaded[self.played_length + 1 - lag]
+        else:
+            results_state = None
+        self.decode_result_from_record(results_state)
+        results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in self.result.items())
+        if self.show_results_checkbox.isChecked():
+            self.results_label.setText(results_text)
 
     def decode_result_from_record(self, results_state):
         if results_state is None:

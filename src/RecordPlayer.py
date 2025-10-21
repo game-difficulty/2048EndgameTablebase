@@ -218,7 +218,9 @@ class ReplayFrame(BaseBoardFrame):
         optimal_sr = np.max(arr_rates, axis=1)
         optimal_sr[optimal_sr <= 0] = 1
         player_sr = arr_rates[np.arange(len(self.moves)), self.moves]
+
         self.losses = player_sr / optimal_sr
+        self.losses[self.losses == 0] = 1
         self.goodness_of_fit = np.cumprod(self.losses)
 
         self.combo = np.empty(len(self.losses), dtype=np.uint16)
