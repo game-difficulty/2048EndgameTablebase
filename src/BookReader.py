@@ -36,10 +36,11 @@ class BookReader:
             return {'?': '?'}
         if nums < 0:
             return {'down': '', 'right': '', 'left': '', 'up': ''}
-        sorted_results = {'down': '', 'right': '', 'left': '', 'up': ''}
+        final_results = {'down': '', 'right': '', 'left': '', 'up': ''}
+        max_success_rate = 0
 
         for path in path_list:
-            if not os.path.exists(path):
+            if not os.path.exists(path) or max_success_rate:
                 continue
 
             for operation in [BookReader.last_operation] + BookReader.gen_all_mirror(pattern):
@@ -47,7 +48,6 @@ class BookReader:
                 t_board = operation_func(board)
                 encoded = np.uint64(bm_.encode_board(t_board))
                 if pattern_check_func(encoded):
-                    BookReader.last_operation = operation
                     results = BookReader.get_best_move(path, f'{pattern_full}_{int(nums)}.book', encoded,
                                                        pattern_check_func, bm_, to_find_func)
                     adjusted = {BookReader.adjust_direction(flip, rotation, direction): success_rate
@@ -56,10 +56,18 @@ class BookReader:
                     non_float_items = {k: v for k, v in adjusted.items() if not isinstance(v, (int, float))}
                     sorted_float_items = dict(sorted(float_items.items(), key=lambda item: item[1], reverse=True))
                     sorted_results = {**sorted_float_items, **non_float_items}
-                    if float_items:
-                        return sorted_results
+                    if pattern in ('4442ff', '4442f') and sorted_float_items:
+                        first_value = sorted_float_items[next(iter(sorted_float_items))]
+                        if first_value > max_success_rate:
+                            BookReader.last_operation = operation
+                            max_success_rate = first_value
+                            final_results = sorted_results
+                    elif float_items:
+                        BookReader.last_operation = operation
+                        final_results = sorted_results
+                        return final_results
 
-        return sorted_results
+        return final_results
 
     @staticmethod
     def gen_all_mirror(pattern: str) -> List[Tuple[str, str, Callable[[np.ndarray], np.ndarray]]]:
@@ -231,11 +239,11 @@ class BookReaderDispatcher:
             with os.scandir(path) as entries:
                 for entry in entries:
                     # 检查条目名称是否以新算法文件后缀结尾
-                    if entry.name.endswith(f'_{str(2 ** target // 2)}b'):
-                        found = True
-                        break
-                    if entry.name.endswith(f'_{str(2 ** target // 4)}b'):
-                        found = True
+                    for rank in (1, 0.75, 0.5, 0.25):
+                        if entry.name.endswith(f'_{str(int(2 ** target * rank))}b'):
+                            found = True
+                            break
+                    if found:
                         break
         if not found:
             self.use_ad = False

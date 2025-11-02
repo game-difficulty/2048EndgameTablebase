@@ -280,7 +280,7 @@ def tile_sum_and_32k_count4(board: np.uint64, param:ParamType
 
     pos_rank = s0 * f0 + s1 * f1 + s2 * f2 + s3 * f3
 
-    is_success = merged_tile == param.target
+    is_success = (merged_tile == param.target) & (merged_tile_found == 1)
 
     return np.uint32(total_sum), np.int8(count_32k), np.uint64(pos_bitmap), np.uint8(pos_rank), np.uint8(merged_tile_found), np.uint8(merged_tile), is_success
 

@@ -202,7 +202,7 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
         _, pattern_check_func, to_find_func, success_check_func, ini = formation_info[pattern]
         if pattern == 'LL' and position == 1:
             to_find_func = Calculator.re_self
-        if pattern in ('4442', '4432', '4441', "3433", "3442", "3432", "4441f", '4432ff', '4432f', '4442f'):
+        if pattern in ('4442', '4432', '4441', "3433", "3442", "3432", "4441f", '4432ff', '4432f', '4442f', '4442ff'):
             isfree = True
         else:
             isfree = False

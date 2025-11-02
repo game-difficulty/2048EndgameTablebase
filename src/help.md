@@ -1,8 +1,8 @@
 # User Manual
 
 **Author**: game_difficulty  
-**Version**: 7.4  
-**Date**: 2025.7.4  
+**Version**: 7.8  
+**Date**: 2025.11.3  
 
 ---
 
@@ -233,14 +233,19 @@ You can use the **Analyze Verse Log** button to analyze game replays from 2048ve
 
    - Write the game replay to a txt file and upload it.
    - Choose a formation to analyze. You must have calculated this table.
-   - **If the file has been moved, it must be reset in the Practise interface.**
-   - The program will analyze all endgames in the replay that meet the formation constraints and generate a text report.
+   - **If the book files have been moved, they must be reset in the Practise interface.**
+   - The program will analyze all endgames in the replay that meet the formation constraints and generate a txt report.
 
 Use the **Review Replay** button to reexamine your gameplay on Testing screen or Verse.
 
    - Entering the interface will allow you to reexamine the test you have just taken.
    - You can select the replay file you want to review from the left side of the menu bar in the interface.
    - Replay files will be generated when you analyze a Verse replay.
+
+The **Mistakes Notebook** is at the bottom of the test interface. It automatically records mistakes made during tests, so you can practice them repeatedly.
+
+To retain your settings and Mistakes Notebook after updating:
+Find the *config* file (without an extension) and the mistakes_book.pkl file in your previous installation folder, then copy them to the same locations in the new version's folder.
 
 ---
 

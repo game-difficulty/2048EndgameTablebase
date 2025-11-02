@@ -56,9 +56,10 @@ class BookReaderAD:
             return {'down': '', 'right': '', 'left': '', 'up': ''}
         if not pattern_check_func or not path_list:
             return {'?': '?'}
-        sorted_results = {'down': '', 'right': '', 'left': '', 'up': ''}
+        final_results = {'down': '', 'right': '', 'left': '', 'up': ''}
+        max_success_rate = 0
         for path in path_list:
-            if not os.path.exists(path):
+            if not os.path.exists(path) or max_success_rate:
                 continue
 
             sym_func = {Calculator.re_self: Calculator.re_self_pair,
@@ -70,7 +71,6 @@ class BookReaderAD:
                 t_board = operation_func(board)
                 encoded = np.uint64(bm_.encode_board(t_board))
                 if pattern_check_func(encoded):
-                    self.last_operation = operation
                     results = self.get_best_move(path, f'{pattern_full}_{int(nums)}b', encoded,
                                                  pattern_check_func, bm_, sym_func)
                     adjusted = {self.adjust_direction(flip, rotation, direction): success_rate
@@ -79,10 +79,18 @@ class BookReaderAD:
                     non_float_items = {k: v for k, v in adjusted.items() if not isinstance(v, (int, float))}
                     sorted_float_items = dict(sorted(float_items.items(), key=lambda item: item[1], reverse=True))
                     sorted_results = {**sorted_float_items, **non_float_items}
-                    if float_items:
-                        return sorted_results
+                    if self.pattern in ('4442ff', '4442f') and sorted_float_items:
+                        first_value = sorted_float_items[next(iter(sorted_float_items))]
+                        if first_value > max_success_rate:
+                            self.last_operation = operation
+                            max_success_rate = first_value
+                            final_results = sorted_results
+                    elif float_items:
+                        self.last_operation = operation
+                        final_results = sorted_results
+                        return final_results
 
-        return sorted_results
+        return final_results
 
     @staticmethod
     def gen_all_mirror(pattern: str) -> List[Tuple[str, str, Callable[[np.ndarray], np.ndarray]]]:

@@ -979,12 +979,12 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.board_state.setText(hex(board_encoded)[2:].rjust(16, '0'))
             self.handle_set_board()
 
-            if self.windowState() & QtCore.Qt.WindowState.WindowMinimized:
-                self.setWindowState(
-                    self.windowState() & ~QtCore.Qt.WindowState.WindowMinimized | QtCore.Qt.WindowState.WindowActive)
-            self.show()
-            self.activateWindow()
-            self.raise_()
+        if self.windowState() & QtCore.Qt.WindowState.WindowMinimized:
+            self.setWindowState(
+                self.windowState() & ~QtCore.Qt.WindowState.WindowMinimized | QtCore.Qt.WindowState.WindowActive)
+        self.show()
+        self.activateWindow()
+        self.raise_()
 
     def closeEvent(self, event):
         self.ai_state = False
