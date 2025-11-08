@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import pickle
 import sys
 from typing import Callable, Dict, Tuple
@@ -358,6 +359,33 @@ class SingletonConfig:
             if hasattr(widget, 'retranslateUi'):
                 widget.retranslateUi()
 
+    def check_pattern_file(cls, pattern):
+        if not cls._instance:
+            return False
+
+        filepath_map = cls._instance.config['filepath_map']
+        file_path_list = filepath_map.get(pattern, None)
+        prefix = f"{pattern}_"
+        if not file_path_list:
+            return False
+
+        for file_path in file_path_list:
+            # 检查文件夹是否存在
+            if not file_path or not os.path.exists(file_path) or not os.path.isdir(file_path):
+                file_path_list.remove(file_path)
+                continue
+
+            # 遍历文件夹中的所有项
+            for item in os.listdir(file_path):
+                if not item.startswith(prefix):
+                    continue
+                if item.endswith('.book') or item.endswith('.z') or item.endswith('b'):
+                    return True
+
+            file_path_list.remove(file_path)
+
+        return False
+
 
 # 创建日志记录
 logger = logging.getLogger('debug_logger')
@@ -406,4 +434,3 @@ else:
 
 clock = ctypes.CDLL(__LIB).clock
 clock.argtypes = []
-

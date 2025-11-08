@@ -77,7 +77,8 @@ class TrainFrame(BaseBoardFrame):
         results = {}
         bd_encoded = self.board_encoded
         _32ks = pattern_32k_tiles_map.get(self.parents.pattern_settings[0], [0])[0]
-        bd_encoded = replace_largest_tiles(bd_encoded, _32ks)
+        target = self.parents.pattern_settings[1]
+        bd_encoded = replace_largest_tiles(bd_encoded, _32ks, target)
 
         for val in (1,2):
             for new_tile_pos in range(16):
@@ -971,7 +972,7 @@ class TrainWindow(QtWidgets.QMainWindow):
 
     def handle_page_jump(self, board_encoded, full_pattern:str):
         if not self.ai_state and not self.playing_record_state and not self.isProcessing:
-            if full_pattern != '_         ' and ('' in self.pattern_settings or '?' in self.pattern_settings):
+            if full_pattern != '_         ' and SingletonConfig().check_pattern_file(full_pattern):
                 splits = full_pattern.split('_')
                 self.pattern_settings[:len(splits)] = splits
                 self.set_to_new_pattern()
@@ -1010,7 +1011,8 @@ class ReaderWorker(QtCore.QThread):
         self.state = ''
 
     def run(self):
-        board_encoded = replace_largest_tiles(self.board_state, self._32ks)
+        target = self.pattern_settings[1]
+        board_encoded = replace_largest_tiles(self.board_state, self._32ks, target)
 
         board = bm.decode_board(board_encoded)
         self.state = '?'
@@ -1030,7 +1032,7 @@ def count_match_positions(s1: str, s2: str) -> int:
     return sum(1 for a, b in zip(s1, s2) if a == b)
 
 
-def replace_largest_tiles(board_encoded, n):
+def replace_largest_tiles(board_encoded, n, target:str):
     if n == 0:
         return board_encoded
 
@@ -1042,6 +1044,9 @@ def replace_largest_tiles(board_encoded, n):
 
     sorted_tiles = sorted(tiles, reverse=True)
     threshold = sorted_tiles[n - 1]
+    if 2 ** threshold < int(target):
+        return board_encoded
+
     count = 0
     for i in range(len(tiles)):
         if count < n and tiles[i] >= threshold:

@@ -530,7 +530,7 @@ class GameFrame(BaseBoardFrame):
 
     def do_move(self, direction: str, do_gen=True):
         """ 支持65536 """
-        if 840000 < self.score and not self.has_65k and np.sum((self.board == 32768)) == 2:
+        if not self.has_65k and np.sum((self.board == 32768)) == 2:
             positions = np.where(self.board == 32768)
             first_position = (positions[0][0], positions[1][0])
             second_position = (positions[0][1], positions[1][1])
@@ -564,6 +564,9 @@ class AIThread(QtCore.QThread):
     def is_mess(self):
         """检查是否乱阵"""
         board = self.ai_player.board
+        if np.sum(board) % 512 < 32:
+            return False
+
         large_tiles = (board > 64).sum()
         board_flatten = board.flatten()
         if large_tiles < 3:
@@ -599,7 +602,7 @@ class AIThread(QtCore.QThread):
             if self.ai_player.check_corner(np.uint64(bm.encode_board(self.ai_player.board))):
                 depth = 8
             self.ai_player.start_search(depth)
-            while self.ai_player.node < 200000 * big_nums2 ** 2 and depth < 9:
+            while self.ai_player.node < 160000 * big_nums2 ** 2 and depth < 9:
                 depth += 1
                 self.ai_player.start_search(depth)
         elif empty_slots > 9 or big_nums < 1:
@@ -608,10 +611,13 @@ class AIThread(QtCore.QThread):
             self.ai_player.start_search(2)
         elif (empty_slots > 3 > big_nums) or (big_nums < 2):
             self.ai_player.start_search(4)
+        elif np.sum(self.ai_player.board) % 512 < 16:
+            depth = 4 if big_nums < 4 else 5
+            self.ai_player.start_search(depth)
         else:
             depth = 4 if big_nums < 4 else 5
             self.ai_player.start_search(depth)
-            while self.ai_player.node < 24000 * depth * big_nums ** 1.25 and depth < 9:
+            while self.ai_player.node < 20000 * depth * big_nums ** 1.25 and depth < 9:
                 depth += 1
                 self.ai_player.start_search(depth)
             # print(depth, self.ai_player.node)
@@ -631,9 +637,11 @@ class GameWindow(QtWidgets.QMainWindow):
 
         self.ai_timer = QTimer(self)
         self.ai_dispatcher = Dispatcher(bm.decode_board(np.uint64(0)), np.uint64(0))
+        self.last_table = 'AI'
 
         self.statusbar.showMessage(self.tr(
             "All features may be slow when used for the first time. Please be patient."), 8000)
+        self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
         self.update_score()
         self.gameframe.setFocus()
         self.gameframe.AIMoveDone.connect(self.ai_move_done)
@@ -650,7 +658,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.gridLayout.setObjectName("gridLayout")
 
         self.gameframe = GameFrame(self.centralwidget)
-        self.gridLayout.addWidget(self.gameframe, 2, 0, 1, 1)
+        self.gridLayout.addWidget(self.gameframe, 3, 0, 1, 1)
 
         self.operate_frame = QtWidgets.QFrame(self.centralwidget)
         self.operate_frame.setMaximumSize(QtCore.QSize(16777215, 180))
@@ -792,7 +800,34 @@ class GameWindow(QtWidgets.QMainWindow):
         self.infoButton.setFlat(True)
         self.difficulty_layout.addWidget(self.infoButton, 0, 11, 1, 1)
         self.infoButton.clicked.connect(self.show_message)  # type: ignore
-        self.gridLayout.addWidget(self.difficulty_frame, 3, 0, 1, 1)
+        self.gridLayout.addWidget(self.difficulty_frame, 4, 0, 1, 1)
+
+        self.setboard_frame = QtWidgets.QFrame(self.centralwidget)
+        self.setboard_frame.setMaximumSize(QtCore.QSize(16777215, 30))
+        self.setboard_frame.setMinimumSize(QtCore.QSize(120, 20))
+        self.setboard_frame.setStyleSheet("QFrame{\n"
+                                            "    border-color: rgb(167, 167, 167);\n"
+                                            "    background-color: rgb(236, 236, 236);\n"
+                                            "}")
+        self.setboard_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        self.setboard_frame.setFrameShadow(QtWidgets.QFrame.Raised)
+        self.setboard_frame.setObjectName("setboard")
+        self.setboard_frame.setMaximumSize(QtCore.QSize(16777215, 60))
+        self.setboard_frame.setMinimumSize(QtCore.QSize(120, 45))
+        self.setboard_Layout = QtWidgets.QHBoxLayout(self.setboard_frame)
+        self.setboard_Layout.setObjectName("setboard_Layout")
+        self.board_state = QtWidgets.QLineEdit(self.centralwidget)
+        self.board_state.setStyleSheet("font: 600 12pt \"consolas\";")
+        self.board_state.setObjectName("board_state")
+        self.board_state.setText('0000000000000000')
+        self.setboard_Layout.addWidget(self.board_state)
+        self.set_board_bt = QtWidgets.QPushButton(self.centralwidget)
+        self.set_board_bt.setMaximumSize(QtCore.QSize(90, 16777215))
+        self.set_board_bt.setStyleSheet("font: 750 12pt \"Cambria\";")
+        self.set_board_bt.setObjectName("set_board_bt")
+        self.set_board_bt.clicked.connect(self.textbox_reset_board)  # type: ignore
+        self.setboard_Layout.addWidget(self.set_board_bt)
+        self.gridLayout.addWidget(self.setboard_frame, 2, 0, 1, 1)
 
         self.setCentralWidget(self.centralwidget)
 
@@ -822,6 +857,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.new_game.setText(_translate("Game", "New Game"))
         self.ai.setText(_translate("Game", "AI: ON"))
         self.difficulty_text.setText(_translate("Game", "Difficulty"))
+        self.set_board_bt.setText(_translate("Game", "SET"))
 
     def difficulty_changed(self):
         self.gameframe.difficulty = self.difficulty_slider.value() / 100
@@ -902,13 +938,21 @@ class GameWindow(QtWidgets.QMainWindow):
         elif event.key() in (QtCore.Qt.Key.Key_Right, QtCore.Qt.Key.Key_D):
             self.process_input('Right')
             event.accept()
+        elif event.key() in (QtCore.Qt.Key.Key_Backspace, QtCore.Qt.Key.Key_Delete) and not self.ai_state:
+            self.handleUndo()
+            event.accept()
+        elif event.key() in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter) and not self.ai_state:
+            self.handleOneStep()
+            event.accept()
         else:
             super().keyPressEvent(event)  # 其他键交给父类处理
 
     def process_input(self, direction):
         self.isProcessing = True  # 设置标志防止进一步的输入
         self.gameframe.do_move(direction)
+        self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
         self.update_score()
+        self.save_game_state()
         self.isProcessing = False
 
     def handleOneStep(self):
@@ -917,10 +961,16 @@ class GameWindow(QtWidgets.QMainWindow):
         self.isProcessing = True
         self.ai_dispatcher.reset(self.gameframe.board, self.gameframe.board_encoded)
         best_move = self.ai_dispatcher.dispatcher()
+        current_table = self.ai_dispatcher.current_table
+        if current_table != self.last_table:
+            self.statusbar.showMessage(self.tr("Using " + current_table), 1000)
+            self.last_table = current_table
+
         if best_move == 'AI':
             self.gameframe.ai_step()
         else:
             self.gameframe.do_move(best_move.capitalize())
+        self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
         self.update_score()
         if self.ai_state:
             if self.gameframe.died_when_ai_state:
@@ -930,6 +980,7 @@ class GameWindow(QtWidgets.QMainWindow):
             elif best_move != 'AI':
                 self.ai_timer.singleShot(20, self.handleOneStep)
         # print(self.ai_dispatcher.last_operator)
+        self.save_game_state()
         self.isProcessing, self.gameframe.ai_processing = False, False
 
     def ai_move_done(self, is_done):
@@ -938,6 +989,7 @@ class GameWindow(QtWidgets.QMainWindow):
 
     def handleUndo(self):
         self.gameframe.undo()
+        self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
         self.update_score()
         self.gameframe.died_when_ai_state = False
 
@@ -961,12 +1013,38 @@ class GameWindow(QtWidgets.QMainWindow):
             self.ai.setText("AI: ON")
             self.ai_state = False
 
+    def textbox_reset_board(self):
+        if not self.board_state.text():
+            return
+        if self.ai_state or self.isProcessing or self.gameframe.ai_processing:
+            self.statusbar.showMessage(self.tr(
+                "Please turn off the AI or wait for the previous process to finish."), 1000)
+            return
+
+        self.gameframe.board_encoded = np.uint64(int(self.board_state.text(), 16))
+        self.gameframe.board = bm.decode_board(self.gameframe.board_encoded)
+        self.gameframe._last_values = self.gameframe.board.copy()
+        self.gameframe.update_all_frame(self.gameframe.board)
+        self.gameframe.setFocus()
+
+        # 重置历史记录
+        self.gameframe.score = 0
+        self.update_score()
+        self.gameframe.history = []
+        self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
+        self.gameframe.died_when_ai_state = False
+
+    def save_game_state(self, save=False):
+        current_time = int(time.time() * 100)
+        if save or current_time % 32 == 0:
+            SingletonConfig().config['game_state'] = [self.gameframe.board_encoded, self.gameframe.score,
+                                                      int(self.best_points.text())]
+            SingletonConfig.save_config(SingletonConfig().config)
+
     def closeEvent(self, event):
         self.ai.setText("AI: ON")
         self.ai_state = False
-        SingletonConfig().config['game_state'] = [self.gameframe.board_encoded, self.gameframe.score,
-                                                  int(self.best_points.text())]
-        SingletonConfig.save_config(SingletonConfig().config)
+        self.save_game_state(True)
         event.accept()  # 确认关闭事件
 
 

@@ -123,6 +123,9 @@ class AItest:
     def is_mess(self):
         """检查是否乱阵"""
         board = self.board
+        if np.sum(board) % 512 < 24:
+            return False
+
         large_tiles = np.sum(self.ai_dispatcher.counts[7:])
         board_flatten = board.flatten()
         if large_tiles < 3:

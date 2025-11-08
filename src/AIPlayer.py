@@ -6,7 +6,7 @@ from numba.experimental import jitclass
 
 from BoardMover import reverse, s_move_board, encode_board, s_gen_new_num, decode_board
 from BookReader import BookReaderDispatcher
-from Config import SingletonConfig
+from Config import SingletonConfig, pattern_32k_tiles_map
 
 
 @njit()
@@ -40,7 +40,8 @@ def diffs_evaluation_func(line_masked):
         score_t = (int(line_masked[0] * 3.75 + line_masked[1] + line_masked[3] * 3.75 + line_masked[2]) >> 1) + max(
             line_masked[1], line_masked[2])
 
-    return int32(max(score_dpdf, score_t) / 4)
+    zero_count = sum([k == 0 for k in line_masked])
+    return int32(max(score_dpdf, score_t) / 4 - zero_count)
 
 
 @njit()
@@ -250,39 +251,19 @@ def search_ai_player(player, b, prob, depth):
     return best
 
 
-class Dispatcher:
+class BaseDispatcher:
     def __init__(self, board, board_encoded):
         self.board_encoded = board_encoded
         self.counts = self.frequency_count()
         self.board = board
-        self.last_operator = 0  # 0:AI 1:free12w-2k 2:free11w-2k 3:4442f-2k 4:free11w-512
+        self.last_operator = 0
+        self.current_table = 'AI'
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
-        self.ad_readers = dict()
-        self.init_bookreader()
-        self.success_count = 0
-
-    def init_bookreader(self):
-        if 'free12w_2048' in SingletonConfig().config['filepath_map'].keys():
-            self.book_reader.dispatch(SingletonConfig().config['filepath_map']['free12w_2048'], 'free12w', '2048')
-            self.ad_readers['free12w_2048'] = (self.book_reader.use_ad, self.book_reader.book_reader_ad)
-        if 'free11w_2048' in SingletonConfig().config['filepath_map'].keys():
-            self.book_reader.dispatch(SingletonConfig().config['filepath_map']['free11w_2048'], 'free11w', '2048')
-            self.ad_readers['free11w_2048'] = (self.book_reader.use_ad, self.book_reader.book_reader_ad)
-        if '4442f_2048' in SingletonConfig().config['filepath_map'].keys():
-            self.book_reader.dispatch(SingletonConfig().config['filepath_map']['4442f_2048'], '4442f', '2048')
-            self.ad_readers['4442f_2048'] = (self.book_reader.use_ad, self.book_reader.book_reader_ad)
-        if 'free11w_512' in SingletonConfig().config['filepath_map'].keys():
-            self.book_reader.dispatch(SingletonConfig().config['filepath_map']['free11w_512'], 'free11w', '512')
-            self.ad_readers['free11w_512'] = (self.book_reader.use_ad, self.book_reader.book_reader_ad)
-
-    def reset_bookreader(self, key):
-        self.book_reader.use_ad, self.book_reader.book_reader_ad = self.ad_readers[key]
 
     def reset(self, board, board_encoded):
         self.board_encoded = board_encoded
         self.counts = self.frequency_count()
         self.board = board
-        # 不要reset success_count
 
     # 统计各个数字数量
     def frequency_count(self):
@@ -306,9 +287,38 @@ class Dispatcher:
                                      [32768, 32768, 32768, 32768]], dtype=np.int32)  # 其他数字太小让AI玩
         return masked_board
 
+    def dispatcher(self):
+        raise NotImplementedError('Subclasses must implement the dispatcher method')
+
+
+class DispatcherSpecialized(BaseDispatcher):
+    def __init__(self, board, board_encoded):
+        super().__init__(board, board_encoded)
+        self.ad_readers = dict()
+        self.init_bookreader()
+        self.success_count = 0
+
+    def init_bookreader(self):
+        if 'free12w_2048' in SingletonConfig().config['filepath_map'].keys():
+            self.book_reader.dispatch(SingletonConfig().config['filepath_map']['free12w_2048'], 'free12w', '2048')
+            self.ad_readers['free12w_2048'] = (self.book_reader.use_ad, self.book_reader.book_reader_ad)
+        if 'free11w_2048' in SingletonConfig().config['filepath_map'].keys():
+            self.book_reader.dispatch(SingletonConfig().config['filepath_map']['free11w_2048'], 'free11w', '2048')
+            self.ad_readers['free11w_2048'] = (self.book_reader.use_ad, self.book_reader.book_reader_ad)
+        if '4442f_2048' in SingletonConfig().config['filepath_map'].keys():
+            self.book_reader.dispatch(SingletonConfig().config['filepath_map']['4442f_2048'], '4442f', '2048')
+            self.ad_readers['4442f_2048'] = (self.book_reader.use_ad, self.book_reader.book_reader_ad)
+        if 'free11w_512' in SingletonConfig().config['filepath_map'].keys():
+            self.book_reader.dispatch(SingletonConfig().config['filepath_map']['free11w_512'], 'free11w', '512')
+            self.ad_readers['free11w_512'] = (self.book_reader.use_ad, self.book_reader.book_reader_ad)
+
+    def reset_bookreader(self, key):
+        self.book_reader.use_ad, self.book_reader.book_reader_ad = self.ad_readers[key]
+
     def check_free12w_2k(self):
         if 'free12w_2048' not in SingletonConfig().config['filepath_map'].keys():
             self.last_operator = 0
+            self.current_table = 'AI'
             return 'AI'
         masked_board = self.mask(4)
         self.reset_bookreader('free12w_2048')
@@ -321,6 +331,7 @@ class Dispatcher:
                 self.success_count = max(0, self.success_count-2)
             if self.success_count < 4:
                 self.last_operator = 1
+                self.current_table = 'free12w_2048'
                 return move
             elif r1[move] == 1 and self.is_final_2k_merge():
                 return self.check_free11w_2k()
@@ -329,11 +340,13 @@ class Dispatcher:
             self.free11w2k_to_free11w512()
             return self.check_free11w_512()
         self.last_operator = 0
+        self.current_table = 'AI'
         return 'AI'
 
     def check_free11w_2k(self):
         if 'free11w_2048' not in SingletonConfig().config['filepath_map'].keys():
             self.last_operator = 0
+            self.current_table = 'AI'
             return 'AI'
         masked_board = self.mask(5)
         self.reset_bookreader('free11w_2048')
@@ -346,6 +359,7 @@ class Dispatcher:
                 self.success_count = max(0, self.success_count-2)
             if self.success_count < 5:
                 self.last_operator = 2
+                self.current_table = 'free11w_2048'
                 return move
         elif ((r1[move] in (0, '') or (isinstance(r1[move], float) and r1[move] <= 0.06))
               and np.max(self.counts[8:]) == 1):  # 删除的局面比较多，可能查不到
@@ -353,11 +367,13 @@ class Dispatcher:
             return self.check_free11w_512()
 
         self.last_operator = 0
+        self.current_table = 'AI'
         return 'AI'
 
     def check_4442f_2k(self):
         if '4442f_2048' not in SingletonConfig().config['filepath_map'].keys():
             self.last_operator = 0
+            self.current_table = 'AI'
             return 'AI'
         if ((self.counts[10] == 2 and np.sum(self.counts[11:]) == 2 and self.counts[11] == 1 and np.sum(self.board[self.board < 512]) < 120) or
             (self.counts[9] == 2 and np.sum(self.counts[10:]) == 2 and self.counts[10] == 1 and np.sum(self.board[self.board < 512]) < 120) or
@@ -385,17 +401,20 @@ class Dispatcher:
                 self.success_count = max(0, self.success_count-2)
             if self.success_count < 4:
                 self.last_operator = 3
+                self.current_table = '4442f_2048'
                 return move
         elif ((r1[move] in (0, '') or (isinstance(r1[move], float) and r1[move] <= 0.95)) and
               np.max(self.counts[7:]) == 1) and np.sum(self.counts[7:]) > 4:  # 4442f删除的局面比较多，可能查不到
             return self.check_free11w_512()
 
         self.last_operator = 0
+        self.current_table = 'AI'
         return 'AI'
 
     def check_free11w_512(self):
         if 'free11w_512' not in SingletonConfig().config['filepath_map'].keys():
             self.last_operator = 0
+            self.current_table = 'AI'
             return 'AI'
         masked_board = self.mask(5)
         self.reset_bookreader('free11w_512')
@@ -408,8 +427,10 @@ class Dispatcher:
                 self.success_count = max(0, self.success_count-2)
             if self.success_count < 3:
                 self.last_operator = 4
+                self.current_table = 'free11w_512'
                 return move
         self.last_operator = 0
+        self.current_table = 'AI'
         return 'AI'
 
     def is_endgame_65k(self):
@@ -450,6 +471,7 @@ class Dispatcher:
         large_tiles = np.sum(self.counts[-7:])  # 大于等于512的格子数
         if large_tiles < 3 or self.with_duplicate(3, -8) or self.with_duplicate(4, -6):  #or np.sum(self.counts[-8:]) < 3
             self.last_operator = 0
+            self.current_table = 'AI'
             return 'AI'
         if self.is_endgame_65k():
             return self.check_free11w_2k()
@@ -458,6 +480,128 @@ class Dispatcher:
         if large_tiles == 5 and np.max(self.counts[8:]) == 1:
             return self.check_free11w_512()
         return self.check_4442f_2k()
+
+
+class DispatcherCommon(BaseDispatcher):
+    def __init__(self, board, board_encoded):
+        super().__init__(board, board_encoded)
+        self.ad_readers = dict()
+        self.init_bookreader()
+
+    def init_bookreader(self):
+        for i, table in enumerate(SingletonConfig().config['filepath_map'].keys()):
+            if SingletonConfig().check_pattern_file(table):
+                pattern_param = table.split('_')
+                pattern = pattern_param[0]
+                target_str = pattern_param[1]
+                target = int(np.log2(int(target_str)))
+                self.book_reader.dispatch(SingletonConfig().config['filepath_map'][table], pattern, target_str)
+                _32k, _free32k, _fix32k_pos = pattern_32k_tiles_map[pattern]
+                lvl = _32k + target
+                if pattern.startswith('free') and not pattern.endswith('w'):
+                    lvl += 1
+                if (lvl, _32k) not in self.ad_readers:
+                    self.ad_readers[(lvl, _32k)] = []
+                self.ad_readers[(lvl, _32k)].append((lvl, _32k, _free32k, pattern, target, target_str, table, i + 1,
+                                             self.book_reader.use_ad, self.book_reader.book_reader_ad))
+        for key in self.ad_readers:
+            # 按_free32k 降序排序
+            self.ad_readers[key].sort(key=lambda x: x[2], reverse=True)
+
+    def check_table(self, table_param:list, table_type:int):
+        (lvl, _32k, _free32k, pattern, target, target_str, table, i,
+        self.book_reader.use_ad, self.book_reader.book_reader_ad) = table_param
+        masked_board = self.mask(_32k)
+
+        r1 = self.book_reader.move_on_dic(masked_board, pattern, target_str, table)
+        move = list(r1.keys())[0]
+        if isinstance(r1[move], float):
+            remainder = np.sum(self.board) % (1 << target)
+            if (table_type == 1 and r1[move] > 0.9999999 and remainder < 24) or (
+                table_type == 2 and remainder < 32) or (
+                table_type == 3 and r1[move] > 0.9999999 and (remainder > ((1 << target) - 4) or remainder < 24)):
+                self.last_operator = 0
+                self.current_table = 'AI'
+                return 'AI'
+
+            if r1[move] > 0:
+                self.last_operator = i
+                self.current_table = table
+                return move
+
+        return None
+
+    def get_endgame_lvls(self):
+        endgame_lvls1, endgame_lvls2, endgame_lvls3 = [], [], []
+        large_tile_count = 0
+        for i in range(15,6,-1):
+            if self.counts[i] > 1 and i != 15:
+                break
+            large_tile_count += self.counts[i]
+            lvl = large_tile_count + i
+            if lvl < 12:
+                continue
+            if self.counts[i] > 0:
+                endgame_lvls1.append((lvl, large_tile_count, 1))
+                endgame_lvls2.append((lvl + 1, large_tile_count, 2))
+                endgame_lvls2.append((lvl + 2, large_tile_count, 2))
+            elif self.counts[i] == 0:
+                endgame_lvls3.append((lvl, large_tile_count, 3))
+
+        return endgame_lvls1 + endgame_lvls2 + endgame_lvls3
+
+    def dispatcher(self):
+        endgame_lvls = self.get_endgame_lvls()
+        for (lvl, _32k, table_type) in endgame_lvls:
+            tables_param = self.ad_readers.get((lvl, _32k), [])
+            for table_param in tables_param:
+                result = self.check_table(table_param, table_type)
+                if result == 'AI':
+                    return 'AI'
+                elif result:
+                    return result
+
+        self.last_operator = 0
+        self.current_table = 'AI'
+        return 'AI'
+
+
+class Dispatcher:
+    def __init__(self, board, board_encoded):
+        self._current_strategy = None
+        self._strategies = {}
+        self._init_strategies(board, board_encoded)
+        strategy_type = self.check_tables()
+        self._current_strategy_type = strategy_type
+        self.switch_strategy(strategy_type)
+
+    def _init_strategies(self, board, board_encoded):
+        self._strategies['specialized'] = DispatcherSpecialized(board, board_encoded)
+        self._strategies['common'] = DispatcherCommon(board, board_encoded)
+
+    @staticmethod
+    def check_tables():
+        use_specialized = True
+        for table in ('free12w_2048', 'free11w_2048', '4442f_2048', 'free11w_512'):
+            use_specialized &= SingletonConfig().check_pattern_file(table)
+        return 'specialized' if use_specialized else 'common'
+
+    def switch_strategy(self, strategy_type):
+        """切换当前使用的策略"""
+        if strategy_type in self._strategies:
+            self._current_strategy = self._strategies[strategy_type]
+            self._current_strategy_type = strategy_type
+        else:
+            raise ValueError(f"Unsupported Strategy Type: {strategy_type}")
+
+    def __getattr__(self, name):
+        """
+        魔法方法：将未定义的属性调用委托给当前策略实例
+        """
+        if hasattr(self._current_strategy, name):
+            return getattr(self._current_strategy, name)
+        else:
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
 
 spec = {
