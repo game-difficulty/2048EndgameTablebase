@@ -324,6 +324,13 @@ for board,score,operator in rec[:]:
  | 26.49% | 13.38%         | 1.41%      | 51.50%   | 7.22%        |
 
 
+## 7.4 General AI
+After version 8.0, the AI can utilize any calculated tables.
+However, it currently does not adjust its strategy based on available table combinations, 
+so it can hardly leverage t tables & snake tables.
+Recommended tables include free10w-512 (or L3-512), 4431-512, etc.
+
+
 ---
 
 # 8. Frequently Asked Questions

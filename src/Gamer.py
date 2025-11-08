@@ -564,7 +564,7 @@ class AIThread(QtCore.QThread):
     def is_mess(self):
         """检查是否乱阵"""
         board = self.ai_player.board
-        if np.sum(board) % 512 < 32:
+        if np.sum(board) % 512 < 12:
             return False
 
         large_tiles = (board > 64).sum()
