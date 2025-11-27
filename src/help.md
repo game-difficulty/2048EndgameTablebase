@@ -87,7 +87,7 @@ After launching the software, you will enter the Main Menu, which contains the f
 
 - **Game**: Provides the basic game functionality and AI.
 - **MiniGame**: Offers various modified mini-games with higher difficulty levels.
-- **Practise**: Shows the optimal moves to help you learn game strategies.
+- **Practice**: Shows the optimal moves to help you learn game strategies.
 - **Test**: Tests your mastery of endgames.
 - **Settings**: The global settings and table calculation.
 - **Help**: Displays the help documentation to guide you on how to use the software.
@@ -110,7 +110,7 @@ Offers a variety of modified mini-games with higher difficulty levels, ideal for
 - **Game Rules**: Each mini-game has specific gameplay instructions, which can be tried according to the prompts on the interface.
 - **Difficulty**: In the bottom left corner, there is a "HardMode" button. Click it to further increase the game difficulty and challenge your limits.
 
-## 4.5 Practise
+## 4.5 Practice
 Displays the optimal moves to learn game strategies.
 
 - **Practice**: In this interface, you can view the calculated tables, showing the four possible moves for each position and their success rates. By learning the optimal moves, you can improve your game skills.
@@ -136,7 +136,7 @@ Table calculation is a prerequisite for using important features such as the AI 
    - Click **Build** to start the calculation.
 
 ## 5.2 Learn the Formation
-   - Enter **Practise**.
+   - Enter **Practice**.
    - In the top left menu (pattern\target\position), select the formation you just calculated.
    - Check the **Show** checkbox to view the success rates.
    - Click **Default** to show a random initial setup.
@@ -207,9 +207,9 @@ The algorithm will prune positions that do not meet the following conditions:
 
 Using this algorithm, free12w-2048 was successfully computed on a 9950x 128GB RAM computer in ~15 days.   
 
-## 6.2 Practise Interface Button Functions
+## 6.2 Practice Interface Button Functions
 
-### Practise Interface Button Functions
+### Practice Interface Button Functions
 
 | Button                  | Function                                                                                                                                                                                                                                                                                                                                                                             |
 |-------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -227,13 +227,13 @@ Using this algorithm, free12w-2048 was successfully computed on a 9950x 128GB RA
 
 ## 6.3 Testing Interface Advanced Features
 
-You can **set the initial setup**. If you are unsure about the encoding method, you can arrange the initial setup in the Practise interface and then copy the encoding.
+You can **set the initial setup**. If you are unsure about the encoding method, you can arrange the initial setup in the Practice interface and then copy the encoding.
 
 You can use the **Analyze Verse Log** button to analyze game replays from 2048verse.com and generate a detailed analysis report.
 
    - Write the game replay to a txt file and upload it.
    - Choose a formation to analyze. You must have calculated this table.
-   - **If the book files have been moved, they must be reset in the Practise interface.**
+   - **If the book files have been moved, they must be reset in the Practice interface.**
    - The program will analyze all endgames in the replay that meet the formation constraints and generate a txt report.
 
 Use the **Review Replay** button to reexamine your gameplay on Testing screen or Verse.
@@ -259,7 +259,7 @@ To fully utilize the AI's performance, the following tables need to be computed:
    - **4442f-2048**
    - **free11w-512**
 
-Ensure these tables can be properly loaded in the **Practise** before running the AI. As these tables require significant disk space, to minimize storage usage, it is recommended to:
+Ensure these tables can be properly loaded in the **Practice** before running the AI. As these tables require significant disk space, to minimize storage usage, it is recommended to:
    - Set a higher **success rate threshold (Remove boards with a success rate below)** for the first three tables. The program allows modifying this parameter during computation to apply different thresholds for different endgame stages.
    - Delete files numbered after half of the target value. For example, delete files from `free11w_2048_1024b` to `free11w_2048_1049b`.
    - Enable advanced algorithm.
@@ -366,7 +366,7 @@ For experienced users, some parameters can be adjusted based on the calculation 
 ### Q7: Why is the AI's performance lower than expected?
 **A7**: If the AI's performance is not as expected, it may be due to the following reasons:
 1. **No table computed**: The AI relies on pre-computed tables. Make sure the related tables are available.
-2. **Table path changed**: If the table file was moved, reset its path in the Practise interface.
+2. **Table path changed**: If the table file was moved, reset its path in the Practice interface.
 3. **Insufficient computer performance**: If the computer's performance is low, the AI's search speed may be slow, so please be patient.
 
 ### Q8: Why do the numbers on the board appear too large, causing distortion?

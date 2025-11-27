@@ -16,7 +16,7 @@ from BookReader import BookReaderDispatcher
 from Calculator import ReverseUD, ReverseLR, RotateR, RotateL
 from Config import SingletonConfig, category_info, pattern_32k_tiles_map
 from Gamer import BaseBoardFrame
-from SignalHub import practise_signal
+from SignalHub import practice_signal
 
 
 direction_map = defaultdict(lambda: "？")
@@ -212,7 +212,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.reader_thread = ReaderWorker(self.book_reader, np.uint64(0), self.pattern_settings, self.current_pattern)
         self.reader_thread.result_ready.connect(self._show_results)
 
-        practise_signal.board_update.connect(self.handle_page_jump)
+        practice_signal.board_update.connect(self.handle_page_jump)
 
         self.statusbar.showMessage(self.tr("All features may be slow when used for the first time. Please be patient."), 8000)
 
@@ -505,7 +505,7 @@ class TrainWindow(QtWidgets.QMainWindow):
     # noinspection PyTypeChecker
     def retranslateUi(self):
         _translate = QtCore.QCoreApplication.translate
-        self.setWindowTitle(_translate("Train", "Practise"))
+        self.setWindowTitle(_translate("Train", "Practice"))
         self.pattern_text.setText(_translate("Train", ""))
         self.set_board_bt.setText(_translate("Train", "SET"))
         self.RL.setText(_translate("Train", "RL"))

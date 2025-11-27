@@ -61,12 +61,12 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.Minigames.setMaximumSize(QtCore.QSize(600, 80))
         self.Minigames.setStyleSheet("font: 640 14pt \"Cambria\";")
         self.innerContainerLayout.addWidget(self.Minigames)
-        self.Practise = QtWidgets.QPushButton(self.centralwidget)
-        self.Practise.setObjectName("Practise")
-        self.Practise.clicked.connect(self.openTrainWindow)  # type: ignore
-        self.Practise.setMaximumSize(QtCore.QSize(600, 80))
-        self.Practise.setStyleSheet("font: 640 14pt \"Cambria\";")
-        self.innerContainerLayout.addWidget(self.Practise)
+        self.Practice = QtWidgets.QPushButton(self.centralwidget)
+        self.Practice.setObjectName("Practice")
+        self.Practice.clicked.connect(self.openTrainWindow)  # type: ignore
+        self.Practice.setMaximumSize(QtCore.QSize(600, 80))
+        self.Practice.setStyleSheet("font: 640 14pt \"Cambria\";")
+        self.innerContainerLayout.addWidget(self.Practice)
         self.Test = QtWidgets.QPushButton(self.centralwidget)
         self.Test.setObjectName("Test")
         self.Test.clicked.connect(self.openTestWindow)  # type: ignore
@@ -228,7 +228,7 @@ class MainMenuWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(_translate("MainMenu", "2048"))
         self.Game.setText(_translate("MainMenu", "Game"))
         self.Minigames.setText(_translate("MainMenu", "Minigames"))
-        self.Practise.setText(_translate("MainMenu", "Practise"))
+        self.Practice.setText(_translate("MainMenu", "Practice"))
         self.Test.setText(_translate("MainMenu", "Test"))
         self.Settings.setText(_translate("MainMenu", "Settings"))
         self.Help.setText(_translate("MainMenu", "Help"))

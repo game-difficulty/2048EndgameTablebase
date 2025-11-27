@@ -417,7 +417,7 @@
     </message>
     <message>
         <location filename="../MainMenu.py" line="231"/>
-        <source>Practise</source>
+        <source>Practice</source>
         <translation>练习</translation>
     </message>
     <message>
@@ -509,7 +509,7 @@
     </message>
     <message>
         <location filename="../MistakesBook.py" line="499"/>
-        <source>Practise</source>
+        <source>Practice</source>
         <translation>练习</translation>
     </message>
     <message>
@@ -635,7 +635,7 @@
     </message>
     <message>
         <location filename="../RecordPlayer.py" line="429"/>
-        <source>Practise</source>
+        <source>Practice</source>
         <translation>练习</translation>
     </message>
     <message>
@@ -1014,7 +1014,7 @@ It is recommended to keep the default settings.</source>
     </message>
     <message>
         <location filename="../Tester.py" line="301"/>
-        <source>Practise</source>
+        <source>Practice</source>
         <translation>练习</translation>
     </message>
     <message>
@@ -1027,7 +1027,7 @@ It is recommended to keep the default settings.</source>
     <name>Train</name>
     <message>
         <location filename="../Trainer.py" line="508"/>
-        <source>Practise</source>
+        <source>Practice</source>
         <translation>练习</translation>
     </message>
     <message>

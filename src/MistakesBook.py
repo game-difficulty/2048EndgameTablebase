@@ -9,7 +9,7 @@ from PyQt5.QtCore import QTimer
 import BoardMover as bm
 from Config import SingletonConfig
 from Gamer import BaseBoardFrame
-from SignalHub import practise_signal
+from SignalHub import practice_signal
 import Calculator
 
 
@@ -171,11 +171,11 @@ class MistakeTrainingWindow(QtWidgets.QMainWindow):
         self.next_btn.clicked.connect(self.next_problem)
         button_row.addWidget(self.next_btn)
 
-        self.practice_btn = QtWidgets.QPushButton(self.tr("Practise"))
+        self.practice_btn = QtWidgets.QPushButton(self.tr("Practice"))
         self.practice_btn.setObjectName('practice_btn')
         self.practice_btn.setMinimumHeight(60)
         self.practice_btn.setStyleSheet("font-size: 20px; font-weight: bold;")
-        self.practice_btn.clicked.connect(self.jump_to_practise)
+        self.practice_btn.clicked.connect(self.jump_to_practice)
         button_row.addWidget(self.practice_btn)
 
         self.delete_btn = QtWidgets.QPushButton(self.tr("Delete"))
@@ -420,8 +420,8 @@ class MistakeTrainingWindow(QtWidgets.QMainWindow):
             # 选择下一个问题
             self.next_problem()
 
-    def jump_to_practise(self):
-        practise_signal.board_update.emit(self.gameframe.board_encoded, self.current_pattern)
+    def jump_to_practice(self):
+        practice_signal.board_update.emit(self.gameframe.board_encoded, self.current_pattern)
 
     def on_weight_mode_changed(self):
         """权重模式变化时的处理"""
@@ -496,7 +496,7 @@ class MistakeTrainingWindow(QtWidgets.QMainWindow):
             else:
                 btn.setText(direction)
         self.next_btn.setText(self.tr("Next"))
-        self.practice_btn.setText(self.tr("Practise"))
+        self.practice_btn.setText(self.tr("Practice"))
         self.delete_btn.setText(self.tr("Delete"))
         self.weight_combo.clear()
         self.weight_combo.addItems([

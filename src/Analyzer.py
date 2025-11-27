@@ -198,7 +198,7 @@ class Analyzer:
             is_endgame, large_tile_changed = self.analyze_one_step(i)
             if is_endgame is None:
                 self.write_error('''Table path not found, please make sure you have calculated the required table
-                and that it is working properly in the practise module.''')
+                and that it is working properly in the practice module.''')
                 break
 
             elif large_tile_changed:

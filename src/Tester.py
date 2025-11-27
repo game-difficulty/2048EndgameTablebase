@@ -16,7 +16,7 @@ from Analyzer import AnalyzeWindow
 from RecordPlayer import ReplayWindow
 from MistakesBook import mistakes_book
 from MistakesBook import MistakeTrainingWindow
-from SignalHub import practise_signal
+from SignalHub import practice_signal
 
 
 direction_map = defaultdict(lambda: "？")
@@ -204,12 +204,12 @@ class TestWindow(QtWidgets.QMainWindow):
         self.text_display.setMinimumSize(120, 240)
 
         self.bts_Layout = QtWidgets.QHBoxLayout()
-        self.practise_button = QtWidgets.QPushButton(self.centralwidget)
-        self.bts_Layout.addWidget(self.practise_button)
-        self.bts_Layout.setAlignment(self.practise_button, QtCore.Qt.AlignmentFlag.AlignHCenter)
-        self.practise_button.setMaximumSize(300, 36)
-        self.practise_button.setMinimumSize(80, 30)
-        self.practise_button.clicked.connect(self.jump_to_practise)  # type: ignore
+        self.practice_button = QtWidgets.QPushButton(self.centralwidget)
+        self.bts_Layout.addWidget(self.practice_button)
+        self.bts_Layout.setAlignment(self.practice_button, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.practice_button.setMaximumSize(300, 36)
+        self.practice_button.setMinimumSize(80, 30)
+        self.practice_button.clicked.connect(self.jump_to_practice)  # type: ignore
 
         self.replay_bt = QtWidgets.QPushButton(self.centralwidget)
         self.bts_Layout.addWidget(self.replay_bt)
@@ -298,7 +298,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.analyzer_bt.setText(_translate("Tester", "Analyze Verse Replay"))
         self.notebook_bt.setText(_translate("Tester", "Mistakes Notebook"))
         self.replay_bt.setText(_translate("Tester", "Review Replay"))
-        self.practise_button.setText(_translate("Tester", "Practise"))
+        self.practice_button.setText(_translate("Tester", "Practice"))
         self.dis_text_checkBox.setText(_translate("Tester", "Display Text"))
 
     def menu_selected(self, i):
@@ -613,8 +613,8 @@ class TestWindow(QtWidgets.QMainWindow):
         self.step_count += 1
         self.record[self.step_count][0] = self.gameframe.board_encoded
 
-    def jump_to_practise(self):
-        practise_signal.board_update.emit(self.gameframe.board_encoded, self.full_pattern)
+    def jump_to_practice(self):
+        practice_signal.board_update.emit(self.gameframe.board_encoded, self.full_pattern)
 
     def dis_text_state_change(self):
         self.text_display.show_text = self.dis_text_checkBox.isChecked()
