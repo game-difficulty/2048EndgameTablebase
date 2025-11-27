@@ -365,7 +365,7 @@ class BaseBoardFrame(QtWidgets.QFrame):
     def setupUi(self):
         self.setMaximumSize(QtCore.QSize(100000, 100000))
         self.setMouseTracking(True)
-        self.setStyleSheet("background-color: rgb(222, 222, 222);")
+        self.setStyleSheet("background-color: palette(Mid);")
         self.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.setFrameShadow(QtWidgets.QFrame.Raised)
         self.setObjectName("gameframe")
@@ -665,7 +665,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.operate_frame.setMinimumSize(QtCore.QSize(120, 150))
         self.operate_frame.setStyleSheet("QFrame{\n"
                                          "    border-color: rgb(167, 167, 167);\n"
-                                         "    background-color: rgb(236, 236, 236);\n"
+                                         "    background-color: palette(Window);\n"
                                          "}")
         self.operate_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.operate_frame.setFrameShadow(QtWidgets.QFrame.Raised)
@@ -676,7 +676,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.scores.setObjectName("scores")
         self.score_frame = QtWidgets.QFrame(self.operate_frame)
         self.score_frame.setStyleSheet("border-radius: 12px; \n"
-                                       "background-color: rgb(244, 241, 232);")
+                                       "background-color: palette(Mid);")
         self.score_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.score_frame.setFrameShadow(QtWidgets.QFrame.Raised)
         self.score_frame.setObjectName("score_frame")
@@ -705,7 +705,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.scores.addWidget(self.score_frame)
         self.best_frame = QtWidgets.QFrame(self.operate_frame)
         self.best_frame.setStyleSheet("border-radius: 12px; \n"
-                                      "background-color: rgb(244, 241, 232);")
+                                      "background-color: palette(Mid);")
         self.best_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.best_frame.setFrameShadow(QtWidgets.QFrame.Raised)
         self.best_frame.setObjectName("best_frame")
@@ -769,7 +769,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.difficulty_frame.setMinimumSize(QtCore.QSize(120, 20))
         self.difficulty_frame.setStyleSheet("QFrame{\n"
                                             "    border-color: rgb(167, 167, 167);\n"
-                                            "    background-color: rgb(236, 236, 236);\n"
+                                            "    background-color: palette(Mid);\n"
                                             "}")
         self.difficulty_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.difficulty_frame.setFrameShadow(QtWidgets.QFrame.Raised)
@@ -807,7 +807,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.setboard_frame.setMinimumSize(QtCore.QSize(120, 20))
         self.setboard_frame.setStyleSheet("QFrame{\n"
                                             "    border-color: rgb(167, 167, 167);\n"
-                                            "    background-color: rgb(236, 236, 236);\n"
+                                            "    background-color: palette(Mid);\n"
                                             "}")
         self.setboard_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.setboard_frame.setFrameShadow(QtWidgets.QFrame.Raised)

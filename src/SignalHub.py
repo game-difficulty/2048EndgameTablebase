@@ -11,10 +11,10 @@ class ProgressSignal(QObject):
 progress_signal = ProgressSignal()
 
 
-class PractiseSignal(QObject):
+class PracticeSignal(QObject):
     # 回放界面跳转练习界面
     board_update = pyqtSignal(np.uint64, str)
 
 
-practise_signal = PractiseSignal()
+practice_signal = PracticeSignal()
 

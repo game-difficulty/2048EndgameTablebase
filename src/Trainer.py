@@ -16,7 +16,7 @@ from BookReader import BookReaderDispatcher
 from Calculator import ReverseUD, ReverseLR, RotateR, RotateL
 from Config import SingletonConfig, category_info, pattern_32k_tiles_map
 from Gamer import BaseBoardFrame
-from SignalHub import practise_signal
+from SignalHub import practice_signal
 
 
 direction_map = defaultdict(lambda: "？")
@@ -212,7 +212,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.reader_thread = ReaderWorker(self.book_reader, np.uint64(0), self.pattern_settings, self.current_pattern)
         self.reader_thread.result_ready.connect(self._show_results)
 
-        practise_signal.board_update.connect(self.handle_page_jump)
+        practice_signal.board_update.connect(self.handle_page_jump)
 
         self.statusbar.showMessage(self.tr("All features may be slow when used for the first time. Please be patient."), 8000)
 
@@ -237,7 +237,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.operate.setMaximumSize(QtCore.QSize(560, 720))
         self.operate.setStyleSheet("QFrame{\n"
                                    "    border-color: rgb(167, 167, 167);\n"
-                                   "    background-color: rgb(236, 236, 236);\n"
+                                   "    background-color: palette(Mid);\n"
                                    "}")
         self.operate.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.operate.setFrameShadow(QtWidgets.QFrame.Raised)
@@ -256,7 +256,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.setboard_Layout = QtWidgets.QHBoxLayout()
         self.setboard_Layout.setObjectName("setboard_Layout")
         self.board_state = QtWidgets.QLineEdit(self.operate)
-        self.board_state.setStyleSheet("background-color: rgb(255, 255, 255);")
+        self.board_state.setStyleSheet("background-color: palette(Mid);")
         self.board_state.setObjectName("board_state")
         self.board_state.setText('0000000000000000')
         self.setboard_Layout.addWidget(self.board_state)
@@ -410,7 +410,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.results_label = QtWidgets.QLabel(self.operate)
         self.results_label.setMinimumSize(QtCore.QSize(0, 180))
         self.results_label.setMaximumSize(QtCore.QSize(16777215, 220))
-        self.results_label.setStyleSheet("background-color: rgb(255, 255, 255);\n"
+        self.results_label.setStyleSheet("background-color: palette(Midlight);\n"
                                          "border-color: rgb(0, 0, 0); font: 75 18pt \"Consolas\";")
         self.results_label.setText("")
         self.results_label.setObjectName("results_label")
@@ -423,7 +423,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.filepath_text.setObjectName("filepath_text")
         self.setpath_Layout.addWidget(self.filepath_text)
         self.filepath = QtWidgets.QLineEdit(self.operate)
-        self.filepath.setStyleSheet("background-color: rgb(255, 255, 255);")
+        self.filepath.setStyleSheet("background-color: palette(Midlight);")
         self.filepath.setObjectName("filepath")
         self.setpath_Layout.addWidget(self.filepath)
         self.set_filepath_bt = QtWidgets.QPushButton(self.operate)
@@ -505,7 +505,7 @@ class TrainWindow(QtWidgets.QMainWindow):
     # noinspection PyTypeChecker
     def retranslateUi(self):
         _translate = QtCore.QCoreApplication.translate
-        self.setWindowTitle(_translate("Train", "Practise"))
+        self.setWindowTitle(_translate("Train", "Practice"))
         self.pattern_text.setText(_translate("Train", ""))
         self.set_board_bt.setText(_translate("Train", "SET"))
         self.RL.setText(_translate("Train", "RL"))
