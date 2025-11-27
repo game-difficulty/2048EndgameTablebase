@@ -109,7 +109,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.setWindowIcon(QtGui.QIcon(r"pic\settings.ico"))
         self.resize(840, 600)
         self.setStyleSheet("QMainWindow{\n"
-                           "    background-color: rgb(245, 245, 247);\n"
+                           "    background-color: palette(Window);\n"
                            "}")
         self.centralwidget = QtWidgets.QWidget(self)
         self.centralwidget.setObjectName("centralwidget")

@@ -173,7 +173,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.setboard_Layout = QtWidgets.QHBoxLayout()
         self.setboard_Layout.setObjectName("setboard_Layout")
         self.board_state = QtWidgets.QLineEdit(self.centralwidget)
-        self.board_state.setStyleSheet("background-color: rgb(255, 255, 255);")
+        self.board_state.setStyleSheet("background-color: palette(Mid);")
         self.board_state.setObjectName("board_state")
         self.board_state.setText('0000000000000000')
         self.setboard_Layout.addWidget(self.board_state)

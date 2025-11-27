@@ -417,7 +417,7 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
         self.setWindowIcon(QtGui.QIcon(r"pic\2048.ico"))
         self.resize(840, 240)
         self.setStyleSheet("QMainWindow{\n"
-                           "    background-color: rgb(245, 245, 247);\n"
+                           "    background-color: palette(Window);\n"
                            "}")
         self.centralwidget = QtWidgets.QWidget(self)
         self.centralwidget.setObjectName("centralwidget")
