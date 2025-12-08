@@ -4,32 +4,32 @@
 <context>
     <name>Analysis</name>
     <message>
-        <location filename="../Analyzer.py" line="483"/>
+        <location filename="../Analyzer.py" line="513"/>
         <source>Analysis</source>
         <translation>对局分析</translation>
     </message>
     <message>
-        <location filename="../Analyzer.py" line="484"/>
+        <location filename="../Analyzer.py" line="514"/>
         <source>Pattern:</source>
         <translation>定式：</translation>
     </message>
     <message>
-        <location filename="../Analyzer.py" line="485"/>
+        <location filename="../Analyzer.py" line="515"/>
         <source>Load Replay</source>
         <translation>加载回放文件</translation>
     </message>
     <message>
-        <location filename="../Analyzer.py" line="486"/>
+        <location filename="../Analyzer.py" line="516"/>
         <source>Analyze</source>
         <translation>分析</translation>
     </message>
     <message>
-        <location filename="../Analyzer.py" line="487"/>
+        <location filename="../Analyzer.py" line="517"/>
         <source>SET...</source>
         <translation>选择路径...</translation>
     </message>
     <message>
-        <location filename="../Analyzer.py" line="488"/>
+        <location filename="../Analyzer.py" line="518"/>
         <source>*https://2048verse.com/ supports save game replay
 *The analysis results will be saved to the same path</source>
         <translation>*https://2048verse.com/ 支持保存对局回放
@@ -41,32 +41,37 @@
     <message>
         <location filename="../Analyzer.py" line="497"/>
         <source>Select a .txt file</source>
-        <translation>选择txt文件</translation>
+        <translation type="obsolete">选择txt文件</translation>
     </message>
     <message>
-        <location filename="../Analyzer.py" line="520"/>
+        <location filename="../Analyzer.py" line="581"/>
         <source>Analyzing...</source>
         <translation>分析中...</translation>
     </message>
     <message>
-        <location filename="../Analyzer.py" line="527"/>
+        <location filename="../Analyzer.py" line="595"/>
         <source>Analyze</source>
         <translation>分析</translation>
     </message>
     <message>
-        <location filename="../Analyzer.py" line="491"/>
+        <location filename="../Analyzer.py" line="521"/>
         <source>Target Tile</source>
         <translation>目标数字</translation>
     </message>
     <message>
-        <location filename="../Analyzer.py" line="490"/>
+        <location filename="../Analyzer.py" line="520"/>
         <source>Select Formation</source>
         <translation>选择定式</translation>
     </message>
     <message>
-        <location filename="../Analyzer.py" line="492"/>
+        <location filename="../Analyzer.py" line="522"/>
         <source>Target Position</source>
         <translation>目标位置</translation>
+    </message>
+    <message>
+        <location filename="../Analyzer.py" line="527"/>
+        <source>Select a .txt file or folder</source>
+        <translation>选择一个txt文件或文件夹</translation>
     </message>
 </context>
 <context>
@@ -915,22 +920,22 @@ It is recommended to keep the default settings.</source>
 <context>
     <name>TestWindow</name>
     <message>
-        <location filename="../Tester.py" line="524"/>
+        <location filename="../Tester.py" line="525"/>
         <source>**Game Over**: NO possible moves left.</source>
         <translation>**游戏结束**：你已经死了。</translation>
     </message>
     <message>
-        <location filename="../Tester.py" line="530"/>
+        <location filename="../Tester.py" line="531"/>
         <source>**Congratulations!** You&apos;re about to reach the target tile.</source>
         <translation>**恭喜！** 您即将达成目标数字。</translation>
     </message>
     <message>
-        <location filename="../Tester.py" line="535"/>
+        <location filename="../Tester.py" line="536"/>
         <source>Total Goodness of Fit: </source>
         <translation>总吻合度： </translation>
     </message>
     <message>
-        <location filename="../Tester.py" line="536"/>
+        <location filename="../Tester.py" line="537"/>
         <source>Maximum Combo: </source>
         <translation>最高连击： </translation>
     </message>
@@ -1026,62 +1031,62 @@ It is recommended to keep the default settings.</source>
 <context>
     <name>Train</name>
     <message>
-        <location filename="../Trainer.py" line="508"/>
+        <location filename="../Trainer.py" line="505"/>
         <source>Practice</source>
         <translation>练习</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="510"/>
+        <location filename="../Trainer.py" line="507"/>
         <source>SET</source>
         <translation>设置</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="511"/>
+        <location filename="../Trainer.py" line="508"/>
         <source>RL</source>
         <translation>左右翻转</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="512"/>
+        <location filename="../Trainer.py" line="509"/>
         <source>DEMO</source>
         <translation>自动推演</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="513"/>
+        <location filename="../Trainer.py" line="510"/>
         <source>R90</source>
         <translation>右转90度</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="514"/>
+        <location filename="../Trainer.py" line="511"/>
         <source>UNDO</source>
         <translation>撤回</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="515"/>
+        <location filename="../Trainer.py" line="512"/>
         <source>UD</source>
         <translation>上下翻转</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="516"/>
+        <location filename="../Trainer.py" line="513"/>
         <source>L90</source>
         <translation>左转90度</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="517"/>
+        <location filename="../Trainer.py" line="514"/>
         <source>Record Demo</source>
         <translation>推演录制​</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="518"/>
+        <location filename="../Trainer.py" line="515"/>
         <source>Play Record</source>
         <translation>播放录像</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="519"/>
+        <location filename="../Trainer.py" line="516"/>
         <source>Load Record</source>
         <translation>加载录像</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="520"/>
+        <location filename="../Trainer.py" line="517"/>
         <source>Screenshot(Z)</source>
         <translation>截屏(Z)</translation>
     </message>
@@ -1091,62 +1096,62 @@ It is recommended to keep the default settings.</source>
         <translation type="obsolete">手动模式</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="522"/>
+        <location filename="../Trainer.py" line="519"/>
         <source>Always Best Spawn</source>
         <translation>最佳出数模式</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="523"/>
+        <location filename="../Trainer.py" line="520"/>
         <source>Always Worst Spawn</source>
         <translation>最差出数模式</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="524"/>
+        <location filename="../Trainer.py" line="521"/>
         <source>ONESTEP</source>
         <translation>步进</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="525"/>
+        <location filename="../Trainer.py" line="522"/>
         <source>Default</source>
         <translation>初始局面</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="526"/>
+        <location filename="../Trainer.py" line="523"/>
         <source>RESULTS:</source>
         <translation>计算结果：</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="527"/>
+        <location filename="../Trainer.py" line="524"/>
         <source>Show</source>
         <translation>显示成功率</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="528"/>
+        <location filename="../Trainer.py" line="525"/>
         <source>FILEPATH:</source>
         <translation>文件路径：</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="529"/>
+        <location filename="../Trainer.py" line="526"/>
         <source>SET...</source>
         <translation>选择路径...</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="530"/>
+        <location filename="../Trainer.py" line="527"/>
         <source>Display numbers for 32k tile</source>
         <translation>32768显示数字</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="531"/>
+        <location filename="../Trainer.py" line="528"/>
         <source>Pattern</source>
         <translation>定式</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="532"/>
+        <location filename="../Trainer.py" line="529"/>
         <source>Position</source>
         <translation>位置</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="533"/>
+        <location filename="../Trainer.py" line="530"/>
         <source>Target</source>
         <translation>目标数字</translation>
     </message>
@@ -1166,7 +1171,7 @@ It is recommended to keep the default settings.</source>
         <translation type="obsolete">向后10步</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="521"/>
+        <location filename="../Trainer.py" line="518"/>
         <source>Manual(Q)</source>
         <translation>手动模式(Q)</translation>
     </message>
@@ -1174,77 +1179,77 @@ It is recommended to keep the default settings.</source>
 <context>
     <name>TrainWindow</name>
     <message>
-        <location filename="../Trainer.py" line="992"/>
+        <location filename="../Trainer.py" line="989"/>
         <source>Demo</source>
         <translation>自动推演</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="663"/>
+        <location filename="../Trainer.py" line="660"/>
         <source>Table not found or 0 success rate</source>
         <translation>未找到结果文件或成功率为 0</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="828"/>
+        <location filename="../Trainer.py" line="825"/>
         <source>Press Enter</source>
         <translation>Enter键停止</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="832"/>
+        <location filename="../Trainer.py" line="829"/>
         <source>Press Enter to Stop</source>
         <translation>按Enter键停止</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="840"/>
+        <location filename="../Trainer.py" line="837"/>
         <source>Save</source>
         <translation>保存录像</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="848"/>
+        <location filename="../Trainer.py" line="845"/>
         <source>Recording started</source>
         <translation>播放回放</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="863"/>
+        <location filename="../Trainer.py" line="860"/>
         <source>Record Demo</source>
         <translation>推演录制​</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="887"/>
+        <location filename="../Trainer.py" line="884"/>
         <source>File loaded successfully</source>
         <translation>文件加载成功</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="898"/>
+        <location filename="../Trainer.py" line="895"/>
         <source>Failed to load file: </source>
         <translation>文件加载失败： </translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="928"/>
+        <location filename="../Trainer.py" line="925"/>
         <source>Play Record</source>
         <translation>播放录像</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="912"/>
+        <location filename="../Trainer.py" line="909"/>
         <source>Stop</source>
         <translation>停止</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="971"/>
+        <location filename="../Trainer.py" line="968"/>
         <source>Screenshot saved to the clipboard</source>
         <translation>截图已保存至剪贴板</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="217"/>
+        <location filename="../Trainer.py" line="214"/>
         <source>All features may be slow when used for the first time. Please be patient.</source>
         <translation>各项功能首次使用时可能加载较慢，请稍作等待。</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="610"/>
+        <location filename="../Trainer.py" line="607"/>
         <source>   Setting the board...</source>
         <translation>   摆盘中...</translation>
     </message>
     <message>
-        <location filename="../Trainer.py" line="644"/>
+        <location filename="../Trainer.py" line="641"/>
         <source>   Reading...</source>
         <translation>   读取中...</translation>
     </message>
