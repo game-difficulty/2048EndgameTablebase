@@ -1,6 +1,7 @@
 import os
 import shutil
 import time
+from datetime import datetime
 from typing import Callable, Tuple
 
 import numpy as np
@@ -18,6 +19,7 @@ from BookSolverAD import remove_died_ad, create_index_ad, \
 from Config import SingletonConfig
 from BookSolverADUtils import (dict_to_structured_array1, dict_to_structured_array2, dict_to_structured_array3,
                                get_array_view10, get_array_view11, get_array_view2, get_array_view3)
+from LzmaCompressor import decompress_with_7z
 from SignalHub import progress_signal
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -32,14 +34,14 @@ ValueType2 = types.uint64[:]
 IndexDictType = Dict[KeyType1, ValueType2]
 ValueType3 = types.uint32[:]
 IndexIndexDictType = Dict[KeyType1, ValueType3]
-ValueType4 = types.Tuple((types.uint64[:], types.uint16[:, :]))
+ValueType4 = types.Tuple((types.uint64[:], types.uint32[:, :]))
 KeyType2 = types.uint32
 MatchDictType = Dict[KeyType2, ValueType4]
 
 logger = Config.logger
 
-# 用于统计回算速度
-_timer, _counter = 0, 0
+# 用于统计信息
+_timer, _counter, _max_rate = 0.0, 0, 0
 
 
 def handle_solve_restart_ad_c(i, pathname, steps, b2, i2, started):
@@ -75,10 +77,13 @@ def recalculate_process_ad_c(
     ini_board_sum = np.sum(decode_board(arr_init[0]))
     indind_dict1, indind_dict2 = None, None
     match_dict = None
-    global _timer, _counter
+    global _timer, _counter, _max_rate
 
     permutation_arr = dict_to_structured_array2(permutation_dict)
     tiles_combinations_arr = dict_to_structured_array3(tiles_combinations_dict)
+    if not os.path.exists(pathname + 'stats.txt'):
+        with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
+            file.write(','.join(['layer', 'length', 'max success rate', 'speed', 'deletion_threshold', 'time']) + '\n')
 
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
@@ -93,7 +98,8 @@ def recalculate_process_ad_c(
             match_dict = Dict.empty(KeyType2, ValueType4)
 
         original_board_sum = 2 * i + ini_board_sum
-
+        if SingletonConfig().config.get('compress_temp_files', False):
+            decompress_with_7z(pathname + str(i) + '.7z')
         d0 = np.fromfile(pathname + str(i), dtype=np.uint64)
 
         book_dict0, ind_dict0 = expand_ad(d0, original_board_sum, tiles_combinations_arr, param, False)
@@ -127,11 +133,16 @@ def recalculate_process_ad_c(
 
         if os.path.exists(pathname + str(i)):
             os.remove(pathname + str(i))
-        logger.debug(f'step {i} done, solving avg {round(_counter / max(_timer, 0.0001) / 2e6, 2)} mbps\n')
+        logger.debug(f'step {i} done, solving avg {round(_counter / max(_timer, 0.000001) / 2e6, 2)} mbps\n')
+
+        with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
+            file.write(','.join([str(i), str(_counter), str(_max_rate / 4e9),
+                                 f'{round(_counter / max(_timer, 0.000001) / 2e6, 2)} mbps',
+                                 str(deletion_threshold / 4e9), str(datetime.now())]) + '\n')
 
         book_dict2, ind_dict2 = book_dict1, ind_dict1
         del book_dict1, ind_dict1
-        _timer, _counter = 0.0, 0
+        _timer, _counter, _max_rate = 0.0, 0, 0
 
 
 def iter_ind_dict4(ind_dict0_keys: list, book_dict2, ind_dict2, indind_dict2,
@@ -158,7 +169,7 @@ def iter_ind_dict4(ind_dict0_keys: list, book_dict2, ind_dict2, indind_dict2,
         free_mem = mem.available
         chunk_size = max(2 ** 28, int(free_mem * 0.9 / 4))
         chunk_length = np.uint64(chunk_size) // derive_size
-        global _timer, _counter
+        global _timer, _counter, _max_rate
 
         for start_idx in range(0, len(positions_array), chunk_length):
             t0 = time.time()
@@ -207,7 +218,7 @@ def iter_ind_dict2(path: str, step: int, ind_dict0_keys: list, book_dict1, ind_d
         free_mem = mem.available
         chunk_size = max(2 ** 28, int(free_mem * 0.9 / 4))
         chunk_length = chunk_size // derive_size
-        global _timer, _counter
+        global _timer, _counter, _max_rate
         # 分块读取逻辑
         with open(book_path, 'r+b') as f:
             for start_idx in range(0, len(positions_array), chunk_length):
@@ -237,6 +248,7 @@ def iter_ind_dict2(path: str, step: int, ind_dict0_keys: list, book_dict1, ind_d
                                  f'done {round(len(positions_chunk) * derive_size / (t1 - t0) / 1e6, 2)} mbps')
                 _timer += t1 - t0
                 _counter += len(positions_chunk) * derive_size
+                _max_rate = max(_max_rate, np.max(book_chunk))
                 # 将计算结果写回原位置
                 # 这里不去除0成功率局面，保证写回大小相同
                 f.seek(start_idx * derive_size * 4)
@@ -280,10 +292,11 @@ def recalculate_ad_c(
     indind_arr = get_array_view10(indind_dict, count_32k, np.uint32)
 
     derive_size = len(book_chunk[0])
+    map_length = 33331 if derive_size < 5000 else 11113
 
     match_index, match_mat = match_dict.setdefault(
-        np.uint32(derive_size), (np.full(33331, np.uint64(0xffffffffffffffff), dtype=np.uint64),
-                                 np.zeros((33331, derive_size), dtype=np.uint16)))
+        np.uint32(derive_size), (np.full(map_length, np.uint64(0xffffffffffffffff), dtype=np.uint64),
+                                 np.zeros((map_length, derive_size), dtype=np.uint32)))
 
     if is_gen2_step:
         new_value, probability = np.uint64(1), 1 - spawn_rate4
