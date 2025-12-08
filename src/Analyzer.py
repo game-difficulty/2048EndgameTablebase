@@ -1,7 +1,11 @@
+import multiprocessing
 import os
+import threading
 from collections import defaultdict
+from queue import Queue
 
 import numpy as np
+from numba import njit
 from numpy.typing import NDArray
 from PyQt5 import QtCore, QtWidgets, QtGui
 import BoardMover as bm
@@ -44,7 +48,8 @@ class Analyzer:
         bookfile_path_list = Config.SingletonConfig().config['filepath_map'].get(full_pattern, [])
         self.book_reader.dispatch(bookfile_path_list, pattern, target)
 
-        replay_text = self.read_replay(file_path)
+        self.filepath = file_path
+        replay_text = self.read_replay()
         self.record_list: np.typing.NDArray = np.empty(0, dtype='uint64,uint8,uint8,uint8')
         self.decode_replay(replay_text)
 
@@ -70,9 +75,8 @@ class Analyzer:
         self.record = np.empty(4000, dtype='uint64,uint8,uint32,uint32,uint32,uint32')
         self.rec_step_count = 0
 
-    @staticmethod
-    def read_replay(path):
-        with open(path, encoding="utf-8") as replay:
+    def read_replay(self):
+        with open(self.filepath, encoding="utf-8") as replay:
             replay_text = replay.read()
         return replay_text
 
@@ -128,7 +132,23 @@ class Analyzer:
 
             if moves_made >= 2:
                 self.record_list[moves_made - 2] = (board, current_score, replay_move, replay_tile, 15 - replay_position)
-                board, new_score = np.uint64(bm.s_move_board(board, replay_move))
+
+                if moves_made > 27000 and count_32ks(board) == 2:
+                    board_decoded = bm.decode_board(board)
+                    positions = np.where(board_decoded == 32768)
+                    first_position = (positions[0][0], positions[1][0])
+                    second_position = (positions[0][1], positions[1][1])
+
+                    if (positions[0][0] == positions[0][1] and abs(positions[1][0] - positions[1][1]) == 1 and
+                        replay_move in (1, 2)) or (positions[1][0] == positions[1][1] and
+                        abs(positions[0][0] - positions[0][1]) == 1 and replay_move in (3, 4)):
+                        board_decoded[first_position] = 16384
+                        board_decoded[second_position] = 16384
+                        board = np.uint64(bm.encode_board(board_decoded))
+                        current_score += 32768
+
+                board, new_score = bm.s_move_board(board, replay_move)
+                board = np.uint64(board)
                 current_score += new_score
 
             board |= np.uint64(replay_tile) << np.uint64(replay_position << 2)
@@ -399,11 +419,20 @@ class Analyzer:
         if self.full_pattern is None or rec_step_count < 2:
             return
 
-        filename = self.full_pattern + '_' + str(step) + f'_{self.goodness_of_fit:.4f}' + '.rpl'
+        filename = self.full_pattern + '_' + os.path.basename(self.filepath) + '_' + str(step) + f'_{self.goodness_of_fit:.4f}' + '.rpl'
         target_file_path = os.path.join(self.target_path, filename)
         self.record[rec_step_count] = (
             0, 88, 666666666, 233333333, 314159265, 987654321)
         self.record[:rec_step_count + 1].tofile(target_file_path)
+
+
+@njit()
+def count_32ks(board):
+    count = 0
+    for i in range(16):
+        tile = (board >> np.uint64(i)) & np.uint64(0xf)
+        count += tile == 0xf
+    return count
 
 
 # noinspection PyAttributeOutsideInit
@@ -493,13 +522,13 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
 
     def filepath_changed(self):
         options = QtWidgets.QFileDialog.Options()
-        # 打开文件选择窗口，只能选择 .txt 文件
+        # 打开文件或文件夹选择窗口
         filepath, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
-            self.tr("Select a .txt file"),
+            self.tr("Select a .txt file or folder"),
             "",
             "Text Files (*.txt);;All Files (*)",
-            options=options
+            options=options | QtWidgets.QFileDialog.DontResolveSymlinks
         )
         if filepath:
             self.filepath_edit.setText(filepath)
@@ -510,22 +539,41 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
         target = self.target_combo.currentText
         pathname = self.filepath_edit.toPlainText()
         position = '0' if not position else position
+
         if pattern and target and pathname and position and os.path.exists(pathname):
+            # 获取文件列表
+            if os.path.isdir(pathname):
+                file_list = [os.path.join(pathname, f) for f in os.listdir(pathname)
+                             if f.lower().endswith('.txt') and os.path.isfile(os.path.join(pathname, f))]
+            else:
+                file_list = [pathname]
+
+            # 计算公共参数
             if pattern in ['444', 'LL', 'L3']:
                 ptn = pattern + '_' + target + '_' + position
             else:
                 ptn = pattern + '_' + target
-            target = int(np.log2(int(target)))
 
+            target_value = int(np.log2(int(target)))
+
+            # 更新UI状态
             self.analyze_bt.setText(self.tr('Analyzing...'))
             self.analyze_bt.setEnabled(False)
-            self.Analyze_thread = AnalyzeThread(pathname, pattern, target, ptn, os.path.dirname(pathname), position)
-            self.Analyze_thread.finished.connect(self.on_analyze_finished)
-            self.Analyze_thread.start()  # 启动线程
+
+            # 创建批量分析管理器
+            self.analyze_manager = BatchAnalyzeManager(self)
+            self.analyze_manager.pattern = pattern
+            self.analyze_manager.target_value = target_value
+            self.analyze_manager.ptn = ptn
+            self.analyze_manager.position = position
+
+            # 启动批量分析
+            self.analyze_manager.start_batch_analyze(file_list)
 
     def on_analyze_finished(self):
         self.analyze_bt.setText(self.tr('Analyze'))
         self.analyze_bt.setEnabled(True)
+        self.BatchAnalyzeManager.analyze_threads = []
 
     def update_pos_combo_visibility(self, pattern):
         if pattern in ['444', 'LL']:
@@ -556,6 +604,67 @@ class AnalyzeThread(QtCore.QThread):
         anlz = Analyzer(self.file_path, self.pattern, self.target, self.ptn, self.target_path, self.position)
         anlz.generate_reports()
         self.finished.emit()
+
+
+class BatchAnalyzeManager:
+    def __init__(self, parent:AnalyzeWindow):
+        self.parent = parent
+        self.file_queue = Queue()
+        self.analyze_threads = []
+        self.active_threads = 0
+        self.completed_count = 0
+        self.total_count = 0
+        self.max_threads = max(1, multiprocessing.cpu_count() - 1)  # 留一个核心给系统
+        self.lock = threading.Lock()
+        self.pattern = None
+        self.target_value = None
+        self.ptn = None
+        self.position = None
+
+    def start_batch_analyze(self, file_list):
+        """启动批量分析"""
+        self.total_count = len(file_list)
+        self.completed_count = 0
+
+        # 将文件加入队列
+        for file_path in file_list:
+            self.file_queue.put(file_path)
+
+        # 启动初始线程
+        self._start_threads()
+
+    def _start_threads(self):
+        """启动线程，不超过最大限制"""
+        with self.lock:
+            while (self.active_threads < self.max_threads and
+                   not self.file_queue.empty()):
+                file_path = self.file_queue.get()
+                self.active_threads += 1
+
+                # 创建并启动分析线程
+                analyze_thread = AnalyzeThread(
+                    file_path, self.pattern, self.target_value, self.ptn,
+                    os.path.dirname(file_path), self.position
+                )
+                analyze_thread.finished.connect(self._on_thread_finished)
+                self.analyze_threads.append(analyze_thread)
+                analyze_thread.start()
+
+    def _on_thread_finished(self):
+        """单个线程完成回调"""
+        with self.lock:
+            self.active_threads -= 1
+            self.completed_count += 1
+
+            # 显示进度
+            print(f"进度: {self.completed_count}/{self.total_count}")
+
+            # 检查是否所有任务完成
+            if self.completed_count == self.total_count:
+                self.parent.on_analyze_finished()
+            else:
+                # 启动新的线程处理剩余任务
+                self._start_threads()
 
 
 if __name__ == "__main__":

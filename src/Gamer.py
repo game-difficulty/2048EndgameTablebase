@@ -365,7 +365,7 @@ class BaseBoardFrame(QtWidgets.QFrame):
     def setupUi(self):
         self.setMaximumSize(QtCore.QSize(100000, 100000))
         self.setMouseTracking(True)
-        self.setStyleSheet("background-color: palette(Mid);")
+        self.setStyleSheet("background-color: palette(Mid));")
         self.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.setFrameShadow(QtWidgets.QFrame.Raised)
         self.setObjectName("gameframe")

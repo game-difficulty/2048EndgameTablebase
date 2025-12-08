@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime
 from typing import Callable, Tuple
 
 import numpy as np
@@ -31,7 +32,7 @@ ValueType2 = types.uint64[:]
 IndexDictType = Dict[KeyType1, ValueType2]
 ValueType3 = types.uint32[:]
 IndexIndexDictType = Dict[KeyType1, ValueType3]
-ValueType4 = types.Tuple((types.uint64[:], types.uint16[:, :]))
+ValueType4 = types.Tuple((types.uint64[:], types.uint32[:, :]))
 KeyType2 = types.uint32
 MatchDictType = Dict[KeyType2, ValueType4]
 
@@ -77,6 +78,9 @@ def recalculate_process_ad(
 
     permutation_arr = dict_to_structured_array2(permutation_dict)
     tiles_combinations_arr = dict_to_structured_array3(tiles_combinations_dict)
+    if not os.path.exists(pathname + 'stats.txt'):
+        with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
+            file.write(','.join(['layer', 'length', 'max success rate', 'speed', 'deletion_threshold', 'time']) + '\n')
 
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
@@ -123,7 +127,7 @@ def recalculate_process_ad(
         recalculate_ad(book_arr0, ind_arr0, book_arr1, ind_arr1, indind_arr1, book_arr2, ind_arr2, indind_arr2,
                        match_dict, tiles_combinations_arr, permutation_arr, param,
                        original_board_sum, pattern_check_func, sym_func, spawn_rate4)
-        length = length_count(book_dict0)
+        length, max_rate = length_count(book_dict0)
         t2 = time.time()
 
         if deletion_threshold > 0:
@@ -134,6 +138,11 @@ def recalculate_process_ad(
             logger.debug(f'step {i} recalculated: {round(length / (t3 - t0) / 1e6, 2)} mbps')
             logger.debug(f'index/solve/remove: {round((t1 - t0) / (t3 - t0), 2)}/'
                          f'{round((t2 - t1) / (t3 - t0), 2)}/{round((t3 - t2) / (t3 - t0), 2)}')
+
+        with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
+            file.write(','.join([str(i), str(length), str(max_rate),
+                                 f'{round(length / (t3 - t0 + 0.0000001) / 1e6, 2)} mbps',
+                                 str(deletion_threshold / 4e9), str(datetime.now())]) + '\n')
         if deletion_threshold > 0:
             dict_tofile(book_dict2, ind_dict2, pathname, i + 2)  # 再写一次，把成功率低于阈值的局面去掉
 
@@ -294,7 +303,7 @@ def recalculate_ad(
               value: 数组模拟哈希表
            2. 哈希表数组:
               索引: 变换编码原始值数组
-              值: 索引映射数组数组 (np.ndarray[np.ndarray[uint16]])
+              值: 索引映射数组数组 (np.ndarray[np.ndarray[uint32]])
     """
     pos_rev = np.array([0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15], dtype=np.uint8)
 
@@ -306,10 +315,11 @@ def recalculate_ad(
 
         # print(count_32k)
         derive_size = book_dict0[i_c32k]['cols']
+        map_length = 33331 if derive_size < 5000 else 11113
 
         match_index, match_mat = match_dict.setdefault(
-            np.uint32(derive_size), (np.full(33331, np.uint64(0xffffffffffffffff), dtype=np.uint64),
-                                     np.zeros((33331, derive_size), dtype=np.uint16)))
+            np.uint32(derive_size), (np.full(map_length, np.uint64(0xffffffffffffffff), dtype=np.uint64),
+                                     np.zeros((map_length, derive_size), dtype=np.uint32)))
 
         book_mat0 = get_array_view11(book_dict0, count_32k, np.uint32)
         book_mat1 = get_array_view11(book_dict1, count_32k, np.uint32)  # book_dict1.setdefault(count_32k, np.empty((0, derive_size), dtype=np.uint32))
@@ -428,7 +438,7 @@ def solve_optimal_success_rate_arr(t, new_value, i, rep_t, rep_t_rev, pos_rev, d
             rep_t_gen_m = np.uint64(move_board2(rep_t_gen, rep_t_gen_rev, direc + 1))
             rep_t_gen_m = np.uint64(sym_like(rep_t_gen_m, symm_index))
             match_ind = ind_match(rep_t_gen_m, rep_v)
-            hashed_match_ind = match_ind % np.uint64(33331)
+            hashed_match_ind = match_ind % np.uint64(len(match_index))
 
             if mnt:
                 # 0、3x64 -> 64 128 1、合成后不存在两个相同大数 2、合成后存在两个相同大数 3、合出第三个64 4、成功
@@ -613,16 +623,6 @@ def process_derived(t_gen: np.uint64, board_sum: np.uint32, direc: int,
     return new_derived
 
 
-@njit(nogil=True)
-def update_rank_match(new_derived: NDArray[np.uint64], match_index: NDArray[np.uint64]
-                      , hashed_match_ind: np.uint64, match_ind: np.uint64, match_mat) -> NDArray[np.uint32]:
-    ranked_array = match_arr(new_derived)
-    if match_index[hashed_match_ind] == np.uint64(0xffffffffffffffff):
-        match_index[hashed_match_ind] = match_ind
-        match_mat[hashed_match_ind] = ranked_array
-    return ranked_array
-
-
 @njit(nogil=True, inline='always')
 def arr_max(arr1: NDArray, arr2: NDArray):
     # assert len(arr1) - len(arr2) == 0
@@ -631,16 +631,16 @@ def arr_max(arr1: NDArray, arr2: NDArray):
 
 
 @njit(nogil=True)
-def match_arr(a: NDArray) -> NDArray[np.uint16]:
+def match_arr(a: NDArray) -> NDArray[np.uint32]:
     sorted_indices = np.argsort(a)  # 事实上在Numba包装的函数内部调用np.argsort比原版更慢
-    ranked_array = np.empty(len(a), dtype=np.uint16)
+    ranked_array = np.empty(len(a), dtype=np.uint32)
     ranked_array[sorted_indices] = np.arange(len(a))
     return ranked_array
 
 
 @njit(nogil=True)
 def update_osr_ad_arr(book_mat: NDArray[NDArray[np.uint32]], b: np.uint64, ind_ar: NDArray[np.uint64],
-                      indind_ar: NDArray[np.uint32], osr: NDArray[np.uint64], ranked_array: NDArray[np.uint16]):
+                      indind_ar: NDArray[np.uint32], osr: NDArray[np.uint64], ranked_array: NDArray[np.uint32]):
     mid = search_arr_ad(ind_ar, b, indind_ar)
     if mid != 0xffffffff:
         arr_max(osr, book_mat[mid][ranked_array])
@@ -678,7 +678,7 @@ def dispatch_mnt_osr_ad_arr(unmasked_b: np.uint64, original_board_sum: np.uint32
 @njit(nogil=True)
 def update_mnt_osr_ad_arr3(book_dict: BookDictType, unmasked_b: np.uint64,
                            count_32k: np.uint8, ind_dict: IndexDictType, indind_dict: IndexIndexDictType,
-                           ranked_array: NDArray[np.uint16], osr: NDArray[np.uint64]):
+                           ranked_array: NDArray[np.uint32], osr: NDArray[np.uint64]):
     count_32k = np.int8(count_32k - 3 + 16)
     ind_arr = get_array_view10(ind_dict, count_32k, np.uint64)  # ind_dict.get(count_32k, np.empty(0, dtype=np.uint64))
     indind_arr = get_array_view10(indind_dict, count_32k, np.uint32)  # indind_dict.get(count_32k, np.empty(0, dtype=np.uint32))
@@ -692,7 +692,7 @@ def update_mnt_osr_ad_arr3(book_dict: BookDictType, unmasked_b: np.uint64,
 @njit(nogil=True)
 def update_mnt_osr_ad_arr2(book_dict: BookDictType, b: np.uint64,
                            pos_rank: int, count_32k: np.uint8, ind_dict: IndexDictType, indind_dict: IndexIndexDictType,
-                           ranked_array: NDArray[np.uint16], osr: NDArray[np.uint64], permutation_dict, param:ParamType):
+                           ranked_array: NDArray[np.uint32], osr: NDArray[np.uint64], permutation_dict, param:ParamType):
     ind_arr = get_array_view10(ind_dict, count_32k, np.uint64)  # ind_dict.get(count_32k, np.empty(0, dtype=np.uint64))
     indind_arr = get_array_view10(indind_dict, count_32k, np.uint32)  # indind_dict.get(count_32k, np.empty(0, dtype=np.uint32))
 
@@ -770,7 +770,7 @@ def _permutations_mapping_364(x, y, n):
 @njit(nogil=True)
 def update_mnt_osr_364_arr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint64,
                               ind_dict: IndexDictType, indind_dict: IndexIndexDictType, osr: NDArray[np.uint64],
-                              ranked_array: NDArray[np.uint16], permutation_dict, param:ParamType):
+                              ranked_array: NDArray[np.uint32], permutation_dict, param:ParamType):
     # 3 64 -> 128 64:0、128和64的pos_rank；1、要找的不是b，需要把64mask掉；2、book_mat[mid]中用permutation找到128,64对应位置
     pos_rank64, pos_rank128, pos_rank, pos_64 = find_3x64_pos(unmasked_b, param)
     b |= (np.uint64(0xf) << pos_64)
@@ -970,12 +970,14 @@ def search_arr_ad(arr: NDArray[np.uint64],
     return binary_search_arr_ad(arr, b, low, high)
 
 
-def length_count(book_dict: BookDictType) -> int:
+def length_count(book_dict: BookDictType) -> (int, float):
     length = 0
+    max_rate = 0
     for mat in book_dict.values():
         s1, s2 = mat.shape
         length += s1 * s2
-    return length
+        max_rate = max(max_rate, np.max(mat))
+    return length, max_rate / 4e9
 
 
 def dict_tofile(book_dict: BookDictType, ind_dict: IndexDictType, path: str, step: int):

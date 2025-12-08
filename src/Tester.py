@@ -346,7 +346,7 @@ class TestWindow(QtWidgets.QMainWindow):
         }
 
         path = SingletonConfig().config['filepath_map'].get(self.full_pattern, [])
-        if not path:
+        if not path or not SingletonConfig().check_pattern_file(self.full_pattern):
             self.text_display.add_text(self.tr('Table file path not found!'))
             self.text_display.update_text()
             return False, path

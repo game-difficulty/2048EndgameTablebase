@@ -136,10 +136,7 @@ class TrainFrame(BaseBoardFrame):
             self.board[i][j] = num_to_set
             self.board_encoded = np.uint64(bm.encode_board(self.board))
             return
-        else:  # 手动模式
-            if self.moved == 0:
-                return
-
+        else:
             if self.board[i][j] == 0:
                 if event.button() == Qt.LeftButton:
                     num_to_set = 2
@@ -149,7 +146,7 @@ class TrainFrame(BaseBoardFrame):
                     self.newtile_pos, self.newtile = i * 4 + j, 2
                 else:
                     return
-                self.moved = 0
+                self.moved = 1
                 self.update_frame(num_to_set, i, j)
                 self.board[i][j] = num_to_set
                 self.board_encoded = np.uint64(bm.encode_board(self.board))
@@ -811,7 +808,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         if not self.isProcessing and self.result:
             self.isProcessing = True
             move = list(self.result.keys())[0]
-            if self.ai_state and (self.result[move] == 0 or self.result[move] is None or self.result[move] == '?'):
+            if self.ai_state and (not self.result[move] or self.result[move] == '?'):
                 self.ai_state = False
                 self.Demo.setText(self.tr('Demo'))
                 self.ai_timer.stop()

@@ -457,7 +457,7 @@ def init_masker(num_free_32k: int, target_num: int, pos_fixed_32k: NDArray[np.ui
     :return: 初始化的字典
     """
     param = Param(
-        small_tile_sum_limit=SingletonConfig().config.get('SmallTileSumLimit', 56),
+        small_tile_sum_limit=SingletonConfig().config.get('SmallTileSumLimit', 96),
         target = np.uint8(target_num),
         pos_fixed_32k=_fixed_32k_mask(pos_fixed_32k),
         num_free_32k = np.uint8(num_free_32k),
