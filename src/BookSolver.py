@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime
 from typing import Callable, Tuple
 
 import numpy as np
@@ -67,6 +68,10 @@ def recalculate_process(
     # 回算搜索时可能需要使用索引进行加速
     ind1: NDArray[np.uint32] | None = None
 
+    if not os.path.exists(pathname + 'stats.txt'):
+        with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
+            file.write(','.join(['layer', 'length', 'max success rate', 'speed', 'deletion_threshold', 'time']) + '\n')
+
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
         started, d1, d2 = handle_restart(i, pathname, steps, d1, d2, started)
@@ -111,6 +116,11 @@ def recalculate_process(
             logger.debug(f'index/solve/remove: {round((t1 - t0) / (t3 - t0), 2)}/'
                          f'{round((t2 - t1) / (t3 - t0), 2)}/{round((t3 - t2) / (t3 - t0), 2)}')
 
+        with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
+            file.write(','.join([str(i), str(length), str(np.max(d0['f1']) / 4e9),
+                                 f'{round(length / (t3 - t0 + 0.0000001) / 1e6, 2)} mbps',
+                                 str(deletion_threshold / 4e9), str(datetime.now())]) + '\n')
+
         d0.tofile(pathname + str(i) + '.book')
         if os.path.exists(pathname + str(i)):
             os.remove(pathname + str(i))
@@ -122,7 +132,8 @@ def recalculate_process(
         if (SingletonConfig().config.get('compress_temp_files', False) and
                 SingletonConfig().config.get('optimal_branch_only', False)):
             compress_with_7z(pathname + str(i + 2) + '.book')
-        elif not SingletonConfig().config.get('optimal_branch_only', False):
+        elif (SingletonConfig().config.get('compress', False) and
+              not SingletonConfig().config.get('optimal_branch_only', False)):
             do_compress(pathname + str(i + 2) + '.book')  # 如果设置了压缩，则压缩i+2的book，其已经不需要再频繁查找
 
         if i > 0:

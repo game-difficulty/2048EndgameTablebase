@@ -976,7 +976,8 @@ def length_count(book_dict: BookDictType) -> (int, float):
     for mat in book_dict.values():
         s1, s2 = mat.shape
         length += s1 * s2
-        max_rate = max(max_rate, np.max(mat))
+        if mat:
+            max_rate = max(max_rate, np.max(mat))
     return length, max_rate / 4e9
 
 

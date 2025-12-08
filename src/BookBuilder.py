@@ -211,6 +211,6 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
     return True
 
 
-if __name__ == "__main__":
-    start_build('t',10,0,r"C:\Apps\2048endgameTablebase\tables\t1k-118\t_1024_")
-    pass
+# if __name__ == "__main__":
+#     start_build('t',10,0,r"C:\Apps\2048endgameTablebase\tables\t1k-118\t_1024_")
+#     pass

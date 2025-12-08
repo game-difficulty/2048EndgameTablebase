@@ -2,6 +2,7 @@ import multiprocessing
 import os
 import threading
 from collections import defaultdict
+from pathlib import Path
 from queue import Queue
 
 import numpy as np
@@ -122,9 +123,8 @@ class Analyzer:
             try:
                 index_i = png_map_dict[i]
             except KeyError:
-                index_i = 0
-                logger.warning(f"Character '{i}' not found in png_map_dict, defaulting to index 0."
-                               f"May cause errors in analysis.")
+                logger.warning(f"Character '{i}' not found in png_map_dict.")
+                return
 
             replay_tile = ((index_i >> 4) & 1) + 1
             replay_move = move_map[index_i >> 5]
@@ -345,7 +345,7 @@ class Analyzer:
             file.write(text + '\n')
 
     def write_analysis(self, step: int):
-        filename = self.full_pattern + '_' + str(step) + f'_{self.goodness_of_fit:.4f}' + '.txt'
+        filename = self.full_pattern + '_' + Path(self.filepath).stem + '_' + str(step) + f'_{self.goodness_of_fit:.4f}' + '.txt'
         target_file_path = os.path.join(self.target_path, filename)
         with open(target_file_path, 'w', encoding='utf-8') as file:
             for line in self.text_list:
@@ -419,7 +419,7 @@ class Analyzer:
         if self.full_pattern is None or rec_step_count < 2:
             return
 
-        filename = self.full_pattern + '_' + os.path.basename(self.filepath) + '_' + str(step) + f'_{self.goodness_of_fit:.4f}' + '.rpl'
+        filename = self.full_pattern + '_' + Path(self.filepath).stem + '_' + str(step) + f'_{self.goodness_of_fit:.4f}' + '.rpl'
         target_file_path = os.path.join(self.target_path, filename)
         self.record[rec_step_count] = (
             0, 88, 666666666, 233333333, 314159265, 987654321)
@@ -440,13 +440,14 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setupUi()
+        self.selected_filepaths = []
 
     def setupUi(self):
         self.setObjectName("self")
         self.setWindowIcon(QtGui.QIcon(r"pic\2048.ico"))
         self.resize(840, 240)
         self.setStyleSheet("QMainWindow{\n"
-                           "    background-color: palette(Window);\n"
+                           "    background-color: rgb(245, 245, 247);\n"
                            "}")
         self.centralwidget = QtWidgets.QWidget(self)
         self.centralwidget.setObjectName("centralwidget")
@@ -523,30 +524,50 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
     def filepath_changed(self):
         options = QtWidgets.QFileDialog.Options()
         # 打开文件或文件夹选择窗口
-        filepath, _ = QtWidgets.QFileDialog.getOpenFileName(
+        filepaths, _ = QtWidgets.QFileDialog.getOpenFileNames(
             self,
             self.tr("Select a .txt file or folder"),
             "",
-            "Text Files (*.txt);;All Files (*)",
+            "Text Files (*.txt);;VRS Files (*.vrs);;All Files (*)",
             options=options | QtWidgets.QFileDialog.DontResolveSymlinks
         )
-        if filepath:
-            self.filepath_edit.setText(filepath)
+        if filepaths:
+            filepath_str = "\n".join(filepaths)  # 用换行符分隔
+            self.filepath_edit.setText(filepath_str)
+            self.selected_filepaths = filepaths
 
     def start_analyze(self):
         position = self.pos_combo.currentText
         pattern = self.pattern_combo.currentText
         target = self.target_combo.currentText
-        pathname = self.filepath_edit.toPlainText()
         position = '0' if not position else position
 
-        if pattern and target and pathname and position and os.path.exists(pathname):
-            # 获取文件列表
-            if os.path.isdir(pathname):
-                file_list = [os.path.join(pathname, f) for f in os.listdir(pathname)
-                             if f.lower().endswith('.txt') and os.path.isfile(os.path.join(pathname, f))]
+        if pattern and target:
+            if self.selected_filepaths:
+                file_list = [f for f in self.selected_filepaths
+                            if os.path.exists(f) and
+                            (f.lower().endswith('.txt') or f.lower().endswith('.vrs'))]
             else:
-                file_list = [pathname]
+                # 从文本框中解析文件路径
+                # 假设文件路径用换行符分隔
+                pathname_text = self.filepath_edit.toPlainText()
+                paths = [p.strip() for p in pathname_text.split('\n') if p.strip()]
+                file_list = []
+                for path in paths:
+                    if os.path.exists(path):
+                        if os.path.isdir(path):
+                            # 如果是文件夹，遍历其中的txt和vrs文件
+                            folder_files = [os.path.join(path, f) for f in os.listdir(path)
+                                            if (f.lower().endswith('.txt') or f.lower().endswith('.vrs')) and
+                                            os.path.isfile(os.path.join(path, f))]
+                            file_list.extend(folder_files)
+                        elif os.path.isfile(path) and (path.lower().endswith('.txt') or path.lower().endswith('.vrs')):
+                            # 如果是单个文件
+                            file_list.append(path)
+
+            if not file_list:
+                QtWidgets.QMessageBox.warning(self, "warning", "No valid .txt or .vrs file found!")
+                return
 
             # 计算公共参数
             if pattern in ['444', 'LL', 'L3']:
@@ -573,7 +594,7 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
     def on_analyze_finished(self):
         self.analyze_bt.setText(self.tr('Analyze'))
         self.analyze_bt.setEnabled(True)
-        self.BatchAnalyzeManager.analyze_threads = []
+        self.analyze_manager.analyze_threads = []
 
     def update_pos_combo_visibility(self, pattern):
         if pattern in ['444', 'LL']:
@@ -606,8 +627,9 @@ class AnalyzeThread(QtCore.QThread):
         self.finished.emit()
 
 
-class BatchAnalyzeManager:
+class BatchAnalyzeManager(QtCore.QThread):
     def __init__(self, parent:AnalyzeWindow):
+        super().__init__()
         self.parent = parent
         self.file_queue = Queue()
         self.analyze_threads = []
@@ -635,20 +657,27 @@ class BatchAnalyzeManager:
 
     def _start_threads(self):
         """启动线程，不超过最大限制"""
+        threads_to_start = []
+
         with self.lock:
+            # 在锁内收集需要启动的线程信息
             while (self.active_threads < self.max_threads and
                    not self.file_queue.empty()):
                 file_path = self.file_queue.get()
                 self.active_threads += 1
 
-                # 创建并启动分析线程
-                analyze_thread = AnalyzeThread(
-                    file_path, self.pattern, self.target_value, self.ptn,
-                    os.path.dirname(file_path), self.position
-                )
-                analyze_thread.finished.connect(self._on_thread_finished)
-                self.analyze_threads.append(analyze_thread)
-                analyze_thread.start()
+                # 只收集文件路径，不创建线程
+                threads_to_start.append(file_path)
+
+        # 在锁外创建和启动线程
+        for file_path in threads_to_start:
+            analyze_thread = AnalyzeThread(
+                file_path, self.pattern, self.target_value, self.ptn,
+                os.path.dirname(file_path), self.position
+            )
+            analyze_thread.finished.connect(self._on_thread_finished)
+            self.analyze_threads.append(analyze_thread)
+            analyze_thread.start()
 
     def _on_thread_finished(self):
         """单个线程完成回调"""
@@ -656,15 +685,16 @@ class BatchAnalyzeManager:
             self.active_threads -= 1
             self.completed_count += 1
 
-            # 显示进度
-            print(f"进度: {self.completed_count}/{self.total_count}")
-
-            # 检查是否所有任务完成
+            # print(f"{self.completed_count}/{self.total_count}")
             if self.completed_count == self.total_count:
-                self.parent.on_analyze_finished()
+                all_finished = True
             else:
-                # 启动新的线程处理剩余任务
-                self._start_threads()
+                all_finished = False
+
+        if all_finished:
+            self.parent.on_analyze_finished()
+        else:
+            self._start_threads()
 
 
 if __name__ == "__main__":
