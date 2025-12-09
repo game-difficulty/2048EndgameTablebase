@@ -1,8 +1,8 @@
 # User Manual
 
 **Author**: game_difficulty  
-**Version**: 7.8  
-**Date**: 2025.11.3  
+**Version**: 8.1 
+**Date**: 2025.12.10  
 
 ---
 
