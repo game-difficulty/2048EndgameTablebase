@@ -1,7 +1,7 @@
 # User Manual
 
 **Author**: game_difficulty  
-**Version**: 8.1 
+**Version**: 8.1  
 **Date**: 2025.12.10  
 
 ---
@@ -482,3 +482,4 @@ If you encounter any issues while using the software, you can get technical supp
 | 4432f_2048   | 3.5 TB | 1.33 TB     |
 | free9_256    | 460 GB | 170 GB      |
 | free10w_1024 | 2 TB   | 700 GB      |
+
