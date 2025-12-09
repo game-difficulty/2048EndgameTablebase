@@ -5,7 +5,7 @@ import numpy as np
 from PyQt5 import QtWidgets
 
 from MiniGame import MinigameFrame, MinigameWindow, MinigameSquareFrame
-from Config import SingletonConfig
+from Config import SingletonConfig, ColorManager
 
 
 class ShapeShifterFrame(MinigameFrame):
@@ -61,9 +61,10 @@ class ShapeShifterFrame(MinigameFrame):
             label = self.game_square.labels[row][col]
             frame = self.game_square.frames[row][col]
             label.setText('')
+            color_mgr = ColorManager()
             frame.setStyleSheet(f"""
                         QFrame#f{row * self.cols + col} {{
-                            background-color: rgb(209, 209, 209);
+                            background-color: {color_mgr.get_css_color(5)};
                         }}
                         """)
             fontsize = self.game_square.base_font_size if (value == -1 or len(str(2 ** value)) < 3) else int(

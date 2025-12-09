@@ -8,7 +8,7 @@ from PyQt5 import QtCore, QtWidgets, QtGui
 from PyQt5.QtCore import QEasingCurve, QTimer
 
 from Calculator import find_merge_positions, slide_distance
-from Config import SingletonConfig
+from Config import SingletonConfig, ColorManager
 from MinigameMover import MinigameBoardMover, MinigameBoardMover_mxn
 from Gamer import SquareFrame
 
@@ -49,7 +49,8 @@ class MinigameSquareFrame(SquareFrame):
     def setupUi(self, num_rows=4, num_cols=4):
         self.setMaximumSize(1000, 1000)
         self.setMinimumSize(120, 120)
-        self.setStyleSheet("border-radius: 5px; background-color: rgb(209, 209, 209);")
+        color_mgr = ColorManager()
+        self.setStyleSheet(f"border-radius: 5px; background-color: {color_mgr.get_css_color(7)};")
         self.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.setFrameShadow(QtWidgets.QFrame.Raised)
         self.setObjectName("game_square")
@@ -65,7 +66,7 @@ class MinigameSquareFrame(SquareFrame):
             row_small_labels = []
             for j in range(self.cols):
                 grid = QtWidgets.QFrame(self)
-                grid.setStyleSheet("border-radius: 8px; background-color: #cdc1b4;")
+                grid.setStyleSheet(f"border-radius: 8px; background-color: {color_mgr.get_css_color(6)};")
                 grid.setFrameShape(QtWidgets.QFrame.StyledPanel)
                 grid.setFrameShadow(QtWidgets.QFrame.Raised)
                 grid.setObjectName(f"grid{i * self.cols + j}")
@@ -233,7 +234,8 @@ class MinigameFrame(QtWidgets.QFrame):
     def setupUi(self):
         self.setMaximumSize(QtCore.QSize(100000, 100000))
         self.setMouseTracking(True)
-        self.setStyleSheet("background-color: rgb(222, 222, 222);")
+        color_mgr = ColorManager()
+        self.setStyleSheet(f"background-color: {color_mgr.get_css_color(4)};")
         self.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.setFrameShadow(QtWidgets.QFrame.Raised)
         self.setObjectName("gameframe")
@@ -439,9 +441,10 @@ class MinigameWindow(QtWidgets.QMainWindow):
         self.operate_frame = QtWidgets.QFrame(self.centralwidget)
         self.operate_frame.setMaximumSize(QtCore.QSize(16777215, 180))
         self.operate_frame.setMinimumSize(QtCore.QSize(120, 150))
+        color_mgr = ColorManager()
         self.operate_frame.setStyleSheet("QFrame{\n"
-                                         "    border-color: rgb(167, 167, 167);\n"
-                                         "    background-color: rgb(236, 236, 236);\n"
+                                         f"    border-color: {color_mgr.get_css_color(8)};\n"
+                                         f"    background-color: {color_mgr.get_css_color(3)};\n"
                                          "}")
         self.operate_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.operate_frame.setFrameShadow(QtWidgets.QFrame.Raised)
@@ -452,7 +455,7 @@ class MinigameWindow(QtWidgets.QMainWindow):
         self.scores.setObjectName("scores")
         self.score_frame = QtWidgets.QFrame(self.operate_frame)
         self.score_frame.setStyleSheet("border-radius: 12px; \n"
-                                       "background-color: rgb(244, 241, 232);")
+                                       f"background-color: {color_mgr.get_css_color(2)};")
         self.score_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.score_frame.setFrameShadow(QtWidgets.QFrame.Raised)
         self.score_frame.setObjectName("score_frame")
@@ -481,7 +484,7 @@ class MinigameWindow(QtWidgets.QMainWindow):
         self.scores.addWidget(self.score_frame)
         self.best_frame = QtWidgets.QFrame(self.operate_frame)
         self.best_frame.setStyleSheet("border-radius: 12px; \n"
-                                      "background-color: rgb(244, 241, 232);")
+                                      f"background-color: {color_mgr.get_css_color(2)};")
         self.best_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.best_frame.setFrameShadow(QtWidgets.QFrame.Raised)
         self.best_frame.setObjectName("best_frame")
@@ -682,9 +685,10 @@ class GameOverDialog(QtWidgets.QDialog):
         overlay_width = int(min(max(parent.width() // 1.3, 270), 520))
         overlay_height = int(min(max(parent.width() // 1.5, 160), 300))
         self.setFixedSize(overlay_width, overlay_height)
+        color_mgr = ColorManager()
         self.setStyleSheet("QFrame{\n"
-                           "    border-color: rgb(160, 160, 160);\n"
-                           "    background-color: rgba(160, 160, 160, 160);\n"
+                           f"    border-color: {color_mgr.get_css_color(9)};\n"
+                           f"    background-color: {color_mgr.get_css_color(9, 160)};\n"
                            "}")
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -723,7 +727,8 @@ class GameOverDialog(QtWidgets.QDialog):
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QtGui.QBrush(QtGui.QColor(160, 160, 160, 160)))
+        color_mgr = ColorManager()
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(*color_mgr.get_rgb(9), 160)))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawRect(self.rect())
 
@@ -740,7 +745,8 @@ class TrophyDialog(QtWidgets.QDialog):
         overlay_width = int(min(max(parent.width() // 1.3, 270), 520))
         overlay_height = int(min(max(parent.width() // 1.5, 200), 400))
         self.setFixedSize(overlay_width, overlay_height)
-        self.setStyleSheet("background-color: rgba(160, 160, 160, 160);")
+        color_mgr = ColorManager()
+        self.setStyleSheet(f"background-color: {color_mgr.get_css_color(9, 160)};")
 
         layout = QtWidgets.QVBoxLayout(self)
 
@@ -793,7 +799,8 @@ class TrophyDialog(QtWidgets.QDialog):
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QtGui.QBrush(QtGui.QColor(160, 160, 160, 160)))
+        color_mgr = ColorManager()
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(*color_mgr.get_rgb(9), 160)))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawRect(self.rect())
 

@@ -90,8 +90,8 @@ class ColumnChaosWindow(MinigameWindow):
 
     def setupUi(self):
         super().setupUi()
-        self.operate_frame.setMaximumSize(QtCore.QSize(16777215, 280))
-        self.operate_frame.setMinimumSize(QtCore.QSize(120, 200))
+        self.operate_frame.setMaximumSize(QtCore.QSize(16777215, 240))
+        self.operate_frame.setMinimumSize(QtCore.QSize(120, 180))
         self.countdown_text = QtWidgets.QTextEdit(self.centralwidget)
         self.countdown_text.setObjectName("countdown_text")
         self.countdown_text.setReadOnly(True)

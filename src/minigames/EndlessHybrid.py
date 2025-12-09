@@ -6,7 +6,7 @@ import numpy as np
 from PyQt5 import QtWidgets, QtCore, QtGui
 
 from MiniGame import MinigameWindow
-from Config import SingletonConfig
+from Config import SingletonConfig, ColorManager
 from Endless import EndlessFrame
 
 
@@ -83,8 +83,8 @@ class EndlessHybridFrame(EndlessFrame):
             label = self.game_square.labels[row][col]
             frame = self.game_square.frames[row][col]
             label.setText('')
-            color = 'rgba(229, 229, 229, 1)'
-            frame.setStyleSheet(f"background-color: {color};")
+            color_mgr = ColorManager()
+            frame.setStyleSheet(f"background-color: {color_mgr.get_css_color(6)};")
 
             label.setPixmap(QtGui.QPixmap('pic//portal.png').scaled(frame.width(), frame.height(
             ), QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation))

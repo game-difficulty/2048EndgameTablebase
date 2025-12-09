@@ -133,7 +133,7 @@ class BlitzkriegWindow(MinigameWindow):
 
     def setupUi(self):
         super().setupUi()
-        self.operate_frame.setMaximumSize(QtCore.QSize(16777215, 280))
+        self.operate_frame.setMaximumSize(QtCore.QSize(16777215, 270))
         self.operate_frame.setMinimumSize(QtCore.QSize(120, 200))
         self.init_timer()
 
