@@ -5,6 +5,8 @@ import multiprocessing
 
 from PyQt5 import QtCore, QtWidgets, QtGui
 
+from Config import apply_global_theme
+
 
 def main():
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
@@ -14,6 +16,8 @@ def main():
     # 加载默认字体
     QtWidgets.QApplication.setAttribute(QtCore.Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
     app = QtWidgets.QApplication(sys.argv)
+    apply_global_theme(app)
+
     if sys.platform == 'win32':
         default_font = QtGui.QFont("Segoe UI")
     else:

@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import QToolButton, QMenu, QAction
 
 from BookBuilder import start_build
 from Variants.vBookBuilder import v_start_build
-from Config import SingletonConfig, category_info, theme_map
+from Config import SingletonConfig, category_info, theme_map, ColorManager
 from SignalHub import progress_signal
 
 
@@ -108,8 +108,9 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.setObjectName("self")
         self.setWindowIcon(QtGui.QIcon(r"pic\settings.ico"))
         self.resize(840, 600)
+        color_mgr = ColorManager()
         self.setStyleSheet("QMainWindow{\n"
-                           "    background-color: rgb(245, 245, 247);\n"
+                           f"    background-color: {color_mgr.get_css_color(1)};\n"
                            "}")
         self.centralwidget = QtWidgets.QWidget(self)
         self.centralwidget.setObjectName("centralwidget")
@@ -327,6 +328,22 @@ class SettingsWindow(QtWidgets.QMainWindow):
         else:
             self.anim_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.selfLayout.addWidget(self.anim_checkBox, 10, 1, 1, 1)
+
+        # 创建色彩模式选择按钮（下拉菜单）
+        self.theme_button2 = QtWidgets.QToolButton(self.centralwidget)
+        self.theme_button2.setMinimumSize(150, 20)
+        self.theme_button2.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        self.theme_button2.setObjectName("theme_button2")
+        self.selfLayout.addWidget(self.theme_button2, 10, 2, 1, 1)
+        self.theme_menu2 = QtWidgets.QMenu(self.theme_button2)
+        self.theme_button2.setMenu(self.theme_menu2)
+
+        for theme in list(color_mgr.schemes.keys()):
+            action = self.theme_menu2.addAction(theme)
+            action.triggered.connect(  # type: ignore
+                lambda checked=False, t=theme: color_mgr.switch_theme(t)
+            )
+
         # 创建语言选择按钮（下拉菜单）
         self.lang_button = QtWidgets.QToolButton(self.centralwidget)
         self.lang_button.setMinimumSize(150, 20)
@@ -336,7 +353,6 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.lang_menu = QtWidgets.QMenu(self.lang_button)
         self.lang_button.setMenu(self.lang_menu)
 
-        # 添加主题选项
         for language in ('zh', 'en'):
             action = self.lang_menu.addAction(language)
             action.triggered.connect(  # type: ignore
@@ -391,6 +407,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.tile_font_size_text.setText(_translate("Settings", "Tile Font Size:"))
         self.anim_text.setText(_translate("Settings", "Do Animation:"))
         self.lang_button.setText("Language")  # 暂不翻译
+        self.theme_button2.setText(_translate("Settings", "Color Mode"))
         self.save_bt.setText(_translate("Settings", "SAVE"))
         if self.smallTileSumLimitLabel is not None:
             self.smallTileSumLimitLabel.setText(self.tr("SmallTileSumLimit:"))

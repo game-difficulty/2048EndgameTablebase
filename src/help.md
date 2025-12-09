@@ -131,8 +131,8 @@ Table calculation is a prerequisite for using important features such as the AI 
 ## 5.1 Calculate a Formation
    - Open the software and enter the main interface.
    - Click **Settings**.
-   - Choose the formation you want to calculate (e.g., L3-512-0).
-   - Specify the save path for the table (e.g., F:/L3_512_0).
+   - Choose the formation you want to calculate (e.g., `L3-512-0`).
+   - Specify the save path for the table (e.g., `F:/L3_512_0`).
    - Click **Build** to start the calculation.
 
 ## 5.2 Learn the Formation
@@ -242,10 +242,39 @@ Use the **Review Replay** button to reexamine your gameplay on Testing screen or
    - You can select the replay file you want to review from the left side of the menu bar in the interface.
    - Replay files will be generated when you analyze a Verse replay.
 
-The **Mistakes Notebook** is at the bottom of the test interface. It automatically records mistakes made during tests, so you can practice them repeatedly.
+### Mistakes Notebook Function
 
-To retain your settings and Mistakes Notebook after updating:
-Find the *config* file (without an extension) and the mistakes_book.pkl file in your previous installation folder, then copy them to the same locations in the new version's folder.
+The **Mistakes Notebook** located at the bottom of the test interface automatically collects all the questions you answered incorrectly during the test. This allows you to review and practice them anytime, helping you strengthen your weak areas.
+
+### How to Back Up and Migrate Personal Data (When Upgrading Versions)
+
+If you have downloaded a new version of the software and wish to retain your previous personal settings and mistake records, please follow these steps:
+
+1.  **Locate the folder of your current (old) software version**  
+    This is the folder containing the main program (`.exe` file) and subdirectories like `_internal`, `font`, `pic`, etc.
+
+2.  **Copy the following two personal data files**  
+    Within that folder, find:
+    *   The **`mistakes_book.pkl`** file
+    *   The **`config`** file (no extension) inside the `_internal` subfolder
+
+3.  **Paste them into the corresponding location of the new version**  
+    Copy the two files found above and paste (overwrite) them into the **corresponding paths in the folder of the new software version** to complete the migration.
+
+---
+
+## 6.4 Settings Interface Advanced Features
+
+In the **Settings** interface, you can customize the following:
+
+*   **Customize Appearance**
+    *   **Number Block Color Theme**: Change the color scheme of the number blocks on the main interface.
+    *   **GUI Color Mode**: Switch between light and dark themes for the overall software interface.
+
+    > **Note**: Changes to color or theme settings will only take effect after you **restart the software**.
+
+*   **Advanced Custom Color Modes**
+    The software supports more advanced color customization. You can find the **`color_schemes.txt`** file in the main software folder. By editing this file, you can define your own unique interface color schemes.
 
 ---
 
@@ -322,6 +351,15 @@ for board,score,operator in rec[:]:
  | Search | free12w-2k     | free11w-2k | 4442f-2k | free11w-512  |
  |--------|----------------|------------|----------|--------------|
  | 26.49% | 13.38%         | 1.41%      | 51.50%   | 7.22%        |
+
+
+
+## 7.4 General AI
+
+After version 8.0, the AI can utilize any calculated tables.
+However, it currently does not adjust its strategy based on available table combinations, 
+so it can hardly leverage t tables & snake tables.
+Recommended tables include free10w-512 (or L3-512), 4431-512, etc.
 
 
 ---

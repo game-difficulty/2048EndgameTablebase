@@ -9,7 +9,7 @@ from numpy.typing import NDArray
 
 import BoardMover as bm
 from Gamer import BaseBoardFrame
-from Config import SingletonConfig
+from Config import SingletonConfig, ColorManager
 from SignalHub import practice_signal
 
 
@@ -320,9 +320,10 @@ class ReplayWindow(QtWidgets.QMainWindow):
         self.operate = QtWidgets.QFrame(self.centralwidget)
         self.operate.setMaximumSize(QtCore.QSize(16777215, 1200))
         self.operate.setMinimumSize(QtCore.QSize(300, 600))
+        color_mgr = ColorManager()
         self.operate.setStyleSheet("QFrame{\n"
-                                         "    border-color: rgb(167, 167, 167);\n"
-                                         "    background-color: rgb(236, 236, 236);\n"
+                                         f"    border-color: {color_mgr.get_css_color(8)};\n"
+                                         f"    background-color: {color_mgr.get_css_color(3)};\n"
                                          "}")
         self.operate.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.operate.setFrameShadow(QtWidgets.QFrame.Raised)
@@ -342,7 +343,7 @@ class ReplayWindow(QtWidgets.QMainWindow):
         self.board_state_layout.addWidget(self.table_state)
         self.board_state = QtWidgets.QLineEdit(self.operate)
         self.board_state.setReadOnly(True)
-        self.board_state.setStyleSheet("background-color: rgb(255, 255, 255);")
+        self.board_state.setStyleSheet(f"background-color: {color_mgr.get_css_color(0)};")
         self.board_state.setObjectName("board_state")
         self.board_state.setText('0000000000000000')
         self.board_state_layout.addWidget(self.board_state)
@@ -358,7 +359,7 @@ class ReplayWindow(QtWidgets.QMainWindow):
         self.results_label.setReadOnly(True)
         self.results_label.setMinimumSize(QtCore.QSize(500, 400))
         self.results_label.setMaximumSize(QtCore.QSize(16777215, 800))
-        self.results_label.setStyleSheet("background-color: rgb(255, 255, 255);\n"
+        self.results_label.setStyleSheet(f"background-color: {color_mgr.get_css_color(0)};\n"
                                          "border-color: rgb(0, 0, 0); font: 75 18pt \"Consolas\";")
         self.results_label.setText("")
         self.results_label.setObjectName("results_label")

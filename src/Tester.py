@@ -10,7 +10,7 @@ from PyQt5.QtGui import QIcon
 
 import BoardMover as bm
 from BookReader import BookReaderDispatcher
-from Config import SingletonConfig, category_info
+from Config import SingletonConfig, category_info, ColorManager
 from Gamer import BaseBoardFrame
 from Analyzer import AnalyzeWindow
 from RecordPlayer import ReplayWindow
@@ -43,6 +43,8 @@ class ScrollTextDisplay(QWidget):
         self.layout = QVBoxLayout()
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
+        color_mgr = ColorManager()
+        self.text_edit.setStyleSheet(f"background-color: {color_mgr.get_css_color(0)}; color: {color_mgr.get_css_color(10)};")
         font = QtGui.QFont()
         font.setFamily("Consolas")
         font.setPointSize(12)
@@ -164,6 +166,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.resize(1280, 720)
         self.centralwidget = QtWidgets.QWidget(self)
         self.centralwidget.setObjectName("centralwidget")
+        color_mgr = ColorManager()
         self.gridLayout = QtWidgets.QGridLayout(self.centralwidget)
         self.gridLayout.setContentsMargins(6, 6, 6, 6)
         self.gridLayout.setVerticalSpacing(8)
@@ -173,7 +176,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.setboard_Layout = QtWidgets.QHBoxLayout()
         self.setboard_Layout.setObjectName("setboard_Layout")
         self.board_state = QtWidgets.QLineEdit(self.centralwidget)
-        self.board_state.setStyleSheet("background-color: rgb(255, 255, 255);")
+        self.board_state.setStyleSheet(f"background-color: {color_mgr.get_css_color(0)};")
         self.board_state.setObjectName("board_state")
         self.board_state.setText('0000000000000000')
         self.setboard_Layout.addWidget(self.board_state)

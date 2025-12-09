@@ -5,6 +5,8 @@ from PyQt5.QtCore import Qt
 import re
 import markdown
 
+from Config import ColorManager
+
 
 # noinspection PyAttributeOutsideInit
 class MDViewer(QMainWindow):
@@ -36,15 +38,16 @@ class MDViewer(QMainWindow):
         main_widget.setLayout(layout)
 
         self.loadMarkdown()
-        self.text_browser.setStyleSheet("""
-            QTextBrowser {
+        color_mgr = ColorManager()
+        self.text_browser.setStyleSheet(f"""
+            QTextBrowser {{
                 font-family: 'Times New Roman';  /* Setting font */
                 font-size: 24px;  /* Setting font size */
                 line-height: 1.5;  /* Setting line spacing */
-                color: #333;  /* Setting font color */
-                background-color: #f8f8f8;  /* Setting background color */
+                color: {color_mgr.get_css_color(10)};  /* Setting font color */
+                background-color: {color_mgr.get_css_color(1)};  /* Setting background color */
                 padding: 10px;  /* Setting padding */
-            }
+            }}
         """)
 
         self.resize(1600, 800)

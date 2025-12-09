@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import QShortcut, QApplication
 import BoardMover as bm
 from BookReader import BookReaderDispatcher
 from Calculator import ReverseUD, ReverseLR, RotateR, RotateL
-from Config import SingletonConfig, category_info, pattern_32k_tiles_map
+from Config import SingletonConfig, category_info, pattern_32k_tiles_map, ColorManager
 from Gamer import BaseBoardFrame
 from SignalHub import practice_signal
 
@@ -232,9 +232,10 @@ class TrainWindow(QtWidgets.QMainWindow):
 
         self.operate = QtWidgets.QFrame(self.centralwidget)
         self.operate.setMaximumSize(QtCore.QSize(560, 720))
+        color_mgr = ColorManager()
         self.operate.setStyleSheet("QFrame{\n"
-                                   "    border-color: rgb(167, 167, 167);\n"
-                                   "    background-color: rgb(236, 236, 236);\n"
+                                   f"    border-color: {color_mgr.get_css_color(8)};\n"
+                                   f"    background-color: {color_mgr.get_css_color(3)};\n"
                                    "}")
         self.operate.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.operate.setFrameShadow(QtWidgets.QFrame.Raised)
@@ -253,7 +254,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.setboard_Layout = QtWidgets.QHBoxLayout()
         self.setboard_Layout.setObjectName("setboard_Layout")
         self.board_state = QtWidgets.QLineEdit(self.operate)
-        self.board_state.setStyleSheet("background-color: rgb(255, 255, 255);")
+        self.board_state.setStyleSheet(f"background-color: {color_mgr.get_css_color(0)};")
         self.board_state.setObjectName("board_state")
         self.board_state.setText('0000000000000000')
         self.setboard_Layout.addWidget(self.board_state)
@@ -407,7 +408,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.results_label = QtWidgets.QLabel(self.operate)
         self.results_label.setMinimumSize(QtCore.QSize(0, 180))
         self.results_label.setMaximumSize(QtCore.QSize(16777215, 220))
-        self.results_label.setStyleSheet("background-color: rgb(255, 255, 255);\n"
+        self.results_label.setStyleSheet(f"background-color: {color_mgr.get_css_color(0)};\n"
                                          "border-color: rgb(0, 0, 0); font: 75 18pt \"Consolas\";")
         self.results_label.setText("")
         self.results_label.setObjectName("results_label")
@@ -420,7 +421,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.filepath_text.setObjectName("filepath_text")
         self.setpath_Layout.addWidget(self.filepath_text)
         self.filepath = QtWidgets.QLineEdit(self.operate)
-        self.filepath.setStyleSheet("background-color: rgb(255, 255, 255);")
+        self.filepath.setStyleSheet(f"background-color: {color_mgr.get_css_color(0)};")
         self.filepath.setObjectName("filepath")
         self.setpath_Layout.addWidget(self.filepath)
         self.set_filepath_bt = QtWidgets.QPushButton(self.operate)

@@ -7,7 +7,7 @@ from typing import Callable, Dict, Tuple
 
 import cpuinfo
 import numpy as np
-from PyQt5 import QtWidgets
+from PyQt5 import QtWidgets, QtGui
 from PyQt5.QtCore import QLocale, QTranslator
 from numpy.typing import NDArray
 
@@ -300,6 +300,7 @@ class SingletonConfig:
                 'power_ups_state': [dict(), dict()],
                 'minigame_difficulty': 1,
                 'language': SingletonConfig.get_system_language(),
+                'theme': "Default",
                 }
 
     @classmethod
@@ -386,6 +387,155 @@ class SingletonConfig:
             file_path_list.remove(file_path)
 
         return False
+
+
+# 用于管理除数字块之外的配色
+class ColorManager:
+    _instance = None
+
+    def __new__(cls, config_file="color_schemes.txt"):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self, config_file="color_schemes.txt"):
+        if not self._initialized:
+            self.config_file = config_file
+            self.schemes = {}  # 配色字典
+            self.current_theme = SingletonConfig().config.get('theme', "Default")
+            self.current_colors = []  # 当前主题的颜色列表
+
+            self._load_schemes()
+            self._initialized = True
+
+    def _normalize_line(self, line):
+        """将中文标点替换为英文标点"""
+        chinese_to_english = {
+            '，': ',',
+            '（': '(',
+            '）': ')',
+            '；': ';',
+            '：': ':',
+            '　': ' ',  # 全角空格
+        }
+
+        for cn_char, en_char in chinese_to_english.items():
+            line = line.replace(cn_char, en_char)
+        return line
+
+    def _load_schemes(self):
+        """从配置文件加载配色方案"""
+        if not os.path.exists(self.config_file):
+            self._create_default_config()
+            return
+
+        with open(self.config_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+
+                line = self._normalize_line(line)
+
+                if ':' in line:
+                    theme, colors_str = line.split(':', 1)
+                    theme = theme.strip()
+
+                    # 分割颜色字符串
+                    colors = []
+                    for color in colors_str.split('),('):
+                        color = color.strip()
+                        if color.startswith('(') and not color.endswith(')'):
+                            color += ')'
+                        elif not color.startswith('(') and color.endswith(')'):
+                            color = '(' + color
+                        elif not color.startswith('(') and not color.endswith(')'):
+                            color = '(' + color + ')'
+                        colors.append(color)
+
+                    self.schemes[theme] = colors
+
+        # 设置默认当前主题
+        if self.schemes:
+            self.current_colors = self.schemes.get(self.current_theme, "Default")
+
+    def _create_default_config(self):
+        """创建默认配置文件"""
+        with open(self.config_file, 'w', encoding='utf-8') as f:
+            f.write(
+                "Default:(255,255,255),(245,245,247),(244,241,232),(236,236,236),(222,222,222),(209,209,209),(205,193,180),(187,173,160),(167,167,167),(160,160,160),(0,0,0)\n")
+            f.write(
+                "Dark:(32,32,32),(30,36,42),(135,130,125),(33,33,33),(36,36,36),(38,38,38),(114,111,107),(48,48,48),(53,53,53),(62,60,58),(245,235,219)\n")
+
+    def add_scheme(self, theme_name, colors_list):
+        self.schemes[theme_name] = colors_list
+        self._save_to_file()
+
+    def switch_theme(self, theme_name):
+        if theme_name in self.schemes:
+            self.current_theme = theme_name
+            SingletonConfig().config['theme'] = theme_name
+            SingletonConfig().save_config(SingletonConfig().config)
+            self.current_colors = self.schemes[theme_name]
+            return True
+        return False
+
+    def _save_to_file(self):
+        with open(self.config_file, 'w', encoding='utf-8') as f:
+            for theme, colors in self.schemes.items():
+                f.write(f"{theme}:{','.join(colors)}\n")
+
+    def get_css_color(self, index, a=None):
+        """获取CSS格式的颜色"""
+        if 0 <= index < len(self.current_colors):
+            if a is None:
+                return f"rgb{self.current_colors[index]}"
+            else:
+                return f"rgba{self.current_colors[index][:-1]},{a})"
+        return "rgb(255,255,255)"
+
+    def get_rgb(self, index):
+        if 0 <= index < len(self.current_colors):
+            r, g, b = self.current_colors[index].strip('()').split(',')
+            return int(r), int(g), int(b)
+        return 255, 255, 255
+
+
+def apply_global_theme(app):
+    """应用全局主题到整个应用程序"""
+    color_mgr = ColorManager()
+    if color_mgr.current_theme == "Default":
+        return
+
+    palette = QtGui.QPalette()
+
+    font_rgb = color_mgr.get_rgb(10)
+    bg1_rgb = color_mgr.get_rgb(0)
+    bg2_rgb = color_mgr.get_rgb(9)
+
+    font_qcolor = QtGui.QColor(*font_rgb)
+    bg1_qcolor = QtGui.QColor(*bg1_rgb)
+    bg2_qcolor = QtGui.QColor(*bg2_rgb)
+
+    # 1. 窗口相关
+    palette.setColor(QtGui.QPalette.Window, bg1_qcolor)  # 窗口背景
+    palette.setColor(QtGui.QPalette.WindowText, font_qcolor)  # 窗口文字
+
+    # 2. 按钮相关
+    palette.setColor(QtGui.QPalette.Button, bg2_qcolor)  # 按钮背景
+    palette.setColor(QtGui.QPalette.ButtonText, font_qcolor)  # 按钮文字
+
+    # 3. 基础控件相关
+    palette.setColor(QtGui.QPalette.Base, bg2_qcolor)  # 输入框等背景
+    palette.setColor(QtGui.QPalette.Text, font_qcolor)  # 输入框等文字
+
+    # 4. 工具提示
+    palette.setColor(QtGui.QPalette.ToolTipBase, bg2_qcolor)  # 工具提示背景
+    palette.setColor(QtGui.QPalette.ToolTipText, font_qcolor)  # 工具提示文字
+
+    app.setStyle("Fusion")
+    app.setPalette(palette)
 
 
 # 创建日志记录
