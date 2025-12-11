@@ -136,7 +136,10 @@ class TrainFrame(BaseBoardFrame):
             self.board[i][j] = num_to_set
             self.board_encoded = np.uint64(bm.encode_board(self.board))
             return
-        else:
+        else:  # 手动模式
+            if self.moved == 0:
+                return
+
             if self.board[i][j] == 0:
                 if event.button() == Qt.LeftButton:
                     num_to_set = 2
@@ -146,7 +149,7 @@ class TrainFrame(BaseBoardFrame):
                     self.newtile_pos, self.newtile = i * 4 + j, 2
                 else:
                     return
-                self.moved = 1
+                self.moved = 0
                 self.update_frame(num_to_set, i, j)
                 self.board[i][j] = num_to_set
                 self.board_encoded = np.uint64(bm.encode_board(self.board))
@@ -592,6 +595,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.read_results()
 
     def tiles_bt_on_click(self):
+        self.gameframe.moved = 0
         sender = self.sender()
         self.ai_state = False
         self.Demo.setText(self.tr('Demo'))
@@ -697,6 +701,7 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.read_results()
 
     def spawn_state_change(self, state):
+        self.gameframe.moved = 0
         if state == 1 and self.best_spawn_checkBox.isChecked():
             self.manual_checkBox.setChecked(False)
             self.worst_spawn_checkBox.setChecked(False)
@@ -734,6 +739,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gameframe.update_all_frame(self.gameframe.board)
 
         # 重置历史记录
+        self.gameframe.moved = 0
         self.gameframe.score = 0
         self.gameframe.history = []
         self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
