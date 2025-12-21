@@ -976,7 +976,7 @@ class TrainWindow(QtWidgets.QMainWindow):
 
     def handle_page_jump(self, board_encoded, full_pattern:str):
         if not self.ai_state and not self.playing_record_state and not self.isProcessing:
-            if full_pattern != '_         ' and SingletonConfig().check_pattern_file(full_pattern):
+            if full_pattern != '_         ' or SingletonConfig().check_pattern_file(full_pattern):
                 splits = full_pattern.split('_')
                 self.pattern_settings[:len(splits)] = splits
                 self.set_to_new_pattern()

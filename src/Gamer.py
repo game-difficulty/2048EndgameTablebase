@@ -1,10 +1,13 @@
 import sys
 import time
+from datetime import datetime
 from typing import List, Tuple, Dict
 
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QEasingCurve, QTimer, QSize
+from PyQt5.QtGui import QKeySequence
+from PyQt5.QtWidgets import QShortcut
 
 from AIPlayer import AIPlayer, Dispatcher, EvilGen
 import Variants.vBoardMover as vbm
@@ -476,6 +479,11 @@ class GameFrame(BaseBoardFrame):
 
         self.has_65k = self.score > 960000
 
+        # verse回放编码
+        self.index_to_char = ' !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜø£Ø×ƒá'
+        self.verse_code = 'replay_'
+        self.last_direc = 1
+
         # 初始化 AI 线程
         self.ai_thread = AIThread(self.board)
         self.ai_thread.updateBoard.connect(self.do_ai_move)
@@ -488,9 +496,13 @@ class GameFrame(BaseBoardFrame):
             self.setup_new_game()
 
     def setup_new_game(self):
-        self.board_encoded = np.uint64(bm.gen_new_num(
-            bm.gen_new_num(np.uint64(0), SingletonConfig().config['4_spawn_rate'])[0],
-            SingletonConfig().config['4_spawn_rate'])[0])
+        self.verse_code = 'replay_'
+        self.board_encoded, _, new_tile_pos, val = bm.s_gen_new_num(np.uint64(0),
+                                                                    SingletonConfig().config['4_spawn_rate'])
+        self.verse_code += self.decode_to_character(val, self.last_direc, 15 - new_tile_pos)
+        self.board_encoded, _, new_tile_pos, val = bm.s_gen_new_num(self.board_encoded,
+                                                                    SingletonConfig().config['4_spawn_rate'])
+        self.verse_code += self.decode_to_character(val, self.last_direc, 15 - new_tile_pos)
         self.board = bm.decode_board(self.board_encoded)
         self.ai_thread.ai_player.board = self.board
         self.evil_gen.reset_board(self.board)
@@ -526,6 +538,7 @@ class GameFrame(BaseBoardFrame):
         self.board = bm.decode_board(self.board_encoded)
         self.history.append((self.board_encoded, self.score))
         self.newtile_pos, self.newtile = new_tile_pos, val
+        self.verse_code += self.decode_to_character(self.newtile, self.last_direc, 15 - self.newtile_pos)
         if do_anim:
             self.timer1.singleShot(125, lambda: self.game_square.animate_appear(
                 self.newtile_pos // 4, self.newtile_pos % 4, 2 ** self.newtile))
@@ -545,7 +558,7 @@ class GameFrame(BaseBoardFrame):
                     self.board_encoded = np.uint64(bm.encode_board(self.board))
                     self.score += 32768
                     self.has_65k = True
-
+        self.last_direc = {'Left': 1, 'Right': 2, 'Up': 3, 'Down': 4}[direction.capitalize()]
         super().do_move(direction, do_gen)
 
     def update_all_frame(self, values):
@@ -554,6 +567,18 @@ class GameFrame(BaseBoardFrame):
             values = values.copy()
             values.flat[next((i for i, x in enumerate(values.flat) if x == 32768), None)] = 65536
         super().update_all_frame(values)
+
+    def decode_to_character(self, replay_tile, replay_move, replay_position, total_space=15):
+        right_side = total_space - replay_position
+        low4 = ((right_side & 0b11) << 2) | ((right_side >> 2) & 0b11)
+        index_i = (([3, 2, 4, 1].index(replay_move)) << 5) | ((replay_tile - 1) << 4) | low4
+        return self.index_to_char[index_i]
+
+    def undo(self):
+        if len(self.history) > 1:
+            self.verse_code = self.verse_code[:-1]
+        super().undo()
+
 
 
 class AIThread(QtCore.QThread):
@@ -832,6 +857,9 @@ class GameWindow(QtWidgets.QMainWindow):
         self.setboard_Layout.addWidget(self.set_board_bt)
         self.gridLayout.addWidget(self.setboard_frame, 2, 0, 1, 1)
 
+        self.shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
+        self.shortcut.activated.connect(self.save_verse_replay)  # type: ignore
+
         self.setCentralWidget(self.centralwidget)
 
         self.statusbar = QtWidgets.QStatusBar(self)
@@ -966,7 +994,7 @@ class GameWindow(QtWidgets.QMainWindow):
         best_move = self.ai_dispatcher.dispatcher()
         current_table = self.ai_dispatcher.current_table
         if current_table != self.last_table:
-            self.statusbar.showMessage(self.tr("Using " + current_table), 1000)
+            self.statusbar.showMessage(self.tr("Using " + current_table), 3000)
             self.last_table = current_table
 
         if best_move == 'AI':
@@ -1036,6 +1064,14 @@ class GameWindow(QtWidgets.QMainWindow):
         self.gameframe.history = []
         self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
         self.gameframe.died_when_ai_state = False
+
+    def save_verse_replay(self):
+        current_date = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'{self.gameframe.score}_{current_date}.txt'
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(self.gameframe.verse_code)
+
+        self.statusBar().showMessage(f"replay has been saved to: {filename}", 3000)
 
     def save_game_state(self, save=False):
         current_time = int(time.time() * 100)

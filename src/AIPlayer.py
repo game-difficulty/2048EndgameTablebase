@@ -542,19 +542,19 @@ class DispatcherCommon(BaseDispatcher):
             if lvl < 12:
                 continue
             if self.counts[i] > 0:
-                endgame_lvls1.append((lvl, large_tile_count, 1))
-                endgame_lvls2.append((lvl + 1, large_tile_count, 2))
-                endgame_lvls2.append((lvl + 2, large_tile_count, 2))
+                endgame_lvls1.extend(self.ad_readers.get((lvl, large_tile_count), []))
+                endgame_lvls2.extend(self.ad_readers.get((lvl + 1, large_tile_count), []))
+                endgame_lvls2.extend(self.ad_readers.get((lvl + 2, large_tile_count), []))
             elif self.counts[i] == 0:
-                endgame_lvls3.append((lvl, large_tile_count, 3))
+                endgame_lvls3.extend(self.ad_readers.get((lvl, large_tile_count), []))
 
-        return endgame_lvls1 + endgame_lvls2 + endgame_lvls3
+        endgame_lvls1.sort(key=lambda x: x[2], reverse=True)
+
+        return endgame_lvls1, endgame_lvls2, endgame_lvls3
 
     def dispatcher(self):
-        endgame_lvls = self.get_endgame_lvls()
-        for (lvl, _32k, table_type) in endgame_lvls:
-            tables_param = self.ad_readers.get((lvl, _32k), [])
-            for table_param in tables_param:
+        for tables_list, table_type in zip(self.get_endgame_lvls(), (1, 2, 3)):
+            for table_param in tables_list:
                 result = self.check_table(table_param, table_type)
                 if result == 'AI':
                     return 'AI'

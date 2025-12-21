@@ -426,11 +426,12 @@ class Analyzer:
         self.record[:rec_step_count + 1].tofile(target_file_path)
 
 
+
 @njit()
 def count_32ks(board):
     count = 0
     for i in range(16):
-        tile = (board >> np.uint64(i)) & np.uint64(0xf)
+        tile = (board >> np.uint64(i * 4)) & np.uint64(0xf)
         count += tile == 0xf
     return count
 

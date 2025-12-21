@@ -116,10 +116,11 @@ def recalculate_process(
             logger.debug(f'index/solve/remove: {round((t1 - t0) / (t3 - t0), 2)}/'
                          f'{round((t2 - t1) / (t3 - t0), 2)}/{round((t3 - t2) / (t3 - t0), 2)}')
 
-        with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
-            file.write(','.join([str(i), str(length), str(np.max(d0['f1']) / 4e9),
-                                 f'{round(length / (t3 - t0 + 0.0000001) / 1e6, 2)} mbps',
-                                 str(deletion_threshold / 4e9), str(datetime.now())]) + '\n')
+        if len(d0):
+            with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
+                file.write(','.join([str(i), str(length), str(np.max(d0['f1']) / 4e9),
+                                     f'{round(length / (t3 - t0 + 0.0000001) / 1e6, 2)} mbps',
+                                     str(deletion_threshold / 4e9), str(datetime.now())]) + '\n')
 
         d0.tofile(pathname + str(i) + '.book')
         if os.path.exists(pathname + str(i)):

@@ -262,7 +262,7 @@ def generate_process(
 
             length_factors, length_factors_list, pivots, pivots_list \
                 = update_parameters(d0, d2, length_factors, length_factors_list_path)
-            length_factor_multiplier = max(counts2) / np.mean(counts2)
+            length_factor_multiplier = max(counts2) / np.mean(counts2) if np.any(counts2) else 5
 
             t2 = time.time()
 
