@@ -4,6 +4,7 @@ import lzma
 import math
 import os
 import subprocess
+from subprocess import CREATE_NO_WINDOW
 
 import numpy as np
 
@@ -17,6 +18,9 @@ else:
     seven_zip_exe = os.path.join("7zip", "7z.exe")
     if not os.path.exists(seven_zip_exe):
         logger.warning(f"7z executable not found!")
+        
+        
+BLOCK_SIZE = 32768
 
 
 def is_seven_zip_available():
@@ -71,7 +75,7 @@ def compress_with_7z(input_file, lvl=1):
             output_file,  # 输出的 .7z 文件路径
             input_file  # 输入的文件路径
         ]
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, creationflags=CREATE_NO_WINDOW)
         logger.debug(f"compressed: {output_file}")
     else:
         # 如果 7z.exe 不可用，则使用 Python 标准库 lzma 压缩
@@ -95,7 +99,7 @@ def decompress_with_7z(archive_file):
             f"-o{os.path.dirname(original_file)}",  # 解压到原文件所在目录
             "-y"  # 自动确认所有提示（如覆盖文件）
         ]
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, creationflags=CREATE_NO_WINDOW)
         logger.debug(f"decompressed: {original_file}")
         # 删除压缩文件
         os.remove(archive_file)
@@ -113,7 +117,7 @@ def compress_uint64_array(data, output_filepath, lvl=1):
         return
 
     # 存储分段信息：每段的第一个值和文件偏移量
-    segments = np.empty(math.ceil(len(data) / 32768), dtype='uint64,uint64')
+    segments = np.empty(math.ceil(len(data) / BLOCK_SIZE), dtype='uint64,uint64')
     current_offset = 0
 
     # 打开输出文件
@@ -122,14 +126,14 @@ def compress_uint64_array(data, output_filepath, lvl=1):
         n = len(data)
 
         while i < n:
-            end = min(i + 32768, n)
+            end = min(i + BLOCK_SIZE, n)
             segment_data = data[i:end]
             first_value = data[i]
             data_bytes = segment_data.tobytes()
             compressor = lzma.LZMACompressor(preset=lvl)
             compressed_data = compressor.compress(data_bytes) + compressor.flush()
             bytes_written = f.write(compressed_data)
-            segments[i // 32768] = (first_value, current_offset)
+            segments[i // BLOCK_SIZE] = (first_value, current_offset)
             current_offset += bytes_written
             i = end
 
@@ -143,7 +147,7 @@ def _compress_uint64_array_p(data, output_filename, lvl=1):
     num_workers = os.cpu_count()
 
     # 计算总段数和每个工作线程处理的段数
-    total_segments = math.ceil(len(data) / 32768)
+    total_segments = math.ceil(len(data) / BLOCK_SIZE)
     segments_per_worker = math.ceil(total_segments / num_workers)
 
     all_segments = np.empty(total_segments, dtype='uint64,uint64')
@@ -154,8 +158,8 @@ def _compress_uint64_array_p(data, output_filename, lvl=1):
     batch_first_values = []
 
     for seg_idx in range(total_segments):
-        start_idx = seg_idx * 32768
-        end_idx = min((seg_idx + 1) * 32768, len(data))
+        start_idx = seg_idx * BLOCK_SIZE
+        end_idx = min((seg_idx + 1) * BLOCK_SIZE, len(data))
         segment_data = data[start_idx:end_idx]
         first_value = data[start_idx] if len(segment_data) > 0 else 0
 
@@ -258,7 +262,7 @@ def find_value_uint64_compressed(input_filename, segments, value):
     seg_idx = bisect.bisect_left(seg_first_values, value)
 
     if seg_idx < len(seg_first_values) and seg_first_values[seg_idx] == value:
-        return seg_idx * 32768
+        return seg_idx * BLOCK_SIZE
     seg_idx -= 1
 
     # 解压找到的段
@@ -290,7 +294,7 @@ def find_value_uint64_compressed(input_filename, segments, value):
     # 检查是否找到
     if idx_in_segment < len(segment_data) and segment_data[idx_in_segment] == value:
         # 计算全局索引
-        global_index = seg_idx * 32768 + idx_in_segment
+        global_index = seg_idx * BLOCK_SIZE + idx_in_segment
         return global_index
     else:
         return None
