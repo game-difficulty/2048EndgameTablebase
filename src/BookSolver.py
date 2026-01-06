@@ -119,7 +119,7 @@ def recalculate_process(
         if len(d0):
             with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
                 file.write(','.join([str(i), str(length), str(np.max(d0['f1']) / 4e9),
-                                     f'{round(length / (t3 - t0 + 0.0000001) / 1e6, 2)} mbps',
+                                     f'{round(length / max((t3 - t0), 0.01) / 1e6, 2)} mbps',
                                      str(deletion_threshold / 4e9), str(datetime.now())]) + '\n')
 
         d0.tofile(pathname + str(i) + '.book')

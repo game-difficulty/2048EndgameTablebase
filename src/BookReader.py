@@ -190,7 +190,8 @@ class BookReader:
                     offset = random_record_index * record_size
                     file.seek(offset)
                     state = struct.unpack('QI', file.read(record_size))[0]
-                    return np.uint64(bm.gen_new_num(np.uint64(state),
+                    if state:
+                        return np.uint64(bm.gen_new_num(np.uint64(state),
                                                                SingletonConfig().config['4_spawn_rate'])[0])
         return np.uint64(0)
 

@@ -120,6 +120,16 @@ def is_4431_success(encoded_board, target, _):
 
 
 @njit(nogil=True, inline='always')
+def is_4421_pattern(encoded_board):
+    return (np.uint64(encoded_board) & np.uint64(16715775)) == np.uint64(16715775)
+
+
+@njit(nogil=True, inline='always')
+def is_4421_success(encoded_board, target, _):
+    return (np.uint64(encoded_board) >> np.uint64(24) & np.uint64(0xf)) == np.uint64(target)
+
+
+@njit(nogil=True, inline='always')
 def is_444_pattern(encoded_board):
     return (np.uint64(encoded_board) & np.uint64(65535)) == np.uint64(65535)
 

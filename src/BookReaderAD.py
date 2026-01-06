@@ -14,6 +14,7 @@ import Calculator
 from Calculator import re_self
 from BoardMaskerAD import init_masker, mask_board, tile_sum_and_32k_count2, unmask_board
 from BookSolverAD import sym_like
+from LzmaCompressor import find_value_uint64_compressed
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 SymFindFunc = Callable[[np.uint64], Tuple[np.uint64, int]]
@@ -174,9 +175,16 @@ class BookReaderAD:
 
         filepath = os.path.join(pathname, filename)
         index_filepath = os.path.join(filepath, str(count_32k) + '.i')
-        if not os.path.exists(index_filepath):
+        compressed_index_filepath = os.path.join(filepath, str(count_32k) + '.zi')
+        seg_filepath = os.path.join(filepath, str(count_32k) + '.s')
+        if os.path.exists(index_filepath):
+            ind = self.find_value_in_binary(index_filepath, search_key)
+        elif os.path.exists(compressed_index_filepath) and os.path.exists(seg_filepath):
+            segments = np.fromfile(seg_filepath, dtype='uint64, uint64')
+            ind = find_value_uint64_compressed(compressed_index_filepath, segments, search_key)
+        else:
             return '?'
-        ind = self.find_value_in_binary(index_filepath, search_key)
+
         if ind is None:
             return 0
 
@@ -262,7 +270,8 @@ class BookReaderAD:
                     offset = random_record_index * record_size
                     file.seek(offset)
                     state = struct.unpack('Q', file.read(record_size))[0]
-                    return np.uint64(bm.gen_new_num(np.uint64(state),
+                    if state:
+                        return np.uint64(bm.gen_new_num(np.uint64(state),
                                                                  SingletonConfig().config['4_spawn_rate'])[0])
         return np.uint64(0)
 

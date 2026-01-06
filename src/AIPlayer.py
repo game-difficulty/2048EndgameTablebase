@@ -534,7 +534,7 @@ class DispatcherCommon(BaseDispatcher):
     def get_endgame_lvls(self):
         endgame_lvls1, endgame_lvls2, endgame_lvls3 = [], [], []
         large_tile_count = 0
-        for i in range(15,6,-1):
+        for i in range(15,7,-1):
             if self.counts[i] > 1 and i != 15:
                 break
             large_tile_count += self.counts[i]
@@ -542,7 +542,12 @@ class DispatcherCommon(BaseDispatcher):
             if lvl < 12:
                 continue
             if self.counts[i] > 0:
-                endgame_lvls1.extend(self.ad_readers.get((lvl, large_tile_count), []))
+                if i <= 12 and self.counts[i + 1] == 0 and sum(self.counts[i + 1:]) > 4:
+                    readers = self.ad_readers.get((lvl, large_tile_count), [])
+                    endgame_lvls3.extend([reader for reader in readers if reader[2] > 4])
+                    endgame_lvls1.extend([reader for reader in readers if reader[2] <= 4])
+                else:
+                    endgame_lvls1.extend(self.ad_readers.get((lvl, large_tile_count), []))
                 endgame_lvls2.extend(self.ad_readers.get((lvl + 1, large_tile_count), []))
                 endgame_lvls2.extend(self.ad_readers.get((lvl + 2, large_tile_count), []))
             elif self.counts[i] == 0:

@@ -496,6 +496,7 @@ class GameFrame(BaseBoardFrame):
             self.setup_new_game()
 
     def setup_new_game(self):
+        self.has_65k = False
         self.verse_code = 'replay_'
         self.board_encoded, _, new_tile_pos, val = bm.s_gen_new_num(np.uint64(0),
                                                                     SingletonConfig().config['4_spawn_rate'])
@@ -508,7 +509,6 @@ class GameFrame(BaseBoardFrame):
         self.evil_gen.reset_board(self.board)
         self.update_all_frame(self.board)
         self.score = 0
-        self.has_65k = False
         self.history = [(self.board_encoded, self.score)]
 
     def ai_step(self):

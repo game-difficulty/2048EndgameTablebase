@@ -77,8 +77,38 @@ class Analyzer:
         self.rec_step_count = 0
 
     def read_replay(self):
-        with open(self.filepath, encoding="utf-8") as replay:
-            replay_text = replay.read()
+        # 以二进制模式读取整个文件
+        with open(self.filepath, 'rb') as f:
+            raw_data = f.read()
+
+        # 常见编码列表
+        common_encodings = ['utf-8', 'gb18030', 'big5', 'shift_jis', 'euc-kr', 'utf-16', 'utf-16le', 'utf-16be']
+
+        # 先检查BOM
+        if raw_data.startswith(b'\xff\xfe'):
+            encoding = 'utf-16le'
+            replay_text = raw_data.decode(encoding)
+        elif raw_data.startswith(b'\xfe\xff'):
+            encoding = 'utf-16be'
+            replay_text = raw_data.decode(encoding)
+        elif raw_data.startswith(b'\xef\xbb\xbf'):
+            encoding = 'utf-8-sig'
+            replay_text = raw_data.decode(encoding)
+        else:
+            encoding = None
+            for enc in common_encodings:
+                try:
+                    replay_text = raw_data.decode(enc)
+                    encoding = enc
+                    break
+                except UnicodeDecodeError:
+                    continue
+
+        if encoding is None:
+            # 如果都不行，则用latin-1（总是成功）
+            encoding = 'latin-1'
+            replay_text = raw_data.decode(encoding)
+
         return replay_text
 
     def decode_replay(self, replay_text: str):
@@ -701,9 +731,9 @@ class BatchAnalyzeManager(QtCore.QThread):
 
 if __name__ == "__main__":
     pass
-    # anlz = Analyzer(r"C:\Users\Administrator\Downloads\message.txt", 'free12w',
-    #                 12, 'free12w_2048', r"C:\Users\Administrator\Downloads", '0')
-    # anlz.generate_reports()
+    anlz = Analyzer(r"C:\Users\Administrator\Downloads\heshen.txt", 'free12w',
+                    13, 'free12w_4096', r"C:\Users\Administrator\Downloads", '0')
+    anlz.generate_reports()
     #
     # anlz = Analyzer(r"D:\2048calculates\test\analysis\vgame.txt", '2x4',
     #                 8, '2x4_256', r"D:\2048calculates\test\analysis", '0')

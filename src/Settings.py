@@ -529,8 +529,6 @@ class SettingsWindow(QtWidgets.QMainWindow):
         SingletonConfig().config['font_size_factor'] = self.tile_font_size_box.value()
 
     def compress_state_changed(self):
-        if self.advanced_algo_checkBox.isChecked() and self.compress_checkBox.isChecked():
-            self.compress_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         SingletonConfig().config['compress'] = self.compress_checkBox.isChecked()
 
     def optimal_branch_only_state_changed(self):
@@ -548,9 +546,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         SingletonConfig().config['advanced_algo'] = self.advanced_algo_checkBox.isChecked()
         if self.advanced_algo_checkBox.isChecked():
             self.optimal_branch_only_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
-            self.compress_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
             self.optimal_branch_only_state_changed()
-            self.compress_state_changed()
 
             self.smallTileSumLimitLabel = QtWidgets.QLabel(self.centralwidget)
             self.smallTileSumLimitLabel.setText(self.tr("SmallTileSumLimit:"))

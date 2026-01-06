@@ -1,11 +1,10 @@
 from typing import Tuple
 
 import numpy as np
-from numpy.typing import NDArray
 from numba import uint64, bool, njit
+from numpy.typing import NDArray
 
-from BoardMover import encode_board, decode_board, encode_row, decode_row, reverse
-
+from BoardMover import decode_board, encode_row, reverse
 
 """
 移动之后保持masked

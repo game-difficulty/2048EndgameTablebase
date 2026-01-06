@@ -15,7 +15,8 @@ import Config
 from BoardMaskerAD import ParamType
 from BoardMoverAD import decode_board, reverse
 from BookSolverAD import remove_died_ad, create_index_ad, \
-    solve_optimal_success_rate, solve_optimal_success_rate_arr, replace_val, dict_fromfile, expand_ad, dict_tofile
+    solve_optimal_success_rate, solve_optimal_success_rate_arr, replace_val, dict_fromfile, expand_ad, dict_tofile, \
+    do_compress_ad
 from Config import SingletonConfig
 from BookSolverADUtils import (dict_to_structured_array1, dict_to_structured_array2, dict_to_structured_array3,
                                get_array_view10, get_array_view11, get_array_view2, get_array_view3)
@@ -46,6 +47,7 @@ _timer, _counter, _max_rate = 0.0, 0, 0
 
 def handle_solve_restart_ad_c(i, pathname, steps, b2, i2, started):
     if os.path.exists(pathname + str(i) + 'b'):
+        do_compress_ad(pathname + str(i + 2) + 'b')
         logger.debug(f"skipping step {i}")
         return False, None, None
     elif not started:
@@ -118,7 +120,7 @@ def recalculate_process_ad_c(
                        pattern_check_func, sym_func, spawn_rate4, pathname, i)
         if deletion_threshold > 0:
             remove_died_ad(book_dict2, ind_dict2, deletion_threshold)
-        dict_tofile(book_dict2, ind_dict2, pathname, i + 2)
+        dict_tofile(book_dict2, ind_dict2, pathname, i + 2, True)
         del book_dict2, ind_dict2, indind_dict2
 
         # 出2

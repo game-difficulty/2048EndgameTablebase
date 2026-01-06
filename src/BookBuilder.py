@@ -196,8 +196,8 @@ def start_build(pattern: str, target: int, position: int, pathname: str) -> bool
     else:
         steps = int(2 ** target / 2 + {'444': 96, '4431': 64, 'LL': 48, 'L3': 36, '4441': 48, '4432': 48, '4442': 48,
                                        '442': 36, '442t': 36, 't': 36, '4432f': 48, '4432ff': 48, 'L3t': 48, '4442f': 48,
-                                       '4442ff': 48, "3433": 48, "3442": 48, "3432": 48, "2433": 48, "4441f": 48
-                                       }[pattern])
+                                       '4442ff': 48, "3433": 48, "3442": 48, "3432": 48, "2433": 48, "4441f": 48,
+                                       '4421': 48}.get(pattern, 48))
         docheck_step = int(2 ** target / 2) - 16
         _, pattern_check_func, to_find_func, success_check_func, ini = formation_info[pattern]
         if pattern == 'LL' and position == 1:

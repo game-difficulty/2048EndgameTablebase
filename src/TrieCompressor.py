@@ -183,6 +183,8 @@ def compress_and_save_p(ind3, data, output_filename, lvl=1):
             futures.append(executor.submit(
                 worker, start_idx, end_idx, segments_info, shm.name, shm_data.shape, shm_data.dtype,
                 lvl, temp_filename, worker_idx))
+    shm.close()
+    shm.unlink()
 
     # 处理分段数据
     all_segments: List[np.typing.NDArray | None] = [None] * num_workers
@@ -222,6 +224,8 @@ def trie_compress_progress(path, filename):
         func = compress_and_save_p
     else:
         func = compress_and_save
+
+
     ind3, segments = func(ind3, book_, target_dir + 'z', lvl=1)  # 分块压缩，更新索引并记录分块大小
 
     ind0['f1'] += 1 + len(ind0)

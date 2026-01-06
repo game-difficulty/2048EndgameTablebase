@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Callable, Tuple
 
 import numpy as np
+from matplotlib.lines import segment_hits
 from numpy.typing import NDArray
 from numba import njit, prange
 from numba import types
@@ -17,7 +18,7 @@ from Calculator import ReverseLR, ReverseUD, ReverseUL, ReverseUR, Rotate180, Ro
 from Config import SingletonConfig
 from BookSolverADUtils import (dict_to_structured_array1, dict_to_structured_array2, dict_to_structured_array3,
                                get_array_view10, get_array_view11, get_array_view2, get_array_view3)
-from LzmaCompressor import decompress_with_7z
+from LzmaCompressor import decompress_with_7z, compress_uint64_array, decompress_uint64_array
 from SignalHub import progress_signal
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -44,6 +45,7 @@ def handle_solve_restart_ad(i, pathname, steps, b1, b2, i1, i2, started):
     处理断点重连逻辑
     """
     if os.path.exists(pathname + str(i) + 'b'):
+        do_compress_ad(pathname + str(i + 2) + 'b')
         logger.debug(f"skipping step {i}")
         return False, None, None, None, None
     elif not started:
@@ -141,10 +143,10 @@ def recalculate_process_ad(
 
         with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
             file.write(','.join([str(i), str(length), str(max_rate),
-                                 f'{round(length / (t3 - t0 + 0.0000001) / 1e6, 2)} mbps',
+                                 f'{round(length / max((t3 - t0), 0.01) / 1e6, 2)} mbps',
                                  str(deletion_threshold / 4e9), str(datetime.now())]) + '\n')
-        if deletion_threshold > 0:
-            dict_tofile(book_dict2, ind_dict2, pathname, i + 2)  # 再写一次，把成功率低于阈值的局面去掉
+        if deletion_threshold > 0 or SingletonConfig().config.get('compress', False):
+            dict_tofile(book_dict2, ind_dict2, pathname, i + 2, True)  # 再写一次，把成功率低于阈值的局面去掉
 
         del book_dict2, ind_dict2
         dict_tofile(book_dict0, ind_dict0, pathname, i)
@@ -981,7 +983,7 @@ def length_count(book_dict: BookDictType) -> (int, float):
     return length, max_rate / 4e9
 
 
-def dict_tofile(book_dict: BookDictType, ind_dict: IndexDictType, path: str, step: int):
+def dict_tofile(book_dict: BookDictType, ind_dict: IndexDictType, path: str, step: int, compress=False):
     # Create the target directory if it doesn't exist
     folder_path = path + str(step) + 'b'
     os.makedirs(folder_path, exist_ok=True)
@@ -995,8 +997,17 @@ def dict_tofile(book_dict: BookDictType, ind_dict: IndexDictType, path: str, ste
             if os.path.exists(book_filename):
                 os.remove(book_filename)
             continue
+
         # Write the ind_dict[k] data to a file named str(k).i
-        ind_dict[k].tofile(ind_filename)
+        if compress and SingletonConfig().config.get('compress', False):
+            compress_uint64_array(ind_dict[k], os.path.join(folder_path, f"{str(k)}"))
+            if not os.path.exists(os.path.join(folder_path, f"{str(k)}.zi")):
+                ind_dict[k].tofile(ind_filename)
+            if os.path.exists(ind_filename) and os.path.exists(os.path.join(folder_path, f"{str(k)}.zi")):
+                os.remove(ind_filename)
+        else:
+            ind_dict[k].tofile(ind_filename)
+
         # Write the book_dict[k] data to a file named str(k).b
         book_dict[k].tofile(book_filename)
 
@@ -1013,6 +1024,12 @@ def dict_fromfile(path: str, step: int) -> (BookDictType, IndexDictType):
             ind_data = np.fromfile(os.path.join(folder_path, filename), dtype=np.uint64)
             if len(ind_data) > 0:
                 ind_dict[key] = ind_data
+        elif filename.endswith('.zi'):
+            key = np.int8(filename.split('.')[0])  # Extract key from filename (before .zi)
+            segments = np.fromfile(os.path.join(folder_path, f"{str(key)}.s"), dtype='uint64, uint64')
+            ind_data = decompress_uint64_array(os.path.join(folder_path, filename), segments)
+            if len(ind_data) > 0:
+                ind_dict[key] = ind_data
 
     # Now, read the .b files and use the corresponding ind_data to reshape book_data
     for filename in os.listdir(folder_path):
@@ -1026,6 +1043,18 @@ def dict_fromfile(path: str, step: int) -> (BookDictType, IndexDictType):
                 book_dict[key] = book_data_reshaped
 
     return book_dict, ind_dict
+
+
+def do_compress_ad(folder_path: str) -> None:
+    for filename in os.listdir(folder_path):
+        if filename.endswith('.i'):
+            key = np.int8(filename.split('.')[0])
+            if not os.path.exists(os.path.join(folder_path, f"{str(key)}.zi")):
+                ind_data = np.fromfile(os.path.join(folder_path, filename), dtype=np.uint64)
+                compress_uint64_array(ind_data, os.path.join(folder_path, f"{str(key)}"))
+            if (os.path.exists(os.path.join(folder_path, filename))
+                    and os.path.exists(os.path.join(folder_path, f"{str(key)}.zi"))):
+                os.remove(os.path.join(folder_path, filename))
 
 
 """非查表实现"""
