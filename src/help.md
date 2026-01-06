@@ -1,8 +1,8 @@
 # User Manual
 
 **Author**: game_difficulty  
-**Version**: 8.1  
-**Date**: 2025.12.10  
+**Version**: 8.3  
+**Date**: 2026.1.6  
 
 ---
 
@@ -203,9 +203,9 @@ The algorithm will prune positions that do not meet the following conditions:
 **Usage limitations**:  
 - Designed specifically for extremely large formations, not suitable for small formations like L3 or T (may perform worse).  
 - Pruning reduces success rate accuracy. Accuracy loss increases with deviations from optimal paths, higher endgame difficulty, and stricter formations constraints. Typical loss is within 0.01%, with no impact on optimal paths.  
-- **opt only** and **compress** options are unsupported.  
+- **opt only** option is unsupported.  
 
-Using this algorithm, free12w-2048 was successfully computed on a 9950x 128GB RAM computer in ~15 days.   
+Using this algorithm, free12w-4096 was successfully computed on a 9950x 128GB RAM computer in ~24 days.   
 
 ## 6.2 Practice Interface Button Functions
 
@@ -482,4 +482,3 @@ If you encounter any issues while using the software, you can get technical supp
 | 4432f_2048   | 3.5 TB | 1.33 TB     |
 | free9_256    | 460 GB | 170 GB      |
 | free10w_1024 | 2 TB   | 700 GB      |
-
