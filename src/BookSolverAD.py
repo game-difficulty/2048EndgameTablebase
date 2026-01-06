@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Callable, Tuple
 
 import numpy as np
-from matplotlib.lines import segment_hits
 from numpy.typing import NDArray
 from numba import njit, prange
 from numba import types
