@@ -542,7 +542,7 @@ class DispatcherCommon(BaseDispatcher):
             if lvl < 12:
                 continue
             if self.counts[i] > 0:
-                if i <= 12 and self.counts[i + 1] == 0 and sum(self.counts[i + 1:]) > 4:
+                if i <= 12 and self.counts[i + 1] == 0 and sum(self.counts[i + 1:]) >= 4:
                     readers = self.ad_readers.get((lvl, large_tile_count), [])
                     endgame_lvls3.extend([reader for reader in readers if reader[2] > 4])
                     endgame_lvls1.extend([reader for reader in readers if reader[2] <= 4])
@@ -752,3 +752,4 @@ if __name__ == "__main__":
     #
     #
     # history[:steps + 1].tofile(fr'C:\Users\Administrator\Desktop\record\0')
+
