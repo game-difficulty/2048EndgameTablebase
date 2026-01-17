@@ -253,7 +253,7 @@ class PreloadThread(QtCore.QThread):
         bm.move_all_dir(np.uint64(0x10120342216902ac))
         for d in (1, 2, 3, 4):
             bm.decode_board(bm.s_move_board(np.uint64(0x10120342216902ac), d)[0])
-        import Variants.vBoardMover as vbm
+        import VBoardMover as vbm
         vbm.move_all_dir(np.uint64(0x10120342216ff2ac))
         for d in (1, 2, 3, 4):
             vbm.decode_board(vbm.s_move_board(np.uint64(0x10120342216ff2ac), d)[0])

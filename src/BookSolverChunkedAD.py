@@ -2,11 +2,11 @@ import os
 import shutil
 import time
 from datetime import datetime
-from typing import Callable, Tuple
+from typing import Callable, Tuple, TypeAlias, Union
 
 import numpy as np
 import psutil
-from numba import njit, prange
+from numba import njit, prange, from_dtype
 from numba import types
 from numba.typed import Dict
 from numpy.typing import NDArray
@@ -19,17 +19,20 @@ from BookSolverAD import remove_died_ad, create_index_ad, \
     do_compress_ad
 from Config import SingletonConfig
 from BookSolverADUtils import (dict_to_structured_array1, dict_to_structured_array2, dict_to_structured_array3,
-                               get_array_view10, get_array_view11, get_array_view2, get_array_view3)
+                               get_array_view10, get_array_view11)
 from LzmaCompressor import decompress_with_7z
 from SignalHub import progress_signal
 
 PatternCheckFunc = Callable[[np.uint64], bool]
-SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
-ToFindFunc = Callable[[np.uint64], np.uint64]
+SuccessCheckFunc = Callable[[np.uint64, int], bool]
+CanonicalFunc = Callable[[np.uint64], np.uint64]
 SymFindFunc = Callable[[np.uint64], Tuple[np.uint64, int]]
 
+ValidDType: TypeAlias = Union[type[np.uint32], type[np.uint64], type[np.float32], type[np.float64]]
+SuccessRateDType: TypeAlias = Union[np.uint32, np.uint64, np.float32, np.float64]
+
 KeyType1 = types.int8
-ValueType1 = types.uint32[:, :]
+ValueType1 = NDArray[NDArray[SuccessRateDType]]
 BookDictType = Dict[KeyType1, ValueType1]
 ValueType2 = types.uint64[:]
 IndexDictType = Dict[KeyType1, ValueType2]
@@ -45,7 +48,7 @@ logger = Config.logger
 _timer, _counter, _max_rate = 0.0, 0, 0
 
 
-def handle_solve_restart_ad_c(i, pathname, steps, b2, i2, started):
+def handle_solve_restart_ad_c(i, pathname, steps, b2, i2, started, dtype, zero_val):
     if os.path.exists(pathname + str(i) + 'b'):
         do_compress_ad(pathname + str(i + 2) + 'b')
         logger.debug(f"skipping step {i}")
@@ -53,8 +56,8 @@ def handle_solve_restart_ad_c(i, pathname, steps, b2, i2, started):
     elif not started:
         started = True
         if i != steps - 3 or b2 is None:
-            b2, i2 = dict_fromfile(pathname, i + 2)
-            remove_died_ad(b2, i2)
+            b2, i2 = dict_fromfile(pathname, i + 2, dtype)
+            remove_died_ad(b2, i2, dtype, zero_val)
         return started, b2, i2
     return True, b2, i2
 
@@ -75,7 +78,9 @@ def recalculate_process_ad_c(
         spawn_rate4: float = 0.1
 ) -> None:
     started = False
-    deletion_threshold = np.uint32(SingletonConfig().config.get('deletion_threshold', 0.0) * 4e9)
+    success_rate_dtype = SingletonConfig().config.get('success_rate_dtype', 'uint32')
+    template, current_dtype, max_scale, zero_val = Config.DTYPE_CONFIG[success_rate_dtype]
+
     ini_board_sum = np.sum(decode_board(arr_init[0]))
     indind_dict1, indind_dict2 = None, None
     match_dict = None
@@ -90,7 +95,7 @@ def recalculate_process_ad_c(
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
         started, book_dict2, ind_dict2 \
-            = handle_solve_restart_ad_c(i, pathname, steps, book_dict2, ind_dict2, started)
+            = handle_solve_restart_ad_c(i, pathname, steps, book_dict2, ind_dict2, started, current_dtype, zero_val)
         if not started:
             continue
 
@@ -104,7 +109,11 @@ def recalculate_process_ad_c(
             decompress_with_7z(pathname + str(i) + '.7z')
         d0 = np.fromfile(pathname + str(i), dtype=np.uint64)
 
-        book_dict0, ind_dict0 = expand_ad(d0, original_board_sum, tiles_combinations_arr, param, False)
+        book_dict0 = Dict.empty(KeyType1, from_dtype(current_dtype)[:, :])
+        ind_dict0 = Dict.empty(KeyType1, ValueType2)
+        book_dict0, ind_dict0 = expand_ad(d0, original_board_sum, tiles_combinations_arr, param, current_dtype,
+                                          book_dict0, ind_dict0, False)
+
         ind_dict0_keys = write_ind(ind_dict0, pathname, i)
         del d0, book_dict0, ind_dict0
 
@@ -114,22 +123,26 @@ def recalculate_process_ad_c(
         else:
             indind_dict2 = create_index_ad(ind_dict2)
 
+        deletion_threshold_n = SingletonConfig().config.get('deletion_threshold', 0.0)
+        deletion_threshold = current_dtype(deletion_threshold_n * (max_scale - zero_val) + zero_val)
+
         # 出4
         iter_ind_dict4(ind_dict0_keys, book_dict2, ind_dict2, indind_dict2, match_dict,
                        tiles_combinations_arr, permutation_arr, param, original_board_sum,
-                       pattern_check_func, sym_func, spawn_rate4, pathname, i)
-        if deletion_threshold > 0:
-            remove_died_ad(book_dict2, ind_dict2, deletion_threshold)
+                       pattern_check_func, sym_func, current_dtype, max_scale, zero_val, spawn_rate4, pathname, i)
+        if deletion_threshold_n > 0:
+            remove_died_ad(book_dict2, ind_dict2, current_dtype, deletion_threshold)
+
         dict_tofile(book_dict2, ind_dict2, pathname, i + 2, True)
         del book_dict2, ind_dict2, indind_dict2
 
         # 出2
-        book_dict1, ind_dict1 = dict_fromfile(pathname, i + 1)
-        remove_died_ad(book_dict1, ind_dict1)
+        book_dict1, ind_dict1 = dict_fromfile(pathname, i + 1, current_dtype)
+        remove_died_ad(book_dict1, ind_dict1, current_dtype, zero_val)
         indind_dict1 = create_index_ad(ind_dict1)
         iter_ind_dict2(pathname, i, ind_dict0_keys, book_dict1, ind_dict1, indind_dict1, match_dict,
                        tiles_combinations_arr, permutation_arr, param, original_board_sum,
-                       pattern_check_func, sym_func, spawn_rate4)
+                       pattern_check_func, sym_func, current_dtype, max_scale, zero_val, spawn_rate4)
 
         os.rename(pathname + str(i) + 'bt', pathname + str(i) + 'b')
 
@@ -138,9 +151,9 @@ def recalculate_process_ad_c(
         logger.debug(f'step {i} done, solving avg {round(_counter / max(_timer, 0.000001) / 2e6, 2)} mbps\n')
 
         with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
-            file.write(','.join([str(i), str(_counter), str(_max_rate / 4e9),
+            file.write(','.join([str(i), str(_counter), str((_max_rate - zero_val) / (max_scale - zero_val)),
                                  f'{round(_counter / max(_timer, 0.000001) / 2e6, 2)} mbps',
-                                 str(deletion_threshold / 4e9), str(datetime.now())]) + '\n')
+                                 str(deletion_threshold_n), str(datetime.now())]) + '\n')
 
         book_dict2, ind_dict2 = book_dict1, ind_dict1
         del book_dict1, ind_dict1
@@ -149,7 +162,7 @@ def recalculate_process_ad_c(
 
 def iter_ind_dict4(ind_dict0_keys: list, book_dict2, ind_dict2, indind_dict2,
                    match_dict, tiles_combinations_dict, permutation_dict, param,
-                   original_board_sum, pattern_check_func, sym_func, spawn_rate4, path, step):
+                   original_board_sum, pattern_check_func, sym_func, dtype, max_scale, zero_val, spawn_rate4, path, step):
     """
     将输入字典拆分计算出4成功率
     chunk_length: 每个切片的最大长度
@@ -169,7 +182,8 @@ def iter_ind_dict4(ind_dict0_keys: list, book_dict2, ind_dict2, indind_dict2,
         # 剩余可用物理内存（单位：字节）
         mem = psutil.virtual_memory()
         free_mem = mem.available
-        chunk_size = max(2 ** 28, int(free_mem * 0.9 / 4))
+        item_size = np.dtype(dtype).itemsize
+        chunk_size = max(2 ** 28, int(free_mem * 0.9 / item_size))
         chunk_length = np.uint64(chunk_size) // derive_size
         global _timer, _counter, _max_rate
 
@@ -178,7 +192,7 @@ def iter_ind_dict4(ind_dict0_keys: list, book_dict2, ind_dict2, indind_dict2,
             end_idx = min(start_idx + chunk_length, len(positions_array))
             positions_chunk = positions_array[start_idx: end_idx]
             # 这里需要赋0，后面计算结果直接相加
-            book_chunk = np.zeros((len(positions_chunk), derive_size), dtype=np.uint32)
+            book_chunk = np.zeros((len(positions_chunk), derive_size), dtype=dtype)
 
             book_arr2 = dict_to_structured_array1(book_dict2)
             ind_arr2 = dict_to_structured_array1(ind_dict2)
@@ -186,7 +200,7 @@ def iter_ind_dict4(ind_dict0_keys: list, book_dict2, ind_dict2, indind_dict2,
 
             recalculate_ad_c(count_32k, positions_chunk, book_chunk, book_arr2, ind_arr2, indind_arr2,
                              match_dict, tiles_combinations_dict, permutation_dict, param, original_board_sum,
-                             pattern_check_func, sym_func, False, spawn_rate4)
+                             pattern_check_func, sym_func, dtype, max_scale, zero_val,False, spawn_rate4)
             t1 = time.time()
             if t1 > t0:
                 logger.debug(f'step {step}, gen4, count_32k {count_32k}, chunk {start_idx // chunk_length}, '
@@ -203,24 +217,27 @@ def iter_ind_dict4(ind_dict0_keys: list, book_dict2, ind_dict2, indind_dict2,
 
 def iter_ind_dict2(path: str, step: int, ind_dict0_keys: list, book_dict1, ind_dict1, indind_dict1,
                    match_dict, tiles_combinations_dict, permutation_dict, param,
-                   original_board_sum, pattern_check_func, sym_func, spawn_rate4):
+                   original_board_sum, pattern_check_func, sym_func, dtype, max_scale, zero_val, spawn_rate4):
     """
     以迭代器方式分块读取成功率文件用于分块回算
     """
     folder = path + str(step) + 'bt'
+    item_size = np.dtype(dtype).itemsize
 
     for count_32k in ind_dict0_keys:
         positions_array = np.fromfile(os.path.join(folder, f"{count_32k}.i"), dtype='uint64')
         book_path = os.path.join(folder, f"{count_32k}.b")
         file_size = os.path.getsize(book_path)
-        total_elements = file_size // 4
+        total_elements = file_size // item_size
         derive_size = total_elements // len(positions_array)
+
         # 剩余可用物理内存（单位：字节）
         mem = psutil.virtual_memory()
         free_mem = mem.available
-        chunk_size = max(2 ** 28, int(free_mem * 0.9 / 4))
+        chunk_size = max(2 ** 28, int(free_mem * 0.9 / item_size))
         chunk_length = chunk_size // derive_size
         global _timer, _counter, _max_rate
+
         # 分块读取逻辑
         with open(book_path, 'r+b') as f:
             for start_idx in range(0, len(positions_array), chunk_length):
@@ -228,10 +245,10 @@ def iter_ind_dict2(path: str, step: int, ind_dict0_keys: list, book_dict1, ind_d
                 positions_chunk = positions_array[start_idx:row_end]
 
                 # 定位并读取数据块
-                f.seek(start_idx * derive_size * 4)
+                f.seek(start_idx * derive_size * item_size)
                 book_chunk = np.fromfile(
                     f,
-                    dtype=np.uint32,
+                    dtype=dtype,
                     count=len(positions_chunk) * derive_size,
                 ).reshape(len(positions_chunk), derive_size)
 
@@ -243,7 +260,7 @@ def iter_ind_dict2(path: str, step: int, ind_dict0_keys: list, book_dict1, ind_d
 
                 recalculate_ad_c(count_32k, positions_chunk, book_chunk, book_arr1, ind_arr1, indind_arr1 ,
                                  match_dict, tiles_combinations_dict, permutation_dict, param, original_board_sum,
-                                 pattern_check_func, sym_func, True, spawn_rate4)
+                                 pattern_check_func, sym_func, dtype, max_scale, zero_val, True, spawn_rate4)
                 t1 = time.time()
                 if t1 > t0:
                     logger.debug(f'step {step}, gen2, count_32k {count_32k}, chunk {start_idx // chunk_length}, '
@@ -253,7 +270,7 @@ def iter_ind_dict2(path: str, step: int, ind_dict0_keys: list, book_dict1, ind_d
                 _max_rate = max(_max_rate, np.max(book_chunk))
                 # 将计算结果写回原位置
                 # 这里不去除0成功率局面，保证写回大小相同
-                f.seek(start_idx * derive_size * 4)
+                f.seek(start_idx * derive_size * item_size)
                 book_chunk.tofile(f)
                 f.flush()
                 del book_chunk, positions_chunk
@@ -284,12 +301,15 @@ def recalculate_ad_c(
         original_board_sum: np.uint32,
         pattern_check_func: PatternCheckFunc,
         sym_func: SymFindFunc,
+        dtype: ValidDType,
+        max_scale: SuccessRateDType,
+        zero_val: SuccessRateDType,
         is_gen2_step: bool,
         spawn_rate4: float = 0.1
 ):
     pos_rev = np.array([0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15], dtype=np.uint8)
 
-    book_mat = get_array_view11(book_dict, count_32k, np.uint32)
+    book_mat = get_array_view11(book_dict, count_32k, dtype)
     ind_arr = get_array_view10(ind_dict, count_32k, np.uint64)
     indind_arr = get_array_view10(indind_dict, count_32k, np.uint32)
 
@@ -327,7 +347,8 @@ def recalculate_ad_c(
                                                                           pattern_check_func, sym_func,
                                                                           count_32k, book_dict, ind_dict,
                                                                           indind_dict, book_mat, ind_arr, indind_arr,
-                                                                          tiles_combinations_dict, param)
+                                                                          tiles_combinations_dict, param, zero_val,
+                                                                           dtype, max_scale)
 
                         success_probability += optimal_success_rate
                 if is_gen2_step:
@@ -350,7 +371,8 @@ def recalculate_ad_c(
                                                            pattern_check_func, sym_func, rep_v, count_32k, book_dict,
                                                            ind_dict, indind_dict, board_sum,
                                                            match_index, match_mat, book_mat, ind_arr, indind_arr,
-                                                           tiles_combinations_dict, permutation_dict, param)
+                                                           tiles_combinations_dict, permutation_dict, param,
+                                                           dtype, zero_val, max_scale)
 
                         success_probability += optimal_success_rate
                 if is_gen2_step:

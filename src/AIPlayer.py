@@ -6,7 +6,7 @@ from numba.experimental import jitclass
 
 from BoardMover import reverse, s_move_board, encode_board, s_gen_new_num, decode_board
 from BookReader import BookReaderDispatcher
-from Config import SingletonConfig, pattern_32k_tiles_map
+from Config import SingletonConfig, pattern_32k_tiles_map, DTYPE_CONFIG
 
 
 @njit()
@@ -41,7 +41,12 @@ def diffs_evaluation_func(line_masked):
             line_masked[1], line_masked[2])
 
     zero_count = sum([k == 0 for k in line_masked])
-    return int32(max(score_dpdf, score_t) / 4 - zero_count)
+    sum_123 = line_masked[1] + line_masked[2] + line_masked[3]
+    if line_masked[0] > 100 and ((zero_count > 1 and sum_123 < 100) or sum_123 < 12):
+        penalty = 8
+    else:
+        penalty = 0
+    return int32(max(score_dpdf, score_t) / 4 - zero_count - penalty)
 
 
 @njit()
@@ -162,7 +167,7 @@ class AIPlayer:
             t, score = s_move_board(b, d)
             if t == b:
                 continue
-            score = max(0, (score >> 1) - 8) if score < 1000 else (1000 if score < 2000 else score * 2)
+            score = max(0, (score >> 2) - 10) if score < 200 else ((score >> 1) - 20 if score < 800 else (score if score < 2000 else score * 2))
             temp = self.cache.lookup(t, 0)
             if temp is None:
                 temp = int32(self.evaluate(t))
@@ -224,7 +229,7 @@ def search_ai_player(player, b, prob, depth):
         if t == b:
             continue
         # 若更改需同步修改 player.search0
-        score = max(0, (score >> 1) - 8) if score < 1000 else (1000 if score < 2000 else score * 2)
+        score = max(0, (score >> 2) - 10) if score < 200 else ((score >> 1) - 20 if score < 800 else (score if score < 2000 else score * 2))
         temp = player.cache.lookup(t, depth)
         if temp is None:
             temp = np.float64(0.0)
@@ -291,197 +296,6 @@ class BaseDispatcher:
         raise NotImplementedError('Subclasses must implement the dispatcher method')
 
 
-class DispatcherSpecialized(BaseDispatcher):
-    def __init__(self, board, board_encoded):
-        super().__init__(board, board_encoded)
-        self.ad_readers = dict()
-        self.init_bookreader()
-        self.success_count = 0
-
-    def init_bookreader(self):
-        if 'free12w_2048' in SingletonConfig().config['filepath_map'].keys():
-            self.book_reader.dispatch(SingletonConfig().config['filepath_map']['free12w_2048'], 'free12w', '2048')
-            self.ad_readers['free12w_2048'] = (self.book_reader.use_ad, self.book_reader.book_reader_ad)
-        if 'free11w_2048' in SingletonConfig().config['filepath_map'].keys():
-            self.book_reader.dispatch(SingletonConfig().config['filepath_map']['free11w_2048'], 'free11w', '2048')
-            self.ad_readers['free11w_2048'] = (self.book_reader.use_ad, self.book_reader.book_reader_ad)
-        if '4442f_2048' in SingletonConfig().config['filepath_map'].keys():
-            self.book_reader.dispatch(SingletonConfig().config['filepath_map']['4442f_2048'], '4442f', '2048')
-            self.ad_readers['4442f_2048'] = (self.book_reader.use_ad, self.book_reader.book_reader_ad)
-        if 'free11w_512' in SingletonConfig().config['filepath_map'].keys():
-            self.book_reader.dispatch(SingletonConfig().config['filepath_map']['free11w_512'], 'free11w', '512')
-            self.ad_readers['free11w_512'] = (self.book_reader.use_ad, self.book_reader.book_reader_ad)
-
-    def reset_bookreader(self, key):
-        self.book_reader.use_ad, self.book_reader.book_reader_ad = self.ad_readers[key]
-
-    def check_free12w_2k(self):
-        if 'free12w_2048' not in SingletonConfig().config['filepath_map'].keys():
-            self.last_operator = 0
-            self.current_table = 'AI'
-            return 'AI'
-        masked_board = self.mask(4)
-        self.reset_bookreader('free12w_2048')
-        r1 = self.book_reader.move_on_dic(masked_board, 'free12w', '2048', 'free12w_2048')
-        move = list(r1.keys())[0]
-        if isinstance(r1[move], float) and r1[move] > 0.6:
-            if r1[move] > 0.9999999:
-                self.success_count += 1
-            else:
-                self.success_count = max(0, self.success_count-2)
-            if self.success_count < 4:
-                self.last_operator = 1
-                self.current_table = 'free12w_2048'
-                return move
-            elif r1[move] == 1 and self.is_final_2k_merge():
-                return self.check_free11w_2k()
-        elif ((r1[move] in (0, '') or (isinstance(r1[move], float) and r1[move] <= 0.6))
-              and np.max(self.counts[8:]) == 1):  # 删除的局面比较多，可能查不到
-            self.free11w2k_to_free11w512()
-            return self.check_free11w_512()
-        self.last_operator = 0
-        self.current_table = 'AI'
-        return 'AI'
-
-    def check_free11w_2k(self):
-        if 'free11w_2048' not in SingletonConfig().config['filepath_map'].keys():
-            self.last_operator = 0
-            self.current_table = 'AI'
-            return 'AI'
-        masked_board = self.mask(5)
-        self.reset_bookreader('free11w_2048')
-        r1 = self.book_reader.move_on_dic(masked_board, 'free11w', '2048', 'free11w_2048')
-        move = list(r1.keys())[0]
-        if isinstance(r1[move], float) and r1[move] > 0.06:
-            if r1[move] > 0.9999999:
-                self.success_count += 1
-            else:
-                self.success_count = max(0, self.success_count-2)
-            if self.success_count < 5:
-                self.last_operator = 2
-                self.current_table = 'free11w_2048'
-                return move
-        elif ((r1[move] in (0, '') or (isinstance(r1[move], float) and r1[move] <= 0.06))
-              and np.max(self.counts[8:]) == 1):  # 删除的局面比较多，可能查不到
-            self.free11w2k_to_free11w512()
-            return self.check_free11w_512()
-
-        self.last_operator = 0
-        self.current_table = 'AI'
-        return 'AI'
-
-    def check_4442f_2k(self):
-        if '4442f_2048' not in SingletonConfig().config['filepath_map'].keys():
-            self.last_operator = 0
-            self.current_table = 'AI'
-            return 'AI'
-        if ((self.counts[10] == 2 and np.sum(self.counts[11:]) == 2 and self.counts[11] == 1 and np.sum(self.board[self.board < 512]) < 120) or
-            (self.counts[9] == 2 and np.sum(self.counts[10:]) == 2 and self.counts[10] == 1 and np.sum(self.board[self.board < 512]) < 120) or
-            (self.counts[9] == 2 and np.sum(self.counts[10:]) == 3 and self.counts[10] == 1 and self.counts[11] == 1)):
-            self.last_operator = 0
-            return 'AI'
-        if ((np.sum(self.board[self.board < 1024]) < 100 and self.counts[10] == 2 and np.sum(self.counts[11:]) == 2) or
-            (np.sum(self.board[self.board < 512]) < 80 and self.counts[9] == 2 and np.sum(self.counts[10:]) == 2)):
-            self.last_operator = 0
-            return 'AI'
-
-        masked_board = self.mask(3)
-
-        if self.counts[9] == 2 and np.sum(self.counts[10:]) == 2 and self.counts[10] == 0:
-            # 把两个512改为1024，让4442f变阵
-            masked_board[masked_board == 512] = 1024
-
-        self.reset_bookreader('4442f_2048')
-        r1 = self.book_reader.move_on_dic(masked_board, '4442f', '2048', '4442f_2048')
-        move = list(r1.keys())[0]
-        if isinstance(r1[move], float) and r1[move] > 0.95:
-            if r1[move] > 0.9999999:
-                self.success_count += 1
-            else:
-                self.success_count = max(0, self.success_count-2)
-            if self.success_count < 4:
-                self.last_operator = 3
-                self.current_table = '4442f_2048'
-                return move
-        elif ((r1[move] in (0, '') or (isinstance(r1[move], float) and r1[move] <= 0.95)) and
-              np.max(self.counts[7:]) == 1) and np.sum(self.counts[7:]) > 4:  # 4442f删除的局面比较多，可能查不到
-            return self.check_free11w_512()
-
-        self.last_operator = 0
-        self.current_table = 'AI'
-        return 'AI'
-
-    def check_free11w_512(self):
-        if 'free11w_512' not in SingletonConfig().config['filepath_map'].keys():
-            self.last_operator = 0
-            self.current_table = 'AI'
-            return 'AI'
-        masked_board = self.mask(5)
-        self.reset_bookreader('free11w_512')
-        r1 = self.book_reader.move_on_dic(masked_board, 'free11w', '512', 'free11w_512')
-        move = list(r1.keys())[0]
-        if isinstance(r1[move], float) and r1[move] > 0.1:
-            if r1[move] > 0.9998:
-                self.success_count += 1
-            else:
-                self.success_count = max(0, self.success_count-2)
-            if self.success_count < 3:
-                self.last_operator = 4
-                self.current_table = 'free11w_512'
-                return move
-        self.last_operator = 0
-        self.current_table = 'AI'
-        return 'AI'
-
-    def is_endgame_65k(self):
-        """1、是残局 2、不即将成功(大数无重复小数无连续合并)"""
-        return np.all(self.counts[-5:] == 1)
-
-    def is_endgame_32k(self):
-        return np.sum(self.counts[-5:]) == 4 and np.max(self.counts[-6:]) == 1
-
-    def is_final_2k_merge(self):
-        # 让free11w-2k做衔接，尽可能以2432进final 2k
-        if np.all(self.counts[-4:] == 1) and self.counts[11] == 0 and self.counts[10] == 1 and self.counts[9] >= 1:
-            board_flatten = self.board.flatten()
-            top4_pos = np.argpartition(board_flatten, -4)[-4:]
-            top4_pos = tuple(sorted(top4_pos))
-            return top4_pos in ((2, 3, 14, 15), (0, 1, 12, 13), (8, 11, 12, 15), (0, 3, 4, 7))
-        return False
-
-    # 前n大数(>512)有相同值
-    def with_duplicate(self, n, tile_th=-7):
-        i = -1
-        c = 0
-        while c < (n - 1) and i > tile_th:
-            if self.counts[i] > 1:
-                return True
-            c += self.counts[i]
-            i -= 1
-        return False
-
-    def free11w2k_to_free11w512(self):
-        if (self.counts[10] + self.counts[9] == 1) and self.counts[8] == 0 and self.counts[7] < 2:
-            self.board[self.board == 512] = 256
-            self.board[self.board == 1024] = 256
-        elif self.counts[9] == 1 and np.sum(self.counts[9:]) == 6 and self.counts[8] == 0 and self.counts[7] < 2:
-            self.board[self.board == 512] = 256
-
-    def dispatcher(self):
-        large_tiles = np.sum(self.counts[-7:])  # 大于等于512的格子数
-        if large_tiles < 3 or self.with_duplicate(3, -8) or self.with_duplicate(4, -6):  #or np.sum(self.counts[-8:]) < 3
-            self.last_operator = 0
-            self.current_table = 'AI'
-            return 'AI'
-        if self.is_endgame_65k():
-            return self.check_free11w_2k()
-        if self.is_endgame_32k():
-            return self.check_free12w_2k()
-        if large_tiles == 5 and np.max(self.counts[8:]) == 1:
-            return self.check_free11w_512()
-        return self.check_4442f_2k()
-
-
 class DispatcherCommon(BaseDispatcher):
     def __init__(self, board, board_encoded):
         super().__init__(board, board_encoded)
@@ -489,17 +303,19 @@ class DispatcherCommon(BaseDispatcher):
         self.init_bookreader()
 
     def init_bookreader(self):
-        for i, table in enumerate(SingletonConfig().config['filepath_map'].keys()):
+        current_spawn_rate4 = SingletonConfig().config['4_spawn_rate']
+        for i, (table, spawn_rate4) in enumerate(SingletonConfig().config['filepath_map'].keys()):
+            if abs(current_spawn_rate4 - spawn_rate4) >= 0.01:
+                continue
             if SingletonConfig().check_pattern_file(table):
                 pattern_param = table.split('_')
                 pattern = pattern_param[0]
                 target_str = pattern_param[1]
                 target = int(np.log2(int(target_str)))
-                self.book_reader.dispatch(SingletonConfig().config['filepath_map'][table], pattern, target_str)
+                self.book_reader.dispatch(SingletonConfig().config['filepath_map'][(table, spawn_rate4)], pattern, target_str)
                 _32k, _free32k, _fix32k_pos = pattern_32k_tiles_map[pattern]
                 lvl = _32k + target
-                if pattern.startswith('free') and not pattern.endswith('w'):
-                    lvl += 1
+
                 if (lvl, _32k) not in self.ad_readers:
                     self.ad_readers[(lvl, _32k)] = []
                 self.ad_readers[(lvl, _32k)].append((lvl, _32k, _free32k, pattern, target, target_str, table, i + 1,
@@ -513,18 +329,24 @@ class DispatcherCommon(BaseDispatcher):
         self.book_reader.use_ad, self.book_reader.book_reader_ad) = table_param
         masked_board = self.mask(_32k)
 
-        r1 = self.book_reader.move_on_dic(masked_board, pattern, target_str, table)
+        r1, success_rate_dtype = self.book_reader.move_on_dic(masked_board, pattern, target_str, table)
+        _, _, _, zero_val = DTYPE_CONFIG.get(success_rate_dtype, DTYPE_CONFIG['uint32'])
+        r1 = {key: (value + zero_val if isinstance(value, (int, float, np.integer, np.floating)) else value) 
+              for key, value in r1.items()}
+
         move = list(r1.keys())[0]
-        if isinstance(r1[move], float):
+        success_rate = r1[move]
+
+        if isinstance(success_rate, (float, np.floating)):
             remainder = np.sum(self.board) % (1 << target)
-            if (table_type == 1 and r1[move] > 0.9999999 and remainder < 24) or (
+            if (table_type == 1 and success_rate > 0.9999999 and remainder < 24) or (
                 table_type == 2 and remainder < 32) or (
-                table_type == 3 and r1[move] > 0.9999999 and (remainder > ((1 << target) - 4) or remainder < 24)):
+                table_type == 3 and success_rate > 0.9999999 and (remainder > ((1 << target) - 4) or remainder < 24)):
                 self.last_operator = 0
                 self.current_table = 'AI'
                 return 'AI'
 
-            if r1[move] > 0:
+            if success_rate > 0:
                 self.last_operator = i
                 self.current_table = table
                 return move
@@ -542,7 +364,7 @@ class DispatcherCommon(BaseDispatcher):
             if lvl < 12:
                 continue
             if self.counts[i] > 0:
-                if i <= 12 and self.counts[i + 1] == 0 and sum(self.counts[i + 1:]) >= 4:
+                if i <= 12 and self.is_unfree_endgame(i):
                     readers = self.ad_readers.get((lvl, large_tile_count), [])
                     endgame_lvls3.extend([reader for reader in readers if reader[2] > 4])
                     endgame_lvls1.extend([reader for reader in readers if reader[2] <= 4])
@@ -556,6 +378,12 @@ class DispatcherCommon(BaseDispatcher):
         endgame_lvls1.sort(key=lambda x: x[2], reverse=True)
 
         return endgame_lvls1, endgame_lvls2, endgame_lvls3
+
+    def is_unfree_endgame(self, i):
+        for j in range(i + 1, 14):
+            if self.counts[j] == 0:
+                return sum(self.counts[j:]) >= 4
+        return False
 
     def dispatcher(self):
         for tables_list, table_type in zip(self.get_endgame_lvls(), (1, 2, 3)):
@@ -581,15 +409,11 @@ class Dispatcher:
         self.switch_strategy(strategy_type)
 
     def _init_strategies(self, board, board_encoded):
-        self._strategies['specialized'] = DispatcherSpecialized(board, board_encoded)
         self._strategies['common'] = DispatcherCommon(board, board_encoded)
 
     @staticmethod
     def check_tables():
-        use_specialized = True
-        for table in ('free12w_2048', 'free11w_2048', '4442f_2048', 'free11w_512'):
-            use_specialized &= SingletonConfig().check_pattern_file(table)
-        return 'specialized' if use_specialized else 'common'
+        return 'common'
 
     def switch_strategy(self, strategy_type):
         """切换当前使用的策略"""
@@ -696,41 +520,42 @@ def search_evil_gen(evil_gen, b, depth):
 
 
 if __name__ == "__main__":
-    history = np.empty(1000, dtype='uint64,uint32')
-    score_sum = 0
-
-    b1 = np.array([[   0 ,   0,  0,  8],
- [   0,   2 ,  2,  4],
- [   2  ,  8 ,  4096,  8],
- [   8192,   2,   1024,   512]], dtype=np.int32)
-    print(b1)
-    s1 = AIPlayer(b1)
-    g1 = EvilGen(b1)
-    s1.start_search(2)
-    g1.gen_new_num(2)
-    b1 = np.uint64(encode_board(b1))
-    print(s1.evaluate(b1))
-
-    t_start = time.time()
-    for steps in range(240):
-        history[steps] = b1, score_sum
-        s1.reset_board(decode_board(b1))
-        t0 = time.time()
-        s1.start_search(6)
-        # print(round(s1.cache.lookup_count / (time.time() - t0) / 1e6, 1), round(s1.node / (time.time() - t0) / 1e6, 1),
-        #     s1.node, round(time.time() - t0, 4))
-        print({0:None, 1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}[s1.best_operation])
-        if not s1.best_operation:
-            print((time.time() - t_start) / steps)
-            break
-        b1, score = s_move_board(b1, s1.best_operation)
-        score_sum += score
-        b1 = np.uint64(b1)
-        g1.reset_board(decode_board(b1))
-        b1 = np.uint64(g1.gen_new_num(5)[0]) if (steps < 0 or (np.random.rand(1)[0] < 0.10) and steps < 0) else np.uint64(s_gen_new_num(b1)[0])
-
-        print(decode_board(b1))
-        print()
+    pass
+ #    history = np.empty(1000, dtype='uint64,uint32')
+ #    score_sum = 0
+ #
+ #    b1 = np.array([[   0 ,   0,  0,  8],
+ # [   0,   2 ,  2,  4],
+ # [   2  ,  8 ,  4096,  8],
+ # [   8192,   2,   1024,   512]], dtype=np.int32)
+ #    print(b1)
+ #    s1 = AIPlayer(b1)
+ #    g1 = EvilGen(b1)
+ #    s1.start_search(2)
+ #    g1.gen_new_num(2)
+ #    b1 = np.uint64(encode_board(b1))
+ #    print(s1.evaluate(b1))
+ #
+ #    t_start = time.time()
+ #    for steps in range(240):
+ #        history[steps] = b1, score_sum
+ #        s1.reset_board(decode_board(b1))
+ #        t0 = time.time()
+ #        s1.start_search(6)
+ #        # print(round(s1.cache.lookup_count / (time.time() - t0) / 1e6, 1), round(s1.node / (time.time() - t0) / 1e6, 1),
+ #        #     s1.node, round(time.time() - t0, 4))
+ #        print({0:None, 1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}[s1.best_operation])
+ #        if not s1.best_operation:
+ #            print((time.time() - t_start) / steps)
+ #            break
+ #        b1, score = s_move_board(b1, s1.best_operation)
+ #        score_sum += score
+ #        b1 = np.uint64(b1)
+ #        g1.reset_board(decode_board(b1))
+ #        b1 = np.uint64(g1.gen_new_num(5)[0]) if (steps < 0 or (np.random.rand(1)[0] < 0.10) and steps < 0) else np.uint64(s_gen_new_num(b1)[0])
+ #
+ #        print(decode_board(b1))
+ #        print()
 
     # be = np.uint64(encode_board(b1))
     # ai_dispatcher = Dispatcher(b1, be)
@@ -752,4 +577,3 @@ if __name__ == "__main__":
     #
     #
     # history[:steps + 1].tofile(fr'C:\Users\Administrator\Desktop\record\0')
-

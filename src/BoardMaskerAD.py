@@ -14,8 +14,8 @@ from Config import SingletonConfig
 logger = Config.logger
 
 PatternCheckFunc = Callable[[np.uint64], bool]
-SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
-ToFindFunc = Callable[[np.uint64], np.uint64]
+SuccessCheckFunc = Callable[[np.uint64, int], bool]
+CanonicalFunc = Callable[[np.uint64], np.uint64]
 SymFindFunc = Callable[[np.uint64], Tuple[np.uint64, int]]
 
 KeyType = types.UniTuple(types.uint8, 2)

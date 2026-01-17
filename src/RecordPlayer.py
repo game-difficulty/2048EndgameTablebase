@@ -284,6 +284,23 @@ class ReplayFrame(BaseBoardFrame):
             self.board = bm.decode_board(self.board_encoded)
             self.update_all_frame(self.board)
 
+    @staticmethod
+    def evaluation_of_performance(loss):
+        if loss > 1 - 3e-10:
+            return "Perfect!"
+        elif loss >= 0.999:
+            return "Excellent!"
+        elif loss >= 0.99:
+            return "Nice try!"
+        elif loss >= 0.975:
+            return "Not bad!"
+        elif loss >= 0.9:
+            return "Mistake!"
+        elif loss >= 0.75:
+            return "Blunder!"
+        else:
+            return "Terrible!"
+
 # noinspection PyAttributeOutsideInit
 class ReplayWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -543,13 +560,75 @@ class ReplayWindow(QtWidgets.QMainWindow):
 
             self.results_label.setMarkdown(results_text)
         else:
-            self.results_label.setMarkdown('')
+            self.show_summary()
 
         self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
 
         if self.ai_state:
             steps_per_second = SingletonConfig().config['demo_speed'] / 10
             self.ai_timer.singleShot(int(1000 / steps_per_second), lambda: self.handle_one_step(1))
+
+    def show_summary(self):
+        frame = self.gameframe
+        if len(frame.record) == 0:
+            self.results_label.setMarkdown('')
+            return
+
+        # 1. 基础数据聚合
+        total_moves = len(frame.losses)
+        final_gof = frame.goodness_of_fit[-1] if total_moves > 0 else 0
+        max_combo = np.max(frame.combo) if total_moves > 0 else 0
+
+        # 2. 计算损失
+        # 相对损失已经在 frame.losses 中 (sr_chosen / sr_optimal)
+        min_relative_rate = np.min(frame.losses)
+        max_rel_loss = (1 - min_relative_rate) * 100  # 转化为百分比
+
+        # 3. 统计各评价等级数量
+        perf_counts = {
+            "Perfect!": 0, "Excellent!": 0, "Nice try!": 0,
+            "Not bad!": 0, "Mistake!": 0, "Blunder!": 0, "Terrible!": 0
+        }
+        for l in frame.losses:
+            label = frame.evaluation_of_performance(l)
+            # 去掉 Markdown 的加粗符号进行匹配
+            clean_label = label.replace('*', '')
+            if clean_label in perf_counts:
+                perf_counts[clean_label] += 1
+
+        # 4. 格式化文本
+        pattern_name = frame.pattern.strip()
+
+        # 标题栏：包含定式名称和总步数
+        summary_header = "🏆 **" + self.tr("Analysis:") + f" {pattern_name}**"
+        move_info = "🏁 " + self.tr("Finished in") + f" *{total_moves}* " + self.tr("moves")
+
+        # 核心数据部分：使用列表保证换行，并用反引号突出数值
+        stats_section = (
+            self.tr("* Total Goodness of Fit:") + f" {final_gof:.4f}\n\n" +
+            self.tr("* Maximum Combo:") + f" {max_combo}x\n\n" +
+            self.tr("* Max Relative Loss:") + f" {max_rel_loss:.2f}%\n\n"
+        )
+
+        # 评价 breakdown 部分：对齐显示
+        eval_header = "🎯 Performance Breakdown"
+        eval_lines = []
+        for key, count in perf_counts.items():
+            # 使用 &nbsp; 增加一点缩进感，使用列表确保换行
+            eval_lines.append(f"- {key:<12} {count}")
+        eval_text = "\n".join(eval_lines)
+
+        # 最终组装：使用 --- 增加视觉分隔
+        full_summary = (
+            f"{summary_header}\n\n"
+            f"{move_info}\n\n"
+            f"{stats_section}\n\n"
+            f"---\n\n"
+            f"{eval_header}\n\n"
+            f"{eval_text}"
+        )
+
+        self.results_label.setMarkdown(full_summary)
 
     def handleSliderMove(self, target_step):
         # # 如果AI正在运行则停止
@@ -581,7 +660,7 @@ class ReplayWindow(QtWidgets.QMainWindow):
             self.statusbar.showMessage(record, 1000000)
             try:
                 splits = os.path.basename(record).split('_')
-                pattern = '_'.join(splits[:3]) if len(splits) > 4 else '_'.join(splits[:2])
+                pattern = '_'.join(splits[:2])
                 self.table_state.setText(pattern)
                 self.gameframe.pattern = pattern
             except IndexError:

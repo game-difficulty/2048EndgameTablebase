@@ -9,9 +9,11 @@ import numpy as np
 from numba import njit
 from numpy.typing import NDArray
 
+from Config import DTYPE_CONFIG
+
 
 @njit(nogil=True)
-def compress_data_how(data):  # u32 u8 u8 u8 u8 u32
+def data_compress_index(data):  # u32 u8 u8 u8 u8 u32
     # 存储索引的列表
     ind0 = np.empty(255, dtype='uint8,uint32')  # f4,ind1_pos
     ind1 = np.empty(65535, dtype='uint8,uint32')  # f3,ind2_pos
@@ -207,15 +209,15 @@ def compress_and_save_p(ind3, data, output_filename, lvl=1):
     return ind3, all_seg
 
 
-def trie_compress_progress(path, filename):
+def trie_compress_progress(path, filename, dtype):
     target_file = os.path.join(path, filename[:-4] + 'zt')
     fullfilepath = os.path.join(path, filename)
     os.makedirs(target_file, exist_ok=True)
 
-    book = np.fromfile(fullfilepath, dtype="uint32,uint8,uint8,uint8,uint8,uint32")
-    ind0, ind1, ind2, ind3 = compress_data_how(book)
+    book = np.fromfile(fullfilepath, dtype=f"uint32,uint8,uint8,uint8,uint8,{np.dtype(dtype).name}")
+    ind0, ind1, ind2, ind3 = data_compress_index(book)
 
-    book_ = np.empty(len(book), dtype='uint32,uint32')  # 后32位和成功率，后面分块压缩
+    book_ = np.empty(len(book), dtype=f'uint32,{np.dtype(dtype).name}')  # 后32位和成功率，后面分块压缩
     book_['f0'] = book['f0']
     book_['f1'] = book['f5']
     del book
@@ -224,7 +226,6 @@ def trie_compress_progress(path, filename):
         func = compress_and_save_p
     else:
         func = compress_and_save
-
 
     ind3, segments = func(ind3, book_, target_dir + 'z', lvl=1)  # 分块压缩，更新索引并记录分块大小
 
@@ -294,17 +295,17 @@ def _get_seg_position(segments, pos):
 
 
 @njit(nogil=True)
-def search_block(block, target):
+def search_block(block, target, zero_val):
     low, high = 0, len(block) - 1
     while low <= high:
         mid = (low + high) // 2
         if block[mid]['f0'] == target:
-            return block[mid]['f1'] / 4000000000
+            return block[mid]['f1']
         elif block[mid]['f0'] < target:
             low = mid + 1
         else:
             high = mid - 1
-    return 0  # 没找到
+    return zero_val  # 没找到
 
 
 @njit(nogil=True)
@@ -321,7 +322,7 @@ def search_block2(block, target):
     return 0, False  # 没找到
 
 
-def trie_decompress_search(filepath, board, ind, segments):
+def trie_decompress_search(filepath, board, ind, segments, success_rate_dtype: str):
     start, end, pos, ind3_seg = search_tree(filepath, ind, segments, board)
     if not start and not end:
         return 0.0  # 没找到
@@ -329,18 +330,27 @@ def trie_decompress_search(filepath, board, ind, segments):
         f.seek(start)  # 定位到块的起始位置
         compressed_data = f.read(end - start)  # 读取压缩数据块
         decompressed_data = lzma.decompress(compressed_data)  # 解压数据块
-    block = np.frombuffer(decompressed_data, dtype='uint32,uint32')
+
+    _, val_type, max_scale, zero_val = DTYPE_CONFIG.get(success_rate_dtype, DTYPE_CONFIG['uint32'])
+    block_dtype = np.dtype([('f0', np.uint32), ('f1', val_type)])
+    block = np.frombuffer(decompressed_data, dtype=block_dtype)
     target = np.uint32(board & np.uint64(0xffffffff))
-    high = ind3_seg[pos + 1]['f1'] + 1
-    low = ind3_seg[pos]['f1']
+    high = int(ind3_seg[pos + 1]['f1']) + 1
+    low = int(ind3_seg[pos]['f1'])
+
     if high == 1:
-        if target == block['f0'][0]:
-            return block['f1'][0] / 4000000000
+        if target == block[0]['f0']:
+            raw_val = block[0]['f1']
+            # 使用统一的归一化函数
+            return raw_val / max_scale if max_scale > 1.0 else raw_val
         high = len(block)
+
     if low != 0:
         low += 1
-    result = search_block(block[low:high], target)
-    return result
+
+    raw_val = search_block(block[low:high], target, zero_val)
+
+    return raw_val / max_scale if max_scale > 1.0 else raw_val
 
 
 """

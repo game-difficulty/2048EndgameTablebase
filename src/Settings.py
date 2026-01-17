@@ -5,9 +5,8 @@ import numpy as np
 from PyQt5 import QtCore, QtWidgets, QtGui
 from PyQt5.QtWidgets import QToolButton, QMenu, QAction
 
-from BookBuilder import start_build
-from Variants.vBookBuilder import v_start_build
-from Config import SingletonConfig, category_info, theme_map, ColorManager
+from BookBuilder import start_build, v_start_build
+from Config import SingletonConfig, category_info, theme_map, ColorManager, DTYPE_CONFIG
 from SignalHub import progress_signal
 
 
@@ -151,13 +150,6 @@ class SettingsWindow(QtWidgets.QMainWindow):
         for category, items in category_info.items():
             self.pattern_combo.add_category(category, items)
         self.selfLayout.addWidget(self.pattern_combo, 0, 1, 1, 1)
-        self.pattern_combo.currentTextChanged.connect(self.update_pos_combo_visibility)
-
-        self.pos_combo = SingleLevelComboBox(self.tr("Target Position"), self.centralwidget)
-        self.pos_combo.setObjectName("pos_combo")
-        self.pos_combo.add_items(["0", "1", "2"])
-        self.selfLayout.addWidget(self.pos_combo, 0, 3, 1, 1)
-        self.pos_combo.hide()
 
         self.build_bt = QtWidgets.QPushButton(self.centralwidget)
         self.build_bt.setObjectName("build_bt")
@@ -220,7 +212,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
             'Remove low success rate positions to reduce table size. '
             'Does not affect calculation accuracy.'))
         # self.mini_table_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.mini_table_text, 4, 1, 1, 2)
+        self.selfLayout.addWidget(self.mini_table_text, 4, 1, 1, 1)
         self.deletion_threshold_box = QtWidgets.QDoubleSpinBox(self.centralwidget)
         self.deletion_threshold_box.setObjectName("deletion_threshold_box")
         self.deletion_threshold_box.setRange(0.0, 1.0)
@@ -230,32 +222,50 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.deletion_threshold_box.valueChanged.connect(self.update_deletion_threshold_rate)  # type: ignore
         self.selfLayout.addWidget(self.deletion_threshold_box, 4, 2, 1, 1)
 
+        self.dtype_text = QtWidgets.QLabel(self.centralwidget)
+        self.dtype_text.setObjectName("dtype_text")
+        self.dtype_text.setToolTip(self.tr(
+            'Success Rate Data Storage Format. '
+            'Recommended Default: uint32'))
+        self.selfLayout.addWidget(self.dtype_text, 5, 1, 1, 1)
+        self.dtype_combo = QtWidgets.QComboBox(self.centralwidget)
+        self.dtype_combo.setObjectName("dtype_combo")
+        for dtype in DTYPE_CONFIG.keys():
+            self.dtype_combo.addItem(dtype)
+        current_dtype = SingletonConfig().config.get('success_rate_dtype', 'uint32')
+        if current_dtype in DTYPE_CONFIG.keys():
+            self.dtype_combo.setCurrentText(current_dtype)
+        else:
+            self.dtype_combo.setCurrentText('uint32')
+        self.selfLayout.addWidget(self.dtype_combo, 5, 2, 1, 1)
+        self.dtype_combo.currentTextChanged.connect(self.update_success_rate_dtype)
+
         self.hline = QtWidgets.QFrame(self.centralwidget)
         self.hline.setFrameShape(QtWidgets.QFrame.HLine)
         self.hline.setStyleSheet("border-width: 3px; border-style: inset;")
         self.hline.setFrameShadow(QtWidgets.QFrame.Sunken)
-        self.selfLayout.addWidget(self.hline, 5, 0, 1, 4)
+        self.selfLayout.addWidget(self.hline, 6, 0, 1, 4)
 
         self.colorset_text = QtWidgets.QLabel(self.centralwidget)
         self.colorset_text.setObjectName("colorset_text")
         self.colorset_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.colorset_text, 6, 0, 1, 1)
+        self.selfLayout.addWidget(self.colorset_text, 7, 0, 1, 1)
         self.color_combo = QtWidgets.QComboBox(self.centralwidget)
         self.color_combo.setObjectName("color_combo")
         for i in range(1, 16):
             self.color_combo.addItem(str(2 ** i))
-        self.selfLayout.addWidget(self.color_combo, 6, 1, 1, 1)
+        self.selfLayout.addWidget(self.color_combo, 7, 1, 1, 1)
         self.color_bt = QtWidgets.QPushButton(self.centralwidget)
         self.color_bt.clicked.connect(self.show_ColorDialog)  # type: ignore
         self.color_bt.setObjectName("color_bt")
-        self.selfLayout.addWidget(self.color_bt, 6, 2, 1, 1)
+        self.selfLayout.addWidget(self.color_bt, 7, 2, 1, 1)
 
         # 创建主题选择按钮（下拉菜单）
         self.theme_button = QtWidgets.QToolButton(self.centralwidget)
         self.theme_button.setMinimumSize(150, 20)
         self.theme_button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
         self.theme_button.setObjectName("theme_button")
-        self.selfLayout.addWidget(self.theme_button, 6, 3, 1, 1)
+        self.selfLayout.addWidget(self.theme_button, 7, 3, 1, 1)
         self.theme_menu = QtWidgets.QMenu(self.theme_button)
         self.theme_button.setMenu(self.theme_menu)
 
@@ -263,31 +273,32 @@ class SettingsWindow(QtWidgets.QMainWindow):
         for theme_name in theme_map.keys():
             action = self.theme_menu.addAction(theme_name)
             action.triggered.connect(  # type: ignore
-                lambda checked, theme=theme_name: self.apply_theme(theme)
+                lambda checked, theme_=theme_name: self.apply_theme(theme_)
             )
 
         self.spawnrate_text = QtWidgets.QLabel(self.centralwidget)
         self.spawnrate_text.setObjectName("spawnrate_text")
         self.spawnrate_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.spawnrate_text, 7, 0, 1, 1)
+        self.selfLayout.addWidget(self.spawnrate_text, 8, 0, 1, 1)
         self.spawnrate_box = QtWidgets.QDoubleSpinBox(self.centralwidget)
         self.spawnrate_box.setObjectName("spawnrate_box")
         self.spawnrate_box.setRange(0.0, 1.0)
         self.spawnrate_box.setSingleStep(0.01)
+        self.spawnrate_box.setDecimals(4)
         self.spawnrate_box.setValue(SingletonConfig().config.get('4_spawn_rate', 0.1))
         self.spawnrate_box.valueChanged.connect(self.update_spawn_rate)  # type: ignore
-        self.selfLayout.addWidget(self.spawnrate_box, 7, 1, 1, 1)
+        self.selfLayout.addWidget(self.spawnrate_box, 8, 1, 1, 1)
         self.infoButton = QtWidgets.QPushButton()
         self.infoButton.setIcon(QtGui.QIcon(r'pic\OQM.png'))
         self.infoButton.setIconSize(QtCore.QSize(24, 24))
         self.infoButton.setFlat(True)
-        self.selfLayout.addWidget(self.infoButton, 7, 2, 1, 1)
+        self.selfLayout.addWidget(self.infoButton, 8, 2, 1, 1)
         self.infoButton.clicked.connect(self.show_message)  # type: ignore
 
         self.nb_th_text = QtWidgets.QLabel(self.centralwidget)
         self.nb_th_text.setObjectName("nb_th_text")
         self.nb_th_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.nb_th_text, 8, 0, 1, 1)
+        self.selfLayout.addWidget(self.nb_th_text, 9, 0, 1, 1)
         self.nb_th_box = QtWidgets.QDoubleSpinBox(self.centralwidget)
         self.nb_th_box.setObjectName("nb_th_box")
         self.nb_th_box.setRange(0.0, 1.0)
@@ -295,18 +306,18 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.nb_th_box.setDecimals(6)
         self.nb_th_box.setValue(SingletonConfig().config.get('notebook_threshold', 0.999))
         self.nb_th_box.valueChanged.connect(self.update_nb_th)  # type: ignore
-        self.selfLayout.addWidget(self.nb_th_box, 8, 1, 1, 1)
+        self.selfLayout.addWidget(self.nb_th_box, 9, 1, 1, 1)
         self.infoButton2 = QtWidgets.QPushButton()
         self.infoButton2.setIcon(QtGui.QIcon(r'pic\OQM.png'))
         self.infoButton2.setIconSize(QtCore.QSize(24, 24))
         self.infoButton2.setFlat(True)
-        self.selfLayout.addWidget(self.infoButton2, 8, 2, 1, 1)
+        self.selfLayout.addWidget(self.infoButton2, 9, 2, 1, 1)
         self.infoButton2.clicked.connect(self.show_message2)  # type: ignore
 
         self.demo_speed_text = QtWidgets.QLabel(self.centralwidget)
         self.demo_speed_text.setObjectName("demo_speed_text")
         self.demo_speed_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.demo_speed_text, 9, 0, 1, 1)
+        self.selfLayout.addWidget(self.demo_speed_text, 10, 0, 1, 1)
         self.demo_speed_box = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal, self.centralwidget)
         self.demo_speed_box.setMinimum(1)
         self.demo_speed_box.setMaximum(200)
@@ -315,26 +326,26 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.demo_speed_box.setTickInterval(10)
         self.demo_speed_box.valueChanged.connect(self.demo_speed_changed)  # type: ignore
         self.demo_speed_box.setObjectName("demo_speed_box")
-        self.selfLayout.addWidget(self.demo_speed_box, 9, 1, 1, 3)
+        self.selfLayout.addWidget(self.demo_speed_box, 10, 1, 1, 3)
 
         self.anim_text = QtWidgets.QLabel(self.centralwidget)
         self.anim_text.setObjectName("anim_text")
         self.anim_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.anim_text, 10, 0, 1, 1)
+        self.selfLayout.addWidget(self.anim_text, 11, 0, 1, 1)
         self.anim_checkBox = QtWidgets.QCheckBox(self.centralwidget)
         self.anim_checkBox.setObjectName("anim_checkBox")
         if config.get('do_animation', True):
             self.anim_checkBox.setCheckState(QtCore.Qt.CheckState.Checked)
         else:
             self.anim_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
-        self.selfLayout.addWidget(self.anim_checkBox, 10, 1, 1, 1)
+        self.selfLayout.addWidget(self.anim_checkBox, 11, 1, 1, 1)
 
         # 创建色彩模式选择按钮（下拉菜单）
         self.theme_button2 = QtWidgets.QToolButton(self.centralwidget)
         self.theme_button2.setMinimumSize(150, 20)
         self.theme_button2.setPopupMode(QtWidgets.QToolButton.InstantPopup)
         self.theme_button2.setObjectName("theme_button2")
-        self.selfLayout.addWidget(self.theme_button2, 10, 2, 1, 1)
+        self.selfLayout.addWidget(self.theme_button2, 11, 2, 1, 1)
         self.theme_menu2 = QtWidgets.QMenu(self.theme_button2)
         self.theme_button2.setMenu(self.theme_menu2)
 
@@ -349,7 +360,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.lang_button.setMinimumSize(150, 20)
         self.lang_button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
         self.lang_button.setObjectName("lang_button")
-        self.selfLayout.addWidget(self.lang_button, 10, 3, 1, 1)
+        self.selfLayout.addWidget(self.lang_button, 11, 3, 1, 1)
         self.lang_menu = QtWidgets.QMenu(self.lang_button)
         self.lang_button.setMenu(self.lang_menu)
 
@@ -362,7 +373,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.tile_font_size_text = QtWidgets.QLabel(self.centralwidget)
         self.tile_font_size_text.setObjectName("tile_font_size_text")
         self.tile_font_size_text.setStyleSheet("font: 500 12pt \"Cambria\";")
-        self.selfLayout.addWidget(self.tile_font_size_text, 11, 0, 1, 1)
+        self.selfLayout.addWidget(self.tile_font_size_text, 12, 0, 1, 1)
         self.tile_font_size_box = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal, self.centralwidget)
         self.tile_font_size_box.setMinimum(50)
         self.tile_font_size_box.setMaximum(150)
@@ -371,7 +382,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.tile_font_size_box.setTickInterval(5)
         self.tile_font_size_box.valueChanged.connect(self.font_size_changed)  # type: ignore
         self.tile_font_size_box.setObjectName("tile_font_size_box")
-        self.selfLayout.addWidget(self.tile_font_size_box, 11, 1, 1, 3)
+        self.selfLayout.addWidget(self.tile_font_size_box, 12, 1, 1, 3)
 
         self.PageLayout.addLayout(self.selfLayout)
         self.save_bt = QtWidgets.QPushButton(self.centralwidget)
@@ -396,6 +407,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         self.compress_temp_files_checkBox.setText(_translate("Settings", "Compress Temp Files"))
         self.advanced_algo_checkBox.setText(_translate("Settings", "Advanced Algo"))
         self.mini_table_text.setText(_translate("Settings", "Remove Boards with a Success Rate Below:"))
+        self.dtype_text.setText(_translate("Settings", "Success Rate Precision:"))
         self.set_filepath_bt.setText(_translate("Settings", "SET..."))
         self.anim_checkBox.setText(_translate("Settings", "appear / pop / slide"))
         self.colorset_text.setText(_translate("Settings", "Tile Color:"))
@@ -415,7 +427,10 @@ class SettingsWindow(QtWidgets.QMainWindow):
             self.chunked_solve_checkBox.setText(self.tr("Chunked Solve"))
         self.pattern_combo.retranslateUi(self.tr("Select Formation"))
         self.target_combo.retranslateUi(self.tr("Target Tile"))
-        self.pos_combo.retranslateUi(self.tr("Target Position"))
+
+    @staticmethod
+    def update_success_rate_dtype(dtype_str):
+        SingletonConfig().config['success_rate_dtype'] = dtype_str
 
     def show_ColorDialog(self):
         config = SingletonConfig().config
@@ -442,18 +457,6 @@ class SettingsWindow(QtWidgets.QMainWindow):
         if filepath:
             self.filepath_edit.setText(filepath)
 
-    def update_pos_combo_visibility(self, pattern):
-        if pattern in ['444', 'LL']:
-            if '2' in self.pos_combo.items:
-                self.pos_combo.remove_item('2')
-            self.pos_combo.show()
-        elif pattern == 'L3':
-            if '2' not in self.pos_combo.items:
-                self.pos_combo.add_item('2')
-            self.pos_combo.show()
-        else:
-            self.pos_combo.hide()
-
     def build_book(self):
         spawn_rate = SingletonConfig().config['4_spawn_rate']
         if spawn_rate != 0.1:
@@ -467,13 +470,12 @@ class SettingsWindow(QtWidgets.QMainWindow):
             if reply == QtWidgets.QMessageBox.No:
                 return
 
-        position = self.pos_combo.currentText
         pattern = self.pattern_combo.currentText
         target = self.target_combo.currentText
         pathname = self.filepath_edit.toPlainText()
 
         if (self.advanced_algo_checkBox.isChecked() and pattern in [
-            'L3', 'L3t', '442', '442t', 't', '444', 'LL', 'free8w', 'free9w', 'free8']):
+            'L3', 'L3t', '442', '442t', 't', '444', 'LL', 'free8', 'free9']):
             reply = QtWidgets.QMessageBox.warning(
                 self,
                 self.tr("Warning"),
@@ -485,7 +487,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
             )
             if reply == QtWidgets.QMessageBox.No:
                 return
-        elif self.advanced_algo_checkBox.isChecked() and pattern in ['2x4', '3x3', '3x4']:
+        elif self.advanced_algo_checkBox.isChecked() and pattern in category_info.get('variant', []):
             reply = QtWidgets.QMessageBox.warning(
                 self,
                 self.tr("Warning"),
@@ -495,25 +497,33 @@ class SettingsWindow(QtWidgets.QMainWindow):
             )
             if reply:
                 return
+        elif self.advanced_algo_checkBox.isChecked() and pattern in ['4tiler',]:
+            reply = QtWidgets.QMessageBox.warning(
+                self,
+                self.tr("Warning"),
+                self.tr("This table does not support the advanced algorithm. "),
+                QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel,
+                QtWidgets.QMessageBox.Cancel
+            )
+            if reply:
+                return
 
+        success_rate_dtype = SingletonConfig().config.get('success_rate_dtype', 'uint32')
         if pattern and target and pathname and os.path.exists(pathname):
-            position = position if position else '0'
             config = SingletonConfig().config
-            if pattern in ['444', 'LL', 'L3']:
-                ptn = pattern + '_' + target + '_' + position
-                config['filepath_map'][ptn] = [pathname, ]
-                pathname = os.path.join(pathname, ptn + '_')
-            else:
-                ptn = pattern + '_' + target
-                config['filepath_map'][ptn] = [pathname, ]
-                pathname = os.path.join(pathname, ptn + '_')
+
+            ptn = pattern + '_' + target
+            config['filepath_map'][(ptn, spawn_rate)] = [(pathname, success_rate_dtype)]
+            pathname = os.path.join(pathname, ptn + '_')
             target = int(np.log2(int(target)))
-            position = int(position)
+
             self.build_bt.setText(self.tr('Building...'))
             self.build_bt.setEnabled(False)
-            self.Building_thread = BuildThread(pattern, target, position, pathname)
+            self.Building_thread = BuildThread(pattern, target, pathname)
             self.Building_thread.finished.connect(self.on_build_finished)
             self.Building_thread.start()  # 启动计算线程
+
+            SingletonConfig.save_config(config)
 
     def update_progress(self, current_step, total_steps):
         self.build_bt.setText(self.tr('Building...') + fr'({current_step}/{total_steps})')
@@ -642,18 +652,17 @@ It is recommended to keep the default settings.'''))
 class BuildThread(QtCore.QThread):
     finished = QtCore.pyqtSignal()
 
-    def __init__(self, pattern, target: int, position: int, pathname):
+    def __init__(self, pattern, target: int, pathname):
         super().__init__()
         self.pattern = pattern
         self.target = target
-        self.position = position
         self.pathname = pathname
 
     def run(self):
-        if self.pattern not in ('2x4', '3x3', '3x4'):
-            start_build(self.pattern, self.target, self.position, self.pathname)
+        if self.pattern not in category_info.get('variant', []):
+            start_build(self.pattern, self.target, self.pathname)
         else:
-            v_start_build(self.pattern, self.target, self.position, self.pathname)
+            v_start_build(self.pattern, self.target, self.pathname)
         self.finished.emit()
 
 

@@ -1,148 +1,22 @@
+import glob
 import logging
 import os
-import re
 import pickle
 import sys
-from typing import Callable, Dict, Tuple
+import json
+from typing import Callable
 
 import cpuinfo
 import numpy as np
 from PyQt5 import QtWidgets, QtGui
 from PyQt5.QtCore import QLocale, QTranslator
-from numpy.typing import NDArray
 
 import Calculator
-import Variants.vCalculator as vCalculator
+from BoardMover import decode_board
 
 PatternCheckFunc = Callable[[np.uint64], bool]
-ToFindFunc = Callable[[np.uint64], np.uint64]
-SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
-
-
-category_info = {'10 space': ['L3', 'L3t', '442', '442t', 't'],
-                 '12 space': ['444', '4431', 'LL', '4432f', '4442ff', '4441f'],
-                 'free': [f'free{i}w' for i in range(8, 15)],
-                 'free halfway': [f'free{i}' for i in range(8, 12)],
-                 'variant': ['2x4', '3x3', '3x4'],
-                 'others': ['4442', '4442f', '4441', '4421']}
-
-
-formation_info: Dict[str, Tuple[int, PatternCheckFunc, ToFindFunc,
-                                SuccessCheckFunc, np.typing.NDArray[np.uint64] | None]] = {
-    'LL': [-131072 - 14, Calculator.is_LL_pattern, Calculator.minUL, Calculator.is_LL_success,
-           np.array([np.uint64(0x1000000021ff12ff), np.uint64(0x0000000112ff21ff)], dtype=np.uint64)],
-    '4431': [-131072 - 14, Calculator.is_4431_pattern, Calculator.re_self, Calculator.is_4431_success,
-             np.array([np.uint64(0x10000000121f2fff), np.uint64(0x00000001121f2fff)], dtype=np.uint64)],
-    '444': [-131072 - 2, Calculator.is_444_pattern, Calculator.re_self, Calculator.is_444_success,
-            np.array([np.uint64(0x100000000000ffff), np.uint64(0x000000010000ffff)], dtype=np.uint64)],
-    'free8': [-229376 - 16, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'free9': [-196608 - 18, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'free10': [-163840 - 20, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'free11': [-131072 - 22, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'free12': [-98304 - 24, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'free13': [-65536 - 26, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'free14': [-32768 - 28, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'L3': [-196608 - 8, Calculator.is_L3_pattern, Calculator.re_self, Calculator.is_L3_success,
-           np.array([np.uint64(0x100000001fff2fff), np.uint64(0x000000012fff1fff)], dtype=np.uint64)],
-    'L3t': [-196608 - 8, Calculator.is_L3t_pattern, Calculator.re_self, Calculator.is_L3t_success,
-            np.array([np.uint64(0x100000001fff2fff), np.uint64(0x000000012fff1fff)], dtype=np.uint64)],
-    '442': [-196608 - 8, Calculator.is_442_pattern, Calculator.re_self, Calculator.is_442_success,
-            np.array([np.uint64(0x1000000021ffffff), np.uint64(0x0000000112ffffff)], dtype=np.uint64)],
-    '442t': [-196608 - 8, Calculator.is_442t_pattern, Calculator.re_self, Calculator.is_442t_success,
-            np.array([np.uint64(0x1000000021ffffff), np.uint64(0x0000000112ffffff)], dtype=np.uint64)],
-    't': [-196608 - 8, Calculator.is_t_pattern, Calculator.re_self, Calculator.is_t_success,
-          np.array([np.uint64(0x10000000f1fff2ff), np.uint64(0x00000001f2fff1ff)], dtype=np.uint64)],
-    '4421': [-163840 - 12, Calculator.is_4421_pattern, Calculator.re_self, Calculator.is_4421_success,
-             np.array([np.uint64(0x1000000012ff2fff), np.uint64(0x1000000121ff1fff)], dtype=np.uint64)],
-    '4441': [-98304 - 4, Calculator.is_4441_pattern, Calculator.re_self, Calculator.is_4441_success,
-             np.array([np.uint64(0x0000100000001fff), np.uint64(0x0001000000001fff)], dtype=np.uint64)],
-    '4432': [-98304 - 16, Calculator.is_4432_pattern, Calculator.minUL, Calculator.is_4432_success,
-             np.array([np.uint64(0x00001000121f21ff), np.uint64(0x00010000121f21ff)], dtype=np.uint64)],
-    '4442': [-65536 - 8, Calculator.is_4442_pattern, Calculator.re_self, Calculator.is_4442_success,
-             np.array([np.uint64(0x00001000000012ff), np.uint64(0x00010000000021ff)], dtype=np.uint64)],
-    '4442f': [-98304 - 16, Calculator.is_4442f_pattern, Calculator.re_self, Calculator.is_4442f_success,
-              np.array([np.uint64(0x00001000121f21ff), np.uint64(0x0001000012112fff)], dtype=np.uint64)],
-    '4442ff': [-131072 - 14, Calculator.is_4442ff_pattern, Calculator.re_self, Calculator.is_4442ff_success,
-              np.array([np.uint64(0x0000100012ff21ff), np.uint64(0x000100001212ffff),
-                        np.uint64(0x00ff0012102100ff)], dtype=np.uint64)],
-    'free8w': [-262144 - 14, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'free9w': [-229376 - 16, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'free10w': [-196608 - 18, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'free11w': [-163840 - 20, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'free12w': [-131072 - 22, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'free13w': [-98304 - 24, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'free14w': [-65536 - 26, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    'free15w': [-32768 - 28, Calculator.is_free_pattern, Calculator.min_all_symm, Calculator.is_free_success, None],
-    '2x4': [-262144, vCalculator.is_variant_pattern, vCalculator.min24, vCalculator.is_2x4_success,
-            np.array([np.uint64(0xffff00000000ffff)], dtype=np.uint64)],
-    '3x3': [-229376, vCalculator.is_variant_pattern, vCalculator.min33, vCalculator.is_3x3_success,
-            np.array([np.uint64(0x000f000f000fffff)], dtype=np.uint64)],
-    '3x4': [-131072, vCalculator.is_variant_pattern, vCalculator.min34, vCalculator.is_3x4_success,
-            np.array([np.uint64(0x000000000000ffff)], dtype=np.uint64)],
-    '4432f': [-131072 - 14, Calculator.is_4432f_pattern, Calculator.minUL, Calculator.is_4432f_success,
-              np.array([np.uint64(0x00001000121f2fff), np.uint64(0x00010000121ff2ff)], dtype=np.uint64)],
-    '4441f':[-131072 - 14, Calculator.is_4441f_pattern, Calculator.re_self, Calculator.is_4441f_success,
-              np.array([np.uint64(0x00001000121f2fff), np.uint64(0x000100001212ffff)], dtype=np.uint64)],
-    '4432ff': [-163840 - 10, Calculator.is_4432ff_pattern, Calculator.minUL, Calculator.is_4432ff_success,
-              np.array([np.uint64(0x00001000112fffff), np.uint64(0x00001000f12ff1ff)], dtype=np.uint64)],
-    "3433": [-98304 - 6, Calculator.is_3433_pattern, Calculator.re_self, Calculator.is_3433_success,
-             np.array([np.uint64(0x100000000000f2ff), np.uint64(0x000000000001f2ff)], dtype=np.uint64)],
-    "3442": [-98304 - 8, Calculator.is_3442_pattern, Calculator.re_self, Calculator.is_3442_success,
-             np.array([np.uint64(0x10000000000ff21f), np.uint64(0x00000000100ff21f)], dtype=np.uint64)],
-
-    "3432": [-131072 - 6, Calculator.is_3432_pattern, Calculator.minUL, Calculator.is_3432_success,
-             np.array([np.uint64(0x10000000000ff2ff), np.uint64(0x00000000100ff2ff)], dtype=np.uint64)],
-    "2433": [-131072 - 6, Calculator.is_2433_pattern, Calculator.re_self, Calculator.is_2433_success,
-             np.array([np.uint64(0x10000000f000f2ff), np.uint64(0x00000000f001f2ff)], dtype=np.uint64)],
-    "movingLL": [-131072 - 14, Calculator.is_movingLL_pattern, Calculator.min_all_symm, Calculator.is_movingLL_success,
-                 np.array([np.uint64(0x100000001ff12ff2), np.uint64(0x1000000012ff21ff)], dtype=np.uint64)],
-}
-
-
-pattern_32k_tiles_map: Dict[str, list] = {
-    # 32k, free32k, fix32k_pos,
-    '': [0, 0, np.array([], dtype=np.uint8)],
-    'LL': [4, 0, np.array([0, 4, 16, 20], dtype=np.uint8)],
-    '4431': [4, 0, np.array([0, 4, 8, 16], dtype=np.uint8)],
-    '444': [4, 0, np.array([0, 4, 8, 12], dtype=np.uint8)],
-    'free8': [7, 7, np.array([], dtype=np.uint8)],
-    'free9': [6, 6, np.array([], dtype=np.uint8)],
-    'free10': [5, 5, np.array([], dtype=np.uint8)],
-    'free11': [4, 4, np.array([], dtype=np.uint8)],
-    'free12': [3, 3, np.array([], dtype=np.uint8)],
-    'free13': [2, 2, np.array([], dtype=np.uint8)],
-    'free14': [1, 1, np.array([], dtype=np.uint8)],
-    'L3': [6, 0, np.array([0, 4, 8, 16, 20, 24], dtype=np.uint8)],
-    'L3t': [6, 2, np.array([4, 8, 20, 24], dtype=np.uint8)],
-    '442': [6, 0, np.array([0, 4, 8, 12, 16, 20], dtype=np.uint8)],
-    '442t': [6, 3, np.array([4, 16, 20], dtype=np.uint8)],
-    't': [6, 2, np.array([0, 4, 16, 20], dtype=np.uint8)],
-    '4421': [5, 0, np.array([0, 4, 8, 16, 20], dtype=np.uint8)],
-    '4441': [3, 0, np.array([0, 4, 8], dtype=np.uint8)],
-    '4432': [3, 0, np.array([0, 4, 16], dtype=np.uint8)],
-    '4432f': [4, 1, np.array([0, 4, 16], dtype=np.uint8)],
-    '4441f': [4, 1, np.array([0, 4, 8], dtype=np.uint8)],
-    '4432ff': [5, 2, np.array([0, 4, 16], dtype=np.uint8)],
-    '4442': [2, 0, np.array([0, 4], dtype=np.uint8)],
-    '4442f': [3, 1, np.array([0, 4], dtype=np.uint8)],
-    '4442ff': [4, 2, np.array([0, 4], dtype=np.uint8)],
-    'free8w': [8, 8, np.array([], dtype=np.uint8)],
-    'free9w': [7, 7, np.array([], dtype=np.uint8)],
-    'free10w': [6, 6, np.array([], dtype=np.uint8)],
-    'free11w': [5, 5, np.array([], dtype=np.uint8)],
-    'free12w': [4, 4, np.array([], dtype=np.uint8)],
-    'free13w': [3, 3, np.array([], dtype=np.uint8)],
-    'free14w': [2, 2, np.array([], dtype=np.uint8)],
-    'free15w': [1, 1, np.array([], dtype=np.uint8)],
-    '2x4': [8, 0, np.array([0, 4, 8, 12, 48, 52, 56, 60], dtype=np.uint8)],
-    '3x3': [7, 0, np.array([0, 4, 8, 12, 16, 32, 48], dtype=np.uint8)],
-    '3x4': [4, 0, np.array([0, 4, 8, 12], dtype=np.uint8)],
-    "3433": [3, 1, np.array([0, 4], dtype=np.uint8)],
-    "3442": [3, 0, np.array([0, 12, 16], dtype=np.uint8)],
-    "3432": [4, 1, np.array([0, 4, 16], dtype=np.uint8)],
-    "2433": [4, 2, np.array([0, 4], dtype=np.uint8)],
-    "movingLL": [4, 4, np.array([], dtype=np.uint8)],
-}
+CanonicalFunc = Callable[[np.uint64], np.uint64]
+SuccessCheckFunc = Callable[[np.uint64, int], bool]
 
 
 theme_map = {
@@ -211,6 +85,367 @@ theme_map = {
           '10 years': ['#f57322', '#cf621f', '#bd5418', '#b0aad1', '#a29dbf', '#908cab', '#ffc832', '#ffc421',
                        '#ffbb00', '#66e8ff', '#45e3ff', '#3698fa', '#187fed', '#b92fdb', '#d041e3', '#d041e3'],
 }
+
+
+DTYPE_CONFIG = {
+    'uint32': (np.zeros(2,dtype='uint64,uint32'), np.uint32, np.uint32(4e9), np.uint32(0)),
+    'uint64': (np.zeros(2,dtype='uint64,uint64'), np.uint64, np.uint64(1.6e18), np.uint64(0)),
+    'float32': (np.zeros(2,dtype='uint64,float32'), np.float32, np.float32(1.0), np.float32(0.0)),
+    'float64': (np.zeros(2,dtype='uint64,float64'), np.float64, np.float64(1.0), np.float64(0.0)),
+    '1-float32': (np.zeros(2,dtype='uint64,float32'), np.float32, np.float32(0.0), np.float32(-1.0)),
+    '1-float64': (np.zeros(2,dtype='uint64,float64'), np.float64, np.float64(0.0), np.float64(-1.0)),
+}
+
+
+# 预定义的默认配置（当文件读取失败时使用）
+DEFAULT_PATTERNS = {
+  "L3": {
+    "category": "10 space",
+      "valid pattern": ["0xfff0fff"],
+      "target pos": "0xf00f0000000",
+      "canonical mode": "identity",
+      "seed boards": ["0x100000001fff2fff", "0x000000012fff1fff"],
+      "extra steps": 48
+    },
+  "L3t": {
+    "category": "10 space",
+      "valid pattern": ["0xfff0fff", "0xf0fff0ff0", "0xf000f0ff00ff0"],
+      "target pos": "0xffff00000000",
+      "canonical mode": "identity",
+      "seed boards": ["0x100000001fff2fff", "0x000000012fff1fff"],
+      "extra steps": 48
+    },
+  "442": {
+    "category": "10 space",
+      "valid pattern": ["0xffffff"],
+      "target pos": "0xf000000",
+      "canonical mode": "identity",
+      "seed boards": ["0x1000000021ffffff", "0x0000000112ffffff"],
+      "extra steps": 48
+    },
+  "442t": {
+    "category": "10 space",
+      "valid pattern": [
+        "0xffffff", "0xf0ff0fff", "0xffff0ff", "0xffff00ff", "0xf00fffff0",
+        "0xff0ff0ff0", "0xf00000ff0fff", "0xf0000fff00ff", "0xf00f00ff0ff0", "0xf00f0fff00f0"
+      ],
+      "target pos": "0xff0ff000000",
+      "canonical mode": "identity",
+      "seed boards": ["0x1000000021ffffff", "0x0000000112ffffff"],
+      "extra steps": 48
+    },
+  "t": {
+    "category": "10 space",
+      "valid pattern": ["0xf0fff0ff", "0xf000f0ff00ff", "0xf000f00000ff00ff"],
+      "target pos": "0xff0f000f00",
+      "canonical mode": "identity",
+      "seed boards": ["0x10000000f1fff2ff", "0x00000001f2fff1ff"],
+      "extra steps": 48
+    },
+  "LL": {
+    "category": "12 space",
+      "valid pattern": ["0xff00ff"],
+      "target pos": "0xff0f000f00",
+      "canonical mode": "diagonal",
+      "seed boards": ["0x1000000021ff12ff", "0x0000000112ff21ff"],
+      "extra steps": 48
+    },
+  "4431": {
+    "category": "12 space",
+      "valid pattern": ["0xf0fff"],
+      "target pos": "0xf00000",
+      "canonical mode": "identity",
+      "seed boards": ["0x10000000121f2fff", "0x00000001121f2fff"],
+      "extra steps": 48
+    },
+  "444": {
+    "category": "12 space",
+      "valid pattern": ["0xffff"],
+      "target pos": "0xff00000",
+      "canonical mode": "horizontal",
+      "seed boards": ["0x100000000000ffff", "0x000000010000ffff"],
+      "extra steps": 60
+    },
+  "4432f": {
+    "category": "12 space",
+      "valid pattern": ["0xf00ff"],
+      "target pos": "0xf00000",
+      "canonical mode": "diagonal",
+      "seed boards": ["0x00001000121f2fff", "0x00010000121ff2ff"],
+      "extra steps": 48
+    },
+  "4442ff": {
+    "category": "12 space",
+      "valid pattern": ["0xff"],
+      "target pos": "0xff0fff0f00",
+      "canonical mode": "identity",
+      "seed boards": ["0x0000100012ff21ff", "0x000100001212ffff", "0x00ff0012102100ff"],
+      "extra steps": 48
+    },
+  "4421": {
+    "category": "others",
+      "valid pattern": ["0xff0fff"],
+      "target pos": "0xf00000",
+      "canonical mode": "identity",
+      "seed boards": ["0x1000000012ff2fff", "0x1000000121ff1fff"],
+      "extra steps": 48
+    },
+  "4441": {
+    "category": "others",
+      "valid pattern": ["0xfff"],
+      "target pos": "0xfff000",
+      "canonical mode": "identity",
+      "seed boards": ["0x0000100000001fff", "0x0001000000001fff"],
+      "extra steps": 48
+    },
+  "4432": {
+    "category": "others",
+      "valid pattern": ["0xf00ff"],
+      "target pos": "0xf00000",
+      "canonical mode": "diagonal",
+      "seed boards": ["0x00001000121f21ff", "0x00010000121f21ff"],
+      "extra steps": 48
+    },
+  "4442": {
+    "category": "others",
+      "valid pattern": ["0xff"],
+      "target pos": "0xff0f00",
+      "canonical mode": "identity",
+      "seed boards": ["0x00001000000012ff", "0x00010000000021ff"],
+      "extra steps": 48
+    },
+  "4442f": {
+    "category": "others",
+      "valid pattern": ["0xff"],
+      "target pos": "0xffff00",
+      "canonical mode": "identity",
+      "seed boards": ["0x00001000121f21ff", "0x0001000012112fff"],
+      "extra steps": 48
+    },
+  "free8": {
+    "category": "free",
+      "valid pattern": [],
+      "target pos": "0xffffffffffffffff",
+      "canonical mode": "full",
+      "seed boards": ["0x01111111ffffffff"],
+      "extra steps": 36
+    },
+  "free9": {
+    "category": "free",
+      "valid pattern": [],
+      "target pos": "0xffffffffffffffff",
+      "canonical mode": "full",
+      "seed boards": ["0x011111111fffffff"],
+      "extra steps": 36
+    },
+  "free10": {
+    "category": "free",
+      "valid pattern": [],
+      "target pos": "0xffffffffffffffff",
+      "canonical mode": "full",
+      "seed boards": ["0x0111111111ffffff"],
+      "extra steps": 36
+    },
+  "free11": {
+    "category": "free",
+      "valid pattern": [],
+      "target pos": "0xffffffffffffffff",
+      "canonical mode": "full",
+      "seed boards": ["0x01111111111fffff"],
+      "extra steps": 36
+    },
+  "free12": {
+    "category": "free",
+      "valid pattern": [],
+      "target pos": "0xffffffffffffffff",
+      "canonical mode": "full",
+      "seed boards": ["0x011111111111ffff"],
+      "extra steps": 36
+    },
+  "2x4": {
+    "category": "variant",
+      "valid pattern": [],
+      "target pos": "0xffffffff0000",
+      "canonical mode": "min24",
+      "seed boards": ["0xffff00000000ffff"],
+      "extra steps": 48
+    },
+  "3x3": {
+    "category": "variant",
+      "valid pattern": [],
+      "target pos": "0xfff0fff0fff00000",
+      "canonical mode": "min33",
+      "seed boards": ["0x000f000f000fffff"],
+      "extra steps": 60
+    },
+  "3x4": {
+    "category": "variant",
+      "valid pattern": [],
+      "target pos": "0xffffffffffff0000",
+      "canonical mode": "min34",
+      "seed boards": ["0x000000000000ffff"],
+      "extra steps": 60
+    }
+}
+
+
+# 创建日志记录
+logger = logging.getLogger('debug_logger')
+
+logger.setLevel(logging.DEBUG)
+console_handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+
+# 创建文件处理器，设置级别为WARNING，用于输出到文件
+file_handler = logging.FileHandler('logger.txt')
+file_handler.setLevel(logging.WARNING)
+file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(file_formatter)
+
+# 将处理器添加到日志记录器中
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+
+
+def handle_exception(exc_type, exc_value, exc_traceback):
+    logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+    # 防止应用崩溃
+    if not issubclass(exc_type, KeyboardInterrupt):
+        QtWidgets.QMessageBox.critical(None, "Error",
+                                       f"An unexpected error occurred: {exc_value}\n {exc_traceback}")
+
+
+sys.excepthook = handle_exception
+
+
+def find_f_nibble_positions(board: np.uint64) -> list[int]:
+    """输入 uint64，输出所有值为 0xf 的 nibble 的起始位索引。"""
+    positions = []
+    for i in range(16):
+        if (board >> np.uint64(i * 4)) & np.uint64(0xf) == 0xf:
+            positions.append(i * 4)
+    return positions
+
+
+def get_nibble_intersection(encoded_boards):
+    if len(encoded_boards) == 0:
+        return np.uint64(0)
+    return np.bitwise_and.reduce(encoded_boards)
+
+
+def load_patterns_from_file(file_path=None):
+    """
+    读取配置文件，并初始化所有定式定义相关的全局字典。
+    """
+    if file_path is None:
+        file_path = os.path.join(os.path.dirname(__file__), 'patterns_config.json')
+
+    raw_data = None
+    needs_restore = False
+
+    # 尝试读取文件
+    try:
+        if not os.path.exists(file_path):
+            logger.warning(f"Config file not found: {file_path}. Restoring defaults...")
+            needs_restore = True
+        else:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                raw_data = json.load(f)
+                if not raw_data:
+                    raise ValueError("File is empty")
+    except (json.JSONDecodeError, OSError, ValueError) as e:
+        logger.warning(f"Error loading {file_path}: {e}. Restoring defaults...")
+        needs_restore = True
+
+    # 如果读取失败，加载默认值并写回文件
+    if needs_restore:
+        raw_data = DEFAULT_PATTERNS
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(raw_data, f, indent=2, ensure_ascii=False)
+            logger.debug(f"Successfully restored DEFAULT_PATTERNS to {file_path}")
+        except OSError as e:
+            logger.critical(f"Critical Warning: Could not write default config to {file_path}: {e}")
+
+    # 1. 初始化容器
+    new_category_info = {}
+    new_pattern_data = {}
+    new_pattern_32k_tiles_map = {}
+
+    # 2. 第一轮遍历：构建基础数据和 PATTERN_DATA
+    for name, data in raw_data.items():
+        # --- 构建 category_info ---
+        cat = data.get('category', 'others')
+        if cat not in new_category_info:
+            new_category_info[cat] = []
+        new_category_info[cat].append(name)
+
+        # --- 构建 PATTERN_DATA ---
+        # 解析十六进制字符串为 uint64
+        def_masks = tuple(np.uint64(int(m, 16)) for m in data.get('valid pattern', []))
+        def_shifts = tuple(find_f_nibble_positions(np.uint64(int(data.get('target pos', '0xffffffffffffffff'), 16))))
+        new_pattern_data[name] = (def_masks, def_shifts)
+
+    # 3. 将 PATTERN_DATA 注入 Calculator 并触发 Numba 编译
+    # 这一步必须在构建 formation_info 之前完成，因为 formation_info 依赖生成的函数
+    Calculator.PATTERN_DATA = new_pattern_data
+    Calculator.update_logic_functions()
+
+    # 4. 第二轮遍历：构建 formation_info
+    # 现在 Calculator.is_L3_pattern 等函数已经存在了
+    new_formation_info = {}
+
+    for name, data in raw_data.items():
+        # 动态获取刚刚生成的 Numba 函数
+        # update_logic_functions 会将函数注入 Calculator 的全局命名空间
+        # 使用 getattr 从模块中获取
+        try:
+            is_pattern_func = getattr(Calculator, f'is_{name}_pattern')
+            is_success_func = getattr(Calculator, f'is_{name}_success')
+        except AttributeError:
+            print(f"Warning: Functions for {name} not found in Calculator after injection.")
+            continue
+
+        # 获取对称函数
+        symm_name = 'canonical_' + data.get('canonical mode', 'identity')
+        symm_func = getattr(Calculator, symm_name)
+
+        # 解析初始局面
+        fmt_seeds_raw = data.get('seed boards')
+        fmt_seeds = [np.uint64(int(m, 16)) for m in fmt_seeds_raw]
+
+        ini_decoded = decode_board(fmt_seeds[0])
+        board_sum = ini_decoded.sum()
+        fmt_seeds = np.array([board for board in fmt_seeds if ini_decoded.sum() == board_sum],
+                              dtype=np.uint64)
+
+        # 组装元组
+        # [score, pattern_func, find_func, success_func, masks_array]
+        new_formation_info[name] = [
+            -board_sum,
+            is_pattern_func,
+            symm_func,
+            is_success_func,
+            fmt_seeds,
+            data.get('extra steps', 36)
+        ]
+
+        # --- 构建 pattern_32k_tiles_map ---
+        count = np.sum(ini_decoded == 32768)
+        fixed_pos = find_f_nibble_positions(get_nibble_intersection(new_pattern_data[name][0]))
+        fixed_pos = np.array(fixed_pos, dtype=np.uint8)
+        free_count = count - len(fixed_pos)
+        new_pattern_32k_tiles_map[name] = [count, free_count, fixed_pos]
+
+    if 'others' in new_category_info:
+        # pop 会取出该键值对，重新赋值会将其插入到字典末尾
+        new_category_info['others'] = new_category_info.pop('others')
+
+    return new_category_info, new_formation_info, new_pattern_32k_tiles_map, new_pattern_data
+
+
+category_info, formation_info, pattern_32k_tiles_map, _ = load_patterns_from_file()
 
 
 def hex_to_rgb(hex_color):
@@ -304,6 +539,7 @@ class SingletonConfig:
                 'minigame_difficulty': 1,
                 'language': SingletonConfig.get_system_language(),
                 'theme': "Default",
+                'success_rate_dtype': "uint32",
                 }
 
     @classmethod
@@ -364,20 +600,21 @@ class SingletonConfig:
             if hasattr(widget, 'retranslateUi'):
                 widget.retranslateUi()
 
-    def check_pattern_file(cls, pattern):
+    @classmethod
+    def check_pattern_file(cls, pattern):  # todo done
         if not cls._instance:
             return False
-
+        spawn_rate4 = SingletonConfig().config['4_spawn_rate']
         filepath_map = cls._instance.config['filepath_map']
-        file_path_list = filepath_map.get(pattern, None)
+        file_path_list: list | None = filepath_map.get((pattern, spawn_rate4), None)
         prefix = f"{pattern}_"
         if not file_path_list:
             return False
 
-        for file_path in file_path_list:
+        for file_path, success_rate_dtype in file_path_list:
             # 检查文件夹是否存在
             if not file_path or not os.path.exists(file_path) or not os.path.isdir(file_path):
-                file_path_list.remove(file_path)
+                file_path_list.remove((file_path, success_rate_dtype))
                 continue
 
             # 遍历文件夹中的所有项
@@ -387,9 +624,67 @@ class SingletonConfig:
                 if item.endswith('.book') or item.endswith('.z') or item.endswith('b'):
                     return True
 
-            file_path_list.remove(file_path)
+            file_path_list.remove((file_path, success_rate_dtype))
+        SingletonConfig().save_config(SingletonConfig().config)
 
         return False
+
+    @staticmethod
+    def read_success_rate_dtype(folder_path, pattern):
+        """
+        从配置文件中读取success_rate_dtype的值。
+        如果找不到该字段，则在配置文件末尾追加默认值'uint32'并返回该值。
+        """
+        if not os.path.isdir(folder_path):
+            return 'uint32'
+
+        # 查找 config 文件
+        config_files = glob.glob(os.path.join(folder_path, f"{pattern}_config.txt"))
+        if not config_files:
+            return 'uint32'
+
+        for config_file in config_files:
+            try:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.startswith('success_rate_dtype:'):
+                            return line.split(':', 1)[1].strip()
+
+                # 如果代码运行到这里，说明文件存在但没找到字段，写入默认值
+                with open(config_file, 'a', encoding='utf-8') as f:
+                    f.write('\nsuccess_rate_dtype: uint32')
+
+                return 'uint32'
+
+            except Exception as e:
+                logger.error(f"Unexpected error processing {config_file}: {e}", exc_info=True)
+
+        return 'uint32'
+
+
+    @staticmethod
+    def read_4sr(folder_path, pattern):
+        """ 从配置文件中读取4_spawn_rate的值。 """
+        if not os.path.isdir(folder_path):
+            return None
+
+        config_files = glob.glob(os.path.join(folder_path, f"{pattern}_config.txt"))
+        if not config_files:
+            return None
+
+        for config_file in config_files:
+            try:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.startswith('4_spawn_rate:'):
+                            spawn_rate = line.split(':', 1)[1].strip()
+                            return float(spawn_rate)
+                return None
+
+            except Exception as e:
+                logger.error(f"Unexpected error processing {config_file}: {e}", exc_info=True)
+
+        return None
 
 
 # 用于管理除数字块之外的配色
@@ -412,7 +707,8 @@ class ColorManager:
             self._load_schemes()
             self._initialized = True
 
-    def _normalize_line(self, line):
+    @staticmethod
+    def _normalize_line(line):
         """将中文标点替换为英文标点"""
         chinese_to_english = {
             '，': ',',
@@ -539,36 +835,6 @@ def apply_global_theme(app):
 
     app.setStyle("Fusion")
     app.setPalette(palette)
-
-
-# 创建日志记录
-logger = logging.getLogger('debug_logger')
-
-logger.setLevel(logging.DEBUG)
-console_handler = logging.StreamHandler()
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(formatter)
-
-# 创建文件处理器，设置级别为WARNING，用于输出到文件
-file_handler = logging.FileHandler('logger.txt')
-file_handler.setLevel(logging.WARNING)
-file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(file_formatter)
-
-# 将处理器添加到日志记录器中
-logger.addHandler(console_handler)
-logger.addHandler(file_handler)
-
-
-def handle_exception(exc_type, exc_value, exc_traceback):
-    logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
-    # 防止应用崩溃
-    if not issubclass(exc_type, KeyboardInterrupt):
-        QtWidgets.QMessageBox.critical(None, "Error",
-                                       f"An unexpected error occurred: {exc_value}\n {exc_traceback}")
-
-
-sys.excepthook = handle_exception
 
 
 """ CPU-time returning clock() function which works from within njit-ted code """

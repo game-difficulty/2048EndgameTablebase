@@ -1,0 +1,189 @@
+{
+  "L3": {
+    "category": "10 space",
+      "valid pattern": ["0xfff0fff"],
+      "target pos": "0xf00f0000000",
+      "canonical mode": "identity",
+      "seed boards": ["0x100000001fff2fff", "0x000000012fff1fff"],
+      "extra steps": 48
+    },
+  "L3t": {
+    "category": "10 space",
+      "valid pattern": ["0xfff0fff", "0xf0fff0ff0", "0xf000f0ff00ff0"],
+      "target pos": "0xffff00000000",
+      "canonical mode": "identity",
+      "seed boards": ["0x100000001fff2fff", "0x000000012fff1fff"],
+      "extra steps": 48
+    },
+  "442": {
+    "category": "10 space",
+      "valid pattern": ["0xffffff"],
+      "target pos": "0xf000000",
+      "canonical mode": "identity",
+      "seed boards": ["0x1000000021ffffff", "0x0000000112ffffff"],
+      "extra steps": 48
+    },
+  "442t": {
+    "category": "10 space",
+      "valid pattern": [
+        "0xffffff", "0xf0ff0fff", "0xffff0ff", "0xffff00ff", "0xf00fffff0",
+        "0xff0ff0ff0", "0xf00000ff0fff", "0xf0000fff00ff", "0xf00f00ff0ff0", "0xf00f0fff00f0"
+      ],
+      "target pos": "0xff0ff000000",
+      "canonical mode": "identity",
+      "seed boards": ["0x1000000021ffffff", "0x0000000112ffffff"],
+      "extra steps": 48
+    },
+  "t": {
+    "category": "10 space",
+      "valid pattern": ["0xf0fff0ff", "0xf000f0ff00ff", "0xf000f00000ff00ff"],
+      "target pos": "0xff0f000f00",
+      "canonical mode": "identity",
+      "seed boards": ["0x10000000f1fff2ff", "0x00000001f2fff1ff"],
+      "extra steps": 48
+    },
+  "LL": {
+    "category": "12 space",
+      "valid pattern": ["0xff00ff"],
+      "target pos": "0xff0f000f00",
+      "canonical mode": "diagonal",
+      "seed boards": ["0x1000000021ff12ff", "0x0000000112ff21ff"],
+      "extra steps": 48
+    },
+  "4431": {
+    "category": "12 space",
+      "valid pattern": ["0xf0fff"],
+      "target pos": "0xf00000",
+      "canonical mode": "identity",
+      "seed boards": ["0x10000000121f2fff", "0x00000001121f2fff"],
+      "extra steps": 48
+    },
+  "444": {
+    "category": "12 space",
+      "valid pattern": ["0xffff"],
+      "target pos": "0xff00000",
+      "canonical mode": "horizontal",
+      "seed boards": ["0x100000000000ffff", "0x000000010000ffff"],
+      "extra steps": 60
+    },
+  "4432f": {
+    "category": "12 space",
+      "valid pattern": ["0xf00ff"],
+      "target pos": "0xf00000",
+      "canonical mode": "diagonal",
+      "seed boards": ["0x00001000121f2fff", "0x00010000121ff2ff"],
+      "extra steps": 48
+    },
+  "4442ff": {
+    "category": "12 space",
+      "valid pattern": ["0xff"],
+      "target pos": "0xff0fff0f00",
+      "canonical mode": "identity",
+      "seed boards": ["0x0000100012ff21ff", "0x000100001212ffff", "0x00ff0012102100ff"],
+      "extra steps": 48
+    },
+  "4421": {
+    "category": "others",
+      "valid pattern": ["0xff0fff"],
+      "target pos": "0xf00000",
+      "canonical mode": "identity",
+      "seed boards": ["0x1000000012ff2fff", "0x1000000121ff1fff"],
+      "extra steps": 48
+    },
+  "4441": {
+    "category": "others",
+      "valid pattern": ["0xfff"],
+      "target pos": "0xfff000",
+      "canonical mode": "identity",
+      "seed boards": ["0x0000100000001fff", "0x0001000000001fff"],
+      "extra steps": 48
+    },
+  "4432": {
+    "category": "others",
+      "valid pattern": ["0xf00ff"],
+      "target pos": "0xf00000",
+      "canonical mode": "diagonal",
+      "seed boards": ["0x00001000121f21ff", "0x00010000121f21ff"],
+      "extra steps": 48
+    },
+  "4442": {
+    "category": "others",
+      "valid pattern": ["0xff"],
+      "target pos": "0xff0f00",
+      "canonical mode": "identity",
+      "seed boards": ["0x00001000000012ff", "0x00010000000021ff"],
+      "extra steps": 48
+    },
+  "4442f": {
+    "category": "others",
+      "valid pattern": ["0xff"],
+      "target pos": "0xffff00",
+      "canonical mode": "identity",
+      "seed boards": ["0x00001000121f21ff", "0x0001000012112fff"],
+      "extra steps": 48
+    },
+  "free8": {
+    "category": "free",
+      "valid pattern": [],
+      "target pos": "0xffffffffffffffff",
+      "canonical mode": "full",
+      "seed boards": ["0x01111111ffffffff"],
+      "extra steps": 36
+    },
+  "free9": {
+    "category": "free",
+      "valid pattern": [],
+      "target pos": "0xffffffffffffffff",
+      "canonical mode": "full",
+      "seed boards": ["0x011111111fffffff"],
+      "extra steps": 36
+    },
+  "free10": {
+    "category": "free",
+      "valid pattern": [],
+      "target pos": "0xffffffffffffffff",
+      "canonical mode": "full",
+      "seed boards": ["0x0111111111ffffff"],
+      "extra steps": 36
+    },
+  "free11": {
+    "category": "free",
+      "valid pattern": [],
+      "target pos": "0xffffffffffffffff",
+      "canonical mode": "full",
+      "seed boards": ["0x01111111111fffff"],
+      "extra steps": 36
+    },
+  "free12": {
+    "category": "free",
+      "valid pattern": [],
+      "target pos": "0xffffffffffffffff",
+      "canonical mode": "full",
+      "seed boards": ["0x011111111111ffff"],
+      "extra steps": 36
+    },
+  "2x4": {
+    "category": "variant",
+      "valid pattern": [],
+      "target pos": "0xffffffff0000",
+      "canonical mode": "min24",
+      "seed boards": ["0xffff00000000ffff"],
+      "extra steps": 48
+    },
+  "3x3": {
+    "category": "variant",
+      "valid pattern": [],
+      "target pos": "0xfff0fff0fff00000",
+      "canonical mode": "min33",
+      "seed boards": ["0x000f000f000fffff"],
+      "extra steps": 60
+    },
+  "3x4": {
+    "category": "variant",
+      "valid pattern": [],
+      "target pos": "0xffffffffffff0000",
+      "canonical mode": "min34",
+      "seed boards": ["0x000000000000ffff"],
+      "extra steps": 60
+    }
+}

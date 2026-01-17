@@ -17,19 +17,19 @@ from LzmaCompressor import compress_with_7z
 from SignalHub import progress_signal
 
 PatternCheckFunc = Callable[[np.uint64], bool]
-SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
-ToFindFunc = Callable[[np.uint64], np.uint64]
+SuccessCheckFunc = Callable[[np.uint64, int], bool]
+CanonicalFunc = Callable[[np.uint64], np.uint64]
 
+move_all_dir: Callable[[np.uint64], tuple[np.uint64, np.uint64, np.uint64, np.uint64]]
 
 logger = Config.logger
 
 
 def gen_boards_big(arr0: NDArray[np.uint64],
                    target: int,
-                   position: int,
                    pattern_check_func: PatternCheckFunc,
                    success_check_func: SuccessCheckFunc,
-                   to_find_func: ToFindFunc,
+                   canonical_func: CanonicalFunc,
                    pivots_list: List[NDArray[np.uint64]],
                    hashmap1: NDArray[np.uint64],
                    hashmap2: NDArray[np.uint64],
@@ -67,7 +67,7 @@ def gen_boards_big(arr0: NDArray[np.uint64],
         length_factor = length_factor if ~np.isnan(length_factor) else 3
 
         arr1t, arr2t, hashmap1, hashmap2, counts1, counts2 = \
-            gen_boards(arr0t, target, position, pattern_check_func, success_check_func, to_find_func,
+            gen_boards(arr0t, target, pattern_check_func, success_check_func, canonical_func,
                        hashmap1, hashmap2, n, length_factor, do_check, isfree)
 
         validate_length_and_balance(arr0t, arr2t, arr1t, counts1, counts2, length_factor, True)
@@ -196,9 +196,8 @@ def generate_process(
         arr_init: NDArray[np.uint64],
         pattern_check_func: PatternCheckFunc,
         success_check_func: SuccessCheckFunc,
-        to_find_func: ToFindFunc,
+        canonical_func: CanonicalFunc,
         target: int,
-        position: int,
         steps: int,
         pathname: str,
         docheck_step: int,
@@ -207,7 +206,7 @@ def generate_process(
 ) -> Tuple[bool, NDArray[np.uint64], NDArray[np.uint64]]:
     global move_all_dir
     if is_variant:
-        from Variants.vBoardMover import move_all_dir
+        from VBoardMover import move_all_dir
     else:
         from BoardMover import move_all_dir
 
@@ -238,8 +237,8 @@ def generate_process(
             if len(d0) < 10000 or arr_init[0] in (np.uint64(0xffff00000000ffff), np.uint64(0x000f000f000fffff)) or \
                     (3.2 in length_factors):
                 # 数组较小(或2x4，3x3或断点重连)的应用简单方法
-                d1t, d2 = gen_boards_simple(d0, target, position, pattern_check_func, success_check_func,
-                                            to_find_func, i > docheck_step, isfree)
+                d1t, d2 = gen_boards_simple(d0, target, pattern_check_func, success_check_func,
+                                            canonical_func, i > docheck_step, isfree)
             else:
                 # 先预测预分配数组的长度乘数
                 length_factor = predict_next_length_factor_quadratic(length_factors)
@@ -250,7 +249,7 @@ def generate_process(
                     hashmap1, hashmap2 = update_hashmap_length(hashmap1, d0), update_hashmap_length(hashmap2, d0)  # 初始化
 
                 d1t, d2, hashmap1, hashmap2, counts1, counts2 = \
-                    gen_boards(d0, target, position, pattern_check_func, success_check_func, to_find_func,
+                    gen_boards(d0, target, pattern_check_func, success_check_func, canonical_func,
                                hashmap1, hashmap2, n, length_factor, i > docheck_step, isfree)
 
                 validate_length_and_balance(d0, d2, d1t, counts1, counts2, length_factor, False)
@@ -293,7 +292,7 @@ def generate_process(
                                       np.empty(largest_power_of_2(hashmap_max_length), dtype=np.uint64))  # 初始化
             (d1s, d2s, pivots_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2,
              t0, gen_time, t2) = \
-                gen_boards_big(d0, target, position, pattern_check_func, success_check_func, to_find_func,
+                gen_boards_big(d0, target, pattern_check_func, success_check_func, canonical_func,
                                pivots_list, hashmap1, hashmap2, n, length_factors_list,
                                length_factor_multiplier, i > docheck_step, isfree)
 
@@ -381,10 +380,9 @@ def log_performance(i, t0, t1, t2, t3, d1):
 @njit(nogil=True, parallel=True, cache=True)
 def gen_boards(arr0: NDArray[np.uint64],
                target: int,
-               position: int,
                pattern_check_func: PatternCheckFunc,
                success_check_func: SuccessCheckFunc,
-               to_find_func: ToFindFunc,
+               canonical_func: CanonicalFunc,
                hashmap1: NDArray[np.uint64],
                hashmap2: NDArray[np.uint64],
                n: int = 8,
@@ -429,14 +427,14 @@ def gen_boards(arr0: NDArray[np.uint64],
 
             for b in range(start, end):
                 t: np.uint64 = arr0[b]
-                if do_check and success_check_func(t, target, position):
+                if do_check and success_check_func(t, target):
                     continue
                 for i in range(16):  # 遍历每个位置
                     if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):
                         t1 = t | (np.uint64(1) << np.uint64(4 * i))  # 填充数字2
                         for newt in move_all_dir(t1):
                             if newt != t1 and pattern_check_func(newt):
-                                newt = to_find_func(newt)
+                                newt = canonical_func(newt)
                                 hashed_newt = (hash_(newt)) & hashmap1_length
                                 if hashmap1[hashed_newt] != newt:
                                     hashmap1[hashed_newt] = newt
@@ -446,7 +444,7 @@ def gen_boards(arr0: NDArray[np.uint64],
                         t1 = t | (np.uint64(2) << np.uint64(4 * i))  # 填充数字4
                         for newt in move_all_dir(t1):
                             if newt != t1 and pattern_check_func(newt):
-                                newt = to_find_func(newt)
+                                newt = canonical_func(newt)
                                 hashed_newt = (hash_(newt)) & hashmap2_length
                                 if hashmap2[hashed_newt] != newt:
                                     hashmap2[hashed_newt] = newt
@@ -466,10 +464,9 @@ def gen_boards(arr0: NDArray[np.uint64],
 @njit(nogil=True, parallel=True, cache=True)
 def gen_boards_simple(arr0: NDArray[np.uint64],
                       target: int,
-                      position: int,
                       pattern_check_func: PatternCheckFunc,
                       success_check_func: SuccessCheckFunc,
-                      to_find_func: ToFindFunc,
+                      canonical_func: CanonicalFunc,
                       do_check: bool = True,
                       isfree: bool = False
                       ) -> Tuple[NDArray[np.uint64], NDArray[np.uint64]]:
@@ -484,7 +481,7 @@ def gen_boards_simple(arr0: NDArray[np.uint64],
         ct = 0
         for t in arr0:
             # 如果当前棋盘状态已经符合成功条件，将其成功概率设为1
-            if do_check and success_check_func(t, target, position):
+            if do_check and success_check_func(t, target):
                 continue  # 由于已成功，无需进一步处理这个棋盘状态，继续下一个
             for i in range(16):  # 遍历每个位置
                 # 检查第i位置是否为空，如果为空，进行填充操作
@@ -494,7 +491,7 @@ def gen_boards_simple(arr0: NDArray[np.uint64],
                     # 尝试所有四个方向上的移动
                     for newt in move_all_dir(t1):
                         if newt != t1 and pattern_check_func(newt):
-                            arr[ct] = to_find_func(newt)
+                            arr[ct] = canonical_func(newt)
                             ct += 1
         arrs[p - 1] = arr[:ct]
     # 返回包含可能的新棋盘状态的两个array

@@ -1,3 +1,4 @@
+import os
 import sys
 from collections import defaultdict
 from datetime import datetime
@@ -10,7 +11,7 @@ from PyQt5.QtGui import QIcon
 
 import BoardMover as bm
 from BookReader import BookReaderDispatcher
-from Config import SingletonConfig, category_info, ColorManager
+from Config import SingletonConfig, category_info, ColorManager, DTYPE_CONFIG, logger, formation_info
 from Gamer import BaseBoardFrame
 from Analyzer import AnalyzeWindow
 from RecordPlayer import ReplayWindow
@@ -95,12 +96,6 @@ class ScrollTextDisplay(QWidget):
 
 
 class TestFrame(BaseBoardFrame):
-    v_inits = {
-        '2x4': np.array([np.uint64(0xffff00000000ffff)], dtype=np.uint64),
-        '3x3': np.array([np.uint64(0x000f000f000fffff)], dtype=np.uint64),
-        '3x4': np.array([np.uint64(0x000000000000ffff)], dtype=np.uint64),
-    }
-
     def __init__(self, centralwidget=None):
         super(TestFrame, self).__init__(centralwidget)
         self.combo = 0
@@ -127,7 +122,7 @@ class TestFrame(BaseBoardFrame):
 
     def set_to_variant(self, pattern: str):
         self.set_use_variant(pattern)
-        self.board_encoded = self.v_inits[pattern][0]
+        self.board_encoded = formation_info[pattern][4][0]
         self.board = bm.decode_board(self.board_encoded)
         self.update_all_frame(self.board)
 
@@ -145,7 +140,7 @@ class TestWindow(QtWidgets.QMainWindow):
         self.setupUi()
         self.isProcessing = False
         self.result = {}
-        self.pattern = ['?', '?', '?']
+        self.pattern = ['?', '?']
         self.full_pattern = None
         # 分析verse replay的窗口
         self.analyze_window = None
@@ -155,8 +150,9 @@ class TestWindow(QtWidgets.QMainWindow):
         # 保存回放和相关信息
         self.record = np.empty(4000, dtype='uint64,uint8,uint32,uint32,uint32,uint32')
         self.step_count = 0
+        self.default_record_dir = os.path.dirname(__file__)
 
-        self.reader_thread = ReaderWorker(self.book_reader, np.zeros((4, 4)), ['?', '?', '?'], '')
+        self.reader_thread = ReaderWorker(self.book_reader, np.zeros((4, 4)), ['?', '?'], '')
         self.reader_thread.result_ready.connect(self._show_results)
 
     def setupUi(self):
@@ -277,15 +273,12 @@ class TestWindow(QtWidgets.QMainWindow):
             m.triggered.connect(lambda: self.menu_selected(1))  # type: ignore
             self.menu_tgt.addAction(m)
         self.menubar.addAction(self.menu_tgt.menuAction())
-        self.menu_pos = QtWidgets.QMenu(self.menubar)
-        self.menu_pos.setObjectName("menuMENU")
-        for ptn in ["0", "1", "2", '?']:
-            m = QtWidgets.QAction(ptn, self)
-            m.triggered.connect(lambda: self.menu_selected(2))  # type: ignore
-            self.menu_pos.addAction(m)
-        self.menubar.addAction(self.menu_pos.menuAction())
         QtCore.QMetaObject.connectSlotsByName(self)
         self.setCentralWidget(self.centralwidget)
+
+        self.statusbar = QtWidgets.QStatusBar(self)
+        self.statusbar.setObjectName("statusbar")
+        self.setStatusBar(self.statusbar)
 
         self.retranslateUi()
 
@@ -293,7 +286,6 @@ class TestWindow(QtWidgets.QMainWindow):
         _translate = QtCore.QCoreApplication.translate
         self.setWindowTitle(_translate("Tester", "Tester"))
         self.menu_ptn.setTitle(_translate("Tester", "Pattern"))
-        self.menu_pos.setTitle(_translate("Tester", "Position"))
         self.menu_tgt.setTitle(_translate("Tester", "Target"))
         self.set_board_bt.setText(_translate("Tester", "SET"))
         self.save_log_bt.setText(_translate("Tester", "Save Logs"))
@@ -310,24 +302,17 @@ class TestWindow(QtWidgets.QMainWindow):
         self.text_display.add_text('_'.join(self.pattern))
         self.text_display.update_text()
 
-        if '?' not in self.pattern[:2]:
-            if self.pattern[0] in ['2x4', '3x3', '3x4']:
+        if '?' not in self.pattern:
+            if self.pattern[0] in category_info.get('variant', []):
                 self.gameframe.set_to_variant(self.pattern[0])
             else:
                 self.gameframe.set_to_44()
 
-            if self.pattern[0] in ("444", "LL", "L3") and self.pattern[2] != '?':
-                self.full_pattern = '_'.join(self.pattern)
-                path_found, path_list = self.init()
-                if path_found:
-                    self.book_reader.dispatch(path_list, self.pattern[0], self.pattern[1])
-                    self.init_random_state()
-            elif self.pattern[0] not in ("444", "LL", "L3"):
-                self.full_pattern = '_'.join(self.pattern[:2])
-                path_found, path_list = self.init()
-                if path_found:
-                    self.book_reader.dispatch(path_list, self.pattern[0], self.pattern[1])
-                    self.init_random_state()
+            self.full_pattern = '_'.join(self.pattern)
+            path_found, path_list = self.init()
+            if path_found:
+                self.book_reader.dispatch(path_list, self.pattern[0], self.pattern[1])
+                self.init_random_state()
 
             self.reader_thread.current_pattern = self.full_pattern
             self.reader_thread.pattern_settings = self.pattern
@@ -348,7 +333,8 @@ class TestWindow(QtWidgets.QMainWindow):
             "**Terrible!**": 0,
         }
 
-        path = SingletonConfig().config['filepath_map'].get(self.full_pattern, [])
+        spawn_rate4 = SingletonConfig().config['4_spawn_rate']
+        path = SingletonConfig().config['filepath_map'].get((self.full_pattern, spawn_rate4), [])
         if not path or not SingletonConfig().check_pattern_file(self.full_pattern):
             self.text_display.add_text(self.tr('Table file path not found!'))
             self.text_display.update_text()
@@ -364,12 +350,16 @@ class TestWindow(QtWidgets.QMainWindow):
             return True, path
 
     def init_random_state(self):
-        path_list = SingletonConfig().config['filepath_map'].get(self.full_pattern, [])
+        spawn_rate4 = SingletonConfig().config['4_spawn_rate']
+        path_list = SingletonConfig().config['filepath_map'].get((self.full_pattern, spawn_rate4), [])
         self.gameframe.board_encoded = self.book_reader.get_random_state(path_list, self.full_pattern)
         self.gameframe.board_encoded = self.do_random_rotate(self.gameframe.board_encoded)
         self.gameframe.board = bm.decode_board(self.gameframe.board_encoded)
-        self.result = self.book_reader.move_on_dic(
+        self.result, success_rate_dtype = self.book_reader.move_on_dic(
             self.gameframe.board, self.pattern[0], self.pattern[1], self.full_pattern)
+        _, _, _, zero_val = DTYPE_CONFIG.get(success_rate_dtype, DTYPE_CONFIG['uint32'])
+        self.result = {key: formatting(value, zero_val) for key, value in self.result.items()}
+
         self.text_display.lines[0] = self.text_display.lines[0].replace(self.tr(' Loading...'), '')
         self.text_display.add_text(self.tr("We'll start from:"))
         self.text_display.print_board(self.gameframe.board)
@@ -385,8 +375,11 @@ class TestWindow(QtWidgets.QMainWindow):
         if path_found:
             self.gameframe.board_encoded = np.uint64(int(self.board_state.text(), 16))
             self.gameframe.board = bm.decode_board(self.gameframe.board_encoded)
-            self.result = self.book_reader.move_on_dic(self.gameframe.board, self.pattern[0], self.pattern[1],
-                                                 self.full_pattern)
+            self.result, success_rate_dtype = self.book_reader.move_on_dic(self.gameframe.board, self.pattern[0],
+                                                                           self.pattern[1], self.full_pattern)
+            _, _, _, zero_val = DTYPE_CONFIG.get(success_rate_dtype, DTYPE_CONFIG['uint32'])
+            self.result = {key: formatting(value, zero_val) for key, value in self.result.items()}
+
             self.text_display.lines[0] = self.text_display.lines[0].replace(self.tr(' Loading...'), '')
             self.text_display.add_text(self.tr("We'll start from:"))
             self.text_display.print_board(self.gameframe.board)
@@ -402,36 +395,41 @@ class TestWindow(QtWidgets.QMainWindow):
         return np.uint64(bm.encode_board(operation_func(bm.decode_board(board_encoded))))
 
     def save_logs_to_file(self):
-        if self.full_pattern is None or len(self.text_display.lines) < 1:
+        if self.full_pattern is None or len(self.text_display.lines) < 5:
             return
         current_time = datetime.now().strftime("%Y%m%d%H%M%S")
         default_filename = f"{self.full_pattern}_{current_time}_{self.gameframe.goodness_of_fit:.4f}_log.txt"
+        initial_path = os.path.join(self.default_record_dir, default_filename)
         # 打开文件保存对话框
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
             "Save Logs",  # 对话框标题
-            default_filename,  # 默认文件名
+            initial_path,  # 默认文件名
             "Text Files (*.txt);;All Files (*)",  # 文件过滤器
         )
         if file_path:
+            self.default_record_dir = os.path.dirname(file_path)
             # 如果用户选择了文件路径，写入文件
             with open(file_path, 'w', encoding='utf-8') as file:
                 for line in self.text_display.lines:
                     file.write(line.replace('**', '').replace('&nbsp;', ' ') + '\n')
 
     def save_rec_to_file(self):
-        if self.full_pattern is None or len(self.text_display.lines) < 1:
+        if self.full_pattern is None or len(self.text_display.lines) < 5:
             return
         current_time = datetime.now().strftime("%Y%m%d%H%M%S")
         default_filename = f"{self.full_pattern}_{current_time}_{self.gameframe.goodness_of_fit:.4f}_rec.rpl"
-        # 打开文件保存对话框
+        initial_path = os.path.join(self.default_record_dir, default_filename)
+
+        # 4. 打开文件保存对话框
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
-            "Save Logs",  # 对话框标题
-            default_filename,  # 默认文件名
-            "Text Files (*.rpl);;All Files (*)",  # 文件过滤器
+            "Save Logs",
+            initial_path,  # 这里传入拼接后的完整路径
+            "Record Files (*.rpl);;All Files (*)",
         )
         if file_path:
+            self.default_record_dir = os.path.dirname(file_path)
             # 添加验证数据
             self.record[self.step_count] = (
                 self.record[self.step_count][0], 88, 666666666, 233333333, 314159265, 987654321)
@@ -487,7 +485,15 @@ class TestWindow(QtWidgets.QMainWindow):
     def keyPressEvent(self, event):
         if self.isProcessing:
             return
-        if event.key() in (QtCore.Qt.Key.Key_Up, QtCore.Qt.Key.Key_W):
+
+        if event.key() == QtCore.Qt.Key.Key_R:
+            self.handle_quick_reset()
+            event.accept()
+        elif event.key() == QtCore.Qt.Key.Key_F:
+            new_state = not self.dis_text_checkBox.isChecked()
+            self.dis_text_checkBox.setChecked(new_state)
+            event.accept()
+        elif event.key() in (QtCore.Qt.Key.Key_Up, QtCore.Qt.Key.Key_W):
             self.process_input('Up')
             event.accept()
         elif event.key() in (QtCore.Qt.Key.Key_Down, QtCore.Qt.Key.Key_S):
@@ -609,7 +615,12 @@ class TestWindow(QtWidgets.QMainWindow):
         success_rates = []
         for d in ('left', 'right', 'up', 'down'):
             rate = self.result[d]
-            if isinstance(rate, (int, float)):
+            if isinstance(rate, str):
+                try:
+                    rate = eval(rate)
+                except SyntaxError:
+                    pass
+            if isinstance(rate, (int, float, np.integer, np.floating)):
                 success_rates.append(np.uint32(rate * 4e9))
             else:
                 success_rates.append(np.uint32(0))
@@ -624,6 +635,43 @@ class TestWindow(QtWidgets.QMainWindow):
         self.text_display.show_text = self.dis_text_checkBox.isChecked()
         self.text_display.update_text()
         SingletonConfig().config['dis_text'] = self.dis_text_checkBox.isChecked()
+
+    def handle_quick_reset(self):
+        if self.full_pattern is None:
+            return
+
+        if len(self.text_display.lines) < 5:
+            self._reset_logic()
+            return
+
+        # 3. 自动保存回放 (.rpl)
+        current_time = datetime.now().strftime("%Y%m%d%H%M%S")
+        # 生成文件名：定式_时间_吻合度.rpl
+        filename = f"{self.full_pattern}_{current_time}_{self.gameframe.goodness_of_fit:.4f}_rec.rpl"
+        file_path = os.path.join(self.default_record_dir, filename)
+
+        try:
+            # 添加验证数据并保存（逻辑复用自 save_rec_to_file）
+            self.record[self.step_count] = (
+                self.record[self.step_count][0], 88, 666666666, 233333333, 314159265, 987654321)
+            self.record[:self.step_count + 1].tofile(file_path)
+            self.statusbar.showMessage(self.tr("Auto-saved:") + f" {file_path}", 3000)
+        except Exception as e:
+            self.statusbar.showMessage(self.tr("Save Failed"), 3000)
+            logger.warning(f"Save Failed: {str(e)}")
+
+        # 4. 执行重置逻辑
+        self._reset_logic()
+
+    def _reset_logic(self):
+        """内部使用的局面重置逻辑"""
+        # 如果 board_state 不为全 0，说明用户设定了特定局面，执行 set_board_init
+        if self.board_state.text() != '0000000000000000':
+            self.set_board_init()
+        else:
+            # 否则重新生成随机开局
+            self.init_random_state()
+        self.gameframe.setFocus()
 
     @staticmethod
     def encode(a, b, c):
@@ -647,9 +695,19 @@ class ReaderWorker(QtCore.QThread):
         self.current_pattern = current_pattern
 
     def run(self):
-        result = self.book_reader.move_on_dic(self.board_state, self.pattern_settings[0], self.pattern_settings[1],
-                                              self.current_pattern, self.pattern_settings[2])
+        result, success_rate_dtype = self.book_reader.move_on_dic(self.board_state, self.pattern_settings[0], self.pattern_settings[1],
+                                              self.current_pattern)
+        _, _, max_scale, zero_val = DTYPE_CONFIG.get(success_rate_dtype, DTYPE_CONFIG['uint32'])
+
+        result = {key: formatting(value, zero_val) for key, value in result.items()}
         self.result_ready.emit(result)
+
+def formatting(value, zero_val):
+    if zero_val >= 0 or not isinstance(value, (int, float, np.integer, np.floating)):
+        return value
+    elif value >= 0 or value < -1e-7:
+        return abs(zero_val) + value
+    return str(abs(zero_val)).strip('.0') + str(value)
 
 
 if __name__ == "__main__":

@@ -10,16 +10,17 @@ from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QShortcut
 
 from AIPlayer import AIPlayer, Dispatcher, EvilGen
-import Variants.vBoardMover as vbm
+import VBoardMover as vbm
 import BoardMover as bm
 from Calculator import find_merge_positions, slide_distance
-from Config import SingletonConfig, ColorManager
+from Config import SingletonConfig, ColorManager, category_info
 
 
 # noinspection PyAttributeOutsideInit
 class SquareFrame(QtWidgets.QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.use_variant_style = 0
         self.setupUi()
         self.animation_config = {
             'appear': {'duration': 120, 'curve': QtCore.QEasingCurve.OutCubic},
@@ -98,8 +99,12 @@ class SquareFrame(QtWidgets.QFrame):
         frame = self.frames[row][col]
         label = self.labels[row][col]
 
-        color_index = int(np.log2(value) - 1) if value > 1 else -1
-        color = self.colors[color_index]
+        if self.use_variant_style != 0 and value == 32768:
+            color_mgr = ColorManager()
+            color = color_mgr.get_css_color(7)
+        else:
+            color_index = int(np.log2(value) - 1) if value > 1 else -1
+            color = self.colors[color_index]
 
         # 设置数字块颜色
         frame.setStyleSheet(f"""
@@ -459,7 +464,9 @@ class BaseBoardFrame(QtWidgets.QFrame):
             self.update_all_frame(self.board)
 
     def set_use_variant(self, pattern: str = ''):
-        self.use_variant_mover = {'2x4': 1, '3x3': 2, '3x4': 3}.get(pattern, 0)
+        self.use_variant_mover = 1 if pattern in category_info.get('variant', []) else 0
+        self.game_square.use_variant_style = self.use_variant_mover
+        self.update_all_frame(self.board)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -520,7 +527,7 @@ class GameFrame(BaseBoardFrame):
     def do_ai_move(self, direction):
         if not direction:
             self.died_when_ai_state = True
-            self.AIMoveDone.emit(False)
+            self.AIMoveDone.emit(True)
         else:
             self.died_when_ai_state = False
             self.do_move(direction)
@@ -1034,12 +1041,8 @@ class GameWindow(QtWidgets.QMainWindow):
             self.ai.setText(self.tr("STOP"))
             self.ai_state = True
             self.ai_timer.singleShot(20, self.handleOneStep)
-            if (not SingletonConfig().config['filepath_map'].get('free12w_2048', []) or
-                    not SingletonConfig().config['filepath_map'].get('4442f_2k', []) or
-                not SingletonConfig().config['filepath_map'].get('free11w_512', []) or
-                not SingletonConfig().config['filepath_map'].get('free11w_2k', [])):
-                self.statusbar.showMessage(self.tr(
-                    "Run free12w-2k free11w-2k 4442f-2k free11w-512 for best performance."), 5000)
+            self.statusbar.showMessage(self.tr(
+                "Run larger tables for better performance."), 5000)
         else:
             self.ai.setText("AI: ON")
             self.ai_state = False

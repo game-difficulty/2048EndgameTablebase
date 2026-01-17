@@ -13,9 +13,9 @@ from Config import SingletonConfig
 
 
 PatternCheckFunc = Callable[[np.uint64], bool]
-SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
-ToFindFunc = Callable[[NDArray[np.uint64]], None]
-ToFindFunc1 = Callable[[np.uint64], np.uint64]
+SuccessCheckFunc = Callable[[np.uint64, int], bool]
+CanonicalFunc = Callable[[NDArray[np.uint64]], None]
+CanonicalFunc1 = Callable[[np.uint64], np.uint64]
 
 logger = Config.logger
 use_avx = SingletonConfig().use_avx

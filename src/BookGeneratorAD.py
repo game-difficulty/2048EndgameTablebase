@@ -24,8 +24,8 @@ from SignalHub import progress_signal
 logger = Config.logger
 
 PatternCheckFunc = Callable[[np.uint64], bool]
-SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
-ToFindFunc = Callable[[np.uint64], np.uint64]
+SuccessCheckFunc = Callable[[np.uint64, int], bool]
+CanonicalFunc = Callable[[np.uint64], np.uint64]
 SymFindFunc = Callable[[np.uint64], Tuple[np.uint64, int]]
 
 KeyType = types.UniTuple(types.uint8, 2)
@@ -36,7 +36,7 @@ ValueType2 = types.uint8[:]
 @njit(nogil=True, parallel=True)
 def gen_boards_ad(arr0: NDArray[np.uint64],
                   pattern_check_func: PatternCheckFunc,
-                  to_find_func: ToFindFunc,
+                  canonical_func: CanonicalFunc,
                   sym_func: SymFindFunc,
                   hashmap1: NDArray[np.uint64],
                   hashmap2: NDArray[np.uint64],
@@ -115,7 +115,7 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
                                 continue
                             for derived_board in derived_boards:
                                 if pattern_check_func(derived_board):
-                                    arr1[c1t] = to_find_func(derived_board)
+                                    arr1[c1t] = canonical_func(derived_board)
                                     c1t += 1
 
                         t1 = t | (np.uint64(2) << np.uint64(4 * i))  # 填4
@@ -142,7 +142,7 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
                                 continue
                             for derived_board in derived_boards:
                                 if pattern_check_func(derived_board):
-                                    arr2[c2t] = to_find_func(derived_board)
+                                    arr2[c2t] = canonical_func(derived_board)
                                     c2t += 1
 
         c1[s] = np.uint64(c1t)
@@ -271,7 +271,7 @@ def handle_restart_ad(i, pathname, arr_init, started, d0, d1):
 def generate_process_ad(
         arr_init: NDArray[np.uint64],
         pattern_check_func: PatternCheckFunc,
-        to_find_func: ToFindFunc,
+        canonical_func: CanonicalFunc,
         sym_func: SymFindFunc,
         steps: int,
         pathname: str,
@@ -315,7 +315,7 @@ def generate_process_ad(
                 hashmap1, hashmap2 = update_hashmap_length(hashmap1, d0), update_hashmap_length(hashmap2, d0)  # 初始化
 
             d1t, d2, hashmap1, hashmap2, counts1, counts2 = \
-                gen_boards_ad(d0, pattern_check_func, to_find_func, sym_func,
+                gen_boards_ad(d0, pattern_check_func, canonical_func, sym_func,
                               hashmap1, hashmap2, board_sum, tiles_combinations_arr, param, n, length_factor, isfree)
 
             validate_length_and_balance(d0, d2, d1t, counts1, counts2, length_factor, False)
@@ -356,7 +356,7 @@ def generate_process_ad(
                                       np.empty(largest_power_of_2(hashmap_max_length), dtype=np.uint64))  # 初始化
             (d1s, d2s, pivots_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2,
              t0, gen_time, t2) = \
-                gen_boards_big_ad(d0, pattern_check_func, sym_func, to_find_func,
+                gen_boards_big_ad(d0, pattern_check_func, sym_func, canonical_func,
                                pivots_list, hashmap1, hashmap2, board_sum, tiles_combinations_arr, param, n,
                                length_factors_list, length_factor_multiplier, isfree)
 
@@ -396,7 +396,7 @@ def generate_process_ad(
 def gen_boards_big_ad(arr0: NDArray[np.uint64],
                    pattern_check_func: PatternCheckFunc,
                    sym_func: SymFindFunc,
-                   to_find_func: ToFindFunc,
+                   canonical_func: CanonicalFunc,
                    pivots_list: List[NDArray[np.uint64]],
                    hashmap1: NDArray[np.uint64],
                    hashmap2: NDArray[np.uint64],
@@ -435,7 +435,7 @@ def gen_boards_big_ad(arr0: NDArray[np.uint64],
         length_factor *= length_factor_multiplier  # type: ignore
 
         arr1t, arr2t, hashmap1, hashmap2, counts1, counts2 = \
-            gen_boards_ad(arr0t, pattern_check_func, to_find_func, sym_func,
+            gen_boards_ad(arr0t, pattern_check_func, canonical_func, sym_func,
                        hashmap1, hashmap2, board_sum, tiles_combinations_arr, param, n, length_factor, isfree)
 
         validate_length_and_balance(arr0t, arr2t, arr1t, counts1, counts2, length_factor, True)

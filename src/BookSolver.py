@@ -1,13 +1,12 @@
 import os
 import time
 from datetime import datetime
-from typing import Callable, Tuple
+from typing import Callable, Tuple, TypeAlias, Union
 
 import numpy as np
 from numpy.typing import NDArray
 from numba import njit, prange
 
-from BoardMover import move_all_dir
 import Config
 from Config import SingletonConfig
 from TrieCompressor import trie_compress_progress
@@ -15,20 +14,25 @@ from LzmaCompressor import compress_with_7z, decompress_with_7z
 from SignalHub import progress_signal
 
 PatternCheckFunc = Callable[[np.uint64], bool]
-SuccessCheckFunc = Callable[[np.uint64, int, int], bool]
-ToFindFunc = Callable[[np.uint64], np.uint64]
+SuccessCheckFunc = Callable[[np.uint64, int], bool]
+CanonicalFunc = Callable[[np.uint64], np.uint64]
+
+ValidDType: TypeAlias = Union[type[np.uint32], type[np.uint64], type[np.float32], type[np.float64]]
+SuccessRateDType: TypeAlias = Union[np.uint32, np.uint64, np.float32, np.float64]
+
+move_all_dir: Callable[[np.uint64], tuple[np.uint64, np.uint64, np.uint64, np.uint64]]
 
 logger = Config.logger
 
 
-def handle_restart(i, pathname, steps, d1, d2, started):
+def handle_restart(i, pathname, steps, d1, d2, started, dtype):
     """
     处理断点重连逻辑
     """
     if os.path.exists(pathname + str(i) + '.book'):
         logger.debug(f"skipping step {i}")
         if not SingletonConfig().config.get('optimal_branch_only', False):
-            do_compress(pathname + str(i + 2) + '.book')
+            do_compress(pathname + str(i + 2) + '.book', dtype)
         return False, None, None
     elif os.path.exists(pathname + str(i) + '.z') or \
             os.path.exists(pathname + str(i) + '.book.7z'):
@@ -37,30 +41,31 @@ def handle_restart(i, pathname, steps, d1, d2, started):
     elif not started:
         started = True
         if i != steps - 3 or d1 is None or d2 is None:
-            d1 = np.fromfile(pathname + str(i + 1) + '.book', dtype='uint64,uint32')
-            d2 = np.fromfile(pathname + str(i + 2) + '.book', dtype='uint64,uint32')
+            d1 = np.fromfile(pathname + str(i + 1) + '.book', dtype=f'uint64,{np.dtype(dtype).name}')
+            d2 = np.fromfile(pathname + str(i + 2) + '.book', dtype=f'uint64,{np.dtype(dtype).name}')
         return started, d1, d2
 
     return True, d1, d2
 
 
 def recalculate_process(
-        d1: NDArray[[np.uint64, np.uint32]],
-        d2: NDArray[[np.uint64, np.uint32]],
+        d1: NDArray[[np.uint64, SuccessRateDType]],
+        d2: NDArray[[np.uint64, SuccessRateDType]],
         pattern_check_func: PatternCheckFunc,
         success_check_func: SuccessCheckFunc,
-        to_find_func: ToFindFunc,
+        canonical_func: CanonicalFunc,
         target: int,
-        position: int,
         steps: int,
         pathname: str,
         docheck_step: int,
         spawn_rate4: float = 0.1,
         is_variant:bool = False,
 ) -> None:
+    success_rate_dtype = SingletonConfig().config.get('success_rate_dtype', 'uint32')
+    template, current_dtype, max_scale, zero_val = Config.DTYPE_CONFIG[success_rate_dtype]
     global move_all_dir
     if is_variant:
-        from Variants.vBoardMover import move_all_dir
+        from VBoardMover import move_all_dir
     else:
         from BoardMover import move_all_dir
 
@@ -74,20 +79,22 @@ def recalculate_process(
 
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
-        started, d1, d2 = handle_restart(i, pathname, steps, d1, d2, started)
+        started, d1, d2 = handle_restart(i, pathname, steps, d1, d2, started, current_dtype)
         if not started:
             continue
 
         progress_signal.progress_updated.emit(steps * 2 - i - 2, steps * 2)
 
-        deletion_threshold = np.uint32(SingletonConfig().config.get('deletion_threshold', 0.0) * 4e9)
+        deletion_threshold_n = SingletonConfig().config.get('deletion_threshold', 0.0)
+        deletion_threshold = current_dtype(deletion_threshold_n * (max_scale - zero_val) + zero_val)
         if SingletonConfig().config.get('compress_temp_files', False):
             decompress_with_7z(pathname + str(i) + '.7z')
         d0 = np.fromfile(pathname + str(i), dtype=np.uint64)
 
         t0 = time.time()
 
-        expanded_arr0 = expand(d0)
+        arr0 = np.empty(len(d0), dtype=template.dtype)
+        expanded_arr0 = expand(d0, arr0)
         del d0
 
         # 创建、更新查找索引
@@ -104,11 +111,11 @@ def recalculate_process(
         t1 = time.time()
 
         # 回算
-        d0 = recalculate(expanded_arr0, d1, d2, target, position, pattern_check_func, success_check_func,
-                         to_find_func, ind1, ind2, i > docheck_step, spawn_rate4)
+        d0 = recalculate(expanded_arr0, d1, d2, target, pattern_check_func, success_check_func,
+                         canonical_func, ind1, ind2, max_scale, zero_val, i > docheck_step, spawn_rate4)
         length = len(d0)
         t2 = time.time()
-        d0 = remove_died(d0).copy()  # 去除0成功率的局面
+        d0 = remove_died(d0, zero_val).copy()  # 去除0成功率的局面
 
         t3 = time.time()
         if t3 > t0:
@@ -118,16 +125,16 @@ def recalculate_process(
 
         if len(d0):
             with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
-                file.write(','.join([str(i), str(length), str(np.max(d0['f1']) / 4e9),
+                file.write(','.join([str(i), str(length), str((np.max(d0['f1']) - zero_val) / (max_scale - zero_val)),
                                      f'{round(length / max((t3 - t0), 0.01) / 1e6, 2)} mbps',
-                                     str(deletion_threshold / 4e9), str(datetime.now())]) + '\n')
+                                     str(deletion_threshold_n), str(datetime.now())]) + '\n')
 
         d0.tofile(pathname + str(i) + '.book')
         if os.path.exists(pathname + str(i)):
             os.remove(pathname + str(i))
         logger.debug(f'step {i} written\n')
 
-        if deletion_threshold > 0:
+        if deletion_threshold_n > 0:
             remove_died(d2, deletion_threshold).tofile(pathname + str(i + 2) + '.book')  # 再写一次，把成功率低于阈值的局面去掉
 
         if (SingletonConfig().config.get('compress_temp_files', False) and
@@ -135,15 +142,14 @@ def recalculate_process(
             compress_with_7z(pathname + str(i + 2) + '.book')
         elif (SingletonConfig().config.get('compress', False) and
               not SingletonConfig().config.get('optimal_branch_only', False)):
-            do_compress(pathname + str(i + 2) + '.book')  # 如果设置了压缩，则压缩i+2的book，其已经不需要再频繁查找
+            do_compress(pathname + str(i + 2) + '.book', current_dtype)  # 如果设置了压缩，则压缩i+2的book，其已经不需要再频繁查找
 
         if i > 0:
             d1, d2 = d0, d1
 
 
 @njit(nogil=True, parallel=True, cache=True)
-def expand(arr: NDArray[np.uint64]) -> NDArray[[np.uint64, np.uint32]]:
-    arr0 = np.empty(len(arr), dtype='uint64,uint32')
+def expand(arr: NDArray[np.uint64], arr0) -> NDArray[[np.uint64, SuccessRateDType]]:
     for i in prange(len(arr)):
         arr0[i]['f0'] = arr[i]
     return arr0
@@ -151,8 +157,8 @@ def expand(arr: NDArray[np.uint64]) -> NDArray[[np.uint64, np.uint32]]:
 
 @njit(nogil=True, cache=True)
 def remove_died(
-        arr: NDArray[[np.uint64, np.uint32]], deletion_threshold: np.uint32 = 0
-) -> NDArray[[np.uint64, np.uint32]]:
+        arr: NDArray[[np.uint64, SuccessRateDType]], deletion_threshold: SuccessRateDType = 0
+) -> NDArray[[np.uint64, SuccessRateDType]]:
     count = 0
     # 原地移动成功率高于阈值的元素
     for i in range(len(arr)):
@@ -163,7 +169,7 @@ def remove_died(
 
 
 @njit(parallel=True, nogil=True, cache=True)
-def create_index(arr: NDArray[[np.uint64, np.uint32]]
+def create_index(arr: NDArray[[np.uint64, SuccessRateDType]]
                  ) -> NDArray[np.uint32] | None:
     """
     根据uint64数据的前24位的分段位置创建一个索引，长度16777216+1
@@ -185,8 +191,8 @@ def create_index(arr: NDArray[[np.uint64, np.uint32]]
 
 
 @njit(nogil=True, cache=True)
-def binary_search_arr(arr: NDArray[[np.uint64, np.uint32]],
-                      target: np.uint64, low: np.uint32 | None = None, high: np.uint32 | None = None) -> np.uint32:
+def binary_search_arr(arr: NDArray[[np.uint64, SuccessRateDType]], zero_val: SuccessRateDType,
+                      target: np.uint64, low: np.uint32 | None = None, high: np.uint32 | None = None) -> SuccessRateDType:
     if low is None:
         low = 0
         high = len(arr) - 1
@@ -201,37 +207,38 @@ def binary_search_arr(arr: NDArray[[np.uint64, np.uint32]],
         else:
             return arr[mid][1]  # 找到匹配，返回对应的uint32值
 
-    return np.uint32(0)  # 如果没有找到匹配项
+    return zero_val  # 如果没有找到匹配项
 
 
 @njit(nogil=True, cache=True)
-def search_arr(arr: NDArray[[np.uint64, np.uint32]],
-               b: np.uint64, ind: NDArray[np.uint32] | None) -> np.uint32:
+def search_arr(arr: NDArray[[np.uint64, SuccessRateDType]],
+               b: np.uint64, ind: NDArray[np.uint32] | None, zero_val: SuccessRateDType) -> SuccessRateDType:
     """
     没有索引就直接二分查找，否则先从索引中确定一个更窄的范围再查找
     """
     if ind is None:
-        return binary_search_arr(arr, b)
+        return binary_search_arr(arr, zero_val, b)
     header = b >> np.uint32(40)
     low, high = ind[header], ind[header + 1] - 1
-    return binary_search_arr(arr, b, low, high)
+    return binary_search_arr(arr, zero_val, b, low, high)
 
 
 @njit(parallel=True, nogil=True, cache=True)
 def recalculate(
-        arr0: NDArray[[np.uint64, np.uint32]],
-        arr1: NDArray[[np.uint64, np.uint32]],
-        arr2: NDArray[[np.uint64, np.uint32]],
+        arr0: NDArray[[np.uint64, SuccessRateDType]],
+        arr1: NDArray[[np.uint64, SuccessRateDType]],
+        arr2: NDArray[[np.uint64, SuccessRateDType]],
         target: int,
-        position: int,
         pattern_check_func: PatternCheckFunc,
         success_check_func: SuccessCheckFunc,
-        to_find_func: ToFindFunc,
+        canonical_func: CanonicalFunc,
         ind1: NDArray[np.uint32] | None,
         ind2: NDArray[np.uint32] | None,
+        max_scale: SuccessRateDType,
+        zero_val: SuccessRateDType,
         do_check: bool = False,
         spawn_rate4: float = 0.1
-) -> NDArray[[np.uint64, np.uint32]]:
+) -> NDArray[[np.uint64, SuccessRateDType]]:
     """
     根据已经填充好成功概率的array回算前一批面板的成功概率。
     对于arr0中的每个面板，考虑在每个空位填充数字2或4（90%概率为2，10%概率为4），
@@ -246,8 +253,8 @@ def recalculate(
             end = len(arr0)
         for k in prange(start, end):
             t: np.uint64 = arr0[k][0]
-            if do_check and success_check_func(t, target, position):
-                arr0[k][1] = 4000000000
+            if do_check and success_check_func(t, target):
+                arr0[k][1] = max_scale
                 continue
             # 初始化概率和权重
             success_probability = 0.0
@@ -259,41 +266,42 @@ def recalculate(
                     # 对于每个空位置，尝试填充2和4
                     new_value, probability = 1, 1 - spawn_rate4
                     t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
-                    optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
+                    optimal_success_rate = zero_val  # 记录有效移动后的面板成功概率中的最大值
                     for newt in move_all_dir(t_gen):
                         if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
                             # 获取移动后的面板成功概率
                             optimal_success_rate = max(optimal_success_rate, search_arr(
-                                arr1, to_find_func(newt), ind1))
+                                arr1, canonical_func(newt), ind1, zero_val))
                     # 对最佳移动下的成功概率加权平均
                     success_probability += optimal_success_rate * probability
 
                     # 填4
                     new_value, probability = 2, spawn_rate4
                     t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
-                    optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
+                    optimal_success_rate = zero_val  # 记录有效移动后的面板成功概率中的最大值
                     for newt in move_all_dir(t_gen):
                         if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
                             # 获取移动后的面板成功概率
                             optimal_success_rate = max(optimal_success_rate, search_arr(
-                                arr2, to_find_func(newt), ind2))
+                                arr2, canonical_func(newt), ind2, zero_val))
                     # 对最佳移动下的成功概率加权平均
                     success_probability += optimal_success_rate * probability
 
             # t是进行一次有效移动后尚未生成新数字时的面板，因此不可能没有空位置
-            arr0[k][1] = np.uint32(success_probability / empty_slots)
+            # numba会自动转换类型
+            arr0[k][1] = success_probability / empty_slots
 
     return arr0
 
 
-def do_compress(bookpath: str) -> None:
+def do_compress(bookpath: str, dtype: ValidDType) -> None:
     if bookpath[-4:] != 'book':
         return
     if bookpath[-7:] in ['_0.book', '_1.book', '_2.book']:
         return
     if SingletonConfig().config.get('compress', False) and os.path.exists(bookpath):
         if os.path.getsize(bookpath) > 2097152:
-            trie_compress_progress(*os.path.split(bookpath))
+            trie_compress_progress(*os.path.split(bookpath), dtype)
             if os.path.exists(bookpath):
                 os.remove(bookpath)
 
@@ -306,13 +314,14 @@ def tofile_(data, path):
 
 @njit(parallel=True, nogil=True, cache=True)
 def find_optimal_branches(
-        arr0: NDArray[[np.uint64, np.uint32]],
-        arr1: NDArray[[np.uint64, np.uint32]],
+        arr0: NDArray[[np.uint64, SuccessRateDType]],
+        arr1: NDArray[[np.uint64, SuccessRateDType]],
         result: NDArray[bool],
         pattern_check_func: PatternCheckFunc,
-        to_find_func: ToFindFunc,
+        canonical_func: CanonicalFunc,
         ind1: NDArray[np.uint32] | None,
         new_value: int,
+        zero_val: SuccessRateDType,
 ) -> NDArray[bool]:
     for start, end in (
             (0, len(arr0) // 10), (len(arr0) // 10, len(arr0) // 3), (len(arr0) // 3, len(arr0))):  # 缓解负载不均衡问题
@@ -321,12 +330,12 @@ def find_optimal_branches(
             for i in range(16):  # 遍历所有位置
                 if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
                     t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
-                    optimal_success_rate = 0  # 记录有效移动后的面板成功概率中的最大值
+                    optimal_success_rate = zero_val  # 记录有效移动后的面板成功概率中的最大值
                     optimal_pos_index = np.uint64(0)
                     for newt in move_all_dir(t_gen):
                         if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
                             # 获取移动后的面板成功概率
-                            success_rate, pos_index = search_arr2(arr1, to_find_func(newt), ind1)
+                            success_rate, pos_index = search_arr2(arr1, canonical_func(newt), ind1, zero_val)
                             if success_rate > optimal_success_rate:
                                 optimal_success_rate = success_rate
                                 optimal_pos_index = np.uint64(pos_index)
@@ -335,9 +344,9 @@ def find_optimal_branches(
 
 
 @njit(nogil=True, cache=True)
-def binary_search_arr2(arr: NDArray[[np.uint64, np.uint32]],
+def binary_search_arr2(arr: NDArray[[np.uint64, SuccessRateDType]], zero_val: SuccessRateDType,
                        target: np.uint64, low: np.uint32 | None = None, high: np.uint32 | None = None
-                       ) -> Tuple[np.uint32, np.uint64]:
+                       ) -> Tuple[SuccessRateDType, np.uint64]:
     """相比binary_search_arr，还会返回索引"""
     if low is None:
         low = 0
@@ -351,58 +360,60 @@ def binary_search_arr2(arr: NDArray[[np.uint64, np.uint32]],
         elif mid_val > target:
             high = mid - 1
         else:
-            return arr[mid][1], mid  # 找到匹配，返回对应的uint32值和索引位置
+            return arr[mid][1], mid  # 找到匹配，返回对应的值和索引位置
 
-    return np.uint32(0), np.uint64(0)  # 如果没有找到匹配项
+    return zero_val, np.uint64(0)  # 如果没有找到匹配项
 
 
 @njit(nogil=True, cache=True)
-def search_arr2(arr: NDArray[[np.uint64, np.uint32]],
-                b: np.uint64, ind: NDArray[np.uint32] | None) -> Tuple[np.uint32, np.uint64]:
+def search_arr2(arr: NDArray[[np.uint64, SuccessRateDType]],
+                b: np.uint64, ind: NDArray[np.uint32] | None, zero_val: SuccessRateDType) -> Tuple[SuccessRateDType, np.uint64]:
     """
     相比search_arr，还会返回索引
     """
     if ind is None:
-        return binary_search_arr2(arr, b)
+        return binary_search_arr2(arr, zero_val, b)
     header = b >> np.uint32(40)
     low, high = ind[header], ind[header + 1] - 1
-    return binary_search_arr2(arr, b, low, high)
+    return binary_search_arr2(arr, zero_val, b, low, high)
 
 
 def keep_only_optimal_branches(
     pattern_check_func: PatternCheckFunc,
-    to_find_func: ToFindFunc,
+    canonical_func: CanonicalFunc,
     steps: int,
     pathname: str,
     ):
+    success_rate_dtype = SingletonConfig().config.get('success_rate_dtype', 'uint32')
+    template, current_dtype, max_scale, zero_val = Config.DTYPE_CONFIG[success_rate_dtype]
     d0, d1 = None, None
     started = False
     for i in range(0, steps):
-        started, d0, d1 = handle_restart_opt_only(i, started, d0, d1, pathname)
+        started, d0, d1 = handle_restart_opt_only(i, started, d0, d1, pathname, current_dtype)
         if SingletonConfig().config.get('compress_temp_files', False):
             decompress_with_7z(pathname + str(i) + '.book.7z')
         if i > 20 and started:
-            d2 = np.fromfile(pathname + str(i) + '.book', dtype='uint64,uint32')
+            d2 = np.fromfile(pathname + str(i) + '.book', dtype=f'uint64,{np.dtype(current_dtype).name}')
             ind = create_index(d2)
             is_in_optimal_branches_mask = np.zeros(len(d2), dtype='bool')
             is_in_optimal_branches_mask = find_optimal_branches(d0, d2, is_in_optimal_branches_mask,
-                                                                pattern_check_func, to_find_func, ind, 2)
+                                                                pattern_check_func, canonical_func, ind, 2, zero_val)
             is_in_optimal_branches_mask = find_optimal_branches(d1, d2, is_in_optimal_branches_mask,
-                                                                pattern_check_func, to_find_func, ind, 1)
+                                                                pattern_check_func, canonical_func, ind, 1, zero_val)
             d2 = d2[is_in_optimal_branches_mask].copy()
             d2.tofile(pathname + str(i) + '.book')
             d0, d1 = d1, d2
             del is_in_optimal_branches_mask, d2
             logger.debug(f'step {i} retains only the optimal branch\n')
-        do_compress(pathname + str(i - 2) + '.book')
+        do_compress(pathname + str(i - 2) + '.book', current_dtype)
 
-    do_compress(pathname + str(steps - 2) + '.book')
-    do_compress(pathname + str(steps - 1) + '.book')
+    do_compress(pathname + str(steps - 2) + '.book', current_dtype)
+    do_compress(pathname + str(steps - 1) + '.book', current_dtype)
     if os.path.exists(pathname + 'optlayer'):
         os.remove(pathname + 'optlayer')
 
 
-def handle_restart_opt_only(i, started, d0, d1, pathname):
+def handle_restart_opt_only(i, started, d0, d1, pathname, dtype):
     if started and d0 is not None:
         with open(pathname + 'optlayer', 'w') as f:
             f.write(str(i - 1))
@@ -417,8 +428,8 @@ def handle_restart_opt_only(i, started, d0, d1, pathname):
     else:
         if (i > 20) & (d0 is None):
             try:
-                d0 = np.fromfile(pathname + str(i - 2) + '.book', dtype='uint64,uint32')
-                d1 = np.fromfile(pathname + str(i - 1) + '.book', dtype='uint64,uint32')
+                d0 = np.fromfile(pathname + str(i - 2) + '.book', dtype=f'uint64,{np.dtype(dtype).name}')
+                d1 = np.fromfile(pathname + str(i - 1) + '.book', dtype=f'uint64,{np.dtype(dtype).name}')
                 return True, d0, d1
             except FileNotFoundError:
                 pass
@@ -426,8 +437,8 @@ def handle_restart_opt_only(i, started, d0, d1, pathname):
 
 
 # if __name__ == "__main__":
-#     from Calculator import is_free_pattern, min_all_symm
+#     from Calculator import is_free_pattern, canonical_full
 #     from BoardMover import BoardMover
 #
-#     keep_only_optimal_branches(is_free_pattern, min_all_symm, 536,
+#     keep_only_optimal_branches(is_free_pattern, canonical_full, 536,
 #                                r"D:\2048calculates\table\free10w_1024 - 副本\free10w_1024_")

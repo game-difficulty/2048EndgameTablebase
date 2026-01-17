@@ -1,6 +1,8 @@
 import os.path
+import re
 import sys
 import time
+from pathlib import Path
 from typing import Dict, Tuple
 from collections import defaultdict
 from datetime import datetime
@@ -14,7 +16,8 @@ from PyQt5.QtWidgets import QShortcut, QApplication
 import BoardMover as bm
 from BookReader import BookReaderDispatcher
 from Calculator import ReverseUD, ReverseLR, RotateR, RotateL
-from Config import SingletonConfig, category_info, pattern_32k_tiles_map, ColorManager
+from Config import SingletonConfig, category_info, pattern_32k_tiles_map, ColorManager, DTYPE_CONFIG, logger, \
+    formation_info
 from Gamer import BaseBoardFrame
 from SignalHub import practice_signal
 
@@ -32,11 +35,6 @@ direction_map.update({
 
 class TrainFrame(BaseBoardFrame):
     dis32k = SingletonConfig().config.get('dis_32k', False)
-    v_inits = {
-        '2x4': np.array([np.uint64(0xffff00000000ffff)], dtype=np.uint64),
-        '3x3': np.array([np.uint64(0x000f000f000fffff)], dtype=np.uint64),
-        '3x4': np.array([np.uint64(0x000000000000ffff)], dtype=np.uint64),
-    }
     update_results = QtCore.pyqtSignal()  # 手动模式查表更新
 
     def __init__(self, parents, centralwidget=None):
@@ -85,9 +83,9 @@ class TrainFrame(BaseBoardFrame):
                 pos = 15 - new_tile_pos
                 if ((bd_encoded >> np.uint64(4 * pos)) & np.uint64(0xF)) == np.uint64(0):
                     board = bd_encoded | np.uint64(val) << np.uint64(4 * pos)
-                    result = self.parents.book_reader.move_on_dic(bm.decode_board(board),
+                    result, _ = self.parents.book_reader.move_on_dic(bm.decode_board(board),
                                                  self.parents.pattern_settings[0], self.parents.pattern_settings[1],
-                                            self.parents.current_pattern, self.parents.pattern_settings[2])
+                                            self.parents.current_pattern)
 
                     if isinstance(result, dict):
                         result0 = result[list(result.keys())[0]]
@@ -173,7 +171,7 @@ class TrainFrame(BaseBoardFrame):
 
     def set_to_variant(self, pattern: str):
         self.set_use_variant(pattern)
-        self.board_encoded = self.v_inits[pattern][0]
+        self.board_encoded = formation_info[pattern][4][0]
         self.board = bm.decode_board(self.board_encoded)
         self.update_all_frame(self.board)
 
@@ -191,9 +189,10 @@ class TrainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setupUi()
         self.current_pattern = ''
-        self.pattern_settings = ['', '', '0']
+        self.pattern_settings = ['', '']
         self.isProcessing = False
         self.result = dict()  # 四个方向成功率字典
+        self.success_rate_dtype = 'uint32'
 
         self.ai_state = False  # demo状态
         self.ai_timer = QTimer(self)
@@ -300,7 +299,10 @@ class TrainWindow(QtWidgets.QMainWindow):
             button.setFixedSize(QtCore.QSize(66, 66))
             self.gridLayout_tiles.addWidget(button, index // 8, index % 8, 1, 1)
             self.tile_buttons.append(button)
+        self.tile_buttons[0].setToolTip("Press E")
         self.gridLayout_operate.addWidget(self.tiles_frame, 8, 0, 1, 1)
+        self.shortcut_e = QShortcut(QKeySequence(Qt.Key.Key_E), self)
+        self.shortcut_e.activated.connect(self.handle_e_key)  # type: ignore
 
         self.gridLayout_bts = QtWidgets.QGridLayout()
         self.gridLayout_bts.setContentsMargins(0, 0, 0, 0)
@@ -369,8 +371,8 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.screenshot_btn = QtWidgets.QPushButton(self.operate)
         self.screenshot_btn.clicked.connect(self.capture_and_copy)  # type: ignore
         self.screenshot_btn.setToolTip("Ctrl+Z")
-        self.shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
-        self.shortcut.activated.connect(self.capture_and_copy)  # type: ignore
+        self.shortcut_z = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self.shortcut_z.activated.connect(self.capture_and_copy)  # type: ignore
         self.gridLayout_record.addWidget(self.screenshot_btn, 0, 3, 1, 1)
 
         self.manual_checkBox = QtWidgets.QCheckBox(self.operate)
@@ -379,8 +381,9 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.gridLayout_record.addWidget(self.manual_checkBox, 1, 0, 1, 1)
         self.manual_checkBox.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.manual_checkBox.stateChanged.connect(self.manual_state_change)  # type: ignore
-        self.shortcut = QShortcut(QKeySequence("Ctrl+Q"), self)
-        self.shortcut.activated.connect(self.manual_state_change_shortcut)  # type: ignore
+        self.manual_checkBox.setToolTip("Press Q")
+        self.shortcut_q = QShortcut(QKeySequence(Qt.Key.Key_Q), self)
+        self.shortcut_q.activated.connect(self.manual_state_change_shortcut)  # type: ignore
 
         self.best_spawn_checkBox = QtWidgets.QCheckBox(self.operate)
         self.best_spawn_checkBox.setStyleSheet("font: 360 10pt \"Cambria\";")
@@ -467,13 +470,6 @@ class TrainWindow(QtWidgets.QMainWindow):
             m.triggered.connect(lambda: self.menu_selected(1))  # type: ignore
             self.menu_tgt.addAction(m)
         self.menubar.addAction(self.menu_tgt.menuAction())
-        self.menu_pos = QtWidgets.QMenu(self.menubar)
-        self.menu_pos.setObjectName("menuMENU")
-        for ptn in ["0", "1", "2"]:
-            m = QtWidgets.QAction(ptn, self)
-            m.triggered.connect(lambda: self.menu_selected(2))  # type: ignore
-            self.menu_pos.addAction(m)
-        self.menubar.addAction(self.menu_pos.menuAction())
 
         self.retranslateUi()
         QtCore.QMetaObject.connectSlotsByName(self)
@@ -530,7 +526,6 @@ class TrainWindow(QtWidgets.QMainWindow):
         self.set_filepath_bt.setText(_translate("Train", "SET..."))
         self.dis32k_checkBox.setText(_translate("Train", "Display numbers for 32k tile"))
         self.menu_ptn.setTitle(_translate("Train", "Pattern"))
-        self.menu_pos.setTitle(_translate("Train", "Position"))
         self.menu_tgt.setTitle(_translate("Train", "Target"))
 
     def dis32k_state_change(self):
@@ -566,22 +561,17 @@ class TrainWindow(QtWidgets.QMainWindow):
         if '' in self.pattern_settings:
             return
 
-        if self.pattern_settings[0] in ['444', 'LL', 'L3']:
-            if self.pattern_settings[0] != 'L3' and self.pattern_settings[2] == '2':
-                self.pattern_settings[2] = '0'
-            self.current_pattern = '_'.join(self.pattern_settings)
-        else:
-            self.pattern_settings[2] = '0'
-            self.current_pattern = '_'.join(self.pattern_settings[:2])
+        self.current_pattern = '_'.join(self.pattern_settings)
 
-        if self.pattern_settings[0] in ['2x4', '3x3', '3x4']:
+        if self.pattern_settings[0] in category_info.get('variant', []):
             self.gameframe.set_to_variant(self.pattern_settings[0])
         else:
             self.gameframe.set_to_44()
 
-        path_list = SingletonConfig().config['filepath_map'].get(self.current_pattern, [])
+        spawn_rate4 = SingletonConfig().config['4_spawn_rate']
+        path_list = SingletonConfig().config['filepath_map'].get((self.current_pattern, spawn_rate4), [])
         if path_list:
-            self.filepath.setText(path_list[-1])
+            self.filepath.setText(path_list[-1][0])
         else:
             self.filepath.setText(' ')
         self.pattern_text.setText(self.current_pattern)
@@ -628,6 +618,21 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.gameframe.history.append((self.gameframe.board_encoded, self.gameframe.score))
             self.read_results()
 
+    def handle_e_key(self):
+        # 查找当前是否有被选中的按钮
+        active_button = None
+        for button in self.tile_buttons:
+            if button.isChecked():
+                active_button = button
+                break
+
+        if active_button:
+            # 如果有选中，再次点击它（触发 toggle 逻辑，使其变为 Unchecked）
+            active_button.click()
+        else:
+            # 否则，视为按下了按钮 '0'
+            self.tile_buttons[0].click()
+
     def read_results(self):
         if self.show_results_checkbox.isChecked():
             board = self.gameframe.board_encoded
@@ -652,16 +657,28 @@ class TrainWindow(QtWidgets.QMainWindow):
                 self.results_label.setText('')
                 self.result = dict()
                 self.read_results()
-            else:
+            else:  # todo done
+                self.success_rate_dtype = state
+                _, _, _, zero_val = DTYPE_CONFIG.get(self.success_rate_dtype, DTYPE_CONFIG['uint32'])
+
+                def formatting(value):
+                    if zero_val >= 0 or not isinstance(value, (int, float, np.integer, np.floating)):
+                        return str(value)
+                    elif value >= 0 or value < -1e-7:
+                        return str(abs(zero_val) + value)
+                    return str(abs(zero_val)).strip('.0') + str(value)
+
                 if SingletonConfig().config['language'] == 'zh':
-                    results_text = "\n".join(f"  {direction_map[key[0].lower()]}: {value}" for key, value in result.items())
+                    results_text = "\n".join(f"  {direction_map[key[0].lower()]}: {formatting(value)}"
+                                             for key, value in result.items())
                 else:
-                    results_text = "\n".join(f"  {key.capitalize()[0]}: {value}" for key, value in result.items())
+                    results_text = "\n".join(f"  {key.capitalize()[0]}: {formatting(value)}"
+                                             for key, value in result.items())
 
                 self.results_label.setText(results_text)
                 self.result = result
                 result0 = result[list(result.keys())[0]]
-                if not result0 or not isinstance(result0, (float, int)):
+                if not result0 or not isinstance(result0, (float, int, np.integer, np.floating)):
                     self.statusbar.showMessage(self.tr("Table not found or 0 success rate"), 3000)
         else:
             self.results_label.setText(state)
@@ -682,20 +699,27 @@ class TrainWindow(QtWidgets.QMainWindow):
         # options |= QtWidgets.QFileDialog.DontUseNativeDialog
         filepath = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Folder", options=options)
         if filepath:
+            spawn_rate4 = SingletonConfig().config['4_spawn_rate']
             self.filepath.setText(filepath)
-            current_path_list = SingletonConfig().config['filepath_map'].get(self.current_pattern, [])
+            current_path_list = SingletonConfig().config['filepath_map'].get((self.current_pattern, spawn_rate4), [])
 
             # 清理无效路径
-            for path in current_path_list:
-                if not os.path.exists(path):
-                    current_path_list.remove(path)
+            for path, success_rate_dtype in current_path_list:
+                if not os.path.exists(path) or path == filepath:
+                    current_path_list.remove((path, success_rate_dtype))
 
-            if filepath not in current_path_list:
-                SingletonConfig().config['filepath_map'][self.current_pattern] = (
-                        current_path_list + [filepath])
-                SingletonConfig().save_config(SingletonConfig().config)
+            if self.current_pattern.startswith('free'):
+                rename_free_files_recursive(filepath)
 
-            self.book_reader.dispatch(SingletonConfig().config['filepath_map'][self.current_pattern]
+            success_rate_dtype = SingletonConfig.read_success_rate_dtype(filepath, self.current_pattern)
+            table_4sr = SingletonConfig.read_4sr(filepath, self.current_pattern)
+            table_4sr = table_4sr if table_4sr is not None else spawn_rate4
+
+            SingletonConfig().config['filepath_map'][(self.current_pattern, table_4sr)] = (
+                    current_path_list + [(filepath, success_rate_dtype)])  # todo done
+            SingletonConfig().save_config(SingletonConfig().config)
+
+            self.book_reader.dispatch(SingletonConfig().config['filepath_map'][(self.current_pattern, spawn_rate4)]
                                       , self.pattern_settings[0], self.pattern_settings[1])
             self.handle_set_default()
             self.read_results()
@@ -752,7 +776,8 @@ class TrainWindow(QtWidgets.QMainWindow):
     def handle_set_default(self):
         if self.ai_state:
             return
-        path_list = SingletonConfig().config['filepath_map'].get(self.current_pattern, [])
+        spawn_rate4 = SingletonConfig().config['4_spawn_rate']
+        path_list = SingletonConfig().config['filepath_map'].get((self.current_pattern, spawn_rate4), [])
         random_board = self.book_reader.get_random_state(path_list, self.current_pattern)
         self.board_state.setText(hex(random_board)[2:].rjust(16, '0'))
         self.handle_set_board()
@@ -820,12 +845,14 @@ class TrainWindow(QtWidgets.QMainWindow):
                 self.Demo.setText(self.tr('Demo'))
                 self.ai_timer.stop()
                 self.isProcessing = False
-            if isinstance(self.result[move], (int, float)):
+            if isinstance(self.result[move], (int, float, np.integer, np.floating)):
                 self.gameframe.do_move(move.capitalize())
                 self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
                 if self.recording_state:
                     self.record_current_state(move)
                 self.read_results()
+            elif not move:
+                self.isProcessing = False
 
     def toggle_demo(self):
         if not self.ai_state and not self.playing_record_state:
@@ -867,14 +894,15 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.record.setText(self.tr('Record Demo'))
 
     def record_current_state(self, move):
+        _, _, max_scale, zero_val = DTYPE_CONFIG.get(self.success_rate_dtype, DTYPE_CONFIG['uint32'])
         gen_pos, gen_num = self.gameframe.newtile_pos, self.gameframe.newtile
         move = {'up': 0, 'down': 1, 'left': 2, 'right': 3}.get(move)
         changes = np.uint8((move & 0b11) | ((gen_pos & 0b1111) << 2) | (((gen_num - 1) & 0b1) << 6))
         success_rates = []
         for direction in ('up', 'down', 'left', 'right'):
             rate = self.result.get(direction, 0)
-            rate = rate if isinstance(rate, (float, int)) else 0
-            success_rates.append(np.uint32(rate * 4e9))
+            rate = rate if isinstance(rate, (float, int, np.integer, np.floating)) else 0
+            success_rates.append(np.uint32((rate - zero_val) / (max_scale - zero_val) * 4e9))
         self.records[self.record_length] = (changes, *success_rates)
         self.record_length += 1
 
@@ -994,8 +1022,10 @@ class TrainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event):
         self.ai_state = False
         self.Demo.setText(self.tr('Demo'))
-        try: np.array(self.gameframe.history, dtype='uint64, uint32').tofile(fr'C:\Users\Administrator\Desktop\record\0')
-        except:pass
+
+        # try: np.array(self.gameframe.history, dtype='uint64, uint32').tofile(fr'C:\Users\Administrator\Desktop\record\0')
+        # except:pass
+
         self.gameframe.history = []
         event.accept()
 
@@ -1020,13 +1050,14 @@ class ReaderWorker(QtCore.QThread):
 
         board = bm.decode_board(board_encoded)
         self.state = '?'
-        result = self.book_reader.move_on_dic(board, self.pattern_settings[0], self.pattern_settings[1],
-                                              self.current_pattern, self.pattern_settings[2])
+        result, success_rate_dtype = self.book_reader.move_on_dic(board, self.pattern_settings[0], self.pattern_settings[1],
+                                              self.current_pattern)
+
         if not isinstance(result, dict):
             self.state = str(result)
             result = dict()
         else:
-            self.state = ''
+            self.state = success_rate_dtype
         self.result_ready.emit(result, self.state)
 
 
@@ -1063,6 +1094,50 @@ def replace_largest_tiles(board_encoded, n, target:str):
         result |= tiles[i]
 
     return np.uint64(result)
+
+
+def rename_free_files_recursive(directory_path):
+    """
+    递归遍历文件夹，将所有文件/文件夹名中的 'free{数字}w' 替换为 'free{数字}'
+    """
+    base_dir = Path(directory_path)
+    if not base_dir.is_dir():
+        logger.error(f"Invalid directory: {directory_path}")
+        return
+
+    # 匹配 free{数字}w 的正则
+    pattern = re.compile(r'free(\d+)w')
+
+    # 1. 使用 rglob('*') 获取所有子文件和子文件夹
+    # 2. 关键：按路径深度倒序排列 (reverse=True)
+    #    确保先重命名文件或深层子目录，最后才重命名父目录
+    try:
+        all_items = sorted(list(base_dir.rglob('*')), key=lambda p: len(p.parts), reverse=True)
+    except Exception as e:
+        logger.error(f"Failed to scan directory: {e}")
+        return
+
+    count = 0
+    for item in all_items:
+        old_name = item.name
+        new_name = pattern.sub(r'free\1', old_name)
+
+        if new_name != old_name:
+            new_path = item.with_name(new_name)
+
+            # 冲突检查
+            if new_path.exists():
+                logger.warning(f"Skip: {item} -> {new_name} (Target already exists)")
+                continue
+
+            try:
+                item.rename(new_path)
+                logger.info(f"Renamed: {item.relative_to(base_dir)} -> {new_name}")
+                count += 1
+            except Exception as e:
+                logger.error(f"Failed to rename {old_name}: {e}")
+
+    logger.info(f"Recursive processing complete. Total renamed: {count}")
 
 
 if __name__ == "__main__":

@@ -6,19 +6,18 @@ from pathlib import Path
 from queue import Queue
 
 import numpy as np
+from PyQt5.QtCore import QObject
 from numba import njit
-from numpy.typing import NDArray
 from PyQt5 import QtCore, QtWidgets, QtGui
 import BoardMover as bm
-import Variants.vBoardMover as vbm
+import VBoardMover as vbm
 from BookReader import BookReaderDispatcher
 from Settings import TwoLevelComboBox, SingleLevelComboBox
 import Config
-from Config import category_info, SingletonConfig
+from Config import category_info, SingletonConfig, DTYPE_CONFIG
 
 
 logger = Config.logger
-translate_ = QtCore.QCoreApplication.translate
 is_zh = (SingletonConfig().config['language'] == 'zh')
 direction_map = defaultdict(lambda: "？")
 
@@ -30,23 +29,40 @@ direction_map.update({
     '?': "？",
 })
 
+png_map_dict = {
+    ' ': 0, '!': 1, '"': 2, '#': 3, '$': 4, '%': 5, '&': 6, "'": 7, '(': 8, ')': 9, '*': 10,
+    '+': 11, ',': 12, '-': 13, '.': 14, '/': 15, '0': 16, '1': 17, '2': 18, '3': 19, '4': 20,
+    '5': 21, '6': 22, '7': 23, '8': 24, '9': 25, ':': 26, ';': 27, '<': 28, '=': 29, '>': 30,
+    '?': 31, '@': 32, 'A': 33, 'B': 34, 'C': 35, 'D': 36, 'E': 37, 'F': 38, 'G': 39, 'H': 40,
+    'I': 41, 'J': 42, 'K': 43, 'L': 44, 'M': 45, 'N': 46, 'O': 47, 'P': 48, 'Q': 49, 'R': 50,
+    'S': 51, 'T': 52, 'U': 53, 'V': 54, 'W': 55, 'X': 56, 'Y': 57, 'Z': 58, '[': 59, '\\': 60,
+    ']': 61, '^': 62, '_': 63, '`': 64, 'a': 65, 'b': 66, 'c': 67, 'd': 68, 'e': 69, 'f': 70,
+    'g': 71, 'h': 72, 'i': 73, 'j': 74, 'k': 75, 'l': 76, 'm': 77, 'n': 78, 'o': 79, 'p': 80,
+    'q': 81, 'r': 82, 's': 83, 't': 84, 'u': 85, 'v': 86, 'w': 87, 'x': 88, 'y': 89, 'z': 90,
+    '{': 91, '|': 92, '}': 93, '~': 94, 'Ç': 95, 'ü': 96, 'é': 97, 'â': 98, 'ä': 99, 'à': 100,
+    'å': 101, 'ç': 102, 'ê': 103, 'ë': 104, 'è': 105, 'ï': 106, 'î': 107, 'ì': 108, 'Ä': 109,
+    'Å': 110, 'É': 111, 'æ': 112, 'Æ': 113, 'ô': 114, 'ö': 115, 'ò': 116, 'û': 117, 'ù': 118,
+    'ÿ': 119, 'Ö': 120, 'Ü': 121, 'ø': 122, '£': 123, 'Ø': 124, '×': 125, 'ƒ': 126, 'á': 127
+}
 
-class Analyzer:
+
+class Analyzer(QObject):
     pattern_map = Config.pattern_32k_tiles_map
 
-    def __init__(self, file_path: str, pattern: str, target: int, full_pattern: str, target_path: str, position: str):
+    def __init__(self, file_path: str, pattern: str, target: int, full_pattern: str, target_path: str):
+        super().__init__()
         self.full_pattern = full_pattern
-        self.position = position
         self.pattern = pattern
+        self.variant = ''
         self.target = target
         self.n_large_tiles = self.pattern_map[pattern][0]
-        self.is_free = self.pattern.startswith('free') and not self.pattern.endswith('w')
         self.large_tile_sum = 0
 
         self.bm = bm
         self.vbm = vbm
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
-        bookfile_path_list = Config.SingletonConfig().config['filepath_map'].get(full_pattern, [])
+        spawn_rate4 = SingletonConfig().config['4_spawn_rate']
+        bookfile_path_list = Config.SingletonConfig().config['filepath_map'].get((full_pattern, spawn_rate4), [])
         self.book_reader.dispatch(bookfile_path_list, pattern, target)
 
         self.filepath = file_path
@@ -80,7 +96,7 @@ class Analyzer:
         # 以二进制模式读取整个文件
         with open(self.filepath, 'rb') as f:
             raw_data = f.read()
-
+        replay_text = ''
         # 常见编码列表
         common_encodings = ['utf-8', 'gb18030', 'big5', 'shift_jis', 'euc-kr', 'utf-16', 'utf-16le', 'utf-16be']
 
@@ -112,39 +128,29 @@ class Analyzer:
         return replay_text
 
     def decode_replay(self, replay_text: str):
-        if self.pattern not in ('2x4', '3x3', '3x4'):
-            board = np.uint64(0)
-            total_space = 15
-            header = 7
-            bm = self.bm
+        if "2x4" in replay_text[:12]:
+            board, total_space, header = np.uint64(0xffff00000000ffff), 11, 10
+            mover = self.vbm
+            self.variant = "2x4"
+        elif "3x3" in replay_text[:12]:
+            board, total_space, header = np.uint64(0x000f000f000fffff), 15, 10
+            mover = self.vbm
+            self.variant = "3x3"
+        elif "3x4" in replay_text[:12]:
+            board, total_space, header = np.uint64(0x00000000000fffff), 15, 10
+            mover = self.vbm
+            self.variant = "3x4"
         else:
-            board, total_space, header = {
-                "2x4": (np.uint64(0xffff00000000ffff), 11, 10),
-                "3x3": (np.uint64(0x000f000f000fffff), 15, 10),
-                "3x4": (np.uint64(0x00000000000fffff), 15, 10),
-            }[self.pattern]
-            bm = self.vbm
+            board, total_space, header = np.uint64(0), 15, 7
+            mover = self.bm
+            self.variant = "4x4"
+
 
         replay_text = replay_text[header:]
         self.record_list: np.typing.NDArray = np.empty(len(replay_text) - 2, dtype='uint64,uint32,uint8,uint8,uint8')
 
         record = np.empty(len(replay_text) - 2, dtype='uint64,uint32,uint8')
 
-        png_map_dict = {
-            ' ': 0, '!': 1, '"': 2, '#': 3, '$': 4, '%': 5, '&': 6, "'": 7, '(': 8, ')': 9, '*': 10,
-            '+': 11, ',': 12, '-': 13, '.': 14, '/': 15, '0': 16, '1': 17, '2': 18, '3': 19, '4': 20,
-            '5': 21, '6': 22, '7': 23, '8': 24, '9': 25, ':': 26, ';': 27, '<': 28, '=': 29, '>': 30,
-            '?': 31, '@': 32, 'A': 33, 'B': 34, 'C': 35, 'D': 36, 'E': 37, 'F': 38, 'G': 39, 'H': 40,
-            'I': 41, 'J': 42, 'K': 43, 'L': 44, 'M': 45, 'N': 46, 'O': 47, 'P': 48, 'Q': 49, 'R': 50,
-            'S': 51, 'T': 52, 'U': 53, 'V': 54, 'W': 55, 'X': 56, 'Y': 57, 'Z': 58, '[': 59, '\\': 60,
-            ']': 61, '^': 62, '_': 63, '`': 64, 'a': 65, 'b': 66, 'c': 67, 'd': 68, 'e': 69, 'f': 70,
-            'g': 71, 'h': 72, 'i': 73, 'j': 74, 'k': 75, 'l': 76, 'm': 77, 'n': 78, 'o': 79, 'p': 80,
-            'q': 81, 'r': 82, 's': 83, 't': 84, 'u': 85, 'v': 86, 'w': 87, 'x': 88, 'y': 89, 'z': 90,
-            '{': 91, '|': 92, '}': 93, '~': 94, 'Ç': 95, 'ü': 96, 'é': 97, 'â': 98, 'ä': 99, 'à': 100,
-            'å': 101, 'ç': 102, 'ê': 103, 'ë': 104, 'è': 105, 'ï': 106, 'î': 107, 'ì': 108, 'Ä': 109,
-            'Å': 110, 'É': 111, 'æ': 112, 'Æ': 113, 'ô': 114, 'ö': 115, 'ò': 116, 'û': 117, 'ù': 118,
-            'ÿ': 119, 'Ö': 120, 'Ü': 121, 'ø': 122, '£': 123, 'Ø': 124, '×': 125, 'ƒ': 126, 'á': 127
-        }
         move_map = [3, 2, 4, 1]
         moves_made = 0
         current_score = 0
@@ -164,7 +170,7 @@ class Analyzer:
                 self.record_list[moves_made - 2] = (board, current_score, replay_move, replay_tile, 15 - replay_position)
 
                 if moves_made > 27000 and count_32ks(board) == 2:
-                    board_decoded = bm.decode_board(board)
+                    board_decoded = mover.decode_board(board)
                     positions = np.where(board_decoded == 32768)
                     first_position = (positions[0][0], positions[1][0])
                     second_position = (positions[0][1], positions[1][1])
@@ -174,10 +180,10 @@ class Analyzer:
                         abs(positions[0][0] - positions[0][1]) == 1 and replay_move in (3, 4)):
                         board_decoded[first_position] = 16384
                         board_decoded[second_position] = 16384
-                        board = np.uint64(bm.encode_board(board_decoded))
+                        board = np.uint64(mover.encode_board(board_decoded))
                         current_score += 32768
 
-                board, new_score = bm.s_move_board(board, replay_move)
+                board, new_score = mover.s_move_board(board, replay_move)
                 board = np.uint64(board)
                 current_score += new_score
 
@@ -207,7 +213,6 @@ class Analyzer:
         }
 
     def check_nth_largest(self, board_encoded: np.uint64) -> bool:
-        is_free = self.is_free
         # 初始化一个大小为16的列表，记录0-15的出现次数
         count = [0] * 16
 
@@ -223,8 +228,7 @@ class Analyzer:
                 if count[i] > 1:
                     return False
                 num_largest_found += 1
-                if (num_largest_found == self.n_large_tiles and not is_free) or \
-                        (is_free and num_largest_found == self.n_large_tiles + 1):
+                if num_largest_found == self.n_large_tiles:
                     return i == self.target
 
         return False
@@ -233,10 +237,7 @@ class Analyzer:
         target_value = 1 << self.target
 
         # 创建条件掩码
-        if self.is_free:
-            mask = (board > target_value)
-        else:
-            mask = (board >= target_value)
+        mask = (board >= target_value)
 
         # 批量应用掩码
         np.copyto(board, 32768, where=mask)
@@ -263,8 +264,8 @@ class Analyzer:
         self.clear_analysis()
 
     def print_board(self, board: np.typing.NDArray):
-        rows = {'2x4':(1,3), '3x3':(0,3), '3x4':(0,3)}.get(self.pattern, (0,4))
-        items = 4 if self.pattern != '3x3' else 3
+        rows = {'2x4':(1,3), '3x3':(0,3), '3x4':(0,3)}.get(self.variant, (0,4))
+        items = 4 if self.variant != '3x3' else 3
 
         for row in board[rows[0]: rows[1]]:
             # 格式化每一行
@@ -282,7 +283,9 @@ class Analyzer:
     def _analyze_one_step(self, board: np.typing.NDArray, masked_board: np.typing.NDArray, move: str,
                           new_tile: int, spawn_position:int) -> bool | None:
         target = str(int(2 ** self.target))
-        self.result = self.book_reader.move_on_dic(masked_board, self.pattern, target, self.full_pattern, self.position)
+        self.result, success_rate_dtype = self.book_reader.move_on_dic(masked_board, self.pattern, target, self.full_pattern)
+        _, _, _, zero_val = DTYPE_CONFIG.get(success_rate_dtype, DTYPE_CONFIG['uint32'])
+        self.result = {key: formatting(value, zero_val) for key, value in self.result.items()}
         self.record_replay(board, move, new_tile, spawn_position)
 
         best_move = list(self.result.keys())[0]
@@ -301,8 +304,8 @@ class Analyzer:
         self.text_list.append('')
 
         # 移动有效但是形成超出定式范围的局面
-        if not isinstance(self.result[move.lower()], (int, float)):
-            self.text_list.append(translate_('Analyzer', "The game goes beyond this formation"))
+        if not isinstance(self.result[move.lower()], (int, float, np.integer, np.floating)):
+            self.text_list.append(self.tr("The game goes beyond this formation"))
             self.text_list.append('--------------------------------------------------')
             self.text_list.append('')
             return False
@@ -354,7 +357,7 @@ class Analyzer:
         board = self.bm.decode_board(board_encoded)
 
         # 把大数字用32768代替，返回能够进行查找的board
-        if self.pattern in ('2x4', '3x3', '3x4'):
+        if self.pattern in Config.category_info.get('variant', []):
             masked_board = board.copy()
         elif self.check_nth_largest(board_encoded):
             masked_board = self.mask_large_tiles(board.copy())
@@ -386,30 +389,30 @@ class Analyzer:
             file.write('\n')
 
             file.write(
-                translate_('Analyzer', 'in ') + self.full_pattern +
-                translate_('Analyzer', ' endgame in ') + str(self.step_count) +
-                translate_('Analyzer', ' moves') + '\n'
+                self.tr('in ') + self.full_pattern +
+                self.tr(' endgame in ') + str(self.step_count) +
+                self.tr(' moves') + '\n'
             )
             file.write(
-                translate_('Analyzer', 'Total Goodness of Fit: ') +
+                self.tr('Total Goodness of Fit: ') +
                 f'{self.goodness_of_fit:.4f}' + '\n'
             )
             file.write(
-                translate_('Analyzer', 'Maximum Combo: ') +
+                self.tr('Maximum Combo: ') +
                 str(self.max_combo) + '\n'
             )
             file.write(
-                translate_('Analyzer', 'Maximum Single Step Loss (Relative, %): ') +
+                self.tr('Maximum Single Step Loss (Relative, %): ') +
                 f'{self.maximum_single_step_loss_relative:.4f}' + '\n'
             )
             file.write(
-                translate_('Analyzer', 'Maximum Single Step Loss (Absolute, pt): ') +
+                self.tr('Maximum Single Step Loss (Absolute, pt): ') +
                 f'{self.maximum_single_step_loss_absolute:.4f}' + '\n'
             )
             # 添加评价统计信息
             for evaluation, count in self.performance_stats.items():
                 file.write(f'{evaluation}: {count}\n')
-            file.write(translate_('Analyzer', 'End of analysis'))
+            file.write(self.tr('End of analysis'))
 
     @staticmethod
     def evaluation_of_performance(loss):
@@ -434,7 +437,7 @@ class Analyzer:
         success_rates = []
         for d in ('left', 'right', 'up', 'down'):
             rate = self.result.get(d, None)
-            if isinstance(rate, (int, float)):
+            if isinstance(rate, (int, float, np.integer, np.floating)):
                 success_rates.append(np.uint32(rate * 4e9))
             else:
                 success_rates.append(np.uint32(0))
@@ -456,7 +459,6 @@ class Analyzer:
         self.record[:rec_step_count + 1].tofile(target_file_path)
 
 
-
 @njit()
 def count_32ks(board):
     count = 0
@@ -464,6 +466,13 @@ def count_32ks(board):
         tile = (board >> np.uint64(i * 4)) & np.uint64(0xf)
         count += tile == 0xf
     return count
+
+
+def formatting(value, zero_val):
+    if zero_val >= 0 or not isinstance(value, (int, float, np.integer, np.floating)):
+        return value
+    else:
+        return abs(zero_val) + value
 
 
 # noinspection PyAttributeOutsideInit
@@ -515,12 +524,6 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
         for category, items in category_info.items():
             self.pattern_combo.add_category(category, items)
         self.selfLayout.addWidget(self.pattern_combo, 0, 1, 1, 1)
-        self.pattern_combo.currentTextChanged.connect(self.update_pos_combo_visibility)
-        self.pos_combo = SingleLevelComboBox(self.tr("Target Position"), self.centralwidget)
-        self.pos_combo.setObjectName("pos_combo")
-        self.pos_combo.add_items(["0", "1", "2"])
-        self.selfLayout.addWidget(self.pos_combo, 0, 3, 1, 1)
-        self.pos_combo.hide()
 
         self.analyze_bt = QtWidgets.QPushButton(self.centralwidget)
         self.analyze_bt.setObjectName("analyze_bt")
@@ -551,7 +554,6 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
                                                        "*The analysis results will be saved to the same path"))
         self.pattern_combo.retranslateUi(self.tr("Select Formation"))
         self.target_combo.retranslateUi(self.tr("Target Tile"))
-        self.pos_combo.retranslateUi(self.tr("Target Position"))
 
     def filepath_changed(self):
         options = QtWidgets.QFileDialog.Options()
@@ -569,10 +571,8 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
             self.selected_filepaths = filepaths
 
     def start_analyze(self):
-        position = self.pos_combo.currentText
         pattern = self.pattern_combo.currentText
         target = self.target_combo.currentText
-        position = '0' if not position else position
 
         if pattern and target:
             if self.selected_filepaths:
@@ -602,10 +602,7 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
                 return
 
             # 计算公共参数
-            if pattern in ['444', 'LL', 'L3']:
-                ptn = pattern + '_' + target + '_' + position
-            else:
-                ptn = pattern + '_' + target
+            ptn = pattern + '_' + target
 
             target_value = int(np.log2(int(target)))
 
@@ -618,7 +615,6 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
             self.analyze_manager.pattern = pattern
             self.analyze_manager.target_value = target_value
             self.analyze_manager.ptn = ptn
-            self.analyze_manager.position = position
 
             # 启动批量分析
             self.analyze_manager.start_batch_analyze(file_list)
@@ -628,33 +624,20 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
         self.analyze_bt.setEnabled(True)
         self.analyze_manager.analyze_threads = []
 
-    def update_pos_combo_visibility(self, pattern):
-        if pattern in ['444', 'LL']:
-            if '2' in self.pos_combo.items:
-                self.pos_combo.remove_item('2')
-            self.pos_combo.show()
-        elif pattern == 'L3':
-            if '2' not in self.pos_combo.items:
-                self.pos_combo.add_item('2')
-            self.pos_combo.show()
-        else:
-            self.pos_combo.hide()
-
 
 class AnalyzeThread(QtCore.QThread):
     finished = QtCore.pyqtSignal()
 
-    def __init__(self, file_path: str, pattern: str, target: int, full_pattern: str, target_path: str, position: str):
+    def __init__(self, file_path: str, pattern: str, target: int, full_pattern: str, target_path: str):
         super().__init__()
         self.pattern = pattern
         self.target = target
-        self.position = position
         self.ptn = full_pattern
         self.file_path = file_path
         self.target_path = target_path
 
     def run(self):
-        anlz = Analyzer(self.file_path, self.pattern, self.target, self.ptn, self.target_path, self.position)
+        anlz = Analyzer(self.file_path, self.pattern, self.target, self.ptn, self.target_path)
         anlz.generate_reports()
         self.finished.emit()
 
@@ -673,7 +656,6 @@ class BatchAnalyzeManager(QtCore.QThread):
         self.pattern = None
         self.target_value = None
         self.ptn = None
-        self.position = None
 
     def start_batch_analyze(self, file_list):
         """启动批量分析"""
@@ -705,7 +687,7 @@ class BatchAnalyzeManager(QtCore.QThread):
         for file_path in threads_to_start:
             analyze_thread = AnalyzeThread(
                 file_path, self.pattern, self.target_value, self.ptn,
-                os.path.dirname(file_path), self.position
+                os.path.dirname(file_path)
             )
             analyze_thread.finished.connect(self._on_thread_finished)
             self.analyze_threads.append(analyze_thread)
@@ -731,16 +713,13 @@ class BatchAnalyzeManager(QtCore.QThread):
 
 if __name__ == "__main__":
     pass
-    anlz = Analyzer(r"C:\Users\Administrator\Downloads\heshen.txt", 'free12w',
-                    13, 'free12w_4096', r"C:\Users\Administrator\Downloads", '0')
-    anlz.generate_reports()
     #
     # anlz = Analyzer(r"D:\2048calculates\test\analysis\vgame.txt", '2x4',
     #                 8, '2x4_256', r"D:\2048calculates\test\analysis", '0')
     # anlz.generate_reports()
-
-    import sys
-    app = QtWidgets.QApplication(sys.argv)
-    main = AnalyzeWindow()
-    main.show()
-    sys.exit(app.exec_())
+    #
+    # import sys
+    # app = QtWidgets.QApplication(sys.argv)
+    # main = AnalyzeWindow()
+    # main.show()
+    # sys.exit(app.exec_())
