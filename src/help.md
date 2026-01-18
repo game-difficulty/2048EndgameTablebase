@@ -1,280 +1,543 @@
 # User Manual
 
 **Author**: game_difficulty  
-**Version**: 8.3  
-**Date**: 2026.1.6  
+**Version**: 9.0  
+**Date**: 2026.1.19  
 
 ---
 
 # 1. Overview
 
-This is a multifunctional 2048 game training software, offering a variety of features including endgame calculation, endgame training, game analysis, AI, modified mini-games, and more.
+This is a comprehensive 2048 game training software offering numerous features including table calculation, endgame training, game analysis, AI assistance, modified mini-games, and more.
 
-## 1.1 Highlights
-- **Fast Calculation**: Uses highly optimized algorithms to provide extremely fast computation speeds.
-- **Low Space Occupation**: Employs multiple data compression techniques to significantly reduce disk space usage.
-- **The Strongest AI**: Features the strongest 2048 AI, with a 65536 success rate far exceeding current AI.
-- **Comprehensive Features**: Provides complete training and analysis tools to help users deeply learn game strategies.
+## 1.1 Key Highlights
+- **Lightning-Fast Computation**: Advanced optimization algorithms and sophisticated pruning techniques deliver superior calculation speeds, with large table computations accelerated over 10x.
+- **Storage Efficiency**: Multiple pruning and data compression techniques significantly reduce table file disk space.
+- **Strongest AI**: Built-in optimal 2048 AI achieves 8.4% (±1.6%) success rate for 65536 and 86.1% (±2.0%) for 32768, far outperforming other AIs.
+- **Complete Toolkit**: Comprehensive training and analysis tools including real-time feedback, mistake notebook, and replay analysis to help users master game strategies.
 
-## 1.2 Target Users
-- **Professional Players**: Players who need more powerful tools to study game techniques and strategies.
-- **AI Developers**: Developers who want to use game data to train and optimize AI.
-- **Casual Players**: Players who want to experience modified mini-games or improve their scores with AI assistance.
+## 1.2 Main Function Modules
+- **Game**: Standard 2048 gameplay with built-in strongest AI assistance.
+- **Practice**: View tables and learn optimal moves, supporting recording and playback.
+- **Test**: Assess your mastery, automatically track mistakes, support replay analysis and Verse replay import.
+- **MiniGame**: Diverse modified games offering additional challenges.
+- **Settings**: Global configuration, table calculation, advanced algorithm setup.
+- **Help**: Documentation guide.
+
+## 1.3 Target Users
+- **Professional Players**: Serious players who need powerful tools to study techniques and strategies.
+- **AI Developers**: Developers seeking to use game data for AI training and optimization.
+- **Endgame Enthusiasts**: Players aiming to deeply understand 2048 endgames and tables.
+- **Casual Players**: Players wanting to experience modified games or improve scores with AI help.
 
 ---
 
 # 2. Installation and Startup
 
 ## 2.1 System Requirements
-- **Operating System**: Windows 7 and above.
-- **Memory**: At least 4GB, the more, the better, virtual memory is recommended.
-- **Disk Space**: The larger the disk space, the better. An SSD with at least 10GB of free space is recommended.
-- **CPU**: CPUs supporting AVX-512 instruction set will perform better.
-- **GPU**: The software does not rely on GPU.
+- **Operating System**: Windows 7 or later.
+- **Memory**:
+  - Basic usage: Minimum 8GB
+  - Computing large tables: 32GB+ recommended; configure virtual memory (swap) as needed
+- **Disk Space**:
+  - Basic usage: 10GB+ free space
+  - Computing large tables: Depending on table type, may need 1TB+ free space (SSD recommended)
+- **CPU**:
+  - Any 64-bit CPU is compatible
+  - CPUs supporting AVX-512 instruction set will perform significantly better
+  - Supports multi-core parallel computing
+- **GPU**: Not required; CPU-based computation only.
 
 ## 2.2 Installation Steps
 - **Extract**: Download and extract the software package.
-- **Run**: Find the `main.exe` file in the extracted folder and double-click to run the software.
+- **Run**: Locate `main.exe` in the extracted folder and double-click to launch the software.
+- **First Launch**: The software performs JIT compilation and initialization, which may take 2-10 seconds; please be patient.
 
 ## 2.3 Startup Instructions
-- **Startup**: The first time you use some features, initialization may take a while, please be patient.
-- **Error Troubleshooting**: If the software fails to start or shows an error, first check the `logger.txt` file, which may contain detailed information or error logs related to the startup failure.
+- **Initialization Time**: JIT compilation and resource loading are normal on first use of various features.
+- **Error Troubleshooting**: If the software fails to start or encounters errors, check the `logger.txt` file in the root directory for detailed error information.
 
 ---
 
-# 3. Concepts
+# 3. Core Concepts
 
-## 3.1 What is an Endgame?
+## 3.1 Understanding Endgames
 
-An endgame starts from a specific setup where some large numbers are already placed in certain tiles, and the player must use the remaining spaces to merge numbers and achieve a target number, thus advancing the game. **An endgame refers to the entire process of reaching the target number from a specific setup.**
+An endgame represents a game state where several large numbers have already been placed in certain tiles, and the player must use the remaining empty spaces to merge and reach a target number. **An endgame is the complete process from a specific board state to achieving the target number.**
 
-## 3.2 Classification of Endgames
+### Example Understanding
+- **10-space 16K Endgame**: The board already contains large numbers (8K, 4K, 2K, 1K, 512, 256 - 6 tiles total). The remaining 10 empty spaces are used to create a new 256, which merges with existing numbers to form 16K.
+- **12-space 32K Endgame**: The board contains (16K, 8K, 4K, 2K - 4 tiles). The remaining 12 spaces must create 2048, which eventually merges into 32K.
 
-**Endgames are classified based on the number of remaining tiles and the difficulty of the endgame.**
+## 3.2 Endgame Classification
 
-For example, a 10-space 16k endgame (16384 endgame) refers to a setup where large numbers such as 8k, 4k, 2k, 1k, 512, and 256 are already placed in 6 tiles. The remaining 10 spaces need to form a 256, which is considered a "16k difficulty".
+Endgame classification is determined by the **layout of remaining empty spaces** and the **target number**, regardless of the specific values of existing large tiles. The algorithm treats endgames as equivalent if their empty space configurations are identical. For instance, whether the existing numbers are (16K, 8K, 4K, 2K) or (32K, 16K, 8K, 2K), the computational difficulty and strategy remain the same as long as the remaining board topology and the target tile are identical.
 
-Similarly, a 12-space 32k endgame (32768 endgame) means that 16k, 8k, 4k, and 2k are already placed, and the remaining 12 spaces must form 2048 to eventually reach 32768.
+### Thought Question
+**What is the target number for a 9-space 65K endgame?**
 
-If the setup already contains 32k, 16k, 4k, and 2k, and the player needs to use 12 empty spaces to form 2048, it is still considered a 12-space 32k endgame because this process is equivalent to forming a 32768.
+**Hint**: Think backwards—what large numbers should already exist if the final goal is 65K (65536)?
 
-Therefore, the classification of an endgame only depends on how many large numbers are in the setup, not which specific large numbers are present.
+## 3.3 Table Concept
 
-Question: What is the target number for a 9-space 65k endgame?
+**A table is an endgame with added constraints.**
 
-## 3.3 What is a Formation?
+In actual gameplay, to reliably achieve goals and maintain formation stability, players typically need to:
+- Keep large numbers in relatively fixed positions
+- Create target numbers at specified locations
 
-**A formation is an endgame with additional constraints.**
+These constraints are called **table constraints**.
 
-In the game, it is generally better to keep the large numbers stationary, while the target number must be formed at specific positions to maintain the formation. Therefore, the constraints usually include:
-- The large numbers in the initial setup must stay in place or can only move in limited ways.
-- The target number must be formed at specified positions.
+### Table Type Comparison
 
-If no constraints are added to the endgame, it is called a **free formation**.
+| Type | Constraint Strength | Human Difficulty | Success Rate | Characteristics & Use Cases |
+| :--- | :--- | :--- | :--- | :--- |
+| **Standard Table** | **Medium-High**: Large numbers locked in place (e.g., Snake pattern) | **Low**: Clear patterns, easy to summarize formation techniques | **Medium**: Limited rescue capability if extreme situations occur consecutively | **Mainstream for real gameplay**. Trades some flexibility for high certainty. |
+| **Free Table** | **Minimal**: Large numbers can move freely as needed | **Extreme**: Extremely complex branching; human analysis depth typically insufficient | **Maximum**: Greatest error tolerance, handles most extreme board combinations | **Theoretical optimum**. Used for AI scoring, extreme research, recovering large numbers after chaos, learning transformation techniques. |
+| **Variant Table** | **Minimal**: Essentially free tables on different board sizes | **Medium-Low**: Limited state space, reasoning depth constrained | **High** | **High-precision training**. Small state count allows humans near-perfect accuracy; ideal for targeted practice. |
 
-## 3.4 Classification of Formations
+### Free Table Examples
+- `free9-128`: 9 empty spaces to create 128, 16K difficulty
+- `free10-512`: 10 empty spaces to create 512, 32K difficulty
 
-Formations are classified based on the initial setup, constraints, and target number (endgame difficulty). Detailed classifications can be found in the appendix.
+### Position Table Examples
+- `L3-512`: 6 large numbers locked in L-shaped corner region, target 512, 32K difficulty
+- `442-256`: Layered formation (Snake pattern) with 6 large numbers, target 256, 16K difficulty
+
+## 3.4 Table Parameters Explained
+
+| Parameter | Name | Description | Example |
+|-----------|------|-------------|---------|
+| **pattern** | Table name | Describes table constraints and remaining empty space quantity/position | `L3`, `442`, `free9` |
+| **target** | Target number | The number to be created from remaining spaces | `256`, `512`, `2048` |
+
+### Understanding Table Naming
+
+- **Numeric Tables** (e.g., `442`, `4441`, `4432`): Empty spaces per row
+  - `442` = Row 1: 4 spaces, Row 2: 4 spaces, Row 3: 2 spaces = 10 total
+  - `4431` = Row 1: 4, Row 2: 4, Row 3: 3, Row 4: 1 = 12 total
+  
+- **Letter Tables** (e.g., `L3`, `t`, `LL`): Empty space distribution shape
+  - `L3` = Outer L-shape + 3 additional spaces, equivalent to `4411`
+  - `t` = 10 spaces in T-shape, equivalent to `2422`
+  - `LL` = Outer L + Inner L, equivalent to `4422`
+  
+- **Free Tables** (e.g., `free9`): Completely unrestricted
+  - `free9` = 7 completely free large numbers and 9 empty spaces
+
+- **Suffix Markers**
+  - `f (Free)`: Free large number marker. Indicates unconstrained movable large numbers beyond base table constraints. Example: `4432f` = 4432 base + 1 free large number (4 total). `4442ff` = 2 free large numbers.
+  - `t (Transport)`: Intra-column repositioning marker. Allows certain large numbers to move up/down within their column. Used for optimization or emergency recovery. In `t` tables, 1x2 sections can move vertically.
+
+### Success Rate Meaning
+
+The **success rate** computed for a table means:
+- Starting from that table's current state
+- Without using any undo operations
+- Following optimal strategy
+- Probability of successfully creating the target number
 
 ---
 
 # 4. Feature Overview
 
-The software's main menu contains multiple functional interfaces, each with different feature modules. You can quickly access these modules via buttons in the main interface. Below is a brief introduction to the software's various functional interfaces:
+The software's main menu (**MainMenu**) contains multiple functional interfaces with different modules. Quick access buttons on the main interface let you reach these modules. Here's a brief introduction to each interface:
 
-## 4.1 MainMenu
-After launching the software, you will enter the Main Menu, which contains the following 6 functional interfaces:
+## 4.1 Settings Interface
 
-- **Game**: Provides the basic game functionality and AI.
-- **MiniGame**: Offers various modified mini-games with higher difficulty levels.
-- **Practice**: Shows the optimal moves to help you learn game strategies.
-- **Test**: Tests your mastery of endgames.
-- **Settings**: The global settings and table calculation.
-- **Help**: Displays the help documentation to guide you on how to use the software.
+The settings interface is divided into two parts: **Table Calculation** and **Global Settings**.
 
-## 4.2 Settings
-Includes table calculation and global setting changes.
+### 4.1.1 Table Calculation Section
 
-- **Adjust Settings**: Customize the game's tile colors, 4-spawn rate, animation effects, etc.
-- **Table Calculation**: Select the table you want to calculate, specify the save path, and set advanced parameters. Click the "BUILD" button to begin the calculation. The calculation process may take some time, depending on the complexity of the endgame and your computer's performance.
+**Core Parameters**:
+- **Table Name**: Select target table from secondary menu (e.g., `L3`, `442`, `free9`)
+- **Target Number**: Choose the number to create (128, 256, 512, 1024, 2048...)
+- **Save Path**: Specify table data location; local SSD recommended for better I/O speed
 
-## 4.3 Game
-Provides the basic 2048 game functionality.
+**Calculation Options**:
+- **Compress Temp Files**: Reduce disk usage during computation but increase computation time
+- **Compress** (Recommended): Compress final table data, significantly reducing disk space
+- **Keep Only Optimal Branches**: Remove non-optimal information, reducing data size; requires additional computation
+- **Prune Low Success Rate** (Recommended): Remove low success rate states after computation without sacrificing accuracy
 
-- **AI Module**: Click the "AI: ON" button on the game interface to let the AI play the game automatically. Note that the AI function depends on previously computed tables. Therefore, you must calculate and save the related tables before enabling AI.
-- **Hard Mode**: At the bottom of the game interface, you can find a "Difficulty" slider. Drag it all the way to the right to enable Hard Mode, which significantly increases the game difficulty.
+**Advanced Options**:
+- **Advanced Algorithm**: Enable advanced algorithm for massive tables, dramatically improving speed and memory usage (only for large tables)
+- **Small Tile Sum Limit (STSL)**: Controls pruning strength in advanced algorithm; balance between accuracy and speed
+- **Chunked Recalculation**: Reduce memory threshold through chunked I/O, ideal for memory-constrained systems computing huge tables; recommend using with SSD
+- **Success Rate Precision**: Customize storage precision and format for success rate data
 
-## 4.4 MiniGame
-Offers a variety of modified mini-games with higher difficulty levels, ideal for players who enjoy a challenge.
+Click **BUILD** to start computation. Real-time progress displays; supports resume from breakpoint.
 
-- **Game Rules**: Each mini-game has specific gameplay instructions, which can be tried according to the prompts on the interface.
-- **Difficulty**: In the bottom left corner, there is a "HardMode" button. Click it to further increase the game difficulty and challenge your limits.
+**Breakpoint Resume Notes:**
+While resumption is supported, crashes or full disk errors may corrupt recently written files. Direct resume could produce incorrect results. Safe operation: Before resuming, check the latest generated file sizes. Manually delete the last 2-3 files/folders to ensure data integrity.
 
-## 4.5 Practice
-Displays the optimal moves to learn game strategies.
+### 4.1.2 Global Settings Section
 
-- **Practice**: In this interface, you can view the calculated tables, showing the four possible moves for each position and their success rates. By learning the optimal moves, you can improve your game skills.
-- **Recording**: Record the optimal moves for an endgame or play back the moves recorded by others.
+**Colors & Themes**:
+- **Block Color Scheme**: Select number block color scheme (2-32768 in different colors)
+- **Color Theme**: 40+ preset themes (Classic, Royal, Supernova, etc.)
+- **Custom Color Scheme**: Dark mode will take effect after restarting. Edit `color_schemes.txt` for advanced customization
 
-## 4.6 Test
-The Test interface helps you evaluate your mastery of endgames:
+**Game Parameters**:
+- **4-Spawn Rate**: Probability of spawning 4 (range 0-1, default 0.1 = 10%)
+- **Mistake Notebook Threshold**: Records board states from tests where single-step match rate falls below this value
+- **Font Size**: Adjust UI font size for different resolutions
+- **Animation**: Disable block movement/merge animations to reduce stuttering
 
-- **Setup**: You can select the formation and initial setup to test and practice.
-- **Replay Analysis**: Supports importing game replays from 2048verse.com for analysis.
+## 4.2 Game Interface
+
+Provides basic 2048 gameplay with AI assistance options.
+
+### 4.2.1 Game Controls
+
+**Basic Controls**:
+- **Move**: Arrow keys or WASD
+- **Undo**: Reverse previous action (only available with AI OFF)
+- **New Game**: Start fresh game
+- **AI**: Click "AI: ON" button to toggle AI assistance
+
+### 4.2.2 Difficulty Settings
+
+**Difficulty Slider**:
+- Located at bottom of game interface; drag right to increase difficulty
+- New tile generation controlled by algorithm, biased toward unfavorable positions rather than random
+- AI calculates based on random generation logic; not recommended to use AI in hard mode.
+
+## 4.3 MiniGame Interface
+
+Offers diverse modified 2048 games with novel mechanics and higher difficulty for challenge-seeking players.
+
+| Game Name | Board Size | Core Mechanic | Difficulty |
+|-----------|-----------|---------------|-----------|
+| **Blitzkrieg** | 4x4 | 3-minute countdown; time bonuses for higher numbers | Medium-High |
+| **Design Master 1-4** | 4x4 | Arrange blocks in specified patterns; merge targets at exact positions | Medium |
+| **Column Chaos** | 4x4 | Timed column swap; two columns randomly exchange every 40 moves | Medium |
+| **Mystery Merge 1-2** | 4x4 | Hidden blocks shown as "?"; only revealed upon merge; requires deduction | High |
+| **Gravity Twist 1-2** | 4x4 | Auto-gravity; automatic movement in random direction after each move | Medium |
+| **Ferris Wheel** | 4x4 | Timed rotation; outer 12 blocks rotate clockwise every 40 moves | Medium-High |
+| **Ice Age** | 4x4 | Freeze mechanic; blocks freeze into immobile ice if unmoved 80+ steps | High |
+| **Isolated Island** | 4x4 | Special tiles; can only merge with themselves, not with other numbers | Medium-High |
+| **Shape Shifter** | Variable | Variable board; random 12x12 irregular shapes; different each game | Medium-High |
+| **Tricky Tiles** | 4x4 | Adversarial AI generation; new tiles appear in worse positions | High |
+| **Endless Factorization** | 4x4 | Special blocks factor touched numbers; endless gameplay | Low |
+| **Endless Explosions** | 4x4 | Bombs eliminate touched blocks; endless gameplay | Low |
+| **Endless Giftbox** | 4x4 | Gift boxes spawn random new numbers; endless gameplay | Medium |
+| **Endless Hybrid** | 4x4 | Mixed mechanics; bombs/pits/gifts with different effects; endless gameplay | High |
+| **Endless AirRaid** | 4x4 | Air raid targets randomly appear; marked blocks eliminated when filled | Medium |
+
+**HardMode Button**: Located at bottom-left. Enabling increases difficulty in game-specific ways.
+
+## 4.4 Practice Interface
+
+Displays table data and optimal moves; core tool for study and research.
+
+### 4.4.1 Interface Layout
+
+**Control Panel**:
+- Menu bar to select table
+- Select path containing table files
+- Show/hide success rates for current position's four directions
+- Click number buttons bottom-right to edit position
+
+**Board Area**:
+- Displays current position
+- Shows position encoding
+
+### 4.4.2 Function Buttons
+
+**Position Operations**:
+- **Set Board**: Load encoding from input box as current position
+- **Default**: Show random initial position for this table
+- **Flip Board**: Perform flip/rotation operations
+
+**Demo Features**:
+- **Auto Demo**: Continuously execute optimal moves, showing complete solution
+- **Step**: Execute one optimal move, convenient for gradual learning
+- **Undo**: Reverse previous operation
+
+**Position Editing**:
+  - **Color Number Buttons** (0-32K): Click to enter "board arrangement mode"
+  - **Left-click**: In arrangement mode, set clicked position to selected number
+  - **Right-click**: Increment clicked position by one level (2→4→8...)
+  - **Other keys**: Decrement clicked position by one level
+  - Click selected button again to exit arrangement mode
+
+**Recording Features**:
+- **Record**: Save demo moves and success rate sequences
+- **Load Demo**: Load previously saved demonstrations
+- **Play Demo**: Play loaded demo content
+
+**Manual Mode**:
+- Board stops auto-generating new tiles
+- Left-click empty space: Place 2
+- Right-click empty space: Place 4
+
+### 4.4.3 Keyboard Shortcuts
+
+- **Arrow Keys / WASD**: Move operations.
+- **Enter**:
+    Stop auto-demo if running. Load position encoding if focus on encoding box. Otherwise execute one step of optimal move.
+- **Backspace / Delete**: Undo previous operation.
+- **Q**: Toggle manual mode.
+- **Z**: Screenshot current board and copy to clipboard.
+- **E**: Equivalent to clicking number button 0.
+
+## 4.5 Test Interface
+
+Evaluates player endgame skill level, providing real-time feedback and performance analysis.
+
+### 4.5.1 Basic Testing Process
+
+**1. Select Table**:
+- Choose desired table from top menu bar
+- If table not loaded, access it from practice interface
+
+**2. Select Initial Position**:
+- System randomly generates initial position
+- Can manually set position in practice interface, copy encoding and paste here
+
+**3. Execute Moves**:
+- Use arrow keys or WASD to move
+- System auto-generates new tiles after each move
+
+**4. View Feedback**:
+- Real-time display of optimal moves and match rate
+- Cumulative match rate and combo counter
+- Positions automatically recorded to "Mistake Notebook"
+
+### 4.5.2 Advanced Features
+
+**Verse Replay Analysis**:
+- Click "Analyze Verse Replay" button
+- Import game replay from *2048verse.com* (`.txt` format)
+- Automatically extracts relevant endgame segments and scores
+- Generates detailed analysis report and replay files for each segment
+
+**Replay Review**:
+- Click "Replay Review" button
+- Supports reviewing current test game or Verse analysis-generated `.rpl` files
+- Fast-forward, rewind, precisely locate mistakes
+- Step through historical games
+
+**Mistake Notebook Function**:
+- Located at bottom of test interface
+- Automatically records low match-rate positions
+- Filter by table, importance, etc.
+- Jump to practice interface to view optimal moves for current position
+
+### 4.5.3 Keyboard Shortcuts
+
+- **Arrow Keys / WASD**: Move operations; real-time table comparison triggered.
+- **R**: Quick reset and save `.rpl` replay to default directory.
+- **F**: Show/hide right-side real-time analysis text.
 
 ---
 
 # 5. Quick Start
 
-Table calculation is a prerequisite for using important features such as the AI module, practice module, and test module. You need to first calculate and save a **table**.
+Table computation is a prerequisite for AI, practice, and test modules. You need to first calculate and save a **table**.
 
-## 5.1 Calculate a Formation
-   - Open the software and enter the main interface.
-   - Click **Settings**.
-   - Choose the formation you want to calculate (e.g., `L3-512-0`).
-   - Specify the save path for the table (e.g., `F:/L3_512_0`).
-   - Click **Build** to start the calculation.
+## 5.1 Calculate a Table (Settings Interface)
 
-## 5.2 Learn the Formation
-   - Enter **Practice**.
-   - In the top left menu (pattern\target\position), select the formation you just calculated.
-   - Check the **Show** checkbox to view the success rates.
-   - Click **Default** to show a random initial setup.
-   - Click **Demo** to view the demo.
+Follow these steps to calculate your first table:
 
-## 5.3 Master the Formation
-   - Enter **Test**.
-   - In the top left menu, select the formation you just calculated.
-   - Execute your moves (using WASD or arrow keys for controls).
-   - View real-time analysis on the right side.
-   - Click **Save Logs** to save the game logs.
+1. Enter main menu, access settings interface
+2. Select `L3` or `442` for table name; select `256` for target number
+3. Specify save path (e.g., `F:/L3_256`)
+4. Check **compress**; keep other options default
+5. Click **BUILD** button to start computation
 
----
+## 5.2 Learn the Table (Practice Interface)
 
-# 6. Advanced Usage
+After computation completes, enter **Practice** to learn optimal moves:
 
-## 6.1 Formation Calculation Parameters and Options
+1. Enter main menu, access practice interface
+2. Select the just-calculated table from top-left menu bar
+3. If completed, program auto-shows save path and random initial position
+4. Display success rates for four directions
+5. Click **Default** to switch random initial positions
+6. Continuously demo optimal moves, observe how to progress from initial to target
 
-### Formation Calculation Parameters
+## 5.3 Master the Table (Test Interface)
 
-| Parameter      | Description                                                                                                            |
-|----------------|------------------------------------------------------------------------------------------------------------------------|
-| **Pattern**    | Formation name                                                                                                         |
-| **Target**     | Target number                                                                                                          |
-| **Position**   | The position where the target number should be formed. <br/> Only a few pattern support this option, usually set to 0. |
+Verify your table mastery through testing:
 
-### Advanced Options
-
-| Button                                      | Function                                          | Purpose                              |
-|---------------------------------------------|---------------------------------------------------|--------------------------------------|
-| **Compress Temp Files**                     | Compress all intermediate files                   | Reduce disk usage during calculation |
-| **Compress**                                | Compress the final .book files                    | Reduce final disk usage              |
-| **Opt Only**                                | Keep only the optimal branches                    | Reduce final disk usage              |
-| **Remove Boards with a Success Rate Below** | Remove boards with success rate below a threshold | Reduce final disk usage              |
-
-**Note**:
-- All of the above options **do not** affect the accuracy of the success rates.
-- The **"Remove Boards with a Success Rate Below"** and **"Opt Only"** options will delete some boards (usually unreasonable ones) and display a success rate of 0, but **will not** affect other data.
-
-### Advanced Algorithm Option  
-When **Advanced Algo** is checked, the program will adopt an advanced algorithm. Tiles ≥64 and <32k are defined as *large numbers*, and those ≤32 as *small numbers*. 
-The algorithm will prune positions that do not meet the following conditions:   
-
-1. **Large number combinations**:  
-   a. Except for the smallest large number, all other large numbers may exist at most once.  
-   b. If the smallest large number is >64, it may exist at most twice.  
-   c. If the smallest large number is 64, it may exist at most three times.  
-   Examples: Valid combinations (4k 2k 512 128 128), (1k 512 256), (512 64 64 64); Invalid combinations (4k 2k 512 128 128 128), (4k 2k 512 128 128 64).  
-
-2. **Sum of small numbers**:  
-  Controlled by the hyperparameter **SmallTileSumLimit (stsl)**:  
-   a. Sum of small numbers ≤ stsl + 64  
-   b. If the board contains two identical large numbers: sum of small numbers ≤ stsl  
-   c. If the board contains three 64s: sum of small numbers ≤ stsl - 64  
-
-3. **Single-step merge limit**:  
-  Each operation produce at most one new large number.  
-
-**Advantages compared to the standard algorithm**:  
-- **Faster computation**: Larger formations (e.g., free10w, 4442ff and above) achieve over 10× speedup.  
-- **Memory optimization**: Peak memory usage reduced by 1-2 orders of magnitude. Up to 100× speedup under memory constraints.  
-- **Storage efficiency**: Smaller intermediate files (space savings increase with table size); book files require no compression.  
-
-**Usage limitations**:  
-- Designed specifically for extremely large formations, not suitable for small formations like L3 or T (may perform worse).  
-- Pruning reduces success rate accuracy. Accuracy loss increases with deviations from optimal paths, higher endgame difficulty, and stricter formations constraints. Typical loss is within 0.01%, with no impact on optimal paths.  
-- **opt only** option is unsupported.  
-
-Using this algorithm, free12w-4096 was successfully computed on a 9950x 128GB RAM computer in ~24 days.   
-
-## 6.2 Practice Interface Button Functions
-
-### Practice Interface Button Functions
-
-| Button                  | Function                                                                                                                                                                                                                                                                                                                                                                             |
-|-------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Set**                 | Reset the board to the value entered in the left box.                                                                                                                                                                                                                                                                                                                                |
-| **0-32k Color Buttons** | Click a number button to enter the set-board mode. During this mode, moves are not executed, and the success rate will not refresh. <br/> In this mode, you can use different keys to set the numbers on the board: <br/>1. Left-click - Change to the number on the button  <br/>2. Right-click - Increase the number by one level <br/>3. Other - Decrease the number by one level |
-| **Undo**                | Undo the previous action                                                                                                                                                                                                                                                                                                                                                             |
-| **Demo**                | Execute the optimal move continuously                                                                                                                                                                                                                                                                                                                                                |
-| **OneStep**             | Execute one optimal move at a time                                                                                                                                                                                                                                                                                                                                                   |
-| **Default**             | Show a random initial setup                                                                                                                                                                                                                                                                                                                                                          |
-| **UD/RL/R90/L90**       | Rotate and flip the board                                                                                                                                                                                                                                                                                                                                                            |
-| **Record Demo**         | Record and save the demo moves and success rates                                                                                                                                                                                                                                                                                                                                     |
-| **Load Demo/Play Demo** | Load and play the recorded demo file                                                                                                                                                                                                                                                                                                                                                 |
-| **Manual**              | Manual mode, no automatic number spawn. Left-click to place 2, right-click to place 4.                                                                                                                                                                                                                                                                                               |
-| **Set...**              | Choose a path to load. **If the calculated table file has been moved, it must be reset.**                                                                                                                                                                                                                                                                                            |
-
-## 6.3 Testing Interface Advanced Features
-
-You can **set the initial setup**. If you are unsure about the encoding method, you can arrange the initial setup in the Practice interface and then copy the encoding.
-
-You can use the **Analyze Verse Log** button to analyze game replays from 2048verse.com and generate a detailed analysis report.
-
-   - Write the game replay to a txt file and upload it.
-   - Choose a formation to analyze. You must have calculated this table.
-   - **If the book files have been moved, they must be reset in the Practice interface.**
-   - The program will analyze all endgames in the replay that meet the formation constraints and generate a txt report.
-
-Use the **Review Replay** button to reexamine your gameplay on Testing screen or Verse.
-
-   - Entering the interface will allow you to reexamine the test you have just taken.
-   - You can select the replay file you want to review from the left side of the menu bar in the interface.
-   - Replay files will be generated when you analyze a Verse replay.
-
-### Mistakes Notebook Function
-
-The **Mistakes Notebook** located at the bottom of the test interface automatically collects all the questions you answered incorrectly during the test. This allows you to review and practice them anytime, helping you strengthen your weak areas.
-
-### How to Back Up and Migrate Personal Data (When Upgrading Versions)
-
-If you have downloaded a new version of the software and wish to retain your previous personal settings and mistake records, please follow these steps:
-
-1.  **Locate the folder of your current (old) software version**  
-    This is the folder containing the main program (`.exe` file) and subdirectories like `_internal`, `font`, `pic`, etc.
-
-2.  **Copy the following two personal data files**  
-    Within that folder, find:
-    *   The **`mistakes_book.pkl`** file
-    *   The **`config`** file (no extension) inside the `_internal` subfolder
-
-3.  **Paste them into the corresponding location of the new version**  
-    Copy the two files found above and paste (overwrite) them into the **corresponding paths in the folder of the new software version** to complete the migration.
+1. Enter main menu, access test interface
+2. Select desired table from top-left menu bar
+3. Input custom position encoding
+4. Execute your best moves
+5. Observe real-time analysis panel on right side
 
 ---
 
-## 6.4 Settings Interface Advanced Features
+# 6. Table Calculation Algorithm
 
-In the **Settings** interface, you can customize the following:
+## 6.1 Fundamental Design
 
-*   **Customize Appearance**
-    *   **Number Block Color Theme**: Change the color scheme of the number blocks on the main interface.
-    *   **GUI Color Mode**: Switch between light and dark themes for the overall software interface.
+### 6.1.1 Board Bitboard Representation
 
-    > **Note**: Changes to color or theme settings will only take effect after you **restart the software**.
+The software uses a single **64-bit unsigned integer (uint64)** to represent 4x4 board state. The 16 board squares require 4 bits each, totaling 64 bits.
 
-*   **Advanced Custom Color Modes**
-    The software supports more advanced color customization. You can find the **`color_schemes.txt`** file in the main software folder. By editing this file, you can define your own unique interface color schemes.
+### 6.1.2 Lookup Tables & Move Functions
+
+To avoid loops and branches in merge logic, **lookup table (LUT)** acceleration is employed:
+
+1. Pre-compute all possible 16-bit row states during initialization (65,536 combinations total)
+2. Lookup tables don't store move results directly; instead store **XOR difference between post-move and original state**
+3. Rotation transforms convert up/down moves into row operations
+4. Extract rows/columns from position, lookup corresponding XOR difference, apply back to position
+
+### 6.1.3 Symmetry & Canonical Forms
+
+Many positions are logically equivalent through flipping or rotation. **Canonicalization** reduces redundant computation:
+
+Implemented transformations:
+* **Mirror flips**: Horizontal (`ReverseLR`), vertical (`ReverseUD`)
+* **Rotations**: 90° CW/CCW (`RotateL/RotateR`), 180° (`Rotate180`)
+* **Diagonal flips**: Main diagonal (`ReverseUL`), anti-diagonal (`ReverseUR`)
+
+Before storage, positions and symmetries are compared; the **numerically smallest form** is stored. For specific tables, only diagonal or horizontal canonicalization can be selected.
+
+## 6.2 Generation & Solution Logic
+
+Table computation can be summarized as: **forward-layer BFS generation** + **backward DP solving**. By splitting the enormous position space into different "layers," computation completes within resource constraints.
+
+### 6.2.1 Forward Position Generation (Forward BFS)
+
+Starting from initial seed positions, breadth-first search explores all reachable positions (generation phase).
+
+#### 1. Layered Search Logic
+Positions divided into "layers" for memory efficiency, typically by sum of log values of all tiles.
+- **State Transition**: Each layer's positions transition to next layer through "spawn new tile" and "move" actions
+- **Operation Loop**: For each position in layer, try spawning 2/4 at each empty location, then move in four directions. If result fits pattern and changed, record it
+
+#### 2. Sorting and Deduplication
+- **Pre-dedup**: Use hash map during generation for immediate caching/filtering, reducing memory overhead. Handles collisions only lightly for duplicate-rate reduction
+- **Sort Dedup**: After each layer completes, sort and remove duplicates. Sorting serves both dedup and enables efficient lookup of sorted positions
+
+#### 3. Memory Management & Prediction
+- **Length Prediction**: Predict next layer's scale growth, dynamically pre-allocate memory
+- **Segmentation**: When single layer exceeds available memory threshold, auto-split into segments, process and merge individually
+
+### 6.2.2 Backward Success Rate Recalculation
+
+After all layers generated and persisted to disk, solving phase begins.
+
+#### 1. Boundary Conditions
+- Position containing target number at required location = 100% success
+- Position with no valid moves = 0% success
+
+#### 2. Success Rate Calculation
+For each position $B$, success rate $P(B)$ depends on maximum success expectation across all possible moves:
+
+$$P(B) = \max_{d \in \{U, D, L, R\}} \left( 0.9 \times \sum_{s_2 \in S_2(d)} \frac{P(s_2)}{N_{empty}} + 0.1 \times \sum_{s_4 \in S_4(d)} \frac{P(s_4)}{N_{empty}} \right)$$
+
+Where:
+- $d$ is move direction
+- $S_2(d)$ and $S_4(d)$ are post-move positions from spawning 2 and 4 respectively
+- $N_{empty}$ is total empty squares after move
+
+#### 3. Indexing & Lookup Mechanism
+
+- **Prefix Indexing**: Create index table using first 24 bits of uint64 (header) as key, record offset of first occurrence in sorted array
+    
+- **Search Strategy**: 1. Compute header of target position 2. Get binary search range from table 3. Binary search within narrow range
+
+### 6.2.3 Breakpoint Resume & Error Recovery
+
+Since huge table computation may take hours or days, robust error handling is built-in:
+- **Layer Persistence**: Each completed layer written to disk immediately
+- **Breakpoint Resume**: On startup, program auto-detects generated files. If interrupted, restart will resume from last complete layer, avoiding duplication
+
+## 6.3 Advanced Algorithm
+
+The advanced algorithm is this program's breakthrough technology for solving `free10`, `4442ff` and larger mega-tables. In these tables, single-layer position counts reach 10^10 to 10^11 magnitude (`free12`), making standard algorithms nearly impossible on personal computers.
+
+### 6.3.1 Design Philosophy: Large Number Masking & Equivalence Classes
+
+Advanced algorithm uses "masking" to differentially handle two number classes:
+- **Large Numbers**: [64, 32768] range
+- **Small Numbers**: ≤32 range
+
+#### 1. Position Masking
+During generation, large numbers not involved in merges are unified as special placeholders (Masks):
+- **Equivalence Class**: One masked position can "represent" thousands of positions differing only in large number arrangements but sharing local logic
+- **State Compression**: This classification compresses BFS state space 10-100x+, dramatically reducing sorting/dedup and binary search pressure
+
+#### 2. Dynamic Expansion & Unmasking (Derive)
+When new tiles might trigger large number merges (e.g., existing 128, newly created 128), "expose" operation unmasking:
+- **Full-Position Expose**: Since masked positions contain multiple 32768 placeholders and mask represents position set, we can't predict specific value locations. Generate positions with value in all possible mask locations
+- **Overhead Analysis**: Most unmasked positions are reachable game states, so unmasking adds minimal invalid computation
+
+### 6.3.2 Heuristic Pruning Rules
+
+Advanced algorithm introduces pruning logic to maximize efficiency:
+
+#### 1. Large Number Combination Limits
+Restrictions on concurrent large number types and quantities:
+- Except smallest large number, others exist at most once
+- If smallest > 64, may coexist at most 2 times
+- If smallest = 64 with no 128, may coexist at most 3 times
+- Valid: `(4K, 2K, 512, 128, 128)`, `(512, 64, 64, 64)`
+- Pruned: `(4K, 2K, 512, 128, 128, 128)` or `(4K, 2K, 512, 128, 128, 64)`
+
+#### 2. Small Number Sum Limit (STSL)
+Hyperparameter **SmallTileSumLimit (STSL)** precisely controls small number complexity:
+- Sum of all small numbers ≤ STSL + 64
+- If position has two identical large numbers, require small sum ≤ STSL
+- If three 64s exist, require small sum ≤ STSL - 64
+- Per-move limit: Each move generates at most one new large number
+
+Actually, only need small-number-sum pruning every 32 layers.
+
+### 6.3.3 Batch Solving Mechanism
+
+Core of advanced solving: treat "masked positions" as vectors for bulk evolution, use transformation encoding to solve ordering consistency.
+
+#### 1. Full Unmasking & Cardinal:
+   - Full unmasking: Expose all mask bits according to large number combinations
+   - Ordering: Guarantees strict ascending position sequence
+   - Unmasked cardinal: Resulting position count determined by large number combination
+   - Data structure: Each masked position associates with Success Rate Array; array length equals its "unmasked cardinal," corresponding 1-to-1 with position sequence
+   - Note: Full unmasking costly; core algorithm avoids it via masking
+
+#### 2. Transformation Encoding & Cache Tables:
+   - Problem: Masked positions' position sequence scrambles after "move + canonicalize" transform
+   - Causes success rate array mismatch with current board, preventing expectation calculation
+   - Labeling & Tracing: Introduce transformation encoding. Before transform, traverse all mask bits (`0xf`) in masked position, assign descending "labels" (`0xf, 0xe, 0xd...`) sequentially. After transform, observe label final positions, compress arrangement state into unique feature value `ind`
+   - Pattern: Identical `ind` masked positions have identical sequence perturbation patterns
+   - Mapping Repair: Use feature `ind` retrieve ranked_array from cache table. Array records index mapping from "perturbed sequence" back to "original ascending sequence"
+   - Effect: Success Rate Array[ranked_array] achieves O(n) alignment, avoiding repeated full unmasking/sorting in solve loop
+
+#### 3. Dynamic Classification:
+   - Cardinal Change: Generating new large number changes unmasked cardinal. Must re-evaluate current large number combination, filter/multi-query success rate arrays
+   - Cardinal = 1: Revert to standard algorithm logic
+
+#### 4. Advantage Summary:
+   - Batch solving dramatically reduces binary search count
+   - Bulk success rate array processing with high parallelization potential
+   - Supports block-by-block solving to further reduce peak memory on massive computation
+
+### 6.3.4 Algorithm Advantages
+
+Advanced algorithm overwhelmingly outperforms standard on mega-tables:
+
+| Dimension | Standard | Advanced |
+| :--- | :--- | :--- |
+| **Computation Time** | Super-linear slowdown with table growth | Faster as tables grow (10x+ speedup possible) |
+| **Memory Usage** | Minimum 2x single-layer memory | Peak memory reduced 1 order of magnitude |
+| **Parallelization** | Parallelizable | Even higher parallelization potential |
+| **Storage Efficiency** | Large files; needs compression | Refined intermediate files, smaller final tables |
+
+Using this algorithm, `free12-4096` successfully computed on 9950X 128GB system in ~24 days.
+
+### 6.3.5 Usage Limitations & Considerations
+
+- **Applicable Scope**: Designed for `free10`, `free12`, `4442ff` mega-tables. For small tables like `L3`, `t`, advanced algorithm may hurt performance
+- **Accuracy Loss**: Pruning causes minor success rate deviation; barely affects optimal move selection
+- **Feature Conflict**: Unsupported: "keep only optimal branches" option, variant tables, tables with 't' suffix (or other limited-movement large numbers)
+- **Compression Characteristic**: Standard algorithm high compression ratio, due to data redundancy. Advanced algorithm lower ratio; masked mechanism stores mostly success rate data with high entropy (near random), traditional compression ineffective on this
+
 
 ---
 
