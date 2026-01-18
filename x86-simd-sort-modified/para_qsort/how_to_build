@@ -1,5 +1,0 @@
-Build/Install:
-
-clang++ -shared -o para_qsort.dll para_qsort.cpp -O3 -fopenmp -g -fPIC -I<path_to_include_directory> -L<path_to_lib_directory> -lx86simdsortcpp
-
-Copy the path to the para_qsort.dll file you got to the load path in BookBuilder.py on line 26
