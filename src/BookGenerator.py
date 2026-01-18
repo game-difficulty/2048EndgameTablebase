@@ -30,7 +30,6 @@ def gen_boards_big(arr0: NDArray[np.uint64],
                    pattern_check_func: PatternCheckFunc,
                    success_check_func: SuccessCheckFunc,
                    canonical_func: CanonicalFunc,
-                   pivots_list: List[NDArray[np.uint64]],
                    hashmap1: NDArray[np.uint64],
                    hashmap2: NDArray[np.uint64],
                    n: int,
@@ -39,7 +38,7 @@ def gen_boards_big(arr0: NDArray[np.uint64],
                    do_check: bool = True,
                    isfree: bool = False,
                    ) -> Tuple[
-    List[NDArray[np.uint64]], List[NDArray[np.uint64]], List[NDArray[np.uint64]], List[
+    List[NDArray[np.uint64]], List[NDArray[np.uint64]], List[
         List[float]], float, NDArray[np.uint64], NDArray[np.uint64], float, float, float]:
     """
     将arr0分段放入gen_boards生成排序去重后的局面，然后归并
@@ -78,11 +77,8 @@ def gen_boards_big(arr0: NDArray[np.uint64],
 
         gen_time += time.time() - t_
 
-        pivots = pivots_list[seg_index]
-        sort_array(arr1t, pivots)
-        sort_array(arr2t, pivots)
-        pivots_list[seg_index] = arr2t[[len(arr2t) // 8 * i for i in range(1, 8)]] if len(arr2t) > 0 else \
-            pivots_list[0].copy()
+        sort_array(arr1t)
+        sort_array(arr2t)
 
         arr1t = parallel_unique(arr1t, n)
         arr2t = parallel_unique(arr2t, n)
@@ -92,17 +88,17 @@ def gen_boards_big(arr0: NDArray[np.uint64],
         del arr1t, arr2t, arr0t
         gc.collect()
 
-    length_factors_list, pivots_list, length_factor_multiplier \
-        = update_parameters_big(actual_lengths2, actual_lengths1, n, length_factors_list, pivots_list)
+    length_factors_list, length_factor_multiplier \
+        = update_parameters_big(actual_lengths2, actual_lengths1, n, length_factors_list)
 
     t2 = time.time()
     gc.collect()
 
-    return (arr1s, arr2s, pivots_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2, t0,
+    return (arr1s, arr2s, length_factors_list, length_factor_multiplier, hashmap1, hashmap2, t0,
             gen_time, t2)
 
 
-def update_parameters_big(actual_lengths2, actual_lengths1, n, length_factors_list, pivots_list):
+def update_parameters_big(actual_lengths2, actual_lengths1, n, length_factors_list):
     percents2 = actual_lengths2 / actual_lengths2.sum()
     percents1 = actual_lengths1 / actual_lengths1.sum()
     logger.debug('Segmentation_ac ' + repr(np.round(percents2, 5)))
@@ -112,14 +108,12 @@ def update_parameters_big(actual_lengths2, actual_lengths1, n, length_factors_li
     # 如果每次循环生成的数组过长则进行一次细分
     if np.mean(actual_lengths2) * n > 20971520 * (round(psutil.virtual_memory().total / (1024 ** 3), 0) * 0.75):
         length_factors_list = split_length_factor_list(length_factors_list)
-        pivots_list = split_pivots_list(pivots_list)
 
     # 数组长度过短，则进行逆向细分操作
     if np.mean(actual_lengths2) * n < 524288 * (round(psutil.virtual_memory().total / (1024 ** 3), 0) * 0.75):
         length_factors_list = reverse_split_length_factor_list(length_factors_list)
-        pivots_list = reverse_split_pivots_list(pivots_list)
 
-    return length_factors_list, pivots_list, length_factor_multiplier
+    return length_factors_list, length_factor_multiplier
 
 
 def initialize_parameters(n, pathname, isfree, default_length_factor = 3.2):
@@ -212,7 +206,6 @@ def generate_process(
 
     started = False  # 是否进行了计算，如果是则需要进行final_steps处理最后一批局面
     d0, d1 = np.empty(0, dtype=np.uint64), np.empty(0, dtype=np.uint64)
-    pivots, pivots_list = None, None  # 用于快排的分割点
     hashmap1, hashmap2 = np.empty(0, dtype=np.uint64), np.empty(0, dtype=np.uint64)
     n = max(4, min(32, os.cpu_count()))  # 并行线程数
     length_factor, length_factors, length_factors_list, length_factors_list_path, \
@@ -223,10 +216,6 @@ def generate_process(
         started, d0, d1 = handle_restart(i, pathname, arr_init, started, d0, d1)
         if not started:
             continue
-
-        if pivots is None:
-            pivots = d0[[len(d0) // 8 * i for i in range(1, 8)]] if len(d0) > 0 else np.zeros(7, dtype='uint64')
-            pivots_list = [pivots] * len(length_factors_list)
 
         progress_signal.progress_updated.emit(i, steps * 2)
 
@@ -256,11 +245,10 @@ def generate_process(
 
             t1 = time.time()
             # 排序
-            sort_array(d1t, pivots)
-            sort_array(d2, pivots)
+            sort_array(d1t)
+            sort_array(d2)
 
-            length_factors, length_factors_list, pivots, pivots_list \
-                = update_parameters(d0, d2, length_factors, length_factors_list_path)
+            length_factors, length_factors_list = update_parameters(d0, d2, length_factors, length_factors_list_path)
             length_factor_multiplier = max(counts2) / np.mean(counts2) if np.any(counts2) else 5
 
             t2 = time.time()
@@ -290,10 +278,10 @@ def generate_process(
                 hashmap_max_length = 20971520 * (round(psutil.virtual_memory().total / (1024 ** 3), 0) * 0.75)
                 hashmap1, hashmap2 = (np.empty(largest_power_of_2(hashmap_max_length), dtype=np.uint64),
                                       np.empty(largest_power_of_2(hashmap_max_length), dtype=np.uint64))  # 初始化
-            (d1s, d2s, pivots_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2,
+            (d1s, d2s, length_factors_list, length_factor_multiplier, hashmap1, hashmap2,
              t0, gen_time, t2) = \
                 gen_boards_big(d0, target, pattern_check_func, success_check_func, canonical_func,
-                               pivots_list, hashmap1, hashmap2, n, length_factors_list,
+                               hashmap1, hashmap2, n, length_factors_list,
                                length_factor_multiplier, i > docheck_step, isfree)
 
             dedup_pivots = d0[np.arange(1, n) * len(d0) // n].copy() if len(d0) > 0 else \
@@ -364,10 +352,7 @@ def update_parameters(d0, d2, length_factors, length_factors_list_path):
     length_factors = length_factors[1:] + [len(d2) / (len(d0) + 1)]
     length_factors_list = [length_factors]
     np.savetxt(length_factors_list_path, length_factors_list, fmt='%.6f', delimiter=',')  # type: ignore
-    # 选取更准确的分割点使下一次快排更有效
-    pivots = d2[[len(d2) // 8 * i for i in range(1, 8)]].copy() if len(d2) > 0 else np.zeros(7, dtype='uint64')
-    pivots_list = [pivots]
-    return length_factors, length_factors_list, pivots, pivots_list
+    return length_factors, length_factors_list
 
 
 def log_performance(i, t0, t1, t2, t3, d1):
@@ -521,23 +506,11 @@ def split_length_factor_list(length_factor_list: List[List[float]]) -> List[List
     return length_factor_list_new
 
 
-def split_pivots_list(pivots_list: List[NDArray[np.uint64]]) -> List[NDArray[np.uint64]]:
-    pivots_list_new: List[NDArray[np.uint64]] = []
-    for i in pivots_list:
-        pivots_list_new.append(i)
-        pivots_list_new.append(i)
-    return pivots_list_new
-
-
 def reverse_split_length_factor_list(length_factor_list: List[List[float]]) -> List[List[float]]:
     length_factor_list_new = []
     for sublist in length_factor_list:
         length_factor_list_new.append(sublist[::2])
     return length_factor_list_new
-
-
-def reverse_split_pivots_list(pivots_list: List[NDArray[np.uint64]]) -> List[NDArray[np.uint64]]:
-    return pivots_list[::2]
 
 
 def harmonic_mean_by_column(matrix: List[List[float]]) -> List[float]:

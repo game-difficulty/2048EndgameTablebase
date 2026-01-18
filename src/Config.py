@@ -480,7 +480,6 @@ def fill_mid_falses(lst):
 class SingletonConfig:
     _instance = None  # 用于存储单例实例的类属性
     config_file_path = os.path.join(os.path.dirname(__file__), 'config')  # 配置文件路径
-    use_avx = 1
     font_colors = [True for _ in range(36)]
     _current_translator: None | QTranslator = None
 
@@ -491,7 +490,6 @@ class SingletonConfig:
             # 初始化配置数据
             cls._instance.config = cls.load_config()
             cls.tile_font_colors()
-            cls.check_cpuinfo()
         return cls._instance
 
     @classmethod
@@ -550,21 +548,17 @@ class SingletonConfig:
         with open(filename, 'wb') as file:
             pickle.dump(config, file)
 
-    @classmethod
-    def check_cpuinfo(cls):
+    @staticmethod
+    def check_cpuinfo():
         # 获取当前cpu指令集信息
         info = cpuinfo.get_cpu_info()
         if 'avx512f' in info['flags'] and 'avx512vl' in info['flags'] and \
                 ('avx512dq' in info['flags'] or ('avx512bw' in info['flags'] and 'avx512vbmi2' in info['flags'])):
-            cls.use_avx = 2
-            logger.info("CPU info: AVX512 is supported")
+            return 'avx512'
         elif 'avx2' in info['flags']:
-            cls.use_avx = 1
-            logger.info("CPU info: AVX2 is supported; AVX512 is not supported")
+            return 'avx2'
         else:
-            cls.use_avx = 0
-            logger.info("CPU info: AVX512/AVX2 is not supported")
-        return
+            return 'None'
 
     @staticmethod
     def get_system_language():

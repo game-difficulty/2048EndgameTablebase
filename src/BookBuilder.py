@@ -202,6 +202,7 @@ def generate_free_inits(t32ks: int, t2s: int) -> np.ndarray:
 def start_build(pattern: str, target: int, pathname: str) -> bool:
     spawn_rate4 = SingletonConfig().config['4_spawn_rate']
     tile_sum, pattern_check_func, canonical_func, success_check_func, ini, extra_steps = formation_info[pattern]
+    tile_sum *= -1
     if pattern[:4] == 'free':
         steps = int(2 ** target / 2 + extra_steps)
         docheck_step = int(2 ** target / 2) - tile_sum % int(2 ** target) // 2
@@ -209,6 +210,7 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
         ini_decoded = decode_board(ini[0])
         n32k = np.sum(ini_decoded==32768)
         extra_tile_sum = tile_sum - 32768 * n32k
+
         if extra_tile_sum <= (14 - n32k) * 2:
             arr_init = generate_free_inits(n32k, extra_tile_sum // 2)
         else:

@@ -1,19 +1,7 @@
-from typing import List, Tuple, Callable
-
-import numpy as np
-from numpy.typing import NDArray
-from numba import njit
-
-
-CanonicalFunc = Callable[[np.uint64], np.uint64]
-
+from typing import List, Tuple
 
 import numpy as np
 from numba import njit
-
-# 提取的参数配置字典
-# Key: Pattern Name
-# Value: ( (Pattern_Masks...), (Success_Shifts...) )
 
 
 def create_pattern_func_source(name, masks):

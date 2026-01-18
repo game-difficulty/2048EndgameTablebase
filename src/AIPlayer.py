@@ -305,10 +305,16 @@ class DispatcherCommon(BaseDispatcher):
     def init_bookreader(self):
         current_spawn_rate4 = SingletonConfig().config['4_spawn_rate']
         for i, (table, spawn_rate4) in enumerate(SingletonConfig().config['filepath_map'].keys()):
+            spawn_rate4 = float(spawn_rate4)
             if abs(current_spawn_rate4 - spawn_rate4) >= 0.01:
                 continue
             if SingletonConfig().check_pattern_file(table):
                 pattern_param = table.split('_')
+
+                if len(pattern_param) > 2:
+                    # 可能是自定义定式名中存在 _ 符号
+                    continue
+
                 pattern = pattern_param[0]
                 target_str = pattern_param[1]
                 target = int(np.log2(int(target_str)))

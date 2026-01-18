@@ -370,8 +370,8 @@ class TrainWindow(QtWidgets.QMainWindow):
 
         self.screenshot_btn = QtWidgets.QPushButton(self.operate)
         self.screenshot_btn.clicked.connect(self.capture_and_copy)  # type: ignore
-        self.screenshot_btn.setToolTip("Ctrl+Z")
-        self.shortcut_z = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self.screenshot_btn.setToolTip("Press Z")
+        self.shortcut_z = QShortcut(QKeySequence("Z"), self)
         self.shortcut_z.activated.connect(self.capture_and_copy)  # type: ignore
         self.gridLayout_record.addWidget(self.screenshot_btn, 0, 3, 1, 1)
 
@@ -619,19 +619,7 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.read_results()
 
     def handle_e_key(self):
-        # 查找当前是否有被选中的按钮
-        active_button = None
-        for button in self.tile_buttons:
-            if button.isChecked():
-                active_button = button
-                break
-
-        if active_button:
-            # 如果有选中，再次点击它（触发 toggle 逻辑，使其变为 Unchecked）
-            active_button.click()
-        else:
-            # 否则，视为按下了按钮 '0'
-            self.tile_buttons[0].click()
+        self.tile_buttons[0].click()
 
     def read_results(self):
         if self.show_results_checkbox.isChecked():

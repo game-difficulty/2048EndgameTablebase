@@ -18,62 +18,40 @@ CanonicalFunc = Callable[[NDArray[np.uint64]], None]
 CanonicalFunc1 = Callable[[np.uint64], np.uint64]
 
 logger = Config.logger
-use_avx = SingletonConfig().use_avx
 
 
 def initialize_sorting_library():
-    global use_avx
     _dll = None
     try:
         current_dir = os.path.dirname(__file__)
-        dll_path = os.path.join(current_dir, "para_qsort", "para_qsort.dll")
+        dll_path = os.path.join(current_dir, "para_qsort", "sort_wrapper.dll")
         if not os.path.exists(dll_path):
-            dll_path = r"_internal/para_qsort.dll"
+            dll_path = r"_internal/sort_wrapper.dll"
             if not os.path.exists(dll_path):
-                raise FileNotFoundError(f"para_qsort.dll not found.")
+                raise FileNotFoundError(f"sort_wrapper.dll not found.")
 
         # 加载DLL
         _dll = ctypes.CDLL(dll_path)
 
-        # 声明parallel_sort函数原型
-        _dll.parallel_sort.argtypes = (POINTER(c_uint64), c_size_t, POINTER(c_uint64), ctypes.c_bool)
-        _dll.parallel_sort.restype = None
+        # 声明sort_uint64函数原型
+        _dll.sort_uint64.argtypes = [POINTER(c_uint64), ctypes.c_size_t, ctypes.c_bool]
+        _dll.sort_uint64.restype = None  # 无返回值
 
         # 测试排序操作
-        _arr = np.random.randint(0, 1 << 64, 1000, dtype=np.uint64)
-        _pivots = np.array([2 ** 61, 2 ** 62, 2 ** 61 * 3, 2 ** 63, 2 ** 61 * 5, 2 ** 62 * 3, 2 ** 61 * 7],
-                           dtype=np.uint64)
-
+        _arr = np.random.randint(0, 1 << 64, 10000, dtype=np.uint64)
         _arr_ptr = _arr.ctypes.data_as(POINTER(c_uint64))
-        _pivots_ptr = (c_uint64 * len(_pivots))(*_pivots)
-        _use_avx512 = True if use_avx == 2 else False
+        descending = False
 
-        try:
-            # 调用DLL中的parallel_sort函数进行测试排序
-            _dll.parallel_sort(_arr_ptr, _arr.size, _pivots_ptr, _use_avx512)
-        except Exception as e:
-            if _use_avx512:
-                _dll.parallel_sort(_arr_ptr, _arr.size, _pivots_ptr, False)
-                SingletonConfig().use_avx = 1
-                use_avx = 1
-            else:
-                raise e
+        _dll.sort_uint64(_arr_ptr, len(_arr), descending)
 
         # 验证排序结果是否正确
         if not np.all(_arr[:-1] <= _arr[1:]):
             raise ValueError("DLL sorting failed, results are not sorted correctly")
-        else:
-            if _use_avx512:
-                logger.info("Sorting success using AVX512.")
-            else:
-                logger.info("Sorting success using AVX2.")
 
     except Exception as e:
-        # 如果加载DLL或排序出错，禁用AVX并记录日志
-        logger.warning(f"avx supports: {use_avx}")
+        logger.info(f"avx support: {SingletonConfig.check_cpuinfo()}")
         logger.warning(f"Failed to load DLL or test sorting failed: {e}. Falling back to numpy sort.")
         logger.warning(traceback.format_exc())  # 输出完整的异常堆栈
-        use_avx = False
 
     return _dll
 
@@ -233,17 +211,13 @@ def concatenate(arrays):
     return res
 
 
-def sort_array(arr: NDArray[np.uint64], pivots: NDArray[np.uint64] | None = None) -> None:
+def sort_array(arr: NDArray[np.uint64]) -> None:
     # 小数组直接调用numpy sort
-    if len(arr) < 1e6 or pivots is None or len(pivots) != 7 or not use_avx:
+    if len(arr) < 1e6 or dll is None:
         arr.sort()
     else:
-        # 转换numpy数组为ctypes数组
         arr_ptr = arr.ctypes.data_as(POINTER(c_uint64))
-        pivots_ptr = (c_uint64 * 7)(*pivots)
-        use_avx512 = True if use_avx == 2 else False
-        # 调用DLL中的parallel_sort函数原地排序
-        dll.parallel_sort(arr_ptr, arr.size, pivots_ptr, use_avx512)
+        dll.sort_uint64(arr_ptr, arr.size, False)
 
 
 @njit(nogil=True, cache=True)

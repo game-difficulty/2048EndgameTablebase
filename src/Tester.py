@@ -702,6 +702,7 @@ class ReaderWorker(QtCore.QThread):
         result = {key: formatting(value, zero_val) for key, value in result.items()}
         self.result_ready.emit(result)
 
+
 def formatting(value, zero_val):
     if zero_val >= 0 or not isinstance(value, (int, float, np.integer, np.floating)):
         return value

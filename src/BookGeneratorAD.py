@@ -281,7 +281,6 @@ def generate_process_ad(
 ) -> Tuple[bool, NDArray[np.uint64], NDArray[np.uint64]]:
     started = False  # 是否进行了计算，如果是则需要进行final_steps处理最后一批局面
     d0, d1 = np.empty(0, dtype=np.uint64), np.empty(0, dtype=np.uint64)
-    pivots, pivots_list = None, None  # 用于快排的分割点
     hashmap1, hashmap2 = np.empty(0, dtype=np.uint64), np.empty(0, dtype=np.uint64)
     n = max(4, min(32, os.cpu_count()))  # 并行线程数
     length_factor, length_factors, length_factors_list, length_factors_list_path, \
@@ -296,10 +295,6 @@ def generate_process_ad(
         started, d0, d1 = handle_restart_ad(i, pathname, arr_init, started, d0, d1)
         if not started:
             continue
-
-        if pivots is None:
-            pivots = d0[[len(d0) // 8 * i for i in range(1, 8)]] if len(d0) > 0 else np.zeros(7, dtype='uint64')
-            pivots_list = [pivots] * len(length_factors_list)
 
         progress_signal.progress_updated.emit(i, steps * 2)
 
@@ -322,11 +317,10 @@ def generate_process_ad(
 
             t1 = time.time()
             # 排序
-            sort_array(d1t, pivots)
-            sort_array(d2, pivots)
+            sort_array(d1t)
+            sort_array(d2)
 
-            length_factors, length_factors_list, pivots, pivots_list \
-                = update_parameters(d0, d2, length_factors, length_factors_list_path)
+            length_factors, length_factors_list = update_parameters(d0, d2, length_factors, length_factors_list_path)
             length_factor_multiplier = max(counts2) / np.mean(counts2) if np.mean(counts2) > 0 else 1
 
             t2 = time.time()
@@ -354,10 +348,10 @@ def generate_process_ad(
                 hashmap_max_length = 20971520 * (round(psutil.virtual_memory().total / (1024 ** 3), 0) * 0.75)
                 hashmap1, hashmap2 = (np.empty(largest_power_of_2(hashmap_max_length), dtype=np.uint64),
                                       np.empty(largest_power_of_2(hashmap_max_length), dtype=np.uint64))  # 初始化
-            (d1s, d2s, pivots_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2,
+            (d1s, d2s, length_factors_list, length_factor_multiplier, hashmap1, hashmap2,
              t0, gen_time, t2) = \
                 gen_boards_big_ad(d0, pattern_check_func, sym_func, canonical_func,
-                               pivots_list, hashmap1, hashmap2, board_sum, tiles_combinations_arr, param, n,
+                               hashmap1, hashmap2, board_sum, tiles_combinations_arr, param, n,
                                length_factors_list, length_factor_multiplier, isfree)
 
             dedup_pivots = d0[np.arange(1, n) * len(d0) // n].copy() if len(d0) > 0 else \
@@ -397,7 +391,6 @@ def gen_boards_big_ad(arr0: NDArray[np.uint64],
                    pattern_check_func: PatternCheckFunc,
                    sym_func: SymFindFunc,
                    canonical_func: CanonicalFunc,
-                   pivots_list: List[NDArray[np.uint64]],
                    hashmap1: NDArray[np.uint64],
                    hashmap2: NDArray[np.uint64],
                    board_sum: np.uint32,
@@ -408,7 +401,7 @@ def gen_boards_big_ad(arr0: NDArray[np.uint64],
                    length_factor_multiplier: float = 1.5,
                    isfree: bool = False,
                    ) -> Tuple[
-    List[NDArray[np.uint64]], List[NDArray[np.uint64]], List[NDArray[np.uint64]], List[
+    List[NDArray[np.uint64]], List[NDArray[np.uint64]], List[
         List[float]], float, NDArray[np.uint64], NDArray[np.uint64], float, float, float]:
     """
     将arr0分段放入gen_boards生成排序去重后的局面，然后归并
@@ -446,11 +439,8 @@ def gen_boards_big_ad(arr0: NDArray[np.uint64],
 
         gen_time += time.time() - t_
 
-        pivots = pivots_list[seg_index]
-        sort_array(arr1t, pivots)
-        sort_array(arr2t, pivots)
-        pivots_list[seg_index] = arr2t[[len(arr2t) // 8 * i for i in range(1, 8)]] if len(arr2t) > 0 else \
-            pivots_list[0].copy()
+        sort_array(arr1t)
+        sort_array(arr2t)
 
         arr1t = parallel_unique(arr1t, n)
         arr2t = parallel_unique(arr2t, n)
@@ -460,13 +450,13 @@ def gen_boards_big_ad(arr0: NDArray[np.uint64],
         del arr1t, arr2t, arr0t
         gc.collect()
 
-    length_factors_list, pivots_list, length_factor_multiplier \
-        = update_parameters_big(actual_lengths2, actual_lengths1, n, length_factors_list, pivots_list)
+    length_factors_list, length_factor_multiplier \
+        = update_parameters_big(actual_lengths2, actual_lengths1, n, length_factors_list)
 
     t2 = time.time()
     gc.collect()
 
-    return (arr1s, arr2s, pivots_list, length_factors_list, length_factor_multiplier, hashmap1, hashmap2, t0,
+    return (arr1s, arr2s, length_factors_list, length_factor_multiplier, hashmap1, hashmap2, t0,
             gen_time, t2)
 
 

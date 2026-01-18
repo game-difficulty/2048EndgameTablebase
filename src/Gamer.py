@@ -893,7 +893,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.one_step.setText(_translate("Game", "One Step"))
         self.undo.setText(_translate("Game", "Undo"))
         self.new_game.setText(_translate("Game", "New Game"))
-        self.ai.setText(_translate("Game", "AI: ON"))
+        self.ai.setText("AI: ON")  # 暂不翻译
         self.difficulty_text.setText(_translate("Game", "Difficulty"))
         self.set_board_bt.setText(_translate("Game", "SET"))
 
