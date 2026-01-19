@@ -565,7 +565,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
 
             self.smallTileSumLimitSpinBox = QtWidgets.QDoubleSpinBox(self.centralwidget)
             self.smallTileSumLimitSpinBox.setMinimum(20)
-            self.smallTileSumLimitSpinBox.setMaximum(132)
+            self.smallTileSumLimitSpinBox.setMaximum(120)
             self.smallTileSumLimitSpinBox.setDecimals(0)
             self.smallTileSumLimitSpinBox.setSingleStep(2)
             self.smallTileSumLimitSpinBox.setValue(SingletonConfig().config.get('SmallTileSumLimit', 96))

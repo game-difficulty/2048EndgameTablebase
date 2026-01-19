@@ -848,3 +848,7 @@ else:
 
 clock = ctypes.CDLL(__LIB).clock
 clock.argtypes = []
+
+
+if __name__ == '__main__':
+    print(Calculator.is_free9_pattern(np.uint64(0xfffff0f0fffff)))  # True

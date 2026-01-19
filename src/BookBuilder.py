@@ -71,6 +71,12 @@ def gen_lookup_table_big(
     else:
         _, num_free_32k, pos_fixed_32k = pattern_32k_tiles_map[pattern]
         permutation_dict, tiles_combinations_dict, param = init_masker(num_free_32k, target, pos_fixed_32k)
+        #
+        # original_board_sum = 229638
+        # derive(
+        #     np.uint64(0x1026fffffffff), np.uint32(original_board_sum + 2), tiles_combinations_dict, param)
+
+
         started, d0, d1 = generate_process_ad(arr_init, pattern_check_func, canonical_func, sym_func,
                                               steps, pathname, isfree, tiles_combinations_dict, param)
         b1, b2, i1, i2 = final_steps_ad(started, pathname, steps)
@@ -211,7 +217,7 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
         n32k = np.sum(ini_decoded==32768)
         extra_tile_sum = tile_sum - 32768 * n32k
 
-        if extra_tile_sum <= (14 - n32k) * 2:
+        if extra_tile_sum <= (15 - n32k) * 2:
             arr_init = generate_free_inits(n32k, extra_tile_sum // 2)
         else:
             arr_init = ini
@@ -232,7 +238,7 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
 def v_start_build(pattern: str, target: int, pathname: str) -> bool:
     spawn_rate4 = SingletonConfig().config['4_spawn_rate']
     tile_sum, pattern_check_func, canonical_func, success_check_func, ini, extra_steps = formation_info[pattern]
-
+    tile_sum *= -1
     steps = int(2 ** target / 2 + extra_steps)
     docheck_step = int(2 ** target / 2) - tile_sum % int(2 ** target) // 2
 
@@ -242,6 +248,7 @@ def v_start_build(pattern: str, target: int, pathname: str) -> bool:
     return True
 
 
-# if __name__ == "__main__":
-#     start_build('t',10,0,r"C:\Apps\2048endgameTablebase\tables\t1k-118\t_1024_")
-#     pass
+if __name__ == "__main__":
+    #start_build('free9',9,r"C:\Users\Administrator\Desktop\test\test\free9test1\free9_512_")
+    pass
+

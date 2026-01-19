@@ -96,6 +96,7 @@ def gen_boards_ad(arr0: NDArray[np.uint64],
                             if newt == t1 or not pattern_check_func(newt):
                                 continue
                             newt, symm_index = sym_func(newt)
+                            newt = np.uint64(newt)
                             hashed_newt = (hash_(newt) & hashmap1_length)
                             if hashmap1[hashed_newt] == newt:
                                 continue
@@ -286,6 +287,7 @@ def generate_process_ad(
     length_factor, length_factors, length_factors_list, length_factors_list_path, \
         counts2, length_factor_multiplier, segment_size = initialize_parameters(n, pathname, isfree)
     ini_board_sum = np.sum(decode_board(arr_init[0]))
+
     for b in range(len(arr_init)):
         arr_init[b] = mask_board(arr_init[b])
     tiles_combinations_arr = dict_to_structured_array3(tiles_combinations_dict)
