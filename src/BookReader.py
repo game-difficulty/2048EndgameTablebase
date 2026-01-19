@@ -38,7 +38,7 @@ class BookReader:
         final_results = {'down': '', 'right': '', 'left': '', 'up': ''}
         max_success_rate = 0
         _success_rate_dtype = ''
-        for path, success_rate_dtype in path_list:  # todo done
+        for path, success_rate_dtype in path_list:
             if not os.path.exists(path) or max_success_rate:
                 continue
             precision_digits = 9 if '32' in success_rate_dtype else None
@@ -193,7 +193,7 @@ class BookReader:
 
     @staticmethod
     def get_random_state(path_list: list, pattern_full: str) -> np.uint64:
-        for path, success_rate_dtype in path_list:  # todo done
+        for path, success_rate_dtype in path_list:
             book_index = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
             _, val_type, max_scale, zero_val = DTYPE_CONFIG.get(success_rate_dtype, DTYPE_CONFIG['uint32'])
             fmt_val = _TYPE_MAP.get(val_type, 'I')
@@ -249,7 +249,7 @@ class BookReaderDispatcher:
         else:
             return self._book_reader.get_random_state(path_list, pattern_full)
 
-    def dispatch(self, path_list: list, pattern: str, target: str | int):  # todo done
+    def dispatch(self, path_list: list, pattern: str, target: str | int):
         try:
             target = int(target)
             if target >= 128:

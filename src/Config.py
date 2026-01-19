@@ -595,7 +595,7 @@ class SingletonConfig:
                 widget.retranslateUi()
 
     @classmethod
-    def check_pattern_file(cls, pattern):  # todo done
+    def check_pattern_file(cls, pattern):
         if not cls._instance:
             return False
         spawn_rate4 = SingletonConfig().config['4_spawn_rate']

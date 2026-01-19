@@ -1,8 +1,9 @@
+
 # User Manual
 
 **Author**: game_difficulty  
 **Version**: 9.0  
-**Date**: 2026.1.19  
+**Date**: 2026.1.20 
 
 ---
 
@@ -11,12 +12,14 @@
 This is a comprehensive 2048 training software suite offering table calculation, endgame training, game analysis, AI assistance, variant mini-games, and more.
 
 ## 1.1 Key Highlights
+
 - **Lightning-Fast Computation**: Highly optimized algorithms and advanced pruning deliver industry-leading calculation speeds, accelerating large table computations by over 10x.
 - **Storage Efficiency**: Multiple pruning and data compression techniques significantly reduce the disk footprint of table files.
 - **State-of-the-Art AI**: Features the world’s most powerful 2048 AI, achieving an 8.4% (±1.6%) success rate for 65536 and 86.1% (±2.0%) for 32768, far surpassing other AI engines.
 - **Complete Toolkit**: Comprehensive training and analysis tools—including real-time feedback, an error log (mistake book), and replay analysis—help users master advanced strategies.
 
 ## 1.2 Main Function Modules
+
 - **Game**: Standard 2048 gameplay with built-in professional AI assistance.
 - **Practice**: Explore tables and learn optimal moves, with support for recording and playback.
 - **Test**: Assess your mastery with automated mistake tracking, replay analysis, and 2048verse.com replay import.
@@ -25,6 +28,7 @@ This is a comprehensive 2048 training software suite offering table calculation,
 - **Help**: Documentation and guides.
 
 ## 1.3 Target Users
+
 - **Professional Players**: Those seeking powerful tools to research advanced techniques and strategies.
 - **AI Developers**: Developers looking to utilize game data for AI training and optimization.
 - **Endgame Enthusiasts**: Players dedicated to a deep understanding of 2048 endgames and tablebases.
@@ -37,23 +41,25 @@ This is a comprehensive 2048 training software suite offering table calculation,
 ## 2.1 System Requirements
 - **Operating System**: Windows 7 or later.
 - **Memory**:
-  - Basic usage: Minimum 8GB.
-  - Large tablebase calculation: 32GB+ recommended; configure significant virtual memory (paging file) if necessary.
+    - Basic usage: Minimum 8GB.
+    - Large tablebase calculation: 32GB+ recommended; configure significant virtual memory (paging file) if necessary.
 - **Disk Space**:
-  - Basic usage: 10GB+ free space.
-  - Large tablebase calculation: Up to 1TB+ depending on the pattern (SSD strongly recommended).
+    - Basic usage: 10GB+ free space.
+    - Large tablebase calculation: Up to 1TB+ depending on the pattern (SSD strongly recommended).
 - **CPU**:
-  - Any 64-bit CPU is compatible.
-  - CPUs supporting the AVX-512 instruction set offer superior performance.
-  - Full support for multi-core parallel processing.
+    - Any 64-bit CPU is compatible.
+    - CPUs supporting the AVX-512 instruction set offer superior performance.
+    - Full support for multi-core parallel processing.
 - **GPU**: No GPU required; the engine is pure CPU-based.
 
 ## 2.2 Installation Steps
+
 - **Extract**: Download and extract the software package.
 - **Run**: Locate and double-click `main.exe` in the extracted folder to launch.
 - **Initial Launch**: The software will perform JIT compilation and initialization, taking approximately 2-10 seconds.
 
 ## 2.3 Startup Instructions
+
 - **Initialization**: JIT compilation and resource loading occur during the first use of each feature; this is normal.
 - **Troubleshooting**: If you encounter errors, please check the `logger.txt` file for detailed diagnostic information.
 
@@ -64,6 +70,7 @@ This is a comprehensive 2048 training software suite offering table calculation,
 An endgame represents a game state where several large numbers have already been placed on specific tiles, and the player must use the remaining empty spaces to merge and reach a target tile. **An endgame is the complete process from a specific board state to achieving the target tile.**
 
 ### Example Understanding
+
 - **10-space 16K Endgame**: The board already contains large numbers (8K, 4K, 2K, 1K, 512, 256 - 6 tiles total). The remaining 10 empty spaces are used to create a new 256, which merges with existing numbers to form 16K.
 - **12-space 32K Endgame**: The board contains (16K, 8K, 4K, 2K - 4 tiles). The remaining 12 spaces must create 2048, which eventually merges into 32K.
 
@@ -81,6 +88,7 @@ Endgame classification is determined by the **layout of remaining empty spaces**
 **A table is an endgame with added constraints.**
 
 In actual gameplay, to reliably achieve goals and maintain formation stability, players typically need to:
+
 - Keep large numbers in relatively fixed positions
 - Create target tiles at specified locations
 
@@ -95,10 +103,12 @@ These constraints are called **table constraints**.
 | **Variant Table** | **Minimal**: Essentially free tables on different board layouts. | **Medium-Low**: Limited state space, reasoning depth constrained. | **High** | **High-precision training**. Small state count allows humans near-perfect accuracy; ideal for targeted practice. |
 
 ### Free Table Examples
+
 - `free9-128`: 9 empty spaces to create 128 (16K endgame).
 - `free10-512`: 10 empty spaces to create 512 (32K endgame).
 
 ### Position Table Examples
+
 - `L3-512`: 6 large numbers locked in L-shaped corner region, target 512 (32K endgame).
 - `442-256`: Layered formation (Snake pattern) with 6 large numbers, target 256 (16K endgame).
 
@@ -112,24 +122,25 @@ These constraints are called **table constraints**.
 ### Understanding Table Naming
 
 - **Numeric Tables** (e.g., `442`, `4441`, `4432`): Empty spaces per row.
-  - `442` = Row 1: 4 spaces, Row 2: 4 spaces, Row 3: 2 spaces = 10 total.
-  - `4431` = Row 1: 4, Row 2: 4, Row 3: 3, Row 4: 1 = 12 total.
+    - `442` = Row 1: 4 spaces, Row 2: 4 spaces, Row 3: 2 spaces = 10 total.
+    - `4431` = Row 1: 4, Row 2: 4, Row 3: 3, Row 4: 1 = 12 total.
   
 - **Letter Tables** (e.g., `L3`, `t`, `LL`): Empty space distribution shape.
-  - `L3` = Outer L-shape + 3 additional spaces, equivalent to `4411`.
-  - `t` = 10 spaces in T-shape, equivalent to `2422`.
-  - `LL` = Outer L + Inner L, equivalent to `4422`.
+    - `L3` = Outer L-shape + 3 additional spaces, equivalent to `4411`.
+    - `t` = 10 spaces in T-shape, equivalent to `2422`.
+    - `LL` = Outer L + Inner L, equivalent to `4422`.
   
 - **Free Tables** (e.g., `free9`): Completely unrestricted.
-  - `free9` = 7 completely free large numbers and 9 empty spaces.
+    - `free9` = 7 completely free large numbers and 9 empty spaces.
 
 - **Suffix Markers**
-  - `f (Free)`: Free large number marker. Indicates unconstrained movable large numbers beyond base table constraints. Example: `4432f` = 4432 base + 1 free large number (4 total). `4442ff` = 2 free large numbers.
-  - `t (Transport)`: Intra-column repositioning marker. Allows certain large numbers to move up/down within their column. Used for optimization or emergency recovery. In `t` tables, 1x2 sections can move vertically.
+    - `f (Free)`: Free large number marker. Indicates unconstrained movable large numbers beyond base table constraints. Example: `4432f` = 4432 base + 1 free large number (4 total). `4442ff` = 2 free large numbers.
+    - `t (Transport)`: Intra-column repositioning marker. Allows certain large numbers to move up/down within their column. Used for optimization or emergency recovery. In `t` tables, 1x2 sections can move vertically.
 
 ### Success Rate Meaning
 
 The **success rate** computed for a table means:
+
 - Starting from that table's current state;
 - Without using any undo operations;
 - Following the optimal strategy;
@@ -148,22 +159,24 @@ The Settings interface is split into two primary sections: **Table Calculation**
 ### 4.1.1 Table Calculation Section
 
 **Core Parameters**:
+
 - **Table Name**: Select the target table pattern from the dropdown menu (e.g., `L3`, `442`, `free9`).
 - **Target Number**: Choose the tiles to be achieved (128, 256, 512, 1024, 2048...).
 - **Save Path**: Specify the storage location for table data; using a local SSD is strongly recommended for better I/O performance.
 
 **Calculation Options**:
+
 - **Compress Temp Files**: Reduces disk footprint during the generation phase but extends total computation time.
 - **Compress** (Recommended): Compresses the final table data, significantly saving long-term disk space.
 - **Keep Only Optimal Branches**: Strips away sub-optimal move data to minimize file size; requires additional processing time.
 - **Prune Low Success Rate** (Recommended): Post-calculation pruning that removes states with negligible winning chances without compromising overall accuracy.
 
 **Advanced Options**:
+
 - **Advanced Algorithm**: Utilizes specialized logic for massive tables, drastically reducing computation time and memory overhead (recommended for large tables only).
 - **Small Tile Sum Limit (STSL)**: Controls the pruning intensity of the advanced algorithm—a trade-off between success rate precision and calculation speed.
 - **Chunked Backward Solving**: Lowers the memory ceiling via chunked I/O. Ideal for memory-constrained systems computing massive endgames; best paired with an SSD.
 - **Success Rate Precision**: Allows customization of the storage format and bit-depth for success rate data.
-
 
 
 Click **BUILD** to initiate the process. The interface displays real-time progress and supports resuming from interruptions.
@@ -175,11 +188,13 @@ While the program supports resuming from breakpoints, interruptions caused by a 
 ### 4.1.2 Global Settings Section
 
 **Appearance & Themes**:
+
 - **Tile Color Scheme**: Choose the background color mapping for tiles (2 through 32,768).
 - **Theme Presets**: 40+ pre-configured styles (Classic, Royal, Supernova, etc.).
 - **Color Mode**: Dark mode applies upon restart. Advanced users can edit `color_schemes.txt` for deep UI customization.
 
 **Game Parameters**:
+
 - **4-Spawn Rate**: Probability of spawning a 4 (Range 0-1, Default 0.1 = 10%).
 - **Mistake Tracker Threshold**: Automatically logs board states from tests where the move optimality (match rate) falls below this specified value.
 - **Font Size**: Scale the UI text to match different screen resolutions.
@@ -199,6 +214,7 @@ Provides a standard 2048 gameplay with professional AI assistance.
 ### 4.2.2 Difficulty Settings
 
 **Difficulty Slider**:
+
 - Located at the bottom; drag right to increase the challenge.
 - Higher settings use an adversarial algorithm that spawns tiles in unfavorable positions rather than randomly.
 - Note: The built-in AI is optimized for random spawn logic; it is not recommended for use in adversarial modes.
@@ -236,28 +252,33 @@ A core tool for study and research, the Practice interface displays table data a
 ### 4.4.1 Interface Layout
 
 **Control Panel**:
+
 - Select the table to view from the menu bar.
 - Choose the directory path where table files are located.
 - Show/Hide success rates for the four move directions.
 - Click the numeric buttons at the bottom right to enter board editing mode.
 
 **Board Area**:
+
 - Displays the current board state.
 - Displays the position encoding.
 
 ### 4.4.2 Function Buttons
 
 **Board Operations**:
+
 - **Set Board**: Loads the encoding from the input box as the current board state.
 - **Default**: Displays a random initial position for the selected table.
 - **Flip/Rotate**: Performs board symmetry operations (flips and rotations).
 
 **Demo Functions**:
+
 - **Demo**: Automatically executes optimal moves continuously to demonstrate the full solution process.
 - **Step**: Executes a single optimal move, ideal for step-by-step learning.
 - **Undo**: Reverts the last move.
 
 **Board Editing**:
+
 - **Colored Tile Buttons (0-32k)**: Click to enter "Board Editing Mode."
 - **Left-click**: Sets the target tile on the board to the selected value.
 - **Right-click**: Increases the target tile value by one level (e.g., 2 → 4 → 8...).
@@ -265,11 +286,13 @@ A core tool for study and research, the Practice interface displays table data a
 - Click the currently selected tile button again to exit Board Editing Mode.
 
 **Recording Features**:
+
 - **Record**: Captures the sequence of moves and success rate data from an auto-demo.
 - **Load Recording**: Loads a previously saved recording file.
 - **Play Recording**: Plays the loaded recording content.
 
 **Manual Mode**:
+
 - Stops the system from automatically spawning new tiles.
 - Left-click empty space: Place a '2' tile.
 - Right-click empty space: Place a '4' tile.
@@ -290,18 +313,22 @@ The Test interface evaluates a player's endgame skill level, providing real-time
 ### 4.5.1 Basic Testing Process
 
 **1. Select Table**:
+
 - Choose the desired table from the top menu bar.
 - If table data is not loaded, specify the path in the Practice interface first.
 
 **2. Select Initial Position**:
+
 - The system randomly generates an initial position.
 - You can manually set a position in the Practice interface, then copy the encoding and paste it here.
 
 **3. Execute Moves**:
+
 - Use the arrow keys or WASD to perform moves.
 - The system automatically spawns a new tile after each move.
 
 **4. View Feedback**:
+
 - Real-time display of the optimal move and your move's match rate.
 - Displays cumulative match rate and current combo counter.
 - Games are automatically recorded in the "Mistake Notebook."
@@ -309,18 +336,21 @@ The Test interface evaluates a player's endgame skill level, providing real-time
 ### 4.5.2 Advanced Features
 
 **Verse Replay Analysis**:
+
 - Click the "Analyze Verse Replay" button.
 - Import replay files (`.txt` format) from *2048verse.com*.
 - Automatically extracts relevant endgame segments from the full replay and scores them.
 - Generates detailed analysis reports and replay files for each segment.
 
 **Replay Review**:
+
 - Click the "Replay Review" button.
 - Supports reviewing the current test session or `.rpl` files generated by Verse analysis.
 - Supports fast-forward, rewind, and precise "Mistake" (blunder) positioning.
 - Step through historical games for deep review.
 
 **Mistake Notebook**:
+
 - Located at the bottom of the Test interface.
 - Automatically records positions with low match rates.
 - Filter by table type, importance, and other conditions.
@@ -391,6 +421,7 @@ To bypass the loops and conditional branches in the merge logic, a **Lookup Tabl
 In table calculation, many positions are logically equivalent through flipping or rotation. A **Canonicalization** mechanism is introduced to reduce redundant computations.
 
 Implemented symmetry transformations:
+
 * **Mirror Flips**: Horizontal (`ReverseLR`) and Vertical (`ReverseUD`).
 * **Rotations**: 90° Clockwise/Counter-clockwise (`RotateL/RotateR`) and 180° (`Rotate180`).
 * **Diagonal Flips**: Main diagonal (`ReverseUL`) and Anti-diagonal (`ReverseUR`).
@@ -406,15 +437,19 @@ The core table algorithm is divided into two phases: **Forward Layer-by-Layer BF
 Starting from one or more initial seed boards, a Breadth-First Search (BFS) algorithm explores all reachable position spaces. This is known as the **Generation Phase**.
 
 #### 1. Layered Search Logic
+
 Positions are divided into "Layers" for memory efficiency, typically categorized by the sum of the tiles' exponents (logarithms).
+
 - **State Transition**: Positions in each layer transition to the next through two actions: "spawn new tile" and "execute move."
 - **Operation Loop**: For every position in a layer, the program iterates through all empty spaces, attempts to spawn a 2 or 4 tile, and then executes moves in four directions. If the resulting position fits the table pattern and the board has changed, it is recorded.
 
 #### 2. Sorting and Deduplication
+
 - **Pre-deduplication**: During generation, a Hash Map is used for immediate caching and filtering to reduce memory overhead. This process does not resolve hash collisions but serves to lower the duplication rate.
 - **Sort Dedup**: Once a layer is complete, the data is sorted and duplicates are removed. Sorting serves both deduplication needs and allows for efficient sorted position lookups.
 
 #### 3. Memory Management & Prediction
+
 - **Length Prediction**: The program predicts the growth scale of the next layer to pre-allocate memory dynamically.
 - **Segmentation**: When a single layer exceeds the available memory threshold, it is automatically split into segments, processed, and merged individually.
 
@@ -423,6 +458,7 @@ Positions are divided into "Layers" for memory efficiency, typically categorized
 Once all layers are generated and persisted to disk, the program enters the **Solving Phase**. During this process, you can adjust the "Success Rate Deletion Threshold" to precisely control the file size of each layer.
 
 #### 1. Boundary Conditions
+
 - If the target tile appears at the required location, the position is marked as 100% success.
 - If a position has no valid moves, its success rate is marked as 0%.
 
@@ -432,17 +468,20 @@ For any position $B$, the success rate $P(B)$ is determined by the maximum expec
 $$P(B) = \max_{d \in \{U, D, L, R\}} \left( 0.9 \times \sum_{s_2 \in S_2(d)} \frac{P(s_2)}{N_{empty}} + 0.1 \times \sum_{s_4 \in S_4(d)} \frac{P(s_4)}{N_{empty}} \right)$$
 
 Where:
+
 - $d$ is the move direction.
 - $S_2(d)$ and $S_4(d)$ are the sets of subsequent positions generated by spawning a 2 or 4 tile after the move.
 - $N_{empty}$ is the total number of empty tiles after the move.
 
 #### 3. Indexing & Lookup Mechanism
+
 - **Prefix Indexing**: An index table is established using the first 24 bits of the uint64 board (the header) as the key. It records the offset of the first occurrence of each 24-bit header in the sorted array.
 - **Search Strategy**: 1. Compute the header of the target position. 2. Retrieve the binary search range from the index table. 3. Perform a binary search within that narrow range.
 
 ### 6.2.3 Breakpoint Resume
 
 Since computing massive tables can take hours or even days, the program includes a robust error-tolerance mechanism:
+
 - **Layer Persistence**: Data is written to disk immediately after each layer completes.
 - **Breakpoint Resume**: On startup, the program automatically detects generated files. If interrupted, it resumes from the last complete layer, avoiding redundant calculations.
 
@@ -453,16 +492,19 @@ The Advanced Algorithm is a critical technical breakthrough designed for calcula
 ### 6.3.1 Design Philosophy: Large Number Masking & Equivalence Classes
 
 The algorithm utilizes "Masking" technology to treat two classes of numbers differently:
+
 - **Large Numbers**: Tiles in the range $[64, 32768]$.
 - **Small Numbers**: Tiles with values $\le 32$.
 
 #### 1. Position Masking
 During the generation phase, large numbers not currently involved in merges are treated as special placeholders (Masks).
+
 - **Equivalence Classes**: A single masked position can represent thousands of actual positions that differ only in the arrangement of large numbers but share the same local logic.
 - **State Compression**: By generating only masked positions, the BFS (Breadth-First Search) state space is compressed by $10$–$100\times$, significantly reducing the pressure on sorting, deduplication, and binary searches.
 
 #### 2. Dynamic Expansion & Unmasking (Derivation)
 When a newly spawned tile might trigger a merge with a large number (e.g., an existing 128 tile colliding with a newly spawned 128), the algorithm performs an "Expose" (or "Derive") operation to restore the mask to a specific value.
+
 - **Exhaustive Position Exposure**: Since a masked position contains multiple 32768 placeholders and represents a set of possible states, the specific location of a value cannot be predicted. Therefore, the algorithm generates positions for that value in all possible mask locations.
 - **Overhead Analysis**: Most exposed positions correspond to reachable game states; thus, unmasking introduces negligible computational overhead.
 
@@ -474,6 +516,7 @@ To maximize efficiency, the Advanced Algorithm introduces specific pruning logic
 
 #### 1. Large Number Combination Limits
 Restrictions are placed on the types and quantities of co-existing large numbers:
+
 - Aside from the smallest among the large numbers, all other large tiles may exist at most once.
 - If the smallest large tile $> 64$, it may co-exist at most twice.
 - If the smallest large tile $= 64$ and no 128 tile is present, it may co-exist at most three times.
@@ -482,6 +525,7 @@ Restrictions are placed on the types and quantities of co-existing large numbers
 
 #### 2. Small Number Sum Limit (STSL)
 The hyperparameter **SmallTileSumLimit (STSL)** precisely controls the complexity of small tiles:
+
 - The sum of all small tiles $\le STSL + 64$.
 - If a position contains two identical large numbers, the small sum must be $\le STSL$.
 - If three 64s are present, the small sum must be $\le STSL - 64$.
@@ -494,6 +538,7 @@ In practice, small-number-sum pruning is only required every 32 layers.
 The core of the advanced solving phase is treating "masked positions" as vectors for bulk evolution, utilizing transformation encoding to maintain ordering consistency.
 
 #### 1. Full Unmasking & Cardinality
+
 - **Full Unmasking**: Restoring all mask bits based on the large number combinations.
 - **Ordering**: Guarantees a strictly ascending sequence of positions.
 - **Unmasked Cardinality**: The total count of positions after unmasking, determined by the large number combinations.
@@ -501,6 +546,7 @@ The core of the advanced solving phase is treating "masked positions" as vectors
 - **Note**: Full unmasking is computationally expensive; the algorithm avoids repeated unmasking via the masking mechanism.
 
 #### 2. Transformation Encoding & Cache Tables
+
 - **Problem**: The sequence order of unmasked positions is scrambled after a "Move + Canonicalize" transformation. This causes the retrieved success rate array to misalign with the current board state, preventing expectation calculations.
 - **Labeling & Tracing**: Before a transformation, the algorithm traverses all mask bits (`0xf`) and assigns unique descending "labels" (`0xf, 0xe, 0xd...`). After the transformation, it observes the final positions of these labels and compresses the arrangement into a unique feature value `ind`.
 - **Pattern**: Masked positions with the same `ind` share identical sequence perturbation patterns.
@@ -508,10 +554,12 @@ The core of the advanced solving phase is treating "masked positions" as vectors
 - **Effect**: Using `Success Rate Array[ranked_array]` achieves $O(n)$ alignment, avoiding redundant full unmasking and sorting within the solving loop.
 
 #### 3. Dynamic Classification
+
 - **Cardinality Change**: Spawning a new large tile changes the Unmasked Cardinality. The algorithm must re-evaluate the large number combination and filter or merge success rate arrays accordingly.
 - **Cardinality = 1**: Reverts to standard algorithm logic.
 
 #### 4. Advantage Summary
+
 - Batch solving dramatically reduces the frequency of binary searches.
 - Bulk processing of success rate arrays offers high parallelization potential.
 - Supports block-by-block solving to further reduce peak memory usage during massive computations.
@@ -540,7 +588,8 @@ Using this algorithm, a `free12-4096` table was successfully computed on a 9950X
 # 7. About the AI
 
 ## 7.1 AI Performance
-Currently the strongest 2048 AI available.
+The strongest 2048 AI available.
+
 - Tested over 1200 games without undo: **65536 success rate: 8.4% (±1.6%), 32768 success rate: 86.1% (±2.0%)**.
 
 | Search Depth      | Games | Avg Score  | Median Score | Moves/s |
@@ -580,6 +629,7 @@ The endgame is the most challenging phase of 2048. This AI relies on search-base
 
 
 ### 7.4.1 Expectimax Search
+
 - **Adaptive Depth**: Search depth automatically adjusts based on the number of empty tiles, typically ranging from 2 to 5 layers.
 - **Evaluation Dimensions**: Evaluates the rationality of tile arrangements using row/column lookup tables.
 - **Caching Mechanism**: Features a built-in hash-based cache table to eliminate redundant computations.
@@ -679,6 +729,7 @@ To speed up generation and solving, do not check the compression option during i
 
 **2. Storage Management for Large Tables**
 When SSD capacity is insufficient for mega-tables, perform "Hot/Cold Separation":
+
 - **Hot Data**: Keep the current Layer and 20–30 adjacent files on the SSD to ensure I/O performance.
 - **Cold Data**: Move completed or currently unnecessary files to an HDD.
 - **Virtual Pathing**: Since the program only verifies file existence and not content during breakpoints, you can create empty files/folders in the original SSD path to "trick" the resume check.
@@ -686,6 +737,7 @@ When SSD capacity is insufficient for mega-tables, perform "Hot/Cold Separation"
 
 **3. Custom Table Definitions**
 Modify `patterns_config.json` to customize table parameters:
+
 - **valid pattern**: Bitmask for the legal space of large tiles with restricted movement.
 - **target pos**: Legal output locations for the target tiles.
 - **canonical mode**: Symmetry rules and canonicalization functions.
@@ -705,7 +757,9 @@ Restart the software after modifications to load and calculate your custom table
 | 444       | ```_ _ _ _ ```<br/>```_ _ _ _ ```<br/>```_ _ _ _ ```<br/>```x x x x``` |
 | LL        | ```_ _ _ _ ```<br/>```_ _ _ _ ```<br/>```_ _ x x ```<br/>```_ _ x x``` |
 | 4431      | ```_ _ _ _ ```<br/>```_ _ _ _ ```<br/>```_ _ _ x ```<br/>```_ x x x``` |
-| 4432f     | ```_ _ _ _ ```<br/>```_ _ _ _ ```<br/>```_ _ _ x ```<br/>```x _ x x``` |
+| 4432f     | ```_ _ _ _ ```<br/>```_ _ _ _ ```<br/>```_ _ _ x ```<br/>```f _ x x``` |
 | 4432      | ```_ _ _ _ ```<br/>```_ _ _ _ ```<br/>```_ _ _ x ```<br/>```_ _ x x``` |
-| 4442ff    | ```_ _ x x ```<br/>```_ _ _ _ ```<br/>```_ _ _ _ ```<br/>```_ _ x x``` |
+| 4442ff    | ```_ _ f f ```<br/>```_ _ _ _ ```<br/>```_ _ _ _ ```<br/>```_ _ x x``` |
 | 3x3       | ```_ _ _ ```<br/>```_ _ 2 ```<br/>```_ _ _```                          |
+
+

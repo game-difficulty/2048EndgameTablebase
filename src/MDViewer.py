@@ -1,123 +1,236 @@
 import sys
-from PyQt5.QtWidgets import QMainWindow, QTextBrowser, QApplication, QListWidget, QVBoxLayout, QWidget, QSplitter
-from PyQt5.QtGui import QIcon, QTextCursor
-from PyQt5.QtCore import Qt
 import re
 import markdown
+from PyQt5.QtWidgets import QMainWindow, QApplication, QListWidget, QVBoxLayout, QWidget, QSplitter
+from PyQt5.QtGui import QIcon
+from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.QtCore import Qt
 
 from Config import ColorManager
 
 
-# noinspection PyAttributeOutsideInit
 class MDViewer(QMainWindow):
     def __init__(self, md_file):
         super().__init__()
         self.MD_file = md_file
-        self.toc = []  # Table of contents list
+        self.toc_anchors = []  # 存储 anchor ID
         self.setupUI()
 
     def setupUI(self):
         self.setWindowIcon(QIcon(r"pic\2048_2.ico"))
-        self.setWindowTitle(self.tr("Help"))
+        self.setWindowTitle(self.tr("Help - Professional Edition"))
 
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout()
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.text_browser = QTextBrowser()
-        self.text_browser.setOpenExternalLinks(True)
+
+        # 1. 使用 QWebEngineView 替换 QTextBrowser
+        self.browser = QWebEngineView()
+
         self.toc_list = QListWidget()
-        self.toc_list.currentRowChanged.connect(self.onTOCClicked)  # type: ignore
+        self.toc_list.currentRowChanged.connect(self.onTOCClicked)
 
         splitter.addWidget(self.toc_list)
-        splitter.addWidget(self.text_browser)
-        splitter.setSizes([200, 600])
+        splitter.addWidget(self.browser)
+        splitter.setSizes([300, 1300])
 
         layout.addWidget(splitter)
         main_widget.setLayout(layout)
 
         self.loadMarkdown()
-        color_mgr = ColorManager()
-        self.text_browser.setStyleSheet(f"""
-            QTextBrowser {{
-                font-family: 'Times New Roman';  /* Setting font */
-                font-size: 24px;  /* Setting font size */
-                line-height: 1.5;  /* Setting line spacing */
-                color: {color_mgr.get_css_color(10)};  /* Setting font color */
-                background-color: {color_mgr.get_css_color(1)};  /* Setting background color */
-                padding: 10px;  /* Setting padding */
-            }}
-        """)
-
         self.resize(1600, 800)
 
     def loadMarkdown(self):
         with open(self.MD_file, 'r', encoding='utf-8') as file:
             md_content = file.read()
 
-        html_text = markdown.markdown(md_content, extensions=['tables', 'extra'])
-        # 为表格添加样式
-        html_text = html_text.replace('<table>', '<table style="border-collapse: collapse; width: 100%;">')
-        html_text = html_text.replace('<tr>', '<tr style="border: 1px solid black;">')
-        html_text = html_text.replace('<td>', '<td style="border: 1px solid black; padding: 5px;">')
-        html_text = html_text.replace('<th>', '<th style="border: 1px solid black; padding: 5px; text-align: center;">')
+        # 使用这些扩展来模拟 GitHub 的行为
+        extensions = [
+            'extra',  # 包含 tables, fenced_code, attr_list 等
+            'sane_lists',  # 让列表解析更符合直觉，防止不同类型的列表混淆
+            'nl2br',  # 换行符转 <br>
+            'toc'  # 生成锚点
+        ]
 
-        self.text_browser.setHtml(html_text)
-        self.extractHeaders(html_text)
+        html_body = markdown.markdown(md_content, extensions=extensions)
 
-    def extractHeaders(self, html_text):
-        # 定义一个正则表达式，匹配所有的 <h1> 到 <h6> 标签
-        header_pattern = re.compile(r'<h([1-6])>(.*?)</h\1>', re.DOTALL)
+        # 2. 构建完整的 HTML 骨架，注入现代样式和公式引擎
+        color_mgr = ColorManager()
+        bg_color = color_mgr.get_css_color(1)
+        text_color = color_mgr.get_css_color(10)
 
-        self.toc.clear()  # 清空现有的目录
-        self.toc_list.clear()  # 清空目录列表
+        full_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <script>
+            window.MathJax = {{
+                tex: {{
+                    inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+                    displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
+                    processEscapes: true,
+                    processEnvironments: true
+                }},
+                options: {{
+                    skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+                }},
+                startup: {{
+                    pageReady: () => {{
+                        return MathJax.startup.defaultPageReady().then(() => {{
+                            console.log('MathJax is ready!');
+                        }});
+                    }}
+                }}
+            }};
+            </script>
+            
+            <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 
-        # 查找所有的标题
-        headers = header_pattern.findall(html_text)
+            <style>
+                /* 1. 基础页面设置 */
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+                    font-size: 16px;
+                    line-height: 1.6;
+                    word-wrap: break-word;
+                    color: {text_color};
+                    background-color: {bg_color};
+                    padding: 45px;
+                    max-width: 1000px;
+                    margin: 0 auto;
+                    scroll-behavior: smooth;
+                }}
 
-        # 遍历所有标题
-        for level, header_text in headers:
-            # 由于标题中的文本可能有多余的空白字符，使用 strip() 去除
-            header_text = header_text.strip()
+                /* 2. 修复列表渲染问题 */
+                .markdown-body ul {{
+                    list-style-type: disc !important; /* 强制无序列表显示圆点 */
+                    padding-left: 2em !important;
+                    margin-top: 0;
+                    margin-bottom: 16px;
+                }}
 
-            # 获取文本光标
-            cursor = QTextCursor(self.text_browser.document())
-            line_number = 0
-            # 遍历文档查找该标题的具体位置
-            while not cursor.atEnd():
-                cursor.movePosition(QTextCursor.StartOfBlock)  # 移动到当前块的起始位置
-                text = cursor.block().text().strip()  # 获取当前块的文本
+                .markdown-body ol {{
+                    list-style-type: decimal !important; /* 强制有序列表显示数字 */
+                    padding-left: 2em !important;
+                    margin-top: 0;
+                    margin-bottom: 16px;
+                }}
 
-                # 判断是否找到匹配的标题
-                if text == header_text:
-                    line_number = cursor.blockNumber() + 1  # 获取标题的行号（从1开始）
-                    break
-                cursor.movePosition(QTextCursor.NextBlock)  # 向下移动到下一行
+                .markdown-body li {{
+                    display: list-item !important;
+                    margin-top: 0.25em;
+                }}
 
-            if line_number:
-                # 将标题及其行号存入目录
-                self.toc.append((header_text, line_number))
-                self.toc_list.addItem('  ' * (int(level) - 1) + header_text)  # 添加到目录列表显示
+                /* 嵌套列表样式：确保层级清晰 */
+                .markdown-body li > ul {{
+                    list-style-type: circle !important; /* 二级列表圆圈 */
+                    margin-top: 0;
+                    margin-bottom: 0;
+                }}
+
+                .markdown-body li > ol {{
+                    margin-top: 0;
+                    margin-bottom: 0;
+                }}
+
+                /* 3. 标题样式 */
+                .markdown-body h1, .markdown-body h2 {{
+                    border-bottom: 1px solid #eaecef;
+                    padding-bottom: 0.3em;
+                    margin-top: 24px;
+                    margin-bottom: 16px;
+                    font-weight: 600;
+                }}
+
+                /* 4. 表格样式 (GitHub 风格) */
+                .markdown-body table {{
+                    display: table;
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin-top: 0;
+                    margin-bottom: 16px;
+                }}
+                .markdown-body table th, .markdown-body table td {{
+                    padding: 6px 13px;
+                    border: 1px solid #dfe2e5;
+                }}
+                .markdown-body table tr {{
+                    background-color: {bg_color};
+                    border-top: 1px solid #c6cbd1;
+                }}
+                .markdown-body table tr:nth-child(even) {{
+                    background-color: rgba(0,0,0,0.03);
+                }}
+
+                /* 5. 代码块样式 */
+                .markdown-body pre {{
+                    background-color: rgba(0,0,0,0.05);
+                    border-radius: 6px;
+                    padding: 16px;
+                    overflow: auto;
+                    font-size: 85%;
+                    line-height: 1.45;
+                }}
+                .markdown-body code {{
+                    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+                    padding: 0.2em 0.4em;
+                    margin: 0;
+                    font-size: 85%;
+                    background-color: rgba(27,31,35,0.05);
+                    border-radius: 3px;
+                }}
+                .markdown-body pre code {{
+                    background-color: transparent;
+                    padding: 0;
+                }}
+
+                /* 6. 滚动条美化 */
+                ::-webkit-scrollbar {{ width: 10px; }}
+                ::-webkit-scrollbar-track {{ background: transparent; }}
+                ::-webkit-scrollbar-thumb {{ background: #d1d5da; border-radius: 5px; }}
+                ::-webkit-scrollbar-thumb:hover {{ background: #adb5bd; }}
+            </style>
+        </head>
+        <body class="markdown-body">
+            {html_body}
+        </body>
+        </html>
+        """
+
+        self.browser.setHtml(full_html)
+        self.extractHeaders(html_body)
+
+    def extractHeaders(self, html_body):
+        # 匹配 markdown 生成的带 id 的标题
+        pattern = re.compile(r'<h([1-6]) id="(.*?)">(.*?)</h\1>')
+        headers = pattern.findall(html_body)
+
+        self.toc_anchors.clear()
+        self.toc_list.clear()
+
+        for level, anchor_id, text in headers:
+            # 清理标题内可能存在的 HTML 标签
+            clean_text = re.sub(r'<.*?>', '', text).strip()
+            self.toc_anchors.append(anchor_id)
+            # 根据标题级别添加缩进
+            self.toc_list.addItem('    ' * (int(level) - 1) + clean_text)
 
     def onTOCClicked(self, index):
-        header, line_number = self.toc[index]  # 获取对应的标题及行号
-        cursor = self.text_browser.textCursor()  # 获取当前 QTextCursor
-        # 将光标移动到文档末尾
-        cursor.movePosition(QTextCursor.End)
-        self.text_browser.setTextCursor(cursor)  # 更新 QTextBrowser 的光标位置
-
-        document = self.text_browser.document()  # 获取 QTextDocument
-        # 使用 findBlockByLineNumber() 定位到指定行
-        block = document.findBlockByLineNumber(line_number - 1)  # line_number 是从 1 开始，blockNumber 从 0 开始
-        if block.isValid():  # 如果找到了有效的文本块
-            cursor.setPosition(block.position())  # 设置光标位置为该块的起始位置
-            self.text_browser.setTextCursor(cursor)  # 更新 QTextBrowser 的光标位置
-            self.text_browser.ensureCursorVisible()  # 确保光标可见
+        if 0 <= index < len(self.toc_anchors):
+            anchor_id = self.toc_anchors[index]
+            # 3. 使用 JavaScript 实现页面内跳转
+            js_code = f"document.getElementById('{anchor_id}').scrollIntoView();"
+            self.browser.page().runJavaScript(js_code)
 
 
 if __name__ == '__main__':
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+
     app = QApplication(sys.argv)
+
     viewer = MDViewer('help.md')
     viewer.show()
     sys.exit(app.exec_())

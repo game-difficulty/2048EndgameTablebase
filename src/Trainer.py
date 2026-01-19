@@ -645,7 +645,7 @@ class TrainWindow(QtWidgets.QMainWindow):
                 self.results_label.setText('')
                 self.result = dict()
                 self.read_results()
-            else:  # todo done
+            else:
                 self.success_rate_dtype = state
                 _, _, _, zero_val = DTYPE_CONFIG.get(self.success_rate_dtype, DTYPE_CONFIG['uint32'])
 
@@ -704,7 +704,7 @@ class TrainWindow(QtWidgets.QMainWindow):
             table_4sr = table_4sr if table_4sr is not None else spawn_rate4
 
             SingletonConfig().config['filepath_map'][(self.current_pattern, table_4sr)] = (
-                    current_path_list + [(filepath, success_rate_dtype)])  # todo done
+                    current_path_list + [(filepath, success_rate_dtype)])
             SingletonConfig().save_config(SingletonConfig().config)
 
             self.book_reader.dispatch(SingletonConfig().config['filepath_map'][(self.current_pattern, spawn_rate4)]
