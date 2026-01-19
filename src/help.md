@@ -744,6 +744,47 @@ Modify `patterns_config.json` to customize table parameters:
 - **seed boards**: Initial position encodings (must have an identical sum of tiles).
 - **extra steps**: Additional steps. Total steps = (Target Tile / 2) + extra steps. (Can be negative, provided the target tile can be merged within that step count).
 
+
+Examples:
+```json
+{
+  "L3f":{
+    "category": "10 space",
+    "valid pattern": ["0x000000000fff0000","0x0000000f0fff0ff0","0x000f000f0ff00ff0",
+                    "0x000000f00fff0f0f","0x000000ff0fff0f00",
+                    "0x00000f000fff00ff","0x00000f0f0fff00f0",
+                    "0x00000ff00fff000f",
+                    "0x000000f00fff0ff0","0x00000f000fff0ff0",
+                    "0x00000ff00fff0f00",
+                    "0x00000f000fff0f0f",
+                    "0x00000f000fff00ff","0x00000fff0fff0000"],
+    "target pos": "0xffffffffffffffff",
+    "canonical mode": "identity",
+    "seed boards": ["0x100000001fff2fff","0x000000012fff1fff"],
+    "extra steps": 48
+  },
+  "3x3from512to1k": {
+    "category": "variant",
+    "valid pattern": [],
+    "target pos": "0xfff0fff0fff00000",
+    "canonical mode": "min33",
+    "seed boards": ["0x000f000f009fffff"],
+    "extra steps": -200
+  },
+  "3x3from1kto512": {
+    "category": "variant",
+    "valid pattern": [],
+    "target pos": "0xfff0fff0fff00000",
+    "canonical mode": "min33",
+    "seed boards": ["0x000f000f00afffff"],
+    "extra steps": 30
+  }
+}
+```
+
+
+Avoid using `_` in pattern names.
+
 Restart the software after modifications to load and calculate your custom table.
 
 ## 10.3 Formation Info

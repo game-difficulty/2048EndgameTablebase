@@ -769,6 +769,45 @@ AI能够使用任意已计算的定式。
     - **seed boards**：起始局面编码，要求数字和相同。
     - **extra steps**：额外步数。总步数 = 目标数字/2 + extra steps（可为负，但需确保步数内可合并出目标数字）。
 
+示例：
+```json
+{
+  "L3f":{
+    "category": "10 space",
+    "valid pattern": ["0x000000000fff0000","0x0000000f0fff0ff0","0x000f000f0ff00ff0",
+                    "0x000000f00fff0f0f","0x000000ff0fff0f00",
+                    "0x00000f000fff00ff","0x00000f0f0fff00f0",
+                    "0x00000ff00fff000f",
+                    "0x000000f00fff0ff0","0x00000f000fff0ff0",
+                    "0x00000ff00fff0f00",
+                    "0x00000f000fff0f0f",
+                    "0x00000f000fff00ff","0x00000fff0fff0000"],
+    "target pos": "0xffffffffffffffff",
+    "canonical mode": "identity",
+    "seed boards": ["0x100000001fff2fff","0x000000012fff1fff"],
+    "extra steps": 48
+  },
+  "3x3from512to1k": {
+    "category": "variant",
+    "valid pattern": [],
+    "target pos": "0xfff0fff0fff00000",
+    "canonical mode": "min33",
+    "seed boards": ["0x000f000f009fffff"],
+    "extra steps": -200
+  },
+  "3x3from1kto512": {
+    "category": "variant",
+    "valid pattern": [],
+    "target pos": "0xfff0fff0fff00000",
+    "canonical mode": "min33",
+    "seed boards": ["0x000f000f00afffff"],
+    "extra steps": 30
+  }
+}
+```
+
+定式名称中避免出现'_'字符。不要使用全角标点符号。
+
 修改后重启软件，在菜单加载并计算自定义定式。
 
 
