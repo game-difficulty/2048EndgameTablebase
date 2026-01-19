@@ -3,7 +3,7 @@
 This project offers the fastest and most space-efficient tablebase generator available, enabling players and developers to explore the theoretical limits of the game. Our AI achieves unprecedented success rates, reaching the **32,768 tile at 86.1%** and the **65,536 tile at 8.4%** under no-undo conditions.
 
 
-success rate of getting a 2048 in 12 spaces (32k endgame)
+success rate of getting a 4096 in 12 spaces (65k endgame)
 
 ![Practise](https://github.com/user-attachments/assets/ed5312e5-5000-452f-a583-ccefc4712ec5)
 
@@ -78,5 +78,6 @@ The AI dynamically dispatches between search and pre-calculated tables:
 * **Community**: 
     * **QQ Group**: 94064339
     * **Discord**: 2048 Runs
+
 
 
