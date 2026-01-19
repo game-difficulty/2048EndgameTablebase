@@ -4,8 +4,10 @@ numba
 cpuinfo 
 psutil
 pyqt5
+PyQtWebEngine
 
 Python C++ Extension Module
 x86simdsort
 sort_wrapper.dll
+
 
