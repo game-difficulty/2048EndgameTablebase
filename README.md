@@ -5,8 +5,7 @@ This project offers the fastest and most space-efficient tablebase generator ava
 
 success rate of getting a 2048 in 12 spaces (32k endgame)
 
-![Practise](<img width="1275" height="747" alt="image" src="https://github.com/user-attachments/assets/ed5312e5-5000-452f-a583-ccefc4712ec5" />
-)
+![Practise](https://github.com/user-attachments/assets/ed5312e5-5000-452f-a583-ccefc4712ec5)
 
 ---
 
@@ -79,4 +78,5 @@ The AI dynamically dispatches between search and pre-calculated tables:
 * **Community**: 
     * **QQ Group**: 94064339
     * **Discord**: 2048 Runs
+
 
