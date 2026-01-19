@@ -1,95 +1,80 @@
-# 2048EndgameTablebase: Overview
-Experience the pinnacle of AI and endgame generation with our 2048 tablebase generator, the fastest and most space-efficient solution available. 
-Outperforming its contemporaries, this AI boasts the highest success rates for 32k and 65k challenges, approaching theoretical limits.
+# 2048EndgameTablebase: The Ultimate 2048 AI & Tablebase Solution
 
-success rate of getting a 2048 in 12 space (32k endgame)
+This project offers the fastest and most space-efficient tablebase generator available, enabling players and developers to explore the theoretical limits of the game. Our AI achieves unprecedented success rates, reaching the **32,768 tile at 86.1%** and the **65,536 tile at 8.4%** under no-undo conditions.
+
+
+success rate of getting a 2048 in 12 spaces (32k endgame)
+
 ![Practise](https://github.com/user-attachments/assets/9bd553b8-6156-45b9-ad63-1e7157b641de)
 
+---
 
+## 🚀 Core Highlights
 
-## Features
--  **Highly Optimized Generator**: A robust endgame generator delivering unmatched speed and efficiency.
+* **Lightning-Fast Computation**: Utilizes highly optimized bitboard logic and advanced pruning. Compute large-scale tables up to 10x faster than traditional methods.
+* **Storage Efficiency**: Multiple data compression and pruning techniques significantly reduce the disk footprint of your endgame tables.
+* **State-of-the-Art AI**: Outperforms all contemporary 2048 AIs by utilizing pre-calculated global optimal solutions to navigate the most difficult endgame stages.
+* **Complete Training Toolkit**: A comprehensive GUI for real-time practice, "Mistake Notebook" tracking, and deep replay analysis (supporting *2048verse.com* imports).
 
--  **Effective Training Interface**: Includes a user-friendly GUI that aids players in training and enhancing their skills.
+---
 
--  **Advanced Algorithms**: Advanced algorithms and compressed file formats are built-in to support the computation of extremely large tables.
+## 🛠️ System Requirements
 
--  **Resource Requirements**: Ensure 32-128GB of virtual memory is available for processing large tables such as free11w_1024.
+* **OS**: Windows 7 or later (64-bit).
+* **Memory**: 
+    * **Basic**: 8GB RAM.
+    * **Mega-Tables**: 32GB–128GB+ RAM (Significant virtual memory/paging file on SSD is recommended).
+* **Disk Space**: 10GB for basic use; 1TB+ SSD recommended for computing advanced tables like `free12`.
+* **CPU**: Any 64-bit CPU (AVX-512 support provides a significant performance boost).
+* **GPU**: Not required; the engine is pure CPU-based.
 
--  **Patience Required**: All functions are highly optimized, yet require patience during initial use.
+---
 
+## 📖 Quick Start Guide
 
-## User Guide
-1. Get started
-   - Open **main.exe** or run **main.py**
-   - Wait for the program to start
-   - Take note of the **help** documentation
-2. Calculate your first table:
-   - Go to **Settings**
-   - Select a pattern, *e.g. L3-512-0*
-   - Specify a save path, *e.g. F:/L3_512_0*
-   - Choose whether to compress the data
-   - Click **Build** to initiate the calculation
-3. View your first table:
-   - Go to **Practise**
-   - From the upper left menu bar, select a pattern, *e.g. L3-512-0*
-   - Enter a file path where the table is saved, *e.g. Q:/L3_512_0*
-   - Check the **Show** checkbox to view success rates
-   - Click **Default** to display the initial positions
-   - Wait for the success rates to show
-4. Find the optimal moves:
-   - Try rotating the board with **UD RL R90 L90**
-   - Try to perform the optimal move with **ONESTEP**
-   - Try **Demo** for continuous moves
-   - Try to record a game demo (do not make your moves during this recording)
-   - Try setting up the board using the provided tiles
-5. Real-time Training:
-   - Go to **Test**
-   - Select a pattern from the upper left menu bar, *e.g. L3-512-0*
-   - Execute what you consider the best move within the formation (wasd or ↑↓←→)
-   - Utilize the real-time analytics on the right-hand side to imporve your skills
-   - Click **Save Logs** to keep a record of your game analysis
-6. Enjoy the AI：
-   - You will need 10TB+ space and 128GB+ RAM
-   - Calculate tables used by the AI in **Settings**
-   - Go to **Game**
-   - Click **New Game** to start a new game
-   - Enable the AI by clicking the **AI: ON** button and watch the AI play
+### 1. Calculate Your First Table
+To use the AI or Practice modes, you must first generate a **Table**.
+1. Navigate to **Settings**.
+2. Select a **Table Name** (e.g., `L3` or `442`) and a **Target Number** (e.g., `256`).
+3. Specify a **Save Path** on your SSD.
+4. Click **BUILD** to initiate the generation process.
 
-##  AI Performance
--  This AI reaches the 65536 tile 8.4% (±1.6%) of the time and the 32768 tile 86.1% (±2.0%) of the time without undos.
-  -  The following table gives the AI performance statistics and success rates by stage
-   
-     | search depth    | games | avg score  | median score | moves/s |
-     |-----------------|-------|------------|--------------|---------|
-     | 1~9 adaptive    | 1200  | 772353     | 819808       | 11      |
+### 2. Learn the Strategy
+1. Go to **Practice**.
+2. Select your calculated table and ensure the file path is correct.
+3. Use the **Auto-Demo** or **Step** features to observe the optimal move sequences.
+4. Analyze success rates displayed for all four directions to understand move priority.
 
+### 3. Real-Time Training
+1. Go to **Test**.
+2. Select your table and execute moves (WASD or Arrow keys).
+3. Review the **Real-Time Analytics** on the right side to see your "Match Rate" against the optimal solution.
+4. Lower-accuracy moves are automatically logged in the **Mistake Notebook** for later review.
 
-     | milestone     | success rate | comparable score |
-     |---------------|--------------|------------------|
-     | 8k            | 100%         | 97000            |
-     | 16k           | 99.9%        | 210000           |
-     | 32k           | 86.1%        | 453000           |
-     | 32k+16k       | 72.8%        | 663000           |
-     | 32k+16k+8k    | 61.8%        | 760000           |
-     | 32k+16k+8k+4k | 53.3%        | 804000           |
-     | final 2k      | 46.3%        | 824000           |
-     | 65k           | 8.4%         | 971000           |
+---
 
+## 📈 AI Performance Statistics
 
-![survival rate](https://github.com/user-attachments/assets/8d708f06-4994-4878-8e27-2aa831db1a2b)
+Tested over 1,200 games (Adaptive Search Depth 1~9, no undo):
 
+| Milestone | Success Rate | Comparable Score |
+| :--- | :--- | :--- |
+| **8k** | 100% | 97,000 |
+| **16k** | 99.9% | 210,000 |
+| **32k** | 86.1% | 453,000 |
+| **65k** | 8.4% | 971,000 |
 
--  The tables used by the AI are
-   - **free12w-2048**
-   - **free11w-2048**
-   - **4442f-2048**
-   - **free11w-512**
+### Table Usage Distribution
+The AI dynamically dispatches between search and pre-calculated tables:
 
--  The following table shows how often each table is used.
-     | Search | free12w-2k     | free11w-2k | 4442f-2k | free11w-512  |
-     |--------|----------------|------------|----------|--------------|
-     | 26.49% | 13.38%         | 1.41%      | 51.50%   | 7.22%        |
+| Search Mode | free12-2k | free11-2k | 4442f-2k | free11-512 |
+| :--- | :--- | :--- | :--- | :--- |
+| 26.49% | 13.38% | 1.41% | 51.50% | 7.22% |
 
+---
 
+## 🤝 Support & Feedback
 
+* **Community**: 
+    * **QQ Group**: 94064339
+    * **Discord**: 2048 Runs
