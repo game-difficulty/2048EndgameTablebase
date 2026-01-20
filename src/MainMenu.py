@@ -209,14 +209,15 @@ class MainMenuWindow(QtWidgets.QMainWindow):
     def openHelpWindow(self):
         if self.view_window is None:
             from MDViewer import MDViewer
-            if SingletonConfig().config['language'] == 'zh':
-                self.view_window = MDViewer('helpZH.md')
-            else:
-                self.view_window = MDViewer('help.md')
+            # 让 MDViewer 内部根据 SingletonConfig 自动选择文件
+            self.view_window = MDViewer()
+
+            # 处理窗口最小化或激活状态（原有逻辑保持不变）
         if self.view_window.windowState() & QtCore.Qt.WindowState.WindowMinimized:
             self.view_window.setWindowState(
                 self.view_window.windowState() & ~QtCore.Qt.WindowState.WindowMinimized
                 | QtCore.Qt.WindowState.WindowActive)
+
         self.view_window.show()
         self.view_window.activateWindow()
         self.show_and_center_window(self.view_window)

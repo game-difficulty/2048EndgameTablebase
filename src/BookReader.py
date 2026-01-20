@@ -26,7 +26,7 @@ class BookReader:
                     ) -> Tuple[Dict[str, Union[str, float, int]], str]:
         bm_ = bm if pattern not in category_info.get('variant', []) else vbm
         nums_adjust, pattern_check_func, canonical_func, success_check_func, _, _ = \
-            formation_info.get(pattern, [0, None, canonical_identity, None, None])
+            formation_info.get(pattern, [0, None, canonical_identity, None, None, None])
         spawn_rate4 = SingletonConfig().config['4_spawn_rate']
         path_list = SingletonConfig().config['filepath_map'].get((pattern_full, spawn_rate4), [])
         nums = (board.sum() + nums_adjust) // 2

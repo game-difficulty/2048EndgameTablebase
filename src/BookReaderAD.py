@@ -48,7 +48,7 @@ class BookReaderAD:
         spawn_rate4 = SingletonConfig().config['4_spawn_rate']
         bm_ = bm if self.pattern not in Config.category_info.get('variant', []) else vbm
         nums_adjust, pattern_check_func, canonical_func, success_check_func, _, _ = \
-            formation_info.get(self.pattern, [0, None, canonical_identity, None, None])
+            formation_info.get(self.pattern, [0, None, canonical_identity, None, None, None])
         path_list = SingletonConfig().config['filepath_map'].get((pattern_full, spawn_rate4), [])
         nums = (board.sum() + nums_adjust) // 2
 
@@ -67,7 +67,9 @@ class BookReaderAD:
 
             sym_func = {Calculator.canonical_identity: Calculator.canonical_identity_pair,
                         Calculator.canonical_diagonal: Calculator.canonical_diagonal_pair,
-                        Calculator.canonical_full: Calculator.canonical_full_pair}[canonical_func]
+                        Calculator.canonical_full: Calculator.canonical_full_pair,
+                        Calculator.canonical_horizontal: Calculator.canonical_horizontal_pair,
+                        }.get(canonical_func, Calculator.canonical_identity_pair)
             precision_digits = 9 if '32' in success_rate_dtype else None
 
             for operation in [self.last_operation] + self.gen_all_mirror(self.pattern):

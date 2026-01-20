@@ -1,9 +1,11 @@
 import os
 import sys
-import time
+
 import multiprocessing
 
-from PyQt5 import QtCore, QtWidgets, QtGui
+from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QApplication
 
 from Config import apply_global_theme
 
@@ -12,6 +14,8 @@ def main():
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
     os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
+
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
 
     # 加载默认字体
     QtWidgets.QApplication.setAttribute(QtCore.Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)

@@ -65,11 +65,11 @@ This is a comprehensive 2048 training software suite offering table calculation,
 
 # 3. Core Concepts
 
-## 3.1 Understanding Endgames
+## 3.1 Endgames
 
 An endgame represents a game state where several large numbers have already been placed on specific tiles, and the player must use the remaining empty spaces to merge and reach a target tile. **An endgame is the complete process from a specific board state to achieving the target tile.**
 
-### Example Understanding
+### Example
 
 - **10-space 16K Endgame**: The board already contains large numbers (8K, 4K, 2K, 1K, 512, 256 - 6 tiles total). The remaining 10 empty spaces are used to create a new 256, which merges with existing numbers to form 16K.
 - **12-space 32K Endgame**: The board contains (16K, 8K, 4K, 2K - 4 tiles). The remaining 12 spaces must create 2048, which eventually merges into 32K.
@@ -107,19 +107,19 @@ These constraints are called **table constraints**.
 - `free9-128`: 9 empty spaces to create 128 (16K endgame).
 - `free10-512`: 10 empty spaces to create 512 (32K endgame).
 
-### Position Table Examples
+### Fixed Table Examples
 
 - `L3-512`: 6 large numbers locked in L-shaped corner region, target 512 (32K endgame).
 - `442-256`: Layered formation (Snake pattern) with 6 large numbers, target 256 (16K endgame).
 
-## 3.4 Table Parameters Explained
+## 3.4 Table Parameters
 
 | Parameter | Name | Description | Example |
 |-----------|------|-------------|---------|
 | **pattern** | Table name | Describes table constraints and remaining empty space quantity/position. | `L3`, `442`, `free9` |
 | **target** | Target number | The number to be created from remaining spaces. | `256`, `512`, `2048` |
 
-### Understanding Table Naming
+### Table Naming
 
 - **Numeric Tables** (e.g., `442`, `4441`, `4432`): Empty spaces per row.
     - `442` = Row 1: 4 spaces, Row 2: 4 spaces, Row 3: 2 spaces = 10 total.
@@ -137,7 +137,7 @@ These constraints are called **table constraints**.
     - `f (Free)`: Free large number marker. Indicates unconstrained movable large numbers beyond base table constraints. Example: `4432f` = 4432 base + 1 free large number (4 total). `4442ff` = 2 free large numbers.
     - `t (Transport)`: Intra-column repositioning marker. Allows certain large numbers to move up/down within their column. Used for optimization or emergency recovery. In `t` tables, 1x2 sections can move vertically.
 
-### Success Rate Meaning
+### Success Rate
 
 The **success rate** computed for a table means:
 
@@ -720,7 +720,7 @@ If you encounter issues, you can obtain technical support through:
 
 Setting a high deletion threshold can significantly reduce the final size. Recommended upper limits for thresholds: 16k endgame ~80%, 32k endgame ~40%, 65k endgame ~5%.
 
-## 10.2 Advanced Pro-Tips
+## 10.2 Pro-Tips
 
 These tips are intended for players with a deep understanding of table algorithms.
 

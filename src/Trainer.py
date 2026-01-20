@@ -696,8 +696,9 @@ class TrainWindow(QtWidgets.QMainWindow):
                 if not os.path.exists(path) or path == filepath:
                     current_path_list.remove((path, success_rate_dtype))
 
-            if self.current_pattern.startswith('free'):
-                rename_free_files_recursive(filepath)
+            for prefix in ('free', 'L3', '444', 'LL'):
+                if prefix in self.current_pattern:
+                    rename_old_files_recursive(filepath)
 
             success_rate_dtype = SingletonConfig.read_success_rate_dtype(filepath, self.current_pattern)
             table_4sr = SingletonConfig.read_4sr(filepath, self.current_pattern)
@@ -1084,22 +1085,26 @@ def replace_largest_tiles(board_encoded, n, target:str):
     return np.uint64(result)
 
 
-def rename_free_files_recursive(directory_path):
+def rename_old_files_recursive(directory_path):
     """
-    递归遍历文件夹，将所有文件/文件夹名中的 'free{数字}w' 替换为 'free{数字}'
+    递归遍历文件夹，执行两项重命名任务：
+    1. 'free{数字}w' -> 'free{数字}'
+    2. '*_*_{0/1/2}_*' -> '*_*_*' (去除中间的 _pos)
     """
     base_dir = Path(directory_path)
     if not base_dir.is_dir():
         logger.error(f"Invalid directory: {directory_path}")
         return
 
-    # 匹配 free{数字}w 的正则
-    pattern = re.compile(r'free(\d+)w')
+    # 模式 1: free{数字}w
+    pattern_free = re.compile(r'free(\d+)w')
 
-    # 1. 使用 rglob('*') 获取所有子文件和子文件夹
-    # 2. 关键：按路径深度倒序排列 (reverse=True)
-    #    确保先重命名文件或深层子目录，最后才重命名父目录
+    # 模式 2: *_*_{x}_* 其中 x 是 0, 1, 2
+    # 解释：捕获组1匹配前两段，跳过_[012]_，捕获组2匹配后续所有内容
+    pattern_pos = re.compile(r'^([^_]+_[^_]+)_[012]_(.*)$')
+
     try:
+        # 按路径深度从深到浅排序，确保重命名时父目录路径依然有效
         all_items = sorted(list(base_dir.rglob('*')), key=lambda p: len(p.parts), reverse=True)
     except Exception as e:
         logger.error(f"Failed to scan directory: {e}")
@@ -1108,8 +1113,15 @@ def rename_free_files_recursive(directory_path):
     count = 0
     for item in all_items:
         old_name = item.name
-        new_name = pattern.sub(r'free\1', old_name)
 
+        # 执行第一种替换: free10w -> free10
+        temp_name = pattern_free.sub(r'free\1', old_name)
+
+        # 执行第二种替换: 444_512_0_0 -> 444_512_0
+        # \1 是前两段，\2 是去除 _x_ 后的剩余部分
+        new_name = pattern_pos.sub(r'\1_\2', temp_name)
+
+        # 检查是否有改动
         if new_name != old_name:
             new_path = item.with_name(new_name)
 
