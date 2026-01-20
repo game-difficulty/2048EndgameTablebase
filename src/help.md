@@ -645,6 +645,8 @@ The dispatcher's logic follows a specific pipeline: Identify Current Endgame Sta
 
 # 8. FAQ
 
+Tip: Press Ctrl + F to search the entire manual.
+
 ### Q1: Why does the software take a long time to start or switch features?
 **A1**: The software uses **Numba JIT (Just-In-Time)** compilation to optimize calculation modules. Upon the first call, code is compiled into CPU-optimized machine code, resulting in an initialization delay of 2–10 seconds. This is normal behavior.
 
