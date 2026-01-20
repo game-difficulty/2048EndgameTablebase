@@ -575,11 +575,8 @@ class TestWindow(QtWidgets.QMainWindow):
                 text_list.append(f"You pressed {move}. And the best move is **{best_move.capitalize()}**")
         else:
             self.gameframe.combo = 0
-            print(self.result)
             loss = self.result[move.lower()] / self.result[best_move] if self.result[best_move] else 1
-            print(loss)
             self.gameframe.goodness_of_fit *= loss
-            print(self.gameframe.goodness_of_fit)
             # 根据 loss 值提供不同级别的评价
             evaluation = self.evaluation_of_performance(loss)
             self.gameframe.performance_stats[evaluation] += 1
@@ -719,3 +716,4 @@ if __name__ == "__main__":
     window = TestWindow()
     window.show()
     sys.exit(app.exec_())
+
