@@ -438,7 +438,7 @@ Starting from one or more initial seed boards, a Breadth-First Search (BFS) algo
 
 #### 1. Layered Search Logic
 
-Positions are divided into "Layers" for memory efficiency, typically categorized by the sum of the tiles' exponents (logarithms).
+Positions are divided into "Layers" for memory efficiency, typically categorized by tile sum.
 
 - **State Transition**: Positions in each layer transition to the next through two actions: "spawn new tile" and "execute move."
 - **Operation Loop**: For every position in a layer, the program iterates through all empty spaces, attempts to spawn a 2 or 4 tile, and then executes moves in four directions. If the resulting position fits the table pattern and the board has changed, it is recorded.
