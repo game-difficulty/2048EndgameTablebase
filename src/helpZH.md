@@ -774,7 +774,7 @@ AI能够使用任意已计算的定式。
 {
   "L3f":{
     "category": "10 space",
-    "valid pattern": ["0x000000000fff0000","0x0000000f0fff0ff0","0x000f000f0ff00ff0",
+    "valid pattern": ["0x000000000fff0fff","0x0000000f0fff0ff0","0x000f000f0ff00ff0",
                     "0x000000f00fff0f0f","0x000000ff0fff0f00",
                     "0x00000f000fff00ff","0x00000f0f0fff00f0",
                     "0x00000ff00fff000f",
