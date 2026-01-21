@@ -185,7 +185,7 @@ DEFAULT_PATTERNS = {
   "4421": {
     "category": "others",
       "valid pattern": ["0xff0fff"],
-      "target pos": "0xf00000",
+      "target pos": "0xf000000",
       "canonical mode": "identity",
       "seed boards": ["0x1000000012ff2fff", "0x1000000121ff1fff"],
       "extra steps": 48
