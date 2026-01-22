@@ -17,6 +17,7 @@ from Gamer import SquareFrame
 class MinigameSquareFrame(SquareFrame):
     def __init__(self, parent=None, shape=(4, 4)):
         QtWidgets.QFrame.__init__(self, parent)
+        self.use_variant_style = 0
         self.rows, self.cols = shape
         self.setupUi(self.rows, self.cols)
         self.animation_config = {
