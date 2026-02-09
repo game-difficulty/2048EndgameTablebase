@@ -469,7 +469,7 @@
 #### 2. 成功率计算
 对于每一个局面 $B$，其成功率 $P(B)$ 取决于其所有可能移动方向中，能获得的最大成功率期望值：
 
-$$P(B) = \max_{d \in \{U, D, L, R\}} \left( 0.9 \times \sum_{s_2 \in S_2(d)} \frac{P(s_2)}{N_{empty}} + 0.1 \times \sum_{s_4 \in S_4(d)} \frac{P(s_4)}{N_{empty}} \right)$$
+$$P(B) = \frac{0.9}{N} \sum_{s \in S_2} \max_{d} P(\text{move}(s, d)) + \frac{0.1}{N} \sum_{s \in S_4} \max_{d} P(\text{move}(s, d))$$
 
 其中：
   - $d$ 代表移动方向。

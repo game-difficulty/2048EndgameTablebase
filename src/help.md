@@ -465,7 +465,7 @@ Once all layers are generated and persisted to disk, the program enters the **So
 #### 2. Success Rate Calculation
 For any position $B$, the success rate $P(B)$ is determined by the maximum expected success rate across all possible move directions:
 
-$$P(B) = \max_{d \in \{U, D, L, R\}} \left( 0.9 \times \sum_{s_2 \in S_2(d)} \frac{P(s_2)}{N_{empty}} + 0.1 \times \sum_{s_4 \in S_4(d)} \frac{P(s_4)}{N_{empty}} \right)$$
+$$P(B) = \frac{0.9}{N} \sum_{s \in S_2} \max_{d} P(\text{move}(s, d)) + \frac{0.1}{N} \sum_{s \in S_4} \max_{d} P(\text{move}(s, d))$$
 
 Where:
 
