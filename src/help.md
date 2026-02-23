@@ -748,7 +748,7 @@ Modify `patterns_config.json` to customize table parameters:
     - **extra steps**: Additional steps. Total steps = (Target Tile / 2) + extra steps. (Can be negative, provided the target tile can be merged within that step count).
 
     Examples:
-    ```json
+```json
     {
       "L3f":{
         "category": "10 space",
@@ -782,16 +782,18 @@ Modify `patterns_config.json` to customize table parameters:
         "extra steps": 30
       }
     }
-    ```
-    &nbsp;&nbsp;&nbsp;&nbsp;Avoid using `_` in pattern names; Pay attention to trailing commas in JSON format.
+```
+&nbsp;&nbsp;&nbsp;&nbsp;Avoid using `_` in pattern names; Pay attention to trailing commas in JSON format.
 
-    &nbsp;&nbsp;&nbsp;&nbsp;Restart the software after modifications to load and calculate your custom table.
+&nbsp;&nbsp;&nbsp;&nbsp;Restart the software after modifications to load and calculate your custom table.
 
 4. **Pattern Stitching**
 Follow the steps below:
-   1. Calculate L3-512 up to step 200
-   2. Close the software and change the L3 definition to
-      ```json
+    - Calculate L3-512 up to step 200
+    - Close the software and change the L3 definition to the following settings
+    - Then resume from the breakpoint
+
+```json
       {
          "L3":{
            "category": "10 space",
@@ -807,8 +809,8 @@ Follow the steps below:
              "extra steps": 48
           }
       }
-       ```
-   3. Then resume from the breakpoint
+```
+
 
 
 ## 10.3 Formation Info
