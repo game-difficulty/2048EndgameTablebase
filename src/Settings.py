@@ -142,7 +142,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
 
         self.target_combo = SingleLevelComboBox(self.tr("Target Tile"), self.centralwidget)
         self.target_combo.setObjectName("target_combo")
-        self.target_combo.add_items(["128", "256", "512", "1024", "2048", "4096", "8192"])
+        self.target_combo.add_items(["64", "128", "256", "512", "1024", "2048", "4096", "8192"])
         self.selfLayout.addWidget(self.target_combo, 0, 2, 1, 1)
 
         self.pattern_combo = TwoLevelComboBox(self.tr("Select Formation"), self.centralwidget)

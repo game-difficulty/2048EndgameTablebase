@@ -91,6 +91,8 @@ class Analyzer(QObject):
         }
         self.record = np.empty(4000, dtype='uint64,uint8,uint32,uint32,uint32,uint32')
         self.rec_step_count = 0
+        self.log_difficulty = 0.0  # 使用对数累加
+        self.prev_expected_success_rate = None
 
     def read_replay(self):
         # 以二进制模式读取整个文件
@@ -211,6 +213,8 @@ class Analyzer(QObject):
             "**Blunder!**": 0,
             "**Terrible!**": 0,
         }
+        self.log_difficulty = 0.0
+        self.prev_expected_success_rate = None
 
     def check_nth_largest(self, board_encoded: np.uint64) -> bool:
         # 初始化一个大小为16的列表，记录0-15的出现次数
@@ -297,6 +301,12 @@ class Analyzer(QObject):
         if not self.result[best_move] or self.result[best_move] == 1 or self.result[best_move] == '?':
             return False
 
+        # --- 计算游戏难度 ---
+        if self.prev_expected_success_rate:
+            diff_step = np.log(self.prev_expected_success_rate) - np.log(self.result[best_move])
+            self.log_difficulty += diff_step
+        # -----------------------------------------------
+
         self.print_board(board)
         self.text_list.append('')
         for key, value in self.result.items():
@@ -308,6 +318,7 @@ class Analyzer(QObject):
             self.text_list.append(self.tr("The game goes beyond this formation"))
             self.text_list.append('--------------------------------------------------')
             self.text_list.append('')
+            self.prev_expected_success_rate = None
             return False
 
         self.step_count += 1
@@ -323,8 +334,10 @@ class Analyzer(QObject):
             if is_zh:
                 self.text_list.append(f"你走的是 {direction_map[move[0].lower()]} ，"
                                  f"最优解正是 **{direction_map[best_move[0].lower()]}**")
+                self.text_list.append(f'吻合度: {self.goodness_of_fit:.4f}, 游戏难度: {self.log_difficulty:.4f}')
             else:
                 self.text_list.append(f"You pressed {move}. And the best move is **{best_move.capitalize()}**")
+                self.text_list.append(f'total goodness of fit: {self.goodness_of_fit:.4f}, game difficulty: {self.log_difficulty:.4f}')
         else:
             self.combo = 0
             loss = self.result[move.lower()] / self.result[best_move]
@@ -342,14 +355,15 @@ class Analyzer(QObject):
                 self.text_list.append(f"你走的是 {direction_map[move[0].lower()]} ，"
                                  f"但最优解是 **{direction_map[best_move[0].lower()]}**")
                 self.text_list.append(f'单步相对损失: {1 - loss:.4f}, 单步绝对损失: {loss_abs:.4f}pt')
-                self.text_list.append(f'吻合度: {self.goodness_of_fit:.4f}')
+                self.text_list.append(f'吻合度: {self.goodness_of_fit:.4f}, 游戏难度: {self.log_difficulty:.4f}')
             else:
                 self.text_list.append(f"You pressed {move}. But the best move is **{best_move.capitalize()}**")
                 self.text_list.append(f'relative one-step loss: {1 - loss:.4f}, absolute one-step loss: {loss_abs:.4f}pt')
-                self.text_list.append(f'total goodness of fit: {self.goodness_of_fit:.4f}')
+                self.text_list.append(f'total goodness of fit: {self.goodness_of_fit:.4f}, game difficulty: {self.log_difficulty:.4f}')
 
         self.text_list.append('--------------------------------------------------')
         self.text_list.append('')
+        self.prev_expected_success_rate = self.result[move.lower()]
         return True
 
     def analyze_one_step(self, i):
@@ -396,6 +410,10 @@ class Analyzer(QObject):
             file.write(
                 self.tr('Total Goodness of Fit: ') +
                 f'{self.goodness_of_fit:.4f}' + '\n'
+            )
+            file.write(
+                self.tr('Game Difficulty: ') +
+                f'{self.log_difficulty:.4f}' + '\n'
             )
             file.write(
                 self.tr('Maximum Combo: ') +
@@ -517,7 +535,7 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
 
         self.target_combo = SingleLevelComboBox(self.tr("Target Tile"), self.centralwidget)
         self.target_combo.setObjectName("target_combo")
-        self.target_combo.add_items(["128", "256", "512", "1024", "2048", "4096", "8192"])
+        self.target_combo.add_items(["64", "128", "256", "512", "1024", "2048", "4096", "8192"])
         self.selfLayout.addWidget(self.target_combo, 0, 2, 1, 1)
         self.pattern_combo = TwoLevelComboBox(self.tr("Select Formation"), self.centralwidget)
         self.pattern_combo.setObjectName("pattern_combo")

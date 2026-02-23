@@ -538,6 +538,7 @@ class SingletonConfig:
                 'language': SingletonConfig.get_system_language(),
                 'theme': "Default",
                 'success_rate_dtype': "uint32",
+                'record_player_slider_threshold': 0.99999,
                 }
 
     @classmethod

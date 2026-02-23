@@ -1,10 +1,9 @@
 from typing import Tuple
 
 import numpy as np
-from numpy.typing import NDArray
 from numba import uint64, njit
 
-from VBoardMover import (reverse, encode_board, encode_row, decode_board, decode_row)
+from VBoardMover import (reverse, encode_board, encode_row, decode_board)
 
 
 @njit(cache=True)
@@ -213,6 +212,14 @@ def s_move_board(board: np.uint64, direction: int) -> Tuple[np.uint64, np.uint32
 
 
 @njit(nogil=True, cache=True)
+def s_move_all_dir(board: np.uint64):
+    board = np.uint64(board)
+    board2 = reverse(board)
+    return (
+        s_move_left(board), s_move_right(board), s_move_up(board, board2), s_move_down(board, board2))
+
+
+@njit(nogil=True, cache=True)
 def s_gen_new_num(t: np.uint64, p: float = 0.1) -> Tuple[np.uint64, int, int, int]:
     empty_slots = [i for i in range(16) if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == 0]  # 找到所有空位
     if not empty_slots:
@@ -236,17 +243,24 @@ def s_gen_new_num(t: np.uint64, p: float = 0.1) -> Tuple[np.uint64, int, int, in
 
 
 if __name__ == "__main__":
-    b = np.array([[32, 8, 0, 2],
-                  [32, 32, 32, 32],
-                  [64, 16, 4, 16],
-                  [16384, 4096, 0, 4096]])
-    r = move_all_dir(encode_board(b))
-    print(b)
-    for rb, d in zip(r, ('l', 'r', 'u', 'd')):
-        print(d)
-        print(decode_board(rb))
-
-    eb = encode_board(b)
-    for d in (1, 2, 3, 4):
-        print(d)
-        print(decode_board(s_move_board(eb, d)[0]))
+    b = np.uint64(0x011312126789abcd)
+    r = move_all_dir(b)
+    for i in r:
+        if i != b:
+            print(hex(i)+',')
+    b = np.uint64(0x101312126789abcd)
+    r = move_all_dir(b)
+    for i in r:
+        if i != b:
+            print(hex(i)+',')
+    print()
+    b = np.uint64(0x021312126789abcd)
+    r = move_all_dir(b)
+    for i in r:
+        if i != b:
+            print(hex(i)+',')
+    b = np.uint64(0x201312126789abcd)
+    r = move_all_dir(b)
+    for i in r:
+        if i != b:
+            print(hex(i)+',')

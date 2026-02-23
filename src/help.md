@@ -341,6 +341,7 @@ The Test interface evaluates a player's endgame skill level, providing real-time
 - Import replay files (`.txt` format) from *2048verse.com*.
 - Automatically extracts relevant endgame segments from the full replay and scores them.
 - Generates detailed analysis reports and replay files for each segment.
+- Try left and right clicking the slider in the top left corner.
 
 **Replay Review**:
 
@@ -726,68 +727,89 @@ Setting a high deletion threshold can significantly reduce the final size. Recom
 
 These tips are intended for players with a deep understanding of table algorithms.
 
-**1. Calculation & Compression Decoupling**
+1. **Calculation & Compression Decoupling**
 To speed up generation and solving, do not check the compression option during initial calculation. Once finished, keep the parameters identical, check "Compress," and run again. The program will recognize the existing table and perform incremental compression.
 
-**2. Storage Management for Large Tables**
+2. **Storage Management for Large Tables**
 When SSD capacity is insufficient for mega-tables, perform "Hot/Cold Separation":
 
-- **Hot Data**: Keep the current Layer and 20–30 adjacent files on the SSD to ensure I/O performance.
-- **Cold Data**: Move completed or currently unnecessary files to an HDD.
-- **Virtual Pathing**: Since the program only verifies file existence and not content during breakpoints, you can create empty files/folders in the original SSD path to "trick" the resume check.
-- **Multi-path Loading**: Tables can be distributed across multiple drives. You don't need to merge them; simply enter all disk paths in the Practice interface to enable cross-drive recognition.
+    - **Hot Data**: Keep the current Layer and 20–30 adjacent files on the SSD to ensure I/O performance.
+    - **Cold Data**: Move completed or currently unnecessary files to an HDD.
+    - **Virtual Pathing**: Since the program only verifies file existence and not content during breakpoints, you can create empty files/folders in the original SSD path to "trick" the resume check.
+    - **Multi-path Loading**: Tables can be distributed across multiple drives. You don't need to merge them; simply enter all disk paths in the Practice interface to enable cross-drive recognition.
 
-**3. Custom Table Definitions**
+3. **Custom Table Definitions**
 Modify `patterns_config.json` to customize table parameters:
 
-- **valid pattern**: Bitmask for the legal space of large tiles with restricted movement.
-- **target pos**: Legal output locations for the target tiles.
-- **canonical mode**: Symmetry rules and canonicalization functions.
-- **seed boards**: Initial position encodings (must have an identical sum of tiles).
-- **extra steps**: Additional steps. Total steps = (Target Tile / 2) + extra steps. (Can be negative, provided the target tile can be merged within that step count).
+    - **valid pattern**: Bitmask for the legal space of large tiles with restricted movement.
+    - **target pos**: Legal output locations for the target tiles.
+    - **canonical mode**: Symmetry rules and canonicalization functions.
+    - **seed boards**: Initial position encodings (must have an identical sum of tiles).
+    - **extra steps**: Additional steps. Total steps = (Target Tile / 2) + extra steps. (Can be negative, provided the target tile can be merged within that step count).
 
+    Examples:
+    ```json
+    {
+      "L3f":{
+        "category": "10 space",
+        "valid pattern": ["0x000000000fff0fff","0x0000000f0fff0ff0","0x000f000f0ff00ff0",
+                        "0x000000f00fff0f0f","0x000000ff0fff0f00",
+                        "0x00000f000fff00ff","0x00000f0f0fff00f0",
+                        "0x00000ff00fff000f",
+                        "0x000000f00fff0ff0","0x00000f000fff0ff0",
+                        "0x00000ff00fff0f00",
+                        "0x00000f000fff0f0f",
+                        "0x00000f000fff00ff","0x00000fff0fff0000"],
+        "target pos": "0xffffffffffffffff",
+        "canonical mode": "identity",
+        "seed boards": ["0x100000001fff2fff","0x000000012fff1fff"],
+        "extra steps": 48
+      },
+      "3x3from512to1k": {
+        "category": "variant",
+        "valid pattern": [],
+        "target pos": "0xfff0fff0fff00000",
+        "canonical mode": "min33",
+        "seed boards": ["0x000f000f009fffff"],
+        "extra steps": -200
+      },
+      "3x3from1kto512": {
+        "category": "variant",
+        "valid pattern": [],
+        "target pos": "0xfff0fff0fff00000",
+        "canonical mode": "min33",
+        "seed boards": ["0x000f000f00afffff"],
+        "extra steps": 30
+      }
+    }
+    ```
+    &nbsp;&nbsp;&nbsp;&nbsp;Avoid using `_` in pattern names; Pay attention to trailing commas in JSON format.
 
-Examples:
-```json
-{
-  "L3f":{
-    "category": "10 space",
-    "valid pattern": ["0x000000000fff0fff","0x0000000f0fff0ff0","0x000f000f0ff00ff0",
-                    "0x000000f00fff0f0f","0x000000ff0fff0f00",
-                    "0x00000f000fff00ff","0x00000f0f0fff00f0",
-                    "0x00000ff00fff000f",
-                    "0x000000f00fff0ff0","0x00000f000fff0ff0",
-                    "0x00000ff00fff0f00",
-                    "0x00000f000fff0f0f",
-                    "0x00000f000fff00ff","0x00000fff0fff0000"],
-    "target pos": "0xffffffffffffffff",
-    "canonical mode": "identity",
-    "seed boards": ["0x100000001fff2fff","0x000000012fff1fff"],
-    "extra steps": 48
-  },
-  "3x3from512to1k": {
-    "category": "variant",
-    "valid pattern": [],
-    "target pos": "0xfff0fff0fff00000",
-    "canonical mode": "min33",
-    "seed boards": ["0x000f000f009fffff"],
-    "extra steps": -200
-  },
-  "3x3from1kto512": {
-    "category": "variant",
-    "valid pattern": [],
-    "target pos": "0xfff0fff0fff00000",
-    "canonical mode": "min33",
-    "seed boards": ["0x000f000f00afffff"],
-    "extra steps": 30
-  }
-}
-```
+    &nbsp;&nbsp;&nbsp;&nbsp;Restart the software after modifications to load and calculate your custom table.
 
+4. **Pattern Stitching**
+Follow the steps below:
+   1. Calculate L3-512 up to step 200
+   2. Close the software and change the L3 definition to
+      ```json
+      {
+         "L3":{
+           "category": "10 space",
+             "valid pattern": [
+             "0xfff0fff","0xf0fff0ff0","0xf000f0ff00ff0","0xf00fff0ff0",
+             "0xf000fff0ff0","0xff0ff00ff0","0xff00ff00ff0","0xf000fff00ff",
+             "0xf00fff00ff","0xff0fff0f00","f00f00ff00ff0","fff0fff0000",
+             "ff00fff0f00","f00fff0f0f"
+             ],
+             "target pos": "0xffffffffffffffff",
+             "canonical mode": "identity",
+             "seed boards": ["0x100000001fff2fff", "0x000000012fff1fff"],
+             "extra steps": 48
+          }
+      }
+       ```
+   3. Then resume from the breakpoint
 
-Avoid using `_` in pattern names.
-
-Restart the software after modifications to load and calculate your custom table.
 
 ## 10.3 Formation Info
 

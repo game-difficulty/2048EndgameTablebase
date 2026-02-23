@@ -38,6 +38,7 @@ class ColoredMarkSlider(QtWidgets.QSlider):
         self.setTickPosition(QtWidgets.QSlider.TicksBelow)
         self.setTickInterval(56)
         self.valueChanged.connect(self._on_value_changed)
+        self.threshold = SingletonConfig().config.get('record_player_slider_threshold', 1)
 
         # 当前值
         self._current_value = 0
@@ -51,6 +52,7 @@ class ColoredMarkSlider(QtWidgets.QSlider):
 
     def _prepare_drawing_data(self):
         threshold = np.quantile(self.data_points,0.1)
+        threshold = min(threshold, self.threshold)
         self.points_rank = np.where((self.data_points < threshold) & (self.data_points < 1))[0]
         self.draw_values = self.data_points[self.points_rank]
 
@@ -82,7 +84,6 @@ class ColoredMarkSlider(QtWidgets.QSlider):
 
                     self.point_colors.append(QColor(r, g, b, 204))
                     break
-
 
     def paintEvent(self, event):
         # 绘制默认滑块
@@ -118,6 +119,10 @@ class ColoredMarkSlider(QtWidgets.QSlider):
             painter.drawPolygon(polygon)
 
     def mousePressEvent(self, event):
+        if event.button() == Qt.RightButton:
+            self.show_threshold_dialog()
+            return
+
         if event.button() == Qt.LeftButton:
             opt = QtWidgets.QStyleOptionSlider()
             self.initStyleOption(opt)
@@ -168,8 +173,36 @@ class ColoredMarkSlider(QtWidgets.QSlider):
                 self.actionTriggered.emit(QtWidgets.QSlider.SliderMove)
                 return
 
-        # 非左键或非轨道区域点击：默认处理
+        # 非左右键或非轨道区域点击：默认处理
         super().mousePressEvent(event)
+
+    def show_threshold_dialog(self):
+        dialog = QtWidgets.QInputDialog(self)
+        dialog.setInputMode(QtWidgets.QInputDialog.DoubleInput)
+        dialog.setWindowTitle(self.tr("Set Marker Threshold"))
+        dialog.setLabelText(self.tr("Maximum threshold for markers (0-1):"))
+
+        # 设置数值范围
+        dialog.setDoubleRange(0.0, 1.0)
+        # 设置显示的小数位数
+        dialog.setDoubleDecimals(7)
+        # 设置当前初始值
+        dialog.setDoubleValue(self.threshold)
+
+        # 设置点击按钮时的步长
+        dialog.setDoubleStep(0.00001)
+
+        dialog.resize(300, 100)
+
+        if dialog.exec() == QtWidgets.QDialog.Accepted:
+            new_val = dialog.doubleValue()
+            SingletonConfig().config['record_player_slider_threshold'] = new_val
+            SingletonConfig().save_config(SingletonConfig().config)
+            self.threshold = new_val
+            # 重新绘图
+            if len(self.data_points) > 0:
+                self._prepare_drawing_data()
+                self.update()
 
 
 # noinspection PyAttributeOutsideInit

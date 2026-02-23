@@ -34,6 +34,10 @@ def create_success_func_source(name, shifts):
         conditions.append(f"((np.uint64(encoded_board) >> {s_val}) & np.uint64(0xf)) == np.uint64(target)")
 
     body = " or \\\n           ".join(conditions)
+
+    if len(shifts) == 0:
+        body = "True"
+
     source = f"def {func_name}(encoded_board, target):\n    return {body}"
     return func_name, source
 
@@ -59,6 +63,24 @@ def update_logic_functions():
         l_scope = {'np': np}
         exec(s_code, l_scope)
         target_globals[s_name] = numba_dec(l_scope[s_name])
+
+
+@njit(nogil=True, inline='always')
+def is_success(board_encoded, target_stacked, mask=np.uint64(0xffffffffffffffff)):
+    """
+    使用 SWAR 技术并行检查 64 位整数中的 4 位块(Nibble)。
+    判断 board_encoded 中是否存在任何一个 4 位块与 target_stacked 对应的块完全相同。
+
+    参数:
+    board_encoded  : uint64, 编码后的棋盘数据，每 4 位代表一个格子。
+    target_stacked : uint64, 预先广播好的目标值（例如目标是 0x9，则为 0x9999999999999999）。
+    mask           : uint64, 位掩码，用于忽略不需要检查的格子。
+    """
+    board_encoded &= mask
+    diff = board_encoded ^ target_stacked
+    mask_7 = np.uint64(0x7777777777777777)
+    res = ~(((diff & mask_7) + mask_7) | diff | mask_7)
+    return res != 0
 
 
 @njit(nogil=True, inline='always')

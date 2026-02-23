@@ -465,7 +465,7 @@ class TrainWindow(QtWidgets.QMainWindow):
 
         self.menu_tgt = QtWidgets.QMenu(self.menubar)
         self.menu_tgt.setObjectName("menuMENU")
-        for ptn in ["128", "256", "512", "1024", "2048", "4096", "8192"]:
+        for ptn in ["64", "128", "256", "512", "1024", "2048", "4096", "8192"]:
             m = QtWidgets.QAction(ptn, self)
             m.triggered.connect(lambda: self.menu_selected(1))  # type: ignore
             self.menu_tgt.addAction(m)
@@ -840,7 +840,7 @@ class TrainWindow(QtWidgets.QMainWindow):
                 if self.recording_state:
                     self.record_current_state(move)
                 self.read_results()
-            elif not move:
+            elif not move or not self.result[move]:
                 self.isProcessing = False
 
     def toggle_demo(self):
@@ -853,6 +853,7 @@ class TrainWindow(QtWidgets.QMainWindow):
         else:
             self.Demo.setText(self.tr('Demo'))
             self.ai_state = False
+            self.isProcessing = False
 
     def handle_record(self):
         if not self.recording_state:
@@ -883,15 +884,16 @@ class TrainWindow(QtWidgets.QMainWindow):
             self.record.setText(self.tr('Record Demo'))
 
     def record_current_state(self, move):
-        _, _, max_scale, zero_val = DTYPE_CONFIG.get(self.success_rate_dtype, DTYPE_CONFIG['uint32'])
+        _, _, _, zero_val = DTYPE_CONFIG.get(self.success_rate_dtype, DTYPE_CONFIG['uint32'])
         gen_pos, gen_num = self.gameframe.newtile_pos, self.gameframe.newtile
         move = {'up': 0, 'down': 1, 'left': 2, 'right': 3}.get(move)
         changes = np.uint8((move & 0b11) | ((gen_pos & 0b1111) << 2) | (((gen_num - 1) & 0b1) << 6))
         success_rates = []
+
         for direction in ('up', 'down', 'left', 'right'):
             rate = self.result.get(direction, 0)
             rate = rate if isinstance(rate, (float, int, np.integer, np.floating)) else 0
-            success_rates.append(np.uint32((rate - zero_val) / (max_scale - zero_val) * 4e9))
+            success_rates.append(np.uint32((rate - zero_val) * 4e9))
         self.records[self.record_length] = (changes, *success_rates)
         self.record_length += 1
 
@@ -1011,6 +1013,7 @@ class TrainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event):
         self.ai_state = False
         self.Demo.setText(self.tr('Demo'))
+        self.isProcessing = False
 
         # try: np.array(self.gameframe.history, dtype='uint64, uint32').tofile(fr'C:\Users\Administrator\Desktop\record\0')
         # except:pass

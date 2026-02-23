@@ -268,7 +268,7 @@ class TestWindow(QtWidgets.QMainWindow):
 
         self.menu_tgt = QtWidgets.QMenu(self.menubar)
         self.menu_tgt.setObjectName("menuMENU")
-        for ptn in ["128", "256", "512", "1024", "2048", "4096", "8192", '?']:
+        for ptn in ["64", "128", "256", "512", "1024", "2048", "4096", "8192", '?']:
             m = QtWidgets.QAction(ptn, self)
             m.triggered.connect(lambda: self.menu_selected(1))  # type: ignore
             self.menu_tgt.addAction(m)

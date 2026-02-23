@@ -3,8 +3,8 @@ import concurrent.futures
 import lzma
 import math
 import os
+import platform
 import subprocess
-from subprocess import CREATE_NO_WINDOW
 
 import numpy as np
 
@@ -21,6 +21,7 @@ else:
         
         
 BLOCK_SIZE = 32768
+CREATE_NO_WINDOW = 0x08000000 if platform.system() == "Windows" else 0
 
 
 def is_seven_zip_available():

@@ -1,3 +1,4 @@
+import os
 import sys
 import re
 import markdown
@@ -8,7 +9,7 @@ from PyQt5.QtWidgets import QMainWindow, QApplication, QListWidget, QVBoxLayout,
     QLineEdit, QPushButton, QShortcut, QFrame, QLabel, QCheckBox
 from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QUrl
 
 from Config import ColorManager, SingletonConfig
 
@@ -121,6 +122,14 @@ class MDViewer(QMainWindow):
         bg_color = color_mgr.get_css_color(1)
         text_color = color_mgr.get_css_color(10)
 
+        # 获取本地 mathjax 文件夹的绝对路径
+        curr_dir = os.path.dirname(os.path.abspath(__file__))
+        mathjax_dir = os.path.join(curr_dir, "mathjax")
+        js_file_path = os.path.join(mathjax_dir, "tex-svg.js")
+
+        # 转换成浏览器理解的 file:/// 协议
+        local_js_url = QUrl.fromLocalFile(js_file_path).toString()
+
         full_html = f"""
         <!DOCTYPE html>
         <html>
@@ -134,6 +143,7 @@ class MDViewer(QMainWindow):
                     processEscapes: true,
                     processEnvironments: true
                 }},
+                svg: {{ fontCache: 'global' }},
                 options: {{
                     skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
                 }},
@@ -147,7 +157,7 @@ class MDViewer(QMainWindow):
             }};
             </script>
             
-            <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+            <script id="MathJax-script" async src="{local_js_url}"></script>
             
 
             <style>
@@ -261,7 +271,8 @@ class MDViewer(QMainWindow):
         </html>
         """
 
-        self.browser.setHtml(full_html)
+        base_url = QUrl.fromLocalFile(mathjax_dir + os.path.sep)
+        self.browser.setHtml(full_html, base_url)
         self.extractHeaders(html_body)
 
     def extractHeaders(self, html_body):
