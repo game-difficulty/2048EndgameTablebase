@@ -1,11 +1,17 @@
 import html
+import os
 import re
 import sys
 import threading
+import traceback
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 
 import markdown
+import markdown.extensions.extra
+import markdown.extensions.sane_lists
+import markdown.extensions.nl2br
+import markdown.extensions.toc
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QMainWindow, QApplication, QListWidget, QVBoxLayout, QWidget, QSplitter, QTextBrowser
@@ -15,18 +21,19 @@ from Config import SingletonConfig, logger
 
 class WebColorManager:
     def get_css_color(self, index):
-        # 获取当前主题配置，默认为 'Default' (亮色)
         theme = SingletonConfig().config.get('theme', 'Default')
 
         if theme == 'Dark':
-            # === 暗色配色方案 ===
             colors = {
-                1: '#1e1e1e',  # 主背景色 (深灰色，VS Code 经典背景色)
-                3: '#252526',  # 侧边栏/代码块背景 (比主背景略亮一点，制造层级感)
-                6: '#333333',  # 输入框/搜索栏背景 (更亮一点，突出交互区域)
-                10: '#d4d4d4'  # 主文本颜色 (柔和的浅灰色，避免纯白文字刺眼)
+                1: '#1e1e1e',  # 主背景色
+                3: '#252526',  # 侧边栏/代码块背景
+                6: '#333333',  # 输入框背景
+                10: '#d4d4d4', # 主文本颜色
+                11: '#58a6ff', # 目录链接颜色 (适合暗色的浅蓝色)
+                12: '#37373d', # 目录 hover 背景色 (深灰色)
+                13: '#8b949e'  # 次级文本颜色 (如4级标题的柔和灰色)
             }
-            fallback_color = '#ffffff'  # 未知索引时的默认回退颜色 (暗色模式下回退为白色)
+            fallback_color = '#ffffff'
 
         else:
             # === 亮色配色方案 (保留你原有的设定) ===
@@ -34,11 +41,36 @@ class WebColorManager:
                 1: '#ffffff',  # 主背景色 (纯白)
                 3: '#f6f8fa',  # 侧边栏/代码块背景 (GitHub 风格的极浅灰蓝)
                 6: '#ffffff',  # 输入框背景
-                10: '#24292e'  # 主文本颜色 (接近纯黑的深灰)
+                10: '#24292e',  # 主文本颜色 (接近纯黑的深灰)
+                11: '#0366d6',  # 目录链接颜色 (经典深蓝色)
+                12: '#eaecef',  # 目录 hover 背景色 (浅灰色)
+                13: '#586069'  # 次级文本颜色
             }
             fallback_color = '#000000'  # 亮色模式下回退为黑色
 
         return colors.get(index, fallback_color)
+
+
+def get_resource_path(relative_path):
+    """ 获取资源绝对路径，多重后备机制，解决打包后的路径玄学问题 """
+    base_paths = []
+
+    if getattr(sys, 'frozen', False):
+        # 如果是 PyInstaller 打包环境
+        base_paths.append(sys._MEIPASS)  # PyInstaller 的临时/依赖目录 (如 _internal)
+        base_paths.append(os.path.dirname(sys.executable))  # exe 所在的同级目录
+    else:
+        # 源代码运行环境
+        base_paths.append(os.path.abspath("."))
+
+    # 依次遍历可能的目录，哪个存在就返回哪个
+    for base_path in base_paths:
+        full_path = os.path.join(base_path, relative_path)
+        if os.path.exists(full_path):
+            return full_path
+
+    # 如果全都没找到，返回默认期望路径，让后续代码抛出 FileNotFoundError
+    return os.path.join(getattr(sys, '_MEIPASS', os.path.abspath(".")), relative_path)
 
 
 class HelpServer(HTTPServer):
@@ -50,37 +82,66 @@ class HelpServer(HTTPServer):
 
 
 class HelpRequestHandler(SimpleHTTPRequestHandler):
-    def do_GET(self):
-        # 拦截根路径请求，返回动态生成的帮助文档
-        if self.path == '/' or self.path == '/help':
-            self.send_response(200)
-            self.send_header("Content-type", "text/html; charset=utf-8")
-            self.end_headers()
+    def __init__(self, *args, **kwargs):
+        # 强制指定静态资源目录，解决打包后找不到本地依赖的问题
+        super().__init__(*args, directory=get_resource_path("."), **kwargs)
 
-            html_content = self.generate_html()
-            self.wfile.write(html_content.encode('utf-8'))
+    def log_message(self, format, *args):
+        """
+        覆盖父类的日志方法。
+        阻止底层偷偷向 sys.stderr 写数据，彻底解决 ERR_EMPTY_RESPONSE 问题。
+        """
+        pass
+
+    def do_GET(self):
+        if self.path == '/' or self.path == '/help':
+            try:
+                # 只有成功生成了 HTML，才发送 200 OK 状态码
+                html_content = self.generate_html()
+                self.send_response(200)
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(html_content.encode('utf-8'))
+            except Exception as e:
+                # 如果崩溃了，把崩溃日志发送给浏览器
+                error_trace = traceback.format_exc()
+                logger.error(f"Render HTML failed:\n{error_trace}")
+
+                error_html = f"<h1>Internal Server Error</h1><pre>{error_trace}</pre>"
+                self.send_response(500)
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(error_html.encode('utf-8'))
         else:
-            # 其他请求（如请求 mathjax 的 js 文件、图片等），退回给默认的静态文件处理器
             super().do_GET()
 
     def generate_html(self):
-        md_file = self.server.md_file
-        try:
-            with open(md_file, 'r', encoding='utf-8') as file:
-                md_content = file.read()
-        except FileNotFoundError:
-            return f"<h1>Error: {md_file} not found.</h1>"
+        # 动态读取语言配置
+        lang = SingletonConfig().config.get('language', 'en')
+        md_file = 'helpZH.md' if lang == 'zh' else 'help.md'
 
+        md_file_path = get_resource_path(md_file)
+
+        if not os.path.exists(md_file_path):
+            return f"<h1>Error: File not found</h1><p>Looking for: {md_file_path}</p>"
+
+        with open(md_file_path, 'r', encoding='utf-8') as file:
+            md_content = file.read()
+
+        # 如果前面的 import 没起作用，这里依然会用显式声明的方式加载
         extensions = ['extra', 'sane_lists', 'nl2br', 'toc']
         html_body = markdown.markdown(md_content, extensions=extensions)
 
-        # 提取标题以生成左侧目录
         toc_html = self.extract_headers_to_toc(html_body)
 
         color_mgr = WebColorManager()
         bg_color = color_mgr.get_css_color(1)
         text_color = color_mgr.get_css_color(10)
         sidebar_bg = color_mgr.get_css_color(3)
+
+        toc_link_color = color_mgr.get_css_color(11)
+        toc_hover_bg = color_mgr.get_css_color(12)
+        sub_text_color = color_mgr.get_css_color(13)
 
         # 构建完整的 HTML，包含左右分栏布局
         full_html = f"""
@@ -122,18 +183,18 @@ class HelpRequestHandler(SimpleHTTPRequestHandler):
                 .sidebar a {{
                     display: block;
                     padding: 6px 20px;
-                    color: #0366d6;
+                    color: {toc_link_color};
                     text-decoration: none;
                     font-size: 14px;
                     line-height: 1.5;
                 }}
-                .sidebar a:hover {{ background-color: #eaecef; text-decoration: underline; }}
+                .sidebar a:hover {{ background-color: {toc_hover_bg}; text-decoration: underline; }}
 
                 /* 针对不同级别的标题添加缩进 */
                 .sidebar .toc-level-1 {{ padding-left: 20px; font-weight: bold; }}
                 .sidebar .toc-level-2 {{ padding-left: 35px; }}
                 .sidebar .toc-level-3 {{ padding-left: 50px; font-size: 13px; }}
-                .sidebar .toc-level-4 {{ padding-left: 65px; font-size: 13px; color: #586069; }}
+                .sidebar .toc-level-4 {{ padding-left: 65px; font-size: 13px; color: {sub_text_color}; }}
 
                 /* 右侧主体内容样式 */
                 .content-wrapper {{
@@ -318,36 +379,49 @@ class FallbackMDViewer(QMainWindow):
 # ==========================================
 class HelpManager:
     def __init__(self):
-        lang = SingletonConfig().config.get('language', 'en')
-        self.md_file = 'helpZH.md' if lang == 'zh' else 'help.md'
         self.fallback_viewer = None
+        self.server = None
+        self.port = None
 
     def show_help(self):
+        # 单例模式管理 server，避免每次点击都开启新的端口和线程
+        if not self.server:
+            try:
+                # 直接使用原生的 HTTPServer，不需要自定义 HelpServer 了
+                self.server = HTTPServer(('127.0.0.1', 0), HelpRequestHandler)
+                self.port = self.server.server_port
+                thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+                thread.start()
+            except Exception as e:
+                logger.warning(f"Server start failed: {e}")
+                self.open_fallback_gui()
+                return
+
         try:
-            # 1. 尝试启动 HTTP 服务器
-            server = HelpServer(('127.0.0.1', 0), HelpRequestHandler, self.md_file)
-            port = server.server_port
-
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-
-            url = f"http://127.0.0.1:{port}/"
-            logger.debug(f"Server started at {url}. Attempting to open browser...")
-
-            # 2. 尝试打开默认浏览器
+            url = f"http://127.0.0.1:{self.port}/"
             success = webbrowser.open(url)
-
             if not success:
                 raise RuntimeError("webbrowser.open() returned False")
-
         except Exception as e:
-            # 3. 拦截所有错误 (端口占用、无默认浏览器、权限拒绝等)
             logger.warning(f"Browser mode failed: {e}. Falling back to basic GUI mode.")
             self.open_fallback_gui()
 
     def open_fallback_gui(self):
-        self.fallback_viewer = FallbackMDViewer(self.md_file)
-        self.fallback_viewer.show()
+        # 动态获取当前语言
+        lang = SingletonConfig().config.get('language', 'en')
+        md_file = 'helpZH.md' if lang == 'zh' else 'help.md'
+        md_file_path = get_resource_path(md_file)
+
+        # 如果窗口尚未创建或已被关闭
+        if self.fallback_viewer is None or not self.fallback_viewer.isVisible():
+            self.fallback_viewer = FallbackMDViewer(md_file_path)
+            self.fallback_viewer.show()
+        else:
+            # 如果窗口已经在显示，直接更新绑定的文件并重新加载
+            self.fallback_viewer.md_file = md_file_path
+            self.fallback_viewer.loadMarkdown()
+            self.fallback_viewer.raise_()
+            self.fallback_viewer.activateWindow()
 
 
 if __name__ == '__main__':
@@ -355,6 +429,7 @@ if __name__ == '__main__':
 
     manager = HelpManager()
 
-    manager.open_fallback_gui()
+    manager.show_help()
+    # manager.open_fallback_gui()
 
     sys.exit(app.exec_())
