@@ -180,7 +180,7 @@ class ColoredMarkSlider(QtWidgets.QSlider):
         dialog = QtWidgets.QInputDialog(self)
         dialog.setInputMode(QtWidgets.QInputDialog.DoubleInput)
         dialog.setWindowTitle(self.tr("Set Marker Threshold"))
-        dialog.setLabelText(self.tr("Maximum success rate threshold (0.0-1.0):"))
+        dialog.setLabelText(self.tr("Maximum threshold for markers (0-1):"))
 
         # 设置数值范围
         dialog.setDoubleRange(0.0, 1.0)
@@ -749,3 +749,4 @@ if __name__ == "__main__":
     window.reset_record(r"C:\Users\Administrator\Desktop\L3_512_0_20250702220058_0.2884_rec.txt", 'L3_512_0')
     window.show()
     sys.exit(app.exec_())
+
