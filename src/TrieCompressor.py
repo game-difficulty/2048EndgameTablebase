@@ -12,7 +12,7 @@ from numpy.typing import NDArray
 from Config import DTYPE_CONFIG
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def data_compress_index(data):  # u32 u8 u8 u8 u8 u32
     # 存储索引的列表
     ind0 = np.empty(255, dtype='uint8,uint32')  # f4,ind1_pos
@@ -140,7 +140,7 @@ def worker(start_idx, end_idx, segments_info, shm_name, shape, dtype, lvl, temp_
     return segments, worker_idx
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def get_segment_pos(ind3, len_data):
     segments_info = np.empty(ind3[-1]['f1'] // 16384, dtype='uint32,uint32,uint32')
     c = 0
@@ -239,7 +239,7 @@ def trie_compress_progress(path, filename, dtype):
     os.rename(target_file, target_file[:-1])  # .zt文件夹变成.z
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def _search_trie(ind, board):
     board_prefix = [np.uint8((board >> np.uint64(56)) & np.uint64(0xff)),
                     np.uint8((board >> np.uint64(48)) & np.uint64(0xff)),

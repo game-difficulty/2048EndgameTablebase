@@ -477,7 +477,7 @@ class Analyzer(QObject):
         self.record[:rec_step_count + 1].tofile(target_file_path)
 
 
-@njit()
+@njit(cache=True)
 def count_32ks(board):
     count = 0
     for i in range(16):

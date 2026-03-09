@@ -514,8 +514,8 @@ class SingletonConfig:
             except EOFError:
                 pass
         return {'filepath_map': dict(),
-                'colors': ['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
-                           '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'] + [
+                'colors': ['#fffdf8', '#fcf1d4', '#f9e5b0', '#f6da8d', '#f3ce69', '#f0c245', '#e67372', '#d35b7c',
+                    '#c04386', '#ac2b8f', '#991399', '#6469ee', '#5a83ee', '#4f9eee', '#45b8ee', '#45b8ee'] + [
                               '#000000'] * 20,
                 'demo_speed': 40,
                 '4_spawn_rate': 0.1,

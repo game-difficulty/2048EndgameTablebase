@@ -684,6 +684,8 @@ Tip: Press Ctrl + F to search the entire manual.
 1. **Manual Adjustment**: Adjust the "Font Size" parameter in settings.
 2. **System Settings**: Right-click `main.exe` > Properties > Compatibility > Change high DPI settings > Override high DPI scaling behavior performed by Application.
 
+---
+
 # 9. Support and Feedback
 
 ## 9.1 Getting Support

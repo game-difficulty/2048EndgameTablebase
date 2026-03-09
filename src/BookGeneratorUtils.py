@@ -24,7 +24,7 @@ def initialize_sorting_library():
     _dll = None
     try:
         current_dir = os.path.dirname(__file__)
-        dll_path = os.path.join(current_dir, "para_qsort", "sort_wrapper.dll")
+        dll_path = os.path.join(current_dir, "ai_and_sort", "sort_wrapper.dll")
         if not os.path.exists(dll_path):
             dll_path = r"_internal/sort_wrapper.dll"
             if not os.path.exists(dll_path):

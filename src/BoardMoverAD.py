@@ -11,7 +11,7 @@ from BoardMover import decode_board, encode_row, reverse
 定式计算专用，勿作他用
 """
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def merge_line(line: NDArray, reverse: bool = False) -> Tuple[NDArray, bool]:
     mask_new_tile = False
     if reverse:
@@ -40,7 +40,7 @@ def merge_line(line: NDArray, reverse: bool = False) -> Tuple[NDArray, bool]:
     return np.array(merged), mask_new_tile
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def calculate_all_moves() -> Tuple[NDArray, NDArray, NDArray, NDArray, NDArray]:
     # 初始化存储所有可能的行及其移动后结果差值的字典
     movel = np.empty(65536, dtype=np.uint16)
@@ -75,7 +75,7 @@ def calculate_all_moves() -> Tuple[NDArray, NDArray, NDArray, NDArray, NDArray]:
 movel, mover, moveu, moved, mask_new_tiles = calculate_all_moves()
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def m_move_left(board: np.uint64) -> np.uint64:
     board ^= movel[board & np.uint64(0xffff)]
     board ^= movel[board >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(16)
@@ -84,7 +84,7 @@ def m_move_left(board: np.uint64) -> np.uint64:
     return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def m_move_left2(board: np.uint64) -> Tuple[np.uint64, bool]:
     mnt = False
     mnt |= mask_new_tiles[board & np.uint64(0xffff)]
@@ -98,7 +98,7 @@ def m_move_left2(board: np.uint64) -> Tuple[np.uint64, bool]:
     return board, mnt
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def m_move_right(board: np.uint64) -> np.uint64:
     board ^= mover[board & np.uint64(0xffff)]
     board ^= mover[board >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(16)
@@ -107,7 +107,7 @@ def m_move_right(board: np.uint64) -> np.uint64:
     return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def m_move_up(board: np.uint64, board2: np.uint64) -> np.uint64:
     board ^= moveu[board2 & np.uint64(0xffff)]
     board ^= moveu[board2 >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(4)
@@ -116,7 +116,7 @@ def m_move_up(board: np.uint64, board2: np.uint64) -> np.uint64:
     return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def m_move_up2(board: np.uint64, board2: np.uint64) -> Tuple[np.uint64, bool]:
     mnt = False
     mnt |= mask_new_tiles[board2 & np.uint64(0xffff)]
@@ -130,7 +130,7 @@ def m_move_up2(board: np.uint64, board2: np.uint64) -> Tuple[np.uint64, bool]:
     return board, mnt
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def m_move_down(board: np.uint64, board2: np.uint64) -> np.uint64:
     board ^= moved[board2 & np.uint64(0xffff)]
     board ^= moved[board2 >> np.uint64(16) & np.uint64(0xffff)] << np.uint64(4)
@@ -139,7 +139,7 @@ def m_move_down(board: np.uint64, board2: np.uint64) -> np.uint64:
     return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def m_move_board(board: np.uint64, direction: int) -> np.uint64:
     if direction == 1:
         return m_move_left(board)
@@ -156,7 +156,7 @@ def m_move_board(board: np.uint64, direction: int) -> np.uint64:
         return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def m_move_board2(board: np.uint64, board2: np.uint64, direction: int) -> np.uint64:
     if direction == 1:
         return m_move_left(board)
@@ -168,7 +168,7 @@ def m_move_board2(board: np.uint64, board2: np.uint64, direction: int) -> np.uin
         return m_move_down(board, board2)
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def m_move_all_dir(board: np.uint64
                    ) -> Tuple[Tuple[uint64, bool], Tuple[uint64, bool], Tuple[uint64, bool], Tuple[uint64, bool]]:
     board = np.uint64(board)
@@ -180,7 +180,7 @@ def m_move_all_dir(board: np.uint64
     return (ml, mnt_h), (mr, mnt_h), (mu, mnt_v), (md, mnt_v)
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def m_move_all_dir2(board: np.uint64, board2: np.uint64
                     ) -> Tuple[Tuple[uint64, bool], Tuple[uint64, bool], Tuple[uint64, bool], Tuple[uint64, bool]]:
     md = m_move_down(board, board2)

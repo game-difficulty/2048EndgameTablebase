@@ -8,7 +8,7 @@ import numpy as np
 from numba import njit
 
 
-@njit()
+@njit(cache=True)
 def reverse(board: np.uint64) -> np.uint64:
     board = (board & np.uint64(0xFF00FF0000FF00FF)) | ((board & np.uint64(0x00FF00FF00000000)) >> np.uint64(24)) | (
             (board & np.uint64(0x00000000FF00FF00)) << np.uint64(24))
@@ -17,7 +17,7 @@ def reverse(board: np.uint64) -> np.uint64:
     return board
 
 
-@njit()
+@njit(cache=True)
 def encode_board(board: np.typing.NDArray) -> np.uint64:
     encoded_board = np.uint64(0)
     tile_log2 = {0: 0, 2: 1, 4: 2, 8: 3, 16: 4, 32: 5, 64: 6, 128: 7, 256: 8, 512: 9, 1024: 10, 2048: 11,
@@ -28,7 +28,7 @@ def encode_board(board: np.typing.NDArray) -> np.uint64:
     return encoded_board
 
 
-@njit()
+@njit(cache=True)
 def decode_board(encoded_board: np.uint64) -> np.typing.NDArray:
     encoded_board = np.uint64(encoded_board)
     board = np.zeros((4, 4), dtype=np.int32)
@@ -42,7 +42,7 @@ def decode_board(encoded_board: np.uint64) -> np.typing.NDArray:
     return board
 
 
-@njit()
+@njit(cache=True)
 def encode_row(row: np.typing.NDArray) -> np.uint64:
     encoded = np.uint64(0)
     tile_log2 = {0: 0, 2: 1, 4: 2, 8: 3, 16: 4, 32: 5, 64: 6, 128: 7, 256: 8, 512: 9, 1024: 10, 2048: 11,
@@ -52,7 +52,7 @@ def encode_row(row: np.typing.NDArray) -> np.uint64:
     return encoded
 
 
-@njit()
+@njit(cache=True)
 def decode_row(encoded: np.uint64) -> np.typing.NDArray:
     row = np.empty(4, dtype=np.uint32)
     for i in range(4):
@@ -64,7 +64,7 @@ def decode_row(encoded: np.uint64) -> np.typing.NDArray:
     return row
 
 
-@njit()
+@njit(cache=True)
 def merge_line_with_score(line: np.ndarray, reverse_line: bool = False) -> Tuple[np.ndarray, np.uint32]:
     """32768不可移动与合并"""
     if reverse_line:
@@ -115,7 +115,7 @@ def merge_line_with_score(line: np.ndarray, reverse_line: bool = False) -> Tuple
     return np.array(merged), np.uint32(score)
 
 
-@njit()
+@njit(cache=True)
 def calculate_all_moves() -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     # 初始化存储所有可能的行及其移动后结果差值的字典
     movel = np.empty(65536, dtype=np.uint64)
@@ -258,7 +258,6 @@ def s_move_down(board: np.uint64, board2: np.uint64) -> Tuple[np.uint64, np.uint
         total_score += score[line]
         board ^= np.uint64(moved[line]) << np.uint64(4 * i)
     return board, total_score
-
 
 @njit(nogil=True, cache=True)
 def s_move_board(board: np.uint64, direction: np.uint8) -> Tuple[np.uint64, np.uint64]:

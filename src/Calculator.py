@@ -65,7 +65,7 @@ def update_logic_functions():
         target_globals[s_name] = numba_dec(l_scope[s_name])
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def is_success(board_encoded, target_stacked, mask=np.uint64(0xffffffffffffffff)):
     """
     使用 SWAR 技术并行检查 64 位整数中的 4 位块(Nibble)。
@@ -83,7 +83,7 @@ def is_success(board_encoded, target_stacked, mask=np.uint64(0xffffffffffffffff)
     return res != 0
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def ReverseLR(board):
     board = (board & np.uint64(0xff00ff00ff00ff00)) >> np.uint64(8) | (
                 board & np.uint64(0x00ff00ff00ff00ff)) << np.uint64(8)
@@ -92,7 +92,7 @@ def ReverseLR(board):
     return board
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def ReverseUD(board):
     board = (board & np.uint64(0xffffffff00000000)) >> np.uint64(32) | (
                 board & np.uint64(0x00000000ffffffff)) << np.uint64(32)
@@ -101,7 +101,7 @@ def ReverseUD(board):
     return board
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def ReverseUL(board):
     board = (board & np.uint64(0xff00ff0000ff00ff)) | (board & np.uint64(0x00ff00ff00000000)) >> np.uint64(24) | (
                 board & np.uint64(0x00000000ff00ff00)) << np.uint64(24)
@@ -110,7 +110,7 @@ def ReverseUL(board):
     return board
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def ReverseUR(board):
     board = (board & np.uint64(0x0f0ff0f00f0ff0f0)) | (board & np.uint64(0xf0f00000f0f00000)) >> np.uint64(20) | (
                 board & np.uint64(0x00000f0f00000f0f)) << np.uint64(20)
@@ -119,7 +119,7 @@ def ReverseUR(board):
     return board
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def Rotate180(board):
     board = (board & np.uint64(0xffffffff00000000)) >> np.uint64(32) | (
                 board & np.uint64(0x00000000ffffffff)) << np.uint64(32)
@@ -132,7 +132,7 @@ def Rotate180(board):
     return board
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def RotateL(board):
     board = (board & np.uint64(0xff00ff0000000000)) >> np.uint64(32) | (
                 board & np.uint64(0x00ff00ff00000000)) << np.uint64(8) | \
@@ -145,7 +145,7 @@ def RotateL(board):
     return board
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def RotateR(board):
     board = (board & np.uint64(0xff00ff0000000000)) >> np.uint64(8) | (
                 board & np.uint64(0x00ff00ff00000000)) >> np.uint64(32) | \
@@ -158,13 +158,13 @@ def RotateR(board):
     return board
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def canonical_full(board):
     return np.uint64(min(ReverseLR(board), ReverseUD(board), ReverseUL(board), ReverseUR(board),
                          Rotate180(board), RotateL(board), RotateR(board), np.uint64(board)))
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def canonical_diagonal(bd):
     board = np.uint64(bd)
     board = (board & np.uint64(0xff00ff0000ff00ff)) | (board & np.uint64(0x00ff00ff00000000)) >> np.uint64(24) | (
@@ -174,17 +174,17 @@ def canonical_diagonal(bd):
     return min(bd, board)
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def canonical_horizontal(board):
     return np.uint64(min(ReverseLR(board), board))
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def canonical_identity(encoded_board):
     return np.uint64(encoded_board)
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def canonical_diagonal_pair(bd1: np.uint64) -> Tuple[np.uint64, int]:
     board = ReverseUL(bd1)
     if bd1 <= board:
@@ -193,7 +193,7 @@ def canonical_diagonal_pair(bd1: np.uint64) -> Tuple[np.uint64, int]:
         return board, 3
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def canonical_horizontal_pair(bd1: np.uint64) -> Tuple[np.uint64, int]:
     board = ReverseLR(bd1)
     if bd1 <= board:
@@ -202,7 +202,7 @@ def canonical_horizontal_pair(bd1: np.uint64) -> Tuple[np.uint64, int]:
         return board, 1
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def canonical_full_pair(bd1: np.uint64) -> Tuple[np.uint64, int]:
     min_value_bd1 = bd1
     best_symm = 0
@@ -246,30 +246,30 @@ def canonical_full_pair(bd1: np.uint64) -> Tuple[np.uint64, int]:
     return min_value_bd1, best_symm
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, cache=True, inline='always')
 def canonical_identity_pair(bd1: np.uint64) -> Tuple[np.uint64, int]:
     return bd1, 0
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def exchange_row12(board):
     return (board & np.uint64(0xffff00000000ffff)) | ((board & np.uint64(0x00000000ffff0000)) << np.uint64(16)) | (
                 (board & np.uint64(0x0000ffff00000000)) >> np.uint64(16))
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def exchange_row02(board):
     return (board & np.uint64(0x0000ffff0000ffff)) | ((board & np.uint64(0x00000000ffff0000)) << np.uint64(32)) | (
                 (board & np.uint64(0xffff000000000000)) >> np.uint64(32))
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def exchange_col02(board):
     return (board & np.uint64(0x0f0f0f0f0f0f0f0f)) | ((board & np.uint64(0xf000f000f000f000)) >> np.uint64(8)) | (
                 (board & np.uint64(0x00f000f000f000f0)) << np.uint64(8))
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def R90_33(board):
     return ((board & np.uint64(0xf000000000000000)) >> np.uint64(32)) | (
                 (board & np.uint64(0x0f00000000000000)) >> np.uint64(12)) | (
@@ -282,7 +282,7 @@ def R90_33(board):
             board & np.uint64(0x000f0f0f000fffff))
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def L90_33(board):
     return ((board & np.uint64(0xf000000000000000)) >> np.uint64(8)) | (
                 (board & np.uint64(0x0f00000000000000)) >> np.uint64(20)) | (
@@ -295,7 +295,7 @@ def L90_33(board):
             board & np.uint64(0x000f0f0f000fffff))
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def R180_33(board):
     return ((board & np.uint64(0xf000000000000000)) >> np.uint64(40)) | (
                 (board & np.uint64(0x0f00000000000000)) >> np.uint64(32)) | (
@@ -308,7 +308,7 @@ def R180_33(board):
             board & np.uint64(0x000f0f0f000fffff))
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def UL_33(board):
     return ((board & np.uint64(0x0f0000f000000000)) >> np.uint64(12)) | (
                 (board & np.uint64(0x0000f0000f000000)) << np.uint64(12)) | (
@@ -317,7 +317,7 @@ def UL_33(board):
             board & np.uint64(0xf00f0f0f00ffffff))
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def UR_33(board):
     return ((board & np.uint64(0x0f00f00000000000)) >> np.uint64(20)) | (
                 (board & np.uint64(0x000000f00f000000)) << np.uint64(20)) | (
@@ -326,7 +326,7 @@ def UR_33(board):
             board & np.uint64(0x00ff0f0ff00fffff))
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def Rotate18034(board):
     board = Rotate180(board)
     board = ((board & np.uint64(0xffff000000000000)) >> np.uint64(48)) | (
@@ -334,25 +334,25 @@ def Rotate18034(board):
     return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def ReverseUD34(board):
     board = (board & np.uint64(0x0000ffff0000ffff)) | ((board & np.uint64(0xffff000000000000)) >> np.uint64(32)) | (
             (board & np.uint64(0x00000000ffff0000)) << np.uint64(32))
     return board
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def canonical_min33(board):
     return np.uint64(min(exchange_col02(board), exchange_row02(board), R90_33(board), L90_33(board),
                          R180_33(board), UR_33(board), UL_33(board), board))
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def canonical_min24(board):
     return min(ReverseUD(board), ReverseLR(board), Rotate180(board), board)
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def canonical_min34(board):
     return min(ReverseLR(board), ReverseUD34(board), Rotate18034(board), board)
 

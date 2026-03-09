@@ -42,7 +42,7 @@ ParamType = types.NamedTuple([
 ],Param)
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def generate_board_info_table1():
     # 初始化查找表（65536个条目）
     lookup_table = np.zeros(65536, dtype='uint16,uint8,uint16,uint8,uint8,uint8')
@@ -89,7 +89,7 @@ def generate_board_info_table1():
 INFO_TABLE1 = generate_board_info_table1()
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def generate_board_info_table2():
     # 初始化查找表（65536个条目）
     lookup_table = np.zeros(65536, dtype='uint16,uint8,uint16,uint8,uint8,uint8')
@@ -143,7 +143,7 @@ def _fixed_32k_mask(pos_fixed_32k):
     return mask
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def mask_board(board: np.uint64, th: int = 6) -> np.uint64:
     """
     mask盘面上所有大于等于阈值的格子
@@ -157,7 +157,7 @@ def mask_board(board: np.uint64, th: int = 6) -> np.uint64:
 
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def tile_sum_and_32k_count(masked_board: np.uint64, param:ParamType) -> Tuple[np.uint32, np.int8, np.uint64]:
     """
     统计一个masked board中非32k的数字和、可移动32k数量和位置
@@ -184,7 +184,7 @@ def tile_sum_and_32k_count(masked_board: np.uint64, param:ParamType) -> Tuple[np
     return np.uint32(total_sum), np.int8(count_32k), np.uint64(pos_bitmap)
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def tile_sum_and_32k_count2(masked_board: np.uint64, param:ParamType) -> Tuple[np.uint32, np.int8, np.uint64]:
     """
     统计一个masked board中小数数字和、可移动大数数量和位置
@@ -211,7 +211,7 @@ def tile_sum_and_32k_count2(masked_board: np.uint64, param:ParamType) -> Tuple[n
     return np.uint32(total_sum), np.int8(count_32k), np.uint64(pos_bitmap)
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def tile_sum_and_32k_count3(masked_board: np.uint64, param:ParamType
                             ) -> Tuple[np.uint32, np.int8, NDArray, np.uint64, np.uint64]:
     """
@@ -240,7 +240,7 @@ def tile_sum_and_32k_count3(masked_board: np.uint64, param:ParamType
     return total_sum, count_32k, pos_32k[:count_32k], masked_board, tile64_count
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def tile_sum_and_32k_count4(board: np.uint64, param:ParamType
                             ) -> Tuple[np.uint32, np.int8, np.uint64, np.uint8, np.uint8, np.uint8, bool]:
     """
@@ -285,7 +285,7 @@ def tile_sum_and_32k_count4(board: np.uint64, param:ParamType
     return np.uint32(total_sum), np.int8(count_32k), np.uint64(pos_bitmap), np.uint8(pos_rank), np.uint8(merged_tile_found), np.uint8(merged_tile), is_success
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def _masked_tiles_combinations(remaining_sum: np.uint64, remaining_count: int
                                ) -> NDArray[np.uint8] | None:
     """
@@ -336,7 +336,7 @@ def generate_tiles_combinations_dict() -> Dict[KeyType, ValueType2]:
     return tiles_combinations_dict
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def validate(board: np.uint64, original_board_sum: np.uint32, tiles_combinations_dict, param:ParamType) -> bool:
     """
     检验一个masked_board是否符合条件：
@@ -368,7 +368,7 @@ def validate(board: np.uint64, original_board_sum: np.uint32, tiles_combinations
     return True
 
 
-@njit(nogil=True, boundscheck=True )
+@njit(nogil=True, cache=True)
 def unmask_board(board: np.int64, original_board_sum: np.uint32, tiles_combinations_dict, permutation_dict, param:ParamType
                  ) -> NDArray[np.uint64]:
     """
@@ -405,7 +405,7 @@ def unmask_board(board: np.int64, original_board_sum: np.uint32, tiles_combinati
     return unmask_boards
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def extract_f_positions(pos_bitmap: np.uint64) -> NDArray:
     result = np.empty(16, dtype=np.uint64)
     count = 0
@@ -426,7 +426,7 @@ def generate_permutations(m: int, n: int) -> NDArray[NDArray[np.uint8]]:
     return result1
 
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def _resort_permutations(m, n, permutation, type_flag):
     """
     保证unmask后的boards是有序的（但permutation不再是字典序）

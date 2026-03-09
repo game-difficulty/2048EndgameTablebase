@@ -1,7 +1,7 @@
+import os
 import sys
 import time
 from datetime import datetime
-from typing import List, Tuple, Dict
 
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -9,468 +9,11 @@ from PyQt5.QtCore import QEasingCurve, QTimer, QSize
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QShortcut
 
-from AIPlayer import AIPlayer, Dispatcher, EvilGen
-import VBoardMover as vbm
 import BoardMover as bm
-from Calculator import find_merge_positions, slide_distance
-from Config import SingletonConfig, ColorManager, category_info
-
-
-# noinspection PyAttributeOutsideInit
-class SquareFrame(QtWidgets.QFrame):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.use_variant_style = 0
-        self.setupUi()
-        self.animation_config = {
-            'appear': {'duration': 120, 'curve': QtCore.QEasingCurve.OutCubic},
-            'pop': {'duration': 120, 'curve': QtCore.QEasingCurve.InOutCubic},
-            'slide': {'duration': 120, 'curve1': QtCore.QEasingCurve.Linear},}
-        self.active_animations: Dict[Tuple, QtCore.QAbstractAnimation] = dict()  # 跟踪所有活动的动画对象
-
-    def setupUi(self, num_rows=4, num_cols=4):
-        self.setMaximumSize(1200, 1000)
-        self.setMinimumSize(120, 120)
-        self.rows = num_rows
-        self.cols = num_cols
-        color_mgr = ColorManager()
-        self.setStyleSheet(f"border-radius: 8px; background-color: {color_mgr.get_css_color(7)};")
-        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
-        self.setFrameShadow(QtWidgets.QFrame.Raised)
-        self.setObjectName("game_square")
-        self.game_grid = QtWidgets.QGridLayout(self)
-        self.game_grid.setObjectName("game_grid")
-        self.grids = []  # 存储QFrame对象
-        self.frames: List[List[None | QtWidgets.QFrame]] = [[None for _0 in range(self.cols)] for _1 in range(self.rows)]  # 存储QFrame对象
-        self.labels: List[List[None | QtWidgets.QLabel]] = [[None for _0 in range(self.cols)] for _1 in range(self.rows)]  # 存储QLabel对象
-
-        for i in range(num_rows):
-            row_grids = []
-            for j in range(num_cols):
-                grid = QtWidgets.QFrame(self)
-                grid.setStyleSheet(f"border-radius: 8px; background-color: {color_mgr.get_css_color(6)};")
-                grid.setFrameShape(QtWidgets.QFrame.StyledPanel)
-                grid.setFrameShadow(QtWidgets.QFrame.Raised)
-                grid.setObjectName(f"grid{i * num_cols + j}")
-
-                self.game_grid.addWidget(grid, i, j, 1, 1)
-                row_grids.append(grid)
-            self.grids.append(row_grids)
-
-    def update_tile_frame(self, value, row, col):
-        if not (0 <= row < self.rows and 0 <= col < self.cols):
-            raise IndexError(f"无效的位置 ({row}, {col})")
-        if value == 0:
-            if self.frames[row][col]:
-                self.labels[row][col].deleteLater()
-                self.frames[row][col].deleteLater()
-                self.labels[row][col] = None
-                self.frames[row][col] = None
-            return
-
-        if self.frames[row][col] is None:
-            self._create_tile_components(row, col)
-        self._update_tile_style(value, row, col)
-        self.frames[row][col].show()
-
-    def _create_tile_components(self, row, col):
-        grid = self.grids[row][col]
-        grid_rect = grid.geometry()
-
-        frame = QtWidgets.QFrame(self)
-        frame.setGeometry(grid_rect)
-        frame.setObjectName(f"f{row * 4 + col}")
-        frame.setStyleSheet("border-radius: 8px;")
-
-        label = QtWidgets.QLabel(frame)
-        label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        label.setObjectName(f"l{row * 4 + col}")
-        label.setGeometry(0, 0, grid_rect.width(), grid_rect.height())
-
-        layout = QtWidgets.QGridLayout(frame)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(label)
-
-        self.frames[row][col] = frame
-        self.labels[row][col] = label
-
-    def _update_tile_style(self, value, row, col):
-        frame = self.frames[row][col]
-        label = self.labels[row][col]
-
-        if self.use_variant_style != 0 and value == 32768:
-            color_mgr = ColorManager()
-            color = color_mgr.get_css_color(7)
-        else:
-            color_index = int(np.log2(value) - 1) if value > 1 else -1
-            color = self.colors[color_index]
-
-        # 设置数字块颜色
-        frame.setStyleSheet(f"""
-            background-color: {color};
-            border-radius: 8px;
-        """)
-        fontsize = self.base_font_size if len(str(value)) < 3 else int(
-            self.base_font_size * 3 / (0.5 + len(str(value))))
-        font_style = self.get_label_style(fontsize, value)
-        label.setStyleSheet(font_style)
-        label.setText(str(value))
-
-    @property
-    def colors(self):
-        """
-        默认主题
-        ['#043c24', '#06643d', '#1b955b', '#20c175', '#fc56a0', '#e4317f', '#e900ad', '#bf009c',
-        '#94008a', '#6a0079', '#3f0067', '#00406b', '#006b9a', '#0095c8', '#00c0f7', '#00c0f7'] + [
-        '#000000'] * 20
-        """
-        return SingletonConfig().config['colors']
-
-    @property
-    def base_font_size(self):
-        return int(self.width() / 14.4 * SingletonConfig().config.get('font_size_factor', 100) / 100)
-
-    def updateGeometry(self):
-        # 保持正方形尺寸并居中显示
-        parent_size = self.parent().size()
-        new_size = int(min(parent_size.width(), parent_size.height()) * 0.95)
-        new_x = (parent_size.width() - new_size) // 2
-        new_y = (parent_size.height() - new_size) // 2
-        self.setGeometry(new_x, new_y, new_size, new_size)
-
-        margin = int(new_size / 32)
-        self.game_grid.setContentsMargins(margin, margin, margin, margin)
-        self.game_grid.setHorizontalSpacing(int(margin / 1.2))
-        self.game_grid.setVerticalSpacing(int(margin / 1.2))
-
-        # 更新所有已创建的tile位置
-        self._adjust_tile_positions()
-
-    def _adjust_tile_positions(self):
-        """调整所有tile的位置到对应grid的位置"""
-        for row in range(self.rows):
-            for col in range(self.cols):
-                if self.frames[row][col] is not None:
-                    # 获取对应grid的新位置
-                    grid_rect = self.grids[row][col].geometry()
-
-                    # 设置frame到grid位置
-                    self.frames[row][col].setGeometry(grid_rect)
-
-                    # 调整内部label大小匹配grid
-                    label = self.labels[row][col]
-                    if label:
-                        value = label.text()
-                        label.setGeometry(0, 0, grid_rect.width(), grid_rect.height())
-                        fontsize = self.base_font_size if len(value) < 3 else int(
-                            self.base_font_size * 3 / (0.5 + len(value)))
-                        font_style = self.get_label_style(fontsize, value)
-                        label.setStyleSheet(font_style)
-
-    @staticmethod
-    def get_label_style(fontsize, value):
-        try:
-            value = int(value)
-            value = 32768 if value <= 1 else value
-        except (TypeError, ValueError):
-            value = 32768
-
-        color = '#776e65' if not SingletonConfig.font_colors[int(np.log2(value)) - 1] else '#f9f6f2'
-
-        return f"""
-            font: {fontsize}pt 'Clear Sans';
-            font-weight: bold;
-            color: {color};
-            background-color: transparent;
-        """
-
-    def animate_appear(self, r, c, value):
-        """数字块出现动画"""
-        if self._check_animation_running(r, c):
-            for anim_id in (2, 1, 0):
-                anim = self.active_animations.pop((r, c, anim_id), None)
-                if anim:
-                    try:
-                        anim.setCurrentTime(anim.duration())
-                        anim.deleteLater()
-                    except RuntimeError:  # wrapped C/C++ object of type QParallelAnimationGroup has been deleted
-                        continue
-
-        if self.frames[r][c]:
-            self.frames[r][c].deleteLater()
-        self._create_tile_components(r, c)
-        self._update_tile_style(value, r, c)
-        frame = self.frames[r][c]
-        frame.show()
-
-        opacity_effect = QtWidgets.QGraphicsOpacityEffect(frame)
-        frame.setGraphicsEffect(opacity_effect)
-
-        anim_group = QtCore.QParallelAnimationGroup()
-
-        opacity_anim = QtCore.QPropertyAnimation(opacity_effect, b"opacity")
-        opacity_anim.setDuration(self.animation_config['appear']['duration'])
-        opacity_anim.setStartValue(0.0)
-        opacity_anim.setEndValue(1.0)
-
-        scale_anim = QtCore.QPropertyAnimation(frame, b"geometry")
-        scale_anim.setDuration(self.animation_config['appear']['duration'])
-        scale_anim.setEasingCurve(self.animation_config['appear']['curve'])
-
-        start_size = QtCore.QSize(10, 10)
-        scale_anim.setStartValue(
-            QtCore.QRect(frame.geometry().center(), start_size)
-        )
-        scale_anim.setEndValue(frame.geometry())
-
-        anim_group.addAnimation(opacity_anim)
-        anim_group.addAnimation(scale_anim)
-
-        anim_group.finished.connect(lambda: self._finalize_animation(r, c, 0))
-        anim_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
-
-        self.active_animations[(r, c, 0)] = anim_group
-
-    def animate_pop(self, r, c):
-        if self._check_animation_running(r, c):
-            return
-
-        frame = self.frames[r][c]
-        if not frame:
-            return
-        anim = QtCore.QSequentialAnimationGroup()
-
-        # 第一阶段：放大
-        enlarge = QtCore.QPropertyAnimation(frame, b"geometry")
-        enlarge.setDuration(self.animation_config['pop']['duration'] // 2)
-        enlarge.setEasingCurve(QtCore.QEasingCurve.OutCubic)
-        enlarge.setEndValue(self._scaled_rect(frame, 1.15))
-
-        # 第二阶段：恢复
-        shrink = QtCore.QPropertyAnimation(frame, b"geometry")
-        shrink.setDuration(self.animation_config['pop']['duration'] // 2)
-        shrink.setEasingCurve(QtCore.QEasingCurve.InCubic)
-        shrink.setEndValue(frame.geometry())
-
-        anim.addAnimation(enlarge)
-        anim.addAnimation(shrink)
-        anim.finished.connect(lambda: self._finalize_animation(r, c, 1))
-        anim.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
-
-        self.active_animations[(r, c, 1)] = anim
-
-    def _check_animation_running(self, r, c):
-        """检查当前单元格是否有未完成动画"""
-        return (r, c, 0) in self.active_animations or (r, c, 1) in self.active_animations
-
-    def _finalize_animation(self, r, c, anim_id):
-        anim = self.active_animations.pop((r, c, anim_id), None)
-        if anim:
-            anim.deleteLater()
-
-    @staticmethod
-    def _scaled_rect(frame, factor):
-        """计算缩放后的几何矩形"""
-        original = frame.geometry()
-        center = original.center()
-        new_width = int(original.width() * factor)
-        new_height = int(original.height() * factor)
-        return QtCore.QRect(
-            center.x() - new_width // 2,
-            center.y() - new_height // 2,
-            new_width,
-            new_height
-        )
-
-    def animate_slide(self, r, c, direction: str, distance):
-        if distance <= 0:
-            return
-
-        current_anim = self.active_animations.pop((r, c, 2), None)
-        if current_anim:
-            current_anim.setCurrentTime(current_anim.duration())
-            current_anim.deleteLater()
-
-        # 获取动画对象
-        frame = self.frames[r][c]
-        label = self.labels[r][c]
-        if not frame or not label:
-            return
-        self.frames[r][c] = None
-        self.labels[r][c] = None
-
-        new_r, new_c = self._calculate_new_position(r, c, direction, distance)
-
-        # 创建移动动画
-        anim = QtCore.QPropertyAnimation(frame, b"pos")
-        anim.setDuration(self.animation_config['slide']['duration'])
-        anim.setEasingCurve(self.animation_config['slide']['curve1'])
-
-        start_pos = frame.pos()
-        end_pos = self._get_grid_pos(new_r, new_c)
-        anim.setStartValue(start_pos)
-        anim.setEndValue(end_pos)
-
-        anim.finished.connect(lambda: self._finalize_slide(frame, label, r, c, 2))
-
-        self.active_animations[(r, c, 2)] = anim
-        anim.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
-
-    @staticmethod
-    def _calculate_new_position(r: int, c: int, direction: str, distance: int) -> tuple:
-        """计算移动后的新坐标"""
-        direction_map = {
-            'Up': (-distance, 0),
-            'Down': (distance, 0),
-            'Left': (0, -distance),
-            'Right': (0, distance)
-        }
-        dr, dc = direction_map[direction.capitalize()]
-        return r + dr, c + dc
-
-    def _get_grid_pos(self, r: int, c: int) -> QtCore.QPoint:
-        """获取网格的坐标位置"""
-        grid = self.grids[r][c]
-        return QtCore.QPoint(grid.x(), grid.y())
-
-    def _finalize_slide(self, frame, label, r, c, anim_id):
-        label.deleteLater()
-        frame.deleteLater()
-        anim = self.active_animations.pop((r, c, anim_id), None)
-        if anim:
-            anim.deleteLater()
-
-    def cancel_all_animations(self):
-        """立即终止所有正在运行的动画"""
-        for anim in list(self.active_animations.values()):
-            try:
-                anim.setCurrentTime(anim.duration())
-                anim.deleteLater()
-            except RuntimeError:  # wrapped C/C++ object of type QParallelAnimationGroup has been deleted
-                continue
-        self.active_animations.clear()
-
-
-# noinspection PyAttributeOutsideInit
-class BaseBoardFrame(QtWidgets.QFrame):
-    def __init__(self, centralwidget=None):
-        super(BaseBoardFrame, self).__init__(centralwidget)
-        self.setupUi()
-        self.board = np.zeros((4, 4), dtype=np.int32)
-        self.board_encoded = np.uint64(0)
-        self.score = 0
-        self.history = []
-
-        self.newtile_pos = 0
-        self.newtile = 1
-
-        self.use_variant_mover = 0
-
-        self.timer1, self.timer2, self.timer3, self.timer4 = QTimer(), QTimer(), QTimer(), QTimer()
-        self._last_values = self.board.copy()
-        self.last_move_time = time.time()
-
-    def setupUi(self):
-        self.setMaximumSize(QtCore.QSize(100000, 100000))
-        self.setMouseTracking(True)
-        color_mgr = ColorManager()
-        self.setStyleSheet(f"background-color: {color_mgr.get_css_color(4)};")
-        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
-        self.setFrameShadow(QtWidgets.QFrame.Raised)
-        self.setObjectName("gameframe")
-        self.game_square = SquareFrame(self)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.game_square.updateGeometry()
-        self.update_all_frame(self.board)
-
-    def update_frame(self, value, row, col):
-        self.game_square.update_tile_frame(value, row, col)
-
-    def update_all_frame(self, values):
-        for i in range(self.game_square.rows):
-            for j in range(self.game_square.cols):
-                self.update_frame(values[i][j], i, j)
-
-    def gen_new_num(self, do_anim=True):
-        self.board_encoded, _, new_tile_pos, val = bm.s_gen_new_num(
-            self.board_encoded, SingletonConfig().config['4_spawn_rate'])
-        self.board_encoded = np.uint64(self.board_encoded)
-        self.board = bm.decode_board(self.board_encoded)
-        self.history.append((self.board_encoded, self.score))
-        self.newtile_pos, self.newtile = new_tile_pos, val
-        if do_anim:
-            self.timer1.singleShot(125, lambda: self.game_square.animate_appear(new_tile_pos // 4, new_tile_pos % 4, 2 ** val))  # 125
-
-    def do_move(self, direction: str, do_gen=True):
-        if self.game_square.active_animations:
-            for timer in (self.timer1, self.timer2, self.timer3):
-                timer.stop()
-            self.game_square.cancel_all_animations()
-            self.update_all_frame(self._last_values)
-        mover = bm if self.use_variant_mover == 0 else vbm
-        do_anim = SingletonConfig().config['do_animation']
-
-        time_now = time.time()
-        slow_move = (time_now - self.last_move_time > 0.08)
-        self.last_move_time = time_now
-
-        direct = {'Left': 1, 'Right': 2, 'Up': 3, 'Down': 4}[direction.capitalize()]
-        board_encoded_new, new_score = mover.s_move_board(self.board_encoded, direct)
-        board_encoded_new = np.uint64(board_encoded_new)
-        if board_encoded_new != self.board_encoded:
-            self.board_encoded = board_encoded_new
-            self.score += new_score
-            current_values = self.board
-            if do_gen:
-                self.gen_new_num(do_anim)
-            self.board = bm.decode_board(self.board_encoded)
-            if do_anim:
-                self.slide_tiles(current_values, direction)
-                self.timer2.singleShot(110, lambda: self.pop_merged(current_values, direction))  # 110
-                # 生成新数字之前的局面
-                self.timer3.singleShot(100, lambda: self.update_all_frame((bm.decode_board(board_encoded_new))))  # 100
-                if not slow_move:
-                    self.timer4.singleShot(250, lambda: self.update_all_frame(self.board))
-            else:
-                self.update_all_frame(self.board)
-            self._last_values = self.board.copy()
-        else:
-            self.update_all_frame(self.board)
-
-    def pop_merged(self, board, direction):
-        merged_pos = find_merge_positions(board, direction)
-        for row in range(self.game_square.rows):
-            for col in range(self.game_square.cols):
-                if merged_pos[row][col] == 1:
-                    self.game_square.animate_pop(row, col)
-
-    def slide_tiles(self, board, direction):
-        slide_distances = slide_distance(board, direction)
-        if self.use_variant_mover:  # variant 32k不移动
-            slide_distances[board == 32768] = 0
-        for row in range(self.game_square.rows):
-            for col in range(self.game_square.cols):
-                self.game_square.animate_slide(row, col, direction, slide_distances[row][col])
-
-    def undo(self):
-        if len(self.history) > 1:
-            self.history.pop()
-            self.board_encoded, self.score = self.history[-1]
-            self.board_encoded = np.uint64(self.board_encoded)
-            self.board = bm.decode_board(self.board_encoded)
-            self.update_all_frame(self.board)
-
-    def set_use_variant(self, pattern: str = ''):
-        self.use_variant_mover = 1 if pattern in category_info.get('variant', []) else 0
-        self.game_square.use_variant_style = self.use_variant_mover
-        self.update_all_frame(self.board)
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.game_square.updateGeometry()
+from AIPlayer import Dispatcher, CoreAILogic
+from BoardFrame import BaseBoardFrame
+from Config import SingletonConfig, ColorManager
+from ai_and_sort import ai_core
 
 
 # noinspection PyAttributeOutsideInit
@@ -492,11 +35,11 @@ class GameFrame(BaseBoardFrame):
         self.last_direc = 1
 
         # 初始化 AI 线程
-        self.ai_thread = AIThread(self.board)
+        self.ai_thread = AIThread(self.board_encoded, np.zeros(16, dtype=np.uint32))
         self.ai_thread.updateBoard.connect(self.do_ai_move)
 
         # 困难模式
-        self.evil_gen = EvilGen(self.board)
+        self.evil_gen = ai_core.EvilGen(self.board_encoded)
         self.difficulty = 0
 
         if self.board_encoded == 0:
@@ -512,16 +55,23 @@ class GameFrame(BaseBoardFrame):
                                                                     SingletonConfig().config['4_spawn_rate'])
         self.verse_code += self.decode_to_character(val, self.last_direc, 15 - new_tile_pos)
         self.board = bm.decode_board(self.board_encoded)
-        self.ai_thread.ai_player.board = self.board
-        self.evil_gen.reset_board(self.board)
+
+        self.evil_gen.reset_board(self.board_encoded)
         self.update_all_frame(self.board)
         self.score = 0
         self.history = [(self.board_encoded, self.score)]
 
-    def ai_step(self):
+    def ai_step(self, counts):
+        if self.ai_thread.isRunning():
+            return
+
         self.ai_processing = True
-        self.ai_thread.ai_player.spawn_rate4 = SingletonConfig().config['4_spawn_rate']
-        self.ai_thread.ai_player.board = self.board
+        self.ai_thread.prepare(
+            board=self.board,
+            board_encoded=self.board_encoded,
+            counts=counts,
+            spawn_rate4=SingletonConfig().config['4_spawn_rate']
+        )
         self.ai_thread.start()
 
     def do_ai_move(self, direction):
@@ -539,8 +89,8 @@ class GameFrame(BaseBoardFrame):
             self.board_encoded, _, new_tile_pos, val = bm.s_gen_new_num(self.board_encoded,
                                                                               SingletonConfig().config['4_spawn_rate'])
         else:
-            self.evil_gen.reset_board(bm.decode_board(self.board_encoded))
-            self.board_encoded, new_tile_pos, val = self.evil_gen.gen_new_num(5)
+            self.evil_gen.reset_board(self.board_encoded)
+            self.board_encoded, new_tile_pos, val = self.get_hardest_tile()
         self.board_encoded = np.uint64(self.board_encoded)
         self.board = bm.decode_board(self.board_encoded)
         self.history.append((self.board_encoded, self.score))
@@ -586,76 +136,48 @@ class GameFrame(BaseBoardFrame):
             self.verse_code = self.verse_code[:-1]
         super().undo()
 
+    def get_hardest_tile(self, depth=5):
+        result = self.evil_gen.gen_new_num(depth)
+        return result
 
 
 class AIThread(QtCore.QThread):
-    updateBoard = QtCore.pyqtSignal(str)  # 传递下一步操作
+    updateBoard = QtCore.pyqtSignal(str)
+    move_map = {1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}
 
-    def __init__(self, board):
+    def __init__(self, board_encoded, counts):
         super(AIThread, self).__init__()
-        self.ai_player = AIPlayer(board)
+        self.ai_player = ai_core.AIPlayer(board_encoded)
+        self.ai_player.max_threads = 8 if os.cpu_count() >= 16 else 4
+        self.logic = CoreAILogic()
+        self.board = None
+        self.board_encoded = board_encoded
+        self.counts = counts
 
-    def is_mess(self):
-        """检查是否乱阵"""
-        board = self.ai_player.board
-        if np.sum(board) % 512 < 12:
-            return False
-
-        large_tiles = (board > 64).sum()
-        board_flatten = board.flatten()
-        if large_tiles < 3:
-            return False
-        elif large_tiles > 3:
-            top4_pos = np.argpartition(board_flatten, -4)[-4:]
-            if len(np.unique(board_flatten[top4_pos])) < 4:
-                return False
-            top4_pos = tuple(sorted(top4_pos))
-            return top4_pos not in ((0, 1, 2, 3), (0, 4, 8, 12), (12, 13, 14, 15), (3, 7, 11, 15),
-                                    (0, 1, 2, 4), (4, 8, 12, 13), (11, 13, 14, 15), (2, 3, 7, 11),
-                                    (0, 1, 4, 8), (8, 12, 13, 14), (7, 11, 14, 15), (1, 2, 3, 7),
-                                    (0, 1, 4, 5), (8, 9, 12, 13), (10, 11, 14, 15), (2, 3, 6, 7),
-                                    (2, 3, 14, 15), (0, 1, 12, 13), (8, 11, 12, 15), (0, 3, 4, 7))
-        else:
-            top3_pos = np.argpartition(board_flatten, -3)[-3:]
-            if len(np.unique(board_flatten[top3_pos])) < 3:
-                return False
-            top3_pos = tuple(sorted(top3_pos))
-            return top3_pos not in (
-                (0, 1, 2), (1, 2, 3), (3, 7, 11), (7, 11, 15), (13, 14, 15), (12, 13, 14), (4, 8, 12), (0, 4, 8),
-                (0, 1, 3), (0, 2, 3), (3, 7, 15), (3, 11, 15), (12, 14, 15), (12, 13, 15), (0, 8, 12), (0, 4, 12),
-                (0, 1, 12), (0, 3, 4), (0, 3, 7), (2, 3, 15), (3, 14, 15), (11, 12, 15), (8, 12 ,15), (0, 12, 13),
-                (0, 1, 4), (2, 3, 7), (11, 14, 15), (8, 12, 13))
+    def prepare(self, board, board_encoded, counts, spawn_rate4):
+        """
+        统一的数据注入接口，避免在外部直接操作成员变量
+        """
+        self.board = board
+        self.board_encoded = board_encoded
+        self.counts = counts
+        self.ai_player.board = board_encoded
+        self.ai_player.spawn_rate4 = spawn_rate4
 
     def run(self):
-        # 根据局面设定搜索深度
-        empty_slots = np.sum(self.ai_player.board == 0)
-        big_nums = (self.ai_player.board > 128).sum()
-        if self.is_mess():
-            big_nums2 = (self.ai_player.board > 256).sum()
-            depth = 5
-            if self.ai_player.check_corner(np.uint64(bm.encode_board(self.ai_player.board))):
-                depth = 8
-            self.ai_player.start_search(depth)
-            while self.ai_player.node < 160000 * big_nums2 ** 2 and depth < 9:
-                depth += 1
-                self.ai_player.start_search(depth)
-        elif empty_slots > 9 or big_nums < 1:
-            self.ai_player.start_search(1)
-        elif empty_slots > 4 and big_nums < 2:
-            self.ai_player.start_search(2)
-        elif (empty_slots > 3 > big_nums) or (big_nums < 2):
-            self.ai_player.start_search(4)
-        elif np.sum(self.ai_player.board) % 512 < 16:
-            depth = 4 if big_nums < 4 else 5
-            self.ai_player.start_search(depth)
-        else:
-            depth = 4 if big_nums < 4 else 5
-            self.ai_player.start_search(depth)
-            while self.ai_player.node < 20000 * depth * big_nums ** 1.25 and depth < 9:
-                depth += 1
-                self.ai_player.start_search(depth)
-            # print(depth, self.ai_player.node)
-        self.updateBoard.emit({1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}.get(self.ai_player.best_operation, ''))
+        time_start = time.time()
+        best_move_code = self.logic.calculate_step(
+            self.ai_player,
+            self.board,
+            self.counts
+        )
+        time_end = time.time()
+        time_cost = time_end - time_start
+        if self.logic.last_move == 'search':
+            print(f"Depth: {self.logic.last_depth}, Time: {time_cost:.6f}")
+
+        move_str = self.move_map.get(best_move_code, '')
+        self.updateBoard.emit(move_str)
 
 
 # noinspection PyAttributeOutsideInit
@@ -825,7 +347,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.difficulty_slider.setMaximum(100)
         self.difficulty_slider.setValue(0)
         self.difficulty_slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
-        self.difficulty_slider.setTickInterval(1)
+        self.difficulty_slider.setTickInterval(10)
         self.difficulty_slider.valueChanged.connect(self.difficulty_changed)  # type: ignore
         self.difficulty_slider.setObjectName("difficulty_slider")
         self.difficulty_layout.addWidget(self.difficulty_slider, 0, 3, 1, 8)
@@ -836,6 +358,38 @@ class GameWindow(QtWidgets.QMainWindow):
         self.difficulty_layout.addWidget(self.infoButton, 0, 11, 1, 1)
         self.infoButton.clicked.connect(self.show_message)  # type: ignore
         self.gridLayout.addWidget(self.difficulty_frame, 4, 0, 1, 1)
+
+        self.speed_frame = QtWidgets.QFrame(self.centralwidget)
+        self.speed_frame.setMaximumSize(QtCore.QSize(16777215, 60))
+        self.speed_frame.setMinimumSize(QtCore.QSize(120, 45))
+        self.speed_frame.setStyleSheet("QFrame{\n"
+                                       f"    border-color: {color_mgr.get_css_color(8)};\n"
+                                       f"    background-color: {color_mgr.get_css_color(3)};\n"
+                                       "}")
+        self.speed_frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        self.speed_frame.setFrameShadow(QtWidgets.QFrame.Raised)
+        self.speed_frame.setObjectName("speed_frame")
+
+        self.speed_layout = QtWidgets.QGridLayout(self.speed_frame)
+        self.speed_layout.setObjectName("speed_layout")
+
+        self.speed_text = QtWidgets.QLabel("AI 思考速度")
+        self.speed_text.setStyleSheet("font: 750 12pt \"Cambria\";")
+        self.speed_text.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.speed_text.setObjectName("speed_text")
+        self.speed_layout.addWidget(self.speed_text, 0, 0, 1, 3)
+        self.speed_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal, self.centralwidget)
+        self.speed_slider.setMinimum(0)
+        self.speed_slider.setMaximum(200)
+        self.speed_slider.setValue(100)
+        self.speed_slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
+        self.speed_slider.setTickInterval(20)
+        self.speed_slider.setObjectName("speed_slider")
+        self.speed_layout.addWidget(self.speed_slider, 0, 3, 1, 8)
+        self.empty_label = QtWidgets.QLabel()
+        self.speed_layout.addWidget(self.empty_label, 0, 11, 1, 1)
+        self.speed_slider.valueChanged.connect(self.speed_changed)
+        self.gridLayout.addWidget(self.speed_frame, 5, 0, 1, 1)
 
         self.setboard_frame = QtWidgets.QFrame(self.centralwidget)
         self.setboard_frame.setMaximumSize(QtCore.QSize(16777215, 30))
@@ -895,11 +449,18 @@ class GameWindow(QtWidgets.QMainWindow):
         self.new_game.setText(_translate("Game", "New Game"))
         self.ai.setText("AI: ON")  # 暂不翻译
         self.difficulty_text.setText(_translate("Game", "Difficulty"))
+        self.speed_text.setText(_translate("Game", "AI Speed"))
         self.set_board_bt.setText(_translate("Game", "SET"))
 
     def difficulty_changed(self):
         self.gameframe.difficulty = self.difficulty_slider.value() / 100
         self.gameframe.setFocus()
+
+    def speed_changed(self, value):
+        """ 将滑块值 [0, 100, 200] 映射为 [10, 1, 0.1] """
+        exponent = (100 - value) / 100.0
+        ratio = 10 ** exponent
+        self.gameframe.ai_thread.logic.time_limit_ratio = ratio
 
     def show_message(self):
         QtWidgets.QMessageBox.information(self, self.tr('Information'),
@@ -917,48 +478,55 @@ class GameWindow(QtWidgets.QMainWindow):
             self.best_points.setText(str(score))
 
     def show_score_animation(self, increment):
-        # 获取 score_points 的相对于主窗口的坐标
+        # 1. 获取 score_points 左上角相对于 self 的准确位置
+        # 使用 QPoint(0, 0) 映射，避免了 geometry().topLeft() 带来的二次偏移
+        local_pos = self.score_points.mapTo(self, QtCore.QPoint(0, 0))
         score_rect = self.score_points.geometry()
-        local_pos = self.score_points.mapTo(self, score_rect.topLeft())
-        decoration_width = self.frameGeometry().height() - self.geometry().height()
 
-        # 在主窗口的坐标系上创建一个新的 QLabel
+        # 2. 创建 Label
         score_animation_label = QtWidgets.QLabel(f"+{increment}", self)
-        score_animation_label.setStyleSheet("font 750 12pt; color: green;")
+        score_animation_label.setStyleSheet("font-weight: 750; font-size: 12pt; color: #3EB489;")
         score_animation_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        score_animation_label.setGeometry(local_pos.x(), local_pos.y() - decoration_width - 10,
+
+        # 3. 解决点击遮挡问题：设置鼠标穿透
+        score_animation_label.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+        # 4. 设置初始位置（不再计算标题栏高度 decoration_width）
+        # 稍微向上偏移 10 像素以美观
+        score_animation_label.setGeometry(local_pos.x(), local_pos.y() - 10,
                                           score_rect.width(), score_rect.height())
         score_animation_label.show()
 
-        # 获取初始位置和结束位置
+        # 动画逻辑
         start_pos = score_animation_label.pos()
-        end_pos = QtCore.QPoint(start_pos.x(), start_pos.y() - 50)
+        end_pos = QtCore.QPoint(start_pos.x(), start_pos.y() - 60)
 
         # 位置动画
         pos_anim = QtCore.QPropertyAnimation(score_animation_label, b"pos")
-        pos_anim.setDuration(600)
+        pos_anim.setDuration(400)
         pos_anim.setStartValue(start_pos)
         pos_anim.setEndValue(end_pos)
-        pos_anim.setEasingCurve(QEasingCurve.InQuad)
+        pos_anim.setEasingCurve(QtCore.QEasingCurve.Type.OutQuad)  # 修改为 OutQuad 更有漂浮感
 
         # 透明度动画
         opacity_effect = QtWidgets.QGraphicsOpacityEffect(score_animation_label)
         score_animation_label.setGraphicsEffect(opacity_effect)
         opacity_anim = QtCore.QPropertyAnimation(opacity_effect, b"opacity")
-        opacity_anim.setDuration(600)
-        opacity_anim.setStartValue(1)
-        opacity_anim.setEndValue(0)
-        opacity_anim.setEasingCurve(QEasingCurve.InQuad)
+        opacity_anim.setDuration(400)
+        opacity_anim.setStartValue(1.0)
+        opacity_anim.setEndValue(0.0)
 
-        # 动画组
+        # 动画组管理
         anim_group = QtCore.QParallelAnimationGroup()
         anim_group.addAnimation(pos_anim)
         anim_group.addAnimation(opacity_anim)
+
+        # 自动清理：动画完成后删除 Label 并从列表中移除自己
         anim_group.finished.connect(score_animation_label.deleteLater)
+        anim_group.finished.connect(
+            lambda: self.score_anims.remove(anim_group) if anim_group in self.score_anims else None)
 
         self.score_anims.append(anim_group)
-        if len(self.score_anims) >= 200:
-            self.score_anims = self.score_anims[100:]
         anim_group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def keyPressEvent(self, event, ):
@@ -976,11 +544,17 @@ class GameWindow(QtWidgets.QMainWindow):
         elif event.key() in (QtCore.Qt.Key.Key_Right, QtCore.Qt.Key.Key_D):
             self.process_input('Right')
             event.accept()
-        elif event.key() in (QtCore.Qt.Key.Key_Backspace, QtCore.Qt.Key.Key_Delete) and not self.ai_state:
-            self.handleUndo()
+        elif event.key() in (QtCore.Qt.Key.Key_Backspace, QtCore.Qt.Key.Key_Delete):
+            if self.ai_state:
+                self.toggleAI()
+            else:
+                self.handleUndo()
             event.accept()
-        elif event.key() in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter) and not self.ai_state:
-            self.handleOneStep()
+        elif event.key() in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
+            if self.ai_state:
+                self.toggleAI()
+            else:
+                self.handleOneStep()
             event.accept()
         else:
             super().keyPressEvent(event)  # 其他键交给父类处理
@@ -1005,7 +579,7 @@ class GameWindow(QtWidgets.QMainWindow):
             self.last_table = current_table
 
         if best_move == 'AI':
-            self.gameframe.ai_step()
+            self.gameframe.ai_step(self.ai_dispatcher.counts)
         else:
             self.gameframe.do_move(best_move.capitalize())
         self.board_state.setText(hex(self.gameframe.board_encoded)[2:].rjust(16, '0'))
@@ -1016,14 +590,14 @@ class GameWindow(QtWidgets.QMainWindow):
                 self.ai.setText("AI: ON")
                 self.gameframe.died_when_ai_state = False
             elif best_move != 'AI':
-                self.ai_timer.singleShot(20, self.handleOneStep)
+                self.ai_timer.singleShot(1, self.handleOneStep)
         # print(self.ai_dispatcher.last_operator)
         self.save_game_state()
         self.isProcessing, self.gameframe.ai_processing = False, False
 
     def ai_move_done(self, is_done):
         if is_done and self.ai_state:
-            self.ai_timer.singleShot(20, self.handleOneStep)
+            self.ai_timer.singleShot(1, self.handleOneStep)
 
     def handleUndo(self):
         self.gameframe.undo()
@@ -1040,7 +614,7 @@ class GameWindow(QtWidgets.QMainWindow):
         if not self.ai_state:
             self.ai.setText(self.tr("STOP"))
             self.ai_state = True
-            self.ai_timer.singleShot(20, self.handleOneStep)
+            self.ai_timer.singleShot(1, self.handleOneStep)
             self.statusbar.showMessage(self.tr(
                 "Run larger tables for better performance."), 5000)
         else:
@@ -1060,6 +634,7 @@ class GameWindow(QtWidgets.QMainWindow):
         self.gameframe._last_values = self.gameframe.board.copy()
         self.gameframe.update_all_frame(self.gameframe.board)
         self.gameframe.setFocus()
+        self.gameframe.ai_thread.logic.last_depth = 4
 
         # 重置历史记录
         self.gameframe.score = 0
