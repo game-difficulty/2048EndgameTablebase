@@ -1,5 +1,6 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/tuple.h>
+#include <nanobind/stl/array.h>
 #include <cstdint>
 #include <cmath>
 #include <algorithm>
