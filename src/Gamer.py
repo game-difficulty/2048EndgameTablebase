@@ -148,7 +148,7 @@ class AIThread(QtCore.QThread):
     def __init__(self, board_encoded, counts):
         super(AIThread, self).__init__()
         self.ai_player = ai_core.AIPlayer(board_encoded)
-        self.ai_player.max_threads = 8 if os.cpu_count() >= 16 else 4
+        self.ai_player.max_threads = 4
         self.logic = CoreAILogic()
         self.board = None
         self.board_encoded = board_encoded
@@ -162,7 +162,7 @@ class AIThread(QtCore.QThread):
         self.board_encoded = board_encoded
         self.counts = counts
         self.ai_player.board = board_encoded
-        self.ai_player.spawn_rate4 = spawn_rate4
+        self.ai_player.update_spawn_rate(spawn_rate4)
 
     def run(self):
         time_start = time.time()
@@ -173,8 +173,6 @@ class AIThread(QtCore.QThread):
         )
         time_end = time.time()
         time_cost = time_end - time_start
-        if self.logic.last_move == 'search':
-            print(f"Depth: {self.logic.last_depth}, Time: {time_cost:.6f}")
 
         move_str = self.move_map.get(best_move_code, '')
         self.updateBoard.emit(move_str)

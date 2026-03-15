@@ -4,6 +4,7 @@ import threading
 from collections import defaultdict
 from pathlib import Path
 from queue import Queue
+import re
 
 import numpy as np
 from PyQt5.QtCore import QObject
@@ -29,7 +30,9 @@ direction_map.update({
     '?': "？",
 })
 
-png_map_dict = {
+
+# 旧版单字符映射表
+PNG_MAP_DICT = {
     ' ': 0, '!': 1, '"': 2, '#': 3, '$': 4, '%': 5, '&': 6, "'": 7, '(': 8, ')': 9, '*': 10,
     '+': 11, ',': 12, '-': 13, '.': 14, '/': 15, '0': 16, '1': 17, '2': 18, '3': 19, '4': 20,
     '5': 21, '6': 22, '7': 23, '8': 24, '9': 25, ':': 26, ';': 27, '<': 28, '=': 29, '>': 30,
@@ -44,6 +47,218 @@ png_map_dict = {
     'Å': 110, 'É': 111, 'æ': 112, 'Æ': 113, 'ô': 114, 'ö': 115, 'ò': 116, 'û': 117, 'ù': 118,
     'ÿ': 119, 'Ö': 120, 'Ü': 121, 'ø': 122, '£': 123, 'Ø': 124, '×': 125, 'ƒ': 126, 'á': 127
 }
+
+# 新版 3字符 Base-128 映射表
+NEW_CHARS_LIST = [
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+    "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J",
+    "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "À", "Á", "Â", "Ã", "Ä", "Å", "Æ",
+    "Ç", "È", "É", "Ê", "Ë", "Ì", "Í", "Î", "Ï", "Ð", "Ñ", "Ò", "Ó", "Ô", "Õ", "Ö", "×", "Ø", "Ù", "Ú", "Û", "Ü", "Ý",
+    "Þ", "ß", "à", "á", "â", "ã", "ä", "å", "æ", "ç", "è", "é", "ê", "ë", "ì", "í", "î", "ï", "ð", "ñ", "ò", "ó", "ô",
+    "õ", "ö", "÷", "ø", "ù", "ú", "û", "ü", "ý", "þ", "ÿ", "¤", "¾"
+]
+NEW_CHAR_MAP = {char: idx for idx, char in enumerate(NEW_CHARS_LIST)}
+
+# 新版移动方向映射到原 Python 代码方向:
+# 新版: 0=up, 1=down, 2=left, 3=right
+# 原代码推导: 1,2代表水平操作(Left/Right), 3,4代表垂直操作(Up/Down)
+NEW_TO_OLD_MOVE = {0: 3, 1: 4, 2: 1, 3: 2}
+
+
+class ReplayDecoder:
+    def __init__(self, filepath, bm, vbm):
+        self.filepath = filepath
+        self.bm = bm
+        self.vbm = vbm
+        self.variant = "4x4"
+        self.record_list: np.typing.NDArray = np.empty(0, dtype='uint64,uint8,uint8,uint8')
+
+    def read_replay(self):
+        """兼容读取所有编码格式的文件"""
+        with open(self.filepath, 'rb') as f:
+            raw_data = f.read()
+
+        replay_text = ''
+        common_encodings = ['utf-8', 'gb18030', 'big5', 'shift_jis', 'euc-kr', 'utf-16', 'utf-16le', 'utf-16be']
+
+        if raw_data.startswith(b'\xff\xfe'):
+            return raw_data.decode('utf-16le')
+        elif raw_data.startswith(b'\xfe\xff'):
+            return raw_data.decode('utf-16be')
+        elif raw_data.startswith(b'\xef\xbb\xbf'):
+            return raw_data.decode('utf-8-sig')
+
+        for enc in common_encodings:
+            try:
+                return raw_data.decode(enc)
+            except UnicodeDecodeError:
+                continue
+
+        return raw_data.decode('latin-1')
+
+    def decode(self):
+        """自动判断格式并调用对应的解码逻辑"""
+        replay_text = self.read_replay()
+
+        # 尝试匹配新版格式正则表达式: 例如 "4x4-0000000000000000_abc..."
+        new_format_match = re.match(r'^(\d+x\d+)-([^_]*)_(.*)$', replay_text)
+
+        if new_format_match:
+            variant_str = new_format_match.group(1)
+            initial_board_str = new_format_match.group(2)
+            moves_str = new_format_match.group(3)
+            self._decode_new_format(variant_str, initial_board_str, moves_str)
+        else:
+            self._decode_old_format(replay_text)
+
+    @staticmethod
+    def _apply_special_32k_rule(board, replay_move, current_score, mover):
+        """抽象出 65k 合并特殊判定规则"""
+        board_decoded = mover.decode_board(board)
+        positions = np.where(board_decoded == 32768)
+        first_position = (positions[0][0], positions[1][0])
+        second_position = (positions[0][1], positions[1][1])
+
+        if (positions[0][0] == positions[0][1] and abs(positions[1][0] - positions[1][1]) == 1 and
+            replay_move in (1, 2)) or (positions[1][0] == positions[1][1] and
+                                       abs(positions[0][0] - positions[0][1]) == 1 and replay_move in (3, 4)):
+            board_decoded[first_position] = 16384
+            board_decoded[second_position] = 16384
+            board = np.uint64(mover.encode_board(board_decoded))
+            current_score += 32768
+
+        return board, current_score
+
+    def _decode_new_format(self, variant_str: str, initial_board_str: str, moves_str: str):
+        """解析新版 21-bit / 3-chars 格式，但输出旧版 Numpy 数组结构"""
+        if variant_str == "2x4":
+            board, total_space = np.uint64(0xffff00000000ffff), 11
+            mover = self.vbm
+            self.variant = "2x4"
+        elif variant_str == "3x3":
+            board, total_space = np.uint64(0x000f000f000fffff), 15
+            mover = self.vbm
+            self.variant = "3x3"
+        elif variant_str == "3x4":
+            board, total_space = np.uint64(0x00000000000fffff), 15
+            mover = self.vbm
+            self.variant = "3x4"
+        elif variant_str == "4x4":
+            board, total_space = np.uint64(0), 15
+            mover = self.bm
+            self.variant = "4x4"
+        else:
+            logger.warning(f"Invalid variant {variant_str}")
+            return
+
+        num_moves = len(moves_str) // 3
+        self.record_list = np.empty(max(0, num_moves - 2), dtype='uint64,uint32,uint8,uint8,uint8')
+        record = np.empty(max(0, num_moves - 2), dtype='uint64,uint32,uint8')
+
+        moves_made = 0
+        current_score = 0
+
+        for i in range(0, len(moves_str), 3):
+            chunk = moves_str[i:i + 3]
+            if len(chunk) < 3:
+                break
+
+            try:
+                # 3 个字符转换为 21-bit 二进制整数
+                binary = (NEW_CHAR_MAP[chunk[0]] << 14) + \
+                         (NEW_CHAR_MAP[chunk[1]] << 7) + \
+                         NEW_CHAR_MAP[chunk[2]]
+            except KeyError:
+                logger.warning(f"Invalid character in new format replay chunk: {chunk}")
+                return
+
+            # 位运算解析
+            move_val = binary & 0b11  # 第 0-1 位
+            spawn_val_bit = (binary >> 2) & 0b11  # 第 2-3 位 (0代表生成2, 1代表生成4)
+            spawn_x = (binary >> 4) & 0b111  # 第 4-6 位
+            spawn_y = (binary >> 7) & 0b111  # 第 7-9 位
+            # 时间分辨率在 (binary >> 10) & 0b111, 时间乘数在 (binary >> 13) & 0b11111111，不需要提取
+
+            # 转换为原代码变量
+            replay_tile = spawn_val_bit + 1  # 0->1(数值2), 1->2(数值4)
+            replay_move = NEW_TO_OLD_MOVE.get(move_val, 1)
+
+            # 将二维坐标转回旧代码的 一维棋盘位置偏移 (适配原有 bitboard 插入规则)
+            replay_position = total_space - (spawn_y << 2) - spawn_x
+
+            # 状态推进逻辑
+            if moves_made >= 2:
+                self.record_list[moves_made - 2] = (board, current_score, replay_move, replay_tile,
+                                                    15 - replay_position)
+
+                if moves_made > 27000 and count_32ks(board) == 2:
+                    board, current_score = self._apply_special_32k_rule(board, replay_move, current_score, mover)
+
+                board, new_score = mover.s_move_board(board, replay_move)
+                board = np.uint64(board)
+                current_score += new_score
+
+            # 位棋盘插入方块
+            board |= np.uint64(replay_tile) << np.uint64(replay_position << 2)
+            moves_made += 1
+
+            if moves_made >= 3:
+                record[moves_made - 3] = (board, current_score, 0)
+
+    def _decode_old_format(self, replay_text: str):
+        """老版逻辑"""
+        if "2x4" in replay_text[:12]:
+            board, total_space, header = np.uint64(0xffff00000000ffff), 11, 10
+            mover = self.vbm
+            self.variant = "2x4"
+        elif "3x3" in replay_text[:12]:
+            board, total_space, header = np.uint64(0x000f000f000fffff), 15, 10
+            mover = self.vbm
+            self.variant = "3x3"
+        elif "3x4" in replay_text[:12]:
+            board, total_space, header = np.uint64(0x00000000000fffff), 15, 10
+            mover = self.vbm
+            self.variant = "3x4"
+        else:
+            board, total_space, header = np.uint64(0), 15, 7
+            mover = self.bm
+            self.variant = "4x4"
+
+        replay_text = replay_text[header:]
+        self.record_list: np.typing.NDArray = np.empty(len(replay_text) - 2, dtype='uint64,uint32,uint8,uint8,uint8')
+        record = np.empty(len(replay_text) - 2, dtype='uint64,uint32,uint8')
+
+        move_map = [3, 2, 4, 1]
+        moves_made = 0
+        current_score = 0
+
+        for i in replay_text:
+            try:
+                index_i = PNG_MAP_DICT[i]
+            except KeyError:
+                logger.warning(f"Character '{i}' not found in png_map_dict.")
+                return
+
+            replay_tile = ((index_i >> 4) & 1) + 1
+            replay_move = move_map[index_i >> 5]
+            replay_position = total_space - ((index_i & 3) << 2) - ((index_i & 15) >> 2)
+
+            if moves_made >= 2:
+                self.record_list[moves_made - 2] = (board, current_score, replay_move, replay_tile,
+                                                    15 - replay_position)
+
+                if moves_made > 27000 and count_32ks(board) == 2:
+                    board, current_score = self._apply_special_32k_rule(board, replay_move, current_score, mover)
+
+                board, new_score = mover.s_move_board(board, replay_move)
+                board = np.uint64(board)
+                current_score += new_score
+
+            board |= np.uint64(replay_tile) << np.uint64(replay_position << 2)
+            moves_made += 1
+
+            if moves_made >= 3:
+                record[moves_made - 3] = (board, current_score, 0)
 
 
 class Analyzer(QObject):
@@ -66,9 +281,9 @@ class Analyzer(QObject):
         self.book_reader.dispatch(bookfile_path_list, pattern, target)
 
         self.filepath = file_path
-        replay_text = self.read_replay()
-        self.record_list: np.typing.NDArray = np.empty(0, dtype='uint64,uint8,uint8,uint8')
-        self.decode_replay(replay_text)
+        decoder = ReplayDecoder(self.filepath, self.bm, self.vbm)
+        decoder.decode()
+        self.record_list = decoder.record_list
 
         self.target_path = target_path
 
@@ -93,107 +308,6 @@ class Analyzer(QObject):
         self.rec_step_count = 0
         self.log_difficulty = 0.0  # 使用对数累加
         self.prev_expected_success_rate = None
-
-    def read_replay(self):
-        # 以二进制模式读取整个文件
-        with open(self.filepath, 'rb') as f:
-            raw_data = f.read()
-        replay_text = ''
-        # 常见编码列表
-        common_encodings = ['utf-8', 'gb18030', 'big5', 'shift_jis', 'euc-kr', 'utf-16', 'utf-16le', 'utf-16be']
-
-        # 先检查BOM
-        if raw_data.startswith(b'\xff\xfe'):
-            encoding = 'utf-16le'
-            replay_text = raw_data.decode(encoding)
-        elif raw_data.startswith(b'\xfe\xff'):
-            encoding = 'utf-16be'
-            replay_text = raw_data.decode(encoding)
-        elif raw_data.startswith(b'\xef\xbb\xbf'):
-            encoding = 'utf-8-sig'
-            replay_text = raw_data.decode(encoding)
-        else:
-            encoding = None
-            for enc in common_encodings:
-                try:
-                    replay_text = raw_data.decode(enc)
-                    encoding = enc
-                    break
-                except UnicodeDecodeError:
-                    continue
-
-        if encoding is None:
-            # 如果都不行，则用latin-1（总是成功）
-            encoding = 'latin-1'
-            replay_text = raw_data.decode(encoding)
-
-        return replay_text
-
-    def decode_replay(self, replay_text: str):
-        if "2x4" in replay_text[:12]:
-            board, total_space, header = np.uint64(0xffff00000000ffff), 11, 10
-            mover = self.vbm
-            self.variant = "2x4"
-        elif "3x3" in replay_text[:12]:
-            board, total_space, header = np.uint64(0x000f000f000fffff), 15, 10
-            mover = self.vbm
-            self.variant = "3x3"
-        elif "3x4" in replay_text[:12]:
-            board, total_space, header = np.uint64(0x00000000000fffff), 15, 10
-            mover = self.vbm
-            self.variant = "3x4"
-        else:
-            board, total_space, header = np.uint64(0), 15, 7
-            mover = self.bm
-            self.variant = "4x4"
-
-
-        replay_text = replay_text[header:]
-        self.record_list: np.typing.NDArray = np.empty(len(replay_text) - 2, dtype='uint64,uint32,uint8,uint8,uint8')
-
-        record = np.empty(len(replay_text) - 2, dtype='uint64,uint32,uint8')
-
-        move_map = [3, 2, 4, 1]
-        moves_made = 0
-        current_score = 0
-
-        for i in replay_text:
-            try:
-                index_i = png_map_dict[i]
-            except KeyError:
-                logger.warning(f"Character '{i}' not found in png_map_dict.")
-                return
-
-            replay_tile = ((index_i >> 4) & 1) + 1
-            replay_move = move_map[index_i >> 5]
-            replay_position = total_space - ((index_i & 3) << 2) - ((index_i & 15) >> 2)
-
-            if moves_made >= 2:
-                self.record_list[moves_made - 2] = (board, current_score, replay_move, replay_tile, 15 - replay_position)
-
-                if moves_made > 27000 and count_32ks(board) == 2:
-                    board_decoded = mover.decode_board(board)
-                    positions = np.where(board_decoded == 32768)
-                    first_position = (positions[0][0], positions[1][0])
-                    second_position = (positions[0][1], positions[1][1])
-
-                    if (positions[0][0] == positions[0][1] and abs(positions[1][0] - positions[1][1]) == 1 and
-                        replay_move in (1, 2)) or (positions[1][0] == positions[1][1] and
-                        abs(positions[0][0] - positions[0][1]) == 1 and replay_move in (3, 4)):
-                        board_decoded[first_position] = 16384
-                        board_decoded[second_position] = 16384
-                        board = np.uint64(mover.encode_board(board_decoded))
-                        current_score += 32768
-
-                board, new_score = mover.s_move_board(board, replay_move)
-                board = np.uint64(board)
-                current_score += new_score
-
-            board |= np.uint64(replay_tile) << np.uint64(replay_position << 2)
-            moves_made += 1
-
-            record[moves_made - 3] = (board, current_score, 0)
-        # record.tofile(fr'C:\Users\Administrator\Desktop\record\0')
 
     def clear_analysis(self):
         self.text_list = []
@@ -578,9 +692,9 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
         # 打开文件或文件夹选择窗口
         filepaths, _ = QtWidgets.QFileDialog.getOpenFileNames(
             self,
-            self.tr("Select a .txt file or folder"),
+            self.tr("Select .txt or .vrs files"),
             "",
-            "Text Files (*.txt);;VRS Files (*.vrs);;All Files (*)",
+            "Supported Files (*.txt *.vrs);;Text Files (*.txt);;VRS Files (*.vrs);;All Files (*)",
             options=options | QtWidgets.QFileDialog.DontResolveSymlinks
         )
         if filepaths:

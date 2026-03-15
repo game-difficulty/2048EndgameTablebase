@@ -749,4 +749,3 @@ if __name__ == "__main__":
     window.reset_record(r"C:\Users\Administrator\Desktop\L3_512_0_20250702220058_0.2884_rec.txt", 'L3_512_0')
     window.show()
     sys.exit(app.exec_())
-

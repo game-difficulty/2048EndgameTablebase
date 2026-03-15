@@ -8,6 +8,11 @@ from BoardMover import gen_new_num, decode_board, encode_board, s_move_board
 
 from ai_and_sort import ai_core
 
+# todo L3-512 final128换向
+TIME_RATIO = 1.5
+START_POS = np.uint64(0x00111123169b28cd)
+MAX_STEP = 8192
+
 
 class AItest:
     def __init__(self, path):
@@ -18,7 +23,7 @@ class AItest:
         self.path = path
         self.endgame_65k = 0
         self.step = 0
-        self.ai_logic.time_limit_ratio = 1.25
+        self.ai_logic.time_limit_ratio = TIME_RATIO
 
     def ai_step(self, counts):
         # 将计算完全委托给 ai_logic
@@ -27,7 +32,7 @@ class AItest:
 
     @staticmethod
     def new_game():
-        board_encoded = np.uint64(0x0011212426ac17bd)  # np.uint64(gen_new_num(gen_new_num(np.uint64(0))[0])[0])
+        board_encoded = START_POS if START_POS else np.uint64(gen_new_num(gen_new_num(np.uint64(0))[0])[0])
         board = decode_board(board_encoded)
         ai_player = ai_core.AIPlayer(board_encoded)
         ai_player.max_threads = 4
@@ -69,7 +74,7 @@ class AItest:
     def play(self):
         while not self.died:
             self.step += 1
-            if self.step > 8192:
+            if self.step > MAX_STEP:
                 self.died = True
                 continue
             self.one_step()
@@ -122,8 +127,9 @@ def run_test(index):
 
 def main():
     multiprocessing.freeze_support()
-    with multiprocessing.Pool(processes=4) as pool:
-        pool.map(run_test, range(0, 400), chunksize=1)
+    cpu_count = multiprocessing.cpu_count()
+    with multiprocessing.Pool(processes=cpu_count//8) as pool:
+        pool.map(run_test, range(0, 360), chunksize=1)
 
 
 if __name__ == "__main__":
