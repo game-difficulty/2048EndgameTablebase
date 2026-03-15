@@ -754,12 +754,16 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
     def on_analyze_finished(self):
         self.analyze_bt.setText(self.tr('Analyze'))
         self.analyze_bt.setEnabled(True)
-        self.analyze_manager.analyze_threads = []
+
+        for thread in self.analyze_manager.analyze_threads:
+            thread.wait()
+            thread.deleteLater()
+
+        # 安全清理完毕后再清空 Python 列表
+        self.analyze_manager.analyze_threads.clear()
 
 
 class AnalyzeThread(QtCore.QThread):
-    finished = QtCore.pyqtSignal()
-
     def __init__(self, file_path: str, pattern: str, target: int, full_pattern: str, target_path: str):
         super().__init__()
         self.pattern = pattern
@@ -771,10 +775,9 @@ class AnalyzeThread(QtCore.QThread):
     def run(self):
         anlz = Analyzer(self.file_path, self.pattern, self.target, self.ptn, self.target_path)
         anlz.generate_reports()
-        self.finished.emit()
 
 
-class BatchAnalyzeManager(QtCore.QThread):
+class BatchAnalyzeManager(QtCore.QObject):
     def __init__(self, parent:AnalyzeWindow):
         super().__init__()
         self.parent = parent
