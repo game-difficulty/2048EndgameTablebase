@@ -5,10 +5,12 @@
 #include <array>
 
 // 引入两个残局表的数据源
-#include "egtb_data_512.h"   // 512 的表
-#include "egtb_data_256.h"   // 256 的表
+#include "egtb_data_512.h" 
+#include "egtb_data_256.h" 
+#include "egtb_data_1256.h" 
 
 extern std::tuple<uint64_t, uint32_t> s_move_board(uint64_t board, int direction);
+extern uint64_t canonical_diagonal(uint64_t board);
 
 namespace {
     const uint64_t BIT_OFFSETS[10] = {12, 28, 32, 36, 40, 44, 48, 52, 56, 60};
@@ -27,7 +29,6 @@ namespace {
         uint64_t compressed_val = 0;
         for (int i = 0; i < 10; ++i) {
             uint64_t digit = (board >> BIT_OFFSETS[i]) & 0xF;
-            if (digit > 8) return 0;
             compressed_val += digit * POWERS_OF_9[i];
         }
         return static_cast<uint32_t>(compressed_val);
@@ -45,7 +46,8 @@ namespace {
     // 新增参数: table_type
     inline int32_t query_perfect_hash(uint32_t b, int layer, int table_type) {
         if (table_type == 512 && (layer < 0 || layer >= 248)) return -1;
-        if (table_type == 256 && (layer < 0 || layer >= 60)) return -1;
+        if (table_type == 256 && (layer < 0 || layer >= 72)) return -1;
+        if (table_type == 1256 && (layer < 0 || layer >= 72)) return -1;
 
         // 声明指向底层数组的指针
         uint32_t B, L;
@@ -70,6 +72,14 @@ namespace {
             sigs = EGTB256_SIGS[layer];
             rates = EGTB256_RATES[layer];
         } 
+        else if (table_type == 1256) {
+            B = EGTB1256_B[layer];
+            L = EGTB1256_L[layer];
+            if (B == 0 || L == 0) return -1;
+            seeds = EGTB1256_SEEDS[layer];
+            sigs = EGTB1256_SIGS[layer];
+            rates = EGTB1256_RATES[layer];
+        } 
         else {
             return -1; // 不支持的表类型
         }
@@ -91,14 +101,25 @@ namespace {
 std::array<float, 4> find_best_egtb_move(uint64_t target_board, int table_type) {
     // 1. 栈上分配，零开销初始化
     std::array<float, 4> rates = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    // 特判
+    if (target_board == 0x012412567fff8fffULL) {
+        rates[0] = 0.9111f;
+        return rates;
+    }
     
     for (int d = 1; d <= 4; ++d) {
         auto [post_board, score] = s_move_board(target_board, d);
         
         if (post_board == target_board) continue;
         
-        int board_sum = get_board_sum(post_board) - 32768 * 6;
-        int layer = (board_sum - 8) / 2;
+        int board_sum = get_board_sum(post_board) % 32768;
+        int initial_sum;
+        if (table_type == 1256) initial_sum = 18;
+        else initial_sum = 8;
+        int layer = (board_sum - initial_sum) / 2;
+
+        if (table_type == 1256) post_board = canonical_diagonal(post_board);
         
         uint32_t compressed_b = compress_board(post_board);
         if (compressed_b == 0) continue;
@@ -113,6 +134,8 @@ std::array<float, 4> find_best_egtb_move(uint64_t target_board, int table_type) 
                 decoded_rate = (static_cast<float>(rate_uint16) / 65535.0f) * (0.96f - 0.4f) + 0.4f;
             } else if (table_type == 256) {
                 decoded_rate = (static_cast<float>(rate_uint16) / 65535.0f) * (0.99999f - 0.75f) + 0.75f;
+            } else if (table_type == 1256) {
+                decoded_rate = (static_cast<float>(rate_uint16) / 65535.0f) * (0.28f - 0.05f) + 0.05f;
             }
             rates[d - 1] = decoded_rate;
         }

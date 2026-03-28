@@ -11,7 +11,6 @@
 #include <array>
 #include <memory>
 #include <cstdlib>
-#include <cstring>
 
 // #include <iostream>
 // #include <chrono>
@@ -83,16 +82,17 @@ int32_t diffs_evaluation_func(const int32_t* line_masked) {
 
     // t 计算
     int32_t score_t;
-    if (std::min(line_masked[0], line_masked[3]) < 32) {
+    int32_t min_03 = std::min(line_masked[0], line_masked[3]);
+    if (min_03 < 32) {
         score_t = -16384;
     } else if ((line_masked[0] < line_masked[1] && line_masked[0] < 400) || 
                (line_masked[3] < line_masked[2] && line_masked[3] < 400)) {
         score_t = -(std::max(line_masked[1], line_masked[2]) * 10);
     } else {
         score_t = (int32_t)((line_masked[0] * 1.8 + line_masked[3] * 1.8) + 
-                  std::max(line_masked[1], line_masked[2]) * 1.5 + std::min(200, std::min(line_masked[1], line_masked[2])) * 2.5);
+                  std::max(line_masked[1], line_masked[2]) * 1.5 + std::min(160, std::min(line_masked[1], line_masked[2])) * 2.5);
         if (std::min(line_masked[1], line_masked[2]) < 8) {
-            score_t -= 80;
+            score_t -= 60;
         }
     }
 
@@ -140,6 +140,18 @@ int32_t large_tile_count(uint8_t start, uint8_t counts[]) {
         sum += counts[i];
     }
     return sum;
+}
+
+bool is_5tiler(uint64_t board_sum, const uint8_t counts[]) {
+    bool sum_range_cond = (board_sum > 62000 && board_sum < 65520);
+    int sum_11_up = 0;
+    for (int i = 11; i < 16; ++i) {
+        sum_11_up += counts[i];
+    }
+    bool counts_cond = (sum_11_up == 4 && counts[10] == 0);
+    uint64_t mod_val = board_sum % 1024;
+    bool mod_cond = (mod_val < 24 || mod_val > 996);
+    return (sum_range_cond || counts_cond) && mod_cond;
 }
 
 uint64_t get_23_mask(uint64_t board) {
@@ -224,10 +236,9 @@ void update_specific_scores(uint64_t board, bool flag1, bool flag2, bool flag3, 
     static int32_t dynamic_scores_cache[5]; // 存储第二组的基础分
     static bool initialized = false;
 
-    // 数据定义设为 static const，避免每次调用都在栈上重建数组
     static const Target base_targets[] = {
-        {0x78ff, 0xff87, 150}, {0x7fff, 0xfff7, 300},
-        {0x8fff, 0xfff8, 320}, 
+        {0x78ff, 0xff87, 300}, {0x7fff, 0xfff7, 320},
+        {0x8fff, 0xfff8, 360}, 
     };
 
     static const DynamicTarget dynamic_targets[] = {
@@ -281,6 +292,27 @@ void update_specific_scores(uint64_t board, bool flag1, bool flag2, bool flag3, 
     }
 }
 
+/**
+ * 检查编码棋盘中 0xF (32768) 的数量。
+ * 如果 2 个，则全部替换为 0xE (16384)。
+ */
+uint64_t resolve_32768_doubles(uint64_t board) {
+    uint64_t m1 = board & (board >> 1);
+    uint64_t m2 = m1 & (m1 >> 2);
+    uint64_t f_mask = m2 & 0x1111111111111111ULL;
+    if (__builtin_popcountll(f_mask) == 2) {
+        return board & ~f_mask;
+    }
+    
+    return board;
+}
+
+uint32_t get_max_layer(double spawnrate, double depth) {
+    double v = std::sqrt(depth * spawnrate * (1.0 - spawnrate));
+    double ceil_9999 = std::ceil(depth * (1.0 + spawnrate) + 3.72 * v);
+    return static_cast<uint32_t>(std::min(depth * 2.0, ceil_9999));
+}
+
 // ------------------------------------------------------------------
 // Cache 类
 // ------------------------------------------------------------------
@@ -289,74 +321,82 @@ class Cache {
 private:
     std::atomic<bool> dummy_false{false};
     int32_t dummy_dead_score = 131072;
-    
-    // 次级哈希生成
-    inline uint32_t get_signature(uint64_t board) const {
-        return static_cast<uint32_t>(board + (board >> 32));
-    }
 
-    // 定义 64 字节对齐的 Bucket，完美契合 L1/L2/L3 Cache Line
-    // 使用 memory_order_relaxed 的原子操作，实现极速无锁并发
     struct alignas(64) CacheBucket {
-        std::atomic<uint64_t> entries[8];
-
-        CacheBucket() {
-            for (int i = 0; i < 8; ++i) {
-                entries[i].store(0, std::memory_order_relaxed);
-            }
-        }
+        uint64_t entries[8];
     };
 
-    // Bucket 总数，原 length 为 2097151 (总计 16MB)
-    // 现在我们将容量保持在 16MB 左右，转换为 Bucket 数量
-    // 16MB / 64B = 262144 个桶 (这是 2 的幂次方，便于位运算)
-    static constexpr uint64_t num_buckets = 262144;
-    static constexpr uint64_t bucket_mask = num_buckets - 1;
+    // 预设最大容量
+    static constexpr uint64_t MAX_BUCKETS = 524288; 
+    
+    // 当前活跃的规格
+    uint64_t current_num_buckets = 524288;
+    uint64_t current_mask = current_num_buckets - 1;
 
     std::unique_ptr<CacheBucket[]> table;
+
+    inline uint32_t get_signature(uint64_t board) const {
+        return static_cast<uint32_t>(((board ^ (board >> 31)) * 0x1a7daf1bULL) + board) >> 21;
+    }
 
 public:
     std::atomic<bool>* abort_ptr = &dummy_false; 
     int32_t* dead_score_ptr = &dummy_dead_score;
 
     Cache() {
-        // C++17 的对齐内存分配，确保整个大数组在内存中的物理地址 64 字节对齐
 #ifdef _WIN32
-        table.reset(new (std::align_val_t(64)) CacheBucket[num_buckets]);
+        table.reset(new (std::align_val_t(64)) CacheBucket[MAX_BUCKETS]);
 #else
-        void* ptr = std::aligned_alloc(64, num_buckets * sizeof(CacheBucket));
-        table.reset(new (ptr) CacheBucket[num_buckets]);
+        void* ptr = std::aligned_alloc(64, MAX_BUCKETS * sizeof(CacheBucket));
+        table.reset(reinterpret_cast<CacheBucket*>(ptr));
 #endif
+        // 初始状态全清零
+        reset(524288);
     }
 
-    void clear() {
-        for (uint64_t i = 0; i < num_buckets; ++i) {
-            std::memset(&table[i], 0, sizeof(CacheBucket));
+    // 动态重设大小并清空
+    void reset(uint64_t new_num_buckets) {
+        current_num_buckets = new_num_buckets;
+        current_mask = new_num_buckets - 1;
+
+        uint64_t* ptr = reinterpret_cast<uint64_t*>(table.get());
+        const size_t elements_to_clear = current_num_buckets * 8;
+
+        for (size_t i = 0; i < elements_to_clear; ++i) {
+            ptr[i] = 0;
         }
     }
 
-    // 主哈希：只决定落在哪个 Bucket (返回 0 ~ bucket_mask)
-    inline uint64_t hash(uint64_t board) const {
-        uint64_t hashed = (((board ^ (board >> 27)) * 0x1A85EC53ULL) + board) >> 23;
-        return hashed & bucket_mask;
+    void clear() {
+        reset(current_num_buckets);
     }
 
-    inline bool lookup(uint64_t bucket_idx, uint64_t board, int32_t depth, int32_t& out_score) {
+    inline uint64_t hash(uint64_t board) const {
+        uint64_t hashed = (((board ^ (board >> 27)) * 0x1A85EC53ULL) + board) >> 23;
+        return hashed & current_mask;
+    }
+
+    inline bool lookup(uint64_t bucket_idx, uint64_t board, int32_t depth, int32_t& out_score, uint64_t& out_subtree_nodes) {
         uint32_t current_sig = get_signature(board);
         CacheBucket& bucket = table[bucket_idx];
 
-        // 此时这 64 字节已经整体被吸入 L1 Cache
-        // 这里的 8 次循环是在 L1 中完成的，耗时几乎为 0
         for (int i = 0; i < 8; ++i) {
-            uint64_t entry = bucket.entries[i].load(std::memory_order_relaxed);
+            uint64_t entry = bucket.entries[i];
             if (entry == 0) continue;
 
             uint32_t cached_sig = static_cast<uint32_t>(entry >> 32);
             if (cached_sig == current_sig) {
-                int32_t cached_depth = static_cast<int32_t>(entry & 0xFF);
+                // 提取 6-bit Depth (位 6-11)
+                int32_t cached_depth = static_cast<int32_t>((entry >> 6) & 0x3F);
+                
                 if (cached_depth >= depth) {
-                    uint32_t unsigned_score = (entry >> 8) & 0xFFFFFF;
-                    out_score = static_cast<int32_t>(unsigned_score) - 8388608;
+                    // 提取 20-bit Score (位 12-31)，减去偏移量 524288 还原负数
+                    uint32_t unsigned_score = (entry >> 12) & 0xFFFFF;
+                    out_score = static_cast<int32_t>(unsigned_score) - 524288;
+                    
+                    // 提取 6-bit Effort (位 0-5)
+                    uint8_t out_effort = static_cast<uint8_t>(entry & 0x3F);
+                    out_subtree_nodes = 1ULL << out_effort;
                     return true;
                 }
             }
@@ -364,55 +404,63 @@ public:
         return false;
     }
 
-    inline void update(uint64_t bucket_idx, uint64_t board, int32_t depth, int32_t score) {
+    inline void update(uint64_t bucket_idx, uint64_t board, int32_t depth, int32_t score, uint64_t subtree_nodes) {
         uint32_t current_sig = get_signature(board);
         CacheBucket& bucket = table[bucket_idx];
 
-        // 死局或接近死局的得分比较可靠，强制标记为极大深度
-        if (score <= -(*dead_score_ptr) + 32) depth = 63; 
+        if (score <= -(*dead_score_ptr) + 32) {
+            depth = 63; 
+        }
         
-        uint8_t pack_depth = static_cast<uint8_t>(std::max(0, std::min(255, depth)));
-        uint32_t pack_score = static_cast<uint32_t>(score + 8388608) & 0xFFFFFF;
+        uint8_t pack_depth = static_cast<uint8_t>(depth);
+        uint8_t pack_effort = static_cast<uint8_t>(63 - __builtin_clzll(subtree_nodes));
+        
+        // 20-bit 能够表示 -524288 到 +524287
+        uint32_t pack_score = static_cast<uint32_t>(score + 524288) & 0xFFFFF;
 
+        // 执行 64-bit 拼装
         uint64_t new_entry = (static_cast<uint64_t>(current_sig) << 32) | 
-                             (static_cast<uint64_t>(pack_score) << 8) | 
-                             static_cast<uint64_t>(pack_depth);
+                             (static_cast<uint64_t>(pack_score) << 12) | 
+                             (static_cast<uint64_t>(pack_depth) << 6) | 
+                             static_cast<uint64_t>(pack_effort);
 
-        int min_depth_idx = 0;
-        int32_t min_depth_val = 1000; // 初始设为极大值
+        int min_effort_idx = 0;
+        uint8_t min_effort_val = 255; // 初始设为极大值
 
         // --- 核心逻辑 ---
         for (int i = 0; i < 8; ++i) {
-            uint64_t entry = bucket.entries[i].load(std::memory_order_relaxed);
+            uint64_t entry = bucket.entries[i];
             
-            // 1. 发现空槽直接占用
+            // 1. 发现空槽 (记录为绝对的最低优先权，等待被占用)
             if (entry == 0) {
-                bucket.entries[i].store(new_entry, std::memory_order_relaxed);
-                return;
+                min_effort_val = 0;
+                min_effort_idx = i;
+                continue; // 遇到空槽继续看，防止并发情况下同一个签名被存两份
             }
 
             uint32_t cached_sig = static_cast<uint32_t>(entry >> 32);
-            int32_t cached_depth = static_cast<int32_t>(entry & 0xFF);
+            int32_t cached_depth = static_cast<int32_t>((entry >> 6) & 0x3F);
+            uint8_t cached_effort = static_cast<uint8_t>(entry & 0x3F);
 
-            // 2. 签名命中：同一个局面，更新或保持，不能让它出现在两个槽位
+            // 2. 签名命中：同一个局面，更新或保持
             if (cached_sig == current_sig) {
-                // 如果当前搜索深度更深，进行覆盖
+                // 如果当前搜索深度更深
                 if (depth > cached_depth) {
-                    bucket.entries[i].store(new_entry, std::memory_order_relaxed);
+                    bucket.entries[i] = new_entry;
                 }
                 return;
             }
 
-            // 3. 统计该桶内最弱（深度最小）的槽位
-            if (cached_depth < min_depth_val) {
-                min_depth_val = cached_depth;
-                min_depth_idx = i;
+            // 3. 统计该桶内最弱（Effort 计算量最小）的槽位
+            if (cached_effort < min_effort_val) {
+                min_effort_val = cached_effort;
+                min_effort_idx = i;
             }
         }
 
-        // 4. 强制替换：运行到这里说明没有空槽且没有签名命中
-        // 始终写入最弱槽位以保证时间局部性
-        bucket.entries[min_depth_idx].store(new_entry, std::memory_order_relaxed);
+        // 4. 运行到这里说明没有签名命中
+        // 始终挤占计算量最小的槽位
+        bucket.entries[min_effort_idx] = new_entry;
     }
 };
 
@@ -489,7 +537,97 @@ public:
     }
 
     inline int32_t check_corner(uint64_t board) const {
-        if (masked_count == 3) {
+        if (masked_count == 6) {
+            // 加 600 分的掩码
+            static constexpr uint64_t m6_600_[] = {
+                0xf000fff0ffULL,  0xff0fff000f000000ULL,  
+                0xff0fff0000000fULL,  0xf0000000fff0ff00ULL,  
+                0xf0ff00ff00f00000ULL,  0xf00000fff00ffULL,  
+                0xff00fff00000f000ULL,  0xf00ff00ff0fULL
+            };
+            for (uint64_t m : m6_600_) {
+                if ((board & m) == m) return -600;
+            }
+
+            // 加 500 分的掩码
+            static constexpr uint64_t m6_500[] = {
+                0xf0000000ff0fff00ULL,  0xfff0ff0000000fULL,  
+                0xf0000000fff0ffULL,  0xff0fff0000000f00ULL,  
+                0xff00ff0f0000f000ULL,  0xf0ff00ff000000f0ULL,  
+                0xf000000ff00ff0fULL,  0xf0000f0ff00ffULL
+            };
+            for (uint64_t m : m6_500) {
+                if ((board & m) == m) return -500;
+            }
+
+            // 加 1600 分的掩码
+            static constexpr uint64_t m6_1600[] = {
+                0xf00000fff0ffULL,  0xff0fff00000f0000ULL,  
+                0xff00ff00000f0fULL,  0xf0f00000ff00ff00ULL,  
+                0xf0ff00fff0000000ULL,  0xf0f000000ff00ffULL,  
+                0xff00ff000000f0f0ULL,  0xfff00ff0fULL
+            };
+            for (uint64_t m : m6_1600) {
+                if ((board & m) == m) return -1600;
+            }
+
+            // 加 2400 分的掩码
+            static constexpr uint64_t m6_2400[] = {
+                0xff0fff0fULL,  0xf0fff0ff00000000ULL,  
+                0xff000000ff00ffULL,  0xff00ff000000ff00ULL,  
+                0xff0fff0f00000000ULL,  0xff00ff000000ffULL,  
+                0xff000000ff00ff00ULL,  0xf0fff0ffULL
+            };
+            for (uint64_t m : m6_2400) {
+                if ((board & m) == m) return -2400;
+            }
+
+            // 减 600 分的掩码
+            static constexpr uint64_t m6_600[] = {
+                0xffff0ffULL,  0xff0ffff000000000ULL,  
+                0xff00ff00f0000fULL,  0xf0000f00ff00ff00ULL,  
+                0xf0ff0fff00000000ULL,  0xf00f000ff00ffULL,  
+                0xff00ff000f00f000ULL,  0xfff0ff0fULL
+            };
+            for (uint64_t m : m6_600) {
+                if ((board & m) == m) return 600;
+            }
+        }
+        if (masked_count == 4) {
+            // 减 3000 分的掩码
+            static constexpr uint64_t m4_3000[] = {
+                0xff00f00fULL, 0xff00f00000000fULL, 
+                0xfff00fULL, 0xff000f000000f000ULL, 
+                0xf00000000f00ff00ULL, 0xf00f00ff00000000ULL, 
+                0xf00fff0000000000ULL, 0xf000000f000ffULL
+            };
+            for (uint64_t m : m4_3000) {
+                if ((board & m) == m) return 3000;
+            }
+
+            // 减 800 分的掩码
+            static constexpr uint64_t m4_800[] = {
+                0xf000f000f00fULL, 0xf000ff00fULL, 
+                0xfff000000000f000ULL, 0xf00000000000fff0ULL, 
+                0xf00f000f000f0000ULL, 0xf00ff000f0000000ULL, 
+                0xf000000000fffULL, 0xfff00000000000fULL
+            };
+            for (uint64_t m : m4_800) {
+                if ((board & m) == m) return 800;
+            }
+
+            // 减 1600 分的掩码
+            static constexpr uint64_t m4_1600[] = {
+                0xff000000f000f000ULL, 0xf000f000000ffULL, 
+                0xf000f0ffULL, 0xff0f000f00000000ULL, 
+                0xf000f0000000ff00ULL, 0xf0fff00000000000ULL, 
+                0xfff0fULL, 0xff0000000f000fULL, 
+            };
+            for (uint64_t m : m4_1600) {
+                if ((board & m) == m) return 1600;
+            }
+        }
+        if (masked_count == 3 || masked_count == 4) {
             // 减 3000 分的掩码
             static constexpr uint64_t m3_3000[] = {
                 0xf00000000f00fULL, 0xf00f00000000000fULL, 
@@ -509,7 +647,8 @@ public:
             for (uint64_t m : m3_2000) {
                 if ((board & m) == m) return 2000;
             }
-
+        } 
+        if (masked_count == 3) {
             // 减 1000 分的掩码
             static constexpr uint64_t m3_1000[] = {
                 0xff00fULL, 0xf000f00fULL, 
@@ -520,45 +659,12 @@ public:
             for (uint64_t m : m3_1000) {
                 if ((board & m) == m) return 1000;
             }
-            
-        } else if (masked_count == 4) {
-            // 减 3000 分的掩码
-            static constexpr uint64_t m4_3000[] = {
-                0xff00f00fULL, 0xff00f00000000fULL, 
-                0xfff00fULL, 0xff000f000000f000ULL, 
-                0xf00000000f00ff00ULL, 0xf00f00ff00000000ULL, 
-                0xf00fff0000000000ULL, 0xf000000f000ffULL
-            };
-            for (uint64_t m : m4_3000) {
-                if ((board & m) == m) return 3000;
-            }
-
-            // 减 1200 分的掩码
-            static constexpr uint64_t m4_1200[] = {
-                0xf000f000f00fULL, 0xf000ff00fULL, 
-                0xfff000000000f000ULL, 0xf00000000000fff0ULL, 
-                0xf00f000f000f0000ULL, 0xf00ff000f0000000ULL, 
-                0xf000000000fffULL, 0xfff00000000000fULL
-            };
-            for (uint64_t m : m4_1200) {
-                if ((board & m) == m) return 1200;
-            }
-
-            // 减 600 分的掩码
-            static constexpr uint64_t m4_600[] = {
-                0xf000f0ffULL, 0xff000000f000f000ULL, 
-                0xff0f000f00000000ULL, 0xf000f000000ffULL
-            };
-            for (uint64_t m : m4_600) {
-                if ((board & m) == m) return 600;
-            }
-        }
+        } 
         
         return 0; // 没有命中任何糟糕的位置
     }
 
     int32_t evaluate(uint64_t s) {
-        // node++;
         uint64_t s_reverse = reverse_board(s);
         int32_t sum_x1 = 0, sum_x2 = 0, sum_y1 = 0, sum_y2 = 0;
 
@@ -606,75 +712,92 @@ public:
         if (s < 200) return std::max(0, (s >> 2) - 10);
         if (s < 500) return (s >> 1) - 12;
         if (s < 1000) return (s >> 1) + 144;
-        return static_cast<int32_t>(score << 1);
+        if (s < 2000) return (s + 600);
+        return 3000;
     }
 
-    inline int32_t search_branch(uint64_t t, int32_t depth, int32_t sum_increment) {
-        // node++;
+    inline int32_t search_branch(uint64_t t, int32_t depth, int32_t sum_increment, uint64_t& out_nodes) {
+        out_nodes = 1; // 当前节点算作 1 个基础计算量
         // 剪枝
         if (depth < max_d - 2) {
             int32_t current_eval = evaluate(t);
+            if (sum_increment > max_layer) return current_eval;
+
             bool mask_unmoved = (t & fixed_mask) == fixed_mask;
             if (!mask_unmoved) {
-                return current_eval * 2 - (dead_score >> 1); 
-
+                return - (dead_score); 
             }
             if (current_eval < initial_eval_score - threshold) {
-                return current_eval * 2 - (dead_score); 
+                return - (dead_score); 
             }
+        }
+
+        // 提取空位掩码并计算数量
+        uint64_t x = t | (t >> 1);
+        x |= (x >> 2);
+        uint64_t empty_mask = (~x) & 0x1111111111111111ULL;
+        int empty_slots_count = __builtin_popcountll(empty_mask);
+
+        // 动态深度衰减
+        int32_t effective_depth = depth;
+        if (empty_slots_count > 5 && masked_count < 4) {
+            effective_depth = std::min(effective_depth, 3);
+        } else if (empty_slots_count > 4 && masked_count < 4) {
+            effective_depth = std::min(effective_depth, 4);
         }
 
         int32_t temp = 0;
         int32_t cached_val = 0;
-        
+        uint64_t cached_nodes = 0;
         uint64_t cache_idx = cache.hash(t);
-        if (!cache.lookup(cache_idx, t, depth, cached_val)) {
-            int empty_slots_count = 0;
-            int64_t local_temp = 0; 
 
-            uint64_t x = t | (t >> 1);
-            x |= (x >> 2);
-            uint64_t empty_mask = (~x) & 0x1111111111111111ULL;
+        if (!cache.lookup(cache_idx, t, effective_depth, cached_val, cached_nodes)) {
+            int64_t local_temp = 0; 
+            uint64_t child_nodes_total = 0;
 
             while (empty_mask != 0) {
-                empty_slots_count++;
-                
                 int bit_pos = __builtin_ctzll(empty_mask);
+                uint64_t nodes_4 = 0, nodes_2 = 0;
 
+                // 向下递归时使用 effective_depth - 1
                 uint64_t t4 = t | (2ULL << bit_pos);
-                int32_t score_4 = search_ai_player(t4, depth - 1, sum_increment + 2);
+                int32_t score_4 = search_ai_player(t4, effective_depth - 1, sum_increment + 2, nodes_4);
                 
                 uint64_t t2 = t | (1ULL << bit_pos);
-                int32_t score_2 = search_ai_player(t2, depth - 1, sum_increment + 1);
+                int32_t score_2 = search_ai_player(t2, effective_depth - 1, sum_increment + 1, nodes_2);
                 
+                child_nodes_total += (nodes_4 + nodes_2);
                 int64_t temp_t = (static_cast<int64_t>(score_2) * spawn_weight_2 + 
-                                  static_cast<int64_t>(score_4) * spawn_weight_4) >> 16;
+                                static_cast<int64_t>(score_4) * spawn_weight_4) >> 16;
                 
                 local_temp += temp_t;
                 empty_mask &= (empty_mask - 1);
             }
             
             temp = static_cast<int32_t>(local_temp / empty_slots_count);
+            out_nodes += child_nodes_total;
             
-            cache.update(cache_idx, t, depth, temp);
+            cache.update(cache_idx, t, effective_depth, temp, out_nodes);
 
         } else {
             temp = cached_val;
+            out_nodes += 1;
         }
 
         return (int32_t)temp;
     }
 
-    int32_t search_ai_player(uint64_t b, int32_t depth, int32_t sum_increment) {
+    int32_t search_ai_player(uint64_t b, int32_t depth, int32_t sum_increment, uint64_t& out_nodes) {
+        out_nodes = 1;
         if (stop_search.load(std::memory_order_relaxed)) return 0;
         if (depth <= 0) return search0(b);
-        if (sum_increment > max_layer) return search0(b);
 
         int32_t best = -dead_score;
 
         // 顶层和次顶层启用 Task 任务池并行模式
         if (depth >= max_d - 2) {
             int32_t scores[4] = {-dead_score, -dead_score, -dead_score, -dead_score};
+            uint64_t task_nodes[4] = {0, 0, 0, 0};
             auto moves = s_move_board_all(b);
 
             for (int i = 0; i < 4; ++i) {
@@ -683,9 +806,11 @@ public:
                     int32_t processed_score = process_score(moves[i].score);
                     
                     // 将分支封装为 Task 丢进全局任务池
-                    #pragma omp task shared(scores) firstprivate(i, t, processed_score, depth, sum_increment)
+                    #pragma omp task shared(scores, task_nodes) firstprivate(i, t, processed_score, depth, sum_increment)
                     {
-                        scores[i] = search_branch(t, depth, sum_increment) + processed_score + 1;
+                        uint64_t branch_nodes = 0;
+                        scores[i] = search_branch(t, depth, sum_increment, branch_nodes) + processed_score + 1;
+                        task_nodes[i] = branch_nodes;
                     }
                 }
             }
@@ -694,6 +819,7 @@ public:
 
             // 串行汇总逻辑
             for (int i = 0; i < 4; ++i) {
+                out_nodes += task_nodes[i];
                 if (scores[i] > best) {
                     best = scores[i];
 
@@ -704,6 +830,7 @@ public:
                 
                 if (depth == max_d) {
                     top_scores[i] = scores[i];
+                    node += task_nodes[i];
                 }
             }
         } else {
@@ -716,12 +843,15 @@ public:
                     uint32_t score = moves[i].score;
                     
                     int32_t current_depth = depth; // 防止修改外层 depth
-                    if (score > 250 && score < 5000) {
+                    if (score > 250 && score < 2000) {
                         int32_t min_depth = __builtin_clz(score) - 16;
                         current_depth = std::min(min_depth, std::max(current_depth, 2));
                     }
-                    
-                    int32_t temp = search_branch(t, current_depth, sum_increment) + process_score(score);
+
+                    uint64_t branch_nodes = 0;
+                    int32_t temp = search_branch(t, current_depth, sum_increment, branch_nodes) + process_score(moves[i].score);
+                    out_nodes += branch_nodes;
+
                     if (temp > best) best = temp;
                 }
             }
@@ -733,8 +863,15 @@ public:
     void start_search(int32_t depth = 3) {
         best_operation = 0;
         max_d = depth;
-        max_layer = (uint32_t)(depth * (1.15 + spawn_rate4 * 1.5) + 2.3);
-        cache.clear();
+        max_layer = (uint32_t)get_max_layer(spawn_rate4, depth);
+        
+        uint64_t num_buckets;
+        if (depth < 3) num_buckets = 4096;
+        else if (depth < 4) num_buckets = 16384;
+        else if (depth < 5) num_buckets = 65536;
+        else if (depth < 7) num_buckets = 262144;
+        else num_buckets = 524288;
+        cache.reset(num_buckets);
 
         initial_eval_score = evaluate(board);
 
@@ -746,16 +883,34 @@ public:
         uint64_t masked_board = apply_dynamic_mask();
         
         int32_t current_max_threads = max_threads;
-        if (depth < 6) {
-            current_max_threads = std::min(max_threads, 4);
+        if (depth < 5) {
+            current_max_threads = 1;
         }
         omp_set_num_threads(current_max_threads);
-        
+
         #pragma omp parallel
         {
             #pragma omp single
             {
-                search_ai_player(masked_board, max_d, 0);
+                uint64_t root_nodes = 0;
+                search_ai_player(masked_board, max_d, 0, root_nodes);
+            }
+        }
+
+        int32_t best_score = top_scores[best_operation - 1];
+        if (fixed_mask && ((best_operation > 0) && (best_score < std::min(-2000, -(dead_score >> 2)) || (
+            masked_count < 5 && best_score < (480 * masked_count) && board_sum % 512 < 160)))) {
+            fixed_mask = 0;
+            masked_count = 0;
+            threshold = std::max(threshold, 6000);
+            cache.clear();
+            #pragma omp parallel
+            {
+                #pragma omp single
+                {
+                    uint64_t root_nodes = 0;
+                    search_ai_player(board, max_d, 0, root_nodes);
+                }
             }
         }
     };
@@ -764,6 +919,7 @@ public:
         uint8_t counts[16] = {0};
         board_sum = 0;
         fixed_mask = 0;
+        uint32_t small_tiles_sum = 0;
         
         uint64_t current_board = board;
         
@@ -774,6 +930,7 @@ public:
             counts[tile]++;
             if (tile > 0) {
                 board_sum += (1 << tile); 
+                if (tile < 9) small_tiles_sum += (1 << tile);
             }
             temp >>= 4;
         }
@@ -802,19 +959,21 @@ public:
         if (large_tiles <= 4) threshold = (prune == 0) ? 8400 : 3200;
 
         if (count_gt_128 <= 4) {
-            dead_score = 524288;
-        } else if (count_gt_128 == 5) {
             dead_score = 262144;
+        } else if (board_sum % 1024 < 8 || board_sum % 1024 > 1008) {
+            dead_score = 131072;
+        } else if (count_gt_128 == 5) {
+            dead_score = 131072;
         } else if (count_gt_256 > 5 && distinct_gt_256) {
             if (count_gt_128 == 8 && (counts[7] == 1 || counts[6] >= 1)) {
                 dead_score = 4096;
             } else if (count_gt_256 >= 6 && 960 < board_sum % 1024){
-                dead_score = 65536;
+                dead_score = 32768;
             } else {
-                dead_score = 96000;
+                dead_score = 48000;
             }
         } else {
-            dead_score = 131072;
+            dead_score = 65536;
         }
         
         // 如果 > 256 的数字不互不相同，直接返回未掩码的 current_board
@@ -824,7 +983,7 @@ public:
         
         // 4. mask
         // 条件：(余数在40~512之间 且 不存在512) 或 (余数在512~1000之间)
-        bool condA_part1 = (rem >= 40 && rem <= 512 && counts[9] == 0);
+        bool condA_part1 = ((rem >= 48 || (rem > 12 && small_tiles_sum == rem)) && rem <= 512 && counts[9] == 0);
         bool condA_part2 = (rem >= 512 || rem < 6);
         
         if (condA_part1 || condA_part2) {
@@ -834,6 +993,9 @@ public:
             else {
                 current_board = mask(current_board, 9);
             }
+        }
+        else {
+            current_board = mask(current_board, 12);
         }
 
         // 5. 统计 0xF 的个数并更新 masked_count
@@ -869,22 +1031,24 @@ public:
         update_specific_scores(current_board, flag1, flag2, flag3, flag4);
 
         // 7. 计算固定大数掩码
-        if ((min_masked_tile == 12 && masked_count == 4) ||
+        if (masked_count >= 5 && counts[0] >= 3) {
+            fixed_mask = get_22_mask(current_board) | get_21_mask(current_board);
+        } else if ((min_masked_tile == 12 && masked_count == 4) ||
             (min_masked_tile == 11 && masked_count == 5) ||
             (min_masked_tile == 10 && masked_count == 6)
-        ) {
+        )  {
             fixed_mask = get_23_mask(current_board) | get_22_mask(current_board);
-        } else if (masked_count >= 5 && (large_tiles > 5 || (board_sum % 256 > 48 && board_sum % 256 < 234))) {
+        } else if (masked_count >= 5 && (large_tiles > 5 || (board_sum % 256 > 48 && board_sum % 256 < 224) || is_5tiler(board_sum, counts))) {
             fixed_mask = get_23_mask(current_board) | get_22_mask(current_board);
-        } else if (do_check || prune == 0 || ((board_sum % 256 > 246 || board_sum % 256 < 24) && large_tiles < 5
+        } else if (do_check || (prune == 0 && (large_tiles > 2 || large_tiles == 0)) || ((board_sum % 256 > 246 || board_sum % 256 < 24) && ((large_tiles < 5 && large_tiles > 2) || large_tiles == 0)
             ) || counts[7] > 1 || (counts[6] > 1 && counts[7] == 1)) {
-            fixed_mask = 0; // 不启用固定掩码
+            fixed_mask = 0;
         } else {
             if (masked_count >= 4) {
                 fixed_mask = get_22_mask(current_board) | get_21_mask(current_board);
-            } else if (masked_count == 3) {
+            } else if (masked_count == 3 && count_gt_512 == 3 && board_sum % 1024 > 24) {
                 fixed_mask = get_21_mask(current_board) | get_20_mask(current_board);
-            } else if (masked_count == 2) {
+            } else if (masked_count >= 2 && count_gt_512 == 2 && board_sum % 512 > 16) {
                 fixed_mask = get_20_mask(current_board);
             }
         }
@@ -923,7 +1087,6 @@ public:
         node = 0;
     }
 
-    // 🚀 优化 1：与 AI 引擎同步的极速 evaluate
     int32_t evaluate(uint64_t s) {
         node++;
         uint64_t s_reverse = reverse_board(s);
@@ -946,8 +1109,9 @@ public:
     }
 
     // 寻找让玩家得分最小的生成位置
-    int32_t search_evil_gen(uint64_t b, int32_t depth) {
+    int32_t search_evil_gen(uint64_t b, int32_t depth, uint64_t& out_nodes) {
         int32_t evil = dead_score; 
+        out_nodes = 1; // 当前节点算作 1 个计算量
 
         uint64_t x = b | (b >> 1);
         x |= (x >> 2);
@@ -969,13 +1133,25 @@ public:
                         uint32_t score = moves[d].score;
 
                         int32_t temp = 0;
+                        uint64_t child_nodes = 0; // 记录子树的真实计算量
                         
                         uint64_t cache_idx = cache.hash(t1);
-                        if (!cache.lookup(cache_idx, t1, depth, temp)) {
-                            temp = (depth > 1) ? search_evil_gen(t1, depth - 1) : evaluate(t1);
-                            cache.update(cache_idx, t1, depth, temp);
+                        
+                        if (!cache.lookup(cache_idx, t1, depth, temp, child_nodes)) {
+                            // 缓存未命中，需要真实推演
+                            if (depth > 1) {
+                                temp = search_evil_gen(t1, depth - 1, child_nodes);
+                            } else {
+                                temp = evaluate(t1);
+                                child_nodes = 1; // 静态评估算作 1 个计算量
+                            }
+                            // 将真实的深度和计算代价存入缓存
+                            cache.update(cache_idx, t1, depth, temp, child_nodes);
                         }
 
+                        // 将子树的计算量累加到当前层
+                        out_nodes += child_nodes;
+                        
                         best = std::max(best, temp + (int32_t)(score << 1));
                         
                         // Alpha-Beta 剪枝
@@ -1000,7 +1176,8 @@ public:
 
     int32_t dispatcher(uint64_t current_board) {
         node = 0;
-        return search_evil_gen(current_board, max_d);
+        uint64_t total_nodes = 0;
+        return search_evil_gen(current_board, max_d, total_nodes);
     }
 
     void start_search(int32_t depth = 4) {
@@ -1057,12 +1234,15 @@ extern std::array<float, 4> find_best_egtb_move(uint64_t target_board, int table
 NB_MODULE(ai_core, m) {
     m.def("find_best_egtb_move", &find_best_egtb_move, 
         nb::arg("board"), nb::arg("table_type"));
+
+    m.def("resolve_32768_doubles", &resolve_32768_doubles, nb::arg("board"));
           
     nb::class_<AIPlayer>(m, "AIPlayer")
         .def(nb::init<uint64_t>())
         .def("reset_board", &AIPlayer::reset_board, nb::arg("new_board"))
         .def("clear_cache", &AIPlayer::clear_cache)
         .def("update_spawn_rate", &AIPlayer::update_spawn_rate, nb::arg("new_rate"))
+        .def("evaluate", &AIPlayer::evaluate, nb::arg("board"))
         .def("start_search", &AIPlayer::start_search, 
              nb::arg("depth") = 3, 
              nb::call_guard<nb::gil_scoped_release>())

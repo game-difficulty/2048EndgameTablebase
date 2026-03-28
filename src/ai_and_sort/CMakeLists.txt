@@ -7,7 +7,7 @@ add_subdirectory(extern/nanobind)
 find_package(OpenMP REQUIRED)
 
 # 2. 先定义目标 (target)
-nanobind_add_module(ai_core AIPlayer.cpp egtb_query.cpp egtb_data_512.cpp egtb_data_256.cpp)
+nanobind_add_module(ai_core AIPlayer.cpp egtb_query.cpp egtb_data_512.cpp egtb_data_256.cpp egtb_data_1256.cpp)
 
 # 3. 设置基础特性
 target_compile_features(ai_core PRIVATE cxx_std_17)
@@ -37,5 +37,6 @@ target_link_options(ai_core PRIVATE
     -Wl,--gc-sections -s -fopenmp
 )
 
-# 7. 禁用 pybind11 详细错误信息以减小字符串占用
-target_compile_definitions(ai_core PRIVATE PYBIND11_DETAILED_ERROR_MESSAGES=0)
+target_compile_definitions(ai_core PRIVATE 
+    NB_NDOC 
+    NB_LEAK_WARNINGS=0)

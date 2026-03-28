@@ -1,25 +1,20 @@
 #pragma once
 #include <cstdint>
 #include <tuple>
-#include <random>
 #include <array>
+#include <algorithm>
 
 // ------------------------------------------------------------------
-// 全局预计算表
+// 合并后的全局预计算表
 // ------------------------------------------------------------------
-struct alignas(4) LR_Move {
+struct alignas(8) RowEntry {
     uint16_t movel;
     uint16_t mover;
+    uint16_t score;
+    uint16_t _pad;
 };
 
-struct alignas(16) UD_Move {
-    uint64_t moveu;
-    uint64_t moved;
-};
-
-inline LR_Move _lr_moves[65536];
-inline UD_Move _ud_moves[65536];
-inline uint32_t score_table[65536];
+inline RowEntry row_table[65536];
 
 // ------------------------------------------------------------------
 // 基础辅助函数
@@ -30,7 +25,11 @@ inline uint64_t reverse_board(uint64_t board) {
     return board;
 }
 
-// 模拟 log2 操作，用于预计算
+uint64_t canonical_diagonal(uint64_t board) {
+    uint64_t board2 = reverse_board(board);
+    return board < board2 ? board : board2;
+}
+
 inline int get_log2(int val) {
     if (val == 0) return 0;
     int res = 0;
@@ -38,10 +37,8 @@ inline int get_log2(int val) {
     return res;
 }
 
-// 初始化所有查找表 (在模块加载时自动执行一次)
 void init_tables() {
     for (uint32_t orig = 0; orig < 65536; ++orig) {
-        // 解析 16 位整数为 4 个独立数字 (基于 2 的幂)
         int k[4] = {
             (int)((orig >> 12) & 0xF),
             (int)((orig >> 8)  & 0xF),
@@ -55,8 +52,7 @@ void init_tables() {
             k[3] ? (1 << k[3]) : 0
         };
 
-        // 处理向左合并
-        auto merge_line = [&](bool reverse_line) -> std::pair<uint16_t, uint32_t> {
+        auto merge_line = [&](bool reverse_line) -> std::pair<uint16_t, uint16_t> {
             int non_zero[4];
             int nz_count = 0;
             if (reverse_line) {
@@ -72,37 +68,27 @@ void init_tables() {
                 if (i + 1 < nz_count && non_zero[i] == non_zero[i + 1] && non_zero[i] != 32768) {
                     merged[m_count++] = non_zero[i] * 2;
                     score += non_zero[i] * 2;
-                    ++i; // skip
+                    ++i;
                 } else {
                     merged[m_count++] = non_zero[i];
                 }
             }
 
             uint16_t res = 0;
-            if (reverse_line) {
-                for (int i = 0; i < 4; ++i) {
-                    int log_v = get_log2(merged[3 - i]);
-                    res |= (log_v << (4 * (3 - i)));
-                }
-            } else {
-                for (int i = 0; i < 4; ++i) {
-                    int log_v = get_log2(merged[i]);
-                    res |= (log_v << (4 * (3 - i)));
-                }
+            for (int i = 0; i < 4; ++i) {
+                int log_v = get_log2(reverse_line ? merged[3 - i] : merged[i]);
+                res |= (log_v << (4 * (3 - i)));
             }
-            return {res, score};
+            return {res, (uint16_t)std::min(score, 65535U)};
         };
 
-        auto left_res = merge_line(false);
-        auto right_res = merge_line(true);
+        auto [l_move, l_score] = merge_line(false);
+        auto [r_move, r_score] = merge_line(true);
 
-        score_table[orig] = left_res.second;
-
-        _lr_moves[orig].movel = left_res.first ^ orig;
-        _lr_moves[orig].mover = right_res.first ^ orig;
-
-        _ud_moves[orig].moveu = reverse_board((uint64_t)_lr_moves[orig].movel);
-        _ud_moves[orig].moved = reverse_board((uint64_t)_lr_moves[orig].mover);
+        row_table[orig].movel = l_move ^ (uint16_t)orig;
+        row_table[orig].mover = r_move ^ (uint16_t)orig;
+        row_table[orig].score = l_score;
+        row_table[orig]._pad  = 0;
     }
 }
 
@@ -112,69 +98,64 @@ struct TableInitializer {
 inline TableInitializer _initializer;
 
 // ------------------------------------------------------------------
-// 带分数的移动函数
+// 移动函数
 // ------------------------------------------------------------------
 inline std::tuple<uint64_t, uint32_t> s_move_left(uint64_t board) {
-    uint16_t l0 = (uint16_t)board;
-    uint16_t l1 = (uint16_t)(board >> 16);
-    uint16_t l2 = (uint16_t)(board >> 32);
-    uint16_t l3 = (uint16_t)(board >> 48);
+    // 获取四行的索引
+    uint16_t rows[4] = {
+        (uint16_t)board,
+        (uint16_t)(board >> 16),
+        (uint16_t)(board >> 32),
+        (uint16_t)(board >> 48)
+    };
 
-    uint32_t total_score = score_table[l0] + score_table[l1] + score_table[l2] + score_table[l3];
+    const RowEntry& e0 = row_table[rows[0]];
+    const RowEntry& e1 = row_table[rows[1]];
+    const RowEntry& e2 = row_table[rows[2]];
+    const RowEntry& e3 = row_table[rows[3]];
 
-    board ^= (uint64_t)_lr_moves[l0].movel;
-    board ^= (uint64_t)_lr_moves[l1].movel << 16;
-    board ^= (uint64_t)_lr_moves[l2].movel << 32;
-    board ^= (uint64_t)_lr_moves[l3].movel << 48;
+    uint32_t total_score = e0.score + e1.score + e2.score + e3.score;
+
+    board ^= (uint64_t)e0.movel;
+    board ^= (uint64_t)e1.movel << 16;
+    board ^= (uint64_t)e2.movel << 32;
+    board ^= (uint64_t)e3.movel << 48;
 
     return {board, total_score};
 }
 
 inline std::tuple<uint64_t, uint32_t> s_move_right(uint64_t board) {
-    uint16_t l0 = (uint16_t)board;
-    uint16_t l1 = (uint16_t)(board >> 16);
-    uint16_t l2 = (uint16_t)(board >> 32);
-    uint16_t l3 = (uint16_t)(board >> 48);
+    uint16_t rows[4] = {
+        (uint16_t)board,
+        (uint16_t)(board >> 16),
+        (uint16_t)(board >> 32),
+        (uint16_t)(board >> 48)
+    };
 
-    uint32_t total_score = score_table[l0] + score_table[l1] + score_table[l2] + score_table[l3];
+    const RowEntry& e0 = row_table[rows[0]];
+    const RowEntry& e1 = row_table[rows[1]];
+    const RowEntry& e2 = row_table[rows[2]];
+    const RowEntry& e3 = row_table[rows[3]];
 
-    board ^= (uint64_t)_lr_moves[l0].mover;
-    board ^= (uint64_t)_lr_moves[l1].mover << 16;
-    board ^= (uint64_t)_lr_moves[l2].mover << 32;
-    board ^= (uint64_t)_lr_moves[l3].mover << 48;
+    uint32_t total_score = e0.score + e1.score + e2.score + e3.score;
+
+    board ^= (uint64_t)e0.mover;
+    board ^= (uint64_t)e1.mover << 16;
+    board ^= (uint64_t)e2.mover << 32;
+    board ^= (uint64_t)e3.mover << 48;
 
     return {board, total_score};
 }
 
 inline std::tuple<uint64_t, uint32_t> s_move_up(uint64_t board, uint64_t board2) {
-    uint16_t l0 = (uint16_t)board2;
-    uint16_t l1 = (uint16_t)(board2 >> 16);
-    uint16_t l2 = (uint16_t)(board2 >> 32);
-    uint16_t l3 = (uint16_t)(board2 >> 48);
-
-    uint32_t total_score = score_table[l0] + score_table[l1] + score_table[l2] + score_table[l3];
-
-    board ^= _ud_moves[l0].moveu;
-    board ^= _ud_moves[l1].moveu << 4;
-    board ^= _ud_moves[l2].moveu << 8;
-    board ^= _ud_moves[l3].moveu << 12;
-
+    auto [bd, total_score] = s_move_left(board2);
+    board = reverse_board(bd);
     return {board, total_score};
 }
 
 inline std::tuple<uint64_t, uint32_t> s_move_down(uint64_t board, uint64_t board2) {
-    uint16_t l0 = (uint16_t)board2;
-    uint16_t l1 = (uint16_t)(board2 >> 16);
-    uint16_t l2 = (uint16_t)(board2 >> 32);
-    uint16_t l3 = (uint16_t)(board2 >> 48);
-
-    uint32_t total_score = score_table[l0] + score_table[l1] + score_table[l2] + score_table[l3];
-
-    board ^= _ud_moves[l0].moved;
-    board ^= _ud_moves[l1].moved << 4;
-    board ^= _ud_moves[l2].moved << 8;
-    board ^= _ud_moves[l3].moved << 12;
-
+    auto [bd, total_score] = s_move_right(board2);
+    board = reverse_board(bd);
     return {board, total_score};
 }
 
