@@ -9,7 +9,7 @@ from BoardMover import gen_new_num, decode_board, encode_board, s_move_board
 from ai_and_sort import ai_core
 
 
-TIME_RATIO = 0.6
+TIME_RATIO = 1.5
 START_POS = np.uint64(0x0)
 MAX_STEP = 65536
 
