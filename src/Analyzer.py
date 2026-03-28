@@ -78,7 +78,25 @@ class ReplayDecoder:
         with open(self.filepath, 'rb') as f:
             raw_data = f.read()
 
-        replay_text = ''
+        # --- 判断是否为 AItest 回放的 numpy 结构化数组 ---
+        dt = np.dtype([('f0', 'uint64'), ('f1', 'uint32'), ('f2', 'uint8')])
+        item_size = dt.itemsize  # 13 字节
+
+        # 1. 长度必须是 13 的倍数且不为空
+        if len(raw_data) > 0 and len(raw_data) % item_size == 0:
+            try:
+                arr = np.frombuffer(raw_data, dtype=dt)
+
+                # 2. 验证第一个元素的 uint32 (f1) 是否从 0 开始
+                if arr['f1'][0] == 0:
+                    # 3. 验证单调不减特性
+                    f1_vals = arr['f1']
+                    if len(f1_vals) == 1 or np.all(np.diff(f1_vals.astype(np.int64)) >= 0):
+                        return arr
+            except Exception:
+                # 如果中间任何环节报错（比如数据过短），回退到文本处理
+                pass
+
         common_encodings = ['utf-8', 'gb18030', 'big5', 'shift_jis', 'euc-kr', 'utf-16', 'utf-16le', 'utf-16be']
 
         if raw_data.startswith(b'\xff\xfe'):
@@ -100,16 +118,18 @@ class ReplayDecoder:
         """自动判断格式并调用对应的解码逻辑"""
         replay_text = self.read_replay()
 
-        # 尝试匹配新版格式正则表达式: 例如 "4x4-0000000000000000_abc..."
-        new_format_match = re.match(r'^(\d+x\d+)-([^_]*)_(.*)$', replay_text)
+        if isinstance(replay_text, str):
+            # 尝试匹配新版格式正则表达式: 例如 "4x4-0000000000000000_abc..."
+            new_format_match = re.match(r'^(\d+x\d+)-([^_]*)_(.*)$', replay_text)
 
-        if new_format_match:
-            variant_str = new_format_match.group(1)
-            initial_board_str = new_format_match.group(2)
-            moves_str = new_format_match.group(3)
-            self._decode_new_format(variant_str, initial_board_str, moves_str)
+            if new_format_match:
+                variant_str = new_format_match.group(1)
+                moves_str = new_format_match.group(3)
+                self._decode_new_format(variant_str, moves_str)
+            else:
+                self._decode_old_format(replay_text)
         else:
-            self._decode_old_format(replay_text)
+            self._decode_test_replay(replay_text)
 
     @staticmethod
     def _apply_special_32k_rule(board, replay_move, current_score, mover):
@@ -129,7 +149,7 @@ class ReplayDecoder:
 
         return board, current_score
 
-    def _decode_new_format(self, variant_str: str, initial_board_str: str, moves_str: str):
+    def _decode_new_format(self, variant_str: str, moves_str: str):
         """解析新版 21-bit / 3-chars 格式，但输出旧版 Numpy 数组结构"""
         if variant_str == "2x4":
             board, total_space = np.uint64(0xffff00000000ffff), 11
@@ -140,7 +160,7 @@ class ReplayDecoder:
             mover = self.vbm
             self.variant = "3x3"
         elif variant_str == "3x4":
-            board, total_space = np.uint64(0x00000000000fffff), 15
+            board, total_space = np.uint64(0x000000000000ffff), 15
             mover = self.vbm
             self.variant = "3x4"
         elif variant_str == "4x4":
@@ -216,7 +236,7 @@ class ReplayDecoder:
             mover = self.vbm
             self.variant = "3x3"
         elif "3x4" in replay_text[:12]:
-            board, total_space, header = np.uint64(0x00000000000fffff), 15, 10
+            board, total_space, header = np.uint64(0x000000000000ffff), 15, 10
             mover = self.vbm
             self.variant = "3x4"
         else:
@@ -259,6 +279,19 @@ class ReplayDecoder:
 
             if moves_made >= 3:
                 record[moves_made - 3] = (board, current_score, 0)
+
+    def _decode_test_replay(self, arr):
+        self.record_list: np.typing.NDArray = np.full(len(arr), 1, dtype='uint64,uint32,uint8,uint8,uint8')
+        self.record_list['f0'] = arr['f0']
+        self.record_list['f1'] = arr['f1']
+        self.record_list['f2'][:-1] = arr['f2'][1:]
+        for i in range(1, len(arr) - 1):
+            moved = bm.move_board(arr['f0'][i], arr['f2'][i + 1])
+            diff = moved ^ arr['f0'][i + 1]
+            pos = (int(diff).bit_length() - 1) // 4
+            value = diff >> (pos * 4)
+            self.record_list['f3'][i] = value
+            self.record_list['f4'][i] = 15 - pos
 
 
 class Analyzer(QObject):
@@ -400,6 +433,8 @@ class Analyzer(QObject):
 
     def _analyze_one_step(self, board: np.typing.NDArray, masked_board: np.typing.NDArray, move: str,
                           new_tile: int, spawn_position:int) -> bool | None:
+        if not move:
+            return False
         target = str(int(2 ** self.target))
         self.result, success_rate_dtype = self.book_reader.move_on_dic(masked_board, self.pattern, target, self.full_pattern)
         _, _, _, zero_val = DTYPE_CONFIG.get(success_rate_dtype, DTYPE_CONFIG['uint32'])
@@ -495,7 +530,7 @@ class Analyzer(QObject):
         large_tile_changed = large_tile_sum != self.large_tile_sum
         self.large_tile_sum = large_tile_sum
 
-        move = ('Left', 'Right', 'Up', 'Down')[move_encoded - 1]
+        move = ('', 'Left', 'Right', 'Up', 'Down')[move_encoded]
         is_endgame = self._analyze_one_step(board, masked_board, move, new_tile, spawn_position)
         return is_endgame, large_tile_changed
 
@@ -710,10 +745,10 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
             if self.selected_filepaths:
                 file_list = [f for f in self.selected_filepaths
                             if os.path.exists(f) and
-                            (f.lower().endswith('.txt') or f.lower().endswith('.vrs'))]
+                            (f.lower().endswith('.txt') or f.lower().endswith('.vrs') or '.' not in f)]
             else:
                 # 从文本框中解析文件路径
-                # 假设文件路径用换行符分隔
+                # 文件路径用换行符分隔
                 pathname_text = self.filepath_edit.toPlainText()
                 paths = [p.strip() for p in pathname_text.split('\n') if p.strip()]
                 file_list = []
@@ -725,7 +760,7 @@ class AnalyzeWindow(QtWidgets.QMainWindow):
                                             if (f.lower().endswith('.txt') or f.lower().endswith('.vrs')) and
                                             os.path.isfile(os.path.join(path, f))]
                             file_list.extend(folder_files)
-                        elif os.path.isfile(path) and (path.lower().endswith('.txt') or path.lower().endswith('.vrs')):
+                        elif os.path.isfile(path) and (path.lower().endswith('.txt') or path.lower().endswith('.vrs') or '.' not in path):
                             # 如果是单个文件
                             file_list.append(path)
 
@@ -852,9 +887,9 @@ if __name__ == "__main__":
     # anlz = Analyzer(r"D:\2048calculates\test\analysis\vgame.txt", '2x4',
     #                 8, '2x4_256', r"D:\2048calculates\test\analysis", '0')
     # anlz.generate_reports()
-    #
-    # import sys
-    # app = QtWidgets.QApplication(sys.argv)
-    # main = AnalyzeWindow()
-    # main.show()
-    # sys.exit(app.exec_())
+
+    import sys
+    app = QtWidgets.QApplication(sys.argv)
+    main = AnalyzeWindow()
+    main.show()
+    sys.exit(app.exec_())

@@ -44,6 +44,8 @@ class GameFrame(BaseBoardFrame):
 
         if self.board_encoded == 0:
             self.setup_new_game()
+        else:
+            self.history = [(self.board_encoded, self.score)]
 
     def setup_new_game(self):
         self.has_65k = False
@@ -66,9 +68,12 @@ class GameFrame(BaseBoardFrame):
             return
 
         self.ai_processing = True
+
+        board_encoded = ai_core.resolve_32768_doubles(
+            self.board_encoded) if not self.has_65k else self.board_encoded
         self.ai_thread.prepare(
             board=self.board,
-            board_encoded=self.board_encoded,
+            board_encoded=board_encoded,
             counts=counts,
             spawn_rate4=SingletonConfig().config['4_spawn_rate']
         )
@@ -122,7 +127,9 @@ class GameFrame(BaseBoardFrame):
         """ 支持65536 """
         if self.has_65k:
             values = values.copy()
-            values.flat[next((i for i, x in enumerate(values.flat) if x == 32768), None)] = 65536
+            idx = next((i for i, x in enumerate(values.flat) if x == 32768), None)
+            if idx is not None:
+                values.flat[idx] = 65536
         super().update_all_frame(values)
 
     def decode_to_character(self, replay_tile, replay_move, replay_position, total_space=15):
@@ -148,7 +155,7 @@ class AIThread(QtCore.QThread):
     def __init__(self, board_encoded, counts):
         super(AIThread, self).__init__()
         self.ai_player = ai_core.AIPlayer(board_encoded)
-        self.ai_player.max_threads = 4
+        self.ai_player.max_threads = min(os.cpu_count(), 8)
         self.logic = CoreAILogic()
         self.board = None
         self.board_encoded = board_encoded

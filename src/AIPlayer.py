@@ -289,6 +289,13 @@ class L3Manager:
         return syms
 
     def probe_L3(self, masked_board: np.uint64, table_types: Tuple[int], board_sum: int) -> Tuple[int, List[float], int]:
+        if 65280 < board_sum < 65436:
+            masked_board = self.mask_large_tiles(masked_board, 8)
+            table_types = (1256,)
+        if 65000 < board_sum < 65280:
+            masked_board = self.mask_large_tiles(masked_board, 9, 0x8)
+            table_types = (512,)
+
         syms = self.get_syms(masked_board)
 
         for i, b in enumerate(syms):
@@ -401,7 +408,7 @@ class CoreAILogic:
     """提取出的核心 AI 逻辑，供测试脚本和 GUI 线程共用"""
     SCORE_CRITICAL = -5000
     SCORE_HOPELESS = -30000
-    FALLBACK_DEPTH = 7
+    FALLBACK_DEPTH = 5
 
     def __init__(self):
         self.manager = L3Manager()
@@ -420,8 +427,26 @@ class CoreAILogic:
 
         large_tiles = (board > 128).sum()
         board_flatten = board.flatten()
+        '''
+         0,  1,  2,  3
+         4,  5,  6,  7
+         8,  9, 10, 11
+        12, 13, 14, 15
+        '''
         if large_tiles < 3:
             return False
+        elif large_tiles == 6:
+            top6_pos = np.argpartition(board_flatten, -6)[-6:]
+            if len(np.unique(board_flatten[top6_pos])) < 6:
+                return False
+            top6_pos = tuple(sorted(top6_pos))
+            return top6_pos not in (
+                (0, 1, 2, 3, 4, 5), (0, 1, 2, 3, 6, 7), (0, 1, 4, 5, 8, 12), (0, 4, 8, 9, 12, 13),
+                (2, 3, 6, 7, 11, 15), (3, 7, 10, 11, 14, 15), (8, 9, 12, 13, 14, 15), (10, 11, 12, 13, 14, 15),
+                (0, 1, 2, 4, 5, 6), (1, 2, 3, 5, 6, 7), (0, 1, 4, 5, 8, 9), (4, 5, 8, 9, 12, 13),
+                (2, 3, 6, 7, 10, 11), (6, 7, 10, 11, 14, 15), (8, 9, 10, 12, 13, 14), (9, 10, 11, 13, 14, 15),
+                (0, 1, 3, 4, 5, 7), (0, 2, 3, 4, 6, 7), (0, 1, 4, 5, 12, 13), (0, 1, 8, 9, 12, 13),
+                (2, 3, 6, 7, 14, 15), (2, 3, 10, 11, 14, 15), (8, 9, 11, 12, 13, 15), (8, 10, 11, 12, 14, 15))
         elif large_tiles == 4:
             top4_pos = np.argpartition(board_flatten, -4)[-4:]
             if len(np.unique(board_flatten[top4_pos])) < 4:
@@ -469,23 +494,24 @@ class CoreAILogic:
                 self.last_move = 'L3'
                 return move
 
-        is_5tiler = (board_sum > 62000 or (np.sum(counts[11:]) == 4 and counts[10] == 0)) and (
+        is_5tiler = (65520 > board_sum > 62000 or (np.sum(counts[11:]) == 4 and counts[10] == 0)) and (
                 board_sum % 1024 < 24 or board_sum % 1024 > 996)
 
         is_not_merging = (np.max(counts[8: 15]) == 1) and not (counts[7] > 1 and counts[8] == 1) and not (
             counts[6] > 1 and counts[7] == 1 and counts[8] == 1 and board_sum % 1024 < 96)
         is_mess = self.is_mess(board) if is_not_merging else False
 
-        ai_player.do_check = np.uint8(big_nums) if is_mess and big_nums in (3, 4) else np.uint8(0)
+        ai_player.do_check = np.uint8(big_nums) if is_mess and big_nums in (3, 4, 5, 6) else np.uint8(0)
         ai_player.prune = np.uint8(1) if is_not_merging and not (
               (not 40 < board_sum % 512 < 500 and max(counts[7:9]) > 1 and big_nums > 2) or
               (not 32 < board_sum % 256 < 250 and max(counts[6:8]) > 1 and big_nums > 4) or
               (not 24 < board_sum % 128 < 126 and max(counts[5:7]) > 1 and big_nums > 4) or
               is_mess) else np.uint8(0)
-        if is_mess or is_5tiler or is_evil or self.tiles_all_set(counts) or (
-                max(counts[6:]) == 1 and np.sum(counts[6:]) >= 9):
+        if (is_mess or is_evil or self.tiles_all_set(counts) or (
+                max(counts[6:]) == 1 and np.sum(counts[6:]) >= 9)) and not is_5tiler:
             ai_player.prune = np.uint8(0)
-
+        if self.danbianhuichuan_patch(board, board_sum):
+            ai_player.prune = np.uint8(1)
 
         if is_mess or is_5tiler:
             big_nums2 = np.sum(counts[9:])
@@ -504,15 +530,19 @@ class CoreAILogic:
                 ai_player, initial_depth, initial_depth, 0.1
             )
 
-        elif big_nums <= 3 and 32 < board_sum % 256 < 240 and is_not_merging and counts[6] < 2:
+        elif ((big_nums <= 3 and 32 < board_sum % 256 < 248 and is_not_merging) or big_nums < 3) and not (board_sum % 256 < 72 and counts[6] > 0):
             initial_depth = 4 if counts[7] == 0 else 5
             best_op, final_depth, scores = self.perform_iterative_search(
                 ai_player, initial_depth, initial_depth, 0.1
             )
 
         else:
-            if counts[7] > 1 or (board_sum % 512 < 20 and np.sum(counts[8:]) > 2):
-                initial_depth, max_depth, time_limit = 5, 32, 0.15 * big_nums ** 0.25
+            if 65380 < board_sum <= 65500:
+                initial_depth, max_depth, time_limit = min(33, (65540 - board_sum) // 2), 60, 0.8
+            if 65260 < board_sum <= 65380:
+                initial_depth, max_depth, time_limit = 20, 60, 1.0
+            elif counts[7] > 1 or (board_sum % 512 < 20 and np.sum(counts[8:]) > 4):
+                initial_depth, max_depth, time_limit = 5, 32, 0.32 * big_nums ** 0.4
             elif is_not_merging and np.sum(counts[7:]) > 5:
                 initial_depth, max_depth, time_limit = 5, 48, 0.32 * big_nums ** 0.25
             else:
@@ -557,11 +587,13 @@ class CoreAILogic:
         depth = initial_depth
         fallback_attempts = 0
 
-        while depth <= max_depth and best_op_so_far != 0:
+        while (depth <= max_depth and best_op_so_far != 0) and not(fallback_attempts > 0 and valid_scores):
             elapsed = time.time() - start_time
             remaining_time = local_limit - elapsed
+            if fallback_attempts:
+                remaining_time = max(remaining_time, local_limit / 2 + 0.005)
 
-            # 1. 终止条件检查 (基于剩余时间与预测时间)
+                # 1. 终止条件检查 (基于剩余时间与预测时间)
             if self._should_stop_search(best_op_so_far, last_depth_time, remaining_time):
                 break
 
@@ -603,7 +635,7 @@ class CoreAILogic:
             depth += 1
 
         # 7. 绝对兜底逻辑 (首层死活跑不出来)
-        if best_op_so_far == -1:
+        if best_op_so_far == -1 or not valid_scores:
             best_op_so_far, final_depth, last_depth_time = self._force_fallback_search(ai_player)
 
         # if last_depth_time is not None:
@@ -633,7 +665,7 @@ class CoreAILogic:
 
     def _handle_timeout(self, best_op: int, depth: int, attempts: int) -> tuple[int | None, int]:
         self.time_ratio *= 1.03  # 惩罚预测倍数
-        if best_op == -1 and attempts < 2:
+        if best_op == -1 and attempts < 3:
             # 首层超时抢救：退层
             new_depth = int(min(max(depth - 2, 1), depth * 0.8))
             return new_depth, attempts + 1
@@ -663,6 +695,7 @@ class CoreAILogic:
         fallback_start = time.time()
         ai_player.stop_search = False
         ai_player.prune = np.uint64(0)
+        ai_player.clear_cache()
         ai_player.start_search(self.FALLBACK_DEPTH)
         return ai_player.best_operation, self.FALLBACK_DEPTH, time.time() - fallback_start
 
@@ -671,6 +704,10 @@ class CoreAILogic:
         """
         对残局表返回的走法进行浅层验证，过滤哈希碰撞产生的致命假阳性。
         """
+        # 特判012412567fff8fff
+        if table_type == 512 and board_sum % 512 > 506 and 0.91109 < max(win_rates) < 0.91111:
+            return True
+
         move_map = {1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}
 
         ai_player.stop_search = False
@@ -681,6 +718,10 @@ class CoreAILogic:
 
         need_further_check = False
         scores = list(ai_player.scores)
+
+        if table_type == 1256 and (max(scores) - scores[np.argmax(win_rates)] < 50):
+            return True
+
         if (win_rates[np.argmax(scores)] == 0.0) and (max(scores) - scores[np.argmax(win_rates)] > 5):
             win_rate = max(win_rates)
             if (table_type == 256 and win_rate > 0.993) or (
@@ -694,35 +735,31 @@ class CoreAILogic:
             sorted_scores = sorted(scores, reverse=True)
 
             # 合理性校验
-            if (table_type == 512) and ((
-                    target_score >= sorted_scores[1] - 18 and sorted_scores[2] > 2400) or (
-                    target_score >= sorted_scores[0] - 24 and sorted_scores[2] > 1800) or (
-                    target_score >= sorted_scores[0] - 16)):
-                return True
-            if (table_type == 256) and ((
-                    target_score >= sorted_scores[1] - 24 and sorted_scores[2] > 2400) or (
-                    target_score >= sorted_scores[0] - 30 and sorted_scores[2] > 1800) or (
-                    target_score >= sorted_scores[0] - 20)):
+            if((target_score >= sorted_scores[0] - 16 and sorted_scores[2] > 2400) or (
+                target_score >= sorted_scores[0] - 24 and sorted_scores[2] > 2800) or (
+                target_score >= sorted_scores[0] - 8)):
                 return True
 
+        max_d = 48 if table_type == 1256 else 12
+        min_d = 24 if table_type == 1256 else 7
+        _time_limit = 0.66 if table_type == 1256 else 0.33
         best_op, final_depth, scores = self.perform_iterative_search(
-            ai_player, 7, 10, 0.5
+            ai_player, min_d,  max_d, _time_limit
         )
+        if not scores:
+            return False
+
+        if table_type == 1256 and scores and (max(scores) - scores[np.argmax(win_rates)] < 100):
+            return True
 
         target_score = scores[move - 1]
         sorted_scores = sorted(scores, reverse=True)
         if target_score < -ai_player.dead_score // 2 and sorted_scores[0] > 0:
             return False
 
-        if (table_type == 512) and ((
-                target_score >= sorted_scores[1] - 10 and sorted_scores[2] > 2400) or (
-                target_score >= sorted_scores[0] - 12 and sorted_scores[2] > 1800) or (
-                target_score >= sorted_scores[0] - 8)):
-            return True
-        if (table_type == 256) and ((
-                target_score >= sorted_scores[1] - 15 and sorted_scores[2] > 2400) or (
-                target_score >= sorted_scores[0] - 16 and sorted_scores[2] > 1800) or (
-                target_score >= sorted_scores[0] - 12)):
+        if ((target_score >= sorted_scores[0] - 24 and sorted_scores[2] > 2400) or (
+            target_score >= sorted_scores[0] - 36 and sorted_scores[2] > 2800) or (
+            target_score >= sorted_scores[0] - 12)):
             return True
 
         if not (threshold == 8 and table_type == 512 and board_sum % 256 < 96):
@@ -748,7 +785,7 @@ class CoreAILogic:
     def tiles_all_set(counts):
         last_dup = 0
         i = 0
-        for i in range(5, 15):
+        for i in range(3, 15):
             if counts[i] > 1:
                 last_dup = i
         if last_dup == 0:
@@ -758,6 +795,30 @@ class CoreAILogic:
                 break
         final_big_tiles = np.sum(counts[i:]) + 1
         return final_big_tiles < 5 and i > 9 and not (final_big_tiles + i < 14 and last_dup < 6)
+
+    def danbianhuichuan_patch(self, board, board_sum):
+        if not (board_sum % 1024 >= 1016 and board_sum > 63000):
+            return 0
+        board = np.uint64(encode_board(board) & 0xffffffffffffffff)
+        board = self.mask(board, 9)
+        board = max(board, ReverseLR(board), ReverseUD(board), ReverseUL(board), ReverseUR(board),
+                    Rotate180(board), RotateL(board), RotateR(board))
+        if (board & np.uint64(0xfff0fff000000000) == np.uint64(0xfff0fff000000000) and
+                board & np.uint64(0xf000ff0000000) == np.uint64(0x8000760000000)):
+            return 1
+        return 0
+
+    @staticmethod
+    def mask(board: np.uint64, threshold: int) -> np.uint64:
+        new_board = np.uint64(0)
+        for i in range(16):
+            shift = i * 4
+            tile_val = (board >> np.uint64(shift)) & np.uint64(0xF)
+            if tile_val >= threshold:
+                tile_val = np.uint64(0xF)
+            new_board |= (tile_val << np.uint64(shift))
+        return new_board
+
 
 
 if __name__ == '__main__':
