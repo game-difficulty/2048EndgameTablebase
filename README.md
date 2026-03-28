@@ -1,6 +1,6 @@
 # 2048EndgameTablebase: The Ultimate 2048 AI & Tablebase Solution
 
-This project offers the fastest and most space-efficient tablebase generator available, enabling players and developers to explore the theoretical limits of the game. Our AI achieves unprecedented success rates, reaching the **32,768 tile at 86.1%** and the **65,536 tile at 8.4%** under no-undo conditions.
+This project offers the fastest and most space-efficient tablebase generator available, enabling players and developers to explore the theoretical limits of the game. By leveraging these massive tables, our AI achieves unprecedented success rates, reaching the **32,768 tile at 86.1%** and the **65,536 tile at 8.4%** under no-undo conditions. Even in its standalone configuration, the AI still reaches the 32,768 tile with an 80% success rate. This also represents the strongest engine performance achievable without reliance on massive external data.
 
 
 success rate of getting a 4096 in 12 spaces (65k endgame)
@@ -58,6 +58,8 @@ To use the AI or Practice modes, you must first generate a **Table**.
 ## 📈 AI Performance Statistics
 
 Tested over 1,200 games (Adaptive Search Depth 1~9, no undo):
+
+average score 772,353
 
 | Milestone | Success Rate | Comparable Score |
 | :--- | :--- | :--- |
