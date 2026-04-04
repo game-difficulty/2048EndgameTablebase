@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2048 AI Engine (WASM)</title>
+    <style>
+        :root {
+            /* 核心配色 */
+            --bg-color: #faf8ef;
+            --board-bg: #bbada0;
+            --cell-empty-bg: #cdc1b4;
+            --text-dark: #776e65;
+            --text-light: #f9f6f2;
+
+            /* 响应式尺寸计算 (基准 400px) */
+            --board-size: min(400px, 90vw);
+            --grid-gap: calc(var(--board-size) * 0.025);
+            /* 10px / 400px */
+            --padding: calc(var(--board-size) * 0.025);
+            /* 单个格子大小 = (总宽 - 2*边距 - 3*间隙) / 4 */
+            --cell-size: calc((var(--board-size) - (var(--grid-gap) * 3) - (var(--padding) * 2)) / 4);
+        }
+
+        body {
+            font-family: "Clear Sans", "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-dark);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px 10px;
+            overflow-x: hidden;
+        }
+
+        .header {
+            width: var(--board-size);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .header h1 {
+            font-size: 48px;
+            margin: 0;
+            font-weight: bold;
+        }
+
+        .score-container {
+            display: flex;
+            gap: 6px;
+        }
+
+        .score-box {
+            background: var(--board-bg);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 4px;
+            text-align: center;
+            min-width: 70px;
+        }
+
+        .score-box span {
+            display: block;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #eee4da;
+        }
+
+        .score-box div {
+            font-size: 20px;
+            font-weight: bold;
+        }
+
+        /* 控制面板样式 */
+        .controls-group {
+            width: var(--board-size);
+            margin-bottom: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .input-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        #board-input {
+            flex: 1;
+            padding: 10px;
+            border: 2px solid var(--board-bg);
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 16px;
+            outline: none;
+            text-align: center;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            flex: 1;
+            min-width: 80px;
+            background: #8f7a66;
+            color: white;
+            border: none;
+            padding: 12px 6px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+
+        .btn:hover {
+            background: #776e65;
+        }
+
+        .btn.active {
+            background: #edc22e;
+        }
+
+        /* 核心棋盘 */
+        .board {
+            background: var(--board-bg);
+            width: var(--board-size);
+            height: var(--board-size);
+            padding: var(--padding);
+            border-radius: 6px;
+            position: relative;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            grid-template-rows: repeat(4, 1fr);
+            gap: var(--grid-gap);
+            box-sizing: border-box;
+            touch-action: none;
+            /* 禁用系统手势 */
+        }
+
+        .grid-cell {
+            background: var(--cell-empty-bg);
+            border-radius: 4px;
+        }
+
+        /* 方块活动类 */
+        .tile {
+            position: absolute;
+            width: var(--cell-size);
+            height: var(--cell-size);
+            transition: 100ms ease-in-out transform;
+            z-index: 10;
+            /* JS 设置 --x 和 --y 后的定位计算 */
+            transform: translate(calc(var(--padding) + var(--x) * (var(--cell-size) + var(--grid-gap))),
+                    calc(var(--padding) + var(--y) * (var(--cell-size) + var(--grid-gap))));
+        }
+
+        .tile-inner {
+            width: 100%;
+            height: 100%;
+            border-radius: 4px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: calc(var(--cell-size) * 0.45);
+            font-weight: bold;
+        }
+
+        /* 动画 */
+        .anim-new {
+            animation: appear 200ms ease backwards;
+        }
+
+        .anim-merged {
+            animation: pop 200ms ease backwards;
+        }
+
+        @keyframes appear {
+            0% {
+                opacity: 0;
+                transform: scale(0);
+            }
+
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        @keyframes pop {
+            0% {
+                transform: scale(0.8);
+            }
+
+            50% {
+                transform: scale(1.2);
+            }
+
+            100% {
+                transform: scale(1);
+            }
+        }
+
+        /* 颜色映射 */
+        .cell-1 {
+            background: #eee4da;
+            color: #776e65;
+        }
+
+        .cell-2 {
+            background: #ede0c8;
+            color: #776e65;
+        }
+
+        /* 颜色映射与字体比例 */
+        .cell-1 {
+            background: #eee4da;
+            color: #776e65;
+        }
+
+        .cell-2 {
+            background: #ede0c8;
+            color: #776e65;
+        }
+
+        .cell-3 {
+            background: #f2b179;
+            color: #f9f6f2;
+        }
+
+        .cell-4 {
+            background: #f59563;
+            color: #f9f6f2;
+        }
+
+        .cell-5 {
+            background: #f67c5f;
+            color: #f9f6f2;
+        }
+
+        .cell-6 {
+            background: #f65e3b;
+            color: #f9f6f2;
+        }
+
+        /* 3 位数 (128, 256, 512) - 0.4 Font Scale */
+        .cell-7 {
+            background: #edcf72;
+            color: #f9f6f2;
+            font-size: calc(var(--cell-size) * 0.4);
+        }
+
+        .cell-8 {
+            background: #edcc61;
+            color: #f9f6f2;
+            font-size: calc(var(--cell-size) * 0.4);
+        }
+
+        .cell-9 {
+            background: #edc850;
+            color: #f9f6f2;
+            font-size: calc(var(--cell-size) * 0.4);
+        }
+
+        /* 4 位数 (1024, 2048, 4096, 8192) - 0.32 Font Scale */
+        .cell-a {
+            background: #edc53f;
+            color: #f9f6f2;
+            font-size: calc(var(--cell-size) * 0.32);
+            box-shadow: 0 0 15px rgba(237, 207, 114, 0.4);
+        }
+
+        .cell-b {
+            background: #edc22e;
+            color: #f9f6f2;
+            font-size: calc(var(--cell-size) * 0.32);
+            box-shadow: 0 0 15px rgba(237, 204, 97, 0.4);
+        }
+
+        .cell-c {
+            background: #e67272;
+            color: #f9f6f2;
+            font-size: calc(var(--cell-size) * 0.32);
+        }
+
+        .cell-d {
+            background: #d05480;
+            color: #f9f6f2;
+            font-size: calc(var(--cell-size) * 0.32);
+        }
+
+        /* 5 位数 (16384, 32768, 65536) - 0.25 Font Scale */
+        .cell-e {
+            background: #bd398e;
+            color: #f9f6f2;
+            font-size: calc(var(--cell-size) * 0.25);
+        }
+
+        .cell-f {
+            background: #991399;
+            color: #f9f6f2;
+            font-size: calc(var(--cell-size) * 0.25);
+        }
+
+        .cell-10 {
+            background: #991399;
+            color: #f9f6f2;
+            font-size: calc(var(--cell-size) * 0.25);
+            box-shadow: 0 0 20px rgba(153, 19, 153, 0.6);
+        }
+
+        .speed-control {
+            width: var(--board-size);
+            margin-top: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-weight: bold;
+        }
+
+        .speed-control input {
+            flex: 1;
+            margin: 0 15px;
+            cursor: pointer;
+        }
+
+        .footer {
+            width: var(--board-size);
+            margin-top: 30px;
+            padding: 15px 0;
+            border-top: 1px solid #bbada0;
+            text-align: center;
+            font-size: 12px;
+            line-height: 1.6;
+            color: #776e65;
+        }
+
+        .footer a {
+            color: #8f7a66;
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="header">
+        <div class="title-container">
+            <h1>2048 AI</h1>
+        </div>
+        <div class="score-container">
+            <div class="score-box"><span>Score</span>
+                <div id="score">0</div>
+            </div>
+            <div class="score-box"><span>Best</span>
+                <div id="best-score">0</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="controls-group">
+        <div class="input-row">
+            <input type="text" id="board-input" placeholder="Hex state e.g. 012345abcde" maxlength="16">
+            <button id="btn-set" class="btn">Set Board</button>
+        </div>
+        <div class="button-row">
+            <button id="btn-auto" class="btn">Auto Run</button>
+            <button id="btn-step" class="btn">One Step</button>
+            <button id="btn-undo" class="btn">Undo</button>
+        </div>
+    </div>
+
+    <div class="board" id="board">
+    </div>
+
+    <div class="speed-control">
+        <span>Slow</span>
+        <input type="range" id="speed-slider" min="0" max="200" value="100">
+        <span>Fast</span>
+    </div>
+
+    <div class="footer">
+        <p>The web version of AI is single-threaded and has limited performance.</p>
+        <p>Project: <a href="https://github.com/game-difficulty/2048EndgameTablebase" target="_blank">GitHub -
+                2048EndgameTablebase</a></p>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+
+</html>
