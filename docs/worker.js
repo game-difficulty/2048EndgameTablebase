@@ -427,32 +427,46 @@ class CoreAILogic {
             }
         }
 
-        let is_5tiler = (65520 > board_sum && board_sum > 62000 || (arraySum(counts.slice(11)) === 4 && counts[10] === 0)) &&
-            (board_sum % 1024 < 24 || board_sum % 1024 > 996);
-
-        let is_not_merging = (arrayMax(counts.slice(8, 15)) === 1) &&
+        // 1. 基础判断：判定是否处于“不合并”状态
+        const is_not_merging = (arrayMax(counts.slice(8, 15)) === 1) &&
             !(counts[7] > 1 && counts[8] === 1) &&
             !(counts[6] > 1 && counts[7] === 1 && counts[8] === 1 && board_sum % 1024 < 96);
-        let is_mess = is_not_merging ? this.is_mess(boardArray) : false;
 
+        const is_mess = is_not_merging ? this.is_mess(boardArray) : false;
+
+        // 2. 5-tiler 特殊残局判定（严格对应 Python 括号优先级）
+        const is_5tiler = ((65520 > board_sum && board_sum > 62000) || (arraySum(counts.slice(11)) === 4 && counts[10] === 0)) &&
+            ((board_sum % 1024 < 24) || (board_sum % 1024 > 996));
+
+        // 3. AI 控制位初始化
         ai_player.do_check = (is_mess && [3, 4, 5, 6].includes(big_nums)) ? big_nums : 0;
 
-        ai_player.prune = (is_not_merging && !(
-            (!(40 < board_sum % 512 && board_sum % 512 < 500) && arrayMax(counts.slice(7, 9)) > 1 && big_nums > 2) ||
-            (!(32 < board_sum % 256 && board_sum % 256 < 250) && arrayMax(counts.slice(6, 8)) > 1 && big_nums > 4) ||
-            (!(24 < board_sum % 128 && board_sum % 128 < 126) && arrayMax(counts.slice(5, 7)) > 1 && big_nums > 4) ||
-            is_mess
-        )) ? 1 : 0;
+        // 4. 计算 Prune
+        let prune = 0;
+        if (is_not_merging) {
+            const cond1 = (!(40 < board_sum % 512 && board_sum % 512 < 500) && arrayMax(counts.slice(7, 9)) > 1 && big_nums > 2);
+            const cond2 = (!(32 < board_sum % 256 && board_sum % 256 < 250) && arrayMax(counts.slice(6, 8)) > 1 && big_nums > 4);
+            const cond3 = (!(24 < board_sum % 128 && board_sum % 128 < 126) && arrayMax(counts.slice(5, 7)) > 1 && big_nums > 4);
 
-        console.log(`[Status] Sum: ${board_sum}, BigNums: ${big_nums}, Mess: ${is_mess}, Prune: ${ai_player.prune}`);
+            if (!(cond1 || cond2 || cond3 || is_mess)) {
+                prune = 1;
+            }
+        }
+        ai_player.prune = prune;
 
-        if ((is_mess || is_evil || this.tiles_all_set(counts) || (arrayMax(counts.slice(6)) === 1 && arraySum(counts.slice(6)) >= 9)) && !is_5tiler) {
+        // 5. 高层残局
+        const is_sparse_endgame = (arrayMax(counts.slice(6)) === 1 && arraySum(counts.slice(6)) >= 9);
+
+        if ((is_mess || is_evil || this.tiles_all_set(counts) || is_sparse_endgame) && !is_5tiler) {
             ai_player.prune = 0;
         }
 
+        // 6. 特殊补丁
         if (this.danbianhuichuan_patch(boardArray, board_sum)) {
             ai_player.prune = 1;
         }
+
+        console.log(`[Status] Sum: ${board_sum}, BigNums: ${big_nums}, Mess: ${is_mess}, Prune: ${ai_player.prune}`);
 
         let initial_depth, max_depth, time_limit;
         let best_op, final_depth, scores;
