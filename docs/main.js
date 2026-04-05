@@ -87,26 +87,44 @@ const vectors = {
 };
 
 // 清理上一帧残留的动画，强制同步 DOM 与逻辑
-function fastForwardAnimations() {
-    // 1. 强制所有方块瞬间就位
-    tiles.forEach(t => t.snapPosition());
-
-    // 2. 清理需要被销毁的合并源方块
-    dyingTiles.forEach(t => t.element.remove());
-    tiles = tiles.filter(t => !t.isDying);
-    dyingTiles = [];
-
-    // 3. 显示新合成的方块并触发 Pop 动画
-    hiddenMergedTiles.forEach(t => {
-        t.element.style.opacity = '1';
-        t.inner.classList.add('anim-merged');
-    });
-    hiddenMergedTiles = [];
-
+// isInterrupt 为 true 时表示由于新输入强制打断动画
+function fastForwardAnimations(isInterrupt = false) {
+    // 1. 强制所有活跃方块瞬间就位
     tiles.forEach(t => {
+        t.snapPosition();
+        
+        // 如果是强行打断，则立刻杀掉所有缩放透明度动画，强制还原到 1:1 状态
+        if (isInterrupt) {
+            t.inner.classList.remove('anim-new');
+            t.inner.classList.remove('anim-merged');
+            t.element.style.opacity = '1';
+        }
+        
         t.mergedThisTurn = false;
         t.isJustAdded = false;
     });
+
+    // 2. 清理需要被销毁的合并源方块
+    dyingTiles.forEach(t => {
+        if (t.element && t.element.parentNode) {
+            t.element.remove();
+        }
+    });
+    tiles = tiles.filter(t => !t.isDying);
+    dyingTiles = [];
+
+    // 3. 处理上一帧产生的隐藏块
+    // 如果是自然结算 (isInterrupt=false)，开启 Pop 动画
+    // 如果是由于新输入打断，我们为了视觉稳定，直接显示结果而不添加新的 Pop 脉冲
+    hiddenMergedTiles.forEach(t => {
+        t.element.style.opacity = '1';
+        if (!isInterrupt) {
+            t.inner.classList.add('anim-merged');
+        } else {
+            t.inner.classList.remove('anim-merged');
+        }
+    });
+    hiddenMergedTiles = [];
 
     saveGameState();
 }
@@ -168,8 +186,8 @@ function applyMove(direction) {
     const currentHex = getGridHex();
     const currentScore = score;
 
-    // 强制同步上一帧逻辑
-    fastForwardAnimations();
+    // 强制同步上一帧逻辑并打断已有动画
+    fastForwardAnimations(true);
 
     // 强制浏览器触发重排 (Reflow)，确保 snapPosition 的瞬间移动生效，从而杜绝斜向滑动
     void document.body.offsetHeight;
@@ -309,7 +327,7 @@ function loadFromHex(hexStr, keepScore = false) {
         clearTimeout(animTimeout);
         animTimeout = null;
     }
-    fastForwardAnimations();
+    fastForwardAnimations(true);
 
     tiles.forEach(t => t.element.remove());
     tiles = [];
@@ -346,7 +364,7 @@ function undo() {
         clearTimeout(animTimeout);
         animTimeout = null;
     }
-    fastForwardAnimations();
+    fastForwardAnimations(true);
 
     const lastState = history.pop();
     score = lastState.score;

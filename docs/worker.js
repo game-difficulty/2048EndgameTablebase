@@ -661,9 +661,9 @@ class CoreAILogic {
             }
         }
 
-        let max_d = table_type === 1256 ? 48 : 12;
-        let min_d = table_type === 1256 ? 24 : 7;
-        let _time_limit = table_type === 1256 ? 0.66 : 0.33;
+        let max_d = table_type === 1256 ? 48 : 10;
+        let min_d = table_type === 1256 ? 24 : 6;
+        let _time_limit = table_type === 1256 ? 0.64 : 0.32;
 
         let [best_op, final_depth, scores_deep] = this.perform_iterative_search(ai_player, min_d, max_d, _time_limit);
         if (scores_deep.length === 0) return false;
