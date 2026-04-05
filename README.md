@@ -7,6 +7,9 @@
 
 Even in its **Standalone Configuration** (with a footprint within 3MB), the engine achieves the **32,768 tile with an 80% success rate**. Due to its extreme efficiency and compact size, this version is even deployable on static web pages ([Experience it here](https://game-difficulty.github.io/2048EndgameTablebase/)). This sets a new benchmark for 2048 AI engines.
 
+---
+
+## Demo
 
 success rate of getting a 4096 in 12 spaces (65k endgame)
 
