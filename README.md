@@ -1,12 +1,16 @@
 # 2048EndgameTablebase: The Ultimate 2048 AI & Tablebase Solution
 
-This project offers the fastest and most space-efficient tablebase generator available, enabling players and developers to explore the theoretical limits of the game. By leveraging these massive tables, our AI achieves unprecedented success rates, reaching the **32,768 tile at 86.1%** and the **65,536 tile at 8.4%** under no-undo conditions. Even in its standalone configuration, the AI still reaches the 32,768 tile with an 80% success rate. This also represents the strongest engine performance achievable without reliance on massive external data.
+**2048EndgameTablebase** is the world's fastest and most space-efficient tablebase solution, designed to push the theoretical boundaries of 2048. By integrating massive pre-computed tables, our AI achieves groundbreaking success rates under **no-undo** conditions:
+
+* **32,768 Tile**: 86.1% success rate
+* **65,536 Tile**: 8.4% success rate
+
+Even in its **Standalone Configuration** (with a footprint within 3MB), the engine achieves the **32,768 tile with an 80% success rate**. Due to its extreme efficiency and compact size, this version is even deployable on static web pages ([Experience it here](https://game-difficulty.github.io/2048EndgameTablebase/)). This sets a new benchmark for 2048 AI engines.
 
 
 success rate of getting a 4096 in 12 spaces (65k endgame)
 
 https://github.com/user-attachments/assets/c105d4e2-8696-423c-9a76-0a130a2d6960
-
 
 
 ---
@@ -74,6 +78,52 @@ The AI dynamically dispatches between search and pre-calculated tables:
 | Search Mode | free12-2k | free11-2k | 4442f-2k | free11-512 |
 | :--- | :--- | :--- | :--- | :--- |
 | 26.49% | 13.38% | 1.41% | 51.50% | 7.22% |
+
+---
+
+## 🧠 Standalone Agent: Engineering & Algorithm
+
+### 1. Transposition Table (Cache)
+* **64-bit Double-Hash Compression:** We abandoned the standard 128-bit cache entries. By compressing the signature, score, depth, and sub-tree effort into a single 64-bit integer, we effectively double L1/L2 cache efficiency and shatter the memory bandwidth bottleneck during deep searches.
+* **Effort-Based Replacement Strategy:** Instead of a naive constant replacement policy, we introduce hash buckets and adopt a replacement strategy based on node sub-tree workload. This preserves the most computationally expensive nodes, drastically reducing redundant calculations in massive branches.
+* **Dynamic Bucket Allocation:** The number of active hash buckets scales dynamically with search depth, significantly reducing the overhead of clearing the cache between moves in shallow searches.
+
+### 2. Advanced Pruning & Search Dynamics
+* **Max-Layer over Probability Pruning:** Traditional 2048 engines prune based on the diminishing probability of spawning '4's, which creates a logical contradiction with Transposition Table hit conditions (where high-depth entries inherently have lower cumulative probabilities). We pioneered a `max_layer` constraint. By searching the rare '4' branches first and restricting them via max-layer, we aggressively populate the cache, allowing the subsequent '2' branches to achieve massive cache hit rates.
+* **Context-Aware Depth Reduction:** If the board is deemed "absolutely safe" (many empty slots and locked large tiles), the effective search depth is dramatically reduced, saving immense computational power.
+* **Catastrophic Displacement Pruning:** Leveraging deep game knowledge, the engine strictly pre-evaluates at the root whether structural disruption is acceptable. If not, branches leading to large tile displacement or chaotic formations are immediately hard-pruned.
+
+### 3. Deep-Knowledge Heuristic Evaluation
+Our evaluation function fundamentally breaks the "rules" taught to novice players:
+* **Embracing Non-Monotonicity (T-Formations):** Strict monotonicity often traps traditional AIs. Our engine dynamically permits non-monotonic formations and temporary disorder, granting it the flexibility needed to fix broken layouts. It also recognizes that having *too many* empty spaces can be detrimental to controlling where new tiles spawn.
+* **The "0xF" Abstraction for Large Tiles:** Above 512/1024, the exact value of a large tile matters far less than its relative position. We universally mask massive tiles as unmergeable entities (`0xF`). This aligns perfectly with endgame tablebase logic.
+* **Phase-Dynamic Weights:** The AI's preference for certain formations and its penalty for "death states" shift dynamically based on the current game phase and board characteristics, utilizing bitwise masks to evaluate massive tile structures instantly.
+
+### 4. Endgame Tablebase Distillation
+To guide the standalone AI through difficult endgame states, we distilled L3f tables into a hyper-compressed 2.5MB footprint:
+* **Monte Carlo Extraction:** We simulated over ten million games to identify the hundreds of thousands of most frequently encountered endgame states.
+* **Perfect Hashing Compression:** By utilizing layered perfect hashing, each state retains only a `uint16` success rate and a `uint8` double-hash verification. The final cost is 3-4 bytes per state.
+* **Verification Search:** Upon entering the endgame, the AI consults this 2.5MB table. If a match occurs, it performs a rapid search validation. If verified, the AI executes the move; otherwise, it falls back to iterative deepening.
+
+---
+
+## ⚡ Tablebase Generation: Algorithmic Innovations
+
+Computing endgame tables like `free12` involves state spaces reaching $10^{13}$ to $10^{14}$ nodes. To conquer this combinatorial explosion, our engine transcends standard Breadth-First Search (BFS) and Dynamic Programming (DP), introducing an "Advanced Algorithm" that calculates massive tables 10x faster while reducing peak memory by an order of magnitude.
+
+### 1. State Space Compression & Abstraction
+* **Bitboard representation & Symmetry Canonicalization** .
+* **Large Number Masking:** Large tiles ($\ge 64$) not immediately involved in merges are abstracted as `0xF` placeholders. A single "masked position" acts as a vector representing thousands of actual board states, compressing the BFS layers by $10\times$–$100\times$ and delivering a 10x boost in throughput. Unmasking is performed **lazily** and **partially**. A masked board is only "exposed" (restored to a specific state vector) when a newly merged tile triggers a potential collision with a large number
+
+### 2. Heuristic Bounding & Pruning
+* **Small Tile Sum Limit (STSL):** The engine aggressively prunes branches where the sum of "small tiles" ($\le 32$) exceeds a strict threshold. It recognizes that overly cluttered, fragmented boards are seldom optimal and are unworthy of computation.
+* **Large Tile Combination Constraints:** The engine restricts the types and maximum counts of co-existing large tiles (e.g., pruning branches with three `128` tiles). This filters out strategically divergent configurations that rarely emerge under optimal play.
+
+### 3. Vectorized Backward DP Solving (Batch Solving)
+* **Eliminating the Binary Search Bottleneck:** In standard DP, calculating move expectations for a state expanding into `n` unmasked positions requires `n` independent binary searches against massive arrays (which is still better than querying a giant hash table). Batch Solving radically changes this. The engine resolves all $n$ unmasked success rates for a masked position using only **~1.x binary searches on average**.
+* **Transformation Encoding & Permutation Caching:** When a move and canonicalization are applied to a masked position, the internal sequence of its `n` unmasked states gets scrambled. The engine tracks this by assigning temporary labels to the mask bits, tracing how they are displaced to generate a unique permutation signature (`ind`).  Using this `ind` signature, the engine queries a hash permutation table to retrieve a pre-calculated index mapping. This allows the engine to instantly map the scrambled success rate array back to its correct sorted order in one sweep. The time complexity per batch is slashed from a heavy O(n log n) down to O(n) with a small constant factor.
+
+> **Note:** For detailed technical specifications of the table generation logic, please refer to the `help.md` file included in the repository.
 
 ---
 
