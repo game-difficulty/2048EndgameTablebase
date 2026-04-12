@@ -1,0 +1,350 @@
+{
+  "tabs": {
+    "home": "Home",
+    "gamer": "Gamer",
+    "trainer": "Trainer",
+    "tester": "Tester",
+    "minigames": "Minigames",
+    "replay": "Replay",
+    "notebook": "Notebook",
+    "settings": "Settings",
+    "help": "Help"
+  },
+  "settings": {
+    "title": "System Settings",
+    "loading": "Loading settings...",
+    "tabs": {
+      "builder": "Tablebase Builder",
+      "game": "Game & AI",
+      "theme": "UI & Theme"
+    },
+    "builder": {
+      "pattern": "Formation",
+      "category": "Category",
+      "target": "Target Tile",
+      "path": "Storage Path",
+      "browse": "Browse",
+      "build": "Start Build",
+      "advanced": "Advanced Algorithm",
+      "compress": "Compress results",
+      "compressTemp": "Compress temp files",
+      "optimalOnly": "Optimal branch only",
+      "deletionThreshold": "Deletion threshold",
+      "successRateDtype": "Data Format",
+      "smallTileSumLimit": "Small Tile Sum Limit",
+      "chunkedSolve": "Chunked Solve",
+      "progress": "Build Progress",
+      "stop": "Stop"
+    },
+    "tooltips": {
+      "advanced": "The advanced algorithm optimizes processing speed and resource efficiency for massive tables only.",
+      "compress": "Compress result files. Recommended.",
+      "compressTemp": "Compress intermediate files to reduce storage usage during computation, at the cost of longer processing time.",
+      "chunkedSolve": "When advanced mode is enabled, chunked solve further reduces memory usage, but it increases disk I/O and is best paired with an SSD.",
+      "optimalOnly": "Post-computation pruning of suboptimal branches. Generally unnecessary.",
+      "deletionThreshold": "Remove low-success-rate positions to reduce table size. Larger values create smaller tables but may lose useful states.",
+      "successRateDtype": "Success rate data storage format. Recommended default: uint32.",
+      "smallTileSumLimit": "Controls pruning strength in the advanced algorithm. Higher values keep more low-value tile combinations and increase table size."
+    },
+    "game": {
+      "demoSpeed": "Demo Speed",
+      "spawnRate": "4-Spawn Chance",
+      "fontSize": "Tile Font Factor",
+      "uiScale": "Interface Scale",
+      "animation": "Enable Slide Animation",
+      "language": "Language",
+      "darkMode": "Dark Mode"
+    },
+    "theme": {
+      "theme": "Global Theme",
+      "colors": "Tile Color Customization",
+      "custom_label": "✨ Custom"
+    }
+  },
+  "help": {
+    "toc": {
+      "expandAll": "Expand",
+      "collapseAll": "Collapse"
+    },
+    "search": {
+      "open": "Find in Help",
+      "placeholder": "Search this help page",
+      "previous": "Previous match",
+      "next": "Next match",
+      "shortcutHint": "Ctrl+F to open search",
+      "enterHint": "Enter / Shift+Enter to jump"
+    }
+  },
+  "tester": {
+    "previousStepResults": "Previous Step Results",
+    "controls": {
+      "set": "Set",
+      "random": "Random",
+      "saveLog": "Save Log",
+      "saveReplay": "Save Replay",
+      "focusMode": "Focus Mode",
+      "showInfo": "Show Info",
+      "goToReplay": "Go To Replay",
+      "goToNotebook": "Go To Notebook",
+      "openAnalysis": "Open Analysis"
+    },
+    "metrics": {
+      "gof": "GOF",
+      "combo": "Combo",
+      "maxCombo": "Max Combo",
+      "evaluationMix": "Evaluation Mix",
+      "evaluationStats": "Evaluation Stats"
+    }
+  },
+  "gamer": {
+    "browserAi": {
+      "title": "Open the browser AI version"
+    }
+  },
+  "notebook": {
+    "patternMenu": {
+      "title": "Pattern",
+      "empty": "No available patterns"
+    },
+    "directions": {
+      "title": "Directions",
+      "up": "Up",
+      "down": "Down",
+      "left": "Left",
+      "right": "Right"
+    },
+    "feedback": {
+      "title": "Feedback",
+      "combo": "Combo",
+      "remaining": "Remaining",
+      "correct": "Correct",
+      "incorrect": "Incorrect"
+    },
+    "sampling": {
+      "title": "Sampling",
+      "options": {
+        "mistakeCount": "Mistake Count Priority",
+        "totalLoss": "Total Loss Priority",
+        "combined": "Combined Weighted"
+      }
+    },
+    "actions": {
+      "title": "Actions",
+      "next": "Next",
+      "delete": "Delete",
+      "practice": "Go To Trainer"
+    }
+  },
+  "trainer": {
+    "top": {
+      "path": "Path",
+      "load": "Load"
+    },
+    "board": {
+      "hexPlaceholder": "Hex board state",
+      "set": "Set",
+      "awaitingSpawn": "Click empty cell: Left=2, Right=4",
+      "hide32k": "Hide 32k"
+    },
+    "palette": {
+      "browse": "Browse",
+      "erase": "Erase"
+    },
+    "results": {
+      "title": "📊 Results",
+      "replay": "Replay",
+      "auto": "Auto",
+      "refresh": "Refresh",
+      "dtype": "dtype",
+      "awaitingManualSpawn": "Awaiting manual spawn...",
+      "hidden": "Results hidden"
+    },
+    "actions": {
+      "title": "⚡ Actions",
+      "demo": "▶ Demo",
+      "stop": "■ Stop",
+      "step": "⤓ Step",
+      "undo": "↶ Undo",
+      "default": "🎲 Default"
+    },
+    "spawnMode": {
+      "title": "🌱 Spawn Mode",
+      "options": {
+        "random": "Random",
+        "best": "Best",
+        "worst": "Worst",
+        "manual": "Manual"
+      }
+    },
+    "transform": {
+      "title": "🔄 Transform",
+      "vFlip": "↕ V-Flip",
+      "hFlip": "↔ H-Flip",
+      "r90": "↻ R90",
+      "l90": "↺ L90"
+    },
+    "recording": {
+      "title": "📽️ Recording",
+      "load": "📂 Load",
+      "record": "⏺️ Record",
+      "save": "💾 Save",
+      "prev": "⏪ Prev",
+      "next": "⏩ Next"
+    }
+  },
+  "replay": {
+    "toolbar": {
+      "loadReplay": "Load Replay",
+      "openFile": "Open .rpl File",
+      "loadLatest": "Load Latest Tester Replay",
+      "jumpToPractice": "Jump To Practice"
+    },
+    "slider": {
+      "title": "Marker Threshold",
+      "description": "Show markers for losses below this value.",
+      "increase": "Increase marker threshold",
+      "decrease": "Decrease marker threshold"
+    },
+    "actions": {
+      "stop": "Stop",
+      "autoDemo": "Auto Demo",
+      "step": "Step",
+      "undo": "Undo",
+      "nextInaccuracy": "Next Inaccuracy",
+      "forward10": "+10 Step",
+      "back10": "-10 Step"
+    },
+    "metrics": {
+      "gof": "GOF",
+      "combo": "Combo",
+      "maxCombo": "Max Combo",
+      "evaluationMix": "Evaluation Mix",
+      "evaluationStats": "Evaluation Stats"
+    },
+    "status": {
+      "noReplayLoaded": "No Replay Loaded",
+      "testerSession": "Tester Session",
+      "replayComplete": "Replay Complete"
+    }
+  },
+  "minigames": {
+    "menu": {
+      "subtitle": "A unified home for the experimental 2048 rule variants.",
+      "difficulty": "Difficulty",
+      "easy": "Casual",
+      "hard": "Hard",
+      "bestScore": "Best Score",
+      "highestTile": "Highest Tile",
+      "available": "Available",
+      "comingSoon": "Coming Soon",
+      "pendingMigration": "Pending migration"
+    },
+    "play": {
+      "backToMenu": "Back To Menu",
+      "keyboardHint": "Use arrows or WASD to play",
+      "info": "Info",
+      "powerUps": "Power-Ups",
+      "cancel": "Cancel"
+    },
+    "overlay": {
+      "continue": "Continue",
+      "infoTitle": "Game Info",
+      "trophyTitle": "Challenge Clear",
+      "gameOverTitle": "Game Over",
+      "gameOverMessage": "No more moves remain."
+    },
+    "powerups": {
+      "bomb": "Bomb",
+      "glove": "Glove",
+      "twist": "Twist",
+      "hints": {
+        "bomb": "Click a numbered tile to destroy it.",
+        "gloveSource": "Click a numbered tile to pick it up.",
+        "gloveTarget": "Click an empty tile to place the selected tile.",
+        "twist": "Click the hotspot between four tiles to rotate that 2×2 block clockwise."
+      }
+    }
+  },
+  "analysis": {
+    "windowTag": "Utility Window",
+    "title": "Replay Analysis",
+    "close": "Close",
+    "notes": "*Reports are saved to the same folder as each replay file. You can also paste folder paths, one per line.",
+    "input": {
+      "title": "Input",
+      "selectPattern": "Select Formation",
+      "paths": "Replay Files / Folders",
+      "pathsPlaceholder": "Paste .txt / .vrs files or folders here, one path per line",
+      "selectFiles": "Select Files",
+      "analyze": "Analyze"
+    },
+    "progress": {
+      "title": "Batch Progress",
+      "currentFile": "Current File",
+      "completed": "Completed",
+      "done": "Done",
+      "failed": "Failed",
+      "queued": "Queued",
+      "running": "Running",
+      "idle": "Idle",
+      "empty": "No analysis result yet",
+      "doneState": "Done",
+      "failedState": "Failed",
+      "completedState": "Completed",
+      "completedWithErrors": "Completed With Errors"
+    }
+  },
+  "menu": {
+    "play": "Start Game",
+    "practice": "Practise",
+    "minigames": "Minigames",
+    "test": "Test",
+    "settings": "Settings",
+    "help": "Help & About",
+    "descriptions": {
+      "play": "The Strongest 2048 AI & Evil Mode.",
+      "practice": "Inspect Table Lines and Learn Optimal Moves for Endgame Positions.",
+      "test": "Train Move Judgement, Replay Workflows, Notebook Drills, and Analysis Tools.",
+      "minigames": "Explore 2048 Variants with Unique Tiles, Rules, and Challenge Modes.",
+      "settings": "Tablebase Building & Appearance Settings.",
+      "help": "Documentation, Technique Guides, and Project Information."
+    },
+    "githubNote": "Support this project by giving it a star on GitHub"
+  },
+  "labels": {
+    "score": "SCORE",
+    "best": "BEST",
+    "gameDifficulty": "game difficulty",
+    "aiSpeed": "AI speed",
+    "tilePalette": "Tile Palette"
+  },
+  "buttons": {
+    "newGame": "New Game",
+    "undo": "Undo",
+    "oneStep": "One Step",
+    "aiOn": "AI: ON",
+    "aiOff": "AI: OFF",
+    "set": "SET"
+  },
+  "inputs": {
+    "hexPlaceholder": "Hex Code (e.g., 0123456789abcdef)"
+  },
+  "common": {
+    "apply": "Apply",
+    "copy": "Copy",
+    "close": "Close"
+  },
+  "appError": {
+    "title": "Application Error",
+    "note": "Please screenshot or copy this detail when reporting the issue.",
+    "copy": "Copy Details",
+    "copied": "Copied",
+    "showDetails": "Show Details",
+    "hideDetails": "Hide Details"
+  },
+  "status": {
+    "connecting": "Connecting...",
+    "connected": "Connected",
+    "disconnected": "Disconnected"
+  }
+}

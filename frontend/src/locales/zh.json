@@ -1,0 +1,350 @@
+{
+  "tabs": {
+    "home": "首页",
+    "gamer": "游戏",
+    "trainer": "训练",
+    "tester": "测试",
+    "minigames": "小游戏",
+    "replay": "回放",
+    "notebook": "错题本",
+    "settings": "设置",
+    "help": "帮助"
+  },
+  "settings": {
+    "title": "系统设置",
+    "loading": "正在加载设置...",
+    "tabs": {
+      "builder": "定式构建",
+      "game": "游戏与AI",
+      "theme": "界面与主题"
+    },
+    "builder": {
+      "pattern": "选择定式",
+      "category": "分类",
+      "target": "目标方块",
+      "path": "存放路径",
+      "browse": "浏览",
+      "build": "开始构建",
+      "advanced": "使用进阶算法",
+      "compress": "压缩结果文件",
+      "compressTemp": "压缩临时文件",
+      "optimalOnly": "仅保留最优分支",
+      "deletionThreshold": "删除成功率阈值",
+      "successRateDtype": "数据精度类型",
+      "smallTileSumLimit": "小方块和上限(STSL)",
+      "chunkedSolve": "分块回算",
+      "progress": "构建进度",
+      "stop": "停止构建"
+    },
+    "tooltips": {
+      "advanced": "进阶算法仅针对超大型表优化处理速度与资源效率。",
+      "compress": "压缩结果文件。推荐开启。",
+      "compressTemp": "压缩中间文件以减少计算过程中的存储占用，但会延长处理时间。",
+      "chunkedSolve": "开启进阶算法后，分块回算可进一步降低内存占用，但会显著增加磁盘 I/O，建议配合 SSD 使用。",
+      "optimalOnly": "在计算完成后裁剪非最优分支。一般没有必要开启。",
+      "deletionThreshold": "删除成功率较低的局面以减小表体积。阈值越大，表越小，但也可能丢失有用状态。",
+      "successRateDtype": "成功率数据的存储格式。推荐默认值：uint32。",
+      "smallTileSumLimit": "控制进阶算法的剪枝强度。数值越大，保留的低值小方块组合越多，表体积也会更大。"
+    },
+    "game": {
+      "demoSpeed": "Demo 推演速度",
+      "spawnRate": "4 出现概率",
+      "fontSize": "方块字体比例",
+      "uiScale": "界面字号比例",
+      "animation": "开启移动动画",
+      "language": "界面语言",
+      "darkMode": "深色模式"
+    },
+    "theme": {
+      "theme": "全局主题",
+      "colors": "方块颜色自定义",
+      "custom_label": "✨用户自定义"
+    }
+  },
+  "help": {
+    "toc": {
+      "expandAll": "展开",
+      "collapseAll": "收起"
+    },
+    "search": {
+      "open": "在帮助中搜索",
+      "placeholder": "搜索当前帮助页面",
+      "previous": "上一个结果",
+      "next": "下一个结果",
+      "shortcutHint": "按 Ctrl+F 打开搜索",
+      "enterHint": "回车 / Shift+回车 跳转"
+    }
+  },
+  "tester": {
+    "previousStepResults": "上一步成功率",
+    "controls": {
+      "set": "设置",
+      "random": "随机",
+      "saveLog": "保存日志",
+      "saveReplay": "保存回放",
+      "focusMode": "专注模式",
+      "showInfo": "显示信息",
+      "goToReplay": "跳转到回放",
+      "goToNotebook": "跳转到错题本",
+      "openAnalysis": "打开分析"
+    },
+    "metrics": {
+      "gof": "GOF",
+      "combo": "Combo",
+      "maxCombo": "Max Combo",
+      "evaluationMix": "评价分布",
+      "evaluationStats": "评价统计"
+    }
+  },
+  "gamer": {
+    "browserAi": {
+      "title": "在本地浏览器中打开网页版 AI"
+    }
+  },
+  "notebook": {
+    "patternMenu": {
+      "title": "\u5b9a\u5f0f",
+      "empty": "\u6682\u65e0\u53ef\u7528\u5b9a\u5f0f"
+    },
+    "directions": {
+      "title": "\u65b9\u5411",
+      "up": "\u4e0a",
+      "down": "\u4e0b",
+      "left": "\u5de6",
+      "right": "\u53f3"
+    },
+    "feedback": {
+      "title": "\u53cd\u9988",
+      "combo": "Combo",
+      "remaining": "\u5269\u4f59",
+      "correct": "\u6b63\u786e",
+      "incorrect": "\u9519\u8bef"
+    },
+    "sampling": {
+      "title": "\u9009\u6837\u65b9\u5f0f",
+      "options": {
+        "mistakeCount": "\u9519\u8bef\u6b21\u6570\u4f18\u5148",
+        "totalLoss": "\u603b\u635f\u5931\u4f18\u5148",
+        "combined": "\u7efc\u5408\u52a0\u6743"
+      }
+    },
+    "actions": {
+      "title": "\u64cd\u4f5c",
+      "next": "\u4e0b\u4e00\u9898",
+      "delete": "\u5220\u9664",
+      "practice": "\u8df3\u8f6c\u5230\u8bad\u7ec3"
+    }
+  },
+  "trainer": {
+    "top": {
+      "path": "路径",
+      "load": "载入"
+    },
+    "board": {
+      "hexPlaceholder": "十六进制棋盘状态",
+      "set": "设置",
+      "awaitingSpawn": "点击空格放置新块：左键=2，右键=4",
+      "hide32k": "隐藏 32k"
+    },
+    "palette": {
+      "browse": "浏览",
+      "erase": "擦除"
+    },
+    "results": {
+      "title": "📊 结果",
+      "replay": "回放",
+      "auto": "自动",
+      "refresh": "刷新",
+      "dtype": "数据类型",
+      "awaitingManualSpawn": "等待手动放置新块...",
+      "hidden": "结果已隐藏"
+    },
+    "actions": {
+      "title": "⚡ 操作",
+      "demo": "▶ Demo",
+      "stop": "■ 停止",
+      "step": "⤓ 步进",
+      "undo": "↶ 撤销",
+      "default": "🎲 默认"
+    },
+    "spawnMode": {
+      "title": "🌱 生成模式",
+      "options": {
+        "random": "随机",
+        "best": "最优",
+        "worst": "最差",
+        "manual": "手动"
+      }
+    },
+    "transform": {
+      "title": "🔄 变换",
+      "vFlip": "↕ 上下翻转",
+      "hFlip": "↔ 左右翻转",
+      "r90": "↻ 右转 90°",
+      "l90": "↺ 左转 90°"
+    },
+    "recording": {
+      "title": "📽️ 录制",
+      "load": "📂 载入",
+      "record": "⏺️ 录制",
+      "save": "💾 保存",
+      "prev": "⏪ 上一步",
+      "next": "⏩ 下一步"
+    }
+  },
+  "replay": {
+    "toolbar": {
+      "loadReplay": "载入回放",
+      "openFile": "打开 .rpl 文件",
+      "loadLatest": "载入最新 Tester 回放",
+      "jumpToPractice": "跳转到训练"
+    },
+    "slider": {
+      "title": "标记阈值",
+      "description": "仅显示低于该值的漏着标记。",
+      "increase": "提高标记阈值",
+      "decrease": "降低标记阈值"
+    },
+    "actions": {
+      "stop": "停止",
+      "autoDemo": "自动推演",
+      "step": "步进",
+      "undo": "撤回",
+      "nextInaccuracy": "下一漏着",
+      "forward10": "前进 10 步",
+      "back10": "后退 10 步"
+    },
+    "metrics": {
+      "gof": "GOF",
+      "combo": "Combo",
+      "maxCombo": "Max Combo",
+      "evaluationMix": "评价分布",
+      "evaluationStats": "评价统计"
+    },
+    "status": {
+      "noReplayLoaded": "未载入回放",
+      "testerSession": "Tester 会话",
+      "replayComplete": "回放结束"
+    }
+  },
+  "minigames": {
+    "menu": {
+      "subtitle": "统一入口放置各种规则改编版 2048 小游戏。",
+      "difficulty": "难度",
+      "easy": "休闲",
+      "hard": "困难",
+      "bestScore": "最高分",
+      "highestTile": "最高方块",
+      "available": "可玩",
+      "comingSoon": "即将支持",
+      "pendingMigration": "正在迁移"
+    },
+    "play": {
+      "backToMenu": "返回菜单",
+      "keyboardHint": "使用方向键或 WASD 操作",
+      "info": "信息",
+      "powerUps": "道具",
+      "cancel": "取消"
+    },
+    "overlay": {
+      "continue": "继续",
+      "infoTitle": "游戏说明",
+      "trophyTitle": "达成成就",
+      "gameOverTitle": "游戏结束",
+      "gameOverMessage": "已没有可用移动。"
+    },
+    "powerups": {
+      "bomb": "炸弹",
+      "glove": "手套",
+      "twist": "扭曲",
+      "hints": {
+        "bomb": "点击一个数字方块以将其摧毁。",
+        "gloveSource": "点击一个数字方块将其拾起。",
+        "gloveTarget": "点击一个空格以放下当前选中的方块。",
+        "twist": "点击四个方块中间的热点，使周围的 2×2 区块顺时针旋转。"
+      }
+    }
+  },
+  "analysis": {
+    "windowTag": "\u5de5\u5177\u7a97\u53e3",
+    "title": "\u56de\u653e\u6279\u91cf\u5206\u6790",
+    "close": "\u5173\u95ed",
+    "notes": "*\u5206\u6790\u62a5\u544a\u4f1a\u4fdd\u5b58\u5230\u6bcf\u4e2a\u56de\u653e\u6587\u4ef6\u6240\u5728\u76ee\u5f55\u3002\u4e5f\u53ef\u4ee5\u76f4\u63a5\u7c98\u8d34\u6587\u4ef6\u5939\u8def\u5f84\uff0c\u6bcf\u884c\u4e00\u6761\u3002",
+    "input": {
+      "title": "\u8f93\u5165",
+      "selectPattern": "\u9009\u62e9\u5b9a\u5f0f",
+      "paths": "\u56de\u653e\u6587\u4ef6 / \u6587\u4ef6\u5939",
+      "pathsPlaceholder": "\u5728\u6b64\u7c98\u8d34 .txt / .vrs \u6587\u4ef6\u6216\u6587\u4ef6\u5939\u8def\u5f84\uff0c\u6bcf\u884c\u4e00\u6761",
+      "selectFiles": "\u9009\u62e9\u6587\u4ef6",
+      "analyze": "\u5f00\u59cb\u5206\u6790"
+    },
+    "progress": {
+      "title": "\u6279\u5904\u7406\u8fdb\u5ea6",
+      "currentFile": "\u5f53\u524d\u6587\u4ef6",
+      "completed": "\u5df2\u5b8c\u6210",
+      "done": "\u6210\u529f",
+      "failed": "\u5931\u8d25",
+      "queued": "\u6392\u961f\u4e2d",
+      "running": "\u8fd0\u884c\u4e2d",
+      "idle": "\u7a7a\u95f2",
+      "empty": "\u6682\u65e0\u5206\u6790\u7ed3\u679c",
+      "doneState": "\u5b8c\u6210",
+      "failedState": "\u5931\u8d25",
+      "completedState": "\u5df2\u5b8c\u6210",
+      "completedWithErrors": "\u5df2\u5b8c\u6210\uff08\u542b\u9519\u8bef\uff09"
+    }
+  },
+  "menu": {
+    "play": "开始游戏",
+    "practice": "训练与定式",
+    "minigames": "小游戏",
+    "test": "测试",
+    "settings": "设置",
+    "help": "帮助",
+    "descriptions": {
+      "play": "当前最强的 2048 AI 以及困难模式",
+      "practice": "查看定式推演，学习残局最优解",
+      "test": "训练走法判断，使用回放、错题本和分析工具",
+      "minigames": "体验带有独特方块、规则与挑战玩法的 2048 变体",
+      "settings": "定式计算与外观设置",
+      "help": "查看文档、技术指南和项目说明"
+    },
+    "githubNote": "欢迎在 GitHub 上点个 Star 支持本项目"
+  },
+  "labels": {
+    "score": "分数",
+    "best": "最高分",
+    "gameDifficulty": "游戏难度 (Evil)",
+    "aiSpeed": "AI 步速极限",
+    "tilePalette": "棋块调色盘"
+  },
+  "buttons": {
+    "newGame": "新游戏",
+    "undo": "撤销",
+    "oneStep": "步进",
+    "aiOn": "AI: 开",
+    "aiOff": "AI: 关",
+    "set": "设置"
+  },
+  "inputs": {
+    "hexPlaceholder": "十六进制代码 (例如. 0123456789abcdef)"
+  },
+  "common": {
+    "apply": "应用",
+    "copy": "复制",
+    "close": "关闭"
+  },
+  "appError": {
+    "title": "程序错误",
+    "note": "反馈问题时，请截图或复制下面的错误明细。",
+    "copy": "复制明细",
+    "copied": "已复制",
+    "showDetails": "展开详情",
+    "hideDetails": "收起详情"
+  },
+  "status": {
+    "connecting": "连接中...",
+    "connected": "已连接",
+    "disconnected": "已断开"
+  }
+}

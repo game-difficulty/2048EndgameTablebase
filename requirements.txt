@@ -1,13 +1,13 @@
-python
-numpy
-numba
-cpuinfo 
-psutil
-pyqt5
-PyQtWebEngine
+# Backend & Web Server
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+pywebview>=4.0.0
+markdown>=3.4.0
 
-Python C++ Extension Module
-x86simdsort
-sort_wrapper.dll
+# Computing & Optimization
+numpy>=1.23.0
+numba>=0.57.0
+psutil>=5.9.0
+py-cpuinfo>=9.0.0
 
-
+# Built-in / Utility

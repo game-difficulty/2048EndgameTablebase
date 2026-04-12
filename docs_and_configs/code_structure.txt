@@ -1,0 +1,112 @@
+2048 Endgame Tablebase - current code structure
+
+1. Runtime entrypoints
+- backend_server.py
+  Thin FastAPI/WebSocket entrypoint for the desktop app.
+- backend/
+  Main backend package used by the Vue frontend.
+- frontend/
+  Vue application source and build output.
+
+2. Backend layout
+- backend/handlers/
+  WebSocket action handlers grouped by feature.
+- backend/minigames/
+  Minigame registry, engine, services, sessions, and migrated game variants.
+- backend/analysis_core.py
+  Qt-free analysis logic extracted from the old desktop implementation.
+- backend/session.py, backend/state.py, backend/serialization.py
+  Shared backend session/state/serialization utilities.
+
+3. Frontend layout
+- frontend/src/app/
+  App shell, top-level tabs, shared app settings.
+- frontend/src/features/
+  Feature-based Vue pages and components.
+- frontend/src/components/
+  Shared UI components still reused across multiple features.
+- frontend/src/utils/ and frontend/src/services/
+  Shared frontend utilities and transport helpers.
+
+4. Core algorithm package
+- egtb_core/
+  Core 2048 / tablebase / replay logic extracted from the old root-level layout.
+  Main modules now live here:
+  - AIPlayer.py
+  - BoardMover.py / BoardMoverAD.py / BoardMaskerAD.py / VBoardMover.py
+  - Calculator.py
+  - BookReader.py / BookReaderAD.py
+  - BookBuilder.py / BookGenerator*.py / BookSolver*.py
+  - LzmaCompressor.py / TrieCompressor.py
+  - replay_utils.py
+
+These files are still used heavily by the migrated backend, but are now grouped
+under a dedicated package instead of being mixed into the project root.
+
+5. Root-level files intentionally kept outside egtb_core
+- Config.py
+  Global config loader/saver and application-level settings integration.
+- SignalHub.py
+  Shared signal/event helper still referenced by runtime code.
+- requirements.txt
+  Main Python dependencies list.
+- docs_and_configs/
+  Centralized directory for documentation and configuration.
+  - config
+    Local runtime config/state file.
+  - mistakes_book.pkl
+    Local notebook persistence.
+  - patterns_config.json, default_patterns.json, themes.json
+    Pattern and theme definitions.
+  - color_schemes.txt
+    UI color scheme definitions.
+- logger.txt
+  Runtime log output (still in root).
+
+6. Assets and static resources
+- pic/
+  Shared static assets.
+- minigames/pic/
+  Minigame assets and covers.
+- font/
+  Fonts.
+- mathjax/
+  Help/document rendering dependency.
+- favicon.ico
+  App/browser icon.
+
+7. Minigame compatibility layer
+- minigames/MinigameMover.py
+  Legacy mover module still reused by backend/minigames/engine/mover.py.
+
+8. Documentation and Configuration
+- docs_and_configs/help/
+  User-facing help files loaded by backend/handlers/settings.py.
+- docs_and_configs/plans/
+  Refactor and implementation planning documents.
+- docs_and_configs/notes/
+  Analysis notes and miscellaneous internal notes.
+- docs_and_configs/packaging_guide.md
+  Guide for bundling with PyInstaller.
+- docs_and_configs/code_structure.txt
+  This structure summary.
+
+9. Tools
+- tools/AItest.py
+  Standalone test script, not part of runtime app startup.
+- tools/Analyzer2.py
+  Auxiliary analysis script, not part of runtime app startup.
+
+10. Local-only / generated content
+- frontend/node_modules/, frontend/dist/
+  Frontend dependency/build output.
+- AIPlayer_cpp/build/ and AIPlayer_cpp/wasm_project/build/
+  Native build outputs.
+- __pycache__/ and temporary compile artifacts
+  Python-generated cache files.
+
+11. Cleanup status
+- Old PyQt window files were removed from the runtime path.
+- Root-level algorithm modules have been moved into egtb_core/.
+- The remaining root-level Python files are now entrypoint/config integration
+  files rather than feature UI implementations.
