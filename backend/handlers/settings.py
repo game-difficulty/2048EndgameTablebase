@@ -7,6 +7,7 @@ import math
 import os
 import re
 import threading
+import time
 
 import markdown
 from Config import SingletonConfig, category_info, theme_map
@@ -21,6 +22,19 @@ from ..session import GameSession
 from ..state import ConnectionManager
 
 
+MAX_DELETION_THRESHOLD = 0.999999
+MIN_BUILD_PROGRESS_INTERVAL = 1.2
+MAX_BUILD_PROGRESS_UPDATES = 120
+
+
+def normalize_deletion_threshold(value: Any) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = 0.0
+    return min(MAX_DELETION_THRESHOLD, max(0.0, parsed))
+
+
 async def handle_settings_action(
     action: str,
     payload: dict[str, Any],
@@ -31,6 +45,9 @@ async def handle_settings_action(
     if action == Action.GET_SETTINGS:
         config = SingletonConfig().config.copy()
         config["ui_scale"] = config.get("ui_scale", 100)
+        config["deletion_threshold"] = normalize_deletion_threshold(
+            config.get("deletion_threshold", 0.0)
+        )
         await websocket.send_json(
             {
                 "type": EventType.SETTINGS_DATA,
@@ -49,6 +66,9 @@ async def handle_settings_action(
         value = payload.get("value")
         config = SingletonConfig().config
         config["ui_scale"] = config.get("ui_scale", 100)
+        config["deletion_threshold"] = normalize_deletion_threshold(
+            config.get("deletion_threshold", 0.0)
+        )
 
         if key == "theme":
             config["theme"] = value
@@ -70,6 +90,9 @@ async def handle_settings_action(
                 if theme in theme_map:
                     config["colors"] = list(theme_map[theme]) + ["#000000"] * 20
             SingletonConfig.tile_font_colors()
+        elif key == "deletion_threshold":
+            value = normalize_deletion_threshold(value)
+            config[key] = value
         else:
             config[key] = value
 
@@ -134,6 +157,12 @@ async def handle_settings_action(
         SingletonConfig().save_config(config)
         loop = asyncio.get_running_loop()
         progress_state = {"current": 0, "total": 0}
+        progress_lock = threading.Lock()
+        progress_meta = {
+            "last_sent_at": 0.0,
+            "last_sent_current": -1,
+            "last_sent_total": -1,
+        }
 
         async def send_build_message(
             message_type: str, message_payload: dict[str, Any]
@@ -154,8 +183,32 @@ async def handle_settings_action(
 
             current = max(0, current)
             total = max(current, total)
-            progress_state["current"] = current
-            progress_state["total"] = total
+            with progress_lock:
+                progress_state["current"] = current
+                progress_state["total"] = total
+
+            now = time.monotonic()
+            with progress_lock:
+                last_sent_at = progress_meta["last_sent_at"]
+                last_sent_current = progress_meta["last_sent_current"]
+                last_sent_total = progress_meta["last_sent_total"]
+
+            step_delta = max(2, total // MAX_BUILD_PROGRESS_UPDATES)
+            should_emit = (
+                current >= total
+                or last_sent_current < 0
+                or total != last_sent_total
+                or (current - last_sent_current) >= step_delta
+                or (now - last_sent_at) >= MIN_BUILD_PROGRESS_INTERVAL
+            )
+            if not should_emit:
+                return
+
+            with progress_lock:
+                progress_meta["last_sent_at"] = now
+                progress_meta["last_sent_current"] = current
+                progress_meta["last_sent_total"] = total
+
             asyncio.run_coroutine_threadsafe(
                 send_build_message(
                     EventType.BUILD_PROGRESS,

@@ -6,7 +6,6 @@ import pickle
 import sys
 import json
 import threading
-import traceback
 from typing import Callable, Optional, Any
 import ctypes
 import platform
@@ -16,7 +15,7 @@ import numpy as np
 
 import egtb_core.Calculator as Calculator
 from egtb_core.BoardMover import decode_board
-from error_bridge import publish_frontend_error
+from error_bridge import publish_frontend_exception
 
 PatternCheckFunc = Callable[[np.uint64], bool]
 CanonicalFunc = Callable[[np.uint64], np.uint64]
@@ -97,6 +96,17 @@ logger.addHandler(console_handler)
 logger.addHandler(file_handler)
 
 
+MAX_DELETION_THRESHOLD = 0.999999
+
+
+def normalize_deletion_threshold(value):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = 0.0
+    return min(MAX_DELETION_THRESHOLD, max(0.0, parsed))
+
+
 def handle_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
@@ -104,10 +114,10 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 
     logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
     try:
-        formatted = "".join(
-            traceback.format_exception(exc_type, exc_value, exc_traceback)
-        ).strip()
-        publish_frontend_error("Unhandled Exception", formatted)
+        publish_frontend_exception(
+            "Unhandled Exception",
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
     except Exception:
         logger.error("Failed to publish frontend error", exc_info=True)
 
@@ -415,6 +425,12 @@ class SingletonConfig:
                         if k not in data:
                             data[k] = v
                             updated = True
+                    normalized_deletion_threshold = normalize_deletion_threshold(
+                        data.get("deletion_threshold", defaults["deletion_threshold"])
+                    )
+                    if data.get("deletion_threshold") != normalized_deletion_threshold:
+                        data["deletion_threshold"] = normalized_deletion_threshold
+                        updated = True
                     if updated:
                         cls.save_config(data, filename)
                     return data

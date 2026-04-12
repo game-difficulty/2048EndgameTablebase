@@ -23,29 +23,35 @@ export function useSettingsSession(activeRef) {
 
   const selectedCategory = ref('');
   const selectedPattern = ref('');
-  const selectedTarget = ref('2048');
+  const selectedTarget = ref('512');
   const buildPath = ref('C:/2048_tables/');
   const buildProgressCurrent = ref(0);
   const buildProgressTotal = ref(0);
   const isBuilding = ref(false);
+  const builderAdvancedAlgo = ref(false);
+  const builderCompress = ref(false);
+  const builderCompressTempFiles = ref(false);
+  const builderOptimalBranchOnly = ref(false);
+  const builderChunkedSolve = ref(false);
+  const builderSuccessRateDtype = ref('uint32');
+  const builderSmallTileSumLimit = ref(96);
+  const MAX_DELETION_THRESHOLD = 0.999999;
 
   const formatDeletionThreshold = (value) => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed.toFixed(6) : '0.000000';
   };
 
+  const normalizeDeletionThreshold = (value) => {
+    const parsed = Number.parseFloat(value);
+    if (!Number.isFinite(parsed)) {
+      return 0;
+    }
+    return Math.min(MAX_DELETION_THRESHOLD, Math.max(0, parsed));
+  };
+
   const deletionThresholdInput = ref(
     formatDeletionThreshold(config.value.deletion_threshold ?? 0)
-  );
-
-  watch(
-    () => config.value.advanced_algo,
-    (newVal) => {
-      if (newVal) {
-        config.value.optimal_branch_only = false;
-        saveSetting('optimal_branch_only');
-      }
-    }
   );
 
   watch(selectedCategory, (newCategory) => {
@@ -54,11 +60,35 @@ export function useSettingsSession(activeRef) {
     }
   });
 
+  const syncBuilderStateFromConfig = () => {
+    builderAdvancedAlgo.value = Boolean(config.value.advanced_algo);
+    builderCompress.value = Boolean(config.value.compress);
+    builderCompressTempFiles.value = Boolean(config.value.compress_temp_files);
+    builderOptimalBranchOnly.value = builderAdvancedAlgo.value
+      ? false
+      : Boolean(config.value.optimal_branch_only);
+    builderChunkedSolve.value = Boolean(config.value.chunked_solve);
+    builderSuccessRateDtype.value =
+      config.value.success_rate_dtype || 'uint32';
+    builderSmallTileSumLimit.value =
+      Number(config.value.SmallTileSumLimit) || 96;
+    deletionThresholdInput.value = formatDeletionThreshold(
+      normalizeDeletionThreshold(config.value.deletion_threshold ?? 0)
+    );
+  };
+
   watch(
-    () => config.value.deletion_threshold,
-    (newValue) => {
-      deletionThresholdInput.value = formatDeletionThreshold(newValue);
-    },
+    () => [
+      config.value.advanced_algo,
+      config.value.compress,
+      config.value.compress_temp_files,
+      config.value.optimal_branch_only,
+      config.value.chunked_solve,
+      config.value.success_rate_dtype,
+      config.value.SmallTileSumLimit,
+      config.value.deletion_threshold,
+    ],
+    syncBuilderStateFromConfig,
     { immediate: true }
   );
 
@@ -141,13 +171,11 @@ export function useSettingsSession(activeRef) {
   };
 
   const commitDeletionThreshold = () => {
-    const parsed = Number.parseFloat(deletionThresholdInput.value);
-    const clamped = Number.isFinite(parsed) ? Math.min(1, Math.max(0, parsed)) : 0;
-    config.value.deletion_threshold = Number(clamped.toFixed(6));
-    deletionThresholdInput.value = formatDeletionThreshold(
-      config.value.deletion_threshold
+    const normalized = Number(
+      normalizeDeletionThreshold(deletionThresholdInput.value).toFixed(6)
     );
-    saveSetting('deletion_threshold');
+    deletionThresholdInput.value = formatDeletionThreshold(normalized);
+    saveSetting('deletion_threshold', normalized);
   };
 
   const handleDeletionThresholdInput = (event) => {
@@ -159,16 +187,49 @@ export function useSettingsSession(activeRef) {
   };
 
   const stepDeletionThreshold = (direction) => {
-    const currentValue = Number.isFinite(Number(config.value.deletion_threshold))
-      ? Number(config.value.deletion_threshold)
-      : 0;
+    const currentValue = normalizeDeletionThreshold(deletionThresholdInput.value);
     const steppedValue = currentValue + direction * 0.01;
-    const clampedValue = Math.min(1, Math.max(0, steppedValue));
-    config.value.deletion_threshold = Number(clampedValue.toFixed(6));
-    deletionThresholdInput.value = formatDeletionThreshold(
-      config.value.deletion_threshold
+    const clampedValue = Number(
+      normalizeDeletionThreshold(steppedValue).toFixed(6)
     );
-    saveSetting('deletion_threshold');
+    deletionThresholdInput.value = formatDeletionThreshold(clampedValue);
+    saveSetting('deletion_threshold', clampedValue);
+  };
+
+  const handleAdvancedAlgoChange = () => {
+    const nextValue = Boolean(builderAdvancedAlgo.value);
+    saveSetting('advanced_algo', nextValue);
+    if (nextValue) {
+      builderOptimalBranchOnly.value = false;
+      saveSetting('optimal_branch_only', false);
+    }
+  };
+
+  const handleCompressChange = () => {
+    saveSetting('compress', Boolean(builderCompress.value));
+  };
+
+  const handleCompressTempFilesChange = () => {
+    saveSetting('compress_temp_files', Boolean(builderCompressTempFiles.value));
+  };
+
+  const handleOptimalBranchOnlyChange = () => {
+    saveSetting('optimal_branch_only', Boolean(builderOptimalBranchOnly.value));
+  };
+
+  const handleChunkedSolveChange = () => {
+    saveSetting('chunked_solve', Boolean(builderChunkedSolve.value));
+  };
+
+  const handleSuccessRateDtypeChange = () => {
+    saveSetting('success_rate_dtype', builderSuccessRateDtype.value);
+  };
+
+  const handleSmallTileSumLimitChange = () => {
+    saveSetting(
+      'SmallTileSumLimit',
+      Number(builderSmallTileSumLimit.value) || 96
+    );
   };
 
   const saveCustomColor = () => {
@@ -199,16 +260,29 @@ export function useSettingsSession(activeRef) {
         ? Math.round(Math.log2(targetTileValue))
         : targetTileValue;
 
-    [
-      'advanced_algo',
-      'compress',
+    const normalizedDeletionThreshold = Number(
+      normalizeDeletionThreshold(deletionThresholdInput.value).toFixed(6)
+    );
+    deletionThresholdInput.value = formatDeletionThreshold(
+      normalizedDeletionThreshold
+    );
+    saveSetting('advanced_algo', Boolean(builderAdvancedAlgo.value));
+    saveSetting('compress', Boolean(builderCompress.value));
+    saveSetting(
       'compress_temp_files',
+      Boolean(builderCompressTempFiles.value)
+    );
+    saveSetting(
       'optimal_branch_only',
-      'chunked_solve',
-      'deletion_threshold',
-      'success_rate_dtype',
+      builderAdvancedAlgo.value ? false : Boolean(builderOptimalBranchOnly.value)
+    );
+    saveSetting('chunked_solve', Boolean(builderChunkedSolve.value));
+    saveSetting('deletion_threshold', normalizedDeletionThreshold);
+    saveSetting('success_rate_dtype', builderSuccessRateDtype.value);
+    saveSetting(
       'SmallTileSumLimit',
-    ].forEach(saveSetting);
+      Number(builderSmallTileSumLimit.value) || 96
+    );
 
     buildClient?.send('START_BUILD', {
       pattern: selectedPattern.value,
@@ -250,14 +324,28 @@ export function useSettingsSession(activeRef) {
     selectedTarget,
     buildPath,
     isBuilding,
+    builderAdvancedAlgo,
+    builderCompress,
+    builderCompressTempFiles,
+    builderOptimalBranchOnly,
+    builderChunkedSolve,
+    builderSuccessRateDtype,
+    builderSmallTileSumLimit,
     deletionThresholdInput,
     filteredPatterns,
     buildProgressPercent,
     buildProgressDisplay,
     saveSetting,
+    handleAdvancedAlgoChange,
+    handleCompressChange,
+    handleCompressTempFilesChange,
+    handleOptimalBranchOnlyChange,
+    handleChunkedSolveChange,
+    handleSuccessRateDtypeChange,
     handleDeletionThresholdInput,
     handleDeletionThresholdChange,
     stepDeletionThreshold,
+    handleSmallTileSumLimitChange,
     saveCustomColor,
     setTheme,
     changeLanguage,

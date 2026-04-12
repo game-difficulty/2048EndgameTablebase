@@ -30,6 +30,8 @@ const DEFAULT_CONFIG = {
   language: 'en',
 };
 
+const MAX_DELETION_THRESHOLD = 0.999999;
+
 const wsStatus = ref('connecting');
 const loaded = ref(false);
 const config = ref({ ...DEFAULT_CONFIG });
@@ -39,16 +41,30 @@ const targetTiles = ref([]);
 
 let client = null;
 let started = false;
+let pendingSettingsRefresh = false;
 const clientId = `app_settings_${Math.random().toString(36).slice(2, 9)}`;
 
 const clonePalette = (palette, fallback = EMPTY_COLOR_SET) =>
   Array.isArray(palette) && palette.length > 0 ? [...palette] : [...fallback];
 
+const normalizeDeletionThreshold = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_CONFIG.deletion_threshold;
+  }
+  return Math.min(MAX_DELETION_THRESHOLD, Math.max(0, parsed));
+};
+
 const mergeConfig = (nextConfig = {}) => {
   const previous = config.value;
+  const nextUiScale = Number(nextConfig.ui_scale ?? previous.ui_scale ?? DEFAULT_CONFIG.ui_scale) || DEFAULT_CONFIG.ui_scale;
   config.value = {
     ...previous,
     ...nextConfig,
+    deletion_threshold: normalizeDeletionThreshold(
+      nextConfig.deletion_threshold ?? previous.deletion_threshold ?? DEFAULT_CONFIG.deletion_threshold
+    ),
+    ui_scale: Math.min(125, Math.max(90, nextUiScale)),
     colors: clonePalette(nextConfig.colors ?? previous.colors, DEFAULT_CONFIG.colors),
     custom_colors: clonePalette(nextConfig.custom_colors ?? previous.custom_colors, DEFAULT_CONFIG.custom_colors),
   };
@@ -106,7 +122,6 @@ const handleSettingsData = (payload = {}) => {
   themeMap.value = payload.theme_map || {};
   targetTiles.value = payload.target_tiles || [];
   mergeConfig(payload.config || {});
-  config.value.ui_scale = Number(payload?.config?.ui_scale ?? DEFAULT_CONFIG.ui_scale) || DEFAULT_CONFIG.ui_scale;
   loaded.value = true;
   applyGlobalConfig();
 };
@@ -140,6 +155,7 @@ const connect = () => {
     clientId,
     onOpen: () => {
       wsStatus.value = 'connected';
+      pendingSettingsRefresh = false;
       client.send('GET_SETTINGS');
     },
     onMessage: (message) => {
@@ -160,7 +176,10 @@ const connect = () => {
 
 const refreshSettings = () => {
   ensureStarted();
-  client?.send('GET_SETTINGS');
+  pendingSettingsRefresh = true;
+  if (client?.send('GET_SETTINGS')) {
+    pendingSettingsRefresh = false;
+  }
 };
 
 const start = () => {

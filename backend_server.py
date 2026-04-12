@@ -6,7 +6,6 @@ from fastapi.responses import FileResponse
 import json
 import os
 import sys
-import traceback
 import socket
 from backend.actions import Action, Message
 from backend.handlers.analysis import handle_analysis_action
@@ -19,7 +18,7 @@ from backend.handlers.tester import handle_tester_action
 from backend.handlers.trainer import handle_trainer_action
 from backend.state import ConnectionManager, save_game_state
 from backend.webview_api import Api
-from error_bridge import register_frontend_error_dispatcher
+from error_bridge import register_frontend_error_dispatcher, publish_frontend_exception
 
 from fastapi.staticfiles import StaticFiles
 
@@ -142,10 +141,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
                 break
             except Exception as e:
                 print(f"WebSocket action error: {e}")
-                traceback.print_exc()
+                publish_frontend_exception("WebSocket Action Error", e)
                 await _send_ws_error(websocket, str(e))
     except Exception as e:
         print(f"Connection error: {e}")
+        publish_frontend_exception("WebSocket Connection Error", e)
     finally:
         save_game_state(session)
         manager.disconnect(websocket)

@@ -71,7 +71,7 @@
       </div>
 
       <div class="w-full">
-        <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" />
+        <BaseBoard :board="board" :metadata="metadata" />
       </div>
 
       <div class="w-full mt-6 bg-ctrl-bg rounded-md p-4 flex flex-col space-y-4 shadow-sm">
@@ -108,7 +108,6 @@ const {
   aiEnabled,
   difficulty,
   aiSpeed,
-  dis32k,
   hexInput,
   scoreAnimations,
   triggerAction,

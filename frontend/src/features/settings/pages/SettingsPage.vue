@@ -64,7 +64,7 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-6 gap-x-7">
               <label class="flex items-start gap-3 cursor-pointer group min-h-[3.0rem]">
                 <div class="relative">
-                  <input type="checkbox" v-model="config.advanced_algo" class="sr-only peer" @change="saveSetting('advanced_algo')" />
+                  <input type="checkbox" v-model="builderAdvancedAlgo" class="sr-only peer" @change="handleAdvancedAlgoChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
                   <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
                 </div>
@@ -76,7 +76,7 @@
 
               <label class="flex items-start gap-3 cursor-pointer group min-h-[3.0rem]">
                 <div class="relative">
-                  <input type="checkbox" v-model="config.compress" class="sr-only peer" @change="saveSetting('compress')" />
+                  <input type="checkbox" v-model="builderCompress" class="sr-only peer" @change="handleCompressChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
                   <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
                 </div>
@@ -88,7 +88,7 @@
 
               <label class="flex items-start gap-3 cursor-pointer group min-h-[3.0rem]">
                 <div class="relative">
-                  <input type="checkbox" v-model="config.compress_temp_files" class="sr-only peer" @change="saveSetting('compress_temp_files')" />
+                  <input type="checkbox" v-model="builderCompressTempFiles" class="sr-only peer" @change="handleCompressTempFilesChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
                   <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
                 </div>
@@ -98,9 +98,9 @@
                 </span>
               </label>
 
-              <label class="flex items-start gap-3 cursor-pointer group min-h-[3.0rem]" v-if="!config.advanced_algo">
+              <label class="flex items-start gap-3 cursor-pointer group min-h-[3.0rem]" v-if="!builderAdvancedAlgo">
                 <div class="relative">
-                  <input type="checkbox" v-model="config.optimal_branch_only" class="sr-only peer" @change="saveSetting('optimal_branch_only')" />
+                  <input type="checkbox" v-model="builderOptimalBranchOnly" class="sr-only peer" @change="handleOptimalBranchOnlyChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
                   <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
                 </div>
@@ -110,9 +110,9 @@
                 </span>
               </label>
 
-              <label class="flex items-start gap-3 cursor-pointer group min-h-[3.0rem]" v-if="config.advanced_algo">
+              <label class="flex items-start gap-3 cursor-pointer group min-h-[3.0rem]" v-if="builderAdvancedAlgo">
                 <div class="relative">
-                  <input type="checkbox" v-model="config.chunked_solve" class="sr-only peer" @change="saveSetting('chunked_solve')" />
+                  <input type="checkbox" v-model="builderChunkedSolve" class="sr-only peer" @change="handleChunkedSolveChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
                   <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
                 </div>
@@ -130,7 +130,7 @@
                   <span>{{ $t('settings.builder.successRateDtype') }}</span>
                   <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.successRateDtype')" :data-tooltip="$t('settings.tooltips.successRateDtype')">?</span>
                 </label>
-                <select v-model="config.success_rate_dtype" @change="saveSetting('success_rate_dtype')" class="w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-control font-black text-text-main outline-none hover:border-accent transition-colors cursor-pointer shadow-sm">
+                  <select v-model="builderSuccessRateDtype" @change="handleSuccessRateDtypeChange" class="w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-control font-black text-text-main outline-none hover:border-accent transition-colors cursor-pointer shadow-sm">
                   <option value="uint32">uint32 (Default)</option>
                   <option value="uint64">uint64</option>
                   <option value="float32">float32</option>
@@ -146,7 +146,7 @@
                   <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.deletionThreshold')" :data-tooltip="$t('settings.tooltips.deletionThreshold')">?</span>
                 </label>
                 <div class="group relative">
-                  <input type="number" step="0.01" min="0" max="1" :value="deletionThresholdInput" @input="handleDeletionThresholdInput" @change="handleDeletionThresholdChange" class="builder-number-input w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 pr-9 ui-control font-black text-text-main outline-none hover:border-accent transition-colors shadow-sm" />
+                  <input type="number" step="0.01" min="0" max="0.999999" :value="deletionThresholdInput" @input="handleDeletionThresholdInput" @change="handleDeletionThresholdChange" class="builder-number-input w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 pr-9 ui-control font-black text-text-main outline-none hover:border-accent transition-colors shadow-sm" />
                   <div class="pointer-events-none absolute inset-y-1 right-1 flex w-5 flex-col overflow-hidden rounded-md border border-border-main/70 bg-bg-card/90 opacity-0 shadow-sm transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
                     <button type="button" @click="stepDeletionThreshold(1)" class="number-spin-btn border-b border-border-main/60" aria-label="Increase deletion threshold">
                       ▲
@@ -159,16 +159,16 @@
               </div>
               </div>
 
-              <div class="min-h-[4.75rem] transition-opacity duration-150" :class="config.advanced_algo ? 'opacity-100' : 'opacity-0 pointer-events-none select-none'">
+              <div class="min-h-[4.75rem] transition-opacity duration-150" :class="builderAdvancedAlgo ? 'opacity-100' : 'opacity-0 pointer-events-none select-none'">
                 <div class="flex flex-col">
                 <div class="flex justify-between items-center mb-2">
                   <label class="flex items-center gap-2 ui-control font-black text-text-main uppercase tracking-wider opacity-70">
                     <span>{{ $t('settings.builder.smallTileSumLimit') }}</span>
                     <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.smallTileSumLimit')" :data-tooltip="$t('settings.tooltips.smallTileSumLimit')">?</span>
                   </label>
-                  <span class="pill-badge pill-badge-soft font-mono shadow-sm">{{ config.SmallTileSumLimit }}</span>
+                  <span class="pill-badge pill-badge-soft font-mono shadow-sm">{{ builderSmallTileSumLimit }}</span>
                 </div>
-                <input type="range" min="20" max="120" step="2" v-model.number="config.SmallTileSumLimit" @change="saveSetting('SmallTileSumLimit')" class="w-full accent-accent cursor-pointer" />
+                <input type="range" min="20" max="120" step="2" v-model.number="builderSmallTileSumLimit" @change="handleSmallTileSumLimitChange" class="w-full accent-accent cursor-pointer" />
                 </div>
               </div>
             </div>
@@ -338,14 +338,28 @@ const props = defineProps({
   selectedTarget,
   buildPath,
   isBuilding,
+  builderAdvancedAlgo,
+  builderCompress,
+  builderCompressTempFiles,
+  builderOptimalBranchOnly,
+  builderChunkedSolve,
+  builderSuccessRateDtype,
+  builderSmallTileSumLimit,
   deletionThresholdInput,
   filteredPatterns,
   buildProgressPercent,
   buildProgressDisplay,
   saveSetting,
+  handleAdvancedAlgoChange,
+  handleCompressChange,
+  handleCompressTempFilesChange,
+  handleOptimalBranchOnlyChange,
+  handleChunkedSolveChange,
+  handleSuccessRateDtypeChange,
   handleDeletionThresholdInput,
   handleDeletionThresholdChange,
   stepDeletionThreshold,
+  handleSmallTileSumLimitChange,
   saveCustomColor,
   setTheme,
   changeLanguage,

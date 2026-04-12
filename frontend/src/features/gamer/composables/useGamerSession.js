@@ -1,10 +1,8 @@
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 
-import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { createWsClient } from '../../../services/ws/createWsClient';
 
 export function useGamerSession(activeRef) {
-  const { config } = useAppSettingsStore();
   const VALID_DIRECTIONS = new Set(['left', 'right', 'up', 'down']);
 
   const board = ref([0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 65536]);
@@ -14,7 +12,6 @@ export function useGamerSession(activeRef) {
   const aiEnabled = ref(false);
   const difficulty = ref(0);
   const aiSpeed = ref(100);
-  const dis32k = ref(false);
   const hexInput = ref('');
   const currentHex = ref('0000000000000000');
 
@@ -179,14 +176,6 @@ export function useGamerSession(activeRef) {
   });
 
   watch(
-    () => config.value.dis_32k,
-    (value) => {
-      dis32k.value = !!value;
-    },
-    { immediate: true }
-  );
-
-  watch(
     activeRef,
     (isActive) => {
       if (isActive) {
@@ -212,7 +201,6 @@ export function useGamerSession(activeRef) {
     aiEnabled,
     difficulty,
     aiSpeed,
-    dis32k,
     hexInput,
     scoreAnimations,
     triggerAction,
