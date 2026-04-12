@@ -18,7 +18,7 @@
       </div>
     </div>
 
-    <div class="grid w-full min-w-[1060px] max-w-6xl grid-cols-[442px_minmax(0,1fr)] items-start gap-6">
+    <div class="grid w-full min-w-[1060px] max-w-6xl grid-cols-[480px_minmax(0,1fr)] items-start gap-6">
       <section class="flex flex-col">
         <ReplayMarkSlider
           :losses="losses"
@@ -39,7 +39,7 @@
           <button class="action-btn min-w-[150px]" :disabled="!loaded" @click="jumpToPractice">{{ $t('replay.toolbar.jumpToPractice') }}</button>
         </div>
 
-        <div class="pointer-events-none mx-auto w-full max-w-[438px]">
+        <div class="pointer-events-none mx-auto w-full max-w-[480px]">
           <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" />
         </div>
       </section>
@@ -56,12 +56,18 @@
 
         <div class="space-y-3 rounded-[20px] bg-bg-card/72 p-3">
           <div class="rounded-[18px] bg-bg-main/58 p-3">
-            <div class="mb-2 flex justify-end">
-              <span v-if="resultsRefreshing" class="pill-badge pill-badge-soft">
+            <div class="mb-2 flex min-h-[1.75rem] items-center justify-between gap-3">
+              <span class="ui-caption font-black uppercase tracking-[0.18em] text-text-secondary">
+                {{ $t('replay.results.title') }}
+              </span>
+              <span
+                class="pill-badge pill-badge-soft transition-opacity"
+                :class="resultsUpdatingVisible ? 'opacity-100' : 'opacity-0'"
+              >
                 {{ $t('common.updating') }}
               </span>
             </div>
-            <div class="flex flex-col gap-1.5 transition-opacity" :class="resultsRefreshing ? 'opacity-70' : 'opacity-100'">
+            <div class="flex flex-col gap-1.5 transition-opacity" :class="resultsUpdatingVisible ? 'opacity-70' : 'opacity-100'">
               <div
                 v-for="item in displayedResults"
                 :key="item.dir"
@@ -198,6 +204,7 @@ const {
   summaryMaxCombo,
   displayedResults,
   resultsRefreshing,
+  resultsUpdatingVisible,
   feedbackBadgeText,
   feedbackBadgeStyle,
   feedbackLossText,

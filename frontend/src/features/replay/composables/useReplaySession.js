@@ -7,8 +7,8 @@ import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
 
 export function useReplaySession(activeRef, emit) {
-  const RESULT_REFRESH_GRACE_MS = 600;
-  const RESULT_REFRESH_PLACEHOLDER_MS = 1800;
+  const RESULT_REFRESH_GRACE_MS = 1200;
+  const RESULT_REFRESH_PLACEHOLDER_MS = 2400;
   const { config: appConfig, categories: appCategories, saveSetting } = useAppSettingsStore();
   const { t } = useI18n();
 
@@ -68,6 +68,7 @@ export function useReplaySession(activeRef, emit) {
   let resultsStaleTimer = null;
   let resultsPlaceholderTimer = null;
   const resultsRefreshPhase = ref('idle');
+  const pendingLatestReplayLoad = ref(false);
 
   const makePlaceholderResults = () => ['up', 'down', 'right', 'left'].map((dir) => ({
     dir,
@@ -160,6 +161,9 @@ export function useReplaySession(activeRef, emit) {
   });
 
   const resultsRefreshing = computed(() => resultsRefreshPhase.value !== 'idle');
+  const resultsUpdatingVisible = computed(
+    () => resultsRefreshPhase.value === 'stale' || resultsRefreshPhase.value === 'placeholder'
+  );
 
   const currentEvaluation = computed(() => {
     if (loss.value == null) return null;
@@ -275,6 +279,28 @@ export function useReplaySession(activeRef, emit) {
     client?.send(action, payload);
   };
 
+  const consumePendingLatestReplayLoad = () => {
+    if (!window.__pendingReplayLatestLoad) {
+      return false;
+    }
+    window.__pendingReplayLatestLoad = false;
+    return true;
+  };
+
+  const requestLatestReplayLoad = () => {
+    stopDemo();
+    startResultsRefresh();
+    triggerAction('REPLAY_LOAD_LATEST');
+  };
+
+  const flushPendingLatestReplayLoad = () => {
+    if (!pendingLatestReplayLoad.value || wsStatus.value !== 'connected') {
+      return;
+    }
+    pendingLatestReplayLoad.value = false;
+    requestLatestReplayLoad();
+  };
+
   const clearResultsRefreshTimers = () => {
     if (resultsStaleTimer) {
       window.clearTimeout(resultsStaleTimer);
@@ -369,9 +395,7 @@ export function useReplaySession(activeRef, emit) {
 
   const loadLatestReplay = () => {
     menuOpen.value = false;
-    stopDemo();
-    startResultsRefresh();
-    triggerAction('REPLAY_LOAD_LATEST');
+    requestLatestReplayLoad();
   };
 
   const guessFullPattern = () => {
@@ -437,6 +461,7 @@ export function useReplaySession(activeRef, emit) {
       onOpen: () => {
         wsStatus.value = 'connected';
         triggerAction('REPLAY_GET_INIT');
+        flushPendingLatestReplayLoad();
       },
       onMessage: handleWSMessage,
       onClose: () => {
@@ -515,7 +540,8 @@ export function useReplaySession(activeRef, emit) {
   watch(
     () => appConfig.value.record_player_slider_threshold,
     (value) => {
-      sliderThreshold.value = Number(value) || 1;
+      const parsed = Number(value);
+      sliderThreshold.value = Number.isFinite(parsed) ? parsed : 1;
     },
     { immediate: true }
   );
@@ -524,7 +550,11 @@ export function useReplaySession(activeRef, emit) {
     activeRef,
     (isActive) => {
       if (isActive) {
+        if (consumePendingLatestReplayLoad()) {
+          pendingLatestReplayLoad.value = true;
+        }
         connect();
+        flushPendingLatestReplayLoad();
       }
     },
     { immediate: true }
@@ -559,6 +589,7 @@ export function useReplaySession(activeRef, emit) {
     summaryMaxCombo,
     displayedResults,
     resultsRefreshing,
+    resultsUpdatingVisible,
     feedbackBadgeText,
     feedbackBadgeStyle,
     feedbackLossText,

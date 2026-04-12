@@ -71,7 +71,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 const props = defineProps({
@@ -110,7 +110,9 @@ const markers = computed(() => {
   if (!losses.length) return [];
   const sorted = [...losses].sort((a, b) => a - b);
   const qIndex = Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * 0.1)));
-  const threshold = Math.min(sorted[qIndex], Number(props.threshold) || 1);
+  const rawThreshold = Number(props.threshold);
+  const thresholdValue = Number.isFinite(rawThreshold) ? rawThreshold : 1;
+  const threshold = Math.min(sorted[qIndex], thresholdValue);
   return losses
     .map((loss, index) => ({ loss, index }))
     .filter(({ loss }) => loss < 1 && loss < threshold)
@@ -132,7 +134,8 @@ const closeThresholdEditor = () => {
 };
 
 const openThresholdEditor = async () => {
-  editorValue.value = String(Number(props.threshold) || 1);
+  const parsed = Number(props.threshold);
+  editorValue.value = String(Number.isFinite(parsed) ? parsed : 1);
   editorOpen.value = true;
   await nextTick();
   editorInput.value?.focus();
@@ -151,7 +154,8 @@ const confirmThreshold = () => {
 
 const stepEditorValue = (direction) => {
   const current = Number(editorValue.value);
-  const base = Number.isFinite(current) ? current : Number(props.threshold) || 1;
+  const threshold = Number(props.threshold);
+  const base = Number.isFinite(current) ? current : (Number.isFinite(threshold) ? threshold : 1);
   const next = Math.min(1, Math.max(0, base + (direction * 0.001)));
   editorValue.value = next.toFixed(3).replace(/\.?0+$/, (match) => (match.startsWith('.') ? '' : match));
 };

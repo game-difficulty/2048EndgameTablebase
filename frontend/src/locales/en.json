@@ -193,6 +193,9 @@
     }
   },
   "replay": {
+    "results": {
+      "title": "Results"
+    },
     "toolbar": {
       "loadReplay": "Load Replay",
       "openFile": "Open .rpl File",

@@ -148,20 +148,23 @@
               <span v-if="replayResultsActive" class="pill-badge pill-badge-accent">
                 {{ $t('trainer.results.replay') }}
               </span>
+              <span
+                class="pill-badge pill-badge-soft transition-opacity"
+                :class="resultsUpdatingVisible ? 'opacity-100' : 'opacity-0'"
+              >
+                {{ $t('common.updating') }}
+              </span>
               <label class="flex items-center gap-1 ui-kicker text-text-secondary cursor-pointer select-none font-bold uppercase tracking-tighter">
                 <input type="checkbox" v-model="showResults" class="cursor-pointer accent-accent" />
                 {{ $t('trainer.results.auto') }}
               </label>
-              <span v-if="resultsRefreshing" class="pill-badge pill-badge-soft">
-                {{ $t('common.updating') }}
-              </span>
               <button @click="queryResults" class="ui-kicker !bg-btn-bg !text-white border border-btn-bg hover:bg-btn-hover px-2.5 py-1 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm">
                 {{ $t('trainer.results.refresh') }}
               </button>
             </div>
           </div>
           <template v-if="showResults && !awaitingSpawn">
-            <div class="mt-2 flex flex-col gap-1 transition-opacity" :class="resultsRefreshing ? 'opacity-70' : 'opacity-100'">
+            <div class="mt-2 flex flex-col gap-1 transition-opacity" :class="resultsUpdatingVisible ? 'opacity-70' : 'opacity-100'">
               <div
                 v-for="item in displayedResults"
                 :key="item.dir"
@@ -298,6 +301,7 @@ const {
   sortedResults,
   displayedResults,
   resultsRefreshing,
+  resultsUpdatingVisible,
   getResultRowStyle,
   dirLabels,
   getResultValueStyle,

@@ -195,6 +195,9 @@ export function useTrainerSession(activeRef) {
   ));
 
   const resultsRefreshing = computed(() => resultsRefreshPhase.value !== 'idle');
+  const resultsUpdatingVisible = computed(
+    () => resultsRefreshPhase.value === 'stale' || resultsRefreshPhase.value === 'placeholder'
+  );
 
   const getResultRowStyle = (item) => ({
     background: item.val != null ? 'var(--bg-main)' : 'transparent',
@@ -888,6 +891,7 @@ export function useTrainerSession(activeRef) {
     sortedResults,
     displayedResults,
     resultsRefreshing,
+    resultsUpdatingVisible,
     getResultRowStyle,
     dirLabels,
     getResultValueStyle,

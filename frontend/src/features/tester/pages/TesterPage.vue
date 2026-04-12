@@ -79,7 +79,7 @@
 
       <section class="flex min-w-0 flex-col gap-3">
         <div class="grid grid-cols-3 gap-2">
-          <button class="action-btn" @click="$emit('navigate-tab', 'ReplayReviewView')">{{ $t('tester.controls.goToReplay') }}</button>
+          <button class="action-btn" @click="openReplayView">{{ $t('tester.controls.goToReplay') }}</button>
           <button class="action-btn" @click="$emit('navigate-tab', 'NotebookView')">{{ $t('tester.controls.goToNotebook') }}</button>
           <button
             class="action-btn tester-btn-accent btn-prominent"
@@ -198,7 +198,7 @@ const props = defineProps({
   active: { type: Boolean, default: false },
 });
 
-defineEmits(['navigate-tab', 'open-analysis']);
+const emit = defineEmits(['navigate-tab', 'open-analysis']);
 
 const evaluationMixRoot = ref(null);
 const showEvaluationTooltip = ref(false);
@@ -218,6 +218,11 @@ const updateEvaluationTooltip = (event) => {
     rect.width - tooltipHalfWidth - padding,
     Math.max(tooltipHalfWidth + padding, pointerX)
   );
+};
+
+const openReplayView = () => {
+  window.__pendingReplayLatestLoad = true;
+  emit('navigate-tab', 'ReplayReviewView');
 };
 
 const {

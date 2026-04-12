@@ -193,6 +193,9 @@
     }
   },
   "replay": {
+    "results": {
+      "title": "结果"
+    },
     "toolbar": {
       "loadReplay": "载入回放",
       "openFile": "打开 .rpl 文件",

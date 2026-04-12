@@ -9,7 +9,7 @@ from Config import (
 )
 from egtb_core.BookReader import BookReader
 from egtb_core.VBoardMover import decode_board, encode_board
-from egtb_core.replay_utils import empty_replay
+from egtb_core.replay_utils import empty_replay, strip_replay_sentinel
 
 from .serialization import sanitize_config
 from .session import safe_hex, u64
@@ -106,9 +106,9 @@ def _tester_reset_record(session):
 def _cache_tester_replay(session):
     if session.tester_step_count <= 0:
         return
-    LATEST_TESTER_REPLAY["record"] = session.tester_record[
-        : session.tester_step_count
-    ].copy()
+    replay = session.tester_record[: session.tester_step_count + 1].copy()
+    replay[session.tester_step_count] = TESTER_REPLAY_SENTINEL
+    LATEST_TESTER_REPLAY["record"] = strip_replay_sentinel(replay)
     LATEST_TESTER_REPLAY["pattern"] = session.tester_full_pattern
     LATEST_TESTER_REPLAY["source"] = "Tester session"
     LATEST_TESTER_REPLAY["use_variant"] = bool(session.use_variant)
