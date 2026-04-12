@@ -8,8 +8,19 @@ from egtb_core.VBoardMover import decode_board
 from fastapi import WebSocket
 
 from .serialization import sanitize_config
-from .session import GameSession, safe_hex, u64
+from .session import GameSession, normalize_gamer_special_tiles, safe_hex, u64
 from .trainer_helpers import _get_current_record_results
+
+
+def _apply_gamer_special_tiles(board_array, special_tiles):
+    if not special_tiles:
+        return board_array
+    board_array = board_array.copy()
+    flat = board_array.reshape(-1)
+    for index, value in special_tiles.items():
+        if 0 <= int(index) < flat.size and int(flat[int(index)]) == 32768:
+            flat[int(index)] = int(value)
+    return board_array
 
 
 class ConnectionManager:
@@ -36,6 +47,10 @@ class ConnectionManager:
         session = self.active_connections[websocket]
         board_encoded = np.uint64(u64(session.board_encoded))
         board_array = decode_board(board_encoded)
+        if session.client_id.startswith("gamer_"):
+            board_array = _apply_gamer_special_tiles(
+                board_array, getattr(session, "gamer_special_tiles", {})
+            )
         config = SingletonConfig().config
         record_results, record_results_dtype = _get_current_record_results(session)
 
@@ -57,6 +72,12 @@ class ConnectionManager:
                         safe_hex(h[0]) for h in getattr(session, "history", [])
                     ],
                     "moves": getattr(session, "move_history", []),
+                    "gamer_special_tiles": [
+                        [int(index), int(value)]
+                        for index, value in sorted(
+                            getattr(session, "gamer_special_tiles", {}).items()
+                        )
+                    ],
                     "record_results_mode": (
                         "embedded"
                         if getattr(session, "record_result_history", [])
@@ -94,6 +115,14 @@ def save_game_state(session_or_data: GameSession | dict[str, Any]) -> None:
                 u64(session_or_data.get("board_encoded", 0)),
                 int(session_or_data.get("score", 0)),
                 int(session_or_data.get("best_score", 0)),
+                [
+                    [int(index), int(value)]
+                    for index, value in sorted(
+                        normalize_gamer_special_tiles(
+                            session_or_data.get("special_tiles", [])
+                        ).items()
+                    )
+                ],
             ]
         else:
             if not session_or_data.client_id.startswith("gamer_"):
@@ -102,6 +131,12 @@ def save_game_state(session_or_data: GameSession | dict[str, Any]) -> None:
                 u64(session_or_data.board_encoded),
                 int(session_or_data.score),
                 int(session_or_data.best_score),
+                [
+                    [int(index), int(value)]
+                    for index, value in sorted(
+                        getattr(session_or_data, "gamer_special_tiles", {}).items()
+                    )
+                ],
             ]
         SingletonConfig().save_config(config)
     except Exception as e:

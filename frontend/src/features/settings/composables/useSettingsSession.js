@@ -128,7 +128,20 @@ export function useSettingsSession(activeRef) {
 
   let buildClient = null;
 
+  const applyBuildState = (buildState = {}) => {
+    const nextCurrent = Math.max(0, Number(buildState.current) || 0);
+    const nextTotal = Math.max(nextCurrent, Number(buildState.total) || 0);
+    buildProgressCurrent.value = nextCurrent;
+    buildProgressTotal.value = nextTotal;
+    isBuilding.value = Boolean(buildState.is_building);
+  };
+
   const handleMessage = (data) => {
+    if (data.type === 'SETTINGS_DATA') {
+      applyBuildState(data.payload?.build_state || {});
+      return;
+    }
+
     if (data.type === 'BUILD_STARTED') {
       isBuilding.value = true;
       buildProgressCurrent.value = 0;
@@ -160,6 +173,9 @@ export function useSettingsSession(activeRef) {
     }
     buildClient = createWsClient({
       clientId: `settings_${Math.random().toString(36).slice(2, 9)}`,
+      onOpen: () => {
+        buildClient?.send('GET_SETTINGS');
+      },
       onMessage: handleMessage,
     });
     buildClient.connect();

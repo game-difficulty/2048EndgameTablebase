@@ -152,15 +152,18 @@
                 <input type="checkbox" v-model="showResults" class="cursor-pointer accent-accent" />
                 {{ $t('trainer.results.auto') }}
               </label>
+              <span v-if="resultsRefreshing" class="pill-badge pill-badge-soft">
+                {{ $t('common.updating') }}
+              </span>
               <button @click="queryResults" class="ui-kicker !bg-btn-bg !text-white border border-btn-bg hover:bg-btn-hover px-2.5 py-1 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm">
                 {{ $t('trainer.results.refresh') }}
               </button>
             </div>
           </div>
           <template v-if="showResults && !awaitingSpawn">
-            <div class="mt-2 flex flex-col gap-1">
+            <div class="mt-2 flex flex-col gap-1 transition-opacity" :class="resultsRefreshing ? 'opacity-70' : 'opacity-100'">
               <div
-                v-for="item in sortedResults"
+                v-for="item in displayedResults"
                 :key="item.dir"
                 class="grid grid-cols-[1.25rem_minmax(0,1fr)_23ch] items-center gap-3 px-3 py-2 rounded-lg border border-border-main/20 bg-bg-main/30 group hover:bg-bg-main/50 transition-colors"
                 :style="getResultRowStyle(item)"
@@ -293,6 +296,8 @@ const {
   showResults,
   queryResults,
   sortedResults,
+  displayedResults,
+  resultsRefreshing,
   getResultRowStyle,
   dirLabels,
   getResultValueStyle,

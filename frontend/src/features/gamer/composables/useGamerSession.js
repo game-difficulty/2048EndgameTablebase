@@ -14,6 +14,7 @@ export function useGamerSession(activeRef) {
   const aiSpeed = ref(100);
   const hexInput = ref('');
   const currentHex = ref('0000000000000000');
+  const specialTiles = ref([]);
 
   const scoreAnimations = ref([]);
   let animIdCounter = 0;
@@ -40,6 +41,9 @@ export function useGamerSession(activeRef) {
       score.value = data.data.score;
       metadata.value = data.data.animation;
       currentHex.value = data.data.hex_str || currentHex.value;
+      specialTiles.value = Array.isArray(data.data.gamer_special_tiles)
+        ? data.data.gamer_special_tiles
+        : [];
 
       if (data.data.settings) {
         difficulty.value = data.data.settings.difficulty;
@@ -167,6 +171,7 @@ export function useGamerSession(activeRef) {
       board_encoded: currentHex.value,
       score: score.value.current,
       best_score: score.value.best,
+      special_tiles: specialTiles.value,
     });
   };
 

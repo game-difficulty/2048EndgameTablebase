@@ -7,6 +7,8 @@ import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
 
 export function useReplaySession(activeRef, emit) {
+  const RESULT_REFRESH_GRACE_MS = 600;
+  const RESULT_REFRESH_PLACEHOLDER_MS = 1800;
   const { config: appConfig, categories: appCategories, saveSetting } = useAppSettingsStore();
   const { t } = useI18n();
 
@@ -63,6 +65,18 @@ export function useReplaySession(activeRef, emit) {
 
   let client = null;
   let demoTimer = null;
+  let resultsStaleTimer = null;
+  let resultsPlaceholderTimer = null;
+  const resultsRefreshPhase = ref('idle');
+
+  const makePlaceholderResults = () => ['up', 'down', 'right', 'left'].map((dir) => ({
+    dir,
+    pct: 0,
+    gradient: 'transparent',
+    display: '0',
+    textColor: 'var(--text-secondary)',
+    val: null,
+  }));
 
   const isZh = () => String(currentLanguage.value || 'en').startsWith('zh');
   const getEvaluationLabel = (label) => (isZh() ? (zhEvaluationLabels[label] || label) : label);
@@ -139,15 +153,13 @@ export function useReplaySession(activeRef, emit) {
   });
 
   const displayedResults = computed(() => {
-    if (loaded.value && currentStep.value < totalSteps.value) return sortedResults.value;
-    return ['up', 'down', 'right', 'left'].map((dir) => ({
-      dir,
-      pct: 0,
-      gradient: 'transparent',
-      display: '0',
-      textColor: 'var(--text-secondary)',
-    }));
+    if (loaded.value && currentStep.value < totalSteps.value) {
+      return resultsRefreshPhase.value === 'placeholder' ? makePlaceholderResults() : sortedResults.value;
+    }
+    return makePlaceholderResults();
   });
+
+  const resultsRefreshing = computed(() => resultsRefreshPhase.value !== 'idle');
 
   const currentEvaluation = computed(() => {
     if (loss.value == null) return null;
@@ -263,6 +275,35 @@ export function useReplaySession(activeRef, emit) {
     client?.send(action, payload);
   };
 
+  const clearResultsRefreshTimers = () => {
+    if (resultsStaleTimer) {
+      window.clearTimeout(resultsStaleTimer);
+      resultsStaleTimer = null;
+    }
+    if (resultsPlaceholderTimer) {
+      window.clearTimeout(resultsPlaceholderTimer);
+      resultsPlaceholderTimer = null;
+    }
+  };
+
+  const startResultsRefresh = () => {
+    clearResultsRefreshTimers();
+    resultsRefreshPhase.value = 'grace';
+    resultsStaleTimer = window.setTimeout(() => {
+      resultsRefreshPhase.value = 'stale';
+      resultsStaleTimer = null;
+    }, RESULT_REFRESH_GRACE_MS);
+    resultsPlaceholderTimer = window.setTimeout(() => {
+      resultsRefreshPhase.value = 'placeholder';
+      resultsPlaceholderTimer = null;
+    }, RESULT_REFRESH_PLACEHOLDER_MS);
+  };
+
+  const finishResultsRefresh = () => {
+    clearResultsRefreshTimers();
+    resultsRefreshPhase.value = 'idle';
+  };
+
   const scheduleDemo = () => {
     if (demoTimer) window.clearTimeout(demoTimer);
     if (!demoActive.value) return;
@@ -273,6 +314,7 @@ export function useReplaySession(activeRef, emit) {
     const delayMs = Math.max(1, Math.round(Number(demoSpeed.value) || 40));
     demoTimer = window.setTimeout(() => {
       if (!demoActive.value) return;
+      startResultsRefresh();
       triggerAction('REPLAY_STEP', { delta: 1 });
     }, delayMs);
   };
@@ -290,12 +332,14 @@ export function useReplaySession(activeRef, emit) {
   const stepReplay = (delta) => {
     stopDemo();
     if (!loaded.value) return;
+    startResultsRefresh();
     triggerAction('REPLAY_STEP', { delta });
   };
 
   const handleSliderStep = (step) => {
     stopDemo();
     if (!loaded.value) return;
+    startResultsRefresh();
     triggerAction('REPLAY_SET_STEP', { step });
   };
 
@@ -308,6 +352,7 @@ export function useReplaySession(activeRef, emit) {
     const point = markerIndices.value.find((item) => item > currentStep.value);
     if (point == null) return;
     stopDemo();
+    startResultsRefresh();
     triggerAction('REPLAY_SET_STEP', { step: point });
   };
 
@@ -317,6 +362,7 @@ export function useReplaySession(activeRef, emit) {
     const path = await window.pywebview.api.select_open_replay_file();
     if (path) {
       stopDemo();
+      startResultsRefresh();
       triggerAction('REPLAY_LOAD_FILE', { path });
     }
   };
@@ -324,6 +370,7 @@ export function useReplaySession(activeRef, emit) {
   const loadLatestReplay = () => {
     menuOpen.value = false;
     stopDemo();
+    startResultsRefresh();
     triggerAction('REPLAY_LOAD_LATEST');
   };
 
@@ -356,6 +403,7 @@ export function useReplaySession(activeRef, emit) {
   };
 
   const handleReplayState = (payload) => {
+    finishResultsRefresh();
     board.value = Array.isArray(payload?.board) ? payload.board : new Array(16).fill(0);
     metadata.value = payload?.animation || {};
     currentHex.value = payload?.hex_str || '0000000000000000';
@@ -393,6 +441,7 @@ export function useReplaySession(activeRef, emit) {
       onMessage: handleWSMessage,
       onClose: () => {
         wsStatus.value = 'disconnected';
+        finishResultsRefresh();
         stopDemo();
       },
     });
@@ -401,6 +450,7 @@ export function useReplaySession(activeRef, emit) {
   };
 
   const disconnect = () => {
+    finishResultsRefresh();
     stopDemo();
     client?.disconnect();
     client = null;
@@ -508,6 +558,7 @@ export function useReplaySession(activeRef, emit) {
     goodnessDisplay,
     summaryMaxCombo,
     displayedResults,
+    resultsRefreshing,
     feedbackBadgeText,
     feedbackBadgeStyle,
     feedbackLossText,

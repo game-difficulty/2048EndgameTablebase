@@ -330,6 +330,7 @@
     "hexPlaceholder": "十六进制代码 (例如. 0123456789abcdef)"
   },
   "common": {
+    "updating": "更新中",
     "apply": "应用",
     "copy": "复制",
     "close": "关闭"

@@ -25,6 +25,16 @@ from ..state import ConnectionManager
 MAX_DELETION_THRESHOLD = 0.999999
 MIN_BUILD_PROGRESS_INTERVAL = 1.2
 MAX_BUILD_PROGRESS_UPDATES = 120
+BUILD_STATE_LOCK = threading.Lock()
+BUILD_STATE = {
+    "is_building": False,
+    "current": 0,
+    "total": 0,
+    "pattern": "",
+    "target_tile": "",
+    "folder_path": "",
+    "error": "",
+}
 
 
 def normalize_deletion_threshold(value: Any) -> float:
@@ -33,6 +43,16 @@ def normalize_deletion_threshold(value: Any) -> float:
     except (TypeError, ValueError):
         parsed = 0.0
     return min(MAX_DELETION_THRESHOLD, max(0.0, parsed))
+
+
+def get_build_state_snapshot() -> dict[str, Any]:
+    with BUILD_STATE_LOCK:
+        return dict(BUILD_STATE)
+
+
+def update_build_state(**kwargs: Any) -> None:
+    with BUILD_STATE_LOCK:
+        BUILD_STATE.update(kwargs)
 
 
 async def handle_settings_action(
@@ -56,6 +76,7 @@ async def handle_settings_action(
                     "categories": sanitize_config(category_info),
                     "theme_map": sanitize_config(theme_map),
                     "target_tiles": [2**i for i in range(6, 15)],
+                    "build_state": sanitize_config(get_build_state_snapshot()),
                 },
             }
         )
@@ -183,6 +204,11 @@ async def handle_settings_action(
 
             current = max(0, current)
             total = max(current, total)
+            update_build_state(
+                current=current,
+                total=total,
+                is_building=not (total > 0 and current >= total),
+            )
             with progress_lock:
                 progress_state["current"] = current
                 progress_state["total"] = total
@@ -237,12 +263,28 @@ async def handle_settings_action(
                     else max(1, progress_state["current"])
                 )
                 publish_build_progress(final_total, final_total)
+                update_build_state(
+                    is_building=False,
+                    current=final_total,
+                    total=final_total,
+                    error="",
+                )
             except Exception as e:
                 print(f"Build error: {e}")
+                update_build_state(is_building=False, error=str(e))
                 notify_build_failed(e)
             finally:
                 progress_signal.progress_updated.disconnect(publish_build_progress)
 
+        update_build_state(
+            is_building=True,
+            current=0,
+            total=0,
+            pattern=str(pattern or ""),
+            target_tile=str(target_tile or ""),
+            folder_path=str(folder_path or ""),
+            error="",
+        )
         threading.Thread(target=run_build, daemon=True).start()
         await websocket.send_json(
             {"type": EventType.BUILD_STARTED, "payload": {"status": "running"}}

@@ -22,6 +22,30 @@ def safe_hex(val):
     return format(u64(val), "016x")
 
 
+def normalize_gamer_special_tiles(raw):
+    if isinstance(raw, dict):
+        items = raw.items()
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        return {}
+
+    normalized = {}
+    for item in items:
+        try:
+            if isinstance(item, tuple) and len(item) == 2:
+                index, value = item
+            else:
+                index, value = item[0], item[1]
+            index = int(index)
+            value = int(value)
+        except (TypeError, ValueError, IndexError):
+            continue
+        if 0 <= index < 16 and value > 32768:
+            normalized[index] = value
+    return normalized
+
+
 class GameSession:
     def __init__(self, client_id=""):
         self.client_id = client_id
@@ -33,9 +57,13 @@ class GameSession:
         self.board_encoded = np.uint64(u64(game_state[0]))
         self.score = int(game_state[1])
         self.best_score = int(game_state[2])
+        self.gamer_special_tiles = (
+            normalize_gamer_special_tiles(game_state[3]) if len(game_state) > 3 else {}
+        )
         self.state = "active"
         self.history = [(self.board_encoded, self.score)]
         self.move_history = [None]
+        self.gamer_special_history = [dict(self.gamer_special_tiles)]
 
         self.evil_gen = EvilGen(self.board_encoded)  # type: ignore
         self.difficulty = 0.0

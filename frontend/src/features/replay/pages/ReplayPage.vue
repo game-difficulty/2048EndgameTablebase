@@ -56,7 +56,12 @@
 
         <div class="space-y-3 rounded-[20px] bg-bg-card/72 p-3">
           <div class="rounded-[18px] bg-bg-main/58 p-3">
-            <div class="flex flex-col gap-1.5">
+            <div class="mb-2 flex justify-end">
+              <span v-if="resultsRefreshing" class="pill-badge pill-badge-soft">
+                {{ $t('common.updating') }}
+              </span>
+            </div>
+            <div class="flex flex-col gap-1.5 transition-opacity" :class="resultsRefreshing ? 'opacity-70' : 'opacity-100'">
               <div
                 v-for="item in displayedResults"
                 :key="item.dir"
@@ -192,6 +197,7 @@ const {
   goodnessDisplay,
   summaryMaxCombo,
   displayedResults,
+  resultsRefreshing,
   feedbackBadgeText,
   feedbackBadgeStyle,
   feedbackLossText,

@@ -7,6 +7,8 @@ import { createResultBarGradient } from '../../../utils/resultBars';
 import { restoreSuccessRate, formatSuccessRate } from '../../../utils/successRate';
 
 export function useTrainerSession(activeRef) {
+  const RESULT_REFRESH_GRACE_MS = 180;
+  const RESULT_REFRESH_PLACEHOLDER_MS = 1400;
   const {
     config: appConfig,
     categories: appCategories,
@@ -55,6 +57,9 @@ export function useTrainerSession(activeRef) {
   const pendingResultsRequests = new Map();
   const pendingTrainerJump = ref(null);
   let demoTimer = null;
+  let resultsStaleTimer = null;
+  let resultsPlaceholderTimer = null;
+  const resultsRefreshPhase = ref('idle');
 
   const recordStep = ref(0);
   const recordMax = ref(0);
@@ -175,6 +180,22 @@ export function useTrainerSession(activeRef) {
     });
   });
 
+  const createPlaceholderResults = () => ['left', 'right', 'down', 'up'].map((dir) => ({
+    dir,
+    val: null,
+    pct: 0,
+    display: '--',
+    color: 'var(--border-main)',
+    gradient: 'transparent',
+    textColor: 'var(--text-secondary)',
+  }));
+
+  const displayedResults = computed(() => (
+    resultsRefreshPhase.value === 'placeholder' ? createPlaceholderResults() : sortedResults.value
+  ));
+
+  const resultsRefreshing = computed(() => resultsRefreshPhase.value !== 'idle');
+
   const getResultRowStyle = (item) => ({
     background: item.val != null ? 'var(--bg-main)' : 'transparent',
     opacity: item.val == null ? 0.5 : 1,
@@ -281,9 +302,38 @@ export function useTrainerSession(activeRef) {
     return false;
   };
 
-  const invalidateResults = () => {
+  const clearResultsRefreshTimers = () => {
+    if (resultsStaleTimer) {
+      window.clearTimeout(resultsStaleTimer);
+      resultsStaleTimer = null;
+    }
+    if (resultsPlaceholderTimer) {
+      window.clearTimeout(resultsPlaceholderTimer);
+      resultsPlaceholderTimer = null;
+    }
+  };
+
+  const startResultsRefresh = () => {
+    clearResultsRefreshTimers();
+    resultsRefreshPhase.value = 'grace';
+    resultsStaleTimer = window.setTimeout(() => {
+      resultsRefreshPhase.value = 'stale';
+      resultsStaleTimer = null;
+    }, RESULT_REFRESH_GRACE_MS);
+    resultsPlaceholderTimer = window.setTimeout(() => {
+      resultsRefreshPhase.value = 'placeholder';
+      resultsPlaceholderTimer = null;
+    }, RESULT_REFRESH_PLACEHOLDER_MS);
+  };
+
+  const finishResultsRefresh = () => {
+    clearResultsRefreshTimers();
+    resultsRefreshPhase.value = 'idle';
+  };
+
+  const invalidateResults = ({ clearDisplay = false } = {}) => {
     resultsBoardHex.value = '';
-    if (!replayResultsActive.value) {
+    if (clearDisplay && !replayResultsActive.value) {
       tableResult.value = { dtype: '?', results: {} };
     }
   };
@@ -315,6 +365,7 @@ export function useTrainerSession(activeRef) {
 
     const requestId = `${clientId}_${++nextResultsRequestId}`;
     pendingResultsRequests.set(requestId, { boardHex, reason });
+    startResultsRefresh();
     triggerAction('TRAINER_GET_RESULTS', { request_id: requestId });
     return requestId;
   };
@@ -404,6 +455,7 @@ export function useTrainerSession(activeRef) {
         invalidateResults();
       }
       if (awaitingSpawn.value) {
+        finishResultsRefresh();
         demoActive.value = false;
         clearDemoTimer();
         clearStepQueue();
@@ -424,6 +476,7 @@ export function useTrainerSession(activeRef) {
       if (resultBoardHex !== currentBoardHex.value) {
         return;
       }
+      finishResultsRefresh();
       replayResultsActive.value = false;
       tableResult.value = {
         dtype: data.data.dtype,
@@ -491,6 +544,7 @@ export function useTrainerSession(activeRef) {
         wsStatus.value = 'disconnected';
         demoActive.value = false;
         clearDemoTimer();
+        finishResultsRefresh();
         pendingResultsRequests.clear();
         clearStepQueue();
       },
@@ -502,6 +556,7 @@ export function useTrainerSession(activeRef) {
   const disconnect = () => {
     demoActive.value = false;
     clearDemoTimer();
+    finishResultsRefresh();
     pendingResultsRequests.clear();
     clearStepQueue();
     client?.disconnect();
@@ -513,6 +568,7 @@ export function useTrainerSession(activeRef) {
     if (!hexInput.value) return;
     demoActive.value = false;
     clearDemoTimer();
+    finishResultsRefresh();
     clearStepQueue();
     triggerAction('SET_BOARD', { hex_str: hexInput.value });
   };
@@ -830,6 +886,8 @@ export function useTrainerSession(activeRef) {
     showResults,
     queryResults,
     sortedResults,
+    displayedResults,
+    resultsRefreshing,
     getResultRowStyle,
     dirLabels,
     getResultValueStyle,

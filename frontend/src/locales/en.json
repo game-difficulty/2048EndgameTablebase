@@ -330,6 +330,7 @@
     "hexPlaceholder": "Hex Code (e.g., 0123456789abcdef)"
   },
   "common": {
+    "updating": "Updating",
     "apply": "Apply",
     "copy": "Copy",
     "close": "Close"
