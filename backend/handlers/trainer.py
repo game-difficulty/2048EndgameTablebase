@@ -221,7 +221,7 @@ async def handle_trainer_action(
             col = payload.get("col", 0)
             val = payload.get("val", 2)
 
-            board_2d = decode_board(session.board_encoded)
+            board_2d = decode_board(np.uint64(u64(session.board_encoded)))
             if board_2d[row, col] == 0:
                 board_2d[row, col] = val
                 session.board_encoded = encode_board(board_2d)
@@ -241,7 +241,7 @@ async def handle_trainer_action(
         val = payload.get("val", 0)
         _clear_record_replay(session)
 
-        board_2d = decode_board(session.board_encoded)
+        board_2d = decode_board(np.uint64(u64(session.board_encoded)))
         board_2d[row, col] = int(val)
 
         session.board_encoded = encode_board(board_2d)

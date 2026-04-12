@@ -1,4 +1,4 @@
-import webview
+﻿import webview
 import threading
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -245,7 +245,7 @@ if __name__ == "__main__":
         url = f"http://localhost:{SERVER_PORT}/"  # 使用动态端口
 
     window = webview.create_window(
-        "2048 Endgame Analyzer",
+        "2048 Endgame TableBase",
         url,
         js_api=Api(),
         width=1200,

@@ -30,7 +30,7 @@ class GameSession:
         else:
             game_state = [0, 0, 0]
 
-        self.board_encoded = np.uint64(game_state[0])
+        self.board_encoded = np.uint64(u64(game_state[0]))
         self.score = int(game_state[1])
         self.best_score = int(game_state[2])
         self.state = "active"
@@ -41,7 +41,8 @@ class GameSession:
         self.difficulty = 0.0
 
         self.ai_dispatcher = Dispatcher(
-            decode_board(self.board_encoded), self.board_encoded
+            decode_board(np.uint64(u64(self.board_encoded))),
+            np.uint64(u64(self.board_encoded)),
         )
 
         self.book_reader = BookReaderDispatcher()

@@ -3,8 +3,11 @@ from __future__ import annotations
 import traceback
 from typing import Any
 
+import numpy as np
+
 from egtb_core.Calculator import find_merge_positions, slide_distance
 from egtb_core.VBoardMover import decode_board
+from .session import u64
 
 
 AnimationMetadata = dict[str, Any]
@@ -17,7 +20,7 @@ def compute_move_animation(
     trace: bool = False,
 ) -> tuple[list[int], list[int]]:
     try:
-        board_2d = decode_board(board_encoded)
+        board_2d = decode_board(np.uint64(u64(board_encoded)))
         distances = slide_distance(board_2d, direction_str).flatten().tolist()
         merges = find_merge_positions(board_2d, direction_str).flatten().tolist()
         return distances, merges
