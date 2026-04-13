@@ -5,6 +5,7 @@ import math
 import os
 import platform
 import subprocess
+import shutil
 
 import numpy as np
 
@@ -14,6 +15,8 @@ internal_path = os.path.join("_internal", "7z.exe")
 
 if os.path.exists(internal_path):
     seven_zip_exe = internal_path
+elif _:=shutil.which("7z"):
+    seven_zip_exe = _
 else:
     seven_zip_exe = os.path.join("7zip", "7z.exe")
     if not os.path.exists(seven_zip_exe):
