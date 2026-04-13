@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from Config import SingletonConfig
+from Config import SingletonConfig, logger
 from fastapi import WebSocket
 from egtb_core.VBoardMover import decode_board
 from egtb_core.BoardMover import (
@@ -20,6 +20,12 @@ from ..state import ConnectionManager
 from ..state import save_game_state
 
 GAMER_TOP_TILE = 32768
+
+
+# def _log_ai_step_debug(best_move: str | None, table_name: str | None):
+#     message = f"AI step move={best_move}, table={table_name or 'Unknown'}"
+#     print(message)
+#     logger.warning(message)
 
 
 def _gamer_board_with_special_tiles(board_encoded: np.uint64, special_tiles: dict[int, int]):
@@ -279,6 +285,11 @@ async def handle_game_action(
             best_move = move_map.get(best_move_code, None)
         else:
             best_move = best_move.lower() if best_move else None
+
+        # _log_ai_step_debug(
+        #     best_move if best_move in valid_moves else None,
+        #     getattr(session.ai_dispatcher, "current_table", None),
+        # )
 
         await websocket.send_json(
             {

@@ -68,6 +68,14 @@
         <button @click="setBoard" class="bg-btn-bg text-white font-bold py-1 px-5 rounded hover:bg-btn-hover ui-body shadow-sm transition-all active:scale-95">
           {{ $t('buttons.set') }}
         </button>
+        <button
+          type="button"
+          @click="writeCurrentBoardToHex"
+          class="bg-btn-bg text-white font-bold py-1 px-4 rounded hover:bg-btn-hover ui-body shadow-sm transition-all active:scale-95 whitespace-nowrap"
+          :title="$t('buttons.loadCurrentBoard')"
+        >
+          {{ $t('buttons.loadCurrentBoard') }}
+        </button>
       </div>
 
       <div class="w-full">
@@ -114,6 +122,7 @@ const {
   toggleAI,
   updateSettings,
   setBoard,
+  writeCurrentBoardToHex,
   openBrowserAi,
 } = useGamerSession(toRef(props, 'active'));
 </script>

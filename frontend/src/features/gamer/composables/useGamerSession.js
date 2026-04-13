@@ -153,6 +153,28 @@ export function useGamerSession(activeRef) {
     triggerAction('SET_BOARD', { hex_str: val });
   };
 
+  const writeCurrentBoardToHex = () => {
+    const digits = board.value.slice(0, 16).map((tile) => {
+      const value = Number(tile) || 0;
+      if (value <= 0) {
+        return '0';
+      }
+      if (value > 32768) {
+        return 'f';
+      }
+      const exponent = Math.log2(value);
+      if (!Number.isInteger(exponent) || exponent < 0) {
+        return '0';
+      }
+      return exponent.toString(16);
+    });
+
+    while (digits.length < 16) {
+      digits.push('0');
+    }
+    hexInput.value = digits.join('');
+  };
+
   const openBrowserAi = async () => {
     const url = 'https://2048-endgame-tablebase.netlify.app/';
     try {
@@ -212,6 +234,7 @@ export function useGamerSession(activeRef) {
     toggleAI,
     updateSettings,
     setBoard,
+    writeCurrentBoardToHex,
     openBrowserAi,
   };
 }

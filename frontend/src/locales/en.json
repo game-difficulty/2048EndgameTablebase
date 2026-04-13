@@ -327,7 +327,8 @@
     "oneStep": "One Step",
     "aiOn": "AI: ON",
     "aiOff": "AI: OFF",
-    "set": "SET"
+    "set": "SET",
+    "loadCurrentBoard": "Use Current Board"
   },
   "inputs": {
     "hexPlaceholder": "Hex Code (e.g., 0123456789abcdef)"

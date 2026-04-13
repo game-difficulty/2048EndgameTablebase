@@ -327,7 +327,8 @@
     "oneStep": "步进",
     "aiOn": "AI: 开",
     "aiOff": "AI: 关",
-    "set": "设置"
+    "set": "设置",
+    "loadCurrentBoard": "读取当前局面"
   },
   "inputs": {
     "hexPlaceholder": "十六进制代码 (例如. 0123456789abcdef)"

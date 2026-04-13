@@ -177,16 +177,15 @@ class DispatcherCommon(BaseDispatcher):
             remainder = np.sum(self.board[self.board < target_val]) if table_type == 1 else np.sum(self.board) % target_val
             if (
                 (table_type == 1 and success_rate > 0.9999999 and remainder < 24)
-                or (table_type == 2 and (remainder < 32 or (self.board == target_val // 2).count() > 1))
+                or (table_type == 2 and (remainder < 32 or (self.board == target_val // 2).sum() > 1))
                 or (
                     table_type == 3
                     and success_rate > 0.9999999
                     and (remainder > ((1 << target) - 4) or remainder < 24)
                 )
             ):
-                # 成功率接近 100%，将该定式冷却 20 步
-                if success_rate > 0.9999999:
-                    self._table_cooldowns[table] = 20
+                # 将该定式冷却 20 步
+                self._table_cooldowns[table] = 20
                 self.last_operator = 0
                 self.current_table = "AI"
                 return "AI"
