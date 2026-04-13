@@ -82,6 +82,10 @@ class DispatcherCommon(BaseDispatcher):
         self._table_cooldowns = {}  # {table_name: remaining_steps}
         self.init_bookreader()
 
+    def reset(self, board, board_encoded):
+        super().reset(board, board_encoded)
+        self._table_cooldowns.clear()  # 清空冷却状态
+
     def init_bookreader(self):
         current_spawn_rate4 = SingletonConfig().config["4_spawn_rate"]
         for i, (table, spawn_rate4) in enumerate(
@@ -168,19 +172,21 @@ class DispatcherCommon(BaseDispatcher):
         success_rate = r1[move]
 
         if isinstance(success_rate, (float, np.floating)):
-            remainder = np.sum(self.board) % (1 << target)
+            target_val = 1 << target
+            # 所有小于 target_val 的格子并求和 or 直接求余数
+            remainder = np.sum(self.board[self.board < target_val]) if table_type == 1 else np.sum(self.board) % target_val
             if (
                 (table_type == 1 and success_rate > 0.9999999 and remainder < 24)
-                or (table_type == 2 and remainder < 32)
+                or (table_type == 2 and (remainder < 32 or (self.board == target_val // 2).count() > 1))
                 or (
                     table_type == 3
                     and success_rate > 0.9999999
                     and (remainder > ((1 << target) - 4) or remainder < 24)
                 )
             ):
-                # 成功率接近100%，将该定式冷却9步
+                # 成功率接近 100%，将该定式冷却 20 步
                 if success_rate > 0.9999999:
-                    self._table_cooldowns[table] = 9
+                    self._table_cooldowns[table] = 20
                 self.last_operator = 0
                 self.current_table = "AI"
                 return "AI"
@@ -195,6 +201,7 @@ class DispatcherCommon(BaseDispatcher):
     def get_endgame_lvls(self):
         endgame_lvls1, endgame_lvls2, endgame_lvls3 = [], [], []
         large_tile_count = 0
+        current_large = np.sum(self.counts[9:])
         for i in range(15, 6, -1):
             if self.counts[i] > 1 and i != 15:
                 break
@@ -205,24 +212,24 @@ class DispatcherCommon(BaseDispatcher):
             if self.counts[i] > 0:
                 if i <= 12 and self.is_unfree_endgame(i):
                     readers = self.ad_readers.get((lvl, large_tile_count), [])
-                    endgame_lvls3.extend(
-                        [reader for reader in readers if reader[2] > 4]
+                    endgame_lvls3.extend(  # free11 补丁
+                        [reader for reader in readers if reader[2] > 4 and current_large > 4]
                     )
                     endgame_lvls1.extend(
-                        [reader for reader in readers if reader[2] <= 4]
+                        [reader for reader in readers if reader[2] <= 4 or current_large < 4]
                     )
                 else:
                     endgame_lvls1.extend(
                         self.ad_readers.get((lvl, large_tile_count), [])
                     )
                 if self.counts[i - 1] < 2:
-                    endgame_lvls2.extend(
+                    endgame_lvls2.extend(  # 小残局大定式
                         self.ad_readers.get((lvl + 1, large_tile_count), [])
                     )
                     endgame_lvls2.extend(
                         self.ad_readers.get((lvl + 2, large_tile_count), [])
                     )
-            elif self.counts[i] == 0:
+            elif self.counts[i] == 0:  # 大残局小定式
                 endgame_lvls3.extend(self.ad_readers.get((lvl, large_tile_count), []))
 
         endgame_lvls1.sort(key=lambda x: x[2], reverse=True)
