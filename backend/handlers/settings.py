@@ -348,8 +348,9 @@ async def handle_settings_action(
         if speed is not None:
             exponent = (100.0 - float(speed)) / 100.0
             ratio = 10.0**exponent
-            session.ai_dispatcher.time_limit_ratio = ratio
             session.speed = float(speed)
+            if session.ai_dispatcher is not None:
+                session.ai_dispatcher.time_limit_ratio = ratio
         return True
 
     return False

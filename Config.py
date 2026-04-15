@@ -486,12 +486,24 @@ class SingletonConfig:
         return
 
     @classmethod
+    def get_pattern_key(cls, pattern, spawn_rate4):
+        if cls._instance is None:
+            return (pattern, float(spawn_rate4))
+        filepath_map = cls._instance.config.get("filepath_map", {})
+        target_sr4 = float(spawn_rate4)
+        for k in filepath_map.keys():
+            if k[0] == pattern and abs(float(k[1]) - target_sr4) <= 1e-4:
+                return k
+        return (pattern, target_sr4)
+
+    @classmethod
     def check_pattern_file(cls, pattern):
         if not cls._instance:
             return False
         spawn_rate4 = SingletonConfig().config["4_spawn_rate"]
         filepath_map = cls._instance.config["filepath_map"]
-        file_path_list: list | None = filepath_map.get((pattern, spawn_rate4), None)
+        pattern_key = cls.get_pattern_key(pattern, float(spawn_rate4))
+        file_path_list: list | None = filepath_map.get(pattern_key, None)
         prefix = f"{pattern}_"
         if not file_path_list:
             return False

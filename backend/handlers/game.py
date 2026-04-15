@@ -15,7 +15,7 @@ from egtb_core.BoardMover import (
 from ..actions import Action, Message
 from ..animation import build_move_animation_metadata
 from ..session import GameSession
-from ..session import u64
+from ..session import np_u64, u64
 from ..state import ConnectionManager
 from ..state import save_game_state
 
@@ -133,14 +133,14 @@ async def handle_game_action(
     spawn_rate4 = float(SingletonConfig().config.get("4_spawn_rate", 0.1))
 
     if action == Action.INIT_GAME:
-        session.board_encoded = np.uint64(0)
+        session.board_encoded = np_u64(0)
         session.score = 0
         session.gamer_special_tiles = {}
-        session.evil_gen.reset_board(u64(session.board_encoded))
+        session.ensure_evil_gen().reset_board(u64(session.board_encoded))
 
         initial_board, _, _, _ = r_gen_new_num(session.board_encoded, spawn_rate4)
         initial_board, _, _, _ = r_gen_new_num(initial_board, spawn_rate4)
-        session.board_encoded = np.uint64(u64(initial_board))
+        session.board_encoded = np_u64(initial_board)
 
         session.history = [(session.board_encoded, session.score)]
         session.move_history = [None]
@@ -156,7 +156,7 @@ async def handle_game_action(
             return True
 
         direction = direction_map[direction_str]
-        old_board_encoded = session.board_encoded
+        old_board_encoded = np_u64(session.board_encoded)
         old_actual_board = _gamer_board_with_special_tiles(
             old_board_encoded, getattr(session, "gamer_special_tiles", {})
         )
@@ -173,15 +173,16 @@ async def handle_game_action(
 
         if np.random.rand() > session.difficulty:
             new_board_with_num, _, num_pos_1d, val_exp = r_gen_new_num(
-                collapsed_after_move, spawn_rate4
+                np_u64(collapsed_after_move), spawn_rate4
             )
         else:
-            session.evil_gen.reset_board(u64(collapsed_after_move))
-            new_board_with_num, num_pos_1d, val_exp = session.evil_gen.gen_new_num(
+            evil_gen = session.ensure_evil_gen()
+            evil_gen.reset_board(u64(collapsed_after_move))
+            new_board_with_num, num_pos_1d, val_exp = evil_gen.gen_new_num(
                 depth=5
             )
 
-        session.board_encoded = np.uint64(u64(new_board_with_num))
+        session.board_encoded = np_u64(new_board_with_num)
         spawned_actual_board = moved_actual_board.copy()
         if num_pos_1d is not None and num_pos_1d >= 0 and val_exp > 0:
             spawned_actual_board[num_pos_1d // 4, num_pos_1d % 4] = 2**val_exp
@@ -231,7 +232,7 @@ async def handle_game_action(
     if action == Action.SET_BOARD:
         hex_str = str(payload.get("hex_str") or "")
         try:
-            new_encoded = np.uint64(int(hex_str, 16))
+            new_encoded = np_u64(int(hex_str, 16))
             from ..trainer_helpers import _clear_record_replay
 
             if session.client_id.startswith("trainer_"):
@@ -259,11 +260,12 @@ async def handle_game_action(
             )
         else:
             board_2d = decode_board(np.uint64(u64(session.board_encoded)))
-            ai_board_encoded = np.uint64(u64(session.board_encoded))
+            ai_board_encoded = np_u64(session.board_encoded)
             allow_resolve_32768 = False
 
-        session.ai_dispatcher.reset(board_2d, u64(ai_board_encoded))
-        best_move = session.ai_dispatcher.dispatcher()
+        ai_dispatcher = session.ensure_ai_dispatcher()
+        ai_dispatcher.reset(board_2d, u64(ai_board_encoded))
+        best_move = ai_dispatcher.dispatcher()
         valid_moves = {"left", "right", "up", "down"}
 
         if best_move == "AI":
@@ -275,11 +277,9 @@ async def handle_game_action(
             player = ai_core.AIPlayer(ai_board_encoded)
             player.update_spawn_rate(SingletonConfig().config["4_spawn_rate"])
             logic = CoreAILogic()
-            logic.time_limit_ratio = getattr(
-                session.ai_dispatcher, "time_limit_ratio", 1.0
-            )
+            logic.time_limit_ratio = getattr(ai_dispatcher, "time_limit_ratio", 1.0)
             best_move_code = logic.calculate_step(
-                player, board_2d, session.ai_dispatcher.counts
+                player, board_2d, ai_dispatcher.counts
             )
             move_map = {1: "left", 2: "right", 3: "up", 4: "down"}
             best_move = move_map.get(best_move_code, None)

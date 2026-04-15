@@ -5,6 +5,7 @@
     @contextmenu.prevent="openThresholdEditor"
   >
     <input
+      data-replay-slider-range="true"
       :value="sliderValue"
       type="range"
       :min="0"
@@ -13,6 +14,8 @@
       class="absolute inset-x-0 top-1/2 z-20 h-6 w-full -translate-y-1/2 cursor-pointer appearance-none bg-transparent opacity-0"
       :disabled="sliderMax <= 0"
       @input="handleInput"
+      @change="blurSliderControl"
+      @pointerup="blurSliderControl"
     />
     <div class="replay-slider-track pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2">
       <div class="replay-slider-progress absolute inset-y-0 left-0 rounded-full" :style="{ width: `${progressPercent}%` }" />
@@ -127,6 +130,13 @@ const handleInput = (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) return;
   emit('update-step', target.valueAsNumber || 0);
+};
+
+const blurSliderControl = (event) => {
+  const target = event?.target;
+  if (target instanceof HTMLElement) {
+    target.blur();
+  }
 };
 
 const closeThresholdEditor = () => {

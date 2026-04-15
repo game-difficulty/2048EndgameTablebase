@@ -32,8 +32,8 @@ export function useTrainerSession(activeRef) {
   const awaitingSpawn = ref(false);
 
   const tablebasePath = ref('');
-  const patternType = ref('L3');
-  const targetValue = ref('512');
+  const patternType = ref('');
+  const targetValue = ref('');
   const tableResult = ref({ dtype: '?', results: {} });
   const currentBoardHex = ref('');
   const resultsBoardHex = ref('');
@@ -69,7 +69,9 @@ export function useTrainerSession(activeRef) {
 
   let client = null;
 
-  const currentPatternDisplay = computed(() => `${patternType.value}_${targetValue.value}`);
+  const currentPatternDisplay = computed(() =>
+    patternType.value && targetValue.value ? `${patternType.value}_${targetValue.value}` : ''
+  );
   const isVariant = computed(() => isVariantPattern(patternType.value, patternCategories.value));
   const patternGroups = computed(() =>
     Object.entries(patternCategories.value || {}).map(([category, patterns]) => ({
@@ -255,7 +257,7 @@ export function useTrainerSession(activeRef) {
         patternType.value = parsed.pattern;
         targetValue.value = parsed.target;
         syncActivePatternCategory();
-        applyTablebase();
+        applyTablebase(null);
       }
     }
 
@@ -286,7 +288,9 @@ export function useTrainerSession(activeRef) {
     patternType.value = pattern;
     syncActivePatternCategory();
     patternMenuOpen.value = false;
-    onPatternChange();
+    if (targetValue.value) {
+      onPatternChange();
+    }
   };
 
   const closePatternMenuOnClick = (event) => {
@@ -427,9 +431,12 @@ export function useTrainerSession(activeRef) {
     }
 
     if (data.action === 'UPDATE_STATE') {
-      metadata.value = data.data.animation;
-      board.value = data.data.board;
-      const nextBoardHex = data.data.hex_str || hexInput.value;
+        metadata.value = data.data.animation;
+        board.value = data.data.board;
+        if (typeof data.data.tablebase_path === 'string') {
+          tablebasePath.value = data.data.tablebase_path;
+        }
+        const nextBoardHex = data.data.hex_str || hexInput.value;
       const boardChanged = !!nextBoardHex && nextBoardHex !== currentBoardHex.value;
       if (nextBoardHex) {
         currentBoardHex.value = nextBoardHex;
@@ -518,7 +525,7 @@ export function useTrainerSession(activeRef) {
     if (data.action === 'FOLDER_SELECTED') {
       if (data.data.path) {
         tablebasePath.value = data.data.path;
-        applyTablebase();
+        applyTablebase(data.data.path);
       }
       return;
     }
@@ -578,6 +585,15 @@ export function useTrainerSession(activeRef) {
 
   const TILE_SEQUENCE = [0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768];
 
+  const getCycledTileValue = (cellVal, delta) => {
+    const idx = TILE_SEQUENCE.indexOf(cellVal);
+    if (idx < 0) {
+      return cellVal;
+    }
+    const nextIndex = (idx + delta + TILE_SEQUENCE.length) % TILE_SEQUENCE.length;
+    return TILE_SEQUENCE[nextIndex];
+  };
+
   const handleCellClick = (row, col, btn) => {
     if (awaitingSpawn.value) {
       const cellVal = board.value[row * 4 + col];
@@ -599,30 +615,29 @@ export function useTrainerSession(activeRef) {
         clearStepQueue();
         triggerAction('SET_CELL', { row, col, val: currentPaletteValue.value });
       }
-    } else if (btn === 2) {
-      const cellVal = board.value[row * 4 + col];
-      const idx = TILE_SEQUENCE.indexOf(cellVal);
-      const nextVal = (idx >= 0 && idx < TILE_SEQUENCE.length - 1) ? TILE_SEQUENCE[idx + 1] : cellVal;
-      demoActive.value = false;
-      clearDemoTimer();
-      clearStepQueue();
-      triggerAction('SET_CELL', { row, col, val: nextVal });
-    } else {
-      const cellVal = board.value[row * 4 + col];
-      const idx = TILE_SEQUENCE.indexOf(cellVal);
-      const prevVal = idx > 0 ? TILE_SEQUENCE[idx - 1] : 0;
-      demoActive.value = false;
-      clearDemoTimer();
-      clearStepQueue();
-      triggerAction('SET_CELL', { row, col, val: prevVal });
-    }
+      } else if (btn === 2) {
+        const cellVal = board.value[row * 4 + col];
+        const nextVal = getCycledTileValue(cellVal, 1);
+        demoActive.value = false;
+        clearDemoTimer();
+        clearStepQueue();
+        triggerAction('SET_CELL', { row, col, val: nextVal });
+      } else {
+        const cellVal = board.value[row * 4 + col];
+        const prevVal = getCycledTileValue(cellVal, -1);
+        demoActive.value = false;
+        clearDemoTimer();
+        clearStepQueue();
+        triggerAction('SET_CELL', { row, col, val: prevVal });
+      }
   };
 
   const onPatternChange = () => {
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
-    applyTablebase();
+    if (!patternType.value || !targetValue.value) return;
+    applyTablebase(null);
   };
 
   const selectFolder = async () => {
@@ -631,7 +646,7 @@ export function useTrainerSession(activeRef) {
         const path = await window.pywebview.api.select_folder();
         if (path) {
           tablebasePath.value = path;
-          applyTablebase();
+          applyTablebase(path);
         }
       } else {
         triggerAction('TRIGGER_SELECT_FOLDER');
@@ -641,10 +656,12 @@ export function useTrainerSession(activeRef) {
     }
   };
 
-  const applyTablebase = () => {
+  const applyTablebase = (filepath = null) => {
+    if (!patternType.value || !targetValue.value) return;
     const fullPattern = `${patternType.value}_${targetValue.value}`;
+    const targetFilepath = typeof filepath === 'string' ? filepath : null;
     triggerAction('TRAINER_SET_FILEPATH', {
-      filepath: tablebasePath.value,
+      filepath: targetFilepath,
       pattern: fullPattern,
       target: targetValue.value,
     });
@@ -786,8 +803,8 @@ export function useTrainerSession(activeRef) {
       patternCategories.value = Object.keys(nextCategories || {}).length > 0
         ? nextCategories
         : fallbackPatternCategories;
-      if (!flatPatterns.value.includes(patternType.value)) {
-        patternType.value = flatPatterns.value[0] || patternType.value;
+      if (patternType.value && !flatPatterns.value.includes(patternType.value)) {
+        patternType.value = '';
       }
       syncActivePatternCategory();
       applyTrainerJump();
@@ -802,8 +819,8 @@ export function useTrainerSession(activeRef) {
       if (normalizedTargets.length > 0) {
         availableTargets.value = normalizedTargets;
       }
-      if (!availableTargets.value.includes(targetValue.value)) {
-        targetValue.value = availableTargets.value[0] || targetValue.value;
+      if (targetValue.value && !availableTargets.value.includes(targetValue.value)) {
+        targetValue.value = '';
       }
       applyTrainerJump();
     },

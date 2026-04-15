@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -40,22 +40,30 @@ docs_and_configs/color_schemes.txt
 docs_and_configs/*.error
 *.log
 
-# C++ / Native Build
+# Native build outputs
 AIPlayer_cpp/
-AIPlayer_cpp/build/
-AIPlayer_cpp/wasm_project/build/
-AIPlayer_cpp/wasm_project/CMakeFiles/
-AIPlayer_cpp/wasm_project/CMakeCache.txt
-AIPlayer_cpp/wasm_project/ai_core.js
-AIPlayer_cpp/wasm_project/ai_core.wasm
-AIPlayer_cpp/wasm_project/Makefile
-AIPlayer_cpp/wasm_project/cmake_install.cmake
-AIPlayer_cpp/.cache/
-AIPlayer_cpp/.vscode/
-AIPlayer_cpp/extern/nanobind/.git/
-AIPlayer_cpp/extern/nanobind/.gitmodules
-AIPlayer_cpp/x86simdsort/x86-simd-sort/builddir/
-AIPlayer_cpp/x86simdsort/x86-simd-sort/lib/
+ai_and_sort/build/
+ai_and_sort/wasm_project/
+ai_and_sort/web_version_project/
+ai_and_sort/*.pyd
+ai_and_sort/*.so
+ai_and_sort/*.dll
+ai_and_sort/*.a
+ai_and_sort/*.lib
+ai_and_sort/*.exp
+ai_and_sort/*.obj
+ai_and_sort/*.o
+ai_and_sort/egtb_data.7z
+ai_and_sort/x86simdsort/x86-simd-sort/builddir/
+ai_and_sort/x86simdsort/x86-simd-sort/*.dll
+ai_and_sort/AIPlayer.cpp
+ai_and_sort/BoardMover.h
+ai_and_sort/egtb_query.cpp
+ai_and_sort/egtb_data_1256.h
+ai_and_sort/egtb_data_256.h
+ai_and_sort/egtb_data_512.h
+ai_and_sort/x86simdsort.h
+ai_and_sort/xss_wrapper.cpp
 .vscode/
 .idea/
 

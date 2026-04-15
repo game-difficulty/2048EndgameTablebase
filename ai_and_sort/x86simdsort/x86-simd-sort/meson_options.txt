@@ -1,0 +1,7 @@
+# 核心选项：保持 OpenMP 开启，以发挥 AMD 9950X 的多核性能
+option('use_openmp', type : 'boolean', value : true,
+  description : 'Use OpenMP to accelerate uint64 sort (default: "true").')
+
+# 库类型：虽然我们在 meson.build 中强制了 static，但保留此选项以符合构建规范
+option('lib_type', type : 'string', value : 'static',
+  description : 'Library type: static only for wrapper (default: "static").')

@@ -13,7 +13,7 @@ from egtb_core.VBoardMover import decode_board
 
 from .actions import Message
 from .serialization import sanitize_config
-from .session import safe_hex, u64
+from .session import np_u64, safe_hex, u64
 
 
 class MistakesBookStore:
@@ -95,7 +95,7 @@ def _notebook_pattern_list() -> list[str]:
 
 def _notebook_clear_state(session) -> None:
     session.notebook_pattern = ""
-    session.notebook_board_encoded = np.uint64(0)
+    session.notebook_board_encoded = np_u64(0)
     session.notebook_best_move = None
     session.notebook_current_count = 0
     session.notebook_combo = 0
@@ -150,7 +150,7 @@ def _notebook_reset_unseen_boards(session) -> None:
         replace=False,
         p=probabilities,
     )
-    session.notebook_unseen_boards = [np.uint64(u64(boards[index])) for index in shuffled_indices]
+    session.notebook_unseen_boards = [np_u64(boards[index]) for index in shuffled_indices]
     session.notebook_correct = 0
     session.notebook_incorrect = 0
 
@@ -158,7 +158,7 @@ def _notebook_reset_unseen_boards(session) -> None:
 def _notebook_load_problem(session, board_encoded: np.uint64) -> None:
     mistakes = mistakes_book_store.get_mistakes_for_pattern(session.notebook_pattern)
     current_count, _, current_best_move = mistakes[board_encoded]
-    session.notebook_board_encoded = np.uint64(u64(board_encoded))
+    session.notebook_board_encoded = np_u64(board_encoded)
     session.notebook_current_count = int(current_count)
     session.notebook_best_move = str(current_best_move).lower()
     session.notebook_answered = False
@@ -182,7 +182,7 @@ def _notebook_select_pattern(session, pattern: str) -> None:
 
 def _notebook_next_problem(session) -> None:
     if not session.notebook_pattern:
-        session.notebook_board_encoded = np.uint64(0)
+        session.notebook_board_encoded = np_u64(0)
         session.notebook_best_move = None
         session.notebook_current_count = 0
         session.notebook_status = ""
@@ -193,7 +193,7 @@ def _notebook_next_problem(session) -> None:
         if session.notebook_pattern not in mistakes_book_store.get_all_patterns():
             available = _notebook_pattern_list()
             session.notebook_pattern = available[0] if available else ""
-        session.notebook_board_encoded = np.uint64(0)
+        session.notebook_board_encoded = np_u64(0)
         session.notebook_best_move = None
         session.notebook_current_count = 0
         session.notebook_unseen_boards = []
@@ -204,13 +204,13 @@ def _notebook_next_problem(session) -> None:
         _notebook_reset_unseen_boards(session)
 
     if not session.notebook_unseen_boards:
-        session.notebook_board_encoded = np.uint64(0)
+        session.notebook_board_encoded = np_u64(0)
         session.notebook_best_move = None
         session.notebook_current_count = 0
         session.notebook_status = "No mistakes recorded for this pattern"
         return
 
-    next_board = np.uint64(u64(session.notebook_unseen_boards.pop(0)))
+    next_board = np_u64(session.notebook_unseen_boards.pop(0))
     _notebook_load_problem(session, next_board)
 
 
@@ -218,7 +218,7 @@ def _notebook_update_mistake_count(session, delta: int) -> None:
     if not session.notebook_pattern or not session.notebook_board_encoded:
         return
     mistakes = mistakes_book_store.get_mistakes_for_pattern(session.notebook_pattern)
-    board_key = np.uint64(u64(session.notebook_board_encoded))
+    board_key = np_u64(session.notebook_board_encoded)
     if board_key not in mistakes:
         return
     count, total_loss, best_move = mistakes[board_key]
@@ -268,13 +268,13 @@ def _notebook_delete_current(session) -> None:
     if not session.notebook_pattern or not session.notebook_board_encoded:
         return
 
-    board_key = np.uint64(u64(session.notebook_board_encoded))
+    board_key = np_u64(session.notebook_board_encoded)
     mistakes_book_store.remove_mistake(session.notebook_pattern, board_key)
     mistakes_book_store.save()
     session.notebook_unseen_boards = [
-        np.uint64(u64(board))
+        np_u64(board)
         for board in session.notebook_unseen_boards
-        if np.uint64(u64(board)) != board_key
+        if np_u64(board) != board_key
     ]
 
     available_patterns = _notebook_pattern_list()
@@ -289,7 +289,7 @@ def _notebook_delete_current(session) -> None:
 
 
 async def send_notebook_state(websocket: WebSocket, session) -> None:
-    board_encoded = np.uint64(u64(session.notebook_board_encoded))
+    board_encoded = np_u64(session.notebook_board_encoded)
     board_array = decode_board(board_encoded)
     await websocket.send_json(
         {

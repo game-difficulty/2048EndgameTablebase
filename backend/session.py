@@ -1,12 +1,14 @@
 import numpy as np
 
-from ai_and_sort.ai_core import EvilGen
-from egtb_core.AIPlayer import Dispatcher
 from egtb_core.BookReader import BookReaderDispatcher
 from backend.minigames.session import MinigameSessionState
 from Config import SingletonConfig
 from egtb_core.VBoardMover import decode_board
 from egtb_core.replay_utils import empty_replay
+
+_SHARED_EVIL_GEN = None
+_SHARED_AI_DISPATCHER = None
+_SHARED_BOOK_READER = None
 
 
 def u64(val):
@@ -20,6 +22,10 @@ def u64(val):
 
 def safe_hex(val):
     return format(u64(val), "016x")
+
+
+def np_u64(val):
+    return np.uint64(u64(val))
 
 
 def normalize_gamer_special_tiles(raw):
@@ -54,7 +60,7 @@ class GameSession:
         else:
             game_state = [0, 0, 0]
 
-        self.board_encoded = np.uint64(u64(game_state[0]))
+        self.board_encoded = np_u64(game_state[0])
         self.score = int(game_state[1])
         self.best_score = int(game_state[2])
         self.gamer_special_tiles = (
@@ -65,15 +71,12 @@ class GameSession:
         self.move_history = [None]
         self.gamer_special_history = [dict(self.gamer_special_tiles)]
 
-        self.evil_gen = EvilGen(self.board_encoded)  # type: ignore
+        self.evil_gen = None
         self.difficulty = 0.0
 
-        self.ai_dispatcher = Dispatcher(
-            decode_board(np.uint64(u64(self.board_encoded))),
-            np.uint64(u64(self.board_encoded)),
-        )
+        self.ai_dispatcher = None
 
-        self.book_reader = BookReaderDispatcher()
+        self.book_reader = None
         self.current_pattern = ""
         self.pattern_settings = ["", ""]
         self.spawn_mode = 0
@@ -140,7 +143,7 @@ class GameSession:
         self.replay_loaded = False
         self.replay_use_variant = False
         self.replay_current_step = 0
-        self.replay_board_encoded = np.uint64(0)
+        self.replay_board_encoded = np_u64(0)
         self.replay_results = {}
         self.replay_current_move = None
         self.replay_best_move = None
@@ -157,7 +160,7 @@ class GameSession:
         }
 
         self.notebook_pattern = ""
-        self.notebook_board_encoded = np.uint64(0)
+        self.notebook_board_encoded = np_u64(0)
         self.notebook_best_move = None
         self.notebook_current_count = 0
         self.notebook_combo = 0
@@ -171,3 +174,42 @@ class GameSession:
         self.notebook_status = ""
 
         self.minigame_session = MinigameSessionState()
+
+    def ensure_evil_gen(self):
+        global _SHARED_EVIL_GEN
+        if _SHARED_EVIL_GEN is None:
+            try:
+                from ai_and_sort.ai_core import EvilGen
+            except Exception as exc:
+                raise RuntimeError(
+                    "AI core module is unavailable. Gamer evil spawn requires ai_and_sort.ai_core."
+                ) from exc
+            _SHARED_EVIL_GEN = EvilGen(self.board_encoded)  # type: ignore
+        self.evil_gen = _SHARED_EVIL_GEN
+        return self.evil_gen
+
+    def ensure_ai_dispatcher(self):
+        global _SHARED_AI_DISPATCHER
+        if _SHARED_AI_DISPATCHER is None:
+            try:
+                from egtb_core.AIPlayer import Dispatcher
+            except Exception as exc:
+                raise RuntimeError(
+                    "AI dispatcher is unavailable. Gamer AI requires ai_and_sort.ai_core."
+                ) from exc
+            board_encoded = np_u64(self.board_encoded)
+            _SHARED_AI_DISPATCHER = Dispatcher(
+                decode_board(board_encoded),
+                board_encoded,
+            )
+        self.ai_dispatcher = _SHARED_AI_DISPATCHER
+        exponent = (100.0 - float(self.speed)) / 100.0
+        self.ai_dispatcher.time_limit_ratio = 10.0**exponent
+        return self.ai_dispatcher
+
+    def ensure_book_reader(self):
+        global _SHARED_BOOK_READER
+        if _SHARED_BOOK_READER is None:
+            _SHARED_BOOK_READER = BookReaderDispatcher()
+        self.book_reader = _SHARED_BOOK_READER
+        return self.book_reader

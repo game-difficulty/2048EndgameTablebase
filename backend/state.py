@@ -8,7 +8,7 @@ from egtb_core.VBoardMover import decode_board
 from fastapi import WebSocket
 
 from .serialization import sanitize_config
-from .session import GameSession, normalize_gamer_special_tiles, safe_hex, u64
+from .session import GameSession, normalize_gamer_special_tiles, np_u64, safe_hex, u64
 from .trainer_helpers import _get_current_record_results
 
 
@@ -45,13 +45,23 @@ class ConnectionManager:
         self, websocket: WebSocket, metadata: Optional[dict[str, Any]] = None
     ) -> None:
         session = self.active_connections[websocket]
-        board_encoded = np.uint64(u64(session.board_encoded))
+        board_encoded = np_u64(session.board_encoded)
         board_array = decode_board(board_encoded)
         if session.client_id.startswith("gamer_"):
             board_array = _apply_gamer_special_tiles(
                 board_array, getattr(session, "gamer_special_tiles", {})
             )
         config = SingletonConfig().config
+        tablebase_path = ""
+        if session.client_id.startswith("trainer_"):
+            pattern_key = session.current_pattern
+            if pattern_key:
+                path_list = config.get("filepath_map", {}).get(
+                    (pattern_key, float(config.get("4_spawn_rate", 0.1))),
+                    [],
+                )
+                if path_list:
+                    tablebase_path = str(path_list[0][0] or "")
         record_results, record_results_dtype = _get_current_record_results(session)
 
         await websocket.send_json(
@@ -86,6 +96,7 @@ class ConnectionManager:
                     "record_results": record_results,
                     "record_results_dtype": record_results_dtype,
                     "awaiting_spawn": (session.spawn_mode == 3 and session.moved == 1),
+                    "tablebase_path": tablebase_path,
                     "settings": {
                         "difficulty": getattr(session, "difficulty", 0) * 100.0,
                         "speed": getattr(session, "speed", 100.0),

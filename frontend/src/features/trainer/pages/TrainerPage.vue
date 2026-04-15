@@ -2,7 +2,7 @@
   <div class="page-root">
     <div class="relative z-[120] w-full max-w-6xl flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
-        <span class="text-3xl font-extrabold tracking-tight text-text-main font-[Cambria,serif]">{{ currentPatternDisplay }}</span>
+        <span class="text-3xl font-extrabold tracking-tight text-text-main font-[Cambria,serif]">{{ currentPatternDisplay || '\u00a0' }}</span>
         <span :class="['badge-base', wsStatus === 'connected' ? 'badge-connection-connected' : 'badge-connection-disconnected']">
           {{ $t(`status.${wsStatus}`) }}
         </span>
@@ -15,7 +15,7 @@
             type="button"
             class="top-menu-trigger cursor-pointer"
           >
-            <span>{{ patternType }}</span>
+            <span>{{ patternType || $t('trainer.top.selectPattern') }}</span>
             <span class="ui-kicker opacity-60">{{ patternMenuOpen ? '▲' : '▼' }}</span>
           </button>
           <div
@@ -64,6 +64,7 @@
           @change="onPatternChange"
           class="top-menu-select"
         >
+          <option value="" class="bg-bg-card text-text-main">{{ $t('trainer.top.selectTarget') }}</option>
           <option v-for="t in availableTargets" :key="t" :value="t" class="bg-bg-card text-text-main">{{ t }}</option>
         </select>
         <button
@@ -95,11 +96,6 @@
         </div>
 
         <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @cell-click="handleCellClick" />
-
-        <div v-if="awaitingSpawn" class="w-full mt-2 px-3 py-2 bg-accent/5 border border-accent/20 rounded-lg flex items-center gap-2 shadow-inner">
-          <span class="w-2.5 h-2.5 rounded-full bg-accent animate-pulse"></span>
-          <span class="ui-kicker font-black text-text-main uppercase tracking-tighter">{{ $t('trainer.board.awaitingSpawn') }}</span>
-        </div>
 
         <div class="w-full mt-4 bg-bg-card border border-border-main rounded-lg p-3 shadow-sm">
           <div class="flex justify-between items-center mb-2">
@@ -168,23 +164,23 @@
               <div
                 v-for="item in displayedResults"
                 :key="item.dir"
-                class="grid grid-cols-[1.25rem_minmax(0,1fr)_23ch] items-center gap-3 px-3 py-2 rounded-lg border border-border-main/20 bg-bg-main/30 group hover:bg-bg-main/50 transition-colors"
+                class="grid grid-cols-[1.25rem_23ch_minmax(0,1fr)] items-center gap-3 px-3 py-2 rounded-lg border border-border-main/20 bg-bg-main/30 group hover:bg-bg-main/50 transition-colors"
                 :style="getResultRowStyle(item)"
               >
                 <span class="text-[16px] font-black w-5 text-center text-text-secondary group-hover:text-text-main">{{ dirLabels[item.dir] }}</span>
+                <div class="min-w-0 overflow-hidden">
+                  <span
+                    class="block w-full whitespace-nowrap text-left font-mono font-black tabular-nums leading-none"
+                    :style="getResultValueStyle(item)"
+                  >
+                    {{ item.display }}
+                  </span>
+                </div>
                 <div class="data-bar-track">
                   <div
                     class="data-bar-fill shadow-[0_0_8px_rgba(0,0,0,0.1)]"
                     :style="{ width: `${item.pct}%`, background: item.gradient }"
                   ></div>
-                </div>
-                <div class="min-w-0 overflow-hidden">
-                  <span
-                    class="block w-full whitespace-nowrap text-right font-mono font-black tabular-nums leading-none"
-                    :style="getResultValueStyle(item)"
-                  >
-                    {{ item.display }}
-                  </span>
                 </div>
               </div>
             </div>

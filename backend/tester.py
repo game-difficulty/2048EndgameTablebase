@@ -12,7 +12,7 @@ from egtb_core.VBoardMover import decode_board, encode_board
 from egtb_core.replay_utils import empty_replay, strip_replay_sentinel
 
 from .serialization import sanitize_config
-from .session import safe_hex, u64
+from .session import np_u64, safe_hex, u64
 
 
 TESTER_PERFORMANCE_ORDER = (
@@ -115,7 +115,7 @@ def _cache_tester_replay(session):
 
 
 def _tester_reset_history(session, board_encoded, score=0):
-    session.board_encoded = np.uint64(u64(board_encoded))
+    session.board_encoded = np_u64(board_encoded)
     session.score = int(score)
     session.history = [(session.board_encoded, session.score)]
     session.move_history = [None]
@@ -258,9 +258,9 @@ def _tester_prepare_selection(session, pattern, target):
     session.use_variant = pattern in category_info.get("variant", [])
 
     if session.use_variant and pattern in formation_info:
-        session.board_encoded = np.uint64(u64(formation_info[pattern][4][0]))
+        session.board_encoded = np_u64(formation_info[pattern][4][0])
     else:
-        session.board_encoded = np.uint64(0)
+        session.board_encoded = np_u64(0)
     session.score = 0
 
     if not session.tester_full_pattern:
@@ -277,7 +277,7 @@ def _tester_prepare_selection(session, pattern, target):
         .get((session.tester_full_pattern, spawn_rate4), [])
     )
     if session.tester_table_found and path_list:
-        session.book_reader.dispatch(path_list, pattern, target)
+        session.ensure_book_reader().dispatch(path_list, pattern, target)
         session.tester_status = f"Loaded {session.tester_full_pattern}"
         return True, path_list
 
@@ -292,7 +292,7 @@ def _tester_compute_results(session):
         session.tester_best_move = None
         return
 
-    result, dtype = session.book_reader.move_on_dic(
+    result, dtype = session.ensure_book_reader().move_on_dic(
         decode_board(np.uint64(u64(session.board_encoded))),
         session.tester_pattern[0],
         session.tester_pattern[1],
@@ -387,7 +387,7 @@ def _tester_append_summary(session):
 
 
 async def send_tester_state(websocket, session, metadata=None):
-    board_encoded = np.uint64(u64(session.board_encoded))
+    board_encoded = np_u64(session.board_encoded)
     board_array = decode_board(board_encoded)
     config = SingletonConfig().config
 

@@ -138,12 +138,13 @@
   "trainer": {
     "top": {
       "path": "路径",
-      "load": "载入"
+      "load": "载入",
+      "selectPattern": "定式",
+      "selectTarget": "目标"
     },
     "board": {
       "hexPlaceholder": "十六进制棋盘状态",
       "set": "设置",
-      "awaitingSpawn": "点击空格放置新块：左键=2，右键=4",
       "hide32k": "隐藏 32k"
     },
     "palette": {
@@ -156,7 +157,7 @@
       "auto": "自动",
       "refresh": "刷新",
       "dtype": "数据类型",
-      "awaitingManualSpawn": "等待手动放置新块...",
+      "awaitingManualSpawn": "点击空格放置新块：左键=2，右键=4",
       "hidden": "结果已隐藏"
     },
     "actions": {

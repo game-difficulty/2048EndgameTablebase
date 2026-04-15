@@ -71,13 +71,13 @@
               <div
                 v-for="item in displayedResults"
                 :key="item.dir"
-                class="grid grid-cols-[1.1rem_minmax(0,1fr)_19ch] items-center gap-3 rounded-lg border border-border-main/20 bg-bg-main/36 px-3 py-2"
+                class="grid grid-cols-[1.1rem_19ch_minmax(0,1fr)] items-center gap-3 rounded-lg border border-border-main/20 bg-bg-main/36 px-3 py-2"
               >
                 <span class="text-center ui-body font-black text-text-secondary">{{ dirLabels[item.dir] }}</span>
+                <span class="truncate text-left font-black tabular-nums leading-none" :style="getResultValueStyle(item)">{{ item.display }}</span>
                 <div class="data-bar-track">
                   <div class="data-bar-fill" :style="{ width: `${item.pct}%`, background: item.gradient }" />
                 </div>
-                <span class="truncate text-right font-black tabular-nums leading-none" :style="getResultValueStyle(item)">{{ item.display }}</span>
               </div>
             </div>
           </div>

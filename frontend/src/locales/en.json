@@ -138,12 +138,13 @@
   "trainer": {
     "top": {
       "path": "Path",
-      "load": "Load"
+      "load": "Load",
+      "selectPattern": "Pattern",
+      "selectTarget": "Target"
     },
     "board": {
       "hexPlaceholder": "Hex board state",
       "set": "Set",
-      "awaitingSpawn": "Click empty cell: Left=2, Right=4",
       "hide32k": "Hide 32k"
     },
     "palette": {
@@ -156,7 +157,7 @@
       "auto": "Auto",
       "refresh": "Refresh",
       "dtype": "dtype",
-      "awaitingManualSpawn": "Awaiting manual spawn...",
+      "awaitingManualSpawn": "Click empty cell: Left=2, Right=4",
       "hidden": "Results hidden"
     },
     "actions": {

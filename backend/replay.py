@@ -14,7 +14,7 @@ from egtb_core.replay_utils import (
 )
 
 from .serialization import sanitize_config
-from .session import safe_hex, u64
+from .session import np_u64, safe_hex, u64
 from .tester import TESTER_PERFORMANCE_ORDER
 
 
@@ -26,7 +26,7 @@ def _replay_reset(session, status=""):
     session.replay_loaded = False
     session.replay_use_variant = False
     session.replay_current_step = 0
-    session.replay_board_encoded = np.uint64(0)
+    session.replay_board_encoded = np_u64(0)
     session.replay_results = {}
     session.replay_current_move = None
     session.replay_best_move = None
@@ -52,8 +52,10 @@ def _replay_sync_step(session, step, animate=False, previous_step=None):
     total_moves = len(session.replay_record)
     step = max(0, min(int(step), total_moves))
     session.replay_current_step = step
-    session.replay_board_encoded = board_for_replay_step(
+    session.replay_board_encoded = np_u64(
+        board_for_replay_step(
         session.replay_record, step, session.replay_use_variant
+    )
     )
     session.replay_results = {}
     session.replay_current_move = None
@@ -130,7 +132,7 @@ def _replay_load_record(session, record, pattern="", source="", use_variant=Fals
 
 
 async def send_replay_state(websocket, session, metadata=None):
-    board_encoded = np.uint64(u64(session.replay_board_encoded))
+    board_encoded = np_u64(session.replay_board_encoded)
     board_array = decode_board(board_encoded)
     config = SingletonConfig().config
     summary = sanitize_config(session.replay_summary)

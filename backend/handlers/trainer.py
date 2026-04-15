@@ -20,7 +20,7 @@ from egtb_core.BoardMover import s_gen_new_num as r_gen_new_num, s_move_board as
 from ..actions import Action, EventType, Message
 from ..animation import build_move_animation_metadata
 from ..session import GameSession
-from ..session import u64
+from ..session import np_u64, u64
 from ..state import ConnectionManager
 from ..trainer_helpers import (
     _clear_record_replay,
@@ -46,38 +46,47 @@ async def handle_trainer_action(
         pattern = payload.get("pattern", "L3")
         target = payload.get("target", "32768")
         _clear_record_replay(session)
-
-        current_path_list = (
-            SingletonConfig().config["filepath_map"].get((pattern, spawn_rate4), [])
-        )
+        config = SingletonConfig().config
+        filepath_map = config["filepath_map"]
+        pattern_key = SingletonConfig.get_pattern_key(pattern, spawn_rate4)
+        current_path_list = list(filepath_map.get(pattern_key, []))
+        normalized_path_list = [
+            (path, success_rate_dtype)
+            for path, success_rate_dtype in current_path_list
+            if path and os.path.exists(path)
+        ]
+        updated_config = normalized_path_list != current_path_list
 
         if filepath:
-            for path, success_rate_dtype in current_path_list.copy():
-                if not os.path.exists(path) or path == filepath:
-                    current_path_list.remove((path, success_rate_dtype))
-
             success_rate_dtype = SingletonConfig.read_success_rate_dtype(filepath, pattern)
             table_4sr = SingletonConfig.read_4sr(filepath, pattern)
             table_4sr = table_4sr if table_4sr is not None else spawn_rate4
+            pattern_key = SingletonConfig.get_pattern_key(pattern, table_4sr)
+            current_path_list = list(filepath_map.get(pattern_key, []))
+            normalized_path_list = [
+                (path, dtype)
+                for path, dtype in current_path_list
+                if path and os.path.exists(path) and path != filepath
+            ]
+            normalized_path_list.append((filepath, success_rate_dtype))
+            updated_config = True
 
-            SingletonConfig().config["filepath_map"][(pattern, table_4sr)] = (
-                current_path_list + [(filepath, success_rate_dtype)]
-            )
+        filepath_map[pattern_key] = normalized_path_list
+        if updated_config:
+            SingletonConfig().save_config(config)
 
-        path_list = (
-            SingletonConfig().config["filepath_map"].get((pattern, spawn_rate4), [])
-        )
-        session.book_reader.dispatch(path_list, pattern.split("_")[0], target)
+        path_list = list(filepath_map.get(pattern_key, []))
+        session.ensure_book_reader().dispatch(path_list, pattern.split("_")[0], target)
         session.current_pattern = pattern
         session.pattern_settings = [pattern.split("_")[0], target]
         session.use_variant = pattern.split("_")[0] in category_info.get("variant", [])
 
         if path_list:
             try:
-                random_board = session.book_reader.get_random_state(
+                random_board = session.ensure_book_reader().get_random_state(
                     path_list, session.current_pattern
                 )
-                session.board_encoded = np.uint64(random_board)
+                session.board_encoded = np_u64(random_board)
                 session.score = 0
                 session.history = [(session.board_encoded, session.score)]
                 session.move_history = [None]
@@ -130,10 +139,11 @@ async def handle_trainer_action(
             return True
 
         direction = direction_map[direction_str]
-        old_board_encoded = session.board_encoded
+        old_board_encoded = np_u64(session.board_encoded)
 
         move_fn = v_move_board if session.use_variant else r_move_board
         new_board, move_score = move_fn(old_board_encoded, direction)
+        new_board = np_u64(new_board)
 
         if new_board == old_board_encoded:
             return True
@@ -147,6 +157,7 @@ async def handle_trainer_action(
             session.moved = 0
             gen_fn = v_gen_new_num if session.use_variant else r_gen_new_num
             new_board, _, num_pos_1d, val_exp = gen_fn(new_board, spawn_rate4)
+            new_board = np_u64(new_board)
         elif session.spawn_mode == 3:
             session.moved = 1
             session.history.append((new_board, session.score))
@@ -161,19 +172,20 @@ async def handle_trainer_action(
                 )
                 pos, val = key
                 p = 15 - pos
-                new_board = new_board | (np.uint64(val) << np.uint64(4 * p))
+                new_board = np_u64(new_board | (np.uint64(val) << np.uint64(4 * p)))
                 num_pos_1d = pos
                 val_exp = val
             else:
                 gen_fn = v_gen_new_num if session.use_variant else r_gen_new_num
                 new_board, _, num_pos_1d, val_exp = gen_fn(new_board, spawn_rate4)
+                new_board = np_u64(new_board)
 
-        session.board_encoded = new_board
+        session.board_encoded = np_u64(new_board)
         if session.spawn_mode != 3:
             session.history.append((session.board_encoded, session.score))
             session.move_history.append(direction_str)
         else:
-            session.history.append((new_board, session.score))
+            session.history.append((session.board_encoded, session.score))
             session.move_history.append(direction_str)
         session.played_length = len(session.history) - 1
 
@@ -191,17 +203,18 @@ async def handle_trainer_action(
 
     if action == Action.TRAINER_DEFAULT:
         _clear_record_replay(session)
+        pattern_key = SingletonConfig.get_pattern_key(session.current_pattern, spawn_rate4)
         path_list = (
             SingletonConfig()
             .config["filepath_map"]
-            .get((session.current_pattern, spawn_rate4), [])
+            .get(pattern_key, [])
         )
         if path_list:
             try:
-                random_board = session.book_reader.get_random_state(
+                random_board = session.ensure_book_reader().get_random_state(
                     path_list, session.current_pattern
                 )
-                session.board_encoded = np.uint64(random_board)
+                session.board_encoded = np_u64(random_board)
                 session.score = 0
                 session.history = [(session.board_encoded, session.score)]
                 session.move_history = [None]
@@ -224,7 +237,7 @@ async def handle_trainer_action(
             board_2d = decode_board(np.uint64(u64(session.board_encoded)))
             if board_2d[row, col] == 0:
                 board_2d[row, col] = val
-                session.board_encoded = encode_board(board_2d)
+                session.board_encoded = np_u64(encode_board(board_2d))
                 session.moved = 0
                 session.history.append((session.board_encoded, session.score))
                 session.move_history.append("spawn")
@@ -244,7 +257,7 @@ async def handle_trainer_action(
         board_2d = decode_board(np.uint64(u64(session.board_encoded)))
         board_2d[row, col] = int(val)
 
-        session.board_encoded = encode_board(board_2d)
+        session.board_encoded = np_u64(encode_board(board_2d))
         session.history = [(session.board_encoded, session.score)]
         session.move_history = [None]
         session.played_length = 0
@@ -262,7 +275,9 @@ async def handle_trainer_action(
         if rotate_func:
             if session.client_id.startswith("trainer_"):
                 _clear_record_replay(session)
-            session.board_encoded = np.uint64(rotate_func(np.uint64(u64(session.board_encoded))))
+            session.board_encoded = np_u64(
+                rotate_func(np_u64(session.board_encoded))
+            )
             session.score = 0
             session.moved = 0
             session.trainer_results = {}
@@ -291,7 +306,7 @@ async def handle_trainer_action(
                         | (np.uint64(v_pieces[3]) << 48)
                     )
 
-                    current_board = init_board
+                    current_board = np_u64(init_board)
                     current_score = 0
                     session.history = [(current_board, current_score)]
                     session.move_history = [None]
@@ -315,7 +330,7 @@ async def handle_trainer_action(
                         current_score += int(move_score)
 
                         p = 15 - pos
-                        nb |= np.uint64(val_exp) << np.uint64(4 * p)
+                        nb = np_u64(nb | (np.uint64(val_exp) << np.uint64(4 * p)))
                         current_board = nb
                         session.history.append((current_board, current_score))
                         session.move_history.append(move_label)
@@ -354,7 +369,7 @@ async def handle_trainer_action(
                     session.move_history = [None] * len(session.history)
                     session.record_animation_history = [{}] * len(session.history)
                     session.played_length = 0
-                    session.board_encoded = session.history[0][0]
+                    session.board_encoded = np_u64(session.history[0][0])
                     session.score = session.history[0][1]
                     await manager.send_state(websocket)
         return True

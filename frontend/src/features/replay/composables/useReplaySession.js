@@ -275,6 +275,13 @@ export function useReplaySession(activeRef, emit) {
     demoActive.value = false;
   };
 
+  const blurActiveControl = () => {
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement) {
+      activeElement.blur();
+    }
+  };
+
   const triggerAction = (action, payload = {}) => {
     client?.send(action, payload);
   };
@@ -357,6 +364,7 @@ export function useReplaySession(activeRef, emit) {
 
   const stepReplay = (delta) => {
     stopDemo();
+    blurActiveControl();
     if (!loaded.value) return;
     startResultsRefresh();
     triggerAction('REPLAY_STEP', { delta });
@@ -364,6 +372,7 @@ export function useReplaySession(activeRef, emit) {
 
   const handleSliderStep = (step) => {
     stopDemo();
+    blurActiveControl();
     if (!loaded.value) return;
     startResultsRefresh();
     triggerAction('REPLAY_SET_STEP', { step });
@@ -378,6 +387,7 @@ export function useReplaySession(activeRef, emit) {
     const point = markerIndices.value.find((item) => item > currentStep.value);
     if (point == null) return;
     stopDemo();
+    blurActiveControl();
     startResultsRefresh();
     triggerAction('REPLAY_SET_STEP', { step: point });
   };
@@ -485,7 +495,10 @@ export function useReplaySession(activeRef, emit) {
   const handleKeyDown = (event) => {
     if (!activeRef?.value) return;
     const target = event.target;
-    if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select'))) return;
+    if (target instanceof HTMLElement) {
+      const isReplaySliderRange = target.matches('[data-replay-slider-range="true"]');
+      if (!isReplaySliderRange && (target.isContentEditable || target.closest('input, textarea, select'))) return;
+    }
     if (event.key === 'Escape' && menuOpen.value) {
       menuOpen.value = false;
       return;

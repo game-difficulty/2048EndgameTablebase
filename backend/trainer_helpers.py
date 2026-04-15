@@ -51,7 +51,7 @@ def _compute_spawns(session, new_board):
             p = 15 - tile_pos
             if ((bd_encoded >> np.uint64(4 * p)) & np.uint64(0xF)) == np.uint64(0):
                 test_board = bd_encoded | (np.uint64(val) << np.uint64(4 * p))
-                result, _ = session.book_reader.move_on_dic(
+                result, _ = session.ensure_book_reader().move_on_dic(
                     decode_board(test_board),
                     session.pattern_settings[0],
                     session.pattern_settings[1],
@@ -66,7 +66,7 @@ def _compute_spawns(session, new_board):
 
 
 async def send_trainer_results(session, websocket, request_id=None):
-    if not hasattr(session, "book_reader"):
+    if session.book_reader is None:
         return
     _32ks = pattern_32k_tiles_map.get(session.pattern_settings[0], [0])[0]
     target = session.pattern_settings[1]
@@ -79,7 +79,7 @@ async def send_trainer_results(session, websocket, request_id=None):
             )
         )
         board = decode_board(board_encoded_replaced)
-        result, dtype = session.book_reader.move_on_dic(
+        result, dtype = session.ensure_book_reader().move_on_dic(
             board,
             session.pattern_settings[0],
             session.pattern_settings[1],

@@ -1,25 +1,32 @@
-#!/bin/bash
+﻿#!/usr/bin/env bash
 
-if [ ! -e ./x86-simd-sort ]; then
-  git clone --depth=1 https://github.com/numpy/x86-simd-sort.git
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+XSS_DIR="$ROOT_DIR/x86simdsort/x86-simd-sort"
+
+cd "$ROOT_DIR"
+
+if [ ! -d "$XSS_DIR" ]; then
+  echo "Missing x86-simd-sort sources at: $XSS_DIR" >&2
+  exit 1
 fi
 
-7z x -y ./egtb_data.7z
+if [ -f "$ROOT_DIR/egtb_data.7z" ]; then
+  7z x -y "$ROOT_DIR/egtb_data.7z"
+fi
 
-cmake -B build
-cmake --build build -j --config Release
-cp ./build/ai_core.*.so .
+cmake -S "$ROOT_DIR" -B "$ROOT_DIR/build" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$ROOT_DIR/build" -j --config Release
 
-cd ./x86-simd-sort || exit
-meson setup build --buildtype=release -Duse_openmp=true -Dlib_type=static
-meson compile -C build
-cd ..
+find "$ROOT_DIR/build" -maxdepth 1 \( -name 'ai_core*.so' -o -name 'ai_core*.pyd' -o -name 'mover_core*.so' -o -name 'mover_core*.pyd' \) -exec cp {} "$ROOT_DIR" \;
+
+meson setup "$XSS_DIR/builddir" "$XSS_DIR" --buildtype=release -Duse_openmp=true
+meson compile -C "$XSS_DIR/builddir"
 
 g++ -O3 -march=native -flto -shared -fPIC \
-        -ffunction-sections -fdata-sections \
-        xss_wrapper.cpp ./x86-simd-sort/build/libx86simdsortcpp.a \
-        -I./x86-simd-sort \
-        -static-libstdc++ -static-libgcc -fopenmp \
-        -Wl,--gc-sections -s \
-        -o sort_wrapper.so
-
+    -ffunction-sections -fdata-sections \
+    "$XSS_DIR/xss_wrapper.cpp" "$XSS_DIR/builddir/libx86simdsortcpp.a" \
+    -I"$XSS_DIR/lib" -I"$XSS_DIR/src" \
+    -fopenmp -Wl,--gc-sections -s \
+    -o "$ROOT_DIR/sort_wrapper.so"

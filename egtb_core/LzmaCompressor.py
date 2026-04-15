@@ -6,6 +6,7 @@ import os
 import platform
 import subprocess
 import shutil
+import sys
 
 import numpy as np
 
@@ -15,23 +16,64 @@ internal_path = os.path.join("_internal", "7z.exe")
 
 if os.path.exists(internal_path):
     seven_zip_exe = internal_path
-elif _:=shutil.which("7z"):
+elif _ := shutil.which("7z"):
     seven_zip_exe = _
 else:
     seven_zip_exe = os.path.join("7zip", "7z.exe")
     if not os.path.exists(seven_zip_exe):
-        logger.warning(f"7z executable not found!")
-        
-        
+        logger.warning("7z executable not found!")
+
 BLOCK_SIZE = 32768
 CREATE_NO_WINDOW = 0x08000000 if platform.system() == "Windows" else 0
+
+
+def _resolve_7z_executable():
+    module_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    candidate_roots = [module_root]
+
+    if getattr(sys, "frozen", False):
+        executable_dir = os.path.dirname(os.path.abspath(sys.executable))
+        candidate_roots.insert(0, executable_dir)
+        bundle_root = getattr(sys, "_MEIPASS", None)
+        if bundle_root:
+            candidate_roots.insert(0, os.path.abspath(bundle_root))
+
+    for root in candidate_roots:
+        for relative_path in (
+            "7z.exe",
+            os.path.join("_internal", "7z.exe"),
+            os.path.join("7zip", "7z.exe"),
+        ):
+            candidate = os.path.abspath(os.path.join(root, relative_path))
+            if os.path.exists(candidate):
+                return candidate
+
+    logger.warning("7z executable not found!")
+    return None
+
+
+def _seven_zip_startup_kwargs():
+    if platform.system() != "Windows":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+    return {"creationflags": CREATE_NO_WINDOW, "startupinfo": startupinfo}
+
+
+seven_zip_exe = _resolve_7z_executable()
 
 
 def is_seven_zip_available():
     """
     检查 seven_zip_exe 是否存在且可用
     """
-    return os.path.exists(seven_zip_exe) and os.access(seven_zip_exe, os.X_OK)
+    return (
+        bool(seven_zip_exe)
+        and os.path.exists(seven_zip_exe)
+        and os.access(seven_zip_exe, os.X_OK)
+    )
 
 
 def compress_with_lzma(input_file, output_file):
@@ -39,7 +81,10 @@ def compress_with_lzma(input_file, output_file):
     使用 Python 标准库 lzma 将文件压缩为 .xz 格式，并删除原文件
     """
     # 使用 lzma 的 FORMAT_XZ 格式，生成 .xz 文件
-    with open(input_file, 'rb') as f_in, lzma.open(output_file, 'wb', format=lzma.FORMAT_XZ) as f_out:
+    with (
+        open(input_file, "rb") as f_in,
+        lzma.open(output_file, "wb", format=lzma.FORMAT_XZ) as f_out,
+    ):
         f_out.write(f_in.read())
     logger.debug(f"文件已使用 lzma 压缩为 .xz 格式到: {output_file}")
     # 删除原文件
@@ -50,7 +95,7 @@ def decompress_with_lzma(input_file, output_file):
     """
     使用 Python 标准库 lzma 解压文件，并删除压缩文件
     """
-    with lzma.open(input_file, 'rb') as f_in, open(output_file, 'wb') as f_out:
+    with lzma.open(input_file, "rb") as f_in, open(output_file, "wb") as f_out:
         f_out.write(f_in.read())
     # logger.debug(f"文件已使用 lzma 解压到: {output_file}")
     # 删除压缩文件
@@ -70,16 +115,17 @@ def compress_with_7z(input_file, lvl=1):
         # 如果 7z.exe 可用，则使用 7z.exe 压缩
         max_threads = os.cpu_count()
         cmd = [
-            seven_zip_exe, "a",  # "a" 表示添加文件到压缩包
+            seven_zip_exe,
+            "a",  # "a" 表示添加文件到压缩包
             "-t7z",  # 使用 7z 格式
             "-m0=lzma2",  # 使用 LZMA2 算法
             f"-mx={lvl}",  # 压缩级别
             f"-mmt={max_threads}",  # 使用最大线程数
             "-sdel",  # 压缩后删除原始文件
             output_file,  # 输出的 .7z 文件路径
-            input_file  # 输入的文件路径
+            input_file,  # 输入的文件路径
         ]
-        subprocess.run(cmd, check=True, creationflags=CREATE_NO_WINDOW)
+        subprocess.run(cmd, check=True, **_seven_zip_startup_kwargs())
         logger.debug(f"compressed: {output_file}")
     else:
         # 如果 7z.exe 不可用，则使用 Python 标准库 lzma 压缩
@@ -98,12 +144,13 @@ def decompress_with_7z(archive_file):
     if is_seven_zip_available():
         # 如果 7z.exe 可用，则使用 7z.exe 解压
         cmd = [
-            seven_zip_exe, "x",  # "x" 表示解压文件到指定路径
+            seven_zip_exe,
+            "x",  # "x" 表示解压文件到指定路径
             archive_file,  # 输入的 .7z 文件路径
             f"-o{os.path.dirname(original_file)}",  # 解压到原文件所在目录
-            "-y"  # 自动确认所有提示（如覆盖文件）
+            "-y",  # 自动确认所有提示（如覆盖文件）
         ]
-        subprocess.run(cmd, check=True, creationflags=CREATE_NO_WINDOW)
+        subprocess.run(cmd, check=True, **_seven_zip_startup_kwargs())
         logger.debug(f"decompressed: {original_file}")
         # 删除压缩文件
         os.remove(archive_file)
@@ -116,16 +163,16 @@ def compress_uint64_array(data, output_filepath, lvl=1):
     if len(data) < 65536:
         return
     if len(data) > 4194304:
-        segments = _compress_uint64_array_p(data, output_filepath + '.zi', lvl)
-        segments.tofile(output_filepath + '.s')
+        segments = _compress_uint64_array_p(data, output_filepath + ".zi", lvl)
+        segments.tofile(output_filepath + ".s")
         return
 
     # 存储分段信息：每段的第一个值和文件偏移量
-    segments = np.empty(math.ceil(len(data) / BLOCK_SIZE), dtype='uint64,uint64')
+    segments = np.empty(math.ceil(len(data) / BLOCK_SIZE), dtype="uint64,uint64")
     current_offset = 0
 
     # 打开输出文件
-    with open(output_filepath + '.zi', 'wb') as f:
+    with open(output_filepath + ".zi", "wb") as f:
         i = 0
         n = len(data)
 
@@ -141,20 +188,20 @@ def compress_uint64_array(data, output_filepath, lvl=1):
             current_offset += bytes_written
             i = end
 
-    segments.tofile(output_filepath + '.s')
+    segments.tofile(output_filepath + ".s")
 
 
 def _compress_uint64_array_p(data, output_filename, lvl=1):
     if len(data) == 0:
-        return np.array([], dtype='uint64,uint64')
+        return np.array([], dtype="uint64,uint64")
 
-    num_workers = os.cpu_count()
+    num_workers = os.cpu_count() or 2
 
     # 计算总段数和每个工作线程处理的段数
     total_segments = math.ceil(len(data) / BLOCK_SIZE)
     segments_per_worker = math.ceil(total_segments / num_workers)
 
-    all_segments = np.empty(total_segments, dtype='uint64,uint64')
+    all_segments = np.empty(total_segments, dtype="uint64,uint64")
 
     # 准备批量数据
     batch_data = []
@@ -188,7 +235,7 @@ def _compress_uint64_array_p(data, output_filename, lvl=1):
                 batch_data[i:end_idx],
                 batch_indices[i:end_idx],
                 batch_first_values[i:end_idx],
-                lvl
+                lvl,
             )
             futures.append(future)
 
@@ -201,7 +248,7 @@ def _compress_uint64_array_p(data, output_filename, lvl=1):
 
     # 写入最终文件
     current_offset = 0
-    with open(output_filename, 'wb') as f:
+    with open(output_filename, "wb") as f:
         for seg_idx, compressed_data, first_value in all_results:
             bytes_written = f.write(compressed_data)
             all_segments[seg_idx] = (first_value, current_offset)
@@ -212,7 +259,9 @@ def _compress_uint64_array_p(data, output_filename, lvl=1):
 
 def worker_batch(worker_id, data_slice, segment_indices, first_values, lvl):
     results = []
-    for i, (seg_data, seg_idx, first_val) in enumerate(zip(data_slice, segment_indices, first_values)):
+    for i, (seg_data, seg_idx, first_val) in enumerate(
+        zip(data_slice, segment_indices, first_values)
+    ):
         data_bytes = seg_data.tobytes()
         compressor = lzma.LZMACompressor(preset=lvl)
         compressed_data = compressor.compress(data_bytes) + compressor.flush()
@@ -226,11 +275,11 @@ def decompress_uint64_array(input_filename, segments):
 
     all_data = []
 
-    with open(input_filename, 'rb') as f:
+    with open(input_filename, "rb") as f:
         for i in range(len(segments)):
             # 获取当前段的偏移量和下一个段的偏移量
-            current_offset = segments[i]['f1']
-            next_offset = segments[i + 1]['f1'] if i + 1 < len(segments) else None
+            current_offset = segments[i]["f1"]
+            next_offset = segments[i + 1]["f1"] if i + 1 < len(segments) else None
 
             # 定位到当前段
             f.seek(current_offset)
@@ -259,7 +308,7 @@ def find_value_uint64_compressed(input_filename, segments, value):
     """
     在不完全解压的情况下，找到特定值在原数组中的索引，如果未找到则返回None
     """
-    seg_first_values = segments['f0']
+    seg_first_values = segments["f0"]
     if len(segments) == 0 or value < seg_first_values[0]:
         return None
 
@@ -271,13 +320,13 @@ def find_value_uint64_compressed(input_filename, segments, value):
 
     # 解压找到的段
     segment = segments[seg_idx]
-    file_offset = segment['f1']
+    file_offset = segment["f1"]
 
     # 读取并解压该段
-    with open(input_filename, 'rb') as f:
+    with open(input_filename, "rb") as f:
         if seg_idx + 1 < len(segments):
             # 有下一段，则读取到下一段的偏移量
-            next_offset = segments[seg_idx + 1]['f1']
+            next_offset = segments[seg_idx + 1]["f1"]
             compressed_size = next_offset - file_offset
         else:
             # 最后一段，读取到文件末尾
@@ -305,8 +354,8 @@ def find_value_uint64_compressed(input_filename, segments, value):
 
 
 # if __name__ == "__main__":
-    # compress_with_7z(r"Q:\tables\4431_2048_725.book", lvl=1)
-    # decompress_with_7z(r"Q:\tables\4431_2048_725.book.7z")
+# compress_with_7z(r"Q:\tables\4431_2048_725.book", lvl=1)
+# decompress_with_7z(r"Q:\tables\4431_2048_725.book.7z")
 
 # if __name__ == "__main__":
 #     test_data = np.fromfile(r"C:\Users\Administrator\Desktop\test\4.i", dtype=np.uint64)

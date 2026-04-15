@@ -12,7 +12,7 @@ from ..actions import Action, Message
 from ..animation import build_move_animation_metadata
 from ..notebook import mistakes_book_store
 from ..session import GameSession
-from ..session import u64
+from ..session import np_u64, u64
 from ..tester import (
     TESTER_REPLAY_SENTINEL,
     _cache_tester_replay,
@@ -82,7 +82,7 @@ async def handle_tester_action(
 
         if found and path_list:
             try:
-                random_board = session.book_reader.get_random_state(
+                random_board = session.ensure_book_reader().get_random_state(
                     path_list, session.tester_full_pattern
                 )
                 random_board = _tester_random_rotate(random_board, pattern)
@@ -107,7 +107,7 @@ async def handle_tester_action(
         target = session.tester_pattern[1]
         found, path_list = _tester_prepare_selection(session, pattern, target)
         if found and path_list:
-            random_board = session.book_reader.get_random_state(
+            random_board = session.ensure_book_reader().get_random_state(
                 path_list, session.tester_full_pattern
             )
             random_board = _tester_random_rotate(random_board, pattern)
@@ -134,7 +134,7 @@ async def handle_tester_action(
         target = session.tester_pattern[1]
         found, _ = _tester_prepare_selection(session, pattern, target)
         try:
-            board_encoded = np.uint64(int(hex_str, 16))
+            board_encoded = np_u64(int(hex_str, 16))
         except ValueError:
             session.tester_status = "Invalid hex board."
             await send_tester_state(websocket, session)
@@ -193,7 +193,7 @@ async def handle_tester_action(
         if selected_rate is None or best_move is None or best_rate is None:
             return True
 
-        old_board_encoded = np.uint64(u64(session.board_encoded))
+        old_board_encoded = np_u64(session.board_encoded)
 
         move_fn = v_move_board if session.use_variant else r_move_board
         gen_fn = v_gen_new_num if session.use_variant else r_gen_new_num
@@ -283,7 +283,7 @@ async def handle_tester_action(
         session.score += int(move_score)
         session.best_score = max(session.best_score, session.score)
         new_board, _, num_pos_1d, val_exp = gen_fn(new_board, spawn_rate4)
-        session.board_encoded = np.uint64(u64(new_board))
+        session.board_encoded = np_u64(new_board)
         session.history.append((session.board_encoded, session.score))
         session.move_history.append(direction_str)
         session.played_length = len(session.history) - 1

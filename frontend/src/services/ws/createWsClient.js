@@ -10,6 +10,7 @@ export function createWsClient({
   let socket = null;
   let reconnectTimer = null;
   let shouldReconnect = true;
+  const pendingPayloads = [];
 
   const clearReconnectTimer = () => {
     if (reconnectTimer !== null) {
@@ -39,6 +40,9 @@ export function createWsClient({
     socket = new WebSocket(resolveUrl());
 
     socket.onopen = () => {
+      while (pendingPayloads.length > 0 && socket?.readyState === WebSocket.OPEN) {
+        socket.send(pendingPayloads.shift());
+      }
       onOpen?.(socket);
     };
 
@@ -69,6 +73,7 @@ export function createWsClient({
   const disconnect = () => {
     shouldReconnect = false;
     clearReconnectTimer();
+    pendingPayloads.length = 0;
     if (socket) {
       socket.onclose = null;
       socket.close();
@@ -77,10 +82,12 @@ export function createWsClient({
   };
 
   const sendRaw = (payload) => {
+    const serialized = typeof payload === 'string' ? payload : JSON.stringify(payload);
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      return false;
+      pendingPayloads.push(serialized);
+      return true;
     }
-    socket.send(JSON.stringify(payload));
+    socket.send(serialized);
     return true;
   };
 

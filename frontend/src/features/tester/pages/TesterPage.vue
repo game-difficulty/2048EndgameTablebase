@@ -115,7 +115,7 @@
                 :style="getResultRowStyle(item)"
               >
                 <span class="text-center ui-body font-black text-text-secondary">{{ dirLabels[item.dir] }}</span>
-                <span class="truncate text-right font-black tabular-nums leading-none" :style="getResultValueStyle(item)">{{ item.display }}</span>
+                <span class="truncate text-left font-black tabular-nums leading-none" :style="getResultValueStyle(item)">{{ item.display }}</span>
               </div>
             </div>
           </div>
