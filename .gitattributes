@@ -1,0 +1,9 @@
+# Generated web AI artifacts published for GitHub Pages
+docs/ai_core.js linguist-generated=true
+docs/ai_core.wasm linguist-generated=true binary
+
+# Large compressed generated source bundle
+ai_and_sort/egtb_data.7z binary
+
+# Modified third-party SIMD sort subtree: keep in repo, exclude from language stats
+ai_and_sort/x86simdsort/x86-simd-sort/** linguist-vendored
