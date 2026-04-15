@@ -49,6 +49,8 @@
   Shared signal/event helper still referenced by runtime code.
 - error_bridge.py
   Frontend/global error reporting bridge.
+- build_linux.sh
+  Linux helper script that builds the frontend and native workspace, then optionally launches the app.
 - requirements.txt
   Main Python dependencies list.
 

@@ -136,6 +136,93 @@ Computing endgame tables like `free12` involves state spaces reaching $10^{13}$ 
     * **QQ Group**: 94064339
     * **Discord**: 2048 Runs
 
+---
+
+## Build From Source
+
+The repository now separates Python/backend code, the Vue frontend, and the native `ai_and_sort/` workspace.
+
+### Linux
+
+The shortest path on Linux is the root helper script:
+
+```bash
+chmod +x build_linux.sh
+./build_linux.sh
+```
+
+To build and launch immediately:
+
+```bash
+./build_linux.sh --run
+```
+
+Linux prerequisites:
+
+- Python 3.8+
+- Node.js + npm
+- `cmake`
+- `meson`
+- `g++`
+- OpenMP support in the toolchain/runtime
+- `7z` when `ai_and_sort/egtb_data.7z` is present
+- A `pywebview` system backend such as GTK/WebKit2 or Qt
+- Python packages from `requirements.txt`
+- `nanobind`
+
+Recommended setup:
+
+```bash
+python3 -m pip install -r requirements.txt
+python3 -m pip install nanobind
+```
+
+What `build_linux.sh` does:
+
+1. Builds the Vue frontend into `frontend/dist`
+2. Runs `ai_and_sort/make.sh` to:
+   - extract `ai_and_sort/egtb_data.7z` into `ai_and_sort/src/`
+   - build `ai_core`
+   - build `mover_core`
+   - build `sort_wrapper.so`
+3. Verifies the Python imports required to launch the app
+
+After the build finishes, you can run the desktop app manually:
+
+```bash
+python3 backend_server.py
+```
+
+If you only need part of the build:
+
+```bash
+./build_linux.sh --skip-frontend
+./build_linux.sh --skip-native
+```
+
+### Windows
+
+The repository also contains the full Windows source layout. Build the frontend with:
+
+```powershell
+cd frontend
+npm install
+npm run build
+```
+
+Then build the native modules from `ai_and_sort/` and run:
+
+```powershell
+python backend_server.py
+```
+
+The native workspace intentionally excludes the following local WIP files from GitHub uploads:
+
+- `ai_and_sort/include/BookGenerator.h`
+- `ai_and_sort/include/BookGeneratorUtils.h`
+- `ai_and_sort/src/BookGenerator.cpp`
+- `ai_and_sort/src/BookGeneratorUtils.cpp`
+
 
 
 

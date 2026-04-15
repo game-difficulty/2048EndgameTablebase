@@ -5,6 +5,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 XSS_DIR="$ROOT_DIR/x86simdsort/x86-simd-sort"
 
+need_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required command: $1" >&2
+    exit 1
+  fi
+}
+
 cd "$ROOT_DIR"
 
 if [ ! -d "$XSS_DIR" ]; then
@@ -12,7 +19,12 @@ if [ ! -d "$XSS_DIR" ]; then
   exit 1
 fi
 
+need_cmd cmake
+need_cmd meson
+need_cmd g++
+
 if [ -f "$ROOT_DIR/egtb_data.7z" ]; then
+  need_cmd 7z
   7z x -y "-o$ROOT_DIR/src" "$ROOT_DIR/egtb_data.7z"
 fi
 

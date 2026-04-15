@@ -45,6 +45,8 @@ AIPlayer_cpp/
 ai_and_sort/build/
 ai_and_sort/wasm_project/
 ai_and_sort/web_version_project/
+ai_and_sort/include/BookGenerator.h
+ai_and_sort/include/BookGeneratorUtils.h
 ai_and_sort/src/BookGenerator.cpp
 ai_and_sort/src/BookGeneratorUtils.cpp
 ai_and_sort/src/egtb_data_1256.cpp

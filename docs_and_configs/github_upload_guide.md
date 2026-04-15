@@ -24,6 +24,11 @@ The goal is to keep all source needed for building the app while excluding local
     - `make.sh`
     - `README.md`
     - `ai_core.pyi`
+  - Exclude local WIP files:
+    - `include/BookGenerator.h`
+    - `include/BookGeneratorUtils.h`
+    - `src/BookGenerator.cpp`
+    - `src/BookGeneratorUtils.cpp`
   - Exclude generated outputs:
     - `*.pyd`, `*.so`, `*.dll`, `*.a`, `build/`, `x86simdsort/x86-simd-sort/builddir/`
   - Exclude local-only large generated sources restored from the archive:
