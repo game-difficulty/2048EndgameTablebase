@@ -47,6 +47,9 @@ ai_and_sort/wasm_project/
 ai_and_sort/web_version_project/
 ai_and_sort/src/BookGenerator.cpp
 ai_and_sort/src/BookGeneratorUtils.cpp
+ai_and_sort/src/egtb_data_1256.cpp
+ai_and_sort/src/egtb_data_256.cpp
+ai_and_sort/src/egtb_data_512.cpp
 !ai_and_sort/x86simdsort/x86-simd-sort/lib/
 !ai_and_sort/x86simdsort/x86-simd-sort/lib/**
 ai_and_sort/*.pyd
@@ -57,7 +60,6 @@ ai_and_sort/*.lib
 ai_and_sort/*.exp
 ai_and_sort/*.obj
 ai_and_sort/*.o
-ai_and_sort/egtb_data.7z
 ai_and_sort/x86simdsort/x86-simd-sort/builddir/
 ai_and_sort/x86simdsort/x86-simd-sort/*.dll
 ai_and_sort/AIPlayer.cpp
@@ -87,6 +89,7 @@ pnpm-debug.log*
 *.book
 *.z
 *.7z
+!ai_and_sort/egtb_data.7z
 
 # temp files
 t/

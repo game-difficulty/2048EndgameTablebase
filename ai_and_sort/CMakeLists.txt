@@ -51,6 +51,20 @@ else()
     )
 endif()
 
+set(REQUIRED_EGTB_DATA_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/egtb_data_512.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/egtb_data_256.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/egtb_data_1256.cpp"
+)
+
+foreach(required_source ${REQUIRED_EGTB_DATA_SOURCES})
+    if(NOT EXISTS "${required_source}")
+        message(FATAL_ERROR
+            "Missing ${required_source}. Extract ai_and_sort/egtb_data.7z into ai_and_sort/src before configuring CMake, or use ai_and_sort/make.sh on Linux."
+        )
+    endif()
+endforeach()
+
 set(AI_CORE_SOURCES
     src/AIPlayer.cpp
     src/egtb_query.cpp

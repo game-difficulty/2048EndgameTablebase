@@ -13,7 +13,7 @@ if [ ! -d "$XSS_DIR" ]; then
 fi
 
 if [ -f "$ROOT_DIR/egtb_data.7z" ]; then
-  7z x -y "$ROOT_DIR/egtb_data.7z"
+  7z x -y "-o$ROOT_DIR/src" "$ROOT_DIR/egtb_data.7z"
 fi
 
 cmake -S "$ROOT_DIR" -B "$ROOT_DIR/build" -DCMAKE_BUILD_TYPE=Release

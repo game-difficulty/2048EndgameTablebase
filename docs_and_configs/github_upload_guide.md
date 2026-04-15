@@ -19,12 +19,17 @@ The goal is to keep all source needed for building the app while excluding local
     - `src/`
     - `include/`
     - `x86simdsort/x86-simd-sort/`
+    - `egtb_data.7z`
     - `CMakeLists.txt`
     - `make.sh`
     - `README.md`
     - `ai_core.pyi`
   - Exclude generated outputs:
     - `*.pyd`, `*.so`, `*.dll`, `*.a`, `build/`, `x86simdsort/x86-simd-sort/builddir/`
+  - Exclude local-only large generated sources restored from the archive:
+    - `src/egtb_data_1256.cpp`
+    - `src/egtb_data_256.cpp`
+    - `src/egtb_data_512.cpp`
 
 ### Documentation and static assets
 - `docs_and_configs/help/`
@@ -43,7 +48,7 @@ The goal is to keep all source needed for building the app while excluding local
 - `docs_and_configs/color_schemes.txt`
 - `logger.txt`
 - any local tablebase folders
-- `*.book`, `*.z`, `*.7z`
+- `*.book`, `*.z`
 - `frontend/node_modules/`, `frontend/dist/`
 - `AIPlayer_cpp/` legacy local workspace
 
@@ -77,6 +82,7 @@ The goal is to keep all source needed for building the app while excluding local
 ## 4. Build guidance for users
 
 ### Windows users
+- Extract `ai_and_sort/egtb_data.7z` into `ai_and_sort/src/`
 - Build `ai_core` and `mover_core` with CMake from `ai_and_sort/`
 - Build `sort_wrapper.dll` from `ai_and_sort/x86simdsort/x86-simd-sort/`
 - Runtime binaries should end up in `ai_and_sort/`

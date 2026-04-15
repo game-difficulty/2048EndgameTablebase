@@ -7,10 +7,11 @@ It contains:
 
 - `src/` and `include/`: the nanobind-based native modules for `ai_core` and `mover_core`
 - `x86simdsort/x86-simd-sort/`: the modified SIMD sorting source used to build `sort_wrapper`
+- `egtb_data.7z`: compressed large generated sources that are extracted locally before building
 - `CMakeLists.txt`: native module build entry
 - `make.sh`: Linux-oriented convenience build script
 
-Generated artifacts such as `ai_core*.pyd`, `mover_core*.so`, `sort_wrapper.dll`, and static libraries are intentionally not tracked.
+Generated artifacts such as `ai_core*.pyd`, `mover_core*.so`, `sort_wrapper.dll`, and static libraries are intentionally not tracked. The large `egtb_data_*.cpp` files are also intentionally kept out of Git and restored locally from `egtb_data.7z`.
 
 ## Build prerequisites
 
@@ -35,6 +36,7 @@ Build the Python extension modules:
 
 ```powershell
 cd ai_and_sort
+..\7zip\7z.exe x -y -o.\src .\egtb_data.7z
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j
 ```
@@ -72,5 +74,5 @@ This builds:
 
 ## Notes
 
-- `egtb_data.7z` is a local asset pack and is not required in GitHub source distributions.
+- `egtb_data.7z` is part of the source distribution. It exists to keep the generated `egtb_data_*.cpp` out of normal GitHub language and line-count statistics while still letting users rebuild locally.
 - `x86simdsort/x86-simd-sort/` is a modified upstream codebase; keep its README and license when publishing.
