@@ -216,13 +216,6 @@ Then build the native modules from `ai_and_sort/` and run:
 python backend_server.py
 ```
 
-The native workspace intentionally excludes the following local WIP files from GitHub uploads:
-
-- `ai_and_sort/include/BookGenerator.h`
-- `ai_and_sort/include/BookGeneratorUtils.h`
-- `ai_and_sort/src/BookGenerator.cpp`
-- `ai_and_sort/src/BookGeneratorUtils.cpp`
-
 
 
 
