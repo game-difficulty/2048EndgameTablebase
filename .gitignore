@@ -45,6 +45,10 @@ AIPlayer_cpp/
 ai_and_sort/build/
 ai_and_sort/wasm_project/
 ai_and_sort/web_version_project/
+ai_and_sort/src/BookGenerator.cpp
+ai_and_sort/src/BookGeneratorUtils.cpp
+!ai_and_sort/x86simdsort/x86-simd-sort/lib/
+!ai_and_sort/x86simdsort/x86-simd-sort/lib/**
 ai_and_sort/*.pyd
 ai_and_sort/*.so
 ai_and_sort/*.dll
