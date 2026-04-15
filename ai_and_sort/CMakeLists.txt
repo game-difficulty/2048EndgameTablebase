@@ -3,7 +3,16 @@ project(2048_AI_Core)
 
 # 1. 查找依赖项
 find_package(Python 3.8 REQUIRED COMPONENTS Interpreter Development.Module)
-add_subdirectory(extern/nanobind)
+if (UNIX)
+    execute_process(
+        COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        OUTPUT_VARIABLE nanobind_ROOT
+    )
+    find_package(nanobind CONFIG REQUIRED)
+else()
+    add_subdirectory(extern/nanobind)
+endif ()
 find_package(OpenMP REQUIRED)
 
 # 2. 先定义目标 (target)

@@ -3,6 +3,7 @@ import os
 from ctypes import c_uint64, c_size_t, POINTER
 from typing import Callable, List
 import traceback
+import sys
 
 import numpy as np
 from numpy.typing import NDArray
@@ -24,11 +25,12 @@ def initialize_sorting_library():
     _dll = None
     try:
         project_root = os.path.dirname(os.path.dirname(__file__))
-        dll_path = os.path.join(project_root, "ai_and_sort", "sort_wrapper.dll")
+        ext = "dll" if sys.platform == 'win32' else "so"
+        dll_path = os.path.join(project_root, "ai_and_sort", f"sort_wrapper.{ext}")
         if not os.path.exists(dll_path):
-            dll_path = r"_internal/sort_wrapper.dll"
+            dll_path = f"_internal/sort_wrapper.{ext}"
             if not os.path.exists(dll_path):
-                raise FileNotFoundError(f"sort_wrapper.dll not found.")
+                raise FileNotFoundError(f"sort_wrapper.{ext} not found.")
 
         # 加载DLL
         _dll = ctypes.CDLL(dll_path)
