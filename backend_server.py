@@ -1,7 +1,8 @@
-import webview
+from __future__ import annotations
+
 import atexit
 import ctypes
-from contextlib import asynccontextmanager
+import html
 import json
 import multiprocessing
 import os
@@ -10,133 +11,34 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
+import traceback
+
+import webview
+
+from backend.resource_paths import get_resource_path
+from backend.webview_api import Api
+from error_bridge import register_frontend_error_dispatcher
 
 
 _MOTW_EXTENSIONS = {".dll", ".pyd", ".exe", ".ocx"}
 _MOTW_SENTINEL = ".motw_unblocked"
 _MOTW_SKIP_DIRS = {".git", "__pycache__", "node_modules"}
+_MOTW_ALWAYS_SCAN_DIRS = {
+    "_internal",
+    "ai_and_sort",
+    "bin",
+    "dlls",
+    "lib",
+    "libs",
+    "pywin32_system32",
+}
 
+APP_TITLE = "2048 Endgame TableBase"
+APP_WINDOW_SIZE = (1200, 940)
+APP_WINDOW_MIN_SIZE = (800, 600)
 
-def _runtime_search_roots() -> list[Path]:
-    roots: list[Path] = []
-    if getattr(sys, "frozen", False):
-        roots.append(Path(sys.executable).resolve().parent)
-        meipass = getattr(sys, "_MEIPASS", None)
-        if meipass:
-            roots.append(Path(meipass).resolve())
-    else:
-        roots.append(Path(__file__).resolve().parent)
-
-    unique_roots: list[Path] = []
-    seen: set[str] = set()
-    for root in roots:
-        key = str(root).lower()
-        if key not in seen:
-            seen.add(key)
-            unique_roots.append(root)
-
-    # In PyInstaller onedir bundles, sys._MEIPASS usually lives under the
-    # executable directory, so scanning the parent once already covers it.
-    deduped: list[Path] = []
-    for root in sorted(unique_roots, key=lambda item: (len(item.parts), str(item).lower())):
-        if any(existing in root.parents for existing in deduped):
-            continue
-        deduped.append(root)
-
-    return deduped
-
-
-def _motw_global_sentinel(roots: list[Path]) -> Path | None:
-    if not roots or not getattr(sys, "frozen", False):
-        return None
-
-    executable_root = Path(sys.executable).resolve().parent
-    if all(root == executable_root or executable_root in root.parents for root in roots):
-        return executable_root / _MOTW_SENTINEL
-
-    return None
-
-
-def _clear_motw_stream(path: Path) -> None:
-    try:
-        os.remove(f"{path}:Zone.Identifier")
-    except FileNotFoundError:
-        return
-    except OSError:
-        return
-
-
-def _unblock_distribution_files() -> None:
-    if os.name != "nt" or not getattr(sys, "frozen", False):
-        return
-
-    roots = _runtime_search_roots()
-    global_sentinel = _motw_global_sentinel(roots)
-    if global_sentinel is not None and global_sentinel.exists():
-        return
-
-    for root in roots:
-        sentinel = root / _MOTW_SENTINEL
-        if global_sentinel is None and sentinel.exists():
-            continue
-
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [
-                name
-                for name in dirnames
-                if name.lower() not in _MOTW_SKIP_DIRS
-            ]
-            for filename in filenames:
-                path = Path(dirpath) / filename
-                if path.suffix.lower() in _MOTW_EXTENSIONS:
-                    _clear_motw_stream(path)
-
-        if global_sentinel is None:
-            try:
-                sentinel.write_text("ok", encoding="utf-8")
-            except OSError:
-                pass
-
-    if global_sentinel is not None:
-        try:
-            global_sentinel.write_text("ok", encoding="utf-8")
-        except OSError:
-            pass
-
-
-_unblock_distribution_files()
-
-import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-
-from backend.actions import Action, Message
-from backend.handlers.analysis import handle_analysis_action
-from backend.handlers.game import handle_game_action
-from backend.handlers.minigames import handle_minigame_action
-from backend.handlers.notebook import handle_notebook_action
-from backend.handlers.replay import handle_replay_action
-from backend.handlers.settings import handle_settings_action
-from backend.handlers.tester import handle_tester_action
-from backend.handlers.trainer import handle_trainer_action
-from backend.preload import start_preload_thread
-from backend.state import ConnectionManager, save_game_state
-from backend.webview_api import Api
-from Config import SingletonConfig
-from error_bridge import register_frontend_error_dispatcher, publish_frontend_exception
-
-
-@asynccontextmanager
-async def app_lifespan(_app: FastAPI):
-    SingletonConfig()
-    start_preload_thread()
-    yield
-
-
-app = FastAPI(lifespan=app_lifespan)
-manager = ConnectionManager()
 window: webview.Window | None = None
 _server_process: subprocess.Popen | None = None
 _server_job_handle = None
@@ -145,6 +47,7 @@ _cleanup_started = False
 
 if os.name == "nt":
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
     _PROCESS_SET_QUOTA = 0x0100
     _PROCESS_TERMINATE = 0x0001
     _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -185,39 +88,211 @@ if os.name == "nt":
         ]
 
 
-def get_resource_path(relative_path):
-    """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包环境"""
+def _runtime_search_roots() -> list[Path]:
+    roots: list[Path] = []
     if getattr(sys, "frozen", False):
-        # PyInstaller 打包环境
-        base_path = sys._MEIPASS  # type: ignore
+        roots.append(Path(sys.executable).resolve().parent)
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            roots.append(Path(meipass).resolve())
     else:
-        # 开发环境
-        base_path = os.path.dirname(os.path.abspath(__file__))
+        roots.append(Path(__file__).resolve().parent)
 
-    # 优先尝试在基准目录下寻找
-    path = os.path.join(base_path, relative_path)
-    if os.path.exists(path):
-        return os.path.abspath(path)
+    unique_roots: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root).lower()
+        if key not in seen:
+            seen.add(key)
+            unique_roots.append(root)
 
-    # 备选：尝试直接匹配相对路径（兼容性处理）
-    if os.path.exists(relative_path):
-        return os.path.abspath(relative_path)
+    deduped: list[Path] = []
+    for root in sorted(unique_roots, key=lambda item: (len(item.parts), str(item).lower())):
+        if any(existing in root.parents for existing in deduped):
+            continue
+        deduped.append(root)
 
-    return os.path.abspath(path)
+    return deduped
 
 
-def find_available_port(start_port=8000):
-    """检查指定端口是否可用，不可用则寻找随机空闲端口"""
+def _motw_global_sentinel(roots: list[Path]) -> Path | None:
+    if not roots or not getattr(sys, "frozen", False):
+        return None
+
+    executable_root = Path(sys.executable).resolve().parent
+    if all(root == executable_root or executable_root in root.parents for root in roots):
+        return executable_root / _MOTW_SENTINEL
+
+    return None
+
+
+def _clear_motw_stream(path: Path) -> None:
     try:
-        # 尝试绑定到 start_port
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", start_port))
+        os.remove(f"{path}:Zone.Identifier")
+    except (FileNotFoundError, OSError):
+        return
+
+
+def _has_motw_stream(path: Path) -> bool:
+    try:
+        return os.path.exists(f"{path}:Zone.Identifier")
+    except OSError:
+        return False
+
+
+def _is_motw_candidate_file(path: Path) -> bool:
+    return path.suffix.lower() in _MOTW_EXTENSIONS
+
+
+def _should_scan_dir(path: Path) -> bool:
+    if path.name.lower() in _MOTW_ALWAYS_SCAN_DIRS:
+        return True
+
+    try:
+        with os.scandir(path) as entries:
+            for entry in entries:
+                if (
+                    entry.is_file(follow_symlinks=False)
+                    and Path(entry.name).suffix.lower() in _MOTW_EXTENSIONS
+                ):
+                    return True
+    except OSError:
+        return False
+
+    return False
+
+
+def _iter_root_candidate_dirs(root: Path):
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                path = Path(entry.path)
+                if path.name.lower() in _MOTW_SKIP_DIRS:
+                    continue
+                if _should_scan_dir(path):
+                    yield path
+    except OSError:
+        return
+
+
+def _iter_motw_candidate_files(root: Path):
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                path = Path(entry.path)
+                if _is_motw_candidate_file(path):
+                    yield path
+    except OSError:
+        return
+
+    for scan_dir in _iter_root_candidate_dirs(root):
+        for dirpath, dirnames, filenames in os.walk(scan_dir):
+            dirnames[:] = [
+                name
+                for name in dirnames
+                if name.lower() not in _MOTW_SKIP_DIRS
+            ]
+            for filename in filenames:
+                path = Path(dirpath) / filename
+                if _is_motw_candidate_file(path):
+                    yield path
+
+
+def _iter_motw_probe_files(root: Path):
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                if entry.is_file(follow_symlinks=False):
+                    path = Path(entry.path)
+                    if _is_motw_candidate_file(path):
+                        yield path
+    except OSError:
+        return
+
+    for scan_dir in _iter_root_candidate_dirs(root):
+        try:
+            with os.scandir(scan_dir) as entries:
+                for entry in entries:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    path = Path(entry.path)
+                    if _is_motw_candidate_file(path):
+                        yield path
+                        break
+        except OSError:
+            continue
+
+
+def _bundle_appears_blocked(roots: list[Path]) -> bool:
+    executable_path = Path(sys.executable).resolve()
+    if _has_motw_stream(executable_path):
+        return True
+
+    for root in roots:
+        for path in _iter_motw_probe_files(root):
+            if _has_motw_stream(path):
+                return True
+
+    return False
+
+
+def _unblock_distribution_files() -> None:
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        return
+
+    roots = _runtime_search_roots()
+    global_sentinel = _motw_global_sentinel(roots)
+    if global_sentinel is not None and global_sentinel.exists():
+        return
+
+    if not _bundle_appears_blocked(roots):
+        if global_sentinel is not None:
+            try:
+                global_sentinel.write_text("ok", encoding="utf-8")
+            except OSError:
+                pass
+        else:
+            for root in roots:
+                try:
+                    (root / _MOTW_SENTINEL).write_text("ok", encoding="utf-8")
+                except OSError:
+                    pass
+        return
+
+    for root in roots:
+        sentinel = root / _MOTW_SENTINEL
+        if global_sentinel is None and sentinel.exists():
+            continue
+
+        for path in _iter_motw_candidate_files(root):
+            _clear_motw_stream(path)
+
+        if global_sentinel is None:
+            try:
+                sentinel.write_text("ok", encoding="utf-8")
+            except OSError:
+                pass
+
+    if global_sentinel is not None:
+        try:
+            global_sentinel.write_text("ok", encoding="utf-8")
+        except OSError:
+            pass
+
+
+def find_available_port(start_port: int = 8000) -> int:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", start_port))
             return start_port
-    except socket.error:
-        # 端口已被占用，寻找动态可用端口
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            return s.getsockname()[1]
+    except OSError:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("", 0))
+            return sock.getsockname()[1]
 
 
 def _ensure_server_job_object():
@@ -271,159 +346,126 @@ def _attach_process_to_server_job(pid: int) -> None:
 
 def _close_server_job_object() -> None:
     global _server_job_handle
-    if os.name != "nt" or _server_job_handle is None:
+    if os.name != "nt":
         return
-    _kernel32.CloseHandle(_server_job_handle)
+
+    handle = _server_job_handle
     _server_job_handle = None
+    if handle is None:
+        return
+
+    _kernel32.CloseHandle(handle)
 
 
-# 在模块加载时确定端口
-SERVER_PORT = find_available_port(8000)
+def _frontend_url() -> str:
+    if os.path.exists(frontend_dist_path):
+        return f"http://localhost:{SERVER_PORT}/"
+    return "http://localhost:5173"
 
 
-# 静态资源路径准备（挂载动作移至底部）
-mathjax_path = get_resource_path("mathjax")
-minigame_pic_path = get_resource_path(os.path.join("minigames", "pic"))
-pic_path = get_resource_path("pic")
-frontend_dist_path = get_resource_path(os.path.join("frontend", "dist"))
-
-
-# --- 路由定义开始 ---
-
-
-async def _send_ws_error(websocket: WebSocket, message: str):
-    try:
-        await websocket.send_json(
-            {"action": Message.ERROR, "data": {"message": message}}
-        )
-    except Exception as send_error:
-        print(f"Send error message failed: {send_error}")
-
-
-@app.websocket("/ws/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ignore
-    await manager.connect(websocket, client_id)
-    session = manager.active_connections[websocket]
-
-    try:
-        while True:
-            try:
-                data = await websocket.receive_text()
-                message = json.loads(data)
-                action = message.get("action") or message.get("type")
-                payload = (
-                    message.get("data")
-                    if isinstance(message.get("data"), dict)
-                    else message
-                )
-
-                if action == Action.GET_STATE:
-                    await manager.send_state(websocket)
-
-                elif await handle_tester_action(action, payload, session, websocket):
-                    continue
-
-                elif await handle_replay_action(action, payload, session, websocket):
-                    continue
-
-                elif await handle_notebook_action(action, payload, session, websocket):
-                    continue
-
-                elif await handle_analysis_action(action, payload, session, websocket):
-                    continue
-
-                elif await handle_minigame_action(action, payload, session, websocket):
-                    continue
-
-                elif await handle_settings_action(
-                    action, payload, session, websocket, manager
-                ):
-                    continue
-
-                elif await handle_game_action(
-                    action, payload, session, websocket, manager
-                ):
-                    continue
-
-                elif await handle_trainer_action(
-                    action, payload, session, websocket, manager
-                ):
-                    continue
-
-            except WebSocketDisconnect:
-                break
-            except Exception as e:
-                print(f"WebSocket action error: {e}")
-                publish_frontend_exception("WebSocket Action Error", e)
-                await _send_ws_error(websocket, str(e))
-    except Exception as e:
-        print(f"Connection error: {e}")
-        publish_frontend_exception("WebSocket Connection Error", e)
-    finally:
-        save_game_state(session)
-        manager.disconnect(websocket)
-
-
-# --- 路由结束，开始挂载静态资源 ---
-
-
-@app.get("/", include_in_schema=False)
-@app.get("/index.html", include_in_schema=False)
-async def serve_index():
-    """显式处理首页，包含详细的路径诊断信息"""
-    path = os.path.join(frontend_dist_path, "index.html")
-    if os.path.exists(path):
-        return FileResponse(path)
-
-    # 诊断：如果找不到，告诉用户程序尝试寻找的绝对路径
-    return {
-        "ERROR": "FRONTEND_NOT_FOUND",
-        "ATTEMPTED_ABS_PATH": os.path.abspath(path),
-        "CWD": os.getcwd(),
-        "SYS_MEIPASS": getattr(sys, "_MEIPASS", "NOT_BUNDLE"),
-    }
-
-
-@app.get("/favicon.ico", include_in_schema=False)
-async def favicon():
-    """为浏览器/Webview 提供图标，避免 404"""
-    icon_path = get_resource_path("favicon.ico")
-    if os.path.exists(icon_path):
-        return FileResponse(icon_path)
-    # 如果根目录没有，尝试去 pic 目录找备选
-    alt_icon_path = get_resource_path(os.path.join("pic", "2048_2.ico"))
-    if os.path.exists(alt_icon_path):
-        return FileResponse(alt_icon_path)
-    return None
-
-
-# 挂载特殊资源
-if os.path.exists(mathjax_path):
-    app.mount("/mathjax", StaticFiles(directory=mathjax_path), name="mathjax")
-
-if os.path.exists(minigame_pic_path):
-    app.mount(
-        "/minigames-assets",
-        StaticFiles(directory=minigame_pic_path),
-        name="minigames-assets",
+def _build_startup_page_html(message: str, is_error: bool = False) -> str:
+    escaped_message = html.escape(message).replace("\n", "<br>")
+    title = "Startup failed" if is_error else "Starting application"
+    accent = "#b93818" if is_error else "#1f6f5f"
+    badge = "Error" if is_error else "Loading"
+    background = (
+        "radial-gradient(circle at top, #fff4ec 0%, #f4eee5 42%, #e9e2d8 100%)"
+        if is_error
+        else "radial-gradient(circle at top, #f5fbf7 0%, #ece9dd 42%, #e0d8cb 100%)"
     )
-
-if os.path.exists(pic_path):
-    app.mount(
-        "/shared-assets",
-        StaticFiles(directory=pic_path),
-        name="shared-assets",
-    )
-
-# 最后挂载主前端根目录
-if os.path.exists(frontend_dist_path):
-    app.mount(
-        "/", StaticFiles(directory=frontend_dist_path, html=True), name="frontend"
-    )
-
-
-def _run_server_process(port: int):
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="error")
+    return f"""<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <title>{html.escape(APP_TITLE)}</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      font-family: \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;
+      --accent: {accent};
+      --surface: rgba(255, 255, 255, 0.84);
+      --text: #1d1d1f;
+      --muted: #5f6368;
+      --border: rgba(0, 0, 0, 0.08);
+    }}
+    * {{
+      box-sizing: border-box;
+    }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: {background};
+      color: var(--text);
+    }}
+    .panel {{
+      width: min(540px, calc(100vw - 48px));
+      padding: 32px 30px;
+      border-radius: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      box-shadow: 0 28px 80px rgba(45, 35, 24, 0.14);
+      backdrop-filter: blur(18px);
+    }}
+    .badge {{
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(0, 0, 0, 0.06);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    h1 {{
+      margin: 18px 0 8px;
+      font-size: 34px;
+      line-height: 1.1;
+    }}
+    h2 {{
+      margin: 0 0 14px;
+      font-size: 19px;
+      line-height: 1.35;
+      font-weight: 700;
+    }}
+    p {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+      word-break: break-word;
+    }}
+    .spinner {{
+      width: 18px;
+      height: 18px;
+      margin-top: 22px;
+      border-radius: 50%;
+      border: 2px solid rgba(0, 0, 0, 0.08);
+      border-top-color: var(--accent);
+      animation: spin 0.9s linear infinite;
+      display: {("none" if is_error else "block")};
+    }}
+    @keyframes spin {{
+      to {{ transform: rotate(360deg); }}
+    }}
+  </style>
+</head>
+<body>
+  <main class=\"panel\">
+    <div class=\"badge\">{badge}</div>
+    <h1>{html.escape(APP_TITLE)}</h1>
+    <h2>{html.escape(title)}</h2>
+    <p>{escaped_message}</p>
+    <div class=\"spinner\" aria-hidden=\"true\"></div>
+  </main>
+</body>
+</html>
+"""
 
 
 def _server_subprocess_command() -> list[str]:
@@ -476,12 +518,8 @@ def start_server_process() -> None:
     _wait_for_server_ready()
 
 
-def stop_server_process() -> None:
-    global _cleanup_started, _server_process
-    if _cleanup_started:
-        return
-    _cleanup_started = True
-
+def _terminate_server_process(close_job: bool) -> None:
+    global _server_process
     process = _server_process
     _server_process = None
     if process is not None:
@@ -495,21 +533,23 @@ def stop_server_process() -> None:
         except Exception:
             pass
 
-    _close_server_job_object()
+    if close_job:
+        _close_server_job_object()
 
 
-def persist_runtime_config() -> None:
-    try:
-        SingletonConfig().save_config(SingletonConfig().config)
-    except Exception as exc:
-        print(f"Failed to persist config on exit: {exc}")
+def stop_server_process() -> None:
+    global _cleanup_started
+    if _cleanup_started:
+        return
+    _cleanup_started = True
+    _terminate_server_process(close_job=True)
 
 
-def _initialize_frontend_error_bridge():
+def _initialize_frontend_error_bridge() -> None:
     if window is None:
         return
 
-    def _dispatch(payload: dict[str, str]):
+    def _dispatch(payload: dict[str, str]) -> None:
         if window is None:
             return
         payload_json = json.dumps(payload, ensure_ascii=False)
@@ -523,9 +563,46 @@ def _initialize_frontend_error_bridge():
     register_frontend_error_dispatcher(_dispatch)
 
 
-def _handle_exit_signal(signum, frame):
+def _show_startup_error(message: str) -> None:
+    if window is None:
+        return
+    try:
+        window.load_html(_build_startup_page_html(message, is_error=True))
+    except Exception:
+        pass
+
+
+def _launch_backend_and_frontend() -> None:
+    try:
+        start_server_process()
+        if _cleanup_started or window is None:
+            return
+        window.load_url(_frontend_url())
+    except Exception as exc:
+        _terminate_server_process(close_job=True)
+        traceback.print_exc()
+        if _cleanup_started:
+            return
+        _show_startup_error(
+            "The backend service failed to start.\n\n"
+            f"{exc}\n\n"
+            "Check the terminal output for the full traceback."
+        )
+
+
+def _start_launcher_runtime() -> None:
+    _initialize_frontend_error_bridge()
+    threading.Thread(target=_launch_backend_and_frontend, daemon=True).start()
+
+
+def _handle_exit_signal(signum, frame) -> None:
     stop_server_process()
     raise SystemExit(0)
+
+
+_unblock_distribution_files()
+SERVER_PORT = find_available_port(8000)
+frontend_dist_path = get_resource_path(os.path.join("frontend", "dist"))
 
 
 if __name__ == "__main__":
@@ -535,8 +612,9 @@ if __name__ == "__main__":
             child_port = int(sys.argv[-1])
         except (TypeError, ValueError):
             pass
-        atexit.register(persist_runtime_config)
-        _run_server_process(child_port)
+        from backend.app import run_backend_server
+
+        run_backend_server(child_port)
         raise SystemExit(0)
 
     is_frozen = getattr(sys, "frozen", False)
@@ -555,22 +633,16 @@ if __name__ == "__main__":
         except (ValueError, OSError):
             pass
 
-    start_server_process()
-
-    url = "http://localhost:5173"
-    if os.path.exists(frontend_dist_path):
-        url = f"http://localhost:{SERVER_PORT}/"
-
     window = webview.create_window(
-        "2048 Endgame TableBase",
-        url,
+        APP_TITLE,
+        html=_build_startup_page_html("Preparing the backend service. Please wait..."),
         js_api=Api(),
-        width=1200,
-        height=940,
-        min_size=(800, 600),
+        width=APP_WINDOW_SIZE[0],
+        height=APP_WINDOW_SIZE[1],
+        min_size=APP_WINDOW_MIN_SIZE,
     )
 
     try:
-        webview.start(_initialize_frontend_error_bridge, debug=not is_frozen)
+        webview.start(_start_launcher_runtime, debug=not is_frozen)
     finally:
         stop_server_process()
