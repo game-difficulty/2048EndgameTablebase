@@ -28,23 +28,23 @@ This guide explains how to bundle the desktop application with PyInstaller.
 ```powershell
 pyinstaller --noconfirm --onedir --windowed `
     --name "2048EndgameTablebase" `
-    --add-data "docs_and_configs/default_patterns.json;docs_and_configs" `
-    --add-data "docs_and_configs/themes.json;docs_and_configs" `
-    --add-data "docs_and_configs/help;docs_and_configs/help" `
-    --add-data "pic;pic" `
-    --add-data "font;font" `
-    --add-data "favicon.ico;." `
-    --add-data "mathjax;mathjax" `
-    --add-data "minigames/pic;minigames/pic" `
-    --add-data "frontend/dist;frontend/dist" `
-    --add-binary "ai_and_sort/libgcc_s_seh-1.dll;ai_and_sort" `
-    --add-binary "ai_and_sort/libgomp-1.dll;ai_and_sort" `
-    --add-binary "ai_and_sort/libwinpthread-1.dll;ai_and_sort" `
-    --add-binary "ai_and_sort/sort_wrapper.dll;ai_and_sort" `
-    --add-data "7zip/7z.dll;." `
-    --add-data "7zip/7z.exe;." `
-    --icon "pic/2048_2.ico" `
-    backend_server.py
+    --add-data "src/docs_and_configs/default_patterns.json;docs_and_configs" `
+    --add-data "src/docs_and_configs/themes.json;docs_and_configs" `
+    --add-data "src/docs_and_configs/help;docs_and_configs/help" `
+    --add-data "src/pic;pic" `
+    --add-data "src/font;font" `
+    --add-data "src/favicon.ico;." `
+    --add-data "src/mathjax;mathjax" `
+    --add-data "src/minigames/pic;minigames/pic" `
+    --add-data "src/frontend/dist;frontend/dist" `
+    --add-binary "src/ai_and_sort/libgcc_s_seh-1.dll;ai_and_sort" `
+    --add-binary "src/ai_and_sort/libgomp-1.dll;ai_and_sort" `
+    --add-binary "src/ai_and_sort/libwinpthread-1.dll;ai_and_sort" `
+    --add-binary "src/ai_and_sort/sort_wrapper.dll;ai_and_sort" `
+    --add-data "src/7zip/7z.dll;." `
+    --add-data "src/7zip/7z.exe;." `
+    --icon "src/pic/2048_2.ico" `
+    src/backend_server.py
 ```
 
 ## 3. Source layout assumptions

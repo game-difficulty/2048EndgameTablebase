@@ -431,12 +431,12 @@ export function useTrainerSession(activeRef) {
     }
 
     if (data.action === 'UPDATE_STATE') {
-        metadata.value = data.data.animation;
-        board.value = data.data.board;
-        if (typeof data.data.tablebase_path === 'string') {
-          tablebasePath.value = data.data.tablebase_path;
-        }
-        const nextBoardHex = data.data.hex_str || hexInput.value;
+      metadata.value = data.data.animation;
+      board.value = data.data.board;
+      if (typeof data.data.tablebase_path === 'string') {
+        tablebasePath.value = data.data.tablebase_path;
+      }
+      const nextBoardHex = data.data.hex_str || hexInput.value;
       const boardChanged = !!nextBoardHex && nextBoardHex !== currentBoardHex.value;
       if (nextBoardHex) {
         currentBoardHex.value = nextBoardHex;
@@ -608,28 +608,30 @@ export function useTrainerSession(activeRef) {
       return;
     }
 
+    if (currentPaletteValue.value === null) {
+      return;
+    }
+
     if (btn === 0) {
-      if (currentPaletteValue.value !== null) {
-        demoActive.value = false;
-        clearDemoTimer();
-        clearStepQueue();
-        triggerAction('SET_CELL', { row, col, val: currentPaletteValue.value });
-      }
-      } else if (btn === 2) {
-        const cellVal = board.value[row * 4 + col];
-        const nextVal = getCycledTileValue(cellVal, 1);
-        demoActive.value = false;
-        clearDemoTimer();
-        clearStepQueue();
-        triggerAction('SET_CELL', { row, col, val: nextVal });
-      } else {
-        const cellVal = board.value[row * 4 + col];
-        const prevVal = getCycledTileValue(cellVal, -1);
-        demoActive.value = false;
-        clearDemoTimer();
-        clearStepQueue();
-        triggerAction('SET_CELL', { row, col, val: prevVal });
-      }
+      demoActive.value = false;
+      clearDemoTimer();
+      clearStepQueue();
+      triggerAction('SET_CELL', { row, col, val: currentPaletteValue.value });
+    } else if (btn === 2) {
+      const cellVal = board.value[row * 4 + col];
+      const nextVal = getCycledTileValue(cellVal, 1);
+      demoActive.value = false;
+      clearDemoTimer();
+      clearStepQueue();
+      triggerAction('SET_CELL', { row, col, val: nextVal });
+    } else {
+      const cellVal = board.value[row * 4 + col];
+      const prevVal = getCycledTileValue(cellVal, -1);
+      demoActive.value = false;
+      clearDemoTimer();
+      clearStepQueue();
+      triggerAction('SET_CELL', { row, col, val: prevVal });
+    }
   };
 
   const onPatternChange = () => {

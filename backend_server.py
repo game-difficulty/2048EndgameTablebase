@@ -1,6 +1,7 @@
-﻿import webview
+import webview
 import atexit
 import ctypes
+from contextlib import asynccontextmanager
 import json
 import multiprocessing
 import os
@@ -13,6 +14,8 @@ import time
 
 
 _MOTW_EXTENSIONS = {".dll", ".pyd", ".exe", ".ocx"}
+_MOTW_SENTINEL = ".motw_unblocked"
+_MOTW_SKIP_DIRS = {".git", "__pycache__", "node_modules"}
 
 
 def _runtime_search_roots() -> list[Path]:
@@ -25,14 +28,34 @@ def _runtime_search_roots() -> list[Path]:
     else:
         roots.append(Path(__file__).resolve().parent)
 
-    deduped: list[Path] = []
+    unique_roots: list[Path] = []
     seen: set[str] = set()
     for root in roots:
         key = str(root).lower()
         if key not in seen:
             seen.add(key)
-            deduped.append(root)
+            unique_roots.append(root)
+
+    # In PyInstaller onedir bundles, sys._MEIPASS usually lives under the
+    # executable directory, so scanning the parent once already covers it.
+    deduped: list[Path] = []
+    for root in sorted(unique_roots, key=lambda item: (len(item.parts), str(item).lower())):
+        if any(existing in root.parents for existing in deduped):
+            continue
+        deduped.append(root)
+
     return deduped
+
+
+def _motw_global_sentinel(roots: list[Path]) -> Path | None:
+    if not roots or not getattr(sys, "frozen", False):
+        return None
+
+    executable_root = Path(sys.executable).resolve().parent
+    if all(root == executable_root or executable_root in root.parents for root in roots):
+        return executable_root / _MOTW_SENTINEL
+
+    return None
 
 
 def _clear_motw_stream(path: Path) -> None:
@@ -48,24 +71,36 @@ def _unblock_distribution_files() -> None:
     if os.name != "nt" or not getattr(sys, "frozen", False):
         return
 
-    for root in _runtime_search_roots():
-        sentinel = root / ".motw_unblocked"
-        if sentinel.exists():
+    roots = _runtime_search_roots()
+    global_sentinel = _motw_global_sentinel(roots)
+    if global_sentinel is not None and global_sentinel.exists():
+        return
+
+    for root in roots:
+        sentinel = root / _MOTW_SENTINEL
+        if global_sentinel is None and sentinel.exists():
             continue
 
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [
                 name
                 for name in dirnames
-                if name.lower() not in {".git", "__pycache__", "node_modules"}
+                if name.lower() not in _MOTW_SKIP_DIRS
             ]
             for filename in filenames:
                 path = Path(dirpath) / filename
                 if path.suffix.lower() in _MOTW_EXTENSIONS:
                     _clear_motw_stream(path)
 
+        if global_sentinel is None:
+            try:
+                sentinel.write_text("ok", encoding="utf-8")
+            except OSError:
+                pass
+
+    if global_sentinel is not None:
         try:
-            sentinel.write_text("ok", encoding="utf-8")
+            global_sentinel.write_text("ok", encoding="utf-8")
         except OSError:
             pass
 
@@ -86,12 +121,21 @@ from backend.handlers.replay import handle_replay_action
 from backend.handlers.settings import handle_settings_action
 from backend.handlers.tester import handle_tester_action
 from backend.handlers.trainer import handle_trainer_action
+from backend.preload import start_preload_thread
 from backend.state import ConnectionManager, save_game_state
 from backend.webview_api import Api
 from Config import SingletonConfig
 from error_bridge import register_frontend_error_dispatcher, publish_frontend_exception
 
-app = FastAPI()
+
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI):
+    SingletonConfig()
+    start_preload_thread()
+    yield
+
+
+app = FastAPI(lifespan=app_lifespan)
 manager = ConnectionManager()
 window: webview.Window | None = None
 _server_process: subprocess.Popen | None = None
@@ -212,9 +256,7 @@ def _attach_process_to_server_job(pid: int) -> None:
         return
 
     process_handle = _kernel32.OpenProcess(
-        _PROCESS_SET_QUOTA
-        | _PROCESS_TERMINATE
-        | _PROCESS_QUERY_LIMITED_INFORMATION,
+        _PROCESS_SET_QUOTA | _PROCESS_TERMINATE | _PROCESS_QUERY_LIMITED_INFORMATION,
         False,
         pid,
     )
@@ -349,7 +391,7 @@ async def favicon():
     if os.path.exists(icon_path):
         return FileResponse(icon_path)
     # 如果根目录没有，尝试去 pic 目录找备选
-    alt_icon_path = get_resource_path(os.path.join("pic", "2048.ico"))
+    alt_icon_path = get_resource_path(os.path.join("pic", "2048_2.ico"))
     if os.path.exists(alt_icon_path):
         return FileResponse(alt_icon_path)
     return None
@@ -405,7 +447,7 @@ def _server_subprocess_kwargs() -> dict[str, object]:
     return kwargs
 
 
-def _wait_for_server_ready(timeout_seconds: float = 5.0) -> None:
+def _wait_for_server_ready(timeout_seconds: float = 10.0) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         if _server_process is not None and _server_process.poll() is not None:
