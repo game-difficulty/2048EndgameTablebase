@@ -285,18 +285,18 @@ async def handle_game_action(
             best_move_code = logic.calculate_step(
                 player, board_2d, ai_dispatcher.counts
             )
-            logger.warning(
-                f"{player.do_check} {player.masked_count} {player.max_d} {player.prune}"
-            )
+            # logger.warning(
+            #     f"{player.do_check} {player.masked_count} {player.max_d} {player.prune}"
+            # )
             move_map = {1: "left", 2: "right", 3: "up", 4: "down"}
             best_move = move_map.get(best_move_code, None)
         else:
             best_move = best_move.lower() if best_move else None
 
-        _log_ai_step_debug(
-            best_move if best_move in valid_moves else None,
-            getattr(session.ai_dispatcher, "current_table", None),
-        )
+        # _log_ai_step_debug(
+        #     best_move if best_move in valid_moves else None,
+        #     getattr(session.ai_dispatcher, "current_table", None),
+        # )
 
         await websocket.send_json(
             {

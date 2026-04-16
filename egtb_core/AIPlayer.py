@@ -14,7 +14,7 @@ from egtb_core.Calculator import (
     RotateL,
     RotateR,
 )
-from Config import SingletonConfig, pattern_32k_tiles_map, DTYPE_CONFIG, logger
+from Config import SingletonConfig, pattern_32k_tiles_map, DTYPE_CONFIG
 from egtb_core.BoardMover import decode_board
 from egtb_core.BoardMover import move_board, encode_board
 
@@ -758,10 +758,6 @@ class CoreAILogic:
             ai_player.prune = np.uint8(0)
         if self.danbianhuichuan_patch(board, board_sum):
             ai_player.prune = np.uint8(1)
-        logger.warning(f"{board_sum}, {board_sum % 512}, {big_nums}, {ai_player.prune}")
-        logger.warning(
-            f"{self.danbianhuichuan_patch(board, board_sum)}, {is_5tiler}, {is_evil}, {is_mess}"
-        )
 
         if is_mess or is_5tiler:
             big_nums2 = np.sum(counts[9:])
