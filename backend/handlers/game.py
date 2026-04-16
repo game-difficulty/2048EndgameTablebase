@@ -22,13 +22,15 @@ from ..state import save_game_state
 GAMER_TOP_TILE = 32768
 
 
-# def _log_ai_step_debug(best_move: str | None, table_name: str | None):
-#     message = f"AI step move={best_move}, table={table_name or 'Unknown'}"
-#     print(message)
-#     logger.warning(message)
+def _log_ai_step_debug(best_move: str | None, table_name: str | None):
+    message = f"AI step move={best_move}, table={table_name or 'Unknown'}"
+    print(message)
+    logger.warning(message)
 
 
-def _gamer_board_with_special_tiles(board_encoded: np.uint64, special_tiles: dict[int, int]):
+def _gamer_board_with_special_tiles(
+    board_encoded: np.uint64, special_tiles: dict[int, int]
+):
     board = decode_board(np.uint64(u64(board_encoded))).copy()
     flat = board.reshape(-1)
     for index, value in special_tiles.items():
@@ -79,7 +81,9 @@ def _gamer_simulate_line(values):
     pops = [0, 0, 0, 0]
     score_delta = 0
 
-    non_zero = [(idx, int(value)) for idx, value in enumerate(values) if int(value) != 0]
+    non_zero = [
+        (idx, int(value)) for idx, value in enumerate(values) if int(value) != 0
+    ]
     read = 0
     write = 0
     while read < len(non_zero):
@@ -110,7 +114,9 @@ def _gamer_simulate_move(actual_board, direction_str: str):
 
     for line_positions in _gamer_line_positions(direction_str):
         line_values = [int(actual_board[row, col]) for row, col in line_positions]
-        next_values, line_distances, line_pops, line_score = _gamer_simulate_line(line_values)
+        next_values, line_distances, line_pops, line_score = _gamer_simulate_line(
+            line_values
+        )
         score_delta += line_score
 
         for offset, (row, col) in enumerate(line_positions):
@@ -160,8 +166,8 @@ async def handle_game_action(
         old_actual_board = _gamer_board_with_special_tiles(
             old_board_encoded, getattr(session, "gamer_special_tiles", {})
         )
-        moved_actual_board, slide_distances, pop_positions, move_score = _gamer_simulate_move(
-            old_actual_board, direction_str
+        moved_actual_board, slide_distances, pop_positions, move_score = (
+            _gamer_simulate_move(old_actual_board, direction_str)
         )
         if np.array_equal(moved_actual_board, old_actual_board):
             return True
@@ -178,9 +184,7 @@ async def handle_game_action(
         else:
             evil_gen = session.ensure_evil_gen()
             evil_gen.reset_board(u64(collapsed_after_move))
-            new_board_with_num, num_pos_1d, val_exp = evil_gen.gen_new_num(
-                depth=5
-            )
+            new_board_with_num, num_pos_1d, val_exp = evil_gen.gen_new_num(depth=5)
 
         session.board_encoded = np_u64(new_board_with_num)
         spawned_actual_board = moved_actual_board.copy()
@@ -269,27 +273,30 @@ async def handle_game_action(
         valid_moves = {"left", "right", "up", "down"}
 
         if best_move == "AI":
-            from ai_and_sort import ai_core
-            from egtb_core.AIPlayer import CoreAILogic
-
             if allow_resolve_32768:
+                from ai_and_sort import ai_core
+
                 ai_board_encoded = ai_core.resolve_32768_doubles(u64(ai_board_encoded))
-            player = ai_core.AIPlayer(ai_board_encoded)
-            player.update_spawn_rate(SingletonConfig().config["4_spawn_rate"])
-            logic = CoreAILogic()
-            logic.time_limit_ratio = getattr(ai_dispatcher, "time_limit_ratio", 1.0)
+            player, logic = session.ensure_ai_fallback(
+                ai_board_encoded,
+                SingletonConfig().config["4_spawn_rate"],
+                getattr(ai_dispatcher, "time_limit_ratio", 1.0),
+            )
             best_move_code = logic.calculate_step(
                 player, board_2d, ai_dispatcher.counts
+            )
+            logger.warning(
+                f"{player.do_check} {player.masked_count} {player.max_d} {player.prune}"
             )
             move_map = {1: "left", 2: "right", 3: "up", 4: "down"}
             best_move = move_map.get(best_move_code, None)
         else:
             best_move = best_move.lower() if best_move else None
 
-        # _log_ai_step_debug(
-        #     best_move if best_move in valid_moves else None,
-        #     getattr(session.ai_dispatcher, "current_table", None),
-        # )
+        _log_ai_step_debug(
+            best_move if best_move in valid_moves else None,
+            getattr(session.ai_dispatcher, "current_table", None),
+        )
 
         await websocket.send_json(
             {

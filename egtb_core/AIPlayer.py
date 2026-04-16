@@ -14,7 +14,7 @@ from egtb_core.Calculator import (
     RotateL,
     RotateR,
 )
-from Config import SingletonConfig, pattern_32k_tiles_map, DTYPE_CONFIG
+from Config import SingletonConfig, pattern_32k_tiles_map, DTYPE_CONFIG, logger
 from egtb_core.BoardMover import decode_board
 from egtb_core.BoardMover import move_board, encode_board
 
@@ -174,10 +174,17 @@ class DispatcherCommon(BaseDispatcher):
         if isinstance(success_rate, (float, np.floating)):
             target_val = 1 << target
             # 所有小于 target_val 的格子并求和 or 直接求余数
-            remainder = np.sum(self.board[self.board < target_val]) if table_type == 1 else np.sum(self.board) % target_val
+            remainder = (
+                np.sum(self.board[self.board < target_val])
+                if table_type == 1
+                else np.sum(self.board) % target_val
+            )
             if (
                 (table_type == 1 and success_rate > 0.9999999 and remainder < 24)
-                or (table_type == 2 and (remainder < 32 or (self.board == target_val // 2).sum() > 1))
+                or (
+                    table_type == 2
+                    and (remainder < 32 or (self.board == target_val // 2).sum() > 1)
+                )
                 or (
                     table_type == 3
                     and success_rate > 0.9999999
@@ -205,17 +212,25 @@ class DispatcherCommon(BaseDispatcher):
             if self.counts[i] > 1 and i != 15:
                 break
             large_tile_count += self.counts[i]
-            lvl = large_tile_count + i
-            if lvl < 12:
+            lvl = large_tile_count + i  # 15 - 32k残局；14 - 16k残局
+            if lvl < 12 or (lvl == 12 and i < 8):
                 continue
             if self.counts[i] > 0:
                 if i <= 12 and self.is_unfree_endgame(i):
                     readers = self.ad_readers.get((lvl, large_tile_count), [])
                     endgame_lvls3.extend(  # free11 补丁
-                        [reader for reader in readers if reader[2] > 4 and current_large > 4]
+                        [
+                            reader
+                            for reader in readers
+                            if reader[2] > 4 and current_large > 4
+                        ]
                     )
                     endgame_lvls1.extend(
-                        [reader for reader in readers if reader[2] <= 4 or current_large < 4]
+                        [
+                            reader
+                            for reader in readers
+                            if reader[2] <= 4 or current_large < 4
+                        ]
                     )
                 else:
                     endgame_lvls1.extend(
@@ -225,7 +240,7 @@ class DispatcherCommon(BaseDispatcher):
                     endgame_lvls2.extend(  # 小残局大定式
                         self.ad_readers.get((lvl + 1, large_tile_count), [])
                     )
-                    endgame_lvls2.extend(
+                    endgame_lvls3.extend(  # 小残局大定式，但残局级别差距更远
                         self.ad_readers.get((lvl + 2, large_tile_count), [])
                     )
             elif self.counts[i] == 0:  # 大残局小定式
@@ -697,6 +712,7 @@ class CoreAILogic:
         is_not_merging = (
             (np.max(counts[8:15]) == 1)
             and not (counts[7] > 1 and counts[8] == 1)
+            and not (abs(board_sum % 512 - 256) > 248)
             and not (
                 counts[6] > 1
                 and counts[7] == 1
@@ -732,6 +748,7 @@ class CoreAILogic:
             )
             else np.uint8(0)
         )
+
         if (
             is_mess
             or is_evil
@@ -741,6 +758,10 @@ class CoreAILogic:
             ai_player.prune = np.uint8(0)
         if self.danbianhuichuan_patch(board, board_sum):
             ai_player.prune = np.uint8(1)
+        logger.warning(f"{board_sum}, {board_sum % 512}, {big_nums}, {ai_player.prune}")
+        logger.warning(
+            f"{self.danbianhuichuan_patch(board, board_sum)}, {is_5tiler}, {is_evil}, {is_mess}"
+        )
 
         if is_mess or is_5tiler:
             big_nums2 = np.sum(counts[9:])

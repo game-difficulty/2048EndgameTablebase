@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 
 from egtb_core.BookReader import BookReaderDispatcher
@@ -75,6 +77,8 @@ class GameSession:
         self.difficulty = 0.0
 
         self.ai_dispatcher = None
+        self.ai_fallback_player = None
+        self.ai_fallback_logic = None
 
         self.book_reader = None
         self.current_pattern = ""
@@ -206,6 +210,25 @@ class GameSession:
         exponent = (100.0 - float(self.speed)) / 100.0
         self.ai_dispatcher.time_limit_ratio = 10.0**exponent
         return self.ai_dispatcher
+
+    def ensure_ai_fallback(self, board_encoded, spawn_rate4, time_limit_ratio):
+        if self.ai_fallback_player is None or self.ai_fallback_logic is None:
+            try:
+                from ai_and_sort import ai_core
+                from egtb_core.AIPlayer import CoreAILogic
+            except Exception as exc:
+                raise RuntimeError(
+                    "AI fallback is unavailable. Gamer AI requires ai_and_sort.ai_core."
+                ) from exc
+            self.ai_fallback_player = ai_core.AIPlayer(u64(board_encoded))
+            if hasattr(self.ai_fallback_player, "max_threads"):
+                self.ai_fallback_player.max_threads = min(os.cpu_count() or 1, 8)
+            self.ai_fallback_logic = CoreAILogic()
+
+        self.ai_fallback_player.reset_board(u64(board_encoded))
+        self.ai_fallback_player.update_spawn_rate(float(spawn_rate4))
+        self.ai_fallback_logic.time_limit_ratio = float(time_limit_ratio)
+        return self.ai_fallback_player, self.ai_fallback_logic
 
     def ensure_book_reader(self):
         global _SHARED_BOOK_READER

@@ -107,7 +107,9 @@ def _runtime_search_roots() -> list[Path]:
             unique_roots.append(root)
 
     deduped: list[Path] = []
-    for root in sorted(unique_roots, key=lambda item: (len(item.parts), str(item).lower())):
+    for root in sorted(
+        unique_roots, key=lambda item: (len(item.parts), str(item).lower())
+    ):
         if any(existing in root.parents for existing in deduped):
             continue
         deduped.append(root)
@@ -120,7 +122,9 @@ def _motw_global_sentinel(roots: list[Path]) -> Path | None:
         return None
 
     executable_root = Path(sys.executable).resolve().parent
-    if all(root == executable_root or executable_root in root.parents for root in roots):
+    if all(
+        root == executable_root or executable_root in root.parents for root in roots
+    ):
         return executable_root / _MOTW_SENTINEL
 
     return None
@@ -192,9 +196,7 @@ def _iter_motw_candidate_files(root: Path):
     for scan_dir in _iter_root_candidate_dirs(root):
         for dirpath, dirnames, filenames in os.walk(scan_dir):
             dirnames[:] = [
-                name
-                for name in dirnames
-                if name.lower() not in _MOTW_SKIP_DIRS
+                name for name in dirnames if name.lower() not in _MOTW_SKIP_DIRS
             ]
             for filename in filenames:
                 path = Path(dirpath) / filename
@@ -489,7 +491,7 @@ def _server_subprocess_kwargs() -> dict[str, object]:
     return kwargs
 
 
-def _wait_for_server_ready(timeout_seconds: float = 10.0) -> None:
+def _wait_for_server_ready(timeout_seconds: float = 20.0) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         if _server_process is not None and _server_process.poll() is not None:
