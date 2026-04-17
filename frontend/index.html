@@ -6,6 +6,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>2048 Endgame Tablebase</title>
     <script>
+      (() => {
+        const startupTheme = new URLSearchParams(window.location.search).get('startup_theme');
+        if (startupTheme === 'dark') {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        } else if (startupTheme === 'light') {
+          document.documentElement.removeAttribute('data-theme');
+        }
+      })();
+    </script>
+    <script>
       window.MathJax = {
         tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']], processEscapes: true, processEnvironments: true },
         svg: { fontCache: 'global' },

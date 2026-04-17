@@ -5,6 +5,7 @@ import { createWsClient } from '../services/ws/createWsClient';
 import { applyTileColors } from '../utils/tileColors';
 
 const EMPTY_COLOR_SET = Array(36).fill('#000000');
+const INITIAL_DARK_MODE = document.documentElement.getAttribute('data-theme') === 'dark';
 
 const DEFAULT_CONFIG = {
   colors: [...EMPTY_COLOR_SET],
@@ -21,7 +22,7 @@ const DEFAULT_CONFIG = {
   demo_speed: 40,
   record_player_slider_threshold: 1,
   dis_32k: false,
-  dark_mode: false,
+  dark_mode: INITIAL_DARK_MODE,
   '4_spawn_rate': 0.1,
   do_animation: true,
   font_size_factor: 100,

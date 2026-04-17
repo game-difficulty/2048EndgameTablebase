@@ -9,11 +9,9 @@ from egtb_core.VBoardMover import decode_board
 from egtb_core.BoardMover import (
     encode_board as r_encode_board,
     s_gen_new_num as r_gen_new_num,
-    s_move_board as r_move_board,
 )
 
 from ..actions import Action, Message
-from ..animation import build_move_animation_metadata
 from ..session import GameSession
 from ..session import np_u64, u64
 from ..state import ConnectionManager

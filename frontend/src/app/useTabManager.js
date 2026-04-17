@@ -47,6 +47,40 @@ export function useTabManager() {
     }
   };
 
+  const moveTabRelative = (tabId, targetTabId, placeAfter = false) => {
+    if (
+      tabId === MAIN_TAB_ID ||
+      targetTabId === tabId ||
+      !isTabOpen(tabId) ||
+      !isTabOpen(targetTabId)
+    ) {
+      return;
+    }
+
+    const nextOpenTabs = [...openTabs.value];
+    const draggingIndex = nextOpenTabs.indexOf(tabId);
+    const targetIndex = nextOpenTabs.indexOf(targetTabId);
+
+    if (draggingIndex < 1 || targetIndex < 0) {
+      return;
+    }
+
+    const [movedTabId] = nextOpenTabs.splice(draggingIndex, 1);
+
+    let insertIndex = 1;
+    if (targetTabId !== MAIN_TAB_ID) {
+      const normalizedTargetIndex = nextOpenTabs.indexOf(targetTabId);
+      insertIndex = normalizedTargetIndex + (placeAfter ? 1 : 0);
+    }
+
+    insertIndex = Math.max(1, Math.min(insertIndex, nextOpenTabs.length));
+    nextOpenTabs.splice(insertIndex, 0, movedTabId);
+
+    if (nextOpenTabs.some((id, index) => id !== openTabs.value[index])) {
+      openTabs.value = nextOpenTabs;
+    }
+  };
+
   const openTabDefinitions = computed(() =>
     openTabs.value
       .map((tabId) => TAB_REGISTRY[tabId])
@@ -60,6 +94,7 @@ export function useTabManager() {
     activateTab,
     closeTab,
     isTabOpen,
+    moveTabRelative,
     openTab,
   };
 }

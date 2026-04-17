@@ -6,10 +6,21 @@
         :key="tab.id"
         :class="[
           'flex items-center rounded-lg border transition-all duration-300',
+          tab.id !== TAB_IDS.MAIN_MENU ? 'cursor-grab active:cursor-grabbing' : '',
+          draggedTabId === tab.id ? 'scale-[0.98] opacity-45' : '',
+          dragTargetTabId === tab.id && draggedTabId && draggedTabId !== tab.id
+            ? 'ring-2 ring-accent/50 bg-accent/8'
+            : '',
           activeTab === tab.id
             ? 'surface-prominent text-white scale-[1.02]'
             : 'border-transparent bg-transparent text-text-secondary hover:bg-btn-bg/10 hover:text-text-main'
         ]"
+        :draggable="tab.id !== TAB_IDS.MAIN_MENU"
+        @dragstart="handleTabDragStart(tab.id, $event)"
+        @dragenter.prevent
+        @dragover="handleTabDragOver(tab.id, $event)"
+        @drop="handleTabDrop(tab.id, $event)"
+        @dragend="handleTabDragEnd"
       >
         <button
           type="button"
@@ -202,8 +213,11 @@ const {
   activateTab,
   closeTab,
   isTabOpen,
+  moveTabRelative,
   openTab,
 } = useTabManager();
+const draggedTabId = ref(null);
+const dragTargetTabId = ref(null);
 
 const getTabLabel = (tab) => (tab.titleKey ? t(tab.titleKey) : tab.title);
 const openAnalysisDialog = (context = {}) => {
@@ -376,6 +390,61 @@ const handleActivateTab = (tabId, event) => {
 const handleCloseTab = (tabId, event) => {
   closeTab(tabId);
   blurButtonTarget(event);
+};
+
+const clearTabDragState = () => {
+  draggedTabId.value = null;
+  dragTargetTabId.value = null;
+};
+
+const handleTabDragStart = (tabId, event) => {
+  if (tabId === TAB_IDS.MAIN_MENU) {
+    event.preventDefault();
+    return;
+  }
+
+  draggedTabId.value = tabId;
+  dragTargetTabId.value = tabId;
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', tabId);
+  }
+};
+
+const handleTabDragOver = (tabId, event) => {
+  if (!draggedTabId.value || draggedTabId.value === tabId) {
+    return;
+  }
+
+  event.preventDefault();
+  dragTargetTabId.value = tabId;
+
+  const currentTarget = event.currentTarget;
+  const isMainMenu = tabId === TAB_IDS.MAIN_MENU;
+  let placeAfter = true;
+
+  if (!isMainMenu && currentTarget instanceof HTMLElement) {
+    const bounds = currentTarget.getBoundingClientRect();
+    placeAfter = event.clientX >= bounds.left + bounds.width / 2;
+  }
+
+  moveTabRelative(draggedTabId.value, tabId, placeAfter);
+
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move';
+  }
+};
+
+const handleTabDrop = (_tabId, event) => {
+  if (!draggedTabId.value) {
+    return;
+  }
+  event.preventDefault();
+  clearTabDragState();
+};
+
+const handleTabDragEnd = () => {
+  clearTabDragState();
 };
 
 onMounted(() => {

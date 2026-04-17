@@ -7,6 +7,7 @@ import json
 import multiprocessing
 import os
 from pathlib import Path
+import pickle
 import signal
 import socket
 import subprocess
@@ -360,21 +361,68 @@ def _close_server_job_object() -> None:
 
 
 def _frontend_url() -> str:
+    startup_theme = "dark" if _startup_uses_dark_mode() else "light"
     if os.path.exists(frontend_dist_path):
-        return f"http://localhost:{SERVER_PORT}/"
-    return "http://localhost:5173"
+        return f"http://localhost:{SERVER_PORT}/?startup_theme={startup_theme}"
+    return f"http://localhost:5173/?startup_theme={startup_theme}"
+
+
+def _startup_uses_dark_mode() -> bool:
+    config_path = Path(get_resource_path(os.path.join("docs_and_configs", "config")))
+    try:
+        with config_path.open("rb") as config_file:
+            config = pickle.load(config_file)
+    except Exception:
+        return False
+
+    if not isinstance(config, dict):
+        return False
+    return bool(config.get("dark_mode", False))
 
 
 def _build_startup_page_html(message: str, is_error: bool = False) -> str:
     escaped_message = html.escape(message).replace("\n", "<br>")
+    is_dark_mode = _startup_uses_dark_mode()
     title = "Startup failed" if is_error else "Starting application"
-    accent = "#b93818" if is_error else "#1f6f5f"
-    badge = "Error" if is_error else "Loading"
-    background = (
-        "radial-gradient(circle at top, #fff4ec 0%, #f4eee5 42%, #e9e2d8 100%)"
+    accent = (
+        "#ff8e72"
+        if is_error and is_dark_mode
+        else "#b93818"
         if is_error
-        else "radial-gradient(circle at top, #f5fbf7 0%, #ece9dd 42%, #e0d8cb 100%)"
+        else "#6fe0c2"
+        if is_dark_mode
+        else "#1f6f5f"
     )
+    badge = "Error" if is_error else "Loading"
+    color_scheme = "dark" if is_dark_mode else "light"
+    if is_dark_mode:
+        background = (
+            "radial-gradient(circle at top, #402018 0%, #251918 44%, #111315 100%)"
+            if is_error
+            else "radial-gradient(circle at top, #14332f 0%, #1b2025 42%, #101214 100%)"
+        )
+        surface = "rgba(20, 23, 27, 0.84)"
+        text = "#f3f4f6"
+        muted = "#aab3bd"
+        border = "rgba(255, 255, 255, 0.10)"
+        panel_shadow = "0 28px 80px rgba(0, 0, 0, 0.40)"
+        badge_background = "rgba(255, 255, 255, 0.08)"
+        badge_border = "rgba(255, 255, 255, 0.10)"
+        spinner_border = "rgba(255, 255, 255, 0.14)"
+    else:
+        background = (
+            "radial-gradient(circle at top, #fff4ec 0%, #f4eee5 42%, #e9e2d8 100%)"
+            if is_error
+            else "radial-gradient(circle at top, #f5fbf7 0%, #ece9dd 42%, #e0d8cb 100%)"
+        )
+        surface = "rgba(255, 255, 255, 0.84)"
+        text = "#1d1d1f"
+        muted = "#5f6368"
+        border = "rgba(0, 0, 0, 0.08)"
+        panel_shadow = "0 28px 80px rgba(45, 35, 24, 0.14)"
+        badge_background = "rgba(255, 255, 255, 0.72)"
+        badge_border = "rgba(0, 0, 0, 0.06)"
+        spinner_border = "rgba(0, 0, 0, 0.08)"
     return f"""<!DOCTYPE html>
 <html lang=\"en\">
 <head>
@@ -383,13 +431,13 @@ def _build_startup_page_html(message: str, is_error: bool = False) -> str:
   <title>{html.escape(APP_TITLE)}</title>
   <style>
     :root {{
-      color-scheme: light;
+      color-scheme: {color_scheme};
       font-family: \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;
       --accent: {accent};
-      --surface: rgba(255, 255, 255, 0.84);
-      --text: #1d1d1f;
-      --muted: #5f6368;
-      --border: rgba(0, 0, 0, 0.08);
+      --surface: {surface};
+      --text: {text};
+      --muted: {muted};
+      --border: {border};
     }}
     * {{
       box-sizing: border-box;
@@ -408,7 +456,7 @@ def _build_startup_page_html(message: str, is_error: bool = False) -> str:
       border-radius: 24px;
       background: var(--surface);
       border: 1px solid var(--border);
-      box-shadow: 0 28px 80px rgba(45, 35, 24, 0.14);
+      box-shadow: {panel_shadow};
       backdrop-filter: blur(18px);
     }}
     .badge {{
@@ -416,8 +464,8 @@ def _build_startup_page_html(message: str, is_error: bool = False) -> str:
       align-items: center;
       padding: 6px 12px;
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.72);
-      border: 1px solid rgba(0, 0, 0, 0.06);
+      background: {badge_background};
+      border: 1px solid {badge_border};
       color: var(--accent);
       font-size: 12px;
       font-weight: 700;
@@ -447,7 +495,7 @@ def _build_startup_page_html(message: str, is_error: bool = False) -> str:
       height: 18px;
       margin-top: 22px;
       border-radius: 50%;
-      border: 2px solid rgba(0, 0, 0, 0.08);
+      border: 2px solid {spinner_border};
       border-top-color: var(--accent);
       animation: spin 0.9s linear infinite;
       display: {("none" if is_error else "block")};

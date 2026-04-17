@@ -208,45 +208,57 @@ class DispatcherCommon(BaseDispatcher):
         endgame_lvls1, endgame_lvls2, endgame_lvls3 = [], [], []
         large_tile_count = 0
         current_large = np.sum(self.counts[9:])
-        for i in range(15, 6, -1):
-            if self.counts[i] > 1 and i != 15:
+        ntiler_after_endgame = 1
+        for target_tile in range(15, 6, -1):
+            if self.counts[target_tile] > 1 and target_tile != 15:
                 break
-            large_tile_count += self.counts[i]
-            lvl = large_tile_count + i  # 15 - 32k残局；14 - 16k残局
-            if lvl < 12 or (lvl == 12 and i < 8):
+            if self.counts[target_tile] == 0:
+                ntiler_after_endgame = np.sum(self.counts[target_tile + 1 :]) + 1
+            large_tile_count += self.counts[target_tile]
+            lvl = large_tile_count + target_tile  # 15 - 32k残局；14 - 16k残局
+            if lvl < 12 or (lvl == 12 and target_tile < 8):
                 continue
-            if self.counts[i] > 0:
-                if i <= 12 and self.is_unfree_endgame(i):
+            if self.counts[target_tile] > 0:
+                if target_tile <= 12 and self.is_unfree_endgame(target_tile):
                     readers = self.ad_readers.get((lvl, large_tile_count), [])
                     endgame_lvls3.extend(  # free11 补丁
                         [
                             reader
                             for reader in readers
-                            if reader[2] > 4 and current_large > 4
+                            if (reader[2] > 4 and current_large > 4)
+                            or (ntiler_after_endgame > 4)
                         ]
                     )
                     endgame_lvls1.extend(
                         [
                             reader
                             for reader in readers
-                            if reader[2] <= 4 or current_large < 4
+                            if (reader[2] <= 4 or current_large < 4)
+                            and (ntiler_after_endgame <= 4)
                         ]
                     )
                 else:
                     endgame_lvls1.extend(
                         self.ad_readers.get((lvl, large_tile_count), [])
                     )
-                if self.counts[i - 1] < 2:
-                    endgame_lvls2.extend(  # 小残局大定式
+                if self.counts[target_tile - 1] < 2:
+                    current_endgame_lvl = (
+                        endgame_lvls2 if ntiler_after_endgame < 5 else endgame_lvls3
+                    )
+                    current_endgame_lvl.extend(  # 小残局大定式
                         self.ad_readers.get((lvl + 1, large_tile_count), [])
                     )
-                    endgame_lvls3.extend(  # 小残局大定式，但残局级别差距更远
-                        self.ad_readers.get((lvl + 2, large_tile_count), [])
-                    )
-            elif self.counts[i] == 0:  # 大残局小定式
+                    if lvl > 12:
+                        readers = self.ad_readers.get((lvl + 2, large_tile_count), [])
+                        endgame_lvls3.extend(  # 小残局大定式，但残局级别差距更远
+                            [reader for reader in readers if reader[2] <= 4]
+                        )
+            elif self.counts[target_tile] == 0:  # 大残局小定式
                 endgame_lvls3.extend(self.ad_readers.get((lvl, large_tile_count), []))
 
         endgame_lvls1.sort(key=lambda x: x[2], reverse=True)
+        endgame_lvls2.sort(key=lambda x: 16 - x[1], reverse=True)
+        endgame_lvls3.sort(key=lambda x: 16 - x[1], reverse=True)
 
         return endgame_lvls1, endgame_lvls2, endgame_lvls3
 

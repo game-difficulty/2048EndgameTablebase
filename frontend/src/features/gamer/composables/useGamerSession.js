@@ -50,7 +50,7 @@ export function useGamerSession(activeRef) {
         aiSpeed.value = data.data.settings.speed;
       }
 
-      if (aiEnabled.value) {
+      if (aiEnabled.value && activeRef?.value) {
         triggerAction('AI_STEP');
       }
       return;
@@ -207,8 +207,9 @@ export function useGamerSession(activeRef) {
     (isActive) => {
       if (isActive) {
         connect();
-      } else {
-        disconnect();
+        if (aiEnabled.value) {
+          triggerAction('AI_STEP');
+        }
       }
     },
     { immediate: true }
