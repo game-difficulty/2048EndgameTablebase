@@ -100,6 +100,7 @@ ai_and_sort/formation_core.pyi
 !ai_and_sort/src/merge_tree_wrapper.cpp
 !ai_and_sort/src/unique_wrapper.cpp
 ai_and_sort/tests/**
+ai_and_sort/test_adaptive_index.exe
 .vscode/
 .idea/
 
@@ -123,8 +124,10 @@ pnpm-debug.log*
 
 # temp files
 t/
+t_native_compress_smoke*/
 ai_and_sort_/
 manim_anim/
+media/texts/
 .VSCodeCounter/
 .codex/
 *.spec
