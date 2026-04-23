@@ -1,20 +1,10 @@
 #pragma once
 #include <cstdint>
 #include <vector>
-#include <string>
-#include <unordered_map>
+#include "FormationRuntime.h"
 
-enum class SymmMode { Identity, Full, Diagonal, Horizontal, Min33, Min24, Min34 };
 
 // --- 定式配置结构体 ---
-struct PatternConfig {
-    std::string name;
-    std::vector<uint64_t> masks;
-    uint64_t success_mask;
-    int symm_mode;
-};
-
-inline std::unordered_map<std::string, PatternConfig> pattern_configs;
 
 // --- 2. 通用校验函数 ---
 
@@ -37,4 +27,17 @@ inline bool is_success(uint64_t board, uint64_t success_mask, uint64_t target_st
 inline bool is_success_general(uint64_t board, uint64_t success_mask, int target) {
     uint64_t target_stacked = (uint64_t)target * 0x1111111111111111ULL;
     return is_success(board, success_mask, target_stacked);
+}
+
+inline bool is_success_by_shifts(uint64_t board, int target, const std::vector<uint8_t> &success_shifts) {
+    if (success_shifts.empty()) {
+        return true;
+    }
+    uint64_t target_value = static_cast<uint64_t>(target);
+    for (uint8_t shift : success_shifts) {
+        if (((board >> shift) & 0xFULL) == target_value) {
+            return true;
+        }
+    }
+    return false;
 }

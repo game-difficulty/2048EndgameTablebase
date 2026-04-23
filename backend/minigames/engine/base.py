@@ -112,7 +112,9 @@ class BaseMinigameEngine:
                 self.max_num = int(main_state[3])
                 self.is_passed = int(main_state[4])
                 self.newtile_pos = int(main_state[5])
-                self.highest_tile_exp = int(main_state[6]) if len(main_state) > 6 else int(main_state[3])
+                self.highest_tile_exp = (
+                    int(main_state[6]) if len(main_state) > 6 else int(main_state[3])
+                )
                 extra_state = saved_entry[1] if len(saved_entry) > 1 else []
                 self.load_legacy_extra(extra_state)
                 if self.board.shape != (self.rows, self.cols):
@@ -138,7 +140,9 @@ class BaseMinigameEngine:
         return []
 
     def _refresh_highest_tile_exp(self) -> None:
-        self.highest_tile_exp = max(int(self.highest_tile_exp), self._positive_max(self.board))
+        self.highest_tile_exp = max(
+            int(self.highest_tile_exp), self._positive_max(self.board)
+        )
 
     def setup_new_game(self) -> None:
         spawn_rate = SingletonConfig().config.get("4_spawn_rate", 0.1)
@@ -208,7 +212,9 @@ class BaseMinigameEngine:
         return
 
     def move_and_check_validity(self, direct: int) -> tuple[np.ndarray, int, bool]:
-        new_board, new_score = self.mover.move_board(np.array(self.board, copy=True), direct)
+        new_board, new_score = self.mover.move_board(
+            np.array(self.board, copy=True), direct
+        )
         is_valid = bool(np.any(new_board != self.board))
         return np.array(new_board, dtype=np.int32), int(new_score), is_valid
 
@@ -240,7 +246,7 @@ class BaseMinigameEngine:
                     "trophy",
                     {
                         "level": level,
-                        "message": f"You achieved {2 ** self.max_num}! You get a {level} trophy!",
+                        "message": f"You achieved {2**self.max_num}! You get a {level} trophy!",
                     },
                 )
             else:
@@ -251,7 +257,7 @@ class BaseMinigameEngine:
                     "trophy",
                     {
                         "level": level,
-                        "message": f"You achieved {2 ** self.current_max_num}! Take it further!",
+                        "message": f"You achieved {2**self.current_max_num}! Take it further!",
                     },
                 )
 
@@ -323,7 +329,7 @@ class BaseMinigameEngine:
         self.check_game_over()
 
         self._last_valid_move = True
-        self._last_move_at_ms = int(time.time() * 1000)
+        self._last_move_at_ms = int(time.perf_counter() * 1000)
         animation_metadata = build_minigame_move_animation_metadata(
             board_before,
             direction_key,
@@ -369,7 +375,9 @@ class BaseMinigameEngine:
     def build_powerups(self) -> dict[str, Any]:
         config = SingletonConfig().config
         init_count = 1 if self.difficulty == 1 else 5
-        counts = config.setdefault("power_ups_state", [dict(), dict()])[self.difficulty].get(
+        counts = config.setdefault("power_ups_state", [dict(), dict()])[
+            self.difficulty
+        ].get(
             self.legacy_name,
             [init_count, init_count, init_count],
         )

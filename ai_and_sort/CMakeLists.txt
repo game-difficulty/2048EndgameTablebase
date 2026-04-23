@@ -8,6 +8,7 @@ execute_process(
     COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
     OUTPUT_VARIABLE nanobind_ROOT
     OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
     RESULT_VARIABLE nanobind_result
 )
 
@@ -24,6 +25,11 @@ if(NOT _nanobind_found AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/extern/nanobind/C
     set(_nanobind_found TRUE)
 endif()
 
+if(NOT _nanobind_found AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../AIPlayer_cpp/extern/nanobind/CMakeLists.txt")
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../AIPlayer_cpp/extern/nanobind" "${CMAKE_CURRENT_BINARY_DIR}/extern/nanobind")
+    set(_nanobind_found TRUE)
+endif()
+
 if(NOT _nanobind_found)
     message(FATAL_ERROR
         "nanobind is unavailable. Install it with `pip install nanobind` or provide ai_and_sort/extern/nanobind."
@@ -34,10 +40,24 @@ find_package(OpenMP REQUIRED)
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
 
+get_filename_component(PYTHON_ROOT_DIR "${Python_EXECUTABLE}" DIRECTORY)
+set(LIBLZMA_HINT_DIRS
+    "${PYTHON_ROOT_DIR}/Library/include"
+    "/usr/include"
+    "/usr/local/include"
+)
+find_path(LIBLZMA_INCLUDE_DIR lzma.h HINTS ${LIBLZMA_HINT_DIRS})
+if(NOT LIBLZMA_INCLUDE_DIR)
+    message(FATAL_ERROR "lzma.h not found. Install liblzma headers or provide them in the Python environment.")
+endif()
+
 add_library(common_config INTERFACE)
 target_compile_features(common_config INTERFACE cxx_std_17)
 target_compile_definitions(common_config INTERFACE NB_NDOC NB_LEAK_WARNINGS=0)
-target_include_directories(common_config INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(common_config INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${LIBLZMA_INCLUDE_DIR}"
+)
 
 if(MSVC)
     target_compile_options(common_config INTERFACE /O2 /arch:AVX2 /openmp)
@@ -84,7 +104,74 @@ set(MOVER_CORE_SOURCES
 nanobind_add_module(mover_core ${MOVER_CORE_SOURCES})
 target_link_libraries(mover_core PRIVATE common_config)
 
-set(ALL_PYD_MODULES ai_core mover_core)
+set(FORMATION_CORE_SOURCES
+    src/CompressionBridge.cpp
+    src/NativeLzma.cpp
+    src/TrieCompression.cpp
+    src/AdaptiveIndex.cpp
+    src/HybridSearch.cpp
+    src/BookGeneratorUtils.cpp
+    src/BookGenerator.cpp
+    src/BoardMaskerAD.cpp
+    src/BoardMoverAD.cpp
+    src/BookGeneratorAD.cpp
+    src/BookSolverAD.cpp
+    src/BookSolver.cpp
+    src/bindings_formation.cpp
+)
+
+nanobind_add_module(formation_core ${FORMATION_CORE_SOURCES})
+target_link_libraries(formation_core PRIVATE common_config OpenMP::OpenMP_CXX)
+
+add_executable(adaptive_index_test
+    src/AdaptiveIndex.cpp
+    tests/test_adaptive_index.cpp
+)
+target_link_libraries(adaptive_index_test PRIVATE common_config OpenMP::OpenMP_CXX)
+
+add_library(bookgen_native SHARED
+    xss_wrapper.cpp
+    src/HybridSearch.cpp
+    src/bookgen_native_wrapper.cpp
+    src/booksolver_utils_wrapper.cpp
+    src/unique_wrapper.cpp
+    src/merge_tree_wrapper.cpp
+)
+target_include_directories(bookgen_native PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_link_libraries(bookgen_native PRIVATE
+    OpenMP::OpenMP_CXX
+    "${CMAKE_CURRENT_SOURCE_DIR}/libx86simdsortcpp.a"
+)
+set_target_properties(bookgen_native PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+    PREFIX ""
+    OUTPUT_NAME "bookgen_native"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    LIBRARY_OUTPUT_DIRECTORY_DEBUG "${CMAKE_CURRENT_SOURCE_DIR}"
+    LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_CURRENT_SOURCE_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+if(MSVC)
+    target_compile_options(bookgen_native PRIVATE /O2 /openmp)
+else()
+    target_compile_options(bookgen_native PRIVATE
+        -O3 -march=x86-64-v2 -fopenmp
+        -ffunction-sections -fdata-sections
+    )
+    target_link_options(bookgen_native PRIVATE
+        -static-libstdc++ -Wl,--gc-sections -s -fopenmp
+    )
+endif()
+
+set(ALL_PYD_MODULES ai_core mover_core formation_core)
 
 foreach(target ${ALL_PYD_MODULES})
     set_target_properties(${target} PROPERTIES
@@ -102,3 +189,7 @@ foreach(target ${ALL_PYD_MODULES})
         set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
     endif()
 endforeach()
+
+if(ipo_supported)
+    set_property(TARGET bookgen_native PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif()

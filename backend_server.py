@@ -529,6 +529,54 @@ def _server_subprocess_command() -> list[str]:
     ]
 
 
+def _stream_is_writable(stream) -> bool:
+    return stream is not None and not getattr(stream, "closed", False)
+
+
+def _parent_log_targets():
+    stdout_target = sys.stdout if _stream_is_writable(sys.stdout) else None
+    stderr_target = sys.stderr if _stream_is_writable(sys.stderr) else stdout_target
+    if stdout_target is None:
+        stdout_target = stderr_target
+    return stdout_target, stderr_target
+
+
+def _relay_server_output(pipe, target) -> None:
+    if pipe is None or target is None:
+        return
+
+    try:
+        for line in iter(pipe.readline, ""):
+            if not line:
+                break
+            try:
+                target.write(line)
+                target.flush()
+            except Exception:
+                break
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
+def _start_server_log_forwarders(process: subprocess.Popen) -> None:
+    stdout_target, stderr_target = _parent_log_targets()
+    if process.stdout is not None and stdout_target is not None:
+        threading.Thread(
+            target=_relay_server_output,
+            args=(process.stdout, stdout_target),
+            daemon=True,
+        ).start()
+    if process.stderr is not None and stderr_target is not None:
+        threading.Thread(
+            target=_relay_server_output,
+            args=(process.stderr, stderr_target),
+            daemon=True,
+        ).start()
+
+
 def _server_subprocess_kwargs() -> dict[str, object]:
     kwargs: dict[str, object] = {}
     if os.name == "nt":
@@ -536,12 +584,25 @@ def _server_subprocess_kwargs() -> dict[str, object]:
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         kwargs["startupinfo"] = startupinfo
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    stdout_target, stderr_target = _parent_log_targets()
+    if stdout_target is not None or stderr_target is not None:
+        env = os.environ.copy()
+        env.setdefault("PYTHONUNBUFFERED", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        kwargs["env"] = env
+        kwargs["stdin"] = subprocess.DEVNULL
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
+        kwargs["text"] = True
+        kwargs["encoding"] = "utf-8"
+        kwargs["errors"] = "replace"
+        kwargs["bufsize"] = 1
     return kwargs
 
 
 def _wait_for_server_ready(timeout_seconds: float = 20.0) -> None:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
+    deadline = time.perf_counter() + timeout_seconds
+    while time.perf_counter() < deadline:
         if _server_process is not None and _server_process.poll() is not None:
             raise RuntimeError("Backend server process exited during startup.")
         try:
@@ -561,9 +622,10 @@ def start_server_process() -> None:
     process = subprocess.Popen(
         _server_subprocess_command(),
         cwd=os.path.dirname(os.path.abspath(__file__)),
-        **_server_subprocess_kwargs(),
-    )
+        **_server_subprocess_kwargs(),  # type: ignore
+    )  # type: ignore
     _server_process = process
+    _start_server_log_forwarders(process)
     _attach_process_to_server_job(process.pid)
     _wait_for_server_ready()
 

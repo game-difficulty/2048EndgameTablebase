@@ -37,7 +37,7 @@ class BlitzkriegEngine(BaseMinigameEngine):
     def _sync_timer(self) -> None:
         if not self.timer_running or self.timer_anchor_ms is None or self.is_over:
             return
-        now_ms = int(time.time() * 1000)
+        now_ms = int(time.perf_counter() * 1000)
         elapsed = max(0, now_ms - self.timer_anchor_ms)
         self.remaining_ms = max(0, self.remaining_ms - elapsed)
         self.timer_anchor_ms = now_ms
@@ -52,7 +52,7 @@ class BlitzkriegEngine(BaseMinigameEngine):
             return
         if not self.timer_running:
             self.timer_running = True
-            self.timer_anchor_ms = int(time.time() * 1000)
+            self.timer_anchor_ms = int(time.perf_counter() * 1000)
         previous_count = int(np.sum(self.board == 10))
         super().do_move(direction)
         self._sync_timer()
@@ -61,10 +61,12 @@ class BlitzkriegEngine(BaseMinigameEngine):
         current_count = int(np.sum(self.board == 10))
         if current_count > previous_count:
             bonus_minutes = 0.75 if int(self.difficulty) == 1 else 1.0
-            gained_ms = int((current_count - previous_count) * bonus_minutes * 60 * 1000)
+            gained_ms = int(
+                (current_count - previous_count) * bonus_minutes * 60 * 1000
+            )
             self.remaining_ms += gained_ms
             if self.timer_running:
-                self.timer_anchor_ms = int(time.time() * 1000)
+                self.timer_anchor_ms = int(time.perf_counter() * 1000)
         self.count_1k = current_count
         if self.is_over:
             self.timer_running = False
@@ -80,7 +82,9 @@ class BlitzkriegEngine(BaseMinigameEngine):
             self.is_passed = {12: 3, 11: 2, 10: 1}.get(self.max_num, 4)
         if self.current_max_num <= 9:
             return
-        level = {12: "gold", 11: "silver", 10: "bronze"}.get(self.current_max_num, "gold")
+        level = {12: "gold", 11: "silver", 10: "bronze"}.get(
+            self.current_max_num, "gold"
+        )
         if self.score == self.max_score:
             message = f"You achieved {self.score} score! You get a {level} trophy!"
         else:
@@ -104,7 +108,7 @@ class BlitzkriegEngine(BaseMinigameEngine):
                 "title": "Countdown",
                 "remainingMs": int(self.remaining_ms),
                 "running": bool(self.timer_running and not self.is_over),
-                "syncedAt": int(time.time() * 1000),
+                "syncedAt": int(time.perf_counter() * 1000),
             }
         ]
         return hud

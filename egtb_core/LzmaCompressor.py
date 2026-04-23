@@ -113,7 +113,7 @@ def compress_with_7z(input_file, lvl=1):
 
     if is_seven_zip_available():
         # 如果 7z.exe 可用，则使用 7z.exe 压缩
-        max_threads = os.cpu_count()
+        max_threads = os.cpu_count() or 2
         cmd = [
             seven_zip_exe,
             "a",  # "a" 表示添加文件到压缩包
@@ -360,10 +360,10 @@ def find_value_uint64_compressed(input_filename, segments, value):
 # if __name__ == "__main__":
 #     test_data = np.fromfile(r"C:\Users\Administrator\Desktop\test\4.i", dtype=np.uint64)
 #     import time
-#     t0=time.time()
+#     t0=time.perf_counter()
 #     output_file = r"C:\Users\Administrator\Desktop\test\compressed_data.bin"
 #     segments = compress_uint64_array(test_data, output_file, lvl=1)
-#     print(time.time()-t0)
+#     print(time.perf_counter()-t0)
 #     segments.tofile(r"C:\Users\Administrator\Desktop\test\seg")
 #
 #     decompressed_data = decompress_uint64_array(output_file, segments)

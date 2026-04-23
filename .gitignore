@@ -43,12 +43,9 @@ docs_and_configs/*.error
 # Native build outputs
 AIPlayer_cpp/
 ai_and_sort/build/
+ai_and_sort/build-formation/
 ai_and_sort/wasm_project/
 ai_and_sort/web_version_project/
-ai_and_sort/include/BookGenerator.h
-ai_and_sort/include/BookGeneratorUtils.h
-ai_and_sort/src/BookGenerator.cpp
-ai_and_sort/src/BookGeneratorUtils.cpp
 ai_and_sort/src/egtb_data_1256.cpp
 ai_and_sort/src/egtb_data_256.cpp
 ai_and_sort/src/egtb_data_512.cpp
@@ -72,6 +69,37 @@ ai_and_sort/egtb_data_256.h
 ai_and_sort/egtb_data_512.h
 ai_and_sort/x86simdsort.h
 ai_and_sort/xss_wrapper.cpp
+ai_and_sort/formation_core.pyi
+!ai_and_sort/include/AdaptiveIndex.h
+!ai_and_sort/include/BoardMaskerAD.h
+!ai_and_sort/include/BoardMoverAD.h
+!ai_and_sort/include/BookGenerator.h
+!ai_and_sort/include/BookGeneratorUtils.h
+!ai_and_sort/include/BookSolver.h
+!ai_and_sort/include/CompressionBridge.h
+!ai_and_sort/include/FormationRuntime.h
+!ai_and_sort/include/HybridSearch.h
+!ai_and_sort/include/NativeLzma.h
+!ai_and_sort/include/TrieCompression.h
+!ai_and_sort/include/UniqueUtils.h
+!ai_and_sort/src/AdaptiveIndex.cpp
+!ai_and_sort/src/BoardMaskerAD.cpp
+!ai_and_sort/src/BoardMoverAD.cpp
+!ai_and_sort/src/BookGenerator.cpp
+!ai_and_sort/src/BookGeneratorAD.cpp
+!ai_and_sort/src/BookGeneratorUtils.cpp
+!ai_and_sort/src/BookSolver.cpp
+!ai_and_sort/src/BookSolverAD.cpp
+!ai_and_sort/src/CompressionBridge.cpp
+!ai_and_sort/src/HybridSearch.cpp
+!ai_and_sort/src/NativeLzma.cpp
+!ai_and_sort/src/TrieCompression.cpp
+!ai_and_sort/src/bindings_formation.cpp
+!ai_and_sort/src/bookgen_native_wrapper.cpp
+!ai_and_sort/src/booksolver_utils_wrapper.cpp
+!ai_and_sort/src/merge_tree_wrapper.cpp
+!ai_and_sort/src/unique_wrapper.cpp
+ai_and_sort/tests/**
 .vscode/
 .idea/
 
@@ -96,6 +124,7 @@ pnpm-debug.log*
 # temp files
 t/
 ai_and_sort_/
+manim_anim/
 .VSCodeCounter/
 .codex/
 *.spec

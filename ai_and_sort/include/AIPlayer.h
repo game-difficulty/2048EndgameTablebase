@@ -56,7 +56,8 @@ public:
   void clear();
 
   inline uint64_t hash(uint64_t board) const {
-    uint64_t hashed = (((board ^ (board >> 27)) * 0x1A85EC53ULL) + board) >> 23;
+    board = ((board ^ (board >> 27)) * 0x1A85EC53ULL) + (board >> 23) + board;
+    uint64_t hashed = ((board ^ (board >> 27)) * 0x1A85EC53ULL) + (board >> 23) + board;
     return hashed & current_mask;
   }
 

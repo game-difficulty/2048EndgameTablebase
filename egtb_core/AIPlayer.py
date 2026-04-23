@@ -847,7 +847,7 @@ class CoreAILogic:
         final_depth = 0
         valid_scores = []
 
-        start_time = time.time()
+        start_time = time.perf_counter()
         local_limit = time_limit * self.time_limit_ratio
         last_depth_time = None
         depth = initial_depth
@@ -856,7 +856,7 @@ class CoreAILogic:
         while (depth <= max_depth and best_op_so_far != 0) and not (
             fallback_attempts > 0 and valid_scores
         ):
-            elapsed = time.time() - start_time
+            elapsed = time.perf_counter() - start_time
             remaining_time = local_limit - elapsed
             if fallback_attempts:
                 remaining_time = max(remaining_time, local_limit / 2 + 0.005)
@@ -871,7 +871,7 @@ class CoreAILogic:
             timer = self._start_timeout_timer(
                 ai_player, best_op_so_far, remaining_time, time_limit
             )
-            depth_start = time.time()
+            depth_start = time.perf_counter()
 
             # 3. 执行搜索
             try:
@@ -879,7 +879,7 @@ class CoreAILogic:
             finally:
                 timer.cancel()
 
-            depth_elapsed = time.time() - depth_start
+            depth_elapsed = time.perf_counter() - depth_start
 
             # 4. 处理搜索结果
             if getattr(ai_player, "stop_search", False):
@@ -1002,7 +1002,7 @@ class CoreAILogic:
             )
 
     def _force_fallback_search(self, ai_player) -> tuple[int, int, float]:
-        fallback_start = time.time()
+        fallback_start = time.perf_counter()
         ai_player.stop_search = False
         ai_player.prune = np.uint64(0)
         ai_player.clear_cache()
@@ -1010,7 +1010,7 @@ class CoreAILogic:
         return (
             ai_player.best_operation,
             self.FALLBACK_DEPTH,
-            time.time() - fallback_start,
+            time.perf_counter() - fallback_start,
         )
 
     def validate_egtb_move(

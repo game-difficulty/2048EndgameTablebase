@@ -12,12 +12,37 @@ from numba.typed import Dict
 import Config
 from egtb_core.BoardMover import move_board2
 from egtb_core.BoardMoverAD import decode_board, m_move_all_dir2, reverse
-from egtb_core.BoardMaskerAD import unmask_board, tile_sum_and_32k_count2, tile_sum_and_32k_count4, ParamType, extract_f_positions
-from egtb_core.Calculator import ReverseLR, ReverseUD, ReverseUL, ReverseUR, Rotate180, RotateL, RotateR
+from egtb_core.BoardMaskerAD import (
+    unmask_board,
+    tile_sum_and_32k_count2,
+    tile_sum_and_32k_count4,
+    ParamType,
+    extract_f_positions,
+)
+from egtb_core.Calculator import (
+    ReverseLR,
+    ReverseUD,
+    ReverseUL,
+    ReverseUR,
+    Rotate180,
+    RotateL,
+    RotateR,
+)
 from Config import SingletonConfig
-from egtb_core.BookSolverADUtils import (dict_to_structured_array1, dict_to_structured_array2, dict_to_structured_array3,
-                               get_array_view10, get_array_view11, get_array_view2, get_array_view3)
-from egtb_core.LzmaCompressor import decompress_with_7z, compress_uint64_array, decompress_uint64_array
+from egtb_core.BookSolverADUtils import (
+    dict_to_structured_array1,
+    dict_to_structured_array2,
+    dict_to_structured_array3,
+    get_array_view10,
+    get_array_view11,
+    get_array_view2,
+    get_array_view3,
+)
+from egtb_core.LzmaCompressor import (
+    decompress_with_7z,
+    compress_uint64_array,
+    decompress_uint64_array,
+)
 from SignalHub import progress_signal
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -25,7 +50,9 @@ SuccessCheckFunc = Callable[[np.uint64, int], bool]
 CanonicalFunc = Callable[[np.uint64], np.uint64]
 SymFindFunc = Callable[[np.uint64], Tuple[np.uint64, int]]
 
-ValidDType: TypeAlias = Union[type[np.uint32], type[np.uint64], type[np.float32], type[np.float64]]
+ValidDType: TypeAlias = Union[
+    type[np.uint32], type[np.uint64], type[np.float32], type[np.float64]
+]
 SuccessRateDType: TypeAlias = Union[np.uint32, np.uint64, np.float32, np.float64]
 
 KeyType1 = types.int8
@@ -46,8 +73,8 @@ def handle_solve_restart_ad(i, pathname, steps, b1, b2, i1, i2, started, dtype):
     """
     处理断点重连逻辑
     """
-    if os.path.exists(pathname + str(i) + 'b'):
-        do_compress_ad(pathname + str(i + 2) + 'b')
+    if os.path.exists(pathname + str(i) + "b"):
+        do_compress_ad(pathname + str(i + 2) + "b")
         logger.debug(f"skipping step {i}")
         return False, None, None, None, None
     elif not started:
@@ -61,23 +88,25 @@ def handle_solve_restart_ad(i, pathname, steps, b1, b2, i1, i2, started, dtype):
 
 
 def recalculate_process_ad(
-        arr_init: NDArray[np.uint64],
-        book_dict1: BookDictType,
-        book_dict2: BookDictType,
-        ind_dict1: IndexDictType,
-        ind_dict2: IndexDictType,
-        tiles_combinations_dict,
-        permutation_dict,
-        param: ParamType, 
-        pattern_check_func: PatternCheckFunc,
-        sym_func: SymFindFunc,
-        steps: int,
-        pathname: str,
-        spawn_rate4: float = 0.1
+    arr_init: NDArray[np.uint64],
+    book_dict1: BookDictType,
+    book_dict2: BookDictType,
+    ind_dict1: IndexDictType,
+    ind_dict2: IndexDictType,
+    tiles_combinations_dict,
+    permutation_dict,
+    param: ParamType,
+    pattern_check_func: PatternCheckFunc,
+    sym_func: SymFindFunc,
+    steps: int,
+    pathname: str,
+    spawn_rate4: float = 0.1,
 ) -> None:
     started = False
-    success_rate_dtype = SingletonConfig().config.get('success_rate_dtype', 'uint32')
-    template, current_dtype, max_scale, zero_val = Config.DTYPE_CONFIG[success_rate_dtype]
+    success_rate_dtype = SingletonConfig().config.get("success_rate_dtype", "uint32")
+    template, current_dtype, max_scale, zero_val = Config.DTYPE_CONFIG[
+        success_rate_dtype
+    ]
 
     ini_board_sum = np.sum(decode_board(arr_init[0]))
     indind_dict1, indind_dict2 = None, None
@@ -85,15 +114,35 @@ def recalculate_process_ad(
 
     permutation_arr = dict_to_structured_array2(permutation_dict)
     tiles_combinations_arr = dict_to_structured_array3(tiles_combinations_dict)
-    if not os.path.exists(pathname + 'stats.txt'):
-        with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
-            file.write(','.join(['layer', 'length', 'max success rate', 'speed', 'deletion_threshold', 'time']) + '\n')
+    if not os.path.exists(pathname + "stats.txt"):
+        with open(pathname + "stats.txt", "a", encoding="utf-8") as file:
+            file.write(
+                ",".join(
+                    [
+                        "layer",
+                        "length",
+                        "max success rate",
+                        "speed",
+                        "deletion_threshold",
+                        "time",
+                    ]
+                )
+                + "\n"
+            )
 
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
-        started, book_dict1, book_dict2, ind_dict1, ind_dict2 \
-            = handle_solve_restart_ad(i, pathname, steps, book_dict1, book_dict2, ind_dict1, ind_dict2, 
-                                      started, current_dtype)
+        started, book_dict1, book_dict2, ind_dict1, ind_dict2 = handle_solve_restart_ad(
+            i,
+            pathname,
+            steps,
+            book_dict1,
+            book_dict2,
+            ind_dict1,
+            ind_dict2,
+            started,
+            current_dtype,
+        )
         if not started:
             continue
 
@@ -103,19 +152,28 @@ def recalculate_process_ad(
             match_dict = Dict.empty(KeyType2, ValueType4)
 
         original_board_sum = 2 * i + ini_board_sum
-        deletion_threshold_n = SingletonConfig().config.get('deletion_threshold', 0.0)
-        deletion_threshold = current_dtype(deletion_threshold_n * (max_scale - zero_val) + zero_val)
+        deletion_threshold_n = SingletonConfig().config.get("deletion_threshold", 0.0)
+        deletion_threshold = current_dtype(
+            deletion_threshold_n * (max_scale - zero_val) + zero_val
+        )
 
-        if SingletonConfig().config.get('compress_temp_files', False):
-            decompress_with_7z(pathname + str(i) + '.7z')
+        if SingletonConfig().config.get("compress_temp_files", False):
+            decompress_with_7z(pathname + str(i) + ".7z")
         d0 = np.fromfile(pathname + str(i), dtype=np.uint64)
 
-        t0 = time.time()
+        t0 = time.perf_counter()
 
         book_dict0 = Dict.empty(KeyType1, from_dtype(current_dtype)[:, :])
         ind_dict0 = Dict.empty(KeyType1, ValueType2)
-        book_dict0, ind_dict0 = expand_ad(d0, original_board_sum, tiles_combinations_arr, param, current_dtype,
-                                          book_dict0, ind_dict0)
+        book_dict0, ind_dict0 = expand_ad(
+            d0,
+            original_board_sum,
+            tiles_combinations_arr,
+            param,
+            current_dtype,
+            book_dict0,
+            ind_dict0,
+        )
         del d0
 
         # 创建、更新查找索引
@@ -125,7 +183,7 @@ def recalculate_process_ad(
             indind_dict2 = create_index_ad(ind_dict2)
         indind_dict1 = create_index_ad(ind_dict1)
 
-        t1 = time.time()
+        t1 = time.perf_counter()
 
         # 回算
         book_arr0 = dict_to_structured_array1(book_dict0)
@@ -137,42 +195,84 @@ def recalculate_process_ad(
         indind_arr1 = dict_to_structured_array1(indind_dict1)
         indind_arr2 = dict_to_structured_array1(indind_dict2)
 
-        recalculate_ad(book_arr0, ind_arr0, book_arr1, ind_arr1, indind_arr1, book_arr2, ind_arr2, indind_arr2,
-                       match_dict, tiles_combinations_arr, permutation_arr, param,
-                       original_board_sum, pattern_check_func, sym_func, current_dtype, max_scale, zero_val, spawn_rate4)
+        recalculate_ad(
+            book_arr0,
+            ind_arr0,
+            book_arr1,
+            ind_arr1,
+            indind_arr1,
+            book_arr2,
+            ind_arr2,
+            indind_arr2,
+            match_dict,
+            tiles_combinations_arr,
+            permutation_arr,
+            param,
+            original_board_sum,
+            pattern_check_func,
+            sym_func,
+            current_dtype,
+            max_scale,
+            zero_val,
+            spawn_rate4,
+        )
         length, max_rate = length_count(book_dict0)
         max_rate = (max_rate - zero_val) / (max_scale - zero_val)
-        t2 = time.time()
+        t2 = time.perf_counter()
 
         if deletion_threshold_n > 0:
             remove_died_ad(book_dict2, ind_dict2, current_dtype, deletion_threshold)
         remove_died_ad(book_dict0, ind_dict0, current_dtype, zero_val)
-        t3 = time.time()
+        t3 = time.perf_counter()
         if t3 > t0:
-            logger.debug(f'step {i} recalculated: {round(length / (t3 - t0) / 1e6, 2)} mbps')
-            logger.debug(f'index/solve/remove: {round((t1 - t0) / (t3 - t0), 2)}/'
-                         f'{round((t2 - t1) / (t3 - t0), 2)}/{round((t3 - t2) / (t3 - t0), 2)}')
+            logger.debug(
+                f"step {i} recalculated: {round(length / (t3 - t0) / 1e6, 2)} mbps"
+            )
+            logger.debug(
+                f"index/solve/remove: {round((t1 - t0) / (t3 - t0), 2)}/"
+                f"{round((t2 - t1) / (t3 - t0), 2)}/{round((t3 - t2) / (t3 - t0), 2)}"
+            )
 
-        with open(pathname + 'stats.txt', 'a', encoding='utf-8') as file:
-            file.write(','.join([str(i), str(length), str(max_rate),
-                                 f'{round(length / max((t3 - t0), 0.01) / 1e6, 2)} mbps',
-                                 str(deletion_threshold_n), str(datetime.now())]) + '\n')
-        if deletion_threshold_n > 0 or SingletonConfig().config.get('compress', False):
-            dict_tofile(book_dict2, ind_dict2, pathname, i + 2, True)  # 再写一次，把成功率低于阈值的局面去掉
+        with open(pathname + "stats.txt", "a", encoding="utf-8") as file:
+            file.write(
+                ",".join(
+                    [
+                        str(i),
+                        str(length),
+                        str(max_rate),
+                        f"{round(length / max((t3 - t0), 0.01) / 1e6, 2)} mbps",
+                        str(deletion_threshold_n),
+                        str(datetime.now()),
+                    ]
+                )
+                + "\n"
+            )
+        if deletion_threshold_n > 0 or SingletonConfig().config.get("compress", False):
+            dict_tofile(
+                book_dict2, ind_dict2, pathname, i + 2, True
+            )  # 再写一次，把成功率低于阈值的局面去掉
 
         del book_dict2, ind_dict2
         dict_tofile(book_dict0, ind_dict0, pathname, i)
         if os.path.exists(pathname + str(i)):
             os.remove(pathname + str(i))
-        logger.debug(f'step {i} written\n')
+        logger.debug(f"step {i} written\n")
 
         book_dict2, ind_dict2 = book_dict1, ind_dict1
         book_dict1, ind_dict1 = book_dict0, ind_dict0
 
 
 @njit(nogil=True, parallel=True)
-def expand_ad(arr: NDArray[np.uint64], original_board_sum: np.uint32, tiles_combinations_dict, param: ParamType, 
-              current_dtype, book_dict, ind_dict, expand_book_dict: bool = True) -> Tuple[BookDictType, IndexDictType]:
+def expand_ad(
+    arr: NDArray[np.uint64],
+    original_board_sum: np.uint32,
+    tiles_combinations_dict,
+    param: ParamType,
+    current_dtype,
+    book_dict,
+    ind_dict,
+    expand_book_dict: bool = True,
+) -> Tuple[BookDictType, IndexDictType]:
     """
     数据结构：
     ind_dict存储所有masked局面，每个键对应一组具有相同unmasked数量的masked局面：
@@ -196,8 +296,16 @@ def expand_ad(arr: NDArray[np.uint64], original_board_sum: np.uint32, tiles_comb
         if count_32k == param.num_free_32k:
             count32ks[i] = count_32k
             continue
-        large_tiles_sum = original_board_sum - total_sum - ((param.num_free_32k + param.num_fixed_32k) << 15)
-        tiles_combinations = get_array_view3(tiles_combinations_dict, np.uint8(large_tiles_sum >> 6), np.uint8(count_32k - param.num_free_32k))  # tiles_combinations_dict.get((np.uint8(large_tiles_sum >> 6), np.uint8(count_32k - param.num_free_32k)), None)
+        large_tiles_sum = (
+            original_board_sum
+            - total_sum
+            - ((param.num_free_32k + param.num_fixed_32k) << 15)
+        )
+        tiles_combinations = get_array_view3(
+            tiles_combinations_dict,
+            np.uint8(large_tiles_sum >> 6),
+            np.uint8(count_32k - param.num_free_32k),
+        )  # tiles_combinations_dict.get((np.uint8(large_tiles_sum >> 6), np.uint8(count_32k - param.num_free_32k)), None)
         if tiles_combinations is None:
             count32ks[i] = -1
             continue
@@ -205,7 +313,10 @@ def expand_ad(arr: NDArray[np.uint64], original_board_sum: np.uint32, tiles_comb
             count32ks[i] = count_32k
             continue
         if tiles_combinations[0] == tiles_combinations[1]:
-            if count_32k - param.num_free_32k > 2 and tiles_combinations[0] == tiles_combinations[2]:
+            if (
+                count_32k - param.num_free_32k > 2
+                and tiles_combinations[0] == tiles_combinations[2]
+            ):
                 # 3个64
                 count32ks[i] = count_32k - 3 + 16
             else:
@@ -217,19 +328,47 @@ def expand_ad(arr: NDArray[np.uint64], original_board_sum: np.uint32, tiles_comb
     for i in range(len(count32ks)):
         flags[count32ks[i] + 15] = True
 
-    factorials = np.array([1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800, 39916800, 1, 1, 1, 1, 1, 1, 1],
-                          dtype=np.uint32)
+    factorials = np.array(
+        [
+            1,
+            1,
+            2,
+            6,
+            24,
+            120,
+            720,
+            5040,
+            40320,
+            362880,
+            3628800,
+            39916800,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+        ],
+        dtype=np.uint32,
+    )
 
     for flag in range(48):
         count_32k = np.int8(flag - 15)
         if count_32k == -1:
             continue
         if count_32k < 0:
-            derive_size = np.uint32(factorials[-count_32k - 2] // factorials[param.num_free_32k])
+            derive_size = np.uint32(
+                factorials[-count_32k - 2] // factorials[param.num_free_32k]
+            )
         elif count_32k > 15:
-            derive_size = np.uint32(factorials[count_32k - 16] // factorials[param.num_free_32k])
+            derive_size = np.uint32(
+                factorials[count_32k - 16] // factorials[param.num_free_32k]
+            )
         else:
-            derive_size = np.uint32(factorials[count_32k] // factorials[param.num_free_32k])
+            derive_size = np.uint32(
+                factorials[count_32k] // factorials[param.num_free_32k]
+            )
 
         if not flags[flag]:
             ind_dict[count_32k] = np.empty(0, dtype=np.uint64)
@@ -241,27 +380,34 @@ def expand_ad(arr: NDArray[np.uint64], original_board_sum: np.uint32, tiles_comb
 
         ind_dict[count_32k] = positions
         if expand_book_dict:
-            book_dict[count_32k] = np.empty((len(positions), derive_size), dtype=current_dtype)
+            book_dict[count_32k] = np.empty(
+                (len(positions), derive_size), dtype=current_dtype
+            )
 
     return book_dict, ind_dict
 
 
 @njit(parallel=True, nogil=True)
 def recalculate_ad(
-        book_dict0: BookDictType, ind_dict0: IndexDictType,
-        book_dict1: BookDictType, ind_dict1: IndexDictType, indind_dict1: IndexIndexDictType,
-        book_dict2: BookDictType, ind_dict2: IndexDictType, indind_dict2: IndexIndexDictType,
-        match_dict: MatchDictType,
-        tiles_combinations_dict,
-        permutation_dict,
-        param: ParamType, 
-        original_board_sum: np.uint32,
-        pattern_check_func: PatternCheckFunc,
-        sym_func: SymFindFunc,
-        dtype: ValidDType,
-        max_scale: SuccessRateDType,
-        zero_val: SuccessRateDType,
-        spawn_rate4: float = 0.1
+    book_dict0: BookDictType,
+    ind_dict0: IndexDictType,
+    book_dict1: BookDictType,
+    ind_dict1: IndexDictType,
+    indind_dict1: IndexIndexDictType,
+    book_dict2: BookDictType,
+    ind_dict2: IndexDictType,
+    indind_dict2: IndexIndexDictType,
+    match_dict: MatchDictType,
+    tiles_combinations_dict,
+    permutation_dict,
+    param: ParamType,
+    original_board_sum: np.uint32,
+    pattern_check_func: PatternCheckFunc,
+    sym_func: SymFindFunc,
+    dtype: ValidDType,
+    max_scale: SuccessRateDType,
+    zero_val: SuccessRateDType,
+    spawn_rate4: float = 0.1,
 ):
     """
     回算方法的核心逻辑（批量回算优化）
@@ -319,7 +465,9 @@ def recalculate_ad(
               索引: 变换编码原始值数组
               值: 索引映射数组数组 (np.ndarray[np.ndarray[uint32]])
     """
-    pos_rev = np.array([0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15], dtype=np.uint8)
+    pos_rev = np.array(
+        [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15], dtype=np.uint8
+    )
 
     for i_c32k in range(48):
         count_32k = i_c32k - 16
@@ -328,29 +476,46 @@ def recalculate_ad(
             continue
 
         # print(count_32k)
-        derive_size = book_dict0[i_c32k]['cols']
+        derive_size = book_dict0[i_c32k]["cols"]
         map_length = 33331 if derive_size < 5000 else 11113
 
         match_index, match_mat = match_dict.setdefault(
-            np.uint32(derive_size), (np.full(map_length, np.uint64(0xffffffffffffffff), dtype=np.uint64),
-                                     np.zeros((map_length, derive_size), dtype=np.uint32)))
+            np.uint32(derive_size),
+            (
+                np.full(map_length, np.uint64(0xFFFFFFFFFFFFFFFF), dtype=np.uint64),
+                np.zeros((map_length, derive_size), dtype=np.uint32),
+            ),
+        )
 
         book_mat0 = get_array_view11(book_dict0, count_32k, dtype)
-        book_mat1 = get_array_view11(book_dict1, count_32k, dtype)  # book_dict1.setdefault(count_32k, np.empty((0, derive_size), dtype=dtype))
-        ind_arr1 = get_array_view10(ind_dict1, count_32k, np.uint64)  # ind_dict1.setdefault(count_32k, np.empty(0, dtype=np.uint64))
-        indind_arr1 = get_array_view10(indind_dict1, count_32k, np.uint32)  # indind_dict1.setdefault(count_32k, np.empty(0, dtype=np.uint32))
-        book_mat2 = get_array_view11(book_dict2, count_32k, dtype) # book_dict2.setdefault(count_32k, np.empty((0, derive_size), dtype=dtype))
-        ind_arr2 = get_array_view10(ind_dict2, count_32k, np.uint64)  # ind_dict2.setdefault(count_32k, np.empty(0, dtype=np.uint64))
-        indind_arr2 = get_array_view10(indind_dict2, count_32k, np.uint32)  # indind_dict2.setdefault(count_32k, np.empty(0, dtype=np.uint32))
+        book_mat1 = get_array_view11(
+            book_dict1, count_32k, dtype
+        )  # book_dict1.setdefault(count_32k, np.empty((0, derive_size), dtype=dtype))
+        ind_arr1 = get_array_view10(
+            ind_dict1, count_32k, np.uint64
+        )  # ind_dict1.setdefault(count_32k, np.empty(0, dtype=np.uint64))
+        indind_arr1 = get_array_view10(
+            indind_dict1, count_32k, np.uint32
+        )  # indind_dict1.setdefault(count_32k, np.empty(0, dtype=np.uint32))
+        book_mat2 = get_array_view11(
+            book_dict2, count_32k, dtype
+        )  # book_dict2.setdefault(count_32k, np.empty((0, derive_size), dtype=dtype))
+        ind_arr2 = get_array_view10(
+            ind_dict2, count_32k, np.uint64
+        )  # ind_dict2.setdefault(count_32k, np.empty(0, dtype=np.uint64))
+        indind_arr2 = get_array_view10(
+            indind_dict2, count_32k, np.uint32
+        )  # indind_dict2.setdefault(count_32k, np.empty(0, dtype=np.uint32))
 
-        chunk_count = max(min(1024, int(len(index) * round(np.log2(derive_size + 1)) // 1048576)), 1)
+        chunk_count = max(
+            min(1024, int(len(index) * round(np.log2(derive_size + 1)) // 1048576)), 1
+        )
         chunk_size = len(index) // chunk_count
         for chunk in range(chunk_count):
             start, end = chunk_size * chunk, chunk_size * (chunk + 1)
             if chunk == chunk_count - 1:
                 end = len(index)
             for k in prange(start, end):
-
                 if derive_size == 1:
                     # derive_size == 1有些计算可以省略，因此单独写逻辑
                     t = index[k]
@@ -359,19 +524,34 @@ def recalculate_ad(
                     empty_slots = 0
 
                     for i in range(16):  # 遍历所有位置
-                        if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
+                        if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(
+                            0
+                        ):  # 如果当前位置为空
                             empty_slots += 1
 
                             # 对于每个空位置，尝试填充2和4
                             new_value, probability = np.uint64(1), 1 - spawn_rate4
                             board_sum = original_board_sum + np.uint32(2)
-                            optimal_success_rate = solve_optimal_success_rate(t, new_value, i, board_sum,
-                                                                              pattern_check_func, sym_func,
-                                                                              count_32k, book_dict1, ind_dict1,
-                                                                              indind_dict1, book_mat1,
-                                                                              ind_arr1, indind_arr1,
-                                                                              tiles_combinations_dict, param, zero_val,
-                                                                              dtype, max_scale)
+                            optimal_success_rate = solve_optimal_success_rate(
+                                t,
+                                new_value,
+                                i,
+                                board_sum,
+                                pattern_check_func,
+                                sym_func,
+                                count_32k,
+                                book_dict1,
+                                ind_dict1,
+                                indind_dict1,
+                                book_mat1,
+                                ind_arr1,
+                                indind_arr1,
+                                tiles_combinations_dict,
+                                param,
+                                zero_val,
+                                dtype,
+                                max_scale,
+                            )
 
                             # 对最佳移动下的成功概率加权平均
                             success_probability += optimal_success_rate * probability
@@ -379,13 +559,26 @@ def recalculate_ad(
                             # 填4
                             new_value, probability = np.uint64(2), spawn_rate4
                             board_sum = original_board_sum + np.uint32(4)
-                            optimal_success_rate = solve_optimal_success_rate(t, new_value, i, board_sum,
-                                                                              pattern_check_func, sym_func,
-                                                                              count_32k, book_dict2, ind_dict2,
-                                                                              indind_dict2, book_mat2,
-                                                                              ind_arr2, indind_arr2,
-                                                                              tiles_combinations_dict, param, zero_val,
-                                                                              dtype, max_scale)
+                            optimal_success_rate = solve_optimal_success_rate(
+                                t,
+                                new_value,
+                                i,
+                                board_sum,
+                                pattern_check_func,
+                                sym_func,
+                                count_32k,
+                                book_dict2,
+                                ind_dict2,
+                                indind_dict2,
+                                book_mat2,
+                                ind_arr2,
+                                indind_arr2,
+                                tiles_combinations_dict,
+                                param,
+                                zero_val,
+                                dtype,
+                                max_scale,
+                            )
 
                             success_probability += optimal_success_rate * probability
                     book_mat0[k][0] = success_probability / empty_slots
@@ -401,20 +594,42 @@ def recalculate_ad(
                     empty_slots = 0
 
                     for i in range(16):  # 遍历所有位置
-                        if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(0):  # 如果当前位置为空
+                        if ((t >> np.uint64(4 * i)) & np.uint64(0xF)) == np.uint64(
+                            0
+                        ):  # 如果当前位置为空
                             empty_slots += 1
 
                             # 对于每个空位置，尝试填充2和4
                             new_value, probability = 1, 1 - spawn_rate4
                             board_sum = original_board_sum + np.uint32(2)
-                            optimal_success_rate = \
-                                solve_optimal_success_rate_arr(t, new_value, i, rep_t, rep_t_rev, pos_rev, derive_size,
-                                                               pattern_check_func,
-                                                               sym_func, rep_v, count_32k, book_dict1, ind_dict1,
-                                                               indind_dict1, board_sum,
-                                                               match_index, match_mat, book_mat1, ind_arr1, indind_arr1,
-                                                               tiles_combinations_dict, permutation_dict, param,
-                                                               dtype, zero_val, max_scale)
+                            optimal_success_rate = solve_optimal_success_rate_arr(
+                                t,
+                                new_value,
+                                i,
+                                rep_t,
+                                rep_t_rev,
+                                pos_rev,
+                                derive_size,
+                                pattern_check_func,
+                                sym_func,
+                                rep_v,
+                                count_32k,
+                                book_dict1,
+                                ind_dict1,
+                                indind_dict1,
+                                board_sum,
+                                match_index,
+                                match_mat,
+                                book_mat1,
+                                ind_arr1,
+                                indind_arr1,
+                                tiles_combinations_dict,
+                                permutation_dict,
+                                param,
+                                dtype,
+                                zero_val,
+                                max_scale,
+                            )
 
                             # 对最佳移动下的成功概率加权平均
                             success_probability += optimal_success_rate * probability
@@ -422,14 +637,34 @@ def recalculate_ad(
                             # 填4
                             new_value, probability = 2, spawn_rate4
                             board_sum = original_board_sum + np.uint32(4)
-                            optimal_success_rate = \
-                                solve_optimal_success_rate_arr(t, new_value, i, rep_t, rep_t_rev, pos_rev, derive_size,
-                                                               pattern_check_func,
-                                                               sym_func, rep_v, count_32k, book_dict2, ind_dict2,
-                                                               indind_dict2, board_sum,
-                                                               match_index, match_mat, book_mat2, ind_arr2, indind_arr2,
-                                                               tiles_combinations_dict, permutation_dict, param,
-                                                               dtype, zero_val, max_scale)
+                            optimal_success_rate = solve_optimal_success_rate_arr(
+                                t,
+                                new_value,
+                                i,
+                                rep_t,
+                                rep_t_rev,
+                                pos_rev,
+                                derive_size,
+                                pattern_check_func,
+                                sym_func,
+                                rep_v,
+                                count_32k,
+                                book_dict2,
+                                ind_dict2,
+                                indind_dict2,
+                                board_sum,
+                                match_index,
+                                match_mat,
+                                book_mat2,
+                                ind_arr2,
+                                indind_arr2,
+                                tiles_combinations_dict,
+                                permutation_dict,
+                                param,
+                                dtype,
+                                zero_val,
+                                max_scale,
+                            )
 
                             success_probability += optimal_success_rate * probability
                     book_mat0[k] = success_probability / empty_slots
@@ -439,11 +674,34 @@ def recalculate_ad(
 
 
 @njit(nogil=True)
-def solve_optimal_success_rate_arr(t, new_value, i, rep_t, rep_t_rev, pos_rev, derive_size, pattern_check_func,
-                                   sym_func, rep_v, count_32k, book_dict, ind_dict, indind_dict, board_sum,
-                                   match_index, match_mat, book_mat, ind_arr, indind_arr, tiles_combinations_dict,
-                                   permutation_dict, param: ParamType, dtype: ValidDType, zero_val: SuccessRateDType, 
-                                   max_scale: SuccessRateDType) -> NDArray[SuccessRateDType]:
+def solve_optimal_success_rate_arr(
+    t,
+    new_value,
+    i,
+    rep_t,
+    rep_t_rev,
+    pos_rev,
+    derive_size,
+    pattern_check_func,
+    sym_func,
+    rep_v,
+    count_32k,
+    book_dict,
+    ind_dict,
+    indind_dict,
+    board_sum,
+    match_index,
+    match_mat,
+    book_mat,
+    ind_arr,
+    indind_arr,
+    tiles_combinations_dict,
+    permutation_dict,
+    param: ParamType,
+    dtype: ValidDType,
+    zero_val: SuccessRateDType,
+    max_scale: SuccessRateDType,
+) -> NDArray[SuccessRateDType]:
     t_gen = t | (np.uint64(new_value) << np.uint64(4 * i))
     rep_t_gen = rep_t | (np.uint64(new_value) << np.uint64(4 * i))
     rep_t_gen_rev = rep_t_rev | (np.uint64(new_value) << np.uint64(4 * pos_rev[i]))
@@ -468,96 +726,251 @@ def solve_optimal_success_rate_arr(t, new_value, i, rep_t, rep_t_rev, pos_rev, d
                     if match_index[hashed_match_ind] == match_ind:
                         # 0.1
                         ranked_array = match_mat[hashed_match_ind]
-                        update_mnt_osr_364_arr_ad(book_dict, newt, unmasked_newt,
-                                                  ind_dict, indind_dict,
-                                                  optimal_success_rate, ranked_array, permutation_dict, param, dtype)
+                        update_mnt_osr_364_arr_ad(
+                            book_dict,
+                            newt,
+                            unmasked_newt,
+                            ind_dict,
+                            indind_dict,
+                            optimal_success_rate,
+                            ranked_array,
+                            permutation_dict,
+                            param,
+                            dtype,
+                        )
                     else:
                         # 0.2
-                        new_derived = process_derived(t_gen, board_sum, direc, symm_index, tiles_combinations_dict,
-                                                      permutation_dict, param)
+                        new_derived = process_derived(
+                            t_gen,
+                            board_sum,
+                            direc,
+                            symm_index,
+                            tiles_combinations_dict,
+                            permutation_dict,
+                            param,
+                        )
                         ranked_array = match_arr(new_derived)
 
-                        if match_index[hashed_match_ind] == np.uint64(0xffffffffffffffff):
+                        if match_index[hashed_match_ind] == np.uint64(
+                            0xFFFFFFFFFFFFFFFF
+                        ):
                             match_index[hashed_match_ind] = match_ind
                             match_mat[hashed_match_ind] = ranked_array
-                        update_mnt_osr_364_arr_ad(book_dict, newt, unmasked_newt,
-                                                  ind_dict, indind_dict,
-                                                  optimal_success_rate, ranked_array, permutation_dict, param, dtype)
+                        update_mnt_osr_364_arr_ad(
+                            book_dict,
+                            newt,
+                            unmasked_newt,
+                            ind_dict,
+                            indind_dict,
+                            optimal_success_rate,
+                            ranked_array,
+                            permutation_dict,
+                            param,
+                            dtype,
+                        )
                     continue
-                need_process, tiles_combinations, pos_rank, pos_32k, tile_value, count32k = (
-                    dispatch_mnt_osr_ad_arr(unmasked_newt, board_sum,
-                                            optimal_success_rate, tiles_combinations_dict, param, max_scale, dtype))
+                (
+                    need_process,
+                    tiles_combinations,
+                    pos_rank,
+                    pos_32k,
+                    tile_value,
+                    count32k,
+                ) = dispatch_mnt_osr_ad_arr(
+                    unmasked_newt,
+                    board_sum,
+                    optimal_success_rate,
+                    tiles_combinations_dict,
+                    param,
+                    max_scale,
+                    dtype,
+                )
 
                 if not need_process:
                     # 4
                     continue
-                if len(tiles_combinations) > 2 and tiles_combinations[0] == tiles_combinations[1] \
-                        and tiles_combinations[0] == tiles_combinations[2]:
+                if (
+                    len(tiles_combinations) > 2
+                    and tiles_combinations[0] == tiles_combinations[1]
+                    and tiles_combinations[0] == tiles_combinations[2]
+                ):
                     # 3
                     if match_index[hashed_match_ind] == match_ind:
                         # 3.1
                         ranked_array = match_mat[hashed_match_ind]
-                        update_mnt_osr_ad_arr3(book_dict, unmasked_newt, count32k, ind_dict,
-                                               indind_dict, ranked_array, optimal_success_rate, dtype)
+                        update_mnt_osr_ad_arr3(
+                            book_dict,
+                            unmasked_newt,
+                            count32k,
+                            ind_dict,
+                            indind_dict,
+                            ranked_array,
+                            optimal_success_rate,
+                            dtype,
+                        )
                     else:
                         # 3.2
-                        new_derived = process_derived(t_gen, board_sum, direc, symm_index, tiles_combinations_dict,
-                                                      permutation_dict, param)
+                        new_derived = process_derived(
+                            t_gen,
+                            board_sum,
+                            direc,
+                            symm_index,
+                            tiles_combinations_dict,
+                            permutation_dict,
+                            param,
+                        )
                         ranked_array = match_arr(new_derived)
 
-                        if match_index[hashed_match_ind] == np.uint64(0xffffffffffffffff):
+                        if match_index[hashed_match_ind] == np.uint64(
+                            0xFFFFFFFFFFFFFFFF
+                        ):
                             match_index[hashed_match_ind] = match_ind
                             match_mat[hashed_match_ind] = ranked_array
-                        update_mnt_osr_ad_arr3(book_dict, unmasked_newt, count32k, ind_dict,
-                                               indind_dict, ranked_array, optimal_success_rate, dtype)
+                        update_mnt_osr_ad_arr3(
+                            book_dict,
+                            unmasked_newt,
+                            count32k,
+                            ind_dict,
+                            indind_dict,
+                            ranked_array,
+                            optimal_success_rate,
+                            dtype,
+                        )
                     pass
-                elif len(tiles_combinations) > 1 and tiles_combinations[0] == tiles_combinations[1]:
+                elif (
+                    len(tiles_combinations) > 1
+                    and tiles_combinations[0] == tiles_combinations[1]
+                ):
                     # 2
-                    new_derived = process_derived(t_gen, board_sum, direc, symm_index, tiles_combinations_dict,
-                                                  permutation_dict, param)
-                    update_mnt_osr_ad_arr1(book_dict, unmasked_newt, ind_dict, indind_dict,
-                                           new_derived, optimal_success_rate, sym_func,
-                                           tiles_combinations, pos_rank, pos_32k, tile_value,
-                                           count32k, dtype)
+                    new_derived = process_derived(
+                        t_gen,
+                        board_sum,
+                        direc,
+                        symm_index,
+                        tiles_combinations_dict,
+                        permutation_dict,
+                        param,
+                    )
+                    update_mnt_osr_ad_arr1(
+                        book_dict,
+                        unmasked_newt,
+                        ind_dict,
+                        indind_dict,
+                        new_derived,
+                        optimal_success_rate,
+                        sym_func,
+                        tiles_combinations,
+                        pos_rank,
+                        pos_32k,
+                        tile_value,
+                        count32k,
+                        dtype,
+                    )
                 else:
                     # 1
                     if match_index[hashed_match_ind] == match_ind:
                         # 1.1
                         ranked_array = match_mat[hashed_match_ind]
-                        update_mnt_osr_ad_arr2(book_dict, newt, pos_rank, count32k, ind_dict, indind_dict, 
-                                               ranked_array, optimal_success_rate, permutation_dict, param, dtype)
+                        update_mnt_osr_ad_arr2(
+                            book_dict,
+                            newt,
+                            pos_rank,
+                            count32k,
+                            ind_dict,
+                            indind_dict,
+                            ranked_array,
+                            optimal_success_rate,
+                            permutation_dict,
+                            param,
+                            dtype,
+                        )
                     else:
                         # 1.2
-                        new_derived = process_derived(t_gen, board_sum, direc, symm_index, tiles_combinations_dict,
-                                                      permutation_dict, param)
+                        new_derived = process_derived(
+                            t_gen,
+                            board_sum,
+                            direc,
+                            symm_index,
+                            tiles_combinations_dict,
+                            permutation_dict,
+                            param,
+                        )
                         ranked_array = match_arr(new_derived)
 
-                        if match_index[hashed_match_ind] == np.uint64(0xffffffffffffffff):
+                        if match_index[hashed_match_ind] == np.uint64(
+                            0xFFFFFFFFFFFFFFFF
+                        ):
                             match_index[hashed_match_ind] = match_ind
                             match_mat[hashed_match_ind] = ranked_array
-                        update_mnt_osr_ad_arr2(book_dict, newt, pos_rank, count32k, ind_dict, indind_dict, 
-                                               ranked_array, optimal_success_rate, permutation_dict, param, dtype)
+                        update_mnt_osr_ad_arr2(
+                            book_dict,
+                            newt,
+                            pos_rank,
+                            count32k,
+                            ind_dict,
+                            indind_dict,
+                            ranked_array,
+                            optimal_success_rate,
+                            permutation_dict,
+                            param,
+                            dtype,
+                        )
             elif match_index[hashed_match_ind] == match_ind:
                 ranked_array = match_mat[hashed_match_ind]
-                update_osr_ad_arr(book_mat, newt, ind_arr, indind_arr,
-                                  optimal_success_rate, ranked_array)
+                update_osr_ad_arr(
+                    book_mat,
+                    newt,
+                    ind_arr,
+                    indind_arr,
+                    optimal_success_rate,
+                    ranked_array,
+                )
             else:
-                new_derived = process_derived(t_gen, board_sum, direc, symm_index, tiles_combinations_dict,
-                                              permutation_dict, param)
+                new_derived = process_derived(
+                    t_gen,
+                    board_sum,
+                    direc,
+                    symm_index,
+                    tiles_combinations_dict,
+                    permutation_dict,
+                    param,
+                )
                 ranked_array = match_arr(new_derived)
-                if match_index[hashed_match_ind] == np.uint64(0xffffffffffffffff):
+                if match_index[hashed_match_ind] == np.uint64(0xFFFFFFFFFFFFFFFF):
                     match_index[hashed_match_ind] = match_ind
                     match_mat[hashed_match_ind] = ranked_array
-                update_osr_ad_arr(book_mat, newt, ind_arr, indind_arr,
-                                  optimal_success_rate, ranked_array)
+                update_osr_ad_arr(
+                    book_mat,
+                    newt,
+                    ind_arr,
+                    indind_arr,
+                    optimal_success_rate,
+                    ranked_array,
+                )
     return optimal_success_rate
 
 
 @njit(nogil=True)
-def solve_optimal_success_rate(t, new_value, i, board_sum, pattern_check_func, sym_func, count_32k,
-                               book_dict, ind_dict, indind_dict, book_mat, ind_arr, indind_arr,
-                               tiles_combinations_dict, param: ParamType, zero_val: SuccessRateDType,
-                               dtype: ValidDType, max_scale: SuccessRateDType) -> SuccessRateDType:
+def solve_optimal_success_rate(
+    t,
+    new_value,
+    i,
+    board_sum,
+    pattern_check_func,
+    sym_func,
+    count_32k,
+    book_dict,
+    ind_dict,
+    indind_dict,
+    book_mat,
+    ind_arr,
+    indind_arr,
+    tiles_combinations_dict,
+    param: ParamType,
+    zero_val: SuccessRateDType,
+    dtype: ValidDType,
+    max_scale: SuccessRateDType,
+) -> SuccessRateDType:
     t_gen = t | (new_value << np.uint64(4 * i))
     board_rev = reverse(t_gen)
     optimal_success_rate = zero_val
@@ -566,35 +979,75 @@ def solve_optimal_success_rate(t, new_value, i, board_sum, pattern_check_func, s
         if newt != t_gen and pattern_check_func(newt):  # 只考虑有效的移动
             newt, symm_index = sym_func(newt)
             if mnt:
-
                 unmasked_newt = move_board2(t_gen, board_rev, direc + 1)
                 unmasked_newt = np.uint64(sym_like(unmasked_newt, symm_index))
 
                 if count_32k < 16:
-                    optimal_success_rate = update_mnt_osr_ad(book_dict, newt, unmasked_newt,
-                                                             ind_dict, indind_dict, optimal_success_rate, board_sum,
-                                                             tiles_combinations_dict, param, dtype, max_scale)
+                    optimal_success_rate = update_mnt_osr_ad(
+                        book_dict,
+                        newt,
+                        unmasked_newt,
+                        ind_dict,
+                        indind_dict,
+                        optimal_success_rate,
+                        board_sum,
+                        tiles_combinations_dict,
+                        param,
+                        dtype,
+                        max_scale,
+                    )
                 else:
-                    optimal_success_rate = update_mnt_osr_364_ad(book_dict, newt, unmasked_newt, ind_dict, indind_dict, 
-                                                                 optimal_success_rate, param, dtype)
+                    optimal_success_rate = update_mnt_osr_364_ad(
+                        book_dict,
+                        newt,
+                        unmasked_newt,
+                        ind_dict,
+                        indind_dict,
+                        optimal_success_rate,
+                        param,
+                        dtype,
+                    )
             else:
-                optimal_success_rate = update_osr_ad(book_mat, newt, ind_arr, indind_arr,
-                                                     optimal_success_rate)
+                optimal_success_rate = update_osr_ad(
+                    book_mat, newt, ind_arr, indind_arr, optimal_success_rate
+                )
     return optimal_success_rate
 
 
 @njit(nogil=True)
-def update_mnt_osr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint64,
-                      ind_dict: IndexDictType, indind_dict: IndexIndexDictType, osr: SuccessRateDType, board_sum: np.uint32,
-                      tiles_combinations_dict, param: ParamType, dtype: SuccessRateDType, max_scale: SuccessRateDType
-                      ) -> SuccessRateDType:
-    total_sum, count_32k, pos_32k, pos_rank, merged_tile_found, merged_tile, is_success = tile_sum_and_32k_count4(
-        unmasked_b, param)
+def update_mnt_osr_ad(
+    book_dict: BookDictType,
+    b: np.uint64,
+    unmasked_b: np.uint64,
+    ind_dict: IndexDictType,
+    indind_dict: IndexIndexDictType,
+    osr: SuccessRateDType,
+    board_sum: np.uint32,
+    tiles_combinations_dict,
+    param: ParamType,
+    dtype: SuccessRateDType,
+    max_scale: SuccessRateDType,
+) -> SuccessRateDType:
+    (
+        total_sum,
+        count_32k,
+        pos_32k,
+        pos_rank,
+        merged_tile_found,
+        merged_tile,
+        is_success,
+    ) = tile_sum_and_32k_count4(unmasked_b, param)
 
     if is_success:
         return max_scale
-    large_tiles_sum = board_sum - total_sum - ((param.num_free_32k + param.num_fixed_32k) << 15)
-    tiles_combinations = get_array_view3(tiles_combinations_dict, np.uint8(large_tiles_sum >> 6), np.uint8(count_32k - param.num_free_32k))  # tiles_combinations_dict.get((np.uint8(large_tiles_sum >> 6), np.uint8(count_32k - param.num_free_32k)), None)
+    large_tiles_sum = (
+        board_sum - total_sum - ((param.num_free_32k + param.num_fixed_32k) << 15)
+    )
+    tiles_combinations = get_array_view3(
+        tiles_combinations_dict,
+        np.uint8(large_tiles_sum >> 6),
+        np.uint8(count_32k - param.num_free_32k),
+    )  # tiles_combinations_dict.get((np.uint8(large_tiles_sum >> 6), np.uint8(count_32k - param.num_free_32k)), None)
     if tiles_combinations is None:
         return osr
 
@@ -603,7 +1056,10 @@ def update_mnt_osr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint
         return osr
 
     if len(tiles_combinations) > 1 and tiles_combinations[0] == tiles_combinations[1]:
-        if len(tiles_combinations) > 2 and tiles_combinations[0] == tiles_combinations[2]:
+        if (
+            len(tiles_combinations) > 2
+            and tiles_combinations[0] == tiles_combinations[2]
+        ):
             # 4
             count_32k = np.int8(count_32k + 16 - 3)  # 实际上就是16
             b = unmasked_b
@@ -611,15 +1067,21 @@ def update_mnt_osr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint
             # 3
             count_32k = np.int8(-count_32k)  # 实际上是-2
 
-            tile = np.uint64(tiles_combinations[0])  # = tiles_combinations[1] = log2(large_tiles_sum >> 1)
+            tile = np.uint64(
+                tiles_combinations[0]
+            )  # = tiles_combinations[1] = log2(large_tiles_sum >> 1)
             tiles_all_positions = tile * np.uint64(0x1111111111111111)
             b = (b & (~pos_32k)) | (tiles_all_positions & pos_32k)
 
-    ind_arr = get_array_view10(ind_dict, count_32k, np.uint64)  # ind_dict.get(np.int8(count_32k), np.empty(0, dtype=np.uint64))
-    indind_arr = get_array_view10(indind_dict, count_32k, np.uint32)  # indind_dict.get(np.int8(count_32k), np.empty(0, dtype=np.uint32))
+    ind_arr = get_array_view10(
+        ind_dict, count_32k, np.uint64
+    )  # ind_dict.get(np.int8(count_32k), np.empty(0, dtype=np.uint64))
+    indind_arr = get_array_view10(
+        indind_dict, count_32k, np.uint32
+    )  # indind_dict.get(np.int8(count_32k), np.empty(0, dtype=np.uint32))
 
     mid = search_arr_ad(ind_arr, np.uint64(b), indind_arr)
-    if mid != 0xffffffff:
+    if mid != 0xFFFFFFFF:
         book_mat = get_array_view11(book_dict, count_32k, dtype)  # book_dict[count_32k]
         if count_32k > 15:
             # 4
@@ -634,16 +1096,25 @@ def update_mnt_osr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint
 
 
 @njit(nogil=True)
-def process_derived(t_gen: np.uint64, board_sum: np.uint32, direc: int,
-                    symm_index: int, tiles_combinations_dict, permutation_dict, param: ParamType) -> NDArray[np.uint64]:
-    derived = unmask_board(t_gen, board_sum, tiles_combinations_dict, permutation_dict, param)
+def process_derived(
+    t_gen: np.uint64,
+    board_sum: np.uint32,
+    direc: int,
+    symm_index: int,
+    tiles_combinations_dict,
+    permutation_dict,
+    param: ParamType,
+) -> NDArray[np.uint64]:
+    derived = unmask_board(
+        t_gen, board_sum, tiles_combinations_dict, permutation_dict, param
+    )
     derived_rev = reverse_arr(derived)
     new_derived = move_arr(derived, direc + 1, derived_rev)
     sym_arr_like(new_derived, symm_index)
     return new_derived
 
 
-@njit(nogil=True, inline='always')
+@njit(nogil=True, inline="always")
 def arr_max(arr1: NDArray, arr2: NDArray):
     # assert len(arr1) - len(arr2) == 0
     for i in range(len(arr1)):
@@ -652,126 +1123,231 @@ def arr_max(arr1: NDArray, arr2: NDArray):
 
 @njit(nogil=True)
 def match_arr(a: NDArray) -> NDArray[np.uint32]:
-    sorted_indices = np.argsort(a)  # 事实上在Numba包装的函数内部调用np.argsort比原版更慢
+    sorted_indices = np.argsort(
+        a
+    )  # 事实上在Numba包装的函数内部调用np.argsort比原版更慢
     ranked_array = np.empty(len(a), dtype=np.uint32)
     ranked_array[sorted_indices] = np.arange(len(a))
     return ranked_array
 
 
 @njit(nogil=True)
-def update_osr_ad_arr(book_mat: NDArray[NDArray[np.uint32]], b: np.uint64, ind_ar: NDArray[np.uint64],
-                      indind_ar: NDArray[np.uint32], osr: NDArray[SuccessRateDType], ranked_array: NDArray[np.uint32]):
+def update_osr_ad_arr(
+    book_mat: NDArray[NDArray[np.uint32]],
+    b: np.uint64,
+    ind_ar: NDArray[np.uint64],
+    indind_ar: NDArray[np.uint32],
+    osr: NDArray[SuccessRateDType],
+    ranked_array: NDArray[np.uint32],
+):
     mid = search_arr_ad(ind_ar, b, indind_ar)
-    if mid != 0xffffffff:
+    if mid != 0xFFFFFFFF:
         arr_max(osr, book_mat[mid][ranked_array])
 
 
 @njit(nogil=True)
-def update_osr_ad(book_mat: NDArray[NDArray[np.uint32]], b: np.uint64, ind_arr: NDArray[np.uint64],
-                  indind_arr: NDArray[np.uint32], osr: SuccessRateDType) -> SuccessRateDType:
+def update_osr_ad(
+    book_mat: NDArray[NDArray[np.uint32]],
+    b: np.uint64,
+    ind_arr: NDArray[np.uint64],
+    indind_arr: NDArray[np.uint32],
+    osr: SuccessRateDType,
+) -> SuccessRateDType:
     mid = search_arr_ad(ind_arr, b, indind_arr)
-    if mid != 0xffffffff:
+    if mid != 0xFFFFFFFF:
         return max(osr, book_mat[mid][0])
     else:
         return osr
 
 
 @njit(nogil=True)
-def dispatch_mnt_osr_ad_arr(unmasked_b: np.uint64, original_board_sum: np.uint32,
-                            osr: NDArray[SuccessRateDType], tiles_combinations_dict, param: ParamType, 
-                            max_scale: SuccessRateDType, dtype: SuccessRateDType
-                            ) -> Tuple[bool, NDArray[np.uint8], int, NDArray[np.uint64], int, np.uint8]:
+def dispatch_mnt_osr_ad_arr(
+    unmasked_b: np.uint64,
+    original_board_sum: np.uint32,
+    osr: NDArray[SuccessRateDType],
+    tiles_combinations_dict,
+    param: ParamType,
+    max_scale: SuccessRateDType,
+    dtype: SuccessRateDType,
+) -> Tuple[bool, NDArray[np.uint8], int, NDArray[np.uint64], int, np.uint8]:
     # 1、合成后不存在两个相同大数 2、合成后存在两个相同大数 3、合出第三个64 4、成功 5、3x64 -> 64 128 (已在之前处理)
-    total_sum, count_32k, pos_32k, pos_rank, merged_tile_found, tile_value, is_success = tile_sum_and_32k_count4(unmasked_b, param)
+    (
+        total_sum,
+        count_32k,
+        pos_32k,
+        pos_rank,
+        merged_tile_found,
+        tile_value,
+        is_success,
+    ) = tile_sum_and_32k_count4(unmasked_b, param)
 
     if is_success:
         # 4
         arr_max(osr, np.full(len(osr), max_scale, dtype=dtype))
-        return False, np.empty(0, dtype=np.uint8), pos_rank, pos_32k, tile_value, count_32k
+        return (
+            False,
+            np.empty(0, dtype=np.uint8),
+            pos_rank,
+            pos_32k,
+            tile_value,
+            count_32k,
+        )
 
-    large_tiles_sum = original_board_sum - total_sum - ((param.num_free_32k + param.num_fixed_32k) << 15)
-    tiles_combinations = get_array_view3(tiles_combinations_dict, np.uint8(large_tiles_sum >> 6), np.uint8(count_32k - param.num_free_32k))  # tiles_combinations_dict.get((np.uint8(large_tiles_sum >> 6), np.uint8(count_32k - param.num_free_32k)), None)
+    large_tiles_sum = (
+        original_board_sum
+        - total_sum
+        - ((param.num_free_32k + param.num_fixed_32k) << 15)
+    )
+    tiles_combinations = get_array_view3(
+        tiles_combinations_dict,
+        np.uint8(large_tiles_sum >> 6),
+        np.uint8(count_32k - param.num_free_32k),
+    )  # tiles_combinations_dict.get((np.uint8(large_tiles_sum >> 6), np.uint8(count_32k - param.num_free_32k)), None)
     if tiles_combinations is None:
-        return False, np.empty(0, dtype=np.uint8), pos_rank, pos_32k, tile_value, count_32k
+        return (
+            False,
+            np.empty(0, dtype=np.uint8),
+            pos_rank,
+            pos_32k,
+            tile_value,
+            count_32k,
+        )
     return True, tiles_combinations, pos_rank, pos_32k, tile_value, count_32k
 
 
 @njit(nogil=True)
-def update_mnt_osr_ad_arr3(book_dict: BookDictType, unmasked_b: np.uint64,
-                           count_32k: np.uint8, ind_dict: IndexDictType, indind_dict: IndexIndexDictType,
-                           ranked_array: NDArray[np.uint32], osr: NDArray[SuccessRateDType], dtype: ValidDType):
+def update_mnt_osr_ad_arr3(
+    book_dict: BookDictType,
+    unmasked_b: np.uint64,
+    count_32k: np.uint8,
+    ind_dict: IndexDictType,
+    indind_dict: IndexIndexDictType,
+    ranked_array: NDArray[np.uint32],
+    osr: NDArray[SuccessRateDType],
+    dtype: ValidDType,
+):
     count_32k = np.int8(count_32k - 3 + 16)
-    ind_arr = get_array_view10(ind_dict, count_32k, np.uint64)  # ind_dict.get(count_32k, np.empty(0, dtype=np.uint64))
-    indind_arr = get_array_view10(indind_dict, count_32k, np.uint32)  # indind_dict.get(count_32k, np.empty(0, dtype=np.uint32))
+    ind_arr = get_array_view10(
+        ind_dict, count_32k, np.uint64
+    )  # ind_dict.get(count_32k, np.empty(0, dtype=np.uint64))
+    indind_arr = get_array_view10(
+        indind_dict, count_32k, np.uint32
+    )  # indind_dict.get(count_32k, np.empty(0, dtype=np.uint32))
 
     mid = search_arr_ad(ind_arr, unmasked_b, indind_arr)
-    if mid != 0xffffffff:
+    if mid != 0xFFFFFFFF:
         book_mat = get_array_view11(book_dict, count_32k, dtype)  # book_dict[count_32k]
         arr_max(osr, book_mat[mid][ranked_array])
 
 
 @njit(nogil=True)
-def update_mnt_osr_ad_arr2(book_dict: BookDictType, b: np.uint64,
-                           pos_rank: int, count_32k: np.uint8, ind_dict: IndexDictType, indind_dict: IndexIndexDictType,
-                           ranked_array: NDArray[np.uint32], osr: NDArray[SuccessRateDType], permutation_dict, 
-                           param: ParamType, dtype: ValidDType):
-    ind_arr = get_array_view10(ind_dict, count_32k, np.uint64)  # ind_dict.get(count_32k, np.empty(0, dtype=np.uint64))
-    indind_arr = get_array_view10(indind_dict, count_32k, np.uint32)  # indind_dict.get(count_32k, np.empty(0, dtype=np.uint32))
+def update_mnt_osr_ad_arr2(
+    book_dict: BookDictType,
+    b: np.uint64,
+    pos_rank: int,
+    count_32k: np.uint8,
+    ind_dict: IndexDictType,
+    indind_dict: IndexIndexDictType,
+    ranked_array: NDArray[np.uint32],
+    osr: NDArray[SuccessRateDType],
+    permutation_dict,
+    param: ParamType,
+    dtype: ValidDType,
+):
+    ind_arr = get_array_view10(
+        ind_dict, count_32k, np.uint64
+    )  # ind_dict.get(count_32k, np.empty(0, dtype=np.uint64))
+    indind_arr = get_array_view10(
+        indind_dict, count_32k, np.uint32
+    )  # indind_dict.get(count_32k, np.empty(0, dtype=np.uint32))
 
     mid = search_arr_ad(ind_arr, b, indind_arr)
-    if mid != 0xffffffff:
-        permutations = get_array_view2(permutation_dict, np.uint8(count_32k), np.uint8(count_32k - param.num_free_32k))  # permutation_dict[(np.uint8(count_32k), np.uint8(count_32k - param.num_free_32k))]
+    if mid != 0xFFFFFFFF:
+        permutations = get_array_view2(
+            permutation_dict,
+            np.uint8(count_32k),
+            np.uint8(count_32k - param.num_free_32k),
+        )  # permutation_dict[(np.uint8(count_32k), np.uint8(count_32k - param.num_free_32k))]
         book_mat = get_array_view11(book_dict, count_32k, dtype)  # book_dict[count_32k]
-        permutations_match = (permutations[:, 0] == pos_rank)
+        permutations_match = permutations[:, 0] == pos_rank
         arr_max(osr, book_mat[mid][permutations_match][ranked_array])
 
 
 @njit(nogil=True)
-def update_mnt_osr_ad_arr1(book_dict: BookDictType, unmasked_b: np.uint64, ind_dict: IndexDictType,
-                           indind_dict: IndexIndexDictType, board_derived: NDArray[np.uint64], osr: NDArray[SuccessRateDType],
-                           sym_func: SymFindFunc, tiles_combinations: NDArray[np.uint8], pos_rank: int,
-                           pos_32k: NDArray[np.uint64], tile_value: int, count_32k: np.uint8, dtype: ValidDType):
+def update_mnt_osr_ad_arr1(
+    book_dict: BookDictType,
+    unmasked_b: np.uint64,
+    ind_dict: IndexDictType,
+    indind_dict: IndexIndexDictType,
+    board_derived: NDArray[np.uint64],
+    osr: NDArray[SuccessRateDType],
+    sym_func: SymFindFunc,
+    tiles_combinations: NDArray[np.uint8],
+    pos_rank: int,
+    pos_32k: NDArray[np.uint64],
+    tile_value: int,
+    count_32k: np.uint8,
+    dtype: ValidDType,
+):
     pos_32k = extract_f_positions(pos_32k)
     for j in range(count_32k):
         if j == pos_rank:
             continue
 
         pos = pos_32k[j]
-        unmasked_b_j = unmasked_b & ~(np.uint64(0xf) << pos)
+        unmasked_b_j = unmasked_b & ~(np.uint64(0xF) << pos)
         unmasked_b_j = unmasked_b_j | (np.uint64(tiles_combinations[0]) << pos)
         unmasked_b_j, symm_index = sym_func(unmasked_b_j)
 
-        ind_arr = get_array_view10(ind_dict, np.int8(-count_32k), np.uint64)  # ind_dict.get(np.int8(-count_32k), np.empty(0, dtype=np.uint64))
-        indind_arr = get_array_view10(indind_dict, np.int8(-count_32k), np.uint32)  # indind_dict.get(np.int8(-count_32k), np.empty(0, dtype=np.uint32))
+        ind_arr = get_array_view10(
+            ind_dict, np.int8(-count_32k), np.uint64
+        )  # ind_dict.get(np.int8(-count_32k), np.empty(0, dtype=np.uint64))
+        indind_arr = get_array_view10(
+            indind_dict, np.int8(-count_32k), np.uint32
+        )  # indind_dict.get(np.int8(-count_32k), np.empty(0, dtype=np.uint32))
 
         mid = search_arr_ad(ind_arr, unmasked_b_j, indind_arr)
-        if mid != 0xffffffff:
-            positions_match = (((board_derived >> pos) & np.uint64(0xf)) == tile_value)
+        if mid != 0xFFFFFFFF:
+            positions_match = ((board_derived >> pos) & np.uint64(0xF)) == tile_value
             osr_match = osr[positions_match]
             board_derived_match = board_derived[positions_match]
             sym_arr_like(board_derived_match, symm_index)
-            book_mat = get_array_view11(book_dict, -count_32k, dtype)  # book_dict[-count_32k]
+            book_mat = get_array_view11(
+                book_dict, -count_32k, dtype
+            )  # book_dict[-count_32k]
             ranked_array = match_arr(board_derived_match)
             arr_max(osr_match, (book_mat[mid])[ranked_array])
             osr[positions_match] = osr_match
 
 
 @njit(nogil=True)
-def update_mnt_osr_364_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint64,
-                          ind_dict: IndexDictType, indind_dict: IndexIndexDictType, osr: SuccessRateDType, 
-                          param: ParamType, dtype: SuccessRateDType
-                          ) -> SuccessRateDType:
+def update_mnt_osr_364_ad(
+    book_dict: BookDictType,
+    b: np.uint64,
+    unmasked_b: np.uint64,
+    ind_dict: IndexDictType,
+    indind_dict: IndexIndexDictType,
+    osr: SuccessRateDType,
+    param: ParamType,
+    dtype: SuccessRateDType,
+) -> SuccessRateDType:
     # 3 64:0、128和64的pos_rank；1、要找的不是b，需要把64mask掉；2、book_mat[mid]中用permutation找到128,64对应位置
     pos_rank64, pos_rank128, pos_rank, pos_64 = find_3x64_pos(unmasked_b, param)
-    b |= (np.uint64(0xf) << pos_64)
+    b |= np.uint64(0xF) << pos_64
     count_32k = np.int8(pos_rank)
-    ind_arr = get_array_view10(ind_dict, count_32k, np.uint64)  # ind_dict.get(count_32k, np.empty(0, dtype=np.uint64))
-    indind_arr = get_array_view10(indind_dict, count_32k, np.uint32)  # indind_dict.get(count_32k, np.empty(0, dtype=np.uint32))
+    ind_arr = get_array_view10(
+        ind_dict, count_32k, np.uint64
+    )  # ind_dict.get(count_32k, np.empty(0, dtype=np.uint64))
+    indind_arr = get_array_view10(
+        indind_dict, count_32k, np.uint32
+    )  # indind_dict.get(count_32k, np.empty(0, dtype=np.uint32))
 
     mid = search_arr_ad(ind_arr, b, indind_arr)
-    if mid != 0xffffffff:
+    if mid != 0xFFFFFFFF:
         book_mat = get_array_view11(book_dict, count_32k, dtype)  # book_dict[count_32k]
-        permutations_match_ind = _permutations_mapping_364(pos_rank64, pos_rank128, pos_rank)
+        permutations_match_ind = _permutations_mapping_364(
+            pos_rank64, pos_rank128, pos_rank
+        )
         return max(osr, book_mat[mid][permutations_match_ind])
         # 等价于:
         # permutations = permutation_dict[(np.uint8(count_32k), np.uint8(count_32k - num_free_32k))]
@@ -790,21 +1366,40 @@ def _permutations_mapping_364(x, y, n):
 
 
 @njit(nogil=True)
-def update_mnt_osr_364_arr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b: np.uint64,
-                              ind_dict: IndexDictType, indind_dict: IndexIndexDictType, osr: NDArray[SuccessRateDType],
-                              ranked_array: NDArray[np.uint32], permutation_dict, param: ParamType, dtype):
+def update_mnt_osr_364_arr_ad(
+    book_dict: BookDictType,
+    b: np.uint64,
+    unmasked_b: np.uint64,
+    ind_dict: IndexDictType,
+    indind_dict: IndexIndexDictType,
+    osr: NDArray[SuccessRateDType],
+    ranked_array: NDArray[np.uint32],
+    permutation_dict,
+    param: ParamType,
+    dtype,
+):
     # 3 64 -> 128 64:0、128和64的pos_rank；1、要找的不是b，需要把64mask掉；2、book_mat[mid]中用permutation找到128,64对应位置
     pos_rank64, pos_rank128, pos_rank, pos_64 = find_3x64_pos(unmasked_b, param)
-    b |= (np.uint64(0xf) << pos_64)
+    b |= np.uint64(0xF) << pos_64
     count_32k = np.int8(pos_rank)
-    ind_arr = get_array_view10(ind_dict, count_32k, np.uint64)  # ind_dict.get(count_32k, np.empty(0, dtype=np.uint64))
-    indind_arr = get_array_view10(indind_dict, count_32k, np.uint32)  # indind_dict.get(count_32k, np.empty(0, dtype=np.uint32))
+    ind_arr = get_array_view10(
+        ind_dict, count_32k, np.uint64
+    )  # ind_dict.get(count_32k, np.empty(0, dtype=np.uint64))
+    indind_arr = get_array_view10(
+        indind_dict, count_32k, np.uint32
+    )  # indind_dict.get(count_32k, np.empty(0, dtype=np.uint32))
 
     mid = search_arr_ad(ind_arr, b, indind_arr)
-    if mid != 0xffffffff:
+    if mid != 0xFFFFFFFF:
         book_mat = get_array_view11(book_dict, count_32k, dtype)  # book_dict[count_32k]
-        permutations = get_array_view2(permutation_dict, np.uint8(count_32k), np.uint8(count_32k - param.num_free_32k))  # permutation_dict[(np.uint8(count_32k), np.uint8(count_32k - param.num_free_32k))]
-        permutations_match = (permutations[:, 0] == pos_rank64) & (permutations[:, 1] == pos_rank128)
+        permutations = get_array_view2(
+            permutation_dict,
+            np.uint8(count_32k),
+            np.uint8(count_32k - param.num_free_32k),
+        )  # permutation_dict[(np.uint8(count_32k), np.uint8(count_32k - param.num_free_32k))]
+        permutations_match = (permutations[:, 0] == pos_rank64) & (
+            permutations[:, 1] == pos_rank128
+        )
         arr_max(osr, book_mat[mid][permutations_match][ranked_array])
 
 
@@ -812,9 +1407,9 @@ def update_mnt_osr_364_arr_ad(book_dict: BookDictType, b: np.uint64, unmasked_b:
 def find_3x64_pos(unmasked_b: np.uint64, param: ParamType) -> Tuple[int, int, int, int]:
     pos_rank = 0
     for i in range(60, -4, -4):
-        tile_value = (unmasked_b >> np.uint64(i)) & np.uint64(0xf)
-        if tile_value == np.uint64(0xf):
-            if (param.pos_fixed_32k >> i) & np.uint64(0xf) == 0:
+        tile_value = (unmasked_b >> np.uint64(i)) & np.uint64(0xF)
+        if tile_value == np.uint64(0xF):
+            if (param.pos_fixed_32k >> i) & np.uint64(0xF) == 0:
                 pos_rank += 1
         elif tile_value == 6:
             pos_rank64 = pos_rank
@@ -830,15 +1425,23 @@ def find_3x64_pos(unmasked_b: np.uint64, param: ParamType) -> Tuple[int, int, in
 
 @njit(nogil=True)
 def reverse_arr(board: NDArray[np.uint64]) -> NDArray[np.uint64]:
-    board = (board & np.uint64(0xFF00FF0000FF00FF)) | ((board & np.uint64(0x00FF00FF00000000)) >> np.uint64(24)) | (
-            (board & np.uint64(0x00000000FF00FF00)) << np.uint64(24))
-    board = (board & np.uint64(0xF0F00F0FF0F00F0F)) | ((board & np.uint64(0x0F0F00000F0F0000)) >> np.uint64(12)) | (
-            (board & np.uint64(0x0000F0F00000F0F0)) << np.uint64(12))
+    board = (
+        (board & np.uint64(0xFF00FF0000FF00FF))
+        | ((board & np.uint64(0x00FF00FF00000000)) >> np.uint64(24))
+        | ((board & np.uint64(0x00000000FF00FF00)) << np.uint64(24))
+    )
+    board = (
+        (board & np.uint64(0xF0F00F0FF0F00F0F))
+        | ((board & np.uint64(0x0F0F00000F0F0000)) >> np.uint64(12))
+        | ((board & np.uint64(0x0000F0F00000F0F0)) << np.uint64(12))
+    )
     return board
 
 
 @njit(nogil=True)
-def move_arr(board: NDArray[np.uint64], direc: int, board_rev: NDArray[np.uint64]) -> NDArray[np.uint64]:
+def move_arr(
+    board: NDArray[np.uint64], direc: int, board_rev: NDArray[np.uint64]
+) -> NDArray[np.uint64]:
     moved = np.empty(len(board), dtype=np.uint64)
     for i in range(len(board)):
         moved[i] = move_board2(board[i], board_rev[i], direc)
@@ -897,8 +1500,8 @@ def sym_arr_like(bd_arr: NDArray[np.uint64], symm_index: int):
 def find_mnt_pos(unmasked: np.uint64) -> int:
     pos_rank = 0
     for i in range(60, -4, -4):
-        tile_value = (unmasked >> np.uint64(i)) & np.uint64(0xf)
-        if tile_value == np.uint64(0xf):
+        tile_value = (unmasked >> np.uint64(i)) & np.uint64(0xF)
+        if tile_value == np.uint64(0xF):
             pos_rank += 1
         elif tile_value > 5:
             return pos_rank
@@ -906,8 +1509,12 @@ def find_mnt_pos(unmasked: np.uint64) -> int:
 
 
 @njit(nogil=True, parallel=True)
-def remove_died_ad(book_dict: BookDictType, ind_dict: IndexDictType, dtype: ValidDType,
-                   deletion_threshold: SuccessRateDType):
+def remove_died_ad(
+    book_dict: BookDictType,
+    ind_dict: IndexDictType,
+    dtype: ValidDType,
+    deletion_threshold: SuccessRateDType,
+):
     for count32k in ind_dict.keys():
         ind = ind_dict[count32k]
         if len(ind) == 0:
@@ -925,7 +1532,9 @@ def remove_died_ad(book_dict: BookDictType, ind_dict: IndexDictType, dtype: Vali
 
 
 @njit(nogil=True, parallel=True)
-def filter_arr(arr: NDArray[NDArray[SuccessRateDType]], f: NDArray[np.bool_], dtype: ValidDType):
+def filter_arr(
+    arr: NDArray[NDArray[SuccessRateDType]], f: NDArray[np.bool_], dtype: ValidDType
+):
     length = np.sum(f)
     lines = np.cumsum(f)
     result = np.empty((length, len(arr[0])), dtype=dtype)
@@ -951,23 +1560,24 @@ def _create_index_ad(arr: NDArray[np.uint64]) -> NDArray[np.uint32]:
     根据uint64数据的前24位的分段位置创建一个索引，长度16777216+1
     """
     n = 16777217
-    ind1: NDArray = np.empty(n, dtype='uint32')
+    ind1: NDArray = np.empty(n, dtype="uint32")
     header = arr[0] >> np.uint32(40)
-    ind1[:header + 1] = 0
+    ind1[: header + 1] = 0
 
     for i in prange(1, len(arr)):
         header = arr[i] >> np.uint32(40)
         header_pre = arr[i - 1] >> np.uint32(40)
         if header != header_pre:
-            ind1[header_pre + 1: header + 1] = i
+            ind1[header_pre + 1 : header + 1] = i
     header = arr[-1] >> np.uint32(40)
-    ind1[header + 1:] = len(arr)
+    ind1[header + 1 :] = len(arr)
     return ind1
 
 
 @njit(nogil=True)
-def binary_search_arr_ad(arr: NDArray[np.uint64],
-                         target: np.uint64, low: np.uint32, high: np.uint32) -> np.uint32:
+def binary_search_arr_ad(
+    arr: NDArray[np.uint64], target: np.uint64, low: np.uint32, high: np.uint32
+) -> np.uint32:
     while low <= high:
         mid = np.uint32((low + high) // 2)
         mid_val = arr[mid]
@@ -978,14 +1588,15 @@ def binary_search_arr_ad(arr: NDArray[np.uint64],
         else:
             return mid  # 找到匹配，返回索引
 
-    return np.uint32(0xffffffff)  # 如果没有找到匹配项
+    return np.uint32(0xFFFFFFFF)  # 如果没有找到匹配项
 
 
 @njit(nogil=True)
-def search_arr_ad(arr: NDArray[np.uint64],
-                  b: np.uint64, ind: NDArray[np.uint32]) -> np.uint32:
+def search_arr_ad(
+    arr: NDArray[np.uint64], b: np.uint64, ind: NDArray[np.uint32]
+) -> np.uint32:
     if arr is None or len(arr) == 0:
-        return np.uint32(0xffffffff)
+        return np.uint32(0xFFFFFFFF)
     if ind is None or len(ind) == 0:
         return binary_search_arr_ad(arr, b, np.uint32(0), np.uint32(len(arr) - 1))
     header = b >> np.uint32(40)
@@ -1004,9 +1615,15 @@ def length_count(book_dict: BookDictType) -> (int, SuccessRateDType):
     return length, max_rate
 
 
-def dict_tofile(book_dict: BookDictType, ind_dict: IndexDictType, path: str, step: int, compress=False):
+def dict_tofile(
+    book_dict: BookDictType,
+    ind_dict: IndexDictType,
+    path: str,
+    step: int,
+    compress=False,
+):
     # Create the target directory if it doesn't exist
-    folder_path = path + str(step) + 'b'
+    folder_path = path + str(step) + "b"
     os.makedirs(folder_path, exist_ok=True)
 
     for k in ind_dict.keys():
@@ -1020,11 +1637,13 @@ def dict_tofile(book_dict: BookDictType, ind_dict: IndexDictType, path: str, ste
             continue
 
         # Write the ind_dict[k] data to a file named str(k).i
-        if compress and SingletonConfig().config.get('compress', False):
+        if compress and SingletonConfig().config.get("compress", False):
             compress_uint64_array(ind_dict[k], os.path.join(folder_path, f"{str(k)}"))
             if not os.path.exists(os.path.join(folder_path, f"{str(k)}.zi")):
                 ind_dict[k].tofile(ind_filename)
-            if os.path.exists(ind_filename) and os.path.exists(os.path.join(folder_path, f"{str(k)}.zi")):
+            if os.path.exists(ind_filename) and os.path.exists(
+                os.path.join(folder_path, f"{str(k)}.zi")
+            ):
                 os.remove(ind_filename)
         else:
             ind_dict[k].tofile(ind_filename)
@@ -1033,36 +1652,54 @@ def dict_tofile(book_dict: BookDictType, ind_dict: IndexDictType, path: str, ste
         book_dict[k].tofile(book_filename)
 
 
-def dict_fromfile(path: str, step: int, dtype: ValidDType) -> (BookDictType, IndexDictType):
-    folder_path = path + str(step) + 'b'
-    template, current_dtype, max_scale, zero_val = Config.DTYPE_CONFIG[SingletonConfig().config.get(
-        'success_rate_dtype', 'uint32')]
+def dict_fromfile(
+    path: str, step: int, dtype: ValidDType
+) -> (BookDictType, IndexDictType):
+    folder_path = path + str(step) + "b"
+    template, current_dtype, max_scale, zero_val = Config.DTYPE_CONFIG[
+        SingletonConfig().config.get("success_rate_dtype", "uint32")
+    ]
     book_dict = Dict.empty(KeyType1, from_dtype(current_dtype)[:, :])
     ind_dict = Dict.empty(KeyType1, ValueType2)
 
     # First, read all the .i files to populate ind_dict
     for filename in os.listdir(folder_path):
-        if filename.endswith('.i'):
-            key = np.int8(filename.split('.')[0])  # Extract key from filename (before .i)
+        if filename.endswith(".i"):
+            key = np.int8(
+                filename.split(".")[0]
+            )  # Extract key from filename (before .i)
             ind_data = np.fromfile(os.path.join(folder_path, filename), dtype=np.uint64)
             if len(ind_data) > 0:
                 ind_dict[key] = ind_data
-        elif filename.endswith('.zi'):
-            key = np.int8(filename.split('.')[0])  # Extract key from filename (before .zi)
-            segments = np.fromfile(os.path.join(folder_path, f"{str(key)}.s"), dtype='uint64, uint64')
-            ind_data = decompress_uint64_array(os.path.join(folder_path, filename), segments)
+        elif filename.endswith(".zi"):
+            key = np.int8(
+                filename.split(".")[0]
+            )  # Extract key from filename (before .zi)
+            segments = np.fromfile(
+                os.path.join(folder_path, f"{str(key)}.s"), dtype="uint64, uint64"
+            )
+            ind_data = decompress_uint64_array(
+                os.path.join(folder_path, filename), segments
+            )
             if len(ind_data) > 0:
                 ind_dict[key] = ind_data
 
     # Now, read the .b files and use the corresponding ind_data to reshape book_data
     for filename in os.listdir(folder_path):
-        if filename.endswith('.b'):
-            key = np.int8(filename.split('.')[0])  # Extract key from filename (before .b)
+        if filename.endswith(".b"):
+            key = np.int8(
+                filename.split(".")[0]
+            )  # Extract key from filename (before .b)
             ind_length = len(
-                ind_dict.get(key, np.empty(0, dtype=np.uint64)))  # Get the length of the corresponding ind_data
+                ind_dict.get(key, np.empty(0, dtype=np.uint64))
+            )  # Get the length of the corresponding ind_data
             if ind_length > 0:
-                book_data = np.fromfile(os.path.join(folder_path, filename), dtype=dtype)
-                book_data_reshaped = book_data.reshape((ind_length, -1))  # Reshape to (ind_length, columns)
+                book_data = np.fromfile(
+                    os.path.join(folder_path, filename), dtype=dtype
+                )
+                book_data_reshaped = book_data.reshape(
+                    (ind_length, -1)
+                )  # Reshape to (ind_length, columns)
                 book_dict[key] = book_data_reshaped
 
     return book_dict, ind_dict
@@ -1070,13 +1707,18 @@ def dict_fromfile(path: str, step: int, dtype: ValidDType) -> (BookDictType, Ind
 
 def do_compress_ad(folder_path: str) -> None:
     for filename in os.listdir(folder_path):
-        if filename.endswith('.i'):
-            key = np.int8(filename.split('.')[0])
+        if filename.endswith(".i"):
+            key = np.int8(filename.split(".")[0])
             if not os.path.exists(os.path.join(folder_path, f"{str(key)}.zi")):
-                ind_data = np.fromfile(os.path.join(folder_path, filename), dtype=np.uint64)
-                compress_uint64_array(ind_data, os.path.join(folder_path, f"{str(key)}"))
-            if (os.path.exists(os.path.join(folder_path, filename))
-                    and os.path.exists(os.path.join(folder_path, f"{str(key)}.zi"))):
+                ind_data = np.fromfile(
+                    os.path.join(folder_path, filename), dtype=np.uint64
+                )
+                compress_uint64_array(
+                    ind_data, os.path.join(folder_path, f"{str(key)}")
+                )
+            if os.path.exists(os.path.join(folder_path, filename)) and os.path.exists(
+                os.path.join(folder_path, f"{str(key)}.zi")
+            ):
                 os.remove(os.path.join(folder_path, filename))
 
 
@@ -1085,12 +1727,12 @@ def do_compress_ad(folder_path: str) -> None:
 
 @njit(nogil=True)
 def replace_val(encoded_board: np.uint64) -> Tuple[np.uint64, np.uint64]:
-    replace_value = np.uint64(0xf)
+    replace_value = np.uint64(0xF)
     for k in range(0, 64, 4):
-        encoded_num = (encoded_board >> np.uint64(k)) & np.uint64(0xf)
-        if encoded_num == np.uint64(0xf):
-            encoded_board &= ~(np.uint64(0xf) << np.uint64(k))  # 清除当前位置的值
-            encoded_board |= (replace_value << np.uint64(k))  # 设置新的值
+        encoded_num = (encoded_board >> np.uint64(k)) & np.uint64(0xF)
+        if encoded_num == np.uint64(0xF):
+            encoded_board &= ~(np.uint64(0xF) << np.uint64(k))  # 清除当前位置的值
+            encoded_board |= replace_value << np.uint64(k)  # 设置新的值
             replace_value -= np.uint64(1)
     return encoded_board, replace_value
 
@@ -1098,16 +1740,16 @@ def replace_val(encoded_board: np.uint64) -> Tuple[np.uint64, np.uint64]:
 @njit(nogil=True)
 def ind_match(encoded_board: np.uint64, replacement_value: np.uint64) -> np.uint64:
     ind = np.uint64(0)
-    x = np.uint64(0xf) - replacement_value
+    x = np.uint64(0xF) - replacement_value
     for k in range(60, -4, -4):
-        encoded_num = (encoded_board >> np.uint64(k)) & np.uint64(0xf)
+        encoded_num = (encoded_board >> np.uint64(k)) & np.uint64(0xF)
         if encoded_num > replacement_value:
             ind *= x
-            ind += (encoded_num - replacement_value)
+            ind += encoded_num - replacement_value
     return ind
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     pass
     # from BoardMaskerAD import init_masker
     # _d1,_d2,param = init_masker(2, 10, np.array([0, 4, 16, 20], dtype=np.uint8))  # t
