@@ -346,6 +346,55 @@ PermutationSlot generate_permutations(int m, int n) {
     return resort_permutations(m, n, make_slot_from_rows(rows), true);
 }
 
+void build_permutation_subsets(PermutationSlot &slot) {
+    slot.first_subset_offsets.fill(0);
+    slot.first_subset_indices.clear();
+    slot.pair_subset_offsets.fill(0);
+    slot.pair_subset_indices.clear();
+
+    auto view = slot.view();
+    if (view.empty()) {
+        return;
+    }
+
+    std::array<uint32_t, 16> first_counts{};
+    std::array<uint32_t, 256> pair_counts{};
+
+    for (size_t row_index = 0; row_index < view.rows; ++row_index) {
+        const uint8_t *row = view.row(row_index);
+        ++first_counts[row[0]];
+        if (view.cols > 1) {
+            const size_t pair_code = (static_cast<size_t>(row[0]) << 4U) + row[1];
+            ++pair_counts[pair_code];
+        }
+    }
+
+    for (size_t i = 0; i < first_counts.size(); ++i) {
+        slot.first_subset_offsets[i + 1] = slot.first_subset_offsets[i] + first_counts[i];
+    }
+    slot.first_subset_indices.resize(view.rows);
+    auto first_write_offsets = slot.first_subset_offsets;
+    for (size_t row_index = 0; row_index < view.rows; ++row_index) {
+        const uint8_t *row = view.row(row_index);
+        slot.first_subset_indices[first_write_offsets[row[0]]++] = static_cast<uint32_t>(row_index);
+    }
+
+    if (view.cols <= 1) {
+        return;
+    }
+
+    for (size_t i = 0; i < pair_counts.size(); ++i) {
+        slot.pair_subset_offsets[i + 1] = slot.pair_subset_offsets[i] + pair_counts[i];
+    }
+    slot.pair_subset_indices.resize(slot.pair_subset_offsets.back());
+    auto pair_write_offsets = slot.pair_subset_offsets;
+    for (size_t row_index = 0; row_index < view.rows; ++row_index) {
+        const uint8_t *row = view.row(row_index);
+        const size_t pair_code = (static_cast<size_t>(row[0]) << 4U) + row[1];
+        slot.pair_subset_indices[pair_write_offsets[pair_code]++] = static_cast<uint32_t>(row_index);
+    }
+}
+
 bool validate(uint64_t board, uint32_t original_board_sum, const TilesCombinationTable &tiles_combinations_table, const AdvancedMaskParam &param) {
     TileCountResult stats = tile_sum_and_32k_count2(board, param);
     if (stats.total_sum >= param.small_tile_sum_limit + 64U) {
@@ -382,16 +431,19 @@ bool validate(uint64_t board, uint32_t original_board_sum, const TilesCombinatio
     return true;
 }
 
-std::vector<uint64_t> unmask_board(
+void unmask_board_into(
     uint64_t board,
     uint32_t original_board_sum,
     const TilesCombinationTable &tiles_combinations_table,
     const PermutationTable &permutation_table,
-    const AdvancedMaskParam &param
+    const AdvancedMaskParam &param,
+    std::vector<uint64_t> &boards
 ) {
     TileCountResult stats = tile_sum_and_32k_count(board, param);
     if (stats.count_32k == 0 || stats.count_32k == static_cast<int8_t>(param.num_free_32k)) {
-        return {board};
+        boards.resize(1);
+        boards[0] = board;
+        return;
     }
     uint32_t large_tiles_sum = original_board_sum - stats.total_sum
         - (static_cast<uint32_t>(param.num_free_32k + param.num_fixed_32k) << 15U);
@@ -401,7 +453,8 @@ std::vector<uint64_t> unmask_board(
         static_cast<uint8_t>(stats.count_32k - static_cast<int8_t>(param.num_free_32k))
     );
     if (tiles_combinations.empty()) {
-        return {};
+        boards.clear();
+        return;
     }
 
     auto permutation_all = permutation_view(
@@ -410,12 +463,13 @@ std::vector<uint64_t> unmask_board(
         static_cast<uint8_t>(stats.count_32k - static_cast<int8_t>(param.num_free_32k))
     );
     if (permutation_all.empty()) {
-        return {};
+        boards.clear();
+        return;
     }
 
     std::vector<uint64_t> pos_32k = extract_f_positions(stats.pos_bitmap);
-    std::vector<uint64_t> boards;
     boards.reserve(permutation_all.rows);
+    boards.clear();
 
     for (size_t row_index = 0; row_index < permutation_all.rows; ++row_index) {
         const uint8_t *permutation = permutation_all.row(row_index);
@@ -434,6 +488,17 @@ std::vector<uint64_t> unmask_board(
         uint64_t masked = (board & ~clear_mask) | set_mask;
         boards.push_back(masked);
     }
+}
+
+std::vector<uint64_t> unmask_board(
+    uint64_t board,
+    uint32_t original_board_sum,
+    const TilesCombinationTable &tiles_combinations_table,
+    const PermutationTable &permutation_table,
+    const AdvancedMaskParam &param
+) {
+    std::vector<uint64_t> boards;
+    unmask_board_into(board, original_board_sum, tiles_combinations_table, permutation_table, param, boards);
     return boards;
 }
 
@@ -442,7 +507,9 @@ MaskerContext init_masker(const AdvancedPatternSpec &spec) {
     context.param = build_mask_param(spec);
     for (int n = 1; n < static_cast<int>(spec.target) - 4; ++n) {
         int m = n + static_cast<int>(spec.num_free_32k);
-        context.permutation_table[permutation_index(static_cast<uint8_t>(m), static_cast<uint8_t>(n))] = generate_permutations(m, n);
+        auto slot = generate_permutations(m, n);
+        build_permutation_subsets(slot);
+        context.permutation_table[permutation_index(static_cast<uint8_t>(m), static_cast<uint8_t>(n))] = std::move(slot);
     }
     for (int a = 1; a < 256; ++a) {
         for (int b = 1; b < 10; ++b) {

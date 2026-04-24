@@ -60,10 +60,25 @@ target_include_directories(common_config INTERFACE
 )
 
 if(MSVC)
-    target_compile_options(common_config INTERFACE /O2 /arch:AVX2 /openmp)
+    target_compile_options(common_config INTERFACE
+        /O2
+        /Ot
+        /GL
+        /fp:fast
+        /arch:AVX2
+        /openmp
+    )
 else()
     target_compile_options(common_config INTERFACE
-        -O3 -march=x86-64-v2 -ffast-math -fopenmp
+        -Ofast
+        -march=native
+        -mtune=native
+        -ffast-math
+        -fno-math-errno
+        -fno-trapping-math
+        -fomit-frame-pointer
+        -funroll-loops
+        -fopenmp
         -ffunction-sections -fdata-sections
     )
     target_link_options(common_config INTERFACE
@@ -160,10 +175,25 @@ set_target_properties(bookgen_native PROPERTIES
 )
 
 if(MSVC)
-    target_compile_options(bookgen_native PRIVATE /O2 /openmp)
+    target_compile_options(bookgen_native PRIVATE
+        /O2
+        /Ot
+        /GL
+        /fp:fast
+        /arch:AVX2
+        /openmp
+    )
 else()
     target_compile_options(bookgen_native PRIVATE
-        -O3 -march=x86-64-v2 -fopenmp
+        -Ofast
+        -march=native
+        -mtune=native
+        -ffast-math
+        -fno-math-errno
+        -fno-trapping-math
+        -fomit-frame-pointer
+        -funroll-loops
+        -fopenmp
         -ffunction-sections -fdata-sections
     )
     target_link_options(bookgen_native PRIVATE

@@ -85,6 +85,38 @@ struct MatchCache {
     }
 };
 
+enum class PendingRowKind : uint8_t {
+    DirectRanked,
+    FirstSubsetRanked,
+    PairSubsetRanked
+};
+
+template <typename T> struct PendingRowOp {
+    PendingRowKind kind = PendingRowKind::DirectRanked;
+    const T *row_ptr = nullptr;
+    const uint32_t *ranked_ptr = nullptr;
+    const uint32_t *subset_ptr = nullptr;
+    size_t len = 0;
+};
+
+template <typename T> struct AdSolveWorkspace {
+    std::vector<uint64_t> derived_boards;
+    std::vector<uint64_t> moved_boards;
+    std::vector<uint64_t> matched_boards;
+    std::vector<uint64_t> positions;
+    std::vector<size_t> matched_positions;
+    std::vector<uint32_t> sorted_indices;
+    std::vector<uint32_t> ranked_array;
+    std::vector<T> optimal_values;
+    std::vector<T> temp_values;
+    std::vector<double> success_probability;
+    std::vector<uint64_t> kept_indices;
+    std::vector<T> kept_values;
+    std::array<PendingRowOp<T>, 4> pending_ops{};
+    size_t pending_op_count = 0;
+    std::array<std::vector<uint32_t>, 4> pending_ranked_storage{};
+};
+
 constexpr size_t kNotFoundIndex = std::numeric_limits<size_t>::max();
 constexpr uint64_t kEmptyMatchIndex = 0xFFFFFFFFFFFFFFFFULL;
 constexpr std::array<uint8_t, 16> kPosRev = {0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15};
@@ -92,6 +124,25 @@ constexpr std::array<uint32_t, 19> kFactorials = {
     1U, 1U, 2U, 6U, 24U, 120U, 720U, 5040U, 40320U, 362880U,
     3628800U, 39916800U, 1U, 1U, 1U, 1U, 1U, 1U, 1U
 };
+
+inline void prefetch_read_low_locality(const void *ptr) {
+#if defined(__GNUC__) || defined(__clang__)
+    __builtin_prefetch(ptr, 0, 1);
+#else
+    (void)ptr;
+#endif
+}
+
+void extract_f_positions_into(uint64_t pos_bitmap, std::vector<uint64_t> &result) {
+    result.clear();
+    result.reserve(16);
+    for (int i = 60; i >= 0; i -= 4) {
+        uint64_t nibble = (pos_bitmap >> static_cast<uint64_t>(i)) & 0xFULL;
+        if (nibble == 0xFULL) {
+            result.push_back(static_cast<uint64_t>(i));
+        }
+    }
+}
 
 double wall_time_seconds() {
     return omp_get_wtime();
@@ -154,6 +205,16 @@ uint64_t apply_sym_like(uint64_t board, int symm_index) {
         case 0:
         default:
             return board;
+    }
+}
+
+template <typename Transform>
+inline void sym_arr_like_transform(std::vector<uint64_t> &boards, Transform transform) {
+    uint64_t *data = boards.data();
+    const ptrdiff_t count = static_cast<ptrdiff_t>(boards.size());
+    #pragma omp simd
+    for (ptrdiff_t i = 0; i < count; ++i) {
+        data[i] = transform(data[i]);
     }
 }
 
@@ -456,15 +517,22 @@ template <typename T> std::pair<size_t, T> length_count(const BookStore<T> &book
 }
 
 template <typename T>
-void remove_died_ad(BookStore<T> &book_dict, IndexStore &ind_dict, T deletion_threshold) {
+void remove_died_ad(
+    BookStore<T> &book_dict,
+    IndexStore &ind_dict,
+    T deletion_threshold,
+    AdSolveWorkspace<T> &workspace
+) {
     for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
         auto &indices = ind_dict.at(key);
         auto &bucket = book_dict.at(key);
         if (indices.empty() || bucket.rows == 0 || bucket.cols == 0) {
             continue;
         }
-        std::vector<uint64_t> kept_indices;
-        std::vector<T> kept_values;
+        auto &kept_indices = workspace.kept_indices;
+        auto &kept_values = workspace.kept_values;
+        kept_indices.clear();
+        kept_values.clear();
         kept_indices.reserve(indices.size());
         kept_values.reserve(bucket.data.size());
         for (size_t row = 0; row < bucket.rows; ++row) {
@@ -525,25 +593,47 @@ std::vector<uint64_t> reverse_arr(const std::vector<uint64_t> &boards) {
     return result;
 }
 
-std::vector<uint64_t> move_arr(const std::vector<uint64_t> &boards, int direction) {
-    std::vector<uint64_t> result(boards.size());
+void move_arr_into(const std::vector<uint64_t> &boards, int direction, std::vector<uint64_t> &result) {
+    result.resize(boards.size());
     for (size_t i = 0; i < boards.size(); ++i) {
         result[i] = BoardMover::move_board(boards[i], direction);
     }
-    return result;
 }
 
 void sym_arr_like(std::vector<uint64_t> &boards, int symm_index) {
-    if (symm_index == 0) {
+    if (symm_index == 0 || boards.empty()) {
         return;
     }
-    for (uint64_t &board : boards) {
-        board = apply_sym_like(board, symm_index);
+    switch (symm_index) {
+        case 1:
+            sym_arr_like_transform(boards, [](uint64_t board) { return Calculator::ReverseLR(board); });
+            return;
+        case 2:
+            sym_arr_like_transform(boards, [](uint64_t board) { return Calculator::ReverseUD(board); });
+            return;
+        case 3:
+            sym_arr_like_transform(boards, [](uint64_t board) { return Calculator::ReverseUL(board); });
+            return;
+        case 4:
+            sym_arr_like_transform(boards, [](uint64_t board) { return Calculator::ReverseUR(board); });
+            return;
+        case 5:
+            sym_arr_like_transform(boards, [](uint64_t board) { return Calculator::Rotate180(board); });
+            return;
+        case 6:
+            sym_arr_like_transform(boards, [](uint64_t board) { return Calculator::RotateL(board); });
+            return;
+        case 7:
+            sym_arr_like_transform(boards, [](uint64_t board) { return Calculator::RotateR(board); });
+            return;
+        default:
+            return;
     }
 }
 
-std::vector<uint32_t> match_arr(const std::vector<uint64_t> &boards) {
-    std::vector<uint32_t> sorted_indices(boards.size());
+void match_arr_into(const std::vector<uint64_t> &boards, AdSolveWorkspace<uint32_t> &workspace, std::vector<uint32_t> &ranked) {
+    auto &sorted_indices = workspace.sorted_indices;
+    sorted_indices.resize(boards.size());
     for (size_t i = 0; i < boards.size(); ++i) {
         sorted_indices[i] = static_cast<uint32_t>(i);
     }
@@ -557,19 +647,32 @@ std::vector<uint32_t> match_arr(const std::vector<uint64_t> &boards) {
             return boards[lhs] < boards[rhs];
         }
     );
-    std::vector<uint32_t> ranked(boards.size());
+    ranked.resize(boards.size());
     for (size_t i = 0; i < sorted_indices.size(); ++i) {
         ranked[sorted_indices[i]] = static_cast<uint32_t>(i);
     }
-    return ranked;
 }
 
 template <typename T>
-void arr_max_subset(std::vector<T> &osr, const std::vector<size_t> &positions, const std::vector<T> &values) {
-    for (size_t i = 0; i < positions.size(); ++i) {
-        if (values[i] > osr[positions[i]]) {
-            osr[positions[i]] = values[i];
+void match_arr_into(const std::vector<uint64_t> &boards, AdSolveWorkspace<T> &workspace, std::vector<uint32_t> &ranked) {
+    auto &sorted_indices = workspace.sorted_indices;
+    sorted_indices.resize(boards.size());
+    for (size_t i = 0; i < boards.size(); ++i) {
+        sorted_indices[i] = static_cast<uint32_t>(i);
+    }
+    std::sort(
+        sorted_indices.begin(),
+        sorted_indices.end(),
+        [&boards](uint32_t lhs, uint32_t rhs) {
+            if (boards[lhs] == boards[rhs]) {
+                return lhs < rhs;
+            }
+            return boards[lhs] < boards[rhs];
         }
+    );
+    ranked.resize(boards.size());
+    for (size_t i = 0; i < sorted_indices.size(); ++i) {
+        ranked[sorted_indices[i]] = static_cast<uint32_t>(i);
     }
 }
 
@@ -582,21 +685,22 @@ struct DispatchResult {
     int8_t count32k = 0;
 };
 
-std::vector<uint64_t> process_derived(
+void process_derived_into(
     uint64_t board_after_spawn,
     uint32_t board_sum_after_spawn,
     int direction,
     int symm_index,
     const FormationAD::TilesCombinationTable &tiles_table,
     const FormationAD::PermutationTable &permutation_table,
-    const AdvancedMaskParam &param
+    const AdvancedMaskParam &param,
+    std::vector<uint64_t> &out,
+    std::vector<uint64_t> &scratch
 ) {
-    std::vector<uint64_t> derived = FormationAD::unmask_board(
-        board_after_spawn, board_sum_after_spawn, tiles_table, permutation_table, param
+    FormationAD::unmask_board_into(
+        board_after_spawn, board_sum_after_spawn, tiles_table, permutation_table, param, scratch
     );
-    std::vector<uint64_t> moved = move_arr(derived, direction + 1);
-    sym_arr_like(moved, symm_index);
-    return moved;
+    move_arr_into(scratch, direction + 1, out);
+    sym_arr_like(out, symm_index);
 }
 
 template <typename T>
@@ -705,25 +809,19 @@ void update_mnt_osr_ad_arr2(
     if (mid == kNotFoundIndex) {
         return;
     }
-    auto permutations = FormationAD::permutation_view(
+    auto subset = FormationAD::permutation_first_subset(
         permutation_table,
         static_cast<uint8_t>(count_32k),
-        static_cast<uint8_t>(count_32k - static_cast<int8_t>(param.num_free_32k))
+        static_cast<uint8_t>(count_32k - static_cast<int8_t>(param.num_free_32k)),
+        pos_rank
     );
     const T *row = book_dict.at(count_32k).row(mid);
-    std::vector<T> filtered;
-    filtered.reserve(ranked_array.size);
-    for (size_t perm_index = 0; perm_index < permutations.rows; ++perm_index) {
-        if (permutations.at(perm_index, 0) == pos_rank) {
-            filtered.push_back(row[perm_index]);
-        }
-    }
-    if (filtered.size() < ranked_array.size) {
+    if (subset.size < ranked_array.size) {
         // TODO(ad-parity): verify whether any real pattern can violate the expected permutation filter cardinality.
         return;
     }
     for (size_t i = 0; i < ranked_array.size; ++i) {
-        T value = filtered[ranked_array[i]];
+        T value = row[subset[ranked_array[i]]];
         if (value > osr[i]) {
             osr[i] = value;
         }
@@ -743,9 +841,11 @@ void update_mnt_osr_ad_arr1(
     uint8_t pos_rank,
     uint64_t pos_32k,
     uint8_t tile_value,
-    int8_t count_32k
+    int8_t count_32k,
+    AdSolveWorkspace<T> &workspace
 ) {
-    std::vector<uint64_t> positions = FormationAD::extract_f_positions(pos_32k);
+    extract_f_positions_into(pos_32k, workspace.positions);
+    const auto &positions = workspace.positions;
     for (int j = 0; j < count_32k; ++j) {
         if (j == static_cast<int>(pos_rank)) {
             continue;
@@ -760,8 +860,10 @@ void update_mnt_osr_ad_arr1(
             continue;
         }
 
-        std::vector<size_t> matched_positions;
-        std::vector<uint64_t> matched_boards;
+        auto &matched_positions = workspace.matched_positions;
+        auto &matched_boards = workspace.matched_boards;
+        matched_positions.clear();
+        matched_boards.clear();
         matched_positions.reserve(board_derived.size());
         matched_boards.reserve(board_derived.size());
         for (size_t index = 0; index < board_derived.size(); ++index) {
@@ -774,13 +876,16 @@ void update_mnt_osr_ad_arr1(
             continue;
         }
         sym_arr_like(matched_boards, symm_index);
-        std::vector<uint32_t> ranked_array = match_arr(matched_boards);
+        auto &ranked_array = workspace.ranked_array;
+        match_arr_into(matched_boards, workspace, ranked_array);
         const T *row = book_dict.at(bucket_key).row(mid);
-        std::vector<T> matched_values(ranked_array.size());
         for (size_t index = 0; index < ranked_array.size(); ++index) {
-            matched_values[index] = row[ranked_array[index]];
+            T value = row[ranked_array[index]];
+            size_t position = matched_positions[index];
+            if (value > osr[position]) {
+                osr[position] = value;
+            }
         }
-        arr_max_subset(osr, matched_positions, matched_values);
     }
 }
 
@@ -852,25 +957,20 @@ void update_mnt_osr_364_arr_ad(
     if (mid == kNotFoundIndex) {
         return;
     }
-    auto permutations = FormationAD::permutation_view(
+    auto subset = FormationAD::permutation_pair_subset(
         permutation_table,
         static_cast<uint8_t>(pos_rank),
-        static_cast<uint8_t>(pos_rank - static_cast<int8_t>(param.num_free_32k))
+        static_cast<uint8_t>(pos_rank - static_cast<int8_t>(param.num_free_32k)),
+        pos_rank64,
+        pos_rank128
     );
     const T *row = book_dict.at(pos_rank).row(mid);
-    std::vector<T> filtered;
-    filtered.reserve(ranked_array.size);
-    for (size_t perm_index = 0; perm_index < permutations.rows; ++perm_index) {
-        if (permutations.at(perm_index, 0) == pos_rank64 && permutations.at(perm_index, 1) == pos_rank128) {
-            filtered.push_back(row[perm_index]);
-        }
-    }
-    if (filtered.size() < ranked_array.size) {
+    if (subset.size < ranked_array.size) {
         // TODO(ad-parity): verify whether any real pattern can violate the expected 3x64 permutation filter cardinality.
         return;
     }
     for (size_t i = 0; i < ranked_array.size; ++i) {
-        T value = filtered[ranked_array[i]];
+        T value = row[subset[ranked_array[i]]];
         if (value > osr[i]) {
             osr[i] = value;
         }
@@ -935,7 +1035,7 @@ T update_mnt_osr_ad(
 }
 
 template <typename T>
-std::vector<T> solve_optimal_success_rate_arr(
+void solve_optimal_success_rate_arr_into(
     uint64_t board,
     uint64_t new_value,
     int spawn_pos,
@@ -957,12 +1057,15 @@ std::vector<T> solve_optimal_success_rate_arr(
     const FormationAD::PermutationTable &permutation_table,
     const AdvancedMaskParam &param,
     T zero_val,
-    T max_scale
+    T max_scale,
+    AdSolveWorkspace<T> &workspace,
+    std::vector<T> &optimal_success_rate
 ) {
     uint64_t board_with_spawn = board | (new_value << static_cast<uint64_t>(4 * spawn_pos));
     uint64_t rep_t_gen = rep_t | (new_value << static_cast<uint64_t>(4 * spawn_pos));
     uint64_t board_rev = FormationAD::reverse(board_with_spawn);
-    std::vector<T> optimal_success_rate(derive_size, zero_val);
+    optimal_success_rate.assign(derive_size, zero_val);
+    workspace.pending_op_count = 0;
     auto moves = FormationAD::m_move_all_dir2(board_with_spawn, board_rev);
     (void)rep_t_rev;
 
@@ -978,38 +1081,73 @@ std::vector<T> solve_optimal_success_rate_arr(
         uint64_t match_ind = ind_match(rep_t_gen_m, rep_v);
         size_t hashed_match_ind = static_cast<size_t>(match_ind % static_cast<uint64_t>(match_cache.map_length));
 
-        std::vector<uint32_t> ranked_array_owned;
         auto load_or_compute_ranked = [&](bool store_if_empty) -> ArrayView<const uint32_t> {
             if (match_cache.match_index[hashed_match_ind] == match_ind) {
                 return {match_cache.row(hashed_match_ind), derive_size};
             }
-            std::vector<uint64_t> new_derived = process_derived(
-                board_with_spawn, board_sum_after_spawn, direction, symm_index, tiles_table, permutation_table, param
+            process_derived_into(
+                board_with_spawn,
+                board_sum_after_spawn,
+                direction,
+                symm_index,
+                tiles_table,
+                permutation_table,
+                param,
+                workspace.moved_boards,
+                workspace.derived_boards
             );
-            ranked_array_owned = match_arr(new_derived);
+            match_arr_into(workspace.moved_boards, workspace, workspace.ranked_array);
             if (store_if_empty && match_cache.match_index[hashed_match_ind] == kEmptyMatchIndex) {
                 match_cache.match_index[hashed_match_ind] = match_ind;
-                std::copy(ranked_array_owned.begin(), ranked_array_owned.end(), match_cache.row(hashed_match_ind));
+                std::copy(workspace.ranked_array.begin(), workspace.ranked_array.end(), match_cache.row(hashed_match_ind));
             }
-            return {ranked_array_owned.data(), ranked_array_owned.size()};
+            return {workspace.ranked_array.data(), workspace.ranked_array.size()};
+        };
+
+        auto pin_ranked_array = [&](size_t slot_index, ArrayView<const uint32_t> ranked_array) -> const uint32_t * {
+            if (match_cache.match_index[hashed_match_ind] == match_ind) {
+                return match_cache.row(hashed_match_ind);
+            }
+            auto &storage = workspace.pending_ranked_storage[slot_index];
+            storage.assign(ranked_array.begin(), ranked_array.end());
+            return storage.data();
+        };
+
+        auto enqueue_pending = [&](PendingRowKind kind, const T *row_ptr, const uint32_t *ranked_ptr, const uint32_t *subset_ptr, size_t len) {
+            const size_t slot_index = workspace.pending_op_count++;
+            workspace.pending_ops[slot_index] = {kind, row_ptr, ranked_ptr, subset_ptr, len};
         };
 
         if (mask_new_tile) {
             uint64_t unmasked_newt = BoardMover::move_board(board_with_spawn, direction + 1);
             unmasked_newt = apply_sym_like(unmasked_newt, symm_index);
             if (count_32k > 15) {
+                auto [pos_rank64, pos_rank128, pos_rank, pos_64] = find_3x64_pos(unmasked_newt, param);
+                uint64_t board_364 = canonical_board | (0xFULL << pos_64);
+                size_t mid = search_arr_ad(ind_dict.at(pos_rank), board_364, indind_dict.at(pos_rank));
+                if (mid == kNotFoundIndex) {
+                    continue;
+                }
+                const T *row_ptr = book_dict.at(pos_rank).row(mid);
+                prefetch_read_low_locality(row_ptr);
                 ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
-                update_mnt_osr_364_arr_ad(
-                    book_dict,
-                    canonical_board,
-                    unmasked_newt,
-                    ind_dict,
-                    indind_dict,
-                    optimal_success_rate,
-                    ranked_array,
+                auto subset = FormationAD::permutation_pair_subset(
                     permutation_table,
-                    param
+                    static_cast<uint8_t>(pos_rank),
+                    static_cast<uint8_t>(pos_rank - static_cast<int8_t>(param.num_free_32k)),
+                    pos_rank64,
+                    pos_rank128
                 );
+                if (subset.size < ranked_array.size) {
+                    continue;
+                }
+                const size_t slot_index = workspace.pending_op_count;
+                const uint32_t *ranked_ptr = pin_ranked_array(slot_index, ranked_array);
+                prefetch_read_low_locality(subset.data);
+                if (ranked_array.size > 0) {
+                    prefetch_read_low_locality(row_ptr + subset[ranked_ptr[0]]);
+                }
+                enqueue_pending(PendingRowKind::PairSubsetRanked, row_ptr, ranked_ptr, subset.data, ranked_array.size);
                 continue;
             }
 
@@ -1024,59 +1162,115 @@ std::vector<T> solve_optimal_success_rate_arr(
                 dispatch.tiles_combinations[0] == dispatch.tiles_combinations[1] &&
                 dispatch.tiles_combinations[0] == dispatch.tiles_combinations[2]
             ) {
+                const int target_count = static_cast<int>(dispatch.count32k - 3 + 16);
+                size_t mid = search_arr_ad(ind_dict.at(target_count), unmasked_newt, indind_dict.at(target_count));
+                if (mid == kNotFoundIndex) {
+                    continue;
+                }
+                const T *row_ptr = book_dict.at(target_count).row(mid);
+                prefetch_read_low_locality(row_ptr);
                 ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
-                update_mnt_osr_ad_arr3(
-                    book_dict,
-                    unmasked_newt,
-                    dispatch.count32k,
-                    ind_dict,
-                    indind_dict,
-                    ranked_array,
-                    optimal_success_rate
-                );
+                const size_t slot_index = workspace.pending_op_count;
+                const uint32_t *ranked_ptr = pin_ranked_array(slot_index, ranked_array);
+                if (ranked_array.size > 0) {
+                    prefetch_read_low_locality(row_ptr + ranked_ptr[0]);
+                }
+                enqueue_pending(PendingRowKind::DirectRanked, row_ptr, ranked_ptr, nullptr, ranked_array.size);
             } else if (
                 dispatch.tiles_combinations.size > 1 &&
                 dispatch.tiles_combinations[0] == dispatch.tiles_combinations[1]
             ) {
-                std::vector<uint64_t> new_derived = process_derived(
-                    board_with_spawn, board_sum_after_spawn, direction, symm_index, tiles_table, permutation_table, param
+                process_derived_into(
+                    board_with_spawn,
+                    board_sum_after_spawn,
+                    direction,
+                    symm_index,
+                    tiles_table,
+                    permutation_table,
+                    param,
+                    workspace.moved_boards,
+                    workspace.derived_boards
                 );
                 update_mnt_osr_ad_arr1(
                     book_dict,
                     unmasked_newt,
                     ind_dict,
                     indind_dict,
-                    new_derived,
+                    workspace.moved_boards,
                     optimal_success_rate,
                     spec,
                     dispatch.tiles_combinations,
                     dispatch.pos_rank,
                     dispatch.pos_32k,
                     dispatch.tile_value,
-                    dispatch.count32k
+                    dispatch.count32k,
+                    workspace
                 );
             } else {
+                size_t mid = search_arr_ad(ind_dict.at(dispatch.count32k), canonical_board, indind_dict.at(dispatch.count32k));
+                if (mid == kNotFoundIndex) {
+                    continue;
+                }
+                const T *row_ptr = book_dict.at(dispatch.count32k).row(mid);
+                prefetch_read_low_locality(row_ptr);
                 ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
-                update_mnt_osr_ad_arr2(
-                    book_dict,
-                    canonical_board,
-                    dispatch.pos_rank,
-                    dispatch.count32k,
-                    ind_dict,
-                    indind_dict,
-                    ranked_array,
-                    optimal_success_rate,
+                auto subset = FormationAD::permutation_first_subset(
                     permutation_table,
-                    param
+                    static_cast<uint8_t>(dispatch.count32k),
+                    static_cast<uint8_t>(dispatch.count32k - static_cast<int8_t>(param.num_free_32k)),
+                    dispatch.pos_rank
                 );
+                if (subset.size < ranked_array.size) {
+                    continue;
+                }
+                const size_t slot_index = workspace.pending_op_count;
+                const uint32_t *ranked_ptr = pin_ranked_array(slot_index, ranked_array);
+                prefetch_read_low_locality(subset.data);
+                if (ranked_array.size > 0) {
+                    prefetch_read_low_locality(row_ptr + subset[ranked_ptr[0]]);
+                }
+                enqueue_pending(PendingRowKind::FirstSubsetRanked, row_ptr, ranked_ptr, subset.data, ranked_array.size);
             }
             continue;
         }
 
+        size_t mid = search_arr_ad(ind_arr, canonical_board, indind_arr);
+        if (mid == kNotFoundIndex) {
+            continue;
+        }
+        const T *row_ptr = book_bucket.row(mid);
+        prefetch_read_low_locality(row_ptr);
         ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
-        update_osr_ad_arr(book_bucket, canonical_board, ind_arr, indind_arr, optimal_success_rate, ranked_array);
+        const size_t slot_index = workspace.pending_op_count;
+        const uint32_t *ranked_ptr = pin_ranked_array(slot_index, ranked_array);
+        if (ranked_array.size > 0) {
+            prefetch_read_low_locality(row_ptr + ranked_ptr[0]);
+        }
+        enqueue_pending(PendingRowKind::DirectRanked, row_ptr, ranked_ptr, nullptr, ranked_array.size);
     }
-    return optimal_success_rate;
+
+    for (size_t op_index = 0; op_index < workspace.pending_op_count; ++op_index) {
+        const PendingRowOp<T> &op = workspace.pending_ops[op_index];
+        switch (op.kind) {
+            case PendingRowKind::DirectRanked:
+                for (size_t i = 0; i < op.len; ++i) {
+                    T value = op.row_ptr[op.ranked_ptr[i]];
+                    if (value > optimal_success_rate[i]) {
+                        optimal_success_rate[i] = value;
+                    }
+                }
+                break;
+            case PendingRowKind::FirstSubsetRanked:
+            case PendingRowKind::PairSubsetRanked:
+                for (size_t i = 0; i < op.len; ++i) {
+                    T value = op.row_ptr[op.subset_ptr[op.ranked_ptr[i]]];
+                    if (value > optimal_success_rate[i]) {
+                        optimal_success_rate[i] = value;
+                    }
+                }
+                break;
+        }
+    }
 }
 
 template <typename T>
@@ -1251,6 +1445,7 @@ void recalculate_ad(
         const size_t derive_size = book_bucket0.cols;
         const size_t map_length = derive_size < 5000U ? 33331U : 11113U;
         std::vector<MatchCache> thread_caches(static_cast<size_t>(num_threads), MatchCache(map_length, derive_size));
+        std::vector<AdSolveWorkspace<T>> thread_workspaces(static_cast<size_t>(num_threads));
         const auto &book_bucket1 = book_dict1.at(key);
         const auto &ind_arr1 = ind_dict1.at(key);
         const auto &indind_arr1 = indind_dict1.at(key);
@@ -1269,7 +1464,9 @@ void recalculate_ad(
             size_t end = chunk == chunk_count - 1 ? indices.size() : chunk_size * static_cast<size_t>(chunk + 1);
             #pragma omp parallel for num_threads(num_threads)
             for (int64_t k = static_cast<int64_t>(start); k < static_cast<int64_t>(end); ++k) {
-                MatchCache &match_cache = thread_caches[static_cast<size_t>(omp_get_thread_num())];
+                const size_t thread_index = static_cast<size_t>(omp_get_thread_num());
+                MatchCache &match_cache = thread_caches[thread_index];
+                AdSolveWorkspace<T> &workspace = thread_workspaces[thread_index];
                 uint64_t board = indices[static_cast<size_t>(k)];
                 if (derive_size == 1U) {
                     double success_probability = 0.0;
@@ -1327,14 +1524,15 @@ void recalculate_ad(
 
                 auto [rep_t, rep_v] = replace_val(board);
                 uint64_t rep_t_rev = FormationAD::reverse(rep_t);
-                std::vector<double> success_probability(derive_size, 0.0);
+                auto &success_probability = workspace.success_probability;
+                success_probability.assign(derive_size, 0.0);
                 int empty_slots = 0;
                 for (int pos = 0; pos < 16; ++pos) {
                     if (((board >> static_cast<uint64_t>(4 * pos)) & 0xFULL) != 0ULL) {
                         continue;
                     }
                     ++empty_slots;
-                    std::vector<T> optimal2 = solve_optimal_success_rate_arr(
+                    solve_optimal_success_rate_arr_into(
                         board,
                         1ULL,
                         pos,
@@ -1356,13 +1554,15 @@ void recalculate_ad(
                         permutation_table,
                         param,
                         zero_val,
-                        max_scale
+                        max_scale,
+                        workspace,
+                        workspace.optimal_values
                     );
                     for (size_t idx = 0; idx < derive_size; ++idx) {
-                        success_probability[idx] += static_cast<double>(optimal2[idx]) * (1.0 - spawn_rate4);
+                        success_probability[idx] += static_cast<double>(workspace.optimal_values[idx]) * (1.0 - spawn_rate4);
                     }
 
-                    std::vector<T> optimal4 = solve_optimal_success_rate_arr(
+                    solve_optimal_success_rate_arr_into(
                         board,
                         2ULL,
                         pos,
@@ -1384,10 +1584,12 @@ void recalculate_ad(
                         permutation_table,
                         param,
                         zero_val,
-                        max_scale
+                        max_scale,
+                        workspace,
+                        workspace.temp_values
                     );
                     for (size_t idx = 0; idx < derive_size; ++idx) {
-                        success_probability[idx] += static_cast<double>(optimal4[idx]) * spawn_rate4;
+                        success_probability[idx] += static_cast<double>(workspace.temp_values[idx]) * spawn_rate4;
                     }
                 }
                 T *dst = book_bucket0.row(static_cast<size_t>(k));
@@ -1449,6 +1651,7 @@ void recalculate_ad_chunk(
         return;
     }
     auto &thread_caches = get_chunk_match_caches<T>(match_dict, derive_size, num_threads);
+    std::vector<AdSolveWorkspace<T>> thread_workspaces(static_cast<size_t>(num_threads));
 
     const uint64_t new_value = is_gen2_step ? 1ULL : 2ULL;
     const double probability = is_gen2_step ? (1.0 - spawn_rate4) : spawn_rate4;
@@ -1471,7 +1674,9 @@ void recalculate_ad_chunk(
         size_t end = chunk == chunk_count - 1 ? positions_chunk.size() : chunk_size * static_cast<size_t>(chunk + 1);
         #pragma omp parallel for num_threads(num_threads)
         for (int64_t row_index = static_cast<int64_t>(start); row_index < static_cast<int64_t>(end); ++row_index) {
-            MatchCache &match_cache = thread_caches[static_cast<size_t>(omp_get_thread_num())];
+            const size_t thread_index = static_cast<size_t>(omp_get_thread_num());
+            MatchCache &match_cache = thread_caches[thread_index];
+            AdSolveWorkspace<T> &workspace = thread_workspaces[thread_index];
             const uint64_t board = positions_chunk[static_cast<size_t>(row_index)];
             if (derive_size == 1U) {
                 double success_probability = 0.0;
@@ -1517,14 +1722,15 @@ void recalculate_ad_chunk(
 
             auto [rep_t, rep_v] = replace_val(board);
             uint64_t rep_t_rev = FormationAD::reverse(rep_t);
-            std::vector<double> success_probability(derive_size, 0.0);
+            auto &success_probability = workspace.success_probability;
+            success_probability.assign(derive_size, 0.0);
             int empty_slots = 0;
             for (int pos = 0; pos < 16; ++pos) {
                 if (((board >> static_cast<uint64_t>(4 * pos)) & 0xFULL) != 0ULL) {
                     continue;
                 }
                 ++empty_slots;
-                std::vector<T> optimal = solve_optimal_success_rate_arr(
+                solve_optimal_success_rate_arr_into(
                     board,
                     new_value,
                     pos,
@@ -1546,10 +1752,12 @@ void recalculate_ad_chunk(
                     permutation_table,
                     param,
                     zero_val,
-                    max_scale
+                    max_scale,
+                    workspace,
+                    workspace.optimal_values
                 );
                 for (size_t idx = 0; idx < derive_size; ++idx) {
-                    success_probability[idx] += static_cast<double>(optimal[idx]);
+                    success_probability[idx] += static_cast<double>(workspace.optimal_values[idx]);
                 }
             }
             T *dst = book_chunk.row(static_cast<size_t>(row_index));
@@ -1815,7 +2023,8 @@ void recalculate_process_ad_chunked_impl(
             started = true;
             if (step != options.steps - 3 || !started_from_generate) {
                 dict_fromfile(options, step + 2, book_dict2, ind_dict2);
-                remove_died_ad(book_dict2, ind_dict2, zero_val);
+        AdSolveWorkspace<T> remove_workspace;
+        remove_died_ad(book_dict2, ind_dict2, zero_val, remove_workspace);
             }
         }
 
@@ -1878,12 +2087,14 @@ void recalculate_process_ad_chunked_impl(
         );
 
         if (options.deletion_threshold > 0.0) {
-            remove_died_ad(book_dict2, ind_dict2, deletion_threshold);
+            AdSolveWorkspace<T> remove_workspace2;
+            remove_died_ad(book_dict2, ind_dict2, deletion_threshold, remove_workspace2);
         }
         dict_tofile(book_dict2, ind_dict2, options, step + 2, true);
 
         dict_fromfile(options, step + 1, book_dict1, ind_dict1);
-        remove_died_ad(book_dict1, ind_dict1, zero_val);
+        AdSolveWorkspace<T> remove_workspace1;
+        remove_died_ad(book_dict1, ind_dict1, zero_val, remove_workspace1);
         indind_dict1 = create_index_ad(ind_dict1, num_threads);
 
         iter_ind_dict2(
@@ -2054,9 +2265,11 @@ void recalculate_process_ad_impl(
         double t2 = wall_time_seconds();
 
         if (options.deletion_threshold > 0.0) {
-            remove_died_ad(book_dict2, ind_dict2, deletion_threshold);
+            AdSolveWorkspace<T> remove_workspace2;
+            remove_died_ad(book_dict2, ind_dict2, deletion_threshold, remove_workspace2);
         }
-        remove_died_ad(book_dict0, ind_dict0, zero_val);
+        AdSolveWorkspace<T> remove_workspace0;
+        remove_died_ad(book_dict0, ind_dict0, zero_val, remove_workspace0);
         double t3 = wall_time_seconds();
         log_recalculate_performance(step, t0, t1, t2, t3, length);
 

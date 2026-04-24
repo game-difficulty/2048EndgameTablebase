@@ -103,6 +103,8 @@ ProfiledBuild build_experimental_parallel_l1_delayed_l3_profiled(const uint64_t 
 ProfiledBuild build_experimental_parallel_l1_delayed_l3_profiled(const std::vector<uint64_t> &keys, const Config &config = {});
 ProfiledBuild build_experimental_hybrid_profiled(const uint64_t *keys, uint64_t size, const Config &config = {});
 ProfiledBuild build_experimental_hybrid_profiled(const std::vector<uint64_t> &keys, const Config &config = {});
+ProfiledBuild build_experimental_hybrid_legacy_profiled(const uint64_t *keys, uint64_t size, const Config &config = {});
+ProfiledBuild build_experimental_hybrid_legacy_profiled(const std::vector<uint64_t> &keys, const Config &config = {});
 Range locate(const Index &index, uint64_t key);
 
 } // namespace AdaptiveIndex

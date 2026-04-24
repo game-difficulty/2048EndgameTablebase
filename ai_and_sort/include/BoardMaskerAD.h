@@ -22,6 +22,10 @@ struct PermutationSlot {
     std::vector<uint8_t> data;
     size_t rows = 0;
     size_t cols = 0;
+    std::array<uint32_t, 17> first_subset_offsets{};
+    std::vector<uint32_t> first_subset_indices;
+    std::array<uint32_t, 257> pair_subset_offsets{};
+    std::vector<uint32_t> pair_subset_indices;
 
     [[nodiscard]] bool empty() const {
         return data.empty() || rows == 0 || cols == 0;
@@ -89,10 +93,19 @@ std::vector<uint64_t> unmask_board(
     const PermutationTable &permutation_table,
     const AdvancedMaskParam &param
 );
+void unmask_board_into(
+    uint64_t board,
+    uint32_t original_board_sum,
+    const TilesCombinationTable &tiles_combinations_table,
+    const PermutationTable &permutation_table,
+    const AdvancedMaskParam &param,
+    std::vector<uint64_t> &boards
+);
 
 std::vector<uint64_t> extract_f_positions(uint64_t pos_bitmap);
 PermutationSlot generate_permutations(int m, int n);
 PermutationSlot resort_permutations(int m, int n, const PermutationSlot &permutation, bool type_flag);
+void build_permutation_subsets(PermutationSlot &slot);
 
 const std::array<InfoEntry, 65536> &info_table1();
 const std::array<InfoEntry, 65536> &info_table2();
@@ -107,6 +120,32 @@ inline size_t tiles_combination_index(uint8_t a, uint8_t b) {
 
 inline MatrixView<const uint8_t> permutation_view(const PermutationTable &table, uint8_t a, uint8_t b) {
     return table[permutation_index(a, b)].view();
+}
+
+inline ArrayView<const uint32_t> permutation_first_subset(
+    const PermutationTable &table,
+    uint8_t a,
+    uint8_t b,
+    uint8_t first
+) {
+    const auto &slot = table[permutation_index(a, b)];
+    const size_t begin = slot.first_subset_offsets[first];
+    const size_t end = slot.first_subset_offsets[static_cast<size_t>(first) + 1];
+    return {slot.first_subset_indices.data() + begin, end - begin};
+}
+
+inline ArrayView<const uint32_t> permutation_pair_subset(
+    const PermutationTable &table,
+    uint8_t a,
+    uint8_t b,
+    uint8_t first,
+    uint8_t second
+) {
+    const auto &slot = table[permutation_index(a, b)];
+    const size_t pair_code = (static_cast<size_t>(first) << 4U) + second;
+    const size_t begin = slot.pair_subset_offsets[pair_code];
+    const size_t end = slot.pair_subset_offsets[pair_code + 1];
+    return {slot.pair_subset_indices.data() + begin, end - begin};
 }
 
 inline ArrayView<const uint8_t> tiles_combination_view(const TilesCombinationTable &table, uint8_t a, uint8_t b) {

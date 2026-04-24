@@ -8,6 +8,7 @@
 #include <immintrin.h>
 #include <cpuid.h>
 
+#include <array>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -108,6 +109,41 @@ void log_performance(int step_index, double t0, double t1, double t2, double t3,
                  << round_to_2((t2 - t1) / total) << "/"
                  << round_to_2((t3 - t2) / total) << "\n";
     debug_log(phase_stream.str());
+}
+
+constexpr size_t kScalarBufferedBatchSize = 128;
+
+inline void process_buf_scalar(
+    const uint64_t *buf,
+    size_t active_count,
+    uint64_t *hmap,
+    uint64_t *target_arr,
+    size_t &counter,
+    uint64_t mask
+) {
+    std::array<uint64_t, kScalarBufferedBatchSize> hashed_idx{};
+    for (size_t i = 0; i < active_count; ++i) {
+        hashed_idx[i] = BookGeneratorUtils::hash_board(buf[i]) & mask;
+#if defined(__GNUC__) || defined(__clang__)
+        __builtin_prefetch(hmap + hashed_idx[i], 1, 1);
+#endif
+    }
+
+    for (size_t i = 0; i < active_count; ++i) {
+        const size_t prefetch_distance = 8;
+        if (i + prefetch_distance < active_count) {
+#if defined(__GNUC__) || defined(__clang__)
+            __builtin_prefetch(hmap + hashed_idx[i + prefetch_distance], 1, 1);
+#endif
+        }
+        const uint64_t board = buf[i];
+        const size_t hashed = static_cast<size_t>(hashed_idx[i]);
+        if (hmap[hashed] == board) {
+            continue;
+        }
+        hmap[hashed] = board;
+        target_arr[counter++] = board;
+    }
 }
 
 double solve_quadratic_and_predict(const std::vector<double> &y) {
@@ -432,6 +468,26 @@ GenBoardsResult gen_boards_internal_naive(
         int thread_index = omp_get_thread_num();
         size_t c1t = starts[thread_index];
         size_t c2t = starts[thread_index];
+        std::array<uint64_t, kScalarBufferedBatchSize> buffer1{};
+        std::array<uint64_t, kScalarBufferedBatchSize> buffer2{};
+        size_t b1_ptr = 0;
+        size_t b2_ptr = 0;
+
+        auto flush_buf1 = [&]() {
+            if (b1_ptr == 0) {
+                return;
+            }
+            process_buf_scalar(buffer1.data(), b1_ptr, hashmap1, arr1, c1t, hashmask1);
+            b1_ptr = 0;
+        };
+
+        auto flush_buf2 = [&]() {
+            if (b2_ptr == 0) {
+                return;
+            }
+            process_buf_scalar(buffer2.data(), b2_ptr, hashmap2, arr2, c2t, hashmask2);
+            b2_ptr = 0;
+        };
 
         for (size_t chunk = 0; chunk < chunks_count; ++chunk) {
             size_t chunk_start = chunk * chunk_size;
@@ -459,11 +515,9 @@ GenBoardsResult gen_boards_internal_naive(
                     uint64_t boards2[4] = {std::get<0>(moves2), std::get<1>(moves2), std::get<2>(moves2), std::get<3>(moves2)};
                     for (uint64_t new_board : boards2) {
                         if (new_board != spawn2 && is_pattern(new_board, spec.pattern_masks)) {
-                            new_board = apply_canonical(new_board, spec.symm_mode);
-                            size_t hashed = BookGeneratorUtils::hash_board(new_board) & hashmask1;
-                            if (hashmap1[hashed] != new_board) {
-                                hashmap1[hashed] = new_board;
-                                arr1[c1t++] = new_board;
+                            buffer1[b1_ptr++] = apply_canonical(new_board, spec.symm_mode);
+                            if (b1_ptr == kScalarBufferedBatchSize) {
+                                flush_buf1();
                             }
                         }
                     }
@@ -473,17 +527,18 @@ GenBoardsResult gen_boards_internal_naive(
                     uint64_t boards4[4] = {std::get<0>(moves4), std::get<1>(moves4), std::get<2>(moves4), std::get<3>(moves4)};
                     for (uint64_t new_board : boards4) {
                         if (new_board != spawn4 && is_pattern(new_board, spec.pattern_masks)) {
-                            new_board = apply_canonical(new_board, spec.symm_mode);
-                            size_t hashed = BookGeneratorUtils::hash_board(new_board) & hashmask2;
-                            if (hashmap2[hashed] != new_board) {
-                                hashmap2[hashed] = new_board;
-                                arr2[c2t++] = new_board;
+                            buffer2[b2_ptr++] = apply_canonical(new_board, spec.symm_mode);
+                            if (b2_ptr == kScalarBufferedBatchSize) {
+                                flush_buf2();
                             }
                         }
                     }
                 }
             }
         }
+
+        flush_buf1();
+        flush_buf2();
 
         c1[thread_index] = c1t;
         c2[thread_index] = c2t;
@@ -620,12 +675,11 @@ GenBoardsResult gen_boards(
             arr0, arr0_size, target, spec, hashmap1, hashmap1_size, hashmap2, hashmap2_size,
             arr1, arr2, capacity, num_threads, do_check, isfree
         );
-    } else {
-        return gen_boards_internal_naive<Mover>(
-            arr0, arr0_size, target, spec, hashmap1, hashmap1_size, hashmap2, hashmap2_size,
-            arr1, arr2, capacity, num_threads, do_check, isfree
-        );
     }
+    return gen_boards_internal_naive<Mover>(
+        arr0, arr0_size, target, spec, hashmap1, hashmap1_size, hashmap2, hashmap2_size,
+        arr1, arr2, capacity, num_threads, do_check, isfree
+    );
 }
 
 template <typename Mover>
@@ -918,7 +972,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             } else {
                 debug_log(
                     "step " + std::to_string(i) + " path: normal-" +
-                    std::string(supports_avx512() ? "avx512" : "naive")
+                    std::string(supports_avx512() ? "avx512" : "buffered-scalar")
                 );
                 double length_factor = predict_next_length_factor_quadratic(init_params.length_factors);
                 length_factor *= d0.size() > static_cast<size_t>(1e8) ? 1.25 : 1.5;

@@ -7,6 +7,7 @@
 #include "Calculator.h"
 #include "CompressionBridge.h"
 #include "Formation.h"
+#include "HybridSearch.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,6 +16,7 @@
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <immintrin.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -500,7 +502,159 @@ struct GenBoardsAdResult {
     std::vector<size_t> counts2;
 };
 
-GenBoardsAdResult gen_boards_ad(
+using GenBoardsAdFn = GenBoardsAdResult (*)(
+    ArrayView<const uint64_t>,
+    const AdvancedPatternSpec &,
+    std::vector<uint64_t> &,
+    std::vector<uint64_t> &,
+    uint32_t,
+    const FormationAD::TilesCombinationTable &,
+    const AdvancedMaskParam &,
+    int,
+    double,
+    bool
+);
+
+enum class AdGenMode : uint8_t {
+    Scalar = 0,
+    AVX512 = 1,
+};
+
+struct GenBoardsAdDispatch {
+    AdGenMode mode = AdGenMode::Scalar;
+    GenBoardsAdFn fn = nullptr;
+};
+
+constexpr size_t kAdGenBatchSize = 128;
+
+enum class BufferedBaseKind : uint8_t {
+    Plain = 0,
+    Derive = 1,
+};
+
+struct BufferedAcceptedBoards {
+    std::array<uint64_t, kAdGenBatchSize> boards{};
+    std::array<uint8_t, kAdGenBatchSize> kinds{};
+    size_t count = 0;
+};
+
+void process_buffered_accepted_boards(
+    const BufferedAcceptedBoards &accepted,
+    uint32_t original_board_sum,
+    uint32_t spawn_delta,
+    const FormationAD::TilesCombinationTable &tiles_table,
+    const AdvancedMaskParam &param,
+    const AdvancedPatternSpec &spec,
+    uint64_t *target_arr,
+    size_t &counter
+) {
+    for (size_t accepted_index = 0; accepted_index < accepted.count; ++accepted_index) {
+        const uint64_t canon = accepted.boards[accepted_index];
+        if (accepted.kinds[accepted_index] == static_cast<uint8_t>(BufferedBaseKind::Plain)) {
+            target_arr[counter++] = canon;
+            continue;
+        }
+        DeriveResult derived = derive(canon, original_board_sum + spawn_delta, tiles_table, param);
+        if (!derived.is_valid) {
+            continue;
+        }
+        if (!derived.is_derived) {
+            target_arr[counter++] = canon;
+            continue;
+        }
+        for (uint8_t derived_index = 0; derived_index < derived.count; ++derived_index) {
+            const uint64_t derived_board = derived.boards[static_cast<size_t>(derived_index)];
+            if (is_pattern(derived_board, spec.pattern_masks)) {
+                target_arr[counter++] = apply_canonical(derived_board, spec.symm_mode);
+            }
+        }
+    }
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
+#endif
+inline __m512i simd_hash_ad_avx512(__m512i v) {
+    __m512i v_xor = _mm512_xor_epi64(v, _mm512_srli_epi64(v, 27));
+    __m512i v_mul = _mm512_mullo_epi64(v_xor, _mm512_set1_epi64(0x1A85EC53ULL));
+    __m512i v_mix = _mm512_add_epi64(_mm512_add_epi64(v_mul, _mm512_srli_epi64(v, 23)), v);
+    __m512i v_mix_xor = _mm512_xor_epi64(v_mix, _mm512_srli_epi64(v_mix, 27));
+    __m512i v_mix_mul = _mm512_mullo_epi64(v_mix_xor, _mm512_set1_epi64(0x1A85EC53ULL));
+    return _mm512_add_epi64(_mm512_add_epi64(v_mix_mul, _mm512_srli_epi64(v_mix, 23)), v_mix);
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
+#endif
+void flush_candidate_buffer_avx512(
+    const uint64_t *board_buffer,
+    const uint8_t *kind_buffer,
+    size_t active_count,
+    uint64_t *hashmap,
+    uint64_t hashmask,
+    BufferedAcceptedBoards &accepted
+) {
+    accepted.count = 0;
+    for (size_t i = 0; i < active_count; i += 8) {
+        const size_t remaining = std::min<size_t>(8, active_count - i);
+        const __mmask8 active_mask = static_cast<__mmask8>((1u << static_cast<unsigned>(remaining)) - 1u);
+        const __m512i states = _mm512_maskz_loadu_epi64(active_mask, board_buffer + i);
+        const __m512i hashes = simd_hash_ad_avx512(states);
+        const __m512i idx = _mm512_and_epi64(hashes, _mm512_set1_epi64(static_cast<long long>(hashmask)));
+        alignas(64) std::array<uint64_t, 8> idx_values{};
+        _mm512_storeu_si512(idx_values.data(), idx);
+
+        for (size_t lane = 0; lane < remaining; ++lane) {
+            const uint64_t board = board_buffer[i + lane];
+            const size_t hash_index = static_cast<size_t>(idx_values[lane]);
+            if (hashmap[hash_index] == board) {
+                continue;
+            }
+            hashmap[hash_index] = board;
+            accepted.boards[accepted.count] = board;
+            accepted.kinds[accepted.count] = kind_buffer[i + lane];
+            ++accepted.count;
+        }
+    }
+}
+
+void flush_candidate_buffer_scalar(
+    const uint64_t *board_buffer,
+    const uint8_t *kind_buffer,
+    size_t active_count,
+    uint64_t *hashmap,
+    uint64_t hashmask,
+    BufferedAcceptedBoards &accepted
+) {
+    accepted.count = 0;
+    std::array<uint64_t, kAdGenBatchSize> hashed_idx{};
+    for (size_t i = 0; i < active_count; ++i) {
+        hashed_idx[i] = BookGeneratorUtils::hash_board(board_buffer[i]) & hashmask;
+#if defined(__GNUC__) || defined(__clang__)
+        __builtin_prefetch(hashmap + static_cast<size_t>(hashed_idx[i]), 1, 1);
+#endif
+    }
+
+    for (size_t i = 0; i < active_count; ++i) {
+        constexpr size_t kPrefetchDistance = 8;
+        if (i + kPrefetchDistance < active_count) {
+#if defined(__GNUC__) || defined(__clang__)
+            __builtin_prefetch(hashmap + static_cast<size_t>(hashed_idx[i + kPrefetchDistance]), 1, 1);
+#endif
+        }
+        const uint64_t board = board_buffer[i];
+        const size_t hash_index = static_cast<size_t>(hashed_idx[i]);
+        if (hashmap[hash_index] == board) {
+            continue;
+        }
+        hashmap[hash_index] = board;
+        accepted.boards[accepted.count] = board;
+        accepted.kinds[accepted.count] = kind_buffer[i];
+        ++accepted.count;
+    }
+}
+
+GenBoardsAdResult gen_boards_ad_scalar(
     ArrayView<const uint64_t> arr0,
     const AdvancedPatternSpec &spec,
     std::vector<uint64_t> &hashmap1,
@@ -533,8 +687,34 @@ GenBoardsAdResult gen_boards_ad(
 
     #pragma omp parallel for num_threads(n)
     for (int s = 0; s < n; ++s) {
-        size_t c1t = (length / static_cast<size_t>(n)) * static_cast<size_t>(s);
-        size_t c2t = (length / static_cast<size_t>(n)) * static_cast<size_t>(s);
+        size_t c1t = starts[static_cast<size_t>(s)];
+        size_t c2t = starts[static_cast<size_t>(s)];
+        std::array<uint64_t, kAdGenBatchSize> buffer1{};
+        std::array<uint8_t, kAdGenBatchSize> kinds1{};
+        std::array<uint64_t, kAdGenBatchSize> buffer2{};
+        std::array<uint8_t, kAdGenBatchSize> kinds2{};
+        size_t buffer1_count = 0;
+        size_t buffer2_count = 0;
+        BufferedAcceptedBoards accepted{};
+
+        auto flush_spawn2 = [&]() {
+            if (buffer1_count == 0) {
+                return;
+            }
+            flush_candidate_buffer_scalar(buffer1.data(), kinds1.data(), buffer1_count, hashmap1.data(), hashmap1_mask, accepted);
+            process_buffered_accepted_boards(accepted, original_board_sum, 2U, tiles_table, param, spec, arr1.get(), c1t);
+            buffer1_count = 0;
+        };
+
+        auto flush_spawn4 = [&]() {
+            if (buffer2_count == 0) {
+                return;
+            }
+            flush_candidate_buffer_scalar(buffer2.data(), kinds2.data(), buffer2_count, hashmap2.data(), hashmap2_mask, accepted);
+            process_buffered_accepted_boards(accepted, original_board_sum, 4U, tiles_table, param, spec, arr2.get(), c2t);
+            buffer2_count = 0;
+        };
+
         for (size_t chunk = 0; chunk < chunks_count; ++chunk) {
             size_t chunk_start = chunk * chunk_size;
             size_t chunk_end = std::min(chunk_start + chunk_size, total_tasks);
@@ -565,29 +745,13 @@ GenBoardsAdResult gen_boards_ad(
                         if (newt == t1 || !is_pattern(newt, spec.pattern_masks)) {
                             continue;
                         }
-                        uint64_t canon = apply_canonical(newt, spec.symm_mode);
-                        uint64_t hashed_newt = BookGeneratorUtils::hash_board(canon) & hashmap1_mask;
-                        if (hashmap1[static_cast<size_t>(hashed_newt)] == canon) {
-                            continue;
-                        }
-                        hashmap1[static_cast<size_t>(hashed_newt)] = canon;
-                        if (!moves2_mask_new_tile[move_index]) {
-                            arr1[c1t++] = canon;
-                            continue;
-                        }
-                        DeriveResult derived = derive(canon, original_board_sum + 2U, tiles_table, param);
-                        if (!derived.is_valid) {
-                            continue;
-                        }
-                        if (!derived.is_derived) {
-                            arr1[c1t++] = canon;
-                            continue;
-                        }
-                        for (uint8_t derived_index = 0; derived_index < derived.count; ++derived_index) {
-                            uint64_t derived_board = derived.boards[static_cast<size_t>(derived_index)];
-                            if (is_pattern(derived_board, spec.pattern_masks)) {
-                                arr1[c1t++] = apply_canonical(derived_board, spec.symm_mode);
-                            }
+                        buffer1[buffer1_count] = apply_canonical(newt, spec.symm_mode);
+                        kinds1[buffer1_count] = static_cast<uint8_t>(
+                            moves2_mask_new_tile[move_index] ? BufferedBaseKind::Derive : BufferedBaseKind::Plain
+                        );
+                        ++buffer1_count;
+                        if (buffer1_count == kAdGenBatchSize) {
+                            flush_spawn2();
                         }
                     }
 
@@ -604,34 +768,20 @@ GenBoardsAdResult gen_boards_ad(
                         if (newt == t1 || !is_pattern(newt, spec.pattern_masks)) {
                             continue;
                         }
-                        uint64_t canon = apply_canonical(newt, spec.symm_mode);
-                        uint64_t hashed_newt = BookGeneratorUtils::hash_board(canon) & hashmap2_mask;
-                        if (hashmap2[static_cast<size_t>(hashed_newt)] == canon) {
-                            continue;
-                        }
-                        hashmap2[static_cast<size_t>(hashed_newt)] = canon;
-                        if (!moves4_mask_new_tile[move_index]) {
-                            arr2[c2t++] = canon;
-                            continue;
-                        }
-                        DeriveResult derived = derive(canon, original_board_sum + 4U, tiles_table, param);
-                        if (!derived.is_valid) {
-                            continue;
-                        }
-                        if (!derived.is_derived) {
-                            arr2[c2t++] = canon;
-                            continue;
-                        }
-                        for (uint8_t derived_index = 0; derived_index < derived.count; ++derived_index) {
-                            uint64_t derived_board = derived.boards[static_cast<size_t>(derived_index)];
-                            if (is_pattern(derived_board, spec.pattern_masks)) {
-                                arr2[c2t++] = apply_canonical(derived_board, spec.symm_mode);
-                            }
+                        buffer2[buffer2_count] = apply_canonical(newt, spec.symm_mode);
+                        kinds2[buffer2_count] = static_cast<uint8_t>(
+                            moves4_mask_new_tile[move_index] ? BufferedBaseKind::Derive : BufferedBaseKind::Plain
+                        );
+                        ++buffer2_count;
+                        if (buffer2_count == kAdGenBatchSize) {
+                            flush_spawn4();
                         }
                     }
                 }
             }
         }
+        flush_spawn2();
+        flush_spawn4();
         c1[static_cast<size_t>(s)] = c1t;
         c2[static_cast<size_t>(s)] = c2t;
     }
@@ -654,6 +804,205 @@ GenBoardsAdResult gen_boards_ad(
         counts2[static_cast<size_t>(i)] = c2[static_cast<size_t>(i)] - starts[static_cast<size_t>(i)];
     }
     return {std::move(arr1_vec), std::move(arr2_vec), std::move(counts1), std::move(counts2)};
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
+#endif
+GenBoardsAdResult gen_boards_ad_avx512(
+    ArrayView<const uint64_t> arr0,
+    const AdvancedPatternSpec &spec,
+    std::vector<uint64_t> &hashmap1,
+    std::vector<uint64_t> &hashmap2,
+    uint32_t original_board_sum,
+    const FormationAD::TilesCombinationTable &tiles_table,
+    const AdvancedMaskParam &param,
+    int n,
+    double length_factor,
+    bool isfree
+) {
+    const size_t min_length = isfree ? 9999999ULL : 6999999ULL;
+    const size_t length = std::max(min_length, static_cast<size_t>(static_cast<double>(arr0.size) * length_factor));
+    auto arr1 = std::unique_ptr<uint64_t[]>(new uint64_t[length]);
+    auto arr2 = std::unique_ptr<uint64_t[]>(new uint64_t[length]);
+    std::vector<size_t> starts(static_cast<size_t>(n));
+    std::vector<size_t> c1(static_cast<size_t>(n));
+    std::vector<size_t> c2(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        starts[static_cast<size_t>(i)] = (length / static_cast<size_t>(n)) * static_cast<size_t>(i);
+        c1[static_cast<size_t>(i)] = starts[static_cast<size_t>(i)];
+        c2[static_cast<size_t>(i)] = starts[static_cast<size_t>(i)];
+    }
+    const uint64_t hashmap1_mask = static_cast<uint64_t>(hashmap1.size() - 1);
+    const uint64_t hashmap2_mask = static_cast<uint64_t>(hashmap2.size() - 1);
+
+    const size_t total_tasks = arr0.size;
+    const size_t chunk_size = std::min<size_t>(1000000ULL, total_tasks / static_cast<size_t>(n * 5) + 1ULL) * static_cast<size_t>(n);
+    const size_t chunks_count = (total_tasks + chunk_size - 1) / chunk_size;
+
+    #pragma omp parallel for num_threads(n)
+    for (int s = 0; s < n; ++s) {
+        size_t c1t = starts[static_cast<size_t>(s)];
+        size_t c2t = starts[static_cast<size_t>(s)];
+        std::array<uint64_t, kAdGenBatchSize> buffer1{};
+        std::array<uint8_t, kAdGenBatchSize> kinds1{};
+        std::array<uint64_t, kAdGenBatchSize> buffer2{};
+        std::array<uint8_t, kAdGenBatchSize> kinds2{};
+        size_t buffer1_count = 0;
+        size_t buffer2_count = 0;
+        BufferedAcceptedBoards accepted{};
+
+        auto flush_spawn2 = [&]() {
+            if (buffer1_count == 0) {
+                return;
+            }
+            flush_candidate_buffer_avx512(buffer1.data(), kinds1.data(), buffer1_count, hashmap1.data(), hashmap1_mask, accepted);
+            process_buffered_accepted_boards(accepted, original_board_sum, 2U, tiles_table, param, spec, arr1.get(), c1t);
+            buffer1_count = 0;
+        };
+
+        auto flush_spawn4 = [&]() {
+            if (buffer2_count == 0) {
+                return;
+            }
+            flush_candidate_buffer_avx512(buffer2.data(), kinds2.data(), buffer2_count, hashmap2.data(), hashmap2_mask, accepted);
+            process_buffered_accepted_boards(accepted, original_board_sum, 4U, tiles_table, param, spec, arr2.get(), c2t);
+            buffer2_count = 0;
+        };
+
+        for (size_t chunk = 0; chunk < chunks_count; ++chunk) {
+            const size_t chunk_start = chunk * chunk_size;
+            const size_t chunk_end = std::min(chunk_start + chunk_size, total_tasks);
+            const size_t thread_start = chunk_start + static_cast<size_t>(s) * chunk_size / static_cast<size_t>(n);
+            const size_t thread_end = thread_start + chunk_size / static_cast<size_t>(n);
+            const size_t start = std::max(thread_start, chunk_start);
+            const size_t end = std::min(thread_end, chunk_end);
+            if (!(start < end)) {
+                continue;
+            }
+
+            for (size_t b = start; b < end; ++b) {
+                const uint64_t t = arr0[b];
+                for (int i = 0; i < 16; ++i) {
+                    if (((t >> static_cast<uint64_t>(4 * i)) & 0xFULL) != 0ULL) {
+                        continue;
+                    }
+
+                    uint64_t t1 = t | (1ULL << static_cast<uint64_t>(4 * i));
+                    const uint64_t t1_rev = FormationAD::reverse(t1);
+                    const uint64_t md2 = FormationAD::m_move_down(t1, t1_rev);
+                    const uint64_t mr2 = FormationAD::m_move_right(t1);
+                    const auto [ml2, mnt_h2] = FormationAD::m_move_left2(t1);
+                    const auto [mu2, mnt_v2] = FormationAD::m_move_up2(t1, t1_rev);
+                    const uint64_t moves2_boards[4] = {ml2, mr2, mu2, md2};
+                    const bool moves2_mask_new_tile[4] = {mnt_h2, mnt_h2, mnt_v2, mnt_v2};
+                    for (int move_index = 0; move_index < 4; ++move_index) {
+                        const uint64_t newt = moves2_boards[move_index];
+                        if (newt == t1 || !is_pattern(newt, spec.pattern_masks)) {
+                            continue;
+                        }
+                        buffer1[buffer1_count] = apply_canonical(newt, spec.symm_mode);
+                        kinds1[buffer1_count] = static_cast<uint8_t>(
+                            moves2_mask_new_tile[move_index] ? BufferedBaseKind::Derive : BufferedBaseKind::Plain
+                        );
+                        ++buffer1_count;
+                        if (buffer1_count == kAdGenBatchSize) {
+                            flush_spawn2();
+                        }
+                    }
+
+                    t1 = t | (2ULL << static_cast<uint64_t>(4 * i));
+                    const uint64_t t1_rev4 = FormationAD::reverse(t1);
+                    const uint64_t md4 = FormationAD::m_move_down(t1, t1_rev4);
+                    const uint64_t mr4 = FormationAD::m_move_right(t1);
+                    const auto [ml4, mnt_h4] = FormationAD::m_move_left2(t1);
+                    const auto [mu4, mnt_v4] = FormationAD::m_move_up2(t1, t1_rev4);
+                    const uint64_t moves4_boards[4] = {ml4, mr4, mu4, md4};
+                    const bool moves4_mask_new_tile[4] = {mnt_h4, mnt_h4, mnt_v4, mnt_v4};
+                    for (int move_index = 0; move_index < 4; ++move_index) {
+                        const uint64_t newt = moves4_boards[move_index];
+                        if (newt == t1 || !is_pattern(newt, spec.pattern_masks)) {
+                            continue;
+                        }
+                        buffer2[buffer2_count] = apply_canonical(newt, spec.symm_mode);
+                        kinds2[buffer2_count] = static_cast<uint8_t>(
+                            moves4_mask_new_tile[move_index] ? BufferedBaseKind::Derive : BufferedBaseKind::Plain
+                        );
+                        ++buffer2_count;
+                        if (buffer2_count == kAdGenBatchSize) {
+                            flush_spawn4();
+                        }
+                    }
+                }
+            }
+        }
+
+        flush_spawn2();
+        flush_spawn4();
+        c1[static_cast<size_t>(s)] = c1t;
+        c2[static_cast<size_t>(s)] = c2t;
+    }
+
+    const size_t total_arr1 = BookGeneratorUtils::merge_inplace(arr1.get(), c1, starts);
+    const size_t total_arr2 = BookGeneratorUtils::merge_inplace(arr2.get(), c2, starts);
+    std::vector<uint64_t> arr1_vec(total_arr1);
+    std::vector<uint64_t> arr2_vec(total_arr2);
+    if (total_arr1 > 0) {
+        std::memcpy(arr1_vec.data(), arr1.get(), total_arr1 * sizeof(uint64_t));
+    }
+    if (total_arr2 > 0) {
+        std::memcpy(arr2_vec.data(), arr2.get(), total_arr2 * sizeof(uint64_t));
+    }
+
+    std::vector<size_t> counts1(static_cast<size_t>(n));
+    std::vector<size_t> counts2(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        counts1[static_cast<size_t>(i)] = c1[static_cast<size_t>(i)] - starts[static_cast<size_t>(i)];
+        counts2[static_cast<size_t>(i)] = c2[static_cast<size_t>(i)] - starts[static_cast<size_t>(i)];
+    }
+    return {std::move(arr1_vec), std::move(arr2_vec), std::move(counts1), std::move(counts2)};
+}
+
+bool cpu_has_ad_gen_avx512_uncached() {
+#if defined(__x86_64__) || defined(__i386)
+    __builtin_cpu_init();
+    return __builtin_cpu_supports("avx512f") &&
+           __builtin_cpu_supports("avx512dq") &&
+           __builtin_cpu_supports("avx512bw") &&
+           __builtin_cpu_supports("avx512vl");
+#elif defined(_M_X64) || defined(_M_IX86)
+    return HybridSearch::mode() == HybridSearch::Mode::AVX512;
+#else
+    return false;
+#endif
+}
+
+GenBoardsAdDispatch resolve_gen_boards_ad_dispatch() {
+    if (cpu_has_ad_gen_avx512_uncached()) {
+        return {AdGenMode::AVX512, gen_boards_ad_avx512};
+    }
+    return {AdGenMode::Scalar, gen_boards_ad_scalar};
+}
+
+const GenBoardsAdDispatch &gen_boards_ad_dispatch() {
+    static const GenBoardsAdDispatch cached = resolve_gen_boards_ad_dispatch();
+    return cached;
+}
+
+GenBoardsAdResult gen_boards_ad(
+    ArrayView<const uint64_t> arr0,
+    const AdvancedPatternSpec &spec,
+    std::vector<uint64_t> &hashmap1,
+    std::vector<uint64_t> &hashmap2,
+    uint32_t original_board_sum,
+    const FormationAD::TilesCombinationTable &tiles_table,
+    const AdvancedMaskParam &param,
+    int n,
+    double length_factor,
+    bool isfree
+) {
+    static const GenBoardsAdFn fn = gen_boards_ad_dispatch().fn;
+    return fn(arr0, spec, hashmap1, hashmap2, original_board_sum, tiles_table, param, n, length_factor, isfree);
 }
 
 struct GenBoardsBigAdResult {

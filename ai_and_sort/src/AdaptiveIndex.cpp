@@ -52,6 +52,36 @@ struct ExperimentalTempL2Node {
     bool active = false;
 };
 
+struct FlatTempL3Bucket {
+    uint16_t h2_value = 0;
+    uint32_t h3_count = 0;
+    uint64_t h3_values_offset = 0;
+    uint64_t rel_starts_offset = 0;
+    uint64_t starts_offset = 0;
+};
+
+struct FlatTempL2Node {
+    uint32_t h1_value = 0;
+    uint32_t owner_worker = 0;
+    uint64_t parent_begin = 0;
+    uint32_t h2_count = 0;
+    uint64_t h2_values_offset = 0;
+    uint64_t rel_starts_offset = 0;
+    uint32_t l3_bucket_count = 0;
+    uint64_t l3_bucket_offset = 0;
+    uint64_t starts_offset = 0;
+    uint64_t l3_nodes_offset = 0;
+    bool active = false;
+};
+
+struct FlatWorkerPools {
+    std::vector<uint16_t> h2_values;
+    std::vector<uint32_t> h2_starts;
+    std::vector<FlatTempL3Bucket> l3_buckets;
+    std::vector<uint16_t> h3_values;
+    std::vector<uint32_t> h3_starts;
+};
+
 struct H1Transition {
     uint32_t h1_value = 0;
     uint64_t position = 0;
@@ -733,6 +763,385 @@ Index materialize_experimental_nodes(
     return index;
 }
 
+Index materialize_flat_experimental_nodes(
+    std::vector<uint64_t> l1_offsets,
+    std::vector<FlatTempL2Node> &&temp_nodes,
+    std::vector<uint16_t> &&h2_values_pool,
+    std::vector<uint32_t> &&h2_starts_pool,
+    std::vector<FlatTempL3Bucket> &&l3_buckets_pool,
+    std::vector<uint16_t> &&h3_values_pool,
+    std::vector<uint32_t> &&h3_starts_pool,
+    const Config &config,
+    BuildProfile *profile = nullptr
+) {
+    Index index;
+    index.l1_offsets = std::move(l1_offsets);
+    const double t0 = profile ? wall_time_seconds() : 0.0;
+
+    uint64_t total_l2_starts = 0U;
+    uint64_t total_l3_starts = 0U;
+    uint64_t total_l3_nodes = 0U;
+    for (FlatTempL2Node &node : temp_nodes) {
+        node.starts_offset = total_l2_starts;
+        total_l2_starts += static_cast<uint64_t>(node.h2_count) + 1U;
+        node.l3_nodes_offset = total_l3_nodes;
+        total_l3_nodes += static_cast<uint64_t>(node.l3_bucket_count);
+        for (uint32_t bucket_index = 0; bucket_index < node.l3_bucket_count; ++bucket_index) {
+            FlatTempL3Bucket &bucket = l3_buckets_pool[static_cast<size_t>(node.l3_bucket_offset + bucket_index)];
+            bucket.starts_offset = total_l3_starts;
+            total_l3_starts += static_cast<uint64_t>(bucket.h3_count) + 1U;
+        }
+    }
+
+    index.l2_relative_starts.resize(static_cast<size_t>(total_l2_starts));
+    index.l3_relative_starts.resize(static_cast<size_t>(total_l3_starts));
+    index.l2_nodes.resize(temp_nodes.size());
+    index.l3_nodes.resize(static_cast<size_t>(total_l3_nodes));
+
+    index.l2_root_bitmap.fill(0ULL);
+    index.l2_root_rank.fill(0U);
+    for (const FlatTempL2Node &node : temp_nodes) {
+        index.l2_root_bitmap[node.h1_value >> 6U] |= (1ULL << (node.h1_value & 63U));
+    }
+    uint32_t root_total = 0U;
+    for (size_t i = 0; i < index.l2_root_bitmap.size(); ++i) {
+        index.l2_root_rank[i] = root_total;
+        root_total += popcount64(index.l2_root_bitmap[i]);
+    }
+    index.l2_root_rank[index.l2_root_bitmap.size()] = root_total;
+    const double t1 = profile ? wall_time_seconds() : 0.0;
+
+    const int num_threads = static_cast<int>(effective_num_threads(config));
+    #pragma omp parallel for num_threads(num_threads)
+    for (int64_t node_index = 0; node_index < static_cast<int64_t>(temp_nodes.size()); ++node_index) {
+        const FlatTempL2Node &temp = temp_nodes[static_cast<size_t>(node_index)];
+        L2Node &dst = index.l2_nodes[static_cast<size_t>(node_index)];
+        dst.parent_begin = temp.parent_begin;
+        dst.starts_offset = temp.starts_offset;
+        dst.l3_nodes_offset = temp.l3_nodes_offset;
+        build_sub_rank_fast(
+            h2_values_pool.data() + static_cast<std::ptrdiff_t>(temp.h2_values_offset),
+            temp.h2_count,
+            dst.h2_map
+        );
+
+        if (temp.l3_bucket_count != 0U) {
+            clear_sub_rank(dst.l3_map);
+            for (uint32_t bucket_index = 0; bucket_index < temp.l3_bucket_count; ++bucket_index) {
+                const FlatTempL3Bucket &bucket = l3_buckets_pool[static_cast<size_t>(temp.l3_bucket_offset + bucket_index)];
+                dst.l3_map.words[bucket.h2_value >> 6U] |= (1ULL << (bucket.h2_value & 63U));
+            }
+            finalize_sub_rank(dst.l3_map);
+        }
+
+        std::copy(
+            h2_starts_pool.begin() + static_cast<std::ptrdiff_t>(temp.rel_starts_offset),
+            h2_starts_pool.begin() + static_cast<std::ptrdiff_t>(temp.rel_starts_offset + temp.h2_count + 1U),
+            index.l2_relative_starts.begin() + static_cast<std::ptrdiff_t>(temp.starts_offset)
+        );
+
+        for (uint32_t bucket_index = 0; bucket_index < temp.l3_bucket_count; ++bucket_index) {
+            const FlatTempL3Bucket &temp_bucket = l3_buckets_pool[static_cast<size_t>(temp.l3_bucket_offset + bucket_index)];
+            L3Node &dst_bucket = index.l3_nodes[static_cast<size_t>(temp.l3_nodes_offset + bucket_index)];
+            dst_bucket.starts_offset = temp_bucket.starts_offset;
+            build_sub_rank_fast(
+                h3_values_pool.data() + static_cast<std::ptrdiff_t>(temp_bucket.h3_values_offset),
+                temp_bucket.h3_count,
+                dst_bucket.h3_map
+            );
+            std::copy(
+                h3_starts_pool.begin() + static_cast<std::ptrdiff_t>(temp_bucket.rel_starts_offset),
+                h3_starts_pool.begin() + static_cast<std::ptrdiff_t>(temp_bucket.rel_starts_offset + temp_bucket.h3_count + 1U),
+                index.l3_relative_starts.begin() + static_cast<std::ptrdiff_t>(temp_bucket.starts_offset)
+            );
+        }
+    }
+
+    if (profile != nullptr) {
+        const double t2 = wall_time_seconds();
+        if (profile->phase3_seconds == 0.0) {
+            profile->phase3_seconds = t1 - t0;
+            profile->phase4_seconds = t2 - t1;
+        } else {
+            profile->phase4_seconds = t2 - t0;
+        }
+    }
+
+    return index;
+}
+
+template <typename LoadKeyFn>
+Index build_experimental_refined_flat_generic(
+    LoadKeyFn &&load_key,
+    std::vector<uint64_t> l1_offsets,
+    const std::vector<uint32_t> &active_h1_values,
+    const Config &config,
+    bool delayed_l3,
+    BuildProfile *profile = nullptr
+) {
+    if (l1_offsets.empty()) {
+        Index index;
+        index.l1_offsets.resize(kL1Size, 0U);
+        return index;
+    }
+
+    std::vector<FlatTempL2Node> node_slots(active_h1_values.size());
+    const uint32_t worker_count = effective_num_threads(config);
+    std::vector<FlatWorkerPools> worker_pools(static_cast<size_t>(worker_count));
+    const double t0 = profile ? wall_time_seconds() : 0.0;
+
+    #pragma omp parallel for num_threads(static_cast<int>(worker_count)) schedule(dynamic, 8)
+    for (int64_t idx = 0; idx < static_cast<int64_t>(active_h1_values.size()); ++idx) {
+        const uint32_t h1 = active_h1_values[static_cast<size_t>(idx)];
+        const uint64_t begin = l1_offsets[h1];
+        const uint64_t end = l1_offsets[h1 + 1U];
+        const uint64_t span = end - begin;
+        if (
+            span <= static_cast<uint64_t>(config.l2_split_threshold) ||
+            span > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())
+        ) {
+            continue;
+        }
+
+        const uint32_t worker = static_cast<uint32_t>(omp_get_thread_num());
+        FlatWorkerPools &pools = worker_pools[worker];
+        FlatTempL2Node node;
+        node.h1_value = h1;
+        node.owner_worker = worker;
+        node.parent_begin = begin;
+        node.h2_values_offset = pools.h2_values.size();
+        node.rel_starts_offset = pools.h2_starts.size();
+        node.l3_bucket_offset = pools.l3_buckets.size();
+        const uint64_t h3_values_base = pools.h3_values.size();
+        const uint64_t h3_starts_base = pools.h3_starts.size();
+
+        uint64_t local_cursor = begin;
+        while (local_cursor < end) {
+            const uint16_t h2 = h2_of(load_key(local_cursor));
+            const uint64_t h2_begin = local_cursor;
+            pools.h2_values.push_back(h2);
+            pools.h2_starts.push_back(static_cast<uint32_t>(h2_begin - begin));
+            ++node.h2_count;
+
+            if (delayed_l3) {
+                uint32_t h3_count = 0U;
+                uint64_t scan_cursor = h2_begin;
+                while (scan_cursor < end) {
+                    if (h2_of(load_key(scan_cursor)) != h2) {
+                        break;
+                    }
+                    ++h3_count;
+                    const uint16_t h3 = h3_of(load_key(scan_cursor));
+                    ++scan_cursor;
+                    while (scan_cursor < end) {
+                        const uint64_t next_key = load_key(scan_cursor);
+                        if (h2_of(next_key) != h2 || h3_of(next_key) != h3) {
+                            break;
+                        }
+                        ++scan_cursor;
+                    }
+                }
+
+                const uint64_t h2_end = scan_cursor;
+                const uint64_t h2_span = h2_end - h2_begin;
+                if (
+                    h2_span <= static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) &&
+                    h2_span > static_cast<uint64_t>(config.l3_split_threshold) &&
+                    h3_count >= 2U
+                ) {
+                    const uint64_t h3_values_offset = pools.h3_values.size();
+                    const uint64_t h3_starts_offset = pools.h3_starts.size();
+                    uint64_t materialize_cursor = h2_begin;
+                    while (materialize_cursor < h2_end) {
+                        const uint16_t h3 = h3_of(load_key(materialize_cursor));
+                        pools.h3_values.push_back(h3);
+                        pools.h3_starts.push_back(static_cast<uint32_t>(materialize_cursor - h2_begin));
+                        ++materialize_cursor;
+                        while (materialize_cursor < h2_end) {
+                            const uint64_t next_key = load_key(materialize_cursor);
+                            if (h2_of(next_key) != h2 || h3_of(next_key) != h3) {
+                                break;
+                            }
+                            ++materialize_cursor;
+                        }
+                    }
+                    pools.h3_starts.push_back(static_cast<uint32_t>(h2_span));
+                    FlatTempL3Bucket bucket;
+                    bucket.h2_value = h2;
+                    bucket.h3_count = h3_count;
+                    bucket.h3_values_offset = h3_values_offset;
+                    bucket.rel_starts_offset = h3_starts_offset;
+                    pools.l3_buckets.push_back(bucket);
+                    ++node.l3_bucket_count;
+                }
+                local_cursor = h2_end;
+                continue;
+            }
+
+            const uint64_t h3_values_offset = pools.h3_values.size();
+            const uint64_t h3_starts_offset = pools.h3_starts.size();
+            uint32_t h3_count = 0U;
+            while (local_cursor < end) {
+                const uint64_t h2_key = load_key(local_cursor);
+                if (h2_of(h2_key) != h2) {
+                    break;
+                }
+                ++h3_count;
+                const uint16_t h3 = h3_of(h2_key);
+                pools.h3_values.push_back(h3);
+                pools.h3_starts.push_back(static_cast<uint32_t>(local_cursor - h2_begin));
+                ++local_cursor;
+                while (local_cursor < end) {
+                    const uint64_t next_key = load_key(local_cursor);
+                    if (h2_of(next_key) != h2 || h3_of(next_key) != h3) {
+                        break;
+                    }
+                    ++local_cursor;
+                }
+            }
+
+            const uint64_t h2_span = local_cursor - h2_begin;
+            if (
+                h2_span <= static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) &&
+                h2_span > static_cast<uint64_t>(config.l3_split_threshold) &&
+                h3_count >= 2U
+            ) {
+                pools.h3_starts.push_back(static_cast<uint32_t>(h2_span));
+                FlatTempL3Bucket bucket;
+                bucket.h2_value = h2;
+                bucket.h3_count = h3_count;
+                bucket.h3_values_offset = h3_values_offset;
+                bucket.rel_starts_offset = h3_starts_offset;
+                pools.l3_buckets.push_back(bucket);
+                ++node.l3_bucket_count;
+            } else {
+                pools.h3_values.resize(static_cast<size_t>(h3_values_offset));
+                pools.h3_starts.resize(static_cast<size_t>(h3_starts_offset));
+            }
+        }
+
+        if (node.h2_count >= 2U) {
+            pools.h2_starts.push_back(static_cast<uint32_t>(span));
+            node.active = true;
+            node_slots[static_cast<size_t>(idx)] = node;
+        } else {
+            pools.h2_values.resize(static_cast<size_t>(node.h2_values_offset));
+            pools.h2_starts.resize(static_cast<size_t>(node.rel_starts_offset));
+            pools.l3_buckets.resize(static_cast<size_t>(node.l3_bucket_offset));
+            pools.h3_values.resize(static_cast<size_t>(h3_values_base));
+            pools.h3_starts.resize(static_cast<size_t>(h3_starts_base));
+        }
+    }
+
+    if (profile != nullptr) {
+        const double t1 = wall_time_seconds();
+        if (profile->phase2_seconds == 0.0) {
+            profile->phase2_seconds = t1 - t0;
+        } else {
+            profile->phase3_seconds = t1 - t0;
+        }
+    }
+
+    std::vector<uint64_t> h2_value_bases(static_cast<size_t>(worker_count), 0U);
+    std::vector<uint64_t> h2_start_bases(static_cast<size_t>(worker_count), 0U);
+    std::vector<uint64_t> l3_bucket_bases(static_cast<size_t>(worker_count), 0U);
+    std::vector<uint64_t> h3_value_bases(static_cast<size_t>(worker_count), 0U);
+    std::vector<uint64_t> h3_start_bases(static_cast<size_t>(worker_count), 0U);
+
+    uint64_t total_h2_values = 0U;
+    uint64_t total_h2_starts = 0U;
+    uint64_t total_l3_buckets = 0U;
+    uint64_t total_h3_values = 0U;
+    uint64_t total_h3_starts = 0U;
+    for (uint32_t worker = 0; worker < worker_count; ++worker) {
+        h2_value_bases[worker] = total_h2_values;
+        h2_start_bases[worker] = total_h2_starts;
+        l3_bucket_bases[worker] = total_l3_buckets;
+        h3_value_bases[worker] = total_h3_values;
+        h3_start_bases[worker] = total_h3_starts;
+        const FlatWorkerPools &pools = worker_pools[worker];
+        total_h2_values += pools.h2_values.size();
+        total_h2_starts += pools.h2_starts.size();
+        total_l3_buckets += pools.l3_buckets.size();
+        total_h3_values += pools.h3_values.size();
+        total_h3_starts += pools.h3_starts.size();
+    }
+
+    std::vector<uint16_t> h2_values_pool(static_cast<size_t>(total_h2_values));
+    std::vector<uint32_t> h2_starts_pool(static_cast<size_t>(total_h2_starts));
+    std::vector<FlatTempL3Bucket> l3_buckets_pool(static_cast<size_t>(total_l3_buckets));
+    std::vector<uint16_t> h3_values_pool(static_cast<size_t>(total_h3_values));
+    std::vector<uint32_t> h3_starts_pool(static_cast<size_t>(total_h3_starts));
+
+    for (uint32_t worker = 0; worker < worker_count; ++worker) {
+        const FlatWorkerPools &pools = worker_pools[worker];
+        std::copy(
+            pools.h2_values.begin(),
+            pools.h2_values.end(),
+            h2_values_pool.begin() + static_cast<std::ptrdiff_t>(h2_value_bases[worker])
+        );
+        std::copy(
+            pools.h2_starts.begin(),
+            pools.h2_starts.end(),
+            h2_starts_pool.begin() + static_cast<std::ptrdiff_t>(h2_start_bases[worker])
+        );
+        std::copy(
+            pools.h3_values.begin(),
+            pools.h3_values.end(),
+            h3_values_pool.begin() + static_cast<std::ptrdiff_t>(h3_value_bases[worker])
+        );
+        std::copy(
+            pools.h3_starts.begin(),
+            pools.h3_starts.end(),
+            h3_starts_pool.begin() + static_cast<std::ptrdiff_t>(h3_start_bases[worker])
+        );
+        auto bucket_dst = l3_buckets_pool.begin() + static_cast<std::ptrdiff_t>(l3_bucket_bases[worker]);
+        std::copy(pools.l3_buckets.begin(), pools.l3_buckets.end(), bucket_dst);
+    }
+
+    for (FlatTempL2Node &node : node_slots) {
+        if (!node.active) {
+            continue;
+        }
+        const uint32_t worker = node.owner_worker;
+        node.h2_values_offset += h2_value_bases[worker];
+        node.rel_starts_offset += h2_start_bases[worker];
+        node.l3_bucket_offset += l3_bucket_bases[worker];
+    }
+    for (FlatTempL3Bucket &bucket : l3_buckets_pool) {
+        // owner is implied by copy segment; fix offsets below when scanning nodes
+        (void)bucket;
+    }
+    for (uint32_t worker = 0; worker < worker_count; ++worker) {
+        const uint64_t bucket_begin = l3_bucket_bases[worker];
+        const uint64_t bucket_end = bucket_begin + worker_pools[worker].l3_buckets.size();
+        for (uint64_t idx = bucket_begin; idx < bucket_end; ++idx) {
+            l3_buckets_pool[static_cast<size_t>(idx)].h3_values_offset += h3_value_bases[worker];
+            l3_buckets_pool[static_cast<size_t>(idx)].rel_starts_offset += h3_start_bases[worker];
+        }
+    }
+
+    std::vector<FlatTempL2Node> temp_nodes;
+    temp_nodes.reserve(node_slots.size());
+    for (auto &slot : node_slots) {
+        if (slot.active) {
+            temp_nodes.push_back(std::move(slot));
+        }
+    }
+
+    return materialize_flat_experimental_nodes(
+        std::move(l1_offsets),
+        std::move(temp_nodes),
+        std::move(h2_values_pool),
+        std::move(h2_starts_pool),
+        std::move(l3_buckets_pool),
+        std::move(h3_values_pool),
+        std::move(h3_starts_pool),
+        config,
+        profile
+    );
+}
+
 void collect_h1_transitions_scalar(
     const uint64_t *keys,
     uint64_t size,
@@ -918,6 +1327,23 @@ Index build_experimental_refined_impl(
     const Config &config,
     BuildProfile *profile = nullptr
 ) {
+    return build_experimental_refined_flat_generic(
+        [keys](uint64_t index) { return keys[index]; },
+        std::move(l1_offsets),
+        active_h1_values,
+        config,
+        false,
+        profile
+    );
+}
+
+Index build_experimental_refined_legacy_impl(
+    const uint64_t *keys,
+    std::vector<uint64_t> l1_offsets,
+    const std::vector<uint32_t> &active_h1_values,
+    const Config &config,
+    BuildProfile *profile = nullptr
+) {
     if (l1_offsets.empty()) {
         Index index;
         index.l1_offsets.resize(kL1Size, 0U);
@@ -1013,6 +1439,23 @@ Index build_experimental_refined_impl(
 }
 
 Index build_experimental_refined_delayed_l3_impl(
+    const uint64_t *keys,
+    std::vector<uint64_t> l1_offsets,
+    const std::vector<uint32_t> &active_h1_values,
+    const Config &config,
+    BuildProfile *profile = nullptr
+) {
+    return build_experimental_refined_flat_generic(
+        [keys](uint64_t index) { return keys[index]; },
+        std::move(l1_offsets),
+        active_h1_values,
+        config,
+        true,
+        profile
+    );
+}
+
+Index build_experimental_refined_delayed_l3_legacy_impl(
     const uint64_t *keys,
     std::vector<uint64_t> l1_offsets,
     const std::vector<uint32_t> &active_h1_values,
@@ -1140,98 +1583,16 @@ Index build_experimental_refined_strided_impl(
     const Config &config,
     BuildProfile *profile = nullptr
 ) {
-    if (l1_offsets.empty()) {
-        Index index;
-        index.l1_offsets.resize(kL1Size, 0U);
-        return index;
-    }
-
-    std::vector<ExperimentalTempL2Node> node_slots(active_h1_values.size());
-    const int num_threads = static_cast<int>(effective_num_threads(config));
-    const double t0 = profile ? wall_time_seconds() : 0.0;
-    #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8)
-    for (int64_t idx = 0; idx < static_cast<int64_t>(active_h1_values.size()); ++idx) {
-        const uint32_t h1 = active_h1_values[static_cast<size_t>(idx)];
-        const uint64_t begin = l1_offsets[h1];
-        const uint64_t end = l1_offsets[h1 + 1U];
-        const uint64_t span = end - begin;
-        if (
-            span <= static_cast<uint64_t>(config.l2_split_threshold) ||
-            span > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())
-        ) {
-            continue;
-        }
-
-        ExperimentalTempL2Node node;
-        node.h1_value = h1;
-        node.parent_begin = begin;
-        node.h2_values.reserve(static_cast<size_t>(std::max<uint64_t>(2U, span / 64U)));
-        node.rel_starts.reserve(static_cast<size_t>(std::max<uint64_t>(3U, span / 64U + 1U)));
-
-        uint64_t local_cursor = begin;
-        while (local_cursor < end) {
-            const uint16_t h2 = h2_of(load_u64_unaligned(base + local_cursor * stride + key_offset));
-            const uint64_t h2_begin = local_cursor;
-            node.h2_values.push_back(h2);
-            node.rel_starts.push_back(static_cast<uint32_t>(h2_begin - begin));
-
-            ExperimentalTempL3Bucket l3_bucket;
-            l3_bucket.h2_value = h2;
-            uint32_t h3_count = 0U;
-            while (local_cursor < end) {
-                const uint64_t h2_key = load_u64_unaligned(base + local_cursor * stride + key_offset);
-                if (h2_of(h2_key) != h2) {
-                    break;
-                }
-                ++h3_count;
-                const uint16_t h3 = h3_of(h2_key);
-                l3_bucket.h3_values.push_back(h3);
-                l3_bucket.rel_starts.push_back(static_cast<uint32_t>(local_cursor - h2_begin));
-                ++local_cursor;
-                while (local_cursor < end) {
-                    const uint64_t next_key = load_u64_unaligned(base + local_cursor * stride + key_offset);
-                    if (h2_of(next_key) != h2 || h3_of(next_key) != h3) {
-                        break;
-                    }
-                    ++local_cursor;
-                }
-            }
-
-            const uint64_t h2_span = local_cursor - h2_begin;
-            if (
-                h2_span <= static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) &&
-                h2_span > static_cast<uint64_t>(config.l3_split_threshold) &&
-                h3_count >= 2U
-            ) {
-                l3_bucket.rel_starts.push_back(static_cast<uint32_t>(h2_span));
-                node.l3_buckets.push_back(std::move(l3_bucket));
-            }
-        }
-
-        if (node.h2_values.size() >= 2U) {
-            node.rel_starts.push_back(static_cast<uint32_t>(span));
-            node.active = true;
-            node_slots[static_cast<size_t>(idx)] = std::move(node);
-        }
-    }
-
-    std::vector<ExperimentalTempL2Node> temp_nodes;
-    temp_nodes.reserve(node_slots.size());
-    for (auto &slot : node_slots) {
-        if (slot.active) {
-            temp_nodes.push_back(std::move(slot));
-        }
-    }
-    if (profile != nullptr) {
-        const double t1 = wall_time_seconds();
-        if (profile->phase2_seconds == 0.0) {
-            profile->phase2_seconds = t1 - t0;
-        } else {
-            profile->phase3_seconds = t1 - t0;
-        }
-    }
-
-    return materialize_experimental_nodes(std::move(l1_offsets), std::move(temp_nodes), config, profile);
+    return build_experimental_refined_flat_generic(
+        [base, stride, key_offset](uint64_t index) {
+            return load_u64_unaligned(base + index * stride + key_offset);
+        },
+        std::move(l1_offsets),
+        active_h1_values,
+        config,
+        false,
+        profile
+    );
 }
 
 Index build_experimental_refined_delayed_l3_strided_impl(
@@ -1243,116 +1604,16 @@ Index build_experimental_refined_delayed_l3_strided_impl(
     const Config &config,
     BuildProfile *profile = nullptr
 ) {
-    if (l1_offsets.empty()) {
-        Index index;
-        index.l1_offsets.resize(kL1Size, 0U);
-        return index;
-    }
-
-    std::vector<ExperimentalTempL2Node> node_slots(active_h1_values.size());
-    const int num_threads = static_cast<int>(effective_num_threads(config));
-    const double t0 = profile ? wall_time_seconds() : 0.0;
-    #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8)
-    for (int64_t idx = 0; idx < static_cast<int64_t>(active_h1_values.size()); ++idx) {
-        const uint32_t h1 = active_h1_values[static_cast<size_t>(idx)];
-        const uint64_t begin = l1_offsets[h1];
-        const uint64_t end = l1_offsets[h1 + 1U];
-        const uint64_t span = end - begin;
-        if (
-            span <= static_cast<uint64_t>(config.l2_split_threshold) ||
-            span > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())
-        ) {
-            continue;
-        }
-
-        ExperimentalTempL2Node node;
-        node.h1_value = h1;
-        node.parent_begin = begin;
-        node.h2_values.reserve(static_cast<size_t>(std::max<uint64_t>(2U, span / 64U)));
-        node.rel_starts.reserve(static_cast<size_t>(std::max<uint64_t>(3U, span / 64U + 1U)));
-
-        uint64_t local_cursor = begin;
-        while (local_cursor < end) {
-            const uint16_t h2 = h2_of(load_u64_unaligned(base + local_cursor * stride + key_offset));
-            const uint64_t h2_begin = local_cursor;
-            node.h2_values.push_back(h2);
-            node.rel_starts.push_back(static_cast<uint32_t>(h2_begin - begin));
-
-            uint32_t h3_count = 0U;
-            uint64_t scan_cursor = h2_begin;
-            while (scan_cursor < end) {
-                if (h2_of(load_u64_unaligned(base + scan_cursor * stride + key_offset)) != h2) {
-                    break;
-                }
-                ++h3_count;
-                const uint16_t h3 = h3_of(load_u64_unaligned(base + scan_cursor * stride + key_offset));
-                ++scan_cursor;
-                while (scan_cursor < end) {
-                    const uint64_t next_key = load_u64_unaligned(base + scan_cursor * stride + key_offset);
-                    if (h2_of(next_key) != h2 || h3_of(next_key) != h3) {
-                        break;
-                    }
-                    ++scan_cursor;
-                }
-            }
-
-            const uint64_t h2_end = scan_cursor;
-            const uint64_t h2_span = h2_end - h2_begin;
-            if (
-                h2_span <= static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) &&
-                h2_span > static_cast<uint64_t>(config.l3_split_threshold) &&
-                h3_count >= 2U
-            ) {
-                ExperimentalTempL3Bucket bucket;
-                bucket.h2_value = h2;
-                bucket.h3_values.reserve(h3_count);
-                bucket.rel_starts.reserve(static_cast<size_t>(h3_count) + 1U);
-
-                uint64_t materialize_cursor = h2_begin;
-                while (materialize_cursor < h2_end) {
-                    const uint16_t h3 = h3_of(load_u64_unaligned(base + materialize_cursor * stride + key_offset));
-                    bucket.h3_values.push_back(h3);
-                    bucket.rel_starts.push_back(static_cast<uint32_t>(materialize_cursor - h2_begin));
-                    ++materialize_cursor;
-                    while (materialize_cursor < h2_end) {
-                        const uint64_t next_key = load_u64_unaligned(base + materialize_cursor * stride + key_offset);
-                        if (h2_of(next_key) != h2 || h3_of(next_key) != h3) {
-                            break;
-                        }
-                        ++materialize_cursor;
-                    }
-                }
-                bucket.rel_starts.push_back(static_cast<uint32_t>(h2_span));
-                node.l3_buckets.push_back(std::move(bucket));
-            }
-
-            local_cursor = h2_end;
-        }
-
-        if (node.h2_values.size() >= 2U) {
-            node.rel_starts.push_back(static_cast<uint32_t>(span));
-            node.active = true;
-            node_slots[static_cast<size_t>(idx)] = std::move(node);
-        }
-    }
-
-    std::vector<ExperimentalTempL2Node> temp_nodes;
-    temp_nodes.reserve(node_slots.size());
-    for (auto &slot : node_slots) {
-        if (slot.active) {
-            temp_nodes.push_back(std::move(slot));
-        }
-    }
-    if (profile != nullptr) {
-        const double t1 = wall_time_seconds();
-        if (profile->phase2_seconds == 0.0) {
-            profile->phase2_seconds = t1 - t0;
-        } else {
-            profile->phase3_seconds = t1 - t0;
-        }
-    }
-
-    return materialize_experimental_nodes(std::move(l1_offsets), std::move(temp_nodes), config, profile);
+    return build_experimental_refined_flat_generic(
+        [base, stride, key_offset](uint64_t index) {
+            return load_u64_unaligned(base + index * stride + key_offset);
+        },
+        std::move(l1_offsets),
+        active_h1_values,
+        config,
+        true,
+        profile
+    );
 }
 
 Index build_experimental_impl(
@@ -1529,6 +1790,124 @@ Index build_experimental_parallel_l1_delayed_l3_impl(
     }
 
     return build_experimental_refined_delayed_l3_impl(
+        keys,
+        std::move(l1_offsets),
+        active_h1_values,
+        config,
+        profile
+    );
+}
+
+Index build_experimental_parallel_l1_legacy_impl(
+    const uint64_t *keys,
+    uint64_t size,
+    const Config &config,
+    BuildProfile *profile = nullptr
+) {
+    std::vector<uint64_t> l1_offsets(kL1Size, 0U);
+    if (size == 0U) {
+        Index index;
+        index.l1_offsets = std::move(l1_offsets);
+        return index;
+    }
+
+    const uint32_t first_h1 = h1_of(keys[0]);
+    std::vector<H1Transition> transitions;
+    const double t0 = profile ? wall_time_seconds() : 0.0;
+    collect_h1_transitions_parallel(keys, size, transitions, first_h1, config);
+    const double t1 = profile ? wall_time_seconds() : 0.0;
+
+    std::vector<uint32_t> active_h1_values;
+    active_h1_values.reserve(std::max<uint64_t>(
+        1024U,
+        size / static_cast<uint64_t>(std::max(config.l2_split_threshold, 1U))
+    ));
+
+    std::fill(l1_offsets.begin(), l1_offsets.begin() + static_cast<std::ptrdiff_t>(first_h1 + 1U), 0U);
+    uint32_t fill_from = first_h1 + 1U;
+    uint32_t prev_h1 = first_h1;
+    uint64_t prev_pos = 0U;
+    for (const H1Transition &transition : transitions) {
+        std::fill(
+            l1_offsets.begin() + static_cast<std::ptrdiff_t>(fill_from),
+            l1_offsets.begin() + static_cast<std::ptrdiff_t>(transition.h1_value + 1U),
+            transition.position
+        );
+        fill_from = transition.h1_value + 1U;
+        if (transition.position - prev_pos > static_cast<uint64_t>(config.l2_split_threshold)) {
+            active_h1_values.push_back(prev_h1);
+        }
+        prev_h1 = transition.h1_value;
+        prev_pos = transition.position;
+    }
+    if (size - prev_pos > static_cast<uint64_t>(config.l2_split_threshold)) {
+        active_h1_values.push_back(prev_h1);
+    }
+    std::fill(l1_offsets.begin() + static_cast<std::ptrdiff_t>(fill_from), l1_offsets.end(), size);
+
+    if (profile != nullptr) {
+        const double t2 = wall_time_seconds();
+        profile->phase1_seconds = t1 - t0;
+        profile->phase2_seconds = t2 - t1;
+    }
+
+    return build_experimental_refined_legacy_impl(keys, std::move(l1_offsets), active_h1_values, config, profile);
+}
+
+Index build_experimental_parallel_l1_delayed_l3_legacy_impl(
+    const uint64_t *keys,
+    uint64_t size,
+    const Config &config,
+    BuildProfile *profile = nullptr
+) {
+    std::vector<uint64_t> l1_offsets(kL1Size, 0U);
+    if (size == 0U) {
+        Index index;
+        index.l1_offsets = std::move(l1_offsets);
+        return index;
+    }
+
+    const uint32_t first_h1 = h1_of(keys[0]);
+    std::vector<H1Transition> transitions;
+    const double t0 = profile ? wall_time_seconds() : 0.0;
+    collect_h1_transitions_parallel(keys, size, transitions, first_h1, config);
+    const double t1 = profile ? wall_time_seconds() : 0.0;
+
+    std::vector<uint32_t> active_h1_values;
+    active_h1_values.reserve(std::max<uint64_t>(
+        1024U,
+        size / static_cast<uint64_t>(std::max(config.l2_split_threshold, 1U))
+    ));
+
+    std::fill(l1_offsets.begin(), l1_offsets.begin() + static_cast<std::ptrdiff_t>(first_h1 + 1U), 0U);
+    uint32_t fill_from = first_h1 + 1U;
+    uint32_t prev_h1 = first_h1;
+    uint64_t prev_pos = 0U;
+    for (const H1Transition &transition : transitions) {
+        std::fill(
+            l1_offsets.begin() + static_cast<std::ptrdiff_t>(fill_from),
+            l1_offsets.begin() + static_cast<std::ptrdiff_t>(transition.h1_value + 1U),
+            transition.position
+        );
+        fill_from = transition.h1_value + 1U;
+        if (transition.position - prev_pos > static_cast<uint64_t>(config.l2_split_threshold)) {
+            active_h1_values.push_back(prev_h1);
+        }
+        prev_h1 = transition.h1_value;
+        prev_pos = transition.position;
+    }
+    if (size - prev_pos > static_cast<uint64_t>(config.l2_split_threshold)) {
+        active_h1_values.push_back(prev_h1);
+    }
+    std::fill(l1_offsets.begin() + static_cast<std::ptrdiff_t>(fill_from), l1_offsets.end(), size);
+
+    if (profile != nullptr) {
+        const double t2 = wall_time_seconds();
+        profile->phase1_seconds = t1 - t0;
+        profile->phase2_seconds = t2 - t1;
+    }
+
+    return build_experimental_refined_delayed_l3_legacy_impl(
         keys,
         std::move(l1_offsets),
         active_h1_values,
@@ -1907,6 +2286,31 @@ ProfiledBuild build_experimental_hybrid_profiled(
         result.index = build_experimental_parallel_l1_impl(keys, size, config, &result.profile);
     } else {
         result.index = build_experimental_parallel_l1_delayed_l3_impl(keys, size, config, &result.profile);
+    }
+    return result;
+}
+
+ProfiledBuild build_experimental_hybrid_legacy_profiled(const std::vector<uint64_t> &keys, const Config &config) {
+    return build_experimental_hybrid_legacy_profiled(
+        keys.data(),
+        static_cast<uint64_t>(keys.size()),
+        config
+    );
+}
+
+ProfiledBuild build_experimental_hybrid_legacy_profiled(
+    const uint64_t *keys,
+    uint64_t size,
+    const Config &config
+) {
+    ProfiledBuild result;
+    if (size == 0U || keys == nullptr) {
+        return result;
+    }
+    if (size > kExperimentalHybridDelayedL3Threshold) {
+        result.index = build_experimental_parallel_l1_legacy_impl(keys, size, config, &result.profile);
+    } else {
+        result.index = build_experimental_parallel_l1_delayed_l3_legacy_impl(keys, size, config, &result.profile);
     }
     return result;
 }
