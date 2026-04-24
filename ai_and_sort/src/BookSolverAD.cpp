@@ -19,6 +19,7 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <atomic>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -66,10 +67,12 @@ template <typename T> using BookStore = BucketStore<MatrixBucket<T>>;
 using IndexStore = BucketStore<std::vector<uint64_t>>;
 using PrefixStore = BucketStore<AdaptiveIndex::Index>;
 
+constexpr uint64_t kPendingMatchIndex = 0xFFFFFFFFFFFFFFFEULL;
+
 struct MatchCache {
     size_t map_length = 0;
     size_t derive_size = 0;
-    std::vector<uint64_t> match_index;
+    std::unique_ptr<std::atomic<uint64_t>[]> match_index;
     std::vector<uint32_t> match_mat;
 
     MatchCache() = default;
@@ -77,27 +80,67 @@ struct MatchCache {
     MatchCache(size_t map_length_, size_t derive_size_)
         : map_length(map_length_),
           derive_size(derive_size_),
-          match_index(map_length_, std::numeric_limits<uint64_t>::max()),
-          match_mat(map_length_ * derive_size_, 0U) {}
+          match_mat(map_length_ * derive_size_, 0U) {
+        match_index = std::make_unique<std::atomic<uint64_t>[]>(map_length_);
+        for (size_t i = 0; i < map_length_; ++i) {
+            match_index[i].store(std::numeric_limits<uint64_t>::max(), std::memory_order_relaxed);
+        }
+    }
+
+    MatchCache(MatchCache &&other) noexcept
+        : map_length(other.map_length),
+          derive_size(other.derive_size),
+          match_index(std::move(other.match_index)),
+          match_mat(std::move(other.match_mat)) {
+        other.map_length = 0;
+        other.derive_size = 0;
+    }
+
+    MatchCache &operator=(MatchCache &&other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+        map_length = other.map_length;
+        derive_size = other.derive_size;
+        match_index = std::move(other.match_index);
+        match_mat = std::move(other.match_mat);
+        other.map_length = 0;
+        other.derive_size = 0;
+        return *this;
+    }
+
+    MatchCache(const MatchCache &) = delete;
+    MatchCache &operator=(const MatchCache &) = delete;
 
     [[nodiscard]] uint32_t *row(size_t index) {
         return match_mat.data() + index * derive_size;
     }
+
+    [[nodiscard]] uint64_t key(size_t index) const {
+        return match_index[index].load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] bool try_claim_empty(size_t index) {
+        uint64_t expected = std::numeric_limits<uint64_t>::max();
+        return match_index[index].compare_exchange_strong(
+            expected,
+            kPendingMatchIndex,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire
+        );
+    }
+
+    void publish(size_t index, uint64_t key_value, const std::vector<uint32_t> &ranked_array) {
+        std::copy(ranked_array.begin(), ranked_array.end(), row(index));
+        match_index[index].store(key_value, std::memory_order_release);
+    }
 };
 
-enum class PendingRowKind : uint8_t {
-    DirectRanked,
-    FirstSubsetRanked,
-    PairSubsetRanked
-};
-
-template <typename T> struct PendingRowOp {
-    PendingRowKind kind = PendingRowKind::DirectRanked;
-    const T *row_ptr = nullptr;
-    const uint32_t *ranked_ptr = nullptr;
-    const uint32_t *subset_ptr = nullptr;
-    size_t len = 0;
-};
+template <typename T>
+MatchCache &get_shared_match_cache(
+    std::unordered_map<uint32_t, MatchCache> &match_dict,
+    size_t derive_size
+);
 
 template <typename T> struct AdSolveWorkspace {
     std::vector<uint64_t> derived_boards;
@@ -112,9 +155,6 @@ template <typename T> struct AdSolveWorkspace {
     std::vector<double> success_probability;
     std::vector<uint64_t> kept_indices;
     std::vector<T> kept_values;
-    std::array<PendingRowOp<T>, 4> pending_ops{};
-    size_t pending_op_count = 0;
-    std::array<std::vector<uint32_t>, 4> pending_ranked_storage{};
 };
 
 constexpr size_t kNotFoundIndex = std::numeric_limits<size_t>::max();
@@ -124,14 +164,6 @@ constexpr std::array<uint32_t, 19> kFactorials = {
     1U, 1U, 2U, 6U, 24U, 120U, 720U, 5040U, 40320U, 362880U,
     3628800U, 39916800U, 1U, 1U, 1U, 1U, 1U, 1U, 1U
 };
-
-inline void prefetch_read_low_locality(const void *ptr) {
-#if defined(__GNUC__) || defined(__clang__)
-    __builtin_prefetch(ptr, 0, 1);
-#else
-    (void)ptr;
-#endif
-}
 
 void extract_f_positions_into(uint64_t pos_bitmap, std::vector<uint64_t> &result) {
     result.clear();
@@ -1065,7 +1097,6 @@ void solve_optimal_success_rate_arr_into(
     uint64_t rep_t_gen = rep_t | (new_value << static_cast<uint64_t>(4 * spawn_pos));
     uint64_t board_rev = FormationAD::reverse(board_with_spawn);
     optimal_success_rate.assign(derive_size, zero_val);
-    workspace.pending_op_count = 0;
     auto moves = FormationAD::m_move_all_dir2(board_with_spawn, board_rev);
     (void)rep_t_rev;
 
@@ -1082,7 +1113,7 @@ void solve_optimal_success_rate_arr_into(
         size_t hashed_match_ind = static_cast<size_t>(match_ind % static_cast<uint64_t>(match_cache.map_length));
 
         auto load_or_compute_ranked = [&](bool store_if_empty) -> ArrayView<const uint32_t> {
-            if (match_cache.match_index[hashed_match_ind] == match_ind) {
+            if (match_cache.key(hashed_match_ind) == match_ind) {
                 return {match_cache.row(hashed_match_ind), derive_size};
             }
             process_derived_into(
@@ -1097,57 +1128,32 @@ void solve_optimal_success_rate_arr_into(
                 workspace.derived_boards
             );
             match_arr_into(workspace.moved_boards, workspace, workspace.ranked_array);
-            if (store_if_empty && match_cache.match_index[hashed_match_ind] == kEmptyMatchIndex) {
-                match_cache.match_index[hashed_match_ind] = match_ind;
-                std::copy(workspace.ranked_array.begin(), workspace.ranked_array.end(), match_cache.row(hashed_match_ind));
+            if (store_if_empty && match_cache.try_claim_empty(hashed_match_ind)) {
+                match_cache.publish(hashed_match_ind, match_ind, workspace.ranked_array);
+                return {match_cache.row(hashed_match_ind), derive_size};
+            }
+            if (match_cache.key(hashed_match_ind) == match_ind) {
+                return {match_cache.row(hashed_match_ind), derive_size};
             }
             return {workspace.ranked_array.data(), workspace.ranked_array.size()};
-        };
-
-        auto pin_ranked_array = [&](size_t slot_index, ArrayView<const uint32_t> ranked_array) -> const uint32_t * {
-            if (match_cache.match_index[hashed_match_ind] == match_ind) {
-                return match_cache.row(hashed_match_ind);
-            }
-            auto &storage = workspace.pending_ranked_storage[slot_index];
-            storage.assign(ranked_array.begin(), ranked_array.end());
-            return storage.data();
-        };
-
-        auto enqueue_pending = [&](PendingRowKind kind, const T *row_ptr, const uint32_t *ranked_ptr, const uint32_t *subset_ptr, size_t len) {
-            const size_t slot_index = workspace.pending_op_count++;
-            workspace.pending_ops[slot_index] = {kind, row_ptr, ranked_ptr, subset_ptr, len};
         };
 
         if (mask_new_tile) {
             uint64_t unmasked_newt = BoardMover::move_board(board_with_spawn, direction + 1);
             unmasked_newt = apply_sym_like(unmasked_newt, symm_index);
             if (count_32k > 15) {
-                auto [pos_rank64, pos_rank128, pos_rank, pos_64] = find_3x64_pos(unmasked_newt, param);
-                uint64_t board_364 = canonical_board | (0xFULL << pos_64);
-                size_t mid = search_arr_ad(ind_dict.at(pos_rank), board_364, indind_dict.at(pos_rank));
-                if (mid == kNotFoundIndex) {
-                    continue;
-                }
-                const T *row_ptr = book_dict.at(pos_rank).row(mid);
-                prefetch_read_low_locality(row_ptr);
                 ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
-                auto subset = FormationAD::permutation_pair_subset(
+                update_mnt_osr_364_arr_ad(
+                    book_dict,
+                    canonical_board,
+                    unmasked_newt,
+                    ind_dict,
+                    indind_dict,
+                    optimal_success_rate,
+                    ranked_array,
                     permutation_table,
-                    static_cast<uint8_t>(pos_rank),
-                    static_cast<uint8_t>(pos_rank - static_cast<int8_t>(param.num_free_32k)),
-                    pos_rank64,
-                    pos_rank128
+                    param
                 );
-                if (subset.size < ranked_array.size) {
-                    continue;
-                }
-                const size_t slot_index = workspace.pending_op_count;
-                const uint32_t *ranked_ptr = pin_ranked_array(slot_index, ranked_array);
-                prefetch_read_low_locality(subset.data);
-                if (ranked_array.size > 0) {
-                    prefetch_read_low_locality(row_ptr + subset[ranked_ptr[0]]);
-                }
-                enqueue_pending(PendingRowKind::PairSubsetRanked, row_ptr, ranked_ptr, subset.data, ranked_array.size);
                 continue;
             }
 
@@ -1162,20 +1168,16 @@ void solve_optimal_success_rate_arr_into(
                 dispatch.tiles_combinations[0] == dispatch.tiles_combinations[1] &&
                 dispatch.tiles_combinations[0] == dispatch.tiles_combinations[2]
             ) {
-                const int target_count = static_cast<int>(dispatch.count32k - 3 + 16);
-                size_t mid = search_arr_ad(ind_dict.at(target_count), unmasked_newt, indind_dict.at(target_count));
-                if (mid == kNotFoundIndex) {
-                    continue;
-                }
-                const T *row_ptr = book_dict.at(target_count).row(mid);
-                prefetch_read_low_locality(row_ptr);
                 ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
-                const size_t slot_index = workspace.pending_op_count;
-                const uint32_t *ranked_ptr = pin_ranked_array(slot_index, ranked_array);
-                if (ranked_array.size > 0) {
-                    prefetch_read_low_locality(row_ptr + ranked_ptr[0]);
-                }
-                enqueue_pending(PendingRowKind::DirectRanked, row_ptr, ranked_ptr, nullptr, ranked_array.size);
+                update_mnt_osr_ad_arr3(
+                    book_dict,
+                    unmasked_newt,
+                    dispatch.count32k,
+                    ind_dict,
+                    indind_dict,
+                    ranked_array,
+                    optimal_success_rate
+                );
             } else if (
                 dispatch.tiles_combinations.size > 1 &&
                 dispatch.tiles_combinations[0] == dispatch.tiles_combinations[1]
@@ -1207,69 +1209,25 @@ void solve_optimal_success_rate_arr_into(
                     workspace
                 );
             } else {
-                size_t mid = search_arr_ad(ind_dict.at(dispatch.count32k), canonical_board, indind_dict.at(dispatch.count32k));
-                if (mid == kNotFoundIndex) {
-                    continue;
-                }
-                const T *row_ptr = book_dict.at(dispatch.count32k).row(mid);
-                prefetch_read_low_locality(row_ptr);
                 ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
-                auto subset = FormationAD::permutation_first_subset(
+                update_mnt_osr_ad_arr2(
+                    book_dict,
+                    canonical_board,
+                    dispatch.pos_rank,
+                    dispatch.count32k,
+                    ind_dict,
+                    indind_dict,
+                    ranked_array,
+                    optimal_success_rate,
                     permutation_table,
-                    static_cast<uint8_t>(dispatch.count32k),
-                    static_cast<uint8_t>(dispatch.count32k - static_cast<int8_t>(param.num_free_32k)),
-                    dispatch.pos_rank
+                    param
                 );
-                if (subset.size < ranked_array.size) {
-                    continue;
-                }
-                const size_t slot_index = workspace.pending_op_count;
-                const uint32_t *ranked_ptr = pin_ranked_array(slot_index, ranked_array);
-                prefetch_read_low_locality(subset.data);
-                if (ranked_array.size > 0) {
-                    prefetch_read_low_locality(row_ptr + subset[ranked_ptr[0]]);
-                }
-                enqueue_pending(PendingRowKind::FirstSubsetRanked, row_ptr, ranked_ptr, subset.data, ranked_array.size);
             }
             continue;
         }
 
-        size_t mid = search_arr_ad(ind_arr, canonical_board, indind_arr);
-        if (mid == kNotFoundIndex) {
-            continue;
-        }
-        const T *row_ptr = book_bucket.row(mid);
-        prefetch_read_low_locality(row_ptr);
         ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
-        const size_t slot_index = workspace.pending_op_count;
-        const uint32_t *ranked_ptr = pin_ranked_array(slot_index, ranked_array);
-        if (ranked_array.size > 0) {
-            prefetch_read_low_locality(row_ptr + ranked_ptr[0]);
-        }
-        enqueue_pending(PendingRowKind::DirectRanked, row_ptr, ranked_ptr, nullptr, ranked_array.size);
-    }
-
-    for (size_t op_index = 0; op_index < workspace.pending_op_count; ++op_index) {
-        const PendingRowOp<T> &op = workspace.pending_ops[op_index];
-        switch (op.kind) {
-            case PendingRowKind::DirectRanked:
-                for (size_t i = 0; i < op.len; ++i) {
-                    T value = op.row_ptr[op.ranked_ptr[i]];
-                    if (value > optimal_success_rate[i]) {
-                        optimal_success_rate[i] = value;
-                    }
-                }
-                break;
-            case PendingRowKind::FirstSubsetRanked:
-            case PendingRowKind::PairSubsetRanked:
-                for (size_t i = 0; i < op.len; ++i) {
-                    T value = op.row_ptr[op.subset_ptr[op.ranked_ptr[i]]];
-                    if (value > optimal_success_rate[i]) {
-                        optimal_success_rate[i] = value;
-                    }
-                }
-                break;
-        }
+        update_osr_ad_arr(book_bucket, canonical_board, ind_arr, indind_arr, optimal_success_rate, ranked_array);
     }
 }
 
@@ -1433,7 +1391,8 @@ void recalculate_ad(
     T max_scale,
     T zero_val,
     double spawn_rate4,
-    int num_threads
+    int num_threads,
+    std::unordered_map<uint32_t, MatchCache> &match_dict
 ) {
     for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
         const auto &indices = ind_dict0.at(key);
@@ -1443,8 +1402,7 @@ void recalculate_ad(
         }
 
         const size_t derive_size = book_bucket0.cols;
-        const size_t map_length = derive_size < 5000U ? 33331U : 11113U;
-        std::vector<MatchCache> thread_caches(static_cast<size_t>(num_threads), MatchCache(map_length, derive_size));
+        MatchCache &match_cache = get_shared_match_cache<T>(match_dict, derive_size);
         std::vector<AdSolveWorkspace<T>> thread_workspaces(static_cast<size_t>(num_threads));
         const auto &book_bucket1 = book_dict1.at(key);
         const auto &ind_arr1 = ind_dict1.at(key);
@@ -1465,7 +1423,6 @@ void recalculate_ad(
             #pragma omp parallel for num_threads(num_threads)
             for (int64_t k = static_cast<int64_t>(start); k < static_cast<int64_t>(end); ++k) {
                 const size_t thread_index = static_cast<size_t>(omp_get_thread_num());
-                MatchCache &match_cache = thread_caches[thread_index];
                 AdSolveWorkspace<T> &workspace = thread_workspaces[thread_index];
                 uint64_t board = indices[static_cast<size_t>(k)];
                 if (derive_size == 1U) {
@@ -1604,21 +1561,15 @@ void recalculate_ad(
 }
 
 template <typename T>
-std::vector<MatchCache> &get_chunk_match_caches(
-    std::unordered_map<uint32_t, std::vector<MatchCache>> &match_dict,
-    size_t derive_size,
-    int num_threads
+MatchCache &get_shared_match_cache(
+    std::unordered_map<uint32_t, MatchCache> &match_dict,
+    size_t derive_size
 ) {
     const uint32_t key = static_cast<uint32_t>(derive_size);
     auto it = match_dict.find(key);
     if (it == match_dict.end()) {
         const size_t map_length = derive_size < 5000U ? 33331U : 11113U;
-        std::vector<MatchCache> caches;
-        caches.reserve(static_cast<size_t>(num_threads));
-        for (int idx = 0; idx < num_threads; ++idx) {
-            caches.emplace_back(map_length, derive_size);
-        }
-        it = match_dict.emplace(key, std::move(caches)).first;
+        it = match_dict.emplace(key, MatchCache(map_length, derive_size)).first;
     }
     return it->second;
 }
@@ -1631,7 +1582,7 @@ void recalculate_ad_chunk(
     const BookStore<T> &book_dict,
     const IndexStore &ind_dict,
     const PrefixStore &indind_dict,
-    std::unordered_map<uint32_t, std::vector<MatchCache>> &match_dict,
+    std::unordered_map<uint32_t, MatchCache> &match_dict,
     const FormationAD::TilesCombinationTable &tiles_table,
     const FormationAD::PermutationTable &permutation_table,
     const AdvancedMaskParam &param,
@@ -1650,7 +1601,7 @@ void recalculate_ad_chunk(
     if (derive_size == 0 || positions_chunk.empty()) {
         return;
     }
-    auto &thread_caches = get_chunk_match_caches<T>(match_dict, derive_size, num_threads);
+    MatchCache &match_cache = get_shared_match_cache<T>(match_dict, derive_size);
     std::vector<AdSolveWorkspace<T>> thread_workspaces(static_cast<size_t>(num_threads));
 
     const uint64_t new_value = is_gen2_step ? 1ULL : 2ULL;
@@ -1675,7 +1626,6 @@ void recalculate_ad_chunk(
         #pragma omp parallel for num_threads(num_threads)
         for (int64_t row_index = static_cast<int64_t>(start); row_index < static_cast<int64_t>(end); ++row_index) {
             const size_t thread_index = static_cast<size_t>(omp_get_thread_num());
-            MatchCache &match_cache = thread_caches[thread_index];
             AdSolveWorkspace<T> &workspace = thread_workspaces[thread_index];
             const uint64_t board = positions_chunk[static_cast<size_t>(row_index)];
             if (derive_size == 1U) {
@@ -1793,7 +1743,7 @@ void iter_ind_dict4(
     const BookStore<T> &book_dict2,
     const IndexStore &ind_dict2,
     const PrefixStore &indind_dict2,
-    std::unordered_map<uint32_t, std::vector<MatchCache>> &match_dict,
+    std::unordered_map<uint32_t, MatchCache> &match_dict,
     const FormationAD::TilesCombinationTable &tiles_table,
     const FormationAD::PermutationTable &permutation_table,
     const AdvancedMaskParam &param,
@@ -1878,7 +1828,7 @@ void iter_ind_dict2(
     const BookStore<T> &book_dict1,
     const IndexStore &ind_dict1,
     const PrefixStore &indind_dict1,
-    std::unordered_map<uint32_t, std::vector<MatchCache>> &match_dict,
+    std::unordered_map<uint32_t, MatchCache> &match_dict,
     const FormationAD::TilesCombinationTable &tiles_table,
     const FormationAD::PermutationTable &permutation_table,
     const AdvancedMaskParam &param,
@@ -2006,7 +1956,7 @@ void recalculate_process_ad_chunked_impl(
         fs::remove(final_raw_path);
     }
 
-    std::unordered_map<uint32_t, std::vector<MatchCache>> match_dict;
+    std::unordered_map<uint32_t, MatchCache> match_dict;
     bool started = false;
 
     for (int step = options.steps - 3; step >= 0; --step) {
@@ -2188,6 +2138,7 @@ void recalculate_process_ad_impl(
         fs::remove(final_raw_path);
     }
 
+    std::unordered_map<uint32_t, MatchCache> match_dict;
     bool started = false;
     bool has_prefix1 = false;
 
@@ -2258,7 +2209,8 @@ void recalculate_process_ad_impl(
             max_scale,
             zero_val,
             options.spawn_rate4,
-            num_threads
+            num_threads,
+            match_dict
         );
         auto [length, max_rate] = length_count(book_dict0);
         double normalized_max_rate = static_cast<double>(max_rate - zero_val) / static_cast<double>(max_scale - zero_val);

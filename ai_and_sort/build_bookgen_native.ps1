@@ -23,7 +23,7 @@ $Sources = @(
 
 $Args = @(
     "-O3",
-    "-march=x86-64-v2",
+    "-march=x86-64-v3",
     "-std=c++17",
     "-shared",
     "-fopenmp",

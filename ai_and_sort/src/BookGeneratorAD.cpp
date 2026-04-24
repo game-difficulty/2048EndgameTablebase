@@ -395,14 +395,13 @@ RestartResult handle_restart_ad(int step_index, const std::string &pathname, con
 uint8_t derive_3x64(uint64_t masked, const std::array<uint64_t, 16> &pos_32k, int8_t count_32k, std::array<uint64_t, 120> &out) {
     uint8_t count = 0;
     for (int idx = 0; idx < count_32k; ++idx) {
-        uint64_t pos = pos_32k[static_cast<size_t>(idx)];
-        uint64_t tile_value = (masked >> pos) & 0xFULL;
+        const uint64_t pos = pos_32k[static_cast<size_t>(idx)];
+        const uint64_t tile_value = (masked >> pos) & 0xFULL;
         if (tile_value == 6ULL) {
             continue;
         }
-        uint64_t derived = masked & ~(0xFULL << pos);
-        derived |= (6ULL << pos);
-        out[static_cast<size_t>(count++)] = derived;
+        const uint64_t delta = ((tile_value ^ 6ULL) << pos);
+        out[static_cast<size_t>(count++)] = masked ^ delta;
     }
     return count;
 }
@@ -454,13 +453,17 @@ DeriveResult derive(uint64_t board, uint32_t original_board_sum, const Formation
         DeriveResult result;
         result.is_valid = true;
         result.is_derived = true;
+        const uint64_t target_value = static_cast<uint64_t>(tiles_combinations[0]);
+        std::array<uint64_t, 16> deltas{};
+        for (int idx = 0; idx < stats.count_32k; ++idx) {
+            const uint64_t pos = stats.pos_32k[static_cast<size_t>(idx)];
+            const uint64_t tile_value = (board >> pos) & 0xFULL;
+            deltas[static_cast<size_t>(idx)] = ((tile_value ^ target_value) << pos);
+        }
         for (int pos1 = 0; pos1 < stats.count_32k - 1; ++pos1) {
+            const uint64_t base = board ^ deltas[static_cast<size_t>(pos1)];
             for (int pos2 = pos1 + 1; pos2 < stats.count_32k; ++pos2) {
-                uint64_t derived = board & ~(0xFULL << stats.pos_32k[static_cast<size_t>(pos1)]);
-                derived |= static_cast<uint64_t>(tiles_combinations[0]) << stats.pos_32k[static_cast<size_t>(pos1)];
-                derived &= ~(0xFULL << stats.pos_32k[static_cast<size_t>(pos2)]);
-                derived |= static_cast<uint64_t>(tiles_combinations[0]) << stats.pos_32k[static_cast<size_t>(pos2)];
-                result.boards[static_cast<size_t>(result.count++)] = derived;
+                result.boards[static_cast<size_t>(result.count++)] = base ^ deltas[static_cast<size_t>(pos2)];
             }
         }
         return result;
@@ -526,6 +529,7 @@ struct GenBoardsAdDispatch {
 };
 
 constexpr size_t kAdGenBatchSize = 128;
+constexpr size_t kAdMaxDerivedBoards = 120;
 
 enum class BufferedBaseKind : uint8_t {
     Plain = 0,
@@ -538,6 +542,75 @@ struct BufferedAcceptedBoards {
     size_t count = 0;
 };
 
+template <typename TransformFn>
+void transform_boards_batch(const uint64_t *src, uint64_t *dst, size_t count, TransformFn transform) {
+    #pragma omp simd
+    for (int64_t i = 0; i < static_cast<int64_t>(count); ++i) {
+        dst[static_cast<size_t>(i)] = transform(src[static_cast<size_t>(i)]);
+    }
+}
+
+void apply_canonical_batch(const uint64_t *src, uint64_t *dst, size_t count, int symm_mode) {
+    switch (static_cast<SymmMode>(symm_mode)) {
+        case SymmMode::Full:
+            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_full(board); });
+            break;
+        case SymmMode::Diagonal:
+            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_diagonal(board); });
+            break;
+        case SymmMode::Horizontal:
+            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_horizontal(board); });
+            break;
+        case SymmMode::Min33:
+            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_min33(board); });
+            break;
+        case SymmMode::Min24:
+            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_min24(board); });
+            break;
+        case SymmMode::Min34:
+            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_min34(board); });
+            break;
+        case SymmMode::Identity:
+        default:
+            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_identity(board); });
+            break;
+    }
+}
+
+size_t filter_pattern_matching_boards(
+    const uint64_t *src,
+    size_t count,
+    const std::vector<uint64_t> &masks,
+    uint64_t *dst
+) {
+    if (count == 0) {
+        return 0;
+    }
+    if (masks.empty()) {
+        std::memcpy(dst, src, count * sizeof(uint64_t));
+        return count;
+    }
+
+    std::array<uint8_t, kAdMaxDerivedBoards> keep{};
+    for (uint64_t mask : masks) {
+        #pragma omp simd
+        for (int64_t i = 0; i < static_cast<int64_t>(count); ++i) {
+            keep[static_cast<size_t>(i)] = static_cast<uint8_t>(
+                keep[static_cast<size_t>(i)] |
+                static_cast<uint8_t>(((src[static_cast<size_t>(i)] & mask) == mask) ? 1U : 0U)
+            );
+        }
+    }
+
+    size_t kept_count = 0;
+    for (size_t i = 0; i < count; ++i) {
+        if (keep[i] != 0U) {
+            dst[kept_count++] = src[i];
+        }
+    }
+    return kept_count;
+}
+
 void process_buffered_accepted_boards(
     const BufferedAcceptedBoards &accepted,
     uint32_t original_board_sum,
@@ -548,6 +621,7 @@ void process_buffered_accepted_boards(
     uint64_t *target_arr,
     size_t &counter
 ) {
+    std::array<uint64_t, kAdMaxDerivedBoards> filtered_derived{};
     for (size_t accepted_index = 0; accepted_index < accepted.count; ++accepted_index) {
         const uint64_t canon = accepted.boards[accepted_index];
         if (accepted.kinds[accepted_index] == static_cast<uint8_t>(BufferedBaseKind::Plain)) {
@@ -562,12 +636,18 @@ void process_buffered_accepted_boards(
             target_arr[counter++] = canon;
             continue;
         }
-        for (uint8_t derived_index = 0; derived_index < derived.count; ++derived_index) {
-            const uint64_t derived_board = derived.boards[static_cast<size_t>(derived_index)];
-            if (is_pattern(derived_board, spec.pattern_masks)) {
-                target_arr[counter++] = apply_canonical(derived_board, spec.symm_mode);
-            }
+        const size_t filtered_count = filter_pattern_matching_boards(
+            derived.boards.data(),
+            derived.count,
+            spec.pattern_masks,
+            filtered_derived.data()
+        );
+        if (filtered_count == 0) {
+            continue;
         }
+        apply_canonical_batch(filtered_derived.data(), filtered_derived.data(), filtered_count, spec.symm_mode);
+        std::memcpy(target_arr + counter, filtered_derived.data(), filtered_count * sizeof(uint64_t));
+        counter += filtered_count;
     }
 }
 
