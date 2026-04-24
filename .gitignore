@@ -131,9 +131,12 @@ media/texts/
 .VSCodeCounter/
 .codex/
 *.spec
+tmp_vec_report*.txt
 
 # OS / editor junk
 Thumbs.db
 Desktop.ini
 .DS_Store
 *.orig
+
+
