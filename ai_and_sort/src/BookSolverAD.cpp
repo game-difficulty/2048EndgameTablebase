@@ -146,7 +146,7 @@ template <typename T> struct AdSolveWorkspace {
     std::vector<uint64_t> derived_boards;
     std::vector<uint64_t> moved_boards;
     std::vector<uint64_t> matched_boards;
-    std::vector<uint64_t> positions;
+    std::array<uint8_t, 16> positions{};
     std::vector<size_t> matched_positions;
     std::vector<uint32_t> sorted_indices;
     std::vector<uint32_t> ranked_array;
@@ -164,17 +164,6 @@ constexpr std::array<uint32_t, 19> kFactorials = {
     1U, 1U, 2U, 6U, 24U, 120U, 720U, 5040U, 40320U, 362880U,
     3628800U, 39916800U, 1U, 1U, 1U, 1U, 1U, 1U, 1U
 };
-
-void extract_f_positions_into(uint64_t pos_bitmap, std::vector<uint64_t> &result) {
-    result.clear();
-    result.reserve(16);
-    for (int i = 60; i >= 0; i -= 4) {
-        uint64_t nibble = (pos_bitmap >> static_cast<uint64_t>(i)) & 0xFULL;
-        if (nibble == 0xFULL) {
-            result.push_back(static_cast<uint64_t>(i));
-        }
-    }
-}
 
 double wall_time_seconds() {
     return omp_get_wtime();
@@ -876,13 +865,13 @@ void update_mnt_osr_ad_arr1(
     int8_t count_32k,
     AdSolveWorkspace<T> &workspace
 ) {
-    extract_f_positions_into(pos_32k, workspace.positions);
+    FormationAD::extract_f_positions_compact(pos_32k, workspace.positions.data());
     const auto &positions = workspace.positions;
     for (int j = 0; j < count_32k; ++j) {
         if (j == static_cast<int>(pos_rank)) {
             continue;
         }
-        uint64_t pos = positions[static_cast<size_t>(j)];
+        const uint64_t pos = static_cast<uint64_t>(positions[static_cast<size_t>(j)]);
         uint64_t unmasked_b_j = (unmasked_board & ~(0xFULL << pos)) | (static_cast<uint64_t>(tiles_combinations[0]) << pos);
         auto [canonical_board, symm_index] = apply_sym_pair(unmasked_b_j, spec.symm_mode);
 

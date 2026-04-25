@@ -184,7 +184,7 @@ What `build_linux.sh` does:
    - extract `ai_and_sort/egtb_data.7z` into `ai_and_sort/src/`
    - build `ai_core`
    - build `mover_core`
-   - build `sort_wrapper.so`
+   - build `bookgen_native.so`
 3. Verifies the Python imports required to launch the app
 
 After the build finishes, you can run the desktop app manually:

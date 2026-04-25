@@ -39,15 +39,12 @@ namespace BookGeneratorUtils {
                 if (module_len > 0) {
                     fs::path module_dir = fs::path(module_path).parent_path();
                     candidates.push_back(module_dir / "bookgen_native.dll");
-                    candidates.push_back(module_dir / "sort_wrapper.dll");
                 }
             }
 
             candidates.insert(candidates.end(), {
                 "bookgen_native.dll",
                 fs::path("ai_and_sort") / "bookgen_native.dll",
-                "sort_wrapper.dll",
-                fs::path("ai_and_sort") / "sort_wrapper.dll",
             });
 
             char module_path[MAX_PATH];
@@ -56,8 +53,6 @@ namespace BookGeneratorUtils {
                 fs::path exe_dir = fs::path(module_path).parent_path();
                 candidates.push_back(exe_dir / "bookgen_native.dll");
                 candidates.push_back(exe_dir / "ai_and_sort" / "bookgen_native.dll");
-                candidates.push_back(exe_dir / "sort_wrapper.dll");
-                candidates.push_back(exe_dir / "ai_and_sort" / "sort_wrapper.dll");
             }
 
             for (const auto &candidate : candidates) {
@@ -78,12 +73,6 @@ namespace BookGeneratorUtils {
             void *lib = dlopen("bookgen_native.so", RTLD_LAZY);
             if (!lib) {
                 lib = dlopen("ai_and_sort/bookgen_native.so", RTLD_LAZY);
-            }
-            if (!lib) {
-                lib = dlopen("sort_wrapper.so", RTLD_LAZY);
-            }
-            if (!lib) {
-                lib = dlopen("ai_and_sort/sort_wrapper.so", RTLD_LAZY);
             }
             return lib ? reinterpret_cast<SortFn>(dlsym(lib, "sort_uint64")) : nullptr;
 #endif

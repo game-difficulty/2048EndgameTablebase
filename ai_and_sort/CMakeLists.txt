@@ -25,11 +25,6 @@ if(NOT _nanobind_found AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/extern/nanobind/C
     set(_nanobind_found TRUE)
 endif()
 
-if(NOT _nanobind_found AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../AIPlayer_cpp/extern/nanobind/CMakeLists.txt")
-    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../AIPlayer_cpp/extern/nanobind" "${CMAKE_CURRENT_BINARY_DIR}/extern/nanobind")
-    set(_nanobind_found TRUE)
-endif()
-
 if(NOT _nanobind_found)
     message(FATAL_ERROR
         "nanobind is unavailable. Install it with `pip install nanobind` or provide ai_and_sort/extern/nanobind."

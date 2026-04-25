@@ -55,6 +55,12 @@ struct TileCountResult {
     uint64_t pos_bitmap = 0;
 };
 
+struct TileCountPositionsResult {
+    uint32_t total_sum = 0;
+    int8_t count_32k = 0;
+    std::array<uint8_t, 16> pos_32k{};
+};
+
 struct TileCount3Result {
     uint32_t total_sum = 0;
     int8_t count_32k = 0;
@@ -80,6 +86,7 @@ MaskerContext init_masker(const AdvancedPatternSpec &spec);
 uint64_t mask_board(uint64_t board, int threshold = 6);
 
 TileCountResult tile_sum_and_32k_count(uint64_t masked_board, const AdvancedMaskParam &param);
+TileCountPositionsResult tile_sum_and_32k_count_positions(uint64_t masked_board, const AdvancedMaskParam &param);
 TileCountResult tile_sum_and_32k_count2(uint64_t masked_board, const AdvancedMaskParam &param);
 TileCount3Result tile_sum_and_32k_count3(uint64_t masked_board, const AdvancedMaskParam &param);
 TileCount4Result tile_sum_and_32k_count4(uint64_t board, const AdvancedMaskParam &param);
@@ -102,7 +109,6 @@ void unmask_board_into(
     std::vector<uint64_t> &boards
 );
 
-std::vector<uint64_t> extract_f_positions(uint64_t pos_bitmap);
 PermutationSlot generate_permutations(int m, int n);
 PermutationSlot resort_permutations(int m, int n, const PermutationSlot &permutation, bool type_flag);
 void build_permutation_subsets(PermutationSlot &slot);
@@ -151,6 +157,25 @@ inline ArrayView<const uint32_t> permutation_pair_subset(
 inline ArrayView<const uint8_t> tiles_combination_view(const TilesCombinationTable &table, uint8_t a, uint8_t b) {
     const auto &slot = table[tiles_combination_index(a, b)];
     return {slot.data(), slot.size()};
+}
+
+inline uint8_t extract_f_positions_compact(uint64_t pos_bitmap, uint8_t *out) {
+    uint8_t count = 0;
+    while (pos_bitmap != 0ULL) {
+#if defined(__GNUC__) || defined(__clang__)
+        const unsigned msb = 63U - static_cast<unsigned>(__builtin_clzll(pos_bitmap));
+        const uint8_t shift = static_cast<uint8_t>(msb & ~3U);
+#else
+        int shift_int = 60;
+        while (((pos_bitmap >> static_cast<uint64_t>(shift_int)) & 0xFULLULL) != 0xFULLULL) {
+            shift_int -= 4;
+        }
+        const uint8_t shift = static_cast<uint8_t>(shift_int);
+#endif
+        out[count++] = shift;
+        pos_bitmap &= ~(0xFULL << shift);
+    }
+    return count;
 }
 
 } // namespace FormationAD

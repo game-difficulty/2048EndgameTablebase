@@ -37,6 +37,7 @@ The goal is to keep all source needed for building the app while excluding local
     - `src/egtb_data_512.cpp`
 
 ### Documentation and static assets
+- `docs/`
 - `docs_and_configs/help/`
 - `docs_and_configs/code_structure.txt`
 - `docs_and_configs/github_upload_guide.md`
@@ -55,7 +56,6 @@ The goal is to keep all source needed for building the app while excluding local
 - any local tablebase folders
 - `*.book`, `*.z`
 - `frontend/node_modules/`, `frontend/dist/`
-- `AIPlayer_cpp/` legacy local workspace
 
 ## 3. Recommended repository structure
 
@@ -88,16 +88,30 @@ The goal is to keep all source needed for building the app while excluding local
 
 ### Windows users
 - Extract `ai_and_sort/egtb_data.7z` into `ai_and_sort/src/`
-- Build `ai_core` and `mover_core` with CMake from `ai_and_sort/`
-- Build `sort_wrapper.dll` from `ai_and_sort/x86simdsort/x86-simd-sort/`
+- Build `libx86simdsortcpp.a` from `ai_and_sort/x86simdsort/x86-simd-sort/` and copy it to `ai_and_sort/`
+- Build `ai_core`, `mover_core`, `formation_core`, and `bookgen_native` with CMake from `ai_and_sort/`
 - Runtime binaries should end up in `ai_and_sort/`
 
 ### Linux users
 - Install `nanobind`, `cmake`, `meson`, `ninja`, and OpenMP
 - Run `ai_and_sort/make.sh`
-- The script builds `ai_core*.so`, `mover_core*.so`, and `sort_wrapper.so`
+- The script builds `ai_core*.so`, `mover_core*.so`, `formation_core*.so`, and `bookgen_native.so`
 
 ## 5. Third-party source note
 
 The modified `x86-simd-sort` subtree is now part of `ai_and_sort/x86simdsort/x86-simd-sort/`.
 Keep its upstream license and README when publishing the repository.
+
+## 6. WASM Demo Layout
+
+- Keep the canonical WASM source files in `ai_and_sort/`:
+  - `include/AIPlayer - wasm.h`
+  - `src/AIPlayer - wasm.cpp`
+  - `src/bindings_wasm.cpp`
+- Publish the browser demo from the repository root `docs/` directory:
+  - `docs/index.html`
+  - `docs/main.js`
+  - `docs/worker.js`
+  - `docs/ai_core.js`
+  - `docs/ai_core.wasm`
+- Keep the WASM build scaffold in `docs/wasm_build/`.

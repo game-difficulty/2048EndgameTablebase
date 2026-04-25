@@ -97,7 +97,5 @@
   Native extension build output.
 - ai_and_sort/x86simdsort/x86-simd-sort/builddir/
   SIMD sort build output.
-- AIPlayer_cpp/
-  Legacy local workspace kept ignored after the merge.
 - __pycache__/ and temporary compile artifacts
   Python-generated cache files.

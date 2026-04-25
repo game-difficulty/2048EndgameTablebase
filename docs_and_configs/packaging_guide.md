@@ -14,7 +14,8 @@ This guide explains how to bundle the desktop application with PyInstaller.
 2. Ensure native runtime binaries already exist in `ai_and_sort/`:
    - `ai_core*.pyd`
    - `mover_core*.pyd`
-   - `sort_wrapper.dll`
+   - `formation_core*.pyd`
+   - `bookgen_native.dll`
    - required runtime DLLs such as `libgcc_s_seh-1.dll`, `libgomp-1.dll`, `libwinpthread-1.dll`
 
 3. Install Python dependencies:
@@ -40,7 +41,7 @@ pyinstaller --noconfirm --onedir --windowed `
     --add-binary "src/ai_and_sort/libgcc_s_seh-1.dll;ai_and_sort" `
     --add-binary "src/ai_and_sort/libgomp-1.dll;ai_and_sort" `
     --add-binary "src/ai_and_sort/libwinpthread-1.dll;ai_and_sort" `
-    --add-binary "src/ai_and_sort/sort_wrapper.dll;ai_and_sort" `
+    --add-binary "src/ai_and_sort/bookgen_native.dll;ai_and_sort" `
     --add-data "src/7zip/7z.dll;." `
     --add-data "src/7zip/7z.exe;." `
     --icon "src/pic/2048_2.ico" `
@@ -50,7 +51,6 @@ pyinstaller --noconfirm --onedir --windowed `
 ## 3. Source layout assumptions
 
 The repository now uses `ai_and_sort/` as the only native-source directory.
-`AIPlayer_cpp/` is treated as a local legacy workspace and is not part of the packaged build.
 
 ## 4. Final distribution notes
 
@@ -67,7 +67,8 @@ These should stay outside version control.
 Check that the following runtime files exist in `dist/2048EndgameTablebase/ai_and_sort/`:
 - `ai_core*.pyd`
 - `mover_core*.pyd`
-- `sort_wrapper.dll`
+- `formation_core*.pyd`
+- `bookgen_native.dll`
 - `libgcc_s_seh-1.dll`
 - `libgomp-1.dll`
 - `libwinpthread-1.dll`

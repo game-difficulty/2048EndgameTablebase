@@ -143,6 +143,29 @@ TileCountResult tile_sum_and_32k_count(uint64_t masked_board, const AdvancedMask
     return result;
 }
 
+TileCountPositionsResult tile_sum_and_32k_count_positions(uint64_t masked_board, const AdvancedMaskParam &param) {
+    masked_board &= ~param.pos_fixed_32k_mask;
+    const auto &table = info_table2();
+    const uint64_t block3 = (masked_board >> 48U) & 0xFFFFULL;
+    const uint64_t block2 = (masked_board >> 32U) & 0xFFFFULL;
+    const uint64_t block1 = (masked_board >> 16U) & 0xFFFFULL;
+    const uint64_t block0 = masked_board & 0xFFFFULL;
+
+    const InfoEntry &r0 = table[block0];
+    const InfoEntry &r1 = table[block1];
+    const InfoEntry &r2 = table[block2];
+    const InfoEntry &r3 = table[block3];
+
+    TileCountPositionsResult result;
+    result.total_sum = static_cast<uint32_t>(r0.total_sum + r1.total_sum + r2.total_sum + r3.total_sum);
+    const uint64_t pos_bitmap = static_cast<uint64_t>(r0.pos_bitmap)
+        | (static_cast<uint64_t>(r1.pos_bitmap) << 16U)
+        | (static_cast<uint64_t>(r2.pos_bitmap) << 32U)
+        | (static_cast<uint64_t>(r3.pos_bitmap) << 48U);
+    result.count_32k = static_cast<int8_t>(extract_f_positions_compact(pos_bitmap, result.pos_32k.data()));
+    return result;
+}
+
 TileCountResult tile_sum_and_32k_count2(uint64_t masked_board, const AdvancedMaskParam &param) {
     masked_board &= ~param.pos_fixed_32k_mask;
     const auto &table = info_table1();
@@ -263,18 +286,6 @@ std::vector<uint8_t> masked_tiles_combinations(uint64_t remaining_sum, int remai
         }
     }
     return {};
-}
-
-std::vector<uint64_t> extract_f_positions(uint64_t pos_bitmap) {
-    std::vector<uint64_t> result;
-    result.reserve(16);
-    for (int i = 60; i >= 0; i -= 4) {
-        uint64_t nibble = (pos_bitmap >> static_cast<uint64_t>(i)) & 0xFULL;
-        if (nibble == 0xFULL) {
-            result.push_back(static_cast<uint64_t>(i));
-        }
-    }
-    return result;
 }
 
 PermutationSlot resort_permutations(int m, int n, const PermutationSlot &permutation, bool type_flag) {
@@ -439,7 +450,7 @@ void unmask_board_into(
     const AdvancedMaskParam &param,
     std::vector<uint64_t> &boards
 ) {
-    TileCountResult stats = tile_sum_and_32k_count(board, param);
+    TileCountPositionsResult stats = tile_sum_and_32k_count_positions(board, param);
     if (stats.count_32k == 0 || stats.count_32k == static_cast<int8_t>(param.num_free_32k)) {
         boards.resize(1);
         boards[0] = board;
@@ -466,10 +477,8 @@ void unmask_board_into(
         boards.clear();
         return;
     }
-
-    std::vector<uint64_t> pos_32k = extract_f_positions(stats.pos_bitmap);
-    boards.reserve(permutation_all.rows);
     boards.clear();
+    boards.reserve(permutation_all.rows);
 
     for (size_t row_index = 0; row_index < permutation_all.rows; ++row_index) {
         const uint8_t *permutation = permutation_all.row(row_index);
@@ -481,7 +490,7 @@ void unmask_board_into(
         uint64_t clear_mask = 0;
         uint64_t set_mask = 0;
         for (size_t j = 0; j < tiles_combinations.size; ++j) {
-            uint64_t shift = pos_32k[permutation[j]];
+            const uint64_t shift = static_cast<uint64_t>(stats.pos_32k[permutation[j]]);
             clear_mask += (0xFULL << shift);
             set_mask += (static_cast<uint64_t>(tiles_combinations[j]) << shift);
         }
