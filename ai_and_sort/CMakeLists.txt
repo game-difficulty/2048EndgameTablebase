@@ -118,6 +118,7 @@ set(FORMATION_CORE_SOURCES
     src/CompressionBridge.cpp
     src/NativeLzma.cpp
     src/TrieCompression.cpp
+    src/ReaderRuntime.cpp
     src/AdaptiveIndex.cpp
     src/HybridSearch.cpp
     src/BookGeneratorUtils.cpp

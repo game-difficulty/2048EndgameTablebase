@@ -6,7 +6,6 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
-from numba import njit
 
 import egtb_core.BoardMover as bm
 import Config
@@ -695,9 +694,9 @@ class Analyzer:
         self.record[: rec_step_count + 1].tofile(target_file_path)
 
 
-@njit(cache=True)
 def count_32ks(board):
     count = 0
+    board = np.uint64(board)
     for i in range(16):
         tile = (board >> np.uint64(i * 4)) & np.uint64(0xF)
         count += tile == 0xF

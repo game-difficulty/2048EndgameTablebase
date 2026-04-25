@@ -8,6 +8,7 @@
 #include "CompressionBridge.h"
 #include "Formation.h"
 #include "HybridSearch.h"
+#include "SymmetryUtils.h"
 
 #include <algorithm>
 #include <array>
@@ -207,28 +208,6 @@ int effective_num_threads(const RunOptions &options) {
     return std::max(4, std::min(32, omp_get_max_threads()));
 }
 
-uint64_t apply_sym_like(uint64_t board, int symm_index) {
-    switch (symm_index) {
-        case 1:
-            return Calculator::ReverseLR(board);
-        case 2:
-            return Calculator::ReverseUD(board);
-        case 3:
-            return Calculator::ReverseUL(board);
-        case 4:
-            return Calculator::ReverseUR(board);
-        case 5:
-            return Calculator::Rotate180(board);
-        case 6:
-            return Calculator::RotateL(board);
-        case 7:
-            return Calculator::RotateR(board);
-        case 0:
-        default:
-            return board;
-    }
-}
-
 template <typename Transform>
 inline void sym_arr_like_transform(std::vector<uint64_t> &boards, Transform transform) {
     uint64_t *data = boards.data();
@@ -236,23 +215,6 @@ inline void sym_arr_like_transform(std::vector<uint64_t> &boards, Transform tran
     #pragma omp simd
     for (ptrdiff_t i = 0; i < count; ++i) {
         data[i] = transform(data[i]);
-    }
-}
-
-std::pair<uint64_t, int> apply_sym_pair(uint64_t board, int symm_mode) {
-    switch (static_cast<SymmMode>(symm_mode)) {
-        case SymmMode::Full:
-            return Calculator::canonical_full_pair(board);
-        case SymmMode::Diagonal:
-            return Calculator::canonical_diagonal_pair(board);
-        case SymmMode::Horizontal:
-            return Calculator::canonical_horizontal_pair(board);
-        case SymmMode::Identity:
-        case SymmMode::Min33:
-        case SymmMode::Min24:
-        case SymmMode::Min34:
-        default:
-            return Calculator::canonical_identity_pair(board);
     }
 }
 

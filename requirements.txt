@@ -6,7 +6,6 @@ markdown>=3.4.0
 
 # Computing & Optimization
 numpy>=1.23.0
-numba>=0.57.0
 psutil>=5.9.0
 py-cpuinfo>=9.0.0
 

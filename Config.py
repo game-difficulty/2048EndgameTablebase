@@ -6,6 +6,7 @@ import pickle
 import sys
 import json
 import threading
+from collections.abc import Iterator, Mapping
 from typing import Callable, Optional, Any
 import ctypes
 import platform
@@ -13,8 +14,6 @@ import platform
 import cpuinfo
 import numpy as np
 
-import egtb_core.Calculator as Calculator
-from egtb_core.BoardMover import decode_board
 from error_bridge import publish_frontend_exception
 
 PatternCheckFunc = Callable[[np.uint64], bool]
@@ -165,6 +164,16 @@ def get_nibble_intersection(encoded_boards):
     return np.bitwise_and.reduce(encoded_boards)
 
 
+def decode_board_pure(encoded_board: np.uint64) -> np.ndarray:
+    encoded_board = np.uint64(encoded_board)
+    board = np.zeros((4, 4), dtype=np.int32)
+    for i in range(3, -1, -1):
+        for j in range(3, -1, -1):
+            encoded_num = (encoded_board >> np.uint64(4 * ((3 - i) * 4 + (3 - j)))) & np.uint64(0xF)
+            board[i, j] = 2 ** encoded_num if encoded_num > 0 else 0
+    return board
+
+
 def load_patterns_from_file(file_path=None):
     """Load pattern metadata from patterns_config.json."""
     if file_path is None:
@@ -207,6 +216,7 @@ def load_patterns_from_file(file_path=None):
     new_category_info = {}
     new_pattern_data = {}
     new_pattern_32k_tiles_map = {}
+    new_pattern_catalog = {}
 
     # 2. 第一轮遍历：构建基础数据和 PATTERN_DATA
     for name, data in raw_data.items():
@@ -226,60 +236,37 @@ def load_patterns_from_file(file_path=None):
         )
         new_pattern_data[name] = (def_masks, def_shifts)
 
-    # 3. 将 PATTERN_DATA 注入 Calculator 并触发 Numba 编译
-    # 这一步必须在构建 formation_info 之前完成，因为 formation_info 依赖生成的函数
-    Calculator.PATTERN_DATA = new_pattern_data  # type: ignore
-    Calculator.update_logic_functions()
-
-    # 4. 第二轮遍历：构建 formation_info
-    # 现在 Calculator.is_L3_pattern 等函数已经存在了
-    new_formation_info = {}
-
-    for name, data in raw_data.items():
-        # 动态获取刚刚生成的 Numba 函数
-        # update_logic_functions 会将函数注入 Calculator 的全局命名空间
-        # 使用 getattr 从模块中获取
-        try:
-            is_pattern_func = getattr(Calculator, f"is_{name}_pattern")
-            is_success_func = getattr(Calculator, f"is_{name}_success")
-        except AttributeError:
-            print(
-                f"Warning: Functions for {name} not found in Calculator after injection."
-            )
-            continue
-
-        # 获取对称函数
-        symm_name = "canonical_" + data.get("canonical mode", "identity")
-        symm_func = getattr(Calculator, symm_name)
-
-        # 解析初始局面
         fmt_seeds_raw = data.get("seed boards", ["0xffffffff"])
         fmt_seeds = [np.uint64(int(m, 16)) for m in fmt_seeds_raw]
-
-        ini_decoded = decode_board(fmt_seeds[0])
-        board_sum = ini_decoded.sum()
+        ini_decoded = decode_board_pure(fmt_seeds[0])
+        board_sum = int(ini_decoded.sum())
         fmt_seeds = np.array(
-            [board for board in fmt_seeds if ini_decoded.sum() == board_sum],
+            [board for board in fmt_seeds if int(decode_board_pure(board).sum()) == board_sum],
             dtype=np.uint64,
         )
 
-        new_formation_info[name] = [
-            -board_sum,
-            is_pattern_func,
-            symm_func,
-            is_success_func,
-            fmt_seeds,
-            data.get("extra steps", 36),
-        ]
-
-        # --- 构建 pattern_32k_tiles_map ---
-        count = np.sum(ini_decoded == 32768)
-        fixed_pos = find_f_nibble_positions(
-            get_nibble_intersection(new_pattern_data[name][0])
+        count = int(np.sum(ini_decoded == 32768))
+        fixed_pos = np.array(
+            find_f_nibble_positions(get_nibble_intersection(def_masks)),
+            dtype=np.uint8,
         )
-        fixed_pos = np.array(fixed_pos, dtype=np.uint8)
         free_count = count - len(fixed_pos)
         new_pattern_32k_tiles_map[name] = [count, free_count, fixed_pos]
+        new_pattern_catalog[name] = {
+            "name": name,
+            "category": cat,
+            "pattern_masks": def_masks,
+            "success_shifts": def_shifts,
+            "canonical_mode": data.get("canonical mode", "identity"),
+            "seed_boards": fmt_seeds,
+            "nums_adjust": -board_sum,
+            "extra_steps": data.get("extra steps", 36),
+            "count_32k": count,
+            "free_count_32k": free_count,
+            "fixed_pos_32k": fixed_pos,
+        }
+
+    # 3. 将 PATTERN_DATA 注入 Calculator
 
     if "others" in new_category_info:
         # pop 会取出该键值对，重新赋值会将其插入到字典末尾
@@ -287,13 +274,80 @@ def load_patterns_from_file(file_path=None):
 
     return (
         new_category_info,
-        new_formation_info,
+        new_pattern_catalog,
         new_pattern_32k_tiles_map,
         new_pattern_data,
     )
 
 
-category_info, formation_info, pattern_32k_tiles_map, _ = load_patterns_from_file()
+def _build_formation_info(pattern_catalog, pattern_data):
+    import egtb_core.Calculator as Calculator
+
+    Calculator.PATTERN_DATA = pattern_data  # type: ignore[attr-defined]
+    Calculator.update_logic_functions()
+
+    new_formation_info = {}
+    for name, meta in pattern_catalog.items():
+        try:
+            is_pattern_func = getattr(Calculator, f"is_{name}_pattern")
+            is_success_func = getattr(Calculator, f"is_{name}_success")
+        except AttributeError:
+            logger.warning(f"Functions for {name} not found in Calculator after injection.")
+            continue
+
+        symm_func = getattr(Calculator, "canonical_" + meta["canonical_mode"])
+        new_formation_info[name] = [
+            meta["nums_adjust"],
+            is_pattern_func,
+            symm_func,
+            is_success_func,
+            meta["seed_boards"],
+            meta["extra_steps"],
+        ]
+    return new_formation_info
+
+
+class _LazyFormationInfo(Mapping):
+    def __init__(self, pattern_catalog, pattern_data):
+        self._pattern_catalog = pattern_catalog
+        self._pattern_data = pattern_data
+        self._lock = threading.Lock()
+        self._data: Optional[dict[str, list]] = None
+
+    def _ensure_loaded(self):
+        if self._data is None:
+            with self._lock:
+                if self._data is None:
+                    self._data = _build_formation_info(self._pattern_catalog, self._pattern_data)
+        return self._data
+
+    def get(self, key, default=None):
+        return self._ensure_loaded().get(key, default)
+
+    def __getitem__(self, key):
+        return self._ensure_loaded()[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._ensure_loaded())
+
+    def __len__(self) -> int:
+        return len(self._ensure_loaded())
+
+    def __contains__(self, key):
+        return key in self._ensure_loaded()
+
+    def keys(self):
+        return self._ensure_loaded().keys()
+
+    def items(self):
+        return self._ensure_loaded().items()
+
+    def values(self):
+        return self._ensure_loaded().values()
+
+
+category_info, pattern_catalog, pattern_32k_tiles_map, _pattern_data = load_patterns_from_file()
+formation_info = _LazyFormationInfo(pattern_catalog, _pattern_data)
 
 
 def hex_to_rgb(hex_color):
@@ -733,7 +787,7 @@ def apply_global_theme(app):
     return None
 
 
-""" CPU-time returning clock() function which works from within njit-ted code """
+"""CPU-time returning clock() function."""
 if platform.system() == "Windows":
     from ctypes.util import find_msvcrt
 

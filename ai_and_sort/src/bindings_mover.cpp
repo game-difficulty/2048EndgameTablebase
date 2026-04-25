@@ -4,8 +4,11 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/vector.h>
 
+#include "BoardCodec.h"
+
 #include "CommonMover.h"
 #include "BoardMover.h"
+#include "Calculator.h"
 #include "VBoardMover.h"
 
 namespace nb = nanobind;
@@ -37,7 +40,19 @@ NB_MODULE(mover_core, m) {
 
     // 公共工具函数
     m.def("reverse", &reverse_board, "board"_a);
+    m.def("encode_board", &encode_board_vector, "board"_a);
+    m.def("decode_board", &decode_board_vector, "board"_a);
+    m.def("canonical_identity", &Calculator::canonical_identity, "board"_a);
     m.def("canonical_diagonal", &canonical_diagonal, "board"_a);
+    m.def("canonical_full", &Calculator::canonical_full, "board"_a);
+    m.def("canonical_horizontal", &Calculator::canonical_horizontal, "board"_a);
+    m.def("canonical_min33", &Calculator::canonical_min33, "board"_a);
+    m.def("canonical_min24", &Calculator::canonical_min24, "board"_a);
+    m.def("canonical_min34", &Calculator::canonical_min34, "board"_a);
+    m.def("canonical_identity_pair", &Calculator::canonical_identity_pair, "board"_a);
+    m.def("canonical_diagonal_pair", &Calculator::canonical_diagonal_pair, "board"_a);
+    m.def("canonical_full_pair", &Calculator::canonical_full_pair, "board"_a);
+    m.def("canonical_horizontal_pair", &Calculator::canonical_horizontal_pair, "board"_a);
 
     m.def("gen_new_num", &gen_new_num, "t"_a, "p"_a = 0.1f);
     m.def("s_gen_new_num", &s_gen_new_num, "t"_a, "p"_a = 0.1f);

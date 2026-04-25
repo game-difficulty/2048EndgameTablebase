@@ -80,7 +80,7 @@ if [ "$SKIP_NATIVE" = false ]; then
 fi
 
 echo "[3/3] Verifying Python dependencies..."
-"$PYTHON_BIN" -c "import fastapi, uvicorn, webview, markdown, numpy, numba, psutil, cpuinfo" >/dev/null
+"$PYTHON_BIN" -c "import fastapi, uvicorn, webview, markdown, numpy, psutil, cpuinfo" >/dev/null
 
 echo "Build completed."
 echo "Run the app with: $PYTHON_BIN backend_server.py"

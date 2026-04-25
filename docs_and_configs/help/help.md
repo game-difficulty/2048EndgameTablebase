@@ -1,4 +1,4 @@
-
+﻿
 # User Manual
 
 **Author**: game_difficulty  
@@ -15,8 +15,8 @@ This is a comprehensive 2048 training software suite offering table calculation,
 
 - **Lightning-Fast Computation**: Highly optimized algorithms and advanced pruning deliver industry-leading calculation speeds, accelerating large table computations by over 10x.
 - **Storage Efficiency**: Multiple pruning and data compression techniques significantly reduce the disk footprint of table files.
-- **State-of-the-Art AI**: Features the world’s most powerful 2048 AI, achieving an 8.4% (±1.6%) success rate for 65536 and 86.1% (±2.0%) for 32768, far surpassing other AI engines.
-- **Complete Toolkit**: Comprehensive training and analysis tools—including real-time feedback, an error log (mistake book), and replay analysis—help users master advanced strategies.
+- **State-of-the-Art AI**: Features the world鈥檚 most powerful 2048 AI, achieving an 8.4% (卤1.6%) success rate for 65536 and 86.1% (卤2.0%) for 32768, far surpassing other AI engines.
+- **Complete Toolkit**: Comprehensive training and analysis tools鈥攊ncluding real-time feedback, an error log (mistake book), and replay analysis鈥攈elp users master advanced strategies.
 
 ## 1.2 Main Function Modules
 
@@ -81,7 +81,7 @@ Endgame classification is determined by the **layout of remaining empty spaces**
 ### Thought Question
 **What is the target tile for a 9-space 65K endgame?**
 
-**Hint**: Think backwards—what large numbers should already exist if the final goal is 65K (65536)?
+**Hint**: Think backwards鈥攚hat large numbers should already exist if the final goal is 65K (65536)?
 
 ## 3.3 Table Concept
 
@@ -174,7 +174,7 @@ The Settings interface is split into two primary sections: **Table Calculation**
 **Advanced Options**:
 
 - **Advanced Algorithm**: Utilizes specialized logic for massive tables, drastically reducing computation time and memory overhead (recommended for large tables only).
-- **Small Tile Sum Limit (STSL)**: Controls the pruning intensity of the advanced algorithm—a trade-off between success rate precision and calculation speed.
+- **Small Tile Sum Limit (STSL)**: Controls the pruning intensity of the advanced algorithm鈥攁 trade-off between success rate precision and calculation speed.
 - **Chunked Backward Solving**: Lowers the memory ceiling via chunked I/O. Ideal for memory-constrained systems computing massive endgames; best paired with an SSD.
 - **Success Rate Precision**: Allows customization of the storage format and bit-depth for success rate data.
 
@@ -281,7 +281,7 @@ A core tool for study and research, the Practice interface displays table data a
 
 - **Colored Tile Buttons (0-32k)**: Click to enter "Board Editing Mode."
 - **Left-click**: Sets the target tile on the board to the selected value.
-- **Right-click**: Increases the target tile value by one level (e.g., 2 → 4 → 8...).
+- **Right-click**: Increases the target tile value by one level (e.g., 2 鈫?4 鈫?8...).
 - **Other keys**: Decreases the target tile value by one level.
 - Click the currently selected tile button again to exit Board Editing Mode.
 
@@ -424,7 +424,7 @@ In table calculation, many positions are logically equivalent through flipping o
 Implemented symmetry transformations:
 
 * **Mirror Flips**: Horizontal (`ReverseLR`) and Vertical (`ReverseUD`).
-* **Rotations**: 90° Clockwise/Counter-clockwise (`RotateL/RotateR`) and 180° (`Rotate180`).
+* **Rotations**: 90掳 Clockwise/Counter-clockwise (`RotateL/RotateR`) and 180掳 (`Rotate180`).
 * **Diagonal Flips**: Main diagonal (`ReverseUL`) and Anti-diagonal (`ReverseUR`).
 
 Before a position is stored, the program compares it with all its symmetrical forms and stores only the **numerically smallest form**. For specific tables, the user can opt for only diagonal or only horizontal canonicalization.
@@ -501,7 +501,7 @@ The algorithm utilizes "Masking" technology to treat two classes of numbers diff
 During the generation phase, large numbers not currently involved in merges are treated as special placeholders (Masks).
 
 - **Equivalence Classes**: A single masked position can represent thousands of actual positions that differ only in the arrangement of large numbers but share the same local logic.
-- **State Compression**: By generating only masked positions, the BFS (Breadth-First Search) state space is compressed by $10$–$100\times$, significantly reducing the pressure on sorting, deduplication, and binary searches.
+- **State Compression**: By generating only masked positions, the BFS (Breadth-First Search) state space is compressed by $10$鈥?100\times$, significantly reducing the pressure on sorting, deduplication, and binary searches.
 
 #### 2. Dynamic Expansion & Unmasking (Derivation)
 When a newly spawned tile might trigger a merge with a large number (e.g., an existing 128 tile colliding with a newly spawned 128), the algorithm performs an "Expose" (or "Derive") operation to restore the mask to a specific value.
@@ -591,7 +591,7 @@ Using this algorithm, a `free12-4096` table was successfully computed on a 9950X
 ## 7.1 AI Performance
 The strongest 2048 AI available.
 
-- Tested over 1200 games without undo: **65536 success rate: 8.4% (±1.6%), 32768 success rate: 86.1% (±2.0%)**.
+- Tested over 1200 games without undo: **65536 success rate: 8.4% (卤1.6%), 32768 success rate: 86.1% (卤2.0%)**.
 
 | Search Depth      | Games | Avg Score  | Median Score | Moves/s |
 |-------------------|-------|------------|--------------|---------|
@@ -649,7 +649,7 @@ The dispatcher's logic follows a specific pipeline: Identify Current Endgame Sta
 Tip: Press Ctrl + F to search the entire manual.
 
 ### Q1: Why does the software take a long time to start or switch features?
-**A1**: The software uses **Numba JIT (Just-In-Time)** compilation to optimize calculation modules. Upon the first call, code is compiled into CPU-optimized machine code, resulting in an initialization delay of 2–10 seconds. This is normal behavior.
+**A1**: The software may spend extra time during startup or feature switches loading native modules, configuration files, and local tables. The first run after launch can therefore be slower than subsequent operations. This is normal behavior.
 
 ### Q2: How do I migrate my settings and mistake records when upgrading versions?
 **A2**: Steps to preserve your configuration and Mistake Notebook:
@@ -665,7 +665,7 @@ Tip: Press Ctrl + F to search the entire manual.
 
 ### Q5: How do I safely resume calculation after an unexpected interruption?
 **A5**: Unexpected interruptions can corrupt files. Recovery steps:
-1. **Safe Rollback**: Check the last 2–3 modified files in the output folder. If the file size is abnormal (e.g., 0KB or significantly smaller than preceding files), delete them manually.
+1. **Safe Rollback**: Check the last 2鈥? modified files in the output folder. If the file size is abnormal (e.g., 0KB or significantly smaller than preceding files), delete them manually.
 2. **Resume**: Restart the program, keep the parameters unchanged, and click **BUILD**. The program will automatically resume from the last complete layer.
 3. **Log Check**: If errors persist, consult `logger.txt` in the root directory to locate the issue.
 
@@ -735,7 +735,7 @@ To speed up generation and solving, do not check the compression option during i
 2. **Storage Management for Large Tables**
 When SSD capacity is insufficient for mega-tables, perform "Hot/Cold Separation":
 
-    - **Hot Data**: Keep the current Layer and 20–30 adjacent files on the SSD to ensure I/O performance.
+    - **Hot Data**: Keep the current Layer and 20鈥?0 adjacent files on the SSD to ensure I/O performance.
     - **Cold Data**: Move completed or currently unnecessary files to an HDD.
     - **Virtual Pathing**: Since the program only verifies file existence and not content during breakpoints, you can create empty files/folders in the original SSD path to "trick" the resume check.
     - **Multi-path Loading**: Tables can be distributed across multiple drives. You don't need to merge them; simply enter all disk paths in the Practice interface to enable cross-drive recognition.

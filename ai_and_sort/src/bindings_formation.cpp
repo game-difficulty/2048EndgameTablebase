@@ -2,11 +2,15 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
 #include "BookSolver.h"
+#include "ReaderRuntime.h"
+#include "SymmetryUtils.h"
+#include "TrieCompression.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -21,6 +25,20 @@ std::vector<uint64_t> to_u64_vector(const U64Array &array) {
         std::memcpy(result.data(), array.data(), result.size() * sizeof(uint64_t));
     }
     return result;
+}
+
+nb::tuple reader_result_to_python(const ReaderMoveResult &result) {
+    nb::dict entries;
+    for (const auto &entry : result.entries) {
+        if (entry.kind == ReaderValueKind::Numeric) {
+            entries[nb::str(entry.key.c_str())] = entry.number;
+        } else if (entry.kind == ReaderValueKind::String) {
+            entries[nb::str(entry.key.c_str())] = nb::str(entry.text.c_str());
+        } else {
+            entries[nb::str(entry.key.c_str())] = nb::none();
+        }
+    }
+    return nb::make_tuple(entries, result.success_rate_dtype);
 }
 
 } // namespace
@@ -69,6 +87,54 @@ NB_MODULE(formation_core, m) {
         .def_rw("small_tile_sum_limit", &AdvancedPatternSpec::small_tile_sum_limit)
         .def_rw("target", &AdvancedPatternSpec::target);
 
+    nb::class_<ClassicBookReader>(m, "ClassicBookReader")
+        .def(nb::init<PatternSpec, bool>(), "pattern_spec"_a, "is_variant"_a = false)
+        .def(
+            "move_on_dic",
+            [](ClassicBookReader &reader,
+               const std::vector<std::vector<int>> &board,
+               const std::vector<std::pair<std::string, std::string>> &path_list,
+               const std::string &pattern_full,
+               int64_t nums_adjust) {
+                return reader_result_to_python(reader.move_on_dic(board, path_list, pattern_full, nums_adjust));
+            },
+            "board"_a,
+            "path_list"_a,
+            "pattern_full"_a,
+            "nums_adjust"_a
+        )
+        .def(
+            "get_random_state",
+            &ClassicBookReader::get_random_state,
+            "path_list"_a,
+            "pattern_full"_a,
+            "spawn_rate4"_a
+        );
+
+    nb::class_<AdvancedBookReader>(m, "AdvancedBookReader")
+        .def(nb::init<AdvancedPatternSpec, bool>(), "pattern_spec"_a, "is_variant"_a = false)
+        .def(
+            "move_on_dic",
+            [](AdvancedBookReader &reader,
+               const std::vector<std::vector<int>> &board,
+               const std::vector<std::pair<std::string, std::string>> &path_list,
+               const std::string &pattern_full,
+               int64_t nums_adjust) {
+                return reader_result_to_python(reader.move_on_dic(board, path_list, pattern_full, nums_adjust));
+            },
+            "board"_a,
+            "path_list"_a,
+            "pattern_full"_a,
+            "nums_adjust"_a
+        )
+        .def(
+            "get_random_state",
+            &AdvancedBookReader::get_random_state,
+            "path_list"_a,
+            "pattern_full"_a,
+            "spawn_rate4"_a
+        );
+
     nb::class_<PatternLayer>(m, "PatternLayer")
         .def(nb::init<>())
         .def_prop_ro("size", &PatternLayer::size)
@@ -90,6 +156,42 @@ NB_MODULE(formation_core, m) {
         },
         "total"_a = 0U
     );
+
+    m.def(
+        "trie_compress_book",
+        &trie_compress_progress_native,
+        "book_path"_a,
+        "success_rate_dtype"_a = "uint32"
+    );
+
+    m.def(
+        "trie_decompress_search",
+        [](const std::string &path_prefix, uint64_t board, const std::string &success_rate_dtype) {
+            const auto result = trie_decompress_search_native(path_prefix, board, success_rate_dtype);
+            return result.value_or(0.0);
+        },
+        "path_prefix"_a,
+        "board"_a,
+        "success_rate_dtype"_a
+    );
+
+    m.def(
+        "find_classic_value",
+        [](const std::string &pathname,
+           const std::string &filename,
+           uint64_t search_key,
+           const std::string &success_rate_dtype) {
+            bool found = false;
+            const double value = find_classic_value_native(pathname, filename, search_key, success_rate_dtype, found);
+            return found ? nb::cast(value) : nb::none();
+        },
+        "pathname"_a,
+        "filename"_a,
+        "search_key"_a,
+        "success_rate_dtype"_a = "uint32"
+    );
+
+    m.def("apply_sym_like", &apply_sym_like, "board"_a, "symm_index"_a);
 
     m.def(
         "run_pattern_generate",

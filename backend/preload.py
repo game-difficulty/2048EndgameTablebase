@@ -50,7 +50,7 @@ def start_preload_thread() -> threading.Thread | None:
 
         _preload_thread = threading.Thread(
             target=_run_preload,
-            name="numba-preload",
+            name="runtime-preload",
             daemon=True,
         )
         _preload_thread.start()
