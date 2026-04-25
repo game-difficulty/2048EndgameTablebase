@@ -19,13 +19,6 @@ struct Config {
     int num_threads = 0;
 };
 
-struct BuildProfile {
-    double phase1_seconds = 0.0;
-    double phase2_seconds = 0.0;
-    double phase3_seconds = 0.0;
-    double phase4_seconds = 0.0;
-};
-
 struct Range {
     uint64_t begin = 0;
     uint64_t end = 0;
@@ -70,41 +63,14 @@ struct Index {
     [[nodiscard]] Range locate(uint64_t key) const;
 };
 
-struct ProfiledBuild {
-    Index index;
-    BuildProfile profile;
-};
-
 Index build(const uint64_t *keys, uint64_t size, const Config &config = {});
 Index build(const std::vector<uint64_t> &keys, const Config &config = {});
-Index build_strided(const void *records, uint64_t size, uint64_t stride, uint64_t key_offset = 0, const Config &config = {});
-Index build_experimental_hybrid_strided(
-    const void *records,
-    uint64_t size,
-    uint64_t stride,
-    uint64_t key_offset = 0,
-    const Config &config = {}
-);
 Index build_experimental(const uint64_t *keys, uint64_t size, const Config &config = {});
 Index build_experimental(const std::vector<uint64_t> &keys, const Config &config = {});
 Index build_experimental_parallel_l1(const uint64_t *keys, uint64_t size, const Config &config = {});
 Index build_experimental_parallel_l1(const std::vector<uint64_t> &keys, const Config &config = {});
-Index build_experimental_parallel_l1_delayed_l3(const uint64_t *keys, uint64_t size, const Config &config = {});
-Index build_experimental_parallel_l1_delayed_l3(const std::vector<uint64_t> &keys, const Config &config = {});
 Index build_experimental_hybrid(const uint64_t *keys, uint64_t size, const Config &config = {});
 Index build_experimental_hybrid(const std::vector<uint64_t> &keys, const Config &config = {});
-ProfiledBuild build_profiled(const uint64_t *keys, uint64_t size, const Config &config = {});
-ProfiledBuild build_profiled(const std::vector<uint64_t> &keys, const Config &config = {});
-ProfiledBuild build_experimental_profiled(const uint64_t *keys, uint64_t size, const Config &config = {});
-ProfiledBuild build_experimental_profiled(const std::vector<uint64_t> &keys, const Config &config = {});
-ProfiledBuild build_experimental_parallel_l1_profiled(const uint64_t *keys, uint64_t size, const Config &config = {});
-ProfiledBuild build_experimental_parallel_l1_profiled(const std::vector<uint64_t> &keys, const Config &config = {});
-ProfiledBuild build_experimental_parallel_l1_delayed_l3_profiled(const uint64_t *keys, uint64_t size, const Config &config = {});
-ProfiledBuild build_experimental_parallel_l1_delayed_l3_profiled(const std::vector<uint64_t> &keys, const Config &config = {});
-ProfiledBuild build_experimental_hybrid_profiled(const uint64_t *keys, uint64_t size, const Config &config = {});
-ProfiledBuild build_experimental_hybrid_profiled(const std::vector<uint64_t> &keys, const Config &config = {});
-ProfiledBuild build_experimental_hybrid_legacy_profiled(const uint64_t *keys, uint64_t size, const Config &config = {});
-ProfiledBuild build_experimental_hybrid_legacy_profiled(const std::vector<uint64_t> &keys, const Config &config = {});
 Range locate(const Index &index, uint64_t key);
 
 } // namespace AdaptiveIndex

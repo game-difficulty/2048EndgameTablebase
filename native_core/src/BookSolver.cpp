@@ -6,6 +6,7 @@
 #include "Calculator.h"
 #include "CompressionBridge.h"
 #include "Formation.h"
+#include "HybridSearch.h"
 #include "VBoardMover.h"
 
 #include <algorithm>
@@ -14,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <memory>
 #include <nanobind/nanobind.h>
 #include <numeric>
 #include <omp.h>
@@ -26,6 +28,55 @@ namespace nb = nanobind;
 namespace {
 
 template <typename T> using LayerVector = std::vector<SuccessEntry<T>>;
+
+template <typename T> struct SplitLayer {
+    std::vector<uint64_t> boards;
+    std::unique_ptr<T[]> success;
+    size_t length = 0;
+
+    [[nodiscard]] bool empty() const {
+        return length == 0U;
+    }
+
+    [[nodiscard]] size_t size() const {
+        return length;
+    }
+};
+
+template <typename T> SplitLayer<T> allocate_split_layer(size_t size) {
+    SplitLayer<T> layer;
+    layer.boards.resize(size);
+    if (size > 0U) {
+        layer.success = std::unique_ptr<T[]>(new T[size]);
+    }
+    layer.length = size;
+    return layer;
+}
+
+template <typename T> SplitLayer<T> make_split_layer_from_raw(std::vector<uint64_t> boards) {
+    SplitLayer<T> layer;
+    layer.length = boards.size();
+    layer.boards = std::move(boards);
+    if (layer.length > 0U) {
+        layer.success = std::unique_ptr<T[]>(new T[layer.length]);
+    }
+    return layer;
+}
+
+template <typename T> SplitLayer<T> split_layer_from_entries(const LayerVector<T> &entries) {
+    SplitLayer<T> layer = allocate_split_layer<T>(entries.size());
+    for (size_t i = 0; i < entries.size(); ++i) {
+        layer.boards[i] = entries[i].board;
+        layer.success[i] = entries[i].success;
+    }
+    return layer;
+}
+
+template <typename T> constexpr size_t io_chunk_entries() {
+    constexpr size_t target_bytes = 1U << 20U;
+    constexpr size_t chunk = target_bytes / sizeof(SuccessEntry<T>);
+    return chunk > 0U ? chunk : 1U;
+}
 
 double wall_time_seconds() {
     return omp_get_wtime();
@@ -117,13 +168,76 @@ template <typename T> LayerVector<T> read_layer_file(const std::string &path) {
     return data;
 }
 
+template <typename T> SplitLayer<T> read_split_layer_file(const std::string &path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return {};
+    }
+    const size_t size = static_cast<size_t>(file.tellg());
+    if (size == 0U) {
+        return {};
+    }
+    file.seekg(0, std::ios::beg);
+    const size_t count = size / sizeof(SuccessEntry<T>);
+    SplitLayer<T> layer = allocate_split_layer<T>(count);
+    std::unique_ptr<SuccessEntry<T>[]> buffer(new SuccessEntry<T>[io_chunk_entries<T>()]);
+
+    size_t offset = 0U;
+    while (offset < count) {
+        const size_t current = std::min(io_chunk_entries<T>(), count - offset);
+        const size_t bytes = current * sizeof(SuccessEntry<T>);
+        file.read(reinterpret_cast<char *>(buffer.get()), static_cast<std::streamsize>(bytes));
+        if (!file) {
+            throw std::runtime_error("failed to read layer file: " + path);
+        }
+        for (size_t j = 0; j < current; ++j) {
+            layer.boards[offset + j] = buffer[j].board;
+            layer.success[offset + j] = buffer[j].success;
+        }
+        offset += current;
+    }
+    return layer;
+}
+
 template <typename T> void write_layer_file(const std::string &path, const LayerVector<T> &data) {
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
     if (!file) {
         return;
     }
     if (!data.empty()) {
-        file.write(reinterpret_cast<const char *>(data.data()), static_cast<std::streamsize>(data.size() * sizeof(SuccessEntry<T>)));
+        size_t offset = 0U;
+        while (offset < data.size()) {
+            const size_t current = std::min(io_chunk_entries<T>(), data.size() - offset);
+            file.write(
+                reinterpret_cast<const char *>(data.data() + offset),
+                static_cast<std::streamsize>(current * sizeof(SuccessEntry<T>))
+            );
+            offset += current;
+        }
+    }
+}
+
+template <typename T> void write_layer_file(const std::string &path, const SplitLayer<T> &data) {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file) {
+        return;
+    }
+    if (data.empty()) {
+        return;
+    }
+    std::unique_ptr<SuccessEntry<T>[]> buffer(new SuccessEntry<T>[io_chunk_entries<T>()]);
+    size_t offset = 0U;
+    while (offset < data.size()) {
+        const size_t current = std::min(io_chunk_entries<T>(), data.size() - offset);
+        for (size_t j = 0; j < current; ++j) {
+            buffer[j].board = data.boards[offset + j];
+            buffer[j].success = data.success[offset + j];
+        }
+        file.write(
+            reinterpret_cast<const char *>(buffer.get()),
+            static_cast<std::streamsize>(current * sizeof(SuccessEntry<T>))
+        );
+        offset += current;
     }
 }
 
@@ -194,7 +308,7 @@ template <typename T> void ensure_stats_header(const RunOptions &options) {
 
 namespace {
 
-template <typename T> AdaptiveIndex::Index create_index(const LayerVector<T> &arr, int num_threads) {
+template <typename T> AdaptiveIndex::Index create_index(const SplitLayer<T> &arr, int num_threads) {
     if (arr.empty()) {
         return {};
     }
@@ -202,41 +316,30 @@ template <typename T> AdaptiveIndex::Index create_index(const LayerVector<T> &ar
     config.l2_split_threshold = 64U;
     config.l3_split_threshold = 64U;
     config.num_threads = num_threads;
-    return AdaptiveIndex::build_experimental_hybrid_strided(
-        arr.data(),
-        static_cast<uint64_t>(arr.size()),
-        sizeof(SuccessEntry<T>),
-        0U,
-        config
-    );
+    return AdaptiveIndex::build_experimental_hybrid(arr.boards.data(), static_cast<uint64_t>(arr.size()), config);
 }
 
 template <typename T> T binary_search_arr(
-    const LayerVector<T> &arr,
+    const SplitLayer<T> &arr,
     T zero_val,
     uint64_t target,
     uint64_t low,
     uint64_t high
 ) {
-    while (low <= high) {
-        uint64_t mid = low + ((high - low) / 2U);
-        uint64_t mid_val = arr[static_cast<size_t>(mid)].board;
-        if (mid_val < target) {
-            low = mid + 1U;
-        } else if (mid_val > target) {
-            if (mid == 0U) {
-                break;
-            }
-            high = mid - 1U;
-        } else {
-            return arr[static_cast<size_t>(mid)].success;
-        }
+    if (low > high) {
+        return zero_val;
     }
-    return zero_val;
+    const size_t begin = static_cast<size_t>(low);
+    const size_t length = static_cast<size_t>(high - low + 1U);
+    const size_t pos = HybridSearch::exact_search(arr.boards.data() + begin, length, target);
+    if (pos == HybridSearch::kNotFound) {
+        return zero_val;
+    }
+    return arr.success[begin + pos];
 }
 
 template <typename T> T search_arr(
-    const LayerVector<T> &arr,
+    const SplitLayer<T> &arr,
     uint64_t board,
     const AdaptiveIndex::Index *index,
     T zero_val
@@ -255,7 +358,7 @@ template <typename T> T search_arr(
 }
 
 template <typename T> std::pair<T, uint64_t> search_arr2(
-    const LayerVector<T> &arr,
+    const SplitLayer<T> &arr,
     uint64_t board,
     const AdaptiveIndex::Index *index,
     T zero_val
@@ -274,38 +377,56 @@ template <typename T> std::pair<T, uint64_t> search_arr2(
         high = range.end - 1U;
     }
 
-    while (low <= high) {
-        uint64_t mid = low + ((high - low) / 2U);
-        uint64_t mid_val = arr[static_cast<size_t>(mid)].board;
-        if (mid_val < board) {
-            low = mid + 1U;
-        } else if (mid_val > board) {
-            if (mid == 0U) {
-                break;
-            }
-            high = mid - 1U;
-        } else {
-            return {arr[static_cast<size_t>(mid)].success, mid};
-        }
+    if (low > high) {
+        return {zero_val, 0U};
     }
-    return {zero_val, 0U};
+    const size_t begin = static_cast<size_t>(low);
+    const size_t length = static_cast<size_t>(high - low + 1U);
+    const size_t pos = HybridSearch::exact_search(arr.boards.data() + begin, length, board);
+    if (pos == HybridSearch::kNotFound) {
+        return {zero_val, 0U};
+    }
+    return {arr.success[begin + pos], begin + pos};
 }
 
-template <typename T> void remove_died(LayerVector<T> &arr, T threshold) {
+template <typename T> size_t compact_live_entries(SplitLayer<T> &arr, T threshold, bool shrink_boards) {
     size_t count = 0;
     for (size_t i = 0; i < arr.size(); ++i) {
-        if (arr[i].success > threshold) {
-            arr[count++] = arr[i];
+        if (arr.success[i] > threshold) {
+            arr.boards[count] = arr.boards[i];
+            arr.success[count] = arr.success[i];
+            ++count;
         }
     }
-    arr.resize(count);
+    arr.length = count;
+    if (shrink_boards) {
+        arr.boards.resize(count);
+    }
+    return count;
+}
+
+template <typename T> size_t compact_by_mask(SplitLayer<T> &arr, const std::vector<uint8_t> &mask, bool shrink_boards) {
+    size_t count = 0U;
+    const size_t limit = std::min(arr.size(), mask.size());
+    for (size_t i = 0; i < limit; ++i) {
+        if (mask[i]) {
+            arr.boards[count] = arr.boards[i];
+            arr.success[count] = arr.success[i];
+            ++count;
+        }
+    }
+    arr.length = count;
+    if (shrink_boards) {
+        arr.boards.resize(count);
+    }
+    return count;
 }
 
 template <typename T, typename Mover>
 void recalculate_layer(
-    LayerVector<T> &arr0,
-    const LayerVector<T> &arr1,
-    const LayerVector<T> &arr2,
+    SplitLayer<T> &arr0,
+    const SplitLayer<T> &arr1,
+    const SplitLayer<T> &arr2,
     const PatternSpec &spec,
     const RunOptions &options,
     const AdaptiveIndex::Index *ind1,
@@ -318,9 +439,9 @@ void recalculate_layer(
 
     #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 1024)
     for (int64_t k = 0; k < static_cast<int64_t>(arr0.size()); ++k) {
-        uint64_t board = arr0[static_cast<size_t>(k)].board;
+        uint64_t board = arr0.boards[static_cast<size_t>(k)];
         if (do_check && is_success_by_shifts(board, options.target, spec.success_shifts)) {
-            arr0[static_cast<size_t>(k)].success = max_scale;
+            arr0.success[static_cast<size_t>(k)] = max_scale;
             continue;
         }
 
@@ -355,7 +476,8 @@ void recalculate_layer(
             success_probability += static_cast<double>(best4) * options.spawn_rate4;
         }
 
-        arr0[static_cast<size_t>(k)].success = empty_slots > 0 ? static_cast<T>(success_probability / static_cast<double>(empty_slots)) : zero_val;
+        arr0.success[static_cast<size_t>(k)] =
+            empty_slots > 0 ? static_cast<T>(success_probability / static_cast<double>(empty_slots)) : zero_val;
     }
 }
 
@@ -366,8 +488,8 @@ namespace {
 template <typename T>
 bool handle_restart_recalculate(
     int i,
-    LayerVector<T> &d1,
-    LayerVector<T> &d2,
+    SplitLayer<T> &d1,
+    SplitLayer<T> &d2,
     bool &started,
     const RunOptions &options
 ) {
@@ -386,8 +508,8 @@ bool handle_restart_recalculate(
     if (!started) {
         started = true;
         if (i != options.steps - 3 || d1.empty() || d2.empty()) {
-            d1 = read_layer_file<T>(options.pathname + std::to_string(i + 1) + ".book");
-            d2 = read_layer_file<T>(options.pathname + std::to_string(i + 2) + ".book");
+            d1 = read_split_layer_file<T>(options.pathname + std::to_string(i + 1) + ".book");
+            d2 = read_split_layer_file<T>(options.pathname + std::to_string(i + 2) + ".book");
         }
     }
     return true;
@@ -395,8 +517,8 @@ bool handle_restart_recalculate(
 
 template <typename T, typename Mover>
 void recalculate_process_impl(
-    LayerVector<T> d1,
-    LayerVector<T> d2,
+    SplitLayer<T> d1,
+    SplitLayer<T> d2,
     const PatternSpec &spec,
     const RunOptions &options
 ) {
@@ -424,11 +546,7 @@ void recalculate_process_impl(
         }
         std::vector<uint64_t> raw_layer = read_raw_file(options.pathname + std::to_string(i));
         double t0 = wall_time_seconds();
-        LayerVector<T> d0(raw_layer.size());
-        for (size_t k = 0; k < raw_layer.size(); ++k) {
-            d0[k].board = raw_layer[k];
-            d0[k].success = zero_val;
-        }
+        SplitLayer<T> d0 = make_split_layer_from_raw<T>(std::move(raw_layer));
 
         AdaptiveIndex::Index ind2;
         if (has_index1) {
@@ -448,15 +566,18 @@ void recalculate_process_impl(
         recalculate_layer<T, Mover>(d0, d1, d2, spec, options, ind1.empty() ? nullptr : &ind1, ind2.empty() ? nullptr : &ind2, i > options.docheck_step);
         size_t length = d0.size();
         double t2 = wall_time_seconds();
-        remove_died(d0, zero_val);
+        compact_live_entries(d0, zero_val, true);
         double t3 = wall_time_seconds();
         log_recalculate_performance(i, t0, t1, t2, t3, length);
 
         if (!d0.empty()) {
-            auto max_iter = std::max_element(d0.begin(), d0.end(), [](const auto &lhs, const auto &rhs) {
-                return lhs.success < rhs.success;
-            });
-            double max_success = static_cast<double>(max_iter->success - zero_val) / static_cast<double>(max_scale - zero_val);
+            T max_success_raw = d0.success[0];
+            for (size_t k = 1; k < d0.size(); ++k) {
+                if (d0.success[k] > max_success_raw) {
+                    max_success_raw = d0.success[k];
+                }
+            }
+            double max_success = static_cast<double>(max_success_raw - zero_val) / static_cast<double>(max_scale - zero_val);
             std::ofstream stats(options.pathname + "stats.txt", std::ios::app);
             stats << i << "," << length << "," << max_success << ","
                   << round_to_2(static_cast<double>(length) / std::max(t3 - t0, 0.01) / 1e6) << " mbps,"
@@ -471,9 +592,8 @@ void recalculate_process_impl(
 
         if (options.deletion_threshold > 0.0) {
             T threshold = static_cast<T>(options.deletion_threshold * static_cast<double>(max_scale - zero_val) + static_cast<double>(zero_val));
-            LayerVector<T> filtered = d2;
-            remove_died(filtered, threshold);
-            write_layer_file(options.pathname + std::to_string(i + 2) + ".book", filtered);
+            compact_live_entries(d2, threshold, false);
+            write_layer_file(options.pathname + std::to_string(i + 2) + ".book", d2);
         }
         if (options.compress_temp_files && options.optimal_branch_only) {
             maybe_compress_with_7z(options.pathname + std::to_string(i + 2) + ".book");
@@ -494,16 +614,16 @@ namespace {
 
 template <typename T, typename Mover>
 void find_optimal_branches(
-    const LayerVector<T> &arr0,
-    const LayerVector<T> &arr1,
+    const SplitLayer<T> &arr0,
+    const SplitLayer<T> &arr1,
     std::vector<uint8_t> &result,
     const PatternSpec &spec,
     const AdaptiveIndex::Index *index,
     int new_value,
     T zero_val
 ) {
-    for (const auto &entry : arr0) {
-        uint64_t board = entry.board;
+    for (size_t row = 0; row < arr0.size(); ++row) {
+        uint64_t board = arr0.boards[row];
         for (int i = 0; i < 16; ++i) {
             if (((board >> (4 * i)) & 0xFULL) != 0) {
                 continue;
@@ -534,8 +654,8 @@ template <typename T>
 bool handle_restart_opt_only(
     int i,
     bool &started,
-    LayerVector<T> &d0,
-    LayerVector<T> &d1,
+    SplitLayer<T> &d0,
+    SplitLayer<T> &d1,
     const RunOptions &options
 ) {
     auto optlayer_path = options.pathname + "optlayer";
@@ -559,8 +679,8 @@ bool handle_restart_opt_only(
         if (!fs::exists(d0_path) || !fs::exists(d1_path)) {
             return false;
         }
-        d0 = read_layer_file<T>(d0_path);
-        d1 = read_layer_file<T>(d1_path);
+        d0 = read_split_layer_file<T>(d0_path);
+        d1 = read_split_layer_file<T>(d1_path);
         started = true;
         return true;
     }
@@ -569,8 +689,8 @@ bool handle_restart_opt_only(
 
 template <typename T, typename Mover>
 void keep_only_optimal_branches_impl(const PatternSpec &spec, const RunOptions &options) {
-    LayerVector<T> d0;
-    LayerVector<T> d1;
+    SplitLayer<T> d0;
+    SplitLayer<T> d1;
     bool started = false;
     T zero_val = zero_value<T>();
     const uint32_t progress_total = classic_build_progress_total(options);
@@ -586,22 +706,16 @@ void keep_only_optimal_branches_impl(const PatternSpec &spec, const RunOptions &
             maybe_decompress_with_7z(options.pathname + std::to_string(i) + ".book.7z");
         }
         if (i > 20 && process_step) {
-            LayerVector<T> d2 = read_layer_file<T>(options.pathname + std::to_string(i) + ".book");
+            SplitLayer<T> d2 = read_split_layer_file<T>(options.pathname + std::to_string(i) + ".book");
             AdaptiveIndex::Index index = create_index(d2, effective_num_threads(options));
             std::vector<uint8_t> mask(d2.size(), 0);
             find_optimal_branches<T, Mover>(d0, d2, mask, spec, index.empty() ? nullptr : &index, 2, zero_val);
             find_optimal_branches<T, Mover>(d1, d2, mask, spec, index.empty() ? nullptr : &index, 1, zero_val);
 
-            LayerVector<T> filtered;
-            filtered.reserve(d2.size());
-            for (size_t k = 0; k < d2.size(); ++k) {
-                if (mask[k]) {
-                    filtered.push_back(d2[k]);
-                }
-            }
-            write_layer_file(options.pathname + std::to_string(i) + ".book", filtered);
+            compact_by_mask(d2, mask, true);
+            write_layer_file(options.pathname + std::to_string(i) + ".book", d2);
             d0 = std::move(d1);
-            d1 = std::move(filtered);
+            d1 = std::move(d2);
             debug_log("step " + std::to_string(i) + " retains only the optimal branch\n");
         }
         if (options.compress) {
@@ -636,7 +750,12 @@ template <typename T, typename Mover> void run_pattern_solve_impl(
     const PatternSpec &spec,
     const RunOptions &options
 ) {
-    recalculate_process_impl<T, Mover>(layer_as<T>(d1), layer_as<T>(d2), spec, options);
+    recalculate_process_impl<T, Mover>(
+        split_layer_from_entries(layer_as<T>(d1)),
+        split_layer_from_entries(layer_as<T>(d2)),
+        spec,
+        options
+    );
     if (options.optimal_branch_only) {
         keep_only_optimal_branches_impl<T, Mover>(spec, options);
     }

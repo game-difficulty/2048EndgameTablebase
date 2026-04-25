@@ -1,4 +1,4 @@
-#include "lib/x86simdsort.h" // 根据你的结构，头文件在 lib 文件夹下
+#include "x86simdsort.h"
 #include <cstdint>
 
 #if defined(_WIN32)
