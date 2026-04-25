@@ -939,6 +939,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
     std::vector<uint64_t> hashmap1;
     std::vector<uint64_t> hashmap2;
     int num_threads = options.num_threads > 0 ? options.num_threads : std::max(4, std::min(32, omp_get_max_threads()));
+    const uint32_t progress_total = classic_build_progress_total(options);
     auto init_params = initialize_parameters_internal(num_threads, options.pathname, options.is_free);
 
     for (int i = 1; i < options.steps - 1; ++i) {
@@ -953,6 +954,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             continue;
         }
         started = true;
+        FormationProgress::update_build_progress(static_cast<uint32_t>(i), progress_total);
         bool do_check = i > options.docheck_step;
 
         if (d0.size() < init_params.segment_size) {

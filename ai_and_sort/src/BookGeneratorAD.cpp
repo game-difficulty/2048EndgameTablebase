@@ -1183,6 +1183,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
     for (uint64_t &board : arr_init) {
         board = FormationAD::mask_board(board);
     }
+    const uint32_t progress_total = build_progress_total(options);
 
     for (int i = 1; i < options.steps - 1; ++i) {
         RestartResult restart = handle_restart_ad(i, options.pathname, arr_init, started);
@@ -1196,6 +1197,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
         if (!restart.d1.empty()) {
             d1 = std::move(restart.d1);
         }
+        FormationProgress::update_build_progress(static_cast<uint32_t>(i), progress_total);
 
         uint32_t board_sum = static_cast<uint32_t>(2 * i + ini_board_sum - 2);
         if (d0.size() < init_params.segment_size) {
@@ -1322,6 +1324,7 @@ void run_pattern_build_ad_cpp(
     const AdvancedPatternSpec &spec,
     const RunOptions &options
 ) {
+    FormationProgress::reset_build_progress(build_progress_total(options));
     bool started = false;
     {
         FormationAD::MaskerContext masker = FormationAD::init_masker(spec);

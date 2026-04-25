@@ -224,6 +224,10 @@ def recalculate_process(
                 + "\n"
             )
 
+    progress_total = steps * (
+        3 if SingletonConfig().config.get("optimal_branch_only", False) else 2
+    )
+
     # 从后向前更新ds中的array
     for i in range(steps - 3, -1, -1):
         started, d1, d2 = handle_restart(
@@ -232,7 +236,7 @@ def recalculate_process(
         if not started:
             continue
 
-        progress_signal.progress_updated.emit(steps * 2 - i - 2, steps * 2)
+        progress_signal.progress_updated.emit(steps * 2 - i - 2, progress_total)
 
         deletion_threshold_n = SingletonConfig().config.get("deletion_threshold", 0.0)
         deletion_threshold = current_dtype(
@@ -710,12 +714,17 @@ def keep_only_optimal_branches(
     pathname: str,
 ):
     success_rate_dtype = SingletonConfig().config.get("success_rate_dtype", "uint32")
+    progress_total = steps * 3
+    solve_progress_total = steps * 2
     _, current_dtype, max_scale, zero_val = Config.DTYPE_CONFIG[
         success_rate_dtype
     ]
     d0, d1 = None, None
     started = False
     for i in range(0, steps):
+        progress_signal.progress_updated.emit(
+            solve_progress_total + i + 1, progress_total
+        )
         started, d0, d1 = handle_restart_opt_only(
             i, started, d0, d1, pathname, current_dtype
         )

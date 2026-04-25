@@ -1947,6 +1947,7 @@ void recalculate_process_ad_chunked_impl(
 
     std::unordered_map<uint32_t, MatchCache> match_dict;
     bool started = false;
+    const uint32_t progress_total = build_progress_total(options);
 
     for (int step = options.steps - 3; step >= 0; --step) {
         const std::string solved_folder = options.pathname + std::to_string(step) + "b";
@@ -1962,10 +1963,14 @@ void recalculate_process_ad_chunked_impl(
             started = true;
             if (step != options.steps - 3 || !started_from_generate) {
                 dict_fromfile(options, step + 2, book_dict2, ind_dict2);
-        AdSolveWorkspace<T> remove_workspace;
-        remove_died_ad(book_dict2, ind_dict2, zero_val, remove_workspace);
+                AdSolveWorkspace<T> remove_workspace;
+                remove_died_ad(book_dict2, ind_dict2, zero_val, remove_workspace);
             }
         }
+        FormationProgress::update_build_progress(
+            progress_total - static_cast<uint32_t>(step) - 2U,
+            progress_total
+        );
 
         const uint32_t original_board_sum = static_cast<uint32_t>(2 * step) + ini_board_sum;
         if (options.compress_temp_files) {
@@ -2130,6 +2135,7 @@ void recalculate_process_ad_impl(
     std::unordered_map<uint32_t, MatchCache> match_dict;
     bool started = false;
     bool has_prefix1 = false;
+    const uint32_t progress_total = build_progress_total(options);
 
     for (int step = options.steps - 3; step >= 0; --step) {
         const std::string solved_folder = options.pathname + std::to_string(step) + "b";
@@ -2148,6 +2154,10 @@ void recalculate_process_ad_impl(
                 dict_fromfile(options, step + 2, book_dict2, ind_dict2);
             }
         }
+        FormationProgress::update_build_progress(
+            progress_total - static_cast<uint32_t>(step) - 2U,
+            progress_total
+        );
 
         if (options.compress_temp_files) {
             maybe_decompress_with_7z(options.pathname + std::to_string(step) + ".7z");

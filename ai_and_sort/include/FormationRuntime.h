@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <atomic>
 #include <array>
 #include <variant>
 #include <vector>
@@ -35,6 +36,50 @@ struct RunOptions {
     bool chunked_solve = false;
     int num_threads = 0;
 };
+
+[[nodiscard]] inline uint32_t build_progress_total(const RunOptions &options) {
+    return options.steps > 0 ? static_cast<uint32_t>(options.steps * 2) : 0U;
+}
+
+[[nodiscard]] inline uint32_t classic_build_progress_total(const RunOptions &options) {
+    uint32_t total = build_progress_total(options);
+    if (options.optimal_branch_only && options.steps > 0) {
+        total += static_cast<uint32_t>(options.steps);
+    }
+    return total;
+}
+
+struct BuildProgressSnapshot {
+    uint32_t current = 0;
+    uint32_t total = 0;
+};
+
+namespace FormationProgress {
+
+inline std::atomic<uint32_t> current{0U};
+inline std::atomic<uint32_t> total{0U};
+
+inline void reset_build_progress(uint32_t next_total = 0U) {
+    current.store(0U, std::memory_order_relaxed);
+    total.store(next_total, std::memory_order_relaxed);
+}
+
+inline void update_build_progress(uint32_t next_current, uint32_t next_total) {
+    total.store(next_total, std::memory_order_relaxed);
+    current.store(next_current, std::memory_order_relaxed);
+}
+
+[[nodiscard]] inline BuildProgressSnapshot get_build_progress() {
+    BuildProgressSnapshot snapshot;
+    snapshot.total = total.load(std::memory_order_relaxed);
+    snapshot.current = current.load(std::memory_order_relaxed);
+    if (snapshot.current > snapshot.total) {
+        snapshot.total = snapshot.current;
+    }
+    return snapshot;
+}
+
+} // namespace FormationProgress
 
 struct AdvancedPatternSpec {
     std::string name;

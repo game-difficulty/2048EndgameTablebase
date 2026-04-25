@@ -407,11 +407,17 @@ void recalculate_process_impl(
     T max_scale = max_scale_value<T>();
     bool has_index1 = false;
     const int index_threads = effective_num_threads(options);
+    const uint32_t progress_total = classic_build_progress_total(options);
+    const uint32_t solve_progress_total = build_progress_total(options);
 
     for (int i = options.steps - 3; i >= 0; --i) {
         if (!handle_restart_recalculate(i, d1, d2, started, options)) {
             continue;
         }
+        FormationProgress::update_build_progress(
+            solve_progress_total - static_cast<uint32_t>(i) - 2U,
+            progress_total
+        );
 
         if (options.compress_temp_files) {
             maybe_decompress_with_7z(options.pathname + std::to_string(i) + ".7z");
@@ -567,8 +573,14 @@ void keep_only_optimal_branches_impl(const PatternSpec &spec, const RunOptions &
     LayerVector<T> d1;
     bool started = false;
     T zero_val = zero_value<T>();
+    const uint32_t progress_total = classic_build_progress_total(options);
+    const uint32_t solve_progress_total = build_progress_total(options);
 
     for (int i = 0; i < options.steps; ++i) {
+        FormationProgress::update_build_progress(
+            solve_progress_total + static_cast<uint32_t>(i) + 1U,
+            progress_total
+        );
         const bool process_step = handle_restart_opt_only(i, started, d0, d1, options);
         if (options.compress_temp_files) {
             maybe_decompress_with_7z(options.pathname + std::to_string(i) + ".book.7z");
@@ -694,6 +706,7 @@ void run_pattern_build_cpp(
     const PatternSpec &spec,
     const RunOptions &options
 ) {
+    FormationProgress::reset_build_progress(classic_build_progress_total(options));
     auto [started, d1, d2] = run_pattern_generate_cpp(arr_init, spec, options);
     (void) started;
     run_pattern_solve_cpp(d1, d2, spec, options);

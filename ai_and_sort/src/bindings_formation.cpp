@@ -76,6 +76,22 @@ NB_MODULE(formation_core, m) {
         .def_prop_ro("dtype_name", &PatternLayer::dtype_name);
 
     m.def(
+        "get_build_progress",
+        []() {
+            const BuildProgressSnapshot snapshot = FormationProgress::get_build_progress();
+            return nb::make_tuple(snapshot.current, snapshot.total);
+        }
+    );
+
+    m.def(
+        "reset_build_progress",
+        [](uint32_t total) {
+            FormationProgress::reset_build_progress(total);
+        },
+        "total"_a = 0U
+    );
+
+    m.def(
         "run_pattern_generate",
         [](const U64Array &arr_init, const PatternSpec &spec, const RunOptions &options) {
             return run_pattern_generate_cpp(to_u64_vector(arr_init), spec, options);

@@ -283,6 +283,9 @@ def generate_process(
         length_factor_multiplier,
         segment_size,
     ) = initialize_parameters(n, pathname, isfree)
+    progress_total = steps * (
+        3 if SingletonConfig().config.get("optimal_branch_only", False) else 2
+    )
 
     # 从前向后遍历，生成新的棋盘状态并保存到相应的array中
     for i in range(1, steps - 1):
@@ -290,7 +293,7 @@ def generate_process(
         if not started:
             continue
 
-        progress_signal.progress_updated.emit(i, steps * 2)
+        progress_signal.progress_updated.emit(i, progress_total)
 
         # 生成新的棋盘状态
         if len(d0) < segment_size:

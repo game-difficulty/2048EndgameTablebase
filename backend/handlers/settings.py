@@ -11,7 +11,7 @@ import time
 
 import markdown
 from Config import SingletonConfig, category_info, theme_map
-from egtb_core.BookBuilder import start_build, v_start_build
+from egtb_core import BookBuilder
 from fastapi import WebSocket
 from SignalHub import progress_signal
 from typing import Any
@@ -25,6 +25,7 @@ from ..state import ConnectionManager
 MAX_DELETION_THRESHOLD = 0.999999
 MIN_BUILD_PROGRESS_INTERVAL = 1.2
 MAX_BUILD_PROGRESS_UPDATES = 120
+NATIVE_BUILD_PROGRESS_POLL_INTERVAL = 0.25
 BUILD_STATE_LOCK = threading.Lock()
 BUILD_STATE = {
     "is_building": False,
@@ -184,6 +185,12 @@ async def handle_settings_action(
             "last_sent_current": -1,
             "last_sent_total": -1,
         }
+        native_progress_module = getattr(BookBuilder, "formation_core", None)
+        supports_native_progress = bool(
+            native_progress_module is not None
+            and hasattr(native_progress_module, "get_build_progress")
+            and hasattr(native_progress_module, "reset_build_progress")
+        )
 
         async def send_build_message(
             message_type: str, message_payload: dict[str, Any]
@@ -249,13 +256,77 @@ async def handle_settings_action(
                 loop,
             )
 
+        def read_native_progress_snapshot() -> tuple[int, int] | None:
+            if not supports_native_progress:
+                return None
+
+            try:
+                current, total = native_progress_module.get_build_progress()
+            except Exception:
+                return None
+
+            try:
+                current = int(current)
+                total = int(total)
+            except (TypeError, ValueError):
+                return None
+
+            current = max(0, current)
+            total = max(current, total)
+            return current, total
+
+        def start_native_progress_polling() -> tuple[threading.Event | None, threading.Thread | None]:
+            if not supports_native_progress:
+                return None, None
+
+            try:
+                native_progress_module.reset_build_progress()
+            except Exception:
+                return None, None
+
+            stop_event = threading.Event()
+
+            def poll() -> None:
+                last_snapshot: tuple[int, int] | None = None
+                while not stop_event.is_set():
+                    snapshot = read_native_progress_snapshot()
+                    if (
+                        snapshot is not None
+                        and snapshot[1] > 0
+                        and snapshot != last_snapshot
+                    ):
+                        publish_build_progress(*snapshot)
+                        last_snapshot = snapshot
+
+                    if stop_event.wait(NATIVE_BUILD_PROGRESS_POLL_INTERVAL):
+                        break
+
+            thread = threading.Thread(target=poll, daemon=True)
+            thread.start()
+            return stop_event, thread
+
+        def stop_native_progress_polling(
+            stop_event: threading.Event | None,
+            thread: threading.Thread | None,
+        ) -> None:
+            if stop_event is None:
+                return
+            stop_event.set()
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=0.5)
+
         def run_build() -> None:
             progress_signal.progress_updated.connect(publish_build_progress)
+            stop_event, poll_thread = start_native_progress_polling()
             try:
                 if pattern in category_info.get("variant", []):
-                    v_start_build(pattern, target, pathname)
+                    BookBuilder.v_start_build(pattern, target, pathname)
                 else:
-                    start_build(pattern, target, pathname)
+                    BookBuilder.start_build(pattern, target, pathname)
+
+                native_snapshot = read_native_progress_snapshot()
+                if native_snapshot is not None and native_snapshot[1] > 0:
+                    publish_build_progress(*native_snapshot)
 
                 final_total = (
                     progress_state["total"]
@@ -274,6 +345,7 @@ async def handle_settings_action(
                 update_build_state(is_building=False, error=str(e))
                 notify_build_failed(e)
             finally:
+                stop_native_progress_polling(stop_event, poll_thread)
                 progress_signal.progress_updated.disconnect(publish_build_progress)
 
         update_build_state(
