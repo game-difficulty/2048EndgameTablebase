@@ -192,6 +192,7 @@ async def handle_trainer_action(
         metadata = build_move_animation_metadata(
             direction_str,
             board_encoded=old_board_encoded,
+            use_variant=session.use_variant,
             spawn_index=num_pos_1d,
             spawn_value=2**val_exp if val_exp > 0 else 0,
         )
@@ -338,6 +339,7 @@ async def handle_trainer_action(
                             build_move_animation_metadata(
                                 move_label,
                                 board_encoded=session.history[-2][0],
+                                use_variant=session.use_variant,
                                 spawn_index=pos,
                                 spawn_value=2**val_exp,
                             )

@@ -133,6 +133,10 @@
       "next": "Next",
       "delete": "Delete",
       "practice": "Go To Trainer"
+    },
+    "threshold": {
+      "title": "Notebook Threshold",
+      "invalid": "Enter a valid number between 0 and 1."
     }
   },
   "trainer": {

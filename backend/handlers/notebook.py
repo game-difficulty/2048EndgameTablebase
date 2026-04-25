@@ -12,6 +12,8 @@ from ..notebook import (
     _notebook_select_pattern,
     _notebook_reset_unseen_boards,
     _notebook_answer,
+    _get_notebook_threshold,
+    _set_notebook_threshold,
     send_notebook_state,
 )
 from ..session import GameSession
@@ -33,6 +35,7 @@ async def handle_notebook_action(
                 "data": {
                     "patterns": patterns,
                     "weight_mode": int(session.notebook_weight_mode),
+                    "notebook_threshold": _get_notebook_threshold(),
                 },
             }
         )
@@ -51,6 +54,11 @@ async def handle_notebook_action(
         if session.notebook_pattern:
             _notebook_reset_unseen_boards(session)
             _notebook_next_problem(session)
+        await send_notebook_state(websocket, session)
+        return True
+
+    if action == Action.NOTEBOOK_SET_THRESHOLD:
+        _set_notebook_threshold(payload.get("threshold"))
         await send_notebook_state(websocket, session)
         return True
 

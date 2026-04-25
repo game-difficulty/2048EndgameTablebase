@@ -45,7 +45,7 @@
                 v-for="pattern in activePatternOptions"
                 :key="pattern"
                 type="button"
-                @click.stop="selectPattern(pattern)"
+                @click.stop="handlePatternSelect(pattern, $event)"
                 :class="[
                   'rounded-lg px-3 py-2 text-left ui-control font-black transition-colors',
                   patternType === pattern
@@ -61,7 +61,7 @@
         <span class="text-text-secondary font-bold opacity-30 truncate">|</span>
         <select
           v-model="targetValue"
-          @change="onPatternChange"
+          @change="handleTargetChange"
           class="top-menu-select"
         >
           <option value="" class="bg-bg-card text-text-main">{{ $t('trainer.top.selectTarget') }}</option>
@@ -95,7 +95,9 @@
           <button @click="setBoard" class="action-btn ui-control px-4 !bg-btn-bg !text-white border-btn-bg hover:bg-btn-hover font-black uppercase shadow-sm">{{ $t('trainer.board.set') }}</button>
         </div>
 
-        <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @cell-click="handleCellClick" />
+        <div ref="boardHotkeyTarget" tabindex="-1" class="w-full outline-none focus:outline-none">
+          <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @cell-click="handleCellClick" />
+        </div>
 
         <div class="w-full mt-4 bg-bg-card border border-border-main rounded-lg p-3 shadow-sm">
           <div class="flex justify-between items-center mb-2">
@@ -254,9 +256,10 @@
 </template>
 
 <script setup>
-import { toRef } from 'vue';
+import { ref, toRef } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
+import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
 import { useTrainerSession } from '../composables/useTrainerSession';
 
 const props = defineProps({
@@ -264,6 +267,7 @@ const props = defineProps({
 });
 
 const spawnModeLabelKeys = ['random', 'best', 'worst', 'manual'];
+const boardHotkeyTarget = ref(null);
 
 const {
   currentPatternDisplay,
@@ -318,6 +322,20 @@ const {
   onDis32kChange,
   patternMenuRoot,
 } = useTrainerSession(toRef(props, 'active'));
+
+const focusBoardHotkeys = (event) => {
+  refocusBoardHotkeyTarget(boardHotkeyTarget, event?.target);
+};
+
+const handlePatternSelect = (pattern, event) => {
+  selectPattern(pattern);
+  focusBoardHotkeys(event);
+};
+
+const handleTargetChange = (event) => {
+  onPatternChange();
+  focusBoardHotkeys(event);
+};
 </script>
 
 <style scoped>

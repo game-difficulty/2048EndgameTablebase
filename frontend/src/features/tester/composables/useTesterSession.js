@@ -13,7 +13,11 @@ export function useTesterSession(activeRef) {
     basic: ['L3', 'L4', 'I3', 'I4', 'LL', 'free8', 'free9', 'free10', '444'],
   };
   const performanceLabels = ['Perfect!', 'Excellent!', 'Nice try!', 'Not bad!', 'Mistake!', 'Blunder!', 'Terrible!'];
-  const dirLabels = { left: 'L', right: 'R', down: 'D', up: 'U' };
+  const dirLabels = computed(() => (
+    isZh()
+      ? { left: '左', right: '右', down: '下', up: '上' }
+      : { left: 'L', right: 'R', down: 'D', up: 'U' }
+  ));
   const COLOR_GREEN = '#2e7d32';
   const COLOR_YG = '#8bc34a';
   const COLOR_ORANGE = '#ff9800';

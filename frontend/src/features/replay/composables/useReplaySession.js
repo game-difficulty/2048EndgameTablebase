@@ -16,7 +16,11 @@ export function useReplaySession(activeRef, emit) {
   const COLOR_YG = '#8bc34a';
   const COLOR_ORANGE = '#ff9800';
   const COLOR_RED = '#f44336';
-  const dirLabels = { left: 'L', right: 'R', up: 'U', down: 'D' };
+  const dirLabels = computed(() => (
+    isZh()
+      ? { left: '左', right: '右', up: '上', down: '下' }
+      : { left: 'L', right: 'R', up: 'U', down: 'D' }
+  ));
   const evaluationColors = {
     'Perfect!': '#2e7d32',
     'Excellent!': '#7cb342',

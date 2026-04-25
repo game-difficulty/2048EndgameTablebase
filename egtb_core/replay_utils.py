@@ -17,6 +17,14 @@ REPLAY_DIRS = ("left", "right", "up", "down")
 ENGINE_DIR_MAP = {"left": 1, "right": 2, "up": 3, "down": 4}
 
 
+def _normalize_board_for_animation(board_2d, use_variant=False):
+    if not use_variant:
+        return board_2d
+    normalized = np.array(board_2d, copy=True)
+    normalized[normalized == 32768] = -1
+    return normalized
+
+
 def empty_replay():
     return np.empty(0, dtype=REPLAY_DTYPE)
 
@@ -147,6 +155,7 @@ def build_step_transition(record, step, use_variant=False):
 
     move_fn = vbm.s_move_board if use_variant else bm.s_move_board
     board_2d = vbm.decode_board(board_encoded)
+    animation_board = _normalize_board_for_animation(board_2d, use_variant)
     moved_board, move_score = move_fn(board_encoded, ENGINE_DIR_MAP[move_name])
     next_board = np.uint64(int(moved_board) | (int(spawn_exp) << (int(spawn_pos) * 4)))
 
@@ -154,8 +163,8 @@ def build_step_transition(record, step, use_variant=False):
         "board_encoded": board_encoded,
         "next_board_encoded": next_board,
         "direction": move_name,
-        "slide_distances": slide_distance(board_2d, move_name).flatten().tolist(),
-        "pop_positions": find_merge_positions(board_2d, move_name).flatten().tolist(),
+        "slide_distances": slide_distance(animation_board, move_name).flatten().tolist(),
+        "pop_positions": find_merge_positions(animation_board, move_name).flatten().tolist(),
         "appear_tile": {
             "index": int(spawn_pos),
             "value": int(2 ** spawn_exp),

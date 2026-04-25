@@ -78,7 +78,7 @@
         </button>
       </div>
 
-      <div class="w-full">
+      <div ref="boardHotkeyTarget" tabindex="-1" class="w-full outline-none focus:outline-none">
         <BaseBoard :board="board" :metadata="metadata" />
       </div>
 
@@ -86,11 +86,11 @@
         <div class="w-full flex justify-between gap-4 mb-4">
           <div class="flex-1 flex flex-col justify-center">
             <span class="text-text-main ui-body font-bold opacity-80 mb-1">{{ $t('labels.gameDifficulty') }}</span>
-            <input type="range" class="w-full" :min="0" :max="100" :step="1" v-model.number="difficulty" @change="updateSettings" />
+            <input type="range" class="w-full" :min="0" :max="100" :step="1" v-model.number="difficulty" @change="handleUpdateSettings($event)" />
           </div>
           <div class="flex-1 flex flex-col justify-center">
             <span class="text-text-main ui-body font-bold opacity-80 mb-1">{{ $t('labels.aiSpeed') }}</span>
-            <input type="range" class="w-full" :min="0" :max="200" :step="1" v-model.number="aiSpeed" @change="updateSettings" />
+            <input type="range" class="w-full" :min="0" :max="200" :step="1" v-model.number="aiSpeed" @change="handleUpdateSettings($event)" />
           </div>
         </div>
       </div>
@@ -99,14 +99,17 @@
 </template>
 
 <script setup>
-import { toRef } from 'vue';
+import { ref, toRef } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
+import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
 import { useGamerSession } from '../composables/useGamerSession';
 
 const props = defineProps({
   active: { type: Boolean, default: true },
 });
+
+const boardHotkeyTarget = ref(null);
 
 const {
   board,
@@ -125,4 +128,9 @@ const {
   writeCurrentBoardToHex,
   openBrowserAi,
 } = useGamerSession(toRef(props, 'active'));
+
+const handleUpdateSettings = (event) => {
+  updateSettings();
+  refocusBoardHotkeyTarget(boardHotkeyTarget, event?.target);
+};
 </script>

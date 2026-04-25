@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import pickle
 from collections import defaultdict
@@ -58,7 +59,7 @@ class MistakesBookStore:
     ) -> None:
         if not full_pattern or not best_move:
             return
-        threshold = float(SingletonConfig().config.get("notebook_threshold", 0.999))
+        threshold = _get_notebook_threshold()
         if loss and loss > threshold:
             return
 
@@ -87,6 +88,30 @@ class MistakesBookStore:
 
 
 mistakes_book_store = MistakesBookStore()
+
+
+def _normalize_notebook_threshold(value: object) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 0.999
+    if not math.isfinite(parsed):
+        return 0.999
+    return min(1.0, max(0.0, parsed))
+
+
+def _get_notebook_threshold() -> float:
+    return _normalize_notebook_threshold(
+        SingletonConfig().config.get("notebook_threshold", 0.999)
+    )
+
+
+def _set_notebook_threshold(value: object) -> float:
+    normalized = _normalize_notebook_threshold(value)
+    config_manager = SingletonConfig()
+    config_manager.config["notebook_threshold"] = normalized
+    config_manager.save_config(config_manager.config)
+    return normalized
 
 
 def _notebook_pattern_list() -> list[str]:
@@ -301,6 +326,7 @@ async def send_notebook_state(websocket: WebSocket, session) -> None:
                 "animation": sanitize_config({}),
                 "hex_str": safe_hex(session.notebook_board_encoded),
                 "weight_mode": int(session.notebook_weight_mode),
+                "notebook_threshold": _get_notebook_threshold(),
                 "feedback": {
                     "combo": int(session.notebook_combo),
                     "remaining": int(len(session.notebook_unseen_boards)),

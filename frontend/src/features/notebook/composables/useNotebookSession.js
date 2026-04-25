@@ -7,6 +7,23 @@ import { isVariantPattern } from '../../../utils/patternCategories';
 const DEFAULT_BOARD = new Array(16).fill(0);
 const SAMPLE_MODE_KEYS = ['mistakeCount', 'totalLoss', 'combined'];
 const AUTO_NEXT_DELAY_MS = 1500;
+const DEFAULT_NOTEBOOK_THRESHOLD = 0.999;
+
+function clampNotebookThreshold(value) {
+  return Math.min(1, Math.max(0, value));
+}
+
+function parseNotebookThresholdInput(value) {
+  const parsed = Number(String(value ?? '').trim());
+  if (!Number.isFinite(parsed)) return null;
+  return clampNotebookThreshold(parsed);
+}
+
+function formatNotebookThreshold(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_NOTEBOOK_THRESHOLD.toFixed(6);
+  return clampNotebookThreshold(parsed).toFixed(6);
+}
 
 export function useNotebookSession(activeRef) {
   const { config: appConfig, categories: appCategories } = useAppSettingsStore();
@@ -29,6 +46,8 @@ export function useNotebookSession(activeRef) {
   const answered = ref(false);
   const answerCorrect = ref(null);
   const bestMove = ref(null);
+  const notebookThreshold = ref(DEFAULT_NOTEBOOK_THRESHOLD);
+  const notebookThresholdInput = ref(formatNotebookThreshold(DEFAULT_NOTEBOOK_THRESHOLD));
   const nextCountdownMs = ref(0);
   const backendReady = ref(false);
 
@@ -55,6 +74,17 @@ export function useNotebookSession(activeRef) {
     if (!nextCountdownActive.value) return null;
     return `${(nextCountdownMs.value / 1000).toFixed(1)}s`;
   });
+  const thresholdInputIsValid = computed(() => parseNotebookThresholdInput(notebookThresholdInput.value) !== null);
+  const thresholdDirty = computed(() => {
+    const parsed = parseNotebookThresholdInput(notebookThresholdInput.value);
+    return parsed !== null && Math.abs(parsed - notebookThreshold.value) > 1e-12;
+  });
+  const thresholdSaveEnabled = computed(() => (
+    backendReady.value
+    && wsStatus.value === 'connected'
+    && thresholdInputIsValid.value
+    && thresholdDirty.value
+  ));
 
   const stopNextCountdown = () => {
     if (nextCountdownTimer) {
@@ -84,6 +114,16 @@ export function useNotebookSession(activeRef) {
       : [...DEFAULT_BOARD];
   };
 
+  const syncNotebookThreshold = (rawThreshold) => {
+    const parsed = parseNotebookThresholdInput(rawThreshold);
+    if (parsed === null) return;
+    const shouldRefreshInput = !thresholdDirty.value || notebookThresholdInput.value.trim() === '';
+    notebookThreshold.value = parsed;
+    if (shouldRefreshInput) {
+      notebookThresholdInput.value = formatNotebookThreshold(parsed);
+    }
+  };
+
   const handleNotebookBootstrap = (payload) => {
     backendReady.value = true;
     availablePatterns.value = Array.isArray(payload?.patterns) ? payload.patterns.map(String) : [];
@@ -93,6 +133,7 @@ export function useNotebookSession(activeRef) {
     if (typeof payload?.weight_mode === 'number') {
       sampleMode.value = Math.max(0, Math.min(SAMPLE_MODE_KEYS.length - 1, payload.weight_mode));
     }
+    syncNotebookThreshold(payload?.notebook_threshold);
   };
 
   const handleNotebookState = (payload) => {
@@ -119,6 +160,7 @@ export function useNotebookSession(activeRef) {
     if (typeof payload?.weight_mode === 'number') {
       sampleMode.value = Math.max(0, Math.min(SAMPLE_MODE_KEYS.length - 1, payload.weight_mode));
     }
+    syncNotebookThreshold(payload?.notebook_threshold);
   };
 
   const handleMessage = (message) => {
@@ -199,6 +241,19 @@ export function useNotebookSession(activeRef) {
       }));
     }
     emit('navigate-tab', 'TrainerView');
+  };
+
+  const updateNotebookThresholdInput = (value) => {
+    notebookThresholdInput.value = value;
+  };
+
+  const saveNotebookThreshold = () => {
+    const parsed = parseNotebookThresholdInput(notebookThresholdInput.value);
+    if (parsed === null) return;
+    const normalized = formatNotebookThreshold(parsed);
+    notebookThresholdInput.value = normalized;
+    if (Math.abs(parsed - notebookThreshold.value) <= 1e-12) return;
+    send('NOTEBOOK_SET_THRESHOLD', { threshold: parsed });
   };
 
   const closePatternMenuOnClick = (event) => {
@@ -304,6 +359,10 @@ export function useNotebookSession(activeRef) {
     correct,
     incorrect,
     sampleMode,
+    notebookThresholdInput,
+    thresholdInputIsValid,
+    thresholdDirty,
+    thresholdSaveEnabled,
     answered,
     answerCorrect,
     currentPatternDisplay,
@@ -312,6 +371,7 @@ export function useNotebookSession(activeRef) {
     sampleModes,
     hasPatterns,
     actionEnabled,
+    canAnswer,
     nextCountdownActive,
     nextCountdownProgress,
     nextButtonLabel,
@@ -322,6 +382,8 @@ export function useNotebookSession(activeRef) {
     nextProblem,
     deleteCurrent,
     jumpToTrainer,
+    updateNotebookThresholdInput,
+    saveNotebookThreshold,
     getDirectionButtonClass,
   };
 }

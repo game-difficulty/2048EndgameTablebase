@@ -13,14 +13,28 @@ from .session import u64
 AnimationMetadata = dict[str, Any]
 
 
+def _normalize_board_for_animation(
+    board_2d: np.ndarray,
+    use_variant: bool,
+) -> np.ndarray:
+    if not use_variant:
+        return board_2d
+    normalized = np.array(board_2d, copy=True)
+    normalized[normalized == 32768] = -1
+    return normalized
+
+
 def compute_move_animation(
     board_encoded: int,
     direction_str: str,
+    *,
+    use_variant: bool = False,
     error_prefix: str | None = None,
     trace: bool = False,
 ) -> tuple[list[int], list[int]]:
     try:
         board_2d = decode_board(np.uint64(u64(board_encoded)))
+        board_2d = _normalize_board_for_animation(board_2d, use_variant)
         distances = slide_distance(board_2d, direction_str).flatten().tolist()
         merges = find_merge_positions(board_2d, direction_str).flatten().tolist()
         return distances, merges
@@ -36,6 +50,7 @@ def build_move_animation_metadata(
     direction_str: str,
     *,
     board_encoded: int | None = None,
+    use_variant: bool = False,
     spawn_index: int | None = None,
     spawn_value: int | None = None,
     distances: list[int] | None = None,
@@ -51,6 +66,7 @@ def build_move_animation_metadata(
             distances, merges = compute_move_animation(
                 board_encoded,
                 direction_str,
+                use_variant=use_variant,
                 error_prefix=error_prefix,
                 trace=trace,
             )

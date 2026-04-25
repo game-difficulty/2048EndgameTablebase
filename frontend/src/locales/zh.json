@@ -133,6 +133,10 @@
       "next": "\u4e0b\u4e00\u9898",
       "delete": "\u5220\u9664",
       "practice": "\u8df3\u8f6c\u5230\u8bad\u7ec3"
+    },
+    "threshold": {
+      "title": "\u9519\u9898\u672c\u9608\u503c",
+      "invalid": "\u8bf7\u8f93\u5165 0 \u5230 1 \u4e4b\u95f4\u7684\u6709\u6548\u6570\u503c\u3002"
     }
   },
   "trainer": {

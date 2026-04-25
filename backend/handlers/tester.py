@@ -319,6 +319,7 @@ async def handle_tester_action(
         metadata = build_move_animation_metadata(
             direction_str,
             board_encoded=old_board_encoded,
+            use_variant=session.use_variant,
             spawn_index=num_pos_1d,
             spawn_value=2**val_exp if val_exp > 0 else 0,
         )

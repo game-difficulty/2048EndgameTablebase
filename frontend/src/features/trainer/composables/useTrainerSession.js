@@ -42,7 +42,11 @@ export function useTrainerSession(activeRef) {
   const patternMenuOpen = ref(false);
   const activePatternCategory = ref(Object.keys(fallbackPatternCategories)[0] || '');
   const patternMenuRoot = ref(null);
-  const dirLabels = { left: 'L', right: 'R', down: 'D', up: 'U' };
+  const dirLabels = computed(() => (
+    String(appConfig.value?.language || 'en').startsWith('zh')
+      ? { left: '左', right: '右', down: '下', up: '上' }
+      : { left: 'L', right: 'R', down: 'D', up: 'U' }
+  ));
 
   const spawnMode = ref(0);
   const spawnModes = ['Random', 'Best', 'Worst', 'Manual'];

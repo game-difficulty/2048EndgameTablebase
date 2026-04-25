@@ -72,6 +72,31 @@ let revealAppearTimeout = null;
 const MERGE_GLOW_MIN_VALUE = 2048;
 const MERGE_GLOW_STEPS = 5;
 
+function isVariantWallValue(value) {
+  return props.isVariant && Number(value) === 32768;
+}
+
+function shouldRenderAsActiveTile(value) {
+  return Number(value) > 0 && !isVariantWallValue(value);
+}
+
+function hasMoveAnimationMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object') return false;
+  const appearTile = metadata.appear_tile;
+  const hasAppearTile = !!appearTile
+    && Number.isInteger(Number(appearTile.index))
+    && Number(appearTile.index) >= 0
+    && Number(appearTile.index) < 16
+    && Number(appearTile.value) > 0;
+  const { direction, slide_distances: slideDistances, pop_positions: popPositions } = metadata;
+  const hasDirectionalAnimation = ['left', 'right', 'up', 'down'].includes(direction)
+    && Array.isArray(slideDistances)
+    && slideDistances.length === 16
+    && Array.isArray(popPositions)
+    && popPositions.length === 16;
+  return hasDirectionalAnimation || hasAppearTile;
+}
+
 const decayGlowSteps = (tile) => {
     if (!tile.glowStepsRemaining) return 0;
     return Math.max(0, tile.glowStepsRemaining - 1);
@@ -135,7 +160,7 @@ const syncToBoardRaw = () => {
     fastForwardAnimations(true);
     activeTiles.value = [];
     for(let i=0; i<16; i++) {
-        if (props.board[i] > 0) {
+        if (shouldRenderAsActiveTile(props.board[i])) {
             activeTiles.value.push(withGlowDefaults({
                 id: `tile-${tileIdCounter++}`,
                 row: Math.floor(i / 4),
@@ -151,8 +176,8 @@ const syncToBoardRaw = () => {
     }
 };
 
-watch(() => props.board, async (newBoard) => {
-    if (!props.metadata || Object.keys(props.metadata).length === 0) {
+watch(() => [props.board, props.isVariant], async ([newBoard]) => {
+    if (!hasMoveAnimationMetadata(props.metadata)) {
         // Init or resync without animation
         clearAnimationTimers();
         syncToBoardRaw();
@@ -207,7 +232,7 @@ watch(() => props.board, async (newBoard) => {
             tile.isDying = true; // Mark old tile to eventually die
             
             // Generate the ultimate merged tile hidden
-            if (!newActive.find(t => t.col === tx && t.row === ty && t.isHidden)) {
+            if (shouldRenderAsActiveTile(newBoard[newIndex]) && !newActive.find(t => t.col === tx && t.row === ty && t.isHidden)) {
                newActive.push(withGlowDefaults({
                    id: `tile-${tileIdCounter++}`,
                    row: ty,
@@ -226,7 +251,7 @@ watch(() => props.board, async (newBoard) => {
     });
     
     // Push the newest spawned tile
-    if (appear_tile && appear_tile.value > 0) {
+    if (appear_tile && shouldRenderAsActiveTile(appear_tile.value)) {
         newActive.push(withGlowDefaults({
             id: `tile-${tileIdCounter++}`,
             row: Math.floor(appear_tile.index / 4),
@@ -269,22 +294,20 @@ const getTilePosStyle = (tile) => {
   };
 };
 
-const isVariantWall = (value) => props.isVariant && Number(value) === 32768;
-
 const getTileDisplayValue = (value) => {
   if (!value) return '';
-  if (value === 32768 && (props.dis32k || isVariantWall(value))) return '';
+  if (value === 32768 && (props.dis32k || isVariantWallValue(value))) return '';
   return value;
 };
 
 const getBackgroundCellStyle = (index) => (
-  isVariantWall(props.board[index])
+  isVariantWallValue(props.board[index])
     ? { backgroundColor: 'var(--color-board-bg)' }
     : null
 );
 
 const getTileInnerStyle = (tile) => {
-  if (isVariantWall(tile.value)) {
+  if (isVariantWallValue(tile.value)) {
     return {
       backgroundColor: 'var(--color-board-bg)',
       color: 'transparent',

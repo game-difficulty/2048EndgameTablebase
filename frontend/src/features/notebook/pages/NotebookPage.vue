@@ -47,9 +47,9 @@
       </div>
     </div>
 
-    <div class="grid w-full max-w-6xl grid-cols-[452px_minmax(0,1fr)] items-start gap-6">
+    <div class="grid w-full max-w-6xl grid-cols-[560px_minmax(0,1fr)] items-start gap-6">
       <section class="flex flex-col">
-        <div class="mx-auto w-full max-w-[442px]">
+        <div class="mx-auto w-full max-w-[556px]">
           <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" />
         </div>
       </section>
@@ -139,6 +139,38 @@
             </button>
           </div>
         </div>
+
+        <div class="console-card">
+          <div class="console-card-header">
+            <span>{{ $t('notebook.threshold.title') }}</span>
+          </div>
+          <div class="mt-3 flex items-center gap-2">
+            <input
+              :value="notebookThresholdInput"
+              type="number"
+              min="0"
+              max="1"
+              step="0.001"
+              class="notebook-threshold-input"
+              @input="updateNotebookThresholdInput($event.target.value)"
+              @keydown.enter.prevent="saveNotebookThreshold"
+            />
+            <button
+              type="button"
+              class="notebook-threshold-save"
+              :disabled="!thresholdSaveEnabled"
+              @click="saveNotebookThreshold"
+            >
+              {{ $t('common.apply') }}
+            </button>
+          </div>
+          <div
+            v-if="!thresholdInputIsValid"
+            class="mt-2 ui-kicker font-black uppercase tracking-[0.16em] text-rose-500"
+          >
+            {{ $t('notebook.threshold.invalid') }}
+          </div>
+        </div>
       </section>
     </div>
   </div>
@@ -173,6 +205,9 @@ const {
   correct,
   incorrect,
   sampleMode,
+  notebookThresholdInput,
+  thresholdInputIsValid,
+  thresholdSaveEnabled,
   canAnswer,
   currentPatternDisplay,
   isVariant,
@@ -190,6 +225,8 @@ const {
   nextProblem,
   deleteCurrent,
   jumpToTrainer,
+  updateNotebookThresholdInput,
+  saveNotebookThreshold,
   getDirectionButtonClass,
 } = useNotebookSession(toRef(props, 'active'));
 </script>
@@ -253,6 +290,57 @@ const {
 
 .notebook-btn-accent:hover {
   color: white;
+}
+
+.notebook-threshold-input {
+  flex: 1;
+  min-width: 0;
+  appearance: textfield;
+  -moz-appearance: textfield;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border-main);
+  background: color-mix(in srgb, var(--bg-main) 82%, transparent);
+  color: var(--text-main);
+  padding: 0.7rem 0.85rem;
+  font-size: var(--font-ui-sm);
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.notebook-threshold-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.notebook-threshold-input::-webkit-inner-spin-button,
+.notebook-threshold-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.notebook-threshold-save {
+  border-radius: 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border-main));
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-main));
+  color: var(--text-main);
+  padding: 0.72rem 0.95rem;
+  font-size: var(--font-ui-xs);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: all 0.18s ease;
+}
+
+.notebook-threshold-save:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.notebook-threshold-save:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 </style>
