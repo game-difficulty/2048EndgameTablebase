@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 import numpy as np
 from Config import SingletonConfig
-from egtb_core.VBoardMover import decode_board
+from engine_core.VBoardMover import decode_board
 from fastapi import WebSocket
 
 from .serialization import sanitize_config

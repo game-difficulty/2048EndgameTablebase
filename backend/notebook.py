@@ -8,9 +8,9 @@ from collections import defaultdict
 import numpy as np
 from fastapi import WebSocket
 
-import egtb_core.Calculator as Calculator
+import engine_core.Calculator as Calculator
 from Config import SingletonConfig
-from egtb_core.VBoardMover import decode_board
+from engine_core.VBoardMover import decode_board
 
 from .actions import Message
 from .serialization import sanitize_config

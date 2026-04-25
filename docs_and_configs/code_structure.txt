@@ -29,9 +29,9 @@
   Shared frontend utilities and transport helpers.
 
 4. Core algorithm packages
-- egtb_core/
+- engine_core/
   Python-side tablebase, replay, compression, and solver logic.
-- ai_and_sort/
+- native_core/
   Merged native workspace for compiled helpers.
   - src/
     C++ source for ai_core and mover_core.
@@ -71,7 +71,7 @@
 7. Assets and static resources
 - pic/
   Shared static assets.
-- minigames/pic/
+- assets/minigames/
   Minigame assets and covers.
 - font/
   Fonts.
@@ -81,8 +81,8 @@
   App/browser icon.
 
 8. Minigame compatibility layer
-- minigames/MinigameMover.py
-  Legacy mover module still reused by backend/minigames/engine/mover.py.
+- backend/minigames/engine/MinigameMover.py
+  Legacy mover implementation now lives inside the backend minigames engine package.
 
 9. Tools
 - tools/AItest.py
@@ -93,9 +93,9 @@
 10. Local-only / generated content
 - frontend/node_modules/, frontend/dist/
   Frontend dependency/build output.
-- ai_and_sort/build/
+- native_core/build-formation/
   Native extension build output.
-- ai_and_sort/x86simdsort/x86-simd-sort/builddir/
+- native_core/x86simdsort/x86-simd-sort/builddir/
   SIMD sort build output.
 - __pycache__/ and temporary compile artifacts
   Python-generated cache files.

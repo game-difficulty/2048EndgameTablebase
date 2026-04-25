@@ -3,13 +3,13 @@ docs/ai_core.js linguist-generated=true
 docs/ai_core.wasm linguist-generated=true binary
 
 # Large compressed generated source bundle
-ai_and_sort/egtb_data.7z binary
+native_core/egtb_data.7z binary
 
 # Modified third-party SIMD sort subtree: keep in repo, exclude from language stats
-ai_and_sort/x86simdsort/x86-simd-sort/** linguist-vendored
+native_core/x86simdsort/x86-simd-sort/** linguist-vendored
 
 # Vendored nanobind subset used for offline/native builds
-ai_and_sort/extern/nanobind/** linguist-vendored
+native_core/extern/nanobind/** linguist-vendored
 
 # Generated Python stub files for native modules
-ai_and_sort/*.pyi linguist-generated=true
+native_core/*.pyi linguist-generated=true

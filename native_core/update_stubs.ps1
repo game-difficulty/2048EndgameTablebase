@@ -43,7 +43,7 @@ nb_stubgen.main(['-m', module_name, '-O', output_dir])
 
 if (-not $SkipBuild) {
     if (-not (Test-Path -LiteralPath $Cache)) {
-        throw "Missing CMake cache: $Cache. Configure ai_and_sort/build-formation first."
+        throw "Missing CMake cache: $Cache. Configure native_core/build-formation first."
     }
 
     & cmake --build $BuildDir --target ai_core formation_core -j $Jobs
@@ -58,8 +58,8 @@ if (-not (Test-Path -LiteralPath $NanobindSrc)) {
 
 Push-Location $RepoRoot
 try {
-    Invoke-StubGen "ai_and_sort.ai_core"
-    Invoke-StubGen "ai_and_sort.formation_core"
+    Invoke-StubGen "native_core.ai_core"
+    Invoke-StubGen "native_core.formation_core"
 } finally {
     Pop-Location
     $env:PYTHONPATH = $OriginalPythonPath

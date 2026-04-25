@@ -7,15 +7,15 @@ from typing import Any
 
 import numpy as np
 from Config import SingletonConfig, category_info
-from egtb_core.Calculator import ReverseLR, ReverseUD, RotateL, RotateR
+from engine_core.Calculator import ReverseLR, ReverseUD, RotateL, RotateR
 from fastapi import WebSocket
-from egtb_core.VBoardMover import (
+from engine_core.VBoardMover import (
     decode_board,
     encode_board,
     s_gen_new_num as v_gen_new_num,
     s_move_board as v_move_board,
 )
-from egtb_core.BoardMover import s_gen_new_num as r_gen_new_num, s_move_board as r_move_board
+from engine_core.BoardMover import s_gen_new_num as r_gen_new_num, s_move_board as r_move_board
 
 from ..actions import Action, EventType, Message
 from ..animation import build_move_animation_metadata

@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from egtb_core.Calculator import count_zeros
+from engine_core.Calculator import count_zeros
 from Config import SingletonConfig
 
 from ..engine.base import BaseMinigameEngine

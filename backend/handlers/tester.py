@@ -5,8 +5,8 @@ from typing import Any
 import numpy as np
 from Config import SingletonConfig, category_info
 from fastapi import WebSocket
-from egtb_core.VBoardMover import s_gen_new_num as v_gen_new_num, s_move_board as v_move_board
-from egtb_core.BoardMover import s_gen_new_num as r_gen_new_num, s_move_board as r_move_board
+from engine_core.VBoardMover import s_gen_new_num as v_gen_new_num, s_move_board as v_move_board
+from engine_core.BoardMover import s_gen_new_num as r_gen_new_num, s_move_board as r_move_board
 
 from ..actions import Action, Message
 from ..animation import build_move_animation_metadata

@@ -11,7 +11,7 @@ This guide explains how to bundle the desktop application with PyInstaller.
    npm run build
    ```
 
-2. Ensure native runtime binaries already exist in `ai_and_sort/`:
+2. Ensure native runtime binaries already exist in `native_core/`:
    - `ai_core*.pyd`
    - `mover_core*.pyd`
    - `formation_core*.pyd`
@@ -36,12 +36,12 @@ pyinstaller --noconfirm --onedir --windowed `
     --add-data "src/font;font" `
     --add-data "src/favicon.ico;." `
     --add-data "src/mathjax;mathjax" `
-    --add-data "src/minigames/pic;minigames/pic" `
+    --add-data "src/assets/minigames;assets/minigames" `
     --add-data "src/frontend/dist;frontend/dist" `
-    --add-binary "src/ai_and_sort/libgcc_s_seh-1.dll;ai_and_sort" `
-    --add-binary "src/ai_and_sort/libgomp-1.dll;ai_and_sort" `
-    --add-binary "src/ai_and_sort/libwinpthread-1.dll;ai_and_sort" `
-    --add-binary "src/ai_and_sort/bookgen_native.dll;ai_and_sort" `
+    --add-binary "src/native_core/libgcc_s_seh-1.dll;native_core" `
+    --add-binary "src/native_core/libgomp-1.dll;native_core" `
+    --add-binary "src/native_core/libwinpthread-1.dll;native_core" `
+    --add-binary "src/native_core/bookgen_native.dll;native_core" `
     --add-data "src/7zip/7z.dll;." `
     --add-data "src/7zip/7z.exe;." `
     --icon "src/pic/2048_2.ico" `
@@ -50,7 +50,7 @@ pyinstaller --noconfirm --onedir --windowed `
 
 ## 3. Source layout assumptions
 
-The repository now uses `ai_and_sort/` as the only native-source directory.
+The repository now uses `native_core/` as the only native-source directory.
 
 ## 4. Final distribution notes
 
@@ -64,7 +64,7 @@ These should stay outside version control.
 ## 5. Troubleshooting
 
 ### Missing native module or DLL
-Check that the following runtime files exist in `dist/2048EndgameTablebase/ai_and_sort/`:
+Check that the following runtime files exist in `dist/2048EndgameTablebase/native_core/`:
 - `ai_core*.pyd`
 - `mover_core*.pyd`
 - `formation_core*.pyd`
@@ -74,4 +74,4 @@ Check that the following runtime files exist in `dist/2048EndgameTablebase/ai_an
 - `libwinpthread-1.dll`
 
 ### Frozen startup path issues
-`backend_server.py` resolves resources using runtime-relative paths and now also handles bundled MotW cleanup and backend child-process shutdown. Keep distribution files together inside the unpacked directory.
+`backend_server.py` resolves resources using runtime-relative paths and shuts down the backend child process with the app lifecycle. Keep distribution files together inside the unpacked directory.

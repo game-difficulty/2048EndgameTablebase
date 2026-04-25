@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from minigames.MinigameMover import MinigameBoardMover, MinigameBoardMover_mxn
+from .MinigameMover import MinigameBoardMover, MinigameBoardMover_mxn
 
 
 def create_mover(shape: tuple[int, int]):

@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FRONTEND_DIR="$ROOT_DIR/frontend"
-NATIVE_DIR="$ROOT_DIR/ai_and_sort"
+NATIVE_DIR="$ROOT_DIR/native_core"
 
 RUN_AFTER_BUILD=false
 SKIP_FRONTEND=false
@@ -32,7 +32,7 @@ Usage: ./build_linux.sh [--run] [--skip-frontend] [--skip-native]
 
   --run             Launch backend_server.py after the build finishes
   --skip-frontend   Reuse the existing frontend/dist output
-  --skip-native     Reuse the existing ai_and_sort native binaries
+  --skip-native     Reuse the existing native_core native binaries
 EOF
 }
 

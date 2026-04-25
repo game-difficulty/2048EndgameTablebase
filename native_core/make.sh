@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 XSS_DIR="$ROOT_DIR/x86simdsort/x86-simd-sort"
 XSS_BUILD_DIR="$XSS_DIR/builddir"
-BUILD_DIR="$ROOT_DIR/build"
+BUILD_DIR="$ROOT_DIR/build-formation"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then

@@ -27,7 +27,7 @@ endif()
 
 if(NOT _nanobind_found)
     message(FATAL_ERROR
-        "nanobind is unavailable. Install it with `pip install nanobind` or provide ai_and_sort/extern/nanobind."
+        "nanobind is unavailable. Install it with `pip install nanobind` or provide native_core/extern/nanobind."
     )
 endif()
 
@@ -90,7 +90,7 @@ set(REQUIRED_EGTB_DATA_SOURCES
 foreach(required_source ${REQUIRED_EGTB_DATA_SOURCES})
     if(NOT EXISTS "${required_source}")
         message(FATAL_ERROR
-            "Missing ${required_source}. Extract ai_and_sort/egtb_data.7z into ai_and_sort/src before configuring CMake, or use ai_and_sort/make.sh on Linux."
+            "Missing ${required_source}. Extract native_core/egtb_data.7z into native_core/src before configuring CMake, or use native_core/make.sh on Linux."
         )
     endif()
 endforeach()

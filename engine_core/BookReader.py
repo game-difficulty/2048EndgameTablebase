@@ -7,10 +7,10 @@ import numpy as np
 from numpy.typing import NDArray
 
 from Config import SingletonConfig, category_info, pattern_catalog
-from egtb_core.BookReaderAD import BookReaderAD
+from engine_core.BookReaderAD import BookReaderAD
 
 try:
-    from ai_and_sort import formation_core
+    from native_core import formation_core
 except Exception:
     formation_core = None
 

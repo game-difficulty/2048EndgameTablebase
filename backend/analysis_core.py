@@ -7,10 +7,10 @@ from pathlib import Path
 
 import numpy as np
 
-import egtb_core.BoardMover as bm
+import engine_core.BoardMover as bm
 import Config
-import egtb_core.VBoardMover as vbm
-from egtb_core.BookReader import BookReaderDispatcher
+import engine_core.VBoardMover as vbm
+from engine_core.BookReader import BookReaderDispatcher
 from Config import DTYPE_CONFIG, SingletonConfig, category_info
 
 

@@ -6,10 +6,10 @@ from itertools import combinations
 import numpy as np
 
 from Config import SingletonConfig, category_info, pattern_32k_tiles_map, pattern_catalog
-from egtb_core import mover_runtime
+from engine_core import mover_runtime
 
 try:
-    from ai_and_sort import formation_core
+    from native_core import formation_core
 except Exception:
     formation_core = None
 

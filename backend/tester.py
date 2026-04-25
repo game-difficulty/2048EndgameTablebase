@@ -7,9 +7,9 @@ from Config import (
     category_info,
     formation_info,
 )
-from egtb_core.BookReader import BookReader
-from egtb_core.VBoardMover import decode_board, encode_board
-from egtb_core.replay_utils import empty_replay, strip_replay_sentinel
+from engine_core.BookReader import BookReader
+from engine_core.VBoardMover import decode_board, encode_board
+from engine_core.replay_utils import empty_replay, strip_replay_sentinel
 
 from .serialization import sanitize_config
 from .session import np_u64, safe_hex, u64

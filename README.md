@@ -140,7 +140,7 @@ Computing endgame tables like `free12` involves state spaces reaching $10^{13}$ 
 
 ## Build From Source
 
-The repository now separates Python/backend code, the Vue frontend, and the native `ai_and_sort/` workspace.
+The repository now separates backend Python code, the `engine_core/` runtime layer, the Vue frontend, and the native `native_core/` workspace.
 
 ### Linux
 
@@ -165,7 +165,7 @@ Linux prerequisites:
 - `meson`
 - `g++`
 - OpenMP support in the toolchain/runtime
-- `7z` when `ai_and_sort/egtb_data.7z` is present
+- `7z` when `native_core/egtb_data.7z` is present
 - A `pywebview` system backend such as GTK/WebKit2 or Qt
 - Python packages from `requirements.txt`
 - `nanobind`
@@ -180,10 +180,11 @@ python3 -m pip install nanobind
 What `build_linux.sh` does:
 
 1. Builds the Vue frontend into `frontend/dist`
-2. Runs `ai_and_sort/make.sh` to:
-   - extract `ai_and_sort/egtb_data.7z` into `ai_and_sort/src/`
+2. Runs `native_core/make.sh` to:
+   - extract `native_core/egtb_data.7z` into `native_core/src/`
    - build `ai_core`
    - build `mover_core`
+   - build `formation_core`
    - build `bookgen_native.so`
 3. Verifies the Python imports required to launch the app
 
@@ -210,7 +211,7 @@ npm install
 npm run build
 ```
 
-Then build the native modules from `ai_and_sort/` and run:
+Then build the native modules from `native_core/` and run:
 
 ```powershell
 python backend_server.py

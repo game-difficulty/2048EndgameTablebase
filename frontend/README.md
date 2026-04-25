@@ -1,5 +1,28 @@
-# Vue 3 + Vite
+# Frontend
 
-This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+This directory contains the Vue 3 + Vite frontend for the desktop application.
 
-Learn more about IDE Support for Vue in the [Vue Docs Scaling up Guide](https://vuejs.org/guide/scaling-up/tooling.html#ide-support).
+## Scripts
+
+```bash
+npm install
+npm run dev
+npm run build
+npm run preview
+```
+
+## Development flow
+
+- `npm run dev` starts the Vite development server.
+- `npm run build` writes the production bundle to `frontend/dist`.
+- `backend_server.py` serves `frontend/dist` when the built assets exist, and otherwise can point to the Vite dev server during development.
+
+## Source layout
+
+- `src/components/`: shared app-level views and layout pieces
+- `src/features/`: feature-specific pages, composables, and modules
+- `src/locales/`: UI translations
+
+## Styling
+
+The frontend uses Vue 3, Vite, and Tailwind CSS v4.

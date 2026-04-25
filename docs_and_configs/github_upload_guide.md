@@ -9,28 +9,27 @@ The goal is to keep all source needed for building the app while excluding local
 - `backend_server.py`
 - `Config.py`, `SignalHub.py`, `error_bridge.py`
 - `backend/`
-- `egtb_core/`
-- `minigames/`
+- `engine_core/`
+- `assets/`
 - `frontend/`
 
 ### Native source
-- `ai_and_sort/`
+- `native_core/`
   - Include:
     - `src/`
     - `include/`
+    - `extern/nanobind/`
     - `x86simdsort/x86-simd-sort/`
     - `egtb_data.7z`
     - `CMakeLists.txt`
     - `make.sh`
     - `README.md`
+    - `update_stubs.ps1`
+    - `__init__.py`
     - `ai_core.pyi`
-  - Exclude local WIP files:
-    - `include/BookGenerator.h`
-    - `include/BookGeneratorUtils.h`
-    - `src/BookGenerator.cpp`
-    - `src/BookGeneratorUtils.cpp`
+    - `formation_core.pyi`
   - Exclude generated outputs:
-    - `*.pyd`, `*.so`, `*.dll`, `*.a`, `build/`, `x86simdsort/x86-simd-sort/builddir/`
+    - `*.pyd`, `*.so`, `*.dll`, `*.a`, `build/`, `build-formation/`, `x86simdsort/x86-simd-sort/builddir/`
   - Exclude local-only large generated sources restored from the archive:
     - `src/egtb_data_1256.cpp`
     - `src/egtb_data_256.cpp`
@@ -45,7 +44,7 @@ The goal is to keep all source needed for building the app while excluding local
 - `docs_and_configs/default_patterns.json`
 - `docs_and_configs/patterns_config.json`
 - `docs_and_configs/themes.json`
-- `pic/`, `font/`, `favicon.ico`, `mathjax/`
+- `pic/`, `assets/`, `font/`, `favicon.ico`, `mathjax/`
 
 ## 2. Do not upload these files
 
@@ -62,8 +61,8 @@ The goal is to keep all source needed for building the app while excluding local
 ```text
 2048EndgameTablebase/
 ├─ backend/
-├─ egtb_core/
-├─ ai_and_sort/
+├─ engine_core/
+├─ native_core/
 │  ├─ src/
 │  ├─ include/
 │  ├─ x86simdsort/
@@ -72,7 +71,7 @@ The goal is to keep all source needed for building the app while excluding local
 │  ├─ make.sh
 │  └─ README.md
 ├─ frontend/
-├─ minigames/
+├─ assets/
 ├─ docs_and_configs/
 ├─ pic/
 ├─ font/
@@ -87,24 +86,24 @@ The goal is to keep all source needed for building the app while excluding local
 ## 4. Build guidance for users
 
 ### Windows users
-- Extract `ai_and_sort/egtb_data.7z` into `ai_and_sort/src/`
-- Build `libx86simdsortcpp.a` from `ai_and_sort/x86simdsort/x86-simd-sort/` and copy it to `ai_and_sort/`
-- Build `ai_core`, `mover_core`, `formation_core`, and `bookgen_native` with CMake from `ai_and_sort/`
-- Runtime binaries should end up in `ai_and_sort/`
+- Extract `native_core/egtb_data.7z` into `native_core/src/`
+- Build `libx86simdsortcpp.a` from `native_core/x86simdsort/x86-simd-sort/` and copy it to `native_core/`
+- Build `ai_core`, `mover_core`, `formation_core`, and `bookgen_native` with CMake from `native_core/`
+- Runtime binaries should end up in `native_core/`
 
 ### Linux users
 - Install `nanobind`, `cmake`, `meson`, `ninja`, and OpenMP
-- Run `ai_and_sort/make.sh`
+- Run `native_core/make.sh`
 - The script builds `ai_core*.so`, `mover_core*.so`, `formation_core*.so`, and `bookgen_native.so`
 
 ## 5. Third-party source note
 
-The modified `x86-simd-sort` subtree is now part of `ai_and_sort/x86simdsort/x86-simd-sort/`.
+The modified `x86-simd-sort` subtree is now part of `native_core/x86simdsort/x86-simd-sort/`.
 Keep its upstream license and README when publishing the repository.
 
 ## 6. WASM Demo Layout
 
-- Keep the canonical WASM source files in `ai_and_sort/`:
+- Keep the canonical WASM source files in `native_core/`:
   - `include/AIPlayer - wasm.h`
   - `src/AIPlayer - wasm.cpp`
   - `src/bindings_wasm.cpp`

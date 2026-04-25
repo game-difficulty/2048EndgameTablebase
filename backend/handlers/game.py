@@ -5,8 +5,8 @@ from typing import Any
 import numpy as np
 from Config import SingletonConfig, logger
 from fastapi import WebSocket
-from egtb_core.VBoardMover import decode_board
-from egtb_core.BoardMover import (
+from engine_core.VBoardMover import decode_board
+from engine_core.BoardMover import (
     encode_board as r_encode_board,
     s_gen_new_num as r_gen_new_num,
 )
@@ -272,7 +272,7 @@ async def handle_game_action(
 
         if best_move == "AI":
             if allow_resolve_32768:
-                from ai_and_sort import ai_core
+                from native_core import ai_core
 
                 ai_board_encoded = ai_core.resolve_32768_doubles(u64(ai_board_encoded))
             player, logic = session.ensure_ai_fallback(

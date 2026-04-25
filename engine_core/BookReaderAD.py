@@ -5,7 +5,7 @@ import numpy as np
 from Config import SingletonConfig, category_info, pattern_32k_tiles_map, pattern_catalog
 
 try:
-    from ai_and_sort import formation_core
+    from native_core import formation_core
 except Exception:
     formation_core = None
 

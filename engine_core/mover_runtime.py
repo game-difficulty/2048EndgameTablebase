@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ai_and_sort import mover_core as _mover_core
+from native_core import mover_core as _mover_core
 
 
 class _MoverFacade:

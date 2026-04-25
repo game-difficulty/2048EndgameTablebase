@@ -44,7 +44,7 @@ namespace BookGeneratorUtils {
 
             candidates.insert(candidates.end(), {
                 "bookgen_native.dll",
-                fs::path("ai_and_sort") / "bookgen_native.dll",
+                fs::path("native_core") / "bookgen_native.dll",
             });
 
             char module_path[MAX_PATH];
@@ -52,7 +52,7 @@ namespace BookGeneratorUtils {
             if (path_len > 0) {
                 fs::path exe_dir = fs::path(module_path).parent_path();
                 candidates.push_back(exe_dir / "bookgen_native.dll");
-                candidates.push_back(exe_dir / "ai_and_sort" / "bookgen_native.dll");
+                candidates.push_back(exe_dir / "native_core" / "bookgen_native.dll");
             }
 
             for (const auto &candidate : candidates) {
@@ -72,7 +72,7 @@ namespace BookGeneratorUtils {
 #else
             void *lib = dlopen("bookgen_native.so", RTLD_LAZY);
             if (!lib) {
-                lib = dlopen("ai_and_sort/bookgen_native.so", RTLD_LAZY);
+                lib = dlopen("native_core/bookgen_native.so", RTLD_LAZY);
             }
             return lib ? reinterpret_cast<SortFn>(dlsym(lib, "sort_uint64")) : nullptr;
 #endif
@@ -101,7 +101,7 @@ namespace BookGeneratorUtils {
 
         candidates.insert(candidates.end(), {
             "bookgen_native.dll",
-            fs::path("ai_and_sort") / "bookgen_native.dll",
+            fs::path("native_core") / "bookgen_native.dll",
         });
 
         char module_path[MAX_PATH];
@@ -109,7 +109,7 @@ namespace BookGeneratorUtils {
         if (path_len > 0) {
             fs::path exe_dir = fs::path(module_path).parent_path();
             candidates.push_back(exe_dir / "bookgen_native.dll");
-            candidates.push_back(exe_dir / "ai_and_sort" / "bookgen_native.dll");
+            candidates.push_back(exe_dir / "native_core" / "bookgen_native.dll");
         }
 
         for (const auto &candidate : candidates) {
@@ -129,7 +129,7 @@ namespace BookGeneratorUtils {
 #else
         void *lib = dlopen("bookgen_native.so", RTLD_LAZY);
         if (!lib) {
-            lib = dlopen("ai_and_sort/bookgen_native.so", RTLD_LAZY);
+            lib = dlopen("native_core/bookgen_native.so", RTLD_LAZY);
         }
         return lib ? reinterpret_cast<Fn>(dlsym(lib, symbol_name)) : nullptr;
 #endif

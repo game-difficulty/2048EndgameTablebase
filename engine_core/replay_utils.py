@@ -1,8 +1,8 @@
 import numpy as np
 
-import egtb_core.BoardMover as bm
-import egtb_core.VBoardMover as vbm
-from egtb_core.Calculator import find_merge_positions, slide_distance
+import engine_core.BoardMover as bm
+import engine_core.VBoardMover as vbm
+from engine_core.Calculator import find_merge_positions, slide_distance
 
 REPLAY_DTYPE = np.dtype("uint64,uint8,uint32,uint32,uint32,uint32")
 REPLAY_SENTINEL = (

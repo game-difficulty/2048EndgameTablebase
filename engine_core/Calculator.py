@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 import numpy as np
 
-from egtb_core import mover_runtime
+from engine_core import mover_runtime
 
 
 PATTERN_DATA = {}

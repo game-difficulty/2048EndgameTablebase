@@ -4,7 +4,7 @@ from typing import Tuple
 
 import numpy as np
 
-from egtb_core import mover_runtime
+from engine_core import mover_runtime
 
 
 def _tile_to_log2(value: int) -> int:

@@ -1302,7 +1302,7 @@ void run_python_ad_solver_bridge(
     const RunOptions &options
 ) {
     nb::gil_scoped_acquire acquire;
-    nb::object helper = nb::module_::import_("egtb_core.BookBuilder").attr("run_pattern_solve_ad_bridge");
+    nb::object helper = nb::module_::import_("engine_core.BookBuilder").attr("run_pattern_solve_ad_bridge");
     helper(
         spec.name,
         nb::cast(arr_init),

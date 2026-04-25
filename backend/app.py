@@ -28,7 +28,7 @@ from error_bridge import publish_frontend_exception
 
 manager = ConnectionManager()
 mathjax_path = get_resource_path("mathjax")
-minigame_pic_path = get_resource_path(os.path.join("minigames", "pic"))
+minigame_assets_path = get_resource_path(os.path.join("assets", "minigames"))
 pic_path = get_resource_path("pic")
 frontend_dist_path = get_resource_path(os.path.join("frontend", "dist"))
 
@@ -147,10 +147,10 @@ async def favicon():
 if os.path.exists(mathjax_path):
     app.mount("/mathjax", StaticFiles(directory=mathjax_path), name="mathjax")
 
-if os.path.exists(minigame_pic_path):
+if os.path.exists(minigame_assets_path):
     app.mount(
         "/minigames-assets",
-        StaticFiles(directory=minigame_pic_path),
+        StaticFiles(directory=minigame_assets_path),
         name="minigames-assets",
     )
 

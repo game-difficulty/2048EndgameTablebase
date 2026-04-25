@@ -2,11 +2,11 @@ import os
 
 import numpy as np
 
-from egtb_core.BookReader import BookReaderDispatcher
+from engine_core.BookReader import BookReaderDispatcher
 from backend.minigames.session import MinigameSessionState
 from Config import SingletonConfig
-from egtb_core.VBoardMover import decode_board
-from egtb_core.replay_utils import empty_replay
+from engine_core.VBoardMover import decode_board
+from engine_core.replay_utils import empty_replay
 
 _SHARED_EVIL_GEN = None
 _SHARED_AI_DISPATCHER = None
@@ -183,10 +183,10 @@ class GameSession:
         global _SHARED_EVIL_GEN
         if _SHARED_EVIL_GEN is None:
             try:
-                from ai_and_sort.ai_core import EvilGen
+                from native_core.ai_core import EvilGen
             except Exception as exc:
                 raise RuntimeError(
-                    "AI core module is unavailable. Gamer evil spawn requires ai_and_sort.ai_core."
+                    "AI core module is unavailable. Gamer evil spawn requires native_core.ai_core."
                 ) from exc
             _SHARED_EVIL_GEN = EvilGen(self.board_encoded)  # type: ignore
         self.evil_gen = _SHARED_EVIL_GEN
@@ -196,10 +196,10 @@ class GameSession:
         global _SHARED_AI_DISPATCHER
         if _SHARED_AI_DISPATCHER is None:
             try:
-                from egtb_core.AIPlayer import Dispatcher
+                from engine_core.AIPlayer import Dispatcher
             except Exception as exc:
                 raise RuntimeError(
-                    "AI dispatcher is unavailable. Gamer AI requires ai_and_sort.ai_core."
+                    "AI dispatcher is unavailable. Gamer AI requires native_core.ai_core."
                 ) from exc
             board_encoded = np_u64(self.board_encoded)
             _SHARED_AI_DISPATCHER = Dispatcher(
@@ -214,11 +214,11 @@ class GameSession:
     def ensure_ai_fallback(self, board_encoded, spawn_rate4, time_limit_ratio):
         if self.ai_fallback_player is None or self.ai_fallback_logic is None:
             try:
-                from ai_and_sort import ai_core
-                from egtb_core.AIPlayer import CoreAILogic
+                from native_core import ai_core
+                from engine_core.AIPlayer import CoreAILogic
             except Exception as exc:
                 raise RuntimeError(
-                    "AI fallback is unavailable. Gamer AI requires ai_and_sort.ai_core."
+                    "AI fallback is unavailable. Gamer AI requires native_core.ai_core."
                 ) from exc
             self.ai_fallback_player = ai_core.AIPlayer(u64(board_encoded))
             if hasattr(self.ai_fallback_player, "max_threads"):

@@ -11,7 +11,7 @@ import time
 
 import markdown
 from Config import SingletonConfig, category_info, theme_map
-from egtb_core import BookBuilder
+from engine_core import BookBuilder
 from fastapi import WebSocket
 from SignalHub import progress_signal
 from typing import Any

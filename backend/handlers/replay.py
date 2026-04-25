@@ -4,7 +4,7 @@ from typing import Any
 
 from Config import category_info
 from fastapi import WebSocket
-from egtb_core.replay_utils import load_replay_file
+from engine_core.replay_utils import load_replay_file
 
 from ..actions import Action
 from ..replay import (

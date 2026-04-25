@@ -41,23 +41,23 @@ docs_and_configs/*.error
 *.log
 
 # Native build outputs
-ai_and_sort/build/
-ai_and_sort/build-formation/
-ai_and_sort/src/egtb_data_1256.cpp
-ai_and_sort/src/egtb_data_256.cpp
-ai_and_sort/src/egtb_data_512.cpp
-!ai_and_sort/x86simdsort/x86-simd-sort/lib/
-!ai_and_sort/x86simdsort/x86-simd-sort/lib/**
-ai_and_sort/*.pyd
-ai_and_sort/*.so
-ai_and_sort/*.dll
-ai_and_sort/*.a
-ai_and_sort/*.lib
-ai_and_sort/*.exp
-ai_and_sort/*.obj
-ai_and_sort/*.o
-ai_and_sort/x86simdsort/x86-simd-sort/builddir/
-ai_and_sort/x86simdsort/x86-simd-sort/*.dll
+native_core/build/
+native_core/build-formation/
+native_core/src/egtb_data_1256.cpp
+native_core/src/egtb_data_256.cpp
+native_core/src/egtb_data_512.cpp
+!native_core/x86simdsort/x86-simd-sort/lib/
+!native_core/x86simdsort/x86-simd-sort/lib/**
+native_core/*.pyd
+native_core/*.so
+native_core/*.dll
+native_core/*.a
+native_core/*.lib
+native_core/*.exp
+native_core/*.obj
+native_core/*.o
+native_core/x86simdsort/x86-simd-sort/builddir/
+native_core/x86simdsort/x86-simd-sort/*.dll
 docs/wasm_build/build/
 docs/wasm_build/CMakeCache.txt
 docs/wasm_build/CMakeFiles/
@@ -65,14 +65,14 @@ docs/wasm_build/Makefile
 docs/wasm_build/cmake_install.cmake
 docs/wasm_build/*.dll
 # Legacy root-level copies from older layouts.
-ai_and_sort/AIPlayer.cpp
-ai_and_sort/BoardMover.h
-ai_and_sort/egtb_query.cpp
-ai_and_sort/egtb_data_1256.h
-ai_and_sort/egtb_data_256.h
-ai_and_sort/egtb_data_512.h
-ai_and_sort/tests/
-ai_and_sort/test_adaptive_index.exe
+native_core/AIPlayer.cpp
+native_core/BoardMover.h
+native_core/egtb_query.cpp
+native_core/egtb_data_1256.h
+native_core/egtb_data_256.h
+native_core/egtb_data_512.h
+native_core/tests/
+native_core/test_adaptive_index.exe
 .vscode/
 .idea/
 
@@ -92,12 +92,12 @@ pnpm-debug.log*
 *.book
 *.z
 *.7z
-!ai_and_sort/egtb_data.7z
+!native_core/egtb_data.7z
 
 # temp files
 t/
 t_native_compress_smoke*/
-ai_and_sort_/
+native_core_/
 manim_anim/
 media/texts/
 .VSCodeCounter/

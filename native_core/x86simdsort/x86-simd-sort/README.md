@@ -1,13 +1,13 @@
 ﻿# Simplified x86-simd-sort (uint64_t only)
 
-This directory contains the modified SIMD sorting source vendored into `ai_and_sort/`.
+This directory contains the modified SIMD sorting source vendored into `native_core/`.
 It is the source used to build the project's `sort_wrapper` shared library.
 
 ## What changed from upstream
 
 - Only the `uint64_t` quicksort path is kept.
 - Unused data types and algorithms were removed.
-- The code is organized for direct integration into `ai_and_sort` instead of being built as a standalone package.
+- The code is organized for direct integration into `native_core` instead of being built as a standalone package.
 - `xss_wrapper.cpp` provides the small C ABI that the Python layer loads dynamically.
 
 ## Build

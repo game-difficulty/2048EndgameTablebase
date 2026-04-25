@@ -4,8 +4,8 @@ from typing import Tuple, List
 
 import numpy as np
 
-from egtb_core.BookReader import BookReaderDispatcher
-from egtb_core.Calculator import (
+from engine_core.BookReader import BookReaderDispatcher
+from engine_core.Calculator import (
     ReverseLR,
     ReverseUD,
     ReverseUL,
@@ -15,13 +15,13 @@ from egtb_core.Calculator import (
     RotateR,
 )
 from Config import SingletonConfig, pattern_32k_tiles_map, DTYPE_CONFIG
-from egtb_core.BoardMover import decode_board
-from egtb_core.BoardMover import move_board, encode_board
+from engine_core.BoardMover import decode_board
+from engine_core.BoardMover import move_board, encode_board
 
 
 class _AICoreProxy:
     def __getattr__(self, name):
-        from ai_and_sort import ai_core
+        from native_core import ai_core
 
         return getattr(ai_core, name)
 

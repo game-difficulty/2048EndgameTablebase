@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from Config import SingletonConfig
-from egtb_core.BoardMover import encode_board
+from engine_core.BoardMover import encode_board
 
 from ..engine.base import BaseMinigameEngine
 
@@ -17,10 +17,10 @@ class TrickyTilesEngine(BaseMinigameEngine):
 
     def _create_evil_gen(self):
         try:
-            from ai_and_sort import ai_core
+            from native_core import ai_core
         except Exception as exc:
             raise RuntimeError(
-                "Tricky Tiles requires ai_and_sort.ai_core, but it is unavailable."
+                "Tricky Tiles requires native_core.ai_core, but it is unavailable."
             ) from exc
         return ai_core.EvilGen(encode_board(self.original_board()))
 

@@ -3,10 +3,10 @@ import os
 
 import numpy as np
 
-from egtb_core.AIPlayer import Dispatcher, CoreAILogic
-from egtb_core.BoardMover import gen_new_num, decode_board, encode_board, s_move_board
+from engine_core.AIPlayer import Dispatcher, CoreAILogic
+from engine_core.BoardMover import gen_new_num, decode_board, encode_board, s_move_board
 
-from ai_and_sort import ai_core
+from native_core import ai_core
 
 
 TIME_RATIO = 2.1

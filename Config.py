@@ -281,7 +281,7 @@ def load_patterns_from_file(file_path=None):
 
 
 def _build_formation_info(pattern_catalog, pattern_data):
-    import egtb_core.Calculator as Calculator
+    import engine_core.Calculator as Calculator
 
     Calculator.PATTERN_DATA = pattern_data  # type: ignore[attr-defined]
     Calculator.update_logic_functions()

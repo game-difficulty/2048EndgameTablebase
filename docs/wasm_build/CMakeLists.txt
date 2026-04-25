@@ -5,11 +5,11 @@ if(NOT EMSCRIPTEN)
     message(FATAL_ERROR "This CMake file must be built using emcmake (Emscripten).")
 endif()
 
-set(CANONICAL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../ai_and_sort")
+set(CANONICAL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../native_core")
 set(DOCS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 
 if(NOT EXISTS "${CANONICAL_ROOT}/CMakeLists.txt")
-    message(FATAL_ERROR "ai_and_sort/ is required as the canonical native source workspace.")
+    message(FATAL_ERROR "native_core/ is required as the canonical native source workspace.")
 endif()
 
 add_library(common_config INTERFACE)

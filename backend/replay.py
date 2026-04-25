@@ -2,8 +2,8 @@ import os
 
 import numpy as np
 from Config import SingletonConfig
-from egtb_core.VBoardMover import decode_board
-from egtb_core.replay_utils import (
+from engine_core.VBoardMover import decode_board
+from engine_core.replay_utils import (
     analyze_replay,
     board_for_replay_step,
     build_step_transition,

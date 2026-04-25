@@ -1,9 +1,9 @@
 import numpy as np
 
-from egtb_core.BoardMover import s_gen_new_num as r_gen_new_num
-from egtb_core.BookReader import BookReader
+from engine_core.BoardMover import s_gen_new_num as r_gen_new_num
+from engine_core.BookReader import BookReader
 from Config import DTYPE_CONFIG, SingletonConfig, pattern_32k_tiles_map
-from egtb_core.VBoardMover import decode_board
+from engine_core.VBoardMover import decode_board
 
 from .serialization import sanitize_config
 from .session import safe_hex, u64

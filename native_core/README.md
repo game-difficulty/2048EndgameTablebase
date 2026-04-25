@@ -1,4 +1,4 @@
-﻿# ai_and_sort
+﻿# native_core
 
 This directory is the canonical native-core workspace for the project.
 
@@ -33,7 +33,7 @@ If you prefer a vendored dependency, `extern/nanobind` is also supported when pr
 
 ## Windows build
 
-From inside `ai_and_sort/`, first build the SIMD static library:
+From inside `native_core/`, first build the SIMD static library:
 
 ```powershell
 cd x86simdsort\x86-simd-sort
@@ -51,7 +51,7 @@ cmake -S . -B build-formation -DCMAKE_BUILD_TYPE=Release
 cmake --build .\build-formation --target ai_core mover_core formation_core bookgen_native -j 4
 ```
 
-The runtime expects generated files in the `ai_and_sort/` root:
+The runtime expects generated files in the `native_core/` root:
 
 - `ai_core*.pyd`
 - `mover_core*.pyd`
@@ -78,7 +78,7 @@ If you want to rebuild `ai_core` / `formation_core` and refresh their `.pyi` stu
 Use the helper script:
 
 ```bash
-cd ai_and_sort
+cd native_core
 chmod +x make.sh
 ./make.sh
 ```

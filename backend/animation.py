@@ -5,8 +5,8 @@ from typing import Any
 
 import numpy as np
 
-from egtb_core.Calculator import find_merge_positions, slide_distance
-from egtb_core.VBoardMover import decode_board
+from engine_core.Calculator import find_merge_positions, slide_distance
+from engine_core.VBoardMover import decode_board
 from .session import u64
 
 

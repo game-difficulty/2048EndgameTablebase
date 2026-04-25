@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 
-from egtb_core.Calculator import find_merge_positions
+from engine_core.Calculator import find_merge_positions
 
 from ..engine.base import BaseMinigameEngine
 

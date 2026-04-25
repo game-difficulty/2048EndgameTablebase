@@ -14,8 +14,8 @@ def _run_preload() -> None:
 
     try:
         from Config import SingletonConfig
-        import egtb_core.BoardMover as bm
-        import egtb_core.VBoardMover as vbm
+        import engine_core.BoardMover as bm
+        import engine_core.VBoardMover as vbm
 
         SingletonConfig()
 

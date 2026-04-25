@@ -4,8 +4,8 @@ from typing import Tuple
 
 import numpy as np
 
-from egtb_core import mover_runtime
-from egtb_core.VBoardMover import decode_board, decode_row, encode_board, encode_row, reverse
+from engine_core import mover_runtime
+from engine_core.VBoardMover import decode_board, decode_row, encode_board, encode_row, reverse
 
 
 def merge_line_with_score(
