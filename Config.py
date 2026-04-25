@@ -80,6 +80,24 @@ DTYPE_CONFIG = {
 DEFAULT_PATTERNS = load_config_json("default_patterns.json")
 
 
+def restore_patterns_config_file(file_path, raw_data):
+    """Write default patterns back to patterns_config.json."""
+    try:
+        default_path = os.path.join(os.path.dirname(__file__), "docs_and_configs", "default_patterns.json")
+        if os.path.exists(default_path):
+            with open(default_path, "r", encoding="utf-8") as src:
+                default_text = src.read()
+            with open(file_path, "w", encoding="utf-8") as dst:
+                dst.write(default_text)
+        else:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(raw_data, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+        logger.info(f"Restored patterns config from defaults: {file_path}")
+    except OSError as e:
+        logger.error(f"Failed to restore default patterns config {file_path}: {e}")
+
+
 logger = logging.getLogger("debug_logger")
 
 logger.setLevel(logging.DEBUG)
@@ -153,10 +171,11 @@ def load_patterns_from_file(file_path=None):
         file_path = os.path.join(os.path.dirname(__file__), "docs_and_configs", "patterns_config.json")
 
     raw_data: dict[str, dict] = {}
+    config_missing = not os.path.exists(file_path)
     needs_restore = False
 
     try:
-        if not os.path.exists(file_path):
+        if config_missing:
             logger.warning(f"Config file not found: {file_path}. Using defaults...")
             needs_restore = True
         else:
@@ -171,8 +190,10 @@ def load_patterns_from_file(file_path=None):
     # 如果读取失败，加载内存中的默认值
     if needs_restore:
         raw_data = DEFAULT_PATTERNS
+        if config_missing:
+            restore_patterns_config_file(file_path, raw_data)
         # 如果文件存在但格式错误，则更名以提醒用户
-        if os.path.exists(file_path):
+        if not config_missing and os.path.exists(file_path):
             error_path = file_path + ".error"
             try:
                 if os.path.exists(error_path):
