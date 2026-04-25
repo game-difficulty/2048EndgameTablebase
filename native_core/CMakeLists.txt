@@ -35,6 +35,13 @@ find_package(OpenMP REQUIRED)
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
 
+set(PORTABLE_X86_64_ARCH "x86-64-v3" CACHE STRING
+    "Portable x86-64 ISA baseline for GCC/Clang builds."
+)
+set(PORTABLE_X86_64_TUNE "generic" CACHE STRING
+    "CPU tuning target for GCC/Clang builds."
+)
+
 get_filename_component(PYTHON_ROOT_DIR "${Python_EXECUTABLE}" DIRECTORY)
 set(LIBLZMA_HINT_DIRS
     "${PYTHON_ROOT_DIR}/Library/include"
@@ -66,8 +73,8 @@ if(MSVC)
 else()
     target_compile_options(common_config INTERFACE
         -Ofast
-        -march=native
-        -mtune=native
+        -march=${PORTABLE_X86_64_ARCH}
+        -mtune=${PORTABLE_X86_64_TUNE}
         -ffast-math
         -fno-math-errno
         -fno-trapping-math
@@ -182,8 +189,8 @@ if(MSVC)
 else()
     target_compile_options(bookgen_native PRIVATE
         -Ofast
-        -march=native
-        -mtune=native
+        -march=${PORTABLE_X86_64_ARCH}
+        -mtune=${PORTABLE_X86_64_TUNE}
         -ffast-math
         -fno-math-errno
         -fno-trapping-math

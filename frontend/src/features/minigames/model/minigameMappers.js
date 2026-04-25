@@ -1,5 +1,5 @@
 const FALLBACK_TILE = 131072;
-const SHARED_ASSET_BASE = 'http://127.0.0.1:8000/shared-assets';
+const MINIGAME_ASSET_BASE = 'http://127.0.0.1:8000/minigames-assets';
 
 export const formatTileNumber = (tileValue) => {
   if (!tileValue) return '';
@@ -30,28 +30,28 @@ export const getTrophyVisualMeta = (level) => {
   if (normalized <= 0) return null;
   if (normalized >= 4) {
     return {
-      backgroundSrc: `${SHARED_ASSET_BASE}/trophybg.png`,
-      trophySrc: `${SHARED_ASSET_BASE}/grand.png`,
+      backgroundSrc: `${MINIGAME_ASSET_BASE}/trophybg.png`,
+      trophySrc: `${MINIGAME_ASSET_BASE}/grand.png`,
       trophyAlt: 'Grand trophy',
     };
   }
   if (normalized >= 3) {
     return {
-      backgroundSrc: `${SHARED_ASSET_BASE}/trophybg.png`,
-      trophySrc: `${SHARED_ASSET_BASE}/gold.png`,
+      backgroundSrc: `${MINIGAME_ASSET_BASE}/trophybg.png`,
+      trophySrc: `${MINIGAME_ASSET_BASE}/gold.png`,
       trophyAlt: 'Gold trophy',
     };
   }
   if (normalized === 2) {
     return {
-      backgroundSrc: `${SHARED_ASSET_BASE}/trophybg.png`,
-      trophySrc: `${SHARED_ASSET_BASE}/silver.png`,
+      backgroundSrc: `${MINIGAME_ASSET_BASE}/trophybg.png`,
+      trophySrc: `${MINIGAME_ASSET_BASE}/silver.png`,
       trophyAlt: 'Silver trophy',
     };
   }
   return {
-    backgroundSrc: `${SHARED_ASSET_BASE}/trophybg.png`,
-    trophySrc: `${SHARED_ASSET_BASE}/bronze.png`,
+    backgroundSrc: `${MINIGAME_ASSET_BASE}/trophybg.png`,
+    trophySrc: `${MINIGAME_ASSET_BASE}/bronze.png`,
     trophyAlt: 'Bronze trophy',
   };
 };

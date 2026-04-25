@@ -70,9 +70,7 @@
 
 7. Assets and static resources
 - pic/
-  Shared static assets.
-- assets/minigames/
-  Minigame assets and covers.
+  Shared static assets, including minigame sprites and covers.
 - font/
   Fonts.
 - mathjax/

@@ -90,7 +90,7 @@ defineEmits(['set-difficulty', 'start-game']);
 
 const cardRefs = new Map();
 const allItems = computed(() => props.sections.flatMap((section) => section?.items || []));
-const sharedAssetBase = 'http://127.0.0.1:8000/shared-assets';
+const minigameAssetBase = 'http://127.0.0.1:8000/minigames-assets';
 const totalGames = computed(() => allItems.value.length);
 const trophyStats = computed(() => {
   const items = allItems.value;
@@ -108,10 +108,10 @@ const trophyStats = computed(() => {
     if (trophy >= 4) counts.grand += 1;
   });
   return [
-    { key: 'bronze', src: `${sharedAssetBase}/bronze.png`, alt: 'Bronze trophies', value: counts.bronze },
-    { key: 'silver', src: `${sharedAssetBase}/silver.png`, alt: 'Silver trophies', value: counts.silver },
-    { key: 'gold', src: `${sharedAssetBase}/gold.png`, alt: 'Gold trophies', value: counts.gold },
-    { key: 'grand', src: `${sharedAssetBase}/grand.png`, alt: 'Grand trophies', value: counts.grand },
+    { key: 'bronze', src: `${minigameAssetBase}/bronze.png`, alt: 'Bronze trophies', value: counts.bronze },
+    { key: 'silver', src: `${minigameAssetBase}/silver.png`, alt: 'Silver trophies', value: counts.silver },
+    { key: 'gold', src: `${minigameAssetBase}/gold.png`, alt: 'Gold trophies', value: counts.gold },
+    { key: 'grand', src: `${minigameAssetBase}/grand.png`, alt: 'Grand trophies', value: counts.grand },
   ];
 });
 

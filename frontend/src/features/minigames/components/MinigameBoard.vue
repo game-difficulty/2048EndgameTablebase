@@ -385,7 +385,7 @@ const getEffectImageClass = (effect) => {
 const getCoverSpriteSrc = (sprite) => {
   const normalized = String(sprite || '').toLowerCase();
   if (normalized === 'bomb.png') return `${assetBase}/bomb2.png`;
-  if (normalized === 'giftbox.png') return 'http://127.0.0.1:8000/shared-assets/giftbox2.png';
+  if (normalized === 'giftbox.png') return `${assetBase}/giftbox2.png`;
   return `${assetBase}/${sprite}`;
 };
 

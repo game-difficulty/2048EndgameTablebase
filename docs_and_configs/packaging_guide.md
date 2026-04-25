@@ -36,7 +36,6 @@ pyinstaller --noconfirm --onedir --windowed `
     --add-data "src/font;font" `
     --add-data "src/favicon.ico;." `
     --add-data "src/mathjax;mathjax" `
-    --add-data "src/assets/minigames;assets/minigames" `
     --add-data "src/frontend/dist;frontend/dist" `
     --add-binary "src/native_core/libgcc_s_seh-1.dll;native_core" `
     --add-binary "src/native_core/libgomp-1.dll;native_core" `

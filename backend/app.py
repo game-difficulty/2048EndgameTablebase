@@ -28,8 +28,8 @@ from error_bridge import publish_frontend_exception
 
 manager = ConnectionManager()
 mathjax_path = get_resource_path("mathjax")
-minigame_assets_path = get_resource_path(os.path.join("assets", "minigames"))
 pic_path = get_resource_path("pic")
+minigame_assets_path = pic_path
 frontend_dist_path = get_resource_path(os.path.join("frontend", "dist"))
 
 
@@ -152,13 +152,6 @@ if os.path.exists(minigame_assets_path):
         "/minigames-assets",
         StaticFiles(directory=minigame_assets_path),
         name="minigames-assets",
-    )
-
-if os.path.exists(pic_path):
-    app.mount(
-        "/shared-assets",
-        StaticFiles(directory=pic_path),
-        name="shared-assets",
     )
 
 if os.path.exists(frontend_dist_path):

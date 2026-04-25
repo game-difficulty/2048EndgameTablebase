@@ -25,7 +25,7 @@ g++ -O3 -march=x86-64-v3 -flto -shared -fPIC -ffunction-sections -fdata-sections
 ```bash
 meson setup builddir --buildtype=release -Duse_openmp=true
 meson compile -C builddir
-g++ -O3 -march=native -flto -shared -fPIC -ffunction-sections -fdata-sections xss_wrapper.cpp ./builddir/libx86simdsortcpp.a -I./lib -I./src -fopenmp -Wl,--gc-sections -s -o ../../sort_wrapper.so
+g++ -O3 -march=x86-64-v3 -flto -shared -fPIC -ffunction-sections -fdata-sections xss_wrapper.cpp ./builddir/libx86simdsortcpp.a -I./lib -I./src -fopenmp -Wl,--gc-sections -s -o ../../sort_wrapper.so
 ```
 
 ## Exported interface

@@ -10,7 +10,6 @@ The goal is to keep all source needed for building the app while excluding local
 - `Config.py`, `SignalHub.py`, `error_bridge.py`
 - `backend/`
 - `engine_core/`
-- `assets/`
 - `frontend/`
 
 ### Native source
@@ -44,7 +43,7 @@ The goal is to keep all source needed for building the app while excluding local
 - `docs_and_configs/default_patterns.json`
 - `docs_and_configs/patterns_config.json`
 - `docs_and_configs/themes.json`
-- `pic/`, `assets/`, `font/`, `favicon.ico`, `mathjax/`
+- `pic/`, `font/`, `favicon.ico`, `mathjax/`
 
 ## 2. Do not upload these files
 
@@ -71,7 +70,6 @@ The goal is to keep all source needed for building the app while excluding local
 │  ├─ make.sh
 │  └─ README.md
 ├─ frontend/
-├─ assets/
 ├─ docs_and_configs/
 ├─ pic/
 ├─ font/
