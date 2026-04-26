@@ -6,11 +6,13 @@
 #include "BookGeneratorUtils.h"
 #include "Calculator.h"
 #include "CompressionBridge.h"
+#include "FileIOUtils.h"
 #include "Formation.h"
 #include "HybridSearch.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -117,25 +119,11 @@ std::pair<uint64_t, int> apply_sym_pair(uint64_t board, int symm_mode) {
 }
 
 std::vector<uint64_t> read_raw_file(const std::string &path) {
-    std::vector<uint64_t> data;
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file) {
-        return data;
-    }
-    size_t size = static_cast<size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
-    data.resize(size / sizeof(uint64_t));
-    if (!data.empty()) {
-        file.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(size));
-    }
-    return data;
+    return FileIOUtils::read_binary_vector<uint64_t>(path);
 }
 
 void write_raw_file(const std::string &path, const std::vector<uint64_t> &data) {
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (out && !data.empty()) {
-        out.write(reinterpret_cast<const char *>(data.data()), static_cast<std::streamsize>(data.size() * sizeof(uint64_t)));
-    }
+    FileIOUtils::write_binary_vector(path, data);
 }
 
 std::vector<std::vector<double>> load_length_factors(const std::string &path, double default_value) {
@@ -618,10 +606,13 @@ void process_buffered_accepted_boards(
     const FormationAD::TilesCombinationTable &tiles_table,
     const AdvancedMaskParam &param,
     const AdvancedPatternSpec &spec,
+    uint64_t *hashmap,
+    uint64_t hashmask,
     uint64_t *target_arr,
     size_t &counter
 ) {
     std::array<uint64_t, kAdMaxDerivedBoards> filtered_derived{};
+    std::array<uint64_t, kAdMaxDerivedBoards> hashed_idx{};
     for (size_t accepted_index = 0; accepted_index < accepted.count; ++accepted_index) {
         const uint64_t canon = accepted.boards[accepted_index];
         if (accepted.kinds[accepted_index] == static_cast<uint8_t>(BufferedBaseKind::Plain)) {
@@ -646,8 +637,27 @@ void process_buffered_accepted_boards(
             continue;
         }
         apply_canonical_batch(filtered_derived.data(), filtered_derived.data(), filtered_count, spec.symm_mode);
-        std::memcpy(target_arr + counter, filtered_derived.data(), filtered_count * sizeof(uint64_t));
-        counter += filtered_count;
+        for (size_t i = 0; i < filtered_count; ++i) {
+            hashed_idx[i] = BookGeneratorUtils::hash_board(filtered_derived[i]) & hashmask;
+#if defined(__GNUC__) || defined(__clang__)
+            __builtin_prefetch(hashmap + static_cast<size_t>(hashed_idx[i]), 1, 1);
+#endif
+        }
+        for (size_t i = 0; i < filtered_count; ++i) {
+            constexpr size_t kPrefetchDistance = 8;
+            if (i + kPrefetchDistance < filtered_count) {
+#if defined(__GNUC__) || defined(__clang__)
+                __builtin_prefetch(hashmap + static_cast<size_t>(hashed_idx[i + kPrefetchDistance]), 1, 1);
+#endif
+            }
+            const uint64_t board = filtered_derived[i];
+            const size_t hash_index = static_cast<size_t>(hashed_idx[i]);
+            if (hashmap[hash_index] == board) {
+                continue;
+            }
+            hashmap[hash_index] = board;
+            target_arr[counter++] = board;
+        }
     }
 }
 
@@ -782,7 +792,18 @@ GenBoardsAdResult gen_boards_ad_scalar(
                 return;
             }
             flush_candidate_buffer_scalar(buffer1.data(), kinds1.data(), buffer1_count, hashmap1.data(), hashmap1_mask, accepted);
-            process_buffered_accepted_boards(accepted, original_board_sum, 2U, tiles_table, param, spec, arr1.get(), c1t);
+            process_buffered_accepted_boards(
+                accepted,
+                original_board_sum,
+                2U,
+                tiles_table,
+                param,
+                spec,
+                hashmap1.data(),
+                hashmap1_mask,
+                arr1.get(),
+                c1t
+            );
             buffer1_count = 0;
         };
 
@@ -791,7 +812,18 @@ GenBoardsAdResult gen_boards_ad_scalar(
                 return;
             }
             flush_candidate_buffer_scalar(buffer2.data(), kinds2.data(), buffer2_count, hashmap2.data(), hashmap2_mask, accepted);
-            process_buffered_accepted_boards(accepted, original_board_sum, 4U, tiles_table, param, spec, arr2.get(), c2t);
+            process_buffered_accepted_boards(
+                accepted,
+                original_board_sum,
+                4U,
+                tiles_table,
+                param,
+                spec,
+                hashmap2.data(),
+                hashmap2_mask,
+                arr2.get(),
+                c2t
+            );
             buffer2_count = 0;
         };
 
@@ -937,7 +969,18 @@ GenBoardsAdResult gen_boards_ad_avx512(
                 return;
             }
             flush_candidate_buffer_avx512(buffer1.data(), kinds1.data(), buffer1_count, hashmap1.data(), hashmap1_mask, accepted);
-            process_buffered_accepted_boards(accepted, original_board_sum, 2U, tiles_table, param, spec, arr1.get(), c1t);
+            process_buffered_accepted_boards(
+                accepted,
+                original_board_sum,
+                2U,
+                tiles_table,
+                param,
+                spec,
+                hashmap1.data(),
+                hashmap1_mask,
+                arr1.get(),
+                c1t
+            );
             buffer1_count = 0;
         };
 
@@ -946,7 +989,18 @@ GenBoardsAdResult gen_boards_ad_avx512(
                 return;
             }
             flush_candidate_buffer_avx512(buffer2.data(), kinds2.data(), buffer2_count, hashmap2.data(), hashmap2_mask, accepted);
-            process_buffered_accepted_boards(accepted, original_board_sum, 4U, tiles_table, param, spec, arr2.get(), c2t);
+            process_buffered_accepted_boards(
+                accepted,
+                original_board_sum,
+                4U,
+                tiles_table,
+                param,
+                spec,
+                hashmap2.data(),
+                hashmap2_mask,
+                arr2.get(),
+                c2t
+            );
             buffer2_count = 0;
         };
 
@@ -1057,7 +1111,23 @@ bool cpu_has_ad_gen_avx512_uncached() {
 #endif
 }
 
+bool env_flag_enabled(const char *name) {
+    const char *value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return false;
+    }
+    return value[0] != '0' && value[0] != 'f' && value[0] != 'F' && value[0] != 'n' && value[0] != 'N';
+}
+
 GenBoardsAdDispatch resolve_gen_boards_ad_dispatch() {
+    if (env_flag_enabled("NATIVE_DISABLE_AD_GEN_AVX512")) {
+        return {AdGenMode::Scalar, gen_boards_ad_scalar};
+    }
+#ifndef NDEBUG
+    if (!env_flag_enabled("NATIVE_FORCE_AD_GEN_AVX512")) {
+        return {AdGenMode::Scalar, gen_boards_ad_scalar};
+    }
+#endif
     if (cpu_has_ad_gen_avx512_uncached()) {
         return {AdGenMode::AVX512, gen_boards_ad_avx512};
     }

@@ -1,5 +1,6 @@
 #include "CompressionBridge.h"
 
+#include "FileIOUtils.h"
 #include "NativeLzma.h"
 #include "TrieCompression.h"
 
@@ -66,16 +67,7 @@ void maybe_do_compress_ad(const std::string &folder_path) {
         const fs::path base_path = index_path.parent_path() / index_path.stem();
         const fs::path zi_path = base_path;
         if (!fs::exists(zi_path.string() + ".zi")) {
-            std::ifstream in(index_path, std::ios::binary | std::ios::ate);
-            if (!in) {
-                continue;
-            }
-            const size_t size = static_cast<size_t>(in.tellg());
-            in.seekg(0, std::ios::beg);
-            std::vector<uint64_t> data(size / sizeof(uint64_t));
-            if (!data.empty()) {
-                in.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(data.size() * sizeof(uint64_t)));
-            }
+            std::vector<uint64_t> data = FileIOUtils::read_binary_vector<uint64_t>(index_path.string());
             compress_uint64_array_native(data, base_path.string(), 1);
         }
         if (fs::exists(index_path) && fs::exists(zi_path.string() + ".zi")) {

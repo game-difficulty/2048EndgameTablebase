@@ -5,7 +5,13 @@ from itertools import combinations
 
 import numpy as np
 
-from Config import SingletonConfig, category_info, pattern_32k_tiles_map, pattern_catalog
+from Config import (
+    SingletonConfig,
+    category_info,
+    logger,
+    pattern_32k_tiles_map,
+    pattern_catalog,
+)
 from engine_core import mover_runtime
 
 try:
@@ -222,6 +228,33 @@ def _run_advanced_build(
     )
 
 
+def _should_retry_build_resume(exc: Exception) -> bool:
+    message = str(exc).strip()
+    if not message:
+        return False
+    if message == "The length multiplier is not big enough. Please restart.":
+        return True
+    return message.startswith("length multiplier ")
+
+
+def _run_with_single_resume_retry(build_label: str, build_fn) -> None:
+    retried = False
+    while True:
+        try:
+            build_fn()
+            return
+        except Exception as exc:
+            if retried or not _should_retry_build_resume(exc):
+                raise
+            retried = True
+            logger.warning(
+                "%s interrupted by validate_length_and_balance (%s); "
+                "re-entering build once via the same Python entrypoint.",
+                build_label,
+                exc,
+            )
+
+
 def start_build(pattern: str, target: int, pathname: str) -> bool:
     _require_native_build()
     config = SingletonConfig().config
@@ -246,28 +279,34 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
         is_free = (len(fixed_positions) < 4) and (tile_sum < 180000)
 
     if config.get("advanced_algo", False):
-        _run_advanced_build(
-            pattern,
-            arr_init,
-            target,
-            steps,
-            pathname,
-            docheck_step,
-            is_free,
-            is_variant,
-            spawn_rate4,
+        _run_with_single_resume_retry(
+            f"Advanced build {pattern}_{2**target}",
+            lambda: _run_advanced_build(
+                pattern,
+                arr_init,
+                target,
+                steps,
+                pathname,
+                docheck_step,
+                is_free,
+                is_variant,
+                spawn_rate4,
+            ),
         )
     else:
-        _run_classic_build(
-            pattern,
-            arr_init,
-            target,
-            steps,
-            pathname,
-            docheck_step,
-            is_free,
-            is_variant,
-            spawn_rate4,
+        _run_with_single_resume_retry(
+            f"Classic build {pattern}_{2**target}",
+            lambda: _run_classic_build(
+                pattern,
+                arr_init,
+                target,
+                steps,
+                pathname,
+                docheck_step,
+                is_free,
+                is_variant,
+                spawn_rate4,
+            ),
         )
     return True
 
@@ -278,15 +317,24 @@ def v_start_build(pattern: str, target: int, pathname: str) -> bool:
     _, tile_sum, seed_boards, extra_steps = _resolve_build_meta(pattern)
     steps, docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
     save_config_to_txt(pathname + "config.txt")
-    _run_classic_build(
-        pattern,
-        seed_boards,
-        target,
-        steps,
-        pathname,
-        docheck_step,
-        True,
-        True,
-        spawn_rate4,
+    _run_with_single_resume_retry(
+        f"Variant build {pattern}_{2**target}",
+        lambda: _run_classic_build(
+            pattern,
+            seed_boards,
+            target,
+            steps,
+            pathname,
+            docheck_step,
+            True,
+            True,
+            spawn_rate4,
+        ),
     )
     return True
+
+
+if __name__ == "__main__":
+    # $env:PYTHONPATH = "."
+    start_build('free10',9,r"C:\2048_tables\free10\free10_512_")
+    pass

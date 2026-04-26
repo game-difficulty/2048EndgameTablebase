@@ -1,6 +1,8 @@
 ﻿cmake_minimum_required(VERSION 3.18)
 project(2048_AI_Core LANGUAGES CXX)
 
+option(NATIVE_ENABLE_ASAN "Enable AddressSanitizer for native_core debug builds." OFF)
+
 find_package(Python 3.8 REQUIRED COMPONENTS Interpreter Development.Module)
 
 set(_nanobind_found FALSE)
@@ -63,28 +65,41 @@ target_include_directories(common_config INTERFACE
 
 if(MSVC)
     target_compile_options(common_config INTERFACE
-        /O2
-        /Ot
-        /GL
-        /fp:fast
+        $<$<CONFIG:Debug>:/Od /Zi>
+        $<$<NOT:$<CONFIG:Debug>>:/O2 /Ot /GL /fp:fast>
+        /Zo
+        /Oy-
         /arch:AVX2
         /openmp
     )
+    target_link_options(common_config INTERFACE
+        $<$<CONFIG:Debug>:/DEBUG:FULL>
+    )
 else()
     target_compile_options(common_config INTERFACE
-        -Ofast
+        $<$<CONFIG:Debug>:-O0 -g3 -fno-omit-frame-pointer -fno-inline -fno-optimize-sibling-calls>
+        $<$<NOT:$<CONFIG:Debug>>:-Ofast -ffast-math -fno-math-errno -fno-trapping-math -fomit-frame-pointer -funroll-loops>
         -march=${PORTABLE_X86_64_ARCH}
         -mtune=${PORTABLE_X86_64_TUNE}
-        -ffast-math
-        -fno-math-errno
-        -fno-trapping-math
-        -fomit-frame-pointer
-        -funroll-loops
         -fopenmp
         -ffunction-sections -fdata-sections
     )
     target_link_options(common_config INTERFACE
-        -static-libstdc++ -Wl,--gc-sections -s -fopenmp
+        $<$<CONFIG:Debug>:-g3>
+        $<$<CONFIG:RelWithDebInfo>:-Wl,--gc-sections>
+        $<$<CONFIG:Release>:-Wl,--gc-sections -s>
+        $<$<CONFIG:MinSizeRel>:-Wl,--gc-sections -s>
+        -static-libstdc++
+        -fopenmp
+    )
+endif()
+
+if(NATIVE_ENABLE_ASAN AND NOT MSVC)
+    target_compile_options(common_config INTERFACE
+        $<$<CONFIG:Debug>:-fsanitize=address>
+    )
+    target_link_options(common_config INTERFACE
+        $<$<CONFIG:Debug>:-fsanitize=address>
     )
 endif()
 
@@ -179,28 +194,41 @@ set_target_properties(bookgen_native PROPERTIES
 
 if(MSVC)
     target_compile_options(bookgen_native PRIVATE
-        /O2
-        /Ot
-        /GL
-        /fp:fast
+        $<$<CONFIG:Debug>:/Od /Zi>
+        $<$<NOT:$<CONFIG:Debug>>:/O2 /Ot /GL /fp:fast>
+        /Zo
+        /Oy-
         /arch:AVX2
         /openmp
     )
+    target_link_options(bookgen_native PRIVATE
+        $<$<CONFIG:Debug>:/DEBUG:FULL>
+    )
 else()
     target_compile_options(bookgen_native PRIVATE
-        -Ofast
+        $<$<CONFIG:Debug>:-O0 -g3 -fno-omit-frame-pointer -fno-inline -fno-optimize-sibling-calls>
+        $<$<NOT:$<CONFIG:Debug>>:-Ofast -ffast-math -fno-math-errno -fno-trapping-math -fomit-frame-pointer -funroll-loops>
         -march=${PORTABLE_X86_64_ARCH}
         -mtune=${PORTABLE_X86_64_TUNE}
-        -ffast-math
-        -fno-math-errno
-        -fno-trapping-math
-        -fomit-frame-pointer
-        -funroll-loops
         -fopenmp
         -ffunction-sections -fdata-sections
     )
     target_link_options(bookgen_native PRIVATE
-        -static-libstdc++ -Wl,--gc-sections -s -fopenmp
+        $<$<CONFIG:Debug>:-g3>
+        $<$<CONFIG:RelWithDebInfo>:-Wl,--gc-sections>
+        $<$<CONFIG:Release>:-Wl,--gc-sections -s>
+        $<$<CONFIG:MinSizeRel>:-Wl,--gc-sections -s>
+        -static-libstdc++
+        -fopenmp
+    )
+endif()
+
+if(NATIVE_ENABLE_ASAN AND NOT MSVC)
+    target_compile_options(bookgen_native PRIVATE
+        $<$<CONFIG:Debug>:-fsanitize=address>
+    )
+    target_link_options(bookgen_native PRIVATE
+        $<$<CONFIG:Debug>:-fsanitize=address>
     )
 endif()
 
@@ -219,10 +247,12 @@ foreach(target ${ALL_PYD_MODULES})
     )
 
     if(ipo_supported)
-        set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+        set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+        set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
     endif()
 endforeach()
 
 if(ipo_supported)
-    set_property(TARGET bookgen_native PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+    set_property(TARGET bookgen_native PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+    set_property(TARGET bookgen_native PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
 endif()

@@ -5,6 +5,7 @@
 #include "BoardMover.h"
 #include "Calculator.h"
 #include "CompressionBridge.h"
+#include "FileIOUtils.h"
 #include "Formation.h"
 #include "HybridSearch.h"
 #include "VBoardMover.h"
@@ -154,18 +155,7 @@ std::string now_string() {
 }
 
 template <typename T> LayerVector<T> read_layer_file(const std::string &path) {
-    LayerVector<T> data;
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file) {
-        return data;
-    }
-    size_t size = static_cast<size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
-    data.resize(size / sizeof(SuccessEntry<T>));
-    if (!data.empty()) {
-        file.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(size));
-    }
-    return data;
+    return FileIOUtils::read_binary_vector<SuccessEntry<T>>(path);
 }
 
 template <typename T> SplitLayer<T> read_split_layer_file(const std::string &path) {
@@ -186,10 +176,7 @@ template <typename T> SplitLayer<T> read_split_layer_file(const std::string &pat
     while (offset < count) {
         const size_t current = std::min(io_chunk_entries<T>(), count - offset);
         const size_t bytes = current * sizeof(SuccessEntry<T>);
-        file.read(reinterpret_cast<char *>(buffer.get()), static_cast<std::streamsize>(bytes));
-        if (!file) {
-            throw std::runtime_error("failed to read layer file: " + path);
-        }
+        FileIOUtils::read_exact(file, buffer.get(), bytes, path);
         for (size_t j = 0; j < current; ++j) {
             layer.boards[offset + j] = buffer[j].board;
             layer.success[offset + j] = buffer[j].success;
@@ -200,21 +187,7 @@ template <typename T> SplitLayer<T> read_split_layer_file(const std::string &pat
 }
 
 template <typename T> void write_layer_file(const std::string &path, const LayerVector<T> &data) {
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    if (!file) {
-        return;
-    }
-    if (!data.empty()) {
-        size_t offset = 0U;
-        while (offset < data.size()) {
-            const size_t current = std::min(io_chunk_entries<T>(), data.size() - offset);
-            file.write(
-                reinterpret_cast<const char *>(data.data() + offset),
-                static_cast<std::streamsize>(current * sizeof(SuccessEntry<T>))
-            );
-            offset += current;
-        }
-    }
+    FileIOUtils::write_binary_vector(path, data);
 }
 
 template <typename T> void write_layer_file(const std::string &path, const SplitLayer<T> &data) {
@@ -233,27 +206,13 @@ template <typename T> void write_layer_file(const std::string &path, const Split
             buffer[j].board = data.boards[offset + j];
             buffer[j].success = data.success[offset + j];
         }
-        file.write(
-            reinterpret_cast<const char *>(buffer.get()),
-            static_cast<std::streamsize>(current * sizeof(SuccessEntry<T>))
-        );
+        FileIOUtils::write_exact(file, buffer.get(), current * sizeof(SuccessEntry<T>), path);
         offset += current;
     }
 }
 
 std::vector<uint64_t> read_raw_file(const std::string &path) {
-    std::vector<uint64_t> data;
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file) {
-        return data;
-    }
-    size_t size = static_cast<size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
-    data.resize(size / sizeof(uint64_t));
-    if (!data.empty()) {
-        file.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(size));
-    }
-    return data;
+    return FileIOUtils::read_binary_vector<uint64_t>(path);
 }
 
 template <typename T> LayerVector<T> final_situation_process(

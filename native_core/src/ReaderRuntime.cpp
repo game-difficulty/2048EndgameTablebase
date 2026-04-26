@@ -2,6 +2,7 @@
 
 #include "BoardCodec.h"
 #include "BoardMover.h"
+#include "FileIOUtils.h"
 #include "Formation.h"
 #include "NativeLzma.h"
 #include "SymmetryUtils.h"
@@ -182,18 +183,7 @@ std::vector<int> operation_sequence(bool is_variant, int last_operation_index) {
 
 template <typename T>
 std::vector<T> read_binary_vector(const fs::path &path) {
-    std::vector<T> data;
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file) {
-        return data;
-    }
-    const size_t size = static_cast<size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
-    data.resize(size / sizeof(T));
-    if (!data.empty()) {
-        file.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(data.size() * sizeof(T)));
-    }
-    return data;
+    return FileIOUtils::read_binary_vector<T>(path);
 }
 
 DTypeInfo dtype_info_for_name(const std::string &name) {
@@ -399,7 +389,12 @@ std::optional<double> trie_search_with_context(
     const size_t count = high - low + 2ULL;
     std::vector<TrieNode16> ind3_seg(count);
     ii_file.seekg(static_cast<std::streamoff>(low * sizeof(TrieNode16) - sizeof(TrieNode16)), std::ios::beg);
-    ii_file.read(reinterpret_cast<char *>(ind3_seg.data()), static_cast<std::streamsize>(count * sizeof(TrieNode16)));
+    FileIOUtils::read_exact(
+        ii_file,
+        ind3_seg.data(),
+        count * sizeof(TrieNode16),
+        path_prefix + "ii"
+    );
 
     const uint8_t target_prefix = static_cast<uint8_t>((board >> 32U) & 0xFFU);
     size_t last_pos = 0;
@@ -427,14 +422,14 @@ std::optional<double> trie_search_with_context(
     }
 
     const auto [start, end] = get_segment_position(segments, static_cast<uint32_t>(last_pos + low));
-    std::ifstream z_file(path_prefix + "z", std::ios::binary | std::ios::ate);
+    std::ifstream z_file(path_prefix + "z", std::ios::binary);
     if (!z_file || end < start) {
         return std::nullopt;
     }
     z_file.seekg(static_cast<std::streamoff>(start), std::ios::beg);
     std::vector<uint8_t> compressed(static_cast<size_t>(end - start));
     if (!compressed.empty()) {
-        z_file.read(reinterpret_cast<char *>(compressed.data()), static_cast<std::streamsize>(compressed.size()));
+        FileIOUtils::read_exact(z_file, compressed.data(), compressed.size(), path_prefix + "z");
     }
     std::vector<uint8_t> decompressed = decompress_xz_block_native(compressed.data(), compressed.size());
     const auto *block = reinterpret_cast<const CompactBookEntry<T> *>(decompressed.data());

@@ -3,6 +3,7 @@
 #include "BoardMover.h"
 #include "Calculator.h"
 #include "CompressionBridge.h"
+#include "FileIOUtils.h"
 #include "Formation.h"
 #include "VBoardMover.h"
 #include <immintrin.h>
@@ -369,27 +370,13 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> handle_restart(
     }
 
     if (step_index == 1) {
-        std::ofstream out(path_i_minus_1, std::ios::binary);
-        if (out && !arr_init.empty()) {
-            out.write(reinterpret_cast<const char *>(arr_init.data()), static_cast<std::streamsize>(arr_init.size() * sizeof(uint64_t)));
-        }
+        FileIOUtils::write_binary_vector(path_i_minus_1, arr_init);
         return {true, arr_init, {}};
     }
 
     if (!started) {
         auto read_raw = [](const std::string &path) {
-            std::vector<uint64_t> data;
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
-            if (!file) {
-                return data;
-            }
-            size_t size = static_cast<size_t>(file.tellg());
-            file.seekg(0, std::ios::beg);
-            data.resize(size / sizeof(uint64_t));
-            if (!data.empty()) {
-                file.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(size));
-            }
-            return data;
+            return FileIOUtils::read_binary_vector<uint64_t>(path);
         };
         return {true, read_raw(path_i_minus_1), read_raw(path_i)};
     }
@@ -1077,10 +1064,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             save_length_factors(init_params.length_factors_list_path, init_params.length_factors_list);
         }
 
-        std::ofstream out(options.pathname + std::to_string(i), std::ios::binary);
-        if (out && !d0.empty()) {
-            out.write(reinterpret_cast<const char *>(d0.data()), static_cast<std::streamsize>(d0.size() * sizeof(uint64_t)));
-        }
+        FileIOUtils::write_binary_vector(options.pathname + std::to_string(i), d0);
         if (options.compress_temp_files && i > 5) {
             maybe_compress_with_7z(options.pathname + std::to_string(i - 2));
         }

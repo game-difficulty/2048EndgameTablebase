@@ -1,5 +1,7 @@
 #include "NativeLzma.h"
 
+#include "FileIOUtils.h"
+
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -43,29 +45,12 @@ static_assert(sizeof(U64SegmentEntry) == 16, "Unexpected uint64 segment entry la
 
 template <typename T>
 std::vector<T> read_binary_vector(const std::string &path) {
-    std::vector<T> data;
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file) {
-        return data;
-    }
-    const size_t size = static_cast<size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
-    data.resize(size / sizeof(T));
-    if (!data.empty()) {
-        file.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(size));
-    }
-    return data;
+    return FileIOUtils::read_binary_vector<T>(path);
 }
 
 template <typename T>
 void write_binary_vector(const std::string &path, const std::vector<T> &data) {
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        return;
-    }
-    if (!data.empty()) {
-        out.write(reinterpret_cast<const char *>(data.data()), static_cast<std::streamsize>(data.size() * sizeof(T)));
-    }
+    FileIOUtils::write_binary_vector(path, data);
 }
 
 struct LzmaApi {
@@ -278,53 +263,29 @@ std::string quote_arg(const std::string &value) {
 }
 
 bool compress_file_xz(const std::string &input_path, const std::string &output_path, int lvl) {
-    std::ifstream file(input_path, std::ios::binary | std::ios::ate);
-    if (!file) {
+    std::vector<uint8_t> bytes = FileIOUtils::read_binary_bytes(input_path);
+    if (bytes.empty() && !fs::exists(input_path)) {
         return false;
-    }
-    const size_t size = static_cast<size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
-    std::vector<uint8_t> bytes(size);
-    if (size != 0) {
-        file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(size));
     }
     std::vector<uint8_t> compressed = xz_compress_bytes(bytes.data(), bytes.size(), static_cast<uint32_t>(lvl));
     if (compressed.empty() && !bytes.empty()) {
         return false;
     }
-    std::ofstream out(output_path, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        return false;
-    }
-    if (!compressed.empty()) {
-        out.write(reinterpret_cast<const char *>(compressed.data()), static_cast<std::streamsize>(compressed.size()));
-    }
+    FileIOUtils::write_binary_bytes(output_path, compressed);
     fs::remove(input_path);
     return true;
 }
 
 bool decompress_file_xz(const std::string &input_path, const std::string &output_path) {
-    std::ifstream file(input_path, std::ios::binary | std::ios::ate);
-    if (!file) {
+    std::vector<uint8_t> bytes = FileIOUtils::read_binary_bytes(input_path);
+    if (bytes.empty() && !fs::exists(input_path)) {
         return false;
-    }
-    const size_t size = static_cast<size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
-    std::vector<uint8_t> bytes(size);
-    if (size != 0) {
-        file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(size));
     }
     std::vector<uint8_t> decompressed = xz_decompress_bytes(bytes.data(), bytes.size());
     if (decompressed.empty() && !bytes.empty()) {
         return false;
     }
-    std::ofstream out(output_path, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        return false;
-    }
-    if (!decompressed.empty()) {
-        out.write(reinterpret_cast<const char *>(decompressed.data()), static_cast<std::streamsize>(decompressed.size()));
-    }
+    FileIOUtils::write_binary_bytes(output_path, decompressed);
     fs::remove(input_path);
     return true;
 }
@@ -334,17 +295,7 @@ std::vector<U64SegmentEntry> read_u64_segments(const fs::path &segments_path) {
 }
 
 std::vector<uint8_t> read_file_bytes_range(const std::string &path, uint64_t begin, uint64_t end) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file || end < begin) {
-        return {};
-    }
-    const size_t size = static_cast<size_t>(end - begin);
-    std::vector<uint8_t> data(size);
-    file.seekg(static_cast<std::streamoff>(begin), std::ios::beg);
-    if (size != 0) {
-        file.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(size));
-    }
-    return data;
+    return FileIOUtils::read_binary_bytes_range(path, begin, end);
 }
 
 } // namespace
@@ -430,7 +381,7 @@ bool compress_uint64_array_native(const std::vector<uint64_t> &data, const std::
         segments[seg].file_offset = current_offset;
         const auto &block = compressed_blocks[seg];
         if (!block.empty()) {
-            out.write(reinterpret_cast<const char *>(block.data()), static_cast<std::streamsize>(block.size()));
+            FileIOUtils::write_exact(out, block.data(), block.size(), output_base + ".zi");
         }
         current_offset += static_cast<uint64_t>(block.size());
     }

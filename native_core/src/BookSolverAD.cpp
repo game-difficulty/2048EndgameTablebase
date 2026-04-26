@@ -6,6 +6,7 @@
 #include "BoardMoverAD.h"
 #include "Calculator.h"
 #include "CompressionBridge.h"
+#include "FileIOUtils.h"
 #include "Formation.h"
 #include "HybridSearch.h"
 #include "SymmetryUtils.h"
@@ -249,28 +250,11 @@ uint64_t available_memory_bytes() {
 }
 
 template <typename T> std::vector<T> read_binary_vector(const std::string &path) {
-    std::vector<T> data;
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file) {
-        return data;
-    }
-    size_t size = static_cast<size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
-    data.resize(size / sizeof(T));
-    if (!data.empty()) {
-        file.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(size));
-    }
-    return data;
+    return FileIOUtils::read_binary_vector<T>(path);
 }
 
 template <typename T> void write_binary_vector(const std::string &path, const std::vector<T> &data) {
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        return;
-    }
-    if (!data.empty()) {
-        out.write(reinterpret_cast<const char *>(data.data()), static_cast<std::streamsize>(data.size() * sizeof(T)));
-    }
+    FileIOUtils::write_binary_vector(path, data);
 }
 
 template <typename T> void ensure_stats_header(const RunOptions &options) {
@@ -1765,8 +1749,12 @@ void iter_ind_dict4(
             timer_acc += (t1 - t0);
             counter_acc += positions_chunk.size() * derive_size;
             if (!book_chunk.data.empty()) {
-                out.write(reinterpret_cast<const char *>(book_chunk.data.data()),
-                          static_cast<std::streamsize>(book_chunk.data.size() * sizeof(T)));
+                FileIOUtils::write_exact(
+                    out,
+                    book_chunk.data.data(),
+                    book_chunk.data.size() * sizeof(T),
+                    (folder / (std::to_string(key) + ".b")).string()
+                );
             }
         }
     }
@@ -1824,8 +1812,12 @@ void iter_ind_dict2(
             const std::streamoff offset = static_cast<std::streamoff>(start_idx * derive_size * sizeof(T));
             file.seekg(offset, std::ios::beg);
             if (!book_chunk.data.empty()) {
-                file.read(reinterpret_cast<char *>(book_chunk.data.data()),
-                          static_cast<std::streamsize>(book_chunk.data.size() * sizeof(T)));
+                FileIOUtils::read_exact(
+                    file,
+                    book_chunk.data.data(),
+                    book_chunk.data.size() * sizeof(T),
+                    book_path.string()
+                );
             }
 
             recalculate_ad_chunk(
@@ -1863,8 +1855,12 @@ void iter_ind_dict2(
             if (!book_chunk.data.empty()) {
                 max_rate = std::max(max_rate, *std::max_element(book_chunk.data.begin(), book_chunk.data.end()));
                 file.seekp(offset, std::ios::beg);
-                file.write(reinterpret_cast<const char *>(book_chunk.data.data()),
-                           static_cast<std::streamsize>(book_chunk.data.size() * sizeof(T)));
+                FileIOUtils::write_exact(
+                    file,
+                    book_chunk.data.data(),
+                    book_chunk.data.size() * sizeof(T),
+                    book_path.string()
+                );
                 file.flush();
             }
         }
