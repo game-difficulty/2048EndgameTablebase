@@ -5,6 +5,7 @@
 #include "CompressionBridge.h"
 #include "FileIOUtils.h"
 #include "Formation.h"
+#include "UniqueUtils.h"
 #include "VBoardMover.h"
 #include <immintrin.h>
 #include <cpuid.h>
@@ -51,18 +52,7 @@ void debug_log(const std::string &message) {
 }
 
 bool supports_avx512() {
-#ifdef _WIN32
-    // 在 Windows 下使用 __builtin_cpu_supports 可能较可靠，或者手动检查 cpuid
-    return __builtin_cpu_supports("avx512f") && 
-           __builtin_cpu_supports("avx512dq") && 
-           __builtin_cpu_supports("avx512bw") && 
-           __builtin_cpu_supports("avx512vl");
-#else
-    return __builtin_cpu_supports("avx512f") && 
-           __builtin_cpu_supports("avx512dq") && 
-           __builtin_cpu_supports("avx512bw") && 
-           __builtin_cpu_supports("avx512vl");
-#endif
+    return UniqueUtils::cpu_has_avx512_dq_bw_vl();
 }
 
 __attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))

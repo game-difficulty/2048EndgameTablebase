@@ -317,7 +317,9 @@
       "settings": "定式计算与外观设置",
       "help": "查看文档、技术指南和项目说明"
     },
-    "githubNote": "欢迎在 GitHub 上点个 Star 支持本项目"
+    "githubNote": "欢迎在 GitHub 上点个 Star 支持本项目",
+    "sponsorNotePrefix": "本项目由",
+    "sponsorNoteSuffix": "赞助"
   },
   "labels": {
     "score": "分数",

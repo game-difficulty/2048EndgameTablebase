@@ -9,6 +9,7 @@
 #include "FileIOUtils.h"
 #include "Formation.h"
 #include "HybridSearch.h"
+#include "UniqueUtils.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1098,17 +1099,7 @@ GenBoardsAdResult gen_boards_ad_avx512(
 }
 
 bool cpu_has_ad_gen_avx512_uncached() {
-#if defined(__x86_64__) || defined(__i386)
-    __builtin_cpu_init();
-    return __builtin_cpu_supports("avx512f") &&
-           __builtin_cpu_supports("avx512dq") &&
-           __builtin_cpu_supports("avx512bw") &&
-           __builtin_cpu_supports("avx512vl");
-#elif defined(_M_X64) || defined(_M_IX86)
-    return HybridSearch::mode() == HybridSearch::Mode::AVX512;
-#else
-    return false;
-#endif
+    return UniqueUtils::cpu_has_avx512_dq_bw_vl();
 }
 
 bool env_flag_enabled(const char *name) {

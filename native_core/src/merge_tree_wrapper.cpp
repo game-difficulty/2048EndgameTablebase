@@ -598,7 +598,7 @@ inline size_t merge_tree_segments_dedup_impl(const std::vector<Segment> &segment
                                              uint64_t *output,
                                              uint64_t *scratch) {
     return merge_tree_segments_dedup_impl(
-        segments, output, scratch, UniqueUtils::cpu_has_avx512()
+        segments, output, scratch, UniqueUtils::cpu_has_avx512_dq_vl()
     );
 }
 
@@ -706,7 +706,7 @@ inline size_t merge_tree_u64_dedup_impl(const uint64_t *const *inputs,
     if (inputs == nullptr || lengths == nullptr) {
         return 0;
     }
-    const bool use_avx512 = UniqueUtils::cpu_has_avx512();
+    const bool use_avx512 = UniqueUtils::cpu_has_avx512_dq_vl();
     if (count == 2) {
         return merge_two_dedup(inputs[0], lengths[0], inputs[1], lengths[1], output, use_avx512);
     }
@@ -728,7 +728,7 @@ inline size_t merge_tree_partitioned_u64_dedup_impl(const uint64_t *const *input
         partition_offsets == nullptr || partition_lengths == nullptr || partition_count == 0) {
         return 0;
     }
-    const bool use_avx512 = UniqueUtils::cpu_has_avx512();
+    const bool use_avx512 = UniqueUtils::cpu_has_avx512_dq_vl();
     if (count == 2) {
         return merge_two_partitioned_direct_dedup(inputs[0],
                                                   lengths[0],
@@ -816,7 +816,7 @@ MERGE_TREE_EXPORT size_t merge_two_u64_dedup(const uint64_t *left,
                                              const uint64_t *right,
                                              size_t right_len,
                                              uint64_t *output) {
-    return merge_two_dedup(left, left_len, right, right_len, output, UniqueUtils::cpu_has_avx512());
+    return merge_two_dedup(left, left_len, right, right_len, output, UniqueUtils::cpu_has_avx512_dq_vl());
 }
 
 MERGE_TREE_EXPORT size_t merge_two_u64_partitioned_dedup(const uint64_t *left,
@@ -837,11 +837,11 @@ MERGE_TREE_EXPORT size_t merge_two_u64_partitioned_dedup(const uint64_t *left,
                                               output,
                                               partition_offsets,
                                               partition_lengths,
-                                              UniqueUtils::cpu_has_avx512());
+                                              UniqueUtils::cpu_has_avx512_dq_vl());
 }
 
 MERGE_TREE_EXPORT int merge_tree_u64_dedup_has_avx512() {
-    return UniqueUtils::cpu_has_avx512() ? 1 : 0;
+    return UniqueUtils::cpu_has_avx512_dq_vl() ? 1 : 0;
 }
 
 MERGE_TREE_EXPORT size_t merge_tree_partitioned_u64_dedup(

@@ -317,7 +317,9 @@
       "settings": "Tablebase Building & Appearance Settings.",
       "help": "Documentation, Technique Guides, and Project Information."
     },
-    "githubNote": "Support this project by giving it a star on GitHub"
+    "githubNote": "Support this project by giving it a star on GitHub",
+    "sponsorNotePrefix": "This project is sponsored by ",
+    "sponsorNoteSuffix": "."
   },
   "labels": {
     "score": "SCORE",

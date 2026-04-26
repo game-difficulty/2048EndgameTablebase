@@ -654,7 +654,7 @@ size_t filter_records_native_impl(const void *input_void,
 
     if (worker_count <= 1) {
 #if defined(__GNUC__) || defined(__clang__)
-        if (UniqueUtils::cpu_has_avx512()) {
+        if (UniqueUtils::cpu_has_avx512_dq_vl()) {
             if (value_kind == kValueKindU32) {
                 return filter_u32_records_avx512_chunk(
                     input, 0, count, record_size, static_cast<uint32_t>(threshold_bits), output
@@ -687,7 +687,7 @@ size_t filter_records_native_impl(const void *input_void,
             continue;
         }
 #if defined(__GNUC__) || defined(__clang__)
-        if (UniqueUtils::cpu_has_avx512()) {
+        if (UniqueUtils::cpu_has_avx512_dq_vl()) {
             if (value_kind == kValueKindU32) {
                 counts[static_cast<size_t>(t)] = filter_u32_records_avx512_chunk(
                     input, begin, end, record_size, static_cast<uint32_t>(threshold_bits), nullptr
@@ -728,7 +728,7 @@ size_t filter_records_native_impl(const void *input_void,
         }
         char *chunk_output = output + offsets[static_cast<size_t>(t)] * record_size;
 #if defined(__GNUC__) || defined(__clang__)
-        if (UniqueUtils::cpu_has_avx512()) {
+        if (UniqueUtils::cpu_has_avx512_dq_vl()) {
             if (value_kind == kValueKindU32) {
                 filter_u32_records_avx512_chunk(
                     input, begin, end, record_size, static_cast<uint32_t>(threshold_bits), chunk_output
@@ -763,7 +763,7 @@ size_t filter_records_inplace_impl(void *data_void,
     char *data = static_cast<char *>(data_void);
 
 #if defined(__GNUC__) || defined(__clang__)
-    if (UniqueUtils::cpu_has_avx512()) {
+    if (UniqueUtils::cpu_has_avx512_dq_vl()) {
         switch (value_kind) {
         case kValueKindU32:
             return filter_u32_records_avx512_inplace(
@@ -799,7 +799,7 @@ void fill_u32_range(uint32_t *output,
                     size_t end,
                     uint32_t value) {
 #if defined(__GNUC__) || defined(__clang__)
-    if (UniqueUtils::cpu_has_avx512() && end - begin >= 256) {
+    if (UniqueUtils::cpu_has_avx512_dq_vl() && end - begin >= 256) {
         fill_u32_range_avx512(output, begin, end, value);
         return;
     }
@@ -1080,7 +1080,7 @@ void create_index_streaming(const char *input,
 
     if (worker_count <= 1) {
 #if defined(__GNUC__) || defined(__clang__)
-        if (UniqueUtils::cpu_has_avx512()) {
+        if (UniqueUtils::cpu_has_avx512_dq_vl()) {
             uint32_t prev_header = first_header;
             uint32_t filled_header = first_header;
             size_t i = 1;
@@ -1123,7 +1123,7 @@ void create_index_streaming(const char *input,
                     : static_cast<uint32_t>(load_key(input + (begin - 1) * record_size) >> 40);
 
 #if defined(__GNUC__) || defined(__clang__)
-            if (UniqueUtils::cpu_has_avx512()) {
+            if (UniqueUtils::cpu_has_avx512_dq_vl()) {
                 uint32_t prev_header = chunk_prev_header;
                 uint32_t filled_header = chunk_prev_header;
                 size_t i = (begin == 0) ? 1 : begin;
@@ -1320,7 +1320,7 @@ BOOKSOLVER_EXPORT size_t booksolver_expand_u64_records(const uint64_t *input,
 
     if (worker_count <= 1) {
 #if defined(__GNUC__) || defined(__clang__)
-        if (UniqueUtils::cpu_has_avx512()) {
+        if (UniqueUtils::cpu_has_avx512_dq_vl()) {
             return expand_u64_records_avx512_chunk(input, count, output_bytes, record_size);
         }
 #endif
@@ -1339,7 +1339,7 @@ BOOKSOLVER_EXPORT size_t booksolver_expand_u64_records(const uint64_t *input,
             continue;
         }
 #if defined(__GNUC__) || defined(__clang__)
-        if (UniqueUtils::cpu_has_avx512()) {
+        if (UniqueUtils::cpu_has_avx512_dq_vl()) {
             expand_u64_records_avx512_chunk(
                 input + begin,
                 end - begin,
