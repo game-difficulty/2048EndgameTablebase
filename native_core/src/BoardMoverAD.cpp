@@ -7,27 +7,37 @@ namespace FormationAD {
 
 namespace {
 
-std::array<uint16_t, 65536> g_movel{};
-std::array<uint16_t, 65536> g_mover{};
-std::array<uint64_t, 65536> g_moveu{};
-std::array<uint64_t, 65536> g_moved{};
-std::array<bool, 65536> g_mask_new_tiles{};
+struct ADRowMove {
+    uint16_t movel = 0;
+    uint16_t mover = 0;
+};
+
+std::array<ADRowMove, 65536> g_row_table{};
+std::array<uint64_t, 1024> g_mask_new_tile_bits{};
+
+inline void set_mask_new_tile(uint32_t row) {
+    g_mask_new_tile_bits[row >> 6U] |= (1ULL << (row & 63U));
+}
+
+inline bool has_mask_new_tile(uint64_t row) {
+    return ((g_mask_new_tile_bits[row >> 6U] >> (row & 63U)) & 1ULL) != 0ULL;
+}
 
 struct ADRowTableInitializer {
     ADRowTableInitializer() {
         for (uint32_t i = 0; i < 65536; ++i) {
             bool mask_new_tile = false;
             uint16_t left = merge_line(static_cast<uint16_t>(i), false, mask_new_tile);
-            g_movel[i] = static_cast<uint16_t>(left ^ static_cast<uint16_t>(i));
-            g_mask_new_tiles[i] = mask_new_tile;
 
             bool ignored = false;
             uint16_t right = merge_line(static_cast<uint16_t>(i), true, ignored);
-            g_mover[i] = static_cast<uint16_t>(right ^ static_cast<uint16_t>(i));
-        }
-        for (uint32_t i = 0; i < 65536; ++i) {
-            g_moveu[i] = reverse_board(static_cast<uint64_t>(g_movel[i]));
-            g_moved[i] = reverse_board(static_cast<uint64_t>(g_mover[i]));
+            g_row_table[i] = ADRowMove{
+                static_cast<uint16_t>(left ^ static_cast<uint16_t>(i)),
+                static_cast<uint16_t>(right ^ static_cast<uint16_t>(i))
+            };
+            if (mask_new_tile) {
+                set_mask_new_tile(i);
+            }
         }
     }
 };
@@ -79,61 +89,52 @@ uint16_t merge_line(uint16_t row, bool reverse_line, bool &mask_new_tile) {
 }
 
 uint64_t m_move_left(uint64_t board) {
-    board ^= static_cast<uint64_t>(g_movel[board & 0xFFFFULL]);
-    board ^= static_cast<uint64_t>(g_movel[(board >> 16U) & 0xFFFFULL]) << 16U;
-    board ^= static_cast<uint64_t>(g_movel[(board >> 32U) & 0xFFFFULL]) << 32U;
-    board ^= static_cast<uint64_t>(g_movel[(board >> 48U) & 0xFFFFULL]) << 48U;
+    board ^= static_cast<uint64_t>(g_row_table[board & 0xFFFFULL].movel);
+    board ^= static_cast<uint64_t>(g_row_table[(board >> 16U) & 0xFFFFULL].movel) << 16U;
+    board ^= static_cast<uint64_t>(g_row_table[(board >> 32U) & 0xFFFFULL].movel) << 32U;
+    board ^= static_cast<uint64_t>(g_row_table[(board >> 48U) & 0xFFFFULL].movel) << 48U;
     return board;
 }
 
 std::pair<uint64_t, bool> m_move_left2(uint64_t board) {
-    bool mnt = false;
-    mnt = mnt || g_mask_new_tiles[board & 0xFFFFULL];
-    board ^= static_cast<uint64_t>(g_movel[board & 0xFFFFULL]);
-    mnt = mnt || g_mask_new_tiles[(board >> 16U) & 0xFFFFULL];
-    board ^= static_cast<uint64_t>(g_movel[(board >> 16U) & 0xFFFFULL]) << 16U;
-    mnt = mnt || g_mask_new_tiles[(board >> 32U) & 0xFFFFULL];
-    board ^= static_cast<uint64_t>(g_movel[(board >> 32U) & 0xFFFFULL]) << 32U;
-    mnt = mnt || g_mask_new_tiles[(board >> 48U) & 0xFFFFULL];
-    board ^= static_cast<uint64_t>(g_movel[(board >> 48U) & 0xFFFFULL]) << 48U;
+    const uint64_t r0 = board & 0xFFFFULL;
+    const uint64_t r1 = (board >> 16U) & 0xFFFFULL;
+    const uint64_t r2 = (board >> 32U) & 0xFFFFULL;
+    const uint64_t r3 = (board >> 48U) & 0xFFFFULL;
+    const ADRowMove &e0 = g_row_table[r0];
+    const ADRowMove &e1 = g_row_table[r1];
+    const ADRowMove &e2 = g_row_table[r2];
+    const ADRowMove &e3 = g_row_table[r3];
+    const bool mnt = has_mask_new_tile(r0) || has_mask_new_tile(r1) || has_mask_new_tile(r2) || has_mask_new_tile(r3);
+    board ^= static_cast<uint64_t>(e0.movel);
+    board ^= static_cast<uint64_t>(e1.movel) << 16U;
+    board ^= static_cast<uint64_t>(e2.movel) << 32U;
+    board ^= static_cast<uint64_t>(e3.movel) << 48U;
     return {board, mnt};
 }
 
 uint64_t m_move_right(uint64_t board) {
-    board ^= static_cast<uint64_t>(g_mover[board & 0xFFFFULL]);
-    board ^= static_cast<uint64_t>(g_mover[(board >> 16U) & 0xFFFFULL]) << 16U;
-    board ^= static_cast<uint64_t>(g_mover[(board >> 32U) & 0xFFFFULL]) << 32U;
-    board ^= static_cast<uint64_t>(g_mover[(board >> 48U) & 0xFFFFULL]) << 48U;
+    board ^= static_cast<uint64_t>(g_row_table[board & 0xFFFFULL].mover);
+    board ^= static_cast<uint64_t>(g_row_table[(board >> 16U) & 0xFFFFULL].mover) << 16U;
+    board ^= static_cast<uint64_t>(g_row_table[(board >> 32U) & 0xFFFFULL].mover) << 32U;
+    board ^= static_cast<uint64_t>(g_row_table[(board >> 48U) & 0xFFFFULL].mover) << 48U;
     return board;
 }
 
 uint64_t m_move_up(uint64_t board, uint64_t board_rev) {
-    board ^= g_moveu[board_rev & 0xFFFFULL];
-    board ^= g_moveu[(board_rev >> 16U) & 0xFFFFULL] << 4U;
-    board ^= g_moveu[(board_rev >> 32U) & 0xFFFFULL] << 8U;
-    board ^= g_moveu[(board_rev >> 48U) & 0xFFFFULL] << 12U;
-    return board;
+    (void) board;
+    return reverse_board(m_move_left(board_rev));
 }
 
 std::pair<uint64_t, bool> m_move_up2(uint64_t board, uint64_t board_rev) {
-    bool mnt = false;
-    mnt = mnt || g_mask_new_tiles[board_rev & 0xFFFFULL];
-    board ^= g_moveu[board_rev & 0xFFFFULL];
-    mnt = mnt || g_mask_new_tiles[(board_rev >> 16U) & 0xFFFFULL];
-    board ^= g_moveu[(board_rev >> 16U) & 0xFFFFULL] << 4U;
-    mnt = mnt || g_mask_new_tiles[(board_rev >> 32U) & 0xFFFFULL];
-    board ^= g_moveu[(board_rev >> 32U) & 0xFFFFULL] << 8U;
-    mnt = mnt || g_mask_new_tiles[(board_rev >> 48U) & 0xFFFFULL];
-    board ^= g_moveu[(board_rev >> 48U) & 0xFFFFULL] << 12U;
-    return {board, mnt};
+    (void) board;
+    auto [moved_rev, mnt] = m_move_left2(board_rev);
+    return {reverse_board(moved_rev), mnt};
 }
 
 uint64_t m_move_down(uint64_t board, uint64_t board_rev) {
-    board ^= g_moved[board_rev & 0xFFFFULL];
-    board ^= g_moved[(board_rev >> 16U) & 0xFFFFULL] << 4U;
-    board ^= g_moved[(board_rev >> 32U) & 0xFFFFULL] << 8U;
-    board ^= g_moved[(board_rev >> 48U) & 0xFFFFULL] << 12U;
-    return board;
+    (void) board;
+    return reverse_board(m_move_right(board_rev));
 }
 
 uint64_t m_move_board(uint64_t board, int direction) {
