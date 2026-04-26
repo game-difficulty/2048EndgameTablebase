@@ -5,6 +5,7 @@ import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
+import { resultValueFontSize } from '../../../utils/successRate';
 
 export function useReplaySession(activeRef, emit) {
   const RESULT_REFRESH_GRACE_MS = 1200;
@@ -267,10 +268,10 @@ export function useReplaySession(activeRef, emit) {
     markerIndices.value.some((point) => point > currentStep.value)
   );
 
+  const resultFontSize = computed(() => resultValueFontSize(displayedResults.value.map((item) => item.display)));
+
   const getResultValueStyle = (item) => {
-    const length = item.display?.length || 0;
-    const fontSize = length >= 21 ? '15px' : (length >= 19 ? '16px' : (length >= 17 ? '17px' : '19px'));
-    return { color: item.textColor, fontSize };
+    return { color: item.textColor, fontSize: resultFontSize.value };
   };
 
   const stopDemo = () => {

@@ -4,7 +4,13 @@ import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
-import { restoreSuccessRate, formatSuccessRate } from '../../../utils/successRate';
+import {
+  restoreSuccessRate,
+  formatSuccessRate,
+  successRateSortValue,
+  successRateRelativeLoss,
+  resultValueFontSize,
+} from '../../../utils/successRate';
 
 export function useTrainerSession(activeRef) {
   const RESULT_REFRESH_GRACE_MS = 180;
@@ -97,10 +103,20 @@ export function useTrainerSession(activeRef) {
   const bestResultMove = computed(() => {
     const dtype = tableResult.value.dtype || '';
     const orderedMoves = Object.entries(tableResult.value.results || {})
-      .map(([dir, val]) => [dir, restoreSuccessRate(val, dtype)])
-      .filter(([, val]) => typeof val === 'number' && Number.isFinite(val) && val > 0)
-      .sort(([, left], [, right]) => right - left);
-    return orderedMoves[0]?.[0] || null;
+      .map(([dir, rawVal]) => ({
+        dir,
+        val: restoreSuccessRate(rawVal, dtype),
+        sortVal: successRateSortValue(rawVal, dtype),
+      }))
+      .filter((item) => (
+        typeof item.val === 'number' &&
+        Number.isFinite(item.val) &&
+        item.val > 0 &&
+        typeof item.sortVal === 'number' &&
+        Number.isFinite(item.sortVal)
+      ))
+      .sort((a, b) => b.sortVal - a.sortVal);
+    return orderedMoves[0]?.dir || null;
   });
 
   const togglePalette = (val) => {
@@ -127,19 +143,22 @@ export function useTrainerSession(activeRef) {
     const items = dirs.map((dir) => {
       const rawVal = r[dir];
       const val = restoreSuccessRate(rawVal, dtype);
+      const sortVal = successRateSortValue(rawVal, dtype);
       return {
         dir,
         rawVal: (rawVal == null || typeof rawVal !== 'number') ? null : rawVal,
         val: val == null ? null : val,
+        sortVal: sortVal == null ? null : sortVal,
       };
     });
     items.sort((a, b) => {
-      if (a.val == null && b.val == null) return 0;
-      if (a.val == null) return 1;
-      if (b.val == null) return -1;
-      return b.val - a.val;
+      if (a.sortVal == null && b.sortVal == null) return 0;
+      if (a.sortVal == null) return 1;
+      if (b.sortVal == null) return -1;
+      return b.sortVal - a.sortVal;
     });
-    const bestVal = items.find((i) => i.val != null)?.val || 0;
+    const bestItem = items.find((i) => i.val != null && i.rawVal != null);
+    const bestVal = bestItem?.val || 0;
     const prec = resultPrecision.value;
 
     const COLOR_GREEN = '#4caf50';
@@ -151,11 +170,11 @@ export function useTrainerSession(activeRef) {
       let pct = 0;
       let color = 'var(--border-main)';
       if (item.val != null && bestVal > 0) {
-        const loss = 1 - item.val / bestVal;
+        const loss = successRateRelativeLoss(item.rawVal, bestItem?.rawVal, dtype);
         if (idx === 0) {
           pct = 100;
           color = COLOR_GREEN;
-        } else if (loss > 0.10) {
+        } else if (loss == null || loss > 0.10) {
           pct = 0;
           color = COLOR_RED;
         } else {
@@ -210,20 +229,12 @@ export function useTrainerSession(activeRef) {
     opacity: item.val == null ? 0.5 : 1,
   });
 
-  const getResultValueStyle = (item) => {
-    const length = item.display?.length || 0;
-    let fontSize = '19px';
-    if (length >= 21) {
-      fontSize = '15px';
-    } else if (length >= 19) {
-      fontSize = '16px';
-    } else if (length >= 17) {
-      fontSize = '17px';
-    }
+  const resultFontSize = computed(() => resultValueFontSize(displayedResults.value.map((item) => item.display)));
 
+  const getResultValueStyle = (item) => {
     return {
       color: item.textColor,
-      fontSize,
+      fontSize: resultFontSize.value,
     };
   };
 

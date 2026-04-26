@@ -4,7 +4,13 @@ import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
-import { restoreSuccessRate, formatSuccessRate } from '../../../utils/successRate';
+import {
+  restoreSuccessRate,
+  formatSuccessRate,
+  successRateSortValue,
+  successRateRelativeLoss,
+  resultValueFontSize,
+} from '../../../utils/successRate';
 
 export function useTesterSession(activeRef) {
   const { config: appConfig } = useAppSettingsStore();
@@ -205,25 +211,32 @@ export function useTesterSession(activeRef) {
       .map((dir) => {
         const rawVal = resultSource.value?.[dir];
         const val = restoreSuccessRate(rawVal, displayedResultDtype.value || '');
-        return { dir, rawVal: typeof rawVal === 'number' ? rawVal : null, val: val == null ? null : val };
+        const sortVal = successRateSortValue(rawVal, displayedResultDtype.value || '');
+        return {
+          dir,
+          rawVal: typeof rawVal === 'number' ? rawVal : null,
+          val: val == null ? null : val,
+          sortVal: sortVal == null ? null : sortVal,
+        };
       })
       .sort((a, b) => {
-        if (a.val == null && b.val == null) return 0;
-        if (a.val == null) return 1;
-        if (b.val == null) return -1;
-        return b.val - a.val;
+        if (a.sortVal == null && b.sortVal == null) return 0;
+        if (a.sortVal == null) return 1;
+        if (b.sortVal == null) return -1;
+        return b.sortVal - a.sortVal;
       });
 
-    const bestVal = items.find((item) => item.val != null)?.val || 0;
+    const bestItem = items.find((item) => item.val != null && item.rawVal != null);
+    const bestVal = bestItem?.val || 0;
     return items.map((item, index) => {
       let pct = 0;
       let color = 'var(--border-main)';
       if (item.val != null && bestVal > 0) {
-        const loss = 1 - item.val / bestVal;
+        const loss = successRateRelativeLoss(item.rawVal, bestItem?.rawVal, displayedResultDtype.value || '');
         if (index === 0) {
           pct = 100;
           color = COLOR_GREEN;
-        } else if (loss <= 0.10) {
+        } else if (loss != null && loss <= 0.10) {
           pct = (1 - loss / 0.10) * 100;
           color = loss <= 0.001
             ? COLOR_GREEN
@@ -266,10 +279,10 @@ export function useTesterSession(activeRef) {
     opacity: item.val == null ? 0.55 : 1,
   });
 
+  const resultFontSize = computed(() => resultValueFontSize(displayedResults.value.map((item) => item.display)));
+
   const getResultValueStyle = (item) => {
-    const length = item.display?.length || 0;
-    const fontSize = length >= 21 ? '15px' : (length >= 19 ? '16px' : (length >= 17 ? '17px' : '19px'));
-    return { color: item.textColor, fontSize };
+    return { color: item.textColor, fontSize: resultFontSize.value };
   };
 
   const formatBoardValue = (value) => {

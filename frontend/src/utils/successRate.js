@@ -12,6 +12,23 @@ export const restoreSuccessRate = (value, dtype) => {
   return 1 + value;
 };
 
+export const successRateSortValue = (value, dtype) => {
+  if (!isFiniteNumber(value)) return null;
+  if (isOneMinusSuccessRateDtype(dtype)) return value;
+  return restoreSuccessRate(value, dtype);
+};
+
+export const successRateRelativeLoss = (value, bestValue, dtype) => {
+  if (!isFiniteNumber(value) || !isFiniteNumber(bestValue)) return null;
+  if (isOneMinusSuccessRateDtype(dtype)) {
+    return Math.max(0, bestValue - value);
+  }
+  const restored = restoreSuccessRate(value, dtype);
+  const bestRestored = restoreSuccessRate(bestValue, dtype);
+  if (!isFiniteNumber(restored) || !isFiniteNumber(bestRestored) || bestRestored <= 0) return null;
+  return 1 - restored / bestRestored;
+};
+
 export const formatSuccessRate = (value, dtype, precision = 9) => {
   if (!isFiniteNumber(value)) return String(value);
 
@@ -24,4 +41,12 @@ export const formatSuccessRate = (value, dtype, precision = 9) => {
   }
 
   return `1${String(value)}`;
+};
+
+export const resultValueFontSize = (displays) => {
+  const maxLength = Math.max(0, ...displays.map((display) => String(display || '').length));
+  if (maxLength >= 21) return '15px';
+  if (maxLength >= 19) return '16px';
+  if (maxLength >= 17) return '17px';
+  return '19px';
 };
