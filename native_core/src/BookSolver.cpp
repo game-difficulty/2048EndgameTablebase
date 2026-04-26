@@ -218,17 +218,26 @@ std::vector<uint64_t> read_raw_file(const std::string &path) {
 template <typename T> LayerVector<T> final_situation_process(
     const std::vector<uint64_t> &boards,
     const PatternSpec &spec,
-    int target
+    int target,
+    const std::string &success_rate_dtype
 ) {
     LayerVector<T> result(boards.size());
-    T max_scale = max_scale_value<T>();
+    const T max_scale = max_scale_value_for_dtype<T>(success_rate_dtype);
+    const T zero_val = zero_value_for_dtype<T>(success_rate_dtype);
     int num_threads = std::max(1, omp_get_max_threads());
     #pragma omp parallel for num_threads(num_threads)
     for (int64_t i = 0; i < static_cast<int64_t>(boards.size()); ++i) {
         result[static_cast<size_t>(i)].board = boards[static_cast<size_t>(i)];
         result[static_cast<size_t>(i)].success =
-            is_success_by_shifts(boards[static_cast<size_t>(i)], target, spec.success_shifts) ? max_scale : zero_value<T>();
+            is_success_by_shifts(boards[static_cast<size_t>(i)], target, spec.success_shifts) ? max_scale : zero_val;
     }
+    size_t count = 0U;
+    for (size_t i = 0; i < result.size(); ++i) {
+        if (result[i].success > zero_val) {
+            result[count++] = result[i];
+        }
+    }
+    result.resize(count);
     return result;
 }
 
@@ -242,8 +251,8 @@ template <typename T> std::pair<PatternLayer, PatternLayer> final_steps(
     LayerVector<T> layer0;
     LayerVector<T> layer1;
     if (started) {
-        layer0 = final_situation_process<T>(d0, spec, options.target);
-        layer1 = final_situation_process<T>(d1, spec, options.target);
+        layer0 = final_situation_process<T>(d0, spec, options.target, options.success_rate_dtype);
+        layer1 = final_situation_process<T>(d1, spec, options.target, options.success_rate_dtype);
         write_layer_file(options.pathname + std::to_string(options.steps - 2) + ".book", layer0);
         write_layer_file(options.pathname + std::to_string(options.steps - 1) + ".book", layer1);
     }
@@ -392,8 +401,8 @@ void recalculate_layer(
     const AdaptiveIndex::Index *ind2,
     bool do_check
 ) {
-    T max_scale = max_scale_value<T>();
-    T zero_val = zero_value<T>();
+    T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
+    T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
     int num_threads = effective_num_threads(options);
 
     #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 1024)
@@ -484,8 +493,8 @@ void recalculate_process_impl(
     ensure_stats_header<T>(options);
     bool started = false;
     AdaptiveIndex::Index ind1;
-    T zero_val = zero_value<T>();
-    T max_scale = max_scale_value<T>();
+    T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
+    T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
     bool has_index1 = false;
     const int index_threads = effective_num_threads(options);
     const uint32_t progress_total = classic_build_progress_total(options);
@@ -651,7 +660,7 @@ void keep_only_optimal_branches_impl(const PatternSpec &spec, const RunOptions &
     SplitLayer<T> d0;
     SplitLayer<T> d1;
     bool started = false;
-    T zero_val = zero_value<T>();
+    T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
     const uint32_t progress_total = classic_build_progress_total(options);
     const uint32_t solve_progress_total = build_progress_total(options);
 

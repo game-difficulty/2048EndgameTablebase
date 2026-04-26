@@ -410,7 +410,7 @@ std::pair<uint64_t, uint64_t> get_segment_position(const std::vector<TrieSegment
 }
 
 template <typename T>
-std::optional<double> trie_decompress_search_typed(const std::string &path_prefix, uint64_t board) {
+std::optional<double> trie_decompress_search_typed(const std::string &path_prefix, uint64_t board, T missing_value) {
     const fs::path prefix(path_prefix);
     const std::vector<TrieNode32> ind = read_binary_vector<TrieNode32>(prefix.string() + "i");
     const std::vector<TrieSegmentEntry> segments = read_binary_vector<TrieSegmentEntry>(prefix.string() + "s");
@@ -500,7 +500,7 @@ std::optional<double> trie_decompress_search_typed(const std::string &path_prefi
     if (sub_low < block_size && block[sub_low].lower32 == target) {
         return normalize_value(block[sub_low].success);
     }
-    return normalize_value(ValueTraits<T>::zero_value);
+    return normalize_value(missing_value);
 }
 
 template <typename T>
@@ -509,23 +509,24 @@ bool dispatch_trie_compress(const std::string &book_path) {
 }
 
 template <typename T>
-std::optional<double> dispatch_trie_search(const std::string &path_prefix, uint64_t board) {
-    return trie_decompress_search_typed<T>(path_prefix, board);
+std::optional<double> dispatch_trie_search(const std::string &path_prefix, uint64_t board, const std::string &success_rate_dtype) {
+    return trie_decompress_search_typed<T>(path_prefix, board, zero_value_for_dtype<T>(success_rate_dtype));
 }
 
 } // namespace
 
 bool trie_compress_progress_native(const std::string &book_path, const std::string &success_rate_dtype) {
-    if (success_rate_dtype == "uint64") {
-        return dispatch_trie_compress<uint64_t>(book_path);
+    switch (success_rate_kind_from_name(success_rate_dtype)) {
+        case SuccessRateKind::UInt64:
+            return dispatch_trie_compress<uint64_t>(book_path);
+        case SuccessRateKind::Float32:
+            return dispatch_trie_compress<float>(book_path);
+        case SuccessRateKind::Float64:
+            return dispatch_trie_compress<double>(book_path);
+        case SuccessRateKind::UInt32:
+        default:
+            return dispatch_trie_compress<uint32_t>(book_path);
     }
-    if (success_rate_dtype == "float32") {
-        return dispatch_trie_compress<float>(book_path);
-    }
-    if (success_rate_dtype == "float64") {
-        return dispatch_trie_compress<double>(book_path);
-    }
-    return dispatch_trie_compress<uint32_t>(book_path);
 }
 
 std::optional<double> trie_decompress_search_native(
@@ -533,14 +534,15 @@ std::optional<double> trie_decompress_search_native(
     uint64_t board,
     const std::string &success_rate_dtype
 ) {
-    if (success_rate_dtype == "uint64") {
-        return dispatch_trie_search<uint64_t>(path_prefix, board);
+    switch (success_rate_kind_from_name(success_rate_dtype)) {
+        case SuccessRateKind::UInt64:
+            return dispatch_trie_search<uint64_t>(path_prefix, board, success_rate_dtype);
+        case SuccessRateKind::Float32:
+            return dispatch_trie_search<float>(path_prefix, board, success_rate_dtype);
+        case SuccessRateKind::Float64:
+            return dispatch_trie_search<double>(path_prefix, board, success_rate_dtype);
+        case SuccessRateKind::UInt32:
+        default:
+            return dispatch_trie_search<uint32_t>(path_prefix, board, success_rate_dtype);
     }
-    if (success_rate_dtype == "float32") {
-        return dispatch_trie_search<float>(path_prefix, board);
-    }
-    if (success_rate_dtype == "float64") {
-        return dispatch_trie_search<double>(path_prefix, board);
-    }
-    return dispatch_trie_search<uint32_t>(path_prefix, board);
 }

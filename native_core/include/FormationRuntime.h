@@ -6,6 +6,7 @@
 #include <string>
 #include <atomic>
 #include <array>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -250,14 +251,18 @@ template <typename T> inline const std::vector<SuccessEntry<T>> &layer_as(const 
     return std::get<std::vector<SuccessEntry<T>>>(layer.storage);
 }
 
+inline bool is_one_minus_success_rate_dtype(const std::string &name) {
+    return name == "1-float32" || name == "1-float64";
+}
+
 inline SuccessRateKind success_rate_kind_from_name(const std::string &name) {
     if (name == "uint64") {
         return SuccessRateKind::UInt64;
     }
-    if (name == "float32") {
+    if (name == "float32" || name == "1-float32") {
         return SuccessRateKind::Float32;
     }
-    if (name == "float64") {
+    if (name == "float64" || name == "1-float64") {
         return SuccessRateKind::Float64;
     }
     return SuccessRateKind::UInt32;
@@ -283,4 +288,22 @@ template <> constexpr float max_scale_value<float>() {
 
 template <> constexpr double max_scale_value<double>() {
     return 1.0;
+}
+
+template <typename T> inline T zero_value_for_dtype(const std::string &name) {
+    if constexpr (std::is_floating_point_v<T>) {
+        if (is_one_minus_success_rate_dtype(name)) {
+            return static_cast<T>(-1);
+        }
+    }
+    return zero_value<T>();
+}
+
+template <typename T> inline T max_scale_value_for_dtype(const std::string &name) {
+    if constexpr (std::is_floating_point_v<T>) {
+        if (is_one_minus_success_rate_dtype(name)) {
+            return static_cast<T>(0);
+        }
+    }
+    return max_scale_value<T>();
 }

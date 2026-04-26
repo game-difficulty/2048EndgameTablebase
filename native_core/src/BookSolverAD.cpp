@@ -468,9 +468,9 @@ size_t search_arr_ad(const std::vector<uint64_t> &arr, uint64_t board, const Ada
     return binary_search_arr_ad(arr, board, range.begin, range.end - 1U);
 }
 
-template <typename T> std::pair<size_t, T> length_count(const BookStore<T> &book_dict) {
+template <typename T> std::pair<size_t, T> length_count(const BookStore<T> &book_dict, T zero_val) {
     size_t length = 0;
-    T max_rate = zero_value<T>();
+    T max_rate = zero_val;
     for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
         const auto &bucket = book_dict.at(key);
         length += bucket.rows * bucket.cols;
@@ -1878,8 +1878,8 @@ void recalculate_process_ad_chunked_impl(
     const AdvancedMaskParam param = FormationAD::build_mask_param(spec);
     const FormationAD::MaskerContext masker = FormationAD::init_masker(spec);
     const uint32_t ini_board_sum = arr_init.empty() ? 0U : board_sum(arr_init.front());
-    const T max_scale = max_scale_value<T>();
-    const T zero_val = zero_value<T>();
+    const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
+    const T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
     const T deletion_threshold = static_cast<T>(options.deletion_threshold * static_cast<double>(max_scale - zero_val) + zero_val);
     const int num_threads = effective_num_threads(options);
 
@@ -2065,8 +2065,8 @@ void recalculate_process_ad_impl(
     const AdvancedMaskParam param = FormationAD::build_mask_param(spec);
     const FormationAD::MaskerContext masker = FormationAD::init_masker(spec);
     const uint32_t ini_board_sum = arr_init.empty() ? 0U : board_sum(arr_init.front());
-    const T max_scale = max_scale_value<T>();
-    const T zero_val = zero_value<T>();
+    const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
+    const T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
     const T deletion_threshold = static_cast<T>(options.deletion_threshold * static_cast<double>(max_scale - zero_val) + zero_val);
     const int num_threads = effective_num_threads(options);
 
@@ -2169,7 +2169,7 @@ void recalculate_process_ad_impl(
             num_threads,
             match_dict
         );
-        auto [length, max_rate] = length_count(book_dict0);
+        auto [length, max_rate] = length_count(book_dict0, zero_val);
         double normalized_max_rate = static_cast<double>(max_rate - zero_val) / static_cast<double>(max_scale - zero_val);
         double t2 = wall_time_seconds();
 

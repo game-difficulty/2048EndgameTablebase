@@ -197,10 +197,10 @@ DTypeInfo dtype_info_for_name(const std::string &name) {
         return {SuccessRateKind::Float64, 1.0, 0.0};
     }
     if (name == "1-float32") {
-        return {SuccessRateKind::Float32, 1.0, -1.0};
+        return {SuccessRateKind::Float32, 0.0, -1.0};
     }
     if (name == "1-float64") {
-        return {SuccessRateKind::Float64, 1.0, -1.0};
+        return {SuccessRateKind::Float64, 0.0, -1.0};
     }
     return {SuccessRateKind::UInt32, 4e9, 0.0};
 }
