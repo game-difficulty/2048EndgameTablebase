@@ -1,5 +1,9 @@
 #include "x86simdsort.h"
+
+#include <algorithm>
 #include <cstdint>
+
+#include "UniqueUtils.h"
 
 #if defined(_WIN32)
 #define SORT_WRAPPER_EXPORT extern "C" __declspec(dllexport)
@@ -8,7 +12,22 @@
 #endif
 
 SORT_WRAPPER_EXPORT void sort_uint64(uint64_t *arr, size_t arrsize, bool descending) {
-        x86simdsort::qsort<uint64_t>(arr, arrsize, false, descending);
+    if (arr == nullptr || arrsize < 2) {
+        return;
+    }
+
+    if (!UniqueUtils::cpu_has_avx2()) {
+        if (descending) {
+            std::sort(arr, arr + arrsize, [](uint64_t lhs, uint64_t rhs) {
+                return lhs > rhs;
+            });
+            return;
+        }
+        std::sort(arr, arr + arrsize);
+        return;
+    }
+
+    x86simdsort::qsort<uint64_t>(arr, arrsize, false, descending);
 }
 
 // This wrapper is linked into the canonical `bookgen_native` target.

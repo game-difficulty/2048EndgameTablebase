@@ -6,6 +6,20 @@
 template <typename vtype, typename maskType>
 typename vtype::opmask_t convert_int_to_mask(maskType mask);
 
+template <typename vtype, typename maskType>
+X86_SIMD_SORT_INLINE typename vtype::opmask_t convert_int_to_mask(maskType mask)
+{
+    if constexpr (vtype::vec_type == simd_type::AVX512) {
+        return mask;
+    }
+    else if constexpr (vtype::vec_type == simd_type::AVX2) {
+        return vtype::convert_int_to_mask(mask);
+    }
+    else {
+        static_assert(always_false<maskType>, "Error in func convert_int_to_mask");
+    }
+}
+
 template <typename vtype, typename reg_t, typename opmask_t>
 X86_SIMD_SORT_INLINE reg_t cmp_merge(reg_t in1, reg_t in2, opmask_t mask);
 

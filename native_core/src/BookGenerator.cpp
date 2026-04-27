@@ -55,7 +55,7 @@ bool supports_avx512() {
     return UniqueUtils::cpu_has_avx512_dq_bw_vl();
 }
 
-__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
+__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl"), noinline))
 inline __m512i simd_hash(__m512i v) {
     // 严格匹配 BookGeneratorUtils::hash_board 的两轮混合逻辑
     __m512i v_xor = _mm512_xor_epi64(v, _mm512_srli_epi64(v, 27));
@@ -66,7 +66,7 @@ inline __m512i simd_hash(__m512i v) {
     return _mm512_add_epi64(_mm512_add_epi64(v_mix_mul, _mm512_srli_epi64(v_mix, 23)), v_mix);
 }
 
-__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
+__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl"), noinline))
 inline void process_buf_avx512(uint64_t *buf, uint64_t *hmap, uint64_t *target_arr, size_t &counter, uint64_t mask) {
     #pragma GCC unroll 16
     for (int i = 0; i < 128; i += 8) {
@@ -534,7 +534,7 @@ GenBoardsResult gen_boards_internal_naive(
 }
 
 template <typename Mover>
-__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
+__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl"), noinline))
 GenBoardsResult gen_boards_internal_avx512(
     const uint64_t *arr0, size_t arr0_size,
     int target,

@@ -64,35 +64,7 @@ inline size_t lower_bound_scalar(const uint64_t *arr, size_t length, uint64_t ta
 }
 
 inline bool cpu_has_avx2_uncached() {
-#if defined(__x86_64__) || defined(__i386)
-    __builtin_cpu_init();
-    return __builtin_cpu_supports("avx2");
-#elif defined(_M_X64) || defined(_M_IX86)
-    int cpu_info[4] = {0, 0, 0, 0};
-    __cpuidex(cpu_info, 0, 0);
-    if (cpu_info[0] < 7) {
-        return false;
-    }
-
-    int xsave_info[4] = {0, 0, 0, 0};
-    __cpuidex(xsave_info, 1, 0);
-    if ((xsave_info[2] & (1 << 27)) == 0) {
-        return false;
-    }
-
-    const unsigned long long xcr0 = _xgetbv(0);
-    const bool xmm_state = (xcr0 & 0x2u) != 0;
-    const bool ymm_state = (xcr0 & 0x4u) != 0;
-    if (!(xmm_state && ymm_state)) {
-        return false;
-    }
-
-    int ext_info[4] = {0, 0, 0, 0};
-    __cpuidex(ext_info, 7, 0);
-    return (ext_info[1] & (1 << 5)) != 0;
-#else
-    return false;
-#endif
+    return UniqueUtils::cpu_has_avx2();
 }
 
 inline bool cpu_has_avx512_uncached() {
@@ -100,7 +72,7 @@ inline bool cpu_has_avx512_uncached() {
 }
 
 #if defined(__GNUC__) || defined(__clang__)
-__attribute__((target("avx2")))
+__attribute__((target("avx2"), noinline))
 #endif
 size_t linear_lower_bound_avx2(const uint64_t *arr, size_t length, uint64_t target) {
     const __m128i sign = _mm_set1_epi64x(static_cast<long long>(0x8000000000000000ULL));
@@ -130,7 +102,7 @@ size_t linear_lower_bound_avx2(const uint64_t *arr, size_t length, uint64_t targ
 }
 
 #if defined(__GNUC__) || defined(__clang__)
-__attribute__((target("avx512f")))
+__attribute__((target("avx512f"), noinline))
 #endif
 size_t linear_lower_bound_avx512(const uint64_t *arr, size_t length, uint64_t target) {
     const __m512i sign = _mm512_set1_epi64(static_cast<long long>(0x8000000000000000ULL));

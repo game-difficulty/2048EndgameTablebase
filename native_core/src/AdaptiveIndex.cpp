@@ -1,4 +1,5 @@
 #include "AdaptiveIndex.h"
+#include "UniqueUtils.h"
 
 #include <algorithm>
 #include <immintrin.h>
@@ -125,16 +126,11 @@ void build_sub_rank(const uint16_t *values, uint32_t count, BitRank4096 &map) {
 }
 
 bool cpu_supports_avx2() {
-#if defined(__GNUC__) || defined(__clang__)
-    static const bool supported = __builtin_cpu_supports("avx2");
-    return supported;
-#else
-    return false;
-#endif
+    return UniqueUtils::cpu_has_avx2();
 }
 
 #if defined(__GNUC__) || defined(__clang__)
-__attribute__((target("avx2")))
+__attribute__((target("avx2"), noinline))
 #endif
 void build_sub_rank_avx2(const uint16_t *values, uint32_t count, BitRank4096 &map) {
     clear_sub_rank(map);
