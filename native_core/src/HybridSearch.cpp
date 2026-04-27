@@ -72,7 +72,7 @@ inline bool cpu_has_avx512_uncached() {
 }
 
 #if defined(__GNUC__) || defined(__clang__)
-__attribute__((target("avx2"), noinline))
+__attribute__((target("avx2")))
 #endif
 size_t linear_lower_bound_avx2(const uint64_t *arr, size_t length, uint64_t target) {
     const __m128i sign = _mm_set1_epi64x(static_cast<long long>(0x8000000000000000ULL));
@@ -102,7 +102,7 @@ size_t linear_lower_bound_avx2(const uint64_t *arr, size_t length, uint64_t targ
 }
 
 #if defined(__GNUC__) || defined(__clang__)
-__attribute__((target("avx512f"), noinline))
+__attribute__((target("avx512f")))
 #endif
 size_t linear_lower_bound_avx512(const uint64_t *arr, size_t length, uint64_t target) {
     const __m512i sign = _mm512_set1_epi64(static_cast<long long>(0x8000000000000000ULL));

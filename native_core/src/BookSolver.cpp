@@ -501,13 +501,13 @@ void recalculate_process_impl(
     const uint32_t solve_progress_total = build_progress_total(options);
 
     for (int i = options.steps - 3; i >= 0; --i) {
-        if (!handle_restart_recalculate(i, d1, d2, started, options)) {
-            continue;
-        }
         FormationProgress::update_build_progress(
             solve_progress_total - static_cast<uint32_t>(i) - 2U,
             progress_total
         );
+        if (!handle_restart_recalculate(i, d1, d2, started, options)) {
+            continue;
+        }
 
         if (options.compress_temp_files) {
             maybe_decompress_with_7z(options.pathname + std::to_string(i) + ".7z");

@@ -398,15 +398,46 @@ std::pair<size_t, size_t> search_trie_range(const std::vector<TrieNode32> &ind, 
 std::pair<uint64_t, uint64_t> get_segment_position(const std::vector<TrieSegmentEntry> &segments, uint32_t pos) {
     size_t low = 0;
     size_t high = segments.size() - 1ULL;
+    uint64_t start = 0ULL;
+    uint64_t end = 0ULL;
     while (low <= high) {
         const size_t mid = (low + high) / 2ULL;
         if (segments[mid].index < pos) {
             low = mid + 1ULL;
         } else {
-            return {segments[mid - 1].file_offset, segments[mid].file_offset};
+            start = segments[mid - 1ULL].file_offset;
+            end = segments[mid].file_offset;
+            if (mid == 0ULL) {
+                break;
+            }
+            high = mid - 1ULL;
         }
     }
-    return {0ULL, 0ULL};
+    return {start, end};
+}
+
+bool search_ind3_relative_position(const std::vector<TrieNode16> &ind3_seg, uint8_t target_prefix, size_t &pos) {
+    if (ind3_seg.size() <= 1ULL) {
+        return false;
+    }
+    size_t low = 1ULL;
+    size_t high = ind3_seg.size() - 1ULL;
+    while (low <= high) {
+        const size_t mid = (low + high) / 2ULL;
+        if (ind3_seg[mid].key == target_prefix) {
+            pos = mid - 1ULL;
+            return true;
+        }
+        if (ind3_seg[mid].key < target_prefix) {
+            low = mid + 1ULL;
+        } else {
+            if (mid == 0ULL) {
+                break;
+            }
+            high = mid - 1ULL;
+        }
+    }
+    return false;
 }
 
 template <typename T>
@@ -438,27 +469,8 @@ std::optional<double> trie_decompress_search_typed(const std::string &path_prefi
     );
 
     const uint8_t target_prefix = static_cast<uint8_t>((board >> 32U) & 0xFFU);
-    size_t last_pos = 0;
-    bool found = false;
-    size_t last_low = 0;
-    size_t last_high = ind3_seg.size() - 2ULL;
-    while (last_low <= last_high) {
-        last_pos = (last_low + last_high) / 2ULL + 1ULL;
-        if (ind3_seg[last_pos].key == target_prefix) {
-            found = true;
-            last_pos -= 1ULL;
-            break;
-        }
-        if (ind3_seg[last_pos].key < target_prefix) {
-            last_low = (last_pos - 1ULL) + 1ULL;
-        } else {
-            if (last_pos <= 1ULL) {
-                break;
-            }
-            last_high = (last_pos - 1ULL) - 1ULL;
-        }
-    }
-    if (!found) {
+    size_t last_pos = 0ULL;
+    if (!search_ind3_relative_position(ind3_seg, target_prefix, last_pos)) {
         return std::nullopt;
     }
 
@@ -474,6 +486,9 @@ std::optional<double> trie_decompress_search_typed(const std::string &path_prefi
     }
     std::vector<uint8_t> decompressed = decompress_xz_block_native(compressed.data(), compressed.size());
     using BlockEntry = CompactBookEntry<T>;
+    if (decompressed.size() % sizeof(BlockEntry) != 0U) {
+        return std::nullopt;
+    }
     const BlockEntry *block = reinterpret_cast<const BlockEntry *>(decompressed.data());
     const size_t block_size = decompressed.size() / sizeof(BlockEntry);
     const uint32_t target = static_cast<uint32_t>(board & 0xFFFFFFFFULL);

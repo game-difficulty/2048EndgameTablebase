@@ -1908,6 +1908,10 @@ void recalculate_process_ad_chunked_impl(
     const uint32_t progress_total = build_progress_total(options);
 
     for (int step = options.steps - 3; step >= 0; --step) {
+        FormationProgress::update_build_progress(
+            progress_total - static_cast<uint32_t>(step) - 2U,
+            progress_total
+        );
         const std::string solved_folder = options.pathname + std::to_string(step) + "b";
         if (fs::exists(solved_folder)) {
             if (options.compress) {
@@ -1925,11 +1929,6 @@ void recalculate_process_ad_chunked_impl(
                 remove_died_ad(book_dict2, ind_dict2, zero_val, remove_workspace);
             }
         }
-        FormationProgress::update_build_progress(
-            progress_total - static_cast<uint32_t>(step) - 2U,
-            progress_total
-        );
-
         const uint32_t original_board_sum = static_cast<uint32_t>(2 * step) + ini_board_sum;
         if (options.compress_temp_files) {
             maybe_decompress_with_7z(options.pathname + std::to_string(step) + ".7z");
@@ -2096,6 +2095,10 @@ void recalculate_process_ad_impl(
     const uint32_t progress_total = build_progress_total(options);
 
     for (int step = options.steps - 3; step >= 0; --step) {
+        FormationProgress::update_build_progress(
+            progress_total - static_cast<uint32_t>(step) - 2U,
+            progress_total
+        );
         const std::string solved_folder = options.pathname + std::to_string(step) + "b";
         if (fs::exists(solved_folder)) {
             if (options.compress) {
@@ -2112,11 +2115,6 @@ void recalculate_process_ad_impl(
                 dict_fromfile(options, step + 2, book_dict2, ind_dict2);
             }
         }
-        FormationProgress::update_build_progress(
-            progress_total - static_cast<uint32_t>(step) - 2U,
-            progress_total
-        );
-
         if (options.compress_temp_files) {
             maybe_decompress_with_7z(options.pathname + std::to_string(step) + ".7z");
         }

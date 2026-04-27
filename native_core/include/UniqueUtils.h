@@ -191,7 +191,7 @@ inline size_t popcount_mask(unsigned mask) {
 #if defined(__GNUC__) || defined(__clang__)
 // Compare each lane with its predecessor and let compress-store pack
 // the surviving uint64 lanes contiguously without per-element branches.
-__attribute__((target("avx512f"), noinline))
+__attribute__((target("avx512f")))
 inline size_t unique_sorted_u64_avx512(uint64_t *data, size_t size) {
     if (data == nullptr || size == 0) {
         return 0;

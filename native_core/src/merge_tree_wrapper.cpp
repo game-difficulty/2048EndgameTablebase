@@ -108,7 +108,7 @@ using U64Vec = zmm_vector<uint64_t>;
 using U64Comparator = Comparator<U64Vec, false>;
 using U64Reg = U64Vec::reg_t;
 
-__attribute__((target("avx512f"), noinline))
+__attribute__((target("avx512f")))
 inline U64Reg sort_block_prefix_8x8(U64Reg left_vec, U64Reg right_vec) {
     U64Reg regs[2];
     regs[0] = left_vec;
@@ -117,19 +117,19 @@ inline U64Reg sort_block_prefix_8x8(U64Reg left_vec, U64Reg right_vec) {
     return regs[0];
 }
 
-__attribute__((target("avx512f"), noinline))
+__attribute__((target("avx512f")))
 inline U64Reg previous_lanes_8x8(U64Reg value) {
     const __m512i previous_index = U64Vec::seti(6, 5, 4, 3, 2, 1, 0, 0);
     return U64Vec::permutexvar(previous_index, value);
 }
 
-__attribute__((target("avx512f"), noinline))
+__attribute__((target("avx512f")))
 inline U64Reg broadcast_last_lane_8x8(U64Reg value) {
     const __m512i last_index = U64Vec::seti(7, 7, 7, 7, 7, 7, 7, 7);
     return U64Vec::permutexvar(last_index, value);
 }
 
-__attribute__((target("avx512f"), noinline))
+__attribute__((target("avx512f")))
 inline void count_prefix_consumed_8x8(U64Reg left_vec,
                                       U64Reg right_vec,
                                       U64Reg sorted_low,
@@ -152,7 +152,7 @@ inline void count_prefix_consumed_8x8(U64Reg left_vec,
     consume_right = 8 - consume_left;
 }
 
-__attribute__((target("avx512f"), noinline))
+__attribute__((target("avx512f")))
 inline void emit_unique_sorted_vec(U64Reg sorted_low,
                                    uint64_t *output,
                                    size_t &out,
@@ -174,7 +174,7 @@ inline void emit_unique_sorted_vec(U64Reg sorted_low,
     last = U64Vec::reducemax(sorted_low);
 }
 
-__attribute__((target("avx512f"), noinline))
+__attribute__((target("avx512f")))
 size_t merge_two_avx512_dedup(const uint64_t *left,
                               size_t left_len,
                               const uint64_t *right,
