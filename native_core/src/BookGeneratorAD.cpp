@@ -119,12 +119,43 @@ std::pair<uint64_t, int> apply_sym_pair(uint64_t board, int symm_mode) {
     }
 }
 
-std::vector<uint64_t> read_raw_file(const std::string &path) {
-    return FileIOUtils::read_binary_vector<uint64_t>(path);
+std::vector<uint64_t> read_raw_file(const std::string &path, FileIOUtils::DirectIoConfig config) {
+    const double t0 = wall_time_seconds();
+    std::vector<uint64_t> data = FileIOUtils::read_binary_vector_direct<uint64_t>(path, config);
+    const double t1 = wall_time_seconds();
+    const double elapsed = std::max(t1 - t0, 1e-12);
+    const uint64_t bytes = static_cast<uint64_t>(data.size()) * static_cast<uint64_t>(sizeof(uint64_t));
+    std::ostringstream oss;
+    oss << "ad raw read path=" << path
+        << " bytes=" << bytes
+        << " direct_io=" << (config.enabled ? 1 : 0)
+        << " qd=" << config.queue_depth
+        << " chunk_mib=" << config.chunk_mib
+        << " seconds=" << round_to_2(elapsed)
+        << " gibps=" << round_to_2(static_cast<double>(bytes) / elapsed / 1024.0 / 1024.0 / 1024.0);
+    debug_log(oss.str());
+    return data;
 }
 
-void write_raw_file(const std::string &path, const std::vector<uint64_t> &data) {
-    FileIOUtils::write_binary_vector(path, data);
+void write_raw_file(
+    const std::string &path,
+    const std::vector<uint64_t> &data,
+    FileIOUtils::DirectIoConfig config
+) {
+    const double t0 = wall_time_seconds();
+    FileIOUtils::write_binary_vector_direct(path, data, config);
+    const double t1 = wall_time_seconds();
+    const double elapsed = std::max(t1 - t0, 1e-12);
+    const uint64_t bytes = static_cast<uint64_t>(data.size()) * static_cast<uint64_t>(sizeof(uint64_t));
+    std::ostringstream oss;
+    oss << "ad raw write path=" << path
+        << " bytes=" << bytes
+        << " direct_io=" << (config.enabled ? 1 : 0)
+        << " qd=" << config.queue_depth
+        << " chunk_mib=" << config.chunk_mib
+        << " seconds=" << round_to_2(elapsed)
+        << " gibps=" << round_to_2(static_cast<double>(bytes) / elapsed / 1024.0 / 1024.0 / 1024.0);
+    debug_log(oss.str());
 }
 
 std::vector<std::vector<double>> load_length_factors(const std::string &path, double default_value) {
@@ -357,7 +388,13 @@ std::pair<std::vector<std::vector<double>>, double> update_parameters_big(
     return {length_factors_list, length_factor_multiplier};
 }
 
-RestartResult handle_restart_ad(int step_index, const std::string &pathname, const std::vector<uint64_t> &arr_init, bool started) {
+RestartResult handle_restart_ad(
+    int step_index,
+    const std::string &pathname,
+    const std::vector<uint64_t> &arr_init,
+    bool started,
+    FileIOUtils::DirectIoConfig io_config
+) {
     const std::string path_i = pathname + std::to_string(step_index);
     const std::string path_i_plus_1 = pathname + std::to_string(step_index + 1);
     const std::string path_i_minus_1 = pathname + std::to_string(step_index - 1);
@@ -372,11 +409,11 @@ RestartResult handle_restart_ad(int step_index, const std::string &pathname, con
         return {};
     }
     if (step_index == 1) {
-        write_raw_file(path_i_minus_1, arr_init);
+        write_raw_file(path_i_minus_1, arr_init, io_config);
         return {true, true, arr_init, {}};
     }
     if (!started) {
-        return {true, true, read_raw_file(path_i_minus_1), read_raw_file(path_i)};
+        return {true, true, read_raw_file(path_i_minus_1, io_config), read_raw_file(path_i, io_config)};
     }
     return {true, true, {}, {}};
 }
@@ -1245,9 +1282,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
         board = FormationAD::mask_board(board);
     }
     const uint32_t progress_total = build_progress_total(options);
+    const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
 
     for (int i = 1; i < options.steps - 1; ++i) {
-        RestartResult restart = handle_restart_ad(i, options.pathname, arr_init, started);
+        RestartResult restart = handle_restart_ad(i, options.pathname, arr_init, started, io_config);
         if (!restart.run) {
             continue;
         }
@@ -1348,7 +1386,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
         }
 
         clear_u64_buffer(hashmap1, n);
-        write_raw_file(options.pathname + std::to_string(i), d0);
+        write_raw_file(options.pathname + std::to_string(i), d0, io_config);
         if (options.compress_temp_files && i > 5) {
             maybe_compress_with_7z(options.pathname + std::to_string(i - 2));
         }

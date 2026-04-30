@@ -24,6 +24,10 @@ namespace {
 constexpr size_t kTrieParallelThreshold = 2097152ULL;
 constexpr size_t kTrieBlockTarget = 32768ULL;
 
+FileIOUtils::DirectIoConfig trie_direct_io_config() {
+    return FileIOUtils::normalize_direct_io_config(FileIOUtils::DirectIoConfig{true, 16U, 8U});
+}
+
 #pragma pack(push, 1)
 struct TrieNode32 {
     uint8_t key;
@@ -113,7 +117,7 @@ void write_binary_vector(const fs::path &path, const std::vector<T> &data) {
 
 template <typename T>
 std::vector<T> read_binary_vector(const fs::path &path) {
-    return FileIOUtils::read_binary_vector<T>(path);
+    return FileIOUtils::read_binary_vector_direct<T>(path, trie_direct_io_config());
 }
 
 template <typename T>
@@ -299,7 +303,8 @@ std::vector<TrieSegmentEntry> compress_and_save_parallel(
 template <typename T>
 bool trie_compress_typed(const std::string &book_path) {
     const fs::path input_path(book_path);
-    std::vector<SuccessEntry<T>> rows = FileIOUtils::read_binary_vector<SuccessEntry<T>>(input_path);
+    std::vector<SuccessEntry<T>> rows =
+        FileIOUtils::read_binary_vector_direct<SuccessEntry<T>>(input_path, trie_direct_io_config());
     const size_t size = rows.size() * sizeof(SuccessEntry<T>);
     if (size == 0 || size % sizeof(SuccessEntry<T>) != 0) {
         return false;

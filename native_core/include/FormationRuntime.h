@@ -36,6 +36,9 @@ struct RunOptions {
     bool optimal_branch_only = false;
     bool chunked_solve = false;
     int num_threads = 0;
+    bool direct_io = false;
+    int direct_io_queue_depth = 16;
+    int direct_io_chunk_mib = 8;
 };
 
 [[nodiscard]] inline uint32_t build_progress_total(const RunOptions &options) {

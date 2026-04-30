@@ -18,6 +18,10 @@ bool has_suffix(const std::string &value, const std::string &suffix) {
            value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+FileIOUtils::DirectIoConfig compression_direct_io_config() {
+    return FileIOUtils::normalize_direct_io_config(FileIOUtils::DirectIoConfig{true, 16U, 8U});
+}
+
 } // namespace
 
 void maybe_compress_with_7z(const std::string &path) {
@@ -67,7 +71,8 @@ void maybe_do_compress_ad(const std::string &folder_path) {
         const fs::path base_path = index_path.parent_path() / index_path.stem();
         const fs::path zi_path = base_path;
         if (!fs::exists(zi_path.string() + ".zi")) {
-            std::vector<uint64_t> data = FileIOUtils::read_binary_vector<uint64_t>(index_path.string());
+            std::vector<uint64_t> data =
+                FileIOUtils::read_binary_vector_direct<uint64_t>(index_path.string(), compression_direct_io_config());
             compress_uint64_array_native(data, base_path.string(), 1);
         }
         if (fs::exists(index_path) && fs::exists(zi_path.string() + ".zi")) {

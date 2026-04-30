@@ -154,65 +154,54 @@ std::string now_string() {
     return oss.str();
 }
 
-template <typename T> LayerVector<T> read_layer_file(const std::string &path) {
-    return FileIOUtils::read_binary_vector<SuccessEntry<T>>(path);
+template <typename T>
+LayerVector<T> read_layer_file(const std::string &path, FileIOUtils::DirectIoConfig config = {}) {
+    return FileIOUtils::read_binary_vector_direct<SuccessEntry<T>>(path, config);
 }
 
-template <typename T> SplitLayer<T> read_split_layer_file(const std::string &path) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file) {
-        return {};
-    }
-    const size_t size = static_cast<size_t>(file.tellg());
-    if (size == 0U) {
-        return {};
-    }
-    file.seekg(0, std::ios::beg);
-    const size_t count = size / sizeof(SuccessEntry<T>);
-    SplitLayer<T> layer = allocate_split_layer<T>(count);
-    std::unique_ptr<SuccessEntry<T>[]> buffer(new SuccessEntry<T>[io_chunk_entries<T>()]);
+template <typename T>
+SplitLayer<T> read_split_layer_file(const std::string &path, FileIOUtils::DirectIoConfig config = {}) {
+    return split_layer_from_entries<T>(read_layer_file<T>(path, config));
+}
 
-    size_t offset = 0U;
-    while (offset < count) {
-        const size_t current = std::min(io_chunk_entries<T>(), count - offset);
-        const size_t bytes = current * sizeof(SuccessEntry<T>);
-        FileIOUtils::read_exact(file, buffer.get(), bytes, path);
-        for (size_t j = 0; j < current; ++j) {
-            layer.boards[offset + j] = buffer[j].board;
-            layer.success[offset + j] = buffer[j].success;
+template <typename T>
+void write_layer_file(
+    const std::string &path,
+    const LayerVector<T> &data,
+    FileIOUtils::DirectIoConfig config = {}
+) {
+    FileIOUtils::write_binary_vector_direct(path, data, config);
+}
+
+template <typename T>
+void write_layer_file(
+    const std::string &path,
+    const SplitLayer<T> &data,
+    FileIOUtils::DirectIoConfig config = {}
+) {
+    FileIOUtils::DirectAppendWriter out(
+        path,
+        static_cast<uint64_t>(data.size()) * static_cast<uint64_t>(sizeof(SuccessEntry<T>)),
+        config
+    );
+    if (!data.empty()) {
+        std::unique_ptr<SuccessEntry<T>[]> buffer(new SuccessEntry<T>[io_chunk_entries<T>()]);
+        size_t offset = 0U;
+        while (offset < data.size()) {
+            const size_t current = std::min(io_chunk_entries<T>(), data.size() - offset);
+            for (size_t j = 0; j < current; ++j) {
+                buffer[j].board = data.boards[offset + j];
+                buffer[j].success = data.success[offset + j];
+            }
+            out.append(buffer.get(), current * sizeof(SuccessEntry<T>));
+            offset += current;
         }
-        offset += current;
     }
-    return layer;
+    out.close();
 }
 
-template <typename T> void write_layer_file(const std::string &path, const LayerVector<T> &data) {
-    FileIOUtils::write_binary_vector(path, data);
-}
-
-template <typename T> void write_layer_file(const std::string &path, const SplitLayer<T> &data) {
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    if (!file) {
-        return;
-    }
-    if (data.empty()) {
-        return;
-    }
-    std::unique_ptr<SuccessEntry<T>[]> buffer(new SuccessEntry<T>[io_chunk_entries<T>()]);
-    size_t offset = 0U;
-    while (offset < data.size()) {
-        const size_t current = std::min(io_chunk_entries<T>(), data.size() - offset);
-        for (size_t j = 0; j < current; ++j) {
-            buffer[j].board = data.boards[offset + j];
-            buffer[j].success = data.success[offset + j];
-        }
-        FileIOUtils::write_exact(file, buffer.get(), current * sizeof(SuccessEntry<T>), path);
-        offset += current;
-    }
-}
-
-std::vector<uint64_t> read_raw_file(const std::string &path) {
-    return FileIOUtils::read_binary_vector<uint64_t>(path);
+std::vector<uint64_t> read_raw_file(const std::string &path, FileIOUtils::DirectIoConfig config = {}) {
+    return FileIOUtils::read_binary_vector_direct<uint64_t>(path, config);
 }
 
 template <typename T> LayerVector<T> final_situation_process(
@@ -253,8 +242,9 @@ template <typename T> std::pair<PatternLayer, PatternLayer> final_steps(
     if (started) {
         layer0 = final_situation_process<T>(d0, spec, options.target, options.success_rate_dtype);
         layer1 = final_situation_process<T>(d1, spec, options.target, options.success_rate_dtype);
-        write_layer_file(options.pathname + std::to_string(options.steps - 2) + ".book", layer0);
-        write_layer_file(options.pathname + std::to_string(options.steps - 1) + ".book", layer1);
+        const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
+        write_layer_file(options.pathname + std::to_string(options.steps - 2) + ".book", layer0, io_config);
+        write_layer_file(options.pathname + std::to_string(options.steps - 1) + ".book", layer1, io_config);
     }
     auto raw_path = options.pathname + std::to_string(options.steps - 2);
     if (fs::exists(raw_path)) {
@@ -476,8 +466,9 @@ bool handle_restart_recalculate(
     if (!started) {
         started = true;
         if (i != options.steps - 3 || d1.empty() || d2.empty()) {
-            d1 = read_split_layer_file<T>(options.pathname + std::to_string(i + 1) + ".book");
-            d2 = read_split_layer_file<T>(options.pathname + std::to_string(i + 2) + ".book");
+            const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
+            d1 = read_split_layer_file<T>(options.pathname + std::to_string(i + 1) + ".book", io_config);
+            d2 = read_split_layer_file<T>(options.pathname + std::to_string(i + 2) + ".book", io_config);
         }
     }
     return true;
@@ -499,6 +490,7 @@ void recalculate_process_impl(
     const int index_threads = effective_num_threads(options);
     const uint32_t progress_total = classic_build_progress_total(options);
     const uint32_t solve_progress_total = build_progress_total(options);
+    const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
 
     for (int i = options.steps - 3; i >= 0; --i) {
         FormationProgress::update_build_progress(
@@ -512,7 +504,7 @@ void recalculate_process_impl(
         if (options.compress_temp_files) {
             maybe_decompress_with_7z(options.pathname + std::to_string(i) + ".7z");
         }
-        std::vector<uint64_t> raw_layer = read_raw_file(options.pathname + std::to_string(i));
+        std::vector<uint64_t> raw_layer = read_raw_file(options.pathname + std::to_string(i), io_config);
         double t0 = wall_time_seconds();
         SplitLayer<T> d0 = make_split_layer_from_raw<T>(std::move(raw_layer));
 
@@ -552,7 +544,7 @@ void recalculate_process_impl(
                   << options.deletion_threshold << "," << now_string() << "\n";
         }
 
-        write_layer_file(options.pathname + std::to_string(i) + ".book", d0);
+        write_layer_file(options.pathname + std::to_string(i) + ".book", d0, io_config);
         auto raw_path = options.pathname + std::to_string(i);
         if (fs::exists(raw_path)) {
             fs::remove(raw_path);
@@ -561,7 +553,7 @@ void recalculate_process_impl(
         if (options.deletion_threshold > 0.0) {
             T threshold = static_cast<T>(options.deletion_threshold * static_cast<double>(max_scale - zero_val) + static_cast<double>(zero_val));
             compact_live_entries(d2, threshold, false);
-            write_layer_file(options.pathname + std::to_string(i + 2) + ".book", d2);
+            write_layer_file(options.pathname + std::to_string(i + 2) + ".book", d2, io_config);
         }
         if (options.compress_temp_files && options.optimal_branch_only) {
             maybe_compress_with_7z(options.pathname + std::to_string(i + 2) + ".book");
@@ -647,8 +639,9 @@ bool handle_restart_opt_only(
         if (!fs::exists(d0_path) || !fs::exists(d1_path)) {
             return false;
         }
-        d0 = read_split_layer_file<T>(d0_path);
-        d1 = read_split_layer_file<T>(d1_path);
+        const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
+        d0 = read_split_layer_file<T>(d0_path, io_config);
+        d1 = read_split_layer_file<T>(d1_path, io_config);
         started = true;
         return true;
     }
@@ -674,14 +667,17 @@ void keep_only_optimal_branches_impl(const PatternSpec &spec, const RunOptions &
             maybe_decompress_with_7z(options.pathname + std::to_string(i) + ".book.7z");
         }
         if (i > 20 && process_step) {
-            SplitLayer<T> d2 = read_split_layer_file<T>(options.pathname + std::to_string(i) + ".book");
+            SplitLayer<T> d2 = read_split_layer_file<T>(
+                options.pathname + std::to_string(i) + ".book",
+                FileIOUtils::direct_io_config_from_options(options)
+            );
             AdaptiveIndex::Index index = create_index(d2, effective_num_threads(options));
             std::vector<uint8_t> mask(d2.size(), 0);
             find_optimal_branches<T, Mover>(d0, d2, mask, spec, index.empty() ? nullptr : &index, 2, zero_val);
             find_optimal_branches<T, Mover>(d1, d2, mask, spec, index.empty() ? nullptr : &index, 1, zero_val);
 
             compact_by_mask(d2, mask, true);
-            write_layer_file(options.pathname + std::to_string(i) + ".book", d2);
+            write_layer_file(options.pathname + std::to_string(i) + ".book", d2, FileIOUtils::direct_io_config_from_options(options));
             d0 = std::move(d1);
             d1 = std::move(d2);
             debug_log("step " + std::to_string(i) + " retains only the optimal branch\n");

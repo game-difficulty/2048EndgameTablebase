@@ -249,12 +249,18 @@ uint64_t available_memory_bytes() {
 #endif
 }
 
-template <typename T> std::vector<T> read_binary_vector(const std::string &path) {
-    return FileIOUtils::read_binary_vector<T>(path);
+template <typename T>
+std::vector<T> read_binary_vector(const std::string &path, FileIOUtils::DirectIoConfig config = {}) {
+    return FileIOUtils::read_binary_vector_direct<T>(path, config);
 }
 
-template <typename T> void write_binary_vector(const std::string &path, const std::vector<T> &data) {
-    FileIOUtils::write_binary_vector(path, data);
+template <typename T>
+void write_binary_vector(
+    const std::string &path,
+    const std::vector<T> &data,
+    FileIOUtils::DirectIoConfig config = {}
+) {
+    FileIOUtils::write_binary_vector_direct(path, data, config);
 }
 
 template <typename T> void ensure_stats_header(const RunOptions &options) {
@@ -320,6 +326,7 @@ void dict_tofile(
 ) {
     const fs::path folder_path = options.pathname + std::to_string(step) + "b";
     fs::create_directories(folder_path);
+    const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
 
     for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
         const fs::path ind_filename = folder_path / (std::to_string(key) + ".i");
@@ -335,8 +342,8 @@ void dict_tofile(
             }
             continue;
         }
-        write_binary_vector<uint64_t>(ind_filename.string(), indices);
-        write_binary_vector<T>(book_filename.string(), book_bucket.data);
+        write_binary_vector<uint64_t>(ind_filename.string(), indices, io_config);
+        write_binary_vector<T>(book_filename.string(), book_bucket.data, io_config);
     }
 
     if (compress_indices && options.compress) {
@@ -355,6 +362,7 @@ void dict_fromfile(
     clear_index_store(ind_dict);
 
     const fs::path folder_path = options.pathname + std::to_string(step) + "b";
+    const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     if (!fs::exists(folder_path)) {
         throw std::runtime_error("Missing AD solve bucket folder: " + folder_path.string());
     }
@@ -377,7 +385,7 @@ void dict_fromfile(
             continue;
         }
         const int key = std::stoi(path.stem().string());
-        ind_dict.at(key) = read_binary_vector<uint64_t>(path.string());
+        ind_dict.at(key) = read_binary_vector<uint64_t>(path.string(), io_config);
     }
 
     for (const auto &entry : fs::directory_iterator(folder_path)) {
@@ -393,7 +401,7 @@ void dict_fromfile(
         if (indices.empty()) {
             continue;
         }
-        auto values = read_binary_vector<T>(path.string());
+        auto values = read_binary_vector<T>(path.string(), io_config);
         MatrixBucket<T> bucket;
         bucket.rows = indices.size();
         bucket.cols = bucket.rows == 0 ? 0 : (values.empty() ? 0 : values.size() / bucket.rows);
@@ -430,12 +438,13 @@ std::vector<int> write_ind_chunked(const IndexStore &ind_dict, const RunOptions 
 
     std::vector<int> keys;
     keys.reserve(bucket_slot_count());
+    const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
         const auto &indices = ind_dict.at(key);
         if (indices.empty()) {
             continue;
         }
-        write_binary_vector<uint64_t>((folder_path / (std::to_string(key) + ".i")).string(), indices);
+        write_binary_vector<uint64_t>((folder_path / (std::to_string(key) + ".i")).string(), indices, io_config);
         keys.push_back(key);
     }
     return keys;
@@ -1695,8 +1704,12 @@ void iter_ind_dict4(
     int num_threads
 ) {
     const fs::path folder = options.pathname + std::to_string(step) + "bt";
+    const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     for (int key : ind_dict0_keys) {
-        std::vector<uint64_t> positions_array = read_binary_vector<uint64_t>((folder / (std::to_string(key) + ".i")).string());
+        std::vector<uint64_t> positions_array = read_binary_vector<uint64_t>(
+            (folder / (std::to_string(key) + ".i")).string(),
+            io_config
+        );
         if (positions_array.empty()) {
             continue;
         }
@@ -1704,7 +1717,13 @@ void iter_ind_dict4(
         const uint64_t free_mem = available_memory_bytes();
         const uint64_t chunk_size = std::max<uint64_t>(1ULL << 28, static_cast<uint64_t>(static_cast<double>(free_mem) * 0.9 / static_cast<double>(sizeof(T))));
         const size_t chunk_length = std::max<size_t>(1U, static_cast<size_t>(chunk_size / std::max<size_t>(derive_size, 1U)));
-        std::ofstream out((folder / (std::to_string(key) + ".b")).string(), std::ios::binary | std::ios::trunc);
+        FileIOUtils::DirectAppendWriter out(
+            (folder / (std::to_string(key) + ".b")).string(),
+            static_cast<uint64_t>(positions_array.size()) *
+                static_cast<uint64_t>(derive_size) *
+                static_cast<uint64_t>(sizeof(T)),
+            io_config
+        );
         for (size_t start_idx = 0; start_idx < positions_array.size(); start_idx += chunk_length) {
             const double t0 = wall_time_seconds();
             const size_t end_idx = std::min(start_idx + chunk_length, positions_array.size());
@@ -1749,14 +1768,10 @@ void iter_ind_dict4(
             timer_acc += (t1 - t0);
             counter_acc += positions_chunk.size() * derive_size;
             if (!book_chunk.data.empty()) {
-                FileIOUtils::write_exact(
-                    out,
-                    book_chunk.data.data(),
-                    book_chunk.data.size() * sizeof(T),
-                    (folder / (std::to_string(key) + ".b")).string()
-                );
+                out.append(book_chunk.data.data(), book_chunk.data.size() * sizeof(T));
             }
         }
+        out.close();
     }
     (void)max_rate;
 }
@@ -1784,8 +1799,12 @@ void iter_ind_dict2(
     int num_threads
 ) {
     const fs::path folder = options.pathname + std::to_string(step) + "bt";
+    const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     for (int key : ind_dict0_keys) {
-        std::vector<uint64_t> positions_array = read_binary_vector<uint64_t>((folder / (std::to_string(key) + ".i")).string());
+        std::vector<uint64_t> positions_array = read_binary_vector<uint64_t>(
+            (folder / (std::to_string(key) + ".i")).string(),
+            io_config
+        );
         if (positions_array.empty()) {
             continue;
         }
@@ -1797,8 +1816,16 @@ void iter_ind_dict2(
         const uint64_t free_mem = available_memory_bytes();
         const uint64_t chunk_size = std::max<uint64_t>(1ULL << 28, static_cast<uint64_t>(static_cast<double>(free_mem) * 0.9 / static_cast<double>(sizeof(T))));
         const size_t chunk_length = std::max<size_t>(1U, static_cast<size_t>(chunk_size / std::max<size_t>(derive_size, 1U)));
+        const uint64_t logical_bytes =
+            static_cast<uint64_t>(positions_array.size()) *
+            static_cast<uint64_t>(derive_size) *
+            static_cast<uint64_t>(sizeof(T));
+        const std::string rewrite_path = book_path.string() + ".rewrite";
+        std::error_code remove_rewrite_error;
+        fs::remove(rewrite_path, remove_rewrite_error);
 
-        std::fstream file(book_path, std::ios::binary | std::ios::in | std::ios::out);
+        FileIOUtils::DirectSequentialReader input_file(book_path.string(), logical_bytes, io_config);
+        FileIOUtils::DirectAppendWriter output_file(rewrite_path, logical_bytes, io_config);
         for (size_t start_idx = 0; start_idx < positions_array.size(); start_idx += chunk_length) {
             const double t0 = wall_time_seconds();
             const size_t end_idx = std::min(start_idx + chunk_length, positions_array.size());
@@ -1809,15 +1836,8 @@ void iter_ind_dict2(
             MatrixBucket<T> book_chunk;
             book_chunk.resize(positions_chunk.size(), derive_size);
 
-            const std::streamoff offset = static_cast<std::streamoff>(start_idx * derive_size * sizeof(T));
-            file.seekg(offset, std::ios::beg);
             if (!book_chunk.data.empty()) {
-                FileIOUtils::read_exact(
-                    file,
-                    book_chunk.data.data(),
-                    book_chunk.data.size() * sizeof(T),
-                    book_path.string()
-                );
+                input_file.read(book_chunk.data.data(), book_chunk.data.size() * sizeof(T));
             }
 
             recalculate_ad_chunk(
@@ -1854,15 +1874,20 @@ void iter_ind_dict2(
             counter_acc += positions_chunk.size() * derive_size;
             if (!book_chunk.data.empty()) {
                 max_rate = std::max(max_rate, *std::max_element(book_chunk.data.begin(), book_chunk.data.end()));
-                file.seekp(offset, std::ios::beg);
-                FileIOUtils::write_exact(
-                    file,
+                output_file.append(
                     book_chunk.data.data(),
-                    book_chunk.data.size() * sizeof(T),
-                    book_path.string()
+                    book_chunk.data.size() * sizeof(T)
                 );
-                file.flush();
             }
+        }
+        input_file.close();
+        output_file.close();
+        std::error_code remove_original_error;
+        fs::remove(book_path, remove_original_error);
+        std::error_code rename_error;
+        fs::rename(rewrite_path, book_path, rename_error);
+        if (rename_error) {
+            throw std::runtime_error("failed to replace rewritten book file: " + book_path.string());
         }
     }
 }
@@ -1906,6 +1931,7 @@ void recalculate_process_ad_chunked_impl(
     std::unordered_map<uint32_t, MatchCache> match_dict;
     bool started = false;
     const uint32_t progress_total = build_progress_total(options);
+    const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
 
     for (int step = options.steps - 3; step >= 0; --step) {
         FormationProgress::update_build_progress(
@@ -1933,7 +1959,10 @@ void recalculate_process_ad_chunked_impl(
         if (options.compress_temp_files) {
             maybe_decompress_with_7z(options.pathname + std::to_string(step) + ".7z");
         }
-        std::vector<uint64_t> d0 = read_binary_vector<uint64_t>(options.pathname + std::to_string(step));
+        std::vector<uint64_t> d0 = read_binary_vector<uint64_t>(
+            options.pathname + std::to_string(step),
+            io_config
+        );
 
         BookStore<T> book_dict0_dummy;
         IndexStore ind_dict0;
@@ -2118,7 +2147,11 @@ void recalculate_process_ad_impl(
         if (options.compress_temp_files) {
             maybe_decompress_with_7z(options.pathname + std::to_string(step) + ".7z");
         }
-        std::vector<uint64_t> d0 = read_binary_vector<uint64_t>(options.pathname + std::to_string(step));
+        const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
+        std::vector<uint64_t> d0 = read_binary_vector<uint64_t>(
+            options.pathname + std::to_string(step),
+            io_config
+        );
         double t0 = wall_time_seconds();
 
         BookStore<T> book_dict0;

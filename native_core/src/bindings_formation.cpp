@@ -75,7 +75,10 @@ NB_MODULE(formation_core, m) {
         .def_rw("compress_temp_files", &RunOptions::compress_temp_files)
         .def_rw("optimal_branch_only", &RunOptions::optimal_branch_only)
         .def_rw("chunked_solve", &RunOptions::chunked_solve)
-        .def_rw("num_threads", &RunOptions::num_threads);
+        .def_rw("num_threads", &RunOptions::num_threads)
+        .def_rw("direct_io", &RunOptions::direct_io)
+        .def_rw("direct_io_queue_depth", &RunOptions::direct_io_queue_depth)
+        .def_rw("direct_io_chunk_mib", &RunOptions::direct_io_chunk_mib);
 
     nb::class_<AdvancedPatternSpec>(m, "AdvancedPatternSpec")
         .def(nb::init<>())

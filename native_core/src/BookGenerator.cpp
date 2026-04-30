@@ -342,7 +342,8 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> handle_restart(
     int step_index,
     const std::string &pathname,
     const std::vector<uint64_t> &arr_init,
-    bool started
+    bool started,
+    FileIOUtils::DirectIoConfig io_config
 ) {
     auto path_i = pathname + std::to_string(step_index);
     auto path_i_plus_1 = pathname + std::to_string(step_index + 1);
@@ -360,13 +361,13 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> handle_restart(
     }
 
     if (step_index == 1) {
-        FileIOUtils::write_binary_vector(path_i_minus_1, arr_init);
+        FileIOUtils::write_binary_vector_direct(path_i_minus_1, arr_init, io_config);
         return {true, arr_init, {}};
     }
 
     if (!started) {
-        auto read_raw = [](const std::string &path) {
-            return FileIOUtils::read_binary_vector<uint64_t>(path);
+        auto read_raw = [&io_config](const std::string &path) {
+            return FileIOUtils::read_binary_vector_direct<uint64_t>(path, io_config);
         };
         return {true, read_raw(path_i_minus_1), read_raw(path_i)};
     }
@@ -918,9 +919,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
     int num_threads = options.num_threads > 0 ? options.num_threads : std::max(4, std::min(32, omp_get_max_threads()));
     const uint32_t progress_total = classic_build_progress_total(options);
     auto init_params = initialize_parameters_internal(num_threads, options.pathname, options.is_free);
+    const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
 
     for (int i = 1; i < options.steps - 1; ++i) {
-        auto [run, restart_d0, restart_d1] = handle_restart(i, options.pathname, arr_init, started);
+        auto [run, restart_d0, restart_d1] = handle_restart(i, options.pathname, arr_init, started, io_config);
         if (!restart_d0.empty()) {
             d0 = std::move(restart_d0);
         }
@@ -1054,7 +1056,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             save_length_factors(init_params.length_factors_list_path, init_params.length_factors_list);
         }
 
-        FileIOUtils::write_binary_vector(options.pathname + std::to_string(i), d0);
+        FileIOUtils::write_binary_vector_direct(options.pathname + std::to_string(i), d0, io_config);
         if (options.compress_temp_files && i > 5) {
             maybe_compress_with_7z(options.pathname + std::to_string(i - 2));
         }

@@ -475,6 +475,9 @@ class SingletonConfig:
             "SmallTileSumLimit": 96,
             "advanced_algo": False,
             "chunked_solve": False,
+            "direct_io": True,
+            "direct_io_queue_depth": 16,
+            "direct_io_chunk_mib": 8,
             "deletion_threshold": 0.0,
             "notebook_threshold": 0.999,
             "font_size_factor": 100,
@@ -499,6 +502,14 @@ class SingletonConfig:
                     for k, v in defaults.items():
                         if k not in data:
                             data[k] = v
+                            updated = True
+                    for direct_io_key in (
+                        "direct_io",
+                        "direct_io_queue_depth",
+                        "direct_io_chunk_mib",
+                    ):
+                        if data.get(direct_io_key) != defaults[direct_io_key]:
+                            data[direct_io_key] = defaults[direct_io_key]
                             updated = True
                     normalized_deletion_threshold = normalize_deletion_threshold(
                         data.get("deletion_threshold", defaults["deletion_threshold"])

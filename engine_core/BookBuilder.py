@@ -66,6 +66,9 @@ def _build_native_run_options(
     options.compress_temp_files = bool(config.get("compress_temp_files", False))
     options.optimal_branch_only = bool(config.get("optimal_branch_only", False))
     options.chunked_solve = bool(config.get("chunked_solve", False))
+    options.direct_io = bool(config.get("direct_io", True))
+    options.direct_io_queue_depth = int(config.get("direct_io_queue_depth", 16))
+    options.direct_io_chunk_mib = int(config.get("direct_io_chunk_mib", 8))
     options.num_threads = int(max(4, min(32, os.cpu_count() or 2)))
     return options
 
@@ -131,6 +134,9 @@ def save_config_to_txt(output_path: str) -> None:
         "optimal_branch_only",
         "compress_temp_files",
         "advanced_algo",
+        "direct_io",
+        "direct_io_queue_depth",
+        "direct_io_chunk_mib",
         "deletion_threshold",
         "4_spawn_rate",
         "success_rate_dtype",

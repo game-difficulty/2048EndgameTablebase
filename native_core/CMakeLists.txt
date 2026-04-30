@@ -137,6 +137,7 @@ nanobind_add_module(mover_core ${MOVER_CORE_SOURCES})
 target_link_libraries(mover_core PRIVATE common_config)
 
 set(FORMATION_CORE_SOURCES
+    src/FileIOUtils.cpp
     src/CompressionBridge.cpp
     src/NativeLzma.cpp
     src/TrieCompression.cpp

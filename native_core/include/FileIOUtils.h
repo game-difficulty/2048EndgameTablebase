@@ -1,10 +1,13 @@
 #pragma once
 
+#include "FormationRuntime.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -13,10 +16,25 @@
 namespace FileIOUtils {
 
 inline constexpr size_t kChunkBytes = 64ULL * 1024ULL * 1024ULL;
+inline constexpr uint64_t kDirectIoAlignment = 4096ULL;
+
+struct DirectIoConfig {
+    bool enabled = false;
+    uint32_t queue_depth = 16U;
+    uint32_t chunk_mib = 8U;
+};
 
 template <typename PathLike>
 std::string path_string(const PathLike &path_like) {
     return std::filesystem::path(path_like).string();
+}
+
+inline uint64_t align_up_u64(uint64_t value, uint64_t alignment) {
+    return alignment == 0ULL ? value : ((value + alignment - 1ULL) / alignment) * alignment;
+}
+
+inline uint64_t align_down_u64(uint64_t value, uint64_t alignment) {
+    return alignment == 0ULL ? value : (value / alignment) * alignment;
 }
 
 inline size_t checked_tellg(std::ifstream &file, const std::string &path) {
@@ -54,6 +72,51 @@ void write_exact(Stream &stream, const void *src, size_t bytes, const std::strin
         offset += chunk;
     }
 }
+
+DirectIoConfig normalize_direct_io_config(DirectIoConfig config);
+DirectIoConfig direct_io_config_from_options(const RunOptions &options);
+std::string temp_write_path(const std::string &final_path);
+void finalize_temporary_file(const std::string &temp_path, const std::string &final_path);
+
+class DirectAppendWriter {
+public:
+    DirectAppendWriter();
+    DirectAppendWriter(const std::string &path, uint64_t logical_bytes, DirectIoConfig config = {});
+    ~DirectAppendWriter();
+
+    DirectAppendWriter(DirectAppendWriter &&other) noexcept;
+    DirectAppendWriter &operator=(DirectAppendWriter &&other) noexcept;
+
+    DirectAppendWriter(const DirectAppendWriter &) = delete;
+    DirectAppendWriter &operator=(const DirectAppendWriter &) = delete;
+
+    void append(const void *src, size_t bytes);
+    void close();
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+class DirectSequentialReader {
+public:
+    DirectSequentialReader();
+    DirectSequentialReader(const std::string &path, uint64_t logical_bytes, DirectIoConfig config = {});
+    ~DirectSequentialReader();
+
+    DirectSequentialReader(DirectSequentialReader &&other) noexcept;
+    DirectSequentialReader &operator=(DirectSequentialReader &&other) noexcept;
+
+    DirectSequentialReader(const DirectSequentialReader &) = delete;
+    DirectSequentialReader &operator=(const DirectSequentialReader &) = delete;
+
+    void read(void *dst, size_t bytes);
+    void close();
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl_;
+};
 
 template <typename PathLike>
 std::vector<uint8_t> read_binary_bytes(const PathLike &path_like) {
@@ -124,6 +187,34 @@ std::vector<T> read_binary_vector(const PathLike &path_like) {
 }
 
 template <typename T, typename PathLike>
+std::vector<T> read_binary_vector_direct(
+    const PathLike &path_like,
+    DirectIoConfig config = {}
+) {
+    static_assert(std::is_trivially_copyable_v<T>, "binary vector I/O requires trivially copyable types");
+    const DirectIoConfig normalized = normalize_direct_io_config(config);
+    if (!normalized.enabled) {
+        return read_binary_vector<T>(path_like);
+    }
+    const std::string path = path_string(path_like);
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return {};
+    }
+    const size_t size = checked_tellg(file, path);
+    if (size % sizeof(T) != 0U) {
+        throw std::runtime_error("misaligned binary file size: " + path);
+    }
+    std::vector<T> data(size / sizeof(T));
+    if (!data.empty()) {
+        DirectSequentialReader reader(path, static_cast<uint64_t>(size), normalized);
+        reader.read(data.data(), size);
+        reader.close();
+    }
+    return data;
+}
+
+template <typename T, typename PathLike>
 void write_binary_span(const PathLike &path_like, const T *data, size_t count) {
     static_assert(std::is_trivially_copyable_v<T>, "binary span I/O requires trivially copyable types");
     const std::string path = path_string(path_like);
@@ -139,6 +230,55 @@ void write_binary_span(const PathLike &path_like, const T *data, size_t count) {
 template <typename T, typename PathLike>
 void write_binary_vector(const PathLike &path_like, const std::vector<T> &data) {
     write_binary_span(path_like, data.data(), data.size());
+}
+
+template <typename PathLike>
+void write_binary_bytes_direct(
+    const PathLike &path_like,
+    const std::vector<uint8_t> &data,
+    DirectIoConfig config = {}
+) {
+    if (!normalize_direct_io_config(config).enabled) {
+        write_binary_bytes(path_like, data);
+        return;
+    }
+    DirectAppendWriter out(path_string(path_like), static_cast<uint64_t>(data.size()), config);
+    if (!data.empty()) {
+        out.append(data.data(), data.size());
+    }
+    out.close();
+}
+
+template <typename T, typename PathLike>
+void write_binary_span_direct(
+    const PathLike &path_like,
+    const T *data,
+    size_t count,
+    DirectIoConfig config = {}
+) {
+    static_assert(std::is_trivially_copyable_v<T>, "binary span I/O requires trivially copyable types");
+    if (!normalize_direct_io_config(config).enabled) {
+        write_binary_span(path_like, data, count);
+        return;
+    }
+    DirectAppendWriter out(
+        path_string(path_like),
+        static_cast<uint64_t>(count) * static_cast<uint64_t>(sizeof(T)),
+        config
+    );
+    if (count != 0U) {
+        out.append(data, count * sizeof(T));
+    }
+    out.close();
+}
+
+template <typename T, typename PathLike>
+void write_binary_vector_direct(
+    const PathLike &path_like,
+    const std::vector<T> &data,
+    DirectIoConfig config = {}
+) {
+    write_binary_span_direct(path_like, data.data(), data.size(), config);
 }
 
 } // namespace FileIOUtils
