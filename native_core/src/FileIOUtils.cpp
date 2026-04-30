@@ -124,32 +124,34 @@ public:
           logical_bytes_(logical_bytes),
           aligned_prefix_bytes_(align_down_u64(logical_bytes, kDirectIoAlignment)),
           config_(normalize_direct_io_config(config)),
-          chunk_bytes_(direct_chunk_bytes(config_)),
-          scratch_(alloc_aligned_bytes(chunk_bytes_)),
-          buffered_tail_(path, std::ios::binary) {
-        const std::wstring native_path = fs::path(path_).wstring();
-        handle_ = CreateFileW(
-            native_path.c_str(),
-            GENERIC_READ,
-            FILE_SHARE_READ,
-            nullptr,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_NO_BUFFERING,
-            nullptr
-        );
-        if (handle_ == INVALID_HANDLE_VALUE) {
-            throw make_win32_error("CreateFileW direct read failed", GetLastError());
-        }
-        if (!buffered_tail_) {
-            throw_io_error("failed to open buffered tail reader: " + path_);
+          chunk_bytes_(direct_chunk_bytes(config_)) {
+        try {
+            scratch_ = alloc_aligned_bytes(chunk_bytes_);
+            buffered_tail_.open(path_, std::ios::binary);
+            if (!buffered_tail_) {
+                throw_io_error("failed to open buffered tail reader: " + path_);
+            }
+            const std::wstring native_path = fs::path(path_).wstring();
+            handle_ = CreateFileW(
+                native_path.c_str(),
+                GENERIC_READ,
+                FILE_SHARE_READ,
+                nullptr,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_NO_BUFFERING,
+                nullptr
+            );
+            if (handle_ == INVALID_HANDLE_VALUE) {
+                throw make_win32_error("CreateFileW direct read failed", GetLastError());
+            }
+        } catch (...) {
+            cleanup();
+            throw;
         }
     }
 
     ~DirectFileReaderWin32() {
-        free_aligned_bytes(scratch_);
-        if (handle_ != INVALID_HANDLE_VALUE) {
-            CloseHandle(handle_);
-        }
+        cleanup();
     }
 
     void read(void *dst, size_t bytes) {
@@ -182,6 +184,16 @@ public:
     }
 
 private:
+    void cleanup() {
+        buffered_tail_.close();
+        free_aligned_bytes(scratch_);
+        scratch_ = nullptr;
+        if (handle_ != INVALID_HANDLE_VALUE) {
+            CloseHandle(handle_);
+            handle_ = INVALID_HANDLE_VALUE;
+        }
+    }
+
     bool buffer_covers(uint64_t logical_offset) const {
         return buffer_valid_ != 0ULL &&
                logical_offset >= buffer_offset_ &&
@@ -236,35 +248,50 @@ public:
           aligned_bytes_(align_up_u64(logical_bytes, kDirectIoAlignment)),
           config_(normalize_direct_io_config(config)),
           chunk_bytes_(direct_chunk_bytes(config_)) {
-        const std::wstring native_path = fs::path(path_).wstring();
-        handle_ = CreateFileW(
-            native_path.c_str(),
-            GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ,
-            nullptr,
-            CREATE_ALWAYS,
-            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED,
-            nullptr
-        );
-        if (handle_ == INVALID_HANDLE_VALUE) {
-            throw make_win32_error("CreateFileW direct write failed", GetLastError());
+        try {
+            const std::wstring native_path = fs::path(path_).wstring();
+            handle_ = CreateFileW(
+                native_path.c_str(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ,
+                nullptr,
+                CREATE_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED,
+                nullptr
+            );
+            if (handle_ == INVALID_HANDLE_VALUE) {
+                throw make_win32_error("CreateFileW direct write failed", GetLastError());
+            }
+            preallocate();
+            init_slots();
+        } catch (...) {
+            cleanup();
+            throw;
         }
-        preallocate();
-        init_slots();
     }
 
     ~DirectFileWriterWin32() {
+        cleanup();
+    }
+
+private:
+    void cleanup() {
         for (auto &slot : slots_) {
             free_aligned_bytes(slot.buffer);
+            slot.buffer = nullptr;
             if (slot.event != nullptr) {
                 CloseHandle(slot.event);
+                slot.event = nullptr;
             }
         }
+        slots_.clear();
         if (handle_ != INVALID_HANDLE_VALUE) {
             CloseHandle(handle_);
+            handle_ = INVALID_HANDLE_VALUE;
         }
     }
 
+public:
     void append(const void *src, size_t bytes) {
         const auto *input = static_cast<const uint8_t *>(src);
         size_t consumed = 0U;
@@ -476,23 +503,25 @@ public:
           logical_bytes_(logical_bytes),
           aligned_prefix_bytes_(align_down_u64(logical_bytes, kDirectIoAlignment)),
           config_(normalize_direct_io_config(config)),
-          chunk_bytes_(direct_chunk_bytes(config_)),
-          scratch_(alloc_aligned_bytes(chunk_bytes_)),
-          buffered_tail_(path, std::ios::binary) {
-        fd_ = ::open(path_.c_str(), O_RDONLY | O_DIRECT);
-        if (fd_ < 0) {
-            throw make_errno_error("open(O_DIRECT) read failed");
-        }
-        if (!buffered_tail_) {
-            throw_io_error("failed to open buffered tail reader: " + path_);
+          chunk_bytes_(direct_chunk_bytes(config_)) {
+        try {
+            scratch_ = alloc_aligned_bytes(chunk_bytes_);
+            buffered_tail_.open(path_, std::ios::binary);
+            if (!buffered_tail_) {
+                throw_io_error("failed to open buffered tail reader: " + path_);
+            }
+            fd_ = ::open(path_.c_str(), O_RDONLY | O_DIRECT);
+            if (fd_ < 0) {
+                throw make_errno_error("open(O_DIRECT) read failed");
+            }
+        } catch (...) {
+            cleanup();
+            throw;
         }
     }
 
     ~DirectFileReaderPosix() {
-        free_aligned_bytes(scratch_);
-        if (fd_ >= 0) {
-            ::close(fd_);
-        }
+        cleanup();
     }
 
     void read(void *dst, size_t bytes) {
@@ -525,6 +554,16 @@ public:
     }
 
 private:
+    void cleanup() {
+        buffered_tail_.close();
+        free_aligned_bytes(scratch_);
+        scratch_ = nullptr;
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
+
     bool buffer_covers(uint64_t logical_offset) const {
         return buffer_valid_ != 0ULL &&
                logical_offset >= buffer_offset_ &&
@@ -572,22 +611,24 @@ public:
           logical_bytes_(logical_bytes),
           aligned_bytes_(align_up_u64(logical_bytes, kDirectIoAlignment)),
           config_(normalize_direct_io_config(config)),
-          chunk_bytes_(direct_chunk_bytes(config_)),
-          scratch_(alloc_aligned_bytes(chunk_bytes_)) {
-        fd_ = ::open(path_.c_str(), O_CREAT | O_TRUNC | O_WRONLY | O_DIRECT, 0644);
-        if (fd_ < 0) {
-            throw make_errno_error("open(O_DIRECT) failed");
-        }
-        if (::ftruncate(fd_, static_cast<off_t>(aligned_bytes_)) != 0) {
-            throw make_errno_error("ftruncate preallocate failed");
+          chunk_bytes_(direct_chunk_bytes(config_)) {
+        try {
+            scratch_ = alloc_aligned_bytes(chunk_bytes_);
+            fd_ = ::open(path_.c_str(), O_CREAT | O_TRUNC | O_WRONLY | O_DIRECT, 0644);
+            if (fd_ < 0) {
+                throw make_errno_error("open(O_DIRECT) failed");
+            }
+            if (::ftruncate(fd_, static_cast<off_t>(aligned_bytes_)) != 0) {
+                throw make_errno_error("ftruncate preallocate failed");
+            }
+        } catch (...) {
+            cleanup();
+            throw;
         }
     }
 
     ~DirectFileWriterPosix() {
-        free_aligned_bytes(scratch_);
-        if (fd_ >= 0) {
-            ::close(fd_);
-        }
+        cleanup();
     }
 
     void append(const void *src, size_t bytes) {
@@ -624,6 +665,15 @@ public:
     }
 
 private:
+    void cleanup() {
+        free_aligned_bytes(scratch_);
+        scratch_ = nullptr;
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
+
     void flush_current(size_t bytes) {
         const ssize_t rv = ::pwrite(
             fd_,
@@ -720,13 +770,18 @@ public:
         }
         std::error_code remove_error;
         fs::remove(temp_path_, remove_error);
+        try {
 #ifdef _WIN32
-        direct_writer_ = std::make_unique<DirectFileWriterWin32>(temp_path_, logical_bytes_, config_);
+            direct_writer_ = std::make_unique<DirectFileWriterWin32>(temp_path_, logical_bytes_, config_);
 #elif defined(__linux__)
-        direct_writer_ = std::make_unique<DirectFileWriterPosix>(temp_path_, logical_bytes_, config_);
+            direct_writer_ = std::make_unique<DirectFileWriterPosix>(temp_path_, logical_bytes_, config_);
 #else
-        throw_io_error("direct I/O is unsupported on this platform");
+            throw_io_error("direct I/O is unsupported on this platform");
 #endif
+        } catch (...) {
+            buffered_writer_ = std::make_unique<BufferedAppendWriter>(temp_path_);
+            finalize_buffered_temp_ = true;
+        }
     }
 
     void append(const void *src, size_t bytes) {
@@ -758,6 +813,9 @@ public:
         } else if (buffered_writer_) {
             buffered_writer_->close();
             buffered_writer_.reset();
+            if (finalize_buffered_temp_) {
+                finalize_temporary_file(temp_path_, final_path_);
+            }
         }
         closed_ = true;
     }
@@ -769,6 +827,7 @@ private:
     uint64_t written_bytes_ = 0ULL;
     DirectIoConfig config_{};
     bool closed_ = false;
+    bool finalize_buffered_temp_ = false;
     std::unique_ptr<BufferedAppendWriter> buffered_writer_;
 #ifdef _WIN32
     std::unique_ptr<DirectFileWriterWin32> direct_writer_;
@@ -789,13 +848,17 @@ public:
             buffered_reader_ = std::make_unique<BufferedSequentialReader>(path_);
             return;
         }
+        try {
 #ifdef _WIN32
-        direct_reader_ = std::make_unique<DirectFileReaderWin32>(path_, logical_bytes_, config_);
+            direct_reader_ = std::make_unique<DirectFileReaderWin32>(path_, logical_bytes_, config_);
 #elif defined(__linux__)
-        direct_reader_ = std::make_unique<DirectFileReaderPosix>(path_, logical_bytes_, config_);
+            direct_reader_ = std::make_unique<DirectFileReaderPosix>(path_, logical_bytes_, config_);
 #else
-        throw_io_error("direct I/O is unsupported on this platform");
+            throw_io_error("direct I/O is unsupported on this platform");
 #endif
+        } catch (...) {
+            buffered_reader_ = std::make_unique<BufferedSequentialReader>(path_);
+        }
     }
 
     void read(void *dst, size_t bytes) {
