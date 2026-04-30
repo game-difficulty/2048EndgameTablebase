@@ -5,7 +5,7 @@ from typing import Final
 from urllib.parse import quote
 
 
-ASSET_BASE_URL: Final[str] = "http://127.0.0.1:8000/minigames-assets"
+ASSET_BASE_PATH: Final[str] = "/minigames-assets"
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ class MinigameDefinition:
     @property
     def cover_url(self) -> str:
         asset_path = self.cover_asset if "/" in self.cover_asset else f"covers/{self.cover_asset}"
-        return f"{ASSET_BASE_URL}/{quote(asset_path)}"
+        return f"{ASSET_BASE_PATH}/{quote(asset_path)}"
 
 
 MINIGAME_REGISTRY: Final[list[MinigameDefinition]] = [

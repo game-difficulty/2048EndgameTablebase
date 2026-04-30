@@ -7,7 +7,13 @@
     <title>2048 Endgame Tablebase</title>
     <script>
       (() => {
-        const startupTheme = new URLSearchParams(window.location.search).get('startup_theme');
+        const currentUrl = new URL(window.location.href);
+        const startupTheme = currentUrl.searchParams.get('startup_theme');
+        const backendPort = currentUrl.searchParams.get('backend_port');
+        if (backendPort) {
+          currentUrl.port = backendPort;
+        }
+        window.__APP_BACKEND_ORIGIN__ = currentUrl.origin;
         if (startupTheme === 'dark') {
           document.documentElement.setAttribute('data-theme', 'dark');
         } else if (startupTheme === 'light') {
@@ -22,7 +28,15 @@
         options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] }
       };
     </script>
-    <script id="MathJax-script" async src="http://localhost:8000/mathjax/tex-svg.js"></script>
+    <script>
+      (() => {
+        const script = document.createElement('script');
+        script.id = 'MathJax-script';
+        script.async = true;
+        script.src = `${window.__APP_BACKEND_ORIGIN__ || window.location.origin}/mathjax/tex-svg.js`;
+        document.head.appendChild(script);
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

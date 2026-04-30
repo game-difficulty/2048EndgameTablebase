@@ -1,3 +1,5 @@
+import { getBackendWebSocketUrl } from '../runtime/backendUrl';
+
 export function createWsClient({
   clientId,
   createUrl,
@@ -24,15 +26,7 @@ export function createWsClient({
       return createUrl(clientId);
     }
 
-    if (typeof window !== 'undefined' && window.location) {
-      const { protocol, hostname, port } = window.location;
-      const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
-      const isFrontendDevServer = port === '5173';
-      const targetPort = isFrontendDevServer ? '8000' : (port || '8000');
-      return `${wsProtocol}//${hostname}:${targetPort}/ws/${clientId}`;
-    }
-
-    return `ws://127.0.0.1:8000/ws/${clientId}`;
+    return getBackendWebSocketUrl(clientId);
   };
 
   const connect = () => {

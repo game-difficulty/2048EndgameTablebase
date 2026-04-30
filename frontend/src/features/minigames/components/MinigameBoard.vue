@@ -170,6 +170,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 
+import { getMinigameAssetUrl } from '../../../services/runtime/backendUrl';
 import {
   buildBoardCells,
   exponentToTileValue,
@@ -219,7 +220,6 @@ let revealTimeout = null;
 let moveCleanupTimeout = null;
 let effectsCleanupTimeout = null;
 let followUpTimeout = null;
-const assetBase = 'http://127.0.0.1:8000/minigames-assets';
 
 const rows = computed(() => Number(props.shape?.rows || 4));
 const cols = computed(() => Number(props.shape?.cols || 4));
@@ -251,9 +251,9 @@ const twistHotspots = computed(() =>
 );
 const cursorPreviewSrc = computed(() => {
   if (!props.interaction?.active) return '';
-  if (props.interaction.mode === 'bomb') return `${assetBase}/bomb2.png`;
-  if (props.interaction.mode === 'glove') return `${assetBase}/glove.png`;
-  if (props.interaction.mode === 'twist') return `${assetBase}/twist.png`;
+  if (props.interaction.mode === 'bomb') return getMinigameAssetUrl('bomb2.png');
+  if (props.interaction.mode === 'glove') return getMinigameAssetUrl('glove.png');
+  if (props.interaction.mode === 'twist') return getMinigameAssetUrl('twist.png');
   return '';
 });
 const cursorPreviewVisible = computed(
@@ -332,13 +332,13 @@ const handleGridCellClick = (cell) => {
 
 const getEffectImageSrc = (effect) => {
   if (effect?.sprite) return getCoverSpriteSrc(effect.sprite);
-  if (effect.type === 'explosion') return `${assetBase}/explode.png`;
-  if (effect.type === 'airraid_fire_drop') return `${assetBase}/fire.png`;
-  if (effect.type === 'airraid_explosion') return `${assetBase}/explode.png`;
-  if (effect.type === 'giftbox_burst') return `${assetBase}/hole.png`;
-  if (effect.type === 'factorization_burst') return `${assetBase}/hole2.png`;
-  if (effect.type === 'grab' || effect.type === 'glove_move') return `${assetBase}/glove.png`;
-  if (effect.type === 'twist') return `${assetBase}/twist.png`;
+  if (effect.type === 'explosion') return getMinigameAssetUrl('explode.png');
+  if (effect.type === 'airraid_fire_drop') return getMinigameAssetUrl('fire.png');
+  if (effect.type === 'airraid_explosion') return getMinigameAssetUrl('explode.png');
+  if (effect.type === 'giftbox_burst') return getMinigameAssetUrl('hole.png');
+  if (effect.type === 'factorization_burst') return getMinigameAssetUrl('hole2.png');
+  if (effect.type === 'grab' || effect.type === 'glove_move') return getMinigameAssetUrl('glove.png');
+  if (effect.type === 'twist') return getMinigameAssetUrl('twist.png');
   return '';
 };
 
@@ -384,9 +384,9 @@ const getEffectImageClass = (effect) => {
 
 const getCoverSpriteSrc = (sprite) => {
   const normalized = String(sprite || '').toLowerCase();
-  if (normalized === 'bomb.png') return `${assetBase}/bomb2.png`;
-  if (normalized === 'giftbox.png') return `${assetBase}/giftbox2.png`;
-  return `${assetBase}/${sprite}`;
+  if (normalized === 'bomb.png') return getMinigameAssetUrl('bomb2.png');
+  if (normalized === 'giftbox.png') return getMinigameAssetUrl('giftbox2.png');
+  return getMinigameAssetUrl(sprite);
 };
 
 const getCoverSpriteClass = (sprite) => {

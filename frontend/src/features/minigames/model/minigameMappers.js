@@ -1,5 +1,6 @@
+import { getMinigameAssetUrl } from '../../../services/runtime/backendUrl';
+
 const FALLBACK_TILE = 131072;
-const MINIGAME_ASSET_BASE = 'http://127.0.0.1:8000/minigames-assets';
 
 export const formatTileNumber = (tileValue) => {
   if (!tileValue) return '';
@@ -30,28 +31,28 @@ export const getTrophyVisualMeta = (level) => {
   if (normalized <= 0) return null;
   if (normalized >= 4) {
     return {
-      backgroundSrc: `${MINIGAME_ASSET_BASE}/trophybg.png`,
-      trophySrc: `${MINIGAME_ASSET_BASE}/grand.png`,
+      backgroundSrc: getMinigameAssetUrl('trophybg.png'),
+      trophySrc: getMinigameAssetUrl('grand.png'),
       trophyAlt: 'Grand trophy',
     };
   }
   if (normalized >= 3) {
     return {
-      backgroundSrc: `${MINIGAME_ASSET_BASE}/trophybg.png`,
-      trophySrc: `${MINIGAME_ASSET_BASE}/gold.png`,
+      backgroundSrc: getMinigameAssetUrl('trophybg.png'),
+      trophySrc: getMinigameAssetUrl('gold.png'),
       trophyAlt: 'Gold trophy',
     };
   }
   if (normalized === 2) {
     return {
-      backgroundSrc: `${MINIGAME_ASSET_BASE}/trophybg.png`,
-      trophySrc: `${MINIGAME_ASSET_BASE}/silver.png`,
+      backgroundSrc: getMinigameAssetUrl('trophybg.png'),
+      trophySrc: getMinigameAssetUrl('silver.png'),
       trophyAlt: 'Silver trophy',
     };
   }
   return {
-    backgroundSrc: `${MINIGAME_ASSET_BASE}/trophybg.png`,
-    trophySrc: `${MINIGAME_ASSET_BASE}/bronze.png`,
+    backgroundSrc: getMinigameAssetUrl('trophybg.png'),
+    trophySrc: getMinigameAssetUrl('bronze.png'),
     trophyAlt: 'Bronze trophy',
   };
 };

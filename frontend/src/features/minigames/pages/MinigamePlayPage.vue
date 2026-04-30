@@ -94,6 +94,7 @@ import MinigameBoard from '../components/MinigameBoard.vue';
 import MinigameHud from '../components/MinigameHud.vue';
 import MinigameOverlay from '../components/MinigameOverlay.vue';
 import PowerUpBar from '../components/PowerUpBar.vue';
+import { getMinigameAssetUrl } from '../../../services/runtime/backendUrl';
 
 const props = defineProps({
   state: {
@@ -139,8 +140,6 @@ const playRootRef = ref(null);
 const pageEffects = ref([]);
 let sparkleTimer = null;
 
-const assetBase = 'http://127.0.0.1:8000/minigames-assets';
-
 const clearSparkleTimer = () => {
   if (sparkleTimer) {
     window.clearInterval(sparkleTimer);
@@ -175,7 +174,7 @@ const maybeSpawnIceSparkle = () => {
   const x = Math.max(0, Math.floor(Math.random() * Math.max(1, rect.width - width)));
   const y = Math.max(0, Math.floor(Math.random() * Math.max(1, rect.height - height)));
   pushPageEffect({
-    src: `${assetBase}/icesparkle.png`,
+    src: getMinigameAssetUrl('icesparkle.png'),
     x,
     y,
     width,
@@ -207,7 +206,7 @@ watch(
       if (String(effect?.type || '') !== 'ice_sparkle' || !playRootRef.value) return;
       const rect = playRootRef.value.getBoundingClientRect();
       pushPageEffect({
-        src: `${assetBase}/icesparkle.png`,
+        src: getMinigameAssetUrl('icesparkle.png'),
         x: Number(effect.x ?? rect.width * 0.5),
         y: Number(effect.y ?? rect.height * 0.5),
         width: Number(effect.width || 36),
