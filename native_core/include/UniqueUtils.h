@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386) || defined(_M_IX86)
 #include <immintrin.h>
@@ -11,6 +12,19 @@
 #endif
 
 namespace UniqueUtils {
+
+inline bool env_flag_enabled(const char *name) {
+    const char *value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return false;
+    }
+    return value[0] != '0' && value[0] != 'f' && value[0] != 'F' && value[0] != 'n' && value[0] != 'N';
+}
+
+inline bool avx512_disabled() {
+    static const bool cached = env_flag_enabled("NATIVE_DISABLE_AVX512");
+    return cached;
+}
 
 inline size_t unique_sorted_u64_scalar(uint64_t *data, size_t size) {
     if (data == nullptr || size == 0) {
@@ -128,6 +142,9 @@ inline bool cpu_has_avx512_uncached() {
 }
 
 inline bool cpu_has_avx512() {
+    if (avx512_disabled()) {
+        return false;
+    }
     static const bool cached = cpu_has_avx512_uncached();
     return cached;
 }
@@ -151,6 +168,9 @@ inline bool cpu_has_avx512_dq_vl_uncached() {
 }
 
 inline bool cpu_has_avx512_dq_vl() {
+    if (avx512_disabled()) {
+        return false;
+    }
     static const bool cached = cpu_has_avx512_dq_vl_uncached();
     return cached;
 }
@@ -176,6 +196,9 @@ inline bool cpu_has_avx512_dq_bw_vl_uncached() {
 }
 
 inline bool cpu_has_avx512_dq_bw_vl() {
+    if (avx512_disabled()) {
+        return false;
+    }
     static const bool cached = cpu_has_avx512_dq_bw_vl_uncached();
     return cached;
 }

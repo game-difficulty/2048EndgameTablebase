@@ -23,39 +23,52 @@ namespace BookGeneratorUtils {
     using MergeTwoPartitionedFn = size_t (*)(const uint64_t *, size_t, const uint64_t *, size_t, const uint64_t *, size_t, uint64_t *, size_t *, size_t *);
     using MergeTreePartitionedFn = size_t (*)(const uint64_t *const *, const size_t *, size_t, const uint64_t *, size_t, uint64_t *, size_t *, size_t *, uint64_t *);
 
+    std::vector<fs::path> bookgen_dll_candidates() {
+        std::vector<fs::path> candidates;
+        auto append_unique = [&candidates](const fs::path &candidate) {
+            if (candidate.empty()) {
+                return;
+            }
+            if (std::find(candidates.begin(), candidates.end(), candidate) == candidates.end()) {
+                candidates.push_back(candidate);
+            }
+        };
+
+#ifdef _WIN32
+        HMODULE module = nullptr;
+        if (GetModuleHandleExA(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCSTR>(&bookgen_dll_candidates),
+                &module) &&
+            module != nullptr) {
+            char module_path[MAX_PATH];
+            DWORD module_len = GetModuleFileNameA(module, module_path, MAX_PATH);
+            if (module_len > 0) {
+                fs::path module_dir = fs::path(module_path).parent_path();
+                append_unique(module_dir / "bookgen_native.dll");
+                append_unique(module_dir / "native_core" / "bookgen_native.dll");
+            }
+        }
+
+        char exe_path[MAX_PATH];
+        DWORD exe_len = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
+        if (exe_len > 0) {
+            fs::path exe_dir = fs::path(exe_path).parent_path();
+            append_unique(exe_dir / "native_core" / "bookgen_native.dll");
+            append_unique(exe_dir / "bookgen_native.dll");
+        }
+
+        append_unique(fs::path("native_core") / "bookgen_native.dll");
+        append_unique("bookgen_native.dll");
+#endif
+
+        return candidates;
+    }
+
     SortFn resolve_sort_uint64() {
         static SortFn fn = []() -> SortFn {
 #ifdef _WIN32
-            std::vector<fs::path> candidates;
-
-            HMODULE module = nullptr;
-            if (GetModuleHandleExA(
-                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                    reinterpret_cast<LPCSTR>(&resolve_sort_uint64),
-                    &module) &&
-                module != nullptr) {
-                char module_path[MAX_PATH];
-                DWORD module_len = GetModuleFileNameA(module, module_path, MAX_PATH);
-                if (module_len > 0) {
-                    fs::path module_dir = fs::path(module_path).parent_path();
-                    candidates.push_back(module_dir / "bookgen_native.dll");
-                }
-            }
-
-            candidates.insert(candidates.end(), {
-                "bookgen_native.dll",
-                fs::path("native_core") / "bookgen_native.dll",
-            });
-
-            char module_path[MAX_PATH];
-            DWORD path_len = GetModuleFileNameA(nullptr, module_path, MAX_PATH);
-            if (path_len > 0) {
-                fs::path exe_dir = fs::path(module_path).parent_path();
-                candidates.push_back(exe_dir / "bookgen_native.dll");
-                candidates.push_back(exe_dir / "native_core" / "bookgen_native.dll");
-            }
-
-            for (const auto &candidate : candidates) {
+            for (const auto &candidate : bookgen_dll_candidates()) {
                 if (!fs::exists(candidate)) {
                     continue;
                 }
@@ -83,36 +96,7 @@ namespace BookGeneratorUtils {
     template <typename Fn> Fn resolve_bookgen_symbol(const char *symbol_name) {
         static_assert(std::is_pointer_v<Fn>, "Fn must be a function pointer");
 #ifdef _WIN32
-        std::vector<fs::path> candidates;
-
-        HMODULE module = nullptr;
-        if (GetModuleHandleExA(
-                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                reinterpret_cast<LPCSTR>(&resolve_sort_uint64),
-                &module) &&
-            module != nullptr) {
-            char module_path[MAX_PATH];
-            DWORD module_len = GetModuleFileNameA(module, module_path, MAX_PATH);
-            if (module_len > 0) {
-                fs::path module_dir = fs::path(module_path).parent_path();
-                candidates.push_back(module_dir / "bookgen_native.dll");
-            }
-        }
-
-        candidates.insert(candidates.end(), {
-            "bookgen_native.dll",
-            fs::path("native_core") / "bookgen_native.dll",
-        });
-
-        char module_path[MAX_PATH];
-        DWORD path_len = GetModuleFileNameA(nullptr, module_path, MAX_PATH);
-        if (path_len > 0) {
-            fs::path exe_dir = fs::path(module_path).parent_path();
-            candidates.push_back(exe_dir / "bookgen_native.dll");
-            candidates.push_back(exe_dir / "native_core" / "bookgen_native.dll");
-        }
-
-        for (const auto &candidate : candidates) {
+        for (const auto &candidate : bookgen_dll_candidates()) {
             if (!fs::exists(candidate)) {
                 continue;
             }
