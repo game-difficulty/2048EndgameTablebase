@@ -103,9 +103,9 @@
       </button>
     </div>
 
-    <!-- Footer / Support -->
-    <div class="mt-10 text-center shadow-sm px-5 py-4 rounded-[1.75rem] bg-bg-card backdrop-blur-md border border-border-main">
-      <p class="text-text-secondary font-black ui-control uppercase tracking-widest flex items-center gap-2 justify-center">
+    <div :class="['menu-bottom-row', { 'menu-bottom-row-with-button': showBrowserModeButton }]">
+      <div class="menu-footer text-center shadow-sm px-5 py-4 rounded-[1.75rem] bg-bg-card backdrop-blur-md border border-border-main">
+        <p class="text-text-secondary font-black ui-control uppercase tracking-widest flex items-center gap-2 justify-center">
         {{ $t('menu.githubNote') }}
         <a href="https://github.com/game-difficulty/2048EndgameTablebase" target="_blank"
           rel="noopener noreferrer"
@@ -115,25 +115,107 @@
           </svg>
           GitHub
         </a>
-      </p>
-      <p class="mt-1 text-text-secondary ui-caption font-bold">
-        {{ $t('menu.sponsorNotePrefix') }}<a href="https://2048next.cn" target="_blank" rel="noopener noreferrer"
-          class="text-prominent font-black hover:underline">2048next.cn</a>{{ $t('menu.sponsorNoteSuffix') }}
-      </p>
+        </p>
+        <p class="mt-1 text-text-secondary ui-caption font-bold">
+          {{ $t('menu.sponsorNotePrefix') }}<a href="https://2048next.cn" target="_blank" rel="noopener noreferrer"
+            class="text-prominent font-black hover:underline">2048next.cn</a>{{ $t('menu.sponsorNoteSuffix') }}
+        </p>
+      </div>
+
+      <button
+        v-if="showBrowserModeButton"
+        type="button"
+        class="menu-utility-btn menu-utility-btn-floating"
+        @click="openBrowserMode"
+      >
+        {{ $t('menu.openBrowserMode') }}
+      </button>
     </div>
     </div>
   </div>
 </template>
 
 <script setup>
+import { onMounted, onUnmounted, ref } from 'vue';
+
 defineProps(['active']);
 defineEmits(['selectTab']);
+
+const showBrowserModeButton = ref(false);
+
+const syncBrowserModeButtonVisibility = () => {
+  showBrowserModeButton.value = !!window.pywebview?.api?.open_external_url;
+};
+
+const openBrowserMode = async () => {
+  const targetUrl = `${window.location.origin}${window.location.pathname}${window.location.search}${window.location.hash}`;
+  try {
+    if (window.pywebview?.api?.open_external_url) {
+      const opened = await window.pywebview.api.open_external_url(targetUrl);
+      if (opened) {
+        return;
+      }
+    }
+  } catch (error) {
+    console.error(error);
+  }
+  window.open(targetUrl, '_blank', 'noopener,noreferrer');
+};
+
+onMounted(() => {
+  syncBrowserModeButtonVisibility();
+  window.addEventListener('pywebviewready', syncBrowserModeButtonVisibility);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('pywebviewready', syncBrowserModeButtonVisibility);
+});
 </script>
 
 <style scoped>
 .menu-card {
   user-select: none;
   box-shadow: 0 18px 34px rgba(0, 0, 0, 0.08);
+}
+
+.menu-bottom-row {
+  position: relative;
+  width: 100%;
+  margin-top: 2.5rem;
+  padding-inline: 1rem;
+}
+
+.menu-footer {
+  width: 100%;
+  max-width: 48rem;
+  margin-inline: auto;
+}
+
+.menu-utility-btn {
+  border: 1px solid var(--border-main);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 92%, white 8%) 0%, var(--bg-card) 100%);
+  color: var(--text-main);
+  padding: 0.85rem 1.4rem;
+  font-size: var(--font-ui-sm);
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
+}
+
+.menu-utility-btn-floating {
+  display: block;
+  margin: 1rem auto 0;
+}
+
+.menu-utility-btn:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.12);
 }
 
 .menu-card-primary {
@@ -223,5 +305,27 @@ defineEmits(['selectTab']);
 
 .letter-spacing-wide {
   letter-spacing: 0.15em;
+}
+
+@media (min-width: 960px) {
+  .menu-bottom-row {
+    min-height: 7.5rem;
+  }
+
+  .menu-bottom-row-with-button {
+    padding-inline: 13rem;
+  }
+
+  .menu-utility-btn-floating {
+    position: absolute;
+    right: 1rem;
+    top: calc(50% - 0.45rem);
+    margin: 0;
+    transform: translateY(-50%);
+  }
+
+  .menu-utility-btn-floating:hover {
+    transform: translateY(calc(-50% - 2px));
+  }
 }
 </style>

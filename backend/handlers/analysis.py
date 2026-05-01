@@ -10,6 +10,7 @@ from fastapi import WebSocket
 from ..actions import Action, EventType
 from ..analysis import normalize_target_value, resolve_analysis_inputs, run_batch_analysis
 from ..session import GameSession
+from ..webview_api import Api
 
 
 async def handle_analysis_action(
@@ -26,6 +27,16 @@ async def handle_analysis_action(
                     "categories": category_info,
                     "target_tiles": [str(2**i) for i in range(6, 14)],
                 },
+            }
+        )
+        return True
+
+    if action == Action.ANALYSIS_TRIGGER_SELECT_FILES:
+        selected_paths = await asyncio.to_thread(Api().select_analysis_files)
+        await websocket.send_json(
+            {
+                "type": EventType.ANALYSIS_FILES_SELECTED,
+                "payload": {"paths": selected_paths or []},
             }
         )
         return True

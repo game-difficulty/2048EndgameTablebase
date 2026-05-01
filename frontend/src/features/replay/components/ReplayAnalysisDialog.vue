@@ -316,11 +316,7 @@ const mergeSelectedPaths = (paths) => {
 };
 
 const pickFiles = async () => {
-  if (!window.pywebview?.api?.select_analysis_files) return;
-  const selected = await window.pywebview.api.select_analysis_files();
-  if (Array.isArray(selected) && selected.length) {
-    mergeSelectedPaths(selected);
-  }
+  client?.send('ANALYSIS_TRIGGER_SELECT_FILES');
 };
 
 const handleListScroll = (event) => {
@@ -377,6 +373,14 @@ const handleMessage = (message) => {
     entries.value = [];
     listScrollTop.value = 0;
     if (listViewportRef.value) listViewportRef.value.scrollTop = 0;
+    return;
+  }
+
+  if (message.type === 'ANALYSIS_FILES_SELECTED') {
+    const selected = Array.isArray(message.payload?.paths) ? message.payload.paths : [];
+    if (selected.length) {
+      mergeSelectedPaths(selected);
+    }
     return;
   }
 

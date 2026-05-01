@@ -167,6 +167,6 @@ def persist_runtime_config() -> None:
         print(f"Failed to persist config on exit: {exc}")
 
 
-def run_backend_server(port: int) -> None:
+def run_backend_server(port: int, host: str = "127.0.0.1") -> None:
     atexit.register(persist_runtime_config)
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="error")
+    uvicorn.run(app, host=host, port=port, log_level="error")

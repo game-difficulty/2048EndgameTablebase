@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import numpy as np
@@ -34,6 +35,7 @@ from ..tester import (
     _tester_start_practice,
     send_tester_state,
 )
+from ..webview_api import Api
 
 
 async def handle_tester_action(
@@ -325,6 +327,22 @@ async def handle_tester_action(
         )
         await send_tester_state(websocket, session, metadata)
         return True
+
+    if action == Action.TESTER_TRIGGER_SAVE_LOG:
+        path = await asyncio.to_thread(Api().select_save_tester_log)
+        if not path:
+            return True
+        payload = dict(payload)
+        payload["path"] = path
+        action = Action.TESTER_SAVE_LOG
+
+    if action == Action.TESTER_TRIGGER_SAVE_REPLAY:
+        path = await asyncio.to_thread(Api().select_save_tester_replay)
+        if not path:
+            return True
+        payload = dict(payload)
+        payload["path"] = path
+        action = Action.TESTER_SAVE_REPLAY
 
     if action == Action.TESTER_SAVE_LOG:
         path = str(payload.get("path") or "").strip()

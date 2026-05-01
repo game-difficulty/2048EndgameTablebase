@@ -177,14 +177,6 @@ export function useGamerSession(activeRef) {
 
   const openBrowserAi = async () => {
     const url = 'https://2048-endgame-tablebase.netlify.app/';
-    try {
-      if (window.pywebview?.api?.open_external_url) {
-        await window.pywebview.api.open_external_url(url);
-        return;
-      }
-    } catch (error) {
-      console.error(error);
-    }
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 

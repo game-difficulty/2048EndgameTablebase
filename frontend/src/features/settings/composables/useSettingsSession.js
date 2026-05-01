@@ -142,6 +142,14 @@ export function useSettingsSession(activeRef) {
       return;
     }
 
+    if (data.type === 'FOLDER_SELECTED') {
+      const path = String(data.payload?.path || '').trim();
+      if (path) {
+        buildPath.value = path;
+      }
+      return;
+    }
+
     if (data.type === 'BUILD_STARTED') {
       isBuilding.value = true;
       buildProgressCurrent.value = 0;
@@ -253,12 +261,7 @@ export function useSettingsSession(activeRef) {
   };
 
   const browseFolder = async () => {
-    if (window.pywebview && window.pywebview.api) {
-      const path = await window.pywebview.api.select_folder();
-      if (path) {
-        buildPath.value = path;
-      }
-    }
+    buildClient?.send('SETTINGS_TRIGGER_SELECT_FOLDER');
   };
 
   const startBuild = () => {

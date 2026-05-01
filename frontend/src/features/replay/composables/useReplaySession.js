@@ -399,13 +399,8 @@ export function useReplaySession(activeRef, emit) {
 
   const openReplayFile = async () => {
     menuOpen.value = false;
-    if (!window.pywebview?.api?.select_open_replay_file) return;
-    const path = await window.pywebview.api.select_open_replay_file();
-    if (path) {
-      stopDemo();
-      startResultsRefresh();
-      triggerAction('REPLAY_LOAD_FILE', { path });
-    }
+    stopDemo();
+    triggerAction('REPLAY_TRIGGER_OPEN_FILE');
   };
 
   const loadLatestReplay = () => {

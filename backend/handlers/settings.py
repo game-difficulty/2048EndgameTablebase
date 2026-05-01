@@ -20,6 +20,7 @@ from ..actions import Action, EventType
 from ..serialization import sanitize_config
 from ..session import GameSession
 from ..state import ConnectionManager
+from ..webview_api import Api
 
 
 MAX_DELETION_THRESHOLD = 0.999999
@@ -146,7 +147,17 @@ async def handle_settings_action(
                         },
                     }
                 )
-            )
+        )
+        return True
+
+    if action == Action.SETTINGS_TRIGGER_SELECT_FOLDER:
+        path = await asyncio.to_thread(Api().select_folder)
+        await websocket.send_json(
+            {
+                "type": EventType.FOLDER_SELECTED,
+                "payload": {"path": path},
+            }
+        )
         return True
 
     if action == Action.START_BUILD:

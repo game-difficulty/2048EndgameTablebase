@@ -4,6 +4,7 @@ import atexit
 import ctypes
 import html
 import importlib
+import ipaddress
 import json
 import multiprocessing
 import os
@@ -41,6 +42,7 @@ _linux_backend_probe_cache: dict[str, object] | None = None
 _frontend_error_queue: queue.Queue = queue.Queue()
 _frontend_error_bridge_started = False
 _frontend_error_bridge_lock = threading.Lock()
+SERVER_BIND_HOST = "0.0.0.0"
 
 
 if os.name == "nt":
@@ -145,12 +147,68 @@ STARTUP_TRANSLATIONS = {
 def find_available_port(start_port: int = 8000) -> int:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("127.0.0.1", start_port))
+            sock.bind((SERVER_BIND_HOST, start_port))
             return start_port
     except OSError:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("", 0))
+            sock.bind((SERVER_BIND_HOST, 0))
             return sock.getsockname()[1]
+
+
+def _lan_ipv4_address_rank(address: str) -> int | None:
+    if not address:
+        return None
+    try:
+        ip = ipaddress.IPv4Address(address)
+    except ipaddress.AddressValueError:
+        return None
+    if ip.is_unspecified or ip.is_loopback or ip.is_link_local:
+        return None
+
+    first_octet, second_octet, *_ = address.split(".")
+    first = int(first_octet)
+    second = int(second_octet)
+    if first == 10:
+        return 0
+    if first == 172 and 16 <= second <= 31:
+        return 0
+    if first == 192 and second == 168:
+        return 0
+    return 1
+
+
+def _discover_lan_access_host() -> str:
+    candidates: list[str] = []
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            candidates.append(sock.getsockname()[0])
+    except OSError:
+        pass
+
+    try:
+        hostname = socket.gethostname()
+        for address in socket.gethostbyname_ex(hostname)[2]:
+            candidates.append(address)
+    except OSError:
+        pass
+
+    seen: set[str] = set()
+    fallback_address: str | None = None
+    for address in candidates:
+        if address in seen:
+            continue
+        seen.add(address)
+        rank = _lan_ipv4_address_rank(address)
+        if rank is None:
+            continue
+        if rank == 0:
+            return address
+        if fallback_address is None:
+            fallback_address = address
+
+    return fallback_address or "127.0.0.1"
 
 
 def _ensure_server_job_object():
@@ -224,7 +282,7 @@ def _frontend_url() -> str:
         }
     )
     if os.path.exists(frontend_dist_path):
-        return f"http://localhost:{SERVER_PORT}/?{query}"
+        return f"http://{SERVER_ACCESS_HOST}:{SERVER_PORT}/?{query}"
     return f"http://localhost:5173/?{query}"
 
 
@@ -1038,7 +1096,7 @@ def _wait_for_server_ready(timeout_seconds: float = 20.0) -> None:
         if _server_process is not None and _server_process.poll() is not None:
             raise RuntimeError("Backend server process exited during startup.")
         try:
-            with socket.create_connection(("127.0.0.1", SERVER_PORT), timeout=0.2):
+            with socket.create_connection((SERVER_PROBE_HOST, SERVER_PORT), timeout=0.2):
                 return
         except OSError:
             time.sleep(0.05)
@@ -1186,6 +1244,8 @@ def _handle_exit_signal(signum, frame) -> None:
 
 
 SERVER_PORT = find_available_port(8000)
+SERVER_ACCESS_HOST = _discover_lan_access_host()
+SERVER_PROBE_HOST = SERVER_ACCESS_HOST
 frontend_dist_path = get_resource_path(os.path.join("frontend", "dist"))
 
 
@@ -1198,7 +1258,7 @@ if __name__ == "__main__":
             pass
         from backend.app import run_backend_server
 
-        run_backend_server(child_port)
+        run_backend_server(child_port, host=SERVER_BIND_HOST)
         raise SystemExit(0)
 
     is_frozen = getattr(sys, "frozen", False)

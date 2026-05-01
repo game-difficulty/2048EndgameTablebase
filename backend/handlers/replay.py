@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from Config import category_info
@@ -16,6 +17,24 @@ from ..replay import (
 )
 from ..session import GameSession
 from ..tester import LATEST_TESTER_REPLAY
+from ..webview_api import Api
+
+
+def _load_replay_path(session: GameSession, path: str) -> None:
+    normalized_path = str(path or "").strip()
+    if not normalized_path:
+        return
+    try:
+        record = load_replay_file(normalized_path)
+        if len(record) == 0:
+            _replay_reset(session, "Recording file corrupted")
+            return
+
+        pattern = _replay_pattern_from_path(normalized_path)
+        use_variant = pattern.split("_")[0] in category_info.get("variant", [])
+        _replay_load_record(session, record, pattern, normalized_path, use_variant)
+    except Exception as exc:
+        _replay_reset(session, f"Failed to load replay: {exc}")
 
 
 async def handle_replay_action(
@@ -56,18 +75,14 @@ async def handle_replay_action(
         path = str(payload.get("path") or "").strip()
         if not path:
             return True
-        try:
-            record = load_replay_file(path)
-            if len(record) == 0:
-                _replay_reset(session, "Recording file corrupted")
-            else:
-                pattern = _replay_pattern_from_path(path)
-                use_variant = pattern.split("_")[0] in category_info.get(
-                    "variant", []
-                )
-                _replay_load_record(session, record, pattern, path, use_variant)
-        except Exception as e:
-            _replay_reset(session, f"Failed to load replay: {e}")
+        _load_replay_path(session, path)
+        await send_replay_state(websocket, session)
+        return True
+
+    if action == Action.REPLAY_TRIGGER_OPEN_FILE:
+        path = await asyncio.to_thread(Api().select_open_replay_file)
+        if path:
+            _load_replay_path(session, path)
         await send_replay_state(websocket, session)
         return True
 

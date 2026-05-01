@@ -309,6 +309,7 @@
     "test": "Test",
     "settings": "Settings",
     "help": "Help & About",
+    "openBrowserMode": "Open In Browser",
     "descriptions": {
       "play": "The Strongest 2048 AI & Evil Mode.",
       "practice": "Inspect Table Lines and Learn Optimal Moves for Endgame Positions.",

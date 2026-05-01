@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import threading
 from typing import Any
 
 import numpy as np
@@ -288,6 +287,22 @@ async def handle_trainer_action(
             await manager.send_state(websocket)
         return True
 
+    if action == Action.TRIGGER_RECORD_OPEN:
+        path = await asyncio.to_thread(Api().select_open_record)
+        if not path:
+            return True
+        payload = dict(payload)
+        payload["path"] = path
+        action = Action.RECORD_OPEN
+
+    if action == Action.TRIGGER_RECORD_SAVE:
+        path = await asyncio.to_thread(Api().select_save_record)
+        if not path:
+            return True
+        payload = dict(payload)
+        payload["path"] = path
+        action = Action.RECORD_SAVE
+
     if action == Action.RECORD_OPEN:
         path = payload.get("path")
         if path and os.path.exists(path):
@@ -460,50 +475,10 @@ async def handle_trainer_action(
         return True
 
     if action == Action.TRIGGER_SELECT_FOLDER:
-        def _trigger() -> None:
-            api = Api()
-            path = api.select_folder()
-            asyncio.run(
-                websocket.send_json(
-                    {"action": Message.FOLDER_SELECTED, "data": {"path": path}}
-                )
-            )
-
-        threading.Thread(target=_trigger).start()
-        return True
-
-    if action == Action.TRIGGER_RECORD_OPEN:
-        def _trigger() -> None:
-            api = Api()
-            path = api.select_open_record()
-            if path:
-                asyncio.run(
-                    websocket.send_json(
-                        {
-                            "action": Message.DO_API_CALLBACK,
-                            "data": {"type": Action.RECORD_OPEN, "path": path},
-                        }
-                    )
-                )
-
-        threading.Thread(target=_trigger).start()
-        return True
-
-    if action == Action.TRIGGER_RECORD_SAVE:
-        def _trigger() -> None:
-            api = Api()
-            path = api.select_save_record()
-            if path:
-                asyncio.run(
-                    websocket.send_json(
-                        {
-                            "action": Message.DO_API_CALLBACK,
-                            "data": {"type": Action.RECORD_SAVE, "path": path},
-                        }
-                    )
-                )
-
-        threading.Thread(target=_trigger).start()
+        path = await asyncio.to_thread(Api().select_folder)
+        await websocket.send_json(
+            {"action": Message.FOLDER_SELECTED, "data": {"path": path}}
+        )
         return True
 
     return False
