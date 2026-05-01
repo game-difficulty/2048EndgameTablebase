@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import pickle
 from platform import machine, system
+import queue
 import shutil
 import signal
 import socket
@@ -37,6 +38,9 @@ _server_process: subprocess.Popen | None = None
 _server_job_handle = None
 _cleanup_started = False
 _linux_backend_probe_cache: dict[str, object] | None = None
+_frontend_error_queue: queue.Queue = queue.Queue()
+_frontend_error_bridge_started = False
+_frontend_error_bridge_lock = threading.Lock()
 
 
 if os.name == "nt":
@@ -472,7 +476,7 @@ def _build_startup_error_page_html(title: str, message: str) -> str:
   <style>
     :root {{
       color-scheme: light dark;
-      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-family: "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "WenQuanYi Micro Hei", "Segoe UI Symbol", "Noto Color Emoji", "Segoe UI", sans-serif;
     }}
     body {{
       margin: 0;
@@ -749,7 +753,7 @@ def _build_startup_page_html(
   <style>
     :root {{
       color-scheme: {color_scheme};
-      font-family: \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;
+      font-family: \"Noto Sans CJK SC\", \"Noto Sans SC\", \"Source Han Sans SC\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei UI\", \"Microsoft YaHei\", \"WenQuanYi Micro Hei\", \"Segoe UI Symbol\", \"Noto Color Emoji\", \"Segoe UI\", sans-serif;
       --accent: {accent};
       --surface: {surface};
       --text: {text};
@@ -1085,21 +1089,61 @@ def stop_server_process() -> None:
     _terminate_server_process(close_job=True)
 
 
+def _dispatch_frontend_error_payload(payload: dict[str, str]) -> None:
+    if window is None:
+        return
+
+    payload_json = json.dumps(payload, ensure_ascii=False)
+    window.evaluate_js(
+        "window.__appGlobalErrors = window.__appGlobalErrors || [];"
+        f"window.__appGlobalErrors.push({payload_json});"
+        "window.dispatchEvent(new CustomEvent('app-global-error', { detail: "
+        f"{payload_json} }}));"
+    )
+
+
+def _drain_frontend_error_queue() -> None:
+    while True:
+        if _cleanup_started:
+            return
+
+        try:
+            payload = _frontend_error_queue.get(timeout=0.2)
+        except queue.Empty:
+            continue
+
+        if window is None:
+            continue
+
+        try:
+            if not window.events.loaded.wait(20):
+                _frontend_error_queue.put(payload)
+                time.sleep(0.2)
+                continue
+            _dispatch_frontend_error_payload(payload)
+        except Exception:
+            if _cleanup_started:
+                return
+            _frontend_error_queue.put(payload)
+            time.sleep(0.2)
+
+
 def _initialize_frontend_error_bridge() -> None:
+    global _frontend_error_bridge_started
     if window is None:
         return
 
     def _dispatch(payload: dict[str, str]) -> None:
-        if window is None:
-            return
-        payload_json = json.dumps(payload, ensure_ascii=False)
-        window.evaluate_js(
-            "window.__appGlobalErrors = window.__appGlobalErrors || [];"
-            f"window.__appGlobalErrors.push({payload_json});"
-            "window.dispatchEvent(new CustomEvent('app-global-error', { detail: "
-            f"{payload_json} }}));"
-        )
+        _frontend_error_queue.put(payload)
 
+    with _frontend_error_bridge_lock:
+        if not _frontend_error_bridge_started:
+            threading.Thread(
+                target=_drain_frontend_error_queue,
+                name="frontend-error-bridge",
+                daemon=True,
+            ).start()
+            _frontend_error_bridge_started = True
     register_frontend_error_dispatcher(_dispatch)
 
 
@@ -1118,6 +1162,7 @@ def _launch_backend_and_frontend() -> None:
         if _cleanup_started or window is None:
             return
         window.load_url(_frontend_url())
+        _initialize_frontend_error_bridge()
     except Exception as exc:
         _terminate_server_process(close_job=True)
         traceback.print_exc()
@@ -1132,8 +1177,7 @@ def _start_launcher_runtime() -> None:
     if os.name == "nt" and not _has_webview2_runtime():
         _show_webview2_runtime_required_notice()
         return
-    _initialize_frontend_error_bridge()
-    threading.Thread(target=_launch_backend_and_frontend, daemon=True).start()
+    _launch_backend_and_frontend()
 
 
 def _handle_exit_signal(signum, frame) -> None:

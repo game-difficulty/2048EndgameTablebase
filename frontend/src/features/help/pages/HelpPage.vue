@@ -294,7 +294,7 @@ const setAllTocNodes = (expanded) => {
 
 :deep(.markdown-body) {
   color: var(--text-main);
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-stack-system);
   line-height: 1.7;
 }
 

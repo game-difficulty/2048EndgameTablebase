@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 
 from engine_core.BoardMover import s_gen_new_num as r_gen_new_num

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 
 set -euo pipefail
 
@@ -6,6 +6,8 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 XSS_DIR="$ROOT_DIR/x86simdsort/x86-simd-sort"
 XSS_BUILD_DIR="$XSS_DIR/builddir"
 BUILD_DIR="$ROOT_DIR/build-formation"
+PORTABLE_X86_64_ARCH="${PORTABLE_X86_64_ARCH:-}"
+PORTABLE_X86_64_TUNE="${PORTABLE_X86_64_TUNE:-}"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -39,5 +41,19 @@ fi
 meson compile -C "$XSS_BUILD_DIR"
 cp "$XSS_BUILD_DIR/libx86simdsortcpp.a" "$ROOT_DIR/libx86simdsortcpp.a"
 
-cmake -S "$ROOT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
+CMAKE_ARGS=(
+  -S "$ROOT_DIR"
+  -B "$BUILD_DIR"
+  -DCMAKE_BUILD_TYPE=Release
+)
+
+if [ -n "$PORTABLE_X86_64_ARCH" ]; then
+  CMAKE_ARGS+=("-DPORTABLE_X86_64_ARCH=$PORTABLE_X86_64_ARCH")
+fi
+
+if [ -n "$PORTABLE_X86_64_TUNE" ]; then
+  CMAKE_ARGS+=("-DPORTABLE_X86_64_TUNE=$PORTABLE_X86_64_TUNE")
+fi
+
+cmake "${CMAKE_ARGS[@]}"
 cmake --build "$BUILD_DIR" --config Release --target ai_core mover_core formation_core bookgen_native -j

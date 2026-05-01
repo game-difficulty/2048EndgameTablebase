@@ -1,5 +1,21 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Clear Sans Web";
+  src: url("../../font/ClearSans/ClearSans-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Clear Sans Web";
+  src: url("../../font/ClearSans/ClearSans-Bold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
 @theme {
   --color-bg-main: var(--bg-main);
   --color-bg-card: var(--bg-card);
@@ -15,6 +31,44 @@
 
 :root {
   --ui-scale: 1;
+  --font-stack-ui:
+    "Clear Sans Web",
+    "Clear Sans",
+    "Noto Sans CJK SC",
+    "Noto Sans SC",
+    "Source Han Sans SC",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    "WenQuanYi Micro Hei",
+    "Arial Unicode MS",
+    "Segoe UI Symbol",
+    "Noto Color Emoji",
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+  --font-stack-system:
+    "Noto Sans CJK SC",
+    "Noto Sans SC",
+    "Source Han Sans SC",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    "WenQuanYi Micro Hei",
+    "Arial Unicode MS",
+    "Segoe UI Symbol",
+    "Noto Color Emoji",
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
   --font-ui-2xs: calc(0.625rem * var(--ui-scale));
   --font-ui-xs: calc(0.6875rem * var(--ui-scale));
   --font-ui-sm: calc(0.75rem * var(--ui-scale));
@@ -193,7 +247,7 @@ body {
   background-color: var(--bg-main);
   background-image: var(--bg-main-gradient);
   color: var(--text-main);
-  font-family: "Clear Sans", "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-stack-ui);
   overflow: hidden;
 }
 

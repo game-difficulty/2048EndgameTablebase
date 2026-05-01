@@ -1,6 +1,7 @@
 # Backend & Web Server
 fastapi>=0.100.0
-uvicorn[standard]>=0.22.0
+uvicorn>=0.22.0
+websockets>=10.4
 pywebview>=4.0.0
 markdown>=3.4.0
 

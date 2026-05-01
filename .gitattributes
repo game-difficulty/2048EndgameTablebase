@@ -13,3 +13,6 @@ native_core/extern/nanobind/** linguist-vendored
 
 # Generated Python stub files for native modules
 native_core/*.pyi linguist-generated=true
+
+# Shell scripts must keep LF line endings for Linux builds
+*.sh text eol=lf

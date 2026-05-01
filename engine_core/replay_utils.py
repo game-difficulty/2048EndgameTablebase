@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 
 import engine_core.BoardMover as bm
