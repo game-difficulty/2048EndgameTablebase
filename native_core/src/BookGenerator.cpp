@@ -8,7 +8,6 @@
 #include "UniqueUtils.h"
 #include "VBoardMover.h"
 #include <immintrin.h>
-#include <cpuid.h>
 
 #include <array>
 #include <algorithm>
@@ -53,6 +52,50 @@ void debug_log(const std::string &message) {
 
 bool supports_avx512() {
     return UniqueUtils::cpu_has_avx512_dq_bw_vl();
+}
+
+size_t success_entry_size_for_dtype(const std::string &name) {
+    switch (success_rate_kind_from_name(name)) {
+        case SuccessRateKind::UInt64:
+            return sizeof(SuccessEntry<uint64_t>);
+        case SuccessRateKind::Float32:
+            return sizeof(SuccessEntry<float>);
+        case SuccessRateKind::Float64:
+            return sizeof(SuccessEntry<double>);
+        case SuccessRateKind::UInt32:
+        default:
+            return sizeof(SuccessEntry<uint32_t>);
+    }
+}
+
+bool is_valid_restart_file(const std::string &path, uint64_t alignment) {
+    std::error_code ec;
+    if (!fs::exists(path, ec) || ec) {
+        return false;
+    }
+    if (!fs::is_regular_file(path, ec) || ec) {
+        return false;
+    }
+    const auto size = fs::file_size(path, ec);
+    if (ec || size == 0U) {
+        return false;
+    }
+    return alignment == 0U || (size % alignment) == 0U;
+}
+
+void remove_invalid_restart_file(const std::string &path, uint64_t alignment) {
+    std::error_code ec;
+    if (!fs::exists(path, ec) || ec) {
+        return;
+    }
+    if (is_valid_restart_file(path, alignment)) {
+        return;
+    }
+    fs::remove(path, ec);
+    if (ec) {
+        throw std::runtime_error("failed to remove invalid restart file: " + path);
+    }
+    debug_log("removed invalid restart file: " + path);
 }
 
 __attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
@@ -340,22 +383,33 @@ void validate_length_and_balance(
 
 std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> handle_restart(
     int step_index,
-    const std::string &pathname,
+    const RunOptions &options,
     const std::vector<uint64_t> &arr_init,
     bool started,
     FileIOUtils::DirectIoConfig io_config
 ) {
-    auto path_i = pathname + std::to_string(step_index);
-    auto path_i_plus_1 = pathname + std::to_string(step_index + 1);
-    auto path_i_minus_1 = pathname + std::to_string(step_index - 1);
+    auto path_i = options.pathname + std::to_string(step_index);
+    auto path_i_plus_1 = options.pathname + std::to_string(step_index + 1);
+    auto path_i_minus_1 = options.pathname + std::to_string(step_index - 1);
+    const uint64_t raw_alignment = sizeof(uint64_t);
+    const uint64_t book_alignment = success_entry_size_for_dtype(options.success_rate_dtype);
 
-    if ((fs::exists(path_i_plus_1) && fs::exists(path_i)) ||
-        (fs::exists(path_i_plus_1 + ".book") && fs::exists(path_i)) ||
-        (fs::exists(path_i_plus_1 + ".z") && fs::exists(path_i)) ||
-        fs::exists(path_i + ".book") ||
-        fs::exists(path_i + ".z") ||
-        fs::exists(path_i + ".book.7z") ||
-        fs::exists(path_i + ".7z")) {
+    remove_invalid_restart_file(path_i, raw_alignment);
+    remove_invalid_restart_file(path_i_plus_1, raw_alignment);
+    remove_invalid_restart_file(path_i + ".book", book_alignment);
+    remove_invalid_restart_file(path_i_plus_1 + ".book", book_alignment);
+    remove_invalid_restart_file(path_i + ".z", 0U);
+    remove_invalid_restart_file(path_i + ".book.7z", 0U);
+    remove_invalid_restart_file(path_i + ".7z", 0U);
+    remove_invalid_restart_file(path_i_plus_1 + ".z", 0U);
+
+    if ((is_valid_restart_file(path_i_plus_1, raw_alignment) && is_valid_restart_file(path_i, raw_alignment)) ||
+        (is_valid_restart_file(path_i_plus_1 + ".book", book_alignment) && is_valid_restart_file(path_i, raw_alignment)) ||
+        (is_valid_restart_file(path_i_plus_1 + ".z", 0U) && is_valid_restart_file(path_i, raw_alignment)) ||
+        is_valid_restart_file(path_i + ".book", book_alignment) ||
+        is_valid_restart_file(path_i + ".z", 0U) ||
+        is_valid_restart_file(path_i + ".book.7z", 0U) ||
+        is_valid_restart_file(path_i + ".7z", 0U)) {
         debug_log("skipping step " + std::to_string(step_index));
         return {false, {}, {}};
     }
@@ -922,7 +976,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
 
     for (int i = 1; i < options.steps - 1; ++i) {
-        auto [run, restart_d0, restart_d1] = handle_restart(i, options.pathname, arr_init, started, io_config);
+        auto [run, restart_d0, restart_d1] = handle_restart(i, options, arr_init, started, io_config);
         if (!restart_d0.empty()) {
             d0 = std::move(restart_d0);
         }

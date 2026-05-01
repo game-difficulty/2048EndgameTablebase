@@ -325,28 +325,36 @@ def canonical_min34(board):
 
 
 def simulate_move_and_merge(line: np.typing.NDArray) -> Tuple[List[int], List[int]]:
-    non_zero = [int(value) for value in line if value != 0]
-    merged = [0] * len(line)
-    new_line = []
-    skip = False
+    values = [int(value) for value in np.asarray(line).reshape(-1).tolist()]
+    merged = [0] * len(values)
+    new_line = [0] * len(values)
 
-    for index in range(len(non_zero)):
-        if skip:
-            skip = False
+    index = 0
+    while index < len(values):
+        if values[index] in (-1, 32768):
+            new_line[index] = values[index]
+            index += 1
             continue
-        if (
-            index + 1 < len(non_zero)
-            and non_zero[index] == non_zero[index + 1]
-            and non_zero[index] != -1
-            and non_zero[index] != 32768
-        ):
-            new_line.append(2 * non_zero[index])
-            merged[len(new_line) - 1] = 1
-            skip = True
-        else:
-            new_line.append(non_zero[index])
 
-    new_line.extend([0] * (len(line) - len(new_line)))
+        next_barrier = index
+        while next_barrier < len(values) and values[next_barrier] not in (-1, 32768):
+            next_barrier += 1
+
+        non_zero = [value for value in values[index:next_barrier] if value != 0]
+        write = index
+        read = 0
+        while read < len(non_zero):
+            if read + 1 < len(non_zero) and non_zero[read] == non_zero[read + 1]:
+                new_line[write] = 2 * non_zero[read]
+                merged[write] = 1
+                read += 2
+            else:
+                new_line[write] = non_zero[read]
+                read += 1
+            write += 1
+
+        index = next_barrier
+
     return new_line, merged
 
 

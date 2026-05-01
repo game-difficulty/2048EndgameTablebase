@@ -95,6 +95,36 @@ void debug_log(const std::string &message) {
     }
 }
 
+bool is_valid_restart_file(const std::string &path, uint64_t alignment) {
+    std::error_code ec;
+    if (!fs::exists(path, ec) || ec) {
+        return false;
+    }
+    if (!fs::is_regular_file(path, ec) || ec) {
+        return false;
+    }
+    const auto size = fs::file_size(path, ec);
+    if (ec || size == 0U) {
+        return false;
+    }
+    return alignment == 0U || (size % alignment) == 0U;
+}
+
+void remove_invalid_restart_file(const std::string &path, uint64_t alignment) {
+    std::error_code ec;
+    if (!fs::exists(path, ec) || ec) {
+        return;
+    }
+    if (is_valid_restart_file(path, alignment)) {
+        return;
+    }
+    fs::remove(path, ec);
+    if (ec) {
+        throw std::runtime_error("failed to remove invalid restart file: " + path);
+    }
+    debug_log("removed invalid restart file: " + path);
+}
+
 void log_recalculate_performance(int step_index, double t0, double t1, double t2, double t3, size_t length) {
     if (t3 <= t0) {
         return;
@@ -452,14 +482,20 @@ bool handle_restart_recalculate(
     const RunOptions &options
 ) {
     auto path_i = options.pathname + std::to_string(i);
-    if (fs::exists(path_i + ".book")) {
+    const uint64_t book_alignment = sizeof(SuccessEntry<T>);
+
+    remove_invalid_restart_file(path_i + ".book", book_alignment);
+    remove_invalid_restart_file(path_i + ".z", 0U);
+    remove_invalid_restart_file(path_i + ".book.7z", 0U);
+
+    if (is_valid_restart_file(path_i + ".book", book_alignment)) {
         debug_log("skipping step " + std::to_string(i));
         if (options.compress && !options.optimal_branch_only) {
             maybe_do_compress_classic(options.pathname + std::to_string(i + 2) + ".book", options.success_rate_dtype);
         }
         return false;
     }
-    if (fs::exists(path_i + ".z") || fs::exists(path_i + ".book.7z")) {
+    if (is_valid_restart_file(path_i + ".z", 0U) || is_valid_restart_file(path_i + ".book.7z", 0U)) {
         debug_log("skipping step " + std::to_string(i));
         return false;
     }
