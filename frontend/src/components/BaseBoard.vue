@@ -1,5 +1,12 @@
 <template>
-  <div class="board relative bg-board-bg rounded-xl aspect-square w-full max-w-[600px] mx-auto touch-none" style="container-type: size;">
+  <div
+    ref="boardRef"
+    class="board relative bg-board-bg rounded-xl aspect-square w-full max-w-[600px] mx-auto touch-none"
+    style="container-type: size;"
+    @pointermove="handleBoardPointerMove"
+    @pointerup="handleBoardPointerUp"
+    @pointercancel="clearTouchGesture"
+  >
     
     <!-- Grid Cells (Background) -->
     <div class="bg-grid">
@@ -8,7 +15,7 @@
         :key="`bg-${i}`" 
         class="bg-cell pointer-events-auto"
         :style="getBackgroundCellStyle(i - 1)"
-        @pointerdown.prevent="(e) => emit('cell-click', Math.floor((i-1)/4), (i-1)%4, e.button)"
+        @pointerdown.prevent="handleBackgroundPointerDown(i - 1, $event)"
         @contextmenu.prevent
       ></div>
     </div>
@@ -42,7 +49,7 @@
 <script setup>
 import { ref, watch, nextTick } from 'vue';
 
-const emit = defineEmits(['cell-click']);
+const emit = defineEmits(['cell-click', 'swipe']);
 
 const props = defineProps({
   board: {
@@ -65,12 +72,15 @@ const props = defineProps({
 });
 
 let tileIdCounter = 0;
+const boardRef = ref(null);
 const activeTiles = ref([]);
 let animTimeout = null;
 let revealMergeTimeout = null;
 let revealAppearTimeout = null;
 const MERGE_GLOW_MIN_VALUE = 2048;
 const MERGE_GLOW_STEPS = 5;
+const SWIPE_THRESHOLD_PX = 28;
+let touchGesture = null;
 
 function isVariantWallValue(value) {
   return props.isVariant && Number(value) === 32768;
@@ -96,6 +106,86 @@ function hasMoveAnimationMetadata(metadata) {
     && popPositions.length === 16;
   return hasDirectionalAnimation || hasAppearTile;
 }
+
+const clearTouchGesture = () => {
+  if (touchGesture?.pointerId != null && boardRef.value?.hasPointerCapture?.(touchGesture.pointerId)) {
+    try {
+      boardRef.value.releasePointerCapture(touchGesture.pointerId);
+    } catch {
+      // Ignore stale captures from interrupted gestures.
+    }
+  }
+  touchGesture = null;
+};
+
+const getSwipeDirection = (dx, dy) => {
+  const absX = Math.abs(dx);
+  const absY = Math.abs(dy);
+  if (Math.max(absX, absY) < SWIPE_THRESHOLD_PX) {
+    return null;
+  }
+  if (absX >= absY) {
+    return dx >= 0 ? 'right' : 'left';
+  }
+  return dy >= 0 ? 'down' : 'up';
+};
+
+const handleBackgroundPointerDown = (index, event) => {
+  const row = Math.floor(index / 4);
+  const col = index % 4;
+  if (event.pointerType === 'mouse') {
+    emit('cell-click', row, col, event.button);
+    return;
+  }
+
+  touchGesture = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    lastX: event.clientX,
+    lastY: event.clientY,
+    row,
+    col,
+    button: event.button,
+  };
+
+  if (boardRef.value?.setPointerCapture) {
+    try {
+      boardRef.value.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture is best-effort for touch drags.
+    }
+  }
+};
+
+const handleBoardPointerMove = (event) => {
+  if (!touchGesture || event.pointerId !== touchGesture.pointerId) {
+    return;
+  }
+  touchGesture.lastX = event.clientX;
+  touchGesture.lastY = event.clientY;
+};
+
+const handleBoardPointerUp = (event) => {
+  if (!touchGesture || event.pointerId !== touchGesture.pointerId) {
+    return;
+  }
+
+  touchGesture.lastX = event.clientX;
+  touchGesture.lastY = event.clientY;
+  const dx = touchGesture.lastX - touchGesture.startX;
+  const dy = touchGesture.lastY - touchGesture.startY;
+  const direction = getSwipeDirection(dx, dy);
+  const { row, col, button } = touchGesture;
+  clearTouchGesture();
+
+  if (direction) {
+    emit('swipe', direction);
+    return;
+  }
+
+  emit('cell-click', row, col, button);
+};
 
 const decayGlowSteps = (tile) => {
     if (!tile.glowStepsRemaining) return 0;

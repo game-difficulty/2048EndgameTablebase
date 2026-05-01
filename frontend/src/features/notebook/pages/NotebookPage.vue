@@ -50,7 +50,7 @@
     <div class="grid w-full max-w-6xl grid-cols-[560px_minmax(0,1fr)] items-start gap-6">
       <section class="flex flex-col">
         <div class="mx-auto w-full max-w-[556px]">
-          <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" />
+          <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @swipe="handleBoardSwipe" />
         </div>
       </section>
 
@@ -190,6 +190,12 @@ const props = defineProps({
 const emit = defineEmits(['navigate-tab']);
 
 const directionButtons = ['Up', 'Down', 'Left', 'Right'];
+
+const handleBoardSwipe = (direction) => {
+  const normalized = String(direction || '').toLowerCase();
+  if (!normalized) return;
+  answerDirection(normalized.charAt(0).toUpperCase() + normalized.slice(1));
+};
 
 const {
   wsStatus,

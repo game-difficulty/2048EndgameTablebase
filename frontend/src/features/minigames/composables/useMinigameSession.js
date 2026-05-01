@@ -369,5 +369,6 @@ export function useMinigameSession(activeRef) {
     usePowerup,
     cancelInteraction,
     handleBoardCellClick,
+    move,
   };
 }

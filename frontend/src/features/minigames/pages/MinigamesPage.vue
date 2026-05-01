@@ -23,6 +23,7 @@
     @use-powerup="usePowerup"
     @cancel-interaction="cancelInteraction"
     @cell-click="handleBoardCellClick"
+    @swipe="move"
     @close-overlay="closeOverlay"
   />
 </template>
@@ -58,5 +59,6 @@ const {
   usePowerup,
   cancelInteraction,
   handleBoardCellClick,
+  move,
 } = useMinigameSession(toRef(props, 'active'));
 </script>

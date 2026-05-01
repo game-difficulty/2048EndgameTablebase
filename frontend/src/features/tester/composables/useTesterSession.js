@@ -421,15 +421,13 @@ export function useTesterSession(activeRef) {
   const move = (dir) => canMove.value && triggerAction('TESTER_MOVE', { dir });
 
   const saveLog = async () => {
-    if (!logs.value.length || !window.pywebview?.api?.select_save_tester_log) return;
-    const path = await window.pywebview.api.select_save_tester_log();
-    if (path) triggerAction('TESTER_SAVE_LOG', { path });
+    if (!logs.value.length) return;
+    triggerAction('TESTER_TRIGGER_SAVE_LOG');
   };
 
   const saveReplay = async () => {
-    if (recordLength.value < 1 || !window.pywebview?.api?.select_save_tester_replay) return;
-    const path = await window.pywebview.api.select_save_tester_replay();
-    if (path) triggerAction('TESTER_SAVE_REPLAY', { path });
+    if (recordLength.value < 1) return;
+    triggerAction('TESTER_TRIGGER_SAVE_REPLAY');
   };
 
   const handlePracticeJump = (event) => {
@@ -643,6 +641,7 @@ export function useTesterSession(activeRef) {
     resetRandom,
     applyManualBoard,
     toggleInsights,
+    move,
     saveLog,
     saveReplay,
     getResultRowStyle,

@@ -4,7 +4,10 @@
     class="board relative bg-board-bg rounded-xl w-full max-w-[600px] mx-auto touch-none overflow-hidden"
     :class="{ 'has-custom-cursor': Boolean(props.interaction?.active) }"
     :style="boardShellStyle"
+    @pointerdown="handleBoardPointerDown"
     @pointermove="handlePointerMove"
+    @pointerup="handleBoardPointerUp"
+    @pointercancel="clearSwipeGesture"
     @pointerleave="handlePointerLeave"
   >
     <div class="minigame-board-grid" :style="boardGridStyle">
@@ -207,7 +210,7 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(['cell-click']);
+const emit = defineEmits(['cell-click', 'swipe']);
 
 const boardRef = ref(null);
 const activeTiles = ref([]);
@@ -220,6 +223,9 @@ let revealTimeout = null;
 let moveCleanupTimeout = null;
 let effectsCleanupTimeout = null;
 let followUpTimeout = null;
+let swipeGesture = null;
+let suppressCellClickUntil = 0;
+const SWIPE_THRESHOLD_PX = 28;
 
 const rows = computed(() => Number(props.shape?.rows || 4));
 const cols = computed(() => Number(props.shape?.cols || 4));
@@ -308,7 +314,56 @@ const getOverlayText = (overlay) => {
   return String(overlay);
 };
 
+const clearSwipeGesture = () => {
+  if (swipeGesture?.pointerId != null && boardRef.value?.hasPointerCapture?.(swipeGesture.pointerId)) {
+    try {
+      boardRef.value.releasePointerCapture(swipeGesture.pointerId);
+    } catch {
+      // Ignore stale captures from interrupted gestures.
+    }
+  }
+  swipeGesture = null;
+};
+
+const getSwipeDirection = (dx, dy) => {
+  const absX = Math.abs(dx);
+  const absY = Math.abs(dy);
+  if (Math.max(absX, absY) < SWIPE_THRESHOLD_PX) {
+    return null;
+  }
+  if (absX >= absY) {
+    return dx >= 0 ? 'right' : 'left';
+  }
+  return dy >= 0 ? 'down' : 'up';
+};
+
+const handleBoardPointerDown = (event) => {
+  if (event.pointerType === 'mouse' || props.interaction?.active) {
+    return;
+  }
+
+  swipeGesture = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    lastX: event.clientX,
+    lastY: event.clientY,
+  };
+
+  if (boardRef.value?.setPointerCapture) {
+    try {
+      boardRef.value.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture is best-effort for touch drags.
+    }
+  }
+};
+
 const handlePointerMove = (event) => {
+  if (swipeGesture && event.pointerId === swipeGesture.pointerId) {
+    swipeGesture.lastX = event.clientX;
+    swipeGesture.lastY = event.clientY;
+  }
   if (!props.interaction?.active || !boardRef.value) {
     cursorPreview.value.visible = false;
     return;
@@ -325,7 +380,28 @@ const handlePointerLeave = () => {
   cursorPreview.value.visible = false;
 };
 
+const handleBoardPointerUp = (event) => {
+  if (!swipeGesture || event.pointerId !== swipeGesture.pointerId) {
+    return;
+  }
+
+  swipeGesture.lastX = event.clientX;
+  swipeGesture.lastY = event.clientY;
+  const dx = swipeGesture.lastX - swipeGesture.startX;
+  const dy = swipeGesture.lastY - swipeGesture.startY;
+  const direction = getSwipeDirection(dx, dy);
+  clearSwipeGesture();
+
+  if (!direction) {
+    return;
+  }
+
+  suppressCellClickUntil = Date.now() + 320;
+  emit('swipe', direction);
+};
+
 const handleGridCellClick = (cell) => {
+  if (Date.now() < suppressCellClickUntil) return;
   if (props.interaction?.mode === 'twist') return;
   emit('cell-click', cell);
 };

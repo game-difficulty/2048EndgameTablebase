@@ -67,7 +67,7 @@
         </div>
 
         <div ref="boardHotkeyTarget" tabindex="-1" class="mx-auto w-full max-w-[442px] outline-none focus:outline-none">
-          <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" />
+          <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @swipe="move" />
         </div>
 
         <div class="mt-4 grid grid-cols-3 gap-2">
@@ -272,6 +272,7 @@ const {
   resetRandom,
   applyManualBoard,
   toggleInsights,
+  move,
   saveLog,
   saveReplay,
   getResultRowStyle,

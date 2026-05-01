@@ -96,7 +96,14 @@
         </div>
 
         <div ref="boardHotkeyTarget" tabindex="-1" class="w-full outline-none focus:outline-none">
-          <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @cell-click="handleCellClick" />
+          <BaseBoard
+            :board="board"
+            :metadata="metadata"
+            :dis32k="dis32k"
+            :is-variant="isVariant"
+            @cell-click="handleCellClick"
+            @swipe="moveBoard"
+          />
         </div>
 
         <div class="w-full mt-4 bg-bg-card border border-border-main rounded-lg p-3 shadow-sm">
@@ -311,6 +318,7 @@ const {
   trainerStep,
   trainerUndo,
   trainerDefault,
+  moveBoard,
   spawnModes,
   spawnMode,
   setSpawnMode,

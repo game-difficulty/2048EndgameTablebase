@@ -39,8 +39,8 @@
           <button class="action-btn min-w-[150px]" :disabled="!loaded" @click="jumpToPractice">{{ $t('replay.toolbar.jumpToPractice') }}</button>
         </div>
 
-        <div class="pointer-events-none mx-auto w-full max-w-[480px]">
-          <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" />
+        <div class="mx-auto w-full max-w-[480px]">
+          <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @swipe="handleBoardSwipe" />
         </div>
       </section>
 
@@ -182,6 +182,18 @@ const updateEvaluationTooltip = (event) => {
     rect.width - tooltipHalfWidth - padding,
     Math.max(tooltipHalfWidth + padding, pointerX)
   );
+};
+
+const handleBoardSwipe = (direction) => {
+  if (direction === 'left') {
+    stepReplay(-1);
+  } else if (direction === 'right') {
+    stepReplay(1);
+  } else if (direction === 'up') {
+    stepReplay(10);
+  } else if (direction === 'down') {
+    stepReplay(-10);
+  }
 };
 
 const {

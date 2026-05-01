@@ -434,14 +434,7 @@ export function useTrainerSession(activeRef) {
     }
 
     if (data.action === 'RECORD_SAVE_REQUIRED') {
-      let path = null;
-      if (window.pywebview && window.pywebview.api) {
-        path = await window.pywebview.api.select_save_record();
-      } else {
-        triggerAction('TRIGGER_RECORD_SAVE');
-        return;
-      }
-      if (path) triggerAction('STOP_RECORDING', { path });
+      triggerAction('TRIGGER_RECORD_SAVE');
       return;
     }
 
@@ -542,13 +535,6 @@ export function useTrainerSession(activeRef) {
         tablebasePath.value = data.data.path;
         applyTablebase(data.data.path);
       }
-      return;
-    }
-
-    if (data.action === 'DO_API_CALLBACK') {
-      const type = data.data.type;
-      if (type === 'RECORD_OPEN') triggerAction('RECORD_OPEN', { path: data.data.path });
-      if (type === 'RECORD_SAVE') triggerAction('RECORD_SAVE', { path: data.data.path });
       return;
     }
 
@@ -659,15 +645,7 @@ export function useTrainerSession(activeRef) {
 
   const selectFolder = async () => {
     try {
-      if (window.pywebview && window.pywebview.api) {
-        const path = await window.pywebview.api.select_folder();
-        if (path) {
-          tablebasePath.value = path;
-          applyTablebase(path);
-        }
-      } else {
-        triggerAction('TRIGGER_SELECT_FOLDER');
-      }
+      triggerAction('TRIGGER_SELECT_FOLDER');
     } catch (error) {
       console.error(error);
     }
@@ -730,15 +708,19 @@ export function useTrainerSession(activeRef) {
         triggerAction('START_RECORDING');
       }
     } else if (cmd === 'OPEN') {
-      if (window.pywebview && window.pywebview.api) {
-        const path = await window.pywebview.api.select_open_record();
-        if (path) triggerAction('RECORD_OPEN', { path });
-      } else {
-        triggerAction('TRIGGER_RECORD_OPEN');
-      }
+      triggerAction('TRIGGER_RECORD_OPEN');
     } else if (cmd === 'PREV' || cmd === 'NEXT') {
       triggerAction('RECORD_STEP', { dir: cmd === 'PREV' ? -1 : 1 });
     }
+  };
+
+  const moveBoard = (dir) => {
+    const normalized = String(dir || '').toLowerCase();
+    if (!['up', 'down', 'left', 'right'].includes(normalized) || awaitingSpawn.value) return;
+    demoActive.value = false;
+    clearDemoTimer();
+    clearStepQueue();
+    triggerAction('TRAINER_MOVE', { dir: normalized });
   };
 
   const handleKeydown = (event) => {
@@ -774,11 +756,7 @@ export function useTrainerSession(activeRef) {
     };
     if (map[event.code]) {
       event.preventDefault();
-      if (awaitingSpawn.value) return;
-      demoActive.value = false;
-      clearDemoTimer();
-      clearStepQueue();
-      triggerAction('TRAINER_MOVE', { dir: map[event.code] });
+      moveBoard(map[event.code]);
     } else if (event.code === 'Backspace' || event.code === 'Delete') {
       event.preventDefault();
       demoActive.value = false;
@@ -935,6 +913,7 @@ export function useTrainerSession(activeRef) {
     trainerStep,
     trainerUndo,
     trainerDefault,
+    moveBoard,
     spawnModes,
     spawnMode,
     setSpawnMode,

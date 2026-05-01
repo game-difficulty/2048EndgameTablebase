@@ -59,6 +59,7 @@
           :metadata="state.animation"
           :interaction="state.interaction"
           @cell-click="$emit('cell-click', $event)"
+          @swipe="$emit('swipe', $event)"
         />
       </div>
 
@@ -126,6 +127,7 @@ defineEmits([
   'use-powerup',
   'cancel-interaction',
   'cell-click',
+  'swipe',
   'custom-action',
   'close-overlay',
 ]);

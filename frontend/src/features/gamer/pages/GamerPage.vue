@@ -79,7 +79,7 @@
       </div>
 
       <div ref="boardHotkeyTarget" tabindex="-1" class="w-full outline-none focus:outline-none">
-        <BaseBoard :board="board" :metadata="metadata" />
+        <BaseBoard :board="board" :metadata="metadata" @swipe="handleBoardSwipe" />
       </div>
 
       <div class="w-full mt-6 bg-ctrl-bg rounded-md p-4 flex flex-col space-y-4 shadow-sm">
@@ -132,5 +132,9 @@ const {
 const handleUpdateSettings = (event) => {
   updateSettings();
   refocusBoardHotkeyTarget(boardHotkeyTarget, event?.target);
+};
+
+const handleBoardSwipe = (direction) => {
+  triggerAction('USER_MOVE', { dir: direction });
 };
 </script>
