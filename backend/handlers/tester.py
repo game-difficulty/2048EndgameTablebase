@@ -109,11 +109,18 @@ async def handle_tester_action(
         target = session.tester_pattern[1]
         found, path_list = _tester_prepare_selection(session, pattern, target)
         if found and path_list:
-            random_board = session.ensure_book_reader().get_random_state(
-                path_list, session.tester_full_pattern
-            )
-            random_board = _tester_random_rotate(random_board, pattern)
-            _tester_start_practice(session, random_board, "We'll start from:")
+            try:
+                random_board = session.ensure_book_reader().get_random_state(
+                    path_list, session.tester_full_pattern
+                )
+                random_board = _tester_random_rotate(random_board, pattern)
+                _tester_start_practice(session, random_board, "We'll start from:")
+            except Exception as e:
+                session.tester_status = f"Failed to initialize board: {e}"
+                session.tester_logs = [
+                    f"Selected pattern: {session.tester_full_pattern}",
+                    session.tester_status,
+                ]
         else:
             _tester_reset_history(session, session.board_encoded, 0)
             _tester_reset_record(session)

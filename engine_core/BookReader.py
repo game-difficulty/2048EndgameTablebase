@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -38,6 +38,25 @@ def _symm_mode_value(name: str) -> int:
 
 class BookReader:
     _native_readers: dict[str, Any] = {}
+
+    @staticmethod
+    def gen_all_mirror(pattern: str) -> list[tuple[str, str, Callable[[np.ndarray], np.ndarray]]]:
+        # Keep the legacy tester randomization contract: variant patterns are not
+        # symmetrically remapped, and LL only rotates.
+        if pattern in category_info.get("variant", []):
+            return [("none", "none", lambda board: board)]
+
+        operations = [
+            ("none", "none", lambda board: board),
+            ("rotate_90", "none", lambda board: np.rot90(board)),
+            ("rotate_180", "none", lambda board: np.rot90(board, k=2)),
+            ("rotate_270", "none", lambda board: np.rot90(board, k=3)),
+            ("none", "horizontal", lambda board: np.flip(board, axis=1)),
+            ("rotate_90", "horizontal", lambda board: np.flip(np.rot90(board), axis=1)),
+            ("rotate_180", "horizontal", lambda board: np.flip(np.rot90(board, k=2), axis=1)),
+            ("rotate_270", "horizontal", lambda board: np.flip(np.rot90(board, k=3), axis=1)),
+        ]
+        return operations if pattern != "LL" else operations[:4]
 
     @classmethod
     def _get_native_reader(cls, pattern: str):
