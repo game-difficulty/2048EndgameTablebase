@@ -2,28 +2,20 @@ from __future__ import annotations
 
 import atexit
 import ctypes
-import html
-import importlib
 import ipaddress
 import json
-import locale
 import multiprocessing
 import os
 from pathlib import Path
-import pickle
-from platform import machine, system
 import queue
-import shutil
 import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import traceback
 from urllib.parse import urlencode
-import webbrowser
 
 import webview
 
@@ -40,7 +32,6 @@ from backend.launcher.platform_windows import (
     show_windows_pythonnet_runtime_notice as _launcher_show_windows_pythonnet_runtime_notice,
 )
 from backend.launcher.startup_config import (
-    load_startup_config as _load_startup_config,
     startup_language as _startup_language,
     startup_uses_dark_mode as _startup_uses_dark_mode,
 )
@@ -65,7 +56,6 @@ window: webview.Window | None = None
 _server_process: subprocess.Popen | None = None
 _server_job_handle = None
 _cleanup_started = False
-_linux_backend_probe_cache: dict[str, object] | None = None
 _frontend_error_queue: queue.Queue = queue.Queue()
 _frontend_error_bridge_started = False
 _frontend_error_bridge_lock = threading.Lock()
@@ -73,36 +63,12 @@ SERVER_BIND_HOST = "0.0.0.0"
 
 
 if os.name == "nt":
-    import winreg
-
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    _user32 = ctypes.WinDLL("user32", use_last_error=True)
-    _WEBVIEW2_DOWNLOAD_URL = "https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section"
-    _WEBVIEW2_MIN_VERSION = (86, 0, 622, 0)
-    _WEBVIEW2_MIN_DOTNET_RELEASE = 394802
-    _WEBVIEW2_RUNTIME_CLIENT_IDS = (
-        "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
-        "{2CD8A007-E189-409D-A2C8-9AF4EF3C72AA}",
-        "{0D50BFEC-CD6A-4F9A-964C-C7416E3ACB10}",
-        "{65C35B14-6C1D-4122-AC46-7148CC9D6497}",
-    )
-
     _PROCESS_SET_QUOTA = 0x0100
     _PROCESS_TERMINATE = 0x0001
     _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
     _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
-    _MB_OK = 0x00000000
-    _MB_ICONERROR = 0x00000010
-    _MB_SYSTEMMODAL = 0x00001000
-
-    _user32.MessageBoxW.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_wchar_p,
-        ctypes.c_wchar_p,
-        ctypes.c_uint,
-    ]
-    _user32.MessageBoxW.restype = ctypes.c_int
 
     class _IO_COUNTERS(ctypes.Structure):
         _fields_ = [
