@@ -188,6 +188,13 @@ What `build_linux.sh` does:
    - build `bookgen_native.so`
 3. Verifies the Python imports required to launch the app
 
+Notes for manual native builds:
+
+- `native_core` test executables are disabled by default.
+- The normal app build does not require `_test` sources.
+- If you intentionally enable `-DNATIVE_BUILD_TESTS=ON`, make sure the optional
+  test sources under `native_core/tests/` are present in your source tree.
+
 After the build finishes, you can run the desktop app manually:
 
 ```bash

@@ -47,7 +47,7 @@ Then build the native targets:
 ```powershell
 cd ..\..
 ..\7zip\7z.exe x -y -o.\src .\egtb_data.7z
-cmake -S . -B build-formation -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build-formation -DCMAKE_BUILD_TYPE=Release -DNATIVE_BUILD_TESTS=OFF
 cmake --build .\build-formation --target ai_core mover_core formation_core bookgen_native -j 4
 ```
 
@@ -90,10 +90,19 @@ This builds:
 - `formation_core*.so`
 - `bookgen_native.so`
 
+If you run `cmake` manually instead of `make.sh`, keep tests disabled unless you
+explicitly have the optional test sources:
+
+```bash
+cmake -S . -B build-formation -DCMAKE_BUILD_TYPE=Release -DNATIVE_BUILD_TESTS=OFF
+cmake --build build-formation --target ai_core mover_core formation_core bookgen_native -j
+```
+
 ## Notes
 
 - `egtb_data.7z` is part of the source distribution. It exists to keep the generated `egtb_data_*.cpp` out of normal GitHub language and line-count statistics while still letting users rebuild locally.
 - `x86simdsort/x86-simd-sort/` is a modified upstream codebase; keep its README and license when publishing.
+- Test sources under `native_core/tests/` are optional and are not required for normal app builds. If they are absent, leave `NATIVE_BUILD_TESTS` disabled.
 - `src/AIPlayer - wasm.cpp`, `src/bindings_wasm.cpp`, and `include/AIPlayer - wasm.h` are intentionally retained as the canonical WASM source set for the repository's web-demo AI flow.
 - Published browser assets belong in the repository root `docs/` directory: `docs/index.html`, `docs/main.js`, `docs/worker.js`, `docs/ai_core.js`, and `docs/ai_core.wasm`.
 - The WASM build scaffold lives in `docs/wasm_build/` and should not be treated as a second native workspace.

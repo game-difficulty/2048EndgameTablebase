@@ -45,6 +45,7 @@ CMAKE_ARGS=(
   -S "$ROOT_DIR"
   -B "$BUILD_DIR"
   -DCMAKE_BUILD_TYPE=Release
+  -DNATIVE_BUILD_TESTS=OFF
 )
 
 if [ -n "$PORTABLE_X86_64_ARCH" ]; then

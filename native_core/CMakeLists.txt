@@ -2,6 +2,7 @@
 project(2048_AI_Core LANGUAGES CXX)
 
 option(NATIVE_ENABLE_ASAN "Enable AddressSanitizer for native_core debug builds." OFF)
+option(NATIVE_BUILD_TESTS "Build native_core test executables when test sources are available." OFF)
 
 find_package(Python 3.8 REQUIRED COMPONENTS Interpreter Development.Module)
 
@@ -157,11 +158,22 @@ set(FORMATION_CORE_SOURCES
 nanobind_add_module(formation_core ${FORMATION_CORE_SOURCES})
 target_link_libraries(formation_core PRIVATE common_config OpenMP::OpenMP_CXX)
 
-add_executable(adaptive_index_test
-    src/AdaptiveIndex.cpp
-    tests/test_adaptive_index.cpp
-)
-target_link_libraries(adaptive_index_test PRIVATE common_config OpenMP::OpenMP_CXX)
+set(ADAPTIVE_INDEX_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_adaptive_index.cpp")
+
+if(NATIVE_BUILD_TESTS)
+    if(NOT EXISTS "${ADAPTIVE_INDEX_TEST_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${ADAPTIVE_INDEX_TEST_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
+
+    add_executable(adaptive_index_test
+        src/AdaptiveIndex.cpp
+        tests/test_adaptive_index.cpp
+    )
+    target_link_libraries(adaptive_index_test PRIVATE common_config OpenMP::OpenMP_CXX)
+endif()
 
 add_library(bookgen_native SHARED
     xss_wrapper.cpp
