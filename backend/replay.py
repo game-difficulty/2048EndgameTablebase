@@ -163,6 +163,7 @@ async def send_replay_state(websocket, session, metadata=None):
                 "points_rank": session.replay_points_rank,
                 "losses": session.replay_losses,
                 "summary": summary,
+                "performance_labels": list(TESTER_PERFORMANCE_ORDER),
                 "settings": {
                     "colors": config.get("colors", []),
                     "dis_32k": config.get("dis_32k", False),

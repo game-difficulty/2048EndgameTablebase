@@ -12,43 +12,25 @@ from Config import (
 from engine_core.BookReader import BookReader
 from engine_core.VBoardMover import decode_board, encode_board
 from engine_core.replay_utils import empty_replay, strip_replay_sentinel
+from engine_core.performance_evaluation import (
+    PERFORMANCE_LABELS,
+    PERFORMANCE_PERFECT_LABEL,
+    build_performance_stats,
+    evaluation_of_performance,
+)
 
 from .serialization import sanitize_config
 from .session import np_u64, safe_hex, u64
 
 
-TESTER_PERFORMANCE_ORDER = (
-    "Perfect!",
-    "Excellent!",
-    "Nice try!",
-    "Not bad!",
-    "Mistake!",
-    "Blunder!",
-    "Terrible!",
-)
+TESTER_PERFORMANCE_ORDER = PERFORMANCE_LABELS
 TESTER_MOVE_LABELS = {
     "en": {"left": "Left", "right": "Right", "up": "Up", "down": "Down"},
     "zh": {"left": "左", "right": "右", "up": "上", "down": "下"},
 }
 TESTER_EVALUATION_LABELS = {
-    "en": {
-        "Perfect!": "Perfect!",
-        "Excellent!": "Excellent!",
-        "Nice try!": "Nice try!",
-        "Not bad!": "Not bad!",
-        "Mistake!": "Mistake!",
-        "Blunder!": "Blunder!",
-        "Terrible!": "Terrible!",
-    },
-    "zh": {
-        "Perfect!": "Perfect!",
-        "Excellent!": "Excellent!",
-        "Nice try!": "Nice try!",
-        "Not bad!": "Not bad!",
-        "Mistake!": "Mistake!",
-        "Blunder!": "Blunder!",
-        "Terrible!": "Terrible!",
-    },
+    "en": {label: label for label in TESTER_PERFORMANCE_ORDER},
+    "zh": {label: label for label in TESTER_PERFORMANCE_ORDER},
 }
 TESTER_REPLAY_SENTINEL = (
     np.uint64(0),
@@ -70,9 +52,7 @@ def _tester_reset_metrics(session):
     session.tester_combo = 0
     session.tester_goodness_of_fit = 1.0
     session.tester_max_combo = 0
-    session.tester_performance_stats = {
-        label: 0 for label in TESTER_PERFORMANCE_ORDER
-    }
+    session.tester_performance_stats = build_performance_stats()
 
 
 def _tester_reset_last_step(session):
@@ -180,7 +160,7 @@ def _tester_feedback_lines(
     best_label = _tester_move_label(best_move, lang)
     display_evaluation = _tester_evaluation_label(evaluation, lang)
 
-    if evaluation == "Perfect!":
+    if evaluation == PERFORMANCE_PERFECT_LABEL:
         if lang == "zh":
             return [
                 f"{display_evaluation} Combo: {combo}x",
@@ -329,17 +309,7 @@ def _tester_start_practice(session, board_encoded, opening_text):
 
 
 def _tester_evaluation_of_performance(loss):
-    if loss >= 0.999:
-        return "Excellent!"
-    if loss >= 0.99:
-        return "Nice try!"
-    if loss >= 0.975:
-        return "Not bad!"
-    if loss >= 0.9:
-        return "Mistake!"
-    if loss >= 0.75:
-        return "Blunder!"
-    return "Terrible!"
+    return evaluation_of_performance(loss)
 
 
 def _tester_record_step(session, direction, spawn_pos, spawn_val_exp):
@@ -418,6 +388,7 @@ async def send_tester_state(websocket, session, metadata=None):
                     "max_combo": session.tester_max_combo,
                     "goodness_of_fit": session.tester_goodness_of_fit,
                     "performance_stats": session.tester_performance_stats,
+                    "performance_labels": list(TESTER_PERFORMANCE_ORDER),
                     "score": int(session.score),
                     "best_score": int(session.best_score),
                 },

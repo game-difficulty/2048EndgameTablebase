@@ -31,7 +31,8 @@ export function useReplaySession(activeRef, emit) {
     'Blunder!': '#e53935',
     'Terrible!': '#b71c1c',
   };
-  const performanceLabels = ['Perfect!', 'Excellent!', 'Nice try!', 'Not bad!', 'Mistake!', 'Blunder!', 'Terrible!'];
+  const fallbackPerformanceLabels = ['Perfect!', 'Excellent!', 'Nice try!', 'Not bad!', 'Mistake!', 'Blunder!', 'Terrible!'];
+  const performanceLabels = ref([...fallbackPerformanceLabels]);
   const zhEvaluationLabels = {
     'Perfect!': 'Perfect!',
     'Excellent!': 'Excellent!',
@@ -41,6 +42,15 @@ export function useReplaySession(activeRef, emit) {
     'Blunder!': 'Blunder!',
     'Terrible!': 'Terrible!',
   };
+  const evaluationColorPalette = [
+    '#2e7d32',
+    '#7cb342',
+    '#c0ca33',
+    '#fb8c00',
+    '#f4511e',
+    '#e53935',
+    '#b71c1c',
+  ];
 
   const wsStatus = ref('connecting');
   const board = ref(new Array(16).fill(0));
@@ -56,6 +66,7 @@ export function useReplaySession(activeRef, emit) {
   const currentMove = ref(null);
   const bestMove = ref(null);
   const loss = ref(null);
+  const evaluation = ref(null);
   const goodnessOfFit = ref(null);
   const combo = ref(0);
   const summary = ref({ total_moves: 0, final_gof: 0, max_combo: 0, counts: {} });
@@ -86,6 +97,13 @@ export function useReplaySession(activeRef, emit) {
 
   const isZh = () => String(currentLanguage.value || 'en').startsWith('zh');
   const getEvaluationLabel = (label) => (isZh() ? (zhEvaluationLabels[label] || label) : label);
+  const perfectLabel = computed(() => performanceLabels.value[0] || fallbackPerformanceLabels[0]);
+  const getEvaluationColor = (label) => {
+    if (evaluationColors[label]) return evaluationColors[label];
+    const index = performanceLabels.value.indexOf(label);
+    if (index >= 0) return evaluationColorPalette[index % evaluationColorPalette.length];
+    return 'var(--accent)';
+  };
   const trimTrailingZeros = (value) =>
     value.replace(/(\.\d*?[1-9])0+$/u, '$1').replace(/\.0+$/u, '').replace(/\.$/u, '');
   const formatReplayRate = (value) => trimTrailingZeros(Number(value || 0).toFixed(9));
@@ -170,36 +188,26 @@ export function useReplaySession(activeRef, emit) {
     () => resultsRefreshPhase.value === 'stale' || resultsRefreshPhase.value === 'placeholder'
   );
 
-  const currentEvaluation = computed(() => {
-    if (loss.value == null) return null;
-    const val = Number(loss.value);
-    if (val > 1 - 3e-10) return 'Perfect!';
-    if (val >= 0.999) return 'Excellent!';
-    if (val >= 0.99) return 'Nice try!';
-    if (val >= 0.975) return 'Not bad!';
-    if (val >= 0.9) return 'Mistake!';
-    if (val >= 0.75) return 'Blunder!';
-    return 'Terrible!';
-  });
+  const currentEvaluation = computed(() => evaluation.value || (loss.value == null ? null : perfectLabel.value));
 
   const feedbackBadgeText = computed(() => {
     if (!loaded.value) return replayStatus.value || t('replay.status.noReplayLoaded');
     if (currentStep.value >= totalSteps.value) return t('replay.status.replayComplete');
-    return getEvaluationLabel(currentEvaluation.value || 'Perfect!');
+    return getEvaluationLabel(currentEvaluation.value || perfectLabel.value);
   });
 
   const feedbackBadgeStyle = computed(() => {
     if (!loaded.value || currentStep.value >= totalSteps.value) {
       return { color: 'var(--text-secondary)' };
     }
-    return { color: evaluationColors[currentEvaluation.value] || 'var(--accent)' };
+    return { color: getEvaluationColor(currentEvaluation.value) };
   });
 
   const feedbackLossText = computed(() => {
     if (
       !loaded.value ||
       currentStep.value >= totalSteps.value ||
-      currentEvaluation.value === 'Perfect!' ||
+      currentEvaluation.value === perfectLabel.value ||
       loss.value == null
     ) {
       return '';
@@ -229,7 +237,7 @@ export function useReplaySession(activeRef, emit) {
   ));
   const feedbackPressedMoveStyle = computed(() => ({
     color: loaded.value && currentStep.value < totalSteps.value
-      ? (evaluationColors[currentEvaluation.value] || 'var(--text-main)')
+      ? getEvaluationColor(currentEvaluation.value)
       : 'var(--text-secondary)',
   }));
   const feedbackBestMoveStyle = computed(() => ({
@@ -237,7 +245,7 @@ export function useReplaySession(activeRef, emit) {
   }));
 
   const evaluationTotal = computed(() => Number(summary.value?.total_moves || 0));
-  const evaluationSegments = computed(() => performanceLabels.map((label) => {
+  const evaluationSegments = computed(() => performanceLabels.value.map((label) => {
     const count = Number(summary.value?.counts?.[label] || 0);
     const total = evaluationTotal.value || 1;
     return {
@@ -245,7 +253,7 @@ export function useReplaySession(activeRef, emit) {
       shortLabel: getEvaluationLabel(label),
       count,
       percent: evaluationTotal.value ? (count / total) * 100 : 0,
-      color: evaluationColors[label] || 'var(--border-main)',
+      color: getEvaluationColor(label),
     };
   }));
 
@@ -438,6 +446,9 @@ export function useReplaySession(activeRef, emit) {
 
   const handleReplayState = (payload) => {
     finishResultsRefresh();
+    performanceLabels.value = Array.isArray(payload?.performance_labels) && payload.performance_labels.length
+      ? [...payload.performance_labels]
+      : [...fallbackPerformanceLabels];
     board.value = Array.isArray(payload?.board) ? payload.board : new Array(16).fill(0);
     metadata.value = payload?.animation || {};
     currentHex.value = payload?.hex_str || '0000000000000000';
@@ -451,6 +462,7 @@ export function useReplaySession(activeRef, emit) {
     currentMove.value = payload?.current_move || null;
     bestMove.value = payload?.best_move || null;
     loss.value = typeof payload?.loss === 'number' ? payload.loss : null;
+    evaluation.value = payload?.evaluation || null;
     goodnessOfFit.value = typeof payload?.goodness_of_fit === 'number' ? payload.goodness_of_fit : null;
     combo.value = Number(payload?.combo || 0);
     summary.value = payload?.summary || { total_moves: 0, final_gof: 0, max_combo: 0, counts: {} };

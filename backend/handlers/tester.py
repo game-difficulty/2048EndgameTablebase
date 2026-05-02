@@ -15,6 +15,7 @@ from ..notebook import mistakes_book_store
 from ..session import GameSession
 from ..session import np_u64, u64
 from ..tester import (
+    PERFORMANCE_PERFECT_LABEL,
     TESTER_REPLAY_SENTINEL,
     _cache_tester_replay,
     _tester_append_log,
@@ -236,15 +237,17 @@ async def handle_tester_action(
             )
             structured_result_lines.append(f"{label}: {display}")
 
-        evaluation = "Perfect!"
+        evaluation = PERFORMANCE_PERFECT_LABEL
         loss = 1.0
         if abs(best_rate - selected_rate) <= 3e-10:
             session.tester_combo += 1
             session.tester_max_combo = max(
                 session.tester_max_combo, session.tester_combo
             )
-            session.tester_performance_stats["Perfect!"] += 1
-            result_lines.append(f"Perfect! Combo: {session.tester_combo}x")
+            session.tester_performance_stats[PERFORMANCE_PERFECT_LABEL] += 1
+            result_lines.append(
+                f"{PERFORMANCE_PERFECT_LABEL} Combo: {session.tester_combo}x"
+            )
             result_lines.append(
                 f"You pressed {direction_str.capitalize()}. And the best move is {best_move.capitalize()}."
             )

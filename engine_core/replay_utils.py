@@ -5,6 +5,10 @@ import numpy as np
 import engine_core.BoardMover as bm
 import engine_core.VBoardMover as vbm
 from engine_core.Calculator import find_merge_positions, slide_distance
+from engine_core.performance_evaluation import (
+    PERFORMANCE_PERFECT_LABEL,
+    evaluation_of_performance as shared_evaluation_of_performance,
+)
 
 REPLAY_DTYPE = np.dtype("uint64,uint8,uint32,uint32,uint32,uint32")
 REPLAY_SENTINEL = (
@@ -74,18 +78,8 @@ def current_results(record, step):
 
 def evaluation_of_performance(loss):
     if loss > 1 - 3e-10:
-        return "Perfect!"
-    if loss >= 0.999:
-        return "Excellent!"
-    if loss >= 0.99:
-        return "Nice try!"
-    if loss >= 0.975:
-        return "Not bad!"
-    if loss >= 0.9:
-        return "Mistake!"
-    if loss >= 0.75:
-        return "Blunder!"
-    return "Terrible!"
+        return PERFORMANCE_PERFECT_LABEL
+    return shared_evaluation_of_performance(loss)
 
 
 def analyze_replay(record, marker_threshold=1.0):

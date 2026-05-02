@@ -7,6 +7,7 @@ from backend.minigames.session import MinigameSessionState
 from Config import SingletonConfig
 from engine_core.VBoardMover import decode_board
 from engine_core.replay_utils import empty_replay
+from engine_core.performance_evaluation import build_performance_stats
 
 _SHARED_EVIL_GEN = None
 _SHARED_AI_DISPATCHER = None
@@ -113,15 +114,7 @@ class GameSession:
         self.tester_combo = 0
         self.tester_goodness_of_fit = 1.0
         self.tester_max_combo = 0
-        self.tester_performance_stats = {
-            "Perfect!": 0,
-            "Excellent!": 0,
-            "Nice try!": 0,
-            "Not bad!": 0,
-            "Mistake!": 0,
-            "Blunder!": 0,
-            "Terrible!": 0,
-        }
+        self.tester_performance_stats = build_performance_stats()
         self.tester_ready = False
         self.tester_table_found = False
         self.tester_status = ""

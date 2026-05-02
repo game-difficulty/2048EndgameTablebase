@@ -12,10 +12,17 @@ import Config
 import engine_core.VBoardMover as vbm
 from engine_core.BookReader import BookReaderDispatcher
 from Config import DTYPE_CONFIG, SingletonConfig, category_info
+from engine_core.performance_evaluation import (
+    PERFORMANCE_PERFECT_LABEL,
+    build_performance_stats,
+    evaluation_of_performance as shared_evaluation_of_performance,
+    markdown_label,
+)
 
 
 logger = Config.logger
 is_zh = SingletonConfig().config.get("language") == "zh"
+ANALYSIS_PERFECT_LABEL = markdown_label(PERFORMANCE_PERFECT_LABEL)
 direction_map = defaultdict(lambda: "?")
 direction_map.update(
     {
@@ -345,15 +352,7 @@ class Analyzer:
         self.maximum_single_step_loss_relative = 0.0
         self.maximum_single_step_loss_absolute = 0.0
         self.step_count = 0
-        self.performance_stats = {
-            "**Perfect!**": 0,
-            "**Excellent!**": 0,
-            "**Nice try!**": 0,
-            "**Not bad!**": 0,
-            "**Mistake!**": 0,
-            "**Blunder!**": 0,
-            "**Terrible!**": 0,
-        }
+        self.performance_stats = build_performance_stats(markdown=True)
         self.record = np.empty(4000, dtype="uint64,uint8,uint32,uint32,uint32,uint32")
         self.rec_step_count = 0
         self.log_difficulty = 0.0
@@ -372,15 +371,7 @@ class Analyzer:
         self.maximum_single_step_loss_relative = 0.0
         self.maximum_single_step_loss_absolute = 0.0
         self.step_count = 0
-        self.performance_stats = {
-            "**Perfect!**": 0,
-            "**Excellent!**": 0,
-            "**Nice try!**": 0,
-            "**Not bad!**": 0,
-            "**Mistake!**": 0,
-            "**Blunder!**": 0,
-            "**Terrible!**": 0,
-        }
+        self.performance_stats = build_performance_stats(markdown=True)
         self.log_difficulty = 0.0
         self.prev_expected_success_rate = None
 
@@ -506,8 +497,8 @@ class Analyzer:
         if move_result is not None and best_result - move_result <= 3e-10:
             self.combo += 1
             self.max_combo = max(self.max_combo, self.combo)
-            self.performance_stats["**Perfect!**"] += 1
-            self.text_list.append(f"**Perfect! Combo: {self.combo}x**")
+            self.performance_stats[ANALYSIS_PERFECT_LABEL] += 1
+            self.text_list.append(f"**{PERFORMANCE_PERFECT_LABEL} Combo: {self.combo}x**")
             if is_zh:
                 self.text_list.append(
                     f"你走的是 {direction_map[move[0].lower()]}，最优解正是 **{direction_map[best_move[0].lower()]}**"
@@ -634,17 +625,7 @@ class Analyzer:
 
     @staticmethod
     def evaluation_of_performance(loss) -> str:
-        if loss >= 0.999:
-            return "**Excellent!**"
-        if loss >= 0.99:
-            return "**Nice try!**"
-        if loss >= 0.975:
-            return "**Not bad!**"
-        if loss >= 0.9:
-            return "**Mistake!**"
-        if loss >= 0.75:
-            return "**Blunder!**"
-        return "**Terrible!**"
+        return shared_evaluation_of_performance(loss, markdown=True)
 
     def record_replay(
         self, board, direction: str, new_tile: int, spawn_position: int

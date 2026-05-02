@@ -16,9 +16,10 @@ export function useTesterSession(activeRef) {
   const { config: appConfig } = useAppSettingsStore();
 
   const fallbackPatternCategories = {
-    basic: ['L3', 'L4', 'I3', 'I4', 'LL', 'free8', 'free9', 'free10', '444'],
+    basic: ['L3', 'LL', 'free8', 'free9', 'free10', '444'],
   };
-  const performanceLabels = ['Perfect!', 'Excellent!', 'Nice try!', 'Not bad!', 'Mistake!', 'Blunder!', 'Terrible!'];
+  const fallbackPerformanceLabels = ['Perfect!', 'Excellent!', 'Nice try!', 'Not bad!', 'Mistake!', 'Blunder!', 'Terrible!'];
+  const performanceLabels = ref([...fallbackPerformanceLabels]);
   const dirLabels = computed(() => (
     isZh()
       ? { left: '左', right: '右', down: '下', up: '上' }
@@ -46,6 +47,15 @@ export function useTesterSession(activeRef) {
     'Blunder!': 'Blunder!',
     'Terrible!': 'Terrible!',
   };
+  const evaluationColorPalette = [
+    '#2e7d32',
+    '#7cb342',
+    '#c0ca33',
+    '#fb8c00',
+    '#f4511e',
+    '#e53935',
+    '#b71c1c',
+  ];
 
   const wsStatus = ref('connecting');
   const board = ref(new Array(16).fill(0));
@@ -119,12 +129,19 @@ export function useTesterSession(activeRef) {
   ));
   const hasLastStep = computed(() => !!(lastStep.value?.direction && lastStep.value?.best_move));
   const insightsActive = computed(() => showInsights.value && hasLastStep.value);
-  const evaluationTotal = computed(() => performanceLabels.reduce((sum, label) => sum + Number(metrics.value.performance_stats?.[label] || 0), 0));
+  const perfectLabel = computed(() => performanceLabels.value[0] || fallbackPerformanceLabels[0]);
+  const getEvaluationColor = (label) => {
+    if (evaluationColors[label]) return evaluationColors[label];
+    const index = performanceLabels.value.indexOf(label);
+    if (index >= 0) return evaluationColorPalette[index % evaluationColorPalette.length];
+    return 'var(--accent)';
+  };
+  const evaluationTotal = computed(() => performanceLabels.value.reduce((sum, label) => sum + Number(metrics.value.performance_stats?.[label] || 0), 0));
 
   const isZh = () => String(currentLanguage.value || 'en').startsWith('zh');
   const getEvaluationLabel = (label) => (isZh() ? (zhEvaluationLabels[label] || label) : label);
 
-  const evaluationSegments = computed(() => performanceLabels.map((label) => {
+  const evaluationSegments = computed(() => performanceLabels.value.map((label) => {
     const count = Number(metrics.value.performance_stats?.[label] || 0);
     const total = evaluationTotal.value || 1;
     const percent = evaluationTotal.value ? (count / total) * 100 : 0;
@@ -134,7 +151,7 @@ export function useTesterSession(activeRef) {
       shortLabel: name,
       count,
       percent,
-      color: evaluationColors[label] || 'var(--border-main)',
+      color: getEvaluationColor(label),
       tooltip: `${name}: ${count}/${evaluationTotal.value || 0} (${percent.toFixed(1)}%)`,
     };
   }));
@@ -142,12 +159,12 @@ export function useTesterSession(activeRef) {
   const displayedEvaluationSegments = computed(() => (
     insightsActive.value
       ? evaluationSegments.value
-      : performanceLabels.map((label) => ({
+      : performanceLabels.value.map((label) => ({
         label,
         shortLabel: getEvaluationLabel(label),
         count: 0,
         percent: 0,
-        color: evaluationColors[label] || 'var(--border-main)',
+        color: getEvaluationColor(label),
         tooltip: `${getEvaluationLabel(label)}: 0`,
       }))
   ));
@@ -158,22 +175,22 @@ export function useTesterSession(activeRef) {
       : { left: 'Left', right: 'Right', up: 'Up', down: 'Down' }
   ));
 
-  const feedbackEvaluation = computed(() => insightsActive.value ? (lastStep.value.evaluation || 'Perfect!') : 'waiting');
+  const feedbackEvaluation = computed(() => insightsActive.value ? (lastStep.value.evaluation || perfectLabel.value) : 'waiting');
   const feedbackBadgeText = computed(() => {
     if (!showInsights.value) return '--';
     if (!hasLastStep.value) return isZh() ? '等待落子' : 'Waiting';
-    return getEvaluationLabel(lastStep.value.evaluation || 'Perfect!');
+    return getEvaluationLabel(lastStep.value.evaluation || perfectLabel.value);
   });
   const feedbackBadgeStyle = computed(() => {
     if (!showInsights.value || !hasLastStep.value) {
       return { color: 'var(--text-secondary)' };
     }
-    const color = evaluationColors[lastStep.value.evaluation] || 'var(--accent)';
+    const color = getEvaluationColor(lastStep.value.evaluation);
     return { color };
   });
   const feedbackLossText = computed(() => {
     if (!hasLastStep.value || !showInsights.value) return '';
-    if (feedbackEvaluation.value === 'Perfect!') return '';
+    if (feedbackEvaluation.value === perfectLabel.value) return '';
     const loss = Number(lastStep.value?.loss ?? 0);
     return isZh()
       ? `单步损失 ${(loss * 100).toFixed(2)}%`
@@ -186,7 +203,7 @@ export function useTesterSession(activeRef) {
   const feedbackBestMove = computed(() => insightsActive.value ? (moveLabels.value[lastStep.value.best_move] || '?') : '--');
   const feedbackPressedMoveStyle = computed(() => {
     const evaluation = lastStep.value?.evaluation;
-    const color = insightsActive.value ? (evaluationColors[evaluation] || 'var(--text-main)') : 'var(--text-secondary)';
+    const color = insightsActive.value ? getEvaluationColor(evaluation) : 'var(--text-secondary)';
     return { color };
   });
   const feedbackBestMoveStyle = computed(() => {
@@ -456,6 +473,10 @@ export function useTesterSession(activeRef) {
   };
 
   const handleTesterState = (payload) => {
+    const incomingLabels = payload?.metrics?.performance_labels;
+    performanceLabels.value = Array.isArray(incomingLabels) && incomingLabels.length
+      ? [...incomingLabels]
+      : [...fallbackPerformanceLabels];
     board.value = Array.isArray(payload?.board) ? payload.board : new Array(16).fill(0);
     metadata.value = payload?.animation || {};
     currentBoardHex.value = payload?.hex_str || currentBoardHex.value;
