@@ -109,13 +109,78 @@ inline __m512i simd_hash(__m512i v) {
     return _mm512_add_epi64(_mm512_add_epi64(v_mix_mul, _mm512_srli_epi64(v_mix, 23)), v_mix);
 }
 
+#if defined(__GNUC__) || defined(__clang__)
 __attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
-inline void process_buf_avx512(uint64_t *buf, uint64_t *hmap, uint64_t *target_arr, size_t &counter, uint64_t mask) {
+#endif
+inline void load_hash_chunk_avx512(
+    const uint64_t *buf,
+    int offset,
+    __m512i v_mask,
+    __m512i &states,
+    __m512i &idx
+) {
+    states = _mm512_loadu_epi64(buf + offset);
+    idx = _mm512_and_epi64(simd_hash(states), v_mask);
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
+#endif
+inline void prefetch_hash_slots_avx512(uint64_t *hmap, __m512i idx) {
+#if defined(__GNUC__) || defined(__clang__)
+    alignas(64) uint64_t idx_values[8];
+    _mm512_store_si512(reinterpret_cast<__m512i *>(idx_values), idx);
+    #pragma GCC unroll 8
+    for (int lane = 0; lane < 8; ++lane) {
+        __builtin_prefetch(hmap + idx_values[lane], 1, 0);
+    }
+#else
+    (void)hmap;
+    (void)idx;
+#endif
+}
+
+__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
+inline void process_buf_avx512(
+    uint64_t *buf,
+    uint64_t *hmap,
+    uint64_t *target_arr,
+    size_t &counter,
+    uint64_t mask
+) {
+    constexpr int kBatchSize = 128;
+    constexpr int kLanesPerChunk = 8;
+    constexpr int kChunkCount = kBatchSize / kLanesPerChunk;
+    constexpr int kPrefetchChunksAhead = 3;
+
+    const __m512i v_mask = _mm512_set1_epi64(static_cast<long long>(mask));
+
+    alignas(64) __m512i state_queue[kPrefetchChunksAhead];
+    alignas(64) __m512i idx_queue[kPrefetchChunksAhead];
+
+    for (int chunk = 0; chunk < std::min(kChunkCount, kPrefetchChunksAhead); ++chunk) {
+        load_hash_chunk_avx512(buf, chunk * kLanesPerChunk, v_mask, state_queue[chunk], idx_queue[chunk]);
+        prefetch_hash_slots_avx512(hmap, idx_queue[chunk]);
+    }
+
     #pragma GCC unroll 16
-    for (int i = 0; i < 128; i += 8) {
-        __m512i v_states = _mm512_loadu_epi64(&buf[i]);
-        __m512i v_h = simd_hash(v_states);
-        __m512i v_idx = _mm512_and_epi64(v_h, _mm512_set1_epi64(mask));
+    for (int chunk = 0; chunk < kChunkCount; ++chunk) {
+        const int slot = chunk % kPrefetchChunksAhead;
+        const __m512i v_states = state_queue[slot];
+        const __m512i v_idx = idx_queue[slot];
+
+        const int future_chunk = chunk + kPrefetchChunksAhead;
+        if (future_chunk < kChunkCount) {
+            load_hash_chunk_avx512(
+                buf,
+                future_chunk * kLanesPerChunk,
+                v_mask,
+                state_queue[slot],
+                idx_queue[slot]
+            );
+            prefetch_hash_slots_avx512(hmap, idx_queue[slot]);
+        }
+
         __m512i v_table = _mm512_i64gather_epi64(v_idx, hmap, 8);
         __mmask8 matches = _mm512_cmpeq_epi64_mask(v_table, v_states);
         __mmask8 not_dup = ~matches;
@@ -159,7 +224,7 @@ inline void process_buf_scalar(
     for (size_t i = 0; i < active_count; ++i) {
         hashed_idx[i] = BookGeneratorUtils::hash_board(buf[i]) & mask;
 #if defined(__GNUC__) || defined(__clang__)
-        __builtin_prefetch(hmap + hashed_idx[i], 1, 1);
+        __builtin_prefetch(hmap + hashed_idx[i], 1, 0);
 #endif
     }
 
@@ -167,7 +232,7 @@ inline void process_buf_scalar(
         const size_t prefetch_distance = 8;
         if (i + prefetch_distance < active_count) {
 #if defined(__GNUC__) || defined(__clang__)
-            __builtin_prefetch(hmap + hashed_idx[i + prefetch_distance], 1, 1);
+            __builtin_prefetch(hmap + hashed_idx[i + prefetch_distance], 1, 0);
 #endif
         }
         const uint64_t board = buf[i];
