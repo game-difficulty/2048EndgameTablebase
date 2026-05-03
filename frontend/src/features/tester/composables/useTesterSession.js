@@ -369,6 +369,14 @@ export function useTesterSession(activeRef) {
         color: 'transparent',
       };
     }
+    // Set 32768 tile to be invisible (board background color) when isVariant is true
+    if (isVariant.value && Number(tile.value) === 32768) {
+      return {
+        backgroundColor: 'var(--color-board-bg)',
+        color: 'transparent',
+        boxShadow: 'none',
+      };
+    }
     return {
       backgroundColor: `var(--color-tile-${tile.value})`,
       color: `var(--color-text-${tile.value})`,

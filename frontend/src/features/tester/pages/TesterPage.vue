@@ -97,7 +97,7 @@
           </button>
         </div>
 
-        <div class="space-y-3 rounded-[20px] bg-bg-card/72 p-3">
+        <div class="space-y-3 rounded-[20px] border border-border-main/60 bg-bg-card/72 p-3 shadow-sm">
           <div class="flex items-center justify-between gap-4">
             <span class="ui-caption font-black uppercase tracking-[0.18em] text-text-secondary">
               {{ $t('tester.previousStepResults') }}
