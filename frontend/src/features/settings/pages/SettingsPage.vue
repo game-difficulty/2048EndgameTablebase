@@ -29,23 +29,38 @@
           <div class="h-full space-y-5">
             <div class="flex flex-col">
               <label class="ui-control font-bold text-text-main mb-2 uppercase tracking-wider">{{ $t('settings.builder.category') }}</label>
-              <select v-model="selectedCategory" class="w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-body font-bold text-text-main outline-none focus:border-accent transition-colors cursor-pointer">
-                <option v-for="(patterns, cat) in categories" :key="cat" :value="cat">{{ cat }}</option>
-              </select>
+              <UiSelect
+                v-model="selectedCategory"
+                class="w-full"
+                :options="categoryOptions"
+                :aria-label="$t('settings.builder.category')"
+                trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-body font-bold text-text-main shadow-sm hover:border-accent/45"
+                option-class="ui-body font-bold"
+              />
             </div>
 
             <div class="flex flex-col">
               <label class="ui-control font-bold text-text-main mb-2 uppercase tracking-wider">{{ $t('settings.builder.pattern') }}</label>
-              <select v-model="selectedPattern" class="w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-body font-bold text-text-main outline-none focus:border-accent transition-colors cursor-pointer">
-                <option v-for="p in filteredPatterns" :key="p" :value="p">{{ p }}</option>
-              </select>
+              <UiSelect
+                v-model="selectedPattern"
+                class="w-full"
+                :options="patternOptions"
+                :aria-label="$t('settings.builder.pattern')"
+                trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-body font-bold text-text-main shadow-sm hover:border-accent/45"
+                option-class="ui-body font-bold"
+              />
             </div>
 
             <div class="flex flex-col">
               <label class="ui-control font-bold text-text-main mb-2 uppercase tracking-wider">{{ $t('settings.builder.target') }}</label>
-              <select v-model="selectedTarget" class="w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-body font-bold text-text-main outline-none focus:border-accent transition-colors cursor-pointer">
-                <option v-for="t in targetTiles" :key="t" :value="t">{{ t }}</option>
-              </select>
+              <UiSelect
+                v-model="selectedTarget"
+                class="w-full"
+                :options="targetOptions"
+                :aria-label="$t('settings.builder.target')"
+                trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-body font-bold text-text-main shadow-sm hover:border-accent/45"
+                option-class="ui-body font-bold"
+              />
             </div>
 
             <div class="flex flex-col border-t border-border-main pt-4 mt-2">
@@ -130,14 +145,15 @@
                   <span>{{ $t('settings.builder.successRateDtype') }}</span>
                   <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.successRateDtype')" :data-tooltip="$t('settings.tooltips.successRateDtype')">?</span>
                 </label>
-                  <select v-model="builderSuccessRateDtype" @change="handleSuccessRateDtypeChange" class="w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-control font-black text-text-main outline-none hover:border-accent transition-colors cursor-pointer shadow-sm">
-                  <option value="uint32">uint32 (Default)</option>
-                  <option value="uint64">uint64</option>
-                  <option value="float32">float32</option>
-                  <option value="float64">float64</option>
-                  <option value="1-float32">1-float32</option>
-                  <option value="1-float64">1-float64</option>
-                </select>
+                <UiSelect
+                  v-model="builderSuccessRateDtype"
+                  class="w-full"
+                  :options="successRateDtypeOptions"
+                  :aria-label="$t('settings.builder.successRateDtype')"
+                  trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-control font-black text-text-main shadow-sm hover:border-accent/45"
+                  option-class="ui-control font-black"
+                  @change="handleSuccessRateDtypeChange"
+                />
               </div>
 
               <div class="flex flex-col">
@@ -313,8 +329,9 @@
 </template>
 
 <script setup>
-import { toRef } from 'vue';
+import { computed, toRef } from 'vue';
 
+import UiSelect from '../../../components/UiSelect.vue';
 import { useSettingsSession } from '../composables/useSettingsSession';
 
 const props = defineProps({
@@ -367,6 +384,36 @@ const props = defineProps({
   browseFolder,
   startBuild,
 } = useSettingsSession(toRef(props, 'active'));
+
+const categoryOptions = computed(() =>
+  Object.keys(categories.value || {}).map((category) => ({
+    value: category,
+    label: category,
+  }))
+);
+
+const patternOptions = computed(() =>
+  (filteredPatterns.value || []).map((pattern) => ({
+    value: pattern,
+    label: pattern,
+  }))
+);
+
+const targetOptions = computed(() =>
+  (targetTiles.value || []).map((target) => ({
+    value: target,
+    label: target,
+  }))
+);
+
+const successRateDtypeOptions = [
+  { value: 'uint32', label: 'uint32 (Default)' },
+  { value: 'uint64', label: 'uint64' },
+  { value: 'float32', label: 'float32' },
+  { value: 'float64', label: 'float64' },
+  { value: '1-float32', label: '1-float32' },
+  { value: '1-float64', label: '1-float64' },
+];
 </script>
 
 <style scoped>

@@ -73,9 +73,15 @@
                   </div>
                 </div>
 
-                <select v-model="selectedTarget" class="analysis-select">
-                  <option v-for="target in targetTiles" :key="target" :value="target">{{ target }}</option>
-                </select>
+                <UiSelect
+                  v-model="selectedTarget"
+                  class="w-full"
+                  :options="targetOptions"
+                  aria-label="Analysis target"
+                  trigger-class="analysis-select"
+                  option-class="ui-control font-black uppercase tracking-[0.06em]"
+                  menu-class="z-[240]"
+                />
               </div>
 
               <div>
@@ -171,6 +177,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
+import UiSelect from '../../../components/UiSelect.vue';
 import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
 import { createWsClient } from '../../../services/ws/createWsClient';
 
@@ -221,6 +228,13 @@ const activePatternOptions = computed(() => {
   const group = patternGroups.value.find((item) => item.category === activePatternCategory.value);
   return group?.items || [];
 });
+
+const targetOptions = computed(() =>
+  targetTiles.value.map((target) => ({
+    value: target,
+    label: target,
+  }))
+);
 
 const currentFileDisplay = computed(() => currentFile.value || t('analysis.progress.idle'));
 const progressPercent = computed(() => {
@@ -501,7 +515,7 @@ onMounted(() => {
   width: 100%;
   border-radius: 0.9rem;
   border: 1px solid var(--border-main);
-  background: var(--bg-card);
+  background-color: var(--bg-card);
   color: var(--text-main);
   padding: 0.78rem 0.95rem;
   font-size: var(--font-ui-sm);
@@ -523,11 +537,6 @@ onMounted(() => {
 .analysis-secondary-btn:hover,
 .analysis-primary-btn:hover {
   border-color: var(--accent);
-}
-
-.analysis-select {
-  cursor: pointer;
-  appearance: none;
 }
 
 .analysis-textarea {

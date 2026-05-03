@@ -45,9 +45,17 @@
             </div>
           </div>
         </div>
-        <select v-model="selectedTarget" class="top-menu-select" @change="handleApplyPatternSelection">
-          <option v-for="target in availableTargets" :key="target" :value="target" class="bg-bg-card text-text-main">{{ target }}</option>
-        </select>
+        <UiSelect
+          v-model="selectedTarget"
+          class="min-w-[5rem]"
+          :options="targetOptions"
+          aria-label="Tester target"
+          align="right"
+          trigger-class="top-menu-select"
+          option-class="ui-control font-black"
+          menu-class="z-[160]"
+          @change="handleApplyPatternSelection"
+        />
       </div>
     </div>
 
@@ -189,9 +197,10 @@
 </template>
 
 <script setup>
-import { ref, toRef } from 'vue';
+import { computed, ref, toRef } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
+import UiSelect from '../../../components/UiSelect.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
 import { useTesterSession } from '../composables/useTesterSession';
 
@@ -279,6 +288,13 @@ const {
   getResultValueStyle,
   getResultMiniTileStyle,
 } = useTesterSession(toRef(props, 'active'));
+
+const targetOptions = computed(() =>
+  availableTargets.value.map((target) => ({
+    value: target,
+    label: target,
+  }))
+);
 
 const focusBoardHotkeys = (event) => {
   refocusBoardHotkeyTarget(boardHotkeyTarget, event?.target);

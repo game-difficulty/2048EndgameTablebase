@@ -59,14 +59,18 @@
           </div>
         </div>
         <span class="text-text-secondary font-bold opacity-30 truncate">|</span>
-        <select
+        <UiSelect
           v-model="targetValue"
+          class="min-w-[5.5rem]"
+          :options="targetOptions"
+          :placeholder="$t('trainer.top.selectTarget')"
+          aria-label="Trainer target"
+          align="right"
+          trigger-class="top-menu-select"
+          option-class="ui-control font-black"
+          menu-class="z-[160]"
           @change="handleTargetChange"
-          class="top-menu-select"
-        >
-          <option value="" class="bg-bg-card text-text-main">{{ $t('trainer.top.selectTarget') }}</option>
-          <option v-for="t in availableTargets" :key="t" :value="t" class="bg-bg-card text-text-main">{{ t }}</option>
-        </select>
+        />
         <button
           @click="selectFolder"
           class="ml-2 ui-kicker bg-btn-bg hover:bg-btn-hover text-white px-2.5 py-1.5 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm"
@@ -263,9 +267,10 @@
 </template>
 
 <script setup>
-import { ref, toRef } from 'vue';
+import { computed, ref, toRef } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
+import UiSelect from '../../../components/UiSelect.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
 import { useTrainerSession } from '../composables/useTrainerSession';
 
@@ -330,6 +335,13 @@ const {
   onDis32kChange,
   patternMenuRoot,
 } = useTrainerSession(toRef(props, 'active'));
+
+const targetOptions = computed(() =>
+  availableTargets.value.map((target) => ({
+    value: target,
+    label: target,
+  }))
+);
 
 const focusBoardHotkeys = (event) => {
   refocusBoardHotkeyTarget(boardHotkeyTarget, event?.target);

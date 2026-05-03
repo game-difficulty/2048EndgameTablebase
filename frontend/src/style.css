@@ -394,13 +394,21 @@ body {
 }
 
 .top-menu-select {
-  border: none;
-  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.7rem;
+  background-color: transparent;
   color: var(--text-main);
   font-size: var(--font-ui-md);
   font-weight: 700;
+  padding: 0.2rem 0.3rem 0.2rem 0.5rem;
   outline: none;
   cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+}
+
+.top-menu-select:hover {
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border-main));
+  background-color: color-mix(in srgb, var(--bg-main) 72%, transparent);
 }
 
 .console-card {
