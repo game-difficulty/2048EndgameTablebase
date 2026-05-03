@@ -37,10 +37,70 @@ export function useSettingsSession(activeRef) {
   const builderSuccessRateDtype = ref('uint32');
   const builderSmallTileSumLimit = ref(96);
   const MAX_DELETION_THRESHOLD = 0.999999;
+  const DEFAULT_DELETION_THRESHOLD_DECIMALS = 6;
+
+  const countFractionDigits = (value) => {
+    const decimalPart = String(value).split('.')[1];
+    return decimalPart ? decimalPart.length : 0;
+  };
+
+  const toPlainNumberString = (value) => {
+    const stringValue = String(value);
+    if (!/[eE]/.test(stringValue)) {
+      return stringValue;
+    }
+
+    const [coefficient, exponentPart] = stringValue.toLowerCase().split('e');
+    const exponent = Number.parseInt(exponentPart, 10);
+    if (!Number.isFinite(exponent)) {
+      return stringValue;
+    }
+
+    const isNegative = coefficient.startsWith('-');
+    const unsignedCoefficient = isNegative ? coefficient.slice(1) : coefficient;
+    const [integerPart, fractionPart = ''] = unsignedCoefficient.split('.');
+    const digits = `${integerPart}${fractionPart}`;
+    const sign = isNegative ? '-' : '';
+
+    if (exponent >= 0) {
+      const wholeLength = integerPart.length + exponent;
+      if (fractionPart.length <= exponent) {
+        return `${sign}${digits}${'0'.repeat(exponent - fractionPart.length)}`;
+      }
+      return `${sign}${digits.slice(0, wholeLength)}.${digits.slice(wholeLength)}`;
+    }
+
+    const decimalIndex = integerPart.length + exponent;
+    if (decimalIndex > 0) {
+      return `${sign}${digits.slice(0, decimalIndex)}.${digits.slice(decimalIndex)}`;
+    }
+
+    return `${sign}0.${'0'.repeat(Math.abs(decimalIndex))}${digits}`;
+  };
+
+  const padFractionDigits = (value, minimumFractionDigits) => {
+    if (minimumFractionDigits <= 0) {
+      return value;
+    }
+
+    const [integerPart, fractionPart = ''] = String(value).split('.');
+    return `${integerPart}.${fractionPart.padEnd(minimumFractionDigits, '0')}`;
+  };
 
   const formatDeletionThreshold = (value) => {
     const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed.toFixed(6) : '0.000000';
+    if (!Number.isFinite(parsed)) {
+      return `0.${'0'.repeat(DEFAULT_DELETION_THRESHOLD_DECIMALS)}`;
+    }
+
+    const plainValue = toPlainNumberString(parsed);
+    return padFractionDigits(
+      plainValue,
+      Math.max(
+        DEFAULT_DELETION_THRESHOLD_DECIMALS,
+        countFractionDigits(plainValue)
+      )
+    );
   };
 
   const normalizeDeletionThreshold = (value) => {
@@ -196,9 +256,7 @@ export function useSettingsSession(activeRef) {
   };
 
   const commitDeletionThreshold = () => {
-    const normalized = Number(
-      normalizeDeletionThreshold(deletionThresholdInput.value).toFixed(6)
-    );
+    const normalized = normalizeDeletionThreshold(deletionThresholdInput.value);
     deletionThresholdInput.value = formatDeletionThreshold(normalized);
     saveSetting('deletion_threshold', normalized);
   };
@@ -287,8 +345,8 @@ export function useSettingsSession(activeRef) {
         ? Math.round(Math.log2(targetTileValue))
         : targetTileValue;
 
-    const normalizedDeletionThreshold = Number(
-      normalizeDeletionThreshold(deletionThresholdInput.value).toFixed(6)
+    const normalizedDeletionThreshold = normalizeDeletionThreshold(
+      deletionThresholdInput.value
     );
     deletionThresholdInput.value = formatDeletionThreshold(
       normalizedDeletionThreshold

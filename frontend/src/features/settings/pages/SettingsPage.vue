@@ -146,7 +146,7 @@
                   <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.deletionThreshold')" :data-tooltip="$t('settings.tooltips.deletionThreshold')">?</span>
                 </label>
                 <div class="group relative">
-                  <input type="number" step="0.01" min="0" max="0.999999" :value="deletionThresholdInput" @input="handleDeletionThresholdInput" @change="handleDeletionThresholdChange" class="builder-number-input w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 pr-9 ui-control font-black text-text-main outline-none hover:border-accent transition-colors shadow-sm" />
+                  <input type="number" step="0.01" min="0" max="0.999999" :value="deletionThresholdInput" :aria-label="$t('settings.builder.deletionThreshold')" @input="handleDeletionThresholdInput" @change="handleDeletionThresholdChange" class="builder-number-input w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 pr-9 ui-control font-black text-text-main outline-none hover:border-accent transition-colors shadow-sm" />
                   <div class="pointer-events-none absolute inset-y-1 right-1 flex w-5 flex-col overflow-hidden rounded-md border border-border-main/70 bg-bg-card/90 opacity-0 shadow-sm transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
                     <button type="button" @click="stepDeletionThreshold(1)" class="number-spin-btn border-b border-border-main/60" aria-label="Increase deletion threshold">
                       ▲
@@ -469,7 +469,7 @@ input[type="color"] {
   max-width: 320px;
   padding: 0.6rem 0.7rem;
   border-radius: 0.75rem;
-  background: color-mix(in srgb, var(--bg-card) 94%, black 6%);
+  background: color-mix(in srgb, var(--bg-main) 92%, var(--text-main) 8%);
   border: 1px solid color-mix(in srgb, var(--border-main) 82%, transparent);
   color: var(--text-main);
   font-size: var(--font-ui-caption);
