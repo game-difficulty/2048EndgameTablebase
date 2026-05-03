@@ -2,6 +2,7 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { useAppSettingsStore } from '../../../app/useAppSettings';
+import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
 
 export function useSettingsSession(activeRef) {
   const activeSubTab = ref('builder');
@@ -261,6 +262,13 @@ export function useSettingsSession(activeRef) {
   };
 
   const browseFolder = async () => {
+    const { handled, value } = await tryDesktopDialog('select_folder');
+    if (handled) {
+      if (value) {
+        buildPath.value = value;
+      }
+      return;
+    }
     buildClient?.send('SETTINGS_TRIGGER_SELECT_FOLDER');
   };
 

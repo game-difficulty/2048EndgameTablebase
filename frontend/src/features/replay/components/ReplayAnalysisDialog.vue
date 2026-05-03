@@ -171,6 +171,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
+import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
 import { createWsClient } from '../../../services/ws/createWsClient';
 
 const props = defineProps({
@@ -316,6 +317,15 @@ const mergeSelectedPaths = (paths) => {
 };
 
 const pickFiles = async () => {
+  const { handled, value } = await tryDesktopDialog('select_analysis_files', {
+    multiple: true,
+  });
+  if (handled) {
+    if (value.length) {
+      mergeSelectedPaths(value);
+    }
+    return;
+  }
   client?.send('ANALYSIS_TRIGGER_SELECT_FILES');
 };
 

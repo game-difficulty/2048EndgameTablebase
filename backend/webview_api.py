@@ -120,16 +120,52 @@ class Api:
         return os.name == "posix" and sys.platform != "darwin"
 
     @staticmethod
-    def _is_wayland_session() -> bool:
-        return (
-            bool(os.environ.get("WAYLAND_DISPLAY"))
-            or os.environ.get("XDG_SESSION_TYPE", "").strip().lower() == "wayland"
-            or bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
-        )
-
-    @staticmethod
     def _has_webview_window() -> bool:
         return bool(getattr(webview, "windows", None))
+
+    @staticmethod
+    def _dialog_request(
+        dialog_id: str,
+    ) -> tuple[str, bool, tuple[str, ...] | None] | None:
+        dialog_map: dict[str, tuple[str, bool, tuple[str, ...] | None]] = {
+            "select_folder": ("folder", False, None),
+            "select_open_record": (
+                "open",
+                False,
+                ("Record Files (*.rec)", "All Files (*.*)"),
+            ),
+            "select_open_replay_file": (
+                "open",
+                False,
+                ("Replay Files (*.rpl)", "All Files (*.*)"),
+            ),
+            "select_analysis_files": (
+                "open",
+                True,
+                (
+                    "Supported Files (*.txt;*.vrs)",
+                    "Text Files (*.txt)",
+                    "VRS Files (*.vrs)",
+                    "All Files (*.*)",
+                ),
+            ),
+            "select_save_record": (
+                "save",
+                False,
+                ("Record Files (*.rec)", "All Files (*.*)"),
+            ),
+            "select_save_tester_log": (
+                "save",
+                False,
+                ("Text Files (*.txt)", "All Files (*.*)"),
+            ),
+            "select_save_tester_replay": (
+                "save",
+                False,
+                ("Replay Files (*.rpl)", "All Files (*.*)"),
+            ),
+        }
+        return dialog_map.get(str(dialog_id or "").strip())
 
     @classmethod
     def _parse_file_types(
@@ -477,9 +513,7 @@ class Api:
                     "save": Gtk.STOCK_SAVE,
                     "open": Gtk.STOCK_OPEN,
                 }[kind]
-                use_native_dialog = cls._is_wayland_session() and hasattr(
-                    Gtk, "FileChooserNative"
-                )
+                use_native_dialog = hasattr(Gtk, "FileChooserNative")
 
                 if use_native_dialog:
                     dialog = Gtk.FileChooserNative(
@@ -708,17 +742,47 @@ class Api:
         *,
         allow_multiple: bool = False,
         file_types: tuple[str, ...] | list[str] | str | None = None,
+        prefer_webview: bool = False,
     ) -> str | list[str] | None:
-        # Linux dialog requests are triggered from background worker threads in
-        # several websocket handlers. The pywebview dialog path is less reliable
-        # there, especially under Wayland compositors, so prefer the native
-        # picker stack on Linux even when a webview window exists.
+        if prefer_webview and cls._has_webview_window():
+            try:
+                return cls._pick_via_webview(
+                    kind,
+                    allow_multiple=allow_multiple,
+                    file_types=file_types,
+                )
+            except Exception as exc:
+                print("Preferred webview dialog err:", exc)
+
         if cls._is_linux_desktop():
-            return cls._pick_via_native(
-                kind,
-                allow_multiple=allow_multiple,
-                file_types=file_types,
-            )
+            # Linux desktop builds should prefer portal-capable/native pickers
+            # first, then fall back based on which capabilities actually exist
+            # on the host instead of hard-coding compositor or distro checks.
+            try:
+                result = cls._pick_via_native(
+                    kind,
+                    allow_multiple=allow_multiple,
+                    file_types=file_types,
+                )
+                if allow_multiple:
+                    if result:
+                        return result
+                elif result:
+                    return result
+            except Exception as exc:
+                print("Linux native dialog err:", exc)
+
+            if cls._has_webview_window():
+                try:
+                    return cls._pick_via_webview(
+                        kind,
+                        allow_multiple=allow_multiple,
+                        file_types=file_types,
+                    )
+                except Exception as exc:
+                    print("Linux webview dialog err:", exc)
+
+            return [] if allow_multiple else None
 
         if cls._has_webview_window():
             return cls._pick_via_webview(
@@ -737,45 +801,62 @@ class Api:
         dialog_api = getattr(webview, "FileDialog", None)
         return getattr(dialog_api, name, fallback) if dialog_api is not None else fallback
 
+    def _show_named_dialog(
+        self,
+        dialog_id: str,
+        *,
+        prefer_webview: bool = False,
+    ) -> str | list[str] | None:
+        request = self._dialog_request(dialog_id)
+        if request is None:
+            return None
+        kind, allow_multiple, file_types = request
+        result = self._pick(
+            kind,
+            allow_multiple=allow_multiple,
+            file_types=file_types,
+            prefer_webview=prefer_webview,
+        )
+        if allow_multiple:
+            return result if isinstance(result, list) else []
+        return result
+
+    def show_dialog(self, dialog_id):
+        try:
+            result = self._show_named_dialog(str(dialog_id or ""), prefer_webview=True)
+            if result is None and str(dialog_id or "").strip() == "select_analysis_files":
+                return []
+            return result
+        except Exception as exc:
+            print("Show dialog err:", exc)
+            if str(dialog_id or "").strip() == "select_analysis_files":
+                return []
+            return None
+
     def select_folder(self):
         try:
-            return self._pick("folder")
+            return self._show_named_dialog("select_folder")
         except Exception as exc:
             print("Select folder err:", exc)
             return None
 
     def select_open_record(self):
         try:
-            return self._pick(
-                "open",
-                file_types=("Record Files (*.rec)", "All Files (*.*)"),
-            )
+            return self._show_named_dialog("select_open_record")
         except Exception as exc:
             print("Select open record err:", exc)
             return None
 
     def select_open_replay_file(self):
         try:
-            return self._pick(
-                "open",
-                file_types=("Replay Files (*.rpl)", "All Files (*.*)"),
-            )
+            return self._show_named_dialog("select_open_replay_file")
         except Exception as exc:
             print("Select open replay err:", exc)
             return None
 
     def select_analysis_files(self):
         try:
-            result = self._pick(
-                "open",
-                allow_multiple=True,
-                file_types=(
-                    "Supported Files (*.txt;*.vrs)",
-                    "Text Files (*.txt)",
-                    "VRS Files (*.vrs)",
-                    "All Files (*.*)",
-                ),
-            )
+            result = self._show_named_dialog("select_analysis_files")
             return result if isinstance(result, list) else []
         except Exception as exc:
             print("Select analysis files err:", exc)
@@ -783,30 +864,21 @@ class Api:
 
     def select_save_record(self):
         try:
-            return self._pick(
-                "save",
-                file_types=("Record Files (*.rec)", "All Files (*.*)"),
-            )
+            return self._show_named_dialog("select_save_record")
         except Exception as exc:
             print("Select save record err:", exc)
             return None
 
     def select_save_tester_log(self):
         try:
-            return self._pick(
-                "save",
-                file_types=("Text Files (*.txt)", "All Files (*.*)"),
-            )
+            return self._show_named_dialog("select_save_tester_log")
         except Exception as exc:
             print("Select save tester log err:", exc)
             return None
 
     def select_save_tester_replay(self):
         try:
-            return self._pick(
-                "save",
-                file_types=("Replay Files (*.rpl)", "All Files (*.*)"),
-            )
+            return self._show_named_dialog("select_save_tester_replay")
         except Exception as exc:
             print("Select save tester replay err:", exc)
             return None

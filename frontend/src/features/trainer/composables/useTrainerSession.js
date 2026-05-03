@@ -1,6 +1,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import { useAppSettingsStore } from '../../../app/useAppSettings';
+import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
@@ -257,6 +258,33 @@ export function useTrainerSession(activeRef) {
     client?.send(action, payload);
   };
 
+  const selectPathWithDesktopDialog = async (dialogId) => {
+    const result = await tryDesktopDialog(dialogId);
+    return result;
+  };
+
+  const openRecord = async () => {
+    const { handled, value } = await selectPathWithDesktopDialog('select_open_record');
+    if (handled) {
+      if (value) {
+        triggerAction('RECORD_OPEN', { path: value });
+      }
+      return;
+    }
+    triggerAction('TRIGGER_RECORD_OPEN');
+  };
+
+  const saveRecord = async () => {
+    const { handled, value } = await selectPathWithDesktopDialog('select_save_record');
+    if (handled) {
+      if (value) {
+        triggerAction('RECORD_SAVE', { path: value });
+      }
+      return;
+    }
+    triggerAction('TRIGGER_RECORD_SAVE');
+  };
+
   const applyTrainerJump = () => {
     const pending = pendingTrainerJump.value;
     if (!pending || wsStatus.value !== 'connected') return;
@@ -434,7 +462,7 @@ export function useTrainerSession(activeRef) {
     }
 
     if (data.action === 'RECORD_SAVE_REQUIRED') {
-      triggerAction('TRIGGER_RECORD_SAVE');
+      await saveRecord();
       return;
     }
 
@@ -645,6 +673,14 @@ export function useTrainerSession(activeRef) {
 
   const selectFolder = async () => {
     try {
+      const { handled, value } = await selectPathWithDesktopDialog('select_folder');
+      if (handled) {
+        if (value) {
+          tablebasePath.value = value;
+          applyTablebase(value);
+        }
+        return;
+      }
       triggerAction('TRIGGER_SELECT_FOLDER');
     } catch (error) {
       console.error(error);
@@ -708,7 +744,7 @@ export function useTrainerSession(activeRef) {
         triggerAction('START_RECORDING');
       }
     } else if (cmd === 'OPEN') {
-      triggerAction('TRIGGER_RECORD_OPEN');
+      await openRecord();
     } else if (cmd === 'PREV' || cmd === 'NEXT') {
       triggerAction('RECORD_STEP', { dir: cmd === 'PREV' ? -1 : 1 });
     }

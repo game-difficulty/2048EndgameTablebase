@@ -1,6 +1,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import { useAppSettingsStore } from '../../../app/useAppSettings';
+import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
@@ -439,11 +440,25 @@ export function useTesterSession(activeRef) {
 
   const saveLog = async () => {
     if (!logs.value.length) return;
+    const { handled, value } = await tryDesktopDialog('select_save_tester_log');
+    if (handled) {
+      if (value) {
+        triggerAction('TESTER_SAVE_LOG', { path: value });
+      }
+      return;
+    }
     triggerAction('TESTER_TRIGGER_SAVE_LOG');
   };
 
   const saveReplay = async () => {
     if (recordLength.value < 1) return;
+    const { handled, value } = await tryDesktopDialog('select_save_tester_replay');
+    if (handled) {
+      if (value) {
+        triggerAction('TESTER_SAVE_REPLAY', { path: value });
+      }
+      return;
+    }
     triggerAction('TESTER_TRIGGER_SAVE_REPLAY');
   };
 

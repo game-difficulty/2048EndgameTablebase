@@ -51,7 +51,7 @@
             <div class="flex flex-col border-t border-border-main pt-4 mt-2">
               <label class="ui-control font-bold text-text-main mb-2 uppercase tracking-wider">{{ $t('settings.builder.path') }}</label>
               <div class="flex gap-2">
-                <input type="text" v-model="buildPath" class="w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-kicker text-text-main outline-none focus:border-accent transition-colors flex-1 appearance-none" readonly />
+                <input type="text" v-model="buildPath" class="w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-kicker text-text-main outline-none focus:border-accent transition-colors flex-1 appearance-none" />
                 <button @click="browseFolder" class="px-3 py-1.5 bg-btn-bg text-white rounded-lg font-black ui-control hover:bg-btn-hover active:scale-95 transition-all whitespace-nowrap shadow-sm">
                   {{ $t('settings.builder.browse') }}
                 </button>

@@ -2,6 +2,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { useAppSettingsStore } from '../../../app/useAppSettings';
+import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
@@ -408,6 +409,13 @@ export function useReplaySession(activeRef, emit) {
   const openReplayFile = async () => {
     menuOpen.value = false;
     stopDemo();
+    const { handled, value } = await tryDesktopDialog('select_open_replay_file');
+    if (handled) {
+      if (value) {
+        triggerAction('REPLAY_LOAD_FILE', { path: value });
+      }
+      return;
+    }
     triggerAction('REPLAY_TRIGGER_OPEN_FILE');
   };
 
