@@ -116,6 +116,18 @@ if os.name == "nt":
 
 class Api:
     @staticmethod
+    def _is_linux_desktop() -> bool:
+        return os.name == "posix" and sys.platform != "darwin"
+
+    @staticmethod
+    def _is_wayland_session() -> bool:
+        return (
+            bool(os.environ.get("WAYLAND_DISPLAY"))
+            or os.environ.get("XDG_SESSION_TYPE", "").strip().lower() == "wayland"
+            or bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
+        )
+
+    @staticmethod
     def _has_webview_window() -> bool:
         return bool(getattr(webview, "windows", None))
 
@@ -465,28 +477,42 @@ class Api:
                     "save": Gtk.STOCK_SAVE,
                     "open": Gtk.STOCK_OPEN,
                 }[kind]
-
-                dialog = Gtk.FileChooserDialog(
-                    title=None,
-                    parent=None,
-                    action=action,
+                use_native_dialog = cls._is_wayland_session() and hasattr(
+                    Gtk, "FileChooserNative"
                 )
-                try:
-                    dialog.add_buttons(
-                        Gtk.STOCK_CANCEL,
-                        Gtk.ResponseType.CANCEL,
-                        accept_label,
-                        Gtk.ResponseType.ACCEPT,
+
+                if use_native_dialog:
+                    dialog = Gtk.FileChooserNative(
+                        title=None,
+                        parent=None,
+                        action=action,
+                        accept_label=accept_label,
+                        cancel_label=Gtk.STOCK_CANCEL,
                     )
+                else:
+                    dialog = Gtk.FileChooserDialog(
+                        title=None,
+                        parent=None,
+                        action=action,
+                    )
+                try:
                     dialog.set_modal(True)
-                    dialog.set_keep_above(True)
-                    dialog.set_skip_taskbar_hint(True)
-                    dialog.set_skip_pager_hint(True)
-                    dialog.set_urgency_hint(True)
-                    dialog.set_type_hint(Gdk.WindowTypeHint.DIALOG)
-                    dialog.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
-                    dialog.set_resizable(True)
                     dialog.set_local_only(True)
+
+                    if not use_native_dialog:
+                        dialog.add_buttons(
+                            Gtk.STOCK_CANCEL,
+                            Gtk.ResponseType.CANCEL,
+                            accept_label,
+                            Gtk.ResponseType.ACCEPT,
+                        )
+                        dialog.set_keep_above(True)
+                        dialog.set_skip_taskbar_hint(True)
+                        dialog.set_skip_pager_hint(True)
+                        dialog.set_urgency_hint(True)
+                        dialog.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+                        dialog.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
+                        dialog.set_resizable(True)
 
                     if kind == "save":
                         dialog.set_do_overwrite_confirmation(True)
@@ -507,7 +533,8 @@ class Api:
                                 file_filter.add_pattern(pattern)
                             dialog.add_filter(file_filter)
 
-                    dialog.present()
+                    if hasattr(dialog, "present"):
+                        dialog.present()
                     response = dialog.run()
                     if response != Gtk.ResponseType.ACCEPT:
                         result_holder["value"] = [] if allow_multiple else None
@@ -682,6 +709,17 @@ class Api:
         allow_multiple: bool = False,
         file_types: tuple[str, ...] | list[str] | str | None = None,
     ) -> str | list[str] | None:
+        # Linux dialog requests are triggered from background worker threads in
+        # several websocket handlers. The pywebview dialog path is less reliable
+        # there, especially under Wayland compositors, so prefer the native
+        # picker stack on Linux even when a webview window exists.
+        if cls._is_linux_desktop():
+            return cls._pick_via_native(
+                kind,
+                allow_multiple=allow_multiple,
+                file_types=file_types,
+            )
+
         if cls._has_webview_window():
             return cls._pick_via_webview(
                 kind,
