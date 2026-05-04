@@ -3,8 +3,11 @@
 #include "UniqueUtils.h"
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <filesystem>
+#include <functional>
 #include <omp.h>
+#include <thread>
 #include <type_traits>
 
 #ifdef _WIN32
@@ -156,53 +159,60 @@ namespace BookGeneratorUtils {
     size_t parallel_unique(uint64_t* arr, size_t length, int num_threads) {
         (void) num_threads;
         return UniqueUtils::unique_sorted_u64_inplace(arr, length);
-        if (length < 2) {
-            return length;
+    }
+
+    std::pair<size_t, size_t> sort_and_unique_two_arrays_concurrently(
+        uint64_t *arr1,
+        size_t len1,
+        uint64_t *arr2,
+        size_t len2,
+        int total_threads,
+        int concurrent_threads_per_sort,
+        size_t min_length
+    ) {
+        if (concurrent_threads_per_sort <= 0 ||
+            total_threads < concurrent_threads_per_sort * 2 ||
+            len1 == 0 ||
+            len2 == 0 ||
+            len1 < min_length ||
+            len2 < min_length) {
+            sort_array(arr1, len1, total_threads);
+            sort_array(arr2, len2, total_threads);
+            return {
+                parallel_unique(arr1, len1, total_threads),
+                parallel_unique(arr2, len2, total_threads)
+            };
         }
 
-        const size_t worker_count = std::min<size_t>(length, static_cast<size_t>(std::max(num_threads, 1)));
-        if (worker_count <= 1 || length < 131072) {
-            return UniqueUtils::unique_sorted_u64_inplace(arr, length);
-        }
+        size_t unique1 = len1;
+        size_t unique2 = len2;
+        std::exception_ptr error1;
+        std::exception_ptr error2;
 
-        const size_t step = (length + worker_count - 1) / worker_count;
-        std::vector<size_t> c_list(worker_count, 0);
-
-        // 并行区间内去重
-        #pragma omp parallel for num_threads(static_cast<int>(worker_count))
-        for (int i = 0; i < static_cast<int>(worker_count); ++i) {
-            const size_t start = static_cast<size_t>(i) * step;
-            const size_t end = std::min(length, start + step);
-            
-            if (start >= end) {
-                continue;
+        auto worker = [concurrent_threads_per_sort](uint64_t *arr, size_t len, size_t &unique_len, std::exception_ptr &error) {
+            try {
+                omp_set_dynamic(0);
+                omp_set_num_threads(concurrent_threads_per_sort);
+                sort_array(arr, len, concurrent_threads_per_sort);
+                unique_len = parallel_unique(arr, len, concurrent_threads_per_sort);
+            } catch (...) {
+                error = std::current_exception();
             }
+        };
 
-            size_t c = UniqueUtils::unique_sorted_u64_inplace(arr + start, end - start);
-            if (i > 0 && c > 0 && arr[start] == arr[start - 1]) {
-                if (c > 1) {
-                    std::memmove(arr + start, arr + start + 1, (c - 1) * sizeof(uint64_t));
-                }
-                --c;
-            }
+        std::thread t1(worker, arr1, len1, std::ref(unique1), std::ref(error1));
+        std::thread t2(worker, arr2, len2, std::ref(unique2), std::ref(error2));
+        t1.join();
+        t2.join();
 
-                // arr[j-1] 访问是安全的，因为后续的 memmove 在并行的这步之后执行
-            c_list[static_cast<size_t>(i)] = c;
+        if (error1) {
+            std::rethrow_exception(error1);
+        }
+        if (error2) {
+            std::rethrow_exception(error2);
         }
 
-        // 串行紧缩收集结果
-        size_t result_cumulative = c_list[0];
-        for (size_t i = 1; i < worker_count; ++i) {
-            const size_t start = i * step;
-            const size_t count = c_list[i];
-            if (count > 0) {
-                // memmove 允许内存重叠，非常适合这种原地覆盖
-                std::memmove(arr + result_cumulative, arr + start, count * sizeof(uint64_t));
-                result_cumulative += count;
-            }
-        }
-
-        return result_cumulative;
+        return {unique1, unique2};
     }
 
     size_t merge_inplace(uint64_t* arr, const std::vector<size_t>& segment_ends, const std::vector<size_t>& segment_starts) {

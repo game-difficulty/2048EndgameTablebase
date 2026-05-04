@@ -885,15 +885,20 @@ gen_boards_big(
         length_factors_list[seg_index].push_back(static_cast<double>(segment_result.total_arr2) / static_cast<double>(1 + len));
         gen_time += wall_time_seconds() - seg_t0;
 
-        BookGeneratorUtils::sort_array(arr1_ptr.get(), segment_result.total_arr1, num_threads);
-        BookGeneratorUtils::sort_array(arr2_ptr.get(), segment_result.total_arr2, num_threads);
+        auto [unique_arr1_length, unique_arr2_length] = BookGeneratorUtils::sort_and_unique_two_arrays_concurrently(
+            arr1_ptr.get(),
+            segment_result.total_arr1,
+            arr2_ptr.get(),
+            segment_result.total_arr2,
+            num_threads
+        );
         big_result.arr1s.emplace_back(
             arr1_ptr.get(),
-            arr1_ptr.get() + BookGeneratorUtils::parallel_unique(arr1_ptr.get(), segment_result.total_arr1, num_threads)
+            arr1_ptr.get() + unique_arr1_length
         );
         big_result.arr2s.emplace_back(
             arr2_ptr.get(),
-            arr2_ptr.get() + BookGeneratorUtils::parallel_unique(arr2_ptr.get(), segment_result.total_arr2, num_threads)
+            arr2_ptr.get() + unique_arr2_length
         );
     }
 
@@ -1121,10 +1126,13 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                     : 5.0;
             }
 
-            BookGeneratorUtils::sort_array(d1t.data(), d1t.size(), num_threads);
-            BookGeneratorUtils::sort_array(d2.data(), d2.size(), num_threads);
-            d1t.resize(BookGeneratorUtils::parallel_unique(d1t.data(), d1t.size(), num_threads));
-            d2.resize(BookGeneratorUtils::parallel_unique(d2.data(), d2.size(), num_threads));
+            auto [unique_d1t_length, unique_d2_length] = BookGeneratorUtils::sort_and_unique_two_arrays_concurrently(
+                d1t.data(), d1t.size(),
+                d2.data(), d2.size(),
+                num_threads
+            );
+            d1t.resize(unique_d1t_length);
+            d2.resize(unique_d2_length);
             t2 = wall_time_seconds();
 
             std::vector<uint64_t> pivots;

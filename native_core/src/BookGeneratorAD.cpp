@@ -1240,10 +1240,15 @@ GenBoardsBigAdResult gen_boards_big_ad(
         length_factors_list[seg_index] = length_factors;
         gen_time += wall_time_seconds() - t_segment;
 
-        BookGeneratorUtils::sort_array(result.arr1.data(), result.arr1.size(), n);
-        BookGeneratorUtils::sort_array(result.arr2.data(), result.arr2.size(), n);
-        result.arr1.resize(BookGeneratorUtils::parallel_unique(result.arr1.data(), result.arr1.size(), n));
-        result.arr2.resize(BookGeneratorUtils::parallel_unique(result.arr2.data(), result.arr2.size(), n));
+        auto [unique_arr1_length, unique_arr2_length] = BookGeneratorUtils::sort_and_unique_two_arrays_concurrently(
+            result.arr1.data(),
+            result.arr1.size(),
+            result.arr2.data(),
+            result.arr2.size(),
+            n
+        );
+        result.arr1.resize(unique_arr1_length);
+        result.arr2.resize(unique_arr2_length);
         arr1s.push_back(std::move(result.arr1));
         arr2s.push_back(std::move(result.arr2));
     }
@@ -1312,8 +1317,6 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
             validate_length_and_balance(d0.size(), result.arr2.size(), result.arr1.size(), result.counts1, result.counts2, length_factor, false);
             double t1 = wall_time_seconds();
 
-            BookGeneratorUtils::sort_array(result.arr1.data(), result.arr1.size(), n);
-            BookGeneratorUtils::sort_array(result.arr2.data(), result.arr2.size(), n);
             auto [new_length_factors, new_length_factors_list] =
                 update_parameters(d0.size(), result.arr2.size(), init_params.length_factors, init_params.length_factors_list_path);
             init_params.length_factors = std::move(new_length_factors);
@@ -1324,10 +1327,16 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
             init_params.length_factor_multiplier = mean_count > 0.0
                 ? static_cast<double>(*std::max_element(result.counts2.begin(), result.counts2.end())) / mean_count
                 : 1.0;
+            auto [unique_arr1_length, unique_arr2_length] = BookGeneratorUtils::sort_and_unique_two_arrays_concurrently(
+                result.arr1.data(),
+                result.arr1.size(),
+                result.arr2.data(),
+                result.arr2.size(),
+                n
+            );
+            result.arr1.resize(unique_arr1_length);
+            result.arr2.resize(unique_arr2_length);
             double t2 = wall_time_seconds();
-
-            result.arr1.resize(BookGeneratorUtils::parallel_unique(result.arr1.data(), result.arr1.size(), n));
-            result.arr2.resize(BookGeneratorUtils::parallel_unique(result.arr2.data(), result.arr2.size(), n));
             std::vector<uint64_t> pivots;
             for (int pt = 1; pt < n; ++pt) {
                 if (d0.empty()) {

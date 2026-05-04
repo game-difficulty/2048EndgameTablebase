@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace BookGeneratorUtils {
@@ -9,6 +10,16 @@ namespace BookGeneratorUtils {
 void sort_array(uint64_t *arr, size_t length, int num_threads = 1);
 
 size_t parallel_unique(uint64_t *arr, size_t length, int num_threads);
+
+std::pair<size_t, size_t> sort_and_unique_two_arrays_concurrently(
+    uint64_t *arr1,
+    size_t len1,
+    uint64_t *arr2,
+    size_t len2,
+    int total_threads,
+    int concurrent_threads_per_sort = 8,
+    size_t min_length = 100000
+);
 
 size_t merge_inplace(uint64_t *arr, const std::vector<size_t> &segment_ends, const std::vector<size_t> &segment_starts);
 
