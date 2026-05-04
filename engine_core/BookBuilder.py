@@ -146,6 +146,26 @@ def save_config_to_txt(output_path: str) -> None:
             file.write(f"{key}: {str(SingletonConfig().config.get(key, '?'))}\n")
 
 
+def _collect_canonical_successors(boards: np.ndarray) -> np.ndarray:
+    canonicalized: list[np.uint64] = []
+
+    for board in boards:
+        for moved in mover_runtime.std.move_all_dir(np.uint64(board)):
+            moved = np.uint64(moved)
+            if moved == mover_runtime.canonical_full(moved):
+                canonicalized.append(moved)
+
+    if not canonicalized:
+        return np.empty(0, dtype=np.uint64)
+    return np.unique(np.asarray(canonicalized, dtype=np.uint64))
+
+
+def _is_reachable_free_init(board: np.uint64) -> bool:
+    decoded = mover_runtime.decode_board(np.uint64(board))
+    corners = (decoded[0, 0], decoded[0, 3], decoded[3, 0], decoded[3, 3])
+    return sum(tile > 4 for tile in corners) < 4
+
+
 def generate_free_inits(t32ks: int, t2s: int) -> np.ndarray:
     max_estimated = 1_000_000
     generated = np.empty(max_estimated, dtype=np.uint64)
@@ -167,19 +187,18 @@ def generate_free_inits(t32ks: int, t2s: int) -> np.ndarray:
             count += 1
 
     generated = np.unique(generated[:count])
-    canonicalized = np.empty(len(generated), dtype=np.uint64)
-    final_count = 0
+    canonicalized_a = _collect_canonical_successors(generated)
+    canonicalized_b = _collect_canonical_successors(canonicalized_a)
 
-    for board in generated:
-        for moved in mover_runtime.std.move_all_dir(np.uint64(board)):
-            moved = np.uint64(moved)
-            if moved == mover_runtime.canonical_full(moved):
-                canonicalized[final_count] = moved
-                final_count += 1
-        if final_count >= len(generated) - 3:
-            break
+    if canonicalized_b.size > 0:
+        canonicalized = np.unique(np.concatenate((canonicalized_a, canonicalized_b)))
+    else:
+        canonicalized = canonicalized_a
 
-    return np.unique(canonicalized[:final_count])
+    reachable = [
+        board for board in canonicalized if _is_reachable_free_init(np.uint64(board))
+    ]
+    return np.asarray(reachable, dtype=np.uint64)
 
 
 def _run_classic_build(
