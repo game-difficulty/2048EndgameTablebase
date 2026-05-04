@@ -121,7 +121,12 @@ std::pair<uint64_t, int> apply_sym_pair(uint64_t board, int symm_mode) {
 
 std::vector<uint64_t> read_raw_file(const std::string &path, FileIOUtils::DirectIoConfig config) {
     const double t0 = wall_time_seconds();
-    std::vector<uint64_t> data = FileIOUtils::read_binary_vector_direct<uint64_t>(path, config);
+    std::vector<uint64_t> data;
+    if (fs::exists(path)) {
+        data = FileIOUtils::read_binary_vector_direct<uint64_t>(path, config);
+    } else {
+        data = read_temp_uint64_archive(path + ".7z");
+    }
     const double t1 = wall_time_seconds();
     const double elapsed = std::max(t1 - t0, 1e-12);
     const uint64_t bytes = static_cast<uint64_t>(data.size()) * static_cast<uint64_t>(sizeof(uint64_t));
@@ -140,10 +145,19 @@ std::vector<uint64_t> read_raw_file(const std::string &path, FileIOUtils::Direct
 void write_raw_file(
     const std::string &path,
     const std::vector<uint64_t> &data,
-    FileIOUtils::DirectIoConfig config
+    FileIOUtils::DirectIoConfig config,
+    bool compressed = false
 ) {
     const double t0 = wall_time_seconds();
-    FileIOUtils::write_binary_vector_direct(path, data, config);
+    if (compressed) {
+        if (!write_temp_uint64_archive(path + ".7z", data, 1)) {
+            throw std::runtime_error("failed to write compressed temp layer: " + path + ".7z");
+        }
+        std::error_code ec;
+        fs::remove(path, ec);
+    } else {
+        FileIOUtils::write_binary_vector_direct(path, data, config);
+    }
     const double t1 = wall_time_seconds();
     const double elapsed = std::max(t1 - t0, 1e-12);
     const uint64_t bytes = static_cast<uint64_t>(data.size()) * static_cast<uint64_t>(sizeof(uint64_t));
@@ -404,7 +418,8 @@ RestartResult handle_restart_ad(
     const std::string &pathname,
     const std::vector<uint64_t> &arr_init,
     bool started,
-    FileIOUtils::DirectIoConfig io_config
+    FileIOUtils::DirectIoConfig io_config,
+    bool compress_temp_files
 ) {
     const std::string path_i = pathname + std::to_string(step_index);
     const std::string path_i_plus_1 = pathname + std::to_string(step_index + 1);
@@ -420,7 +435,7 @@ RestartResult handle_restart_ad(
         return {};
     }
     if (step_index == 1) {
-        write_raw_file(path_i_minus_1, arr_init, io_config);
+        write_raw_file(path_i_minus_1, arr_init, io_config, compress_temp_files);
         return {true, true, arr_init, {}};
     }
     if (!started) {
@@ -1461,7 +1476,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
 
     for (int i = 1; i < options.steps - 1; ++i) {
-        RestartResult restart = handle_restart_ad(i, options.pathname, arr_init, started, io_config);
+        RestartResult restart = handle_restart_ad(i, options.pathname, arr_init, started, io_config, options.compress_temp_files);
         if (!restart.run) {
             continue;
         }
@@ -1580,10 +1595,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
         }
 
         clear_u64_buffer(hashmap1, n);
-        write_raw_file(options.pathname + std::to_string(i), d0, io_config);
-        if (options.compress_temp_files && i > 5) {
-            maybe_compress_with_7z(options.pathname + std::to_string(i - 2));
-        }
+        write_raw_file(options.pathname + std::to_string(i), d0, io_config, options.compress_temp_files);
         std::swap(hashmap1, hashmap2);
     }
     return {started, std::move(d0), std::move(d1)};

@@ -8,6 +8,14 @@
 
 bool compress_with_7z_or_xz(const std::string &input_path, int lvl = 1);
 bool decompress_with_7z_or_xz(const std::string &archive_path);
+bool compress_bytes_to_7z_archive_streaming(
+    const uint8_t *data,
+    size_t size,
+    const std::string &archive_path,
+    const std::string &entry_name,
+    int lvl = 1
+);
+bool decompress_7z_archive_to_bytes_streaming(const std::string &archive_path, std::vector<uint8_t> &output);
 
 std::vector<uint8_t> compress_xz_block_native(const uint8_t *data, size_t size, int lvl = 1);
 std::vector<uint8_t> decompress_xz_block_native(const uint8_t *data, size_t size);

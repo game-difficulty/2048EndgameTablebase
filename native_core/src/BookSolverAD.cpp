@@ -253,6 +253,13 @@ std::vector<T> read_binary_vector(const std::string &path, FileIOUtils::DirectIo
     return FileIOUtils::read_binary_vector_direct<T>(path, config);
 }
 
+std::vector<uint64_t> read_temp_raw_layer(const std::string &path, FileIOUtils::DirectIoConfig config = {}) {
+    if (fs::exists(path)) {
+        return FileIOUtils::read_binary_vector_direct<uint64_t>(path, config);
+    }
+    return read_temp_uint64_archive(path + ".7z");
+}
+
 template <typename T>
 void write_binary_vector(
     const std::string &path,
@@ -307,6 +314,16 @@ void clear_index_store(IndexStore &index_store) {
     for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
         index_store.at(key).clear();
     }
+}
+
+void remove_file_if_exists(const std::string &path) {
+    std::error_code ec;
+    fs::remove(path, ec);
+}
+
+void remove_temp_raw_layer_files(const std::string &path) {
+    remove_file_if_exists(path);
+    remove_file_if_exists(path + ".7z");
 }
 
 void release_index_store(IndexStore &index_store) {
@@ -1926,9 +1943,7 @@ void recalculate_process_ad_chunked_impl(
         fs::create_directories(options.pathname + std::to_string(options.steps - 2) + "b");
     }
     const std::string final_raw_path = options.pathname + std::to_string(options.steps - 2);
-    if (fs::exists(final_raw_path)) {
-        fs::remove(final_raw_path);
-    }
+    remove_temp_raw_layer_files(final_raw_path);
 
     std::unordered_map<uint32_t, MatchCache> match_dict;
     bool started = false;
@@ -1957,10 +1972,7 @@ void recalculate_process_ad_chunked_impl(
             }
         }
         const uint32_t original_board_sum = static_cast<uint32_t>(2 * step) + ini_board_sum;
-        if (options.compress_temp_files) {
-            maybe_decompress_with_7z(options.pathname + std::to_string(step) + ".7z");
-        }
-        std::vector<uint64_t> d0 = read_binary_vector<uint64_t>(
+        std::vector<uint64_t> d0 = read_temp_raw_layer(
             options.pathname + std::to_string(step),
             io_config
         );
@@ -2059,9 +2071,7 @@ void recalculate_process_ad_chunked_impl(
         fs::rename(temp_folder, final_folder);
 
         const std::string raw_path = options.pathname + std::to_string(step);
-        if (fs::exists(raw_path)) {
-            fs::remove(raw_path);
-        }
+        remove_temp_raw_layer_files(raw_path);
 
         const double avg_speed = round_to_2(static_cast<double>(counter_acc) / std::max(timer_acc, 0.000001) / 2e6);
         {
@@ -2116,9 +2126,7 @@ void recalculate_process_ad_impl(
         fs::create_directories(options.pathname + std::to_string(options.steps - 2) + "b");
     }
     const std::string final_raw_path = options.pathname + std::to_string(options.steps - 2);
-    if (fs::exists(final_raw_path)) {
-        fs::remove(final_raw_path);
-    }
+    remove_temp_raw_layer_files(final_raw_path);
 
     std::unordered_map<uint32_t, MatchCache> match_dict;
     bool started = false;
@@ -2146,11 +2154,8 @@ void recalculate_process_ad_impl(
                 dict_fromfile(options, step + 2, book_dict2, ind_dict2);
             }
         }
-        if (options.compress_temp_files) {
-            maybe_decompress_with_7z(options.pathname + std::to_string(step) + ".7z");
-        }
         const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
-        std::vector<uint64_t> d0 = read_binary_vector<uint64_t>(
+        std::vector<uint64_t> d0 = read_temp_raw_layer(
             options.pathname + std::to_string(step),
             io_config
         );
@@ -2232,9 +2237,7 @@ void recalculate_process_ad_impl(
         dict_tofile(book_dict0, ind_dict0, options, step, false);
 
         const std::string raw_path = options.pathname + std::to_string(step);
-        if (fs::exists(raw_path)) {
-            fs::remove(raw_path);
-        }
+        remove_temp_raw_layer_files(raw_path);
         debug_log("step " + std::to_string(step) + " written\n");
 
         book_dict2 = std::move(book_dict1);

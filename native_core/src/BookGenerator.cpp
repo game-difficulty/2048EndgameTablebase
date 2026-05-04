@@ -680,6 +680,23 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> handle_restart(
     auto path_i_minus_1 = options.pathname + std::to_string(step_index - 1);
     const uint64_t raw_alignment = sizeof(uint64_t);
     const uint64_t book_alignment = success_entry_size_for_dtype(options.success_rate_dtype);
+    auto read_temp_layer = [&io_config](const std::string &path) {
+        if (fs::exists(path)) {
+            return FileIOUtils::read_binary_vector_direct<uint64_t>(path, io_config);
+        }
+        return read_temp_uint64_archive(path + ".7z");
+    };
+    auto write_temp_layer = [&io_config, &options](const std::string &path, const std::vector<uint64_t> &data) {
+        if (options.compress_temp_files) {
+            if (!write_temp_uint64_archive(path + ".7z", data, 1)) {
+                throw std::runtime_error("failed to write compressed temp layer: " + path + ".7z");
+            }
+            std::error_code ec;
+            fs::remove(path, ec);
+            return;
+        }
+        FileIOUtils::write_binary_vector_direct(path, data, io_config);
+    };
 
     remove_invalid_restart_file(path_i, raw_alignment);
     remove_invalid_restart_file(path_i_plus_1, raw_alignment);
@@ -702,15 +719,12 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> handle_restart(
     }
 
     if (step_index == 1) {
-        FileIOUtils::write_binary_vector_direct(path_i_minus_1, arr_init, io_config);
+        write_temp_layer(path_i_minus_1, arr_init);
         return {true, arr_init, {}};
     }
 
     if (!started) {
-        auto read_raw = [&io_config](const std::string &path) {
-            return FileIOUtils::read_binary_vector_direct<uint64_t>(path, io_config);
-        };
-        return {true, read_raw(path_i_minus_1), read_raw(path_i)};
+        return {true, read_temp_layer(path_i_minus_1), read_temp_layer(path_i)};
     }
 
     return {true, {}, {}};
@@ -1426,9 +1440,14 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             save_length_factors(init_params.length_factors_list_path, init_params.length_factors_list);
         }
 
-        FileIOUtils::write_binary_vector_direct(options.pathname + std::to_string(i), d0, io_config);
-        if (options.compress_temp_files && i > 5) {
-            maybe_compress_with_7z(options.pathname + std::to_string(i - 2));
+        if (options.compress_temp_files) {
+            if (!write_temp_uint64_archive(options.pathname + std::to_string(i) + ".7z", d0, 1)) {
+                throw std::runtime_error("failed to write compressed temp layer: " + options.pathname + std::to_string(i) + ".7z");
+            }
+            std::error_code ec;
+            fs::remove(options.pathname + std::to_string(i), ec);
+        } else {
+            FileIOUtils::write_binary_vector_direct(options.pathname + std::to_string(i), d0, io_config);
         }
         std::swap(hashmap1, hashmap2);
     }

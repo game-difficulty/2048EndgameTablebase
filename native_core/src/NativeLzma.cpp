@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +24,7 @@
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -197,8 +199,17 @@ std::vector<uint8_t> xz_decompress_bytes(const uint8_t *data, size_t size) {
 std::optional<std::string> resolve_7z_executable() {
     std::vector<fs::path> candidates = {
         fs::path("7z.exe"),
+        fs::path("7za.exe"),
+        fs::path("7zz.exe"),
         fs::path("_internal") / "7z.exe",
+        fs::path("_internal") / "7za.exe",
+        fs::path("_internal") / "7zz.exe",
         fs::path("7zip") / "7z.exe",
+        fs::path("7zip") / "7za.exe",
+        fs::path("7zip") / "7zz.exe",
+        fs::path("7z"),
+        fs::path("7za"),
+        fs::path("7zz"),
     };
 
 #ifdef _WIN32
@@ -262,6 +273,322 @@ std::string quote_arg(const std::string &value) {
     return "\"" + value + "\"";
 }
 
+std::string build_command_line(const std::vector<std::string> &args) {
+    std::string command_line;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i != 0) {
+            command_line.push_back(' ');
+        }
+        command_line += quote_arg(args[i]);
+    }
+    return command_line;
+}
+
+#ifdef _WIN32
+bool wait_process_success(PROCESS_INFORMATION &process_info) {
+    WaitForSingleObject(process_info.hProcess, INFINITE);
+    DWORD exit_code = 1;
+    GetExitCodeProcess(process_info.hProcess, &exit_code);
+    CloseHandle(process_info.hThread);
+    CloseHandle(process_info.hProcess);
+    process_info.hThread = nullptr;
+    process_info.hProcess = nullptr;
+    return exit_code == 0;
+}
+
+bool write_all_handle(HANDLE handle, const uint8_t *data, size_t size) {
+    size_t offset = 0;
+    while (offset < size) {
+        const DWORD chunk = static_cast<DWORD>(std::min<size_t>(size - offset, 1U << 20));
+        DWORD written = 0;
+        if (!WriteFile(handle, data + offset, chunk, &written, nullptr)) {
+            return false;
+        }
+        offset += static_cast<size_t>(written);
+    }
+    return true;
+}
+
+std::vector<uint8_t> read_all_handle(HANDLE handle, bool &ok) {
+    ok = true;
+    std::vector<uint8_t> output;
+    std::array<uint8_t, 1U << 20> buffer{};
+    for (;;) {
+        DWORD read_bytes = 0;
+        const BOOL read_ok = ReadFile(handle, buffer.data(), static_cast<DWORD>(buffer.size()), &read_bytes, nullptr);
+        if (!read_ok || read_bytes == 0) {
+            if (!read_ok && GetLastError() != ERROR_BROKEN_PIPE) {
+                ok = false;
+            }
+            break;
+        }
+        output.insert(output.end(), buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(read_bytes));
+    }
+    return output;
+}
+
+bool spawn_process_with_redirects(
+    const std::vector<std::string> &args,
+    HANDLE child_stdin,
+    HANDLE child_stdout,
+    HANDLE child_stderr,
+    PROCESS_INFORMATION &process_info
+) {
+    STARTUPINFOA startup_info{};
+    startup_info.cb = sizeof(startup_info);
+    startup_info.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    startup_info.wShowWindow = SW_HIDE;
+    startup_info.hStdInput = child_stdin;
+    startup_info.hStdOutput = child_stdout;
+    startup_info.hStdError = child_stderr;
+    std::string command_line = build_command_line(args);
+    std::vector<char> command(command_line.begin(), command_line.end());
+    command.push_back('\0');
+    return CreateProcessA(
+        nullptr,
+        command.data(),
+        nullptr,
+        nullptr,
+        TRUE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        nullptr,
+        &startup_info,
+        &process_info) != FALSE;
+}
+#else
+bool write_all_fd(int fd, const uint8_t *data, size_t size) {
+    size_t offset = 0;
+    while (offset < size) {
+        ssize_t written = write(fd, data + offset, size - offset);
+        if (written < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        offset += static_cast<size_t>(written);
+    }
+    return true;
+}
+
+std::vector<uint8_t> read_all_fd(int fd, bool &ok) {
+    ok = true;
+    std::vector<uint8_t> output;
+    std::array<uint8_t, 1U << 20> buffer{};
+    for (;;) {
+        ssize_t read_bytes = read(fd, buffer.data(), buffer.size());
+        if (read_bytes < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            ok = false;
+            break;
+        }
+        if (read_bytes == 0) {
+            break;
+        }
+        output.insert(output.end(), buffer.begin(), buffer.begin() + read_bytes);
+    }
+    return output;
+}
+
+bool wait_pid_success(pid_t pid) {
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            return false;
+        }
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+#endif
+
+bool compress_bytes_to_7z_archive_streaming_impl(
+    const uint8_t *data,
+    size_t size,
+    const std::string &archive_path,
+    const std::string &entry_name,
+    int lvl
+) {
+    auto exe = resolve_7z_executable();
+    if (!exe) {
+        return false;
+    }
+    const int max_threads = std::max(2, omp_get_max_threads());
+    std::error_code ec;
+    fs::remove(archive_path, ec);
+    const std::vector<std::string> args = {
+        *exe,
+        "a",
+        "-t7z",
+        "-m0=lzma2",
+        "-mx=" + std::to_string(lvl),
+        "-mmt=" + std::to_string(max_threads),
+        "-bd",
+        "-y",
+        archive_path,
+        "-si" + entry_name
+    };
+
+#ifdef _WIN32
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE stdin_read = nullptr;
+    HANDLE stdin_write = nullptr;
+    if (!CreatePipe(&stdin_read, &stdin_write, &sa, 0)) {
+        return false;
+    }
+    SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0);
+    HANDLE nul_out = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (nul_out == INVALID_HANDLE_VALUE) {
+        CloseHandle(stdin_read);
+        CloseHandle(stdin_write);
+        return false;
+    }
+    PROCESS_INFORMATION process_info{};
+    const bool spawned = spawn_process_with_redirects(args, stdin_read, nul_out, nul_out, process_info);
+    CloseHandle(stdin_read);
+    CloseHandle(nul_out);
+    if (!spawned) {
+        CloseHandle(stdin_write);
+        return false;
+    }
+    const bool write_ok = write_all_handle(stdin_write, data, size);
+    CloseHandle(stdin_write);
+    const bool exit_ok = wait_process_success(process_info);
+    if (!write_ok || !exit_ok) {
+        fs::remove(archive_path, ec);
+        return false;
+    }
+    return true;
+#else
+    int stdin_pipe[2];
+    if (pipe(stdin_pipe) != 0) {
+        return false;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(stdin_pipe[0]);
+        close(stdin_pipe[1]);
+        return false;
+    }
+    if (pid == 0) {
+        int nul_out = open("/dev/null", O_WRONLY);
+        dup2(stdin_pipe[0], STDIN_FILENO);
+        dup2(nul_out, STDOUT_FILENO);
+        dup2(nul_out, STDERR_FILENO);
+        close(stdin_pipe[0]);
+        close(stdin_pipe[1]);
+        close(nul_out);
+        std::vector<char *> argv;
+        argv.reserve(args.size() + 1);
+        for (const auto &arg : args) {
+            argv.push_back(const_cast<char *>(arg.c_str()));
+        }
+        argv.push_back(nullptr);
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+    close(stdin_pipe[0]);
+    const bool write_ok = write_all_fd(stdin_pipe[1], data, size);
+    close(stdin_pipe[1]);
+    const bool exit_ok = wait_pid_success(pid);
+    if (!write_ok || !exit_ok) {
+        fs::remove(archive_path, ec);
+        return false;
+    }
+    return true;
+#endif
+}
+
+bool decompress_7z_archive_to_bytes_streaming_impl(const std::string &archive_path, std::vector<uint8_t> &output) {
+    auto exe = resolve_7z_executable();
+    if (!exe || !fs::exists(archive_path)) {
+        return false;
+    }
+    const std::vector<std::string> args = {
+        *exe,
+        "x",
+        "-so",
+        "-bd",
+        "-y",
+        archive_path
+    };
+
+#ifdef _WIN32
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE stdout_read = nullptr;
+    HANDLE stdout_write = nullptr;
+    if (!CreatePipe(&stdout_read, &stdout_write, &sa, 0)) {
+        return false;
+    }
+    SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
+    HANDLE nul_in = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE nul_err = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (nul_in == INVALID_HANDLE_VALUE || nul_err == INVALID_HANDLE_VALUE) {
+        if (nul_in != INVALID_HANDLE_VALUE) CloseHandle(nul_in);
+        if (nul_err != INVALID_HANDLE_VALUE) CloseHandle(nul_err);
+        CloseHandle(stdout_read);
+        CloseHandle(stdout_write);
+        return false;
+    }
+    PROCESS_INFORMATION process_info{};
+    const bool spawned = spawn_process_with_redirects(args, nul_in, stdout_write, nul_err, process_info);
+    CloseHandle(nul_in);
+    CloseHandle(nul_err);
+    CloseHandle(stdout_write);
+    if (!spawned) {
+        CloseHandle(stdout_read);
+        return false;
+    }
+    bool read_ok = false;
+    output = read_all_handle(stdout_read, read_ok);
+    CloseHandle(stdout_read);
+    const bool exit_ok = wait_process_success(process_info);
+    return read_ok && exit_ok;
+#else
+    int stdout_pipe[2];
+    if (pipe(stdout_pipe) != 0) {
+        return false;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(stdout_pipe[0]);
+        close(stdout_pipe[1]);
+        return false;
+    }
+    if (pid == 0) {
+        int nul_in = open("/dev/null", O_RDONLY);
+        int nul_err = open("/dev/null", O_WRONLY);
+        dup2(nul_in, STDIN_FILENO);
+        dup2(stdout_pipe[1], STDOUT_FILENO);
+        dup2(nul_err, STDERR_FILENO);
+        close(stdout_pipe[0]);
+        close(stdout_pipe[1]);
+        close(nul_in);
+        close(nul_err);
+        std::vector<char *> argv;
+        argv.reserve(args.size() + 1);
+        for (const auto &arg : args) {
+            argv.push_back(const_cast<char *>(arg.c_str()));
+        }
+        argv.push_back(nullptr);
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+    close(stdout_pipe[1]);
+    bool read_ok = false;
+    output = read_all_fd(stdout_pipe[0], read_ok);
+    close(stdout_pipe[0]);
+    const bool exit_ok = wait_pid_success(pid);
+    return read_ok && exit_ok;
+#endif
+}
+
 bool compress_file_xz(const std::string &input_path, const std::string &output_path, int lvl) {
     std::vector<uint8_t> bytes = FileIOUtils::read_binary_bytes(input_path);
     if (bytes.empty() && !fs::exists(input_path)) {
@@ -299,6 +626,21 @@ std::vector<uint8_t> read_file_bytes_range(const std::string &path, uint64_t beg
 }
 
 } // namespace
+
+bool compress_bytes_to_7z_archive_streaming(
+    const uint8_t *data,
+    size_t size,
+    const std::string &archive_path,
+    const std::string &entry_name,
+    int lvl
+) {
+    return compress_bytes_to_7z_archive_streaming_impl(data, size, archive_path, entry_name, lvl);
+}
+
+bool decompress_7z_archive_to_bytes_streaming(const std::string &archive_path, std::vector<uint8_t> &output) {
+    output.clear();
+    return decompress_7z_archive_to_bytes_streaming_impl(archive_path, output);
+}
 
 std::vector<uint8_t> compress_xz_block_native(const uint8_t *data, size_t size, int lvl) {
     return xz_compress_bytes(data, size, static_cast<uint32_t>(lvl));
