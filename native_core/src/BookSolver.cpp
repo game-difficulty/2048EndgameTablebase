@@ -8,10 +8,12 @@
 #include "FileIOUtils.h"
 #include "Formation.h"
 #include "HybridSearch.h"
+#include "UniqueUtils.h"
 #include "VBoardMover.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -22,6 +24,7 @@
 #include <omp.h>
 #include <stdexcept>
 #include <sstream>
+#include <type_traits>
 
 namespace fs = std::filesystem;
 namespace nb = nanobind;
@@ -191,7 +194,40 @@ LayerVector<T> read_layer_file(const std::string &path, FileIOUtils::DirectIoCon
 
 template <typename T>
 SplitLayer<T> read_split_layer_file(const std::string &path, FileIOUtils::DirectIoConfig config = {}) {
-    return split_layer_from_entries<T>(read_layer_file<T>(path, config));
+    const FileIOUtils::DirectIoConfig normalized = FileIOUtils::normalize_direct_io_config(config);
+    if (!normalized.enabled) {
+        return split_layer_from_entries<T>(read_layer_file<T>(path, config));
+    }
+
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return {};
+    }
+    const size_t size = FileIOUtils::checked_tellg(file, path);
+    if (size % sizeof(SuccessEntry<T>) != 0U) {
+        throw std::runtime_error("misaligned binary file size: " + path);
+    }
+
+    const size_t entry_count = size / sizeof(SuccessEntry<T>);
+    SplitLayer<T> layer = allocate_split_layer<T>(entry_count);
+    if (entry_count == 0U) {
+        return layer;
+    }
+
+    FileIOUtils::DirectSequentialReader reader(path, static_cast<uint64_t>(size), normalized);
+    std::unique_ptr<SuccessEntry<T>[]> buffer(new SuccessEntry<T>[io_chunk_entries<T>()]);
+    size_t offset = 0U;
+    while (offset < entry_count) {
+        const size_t current = std::min(io_chunk_entries<T>(), entry_count - offset);
+        reader.read(buffer.get(), current * sizeof(SuccessEntry<T>));
+        for (size_t i = 0; i < current; ++i) {
+            layer.boards[offset + i] = buffer[i].board;
+            layer.success[offset + i] = buffer[i].success;
+        }
+        offset += current;
+    }
+    reader.close();
+    return layer;
 }
 
 template <typename T>
@@ -377,7 +413,7 @@ template <typename T> std::pair<T, uint64_t> search_arr2(
     return {arr.success[begin + pos], begin + pos};
 }
 
-template <typename T> size_t compact_live_entries(SplitLayer<T> &arr, T threshold, bool shrink_boards) {
+template <typename T> size_t compact_live_entries_scalar_impl(SplitLayer<T> &arr, T threshold, bool shrink_boards) {
     size_t count = 0;
     for (size_t i = 0; i < arr.size(); ++i) {
         if (arr.success[i] > threshold) {
@@ -393,7 +429,7 @@ template <typename T> size_t compact_live_entries(SplitLayer<T> &arr, T threshol
     return count;
 }
 
-template <typename T> size_t compact_by_mask(SplitLayer<T> &arr, const std::vector<uint8_t> &mask, bool shrink_boards) {
+template <typename T> size_t compact_by_mask_scalar_impl(SplitLayer<T> &arr, const std::vector<uint8_t> &mask, bool shrink_boards) {
     size_t count = 0U;
     const size_t limit = std::min(arr.size(), mask.size());
     for (size_t i = 0; i < limit; ++i) {
@@ -408,6 +444,431 @@ template <typename T> size_t compact_by_mask(SplitLayer<T> &arr, const std::vect
         arr.boards.resize(count);
     }
     return count;
+}
+
+template <typename T>
+void copy_selected_runs_soa(
+    SplitLayer<T> &arr,
+    size_t src_index,
+    size_t &dst_index,
+    uint32_t keep_mask,
+    unsigned lane_count
+) {
+    while (keep_mask != 0U) {
+        const unsigned start = static_cast<unsigned>(__builtin_ctz(keep_mask));
+        unsigned run_length = 1U;
+        while (start + run_length < lane_count && ((keep_mask >> (start + run_length)) & 1U) != 0U) {
+            ++run_length;
+        }
+        std::memmove(
+            arr.boards.data() + dst_index,
+            arr.boards.data() + src_index + static_cast<size_t>(start),
+            static_cast<size_t>(run_length) * sizeof(uint64_t)
+        );
+        std::memmove(
+            arr.success.get() + dst_index,
+            arr.success.get() + src_index + static_cast<size_t>(start),
+            static_cast<size_t>(run_length) * sizeof(T)
+        );
+        dst_index += static_cast<size_t>(run_length);
+        const uint32_t run_bits = static_cast<uint32_t>(((1ULL << run_length) - 1ULL) << start);
+        keep_mask &= ~run_bits;
+    }
+}
+
+inline uint32_t keep_mask_from_bytes_scalar(const uint8_t *mask, unsigned lane_count) {
+    uint32_t keep_mask = 0U;
+    for (unsigned lane = 0; lane < lane_count; ++lane) {
+        if (mask[lane] != 0U) {
+            keep_mask |= (1U << lane);
+        }
+    }
+    return keep_mask;
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+template <typename T>
+__attribute__((target("avx2")))
+size_t compact_live_entries_avx2_impl(SplitLayer<T> &arr, T threshold, bool shrink_boards) {
+    size_t out = 0U;
+    size_t i = 0U;
+
+    if constexpr (std::is_same_v<T, uint32_t>) {
+        constexpr unsigned kLanes = 8U;
+        const __m256i bias = _mm256_set1_epi32(static_cast<int>(0x80000000U));
+        const __m256i threshold_vec = _mm256_xor_si256(_mm256_set1_epi32(static_cast<int>(threshold)), bias);
+        for (; i + kLanes <= arr.size(); i += kLanes) {
+            const __m256i values = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(arr.success.get() + i));
+            const __m256i biased = _mm256_xor_si256(values, bias);
+            const __m256i cmp = _mm256_cmpgt_epi32(biased, threshold_vec);
+            const uint32_t keep_mask = static_cast<uint32_t>(_mm256_movemask_ps(_mm256_castsi256_ps(cmp)));
+            if (keep_mask == 0U) {
+                continue;
+            }
+            if (keep_mask == 0xFFU) {
+                if (out != i) {
+                    std::memmove(arr.boards.data() + out, arr.boards.data() + i, kLanes * sizeof(uint64_t));
+                    std::memmove(arr.success.get() + out, arr.success.get() + i, kLanes * sizeof(T));
+                }
+                out += kLanes;
+                continue;
+            }
+            copy_selected_runs_soa(arr, i, out, keep_mask, kLanes);
+        }
+    } else if constexpr (std::is_same_v<T, float>) {
+        constexpr unsigned kLanes = 8U;
+        const __m256 threshold_vec = _mm256_set1_ps(threshold);
+        for (; i + kLanes <= arr.size(); i += kLanes) {
+            const __m256 values = _mm256_loadu_ps(arr.success.get() + i);
+            const __m256 cmp = _mm256_cmp_ps(values, threshold_vec, _CMP_GT_OQ);
+            const uint32_t keep_mask = static_cast<uint32_t>(_mm256_movemask_ps(cmp));
+            if (keep_mask == 0U) {
+                continue;
+            }
+            if (keep_mask == 0xFFU) {
+                if (out != i) {
+                    std::memmove(arr.boards.data() + out, arr.boards.data() + i, kLanes * sizeof(uint64_t));
+                    std::memmove(arr.success.get() + out, arr.success.get() + i, kLanes * sizeof(T));
+                }
+                out += kLanes;
+                continue;
+            }
+            copy_selected_runs_soa(arr, i, out, keep_mask, kLanes);
+        }
+    } else if constexpr (std::is_same_v<T, uint64_t>) {
+        constexpr unsigned kLanes = 4U;
+        const __m256i bias = _mm256_set1_epi64x(static_cast<long long>(0x8000000000000000ULL));
+        const __m256i threshold_vec = _mm256_xor_si256(
+            _mm256_set1_epi64x(static_cast<long long>(threshold)),
+            bias
+        );
+        for (; i + kLanes <= arr.size(); i += kLanes) {
+            const __m256i values = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(arr.success.get() + i));
+            const __m256i biased = _mm256_xor_si256(values, bias);
+            const __m256i cmp = _mm256_cmpgt_epi64(biased, threshold_vec);
+            const uint32_t keep_mask = static_cast<uint32_t>(_mm256_movemask_pd(_mm256_castsi256_pd(cmp)));
+            if (keep_mask == 0U) {
+                continue;
+            }
+            if (keep_mask == 0xFU) {
+                if (out != i) {
+                    std::memmove(arr.boards.data() + out, arr.boards.data() + i, kLanes * sizeof(uint64_t));
+                    std::memmove(arr.success.get() + out, arr.success.get() + i, kLanes * sizeof(T));
+                }
+                out += kLanes;
+                continue;
+            }
+            copy_selected_runs_soa(arr, i, out, keep_mask, kLanes);
+        }
+    } else if constexpr (std::is_same_v<T, double>) {
+        constexpr unsigned kLanes = 4U;
+        const __m256d threshold_vec = _mm256_set1_pd(threshold);
+        for (; i + kLanes <= arr.size(); i += kLanes) {
+            const __m256d values = _mm256_loadu_pd(arr.success.get() + i);
+            const __m256d cmp = _mm256_cmp_pd(values, threshold_vec, _CMP_GT_OQ);
+            const uint32_t keep_mask = static_cast<uint32_t>(_mm256_movemask_pd(cmp));
+            if (keep_mask == 0U) {
+                continue;
+            }
+            if (keep_mask == 0xFU) {
+                if (out != i) {
+                    std::memmove(arr.boards.data() + out, arr.boards.data() + i, kLanes * sizeof(uint64_t));
+                    std::memmove(arr.success.get() + out, arr.success.get() + i, kLanes * sizeof(T));
+                }
+                out += kLanes;
+                continue;
+            }
+            copy_selected_runs_soa(arr, i, out, keep_mask, kLanes);
+        }
+    }
+
+    for (; i < arr.size(); ++i) {
+        if (arr.success[i] > threshold) {
+            arr.boards[out] = arr.boards[i];
+            arr.success[out] = arr.success[i];
+            ++out;
+        }
+    }
+    arr.length = out;
+    if (shrink_boards) {
+        arr.boards.resize(out);
+    }
+    return out;
+}
+
+template <typename T>
+__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
+size_t compact_live_entries_avx512_impl(SplitLayer<T> &arr, T threshold, bool shrink_boards) {
+    size_t out = 0U;
+    size_t i = 0U;
+
+    if constexpr (std::is_same_v<T, uint32_t>) {
+        constexpr unsigned kLanes = 16U;
+        const __m512i threshold_vec = _mm512_set1_epi32(static_cast<int>(threshold));
+        for (; i + kLanes <= arr.size(); i += kLanes) {
+            const __m512i values = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.success.get() + i));
+            const __mmask16 keep_mask = _mm512_cmp_epu32_mask(values, threshold_vec, _MM_CMPINT_GT);
+            if (keep_mask == 0U) {
+                continue;
+            }
+            if (keep_mask == 0xFFFFU && out == i) {
+                out += kLanes;
+                continue;
+            }
+            _mm512_mask_compressstoreu_epi32(arr.success.get() + out, keep_mask, values);
+            const __m512i boards_lo = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.boards.data() + i));
+            const __m512i boards_hi = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.boards.data() + i + 8U));
+            const __mmask8 keep_lo = static_cast<__mmask8>(keep_mask & 0xFFU);
+            const __mmask8 keep_hi = static_cast<__mmask8>((keep_mask >> 8U) & 0xFFU);
+            _mm512_mask_compressstoreu_epi64(arr.boards.data() + out, keep_lo, boards_lo);
+            const size_t out_hi = out + UniqueUtils::popcount_mask(static_cast<unsigned>(keep_lo));
+            _mm512_mask_compressstoreu_epi64(arr.boards.data() + out_hi, keep_hi, boards_hi);
+            out += UniqueUtils::popcount_mask(static_cast<unsigned>(keep_mask));
+        }
+    } else if constexpr (std::is_same_v<T, float>) {
+        constexpr unsigned kLanes = 16U;
+        const __m512 threshold_vec = _mm512_set1_ps(threshold);
+        for (; i + kLanes <= arr.size(); i += kLanes) {
+            const __m512 values = _mm512_loadu_ps(arr.success.get() + i);
+            const __mmask16 keep_mask = _mm512_cmp_ps_mask(values, threshold_vec, _CMP_GT_OQ);
+            if (keep_mask == 0U) {
+                continue;
+            }
+            if (keep_mask == 0xFFFFU && out == i) {
+                out += kLanes;
+                continue;
+            }
+            _mm512_mask_compressstoreu_ps(arr.success.get() + out, keep_mask, values);
+            const __m512i boards_lo = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.boards.data() + i));
+            const __m512i boards_hi = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.boards.data() + i + 8U));
+            const __mmask8 keep_lo = static_cast<__mmask8>(keep_mask & 0xFFU);
+            const __mmask8 keep_hi = static_cast<__mmask8>((keep_mask >> 8U) & 0xFFU);
+            _mm512_mask_compressstoreu_epi64(arr.boards.data() + out, keep_lo, boards_lo);
+            const size_t out_hi = out + UniqueUtils::popcount_mask(static_cast<unsigned>(keep_lo));
+            _mm512_mask_compressstoreu_epi64(arr.boards.data() + out_hi, keep_hi, boards_hi);
+            out += UniqueUtils::popcount_mask(static_cast<unsigned>(keep_mask));
+        }
+    } else if constexpr (std::is_same_v<T, uint64_t>) {
+        constexpr unsigned kLanes = 8U;
+        const __m512i threshold_vec = _mm512_set1_epi64(static_cast<long long>(threshold));
+        for (; i + kLanes <= arr.size(); i += kLanes) {
+            const __m512i values = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.success.get() + i));
+            const __mmask8 keep_mask = _mm512_cmp_epu64_mask(values, threshold_vec, _MM_CMPINT_GT);
+            if (keep_mask == 0U) {
+                continue;
+            }
+            if (keep_mask == 0xFFU && out == i) {
+                out += kLanes;
+                continue;
+            }
+            _mm512_mask_compressstoreu_epi64(arr.success.get() + out, keep_mask, values);
+            const __m512i boards = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.boards.data() + i));
+            _mm512_mask_compressstoreu_epi64(arr.boards.data() + out, keep_mask, boards);
+            out += UniqueUtils::popcount_mask(static_cast<unsigned>(keep_mask));
+        }
+    } else if constexpr (std::is_same_v<T, double>) {
+        constexpr unsigned kLanes = 8U;
+        const __m512d threshold_vec = _mm512_set1_pd(threshold);
+        for (; i + kLanes <= arr.size(); i += kLanes) {
+            const __m512d values = _mm512_loadu_pd(arr.success.get() + i);
+            const __mmask8 keep_mask = _mm512_cmp_pd_mask(values, threshold_vec, _CMP_GT_OQ);
+            if (keep_mask == 0U) {
+                continue;
+            }
+            if (keep_mask == 0xFFU && out == i) {
+                out += kLanes;
+                continue;
+            }
+            _mm512_mask_compressstoreu_pd(arr.success.get() + out, keep_mask, values);
+            const __m512i boards = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.boards.data() + i));
+            _mm512_mask_compressstoreu_epi64(arr.boards.data() + out, keep_mask, boards);
+            out += UniqueUtils::popcount_mask(static_cast<unsigned>(keep_mask));
+        }
+    }
+
+    for (; i < arr.size(); ++i) {
+        if (arr.success[i] > threshold) {
+            arr.boards[out] = arr.boards[i];
+            arr.success[out] = arr.success[i];
+            ++out;
+        }
+    }
+    arr.length = out;
+    if (shrink_boards) {
+        arr.boards.resize(out);
+    }
+    return out;
+}
+
+template <typename T>
+__attribute__((target("avx2")))
+size_t compact_by_mask_avx2_impl(SplitLayer<T> &arr, const std::vector<uint8_t> &mask, bool shrink_boards) {
+    constexpr unsigned kLanes = 8U;
+    size_t out = 0U;
+    size_t i = 0U;
+    const size_t limit = std::min(arr.size(), mask.size());
+    for (; i + kLanes <= limit; i += kLanes) {
+        const uint32_t keep_mask = keep_mask_from_bytes_scalar(mask.data() + i, kLanes);
+        if (keep_mask == 0U) {
+            continue;
+        }
+        if (keep_mask == 0xFFU) {
+            if (out != i) {
+                std::memmove(arr.boards.data() + out, arr.boards.data() + i, kLanes * sizeof(uint64_t));
+                std::memmove(arr.success.get() + out, arr.success.get() + i, kLanes * sizeof(T));
+            }
+            out += kLanes;
+            continue;
+        }
+        copy_selected_runs_soa(arr, i, out, keep_mask, kLanes);
+    }
+    for (; i < limit; ++i) {
+        if (mask[i] != 0U) {
+            arr.boards[out] = arr.boards[i];
+            arr.success[out] = arr.success[i];
+            ++out;
+        }
+    }
+    arr.length = out;
+    if (shrink_boards) {
+        arr.boards.resize(out);
+    }
+    return out;
+}
+
+template <typename T>
+__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
+size_t compact_by_mask_avx512_impl(SplitLayer<T> &arr, const std::vector<uint8_t> &mask, bool shrink_boards) {
+    size_t out = 0U;
+    size_t i = 0U;
+    const size_t limit = std::min(arr.size(), mask.size());
+
+    if constexpr (std::is_same_v<T, uint32_t>) {
+        constexpr unsigned kLanes = 16U;
+        for (; i + kLanes <= limit; i += kLanes) {
+            const __mmask16 keep_mask = _mm_cmpneq_epi8_mask(
+                _mm_loadu_si128(reinterpret_cast<const __m128i *>(mask.data() + i)),
+                _mm_setzero_si128()
+            );
+            if (keep_mask == 0U) {
+                continue;
+            }
+            if (keep_mask == 0xFFFFU && out == i) {
+                out += kLanes;
+                continue;
+            }
+            const __m512i values = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.success.get() + i));
+            _mm512_mask_compressstoreu_epi32(arr.success.get() + out, keep_mask, values);
+            const __m512i boards_lo = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.boards.data() + i));
+            const __m512i boards_hi = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.boards.data() + i + 8U));
+            const __mmask8 keep_lo = static_cast<__mmask8>(keep_mask & 0xFFU);
+            const __mmask8 keep_hi = static_cast<__mmask8>((keep_mask >> 8U) & 0xFFU);
+            _mm512_mask_compressstoreu_epi64(arr.boards.data() + out, keep_lo, boards_lo);
+            const size_t out_hi = out + UniqueUtils::popcount_mask(static_cast<unsigned>(keep_lo));
+            _mm512_mask_compressstoreu_epi64(arr.boards.data() + out_hi, keep_hi, boards_hi);
+            out += UniqueUtils::popcount_mask(static_cast<unsigned>(keep_mask));
+        }
+    } else if constexpr (std::is_same_v<T, float>) {
+        constexpr unsigned kLanes = 16U;
+        for (; i + kLanes <= limit; i += kLanes) {
+            const __mmask16 keep_mask = _mm_cmpneq_epi8_mask(
+                _mm_loadu_si128(reinterpret_cast<const __m128i *>(mask.data() + i)),
+                _mm_setzero_si128()
+            );
+            if (keep_mask == 0U) {
+                continue;
+            }
+            if (keep_mask == 0xFFFFU && out == i) {
+                out += kLanes;
+                continue;
+            }
+            const __m512 values = _mm512_loadu_ps(arr.success.get() + i);
+            _mm512_mask_compressstoreu_ps(arr.success.get() + out, keep_mask, values);
+            const __m512i boards_lo = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.boards.data() + i));
+            const __m512i boards_hi = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.boards.data() + i + 8U));
+            const __mmask8 keep_lo = static_cast<__mmask8>(keep_mask & 0xFFU);
+            const __mmask8 keep_hi = static_cast<__mmask8>((keep_mask >> 8U) & 0xFFU);
+            _mm512_mask_compressstoreu_epi64(arr.boards.data() + out, keep_lo, boards_lo);
+            const size_t out_hi = out + UniqueUtils::popcount_mask(static_cast<unsigned>(keep_lo));
+            _mm512_mask_compressstoreu_epi64(arr.boards.data() + out_hi, keep_hi, boards_hi);
+            out += UniqueUtils::popcount_mask(static_cast<unsigned>(keep_mask));
+        }
+    } else if constexpr (std::is_same_v<T, uint64_t> || std::is_same_v<T, double>) {
+        constexpr unsigned kLanes = 8U;
+        for (; i + kLanes <= limit; i += kLanes) {
+            const uint32_t keep_mask32 = keep_mask_from_bytes_scalar(mask.data() + i, kLanes);
+            const __mmask8 keep_mask = static_cast<__mmask8>(keep_mask32);
+            if (keep_mask == 0U) {
+                continue;
+            }
+            if (keep_mask == 0xFFU && out == i) {
+                out += kLanes;
+                continue;
+            }
+            const __m512i boards = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.boards.data() + i));
+            _mm512_mask_compressstoreu_epi64(arr.boards.data() + out, keep_mask, boards);
+            if constexpr (std::is_same_v<T, uint64_t>) {
+                const __m512i values = _mm512_loadu_si512(reinterpret_cast<const void *>(arr.success.get() + i));
+                _mm512_mask_compressstoreu_epi64(arr.success.get() + out, keep_mask, values);
+            } else {
+                const __m512d values = _mm512_loadu_pd(arr.success.get() + i);
+                _mm512_mask_compressstoreu_pd(arr.success.get() + out, keep_mask, values);
+            }
+            out += UniqueUtils::popcount_mask(static_cast<unsigned>(keep_mask));
+        }
+    }
+
+    for (; i < limit; ++i) {
+        if (mask[i] != 0U) {
+            arr.boards[out] = arr.boards[i];
+            arr.success[out] = arr.success[i];
+            ++out;
+        }
+    }
+    arr.length = out;
+    if (shrink_boards) {
+        arr.boards.resize(out);
+    }
+    return out;
+}
+#endif
+
+template <typename T>
+size_t compact_live_entries(SplitLayer<T> &arr, T threshold, bool shrink_boards) {
+#if defined(__GNUC__) || defined(__clang__)
+    using Fn = size_t (*)(SplitLayer<T> &, T, bool);
+    static const Fn fn = []() -> Fn {
+        if (UniqueUtils::cpu_has_avx512_dq_bw_vl()) {
+            return &compact_live_entries_avx512_impl<T>;
+        }
+        if (UniqueUtils::cpu_has_avx2()) {
+            return &compact_live_entries_avx2_impl<T>;
+        }
+        return &compact_live_entries_scalar_impl<T>;
+    }();
+    return fn(arr, threshold, shrink_boards);
+#else
+    return compact_live_entries_scalar_impl(arr, threshold, shrink_boards);
+#endif
+}
+
+template <typename T>
+size_t compact_by_mask(SplitLayer<T> &arr, const std::vector<uint8_t> &mask, bool shrink_boards) {
+#if defined(__GNUC__) || defined(__clang__)
+    using Fn = size_t (*)(SplitLayer<T> &, const std::vector<uint8_t> &, bool);
+    static const Fn fn = []() -> Fn {
+        if (UniqueUtils::cpu_has_avx512_dq_bw_vl()) {
+            return &compact_by_mask_avx512_impl<T>;
+        }
+        if (UniqueUtils::cpu_has_avx2()) {
+            return &compact_by_mask_avx2_impl<T>;
+        }
+        return &compact_by_mask_scalar_impl<T>;
+    }();
+    return fn(arr, mask, shrink_boards);
+#else
+    return compact_by_mask_scalar_impl(arr, mask, shrink_boards);
+#endif
 }
 
 template <typename T, typename Mover>

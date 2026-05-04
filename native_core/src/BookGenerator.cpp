@@ -1067,12 +1067,22 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             std::vector<uint64_t> d1t;
             std::vector<uint64_t> d2;
             std::vector<size_t> generation_counts2;
+            std::unique_ptr<uint64_t[]> arr1_ptr;
+            std::unique_ptr<uint64_t[]> arr2_ptr;
+            uint64_t *sort_arr1 = nullptr;
+            uint64_t *sort_arr2 = nullptr;
+            size_t sort_len1 = 0;
+            size_t sort_len2 = 0;
             bool use_simple_path = should_use_simple_path(d0, arr_init, init_params.length_factors);
             if (use_simple_path) {
                 debug_log("step " + std::to_string(i) + " path: simple");
                 std::tie(d1t, d2) = options.is_variant
                     ? gen_boards_simple<VBoardMover>(d0.data(), d0.size(), options.target, spec, do_check, options.is_free)
                     : gen_boards_simple<BoardMover>(d0.data(), d0.size(), options.target, spec, do_check, options.is_free);
+                sort_arr1 = d1t.data();
+                sort_len1 = d1t.size();
+                sort_arr2 = d2.data();
+                sort_len2 = d2.size();
                 t1 = wall_time_seconds();
             } else {
                 debug_log(
@@ -1092,8 +1102,8 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
 
                 size_t min_length = options.is_free ? 9999999ULL : 6999999ULL;
                 size_t capacity = std::max(min_length, static_cast<size_t>(static_cast<double>(d0.size()) * length_factor));
-                auto arr1_ptr = std::make_unique<uint64_t[]>(capacity);
-                auto arr2_ptr = std::make_unique<uint64_t[]>(capacity);
+                arr1_ptr = std::make_unique<uint64_t[]>(capacity);
+                arr2_ptr = std::make_unique<uint64_t[]>(capacity);
                 GenBoardsResult result = options.is_variant
                     ? gen_boards<VBoardMover>(d0.data(), d0.size(), options.target, spec, hashmap1.data(), hashmap1.size(), hashmap2.data(), hashmap2.size(), arr1_ptr.get(), arr2_ptr.get(), capacity, num_threads, do_check, options.is_free)
                     : gen_boards<BoardMover>(d0.data(), d0.size(), options.target, spec, hashmap1.data(), hashmap1.size(), hashmap2.data(), hashmap2.size(), arr1_ptr.get(), arr2_ptr.get(), capacity, num_threads, do_check, options.is_free);
@@ -1108,13 +1118,15 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                     length_factor,
                     false
                 );
-                d1t.assign(arr1_ptr.get(), arr1_ptr.get() + result.total_arr1);
-                d2.assign(arr2_ptr.get(), arr2_ptr.get() + result.total_arr2);
+                sort_arr1 = arr1_ptr.get();
+                sort_len1 = result.total_arr1;
+                sort_arr2 = arr2_ptr.get();
+                sort_len2 = result.total_arr2;
                 generation_counts2 = std::move(result.counts2);
             }
 
             std::tie(init_params.length_factors, init_params.length_factors_list) =
-                update_parameters(d0.size(), d2.size(), init_params.length_factors, init_params.length_factors_list_path);
+                update_parameters(d0.size(), sort_len2, init_params.length_factors, init_params.length_factors_list_path);
             if (generation_counts2.empty()) {
                 // Python keeps counts2 initialized to ones on the simple path, so the multiplier collapses to 1.0.
                 init_params.length_factor_multiplier = 1.0;
@@ -1127,12 +1139,17 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             }
 
             auto [unique_d1t_length, unique_d2_length] = BookGeneratorUtils::sort_and_unique_two_arrays_concurrently(
-                d1t.data(), d1t.size(),
-                d2.data(), d2.size(),
+                sort_arr1, sort_len1,
+                sort_arr2, sort_len2,
                 num_threads
             );
-            d1t.resize(unique_d1t_length);
-            d2.resize(unique_d2_length);
+            if (use_simple_path) {
+                d1t.resize(unique_d1t_length);
+                d2.resize(unique_d2_length);
+            } else {
+                d1t.assign(arr1_ptr.get(), arr1_ptr.get() + unique_d1t_length);
+                d2.assign(arr2_ptr.get(), arr2_ptr.get() + unique_d2_length);
+            }
             t2 = wall_time_seconds();
 
             std::vector<uint64_t> pivots;

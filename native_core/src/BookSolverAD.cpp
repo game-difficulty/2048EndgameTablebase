@@ -15,6 +15,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -155,8 +156,6 @@ template <typename T> struct AdSolveWorkspace {
     std::vector<T> optimal_values;
     std::vector<T> temp_values;
     std::vector<double> success_probability;
-    std::vector<uint64_t> kept_indices;
-    std::vector<T> kept_values;
 };
 
 constexpr size_t kNotFoundIndex = std::numeric_limits<size_t>::max();
@@ -307,6 +306,12 @@ template <typename T> void clear_book_store(BookStore<T> &book_store) {
 void clear_index_store(IndexStore &index_store) {
     for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
         index_store.at(key).clear();
+    }
+}
+
+void release_index_store(IndexStore &index_store) {
+    for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
+        index_store.at(key) = std::vector<uint64_t>{};
     }
 }
 
@@ -496,8 +501,7 @@ template <typename T>
 void remove_died_ad(
     BookStore<T> &book_dict,
     IndexStore &ind_dict,
-    T deletion_threshold,
-    AdSolveWorkspace<T> &workspace
+    T deletion_threshold
 ) {
     for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
         auto &indices = ind_dict.at(key);
@@ -505,14 +509,9 @@ void remove_died_ad(
         if (indices.empty() || bucket.rows == 0 || bucket.cols == 0) {
             continue;
         }
-        auto &kept_indices = workspace.kept_indices;
-        auto &kept_values = workspace.kept_values;
-        kept_indices.clear();
-        kept_values.clear();
-        kept_indices.reserve(indices.size());
-        kept_values.reserve(bucket.data.size());
-        for (size_t row = 0; row < bucket.rows; ++row) {
-            const T *values = bucket.row(row);
+        size_t write_row = 0;
+        for (size_t read_row = 0; read_row < bucket.rows; ++read_row) {
+            const T *values = bucket.row(read_row);
             bool keep = false;
             for (size_t col = 0; col < bucket.cols; ++col) {
                 if (values[col] > deletion_threshold) {
@@ -523,12 +522,15 @@ void remove_died_ad(
             if (!keep) {
                 continue;
             }
-            kept_indices.push_back(indices[row]);
-            kept_values.insert(kept_values.end(), values, values + bucket.cols);
+            if (write_row != read_row) {
+                indices[write_row] = indices[read_row];
+                std::memmove(bucket.row(write_row), values, bucket.cols * sizeof(T));
+            }
+            ++write_row;
         }
-        indices = std::move(kept_indices);
-        bucket.rows = indices.size();
-        bucket.data = std::move(kept_values);
+        indices.resize(write_row);
+        bucket.rows = write_row;
+        bucket.data.resize(write_row * bucket.cols);
         if (bucket.rows == 0) {
             bucket.cols = 0;
         }
@@ -1951,8 +1953,7 @@ void recalculate_process_ad_chunked_impl(
             started = true;
             if (step != options.steps - 3 || !started_from_generate) {
                 dict_fromfile(options, step + 2, book_dict2, ind_dict2);
-                AdSolveWorkspace<T> remove_workspace;
-                remove_died_ad(book_dict2, ind_dict2, zero_val, remove_workspace);
+                remove_died_ad(book_dict2, ind_dict2, zero_val);
             }
         }
         const uint32_t original_board_sum = static_cast<uint32_t>(2 * step) + ini_board_sum;
@@ -1982,7 +1983,7 @@ void recalculate_process_ad_chunked_impl(
         d0.shrink_to_fit();
 
         std::vector<int> ind_dict0_keys = write_ind_chunked(ind_dict0, options, step);
-        clear_index_store(ind_dict0);
+        release_index_store(ind_dict0);
 
         if (indind_dict1) {
             indind_dict2 = std::move(indind_dict1);
@@ -2017,14 +2018,15 @@ void recalculate_process_ad_chunked_impl(
         );
 
         if (options.deletion_threshold > 0.0) {
-            AdSolveWorkspace<T> remove_workspace2;
-            remove_died_ad(book_dict2, ind_dict2, deletion_threshold, remove_workspace2);
+            remove_died_ad(book_dict2, ind_dict2, deletion_threshold);
         }
         dict_tofile(book_dict2, ind_dict2, options, step + 2, true);
+        clear_book_store(book_dict2);
+        release_index_store(ind_dict2);
+        indind_dict2.reset();
 
         dict_fromfile(options, step + 1, book_dict1, ind_dict1);
-        AdSolveWorkspace<T> remove_workspace1;
-        remove_died_ad(book_dict1, ind_dict1, zero_val, remove_workspace1);
+        remove_died_ad(book_dict1, ind_dict1, zero_val);
         indind_dict1 = create_index_ad(ind_dict1, num_threads);
 
         iter_ind_dict2(
@@ -2205,11 +2207,9 @@ void recalculate_process_ad_impl(
         double t2 = wall_time_seconds();
 
         if (options.deletion_threshold > 0.0) {
-            AdSolveWorkspace<T> remove_workspace2;
-            remove_died_ad(book_dict2, ind_dict2, deletion_threshold, remove_workspace2);
+            remove_died_ad(book_dict2, ind_dict2, deletion_threshold);
         }
-        AdSolveWorkspace<T> remove_workspace0;
-        remove_died_ad(book_dict0, ind_dict0, zero_val, remove_workspace0);
+        remove_died_ad(book_dict0, ind_dict0, zero_val);
         double t3 = wall_time_seconds();
         log_recalculate_performance(step, t0, t1, t2, t3, length);
 
@@ -2226,6 +2226,9 @@ void recalculate_process_ad_impl(
         if (options.deletion_threshold > 0.0 || options.compress) {
             dict_tofile(book_dict2, ind_dict2, options, step + 2, true);
         }
+        clear_book_store(book_dict2);
+        release_index_store(ind_dict2);
+        indind_dict2.reset();
         dict_tofile(book_dict0, ind_dict0, options, step, false);
 
         const std::string raw_path = options.pathname + std::to_string(step);
