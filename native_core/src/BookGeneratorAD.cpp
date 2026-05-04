@@ -299,7 +299,11 @@ void validate_length_and_balance(
     const std::vector<size_t> &counts1,
     const std::vector<size_t> &counts2,
     double length_factor,
-    bool is_big
+    bool is_big,
+    size_t spill_arr1 = 0,
+    size_t spill_arr2 = 0,
+    bool exact_gather_arr1 = false,
+    bool exact_gather_arr2 = false
 ) {
     if (len_d0 < 99999 || len_d2 < 99999 || counts1.empty() || counts2.empty()) {
         return;
@@ -310,7 +314,8 @@ void validate_length_and_balance(
     ) * counts1.size();
     double length_factor_actual = static_cast<double>(length_needed) / static_cast<double>(len_d0);
     size_t length = std::max<size_t>(6999999ULL, static_cast<size_t>(static_cast<double>(len_d0) * length_factor));
-    if (length_needed > length) {
+    const bool used_spill = spill_arr1 > 0 || spill_arr2 > 0;
+    if (!used_spill && length_needed > length) {
         std::ostringstream oss;
         oss << "length multiplier " << length_factor << ", need " << length_factor_actual;
         throw std::runtime_error(oss.str());
@@ -322,6 +327,12 @@ void validate_length_and_balance(
     oss << "length " << len_d1t << ", " << len_d2
         << ", Using " << round_to_2(length_factor)
         << ", Need " << round_to_2(length_factor_actual);
+    if (used_spill) {
+        oss << ", Spill1 " << spill_arr1
+            << (exact_gather_arr1 ? "(gather)" : "(tail)")
+            << ", Spill2 " << spill_arr2
+            << (exact_gather_arr2 ? "(gather)" : "(tail)");
+    }
     debug_log(oss.str());
 }
 
@@ -525,10 +536,16 @@ std::vector<uint64_t> validate_layer(const std::vector<uint64_t> &arr, uint32_t 
 }
 
 struct GenBoardsAdResult {
-    std::vector<uint64_t> arr1;
-    std::vector<uint64_t> arr2;
+    size_t total_arr1 = 0;
+    size_t total_arr2 = 0;
     std::vector<size_t> counts1;
     std::vector<size_t> counts2;
+    std::unique_ptr<uint64_t[]> finalized_arr1;
+    std::unique_ptr<uint64_t[]> finalized_arr2;
+    size_t spill_arr1 = 0;
+    size_t spill_arr2 = 0;
+    bool exact_gather_arr1 = false;
+    bool exact_gather_arr2 = false;
 };
 
 using GenBoardsAdFn = GenBoardsAdResult (*)(
@@ -556,6 +573,175 @@ struct GenBoardsAdDispatch {
 
 constexpr size_t kAdGenBatchSize = 128;
 constexpr size_t kAdMaxDerivedBoards = 120;
+constexpr size_t kSpillChunkLength = 1048576ULL;
+
+struct SpillChunks {
+    std::vector<std::unique_ptr<uint64_t[]>> chunks;
+    std::vector<size_t> used;
+    size_t total_count = 0;
+
+    void append_one(uint64_t value) {
+        if (chunks.empty() || used.back() == kSpillChunkLength) {
+            chunks.push_back(std::make_unique<uint64_t[]>(kSpillChunkLength));
+            used.push_back(0);
+        }
+        chunks.back()[used.back()++] = value;
+        ++total_count;
+    }
+
+    void append_many(const uint64_t *src, size_t count) {
+        while (count > 0) {
+            if (chunks.empty() || used.back() == kSpillChunkLength) {
+                chunks.push_back(std::make_unique<uint64_t[]>(kSpillChunkLength));
+                used.push_back(0);
+            }
+            const size_t remaining = kSpillChunkLength - used.back();
+            const size_t to_copy = std::min(remaining, count);
+            std::memcpy(chunks.back().get() + used.back(), src, to_copy * sizeof(uint64_t));
+            used.back() += to_copy;
+            total_count += to_copy;
+            src += to_copy;
+            count -= to_copy;
+        }
+    }
+
+    void copy_into(uint64_t *dst) const {
+        size_t offset = 0;
+        for (size_t i = 0; i < chunks.size(); ++i) {
+            if (used[i] == 0) {
+                continue;
+            }
+            std::memcpy(dst + offset, chunks[i].get(), used[i] * sizeof(uint64_t));
+            offset += used[i];
+        }
+    }
+};
+
+struct ThreadWriteSink {
+    uint64_t *primary = nullptr;
+    size_t primary_begin = 0;
+    size_t primary_pos = 0;
+    size_t primary_end = 0;
+    SpillChunks spill;
+
+    ThreadWriteSink() = default;
+
+    ThreadWriteSink(uint64_t *primary_arr, size_t begin, size_t end)
+        : primary(primary_arr), primary_begin(begin), primary_pos(begin), primary_end(end) {}
+
+    size_t primary_written() const {
+        return primary_pos - primary_begin;
+    }
+
+    size_t total_written() const {
+        return primary_written() + spill.total_count;
+    }
+
+    void append_one(uint64_t value) {
+        if (primary_pos < primary_end) {
+            primary[primary_pos++] = value;
+            return;
+        }
+        spill.append_one(value);
+    }
+
+    void append_many(const uint64_t *src, size_t count) {
+        const size_t primary_remaining = primary_end - primary_pos;
+        const size_t to_primary = std::min(primary_remaining, count);
+        if (to_primary > 0) {
+            std::memcpy(primary + primary_pos, src, to_primary * sizeof(uint64_t));
+            primary_pos += to_primary;
+            src += to_primary;
+            count -= to_primary;
+        }
+        if (count > 0) {
+            spill.append_many(src, count);
+        }
+    }
+};
+
+struct FinalizedGeneratedArray {
+    std::unique_ptr<uint64_t[]> owned;
+    size_t total = 0;
+    size_t spill_total = 0;
+    bool exact_gather = false;
+
+    uint64_t *data(uint64_t *primary_arr) const {
+        return owned ? owned.get() : primary_arr;
+    }
+};
+
+std::vector<size_t> build_segment_starts(size_t capacity, int num_threads) {
+    std::vector<size_t> starts(static_cast<size_t>(num_threads));
+    for (int i = 0; i < num_threads; ++i) {
+        starts[static_cast<size_t>(i)] = (capacity / static_cast<size_t>(num_threads)) * static_cast<size_t>(i);
+    }
+    return starts;
+}
+
+std::vector<ThreadWriteSink> create_write_sinks(uint64_t *primary_arr, const std::vector<size_t> &starts, size_t capacity) {
+    std::vector<ThreadWriteSink> sinks;
+    sinks.reserve(starts.size());
+    for (size_t i = 0; i < starts.size(); ++i) {
+        const size_t begin = starts[i];
+        const size_t end = (i + 1 < starts.size()) ? starts[i + 1] : capacity;
+        sinks.emplace_back(primary_arr, begin, end);
+    }
+    return sinks;
+}
+
+std::vector<size_t> collect_total_counts(const std::vector<ThreadWriteSink> &sinks) {
+    std::vector<size_t> counts(sinks.size(), 0);
+    for (size_t i = 0; i < sinks.size(); ++i) {
+        counts[i] = sinks[i].total_written();
+    }
+    return counts;
+}
+
+FinalizedGeneratedArray finalize_generated_array(
+    uint64_t *primary_arr,
+    size_t capacity,
+    const std::vector<size_t> &starts,
+    const std::vector<ThreadWriteSink> &sinks
+) {
+    std::vector<size_t> primary_ends(starts.size(), 0);
+    size_t spill_total = 0;
+    for (size_t i = 0; i < sinks.size(); ++i) {
+        primary_ends[i] = sinks[i].primary_pos;
+        spill_total += sinks[i].spill.total_count;
+    }
+
+    const size_t primary_total = BookGeneratorUtils::merge_inplace(primary_arr, primary_ends, starts);
+    FinalizedGeneratedArray result;
+    result.total = primary_total;
+    result.spill_total = spill_total;
+    if (spill_total == 0) {
+        return result;
+    }
+
+    if (capacity - primary_total >= spill_total) {
+        size_t offset = primary_total;
+        for (const auto &sink : sinks) {
+            sink.spill.copy_into(primary_arr + offset);
+            offset += sink.spill.total_count;
+        }
+        result.total = offset;
+        return result;
+    }
+
+    result.exact_gather = true;
+    result.owned = std::make_unique<uint64_t[]>(primary_total + spill_total);
+    if (primary_total > 0) {
+        std::memcpy(result.owned.get(), primary_arr, primary_total * sizeof(uint64_t));
+    }
+    size_t offset = primary_total;
+    for (const auto &sink : sinks) {
+        sink.spill.copy_into(result.owned.get() + offset);
+        offset += sink.spill.total_count;
+    }
+    result.total = offset;
+    return result;
+}
 
 enum class BufferedBaseKind : uint8_t {
     Plain = 0,
@@ -646,15 +832,14 @@ void process_buffered_accepted_boards(
     const AdvancedPatternSpec &spec,
     uint64_t *hashmap,
     uint64_t hashmask,
-    uint64_t *target_arr,
-    size_t &counter
+    ThreadWriteSink &sink
 ) {
     std::array<uint64_t, kAdMaxDerivedBoards> filtered_derived{};
     std::array<uint64_t, kAdMaxDerivedBoards> hashed_idx{};
     for (size_t accepted_index = 0; accepted_index < accepted.count; ++accepted_index) {
         const uint64_t canon = accepted.boards[accepted_index];
         if (accepted.kinds[accepted_index] == static_cast<uint8_t>(BufferedBaseKind::Plain)) {
-            target_arr[counter++] = canon;
+            sink.append_one(canon);
             continue;
         }
         DeriveResult derived = derive(canon, original_board_sum + spawn_delta, tiles_table, param);
@@ -662,7 +847,7 @@ void process_buffered_accepted_boards(
             continue;
         }
         if (!derived.is_derived) {
-            target_arr[counter++] = canon;
+            sink.append_one(canon);
             continue;
         }
         const size_t filtered_count = filter_pattern_matching_boards(
@@ -694,7 +879,7 @@ void process_buffered_accepted_boards(
                 continue;
             }
             hashmap[hash_index] = board;
-            target_arr[counter++] = board;
+            sink.append_one(board);
         }
     }
 }
@@ -798,14 +983,9 @@ GenBoardsAdResult gen_boards_ad_scalar(
     const size_t length = std::max(min_length, static_cast<size_t>(static_cast<double>(arr0.size) * length_factor));
     auto arr1 = std::unique_ptr<uint64_t[]>(new uint64_t[length]);
     auto arr2 = std::unique_ptr<uint64_t[]>(new uint64_t[length]);
-    std::vector<size_t> starts(static_cast<size_t>(n));
-    std::vector<size_t> c1(static_cast<size_t>(n));
-    std::vector<size_t> c2(static_cast<size_t>(n));
-    for (int i = 0; i < n; ++i) {
-        starts[static_cast<size_t>(i)] = (length / static_cast<size_t>(n)) * static_cast<size_t>(i);
-        c1[static_cast<size_t>(i)] = starts[static_cast<size_t>(i)];
-        c2[static_cast<size_t>(i)] = starts[static_cast<size_t>(i)];
-    }
+    std::vector<size_t> starts = build_segment_starts(length, n);
+    std::vector<ThreadWriteSink> sinks1 = create_write_sinks(arr1.get(), starts, length);
+    std::vector<ThreadWriteSink> sinks2 = create_write_sinks(arr2.get(), starts, length);
     uint64_t hashmap1_mask = static_cast<uint64_t>(hashmap1.size() - 1);
     uint64_t hashmap2_mask = static_cast<uint64_t>(hashmap2.size() - 1);
 
@@ -815,8 +995,8 @@ GenBoardsAdResult gen_boards_ad_scalar(
 
     #pragma omp parallel for num_threads(n)
     for (int s = 0; s < n; ++s) {
-        size_t c1t = starts[static_cast<size_t>(s)];
-        size_t c2t = starts[static_cast<size_t>(s)];
+        ThreadWriteSink &sink1 = sinks1[static_cast<size_t>(s)];
+        ThreadWriteSink &sink2 = sinks2[static_cast<size_t>(s)];
         std::array<uint64_t, kAdGenBatchSize> buffer1{};
         std::array<uint8_t, kAdGenBatchSize> kinds1{};
         std::array<uint64_t, kAdGenBatchSize> buffer2{};
@@ -839,8 +1019,7 @@ GenBoardsAdResult gen_boards_ad_scalar(
                 spec,
                 hashmap1.data(),
                 hashmap1_mask,
-                arr1.get(),
-                c1t
+                sink1
             );
             buffer1_count = 0;
         };
@@ -859,8 +1038,7 @@ GenBoardsAdResult gen_boards_ad_scalar(
                 spec,
                 hashmap2.data(),
                 hashmap2_mask,
-                arr2.get(),
-                c2t
+                sink2
             );
             buffer2_count = 0;
         };
@@ -932,28 +1110,22 @@ GenBoardsAdResult gen_boards_ad_scalar(
         }
         flush_spawn2();
         flush_spawn4();
-        c1[static_cast<size_t>(s)] = c1t;
-        c2[static_cast<size_t>(s)] = c2t;
     }
 
-    size_t total_arr1 = BookGeneratorUtils::merge_inplace(arr1.get(), c1, starts);
-    size_t total_arr2 = BookGeneratorUtils::merge_inplace(arr2.get(), c2, starts);
-    std::vector<uint64_t> arr1_vec(total_arr1);
-    std::vector<uint64_t> arr2_vec(total_arr2);
-    if (total_arr1 > 0) {
-        std::memcpy(arr1_vec.data(), arr1.get(), total_arr1 * sizeof(uint64_t));
-    }
-    if (total_arr2 > 0) {
-        std::memcpy(arr2_vec.data(), arr2.get(), total_arr2 * sizeof(uint64_t));
-    }
-
-    std::vector<size_t> counts1(static_cast<size_t>(n));
-    std::vector<size_t> counts2(static_cast<size_t>(n));
-    for (int i = 0; i < n; ++i) {
-        counts1[static_cast<size_t>(i)] = c1[static_cast<size_t>(i)] - starts[static_cast<size_t>(i)];
-        counts2[static_cast<size_t>(i)] = c2[static_cast<size_t>(i)] - starts[static_cast<size_t>(i)];
-    }
-    return {std::move(arr1_vec), std::move(arr2_vec), std::move(counts1), std::move(counts2)};
+    FinalizedGeneratedArray finalized_arr1 = finalize_generated_array(arr1.get(), length, starts, sinks1);
+    FinalizedGeneratedArray finalized_arr2 = finalize_generated_array(arr2.get(), length, starts, sinks2);
+    return {
+        finalized_arr1.total,
+        finalized_arr2.total,
+        collect_total_counts(sinks1),
+        collect_total_counts(sinks2),
+        finalized_arr1.owned ? std::move(finalized_arr1.owned) : std::move(arr1),
+        finalized_arr2.owned ? std::move(finalized_arr2.owned) : std::move(arr2),
+        finalized_arr1.spill_total,
+        finalized_arr2.spill_total,
+        finalized_arr1.exact_gather,
+        finalized_arr2.exact_gather
+    };
 }
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -975,14 +1147,9 @@ GenBoardsAdResult gen_boards_ad_avx512(
     const size_t length = std::max(min_length, static_cast<size_t>(static_cast<double>(arr0.size) * length_factor));
     auto arr1 = std::unique_ptr<uint64_t[]>(new uint64_t[length]);
     auto arr2 = std::unique_ptr<uint64_t[]>(new uint64_t[length]);
-    std::vector<size_t> starts(static_cast<size_t>(n));
-    std::vector<size_t> c1(static_cast<size_t>(n));
-    std::vector<size_t> c2(static_cast<size_t>(n));
-    for (int i = 0; i < n; ++i) {
-        starts[static_cast<size_t>(i)] = (length / static_cast<size_t>(n)) * static_cast<size_t>(i);
-        c1[static_cast<size_t>(i)] = starts[static_cast<size_t>(i)];
-        c2[static_cast<size_t>(i)] = starts[static_cast<size_t>(i)];
-    }
+    std::vector<size_t> starts = build_segment_starts(length, n);
+    std::vector<ThreadWriteSink> sinks1 = create_write_sinks(arr1.get(), starts, length);
+    std::vector<ThreadWriteSink> sinks2 = create_write_sinks(arr2.get(), starts, length);
     const uint64_t hashmap1_mask = static_cast<uint64_t>(hashmap1.size() - 1);
     const uint64_t hashmap2_mask = static_cast<uint64_t>(hashmap2.size() - 1);
 
@@ -992,8 +1159,8 @@ GenBoardsAdResult gen_boards_ad_avx512(
 
     #pragma omp parallel for num_threads(n)
     for (int s = 0; s < n; ++s) {
-        size_t c1t = starts[static_cast<size_t>(s)];
-        size_t c2t = starts[static_cast<size_t>(s)];
+        ThreadWriteSink &sink1 = sinks1[static_cast<size_t>(s)];
+        ThreadWriteSink &sink2 = sinks2[static_cast<size_t>(s)];
         std::array<uint64_t, kAdGenBatchSize> buffer1{};
         std::array<uint8_t, kAdGenBatchSize> kinds1{};
         std::array<uint64_t, kAdGenBatchSize> buffer2{};
@@ -1016,8 +1183,7 @@ GenBoardsAdResult gen_boards_ad_avx512(
                 spec,
                 hashmap1.data(),
                 hashmap1_mask,
-                arr1.get(),
-                c1t
+                sink1
             );
             buffer1_count = 0;
         };
@@ -1036,8 +1202,7 @@ GenBoardsAdResult gen_boards_ad_avx512(
                 spec,
                 hashmap2.data(),
                 hashmap2_mask,
-                arr2.get(),
-                c2t
+                sink2
             );
             buffer2_count = 0;
         };
@@ -1111,28 +1276,22 @@ GenBoardsAdResult gen_boards_ad_avx512(
 
         flush_spawn2();
         flush_spawn4();
-        c1[static_cast<size_t>(s)] = c1t;
-        c2[static_cast<size_t>(s)] = c2t;
     }
 
-    const size_t total_arr1 = BookGeneratorUtils::merge_inplace(arr1.get(), c1, starts);
-    const size_t total_arr2 = BookGeneratorUtils::merge_inplace(arr2.get(), c2, starts);
-    std::vector<uint64_t> arr1_vec(total_arr1);
-    std::vector<uint64_t> arr2_vec(total_arr2);
-    if (total_arr1 > 0) {
-        std::memcpy(arr1_vec.data(), arr1.get(), total_arr1 * sizeof(uint64_t));
-    }
-    if (total_arr2 > 0) {
-        std::memcpy(arr2_vec.data(), arr2.get(), total_arr2 * sizeof(uint64_t));
-    }
-
-    std::vector<size_t> counts1(static_cast<size_t>(n));
-    std::vector<size_t> counts2(static_cast<size_t>(n));
-    for (int i = 0; i < n; ++i) {
-        counts1[static_cast<size_t>(i)] = c1[static_cast<size_t>(i)] - starts[static_cast<size_t>(i)];
-        counts2[static_cast<size_t>(i)] = c2[static_cast<size_t>(i)] - starts[static_cast<size_t>(i)];
-    }
-    return {std::move(arr1_vec), std::move(arr2_vec), std::move(counts1), std::move(counts2)};
+    FinalizedGeneratedArray finalized_arr1 = finalize_generated_array(arr1.get(), length, starts, sinks1);
+    FinalizedGeneratedArray finalized_arr2 = finalize_generated_array(arr2.get(), length, starts, sinks2);
+    return {
+        finalized_arr1.total,
+        finalized_arr2.total,
+        collect_total_counts(sinks1),
+        collect_total_counts(sinks2),
+        finalized_arr1.owned ? std::move(finalized_arr1.owned) : std::move(arr1),
+        finalized_arr2.owned ? std::move(finalized_arr2.owned) : std::move(arr2),
+        finalized_arr1.spill_total,
+        finalized_arr2.spill_total,
+        finalized_arr1.exact_gather,
+        finalized_arr2.exact_gather
+    };
 }
 
 bool cpu_has_ad_gen_avx512_uncached() {
@@ -1223,11 +1382,23 @@ GenBoardsBigAdResult gen_boards_big_ad(
 
         std::vector<double> length_factors = length_factors_list[seg_index];
         double length_factor = BookGenerator::predict_next_length_factor_quadratic(length_factors);
-        length_factor *= arr0t.size > static_cast<size_t>(1e8) ? 1.25 : 1.5;
+        length_factor *= arr0t.size > static_cast<size_t>(1e8) ? 1.15 : 1.2;
         length_factor *= length_factor_multiplier;
 
         GenBoardsAdResult result = gen_boards_ad(arr0t, spec, hashmap1, hashmap2, board_sum, tiles_table, param, n, length_factor, isfree);
-        validate_length_and_balance(arr0t.size, result.arr2.size(), result.arr1.size(), result.counts1, result.counts2, length_factor, true);
+        validate_length_and_balance(
+            arr0t.size,
+            result.total_arr2,
+            result.total_arr1,
+            result.counts1,
+            result.counts2,
+            length_factor,
+            true,
+            result.spill_arr1,
+            result.spill_arr2,
+            result.exact_gather_arr1,
+            result.exact_gather_arr2
+        );
 
         for (int idx = 0; idx < n; ++idx) {
             actual_lengths2[seg_index * static_cast<size_t>(n) + static_cast<size_t>(idx)] = result.counts2[static_cast<size_t>(idx)];
@@ -1236,21 +1407,21 @@ GenBoardsBigAdResult gen_boards_big_ad(
         if (!length_factors.empty()) {
             length_factors.erase(length_factors.begin());
         }
-        length_factors.push_back(static_cast<double>(result.arr2.size()) / static_cast<double>(1 + arr0t.size));
+        length_factors.push_back(static_cast<double>(result.total_arr2) / static_cast<double>(1 + arr0t.size));
         length_factors_list[seg_index] = length_factors;
         gen_time += wall_time_seconds() - t_segment;
 
+        uint64_t *segment_arr1 = result.finalized_arr1.get();
+        uint64_t *segment_arr2 = result.finalized_arr2.get();
         auto [unique_arr1_length, unique_arr2_length] = BookGeneratorUtils::sort_and_unique_two_arrays_concurrently(
-            result.arr1.data(),
-            result.arr1.size(),
-            result.arr2.data(),
-            result.arr2.size(),
+            segment_arr1,
+            result.total_arr1,
+            segment_arr2,
+            result.total_arr2,
             n
         );
-        result.arr1.resize(unique_arr1_length);
-        result.arr2.resize(unique_arr2_length);
-        arr1s.push_back(std::move(result.arr1));
-        arr2s.push_back(std::move(result.arr2));
+        arr1s.emplace_back(segment_arr1, segment_arr1 + unique_arr1_length);
+        arr2s.emplace_back(segment_arr2, segment_arr2 + unique_arr2_length);
     }
 
     auto [updated_factors, updated_multiplier] = update_parameters_big(actual_lengths2, actual_lengths1, n, std::move(length_factors_list));
@@ -1307,18 +1478,30 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
         if (d0.size() < init_params.segment_size) {
             double t0 = wall_time_seconds();
             double length_factor = BookGenerator::predict_next_length_factor_quadratic(init_params.length_factors);
-            length_factor *= d0.size() > static_cast<size_t>(1e8) ? 1.33 : 1.5;
+            length_factor *= d0.size() > static_cast<size_t>(1e8) ? 1.15 : 1.2;
             length_factor *= init_params.length_factor_multiplier;
             if (hashmap1.empty()) {
                 BookGenerator::update_hashmap_length(hashmap1, d0.size());
                 BookGenerator::update_hashmap_length(hashmap2, d0.size());
             }
             GenBoardsAdResult result = gen_boards_ad({d0.data(), d0.size()}, spec, hashmap1, hashmap2, board_sum, masker.tiles_combination_table, masker.param, n, length_factor, options.is_free);
-            validate_length_and_balance(d0.size(), result.arr2.size(), result.arr1.size(), result.counts1, result.counts2, length_factor, false);
+            validate_length_and_balance(
+                d0.size(),
+                result.total_arr2,
+                result.total_arr1,
+                result.counts1,
+                result.counts2,
+                length_factor,
+                false,
+                result.spill_arr1,
+                result.spill_arr2,
+                result.exact_gather_arr1,
+                result.exact_gather_arr2
+            );
             double t1 = wall_time_seconds();
 
             auto [new_length_factors, new_length_factors_list] =
-                update_parameters(d0.size(), result.arr2.size(), init_params.length_factors, init_params.length_factors_list_path);
+                update_parameters(d0.size(), result.total_arr2, init_params.length_factors, init_params.length_factors_list_path);
             init_params.length_factors = std::move(new_length_factors);
             init_params.length_factors_list = std::move(new_length_factors_list);
             double mean_count = result.counts2.empty()
@@ -1327,15 +1510,17 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
             init_params.length_factor_multiplier = mean_count > 0.0
                 ? static_cast<double>(*std::max_element(result.counts2.begin(), result.counts2.end())) / mean_count
                 : 1.0;
+            uint64_t *result_arr1 = result.finalized_arr1.get();
+            uint64_t *result_arr2 = result.finalized_arr2.get();
             auto [unique_arr1_length, unique_arr2_length] = BookGeneratorUtils::sort_and_unique_two_arrays_concurrently(
-                result.arr1.data(),
-                result.arr1.size(),
-                result.arr2.data(),
-                result.arr2.size(),
+                result_arr1,
+                result.total_arr1,
+                result_arr2,
+                result.total_arr2,
                 n
             );
-            result.arr1.resize(unique_arr1_length);
-            result.arr2.resize(unique_arr2_length);
+            std::vector<uint64_t> next_d1t(result_arr1, result_arr1 + unique_arr1_length);
+            std::vector<uint64_t> next_d2(result_arr2, result_arr2 + unique_arr2_length);
             double t2 = wall_time_seconds();
             std::vector<uint64_t> pivots;
             for (int pt = 1; pt < n; ++pt) {
@@ -1345,10 +1530,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
                     pivots.push_back(d0[static_cast<size_t>(pt) * d0.size() / static_cast<size_t>(n)]);
                 }
             }
-            std::vector<std::vector<uint64_t>> d1_inputs = {std::move(d1), std::move(result.arr1)};
+            std::vector<std::vector<uint64_t>> d1_inputs = {std::move(d1), std::move(next_d1t)};
             d1 = BookGeneratorUtils::merge_deduplicate_all_concat(d1_inputs, pivots, n);
             d0 = std::move(d1);
-            d1 = std::move(result.arr2);
+            d1 = std::move(next_d2);
             double t3 = wall_time_seconds();
             log_generation_performance(i, t0, t1, t2, t3, d0.size());
 

@@ -51,6 +51,12 @@ void debug_log(const std::string &message) {
 }
 
 bool supports_avx512() {
+    const char *disable = std::getenv("NATIVE_DISABLE_CLASSIC_GEN_AVX512");
+    if (disable != nullptr && disable[0] != '\0' &&
+        disable[0] != '0' && disable[0] != 'f' && disable[0] != 'F' &&
+        disable[0] != 'n' && disable[0] != 'N') {
+        return false;
+    }
     return UniqueUtils::cpu_has_avx512_dq_bw_vl();
 }
 
@@ -115,11 +121,12 @@ __attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
 inline void load_hash_chunk_avx512(
     const uint64_t *buf,
     int offset,
+    __mmask8 active_mask,
     __m512i v_mask,
     __m512i &states,
     __m512i &idx
 ) {
-    states = _mm512_loadu_epi64(buf + offset);
+    states = _mm512_maskz_loadu_epi64(active_mask, buf + offset);
     idx = _mm512_and_epi64(simd_hash(states), v_mask);
 }
 
@@ -140,40 +147,58 @@ inline void prefetch_hash_slots_avx512(uint64_t *hmap, __m512i idx) {
 #endif
 }
 
+struct ThreadWriteSink;
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
+#endif
+void append_masked_to_sink_avx512(ThreadWriteSink &sink, __m512i states, __mmask8 mask, size_t accepted_count);
+
 __attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
 inline void process_buf_avx512(
-    uint64_t *buf,
+    const uint64_t *buf,
+    size_t active_count,
     uint64_t *hmap,
-    uint64_t *target_arr,
-    size_t &counter,
+    ThreadWriteSink &sink,
     uint64_t mask
 ) {
-    constexpr int kBatchSize = 128;
     constexpr int kLanesPerChunk = 8;
-    constexpr int kChunkCount = kBatchSize / kLanesPerChunk;
     constexpr int kPrefetchChunksAhead = 3;
+    const int chunk_count = static_cast<int>((active_count + static_cast<size_t>(kLanesPerChunk) - 1U) / static_cast<size_t>(kLanesPerChunk));
+    if (chunk_count == 0) {
+        return;
+    }
 
     const __m512i v_mask = _mm512_set1_epi64(static_cast<long long>(mask));
 
     alignas(64) __m512i state_queue[kPrefetchChunksAhead];
     alignas(64) __m512i idx_queue[kPrefetchChunksAhead];
+    __mmask8 active_mask_queue[kPrefetchChunksAhead]{};
 
-    for (int chunk = 0; chunk < std::min(kChunkCount, kPrefetchChunksAhead); ++chunk) {
-        load_hash_chunk_avx512(buf, chunk * kLanesPerChunk, v_mask, state_queue[chunk], idx_queue[chunk]);
+    for (int chunk = 0; chunk < std::min(chunk_count, kPrefetchChunksAhead); ++chunk) {
+        const size_t offset = static_cast<size_t>(chunk * kLanesPerChunk);
+        const size_t remaining = std::min(active_count - offset, static_cast<size_t>(kLanesPerChunk));
+        active_mask_queue[chunk] = static_cast<__mmask8>((1u << static_cast<unsigned>(remaining)) - 1u);
+        load_hash_chunk_avx512(buf, chunk * kLanesPerChunk, active_mask_queue[chunk], v_mask, state_queue[chunk], idx_queue[chunk]);
         prefetch_hash_slots_avx512(hmap, idx_queue[chunk]);
     }
 
     #pragma GCC unroll 16
-    for (int chunk = 0; chunk < kChunkCount; ++chunk) {
+    for (int chunk = 0; chunk < chunk_count; ++chunk) {
         const int slot = chunk % kPrefetchChunksAhead;
         const __m512i v_states = state_queue[slot];
         const __m512i v_idx = idx_queue[slot];
+        const __mmask8 active_mask = active_mask_queue[slot];
 
         const int future_chunk = chunk + kPrefetchChunksAhead;
-        if (future_chunk < kChunkCount) {
+        if (future_chunk < chunk_count) {
+            const size_t offset = static_cast<size_t>(future_chunk * kLanesPerChunk);
+            const size_t remaining = std::min(active_count - offset, static_cast<size_t>(kLanesPerChunk));
+            active_mask_queue[slot] = static_cast<__mmask8>((1u << static_cast<unsigned>(remaining)) - 1u);
             load_hash_chunk_avx512(
                 buf,
                 future_chunk * kLanesPerChunk,
+                active_mask_queue[slot],
                 v_mask,
                 state_queue[slot],
                 idx_queue[slot]
@@ -181,13 +206,12 @@ inline void process_buf_avx512(
             prefetch_hash_slots_avx512(hmap, idx_queue[slot]);
         }
 
-        __m512i v_table = _mm512_i64gather_epi64(v_idx, hmap, 8);
-        __mmask8 matches = _mm512_cmpeq_epi64_mask(v_table, v_states);
-        __mmask8 not_dup = ~matches;
+        __m512i v_table = _mm512_mask_i64gather_epi64(_mm512_setzero_si512(), active_mask, v_idx, hmap, 8);
+        __mmask8 matches = _mm512_mask_cmpeq_epi64_mask(active_mask, v_table, v_states);
+        __mmask8 not_dup = active_mask & static_cast<__mmask8>(~matches);
         _mm512_mask_i64scatter_epi64(hmap, not_dup, v_idx, v_states, 8);
-        int count = __builtin_popcount(static_cast<unsigned int>(not_dup));
-        _mm512_mask_compressstoreu_epi64(target_arr + counter, not_dup, v_states);
-        counter += static_cast<size_t>(count);
+        const size_t accepted_count = static_cast<size_t>(__builtin_popcount(static_cast<unsigned int>(not_dup)));
+        append_masked_to_sink_avx512(sink, v_states, not_dup, accepted_count);
     }
 }
 
@@ -211,13 +235,200 @@ void log_performance(int step_index, double t0, double t1, double t2, double t3,
 }
 
 constexpr size_t kScalarBufferedBatchSize = 128;
+constexpr size_t kSpillChunkLength = 1048576ULL;
+
+struct SpillChunks {
+    std::vector<std::unique_ptr<uint64_t[]>> chunks;
+    std::vector<size_t> used;
+    size_t total_count = 0;
+
+    void append_one(uint64_t value) {
+        if (chunks.empty() || used.back() == kSpillChunkLength) {
+            chunks.push_back(std::make_unique<uint64_t[]>(kSpillChunkLength));
+            used.push_back(0);
+        }
+        chunks.back()[used.back()++] = value;
+        ++total_count;
+    }
+
+    void append_many(const uint64_t *src, size_t count) {
+        while (count > 0) {
+            if (chunks.empty() || used.back() == kSpillChunkLength) {
+                chunks.push_back(std::make_unique<uint64_t[]>(kSpillChunkLength));
+                used.push_back(0);
+            }
+            const size_t remaining = kSpillChunkLength - used.back();
+            const size_t to_copy = std::min(remaining, count);
+            std::memcpy(chunks.back().get() + used.back(), src, to_copy * sizeof(uint64_t));
+            used.back() += to_copy;
+            total_count += to_copy;
+            src += to_copy;
+            count -= to_copy;
+        }
+    }
+
+    void copy_into(uint64_t *dst) const {
+        size_t offset = 0;
+        for (size_t i = 0; i < chunks.size(); ++i) {
+            if (used[i] == 0) {
+                continue;
+            }
+            std::memcpy(dst + offset, chunks[i].get(), used[i] * sizeof(uint64_t));
+            offset += used[i];
+        }
+    }
+};
+
+struct ThreadWriteSink {
+    uint64_t *primary = nullptr;
+    size_t primary_begin = 0;
+    size_t primary_pos = 0;
+    size_t primary_end = 0;
+    SpillChunks spill;
+
+    ThreadWriteSink() = default;
+
+    ThreadWriteSink(uint64_t *primary_arr, size_t begin, size_t end)
+        : primary(primary_arr), primary_begin(begin), primary_pos(begin), primary_end(end) {}
+
+    size_t primary_written() const {
+        return primary_pos - primary_begin;
+    }
+
+    size_t total_written() const {
+        return primary_written() + spill.total_count;
+    }
+
+    void append_one(uint64_t value) {
+        if (primary_pos < primary_end) {
+            primary[primary_pos++] = value;
+            return;
+        }
+        spill.append_one(value);
+    }
+
+    void append_many(const uint64_t *src, size_t count) {
+        const size_t primary_remaining = primary_end - primary_pos;
+        const size_t to_primary = std::min(primary_remaining, count);
+        if (to_primary > 0) {
+            std::memcpy(primary + primary_pos, src, to_primary * sizeof(uint64_t));
+            primary_pos += to_primary;
+            src += to_primary;
+            count -= to_primary;
+        }
+        if (count > 0) {
+            spill.append_many(src, count);
+        }
+    }
+
+};
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl")))
+#endif
+void append_masked_to_sink_avx512(ThreadWriteSink &sink, __m512i states, __mmask8 mask, size_t accepted_count) {
+    if (accepted_count == 0) {
+        return;
+    }
+    const size_t primary_remaining = sink.primary_end - sink.primary_pos;
+    if (primary_remaining >= accepted_count) {
+        _mm512_mask_compressstoreu_epi64(sink.primary + sink.primary_pos, mask, states);
+        sink.primary_pos += accepted_count;
+        return;
+    }
+    alignas(64) uint64_t compacted[8];
+    _mm512_mask_compressstoreu_epi64(compacted, mask, states);
+    sink.append_many(compacted, accepted_count);
+}
+
+struct FinalizedGeneratedArray {
+    std::unique_ptr<uint64_t[]> owned;
+    size_t total = 0;
+    size_t spill_total = 0;
+    bool exact_gather = false;
+
+    uint64_t *data(uint64_t *primary_arr) const {
+        return owned ? owned.get() : primary_arr;
+    }
+};
+
+std::vector<size_t> build_segment_starts(size_t capacity, int num_threads) {
+    std::vector<size_t> starts(static_cast<size_t>(num_threads));
+    for (int i = 0; i < num_threads; ++i) {
+        starts[static_cast<size_t>(i)] = (capacity / static_cast<size_t>(num_threads)) * static_cast<size_t>(i);
+    }
+    return starts;
+}
+
+std::vector<ThreadWriteSink> create_write_sinks(uint64_t *primary_arr, const std::vector<size_t> &starts, size_t capacity) {
+    std::vector<ThreadWriteSink> sinks;
+    sinks.reserve(starts.size());
+    for (size_t i = 0; i < starts.size(); ++i) {
+        const size_t begin = starts[i];
+        const size_t end = (i + 1 < starts.size()) ? starts[i + 1] : capacity;
+        sinks.emplace_back(primary_arr, begin, end);
+    }
+    return sinks;
+}
+
+std::vector<size_t> collect_total_counts(const std::vector<ThreadWriteSink> &sinks) {
+    std::vector<size_t> counts(sinks.size(), 0);
+    for (size_t i = 0; i < sinks.size(); ++i) {
+        counts[i] = sinks[i].total_written();
+    }
+    return counts;
+}
+
+FinalizedGeneratedArray finalize_generated_array(
+    uint64_t *primary_arr,
+    size_t capacity,
+    const std::vector<size_t> &starts,
+    const std::vector<ThreadWriteSink> &sinks
+) {
+    std::vector<size_t> primary_ends(starts.size(), 0);
+    size_t spill_total = 0;
+    for (size_t i = 0; i < sinks.size(); ++i) {
+        primary_ends[i] = sinks[i].primary_pos;
+        spill_total += sinks[i].spill.total_count;
+    }
+
+    const size_t primary_total = BookGeneratorUtils::merge_inplace(primary_arr, primary_ends, starts);
+    FinalizedGeneratedArray result;
+    result.total = primary_total;
+    result.spill_total = spill_total;
+    if (spill_total == 0) {
+        return result;
+    }
+
+    if (capacity - primary_total >= spill_total) {
+        size_t offset = primary_total;
+        for (const auto &sink : sinks) {
+            sink.spill.copy_into(primary_arr + offset);
+            offset += sink.spill.total_count;
+        }
+        result.total = offset;
+        return result;
+    }
+
+    result.exact_gather = true;
+    result.owned = std::make_unique<uint64_t[]>(primary_total + spill_total);
+    if (primary_total > 0) {
+        std::memcpy(result.owned.get(), primary_arr, primary_total * sizeof(uint64_t));
+    }
+    size_t offset = primary_total;
+    for (const auto &sink : sinks) {
+        sink.spill.copy_into(result.owned.get() + offset);
+        offset += sink.spill.total_count;
+    }
+    result.total = offset;
+    return result;
+}
 
 inline void process_buf_scalar(
     const uint64_t *buf,
     size_t active_count,
     uint64_t *hmap,
-    uint64_t *target_arr,
-    size_t &counter,
+    ThreadWriteSink &sink,
     uint64_t mask
 ) {
     std::array<uint64_t, kScalarBufferedBatchSize> hashed_idx{};
@@ -241,7 +452,7 @@ inline void process_buf_scalar(
             continue;
         }
         hmap[hashed] = board;
-        target_arr[counter++] = board;
+        sink.append_one(board);
     }
 }
 
@@ -421,7 +632,11 @@ void validate_length_and_balance(
     const std::vector<size_t> &counts1,
     const std::vector<size_t> &counts2,
     double length_factor,
-    bool is_big
+    bool is_big,
+    size_t spill_arr1 = 0,
+    size_t spill_arr2 = 0,
+    bool exact_gather_arr1 = false,
+    bool exact_gather_arr2 = false
 ) {
     if (len_d0 < 99999 || len_d2 < 99999 || counts1.empty() || counts2.empty()) {
         return;
@@ -432,13 +647,20 @@ void validate_length_and_balance(
     ) * counts1.size();
     double length_factor_actual = static_cast<double>(length_needed) / static_cast<double>(len_d0 == 0 ? 1 : len_d0);
     size_t allocated_length = std::max<size_t>(6999999ULL, static_cast<size_t>(static_cast<double>(len_d0) * length_factor));
-    if (length_needed > allocated_length) {
+    const bool used_spill = spill_arr1 > 0 || spill_arr2 > 0;
+    if (!used_spill && length_needed > allocated_length) {
         throw std::out_of_range("The length multiplier is not big enough. Please restart.");
     }
     std::ostringstream oss;
     oss << "length " << len_d1t << ", " << len_d2
         << ", Using " << round_to_2(length_factor)
         << ", Need " << round_to_2(length_factor_actual);
+    if (used_spill) {
+        oss << ", Spill1 " << spill_arr1
+            << (exact_gather_arr1 ? "(gather)" : "(tail)")
+            << ", Spill2 " << spill_arr2
+            << (exact_gather_arr2 ? "(gather)" : "(tail)");
+    }
     debug_log(oss.str());
     if (!is_big) {
         debug_log("Segmentation1_ac " + format_percent_array(counts2));
@@ -550,12 +772,9 @@ GenBoardsResult gen_boards_internal_naive(
     (void) isfree;
     uint64_t hashmask1 = hashmap1_size - 1;
     uint64_t hashmask2 = hashmap2_size - 1;
-    std::vector<size_t> starts(num_threads);
-    std::vector<size_t> c1(num_threads);
-    std::vector<size_t> c2(num_threads);
-    for (int i = 0; i < num_threads; ++i) {
-        starts[i] = (capacity / static_cast<size_t>(num_threads)) * static_cast<size_t>(i);
-    }
+    std::vector<size_t> starts = build_segment_starts(capacity, num_threads);
+    std::vector<ThreadWriteSink> sinks1 = create_write_sinks(arr1, starts, capacity);
+    std::vector<ThreadWriteSink> sinks2 = create_write_sinks(arr2, starts, capacity);
 
     size_t chunk_size = std::min<size_t>(1000000ULL, arr0_size / (static_cast<size_t>(num_threads) * 5ULL) + 1ULL) * static_cast<size_t>(num_threads);
     size_t chunks_count = (arr0_size + chunk_size - 1) / chunk_size;
@@ -563,8 +782,8 @@ GenBoardsResult gen_boards_internal_naive(
     #pragma omp parallel num_threads(num_threads)
     {
         int thread_index = omp_get_thread_num();
-        size_t c1t = starts[thread_index];
-        size_t c2t = starts[thread_index];
+        ThreadWriteSink &sink1 = sinks1[static_cast<size_t>(thread_index)];
+        ThreadWriteSink &sink2 = sinks2[static_cast<size_t>(thread_index)];
         std::array<uint64_t, kScalarBufferedBatchSize> buffer1{};
         std::array<uint64_t, kScalarBufferedBatchSize> buffer2{};
         size_t b1_ptr = 0;
@@ -574,7 +793,7 @@ GenBoardsResult gen_boards_internal_naive(
             if (b1_ptr == 0) {
                 return;
             }
-            process_buf_scalar(buffer1.data(), b1_ptr, hashmap1, arr1, c1t, hashmask1);
+            process_buf_scalar(buffer1.data(), b1_ptr, hashmap1, sink1, hashmask1);
             b1_ptr = 0;
         };
 
@@ -582,7 +801,7 @@ GenBoardsResult gen_boards_internal_naive(
             if (b2_ptr == 0) {
                 return;
             }
-            process_buf_scalar(buffer2.data(), b2_ptr, hashmap2, arr2, c2t, hashmask2);
+            process_buf_scalar(buffer2.data(), b2_ptr, hashmap2, sink2, hashmask2);
             b2_ptr = 0;
         };
 
@@ -636,20 +855,19 @@ GenBoardsResult gen_boards_internal_naive(
 
         flush_buf1();
         flush_buf2();
-
-        c1[thread_index] = c1t;
-        c2[thread_index] = c2t;
     }
 
     GenBoardsResult result;
-    result.total_arr1 = BookGeneratorUtils::merge_inplace(arr1, c1, starts);
-    result.total_arr2 = BookGeneratorUtils::merge_inplace(arr2, c2, starts);
-    result.counts1.resize(num_threads);
-    result.counts2.resize(num_threads);
-    for (int i = 0; i < num_threads; ++i) {
-        result.counts1[i] = c1[i] - starts[i];
-        result.counts2[i] = c2[i] - starts[i];
-    }
+    FinalizedGeneratedArray finalized_arr1 = finalize_generated_array(arr1, capacity, starts, sinks1);
+    FinalizedGeneratedArray finalized_arr2 = finalize_generated_array(arr2, capacity, starts, sinks2);
+    result.total_arr1 = finalized_arr1.total;
+    result.total_arr2 = finalized_arr2.total;
+    result.counts1 = collect_total_counts(sinks1);
+    result.counts2 = collect_total_counts(sinks2);
+    result.finalized_arr1 = std::move(finalized_arr1.owned);
+    result.finalized_arr2 = std::move(finalized_arr2.owned);
+    result.spill_arr1 = finalized_arr1.spill_total;
+    result.spill_arr2 = finalized_arr2.spill_total;
     return result;
 }
 
@@ -670,26 +888,27 @@ GenBoardsResult gen_boards_internal_avx512(
     (void) isfree;
     uint64_t hashmask1 = hashmap1_size - 1;
     uint64_t hashmask2 = hashmap2_size - 1;
-    std::vector<size_t> starts(num_threads);
-    std::vector<size_t> c1(num_threads);
-    std::vector<size_t> c2(num_threads);
-    for (int i = 0; i < num_threads; ++i) {
-        starts[i] = (capacity / static_cast<size_t>(num_threads)) * static_cast<size_t>(i);
-    }
+    std::vector<size_t> starts = build_segment_starts(capacity, num_threads);
+    std::vector<ThreadWriteSink> sinks1 = create_write_sinks(arr1, starts, capacity);
+    std::vector<ThreadWriteSink> sinks2 = create_write_sinks(arr2, starts, capacity);
 
     const int BATCH_SIZE = 128;
 
     #pragma omp parallel num_threads(num_threads)
     {
         int thread_index = omp_get_thread_num();
-        size_t c1t = starts[thread_index];
-        size_t c2t = starts[thread_index];
+        ThreadWriteSink &sink1 = sinks1[static_cast<size_t>(thread_index)];
+        ThreadWriteSink &sink2 = sinks2[static_cast<size_t>(thread_index)];
 
         uint64_t buffer1[BATCH_SIZE], buffer2[BATCH_SIZE];
         int b1_ptr = 0, b2_ptr = 0;
 
-        auto process_buf = [&](uint64_t* buf, int& ptr, uint64_t* hmap, uint64_t* target_arr, size_t& counter, uint64_t mask) {
-            process_buf_avx512(buf, hmap, target_arr, counter, mask);
+        auto process_buf = [&](const uint64_t *buf, int &ptr, uint64_t *hmap, ThreadWriteSink &sink, uint64_t mask) {
+            if (ptr == BATCH_SIZE) {
+                process_buf_avx512(buf, static_cast<size_t>(ptr), hmap, sink, mask);
+            } else {
+                process_buf_scalar(buf, static_cast<size_t>(ptr), hmap, sink, mask);
+            }
             ptr = 0;
         };
 
@@ -710,7 +929,7 @@ GenBoardsResult gen_boards_internal_avx512(
                 for (uint64_t new_board : boards2) {
                     if (new_board != spawn2 && is_pattern(new_board, spec.pattern_masks)) {
                         buffer1[b1_ptr++] = apply_canonical(new_board, spec.symm_mode);
-                        if (b1_ptr == BATCH_SIZE) process_buf(buffer1, b1_ptr, hashmap1, arr1, c1t, hashmask1);
+                        if (b1_ptr == BATCH_SIZE) process_buf(buffer1, b1_ptr, hashmap1, sink1, hashmask1);
                     }
                 }
 
@@ -720,7 +939,7 @@ GenBoardsResult gen_boards_internal_avx512(
                 for (uint64_t new_board : boards4) {
                     if (new_board != spawn4 && is_pattern(new_board, spec.pattern_masks)) {
                         buffer2[b2_ptr++] = apply_canonical(new_board, spec.symm_mode);
-                        if (b2_ptr == BATCH_SIZE) process_buf(buffer2, b2_ptr, hashmap2, arr2, c2t, hashmask2);
+                        if (b2_ptr == BATCH_SIZE) process_buf(buffer2, b2_ptr, hashmap2, sink2, hashmask2);
                     }
                 }
             }
@@ -728,29 +947,25 @@ GenBoardsResult gen_boards_internal_avx512(
         
         // 尾部清理
         if (b1_ptr > 0) {
-            uint64_t dummy = buffer1[0];
-            while (b1_ptr < BATCH_SIZE) buffer1[b1_ptr++] = dummy;
-            process_buf(buffer1, b1_ptr, hashmap1, arr1, c1t, hashmask1);
+            process_buf(buffer1, b1_ptr, hashmap1, sink1, hashmask1);
         }
         if (b2_ptr > 0) {
-            uint64_t dummy = buffer2[0];
-            while (b2_ptr < BATCH_SIZE) buffer2[b2_ptr++] = dummy;
-            process_buf(buffer2, b2_ptr, hashmap2, arr2, c2t, hashmask2);
+            process_buf(buffer2, b2_ptr, hashmap2, sink2, hashmask2);
         }
 
-        c1[thread_index] = c1t;
-        c2[thread_index] = c2t;
     }
 
     GenBoardsResult result;
-    result.total_arr1 = BookGeneratorUtils::merge_inplace(arr1, c1, starts);
-    result.total_arr2 = BookGeneratorUtils::merge_inplace(arr2, c2, starts);
-    result.counts1.resize(num_threads);
-    result.counts2.resize(num_threads);
-    for (int i = 0; i < num_threads; ++i) {
-        result.counts1[i] = c1[i] - starts[i];
-        result.counts2[i] = c2[i] - starts[i];
-    }
+    FinalizedGeneratedArray finalized_arr1 = finalize_generated_array(arr1, capacity, starts, sinks1);
+    FinalizedGeneratedArray finalized_arr2 = finalize_generated_array(arr2, capacity, starts, sinks2);
+    result.total_arr1 = finalized_arr1.total;
+    result.total_arr2 = finalized_arr2.total;
+    result.counts1 = collect_total_counts(sinks1);
+    result.counts2 = collect_total_counts(sinks2);
+    result.finalized_arr1 = std::move(finalized_arr1.owned);
+    result.finalized_arr2 = std::move(finalized_arr2.owned);
+    result.spill_arr1 = finalized_arr1.spill_total;
+    result.spill_arr2 = finalized_arr2.spill_total;
     return result;
 }
 
@@ -852,7 +1067,7 @@ gen_boards_big(
         size_t end_index = seg_limits[seg_index + 1];
         size_t len = end_index - start_index;
         double length_factor = predict_next_length_factor_quadratic(length_factors_list[seg_index]);
-        length_factor *= len > static_cast<size_t>(1e8) ? 1.25 : 1.5;
+        length_factor *= len > static_cast<size_t>(1e8) ? 1.15 : 1.2;
         length_factor *= length_factor_multiplier;
         if (std::isnan(length_factor)) {
             length_factor = 3.0;
@@ -874,7 +1089,11 @@ gen_boards_big(
             segment_result.counts1,
             segment_result.counts2,
             length_factor,
-            true
+            true,
+            segment_result.spill_arr1,
+            segment_result.spill_arr2,
+            segment_result.finalized_arr1 != nullptr,
+            segment_result.finalized_arr2 != nullptr
         );
         std::copy(segment_result.counts1.begin(), segment_result.counts1.end(), actual_lengths1.begin() + static_cast<std::ptrdiff_t>(seg_index * static_cast<size_t>(num_threads)));
         std::copy(segment_result.counts2.begin(), segment_result.counts2.end(), actual_lengths2.begin() + static_cast<std::ptrdiff_t>(seg_index * static_cast<size_t>(num_threads)));
@@ -885,20 +1104,22 @@ gen_boards_big(
         length_factors_list[seg_index].push_back(static_cast<double>(segment_result.total_arr2) / static_cast<double>(1 + len));
         gen_time += wall_time_seconds() - seg_t0;
 
+        uint64_t *segment_arr1 = segment_result.finalized_arr1 ? segment_result.finalized_arr1.get() : arr1_ptr.get();
+        uint64_t *segment_arr2 = segment_result.finalized_arr2 ? segment_result.finalized_arr2.get() : arr2_ptr.get();
         auto [unique_arr1_length, unique_arr2_length] = BookGeneratorUtils::sort_and_unique_two_arrays_concurrently(
-            arr1_ptr.get(),
+            segment_arr1,
             segment_result.total_arr1,
-            arr2_ptr.get(),
+            segment_arr2,
             segment_result.total_arr2,
             num_threads
         );
         big_result.arr1s.emplace_back(
-            arr1_ptr.get(),
-            arr1_ptr.get() + unique_arr1_length
+            segment_arr1,
+            segment_arr1 + unique_arr1_length
         );
         big_result.arr2s.emplace_back(
-            arr2_ptr.get(),
-            arr2_ptr.get() + unique_arr2_length
+            segment_arr2,
+            segment_arr2 + unique_arr2_length
         );
     }
 
@@ -1073,6 +1294,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             uint64_t *sort_arr2 = nullptr;
             size_t sort_len1 = 0;
             size_t sort_len2 = 0;
+            GenBoardsResult generated_result;
             bool use_simple_path = should_use_simple_path(d0, arr_init, init_params.length_factors);
             if (use_simple_path) {
                 debug_log("step " + std::to_string(i) + " path: simple");
@@ -1090,7 +1312,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                     std::string(supports_avx512() ? "avx512" : "buffered-scalar")
                 );
                 double length_factor = predict_next_length_factor_quadratic(init_params.length_factors);
-                length_factor *= d0.size() > static_cast<size_t>(1e8) ? 1.25 : 1.5;
+                length_factor *= d0.size() > static_cast<size_t>(1e8) ? 1.15 : 1.2;
                 length_factor *= init_params.length_factor_multiplier;
                 if (std::isnan(length_factor)) {
                     length_factor = 3.0;
@@ -1104,25 +1326,29 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                 size_t capacity = std::max(min_length, static_cast<size_t>(static_cast<double>(d0.size()) * length_factor));
                 arr1_ptr = std::make_unique<uint64_t[]>(capacity);
                 arr2_ptr = std::make_unique<uint64_t[]>(capacity);
-                GenBoardsResult result = options.is_variant
+                generated_result = options.is_variant
                     ? gen_boards<VBoardMover>(d0.data(), d0.size(), options.target, spec, hashmap1.data(), hashmap1.size(), hashmap2.data(), hashmap2.size(), arr1_ptr.get(), arr2_ptr.get(), capacity, num_threads, do_check, options.is_free)
                     : gen_boards<BoardMover>(d0.data(), d0.size(), options.target, spec, hashmap1.data(), hashmap1.size(), hashmap2.data(), hashmap2.size(), arr1_ptr.get(), arr2_ptr.get(), capacity, num_threads, do_check, options.is_free);
                 t1 = wall_time_seconds();
 
                 validate_length_and_balance(
                     d0.size(),
-                    result.total_arr2,
-                    result.total_arr1,
-                    result.counts1,
-                    result.counts2,
+                    generated_result.total_arr2,
+                    generated_result.total_arr1,
+                    generated_result.counts1,
+                    generated_result.counts2,
                     length_factor,
-                    false
+                    false,
+                    generated_result.spill_arr1,
+                    generated_result.spill_arr2,
+                    generated_result.finalized_arr1 != nullptr,
+                    generated_result.finalized_arr2 != nullptr
                 );
-                sort_arr1 = arr1_ptr.get();
-                sort_len1 = result.total_arr1;
-                sort_arr2 = arr2_ptr.get();
-                sort_len2 = result.total_arr2;
-                generation_counts2 = std::move(result.counts2);
+                sort_arr1 = generated_result.finalized_arr1 ? generated_result.finalized_arr1.get() : arr1_ptr.get();
+                sort_len1 = generated_result.total_arr1;
+                sort_arr2 = generated_result.finalized_arr2 ? generated_result.finalized_arr2.get() : arr2_ptr.get();
+                sort_len2 = generated_result.total_arr2;
+                generation_counts2 = generated_result.counts2;
             }
 
             std::tie(init_params.length_factors, init_params.length_factors_list) =
@@ -1147,8 +1373,8 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                 d1t.resize(unique_d1t_length);
                 d2.resize(unique_d2_length);
             } else {
-                d1t.assign(arr1_ptr.get(), arr1_ptr.get() + unique_d1t_length);
-                d2.assign(arr2_ptr.get(), arr2_ptr.get() + unique_d2_length);
+                d1t.assign(sort_arr1, sort_arr1 + unique_d1t_length);
+                d2.assign(sort_arr2, sort_arr2 + unique_d2_length);
             }
             t2 = wall_time_seconds();
 

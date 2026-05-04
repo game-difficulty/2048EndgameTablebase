@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <tuple>
 #include <vector>
 
@@ -15,6 +16,10 @@ struct GenBoardsResult {
     size_t total_arr2 = 0;
     std::vector<size_t> counts1;
     std::vector<size_t> counts2;
+    std::unique_ptr<uint64_t[]> finalized_arr1;
+    std::unique_ptr<uint64_t[]> finalized_arr2;
+    size_t spill_arr1 = 0;
+    size_t spill_arr2 = 0;
 };
 
 struct GenBoardsBigResult {
