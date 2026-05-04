@@ -41,7 +41,7 @@
         </div>
       </div>
 
-      <div class="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="grid grid-cols-1 items-start gap-4 min-[480px]:grid-cols-2 min-[720px]:grid-cols-3 min-[960px]:grid-cols-4">
         <div
           v-for="item in allItems"
           :key="item.id"

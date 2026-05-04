@@ -47,9 +47,9 @@
       </div>
     </div>
 
-    <div class="grid w-full max-w-6xl grid-cols-[560px_minmax(0,1fr)] items-start gap-6">
-      <section class="flex flex-col">
-        <div class="mx-auto w-full max-w-[556px]">
+    <div class="grid w-full max-w-6xl grid-cols-[clamp(260px,60vh,556px)_minmax(0,1fr)] items-start gap-6">
+      <section class="flex min-w-0 flex-col">
+        <div class="notebook-board-shell mx-auto w-full">
           <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @swipe="handleBoardSwipe" />
         </div>
       </section>
@@ -347,6 +347,11 @@ const {
 .notebook-threshold-save:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.notebook-board-shell {
+  width: 100%;
+  max-width: none;
 }
 
 </style>

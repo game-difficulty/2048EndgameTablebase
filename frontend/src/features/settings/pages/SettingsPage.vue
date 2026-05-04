@@ -77,63 +77,63 @@
           <div class="h-full bg-border-main/5 p-5 rounded-2xl border border-border-main shadow-inner">
             <div class="grid h-full grid-rows-[auto_auto] gap-4">
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-6 gap-x-7">
-              <label class="flex items-start gap-3 cursor-pointer group min-h-[3.0rem]">
-                <div class="relative">
+              <label class="builder-toggle-option cursor-pointer group">
+                <div class="builder-toggle-switch relative">
                   <input type="checkbox" v-model="builderAdvancedAlgo" class="sr-only peer" @change="handleAdvancedAlgoChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
                   <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
                 </div>
-                <span class="flex min-h-[3.0rem] items-start gap-2 pt-0.5">
-                  <span class="ui-body font-bold text-text-main group-hover:text-accent transition-colors">{{ $t('settings.builder.advanced') }}</span>
-                  <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.advanced')" :data-tooltip="$t('settings.tooltips.advanced')">?</span>
+                <span class="builder-toggle-copy">
+                  <span class="builder-toggle-text ui-body font-bold text-text-main group-hover:text-accent transition-colors">{{ $t('settings.builder.advanced') }}</span>
+                  <span class="setting-tooltip builder-toggle-tooltip" tabindex="0" :title="$t('settings.tooltips.advanced')" :data-tooltip="$t('settings.tooltips.advanced')">?</span>
                 </span>
               </label>
 
-              <label class="flex items-start gap-3 cursor-pointer group min-h-[3.0rem]">
-                <div class="relative">
+              <label class="builder-toggle-option cursor-pointer group">
+                <div class="builder-toggle-switch relative">
                   <input type="checkbox" v-model="builderCompress" class="sr-only peer" @change="handleCompressChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
                   <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
                 </div>
-                <span class="flex min-h-[3.0rem] items-start gap-2 pt-0.5">
-                  <span class="ui-body font-bold text-text-main group-hover:text-accent transition-colors">{{ $t('settings.builder.compress') }}</span>
-                  <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.compress')" :data-tooltip="$t('settings.tooltips.compress')">?</span>
+                <span class="builder-toggle-copy">
+                  <span class="builder-toggle-text ui-body font-bold text-text-main group-hover:text-accent transition-colors">{{ $t('settings.builder.compress') }}</span>
+                  <span class="setting-tooltip builder-toggle-tooltip" tabindex="0" :title="$t('settings.tooltips.compress')" :data-tooltip="$t('settings.tooltips.compress')">?</span>
                 </span>
               </label>
 
-              <label class="flex items-start gap-3 cursor-pointer group min-h-[3.0rem]">
-                <div class="relative">
+              <label class="builder-toggle-option cursor-pointer group">
+                <div class="builder-toggle-switch relative">
                   <input type="checkbox" v-model="builderCompressTempFiles" class="sr-only peer" @change="handleCompressTempFilesChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
                   <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
                 </div>
-                <span class="flex min-h-[3.0rem] items-start gap-2 pt-0.5">
-                  <span class="ui-body font-bold text-text-main group-hover:text-accent transition-colors">{{ $t('settings.builder.compressTemp') }}</span>
-                  <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.compressTemp')" :data-tooltip="$t('settings.tooltips.compressTemp')">?</span>
+                <span class="builder-toggle-copy">
+                  <span class="builder-toggle-text ui-body font-bold text-text-main group-hover:text-accent transition-colors">{{ $t('settings.builder.compressTemp') }}</span>
+                  <span class="setting-tooltip builder-toggle-tooltip" tabindex="0" :title="$t('settings.tooltips.compressTemp')" :data-tooltip="$t('settings.tooltips.compressTemp')">?</span>
                 </span>
               </label>
 
-              <label class="flex items-start gap-3 cursor-pointer group min-h-[3.0rem]" v-if="!builderAdvancedAlgo">
-                <div class="relative">
+              <label class="builder-toggle-option cursor-pointer group" v-if="!builderAdvancedAlgo">
+                <div class="builder-toggle-switch relative">
                   <input type="checkbox" v-model="builderOptimalBranchOnly" class="sr-only peer" @change="handleOptimalBranchOnlyChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
                   <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
                 </div>
-                <span class="flex min-h-[3.0rem] items-start gap-2 pt-0.5">
-                  <span class="ui-body font-bold text-text-main group-hover:text-accent transition-colors">{{ $t('settings.builder.optimalOnly') }}</span>
-                  <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.optimalOnly')" :data-tooltip="$t('settings.tooltips.optimalOnly')">?</span>
+                <span class="builder-toggle-copy">
+                  <span class="builder-toggle-text ui-body font-bold text-text-main group-hover:text-accent transition-colors">{{ $t('settings.builder.optimalOnly') }}</span>
+                  <span class="setting-tooltip builder-toggle-tooltip" tabindex="0" :title="$t('settings.tooltips.optimalOnly')" :data-tooltip="$t('settings.tooltips.optimalOnly')">?</span>
                 </span>
               </label>
 
-              <label class="flex items-start gap-3 cursor-pointer group min-h-[3.0rem]" v-if="builderAdvancedAlgo">
-                <div class="relative">
+              <label class="builder-toggle-option cursor-pointer group" v-if="builderAdvancedAlgo">
+                <div class="builder-toggle-switch relative">
                   <input type="checkbox" v-model="builderChunkedSolve" class="sr-only peer" @change="handleChunkedSolveChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
                   <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
                 </div>
-                <span class="flex min-h-[3.0rem] items-start gap-2 pt-0.5">
-                  <span class="ui-body font-bold text-text-main group-hover:text-accent transition-colors">{{ $t('settings.builder.chunkedSolve') }}</span>
-                  <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.chunkedSolve')" :data-tooltip="$t('settings.tooltips.chunkedSolve')">?</span>
+                <span class="builder-toggle-copy">
+                  <span class="builder-toggle-text ui-body font-bold text-text-main group-hover:text-accent transition-colors">{{ $t('settings.builder.chunkedSolve') }}</span>
+                  <span class="setting-tooltip builder-toggle-tooltip" tabindex="0" :title="$t('settings.tooltips.chunkedSolve')" :data-tooltip="$t('settings.tooltips.chunkedSolve')">?</span>
                 </span>
               </label>
             </div>
@@ -268,20 +268,22 @@
           <input type="range" class="w-full accent-accent" min="90" max="125" step="5" v-model.number="config.ui_scale" @change="saveSetting('ui_scale')" />
         </div>
 
-        <div class="flex items-center justify-between p-4 bg-bg-card border border-border-main rounded-xl max-w-sm">
-          <span class="font-bold text-text-main">{{ $t('settings.game.darkMode') }}</span>
-          <label class="relative inline-flex items-center cursor-pointer">
-            <input type="checkbox" v-model="config.dark_mode" class="sr-only peer" @change="saveSetting('dark_mode')" />
-            <div class="w-11 h-6 bg-border-main/30 border border-border-main rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent shadow-inner"></div>
-          </label>
-        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div class="flex min-w-0 items-center justify-between rounded-xl border border-border-main bg-bg-card p-4">
+            <span class="font-bold text-text-main">{{ $t('settings.game.darkMode') }}</span>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" v-model="config.dark_mode" class="sr-only peer" @change="saveSetting('dark_mode')" />
+              <div class="w-11 h-6 bg-border-main/30 border border-border-main rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent shadow-inner"></div>
+            </label>
+          </div>
 
-        <div class="flex items-center justify-between p-4 bg-bg-card border border-border-main rounded-xl max-w-sm">
-          <span class="font-bold text-text-main">{{ $t('settings.game.animation') }}</span>
-          <label class="relative inline-flex items-center cursor-pointer">
-            <input type="checkbox" v-model="config.do_animation" class="sr-only peer" @change="saveSetting('do_animation')" />
-            <div class="w-11 h-6 bg-border-main/30 border border-border-main rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent shadow-inner"></div>
-          </label>
+          <div class="flex min-w-0 items-center justify-between rounded-xl border border-border-main bg-bg-card p-4">
+            <span class="font-bold text-text-main">{{ $t('settings.game.animation') }}</span>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" v-model="config.do_animation" class="sr-only peer" @change="saveSetting('do_animation')" />
+              <div class="w-11 h-6 bg-border-main/30 border border-border-main rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent shadow-inner"></div>
+            </label>
+          </div>
         </div>
       </div>
 
@@ -429,6 +431,37 @@ const successRateDtypeOptions = [
 .animate-grow-x {
   animation: growX 0.6s ease-out forwards;
   transform-origin: left;
+}
+
+.builder-toggle-option {
+  display: grid;
+  min-height: 3.25rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.75rem;
+}
+
+.builder-toggle-switch {
+  margin-top: 0.1rem;
+}
+
+.builder-toggle-copy {
+  display: grid;
+  min-width: 0;
+  min-height: 3.25rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.5rem;
+}
+
+.builder-toggle-text {
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.builder-toggle-tooltip {
+  align-self: start;
+  margin-top: 0.2rem;
 }
 
 @keyframes growX {

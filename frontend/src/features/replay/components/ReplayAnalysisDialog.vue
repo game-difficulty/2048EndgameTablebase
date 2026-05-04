@@ -5,8 +5,8 @@
       class="fixed inset-0 z-[220] flex items-center justify-center bg-black/35 px-4 py-8 backdrop-blur-sm"
       @click.self="$emit('close')"
     >
-      <div class="w-full max-w-5xl overflow-hidden rounded-[30px] border border-border-main bg-bg-card shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
-        <div class="flex items-center justify-between border-b border-border-main/60 px-6 py-4">
+      <div class="analysis-dialog-shell w-full max-w-5xl overflow-hidden rounded-[30px] border border-border-main bg-bg-card shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
+        <div class="analysis-dialog-header flex items-center justify-between border-b border-border-main/60 px-6 py-4">
           <div>
             <div class="ui-control font-black uppercase tracking-[0.24em] text-text-secondary">{{ $t('analysis.windowTag') }}</div>
             <div class="mt-1 text-2xl font-black text-text-main">{{ $t('analysis.title') }}</div>
@@ -22,11 +22,11 @@
           </div>
         </div>
 
-        <div class="grid gap-5 p-6 lg:grid-cols-[minmax(340px,0.95fr)_minmax(0,1.05fr)]">
+        <div class="analysis-dialog-body grid gap-5 p-6 lg:grid-cols-[minmax(340px,0.95fr)_minmax(0,1.05fr)]">
           <section class="rounded-[24px] border border-border-main/70 bg-bg-main/65 p-5 shadow-inner">
             <div class="ui-control font-black uppercase tracking-[0.24em] text-text-secondary">{{ $t('analysis.input.title') }}</div>
             <div class="mt-4 space-y-4">
-              <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_132px]">
+              <div class="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3">
                 <div ref="patternMenuRoot" class="relative">
                   <button
                     type="button"
@@ -75,10 +75,10 @@
 
                 <UiSelect
                   v-model="selectedTarget"
-                  class="w-full"
+                  class="analysis-select-shell w-full"
                   :options="targetOptions"
                   aria-label="Analysis target"
-                  trigger-class="analysis-select"
+                  trigger-class="analysis-select-trigger w-full min-h-[3.25rem] rounded-[0.9rem] border border-border-main bg-bg-card px-[0.95rem] py-[0.78rem] ui-control font-black uppercase tracking-[0.06em] text-text-main"
                   option-class="ui-control font-black uppercase tracking-[0.06em]"
                   menu-class="z-[240]"
                 />
@@ -195,7 +195,7 @@ const { t } = useI18n();
 
 const wsStatus = ref('disconnected');
 const categories = ref({});
-const targetTiles = ref(['64', '128', '256', '512', '1024', '2048', '4096', '8192']);
+const targetTiles = ref(['64', '128', '256', '512', '1024', '2048', '4096', '8192', '16384']);
 const selectedPattern = ref('');
 const selectedTarget = ref('2048');
 const pathsInput = ref('');
@@ -508,11 +508,29 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.analysis-dialog-shell {
+  display: flex;
+  max-height: calc(100vh - 4rem);
+  min-height: 0;
+  flex-direction: column;
+}
+
+.analysis-dialog-header {
+  flex: 0 0 auto;
+}
+
+.analysis-dialog-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .analysis-input-btn,
-.analysis-select,
 .analysis-secondary-btn,
 .analysis-primary-btn {
   width: 100%;
+  min-height: 3.25rem;
   border-radius: 0.9rem;
   border: 1px solid var(--border-main);
   background-color: var(--bg-card);
@@ -526,14 +544,28 @@ onMounted(() => {
 }
 
 .analysis-input-btn,
-.analysis-select {
+:deep(.analysis-select-trigger) {
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
 }
 
+:deep(.analysis-select-trigger) {
+  width: 100%;
+  min-height: 3.25rem;
+  border-radius: 0.9rem;
+  border: 1px solid var(--border-main);
+  background-color: var(--bg-card);
+  color: var(--text-main);
+  padding: 0.78rem 0.95rem;
+  font-size: var(--font-ui-sm);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .analysis-input-btn:hover,
-.analysis-select:hover,
+.analysis-select-shell:hover :deep(.analysis-select-trigger),
 .analysis-secondary-btn:hover,
 .analysis-primary-btn:hover {
   border-color: var(--accent);

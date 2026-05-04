@@ -59,8 +59,8 @@
       </div>
     </div>
 
-    <div class="relative z-0 grid w-full min-w-[1020px] max-w-6xl grid-cols-[452px_minmax(0,1fr)] items-start gap-6">
-      <section class="flex flex-col">
+    <div class="relative z-0 grid w-full max-w-6xl grid-cols-[clamp(260px,58vh,442px)_minmax(0,1fr)] items-start gap-6">
+      <section class="flex min-w-0 flex-col">
         <div class="mb-4 flex gap-2">
           <input
             v-model="hexInput"
@@ -70,11 +70,11 @@
             class="flex-1 rounded-lg border border-border-main bg-bg-main px-3 py-2 font-[Consolas,Monaco,monospace] ui-body font-black tracking-[0.06em] text-text-main outline-none transition-colors placeholder:opacity-50 hover:border-accent/40 focus:border-accent"
             placeholder="0000000000000000"
           />
-          <button class="action-btn min-w-[70px]" :disabled="!hexInput.trim()" @click="applyManualBoard">{{ $t('tester.controls.set') }}</button>
-          <button class="action-btn min-w-[88px]" :disabled="!selectedPattern || !selectedTarget" @click="resetRandom">{{ $t('tester.controls.random') }}</button>
+          <button class="action-btn min-w-[58px]" :disabled="!hexInput.trim()" @click="applyManualBoard">{{ $t('tester.controls.set') }}</button>
+          <button class="action-btn min-w-[72px]" :disabled="!selectedPattern || !selectedTarget" @click="resetRandom">{{ $t('tester.controls.random') }}</button>
         </div>
 
-        <div ref="boardHotkeyTarget" tabindex="-1" class="mx-auto w-full max-w-[442px] outline-none focus:outline-none">
+        <div ref="boardHotkeyTarget" tabindex="-1" class="tester-board-shell mx-auto w-full outline-none focus:outline-none">
           <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @swipe="move" />
         </div>
 
@@ -104,7 +104,7 @@
             </span>
             <span class="ui-caption font-black uppercase tracking-[0.18em] text-text-secondary">{{ displayedResultDtype || '?' }}</span>
           </div>
-          <div class="grid grid-cols-[198px_minmax(0,1fr)] items-stretch gap-4">
+          <div class="grid grid-cols-[176px_minmax(0,1fr)] items-stretch gap-4">
             <div class="result-mini-board">
               <div
                 v-for="tile in resultConsoleTiles"
@@ -359,8 +359,9 @@ const handleApplyPatternSelection = (event) => {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   grid-template-rows: repeat(4, minmax(0, 1fr));
   gap: 0.45rem;
-  height: 100%;
-  align-self: stretch;
+  width: 100%;
+  aspect-ratio: 1;
+  align-self: start;
 }
 
 .result-mini-tile {
@@ -368,10 +369,16 @@ const handleApplyPatternSelection = (event) => {
   align-items: center;
   justify-content: center;
   border-radius: 0.7rem;
+  min-width: 0;
   min-height: 0;
   font-size: calc(0.92rem * var(--ui-scale));
   font-weight: 900;
   letter-spacing: -0.01em;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.tester-board-shell {
+  width: 100%;
+  max-width: none;
 }
 </style>

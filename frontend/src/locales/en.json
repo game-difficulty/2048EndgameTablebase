@@ -51,7 +51,7 @@
       "spawnRate": "4-Spawn Chance",
       "fontSize": "Tile Font Factor",
       "uiScale": "Interface Scale",
-      "animation": "Enable Slide Animation",
+      "animation": "Slide Animation",
       "language": "Language",
       "darkMode": "Dark Mode"
     },

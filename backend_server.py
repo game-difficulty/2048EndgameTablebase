@@ -50,7 +50,7 @@ from error_bridge import register_frontend_error_dispatcher
 
 APP_TITLE = "2048 Endgame TableBase"
 APP_WINDOW_SIZE = (1200, 940)
-APP_WINDOW_MIN_SIZE = (800, 600)
+APP_WINDOW_MIN_SIZE = (480, 320)
 
 window: webview.Window | None = None
 _server_process: subprocess.Popen | None = None

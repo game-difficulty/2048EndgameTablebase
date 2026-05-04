@@ -1,13 +1,13 @@
 <template>
   <div class="page-root">
-    <div class="mb-3 flex w-full min-w-[1060px] max-w-6xl items-start justify-between gap-6">
+    <div class="mb-3 flex w-full max-w-6xl items-start justify-between gap-6">
       <div class="min-w-0 flex-1">
         <div class="truncate text-left font-[Cambria,serif] text-3xl font-extrabold tracking-tight text-text-main" :title="fileDisplay">
           {{ fileDisplay }}
         </div>
       </div>
       <div ref="menuRoot" class="relative z-[120] flex shrink-0 justify-end">
-        <button type="button" class="top-menu-shell top-menu-trigger btn-prominent min-w-[148px] justify-center border-transparent px-4 text-white" @click="menuOpen = !menuOpen">
+        <button type="button" class="top-menu-shell top-menu-trigger btn-prominent min-w-[128px] justify-center border-transparent px-4 text-white" @click="menuOpen = !menuOpen">
           <span>{{ $t('replay.toolbar.loadReplay') }}</span>
           <span class="ui-kicker opacity-80">{{ menuOpen ? '^' : 'v' }}</span>
         </button>
@@ -18,8 +18,8 @@
       </div>
     </div>
 
-    <div class="grid w-full min-w-[1060px] max-w-6xl grid-cols-[480px_minmax(0,1fr)] items-start gap-6">
-      <section class="flex flex-col">
+    <div class="grid w-full max-w-6xl grid-cols-[clamp(280px,60vh,480px)_minmax(0,1fr)] items-start gap-6">
+      <section class="flex min-w-0 flex-col">
         <ReplayMarkSlider
           :losses="losses"
           :current-step="currentStep"
@@ -36,10 +36,10 @@
             spellcheck="false"
             class="flex-1 rounded-lg border border-border-main bg-bg-main px-3 py-2 font-[Consolas,Monaco,monospace] ui-body font-black tracking-[0.06em] text-text-main outline-none"
           />
-          <button class="action-btn min-w-[150px]" :disabled="!loaded" @click="jumpToPractice">{{ $t('replay.toolbar.jumpToPractice') }}</button>
+          <button class="action-btn min-w-[128px]" :disabled="!loaded" @click="jumpToPractice">{{ $t('replay.toolbar.jumpToPractice') }}</button>
         </div>
 
-        <div class="mx-auto w-full max-w-[480px]">
+        <div class="replay-board-shell mx-auto w-full">
           <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @swipe="handleBoardSwipe" />
         </div>
       </section>
@@ -71,7 +71,7 @@
               <div
                 v-for="item in displayedResults"
                 :key="item.dir"
-                class="grid grid-cols-[1.1rem_19ch_minmax(0,1fr)] items-center gap-3 rounded-lg border border-border-main/20 bg-bg-main/36 px-3 py-2"
+                class="grid grid-cols-[1.1rem_16ch_minmax(0,1fr)] items-center gap-3 rounded-lg border border-border-main/20 bg-bg-main/36 px-3 py-2"
               >
                 <span class="text-center ui-body font-black text-text-secondary">{{ dirLabels[item.dir] }}</span>
                 <span class="truncate text-left font-black tabular-nums leading-none" :style="getResultValueStyle(item)">{{ item.display }}</span>
@@ -294,5 +294,10 @@ const {
   font-size: calc(0.78rem * var(--ui-scale));
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.replay-board-shell {
+  width: 100%;
+  max-width: none;
 }
 </style>

@@ -25,7 +25,7 @@ async def handle_analysis_action(
                 "type": EventType.ANALYSIS_BOOTSTRAP,
                 "payload": {
                     "categories": category_info,
-                    "target_tiles": [str(2**i) for i in range(6, 14)],
+                    "target_tiles": [str(2**i) for i in range(6, 15)],
                 },
             }
         )

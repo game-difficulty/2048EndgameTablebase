@@ -110,16 +110,20 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 0.45rem;
   width: 100%;
+  min-width: 0;
   border-radius: inherit;
   border: 1px solid var(--border-main);
   background: var(--bg-card);
   color: var(--text-main);
   padding: 0.65rem 0.9rem;
-  font-size: var(--font-ui-sm);
+  font-size: clamp(calc(0.64rem * var(--ui-scale)), calc(0.56rem * var(--ui-scale) + 0.22vw), var(--font-ui-sm));
   font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
   transition: all 0.2s ease;
   appearance: none;
 }
@@ -174,6 +178,10 @@ onUnmounted(() => {
 .countdown-meta {
   position: relative;
   z-index: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .countdown-meta {

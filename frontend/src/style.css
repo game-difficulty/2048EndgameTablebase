@@ -385,11 +385,15 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
   border: none;
   background: transparent;
   color: var(--text-main);
   font-size: var(--font-ui-md);
   font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   outline: none;
 }
 
@@ -482,10 +486,14 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   border: 1px solid var(--border-main);
   color: var(--text-main);
   font-weight: 900;
   text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: all 0.2s ease;
 }
 
@@ -493,7 +501,7 @@ body {
   border-radius: 0.75rem;
   background: var(--bg-card);
   padding: 0.6rem 0.9rem;
-  font-size: var(--font-ui-sm);
+  font-size: clamp(calc(0.64rem * var(--ui-scale)), calc(0.56rem * var(--ui-scale) + 0.22vw), var(--font-ui-sm));
   letter-spacing: 0.06em;
 }
 
@@ -501,7 +509,7 @@ body {
   border-radius: 0.6rem;
   background: var(--bg-main);
   padding: 0.35rem 0.7rem;
-  font-size: var(--font-ui-xs);
+  font-size: clamp(calc(0.6rem * var(--ui-scale)), calc(0.52rem * var(--ui-scale) + 0.18vw), var(--font-ui-xs));
   letter-spacing: 0.05em;
 }
 
