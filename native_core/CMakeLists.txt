@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.18)
 project(2048_AI_Core LANGUAGES CXX)
 
 option(NATIVE_ENABLE_ASAN "Enable AddressSanitizer for native_core debug builds." OFF)
@@ -145,11 +145,18 @@ set(FORMATION_CORE_SOURCES
     src/ReaderRuntime.cpp
     src/AdaptiveIndex.cpp
     src/HybridSearch.cpp
+    src/CanonicalBatch.cpp
     src/BookGeneratorUtils.cpp
     src/BookGenerator.cpp
+    src/EXPrefix40Layer.cpp
+    src/EXPrefix36Runtime.cpp
+    src/EXFrozenLayer.cpp
+    src/EXCompressedResult.cpp
+    src/BookGeneratorEX.cpp
     src/BoardMaskerAD.cpp
     src/BoardMoverAD.cpp
     src/BookGeneratorAD.cpp
+    src/BookSolverEX.cpp
     src/BookSolverAD.cpp
     src/BookSolver.cpp
     src/bindings_formation.cpp
@@ -167,7 +174,6 @@ if(NATIVE_BUILD_TESTS)
             "Test sources are optional and are not required for normal Linux or Windows builds."
         )
     endif()
-
     add_executable(adaptive_index_test
         src/AdaptiveIndex.cpp
         tests/test_adaptive_index.cpp

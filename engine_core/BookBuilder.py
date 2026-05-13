@@ -134,6 +134,7 @@ def save_config_to_txt(output_path: str) -> None:
         "optimal_branch_only",
         "compress_temp_files",
         "advanced_algo",
+        "zmask_algo",
         "direct_io",
         "direct_io_queue_depth",
         "direct_io_chunk_mib",
@@ -201,6 +202,18 @@ def generate_free_inits(t32ks: int, t2s: int) -> np.ndarray:
     return np.asarray(reachable, dtype=np.uint64)
 
 
+def _canonicalize_initial_boards_for_ex(arr_init: np.ndarray, meta: dict) -> np.ndarray:
+    if str(meta.get("canonical_mode", "identity")).lower() != "full":
+        return np.asarray(arr_init, dtype=np.uint64)
+    canonicalized = [
+        mover_runtime.canonical_full(np.uint64(board))
+        for board in np.asarray(arr_init, dtype=np.uint64)
+    ]
+    if not canonicalized:
+        return np.empty(0, dtype=np.uint64)
+    return np.unique(np.asarray(canonicalized, dtype=np.uint64))
+
+
 def _run_classic_build(
     pattern: str,
     arr_init: np.ndarray,
@@ -253,6 +266,34 @@ def _run_advanced_build(
     )
 
 
+def _run_zmask_build(
+    pattern: str,
+    arr_init: np.ndarray,
+    target: int,
+    steps: int,
+    pathname: str,
+    docheck_step: int,
+    is_free: bool,
+    is_variant: bool,
+    spawn_rate4: float,
+) -> None:
+    pattern_spec = _build_native_pattern_spec(pattern)
+    run_options = _build_native_run_options(
+        target,
+        steps,
+        pathname,
+        docheck_step,
+        is_free,
+        is_variant,
+        spawn_rate4,
+    )
+    run_options.optimal_branch_only = False
+    run_options.chunked_solve = False
+    formation_core.run_pattern_build_zmask(
+        np.asarray(arr_init, dtype=np.uint64), pattern_spec, run_options
+    )
+
+
 def _should_retry_build_resume(exc: Exception) -> bool:
     message = str(exc).strip()
     if not message:
@@ -284,9 +325,10 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
     _require_native_build()
     config = SingletonConfig().config
     spawn_rate4 = float(config["4_spawn_rate"])
-    _, tile_sum, seed_boards, extra_steps = _resolve_build_meta(pattern)
+    meta, tile_sum, seed_boards, extra_steps = _resolve_build_meta(pattern)
     steps, docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
     is_variant = pattern in category_info.get("variant", [])
+    use_ex_canonical = bool(config.get("zmask_algo", False))
     save_config_to_txt(pathname + "config.txt")
 
     if pattern.startswith("free"):
@@ -303,7 +345,25 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
         fixed_positions = pattern_32k_tiles_map[pattern][2]
         is_free = (len(fixed_positions) < 4) and (tile_sum < 180000)
 
-    if config.get("advanced_algo", False):
+    if use_ex_canonical:
+        arr_init = _canonicalize_initial_boards_for_ex(arr_init, meta)
+
+    if config.get("zmask_algo", False):
+        _run_with_single_resume_retry(
+            f"ZMask build {pattern}_{2**target}",
+            lambda: _run_zmask_build(
+                pattern,
+                arr_init,
+                target,
+                steps,
+                pathname,
+                docheck_step,
+                is_free,
+                is_variant,
+                spawn_rate4,
+            ),
+        )
+    elif config.get("advanced_algo", False):
         _run_with_single_resume_retry(
             f"Advanced build {pattern}_{2**target}",
             lambda: _run_advanced_build(
@@ -338,24 +398,46 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
 
 def v_start_build(pattern: str, target: int, pathname: str) -> bool:
     _require_native_build()
-    spawn_rate4 = float(SingletonConfig().config["4_spawn_rate"])
-    _, tile_sum, seed_boards, extra_steps = _resolve_build_meta(pattern)
+    config = SingletonConfig().config
+    spawn_rate4 = float(config["4_spawn_rate"])
+    meta, tile_sum, seed_boards, extra_steps = _resolve_build_meta(pattern)
     steps, docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
     save_config_to_txt(pathname + "config.txt")
-    _run_with_single_resume_retry(
-        f"Variant build {pattern}_{2**target}",
-        lambda: _run_classic_build(
-            pattern,
-            seed_boards,
-            target,
-            steps,
-            pathname,
-            docheck_step,
-            True,
-            True,
-            spawn_rate4,
-        ),
+    seed_boards_for_build = (
+        _canonicalize_initial_boards_for_ex(seed_boards, meta)
+        if config.get("zmask_algo", False)
+        else seed_boards
     )
+    if config.get("zmask_algo", False):
+        _run_with_single_resume_retry(
+            f"Variant zmask build {pattern}_{2**target}",
+            lambda: _run_zmask_build(
+                pattern,
+                seed_boards_for_build,
+                target,
+                steps,
+                pathname,
+                docheck_step,
+                True,
+                True,
+                spawn_rate4,
+            ),
+        )
+    else:
+        _run_with_single_resume_retry(
+            f"Variant build {pattern}_{2**target}",
+            lambda: _run_classic_build(
+                pattern,
+                seed_boards_for_build,
+                target,
+                steps,
+                pathname,
+                docheck_step,
+                True,
+                True,
+                spawn_rate4,
+            ),
+        )
     return True
 
 

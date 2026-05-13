@@ -2,6 +2,8 @@
 
 #include "BoardCodec.h"
 #include "BoardMover.h"
+#include "EXCompressedResult.h"
+#include "EXPrefix36Runtime.h"
 #include "FileIOUtils.h"
 #include "Formation.h"
 #include "NativeLzma.h"
@@ -13,6 +15,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -708,6 +711,101 @@ SearchValue find_advanced_value(
     return read_value_at_index(*ind);
 }
 
+double normalize_ex_lookup_value(const EXCompressedResult::ColdLookupResult &lookup, const DTypeInfo &dtype_info) {
+    if (!lookup.found) {
+        return dtype_info.zero_value;
+    }
+    switch (lookup.success_kind) {
+        case SuccessRateKind::UInt64:
+            return dtype_info.max_scale > 1.0
+                ? static_cast<double>(lookup.raw_value_bits) / dtype_info.max_scale
+                : static_cast<double>(lookup.raw_value_bits);
+        case SuccessRateKind::Float32: {
+            uint32_t bits = static_cast<uint32_t>(lookup.raw_value_bits);
+            float value = 0.0f;
+            std::memcpy(&value, &bits, sizeof(value));
+            return static_cast<double>(value);
+        }
+        case SuccessRateKind::Float64: {
+            uint64_t bits = lookup.raw_value_bits;
+            double value = 0.0;
+            std::memcpy(&value, &bits, sizeof(value));
+            return value;
+        }
+        case SuccessRateKind::UInt32:
+        default:
+            return dtype_info.max_scale > 1.0
+                ? static_cast<double>(static_cast<uint32_t>(lookup.raw_value_bits)) / dtype_info.max_scale
+                : static_cast<double>(static_cast<uint32_t>(lookup.raw_value_bits));
+    }
+}
+
+std::vector<fs::path> ex_compressed_candidates(const fs::path &zbook_path) {
+    std::vector<fs::path> candidates;
+    fs::path replaced = zbook_path;
+    replaced.replace_extension(EXCompressedResult::kCompressedLayerFileExtension);
+    candidates.push_back(replaced);
+    candidates.push_back(fs::path(zbook_path.string() + EXCompressedResult::kCompressedLayerFileExtension));
+    return candidates;
+}
+
+SearchValue find_ex_value(
+    const std::string &pathname,
+    const std::string &filename,
+    const std::string &pattern_full,
+    uint64_t board,
+    const std::string &success_rate_dtype
+) {
+    const DTypeInfo dtype_info = dtype_info_for_name(success_rate_dtype);
+    const fs::path root(pathname);
+    const fs::path zlut_path = root / (pattern_full + "_.zlut");
+    if (!fs::exists(zlut_path)) {
+        return string_search_value("?");
+    }
+
+    const fs::path zbook_path = root / filename;
+    try {
+        EXCompressedResult::ColdLookupResult lookup;
+        if (fs::exists(zbook_path)) {
+            lookup = EXPrefix36Runtime::lookup_zbook_cold(
+                zbook_path.string(), zlut_path.string(), board);
+        } else {
+            bool found_compressed = false;
+            for (const fs::path &candidate : ex_compressed_candidates(zbook_path)) {
+                if (!fs::exists(candidate)) {
+                    continue;
+                }
+                lookup = EXCompressedResult::lookup_cold(candidate.string(), zlut_path.string(), board);
+                found_compressed = true;
+                break;
+            }
+            if (!found_compressed) {
+                return string_search_value("?");
+            }
+        }
+        return numeric_search_value(normalize_ex_lookup_value(lookup, dtype_info), success_rate_dtype);
+    } catch (...) {
+        return string_search_value("?");
+    }
+}
+
+bool sample_ex_zbook_state(
+    const fs::path &zbook_path,
+    const fs::path &zlut_path,
+    std::mt19937 &rng,
+    uint64_t &state
+) {
+    (void)rng;
+    uint64_t raw = 0;
+    double numeric = 0.0;
+    try {
+        return EXPrefix36Runtime::sample_zbook_state(
+            zbook_path.string(), zlut_path.string(), state, raw, numeric);
+    } catch (...) {
+        return false;
+    }
+}
+
 ReaderMoveResult evaluate_classic_result_candidates(
     ClassicBookReader &reader,
     const BoardMatrix &board_matrix,
@@ -718,6 +816,14 @@ ReaderMoveResult evaluate_classic_result_candidates(
 
 ReaderMoveResult evaluate_advanced_result_candidates(
     AdvancedBookReader &reader,
+    const BoardMatrix &board_matrix,
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &pattern_full,
+    int64_t nums_adjust
+);
+
+ReaderMoveResult evaluate_ex_result_candidates(
+    EXBookReader &reader,
     const BoardMatrix &board_matrix,
     const std::vector<std::pair<std::string, std::string>> &path_list,
     const std::string &pattern_full,
@@ -942,6 +1048,97 @@ ReaderMoveResult evaluate_advanced_result_candidates(
     return {final_results, success_rate_dtype};
 }
 
+ReaderMoveResult evaluate_ex_result_candidates(
+    EXBookReader &reader,
+    const BoardMatrix &board_matrix,
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &pattern_full,
+    int64_t nums_adjust
+) {
+    if (path_list.empty()) {
+        return {question_entries(), {}};
+    }
+    const int64_t nums = static_cast<int64_t>((board_value_sum(board_matrix) + nums_adjust) / 2);
+    if (nums < 0) {
+        return {blank_direction_entries(), {}};
+    }
+
+    const std::string filename = pattern_full + "_" + std::to_string(nums) + ".zbook";
+    const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
+
+    for (const auto &path_entry : path_list) {
+        if (!fs::exists(path_entry.first)) {
+            continue;
+        }
+
+        for (int operation_index : operations) {
+            const BoardMatrix transformed_board = apply_operation(board_matrix, operation_index);
+            const uint64_t encoded = encode_board_matrix(transformed_board);
+            if (!is_pattern(encoded, reader.spec_.pattern_masks)) {
+                continue;
+            }
+
+            std::array<SearchValue, 4> result_values = {
+                none_search_value(),
+                none_search_value(),
+                none_search_value(),
+                none_search_value(),
+            };
+            const auto moved_boards = move_all_dir_for_variant(encoded, reader.is_variant_);
+            for (size_t index = 0; index < moved_boards.size(); ++index) {
+                const uint64_t moved_board = moved_boards[index];
+                if (moved_board == encoded || !is_pattern(moved_board, reader.spec_.pattern_masks)) {
+                    continue;
+                }
+                const SearchValue value = find_ex_value(
+                    path_entry.first,
+                    filename,
+                    pattern_full,
+                    canonical_by_mode(moved_board, reader.spec_.symm_mode),
+                    path_entry.second
+                );
+                if (index == 0U) {
+                    result_values[2] = value;
+                } else if (index == 1U) {
+                    result_values[1] = value;
+                } else if (index == 2U) {
+                    result_values[3] = value;
+                } else {
+                    result_values[0] = value;
+                }
+            }
+
+            std::vector<std::pair<std::string, SearchValue>> adjusted_entries;
+            adjusted_entries.reserve(4);
+            for (size_t ordered_index = 0; ordered_index < kOrderedResultKeys.size(); ++ordered_index) {
+                adjusted_entries.push_back({
+                    adjust_direction(operation_index, std::string(kOrderedResultKeys[ordered_index])),
+                    result_values[ordered_index],
+                });
+            }
+
+            const std::vector<OrderedReaderEntry> sorted_entries = sort_adjusted_entries(adjusted_entries);
+            bool has_numeric = false;
+            double first_numeric = 0.0;
+            for (const auto &entry : sorted_entries) {
+                if (entry.kind == ReaderValueKind::Numeric) {
+                    has_numeric = true;
+                    first_numeric = entry.number;
+                    break;
+                }
+            }
+            if (!has_numeric) {
+                continue;
+            }
+
+            reader.last_operation_index_ = operation_index;
+            return {sorted_entries, path_entry.second};
+        }
+    }
+
+    return {blank_direction_entries(), {}};
+}
+
 uint64_t sample_classic_book_state(
     const std::vector<std::pair<std::string, std::string>> &path_list,
     const std::string &pattern_full,
@@ -1045,6 +1242,47 @@ uint64_t sample_advanced_book_state(
     return 0ULL;
 }
 
+uint64_t sample_ex_book_state(
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &pattern_full,
+    double spawn_rate4
+) {
+    static thread_local std::mt19937 rng(std::random_device{}());
+    for (const auto &path_entry : path_list) {
+        std::vector<int> book_indices = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        const fs::path zlut_path = fs::path(path_entry.first) / (pattern_full + "_.zlut");
+        if (!fs::exists(zlut_path)) {
+            continue;
+        }
+        while (!book_indices.empty()) {
+            std::uniform_int_distribution<size_t> pick(0, book_indices.size() - 1U);
+            const size_t chosen = pick(rng);
+            const int book_id = book_indices[chosen];
+            book_indices.erase(book_indices.begin() + static_cast<ptrdiff_t>(chosen));
+
+            const fs::path zbook_path =
+                fs::path(path_entry.first) / (pattern_full + "_" + std::to_string(book_id) + ".zbook");
+            uint64_t state = 0ULL;
+            if (fs::exists(zbook_path) && sample_ex_zbook_state(zbook_path, zlut_path, rng, state)) {
+                return gen_new_num(state, static_cast<float>(spawn_rate4)).first;
+            }
+            if (!fs::exists(zbook_path)) {
+                for (const fs::path &candidate : ex_compressed_candidates(zbook_path)) {
+                    if (!fs::exists(candidate)) {
+                        continue;
+                    }
+                    uint64_t raw = 0ULL;
+                    double numeric = 0.0;
+                    if (EXCompressedResult::sample_cold(candidate.string(), zlut_path.string(), state, raw, numeric)) {
+                        return gen_new_num(state, static_cast<float>(spawn_rate4)).first;
+                    }
+                }
+            }
+        }
+    }
+    return 0ULL;
+}
+
 } // namespace
 
 ClassicBookReader::ClassicBookReader(PatternSpec spec, bool is_variant)
@@ -1102,6 +1340,33 @@ uint64_t AdvancedBookReader::get_random_state(
     double spawn_rate4
 ) const {
     return sample_advanced_book_state(path_list, pattern_full, spawn_rate4);
+}
+
+EXBookReader::EXBookReader(PatternSpec spec, bool is_variant)
+    : spec_(std::move(spec)),
+      is_variant_(is_variant) {}
+
+ReaderMoveResult EXBookReader::move_on_dic(
+    const std::vector<std::vector<int>> &board,
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &pattern_full,
+    int64_t nums_adjust
+) {
+    BoardMatrix board_matrix{};
+    for (size_t row = 0; row < std::min<size_t>(4U, board.size()); ++row) {
+        for (size_t col = 0; col < std::min<size_t>(4U, board[row].size()); ++col) {
+            board_matrix[row][col] = static_cast<uint32_t>(board[row][col]);
+        }
+    }
+    return evaluate_ex_result_candidates(*this, board_matrix, path_list, pattern_full, nums_adjust);
+}
+
+uint64_t EXBookReader::get_random_state(
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &pattern_full,
+    double spawn_rate4
+) const {
+    return sample_ex_book_state(path_list, pattern_full, spawn_rate4);
 }
 
 double find_classic_value_native(

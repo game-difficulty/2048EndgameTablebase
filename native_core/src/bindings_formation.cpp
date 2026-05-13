@@ -8,6 +8,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "BookSolver.h"
+#include "EXCompressedResult.h"
 #include "ReaderRuntime.h"
 #include "SymmetryUtils.h"
 #include "TrieCompression.h"
@@ -39,6 +40,36 @@ nb::tuple reader_result_to_python(const ReaderMoveResult &result) {
         }
     }
     return nb::make_tuple(entries, result.success_rate_dtype);
+}
+
+nb::dict ex_compress_stats_to_python(const EXCompressedResult::CompressStats &stats) {
+    nb::dict result;
+    result["original_bytes"] = stats.original_bytes;
+    result["compressed_bytes"] = stats.compressed_bytes;
+    result["bucket_block_count"] = stats.bucket_block_count;
+    result["success_block_count"] = stats.success_block_count;
+    result["bucket_raw_bytes"] = stats.bucket_raw_bytes;
+    result["bucket_compressed_bytes"] = stats.bucket_compressed_bytes;
+    result["success_raw_bytes"] = stats.success_raw_bytes;
+    result["success_compressed_bytes"] = stats.success_compressed_bytes;
+    result["compress_seconds"] = stats.compress_seconds;
+    result["ratio"] = stats.ratio();
+    result["save_ratio"] = stats.save_ratio();
+    return result;
+}
+
+nb::dict ex_cold_lookup_to_python(const EXCompressedResult::ColdLookupResult &lookup) {
+    nb::dict result;
+    result["found"] = lookup.found;
+    result["global_dense_index"] = lookup.global_dense_index;
+    result["raw_value_bits"] = lookup.raw_value_bits;
+    result["numeric_value"] = lookup.numeric_value;
+    result["success_kind"] = static_cast<uint32_t>(lookup.success_kind);
+    result["bucket_block_raw_bytes"] = lookup.bucket_block_raw_bytes;
+    result["success_block_raw_bytes"] = lookup.success_block_raw_bytes;
+    result["bucket_block_compressed_bytes"] = lookup.bucket_block_compressed_bytes;
+    result["success_block_compressed_bytes"] = lookup.success_block_compressed_bytes;
+    return result;
 }
 
 } // namespace
@@ -133,6 +164,30 @@ NB_MODULE(formation_core, m) {
         .def(
             "get_random_state",
             &AdvancedBookReader::get_random_state,
+            "path_list"_a,
+            "pattern_full"_a,
+            "spawn_rate4"_a
+        );
+
+    nb::class_<EXBookReader>(m, "EXBookReader")
+        .def(nb::init<PatternSpec, bool>(), "pattern_spec"_a, "is_variant"_a = false)
+        .def(
+            "move_on_dic",
+            [](EXBookReader &reader,
+               const std::vector<std::vector<int>> &board,
+               const std::vector<std::pair<std::string, std::string>> &path_list,
+               const std::string &pattern_full,
+               int64_t nums_adjust) {
+                return reader_result_to_python(reader.move_on_dic(board, path_list, pattern_full, nums_adjust));
+            },
+            "board"_a,
+            "path_list"_a,
+            "pattern_full"_a,
+            "nums_adjust"_a
+        )
+        .def(
+            "get_random_state",
+            &EXBookReader::get_random_state,
             "path_list"_a,
             "pattern_full"_a,
             "spawn_rate4"_a
@@ -237,5 +292,99 @@ NB_MODULE(formation_core, m) {
         "pattern_spec"_a,
         "run_options"_a,
         nb::call_guard<nb::gil_scoped_release>()
+    );
+
+    m.def(
+        "run_pattern_build_zmask",
+        [](const U64Array &arr_init, const PatternSpec &spec, const RunOptions &options) {
+            run_pattern_build_zmask_cpp(to_u64_vector(arr_init), spec, options);
+        },
+        "arr_init"_a,
+        "pattern_spec"_a,
+        "run_options"_a,
+        nb::call_guard<nb::gil_scoped_release>()
+    );
+
+    m.def(
+        "run_pattern_solve_zmask",
+        [](const U64Array &arr_init, const PatternSpec &spec, const RunOptions &options) {
+            run_pattern_solve_zmask_cpp(to_u64_vector(arr_init), spec, options);
+        },
+        "arr_init"_a,
+        "pattern_spec"_a,
+        "run_options"_a,
+        nb::call_guard<nb::gil_scoped_release>()
+    );
+
+    m.def(
+        "run_pattern_solve_zmask_single_layer",
+        [](const U64Array &arr_init, const PatternSpec &spec, const RunOptions &options, int step) {
+            run_pattern_solve_zmask_single_layer_cpp(to_u64_vector(arr_init), spec, options, step);
+        },
+        "arr_init"_a,
+        "pattern_spec"_a,
+        "run_options"_a,
+        "step"_a,
+        nb::call_guard<nb::gil_scoped_release>()
+    );
+
+    m.def(
+        "compress_ex_zbook_result",
+        [](const std::string &zbook_path,
+           const std::string &zlut_path,
+           const std::string &output_path,
+           uint32_t bucket_block_buckets,
+           uint32_t success_block_values,
+           int compression_level) {
+            EXCompressedResult::CompressStats stats;
+            {
+                nb::gil_scoped_release release;
+                stats = EXCompressedResult::compress_zbook_to_ex_result(
+                    zbook_path,
+                    zlut_path,
+                    output_path,
+                    bucket_block_buckets,
+                    success_block_values,
+                    compression_level
+                );
+            }
+            return ex_compress_stats_to_python(stats);
+        },
+        "zbook_path"_a,
+        "zlut_path"_a,
+        "output_path"_a,
+        "bucket_block_buckets"_a = 4096U,
+        "success_block_values"_a = 65536U,
+        "compression_level"_a = 5
+    );
+
+    m.def(
+        "lookup_ex_zbook_result_cold",
+        [](const std::string &compressed_path, const std::string &zlut_path, uint64_t board) {
+            EXCompressedResult::ColdLookupResult result;
+            {
+                nb::gil_scoped_release release;
+                result = EXCompressedResult::lookup_cold(compressed_path, zlut_path, board);
+            }
+            return ex_cold_lookup_to_python(result);
+        },
+        "compressed_path"_a,
+        "zlut_path"_a,
+        "board"_a
+    );
+
+    m.def(
+        "lookup_ex_zbook_cold",
+        [](const std::string &zbook_path, const std::string &zlut_path, uint64_t board) {
+            EXCompressedResult::ColdLookupResult result;
+            {
+                nb::gil_scoped_release release;
+                result = EXCompressedResult::lookup_zbook_cold(zbook_path, zlut_path, board);
+            }
+            return ex_cold_lookup_to_python(result);
+        },
+        "zbook_path"_a,
+        "zlut_path"_a,
+        "board"_a
     );
 }

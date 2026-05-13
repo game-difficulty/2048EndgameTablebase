@@ -36,3 +36,22 @@ void run_pattern_solve_ad_cpp(
     const RunOptions &options,
     bool started_from_generate = false
 );
+
+void run_pattern_build_zmask_cpp(
+    const std::vector<uint64_t> &arr_init,
+    const PatternSpec &spec,
+    const RunOptions &options
+);
+
+void run_pattern_solve_zmask_cpp(
+    const std::vector<uint64_t> &arr_init,
+    const PatternSpec &spec,
+    const RunOptions &options
+);
+
+void run_pattern_solve_zmask_single_layer_cpp(
+    const std::vector<uint64_t> &arr_init,
+    const PatternSpec &spec,
+    const RunOptions &options,
+    int step
+);

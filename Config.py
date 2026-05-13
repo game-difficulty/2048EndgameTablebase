@@ -476,6 +476,7 @@ class SingletonConfig:
             "compress_temp_files": False,
             "SmallTileSumLimit": 96,
             "advanced_algo": False,
+            "zmask_algo": False,
             "chunked_solve": False,
             "direct_io": True,
             "direct_io_queue_depth": 16,
@@ -610,7 +611,7 @@ class SingletonConfig:
             for item in os.listdir(file_path):
                 if not item.startswith(prefix):
                     continue
-                if item.endswith(".book") or item.endswith(".z") or item.endswith("b"):
+                if item.endswith(".book") or item.endswith(".z") or item.endswith("b") or item.endswith(".zbook") or item.endswith(".exzbook"):
                     return True
 
             file_path_list.remove((file_path, success_rate_dtype))
