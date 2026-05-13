@@ -1,1 +1,4 @@
+std::vector<unsigned long, std::allocator<unsigned long> > x86simdsort::argsort<unsigned int>(unsigned int const*, unsigned long, bool, bool)
+std::vector<unsigned long, std::allocator<unsigned long> > x86simdsort::argsort<unsigned long>(unsigned long const*, unsigned long, bool, bool)
+void x86simdsort::qsort<unsigned int>(unsigned int*, unsigned long, bool, bool)
 void x86simdsort::qsort<unsigned long>(unsigned long*, unsigned long, bool, bool)

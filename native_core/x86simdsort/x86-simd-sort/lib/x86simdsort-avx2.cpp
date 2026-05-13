@@ -2,21 +2,33 @@
 
 #include "x86simdsort-static-incl.h"
 #include "x86simdsort-internal.h"
+#include "../src/xss-common-keyvaluesort.hpp"
 
-// 重新定义宏，仅保留 qsort 功能
-#define DEFINE_QSORT_ONLY(type) \
+#define DEFINE_SORT_AND_ARGSORT(type) \
     template <> \
     void qsort(type *arr, size_t arrsize, bool hasnan, bool descending) \
     { \
         x86simdsortStatic::qsort(arr, arrsize, hasnan, descending); \
+    } \
+    template <> \
+    std::vector<size_t> argsort( \
+            const type *arr, size_t arrsize, bool hasnan, bool descending) \
+    { \
+        return x86simdsortStatic::argsort(arr, arrsize, hasnan, descending); \
     }
 
 namespace xss {
 namespace avx2 {
-    /**
-     * 只保留 uint64_t 的快速排序
-     * 这样编译器就不会为 int32, float, double 以及所有的 Key-Value 组合生成 AVX2 代码
-     */
-    DEFINE_QSORT_ONLY(uint64_t)
+    DEFINE_SORT_AND_ARGSORT(uint32_t)
+    DEFINE_SORT_AND_ARGSORT(uint64_t)
 } // namespace avx2
 } // namespace xss
+
+extern "C" void xss_avx2_keyvalue_sort_uint64_uint32(
+    uint64_t *keys,
+    uint32_t *values,
+    size_t count,
+    bool descending
+) {
+    avx2_qsort_kv<uint64_t, uint32_t>(keys, values, static_cast<arrsize_t>(count), false, descending);
+}

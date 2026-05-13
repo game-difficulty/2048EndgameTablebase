@@ -124,18 +124,4 @@ struct Comparator {
     }
 };
 
-template <typename vtype, typename T>
-X86_SIMD_SORT_INLINE bool comparison_func(const T &a, const T &b)
-{
-    return a < b;
-}
-
-template <typename vtype, typename mm_t>
-X86_SIMD_SORT_INLINE void COEX(mm_t &a, mm_t &b)
-{
-    mm_t temp = a;
-    a = vtype::min(a, b);
-    b = vtype::max(temp, b);
-}
-
 #endif // XSS_COMMON_COMPARATORS

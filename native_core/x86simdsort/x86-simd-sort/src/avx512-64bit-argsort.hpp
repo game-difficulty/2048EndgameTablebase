@@ -4,9 +4,10 @@
  * Authors: Raghuveer Devulapalli <raghuveer.devulapalli@intel.com>
  * ****************************************************************/
 
-#ifndef AVX512_QSORT_64BIT
-#define AVX512_QSORT_64BIT
+#ifndef AVX512_ARGSORT_64BIT
+#define AVX512_ARGSORT_64BIT
 
 #include "avx512-64bit-common.h"
+#include "xss-common-argsort.h"
 
-#endif // AVX512_QSORT_64BIT
+#endif // AVX512_ARGSORT_64BIT

@@ -10,44 +10,56 @@
 #include "x86simdsortcpuid.h"
 #include <string>
 
-// --- 1. 基础 CPU 探测函数 (保持不变) ---
 static int check_cpu_feature_support(std::string_view cpufeature) {
     const char *disable_avx512 = std::getenv("XSS_DISABLE_AVX512");
-    if ((cpufeature == "avx512_icl") && (!disable_avx512))
+    if ((cpufeature == "avx512_icl") && (!disable_avx512)) {
         return xss_cpu_supports("avx512f") && xss_cpu_supports("avx512vbmi2")
                 && xss_cpu_supports("avx512bw") && xss_cpu_supports("avx512vl");
-    else if ((cpufeature == "avx512_skx") && (!disable_avx512))
+    }
+    else if ((cpufeature == "avx512_skx") && (!disable_avx512)) {
         return xss_cpu_supports("avx512f") && xss_cpu_supports("avx512dq")
                 && xss_cpu_supports("avx512vl");
-    else if (cpufeature == "avx2")
+    }
+    else if (cpufeature == "avx2") {
         return xss_cpu_supports("avx2");
+    }
     return 0;
 }
 
 static std::string_view find_preferred_cpu(std::initializer_list<std::string_view> cpulist) {
-    for (auto cpu : cpulist) { if (check_cpu_feature_support(cpu)) return cpu; }
+    for (auto cpu : cpulist) {
+        if (check_cpu_feature_support(cpu)) {
+            return cpu;
+        }
+    }
     return "scalar";
 }
 
-constexpr bool dispatch_requested(std::string_view cpurequested, std::initializer_list<std::string_view> cpulist) {
-    for (auto cpu : cpulist) { if (cpu.find(cpurequested) != std::string_view::npos) return true; }
+constexpr bool dispatch_requested(std::string_view cpurequested,
+                                  std::initializer_list<std::string_view> cpulist) {
+    for (auto cpu : cpulist) {
+        if (cpu.find(cpurequested) != std::string_view::npos) {
+            return true;
+        }
+    }
     return false;
 }
 
-// --- 2. 核心宏重构 ---
 namespace x86simdsort {
 
 #define CAT_(a, b) a##b
 #define CAT(a, b) CAT_(a, b)
+#define ISA_LIST(...) std::initializer_list<std::string_view> { __VA_ARGS__ }
 
-// 步骤 A: 显式特化声明 (告知编译器：别急着实例化，我要自己写实现)
-#define PRE_DECLARE_SPECIALIZATION(TYPE) \
+#define PRE_DECLARE_QSORT(TYPE) \
     template <> XSS_EXPORT_SYMBOL void qsort<TYPE>(TYPE *, size_t, bool, bool);
 
-// 步骤 B: 定义内部函数指针和分发解析器
-#define DEFINE_DISPATCHER(TYPE, ISA) \
+#define PRE_DECLARE_ARGSORT(TYPE) \
+    template <> XSS_EXPORT_SYMBOL std::vector<size_t> argsort<TYPE>(const TYPE *, size_t, bool, bool);
+
+#define DEFINE_QSORT_DISPATCHER(TYPE, ISA) \
     static void (*internal_qsort##TYPE)(TYPE *, size_t, bool, bool) = nullptr; \
-    static XSS_ATTRIBUTE_CONSTRUCTOR void resolve_qsort_##TYPE(void) { \
+    static XSS_ATTRIBUTE_CONSTRUCTOR void CAT(resolve_qsort_, TYPE)(void) { \
         xss_cpu_init(); \
         std::string_view preferred_cpu = find_preferred_cpu(ISA); \
         internal_qsort##TYPE = &xss::scalar::qsort<TYPE>; \
@@ -57,28 +69,63 @@ namespace x86simdsort {
                 return; \
             } \
         } \
-        if (preferred_cpu.find("avx2") != std::string_view::npos) { \
-            internal_qsort##TYPE = &xss::avx2::qsort<TYPE>; \
+        if constexpr (dispatch_requested("avx2", ISA)) { \
+            if (preferred_cpu.find("avx2") != std::string_view::npos) { \
+                internal_qsort##TYPE = &xss::avx2::qsort<TYPE>; \
+            } \
         } \
     }
 
-// 步骤 C: 真正的特化实现 (外部调用的入口)
-#define IMPLEMENT_SPECIALIZATION(TYPE) \
+#define DEFINE_ARGSORT_DISPATCHER(TYPE, ISA) \
+    static std::vector<size_t> (*internal_argsort##TYPE)(const TYPE *, size_t, bool, bool) = nullptr; \
+    static XSS_ATTRIBUTE_CONSTRUCTOR void CAT(resolve_argsort_, TYPE)(void) { \
+        xss_cpu_init(); \
+        std::string_view preferred_cpu = find_preferred_cpu(ISA); \
+        internal_argsort##TYPE = &xss::scalar::argsort<TYPE>; \
+        if constexpr (dispatch_requested("avx512", ISA)) { \
+            if (preferred_cpu.find("avx512") != std::string_view::npos) { \
+                internal_argsort##TYPE = &xss::avx512::argsort<TYPE>; \
+                return; \
+            } \
+        } \
+        if constexpr (dispatch_requested("avx2", ISA)) { \
+            if (preferred_cpu.find("avx2") != std::string_view::npos) { \
+                internal_argsort##TYPE = &xss::avx2::argsort<TYPE>; \
+            } \
+        } \
+    }
+
+#define IMPLEMENT_QSORT_SPECIALIZATION(TYPE) \
     template <> \
     void XSS_EXPORT_SYMBOL qsort<TYPE>(TYPE *arr, size_t arrsize, bool hasnan, bool descending) { \
-        if (!internal_qsort##TYPE) { resolve_qsort_##TYPE(); } \
+        if (internal_qsort##TYPE == nullptr) { \
+            CAT(resolve_qsort_, TYPE)(); \
+        } \
         internal_qsort##TYPE(arr, arrsize, hasnan, descending); \
     }
 
-// --- 3. 严格顺序执行 ---
+#define IMPLEMENT_ARGSORT_SPECIALIZATION(TYPE) \
+    template <> \
+    std::vector<size_t> XSS_EXPORT_SYMBOL argsort<TYPE>(const TYPE *arr, size_t arrsize, bool hasnan, bool descending) { \
+        if (internal_argsort##TYPE == nullptr) { \
+            CAT(resolve_argsort_, TYPE)(); \
+        } \
+        return internal_argsort##TYPE(arr, arrsize, hasnan, descending); \
+    }
 
-// 1. 先进行特化预声明
-PRE_DECLARE_SPECIALIZATION(uint64_t)
+PRE_DECLARE_QSORT(uint32_t)
+PRE_DECLARE_QSORT(uint64_t)
+PRE_DECLARE_ARGSORT(uint32_t)
+PRE_DECLARE_ARGSORT(uint64_t)
 
-// 2. 定义分发逻辑
-DEFINE_DISPATCHER(uint64_t, (std::initializer_list<std::string_view>{"avx512_skx", "avx2"}))
+DEFINE_QSORT_DISPATCHER(uint32_t, ISA_LIST("avx512_skx", "avx2"))
+DEFINE_QSORT_DISPATCHER(uint64_t, ISA_LIST("avx512_skx", "avx2"))
+DEFINE_ARGSORT_DISPATCHER(uint32_t, ISA_LIST("avx512_skx", "avx2"))
+DEFINE_ARGSORT_DISPATCHER(uint64_t, ISA_LIST("avx512_skx", "avx2"))
 
-// 3. 最后写实现代码
-IMPLEMENT_SPECIALIZATION(uint64_t)
+IMPLEMENT_QSORT_SPECIALIZATION(uint32_t)
+IMPLEMENT_QSORT_SPECIALIZATION(uint64_t)
+IMPLEMENT_ARGSORT_SPECIALIZATION(uint32_t)
+IMPLEMENT_ARGSORT_SPECIALIZATION(uint64_t)
 
 } // namespace x86simdsort

@@ -1,105 +1,81 @@
 #ifndef X86SIMDSORT_CPUID_H
 #define X86SIMDSORT_CPUID_H
 
-#include <cstring>
-
 #ifdef _MSC_VER
 #include <intrin.h>
+#include <string>
+#include <unordered_map>
+
+static std::unordered_map<std::string, bool> xss_cpu_features;
+
+static bool os_supports_avx()
+{
+    int cpuInfo[4];
+    __cpuid(cpuInfo, 1);
+
+    bool osxsaveSupported = (cpuInfo[2] & (1 << 27)) != 0; // OSXSAVE bit
+    bool avxSupported = (cpuInfo[2] & (1 << 28)) != 0; // AVX bit
+    if (!(avxSupported && osxsaveSupported)) return false;
+
+    // Check XCR0[2:1] (XMM and YMM state)
+    unsigned long long xcr0 = _xgetbv(0);
+    return (xcr0 & 0x6) == 0x6;
+}
+
+static bool os_supports_avx512()
+{
+    if (!os_supports_avx()) return false;
+
+    // Need XCR0[7:5] = opmask/ZMM/YMM state enabled
+    unsigned long long xcr0 = _xgetbv(0);
+    return (xcr0 & 0xE0) == 0xE0;
+}
+
+static void xss_cpu_init()
+{
+    int cpuInfo[4];
+    __cpuid(cpuInfo, 0);
+    int maxLeaf = cpuInfo[0];
+
+    bool hasAVX2 = false;
+    bool hasAVX512F = false, hasAVX512DQ = false, hasAVX512BW = false,
+         hasAVX512VL = false;
+    bool hasAVX512VBMI2 = false, hasAVX512FP16 = false;
+
+    if (maxLeaf >= 7) {
+        __cpuidex(cpuInfo, 7, 0);
+
+        // EBX bits
+        hasAVX2 = os_supports_avx() && (cpuInfo[1] & (1 << 5));
+        hasAVX512F = os_supports_avx512() && (cpuInfo[1] & (1 << 16));
+        hasAVX512DQ = os_supports_avx512() && (cpuInfo[1] & (1 << 17));
+        hasAVX512BW = os_supports_avx512() && (cpuInfo[1] & (1 << 30));
+        hasAVX512VL = os_supports_avx512() && (cpuInfo[1] & (1 << 31));
+
+        // ECX bits
+        hasAVX512VBMI2 = os_supports_avx512() && (cpuInfo[2] & (1 << 6));
+
+        // EDX bits
+        hasAVX512FP16 = os_supports_avx512() && (cpuInfo[3] & (1 << 23));
+    }
+
+    xss_cpu_features["avx2"] = hasAVX2;
+    xss_cpu_features["avx512f"] = hasAVX512F;
+    xss_cpu_features["avx512dq"] = hasAVX512DQ;
+    xss_cpu_features["avx512bw"] = hasAVX512BW;
+    xss_cpu_features["avx512vl"] = hasAVX512VL;
+    xss_cpu_features["avx512vbmi2"] = hasAVX512VBMI2;
+    xss_cpu_features["avx512fp16"] = hasAVX512FP16;
+}
+
+inline bool xss_cpu_supports(const char *feature)
+{
+    auto it = xss_cpu_features.find(feature);
+    return it != xss_cpu_features.end() && it->second;
+}
+
 #else
-#include <cpuid.h>
-#endif
-
-namespace xss_cpuid {
-
-inline void init() {}
-
-#ifdef _MSC_VER
-inline unsigned long long read_xcr0() {
-    return _xgetbv(0);
-}
-
-inline void cpuid(int leaf, int subleaf, int regs[4]) {
-    __cpuidex(regs, leaf, subleaf);
-}
-
-inline int max_leaf() {
-    int regs[4] = {0, 0, 0, 0};
-    __cpuidex(regs, 0, 0);
-    return regs[0];
-}
-#else
-inline unsigned long long read_xcr0() {
-    unsigned int eax = 0;
-    unsigned int edx = 0;
-    __asm__ volatile("xgetbv" : "=a"(eax), "=d"(edx) : "c"(0));
-    return (static_cast<unsigned long long>(edx) << 32) | eax;
-}
-
-inline void cpuid(int leaf, int subleaf, int regs[4]) {
-    unsigned int eax = 0;
-    unsigned int ebx = 0;
-    unsigned int ecx = 0;
-    unsigned int edx = 0;
-    __cpuid_count(leaf, subleaf, eax, ebx, ecx, edx);
-    regs[0] = static_cast<int>(eax);
-    regs[1] = static_cast<int>(ebx);
-    regs[2] = static_cast<int>(ecx);
-    regs[3] = static_cast<int>(edx);
-}
-
-inline int max_leaf() {
-    return static_cast<int>(__get_cpuid_max(0, nullptr));
-}
-#endif
-
-inline bool os_supports_avx(bool require_zmm) {
-    int regs[4] = {0, 0, 0, 0};
-    cpuid(1, 0, regs);
-    if ((regs[2] & (1 << 27)) == 0) {
-        return false;
-    }
-
-    const unsigned long long xcr0 = read_xcr0();
-    constexpr unsigned long long xmm_ymm = 0x2ULL | 0x4ULL;
-    constexpr unsigned long long zmm = 0x20ULL | 0x40ULL | 0x80ULL;
-    return require_zmm ? ((xcr0 & (xmm_ymm | zmm)) == (xmm_ymm | zmm))
-                       : ((xcr0 & xmm_ymm) == xmm_ymm);
-}
-
-inline bool has_feature(const char *feature) {
-    if (feature == nullptr || max_leaf() < 7) {
-        return false;
-    }
-
-    int regs[4] = {0, 0, 0, 0};
-    cpuid(7, 0, regs);
-    const int ebx = regs[1];
-    const int ecx = regs[2];
-
-    if (std::strcmp(feature, "avx2") == 0) {
-        return os_supports_avx(false) && ((ebx & (1 << 5)) != 0);
-    }
-    if (std::strcmp(feature, "avx512f") == 0) {
-        return os_supports_avx(true) && ((ebx & (1 << 16)) != 0);
-    }
-    if (std::strcmp(feature, "avx512dq") == 0) {
-        return os_supports_avx(true) && ((ebx & (1 << 17)) != 0);
-    }
-    if (std::strcmp(feature, "avx512bw") == 0) {
-        return os_supports_avx(true) && ((ebx & (1 << 30)) != 0);
-    }
-    if (std::strcmp(feature, "avx512vl") == 0) {
-        return os_supports_avx(true) && ((ebx & (1 << 31)) != 0);
-    }
-    if (std::strcmp(feature, "avx512vbmi2") == 0) {
-        return os_supports_avx(true) && ((ecx & (1 << 6)) != 0);
-    }
-    return false;
-}
-
-} // namespace xss_cpuid
-
-#define xss_cpu_init() xss_cpuid::init()
-#define xss_cpu_supports(feature) xss_cpuid::has_feature(feature)
-
+#define xss_cpu_init() __builtin_cpu_init()
+#define xss_cpu_supports(feature) __builtin_cpu_supports(feature)
+#endif // _MSC_VER
 #endif // X86SIMDSORT_CPUID_H
