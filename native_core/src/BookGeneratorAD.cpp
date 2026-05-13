@@ -5,6 +5,7 @@
 #include "BookGenerator.h"
 #include "BookGeneratorUtils.h"
 #include "Calculator.h"
+#include "CanonicalBatch.h"
 #include "CompressionBridge.h"
 #include "FileIOUtils.h"
 #include "Formation.h"
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -47,6 +49,95 @@ void debug_log(const std::string &message) {
         nb::module_::import_("Config").attr("logger").attr("debug")(nb::str(message.c_str()));
     } catch (...) {
     }
+}
+
+std::string now_string() {
+    std::time_t now = std::time(nullptr);
+    std::tm local_time{};
+#ifdef _WIN32
+    localtime_s(&local_time, &now);
+#else
+    localtime_r(&local_time, &now);
+#endif
+    std::ostringstream oss;
+    oss << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S");
+    return oss.str();
+}
+
+double throughput_mbps_for(uint64_t count, double seconds) {
+    return seconds > 0.0 ? static_cast<double>(count) / seconds / 1e6 : 0.0;
+}
+
+std::string ad_generate_stats_file_path(const RunOptions &options) {
+    return options.pathname + "ad_generate_stats.csv";
+}
+
+std::string ad_generate_stats_header() {
+    return "stage,step,input_live,arr1_raw,arr2_raw,arr1_unique,arr2_unique,output_live,length_factor,total_seconds,throughput_mbps,compute_seconds,compute_throughput_mbps,generate_seconds,sort_unique_seconds,merge_seconds,validate_seconds,write_seconds,time";
+}
+
+void ensure_ad_generate_stats_header(const RunOptions &options) {
+    const std::string path = ad_generate_stats_file_path(options);
+    if (fs::exists(path)) {
+        std::ifstream in(path);
+        std::string first_line;
+        if (std::getline(in, first_line) && first_line == ad_generate_stats_header()) {
+            return;
+        }
+        in.close();
+        std::error_code ec;
+        fs::remove(path, ec);
+    }
+    std::ofstream file(path, std::ios::app);
+    file << ad_generate_stats_header() << "\n";
+}
+
+struct AdGenerateStatsRecord {
+    std::string stage;
+    int step = -1;
+    uint64_t input_live = 0U;
+    uint64_t arr1_raw = 0U;
+    uint64_t arr2_raw = 0U;
+    uint64_t arr1_unique = 0U;
+    uint64_t arr2_unique = 0U;
+    uint64_t output_live = 0U;
+    double length_factor = 0.0;
+    double generate_seconds = 0.0;
+    double sort_unique_seconds = 0.0;
+    double merge_seconds = 0.0;
+    double validate_seconds = 0.0;
+    double write_seconds = 0.0;
+};
+
+void append_ad_generate_stats_record(
+    const RunOptions &options,
+    const AdGenerateStatsRecord &record
+) {
+    ensure_ad_generate_stats_header(options);
+    const double compute_seconds =
+        record.generate_seconds + record.sort_unique_seconds + record.merge_seconds + record.validate_seconds;
+    const double total_seconds = compute_seconds + record.write_seconds;
+    std::ofstream file(ad_generate_stats_file_path(options), std::ios::app);
+    file << record.stage << ","
+         << record.step << ","
+         << record.input_live << ","
+         << record.arr1_raw << ","
+         << record.arr2_raw << ","
+         << record.arr1_unique << ","
+         << record.arr2_unique << ","
+         << record.output_live << ","
+         << std::fixed << std::setprecision(6)
+         << record.length_factor << ","
+         << total_seconds << ","
+         << throughput_mbps_for(record.output_live, total_seconds) << ","
+         << compute_seconds << ","
+         << throughput_mbps_for(record.output_live, compute_seconds) << ","
+         << record.generate_seconds << ","
+         << record.sort_unique_seconds << ","
+         << record.merge_seconds << ","
+         << record.validate_seconds << ","
+         << record.write_seconds << ","
+         << now_string() << "\n";
 }
 
 void log_generation_performance(int step_index, double t0, double t1, double t2, double t3, size_t layer_size) {
@@ -778,30 +869,7 @@ void transform_boards_batch(const uint64_t *src, uint64_t *dst, size_t count, Tr
 }
 
 void apply_canonical_batch(const uint64_t *src, uint64_t *dst, size_t count, int symm_mode) {
-    switch (static_cast<SymmMode>(symm_mode)) {
-        case SymmMode::Full:
-            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_full(board); });
-            break;
-        case SymmMode::Diagonal:
-            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_diagonal(board); });
-            break;
-        case SymmMode::Horizontal:
-            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_horizontal(board); });
-            break;
-        case SymmMode::Min33:
-            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_min33(board); });
-            break;
-        case SymmMode::Min24:
-            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_min24(board); });
-            break;
-        case SymmMode::Min34:
-            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_min34(board); });
-            break;
-        case SymmMode::Identity:
-        default:
-            transform_boards_batch(src, dst, count, [](uint64_t board) { return Calculator::canonical_identity(board); });
-            break;
-    }
+    CanonicalBatch::canonicalize_by_mode(src, dst, count, symm_mode);
 }
 
 size_t filter_pattern_matching_boards(
@@ -1024,6 +1092,7 @@ GenBoardsAdResult gen_boards_ad_scalar(
             if (buffer1_count == 0) {
                 return;
             }
+            CanonicalBatch::canonicalize_inplace(buffer1.data(), buffer1_count, spec.symm_mode);
             flush_candidate_buffer_scalar(buffer1.data(), kinds1.data(), buffer1_count, hashmap1.data(), hashmap1_mask, accepted);
             process_buffered_accepted_boards(
                 accepted,
@@ -1043,6 +1112,7 @@ GenBoardsAdResult gen_boards_ad_scalar(
             if (buffer2_count == 0) {
                 return;
             }
+            CanonicalBatch::canonicalize_inplace(buffer2.data(), buffer2_count, spec.symm_mode);
             flush_candidate_buffer_scalar(buffer2.data(), kinds2.data(), buffer2_count, hashmap2.data(), hashmap2_mask, accepted);
             process_buffered_accepted_boards(
                 accepted,
@@ -1088,7 +1158,7 @@ GenBoardsAdResult gen_boards_ad_scalar(
                         if (newt == t1 || !is_pattern(newt, spec.pattern_masks)) {
                             continue;
                         }
-                        buffer1[buffer1_count] = apply_canonical(newt, spec.symm_mode);
+                        buffer1[buffer1_count] = newt;
                         kinds1[buffer1_count] = static_cast<uint8_t>(
                             moves2_mask_new_tile[move_index] ? BufferedBaseKind::Derive : BufferedBaseKind::Plain
                         );
@@ -1111,7 +1181,7 @@ GenBoardsAdResult gen_boards_ad_scalar(
                         if (newt == t1 || !is_pattern(newt, spec.pattern_masks)) {
                             continue;
                         }
-                        buffer2[buffer2_count] = apply_canonical(newt, spec.symm_mode);
+                        buffer2[buffer2_count] = newt;
                         kinds2[buffer2_count] = static_cast<uint8_t>(
                             moves4_mask_new_tile[move_index] ? BufferedBaseKind::Derive : BufferedBaseKind::Plain
                         );
@@ -1188,6 +1258,7 @@ GenBoardsAdResult gen_boards_ad_avx512(
             if (buffer1_count == 0) {
                 return;
             }
+            CanonicalBatch::canonicalize_inplace(buffer1.data(), buffer1_count, spec.symm_mode);
             flush_candidate_buffer_avx512(buffer1.data(), kinds1.data(), buffer1_count, hashmap1.data(), hashmap1_mask, accepted);
             process_buffered_accepted_boards(
                 accepted,
@@ -1207,6 +1278,7 @@ GenBoardsAdResult gen_boards_ad_avx512(
             if (buffer2_count == 0) {
                 return;
             }
+            CanonicalBatch::canonicalize_inplace(buffer2.data(), buffer2_count, spec.symm_mode);
             flush_candidate_buffer_avx512(buffer2.data(), kinds2.data(), buffer2_count, hashmap2.data(), hashmap2_mask, accepted);
             process_buffered_accepted_boards(
                 accepted,
@@ -1253,7 +1325,7 @@ GenBoardsAdResult gen_boards_ad_avx512(
                         if (newt == t1 || !is_pattern(newt, spec.pattern_masks)) {
                             continue;
                         }
-                        buffer1[buffer1_count] = apply_canonical(newt, spec.symm_mode);
+                        buffer1[buffer1_count] = newt;
                         kinds1[buffer1_count] = static_cast<uint8_t>(
                             moves2_mask_new_tile[move_index] ? BufferedBaseKind::Derive : BufferedBaseKind::Plain
                         );
@@ -1276,7 +1348,7 @@ GenBoardsAdResult gen_boards_ad_avx512(
                         if (newt == t1 || !is_pattern(newt, spec.pattern_masks)) {
                             continue;
                         }
-                        buffer2[buffer2_count] = apply_canonical(newt, spec.symm_mode);
+                        buffer2[buffer2_count] = newt;
                         kinds2[buffer2_count] = static_cast<uint8_t>(
                             moves4_mask_new_tile[move_index] ? BufferedBaseKind::Derive : BufferedBaseKind::Plain
                         );
@@ -1319,6 +1391,21 @@ bool env_flag_enabled(const char *name) {
         return false;
     }
     return value[0] != '0' && value[0] != 'f' && value[0] != 'F' && value[0] != 'n' && value[0] != 'N';
+}
+
+bool ad_validate_step_trigger(int step, uint32_t ini_board_sum, const AdvancedMaskParam &param) {
+    return ((step + static_cast<int>(ini_board_sum % 64U / 2U)) % 32) ==
+        ((static_cast<int>(param.small_tile_sum_limit / 2U)) % 32) + 1;
+}
+
+double post_validate_length_factor_floor(int step, uint32_t ini_board_sum, const AdvancedMaskParam &param) {
+    if (step > 1 && ad_validate_step_trigger(step - 1, ini_board_sum, param)) {
+        return 2.25;
+    }
+    if (step > 2 && ad_validate_step_trigger(step - 2, ini_board_sum, param)) {
+        return 1.60;
+    }
+    return 0.0;
 }
 
 GenBoardsAdDispatch resolve_gen_boards_ad_dispatch() {
@@ -1378,7 +1465,8 @@ GenBoardsBigAdResult gen_boards_big_ad(
     int n,
     std::vector<std::vector<double>> length_factors_list,
     double length_factor_multiplier,
-    bool isfree
+    bool isfree,
+    double length_factor_floor
 ) {
     size_t segs_count = length_factors_list.size();
     std::vector<std::vector<uint64_t>> arr1s;
@@ -1399,6 +1487,7 @@ GenBoardsBigAdResult gen_boards_big_ad(
         double length_factor = BookGenerator::predict_next_length_factor_quadratic(length_factors);
         length_factor *= arr0t.size > static_cast<size_t>(1e8) ? 1.15 : 1.2;
         length_factor *= length_factor_multiplier;
+        length_factor = std::max(length_factor, length_factor_floor);
 
         GenBoardsAdResult result = gen_boards_ad(arr0t, spec, hashmap1, hashmap2, board_sum, tiles_table, param, n, length_factor, isfree);
         validate_length_and_balance(
@@ -1474,6 +1563,9 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
     }
     const uint32_t progress_total = build_progress_total(options);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
+    ensure_ad_generate_stats_header(options);
+    AdGenerateStatsRecord total_record;
+    total_record.stage = "_total";
 
     for (int i = 1; i < options.steps - 1; ++i) {
         RestartResult restart = handle_restart_ad(i, options.pathname, arr_init, started, io_config, options.compress_temp_files);
@@ -1490,11 +1582,19 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
         FormationProgress::update_build_progress(static_cast<uint32_t>(i), progress_total);
 
         uint32_t board_sum = static_cast<uint32_t>(2 * i + ini_board_sum - 2);
+        AdGenerateStatsRecord stats_record;
+        bool has_stats_record = false;
+        stats_record.step = i;
+        stats_record.input_live = static_cast<uint64_t>(d0.size());
+        const double length_factor_floor = post_validate_length_factor_floor(i, ini_board_sum, masker.param);
         if (d0.size() < init_params.segment_size) {
             double t0 = wall_time_seconds();
             double length_factor = BookGenerator::predict_next_length_factor_quadratic(init_params.length_factors);
             length_factor *= d0.size() > static_cast<size_t>(1e8) ? 1.15 : 1.2;
             length_factor *= init_params.length_factor_multiplier;
+            length_factor = std::max(length_factor, length_factor_floor);
+            stats_record.stage = "normal";
+            stats_record.length_factor = length_factor;
             if (hashmap1.empty()) {
                 BookGenerator::update_hashmap_length(hashmap1, d0.size());
                 BookGenerator::update_hashmap_length(hashmap2, d0.size());
@@ -1534,6 +1634,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
                 result.total_arr2,
                 n
             );
+            stats_record.arr1_raw = static_cast<uint64_t>(result.total_arr1);
+            stats_record.arr2_raw = static_cast<uint64_t>(result.total_arr2);
+            stats_record.arr1_unique = static_cast<uint64_t>(unique_arr1_length);
+            stats_record.arr2_unique = static_cast<uint64_t>(unique_arr2_length);
             std::vector<uint64_t> next_d1t(result_arr1, result_arr1 + unique_arr1_length);
             std::vector<uint64_t> next_d2(result_arr2, result_arr2 + unique_arr2_length);
             double t2 = wall_time_seconds();
@@ -1550,7 +1654,11 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
             d0 = std::move(d1);
             d1 = std::move(next_d2);
             double t3 = wall_time_seconds();
-            log_generation_performance(i, t0, t1, t2, t3, d0.size());
+            stats_record.output_live = static_cast<uint64_t>(d0.size());
+            stats_record.generate_seconds = t1 - t0;
+            stats_record.sort_unique_seconds = t2 - t1;
+            stats_record.merge_seconds = t3 - t2;
+            has_stats_record = true;
 
             if (!hashmap1.empty()) {
                 BookGenerator::update_hashmap_length(hashmap1, d1.size());
@@ -1566,8 +1674,9 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
             }
             GenBoardsBigAdResult big_result = gen_boards_big_ad(
                 d0, spec, hashmap1, hashmap2, board_sum, masker.tiles_combination_table, masker.param, n,
-                init_params.length_factors_list, init_params.length_factor_multiplier, options.is_free
+                init_params.length_factors_list, init_params.length_factor_multiplier, options.is_free, length_factor_floor
             );
+            stats_record.stage = "big";
 
             std::vector<uint64_t> pivots;
             for (int pt = 1; pt < n; ++pt) {
@@ -1577,27 +1686,65 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
                     pivots.push_back(d0[static_cast<size_t>(pt) * d0.size() / static_cast<size_t>(n)]);
                 }
             }
+            uint64_t big_arr1_raw = 0U;
+            uint64_t big_arr2_raw = 0U;
+            for (const auto &part : big_result.arr1s) {
+                big_arr1_raw += static_cast<uint64_t>(part.size());
+            }
+            for (const auto &part : big_result.arr2s) {
+                big_arr2_raw += static_cast<uint64_t>(part.size());
+            }
             big_result.arr1s.push_back(std::move(d1));
             d1 = BookGeneratorUtils::merge_deduplicate_all_concat(big_result.arr2s, pivots, n);
             d0 = BookGeneratorUtils::merge_deduplicate_all_concat(big_result.arr1s, pivots, n);
             double t3 = wall_time_seconds();
-            log_generation_performance(i, big_result.t0, big_result.t0 + big_result.gen_time, big_result.t2, t3, d0.size());
+            stats_record.arr1_raw = big_arr1_raw;
+            stats_record.arr2_raw = big_arr2_raw;
+            stats_record.arr1_unique = static_cast<uint64_t>(d0.size());
+            stats_record.arr2_unique = static_cast<uint64_t>(d1.size());
+            stats_record.output_live = static_cast<uint64_t>(d0.size());
+            stats_record.generate_seconds = big_result.gen_time;
+            stats_record.sort_unique_seconds = big_result.t2 - (big_result.t0 + big_result.gen_time);
+            stats_record.merge_seconds = t3 - big_result.t2;
+            has_stats_record = true;
             init_params.length_factors_list = std::move(big_result.length_factors_list);
             init_params.length_factor_multiplier = big_result.length_factor_multiplier;
             init_params.length_factors = BookGenerator::harmonic_mean_by_column(init_params.length_factors_list);
             save_length_factors(init_params.length_factors_list_path, init_params.length_factors_list);
         }
 
-        if (((i + static_cast<int>(ini_board_sum % 64U / 2U)) % 32) == ((static_cast<int>(masker.param.small_tile_sum_limit / 2U)) % 32) + 1) {
+        const double validate_t0 = wall_time_seconds();
+        if (ad_validate_step_trigger(i, ini_board_sum, masker.param)) {
             d0 = validate_layer(d0, board_sum + 2U, masker.tiles_combination_table, masker.param, n);
             d1 = validate_layer(d1, board_sum + 4U, masker.tiles_combination_table, masker.param, n);
             debug_log("validate step " + std::to_string(i));
         }
+        stats_record.validate_seconds = wall_time_seconds() - validate_t0;
 
         clear_u64_buffer(hashmap1, n);
+        const double write_t0 = wall_time_seconds();
         write_raw_file(options.pathname + std::to_string(i), d0, io_config, options.compress_temp_files);
+        stats_record.write_seconds = wall_time_seconds() - write_t0;
+        if (has_stats_record) {
+            append_ad_generate_stats_record(options, stats_record);
+            total_record.input_live += stats_record.input_live;
+            total_record.arr1_raw += stats_record.arr1_raw;
+            total_record.arr2_raw += stats_record.arr2_raw;
+            total_record.arr1_unique += stats_record.arr1_unique;
+            total_record.arr2_unique += stats_record.arr2_unique;
+            total_record.output_live += stats_record.output_live;
+            total_record.generate_seconds += stats_record.generate_seconds;
+            total_record.sort_unique_seconds += stats_record.sort_unique_seconds;
+            total_record.merge_seconds += stats_record.merge_seconds;
+            total_record.validate_seconds += stats_record.validate_seconds;
+            total_record.write_seconds += stats_record.write_seconds;
+        }
         std::swap(hashmap1, hashmap2);
     }
+    total_record.length_factor = total_record.input_live > 0U
+        ? static_cast<double>(total_record.output_live) / static_cast<double>(total_record.input_live)
+        : 0.0;
+    append_ad_generate_stats_record(options, total_record);
     return {started, std::move(d0), std::move(d1)};
 }
 

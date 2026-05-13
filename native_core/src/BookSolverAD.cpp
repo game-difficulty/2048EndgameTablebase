@@ -201,6 +201,69 @@ void log_recalculate_performance(int step_index, double t0, double t1, double t2
     debug_log(phase_stream.str());
 }
 
+double throughput_mbps_for(uint64_t count, double seconds) {
+    return seconds > 0.0 ? static_cast<double>(count) / seconds / 1e6 : 0.0;
+}
+
+std::array<uint8_t, 256> make_empty_nibble_byte_table() {
+    std::array<uint8_t, 256> table{};
+    for (uint32_t value = 0; value < table.size(); ++value) {
+        uint8_t mask = 0U;
+        if ((value & 0xFU) == 0U) {
+            mask |= 1U;
+        }
+        if (((value >> 4U) & 0xFU) == 0U) {
+            mask |= 2U;
+        }
+        table[value] = mask;
+    }
+    return table;
+}
+
+const std::array<uint8_t, 256> &empty_nibble_byte_table() {
+    static const std::array<uint8_t, 256> table = make_empty_nibble_byte_table();
+    return table;
+}
+
+inline uint32_t empty_cell_mask16(uint64_t board) {
+    const auto &table = empty_nibble_byte_table();
+    uint32_t mask = 0U;
+    mask |= static_cast<uint32_t>(table[board & 0xFFULL]);
+    mask |= static_cast<uint32_t>(table[(board >> 8U) & 0xFFULL]) << 2U;
+    mask |= static_cast<uint32_t>(table[(board >> 16U) & 0xFFULL]) << 4U;
+    mask |= static_cast<uint32_t>(table[(board >> 24U) & 0xFFULL]) << 6U;
+    mask |= static_cast<uint32_t>(table[(board >> 32U) & 0xFFULL]) << 8U;
+    mask |= static_cast<uint32_t>(table[(board >> 40U) & 0xFFULL]) << 10U;
+    mask |= static_cast<uint32_t>(table[(board >> 48U) & 0xFFULL]) << 12U;
+    mask |= static_cast<uint32_t>(table[(board >> 56U) & 0xFFULL]) << 14U;
+    return mask;
+}
+
+inline uint32_t popcount_u32(uint32_t value) {
+#if defined(__GNUC__) || defined(__clang__)
+    return static_cast<uint32_t>(__builtin_popcount(value));
+#else
+    uint32_t count = 0U;
+    while (value != 0U) {
+        value &= value - 1U;
+        ++count;
+    }
+    return count;
+#endif
+}
+
+inline uint32_t ctz_u32(uint32_t value) {
+#if defined(__GNUC__) || defined(__clang__)
+    return static_cast<uint32_t>(__builtin_ctz(value));
+#else
+    uint32_t bit = 0U;
+    while (((value >> bit) & 1U) == 0U) {
+        ++bit;
+    }
+    return bit;
+#endif
+}
+
 int effective_num_threads(const RunOptions &options) {
     if (options.num_threads > 0) {
         return options.num_threads;
@@ -269,13 +332,85 @@ void write_binary_vector(
     FileIOUtils::write_binary_vector_direct(path, data, config);
 }
 
-template <typename T> void ensure_stats_header(const RunOptions &options) {
-    const std::string path = options.pathname + "stats.txt";
+std::string ad_solve_stats_file_path(const RunOptions &options) {
+    return options.pathname + "ad_solve_stats.csv";
+}
+
+std::string ad_solve_stats_header() {
+    return "stage,step,input_live,post_zero_live,deletion_threshold,max_success,total_seconds,throughput_mbps,compute_seconds,compute_throughput_mbps,current_read_seconds,expand_seconds,index_seconds,recalculate_seconds,compact_seconds,current_write_seconds,future_compact_seconds,future_write_seconds,compress_seconds,time";
+}
+
+void ensure_ad_solve_stats_header(const RunOptions &options) {
+    {
+        std::error_code ec;
+        fs::remove(options.pathname + "stats.txt", ec);
+    }
+    const std::string path = ad_solve_stats_file_path(options);
     if (fs::exists(path)) {
-        return;
+        std::ifstream in(path);
+        std::string first_line;
+        if (std::getline(in, first_line) && first_line == ad_solve_stats_header()) {
+            return;
+        }
+        in.close();
+        std::error_code ec;
+        fs::remove(path, ec);
     }
     std::ofstream file(path, std::ios::app);
-    file << "layer,length,max success rate,speed,deletion_threshold,time\n";
+    file << ad_solve_stats_header() << "\n";
+}
+
+struct AdSolveStatsRecord {
+    std::string stage = "solve";
+    int step = -1;
+    uint64_t input_live = 0U;
+    uint64_t post_zero_live = 0U;
+    double deletion_threshold = 0.0;
+    double max_success = 0.0;
+    double current_read_seconds = 0.0;
+    double expand_seconds = 0.0;
+    double index_seconds = 0.0;
+    double recalculate_seconds = 0.0;
+    double compact_seconds = 0.0;
+    double current_write_seconds = 0.0;
+    double future_compact_seconds = 0.0;
+    double future_write_seconds = 0.0;
+    double compress_seconds = 0.0;
+};
+
+void append_ad_solve_stats_record(
+    const RunOptions &options,
+    const AdSolveStatsRecord &record
+) {
+    ensure_ad_solve_stats_header(options);
+    const double compute_seconds =
+        record.expand_seconds + record.index_seconds + record.recalculate_seconds
+        + record.compact_seconds + record.future_compact_seconds;
+    const double total_seconds =
+        record.current_read_seconds + compute_seconds + record.current_write_seconds
+        + record.future_write_seconds + record.compress_seconds;
+    std::ofstream file(ad_solve_stats_file_path(options), std::ios::app);
+    file << record.stage << ","
+         << record.step << ","
+         << record.input_live << ","
+         << record.post_zero_live << ","
+         << std::fixed << std::setprecision(6)
+         << record.deletion_threshold << ","
+         << record.max_success << ","
+         << total_seconds << ","
+         << throughput_mbps_for(record.input_live, total_seconds) << ","
+         << compute_seconds << ","
+         << throughput_mbps_for(record.input_live, compute_seconds) << ","
+         << record.current_read_seconds << ","
+         << record.expand_seconds << ","
+         << record.index_seconds << ","
+         << record.recalculate_seconds << ","
+         << record.compact_seconds << ","
+         << record.current_write_seconds << ","
+         << record.future_compact_seconds << ","
+         << record.future_write_seconds << ","
+         << record.compress_seconds << ","
+         << now_string() << "\n";
 }
 
 uint32_t board_sum(uint64_t board) {
@@ -1390,12 +1525,11 @@ void recalculate_ad(
                 uint64_t board = indices[static_cast<size_t>(k)];
                 if (derive_size == 1U) {
                     double success_probability = 0.0;
-                    int empty_slots = 0;
-                    for (int pos = 0; pos < 16; ++pos) {
-                        if (((board >> static_cast<uint64_t>(4 * pos)) & 0xFULL) != 0ULL) {
-                            continue;
-                        }
-                        ++empty_slots;
+                    uint32_t empty_mask = empty_cell_mask16(board);
+                    const int empty_slots = static_cast<int>(popcount_u32(empty_mask));
+                    while (empty_mask != 0U) {
+                        const int pos = static_cast<int>(ctz_u32(empty_mask));
+                        empty_mask &= empty_mask - 1U;
                         T success2 = solve_optimal_success_rate(
                             board,
                             1ULL,
@@ -1446,12 +1580,11 @@ void recalculate_ad(
                 uint64_t rep_t_rev = FormationAD::reverse(rep_t);
                 auto &success_probability = workspace.success_probability;
                 success_probability.assign(derive_size, 0.0);
-                int empty_slots = 0;
-                for (int pos = 0; pos < 16; ++pos) {
-                    if (((board >> static_cast<uint64_t>(4 * pos)) & 0xFULL) != 0ULL) {
-                        continue;
-                    }
-                    ++empty_slots;
+                uint32_t empty_mask = empty_cell_mask16(board);
+                const int empty_slots = static_cast<int>(popcount_u32(empty_mask));
+                while (empty_mask != 0U) {
+                    const int pos = static_cast<int>(ctz_u32(empty_mask));
+                    empty_mask &= empty_mask - 1U;
                     solve_optimal_success_rate_arr_into(
                         board,
                         1ULL,
@@ -1593,12 +1726,11 @@ void recalculate_ad_chunk(
             const uint64_t board = positions_chunk[static_cast<size_t>(row_index)];
             if (derive_size == 1U) {
                 double success_probability = 0.0;
-                int empty_slots = 0;
-                for (int pos = 0; pos < 16; ++pos) {
-                    if (((board >> static_cast<uint64_t>(4 * pos)) & 0xFULL) != 0ULL) {
-                        continue;
-                    }
-                    ++empty_slots;
+                uint32_t empty_mask = empty_cell_mask16(board);
+                const int empty_slots = static_cast<int>(popcount_u32(empty_mask));
+                while (empty_mask != 0U) {
+                    const int pos = static_cast<int>(ctz_u32(empty_mask));
+                    empty_mask &= empty_mask - 1U;
                     T success = solve_optimal_success_rate(
                         board,
                         new_value,
@@ -1637,12 +1769,11 @@ void recalculate_ad_chunk(
             uint64_t rep_t_rev = FormationAD::reverse(rep_t);
             auto &success_probability = workspace.success_probability;
             success_probability.assign(derive_size, 0.0);
-            int empty_slots = 0;
-            for (int pos = 0; pos < 16; ++pos) {
-                if (((board >> static_cast<uint64_t>(4 * pos)) & 0xFULL) != 0ULL) {
-                    continue;
-                }
-                ++empty_slots;
+            uint32_t empty_mask = empty_cell_mask16(board);
+            const int empty_slots = static_cast<int>(popcount_u32(empty_mask));
+            while (empty_mask != 0U) {
+                const int pos = static_cast<int>(ctz_u32(empty_mask));
+                empty_mask &= empty_mask - 1U;
                 solve_optimal_success_rate_arr_into(
                     board,
                     new_value,
@@ -1918,7 +2049,10 @@ void recalculate_process_ad_chunked_impl(
     const RunOptions &options,
     bool started_from_generate
 ) {
-    ensure_stats_header<T>(options);
+    ensure_ad_solve_stats_header(options);
+    AdSolveStatsRecord total_record;
+    total_record.stage = "_total";
+    total_record.deletion_threshold = options.deletion_threshold;
     const AdvancedMaskParam param = FormationAD::build_mask_param(spec);
     const FormationAD::MaskerContext masker = FormationAD::init_masker(spec);
     const uint32_t ini_board_sum = arr_init.empty() ? 0U : board_sum(arr_init.front());
@@ -1972,11 +2106,15 @@ void recalculate_process_ad_chunked_impl(
             }
         }
         const uint32_t original_board_sum = static_cast<uint32_t>(2 * step) + ini_board_sum;
+        const double current_read_t0 = wall_time_seconds();
         std::vector<uint64_t> d0 = read_temp_raw_layer(
             options.pathname + std::to_string(step),
             io_config
         );
+        const double current_read_t1 = wall_time_seconds();
+        const uint64_t raw_input_live = static_cast<uint64_t>(d0.size());
 
+        const double expand_t0 = wall_time_seconds();
         BookStore<T> book_dict0_dummy;
         IndexStore ind_dict0;
         clear_book_store(book_dict0_dummy);
@@ -1996,12 +2134,15 @@ void recalculate_process_ad_chunked_impl(
 
         std::vector<int> ind_dict0_keys = write_ind_chunked(ind_dict0, options, step);
         release_index_store(ind_dict0);
+        const double expand_t1 = wall_time_seconds();
 
+        const double index_t0 = wall_time_seconds();
         if (indind_dict1) {
             indind_dict2 = std::move(indind_dict1);
         } else {
             indind_dict2 = create_index_ad(ind_dict2, num_threads);
         }
+        const double index_t1 = wall_time_seconds();
 
         double timer_acc = 0.0;
         size_t counter_acc = 0;
@@ -2029,10 +2170,16 @@ void recalculate_process_ad_chunked_impl(
             num_threads
         );
 
+        double future_compact_seconds = 0.0;
+        double future_write_seconds = 0.0;
         if (options.deletion_threshold > 0.0) {
+            const double future_compact_t0 = wall_time_seconds();
             remove_died_ad(book_dict2, ind_dict2, deletion_threshold);
+            future_compact_seconds += wall_time_seconds() - future_compact_t0;
         }
+        const double future_write_t0 = wall_time_seconds();
         dict_tofile(book_dict2, ind_dict2, options, step + 2, true);
+        future_write_seconds += wall_time_seconds() - future_write_t0;
         clear_book_store(book_dict2);
         release_index_store(ind_dict2);
         indind_dict2.reset();
@@ -2073,25 +2220,37 @@ void recalculate_process_ad_chunked_impl(
         const std::string raw_path = options.pathname + std::to_string(step);
         remove_temp_raw_layer_files(raw_path);
 
-        const double avg_speed = round_to_2(static_cast<double>(counter_acc) / std::max(timer_acc, 0.000001) / 2e6);
-        {
-            std::ostringstream oss;
-            oss << "step " << step << " done, solving avg " << avg_speed << " mbps\n";
-            debug_log(oss.str());
-        }
-        {
-            std::ofstream file(options.pathname + "stats.txt", std::ios::app);
-            file << step << ","
-                 << counter_acc << ","
-                 << static_cast<double>(max_rate - zero_val) / static_cast<double>(max_scale - zero_val) << ","
-                 << avg_speed << " mbps,"
-                 << options.deletion_threshold << ","
-                 << now_string() << "\n";
-        }
+        AdSolveStatsRecord record;
+        record.stage = "chunked_solve";
+        record.step = step;
+        record.input_live = counter_acc != 0U ? static_cast<uint64_t>(counter_acc) : raw_input_live;
+        record.post_zero_live = static_cast<uint64_t>(counter_acc);
+        record.deletion_threshold = options.deletion_threshold;
+        record.max_success = static_cast<double>(max_rate - zero_val) / static_cast<double>(max_scale - zero_val);
+        record.current_read_seconds = current_read_t1 - current_read_t0;
+        record.expand_seconds = expand_t1 - expand_t0;
+        record.index_seconds = index_t1 - index_t0;
+        record.recalculate_seconds = timer_acc;
+        record.future_compact_seconds = future_compact_seconds;
+        record.future_write_seconds = future_write_seconds;
+        append_ad_solve_stats_record(options, record);
+        total_record.input_live += record.input_live;
+        total_record.post_zero_live += record.post_zero_live;
+        total_record.max_success = std::max(total_record.max_success, record.max_success);
+        total_record.current_read_seconds += record.current_read_seconds;
+        total_record.expand_seconds += record.expand_seconds;
+        total_record.index_seconds += record.index_seconds;
+        total_record.recalculate_seconds += record.recalculate_seconds;
+        total_record.compact_seconds += record.compact_seconds;
+        total_record.current_write_seconds += record.current_write_seconds;
+        total_record.future_compact_seconds += record.future_compact_seconds;
+        total_record.future_write_seconds += record.future_write_seconds;
+        total_record.compress_seconds += record.compress_seconds;
 
         book_dict2 = std::move(book_dict1);
         ind_dict2 = std::move(ind_dict1);
     }
+    append_ad_solve_stats_record(options, total_record);
 }
 
 template <typename T>
@@ -2101,7 +2260,10 @@ void recalculate_process_ad_impl(
     const RunOptions &options,
     bool started_from_generate
 ) {
-    ensure_stats_header<T>(options);
+    ensure_ad_solve_stats_header(options);
+    AdSolveStatsRecord total_record;
+    total_record.stage = "_total";
+    total_record.deletion_threshold = options.deletion_threshold;
     const AdvancedMaskParam param = FormationAD::build_mask_param(spec);
     const FormationAD::MaskerContext masker = FormationAD::init_masker(spec);
     const uint32_t ini_board_sum = arr_init.empty() ? 0U : board_sum(arr_init.front());
@@ -2155,10 +2317,13 @@ void recalculate_process_ad_impl(
             }
         }
         const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
+        const double current_read_t0 = wall_time_seconds();
         std::vector<uint64_t> d0 = read_temp_raw_layer(
             options.pathname + std::to_string(step),
             io_config
         );
+        const double current_read_t1 = wall_time_seconds();
+        const uint64_t raw_input_live = static_cast<uint64_t>(d0.size());
         double t0 = wall_time_seconds();
 
         BookStore<T> book_dict0;
@@ -2177,6 +2342,7 @@ void recalculate_process_ad_impl(
         );
         d0.clear();
         d0.shrink_to_fit();
+        double expand_t1 = wall_time_seconds();
 
         if (has_prefix1) {
             indind_dict2 = std::move(indind_dict1);
@@ -2211,40 +2377,66 @@ void recalculate_process_ad_impl(
         double normalized_max_rate = static_cast<double>(max_rate - zero_val) / static_cast<double>(max_scale - zero_val);
         double t2 = wall_time_seconds();
 
+        double future_compact_seconds = 0.0;
         if (options.deletion_threshold > 0.0) {
+            const double future_compact_t0 = wall_time_seconds();
             remove_died_ad(book_dict2, ind_dict2, deletion_threshold);
+            future_compact_seconds += wall_time_seconds() - future_compact_t0;
         }
         remove_died_ad(book_dict0, ind_dict0, zero_val);
         double t3 = wall_time_seconds();
-        log_recalculate_performance(step, t0, t1, t2, t3, length);
 
-        {
-            std::ofstream file(options.pathname + "stats.txt", std::ios::app);
-            file << step << ","
-                 << length << ","
-                 << normalized_max_rate << ","
-                 << round_to_2(static_cast<double>(length) / std::max(t3 - t0, 0.01) / 1e6) << " mbps,"
-                 << options.deletion_threshold << ","
-                 << now_string() << "\n";
-        }
-
+        double future_write_seconds = 0.0;
         if (options.deletion_threshold > 0.0 || options.compress) {
+            const double future_write_t0 = wall_time_seconds();
             dict_tofile(book_dict2, ind_dict2, options, step + 2, true);
+            future_write_seconds += wall_time_seconds() - future_write_t0;
         }
         clear_book_store(book_dict2);
         release_index_store(ind_dict2);
         indind_dict2.reset();
+        const double current_write_t0 = wall_time_seconds();
         dict_tofile(book_dict0, ind_dict0, options, step, false);
+        const double current_write_t1 = wall_time_seconds();
 
         const std::string raw_path = options.pathname + std::to_string(step);
         remove_temp_raw_layer_files(raw_path);
-        debug_log("step " + std::to_string(step) + " written\n");
+
+        AdSolveStatsRecord record;
+        record.stage = "solve";
+        record.step = step;
+        record.input_live = length != 0U ? static_cast<uint64_t>(length) : raw_input_live;
+        record.post_zero_live = static_cast<uint64_t>(length);
+        record.deletion_threshold = options.deletion_threshold;
+        record.max_success = normalized_max_rate;
+        record.current_read_seconds = current_read_t1 - current_read_t0;
+        record.expand_seconds = expand_t1 - t0;
+        record.index_seconds = t1 - expand_t1;
+        record.recalculate_seconds = t2 - t1;
+        record.compact_seconds = t3 - t2;
+        record.current_write_seconds = current_write_t1 - current_write_t0;
+        record.future_compact_seconds = future_compact_seconds;
+        record.future_write_seconds = future_write_seconds;
+        append_ad_solve_stats_record(options, record);
+        total_record.input_live += record.input_live;
+        total_record.post_zero_live += record.post_zero_live;
+        total_record.max_success = std::max(total_record.max_success, record.max_success);
+        total_record.current_read_seconds += record.current_read_seconds;
+        total_record.expand_seconds += record.expand_seconds;
+        total_record.index_seconds += record.index_seconds;
+        total_record.recalculate_seconds += record.recalculate_seconds;
+        total_record.compact_seconds += record.compact_seconds;
+        total_record.current_write_seconds += record.current_write_seconds;
+        total_record.future_compact_seconds += record.future_compact_seconds;
+        total_record.future_write_seconds += record.future_write_seconds;
+        total_record.compress_seconds += record.compress_seconds;
 
         book_dict2 = std::move(book_dict1);
         ind_dict2 = std::move(ind_dict1);
         book_dict1 = std::move(book_dict0);
         ind_dict1 = std::move(ind_dict0);
     }
+    append_ad_solve_stats_record(options, total_record);
 }
 
 } // namespace

@@ -216,6 +216,10 @@ void log_recalculate_performance(int step_index, double t0, double t1, double t2
     debug_log(phase_stream.str());
 }
 
+double throughput_mbps_for(uint64_t count, double seconds) {
+    return seconds > 0.0 ? static_cast<double>(count) / seconds / 1e6 : 0.0;
+}
+
 int effective_num_threads(const RunOptions &options) {
     if (options.num_threads > 0) {
         return options.num_threads;
@@ -420,13 +424,91 @@ template <typename T> std::pair<PatternLayer, PatternLayer> final_steps(
     return {make_pattern_layer(std::move(layer0)), make_pattern_layer(std::move(layer1))};
 }
 
-template <typename T> void ensure_stats_header(const RunOptions &options) {
-    auto path = options.pathname + "stats.txt";
+std::string classic_solve_stats_file_path(const RunOptions &options) {
+    return options.pathname + "classic_solve_stats.csv";
+}
+
+std::string classic_solve_stats_header() {
+    return "stage,step,input_live,post_zero_live,future1_live,future2_live,future2_post_threshold_live,deletion_threshold,max_success,total_seconds,throughput_mbps,compute_seconds,compute_throughput_mbps,current_read_seconds,index_seconds,recalculate_seconds,zero_compact_seconds,max_scan_seconds,current_write_seconds,future_compact_seconds,future_write_seconds,compress_seconds,time";
+}
+
+void ensure_classic_solve_stats_header(const RunOptions &options) {
+    {
+        std::error_code ec;
+        fs::remove(options.pathname + "stats.txt", ec);
+    }
+    const std::string path = classic_solve_stats_file_path(options);
     if (fs::exists(path)) {
-        return;
+        std::ifstream in(path);
+        std::string first_line;
+        if (std::getline(in, first_line) && first_line == classic_solve_stats_header()) {
+            return;
+        }
+        in.close();
+        std::error_code ec;
+        fs::remove(path, ec);
     }
     std::ofstream file(path, std::ios::app);
-    file << "layer,length,max success rate,speed,deletion_threshold,time\n";
+    file << classic_solve_stats_header() << "\n";
+}
+
+struct ClassicSolveStatsRecord {
+    std::string stage = "solve";
+    int step = -1;
+    uint64_t input_live = 0U;
+    uint64_t post_zero_live = 0U;
+    uint64_t future1_live = 0U;
+    uint64_t future2_live = 0U;
+    uint64_t future2_post_threshold_live = 0U;
+    double deletion_threshold = 0.0;
+    double max_success = 0.0;
+    double current_read_seconds = 0.0;
+    double index_seconds = 0.0;
+    double recalculate_seconds = 0.0;
+    double zero_compact_seconds = 0.0;
+    double max_scan_seconds = 0.0;
+    double current_write_seconds = 0.0;
+    double future_compact_seconds = 0.0;
+    double future_write_seconds = 0.0;
+    double compress_seconds = 0.0;
+};
+
+void append_classic_solve_stats_record(
+    const RunOptions &options,
+    const ClassicSolveStatsRecord &record
+) {
+    ensure_classic_solve_stats_header(options);
+    const double compute_seconds =
+        record.index_seconds + record.recalculate_seconds + record.zero_compact_seconds
+        + record.max_scan_seconds + record.future_compact_seconds;
+    const double total_seconds =
+        record.current_read_seconds + compute_seconds + record.current_write_seconds
+        + record.future_write_seconds + record.compress_seconds;
+    std::ofstream file(classic_solve_stats_file_path(options), std::ios::app);
+    file << record.stage << ","
+         << record.step << ","
+         << record.input_live << ","
+         << record.post_zero_live << ","
+         << record.future1_live << ","
+         << record.future2_live << ","
+         << record.future2_post_threshold_live << ","
+         << std::fixed << std::setprecision(6)
+         << record.deletion_threshold << ","
+         << record.max_success << ","
+         << total_seconds << ","
+         << throughput_mbps_for(record.input_live, total_seconds) << ","
+         << compute_seconds << ","
+         << throughput_mbps_for(record.input_live, compute_seconds) << ","
+         << record.current_read_seconds << ","
+         << record.index_seconds << ","
+         << record.recalculate_seconds << ","
+         << record.zero_compact_seconds << ","
+         << record.max_scan_seconds << ","
+         << record.current_write_seconds << ","
+         << record.future_compact_seconds << ","
+         << record.future_write_seconds << ","
+         << record.compress_seconds << ","
+         << now_string() << "\n";
 }
 
 } // namespace
@@ -1084,7 +1166,10 @@ void recalculate_process_impl(
     const PatternSpec &spec,
     const RunOptions &options
 ) {
-    ensure_stats_header<T>(options);
+    ensure_classic_solve_stats_header(options);
+    ClassicSolveStatsRecord total_record;
+    total_record.stage = "_total";
+    total_record.deletion_threshold = options.deletion_threshold;
     bool started = false;
     AdaptiveIndex::Index ind1;
     T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
@@ -1104,7 +1189,9 @@ void recalculate_process_impl(
             continue;
         }
 
+        const double read_t0 = wall_time_seconds();
         std::vector<uint64_t> raw_layer = read_raw_file(options.pathname + std::to_string(i), io_config);
+        const double read_t1 = wall_time_seconds();
         double t0 = wall_time_seconds();
         SplitLayer<T> d0 = make_split_layer_from_raw<T>(std::move(raw_layer));
 
@@ -1128,8 +1215,9 @@ void recalculate_process_impl(
         double t2 = wall_time_seconds();
         compact_live_entries(d0, zero_val, true);
         double t3 = wall_time_seconds();
-        log_recalculate_performance(i, t0, t1, t2, t3, length);
 
+        double max_success = 0.0;
+        const double max_scan_t0 = wall_time_seconds();
         if (!d0.empty()) {
             T max_success_raw = d0.success[0];
             for (size_t k = 1; k < d0.size(); ++k) {
@@ -1137,14 +1225,13 @@ void recalculate_process_impl(
                     max_success_raw = d0.success[k];
                 }
             }
-            double max_success = static_cast<double>(max_success_raw - zero_val) / static_cast<double>(max_scale - zero_val);
-            std::ofstream stats(options.pathname + "stats.txt", std::ios::app);
-            stats << i << "," << length << "," << max_success << ","
-                  << round_to_2(static_cast<double>(length) / std::max(t3 - t0, 0.01) / 1e6) << " mbps,"
-                  << options.deletion_threshold << "," << now_string() << "\n";
+            max_success = static_cast<double>(max_success_raw - zero_val) / static_cast<double>(max_scale - zero_val);
         }
+        const double max_scan_t1 = wall_time_seconds();
 
+        const double current_write_t0 = wall_time_seconds();
         write_layer_file(options.pathname + std::to_string(i) + ".book", d0, io_config);
+        const double current_write_t1 = wall_time_seconds();
         remove_file_if_exists(options.pathname + std::to_string(i) + ".book.7z");
         auto raw_path = options.pathname + std::to_string(i);
         remove_temp_raw_layer_files(raw_path);
@@ -1156,29 +1243,79 @@ void recalculate_process_impl(
             options.optimal_branch_only &&
             future_layer >= kOptimalBranchOnlyStartStep;
 
+        double future_compact_seconds = 0.0;
+        double future_write_seconds = 0.0;
+        double compress_seconds = 0.0;
+        const uint64_t future2_live_before = static_cast<uint64_t>(d2.size());
         if (options.deletion_threshold > 0.0) {
             T threshold = static_cast<T>(options.deletion_threshold * static_cast<double>(max_scale - zero_val) + static_cast<double>(zero_val));
+            const double future_compact_t0 = wall_time_seconds();
             compact_live_entries(d2, threshold, false);
+            const double future_compact_t1 = wall_time_seconds();
+            future_compact_seconds += future_compact_t1 - future_compact_t0;
+            const double future_write_t0 = wall_time_seconds();
             if (use_opt_temp_archive) {
                 write_split_layer_archive_file(future_archive_path, d2, 1);
             } else {
                 write_layer_file(future_book_path, d2, io_config);
                 remove_file_if_exists(future_archive_path);
             }
+            const double future_write_t1 = wall_time_seconds();
+            future_write_seconds += future_write_t1 - future_write_t0;
         }
         if (use_opt_temp_archive) {
             if (options.deletion_threshold <= 0.0) {
+                const double future_write_t0 = wall_time_seconds();
                 write_split_layer_archive_file(future_archive_path, d2, 1);
+                future_write_seconds += wall_time_seconds() - future_write_t0;
             }
         } else if (options.compress && !options.optimal_branch_only) {
+            const double compress_t0 = wall_time_seconds();
             maybe_do_compress_classic(future_book_path, options.success_rate_dtype);
+            compress_seconds += wall_time_seconds() - compress_t0;
         }
+
+        ClassicSolveStatsRecord record;
+        record.step = i;
+        record.input_live = static_cast<uint64_t>(length);
+        record.post_zero_live = static_cast<uint64_t>(d0.size());
+        record.future1_live = static_cast<uint64_t>(d1.size());
+        record.future2_live = future2_live_before;
+        record.future2_post_threshold_live = static_cast<uint64_t>(d2.size());
+        record.deletion_threshold = options.deletion_threshold;
+        record.max_success = max_success;
+        record.current_read_seconds = read_t1 - read_t0;
+        record.index_seconds = t1 - t0;
+        record.recalculate_seconds = t2 - t1;
+        record.zero_compact_seconds = t3 - t2;
+        record.max_scan_seconds = max_scan_t1 - max_scan_t0;
+        record.current_write_seconds = current_write_t1 - current_write_t0;
+        record.future_compact_seconds = future_compact_seconds;
+        record.future_write_seconds = future_write_seconds;
+        record.compress_seconds = compress_seconds;
+        append_classic_solve_stats_record(options, record);
+        total_record.input_live += record.input_live;
+        total_record.post_zero_live += record.post_zero_live;
+        total_record.future1_live += record.future1_live;
+        total_record.future2_live += record.future2_live;
+        total_record.future2_post_threshold_live += record.future2_post_threshold_live;
+        total_record.max_success = std::max(total_record.max_success, record.max_success);
+        total_record.current_read_seconds += record.current_read_seconds;
+        total_record.index_seconds += record.index_seconds;
+        total_record.recalculate_seconds += record.recalculate_seconds;
+        total_record.zero_compact_seconds += record.zero_compact_seconds;
+        total_record.max_scan_seconds += record.max_scan_seconds;
+        total_record.current_write_seconds += record.current_write_seconds;
+        total_record.future_compact_seconds += record.future_compact_seconds;
+        total_record.future_write_seconds += record.future_write_seconds;
+        total_record.compress_seconds += record.compress_seconds;
 
         if (i > 0) {
             d2 = std::move(d1);
             d1 = std::move(d0);
         }
     }
+    append_classic_solve_stats_record(options, total_record);
 }
 
 } // namespace

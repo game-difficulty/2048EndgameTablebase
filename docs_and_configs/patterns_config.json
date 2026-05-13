@@ -101,6 +101,19 @@
     ],
     "extra steps": 48
   },
+  "LL2": {
+    "category": "12 space",
+    "valid pattern": [
+      "0xff00ff0000000000"
+    ],
+    "target pos": "0xff00ffffffffff",
+    "canonical mode": "diagonal",
+    "seed boards": [
+      "0xff12ff1200000011",
+      "0xff21ff1200000110"
+    ],
+    "extra steps": 48
+  },
   "4431": {
     "category": "12 space",
     "valid pattern": [

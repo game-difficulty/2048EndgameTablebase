@@ -117,6 +117,46 @@ bool write_temp_uint64_archive(const std::string &archive_path, const std::vecto
     );
 }
 
+bool write_temp_byte_archive(const std::string &archive_path, const std::vector<uint8_t> &data, int lvl) {
+    if (compress_bytes_to_7z_archive_streaming(
+            data.data(),
+            data.size(),
+            archive_path,
+            temp_archive_entry_name(archive_path),
+            lvl)) {
+        return true;
+    }
+
+    std::vector<uint8_t> compressed = compress_xz_block_native(data.data(), data.size(), lvl);
+    if (compressed.empty() && !data.empty()) {
+        return false;
+    }
+    FileIOUtils::write_binary_bytes(archive_path, compressed);
+    return true;
+}
+
+std::vector<uint8_t> read_temp_byte_archive(const std::string &archive_path) {
+    if (!fs::exists(archive_path)) {
+        return {};
+    }
+
+    std::vector<uint8_t> header = FileIOUtils::read_binary_bytes_range(archive_path, 0, 6);
+    if (is_xz_stream(header)) {
+        std::vector<uint8_t> archive_bytes = FileIOUtils::read_binary_bytes(archive_path);
+        std::vector<uint8_t> decompressed = decompress_xz_block_native(archive_bytes.data(), archive_bytes.size());
+        if (decompressed.empty() && !archive_bytes.empty()) {
+            return {};
+        }
+        return decompressed;
+    }
+
+    std::vector<uint8_t> decompressed;
+    if (!decompress_7z_archive_to_bytes_streaming(archive_path, decompressed)) {
+        return {};
+    }
+    return decompressed;
+}
+
 std::vector<uint64_t> read_temp_uint64_archive(const std::string &archive_path) {
     if (!fs::exists(archive_path)) {
         return {};

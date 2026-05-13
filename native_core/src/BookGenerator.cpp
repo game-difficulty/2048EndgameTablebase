@@ -2,6 +2,7 @@
 
 #include "BoardMover.h"
 #include "Calculator.h"
+#include "CanonicalBatch.h"
 #include "CompressionBridge.h"
 #include "FileIOUtils.h"
 #include "Formation.h"
@@ -12,6 +13,7 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -48,6 +50,95 @@ void debug_log(const std::string &message) {
         nb::module_::import_("Config").attr("logger").attr("debug")(nb::str(message.c_str()));
     } catch (...) {
     }
+}
+
+std::string now_string() {
+    std::time_t now = std::time(nullptr);
+    std::tm local_time{};
+#ifdef _WIN32
+    localtime_s(&local_time, &now);
+#else
+    localtime_r(&local_time, &now);
+#endif
+    std::ostringstream oss;
+    oss << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S");
+    return oss.str();
+}
+
+double throughput_mbps_for(uint64_t count, double seconds) {
+    return seconds > 0.0 ? static_cast<double>(count) / seconds / 1e6 : 0.0;
+}
+
+std::string classic_generate_stats_file_path(const RunOptions &options) {
+    return options.pathname + "classic_generate_stats.csv";
+}
+
+std::string classic_generate_stats_header() {
+    return "stage,step,input_live,arr1_raw,arr2_raw,arr1_unique,arr2_unique,output_live,length_factor,total_seconds,throughput_mbps,compute_seconds,compute_throughput_mbps,generate_seconds,sort_unique_seconds,merge_seconds,validate_seconds,write_seconds,time";
+}
+
+void ensure_classic_generate_stats_header(const RunOptions &options) {
+    const std::string path = classic_generate_stats_file_path(options);
+    if (fs::exists(path)) {
+        std::ifstream in(path);
+        std::string first_line;
+        if (std::getline(in, first_line) && first_line == classic_generate_stats_header()) {
+            return;
+        }
+        in.close();
+        std::error_code ec;
+        fs::remove(path, ec);
+    }
+    std::ofstream file(path, std::ios::app);
+    file << classic_generate_stats_header() << "\n";
+}
+
+struct ClassicGenerateStatsRecord {
+    std::string stage;
+    int step = -1;
+    uint64_t input_live = 0U;
+    uint64_t arr1_raw = 0U;
+    uint64_t arr2_raw = 0U;
+    uint64_t arr1_unique = 0U;
+    uint64_t arr2_unique = 0U;
+    uint64_t output_live = 0U;
+    double length_factor = 0.0;
+    double generate_seconds = 0.0;
+    double sort_unique_seconds = 0.0;
+    double merge_seconds = 0.0;
+    double validate_seconds = 0.0;
+    double write_seconds = 0.0;
+};
+
+void append_classic_generate_stats_record(
+    const RunOptions &options,
+    const ClassicGenerateStatsRecord &record
+) {
+    ensure_classic_generate_stats_header(options);
+    const double compute_seconds =
+        record.generate_seconds + record.sort_unique_seconds + record.merge_seconds + record.validate_seconds;
+    const double total_seconds = compute_seconds + record.write_seconds;
+    std::ofstream file(classic_generate_stats_file_path(options), std::ios::app);
+    file << record.stage << ","
+         << record.step << ","
+         << record.input_live << ","
+         << record.arr1_raw << ","
+         << record.arr2_raw << ","
+         << record.arr1_unique << ","
+         << record.arr2_unique << ","
+         << record.output_live << ","
+         << std::fixed << std::setprecision(6)
+         << record.length_factor << ","
+         << total_seconds << ","
+         << throughput_mbps_for(record.output_live, total_seconds) << ","
+         << compute_seconds << ","
+         << throughput_mbps_for(record.output_live, compute_seconds) << ","
+         << record.generate_seconds << ","
+         << record.sort_unique_seconds << ","
+         << record.merge_seconds << ","
+         << record.validate_seconds << ","
+         << record.write_seconds << ","
+         << now_string() << "\n";
 }
 
 bool supports_avx512() {
@@ -662,10 +753,6 @@ void validate_length_and_balance(
             << (exact_gather_arr2 ? "(gather)" : "(tail)");
     }
     debug_log(oss.str());
-    if (!is_big) {
-        debug_log("Segmentation1_ac " + format_percent_array(counts2));
-        debug_log("Segmentation2_ac " + format_percent_array(counts1));
-    }
 }
 
 std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> handle_restart(
@@ -807,6 +894,7 @@ GenBoardsResult gen_boards_internal_naive(
             if (b1_ptr == 0) {
                 return;
             }
+            CanonicalBatch::canonicalize_inplace(buffer1.data(), b1_ptr, spec.symm_mode);
             process_buf_scalar(buffer1.data(), b1_ptr, hashmap1, sink1, hashmask1);
             b1_ptr = 0;
         };
@@ -815,6 +903,7 @@ GenBoardsResult gen_boards_internal_naive(
             if (b2_ptr == 0) {
                 return;
             }
+            CanonicalBatch::canonicalize_inplace(buffer2.data(), b2_ptr, spec.symm_mode);
             process_buf_scalar(buffer2.data(), b2_ptr, hashmap2, sink2, hashmask2);
             b2_ptr = 0;
         };
@@ -845,7 +934,7 @@ GenBoardsResult gen_boards_internal_naive(
                     uint64_t boards2[4] = {std::get<0>(moves2), std::get<1>(moves2), std::get<2>(moves2), std::get<3>(moves2)};
                     for (uint64_t new_board : boards2) {
                         if (new_board != spawn2 && is_pattern(new_board, spec.pattern_masks)) {
-                            buffer1[b1_ptr++] = apply_canonical(new_board, spec.symm_mode);
+                            buffer1[b1_ptr++] = new_board;
                             if (b1_ptr == kScalarBufferedBatchSize) {
                                 flush_buf1();
                             }
@@ -857,7 +946,7 @@ GenBoardsResult gen_boards_internal_naive(
                     uint64_t boards4[4] = {std::get<0>(moves4), std::get<1>(moves4), std::get<2>(moves4), std::get<3>(moves4)};
                     for (uint64_t new_board : boards4) {
                         if (new_board != spawn4 && is_pattern(new_board, spec.pattern_masks)) {
-                            buffer2[b2_ptr++] = apply_canonical(new_board, spec.symm_mode);
+                            buffer2[b2_ptr++] = new_board;
                             if (b2_ptr == kScalarBufferedBatchSize) {
                                 flush_buf2();
                             }
@@ -917,7 +1006,8 @@ GenBoardsResult gen_boards_internal_avx512(
         uint64_t buffer1[BATCH_SIZE], buffer2[BATCH_SIZE];
         int b1_ptr = 0, b2_ptr = 0;
 
-        auto process_buf = [&](const uint64_t *buf, int &ptr, uint64_t *hmap, ThreadWriteSink &sink, uint64_t mask) {
+        auto process_buf = [&](uint64_t *buf, int &ptr, uint64_t *hmap, ThreadWriteSink &sink, uint64_t mask) {
+            CanonicalBatch::canonicalize_inplace(buf, static_cast<size_t>(ptr), spec.symm_mode);
             if (ptr == BATCH_SIZE) {
                 process_buf_avx512(buf, static_cast<size_t>(ptr), hmap, sink, mask);
             } else {
@@ -942,7 +1032,7 @@ GenBoardsResult gen_boards_internal_avx512(
                 uint64_t boards2[4] = {std::get<0>(moves2), std::get<1>(moves2), std::get<2>(moves2), std::get<3>(moves2)};
                 for (uint64_t new_board : boards2) {
                     if (new_board != spawn2 && is_pattern(new_board, spec.pattern_masks)) {
-                        buffer1[b1_ptr++] = apply_canonical(new_board, spec.symm_mode);
+                        buffer1[b1_ptr++] = new_board;
                         if (b1_ptr == BATCH_SIZE) process_buf(buffer1, b1_ptr, hashmap1, sink1, hashmask1);
                     }
                 }
@@ -952,7 +1042,7 @@ GenBoardsResult gen_boards_internal_avx512(
                 uint64_t boards4[4] = {std::get<0>(moves4), std::get<1>(moves4), std::get<2>(moves4), std::get<3>(moves4)};
                 for (uint64_t new_board : boards4) {
                     if (new_board != spawn4 && is_pattern(new_board, spec.pattern_masks)) {
-                        buffer2[b2_ptr++] = apply_canonical(new_board, spec.symm_mode);
+                        buffer2[b2_ptr++] = new_board;
                         if (b2_ptr == BATCH_SIZE) process_buf(buffer2, b2_ptr, hashmap2, sink2, hashmask2);
                     }
                 }
@@ -1279,6 +1369,9 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
     const uint32_t progress_total = classic_build_progress_total(options);
     auto init_params = initialize_parameters_internal(num_threads, options.pathname, options.is_free);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
+    ensure_classic_generate_stats_header(options);
+    ClassicGenerateStatsRecord total_record;
+    total_record.stage = "_total";
 
     for (int i = 1; i < options.steps - 1; ++i) {
         auto [run, restart_d0, restart_d1] = handle_restart(i, options, arr_init, started, io_config);
@@ -1294,6 +1387,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
         started = true;
         FormationProgress::update_build_progress(static_cast<uint32_t>(i), progress_total);
         bool do_check = i > options.docheck_step;
+        ClassicGenerateStatsRecord stats_record;
+        bool has_stats_record = false;
+        stats_record.step = i;
+        stats_record.input_live = static_cast<uint64_t>(d0.size());
 
         if (d0.size() < init_params.segment_size) {
             double t0 = wall_time_seconds();
@@ -1310,6 +1407,9 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             size_t sort_len2 = 0;
             GenBoardsResult generated_result;
             bool use_simple_path = should_use_simple_path(d0, arr_init, init_params.length_factors);
+            stats_record.stage = use_simple_path
+                ? "simple"
+                : std::string("normal-") + (supports_avx512() ? "avx512" : "buffered-scalar");
             if (use_simple_path) {
                 debug_log("step " + std::to_string(i) + " path: simple");
                 std::tie(d1t, d2) = options.is_variant
@@ -1321,16 +1421,14 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                 sort_len2 = d2.size();
                 t1 = wall_time_seconds();
             } else {
-                debug_log(
-                    "step " + std::to_string(i) + " path: normal-" +
-                    std::string(supports_avx512() ? "avx512" : "buffered-scalar")
-                );
+                debug_log("step " + std::to_string(i) + " path: " + stats_record.stage);
                 double length_factor = predict_next_length_factor_quadratic(init_params.length_factors);
                 length_factor *= d0.size() > static_cast<size_t>(1e8) ? 1.15 : 1.2;
                 length_factor *= init_params.length_factor_multiplier;
                 if (std::isnan(length_factor)) {
                     length_factor = 3.0;
                 }
+                stats_record.length_factor = length_factor;
                 if (hashmap1.empty()) {
                     update_hashmap_length(hashmap1, d0.size());
                     update_hashmap_length(hashmap2, d0.size());
@@ -1383,6 +1481,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                 sort_arr2, sort_len2,
                 num_threads
             );
+            stats_record.arr1_raw = static_cast<uint64_t>(sort_len1);
+            stats_record.arr2_raw = static_cast<uint64_t>(sort_len2);
+            stats_record.arr1_unique = static_cast<uint64_t>(unique_d1t_length);
+            stats_record.arr2_unique = static_cast<uint64_t>(unique_d2_length);
             if (use_simple_path) {
                 d1t.resize(unique_d1t_length);
                 d2.resize(unique_d2_length);
@@ -1403,7 +1505,11 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             std::vector<std::vector<uint64_t>> d1_inputs = {std::move(d1), std::move(d1t)};
             d1 = BookGeneratorUtils::concatenate(BookGeneratorUtils::merge_deduplicate_all(d1_inputs, pivots, num_threads));
             double t3 = wall_time_seconds();
-            log_performance(i, t0, t1, t2, t3, d1.size());
+            stats_record.output_live = static_cast<uint64_t>(d1.size());
+            stats_record.generate_seconds = t1 - t0;
+            stats_record.sort_unique_seconds = t2 - t1;
+            stats_record.merge_seconds = t3 - t2;
+            has_stats_record = true;
             d0 = std::move(d1);
             d1 = std::move(d2);
             if (!hashmap1.empty()) {
@@ -1412,6 +1518,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             }
         } else {
             debug_log("step " + std::to_string(i) + " path: big");
+            stats_record.stage = "big";
             if (hashmap1.empty()) {
                 size_t capacity = BookGeneratorUtils::largest_power_of_2(
                     20971520ULL * static_cast<size_t>(std::max(1.0, get_system_memory_gb() * 0.75))
@@ -1431,26 +1538,67 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             for (int pt = 1; pt < num_threads; ++pt) {
                 pivots.push_back(d0[static_cast<size_t>(pt) * d0.size() / static_cast<size_t>(num_threads)]);
             }
+            uint64_t big_arr1_raw = 0U;
+            uint64_t big_arr2_raw = 0U;
+            for (const auto &part : big_result.arr1s) {
+                big_arr1_raw += static_cast<uint64_t>(part.size());
+            }
+            for (const auto &part : big_result.arr2s) {
+                big_arr2_raw += static_cast<uint64_t>(part.size());
+            }
             big_result.arr1s.push_back(std::move(d1));
             d1 = BookGeneratorUtils::concatenate(BookGeneratorUtils::merge_deduplicate_all(big_result.arr2s, pivots, num_threads));
             d0 = BookGeneratorUtils::concatenate(BookGeneratorUtils::merge_deduplicate_all(big_result.arr1s, pivots, num_threads));
             double t3 = wall_time_seconds();
-            log_performance(i, big_result.t0, big_result.t1, big_result.t2, t3, d0.size());
+            stats_record.arr1_raw = big_arr1_raw;
+            stats_record.arr2_raw = big_arr2_raw;
+            stats_record.arr1_unique = static_cast<uint64_t>(d0.size());
+            stats_record.arr2_unique = static_cast<uint64_t>(d1.size());
+            stats_record.output_live = static_cast<uint64_t>(d0.size());
+            stats_record.generate_seconds = big_result.t1 - big_result.t0;
+            stats_record.sort_unique_seconds = big_result.t2 - big_result.t1;
+            stats_record.merge_seconds = t3 - big_result.t2;
+            has_stats_record = true;
             init_params.length_factors = harmonic_mean_by_column(init_params.length_factors_list);
             save_length_factors(init_params.length_factors_list_path, init_params.length_factors_list);
         }
 
+        const double validate_t0 = wall_time_seconds();
         if (options.compress_temp_files) {
+            stats_record.validate_seconds += wall_time_seconds() - validate_t0;
+            const double write_t0 = wall_time_seconds();
             if (!write_temp_uint64_archive(options.pathname + std::to_string(i) + ".7z", d0, 1)) {
                 throw std::runtime_error("failed to write compressed temp layer: " + options.pathname + std::to_string(i) + ".7z");
             }
             std::error_code ec;
             fs::remove(options.pathname + std::to_string(i), ec);
+            stats_record.write_seconds = wall_time_seconds() - write_t0;
         } else {
+            stats_record.validate_seconds += wall_time_seconds() - validate_t0;
+            const double write_t0 = wall_time_seconds();
             FileIOUtils::write_binary_vector_direct(options.pathname + std::to_string(i), d0, io_config);
+            stats_record.write_seconds = wall_time_seconds() - write_t0;
+        }
+        if (has_stats_record) {
+            append_classic_generate_stats_record(options, stats_record);
+            total_record.input_live += stats_record.input_live;
+            total_record.arr1_raw += stats_record.arr1_raw;
+            total_record.arr2_raw += stats_record.arr2_raw;
+            total_record.arr1_unique += stats_record.arr1_unique;
+            total_record.arr2_unique += stats_record.arr2_unique;
+            total_record.output_live += stats_record.output_live;
+            total_record.generate_seconds += stats_record.generate_seconds;
+            total_record.sort_unique_seconds += stats_record.sort_unique_seconds;
+            total_record.merge_seconds += stats_record.merge_seconds;
+            total_record.validate_seconds += stats_record.validate_seconds;
+            total_record.write_seconds += stats_record.write_seconds;
         }
         std::swap(hashmap1, hashmap2);
     }
+    total_record.length_factor = total_record.input_live > 0U
+        ? static_cast<double>(total_record.output_live) / static_cast<double>(total_record.input_live)
+        : 0.0;
+    append_classic_generate_stats_record(options, total_record);
 
     return {started, std::move(d0), std::move(d1)};
 }

@@ -104,6 +104,8 @@ media/texts/
 .codex/
 *.spec
 tmp_vec_report*.txt
+tmp_*
+tmp/
 
 # OS / editor junk
 Thumbs.db

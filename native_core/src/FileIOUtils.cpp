@@ -731,15 +731,38 @@ void finalize_temporary_file(const std::string &temp_path, const std::string &fi
 #ifdef _WIN32
     const std::wstring temp = fs::path(temp_path).wstring();
     const std::wstring final = fs::path(final_path).wstring();
-    if (MoveFileExW(temp.c_str(), final.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        return;
+    constexpr int kRenameRetryCount = 8;
+    constexpr DWORD kRenameRetrySleepMs = 25;
+    DWORD move_error = ERROR_SUCCESS;
+    for (int attempt = 0; attempt < kRenameRetryCount; ++attempt) {
+        if (MoveFileExW(temp.c_str(), final.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            return;
+        }
+        move_error = GetLastError();
+        if (move_error != ERROR_ACCESS_DENIED && move_error != ERROR_SHARING_VIOLATION) {
+            break;
+        }
+        Sleep(kRenameRetrySleepMs);
     }
-    const DWORD move_error = GetLastError();
+
     std::error_code remove_error;
     fs::remove(final_path, remove_error);
     std::error_code rename_error;
-    fs::rename(temp_path, final_path, rename_error);
-    if (!rename_error) {
+    for (int attempt = 0; attempt < kRenameRetryCount; ++attempt) {
+        fs::rename(temp_path, final_path, rename_error);
+        if (!rename_error) {
+            return;
+        }
+        if (rename_error.value() != static_cast<int>(ERROR_ACCESS_DENIED)
+            && rename_error.value() != static_cast<int>(ERROR_SHARING_VIOLATION)) {
+            break;
+        }
+        Sleep(kRenameRetrySleepMs);
+    }
+
+    if (CopyFileW(temp.c_str(), final.c_str(), FALSE)) {
+        std::error_code cleanup_error;
+        fs::remove(temp_path, cleanup_error);
         return;
     }
     throw std::runtime_error(
