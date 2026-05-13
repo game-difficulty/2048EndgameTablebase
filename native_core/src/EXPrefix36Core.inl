@@ -1752,10 +1752,10 @@ uint32_t prefix36_dynamic_home_slot(uint64_t prefix36, uint32_t capacity) {
 #endif
 }
 
-using ArgsortUint64Fn = void (*)(const uint64_t *, size_t, size_t *, bool);
+using KeyValueSortUint64Uint32Fn = void (*)(uint64_t *, uint32_t *, size_t, bool);
 
-ArgsortUint64Fn resolve_argsort_uint64() {
-    static ArgsortUint64Fn fn = []() -> ArgsortUint64Fn {
+KeyValueSortUint64Uint32Fn resolve_keyvalue_sort_uint64_uint32() {
+    static KeyValueSortUint64Uint32Fn fn = []() -> KeyValueSortUint64Uint32Fn {
 #if defined(_WIN32)
         std::vector<std::filesystem::path> candidates;
         candidates.emplace_back("native_core/bookgen_native.dll");
@@ -1770,7 +1770,7 @@ ArgsortUint64Fn resolve_argsort_uint64() {
             if (!lib) {
                 continue;
             }
-            auto proc = reinterpret_cast<ArgsortUint64Fn>(GetProcAddress(lib, "argsort_uint64"));
+            auto proc = reinterpret_cast<KeyValueSortUint64Uint32Fn>(GetProcAddress(lib, "keyvalue_sort_uint64_uint32"));
             if (proc) {
                 return proc;
             }
@@ -1781,7 +1781,7 @@ ArgsortUint64Fn resolve_argsort_uint64() {
         if (!lib) {
             lib = dlopen("native_core/bookgen_native.so", RTLD_LAZY);
         }
-        return lib ? reinterpret_cast<ArgsortUint64Fn>(dlsym(lib, "argsort_uint64")) : nullptr;
+        return lib ? reinterpret_cast<KeyValueSortUint64Uint32Fn>(dlsym(lib, "keyvalue_sort_uint64_uint32")) : nullptr;
 #endif
     }();
     return fn;
@@ -2187,6 +2187,20 @@ struct Prefix36DynamicKeyOffset {
     uint32_t offset = 0;
 };
 
+void fallback_sort_key_offsets(std::vector<uint64_t> &keys, std::vector<uint32_t> &offsets) {
+    std::vector<Prefix36DynamicKeyOffset> items(keys.size());
+    for (size_t i = 0; i < keys.size(); ++i) {
+        items[i] = Prefix36DynamicKeyOffset{keys[i], offsets[i]};
+    }
+    std::sort(items.begin(), items.end(), [](const auto &a, const auto &b) {
+        return a.key < b.key;
+    });
+    for (size_t i = 0; i < items.size(); ++i) {
+        keys[i] = items[i].key;
+        offsets[i] = items[i].offset;
+    }
+}
+
 Prefix36Layer finalize_prefix36_dynamic_state(
     const Prefix36DynamicState &state,
     const DenseLow24RankLut &dense_lut,
@@ -2220,7 +2234,9 @@ Prefix36Layer finalize_prefix36_dynamic_state(
             thread_offsets[static_cast<size_t>(i)] + thread_counts[static_cast<size_t>(i)];
     }
     const double collect_t0 = wall_time_seconds();
-    std::vector<Prefix36DynamicKeyOffset> items(thread_offsets.back());
+    const size_t item_count = thread_offsets.back();
+    std::vector<uint64_t> keys(item_count);
+    std::vector<uint32_t> arena_offsets(item_count);
 #pragma omp parallel num_threads(num_threads)
     {
         const int tid = omp_get_thread_num();
@@ -2241,74 +2257,136 @@ Prefix36Layer finalize_prefix36_dynamic_state(
             if (offset == Prefix36DynamicState::kPendingOffset) {
                 throw std::runtime_error("prefix36 dynamic finalize saw pending offset");
             }
-            items[out++] = Prefix36DynamicKeyOffset{key, offset};
+            keys[out] = key;
+            arena_offsets[out] = offset;
+            ++out;
         }
     }
     const double collect_t1 = wall_time_seconds();
     const double sort_t0 = wall_time_seconds();
-    if (auto argsort_fn = resolve_argsort_uint64(); argsort_fn != nullptr && items.size() >= 10000U) {
-        std::vector<uint64_t> keys(items.size());
-#pragma omp parallel for schedule(static) num_threads(num_threads)
-        for (int64_t i = 0; i < static_cast<int64_t>(items.size()); ++i) {
-            keys[static_cast<size_t>(i)] = items[static_cast<size_t>(i)].key;
-        }
-        std::vector<size_t> indices(items.size());
-        argsort_fn(keys.data(), keys.size(), indices.data(), false);
-        std::vector<Prefix36DynamicKeyOffset> sorted(items.size());
-#pragma omp parallel for schedule(static) num_threads(num_threads)
-        for (int64_t i = 0; i < static_cast<int64_t>(indices.size()); ++i) {
-            sorted[static_cast<size_t>(i)] = items[indices[static_cast<size_t>(i)]];
-        }
-        items.swap(sorted);
+    if (auto keyvalue_sort_fn = resolve_keyvalue_sort_uint64_uint32(); keyvalue_sort_fn != nullptr && keys.size() >= 10000U) {
+        keyvalue_sort_fn(keys.data(), arena_offsets.data(), keys.size(), false);
     } else {
-        std::sort(items.begin(), items.end(), [](const auto &a, const auto &b) {
-            return a.key < b.key;
-        });
+        fallback_sort_key_offsets(keys, arena_offsets);
     }
     const double sort_t1 = wall_time_seconds();
 
     Prefix36Layer out;
     out.layer_sum = state.layer_sum;
     out.threshold_bits = state.threshold_bits;
-    out.bucket_keys.resize(items.size());
-    out.bitmap_offsets.resize(items.size());
-    out.success_offsets.resize(items.size());
-    out.large_rank_offsets.resize(items.size());
+    out.bucket_keys.resize(item_count);
+    out.bitmap_offsets.resize(item_count);
+    out.success_offsets.resize(item_count);
+    out.large_rank_offsets.resize(item_count);
 
     uint64_t small_bytes = 0U;
     uint64_t large_words = 0U;
     uint64_t large_rank_words = 0U;
     const double plan_t0 = wall_time_seconds();
-    std::vector<uint32_t> live_counts(items.size(), 0U);
-    for (size_t i = 0; i < items.size(); ++i) {
-        const uint32_t group = sum_index(key_remaining_sum(items[i].key));
-        const uint32_t valid_count = dense_lut.size_table[group];
-        if (valid_count <= state.threshold_bits) {
-            const uint32_t bytes = static_cast<uint32_t>(bytes_for_bits(valid_count));
-            out.bitmap_offsets[i] = static_cast<uint32_t>(small_bytes);
-            out.large_rank_offsets[i] = 0U;
-            small_bytes += bytes;
-        } else {
-            const uint32_t words = static_cast<uint32_t>(words_for_bits(valid_count));
-            out.bitmap_offsets[i] = static_cast<uint32_t>(large_words);
-            out.large_rank_offsets[i] = static_cast<uint32_t>(large_rank_words);
-            large_words += words;
-            large_rank_words += large_rank_bases_for_words(words);
+    std::vector<uint32_t> live_counts(item_count, 0U);
+    if (item_count >= 10000U && num_threads > 1) {
+        std::vector<uint64_t> block_small(static_cast<size_t>(num_threads + 1), 0U);
+        std::vector<uint64_t> block_large(static_cast<size_t>(num_threads + 1), 0U);
+        std::vector<uint64_t> block_rank(static_cast<size_t>(num_threads + 1), 0U);
+#pragma omp parallel num_threads(num_threads)
+        {
+            const int tid = omp_get_thread_num();
+            const size_t begin =
+                (item_count * static_cast<size_t>(tid)) / static_cast<size_t>(num_threads);
+            const size_t end =
+                (item_count * static_cast<size_t>(tid + 1)) / static_cast<size_t>(num_threads);
+            uint64_t local_small = 0U;
+            uint64_t local_large = 0U;
+            uint64_t local_rank = 0U;
+            for (size_t i = begin; i < end; ++i) {
+                const uint32_t group = sum_index(key_remaining_sum(keys[i]));
+                const uint32_t valid_count = dense_lut.size_table[group];
+                if (valid_count <= state.threshold_bits) {
+                    local_small += bytes_for_bits(valid_count);
+                } else {
+                    const uint32_t words = static_cast<uint32_t>(words_for_bits(valid_count));
+                    local_large += words;
+                    local_rank += large_rank_bases_for_words(words);
+                }
+            }
+            block_small[static_cast<size_t>(tid + 1)] = local_small;
+            block_large[static_cast<size_t>(tid + 1)] = local_large;
+            block_rank[static_cast<size_t>(tid + 1)] = local_rank;
         }
-        out.bucket_keys[i] = items[i].key;
+        for (int i = 0; i < num_threads; ++i) {
+            block_small[static_cast<size_t>(i + 1)] += block_small[static_cast<size_t>(i)];
+            block_large[static_cast<size_t>(i + 1)] += block_large[static_cast<size_t>(i)];
+            block_rank[static_cast<size_t>(i + 1)] += block_rank[static_cast<size_t>(i)];
+        }
+        small_bytes = block_small[static_cast<size_t>(num_threads)];
+        large_words = block_large[static_cast<size_t>(num_threads)];
+        large_rank_words = block_rank[static_cast<size_t>(num_threads)];
+        if (small_bytes > std::numeric_limits<uint32_t>::max() ||
+            large_words > std::numeric_limits<uint32_t>::max() ||
+            large_rank_words > std::numeric_limits<uint32_t>::max()) {
+            throw std::runtime_error("prefix36 dynamic finalize bitmap offsets exceed uint32");
+        }
+#pragma omp parallel num_threads(num_threads)
+        {
+            const int tid = omp_get_thread_num();
+            const size_t begin =
+                (item_count * static_cast<size_t>(tid)) / static_cast<size_t>(num_threads);
+            const size_t end =
+                (item_count * static_cast<size_t>(tid + 1)) / static_cast<size_t>(num_threads);
+            uint64_t small_cursor = block_small[static_cast<size_t>(tid)];
+            uint64_t large_cursor = block_large[static_cast<size_t>(tid)];
+            uint64_t rank_cursor = block_rank[static_cast<size_t>(tid)];
+            for (size_t i = begin; i < end; ++i) {
+                const uint64_t key = keys[i];
+                const uint32_t group = sum_index(key_remaining_sum(key));
+                const uint32_t valid_count = dense_lut.size_table[group];
+                out.bucket_keys[i] = key;
+                if (valid_count <= state.threshold_bits) {
+                    const uint32_t bytes = static_cast<uint32_t>(bytes_for_bits(valid_count));
+                    out.bitmap_offsets[i] = static_cast<uint32_t>(small_cursor);
+                    out.large_rank_offsets[i] = 0U;
+                    small_cursor += bytes;
+                } else {
+                    const uint32_t words = static_cast<uint32_t>(words_for_bits(valid_count));
+                    out.bitmap_offsets[i] = static_cast<uint32_t>(large_cursor);
+                    out.large_rank_offsets[i] = static_cast<uint32_t>(rank_cursor);
+                    large_cursor += words;
+                    rank_cursor += large_rank_bases_for_words(words);
+                }
+            }
+        }
+    } else {
+        for (size_t i = 0; i < item_count; ++i) {
+            const uint32_t group = sum_index(key_remaining_sum(keys[i]));
+            const uint32_t valid_count = dense_lut.size_table[group];
+            if (valid_count <= state.threshold_bits) {
+                const uint32_t bytes = static_cast<uint32_t>(bytes_for_bits(valid_count));
+                out.bitmap_offsets[i] = static_cast<uint32_t>(small_bytes);
+                out.large_rank_offsets[i] = 0U;
+                small_bytes += bytes;
+            } else {
+                const uint32_t words = static_cast<uint32_t>(words_for_bits(valid_count));
+                out.bitmap_offsets[i] = static_cast<uint32_t>(large_words);
+                out.large_rank_offsets[i] = static_cast<uint32_t>(large_rank_words);
+                large_words += words;
+                large_rank_words += large_rank_bases_for_words(words);
+            }
+            out.bucket_keys[i] = keys[i];
+        }
     }
     const double plan_t1 = wall_time_seconds();
     const double allocate_t0 = wall_time_seconds();
-    out.small_bitmap_bytes.assign(static_cast<size_t>(small_bytes), 0U);
-    out.large_bitmap_words.assign(static_cast<size_t>(large_words), 0ULL);
-    out.large_rank_bases.assign(static_cast<size_t>(large_rank_words), 0U);
+    // std::vector still value-initializes here; true uninitialized allocation would require a container/allocator change.
+    out.small_bitmap_bytes.resize(static_cast<size_t>(small_bytes));
+    out.large_bitmap_words.resize(static_cast<size_t>(large_words));
+    out.large_rank_bases.resize(static_cast<size_t>(large_rank_words));
     const double allocate_t1 = wall_time_seconds();
 
     const double copy_t0 = wall_time_seconds();
 #pragma omp parallel for schedule(dynamic, 256) num_threads(num_threads)
-    for (int64_t i_signed = 0; i_signed < static_cast<int64_t>(items.size()); ++i_signed) {
+    for (int64_t i_signed = 0; i_signed < static_cast<int64_t>(item_count); ++i_signed) {
         const size_t i = static_cast<size_t>(i_signed);
-        const uint32_t group = sum_index(key_remaining_sum(items[i].key));
+        const uint32_t group = sum_index(key_remaining_sum(keys[i]));
         const uint32_t valid_count = dense_lut.size_table[group];
         if (valid_count <= state.threshold_bits) {
             const uint32_t bytes = static_cast<uint32_t>(bytes_for_bits(valid_count));
@@ -2316,7 +2394,7 @@ Prefix36Layer finalize_prefix36_dynamic_state(
             uint32_t live = 0U;
             for (uint32_t j = 0; j < bytes; ++j) {
                 uint8_t value =
-                    state.small_arena[items[i].offset + j].load(std::memory_order_relaxed);
+                    state.small_arena[arena_offsets[i] + j].load(std::memory_order_relaxed);
                 if (j + 1U == bytes && (valid_count & 7U) != 0U) {
                     value = static_cast<uint8_t>(value & static_cast<uint8_t>((1U << (valid_count & 7U)) - 1U));
                 }
@@ -2328,7 +2406,7 @@ Prefix36Layer finalize_prefix36_dynamic_state(
             const uint32_t words = static_cast<uint32_t>(words_for_bits(valid_count));
             const uint32_t dst = out.bitmap_offsets[i];
             for (uint32_t j = 0; j < words; ++j) {
-                uint64_t value = state.large_arena[items[i].offset + j].load(std::memory_order_relaxed);
+                uint64_t value = state.large_arena[arena_offsets[i] + j].load(std::memory_order_relaxed);
                 if (j + 1U == words && (valid_count & 63U) != 0U) {
                     value &= ((1ULL << (valid_count & 63U)) - 1ULL);
                 }
@@ -2337,12 +2415,49 @@ Prefix36Layer finalize_prefix36_dynamic_state(
             live_counts[i] = fill_large_rank_bases(out, dst, out.large_rank_offsets[i], words);
         }
     }
-    uint64_t success_cursor = 0U;
-    for (size_t i = 0; i < live_counts.size(); ++i) {
-        out.success_offsets[i] = static_cast<uint32_t>(success_cursor);
-        success_cursor += live_counts[i];
+    if (item_count >= 10000U && num_threads > 1) {
+        std::vector<uint64_t> block_success(static_cast<size_t>(num_threads + 1), 0U);
+#pragma omp parallel num_threads(num_threads)
+        {
+            const int tid = omp_get_thread_num();
+            const size_t begin =
+                (item_count * static_cast<size_t>(tid)) / static_cast<size_t>(num_threads);
+            const size_t end =
+                (item_count * static_cast<size_t>(tid + 1)) / static_cast<size_t>(num_threads);
+            uint64_t local = 0U;
+            for (size_t i = begin; i < end; ++i) {
+                local += live_counts[i];
+            }
+            block_success[static_cast<size_t>(tid + 1)] = local;
+        }
+        for (int i = 0; i < num_threads; ++i) {
+            block_success[static_cast<size_t>(i + 1)] += block_success[static_cast<size_t>(i)];
+        }
+        if (block_success[static_cast<size_t>(num_threads)] > std::numeric_limits<uint32_t>::max()) {
+            throw std::runtime_error("prefix36 dynamic finalize success offsets exceed uint32");
+        }
+#pragma omp parallel num_threads(num_threads)
+        {
+            const int tid = omp_get_thread_num();
+            const size_t begin =
+                (item_count * static_cast<size_t>(tid)) / static_cast<size_t>(num_threads);
+            const size_t end =
+                (item_count * static_cast<size_t>(tid + 1)) / static_cast<size_t>(num_threads);
+            uint64_t success_cursor = block_success[static_cast<size_t>(tid)];
+            for (size_t i = begin; i < end; ++i) {
+                out.success_offsets[i] = static_cast<uint32_t>(success_cursor);
+                success_cursor += live_counts[i];
+            }
+        }
+        out.live_board_count = block_success[static_cast<size_t>(num_threads)];
+    } else {
+        uint64_t success_cursor = 0U;
+        for (size_t i = 0; i < live_counts.size(); ++i) {
+            out.success_offsets[i] = static_cast<uint32_t>(success_cursor);
+            success_cursor += live_counts[i];
+        }
+        out.live_board_count = success_cursor;
     }
-    out.live_board_count = success_cursor;
     const double copy_t1 = wall_time_seconds();
     if (timing != nullptr) {
         timing->count_seconds = count_t1 - count_t0;
