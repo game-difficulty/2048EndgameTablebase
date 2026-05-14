@@ -6,6 +6,7 @@
 #include <exception>
 #include <filesystem>
 #include <functional>
+#include <numeric>
 #include <omp.h>
 #include <thread>
 #include <type_traits>
@@ -23,6 +24,7 @@ namespace BookGeneratorUtils {
     namespace {
 
     using SortFn = void (*)(uint64_t *, size_t, bool);
+    using KeyValueSortUint64Uint32Fn = void (*)(uint64_t *, uint32_t *, size_t, bool);
     using MergeTwoPartitionedFn = size_t (*)(const uint64_t *, size_t, const uint64_t *, size_t, const uint64_t *, size_t, uint64_t *, size_t *, size_t *);
     using MergeTreePartitionedFn = size_t (*)(const uint64_t *const *, const size_t *, size_t, const uint64_t *, size_t, uint64_t *, size_t *, size_t *, uint64_t *);
 
@@ -132,6 +134,12 @@ namespace BookGeneratorUtils {
         return fn;
     }
 
+    KeyValueSortUint64Uint32Fn resolve_keyvalue_sort_uint64_uint32() {
+        static KeyValueSortUint64Uint32Fn fn =
+            resolve_bookgen_symbol<KeyValueSortUint64Uint32Fn>("keyvalue_sort_uint64_uint32");
+        return fn;
+    }
+
     } // namespace
 
     // ------------------------------------------------------------------
@@ -150,6 +158,40 @@ namespace BookGeneratorUtils {
                 std::sort(arr, arr + length);
             }
         }
+    }
+
+    void sort_keyvalue_uint64_uint32(
+        uint64_t *keys,
+        uint32_t *values,
+        size_t length,
+        bool descending
+    ) {
+        if (keys == nullptr || values == nullptr || length < 2) {
+            return;
+        }
+        if (auto fn = resolve_keyvalue_sort_uint64_uint32(); fn != nullptr && length >= 10000) {
+            fn(keys, values, length, descending);
+            return;
+        }
+        std::vector<size_t> order(length);
+        std::iota(order.begin(), order.end(), size_t {0});
+        if (descending) {
+            std::sort(order.begin(), order.end(), [keys](size_t lhs, size_t rhs) {
+                return keys[lhs] > keys[rhs];
+            });
+        } else {
+            std::sort(order.begin(), order.end(), [keys](size_t lhs, size_t rhs) {
+                return keys[lhs] < keys[rhs];
+            });
+        }
+        std::vector<uint64_t> sorted_keys(length);
+        std::vector<uint32_t> sorted_values(length);
+        for (size_t i = 0; i < length; ++i) {
+            sorted_keys[i] = keys[order[i]];
+            sorted_values[i] = values[order[i]];
+        }
+        std::memcpy(keys, sorted_keys.data(), length * sizeof(uint64_t));
+        std::memcpy(values, sorted_values.data(), length * sizeof(uint32_t));
     }
 
     // ------------------------------------------------------------------

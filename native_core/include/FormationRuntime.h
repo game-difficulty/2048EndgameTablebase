@@ -88,6 +88,7 @@ inline void update_build_progress(uint32_t next_current, uint32_t next_total) {
 struct AdvancedPatternSpec {
     std::string name;
     std::vector<uint64_t> pattern_masks;
+    std::vector<uint8_t> success_shifts;
     int symm_mode = static_cast<int>(SymmMode::Identity);
     uint8_t num_free_32k = 0;
     std::vector<uint8_t> fixed_32k_shifts;

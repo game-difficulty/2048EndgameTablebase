@@ -153,6 +153,12 @@ set(FORMATION_CORE_SOURCES
     src/EXFrozenLayer.cpp
     src/EXCompressedResult.cpp
     src/BookGeneratorEX.cpp
+    src/EXADLayer.cpp
+    src/EXADIO.cpp
+    src/EXADCompressedResult.cpp
+    src/EXADBuilder.cpp
+    src/BookGeneratorEXAD.cpp
+    src/BookSolverEXAD.cpp
     src/BoardMaskerAD.cpp
     src/BoardMoverAD.cpp
     src/BookGeneratorAD.cpp

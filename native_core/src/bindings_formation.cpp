@@ -8,6 +8,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "BookSolver.h"
+#include "EXADCompressedResult.h"
 #include "EXCompressedResult.h"
 #include "ReaderRuntime.h"
 #include "SymmetryUtils.h"
@@ -72,6 +73,42 @@ nb::dict ex_cold_lookup_to_python(const EXCompressedResult::ColdLookupResult &lo
     return result;
 }
 
+nb::dict exad_compress_stats_to_python(const EXADCompressedResult::CompressStats &stats) {
+    nb::dict result;
+    result["original_bytes"] = stats.original_bytes;
+    result["compressed_bytes"] = stats.compressed_bytes;
+    result["live_board_count"] = stats.live_board_count;
+    result["success_value_count"] = stats.success_value_count;
+    result["bucket_block_count"] = stats.bucket_block_count;
+    result["value_block_count"] = stats.value_block_count;
+    result["bucket_raw_bytes"] = stats.bucket_raw_bytes;
+    result["bucket_compressed_bytes"] = stats.bucket_compressed_bytes;
+    result["value_raw_bytes"] = stats.value_raw_bytes;
+    result["value_compressed_bytes"] = stats.value_compressed_bytes;
+    result["compression_seconds"] = stats.compression_seconds;
+    const double ratio = stats.original_bytes == 0
+        ? 0.0
+        : static_cast<double>(stats.compressed_bytes) / static_cast<double>(stats.original_bytes);
+    result["ratio"] = ratio;
+    result["save_ratio"] = 1.0 - ratio;
+    return result;
+}
+
+nb::dict exad_cold_lookup_to_python(const EXADCompressedResult::ColdLookupResult &lookup) {
+    nb::dict result;
+    result["found"] = lookup.found;
+    result["value_index"] = lookup.value_index;
+    result["local_row"] = lookup.local_row;
+    result["raw_value_bits"] = lookup.raw_value_bits;
+    result["numeric_value"] = lookup.numeric_value;
+    result["success_kind"] = static_cast<uint32_t>(lookup.success_kind);
+    result["bucket_block_raw_bytes"] = lookup.bucket_block_raw_bytes;
+    result["value_block_raw_bytes"] = lookup.value_block_raw_bytes;
+    result["bucket_block_compressed_bytes"] = lookup.bucket_block_compressed_bytes;
+    result["value_block_compressed_bytes"] = lookup.value_block_compressed_bytes;
+    return result;
+}
+
 } // namespace
 
 NB_MODULE(formation_core, m) {
@@ -115,6 +152,7 @@ NB_MODULE(formation_core, m) {
         .def(nb::init<>())
         .def_rw("name", &AdvancedPatternSpec::name)
         .def_rw("pattern_masks", &AdvancedPatternSpec::pattern_masks)
+        .def_rw("success_shifts", &AdvancedPatternSpec::success_shifts)
         .def_rw("symm_mode", &AdvancedPatternSpec::symm_mode)
         .def_rw("num_free_32k", &AdvancedPatternSpec::num_free_32k)
         .def_rw("fixed_32k_shifts", &AdvancedPatternSpec::fixed_32k_shifts)
@@ -164,6 +202,30 @@ NB_MODULE(formation_core, m) {
         .def(
             "get_random_state",
             &AdvancedBookReader::get_random_state,
+            "path_list"_a,
+            "pattern_full"_a,
+            "spawn_rate4"_a
+        );
+
+    nb::class_<EXADBookReader>(m, "EXADBookReader")
+        .def(nb::init<AdvancedPatternSpec, bool>(), "pattern_spec"_a, "is_variant"_a = false)
+        .def(
+            "move_on_dic",
+            [](EXADBookReader &reader,
+               const std::vector<std::vector<int>> &board,
+               const std::vector<std::pair<std::string, std::string>> &path_list,
+               const std::string &pattern_full,
+               int64_t nums_adjust) {
+                return reader_result_to_python(reader.move_on_dic(board, path_list, pattern_full, nums_adjust));
+            },
+            "board"_a,
+            "path_list"_a,
+            "pattern_full"_a,
+            "nums_adjust"_a
+        )
+        .def(
+            "get_random_state",
+            &EXADBookReader::get_random_state,
             "path_list"_a,
             "pattern_full"_a,
             "spawn_rate4"_a
@@ -295,6 +357,28 @@ NB_MODULE(formation_core, m) {
     );
 
     m.def(
+        "run_pattern_build_exad",
+        [](const U64Array &arr_init, const AdvancedPatternSpec &spec, const RunOptions &options) {
+            run_pattern_build_exad_cpp(to_u64_vector(arr_init), spec, options);
+        },
+        "arr_init"_a,
+        "pattern_spec"_a,
+        "run_options"_a,
+        nb::call_guard<nb::gil_scoped_release>()
+    );
+
+    m.def(
+        "run_pattern_solve_exad",
+        [](const U64Array &arr_init, const AdvancedPatternSpec &spec, const RunOptions &options) {
+            run_pattern_solve_exad_cpp(to_u64_vector(arr_init), spec, options);
+        },
+        "arr_init"_a,
+        "pattern_spec"_a,
+        "run_options"_a,
+        nb::call_guard<nb::gil_scoped_release>()
+    );
+
+    m.def(
         "run_pattern_build_zmask",
         [](const U64Array &arr_init, const PatternSpec &spec, const RunOptions &options) {
             run_pattern_build_zmask_cpp(to_u64_vector(arr_init), spec, options);
@@ -386,5 +470,89 @@ NB_MODULE(formation_core, m) {
         "zbook_path"_a,
         "zlut_path"_a,
         "board"_a
+    );
+
+    m.def(
+        "compress_exadbook_result",
+        [](const std::string &exadbook_path,
+           const std::string &exadlut_path,
+           const std::string &output_path,
+           uint32_t bucket_block_raw_target_bytes,
+           uint32_t success_block_values,
+           int compression_level) {
+            EXADCompressedResult::CompressStats stats;
+            {
+                nb::gil_scoped_release release;
+                stats = EXADCompressedResult::compress_exad_solved_layer_to_result(
+                    exadbook_path,
+                    exadlut_path,
+                    output_path,
+                    bucket_block_raw_target_bytes,
+                    success_block_values,
+                    compression_level
+                );
+            }
+            return exad_compress_stats_to_python(stats);
+        },
+        "exadbook_path"_a,
+        "exadlut_path"_a,
+        "output_path"_a,
+        "bucket_block_raw_target_bytes"_a = 512U * 1024U,
+        "success_block_values"_a = 65536U,
+        "compression_level"_a = 5
+    );
+
+    m.def(
+        "lookup_exadbook_result_cold",
+        [](const std::string &compressed_path,
+           const std::string &exadlut_path,
+           int ad_key,
+           uint64_t canonical_board,
+           uint32_t column) {
+            EXADCompressedResult::ColdLookupResult result;
+            {
+                nb::gil_scoped_release release;
+                result = EXADCompressedResult::lookup_exad_cold(
+                    compressed_path,
+                    exadlut_path,
+                    ad_key,
+                    canonical_board,
+                    column
+                );
+            }
+            return exad_cold_lookup_to_python(result);
+        },
+        "compressed_path"_a,
+        "exadlut_path"_a,
+        "ad_key"_a,
+        "canonical_board"_a,
+        "column"_a
+    );
+
+    m.def(
+        "lookup_exadbook_cold",
+        [](const std::string &exadbook_path,
+           const std::string &exadlut_path,
+           int ad_key,
+           uint64_t canonical_board,
+           uint32_t column) {
+            EXADCompressedResult::ColdLookupResult result;
+            {
+                nb::gil_scoped_release release;
+                result = EXADCompressedResult::lookup_exadbook_cold(
+                    exadbook_path,
+                    exadlut_path,
+                    ad_key,
+                    canonical_board,
+                    column
+                );
+            }
+            return exad_cold_lookup_to_python(result);
+        },
+        "exadbook_path"_a,
+        "exadlut_path"_a,
+        "ad_key"_a,
+        "canonical_board"_a,
+        "column"_a
     );
 }

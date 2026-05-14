@@ -1,0 +1,2847 @@
+#include "BookSolver.h"
+
+#include "CanonicalBatch.h"
+#include "EXADCompressedResult.h"
+#include "EXADSolvedLayer.h"
+#include "HybridSearch.h"
+
+// EXAD recalculate still reuses AD's semantic helper routines (derive ranking,
+// mask-new-tile dispatch, permutation matching, and workspaces).  The storage
+// and lookup path below is EXAD-native and does not call AD's matrix solver.
+#define run_pattern_solve_ad_cpp run_pattern_solve_ad_cpp_for_exad_core
+#include "BookSolverAD.cpp"
+#undef run_pattern_solve_ad_cpp
+
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <limits>
+#include <sstream>
+
+namespace {
+
+namespace fs = std::filesystem;
+
+template <typename T>
+inline void prefetch_success_row(const T *row) {
+#if defined(__GNUC__) || defined(__clang__)
+    if (row != nullptr) {
+        __builtin_prefetch(row, 0, 1);
+    }
+#else
+    (void)row;
+#endif
+}
+
+constexpr uint32_t kEXADScalarBatchSize = 256U;
+constexpr size_t kEXADScalarBestSlots = static_cast<size_t>(kEXADScalarBatchSize) * 16U;
+constexpr size_t kEXADScalarQueryReserve = static_cast<size_t>(kEXADScalarBatchSize) * 16U * 4U;
+constexpr uint32_t kEXADVectorMaxBatchSize = 256U;
+constexpr uint32_t kEXADVectorMaxWidth = 128U;
+constexpr size_t kEXADVectorTargetBestSlots = kEXADScalarBestSlots * 8U;
+constexpr size_t kEXADMaxMatchCacheCells = 64ULL * 1024ULL * 1024ULL;
+static_assert(kEXADVectorMaxWidth <= std::numeric_limits<uint16_t>::max());
+static_assert(kEXADVectorMaxBatchSize * 16U - 1U <= std::numeric_limits<uint16_t>::max());
+
+inline bool exad_vector_batch_enabled(size_t width) {
+    // Very large AD vector rows are valid but intentionally stay on the scalar
+    // vector path; the batched query metadata stores width/ref compactly.
+    return width > 1U &&
+        width <= kEXADVectorMaxWidth &&
+        width <= std::numeric_limits<uint16_t>::max();
+}
+
+inline uint32_t exad_vector_batch_size(size_t width) {
+    const size_t denom = std::max<size_t>(1U, 16U * width);
+    const size_t by_width = std::max<size_t>(1U, kEXADVectorTargetBestSlots / denom);
+    return static_cast<uint32_t>(std::min<size_t>(kEXADVectorMaxBatchSize, by_width));
+}
+
+inline size_t exad_match_cache_map_length(size_t derive_size) {
+    if (derive_size == 0U) {
+        return 0U;
+    }
+    constexpr std::array<size_t, 8> kPrimeLengths = {
+        33331U, 11113U, 4099U, 2053U, 1021U, 509U, 251U, 127U
+    };
+    const size_t max_length = std::max<size_t>(1U, kEXADMaxMatchCacheCells / derive_size);
+    for (size_t length : kPrimeLengths) {
+        if (length <= max_length) {
+            return length;
+        }
+    }
+    return 0U;
+}
+
+inline bool exad_match_cache_enabled(size_t derive_size) {
+    if (derive_size <= 1U || derive_size > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+        return false;
+    }
+    const size_t map_length = exad_match_cache_map_length(derive_size);
+    return map_length != 0U &&
+        map_length <= kEXADMaxMatchCacheCells / derive_size;
+}
+
+inline bool match_cache_ready(const MatchCache &cache, size_t derive_size) {
+    return cache.map_length != 0U && cache.derive_size >= derive_size;
+}
+
+template <typename T>
+MatchCache &get_exad_match_cache(
+    std::unordered_map<uint32_t, MatchCache> &match_dict,
+    size_t derive_size
+) {
+    const uint32_t key = static_cast<uint32_t>(derive_size);
+    auto it = match_dict.find(key);
+    if (it == match_dict.end()) {
+        const size_t map_length = exad_match_cache_map_length(derive_size);
+        if (map_length == 0U) {
+            throw std::runtime_error("EXAD match cache requested for unsupported row width");
+        }
+        it = match_dict.emplace(key, MatchCache(map_length, derive_size)).first;
+    }
+    return it->second;
+}
+
+template <typename T>
+struct EXADScalarBatchWorkspace {
+    std::vector<EXAD::PreparedQuery> queries1;
+    std::vector<EXAD::PreparedQuery> queries2;
+    std::vector<uint64_t> canonical_candidates1;
+    std::vector<uint64_t> canonical_candidates2;
+    std::vector<uint16_t> candidate_refs1;
+    std::vector<uint16_t> candidate_refs2;
+    std::array<uint16_t, kEXADScalarBatchSize> empty_masks{};
+    std::array<T, kEXADScalarBestSlots> best2{};
+    std::array<T, kEXADScalarBestSlots> best4{};
+
+    EXADScalarBatchWorkspace() {
+        queries1.reserve(kEXADScalarQueryReserve);
+        queries2.reserve(kEXADScalarQueryReserve);
+        canonical_candidates1.reserve(kEXADScalarQueryReserve);
+        canonical_candidates2.reserve(kEXADScalarQueryReserve);
+        candidate_refs1.reserve(kEXADScalarQueryReserve);
+        candidate_refs2.reserve(kEXADScalarQueryReserve);
+    }
+};
+
+struct EXADVectorQuery {
+    EXAD::PreparedQuery query{};
+    uint32_t column_offset = 0;
+};
+
+template <typename T>
+struct EXADVectorBatchWorkspace {
+    std::vector<EXADVectorQuery> queries1;
+    std::vector<EXADVectorQuery> queries2;
+    std::vector<uint32_t> columns1;
+    std::vector<uint32_t> columns2;
+    std::vector<uint16_t> empty_masks;
+    std::vector<T> best2;
+    std::vector<T> best4;
+    std::vector<double> success_probability;
+
+    void prepare(uint32_t width, uint32_t board_count, T zero_val) {
+        queries1.clear();
+        queries2.clear();
+        columns1.clear();
+        columns2.clear();
+        const size_t query_reserve = static_cast<size_t>(board_count) * 16U * 4U;
+        const size_t best_slots = static_cast<size_t>(board_count) * 16U * width;
+        if (queries1.capacity() < query_reserve) {
+            queries1.reserve(query_reserve);
+            queries2.reserve(query_reserve);
+        }
+        const size_t column_reserve = query_reserve * width;
+        if (columns1.capacity() < column_reserve) {
+            columns1.reserve(column_reserve);
+            columns2.reserve(column_reserve);
+        }
+        empty_masks.resize(board_count);
+        best2.resize(best_slots);
+        best4.resize(best_slots);
+        std::fill(best2.begin(), best2.end(), zero_val);
+        std::fill(best4.begin(), best4.end(), zero_val);
+        success_probability.resize(width);
+    }
+};
+
+std::string exad_solve_stats_file_path(const RunOptions &options) {
+    return options.pathname + "exad_solve_stats.csv";
+}
+
+std::string exad_solve_stats_header() {
+    return "stage,layout,direct_index_type,step,input_rows,input_values,post_zero_rows,post_zero_values,"
+           "deletion_threshold,max_success,total_seconds,throughput_mbps,compute_seconds,compute_throughput_mbps,"
+           "current_read_seconds,current_build_seconds,future_read_seconds,future_index_seconds,recalculate_seconds,"
+           "zero_compact_seconds,current_write_seconds,future_compact_seconds,future_write_seconds,metadata_bytes,"
+           "success_bytes,bitmap_density,compress_seconds,time";
+}
+
+void ensure_exad_solve_stats_header(const RunOptions &options) {
+    const std::string path = exad_solve_stats_file_path(options);
+    if (fs::exists(path)) {
+        std::ifstream in(path);
+        std::string first_line;
+        if (std::getline(in, first_line) && first_line == exad_solve_stats_header()) {
+            return;
+        }
+        in.close();
+        std::error_code ec;
+        fs::remove(path, ec);
+    }
+    std::ofstream file(path, std::ios::app);
+    file << exad_solve_stats_header() << "\n";
+}
+
+struct EXADSolveStatsRecord {
+    std::string stage = "solve";
+    int step = -1;
+    uint64_t input_rows = 0;
+    uint64_t input_values = 0;
+    uint64_t post_zero_rows = 0;
+    uint64_t post_zero_values = 0;
+    double deletion_threshold = 0.0;
+    double max_success = 0.0;
+    double current_read_seconds = 0.0;
+    double current_build_seconds = 0.0;
+    double future_read_seconds = 0.0;
+    double future_index_seconds = 0.0;
+    double recalculate_seconds = 0.0;
+    double zero_compact_seconds = 0.0;
+    double current_write_seconds = 0.0;
+    double future_compact_seconds = 0.0;
+    double future_write_seconds = 0.0;
+    double compress_seconds = 0.0;
+    uint64_t metadata_bytes = 0;
+    uint64_t success_bytes = 0;
+    double bitmap_density = 0.0;
+};
+
+void append_exad_solve_stats_record(
+    const RunOptions &options,
+    const EXADSolveStatsRecord &record
+) {
+    ensure_exad_solve_stats_header(options);
+    const double compute_seconds =
+        record.current_build_seconds + record.future_index_seconds + record.recalculate_seconds
+        + record.zero_compact_seconds + record.future_compact_seconds;
+    const double total_seconds =
+        record.current_read_seconds + record.future_read_seconds + compute_seconds
+        + record.current_write_seconds + record.future_write_seconds + record.compress_seconds;
+    std::ofstream file(exad_solve_stats_file_path(options), std::ios::app);
+    file << record.stage << ","
+         << "exad_prefix36_suffix28_solved,per_ad_bucket_entry,"
+         << record.step << ","
+         << record.input_rows << ","
+         << record.input_values << ","
+         << record.post_zero_rows << ","
+         << record.post_zero_values << ","
+         << std::fixed << std::setprecision(6)
+         << record.deletion_threshold << ","
+         << record.max_success << ","
+         << total_seconds << ","
+         << throughput_mbps_for(record.input_values, total_seconds) << ","
+         << compute_seconds << ","
+         << throughput_mbps_for(record.input_values, compute_seconds) << ","
+         << record.current_read_seconds << ","
+         << record.current_build_seconds << ","
+         << record.future_read_seconds << ","
+         << record.future_index_seconds << ","
+         << record.recalculate_seconds << ","
+         << record.zero_compact_seconds << ","
+         << record.current_write_seconds << ","
+         << record.future_compact_seconds << ","
+         << record.future_write_seconds << ","
+         << record.metadata_bytes << ","
+         << record.success_bytes << ","
+         << record.bitmap_density << ","
+         << record.compress_seconds << ","
+         << now_string() << "\n";
+}
+
+constexpr char kEXADSlotChunkMagic[8] = {'E', 'X', 'A', 'D', '7', 'S', 'L', 'C'};
+constexpr uint32_t kEXADSlotChunkVersion = 1U;
+
+struct EXADSlotChunkHeader {
+    char magic[8];
+    uint32_t version = kEXADSlotChunkVersion;
+    uint32_t dtype_mode = 0;
+    uint32_t value_size = 0;
+    uint32_t slot = 0;
+    uint32_t original_board_sum = 0;
+    uint32_t threshold_bits = 0;
+    uint32_t row_width = 0;
+    uint64_t lut_signature = 0;
+    uint64_t live_board_count = 0;
+    uint64_t exact_bitmap_bits = 0;
+    uint64_t aligned_bitmap_bits = 0;
+    uint64_t bucket_count = 0;
+    uint64_t small_bitmap_bytes = 0;
+    uint64_t large_bitmap_words = 0;
+    uint64_t success_value_count = 0;
+};
+
+struct EXADSlotChunkManifest {
+    std::string path;
+    uint32_t slot = 0;
+    uint32_t original_board_sum = 0;
+    uint32_t threshold_bits = 0;
+    uint32_t row_width = 0;
+    uint64_t lut_signature = 0;
+    uint64_t live_board_count = 0;
+    uint64_t exact_bitmap_bits = 0;
+    uint64_t aligned_bitmap_bits = 0;
+    uint64_t bucket_count = 0;
+    uint64_t small_bitmap_bytes = 0;
+    uint64_t large_bitmap_words = 0;
+    uint64_t success_value_count = 0;
+};
+
+struct EXADChunkMergeSummary {
+    uint64_t post_zero_rows = 0;
+    uint64_t post_zero_values = 0;
+    uint64_t metadata_bytes = 0;
+    uint64_t success_bytes = 0;
+    double bitmap_density = 0.0;
+};
+
+std::string exad_chunk_dir_path(const RunOptions &options, int step) {
+    return EXAD::solved_file_path(options.pathname, step) + ".chunks.tmp";
+}
+
+std::string exad_chunk_writing_path(const RunOptions &options, int step) {
+    return EXAD::solved_file_path(options.pathname, step) + ".writing";
+}
+
+std::string exad_slot_chunk_path(const std::string &chunk_dir, size_t slot) {
+    std::ostringstream stream;
+    stream << "slot_" << std::setw(2) << std::setfill('0') << slot << ".exadslot";
+    return (fs::path(chunk_dir) / stream.str()).string();
+}
+
+std::string exad_compressed_file_path(const RunOptions &options, int step) {
+    return options.pathname + std::to_string(step) + EXADCompressedResult::kCompressedLayerFileExtension;
+}
+
+bool exad_compressed_file_is_fresh(const std::string &source_path, const std::string &output_path) {
+    std::error_code ec;
+    if (!fs::exists(output_path, ec)) {
+        return false;
+    }
+    const auto out_time = fs::last_write_time(output_path, ec);
+    if (ec) {
+        return false;
+    }
+    const auto src_time = fs::last_write_time(source_path, ec);
+    if (ec) {
+        return false;
+    }
+    return out_time >= src_time;
+}
+
+double maybe_compress_exad_solved_file(const RunOptions &options, int step) {
+    if (!options.compress) {
+        return 0.0;
+    }
+    const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
+    const std::string compressed_path = exad_compressed_file_path(options, step);
+    if (exad_compressed_file_is_fresh(solved_path, compressed_path)) {
+        return 0.0;
+    }
+    const double t0 = wall_time_seconds();
+    EXADCompressedResult::compress_exad_solved_layer_to_result(
+        solved_path,
+        EXAD::lut_file_path(options.pathname),
+        compressed_path
+    );
+    return wall_time_seconds() - t0;
+}
+
+uint64_t exad_file_size_or_throw(const std::string &path, const char *kind) {
+    std::error_code ec;
+    const uintmax_t size = fs::file_size(path, ec);
+    if (ec) {
+        throw std::runtime_error(std::string("failed to determine EXAD ") + kind + " file size: " + path);
+    }
+    return static_cast<uint64_t>(size);
+}
+
+void read_chunk_exact(
+    FileIOUtils::DirectSequentialReader &in,
+    void *dst,
+    size_t bytes,
+    const std::string &
+) {
+    if (bytes != 0U) {
+        in.read(dst, bytes);
+    }
+}
+
+template <typename T>
+EXADSlotChunkManifest manifest_from_chunk_header(
+    const EXADSlotChunkHeader &header,
+    const std::string &path,
+    EXAD::DTypeMode expected_mode,
+    size_t expected_slot
+) {
+    if (std::memcmp(header.magic, kEXADSlotChunkMagic, sizeof(header.magic)) != 0 ||
+        header.version != kEXADSlotChunkVersion) {
+        throw std::runtime_error("invalid EXAD slot chunk magic/version: " + path);
+    }
+    const EXAD::DTypeMode file_mode = static_cast<EXAD::DTypeMode>(header.dtype_mode);
+    if (file_mode != expected_mode || !EXAD::dtype_matches_type<T>(file_mode) || header.value_size != sizeof(T)) {
+        throw std::runtime_error("EXAD slot chunk dtype mismatch: " + path);
+    }
+    if (header.slot != expected_slot || expected_slot >= bucket_slot_count()) {
+        throw std::runtime_error("EXAD slot chunk slot mismatch: " + path);
+    }
+    if (header.row_width != 0U) {
+        const uint64_t expected_values = header.live_board_count * static_cast<uint64_t>(header.row_width);
+        if (header.live_board_count != 0U &&
+            expected_values / header.live_board_count != static_cast<uint64_t>(header.row_width)) {
+            throw std::runtime_error("EXAD slot chunk value count overflow: " + path);
+        }
+        if (header.success_value_count != expected_values) {
+            throw std::runtime_error("EXAD slot chunk value count mismatch: " + path);
+        }
+    } else if (header.success_value_count != 0U) {
+        throw std::runtime_error("EXAD slot chunk has values with zero row width: " + path);
+    }
+
+    EXADSlotChunkManifest manifest;
+    manifest.path = path;
+    manifest.slot = header.slot;
+    manifest.original_board_sum = header.original_board_sum;
+    manifest.threshold_bits = header.threshold_bits;
+    manifest.row_width = header.row_width;
+    manifest.lut_signature = header.lut_signature;
+    manifest.live_board_count = header.live_board_count;
+    manifest.exact_bitmap_bits = header.exact_bitmap_bits;
+    manifest.aligned_bitmap_bits = header.aligned_bitmap_bits;
+    manifest.bucket_count = header.bucket_count;
+    manifest.small_bitmap_bytes = header.small_bitmap_bytes;
+    manifest.large_bitmap_words = header.large_bitmap_words;
+    manifest.success_value_count = header.success_value_count;
+    return manifest;
+}
+
+template <typename T>
+EXADSlotChunkManifest read_slot_chunk_manifest(
+    const std::string &path,
+    EXAD::DTypeMode expected_mode,
+    size_t expected_slot
+) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("failed to open EXAD slot chunk: " + path);
+    }
+    EXADSlotChunkHeader header{};
+    FileIOUtils::read_exact(in, &header, sizeof(header), path);
+    return manifest_from_chunk_header<T>(header, path, expected_mode, expected_slot);
+}
+
+template <typename T>
+uint64_t slot_chunk_serialized_size(const EXAD::SolvedLayer<T> &layer, size_t slot) {
+    const EXAD::BoardSet &set = layer.sets[slot];
+    return sizeof(EXADSlotChunkHeader)
+        + static_cast<uint64_t>(set.buckets.size()) * sizeof(EXAD::BucketEntry)
+        + static_cast<uint64_t>(set.small_bitmap_bytes.size())
+        + static_cast<uint64_t>(set.large_bitmap_words.size()) * sizeof(uint64_t)
+        + static_cast<uint64_t>(layer.success_values.size()) * sizeof(T);
+}
+
+template <typename T>
+void write_slot_chunk_file(
+    const std::string &path,
+    const EXAD::SolvedLayer<T> &layer,
+    size_t slot,
+    FileIOUtils::DirectIoConfig config
+) {
+    const EXAD::BoardSet &set = layer.sets[slot];
+    EXADSlotChunkHeader header{};
+    std::memcpy(header.magic, kEXADSlotChunkMagic, sizeof(header.magic));
+    header.dtype_mode = static_cast<uint32_t>(layer.dtype_mode);
+    header.value_size = sizeof(T);
+    header.slot = static_cast<uint32_t>(slot);
+    header.original_board_sum = layer.original_board_sum;
+    header.threshold_bits = layer.threshold_bits;
+    header.row_width = layer.row_width[slot];
+    header.lut_signature = layer.lut_signature;
+    header.live_board_count = set.live_board_count;
+    header.exact_bitmap_bits = set.exact_bitmap_bits;
+    header.aligned_bitmap_bits = set.aligned_bitmap_bits;
+    header.bucket_count = set.buckets.size();
+    header.small_bitmap_bytes = set.small_bitmap_bytes.size();
+    header.large_bitmap_words = set.large_bitmap_words.size();
+    header.success_value_count = layer.success_values.size();
+
+    FileIOUtils::DirectAppendWriter out(path, slot_chunk_serialized_size(layer, slot), config);
+    out.append(&header, sizeof(header));
+    if (!set.buckets.empty()) {
+        out.append(set.buckets.data(), set.buckets.size() * sizeof(EXAD::BucketEntry));
+    }
+    if (!set.small_bitmap_bytes.empty()) {
+        out.append(set.small_bitmap_bytes.data(), set.small_bitmap_bytes.size());
+    }
+    if (!set.large_bitmap_words.empty()) {
+        out.append(set.large_bitmap_words.data(), set.large_bitmap_words.size() * sizeof(uint64_t));
+    }
+    if (!layer.success_values.empty()) {
+        out.append(layer.success_values.data(), layer.success_values.size() * sizeof(T));
+    }
+    out.close();
+}
+
+template <typename T>
+EXAD::SolvedLayer<T> make_solved_layer_from_slot(
+    EXAD::BoardSet &&set,
+    const EXAD::LayerFileInfo &info,
+    size_t slot,
+    const AdvancedMaskParam &param,
+    EXAD::DTypeMode mode,
+    T fill_value,
+    int num_threads
+) {
+    if (slot >= bucket_slot_count()) {
+        throw std::runtime_error("EXAD slot out of range while building chunked solved layer");
+    }
+    EXAD::SolvedLayer<T> layer;
+    layer.original_board_sum = info.original_board_sum;
+    layer.threshold_bits = info.threshold_bits;
+    layer.lut_signature = info.lut_signature;
+    layer.dtype_mode = mode;
+    layer.live_board_count = set.live_board_count;
+    layer.sets[slot] = std::move(set);
+    const int ad_key = bucket_key_min() + static_cast<int>(slot);
+    const uint32_t width = static_cast<uint32_t>(EXAD::solved_derive_size_for_bucket(ad_key, param.num_free_32k));
+    layer.row_width[slot] = width;
+    const uint64_t value_count = layer.live_board_count * static_cast<uint64_t>(width);
+    if (layer.live_board_count != 0U && value_count / layer.live_board_count != static_cast<uint64_t>(width)) {
+        throw std::runtime_error("EXAD chunked solved layer value count overflow");
+    }
+    layer.success_values.resize(static_cast<size_t>(value_count));
+    EXAD::fill_success_values(layer.success_values, fill_value, num_threads);
+    return layer;
+}
+
+void discard_reader_bytes(
+    FileIOUtils::DirectSequentialReader &reader,
+    uint64_t bytes,
+    const std::string &path
+) {
+    std::vector<uint8_t> buffer(8ULL * 1024ULL * 1024ULL);
+    while (bytes != 0U) {
+        const size_t chunk = static_cast<size_t>(std::min<uint64_t>(bytes, buffer.size()));
+        read_chunk_exact(reader, buffer.data(), chunk, path);
+        bytes -= static_cast<uint64_t>(chunk);
+    }
+}
+
+void copy_reader_bytes(
+    FileIOUtils::DirectSequentialReader &reader,
+    FileIOUtils::DirectAppendWriter &writer,
+    uint64_t bytes,
+    const std::string &path
+) {
+    std::vector<uint8_t> buffer(8ULL * 1024ULL * 1024ULL);
+    while (bytes != 0U) {
+        const size_t chunk = static_cast<size_t>(std::min<uint64_t>(bytes, buffer.size()));
+        read_chunk_exact(reader, buffer.data(), chunk, path);
+        writer.append(buffer.data(), chunk);
+        bytes -= static_cast<uint64_t>(chunk);
+    }
+}
+
+template <typename T>
+EXADSlotChunkHeader read_slot_chunk_header_direct(
+    FileIOUtils::DirectSequentialReader &reader,
+    const std::string &path,
+    EXAD::DTypeMode expected_mode,
+    size_t expected_slot
+) {
+    EXADSlotChunkHeader header{};
+    read_chunk_exact(reader, &header, sizeof(header), path);
+    (void)manifest_from_chunk_header<T>(header, path, expected_mode, expected_slot);
+    return header;
+}
+
+template <typename T>
+void append_slot_chunk_metadata(
+    FileIOUtils::DirectAppendWriter &out,
+    const EXADSlotChunkManifest &manifest,
+    EXAD::DTypeMode expected_mode,
+    FileIOUtils::DirectIoConfig config
+) {
+    FileIOUtils::DirectSequentialReader reader(
+        manifest.path,
+        exad_file_size_or_throw(manifest.path, "slot chunk"),
+        config
+    );
+    (void)read_slot_chunk_header_direct<T>(reader, manifest.path, expected_mode, manifest.slot);
+    copy_reader_bytes(
+        reader,
+        out,
+        static_cast<uint64_t>(manifest.bucket_count) * sizeof(EXAD::BucketEntry)
+            + manifest.small_bitmap_bytes
+            + manifest.large_bitmap_words * sizeof(uint64_t),
+        manifest.path
+    );
+    // The success payload is appended in a second pass so the final file keeps
+    // the standard EXAD solved-layer layout without materializing all slots.
+}
+
+template <typename T>
+void append_slot_chunk_success(
+    FileIOUtils::DirectAppendWriter &out,
+    const EXADSlotChunkManifest &manifest,
+    EXAD::DTypeMode expected_mode,
+    FileIOUtils::DirectIoConfig config
+) {
+    FileIOUtils::DirectSequentialReader reader(
+        manifest.path,
+        exad_file_size_or_throw(manifest.path, "slot chunk"),
+        config
+    );
+    (void)read_slot_chunk_header_direct<T>(reader, manifest.path, expected_mode, manifest.slot);
+    discard_reader_bytes(
+        reader,
+        static_cast<uint64_t>(manifest.bucket_count) * sizeof(EXAD::BucketEntry)
+            + manifest.small_bitmap_bytes
+            + manifest.large_bitmap_words * sizeof(uint64_t),
+        manifest.path
+    );
+    copy_reader_bytes(
+        reader,
+        out,
+        manifest.success_value_count * sizeof(T),
+        manifest.path
+    );
+    reader.close();
+}
+
+template <typename T>
+EXADChunkMergeSummary merge_slot_chunks_to_solved_file(
+    const std::string &solved_path,
+    const std::string &writing_path,
+    EXAD::DTypeMode dtype_mode,
+    uint32_t original_board_sum,
+    uint32_t threshold_bits,
+    uint64_t lut_signature,
+    const std::array<EXADSlotChunkManifest, bucket_slot_count()> &manifests,
+    FileIOUtils::DirectIoConfig config
+) {
+    std::array<EXAD::detail::SolvedSlotHeader, bucket_slot_count()> slots{};
+    uint64_t row_cursor = 0;
+    uint64_t value_cursor = 0;
+    uint64_t metadata_payload_bytes = 0;
+    uint64_t total_aligned_bits = 0;
+    for (size_t slot = 0; slot < manifests.size(); ++slot) {
+        const EXADSlotChunkManifest &manifest = manifests[slot];
+        if (manifest.path.empty()) {
+            throw std::runtime_error("missing EXAD slot chunk before merge: slot " + std::to_string(slot));
+        }
+        if (manifest.slot != slot ||
+            manifest.original_board_sum != original_board_sum ||
+            manifest.threshold_bits != threshold_bits ||
+            manifest.lut_signature != lut_signature) {
+            throw std::runtime_error("EXAD slot chunk metadata mismatch before merge: " + manifest.path);
+        }
+        slots[slot].bucket_count = manifest.bucket_count;
+        slots[slot].small_bitmap_bytes = manifest.small_bitmap_bytes;
+        slots[slot].large_bitmap_words = manifest.large_bitmap_words;
+        slots[slot].live_board_count = manifest.live_board_count;
+        slots[slot].exact_bitmap_bits = manifest.exact_bitmap_bits;
+        slots[slot].aligned_bitmap_bits = manifest.aligned_bitmap_bits;
+        slots[slot].row_base = row_cursor;
+        slots[slot].value_base = value_cursor;
+        slots[slot].row_width = manifest.row_width;
+        row_cursor += manifest.live_board_count;
+        value_cursor += manifest.success_value_count;
+        metadata_payload_bytes += manifest.bucket_count * sizeof(EXAD::BucketEntry)
+            + manifest.small_bitmap_bytes
+            + manifest.large_bitmap_words * sizeof(uint64_t);
+        total_aligned_bits += manifest.aligned_bitmap_bits;
+    }
+
+    EXAD::detail::SolvedFileHeader header{};
+    std::memcpy(header.magic, EXAD::detail::kSolvedMagic, sizeof(header.magic));
+    header.dtype_mode = static_cast<uint32_t>(dtype_mode);
+    header.value_size = sizeof(T);
+    header.original_board_sum = original_board_sum;
+    header.threshold_bits = threshold_bits;
+    header.lut_signature = lut_signature;
+    header.live_board_count = row_cursor;
+    header.success_value_count = value_cursor;
+
+    const uint64_t serialized_size = sizeof(EXAD::detail::SolvedFileHeader)
+        + sizeof(EXAD::detail::SolvedSlotHeader) * bucket_slot_count()
+        + metadata_payload_bytes
+        + value_cursor * sizeof(T);
+
+    std::error_code ec;
+    fs::remove(writing_path, ec);
+    fs::remove(FileIOUtils::temp_write_path(writing_path), ec);
+    FileIOUtils::DirectAppendWriter out(writing_path, serialized_size, config);
+    out.append(&header, sizeof(header));
+    out.append(slots.data(), slots.size() * sizeof(slots[0]));
+    for (const EXADSlotChunkManifest &manifest : manifests) {
+        append_slot_chunk_metadata<T>(out, manifest, dtype_mode, config);
+    }
+    for (const EXADSlotChunkManifest &manifest : manifests) {
+        append_slot_chunk_success<T>(out, manifest, dtype_mode, config);
+    }
+    out.close();
+
+    fs::remove(solved_path, ec);
+    fs::rename(writing_path, solved_path, ec);
+    if (ec) {
+        throw std::runtime_error("failed to publish EXAD chunked solved layer: " + solved_path);
+    }
+
+    EXADChunkMergeSummary summary;
+    summary.post_zero_rows = row_cursor;
+    summary.post_zero_values = value_cursor;
+    summary.metadata_bytes = sizeof(uint64_t) * bucket_slot_count() * 2ULL
+        + sizeof(uint32_t) * bucket_slot_count()
+        + metadata_payload_bytes;
+    summary.success_bytes = value_cursor * sizeof(T);
+    summary.bitmap_density = total_aligned_bits == 0U
+        ? 0.0
+        : static_cast<double>(row_cursor) / static_cast<double>(total_aligned_bits);
+    return summary;
+}
+
+PatternSpec exad_make_base_pattern_spec(const AdvancedPatternSpec &spec) {
+    PatternSpec base;
+    base.name = spec.name;
+    base.pattern_masks = spec.pattern_masks;
+    base.symm_mode = spec.symm_mode;
+    return base;
+}
+
+EXAD::Luts exad_load_or_build_luts(
+    const std::vector<uint64_t> &seed_boards,
+    const AdvancedPatternSpec &spec,
+    const RunOptions &options,
+    int num_threads,
+    FileIOUtils::DirectIoConfig io_config
+) {
+    const std::string path = EXAD::lut_file_path(options.pathname);
+    const PatternSpec base = exad_make_base_pattern_spec(spec);
+    const ZMaskFrozen::TileLimitConfig config = EXAD::make_exad_lut_tile_limit_config(
+        options.target,
+        seed_boards,
+        base,
+        options.is_free,
+        options.is_variant
+    );
+    if (fs::exists(path)) {
+        EXAD::Luts luts = EXAD::read_lut_file(path, io_config);
+        if (ZMaskFrozen::tile_limit_configs_equal(luts.config, config)) {
+            EXAD::initialize_runtime_tables(luts);
+            return luts;
+        }
+    }
+    EXAD::Luts luts = EXAD::build_luts(config, num_threads);
+    EXAD::write_lut_file(path, luts, io_config);
+    return luts;
+}
+
+template <typename T>
+T update_osr_exad_arr(
+    const EXAD::SolvedLayer<T> &layer,
+    const EXAD::Luts &luts,
+    int ad_key,
+    uint64_t board,
+    uint32_t column,
+    T osr
+) {
+    const T *row = EXAD::lookup_row_ptr(layer, luts, ad_key, board);
+    if (row == nullptr || column >= layer.row_width[bucket_to_index(ad_key)]) {
+        return osr;
+    }
+    prefetch_success_row(row);
+    return std::max(osr, row[column]);
+}
+
+template <typename T>
+void update_osr_exad_ranked(
+    const EXAD::SolvedLayer<T> &layer,
+    const EXAD::Luts &luts,
+    int ad_key,
+    uint64_t board,
+    ArrayView<const uint32_t> ranked_array,
+    std::vector<T> &osr
+) {
+    const T *row = EXAD::lookup_row_ptr(layer, luts, ad_key, board);
+    if (row == nullptr) {
+        return;
+    }
+    prefetch_success_row(row);
+    const uint32_t width = layer.row_width[bucket_to_index(ad_key)];
+    for (size_t i = 0; i < ranked_array.size; ++i) {
+        const uint32_t col = ranked_array[i];
+        if (col >= width) {
+            continue;
+        }
+        T value = row[col];
+        if (value > osr[i]) {
+            osr[i] = value;
+        }
+    }
+}
+
+template <typename T>
+void update_mnt_osr_exad_arr3(
+    const EXAD::SolvedLayer<T> &layer,
+    const EXAD::Luts &luts,
+    uint64_t unmasked_board,
+    int8_t count_32k,
+    ArrayView<const uint32_t> ranked_array,
+    std::vector<T> &osr
+) {
+    const int target_count = static_cast<int>(count_32k - 3 + 16);
+    update_osr_exad_ranked(layer, luts, target_count, unmasked_board, ranked_array, osr);
+}
+
+template <typename T>
+void update_mnt_osr_exad_arr2(
+    const EXAD::SolvedLayer<T> &layer,
+    const EXAD::Luts &luts,
+    uint64_t board,
+    uint8_t pos_rank,
+    int8_t count_32k,
+    ArrayView<const uint32_t> ranked_array,
+    std::vector<T> &osr,
+    const FormationAD::PermutationTable &permutation_table,
+    const AdvancedMaskParam &param
+) {
+    const T *row = EXAD::lookup_row_ptr(layer, luts, count_32k, board);
+    if (row == nullptr) {
+        return;
+    }
+    prefetch_success_row(row);
+    auto subset = FormationAD::permutation_first_subset(
+        permutation_table,
+        static_cast<uint8_t>(count_32k),
+        static_cast<uint8_t>(count_32k - static_cast<int8_t>(param.num_free_32k)),
+        pos_rank
+    );
+    if (subset.size < ranked_array.size) {
+        return;
+    }
+    const uint32_t width = layer.row_width[bucket_to_index(count_32k)];
+    for (size_t i = 0; i < ranked_array.size; ++i) {
+        const uint32_t col = subset[ranked_array[i]];
+        if (col >= width) {
+            continue;
+        }
+        T value = row[col];
+        if (value > osr[i]) {
+            osr[i] = value;
+        }
+    }
+}
+
+template <typename T>
+void update_mnt_osr_exad_arr1(
+    const EXAD::SolvedLayer<T> &layer,
+    const EXAD::Luts &luts,
+    uint64_t unmasked_board,
+    const std::vector<uint64_t> &board_derived,
+    std::vector<T> &osr,
+    const AdvancedPatternSpec &spec,
+    ArrayView<const uint8_t> tiles_combinations,
+    uint8_t pos_rank,
+    uint64_t pos_32k,
+    uint8_t tile_value,
+    int8_t count_32k,
+    AdSolveWorkspace<T> &workspace
+) {
+    FormationAD::extract_f_positions_compact(pos_32k, workspace.positions.data());
+    const auto &positions = workspace.positions;
+    struct Candidate {
+        uint64_t pos = 0;
+        int symm_index = 0;
+        const T *row = nullptr;
+    };
+    std::array<Candidate, 16> candidates{};
+    size_t candidate_count = 0;
+    const int bucket_key = -count_32k;
+    for (int j = 0; j < count_32k; ++j) {
+        if (j == static_cast<int>(pos_rank)) {
+            continue;
+        }
+        const uint64_t pos = static_cast<uint64_t>(positions[static_cast<size_t>(j)]);
+        uint64_t unmasked_b_j =
+            (unmasked_board & ~(0xFULL << pos)) | (static_cast<uint64_t>(tiles_combinations[0]) << pos);
+        auto [canonical_board, symm_index] = canonical_pair_by_mode(unmasked_b_j, spec.symm_mode);
+
+        const T *row = EXAD::lookup_row_ptr(layer, luts, bucket_key, canonical_board);
+        if (row == nullptr) {
+            continue;
+        }
+        if (candidate_count < candidates.size()) {
+            candidates[candidate_count++] = Candidate{pos, symm_index, row};
+        }
+    }
+
+    for (size_t candidate_i = 0; candidate_i < candidate_count; ++candidate_i) {
+        prefetch_success_row(candidates[candidate_i].row);
+    }
+
+    for (size_t candidate_i = 0; candidate_i < candidate_count; ++candidate_i) {
+        const uint64_t pos = candidates[candidate_i].pos;
+        const int symm_index = candidates[candidate_i].symm_index;
+        const T *row = candidates[candidate_i].row;
+        auto &matched_positions = workspace.matched_positions;
+        auto &matched_boards = workspace.matched_boards;
+        matched_positions.clear();
+        matched_boards.clear();
+        matched_positions.reserve(board_derived.size());
+        matched_boards.reserve(board_derived.size());
+        for (size_t index = 0; index < board_derived.size(); ++index) {
+            if (((board_derived[index] >> pos) & 0xFULL) == static_cast<uint64_t>(tile_value)) {
+                matched_positions.push_back(index);
+                matched_boards.push_back(board_derived[index]);
+            }
+        }
+        if (matched_boards.empty()) {
+            continue;
+        }
+        sym_arr_like(matched_boards, symm_index);
+        auto &ranked_array = workspace.ranked_array;
+        match_arr_into(matched_boards, workspace, ranked_array);
+        const uint32_t width = layer.row_width[bucket_to_index(bucket_key)];
+        for (size_t index = 0; index < ranked_array.size(); ++index) {
+            const uint32_t col = ranked_array[index];
+            if (col >= width) {
+                continue;
+            }
+            T value = row[col];
+            size_t position = matched_positions[index];
+            if (value > osr[position]) {
+                osr[position] = value;
+            }
+        }
+    }
+}
+
+template <typename T>
+T update_mnt_osr_364_exad(
+    const EXAD::SolvedLayer<T> &layer,
+    const EXAD::Luts &luts,
+    uint64_t board,
+    uint64_t unmasked_board,
+    T osr,
+    const AdvancedMaskParam &param
+) {
+    auto [pos_rank64, pos_rank128, pos_rank, pos_64] = find_3x64_pos(unmasked_board, param);
+    board |= (0xFULL << pos_64);
+    const T *row = EXAD::lookup_row_ptr(layer, luts, pos_rank, board);
+    if (row == nullptr) {
+        return osr;
+    }
+    prefetch_success_row(row);
+    uint32_t mapping = permutations_mapping_364(pos_rank64, pos_rank128, pos_rank);
+    if (mapping >= layer.row_width[bucket_to_index(pos_rank)]) {
+        return osr;
+    }
+    return std::max(osr, row[mapping]);
+}
+
+template <typename T>
+void update_mnt_osr_364_arr_exad(
+    const EXAD::SolvedLayer<T> &layer,
+    const EXAD::Luts &luts,
+    uint64_t board,
+    uint64_t unmasked_board,
+    std::vector<T> &osr,
+    ArrayView<const uint32_t> ranked_array,
+    const FormationAD::PermutationTable &permutation_table,
+    const AdvancedMaskParam &param
+) {
+    auto [pos_rank64, pos_rank128, pos_rank, pos_64] = find_3x64_pos(unmasked_board, param);
+    board |= (0xFULL << pos_64);
+    const T *row = EXAD::lookup_row_ptr(layer, luts, pos_rank, board);
+    if (row == nullptr) {
+        return;
+    }
+    prefetch_success_row(row);
+    auto subset = FormationAD::permutation_pair_subset(
+        permutation_table,
+        static_cast<uint8_t>(pos_rank),
+        static_cast<uint8_t>(pos_rank - static_cast<int8_t>(param.num_free_32k)),
+        pos_rank64,
+        pos_rank128
+    );
+    if (subset.size < ranked_array.size) {
+        return;
+    }
+    const uint32_t width = layer.row_width[bucket_to_index(pos_rank)];
+    for (size_t i = 0; i < ranked_array.size; ++i) {
+        const uint32_t col = subset[ranked_array[i]];
+        if (col >= width) {
+            continue;
+        }
+        T value = row[col];
+        if (value > osr[i]) {
+            osr[i] = value;
+        }
+    }
+}
+
+template <typename T>
+T update_mnt_osr_exad(
+    const EXAD::SolvedLayer<T> &layer,
+    const EXAD::Luts &luts,
+    uint64_t board,
+    uint64_t unmasked_board,
+    T osr,
+    uint32_t board_sum_after_spawn,
+    const FormationAD::TilesCombinationTable &tiles_table,
+    const AdvancedMaskParam &param,
+    T max_scale
+) {
+    auto stats = FormationAD::tile_sum_and_32k_count4(unmasked_board, param);
+    if (stats.is_success) {
+        return max_scale;
+    }
+    uint32_t large_tiles_sum = board_sum_after_spawn
+        - stats.total_sum
+        - (static_cast<uint32_t>(param.num_free_32k + param.num_fixed_32k) << 15U);
+    auto tiles = FormationAD::tiles_combination_view(
+        tiles_table,
+        static_cast<uint8_t>(large_tiles_sum >> 6U),
+        static_cast<uint8_t>(stats.count_32k - static_cast<int8_t>(param.num_free_32k))
+    );
+    if (tiles.empty() || stats.merged_tile_found == 2U) {
+        return osr;
+    }
+    int bucket_key = stats.count_32k;
+    if (tiles.size > 1 && tiles[0] == tiles[1]) {
+        if (tiles.size > 2 && tiles[0] == tiles[2]) {
+            bucket_key = static_cast<int8_t>(stats.count_32k + 16 - 3);
+            board = unmasked_board;
+        } else {
+            bucket_key = static_cast<int8_t>(-stats.count_32k);
+            uint64_t tile = static_cast<uint64_t>(tiles[0]);
+            uint64_t tiles_all_positions = tile * 0x1111111111111111ULL;
+            board = (board & (~stats.pos_bitmap)) | (tiles_all_positions & stats.pos_bitmap);
+        }
+    }
+    const T *row = EXAD::lookup_row_ptr(layer, luts, bucket_key, board);
+    if (row == nullptr) {
+        return osr;
+    }
+    prefetch_success_row(row);
+    if (bucket_key > 15) {
+        return std::max(osr, row[0]);
+    }
+    if (bucket_key > 0) {
+        if (stats.pos_rank >= layer.row_width[bucket_to_index(bucket_key)]) {
+            return osr;
+        }
+        return std::max(osr, row[stats.pos_rank]);
+    }
+    return std::max(osr, row[0]);
+}
+
+template <typename T>
+void solve_optimal_success_rate_arr_into_exad(
+    uint64_t board,
+    uint64_t new_value,
+    int spawn_pos,
+    uint64_t rep_t,
+    uint64_t rep_t_rev,
+    size_t derive_size,
+    const AdvancedPatternSpec &spec,
+    uint64_t rep_v,
+    int8_t count_32k,
+    const EXAD::SolvedLayer<T> &future,
+    const EXAD::Luts &luts,
+    uint32_t board_sum_after_spawn,
+    MatchCache &match_cache,
+    const FormationAD::TilesCombinationTable &tiles_table,
+    const FormationAD::PermutationTable &permutation_table,
+    const AdvancedMaskParam &param,
+    T zero_val,
+    T max_scale,
+    AdSolveWorkspace<T> &workspace,
+    std::vector<T> &optimal_success_rate
+) {
+    uint64_t board_with_spawn = board | (new_value << static_cast<uint64_t>(4 * spawn_pos));
+    uint64_t rep_t_gen = rep_t | (new_value << static_cast<uint64_t>(4 * spawn_pos));
+    uint64_t board_rev = FormationAD::reverse(board_with_spawn);
+    optimal_success_rate.assign(derive_size, zero_val);
+    auto moves = FormationAD::m_move_all_dir2(board_with_spawn, board_rev);
+    (void)rep_t_rev;
+
+    for (int direction = 0; direction < 4; ++direction) {
+        uint64_t moved_board = moves[static_cast<size_t>(direction)].board;
+        bool mask_new_tile = moves[static_cast<size_t>(direction)].mask_new_tile;
+        if (moved_board == board_with_spawn || !is_pattern(moved_board, spec.pattern_masks)) {
+            continue;
+        }
+        auto [canonical_board, symm_index] = canonical_pair_by_mode(moved_board, spec.symm_mode);
+        uint64_t rep_t_gen_m = BoardMover::move_board(rep_t_gen, direction + 1);
+        rep_t_gen_m = apply_sym_like(rep_t_gen_m, symm_index);
+        uint64_t match_ind = ind_match(rep_t_gen_m, rep_v);
+        const bool use_match_cache = match_cache_ready(match_cache, derive_size);
+        size_t hashed_match_ind = 0U;
+        if (use_match_cache) {
+            hashed_match_ind = static_cast<size_t>(match_ind % static_cast<uint64_t>(match_cache.map_length));
+        }
+
+        auto load_or_compute_ranked = [&](bool store_if_empty) -> ArrayView<const uint32_t> {
+            if (use_match_cache && match_cache.key(hashed_match_ind) == match_ind) {
+                return {match_cache.row(hashed_match_ind), derive_size};
+            }
+            process_derived_into(
+                board_with_spawn,
+                board_sum_after_spawn,
+                direction,
+                symm_index,
+                tiles_table,
+                permutation_table,
+                param,
+                workspace.moved_boards,
+                workspace.derived_boards
+            );
+            match_arr_into(workspace.moved_boards, workspace, workspace.ranked_array);
+            if (use_match_cache && store_if_empty && match_cache.try_claim_empty(hashed_match_ind)) {
+                match_cache.publish(hashed_match_ind, match_ind, workspace.ranked_array);
+                return {match_cache.row(hashed_match_ind), derive_size};
+            }
+            if (use_match_cache && match_cache.key(hashed_match_ind) == match_ind) {
+                return {match_cache.row(hashed_match_ind), derive_size};
+            }
+            return {workspace.ranked_array.data(), workspace.ranked_array.size()};
+        };
+
+        if (mask_new_tile) {
+            uint64_t unmasked_newt = BoardMover::move_board(board_with_spawn, direction + 1);
+            unmasked_newt = apply_sym_like(unmasked_newt, symm_index);
+            if (count_32k > 15) {
+                ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
+                update_mnt_osr_364_arr_exad(
+                    future, luts, canonical_board, unmasked_newt, optimal_success_rate, ranked_array,
+                    permutation_table, param
+                );
+                continue;
+            }
+
+            DispatchResult dispatch = dispatch_mnt_osr_ad_arr(
+                unmasked_newt, board_sum_after_spawn, optimal_success_rate, tiles_table, param, max_scale
+            );
+            if (!dispatch.need_process) {
+                continue;
+            }
+            if (
+                dispatch.tiles_combinations.size > 2 &&
+                dispatch.tiles_combinations[0] == dispatch.tiles_combinations[1] &&
+                dispatch.tiles_combinations[0] == dispatch.tiles_combinations[2]
+            ) {
+                ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
+                update_mnt_osr_exad_arr3(
+                    future, luts, unmasked_newt, dispatch.count32k, ranked_array, optimal_success_rate
+                );
+            } else if (
+                dispatch.tiles_combinations.size > 1 &&
+                dispatch.tiles_combinations[0] == dispatch.tiles_combinations[1]
+            ) {
+                process_derived_into(
+                    board_with_spawn,
+                    board_sum_after_spawn,
+                    direction,
+                    symm_index,
+                    tiles_table,
+                    permutation_table,
+                    param,
+                    workspace.moved_boards,
+                    workspace.derived_boards
+                );
+                update_mnt_osr_exad_arr1(
+                    future, luts, unmasked_newt, workspace.moved_boards, optimal_success_rate, spec,
+                    dispatch.tiles_combinations, dispatch.pos_rank, dispatch.pos_32k, dispatch.tile_value,
+                    dispatch.count32k, workspace
+                );
+            } else {
+                ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
+                update_mnt_osr_exad_arr2(
+                    future, luts, canonical_board, dispatch.pos_rank, dispatch.count32k, ranked_array,
+                    optimal_success_rate, permutation_table, param
+                );
+            }
+            continue;
+        }
+
+        ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
+        update_osr_exad_ranked(future, luts, count_32k, canonical_board, ranked_array, optimal_success_rate);
+    }
+}
+
+template <typename T>
+T solve_optimal_success_rate_exad(
+    uint64_t board,
+    uint64_t new_value,
+    int spawn_pos,
+    uint32_t board_sum_after_spawn,
+    const AdvancedPatternSpec &spec,
+    int8_t count_32k,
+    const EXAD::SolvedLayer<T> &future,
+    const EXAD::Luts &luts,
+    const FormationAD::TilesCombinationTable &tiles_table,
+    const AdvancedMaskParam &param,
+    T zero_val,
+    T max_scale
+) {
+    uint64_t board_with_spawn = board | (new_value << static_cast<uint64_t>(4 * spawn_pos));
+    uint64_t board_rev = FormationAD::reverse(board_with_spawn);
+    T optimal_success_rate = zero_val;
+    auto moves = FormationAD::m_move_all_dir2(board_with_spawn, board_rev);
+
+    for (int direction = 0; direction < 4; ++direction) {
+        uint64_t moved_board = moves[static_cast<size_t>(direction)].board;
+        bool mask_new_tile = moves[static_cast<size_t>(direction)].mask_new_tile;
+        if (moved_board == board_with_spawn || !is_pattern(moved_board, spec.pattern_masks)) {
+            continue;
+        }
+        auto [canonical_board, symm_index] = canonical_pair_by_mode(moved_board, spec.symm_mode);
+        if (mask_new_tile) {
+            uint64_t unmasked_newt = BoardMover::move_board(board_with_spawn, direction + 1);
+            unmasked_newt = apply_sym_like(unmasked_newt, symm_index);
+            if (count_32k < 16) {
+                optimal_success_rate = update_mnt_osr_exad(
+                    future,
+                    luts,
+                    canonical_board,
+                    unmasked_newt,
+                    optimal_success_rate,
+                    board_sum_after_spawn,
+                    tiles_table,
+                    param,
+                    max_scale
+                );
+            } else {
+                optimal_success_rate = update_mnt_osr_364_exad(
+                    future, luts, canonical_board, unmasked_newt, optimal_success_rate, param
+                );
+            }
+        } else {
+            optimal_success_rate = update_osr_exad_arr(future, luts, count_32k, canonical_board, 0U, optimal_success_rate);
+        }
+    }
+    return optimal_success_rate;
+}
+
+template <typename T>
+void collect_scalar_spawn_queries_exad(
+    uint64_t board,
+    uint64_t new_value,
+    int spawn_pos,
+    uint32_t board_sum_after_spawn,
+    const AdvancedPatternSpec &spec,
+    int8_t count_32k,
+    const EXAD::SolvedLayer<T> &future,
+    const EXAD::Luts &luts,
+    const FormationAD::TilesCombinationTable &tiles_table,
+    const AdvancedMaskParam &param,
+    T max_scale,
+    uint16_t ref,
+    std::vector<EXAD::PreparedQuery> &queries,
+    std::vector<uint64_t> &canonical_candidates,
+    std::vector<uint16_t> &candidate_refs,
+    T *best
+) {
+    uint64_t board_with_spawn = board | (new_value << static_cast<uint64_t>(4 * spawn_pos));
+    uint64_t board_rev = FormationAD::reverse(board_with_spawn);
+    auto moves = FormationAD::m_move_all_dir2(board_with_spawn, board_rev);
+
+    for (int direction = 0; direction < 4; ++direction) {
+        const uint64_t moved_board = moves[static_cast<size_t>(direction)].board;
+        const bool mask_new_tile = moves[static_cast<size_t>(direction)].mask_new_tile;
+        if (moved_board == board_with_spawn || !is_pattern(moved_board, spec.pattern_masks)) {
+            continue;
+        }
+        if (!mask_new_tile) {
+            canonical_candidates.push_back(moved_board);
+            candidate_refs.push_back(ref);
+            continue;
+        }
+
+        auto [canonical_board, symm_index] = canonical_pair_by_mode(moved_board, spec.symm_mode);
+        uint64_t unmasked_newt = BoardMover::move_board(board_with_spawn, direction + 1);
+        unmasked_newt = apply_sym_like(unmasked_newt, symm_index);
+        if (count_32k >= 16) {
+            auto [pos_rank64, pos_rank128, pos_rank, pos_64] = find_3x64_pos(unmasked_newt, param);
+            uint64_t lookup_board = canonical_board | (0xFULL << pos_64);
+            const uint32_t column = permutations_mapping_364(pos_rank64, pos_rank128, pos_rank);
+            EXAD::PreparedQuery query;
+            if (EXAD::prepare_query(luts, pos_rank, lookup_board, ref, column, query)) {
+                queries.push_back(query);
+            }
+            continue;
+        }
+
+        auto stats = FormationAD::tile_sum_and_32k_count4(unmasked_newt, param);
+        if (stats.is_success) {
+            best[ref] = max_scale;
+            continue;
+        }
+        uint32_t large_tiles_sum = board_sum_after_spawn
+            - stats.total_sum
+            - (static_cast<uint32_t>(param.num_free_32k + param.num_fixed_32k) << 15U);
+        auto tiles = FormationAD::tiles_combination_view(
+            tiles_table,
+            static_cast<uint8_t>(large_tiles_sum >> 6U),
+            static_cast<uint8_t>(stats.count_32k - static_cast<int8_t>(param.num_free_32k))
+        );
+        if (tiles.empty() || stats.merged_tile_found == 2U) {
+            continue;
+        }
+        int bucket_key = stats.count_32k;
+        uint64_t lookup_board = canonical_board;
+        uint32_t column = stats.pos_rank;
+        if (tiles.size > 1 && tiles[0] == tiles[1]) {
+            column = 0U;
+            if (tiles.size > 2 && tiles[0] == tiles[2]) {
+                bucket_key = static_cast<int8_t>(stats.count_32k + 16 - 3);
+                lookup_board = unmasked_newt;
+            } else {
+                bucket_key = static_cast<int8_t>(-stats.count_32k);
+                const uint64_t tile = static_cast<uint64_t>(tiles[0]);
+                const uint64_t tiles_all_positions = tile * 0x1111111111111111ULL;
+                lookup_board = (canonical_board & (~stats.pos_bitmap)) | (tiles_all_positions & stats.pos_bitmap);
+            }
+        }
+        EXAD::PreparedQuery query;
+        if (EXAD::prepare_query(luts, bucket_key, lookup_board, ref, column, query)) {
+            queries.push_back(query);
+        }
+    }
+}
+
+template <typename Fn>
+bool append_vector_query_columns(
+    const EXAD::PreparedQuery &prepared,
+    uint32_t width,
+    std::vector<EXADVectorQuery> &queries,
+    std::vector<uint32_t> &columns,
+    Fn &&column_at
+) {
+    if (width == 0U || width > std::numeric_limits<uint16_t>::max()) {
+        return false;
+    }
+    if (columns.size() > std::numeric_limits<uint32_t>::max()) {
+        return false;
+    }
+    const uint32_t offset = static_cast<uint32_t>(columns.size());
+    for (uint32_t i = 0; i < width; ++i) {
+        columns.push_back(static_cast<uint32_t>(column_at(i)));
+    }
+    EXADVectorQuery vector_query;
+    vector_query.query = prepared;
+    vector_query.column_offset = offset;
+    queries.push_back(vector_query);
+    return true;
+}
+
+bool append_ranked_vector_query(
+    const EXAD::PreparedQuery &prepared,
+    ArrayView<const uint32_t> ranked_array,
+    uint32_t width,
+    std::vector<EXADVectorQuery> &queries,
+    std::vector<uint32_t> &columns
+) {
+    if (ranked_array.size < width) {
+        return false;
+    }
+    return append_vector_query_columns(prepared, width, queries, columns, [&](uint32_t i) {
+        return ranked_array[i];
+    });
+}
+
+bool append_subset_vector_query(
+    const EXAD::PreparedQuery &prepared,
+    ArrayView<const uint32_t> ranked_array,
+    ArrayView<const uint32_t> subset,
+    uint32_t width,
+    std::vector<EXADVectorQuery> &queries,
+    std::vector<uint32_t> &columns
+) {
+    if (ranked_array.size < width) {
+        return false;
+    }
+    const size_t old_size = columns.size();
+    if (old_size > std::numeric_limits<uint32_t>::max()) {
+        return false;
+    }
+    for (uint32_t i = 0; i < width; ++i) {
+        const uint32_t ranked = ranked_array[i];
+        if (ranked >= subset.size) {
+            columns.resize(old_size);
+            return false;
+        }
+        columns.push_back(subset[ranked]);
+    }
+    EXADVectorQuery vector_query;
+    vector_query.query = prepared;
+    vector_query.column_offset = static_cast<uint32_t>(old_size);
+    queries.push_back(vector_query);
+    return true;
+}
+
+template <uint32_t StaticWidth = 0U, typename T>
+uint64_t lookup_reduce_vector_queries_exad(
+    const EXAD::SolvedLayer<T> &layer,
+    const std::vector<EXADVectorQuery> &queries,
+    const std::vector<uint32_t> &columns,
+    uint32_t vector_width,
+    T *best
+) {
+    uint64_t found = 0U;
+    const uint32_t count = static_cast<uint32_t>(queries.size());
+    for (uint32_t base = 0; base < count; base += EXAD::kLookupBatchSize) {
+        const uint32_t block_count = std::min<uint32_t>(EXAD::kLookupBatchSize, count - base);
+        std::array<const EXAD::DirectEntry *, EXAD::kLookupBatchSize> entries{};
+        std::array<const T *, EXAD::kLookupBatchSize> rows{};
+        std::array<uint32_t, EXAD::kLookupBatchSize> hash_slots{};
+
+        for (uint32_t i = 0; i < block_count; ++i) {
+            const EXAD::PreparedQuery &query = queries[base + i].query;
+            if (query.valid == 0U || query.slot >= bucket_slot_count()) {
+                continue;
+            }
+            const EXAD::DirectEntryIndex &index = layer.direct_entry_indices[query.slot];
+            if (index.empty()) {
+                continue;
+            }
+            hash_slots[i] = static_cast<uint32_t>(EXAD::mix_key64(query.key)) & index.mask;
+#if defined(__GNUC__) || defined(__clang__)
+            __builtin_prefetch(&index.entries[hash_slots[i]], 0, 1);
+#endif
+        }
+
+        for (uint32_t i = 0; i < block_count; ++i) {
+            const EXAD::PreparedQuery &query = queries[base + i].query;
+            if (query.valid == 0U || query.slot >= bucket_slot_count()) {
+                continue;
+            }
+            const EXAD::DirectEntryIndex &index = layer.direct_entry_indices[query.slot];
+            if (index.empty()) {
+                continue;
+            }
+            uint32_t hash_slot = hash_slots[i];
+            for (;;) {
+                const EXAD::DirectEntry &entry = index.entries[hash_slot];
+                if (entry.key == EXAD::kInvalidBucketKey) {
+                    break;
+                }
+                if (entry.key == query.key) {
+                    entries[i] = &entry;
+                    break;
+                }
+                hash_slot = (hash_slot + 1U) & index.mask;
+#if defined(__GNUC__) || defined(__clang__)
+                __builtin_prefetch(&index.entries[hash_slot], 0, 1);
+#endif
+            }
+        }
+
+        for (uint32_t i = 0; i < block_count; ++i) {
+            const EXAD::DirectEntry *entry = entries[i];
+            if (entry == nullptr) {
+                continue;
+            }
+            const EXAD::PreparedQuery &query = queries[base + i].query;
+            const EXAD::BoardSet &set = layer.sets[query.slot];
+            if (query.valid_count <= set.threshold_bits) {
+                const uint32_t byte_idx = query.rank >> 3U;
+#if defined(__GNUC__) || defined(__clang__)
+                __builtin_prefetch(&set.small_bitmap_bytes[entry->bitmap_offset + byte_idx], 0, 1);
+#endif
+            } else {
+                const uint32_t word_idx = query.rank >> 6U;
+#if defined(__GNUC__) || defined(__clang__)
+                __builtin_prefetch(&set.large_bitmap_words[entry->bitmap_offset + word_idx], 0, 1);
+                __builtin_prefetch(&layer.large_rank_bases[query.slot][entry->bitmap_offset + word_idx], 0, 1);
+#endif
+            }
+        }
+
+        for (uint32_t i = 0; i < block_count; ++i) {
+            const EXAD::DirectEntry *entry = entries[i];
+            if (entry == nullptr) {
+                continue;
+            }
+            const EXAD::PreparedQuery &query = queries[base + i].query;
+            const EXAD::BoardSet &set = layer.sets[query.slot];
+            uint32_t ordinal = 0;
+            if (!EXAD::dense_ordinal_for_rank_fast(
+                    set,
+                    *entry,
+                    query.valid_count,
+                    query.rank,
+                    layer.large_rank_bases[query.slot],
+                    ordinal)) {
+                continue;
+            }
+            const uint64_t local_row = static_cast<uint64_t>(entry->dense_offset) + ordinal;
+            rows[i] = EXAD::row_ptr(layer, query.slot, local_row);
+#if defined(__GNUC__) || defined(__clang__)
+            __builtin_prefetch(rows[i], 0, 1);
+#endif
+        }
+
+        for (uint32_t i = 0; i < block_count; ++i) {
+            const T *row = rows[i];
+            if (row == nullptr) {
+                continue;
+            }
+            const EXADVectorQuery &vector_query = queries[base + i];
+            const uint32_t active_width = vector_width;
+            const uint32_t loop_width = StaticWidth == 0U ? vector_width : StaticWidth;
+            T *dst = best + static_cast<size_t>(vector_query.query.ref) * active_width;
+            const uint32_t row_width = layer.row_width[vector_query.query.slot];
+            const uint32_t *query_columns = columns.data() + vector_query.column_offset;
+            for (uint32_t col_i = 0; col_i < loop_width; ++col_i) {
+                if (col_i >= active_width) {
+                    break;
+                }
+                const uint32_t column = query_columns[col_i];
+                if (column >= row_width) {
+                    continue;
+                }
+                T value = row[column];
+                if (value > dst[col_i]) {
+                    dst[col_i] = value;
+                }
+            }
+            ++found;
+        }
+    }
+    return found;
+}
+
+template <typename T>
+uint64_t lookup_reduce_vector_queries_by_width_exad(
+    const EXAD::SolvedLayer<T> &layer,
+    const std::vector<EXADVectorQuery> &queries,
+    const std::vector<uint32_t> &columns,
+    uint32_t width,
+    T *best
+) {
+    if (width <= 8U) {
+        return lookup_reduce_vector_queries_exad<8U>(layer, queries, columns, width, best);
+    }
+    if (width <= 16U) {
+        return lookup_reduce_vector_queries_exad<16U>(layer, queries, columns, width, best);
+    }
+    if (width <= 32U) {
+        return lookup_reduce_vector_queries_exad<32U>(layer, queries, columns, width, best);
+    }
+    if (width <= 64U) {
+        return lookup_reduce_vector_queries_exad<64U>(layer, queries, columns, width, best);
+    }
+    if (width <= 128U) {
+        return lookup_reduce_vector_queries_exad<128U>(layer, queries, columns, width, best);
+    }
+    return lookup_reduce_vector_queries_exad(layer, queries, columns, width, best);
+}
+
+template <typename T>
+void collect_vector_spawn_queries_exad(
+    uint64_t board,
+    uint64_t new_value,
+    int spawn_pos,
+    uint64_t rep_t,
+    uint64_t rep_v,
+    const AdvancedPatternSpec &spec,
+    int8_t count_32k,
+    const EXAD::SolvedLayer<T> &future,
+    const EXAD::Luts &luts,
+    uint32_t board_sum_after_spawn,
+    MatchCache &match_cache,
+    const FormationAD::TilesCombinationTable &tiles_table,
+    const FormationAD::PermutationTable &permutation_table,
+    const AdvancedMaskParam &param,
+    T zero_val,
+    T max_scale,
+    AdSolveWorkspace<T> &workspace,
+    uint16_t ref,
+    uint32_t width,
+    std::vector<EXADVectorQuery> &queries,
+    std::vector<uint32_t> &columns,
+    T *best
+) {
+    uint64_t board_with_spawn = board | (new_value << static_cast<uint64_t>(4 * spawn_pos));
+    uint64_t rep_t_gen = rep_t | (new_value << static_cast<uint64_t>(4 * spawn_pos));
+    uint64_t board_rev = FormationAD::reverse(board_with_spawn);
+    auto moves = FormationAD::m_move_all_dir2(board_with_spawn, board_rev);
+    bool mask_values_used = false;
+
+    auto ensure_mask_values = [&]() -> std::vector<T> & {
+        if (!mask_values_used) {
+            workspace.optimal_values.assign(width, zero_val);
+            mask_values_used = true;
+        }
+        return workspace.optimal_values;
+    };
+
+    for (int direction = 0; direction < 4; ++direction) {
+        uint64_t moved_board = moves[static_cast<size_t>(direction)].board;
+        bool mask_new_tile = moves[static_cast<size_t>(direction)].mask_new_tile;
+        if (moved_board == board_with_spawn || !is_pattern(moved_board, spec.pattern_masks)) {
+            continue;
+        }
+        auto [canonical_board, symm_index] = canonical_pair_by_mode(moved_board, spec.symm_mode);
+        uint64_t rep_t_gen_m = BoardMover::move_board(rep_t_gen, direction + 1);
+        rep_t_gen_m = apply_sym_like(rep_t_gen_m, symm_index);
+        uint64_t match_ind = ind_match(rep_t_gen_m, rep_v);
+        const bool use_match_cache = match_cache_ready(match_cache, width);
+        size_t hashed_match_ind = 0U;
+        if (use_match_cache) {
+            hashed_match_ind = static_cast<size_t>(match_ind % static_cast<uint64_t>(match_cache.map_length));
+        }
+
+        auto load_or_compute_ranked = [&](bool store_if_empty) -> ArrayView<const uint32_t> {
+            if (use_match_cache && match_cache.key(hashed_match_ind) == match_ind) {
+                return {match_cache.row(hashed_match_ind), width};
+            }
+            process_derived_into(
+                board_with_spawn,
+                board_sum_after_spawn,
+                direction,
+                symm_index,
+                tiles_table,
+                permutation_table,
+                param,
+                workspace.moved_boards,
+                workspace.derived_boards
+            );
+            match_arr_into(workspace.moved_boards, workspace, workspace.ranked_array);
+            if (use_match_cache && store_if_empty && match_cache.try_claim_empty(hashed_match_ind)) {
+                match_cache.publish(hashed_match_ind, match_ind, workspace.ranked_array);
+                return {match_cache.row(hashed_match_ind), width};
+            }
+            if (use_match_cache && match_cache.key(hashed_match_ind) == match_ind) {
+                return {match_cache.row(hashed_match_ind), width};
+            }
+            return {workspace.ranked_array.data(), workspace.ranked_array.size()};
+        };
+
+        if (mask_new_tile) {
+            uint64_t unmasked_newt = BoardMover::move_board(board_with_spawn, direction + 1);
+            unmasked_newt = apply_sym_like(unmasked_newt, symm_index);
+            if (count_32k > 15) {
+                ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
+                auto [pos_rank64, pos_rank128, pos_rank, pos_64] = find_3x64_pos(unmasked_newt, param);
+                uint64_t lookup_board = canonical_board | (0xFULL << pos_64);
+                auto subset = FormationAD::permutation_pair_subset(
+                    permutation_table,
+                    static_cast<uint8_t>(pos_rank),
+                    static_cast<uint8_t>(pos_rank - static_cast<int8_t>(param.num_free_32k)),
+                    pos_rank64,
+                    pos_rank128
+                );
+                if (ranked_array.size >= width) {
+                    EXAD::PreparedQuery prepared;
+                    if (EXAD::prepare_query(luts, pos_rank, lookup_board, ref, 0U, prepared)) {
+                        append_subset_vector_query(prepared, ranked_array, subset, width, queries, columns);
+                    }
+                }
+                continue;
+            }
+
+            auto stats = FormationAD::tile_sum_and_32k_count4(unmasked_newt, param);
+            if (stats.is_success) {
+                T *dst = best + static_cast<size_t>(ref) * width;
+                std::fill(dst, dst + width, max_scale);
+                continue;
+            }
+            uint32_t large_tiles_sum = board_sum_after_spawn
+                - stats.total_sum
+                - (static_cast<uint32_t>(param.num_free_32k + param.num_fixed_32k) << 15U);
+            auto tiles = FormationAD::tiles_combination_view(
+                tiles_table,
+                static_cast<uint8_t>(large_tiles_sum >> 6U),
+                static_cast<uint8_t>(stats.count_32k - static_cast<int8_t>(param.num_free_32k))
+            );
+            if (tiles.empty()) {
+                continue;
+            }
+            if (
+                tiles.size > 2 &&
+                tiles[0] == tiles[1] &&
+                tiles[0] == tiles[2]
+            ) {
+                ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
+                if (ranked_array.size >= width) {
+                    const int bucket_key = static_cast<int8_t>(stats.count_32k + 16 - 3);
+                    EXAD::PreparedQuery prepared;
+                    if (EXAD::prepare_query(luts, bucket_key, unmasked_newt, ref, 0U, prepared)) {
+                        append_ranked_vector_query(prepared, ranked_array, width, queries, columns);
+                    }
+                }
+            } else if (
+                tiles.size > 1 &&
+                tiles[0] == tiles[1]
+            ) {
+                std::vector<T> &mask_values = ensure_mask_values();
+                process_derived_into(
+                    board_with_spawn,
+                    board_sum_after_spawn,
+                    direction,
+                    symm_index,
+                    tiles_table,
+                    permutation_table,
+                    param,
+                    workspace.moved_boards,
+                    workspace.derived_boards
+                );
+                update_mnt_osr_exad_arr1(
+                    future, luts, unmasked_newt, workspace.moved_boards, mask_values, spec,
+                    tiles, stats.pos_rank, stats.pos_bitmap, stats.merged_tile,
+                    stats.count_32k, workspace
+                );
+            } else {
+                ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
+                auto subset = FormationAD::permutation_first_subset(
+                    permutation_table,
+                    static_cast<uint8_t>(stats.count_32k),
+                    static_cast<uint8_t>(stats.count_32k - static_cast<int8_t>(param.num_free_32k)),
+                    stats.pos_rank
+                );
+                if (ranked_array.size >= width) {
+                    EXAD::PreparedQuery prepared;
+                    if (EXAD::prepare_query(luts, stats.count_32k, canonical_board, ref, 0U, prepared)) {
+                        append_subset_vector_query(prepared, ranked_array, subset, width, queries, columns);
+                    }
+                }
+            }
+            continue;
+        }
+
+        ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
+        if (ranked_array.size < width) {
+            continue;
+        }
+        EXAD::PreparedQuery prepared;
+        if (!EXAD::prepare_query(luts, count_32k, canonical_board, ref, 0U, prepared)) {
+            continue;
+        }
+        append_ranked_vector_query(prepared, ranked_array, width, queries, columns);
+    }
+
+    if (mask_values_used) {
+        const std::vector<T> &mask_values = workspace.optimal_values;
+        T *dst = best + static_cast<size_t>(ref) * width;
+        for (uint32_t i = 0; i < width; ++i) {
+            if (mask_values[i] > dst[i]) {
+                dst[i] = mask_values[i];
+            }
+        }
+    }
+}
+
+template <typename T>
+void recalculate_exad_scalar_batch(
+    EXAD::SolvedLayer<T> &current,
+    size_t current_slot,
+    const uint64_t *boards,
+    const uint64_t *local_rows,
+    uint32_t board_count,
+    const EXAD::SolvedLayer<T> &future1,
+    const EXAD::SolvedLayer<T> &future2,
+    const EXAD::Luts &luts,
+    const FormationAD::TilesCombinationTable &tiles_table,
+    const AdvancedMaskParam &param,
+    uint32_t original_board_sum,
+    const AdvancedPatternSpec &spec,
+    int8_t count_32k,
+    T max_scale,
+    T zero_val,
+    double spawn_rate4,
+    EXADScalarBatchWorkspace<T> &workspace
+) {
+    if (board_count == 0U) {
+        return;
+    }
+    workspace.queries1.clear();
+    workspace.queries2.clear();
+    workspace.canonical_candidates1.clear();
+    workspace.canonical_candidates2.clear();
+    workspace.candidate_refs1.clear();
+    workspace.candidate_refs2.clear();
+    const size_t best_slots = static_cast<size_t>(board_count) * 16U;
+    std::fill(workspace.best2.begin(), workspace.best2.begin() + best_slots, zero_val);
+    std::fill(workspace.best4.begin(), workspace.best4.begin() + best_slots, zero_val);
+
+    auto prepare_canonical_queries = [&](
+        std::vector<uint64_t> &canonical_candidates,
+        std::vector<uint16_t> &candidate_refs,
+        std::vector<EXAD::PreparedQuery> &queries
+    ) {
+        if (canonical_candidates.empty()) {
+            return;
+        }
+        CanonicalBatch::canonicalize_inplace(
+            canonical_candidates.data(),
+            canonical_candidates.size(),
+            spec.symm_mode
+        );
+        for (size_t i = 0; i < canonical_candidates.size(); ++i) {
+            EXAD::PreparedQuery query;
+            if (EXAD::prepare_query(luts, count_32k, canonical_candidates[i], candidate_refs[i], 0U, query)) {
+                queries.push_back(query);
+            }
+        }
+    };
+
+    for (uint32_t board_slot = 0; board_slot < board_count; ++board_slot) {
+        const uint64_t board = boards[board_slot];
+        uint32_t empty_mask = empty_cell_mask16(board);
+        workspace.empty_masks[board_slot] = static_cast<uint16_t>(empty_mask);
+        while (empty_mask != 0U) {
+            const int pos = static_cast<int>(ctz_u32(empty_mask));
+            empty_mask &= empty_mask - 1U;
+            const uint16_t ref = static_cast<uint16_t>(board_slot * 16U + static_cast<uint32_t>(pos));
+            collect_scalar_spawn_queries_exad(
+                board,
+                1ULL,
+                pos,
+                original_board_sum + 2U,
+                spec,
+                count_32k,
+                future1,
+                luts,
+                tiles_table,
+                param,
+                max_scale,
+                ref,
+                workspace.queries1,
+                workspace.canonical_candidates1,
+                workspace.candidate_refs1,
+                workspace.best2.data()
+            );
+            collect_scalar_spawn_queries_exad(
+                board,
+                2ULL,
+                pos,
+                original_board_sum + 4U,
+                spec,
+                count_32k,
+                future2,
+                luts,
+                tiles_table,
+                param,
+                max_scale,
+                ref,
+                workspace.queries2,
+                workspace.canonical_candidates2,
+                workspace.candidate_refs2,
+                workspace.best4.data()
+            );
+        }
+    }
+
+    prepare_canonical_queries(workspace.canonical_candidates1, workspace.candidate_refs1, workspace.queries1);
+    prepare_canonical_queries(workspace.canonical_candidates2, workspace.candidate_refs2, workspace.queries2);
+    EXAD::lookup_reduce_prepared_queries(
+        future1,
+        workspace.queries1.data(),
+        static_cast<uint32_t>(workspace.queries1.size()),
+        workspace.best2.data()
+    );
+    EXAD::lookup_reduce_prepared_queries(
+        future2,
+        workspace.queries2.data(),
+        static_cast<uint32_t>(workspace.queries2.size()),
+        workspace.best4.data()
+    );
+
+    for (uint32_t board_slot = 0; board_slot < board_count; ++board_slot) {
+        double success_probability = 0.0;
+        uint32_t empty_count = 0U;
+        uint32_t empty_mask = workspace.empty_masks[board_slot];
+        while (empty_mask != 0U) {
+            const uint32_t pos = ctz_u32(empty_mask);
+            empty_mask &= empty_mask - 1U;
+            const size_t best_index = static_cast<size_t>(board_slot) * 16U + pos;
+            success_probability += static_cast<double>(workspace.best2[best_index]) * (1.0 - spawn_rate4);
+            success_probability += static_cast<double>(workspace.best4[best_index]) * spawn_rate4;
+            ++empty_count;
+        }
+        T *dst = EXAD::row_ptr(current, current_slot, local_rows[board_slot]);
+        dst[0] = empty_count == 0U
+            ? zero_val
+            : static_cast<T>(success_probability / static_cast<double>(empty_count));
+    }
+}
+
+template <uint32_t MaxWidth, typename T>
+void finish_vector_batch_rows_bounded(
+    EXAD::SolvedLayer<T> &current,
+    size_t current_slot,
+    const uint64_t *local_rows,
+    uint32_t board_count,
+    uint32_t width,
+    double spawn_rate4,
+    T zero_val,
+    EXADVectorBatchWorkspace<T> &batch_workspace
+) {
+    for (uint32_t board_slot = 0; board_slot < board_count; ++board_slot) {
+        std::array<double, MaxWidth> success_probability{};
+        uint32_t empty_count = 0U;
+        uint32_t empty_mask = batch_workspace.empty_masks[board_slot];
+        while (empty_mask != 0U) {
+            const uint32_t pos = ctz_u32(empty_mask);
+            empty_mask &= empty_mask - 1U;
+            const size_t best_index = (static_cast<size_t>(board_slot) * 16U + pos) * width;
+            for (uint32_t idx = 0; idx < MaxWidth; ++idx) {
+                if (idx >= width) {
+                    break;
+                }
+                success_probability[idx] +=
+                    static_cast<double>(batch_workspace.best2[best_index + idx]) * (1.0 - spawn_rate4);
+                success_probability[idx] +=
+                    static_cast<double>(batch_workspace.best4[best_index + idx]) * spawn_rate4;
+            }
+            ++empty_count;
+        }
+        T *dst = EXAD::row_ptr(current, current_slot, local_rows[board_slot]);
+        if (empty_count == 0U) {
+            std::fill(dst, dst + width, zero_val);
+            continue;
+        }
+        const double inv_empty = 1.0 / static_cast<double>(empty_count);
+        for (uint32_t idx = 0; idx < MaxWidth; ++idx) {
+            if (idx >= width) {
+                break;
+            }
+            dst[idx] = static_cast<T>(success_probability[idx] * inv_empty);
+        }
+    }
+}
+
+template <typename T>
+void finish_vector_batch_rows_exad(
+    EXAD::SolvedLayer<T> &current,
+    size_t current_slot,
+    const uint64_t *local_rows,
+    uint32_t board_count,
+    uint32_t width,
+    double spawn_rate4,
+    T zero_val,
+    EXADVectorBatchWorkspace<T> &batch_workspace
+) {
+    if (width <= 8U) {
+        finish_vector_batch_rows_bounded<8U>(
+            current, current_slot, local_rows, board_count, width, spawn_rate4, zero_val, batch_workspace
+        );
+    } else if (width <= 16U) {
+        finish_vector_batch_rows_bounded<16U>(
+            current, current_slot, local_rows, board_count, width, spawn_rate4, zero_val, batch_workspace
+        );
+    } else if (width <= 32U) {
+        finish_vector_batch_rows_bounded<32U>(
+            current, current_slot, local_rows, board_count, width, spawn_rate4, zero_val, batch_workspace
+        );
+    } else if (width <= 64U) {
+        finish_vector_batch_rows_bounded<64U>(
+            current, current_slot, local_rows, board_count, width, spawn_rate4, zero_val, batch_workspace
+        );
+    } else {
+        finish_vector_batch_rows_bounded<128U>(
+            current, current_slot, local_rows, board_count, width, spawn_rate4, zero_val, batch_workspace
+        );
+    }
+}
+
+template <typename T>
+void recalculate_exad_vector_batch(
+    EXAD::SolvedLayer<T> &current,
+    size_t current_slot,
+    const uint64_t *boards,
+    const uint64_t *local_rows,
+    uint32_t board_count,
+    const EXAD::SolvedLayer<T> &future1,
+    const EXAD::SolvedLayer<T> &future2,
+    const EXAD::Luts &luts,
+    const FormationAD::TilesCombinationTable &tiles_table,
+    const FormationAD::PermutationTable &permutation_table,
+    const AdvancedMaskParam &param,
+    uint32_t original_board_sum,
+    const AdvancedPatternSpec &spec,
+    int8_t count_32k,
+    T max_scale,
+    T zero_val,
+    double spawn_rate4,
+    MatchCache &match_cache,
+    AdSolveWorkspace<T> &ad_workspace,
+    uint32_t width,
+    EXADVectorBatchWorkspace<T> &batch_workspace
+) {
+    if (board_count == 0U) {
+        return;
+    }
+    batch_workspace.prepare(width, board_count, zero_val);
+
+    for (uint32_t board_slot = 0; board_slot < board_count; ++board_slot) {
+        const uint64_t board = boards[board_slot];
+        auto [rep_t, rep_v] = replace_val(board);
+        uint32_t empty_mask = empty_cell_mask16(board);
+        batch_workspace.empty_masks[board_slot] = static_cast<uint16_t>(empty_mask);
+        while (empty_mask != 0U) {
+            const int pos = static_cast<int>(ctz_u32(empty_mask));
+            empty_mask &= empty_mask - 1U;
+            const uint16_t ref = static_cast<uint16_t>(board_slot * 16U + static_cast<uint32_t>(pos));
+            collect_vector_spawn_queries_exad(
+                board,
+                1ULL,
+                pos,
+                rep_t,
+                rep_v,
+                spec,
+                count_32k,
+                future1,
+                luts,
+                original_board_sum + 2U,
+                match_cache,
+                tiles_table,
+                permutation_table,
+                param,
+                zero_val,
+                max_scale,
+                ad_workspace,
+                ref,
+                width,
+                batch_workspace.queries1,
+                batch_workspace.columns1,
+                batch_workspace.best2.data()
+            );
+            collect_vector_spawn_queries_exad(
+                board,
+                2ULL,
+                pos,
+                rep_t,
+                rep_v,
+                spec,
+                count_32k,
+                future2,
+                luts,
+                original_board_sum + 4U,
+                match_cache,
+                tiles_table,
+                permutation_table,
+                param,
+                zero_val,
+                max_scale,
+                ad_workspace,
+                ref,
+                width,
+                batch_workspace.queries2,
+                batch_workspace.columns2,
+                batch_workspace.best4.data()
+            );
+        }
+    }
+
+    lookup_reduce_vector_queries_by_width_exad(
+        future1,
+        batch_workspace.queries1,
+        batch_workspace.columns1,
+        width,
+        batch_workspace.best2.data()
+    );
+    lookup_reduce_vector_queries_by_width_exad(
+        future2,
+        batch_workspace.queries2,
+        batch_workspace.columns2,
+        width,
+        batch_workspace.best4.data()
+    );
+    finish_vector_batch_rows_exad(
+        current,
+        current_slot,
+        local_rows,
+        board_count,
+        width,
+        spawn_rate4,
+        zero_val,
+        batch_workspace
+    );
+}
+
+template <typename T>
+void recalculate_exad_direct(
+    EXAD::SolvedLayer<T> &current,
+    const EXAD::SolvedLayer<T> &future1,
+    const EXAD::SolvedLayer<T> &future2,
+    const EXAD::Luts &luts,
+    const FormationAD::TilesCombinationTable &tiles_table,
+    const FormationAD::PermutationTable &permutation_table,
+    const AdvancedMaskParam &param,
+    uint32_t original_board_sum,
+    const AdvancedPatternSpec &spec,
+    T max_scale,
+    T zero_val,
+    double spawn_rate4,
+    bool do_check,
+    int target,
+    int num_threads,
+    std::unordered_map<uint32_t, MatchCache> &match_dict
+) {
+    for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
+        const size_t slot = bucket_to_index(key);
+        const EXAD::BoardSet &set = current.sets[slot];
+        const size_t derive_size = current.row_width[slot];
+        if (set.live_board_count == 0 || derive_size == 0) {
+            continue;
+        }
+
+        MatchCache disabled_match_cache;
+        MatchCache *match_cache = nullptr;
+        if (derive_size != 1U) {
+            match_cache = exad_match_cache_enabled(derive_size)
+                ? &get_exad_match_cache<T>(match_dict, derive_size)
+                : &disabled_match_cache;
+        }
+        std::vector<AdSolveWorkspace<T>> thread_workspaces(static_cast<size_t>(num_threads));
+        std::vector<EXADScalarBatchWorkspace<T>> scalar_workspaces;
+        std::vector<EXADVectorBatchWorkspace<T>> vector_workspaces;
+        const bool use_vector_batch = exad_vector_batch_enabled(derive_size);
+        const uint32_t vector_batch_size = use_vector_batch ? exad_vector_batch_size(derive_size) : 0U;
+        if (derive_size == 1U) {
+            scalar_workspaces.resize(static_cast<size_t>(num_threads));
+        } else if (use_vector_batch) {
+            vector_workspaces.resize(static_cast<size_t>(num_threads));
+        }
+        const int chunk_count = std::max(
+            std::min(
+                1024,
+                static_cast<int>(
+                    (set.buckets.size() * static_cast<size_t>(std::llround(std::log2(static_cast<double>(derive_size + 1U)))))
+                    / 64ULL
+                )
+            ),
+            1
+        );
+        const int schedule_chunk = std::max(1, static_cast<int>(set.buckets.size() / static_cast<size_t>(chunk_count + 1)));
+
+#pragma omp parallel for schedule(dynamic, schedule_chunk) num_threads(num_threads)
+        for (int64_t bucket_i = 0; bucket_i < static_cast<int64_t>(set.buckets.size()); ++bucket_i) {
+            const size_t thread_index = static_cast<size_t>(omp_get_thread_num());
+            AdSolveWorkspace<T> &workspace = thread_workspaces[thread_index];
+            const EXAD::BucketEntry &bucket = set.buckets[static_cast<size_t>(bucket_i)];
+            const uint64_t prefix36 = EXAD::bucket_key_prefix36(bucket.key);
+            const uint32_t group = EXAD::lut_group_index(EXAD::bucket_key_semantic_sum(bucket.key));
+            const uint32_t valid_count = luts.size_table[group];
+            const uint32_t unrank_base = luts.offset_table[group];
+            uint32_t ordinal = 0;
+            std::array<uint64_t, kEXADScalarBatchSize> scalar_boards{};
+            std::array<uint64_t, kEXADScalarBatchSize> scalar_local_rows{};
+            uint32_t scalar_count = 0U;
+            std::array<uint64_t, kEXADVectorMaxBatchSize> vector_boards{};
+            std::array<uint64_t, kEXADVectorMaxBatchSize> vector_local_rows{};
+            uint32_t vector_count = 0U;
+
+            auto flush_scalar = [&]() {
+                if (scalar_count == 0U) {
+                    return;
+                }
+                recalculate_exad_scalar_batch(
+                    current,
+                    slot,
+                    scalar_boards.data(),
+                    scalar_local_rows.data(),
+                    scalar_count,
+                    future1,
+                    future2,
+                    luts,
+                    tiles_table,
+                    param,
+                    original_board_sum,
+                    spec,
+                    static_cast<int8_t>(key),
+                    max_scale,
+                    zero_val,
+                    spawn_rate4,
+                    scalar_workspaces[thread_index]
+                );
+                scalar_count = 0U;
+            };
+
+            auto flush_vector = [&]() {
+                if (vector_count == 0U) {
+                    return;
+                }
+                recalculate_exad_vector_batch(
+                    current,
+                    slot,
+                    vector_boards.data(),
+                    vector_local_rows.data(),
+                    vector_count,
+                    future1,
+                    future2,
+                    luts,
+                    tiles_table,
+                    permutation_table,
+                    param,
+                    original_board_sum,
+                    spec,
+                    static_cast<int8_t>(key),
+                    max_scale,
+                    zero_val,
+                    spawn_rate4,
+                    *match_cache,
+                    workspace,
+                    static_cast<uint32_t>(derive_size),
+                    vector_workspaces[thread_index]
+                );
+                vector_count = 0U;
+            };
+
+            auto process_rank = [&](uint32_t rank) {
+                const uint64_t board = (prefix36 << EXAD::kSuffixBits) | luts.unrank_array[unrank_base + rank];
+                const uint64_t local_row = static_cast<uint64_t>(bucket.dense_offset) + ordinal;
+                ++ordinal;
+                if (do_check && is_success_by_shifts(board, target, spec.success_shifts)) {
+                    T *dst = EXAD::row_ptr(current, slot, local_row);
+                    std::fill(dst, dst + derive_size, max_scale);
+                    return;
+                }
+                if (derive_size == 1U) {
+                    scalar_boards[scalar_count] = board;
+                    scalar_local_rows[scalar_count] = local_row;
+                    ++scalar_count;
+                    if (scalar_count == kEXADScalarBatchSize) {
+                        flush_scalar();
+                    }
+                    return;
+                }
+                if (use_vector_batch) {
+                    vector_boards[vector_count] = board;
+                    vector_local_rows[vector_count] = local_row;
+                    ++vector_count;
+                    if (vector_count == vector_batch_size) {
+                        flush_vector();
+                    }
+                    return;
+                }
+
+                T *dst = EXAD::row_ptr(current, slot, local_row);
+                auto [rep_t, rep_v] = replace_val(board);
+                uint64_t rep_t_rev = FormationAD::reverse(rep_t);
+                auto &success_probability = workspace.success_probability;
+                success_probability.assign(derive_size, 0.0);
+                uint32_t empty_mask = empty_cell_mask16(board);
+                const int empty_slots = static_cast<int>(popcount_u32(empty_mask));
+                while (empty_mask != 0U) {
+                    const int pos = static_cast<int>(ctz_u32(empty_mask));
+                    empty_mask &= empty_mask - 1U;
+                    solve_optimal_success_rate_arr_into_exad(
+                        board, 1ULL, pos, rep_t, rep_t_rev, derive_size, spec, rep_v,
+                        static_cast<int8_t>(key), future1, luts, original_board_sum + 2U,
+                        *match_cache, tiles_table, permutation_table, param, zero_val, max_scale,
+                        workspace, workspace.optimal_values
+                    );
+                    for (size_t idx = 0; idx < derive_size; ++idx) {
+                        success_probability[idx] += static_cast<double>(workspace.optimal_values[idx]) * (1.0 - spawn_rate4);
+                    }
+                    solve_optimal_success_rate_arr_into_exad(
+                        board, 2ULL, pos, rep_t, rep_t_rev, derive_size, spec, rep_v,
+                        static_cast<int8_t>(key), future2, luts, original_board_sum + 4U,
+                        *match_cache, tiles_table, permutation_table, param, zero_val, max_scale,
+                        workspace, workspace.temp_values
+                    );
+                    for (size_t idx = 0; idx < derive_size; ++idx) {
+                        success_probability[idx] += static_cast<double>(workspace.temp_values[idx]) * spawn_rate4;
+                    }
+                }
+                for (size_t idx = 0; idx < derive_size; ++idx) {
+                    dst[idx] = empty_slots == 0
+                        ? zero_val
+                        : static_cast<T>(success_probability[idx] / static_cast<double>(empty_slots));
+                }
+            };
+
+            if (valid_count <= set.threshold_bits) {
+                const uint32_t bytes = static_cast<uint32_t>(ZMaskFrozen::bytes_for_bits(valid_count));
+                for (uint32_t byte_idx = 0; byte_idx < bytes; ++byte_idx) {
+                    uint8_t value = set.small_bitmap_bytes[bucket.bitmap_offset + byte_idx];
+                    while (value != 0U) {
+#if defined(__GNUC__) || defined(__clang__)
+                        const uint32_t bit = static_cast<uint32_t>(__builtin_ctz(value));
+#else
+                        uint32_t bit = 0;
+                        while (((value >> bit) & 1U) == 0U) {
+                            ++bit;
+                        }
+#endif
+                        const uint32_t rank = byte_idx * 8U + bit;
+                        if (rank >= valid_count) {
+                            break;
+                        }
+                        process_rank(rank);
+                        value = static_cast<uint8_t>(value & static_cast<uint8_t>(value - 1U));
+                    }
+                }
+            } else {
+                const uint32_t words = static_cast<uint32_t>(ZMaskFrozen::words_for_bits(valid_count));
+                for (uint32_t word_idx = 0; word_idx < words; ++word_idx) {
+                    uint64_t value = set.large_bitmap_words[bucket.bitmap_offset + word_idx];
+                    while (value != 0ULL) {
+#if defined(__GNUC__) || defined(__clang__)
+                        const uint32_t bit = static_cast<uint32_t>(__builtin_ctzll(value));
+#else
+                        uint32_t bit = 0;
+                        while (((value >> bit) & 1ULL) == 0ULL) {
+                            ++bit;
+                        }
+#endif
+                        const uint32_t rank = word_idx * 64U + bit;
+                        if (rank >= valid_count) {
+                            break;
+                        }
+                        process_rank(rank);
+                        value &= value - 1ULL;
+                    }
+                }
+            }
+            flush_scalar();
+            flush_vector();
+        }
+    }
+}
+
+template <typename T>
+EXAD::SolvedLayer<T> empty_future_layer(EXAD::DTypeMode mode) {
+    EXAD::SolvedLayer<T> layer;
+    layer.dtype_mode = mode;
+    return layer;
+}
+
+template <typename T>
+void load_future_layer(
+    const RunOptions &options,
+    int target_step,
+    EXAD::DTypeMode mode,
+    const EXAD::Luts &luts,
+    EXAD::SolvedLayer<T> &layer,
+    int &cached_step,
+    FileIOUtils::DirectIoConfig io_config,
+    double &read_seconds,
+    double &index_seconds
+) {
+    if (cached_step == target_step) {
+        return;
+    }
+    if (target_step >= options.steps - 2) {
+        layer = empty_future_layer<T>(mode);
+        cached_step = target_step;
+        return;
+    }
+    const std::string path = EXAD::solved_file_path(options.pathname, target_step);
+    if (!EXAD::solved_file_exists(path)) {
+        throw std::runtime_error("missing EXAD solved future layer: " + path);
+    }
+    const double read_t0 = wall_time_seconds();
+    layer = EXAD::read_solved_layer_file<T>(path, mode, io_config);
+    read_seconds += wall_time_seconds() - read_t0;
+    const double index_t0 = wall_time_seconds();
+    EXAD::build_direct_indexes(layer, luts);
+    index_seconds += wall_time_seconds() - index_t0;
+    cached_step = target_step;
+}
+
+template <typename T>
+void recalculate_process_exad_impl(
+    const std::vector<uint64_t> &arr_init,
+    const AdvancedPatternSpec &spec,
+    const RunOptions &options
+) {
+    ensure_exad_solve_stats_header(options);
+    EXADSolveStatsRecord total_record;
+    total_record.stage = "_total";
+    total_record.deletion_threshold = options.deletion_threshold;
+
+    const int num_threads = effective_num_threads(options);
+    const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
+    FormationAD::MaskerContext masker = FormationAD::init_masker(spec);
+    const AdvancedMaskParam param = masker.param;
+    EXAD::Luts luts = exad_load_or_build_luts(arr_init, spec, options, num_threads, io_config);
+    const uint32_t ini_board_sum = arr_init.empty() ? 0U : board_sum(arr_init.front());
+    const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
+    const T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
+    const T deletion_threshold = static_cast<T>(
+        options.deletion_threshold * static_cast<double>(max_scale - zero_val) + zero_val
+    );
+    const EXAD::DTypeMode dtype_mode = EXAD::dtype_mode_from_name(options.success_rate_dtype);
+
+    EXAD::SolvedLayer<T> future1 = empty_future_layer<T>(dtype_mode);
+    EXAD::SolvedLayer<T> future2 = empty_future_layer<T>(dtype_mode);
+    int cached_future1_step = std::numeric_limits<int>::min();
+    int cached_future2_step = std::numeric_limits<int>::min();
+    std::unordered_map<uint32_t, MatchCache> match_dict;
+    const uint32_t progress_total = build_progress_total(options);
+
+    for (int step = options.steps - 3; step >= 0; --step) {
+        FormationProgress::update_build_progress(
+            progress_total - static_cast<uint32_t>(step) - 2U,
+            progress_total
+        );
+        const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
+        if (EXAD::solved_file_exists(solved_path)) {
+            maybe_compress_exad_solved_file(options, step);
+            continue;
+        }
+
+        const double current_read_t0 = wall_time_seconds();
+        EXAD::Layer generation_layer = EXAD::read_layer_file(EXAD::layer_file_path(options.pathname, step), io_config);
+        const double current_read_t1 = wall_time_seconds();
+        if (generation_layer.empty()) {
+            throw std::runtime_error("empty EXAD current layer: " + EXAD::layer_file_path(options.pathname, step));
+        }
+
+        const double build_t0 = wall_time_seconds();
+        EXAD::SolvedLayer<T> current = EXAD::make_solved_layer_from_generation<T>(
+            std::move(generation_layer),
+            param,
+            dtype_mode,
+            zero_val
+        );
+        EXAD::fill_success_values(current.success_values, zero_val, num_threads);
+        const double build_t1 = wall_time_seconds();
+
+        double future_read_seconds = 0.0;
+        double future_index_seconds = 0.0;
+        load_future_layer(
+            options, step + 1, dtype_mode, luts, future1, cached_future1_step, io_config,
+            future_read_seconds, future_index_seconds
+        );
+        load_future_layer(
+            options, step + 2, dtype_mode, luts, future2, cached_future2_step, io_config,
+            future_read_seconds, future_index_seconds
+        );
+
+        const double recalc_t0 = wall_time_seconds();
+        recalculate_exad_direct(
+            current,
+            future1,
+            future2,
+            luts,
+            masker.tiles_combination_table,
+            masker.permutation_table,
+            param,
+            static_cast<uint32_t>(2 * step) + ini_board_sum,
+            spec,
+            max_scale,
+            zero_val,
+            options.spawn_rate4,
+            step > options.docheck_step,
+            options.target,
+            num_threads,
+            match_dict
+        );
+        const double recalc_t1 = wall_time_seconds();
+
+        auto [input_values, max_rate] = EXAD::solved_value_count_and_max(current, zero_val);
+        const uint64_t input_rows = current.live_board_count;
+        const double normalized_max_rate = static_cast<double>(max_rate - zero_val) /
+            static_cast<double>(max_scale - zero_val);
+
+        double future_compact_seconds = 0.0;
+        double future_write_seconds = 0.0;
+        double compress_seconds = 0.0;
+        if (options.deletion_threshold > 0.0 && cached_future2_step == step + 2 && !future2.empty()) {
+            const double future_compact_t0 = wall_time_seconds();
+            EXAD::SolvedLayer<T> compacted_future =
+                EXAD::compact_solved_layer(future2, luts, deletion_threshold, num_threads);
+            future_compact_seconds = wall_time_seconds() - future_compact_t0;
+
+            const double future_write_t0 = wall_time_seconds();
+            EXAD::write_solved_layer_file(
+                EXAD::solved_file_path(options.pathname, step + 2),
+                compacted_future,
+                io_config
+            );
+            future_write_seconds = wall_time_seconds() - future_write_t0;
+            compress_seconds += maybe_compress_exad_solved_file(options, step + 2);
+            if (cached_future2_step == step + 2) {
+                future2 = std::move(compacted_future);
+                EXAD::build_direct_indexes(future2, luts);
+            }
+        }
+
+        const double compact_t0 = wall_time_seconds();
+        current = EXAD::compact_solved_layer(current, luts, zero_val, num_threads);
+        const double compact_t1 = wall_time_seconds();
+        auto [post_zero_values, ignored_max] = EXAD::solved_value_count_and_max(current, zero_val);
+        (void)ignored_max;
+        const uint64_t post_zero_rows = current.live_board_count;
+
+        const double current_index_t0 = wall_time_seconds();
+        EXAD::build_direct_indexes(current, luts);
+        future_index_seconds += wall_time_seconds() - current_index_t0;
+
+        const double write_t0 = wall_time_seconds();
+        EXAD::write_solved_layer_file(solved_path, current, io_config);
+        const double write_t1 = wall_time_seconds();
+        compress_seconds += maybe_compress_exad_solved_file(options, step);
+        std::error_code remove_ec;
+        fs::remove(EXAD::layer_file_path(options.pathname, step), remove_ec);
+
+        EXADSolveStatsRecord record;
+        record.stage = "solve";
+        record.step = step;
+        record.input_rows = input_rows;
+        record.input_values = input_values;
+        record.post_zero_rows = post_zero_rows;
+        record.post_zero_values = post_zero_values;
+        record.deletion_threshold = options.deletion_threshold;
+        record.max_success = normalized_max_rate;
+        record.current_read_seconds = current_read_t1 - current_read_t0;
+        record.current_build_seconds = build_t1 - build_t0;
+        record.future_read_seconds = future_read_seconds;
+        record.future_index_seconds = future_index_seconds;
+        record.recalculate_seconds = recalc_t1 - recalc_t0;
+        record.zero_compact_seconds = compact_t1 - compact_t0;
+        record.current_write_seconds = write_t1 - write_t0;
+        record.future_compact_seconds = future_compact_seconds;
+        record.future_write_seconds = future_write_seconds;
+        record.compress_seconds = compress_seconds;
+        record.metadata_bytes = EXAD::metadata_bytes(current);
+        record.success_bytes = static_cast<uint64_t>(current.success_values.size()) * sizeof(T);
+        record.bitmap_density = EXAD::bitmap_density(current);
+        append_exad_solve_stats_record(options, record);
+
+        total_record.input_rows += record.input_rows;
+        total_record.input_values += record.input_values;
+        total_record.post_zero_rows += record.post_zero_rows;
+        total_record.post_zero_values += record.post_zero_values;
+        total_record.max_success = std::max(total_record.max_success, record.max_success);
+        total_record.current_read_seconds += record.current_read_seconds;
+        total_record.current_build_seconds += record.current_build_seconds;
+        total_record.future_read_seconds += record.future_read_seconds;
+        total_record.future_index_seconds += record.future_index_seconds;
+        total_record.recalculate_seconds += record.recalculate_seconds;
+        total_record.zero_compact_seconds += record.zero_compact_seconds;
+        total_record.current_write_seconds += record.current_write_seconds;
+        total_record.future_compact_seconds += record.future_compact_seconds;
+        total_record.future_write_seconds += record.future_write_seconds;
+        total_record.compress_seconds += record.compress_seconds;
+        total_record.metadata_bytes += record.metadata_bytes;
+        total_record.success_bytes += record.success_bytes;
+        total_record.bitmap_density = record.bitmap_density;
+
+        future2 = std::move(future1);
+        cached_future2_step = cached_future1_step;
+        future1 = std::move(current);
+        cached_future1_step = step;
+    }
+
+    append_exad_solve_stats_record(options, total_record);
+}
+
+template <typename T>
+void recalculate_process_exad_chunked_impl(
+    const std::vector<uint64_t> &arr_init,
+    const AdvancedPatternSpec &spec,
+    const RunOptions &options
+) {
+    ensure_exad_solve_stats_header(options);
+    EXADSolveStatsRecord total_record;
+    total_record.stage = "_total";
+    total_record.deletion_threshold = options.deletion_threshold;
+
+    const int num_threads = effective_num_threads(options);
+    const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
+    FormationAD::MaskerContext masker = FormationAD::init_masker(spec);
+    const AdvancedMaskParam param = masker.param;
+    EXAD::Luts luts = exad_load_or_build_luts(arr_init, spec, options, num_threads, io_config);
+    const uint32_t ini_board_sum = arr_init.empty() ? 0U : board_sum(arr_init.front());
+    const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
+    const T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
+    const T deletion_threshold = static_cast<T>(
+        options.deletion_threshold * static_cast<double>(max_scale - zero_val) + zero_val
+    );
+    const EXAD::DTypeMode dtype_mode = EXAD::dtype_mode_from_name(options.success_rate_dtype);
+
+    EXAD::SolvedLayer<T> future1 = empty_future_layer<T>(dtype_mode);
+    EXAD::SolvedLayer<T> future2 = empty_future_layer<T>(dtype_mode);
+    int cached_future1_step = std::numeric_limits<int>::min();
+    int cached_future2_step = std::numeric_limits<int>::min();
+    std::unordered_map<uint32_t, MatchCache> match_dict;
+    const uint32_t progress_total = build_progress_total(options);
+
+    for (int step = options.steps - 3; step >= 0; --step) {
+        FormationProgress::update_build_progress(
+            progress_total - static_cast<uint32_t>(step) - 2U,
+            progress_total
+        );
+        const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
+        if (EXAD::solved_file_exists(solved_path)) {
+            maybe_compress_exad_solved_file(options, step);
+            continue;
+        }
+
+        const std::string chunk_dir = exad_chunk_dir_path(options, step);
+        const std::string writing_path = exad_chunk_writing_path(options, step);
+        std::error_code cleanup_ec;
+        fs::remove_all(chunk_dir, cleanup_ec);
+        if (cleanup_ec) {
+            throw std::runtime_error("failed to remove stale EXAD chunk directory: " + chunk_dir);
+        }
+        fs::create_directories(chunk_dir, cleanup_ec);
+        if (cleanup_ec) {
+            throw std::runtime_error("failed to create EXAD chunk directory: " + chunk_dir);
+        }
+        fs::remove(writing_path, cleanup_ec);
+        fs::remove(FileIOUtils::temp_write_path(writing_path), cleanup_ec);
+
+        double future_read_seconds = 0.0;
+        double future_index_seconds = 0.0;
+        load_future_layer(
+            options, step + 1, dtype_mode, luts, future1, cached_future1_step, io_config,
+            future_read_seconds, future_index_seconds
+        );
+        load_future_layer(
+            options, step + 2, dtype_mode, luts, future2, cached_future2_step, io_config,
+            future_read_seconds, future_index_seconds
+        );
+
+        double current_read_seconds = 0.0;
+        double current_build_seconds = 0.0;
+        double recalculate_seconds = 0.0;
+        double zero_compact_seconds = 0.0;
+        double current_write_seconds = 0.0;
+        uint64_t input_rows = 0;
+        uint64_t input_values = 0;
+        T max_rate = zero_val;
+        std::array<EXADSlotChunkManifest, bucket_slot_count()> manifests{};
+        EXAD::LayerFileInfo layer_info{};
+
+        const std::string layer_path = EXAD::layer_file_path(options.pathname, step);
+        {
+            const double open_t0 = wall_time_seconds();
+            EXAD::LayerSlotReader reader(layer_path, io_config);
+            layer_info = reader.info();
+            current_read_seconds += wall_time_seconds() - open_t0;
+            if (layer_info.live_board_count == 0U) {
+                throw std::runtime_error("empty EXAD current layer: " + layer_path);
+            }
+
+            for (size_t slot = 0; slot < bucket_slot_count(); ++slot) {
+                EXAD::BoardSet set;
+                const double slot_read_t0 = wall_time_seconds();
+                if (!reader.read_next(set)) {
+                    throw std::runtime_error("EXAD temp layer ended before all slots were read: " + layer_path);
+                }
+                current_read_seconds += wall_time_seconds() - slot_read_t0;
+
+                const double build_t0 = wall_time_seconds();
+                EXAD::SolvedLayer<T> current = make_solved_layer_from_slot<T>(
+                    std::move(set),
+                    layer_info,
+                    slot,
+                    param,
+                    dtype_mode,
+                    zero_val,
+                    num_threads
+                );
+                current_build_seconds += wall_time_seconds() - build_t0;
+
+                const double recalc_t0 = wall_time_seconds();
+                recalculate_exad_direct(
+                    current,
+                    future1,
+                    future2,
+                    luts,
+                    masker.tiles_combination_table,
+                    masker.permutation_table,
+                    param,
+                    static_cast<uint32_t>(2 * step) + ini_board_sum,
+                    spec,
+                    max_scale,
+                    zero_val,
+                    options.spawn_rate4,
+                    step > options.docheck_step,
+                    options.target,
+                    num_threads,
+                    match_dict
+                );
+                recalculate_seconds += wall_time_seconds() - recalc_t0;
+
+                auto [slot_values, slot_max] = EXAD::solved_value_count_and_max(current, zero_val);
+                input_values += slot_values;
+                input_rows += current.live_board_count;
+                if (slot_max > max_rate) {
+                    max_rate = slot_max;
+                }
+
+                const double compact_t0 = wall_time_seconds();
+                current = EXAD::compact_solved_layer(current, luts, zero_val, num_threads);
+                zero_compact_seconds += wall_time_seconds() - compact_t0;
+
+                const std::string chunk_path = exad_slot_chunk_path(chunk_dir, slot);
+                const double chunk_write_t0 = wall_time_seconds();
+                write_slot_chunk_file<T>(chunk_path, current, slot, io_config);
+                current_write_seconds += wall_time_seconds() - chunk_write_t0;
+                manifests[slot] = read_slot_chunk_manifest<T>(chunk_path, dtype_mode, slot);
+            }
+            reader.close();
+        }
+
+        double future_compact_seconds = 0.0;
+        double future_write_seconds = 0.0;
+        double compress_seconds = 0.0;
+        if (options.deletion_threshold > 0.0 && cached_future2_step == step + 2 && !future2.empty()) {
+            const double future_compact_t0 = wall_time_seconds();
+            EXAD::SolvedLayer<T> compacted_future =
+                EXAD::compact_solved_layer(future2, luts, deletion_threshold, num_threads);
+            future_compact_seconds = wall_time_seconds() - future_compact_t0;
+
+            const double future_write_t0 = wall_time_seconds();
+            EXAD::write_solved_layer_file(
+                EXAD::solved_file_path(options.pathname, step + 2),
+                compacted_future,
+                io_config
+            );
+            future_write_seconds = wall_time_seconds() - future_write_t0;
+            compress_seconds += maybe_compress_exad_solved_file(options, step + 2);
+            if (cached_future2_step == step + 2) {
+                future2 = std::move(compacted_future);
+                const double future_reindex_t0 = wall_time_seconds();
+                EXAD::build_direct_indexes(future2, luts);
+                future_index_seconds += wall_time_seconds() - future_reindex_t0;
+            }
+        }
+
+        const double merge_t0 = wall_time_seconds();
+        const EXADChunkMergeSummary merge_summary = merge_slot_chunks_to_solved_file<T>(
+            solved_path,
+            writing_path,
+            dtype_mode,
+            layer_info.original_board_sum,
+            layer_info.threshold_bits,
+            layer_info.lut_signature,
+            manifests,
+            io_config
+        );
+        current_write_seconds += wall_time_seconds() - merge_t0;
+        compress_seconds += maybe_compress_exad_solved_file(options, step);
+
+        fs::remove_all(chunk_dir, cleanup_ec);
+        if (cleanup_ec) {
+            throw std::runtime_error("failed to remove EXAD chunk directory: " + chunk_dir);
+        }
+        fs::remove(layer_path, cleanup_ec);
+
+        const double current_readback_t0 = wall_time_seconds();
+        EXAD::SolvedLayer<T> current = EXAD::read_solved_layer_file<T>(solved_path, dtype_mode, io_config);
+        future_read_seconds += wall_time_seconds() - current_readback_t0;
+        const double current_index_t0 = wall_time_seconds();
+        EXAD::build_direct_indexes(current, luts);
+        future_index_seconds += wall_time_seconds() - current_index_t0;
+
+        const double normalized_max_rate = static_cast<double>(max_rate - zero_val) /
+            static_cast<double>(max_scale - zero_val);
+
+        EXADSolveStatsRecord record;
+        record.stage = "chunked_solve";
+        record.step = step;
+        record.input_rows = input_rows;
+        record.input_values = input_values;
+        record.post_zero_rows = merge_summary.post_zero_rows;
+        record.post_zero_values = merge_summary.post_zero_values;
+        record.deletion_threshold = options.deletion_threshold;
+        record.max_success = normalized_max_rate;
+        record.current_read_seconds = current_read_seconds;
+        record.current_build_seconds = current_build_seconds;
+        record.future_read_seconds = future_read_seconds;
+        record.future_index_seconds = future_index_seconds;
+        record.recalculate_seconds = recalculate_seconds;
+        record.zero_compact_seconds = zero_compact_seconds;
+        record.current_write_seconds = current_write_seconds;
+        record.future_compact_seconds = future_compact_seconds;
+        record.future_write_seconds = future_write_seconds;
+        record.compress_seconds = compress_seconds;
+        record.metadata_bytes = merge_summary.metadata_bytes;
+        record.success_bytes = merge_summary.success_bytes;
+        record.bitmap_density = merge_summary.bitmap_density;
+        append_exad_solve_stats_record(options, record);
+
+        total_record.input_rows += record.input_rows;
+        total_record.input_values += record.input_values;
+        total_record.post_zero_rows += record.post_zero_rows;
+        total_record.post_zero_values += record.post_zero_values;
+        total_record.max_success = std::max(total_record.max_success, record.max_success);
+        total_record.current_read_seconds += record.current_read_seconds;
+        total_record.current_build_seconds += record.current_build_seconds;
+        total_record.future_read_seconds += record.future_read_seconds;
+        total_record.future_index_seconds += record.future_index_seconds;
+        total_record.recalculate_seconds += record.recalculate_seconds;
+        total_record.zero_compact_seconds += record.zero_compact_seconds;
+        total_record.current_write_seconds += record.current_write_seconds;
+        total_record.future_compact_seconds += record.future_compact_seconds;
+        total_record.future_write_seconds += record.future_write_seconds;
+        total_record.compress_seconds += record.compress_seconds;
+        total_record.metadata_bytes += record.metadata_bytes;
+        total_record.success_bytes += record.success_bytes;
+        total_record.bitmap_density = record.bitmap_density;
+
+        future2 = std::move(future1);
+        cached_future2_step = cached_future1_step;
+        future1 = std::move(current);
+        cached_future1_step = step;
+    }
+
+    append_exad_solve_stats_record(options, total_record);
+}
+
+} // namespace
+
+void run_pattern_solve_exad_cpp(
+    const std::vector<uint64_t> &arr_init,
+    const AdvancedPatternSpec &spec,
+    const RunOptions &options
+) {
+    (void)HybridSearch::mode();
+    switch (success_rate_kind_from_name(options.success_rate_dtype)) {
+        case SuccessRateKind::UInt64:
+            if (options.chunked_solve) {
+                recalculate_process_exad_chunked_impl<uint64_t>(arr_init, spec, options);
+            } else {
+                recalculate_process_exad_impl<uint64_t>(arr_init, spec, options);
+            }
+            return;
+        case SuccessRateKind::Float32:
+            if (options.chunked_solve) {
+                recalculate_process_exad_chunked_impl<float>(arr_init, spec, options);
+            } else {
+                recalculate_process_exad_impl<float>(arr_init, spec, options);
+            }
+            return;
+        case SuccessRateKind::Float64:
+            if (options.chunked_solve) {
+                recalculate_process_exad_chunked_impl<double>(arr_init, spec, options);
+            } else {
+                recalculate_process_exad_impl<double>(arr_init, spec, options);
+            }
+            return;
+        case SuccessRateKind::UInt32:
+        default:
+            if (options.chunked_solve) {
+                recalculate_process_exad_chunked_impl<uint32_t>(arr_init, spec, options);
+            } else {
+                recalculate_process_exad_impl<uint32_t>(arr_init, spec, options);
+            }
+            return;
+    }
+}

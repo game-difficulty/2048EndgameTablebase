@@ -2,6 +2,7 @@
 
 #include "BoardCodec.h"
 #include "BoardMover.h"
+#include "EXADCompressedResult.h"
 #include "EXCompressedResult.h"
 #include "EXPrefix36Runtime.h"
 #include "FileIOUtils.h"
@@ -711,6 +712,91 @@ SearchValue find_advanced_value(
     return read_value_at_index(*ind);
 }
 
+struct EXADLookupTarget {
+    int ad_key = 0;
+    uint64_t board = 0;
+    uint32_t column = 0;
+    bool valid = false;
+    bool zero = false;
+};
+
+EXADLookupTarget build_exad_lookup_target(
+    const AdvancedPatternSpec &spec,
+    const FormationAD::MaskerContext &masker,
+    uint64_t board
+) {
+    EXADLookupTarget target;
+    const auto stats = FormationAD::tile_sum_and_32k_count2(board, masker.param);
+    const uint32_t total_sum = stats.total_sum;
+    int count_32k = stats.count_32k;
+    const uint32_t original_board_sum = board_value_sum(decode_board_matrix(board));
+    const uint32_t total_32k_sum =
+        static_cast<uint32_t>(masker.param.num_free_32k + masker.param.num_fixed_32k) << 15U;
+    if (count_32k < static_cast<int>(masker.param.num_free_32k) ||
+        original_board_sum < total_sum + total_32k_sum) {
+        target.zero = true;
+        return target;
+    }
+    const uint32_t large_tiles_sum = original_board_sum - total_sum - total_32k_sum;
+
+    const auto tiles_combinations = FormationAD::tiles_combination_view(
+        masker.tiles_combination_table,
+        static_cast<uint8_t>(large_tiles_sum >> 6U),
+        static_cast<uint8_t>(count_32k - masker.param.num_free_32k)
+    );
+
+    uint64_t search_key = 0ULL;
+    int symm_index = 0;
+    if (!tiles_combinations.empty()) {
+        if (tiles_combinations.size >= 3U && tiles_combinations[0] == tiles_combinations[2]) {
+            count_32k = count_32k - 3 + 16;
+            const auto pair = canonical_pair_by_mode(FormationAD::mask_board(board, 7), spec.symm_mode);
+            search_key = pair.first;
+            symm_index = pair.second;
+        } else if (tiles_combinations.size >= 2U && tiles_combinations[0] == tiles_combinations[1]) {
+            count_32k = -count_32k;
+            const auto pair = canonical_pair_by_mode(
+                FormationAD::mask_board(board, tiles_combinations[0] + 1),
+                spec.symm_mode
+            );
+            search_key = pair.first;
+            symm_index = pair.second;
+        } else {
+            const auto pair = canonical_pair_by_mode(FormationAD::mask_board(board, 6), spec.symm_mode);
+            search_key = pair.first;
+            symm_index = pair.second;
+        }
+    } else {
+        const auto pair = canonical_pair_by_mode(board, spec.symm_mode);
+        search_key = pair.first;
+        symm_index = pair.second;
+    }
+
+    uint32_t column = 0U;
+    if (!tiles_combinations.empty()) {
+        const std::vector<uint64_t> board_derived = FormationAD::unmask_board(
+            search_key,
+            original_board_sum,
+            masker.tiles_combination_table,
+            masker.permutation_table,
+            masker.param
+        );
+        const uint64_t symm_board = apply_sym_like(board, symm_index);
+        const auto it = std::lower_bound(board_derived.begin(), board_derived.end(), symm_board);
+        if (it == board_derived.end() || *it != symm_board) {
+            target.zero = true;
+            return target;
+        }
+        column = static_cast<uint32_t>(std::distance(board_derived.begin(), it));
+    }
+
+    target.ad_key = count_32k;
+    target.board = search_key;
+    target.column = column;
+    target.valid = true;
+    return target;
+}
+
 double normalize_ex_lookup_value(const EXCompressedResult::ColdLookupResult &lookup, const DTypeInfo &dtype_info) {
     if (!lookup.found) {
         return dtype_info.zero_value;
@@ -737,6 +823,99 @@ double normalize_ex_lookup_value(const EXCompressedResult::ColdLookupResult &loo
             return dtype_info.max_scale > 1.0
                 ? static_cast<double>(static_cast<uint32_t>(lookup.raw_value_bits)) / dtype_info.max_scale
                 : static_cast<double>(static_cast<uint32_t>(lookup.raw_value_bits));
+    }
+}
+
+double normalize_exad_lookup_value(const EXADCompressedResult::ColdLookupResult &lookup, const DTypeInfo &dtype_info) {
+    if (!lookup.found) {
+        return dtype_info.zero_value;
+    }
+    switch (lookup.success_kind) {
+        case SuccessRateKind::UInt64:
+            return dtype_info.max_scale > 1.0
+                ? static_cast<double>(lookup.raw_value_bits) / dtype_info.max_scale
+                : static_cast<double>(lookup.raw_value_bits);
+        case SuccessRateKind::Float32: {
+            uint32_t bits = static_cast<uint32_t>(lookup.raw_value_bits);
+            float value = 0.0f;
+            std::memcpy(&value, &bits, sizeof(value));
+            return static_cast<double>(value);
+        }
+        case SuccessRateKind::Float64: {
+            uint64_t bits = lookup.raw_value_bits;
+            double value = 0.0;
+            std::memcpy(&value, &bits, sizeof(value));
+            return value;
+        }
+        case SuccessRateKind::UInt32:
+        default:
+            return dtype_info.max_scale > 1.0
+                ? static_cast<double>(static_cast<uint32_t>(lookup.raw_value_bits)) / dtype_info.max_scale
+                : static_cast<double>(static_cast<uint32_t>(lookup.raw_value_bits));
+    }
+}
+
+std::vector<fs::path> exad_compressed_candidates(const fs::path &exadbook_path) {
+    std::vector<fs::path> candidates;
+    fs::path replaced = exadbook_path;
+    replaced.replace_extension(EXADCompressedResult::kCompressedLayerFileExtension);
+    candidates.push_back(replaced);
+    candidates.push_back(fs::path(exadbook_path.string() + EXADCompressedResult::kCompressedLayerFileExtension));
+    return candidates;
+}
+
+SearchValue find_exad_value(
+    const AdvancedPatternSpec &spec,
+    const FormationAD::MaskerContext &masker,
+    const std::string &pathname,
+    const std::string &filename,
+    const std::string &pattern_full,
+    uint64_t board,
+    const std::string &success_rate_dtype
+) {
+    const DTypeInfo dtype_info = dtype_info_for_name(success_rate_dtype);
+    const fs::path root(pathname);
+    const fs::path exadlut_path = root / (pattern_full + "_.exadlut");
+    if (!fs::exists(exadlut_path)) {
+        return string_search_value("?");
+    }
+
+    const EXADLookupTarget target = build_exad_lookup_target(spec, masker, board);
+    if (target.zero) {
+        return numeric_search_value(dtype_info.zero_value, success_rate_dtype);
+    }
+    if (!target.valid) {
+        return string_search_value("?");
+    }
+
+    const fs::path exadbook_path = root / filename;
+    try {
+        if (fs::exists(exadbook_path)) {
+            const auto lookup = EXADCompressedResult::lookup_exadbook_cold(
+                exadbook_path.string(),
+                exadlut_path.string(),
+                target.ad_key,
+                target.board,
+                target.column
+            );
+            return numeric_search_value(normalize_exad_lookup_value(lookup, dtype_info), success_rate_dtype);
+        }
+        for (const fs::path &candidate : exad_compressed_candidates(exadbook_path)) {
+            if (!fs::exists(candidate)) {
+                continue;
+            }
+            const auto lookup = EXADCompressedResult::lookup_exad_cold(
+                candidate.string(),
+                exadlut_path.string(),
+                target.ad_key,
+                target.board,
+                target.column
+            );
+            return numeric_search_value(normalize_exad_lookup_value(lookup, dtype_info), success_rate_dtype);
+        }
+        return string_search_value("?");
+    } catch (...) {
+        return string_search_value("?");
     }
 }
 
@@ -816,6 +995,14 @@ ReaderMoveResult evaluate_classic_result_candidates(
 
 ReaderMoveResult evaluate_advanced_result_candidates(
     AdvancedBookReader &reader,
+    const BoardMatrix &board_matrix,
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &pattern_full,
+    int64_t nums_adjust
+);
+
+ReaderMoveResult evaluate_exad_result_candidates(
+    EXADBookReader &reader,
     const BoardMatrix &board_matrix,
     const std::vector<std::pair<std::string, std::string>> &path_list,
     const std::string &pattern_full,
@@ -995,6 +1182,110 @@ ReaderMoveResult evaluate_advanced_result_candidates(
                     reader.masker_,
                     path_entry.first,
                     filename,
+                    moved_board,
+                    path_entry.second
+                );
+                if (index == 0U) {
+                    result_values[2] = value;
+                } else if (index == 1U) {
+                    result_values[1] = value;
+                } else if (index == 2U) {
+                    result_values[3] = value;
+                } else {
+                    result_values[0] = value;
+                }
+            }
+
+            std::vector<std::pair<std::string, SearchValue>> adjusted_entries;
+            adjusted_entries.reserve(4);
+            for (size_t ordered_index = 0; ordered_index < kOrderedResultKeys.size(); ++ordered_index) {
+                adjusted_entries.push_back({
+                    adjust_direction(operation_index, std::string(kOrderedResultKeys[ordered_index])),
+                    result_values[ordered_index],
+                });
+            }
+
+            const std::vector<OrderedReaderEntry> sorted_entries = sort_adjusted_entries(adjusted_entries);
+            bool has_numeric = false;
+            double first_numeric = 0.0;
+            for (const auto &entry : sorted_entries) {
+                if (entry.kind == ReaderValueKind::Numeric) {
+                    has_numeric = true;
+                    first_numeric = entry.number;
+                    break;
+                }
+            }
+            if (!has_numeric) {
+                continue;
+            }
+
+            reader.last_operation_index_ = operation_index;
+            if (reader.prefer_max_result_) {
+                if (first_numeric > max_success_rate) {
+                    max_success_rate = first_numeric;
+                    final_results = sorted_entries;
+                    success_rate_dtype = path_entry.second;
+                }
+            } else {
+                return {sorted_entries, path_entry.second};
+            }
+        }
+    }
+
+    return {final_results, success_rate_dtype};
+}
+
+ReaderMoveResult evaluate_exad_result_candidates(
+    EXADBookReader &reader,
+    const BoardMatrix &board_matrix,
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &pattern_full,
+    int64_t nums_adjust
+) {
+    if (path_list.empty()) {
+        return {question_entries(), {}};
+    }
+    const int64_t nums = static_cast<int64_t>((board_value_sum(board_matrix) + nums_adjust) / 2);
+    if (nums < 0) {
+        return {blank_direction_entries(), {}};
+    }
+
+    std::vector<OrderedReaderEntry> final_results = blank_direction_entries();
+    double max_success_rate = 0.0;
+    std::string success_rate_dtype;
+    const std::string filename = pattern_full + "_" + std::to_string(nums) + ".exadbook";
+    const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
+
+    for (const auto &path_entry : path_list) {
+        if (!fs::exists(path_entry.first) || max_success_rate > 0.0) {
+            continue;
+        }
+
+        for (int operation_index : operations) {
+            const BoardMatrix transformed_board = apply_operation(board_matrix, operation_index);
+            const uint64_t encoded = encode_board_matrix(transformed_board);
+            if (!is_pattern(encoded, reader.spec_.pattern_masks)) {
+                continue;
+            }
+
+            std::array<SearchValue, 4> result_values = {
+                none_search_value(),
+                none_search_value(),
+                none_search_value(),
+                none_search_value(),
+            };
+            const auto moved_boards = move_all_dir_for_variant(encoded, reader.is_variant_);
+            for (size_t index = 0; index < moved_boards.size(); ++index) {
+                const uint64_t moved_board = moved_boards[index];
+                if (moved_board == encoded || !is_pattern(moved_board, reader.spec_.pattern_masks)) {
+                    continue;
+                }
+                const SearchValue value = find_exad_value(
+                    reader.spec_,
+                    reader.masker_,
+                    path_entry.first,
+                    filename,
+                    pattern_full,
                     moved_board,
                     path_entry.second
                 );
@@ -1242,6 +1533,44 @@ uint64_t sample_advanced_book_state(
     return 0ULL;
 }
 
+uint64_t sample_exad_book_state(
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &pattern_full,
+    double spawn_rate4
+) {
+    static thread_local std::mt19937 rng(std::random_device{}());
+    for (const auto &path_entry : path_list) {
+        std::vector<int> book_indices = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        const fs::path exadlut_path = fs::path(path_entry.first) / (pattern_full + "_.exadlut");
+        if (!fs::exists(exadlut_path)) {
+            continue;
+        }
+        while (!book_indices.empty()) {
+            std::uniform_int_distribution<size_t> pick(0, book_indices.size() - 1U);
+            const size_t chosen = pick(rng);
+            const int book_id = book_indices[chosen];
+            book_indices.erase(book_indices.begin() + static_cast<ptrdiff_t>(chosen));
+
+            const fs::path exadbook_path =
+                fs::path(path_entry.first) / (pattern_full + "_" + std::to_string(book_id) + ".exadbook");
+            uint64_t state = 0ULL;
+            if (fs::exists(exadbook_path) &&
+                EXADCompressedResult::sample_exadbook_cold(exadbook_path.string(), exadlut_path.string(), state)) {
+                return gen_new_num(state, static_cast<float>(spawn_rate4)).first;
+            }
+            for (const fs::path &candidate : exad_compressed_candidates(exadbook_path)) {
+                if (!fs::exists(candidate)) {
+                    continue;
+                }
+                if (EXADCompressedResult::sample_exad_cold(candidate.string(), exadlut_path.string(), state)) {
+                    return gen_new_num(state, static_cast<float>(spawn_rate4)).first;
+                }
+            }
+        }
+    }
+    return 0ULL;
+}
+
 uint64_t sample_ex_book_state(
     const std::vector<std::pair<std::string, std::string>> &path_list,
     const std::string &pattern_full,
@@ -1340,6 +1669,35 @@ uint64_t AdvancedBookReader::get_random_state(
     double spawn_rate4
 ) const {
     return sample_advanced_book_state(path_list, pattern_full, spawn_rate4);
+}
+
+EXADBookReader::EXADBookReader(AdvancedPatternSpec spec, bool is_variant)
+    : spec_(std::move(spec)),
+      masker_(FormationAD::init_masker(spec_)),
+      is_variant_(is_variant),
+      prefer_max_result_(spec_.name == "4442ff" || spec_.name == "4442f" || spec_.name == "4tiler") {}
+
+ReaderMoveResult EXADBookReader::move_on_dic(
+    const std::vector<std::vector<int>> &board,
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &pattern_full,
+    int64_t nums_adjust
+) {
+    BoardMatrix board_matrix{};
+    for (size_t row = 0; row < std::min<size_t>(4U, board.size()); ++row) {
+        for (size_t col = 0; col < std::min<size_t>(4U, board[row].size()); ++col) {
+            board_matrix[row][col] = static_cast<uint32_t>(board[row][col]);
+        }
+    }
+    return evaluate_exad_result_candidates(*this, board_matrix, path_list, pattern_full, nums_adjust);
+}
+
+uint64_t EXADBookReader::get_random_state(
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &pattern_full,
+    double spawn_rate4
+) const {
+    return sample_exad_book_state(path_list, pattern_full, spawn_rate4);
 }
 
 EXBookReader::EXBookReader(PatternSpec spec, bool is_variant)

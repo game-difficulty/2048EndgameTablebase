@@ -98,6 +98,7 @@ def _build_native_advanced_pattern_spec(pattern: str, target: int):
     pattern_spec = formation_core.AdvancedPatternSpec()
     pattern_spec.name = pattern
     pattern_spec.pattern_masks = list(meta.get("pattern_masks", ()))
+    pattern_spec.success_shifts = list(meta.get("success_shifts", ()))
     pattern_spec.symm_mode = _symm_mode_value(meta.get("canonical_mode", "identity"))
     pattern_spec.num_free_32k = int(num_free_32k)
     pattern_spec.fixed_32k_shifts = list(np.asarray(pos_fixed_32k, dtype=np.uint8))

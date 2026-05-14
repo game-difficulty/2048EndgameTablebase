@@ -37,6 +37,18 @@ void run_pattern_solve_ad_cpp(
     bool started_from_generate = false
 );
 
+void run_pattern_build_exad_cpp(
+    const std::vector<uint64_t> &arr_init,
+    const AdvancedPatternSpec &spec,
+    const RunOptions &options
+);
+
+void run_pattern_solve_exad_cpp(
+    const std::vector<uint64_t> &arr_init,
+    const AdvancedPatternSpec &spec,
+    const RunOptions &options
+);
+
 void run_pattern_build_zmask_cpp(
     const std::vector<uint64_t> &arr_init,
     const PatternSpec &spec,

@@ -9,6 +9,13 @@ namespace BookGeneratorUtils {
 
 void sort_array(uint64_t *arr, size_t length, int num_threads = 1);
 
+void sort_keyvalue_uint64_uint32(
+    uint64_t *keys,
+    uint32_t *values,
+    size_t length,
+    bool descending = false
+);
+
 size_t parallel_unique(uint64_t *arr, size_t length, int num_threads);
 
 std::pair<size_t, size_t> sort_and_unique_two_arrays_concurrently(

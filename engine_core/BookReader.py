@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 from Config import SingletonConfig, category_info, pattern_catalog
 from engine_core.BookReaderAD import BookReaderAD
 from engine_core.BookReaderEX import BookReaderEX
+from engine_core.BookReaderEXAD import BookReaderEXAD
 
 try:
     from native_core import formation_core
@@ -125,8 +126,10 @@ class BookReaderDispatcher:
     def __init__(self):
         self.book_reader_ad: BookReaderAD | None = None
         self.book_reader_ex: BookReaderEX | None = None
+        self.book_reader_exad: BookReaderEXAD | None = None
         self.use_ad = False
         self.use_ex = False
+        self.use_exad = False
 
     def set_book_reader_ad(self, pattern: str, target: int):
         if self.book_reader_ad is not None:
@@ -139,6 +142,12 @@ class BookReaderDispatcher:
             return
         self.book_reader_ex = BookReaderEX(pattern)
 
+    def set_book_reader_exad(self, pattern: str, target: int):
+        if self.book_reader_exad is not None:
+            if pattern == self.book_reader_exad.pattern and target == self.book_reader_exad.target:
+                return
+        self.book_reader_exad = BookReaderEXAD(pattern, target)
+
     def move_on_dic(
         self,
         board: NDArray,
@@ -146,6 +155,8 @@ class BookReaderDispatcher:
         target: str,
         pattern_full: str,
     ) -> tuple[dict[str, str | float | int | None], str]:
+        if self.use_exad and self.book_reader_exad is not None:
+            return self.book_reader_exad.move_on_dic(board, pattern_full)
         if self.use_ad and self.book_reader_ad is not None:
             return self.book_reader_ad.move_on_dic(board, pattern_full)
         if self.use_ex and self.book_reader_ex is not None:
@@ -153,6 +164,8 @@ class BookReaderDispatcher:
         return self._book_reader.move_on_dic(board, pattern, target, pattern_full)
 
     def get_random_state(self, path_list: list, pattern_full: str):
+        if self.use_exad and self.book_reader_exad is not None:
+            return self.book_reader_exad.get_random_state(path_list, pattern_full)
         if self.use_ad and self.book_reader_ad is not None:
             return self.book_reader_ad.get_random_state(path_list, pattern_full)
         if self.use_ex and self.book_reader_ex is not None:
@@ -171,6 +184,7 @@ class BookReaderDispatcher:
 
         found_ad = False
         found_ex = False
+        found_exad = False
         ex_prefix = f"{pattern}_{2 ** target}_"
         for path, _success_rate_dtype in path_list:
             if not os.path.exists(path):
@@ -178,35 +192,61 @@ class BookReaderDispatcher:
 
             has_ex_lut = False
             has_ex_layer = False
+            has_exad_lut = False
+            has_exad_layer = False
             with os.scandir(path) as entries:
                 for entry in entries:
                     if entry.name == f"{ex_prefix}.zlut":
                         has_ex_lut = True
+                    elif entry.name == f"{ex_prefix}.exadlut":
+                        has_exad_lut = True
                     elif entry.name.startswith(ex_prefix) and (
                         entry.name.endswith(".zbook") or entry.name.endswith(".exzbook")
                     ):
                         has_ex_layer = True
+                    elif entry.name.startswith(ex_prefix) and (
+                        entry.name.endswith(".exadbook") or entry.name.endswith(".exadzbook")
+                    ):
+                        has_exad_layer = True
                     for rank in (1, 0.75, 0.5, 0.25):
                         if entry.name.endswith(f"_{int(2 ** target * rank)}b"):
                             found_ad = True
                             break
+                    if has_exad_lut and has_exad_layer:
+                        found_exad = True
+                        break
                     if has_ex_lut and has_ex_layer:
                         found_ex = True
                         break
+            if found_exad:
+                break
             if found_ex:
                 break
 
+        if found_exad:
+            self.use_ad = False
+            self.use_ex = False
+            self.book_reader_ad = None
+            self.book_reader_ex = None
+            self.set_book_reader_exad(pattern, target)
+            self.use_exad = self.book_reader_exad is not None
+            return
+
         if found_ex:
             self.use_ad = False
+            self.use_exad = False
             self.book_reader_ad = None
+            self.book_reader_exad = None
             self.set_book_reader_ex(pattern)
             self.use_ex = self.book_reader_ex is not None
             return
 
         self.use_ex = False
+        self.use_exad = False
         if not found_ad:
             self.use_ad = False
             return
 
+        self.book_reader_exad = None
         self.set_book_reader_ad(pattern, target)
         self.use_ad = self.book_reader_ad is not None

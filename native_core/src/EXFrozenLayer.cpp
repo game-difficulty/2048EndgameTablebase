@@ -329,7 +329,6 @@ TileLimitConfig make_target_tile_limit_config(int target_exponent) {
     TileLimitConfig config{};
     config.max_counts.fill(-1);
     config.max_counts[15] = -1;
-    config.max_counts[static_cast<size_t>(target_exponent)] = 1;
     for (int exponent = target_exponent + 1; exponent <= 14; ++exponent) {
         config.max_counts[static_cast<size_t>(exponent)] = 0;
     }
@@ -337,13 +336,6 @@ TileLimitConfig make_target_tile_limit_config(int target_exponent) {
 }
 
 namespace {
-
-int8_t merge_tile_count_limit(int8_t base_limit, uint8_t observed_count) {
-    if (base_limit < 0) {
-        return base_limit;
-    }
-    return static_cast<int8_t>(std::max<int>(base_limit, observed_count));
-}
 
 void normalize_valid_suffix_masks(std::vector<uint32_t> &masks) {
     for (uint32_t &mask : masks) {
@@ -375,16 +367,18 @@ TileLimitConfig make_lut_tile_limit_config(
             std::array<uint8_t, 16> counts{};
             for (uint32_t cell = 0; cell < 16U; ++cell) {
                 const uint32_t tile = static_cast<uint32_t>((board >> (cell * 4U)) & 0xFULL);
-                if (tile >= static_cast<uint32_t>(target_exponent) && tile < 15U) {
+                if (tile > static_cast<uint32_t>(target_exponent) && tile < 15U) {
                     ++counts[tile];
                 }
             }
-            for (uint32_t tile = static_cast<uint32_t>(target_exponent); tile < 15U; ++tile) {
+            for (uint32_t tile = static_cast<uint32_t>(target_exponent + 1); tile < 15U; ++tile) {
                 seed_max_counts[tile] = std::max(seed_max_counts[tile], counts[tile]);
             }
         }
-        for (uint32_t tile = static_cast<uint32_t>(target_exponent); tile < 15U; ++tile) {
-            config.max_counts[tile] = merge_tile_count_limit(config.max_counts[tile], seed_max_counts[tile]);
+        for (uint32_t tile = static_cast<uint32_t>(target_exponent + 1); tile < 15U; ++tile) {
+            if (seed_max_counts[tile] != 0U) {
+                config.max_counts[tile] = -1;
+            }
         }
     }
 

@@ -76,6 +76,31 @@ public:
     int last_operation_index_ = 0;
 };
 
+class EXADBookReader {
+public:
+    EXADBookReader(AdvancedPatternSpec spec, bool is_variant = false);
+
+    ReaderMoveResult move_on_dic(
+        const std::vector<std::vector<int>> &board,
+        const std::vector<std::pair<std::string, std::string>> &path_list,
+        const std::string &pattern_full,
+        int64_t nums_adjust
+    );
+
+    uint64_t get_random_state(
+        const std::vector<std::pair<std::string, std::string>> &path_list,
+        const std::string &pattern_full,
+        double spawn_rate4
+    ) const;
+
+public:
+    AdvancedPatternSpec spec_;
+    FormationAD::MaskerContext masker_;
+    bool is_variant_ = false;
+    bool prefer_max_result_ = false;
+    int last_operation_index_ = 0;
+};
+
 class EXBookReader {
 public:
     EXBookReader(PatternSpec spec, bool is_variant = false);

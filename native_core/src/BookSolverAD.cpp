@@ -160,11 +160,40 @@ template <typename T> struct AdSolveWorkspace {
 
 constexpr size_t kNotFoundIndex = std::numeric_limits<size_t>::max();
 constexpr uint64_t kEmptyMatchIndex = 0xFFFFFFFFFFFFFFFFULL;
+constexpr size_t kADMaxMatchCacheCells = 64ULL * 1024ULL * 1024ULL;
 constexpr std::array<uint8_t, 16> kPosRev = {0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15};
 constexpr std::array<uint32_t, 19> kFactorials = {
     1U, 1U, 2U, 6U, 24U, 120U, 720U, 5040U, 40320U, 362880U,
     3628800U, 39916800U, 1U, 1U, 1U, 1U, 1U, 1U, 1U
 };
+
+size_t ad_match_cache_map_length(size_t derive_size) {
+    if (derive_size == 0U) {
+        return 0U;
+    }
+    constexpr std::array<size_t, 8> kPrimeLengths = {
+        33331U, 11113U, 4099U, 2053U, 1021U, 509U, 251U, 127U
+    };
+    const size_t max_length = std::max<size_t>(1U, kADMaxMatchCacheCells / derive_size);
+    for (size_t length : kPrimeLengths) {
+        if (length <= max_length) {
+            return length;
+        }
+    }
+    return 0U;
+}
+
+bool ad_match_cache_enabled(size_t derive_size) {
+    if (derive_size <= 1U || derive_size > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+        return false;
+    }
+    const size_t map_length = ad_match_cache_map_length(derive_size);
+    return map_length != 0U && map_length <= kADMaxMatchCacheCells / derive_size;
+}
+
+bool ad_match_cache_ready(const MatchCache &cache, size_t derive_size) {
+    return cache.map_length != 0U && cache.derive_size >= derive_size;
+}
 
 double wall_time_seconds() {
     return omp_get_wtime();
@@ -1208,10 +1237,14 @@ void solve_optimal_success_rate_arr_into(
         uint64_t rep_t_gen_m = BoardMover::move_board(rep_t_gen, direction + 1);
         rep_t_gen_m = apply_sym_like(rep_t_gen_m, symm_index);
         uint64_t match_ind = ind_match(rep_t_gen_m, rep_v);
-        size_t hashed_match_ind = static_cast<size_t>(match_ind % static_cast<uint64_t>(match_cache.map_length));
+        const bool use_match_cache = ad_match_cache_ready(match_cache, derive_size);
+        size_t hashed_match_ind = 0U;
+        if (use_match_cache) {
+            hashed_match_ind = static_cast<size_t>(match_ind % static_cast<uint64_t>(match_cache.map_length));
+        }
 
         auto load_or_compute_ranked = [&](bool store_if_empty) -> ArrayView<const uint32_t> {
-            if (match_cache.key(hashed_match_ind) == match_ind) {
+            if (use_match_cache && match_cache.key(hashed_match_ind) == match_ind) {
                 return {match_cache.row(hashed_match_ind), derive_size};
             }
             process_derived_into(
@@ -1226,11 +1259,11 @@ void solve_optimal_success_rate_arr_into(
                 workspace.derived_boards
             );
             match_arr_into(workspace.moved_boards, workspace, workspace.ranked_array);
-            if (store_if_empty && match_cache.try_claim_empty(hashed_match_ind)) {
+            if (use_match_cache && store_if_empty && match_cache.try_claim_empty(hashed_match_ind)) {
                 match_cache.publish(hashed_match_ind, match_ind, workspace.ranked_array);
                 return {match_cache.row(hashed_match_ind), derive_size};
             }
-            if (match_cache.key(hashed_match_ind) == match_ind) {
+            if (use_match_cache && match_cache.key(hashed_match_ind) == match_ind) {
                 return {match_cache.row(hashed_match_ind), derive_size};
             }
             return {workspace.ranked_array.data(), workspace.ranked_array.size()};
@@ -1500,7 +1533,10 @@ void recalculate_ad(
         }
 
         const size_t derive_size = book_bucket0.cols;
-        MatchCache &match_cache = get_shared_match_cache<T>(match_dict, derive_size);
+        MatchCache disabled_match_cache;
+        MatchCache &match_cache = ad_match_cache_enabled(derive_size)
+            ? get_shared_match_cache<T>(match_dict, derive_size)
+            : disabled_match_cache;
         std::vector<AdSolveWorkspace<T>> thread_workspaces(static_cast<size_t>(num_threads));
         const auto &book_bucket1 = book_dict1.at(key);
         const auto &ind_arr1 = ind_dict1.at(key);
@@ -1664,7 +1700,10 @@ MatchCache &get_shared_match_cache(
     const uint32_t key = static_cast<uint32_t>(derive_size);
     auto it = match_dict.find(key);
     if (it == match_dict.end()) {
-        const size_t map_length = derive_size < 5000U ? 33331U : 11113U;
+        const size_t map_length = ad_match_cache_map_length(derive_size);
+        if (map_length == 0U) {
+            throw std::runtime_error("AD match cache requested for unsupported row width");
+        }
         it = match_dict.emplace(key, MatchCache(map_length, derive_size)).first;
     }
     return it->second;
@@ -1697,7 +1736,10 @@ void recalculate_ad_chunk(
     if (derive_size == 0 || positions_chunk.empty()) {
         return;
     }
-    MatchCache &match_cache = get_shared_match_cache<T>(match_dict, derive_size);
+    MatchCache disabled_match_cache;
+    MatchCache &match_cache = ad_match_cache_enabled(derive_size)
+        ? get_shared_match_cache<T>(match_dict, derive_size)
+        : disabled_match_cache;
     std::vector<AdSolveWorkspace<T>> thread_workspaces(static_cast<size_t>(num_threads));
 
     const uint64_t new_value = is_gen2_step ? 1ULL : 2ULL;
