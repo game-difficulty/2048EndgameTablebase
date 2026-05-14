@@ -1969,15 +1969,19 @@ void prefix36_dynamic_flush(
     for (uint32_t i = 0; i < count; ++i) {
         const Prefix36DynamicResolved &entry = resolved[i];
         if (entry.valid_count <= state.threshold_bits) {
-            state.small_arena[entry.bitmap_offset + (entry.rank >> 3U)].fetch_or(
-                static_cast<uint8_t>(1U << (entry.rank & 7U)),
-                std::memory_order_relaxed
-            );
+            std::atomic<uint8_t> &target = state.small_arena[entry.bitmap_offset + (entry.rank >> 3U)];
+            const uint8_t mask = static_cast<uint8_t>(1U << (entry.rank & 7U));
+            if ((target.load(std::memory_order_relaxed) & mask) != 0U) {
+                continue;
+            }
+            target.fetch_or(mask, std::memory_order_relaxed);
         } else {
-            state.large_arena[entry.bitmap_offset + (entry.rank >> 6U)].fetch_or(
-                1ULL << (entry.rank & 63U),
-                std::memory_order_relaxed
-            );
+            std::atomic<uint64_t> &target = state.large_arena[entry.bitmap_offset + (entry.rank >> 6U)];
+            const uint64_t mask = 1ULL << (entry.rank & 63U);
+            if ((target.load(std::memory_order_relaxed) & mask) != 0ULL) {
+                continue;
+            }
+            target.fetch_or(mask, std::memory_order_relaxed);
         }
     }
 }
