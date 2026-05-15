@@ -24,6 +24,10 @@ def _normalize_board_for_animation(
     return normalized
 
 
+def _non_merging_values_for_animation(use_variant: bool) -> tuple[int, ...]:
+    return (32768, 16384) if use_variant else (32768,)
+
+
 def compute_move_animation(
     board_encoded: int,
     direction_str: str,
@@ -35,8 +39,9 @@ def compute_move_animation(
     try:
         board_2d = decode_board(np.uint64(u64(board_encoded)))
         board_2d = _normalize_board_for_animation(board_2d, use_variant)
-        distances = slide_distance(board_2d, direction_str).flatten().tolist()
-        merges = find_merge_positions(board_2d, direction_str).flatten().tolist()
+        non_merging_values = _non_merging_values_for_animation(use_variant)
+        distances = slide_distance(board_2d, direction_str, non_merging_values).flatten().tolist()
+        merges = find_merge_positions(board_2d, direction_str, non_merging_values).flatten().tolist()
         return distances, merges
     except Exception as exc:
         if error_prefix:

@@ -86,6 +86,10 @@ function isVariantWallValue(value) {
   return props.isVariant && Number(value) === 32768;
 }
 
+function isVariantNonMergingValue(value) {
+  return props.isVariant && Number(value) === 16384;
+}
+
 function shouldRenderAsActiveTile(value) {
   return Number(value) > 0 && !isVariantWallValue(value);
 }
@@ -318,7 +322,8 @@ watch(() => [props.board, props.isVariant], async ([newBoard]) => {
             tile.row = ty; 
         }      
         const newIndex = ty * 4 + tx;
-        if (pop_positions[newIndex] === 1) {
+        const shouldMergeTile = pop_positions[newIndex] === 1 && !isVariantNonMergingValue(tile.value);
+        if (shouldMergeTile) {
             tile.isDying = true; // Mark old tile to eventually die
             
             // Generate the ultimate merged tile hidden

@@ -324,8 +324,12 @@ def canonical_min34(board):
     return np.uint64(mover_runtime.canonical_min34(board))
 
 
-def simulate_move_and_merge(line: np.typing.NDArray) -> Tuple[List[int], List[int]]:
+def simulate_move_and_merge(
+    line: np.typing.NDArray,
+    non_merging_values: tuple[int, ...] = (32768,),
+) -> Tuple[List[int], List[int]]:
     values = [int(value) for value in np.asarray(line).reshape(-1).tolist()]
+    non_merging = set(non_merging_values)
     merged = [0] * len(values)
     new_line = [0] * len(values)
 
@@ -344,7 +348,11 @@ def simulate_move_and_merge(line: np.typing.NDArray) -> Tuple[List[int], List[in
         write = index
         read = 0
         while read < len(non_zero):
-            if read + 1 < len(non_zero) and non_zero[read] == non_zero[read + 1]:
+            if (
+                read + 1 < len(non_zero)
+                and non_zero[read] == non_zero[read + 1]
+                and non_zero[read] not in non_merging
+            ):
                 new_line[write] = 2 * non_zero[read]
                 merged[write] = 1
                 read += 2
@@ -358,7 +366,11 @@ def simulate_move_and_merge(line: np.typing.NDArray) -> Tuple[List[int], List[in
     return new_line, merged
 
 
-def find_merge_positions(current_board: np.typing.NDArray, move_direction: str) -> np.typing.NDArray:
+def find_merge_positions(
+    current_board: np.typing.NDArray,
+    move_direction: str,
+    non_merging_values: tuple[int, ...] = (32768,),
+) -> np.typing.NDArray:
     merge_positions = np.zeros_like(current_board)
     move_direction = move_direction.lower()
     rows, cols = current_board.shape
@@ -366,7 +378,7 @@ def find_merge_positions(current_board: np.typing.NDArray, move_direction: str) 
     for index in range(rows if move_direction in ["left", "right"] else cols):
         line = current_board[index, :] if move_direction in ["left", "right"] else current_board[:, index]
         line_to_process = line[::-1] if move_direction in ["down", "right"] else line
-        _, merge_line = simulate_move_and_merge(line_to_process)
+        _, merge_line = simulate_move_and_merge(line_to_process, non_merging_values)
         if move_direction in ["right", "down"]:
             merge_line = merge_line[::-1]
         if move_direction in ["left", "right"]:
@@ -377,7 +389,11 @@ def find_merge_positions(current_board: np.typing.NDArray, move_direction: str) 
     return merge_positions
 
 
-def _move_distance(line: np.typing.NDArray) -> np.typing.NDArray:
+def _move_distance(
+    line: np.typing.NDArray,
+    non_merging_values: tuple[int, ...] = (32768,),
+) -> np.typing.NDArray:
+    non_merging = set(non_merging_values)
     moved_distance = 0
     last_tile = 0
     move_distance = np.zeros_like(line)
@@ -390,7 +406,7 @@ def _move_distance(line: np.typing.NDArray) -> np.typing.NDArray:
             last_tile = 0
         elif value == -2:
             last_tile = 0
-        elif last_tile == value and value != 32768:
+        elif last_tile == value and value not in non_merging:
             move_distance[index] = moved_distance + 1
             moved_distance += 1
             last_tile = 0
@@ -401,7 +417,11 @@ def _move_distance(line: np.typing.NDArray) -> np.typing.NDArray:
     return move_distance
 
 
-def slide_distance(current_board: np.typing.NDArray, move_direction: str) -> np.typing.NDArray:
+def slide_distance(
+    current_board: np.typing.NDArray,
+    move_direction: str,
+    non_merging_values: tuple[int, ...] = (32768,),
+) -> np.typing.NDArray:
     move_distance = np.zeros_like(current_board)
     move_direction = move_direction.lower()
     rows, cols = current_board.shape
@@ -409,7 +429,7 @@ def slide_distance(current_board: np.typing.NDArray, move_direction: str) -> np.
     for index in range(rows if move_direction in ["left", "right"] else cols):
         line = current_board[index, :] if move_direction in ["left", "right"] else current_board[:, index]
         line_to_process = line[::-1] if move_direction in ["down", "right"] else line
-        line_move_distance = _move_distance(line_to_process)
+        line_move_distance = _move_distance(line_to_process, non_merging_values)
         if move_direction in ["right", "down"]:
             line_move_distance = line_move_distance[::-1]
         if move_direction in ["left", "right"]:
