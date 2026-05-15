@@ -47,6 +47,10 @@ struct Prefix36LayerView {
     uint32_t dtype_mode = 0;
     SuccessRateKind success_kind = SuccessRateKind::UInt32;
     uint32_t value_size = sizeof(uint32_t);
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint64_t live_board_count = 0;
 
     const uint64_t *bucket_keys = nullptr;

@@ -1177,6 +1177,10 @@ void lookup_prepared_batch(
     for (uint32_t i = 0; i < count; ++i) {
         found_flags[i] = 0U;
     }
+    if (count == 0U || layer.live_board_count == 0U ||
+        layer.direct_index.table_size == 0U || layer.direct_index.bucket_indices.empty()) {
+        return;
+    }
     uint64_t slots[kBatchSize];
     uint32_t bucket_indices[kBatchSize];
     uint8_t hit[kBatchSize];
@@ -1292,6 +1296,10 @@ void lookup_prepared_batch_direct_entry(
 ) {
     for (uint32_t i = 0; i < count; ++i) {
         found_flags[i] = 0U;
+    }
+    if (count == 0U || layer.live_board_count == 0U ||
+        layer.direct_entry_index.table_size == 0U || layer.direct_entry_index.entries.empty()) {
+        return;
     }
     uint64_t slots[kBatchSize];
     BucketEntry buckets[kBatchSize];
@@ -2025,7 +2033,8 @@ void prefix36_dynamic_generate_into(
     Prefix36DynamicState &arr2_state,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
-    int num_threads
+    int num_threads,
+    int symm_mode
 ) {
 #pragma omp parallel num_threads(num_threads)
     {
@@ -2052,7 +2061,7 @@ void prefix36_dynamic_generate_into(
             if (canonical_count1 == 0U) {
                 return;
             }
-            CanonicalBatch::canonicalize_inplace(canonical1.data(), canonical_count1, static_cast<int>(SymmMode::Full));
+            CanonicalBatch::canonicalize_inplace(canonical1.data(), canonical_count1, symm_mode);
             for (uint32_t i = 0; i < canonical_count1; ++i) {
                 prefix36_dynamic_push_board(
                     arr1_state,
@@ -2070,7 +2079,7 @@ void prefix36_dynamic_generate_into(
             if (canonical_count2 == 0U) {
                 return;
             }
-            CanonicalBatch::canonicalize_inplace(canonical2.data(), canonical_count2, static_cast<int>(SymmMode::Full));
+            CanonicalBatch::canonicalize_inplace(canonical2.data(), canonical_count2, symm_mode);
             for (uint32_t i = 0; i < canonical_count2; ++i) {
                 prefix36_dynamic_push_board(
                     arr2_state,
@@ -2847,6 +2856,7 @@ void recalculate_batch_prefix36(
     const Prefix36Layer &future2,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
+    int symm_mode,
     RecalcWorkspace &workspace,
     RecalcStats &stats,
     bool interleave_lookups = false,
@@ -2869,7 +2879,7 @@ void recalculate_batch_prefix36(
         if (canonical_count1 == 0U) {
             return;
         }
-        CanonicalBatch::canonicalize_inplace(canonical_candidates1.data(), canonical_count1, static_cast<int>(SymmMode::Full));
+        CanonicalBatch::canonicalize_inplace(canonical_candidates1.data(), canonical_count1, symm_mode);
         for (size_t i = 0; i < canonical_count1; ++i) {
             PreparedQuery query = prepare_query_dense_hot(
                 dense_lut,
@@ -2886,7 +2896,7 @@ void recalculate_batch_prefix36(
         if (canonical_count2 == 0U) {
             return;
         }
-        CanonicalBatch::canonicalize_inplace(canonical_candidates2.data(), canonical_count2, static_cast<int>(SymmMode::Full));
+        CanonicalBatch::canonicalize_inplace(canonical_candidates2.data(), canonical_count2, symm_mode);
         for (size_t i = 0; i < canonical_count2; ++i) {
             PreparedQuery query = prepare_query_dense_hot(
                 dense_lut,
@@ -2941,7 +2951,7 @@ void recalculate_batch_prefix36(
                         canonical2[canonical2_count++] = moved;
                     }
                 }
-                CanonicalBatch::canonicalize_inplace(canonical2, canonical2_count, static_cast<int>(SymmMode::Full));
+                CanonicalBatch::canonicalize_inplace(canonical2, canonical2_count, symm_mode);
                 for (uint32_t candidate_idx = 0; candidate_idx < canonical2_count; ++candidate_idx) {
                     const uint64_t canonical = canonical2[candidate_idx];
                     bool duplicate = false;
@@ -2984,7 +2994,7 @@ void recalculate_batch_prefix36(
                         canonical4[canonical4_count++] = moved;
                     }
                 }
-                CanonicalBatch::canonicalize_inplace(canonical4, canonical4_count, static_cast<int>(SymmMode::Full));
+                CanonicalBatch::canonicalize_inplace(canonical4, canonical4_count, symm_mode);
                 for (uint32_t candidate_idx = 0; candidate_idx < canonical4_count; ++candidate_idx) {
                     const uint64_t canonical = canonical4[candidate_idx];
                     bool duplicate = false;
@@ -3099,6 +3109,7 @@ void recalculate_batch_prefix36_late(
     const Prefix36Layer &future2,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
+    int symm_mode,
     RecalcWorkspace &workspace,
     RecalcStats &stats
 ) {
@@ -3117,7 +3128,7 @@ void recalculate_batch_prefix36_late(
         if (canonical_count1 == 0U) {
             return;
         }
-        CanonicalBatch::canonicalize_inplace(canonical_candidates1.data(), canonical_count1, static_cast<int>(SymmMode::Full));
+        CanonicalBatch::canonicalize_inplace(canonical_candidates1.data(), canonical_count1, symm_mode);
         for (size_t i = 0; i < canonical_count1; ++i) {
             workspace.late_queries1.push_back(make_late_query(canonical_candidates1[i], candidate_refs1[i]));
         }
@@ -3127,7 +3138,7 @@ void recalculate_batch_prefix36_late(
         if (canonical_count2 == 0U) {
             return;
         }
-        CanonicalBatch::canonicalize_inplace(canonical_candidates2.data(), canonical_count2, static_cast<int>(SymmMode::Full));
+        CanonicalBatch::canonicalize_inplace(canonical_candidates2.data(), canonical_count2, symm_mode);
         for (size_t i = 0; i < canonical_count2; ++i) {
             workspace.late_queries2.push_back(make_late_query(canonical_candidates2[i], candidate_refs2[i]));
         }
@@ -3252,6 +3263,7 @@ RecalcStats run_recalculate_prefix36(
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     int num_threads,
+    int symm_mode,
     bool dedup_canonical_moves = false,
     bool use_direct_entries = false,
     bool sort_success_reads = false
@@ -3279,6 +3291,7 @@ RecalcStats run_recalculate_prefix36(
                 future2,
                 dense_lut,
                 z_luts,
+                symm_mode,
                 workspace,
                 stats,
                 false,
@@ -3378,6 +3391,7 @@ RecalcStats run_recalculate_prefix36_current(
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     int num_threads,
+    int symm_mode,
     bool dedup_canonical_moves = false,
     bool use_direct_entries = false,
     bool sort_success_reads = false
@@ -3405,6 +3419,7 @@ RecalcStats run_recalculate_prefix36_current(
                 future2,
                 dense_lut,
                 z_luts,
+                symm_mode,
                 workspace,
                 stats,
                 false,
@@ -3505,7 +3520,8 @@ RecalcStats run_recalculate_prefix36_current_interleaved(
     const Prefix36Layer &future2,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
-    int num_threads
+    int num_threads,
+    int symm_mode
 ) {
     const double t0 = wall_time_seconds();
     std::vector<RecalcStats> per_thread(static_cast<size_t>(num_threads));
@@ -3530,6 +3546,7 @@ RecalcStats run_recalculate_prefix36_current_interleaved(
                 future2,
                 dense_lut,
                 z_luts,
+                symm_mode,
                 workspace,
                 stats,
                 true
@@ -3627,7 +3644,8 @@ RecalcStats run_recalculate_prefix36_current_late(
     const Prefix36Layer &future2,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
-    int num_threads
+    int num_threads,
+    int symm_mode
 ) {
     const double t0 = wall_time_seconds();
     std::vector<RecalcStats> per_thread(static_cast<size_t>(num_threads));
@@ -3652,6 +3670,7 @@ RecalcStats run_recalculate_prefix36_current_late(
                 future2,
                 dense_lut,
                 z_luts,
+                symm_mode,
                 workspace,
                 stats
             );

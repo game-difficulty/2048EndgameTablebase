@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from Config import SingletonConfig, category_info, pattern_catalog
+from engine_core.EXPhysicalPattern import resolve_ex_physical_pattern
 
 try:
     from native_core import formation_core
@@ -27,20 +28,32 @@ def _symm_mode_value(name: str) -> int:
 
 
 class BookReaderEX:
-    def __init__(self, pattern: str):
+    def __init__(self, pattern: str, target: int):
         if formation_core is None:
             raise RuntimeError("formation_core is unavailable")
 
         self.pattern = pattern
+        self.target = int(np.log2(target)) if int(target) >= 128 else int(target)
         meta = pattern_catalog.get(pattern)
         if meta is None:
             raise KeyError(f"Unknown pattern: {pattern}")
 
+        resolution = resolve_ex_physical_pattern(
+            pattern,
+            np.asarray(meta.get("seed_boards", ()), dtype=np.uint64),
+            self.target,
+            int(SingletonConfig().config.get("SmallTileSumLimit", 96)),
+            advanced=False,
+        )
         pattern_spec = formation_core.PatternSpec()
         pattern_spec.name = pattern
-        pattern_spec.pattern_masks = list(meta.get("pattern_masks", ()))
-        pattern_spec.success_shifts = list(meta.get("success_shifts", ()))
+        pattern_spec.pattern_masks = list(resolution.pattern_masks)
+        pattern_spec.success_shifts = list(resolution.success_shifts)
         pattern_spec.symm_mode = _symm_mode_value(meta.get("canonical_mode", "identity"))
+        pattern_spec.physical_transform = int(resolution.transform_id)
+        pattern_spec.inverse_physical_transform = int(resolution.inverse_transform_id)
+        pattern_spec.logical_pattern_signature = int(resolution.logical_pattern_signature)
+        pattern_spec.physical_pattern_signature = int(resolution.physical_pattern_signature)
         self._nums_adjust = int(meta.get("nums_adjust", 0))
         self._native_reader = formation_core.EXBookReader(
             pattern_spec,

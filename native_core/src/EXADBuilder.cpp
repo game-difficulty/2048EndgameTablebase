@@ -1904,6 +1904,10 @@ Layer finalize_carry_layer(
     layer.original_board_sum = carry.original_board_sum;
     layer.threshold_bits = carry.threshold_bits;
     layer.lut_signature = luts.config_signature;
+    layer.physical_transform = luts.physical_transform;
+    layer.inverse_physical_transform = luts.inverse_physical_transform;
+    layer.logical_pattern_signature = luts.logical_pattern_signature;
+    layer.physical_pattern_signature = luts.physical_pattern_signature;
     std::array<uint64_t, bucket_slot_count()> live_counts{};
 #pragma omp parallel for schedule(dynamic, 1) num_threads(thread_count)
     for (int64_t slot_i = 0; slot_i < static_cast<int64_t>(bucket_slot_count()); ++slot_i) {
@@ -2107,6 +2111,10 @@ Layer validate_layer_streaming(
     out.original_board_sum = layer.original_board_sum;
     out.threshold_bits = layer.threshold_bits;
     out.lut_signature = layer.lut_signature;
+    out.physical_transform = layer.physical_transform;
+    out.inverse_physical_transform = layer.inverse_physical_transform;
+    out.logical_pattern_signature = layer.logical_pattern_signature;
+    out.physical_pattern_signature = layer.physical_pattern_signature;
 
     std::array<uint64_t, bucket_slot_count()> output_live{};
 #pragma omp parallel for schedule(dynamic, 1) num_threads(thread_count)

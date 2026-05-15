@@ -29,7 +29,8 @@ namespace fs = std::filesystem;
 constexpr char kPrefix36CompressedMagic[8] = {'E', 'X', '3', '6', 'C', 'Z', '1', '\0'};
 constexpr char kPrefix36LayerMagic[8] = {'E', 'X', 'P', '3', '6', 'B', 'K', '\0'};
 constexpr char kPrefix36LutMagic[8] = {'E', 'X', 'P', '3', '6', 'L', 'T', '\0'};
-constexpr uint32_t kPrefix36LayerVersion = 4U;
+constexpr uint32_t kPrefix36LayerVersion = 5U;
+constexpr uint32_t kPrefix36LutVersion = 2U;
 constexpr uint16_t kPrefix36InvalidRank = 0xFFFFU;
 constexpr double kPrefix36FixedScale = 4000000000.0;
 constexpr double kPrefix36UInt64Scale = 1600000000000000000.0;
@@ -51,6 +52,11 @@ struct Prefix36CompressedHeader {
     uint32_t value_size = 0;
     uint32_t layer_sum = 0;
     uint32_t threshold_bits = 0;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint16_t reserved16 = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint64_t bucket_count = 0;
     uint64_t success_value_count = 0;
     uint64_t live_board_count = 0;
@@ -72,6 +78,11 @@ struct Prefix36LayerHeader {
     uint32_t layer_sum = 0;
     uint32_t threshold_bits = 0;
     uint32_t dtype_mode = 0;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint16_t reserved16 = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint64_t bucket_count = 0;
     uint64_t small_bitmap_bytes = 0;
     uint64_t large_bitmap_words = 0;
@@ -83,8 +94,13 @@ struct Prefix36LayerHeader {
 
 struct Prefix36LutHeader {
     char magic[8];
-    uint32_t version = 1;
+    uint32_t version = kPrefix36LutVersion;
     uint32_t reserved32 = 0;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint16_t reserved16a = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     int8_t max_counts[16]{};
     uint32_t required_suffix24 = 0;
     uint8_t table_for_high[16]{};
@@ -131,6 +147,10 @@ struct Prefix36BucketBlockRawHeader {
 };
 
 struct Prefix36LutRuntime {
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     std::vector<uint32_t> size_table;
     std::vector<uint32_t> offset_table;
     std::vector<uint32_t> unrank_array;
@@ -157,9 +177,6 @@ struct Prefix36LutPointIndex {
     Prefix36LutHeader header{};
     Prefix36LutFileLayout layout{};
 };
-
-static_assert(sizeof(Prefix36LayerHeader) == 88, "unexpected prefix36 zbook header size");
-static_assert(sizeof(Prefix36LutHeader) == 144, "unexpected prefix36 LUT header size");
 
 double wall_time_seconds() {
     using clock = std::chrono::steady_clock;
@@ -553,10 +570,14 @@ Prefix36LutRuntime read_prefix36_lut_runtime(const std::string &zlut_path, bool 
     in.read(reinterpret_cast<char *>(&header), sizeof(header));
     if (!in ||
         std::memcmp(header.magic, kPrefix36LutMagic, sizeof(kPrefix36LutMagic)) != 0 ||
-        header.version != 1U) {
+        header.version != kPrefix36LutVersion) {
         throw std::runtime_error("invalid prefix36 LUT file");
     }
     Prefix36LutRuntime lut;
+    lut.physical_transform = header.physical_transform;
+    lut.inverse_physical_transform = header.inverse_physical_transform;
+    lut.logical_pattern_signature = header.logical_pattern_signature;
+    lut.physical_pattern_signature = header.physical_pattern_signature;
     lut.table_for_high.assign(std::begin(header.table_for_high), std::end(header.table_for_high));
     lut.packed_table0 = header.packed_table0;
     lut.packed_table1 = header.packed_table1;
@@ -854,6 +875,28 @@ Prefix36LutFileLayout prefix36_lut_file_layout(const Prefix36LutHeader &header) 
     return layout;
 }
 
+template <typename Header>
+bool prefix36_physical_metadata_matches_lut(const Header &header, const Prefix36LutHeader &lut_header) {
+    return header.physical_transform == lut_header.physical_transform &&
+        header.inverse_physical_transform == lut_header.inverse_physical_transform &&
+        header.logical_pattern_signature == lut_header.logical_pattern_signature &&
+        header.physical_pattern_signature == lut_header.physical_pattern_signature;
+}
+
+bool prefix36_physical_metadata_matches_lut(const Prefix36LayerHeader &header, const Prefix36LutRuntime &lut) {
+    return header.physical_transform == lut.physical_transform &&
+        header.inverse_physical_transform == lut.inverse_physical_transform &&
+        header.logical_pattern_signature == lut.logical_pattern_signature &&
+        header.physical_pattern_signature == lut.physical_pattern_signature;
+}
+
+bool prefix36_physical_metadata_matches_lut(const Prefix36LayerView &layer, const Prefix36LutRuntime &lut) {
+    return layer.physical_transform == lut.physical_transform &&
+        layer.inverse_physical_transform == lut.inverse_physical_transform &&
+        layer.logical_pattern_signature == lut.logical_pattern_signature &&
+        layer.physical_pattern_signature == lut.physical_pattern_signature;
+}
+
 Prefix36LutPointIndex read_prefix36_lut_point_index(const std::string &path) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
@@ -863,7 +906,7 @@ Prefix36LutPointIndex read_prefix36_lut_point_index(const std::string &path) {
     in.read(reinterpret_cast<char *>(&index.header), sizeof(index.header));
     if (!in ||
         std::memcmp(index.header.magic, kPrefix36LutMagic, sizeof(kPrefix36LutMagic)) != 0 ||
-        index.header.version != 1U ||
+        index.header.version != kPrefix36LutVersion ||
         index.header.size_table_values == 0U ||
         index.header.high_base_values == 0U) {
         throw std::runtime_error("invalid prefix36 LUT file");
@@ -901,6 +944,10 @@ public:
         if (!in_) {
             throw std::runtime_error("failed to open prefix36 LUT: " + path);
         }
+    }
+
+    const Prefix36LutHeader &header() const {
+        return index_->header;
     }
 
     Prefix36PreparedQuery prepare_query(uint64_t board) {
@@ -1115,6 +1162,9 @@ CompressStats compress_prefix36_layer_file(
     const Prefix36LayerHeader source = read_prefix36_layer_header(zbook_path);
     const Prefix36LayerLayout layout = prefix36_layer_layout(source);
     const Prefix36LutRuntime lut = read_prefix36_lut_runtime(zlut_path);
+    if (!prefix36_physical_metadata_matches_lut(source, lut)) {
+        throw std::runtime_error("EX prefix36 physical pattern metadata does not match LUT");
+    }
     const uint64_t bucket_block_count = (source.bucket_count + bucket_block_buckets - 1ULL) / bucket_block_buckets;
     const uint64_t success_block_count = (source.success_value_count + success_block_values - 1ULL) / success_block_values;
 
@@ -1125,6 +1175,10 @@ CompressStats compress_prefix36_layer_file(
     header.value_size = static_cast<uint32_t>(source.value_size);
     header.layer_sum = source.layer_sum;
     header.threshold_bits = source.threshold_bits;
+    header.physical_transform = source.physical_transform;
+    header.inverse_physical_transform = source.inverse_physical_transform;
+    header.logical_pattern_signature = source.logical_pattern_signature;
+    header.physical_pattern_signature = source.physical_pattern_signature;
     header.bucket_count = source.bucket_count;
     header.success_value_count = source.success_value_count;
     header.live_board_count = source.live_board_count;
@@ -1336,6 +1390,9 @@ CompressStats compress_prefix36_layer_view_impl(
     validate_prefix36_layer_view(layer);
     const Prefix36DTypeMode mode = prefix36_dtype_mode_from_u32(layer.dtype_mode);
     const Prefix36LutRuntime lut = read_prefix36_lut_runtime(zlut_path);
+    if (!prefix36_physical_metadata_matches_lut(layer, lut)) {
+        throw std::runtime_error("EX prefix36 physical pattern metadata does not match LUT");
+    }
     const uint64_t bucket_block_count = (layer.bucket_count + bucket_block_buckets - 1ULL) / bucket_block_buckets;
     const uint64_t success_block_count =
         (layer.success_value_count + success_block_values - 1ULL) / success_block_values;
@@ -1347,6 +1404,10 @@ CompressStats compress_prefix36_layer_view_impl(
     header.value_size = layer.value_size;
     header.layer_sum = layer.layer_sum;
     header.threshold_bits = layer.threshold_bits;
+    header.physical_transform = layer.physical_transform;
+    header.inverse_physical_transform = layer.inverse_physical_transform;
+    header.logical_pattern_signature = layer.logical_pattern_signature;
+    header.physical_pattern_signature = layer.physical_pattern_signature;
     header.bucket_count = layer.bucket_count;
     header.success_value_count = layer.success_value_count;
     header.live_board_count = layer.live_board_count;
@@ -1532,6 +1593,9 @@ ColdLookupResult lookup_prefix36_compressed_cold(
     }
 
     Prefix36LutPointReader lut(zlut_path);
+    if (!prefix36_physical_metadata_matches_lut(index.header, lut.header())) {
+        throw std::runtime_error("EX prefix36 physical pattern metadata does not match compressed layer");
+    }
     const Prefix36PreparedQuery query = lut.prepare_query(board);
     if (!query.valid) {
         return miss;
@@ -1718,6 +1782,9 @@ bool sample_prefix36_compressed_cold(
     }
     const Prefix36DTypeMode mode = prefix36_dtype_mode_from_u32(index.header.dtype_mode);
     Prefix36LutPointReader lut(zlut_path);
+    if (!prefix36_physical_metadata_matches_lut(index.header, lut.header())) {
+        return false;
+    }
     std::ifstream compressed_in(compressed_path, std::ios::binary);
     if (!compressed_in) {
         return false;

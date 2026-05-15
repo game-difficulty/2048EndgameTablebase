@@ -15,6 +15,7 @@ const DEFAULT_CONFIG = {
   optimal_branch_only: false,
   compress_temp_files: false,
   advanced_algo: false,
+  zmask_algo: false,
   chunked_solve: false,
   deletion_threshold: 0,
   SmallTileSumLimit: 96,

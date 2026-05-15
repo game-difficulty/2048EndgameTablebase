@@ -26,6 +26,7 @@
       "browse": "Browse",
       "build": "Start Build",
       "advanced": "Advanced Algorithm",
+      "zmask": "EX Algorithm",
       "compress": "Compress results",
       "compressTemp": "Compress temp files",
       "optimalOnly": "Optimal branch only",
@@ -38,6 +39,7 @@
     },
     "tooltips": {
       "advanced": "The advanced algorithm optimizes processing speed and resource efficiency for massive tables only.",
+      "zmask": "Use the EX algorithm with a compact prefix/suffix bitmap and dense result layout. It usually uses less memory and disk space than the classic layout, and is often faster on large layers.",
       "compress": "Compress result files. Recommended.",
       "compressTemp": "Compress intermediate files to reduce storage usage during computation, at the cost of longer processing time.",
       "chunkedSolve": "When advanced mode is enabled, chunked solve further reduces memory usage, but it increases disk I/O and is best paired with an SSD.",

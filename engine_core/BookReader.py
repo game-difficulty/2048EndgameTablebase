@@ -137,10 +137,10 @@ class BookReaderDispatcher:
                 return
         self.book_reader_ad = BookReaderAD(pattern, target)
 
-    def set_book_reader_ex(self, pattern: str):
-        if self.book_reader_ex is not None and pattern == self.book_reader_ex.pattern:
+    def set_book_reader_ex(self, pattern: str, target: int):
+        if self.book_reader_ex is not None and pattern == self.book_reader_ex.pattern and target == self.book_reader_ex.target:
             return
-        self.book_reader_ex = BookReaderEX(pattern)
+        self.book_reader_ex = BookReaderEX(pattern, target)
 
     def set_book_reader_exad(self, pattern: str, target: int):
         if self.book_reader_exad is not None:
@@ -237,7 +237,7 @@ class BookReaderDispatcher:
             self.use_exad = False
             self.book_reader_ad = None
             self.book_reader_exad = None
-            self.set_book_reader_ex(pattern)
+            self.set_book_reader_ex(pattern, target)
             self.use_ex = self.book_reader_ex is not None
             return
 

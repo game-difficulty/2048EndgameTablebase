@@ -15,6 +15,7 @@ from Config import (
     write_runtime_deletion_threshold_signal,
 )
 from engine_core import mover_runtime
+from engine_core.EXPhysicalPattern import PhysicalPatternResolution, resolve_ex_physical_pattern
 
 try:
     from native_core import formation_core
@@ -79,7 +80,18 @@ def _build_native_run_options(
     return options
 
 
-def _build_native_pattern_spec(pattern: str):
+def _apply_physical_fields(pattern_spec, resolution: PhysicalPatternResolution | None) -> None:
+    if resolution is None:
+        return
+    pattern_spec.pattern_masks = list(resolution.pattern_masks)
+    pattern_spec.success_shifts = list(resolution.success_shifts)
+    pattern_spec.physical_transform = int(resolution.transform_id)
+    pattern_spec.inverse_physical_transform = int(resolution.inverse_transform_id)
+    pattern_spec.logical_pattern_signature = int(resolution.logical_pattern_signature)
+    pattern_spec.physical_pattern_signature = int(resolution.physical_pattern_signature)
+
+
+def _build_native_pattern_spec(pattern: str, resolution: PhysicalPatternResolution | None = None):
     _require_native_build()
     meta = pattern_catalog.get(pattern)
     if meta is None:
@@ -90,10 +102,15 @@ def _build_native_pattern_spec(pattern: str):
     pattern_spec.pattern_masks = list(meta.get("pattern_masks", ()))
     pattern_spec.success_shifts = list(meta.get("success_shifts", ()))
     pattern_spec.symm_mode = _symm_mode_value(meta.get("canonical_mode", "identity"))
+    _apply_physical_fields(pattern_spec, resolution)
     return pattern_spec
 
 
-def _build_native_advanced_pattern_spec(pattern: str, target: int):
+def _build_native_advanced_pattern_spec(
+    pattern: str,
+    target: int,
+    resolution: PhysicalPatternResolution | None = None,
+):
     _require_native_build()
     meta = pattern_catalog.get(pattern)
     if meta is None:
@@ -112,6 +129,9 @@ def _build_native_advanced_pattern_spec(pattern: str, target: int):
         SingletonConfig().config.get("SmallTileSumLimit", 96)
     )
     pattern_spec.target = int(target)
+    _apply_physical_fields(pattern_spec, resolution)
+    if resolution is not None:
+        pattern_spec.fixed_32k_shifts = list(resolution.fixed_32k_shifts)
     return pattern_spec
 
 
@@ -152,6 +172,17 @@ def save_config_to_txt(output_path: str) -> None:
     with open(output_path, "w", encoding="utf-8") as file:
         for key in keys:
             file.write(f"{key}: {str(SingletonConfig().config.get(key, '?'))}\n")
+
+
+def append_ex_physical_config(output_path: str, resolution: PhysicalPatternResolution | None) -> None:
+    if resolution is None:
+        return
+    with open(output_path, "a", encoding="utf-8") as file:
+        file.write(f"ex_physical_transform: {resolution.transform_id}\n")
+        file.write(f"ex_inverse_physical_transform: {resolution.inverse_transform_id}\n")
+        file.write(f"ex_logical_pattern_signature: {resolution.logical_pattern_signature}\n")
+        file.write(f"ex_physical_pattern_signature: {resolution.physical_pattern_signature}\n")
+        file.write(f"ex_physical_transform_score: {resolution.score}\n")
 
 
 def _collect_canonical_successors(boards: np.ndarray) -> np.ndarray:
@@ -207,18 +238,6 @@ def generate_free_inits(t32ks: int, t2s: int) -> np.ndarray:
         board for board in canonicalized if _is_reachable_free_init(np.uint64(board))
     ]
     return np.asarray(reachable, dtype=np.uint64)
-
-
-def _canonicalize_initial_boards_for_ex(arr_init: np.ndarray, meta: dict) -> np.ndarray:
-    if str(meta.get("canonical_mode", "identity")).lower() != "full":
-        return np.asarray(arr_init, dtype=np.uint64)
-    canonicalized = [
-        mover_runtime.canonical_full(np.uint64(board))
-        for board in np.asarray(arr_init, dtype=np.uint64)
-    ]
-    if not canonicalized:
-        return np.empty(0, dtype=np.uint64)
-    return np.unique(np.asarray(canonicalized, dtype=np.uint64))
 
 
 def _run_classic_build(
@@ -283,8 +302,9 @@ def _run_zmask_build(
     is_free: bool,
     is_variant: bool,
     spawn_rate4: float,
+    resolution: PhysicalPatternResolution | None = None,
 ) -> None:
-    pattern_spec = _build_native_pattern_spec(pattern)
+    pattern_spec = _build_native_pattern_spec(pattern, resolution)
     run_options = _build_native_run_options(
         target,
         steps,
@@ -294,9 +314,35 @@ def _run_zmask_build(
         is_variant,
         spawn_rate4,
     )
-    run_options.optimal_branch_only = False
     run_options.chunked_solve = False
     formation_core.run_pattern_build_zmask(
+        np.asarray(arr_init, dtype=np.uint64), pattern_spec, run_options
+    )
+
+
+def _run_exad_build(
+    pattern: str,
+    arr_init: np.ndarray,
+    target: int,
+    steps: int,
+    pathname: str,
+    docheck_step: int,
+    is_free: bool,
+    is_variant: bool,
+    spawn_rate4: float,
+    resolution: PhysicalPatternResolution | None = None,
+) -> None:
+    pattern_spec = _build_native_advanced_pattern_spec(pattern, target, resolution)
+    run_options = _build_native_run_options(
+        target,
+        steps,
+        pathname,
+        docheck_step,
+        is_free,
+        is_variant,
+        spawn_rate4,
+    )
+    formation_core.run_pattern_build_exad(
         np.asarray(arr_init, dtype=np.uint64), pattern_spec, run_options
     )
 
@@ -335,7 +381,9 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
     meta, tile_sum, seed_boards, extra_steps = _resolve_build_meta(pattern)
     steps, docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
     is_variant = pattern in category_info.get("variant", [])
-    use_ex_canonical = bool(config.get("zmask_algo", False))
+    use_ex_algo = bool(config.get("zmask_algo", False))
+    use_ad_algo = bool(config.get("advanced_algo", False))
+    use_exad_algo = use_ex_algo and use_ad_algo
     save_config_to_txt(pathname + "config.txt")
 
     if pattern.startswith("free"):
@@ -352,12 +400,37 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
         fixed_positions = pattern_32k_tiles_map[pattern][2]
         is_free = (len(fixed_positions) < 4) and (tile_sum < 180000)
 
-    if use_ex_canonical:
-        arr_init = _canonicalize_initial_boards_for_ex(arr_init, meta)
+    ex_resolution = None
+    if use_ex_algo:
+        ex_resolution = resolve_ex_physical_pattern(
+            pattern,
+            arr_init,
+            target,
+            int(config.get("SmallTileSumLimit", 96)),
+            advanced=use_exad_algo,
+        )
+        arr_init = ex_resolution.initial_boards
+        append_ex_physical_config(pathname + "config.txt", ex_resolution)
 
-    if config.get("zmask_algo", False):
+    if use_exad_algo:
         _run_with_single_resume_retry(
-            f"ZMask build {pattern}_{2**target}",
+            f"EXAD build {pattern}_{2**target}",
+            lambda: _run_exad_build(
+                pattern,
+                arr_init,
+                target,
+                steps,
+                pathname,
+                docheck_step,
+                is_free,
+                is_variant,
+                spawn_rate4,
+                ex_resolution,
+            ),
+        )
+    elif use_ex_algo:
+        _run_with_single_resume_retry(
+            f"EX build {pattern}_{2**target}",
             lambda: _run_zmask_build(
                 pattern,
                 arr_init,
@@ -368,9 +441,10 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
                 is_free,
                 is_variant,
                 spawn_rate4,
+                ex_resolution,
             ),
         )
-    elif config.get("advanced_algo", False):
+    elif use_ad_algo:
         _run_with_single_resume_retry(
             f"Advanced build {pattern}_{2**target}",
             lambda: _run_advanced_build(
@@ -410,15 +484,57 @@ def v_start_build(pattern: str, target: int, pathname: str) -> bool:
     meta, tile_sum, seed_boards, extra_steps = _resolve_build_meta(pattern)
     steps, docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
     save_config_to_txt(pathname + "config.txt")
-    seed_boards_for_build = (
-        _canonicalize_initial_boards_for_ex(seed_boards, meta)
-        if config.get("zmask_algo", False)
-        else seed_boards
-    )
-    if config.get("zmask_algo", False):
+    use_ex_algo = bool(config.get("zmask_algo", False))
+    use_ad_algo = bool(config.get("advanced_algo", False))
+    use_exad_algo = use_ex_algo and use_ad_algo
+    ex_resolution = None
+    seed_boards_for_build = seed_boards
+    if use_ex_algo:
+        ex_resolution = resolve_ex_physical_pattern(
+            pattern,
+            seed_boards,
+            target,
+            int(config.get("SmallTileSumLimit", 96)),
+            advanced=use_exad_algo,
+        )
+        seed_boards_for_build = ex_resolution.initial_boards
+        append_ex_physical_config(pathname + "config.txt", ex_resolution)
+    if use_exad_algo:
         _run_with_single_resume_retry(
-            f"Variant zmask build {pattern}_{2**target}",
+            f"Variant EXAD build {pattern}_{2**target}",
+            lambda: _run_exad_build(
+                pattern,
+                seed_boards_for_build,
+                target,
+                steps,
+                pathname,
+                docheck_step,
+                True,
+                True,
+                spawn_rate4,
+                ex_resolution,
+            ),
+        )
+    elif use_ex_algo:
+        _run_with_single_resume_retry(
+            f"Variant EX build {pattern}_{2**target}",
             lambda: _run_zmask_build(
+                pattern,
+                seed_boards_for_build,
+                target,
+                steps,
+                pathname,
+                docheck_step,
+                True,
+                True,
+                spawn_rate4,
+                ex_resolution,
+            ),
+        )
+    elif use_ad_algo:
+        _run_with_single_resume_retry(
+            f"Variant advanced build {pattern}_{2**target}",
+            lambda: _run_advanced_build(
                 pattern,
                 seed_boards_for_build,
                 target,

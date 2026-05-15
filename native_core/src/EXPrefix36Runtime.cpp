@@ -3,6 +3,7 @@
 #include "EXFrozenLayer.h"
 #include "EXIoConfig.h"
 #include "EXPrefix40Layer.h"
+#include "CompressionBridge.h"
 #include "Formation.h"
 #include "VBoardMover.h"
 
@@ -35,8 +36,8 @@ constexpr char kLayerMagic[8] = {'E', 'X', 'P', '3', '6', 'B', 'K', '\0'};
 constexpr char kLutMagic[8] = {'E', 'X', 'P', '3', '6', 'L', 'T', '\0'};
 constexpr const char *kGeneratedLayerFileExtension = ".exgen";
 constexpr const char *kLutFileExtension = ".zlut";
-constexpr uint32_t kLayerVersion = 4U;
-constexpr uint32_t kLutVersion = 1U;
+constexpr uint32_t kLayerVersion = 5U;
+constexpr uint32_t kLutVersion = 2U;
 constexpr double kDefaultReserveFactor = 3.0;
 constexpr double kEarlyLayerReserveFactor = 8.0;
 constexpr int kEarlyLayerReserveFactorSteps = 10;
@@ -64,6 +65,11 @@ struct LayerFileHeader {
     uint32_t layer_sum = 0;
     uint32_t threshold_bits = 0;
     uint32_t dtype_mode = static_cast<uint32_t>(DTypeMode::UInt32);
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint16_t reserved16 = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint64_t bucket_count = 0;
     uint64_t small_bitmap_bytes = 0;
     uint64_t large_bitmap_words = 0;
@@ -73,12 +79,15 @@ struct LayerFileHeader {
     uint64_t reserved1 = 0;
 };
 
-static_assert(sizeof(LayerFileHeader) == 88, "EX prefix36 layer header layout changed");
-
 struct LutFileHeader {
     char magic[8];
     uint32_t version = kLutVersion;
     uint32_t reserved32 = 0;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint16_t reserved16a = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     int8_t max_counts[16]{};
     uint32_t required_suffix24 = 0;
     uint8_t table_for_high[16]{};
@@ -97,8 +106,6 @@ struct LutFileHeader {
     uint64_t high_base_values = 0;
     uint64_t valid_suffix_count = 0;
 };
-
-static_assert(sizeof(LutFileHeader) == 144, "EX prefix36 LUT header layout changed");
 
 struct LutFileLayout {
     uint64_t valid_suffix_masks_offset = 0;
@@ -133,9 +140,27 @@ LutFileLayout lut_file_layout(const LutFileHeader &header) {
 
 struct LutBundle {
     ZMaskFrozen::TileLimitConfig config;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     ZMaskFrozen::ZMaskLuts row_luts;
     DenseLow24RankLut dense_lut;
 };
+
+bool physical_metadata_matches(const LayerFileHeader &layer, const LutFileHeader &lut) {
+    return layer.physical_transform == lut.physical_transform &&
+        layer.inverse_physical_transform == lut.inverse_physical_transform &&
+        layer.logical_pattern_signature == lut.logical_pattern_signature &&
+        layer.physical_pattern_signature == lut.physical_pattern_signature;
+}
+
+bool physical_metadata_matches(const LayerFileHeader &layer, const LutBundle &lut) {
+    return layer.physical_transform == lut.physical_transform &&
+        layer.inverse_physical_transform == lut.inverse_physical_transform &&
+        layer.logical_pattern_signature == lut.logical_pattern_signature &&
+        layer.physical_pattern_signature == lut.physical_pattern_signature;
+}
 
 std::string lut_file_path(const std::string &pathname) {
     return pathname + kLutFileExtension;
@@ -422,15 +447,16 @@ void write_vector(std::ofstream &out, const std::vector<T> &values) {
     }
 }
 
-template <typename T>
-void append_vector(FileIOUtils::DirectAppendWriter &out, const std::vector<T> &values) {
+template <typename Writer, typename T>
+void append_vector(Writer &out, const std::vector<T> &values) {
     if (!values.empty()) {
         out.append(values.data(), values.size() * sizeof(T));
     }
 }
 
+template <typename Writer>
 void append_typed_success_values(
-    FileIOUtils::DirectAppendWriter &out,
+    Writer &out,
     const std::vector<uint32_t> &values,
     DTypeMode mode
 ) {
@@ -476,16 +502,17 @@ void read_vector(std::ifstream &in, std::vector<T> &values, uint64_t count) {
     }
 }
 
-template <typename T>
-void read_vector(FileIOUtils::DirectSequentialReader &in, std::vector<T> &values, uint64_t count) {
+template <typename Reader, typename T>
+void read_vector(Reader &in, std::vector<T> &values, uint64_t count) {
     values.resize(static_cast<size_t>(count));
     if (!values.empty()) {
         in.read(values.data(), values.size() * sizeof(T));
     }
 }
 
+template <typename Reader>
 void read_typed_success_values(
-    FileIOUtils::DirectSequentialReader &in,
+    Reader &in,
     std::vector<uint32_t> &values,
     uint64_t count,
     DTypeMode mode
@@ -702,6 +729,10 @@ ZMaskFrozen::ZMaskLuts make_row16_only_luts() {
 void write_lut_file(const std::string &path, const LutBundle &bundle) {
     LutFileHeader header{};
     std::memcpy(header.magic, kLutMagic, sizeof(kLutMagic));
+    header.physical_transform = bundle.physical_transform;
+    header.inverse_physical_transform = bundle.inverse_physical_transform;
+    header.logical_pattern_signature = bundle.logical_pattern_signature;
+    header.physical_pattern_signature = bundle.physical_pattern_signature;
     std::copy(bundle.config.max_counts.begin(), bundle.config.max_counts.end(), header.max_counts);
     header.required_suffix24 = bundle.config.required_suffix24 & 0xFFFFFFU;
     for (size_t i = 0; i < std::size(header.table_for_high); ++i) {
@@ -759,6 +790,10 @@ LutBundle read_lut_file(const std::string &path) {
         throw std::runtime_error("unsupported EX prefix36 LUT version, rebuild required: " + path);
     }
     LutBundle bundle;
+    bundle.physical_transform = header.physical_transform;
+    bundle.inverse_physical_transform = header.inverse_physical_transform;
+    bundle.logical_pattern_signature = header.logical_pattern_signature;
+    bundle.physical_pattern_signature = header.physical_pattern_signature;
     std::copy(std::begin(header.max_counts), std::end(header.max_counts), bundle.config.max_counts.begin());
     bundle.config.required_suffix24 = header.required_suffix24 & 0xFFFFFFU;
     read_vector(in, bundle.config.valid_suffix_masks, header.valid_suffix_mask_count);
@@ -805,11 +840,18 @@ LutBundle make_lut_bundle(const ZMaskFrozen::TileLimitConfig &config) {
     return bundle;
 }
 
-void write_layer_file(
-    const std::string &path,
+std::string archive_entry_name_for_path(const std::string &path) {
+    std::string name = fs::path(path).stem().string();
+    if (name.empty()) {
+        name = "data";
+    }
+    return name + ".bin";
+}
+
+LayerFileHeader make_layer_header(
     const Prefix36Layer &layer,
-    DTypeMode mode,
-    FileIOUtils::DirectIoConfig io_config = {}
+    const PatternSpec &spec,
+    DTypeMode mode
 ) {
     LayerFileHeader header{};
     std::memcpy(header.magic, kLayerMagic, sizeof(kLayerMagic));
@@ -817,14 +859,26 @@ void write_layer_file(
     header.dtype_mode = static_cast<uint32_t>(mode);
     header.layer_sum = layer.layer_sum;
     header.threshold_bits = layer.threshold_bits;
+    header.physical_transform = spec.physical_transform;
+    header.inverse_physical_transform = spec.inverse_physical_transform;
+    header.logical_pattern_signature = spec.logical_pattern_signature;
+    header.physical_pattern_signature = spec.physical_pattern_signature;
     header.bucket_count = layer.bucket_keys.size();
     header.small_bitmap_bytes = layer.small_bitmap_bytes.size();
     header.large_bitmap_words = layer.large_bitmap_words.size();
     header.success_value_count = layer.success_values.size();
     header.live_board_count = layer.live_board_count;
     header.value_size = value_size_for_dtype_mode(mode);
+    return header;
+}
 
-    FileIOUtils::DirectAppendWriter out(path, layer_file_bytes(layer, mode), io_config);
+template <typename Writer>
+void append_layer_payload(
+    Writer &out,
+    const LayerFileHeader &header,
+    const Prefix36Layer &layer,
+    DTypeMode mode
+) {
     out.append(&header, sizeof(header));
     if (!layer.bucket_keys.empty()) {
         append_vector(out, layer.bucket_keys);
@@ -840,37 +894,44 @@ void write_layer_file(
     if (!layer.success_values.empty()) {
         append_typed_success_values(out, layer.success_values, mode);
     }
+}
+
+void write_layer_file(
+    const std::string &path,
+    const Prefix36Layer &layer,
+    const PatternSpec &spec,
+    DTypeMode mode,
+    FileIOUtils::DirectIoConfig io_config = {}
+) {
+    const LayerFileHeader header = make_layer_header(layer, spec, mode);
+    FileIOUtils::DirectAppendWriter out(path, layer_file_bytes(layer, mode), io_config);
+    append_layer_payload(out, header, layer, mode);
     out.close();
 }
 
-Prefix36Layer read_layer_file(
-    const std::string &path,
-    LayerFileHeader *out_header = nullptr,
-    FileIOUtils::DirectIoConfig io_config = {},
-    const std::vector<uint32_t> *size_table = nullptr,
-    int rebuild_threads = 1
+void write_layer_archive_file(
+    const std::string &archive_path,
+    const Prefix36Layer &layer,
+    const PatternSpec &spec,
+    DTypeMode mode
 ) {
-    std::ifstream header_in(path, std::ios::binary);
-    if (!header_in) {
-        throw std::runtime_error("failed to read EX prefix36 layer: " + path);
-    }
-    LayerFileHeader header{};
-    header_in.read(reinterpret_cast<char *>(&header), sizeof(header));
-    if (!header_in) {
-        throw std::runtime_error("failed to read EX prefix36 layer header: " + path);
-    }
-    validate_layer_header(header, path);
-    const uint64_t expected_bytes = layer_file_bytes(header);
-    if (fs::exists(path) && fs::file_size(path) < expected_bytes) {
-        throw std::runtime_error("truncated EX prefix36 layer: " + path);
-    }
-    header_in.close();
+    const LayerFileHeader header = make_layer_header(layer, spec, mode);
+    SevenZipArchiveWriter out(archive_path, archive_entry_name_for_path(archive_path), 1);
+    append_layer_payload(out, header, layer, mode);
+    out.close();
+}
 
-    FileIOUtils::DirectSequentialReader in(path, expected_bytes, io_config);
-    LayerFileHeader direct_header{};
-    in.read(&direct_header, sizeof(direct_header));
-    validate_layer_header(direct_header, path);
-    header = direct_header;
+template <typename Reader>
+Prefix36Layer read_layer_file_from_reader(
+    Reader &in,
+    const std::string &path,
+    LayerFileHeader *out_header,
+    const std::vector<uint32_t> *size_table,
+    int rebuild_threads
+) {
+    LayerFileHeader header{};
+    in.read(&header, sizeof(header));
+    validate_layer_header(header, path);
     if (out_header != nullptr) {
         *out_header = header;
     }
@@ -898,11 +959,54 @@ Prefix36Layer read_layer_file(
     if (header.success_value_count != 0U) {
         read_typed_success_values(in, layer.success_values, header.success_value_count, mode);
     }
-    in.close();
     if (size_table == nullptr) {
         throw std::runtime_error("EX prefix36 layer requires zlut size table to rebuild rank metadata: " + path);
     }
     rebuild_large_rank_metadata(layer, *size_table, rebuild_threads, path);
+    return layer;
+}
+
+bool has_archive_suffix(const std::string &path) {
+    return path.size() >= 3U && path.compare(path.size() - 3U, 3U, ".7z") == 0;
+}
+
+Prefix36Layer read_layer_file(
+    const std::string &path,
+    LayerFileHeader *out_header = nullptr,
+    FileIOUtils::DirectIoConfig io_config = {},
+    const std::vector<uint32_t> *size_table = nullptr,
+    int rebuild_threads = 1
+) {
+    std::string actual_path = path;
+    if (!fs::exists(actual_path) && !has_archive_suffix(actual_path) && fs::exists(actual_path + ".7z")) {
+        actual_path += ".7z";
+    }
+    if (has_archive_suffix(actual_path)) {
+        SevenZipSequentialReader in(actual_path);
+        Prefix36Layer layer = read_layer_file_from_reader(in, actual_path, out_header, size_table, rebuild_threads);
+        in.close();
+        return layer;
+    }
+
+    std::ifstream header_in(actual_path, std::ios::binary);
+    if (!header_in) {
+        throw std::runtime_error("failed to read EX prefix36 layer: " + actual_path);
+    }
+    LayerFileHeader header{};
+    header_in.read(reinterpret_cast<char *>(&header), sizeof(header));
+    if (!header_in) {
+        throw std::runtime_error("failed to read EX prefix36 layer header: " + actual_path);
+    }
+    validate_layer_header(header, actual_path);
+    const uint64_t expected_bytes = layer_file_bytes(header);
+    if (fs::exists(actual_path) && fs::file_size(actual_path) < expected_bytes) {
+        throw std::runtime_error("truncated EX prefix36 layer: " + actual_path);
+    }
+    header_in.close();
+
+    FileIOUtils::DirectSequentialReader in(actual_path, expected_bytes, io_config);
+    Prefix36Layer layer = read_layer_file_from_reader(in, actual_path, out_header, size_table, rebuild_threads);
+    in.close();
     return layer;
 }
 
@@ -923,13 +1027,21 @@ LutBundle load_or_build_prefix36_lut(
     if (fs::exists(path)) {
         try {
             LutBundle bundle = read_lut_file(path);
-            if (ZMaskFrozen::tile_limit_configs_equal(bundle.config, config)) {
+            if (ZMaskFrozen::tile_limit_configs_equal(bundle.config, config) &&
+                bundle.physical_transform == spec.physical_transform &&
+                bundle.inverse_physical_transform == spec.inverse_physical_transform &&
+                bundle.logical_pattern_signature == spec.logical_pattern_signature &&
+                bundle.physical_pattern_signature == spec.physical_pattern_signature) {
                 return bundle;
             }
         } catch (...) {
         }
     }
     LutBundle bundle = make_lut_bundle(config);
+    bundle.physical_transform = spec.physical_transform;
+    bundle.inverse_physical_transform = spec.inverse_physical_transform;
+    bundle.logical_pattern_signature = spec.logical_pattern_signature;
+    bundle.physical_pattern_signature = spec.physical_pattern_signature;
     write_lut_file(path, bundle);
     return bundle;
 }
@@ -1081,9 +1193,14 @@ std::string generated_layer_file_path(const std::string &pathname, int step) {
     return pathname + std::to_string(step) + kGeneratedLayerFileExtension;
 }
 
+std::string generated_layer_archive_path(const std::string &pathname, int step) {
+    return generated_layer_file_path(pathname, step) + ".7z";
+}
+
 bool layer_input_exists(const std::string &pathname, int step) {
     return fs::exists(layer_file_path(pathname, step)) ||
-           fs::exists(generated_layer_file_path(pathname, step));
+           fs::exists(generated_layer_file_path(pathname, step)) ||
+           fs::exists(generated_layer_archive_path(pathname, step));
 }
 
 bool all_layer_inputs_exist(const RunOptions &options) {
@@ -1107,6 +1224,10 @@ std::string existing_layer_input_path(const std::string &pathname, int step) {
     if (fs::exists(generated_path)) {
         return generated_path;
     }
+    const std::string generated_archive = generated_layer_archive_path(pathname, step);
+    if (fs::exists(generated_archive)) {
+        return generated_archive;
+    }
     return final_path;
 }
 
@@ -1115,32 +1236,87 @@ Prefix36Layer read_layer_input(
     int step,
     FileIOUtils::DirectIoConfig io_config,
     const DenseLow24RankLut &dense_lut,
-    int rebuild_threads
+    int rebuild_threads,
+    const LutBundle *expected_lut = nullptr
 ) {
-    return read_layer_file(
+    LayerFileHeader header{};
+    Prefix36Layer layer = read_layer_file(
         existing_layer_input_path(pathname, step),
-        nullptr,
+        &header,
         io_config,
         &dense_lut.size_table,
         rebuild_threads
     );
+    if (expected_lut != nullptr && !physical_metadata_matches(header, *expected_lut)) {
+        throw std::runtime_error(
+            "EX prefix36 physical pattern metadata does not match LUT: " +
+            existing_layer_input_path(pathname, step)
+        );
+    }
+    return layer;
 }
 
 void remove_generated_layer_input(const std::string &pathname, int step) {
     std::error_code ec;
     fs::remove(generated_layer_file_path(pathname, step), ec);
+    fs::remove(generated_layer_archive_path(pathname, step), ec);
 }
 
-void promote_generated_layer_input(const std::string &pathname, int step) {
+void write_generated_layer_file(
+    const RunOptions &options,
+    int step,
+    const Prefix36Layer &layer,
+    const PatternSpec &spec,
+    DTypeMode mode,
+    FileIOUtils::DirectIoConfig io_config
+) {
+    const std::string raw_path = generated_layer_file_path(options.pathname, step);
+    const std::string archive_path = generated_layer_archive_path(options.pathname, step);
+    std::error_code ec;
+    if (options.compress_temp_files) {
+        write_layer_archive_file(archive_path, layer, spec, mode);
+        fs::remove(raw_path, ec);
+    } else {
+        write_layer_file(raw_path, layer, spec, mode, io_config);
+        fs::remove(archive_path, ec);
+    }
+}
+
+void promote_generated_layer_input(
+    const std::string &pathname,
+    int step,
+    const PatternSpec &spec,
+    DTypeMode mode,
+    FileIOUtils::DirectIoConfig io_config,
+    const LutBundle &lut,
+    int rebuild_threads
+) {
     const std::string final_path = layer_file_path(pathname, step);
     if (fs::exists(final_path)) {
         return;
     }
+    std::error_code ec;
     const std::string generated_path = generated_layer_file_path(pathname, step);
     if (!fs::exists(generated_path)) {
+        const std::string archive_path = generated_layer_archive_path(pathname, step);
+        if (!fs::exists(archive_path)) {
+            return;
+        }
+        LayerFileHeader header{};
+        Prefix36Layer layer = read_layer_file(
+            archive_path,
+            &header,
+            io_config,
+            &lut.dense_lut.size_table,
+            rebuild_threads
+        );
+        if (!physical_metadata_matches(header, lut)) {
+            throw std::runtime_error("EX prefix36 physical pattern metadata does not match generated archive: " + archive_path);
+        }
+        write_layer_file(final_path, layer, spec, mode, io_config);
+        fs::remove(archive_path, ec);
         return;
     }
-    std::error_code ec;
     fs::rename(generated_path, final_path, ec);
     if (ec) {
         throw std::runtime_error("failed to promote EX generated layer to zbook: " + generated_path);
@@ -1163,13 +1339,21 @@ bool all_compressed_layers_exist(const RunOptions &options) {
     return true;
 }
 
-EXCompressedResult::Prefix36LayerView layer_compression_view(const Prefix36Layer &layer, DTypeMode mode) {
+EXCompressedResult::Prefix36LayerView layer_compression_view(
+    const Prefix36Layer &layer,
+    const PatternSpec &spec,
+    DTypeMode mode
+) {
     EXCompressedResult::Prefix36LayerView view;
     view.layer_sum = layer.layer_sum;
     view.threshold_bits = layer.threshold_bits;
     view.dtype_mode = static_cast<uint32_t>(mode);
     view.success_kind = storage_kind_for_dtype_mode(mode);
     view.value_size = static_cast<uint32_t>(value_size_for_dtype_mode(mode));
+    view.physical_transform = spec.physical_transform;
+    view.inverse_physical_transform = spec.inverse_physical_transform;
+    view.logical_pattern_signature = spec.logical_pattern_signature;
+    view.physical_pattern_signature = spec.physical_pattern_signature;
     view.live_board_count = layer.live_board_count;
 
     view.bucket_keys = layer.bucket_keys.empty() ? nullptr : layer.bucket_keys.data();
@@ -1204,6 +1388,7 @@ double compress_layer_result_from_memory(
     const RunOptions &options,
     int step,
     const Prefix36Layer &layer,
+    const PatternSpec &spec,
     DTypeMode mode
 ) {
     if (!options.compress) {
@@ -1219,7 +1404,7 @@ double compress_layer_result_from_memory(
     std::error_code ec;
     fs::remove(temp_path, ec);
     EXCompressedResult::compress_prefix36_layer_view_to_ex_result(
-        layer_compression_view(layer, mode),
+        layer_compression_view(layer, spec, mode),
         lut_file_path(options.pathname),
         temp_path,
         4096U,
@@ -1947,6 +2132,8 @@ void recalculate_batch_prefix36_write(
     const Prefix36Layer &future2,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
+    const PatternSpec &spec,
+    double spawn_rate4,
     RecalcWorkspace &workspace,
     RecalcStats &stats,
     Prefix36Layer &current
@@ -1965,7 +2152,7 @@ void recalculate_batch_prefix36_write(
         if (canonical_count1 == 0U) {
             return;
         }
-        CanonicalBatch::canonicalize_inplace(canonical_candidates1.data(), canonical_count1, static_cast<int>(SymmMode::Full));
+        CanonicalBatch::canonicalize_inplace(canonical_candidates1.data(), canonical_count1, spec.symm_mode);
         for (size_t i = 0; i < canonical_count1; ++i) {
             PreparedQuery query = prepare_query_dense_hot(dense_lut, z_luts, canonical_candidates1[i], future1.threshold_bits);
             query.ref = candidate_refs1[i];
@@ -1977,7 +2164,7 @@ void recalculate_batch_prefix36_write(
         if (canonical_count2 == 0U) {
             return;
         }
-        CanonicalBatch::canonicalize_inplace(canonical_candidates2.data(), canonical_count2, static_cast<int>(SymmMode::Full));
+        CanonicalBatch::canonicalize_inplace(canonical_candidates2.data(), canonical_count2, spec.symm_mode);
         for (size_t i = 0; i < canonical_count2; ++i) {
             PreparedQuery query = prepare_query_dense_hot(dense_lut, z_luts, canonical_candidates2[i], future2.threshold_bits);
             query.ref = candidate_refs2[i];
@@ -2013,7 +2200,7 @@ void recalculate_batch_prefix36_write(
             const auto moves2 = BoardMover::move_all_dir(spawn2);
             const uint64_t b2[4] = {std::get<0>(moves2), std::get<1>(moves2), std::get<2>(moves2), std::get<3>(moves2)};
             for (uint64_t moved : b2) {
-                if (moved != spawn2) {
+                if (moved != spawn2 && is_pattern(moved, spec.pattern_masks)) {
                     push1(moved, ref);
                 }
             }
@@ -2021,7 +2208,7 @@ void recalculate_batch_prefix36_write(
             const auto moves4 = BoardMover::move_all_dir(spawn4);
             const uint64_t b4[4] = {std::get<0>(moves4), std::get<1>(moves4), std::get<2>(moves4), std::get<3>(moves4)};
             for (uint64_t moved : b4) {
-                if (moved != spawn4) {
+                if (moved != spawn4 && is_pattern(moved, spec.pattern_masks)) {
                     push2(moved, ref);
                 }
             }
@@ -2048,8 +2235,8 @@ void recalculate_batch_prefix36_write(
             const uint32_t cell = countr_zero_u32(empty_mask);
             empty_mask &= empty_mask - 1U;
             const size_t best_index = static_cast<size_t>(board_slot) * 16U + static_cast<size_t>(cell);
-            success_probability += static_cast<double>(workspace.best2[best_index]) * 0.9;
-            success_probability += static_cast<double>(workspace.best4[best_index]) * 0.1;
+            success_probability += static_cast<double>(workspace.best2[best_index]) * (1.0 - spawn_rate4);
+            success_probability += static_cast<double>(workspace.best4[best_index]) * spawn_rate4;
             ++empty_count;
         }
         const uint32_t value = empty_count > 0U
@@ -2107,6 +2294,8 @@ RecalcStats recalculate_current_layer(
                 future2,
                 dense_lut,
                 z_luts,
+                spec,
+                options.spawn_rate4,
                 workspace,
                 stats,
                 current
@@ -2393,7 +2582,7 @@ void generate_forward_layers(
     );
     const double init_t1 = now_seconds();
     const double init_write_t0 = now_seconds();
-    write_layer_file(generated_layer_file_path(options.pathname, 0), current, mode, io_config);
+    write_generated_layer_file(options, 0, current, spec, mode, io_config);
     const double init_write_t1 = now_seconds();
     append_generate_stats(
         options, "init", 0, arr_init.size(), &current, nullptr, 0,
@@ -2492,9 +2681,9 @@ void generate_forward_layers(
         }
 
         const double write_t0 = now_seconds();
-        write_layer_file(generated_layer_file_path(options.pathname, current_step + 1), next_layer, mode, io_config);
+        write_generated_layer_file(options, current_step + 1, next_layer, spec, mode, io_config);
         if (terminal) {
-            write_layer_file(generated_layer_file_path(options.pathname, current_step + 2), terminal_next2, mode, io_config);
+            write_generated_layer_file(options, current_step + 2, terminal_next2, spec, mode, io_config);
         }
         const double write_t1 = now_seconds();
 
@@ -2627,9 +2816,9 @@ SolveStepSummary solve_loaded_step_impl(
     }
     const double compact_t1 = now_seconds();
     const double write_t0 = now_seconds();
-    write_layer_file(layer_file_path(options.pathname, step), current, mode, io_config);
+    write_layer_file(layer_file_path(options.pathname, step), current, spec, mode, io_config);
     remove_generated_layer_input(options.pathname, step);
-    compress_layer_result_from_memory(options, step, current, mode);
+    compress_layer_result_from_memory(options, step, current, spec, mode);
     const double write_t1 = now_seconds();
 
     double future_compact_seconds = 0.0;
@@ -2645,9 +2834,9 @@ SolveStepSummary solve_loaded_step_impl(
         future2 = compact_layer(future2, dense_lut, threshold, num_threads);
         const double fc_t1 = now_seconds();
         const double fw_t0 = now_seconds();
-        write_layer_file(layer_file_path(options.pathname, step + 2), future2, mode, io_config);
+        write_layer_file(layer_file_path(options.pathname, step + 2), future2, spec, mode, io_config);
         remove_generated_layer_input(options.pathname, step + 2);
-        compress_layer_result_from_memory(options, step + 2, future2, mode);
+        compress_layer_result_from_memory(options, step + 2, future2, spec, mode);
         const double fw_t1 = now_seconds();
         future_compact_seconds = fc_t1 - fc_t0;
         future_write_seconds = fw_t1 - fw_t0;
@@ -2701,22 +2890,24 @@ SolveStepSummary solve_loaded_step_impl(
 SolveStepSummary solve_single_step_impl(
     const PatternSpec &spec,
     const RunOptions &options,
-    const DenseLow24RankLut &dense_lut,
-    const ZMaskFrozen::ZMaskLuts &z_luts,
+    const LutBundle &lut,
     int step
 ) {
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     const int num_threads = thread_count_from_options(options);
     const double read_t0 = now_seconds();
-    Prefix36Layer future1 = read_layer_input(options.pathname, step + 1, io_config, dense_lut, num_threads);
-    Prefix36Layer future2 = read_layer_input(options.pathname, step + 2, io_config, dense_lut, num_threads);
-    Prefix36Layer current = read_layer_input(options.pathname, step, io_config, dense_lut, num_threads);
+    Prefix36Layer future1 = read_layer_input(
+        options.pathname, step + 1, io_config, lut.dense_lut, num_threads, &lut);
+    Prefix36Layer future2 = read_layer_input(
+        options.pathname, step + 2, io_config, lut.dense_lut, num_threads, &lut);
+    Prefix36Layer current = read_layer_input(
+        options.pathname, step, io_config, lut.dense_lut, num_threads, &lut);
     const double read_t1 = now_seconds();
     return solve_loaded_step_impl(
         spec,
         options,
-        dense_lut,
-        z_luts,
+        lut.dense_lut,
+        lut.row_luts,
         step,
         current,
         future1,
@@ -2760,11 +2951,14 @@ void run_pattern_solve(
     const int first_step = options.steps - 3;
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     const int num_threads = thread_count_from_options(options);
-    promote_generated_layer_input(options.pathname, first_step + 1);
-    promote_generated_layer_input(options.pathname, first_step + 2);
+    const DTypeMode mode = dtype_mode_from_name(options.success_rate_dtype);
+    promote_generated_layer_input(options.pathname, first_step + 1, spec, mode, io_config, lut, num_threads);
+    promote_generated_layer_input(options.pathname, first_step + 2, spec, mode, io_config, lut, num_threads);
     const double initial_read_t0 = now_seconds();
-    Prefix36Layer future1 = read_layer_input(options.pathname, first_step + 1, io_config, lut.dense_lut, num_threads);
-    Prefix36Layer future2 = read_layer_input(options.pathname, first_step + 2, io_config, lut.dense_lut, num_threads);
+    Prefix36Layer future1 = read_layer_input(
+        options.pathname, first_step + 1, io_config, lut.dense_lut, num_threads, &lut);
+    Prefix36Layer future2 = read_layer_input(
+        options.pathname, first_step + 2, io_config, lut.dense_lut, num_threads, &lut);
     double carried_read_seconds = now_seconds() - initial_read_t0;
     double deletion_threshold_state = RuntimeControls::current_deletion_threshold(options);
     for (int step = first_step; step >= 0; --step) {
@@ -2773,7 +2967,8 @@ void run_pattern_solve(
             classic_build_progress_total(options)
         );
         const double read_t0 = now_seconds();
-        Prefix36Layer current = read_layer_input(options.pathname, step, io_config, lut.dense_lut, num_threads);
+        Prefix36Layer current = read_layer_input(
+            options.pathname, step, io_config, lut.dense_lut, num_threads, &lut);
         const double read_seconds = carried_read_seconds + (now_seconds() - read_t0);
         carried_read_seconds = 0.0;
         deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);
@@ -2838,7 +3033,7 @@ void run_pattern_solve_single_layer(
     int step
 ) {
     const LutBundle lut = load_or_build_prefix36_lut(arr_init, spec, options);
-    (void)solve_single_step_impl(spec, options, lut.dense_lut, lut.row_luts, step);
+    (void)solve_single_step_impl(spec, options, lut, step);
 }
 
 uint32_t find_bucket_in_layer_file(
@@ -2960,6 +3155,16 @@ EXCompressedResult::ColdLookupResult lookup_zbook_cold(
     const DTypeMode mode = dtype_mode_from_header(header);
     EXCompressedResult::ColdLookupResult result;
     result.success_kind = storage_kind_for_dtype_mode(mode);
+    {
+        std::ifstream lut_in(zlut_path, std::ios::binary);
+        if (!lut_in) {
+            throw std::runtime_error("failed to open EX prefix36 LUT: " + zlut_path);
+        }
+        const LutFileHeader lut_header = read_lut_header_for_cold_lookup(lut_in, zlut_path);
+        if (!physical_metadata_matches(header, lut_header)) {
+            throw std::runtime_error("EX prefix36 physical pattern metadata does not match zbook");
+        }
+    }
     if (board_tile_sum(board) != header.layer_sum ||
         header.bucket_count == 0U ||
         header.success_value_count == 0U) {
@@ -3099,6 +3304,9 @@ bool sample_zbook_state(
     try {
         lut_header = read_lut_header_for_cold_lookup(lut_in, zlut_path);
     } catch (...) {
+        return false;
+    }
+    if (!physical_metadata_matches(header, lut_header)) {
         return false;
     }
     const LayerFileLayout layout = layer_file_layout(header);

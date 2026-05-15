@@ -30,6 +30,7 @@ export function useSettingsSession(activeRef) {
   const buildProgressTotal = ref(0);
   const isBuilding = ref(false);
   const builderAdvancedAlgo = ref(false);
+  const builderZMaskAlgo = ref(false);
   const builderCompress = ref(false);
   const builderCompressTempFiles = ref(false);
   const builderOptimalBranchOnly = ref(false);
@@ -123,11 +124,10 @@ export function useSettingsSession(activeRef) {
 
   const syncBuilderStateFromConfig = () => {
     builderAdvancedAlgo.value = Boolean(config.value.advanced_algo);
+    builderZMaskAlgo.value = Boolean(config.value.zmask_algo);
     builderCompress.value = Boolean(config.value.compress);
     builderCompressTempFiles.value = Boolean(config.value.compress_temp_files);
-    builderOptimalBranchOnly.value = builderAdvancedAlgo.value
-      ? false
-      : Boolean(config.value.optimal_branch_only);
+    builderOptimalBranchOnly.value = Boolean(config.value.optimal_branch_only);
     builderChunkedSolve.value = Boolean(config.value.chunked_solve);
     builderSuccessRateDtype.value =
       config.value.success_rate_dtype || 'uint32';
@@ -141,6 +141,7 @@ export function useSettingsSession(activeRef) {
   watch(
     () => [
       config.value.advanced_algo,
+      config.value.zmask_algo,
       config.value.compress,
       config.value.compress_temp_files,
       config.value.optimal_branch_only,
@@ -282,7 +283,20 @@ export function useSettingsSession(activeRef) {
   const handleAdvancedAlgoChange = () => {
     const nextValue = Boolean(builderAdvancedAlgo.value);
     saveSetting('advanced_algo', nextValue);
+    if (!nextValue) {
+      builderChunkedSolve.value = false;
+      saveSetting('chunked_solve', false);
+    }
     if (nextValue) {
+      builderOptimalBranchOnly.value = false;
+      saveSetting('optimal_branch_only', false);
+    }
+  };
+
+  const handleZMaskAlgoChange = () => {
+    const nextValue = Boolean(builderZMaskAlgo.value);
+    saveSetting('zmask_algo', nextValue);
+    if (builderAdvancedAlgo.value) {
       builderOptimalBranchOnly.value = false;
       saveSetting('optimal_branch_only', false);
     }
@@ -297,6 +311,11 @@ export function useSettingsSession(activeRef) {
   };
 
   const handleOptimalBranchOnlyChange = () => {
+    if (builderAdvancedAlgo.value) {
+      builderOptimalBranchOnly.value = false;
+      saveSetting('optimal_branch_only', false);
+      return;
+    }
     saveSetting('optimal_branch_only', Boolean(builderOptimalBranchOnly.value));
   };
 
@@ -352,6 +371,7 @@ export function useSettingsSession(activeRef) {
       normalizedDeletionThreshold
     );
     saveSetting('advanced_algo', Boolean(builderAdvancedAlgo.value));
+    saveSetting('zmask_algo', Boolean(builderZMaskAlgo.value));
     saveSetting('compress', Boolean(builderCompress.value));
     saveSetting(
       'compress_temp_files',
@@ -361,7 +381,10 @@ export function useSettingsSession(activeRef) {
       'optimal_branch_only',
       builderAdvancedAlgo.value ? false : Boolean(builderOptimalBranchOnly.value)
     );
-    saveSetting('chunked_solve', Boolean(builderChunkedSolve.value));
+    saveSetting(
+      'chunked_solve',
+      builderAdvancedAlgo.value ? Boolean(builderChunkedSolve.value) : false
+    );
     saveSetting('deletion_threshold', normalizedDeletionThreshold);
     saveSetting('success_rate_dtype', builderSuccessRateDtype.value);
     saveSetting(
@@ -410,6 +433,7 @@ export function useSettingsSession(activeRef) {
     buildPath,
     isBuilding,
     builderAdvancedAlgo,
+    builderZMaskAlgo,
     builderCompress,
     builderCompressTempFiles,
     builderOptimalBranchOnly,
@@ -422,6 +446,7 @@ export function useSettingsSession(activeRef) {
     buildProgressDisplay,
     saveSetting,
     handleAdvancedAlgoChange,
+    handleZMaskAlgoChange,
     handleCompressChange,
     handleCompressTempFilesChange,
     handleOptimalBranchOnlyChange,

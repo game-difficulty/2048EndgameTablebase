@@ -135,6 +135,19 @@ bool write_temp_byte_archive(const std::string &archive_path, const std::vector<
     return true;
 }
 
+bool write_temp_byte_spans_archive(
+    const std::string &archive_path,
+    const std::vector<ArchiveByteSpan> &spans,
+    int lvl
+) {
+    return compress_spans_to_7z_archive_streaming(
+        spans,
+        archive_path,
+        temp_archive_entry_name(archive_path),
+        lvl
+    );
+}
+
 std::vector<uint8_t> read_temp_byte_archive(const std::string &archive_path) {
     if (!fs::exists(archive_path)) {
         return {};

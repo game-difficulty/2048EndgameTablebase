@@ -126,7 +126,11 @@ NB_MODULE(formation_core, m) {
         .def_rw("name", &PatternSpec::name)
         .def_rw("pattern_masks", &PatternSpec::pattern_masks)
         .def_rw("success_shifts", &PatternSpec::success_shifts)
-        .def_rw("symm_mode", &PatternSpec::symm_mode);
+        .def_rw("symm_mode", &PatternSpec::symm_mode)
+        .def_rw("physical_transform", &PatternSpec::physical_transform)
+        .def_rw("inverse_physical_transform", &PatternSpec::inverse_physical_transform)
+        .def_rw("logical_pattern_signature", &PatternSpec::logical_pattern_signature)
+        .def_rw("physical_pattern_signature", &PatternSpec::physical_pattern_signature);
 
     nb::class_<RunOptions>(m, "RunOptions")
         .def(nb::init<>())
@@ -155,6 +159,10 @@ NB_MODULE(formation_core, m) {
         .def_rw("pattern_masks", &AdvancedPatternSpec::pattern_masks)
         .def_rw("success_shifts", &AdvancedPatternSpec::success_shifts)
         .def_rw("symm_mode", &AdvancedPatternSpec::symm_mode)
+        .def_rw("physical_transform", &AdvancedPatternSpec::physical_transform)
+        .def_rw("inverse_physical_transform", &AdvancedPatternSpec::inverse_physical_transform)
+        .def_rw("logical_pattern_signature", &AdvancedPatternSpec::logical_pattern_signature)
+        .def_rw("physical_pattern_signature", &AdvancedPatternSpec::physical_pattern_signature)
         .def_rw("num_free_32k", &AdvancedPatternSpec::num_free_32k)
         .def_rw("fixed_32k_shifts", &AdvancedPatternSpec::fixed_32k_shifts)
         .def_rw("small_tile_sum_limit", &AdvancedPatternSpec::small_tile_sum_limit)

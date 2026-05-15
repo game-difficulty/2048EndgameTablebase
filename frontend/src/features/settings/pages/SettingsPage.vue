@@ -91,6 +91,18 @@
 
               <label class="builder-toggle-option cursor-pointer group">
                 <div class="builder-toggle-switch relative">
+                  <input type="checkbox" v-model="builderZMaskAlgo" class="sr-only peer" @change="handleZMaskAlgoChange" />
+                  <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
+                  <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
+                </div>
+                <span class="builder-toggle-copy">
+                  <span class="builder-toggle-text ui-body font-bold text-text-main group-hover:text-accent transition-colors">{{ $t('settings.builder.zmask') }}</span>
+                  <span class="setting-tooltip builder-toggle-tooltip" tabindex="0" :title="$t('settings.tooltips.zmask')" :data-tooltip="$t('settings.tooltips.zmask')">?</span>
+                </span>
+              </label>
+
+              <label class="builder-toggle-option cursor-pointer group">
+                <div class="builder-toggle-switch relative">
                   <input type="checkbox" v-model="builderCompress" class="sr-only peer" @change="handleCompressChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
                   <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
@@ -358,6 +370,7 @@ const props = defineProps({
   buildPath,
   isBuilding,
   builderAdvancedAlgo,
+  builderZMaskAlgo,
   builderCompress,
   builderCompressTempFiles,
   builderOptimalBranchOnly,
@@ -370,6 +383,7 @@ const props = defineProps({
   buildProgressDisplay,
   saveSetting,
   handleAdvancedAlgoChange,
+  handleZMaskAlgoChange,
   handleCompressChange,
   handleCompressTempFilesChange,
   handleOptimalBranchOnlyChange,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from Config import SingletonConfig, category_info, pattern_32k_tiles_map, pattern_catalog
+from engine_core.EXPhysicalPattern import resolve_ex_physical_pattern
 
 try:
     from native_core import formation_core
@@ -40,15 +41,26 @@ class BookReaderEXAD:
         self.pattern = pattern
         self.target = native_target
         meta = pattern_catalog.get(pattern, {})
-        _, num_free_32k, pos_fixed_32k = pattern_32k_tiles_map[pattern]
+        _, num_free_32k, _pos_fixed_32k = pattern_32k_tiles_map[pattern]
+        resolution = resolve_ex_physical_pattern(
+            pattern,
+            np.asarray(meta.get("seed_boards", ()), dtype=np.uint64),
+            native_target,
+            int(SingletonConfig().config.get("SmallTileSumLimit", 96)),
+            advanced=True,
+        )
 
         pattern_spec = formation_core.AdvancedPatternSpec()
         pattern_spec.name = pattern
-        pattern_spec.pattern_masks = list(meta.get("pattern_masks", ()))
-        pattern_spec.success_shifts = list(meta.get("success_shifts", ()))
+        pattern_spec.pattern_masks = list(resolution.pattern_masks)
+        pattern_spec.success_shifts = list(resolution.success_shifts)
         pattern_spec.symm_mode = _symm_mode_value(meta.get("canonical_mode", "identity"))
+        pattern_spec.physical_transform = int(resolution.transform_id)
+        pattern_spec.inverse_physical_transform = int(resolution.inverse_transform_id)
+        pattern_spec.logical_pattern_signature = int(resolution.logical_pattern_signature)
+        pattern_spec.physical_pattern_signature = int(resolution.physical_pattern_signature)
         pattern_spec.num_free_32k = int(num_free_32k)
-        pattern_spec.fixed_32k_shifts = list(np.asarray(pos_fixed_32k, dtype=np.uint8))
+        pattern_spec.fixed_32k_shifts = list(resolution.fixed_32k_shifts)
         pattern_spec.small_tile_sum_limit = int(SingletonConfig().config.get("SmallTileSumLimit", 96))
         pattern_spec.target = native_target
 

@@ -23,6 +23,10 @@ constexpr uint32_t kInvalidSuffix28 = 0xFFFFFFFFU;
 struct Luts {
     ZMaskFrozen::TileLimitConfig config;
     uint64_t config_signature = 0;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     std::vector<std::vector<uint16_t>> rank_tables;
     std::vector<uint32_t> packed_rank_pair_table;
     std::vector<uint32_t> size_table;
@@ -60,6 +64,10 @@ struct Layer {
     uint32_t original_board_sum = 0;
     uint32_t threshold_bits = kDefaultThresholdBits;
     uint64_t lut_signature = 0;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint64_t live_board_count = 0;
     std::array<BoardSet, bucket_slot_count()> sets{};
 
@@ -67,6 +75,13 @@ struct Layer {
         return live_board_count == 0;
     }
 };
+
+inline bool physical_metadata_matches(const Layer &layer, const Luts &luts) {
+    return layer.physical_transform == luts.physical_transform &&
+        layer.inverse_physical_transform == luts.inverse_physical_transform &&
+        layer.logical_pattern_signature == luts.logical_pattern_signature &&
+        layer.physical_pattern_signature == luts.physical_pattern_signature;
+}
 
 uint32_t tile_value(uint32_t tile);
 uint32_t sum_index(uint32_t sum);

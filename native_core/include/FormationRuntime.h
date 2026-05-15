@@ -21,6 +21,10 @@ struct PatternSpec {
     std::vector<uint64_t> pattern_masks;
     std::vector<uint8_t> success_shifts;
     int symm_mode = static_cast<int>(SymmMode::Identity);
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
 };
 
 struct RunOptions {
@@ -136,6 +140,10 @@ struct AdvancedPatternSpec {
     std::vector<uint64_t> pattern_masks;
     std::vector<uint8_t> success_shifts;
     int symm_mode = static_cast<int>(SymmMode::Identity);
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint8_t num_free_32k = 0;
     std::vector<uint8_t> fixed_32k_shifts;
     uint32_t small_tile_sum_limit = 96;

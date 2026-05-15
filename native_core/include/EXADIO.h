@@ -21,6 +21,10 @@ struct LayerFileInfo {
     uint32_t original_board_sum = 0;
     uint32_t threshold_bits = kDefaultThresholdBits;
     uint64_t lut_signature = 0;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint64_t live_board_count = 0;
 };
 
@@ -58,7 +62,8 @@ Luts read_lut_file(
 void write_layer_file(
     const std::string &path,
     const Layer &layer,
-    FileIOUtils::DirectIoConfig config = {}
+    FileIOUtils::DirectIoConfig config = {},
+    bool compressed_archive = false
 );
 
 Layer read_layer_file(

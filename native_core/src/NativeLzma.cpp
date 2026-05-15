@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -627,6 +628,422 @@ std::vector<uint8_t> read_file_bytes_range(const std::string &path, uint64_t beg
 
 } // namespace
 
+struct SevenZipArchiveWriter::Impl {
+    std::string archive_path;
+#ifdef _WIN32
+    HANDLE stdin_write = nullptr;
+    PROCESS_INFORMATION process_info{};
+#else
+    int stdin_fd = -1;
+    pid_t pid = -1;
+#endif
+    bool opened = false;
+
+    void open_process(const std::string &path, const std::string &entry_name, int lvl) {
+        if (opened) {
+            throw std::runtime_error("7z archive writer is already open");
+        }
+        auto exe = resolve_7z_executable();
+        if (!exe) {
+            throw std::runtime_error("7z executable not found");
+        }
+        archive_path = path;
+        const int max_threads = std::max(2, omp_get_max_threads());
+        std::error_code ec;
+        fs::remove(archive_path, ec);
+        const std::vector<std::string> args = {
+            *exe,
+            "a",
+            "-t7z",
+            "-m0=lzma2",
+            "-mx=" + std::to_string(lvl),
+            "-mmt=" + std::to_string(max_threads),
+            "-bd",
+            "-y",
+            archive_path,
+            "-si" + entry_name
+        };
+
+#ifdef _WIN32
+        SECURITY_ATTRIBUTES sa{};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
+        HANDLE stdin_read = nullptr;
+        if (!CreatePipe(&stdin_read, &stdin_write, &sa, 0)) {
+            throw std::runtime_error("failed to create 7z stdin pipe");
+        }
+        SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0);
+        HANDLE nul_out = CreateFileA(
+            "NUL",
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &sa,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        if (nul_out == INVALID_HANDLE_VALUE) {
+            CloseHandle(stdin_read);
+            CloseHandle(stdin_write);
+            stdin_write = nullptr;
+            throw std::runtime_error("failed to open NUL for 7z output");
+        }
+        const bool spawned = spawn_process_with_redirects(args, stdin_read, nul_out, nul_out, process_info);
+        CloseHandle(stdin_read);
+        CloseHandle(nul_out);
+        if (!spawned) {
+            CloseHandle(stdin_write);
+            stdin_write = nullptr;
+            throw std::runtime_error("failed to spawn 7z archive writer");
+        }
+#else
+        int stdin_pipe[2];
+        if (pipe(stdin_pipe) != 0) {
+            throw std::runtime_error("failed to create 7z stdin pipe");
+        }
+        pid = fork();
+        if (pid < 0) {
+            close(stdin_pipe[0]);
+            close(stdin_pipe[1]);
+            pid = -1;
+            throw std::runtime_error("failed to fork 7z archive writer");
+        }
+        if (pid == 0) {
+            int nul_out = open("/dev/null", O_WRONLY);
+            dup2(stdin_pipe[0], STDIN_FILENO);
+            dup2(nul_out, STDOUT_FILENO);
+            dup2(nul_out, STDERR_FILENO);
+            close(stdin_pipe[0]);
+            close(stdin_pipe[1]);
+            close(nul_out);
+            std::vector<char *> argv;
+            argv.reserve(args.size() + 1);
+            for (const auto &arg : args) {
+                argv.push_back(const_cast<char *>(arg.c_str()));
+            }
+            argv.push_back(nullptr);
+            execvp(argv[0], argv.data());
+            _exit(127);
+        }
+        close(stdin_pipe[0]);
+        stdin_fd = stdin_pipe[1];
+#endif
+        opened = true;
+    }
+
+    void append_bytes(const void *data, size_t size) {
+        if (size == 0U) {
+            return;
+        }
+        if (!opened) {
+            throw std::runtime_error("7z archive writer is not open");
+        }
+        if (data == nullptr) {
+            throw std::runtime_error("attempted to append null data to 7z archive");
+        }
+        const uint8_t *bytes = static_cast<const uint8_t *>(data);
+#ifdef _WIN32
+        if (!write_all_handle(stdin_write, bytes, size)) {
+            throw std::runtime_error("failed while writing 7z archive stream");
+        }
+#else
+        if (!write_all_fd(stdin_fd, bytes, size)) {
+            throw std::runtime_error("failed while writing 7z archive stream");
+        }
+#endif
+    }
+
+    bool finish(bool throw_on_error) {
+        if (!opened) {
+            return true;
+        }
+        opened = false;
+        bool ok = true;
+#ifdef _WIN32
+        if (stdin_write != nullptr) {
+            CloseHandle(stdin_write);
+            stdin_write = nullptr;
+        }
+        ok = wait_process_success(process_info);
+#else
+        if (stdin_fd >= 0) {
+            close(stdin_fd);
+            stdin_fd = -1;
+        }
+        if (pid >= 0) {
+            ok = wait_pid_success(pid);
+            pid = -1;
+        }
+#endif
+        if (!ok) {
+            std::error_code ec;
+            fs::remove(archive_path, ec);
+            if (throw_on_error) {
+                throw std::runtime_error("7z archive writer failed: " + archive_path);
+            }
+        }
+        return ok;
+    }
+
+    ~Impl() {
+        try {
+            finish(false);
+        } catch (...) {
+        }
+    }
+};
+
+struct SevenZipSequentialReader::Impl {
+    std::string archive_path;
+#ifdef _WIN32
+    HANDLE stdout_read = nullptr;
+    PROCESS_INFORMATION process_info{};
+#else
+    int stdout_fd = -1;
+    pid_t pid = -1;
+#endif
+    bool opened = false;
+
+    void open_process(const std::string &path) {
+        if (opened) {
+            throw std::runtime_error("7z archive reader is already open");
+        }
+        auto exe = resolve_7z_executable();
+        if (!exe || !fs::exists(path)) {
+            throw std::runtime_error("7z archive not available: " + path);
+        }
+        archive_path = path;
+        const std::vector<std::string> args = {
+            *exe,
+            "x",
+            "-so",
+            "-bd",
+            "-y",
+            archive_path
+        };
+
+#ifdef _WIN32
+        SECURITY_ATTRIBUTES sa{};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
+        HANDLE stdout_write = nullptr;
+        if (!CreatePipe(&stdout_read, &stdout_write, &sa, 0)) {
+            throw std::runtime_error("failed to create 7z stdout pipe");
+        }
+        SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
+        HANDLE nul_in = CreateFileA(
+            "NUL",
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &sa,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        HANDLE nul_err = CreateFileA(
+            "NUL",
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &sa,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        if (nul_in == INVALID_HANDLE_VALUE || nul_err == INVALID_HANDLE_VALUE) {
+            if (nul_in != INVALID_HANDLE_VALUE) CloseHandle(nul_in);
+            if (nul_err != INVALID_HANDLE_VALUE) CloseHandle(nul_err);
+            CloseHandle(stdout_read);
+            CloseHandle(stdout_write);
+            stdout_read = nullptr;
+            throw std::runtime_error("failed to open NUL for 7z reader");
+        }
+        const bool spawned = spawn_process_with_redirects(args, nul_in, stdout_write, nul_err, process_info);
+        CloseHandle(nul_in);
+        CloseHandle(nul_err);
+        CloseHandle(stdout_write);
+        if (!spawned) {
+            CloseHandle(stdout_read);
+            stdout_read = nullptr;
+            throw std::runtime_error("failed to spawn 7z archive reader");
+        }
+#else
+        int stdout_pipe[2];
+        if (pipe(stdout_pipe) != 0) {
+            throw std::runtime_error("failed to create 7z stdout pipe");
+        }
+        pid = fork();
+        if (pid < 0) {
+            close(stdout_pipe[0]);
+            close(stdout_pipe[1]);
+            pid = -1;
+            throw std::runtime_error("failed to fork 7z archive reader");
+        }
+        if (pid == 0) {
+            int nul_in = open("/dev/null", O_RDONLY);
+            int nul_err = open("/dev/null", O_WRONLY);
+            dup2(nul_in, STDIN_FILENO);
+            dup2(stdout_pipe[1], STDOUT_FILENO);
+            dup2(nul_err, STDERR_FILENO);
+            close(stdout_pipe[0]);
+            close(stdout_pipe[1]);
+            close(nul_in);
+            close(nul_err);
+            std::vector<char *> argv;
+            argv.reserve(args.size() + 1);
+            for (const auto &arg : args) {
+                argv.push_back(const_cast<char *>(arg.c_str()));
+            }
+            argv.push_back(nullptr);
+            execvp(argv[0], argv.data());
+            _exit(127);
+        }
+        close(stdout_pipe[1]);
+        stdout_fd = stdout_pipe[0];
+#endif
+        opened = true;
+    }
+
+    void read_exact(void *dst, size_t bytes) {
+        if (bytes == 0U) {
+            return;
+        }
+        if (!opened) {
+            throw std::runtime_error("7z archive reader is not open");
+        }
+        if (dst == nullptr) {
+            throw std::runtime_error("attempted to read 7z archive into null buffer");
+        }
+        uint8_t *out = static_cast<uint8_t *>(dst);
+        size_t offset = 0;
+        while (offset < bytes) {
+#ifdef _WIN32
+            DWORD read_bytes = 0;
+            const DWORD chunk = static_cast<DWORD>(std::min<size_t>(bytes - offset, 1U << 20));
+            const BOOL ok = ReadFile(stdout_read, out + offset, chunk, &read_bytes, nullptr);
+            if (!ok || read_bytes == 0) {
+                throw std::runtime_error("truncated 7z archive stream: " + archive_path);
+            }
+            offset += static_cast<size_t>(read_bytes);
+#else
+            const size_t chunk = std::min<size_t>(bytes - offset, 1U << 20);
+            ssize_t read_bytes = read(stdout_fd, out + offset, chunk);
+            if (read_bytes < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                throw std::runtime_error("failed while reading 7z archive stream: " + archive_path);
+            }
+            if (read_bytes == 0) {
+                throw std::runtime_error("truncated 7z archive stream: " + archive_path);
+            }
+            offset += static_cast<size_t>(read_bytes);
+#endif
+        }
+    }
+
+    bool finish(bool throw_on_error) {
+        if (!opened) {
+            return true;
+        }
+        opened = false;
+        bool ok = true;
+#ifdef _WIN32
+        if (stdout_read != nullptr) {
+            CloseHandle(stdout_read);
+            stdout_read = nullptr;
+        }
+        ok = wait_process_success(process_info);
+#else
+        if (stdout_fd >= 0) {
+            close(stdout_fd);
+            stdout_fd = -1;
+        }
+        if (pid >= 0) {
+            ok = wait_pid_success(pid);
+            pid = -1;
+        }
+#endif
+        if (!ok && throw_on_error) {
+            throw std::runtime_error("7z archive reader failed: " + archive_path);
+        }
+        return ok;
+    }
+
+    ~Impl() {
+        try {
+            finish(false);
+        } catch (...) {
+        }
+    }
+};
+
+SevenZipArchiveWriter::SevenZipArchiveWriter() = default;
+
+SevenZipArchiveWriter::SevenZipArchiveWriter(
+    const std::string &archive_path,
+    const std::string &entry_name,
+    int lvl
+) {
+    open(archive_path, entry_name, lvl);
+}
+
+SevenZipArchiveWriter::~SevenZipArchiveWriter() = default;
+SevenZipArchiveWriter::SevenZipArchiveWriter(SevenZipArchiveWriter &&) noexcept = default;
+SevenZipArchiveWriter &SevenZipArchiveWriter::operator=(SevenZipArchiveWriter &&) noexcept = default;
+
+void SevenZipArchiveWriter::open(const std::string &archive_path, const std::string &entry_name, int lvl) {
+    impl_ = std::make_unique<Impl>();
+    impl_->open_process(archive_path, entry_name, lvl);
+}
+
+void SevenZipArchiveWriter::append(const void *data, size_t size) {
+    if (!impl_) {
+        throw std::runtime_error("7z archive writer is not open");
+    }
+    impl_->append_bytes(data, size);
+}
+
+void SevenZipArchiveWriter::close() {
+    if (impl_) {
+        impl_->finish(true);
+        impl_.reset();
+    }
+}
+
+bool SevenZipArchiveWriter::is_open() const {
+    return impl_ != nullptr && impl_->opened;
+}
+
+SevenZipSequentialReader::SevenZipSequentialReader() = default;
+
+SevenZipSequentialReader::SevenZipSequentialReader(const std::string &archive_path) {
+    open(archive_path);
+}
+
+SevenZipSequentialReader::~SevenZipSequentialReader() = default;
+SevenZipSequentialReader::SevenZipSequentialReader(SevenZipSequentialReader &&) noexcept = default;
+SevenZipSequentialReader &SevenZipSequentialReader::operator=(SevenZipSequentialReader &&) noexcept = default;
+
+void SevenZipSequentialReader::open(const std::string &archive_path) {
+    impl_ = std::make_unique<Impl>();
+    impl_->open_process(archive_path);
+}
+
+void SevenZipSequentialReader::read(void *dst, size_t bytes) {
+    if (!impl_) {
+        throw std::runtime_error("7z archive reader is not open");
+    }
+    impl_->read_exact(dst, bytes);
+}
+
+void SevenZipSequentialReader::close() {
+    if (impl_) {
+        impl_->finish(true);
+        impl_.reset();
+    }
+}
+
+bool SevenZipSequentialReader::is_open() const {
+    return impl_ != nullptr && impl_->opened;
+}
+
 bool compress_bytes_to_7z_archive_streaming(
     const uint8_t *data,
     size_t size,
@@ -635,6 +1052,26 @@ bool compress_bytes_to_7z_archive_streaming(
     int lvl
 ) {
     return compress_bytes_to_7z_archive_streaming_impl(data, size, archive_path, entry_name, lvl);
+}
+
+bool compress_spans_to_7z_archive_streaming(
+    const std::vector<ArchiveByteSpan> &spans,
+    const std::string &archive_path,
+    const std::string &entry_name,
+    int lvl
+) {
+    try {
+        SevenZipArchiveWriter writer(archive_path, entry_name, lvl);
+        for (const ArchiveByteSpan &span : spans) {
+            writer.append(span.data, span.size);
+        }
+        writer.close();
+        return true;
+    } catch (...) {
+        std::error_code ec;
+        fs::remove(archive_path, ec);
+        return false;
+    }
 }
 
 bool decompress_7z_archive_to_bytes_streaming(const std::string &archive_path, std::vector<uint8_t> &output) {

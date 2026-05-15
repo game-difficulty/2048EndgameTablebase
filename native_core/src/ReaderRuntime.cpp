@@ -1264,7 +1264,9 @@ ReaderMoveResult evaluate_exad_result_candidates(
         for (int operation_index : operations) {
             const BoardMatrix transformed_board = apply_operation(board_matrix, operation_index);
             const uint64_t encoded = encode_board_matrix(transformed_board);
-            if (!is_pattern(encoded, reader.spec_.pattern_masks)) {
+            const uint64_t physical_encoded =
+                apply_sym_like(encoded, static_cast<int>(reader.spec_.physical_transform));
+            if (!is_pattern(physical_encoded, reader.spec_.pattern_masks)) {
                 continue;
             }
 
@@ -1277,7 +1279,9 @@ ReaderMoveResult evaluate_exad_result_candidates(
             const auto moved_boards = move_all_dir_for_variant(encoded, reader.is_variant_);
             for (size_t index = 0; index < moved_boards.size(); ++index) {
                 const uint64_t moved_board = moved_boards[index];
-                if (moved_board == encoded || !is_pattern(moved_board, reader.spec_.pattern_masks)) {
+                const uint64_t physical_moved =
+                    apply_sym_like(moved_board, static_cast<int>(reader.spec_.physical_transform));
+                if (moved_board == encoded || !is_pattern(physical_moved, reader.spec_.pattern_masks)) {
                     continue;
                 }
                 const SearchValue value = find_exad_value(
@@ -1286,7 +1290,7 @@ ReaderMoveResult evaluate_exad_result_candidates(
                     path_entry.first,
                     filename,
                     pattern_full,
-                    moved_board,
+                    physical_moved,
                     path_entry.second
                 );
                 if (index == 0U) {
@@ -1365,7 +1369,9 @@ ReaderMoveResult evaluate_ex_result_candidates(
         for (int operation_index : operations) {
             const BoardMatrix transformed_board = apply_operation(board_matrix, operation_index);
             const uint64_t encoded = encode_board_matrix(transformed_board);
-            if (!is_pattern(encoded, reader.spec_.pattern_masks)) {
+            const uint64_t physical_encoded =
+                apply_sym_like(encoded, static_cast<int>(reader.spec_.physical_transform));
+            if (!is_pattern(physical_encoded, reader.spec_.pattern_masks)) {
                 continue;
             }
 
@@ -1378,14 +1384,16 @@ ReaderMoveResult evaluate_ex_result_candidates(
             const auto moved_boards = move_all_dir_for_variant(encoded, reader.is_variant_);
             for (size_t index = 0; index < moved_boards.size(); ++index) {
                 const uint64_t moved_board = moved_boards[index];
-                if (moved_board == encoded || !is_pattern(moved_board, reader.spec_.pattern_masks)) {
+                const uint64_t physical_moved =
+                    apply_sym_like(moved_board, static_cast<int>(reader.spec_.physical_transform));
+                if (moved_board == encoded || !is_pattern(physical_moved, reader.spec_.pattern_masks)) {
                     continue;
                 }
                 const SearchValue value = find_ex_value(
                     path_entry.first,
                     filename,
                     pattern_full,
-                    canonical_by_mode(moved_board, reader.spec_.symm_mode),
+                    canonical_by_mode(physical_moved, reader.spec_.symm_mode),
                     path_entry.second
                 );
                 if (index == 0U) {
@@ -1536,6 +1544,7 @@ uint64_t sample_advanced_book_state(
 uint64_t sample_exad_book_state(
     const std::vector<std::pair<std::string, std::string>> &path_list,
     const std::string &pattern_full,
+    int inverse_transform,
     double spawn_rate4
 ) {
     static thread_local std::mt19937 rng(std::random_device{}());
@@ -1556,14 +1565,14 @@ uint64_t sample_exad_book_state(
             uint64_t state = 0ULL;
             if (fs::exists(exadbook_path) &&
                 EXADCompressedResult::sample_exadbook_cold(exadbook_path.string(), exadlut_path.string(), state)) {
-                return gen_new_num(state, static_cast<float>(spawn_rate4)).first;
+                return gen_new_num(apply_sym_like(state, inverse_transform), static_cast<float>(spawn_rate4)).first;
             }
             for (const fs::path &candidate : exad_compressed_candidates(exadbook_path)) {
                 if (!fs::exists(candidate)) {
                     continue;
                 }
                 if (EXADCompressedResult::sample_exad_cold(candidate.string(), exadlut_path.string(), state)) {
-                    return gen_new_num(state, static_cast<float>(spawn_rate4)).first;
+                    return gen_new_num(apply_sym_like(state, inverse_transform), static_cast<float>(spawn_rate4)).first;
                 }
             }
         }
@@ -1574,6 +1583,7 @@ uint64_t sample_exad_book_state(
 uint64_t sample_ex_book_state(
     const std::vector<std::pair<std::string, std::string>> &path_list,
     const std::string &pattern_full,
+    int inverse_transform,
     double spawn_rate4
 ) {
     static thread_local std::mt19937 rng(std::random_device{}());
@@ -1593,7 +1603,7 @@ uint64_t sample_ex_book_state(
                 fs::path(path_entry.first) / (pattern_full + "_" + std::to_string(book_id) + ".zbook");
             uint64_t state = 0ULL;
             if (fs::exists(zbook_path) && sample_ex_zbook_state(zbook_path, zlut_path, rng, state)) {
-                return gen_new_num(state, static_cast<float>(spawn_rate4)).first;
+                return gen_new_num(apply_sym_like(state, inverse_transform), static_cast<float>(spawn_rate4)).first;
             }
             if (!fs::exists(zbook_path)) {
                 for (const fs::path &candidate : ex_compressed_candidates(zbook_path)) {
@@ -1603,7 +1613,7 @@ uint64_t sample_ex_book_state(
                     uint64_t raw = 0ULL;
                     double numeric = 0.0;
                     if (EXCompressedResult::sample_cold(candidate.string(), zlut_path.string(), state, raw, numeric)) {
-                        return gen_new_num(state, static_cast<float>(spawn_rate4)).first;
+                        return gen_new_num(apply_sym_like(state, inverse_transform), static_cast<float>(spawn_rate4)).first;
                     }
                 }
             }
@@ -1697,7 +1707,12 @@ uint64_t EXADBookReader::get_random_state(
     const std::string &pattern_full,
     double spawn_rate4
 ) const {
-    return sample_exad_book_state(path_list, pattern_full, spawn_rate4);
+    return sample_exad_book_state(
+        path_list,
+        pattern_full,
+        static_cast<int>(spec_.inverse_physical_transform),
+        spawn_rate4
+    );
 }
 
 EXBookReader::EXBookReader(PatternSpec spec, bool is_variant)
@@ -1724,7 +1739,12 @@ uint64_t EXBookReader::get_random_state(
     const std::string &pattern_full,
     double spawn_rate4
 ) const {
-    return sample_ex_book_state(path_list, pattern_full, spawn_rate4);
+    return sample_ex_book_state(
+        path_list,
+        pattern_full,
+        static_cast<int>(spec_.inverse_physical_transform),
+        spawn_rate4
+    );
 }
 
 double find_classic_value_native(

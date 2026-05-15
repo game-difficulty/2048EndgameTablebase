@@ -20,7 +20,7 @@
 namespace EXAD {
 
 constexpr const char *kSolvedFileExtension = ".exadbook";
-constexpr uint32_t kSolvedFileVersion = 1U;
+constexpr uint32_t kSolvedFileVersion = 2U;
 constexpr uint32_t kInvalidDirectBucket = 0xFFFFFFFFU;
 constexpr uint32_t kLookupBatchSize = 256U;
 
@@ -178,6 +178,10 @@ struct SolvedLayer {
     uint32_t original_board_sum = 0;
     uint32_t threshold_bits = kDefaultThresholdBits;
     uint64_t lut_signature = 0;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint64_t live_board_count = 0;
     DTypeMode dtype_mode = DTypeMode::UInt32;
     std::array<BoardSet, bucket_slot_count()> sets{};
@@ -453,6 +457,10 @@ inline SolvedLayer<T> make_solved_layer_from_generation(
     out.original_board_sum = source.original_board_sum;
     out.threshold_bits = source.threshold_bits;
     out.lut_signature = source.lut_signature;
+    out.physical_transform = source.physical_transform;
+    out.inverse_physical_transform = source.inverse_physical_transform;
+    out.logical_pattern_signature = source.logical_pattern_signature;
+    out.physical_pattern_signature = source.physical_pattern_signature;
     out.live_board_count = source.live_board_count;
     out.dtype_mode = mode;
     out.sets = source.sets;
@@ -484,6 +492,10 @@ inline SolvedLayer<T> make_solved_layer_from_generation(
     out.original_board_sum = source.original_board_sum;
     out.threshold_bits = source.threshold_bits;
     out.lut_signature = source.lut_signature;
+    out.physical_transform = source.physical_transform;
+    out.inverse_physical_transform = source.inverse_physical_transform;
+    out.logical_pattern_signature = source.logical_pattern_signature;
+    out.physical_pattern_signature = source.physical_pattern_signature;
     out.live_board_count = source.live_board_count;
     out.dtype_mode = mode;
     out.sets = std::move(source.sets);
@@ -806,6 +818,10 @@ inline SolvedLayer<T> compact_solved_layer(
     out.original_board_sum = input.original_board_sum;
     out.threshold_bits = input.threshold_bits;
     out.lut_signature = input.lut_signature;
+    out.physical_transform = input.physical_transform;
+    out.inverse_physical_transform = input.inverse_physical_transform;
+    out.logical_pattern_signature = input.logical_pattern_signature;
+    out.physical_pattern_signature = input.physical_pattern_signature;
     out.dtype_mode = input.dtype_mode;
     out.row_width = input.row_width;
 
@@ -1018,8 +1034,12 @@ struct SolvedFileHeader {
     uint32_t original_board_sum = 0;
     uint32_t threshold_bits = 0;
     uint32_t slot_count = static_cast<uint32_t>(bucket_slot_count());
-    uint32_t reserved = 0;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint16_t reserved = 0;
     uint64_t lut_signature = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint64_t live_board_count = 0;
     uint64_t success_value_count = 0;
 };
@@ -1089,7 +1109,11 @@ inline void write_solved_layer_file(
     header.value_size = sizeof(T);
     header.original_board_sum = layer.original_board_sum;
     header.threshold_bits = layer.threshold_bits;
+    header.physical_transform = layer.physical_transform;
+    header.inverse_physical_transform = layer.inverse_physical_transform;
     header.lut_signature = layer.lut_signature;
+    header.logical_pattern_signature = layer.logical_pattern_signature;
+    header.physical_pattern_signature = layer.physical_pattern_signature;
     header.live_board_count = layer.live_board_count;
     header.success_value_count = layer.success_values.size();
 
@@ -1161,6 +1185,10 @@ inline SolvedLayer<T> read_solved_layer_file(
     layer.original_board_sum = header.original_board_sum;
     layer.threshold_bits = header.threshold_bits;
     layer.lut_signature = header.lut_signature;
+    layer.physical_transform = header.physical_transform;
+    layer.inverse_physical_transform = header.inverse_physical_transform;
+    layer.logical_pattern_signature = header.logical_pattern_signature;
+    layer.physical_pattern_signature = header.physical_pattern_signature;
     layer.live_board_count = header.live_board_count;
     for (size_t i = 0; i < layer.sets.size(); ++i) {
         BoardSet &set = layer.sets[i];

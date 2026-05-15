@@ -26,7 +26,7 @@ namespace {
 
 constexpr char kMagic[8] = {'E', 'X', 'A', 'D', 'C', 'Z', '1', '\0'};
 constexpr char kExadLutMagic[8] = {'E', 'X', 'A', 'D', '7', 'L', 'U', 'T'};
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 2;
 constexpr uint32_t kSlotCount = 48;
 constexpr uint32_t kBucketBlockHardCapBytes = 1024u * 1024u;
 constexpr double kFixed32Scale = 4000000000.0;
@@ -44,6 +44,12 @@ struct FileHeader {
     uint32_t bucket_block_raw_hard_cap_bytes;
     uint32_t success_block_values;
     uint64_t lut_signature;
+    uint8_t physical_transform;
+    uint8_t inverse_physical_transform;
+    uint16_t reserved_transform;
+    uint32_t reserved32;
+    uint64_t logical_pattern_signature;
+    uint64_t physical_pattern_signature;
     uint64_t live_board_count;
     uint64_t success_value_count;
     uint64_t bucket_block_count;
@@ -107,9 +113,14 @@ struct PendingBucketBlock {
 
 struct ExadLutFileHeader {
     char magic[8];
-    uint32_t version = 1;
+    uint32_t version = 2;
     uint32_t valid_mask_count = 0;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint16_t reserved16 = 0;
     uint64_t config_signature = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint64_t rank_table_count = 0;
     uint64_t rank_table_values = 0;
     uint64_t packed_rank_pair_values = 0;
@@ -124,8 +135,6 @@ struct ExadLutFileHeader {
     int8_t max_counts[16]{};
     uint32_t required_suffix24 = 0;
 };
-
-static_assert(sizeof(ExadLutFileHeader) == 128, "EXAD LUT header layout changed");
 
 struct ExadLutFileLayout {
     uint64_t valid_suffix_masks_offset = 0;
@@ -549,20 +558,26 @@ std::vector<uint8_t> build_bucket_block_raw(
 }
 
 template <typename T>
-CompressStats compress_impl(
-    const std::string& exadbook_path,
-    const std::string& exadlut_path,
+CompressStats compress_layer_impl(
+    const EXAD::SolvedLayer<T>& layer,
+    const EXAD::Luts& luts,
+    const std::string& source_label,
+    uint64_t original_bytes,
     const std::string& output_path,
     EXAD::DTypeMode mode,
     uint32_t bucket_block_raw_target_bytes,
     uint32_t success_block_values,
     int compression_level) {
     const double t0 = wall_time_seconds();
-    const auto luts = EXAD::read_lut_file(exadlut_path);
-    auto layer = EXAD::read_solved_layer_file<T>(exadbook_path, mode, {});
     if (layer.lut_signature != 0 && luts.config_signature != 0 &&
         layer.lut_signature != luts.config_signature) {
         throw std::runtime_error("EXAD LUT signature does not match solved layer");
+    }
+    if (layer.physical_pattern_signature != luts.physical_pattern_signature ||
+        layer.logical_pattern_signature != luts.logical_pattern_signature ||
+        layer.physical_transform != luts.physical_transform ||
+        layer.inverse_physical_transform != luts.inverse_physical_transform) {
+        throw std::runtime_error("EXAD physical pattern metadata does not match solved layer");
     }
 
     std::array<SlotDirEntry, 48> slots{};
@@ -585,6 +600,10 @@ CompressStats compress_impl(
     header.bucket_block_raw_hard_cap_bytes = kBucketBlockHardCapBytes;
     header.success_block_values = value_block_values;
     header.lut_signature = layer.lut_signature;
+    header.physical_transform = layer.physical_transform;
+    header.inverse_physical_transform = layer.inverse_physical_transform;
+    header.logical_pattern_signature = layer.logical_pattern_signature;
+    header.physical_pattern_signature = layer.physical_pattern_signature;
     header.live_board_count = layer.live_board_count;
     header.success_value_count = success_value_count;
     header.bucket_block_count = bucket_blocks.size();
@@ -593,7 +612,7 @@ CompressStats compress_impl(
     header.bucket_dir_offset = header.slot_dir_offset + sizeof(SlotDirEntry) * kSlotCount;
     header.value_dir_offset = header.bucket_dir_offset + sizeof(BucketBlockDirEntry) * bucket_blocks.size();
     header.data_offset = header.value_dir_offset + sizeof(ValueBlockDirEntry) * value_block_count;
-    header.original_file_size = file_size_or_zero(exadbook_path);
+    header.original_file_size = original_bytes;
 
     std::vector<BucketBlockDirEntry> bucket_dirs(bucket_blocks.size());
     std::vector<ValueBlockDirEntry> value_dirs(value_block_count);
@@ -612,7 +631,7 @@ CompressStats compress_impl(
                           sizeof(ValueBlockDirEntry) * value_block_count);
 
     CompressStats stats;
-    stats.source_path = exadbook_path;
+    stats.source_path = source_label;
     stats.output_path = output_path;
     stats.original_bytes = header.original_file_size;
     stats.live_board_count = header.live_board_count;
@@ -711,6 +730,30 @@ CompressStats compress_impl(
     stats.compressed_bytes = file_size_or_zero(output_path);
     stats.compression_seconds = wall_time_seconds() - t0;
     return stats;
+}
+
+template <typename T>
+CompressStats compress_impl(
+    const std::string& exadbook_path,
+    const std::string& exadlut_path,
+    const std::string& output_path,
+    EXAD::DTypeMode mode,
+    uint32_t bucket_block_raw_target_bytes,
+    uint32_t success_block_values,
+    int compression_level) {
+    const auto luts = EXAD::read_lut_file(exadlut_path);
+    auto layer = EXAD::read_solved_layer_file<T>(exadbook_path, mode, {});
+    return compress_layer_impl(
+        layer,
+        luts,
+        exadbook_path,
+        file_size_or_zero(exadbook_path),
+        output_path,
+        mode,
+        bucket_block_raw_target_bytes,
+        success_block_values,
+        compression_level
+    );
 }
 
 struct CompressedIndex {
@@ -899,7 +942,7 @@ ExadLutPointIndex read_exad_lut_point_index(const std::string& path) {
     ExadLutPointIndex index;
     read_exact(in, &index.header, sizeof(index.header), "EXAD LUT header");
     if (std::memcmp(index.header.magic, kExadLutMagic, sizeof(kExadLutMagic)) != 0 ||
-        index.header.version != 1U) {
+        index.header.version != 2U) {
         throw std::runtime_error("invalid EXAD LUT file: " + path);
     }
     if (index.header.size_table_values == 0U ||
@@ -962,6 +1005,10 @@ public:
 
     uint64_t signature() const {
         return index_->header.config_signature;
+    }
+
+    const ExadLutFileHeader& header() const {
+        return index_->header;
     }
 
     bool valid_count_for_group(uint32_t group, uint32_t& valid_count) {
@@ -1091,6 +1138,14 @@ private:
     std::shared_ptr<const ExadLutPointIndex> index_;
     std::ifstream in_;
 };
+
+template <typename Header>
+bool physical_metadata_matches_lut(const Header& header, const ExadLutFileHeader& lut_header) {
+    return header.physical_transform == lut_header.physical_transform &&
+        header.inverse_physical_transform == lut_header.inverse_physical_transform &&
+        header.logical_pattern_signature == lut_header.logical_pattern_signature &&
+        header.physical_pattern_signature == lut_header.physical_pattern_signature;
+}
 
 std::shared_ptr<const CompressedIndex> cached_compressed_index(const std::string& path) {
     const FileStamp stamp = file_stamp(path);
@@ -1468,6 +1523,61 @@ CompressStats compress_exad_solved_layer_to_result(
     throw std::runtime_error("unsupported EXAD dtype mode");
 }
 
+template <typename T>
+CompressStats compress_exad_solved_layer_to_result_from_memory(
+    const EXAD::SolvedLayer<T>& layer,
+    const EXAD::Luts& luts,
+    const std::string& source_label,
+    const std::string& output_path,
+    uint32_t bucket_block_raw_target_bytes,
+    uint32_t success_block_values,
+    int compression_level) {
+    return compress_layer_impl(
+        layer,
+        luts,
+        source_label,
+        EXAD::solved_serialized_size(layer),
+        output_path,
+        layer.dtype_mode,
+        bucket_block_raw_target_bytes,
+        success_block_values,
+        compression_level
+    );
+}
+
+template CompressStats compress_exad_solved_layer_to_result_from_memory<uint32_t>(
+    const EXAD::SolvedLayer<uint32_t>&,
+    const EXAD::Luts&,
+    const std::string&,
+    const std::string&,
+    uint32_t,
+    uint32_t,
+    int);
+template CompressStats compress_exad_solved_layer_to_result_from_memory<uint64_t>(
+    const EXAD::SolvedLayer<uint64_t>&,
+    const EXAD::Luts&,
+    const std::string&,
+    const std::string&,
+    uint32_t,
+    uint32_t,
+    int);
+template CompressStats compress_exad_solved_layer_to_result_from_memory<float>(
+    const EXAD::SolvedLayer<float>&,
+    const EXAD::Luts&,
+    const std::string&,
+    const std::string&,
+    uint32_t,
+    uint32_t,
+    int);
+template CompressStats compress_exad_solved_layer_to_result_from_memory<double>(
+    const EXAD::SolvedLayer<double>&,
+    const EXAD::Luts&,
+    const std::string&,
+    const std::string&,
+    uint32_t,
+    uint32_t,
+    int);
+
 ColdLookupResult lookup_exad_cold(
     const std::string& compressed_path,
     const std::string& exadlut_path,
@@ -1481,6 +1591,9 @@ ColdLookupResult lookup_exad_cold(
     if (index.header.lut_signature != 0 && lut.signature() != 0 &&
         index.header.lut_signature != lut.signature()) {
         throw std::runtime_error("EXAD LUT signature does not match compressed layer");
+    }
+    if (!physical_metadata_matches_lut(index.header, lut.header())) {
+        throw std::runtime_error("EXAD physical pattern metadata does not match compressed layer");
     }
 
     ColdLookupResult result;
@@ -1673,6 +1786,9 @@ ColdLookupResult lookup_exadbook_cold(
         index.header.lut_signature != lut.signature()) {
         throw std::runtime_error("EXAD LUT signature does not match solved layer");
     }
+    if (!physical_metadata_matches_lut(index.header, lut.header())) {
+        throw std::runtime_error("EXAD physical pattern metadata does not match solved layer");
+    }
 
     ColdLookupResult result;
     result.success_kind = success_kind_for_mode(mode);
@@ -1802,6 +1918,9 @@ bool sample_exad_cold(
         ExadLutPointReader lut(exadlut_path);
         if (index.header.lut_signature != 0 && lut.signature() != 0 &&
             index.header.lut_signature != lut.signature()) {
+            return false;
+        }
+        if (!physical_metadata_matches_lut(index.header, lut.header())) {
             return false;
         }
         if (index.header.live_board_count == 0U || index.header.bucket_block_count == 0U) {
@@ -1941,6 +2060,9 @@ bool sample_exadbook_cold(
         ExadLutPointReader lut(exadlut_path);
         if (index.header.lut_signature != 0 && lut.signature() != 0 &&
             index.header.lut_signature != lut.signature()) {
+            return false;
+        }
+        if (!physical_metadata_matches_lut(index.header, lut.header())) {
             return false;
         }
         if (index.header.live_board_count == 0U) {

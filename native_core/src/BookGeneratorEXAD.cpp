@@ -157,7 +157,12 @@ PatternSpec make_base_pattern_spec(const AdvancedPatternSpec &spec) {
     PatternSpec base;
     base.name = spec.name;
     base.pattern_masks = spec.pattern_masks;
+    base.success_shifts = spec.success_shifts;
     base.symm_mode = spec.symm_mode;
+    base.physical_transform = spec.physical_transform;
+    base.inverse_physical_transform = spec.inverse_physical_transform;
+    base.logical_pattern_signature = spec.logical_pattern_signature;
+    base.physical_pattern_signature = spec.physical_pattern_signature;
     return base;
 }
 
@@ -179,12 +184,20 @@ EXAD::Luts load_or_build_luts(
     );
     if (fs::exists(path)) {
         EXAD::Luts luts = EXAD::read_lut_file(path, io_config);
-        if (ZMaskFrozen::tile_limit_configs_equal(luts.config, config)) {
+        if (ZMaskFrozen::tile_limit_configs_equal(luts.config, config) &&
+            luts.physical_transform == spec.physical_transform &&
+            luts.inverse_physical_transform == spec.inverse_physical_transform &&
+            luts.logical_pattern_signature == spec.logical_pattern_signature &&
+            luts.physical_pattern_signature == spec.physical_pattern_signature) {
             EXAD::initialize_runtime_tables(luts);
             return luts;
         }
     }
     EXAD::Luts luts = EXAD::build_luts(config, num_threads);
+    luts.physical_transform = spec.physical_transform;
+    luts.inverse_physical_transform = spec.inverse_physical_transform;
+    luts.logical_pattern_signature = spec.logical_pattern_signature;
+    luts.physical_pattern_signature = spec.physical_pattern_signature;
     EXAD::write_lut_file(path, luts, io_config);
     return luts;
 }
@@ -518,7 +531,7 @@ ResumeState initialize_or_resume(
             num_threads
         );
         const double t1 = wall_time_seconds();
-        EXAD::write_layer_file(layer0_path, seed_layer, io_config);
+        EXAD::write_layer_file(layer0_path, seed_layer, io_config, options.compress_temp_files);
         StatsRecord init;
         init.stage = "init";
         init.step = 0;
@@ -537,12 +550,21 @@ ResumeState initialize_or_resume(
     if (first_missing <= 1) {
         state.start_step = 1;
         state.current = EXAD::read_layer_file(layer0_path, io_config);
+        if (!EXAD::physical_metadata_matches(state.current, luts)) {
+            throw std::runtime_error("EXAD temp layer physical metadata does not match LUT");
+        }
         return state;
     }
 
     state.start_step = first_missing - 1;
     state.current = EXAD::read_layer_file(EXAD::layer_file_path(options.pathname, state.start_step - 1), io_config);
+    if (!EXAD::physical_metadata_matches(state.current, luts)) {
+        throw std::runtime_error("EXAD temp layer physical metadata does not match LUT");
+    }
     EXAD::Layer seed_layer = EXAD::read_layer_file(EXAD::layer_file_path(options.pathname, state.start_step), io_config);
+    if (!EXAD::physical_metadata_matches(seed_layer, luts)) {
+        throw std::runtime_error("EXAD temp layer physical metadata does not match LUT");
+    }
     state.next_seed = EXAD::carry_from_layer(seed_layer, luts, num_threads);
     return state;
 }
@@ -597,6 +619,9 @@ void run_pattern_build_exad_cpp(
             continue;
         }
         EXAD::Layer history_layer = EXAD::read_layer_file(path, io_config);
+        if (!EXAD::physical_metadata_matches(history_layer, luts)) {
+            throw std::runtime_error("EXAD temp layer physical metadata does not match LUT");
+        }
         push_reserve_history(reserve_history, history_layer);
         update_reserve_base(reserve_base, history_layer);
     }
@@ -695,7 +720,12 @@ void run_pattern_build_exad_cpp(
         record.validate_seconds = wall_time_seconds() - validate0;
 
         const double write0 = wall_time_seconds();
-        EXAD::write_layer_file(EXAD::layer_file_path(options.pathname, step), merged, io_config);
+        EXAD::write_layer_file(
+            EXAD::layer_file_path(options.pathname, step),
+            merged,
+            io_config,
+            options.compress_temp_files
+        );
         record.write_seconds = wall_time_seconds() - write0;
         append_stats(options, record);
 

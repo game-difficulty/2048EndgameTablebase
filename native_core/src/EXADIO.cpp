@@ -1,5 +1,8 @@
 #include "EXADIO.h"
 
+#include "NativeLzma.h"
+
+#include <array>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -14,11 +17,16 @@ namespace fs = std::filesystem;
 
 struct FileHeader {
     char magic[8];
-    uint32_t version = 1;
+    uint32_t version = 2;
     uint32_t original_board_sum = 0;
     uint32_t threshold_bits = 0;
     uint32_t slot_count = static_cast<uint32_t>(bucket_slot_count());
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint16_t reserved16 = 0;
     uint64_t lut_signature = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint64_t live_board_count = 0;
 };
 
@@ -33,9 +41,14 @@ struct SlotHeader {
 
 struct LutFileHeader {
     char magic[8];
-    uint32_t version = 1;
+    uint32_t version = 2;
     uint32_t valid_mask_count = 0;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint16_t reserved16 = 0;
     uint64_t config_signature = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint64_t rank_table_count = 0;
     uint64_t rank_table_values = 0;
     uint64_t packed_rank_pair_values = 0;
@@ -59,7 +72,11 @@ FileHeader make_header(const Layer &layer) {
     std::memcpy(header.magic, kMagic, sizeof(kMagic));
     header.original_board_sum = layer.original_board_sum;
     header.threshold_bits = layer.threshold_bits;
+    header.physical_transform = layer.physical_transform;
+    header.inverse_physical_transform = layer.inverse_physical_transform;
     header.lut_signature = layer.lut_signature;
+    header.logical_pattern_signature = layer.logical_pattern_signature;
+    header.physical_pattern_signature = layer.physical_pattern_signature;
     header.live_board_count = layer.live_board_count;
     return header;
 }
@@ -68,7 +85,7 @@ void validate_header(const FileHeader &header) {
     if (std::memcmp(header.magic, kMagic, sizeof(kMagic)) != 0) {
         throw std::runtime_error("invalid EXAD temp layer file magic");
     }
-    if (header.version != 1U || header.slot_count != static_cast<uint32_t>(bucket_slot_count())) {
+    if (header.version != 2U || header.slot_count != static_cast<uint32_t>(bucket_slot_count())) {
         throw std::runtime_error("unsupported EXAD temp layer version");
     }
 }
@@ -92,8 +109,58 @@ uint64_t file_size_or_throw(const std::string &path, const char *kind) {
     return static_cast<uint64_t>(size);
 }
 
+std::string archive_path_for_layer(const std::string &path) {
+    return path + ".7z";
+}
+
+bool has_archive_suffix(const std::string &path) {
+    return path.size() >= 3U && path.compare(path.size() - 3U, 3U, ".7z") == 0;
+}
+
+std::string existing_layer_storage_path(const std::string &path) {
+    if (fs::exists(path) || has_archive_suffix(path)) {
+        return path;
+    }
+    const std::string archive_path = archive_path_for_layer(path);
+    if (fs::exists(archive_path)) {
+        return archive_path;
+    }
+    return path;
+}
+
+std::string archive_entry_name_for_path(const std::string &path) {
+    std::string name = fs::path(path).stem().string();
+    if (name.empty()) {
+        name = "data";
+    }
+    return name + ".bin";
+}
+
+template <typename Writer>
+void append_layer_payload(
+    Writer &out,
+    const FileHeader &header,
+    const std::array<SlotHeader, bucket_slot_count()> &slots,
+    const Layer &layer
+) {
+    out.append(&header, sizeof(header));
+    out.append(slots.data(), slots.size() * sizeof(SlotHeader));
+    for (const BoardSet &set : layer.sets) {
+        if (!set.buckets.empty()) {
+            out.append(set.buckets.data(), set.buckets.size() * sizeof(BucketEntry));
+        }
+        if (!set.small_bitmap_bytes.empty()) {
+            out.append(set.small_bitmap_bytes.data(), set.small_bitmap_bytes.size());
+        }
+        if (!set.large_bitmap_words.empty()) {
+            out.append(set.large_bitmap_words.data(), set.large_bitmap_words.size() * sizeof(uint64_t));
+        }
+    }
+}
+
+template <typename Reader>
 void read_direct_exact(
-    FileIOUtils::DirectSequentialReader &in,
+    Reader &in,
     void *dst,
     size_t bytes,
     const std::string &
@@ -103,8 +170,9 @@ void read_direct_exact(
     }
 }
 
+template <typename Reader>
 void read_slot_payload(
-    FileIOUtils::DirectSequentialReader &in,
+    Reader &in,
     BoardSet &set,
     const SlotHeader &slot,
     const std::string &path
@@ -137,27 +205,40 @@ std::string lut_file_path(const std::string &pathname) {
 }
 
 bool layer_file_exists(const std::string &path) {
-    return fs::exists(path);
+    return fs::exists(path) || fs::exists(archive_path_for_layer(path));
 }
 
 void remove_layer_file(const std::string &path) {
     std::error_code ec;
     fs::remove(path, ec);
+    fs::remove(archive_path_for_layer(path), ec);
 }
 
 class LayerSlotReader::Impl {
 public:
     Impl(const std::string &path, FileIOUtils::DirectIoConfig config)
-        : path_(path),
-          in_(path, file_size_or_throw(path, "temp layer"), config) {
+        : path_(existing_layer_storage_path(path)) {
+        if (has_archive_suffix(path_)) {
+            archive_in_ = std::make_unique<SevenZipSequentialReader>(path_);
+        } else {
+            direct_in_ = std::make_unique<FileIOUtils::DirectSequentialReader>(
+                path_,
+                file_size_or_throw(path_, "temp layer"),
+                config
+            );
+        }
         FileHeader header{};
-        read_direct_exact(in_, &header, sizeof(header), path_);
+        read_exact(&header, sizeof(header));
         validate_header(header);
         info_.original_board_sum = header.original_board_sum;
         info_.threshold_bits = header.threshold_bits;
         info_.lut_signature = header.lut_signature;
+        info_.physical_transform = header.physical_transform;
+        info_.inverse_physical_transform = header.inverse_physical_transform;
+        info_.logical_pattern_signature = header.logical_pattern_signature;
+        info_.physical_pattern_signature = header.physical_pattern_signature;
         info_.live_board_count = header.live_board_count;
-        read_direct_exact(in_, slots_.data(), slots_.size() * sizeof(SlotHeader), path_);
+        read_exact(slots_.data(), slots_.size() * sizeof(SlotHeader));
     }
 
     const LayerFileInfo &info() const {
@@ -174,18 +255,36 @@ public:
         }
         set = BoardSet{};
         set.threshold_bits = info_.threshold_bits;
-        read_slot_payload(in_, set, slots_[next_slot_], path_);
+        if (archive_in_) {
+            read_slot_payload(*archive_in_, set, slots_[next_slot_], path_);
+        } else {
+            read_slot_payload(*direct_in_, set, slots_[next_slot_], path_);
+        }
         ++next_slot_;
         return true;
     }
 
     void close() {
-        in_.close();
+        if (archive_in_) {
+            archive_in_->close();
+        }
+        if (direct_in_) {
+            direct_in_->close();
+        }
     }
 
 private:
+    void read_exact(void *dst, size_t bytes) {
+        if (archive_in_) {
+            read_direct_exact(*archive_in_, dst, bytes, path_);
+        } else {
+            read_direct_exact(*direct_in_, dst, bytes, path_);
+        }
+    }
+
     std::string path_;
-    FileIOUtils::DirectSequentialReader in_;
+    std::unique_ptr<FileIOUtils::DirectSequentialReader> direct_in_;
+    std::unique_ptr<SevenZipSequentialReader> archive_in_;
     std::array<SlotHeader, bucket_slot_count()> slots_{};
     LayerFileInfo info_{};
     size_t next_slot_ = 0;
@@ -228,7 +327,8 @@ void LayerSlotReader::close() {
 void write_layer_file(
     const std::string &path,
     const Layer &layer,
-    FileIOUtils::DirectIoConfig config
+    FileIOUtils::DirectIoConfig config,
+    bool compressed_archive
 ) {
     const FileHeader header = make_header(layer);
     std::array<SlotHeader, bucket_slot_count()> slots{};
@@ -242,44 +342,76 @@ void write_layer_file(
         slots[i].aligned_bitmap_bits = set.aligned_bitmap_bits;
     }
 
-    FileIOUtils::DirectAppendWriter out(path, serialized_size(layer), config);
-    out.append(&header, sizeof(header));
-    out.append(slots.data(), slots.size() * sizeof(SlotHeader));
-    for (const BoardSet &set : layer.sets) {
-        if (!set.buckets.empty()) {
-            out.append(set.buckets.data(), set.buckets.size() * sizeof(BucketEntry));
-        }
-        if (!set.small_bitmap_bytes.empty()) {
-            out.append(set.small_bitmap_bytes.data(), set.small_bitmap_bytes.size());
-        }
-        if (!set.large_bitmap_words.empty()) {
-            out.append(set.large_bitmap_words.data(), set.large_bitmap_words.size() * sizeof(uint64_t));
-        }
+    if (compressed_archive) {
+        const std::string archive_path = archive_path_for_layer(path);
+        SevenZipArchiveWriter out(archive_path, archive_entry_name_for_path(archive_path), 1);
+        append_layer_payload(out, header, slots, layer);
+        out.close();
+        std::error_code ec;
+        fs::remove(path, ec);
+        return;
     }
+
+    FileIOUtils::DirectAppendWriter out(path, serialized_size(layer), config);
+    append_layer_payload(out, header, slots, layer);
     out.close();
+    std::error_code ec;
+    fs::remove(archive_path_for_layer(path), ec);
 }
 
 Layer read_layer_file(
     const std::string &path,
     FileIOUtils::DirectIoConfig config
 ) {
-    FileIOUtils::DirectSequentialReader in(path, file_size_or_throw(path, "temp layer"), config);
+    const std::string actual_path = existing_layer_storage_path(path);
+    std::unique_ptr<FileIOUtils::DirectSequentialReader> direct_in;
+    std::unique_ptr<SevenZipSequentialReader> archive_in;
+    if (has_archive_suffix(actual_path)) {
+        archive_in = std::make_unique<SevenZipSequentialReader>(actual_path);
+    } else {
+        direct_in = std::make_unique<FileIOUtils::DirectSequentialReader>(
+            actual_path,
+            file_size_or_throw(actual_path, "temp layer"),
+            config
+        );
+    }
+    auto read_exact = [&](void *dst, size_t bytes) {
+        if (archive_in) {
+            read_direct_exact(*archive_in, dst, bytes, actual_path);
+        } else {
+            read_direct_exact(*direct_in, dst, bytes, actual_path);
+        }
+    };
+
     FileHeader header{};
-    read_direct_exact(in, &header, sizeof(header), path);
+    read_exact(&header, sizeof(header));
     validate_header(header);
     std::array<SlotHeader, bucket_slot_count()> slots{};
-    read_direct_exact(in, slots.data(), slots.size() * sizeof(SlotHeader), path);
+    read_exact(slots.data(), slots.size() * sizeof(SlotHeader));
 
     Layer layer;
     layer.original_board_sum = header.original_board_sum;
     layer.threshold_bits = header.threshold_bits;
     layer.lut_signature = header.lut_signature;
+    layer.physical_transform = header.physical_transform;
+    layer.inverse_physical_transform = header.inverse_physical_transform;
+    layer.logical_pattern_signature = header.logical_pattern_signature;
+    layer.physical_pattern_signature = header.physical_pattern_signature;
     layer.live_board_count = header.live_board_count;
     for (size_t i = 0; i < layer.sets.size(); ++i) {
         layer.sets[i].threshold_bits = header.threshold_bits;
-        read_slot_payload(in, layer.sets[i], slots[i], path);
+        if (archive_in) {
+            read_slot_payload(*archive_in, layer.sets[i], slots[i], actual_path);
+        } else {
+            read_slot_payload(*direct_in, layer.sets[i], slots[i], actual_path);
+        }
     }
-    in.close();
+    if (archive_in) {
+        archive_in->close();
+    }
+    if (direct_in) {
+        direct_in->close();
+    }
     return layer;
 }
 
@@ -291,7 +423,11 @@ void write_lut_file(
     LutFileHeader header{};
     std::memcpy(header.magic, kLutMagic, sizeof(kLutMagic));
     header.valid_mask_count = static_cast<uint32_t>(luts.config.valid_suffix_masks.size());
+    header.physical_transform = luts.physical_transform;
+    header.inverse_physical_transform = luts.inverse_physical_transform;
     header.config_signature = luts.config_signature;
+    header.logical_pattern_signature = luts.logical_pattern_signature;
+    header.physical_pattern_signature = luts.physical_pattern_signature;
     header.rank_table_count = luts.rank_tables.size();
     for (const auto &table : luts.rank_tables) {
         header.rank_table_values += table.size();
@@ -364,11 +500,15 @@ Luts read_lut_file(
     FileIOUtils::DirectSequentialReader in(path, file_size_or_throw(path, "LUT"), config);
     LutFileHeader header{};
     read_direct_exact(in, &header, sizeof(header), path);
-    if (std::memcmp(header.magic, kLutMagic, sizeof(kLutMagic)) != 0 || header.version != 1U) {
+    if (std::memcmp(header.magic, kLutMagic, sizeof(kLutMagic)) != 0 || header.version != 2U) {
         throw std::runtime_error("invalid EXAD prefix36 LUT file");
     }
     Luts luts;
     luts.config_signature = header.config_signature;
+    luts.physical_transform = header.physical_transform;
+    luts.inverse_physical_transform = header.inverse_physical_transform;
+    luts.logical_pattern_signature = header.logical_pattern_signature;
+    luts.physical_pattern_signature = header.physical_pattern_signature;
     std::memcpy(luts.config.max_counts.data(), header.max_counts, luts.config.max_counts.size());
     luts.config.required_suffix24 = header.required_suffix24;
     luts.config.valid_suffix_masks.resize(header.valid_mask_count);

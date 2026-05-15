@@ -274,7 +274,7 @@ void append_exad_solve_stats_record(
 }
 
 constexpr char kEXADSlotChunkMagic[8] = {'E', 'X', 'A', 'D', '7', 'S', 'L', 'C'};
-constexpr uint32_t kEXADSlotChunkVersion = 1U;
+constexpr uint32_t kEXADSlotChunkVersion = 2U;
 
 struct EXADSlotChunkHeader {
     char magic[8];
@@ -285,7 +285,12 @@ struct EXADSlotChunkHeader {
     uint32_t original_board_sum = 0;
     uint32_t threshold_bits = 0;
     uint32_t row_width = 0;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
+    uint16_t reserved_transform = 0;
     uint64_t lut_signature = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint64_t live_board_count = 0;
     uint64_t exact_bitmap_bits = 0;
     uint64_t aligned_bitmap_bits = 0;
@@ -301,7 +306,11 @@ struct EXADSlotChunkManifest {
     uint32_t original_board_sum = 0;
     uint32_t threshold_bits = 0;
     uint32_t row_width = 0;
+    uint8_t physical_transform = 0;
+    uint8_t inverse_physical_transform = 0;
     uint64_t lut_signature = 0;
+    uint64_t logical_pattern_signature = 0;
+    uint64_t physical_pattern_signature = 0;
     uint64_t live_board_count = 0;
     uint64_t exact_bitmap_bits = 0;
     uint64_t aligned_bitmap_bits = 0;
@@ -395,6 +404,56 @@ double maybe_compress_exad_solved_file(const RunOptions &options, int step, bool
     return elapsed;
 }
 
+double compress_all_exad_solved_files(const RunOptions &options, bool remove_source_after_compress) {
+    if (!options.compress || options.steps < 3) {
+        return 0.0;
+    }
+    double elapsed = 0.0;
+    for (int step = 0; step <= options.steps - 3; ++step) {
+        const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
+        if (!EXAD::solved_file_exists(solved_path)) {
+            continue;
+        }
+        elapsed += maybe_compress_exad_solved_file(options, step, remove_source_after_compress);
+    }
+    return elapsed;
+}
+
+template <typename T>
+double compress_exad_solved_layer_from_memory(
+    const RunOptions &options,
+    int step,
+    const EXAD::SolvedLayer<T> &layer,
+    const EXAD::Luts &luts
+) {
+    if (!options.compress) {
+        return 0.0;
+    }
+    const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
+    const std::string compressed_path = exad_compressed_file_path(options, step);
+    const std::string temp_path = compressed_path + ".tmp";
+    std::error_code ec;
+    fs::remove(temp_path, ec);
+    const double t0 = wall_time_seconds();
+    EXADCompressedResult::compress_exad_solved_layer_to_result_from_memory(
+        layer,
+        luts,
+        solved_path,
+        temp_path
+    );
+    fs::remove(compressed_path, ec);
+    fs::rename(temp_path, compressed_path, ec);
+    if (ec) {
+        fs::remove(temp_path, ec);
+        throw std::runtime_error("failed to finalize EXAD compressed layer: " + compressed_path);
+    }
+    fs::remove(solved_path, ec);
+    if (ec) {
+        throw std::runtime_error("failed to remove EXAD solved layer after in-memory compression: " + solved_path);
+    }
+    return wall_time_seconds() - t0;
+}
+
 uint64_t exad_file_size_or_throw(const std::string &path, const char *kind) {
     std::error_code ec;
     const uintmax_t size = fs::file_size(path, ec);
@@ -452,7 +511,11 @@ EXADSlotChunkManifest manifest_from_chunk_header(
     manifest.original_board_sum = header.original_board_sum;
     manifest.threshold_bits = header.threshold_bits;
     manifest.row_width = header.row_width;
+    manifest.physical_transform = header.physical_transform;
+    manifest.inverse_physical_transform = header.inverse_physical_transform;
     manifest.lut_signature = header.lut_signature;
+    manifest.logical_pattern_signature = header.logical_pattern_signature;
+    manifest.physical_pattern_signature = header.physical_pattern_signature;
     manifest.live_board_count = header.live_board_count;
     manifest.exact_bitmap_bits = header.exact_bitmap_bits;
     manifest.aligned_bitmap_bits = header.aligned_bitmap_bits;
@@ -504,7 +567,11 @@ void write_slot_chunk_file(
     header.original_board_sum = layer.original_board_sum;
     header.threshold_bits = layer.threshold_bits;
     header.row_width = layer.row_width[slot];
+    header.physical_transform = layer.physical_transform;
+    header.inverse_physical_transform = layer.inverse_physical_transform;
     header.lut_signature = layer.lut_signature;
+    header.logical_pattern_signature = layer.logical_pattern_signature;
+    header.physical_pattern_signature = layer.physical_pattern_signature;
     header.live_board_count = set.live_board_count;
     header.exact_bitmap_bits = set.exact_bitmap_bits;
     header.aligned_bitmap_bits = set.aligned_bitmap_bits;
@@ -547,6 +614,10 @@ EXAD::SolvedLayer<T> make_solved_layer_from_slot(
     layer.original_board_sum = info.original_board_sum;
     layer.threshold_bits = info.threshold_bits;
     layer.lut_signature = info.lut_signature;
+    layer.physical_transform = info.physical_transform;
+    layer.inverse_physical_transform = info.inverse_physical_transform;
+    layer.logical_pattern_signature = info.logical_pattern_signature;
+    layer.physical_pattern_signature = info.physical_pattern_signature;
     layer.dtype_mode = mode;
     layer.live_board_count = set.live_board_count;
     layer.sets[slot] = std::move(set);
@@ -665,6 +736,10 @@ EXADChunkMergeSummary merge_slot_chunks_to_solved_file(
     uint32_t original_board_sum,
     uint32_t threshold_bits,
     uint64_t lut_signature,
+    uint8_t physical_transform,
+    uint8_t inverse_physical_transform,
+    uint64_t logical_pattern_signature,
+    uint64_t physical_pattern_signature,
     const std::array<EXADSlotChunkManifest, bucket_slot_count()> &manifests,
     FileIOUtils::DirectIoConfig config
 ) {
@@ -681,7 +756,11 @@ EXADChunkMergeSummary merge_slot_chunks_to_solved_file(
         if (manifest.slot != slot ||
             manifest.original_board_sum != original_board_sum ||
             manifest.threshold_bits != threshold_bits ||
-            manifest.lut_signature != lut_signature) {
+            manifest.lut_signature != lut_signature ||
+            manifest.physical_transform != physical_transform ||
+            manifest.inverse_physical_transform != inverse_physical_transform ||
+            manifest.logical_pattern_signature != logical_pattern_signature ||
+            manifest.physical_pattern_signature != physical_pattern_signature) {
             throw std::runtime_error("EXAD slot chunk metadata mismatch before merge: " + manifest.path);
         }
         slots[slot].bucket_count = manifest.bucket_count;
@@ -707,7 +786,11 @@ EXADChunkMergeSummary merge_slot_chunks_to_solved_file(
     header.value_size = sizeof(T);
     header.original_board_sum = original_board_sum;
     header.threshold_bits = threshold_bits;
+    header.physical_transform = physical_transform;
+    header.inverse_physical_transform = inverse_physical_transform;
     header.lut_signature = lut_signature;
+    header.logical_pattern_signature = logical_pattern_signature;
+    header.physical_pattern_signature = physical_pattern_signature;
     header.live_board_count = row_cursor;
     header.success_value_count = value_cursor;
 
@@ -753,7 +836,12 @@ PatternSpec exad_make_base_pattern_spec(const AdvancedPatternSpec &spec) {
     PatternSpec base;
     base.name = spec.name;
     base.pattern_masks = spec.pattern_masks;
+    base.success_shifts = spec.success_shifts;
     base.symm_mode = spec.symm_mode;
+    base.physical_transform = spec.physical_transform;
+    base.inverse_physical_transform = spec.inverse_physical_transform;
+    base.logical_pattern_signature = spec.logical_pattern_signature;
+    base.physical_pattern_signature = spec.physical_pattern_signature;
     return base;
 }
 
@@ -775,12 +863,20 @@ EXAD::Luts exad_load_or_build_luts(
     );
     if (fs::exists(path)) {
         EXAD::Luts luts = EXAD::read_lut_file(path, io_config);
-        if (ZMaskFrozen::tile_limit_configs_equal(luts.config, config)) {
+        if (ZMaskFrozen::tile_limit_configs_equal(luts.config, config) &&
+            luts.physical_transform == spec.physical_transform &&
+            luts.inverse_physical_transform == spec.inverse_physical_transform &&
+            luts.logical_pattern_signature == spec.logical_pattern_signature &&
+            luts.physical_pattern_signature == spec.physical_pattern_signature) {
             EXAD::initialize_runtime_tables(luts);
             return luts;
         }
     }
     EXAD::Luts luts = EXAD::build_luts(config, num_threads);
+    luts.physical_transform = spec.physical_transform;
+    luts.inverse_physical_transform = spec.inverse_physical_transform;
+    luts.logical_pattern_signature = spec.logical_pattern_signature;
+    luts.physical_pattern_signature = spec.physical_pattern_signature;
     EXAD::write_lut_file(path, luts, io_config);
     return luts;
 }
@@ -2362,6 +2458,20 @@ EXAD::SolvedLayer<T> empty_future_layer(EXAD::DTypeMode mode) {
 }
 
 template <typename T>
+bool solved_physical_metadata_matches(const EXAD::SolvedLayer<T> &layer, const EXAD::Luts &luts) {
+    return layer.physical_transform == luts.physical_transform &&
+        layer.inverse_physical_transform == luts.inverse_physical_transform &&
+        layer.logical_pattern_signature == luts.logical_pattern_signature &&
+        layer.physical_pattern_signature == luts.physical_pattern_signature;
+}
+
+void remove_exad_temp_layers(const RunOptions &options) {
+    for (int step = 0; step < options.steps; ++step) {
+        EXAD::remove_layer_file(EXAD::layer_file_path(options.pathname, step));
+    }
+}
+
+template <typename T>
 void load_future_layer(
     const RunOptions &options,
     int target_step,
@@ -2388,6 +2498,9 @@ void load_future_layer(
     const double read_t0 = wall_time_seconds();
     layer = EXAD::read_solved_layer_file<T>(path, mode, io_config);
     read_seconds += wall_time_seconds() - read_t0;
+    if (!solved_physical_metadata_matches(layer, luts)) {
+        throw std::runtime_error("EXAD solved layer physical metadata does not match LUT: " + path);
+    }
     const double index_t0 = wall_time_seconds();
     EXAD::build_direct_indexes(layer, luts);
     index_seconds += wall_time_seconds() - index_t0;
@@ -2430,7 +2543,6 @@ void recalculate_process_exad_impl(
         );
         const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
         if (EXAD::solved_file_exists(solved_path)) {
-            maybe_compress_exad_solved_file(options, step, true);
             continue;
         }
         if (exad_compressed_file_exists(options, step)) {
@@ -2445,10 +2557,9 @@ void recalculate_process_exad_impl(
         const double current_read_t0 = wall_time_seconds();
         EXAD::Layer generation_layer = EXAD::read_layer_file(EXAD::layer_file_path(options.pathname, step), io_config);
         const double current_read_t1 = wall_time_seconds();
-        if (generation_layer.empty()) {
-            throw std::runtime_error("empty EXAD current layer: " + EXAD::layer_file_path(options.pathname, step));
+        if (!EXAD::physical_metadata_matches(generation_layer, luts)) {
+            throw std::runtime_error("EXAD temp layer physical metadata does not match LUT");
         }
-
         const double build_t0 = wall_time_seconds();
         EXAD::SolvedLayer<T> current = EXAD::make_solved_layer_from_generation<T>(
             std::move(generation_layer),
@@ -2508,14 +2619,22 @@ void recalculate_process_exad_impl(
             future_compact_seconds = wall_time_seconds() - future_compact_t0;
             future_threshold_values_after = static_cast<uint64_t>(compacted_future.success_values.size());
 
-            const double future_write_t0 = wall_time_seconds();
-            EXAD::write_solved_layer_file(
-                EXAD::solved_file_path(options.pathname, step + 2),
-                compacted_future,
-                io_config
-            );
-            future_write_seconds = wall_time_seconds() - future_write_t0;
-            compress_seconds += maybe_compress_exad_solved_file(options, step + 2);
+            if (options.compress) {
+                compress_seconds += compress_exad_solved_layer_from_memory(
+                    options,
+                    step + 2,
+                    compacted_future,
+                    luts
+                );
+            } else {
+                const double future_write_t0 = wall_time_seconds();
+                EXAD::write_solved_layer_file(
+                    EXAD::solved_file_path(options.pathname, step + 2),
+                    compacted_future,
+                    io_config
+                );
+                future_write_seconds = wall_time_seconds() - future_write_t0;
+            }
             if (cached_future2_step == step + 2) {
                 future2 = std::move(compacted_future);
                 EXAD::build_direct_indexes(future2, luts);
@@ -2537,8 +2656,7 @@ void recalculate_process_exad_impl(
         EXAD::write_solved_layer_file(solved_path, current, io_config);
         const double write_t1 = wall_time_seconds();
         compress_seconds += maybe_compress_exad_solved_file(options, step);
-        std::error_code remove_ec;
-        fs::remove(EXAD::layer_file_path(options.pathname, step), remove_ec);
+        EXAD::remove_layer_file(EXAD::layer_file_path(options.pathname, step));
 
         EXADSolveStatsRecord record;
         record.stage = "solve";
@@ -2604,6 +2722,11 @@ void recalculate_process_exad_impl(
     }
 
     total_record.deletion_threshold = deletion_threshold_state;
+    future1 = empty_future_layer<T>(dtype_mode);
+    future2 = empty_future_layer<T>(dtype_mode);
+    match_dict.clear();
+    total_record.compress_seconds += compress_all_exad_solved_files(options, true);
+    remove_exad_temp_layers(options);
     append_exad_solve_stats_record(options, total_record);
 }
 
@@ -2643,7 +2766,6 @@ void recalculate_process_exad_chunked_impl(
         );
         const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
         if (EXAD::solved_file_exists(solved_path)) {
-            maybe_compress_exad_solved_file(options, step, true);
             continue;
         }
         if (exad_compressed_file_exists(options, step)) {
@@ -2697,9 +2819,6 @@ void recalculate_process_exad_chunked_impl(
             EXAD::LayerSlotReader reader(layer_path, io_config);
             layer_info = reader.info();
             current_read_seconds += wall_time_seconds() - open_t0;
-            if (layer_info.live_board_count == 0U) {
-                throw std::runtime_error("empty EXAD current layer: " + layer_path);
-            }
 
             for (size_t slot = 0; slot < bucket_slot_count(); ++slot) {
                 EXAD::BoardSet set;
@@ -2774,14 +2893,22 @@ void recalculate_process_exad_chunked_impl(
             future_compact_seconds = wall_time_seconds() - future_compact_t0;
             future_threshold_values_after = static_cast<uint64_t>(compacted_future.success_values.size());
 
-            const double future_write_t0 = wall_time_seconds();
-            EXAD::write_solved_layer_file(
-                EXAD::solved_file_path(options.pathname, step + 2),
-                compacted_future,
-                io_config
-            );
-            future_write_seconds = wall_time_seconds() - future_write_t0;
-            compress_seconds += maybe_compress_exad_solved_file(options, step + 2);
+            if (options.compress) {
+                compress_seconds += compress_exad_solved_layer_from_memory(
+                    options,
+                    step + 2,
+                    compacted_future,
+                    luts
+                );
+            } else {
+                const double future_write_t0 = wall_time_seconds();
+                EXAD::write_solved_layer_file(
+                    EXAD::solved_file_path(options.pathname, step + 2),
+                    compacted_future,
+                    io_config
+                );
+                future_write_seconds = wall_time_seconds() - future_write_t0;
+            }
             if (cached_future2_step == step + 2) {
                 future2 = std::move(compacted_future);
                 const double future_reindex_t0 = wall_time_seconds();
@@ -2798,21 +2925,27 @@ void recalculate_process_exad_chunked_impl(
             layer_info.original_board_sum,
             layer_info.threshold_bits,
             layer_info.lut_signature,
+            layer_info.physical_transform,
+            layer_info.inverse_physical_transform,
+            layer_info.logical_pattern_signature,
+            layer_info.physical_pattern_signature,
             manifests,
             io_config
         );
         current_write_seconds += wall_time_seconds() - merge_t0;
-        compress_seconds += maybe_compress_exad_solved_file(options, step);
 
         fs::remove_all(chunk_dir, cleanup_ec);
         if (cleanup_ec) {
             throw std::runtime_error("failed to remove EXAD chunk directory: " + chunk_dir);
         }
-        fs::remove(layer_path, cleanup_ec);
+        EXAD::remove_layer_file(layer_path);
 
         const double current_readback_t0 = wall_time_seconds();
         EXAD::SolvedLayer<T> current = EXAD::read_solved_layer_file<T>(solved_path, dtype_mode, io_config);
         future_read_seconds += wall_time_seconds() - current_readback_t0;
+        if (!solved_physical_metadata_matches(current, luts)) {
+            throw std::runtime_error("EXAD solved layer physical metadata does not match LUT: " + solved_path);
+        }
         const double current_index_t0 = wall_time_seconds();
         EXAD::build_direct_indexes(current, luts);
         future_index_seconds += wall_time_seconds() - current_index_t0;
@@ -2884,6 +3017,11 @@ void recalculate_process_exad_chunked_impl(
     }
 
     total_record.deletion_threshold = deletion_threshold_state;
+    future1 = empty_future_layer<T>(dtype_mode);
+    future2 = empty_future_layer<T>(dtype_mode);
+    match_dict.clear();
+    total_record.compress_seconds += compress_all_exad_solved_files(options, true);
+    remove_exad_temp_layers(options);
     append_exad_solve_stats_record(options, total_record);
 }
 

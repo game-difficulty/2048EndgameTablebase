@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EXADIO.h"
+#include "EXADSolvedLayer.h"
 #include "FormationRuntime.h"
 
 #include <cstdint>
@@ -43,6 +45,16 @@ bool is_exad_compressed_file(const std::string& path);
 CompressStats compress_exad_solved_layer_to_result(
     const std::string& exadbook_path,
     const std::string& exadlut_path,
+    const std::string& output_path,
+    uint32_t bucket_block_raw_target_bytes = 512u * 1024u,
+    uint32_t success_block_values = 65536u,
+    int compression_level = 5);
+
+template <typename T>
+CompressStats compress_exad_solved_layer_to_result_from_memory(
+    const EXAD::SolvedLayer<T>& layer,
+    const EXAD::Luts& luts,
+    const std::string& source_label,
     const std::string& output_path,
     uint32_t bucket_block_raw_target_bytes = 512u * 1024u,
     uint32_t success_block_values = 65536u,
