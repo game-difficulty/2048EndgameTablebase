@@ -119,7 +119,8 @@ NB_MODULE(formation_core, m) {
         .value("Horizontal", SymmMode::Horizontal)
         .value("Min33", SymmMode::Min33)
         .value("Min24", SymmMode::Min24)
-        .value("Min34", SymmMode::Min34);
+        .value("Min34", SymmMode::Min34)
+        .value("Min34Top", SymmMode::Min34Top);
 
     nb::class_<PatternSpec>(m, "PatternSpec")
         .def(nb::init<>())

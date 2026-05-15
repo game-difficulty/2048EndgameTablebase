@@ -325,26 +325,14 @@
     ],
     "extra steps": 60
   },
-  "L1": {
-    "category": "others",
-    "valid pattern": [
-      "ff0fff0fff"
-    ],
-    "target pos": "0xf0000000000",
-    "canonical mode": "diagonal",
-    "seed boards": [
-      "0x11202ff2fff1fff"
-    ],
-    "extra steps": 12
-  },
-  "3x405": {
+  "3x4441": {
     "category": "variant",
     "valid pattern": [],
     "target pos": "0xffffffffffff0000",
     "canonical mode": "min34",
     "seed boards": [
-      "0x0001218912abffff"
+      "0x000000000eeeffff"
     ],
-    "extra steps": -1900
+    "extra steps": 30
   }
 }

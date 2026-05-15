@@ -360,7 +360,7 @@ TileLimitConfig make_lut_tile_limit_config(
 ) {
     TileLimitConfig config = make_target_tile_limit_config(target_exponent);
 
-    const bool generated_free_seed = is_free && spec.pattern_masks.empty();
+    const bool generated_free_seed = is_free && !is_variant && spec.pattern_masks.empty();
     if (!generated_free_seed && !seed_boards.empty()) {
         std::array<uint8_t, 16> seed_max_counts{};
         for (uint64_t board : seed_boards) {
@@ -391,7 +391,12 @@ TileLimitConfig make_lut_tile_limit_config(
     if (is_variant) {
         uint32_t required_suffix24 = 0U;
         for (uint64_t board : seed_boards) {
-            required_suffix24 |= static_cast<uint32_t>(board & 0xFFFFFFULL);
+            for (uint32_t cell = 0; cell < 6U; ++cell) {
+                const uint32_t shift = cell * 4U;
+                if (((board >> shift) & 0xFULL) == 0xFU) {
+                    required_suffix24 |= (0xFU << shift);
+                }
+            }
         }
         config.required_suffix24 = required_suffix24 & 0xFFFFFFU;
     }

@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-enum class SymmMode { Identity, Full, Diagonal, Horizontal, Min33, Min24, Min34 };
+enum class SymmMode { Identity, Full, Diagonal, Horizontal, Min33, Min24, Min34, Min34Top };
 
 enum class SuccessRateKind { UInt32, UInt64, Float32, Float64 };
 

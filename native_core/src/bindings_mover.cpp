@@ -49,6 +49,7 @@ NB_MODULE(mover_core, m) {
     m.def("canonical_min33", &Calculator::canonical_min33, "board"_a);
     m.def("canonical_min24", &Calculator::canonical_min24, "board"_a);
     m.def("canonical_min34", &Calculator::canonical_min34, "board"_a);
+    m.def("canonical_min34_top", &Calculator::canonical_min34_top, "board"_a);
     m.def("canonical_identity_pair", &Calculator::canonical_identity_pair, "board"_a);
     m.def("canonical_diagonal_pair", &Calculator::canonical_diagonal_pair, "board"_a);
     m.def("canonical_full_pair", &Calculator::canonical_full_pair, "board"_a);

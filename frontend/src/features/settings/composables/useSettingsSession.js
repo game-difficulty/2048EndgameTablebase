@@ -3,6 +3,7 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
+import { isVariantPattern } from '../../../utils/patternCategories';
 
 export function useSettingsSession(activeRef) {
   const activeSubTab = ref('builder');
@@ -167,6 +168,19 @@ export function useSettingsSession(activeRef) {
   const filteredPatterns = computed(
     () => categories.value[selectedCategory.value] || []
   );
+  const selectedPatternIsVariant = computed(() => (
+    isVariantPattern(selectedPattern.value, categories.value)
+  ));
+
+  watch(selectedPatternIsVariant, (isVariant) => {
+    if (!isVariant || !builderAdvancedAlgo.value) {
+      return;
+    }
+    builderAdvancedAlgo.value = false;
+    builderChunkedSolve.value = false;
+    saveSetting('advanced_algo', false);
+    saveSetting('chunked_solve', false);
+  });
 
   const buildProgressPercent = computed(() => {
     if (buildProgressTotal.value <= 0) {
@@ -281,6 +295,13 @@ export function useSettingsSession(activeRef) {
   };
 
   const handleAdvancedAlgoChange = () => {
+    if (selectedPatternIsVariant.value) {
+      builderAdvancedAlgo.value = false;
+      builderChunkedSolve.value = false;
+      saveSetting('advanced_algo', false);
+      saveSetting('chunked_solve', false);
+      return;
+    }
     const nextValue = Boolean(builderAdvancedAlgo.value);
     saveSetting('advanced_algo', nextValue);
     if (!nextValue) {
@@ -370,7 +391,12 @@ export function useSettingsSession(activeRef) {
     deletionThresholdInput.value = formatDeletionThreshold(
       normalizedDeletionThreshold
     );
-    saveSetting('advanced_algo', Boolean(builderAdvancedAlgo.value));
+    const advancedEnabled = !selectedPatternIsVariant.value && Boolean(builderAdvancedAlgo.value);
+    if (!advancedEnabled) {
+      builderAdvancedAlgo.value = false;
+      builderChunkedSolve.value = false;
+    }
+    saveSetting('advanced_algo', advancedEnabled);
     saveSetting('zmask_algo', Boolean(builderZMaskAlgo.value));
     saveSetting('compress', Boolean(builderCompress.value));
     saveSetting(
@@ -379,11 +405,11 @@ export function useSettingsSession(activeRef) {
     );
     saveSetting(
       'optimal_branch_only',
-      builderAdvancedAlgo.value ? false : Boolean(builderOptimalBranchOnly.value)
+      advancedEnabled ? false : Boolean(builderOptimalBranchOnly.value)
     );
     saveSetting(
       'chunked_solve',
-      builderAdvancedAlgo.value ? Boolean(builderChunkedSolve.value) : false
+      advancedEnabled ? Boolean(builderChunkedSolve.value) : false
     );
     saveSetting('deletion_threshold', normalizedDeletionThreshold);
     saveSetting('success_rate_dtype', builderSuccessRateDtype.value);
@@ -430,6 +456,7 @@ export function useSettingsSession(activeRef) {
     selectedCategory,
     selectedPattern,
     selectedTarget,
+    selectedPatternIsVariant,
     buildPath,
     isBuilding,
     builderAdvancedAlgo,

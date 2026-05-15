@@ -21,6 +21,8 @@ class SymmMode(enum.Enum):
 
     Min34 = 6
 
+    Min34Top = 7
+
 class PatternSpec:
     def __init__(self) -> None: ...
 

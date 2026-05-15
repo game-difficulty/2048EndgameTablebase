@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -48,6 +49,7 @@ constexpr double kLearnedReserveRetryGuard = 1.25;
 constexpr size_t kLearnedReserveHistoryWindow = 32;
 constexpr double kFixedScale = 4000000000.0;
 constexpr double kUInt64Scale = 1600000000000000000.0;
+constexpr int kOptimalBranchOnlyStartStep = 21;
 
 enum class DTypeMode : uint32_t {
     UInt32 = 0,
@@ -1189,6 +1191,43 @@ bool all_layers_exist(const RunOptions &options) {
     return true;
 }
 
+std::string optimal_layer_marker_path(const std::string &pathname) {
+    return pathname + "ex_optlayer";
+}
+
+std::string optimal_complete_marker_path(const std::string &pathname) {
+    return pathname + "ex_optimal_complete";
+}
+
+bool optimal_complete_marker_exists(const RunOptions &options) {
+    return fs::exists(optimal_complete_marker_path(options.pathname));
+}
+
+int read_optimal_layer_marker(const RunOptions &options) {
+    std::ifstream in(optimal_layer_marker_path(options.pathname));
+    int step = kOptimalBranchOnlyStartStep - 1;
+    if (in) {
+        in >> step;
+    }
+    return step;
+}
+
+void write_optimal_layer_marker(const RunOptions &options, int step) {
+    std::ofstream out(optimal_layer_marker_path(options.pathname), std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error("failed to write EX optimal branch marker");
+    }
+    out << step;
+}
+
+void write_optimal_complete_marker(const RunOptions &options) {
+    std::ofstream out(optimal_complete_marker_path(options.pathname), std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error("failed to write EX optimal completion marker");
+    }
+    out << "complete\n";
+}
+
 std::string generated_layer_file_path(const std::string &pathname, int step) {
     return pathname + std::to_string(step) + kGeneratedLayerFileExtension;
 }
@@ -1208,6 +1247,19 @@ bool all_layer_inputs_exist(const RunOptions &options) {
         return false;
     }
     for (int step = 0; step < options.steps; ++step) {
+        if (!layer_input_exists(options.pathname, step)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool optimal_resume_inputs_exist(const RunOptions &options, int last_done) {
+    if (options.steps <= kOptimalBranchOnlyStartStep || last_done < kOptimalBranchOnlyStartStep) {
+        return false;
+    }
+    const int first_needed = std::max(0, last_done - 1);
+    for (int step = first_needed; step < options.steps; ++step) {
         if (!layer_input_exists(options.pathname, step)) {
             return false;
         }
@@ -1339,6 +1391,13 @@ bool all_compressed_layers_exist(const RunOptions &options) {
     return true;
 }
 
+bool compressed_results_are_complete_for_options(const RunOptions &options) {
+    if (!all_compressed_layers_exist(options)) {
+        return false;
+    }
+    return !options.optimal_branch_only || optimal_complete_marker_exists(options);
+}
+
 EXCompressedResult::Prefix36LayerView layer_compression_view(
     const Prefix36Layer &layer,
     const PatternSpec &spec,
@@ -1420,41 +1479,49 @@ double compress_layer_result_from_memory(
     return now_seconds() - t0;
 }
 
+double compress_layer_result_from_file(const RunOptions &options, int step) {
+    if (!options.compress) {
+        return 0.0;
+    }
+    const std::string zbook_path = layer_file_path(options.pathname, step);
+    if (!fs::exists(zbook_path)) {
+        return 0.0;
+    }
+    const std::string output_path = compressed_layer_file_path(options.pathname, step);
+    if (compressed_layer_is_fresh(zbook_path, output_path)) {
+        std::error_code ec;
+        fs::remove(zbook_path, ec);
+        return 0.0;
+    }
+    const double t0 = now_seconds();
+    const std::string temp_path = output_path + ".tmp";
+    std::error_code ec;
+    fs::remove(temp_path, ec);
+    EXCompressedResult::compress_zbook_to_ex_result(
+        zbook_path,
+        lut_file_path(options.pathname),
+        temp_path,
+        4096U,
+        65536U,
+        5
+    );
+    fs::remove(output_path, ec);
+    fs::rename(temp_path, output_path, ec);
+    if (ec) {
+        fs::remove(temp_path, ec);
+        throw std::runtime_error("failed to finalize EX compressed result: " + output_path);
+    }
+    fs::remove(zbook_path, ec);
+    return now_seconds() - t0;
+}
+
 double compress_all_layer_results(const RunOptions &options) {
     if (!options.compress || options.steps <= 0) {
         return 0.0;
     }
     const double t0 = now_seconds();
-    const std::string zlut_path = lut_file_path(options.pathname);
     for (int step = 0; step < options.steps; ++step) {
-        const std::string zbook_path = layer_file_path(options.pathname, step);
-        if (!fs::exists(zbook_path)) {
-            continue;
-        }
-        const std::string output_path = compressed_layer_file_path(options.pathname, step);
-        if (compressed_layer_is_fresh(zbook_path, output_path)) {
-            std::error_code ec;
-            fs::remove(zbook_path, ec);
-            continue;
-        }
-        const std::string temp_path = output_path + ".tmp";
-        std::error_code ec;
-        fs::remove(temp_path, ec);
-        EXCompressedResult::compress_zbook_to_ex_result(
-            zbook_path,
-            zlut_path,
-            temp_path,
-            4096U,
-            65536U,
-            5
-        );
-        fs::remove(output_path, ec);
-        fs::rename(temp_path, output_path, ec);
-        if (ec) {
-            fs::remove(temp_path, ec);
-            throw std::runtime_error("failed to finalize EX compressed result: " + output_path);
-        }
-        fs::remove(zbook_path, ec);
+        (void)compress_layer_result_from_file(options, step);
     }
     return now_seconds() - t0;
 }
@@ -2124,6 +2191,476 @@ Prefix36Layer compact_layer(
     return out;
 }
 
+bool keep_bit_is_set(const std::vector<uint64_t> &keep_bits, uint64_t index) {
+    const uint64_t word = index >> 6U;
+    if (word >= keep_bits.size()) {
+        return false;
+    }
+    return (keep_bits[static_cast<size_t>(word)] & (1ULL << (index & 63U))) != 0ULL;
+}
+
+uint32_t count_keep_range(const std::vector<uint64_t> &keep_bits, uint32_t begin, uint32_t count) {
+    if (count == 0U) {
+        return 0U;
+    }
+    const uint64_t range_begin = begin;
+    const uint64_t range_end = range_begin + count;
+    const uint64_t first_word = range_begin >> 6U;
+    const uint64_t last_word = (range_end - 1U) >> 6U;
+    uint32_t kept = 0U;
+    for (uint64_t word = first_word; word <= last_word && word < keep_bits.size(); ++word) {
+        uint64_t value = keep_bits[static_cast<size_t>(word)];
+        if (word == first_word && (range_begin & 63U) != 0U) {
+            value &= ~((1ULL << (range_begin & 63U)) - 1ULL);
+        }
+        if (word == last_word && (range_end & 63U) != 0U) {
+            value &= ((1ULL << (range_end & 63U)) - 1ULL);
+        }
+        kept += popcount_u64(value);
+    }
+    return kept;
+}
+
+Prefix36Layer compact_layer_by_keep_bits(
+    const Prefix36Layer &input,
+    const DenseLow24RankLut &dense_lut,
+    const std::vector<uint64_t> &keep_bits,
+    int num_threads
+) {
+    Prefix36Layer out;
+    out.layer_sum = input.layer_sum;
+    out.threshold_bits = input.threshold_bits;
+
+    const size_t bucket_count = input.bucket_keys.size();
+    if (bucket_count == 0U || input.success_values.empty()) {
+        return out;
+    }
+
+    std::vector<CompactBucketPlan> plans(bucket_count);
+    const int thread_count = std::max(1, num_threads);
+
+#pragma omp parallel for schedule(dynamic, 256) num_threads(thread_count)
+    for (int64_t i_signed = 0; i_signed < static_cast<int64_t>(bucket_count); ++i_signed) {
+        const size_t i = static_cast<size_t>(i_signed);
+        CompactBucketPlan plan;
+        const uint32_t group = sum_index(key_remaining_sum(input.bucket_keys[i]));
+        const uint32_t valid_count = dense_lut.size_table[group];
+        plan.valid_count = valid_count;
+        plan.is_small = valid_count <= input.threshold_bits;
+        plan.bitmap_units = plan.is_small
+            ? static_cast<uint32_t>(bytes_for_bits(valid_count))
+            : static_cast<uint32_t>(words_for_bits(valid_count));
+        plan.old_bitmap_offset = input.bitmap_offsets[i];
+        plan.old_success_offset = input.success_offsets[i];
+        plan.live_count = compact_count_bitmap_live(input, plan);
+        plan.kept_count = count_keep_range(keep_bits, plan.old_success_offset, plan.live_count);
+        plans[i] = plan;
+    }
+
+    uint64_t output_bucket_count = 0;
+    uint64_t small_bitmap_bytes = 0;
+    uint64_t large_bitmap_words = 0;
+    uint64_t large_rank_base_count = 0;
+    uint64_t success_value_count = 0;
+    for (size_t i = 0; i < bucket_count; ++i) {
+        CompactBucketPlan &plan = plans[i];
+        if (plan.kept_count == 0U) {
+            continue;
+        }
+        if (output_bucket_count > std::numeric_limits<uint32_t>::max()) {
+            throw std::runtime_error("EX prefix36 keep compact bucket count exceeds uint32_t");
+        }
+        if (success_value_count > std::numeric_limits<uint32_t>::max()) {
+            throw std::runtime_error("EX prefix36 keep compact success offset exceeds uint32_t");
+        }
+        plan.out_bucket_index = static_cast<uint32_t>(output_bucket_count++);
+        plan.out_success_offset = static_cast<uint32_t>(success_value_count);
+        success_value_count += plan.kept_count;
+        if (plan.is_small) {
+            if (small_bitmap_bytes > std::numeric_limits<uint32_t>::max()) {
+                throw std::runtime_error("EX prefix36 keep compact small bitmap offset exceeds uint32_t");
+            }
+            plan.out_bitmap_offset = static_cast<uint32_t>(small_bitmap_bytes);
+            small_bitmap_bytes += plan.bitmap_units;
+        } else {
+            if (large_bitmap_words > std::numeric_limits<uint32_t>::max() ||
+                large_rank_base_count > std::numeric_limits<uint32_t>::max()) {
+                throw std::runtime_error("EX prefix36 keep compact large bitmap offset exceeds uint32_t");
+            }
+            plan.out_bitmap_offset = static_cast<uint32_t>(large_bitmap_words);
+            plan.out_large_rank_offset = static_cast<uint32_t>(large_rank_base_count);
+            large_bitmap_words += plan.bitmap_units;
+            large_rank_base_count += large_rank_bases_for_words(plan.bitmap_units);
+        }
+    }
+    if (success_value_count == 0U) {
+        return out;
+    }
+
+    out.bucket_keys.resize(static_cast<size_t>(output_bucket_count));
+    out.bitmap_offsets.resize(static_cast<size_t>(output_bucket_count));
+    out.success_offsets.resize(static_cast<size_t>(output_bucket_count));
+    out.large_rank_offsets.resize(static_cast<size_t>(output_bucket_count));
+    out.small_bitmap_bytes.assign(static_cast<size_t>(small_bitmap_bytes), 0U);
+    out.large_bitmap_words.assign(static_cast<size_t>(large_bitmap_words), 0ULL);
+    out.large_rank_bases.assign(static_cast<size_t>(large_rank_base_count), 0U);
+    out.success_values.resize(static_cast<size_t>(success_value_count));
+
+#pragma omp parallel for schedule(dynamic, 256) num_threads(thread_count)
+    for (int64_t i_signed = 0; i_signed < static_cast<int64_t>(bucket_count); ++i_signed) {
+        const size_t i = static_cast<size_t>(i_signed);
+        const CompactBucketPlan &plan = plans[i];
+        if (plan.kept_count == 0U) {
+            continue;
+        }
+
+        const uint32_t out_bucket = plan.out_bucket_index;
+        out.bucket_keys[out_bucket] = input.bucket_keys[i];
+        out.bitmap_offsets[out_bucket] = plan.out_bitmap_offset;
+        out.success_offsets[out_bucket] = plan.out_success_offset;
+        out.large_rank_offsets[out_bucket] = plan.is_small ? 0U : plan.out_large_rank_offset;
+
+        if (plan.kept_count == plan.live_count) {
+            std::copy_n(
+                input.success_values.data() + plan.old_success_offset,
+                plan.live_count,
+                out.success_values.data() + plan.out_success_offset
+            );
+            if (plan.is_small) {
+                std::copy_n(
+                    input.small_bitmap_bytes.data() + plan.old_bitmap_offset,
+                    plan.bitmap_units,
+                    out.small_bitmap_bytes.data() + plan.out_bitmap_offset
+                );
+            } else {
+                std::copy_n(
+                    input.large_bitmap_words.data() + plan.old_bitmap_offset,
+                    plan.bitmap_units,
+                    out.large_bitmap_words.data() + plan.out_bitmap_offset
+                );
+                fill_large_rank_bases(
+                    out,
+                    plan.out_bitmap_offset,
+                    plan.out_large_rank_offset,
+                    plan.bitmap_units
+                );
+            }
+            continue;
+        }
+
+        uint32_t ordinal = 0U;
+        uint32_t kept = 0U;
+        if (plan.is_small) {
+            for (uint32_t byte_idx = 0; byte_idx < plan.bitmap_units; ++byte_idx) {
+                uint8_t value = input.small_bitmap_bytes[plan.old_bitmap_offset + byte_idx];
+                uint8_t out_value = 0U;
+                while (value != 0U) {
+                    const uint32_t bit = countr_zero_u32(value);
+                    const uint32_t rank = byte_idx * 8U + bit;
+                    if (rank >= plan.valid_count) {
+                        break;
+                    }
+                    const uint32_t success_index = plan.old_success_offset + ordinal;
+                    if (keep_bit_is_set(keep_bits, success_index)) {
+                        out_value = static_cast<uint8_t>(out_value | static_cast<uint8_t>(1U << bit));
+                        out.success_values[static_cast<size_t>(plan.out_success_offset + kept)] =
+                            input.success_values[static_cast<size_t>(success_index)];
+                        ++kept;
+                    }
+                    ++ordinal;
+                    value = static_cast<uint8_t>(value & static_cast<uint8_t>(value - 1U));
+                }
+                out.small_bitmap_bytes[plan.out_bitmap_offset + byte_idx] = out_value;
+            }
+        } else {
+            for (uint32_t word_idx = 0; word_idx < plan.bitmap_units; ++word_idx) {
+                uint64_t value = input.large_bitmap_words[plan.old_bitmap_offset + word_idx];
+                uint64_t out_value = 0ULL;
+                while (value != 0ULL) {
+                    const uint32_t bit = countr_zero_u64(value);
+                    const uint32_t rank = word_idx * 64U + bit;
+                    if (rank >= plan.valid_count) {
+                        break;
+                    }
+                    const uint32_t success_index = plan.old_success_offset + ordinal;
+                    if (keep_bit_is_set(keep_bits, success_index)) {
+                        out_value |= (1ULL << bit);
+                        out.success_values[static_cast<size_t>(plan.out_success_offset + kept)] =
+                            input.success_values[static_cast<size_t>(success_index)];
+                        ++kept;
+                    }
+                    ++ordinal;
+                    value &= value - 1ULL;
+                }
+                out.large_bitmap_words[plan.out_bitmap_offset + word_idx] = out_value;
+            }
+            fill_large_rank_bases(
+                out,
+                plan.out_bitmap_offset,
+                plan.out_large_rank_offset,
+                plan.bitmap_units
+            );
+        }
+        if (kept != plan.kept_count) {
+            throw std::runtime_error("EX prefix36 keep compact kept count mismatch");
+        }
+    }
+    out.live_board_count = success_value_count;
+    return out;
+}
+
+struct OptimalBranchStats {
+    uint64_t source_live = 0;
+    uint64_t candidates = 0;
+    uint64_t found = 0;
+    uint64_t marked = 0;
+    double mark_seconds = 0.0;
+};
+
+struct OptimalMarkWorkspace {
+    static constexpr size_t kMaxCells = static_cast<size_t>(kBatchSize) * 16U;
+    static constexpr size_t kMaxCandidates = kMaxCells * 4U;
+    std::array<uint32_t, kMaxCells> best_success{};
+    std::array<uint32_t, kMaxCells> best_index{};
+    std::array<uint64_t, kMaxCandidates> canonical_candidates{};
+    std::array<uint16_t, kMaxCandidates> candidate_refs{};
+    std::vector<PreparedQuery> queries;
+
+    OptimalMarkWorkspace() {
+        queries.reserve(kMaxCandidates);
+    }
+};
+
+void mark_keep_index(std::vector<std::atomic<uint64_t>> &keep_words, uint32_t success_index) {
+    const uint32_t word = success_index >> 6U;
+    if (word >= keep_words.size()) {
+        return;
+    }
+    keep_words[static_cast<size_t>(word)].fetch_or(
+        1ULL << (success_index & 63U),
+        std::memory_order_relaxed
+    );
+}
+
+template <typename Mover>
+OptimalBranchStats mark_optimal_batch(
+    const uint64_t *boards,
+    uint32_t board_count,
+    const Prefix36Layer &target,
+    const DenseLow24RankLut &dense_lut,
+    const ZMaskFrozen::ZMaskLuts &z_luts,
+    const PatternSpec &spec,
+    uint32_t spawn_exp,
+    std::vector<std::atomic<uint64_t>> &keep_words,
+    OptimalMarkWorkspace &workspace
+) {
+    OptimalBranchStats stats;
+    stats.source_live = board_count;
+    workspace.queries.clear();
+    uint32_t cell_count = 0U;
+    uint32_t canonical_count = 0U;
+
+    auto flush_canonical = [&]() {
+        if (canonical_count == 0U) {
+            return;
+        }
+        CanonicalBatch::canonicalize_inplace(
+            workspace.canonical_candidates.data(),
+            canonical_count,
+            spec.symm_mode
+        );
+        for (uint32_t i = 0; i < canonical_count; ++i) {
+            PreparedQuery query = prepare_query_dense_hot(
+                dense_lut,
+                z_luts,
+                workspace.canonical_candidates[i],
+                target.threshold_bits
+            );
+            query.ref = workspace.candidate_refs[i];
+            workspace.queries.push_back(query);
+        }
+        canonical_count = 0U;
+    };
+
+    auto push_candidate = [&](uint64_t moved, uint16_t ref) {
+        workspace.canonical_candidates[canonical_count] = moved;
+        workspace.candidate_refs[canonical_count] = ref;
+        ++canonical_count;
+        ++stats.candidates;
+        if (canonical_count == OptimalMarkWorkspace::kMaxCandidates) {
+            flush_canonical();
+        }
+    };
+
+    for (uint32_t board_slot = 0; board_slot < board_count; ++board_slot) {
+        const uint64_t board = boards[board_slot];
+        uint32_t empty_mask = zero_cell_mask16(board);
+        while (empty_mask != 0U) {
+            const uint32_t cell = countr_zero_u32(empty_mask);
+            empty_mask &= empty_mask - 1U;
+            const uint16_t ref = static_cast<uint16_t>(cell_count++);
+            workspace.best_success[ref] = 0U;
+            workspace.best_index[ref] = std::numeric_limits<uint32_t>::max();
+            const uint64_t spawned = board | (static_cast<uint64_t>(spawn_exp) << (4U * cell));
+            const auto moves = Mover::move_all_dir(spawned);
+            const uint64_t moved_boards[4] = {
+                std::get<0>(moves), std::get<1>(moves),
+                std::get<2>(moves), std::get<3>(moves)
+            };
+            for (uint64_t moved : moved_boards) {
+                if (moved != spawned && is_pattern(moved, spec.pattern_masks)) {
+                    push_candidate(moved, ref);
+                }
+            }
+        }
+    }
+    flush_canonical();
+
+    uint32_t success_indices[kBatchSize];
+    uint8_t found_flags[kBatchSize];
+    for (uint32_t base = 0; base < static_cast<uint32_t>(workspace.queries.size()); base += kBatchSize) {
+        const uint32_t count = std::min<uint32_t>(kBatchSize, static_cast<uint32_t>(workspace.queries.size()) - base);
+        lookup_prepared_batch_direct_entry(
+            target,
+            workspace.queries.data() + base,
+            success_indices,
+            found_flags,
+            count
+        );
+        for (uint32_t i = 0; i < count; ++i) {
+            if (found_flags[i] != 0U) {
+                __builtin_prefetch(&target.success_values[static_cast<size_t>(success_indices[i])], 0, 1);
+            }
+        }
+        for (uint32_t i = 0; i < count; ++i) {
+            if (found_flags[i] == 0U) {
+                continue;
+            }
+            ++stats.found;
+            const uint32_t success_index = success_indices[i];
+            const uint32_t success = target.success_values[static_cast<size_t>(success_index)];
+            const uint16_t ref = workspace.queries[base + i].ref;
+            if (success > workspace.best_success[ref]) {
+                workspace.best_success[ref] = success;
+                workspace.best_index[ref] = success_index;
+            }
+        }
+    }
+
+    for (uint32_t ref = 0; ref < cell_count; ++ref) {
+        const uint32_t success_index = workspace.best_index[ref];
+        if (workspace.best_success[ref] != 0U &&
+            success_index != std::numeric_limits<uint32_t>::max()) {
+            mark_keep_index(keep_words, success_index);
+            ++stats.marked;
+        }
+    }
+    return stats;
+}
+
+template <typename Mover>
+OptimalBranchStats mark_optimal_branches_from_source(
+    const Prefix36Layer &source,
+    const Prefix36Layer &target,
+    const DenseLow24RankLut &dense_lut,
+    const ZMaskFrozen::ZMaskLuts &z_luts,
+    const PatternSpec &spec,
+    uint32_t spawn_exp,
+    std::vector<std::atomic<uint64_t>> &keep_words,
+    int num_threads
+) {
+    const double t0 = now_seconds();
+    std::vector<OptimalBranchStats> per_thread(static_cast<size_t>(num_threads));
+#pragma omp parallel num_threads(num_threads)
+    {
+        const int tid = omp_get_thread_num();
+        OptimalBranchStats &stats = per_thread[static_cast<size_t>(tid)];
+        std::array<uint64_t, kBatchSize> board_buffer{};
+        uint32_t board_buffer_count = 0U;
+        OptimalMarkWorkspace workspace;
+        auto flush = [&]() {
+            if (board_buffer_count == 0U) {
+                return;
+            }
+            OptimalBranchStats batch = mark_optimal_batch<Mover>(
+                board_buffer.data(),
+                board_buffer_count,
+                target,
+                dense_lut,
+                z_luts,
+                spec,
+                spawn_exp,
+                keep_words,
+                workspace
+            );
+            stats.source_live += batch.source_live;
+            stats.candidates += batch.candidates;
+            stats.found += batch.found;
+            stats.marked += batch.marked;
+            board_buffer_count = 0U;
+        };
+#pragma omp for schedule(dynamic, 16)
+        for (int64_t bucket_idx_signed = 0; bucket_idx_signed < static_cast<int64_t>(source.bucket_keys.size()); ++bucket_idx_signed) {
+            const uint32_t bucket_idx = static_cast<uint32_t>(bucket_idx_signed);
+            const uint64_t key = source.bucket_keys[bucket_idx];
+            const uint64_t prefix36 = key_prefix36(key);
+            const uint32_t group = sum_index(key_remaining_sum(key));
+            const uint32_t valid_count = dense_lut.size_table[group];
+            const uint32_t unrank_offset = dense_lut.offset_table[group];
+            auto push_rank = [&](uint32_t rank) {
+                board_buffer[board_buffer_count++] =
+                    (prefix36 << kSuffixBits) |
+                    static_cast<uint64_t>(dense_lut.unrank_array[unrank_offset + rank]);
+                if (board_buffer_count == kBatchSize) {
+                    flush();
+                }
+            };
+            if (valid_count <= source.threshold_bits) {
+                const uint32_t offset = source.bitmap_offsets[bucket_idx];
+                const uint32_t bytes = static_cast<uint32_t>(bytes_for_bits(valid_count));
+                for (uint32_t byte_idx = 0; byte_idx < bytes; ++byte_idx) {
+                    uint8_t value = source.small_bitmap_bytes[offset + byte_idx];
+                    while (value != 0U) {
+                        const uint32_t bit = countr_zero_u32(value);
+                        const uint32_t rank = byte_idx * 8U + bit;
+                        if (rank >= valid_count) {
+                            break;
+                        }
+                        push_rank(rank);
+                        value = static_cast<uint8_t>(value & static_cast<uint8_t>(value - 1U));
+                    }
+                }
+            } else {
+                const uint32_t offset = source.bitmap_offsets[bucket_idx];
+                const uint32_t words = static_cast<uint32_t>(words_for_bits(valid_count));
+                for (uint32_t word_idx = 0; word_idx < words; ++word_idx) {
+                    uint64_t value = source.large_bitmap_words[offset + word_idx];
+                    while (value != 0ULL) {
+                        const uint32_t bit = countr_zero_u64(value);
+                        const uint32_t rank = word_idx * 64U + bit;
+                        if (rank >= valid_count) {
+                            break;
+                        }
+                        push_rank(rank);
+                        value &= value - 1ULL;
+                    }
+                }
+            }
+        }
+        flush();
+    }
+    OptimalBranchStats total;
+    for (const OptimalBranchStats &stats : per_thread) {
+        total.source_live += stats.source_live;
+        total.candidates += stats.candidates;
+        total.found += stats.found;
+        total.marked += stats.marked;
+    }
+    total.mark_seconds = now_seconds() - t0;
+    return total;
+}
+
+template <typename Mover>
 void recalculate_batch_prefix36_write(
     const uint64_t *boards,
     const uint64_t *output_positions,
@@ -2197,7 +2734,7 @@ void recalculate_batch_prefix36_write(
             workspace.best2[ref] = 0U;
             workspace.best4[ref] = 0U;
             const uint64_t spawn2 = board | (1ULL << (4U * cell));
-            const auto moves2 = BoardMover::move_all_dir(spawn2);
+            const auto moves2 = Mover::move_all_dir(spawn2);
             const uint64_t b2[4] = {std::get<0>(moves2), std::get<1>(moves2), std::get<2>(moves2), std::get<3>(moves2)};
             for (uint64_t moved : b2) {
                 if (moved != spawn2 && is_pattern(moved, spec.pattern_masks)) {
@@ -2205,7 +2742,7 @@ void recalculate_batch_prefix36_write(
                 }
             }
             const uint64_t spawn4 = board | (2ULL << (4U * cell));
-            const auto moves4 = BoardMover::move_all_dir(spawn4);
+            const auto moves4 = Mover::move_all_dir(spawn4);
             const uint64_t b4[4] = {std::get<0>(moves4), std::get<1>(moves4), std::get<2>(moves4), std::get<3>(moves4)};
             for (uint64_t moved : b4) {
                 if (moved != spawn4 && is_pattern(moved, spec.pattern_masks)) {
@@ -2259,6 +2796,7 @@ void recalculate_batch_prefix36_write(
     stats.checksum += checksum;
 }
 
+template <typename Mover>
 RecalcStats recalculate_current_layer(
     Prefix36Layer &current,
     const Prefix36Layer &future1,
@@ -2286,7 +2824,7 @@ RecalcStats recalculate_current_layer(
             if (board_buffer_count == 0U) {
                 return;
             }
-            recalculate_batch_prefix36_write(
+            recalculate_batch_prefix36_write<Mover>(
                 board_buffer.data(),
                 output_buffer.data(),
                 board_buffer_count,
@@ -2605,9 +3143,10 @@ void generate_forward_layers(
     double total_write = init_write_t1 - init_write_t0;
     std::vector<double> reserve_need_history;
     double retry_guard_factor = 0.0;
+    const uint32_t progress_total = classic_build_progress_total(options);
 
     for (int current_step = 0; current_step <= options.steps - 3; ++current_step) {
-        FormationProgress::update_build_progress(static_cast<uint32_t>(current_step + 1), classic_build_progress_total(options));
+        FormationProgress::update_build_progress(static_cast<uint32_t>(current_step + 1), progress_total);
         double factor = reserve_factor_for_step(current_step, reserve_need_history, retry_guard_factor);
         retry_guard_factor = 0.0;
         uint32_t retry_count = 0U;
@@ -2790,17 +3329,31 @@ SolveStepSummary solve_loaded_step_impl(
         }
         recalc.boards = current.live_board_count;
     } else {
-        recalc = recalculate_current_layer(
-            current,
-            future1,
-            future2,
-            dense_lut,
-            z_luts,
-            spec,
-            options,
-            do_check,
-            num_threads
-        );
+        if (options.is_variant) {
+            recalc = recalculate_current_layer<VBoardMover>(
+                current,
+                future1,
+                future2,
+                dense_lut,
+                z_luts,
+                spec,
+                options,
+                do_check,
+                num_threads
+            );
+        } else {
+            recalc = recalculate_current_layer<BoardMover>(
+                current,
+                future1,
+                future2,
+                dense_lut,
+                z_luts,
+                spec,
+                options,
+                do_check,
+                num_threads
+            );
+        }
     }
     const double recalc_t1 = now_seconds();
     recalc.seconds = recalc_t1 - recalc_t0;
@@ -2887,6 +3440,213 @@ SolveStepSummary solve_loaded_step_impl(
     return summary;
 }
 
+template <typename Mover>
+SolveStepSummary keep_only_optimal_branches_prefix36_impl(
+    const PatternSpec &spec,
+    const RunOptions &options,
+    const LutBundle &lut
+) {
+    SolveStepSummary total;
+    const uint32_t progress_total = classic_build_progress_total(options);
+    const uint32_t solve_progress_total = build_progress_total(options);
+    if (options.steps <= kOptimalBranchOnlyStartStep) {
+        for (int step = 0; step < options.steps; ++step) {
+            FormationProgress::update_build_progress(
+                solve_progress_total + static_cast<uint32_t>(step) + 1U,
+                progress_total
+            );
+        }
+        write_optimal_complete_marker(options);
+        return total;
+    }
+
+    const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
+    const int num_threads = thread_count_from_options(options);
+    const DTypeMode mode = dtype_mode_from_name(options.success_rate_dtype);
+    int last_done = std::max(kOptimalBranchOnlyStartStep - 1, read_optimal_layer_marker(options));
+    if (last_done >= options.steps - 1) {
+        if (options.compress) {
+            for (int step = 0; step < options.steps; ++step) {
+                const double seconds = compress_layer_result_from_file(options, step);
+                total.current_write_seconds += seconds;
+                total.total_seconds += seconds;
+            }
+        }
+        write_optimal_complete_marker(options);
+        return total;
+    }
+
+    Prefix36Layer prev2;
+    Prefix36Layer prev1;
+    int prev2_step = std::numeric_limits<int>::min();
+    int prev1_step = std::numeric_limits<int>::min();
+
+    for (int step = 0; step < options.steps; ++step) {
+        FormationProgress::update_build_progress(
+            solve_progress_total + static_cast<uint32_t>(step) + 1U,
+            progress_total
+        );
+        if (step < kOptimalBranchOnlyStartStep || step <= last_done) {
+            continue;
+        }
+
+        const double total_t0 = now_seconds();
+        const double read_t0 = now_seconds();
+        if (prev2_step != step - 2) {
+            prev2 = read_layer_input(
+                options.pathname,
+                step - 2,
+                io_config,
+                lut.dense_lut,
+                num_threads,
+                &lut
+            );
+            prev2_step = step - 2;
+        }
+        if (prev1_step != step - 1) {
+            prev1 = read_layer_input(
+                options.pathname,
+                step - 1,
+                io_config,
+                lut.dense_lut,
+                num_threads,
+                &lut
+            );
+            prev1_step = step - 1;
+        }
+        Prefix36Layer target = read_layer_input(
+            options.pathname,
+            step,
+            io_config,
+            lut.dense_lut,
+            num_threads,
+            &lut
+        );
+        const double read_seconds = now_seconds() - read_t0;
+        const uint64_t target_live_before = target.live_board_count;
+
+        const double index_t0 = now_seconds();
+        ensure_direct_index_built(target, lut.dense_lut.size_table);
+        const double index_seconds = now_seconds() - index_t0;
+
+        std::vector<std::atomic<uint64_t>> keep_words(
+            static_cast<size_t>((target.success_values.size() + 63U) >> 6U)
+        );
+        for (std::atomic<uint64_t> &word : keep_words) {
+            word.store(0ULL, std::memory_order_relaxed);
+        }
+
+        const double mark_t0 = now_seconds();
+        OptimalBranchStats from_prev2 = mark_optimal_branches_from_source<Mover>(
+            prev2,
+            target,
+            lut.dense_lut,
+            lut.row_luts,
+            spec,
+            2U,
+            keep_words,
+            num_threads
+        );
+        OptimalBranchStats from_prev1 = mark_optimal_branches_from_source<Mover>(
+            prev1,
+            target,
+            lut.dense_lut,
+            lut.row_luts,
+            spec,
+            1U,
+            keep_words,
+            num_threads
+        );
+        const double mark_seconds = now_seconds() - mark_t0;
+
+        std::vector<uint64_t> keep_bits(keep_words.size(), 0ULL);
+        for (size_t i = 0; i < keep_words.size(); ++i) {
+            keep_bits[i] = keep_words[i].load(std::memory_order_relaxed);
+        }
+
+        const double compact_t0 = now_seconds();
+        Prefix36Layer pruned = compact_layer_by_keep_bits(target, lut.dense_lut, keep_bits, num_threads);
+        const double compact_seconds = now_seconds() - compact_t0;
+
+        const double write_t0 = now_seconds();
+        write_layer_file(layer_file_path(options.pathname, step), pruned, spec, mode, io_config);
+        remove_generated_layer_input(options.pathname, step);
+        const double write_seconds = now_seconds() - write_t0;
+        write_optimal_layer_marker(options, step);
+
+        double compress_seconds = 0.0;
+        if (options.compress && step - 2 >= 0) {
+            compress_seconds += compress_layer_result_from_memory(options, step - 2, prev2, spec, mode);
+            std::error_code ec;
+            fs::remove(layer_file_path(options.pathname, step - 2), ec);
+        }
+
+        const double total_seconds = now_seconds() - total_t0;
+        const double compute_seconds = index_seconds + mark_seconds + compact_seconds;
+        append_solve_stats(
+            options,
+            "optimal_branch",
+            step,
+            prev2.live_board_count + prev1.live_board_count,
+            pruned.live_board_count,
+            prev1.live_board_count,
+            target_live_before,
+            target_live_before,
+            0.0,
+            RuntimeControls::retention_ratio(pruned.live_board_count, target_live_before),
+            0.0,
+            mark_seconds,
+            compact_seconds,
+            index_seconds,
+            0.0,
+            write_seconds + compress_seconds,
+            0.0,
+            read_seconds,
+            total_seconds,
+            compute_seconds,
+            &pruned
+        );
+
+        total.input_live += target_live_before;
+        total.output_live += pruned.live_board_count;
+        total.recalc_seconds += mark_seconds;
+        total.compact_seconds += compact_seconds;
+        total.future_index_seconds += index_seconds;
+        total.current_write_seconds += write_seconds + compress_seconds;
+        total.read_seconds += read_seconds;
+        total.total_seconds += total_seconds;
+        total.compute_seconds += compute_seconds;
+
+        (void)from_prev2;
+        (void)from_prev1;
+        prev2 = std::move(prev1);
+        prev2_step = step - 1;
+        prev1 = std::move(pruned);
+        prev1_step = step;
+        last_done = step;
+    }
+
+    if (options.compress) {
+        for (int step = 0; step < options.steps; ++step) {
+            const double seconds = compress_layer_result_from_file(options, step);
+            total.current_write_seconds += seconds;
+            total.total_seconds += seconds;
+        }
+    }
+    write_optimal_complete_marker(options);
+    return total;
+}
+
+SolveStepSummary keep_only_optimal_branches_prefix36(
+    const PatternSpec &spec,
+    const RunOptions &options,
+    const LutBundle &lut
+) {
+    return options.is_variant
+        ? keep_only_optimal_branches_prefix36_impl<VBoardMover>(spec, options, lut)
+        : keep_only_optimal_branches_prefix36_impl<BoardMover>(spec, options, lut);
+}
+
 SolveStepSummary solve_single_step_impl(
     const PatternSpec &spec,
     const RunOptions &options,
@@ -2928,8 +3688,13 @@ void run_pattern_build(
     const PatternSpec &spec,
     const RunOptions &options
 ) {
-    if (all_compressed_layers_exist(options)) {
+    if (compressed_results_are_complete_for_options(options)) {
         return;
+    }
+    if (options.optimal_branch_only && all_compressed_layers_exist(options)) {
+        throw std::runtime_error(
+            "EX optimal_branch_only requested, but compressed EX results lack ex_optimal_complete marker; rebuild the table"
+        );
     }
     const LutBundle lut = load_or_build_prefix36_lut(arr_init, spec, options);
     generate_forward_layers(arr_init, spec, options, lut);
@@ -2941,12 +3706,54 @@ void run_pattern_solve(
     const PatternSpec &spec,
     const RunOptions &options
 ) {
-    if (all_compressed_layers_exist(options)) {
+    if (compressed_results_are_complete_for_options(options)) {
         return;
     }
+    if (options.optimal_branch_only && all_compressed_layers_exist(options)) {
+        throw std::runtime_error(
+            "EX optimal_branch_only requested, but compressed EX results lack ex_optimal_complete marker; rebuild the table"
+        );
+    }
     const LutBundle lut = load_or_build_prefix36_lut(arr_init, spec, options);
+
+    if (options.optimal_branch_only && !optimal_complete_marker_exists(options)) {
+        const int last_done = read_optimal_layer_marker(options);
+        if (optimal_resume_inputs_exist(options, last_done)) {
+            SolveStepSummary optimal_summary = keep_only_optimal_branches_prefix36(spec, options, lut);
+            append_solve_stats(
+                options,
+                "_total",
+                -1,
+                optimal_summary.input_live,
+                optimal_summary.output_live,
+                0,
+                0,
+                0,
+                RuntimeControls::current_deletion_threshold(options),
+                RuntimeControls::retention_ratio(optimal_summary.output_live, optimal_summary.input_live),
+                0.0,
+                optimal_summary.recalc_seconds,
+                optimal_summary.compact_seconds,
+                optimal_summary.future_index_seconds,
+                0.0,
+                optimal_summary.current_write_seconds,
+                0.0,
+                optimal_summary.read_seconds,
+                optimal_summary.total_seconds,
+                optimal_summary.compute_seconds,
+                nullptr
+            );
+            return;
+        }
+    }
+
     generate_forward_layers(arr_init, spec, options, lut);
     reset_solve_stats(options);
+    if (options.optimal_branch_only) {
+        std::error_code ec;
+        fs::remove(optimal_layer_marker_path(options.pathname), ec);
+        fs::remove(optimal_complete_marker_path(options.pathname), ec);
+    }
     SolveStepSummary total;
     const int first_step = options.steps - 3;
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
@@ -2961,10 +3768,12 @@ void run_pattern_solve(
         options.pathname, first_step + 2, io_config, lut.dense_lut, num_threads, &lut);
     double carried_read_seconds = now_seconds() - initial_read_t0;
     double deletion_threshold_state = RuntimeControls::current_deletion_threshold(options);
+    const uint32_t progress_total = classic_build_progress_total(options);
+    const uint32_t solve_progress_base = build_progress_total(options);
     for (int step = first_step; step >= 0; --step) {
         FormationProgress::update_build_progress(
-            static_cast<uint32_t>((first_step - step) + 1),
-            classic_build_progress_total(options)
+            solve_progress_base - static_cast<uint32_t>(step) - 2U,
+            progress_total
         );
         const double read_t0 = now_seconds();
         Prefix36Layer current = read_layer_input(
@@ -2998,9 +3807,22 @@ void run_pattern_solve(
         future2 = std::move(future1);
         future1 = std::move(current);
     }
-    const double compress_seconds = compress_all_layer_results(options);
-    total.total_seconds += compress_seconds;
-    total.current_write_seconds += compress_seconds;
+    if (options.optimal_branch_only) {
+        SolveStepSummary optimal_summary = keep_only_optimal_branches_prefix36(spec, options, lut);
+        total.input_live += optimal_summary.input_live;
+        total.output_live += optimal_summary.output_live;
+        total.recalc_seconds += optimal_summary.recalc_seconds;
+        total.compact_seconds += optimal_summary.compact_seconds;
+        total.future_index_seconds += optimal_summary.future_index_seconds;
+        total.current_write_seconds += optimal_summary.current_write_seconds;
+        total.read_seconds += optimal_summary.read_seconds;
+        total.total_seconds += optimal_summary.total_seconds;
+        total.compute_seconds += optimal_summary.compute_seconds;
+    } else {
+        const double compress_seconds = compress_all_layer_results(options);
+        total.total_seconds += compress_seconds;
+        total.current_write_seconds += compress_seconds;
+    }
     append_solve_stats(
         options,
         "_total",

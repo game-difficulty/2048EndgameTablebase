@@ -609,6 +609,8 @@ uint64_t apply_canonical(uint64_t board, int symm_mode) {
             return Calculator::canonical_min24(board);
         case SymmMode::Min34:
             return Calculator::canonical_min34(board);
+        case SymmMode::Min34Top:
+            return Calculator::canonical_min34_top(board);
         case SymmMode::Identity:
         default:
             return Calculator::canonical_identity(board);

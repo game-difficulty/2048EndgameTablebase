@@ -42,6 +42,8 @@ inline uint64_t canonical_by_mode(uint64_t board, int symm_mode) {
             return Calculator::canonical_min24(board);
         case SymmMode::Min34:
             return Calculator::canonical_min34(board);
+        case SymmMode::Min34Top:
+            return Calculator::canonical_min34_top(board);
         case SymmMode::Identity:
         default:
             return Calculator::canonical_identity(board);
@@ -60,6 +62,7 @@ inline std::pair<uint64_t, int> canonical_pair_by_mode(uint64_t board, int symm_
         case SymmMode::Min33:
         case SymmMode::Min24:
         case SymmMode::Min34:
+        case SymmMode::Min34Top:
         default:
             return Calculator::canonical_identity_pair(board);
     }

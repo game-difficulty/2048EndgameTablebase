@@ -31,6 +31,7 @@ _SYMM_MODE_BY_NAME = {
     "min33": formation_core.SymmMode.Min33 if formation_core else 4,
     "min24": formation_core.SymmMode.Min24 if formation_core else 5,
     "min34": formation_core.SymmMode.Min34 if formation_core else 6,
+    "min34top": formation_core.SymmMode.Min34Top if formation_core else 7,
 }
 
 
@@ -85,6 +86,7 @@ def _apply_physical_fields(pattern_spec, resolution: PhysicalPatternResolution |
         return
     pattern_spec.pattern_masks = list(resolution.pattern_masks)
     pattern_spec.success_shifts = list(resolution.success_shifts)
+    pattern_spec.symm_mode = _symm_mode_value(resolution.physical_canonical_mode)
     pattern_spec.physical_transform = int(resolution.transform_id)
     pattern_spec.inverse_physical_transform = int(resolution.inverse_transform_id)
     pattern_spec.logical_pattern_signature = int(resolution.logical_pattern_signature)
@@ -180,6 +182,7 @@ def append_ex_physical_config(output_path: str, resolution: PhysicalPatternResol
     with open(output_path, "a", encoding="utf-8") as file:
         file.write(f"ex_physical_transform: {resolution.transform_id}\n")
         file.write(f"ex_inverse_physical_transform: {resolution.inverse_transform_id}\n")
+        file.write(f"ex_physical_canonical_mode: {resolution.physical_canonical_mode}\n")
         file.write(f"ex_logical_pattern_signature: {resolution.logical_pattern_signature}\n")
         file.write(f"ex_physical_pattern_signature: {resolution.physical_pattern_signature}\n")
         file.write(f"ex_physical_transform_score: {resolution.score}\n")
@@ -483,10 +486,12 @@ def v_start_build(pattern: str, target: int, pathname: str) -> bool:
     spawn_rate4 = float(config["4_spawn_rate"])
     meta, tile_sum, seed_boards, extra_steps = _resolve_build_meta(pattern)
     steps, docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
-    save_config_to_txt(pathname + "config.txt")
     use_ex_algo = bool(config.get("zmask_algo", False))
     use_ad_algo = bool(config.get("advanced_algo", False))
     use_exad_algo = use_ex_algo and use_ad_algo
+    if use_ad_algo:
+        raise ValueError("Variant patterns do not support advanced or EXAD algorithms; use classic or EX.")
+    save_config_to_txt(pathname + "config.txt")
     ex_resolution = None
     seed_boards_for_build = seed_boards
     if use_ex_algo:

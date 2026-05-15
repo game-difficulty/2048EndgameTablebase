@@ -40,13 +40,14 @@ _ALLOWED_TRANSFORMS = {
 class PhysicalPatternResolution:
     transform_id: int
     inverse_transform_id: int
+    physical_canonical_mode: str
     pattern_masks: list[int]
     success_shifts: list[int]
     fixed_32k_shifts: list[int]
     initial_boards: np.ndarray
     logical_pattern_signature: int
     physical_pattern_signature: int
-    score: tuple[int, int, int, int, int, int]
+    score: tuple[int, ...]
 
 
 def _require_native() -> None:
@@ -85,6 +86,16 @@ def _large_initial_suffix_count(boards: Sequence[int] | np.ndarray, target_expon
         for pos in range(7):
             tile = (value >> (4 * pos)) & 0xF
             if tile > int(target_exponent) and tile != 15:
+                count += 1
+    return count
+
+
+def _variant_wall_suffix_count(boards: Sequence[int] | np.ndarray) -> int:
+    count = 0
+    for board in np.asarray(boards, dtype=np.uint64):
+        value = int(board)
+        for pos in range(7):
+            if ((value >> (4 * pos)) & 0xF) == 0xF:
                 count += 1
     return count
 
@@ -144,6 +155,7 @@ def _canonicalize_boards(boards: np.ndarray, canonical_mode: str) -> np.ndarray:
         "min33": mover_runtime.canonical_min33,
         "min24": mover_runtime.canonical_min24,
         "min34": mover_runtime.canonical_min34,
+        "min34top": mover_runtime.canonical_min34top,
     }.get(mode)
     if canonicalizer is None:
         return np.unique(np.asarray(boards, dtype=np.uint64))
@@ -163,6 +175,13 @@ def resolve_ex_physical_pattern(
 
     canonical_mode = str(meta.get("canonical_mode", "identity")).lower()
     candidates = _ALLOWED_TRANSFORMS.get(canonical_mode, (0,))
+    use_min34_top_variant = (
+        not advanced
+        and canonical_mode == "min34"
+        and str(meta.get("category", "")).lower() == "variant"
+    )
+    if use_min34_top_variant:
+        candidates = (0, 2)
     logical_masks = [int(mask) for mask in meta.get("pattern_masks", ())]
     logical_success = [int(shift) for shift in meta.get("success_shifts", ())]
     if advanced:
@@ -174,8 +193,11 @@ def resolve_ex_physical_pattern(
         num_free = 0
 
     boards = np.asarray(initial_boards, dtype=np.uint64)
-    best: tuple[tuple[int, int, int, int, int, int], int, list[int], list[int], list[int], np.ndarray] | None = None
+    best: tuple[tuple[int, ...], int, str, list[int], list[int], list[int], np.ndarray] | None = None
     for transform_id in candidates:
+        physical_canonical_mode = canonical_mode
+        if use_min34_top_variant and transform_id == 2:
+            physical_canonical_mode = "min34top"
         masks = [_apply_transform(mask, transform_id) for mask in logical_masks]
         success = [_transform_shift(shift, transform_id) for shift in logical_success]
         fixed = [_transform_shift(shift, transform_id) for shift in logical_fixed]
@@ -183,24 +205,30 @@ def resolve_ex_physical_pattern(
             [_apply_transform(int(board), transform_id) for board in boards],
             dtype=np.uint64,
         )
-        transformed_boards = _canonicalize_boards(transformed_boards, canonical_mode)
+        transformed_boards = _canonicalize_boards(transformed_boards, physical_canonical_mode)
         per_mask_suffix = [_suffix_full_nibbles(mask) for mask in masks] or [0]
+        variant_wall_suffix = (
+            _variant_wall_suffix_count(transformed_boards)
+            if meta.get("category") == "variant"
+            else 0
+        )
         score = (
             sum(per_mask_suffix),
             max(per_mask_suffix),
             _suffix_shift_count(fixed),
+            variant_wall_suffix,
             _suffix_shift_count(success),
             _large_initial_suffix_count(transformed_boards, target_exponent),
             int(transform_id),
         )
-        candidate = (score, int(transform_id), masks, success, fixed, transformed_boards)
+        candidate = (score, int(transform_id), physical_canonical_mode, masks, success, fixed, transformed_boards)
         if best is None or candidate[0] < best[0]:
             best = candidate
 
     if best is None:
         raise RuntimeError(f"no EX physical transform candidate for pattern {pattern}")
 
-    score, transform_id, masks, success, fixed, transformed_boards = best
+    score, transform_id, physical_canonical_mode, masks, success, fixed, transformed_boards = best
     inverse_id = _INVERSE_TRANSFORM[transform_id]
     logical_signature = _signature(
         pattern,
@@ -215,7 +243,7 @@ def resolve_ex_physical_pattern(
     )
     physical_signature = _signature(
         pattern,
-        canonical_mode,
+        physical_canonical_mode,
         masks,
         success,
         fixed,
@@ -227,6 +255,7 @@ def resolve_ex_physical_pattern(
     return PhysicalPatternResolution(
         transform_id=transform_id,
         inverse_transform_id=inverse_id,
+        physical_canonical_mode=physical_canonical_mode,
         pattern_masks=masks,
         success_shifts=success,
         fixed_32k_shifts=fixed,

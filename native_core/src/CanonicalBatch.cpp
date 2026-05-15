@@ -30,6 +30,8 @@ inline uint64_t scalar_by_mode(uint64_t board, int symm_mode) {
             return Calculator::canonical_min24(board);
         case SymmMode::Min34:
             return Calculator::canonical_min34(board);
+        case SymmMode::Min34Top:
+            return Calculator::canonical_min34_top(board);
         case SymmMode::Identity:
         default:
             return Calculator::canonical_identity(board);
@@ -152,6 +154,17 @@ CANONICAL_AVX2 inline __m256i v256_rotate18034(__m256i board) {
         _mm256_slli_epi64(_mm256_and_si256(res, v256_set1(0x0000ffffffffffffULL)), 16));
 }
 
+CANONICAL_AVX2 inline __m256i v256_reverse_ud34_top(__m256i board) {
+    return v256_or3(
+        _mm256_and_si256(board, v256_set1(0xffff0000ffff0000ULL)),
+        _mm256_srli_epi64(_mm256_and_si256(board, v256_set1(0x0000ffff00000000ULL)), 32),
+        _mm256_slli_epi64(_mm256_and_si256(board, v256_set1(0x000000000000ffffULL)), 32));
+}
+
+CANONICAL_AVX2 inline __m256i v256_rotate18034_top(__m256i board) {
+    return v256_reverse_lr(v256_reverse_ud34_top(board));
+}
+
 CANONICAL_AVX2 inline __m256i v256_exchange_row02(__m256i board) {
     return v256_or3(
         _mm256_and_si256(board, v256_set1(0x0000ffff0000ffffULL)),
@@ -256,6 +269,11 @@ CANONICAL_AVX2 inline __m256i v256_canonical(__m256i board, int symm_mode) {
             best = v256_cmp_select(best, v256_reverse_lr(board));
             best = v256_cmp_select(best, v256_reverse_ud34(board));
             best = v256_cmp_select(best, v256_rotate18034(board));
+            return best;
+        case SymmMode::Min34Top:
+            best = v256_cmp_select(best, v256_reverse_lr(board));
+            best = v256_cmp_select(best, v256_reverse_ud34_top(board));
+            best = v256_cmp_select(best, v256_rotate18034_top(board));
             return best;
         case SymmMode::Min33:
             best = v256_cmp_select(best, v256_exchange_col02(board));
@@ -389,6 +407,17 @@ CANONICAL_AVX512 inline __m512i v512_rotate18034(__m512i board) {
         _mm512_slli_epi64(_mm512_and_si512(res, v512_set1(0x0000ffffffffffffULL)), 16));
 }
 
+DEFINE_V512_FROM_V256_BODY(v512_reverse_ud34_top, {
+    return v512_or3(
+        _mm512_and_si512(board, v512_set1(0xffff0000ffff0000ULL)),
+        _mm512_srli_epi64(_mm512_and_si512(board, v512_set1(0x0000ffff00000000ULL)), 32),
+        _mm512_slli_epi64(_mm512_and_si512(board, v512_set1(0x000000000000ffffULL)), 32));
+})
+
+CANONICAL_AVX512 inline __m512i v512_rotate18034_top(__m512i board) {
+    return v512_reverse_lr(v512_reverse_ud34_top(board));
+}
+
 DEFINE_V512_FROM_V256_BODY(v512_exchange_row02, {
     return v512_or3(
         _mm512_and_si512(board, v512_set1(0x0000ffff0000ffffULL)),
@@ -490,6 +519,11 @@ CANONICAL_AVX512 inline __m512i v512_canonical(__m512i board, int symm_mode) {
             best = v512_cmp_select(best, v512_reverse_lr(board));
             best = v512_cmp_select(best, v512_reverse_ud34(board));
             best = v512_cmp_select(best, v512_rotate18034(board));
+            return best;
+        case SymmMode::Min34Top:
+            best = v512_cmp_select(best, v512_reverse_lr(board));
+            best = v512_cmp_select(best, v512_reverse_ud34_top(board));
+            best = v512_cmp_select(best, v512_rotate18034_top(board));
             return best;
         case SymmMode::Min33:
             best = v512_cmp_select(best, v512_exchange_col02(board));

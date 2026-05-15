@@ -19,6 +19,7 @@ _SYMM_MODE_BY_NAME = {
     "min33": formation_core.SymmMode.Min33 if formation_core else 4,
     "min24": formation_core.SymmMode.Min24 if formation_core else 5,
     "min34": formation_core.SymmMode.Min34 if formation_core else 6,
+    "min34top": formation_core.SymmMode.Min34Top if formation_core else 7,
 }
 
 
@@ -49,7 +50,7 @@ class BookReaderEX:
         pattern_spec.name = pattern
         pattern_spec.pattern_masks = list(resolution.pattern_masks)
         pattern_spec.success_shifts = list(resolution.success_shifts)
-        pattern_spec.symm_mode = _symm_mode_value(meta.get("canonical_mode", "identity"))
+        pattern_spec.symm_mode = _symm_mode_value(resolution.physical_canonical_mode)
         pattern_spec.physical_transform = int(resolution.transform_id)
         pattern_spec.inverse_physical_transform = int(resolution.inverse_transform_id)
         pattern_spec.logical_pattern_signature = int(resolution.logical_pattern_signature)

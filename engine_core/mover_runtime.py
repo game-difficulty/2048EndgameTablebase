@@ -95,6 +95,7 @@ canonical_horizontal = _canonical_uint64(_mover_core.canonical_horizontal)
 canonical_min33 = _canonical_uint64(_mover_core.canonical_min33)
 canonical_min24 = _canonical_uint64(_mover_core.canonical_min24)
 canonical_min34 = _canonical_uint64(_mover_core.canonical_min34)
+canonical_min34top = _canonical_uint64(_mover_core.canonical_min34_top)
 
 canonical_identity_pair = _canonical_pair(_mover_core.canonical_identity_pair)
 canonical_diagonal_pair = _canonical_pair(_mover_core.canonical_diagonal_pair)

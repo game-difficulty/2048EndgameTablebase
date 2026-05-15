@@ -77,9 +77,12 @@
           <div class="h-full bg-border-main/5 p-5 rounded-2xl border border-border-main shadow-inner">
             <div class="grid h-full grid-rows-[auto_auto] gap-4">
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-6 gap-x-7">
-              <label class="builder-toggle-option cursor-pointer group">
+              <label
+                class="builder-toggle-option cursor-pointer group"
+                :class="{ 'opacity-50 cursor-not-allowed': selectedPatternIsVariant }"
+              >
                 <div class="builder-toggle-switch relative">
-                  <input type="checkbox" v-model="builderAdvancedAlgo" class="sr-only peer" @change="handleAdvancedAlgoChange" />
+                  <input type="checkbox" v-model="builderAdvancedAlgo" class="sr-only peer" :disabled="selectedPatternIsVariant" @change="handleAdvancedAlgoChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
                   <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
                 </div>
@@ -367,6 +370,7 @@ const props = defineProps({
   selectedCategory,
   selectedPattern,
   selectedTarget,
+  selectedPatternIsVariant,
   buildPath,
   isBuilding,
   builderAdvancedAlgo,

@@ -189,6 +189,15 @@ namespace Calculator {
                ((board & 0x00000000ffff0000ULL) << 32);
     }
 
+    static inline uint64_t ReverseUD34Top(uint64_t board) {
+        return (board & 0xffff0000ffff0000ULL) | ((board & 0x0000ffff00000000ULL) >> 32) |
+               ((board & 0x000000000000ffffULL) << 32);
+    }
+
+    static inline uint64_t Rotate18034Top(uint64_t board) {
+        return ReverseLR(ReverseUD34Top(board));
+    }
+
     static inline uint64_t canonical_min33(uint64_t board) {
         return std::min({exchange_col02(board), exchange_row02(board), R90_33(board), L90_33(board),
                          R180_33(board), UR_33(board), UL_33(board), board});
@@ -200,5 +209,9 @@ namespace Calculator {
 
     static inline uint64_t canonical_min34(uint64_t board) {
         return std::min({ReverseLR(board), ReverseUD34(board), Rotate18034(board), board});
+    }
+
+    static inline uint64_t canonical_min34_top(uint64_t board) {
+        return std::min({ReverseLR(board), ReverseUD34Top(board), Rotate18034Top(board), board});
     }
 }
