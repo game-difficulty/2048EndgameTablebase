@@ -4,7 +4,7 @@ import numpy as np
 
 from engine_core.BoardMover import s_gen_new_num as r_gen_new_num
 from engine_core.BookReader import BookReader
-from Config import DTYPE_CONFIG, SingletonConfig, pattern_32k_tiles_map
+from Config import DTYPE_CONFIG, SingletonConfig, pattern_32k_tiles_map, pattern_catalog
 from engine_core.VBoardMover import decode_board
 
 from .serialization import sanitize_config
@@ -40,12 +40,60 @@ def replace_largest_tiles(board_encoded, n, target: str):
     return result
 
 
+def replace_variant_large_tiles(board_encoded, pattern: str, target: str):
+    meta = pattern_catalog.get(pattern, {})
+    seed_boards = meta.get("seed_boards", ())
+    if len(seed_boards) == 0:
+        return np.uint64(board_encoded)
+
+    try:
+        target_exp = int(int(target).bit_length() - 1)
+    except Exception:
+        return np.uint64(board_encoded)
+
+    be = np.uint64(board_encoded)
+    wall_board = np.uint64(seed_boards[0])
+    result = np.uint64(0)
+    for i in range(15, -1, -1):
+        shift = np.uint64(4 * i)
+        tile = int((be >> shift) & np.uint64(0xF))
+        wall_tile = int((wall_board >> shift) & np.uint64(0xF))
+        if wall_tile == 0xF:
+            tile = 0xF
+        elif tile >= target_exp:
+            tile = 0xE
+        result = np.uint64(result << np.uint64(4))
+        result = np.uint64(result | np.uint64(tile))
+    return result
+
+
+def replace_board_for_lookup(
+    board_encoded,
+    pattern: str,
+    n: int,
+    target: str,
+    use_variant: bool,
+):
+    if use_variant:
+        return replace_variant_large_tiles(board_encoded, pattern, target)
+    return replace_largest_tiles(board_encoded, n, target)
+
+
 def _compute_spawns(session, new_board):
     results = {}
-    _32ks = pattern_32k_tiles_map.get(session.pattern_settings[0], [0])[0]
+    pattern = session.pattern_settings[0]
+    _32ks = pattern_32k_tiles_map.get(pattern, [0])[0]
     target = session.pattern_settings[1]
     bd_encoded = np.uint64(
-        u64(replace_largest_tiles(np.uint64(u64(new_board)), _32ks, target))
+        u64(
+            replace_board_for_lookup(
+                np.uint64(u64(new_board)),
+                pattern,
+                _32ks,
+                target,
+                session.use_variant,
+            )
+        )
     )
 
     for val in (1, 2):
@@ -70,13 +118,18 @@ def _compute_spawns(session, new_board):
 async def send_trainer_results(session, websocket, request_id=None):
     if session.book_reader is None:
         return
-    _32ks = pattern_32k_tiles_map.get(session.pattern_settings[0], [0])[0]
+    pattern = session.pattern_settings[0]
+    _32ks = pattern_32k_tiles_map.get(pattern, [0])[0]
     target = session.pattern_settings[1]
     try:
         board_encoded_replaced = np.uint64(
             u64(
-                replace_largest_tiles(
-                    np.uint64(u64(session.board_encoded)), _32ks, target
+                replace_board_for_lookup(
+                    np.uint64(u64(session.board_encoded)),
+                    pattern,
+                    _32ks,
+                    target,
+                    session.use_variant,
                 )
             )
         )

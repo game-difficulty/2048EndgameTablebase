@@ -76,6 +76,7 @@ def merge_line_with_score(
                 index + 1 < len(non_zero)
                 and non_zero[index] == non_zero[index + 1]
                 and non_zero[index] != 32768
+                and non_zero[index] != 16384
             ):
                 merged_value = non_zero[index] * 2
                 score += merged_value

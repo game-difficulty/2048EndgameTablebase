@@ -6,6 +6,9 @@
 
 struct WallMergePolicy {
     static inline std::pair<uint16_t, uint16_t> _internal_merge(uint16_t row, bool reverse_line) {
+        constexpr uint32_t WALL_TILE = 32768;
+        constexpr uint32_t MAX_MOVABLE_TILE = 16384;
+
         uint32_t line[4];
         for (int i = 0; i < 4; ++i) {
             uint32_t v = (row >> (4 * (3 - i))) & 0xF;
@@ -20,14 +23,14 @@ struct WallMergePolicy {
         uint32_t score = 0;
 
         for (int i = 0; i < 4;) {
-            if (line[i] == 32768) {
-                merged[i] = 32768;
+            if (line[i] == WALL_TILE) {
+                merged[i] = WALL_TILE;
                 ++i;
                 continue;
             }
 
             int next_wall = i;
-            while (next_wall < 4 && line[next_wall] != 32768) {
+            while (next_wall < 4 && line[next_wall] != WALL_TILE) {
                 next_wall++;
             }
 
@@ -42,7 +45,8 @@ struct WallMergePolicy {
                     write_idx > i &&
                     !last_write_merged &&
                     merged[write_idx - 1] == line[read_idx] &&
-                    merged[write_idx - 1] != 32768
+                    merged[write_idx - 1] != WALL_TILE &&
+                    merged[write_idx - 1] != MAX_MOVABLE_TILE
                 ) {
                     merged[write_idx - 1] *= 2;
                     score += merged[write_idx - 1];
