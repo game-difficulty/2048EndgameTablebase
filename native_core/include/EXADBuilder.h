@@ -10,9 +10,9 @@
 namespace EXAD {
 
 struct ReserveFactors {
-    double bucket = 4.0;
-    double small = 8.0;
-    double large = 8.0;
+    double bucket = 2.5;
+    double small = 4.0;
+    double large = 4.0;
     std::array<uint64_t, bucket_slot_count()> bucket_floor{};
     std::array<uint64_t, bucket_slot_count()> small_floor{};
     std::array<uint64_t, bucket_slot_count()> large_floor{};

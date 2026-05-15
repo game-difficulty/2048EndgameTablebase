@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <immintrin.h>
 #include <nanobind/nanobind.h>
@@ -397,6 +398,9 @@ struct DeriveResult {
     std::array<uint64_t, 120> boards{};
 };
 
+size_t capacity_from_factor(size_t input_size, double length_factor, size_t min_length, size_t capacity_floor);
+double effective_length_factor_for_capacity(size_t input_size, double length_factor, size_t capacity_floor);
+
 void validate_length_and_balance(
     size_t len_d0,
     size_t len_d2,
@@ -408,7 +412,8 @@ void validate_length_and_balance(
     size_t spill_arr1 = 0,
     size_t spill_arr2 = 0,
     bool exact_gather_arr1 = false,
-    bool exact_gather_arr2 = false
+    bool exact_gather_arr2 = false,
+    size_t capacity_floor = 0
 ) {
     if (len_d0 < 99999 || len_d2 < 99999 || counts1.empty() || counts2.empty()) {
         return;
@@ -418,11 +423,13 @@ void validate_length_and_balance(
         *std::max_element(counts2.begin(), counts2.end())
     ) * counts1.size();
     double length_factor_actual = static_cast<double>(length_needed) / static_cast<double>(len_d0);
-    size_t length = std::max<size_t>(6999999ULL, static_cast<size_t>(static_cast<double>(len_d0) * length_factor));
+    size_t length = capacity_from_factor(len_d0, length_factor, 6999999ULL, capacity_floor);
+    const double reported_length_factor =
+        effective_length_factor_for_capacity(len_d0, length_factor, capacity_floor);
     const bool used_spill = spill_arr1 > 0 || spill_arr2 > 0;
     if (!used_spill && length_needed > length) {
         std::ostringstream oss;
-        oss << "length multiplier " << length_factor << ", need " << length_factor_actual;
+        oss << "length multiplier " << reported_length_factor << ", need " << length_factor_actual;
         throw std::runtime_error(oss.str());
     }
     if (is_big || len_d0 == 0) {
@@ -430,7 +437,7 @@ void validate_length_and_balance(
     }
     std::ostringstream oss;
     oss << "length " << len_d1t << ", " << len_d2
-        << ", Using " << round_to_2(length_factor)
+        << ", Using " << round_to_2(reported_length_factor)
         << ", Need " << round_to_2(length_factor_actual);
     if (used_spill) {
         oss << ", Spill1 " << spill_arr1
@@ -654,6 +661,24 @@ struct GenBoardsAdResult {
     bool exact_gather_arr2 = false;
 };
 
+size_t capacity_from_factor(size_t input_size, double length_factor, size_t min_length, size_t capacity_floor) {
+    size_t predicted = 0;
+    if (std::isfinite(length_factor) && length_factor > 0.0) {
+        const long double scaled = static_cast<long double>(input_size) * static_cast<long double>(length_factor);
+        predicted = scaled >= static_cast<long double>(std::numeric_limits<size_t>::max())
+            ? std::numeric_limits<size_t>::max()
+            : static_cast<size_t>(scaled);
+    }
+    return std::max(std::max(min_length, predicted), capacity_floor);
+}
+
+double effective_length_factor_for_capacity(size_t input_size, double length_factor, size_t capacity_floor) {
+    if (capacity_floor == 0U || input_size == 0U) {
+        return length_factor;
+    }
+    return std::max(length_factor, static_cast<double>(capacity_floor) / static_cast<double>(input_size));
+}
+
 using GenBoardsAdFn = GenBoardsAdResult (*)(
     ArrayView<const uint64_t>,
     const AdvancedPatternSpec &,
@@ -664,6 +689,7 @@ using GenBoardsAdFn = GenBoardsAdResult (*)(
     const AdvancedMaskParam &,
     int,
     double,
+    size_t,
     bool
 );
 
@@ -1060,10 +1086,11 @@ GenBoardsAdResult gen_boards_ad_scalar(
     const AdvancedMaskParam &param,
     int n,
     double length_factor,
+    size_t capacity_floor,
     bool isfree
 ) {
     const size_t min_length = isfree ? 9999999ULL : 6999999ULL;
-    const size_t length = std::max(min_length, static_cast<size_t>(static_cast<double>(arr0.size) * length_factor));
+    const size_t length = capacity_from_factor(arr0.size, length_factor, min_length, capacity_floor);
     auto arr1 = std::unique_ptr<uint64_t[]>(new uint64_t[length]);
     auto arr2 = std::unique_ptr<uint64_t[]>(new uint64_t[length]);
     std::vector<size_t> starts = build_segment_starts(length, n);
@@ -1226,10 +1253,11 @@ GenBoardsAdResult gen_boards_ad_avx512(
     const AdvancedMaskParam &param,
     int n,
     double length_factor,
+    size_t capacity_floor,
     bool isfree
 ) {
     const size_t min_length = isfree ? 9999999ULL : 6999999ULL;
-    const size_t length = std::max(min_length, static_cast<size_t>(static_cast<double>(arr0.size) * length_factor));
+    const size_t length = capacity_from_factor(arr0.size, length_factor, min_length, capacity_floor);
     auto arr1 = std::unique_ptr<uint64_t[]>(new uint64_t[length]);
     auto arr2 = std::unique_ptr<uint64_t[]>(new uint64_t[length]);
     std::vector<size_t> starts = build_segment_starts(length, n);
@@ -1398,14 +1426,34 @@ bool ad_validate_step_trigger(int step, uint32_t ini_board_sum, const AdvancedMa
         ((static_cast<int>(param.small_tile_sum_limit / 2U)) % 32) + 1;
 }
 
-double post_validate_length_factor_floor(int step, uint32_t ini_board_sum, const AdvancedMaskParam &param) {
-    if (step > 1 && ad_validate_step_trigger(step - 1, ini_board_sum, param)) {
-        return 2.25;
+struct PostValidateCapacityFloor {
+    size_t capacity = 0;
+    int remaining_layers = 0;
+};
+
+size_t post_validate_capacity_floor_from_layer(size_t layer_size) {
+    constexpr long double kPostValidateFloorMargin = 1.20L;
+    const long double scaled = static_cast<long double>(layer_size) * kPostValidateFloorMargin;
+    return scaled >= static_cast<long double>(std::numeric_limits<size_t>::max())
+        ? std::numeric_limits<size_t>::max()
+        : static_cast<size_t>(std::ceil(scaled));
+}
+
+size_t current_post_validate_capacity_floor(const PostValidateCapacityFloor &floor) {
+    return floor.remaining_layers > 0 ? floor.capacity : 0U;
+}
+
+size_t proportional_capacity_floor(size_t total_floor, size_t part_size, size_t total_size) {
+    if (total_floor == 0U || part_size == 0U || total_size == 0U) {
+        return 0U;
     }
-    if (step > 2 && ad_validate_step_trigger(step - 2, ini_board_sum, param)) {
-        return 1.60;
-    }
-    return 0.0;
+    const long double scaled =
+        static_cast<long double>(total_floor) *
+        static_cast<long double>(part_size) /
+        static_cast<long double>(total_size);
+    return scaled >= static_cast<long double>(std::numeric_limits<size_t>::max())
+        ? std::numeric_limits<size_t>::max()
+        : static_cast<size_t>(std::ceil(scaled));
 }
 
 GenBoardsAdDispatch resolve_gen_boards_ad_dispatch() {
@@ -1438,10 +1486,11 @@ GenBoardsAdResult gen_boards_ad(
     const AdvancedMaskParam &param,
     int n,
     double length_factor,
+    size_t capacity_floor,
     bool isfree
 ) {
     static const GenBoardsAdFn fn = gen_boards_ad_dispatch().fn;
-    return fn(arr0, spec, hashmap1, hashmap2, original_board_sum, tiles_table, param, n, length_factor, isfree);
+    return fn(arr0, spec, hashmap1, hashmap2, original_board_sum, tiles_table, param, n, length_factor, capacity_floor, isfree);
 }
 
 struct GenBoardsBigAdResult {
@@ -1466,7 +1515,7 @@ GenBoardsBigAdResult gen_boards_big_ad(
     std::vector<std::vector<double>> length_factors_list,
     double length_factor_multiplier,
     bool isfree,
-    double length_factor_floor
+    size_t capacity_floor
 ) {
     size_t segs_count = length_factors_list.size();
     std::vector<std::vector<uint64_t>> arr1s;
@@ -1487,9 +1536,22 @@ GenBoardsBigAdResult gen_boards_big_ad(
         double length_factor = BookGenerator::predict_next_length_factor_quadratic(length_factors);
         length_factor *= arr0t.size > static_cast<size_t>(1e8) ? 1.15 : 1.2;
         length_factor *= length_factor_multiplier;
-        length_factor = std::max(length_factor, length_factor_floor);
+        const size_t segment_capacity_floor =
+            proportional_capacity_floor(capacity_floor, arr0t.size, arr0.size());
 
-        GenBoardsAdResult result = gen_boards_ad(arr0t, spec, hashmap1, hashmap2, board_sum, tiles_table, param, n, length_factor, isfree);
+        GenBoardsAdResult result = gen_boards_ad(
+            arr0t,
+            spec,
+            hashmap1,
+            hashmap2,
+            board_sum,
+            tiles_table,
+            param,
+            n,
+            length_factor,
+            segment_capacity_floor,
+            isfree
+        );
         validate_length_and_balance(
             arr0t.size,
             result.total_arr2,
@@ -1501,7 +1563,8 @@ GenBoardsBigAdResult gen_boards_big_ad(
             result.spill_arr1,
             result.spill_arr2,
             result.exact_gather_arr1,
-            result.exact_gather_arr2
+            result.exact_gather_arr2,
+            segment_capacity_floor
         );
 
         for (int idx = 0; idx < n; ++idx) {
@@ -1566,6 +1629,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
     ensure_ad_generate_stats_header(options);
     AdGenerateStatsRecord total_record;
     total_record.stage = "_total";
+    PostValidateCapacityFloor post_validate_floor;
 
     for (int i = 1; i < options.steps - 1; ++i) {
         RestartResult restart = handle_restart_ad(i, options.pathname, arr_init, started, io_config, options.compress_temp_files);
@@ -1586,20 +1650,35 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
         bool has_stats_record = false;
         stats_record.step = i;
         stats_record.input_live = static_cast<uint64_t>(d0.size());
-        const double length_factor_floor = post_validate_length_factor_floor(i, ini_board_sum, masker.param);
+        const size_t capacity_floor = current_post_validate_capacity_floor(post_validate_floor);
+        if (post_validate_floor.remaining_layers > 0) {
+            --post_validate_floor.remaining_layers;
+        }
         if (d0.size() < init_params.segment_size) {
             double t0 = wall_time_seconds();
             double length_factor = BookGenerator::predict_next_length_factor_quadratic(init_params.length_factors);
             length_factor *= d0.size() > static_cast<size_t>(1e8) ? 1.15 : 1.2;
             length_factor *= init_params.length_factor_multiplier;
-            length_factor = std::max(length_factor, length_factor_floor);
             stats_record.stage = "normal";
-            stats_record.length_factor = length_factor;
+            stats_record.length_factor =
+                effective_length_factor_for_capacity(d0.size(), length_factor, capacity_floor);
             if (hashmap1.empty()) {
                 BookGenerator::update_hashmap_length(hashmap1, d0.size());
                 BookGenerator::update_hashmap_length(hashmap2, d0.size());
             }
-            GenBoardsAdResult result = gen_boards_ad({d0.data(), d0.size()}, spec, hashmap1, hashmap2, board_sum, masker.tiles_combination_table, masker.param, n, length_factor, options.is_free);
+            GenBoardsAdResult result = gen_boards_ad(
+                {d0.data(), d0.size()},
+                spec,
+                hashmap1,
+                hashmap2,
+                board_sum,
+                masker.tiles_combination_table,
+                masker.param,
+                n,
+                length_factor,
+                capacity_floor,
+                options.is_free
+            );
             validate_length_and_balance(
                 d0.size(),
                 result.total_arr2,
@@ -1611,7 +1690,8 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
                 result.spill_arr1,
                 result.spill_arr2,
                 result.exact_gather_arr1,
-                result.exact_gather_arr2
+                result.exact_gather_arr2,
+                capacity_floor
             );
             double t1 = wall_time_seconds();
 
@@ -1674,7 +1754,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
             }
             GenBoardsBigAdResult big_result = gen_boards_big_ad(
                 d0, spec, hashmap1, hashmap2, board_sum, masker.tiles_combination_table, masker.param, n,
-                init_params.length_factors_list, init_params.length_factor_multiplier, options.is_free, length_factor_floor
+                init_params.length_factors_list, init_params.length_factor_multiplier, options.is_free, capacity_floor
             );
             stats_record.stage = "big";
 
@@ -1715,6 +1795,8 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
 
         const double validate_t0 = wall_time_seconds();
         if (ad_validate_step_trigger(i, ini_board_sum, masker.param)) {
+            post_validate_floor.capacity = post_validate_capacity_floor_from_layer(d0.size());
+            post_validate_floor.remaining_layers = 3;
             d0 = validate_layer(d0, board_sum + 2U, masker.tiles_combination_table, masker.param, n);
             d1 = validate_layer(d1, board_sum + 4U, masker.tiles_combination_table, masker.param, n);
             debug_log("validate step " + std::to_string(i));

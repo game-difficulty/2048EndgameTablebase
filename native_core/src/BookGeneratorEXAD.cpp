@@ -14,8 +14,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 #if defined(_OPENMP)
 #include <omp.h>
@@ -203,6 +205,15 @@ struct ReserveBaseTracker {
     bool initialized = false;
 };
 
+struct PostValidateReserveFloor {
+    ReserveFootprint floor;
+    int remaining_layers = 0;
+};
+
+struct DerivedOutputHistory {
+    std::deque<uint64_t> values;
+};
+
 ReserveFootprint reserve_footprint_from_layer(const EXAD::Layer &layer) {
     ReserveFootprint footprint;
     for (size_t slot = 0; slot < layer.sets.size(); ++slot) {
@@ -315,34 +326,155 @@ void apply_reserve_base_floors(EXAD::ReserveFactors &factors, const ReserveBaseT
     }
 }
 
-double post_validate_reserve_boost(int step, uint32_t ini_board_sum, const AdvancedMaskParam &param) {
-    if (step > 1 && validate_step_trigger(step - 1, ini_board_sum, param)) {
-        return 2.25;
+void apply_post_validate_floor(EXAD::ReserveFactors &factors, const PostValidateReserveFloor &tracker) {
+    if (tracker.remaining_layers <= 0) {
+        return;
     }
-    if (step > 2 && validate_step_trigger(step - 2, ini_board_sum, param)) {
-        return 1.60;
+    constexpr double kPostValidateFloorMargin = 1.20;
+    for (size_t slot = 0; slot < bucket_slot_count(); ++slot) {
+        factors.bucket_floor[slot] = std::max<uint64_t>(
+            factors.bucket_floor[slot],
+            static_cast<uint64_t>(std::ceil(static_cast<double>(tracker.floor.buckets[slot]) * kPostValidateFloorMargin))
+        );
+        factors.small_floor[slot] = std::max<uint64_t>(
+            factors.small_floor[slot],
+            static_cast<uint64_t>(std::ceil(static_cast<double>(tracker.floor.small_bytes[slot]) * kPostValidateFloorMargin))
+        );
+        factors.large_floor[slot] = std::max<uint64_t>(
+            factors.large_floor[slot],
+            static_cast<uint64_t>(std::ceil(static_cast<double>(tracker.floor.large_words[slot]) * kPostValidateFloorMargin))
+        );
     }
-    return 1.0;
+}
+
+void multiply_reserve_prediction(EXAD::ReserveFactors &factors, double multiplier) {
+    if (!(multiplier > 1.0)) {
+        return;
+    }
+    factors.bucket *= multiplier;
+    factors.small *= multiplier;
+    factors.large *= multiplier;
+    for (size_t slot = 0; slot < bucket_slot_count(); ++slot) {
+        factors.bucket_floor[slot] = static_cast<uint64_t>(
+            std::ceil(static_cast<double>(factors.bucket_floor[slot]) * multiplier)
+        );
+        factors.small_floor[slot] = static_cast<uint64_t>(
+            std::ceil(static_cast<double>(factors.small_floor[slot]) * multiplier)
+        );
+        factors.large_floor[slot] = static_cast<uint64_t>(
+            std::ceil(static_cast<double>(factors.large_floor[slot]) * multiplier)
+        );
+    }
+}
+
+void push_derived_output_history(DerivedOutputHistory &history, uint64_t derived_output_count) {
+    history.values.push_back(derived_output_count);
+    while (history.values.size() > 6U) {
+        history.values.pop_front();
+    }
+}
+
+bool recent_derived_output_onset(const DerivedOutputHistory &history) {
+    const auto &values = history.values;
+    if (values.size() < 2U) {
+        return false;
+    }
+    for (size_t i = 1; i < values.size(); ++i) {
+        if (values[i] == 0U) {
+            continue;
+        }
+        size_t zero_run = 0U;
+        size_t cursor = i;
+        while (cursor > 0U && values[cursor - 1U] == 0U) {
+            ++zero_run;
+            --cursor;
+        }
+        if (zero_run != 0U) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool derived_burst_guard_active(
+    int step,
+    uint32_t ini_board_sum,
+    int target,
+    const DerivedOutputHistory &history
+) {
+    if (!recent_derived_output_onset(history) || target <= 1 || target >= 31) {
+        return false;
+    }
+    const uint64_t target_tile = 1ULL << static_cast<uint32_t>(target);
+    const uint64_t half_target = target_tile >> 1U;
+    if (half_target == 0U) {
+        return false;
+    }
+    const uint64_t true_sum = static_cast<uint64_t>(ini_board_sum) + static_cast<uint64_t>(step) * 2ULL;
+    const uint64_t phase = true_sum % half_target;
+    return phase >= 8ULL && phase <= 16ULL;
+}
+
+std::vector<std::string> split_csv_simple(const std::string &line) {
+    std::vector<std::string> fields;
+    std::stringstream ss(line);
+    std::string field;
+    while (std::getline(ss, field, ',')) {
+        fields.push_back(std::move(field));
+    }
+    return fields;
+}
+
+DerivedOutputHistory load_recent_derived_output_history(const RunOptions &options, int start_step) {
+    DerivedOutputHistory history;
+    std::ifstream file(stats_file_path(options));
+    if (!file) {
+        return history;
+    }
+    std::string line;
+    std::getline(file, line);
+    std::map<int, uint64_t> by_step;
+    while (std::getline(file, line)) {
+        const std::vector<std::string> fields = split_csv_simple(line);
+        if (fields.size() <= 7U || fields[0] != "forward") {
+            continue;
+        }
+        try {
+            const int step = std::stoi(fields[1]);
+            if (step >= start_step) {
+                continue;
+            }
+            by_step[step] = static_cast<uint64_t>(std::stoull(fields[7]));
+        } catch (...) {
+        }
+    }
+    std::vector<uint64_t> recent;
+    recent.reserve(6U);
+    for (auto it = by_step.rbegin(); it != by_step.rend() && recent.size() < 6U; ++it) {
+        recent.push_back(it->second);
+    }
+    for (auto it = recent.rbegin(); it != recent.rend(); ++it) {
+        push_derived_output_history(history, *it);
+    }
+    return history;
 }
 
 EXAD::ReserveFactors reserve_factors_for_layer(
     int step,
     int total_steps,
     uint64_t live_board_count,
-    uint32_t ini_board_sum,
-    const AdvancedMaskParam &param,
     const std::deque<ReserveFootprint> &history,
-    const ReserveBaseTracker &base_tracker
+    const ReserveBaseTracker &base_tracker,
+    const PostValidateReserveFloor &post_validate_floor,
+    uint32_t ini_board_sum,
+    int target,
+    const DerivedOutputHistory &derived_history
 ) {
     (void)total_steps;
     EXAD::ReserveFactors factors;
-    const EXAD::ReserveFactors base;
-    const double validate_boost = post_validate_reserve_boost(step, ini_board_sum, param);
-    factors.bucket = std::max(factors.bucket, base.bucket * validate_boost);
-    factors.small = std::max(factors.small, base.small * validate_boost);
-    factors.large = std::max(factors.large, base.large * validate_boost);
     apply_reserve_history_floors(factors, history);
     apply_reserve_base_floors(factors, base_tracker);
+    apply_post_validate_floor(factors, post_validate_floor);
 
     // Resume/cold-start may not have enough footprint history yet. Keep a
     // conservative low-live fallback only in that case; normal sequential runs
@@ -351,6 +483,9 @@ EXAD::ReserveFactors reserve_factors_for_layer(
         factors.bucket = std::max(factors.bucket, 64.0);
         factors.small = std::max(factors.small, 64.0);
         factors.large = std::max(factors.large, 64.0);
+    }
+    if (derived_burst_guard_active(step, ini_board_sum, target, derived_history)) {
+        multiply_reserve_prediction(factors, 2.5);
     }
     return factors;
 }
@@ -453,6 +588,8 @@ void run_pattern_build_exad_cpp(
     EXAD::DeriveHashState derive_hash_state;
     std::deque<ReserveFootprint> reserve_history;
     ReserveBaseTracker reserve_base;
+    PostValidateReserveFloor post_validate_floor;
+    DerivedOutputHistory derived_history = load_recent_derived_output_history(options, resume.start_step);
     const int history_begin = std::max(0, resume.start_step - 5);
     for (int history_step = history_begin; history_step < resume.start_step; ++history_step) {
         const std::string path = EXAD::layer_file_path(options.pathname, history_step);
@@ -472,7 +609,20 @@ void run_pattern_build_exad_cpp(
     for (int step = resume.start_step; step < options.steps - 1; ++step) {
         FormationProgress::update_build_progress(static_cast<uint32_t>(step), progress_total);
         const EXAD::ReserveFactors reserve_factors =
-            reserve_factors_for_layer(step, options.steps, current.live_board_count, ini_board_sum, masker.param, reserve_history, reserve_base);
+            reserve_factors_for_layer(
+                step,
+                options.steps,
+                current.live_board_count,
+                reserve_history,
+                reserve_base,
+                post_validate_floor,
+                ini_board_sum,
+                options.target,
+                derived_history
+            );
+        if (post_validate_floor.remaining_layers > 0) {
+            --post_validate_floor.remaining_layers;
+        }
         EXAD::GeneratePairResult generated = EXAD::generate_two_layers_carry(
             current,
             spec,
@@ -515,6 +665,9 @@ void run_pattern_build_exad_cpp(
 
         const double validate0 = wall_time_seconds();
         if (validate_step_trigger(step, ini_board_sum, masker.param)) {
+            post_validate_floor.floor = reserve_footprint_from_layer(merged);
+            post_validate_floor.remaining_layers = 3;
+
             const uint64_t before_current = merged.live_board_count;
             merged = EXAD::validate_layer_streaming(
                 merged,
@@ -569,6 +722,7 @@ void run_pattern_build_exad_cpp(
         total.write_seconds += record.write_seconds;
         total.retry_count += record.retry_count;
 
+        push_derived_output_history(derived_history, record.derived_output_count);
         push_reserve_history(reserve_history, merged);
         update_reserve_base(reserve_base, merged);
         current = std::move(merged);
