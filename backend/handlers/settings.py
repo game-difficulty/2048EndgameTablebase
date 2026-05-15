@@ -10,7 +10,7 @@ import threading
 import time
 
 import markdown
-from Config import SingletonConfig, category_info, theme_map
+from Config import SingletonConfig, category_info, theme_map, write_runtime_deletion_threshold_signal
 from engine_core import BookBuilder
 from fastapi import WebSocket
 from SignalHub import progress_signal
@@ -114,7 +114,7 @@ async def handle_settings_action(
                     config["colors"] = list(theme_map[theme]) + ["#000000"] * 20
             SingletonConfig.tile_font_colors()
         elif key == "deletion_threshold":
-            value = normalize_deletion_threshold(value)
+            value = write_runtime_deletion_threshold_signal(value)
             config[key] = value
         else:
             config[key] = value

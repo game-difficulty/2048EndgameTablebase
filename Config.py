@@ -116,6 +116,11 @@ logger.addHandler(file_handler)
 
 
 MAX_DELETION_THRESHOLD = 0.999999
+RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "docs_and_configs",
+    "runtime_deletion_threshold.txt",
+)
 
 
 def normalize_deletion_threshold(value):
@@ -124,6 +129,17 @@ def normalize_deletion_threshold(value):
     except (TypeError, ValueError):
         parsed = 0.0
     return min(MAX_DELETION_THRESHOLD, max(0.0, parsed))
+
+
+def write_runtime_deletion_threshold_signal(value):
+    threshold = normalize_deletion_threshold(value)
+    path = RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH
+    tmp_path = path + ".tmp"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(tmp_path, "w", encoding="ascii") as file:
+        file.write(f"{threshold:.12g}\n")
+    os.replace(tmp_path, path)
+    return threshold
 
 
 def handle_exception(exc_type, exc_value, exc_traceback):
@@ -535,6 +551,11 @@ class SingletonConfig:
 
         with open(filename, "wb") as file:
             pickle.dump(config, file)
+        if "deletion_threshold" in config:
+            try:
+                write_runtime_deletion_threshold_signal(config["deletion_threshold"])
+            except OSError as exc:
+                logger.error(f"Failed to write runtime deletion threshold signal: {exc}")
 
     @staticmethod
     def check_cpuinfo():

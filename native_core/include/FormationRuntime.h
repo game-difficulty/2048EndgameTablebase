@@ -6,6 +6,8 @@
 #include <string>
 #include <atomic>
 #include <array>
+#include <cmath>
+#include <fstream>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -31,6 +33,7 @@ struct RunOptions {
     double spawn_rate4 = 0.1;
     std::string success_rate_dtype = "uint32";
     double deletion_threshold = 0.0;
+    std::string deletion_threshold_signal_path;
     bool compress = false;
     bool compress_temp_files = false;
     bool optimal_branch_only = false;
@@ -40,6 +43,49 @@ struct RunOptions {
     int direct_io_queue_depth = 16;
     int direct_io_chunk_mib = 8;
 };
+
+namespace RuntimeControls {
+
+inline double clamp_deletion_threshold(double value) {
+    if (!std::isfinite(value)) {
+        return 0.0;
+    }
+    if (value < 0.0) {
+        return 0.0;
+    }
+    constexpr double kMaxDeletionThreshold = 0.999999;
+    return value > kMaxDeletionThreshold ? kMaxDeletionThreshold : value;
+}
+
+inline double current_deletion_threshold(const RunOptions &options) {
+    double value = options.deletion_threshold;
+    if (!options.deletion_threshold_signal_path.empty()) {
+        std::ifstream in(options.deletion_threshold_signal_path);
+        double signaled = 0.0;
+        if (in >> signaled) {
+            value = signaled;
+        }
+    }
+    return clamp_deletion_threshold(value);
+}
+
+inline double refresh_deletion_threshold(const RunOptions &options, double current_value) {
+    if (options.deletion_threshold_signal_path.empty()) {
+        return clamp_deletion_threshold(current_value);
+    }
+    std::ifstream in(options.deletion_threshold_signal_path);
+    double signaled = 0.0;
+    if (in >> signaled) {
+        return clamp_deletion_threshold(signaled);
+    }
+    return clamp_deletion_threshold(current_value);
+}
+
+inline double retention_ratio(uint64_t after, uint64_t before) {
+    return before == 0U ? 0.0 : static_cast<double>(after) / static_cast<double>(before);
+}
+
+} // namespace RuntimeControls
 
 [[nodiscard]] inline uint32_t build_progress_total(const RunOptions &options) {
     return options.steps > 0 ? static_cast<uint32_t>(options.steps * 2) : 0U;

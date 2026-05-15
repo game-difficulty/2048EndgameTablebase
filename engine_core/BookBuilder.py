@@ -6,11 +6,13 @@ from itertools import combinations
 import numpy as np
 
 from Config import (
+    RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH,
     SingletonConfig,
     category_info,
     logger,
     pattern_32k_tiles_map,
     pattern_catalog,
+    write_runtime_deletion_threshold_signal,
 )
 from engine_core import mover_runtime
 
@@ -61,7 +63,11 @@ def _build_native_run_options(
     options.is_variant = bool(is_variant)
     options.spawn_rate4 = float(spawn_rate4)
     options.success_rate_dtype = str(config.get("success_rate_dtype", "uint32"))
-    options.deletion_threshold = float(config.get("deletion_threshold", 0.0))
+    options.deletion_threshold = write_runtime_deletion_threshold_signal(
+        config.get("deletion_threshold", 0.0)
+    )
+    if hasattr(options, "deletion_threshold_signal_path"):
+        options.deletion_threshold_signal_path = RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH
     options.compress = bool(config.get("compress", False))
     options.compress_temp_files = bool(config.get("compress_temp_files", False))
     options.optimal_branch_only = bool(config.get("optimal_branch_only", False))

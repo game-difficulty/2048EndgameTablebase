@@ -139,6 +139,7 @@ NB_MODULE(formation_core, m) {
         .def_rw("spawn_rate4", &RunOptions::spawn_rate4)
         .def_rw("success_rate_dtype", &RunOptions::success_rate_dtype)
         .def_rw("deletion_threshold", &RunOptions::deletion_threshold)
+        .def_rw("deletion_threshold_signal_path", &RunOptions::deletion_threshold_signal_path)
         .def_rw("compress", &RunOptions::compress)
         .def_rw("compress_temp_files", &RunOptions::compress_temp_files)
         .def_rw("optimal_branch_only", &RunOptions::optimal_branch_only)

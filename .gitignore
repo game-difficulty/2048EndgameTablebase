@@ -35,6 +35,7 @@ config
 mistakes_book.pkl
 logger.txt
 docs_and_configs/config
+docs_and_configs/runtime_deletion_threshold.txt
 docs_and_configs/mistakes_book.pkl
 docs_and_configs/color_schemes.txt
 docs_and_configs/*.error

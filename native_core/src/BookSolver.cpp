@@ -429,7 +429,11 @@ std::string classic_solve_stats_file_path(const RunOptions &options) {
 }
 
 std::string classic_solve_stats_header() {
-    return "stage,step,input_live,post_zero_live,future1_live,future2_live,future2_post_threshold_live,deletion_threshold,max_success,total_seconds,throughput_mbps,compute_seconds,compute_throughput_mbps,current_read_seconds,index_seconds,recalculate_seconds,zero_compact_seconds,max_scan_seconds,current_write_seconds,future_compact_seconds,future_write_seconds,compress_seconds,time";
+    return "stage,step,input_live,post_zero_live,future1_live,future2_live,future2_post_threshold_live,"
+           "deletion_threshold,current_retained_ratio,future_threshold_retained_ratio,max_success,"
+           "total_seconds,throughput_mbps,compute_seconds,compute_throughput_mbps,current_read_seconds,"
+           "index_seconds,recalculate_seconds,zero_compact_seconds,max_scan_seconds,current_write_seconds,"
+           "future_compact_seconds,future_write_seconds,compress_seconds,time";
 }
 
 void ensure_classic_solve_stats_header(const RunOptions &options) {
@@ -461,6 +465,8 @@ struct ClassicSolveStatsRecord {
     uint64_t future2_live = 0U;
     uint64_t future2_post_threshold_live = 0U;
     double deletion_threshold = 0.0;
+    double current_retained_ratio = 0.0;
+    double future_threshold_retained_ratio = 0.0;
     double max_success = 0.0;
     double current_read_seconds = 0.0;
     double index_seconds = 0.0;
@@ -494,6 +500,8 @@ void append_classic_solve_stats_record(
          << record.future2_post_threshold_live << ","
          << std::fixed << std::setprecision(6)
          << record.deletion_threshold << ","
+         << record.current_retained_ratio << ","
+         << record.future_threshold_retained_ratio << ","
          << record.max_success << ","
          << total_seconds << ","
          << throughput_mbps_for(record.input_live, total_seconds) << ","
@@ -1169,7 +1177,8 @@ void recalculate_process_impl(
     ensure_classic_solve_stats_header(options);
     ClassicSolveStatsRecord total_record;
     total_record.stage = "_total";
-    total_record.deletion_threshold = options.deletion_threshold;
+    double deletion_threshold_state = RuntimeControls::current_deletion_threshold(options);
+    total_record.deletion_threshold = deletion_threshold_state;
     bool started = false;
     AdaptiveIndex::Index ind1;
     T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
@@ -1188,6 +1197,8 @@ void recalculate_process_impl(
         if (!handle_restart_recalculate(i, d1, d2, started, options)) {
             continue;
         }
+        deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);
+        const double layer_deletion_threshold = deletion_threshold_state;
 
         const double read_t0 = wall_time_seconds();
         std::vector<uint64_t> raw_layer = read_raw_file(options.pathname + std::to_string(i), io_config);
@@ -1247,8 +1258,8 @@ void recalculate_process_impl(
         double future_write_seconds = 0.0;
         double compress_seconds = 0.0;
         const uint64_t future2_live_before = static_cast<uint64_t>(d2.size());
-        if (options.deletion_threshold > 0.0) {
-            T threshold = static_cast<T>(options.deletion_threshold * static_cast<double>(max_scale - zero_val) + static_cast<double>(zero_val));
+        if (layer_deletion_threshold > 0.0) {
+            T threshold = static_cast<T>(layer_deletion_threshold * static_cast<double>(max_scale - zero_val) + static_cast<double>(zero_val));
             const double future_compact_t0 = wall_time_seconds();
             compact_live_entries(d2, threshold, false);
             const double future_compact_t1 = wall_time_seconds();
@@ -1264,7 +1275,7 @@ void recalculate_process_impl(
             future_write_seconds += future_write_t1 - future_write_t0;
         }
         if (use_opt_temp_archive) {
-            if (options.deletion_threshold <= 0.0) {
+            if (layer_deletion_threshold <= 0.0) {
                 const double future_write_t0 = wall_time_seconds();
                 write_split_layer_archive_file(future_archive_path, d2, 1);
                 future_write_seconds += wall_time_seconds() - future_write_t0;
@@ -1282,7 +1293,10 @@ void recalculate_process_impl(
         record.future1_live = static_cast<uint64_t>(d1.size());
         record.future2_live = future2_live_before;
         record.future2_post_threshold_live = static_cast<uint64_t>(d2.size());
-        record.deletion_threshold = options.deletion_threshold;
+        record.deletion_threshold = layer_deletion_threshold;
+        record.current_retained_ratio = RuntimeControls::retention_ratio(record.post_zero_live, record.input_live);
+        record.future_threshold_retained_ratio =
+            RuntimeControls::retention_ratio(record.future2_post_threshold_live, record.future2_live);
         record.max_success = max_success;
         record.current_read_seconds = read_t1 - read_t0;
         record.index_seconds = t1 - t0;
@@ -1299,6 +1313,13 @@ void recalculate_process_impl(
         total_record.future1_live += record.future1_live;
         total_record.future2_live += record.future2_live;
         total_record.future2_post_threshold_live += record.future2_post_threshold_live;
+        total_record.current_retained_ratio =
+            RuntimeControls::retention_ratio(total_record.post_zero_live, total_record.input_live);
+        total_record.future_threshold_retained_ratio =
+            RuntimeControls::retention_ratio(
+                total_record.future2_post_threshold_live,
+                total_record.future2_live
+            );
         total_record.max_success = std::max(total_record.max_success, record.max_success);
         total_record.current_read_seconds += record.current_read_seconds;
         total_record.index_seconds += record.index_seconds;
@@ -1315,6 +1336,7 @@ void recalculate_process_impl(
             d1 = std::move(d0);
         }
     }
+    total_record.deletion_threshold = deletion_threshold_state;
     append_classic_solve_stats_record(options, total_record);
 }
 

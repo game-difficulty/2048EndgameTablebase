@@ -175,7 +175,9 @@ std::string exad_solve_stats_file_path(const RunOptions &options) {
 
 std::string exad_solve_stats_header() {
     return "stage,layout,direct_index_type,step,input_rows,input_values,post_zero_rows,post_zero_values,"
-           "deletion_threshold,max_success,total_seconds,throughput_mbps,compute_seconds,compute_throughput_mbps,"
+           "deletion_threshold,current_retained_ratio,future_threshold_values_before,"
+           "future_threshold_values_after,future_threshold_retained_ratio,max_success,total_seconds,"
+           "throughput_mbps,compute_seconds,compute_throughput_mbps,"
            "current_read_seconds,current_build_seconds,future_read_seconds,future_index_seconds,recalculate_seconds,"
            "zero_compact_seconds,current_write_seconds,future_compact_seconds,future_write_seconds,metadata_bytes,"
            "success_bytes,bitmap_density,compress_seconds,time";
@@ -205,6 +207,10 @@ struct EXADSolveStatsRecord {
     uint64_t post_zero_rows = 0;
     uint64_t post_zero_values = 0;
     double deletion_threshold = 0.0;
+    double current_retained_ratio = 0.0;
+    uint64_t future_threshold_values_before = 0;
+    uint64_t future_threshold_values_after = 0;
+    double future_threshold_retained_ratio = 0.0;
     double max_success = 0.0;
     double current_read_seconds = 0.0;
     double current_build_seconds = 0.0;
@@ -242,6 +248,10 @@ void append_exad_solve_stats_record(
          << record.post_zero_values << ","
          << std::fixed << std::setprecision(6)
          << record.deletion_threshold << ","
+         << record.current_retained_ratio << ","
+         << record.future_threshold_values_before << ","
+         << record.future_threshold_values_after << ","
+         << record.future_threshold_retained_ratio << ","
          << record.max_success << ","
          << total_seconds << ","
          << throughput_mbps_for(record.input_values, total_seconds) << ","
@@ -2369,7 +2379,8 @@ void recalculate_process_exad_impl(
     ensure_exad_solve_stats_header(options);
     EXADSolveStatsRecord total_record;
     total_record.stage = "_total";
-    total_record.deletion_threshold = options.deletion_threshold;
+    double deletion_threshold_state = RuntimeControls::current_deletion_threshold(options);
+    total_record.deletion_threshold = deletion_threshold_state;
 
     const int num_threads = effective_num_threads(options);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
@@ -2379,9 +2390,6 @@ void recalculate_process_exad_impl(
     const uint32_t ini_board_sum = arr_init.empty() ? 0U : board_sum(arr_init.front());
     const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
     const T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
-    const T deletion_threshold = static_cast<T>(
-        options.deletion_threshold * static_cast<double>(max_scale - zero_val) + zero_val
-    );
     const EXAD::DTypeMode dtype_mode = EXAD::dtype_mode_from_name(options.success_rate_dtype);
 
     EXAD::SolvedLayer<T> future1 = empty_future_layer<T>(dtype_mode);
@@ -2401,6 +2409,11 @@ void recalculate_process_exad_impl(
             maybe_compress_exad_solved_file(options, step);
             continue;
         }
+        deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);
+        const double layer_deletion_threshold = deletion_threshold_state;
+        const T layer_threshold = static_cast<T>(
+            layer_deletion_threshold * static_cast<double>(max_scale - zero_val) + zero_val
+        );
 
         const double current_read_t0 = wall_time_seconds();
         EXAD::Layer generation_layer = EXAD::read_layer_file(EXAD::layer_file_path(options.pathname, step), io_config);
@@ -2459,11 +2472,14 @@ void recalculate_process_exad_impl(
         double future_compact_seconds = 0.0;
         double future_write_seconds = 0.0;
         double compress_seconds = 0.0;
-        if (options.deletion_threshold > 0.0 && cached_future2_step == step + 2 && !future2.empty()) {
+        uint64_t future_threshold_values_before = static_cast<uint64_t>(future2.success_values.size());
+        uint64_t future_threshold_values_after = future_threshold_values_before;
+        if (layer_deletion_threshold > 0.0 && cached_future2_step == step + 2 && !future2.empty()) {
             const double future_compact_t0 = wall_time_seconds();
             EXAD::SolvedLayer<T> compacted_future =
-                EXAD::compact_solved_layer(future2, luts, deletion_threshold, num_threads);
+                EXAD::compact_solved_layer(future2, luts, layer_threshold, num_threads);
             future_compact_seconds = wall_time_seconds() - future_compact_t0;
+            future_threshold_values_after = static_cast<uint64_t>(compacted_future.success_values.size());
 
             const double future_write_t0 = wall_time_seconds();
             EXAD::write_solved_layer_file(
@@ -2504,7 +2520,12 @@ void recalculate_process_exad_impl(
         record.input_values = input_values;
         record.post_zero_rows = post_zero_rows;
         record.post_zero_values = post_zero_values;
-        record.deletion_threshold = options.deletion_threshold;
+        record.deletion_threshold = layer_deletion_threshold;
+        record.current_retained_ratio = RuntimeControls::retention_ratio(record.post_zero_values, record.input_values);
+        record.future_threshold_values_before = future_threshold_values_before;
+        record.future_threshold_values_after = future_threshold_values_after;
+        record.future_threshold_retained_ratio =
+            RuntimeControls::retention_ratio(future_threshold_values_after, future_threshold_values_before);
         record.max_success = normalized_max_rate;
         record.current_read_seconds = current_read_t1 - current_read_t0;
         record.current_build_seconds = build_t1 - build_t0;
@@ -2525,6 +2546,15 @@ void recalculate_process_exad_impl(
         total_record.input_values += record.input_values;
         total_record.post_zero_rows += record.post_zero_rows;
         total_record.post_zero_values += record.post_zero_values;
+        total_record.current_retained_ratio =
+            RuntimeControls::retention_ratio(total_record.post_zero_values, total_record.input_values);
+        total_record.future_threshold_values_before += record.future_threshold_values_before;
+        total_record.future_threshold_values_after += record.future_threshold_values_after;
+        total_record.future_threshold_retained_ratio =
+            RuntimeControls::retention_ratio(
+                total_record.future_threshold_values_after,
+                total_record.future_threshold_values_before
+            );
         total_record.max_success = std::max(total_record.max_success, record.max_success);
         total_record.current_read_seconds += record.current_read_seconds;
         total_record.current_build_seconds += record.current_build_seconds;
@@ -2546,6 +2576,7 @@ void recalculate_process_exad_impl(
         cached_future1_step = step;
     }
 
+    total_record.deletion_threshold = deletion_threshold_state;
     append_exad_solve_stats_record(options, total_record);
 }
 
@@ -2558,7 +2589,8 @@ void recalculate_process_exad_chunked_impl(
     ensure_exad_solve_stats_header(options);
     EXADSolveStatsRecord total_record;
     total_record.stage = "_total";
-    total_record.deletion_threshold = options.deletion_threshold;
+    double deletion_threshold_state = RuntimeControls::current_deletion_threshold(options);
+    total_record.deletion_threshold = deletion_threshold_state;
 
     const int num_threads = effective_num_threads(options);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
@@ -2568,9 +2600,6 @@ void recalculate_process_exad_chunked_impl(
     const uint32_t ini_board_sum = arr_init.empty() ? 0U : board_sum(arr_init.front());
     const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
     const T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
-    const T deletion_threshold = static_cast<T>(
-        options.deletion_threshold * static_cast<double>(max_scale - zero_val) + zero_val
-    );
     const EXAD::DTypeMode dtype_mode = EXAD::dtype_mode_from_name(options.success_rate_dtype);
 
     EXAD::SolvedLayer<T> future1 = empty_future_layer<T>(dtype_mode);
@@ -2590,6 +2619,11 @@ void recalculate_process_exad_chunked_impl(
             maybe_compress_exad_solved_file(options, step);
             continue;
         }
+        deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);
+        const double layer_deletion_threshold = deletion_threshold_state;
+        const T layer_threshold = static_cast<T>(
+            layer_deletion_threshold * static_cast<double>(max_scale - zero_val) + zero_val
+        );
 
         const std::string chunk_dir = exad_chunk_dir_path(options, step);
         const std::string writing_path = exad_chunk_writing_path(options, step);
@@ -2701,11 +2735,14 @@ void recalculate_process_exad_chunked_impl(
         double future_compact_seconds = 0.0;
         double future_write_seconds = 0.0;
         double compress_seconds = 0.0;
-        if (options.deletion_threshold > 0.0 && cached_future2_step == step + 2 && !future2.empty()) {
+        uint64_t future_threshold_values_before = static_cast<uint64_t>(future2.success_values.size());
+        uint64_t future_threshold_values_after = future_threshold_values_before;
+        if (layer_deletion_threshold > 0.0 && cached_future2_step == step + 2 && !future2.empty()) {
             const double future_compact_t0 = wall_time_seconds();
             EXAD::SolvedLayer<T> compacted_future =
-                EXAD::compact_solved_layer(future2, luts, deletion_threshold, num_threads);
+                EXAD::compact_solved_layer(future2, luts, layer_threshold, num_threads);
             future_compact_seconds = wall_time_seconds() - future_compact_t0;
+            future_threshold_values_after = static_cast<uint64_t>(compacted_future.success_values.size());
 
             const double future_write_t0 = wall_time_seconds();
             EXAD::write_solved_layer_file(
@@ -2760,7 +2797,12 @@ void recalculate_process_exad_chunked_impl(
         record.input_values = input_values;
         record.post_zero_rows = merge_summary.post_zero_rows;
         record.post_zero_values = merge_summary.post_zero_values;
-        record.deletion_threshold = options.deletion_threshold;
+        record.deletion_threshold = layer_deletion_threshold;
+        record.current_retained_ratio = RuntimeControls::retention_ratio(record.post_zero_values, record.input_values);
+        record.future_threshold_values_before = future_threshold_values_before;
+        record.future_threshold_values_after = future_threshold_values_after;
+        record.future_threshold_retained_ratio =
+            RuntimeControls::retention_ratio(future_threshold_values_after, future_threshold_values_before);
         record.max_success = normalized_max_rate;
         record.current_read_seconds = current_read_seconds;
         record.current_build_seconds = current_build_seconds;
@@ -2781,6 +2823,15 @@ void recalculate_process_exad_chunked_impl(
         total_record.input_values += record.input_values;
         total_record.post_zero_rows += record.post_zero_rows;
         total_record.post_zero_values += record.post_zero_values;
+        total_record.current_retained_ratio =
+            RuntimeControls::retention_ratio(total_record.post_zero_values, total_record.input_values);
+        total_record.future_threshold_values_before += record.future_threshold_values_before;
+        total_record.future_threshold_values_after += record.future_threshold_values_after;
+        total_record.future_threshold_retained_ratio =
+            RuntimeControls::retention_ratio(
+                total_record.future_threshold_values_after,
+                total_record.future_threshold_values_before
+            );
         total_record.max_success = std::max(total_record.max_success, record.max_success);
         total_record.current_read_seconds += record.current_read_seconds;
         total_record.current_build_seconds += record.current_build_seconds;
@@ -2802,6 +2853,7 @@ void recalculate_process_exad_chunked_impl(
         cached_future1_step = step;
     }
 
+    total_record.deletion_threshold = deletion_threshold_state;
     append_exad_solve_stats_record(options, total_record);
 }
 

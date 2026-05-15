@@ -1352,7 +1352,8 @@ void append_generate_stats(
 void reset_solve_stats(const RunOptions &options) {
     std::ofstream file(solve_stats_path(options), std::ios::trunc);
     file << "stage,step,layout,dtype_mode,canonical_batch_backend,direct_index_type,input_live,output_live,"
-            "future1_live,future2_live,future2_post_threshold_live,recalculate_seconds,"
+            "future1_live,future2_live,future2_post_threshold_live,deletion_threshold,current_retained_ratio,"
+            "future_threshold_retained_ratio,recalculate_seconds,"
             "freeze_zero_compact_seconds,future_index_seconds,future_compact_seconds,current_write_seconds,"
             "future_write_seconds,read_seconds,total_seconds,compute_seconds,active_throughput_mbps,compute_throughput_mbps,"
             "total_throughput_mbps,metadata_bytes,bitmap_density,timestamp\n";
@@ -1367,6 +1368,9 @@ void append_solve_stats(
     uint64_t future1_live,
     uint64_t future2_live,
     uint64_t future2_post_live,
+    double deletion_threshold,
+    double current_retained_ratio,
+    double future_threshold_retained_ratio,
     double recalc_seconds,
     double compact_seconds,
     double future_index_seconds,
@@ -1398,6 +1402,9 @@ void append_solve_stats(
          << future2_live << ','
          << future2_post_live << ','
          << std::setprecision(9)
+         << deletion_threshold << ','
+         << current_retained_ratio << ','
+         << future_threshold_retained_ratio << ','
          << recalc_seconds << ','
          << compact_seconds << ','
          << future_index_seconds << ','
@@ -2187,14 +2194,6 @@ RecalcStats recalculate_current_layer(
     return total;
 }
 
-uint32_t scaled_delete_threshold(const RunOptions &options) {
-    if (options.deletion_threshold <= 0.0) {
-        return 0U;
-    }
-    return static_cast<uint32_t>(
-        options.deletion_threshold * static_cast<double>(max_scale_value_for_dtype<uint32_t>(options.success_rate_dtype)));
-}
-
 template <typename Mover>
 void prefix36_dynamic_generate_into_production(
     const Prefix36Layer &current,
@@ -2572,7 +2571,8 @@ SolveStepSummary solve_loaded_step_impl(
     Prefix36Layer &current,
     Prefix36Layer &future1,
     Prefix36Layer &future2,
-    double read_seconds
+    double read_seconds,
+    double layer_deletion_threshold
 ) {
     const int num_threads = thread_count_from_options(options);
     const DTypeMode mode = dtype_mode_from_name(options.success_rate_dtype);
@@ -2634,9 +2634,13 @@ SolveStepSummary solve_loaded_step_impl(
 
     double future_compact_seconds = 0.0;
     double future_write_seconds = 0.0;
+    const uint64_t future2_pre_threshold_live = future2.live_board_count;
     uint64_t future2_post_live = future2.live_board_count;
-    if (options.deletion_threshold > 0.0) {
-        const uint32_t threshold = scaled_delete_threshold(options);
+    if (layer_deletion_threshold > 0.0) {
+        const uint32_t threshold = static_cast<uint32_t>(
+            layer_deletion_threshold *
+            static_cast<double>(max_scale_value_for_dtype<uint32_t>(options.success_rate_dtype))
+        );
         const double fc_t0 = now_seconds();
         future2 = compact_layer(future2, dense_lut, threshold, num_threads);
         const double fc_t1 = now_seconds();
@@ -2649,6 +2653,10 @@ SolveStepSummary solve_loaded_step_impl(
         future_write_seconds = fw_t1 - fw_t0;
         future2_post_live = future2.live_board_count;
     }
+    const double current_retained_ratio =
+        RuntimeControls::retention_ratio(current.live_board_count, input_live);
+    const double future_threshold_retained_ratio =
+        RuntimeControls::retention_ratio(future2_post_live, future2_pre_threshold_live);
     const double total_t1 = now_seconds();
     const double compute_seconds =
         (recalc_t1 - recalc_t0) + (compact_t1 - compact_t0) + (index_t1 - index_t0) + future_compact_seconds;
@@ -2661,6 +2669,9 @@ SolveStepSummary solve_loaded_step_impl(
         future1.live_board_count,
         future2.live_board_count,
         future2_post_live,
+        layer_deletion_threshold,
+        current_retained_ratio,
+        future_threshold_retained_ratio,
         recalc.seconds,
         compact_t1 - compact_t0,
         index_t1 - index_t0,
@@ -2710,7 +2721,8 @@ SolveStepSummary solve_single_step_impl(
         current,
         future1,
         future2,
-        read_t1 - read_t0
+        read_t1 - read_t0,
+        RuntimeControls::current_deletion_threshold(options)
     );
 }
 
@@ -2754,6 +2766,7 @@ void run_pattern_solve(
     Prefix36Layer future1 = read_layer_input(options.pathname, first_step + 1, io_config, lut.dense_lut, num_threads);
     Prefix36Layer future2 = read_layer_input(options.pathname, first_step + 2, io_config, lut.dense_lut, num_threads);
     double carried_read_seconds = now_seconds() - initial_read_t0;
+    double deletion_threshold_state = RuntimeControls::current_deletion_threshold(options);
     for (int step = first_step; step >= 0; --step) {
         FormationProgress::update_build_progress(
             static_cast<uint32_t>((first_step - step) + 1),
@@ -2763,6 +2776,7 @@ void run_pattern_solve(
         Prefix36Layer current = read_layer_input(options.pathname, step, io_config, lut.dense_lut, num_threads);
         const double read_seconds = carried_read_seconds + (now_seconds() - read_t0);
         carried_read_seconds = 0.0;
+        deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);
         const SolveStepSummary step_summary = solve_loaded_step_impl(
             spec,
             options,
@@ -2772,7 +2786,8 @@ void run_pattern_solve(
             current,
             future1,
             future2,
-            read_seconds
+            read_seconds,
+            deletion_threshold_state
         );
         total.input_live += step_summary.input_live;
         total.output_live += step_summary.output_live;
@@ -2800,6 +2815,9 @@ void run_pattern_solve(
         0,
         0,
         0,
+        deletion_threshold_state,
+        RuntimeControls::retention_ratio(total.output_live, total.input_live),
+        0.0,
         total.recalc_seconds,
         total.compact_seconds,
         total.future_index_seconds,
