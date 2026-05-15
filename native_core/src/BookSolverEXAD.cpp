@@ -353,13 +353,33 @@ bool exad_compressed_file_is_fresh(const std::string &source_path, const std::st
     return out_time >= src_time;
 }
 
-double maybe_compress_exad_solved_file(const RunOptions &options, int step) {
+bool exad_compressed_file_exists(const RunOptions &options, int step) {
+    std::error_code ec;
+    return fs::exists(exad_compressed_file_path(options, step), ec);
+}
+
+void remove_exad_solved_file_after_compression(const std::string &solved_path,
+                                               const std::string &compressed_path) {
+    if (!exad_compressed_file_is_fresh(solved_path, compressed_path)) {
+        throw std::runtime_error("EXAD compressed layer is not fresh after compression: " + compressed_path);
+    }
+    std::error_code ec;
+    fs::remove(solved_path, ec);
+    if (ec) {
+        throw std::runtime_error("failed to remove EXAD solved layer after compression: " + solved_path);
+    }
+}
+
+double maybe_compress_exad_solved_file(const RunOptions &options, int step, bool remove_source_after_compress = false) {
     if (!options.compress) {
         return 0.0;
     }
     const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
     const std::string compressed_path = exad_compressed_file_path(options, step);
     if (exad_compressed_file_is_fresh(solved_path, compressed_path)) {
+        if (remove_source_after_compress) {
+            remove_exad_solved_file_after_compression(solved_path, compressed_path);
+        }
         return 0.0;
     }
     const double t0 = wall_time_seconds();
@@ -368,7 +388,11 @@ double maybe_compress_exad_solved_file(const RunOptions &options, int step) {
         EXAD::lut_file_path(options.pathname),
         compressed_path
     );
-    return wall_time_seconds() - t0;
+    const double elapsed = wall_time_seconds() - t0;
+    if (remove_source_after_compress) {
+        remove_exad_solved_file_after_compression(solved_path, compressed_path);
+    }
+    return elapsed;
 }
 
 uint64_t exad_file_size_or_throw(const std::string &path, const char *kind) {
@@ -2406,7 +2430,10 @@ void recalculate_process_exad_impl(
         );
         const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
         if (EXAD::solved_file_exists(solved_path)) {
-            maybe_compress_exad_solved_file(options, step);
+            maybe_compress_exad_solved_file(options, step, true);
+            continue;
+        }
+        if (exad_compressed_file_exists(options, step)) {
             continue;
         }
         deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);
@@ -2616,7 +2643,10 @@ void recalculate_process_exad_chunked_impl(
         );
         const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
         if (EXAD::solved_file_exists(solved_path)) {
-            maybe_compress_exad_solved_file(options, step);
+            maybe_compress_exad_solved_file(options, step, true);
+            continue;
+        }
+        if (exad_compressed_file_exists(options, step)) {
             continue;
         }
         deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);

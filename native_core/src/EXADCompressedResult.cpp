@@ -10,16 +10,22 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <random>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 namespace EXADCompressedResult {
 namespace {
 
 constexpr char kMagic[8] = {'E', 'X', 'A', 'D', 'C', 'Z', '1', '\0'};
+constexpr char kExadLutMagic[8] = {'E', 'X', 'A', 'D', '7', 'L', 'U', 'T'};
 constexpr uint32_t kVersion = 1;
 constexpr uint32_t kSlotCount = 48;
 constexpr uint32_t kBucketBlockHardCapBytes = 1024u * 1024u;
@@ -97,6 +103,46 @@ struct PendingBucketBlock {
     uint32_t begin = 0;
     uint32_t count = 0;
     uint64_t raw_size_estimate = 0;
+};
+
+struct ExadLutFileHeader {
+    char magic[8];
+    uint32_t version = 1;
+    uint32_t valid_mask_count = 0;
+    uint64_t config_signature = 0;
+    uint64_t rank_table_count = 0;
+    uint64_t rank_table_values = 0;
+    uint64_t packed_rank_pair_values = 0;
+    uint64_t size_table_values = 0;
+    uint64_t offset_table_values = 0;
+    uint64_t unrank_array_values = 0;
+    uint64_t high_base_values = 0;
+    uint64_t row16_sum_values = 0;
+    uint8_t packed_table0 = 0xFFU;
+    uint8_t packed_table1 = 0xFFU;
+    uint8_t table_for_high[16]{};
+    int8_t max_counts[16]{};
+    uint32_t required_suffix24 = 0;
+};
+
+static_assert(sizeof(ExadLutFileHeader) == 128, "EXAD LUT header layout changed");
+
+struct ExadLutFileLayout {
+    uint64_t valid_suffix_masks_offset = 0;
+    uint64_t rank_table_sizes_offset = 0;
+    uint64_t rank_tables_offset = 0;
+    uint64_t packed_rank_pair_offset = 0;
+    uint64_t size_table_offset = 0;
+    uint64_t offset_table_offset = 0;
+    uint64_t unrank_array_offset = 0;
+    uint64_t high_base_offset = 0;
+};
+
+struct ExadLutPointIndex {
+    ExadLutFileHeader header{};
+    ExadLutFileLayout layout{};
+    std::vector<uint64_t> rank_table_sizes;
+    std::vector<uint64_t> rank_table_offsets;
 };
 
 template <typename T>
@@ -186,6 +232,29 @@ std::vector<uint8_t> compress_block_or_throw(const std::vector<uint8_t>& raw, in
     }
     return compressed;
 }
+
+uint32_t compression_worker_count(uint64_t block_count) {
+    if (block_count <= 1U) {
+        return 1U;
+    }
+    uint32_t hw = std::thread::hardware_concurrency();
+    if (hw == 0U) {
+        hw = 4U;
+    }
+    return static_cast<uint32_t>(std::min<uint64_t>(block_count, hw));
+}
+
+struct CompressedBucketBlock {
+    BucketBlockDirEntry dir{};
+    std::vector<uint8_t> compressed;
+    uint64_t raw_size = 0;
+};
+
+struct CompressedValueBlock {
+    ValueBlockDirEntry dir{};
+    std::vector<uint8_t> compressed;
+    uint64_t raw_size = 0;
+};
 
 std::vector<uint8_t> decompress_block_or_throw(
     const uint8_t* compressed,
@@ -552,53 +621,77 @@ CompressStats compress_impl(
     stats.value_block_count = value_block_count;
 
     uint64_t data_offset = header.data_offset;
-    for (size_t i = 0; i < bucket_blocks.size(); ++i) {
-        const auto& block = bucket_blocks[i];
-        const auto& set = layer.sets[block.slot];
-        auto raw = build_bucket_block_raw(layer, luts, block);
-        auto compressed = compress_block_or_throw(raw, compression_level);
-        out.seekp(static_cast<std::streamoff>(data_offset), std::ios::beg);
-        write_exact(out, compressed.data(), compressed.size(), "EXAD compressed bucket block");
-
-        auto& dir = bucket_dirs[i];
-        dir.slot = block.slot;
-        dir.first_bucket_index = block.begin;
-        dir.bucket_count = block.count;
-        dir.first_key = set.buckets[block.begin].key;
-        dir.last_key = set.buckets[block.begin + block.count - 1].key;
-        dir.first_dense_offset = set.buckets[block.begin].dense_offset;
-        dir.compressed_offset = data_offset;
-        dir.compressed_size = compressed.size();
-        dir.raw_size = raw.size();
-
-        data_offset += compressed.size();
-        stats.bucket_raw_bytes += raw.size();
-        stats.bucket_compressed_bytes += compressed.size();
+    const uint32_t bucket_workers = compression_worker_count(bucket_blocks.size());
+    for (size_t batch_begin = 0; batch_begin < bucket_blocks.size(); batch_begin += bucket_workers) {
+        const size_t batch_end = std::min<size_t>(bucket_blocks.size(), batch_begin + bucket_workers);
+        std::vector<std::future<CompressedBucketBlock>> futures;
+        futures.reserve(batch_end - batch_begin);
+        for (size_t i = batch_begin; i < batch_end; ++i) {
+            futures.emplace_back(std::async(std::launch::async, [&, i]() {
+                const auto& block = bucket_blocks[i];
+                const auto& set = layer.sets[block.slot];
+                auto raw = build_bucket_block_raw(layer, luts, block);
+                CompressedBucketBlock result;
+                result.compressed = compress_block_or_throw(raw, compression_level);
+                result.raw_size = raw.size();
+                result.dir.slot = block.slot;
+                result.dir.first_bucket_index = block.begin;
+                result.dir.bucket_count = block.count;
+                result.dir.first_key = set.buckets[block.begin].key;
+                result.dir.last_key = set.buckets[block.begin + block.count - 1].key;
+                result.dir.first_dense_offset = set.buckets[block.begin].dense_offset;
+                result.dir.compressed_size = result.compressed.size();
+                result.dir.raw_size = result.raw_size;
+                return result;
+            }));
+        }
+        for (size_t local = 0; local < futures.size(); ++local) {
+            CompressedBucketBlock result = futures[local].get();
+            result.dir.compressed_offset = data_offset;
+            bucket_dirs[batch_begin + local] = result.dir;
+            out.seekp(static_cast<std::streamoff>(data_offset), std::ios::beg);
+            write_exact(out, result.compressed.data(), result.compressed.size(), "EXAD compressed bucket block");
+            data_offset += result.compressed.size();
+            stats.bucket_raw_bytes += result.raw_size;
+            stats.bucket_compressed_bytes += result.compressed.size();
+        }
     }
 
     const auto* values_bytes = reinterpret_cast<const uint8_t*>(layer.success_values.data());
-    for (uint64_t block = 0; block < value_block_count; ++block) {
-        const uint64_t first = block * value_block_values;
-        const uint32_t count = static_cast<uint32_t>(
-            std::min<uint64_t>(value_block_values, success_value_count - first));
-        const uint64_t raw_size = static_cast<uint64_t>(count) * sizeof(T);
-        std::vector<uint8_t> raw(values_bytes + first * sizeof(T),
-                                 values_bytes + first * sizeof(T) + raw_size);
-        auto compressed = compress_block_or_throw(raw, compression_level);
-        out.seekp(static_cast<std::streamoff>(data_offset), std::ios::beg);
-        write_exact(out, compressed.data(), compressed.size(), "EXAD compressed value block");
-
-        auto& dir = value_dirs[block];
-        dir.first_value_index = first;
-        dir.value_count = count;
-        dir.value_size = static_cast<uint32_t>(sizeof(T));
-        dir.compressed_offset = data_offset;
-        dir.compressed_size = compressed.size();
-        dir.raw_size = raw_size;
-
-        data_offset += compressed.size();
-        stats.value_raw_bytes += raw_size;
-        stats.value_compressed_bytes += compressed.size();
+    const uint32_t value_workers = compression_worker_count(value_block_count);
+    for (uint64_t batch_begin = 0; batch_begin < value_block_count; batch_begin += value_workers) {
+        const uint64_t batch_end = std::min<uint64_t>(value_block_count, batch_begin + value_workers);
+        std::vector<std::future<CompressedValueBlock>> futures;
+        futures.reserve(static_cast<size_t>(batch_end - batch_begin));
+        for (uint64_t block = batch_begin; block < batch_end; ++block) {
+            futures.emplace_back(std::async(std::launch::async, [&, block]() {
+                const uint64_t first = block * value_block_values;
+                const uint32_t count = static_cast<uint32_t>(
+                    std::min<uint64_t>(value_block_values, success_value_count - first));
+                const uint64_t raw_size = static_cast<uint64_t>(count) * sizeof(T);
+                std::vector<uint8_t> raw(values_bytes + first * sizeof(T),
+                                         values_bytes + first * sizeof(T) + raw_size);
+                CompressedValueBlock result;
+                result.compressed = compress_block_or_throw(raw, compression_level);
+                result.raw_size = raw_size;
+                result.dir.first_value_index = first;
+                result.dir.value_count = count;
+                result.dir.value_size = static_cast<uint32_t>(sizeof(T));
+                result.dir.compressed_size = result.compressed.size();
+                result.dir.raw_size = raw_size;
+                return result;
+            }));
+        }
+        for (size_t local = 0; local < futures.size(); ++local) {
+            CompressedValueBlock result = futures[local].get();
+            result.dir.compressed_offset = data_offset;
+            value_dirs[static_cast<size_t>(batch_begin) + local] = result.dir;
+            out.seekp(static_cast<std::streamoff>(data_offset), std::ios::beg);
+            write_exact(out, result.compressed.data(), result.compressed.size(), "EXAD compressed value block");
+            data_offset += result.compressed.size();
+            stats.value_raw_bytes += result.raw_size;
+            stats.value_compressed_bytes += result.compressed.size();
+        }
     }
 
     out.flush();
@@ -640,6 +733,44 @@ struct SolvedFileIndex {
     uint64_t success_values_offset = 0;
     EXAD::DTypeMode mode = EXAD::DTypeMode::UInt32;
 };
+
+struct FileStamp {
+    uint64_t size = 0;
+    std::filesystem::file_time_type write_time{};
+    bool valid = false;
+};
+
+template <typename T>
+struct CachedFileEntry {
+    FileStamp stamp;
+    std::shared_ptr<const T> value;
+};
+
+std::mutex g_cache_mutex;
+std::unordered_map<std::string, CachedFileEntry<ExadLutPointIndex>> g_exad_lut_point_cache;
+std::unordered_map<std::string, CachedFileEntry<CompressedIndex>> g_compressed_index_cache;
+std::unordered_map<std::string, CachedFileEntry<SolvedFileIndex>> g_solved_index_cache;
+
+FileStamp file_stamp(const std::string& path) {
+    FileStamp stamp;
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec) {
+        return stamp;
+    }
+    const auto write_time = std::filesystem::last_write_time(path, ec);
+    if (ec) {
+        return stamp;
+    }
+    stamp.size = static_cast<uint64_t>(size);
+    stamp.write_time = write_time;
+    stamp.valid = true;
+    return stamp;
+}
+
+bool same_stamp(const FileStamp& lhs, const FileStamp& rhs) {
+    return lhs.valid && rhs.valid && lhs.size == rhs.size && lhs.write_time == rhs.write_time;
+}
 
 CompressedIndex read_index(const std::string& path) {
     CompressedIndex index;
@@ -730,6 +861,275 @@ SolvedFileIndex read_solved_file_index(std::ifstream& in, const std::string& pat
         throw std::runtime_error("truncated EXAD solved layer: " + path);
     }
     return index;
+}
+
+ExadLutFileLayout exad_lut_file_layout(const ExadLutFileHeader& header) {
+    ExadLutFileLayout layout;
+    layout.valid_suffix_masks_offset = sizeof(ExadLutFileHeader);
+    layout.rank_table_sizes_offset =
+        layout.valid_suffix_masks_offset + static_cast<uint64_t>(header.valid_mask_count) * sizeof(uint32_t);
+    layout.rank_tables_offset =
+        layout.rank_table_sizes_offset + header.rank_table_count * sizeof(uint64_t);
+    layout.packed_rank_pair_offset =
+        layout.rank_tables_offset + header.rank_table_values * sizeof(uint16_t);
+    layout.size_table_offset =
+        layout.packed_rank_pair_offset + header.packed_rank_pair_values * sizeof(uint32_t);
+    layout.offset_table_offset =
+        layout.size_table_offset + header.size_table_values * sizeof(uint32_t);
+    layout.unrank_array_offset =
+        layout.offset_table_offset + header.offset_table_values * sizeof(uint32_t);
+    layout.high_base_offset =
+        layout.unrank_array_offset + header.unrank_array_values * sizeof(uint32_t);
+    return layout;
+}
+
+uint32_t low24_sum_direct(uint32_t low24) {
+    uint32_t sum = 0U;
+    for (uint32_t cell = 0; cell < 6U; ++cell) {
+        sum += EXAD::tile_value((low24 >> (cell * 4U)) & 0xFU);
+    }
+    return sum;
+}
+
+ExadLutPointIndex read_exad_lut_point_index(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("failed to open EXAD LUT: " + path);
+    }
+    ExadLutPointIndex index;
+    read_exact(in, &index.header, sizeof(index.header), "EXAD LUT header");
+    if (std::memcmp(index.header.magic, kExadLutMagic, sizeof(kExadLutMagic)) != 0 ||
+        index.header.version != 1U) {
+        throw std::runtime_error("invalid EXAD LUT file: " + path);
+    }
+    if (index.header.size_table_values == 0U ||
+        index.header.offset_table_values == 0U ||
+        index.header.unrank_array_values == 0U ||
+        index.header.high_base_values == 0U) {
+        throw std::runtime_error("invalid EXAD LUT table shape: " + path);
+    }
+    index.layout = exad_lut_file_layout(index.header);
+    index.rank_table_sizes.resize(static_cast<size_t>(index.header.rank_table_count));
+    if (!index.rank_table_sizes.empty()) {
+        in.seekg(static_cast<std::streamoff>(index.layout.rank_table_sizes_offset), std::ios::beg);
+        read_exact(
+            in,
+            index.rank_table_sizes.data(),
+            index.rank_table_sizes.size() * sizeof(uint64_t),
+            "EXAD LUT rank table sizes");
+    }
+    index.rank_table_offsets.resize(index.rank_table_sizes.size());
+    uint64_t offset = index.layout.rank_tables_offset;
+    uint64_t total_values = 0U;
+    for (size_t i = 0; i < index.rank_table_sizes.size(); ++i) {
+        index.rank_table_offsets[i] = offset;
+        total_values += index.rank_table_sizes[i];
+        offset += index.rank_table_sizes[i] * sizeof(uint16_t);
+    }
+    if (total_values != index.header.rank_table_values) {
+        throw std::runtime_error("EXAD LUT rank table size mismatch: " + path);
+    }
+    return index;
+}
+
+std::shared_ptr<const ExadLutPointIndex> cached_exad_lut_point_index(const std::string& path) {
+    const FileStamp stamp = file_stamp(path);
+    {
+        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        auto it = g_exad_lut_point_cache.find(path);
+        if (it != g_exad_lut_point_cache.end() && same_stamp(it->second.stamp, stamp) && it->second.value) {
+            return it->second.value;
+        }
+    }
+
+    auto loaded = std::make_shared<ExadLutPointIndex>(read_exad_lut_point_index(path));
+    if (stamp.valid) {
+        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        g_exad_lut_point_cache[path] = CachedFileEntry<ExadLutPointIndex>{stamp, loaded};
+    }
+    return loaded;
+}
+
+class ExadLutPointReader {
+public:
+    explicit ExadLutPointReader(const std::string& path)
+        : index_(cached_exad_lut_point_index(path)),
+          in_(path, std::ios::binary) {
+        if (!in_) {
+            throw std::runtime_error("failed to open EXAD LUT: " + path);
+        }
+    }
+
+    uint64_t signature() const {
+        return index_->header.config_signature;
+    }
+
+    bool valid_count_for_group(uint32_t group, uint32_t& valid_count) {
+        valid_count = 0U;
+        const auto& header = index_->header;
+        if (group >= header.size_table_values) {
+            return false;
+        }
+        valid_count = read_one_from<uint32_t>(
+            in_,
+            index_->layout.size_table_offset + static_cast<uint64_t>(group) * sizeof(uint32_t),
+            "EXAD LUT size table");
+        return true;
+    }
+
+    bool valid_count_for_semantic_sum(uint32_t semantic_sum, uint32_t& valid_count) {
+        valid_count = 0U;
+        if ((semantic_sum & 1U) != 0U) {
+            return false;
+        }
+        return valid_count_for_group(semantic_sum >> 1U, valid_count);
+    }
+
+    bool suffix28_query(
+        uint32_t suffix28,
+        uint32_t& group,
+        uint32_t& rank,
+        uint32_t& semantic_sum,
+        uint32_t& valid_count) {
+        group = 0U;
+        rank = 0U;
+        semantic_sum = 0U;
+        valid_count = 0U;
+
+        const auto& header = index_->header;
+        const uint32_t high = suffix28 >> 24U;
+        const uint8_t table_id = header.table_for_high[high];
+        if (table_id == 0xFFU) {
+            return false;
+        }
+        const uint32_t low24 = suffix28 & 0xFFFFFFU;
+        const uint16_t low_rank = low24_rank(table_id, low24);
+        if (low_rank == ZMaskFrozen::kInvalidRank) {
+            return false;
+        }
+
+        const uint32_t sum = low24_sum_direct(low24) + EXAD::tile_value(high);
+        if (sum > EXAD::kMaxSemanticSuffixSum || (sum & 1U) != 0U) {
+            return false;
+        }
+        group = sum >> 1U;
+        if (!valid_count_for_group(group, valid_count) || valid_count == 0U) {
+            return false;
+        }
+
+        const uint64_t high_base_index =
+            static_cast<uint64_t>(high) * header.size_table_values + group;
+        if (high_base_index >= header.high_base_values) {
+            return false;
+        }
+        const uint16_t high_base = read_one_from<uint16_t>(
+            in_,
+            index_->layout.high_base_offset + high_base_index * sizeof(uint16_t),
+            "EXAD LUT high base");
+        rank = static_cast<uint32_t>(high_base) + low_rank;
+        if (rank >= valid_count) {
+            return false;
+        }
+        semantic_sum = sum;
+        return true;
+    }
+
+    bool reconstruct_board_from_key_rank(uint64_t key, uint32_t rank, uint64_t& board) {
+        board = 0ULL;
+        const uint32_t semantic_sum = EXAD::bucket_key_semantic_sum(key);
+        uint32_t valid_count = 0U;
+        if (!valid_count_for_semantic_sum(semantic_sum, valid_count) || rank >= valid_count) {
+            return false;
+        }
+        const uint32_t group = semantic_sum >> 1U;
+        if (group >= index_->header.offset_table_values) {
+            return false;
+        }
+        const uint32_t unrank_offset = read_one_from<uint32_t>(
+            in_,
+            index_->layout.offset_table_offset + static_cast<uint64_t>(group) * sizeof(uint32_t),
+            "EXAD LUT offset table");
+        const uint64_t unrank_index = static_cast<uint64_t>(unrank_offset) + rank;
+        if (unrank_index >= index_->header.unrank_array_values) {
+            return false;
+        }
+        const uint32_t suffix28 = read_one_from<uint32_t>(
+            in_,
+            index_->layout.unrank_array_offset + unrank_index * sizeof(uint32_t),
+            "EXAD LUT unrank array");
+        const uint64_t prefix36 = EXAD::bucket_key_prefix36(key);
+        board = (prefix36 << EXAD::kSuffixBits) | static_cast<uint64_t>(suffix28);
+        return true;
+    }
+
+private:
+    uint16_t low24_rank(uint8_t table_id, uint32_t low24) {
+        const auto& header = index_->header;
+        if (header.packed_rank_pair_values != 0U &&
+            (table_id == header.packed_table0 || table_id == header.packed_table1)) {
+            if (low24 >= header.packed_rank_pair_values) {
+                return ZMaskFrozen::kInvalidRank;
+            }
+            const uint32_t packed = read_one_from<uint32_t>(
+                in_,
+                index_->layout.packed_rank_pair_offset + static_cast<uint64_t>(low24) * sizeof(uint32_t),
+                "EXAD LUT packed rank pair");
+            return table_id == header.packed_table0
+                ? static_cast<uint16_t>(packed & 0xFFFFU)
+                : static_cast<uint16_t>(packed >> 16U);
+        }
+        if (table_id >= index_->rank_table_offsets.size() ||
+            low24 >= index_->rank_table_sizes[table_id]) {
+            return ZMaskFrozen::kInvalidRank;
+        }
+        return read_one_from<uint16_t>(
+            in_,
+            index_->rank_table_offsets[table_id] + static_cast<uint64_t>(low24) * sizeof(uint16_t),
+            "EXAD LUT rank table");
+    }
+
+    std::shared_ptr<const ExadLutPointIndex> index_;
+    std::ifstream in_;
+};
+
+std::shared_ptr<const CompressedIndex> cached_compressed_index(const std::string& path) {
+    const FileStamp stamp = file_stamp(path);
+    {
+        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        auto it = g_compressed_index_cache.find(path);
+        if (it != g_compressed_index_cache.end() && same_stamp(it->second.stamp, stamp) && it->second.value) {
+            return it->second.value;
+        }
+    }
+
+    auto loaded = std::make_shared<CompressedIndex>(read_index(path));
+    if (stamp.valid) {
+        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        g_compressed_index_cache[path] = CachedFileEntry<CompressedIndex>{stamp, loaded};
+    }
+    return loaded;
+}
+
+std::shared_ptr<const SolvedFileIndex> cached_solved_file_index(const std::string& path) {
+    const FileStamp stamp = file_stamp(path);
+    {
+        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        auto it = g_solved_index_cache.find(path);
+        if (it != g_solved_index_cache.end() && same_stamp(it->second.stamp, stamp) && it->second.value) {
+            return it->second.value;
+        }
+    }
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("failed to open EXAD solved layer: " + path);
+    }
+    auto loaded = std::make_shared<SolvedFileIndex>(read_solved_file_index(in, path));
+    if (stamp.valid) {
+        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        g_solved_index_cache[path] = CachedFileEntry<SolvedFileIndex>{stamp, loaded};
+    }
+    return loaded;
 }
 
 int slot_index_from_ad_key(int ad_key) {
@@ -911,24 +1311,11 @@ bool rank_for_large_bitmap_ordinal(
 }
 
 bool reconstruct_board_from_key_rank(
-    const EXAD::Luts& luts,
+    ExadLutPointReader& lut,
     uint64_t key,
     uint32_t rank,
     uint64_t& board) {
-    const uint32_t semantic_sum = EXAD::bucket_key_semantic_sum(key);
-    const uint32_t group = EXAD::lut_group_index(semantic_sum);
-    if (group >= luts.size_table.size() ||
-        group >= luts.offset_table.size() ||
-        rank >= luts.size_table[group]) {
-        return false;
-    }
-    const uint64_t unrank_index = static_cast<uint64_t>(luts.offset_table[group]) + rank;
-    if (unrank_index >= luts.unrank_array.size()) {
-        return false;
-    }
-    const uint64_t prefix36 = EXAD::bucket_key_prefix36(key);
-    board = (prefix36 << EXAD::kSuffixBits) | static_cast<uint64_t>(luts.unrank_array[unrank_index]);
-    return true;
+    return lut.reconstruct_board_from_key_rank(key, rank, board);
 }
 
 int select_solved_slot_by_live(
@@ -997,16 +1384,15 @@ bool sample_from_solved_bucket(
     std::ifstream& in,
     const SolvedFileIndex& index,
     const SolvedSlotLayout& slot,
-    const EXAD::Luts& luts,
+    ExadLutPointReader& lut,
     uint64_t local_row,
     const EXAD::BucketEntry& bucket,
     uint64_t& board) {
     const uint32_t semantic_sum = EXAD::bucket_key_semantic_sum(bucket.key);
-    const uint32_t group = EXAD::lut_group_index(semantic_sum);
-    if (group >= luts.size_table.size()) {
+    uint32_t valid_count = 0U;
+    if (!lut.valid_count_for_semantic_sum(semantic_sum, valid_count)) {
         return false;
     }
-    const uint32_t valid_count = luts.size_table[group];
     const uint64_t ordinal = local_row - static_cast<uint64_t>(bucket.dense_offset);
     uint32_t rank = std::numeric_limits<uint32_t>::max();
     if (valid_count <= index.header.threshold_bits) {
@@ -1036,7 +1422,7 @@ bool sample_from_solved_bucket(
             return false;
         }
     }
-    return reconstruct_board_from_key_rank(luts, bucket.key, rank, board);
+    return reconstruct_board_from_key_rank(lut, bucket.key, rank, board);
 }
 
 } // namespace
@@ -1088,11 +1474,12 @@ ColdLookupResult lookup_exad_cold(
     int ad_key,
     uint64_t canonical_board,
     uint32_t column) {
-    const auto index = read_index(compressed_path);
+    const auto index_ptr = cached_compressed_index(compressed_path);
+    const auto& index = *index_ptr;
     const auto mode = static_cast<EXAD::DTypeMode>(index.header.dtype_mode);
-    const auto luts = EXAD::read_lut_file(exadlut_path);
-    if (index.header.lut_signature != 0 && luts.config_signature != 0 &&
-        index.header.lut_signature != luts.config_signature) {
+    ExadLutPointReader lut(exadlut_path);
+    if (index.header.lut_signature != 0 && lut.signature() != 0 &&
+        index.header.lut_signature != lut.signature()) {
         throw std::runtime_error("EXAD LUT signature does not match compressed layer");
     }
 
@@ -1110,14 +1497,16 @@ ColdLookupResult lookup_exad_cold(
     uint32_t group = 0;
     uint32_t rank = 0;
     uint32_t semantic_sum = 0;
-    if (!EXAD::suffix28_rank_group_sum_fast(luts, canonical_board & EXAD::kSuffixMask,
-                                            group, rank, semantic_sum)) {
+    uint32_t valid_count = 0;
+    if (!lut.suffix28_query(
+            static_cast<uint32_t>(canonical_board & EXAD::kSuffixMask),
+            group,
+            rank,
+            semantic_sum,
+            valid_count)) {
         return result;
     }
-    if (group >= luts.size_table.size()) {
-        return result;
-    }
-    const uint32_t valid_count = luts.size_table[group];
+    (void)group;
     if (rank >= valid_count) {
         return result;
     }
@@ -1139,7 +1528,16 @@ ColdLookupResult lookup_exad_cold(
         return result;
     }
 
-    const auto compressed_bucket = read_range(compressed_path, block_it->compressed_offset, block_it->compressed_size);
+    std::ifstream compressed_in(compressed_path, std::ios::binary);
+    if (!compressed_in) {
+        throw std::runtime_error("failed to open EXAD compressed file: " + compressed_path);
+    }
+
+    const auto compressed_bucket = read_range_from(
+        compressed_in,
+        block_it->compressed_offset,
+        block_it->compressed_size,
+        "EXAD compressed bucket block");
     auto raw_bucket = decompress_block_or_throw(compressed_bucket.data(), compressed_bucket.size(), block_it->raw_size);
     result.bucket_block_raw_bytes = block_it->raw_size;
     result.bucket_block_compressed_bytes = block_it->compressed_size;
@@ -1214,8 +1612,11 @@ ColdLookupResult lookup_exad_cold(
         value_block->value_size != value_size_for_mode(mode)) {
         throw std::runtime_error("EXAD compressed value size mismatch");
     }
-    const auto compressed_value = read_range(compressed_path, value_block->compressed_offset,
-                                             value_block->compressed_size);
+    const auto compressed_value = read_range_from(
+        compressed_in,
+        value_block->compressed_offset,
+        value_block->compressed_size,
+        "EXAD compressed value block");
     auto raw_value_block = decompress_block_or_throw(compressed_value.data(), compressed_value.size(),
                                                      value_block->raw_size);
     result.value_block_raw_bytes = value_block->raw_size;
@@ -1264,11 +1665,12 @@ ColdLookupResult lookup_exadbook_cold(
     if (!in) {
         throw std::runtime_error("failed to open EXAD solved layer: " + exadbook_path);
     }
-    const auto index = read_solved_file_index(in, exadbook_path);
+    const auto index_ptr = cached_solved_file_index(exadbook_path);
+    const auto& index = *index_ptr;
     const auto mode = index.mode;
-    const auto luts = EXAD::read_lut_file(exadlut_path);
-    if (index.header.lut_signature != 0 && luts.config_signature != 0 &&
-        index.header.lut_signature != luts.config_signature) {
+    ExadLutPointReader lut(exadlut_path);
+    if (index.header.lut_signature != 0 && lut.signature() != 0 &&
+        index.header.lut_signature != lut.signature()) {
         throw std::runtime_error("EXAD LUT signature does not match solved layer");
     }
 
@@ -1286,14 +1688,16 @@ ColdLookupResult lookup_exadbook_cold(
     uint32_t group = 0;
     uint32_t rank = 0;
     uint32_t semantic_sum = 0;
-    if (!EXAD::suffix28_rank_group_sum_fast(luts, canonical_board & EXAD::kSuffixMask,
-                                            group, rank, semantic_sum)) {
+    uint32_t valid_count = 0;
+    if (!lut.suffix28_query(
+            static_cast<uint32_t>(canonical_board & EXAD::kSuffixMask),
+            group,
+            rank,
+            semantic_sum,
+            valid_count)) {
         return result;
     }
-    if (group >= luts.size_table.size()) {
-        return result;
-    }
-    const uint32_t valid_count = luts.size_table[group];
+    (void)group;
     if (rank >= valid_count) {
         return result;
     }
@@ -1393,13 +1797,18 @@ bool sample_exad_cold(
     const std::string& exadlut_path,
     uint64_t& board) {
     try {
-        const auto index = read_index(compressed_path);
-        const auto luts = EXAD::read_lut_file(exadlut_path);
-        if (index.header.lut_signature != 0 && luts.config_signature != 0 &&
-            index.header.lut_signature != luts.config_signature) {
+        const auto index_ptr = cached_compressed_index(compressed_path);
+        const auto& index = *index_ptr;
+        ExadLutPointReader lut(exadlut_path);
+        if (index.header.lut_signature != 0 && lut.signature() != 0 &&
+            index.header.lut_signature != lut.signature()) {
             return false;
         }
         if (index.header.live_board_count == 0U || index.header.bucket_block_count == 0U) {
+            return false;
+        }
+        std::ifstream compressed_in(compressed_path, std::ios::binary);
+        if (!compressed_in) {
             return false;
         }
 
@@ -1431,8 +1840,11 @@ bool sample_exad_cold(
             }
             --block_it;
 
-            const auto compressed_bucket =
-                read_range(compressed_path, block_it->compressed_offset, block_it->compressed_size);
+            const auto compressed_bucket = read_range_from(
+                compressed_in,
+                block_it->compressed_offset,
+                block_it->compressed_size,
+                "EXAD compressed bucket block");
             auto raw_bucket =
                 decompress_block_or_throw(compressed_bucket.data(), compressed_bucket.size(), block_it->raw_size);
             if (raw_bucket.size() < sizeof(BucketBlockRawHeader)) {
@@ -1478,11 +1890,10 @@ bool sample_exad_cold(
                 raw_bucket.data() + dense_off + bucket_idx * sizeof(uint32_t));
             const uint64_t ordinal = block_local_row - static_cast<uint64_t>(dense);
             const uint32_t semantic_sum = EXAD::bucket_key_semantic_sum(key);
-            const uint32_t group = EXAD::lut_group_index(semantic_sum);
-            if (group >= luts.size_table.size()) {
+            uint32_t valid_count = 0U;
+            if (!lut.valid_count_for_semantic_sum(semantic_sum, valid_count)) {
                 continue;
             }
-            const uint32_t valid_count = luts.size_table[group];
             const uint32_t bitmap_off = load_unaligned<uint32_t>(
                 raw_bucket.data() + bitmap_offsets_off + bucket_idx * sizeof(uint32_t));
             uint32_t rank = std::numeric_limits<uint32_t>::max();
@@ -1506,7 +1917,7 @@ bool sample_exad_cold(
                     continue;
                 }
             }
-            if (reconstruct_board_from_key_rank(luts, key, rank, board)) {
+            if (reconstruct_board_from_key_rank(lut, key, rank, board)) {
                 return true;
             }
         }
@@ -1525,10 +1936,11 @@ bool sample_exadbook_cold(
         if (!in) {
             return false;
         }
-        const auto index = read_solved_file_index(in, exadbook_path);
-        const auto luts = EXAD::read_lut_file(exadlut_path);
-        if (index.header.lut_signature != 0 && luts.config_signature != 0 &&
-            index.header.lut_signature != luts.config_signature) {
+        const auto index_ptr = cached_solved_file_index(exadbook_path);
+        const auto& index = *index_ptr;
+        ExadLutPointReader lut(exadlut_path);
+        if (index.header.lut_signature != 0 && lut.signature() != 0 &&
+            index.header.lut_signature != lut.signature()) {
             return false;
         }
         if (index.header.live_board_count == 0U) {
@@ -1549,7 +1961,7 @@ bool sample_exadbook_cold(
             if (!read_solved_bucket_for_local_row(in, slot, local_row, bucket)) {
                 continue;
             }
-            if (sample_from_solved_bucket(in, index, slot, luts, local_row, bucket, board)) {
+            if (sample_from_solved_bucket(in, index, slot, lut, local_row, bucket, board)) {
                 return true;
             }
         }

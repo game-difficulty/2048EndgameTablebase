@@ -9,10 +9,15 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <random>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 namespace EXCompressedResult {
@@ -137,6 +142,22 @@ struct Prefix36LutRuntime {
     uint8_t packed_table1 = 0xFFU;
 };
 
+struct Prefix36LutFileLayout {
+    uint64_t valid_suffix_masks_offset = 0;
+    uint64_t rank_tables_offset = 0;
+    uint64_t packed_rank_pair_offset = 0;
+    uint64_t packed_meta_offset = 0;
+    uint64_t size_table_offset = 0;
+    uint64_t offset_table_offset = 0;
+    uint64_t unrank_array_offset = 0;
+    uint64_t high_base_offset = 0;
+};
+
+struct Prefix36LutPointIndex {
+    Prefix36LutHeader header{};
+    Prefix36LutFileLayout layout{};
+};
+
 static_assert(sizeof(Prefix36LayerHeader) == 88, "unexpected prefix36 zbook header size");
 static_assert(sizeof(Prefix36LutHeader) == 144, "unexpected prefix36 LUT header size");
 
@@ -154,6 +175,14 @@ template <typename T>
 void append_value(std::vector<uint8_t> &out, const T &value) {
     const auto *ptr = reinterpret_cast<const uint8_t *>(&value);
     out.insert(out.end(), ptr, ptr + sizeof(T));
+}
+
+void append_bytes(std::vector<uint8_t> &out, const void *data, size_t bytes) {
+    if (bytes == 0U) {
+        return;
+    }
+    const auto *ptr = reinterpret_cast<const uint8_t *>(data);
+    out.insert(out.end(), ptr, ptr + bytes);
 }
 
 template <typename T>
@@ -180,28 +209,23 @@ void write_at(std::fstream &out, uint64_t offset, const void *data, uint64_t byt
     }
 }
 
-std::vector<uint8_t> read_range(const std::string &path, uint64_t offset, uint64_t size) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        throw std::runtime_error("failed to open file: " + path);
-    }
-    in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
-    std::vector<uint8_t> data(static_cast<size_t>(size));
-    if (size != 0U) {
-        in.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(size));
-        if (!in) {
-            throw std::runtime_error("failed to read file range: " + path);
-        }
-    }
-    return data;
-}
-
 template <typename T>
 T read_one_at(const std::string &path, uint64_t offset) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open file: " + path);
     }
+    in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+    T value{};
+    in.read(reinterpret_cast<char *>(&value), sizeof(value));
+    if (!in) {
+        throw std::runtime_error("failed to read file value: " + path);
+    }
+    return value;
+}
+
+template <typename T>
+T read_one_from(std::ifstream &in, uint64_t offset, const std::string &path) {
     in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
     T value{};
     in.read(reinterpret_cast<char *>(&value), sizeof(value));
@@ -231,8 +255,37 @@ std::vector<uint8_t> compress_block_or_throw(const uint8_t *data, size_t size, i
     return compressed;
 }
 
-std::vector<uint8_t> decompress_block_or_throw(const std::string &path, uint64_t offset, uint64_t compressed_size, uint64_t raw_size) {
-    std::vector<uint8_t> compressed = read_range(path, offset, compressed_size);
+uint32_t compression_worker_count(uint64_t block_count) {
+    if (block_count <= 1U) {
+        return 1U;
+    }
+    uint32_t hw = std::thread::hardware_concurrency();
+    if (hw == 0U) {
+        hw = 4U;
+    }
+    return static_cast<uint32_t>(std::min<uint64_t>(block_count, hw));
+}
+
+struct CompressedPrefix36BucketBlock {
+    Prefix36BucketBlockEntry entry{};
+    std::vector<uint8_t> compressed;
+    uint64_t raw_size = 0;
+};
+
+struct CompressedPrefix36SuccessBlock {
+    Prefix36SuccessBlockEntry entry{};
+    std::vector<uint8_t> compressed;
+    uint64_t raw_size = 0;
+};
+
+std::vector<uint8_t> decompress_block_or_throw_from(
+    std::ifstream &in,
+    const std::string &path,
+    uint64_t offset,
+    uint64_t compressed_size,
+    uint64_t raw_size
+) {
+    std::vector<uint8_t> compressed = read_range_from(in, offset, compressed_size, path);
     std::vector<uint8_t> raw = decompress_xz_block_native(compressed.data(), compressed.size());
     if (raw.size() != raw_size) {
         throw std::runtime_error("EX compressed zbook block decompressed to unexpected size");
@@ -683,6 +736,43 @@ struct Prefix36CompressedFileIndex {
     std::vector<Prefix36SuccessBlockEntry> success_dir;
 };
 
+struct FileStamp {
+    uint64_t size = 0;
+    std::filesystem::file_time_type write_time{};
+    bool valid = false;
+};
+
+template <typename T>
+struct CachedFileEntry {
+    FileStamp stamp;
+    std::shared_ptr<const T> value;
+};
+
+std::mutex g_cache_mutex;
+std::unordered_map<std::string, CachedFileEntry<Prefix36CompressedFileIndex>> g_prefix36_compressed_index_cache;
+std::unordered_map<std::string, CachedFileEntry<Prefix36LutPointIndex>> g_prefix36_lut_point_cache;
+
+FileStamp file_stamp(const std::string &path) {
+    FileStamp stamp;
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec) {
+        return stamp;
+    }
+    const auto write_time = std::filesystem::last_write_time(path, ec);
+    if (ec) {
+        return stamp;
+    }
+    stamp.size = static_cast<uint64_t>(size);
+    stamp.write_time = write_time;
+    stamp.valid = true;
+    return stamp;
+}
+
+bool same_stamp(const FileStamp &lhs, const FileStamp &rhs) {
+    return lhs.valid && rhs.valid && lhs.size == rhs.size && lhs.write_time == rhs.write_time;
+}
+
 Prefix36CompressedFileIndex read_prefix36_compressed_index(const std::string &path) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
@@ -723,6 +813,205 @@ Prefix36CompressedFileIndex read_prefix36_compressed_index(const std::string &pa
     }
     return index;
 }
+
+std::shared_ptr<const Prefix36CompressedFileIndex> cached_prefix36_compressed_index(const std::string &path) {
+    const FileStamp stamp = file_stamp(path);
+    {
+        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        auto it = g_prefix36_compressed_index_cache.find(path);
+        if (it != g_prefix36_compressed_index_cache.end() &&
+            same_stamp(it->second.stamp, stamp) &&
+            it->second.value) {
+            return it->second.value;
+        }
+    }
+
+    auto loaded = std::make_shared<Prefix36CompressedFileIndex>(read_prefix36_compressed_index(path));
+    if (stamp.valid) {
+        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        g_prefix36_compressed_index_cache[path] = CachedFileEntry<Prefix36CompressedFileIndex>{stamp, loaded};
+    }
+    return loaded;
+}
+
+Prefix36LutFileLayout prefix36_lut_file_layout(const Prefix36LutHeader &header) {
+    Prefix36LutFileLayout layout;
+    layout.valid_suffix_masks_offset = sizeof(Prefix36LutHeader);
+    layout.rank_tables_offset =
+        layout.valid_suffix_masks_offset + header.valid_suffix_mask_count * sizeof(uint32_t);
+    layout.packed_rank_pair_offset =
+        layout.rank_tables_offset + header.rank_table_values * sizeof(uint16_t);
+    layout.packed_meta_offset =
+        layout.packed_rank_pair_offset + header.packed_rank_pair_values * sizeof(uint32_t);
+    layout.size_table_offset =
+        layout.packed_meta_offset + header.packed_meta_values * sizeof(uint64_t);
+    layout.offset_table_offset =
+        layout.size_table_offset + header.size_table_values * sizeof(uint32_t);
+    layout.unrank_array_offset =
+        layout.offset_table_offset + header.offset_table_values * sizeof(uint32_t);
+    layout.high_base_offset =
+        layout.unrank_array_offset + header.unrank_array_values * sizeof(uint32_t);
+    return layout;
+}
+
+Prefix36LutPointIndex read_prefix36_lut_point_index(const std::string &path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("failed to open prefix36 LUT: " + path);
+    }
+    Prefix36LutPointIndex index;
+    in.read(reinterpret_cast<char *>(&index.header), sizeof(index.header));
+    if (!in ||
+        std::memcmp(index.header.magic, kPrefix36LutMagic, sizeof(kPrefix36LutMagic)) != 0 ||
+        index.header.version != 1U ||
+        index.header.size_table_values == 0U ||
+        index.header.high_base_values == 0U) {
+        throw std::runtime_error("invalid prefix36 LUT file");
+    }
+    index.layout = prefix36_lut_file_layout(index.header);
+    return index;
+}
+
+std::shared_ptr<const Prefix36LutPointIndex> cached_prefix36_lut_point_index(const std::string &path) {
+    const FileStamp stamp = file_stamp(path);
+    {
+        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        auto it = g_prefix36_lut_point_cache.find(path);
+        if (it != g_prefix36_lut_point_cache.end() &&
+            same_stamp(it->second.stamp, stamp) &&
+            it->second.value) {
+            return it->second.value;
+        }
+    }
+
+    auto loaded = std::make_shared<Prefix36LutPointIndex>(read_prefix36_lut_point_index(path));
+    if (stamp.valid) {
+        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        g_prefix36_lut_point_cache[path] = CachedFileEntry<Prefix36LutPointIndex>{stamp, loaded};
+    }
+    return loaded;
+}
+
+class Prefix36LutPointReader {
+public:
+    explicit Prefix36LutPointReader(const std::string &path)
+        : index_(cached_prefix36_lut_point_index(path)),
+          in_(path, std::ios::binary),
+          path_(path) {
+        if (!in_) {
+            throw std::runtime_error("failed to open prefix36 LUT: " + path);
+        }
+    }
+
+    Prefix36PreparedQuery prepare_query(uint64_t board) {
+        Prefix36PreparedQuery query;
+        const uint32_t suffix28 = static_cast<uint32_t>(board & 0x0FFFFFFFULL);
+        const uint32_t high = suffix28 >> 24U;
+        const uint8_t table_id = index_->header.table_for_high[high];
+        if (table_id == 0xFFU) {
+            return query;
+        }
+
+        const uint32_t low24 = suffix28 & 0xFFFFFFU;
+        const uint16_t low_rank = low24_rank(table_id, low24);
+        if (low_rank == kPrefix36InvalidRank) {
+            return query;
+        }
+
+        const uint32_t group = prefix36_suffix_group(suffix28);
+        uint32_t valid_count = 0U;
+        if (!valid_count_for_group(group, valid_count) || valid_count == 0U) {
+            return query;
+        }
+        const uint64_t high_base_index =
+            static_cast<uint64_t>(high) * index_->header.size_table_values + group;
+        if (high_base_index >= index_->header.high_base_values) {
+            return query;
+        }
+        const uint16_t high_base = read_one_from<uint16_t>(
+            in_,
+            index_->layout.high_base_offset + high_base_index * sizeof(uint16_t),
+            path_);
+        const uint32_t rank = static_cast<uint32_t>(high_base) + low_rank;
+        if (rank >= valid_count) {
+            return query;
+        }
+        query.prefix36 = board >> 28U;
+        query.group = group;
+        query.valid_count = valid_count;
+        query.rank = rank;
+        query.valid = true;
+        return query;
+    }
+
+    bool valid_count_for_group(uint32_t group, uint32_t &valid_count) {
+        valid_count = 0U;
+        if (group >= index_->header.size_table_values) {
+            return false;
+        }
+        valid_count = read_one_from<uint32_t>(
+            in_,
+            index_->layout.size_table_offset + static_cast<uint64_t>(group) * sizeof(uint32_t),
+            path_);
+        return true;
+    }
+
+    bool unrank_suffix(uint32_t group, uint32_t rank, uint32_t &suffix28) {
+        suffix28 = 0U;
+        uint32_t valid_count = 0U;
+        if (!valid_count_for_group(group, valid_count) || rank >= valid_count ||
+            group >= index_->header.offset_table_values) {
+            return false;
+        }
+        const uint32_t unrank_offset = read_one_from<uint32_t>(
+            in_,
+            index_->layout.offset_table_offset + static_cast<uint64_t>(group) * sizeof(uint32_t),
+            path_);
+        const uint64_t unrank_index = static_cast<uint64_t>(unrank_offset) + rank;
+        if (unrank_index >= index_->header.unrank_array_values) {
+            return false;
+        }
+        suffix28 = read_one_from<uint32_t>(
+            in_,
+            index_->layout.unrank_array_offset + unrank_index * sizeof(uint32_t),
+            path_);
+        return true;
+    }
+
+private:
+    uint16_t low24_rank(uint8_t table_id, uint32_t low24) {
+        const auto &header = index_->header;
+        if (header.packed_rank_pair_values != 0U &&
+            (table_id == header.packed_table0 || table_id == header.packed_table1)) {
+            if (low24 >= header.packed_rank_pair_values) {
+                return kPrefix36InvalidRank;
+            }
+            const uint32_t packed = read_one_from<uint32_t>(
+                in_,
+                index_->layout.packed_rank_pair_offset + static_cast<uint64_t>(low24) * sizeof(uint32_t),
+                path_);
+            return table_id == header.packed_table0
+                ? static_cast<uint16_t>(packed & 0xFFFFU)
+                : static_cast<uint16_t>(packed >> 16U);
+        }
+        if (table_id >= header.rank_table_count) {
+            return kPrefix36InvalidRank;
+        }
+        const uint64_t rank_index =
+            static_cast<uint64_t>(table_id) * ZMaskFrozen::kSuffixStateCount + low24;
+        if (rank_index >= header.rank_table_values) {
+            return kPrefix36InvalidRank;
+        }
+        return read_one_from<uint16_t>(
+            in_,
+            index_->layout.rank_tables_offset + rank_index * sizeof(uint16_t),
+            path_);
+    }
+
+    std::shared_ptr<const Prefix36LutPointIndex> index_;
+    std::ifstream in_;
+    std::string path_;
+};
 
 const Prefix36BucketBlockEntry *find_prefix36_bucket_block(
     const std::vector<Prefix36BucketBlockEntry> &dir,
@@ -859,10 +1148,6 @@ CompressStats compress_prefix36_layer_file(
     write_zero_bytes(out, bucket_block_count * sizeof(Prefix36BucketBlockEntry) +
                           success_block_count * sizeof(Prefix36SuccessBlockEntry));
 
-    std::ifstream source_file(zbook_path, std::ios::binary);
-    if (!source_file) {
-        throw std::runtime_error("failed to open prefix36 zbook: " + zbook_path);
-    }
     uint64_t write_offset = header.data_offset;
     out.seekp(static_cast<std::streamoff>(write_offset), std::ios::beg);
     CompressStats stats;
@@ -870,121 +1155,157 @@ CompressStats compress_prefix36_layer_file(
     stats.bucket_block_count = bucket_block_count;
     stats.success_block_count = success_block_count;
 
-    for (uint64_t block_idx = 0; block_idx < bucket_block_count; ++block_idx) {
-        const uint32_t begin = static_cast<uint32_t>(block_idx * bucket_block_buckets);
-        const uint32_t end = static_cast<uint32_t>(std::min<uint64_t>(source.bucket_count, begin + bucket_block_buckets));
-        const uint32_t count = end - begin;
-        std::vector<uint64_t> keys(count);
-        std::vector<uint32_t> bitmap_offsets(count);
-        std::vector<uint32_t> success_offsets(count);
-        if (count != 0U) {
-            source_file.seekg(static_cast<std::streamoff>(layout.bucket_keys_offset + static_cast<uint64_t>(begin) * sizeof(uint64_t)));
-            source_file.read(reinterpret_cast<char *>(keys.data()), static_cast<std::streamsize>(keys.size() * sizeof(uint64_t)));
-            source_file.seekg(static_cast<std::streamoff>(layout.bitmap_offsets_offset + static_cast<uint64_t>(begin) * sizeof(uint32_t)));
-            source_file.read(reinterpret_cast<char *>(bitmap_offsets.data()), static_cast<std::streamsize>(bitmap_offsets.size() * sizeof(uint32_t)));
-            source_file.seekg(static_cast<std::streamoff>(layout.success_offsets_offset + static_cast<uint64_t>(begin) * sizeof(uint32_t)));
-            source_file.read(reinterpret_cast<char *>(success_offsets.data()), static_cast<std::streamsize>(success_offsets.size() * sizeof(uint32_t)));
-            if (!source_file) {
-                throw std::runtime_error("failed to read prefix36 zbook metadata");
-            }
-        }
+    const uint32_t bucket_workers = compression_worker_count(bucket_block_count);
+    for (uint64_t batch_begin = 0; batch_begin < bucket_block_count; batch_begin += bucket_workers) {
+        const uint64_t batch_end = std::min<uint64_t>(bucket_block_count, batch_begin + bucket_workers);
+        std::vector<std::future<CompressedPrefix36BucketBlock>> futures;
+        futures.reserve(static_cast<size_t>(batch_end - batch_begin));
+        for (uint64_t block_idx = batch_begin; block_idx < batch_end; ++block_idx) {
+            futures.emplace_back(std::async(std::launch::async, [&, block_idx]() {
+                std::ifstream source_file(zbook_path, std::ios::binary);
+                if (!source_file) {
+                    throw std::runtime_error("failed to open prefix36 zbook: " + zbook_path);
+                }
+                const uint32_t begin = static_cast<uint32_t>(block_idx * bucket_block_buckets);
+                const uint32_t end = static_cast<uint32_t>(
+                    std::min<uint64_t>(source.bucket_count, begin + bucket_block_buckets));
+                const uint32_t count = end - begin;
+                std::vector<uint64_t> keys(count);
+                std::vector<uint32_t> bitmap_offsets(count);
+                std::vector<uint32_t> success_offsets(count);
+                if (count != 0U) {
+                    source_file.seekg(static_cast<std::streamoff>(
+                        layout.bucket_keys_offset + static_cast<uint64_t>(begin) * sizeof(uint64_t)));
+                    source_file.read(reinterpret_cast<char *>(keys.data()),
+                                     static_cast<std::streamsize>(keys.size() * sizeof(uint64_t)));
+                    source_file.seekg(static_cast<std::streamoff>(
+                        layout.bitmap_offsets_offset + static_cast<uint64_t>(begin) * sizeof(uint32_t)));
+                    source_file.read(reinterpret_cast<char *>(bitmap_offsets.data()),
+                                     static_cast<std::streamsize>(bitmap_offsets.size() * sizeof(uint32_t)));
+                    source_file.seekg(static_cast<std::streamoff>(
+                        layout.success_offsets_offset + static_cast<uint64_t>(begin) * sizeof(uint32_t)));
+                    source_file.read(reinterpret_cast<char *>(success_offsets.data()),
+                                     static_cast<std::streamsize>(success_offsets.size() * sizeof(uint32_t)));
+                    if (!source_file) {
+                        throw std::runtime_error("failed to read prefix36 zbook metadata");
+                    }
+                }
 
-        std::vector<uint32_t> local_bitmap_offsets(static_cast<size_t>(count) + 1U, 0U);
-        std::vector<uint8_t> small_payload;
-        std::vector<uint8_t> large_payload;
-        for (uint32_t local = 0; local < count; ++local) {
-            const uint64_t key = keys[local];
-            const uint32_t group = static_cast<uint32_t>((key & ((1ULL << 18U) - 1ULL)) >> 1U);
-            const uint32_t valid_count = group < lut.size_table.size() ? lut.size_table[group] : 0U;
-            if (valid_count <= source.threshold_bits) {
-                local_bitmap_offsets[local] = static_cast<uint32_t>(small_payload.size());
-                const uint64_t bytes = ZMaskFrozen::bytes_for_bits(valid_count);
-                std::vector<uint8_t> bitmap = read_range_from(
-                    source_file,
-                    layout.small_bitmap_offset + bitmap_offsets[local],
-                    bytes,
-                    zbook_path
-                );
-                small_payload.insert(small_payload.end(), bitmap.begin(), bitmap.end());
-            } else {
-                local_bitmap_offsets[local] = static_cast<uint32_t>(large_payload.size() / sizeof(uint64_t));
-                const uint64_t bytes = ZMaskFrozen::words_for_bits(valid_count) * sizeof(uint64_t);
-                std::vector<uint8_t> bitmap = read_range_from(
-                    source_file,
-                    layout.large_bitmap_offset + static_cast<uint64_t>(bitmap_offsets[local]) * sizeof(uint64_t),
-                    bytes,
-                    zbook_path
-                );
-                large_payload.insert(large_payload.end(), bitmap.begin(), bitmap.end());
-            }
-        }
-        local_bitmap_offsets[count] = 0U;
+                std::vector<uint32_t> local_bitmap_offsets(static_cast<size_t>(count) + 1U, 0U);
+                std::vector<uint8_t> small_payload;
+                std::vector<uint8_t> large_payload;
+                for (uint32_t local = 0; local < count; ++local) {
+                    const uint64_t key = keys[local];
+                    const uint32_t group = static_cast<uint32_t>((key & ((1ULL << 18U) - 1ULL)) >> 1U);
+                    const uint32_t valid_count = group < lut.size_table.size() ? lut.size_table[group] : 0U;
+                    if (valid_count <= source.threshold_bits) {
+                        local_bitmap_offsets[local] = static_cast<uint32_t>(small_payload.size());
+                        const uint64_t bytes = ZMaskFrozen::bytes_for_bits(valid_count);
+                        std::vector<uint8_t> bitmap = read_range_from(
+                            source_file,
+                            layout.small_bitmap_offset + bitmap_offsets[local],
+                            bytes,
+                            zbook_path
+                        );
+                        small_payload.insert(small_payload.end(), bitmap.begin(), bitmap.end());
+                    } else {
+                        local_bitmap_offsets[local] = static_cast<uint32_t>(large_payload.size() / sizeof(uint64_t));
+                        const uint64_t bytes = ZMaskFrozen::words_for_bits(valid_count) * sizeof(uint64_t);
+                        std::vector<uint8_t> bitmap = read_range_from(
+                            source_file,
+                            layout.large_bitmap_offset + static_cast<uint64_t>(bitmap_offsets[local]) * sizeof(uint64_t),
+                            bytes,
+                            zbook_path
+                        );
+                        large_payload.insert(large_payload.end(), bitmap.begin(), bitmap.end());
+                    }
+                }
+                local_bitmap_offsets[count] = 0U;
 
-        Prefix36BucketBlockRawHeader raw_header{};
-        raw_header.bucket_count = count;
-        raw_header.small_bitmap_bytes = static_cast<uint32_t>(small_payload.size());
-        raw_header.large_bitmap_words = static_cast<uint32_t>(large_payload.size() / sizeof(uint64_t));
-        std::vector<uint8_t> raw;
-        raw.reserve(sizeof(raw_header)
-            + keys.size() * sizeof(uint64_t)
-            + success_offsets.size() * sizeof(uint32_t)
-            + local_bitmap_offsets.size() * sizeof(uint32_t)
-            + small_payload.size()
-            + large_payload.size());
-        append_value(raw, raw_header);
-        auto append_bytes = [&raw](const void *data, size_t bytes) {
-            const auto *ptr = reinterpret_cast<const uint8_t *>(data);
-            raw.insert(raw.end(), ptr, ptr + bytes);
-        };
-        append_bytes(keys.data(), keys.size() * sizeof(uint64_t));
-        append_bytes(success_offsets.data(), success_offsets.size() * sizeof(uint32_t));
-        append_bytes(local_bitmap_offsets.data(), local_bitmap_offsets.size() * sizeof(uint32_t));
-        if (!small_payload.empty()) {
-            append_bytes(small_payload.data(), small_payload.size());
-        }
-        if (!large_payload.empty()) {
-            append_bytes(large_payload.data(), large_payload.size());
-        }
+                Prefix36BucketBlockRawHeader raw_header{};
+                raw_header.bucket_count = count;
+                raw_header.small_bitmap_bytes = static_cast<uint32_t>(small_payload.size());
+                raw_header.large_bitmap_words = static_cast<uint32_t>(large_payload.size() / sizeof(uint64_t));
+                std::vector<uint8_t> raw;
+                raw.reserve(sizeof(raw_header)
+                    + keys.size() * sizeof(uint64_t)
+                    + success_offsets.size() * sizeof(uint32_t)
+                    + local_bitmap_offsets.size() * sizeof(uint32_t)
+                    + small_payload.size()
+                    + large_payload.size());
+                append_value(raw, raw_header);
+                append_bytes(raw, keys.data(), keys.size() * sizeof(uint64_t));
+                append_bytes(raw, success_offsets.data(), success_offsets.size() * sizeof(uint32_t));
+                append_bytes(raw, local_bitmap_offsets.data(), local_bitmap_offsets.size() * sizeof(uint32_t));
+                append_bytes(raw, small_payload.data(), small_payload.size());
+                append_bytes(raw, large_payload.data(), large_payload.size());
 
-        std::vector<uint8_t> compressed = compress_block_or_throw(raw.data(), raw.size(), compression_level);
-        Prefix36BucketBlockEntry entry{};
-        entry.first_prefix36 = count == 0U ? 0ULL : keys.front();
-        entry.last_prefix36 = count == 0U ? 0ULL : keys.back();
-        entry.first_bucket_index = begin;
-        entry.bucket_count = count;
-        entry.compressed_offset = write_offset;
-        entry.compressed_size = compressed.size();
-        entry.raw_size = raw.size();
-        bucket_dir[static_cast<size_t>(block_idx)] = entry;
-        out.write(reinterpret_cast<const char *>(compressed.data()), static_cast<std::streamsize>(compressed.size()));
-        write_offset += compressed.size();
-        stats.bucket_raw_bytes += raw.size();
-        stats.bucket_compressed_bytes += compressed.size();
+                CompressedPrefix36BucketBlock result;
+                result.compressed = compress_block_or_throw(raw.data(), raw.size(), compression_level);
+                result.raw_size = raw.size();
+                result.entry.first_prefix36 = count == 0U ? 0ULL : keys.front();
+                result.entry.last_prefix36 = count == 0U ? 0ULL : keys.back();
+                result.entry.first_bucket_index = begin;
+                result.entry.bucket_count = count;
+                result.entry.compressed_size = result.compressed.size();
+                result.entry.raw_size = raw.size();
+                return result;
+            }));
+        }
+        for (size_t local = 0; local < futures.size(); ++local) {
+            CompressedPrefix36BucketBlock result = futures[local].get();
+            result.entry.compressed_offset = write_offset;
+            bucket_dir[static_cast<size_t>(batch_begin) + local] = result.entry;
+            out.write(reinterpret_cast<const char *>(result.compressed.data()),
+                      static_cast<std::streamsize>(result.compressed.size()));
+            write_offset += result.compressed.size();
+            stats.bucket_raw_bytes += result.raw_size;
+            stats.bucket_compressed_bytes += result.compressed.size();
+        }
     }
 
-    for (uint64_t block_idx = 0; block_idx < success_block_count; ++block_idx) {
-        const uint64_t first = block_idx * success_block_values;
-        const uint32_t count = static_cast<uint32_t>(std::min<uint64_t>(source.success_value_count - first, success_block_values));
-        const uint64_t raw_size = static_cast<uint64_t>(count) * source.value_size;
-        std::vector<uint8_t> raw = read_range_from(
-            source_file,
-            layout.success_values_offset + first * source.value_size,
-            raw_size,
-            zbook_path
-        );
-        std::vector<uint8_t> compressed = compress_block_or_throw(raw.data(), raw.size(), compression_level);
-        Prefix36SuccessBlockEntry entry{};
-        entry.first_value_index = first;
-        entry.value_count = count;
-        entry.value_size = static_cast<uint32_t>(source.value_size);
-        entry.compressed_offset = write_offset;
-        entry.compressed_size = compressed.size();
-        entry.raw_size = raw.size();
-        success_dir[static_cast<size_t>(block_idx)] = entry;
-        out.write(reinterpret_cast<const char *>(compressed.data()), static_cast<std::streamsize>(compressed.size()));
-        write_offset += compressed.size();
-        stats.success_raw_bytes += raw.size();
-        stats.success_compressed_bytes += compressed.size();
+    const uint32_t success_workers = compression_worker_count(success_block_count);
+    for (uint64_t batch_begin = 0; batch_begin < success_block_count; batch_begin += success_workers) {
+        const uint64_t batch_end = std::min<uint64_t>(success_block_count, batch_begin + success_workers);
+        std::vector<std::future<CompressedPrefix36SuccessBlock>> futures;
+        futures.reserve(static_cast<size_t>(batch_end - batch_begin));
+        for (uint64_t block_idx = batch_begin; block_idx < batch_end; ++block_idx) {
+            futures.emplace_back(std::async(std::launch::async, [&, block_idx]() {
+                std::ifstream source_file(zbook_path, std::ios::binary);
+                if (!source_file) {
+                    throw std::runtime_error("failed to open prefix36 zbook: " + zbook_path);
+                }
+                const uint64_t first = block_idx * success_block_values;
+                const uint32_t count = static_cast<uint32_t>(
+                    std::min<uint64_t>(source.success_value_count - first, success_block_values));
+                const uint64_t raw_size = static_cast<uint64_t>(count) * source.value_size;
+                std::vector<uint8_t> raw = read_range_from(
+                    source_file,
+                    layout.success_values_offset + first * source.value_size,
+                    raw_size,
+                    zbook_path
+                );
+                CompressedPrefix36SuccessBlock result;
+                result.compressed = compress_block_or_throw(raw.data(), raw.size(), compression_level);
+                result.raw_size = raw.size();
+                result.entry.first_value_index = first;
+                result.entry.value_count = count;
+                result.entry.value_size = static_cast<uint32_t>(source.value_size);
+                result.entry.compressed_size = result.compressed.size();
+                result.entry.raw_size = raw.size();
+                return result;
+            }));
+        }
+        for (size_t local = 0; local < futures.size(); ++local) {
+            CompressedPrefix36SuccessBlock result = futures[local].get();
+            result.entry.compressed_offset = write_offset;
+            success_dir[static_cast<size_t>(batch_begin) + local] = result.entry;
+            out.write(reinterpret_cast<const char *>(result.compressed.data()),
+                      static_cast<std::streamsize>(result.compressed.size()));
+            write_offset += result.compressed.size();
+            stats.success_raw_bytes += result.raw_size;
+            stats.success_compressed_bytes += result.compressed.size();
+        }
     }
 
     write_at(out, 0, &header, sizeof(header));
@@ -1056,108 +1377,129 @@ CompressStats compress_prefix36_layer_view_impl(
     stats.bucket_block_count = bucket_block_count;
     stats.success_block_count = success_block_count;
 
-    const auto append_bytes = [](std::vector<uint8_t> &raw, const void *data, size_t bytes) {
-        if (bytes == 0U) {
-            return;
-        }
-        const auto *ptr = reinterpret_cast<const uint8_t *>(data);
-        raw.insert(raw.end(), ptr, ptr + bytes);
-    };
+    const uint32_t bucket_workers = compression_worker_count(bucket_block_count);
+    for (uint64_t batch_begin = 0; batch_begin < bucket_block_count; batch_begin += bucket_workers) {
+        const uint64_t batch_end = std::min<uint64_t>(bucket_block_count, batch_begin + bucket_workers);
+        std::vector<std::future<CompressedPrefix36BucketBlock>> futures;
+        futures.reserve(static_cast<size_t>(batch_end - batch_begin));
+        for (uint64_t block_idx = batch_begin; block_idx < batch_end; ++block_idx) {
+            futures.emplace_back(std::async(std::launch::async, [&, block_idx]() {
+                const uint32_t begin = static_cast<uint32_t>(block_idx * bucket_block_buckets);
+                const uint32_t end = static_cast<uint32_t>(
+                    std::min<uint64_t>(layer.bucket_count, begin + bucket_block_buckets));
+                const uint32_t count = end - begin;
 
-    for (uint64_t block_idx = 0; block_idx < bucket_block_count; ++block_idx) {
-        const uint32_t begin = static_cast<uint32_t>(block_idx * bucket_block_buckets);
-        const uint32_t end = static_cast<uint32_t>(std::min<uint64_t>(layer.bucket_count, begin + bucket_block_buckets));
-        const uint32_t count = end - begin;
+                std::vector<uint64_t> keys(count);
+                std::vector<uint32_t> success_offsets(count);
+                std::vector<uint32_t> local_bitmap_offsets(static_cast<size_t>(count) + 1U, 0U);
+                std::vector<uint8_t> small_payload;
+                std::vector<uint8_t> large_payload;
 
-        std::vector<uint64_t> keys(count);
-        std::vector<uint32_t> success_offsets(count);
-        std::vector<uint32_t> local_bitmap_offsets(static_cast<size_t>(count) + 1U, 0U);
-        std::vector<uint8_t> small_payload;
-        std::vector<uint8_t> large_payload;
-
-        for (uint32_t local = 0; local < count; ++local) {
-            const uint32_t bucket_index = begin + local;
-            const uint64_t key = layer.bucket_keys[bucket_index];
-            keys[local] = key;
-            success_offsets[local] = layer.success_offsets[bucket_index];
-            const uint32_t group = static_cast<uint32_t>((key & ((1ULL << 18U) - 1ULL)) >> 1U);
-            const uint32_t valid_count = group < lut.size_table.size() ? lut.size_table[group] : 0U;
-            const uint32_t old_offset = layer.bitmap_offsets[bucket_index];
-            if (valid_count <= layer.threshold_bits) {
-                local_bitmap_offsets[local] = static_cast<uint32_t>(small_payload.size());
-                const uint64_t bytes = ZMaskFrozen::bytes_for_bits(valid_count);
-                if (static_cast<uint64_t>(old_offset) + bytes > layer.small_bitmap_byte_count) {
-                    throw std::runtime_error("prefix36 layer view small bitmap offset out of bounds");
+                for (uint32_t local = 0; local < count; ++local) {
+                    const uint32_t bucket_index = begin + local;
+                    const uint64_t key = layer.bucket_keys[bucket_index];
+                    keys[local] = key;
+                    success_offsets[local] = layer.success_offsets[bucket_index];
+                    const uint32_t group = static_cast<uint32_t>((key & ((1ULL << 18U) - 1ULL)) >> 1U);
+                    const uint32_t valid_count = group < lut.size_table.size() ? lut.size_table[group] : 0U;
+                    const uint32_t old_offset = layer.bitmap_offsets[bucket_index];
+                    if (valid_count <= layer.threshold_bits) {
+                        local_bitmap_offsets[local] = static_cast<uint32_t>(small_payload.size());
+                        const uint64_t bytes = ZMaskFrozen::bytes_for_bits(valid_count);
+                        if (static_cast<uint64_t>(old_offset) + bytes > layer.small_bitmap_byte_count) {
+                            throw std::runtime_error("prefix36 layer view small bitmap offset out of bounds");
+                        }
+                        append_bytes(small_payload, layer.small_bitmap_bytes + old_offset, static_cast<size_t>(bytes));
+                    } else {
+                        local_bitmap_offsets[local] = static_cast<uint32_t>(large_payload.size() / sizeof(uint64_t));
+                        const uint64_t words = ZMaskFrozen::words_for_bits(valid_count);
+                        if (static_cast<uint64_t>(old_offset) + words > layer.large_bitmap_word_count) {
+                            throw std::runtime_error("prefix36 layer view large bitmap offset out of bounds");
+                        }
+                        append_bytes(
+                            large_payload,
+                            reinterpret_cast<const uint8_t *>(layer.large_bitmap_words + old_offset),
+                            static_cast<size_t>(words * sizeof(uint64_t))
+                        );
+                    }
                 }
-                append_bytes(small_payload, layer.small_bitmap_bytes + old_offset, static_cast<size_t>(bytes));
-            } else {
-                local_bitmap_offsets[local] = static_cast<uint32_t>(large_payload.size() / sizeof(uint64_t));
-                const uint64_t words = ZMaskFrozen::words_for_bits(valid_count);
-                if (static_cast<uint64_t>(old_offset) + words > layer.large_bitmap_word_count) {
-                    throw std::runtime_error("prefix36 layer view large bitmap offset out of bounds");
-                }
-                append_bytes(
-                    large_payload,
-                    reinterpret_cast<const uint8_t *>(layer.large_bitmap_words + old_offset),
-                    static_cast<size_t>(words * sizeof(uint64_t))
-                );
-            }
+                local_bitmap_offsets[count] = 0U;
+
+                Prefix36BucketBlockRawHeader raw_header{};
+                raw_header.bucket_count = count;
+                raw_header.small_bitmap_bytes = static_cast<uint32_t>(small_payload.size());
+                raw_header.large_bitmap_words = static_cast<uint32_t>(large_payload.size() / sizeof(uint64_t));
+                std::vector<uint8_t> raw;
+                raw.reserve(sizeof(raw_header)
+                    + keys.size() * sizeof(uint64_t)
+                    + success_offsets.size() * sizeof(uint32_t)
+                    + local_bitmap_offsets.size() * sizeof(uint32_t)
+                    + small_payload.size()
+                    + large_payload.size());
+                append_value(raw, raw_header);
+                append_bytes(raw, keys.data(), keys.size() * sizeof(uint64_t));
+                append_bytes(raw, success_offsets.data(), success_offsets.size() * sizeof(uint32_t));
+                append_bytes(raw, local_bitmap_offsets.data(), local_bitmap_offsets.size() * sizeof(uint32_t));
+                append_bytes(raw, small_payload.data(), small_payload.size());
+                append_bytes(raw, large_payload.data(), large_payload.size());
+
+                CompressedPrefix36BucketBlock result;
+                result.compressed = compress_block_or_throw(raw.data(), raw.size(), compression_level);
+                result.raw_size = raw.size();
+                result.entry.first_prefix36 = count == 0U ? 0ULL : keys.front();
+                result.entry.last_prefix36 = count == 0U ? 0ULL : keys.back();
+                result.entry.first_bucket_index = begin;
+                result.entry.bucket_count = count;
+                result.entry.compressed_size = result.compressed.size();
+                result.entry.raw_size = raw.size();
+                return result;
+            }));
         }
-        local_bitmap_offsets[count] = 0U;
-
-        Prefix36BucketBlockRawHeader raw_header{};
-        raw_header.bucket_count = count;
-        raw_header.small_bitmap_bytes = static_cast<uint32_t>(small_payload.size());
-        raw_header.large_bitmap_words = static_cast<uint32_t>(large_payload.size() / sizeof(uint64_t));
-        std::vector<uint8_t> raw;
-        raw.reserve(sizeof(raw_header)
-            + keys.size() * sizeof(uint64_t)
-            + success_offsets.size() * sizeof(uint32_t)
-            + local_bitmap_offsets.size() * sizeof(uint32_t)
-            + small_payload.size()
-            + large_payload.size());
-        append_value(raw, raw_header);
-        append_bytes(raw, keys.data(), keys.size() * sizeof(uint64_t));
-        append_bytes(raw, success_offsets.data(), success_offsets.size() * sizeof(uint32_t));
-        append_bytes(raw, local_bitmap_offsets.data(), local_bitmap_offsets.size() * sizeof(uint32_t));
-        append_bytes(raw, small_payload.data(), small_payload.size());
-        append_bytes(raw, large_payload.data(), large_payload.size());
-
-        std::vector<uint8_t> compressed = compress_block_or_throw(raw.data(), raw.size(), compression_level);
-        Prefix36BucketBlockEntry entry{};
-        entry.first_prefix36 = count == 0U ? 0ULL : keys.front();
-        entry.last_prefix36 = count == 0U ? 0ULL : keys.back();
-        entry.first_bucket_index = begin;
-        entry.bucket_count = count;
-        entry.compressed_offset = write_offset;
-        entry.compressed_size = compressed.size();
-        entry.raw_size = raw.size();
-        bucket_dir[static_cast<size_t>(block_idx)] = entry;
-        out.write(reinterpret_cast<const char *>(compressed.data()), static_cast<std::streamsize>(compressed.size()));
-        write_offset += compressed.size();
-        stats.bucket_raw_bytes += raw.size();
-        stats.bucket_compressed_bytes += compressed.size();
+        for (size_t local = 0; local < futures.size(); ++local) {
+            CompressedPrefix36BucketBlock result = futures[local].get();
+            result.entry.compressed_offset = write_offset;
+            bucket_dir[static_cast<size_t>(batch_begin) + local] = result.entry;
+            out.write(reinterpret_cast<const char *>(result.compressed.data()),
+                      static_cast<std::streamsize>(result.compressed.size()));
+            write_offset += result.compressed.size();
+            stats.bucket_raw_bytes += result.raw_size;
+            stats.bucket_compressed_bytes += result.compressed.size();
+        }
     }
 
-    for (uint64_t block_idx = 0; block_idx < success_block_count; ++block_idx) {
-        const uint64_t first = block_idx * success_block_values;
-        const uint32_t count = static_cast<uint32_t>(
-            std::min<uint64_t>(layer.success_value_count - first, success_block_values)
-        );
-        std::vector<uint8_t> raw = prefix36_success_raw_from_fixed_view(layer, first, count, mode);
-        std::vector<uint8_t> compressed = compress_block_or_throw(raw.data(), raw.size(), compression_level);
-        Prefix36SuccessBlockEntry entry{};
-        entry.first_value_index = first;
-        entry.value_count = count;
-        entry.value_size = layer.value_size;
-        entry.compressed_offset = write_offset;
-        entry.compressed_size = compressed.size();
-        entry.raw_size = raw.size();
-        success_dir[static_cast<size_t>(block_idx)] = entry;
-        out.write(reinterpret_cast<const char *>(compressed.data()), static_cast<std::streamsize>(compressed.size()));
-        write_offset += compressed.size();
-        stats.success_raw_bytes += raw.size();
-        stats.success_compressed_bytes += compressed.size();
+    const uint32_t success_workers = compression_worker_count(success_block_count);
+    for (uint64_t batch_begin = 0; batch_begin < success_block_count; batch_begin += success_workers) {
+        const uint64_t batch_end = std::min<uint64_t>(success_block_count, batch_begin + success_workers);
+        std::vector<std::future<CompressedPrefix36SuccessBlock>> futures;
+        futures.reserve(static_cast<size_t>(batch_end - batch_begin));
+        for (uint64_t block_idx = batch_begin; block_idx < batch_end; ++block_idx) {
+            futures.emplace_back(std::async(std::launch::async, [&, block_idx]() {
+                const uint64_t first = block_idx * success_block_values;
+                const uint32_t count = static_cast<uint32_t>(
+                    std::min<uint64_t>(layer.success_value_count - first, success_block_values)
+                );
+                std::vector<uint8_t> raw = prefix36_success_raw_from_fixed_view(layer, first, count, mode);
+                CompressedPrefix36SuccessBlock result;
+                result.compressed = compress_block_or_throw(raw.data(), raw.size(), compression_level);
+                result.raw_size = raw.size();
+                result.entry.first_value_index = first;
+                result.entry.value_count = count;
+                result.entry.value_size = layer.value_size;
+                result.entry.compressed_size = result.compressed.size();
+                result.entry.raw_size = raw.size();
+                return result;
+            }));
+        }
+        for (size_t local = 0; local < futures.size(); ++local) {
+            CompressedPrefix36SuccessBlock result = futures[local].get();
+            result.entry.compressed_offset = write_offset;
+            success_dir[static_cast<size_t>(batch_begin) + local] = result.entry;
+            out.write(reinterpret_cast<const char *>(result.compressed.data()),
+                      static_cast<std::streamsize>(result.compressed.size()));
+            write_offset += result.compressed.size();
+            stats.success_raw_bytes += result.raw_size;
+            stats.success_compressed_bytes += result.compressed.size();
+        }
     }
 
     write_at(out, 0, &header, sizeof(header));
@@ -1178,7 +1520,8 @@ ColdLookupResult lookup_prefix36_compressed_cold(
     const std::string &zlut_path,
     uint64_t board
 ) {
-    const Prefix36CompressedFileIndex index = read_prefix36_compressed_index(compressed_path);
+    const auto index_ptr = cached_prefix36_compressed_index(compressed_path);
+    const Prefix36CompressedFileIndex &index = *index_ptr;
     const Prefix36DTypeMode mode = prefix36_dtype_mode_from_u32(index.header.dtype_mode);
     ColdLookupResult miss;
     miss.success_kind = storage_kind_for_prefix36_mode(mode);
@@ -1188,8 +1531,8 @@ ColdLookupResult lookup_prefix36_compressed_cold(
         return miss;
     }
 
-    const Prefix36LutRuntime lut = read_prefix36_lut_runtime(zlut_path);
-    const Prefix36PreparedQuery query = prepare_prefix36_query(lut, board);
+    Prefix36LutPointReader lut(zlut_path);
+    const Prefix36PreparedQuery query = lut.prepare_query(board);
     if (!query.valid) {
         return miss;
     }
@@ -1200,7 +1543,13 @@ ColdLookupResult lookup_prefix36_compressed_cold(
         return miss;
     }
 
-    std::vector<uint8_t> bucket_raw = decompress_block_or_throw(
+    std::ifstream compressed_in(compressed_path, std::ios::binary);
+    if (!compressed_in) {
+        throw std::runtime_error("failed to open EX prefix36 compressed result: " + compressed_path);
+    }
+
+    std::vector<uint8_t> bucket_raw = decompress_block_or_throw_from(
+        compressed_in,
         compressed_path,
         bucket_entry->compressed_offset,
         bucket_entry->compressed_size,
@@ -1281,7 +1630,8 @@ ColdLookupResult lookup_prefix36_compressed_cold(
     if (success_entry == nullptr || success_entry->value_size != index.header.value_size) {
         throw std::runtime_error("EX prefix36 compressed success block not found");
     }
-    std::vector<uint8_t> success_raw = decompress_block_or_throw(
+    std::vector<uint8_t> success_raw = decompress_block_or_throw_from(
+        compressed_in,
         compressed_path,
         success_entry->compressed_offset,
         success_entry->compressed_size,
@@ -1314,6 +1664,7 @@ ColdLookupResult lookup_prefix36_compressed_cold(
 }
 
 bool load_prefix36_compressed_success_value(
+    std::ifstream &compressed_in,
     const std::string &compressed_path,
     const Prefix36CompressedFileIndex &index,
     Prefix36DTypeMode mode,
@@ -1330,7 +1681,8 @@ bool load_prefix36_compressed_success_value(
     if (entry == nullptr || entry->value_size != index.header.value_size) {
         return false;
     }
-    std::vector<uint8_t> raw = decompress_block_or_throw(
+    std::vector<uint8_t> raw = decompress_block_or_throw_from(
+        compressed_in,
         compressed_path,
         entry->compressed_offset,
         entry->compressed_size,
@@ -1357,15 +1709,17 @@ bool sample_prefix36_compressed_cold(
     uint64_t &raw_value_bits,
     double &numeric_value
 ) {
-    const Prefix36CompressedFileIndex index = read_prefix36_compressed_index(compressed_path);
+    const auto index_ptr = cached_prefix36_compressed_index(compressed_path);
+    const Prefix36CompressedFileIndex &index = *index_ptr;
     if (index.header.bucket_block_count == 0U ||
         index.header.bucket_count == 0U ||
         index.header.success_value_count == 0U) {
         return false;
     }
     const Prefix36DTypeMode mode = prefix36_dtype_mode_from_u32(index.header.dtype_mode);
-    const Prefix36LutRuntime lut = read_prefix36_lut_runtime(zlut_path, true);
-    if (lut.offset_table.empty() || lut.unrank_array.empty()) {
+    Prefix36LutPointReader lut(zlut_path);
+    std::ifstream compressed_in(compressed_path, std::ios::binary);
+    if (!compressed_in) {
         return false;
     }
 
@@ -1377,7 +1731,8 @@ bool sample_prefix36_compressed_cold(
         if (bucket_entry.bucket_count == 0U) {
             continue;
         }
-        std::vector<uint8_t> bucket_raw = decompress_block_or_throw(
+        std::vector<uint8_t> bucket_raw = decompress_block_or_throw_from(
+            compressed_in,
             compressed_path,
             bucket_entry.compressed_offset,
             bucket_entry.compressed_size,
@@ -1420,11 +1775,10 @@ bool sample_prefix36_compressed_cold(
             const uint64_t key = load_unaligned<uint64_t>(keys_ptr + static_cast<size_t>(local) * sizeof(uint64_t));
             const uint64_t prefix36 = key >> 18U;
             const uint32_t group = static_cast<uint32_t>((key & ((1ULL << 18U) - 1ULL)) >> 1U);
-            if (group >= lut.size_table.size() || group >= lut.offset_table.size()) {
-                return false;
+            uint32_t valid_count = 0U;
+            if (!lut.valid_count_for_group(group, valid_count)) {
+                continue;
             }
-            const uint32_t valid_count = lut.size_table[group];
-            const uint32_t unrank_offset = lut.offset_table[group];
             const uint32_t success_offset =
                 load_unaligned<uint32_t>(success_offsets_ptr + static_cast<size_t>(local) * sizeof(uint32_t));
             const uint32_t bitmap_offset =
@@ -1487,17 +1841,18 @@ bool sample_prefix36_compressed_cold(
                         break;
                     }
                 }
+                uint32_t suffix28 = 0U;
                 if (rank == std::numeric_limits<uint32_t>::max() ||
-                    static_cast<uint64_t>(unrank_offset) + rank >= lut.unrank_array.size()) {
+                    !lut.unrank_suffix(group, rank, suffix28)) {
                     continue;
                 }
                 const uint64_t success_index = static_cast<uint64_t>(success_offset) + success_ordinal;
                 if (success_index >= index.header.success_value_count) {
                     continue;
                 }
-                board = (prefix36 << 28U) | lut.unrank_array[static_cast<size_t>(unrank_offset) + rank];
+                board = (prefix36 << 28U) | suffix28;
                 if (load_prefix36_compressed_success_value(
-                        compressed_path, index, mode, success_index, raw_value_bits, numeric_value)) {
+                        compressed_in, compressed_path, index, mode, success_index, raw_value_bits, numeric_value)) {
                     return true;
                 }
             } else {
@@ -1558,17 +1913,18 @@ bool sample_prefix36_compressed_cold(
                         break;
                     }
                 }
+                uint32_t suffix28 = 0U;
                 if (rank == std::numeric_limits<uint32_t>::max() ||
-                    static_cast<uint64_t>(unrank_offset) + rank >= lut.unrank_array.size()) {
+                    !lut.unrank_suffix(group, rank, suffix28)) {
                     continue;
                 }
                 const uint64_t success_index = static_cast<uint64_t>(success_offset) + success_ordinal;
                 if (success_index >= index.header.success_value_count) {
                     continue;
                 }
-                board = (prefix36 << 28U) | lut.unrank_array[static_cast<size_t>(unrank_offset) + rank];
+                board = (prefix36 << 28U) | suffix28;
                 if (load_prefix36_compressed_success_value(
-                        compressed_path, index, mode, success_index, raw_value_bits, numeric_value)) {
+                        compressed_in, compressed_path, index, mode, success_index, raw_value_bits, numeric_value)) {
                     return true;
                 }
             }
