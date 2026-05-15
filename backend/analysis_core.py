@@ -11,7 +11,7 @@ import engine_core.BoardMover as bm
 import Config
 import engine_core.VBoardMover as vbm
 from engine_core.BookReader import BookReaderDispatcher
-from Config import DTYPE_CONFIG, SingletonConfig, category_info
+from Config import DTYPE_CONFIG, SingletonConfig, category_info, pattern_catalog
 from engine_core.performance_evaluation import (
     PERFORMANCE_PERFECT_LABEL,
     build_performance_stats,
@@ -331,6 +331,7 @@ class Analyzer:
 
         self.bm = bm
         self.vbm = vbm
+        self.variant_wall_mask = self._build_variant_wall_mask()
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
         spawn_rate4 = SingletonConfig().config["4_spawn_rate"]
         bookfile_path_list = SingletonConfig().config["filepath_map"].get(
@@ -396,6 +397,26 @@ class Analyzer:
         target_value = 1 << self.target
         mask = board >= target_value
         np.copyto(board, 32768, where=mask)
+        return board
+
+    def _build_variant_wall_mask(self) -> np.typing.NDArray | None:
+        if self.pattern not in category_info.get("variant", []):
+            return None
+        seed_boards = pattern_catalog.get(self.pattern, {}).get("seed_boards", ())
+        if len(seed_boards) == 0:
+            return None
+        seed_board = self.vbm.decode_board(np.uint64(seed_boards[0]))
+        return seed_board == 32768
+
+    def mask_variant_large_tiles(self, board: np.typing.NDArray) -> np.typing.NDArray:
+        target_value = 1 << self.target
+        wall_mask = self.variant_wall_mask
+        if wall_mask is None:
+            mask = board >= target_value
+        else:
+            np.copyto(board, 32768, where=wall_mask)
+            mask = (board >= target_value) & ~wall_mask
+        np.copyto(board, 16384, where=mask)
         return board
 
     def generate_reports(self) -> None:
@@ -560,7 +581,7 @@ class Analyzer:
         board = self.bm.decode_board(board_encoded)
 
         if self.pattern in category_info.get("variant", []):
-            masked_board = board.copy()
+            masked_board = self.mask_variant_large_tiles(board.copy())
         elif self.check_nth_largest(board_encoded):
             masked_board = self.mask_large_tiles(board.copy())
         else:

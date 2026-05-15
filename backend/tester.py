@@ -8,6 +8,7 @@ from Config import (
     SingletonConfig,
     category_info,
     formation_info,
+    pattern_32k_tiles_map,
 )
 from engine_core.BookReader import BookReader
 from engine_core.VBoardMover import decode_board, encode_board
@@ -21,6 +22,7 @@ from engine_core.performance_evaluation import (
 
 from .serialization import sanitize_config
 from .session import np_u64, safe_hex, u64
+from .trainer_helpers import replace_board_for_lookup
 
 
 TESTER_PERFORMANCE_ORDER = PERFORMANCE_LABELS
@@ -274,10 +276,20 @@ def _tester_compute_results(session):
         session.tester_best_move = None
         return
 
+    pattern = session.tester_pattern[0]
+    target = session.tester_pattern[1]
+    n_large_tiles = pattern_32k_tiles_map.get(pattern, [0])[0]
+    lookup_board = replace_board_for_lookup(
+        np.uint64(u64(session.board_encoded)),
+        pattern,
+        n_large_tiles,
+        target,
+        session.use_variant,
+    )
     result, dtype = session.ensure_book_reader().move_on_dic(
-        decode_board(np.uint64(u64(session.board_encoded))),
-        session.tester_pattern[0],
-        session.tester_pattern[1],
+        decode_board(np.uint64(u64(lookup_board))),
+        pattern,
+        target,
         session.tester_full_pattern,
     )
 
