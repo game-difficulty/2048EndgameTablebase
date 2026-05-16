@@ -59,21 +59,11 @@ uint32_t bucket_key_remaining_sum(uint64_t key);
 
 Luts build_luts(const ZMaskFrozen::TileLimitConfig &config, int num_threads = 8);
 
-bool test_small_bit(const std::vector<uint8_t> &bitmap, uint32_t offset, uint32_t rank);
-bool test_large_bit(const std::vector<uint64_t> &bitmap, uint32_t offset, uint32_t rank);
 void set_small_bit(std::vector<uint8_t> &bitmap, uint32_t offset, uint32_t rank);
 void set_large_bit(std::vector<uint64_t> &bitmap, uint32_t offset, uint32_t rank);
-uint64_t live_count_by_bitmap(const Layer &layer, uint32_t bucket_index, const Luts &luts);
 
 Layer build_layer_from_sorted_boards(
     const std::vector<uint64_t> &boards,
-    const Luts &luts,
-    int num_threads
-);
-
-Layer merge_layers(
-    const Layer &lhs,
-    const Layer &rhs,
     const Luts &luts,
     int num_threads
 );

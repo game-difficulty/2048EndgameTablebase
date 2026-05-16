@@ -3,7 +3,6 @@
 #include "EXFrozenLayer.h"
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -12,10 +11,6 @@
 
 #if defined(_OPENMP)
 #include <omp.h>
-#endif
-
-#if defined(_MSC_VER)
-#include <intrin.h>
 #endif
 
 namespace Prefix40Baseline {
@@ -32,29 +27,6 @@ inline int effective_threads(int requested) {
     return requested > 0 ? requested : 1;
 #endif
 }
-
-inline uint32_t popcount_u32(uint32_t value) {
-#if defined(_MSC_VER)
-    return static_cast<uint32_t>(__popcnt(value));
-#else
-    return static_cast<uint32_t>(__builtin_popcount(value));
-#endif
-}
-
-inline uint32_t popcount_u64(uint64_t value) {
-#if defined(_MSC_VER) && defined(_M_X64)
-    return static_cast<uint32_t>(__popcnt64(value));
-#elif defined(_MSC_VER)
-    return popcount_u32(static_cast<uint32_t>(value)) + popcount_u32(static_cast<uint32_t>(value >> 32U));
-#else
-    return static_cast<uint32_t>(__builtin_popcountll(value));
-#endif
-}
-
-struct BucketSource {
-    uint32_t lhs = std::numeric_limits<uint32_t>::max();
-    uint32_t rhs = std::numeric_limits<uint32_t>::max();
-};
 
 } // namespace
 
@@ -181,18 +153,6 @@ Luts build_luts(const ZMaskFrozen::TileLimitConfig &config, int num_threads) {
     return luts;
 }
 
-bool test_small_bit(const std::vector<uint8_t> &bitmap, uint32_t offset, uint32_t rank) {
-    const uint32_t byte_idx = offset + (rank >> 3U);
-    const uint32_t bit = rank & 7U;
-    return (bitmap[byte_idx] & static_cast<uint8_t>(1U << bit)) != 0U;
-}
-
-bool test_large_bit(const std::vector<uint64_t> &bitmap, uint32_t offset, uint32_t rank) {
-    const uint32_t word_idx = offset + (rank >> 6U);
-    const uint32_t bit = rank & 63U;
-    return (bitmap[word_idx] & (1ULL << bit)) != 0ULL;
-}
-
 void set_small_bit(std::vector<uint8_t> &bitmap, uint32_t offset, uint32_t rank) {
     const uint32_t byte_idx = offset + (rank >> 3U);
     const uint32_t bit = rank & 7U;
@@ -203,26 +163,6 @@ void set_large_bit(std::vector<uint64_t> &bitmap, uint32_t offset, uint32_t rank
     const uint32_t word_idx = offset + (rank >> 6U);
     const uint32_t bit = rank & 63U;
     bitmap[word_idx] |= (1ULL << bit);
-}
-
-uint64_t live_count_by_bitmap(const Layer &layer, uint32_t bucket_index, const Luts &luts) {
-    const uint32_t remaining_sum = bucket_key_remaining_sum(layer.bucket_keys[bucket_index]);
-    const uint32_t valid_count = luts.size_table[sum_index(remaining_sum)];
-    uint64_t total = 0U;
-    if (valid_count <= layer.threshold_bits) {
-        const uint32_t bytes = static_cast<uint32_t>(bytes_for_bits(valid_count));
-        const uint32_t offset = layer.bitmap_offsets[bucket_index];
-        for (uint32_t i = 0; i < bytes; ++i) {
-            total += popcount_u32(layer.small_bitmap_bytes[offset + i]);
-        }
-    } else {
-        const uint32_t words = static_cast<uint32_t>(words_for_bits(valid_count));
-        const uint32_t offset = layer.bitmap_offsets[bucket_index];
-        for (uint32_t i = 0; i < words; ++i) {
-            total += popcount_u64(layer.large_bitmap_words[offset + i]);
-        }
-    }
-    return total;
 }
 
 Layer build_layer_from_sorted_boards(
@@ -318,128 +258,6 @@ Layer build_layer_from_sorted_boards(
     }
 
     return layer;
-}
-
-Layer merge_layers(
-    const Layer &lhs,
-    const Layer &rhs,
-    const Luts &luts,
-    int num_threads
-) {
-    if (lhs.empty()) {
-        return rhs;
-    }
-    if (rhs.empty()) {
-        return lhs;
-    }
-    if (lhs.layer_sum != rhs.layer_sum) {
-        throw std::runtime_error("cannot merge prefix40 layers with different layer_sum");
-    }
-    if (lhs.threshold_bits != rhs.threshold_bits) {
-        throw std::runtime_error("cannot merge prefix40 layers with different threshold_bits");
-    }
-
-    Layer out;
-    out.layer_sum = lhs.layer_sum;
-    out.threshold_bits = lhs.threshold_bits;
-
-    std::vector<BucketSource> sources;
-    sources.reserve(lhs.bucket_keys.size() + rhs.bucket_keys.size());
-
-    size_t i = 0U;
-    size_t j = 0U;
-    uint64_t exact_bits = 0U;
-    uint64_t aligned_bits = 0U;
-    uint64_t small_bytes_total = 0U;
-    uint64_t large_words_total = 0U;
-    while (i < lhs.bucket_keys.size() || j < rhs.bucket_keys.size()) {
-        const bool take_lhs = (j == rhs.bucket_keys.size()) ||
-                              (i < lhs.bucket_keys.size() && lhs.bucket_keys[i] < rhs.bucket_keys[j]);
-        const bool take_rhs = (i == lhs.bucket_keys.size()) ||
-                              (j < rhs.bucket_keys.size() && rhs.bucket_keys[j] < lhs.bucket_keys[i]);
-        uint64_t key = 0U;
-        BucketSource src;
-        if (take_lhs) {
-            key = lhs.bucket_keys[i];
-            src.lhs = static_cast<uint32_t>(i++);
-        } else if (take_rhs) {
-            key = rhs.bucket_keys[j];
-            src.rhs = static_cast<uint32_t>(j++);
-        } else {
-            key = lhs.bucket_keys[i];
-            src.lhs = static_cast<uint32_t>(i++);
-            src.rhs = static_cast<uint32_t>(j++);
-        }
-        const uint32_t remaining_sum = bucket_key_remaining_sum(key);
-        const uint32_t valid_count = luts.size_table[sum_index(remaining_sum)];
-        out.bucket_keys.push_back(key);
-        out.bitmap_offsets.push_back(0U);
-        out.dense_offsets.push_back(0U);
-        exact_bits += valid_count;
-        if (valid_count <= out.threshold_bits) {
-            out.bitmap_offsets.back() = static_cast<uint32_t>(small_bytes_total);
-            small_bytes_total += bytes_for_bits(valid_count);
-            aligned_bits += bytes_for_bits(valid_count) * 8ULL;
-        } else {
-            out.bitmap_offsets.back() = static_cast<uint32_t>(large_words_total);
-            large_words_total += words_for_bits(valid_count);
-            aligned_bits += words_for_bits(valid_count) * 64ULL;
-        }
-        sources.push_back(src);
-    }
-
-    out.exact_bitmap_bits = exact_bits;
-    out.aligned_bitmap_bits = aligned_bits;
-    out.small_bitmap_bytes.assign(small_bytes_total, 0U);
-    out.large_bitmap_words.assign(large_words_total, 0ULL);
-
-    const int thread_count = effective_threads(num_threads);
-    std::vector<uint32_t> live_counts(out.bucket_keys.size(), 0U);
-
-#pragma omp parallel for schedule(static) num_threads(thread_count)
-    for (int64_t idx = 0; idx < static_cast<int64_t>(out.bucket_keys.size()); ++idx) {
-        const uint32_t remaining_sum = bucket_key_remaining_sum(out.bucket_keys[static_cast<size_t>(idx)]);
-        const uint32_t valid_count = luts.size_table[sum_index(remaining_sum)];
-        const uint32_t bitmap_offset = out.bitmap_offsets[static_cast<size_t>(idx)];
-        const BucketSource src = sources[static_cast<size_t>(idx)];
-        uint32_t live = 0U;
-        if (valid_count <= out.threshold_bits) {
-            const uint32_t bytes = static_cast<uint32_t>(bytes_for_bits(valid_count));
-            for (uint32_t byte_idx = 0; byte_idx < bytes; ++byte_idx) {
-                uint8_t value = 0U;
-                if (src.lhs != std::numeric_limits<uint32_t>::max()) {
-                    value = static_cast<uint8_t>(value | lhs.small_bitmap_bytes[lhs.bitmap_offsets[src.lhs] + byte_idx]);
-                }
-                if (src.rhs != std::numeric_limits<uint32_t>::max()) {
-                    value = static_cast<uint8_t>(value | rhs.small_bitmap_bytes[rhs.bitmap_offsets[src.rhs] + byte_idx]);
-                }
-                out.small_bitmap_bytes[bitmap_offset + byte_idx] = value;
-                live += popcount_u32(value);
-            }
-        } else {
-            const uint32_t words = static_cast<uint32_t>(words_for_bits(valid_count));
-            for (uint32_t word_idx = 0; word_idx < words; ++word_idx) {
-                uint64_t value = 0ULL;
-                if (src.lhs != std::numeric_limits<uint32_t>::max()) {
-                    value |= lhs.large_bitmap_words[lhs.bitmap_offsets[src.lhs] + word_idx];
-                }
-                if (src.rhs != std::numeric_limits<uint32_t>::max()) {
-                    value |= rhs.large_bitmap_words[rhs.bitmap_offsets[src.rhs] + word_idx];
-                }
-                out.large_bitmap_words[bitmap_offset + word_idx] = value;
-                live += popcount_u64(value);
-            }
-        }
-        live_counts[static_cast<size_t>(idx)] = live;
-    }
-
-    uint64_t dense_cursor = 0U;
-    for (size_t idx = 0; idx < out.bucket_keys.size(); ++idx) {
-        out.dense_offsets[idx] = static_cast<uint32_t>(dense_cursor);
-        dense_cursor += live_counts[idx];
-    }
-    out.live_board_count = dense_cursor;
-    return out;
 }
 
 } // namespace Prefix40Baseline
