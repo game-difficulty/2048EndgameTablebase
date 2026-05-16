@@ -86,7 +86,11 @@ class DispatcherCommon(BaseDispatcher):
 
     def reset(self, board, board_encoded):
         super().reset(board, board_encoded)
-        self._table_cooldowns.clear()  # 清空冷却状态
+        expired = [t for t, c in self._table_cooldowns.items() if c <= 1]
+        for t in expired:
+            del self._table_cooldowns[t]
+        for t in self._table_cooldowns:
+            self._table_cooldowns[t] -= 1
 
     def init_bookreader(self):
         current_spawn_rate4 = SingletonConfig().config["4_spawn_rate"]
@@ -181,6 +185,14 @@ class DispatcherCommon(BaseDispatcher):
                 if table_type == 1
                 else np.sum(self.board) % target_val
             )
+            flat = self.board.ravel()
+            has_target_parts = (
+                np.count_nonzero(flat == target_val >> 1) >= 2
+                or (
+                    np.count_nonzero(flat == target_val >> 1) >= 1
+                    and np.count_nonzero(flat == target_val >> 2) >= 2
+                )
+            )
             if (
                 (table_type == 1 and success_rate > 0.9999999 and remainder < 24)
                 or (
@@ -192,6 +204,7 @@ class DispatcherCommon(BaseDispatcher):
                     and success_rate > 0.9999999
                     and (remainder > ((1 << target) - 4) or remainder < 24)
                 )
+                or (success_rate > 0.9999999 and has_target_parts)
             ):
                 # 将该定式冷却 20 步
                 self._table_cooldowns[table] = 20
@@ -206,11 +219,29 @@ class DispatcherCommon(BaseDispatcher):
 
         return None
 
+    def free_table_valid(self, reader):
+        _, _, free_n, pattern, target, _, table, *_ = reader
+        if "free" not in pattern and "free" not in table:
+            return True
+
+        largest = np.sort(self.board.ravel())[::-1]
+        if free_n > len(largest):
+            return False
+
+        return largest[free_n - 1] == (1 << target)
+
     def get_endgame_lvls(self):
         endgame_lvls1, endgame_lvls2, endgame_lvls3 = [], [], []
         large_tile_count = 0
         current_large = np.sum(self.counts[9:])
         ntiler_after_endgame = 1
+
+        def route(reader, target_list):
+            if self.free_table_valid(reader):
+                target_list.append(reader)
+            else:
+                endgame_lvls3.append(reader)
+
         for target_tile in range(15, 6, -1):
             if self.counts[target_tile] > 1 and target_tile != 15:
                 break
@@ -223,40 +254,30 @@ class DispatcherCommon(BaseDispatcher):
             if self.counts[target_tile] > 0:
                 if target_tile <= 12 and self.is_unfree_endgame(target_tile):
                     readers = self.ad_readers.get((lvl, large_tile_count), [])
-                    endgame_lvls3.extend(  # free11 补丁
-                        [
-                            reader
-                            for reader in readers
-                            if (reader[2] > 4 and current_large > 4)
-                            or (ntiler_after_endgame > 4)
-                        ]
-                    )
-                    endgame_lvls1.extend(
-                        [
-                            reader
-                            for reader in readers
-                            if (reader[2] <= 4 or current_large < 4)
-                            and (ntiler_after_endgame <= 4)
-                        ]
-                    )
+                    for reader in readers:
+                        if (reader[2] > 4 and current_large > 4) or (
+                            ntiler_after_endgame > 4
+                        ):
+                            route(reader, endgame_lvls3)
+                        else:
+                            route(reader, endgame_lvls1)
                 else:
-                    endgame_lvls1.extend(
-                        self.ad_readers.get((lvl, large_tile_count), [])
-                    )
+                    for reader in self.ad_readers.get((lvl, large_tile_count), []):
+                        route(reader, endgame_lvls1)
                 if self.counts[target_tile - 1] < 2:
                     current_endgame_lvl = (
                         endgame_lvls2 if ntiler_after_endgame < 5 else endgame_lvls3
                     )
-                    current_endgame_lvl.extend(  # 小残局大定式
-                        self.ad_readers.get((lvl + 1, large_tile_count), [])
-                    )
+                    for reader in self.ad_readers.get((lvl + 1, large_tile_count), []):
+                        route(reader, current_endgame_lvl)
                     if lvl > 12:
                         readers = self.ad_readers.get((lvl + 2, large_tile_count), [])
-                        endgame_lvls3.extend(  # 小残局大定式，但残局级别差距更远
-                            [reader for reader in readers if reader[2] <= 4]
-                        )
+                        for reader in readers:
+                            if reader[2] <= 4:
+                                route(reader, endgame_lvls3)
             elif self.counts[target_tile] == 0:  # 大残局小定式
-                endgame_lvls3.extend(self.ad_readers.get((lvl, large_tile_count), []))
+                for reader in self.ad_readers.get((lvl, large_tile_count), []):
+                    route(reader, endgame_lvls3)
 
         endgame_lvls1.sort(key=lambda x: x[2], reverse=True)
         endgame_lvls2.sort(key=lambda x: 16 - x[1], reverse=True)
@@ -271,13 +292,6 @@ class DispatcherCommon(BaseDispatcher):
         return False
 
     def dispatcher(self):
-        # 每次调度时递减冷却计数器
-        expired = [t for t, c in self._table_cooldowns.items() if c <= 1]
-        for t in expired:
-            del self._table_cooldowns[t]
-        for t in self._table_cooldowns:
-            self._table_cooldowns[t] -= 1
-
         for tables_list, table_type in zip(self.get_endgame_lvls(), (1, 2, 3)):
             for table_param in tables_list:
                 result = self.check_table(table_param, table_type)
