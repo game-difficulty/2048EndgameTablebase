@@ -702,19 +702,19 @@ struct SevenZipArchiveWriter::Impl {
         }
         pid = fork();
         if (pid < 0) {
-            close(stdin_pipe[0]);
-            close(stdin_pipe[1]);
+            ::close(stdin_pipe[0]);
+            ::close(stdin_pipe[1]);
             pid = -1;
             throw std::runtime_error("failed to fork 7z archive writer");
         }
         if (pid == 0) {
-            int nul_out = open("/dev/null", O_WRONLY);
+            int nul_out = ::open("/dev/null", O_WRONLY);
             dup2(stdin_pipe[0], STDIN_FILENO);
             dup2(nul_out, STDOUT_FILENO);
             dup2(nul_out, STDERR_FILENO);
-            close(stdin_pipe[0]);
-            close(stdin_pipe[1]);
-            close(nul_out);
+            ::close(stdin_pipe[0]);
+            ::close(stdin_pipe[1]);
+            ::close(nul_out);
             std::vector<char *> argv;
             argv.reserve(args.size() + 1);
             for (const auto &arg : args) {
@@ -724,7 +724,7 @@ struct SevenZipArchiveWriter::Impl {
             execvp(argv[0], argv.data());
             _exit(127);
         }
-        close(stdin_pipe[0]);
+        ::close(stdin_pipe[0]);
         stdin_fd = stdin_pipe[1];
 #endif
         opened = true;
@@ -766,7 +766,7 @@ struct SevenZipArchiveWriter::Impl {
         ok = wait_process_success(process_info);
 #else
         if (stdin_fd >= 0) {
-            close(stdin_fd);
+            ::close(stdin_fd);
             stdin_fd = -1;
         }
         if (pid >= 0) {
@@ -870,21 +870,21 @@ struct SevenZipSequentialReader::Impl {
         }
         pid = fork();
         if (pid < 0) {
-            close(stdout_pipe[0]);
-            close(stdout_pipe[1]);
+            ::close(stdout_pipe[0]);
+            ::close(stdout_pipe[1]);
             pid = -1;
             throw std::runtime_error("failed to fork 7z archive reader");
         }
         if (pid == 0) {
-            int nul_in = open("/dev/null", O_RDONLY);
-            int nul_err = open("/dev/null", O_WRONLY);
+            int nul_in = ::open("/dev/null", O_RDONLY);
+            int nul_err = ::open("/dev/null", O_WRONLY);
             dup2(nul_in, STDIN_FILENO);
             dup2(stdout_pipe[1], STDOUT_FILENO);
             dup2(nul_err, STDERR_FILENO);
-            close(stdout_pipe[0]);
-            close(stdout_pipe[1]);
-            close(nul_in);
-            close(nul_err);
+            ::close(stdout_pipe[0]);
+            ::close(stdout_pipe[1]);
+            ::close(nul_in);
+            ::close(nul_err);
             std::vector<char *> argv;
             argv.reserve(args.size() + 1);
             for (const auto &arg : args) {
@@ -894,7 +894,7 @@ struct SevenZipSequentialReader::Impl {
             execvp(argv[0], argv.data());
             _exit(127);
         }
-        close(stdout_pipe[1]);
+        ::close(stdout_pipe[1]);
         stdout_fd = stdout_pipe[0];
 #endif
         opened = true;
@@ -923,7 +923,7 @@ struct SevenZipSequentialReader::Impl {
             offset += static_cast<size_t>(read_bytes);
 #else
             const size_t chunk = std::min<size_t>(bytes - offset, 1U << 20);
-            ssize_t read_bytes = read(stdout_fd, out + offset, chunk);
+            ssize_t read_bytes = ::read(stdout_fd, out + offset, chunk);
             if (read_bytes < 0) {
                 if (errno == EINTR) {
                     continue;
@@ -952,7 +952,7 @@ struct SevenZipSequentialReader::Impl {
         ok = wait_process_success(process_info);
 #else
         if (stdout_fd >= 0) {
-            close(stdout_fd);
+            ::close(stdout_fd);
             stdout_fd = -1;
         }
         if (pid >= 0) {

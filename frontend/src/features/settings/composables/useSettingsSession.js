@@ -227,9 +227,11 @@ export function useSettingsSession(activeRef) {
     }
 
     if (data.type === 'BUILD_STARTED') {
+      const nextCurrent = Math.max(0, Number(data.payload?.current) || 0);
+      const nextTotal = Math.max(nextCurrent, Number(data.payload?.total) || 0);
       isBuilding.value = true;
-      buildProgressCurrent.value = 0;
-      buildProgressTotal.value = 0;
+      buildProgressCurrent.value = nextCurrent;
+      buildProgressTotal.value = nextTotal;
       return;
     }
 

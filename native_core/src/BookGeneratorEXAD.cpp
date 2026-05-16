@@ -43,7 +43,7 @@ std::string now_string() {
 #ifdef _WIN32
     localtime_s(&local_time, &now);
 #else
-    localtime_r(&local_time, &now);
+    localtime_r(&now, &local_time);
 #endif
     std::ostringstream oss;
     oss << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S");

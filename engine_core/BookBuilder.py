@@ -157,6 +157,91 @@ def _steps_and_docheck(tile_sum: int, target: int, extra_steps: int) -> tuple[in
     return steps, docheck_step
 
 
+def _path_exists_any(paths) -> bool:
+    return any(os.path.exists(path) for path in paths)
+
+
+def _count_existing_steps(pathname: str, steps: int, suffixes) -> int:
+    return sum(
+        1
+        for step in range(max(0, int(steps)))
+        if _path_exists_any(f"{pathname}{step}{suffix}" for suffix in suffixes)
+    )
+
+
+def _all_existing_steps(pathname: str, steps: int, suffixes) -> bool:
+    if steps <= 0:
+        return False
+    return all(
+        _path_exists_any(f"{pathname}{step}{suffix}" for suffix in suffixes)
+        for step in range(int(steps))
+    )
+
+
+def _read_int_marker(path: str) -> int | None:
+    try:
+        with open(path, "r", encoding="utf-8") as file:
+            return int(file.read().strip().split()[0])
+    except Exception:
+        return None
+
+
+def estimate_build_progress(pattern: str, target: int, pathname: str) -> tuple[int, int]:
+    config = SingletonConfig().config
+    meta, tile_sum, _seed_boards, extra_steps = _resolve_build_meta(pattern)
+    steps, _docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
+    use_ex_algo = bool(config.get("zmask_algo", False))
+    use_ad_algo = bool(config.get("advanced_algo", False))
+    use_exad_algo = use_ex_algo and use_ad_algo
+    optimal = bool(config.get("optimal_branch_only", False)) and not use_ad_algo
+    total = steps * (3 if optimal else 2)
+    if steps <= 0:
+        return 0, 0
+
+    current = 0
+    if use_exad_algo:
+        solved_count = _count_existing_steps(pathname, steps, (".exadbook", ".exadzbook"))
+        if solved_count:
+            current = steps + solved_count
+        else:
+            current = _count_existing_steps(pathname, steps, (".exadtmp", ".exadtmp.7z"))
+    elif use_ex_algo:
+        if optimal and os.path.exists(pathname + "ex_optimal_complete"):
+            current = total
+        elif not optimal and _all_existing_steps(pathname, steps, (".exzbook",)):
+            current = total
+        else:
+            solved_count = _count_existing_steps(pathname, steps, (".zbook", ".exzbook"))
+            if solved_count:
+                current = steps + solved_count
+            else:
+                current = _count_existing_steps(pathname, steps, (".exgen", ".exgen.7z"))
+            if optimal:
+                opt_step = _read_int_marker(pathname + "ex_optlayer")
+                if opt_step is not None:
+                    current = max(current, 2 * steps + opt_step + 1)
+                elif solved_count >= steps:
+                    current = max(current, 2 * steps)
+    elif use_ad_algo:
+        solved_count = _count_existing_steps(pathname, steps, ("b", ".z", "b.7z"))
+        if solved_count:
+            current = steps + solved_count
+        else:
+            current = _count_existing_steps(pathname, steps, ("", ".7z"))
+    else:
+        solved_count = _count_existing_steps(pathname, steps, (".book", ".z", ".book.7z"))
+        if solved_count:
+            current = steps + solved_count
+        else:
+            current = _count_existing_steps(pathname, steps, ("", ".7z"))
+        if optimal:
+            opt_step = _read_int_marker(pathname + "optlayer")
+            if opt_step is not None:
+                current = max(current, 2 * steps + opt_step + 1)
+
+    return max(0, min(int(current), int(total))), int(total)
+
+
 def save_config_to_txt(output_path: str) -> None:
     keys = [
         "compress",

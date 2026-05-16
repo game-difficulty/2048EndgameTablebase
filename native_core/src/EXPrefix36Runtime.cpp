@@ -3371,7 +3371,9 @@ SolveStepSummary solve_loaded_step_impl(
     const double write_t0 = now_seconds();
     write_layer_file(layer_file_path(options.pathname, step), current, spec, mode, io_config);
     remove_generated_layer_input(options.pathname, step);
-    compress_layer_result_from_memory(options, step, current, spec, mode);
+    if (!options.optimal_branch_only) {
+        compress_layer_result_from_memory(options, step, current, spec, mode);
+    }
     const double write_t1 = now_seconds();
 
     double future_compact_seconds = 0.0;
@@ -3389,7 +3391,9 @@ SolveStepSummary solve_loaded_step_impl(
         const double fw_t0 = now_seconds();
         write_layer_file(layer_file_path(options.pathname, step + 2), future2, spec, mode, io_config);
         remove_generated_layer_input(options.pathname, step + 2);
-        compress_layer_result_from_memory(options, step + 2, future2, spec, mode);
+        if (!options.optimal_branch_only) {
+            compress_layer_result_from_memory(options, step + 2, future2, spec, mode);
+        }
         const double fw_t1 = now_seconds();
         future_compact_seconds = fc_t1 - fc_t0;
         future_write_seconds = fw_t1 - fw_t0;

@@ -188,8 +188,14 @@ async def handle_settings_action(
             (folder_path, success_rate_dtype)
         ]
         SingletonConfig().save_config(config)
+        try:
+            initial_current, initial_total = BookBuilder.estimate_build_progress(
+                str(pattern), int(target), str(pathname)
+            )
+        except Exception:
+            initial_current, initial_total = 0, 0
         loop = asyncio.get_running_loop()
-        progress_state = {"current": 0, "total": 0}
+        progress_state = {"current": initial_current, "total": initial_total}
         progress_lock = threading.Lock()
         progress_meta = {
             "last_sent_at": 0.0,
@@ -222,6 +228,12 @@ async def handle_settings_action(
 
             current = max(0, current)
             total = max(current, total)
+            with progress_lock:
+                previous_current = progress_state["current"]
+                previous_total = progress_state["total"]
+            if previous_total > 0 and total > 0 and total <= previous_total:
+                total = previous_total
+                current = max(current, previous_current)
             update_build_state(
                 current=current,
                 total=total,
@@ -328,6 +340,8 @@ async def handle_settings_action(
 
         def run_build() -> None:
             progress_signal.progress_updated.connect(publish_build_progress)
+            if initial_total > 0:
+                publish_build_progress(initial_current, initial_total)
             stop_event, poll_thread = start_native_progress_polling()
             try:
                 if pattern in category_info.get("variant", []):
@@ -361,8 +375,8 @@ async def handle_settings_action(
 
         update_build_state(
             is_building=True,
-            current=0,
-            total=0,
+            current=initial_current,
+            total=initial_total,
             pattern=str(pattern or ""),
             target_tile=str(target_tile or ""),
             folder_path=str(folder_path or ""),
@@ -370,7 +384,14 @@ async def handle_settings_action(
         )
         threading.Thread(target=run_build, daemon=True).start()
         await websocket.send_json(
-            {"type": EventType.BUILD_STARTED, "payload": {"status": "running"}}
+            {
+                "type": EventType.BUILD_STARTED,
+                "payload": {
+                    "status": "running",
+                    "current": initial_current,
+                    "total": initial_total,
+                },
+            }
         )
         return True
 

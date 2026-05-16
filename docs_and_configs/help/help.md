@@ -1,9 +1,9 @@
 ﻿
 # User Manual
 
-**Author**: game_difficulty  
-**Version**: 9.0  
-**Date**: 2026.1.20 
+**Author**: game_difficulty
+**Version**: 12.0
+**Date**: 2026.5.16
 
 ---
 
@@ -584,6 +584,26 @@ Using this algorithm, a `free12-4096` table was successfully computed on a 9950X
 - **Accuracy Loss**: Pruning causes minor deviations in success rates, but these rarely affect the selection of the optimal move.
 - **Feature Conflicts**: Does not support the "keep only optimal branches" option, variant tables, or tables with the 't' suffix (and other patterns with restricted-movement large tiles).
 - **Compression Characteristics**: Standard algorithms have high compression ratios because position data is highly redundant. The Advanced Algorithm has a lower ratio because it stores mostly success rate data. High-precision success rate data has high entropy (approaching a random sequence), making traditional lossless compression less effective.
+
+## 6.4 EX and EXAD Algorithms
+
+EX and EXAD are newer calculation modes mainly designed to reduce memory usage and improve calculation speed.
+
+### 6.4.1 EX Algorithm
+
+The EX algorithm stores related positions in a more compact structure, reducing duplication and storage pressure. In simple terms, it uses hash tables to locate position groups and bitmaps to record which positions actually exist inside each group.
+
+Its main advantages are:
+
+- **Smaller files**: EX usually significantly reduces both intermediate files and final table files.
+- **Good compatibility**: EX keeps the same table semantics as the standard algorithm and supports the "Keep Only Optimal Branches" option.
+- **Best use case**: Suitable for all medium and large standard tables; it is usually recommended to enable it.
+
+### 6.4.2 EXAD Algorithm
+
+EXAD combines EX with the Advanced Algorithm: it uses the large-number masking idea of the Advanced Algorithm for very large tables, while using EX-style compact storage to reduce file size and lookup pressure.
+
+It is suitable for very large tables that already benefit from the Advanced Algorithm, and further improves disk usage and lookup efficiency.
 
 
 # 7. About the AI
