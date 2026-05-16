@@ -10,6 +10,7 @@
 #include "BookSolver.h"
 #include "EXADCompressedResult.h"
 #include "EXCompressedResult.h"
+#include "NativeDiagnostics.h"
 #include "ReaderRuntime.h"
 #include "SymmetryUtils.h"
 #include "TrieCompression.h"
@@ -112,6 +113,8 @@ nb::dict exad_cold_lookup_to_python(const EXADCompressedResult::ColdLookupResult
 } // namespace
 
 NB_MODULE(formation_core, m) {
+    NDIAG_INSTALL();
+
     nb::enum_<SymmMode>(m, "SymmMode")
         .value("Identity", SymmMode::Identity)
         .value("Full", SymmMode::Full)
@@ -369,7 +372,16 @@ NB_MODULE(formation_core, m) {
     m.def(
         "run_pattern_build_exad",
         [](const U64Array &arr_init, const AdvancedPatternSpec &spec, const RunOptions &options) {
-            run_pattern_build_exad_cpp(to_u64_vector(arr_init), spec, options);
+            NDIAG_START_RUN("run_pattern_build_exad", spec, options, static_cast<uint64_t>(arr_init.shape(0)));
+            try {
+                run_pattern_build_exad_cpp(to_u64_vector(arr_init), spec, options);
+            } catch (const std::exception &e) {
+                NDIAG_EXCEPTION("run_pattern_build_exad", e.what());
+                throw;
+            } catch (...) {
+                NDIAG_EXCEPTION("run_pattern_build_exad", "unknown exception");
+                throw;
+            }
         },
         "arr_init"_a,
         "pattern_spec"_a,
@@ -380,7 +392,16 @@ NB_MODULE(formation_core, m) {
     m.def(
         "run_pattern_solve_exad",
         [](const U64Array &arr_init, const AdvancedPatternSpec &spec, const RunOptions &options) {
-            run_pattern_solve_exad_cpp(to_u64_vector(arr_init), spec, options);
+            NDIAG_START_RUN("run_pattern_solve_exad", spec, options, static_cast<uint64_t>(arr_init.shape(0)));
+            try {
+                run_pattern_solve_exad_cpp(to_u64_vector(arr_init), spec, options);
+            } catch (const std::exception &e) {
+                NDIAG_EXCEPTION("run_pattern_solve_exad", e.what());
+                throw;
+            } catch (...) {
+                NDIAG_EXCEPTION("run_pattern_solve_exad", "unknown exception");
+                throw;
+            }
         },
         "arr_init"_a,
         "pattern_spec"_a,
@@ -391,7 +412,16 @@ NB_MODULE(formation_core, m) {
     m.def(
         "run_pattern_build_zmask",
         [](const U64Array &arr_init, const PatternSpec &spec, const RunOptions &options) {
-            run_pattern_build_zmask_cpp(to_u64_vector(arr_init), spec, options);
+            NDIAG_START_RUN("run_pattern_build_zmask", spec, options, static_cast<uint64_t>(arr_init.shape(0)));
+            try {
+                run_pattern_build_zmask_cpp(to_u64_vector(arr_init), spec, options);
+            } catch (const std::exception &e) {
+                NDIAG_EXCEPTION("run_pattern_build_zmask", e.what());
+                throw;
+            } catch (...) {
+                NDIAG_EXCEPTION("run_pattern_build_zmask", "unknown exception");
+                throw;
+            }
         },
         "arr_init"_a,
         "pattern_spec"_a,
@@ -402,7 +432,16 @@ NB_MODULE(formation_core, m) {
     m.def(
         "run_pattern_solve_zmask",
         [](const U64Array &arr_init, const PatternSpec &spec, const RunOptions &options) {
-            run_pattern_solve_zmask_cpp(to_u64_vector(arr_init), spec, options);
+            NDIAG_START_RUN("run_pattern_solve_zmask", spec, options, static_cast<uint64_t>(arr_init.shape(0)));
+            try {
+                run_pattern_solve_zmask_cpp(to_u64_vector(arr_init), spec, options);
+            } catch (const std::exception &e) {
+                NDIAG_EXCEPTION("run_pattern_solve_zmask", e.what());
+                throw;
+            } catch (...) {
+                NDIAG_EXCEPTION("run_pattern_solve_zmask", "unknown exception");
+                throw;
+            }
         },
         "arr_init"_a,
         "pattern_spec"_a,

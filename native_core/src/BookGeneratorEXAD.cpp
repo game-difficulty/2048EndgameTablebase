@@ -5,6 +5,7 @@
 #include "EXADIO.h"
 #include "FileIOUtils.h"
 #include "FormationRuntime.h"
+#include "NativeDiagnostics.h"
 
 #include <algorithm>
 #include <chrono>
@@ -576,6 +577,8 @@ void run_pattern_build_exad_cpp(
     const AdvancedPatternSpec &spec,
     const RunOptions &options
 ) {
+    NDIAG_START_RUN("run_pattern_build_exad_cpp", spec, options, static_cast<uint64_t>(arr_init.size()));
+    NDIAG_CHECKPOINT("exad_build_entry", 0, static_cast<uint64_t>(arr_init.size()), 0, 0);
     FormationProgress::reset_build_progress(build_progress_total(options));
     ensure_stats_header(options);
     const int num_threads = options.num_threads > 0 ? options.num_threads :
@@ -585,8 +588,11 @@ void run_pattern_build_exad_cpp(
         4;
 #endif
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
+    NDIAG_CHECKPOINT("exad_init_masker_begin", 0, static_cast<uint64_t>(num_threads), 0, 0);
     FormationAD::MaskerContext masker = FormationAD::init_masker(spec);
+    NDIAG_CHECKPOINT("exad_lut_load_or_build_begin", 0, static_cast<uint64_t>(arr_init.size()), 0, 0);
     EXAD::Luts luts = load_or_build_luts(arr_init, spec, options, num_threads, io_config);
+    NDIAG_CHECKPOINT("exad_lut_load_or_build_end", 0, static_cast<uint64_t>(luts.size_table.size()), 0, 0);
 
     const uint32_t ini_board_sum = board_sum_from_seed(arr_init);
     std::vector<uint64_t> masked_seed = arr_init;
@@ -603,6 +609,13 @@ void run_pattern_build_exad_cpp(
         options,
         io_config,
         num_threads
+    );
+    NDIAG_CHECKPOINT(
+        "exad_resume_ready",
+        resume.start_step,
+        resume.current.live_board_count,
+        EXAD::carry_bucket_count(resume.next_seed),
+        0
     );
 
     EXAD::Layer current = std::move(resume.current);
@@ -632,6 +645,7 @@ void run_pattern_build_exad_cpp(
     const uint32_t progress_total = build_progress_total(options);
 
     for (int step = resume.start_step; step < options.steps - 1; ++step) {
+        NDIAG_CHECKPOINT("exad_forward_step_begin", step, current.live_board_count, 0, 0);
         FormationProgress::update_build_progress(static_cast<uint32_t>(step), progress_total);
         const EXAD::ReserveFactors reserve_factors =
             reserve_factors_for_layer(
@@ -645,9 +659,23 @@ void run_pattern_build_exad_cpp(
                 options.target,
                 derived_history
             );
+        NDIAG_CHECKPOINT(
+            "exad_forward_reserve_ready",
+            step,
+            static_cast<uint64_t>(reserve_factors.bucket * 1000.0),
+            static_cast<uint64_t>(reserve_factors.small * 1000.0),
+            static_cast<uint64_t>(reserve_factors.large * 1000.0)
+        );
         if (post_validate_floor.remaining_layers > 0) {
             --post_validate_floor.remaining_layers;
         }
+        NDIAG_CHECKPOINT(
+            "exad_generate_two_layers_begin",
+            step,
+            current.live_board_count,
+            EXAD::carry_bucket_count(next_seed),
+            0
+        );
         EXAD::GeneratePairResult generated = EXAD::generate_two_layers_carry(
             current,
             spec,
@@ -660,10 +688,19 @@ void run_pattern_build_exad_cpp(
             reserve_factors,
             &derive_hash_state
         );
+        NDIAG_CHECKPOINT(
+            "exad_generate_two_layers_end",
+            step,
+            generated.stats.input_live,
+            generated.stats.derive_candidate_count,
+            generated.stats.derived_output_count
+        );
         current = EXAD::Layer{};
         const double finalize0 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_finalize_arr1_begin", step, EXAD::carry_bucket_count(generated.arr1), 0, 0);
         EXAD::Layer merged = EXAD::finalize_carry_layer(generated.arr1, luts, num_threads);
         const double finalize1 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_finalize_arr1_end", step, merged.live_board_count, 0, 0);
         next_seed = std::move(generated.arr2);
 
         StatsRecord record;
@@ -690,6 +727,7 @@ void run_pattern_build_exad_cpp(
 
         const double validate0 = wall_time_seconds();
         if (validate_step_trigger(step, ini_board_sum, masker.param)) {
+            NDIAG_CHECKPOINT("exad_validate_begin", step, merged.live_board_count, EXAD::carry_bucket_count(next_seed), 0);
             post_validate_floor.floor = reserve_footprint_from_layer(merged);
             post_validate_floor.remaining_layers = 3;
 
@@ -716,10 +754,12 @@ void run_pattern_build_exad_cpp(
             );
             record.validate_removed_next = before_next - next_layer.live_board_count;
             next_seed = EXAD::carry_from_layer(next_layer, luts, num_threads);
+            NDIAG_CHECKPOINT("exad_validate_end", step, merged.live_board_count, EXAD::carry_bucket_count(next_seed), 0);
         }
         record.validate_seconds = wall_time_seconds() - validate0;
 
         const double write0 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_write_layer_begin", step, merged.live_board_count, 0, 0);
         EXAD::write_layer_file(
             EXAD::layer_file_path(options.pathname, step),
             merged,
@@ -727,6 +767,7 @@ void run_pattern_build_exad_cpp(
             options.compress_temp_files
         );
         record.write_seconds = wall_time_seconds() - write0;
+        NDIAG_CHECKPOINT("exad_write_layer_end", step, merged.live_board_count, 0, 0);
         append_stats(options, record);
 
         total.input_live += record.input_live;
@@ -759,5 +800,6 @@ void run_pattern_build_exad_cpp(
     }
 
     append_stats(options, total);
+    NDIAG_CHECKPOINT("exad_build_forward_complete", options.steps, total.input_live, total.output_live, 0);
     run_pattern_solve_exad_cpp(arr_init, spec, options);
 }

@@ -4,6 +4,7 @@
 #include "EXADCompressedResult.h"
 #include "EXADSolvedLayer.h"
 #include "HybridSearch.h"
+#include "NativeDiagnostics.h"
 
 // EXAD recalculate still reuses AD's semantic helper routines (derive ranking,
 // mask-new-tile dispatch, permutation matching, and workspaces).  The storage
@@ -2266,6 +2267,12 @@ void recalculate_exad_direct(
 
 #pragma omp parallel for schedule(dynamic, schedule_chunk) num_threads(num_threads)
         for (int64_t bucket_i = 0; bucket_i < static_cast<int64_t>(set.buckets.size()); ++bucket_i) {
+            NDIAG_HEARTBEAT(
+                "exad_recalculate_bucket",
+                static_cast<uint64_t>(bucket_i),
+                static_cast<uint64_t>(set.buckets.size()),
+                static_cast<uint64_t>(slot)
+            );
             const size_t thread_index = static_cast<size_t>(omp_get_thread_num());
             AdSolveWorkspace<T> &workspace = thread_workspaces[thread_index];
             const EXAD::BucketEntry &bucket = set.buckets[static_cast<size_t>(bucket_i)];
@@ -2338,6 +2345,7 @@ void recalculate_exad_direct(
             };
 
             auto process_rank = [&](uint32_t rank) {
+                NDIAG_HEARTBEAT("exad_recalculate_rank", static_cast<uint64_t>(ordinal), set.live_board_count, static_cast<uint64_t>(slot));
                 const uint64_t board = (prefix36 << EXAD::kSuffixBits) | luts.unrank_array[unrank_base + rank];
                 const uint64_t local_row = static_cast<uint64_t>(bucket.dense_offset) + ordinal;
                 ++ordinal;
@@ -2513,6 +2521,7 @@ void recalculate_process_exad_impl(
     const AdvancedPatternSpec &spec,
     const RunOptions &options
 ) {
+    NDIAG_CHECKPOINT("exad_solve_impl_begin", options.steps, static_cast<uint64_t>(arr_init.size()), 0, 0);
     ensure_exad_solve_stats_header(options);
     EXADSolveStatsRecord total_record;
     total_record.stage = "_total";
@@ -2521,9 +2530,12 @@ void recalculate_process_exad_impl(
 
     const int num_threads = effective_num_threads(options);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
+    NDIAG_CHECKPOINT("exad_solve_masker_begin", options.steps, 0, 0, 0);
     FormationAD::MaskerContext masker = FormationAD::init_masker(spec);
     const AdvancedMaskParam param = masker.param;
+    NDIAG_CHECKPOINT("exad_solve_lut_begin", options.steps, static_cast<uint64_t>(arr_init.size()), 0, 0);
     EXAD::Luts luts = exad_load_or_build_luts(arr_init, spec, options, num_threads, io_config);
+    NDIAG_CHECKPOINT("exad_solve_lut_end", options.steps, static_cast<uint64_t>(luts.size_table.size()), 0, 0);
     const uint32_t ini_board_sum = arr_init.empty() ? 0U : board_sum(arr_init.front());
     const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
     const T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
@@ -2537,15 +2549,18 @@ void recalculate_process_exad_impl(
     const uint32_t progress_total = build_progress_total(options);
 
     for (int step = options.steps - 3; step >= 0; --step) {
+        NDIAG_CHECKPOINT("exad_solve_step_begin", step, 0, 0, 0);
         FormationProgress::update_build_progress(
             progress_total - static_cast<uint32_t>(step) - 2U,
             progress_total
         );
         const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
         if (EXAD::solved_file_exists(solved_path)) {
+            NDIAG_CHECKPOINT("exad_solve_step_skip_solved", step, 0, 0, 0);
             continue;
         }
         if (exad_compressed_file_exists(options, step)) {
+            NDIAG_CHECKPOINT("exad_solve_step_skip_compressed", step, 0, 0, 0);
             continue;
         }
         deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);
@@ -2555,12 +2570,15 @@ void recalculate_process_exad_impl(
         );
 
         const double current_read_t0 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_solve_current_read_begin", step, 0, 0, 0);
         EXAD::Layer generation_layer = EXAD::read_layer_file(EXAD::layer_file_path(options.pathname, step), io_config);
         const double current_read_t1 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_solve_current_read_end", step, generation_layer.live_board_count, 0, 0);
         if (!EXAD::physical_metadata_matches(generation_layer, luts)) {
             throw std::runtime_error("EXAD temp layer physical metadata does not match LUT");
         }
         const double build_t0 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_solve_current_build_begin", step, generation_layer.live_board_count, 0, 0);
         EXAD::SolvedLayer<T> current = EXAD::make_solved_layer_from_generation<T>(
             std::move(generation_layer),
             param,
@@ -2569,6 +2587,7 @@ void recalculate_process_exad_impl(
         );
         EXAD::fill_success_values(current.success_values, zero_val, num_threads);
         const double build_t1 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_solve_current_build_end", step, current.live_board_count, static_cast<uint64_t>(current.success_values.size()), 0);
 
         double future_read_seconds = 0.0;
         double future_index_seconds = 0.0;
@@ -2576,12 +2595,15 @@ void recalculate_process_exad_impl(
             options, step + 1, dtype_mode, luts, future1, cached_future1_step, io_config,
             future_read_seconds, future_index_seconds
         );
+        NDIAG_CHECKPOINT("exad_solve_future1_ready", step + 1, future1.live_board_count, static_cast<uint64_t>(future1.success_values.size()), 0);
         load_future_layer(
             options, step + 2, dtype_mode, luts, future2, cached_future2_step, io_config,
             future_read_seconds, future_index_seconds
         );
+        NDIAG_CHECKPOINT("exad_solve_future2_ready", step + 2, future2.live_board_count, static_cast<uint64_t>(future2.success_values.size()), 0);
 
         const double recalc_t0 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_solve_recalculate_begin", step, current.live_board_count, future1.live_board_count, future2.live_board_count);
         recalculate_exad_direct(
             current,
             future1,
@@ -2601,6 +2623,7 @@ void recalculate_process_exad_impl(
             match_dict
         );
         const double recalc_t1 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_solve_recalculate_end", step, current.live_board_count, static_cast<uint64_t>((recalc_t1 - recalc_t0) * 1000.0), 0);
 
         auto [input_values, max_rate] = EXAD::solved_value_count_and_max(current, zero_val);
         const uint64_t input_rows = current.live_board_count;
@@ -2614,9 +2637,11 @@ void recalculate_process_exad_impl(
         uint64_t future_threshold_values_after = future_threshold_values_before;
         if (layer_deletion_threshold > 0.0 && cached_future2_step == step + 2 && !future2.empty()) {
             const double future_compact_t0 = wall_time_seconds();
+            NDIAG_CHECKPOINT("exad_solve_future_compact_begin", step + 2, future2.live_board_count, static_cast<uint64_t>(future2.success_values.size()), 0);
             EXAD::SolvedLayer<T> compacted_future =
                 EXAD::compact_solved_layer(future2, luts, layer_threshold, num_threads);
             future_compact_seconds = wall_time_seconds() - future_compact_t0;
+            NDIAG_CHECKPOINT("exad_solve_future_compact_end", step + 2, compacted_future.live_board_count, static_cast<uint64_t>(compacted_future.success_values.size()), 0);
             future_threshold_values_after = static_cast<uint64_t>(compacted_future.success_values.size());
 
             if (options.compress) {
@@ -2642,19 +2667,25 @@ void recalculate_process_exad_impl(
         }
 
         const double compact_t0 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_solve_zero_compact_begin", step, current.live_board_count, static_cast<uint64_t>(current.success_values.size()), 0);
         current = EXAD::compact_solved_layer(current, luts, zero_val, num_threads);
         const double compact_t1 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_solve_zero_compact_end", step, current.live_board_count, static_cast<uint64_t>(current.success_values.size()), 0);
         auto [post_zero_values, ignored_max] = EXAD::solved_value_count_and_max(current, zero_val);
         (void)ignored_max;
         const uint64_t post_zero_rows = current.live_board_count;
 
         const double current_index_t0 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_solve_current_index_begin", step, current.live_board_count, 0, 0);
         EXAD::build_direct_indexes(current, luts);
         future_index_seconds += wall_time_seconds() - current_index_t0;
+        NDIAG_CHECKPOINT("exad_solve_current_index_end", step, current.live_board_count, 0, 0);
 
         const double write_t0 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_solve_write_begin", step, current.live_board_count, static_cast<uint64_t>(current.success_values.size()), 0);
         EXAD::write_solved_layer_file(solved_path, current, io_config);
         const double write_t1 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_solve_write_end", step, current.live_board_count, static_cast<uint64_t>(current.success_values.size()), 0);
         compress_seconds += maybe_compress_exad_solved_file(options, step);
         EXAD::remove_layer_file(EXAD::layer_file_path(options.pathname, step));
 
@@ -2736,6 +2767,7 @@ void recalculate_process_exad_chunked_impl(
     const AdvancedPatternSpec &spec,
     const RunOptions &options
 ) {
+    NDIAG_CHECKPOINT("exad_solve_chunked_impl_begin", options.steps, static_cast<uint64_t>(arr_init.size()), 0, 0);
     ensure_exad_solve_stats_header(options);
     EXADSolveStatsRecord total_record;
     total_record.stage = "_total";
@@ -2744,9 +2776,12 @@ void recalculate_process_exad_chunked_impl(
 
     const int num_threads = effective_num_threads(options);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
+    NDIAG_CHECKPOINT("exad_solve_chunked_masker_begin", options.steps, 0, 0, 0);
     FormationAD::MaskerContext masker = FormationAD::init_masker(spec);
     const AdvancedMaskParam param = masker.param;
+    NDIAG_CHECKPOINT("exad_solve_chunked_lut_begin", options.steps, static_cast<uint64_t>(arr_init.size()), 0, 0);
     EXAD::Luts luts = exad_load_or_build_luts(arr_init, spec, options, num_threads, io_config);
+    NDIAG_CHECKPOINT("exad_solve_chunked_lut_end", options.steps, static_cast<uint64_t>(luts.size_table.size()), 0, 0);
     const uint32_t ini_board_sum = arr_init.empty() ? 0U : board_sum(arr_init.front());
     const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
     const T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
@@ -2760,15 +2795,18 @@ void recalculate_process_exad_chunked_impl(
     const uint32_t progress_total = build_progress_total(options);
 
     for (int step = options.steps - 3; step >= 0; --step) {
+        NDIAG_CHECKPOINT("exad_solve_chunked_step_begin", step, 0, 0, 0);
         FormationProgress::update_build_progress(
             progress_total - static_cast<uint32_t>(step) - 2U,
             progress_total
         );
         const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
         if (EXAD::solved_file_exists(solved_path)) {
+            NDIAG_CHECKPOINT("exad_solve_chunked_step_skip_solved", step, 0, 0, 0);
             continue;
         }
         if (exad_compressed_file_exists(options, step)) {
+            NDIAG_CHECKPOINT("exad_solve_chunked_step_skip_compressed", step, 0, 0, 0);
             continue;
         }
         deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);
@@ -2797,10 +2835,12 @@ void recalculate_process_exad_chunked_impl(
             options, step + 1, dtype_mode, luts, future1, cached_future1_step, io_config,
             future_read_seconds, future_index_seconds
         );
+        NDIAG_CHECKPOINT("exad_solve_chunked_future1_ready", step + 1, future1.live_board_count, static_cast<uint64_t>(future1.success_values.size()), 0);
         load_future_layer(
             options, step + 2, dtype_mode, luts, future2, cached_future2_step, io_config,
             future_read_seconds, future_index_seconds
         );
+        NDIAG_CHECKPOINT("exad_solve_chunked_future2_ready", step + 2, future2.live_board_count, static_cast<uint64_t>(future2.success_values.size()), 0);
 
         double current_read_seconds = 0.0;
         double current_build_seconds = 0.0;
@@ -2816,11 +2856,14 @@ void recalculate_process_exad_chunked_impl(
         const std::string layer_path = EXAD::layer_file_path(options.pathname, step);
         {
             const double open_t0 = wall_time_seconds();
+            NDIAG_CHECKPOINT("exad_solve_chunked_reader_open_begin", step, 0, 0, 0);
             EXAD::LayerSlotReader reader(layer_path, io_config);
             layer_info = reader.info();
             current_read_seconds += wall_time_seconds() - open_t0;
+            NDIAG_CHECKPOINT("exad_solve_chunked_reader_open_end", step, layer_info.live_board_count, 0, 0);
 
             for (size_t slot = 0; slot < bucket_slot_count(); ++slot) {
+                NDIAG_HEARTBEAT("exad_solve_chunked_slot_begin", static_cast<uint64_t>(slot), bucket_slot_count(), step);
                 EXAD::BoardSet set;
                 const double slot_read_t0 = wall_time_seconds();
                 if (!reader.read_next(set)) {
@@ -2829,6 +2872,7 @@ void recalculate_process_exad_chunked_impl(
                 current_read_seconds += wall_time_seconds() - slot_read_t0;
 
                 const double build_t0 = wall_time_seconds();
+                NDIAG_CHECKPOINT("exad_solve_chunked_slot_build_begin", step, static_cast<uint64_t>(slot), set.live_board_count, 0);
                 EXAD::SolvedLayer<T> current = make_solved_layer_from_slot<T>(
                     std::move(set),
                     layer_info,
@@ -2839,8 +2883,10 @@ void recalculate_process_exad_chunked_impl(
                     num_threads
                 );
                 current_build_seconds += wall_time_seconds() - build_t0;
+                NDIAG_CHECKPOINT("exad_solve_chunked_slot_build_end", step, static_cast<uint64_t>(slot), current.live_board_count, static_cast<uint64_t>(current.success_values.size()));
 
                 const double recalc_t0 = wall_time_seconds();
+                NDIAG_CHECKPOINT("exad_solve_chunked_slot_recalc_begin", step, static_cast<uint64_t>(slot), current.live_board_count, 0);
                 recalculate_exad_direct(
                     current,
                     future1,
@@ -2860,6 +2906,7 @@ void recalculate_process_exad_chunked_impl(
                     match_dict
                 );
                 recalculate_seconds += wall_time_seconds() - recalc_t0;
+                NDIAG_CHECKPOINT("exad_solve_chunked_slot_recalc_end", step, static_cast<uint64_t>(slot), current.live_board_count, 0);
 
                 auto [slot_values, slot_max] = EXAD::solved_value_count_and_max(current, zero_val);
                 input_values += slot_values;
@@ -2869,13 +2916,17 @@ void recalculate_process_exad_chunked_impl(
                 }
 
                 const double compact_t0 = wall_time_seconds();
+                NDIAG_CHECKPOINT("exad_solve_chunked_slot_compact_begin", step, static_cast<uint64_t>(slot), current.live_board_count, static_cast<uint64_t>(current.success_values.size()));
                 current = EXAD::compact_solved_layer(current, luts, zero_val, num_threads);
                 zero_compact_seconds += wall_time_seconds() - compact_t0;
+                NDIAG_CHECKPOINT("exad_solve_chunked_slot_compact_end", step, static_cast<uint64_t>(slot), current.live_board_count, static_cast<uint64_t>(current.success_values.size()));
 
                 const std::string chunk_path = exad_slot_chunk_path(chunk_dir, slot);
                 const double chunk_write_t0 = wall_time_seconds();
+                NDIAG_CHECKPOINT("exad_solve_chunked_slot_write_begin", step, static_cast<uint64_t>(slot), current.live_board_count, static_cast<uint64_t>(current.success_values.size()));
                 write_slot_chunk_file<T>(chunk_path, current, slot, io_config);
                 current_write_seconds += wall_time_seconds() - chunk_write_t0;
+                NDIAG_CHECKPOINT("exad_solve_chunked_slot_write_end", step, static_cast<uint64_t>(slot), current.live_board_count, static_cast<uint64_t>(current.success_values.size()));
                 manifests[slot] = read_slot_chunk_manifest<T>(chunk_path, dtype_mode, slot);
             }
             reader.close();
@@ -2918,6 +2969,7 @@ void recalculate_process_exad_chunked_impl(
         }
 
         const double merge_t0 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_solve_chunked_merge_begin", step, input_rows, input_values, 0);
         const EXADChunkMergeSummary merge_summary = merge_slot_chunks_to_solved_file<T>(
             solved_path,
             writing_path,
@@ -2933,6 +2985,7 @@ void recalculate_process_exad_chunked_impl(
             io_config
         );
         current_write_seconds += wall_time_seconds() - merge_t0;
+        NDIAG_CHECKPOINT("exad_solve_chunked_merge_end", step, merge_summary.post_zero_rows, merge_summary.post_zero_values, 0);
 
         fs::remove_all(chunk_dir, cleanup_ec);
         if (cleanup_ec) {
@@ -2941,8 +2994,10 @@ void recalculate_process_exad_chunked_impl(
         EXAD::remove_layer_file(layer_path);
 
         const double current_readback_t0 = wall_time_seconds();
+        NDIAG_CHECKPOINT("exad_solve_chunked_readback_begin", step, 0, 0, 0);
         EXAD::SolvedLayer<T> current = EXAD::read_solved_layer_file<T>(solved_path, dtype_mode, io_config);
         future_read_seconds += wall_time_seconds() - current_readback_t0;
+        NDIAG_CHECKPOINT("exad_solve_chunked_readback_end", step, current.live_board_count, static_cast<uint64_t>(current.success_values.size()), 0);
         if (!solved_physical_metadata_matches(current, luts)) {
             throw std::runtime_error("EXAD solved layer physical metadata does not match LUT: " + solved_path);
         }
@@ -3032,34 +3087,44 @@ void run_pattern_solve_exad_cpp(
     const AdvancedPatternSpec &spec,
     const RunOptions &options
 ) {
+    NDIAG_START_RUN("run_pattern_solve_exad_cpp", spec, options, static_cast<uint64_t>(arr_init.size()));
+    NDIAG_CHECKPOINT("exad_solve_entry", options.steps, static_cast<uint64_t>(arr_init.size()), options.chunked_solve ? 1U : 0U, 0);
     (void)HybridSearch::mode();
     switch (success_rate_kind_from_name(options.success_rate_dtype)) {
         case SuccessRateKind::UInt64:
             if (options.chunked_solve) {
+                NDIAG_CHECKPOINT("exad_solve_dispatch_uint64_chunked", options.steps, 0, 0, 0);
                 recalculate_process_exad_chunked_impl<uint64_t>(arr_init, spec, options);
             } else {
+                NDIAG_CHECKPOINT("exad_solve_dispatch_uint64", options.steps, 0, 0, 0);
                 recalculate_process_exad_impl<uint64_t>(arr_init, spec, options);
             }
             return;
         case SuccessRateKind::Float32:
             if (options.chunked_solve) {
+                NDIAG_CHECKPOINT("exad_solve_dispatch_float32_chunked", options.steps, 0, 0, 0);
                 recalculate_process_exad_chunked_impl<float>(arr_init, spec, options);
             } else {
+                NDIAG_CHECKPOINT("exad_solve_dispatch_float32", options.steps, 0, 0, 0);
                 recalculate_process_exad_impl<float>(arr_init, spec, options);
             }
             return;
         case SuccessRateKind::Float64:
             if (options.chunked_solve) {
+                NDIAG_CHECKPOINT("exad_solve_dispatch_float64_chunked", options.steps, 0, 0, 0);
                 recalculate_process_exad_chunked_impl<double>(arr_init, spec, options);
             } else {
+                NDIAG_CHECKPOINT("exad_solve_dispatch_float64", options.steps, 0, 0, 0);
                 recalculate_process_exad_impl<double>(arr_init, spec, options);
             }
             return;
         case SuccessRateKind::UInt32:
         default:
             if (options.chunked_solve) {
+                NDIAG_CHECKPOINT("exad_solve_dispatch_uint32_chunked", options.steps, 0, 0, 0);
                 recalculate_process_exad_chunked_impl<uint32_t>(arr_init, spec, options);
             } else {
+                NDIAG_CHECKPOINT("exad_solve_dispatch_uint32", options.steps, 0, 0, 0);
                 recalculate_process_exad_impl<uint32_t>(arr_init, spec, options);
             }
             return;

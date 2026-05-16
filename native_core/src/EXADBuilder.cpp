@@ -6,6 +6,7 @@
 #include "Calculator.h"
 #include "CanonicalBatch.h"
 #include "Formation.h"
+#include "NativeDiagnostics.h"
 
 #include <algorithm>
 #include <array>
@@ -1251,6 +1252,7 @@ void generate_into_carries_once(
     DeriveHashState *derive_hash_state,
     GenerateStats &stats
 ) {
+    NDIAG_CHECKPOINT("exad_generate_once_hashmap_begin", -999999, current.live_board_count, 0, 0);
     const double hashmap0 = now_seconds();
     size_t derive_hash_length = derive_input_hash_length(current.live_board_count);
     std::unique_ptr<uint64_t[]> local_derive_hash1;
@@ -1269,6 +1271,7 @@ void generate_into_carries_once(
     }
     const uint64_t derive_hashmask = static_cast<uint64_t>(derive_hash_length - 1U);
     const double hashmap1_done = now_seconds();
+    NDIAG_CHECKPOINT("exad_generate_once_hashmap_end", -999999, current.live_board_count, derive_hash_length, 0);
 
     std::vector<std::array<uint32_t, bucket_slot_count()>> thread_new_counts1(static_cast<size_t>(thread_count));
     std::vector<std::array<uint32_t, bucket_slot_count()>> thread_new_counts2(static_cast<size_t>(thread_count));
@@ -1295,6 +1298,7 @@ void generate_into_carries_once(
         }
     }
     const double work_done = now_seconds();
+    NDIAG_CHECKPOINT("exad_generate_once_work_ready", -999999, current.live_board_count, static_cast<uint64_t>(work.size()), 0);
 
 #pragma omp parallel num_threads(thread_count)
     {
@@ -1325,6 +1329,7 @@ void generate_into_carries_once(
         size_t derived2_count = 0;
         uint64_t local_derive = 0;
         uint64_t local_derived_out = 0;
+        uint64_t local_boards_seen = 0;
         const bool inherit_plain_slot = param.pos_fixed_32k_mask == 0ULL;
 
         auto append_slot_pending = [&](
@@ -1583,6 +1588,8 @@ void generate_into_carries_once(
 
         const auto &spawn_reverse_shifts = reverse_spawn_shifts();
         auto process_board = [&](uint64_t board, uint8_t source_slot) {
+            ++local_boards_seen;
+            NDIAG_HEARTBEAT("exad_generate_process_board", local_boards_seen, current.live_board_count, source_slot);
             const uint64_t board_rev = FormationAD::reverse(board);
             uint64_t zero_mask = zero_nibble_lsb_mask(board);
             while (zero_mask != 0ULL) {
@@ -1631,6 +1638,7 @@ void generate_into_carries_once(
 
 #pragma omp for schedule(dynamic, 1024)
         for (int64_t work_idx = 0; work_idx < static_cast<int64_t>(work.size()); ++work_idx) {
+            NDIAG_HEARTBEAT("exad_generate_work_bucket", static_cast<uint64_t>(work_idx), static_cast<uint64_t>(work.size()), current.live_board_count);
             if (arr1.states[0].overflowed.load(std::memory_order_acquire) || arr2.states[0].overflowed.load(std::memory_order_acquire)) {
                 continue;
             }
@@ -1697,10 +1705,12 @@ void generate_into_carries_once(
         thread_derived_out[static_cast<size_t>(tid)] = local_derived_out;
     }
     const double loop_done = now_seconds();
+    NDIAG_CHECKPOINT("exad_generate_once_loop_end", -999999, current.live_board_count, stats.derive_candidate_count, stats.derived_output_count);
 
     finalize_counts(arr1, thread_new_counts1);
     finalize_counts(arr2, thread_new_counts2);
     const double counts_done = now_seconds();
+    NDIAG_CHECKPOINT("exad_generate_once_counts_end", -999999, carry_bucket_count(arr1), carry_bucket_count(arr2), 0);
     stats.hashmap_seconds += hashmap1_done - hashmap0;
     stats.worklist_seconds += work_done - hashmap1_done;
     stats.loop_seconds += loop_done - work_done;
@@ -1939,6 +1949,13 @@ GeneratePairResult generate_two_layers_carry(
     GenerateStats stats;
     stats.input_live = current.live_board_count;
     for (;;) {
+        NDIAG_CHECKPOINT(
+            "exad_generate_retry_prepare_begin",
+            -999999,
+            current.live_board_count,
+            stats.retry_count,
+            static_cast<uint64_t>(factors.bucket * 1000.0)
+        );
         const double prepare0 =
 #if defined(_OPENMP)
             omp_get_wtime();
@@ -1952,6 +1969,7 @@ GeneratePairResult generate_two_layers_carry(
 #else
             0.0;
 #endif
+        NDIAG_CHECKPOINT("exad_generate_estimate_done", -999999, estimate.slots[0].buckets, estimate.slots[0].small_bytes, estimate.slots[0].large_words);
         CarryLayer arr1 = prepare_arr1(std::move(arr1_seed), current.original_board_sum + 2U, estimate, thread_count);
         const double arr1_done =
 #if defined(_OPENMP)
@@ -1959,6 +1977,7 @@ GeneratePairResult generate_two_layers_carry(
 #else
             0.0;
 #endif
+        NDIAG_CHECKPOINT("exad_generate_arr1_alloc_done", -999999, carry_bucket_count(arr1), current.original_board_sum + 2U, 0);
         CarryLayer arr2 = make_carry(current.original_board_sum + 4U, estimate, thread_count);
         const double prepare1 =
 #if defined(_OPENMP)
@@ -1966,7 +1985,9 @@ GeneratePairResult generate_two_layers_carry(
 #else
             0.0;
 #endif
+        NDIAG_CHECKPOINT("exad_generate_arr2_alloc_done", -999999, carry_bucket_count(arr2), current.original_board_sum + 4U, 0);
         const double gen0 = prepare1;
+        NDIAG_CHECKPOINT("exad_generate_once_begin", -999999, current.live_board_count, carry_bucket_count(arr1), carry_bucket_count(arr2));
         generate_into_carries_once(
             current,
             spec,
@@ -1986,6 +2007,7 @@ GeneratePairResult generate_two_layers_carry(
 #else
             0.0;
 #endif
+        NDIAG_CHECKPOINT("exad_generate_once_done", -999999, current.live_board_count, carry_bucket_count(arr1), carry_bucket_count(arr2));
         stats.prepare_seconds += prepare1 - prepare0;
         stats.prepare_estimate_seconds += estimate_done - prepare0;
         stats.prepare_arr1_seconds += arr1_done - estimate_done;
@@ -1995,12 +2017,14 @@ GeneratePairResult generate_two_layers_carry(
         const bool arr1_overflow = any_overflow(arr1);
         const bool arr2_overflow = any_overflow(arr2);
         if (!arr1_overflow && !arr2_overflow) {
+            NDIAG_CHECKPOINT("exad_generate_retry_success", -999999, stats.retry_count, carry_bucket_count(arr1), carry_bucket_count(arr2));
             if (derive_hash_state != nullptr) {
                 // This step's arr2 target becomes the next step's arr1 target.
                 rotate_derive_hashmaps(*derive_hash_state);
             }
             return {std::move(arr1), std::move(arr2), stats};
         }
+        NDIAG_CHECKPOINT("exad_generate_retry_overflow", -999999, stats.retry_count, arr1_overflow ? 1U : 0U, arr2_overflow ? 1U : 0U);
         if (derive_hash_state != nullptr) {
             reset_derive_hashmaps(*derive_hash_state, thread_count);
         }
