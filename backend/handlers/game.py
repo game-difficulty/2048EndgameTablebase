@@ -13,7 +13,7 @@ from engine_core.BoardMover import (
 
 from ..actions import Action, Message
 from ..session import GameSession
-from ..session import np_u64, u64
+from ..session import np_u64, safe_hex, u64
 from ..state import ConnectionManager
 from ..state import save_game_state
 
@@ -127,6 +127,17 @@ def _gamer_simulate_move(actual_board, direction_str: str):
     return next_board, slide_distances, pop_positions, score_delta
 
 
+def _gamer_legal_moves(actual_board):
+    return [
+        direction
+        for direction in ("left", "right", "up", "down")
+        if not np.array_equal(
+            _gamer_simulate_move(actual_board, direction)[0],
+            actual_board,
+        )
+    ]
+
+
 async def handle_game_action(
     action: str,
     payload: dict[str, Any],
@@ -168,6 +179,19 @@ async def handle_game_action(
             _gamer_simulate_move(old_actual_board, direction_str)
         )
         if np.array_equal(moved_actual_board, old_actual_board):
+            if str(payload.get("source") or "") == "ai":
+                await websocket.send_json(
+                    {
+                        "action": Message.AI_MOVE_SKIPPED,
+                        "data": {
+                            "dir": direction_str,
+                            "has_legal_moves": bool(
+                                _gamer_legal_moves(old_actual_board)
+                            ),
+                            "hex_str": safe_hex(session.board_encoded),
+                        },
+                    }
+                )
             return True
 
         collapsed_after_move = _gamer_collapse_board(moved_actual_board)
