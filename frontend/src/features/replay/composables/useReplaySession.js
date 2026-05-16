@@ -123,7 +123,9 @@ export function useReplaySession(activeRef, emit) {
       const parts = source.split(/[\\/]/u);
       const display = parts[parts.length - 1] || source;
       const normalizedDisplay = display.toLowerCase().replace(/[\s-]+/gu, '_');
-      if (normalizedDisplay === 'tester_session') return t('replay.status.testerSession');
+      if (normalizedDisplay === 'tester_session') {
+        return replayPattern.value || t('replay.status.testerSession');
+      }
       return display;
     }
     if (replayPattern.value) return replayPattern.value;
