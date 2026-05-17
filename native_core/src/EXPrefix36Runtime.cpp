@@ -5,7 +5,6 @@
 #include "EXPrefix40Layer.h"
 #include "CompressionBridge.h"
 #include "Formation.h"
-#include "NativeDiagnostics.h"
 #include "VBoardMover.h"
 
 #include <algorithm>
@@ -3007,12 +3006,6 @@ void prefix36_dynamic_generate_into_production(
         for (int64_t bucket_idx_signed = 0;
              bucket_idx_signed < static_cast<int64_t>(current.bucket_keys.size());
              ++bucket_idx_signed) {
-            NDIAG_HEARTBEAT(
-                "ex_generate_bucket",
-                static_cast<uint64_t>(bucket_idx_signed),
-                static_cast<uint64_t>(current.bucket_keys.size()),
-                current.live_board_count
-            );
             if (arr1_state.overflowed.load(std::memory_order_acquire) ||
                 arr2_state.overflowed.load(std::memory_order_acquire)) {
                 continue;
@@ -3023,10 +3016,7 @@ void prefix36_dynamic_generate_into_production(
             const uint32_t group = sum_index(key_remaining_sum(key));
             const uint32_t valid_count = dense_lut.size_table[group];
             const uint32_t unrank_offset = dense_lut.offset_table[group];
-            uint64_t local_boards_seen = 0;
             auto handle_board = [&](uint64_t board) {
-                ++local_boards_seen;
-                NDIAG_HEARTBEAT("ex_generate_process_board", local_boards_seen, current.live_board_count, bucket_idx);
                 if (do_check && is_success_by_shifts(board, options.target, spec.success_shifts)) {
                     return;
                 }
@@ -3109,9 +3099,7 @@ void generate_forward_layers(
     const RunOptions &options,
     const LutBundle &lut
 ) {
-    NDIAG_CHECKPOINT("ex_generate_forward_entry", 0, static_cast<uint64_t>(arr_init.size()), 0, 0);
     if (all_layer_inputs_exist(options)) {
-        NDIAG_CHECKPOINT("ex_generate_forward_skip_existing", 0, 0, 0, 0);
         return;
     }
     reset_generate_stats(options);
@@ -3121,11 +3109,8 @@ void generate_forward_layers(
     const double total_t0 = now_seconds();
 
     const double init_t0 = now_seconds();
-    NDIAG_CHECKPOINT("ex_generate_init_prefix_lut_begin", 0, static_cast<uint64_t>(arr_init.size()), 0, 0);
     const Prefix40Baseline::Luts prefix_luts = build_prefix_luts(lut.config, options);
-    NDIAG_CHECKPOINT("ex_generate_init_prefix40_begin", 0, static_cast<uint64_t>(arr_init.size()), 0, 0);
     Prefix40Baseline::Layer p40 = Prefix40Baseline::build_layer_from_sorted_boards(arr_init, prefix_luts, num_threads);
-    NDIAG_CHECKPOINT("ex_generate_init_prefix36_begin", 0, p40.live_board_count, 0, 0);
     Prefix36Layer current = build_prefix36_metadata_from_prefix40_single_bucket_parallel(
         p40,
         prefix_luts,
@@ -3135,10 +3120,8 @@ void generate_forward_layers(
     );
     const double init_t1 = now_seconds();
     const double init_write_t0 = now_seconds();
-    NDIAG_CHECKPOINT("ex_generate_init_write_begin", 0, current.live_board_count, 0, 0);
     write_generated_layer_file(options, 0, current, spec, mode, io_config);
     const double init_write_t1 = now_seconds();
-    NDIAG_CHECKPOINT("ex_generate_init_write_end", 0, current.live_board_count, 0, 0);
     append_generate_stats(
         options, "init", 0, arr_init.size(), &current, nullptr, 0,
         init_write_t1 - init_t0,
@@ -3163,7 +3146,6 @@ void generate_forward_layers(
     const uint32_t progress_total = classic_build_progress_total(options);
 
     for (int current_step = 0; current_step <= options.steps - 3; ++current_step) {
-        NDIAG_CHECKPOINT("ex_generate_step_begin", current_step, current.live_board_count, 0, 0);
         FormationProgress::update_build_progress(static_cast<uint32_t>(current_step + 1), progress_total);
         double factor = reserve_factor_for_step(current_step, reserve_need_history, retry_guard_factor);
         retry_guard_factor = 0.0;
@@ -3180,29 +3162,18 @@ void generate_forward_layers(
             double cleanup_t0 = 0.0;
             {
                 const double prepare_t0 = now_seconds();
-                NDIAG_CHECKPOINT(
-                    "ex_generate_dynamic_alloc_begin",
-                    current_step,
-                    current.live_board_count,
-                    static_cast<uint64_t>(factor * 1000.0),
-                    retry_count
-                );
                 Prefix36DynamicState arr1 =
                     make_dynamic_for_current(current.layer_sum + 2U, current.threshold_bits, current, factor);
                 Prefix36DynamicState arr2 =
                     make_dynamic_for_current(current.layer_sum + 4U, current.threshold_bits, current, factor);
                 const double prepare_t1 = now_seconds();
-                NDIAG_CHECKPOINT("ex_generate_dynamic_alloc_end", current_step, arr1.hash_capacity, arr2.hash_capacity, retry_count);
                 prepare_seconds += prepare_t1 - prepare_t0;
                 const double seed_t0 = now_seconds();
                 if (has_carry) {
-                    NDIAG_CHECKPOINT("ex_generate_insert_carry_begin", current_step, carry_layer.live_board_count, 0, 0);
                     insert_layer_into_dynamic(carry_layer, arr1, lut.dense_lut, lut.row_luts, num_threads);
-                    NDIAG_CHECKPOINT("ex_generate_insert_carry_end", current_step, carry_layer.live_board_count, 0, 0);
                 }
                 const double work_t0 = now_seconds();
                 const bool do_check = current_step > options.docheck_step;
-                NDIAG_CHECKPOINT("ex_generate_dynamic_loop_begin", current_step, current.live_board_count, do_check ? 1U : 0U, 0);
                 if (options.is_variant) {
                     prefix36_dynamic_generate_into_production<VBoardMover>(
                         current, arr1, arr2, lut.dense_lut, lut.row_luts, spec, options, num_threads, do_check);
@@ -3211,7 +3182,6 @@ void generate_forward_layers(
                         current, arr1, arr2, lut.dense_lut, lut.row_luts, spec, options, num_threads, do_check);
                 }
                 const double work_t1 = now_seconds();
-                NDIAG_CHECKPOINT("ex_generate_dynamic_loop_end", current_step, current.live_board_count, arr1.overflowed.load() ? 1U : 0U, arr2.overflowed.load() ? 1U : 0U);
                 work_seconds += (work_t1 - seed_t0);
                 if (arr1.overflowed.load(std::memory_order_acquire) ||
                     arr2.overflowed.load(std::memory_order_acquire)) {
@@ -3220,11 +3190,9 @@ void generate_forward_layers(
                     if (retry_count > 6U) {
                         throw std::runtime_error("EX prefix36 dynamic generation exceeded retry limit");
                     }
-                    NDIAG_CHECKPOINT("ex_generate_dynamic_overflow_retry", current_step, static_cast<uint64_t>(factor * 1000.0), retry_count, 0);
                     cleanup_t0 = now_seconds();
                 } else {
                     const double finalize_t0 = now_seconds();
-                    NDIAG_CHECKPOINT("ex_generate_finalize_begin", current_step, 0, 0, 0);
                     next_layer = finalize_prefix36_dynamic_state(arr1, lut.dense_lut, num_threads);
                     if (terminal) {
                         terminal_next2 = finalize_prefix36_dynamic_state(arr2, lut.dense_lut, num_threads);
@@ -3238,13 +3206,6 @@ void generate_forward_layers(
                         has_carry = true;
                     }
                     const double finalize_t1 = now_seconds();
-                    NDIAG_CHECKPOINT(
-                        "ex_generate_finalize_end",
-                        current_step,
-                        next_layer.live_board_count,
-                        terminal ? terminal_next2.live_board_count : carry_layer.live_board_count,
-                        terminal ? 1U : 0U
-                    );
                     finalize_seconds += finalize_t1 - finalize_t0;
                     cleanup_t0 = finalize_t1;
                     built = true;
@@ -3259,13 +3220,11 @@ void generate_forward_layers(
         }
 
         const double write_t0 = now_seconds();
-        NDIAG_CHECKPOINT("ex_generate_write_begin", current_step + 1, next_layer.live_board_count, terminal ? terminal_next2.live_board_count : 0ULL, 0);
         write_generated_layer_file(options, current_step + 1, next_layer, spec, mode, io_config);
         if (terminal) {
             write_generated_layer_file(options, current_step + 2, terminal_next2, spec, mode, io_config);
         }
         const double write_t1 = now_seconds();
-        NDIAG_CHECKPOINT("ex_generate_write_end", current_step + 1, next_layer.live_board_count, terminal ? terminal_next2.live_board_count : 0ULL, 0);
 
         const double layer_compute_seconds = prepare_seconds + work_seconds + finalize_seconds + cleanup_seconds;
         const double layer_write_seconds = write_t1 - write_t0;
@@ -3349,17 +3308,14 @@ SolveStepSummary solve_loaded_step_impl(
     const double total_t0 = now_seconds();
     const double index_t0 = now_seconds();
     const bool futures_empty = future1.live_board_count == 0U && future2.live_board_count == 0U;
-    NDIAG_CHECKPOINT("ex_solve_step_index_begin", step, current.live_board_count, future1.live_board_count, future2.live_board_count);
     if (!futures_empty) {
         ensure_direct_index_built(future1, dense_lut.size_table);
         ensure_direct_index_built(future2, dense_lut.size_table);
     }
     const double index_t1 = now_seconds();
-    NDIAG_CHECKPOINT("ex_solve_step_index_end", step, current.live_board_count, future1.live_board_count, future2.live_board_count);
 
     const uint64_t input_live = current.live_board_count;
     const double recalc_t0 = now_seconds();
-    NDIAG_CHECKPOINT("ex_solve_step_recalc_begin", step, input_live, futures_empty ? 1U : 0U, 0);
     const bool do_check = step > options.docheck_step;
     const bool all_zero_output = futures_empty && !do_check;
     RecalcStats recalc;
@@ -3400,11 +3356,9 @@ SolveStepSummary solve_loaded_step_impl(
         }
     }
     const double recalc_t1 = now_seconds();
-    NDIAG_CHECKPOINT("ex_solve_step_recalc_end", step, recalc.boards, static_cast<uint64_t>((recalc_t1 - recalc_t0) * 1000.0), 0);
     recalc.seconds = recalc_t1 - recalc_t0;
     recalc.mbps = throughput(recalc.boards, recalc.seconds);
     const double compact_t0 = now_seconds();
-    NDIAG_CHECKPOINT("ex_solve_step_compact_begin", step, current.live_board_count, 0, 0);
     if (all_zero_output) {
         Prefix36Layer empty;
         empty.layer_sum = current.layer_sum;
@@ -3414,16 +3368,13 @@ SolveStepSummary solve_loaded_step_impl(
         current = compact_layer(current, dense_lut, 0U, num_threads);
     }
     const double compact_t1 = now_seconds();
-    NDIAG_CHECKPOINT("ex_solve_step_compact_end", step, current.live_board_count, 0, 0);
     const double write_t0 = now_seconds();
-    NDIAG_CHECKPOINT("ex_solve_step_write_begin", step, current.live_board_count, 0, 0);
     write_layer_file(layer_file_path(options.pathname, step), current, spec, mode, io_config);
     remove_generated_layer_input(options.pathname, step);
     if (!options.optimal_branch_only) {
         compress_layer_result_from_memory(options, step, current, spec, mode);
     }
     const double write_t1 = now_seconds();
-    NDIAG_CHECKPOINT("ex_solve_step_write_end", step, current.live_board_count, 0, 0);
 
     double future_compact_seconds = 0.0;
     double future_write_seconds = 0.0;
@@ -3435,11 +3386,9 @@ SolveStepSummary solve_loaded_step_impl(
             static_cast<double>(max_scale_value_for_dtype<uint32_t>(options.success_rate_dtype))
         );
         const double fc_t0 = now_seconds();
-        NDIAG_CHECKPOINT("ex_solve_future_compact_begin", step + 2, future2.live_board_count, threshold, 0);
         future2 = compact_layer(future2, dense_lut, threshold, num_threads);
         const double fc_t1 = now_seconds();
         const double fw_t0 = now_seconds();
-        NDIAG_CHECKPOINT("ex_solve_future_write_begin", step + 2, future2.live_board_count, 0, 0);
         write_layer_file(layer_file_path(options.pathname, step + 2), future2, spec, mode, io_config);
         remove_generated_layer_input(options.pathname, step + 2);
         if (!options.optimal_branch_only) {
@@ -3449,7 +3398,6 @@ SolveStepSummary solve_loaded_step_impl(
         future_compact_seconds = fc_t1 - fc_t0;
         future_write_seconds = fw_t1 - fw_t0;
         future2_post_live = future2.live_board_count;
-        NDIAG_CHECKPOINT("ex_solve_future_write_end", step + 2, future2.live_board_count, 0, 0);
     }
     const double current_retained_ratio =
         RuntimeControls::retention_ratio(current.live_board_count, input_live);
@@ -3744,10 +3692,7 @@ void run_pattern_build(
     const PatternSpec &spec,
     const RunOptions &options
 ) {
-    NDIAG_START_RUN("run_pattern_build_zmask_cpp", spec, options, static_cast<uint64_t>(arr_init.size()));
-    NDIAG_CHECKPOINT("ex_build_entry", 0, static_cast<uint64_t>(arr_init.size()), 0, 0);
     if (compressed_results_are_complete_for_options(options)) {
-        NDIAG_CHECKPOINT("ex_build_skip_compressed_complete", 0, 0, 0, 0);
         return;
     }
     if (options.optimal_branch_only && all_compressed_layers_exist(options)) {
@@ -3755,11 +3700,8 @@ void run_pattern_build(
             "EX optimal_branch_only requested, but compressed EX results lack ex_optimal_complete marker; rebuild the table"
         );
     }
-    NDIAG_CHECKPOINT("ex_lut_load_or_build_begin", 0, static_cast<uint64_t>(arr_init.size()), 0, 0);
     const LutBundle lut = load_or_build_prefix36_lut(arr_init, spec, options);
-    NDIAG_CHECKPOINT("ex_lut_load_or_build_end", 0, static_cast<uint64_t>(lut.dense_lut.size_table.size()), 0, 0);
     generate_forward_layers(arr_init, spec, options, lut);
-    NDIAG_CHECKPOINT("ex_build_forward_complete", options.steps, 0, 0, 0);
     run_pattern_solve(arr_init, spec, options);
 }
 
@@ -3768,10 +3710,7 @@ void run_pattern_solve(
     const PatternSpec &spec,
     const RunOptions &options
 ) {
-    NDIAG_START_RUN("run_pattern_solve_zmask_cpp", spec, options, static_cast<uint64_t>(arr_init.size()));
-    NDIAG_CHECKPOINT("ex_solve_entry", options.steps, static_cast<uint64_t>(arr_init.size()), 0, 0);
     if (compressed_results_are_complete_for_options(options)) {
-        NDIAG_CHECKPOINT("ex_solve_skip_compressed_complete", options.steps, 0, 0, 0);
         return;
     }
     if (options.optimal_branch_only && all_compressed_layers_exist(options)) {
@@ -3779,9 +3718,7 @@ void run_pattern_solve(
             "EX optimal_branch_only requested, but compressed EX results lack ex_optimal_complete marker; rebuild the table"
         );
     }
-    NDIAG_CHECKPOINT("ex_solve_lut_load_or_build_begin", options.steps, static_cast<uint64_t>(arr_init.size()), 0, 0);
     const LutBundle lut = load_or_build_prefix36_lut(arr_init, spec, options);
-    NDIAG_CHECKPOINT("ex_solve_lut_load_or_build_end", options.steps, static_cast<uint64_t>(lut.dense_lut.size_table.size()), 0, 0);
 
     if (options.optimal_branch_only && !optimal_complete_marker_exists(options)) {
         const int last_done = read_optimal_layer_marker(options);
@@ -3815,7 +3752,6 @@ void run_pattern_solve(
     }
 
     generate_forward_layers(arr_init, spec, options, lut);
-    NDIAG_CHECKPOINT("ex_solve_forward_inputs_ready", options.steps, 0, 0, 0);
     reset_solve_stats(options);
     if (options.optimal_branch_only) {
         std::error_code ec;
@@ -3830,28 +3766,23 @@ void run_pattern_solve(
     promote_generated_layer_input(options.pathname, first_step + 1, spec, mode, io_config, lut, num_threads);
     promote_generated_layer_input(options.pathname, first_step + 2, spec, mode, io_config, lut, num_threads);
     const double initial_read_t0 = now_seconds();
-    NDIAG_CHECKPOINT("ex_solve_initial_future_read_begin", first_step, 0, 0, 0);
     Prefix36Layer future1 = read_layer_input(
         options.pathname, first_step + 1, io_config, lut.dense_lut, num_threads, &lut);
     Prefix36Layer future2 = read_layer_input(
         options.pathname, first_step + 2, io_config, lut.dense_lut, num_threads, &lut);
     double carried_read_seconds = now_seconds() - initial_read_t0;
-    NDIAG_CHECKPOINT("ex_solve_initial_future_read_end", first_step, future1.live_board_count, future2.live_board_count, 0);
     double deletion_threshold_state = RuntimeControls::current_deletion_threshold(options);
     const uint32_t progress_total = classic_build_progress_total(options);
     const uint32_t solve_progress_base = build_progress_total(options);
     for (int step = first_step; step >= 0; --step) {
-        NDIAG_CHECKPOINT("ex_solve_step_begin", step, future1.live_board_count, future2.live_board_count, 0);
         FormationProgress::update_build_progress(
             solve_progress_base - static_cast<uint32_t>(step) - 2U,
             progress_total
         );
         const double read_t0 = now_seconds();
-        NDIAG_CHECKPOINT("ex_solve_current_read_begin", step, 0, 0, 0);
         Prefix36Layer current = read_layer_input(
             options.pathname, step, io_config, lut.dense_lut, num_threads, &lut);
         const double read_seconds = carried_read_seconds + (now_seconds() - read_t0);
-        NDIAG_CHECKPOINT("ex_solve_current_read_end", step, current.live_board_count, 0, 0);
         carried_read_seconds = 0.0;
         deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);
         const SolveStepSummary step_summary = solve_loaded_step_impl(
@@ -3866,7 +3797,6 @@ void run_pattern_solve(
             read_seconds,
             deletion_threshold_state
         );
-        NDIAG_CHECKPOINT("ex_solve_step_end", step, step_summary.input_live, step_summary.output_live, 0);
         total.input_live += step_summary.input_live;
         total.output_live += step_summary.output_live;
         total.recalc_seconds += step_summary.recalc_seconds;
@@ -3882,9 +3812,7 @@ void run_pattern_solve(
         future1 = std::move(current);
     }
     if (options.optimal_branch_only) {
-        NDIAG_CHECKPOINT("ex_optimal_begin", options.steps, 0, 0, 0);
         SolveStepSummary optimal_summary = keep_only_optimal_branches_prefix36(spec, options, lut);
-        NDIAG_CHECKPOINT("ex_optimal_end", options.steps, optimal_summary.input_live, optimal_summary.output_live, 0);
         total.input_live += optimal_summary.input_live;
         total.output_live += optimal_summary.output_live;
         total.recalc_seconds += optimal_summary.recalc_seconds;
@@ -3895,9 +3823,7 @@ void run_pattern_solve(
         total.total_seconds += optimal_summary.total_seconds;
         total.compute_seconds += optimal_summary.compute_seconds;
     } else {
-        NDIAG_CHECKPOINT("ex_compress_all_begin", options.steps, 0, 0, 0);
         const double compress_seconds = compress_all_layer_results(options);
-        NDIAG_CHECKPOINT("ex_compress_all_end", options.steps, static_cast<uint64_t>(compress_seconds * 1000.0), 0, 0);
         total.total_seconds += compress_seconds;
         total.current_write_seconds += compress_seconds;
     }

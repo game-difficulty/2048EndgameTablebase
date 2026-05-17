@@ -44,9 +44,6 @@ set(PORTABLE_X86_64_ARCH "x86-64-v3" CACHE STRING
 set(PORTABLE_X86_64_TUNE "generic" CACHE STRING
     "CPU tuning target for GCC/Clang builds."
 )
-set(NATIVE_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH
-    "Output directory for native Python extension modules and DLLs."
-)
 
 get_filename_component(PYTHON_ROOT_DIR "${Python_EXECUTABLE}" DIRECTORY)
 set(LIBLZMA_HINT_DIRS
@@ -146,7 +143,6 @@ set(FORMATION_CORE_SOURCES
     src/NativeLzma.cpp
     src/TrieCompression.cpp
     src/ReaderRuntime.cpp
-    src/NativeDiagnosticsDllMain.cpp
     src/AdaptiveIndex.cpp
     src/HybridSearch.cpp
     src/CanonicalBatch.cpp
@@ -267,12 +263,12 @@ foreach(target ${ALL_PYD_MODULES})
     set_target_properties(${target} PROPERTIES
         CXX_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN ON
-        LIBRARY_OUTPUT_DIRECTORY "${NATIVE_OUTPUT_DIR}"
-        RUNTIME_OUTPUT_DIRECTORY "${NATIVE_OUTPUT_DIR}"
-        LIBRARY_OUTPUT_DIRECTORY_DEBUG "${NATIVE_OUTPUT_DIR}"
-        LIBRARY_OUTPUT_DIRECTORY_RELEASE "${NATIVE_OUTPUT_DIR}"
-        RUNTIME_OUTPUT_DIRECTORY_DEBUG "${NATIVE_OUTPUT_DIR}"
-        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${NATIVE_OUTPUT_DIR}"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        LIBRARY_OUTPUT_DIRECTORY_DEBUG "${CMAKE_CURRENT_SOURCE_DIR}"
+        LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_CURRENT_SOURCE_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}"
     )
 
     if(ipo_supported)
