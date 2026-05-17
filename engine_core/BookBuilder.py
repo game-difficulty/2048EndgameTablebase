@@ -9,6 +9,7 @@ from Config import (
     RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH,
     SingletonConfig,
     category_info,
+    deletion_threshold_components,
     logger,
     pattern_32k_tiles_map,
     pattern_catalog,
@@ -65,9 +66,18 @@ def _build_native_run_options(
     options.is_variant = bool(is_variant)
     options.spawn_rate4 = float(spawn_rate4)
     options.success_rate_dtype = str(config.get("success_rate_dtype", "uint32"))
-    options.deletion_threshold = write_runtime_deletion_threshold_signal(
-        config.get("deletion_threshold", 0.0)
+    deletion_threshold_mode = config.get("deletion_threshold_mode", "absolute")
+    absolute_threshold, relative_threshold = deletion_threshold_components(
+        config.get("deletion_threshold", 0.0),
+        deletion_threshold_mode,
     )
+    write_runtime_deletion_threshold_signal(
+        config.get("deletion_threshold", 0.0),
+        mode=deletion_threshold_mode,
+    )
+    options.deletion_threshold = absolute_threshold
+    if hasattr(options, "relative_deletion_threshold"):
+        options.relative_deletion_threshold = relative_threshold
     if hasattr(options, "deletion_threshold_signal_path"):
         options.deletion_threshold_signal_path = RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH
     options.compress = bool(config.get("compress", False))
@@ -253,6 +263,7 @@ def save_config_to_txt(output_path: str) -> None:
         "direct_io_queue_depth",
         "direct_io_chunk_mib",
         "deletion_threshold",
+        "deletion_threshold_mode",
         "4_spawn_rate",
         "success_rate_dtype",
     ]

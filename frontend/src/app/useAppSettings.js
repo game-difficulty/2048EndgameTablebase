@@ -18,6 +18,7 @@ const DEFAULT_CONFIG = {
   zmask_algo: false,
   chunked_solve: false,
   deletion_threshold: 0,
+  deletion_threshold_mode: 'absolute',
   SmallTileSumLimit: 96,
   success_rate_dtype: 'uint32',
   demo_speed: 40,
@@ -57,6 +58,9 @@ const normalizeDeletionThreshold = (value) => {
   return Math.min(MAX_DELETION_THRESHOLD, Math.max(0, parsed));
 };
 
+const normalizeDeletionThresholdMode = (value) =>
+  value === 'relative' || value === 'off' ? value : 'absolute';
+
 const mergeConfig = (nextConfig = {}) => {
   const previous = config.value;
   const nextUiScale = Number(nextConfig.ui_scale ?? previous.ui_scale ?? DEFAULT_CONFIG.ui_scale) || DEFAULT_CONFIG.ui_scale;
@@ -65,6 +69,11 @@ const mergeConfig = (nextConfig = {}) => {
     ...nextConfig,
     deletion_threshold: normalizeDeletionThreshold(
       nextConfig.deletion_threshold ?? previous.deletion_threshold ?? DEFAULT_CONFIG.deletion_threshold
+    ),
+    deletion_threshold_mode: normalizeDeletionThresholdMode(
+      nextConfig.deletion_threshold_mode
+        ?? previous.deletion_threshold_mode
+        ?? DEFAULT_CONFIG.deletion_threshold_mode
     ),
     ui_scale: Math.min(125, Math.max(90, nextUiScale)),
     colors: clonePalette(nextConfig.colors ?? previous.colors, DEFAULT_CONFIG.colors),

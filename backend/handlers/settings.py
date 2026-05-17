@@ -10,7 +10,13 @@ import threading
 import time
 
 import markdown
-from Config import SingletonConfig, category_info, theme_map, write_runtime_deletion_threshold_signal
+from Config import (
+    SingletonConfig,
+    category_info,
+    normalize_deletion_threshold_mode,
+    theme_map,
+    write_runtime_deletion_threshold_signal,
+)
 from engine_core import BookBuilder
 from fastapi import WebSocket
 from SignalHub import progress_signal
@@ -70,6 +76,9 @@ async def handle_settings_action(
         config["deletion_threshold"] = normalize_deletion_threshold(
             config.get("deletion_threshold", 0.0)
         )
+        config["deletion_threshold_mode"] = normalize_deletion_threshold_mode(
+            config.get("deletion_threshold_mode", "absolute")
+        )
         await websocket.send_json(
             {
                 "type": EventType.SETTINGS_DATA,
@@ -91,6 +100,9 @@ async def handle_settings_action(
         config["ui_scale"] = config.get("ui_scale", 100)
         config["deletion_threshold"] = normalize_deletion_threshold(
             config.get("deletion_threshold", 0.0)
+        )
+        config["deletion_threshold_mode"] = normalize_deletion_threshold_mode(
+            config.get("deletion_threshold_mode", "absolute")
         )
 
         if key == "theme":
@@ -114,8 +126,18 @@ async def handle_settings_action(
                     config["colors"] = list(theme_map[theme]) + ["#000000"] * 20
             SingletonConfig.tile_font_colors()
         elif key == "deletion_threshold":
-            value = write_runtime_deletion_threshold_signal(value)
+            value = write_runtime_deletion_threshold_signal(
+                value,
+                mode=config.get("deletion_threshold_mode", "absolute"),
+            )
             config[key] = value
+        elif key == "deletion_threshold_mode":
+            value = normalize_deletion_threshold_mode(value)
+            config[key] = value
+            write_runtime_deletion_threshold_signal(
+                config.get("deletion_threshold", 0.0),
+                mode=value,
+            )
         else:
             config[key] = value
 

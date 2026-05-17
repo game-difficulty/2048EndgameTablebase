@@ -37,6 +37,7 @@ struct RunOptions {
     double spawn_rate4 = 0.1;
     std::string success_rate_dtype = "uint32";
     double deletion_threshold = 0.0;
+    double relative_deletion_threshold = 0.0;
     std::string deletion_threshold_signal_path;
     bool compress = false;
     bool compress_temp_files = false;
@@ -50,6 +51,11 @@ struct RunOptions {
 
 namespace RuntimeControls {
 
+struct DeletionThresholdState {
+    double absolute = 0.0;
+    double relative = 0.0;
+};
+
 inline double clamp_deletion_threshold(double value) {
     if (!std::isfinite(value)) {
         return 0.0;
@@ -61,28 +67,145 @@ inline double clamp_deletion_threshold(double value) {
     return value > kMaxDeletionThreshold ? kMaxDeletionThreshold : value;
 }
 
-inline double current_deletion_threshold(const RunOptions &options) {
-    double value = options.deletion_threshold;
+inline DeletionThresholdState clamp_deletion_thresholds(DeletionThresholdState state) {
+    state.absolute = clamp_deletion_threshold(state.absolute);
+    state.relative = clamp_deletion_threshold(state.relative);
+    return state;
+}
+
+inline DeletionThresholdState current_deletion_thresholds(const RunOptions &options) {
+    DeletionThresholdState state{
+        options.deletion_threshold,
+        options.relative_deletion_threshold
+    };
     if (!options.deletion_threshold_signal_path.empty()) {
         std::ifstream in(options.deletion_threshold_signal_path);
-        double signaled = 0.0;
-        if (in >> signaled) {
-            value = signaled;
+        double signaled_absolute = 0.0;
+        if (in >> signaled_absolute) {
+            state.absolute = signaled_absolute;
+            double signaled_relative = 0.0;
+            if (in >> signaled_relative) {
+                state.relative = signaled_relative;
+            } else {
+                state.relative = 0.0;
+            }
         }
     }
-    return clamp_deletion_threshold(value);
+    return clamp_deletion_thresholds(state);
+}
+
+inline DeletionThresholdState refresh_deletion_thresholds(
+    const RunOptions &options,
+    DeletionThresholdState current_state
+) {
+    if (options.deletion_threshold_signal_path.empty()) {
+        return clamp_deletion_thresholds(current_state);
+    }
+    std::ifstream in(options.deletion_threshold_signal_path);
+    double signaled_absolute = 0.0;
+    if (in >> signaled_absolute) {
+        current_state.absolute = signaled_absolute;
+        double signaled_relative = 0.0;
+        if (in >> signaled_relative) {
+            current_state.relative = signaled_relative;
+        } else {
+            current_state.relative = 0.0;
+        }
+    }
+    return clamp_deletion_thresholds(current_state);
+}
+
+inline double current_deletion_threshold(const RunOptions &options) {
+    return current_deletion_thresholds(options).absolute;
 }
 
 inline double refresh_deletion_threshold(const RunOptions &options, double current_value) {
-    if (options.deletion_threshold_signal_path.empty()) {
-        return clamp_deletion_threshold(current_value);
+    DeletionThresholdState state{current_value, options.relative_deletion_threshold};
+    return refresh_deletion_thresholds(options, state).absolute;
+}
+
+inline bool deletion_threshold_enabled(DeletionThresholdState state) {
+    state = clamp_deletion_thresholds(state);
+    return state.absolute > 0.0 || state.relative > 0.0;
+}
+
+template <typename T>
+inline double normalized_success_value(T value, T zero_value, T max_scale_value) {
+    const long double zero = static_cast<long double>(zero_value);
+    const long double scale = static_cast<long double>(max_scale_value) - zero;
+    if (scale == 0.0L) {
+        return 0.0;
     }
-    std::ifstream in(options.deletion_threshold_signal_path);
-    double signaled = 0.0;
-    if (in >> signaled) {
-        return clamp_deletion_threshold(signaled);
+    return static_cast<double>((static_cast<long double>(value) - zero) / scale);
+}
+
+template <typename T>
+inline T scaled_deletion_threshold(
+    double ratio,
+    T zero_value,
+    T max_scale_value
+) {
+    const long double zero = static_cast<long double>(zero_value);
+    const long double scale = static_cast<long double>(max_scale_value) - zero;
+    const long double threshold = zero + scale * static_cast<long double>(clamp_deletion_threshold(ratio));
+    if constexpr (std::is_integral_v<T>) {
+        return static_cast<T>(threshold < zero ? zero : threshold);
+    } else {
+        return static_cast<T>(threshold);
     }
-    return clamp_deletion_threshold(current_value);
+}
+
+template <typename T>
+inline T absolute_deletion_threshold(
+    T zero_value,
+    T max_scale_value,
+    DeletionThresholdState state
+) {
+    return scaled_deletion_threshold(state.absolute, zero_value, max_scale_value);
+}
+
+template <typename T>
+inline T relative_deletion_threshold(
+    T layer_max_value,
+    T zero_value,
+    DeletionThresholdState state
+) {
+    state = clamp_deletion_thresholds(state);
+    const long double zero = static_cast<long double>(zero_value);
+    const long double threshold = zero
+        + (static_cast<long double>(layer_max_value) - zero) * static_cast<long double>(state.relative);
+    if constexpr (std::is_integral_v<T>) {
+        return static_cast<T>(threshold < zero ? zero : threshold);
+    } else {
+        return static_cast<T>(threshold);
+    }
+}
+
+template <typename T>
+inline T max_deletion_threshold(T lhs, T rhs) {
+    return lhs > rhs ? lhs : rhs;
+}
+
+template <typename T>
+inline T effective_deletion_threshold(
+    T layer_max_value,
+    T zero_value,
+    T max_scale_value,
+    DeletionThresholdState state
+) {
+    return max_deletion_threshold(
+        absolute_deletion_threshold(zero_value, max_scale_value, state),
+        relative_deletion_threshold(layer_max_value, zero_value, state)
+    );
+}
+
+template <typename T>
+inline double normalized_deletion_threshold(
+    T threshold,
+    T zero_value,
+    T max_scale_value
+) {
+    return normalized_success_value(threshold, zero_value, max_scale_value);
 }
 
 inline double retention_ratio(uint64_t after, uint64_t before) {

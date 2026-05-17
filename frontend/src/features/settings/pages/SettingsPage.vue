@@ -25,7 +25,7 @@
       </div>
       <template v-else>
       <div v-show="activeSubTab === 'builder'" class="flex flex-col space-y-2 animate-fade-in">
-        <div class="grid min-h-[360px] grid-cols-1 gap-6 items-stretch md:grid-cols-2">
+        <div class="grid min-h-[360px] grid-cols-1 gap-6 items-stretch md:grid-cols-[minmax(0,1fr)_minmax(0,1.618fr)]">
           <div class="h-full space-y-5">
             <div class="flex flex-col">
               <label class="ui-control font-bold text-text-main mb-2 uppercase tracking-wider">{{ $t('settings.builder.category') }}</label>
@@ -75,35 +75,85 @@
           </div>
 
           <div class="h-full bg-border-main/5 p-5 rounded-2xl border border-border-main shadow-inner">
-            <div class="grid h-full grid-rows-[auto_auto] gap-4">
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-6 gap-x-7">
-              <label
-                class="builder-toggle-option cursor-pointer group"
-                :class="{ 'opacity-50 cursor-not-allowed': selectedPatternIsVariant }"
-              >
-                <div class="builder-toggle-switch relative">
-                  <input type="checkbox" v-model="builderAdvancedAlgo" class="sr-only peer" :disabled="selectedPatternIsVariant" @change="handleAdvancedAlgoChange" />
-                  <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
-                  <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
-                </div>
-                <span class="builder-toggle-copy">
-                  <span class="builder-toggle-text ui-body font-bold text-text-main group-hover:text-accent transition-colors">{{ $t('settings.builder.advanced') }}</span>
-                  <span class="setting-tooltip builder-toggle-tooltip" tabindex="0" :title="$t('settings.tooltips.advanced')" :data-tooltip="$t('settings.tooltips.advanced')">?</span>
-                </span>
-              </label>
+            <div class="flex h-full flex-col gap-4">
+              <div class="grid content-start grid-cols-1 gap-4 sm:grid-cols-2">
+              <div class="flex flex-col">
+                <label class="builder-field-label">
+                  <span>{{ $t('settings.builder.algorithmMode') }}</span>
+                  <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.algorithmMode')" :data-tooltip="$t('settings.tooltips.algorithmMode')">?</span>
+                </label>
+                <UiSelect
+                  v-model="builderAlgorithm"
+                  class="w-full"
+                  :options="[
+                    { value: 'classic', label: $t('settings.builder.algorithmClassic') },
+                    { value: 'ad', label: $t('settings.builder.algorithmAD'), disabled: selectedPatternIsVariant },
+                    { value: 'ex', label: $t('settings.builder.algorithmEX') },
+                    { value: 'exad', label: $t('settings.builder.algorithmEXAD'), disabled: selectedPatternIsVariant },
+                  ]"
+                  :aria-label="$t('settings.builder.algorithmMode')"
+                  trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-control font-black text-text-main shadow-sm hover:border-accent/45"
+                  option-class="ui-control font-black"
+                  @change="handleBuilderAlgorithmChange"
+                />
+              </div>
 
-              <label class="builder-toggle-option cursor-pointer group">
-                <div class="builder-toggle-switch relative">
-                  <input type="checkbox" v-model="builderZMaskAlgo" class="sr-only peer" @change="handleZMaskAlgoChange" />
-                  <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
-                  <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
-                </div>
-                <span class="builder-toggle-copy">
-                  <span class="builder-toggle-text ui-body font-bold text-text-main group-hover:text-accent transition-colors">{{ $t('settings.builder.zmask') }}</span>
-                  <span class="setting-tooltip builder-toggle-tooltip" tabindex="0" :title="$t('settings.tooltips.zmask')" :data-tooltip="$t('settings.tooltips.zmask')">?</span>
-                </span>
-              </label>
+              <div class="flex flex-col">
+                <label class="builder-field-label">
+                  <span>{{ $t('settings.builder.successRateDtype') }}</span>
+                  <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.successRateDtype')" :data-tooltip="$t('settings.tooltips.successRateDtype')">?</span>
+                </label>
+                <UiSelect
+                  v-model="builderSuccessRateDtype"
+                  class="w-full"
+                  :options="successRateDtypeOptions"
+                  :aria-label="$t('settings.builder.successRateDtype')"
+                  trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-control font-black text-text-main shadow-sm hover:border-accent/45"
+                  option-class="ui-control font-black"
+                  @change="handleSuccessRateDtypeChange"
+                />
+              </div>
 
+              <div class="flex flex-col">
+                <label class="builder-field-label">
+                  <span>{{ $t('settings.builder.deletionThreshold') }}</span>
+                  <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.deletionThreshold')" :data-tooltip="$t('settings.tooltips.deletionThreshold')">?</span>
+                </label>
+                <div class="group relative min-w-0">
+                  <input type="number" step="0.01" min="0" max="0.999999" :value="deletionThresholdInput" :disabled="builderDeletionThresholdMode === 'off'" :aria-label="$t('settings.builder.deletionThreshold')" @input="handleDeletionThresholdInput" @change="handleDeletionThresholdChange" class="builder-number-input h-[42px] w-full bg-bg-main border border-border-main rounded-lg px-3 pr-9 ui-control font-black text-text-main outline-none hover:border-accent transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-50" />
+                  <div class="pointer-events-none absolute inset-y-1 right-1 flex w-5 flex-col overflow-hidden rounded-md border border-border-main/70 bg-bg-card/90 opacity-0 shadow-sm transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100" :class="{ 'hidden': builderDeletionThresholdMode === 'off' }">
+                    <button type="button" @click="stepDeletionThreshold(1)" class="number-spin-btn border-b border-border-main/60" aria-label="Increase deletion threshold">
+                      ▲
+                    </button>
+                    <button type="button" @click="stepDeletionThreshold(-1)" class="number-spin-btn" aria-label="Decrease deletion threshold">
+                      ▼
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="flex flex-col">
+                <label class="builder-field-label">
+                  <span>{{ $t('settings.builder.deletionThresholdModeShort') }}</span>
+                  <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.deletionThresholdMode')" :data-tooltip="$t('settings.tooltips.deletionThresholdMode')">?</span>
+                </label>
+                <UiSelect
+                  v-model="builderDeletionThresholdMode"
+                  class="w-full"
+                  :options="[
+                    { value: 'off', label: $t('settings.builder.deletionThresholdOff') },
+                    { value: 'absolute', label: $t('settings.builder.deletionThresholdAbsolute') },
+                    { value: 'relative', label: $t('settings.builder.deletionThresholdRelative') },
+                  ]"
+                  :aria-label="$t('settings.builder.deletionThresholdMode')"
+                  trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-control font-black text-text-main shadow-sm hover:border-accent/45"
+                  option-class="ui-control font-black"
+                  @change="handleDeletionThresholdModeChange"
+                />
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 gap-y-4 gap-x-5 border-t border-border-main pt-4 sm:grid-cols-3">
               <label class="builder-toggle-option cursor-pointer group">
                 <div class="builder-toggle-switch relative">
                   <input type="checkbox" v-model="builderCompress" class="sr-only peer" @change="handleCompressChange" />
@@ -128,7 +178,7 @@
                 </span>
               </label>
 
-              <label class="builder-toggle-option cursor-pointer group" v-if="!builderAdvancedAlgo">
+              <label class="builder-toggle-option cursor-pointer group" v-if="!builderUsesAdvanced">
                 <div class="builder-toggle-switch relative">
                   <input type="checkbox" v-model="builderOptimalBranchOnly" class="sr-only peer" @change="handleOptimalBranchOnlyChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
@@ -140,7 +190,7 @@
                 </span>
               </label>
 
-              <label class="builder-toggle-option cursor-pointer group" v-if="builderAdvancedAlgo">
+              <label class="builder-toggle-option cursor-pointer group" v-if="builderUsesAdvanced">
                 <div class="builder-toggle-switch relative">
                   <input type="checkbox" v-model="builderChunkedSolve" class="sr-only peer" @change="handleChunkedSolveChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
@@ -153,55 +203,15 @@
               </label>
             </div>
 
-            <div class="grid content-start grid-cols-1 gap-4 border-t border-border-main pt-6">
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div class="flex flex-col">
-                <label class="flex min-h-[2.7rem] items-start gap-2 ui-control font-black text-text-main mb-2 uppercase tracking-wider opacity-70">
-                  <span>{{ $t('settings.builder.successRateDtype') }}</span>
-                  <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.successRateDtype')" :data-tooltip="$t('settings.tooltips.successRateDtype')">?</span>
+            <div v-if="builderUsesAdvanced" class="pt-1">
+              <div class="flex justify-between items-center mb-2">
+                <label class="flex items-center gap-2 ui-control font-black text-text-main uppercase tracking-wider opacity-70">
+                  <span>{{ $t('settings.builder.smallTileSumLimit') }}</span>
+                  <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.smallTileSumLimit')" :data-tooltip="$t('settings.tooltips.smallTileSumLimit')">?</span>
                 </label>
-                <UiSelect
-                  v-model="builderSuccessRateDtype"
-                  class="w-full"
-                  :options="successRateDtypeOptions"
-                  :aria-label="$t('settings.builder.successRateDtype')"
-                  trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-control font-black text-text-main shadow-sm hover:border-accent/45"
-                  option-class="ui-control font-black"
-                  @change="handleSuccessRateDtypeChange"
-                />
+                <span class="pill-badge pill-badge-soft font-mono shadow-sm">{{ builderSmallTileSumLimit }}</span>
               </div>
-
-              <div class="flex flex-col">
-                <label class="flex min-h-[2.7rem] items-start gap-2 ui-control font-black text-text-main mb-2 uppercase tracking-wider opacity-70">
-                  <span>{{ $t('settings.builder.deletionThreshold') }}</span>
-                  <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.deletionThreshold')" :data-tooltip="$t('settings.tooltips.deletionThreshold')">?</span>
-                </label>
-                <div class="group relative">
-                  <input type="number" step="0.01" min="0" max="0.999999" :value="deletionThresholdInput" :aria-label="$t('settings.builder.deletionThreshold')" @input="handleDeletionThresholdInput" @change="handleDeletionThresholdChange" class="builder-number-input w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 pr-9 ui-control font-black text-text-main outline-none hover:border-accent transition-colors shadow-sm" />
-                  <div class="pointer-events-none absolute inset-y-1 right-1 flex w-5 flex-col overflow-hidden rounded-md border border-border-main/70 bg-bg-card/90 opacity-0 shadow-sm transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
-                    <button type="button" @click="stepDeletionThreshold(1)" class="number-spin-btn border-b border-border-main/60" aria-label="Increase deletion threshold">
-                      ▲
-                    </button>
-                    <button type="button" @click="stepDeletionThreshold(-1)" class="number-spin-btn" aria-label="Decrease deletion threshold">
-                      ▼
-                    </button>
-                  </div>
-                </div>
-              </div>
-              </div>
-
-              <div class="min-h-[4.75rem] transition-opacity duration-150" :class="builderAdvancedAlgo ? 'opacity-100' : 'opacity-0 pointer-events-none select-none'">
-                <div class="flex flex-col">
-                <div class="flex justify-between items-center mb-2">
-                  <label class="flex items-center gap-2 ui-control font-black text-text-main uppercase tracking-wider opacity-70">
-                    <span>{{ $t('settings.builder.smallTileSumLimit') }}</span>
-                    <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.smallTileSumLimit')" :data-tooltip="$t('settings.tooltips.smallTileSumLimit')">?</span>
-                  </label>
-                  <span class="pill-badge pill-badge-soft font-mono shadow-sm">{{ builderSmallTileSumLimit }}</span>
-                </div>
-                <input type="range" min="20" max="120" step="2" v-model.number="builderSmallTileSumLimit" @change="handleSmallTileSumLimitChange" class="w-full accent-accent cursor-pointer" />
-                </div>
-              </div>
+              <input type="range" min="20" max="120" step="2" v-model.number="builderSmallTileSumLimit" @change="handleSmallTileSumLimitChange" class="w-full accent-accent cursor-pointer" />
             </div>
             </div>
           </div>
@@ -373,26 +383,26 @@ const props = defineProps({
   selectedPatternIsVariant,
   buildPath,
   isBuilding,
-  builderAdvancedAlgo,
-  builderZMaskAlgo,
+  builderAlgorithm,
   builderCompress,
   builderCompressTempFiles,
   builderOptimalBranchOnly,
   builderChunkedSolve,
   builderSuccessRateDtype,
   builderSmallTileSumLimit,
+  builderDeletionThresholdMode,
   deletionThresholdInput,
   filteredPatterns,
   buildProgressPercent,
   buildProgressDisplay,
   saveSetting,
-  handleAdvancedAlgoChange,
-  handleZMaskAlgoChange,
+  handleBuilderAlgorithmChange,
   handleCompressChange,
   handleCompressTempFilesChange,
   handleOptimalBranchOnlyChange,
   handleChunkedSolveChange,
   handleSuccessRateDtypeChange,
+  handleDeletionThresholdModeChange,
   handleDeletionThresholdInput,
   handleDeletionThresholdChange,
   stepDeletionThreshold,
@@ -427,13 +437,17 @@ const targetOptions = computed(() =>
 );
 
 const successRateDtypeOptions = [
-  { value: 'uint32', label: 'uint32 (Default)' },
+  { value: 'uint32', label: 'uint32' },
   { value: 'uint64', label: 'uint64' },
   { value: 'float32', label: 'float32' },
   { value: 'float64', label: 'float64' },
   { value: '1-float32', label: '1-float32' },
   { value: '1-float64', label: '1-float64' },
 ];
+
+const builderUsesAdvanced = computed(() =>
+  builderAlgorithm.value === 'ad' || builderAlgorithm.value === 'exad'
+);
 </script>
 
 <style scoped>
@@ -460,26 +474,41 @@ const successRateDtypeOptions = [
 }
 
 .builder-toggle-switch {
-  margin-top: 0.1rem;
+  align-self: center;
+  margin-top: 0;
 }
 
 .builder-toggle-copy {
-  display: grid;
+  display: flex;
   min-width: 0;
   min-height: 3.25rem;
-  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 0.5rem;
 }
 
 .builder-toggle-text {
   min-width: 0;
+  flex: 0 1 auto;
   line-height: 1.3;
 }
 
 .builder-toggle-tooltip {
-  align-self: start;
-  margin-top: 0.2rem;
+  flex: 0 0 auto;
+}
+
+.builder-field-label {
+  display: flex;
+  min-height: 1.65rem;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+  color: var(--text-main);
+  font-size: var(--font-ui-sm);
+  font-weight: 900;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
 }
 
 @keyframes growX {

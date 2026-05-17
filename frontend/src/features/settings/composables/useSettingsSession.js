@@ -30,6 +30,7 @@ export function useSettingsSession(activeRef) {
   const buildProgressCurrent = ref(0);
   const buildProgressTotal = ref(0);
   const isBuilding = ref(false);
+  const builderAlgorithm = ref('classic');
   const builderAdvancedAlgo = ref(false);
   const builderZMaskAlgo = ref(false);
   const builderCompress = ref(false);
@@ -38,6 +39,7 @@ export function useSettingsSession(activeRef) {
   const builderChunkedSolve = ref(false);
   const builderSuccessRateDtype = ref('uint32');
   const builderSmallTileSumLimit = ref(96);
+  const builderDeletionThresholdMode = ref('absolute');
   const MAX_DELETION_THRESHOLD = 0.999999;
   const DEFAULT_DELETION_THRESHOLD_DECIMALS = 6;
 
@@ -113,6 +115,73 @@ export function useSettingsSession(activeRef) {
     return Math.min(MAX_DELETION_THRESHOLD, Math.max(0, parsed));
   };
 
+  const normalizeDeletionThresholdMode = (value) =>
+    value === 'relative' || value === 'off' ? value : 'absolute';
+
+  const normalizeBuilderAlgorithm = (value) => {
+    if (value === 'ad' || value === 'ex' || value === 'exad') {
+      return value;
+    }
+    return 'classic';
+  };
+
+  const algorithmFromFlags = (advanced, ex) => {
+    if (advanced && ex) {
+      return 'exad';
+    }
+    if (advanced) {
+      return 'ad';
+    }
+    if (ex) {
+      return 'ex';
+    }
+    return 'classic';
+  };
+
+  const flagsFromAlgorithm = (algorithm, isVariant = false) => {
+    const normalized = normalizeBuilderAlgorithm(algorithm);
+    if (isVariant) {
+      if (normalized === 'ad') {
+        return { algorithm: 'classic', advanced: false, ex: false };
+      }
+      if (normalized === 'exad') {
+        return { algorithm: 'ex', advanced: false, ex: true };
+      }
+    }
+    return {
+      algorithm: normalized,
+      advanced: normalized === 'ad' || normalized === 'exad',
+      ex: normalized === 'ex' || normalized === 'exad',
+    };
+  };
+
+  const applyBuilderAlgorithm = (algorithm, { persist = true } = {}) => {
+    const flags = flagsFromAlgorithm(algorithm, selectedPatternIsVariant.value);
+    builderAlgorithm.value = flags.algorithm;
+    builderAdvancedAlgo.value = flags.advanced;
+    builderZMaskAlgo.value = flags.ex;
+    if (!flags.advanced) {
+      builderChunkedSolve.value = false;
+    }
+    if (flags.advanced) {
+      builderOptimalBranchOnly.value = false;
+    }
+
+    if (!persist) {
+      return flags;
+    }
+
+    saveSetting('advanced_algo', flags.advanced);
+    saveSetting('zmask_algo', flags.ex);
+    if (!flags.advanced) {
+      saveSetting('chunked_solve', false);
+    }
+    if (flags.advanced) {
+      saveSetting('optimal_branch_only', false);
+    }
+    return flags;
+  };
+
   const deletionThresholdInput = ref(
     formatDeletionThreshold(config.value.deletion_threshold ?? 0)
   );
@@ -126,6 +195,10 @@ export function useSettingsSession(activeRef) {
   const syncBuilderStateFromConfig = () => {
     builderAdvancedAlgo.value = Boolean(config.value.advanced_algo);
     builderZMaskAlgo.value = Boolean(config.value.zmask_algo);
+    builderAlgorithm.value = algorithmFromFlags(
+      builderAdvancedAlgo.value,
+      builderZMaskAlgo.value
+    );
     builderCompress.value = Boolean(config.value.compress);
     builderCompressTempFiles.value = Boolean(config.value.compress_temp_files);
     builderOptimalBranchOnly.value = Boolean(config.value.optimal_branch_only);
@@ -134,6 +207,9 @@ export function useSettingsSession(activeRef) {
       config.value.success_rate_dtype || 'uint32';
     builderSmallTileSumLimit.value =
       Number(config.value.SmallTileSumLimit) || 96;
+    builderDeletionThresholdMode.value = normalizeDeletionThresholdMode(
+      config.value.deletion_threshold_mode
+    );
     deletionThresholdInput.value = formatDeletionThreshold(
       normalizeDeletionThreshold(config.value.deletion_threshold ?? 0)
     );
@@ -150,6 +226,7 @@ export function useSettingsSession(activeRef) {
       config.value.success_rate_dtype,
       config.value.SmallTileSumLimit,
       config.value.deletion_threshold,
+      config.value.deletion_threshold_mode,
     ],
     syncBuilderStateFromConfig,
     { immediate: true }
@@ -173,13 +250,10 @@ export function useSettingsSession(activeRef) {
   ));
 
   watch(selectedPatternIsVariant, (isVariant) => {
-    if (!isVariant || !builderAdvancedAlgo.value) {
+    if (!isVariant || (builderAlgorithm.value !== 'ad' && builderAlgorithm.value !== 'exad')) {
       return;
     }
-    builderAdvancedAlgo.value = false;
-    builderChunkedSolve.value = false;
-    saveSetting('advanced_algo', false);
-    saveSetting('chunked_solve', false);
+    applyBuilderAlgorithm(builderAlgorithm.value);
   });
 
   const buildProgressPercent = computed(() => {
@@ -286,6 +360,12 @@ export function useSettingsSession(activeRef) {
     commitDeletionThreshold();
   };
 
+  const handleDeletionThresholdModeChange = (mode = builderDeletionThresholdMode.value) => {
+    const normalized = normalizeDeletionThresholdMode(mode);
+    builderDeletionThresholdMode.value = normalized;
+    saveSetting('deletion_threshold_mode', normalized);
+  };
+
   const stepDeletionThreshold = (direction) => {
     const currentValue = normalizeDeletionThreshold(deletionThresholdInput.value);
     const steppedValue = currentValue + direction * 0.01;
@@ -296,15 +376,17 @@ export function useSettingsSession(activeRef) {
     saveSetting('deletion_threshold', clampedValue);
   };
 
+  const handleBuilderAlgorithmChange = (algorithm) => {
+    applyBuilderAlgorithm(algorithm);
+  };
+
   const handleAdvancedAlgoChange = () => {
     if (selectedPatternIsVariant.value) {
-      builderAdvancedAlgo.value = false;
-      builderChunkedSolve.value = false;
-      saveSetting('advanced_algo', false);
-      saveSetting('chunked_solve', false);
+      applyBuilderAlgorithm(builderZMaskAlgo.value ? 'ex' : 'classic');
       return;
     }
     const nextValue = Boolean(builderAdvancedAlgo.value);
+    builderAlgorithm.value = algorithmFromFlags(nextValue, builderZMaskAlgo.value);
     saveSetting('advanced_algo', nextValue);
     if (!nextValue) {
       builderChunkedSolve.value = false;
@@ -318,6 +400,7 @@ export function useSettingsSession(activeRef) {
 
   const handleZMaskAlgoChange = () => {
     const nextValue = Boolean(builderZMaskAlgo.value);
+    builderAlgorithm.value = algorithmFromFlags(builderAdvancedAlgo.value, nextValue);
     saveSetting('zmask_algo', nextValue);
     if (builderAdvancedAlgo.value) {
       builderOptimalBranchOnly.value = false;
@@ -393,13 +476,26 @@ export function useSettingsSession(activeRef) {
     deletionThresholdInput.value = formatDeletionThreshold(
       normalizedDeletionThreshold
     );
-    const advancedEnabled = !selectedPatternIsVariant.value && Boolean(builderAdvancedAlgo.value);
+    const normalizedDeletionThresholdMode = normalizeDeletionThresholdMode(
+      builderDeletionThresholdMode.value
+    );
+    builderDeletionThresholdMode.value = normalizedDeletionThresholdMode;
+    const algorithmFlags = flagsFromAlgorithm(
+      builderAlgorithm.value,
+      selectedPatternIsVariant.value
+    );
+    builderAlgorithm.value = algorithmFlags.algorithm;
+    builderAdvancedAlgo.value = algorithmFlags.advanced;
+    builderZMaskAlgo.value = algorithmFlags.ex;
+    const advancedEnabled = algorithmFlags.advanced;
     if (!advancedEnabled) {
-      builderAdvancedAlgo.value = false;
       builderChunkedSolve.value = false;
     }
+    if (advancedEnabled) {
+      builderOptimalBranchOnly.value = false;
+    }
     saveSetting('advanced_algo', advancedEnabled);
-    saveSetting('zmask_algo', Boolean(builderZMaskAlgo.value));
+    saveSetting('zmask_algo', algorithmFlags.ex);
     saveSetting('compress', Boolean(builderCompress.value));
     saveSetting(
       'compress_temp_files',
@@ -413,6 +509,7 @@ export function useSettingsSession(activeRef) {
       'chunked_solve',
       advancedEnabled ? Boolean(builderChunkedSolve.value) : false
     );
+    saveSetting('deletion_threshold_mode', normalizedDeletionThresholdMode);
     saveSetting('deletion_threshold', normalizedDeletionThreshold);
     saveSetting('success_rate_dtype', builderSuccessRateDtype.value);
     saveSetting(
@@ -461,6 +558,7 @@ export function useSettingsSession(activeRef) {
     selectedPatternIsVariant,
     buildPath,
     isBuilding,
+    builderAlgorithm,
     builderAdvancedAlgo,
     builderZMaskAlgo,
     builderCompress,
@@ -469,11 +567,13 @@ export function useSettingsSession(activeRef) {
     builderChunkedSolve,
     builderSuccessRateDtype,
     builderSmallTileSumLimit,
+    builderDeletionThresholdMode,
     deletionThresholdInput,
     filteredPatterns,
     buildProgressPercent,
     buildProgressDisplay,
     saveSetting,
+    handleBuilderAlgorithmChange,
     handleAdvancedAlgoChange,
     handleZMaskAlgoChange,
     handleCompressChange,
@@ -481,6 +581,7 @@ export function useSettingsSession(activeRef) {
     handleOptimalBranchOnlyChange,
     handleChunkedSolveChange,
     handleSuccessRateDtypeChange,
+    handleDeletionThresholdModeChange,
     handleDeletionThresholdInput,
     handleDeletionThresholdChange,
     stepDeletionThreshold,

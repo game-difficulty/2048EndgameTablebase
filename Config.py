@@ -131,13 +131,39 @@ def normalize_deletion_threshold(value):
     return min(MAX_DELETION_THRESHOLD, max(0.0, parsed))
 
 
-def write_runtime_deletion_threshold_signal(value):
+def normalize_deletion_threshold_mode(value):
+    if value == "relative":
+        return "relative"
+    if value == "off":
+        return "off"
+    return "absolute"
+
+
+def deletion_threshold_components(value, mode="absolute"):
     threshold = normalize_deletion_threshold(value)
+    normalized_mode = normalize_deletion_threshold_mode(mode)
+    if normalized_mode == "off":
+        return 0.0, 0.0
+    if normalized_mode == "relative":
+        return 0.0, threshold
+    return threshold, 0.0
+
+
+def write_runtime_deletion_threshold_signal(value, relative_value=0.0, mode=None):
+    threshold = normalize_deletion_threshold(value)
+    if mode is None:
+        absolute_threshold = threshold
+        relative_threshold = normalize_deletion_threshold(relative_value)
+    else:
+        absolute_threshold, relative_threshold = deletion_threshold_components(
+            threshold,
+            mode,
+        )
     path = RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH
     tmp_path = path + ".tmp"
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(tmp_path, "w", encoding="ascii") as file:
-        file.write(f"{threshold:.12g}\n")
+        file.write(f"{absolute_threshold:.12g} {relative_threshold:.12g}\n")
     os.replace(tmp_path, path)
     return threshold
 
@@ -498,6 +524,7 @@ class SingletonConfig:
             "direct_io_queue_depth": 16,
             "direct_io_chunk_mib": 8,
             "deletion_threshold": 0.0,
+            "deletion_threshold_mode": "absolute",
             "notebook_threshold": 0.999,
             "font_size_factor": 100,
             "ui_scale": 100,
@@ -536,6 +563,12 @@ class SingletonConfig:
                     if data.get("deletion_threshold") != normalized_deletion_threshold:
                         data["deletion_threshold"] = normalized_deletion_threshold
                         updated = True
+                    normalized_deletion_threshold_mode = normalize_deletion_threshold_mode(
+                        data.get("deletion_threshold_mode", defaults["deletion_threshold_mode"])
+                    )
+                    if data.get("deletion_threshold_mode") != normalized_deletion_threshold_mode:
+                        data["deletion_threshold_mode"] = normalized_deletion_threshold_mode
+                        updated = True
                     if updated:
                         cls.save_config(data, filename)
                     return data
@@ -551,9 +584,12 @@ class SingletonConfig:
 
         with open(filename, "wb") as file:
             pickle.dump(config, file)
-        if "deletion_threshold" in config:
+        if "deletion_threshold" in config or "deletion_threshold_mode" in config:
             try:
-                write_runtime_deletion_threshold_signal(config["deletion_threshold"])
+                write_runtime_deletion_threshold_signal(
+                    config.get("deletion_threshold", 0.0),
+                    mode=config.get("deletion_threshold_mode", "absolute"),
+                )
             except OSError as exc:
                 logger.error(f"Failed to write runtime deletion threshold signal: {exc}")
 

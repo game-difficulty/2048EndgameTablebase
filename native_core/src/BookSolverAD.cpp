@@ -366,7 +366,8 @@ std::string ad_solve_stats_file_path(const RunOptions &options) {
 }
 
 std::string ad_solve_stats_header() {
-    return "stage,step,input_live,post_zero_live,deletion_threshold,current_retained_ratio,"
+    return "stage,step,input_live,post_zero_live,deletion_threshold,relative_deletion_threshold,"
+           "effective_deletion_threshold,current_retained_ratio,"
            "future_threshold_rows_before,future_threshold_rows_after,future_threshold_retained_ratio,"
            "max_success,total_seconds,throughput_mbps,compute_seconds,compute_throughput_mbps,"
            "current_read_seconds,expand_seconds,index_seconds,recalculate_seconds,compact_seconds,"
@@ -399,6 +400,8 @@ struct AdSolveStatsRecord {
     uint64_t input_live = 0U;
     uint64_t post_zero_live = 0U;
     double deletion_threshold = 0.0;
+    double relative_deletion_threshold = 0.0;
+    double effective_deletion_threshold = 0.0;
     double current_retained_ratio = 0.0;
     uint64_t future_threshold_rows_before = 0U;
     uint64_t future_threshold_rows_after = 0U;
@@ -433,6 +436,8 @@ void append_ad_solve_stats_record(
          << record.post_zero_live << ","
          << std::fixed << std::setprecision(6)
          << record.deletion_threshold << ","
+         << record.relative_deletion_threshold << ","
+         << record.effective_deletion_threshold << ","
          << record.current_retained_ratio << ","
          << record.future_threshold_rows_before << ","
          << record.future_threshold_rows_after << ","
@@ -688,6 +693,19 @@ template <typename T> std::pair<size_t, T> length_count(const BookStore<T> &book
         }
     }
     return {length, max_rate};
+}
+
+template <typename T> T max_success_value(const BookStore<T> &book_dict, T zero_val) {
+    T max_rate = zero_val;
+    for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
+        const auto &bucket = book_dict.at(key);
+        for (const T value : bucket.data) {
+            if (value > max_rate) {
+                max_rate = value;
+            }
+        }
+    }
+    return max_rate;
 }
 
 template <typename T> uint64_t row_count(const BookStore<T> &book_dict) {
@@ -2119,8 +2137,10 @@ void recalculate_process_ad_chunked_impl(
     ensure_ad_solve_stats_header(options);
     AdSolveStatsRecord total_record;
     total_record.stage = "_total";
-    double deletion_threshold_state = RuntimeControls::current_deletion_threshold(options);
-    total_record.deletion_threshold = deletion_threshold_state;
+    RuntimeControls::DeletionThresholdState deletion_threshold_state =
+        RuntimeControls::current_deletion_thresholds(options);
+    total_record.deletion_threshold = deletion_threshold_state.absolute;
+    total_record.relative_deletion_threshold = deletion_threshold_state.relative;
     const AdvancedMaskParam param = FormationAD::build_mask_param(spec);
     const FormationAD::MaskerContext masker = FormationAD::init_masker(spec);
     const uint32_t ini_board_sum = arr_init.empty() ? 0U : board_sum(arr_init.front());
@@ -2164,11 +2184,9 @@ void recalculate_process_ad_chunked_impl(
             debug_log("skipping step " + std::to_string(step));
             continue;
         }
-        deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);
-        const double layer_deletion_threshold = deletion_threshold_state;
-        const T layer_threshold = static_cast<T>(
-            layer_deletion_threshold * static_cast<double>(max_scale - zero_val) + zero_val
-        );
+        deletion_threshold_state =
+            RuntimeControls::refresh_deletion_thresholds(options, deletion_threshold_state);
+        const double layer_deletion_threshold = deletion_threshold_state.absolute;
 
         if (!started) {
             started = true;
@@ -2246,12 +2264,38 @@ void recalculate_process_ad_chunked_impl(
         double future_write_seconds = 0.0;
         uint64_t future_threshold_rows_before = row_count(book_dict2);
         uint64_t future_threshold_rows_after = future_threshold_rows_before;
-        if (layer_deletion_threshold > 0.0) {
-            const double future_compact_t0 = wall_time_seconds();
-            const auto future_counts = remove_died_ad(book_dict2, ind_dict2, layer_threshold);
-            future_threshold_rows_before = future_counts.first;
-            future_threshold_rows_after = future_counts.second;
-            future_compact_seconds += wall_time_seconds() - future_compact_t0;
+        double effective_deletion_threshold = 0.0;
+        if (RuntimeControls::deletion_threshold_enabled(deletion_threshold_state)) {
+            bool should_compact_future = deletion_threshold_state.absolute > 0.0;
+            T layer_threshold = RuntimeControls::absolute_deletion_threshold(
+                zero_val,
+                max_scale,
+                deletion_threshold_state
+            );
+            if (deletion_threshold_state.relative > 0.0) {
+                const T future_max = max_success_value(book_dict2, zero_val);
+                if (future_max > zero_val) {
+                    const T relative_threshold = RuntimeControls::relative_deletion_threshold(
+                        future_max,
+                        zero_val,
+                        deletion_threshold_state
+                    );
+                    layer_threshold = RuntimeControls::max_deletion_threshold(
+                        layer_threshold,
+                        relative_threshold
+                    );
+                    should_compact_future = true;
+                }
+            }
+            if (should_compact_future) {
+                effective_deletion_threshold =
+                    RuntimeControls::normalized_deletion_threshold(layer_threshold, zero_val, max_scale);
+                const double future_compact_t0 = wall_time_seconds();
+                const auto future_counts = remove_died_ad(book_dict2, ind_dict2, layer_threshold);
+                future_threshold_rows_before = future_counts.first;
+                future_threshold_rows_after = future_counts.second;
+                future_compact_seconds += wall_time_seconds() - future_compact_t0;
+            }
         }
         const double future_write_t0 = wall_time_seconds();
         dict_tofile(book_dict2, ind_dict2, options, step + 2, true);
@@ -2302,6 +2346,8 @@ void recalculate_process_ad_chunked_impl(
         record.input_live = counter_acc != 0U ? static_cast<uint64_t>(counter_acc) : raw_input_live;
         record.post_zero_live = static_cast<uint64_t>(counter_acc);
         record.deletion_threshold = layer_deletion_threshold;
+        record.relative_deletion_threshold = deletion_threshold_state.relative;
+        record.effective_deletion_threshold = effective_deletion_threshold;
         record.current_retained_ratio = RuntimeControls::retention_ratio(record.post_zero_live, record.input_live);
         record.future_threshold_rows_before = future_threshold_rows_before;
         record.future_threshold_rows_after = future_threshold_rows_after;
@@ -2340,7 +2386,8 @@ void recalculate_process_ad_chunked_impl(
         book_dict2 = std::move(book_dict1);
         ind_dict2 = std::move(ind_dict1);
     }
-    total_record.deletion_threshold = deletion_threshold_state;
+    total_record.deletion_threshold = deletion_threshold_state.absolute;
+    total_record.relative_deletion_threshold = deletion_threshold_state.relative;
     append_ad_solve_stats_record(options, total_record);
 }
 
@@ -2354,8 +2401,10 @@ void recalculate_process_ad_impl(
     ensure_ad_solve_stats_header(options);
     AdSolveStatsRecord total_record;
     total_record.stage = "_total";
-    double deletion_threshold_state = RuntimeControls::current_deletion_threshold(options);
-    total_record.deletion_threshold = deletion_threshold_state;
+    RuntimeControls::DeletionThresholdState deletion_threshold_state =
+        RuntimeControls::current_deletion_thresholds(options);
+    total_record.deletion_threshold = deletion_threshold_state.absolute;
+    total_record.relative_deletion_threshold = deletion_threshold_state.relative;
     const AdvancedMaskParam param = FormationAD::build_mask_param(spec);
     const FormationAD::MaskerContext masker = FormationAD::init_masker(spec);
     const uint32_t ini_board_sum = arr_init.empty() ? 0U : board_sum(arr_init.front());
@@ -2399,11 +2448,9 @@ void recalculate_process_ad_impl(
             debug_log("skipping step " + std::to_string(step));
             continue;
         }
-        deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);
-        const double layer_deletion_threshold = deletion_threshold_state;
-        const T layer_threshold = static_cast<T>(
-            layer_deletion_threshold * static_cast<double>(max_scale - zero_val) + zero_val
-        );
+        deletion_threshold_state =
+            RuntimeControls::refresh_deletion_thresholds(options, deletion_threshold_state);
+        const double layer_deletion_threshold = deletion_threshold_state.absolute;
 
         if (!started) {
             started = true;
@@ -2476,18 +2523,44 @@ void recalculate_process_ad_impl(
         double future_compact_seconds = 0.0;
         uint64_t future_threshold_rows_before = row_count(book_dict2);
         uint64_t future_threshold_rows_after = future_threshold_rows_before;
-        if (layer_deletion_threshold > 0.0) {
-            const double future_compact_t0 = wall_time_seconds();
-            const auto future_counts = remove_died_ad(book_dict2, ind_dict2, layer_threshold);
-            future_threshold_rows_before = future_counts.first;
-            future_threshold_rows_after = future_counts.second;
-            future_compact_seconds += wall_time_seconds() - future_compact_t0;
+        double effective_deletion_threshold = 0.0;
+        if (RuntimeControls::deletion_threshold_enabled(deletion_threshold_state)) {
+            bool should_compact_future = deletion_threshold_state.absolute > 0.0;
+            T layer_threshold = RuntimeControls::absolute_deletion_threshold(
+                zero_val,
+                max_scale,
+                deletion_threshold_state
+            );
+            if (deletion_threshold_state.relative > 0.0) {
+                const T future_max = max_success_value(book_dict2, zero_val);
+                if (future_max > zero_val) {
+                    const T relative_threshold = RuntimeControls::relative_deletion_threshold(
+                        future_max,
+                        zero_val,
+                        deletion_threshold_state
+                    );
+                    layer_threshold = RuntimeControls::max_deletion_threshold(
+                        layer_threshold,
+                        relative_threshold
+                    );
+                    should_compact_future = true;
+                }
+            }
+            if (should_compact_future) {
+                effective_deletion_threshold =
+                    RuntimeControls::normalized_deletion_threshold(layer_threshold, zero_val, max_scale);
+                const double future_compact_t0 = wall_time_seconds();
+                const auto future_counts = remove_died_ad(book_dict2, ind_dict2, layer_threshold);
+                future_threshold_rows_before = future_counts.first;
+                future_threshold_rows_after = future_counts.second;
+                future_compact_seconds += wall_time_seconds() - future_compact_t0;
+            }
         }
         remove_died_ad(book_dict0, ind_dict0, zero_val);
         double t3 = wall_time_seconds();
 
         double future_write_seconds = 0.0;
-        if (layer_deletion_threshold > 0.0 || options.compress) {
+        if (future_threshold_rows_after != future_threshold_rows_before || options.compress) {
             const double future_write_t0 = wall_time_seconds();
             dict_tofile(book_dict2, ind_dict2, options, step + 2, true);
             future_write_seconds += wall_time_seconds() - future_write_t0;
@@ -2508,6 +2581,8 @@ void recalculate_process_ad_impl(
         record.input_live = length != 0U ? static_cast<uint64_t>(length) : raw_input_live;
         record.post_zero_live = static_cast<uint64_t>(length);
         record.deletion_threshold = layer_deletion_threshold;
+        record.relative_deletion_threshold = deletion_threshold_state.relative;
+        record.effective_deletion_threshold = effective_deletion_threshold;
         record.current_retained_ratio = RuntimeControls::retention_ratio(record.post_zero_live, record.input_live);
         record.future_threshold_rows_before = future_threshold_rows_before;
         record.future_threshold_rows_after = future_threshold_rows_after;
@@ -2550,7 +2625,8 @@ void recalculate_process_ad_impl(
         book_dict1 = std::move(book_dict0);
         ind_dict1 = std::move(ind_dict0);
     }
-    total_record.deletion_threshold = deletion_threshold_state;
+    total_record.deletion_threshold = deletion_threshold_state.absolute;
+    total_record.relative_deletion_threshold = deletion_threshold_state.relative;
     append_ad_solve_stats_record(options, total_record);
 }
 

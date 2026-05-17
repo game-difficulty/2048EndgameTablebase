@@ -1604,7 +1604,8 @@ void append_generate_stats(
 void reset_solve_stats(const RunOptions &options) {
     std::ofstream file(solve_stats_path(options), std::ios::trunc);
     file << "stage,step,layout,dtype_mode,canonical_batch_backend,direct_index_type,input_live,output_live,"
-            "future1_live,future2_live,future2_post_threshold_live,deletion_threshold,current_retained_ratio,"
+            "future1_live,future2_live,future2_post_threshold_live,deletion_threshold,"
+            "relative_deletion_threshold,effective_deletion_threshold,current_retained_ratio,"
             "future_threshold_retained_ratio,recalculate_seconds,"
             "freeze_zero_compact_seconds,future_index_seconds,future_compact_seconds,current_write_seconds,"
             "future_write_seconds,read_seconds,total_seconds,compute_seconds,active_throughput_mbps,compute_throughput_mbps,"
@@ -1621,6 +1622,8 @@ void append_solve_stats(
     uint64_t future2_live,
     uint64_t future2_post_live,
     double deletion_threshold,
+    double relative_deletion_threshold,
+    double effective_deletion_threshold,
     double current_retained_ratio,
     double future_threshold_retained_ratio,
     double recalc_seconds,
@@ -1655,6 +1658,8 @@ void append_solve_stats(
          << future2_post_live << ','
          << std::setprecision(9)
          << deletion_threshold << ','
+         << relative_deletion_threshold << ','
+         << effective_deletion_threshold << ','
          << current_retained_ratio << ','
          << future_threshold_retained_ratio << ','
          << recalc_seconds << ','
@@ -3290,6 +3295,16 @@ void ensure_direct_index_built(Prefix36Layer &layer, const std::vector<uint32_t>
     build_direct_index(layer, size_table);
 }
 
+uint32_t max_success_value(const Prefix36Layer &layer) {
+    uint32_t max_value = 0U;
+    for (const uint32_t value : layer.success_values) {
+        if (value > max_value) {
+            max_value = value;
+        }
+    }
+    return max_value;
+}
+
 SolveStepSummary solve_loaded_step_impl(
     const PatternSpec &spec,
     const RunOptions &options,
@@ -3300,7 +3315,7 @@ SolveStepSummary solve_loaded_step_impl(
     Prefix36Layer &future1,
     Prefix36Layer &future2,
     double read_seconds,
-    double layer_deletion_threshold
+    RuntimeControls::DeletionThresholdState deletion_threshold_state
 ) {
     const int num_threads = thread_count_from_options(options);
     const DTypeMode mode = dtype_mode_from_name(options.success_rate_dtype);
@@ -3380,24 +3395,47 @@ SolveStepSummary solve_loaded_step_impl(
     double future_write_seconds = 0.0;
     const uint64_t future2_pre_threshold_live = future2.live_board_count;
     uint64_t future2_post_live = future2.live_board_count;
-    if (layer_deletion_threshold > 0.0) {
-        const uint32_t threshold = static_cast<uint32_t>(
-            layer_deletion_threshold *
-            static_cast<double>(max_scale_value_for_dtype<uint32_t>(options.success_rate_dtype))
+    double effective_deletion_threshold = 0.0;
+    if (RuntimeControls::deletion_threshold_enabled(deletion_threshold_state)) {
+        const uint32_t max_scale = max_scale_value_for_dtype<uint32_t>(options.success_rate_dtype);
+        bool should_compact_future = deletion_threshold_state.absolute > 0.0;
+        uint32_t threshold = RuntimeControls::absolute_deletion_threshold(
+            0U,
+            max_scale,
+            deletion_threshold_state
         );
-        const double fc_t0 = now_seconds();
-        future2 = compact_layer(future2, dense_lut, threshold, num_threads);
-        const double fc_t1 = now_seconds();
-        const double fw_t0 = now_seconds();
-        write_layer_file(layer_file_path(options.pathname, step + 2), future2, spec, mode, io_config);
-        remove_generated_layer_input(options.pathname, step + 2);
-        if (!options.optimal_branch_only) {
-            compress_layer_result_from_memory(options, step + 2, future2, spec, mode);
+        if (deletion_threshold_state.relative > 0.0) {
+            const uint32_t future_max = max_success_value(future2);
+            if (future_max > 0U) {
+                const uint32_t relative_threshold = RuntimeControls::relative_deletion_threshold(
+                    future_max,
+                    0U,
+                    deletion_threshold_state
+                );
+                threshold = RuntimeControls::max_deletion_threshold(threshold, relative_threshold);
+                should_compact_future = true;
+            }
         }
-        const double fw_t1 = now_seconds();
-        future_compact_seconds = fc_t1 - fc_t0;
-        future_write_seconds = fw_t1 - fw_t0;
-        future2_post_live = future2.live_board_count;
+        if (should_compact_future) {
+            effective_deletion_threshold = RuntimeControls::normalized_deletion_threshold(
+                threshold,
+                0U,
+                max_scale
+            );
+            const double fc_t0 = now_seconds();
+            future2 = compact_layer(future2, dense_lut, threshold, num_threads);
+            const double fc_t1 = now_seconds();
+            const double fw_t0 = now_seconds();
+            write_layer_file(layer_file_path(options.pathname, step + 2), future2, spec, mode, io_config);
+            remove_generated_layer_input(options.pathname, step + 2);
+            if (!options.optimal_branch_only) {
+                compress_layer_result_from_memory(options, step + 2, future2, spec, mode);
+            }
+            const double fw_t1 = now_seconds();
+            future_compact_seconds = fc_t1 - fc_t0;
+            future_write_seconds = fw_t1 - fw_t0;
+            future2_post_live = future2.live_board_count;
+        }
     }
     const double current_retained_ratio =
         RuntimeControls::retention_ratio(current.live_board_count, input_live);
@@ -3415,7 +3453,9 @@ SolveStepSummary solve_loaded_step_impl(
         future1.live_board_count,
         future2.live_board_count,
         future2_post_live,
-        layer_deletion_threshold,
+        deletion_threshold_state.absolute,
+        deletion_threshold_state.relative,
+        effective_deletion_threshold,
         current_retained_ratio,
         future_threshold_retained_ratio,
         recalc.seconds,
@@ -3597,6 +3637,8 @@ SolveStepSummary keep_only_optimal_branches_prefix36_impl(
             target_live_before,
             target_live_before,
             0.0,
+            0.0,
+            0.0,
             RuntimeControls::retention_ratio(pruned.live_board_count, target_live_before),
             0.0,
             mark_seconds,
@@ -3677,7 +3719,7 @@ SolveStepSummary solve_single_step_impl(
         future1,
         future2,
         read_t1 - read_t0,
-        RuntimeControls::current_deletion_threshold(options)
+        RuntimeControls::current_deletion_thresholds(options)
     );
 }
 
@@ -3724,6 +3766,8 @@ void run_pattern_solve(
         const int last_done = read_optimal_layer_marker(options);
         if (optimal_resume_inputs_exist(options, last_done)) {
             SolveStepSummary optimal_summary = keep_only_optimal_branches_prefix36(spec, options, lut);
+            const RuntimeControls::DeletionThresholdState deletion_threshold_state =
+                RuntimeControls::current_deletion_thresholds(options);
             append_solve_stats(
                 options,
                 "_total",
@@ -3733,7 +3777,9 @@ void run_pattern_solve(
                 0,
                 0,
                 0,
-                RuntimeControls::current_deletion_threshold(options),
+                deletion_threshold_state.absolute,
+                deletion_threshold_state.relative,
+                0.0,
                 RuntimeControls::retention_ratio(optimal_summary.output_live, optimal_summary.input_live),
                 0.0,
                 optimal_summary.recalc_seconds,
@@ -3771,7 +3817,8 @@ void run_pattern_solve(
     Prefix36Layer future2 = read_layer_input(
         options.pathname, first_step + 2, io_config, lut.dense_lut, num_threads, &lut);
     double carried_read_seconds = now_seconds() - initial_read_t0;
-    double deletion_threshold_state = RuntimeControls::current_deletion_threshold(options);
+    RuntimeControls::DeletionThresholdState deletion_threshold_state =
+        RuntimeControls::current_deletion_thresholds(options);
     const uint32_t progress_total = classic_build_progress_total(options);
     const uint32_t solve_progress_base = build_progress_total(options);
     for (int step = first_step; step >= 0; --step) {
@@ -3784,7 +3831,8 @@ void run_pattern_solve(
             options.pathname, step, io_config, lut.dense_lut, num_threads, &lut);
         const double read_seconds = carried_read_seconds + (now_seconds() - read_t0);
         carried_read_seconds = 0.0;
-        deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);
+        deletion_threshold_state =
+            RuntimeControls::refresh_deletion_thresholds(options, deletion_threshold_state);
         const SolveStepSummary step_summary = solve_loaded_step_impl(
             spec,
             options,
@@ -3836,7 +3884,9 @@ void run_pattern_solve(
         0,
         0,
         0,
-        deletion_threshold_state,
+        deletion_threshold_state.absolute,
+        deletion_threshold_state.relative,
+        0.0,
         RuntimeControls::retention_ratio(total.output_live, total.input_live),
         0.0,
         total.recalc_seconds,

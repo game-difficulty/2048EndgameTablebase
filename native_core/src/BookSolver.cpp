@@ -432,7 +432,8 @@ std::string classic_solve_stats_file_path(const RunOptions &options) {
 
 std::string classic_solve_stats_header() {
     return "stage,step,input_live,post_zero_live,future1_live,future2_live,future2_post_threshold_live,"
-           "deletion_threshold,current_retained_ratio,future_threshold_retained_ratio,max_success,"
+           "deletion_threshold,relative_deletion_threshold,effective_deletion_threshold,"
+           "current_retained_ratio,future_threshold_retained_ratio,max_success,"
            "total_seconds,throughput_mbps,compute_seconds,compute_throughput_mbps,current_read_seconds,"
            "index_seconds,recalculate_seconds,zero_compact_seconds,max_scan_seconds,current_write_seconds,"
            "future_compact_seconds,future_write_seconds,compress_seconds,time";
@@ -467,6 +468,8 @@ struct ClassicSolveStatsRecord {
     uint64_t future2_live = 0U;
     uint64_t future2_post_threshold_live = 0U;
     double deletion_threshold = 0.0;
+    double relative_deletion_threshold = 0.0;
+    double effective_deletion_threshold = 0.0;
     double current_retained_ratio = 0.0;
     double future_threshold_retained_ratio = 0.0;
     double max_success = 0.0;
@@ -502,6 +505,8 @@ void append_classic_solve_stats_record(
          << record.future2_post_threshold_live << ","
          << std::fixed << std::setprecision(6)
          << record.deletion_threshold << ","
+         << record.relative_deletion_threshold << ","
+         << record.effective_deletion_threshold << ","
          << record.current_retained_ratio << ","
          << record.future_threshold_retained_ratio << ","
          << record.max_success << ","
@@ -1046,6 +1051,17 @@ size_t compact_live_entries(SplitLayer<T> &arr, T threshold, bool shrink_boards)
 }
 
 template <typename T>
+T max_success_value(const SplitLayer<T> &arr, T zero_val) {
+    T max_value = zero_val;
+    for (size_t i = 0; i < arr.size(); ++i) {
+        if (arr.success[i] > max_value) {
+            max_value = arr.success[i];
+        }
+    }
+    return max_value;
+}
+
+template <typename T>
 size_t compact_by_mask(SplitLayer<T> &arr, const std::vector<uint8_t> &mask, bool shrink_boards) {
 #if defined(__GNUC__) || defined(__clang__)
     using Fn = size_t (*)(SplitLayer<T> &, const std::vector<uint8_t> &, bool);
@@ -1179,8 +1195,10 @@ void recalculate_process_impl(
     ensure_classic_solve_stats_header(options);
     ClassicSolveStatsRecord total_record;
     total_record.stage = "_total";
-    double deletion_threshold_state = RuntimeControls::current_deletion_threshold(options);
-    total_record.deletion_threshold = deletion_threshold_state;
+    RuntimeControls::DeletionThresholdState deletion_threshold_state =
+        RuntimeControls::current_deletion_thresholds(options);
+    total_record.deletion_threshold = deletion_threshold_state.absolute;
+    total_record.relative_deletion_threshold = deletion_threshold_state.relative;
     bool started = false;
     AdaptiveIndex::Index ind1;
     T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
@@ -1199,8 +1217,9 @@ void recalculate_process_impl(
         if (!handle_restart_recalculate(i, d1, d2, started, options)) {
             continue;
         }
-        deletion_threshold_state = RuntimeControls::refresh_deletion_threshold(options, deletion_threshold_state);
-        const double layer_deletion_threshold = deletion_threshold_state;
+        deletion_threshold_state =
+            RuntimeControls::refresh_deletion_thresholds(options, deletion_threshold_state);
+        const double layer_deletion_threshold = deletion_threshold_state.absolute;
 
         const double read_t0 = wall_time_seconds();
         std::vector<uint64_t> raw_layer = read_raw_file(options.pathname + std::to_string(i), io_config);
@@ -1260,24 +1279,48 @@ void recalculate_process_impl(
         double future_write_seconds = 0.0;
         double compress_seconds = 0.0;
         const uint64_t future2_live_before = static_cast<uint64_t>(d2.size());
-        if (layer_deletion_threshold > 0.0) {
-            T threshold = static_cast<T>(layer_deletion_threshold * static_cast<double>(max_scale - zero_val) + static_cast<double>(zero_val));
-            const double future_compact_t0 = wall_time_seconds();
-            compact_live_entries(d2, threshold, false);
-            const double future_compact_t1 = wall_time_seconds();
-            future_compact_seconds += future_compact_t1 - future_compact_t0;
-            const double future_write_t0 = wall_time_seconds();
-            if (use_opt_temp_archive) {
-                write_split_layer_archive_file(future_archive_path, d2, 1);
-            } else {
-                write_layer_file(future_book_path, d2, io_config);
-                remove_file_if_exists(future_archive_path);
+        double effective_deletion_threshold = 0.0;
+        bool future_threshold_rewritten = false;
+        if (RuntimeControls::deletion_threshold_enabled(deletion_threshold_state)) {
+            bool should_compact_future = deletion_threshold_state.absolute > 0.0;
+            T threshold = RuntimeControls::absolute_deletion_threshold(
+                zero_val,
+                max_scale,
+                deletion_threshold_state
+            );
+            if (deletion_threshold_state.relative > 0.0) {
+                const T future2_max = max_success_value(d2, zero_val);
+                if (future2_max > zero_val) {
+                    const T relative_threshold = RuntimeControls::relative_deletion_threshold(
+                        future2_max,
+                        zero_val,
+                        deletion_threshold_state
+                    );
+                    threshold = RuntimeControls::max_deletion_threshold(threshold, relative_threshold);
+                    should_compact_future = true;
+                }
             }
-            const double future_write_t1 = wall_time_seconds();
-            future_write_seconds += future_write_t1 - future_write_t0;
+            if (should_compact_future) {
+                effective_deletion_threshold =
+                    RuntimeControls::normalized_deletion_threshold(threshold, zero_val, max_scale);
+                const double future_compact_t0 = wall_time_seconds();
+                compact_live_entries(d2, threshold, false);
+                const double future_compact_t1 = wall_time_seconds();
+                future_compact_seconds += future_compact_t1 - future_compact_t0;
+                const double future_write_t0 = wall_time_seconds();
+                if (use_opt_temp_archive) {
+                    write_split_layer_archive_file(future_archive_path, d2, 1);
+                } else {
+                    write_layer_file(future_book_path, d2, io_config);
+                    remove_file_if_exists(future_archive_path);
+                }
+                const double future_write_t1 = wall_time_seconds();
+                future_write_seconds += future_write_t1 - future_write_t0;
+                future_threshold_rewritten = true;
+            }
         }
         if (use_opt_temp_archive) {
-            if (layer_deletion_threshold <= 0.0) {
+            if (!future_threshold_rewritten) {
                 const double future_write_t0 = wall_time_seconds();
                 write_split_layer_archive_file(future_archive_path, d2, 1);
                 future_write_seconds += wall_time_seconds() - future_write_t0;
@@ -1296,6 +1339,8 @@ void recalculate_process_impl(
         record.future2_live = future2_live_before;
         record.future2_post_threshold_live = static_cast<uint64_t>(d2.size());
         record.deletion_threshold = layer_deletion_threshold;
+        record.relative_deletion_threshold = deletion_threshold_state.relative;
+        record.effective_deletion_threshold = effective_deletion_threshold;
         record.current_retained_ratio = RuntimeControls::retention_ratio(record.post_zero_live, record.input_live);
         record.future_threshold_retained_ratio =
             RuntimeControls::retention_ratio(record.future2_post_threshold_live, record.future2_live);
@@ -1338,7 +1383,8 @@ void recalculate_process_impl(
             d1 = std::move(d0);
         }
     }
-    total_record.deletion_threshold = deletion_threshold_state;
+    total_record.deletion_threshold = deletion_threshold_state.absolute;
+    total_record.relative_deletion_threshold = deletion_threshold_state.relative;
     append_classic_solve_stats_record(options, total_record);
 }
 
