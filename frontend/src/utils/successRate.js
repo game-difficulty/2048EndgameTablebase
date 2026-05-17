@@ -1,8 +1,11 @@
 const ONE_MINUS_SUCCESS_RATE_DTYPES = new Set(['1-float32', '1-float64']);
 const ONE_MINUS_TEXT_THRESHOLD = -1e-7;
+const FLOAT_SUCCESS_RATE_DTYPES = new Set(['float32', 'float64']);
+const SCIENTIFIC_TEXT_THRESHOLD = 1e-6;
 
 const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(value);
 const trimTrailingZeros = (value) => value.replace(/(\.\d*?[1-9])0+$/u, '$1').replace(/\.0+$/u, '').replace(/\.$/u, '');
+const trimScientificZeros = (value) => value.replace(/(\.\d*?[1-9])0+(e[+-]?\d+)$/iu, '$1$2').replace(/\.0+(e[+-]?\d+)$/iu, '$1');
 
 export const isOneMinusSuccessRateDtype = (dtype) => ONE_MINUS_SUCCESS_RATE_DTYPES.has(dtype);
 
@@ -33,6 +36,13 @@ export const formatSuccessRate = (value, dtype, precision = 9) => {
   if (!isFiniteNumber(value)) return String(value);
 
   if (!isOneMinusSuccessRateDtype(dtype)) {
+    if (
+      FLOAT_SUCCESS_RATE_DTYPES.has(dtype) &&
+      value !== 0 &&
+      Math.abs(value) < SCIENTIFIC_TEXT_THRESHOLD
+    ) {
+      return trimScientificZeros(value.toExponential(Math.max(precision, 12)));
+    }
     return trimTrailingZeros(value.toFixed(precision));
   }
 
