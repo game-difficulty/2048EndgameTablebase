@@ -60,6 +60,7 @@ _frontend_error_queue: queue.Queue = queue.Queue()
 _frontend_error_bridge_started = False
 _frontend_error_bridge_lock = threading.Lock()
 SERVER_BIND_HOST = "0.0.0.0"
+DESKTOP_ACCESS_HOST = "127.0.0.1"
 
 
 if os.name == "nt":
@@ -167,7 +168,11 @@ def _lan_ipv4_address_rank(address: str) -> int | None:
         ip = ipaddress.IPv4Address(address)
     except ipaddress.AddressValueError:
         return None
-    if ip.is_unspecified or ip.is_loopback or ip.is_link_local:
+    if (
+        ip.is_unspecified
+        or ip.is_loopback
+        or ip.is_link_local
+    ):
         return None
 
     first_octet, second_octet, *_ = address.split(".")
@@ -179,7 +184,7 @@ def _lan_ipv4_address_rank(address: str) -> int | None:
         return 0
     if first == 192 and second == 168:
         return 0
-    return 1
+    return None
 
 
 def _discover_lan_access_host() -> str:
@@ -284,10 +289,11 @@ def _frontend_url() -> str:
         {
             "startup_theme": startup_theme,
             "backend_port": SERVER_PORT,
+            "lan_host": SERVER_ACCESS_HOST,
         }
     )
     if os.path.exists(frontend_dist_path):
-        return f"http://{SERVER_ACCESS_HOST}:{SERVER_PORT}/?{query}"
+        return f"http://{DESKTOP_ACCESS_HOST}:{SERVER_PORT}/?{query}"
     return f"http://localhost:5173/?{query}"
 
 
@@ -633,7 +639,7 @@ def _handle_exit_signal(signum, frame) -> None:
 
 SERVER_PORT = find_available_port(8000)
 SERVER_ACCESS_HOST = _discover_lan_access_host()
-SERVER_PROBE_HOST = SERVER_ACCESS_HOST
+SERVER_PROBE_HOST = DESKTOP_ACCESS_HOST
 frontend_dist_path = get_resource_path(os.path.join("frontend", "dist"))
 
 
