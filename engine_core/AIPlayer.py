@@ -84,6 +84,26 @@ class DispatcherCommon(BaseDispatcher):
         self._table_cooldowns = {}  # {table_name: remaining_steps}
         self.init_bookreader()
 
+    def _reader_state(self):
+        return (
+            self.book_reader.use_ad,
+            self.book_reader.book_reader_ad,
+            self.book_reader.use_ex,
+            self.book_reader.book_reader_ex,
+            self.book_reader.use_exad,
+            self.book_reader.book_reader_exad,
+        )
+
+    def _restore_reader_state(self, state):
+        (
+            self.book_reader.use_ad,
+            self.book_reader.book_reader_ad,
+            self.book_reader.use_ex,
+            self.book_reader.book_reader_ex,
+            self.book_reader.use_exad,
+            self.book_reader.book_reader_exad,
+        ) = state
+
     def reset(self, board, board_encoded):
         super().reset(board, board_encoded)
         expired = [t for t, c in self._table_cooldowns.items() if c <= 1]
@@ -133,8 +153,7 @@ class DispatcherCommon(BaseDispatcher):
                         target_str,
                         table,
                         i + 1,
-                        self.book_reader.use_ad,
-                        self.book_reader.book_reader_ad,
+                        self._reader_state(),
                     )
                 )
         for key in self.ad_readers:
@@ -151,9 +170,9 @@ class DispatcherCommon(BaseDispatcher):
             target_str,
             table,
             i,
-            self.book_reader.use_ad,
-            self.book_reader.book_reader_ad,
+            reader_state,
         ) = table_param
+        self._restore_reader_state(reader_state)
 
         # 如果该定式处于冷却期，直接跳过
         if table in self._table_cooldowns:

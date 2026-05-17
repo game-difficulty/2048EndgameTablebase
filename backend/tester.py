@@ -255,11 +255,8 @@ def _tester_prepare_selection(session, pattern, target):
     session.tester_table_found = SingletonConfig().check_pattern_file(
         session.tester_full_pattern
     )
-    path_list = (
-        SingletonConfig()
-        .config["filepath_map"]
-        .get((session.tester_full_pattern, spawn_rate4), [])
-    )
+    pattern_key = SingletonConfig.get_pattern_key(session.tester_full_pattern, spawn_rate4)
+    path_list = SingletonConfig().config["filepath_map"].get(pattern_key, [])
     if session.tester_table_found and path_list:
         session.ensure_book_reader().dispatch(path_list, pattern, target)
         session.tester_status = f"Loaded {session.tester_full_pattern}"

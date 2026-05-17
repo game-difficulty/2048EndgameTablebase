@@ -632,7 +632,17 @@ class SingletonConfig:
             for item in os.listdir(file_path):
                 if not item.startswith(prefix):
                     continue
-                if item.endswith(".book") or item.endswith(".z") or item.endswith("b") or item.endswith(".zbook") or item.endswith(".exzbook"):
+                if item.endswith(
+                    (
+                        ".book",
+                        ".z",
+                        "b",
+                        ".zbook",
+                        ".exzbook",
+                        ".exadbook",
+                        ".exadzbook",
+                    )
+                ):
                     return True
 
             file_path_list.remove((file_path, success_rate_dtype))

@@ -62,7 +62,8 @@ class BookReaderAD:
         pattern_full: str,
     ) -> tuple[dict[str, str | float | int | None], str]:
         spawn_rate4 = SingletonConfig().config["4_spawn_rate"]
-        path_list = SingletonConfig().config["filepath_map"].get((pattern_full, spawn_rate4), [])
+        pattern_key = SingletonConfig.get_pattern_key(pattern_full, spawn_rate4)
+        path_list = SingletonConfig().config["filepath_map"].get(pattern_key, [])
         return self._native_reader.move_on_dic(
             board.tolist(),
             path_list,

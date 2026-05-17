@@ -2,10 +2,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 
 #ifdef _WIN32
@@ -85,6 +88,117 @@ private:
     std::string path_;
     std::ifstream in_;
 };
+
+#ifdef _WIN32
+void *alloc_aligned_bytes(size_t bytes);
+void free_aligned_bytes(void *ptr);
+#endif
+
+bool direct_io_supported_path(const std::string &path) {
+    std::string key;
+    try {
+        fs::path directory = fs::absolute(fs::path(path)).parent_path();
+        if (directory.empty()) {
+            directory = fs::current_path();
+        }
+        key = directory.string();
+    } catch (...) {
+        return false;
+    }
+    if (key.empty()) {
+        return false;
+    }
+
+    static std::mutex cache_mutex;
+    static std::unordered_map<std::string, bool> cache;
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        if (auto it = cache.find(key); it != cache.end()) {
+            return it->second;
+        }
+    }
+
+    bool supported = false;
+#ifdef _WIN32
+    std::error_code fs_error;
+    const fs::path directory(key);
+    if (fs::exists(directory, fs_error) && fs::is_directory(directory, fs_error)) {
+        static std::atomic<uint64_t> probe_counter{0ULL};
+        const std::wstring probe_path = (
+            directory /
+            (
+                ".direct_io_probe_" +
+                std::to_string(static_cast<unsigned long>(GetCurrentProcessId())) +
+                "_" +
+                std::to_string(static_cast<unsigned long>(GetCurrentThreadId())) +
+                "_" +
+                std::to_string(probe_counter.fetch_add(1ULL, std::memory_order_relaxed)) +
+                ".tmp"
+            )
+        ).wstring();
+
+        HANDLE handle = INVALID_HANDLE_VALUE;
+        void *buffer = nullptr;
+        bool wrote_probe = false;
+        try {
+            buffer = alloc_aligned_bytes(static_cast<size_t>(kDirectIoAlignment));
+            std::memset(buffer, 0xA5, static_cast<size_t>(kDirectIoAlignment));
+            handle = CreateFileW(
+                probe_path.c_str(),
+                GENERIC_WRITE,
+                0,
+                nullptr,
+                CREATE_NEW,
+                FILE_ATTRIBUTE_TEMPORARY |
+                    FILE_ATTRIBUTE_NOT_CONTENT_INDEXED |
+                    FILE_FLAG_NO_BUFFERING |
+                    FILE_FLAG_WRITE_THROUGH,
+                nullptr
+            );
+            if (handle != INVALID_HANDLE_VALUE) {
+                DWORD transferred = 0U;
+                wrote_probe =
+                    WriteFile(
+                        handle,
+                        buffer,
+                        static_cast<DWORD>(kDirectIoAlignment),
+                        &transferred,
+                        nullptr
+                    ) &&
+                    transferred == static_cast<DWORD>(kDirectIoAlignment) &&
+                    FlushFileBuffers(handle);
+            }
+        } catch (...) {
+            wrote_probe = false;
+        }
+        if (handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(handle);
+        }
+        free_aligned_bytes(buffer);
+
+        std::error_code exists_error;
+        std::error_code size_error;
+        const fs::path probe_fs_path(probe_path);
+        supported =
+            wrote_probe &&
+            fs::exists(probe_fs_path, exists_error) &&
+            fs::file_size(probe_fs_path, size_error) == kDirectIoAlignment &&
+            !size_error;
+        std::error_code remove_error;
+        fs::remove(probe_fs_path, remove_error);
+    }
+#elif defined(__linux__)
+    supported = true;
+#else
+    supported = false;
+#endif
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        auto [it, inserted] = cache.emplace(std::move(key), supported);
+        (void)inserted;
+        return it->second;
+    }
+}
 
 #ifdef _WIN32
 
@@ -793,6 +907,11 @@ public:
         }
         std::error_code remove_error;
         fs::remove(temp_path_, remove_error);
+        if (!direct_io_supported_path(final_path_)) {
+            buffered_writer_ = std::make_unique<BufferedAppendWriter>(temp_path_);
+            finalize_buffered_temp_ = true;
+            return;
+        }
         try {
 #ifdef _WIN32
             direct_writer_ = std::make_unique<DirectFileWriterWin32>(temp_path_, logical_bytes_, config_);
@@ -868,6 +987,10 @@ public:
           logical_bytes_(logical_bytes),
           config_(normalize_direct_io_config(config)) {
         if (!config_.enabled) {
+            buffered_reader_ = std::make_unique<BufferedSequentialReader>(path_);
+            return;
+        }
+        if (!direct_io_supported_path(path_)) {
             buffered_reader_ = std::make_unique<BufferedSequentialReader>(path_);
             return;
         }

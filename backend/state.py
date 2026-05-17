@@ -56,10 +56,10 @@ class ConnectionManager:
         if session.client_id.startswith("trainer_"):
             pattern_key = session.current_pattern
             if pattern_key:
-                path_list = config.get("filepath_map", {}).get(
-                    (pattern_key, float(config.get("4_spawn_rate", 0.1))),
-                    [],
+                table_key = SingletonConfig.get_pattern_key(
+                    pattern_key, float(config.get("4_spawn_rate", 0.1))
                 )
+                path_list = config.get("filepath_map", {}).get(table_key, [])
                 if path_list:
                     tablebase_path = str(path_list[0][0] or "")
         record_results, record_results_dtype = _get_current_record_results(session)

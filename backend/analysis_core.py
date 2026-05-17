@@ -334,9 +334,8 @@ class Analyzer:
         self.variant_wall_mask = self._build_variant_wall_mask()
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
         spawn_rate4 = SingletonConfig().config["4_spawn_rate"]
-        bookfile_path_list = SingletonConfig().config["filepath_map"].get(
-            (full_pattern, spawn_rate4), []
-        )
+        pattern_key = SingletonConfig.get_pattern_key(full_pattern, spawn_rate4)
+        bookfile_path_list = SingletonConfig().config["filepath_map"].get(pattern_key, [])
         self.book_reader.dispatch(bookfile_path_list, pattern, target)
 
         self.filepath = file_path
