@@ -50,6 +50,8 @@ constexpr size_t kLearnedReserveHistoryWindow = 32;
 constexpr double kFixedScale = 4000000000.0;
 constexpr double kUInt64Scale = 1600000000000000000.0;
 constexpr int kOptimalBranchOnlyStartStep = 21;
+constexpr int kNoSolveResumeStep = std::numeric_limits<int>::min();
+constexpr int kSolveAlreadyCompleteStep = -1;
 
 enum class DTypeMode : uint32_t {
     UInt32 = 0,
@@ -1242,6 +1244,20 @@ bool layer_input_exists(const std::string &pathname, int step) {
            fs::exists(generated_layer_archive_path(pathname, step));
 }
 
+bool generated_layer_input_exists(const std::string &pathname, int step) {
+    return fs::exists(generated_layer_file_path(pathname, step)) ||
+           fs::exists(generated_layer_archive_path(pathname, step));
+}
+
+bool raw_solved_layer_exists(const std::string &pathname, int step) {
+    return fs::exists(layer_file_path(pathname, step));
+}
+
+bool readable_layer_input_exists(const std::string &pathname, int step) {
+    return raw_solved_layer_exists(pathname, step) ||
+           generated_layer_input_exists(pathname, step);
+}
+
 bool all_layer_inputs_exist(const RunOptions &options) {
     if (options.steps <= 0) {
         return false;
@@ -1344,10 +1360,12 @@ void promote_generated_layer_input(
     int rebuild_threads
 ) {
     const std::string final_path = layer_file_path(pathname, step);
+    std::error_code ec;
     if (fs::exists(final_path)) {
+        fs::remove(generated_layer_file_path(pathname, step), ec);
+        fs::remove(generated_layer_archive_path(pathname, step), ec);
         return;
     }
-    std::error_code ec;
     const std::string generated_path = generated_layer_file_path(pathname, step);
     if (!fs::exists(generated_path)) {
         const std::string archive_path = generated_layer_archive_path(pathname, step);
@@ -1389,6 +1407,46 @@ bool all_compressed_layers_exist(const RunOptions &options) {
         }
     }
     return true;
+}
+
+bool compressed_solved_layer_exists(const std::string &pathname, int step) {
+    return fs::exists(compressed_layer_file_path(pathname, step));
+}
+
+bool solved_layer_exists(const std::string &pathname, int step) {
+    return raw_solved_layer_exists(pathname, step) ||
+           compressed_solved_layer_exists(pathname, step);
+}
+
+int find_solve_resume_step(const RunOptions &options) {
+    if (options.steps <= 0) {
+        return kNoSolveResumeStep;
+    }
+    int first_solved = options.steps;
+    while (first_solved > 0 && solved_layer_exists(options.pathname, first_solved - 1)) {
+        --first_solved;
+    }
+    if (first_solved == options.steps) {
+        return kNoSolveResumeStep;
+    }
+    if (first_solved == 0) {
+        return kSolveAlreadyCompleteStep;
+    }
+    const int resume_step = first_solved - 1;
+    if (resume_step > options.steps - 3) {
+        return kNoSolveResumeStep;
+    }
+    for (int step = 0; step <= resume_step; ++step) {
+        if (!readable_layer_input_exists(options.pathname, step)) {
+            return kNoSolveResumeStep;
+        }
+    }
+    for (int step = resume_step + 1; step <= std::min(options.steps - 1, resume_step + 2); ++step) {
+        if (!raw_solved_layer_exists(options.pathname, step)) {
+            return kNoSolveResumeStep;
+        }
+    }
+    return resume_step;
 }
 
 bool compressed_results_are_complete_for_options(const RunOptions &options) {
@@ -1448,7 +1506,8 @@ double compress_layer_result_from_memory(
     int step,
     const Prefix36Layer &layer,
     const PatternSpec &spec,
-    DTypeMode mode
+    DTypeMode mode,
+    bool remove_zbook_after = false
 ) {
     if (!options.compress) {
         return 0.0;
@@ -1456,6 +1515,10 @@ double compress_layer_result_from_memory(
     const std::string zbook_path = layer_file_path(options.pathname, step);
     const std::string output_path = compressed_layer_file_path(options.pathname, step);
     if (compressed_layer_is_fresh(zbook_path, output_path)) {
+        if (remove_zbook_after) {
+            std::error_code ec;
+            fs::remove(zbook_path, ec);
+        }
         return 0.0;
     }
     const double t0 = now_seconds();
@@ -1475,6 +1538,9 @@ double compress_layer_result_from_memory(
     if (ec) {
         fs::remove(temp_path, ec);
         throw std::runtime_error("failed to finalize EX compressed result: " + output_path);
+    }
+    if (remove_zbook_after) {
+        fs::remove(zbook_path, ec);
     }
     return now_seconds() - t0;
 }
@@ -3104,7 +3170,7 @@ void generate_forward_layers(
     const RunOptions &options,
     const LutBundle &lut
 ) {
-    if (all_layer_inputs_exist(options)) {
+    if (all_layer_inputs_exist(options) || find_solve_resume_step(options) != kNoSolveResumeStep) {
         return;
     }
     reset_generate_stats(options);
@@ -3386,9 +3452,6 @@ SolveStepSummary solve_loaded_step_impl(
     const double write_t0 = now_seconds();
     write_layer_file(layer_file_path(options.pathname, step), current, spec, mode, io_config);
     remove_generated_layer_input(options.pathname, step);
-    if (!options.optimal_branch_only) {
-        compress_layer_result_from_memory(options, step, current, spec, mode);
-    }
     const double write_t1 = now_seconds();
 
     double future_compact_seconds = 0.0;
@@ -3428,14 +3491,17 @@ SolveStepSummary solve_loaded_step_impl(
             const double fw_t0 = now_seconds();
             write_layer_file(layer_file_path(options.pathname, step + 2), future2, spec, mode, io_config);
             remove_generated_layer_input(options.pathname, step + 2);
-            if (!options.optimal_branch_only) {
-                compress_layer_result_from_memory(options, step + 2, future2, spec, mode);
-            }
             const double fw_t1 = now_seconds();
             future_compact_seconds = fc_t1 - fc_t0;
             future_write_seconds = fw_t1 - fw_t0;
             future2_post_live = future2.live_board_count;
         }
+    }
+    if (!options.optimal_branch_only && options.compress) {
+        const double retired_seconds =
+            compress_layer_result_from_memory(options, step + 2, future2, spec, mode, true);
+        remove_generated_layer_input(options.pathname, step + 2);
+        future_write_seconds += retired_seconds;
     }
     const double current_retained_ratio =
         RuntimeControls::retention_ratio(current.live_board_count, input_live);
@@ -3499,6 +3565,13 @@ SolveStepSummary keep_only_optimal_branches_prefix36_impl(
                 solve_progress_total + static_cast<uint32_t>(step) + 1U,
                 progress_total
             );
+        }
+        if (options.compress) {
+            for (int step = 0; step < options.steps; ++step) {
+                const double seconds = compress_layer_result_from_file(options, step);
+                total.current_write_seconds += seconds;
+                total.total_seconds += seconds;
+            }
         }
         write_optimal_complete_marker(options);
         return total;
@@ -3797,67 +3870,73 @@ void run_pattern_solve(
         }
     }
 
-    generate_forward_layers(arr_init, spec, options, lut);
-    reset_solve_stats(options);
-    if (options.optimal_branch_only) {
+    const int resume_step = find_solve_resume_step(options);
+    const bool resume_solve_phase = resume_step != kNoSolveResumeStep;
+    if (!resume_solve_phase) {
+        generate_forward_layers(arr_init, spec, options, lut);
+        reset_solve_stats(options);
+    }
+    if (options.optimal_branch_only && !resume_solve_phase) {
         std::error_code ec;
         fs::remove(optimal_layer_marker_path(options.pathname), ec);
         fs::remove(optimal_complete_marker_path(options.pathname), ec);
     }
     SolveStepSummary total;
-    const int first_step = options.steps - 3;
+    const int first_step = resume_solve_phase ? resume_step : options.steps - 3;
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     const int num_threads = thread_count_from_options(options);
     const DTypeMode mode = dtype_mode_from_name(options.success_rate_dtype);
-    promote_generated_layer_input(options.pathname, first_step + 1, spec, mode, io_config, lut, num_threads);
-    promote_generated_layer_input(options.pathname, first_step + 2, spec, mode, io_config, lut, num_threads);
-    const double initial_read_t0 = now_seconds();
-    Prefix36Layer future1 = read_layer_input(
-        options.pathname, first_step + 1, io_config, lut.dense_lut, num_threads, &lut);
-    Prefix36Layer future2 = read_layer_input(
-        options.pathname, first_step + 2, io_config, lut.dense_lut, num_threads, &lut);
-    double carried_read_seconds = now_seconds() - initial_read_t0;
     RuntimeControls::DeletionThresholdState deletion_threshold_state =
         RuntimeControls::current_deletion_thresholds(options);
-    const uint32_t progress_total = classic_build_progress_total(options);
-    const uint32_t solve_progress_base = build_progress_total(options);
-    for (int step = first_step; step >= 0; --step) {
-        FormationProgress::update_build_progress(
-            solve_progress_base - static_cast<uint32_t>(step) - 2U,
-            progress_total
-        );
-        const double read_t0 = now_seconds();
-        Prefix36Layer current = read_layer_input(
-            options.pathname, step, io_config, lut.dense_lut, num_threads, &lut);
-        const double read_seconds = carried_read_seconds + (now_seconds() - read_t0);
-        carried_read_seconds = 0.0;
-        deletion_threshold_state =
-            RuntimeControls::refresh_deletion_thresholds(options, deletion_threshold_state);
-        const SolveStepSummary step_summary = solve_loaded_step_impl(
-            spec,
-            options,
-            lut.dense_lut,
-            lut.row_luts,
-            step,
-            current,
-            future1,
-            future2,
-            read_seconds,
-            deletion_threshold_state
-        );
-        total.input_live += step_summary.input_live;
-        total.output_live += step_summary.output_live;
-        total.recalc_seconds += step_summary.recalc_seconds;
-        total.compact_seconds += step_summary.compact_seconds;
-        total.future_index_seconds += step_summary.future_index_seconds;
-        total.future_compact_seconds += step_summary.future_compact_seconds;
-        total.current_write_seconds += step_summary.current_write_seconds;
-        total.future_write_seconds += step_summary.future_write_seconds;
-        total.read_seconds += step_summary.read_seconds;
-        total.total_seconds += step_summary.total_seconds;
-        total.compute_seconds += step_summary.compute_seconds;
-        future2 = std::move(future1);
-        future1 = std::move(current);
+    if (first_step >= 0) {
+        promote_generated_layer_input(options.pathname, first_step + 1, spec, mode, io_config, lut, num_threads);
+        promote_generated_layer_input(options.pathname, first_step + 2, spec, mode, io_config, lut, num_threads);
+        const double initial_read_t0 = now_seconds();
+        Prefix36Layer future1 = read_layer_input(
+            options.pathname, first_step + 1, io_config, lut.dense_lut, num_threads, &lut);
+        Prefix36Layer future2 = read_layer_input(
+            options.pathname, first_step + 2, io_config, lut.dense_lut, num_threads, &lut);
+        double carried_read_seconds = now_seconds() - initial_read_t0;
+        const uint32_t progress_total = classic_build_progress_total(options);
+        const uint32_t solve_progress_base = build_progress_total(options);
+        for (int step = first_step; step >= 0; --step) {
+            FormationProgress::update_build_progress(
+                solve_progress_base - static_cast<uint32_t>(step) - 2U,
+                progress_total
+            );
+            const double read_t0 = now_seconds();
+            Prefix36Layer current = read_layer_input(
+                options.pathname, step, io_config, lut.dense_lut, num_threads, &lut);
+            const double read_seconds = carried_read_seconds + (now_seconds() - read_t0);
+            carried_read_seconds = 0.0;
+            deletion_threshold_state =
+                RuntimeControls::refresh_deletion_thresholds(options, deletion_threshold_state);
+            const SolveStepSummary step_summary = solve_loaded_step_impl(
+                spec,
+                options,
+                lut.dense_lut,
+                lut.row_luts,
+                step,
+                current,
+                future1,
+                future2,
+                read_seconds,
+                deletion_threshold_state
+            );
+            total.input_live += step_summary.input_live;
+            total.output_live += step_summary.output_live;
+            total.recalc_seconds += step_summary.recalc_seconds;
+            total.compact_seconds += step_summary.compact_seconds;
+            total.future_index_seconds += step_summary.future_index_seconds;
+            total.future_compact_seconds += step_summary.future_compact_seconds;
+            total.current_write_seconds += step_summary.current_write_seconds;
+            total.future_write_seconds += step_summary.future_write_seconds;
+            total.read_seconds += step_summary.read_seconds;
+            total.total_seconds += step_summary.total_seconds;
+            total.compute_seconds += step_summary.compute_seconds;
+            future2 = std::move(future1);
+            future1 = std::move(current);
+        }
     }
     if (options.optimal_branch_only) {
         SolveStepSummary optimal_summary = keep_only_optimal_branches_prefix36(spec, options, lut);
