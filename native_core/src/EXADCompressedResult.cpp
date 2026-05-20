@@ -760,7 +760,6 @@ struct CompressedIndex {
     FileHeader header{};
     std::array<SlotDirEntry, 48> slots{};
     std::vector<BucketBlockDirEntry> bucket_dirs;
-    std::vector<ValueBlockDirEntry> value_dirs;
 };
 
 struct SolvedSlotLayout {
@@ -828,18 +827,12 @@ CompressedIndex read_index(const std::string& path) {
         throw std::runtime_error("invalid EXAD compressed file header: " + path);
     }
     index.bucket_dirs.resize(static_cast<size_t>(index.header.bucket_block_count));
-    index.value_dirs.resize(static_cast<size_t>(index.header.value_block_count));
     in.seekg(static_cast<std::streamoff>(index.header.slot_dir_offset), std::ios::beg);
     read_exact(in, index.slots.data(), sizeof(SlotDirEntry) * index.slots.size(), "EXAD slot dir");
     if (!index.bucket_dirs.empty()) {
         in.seekg(static_cast<std::streamoff>(index.header.bucket_dir_offset), std::ios::beg);
         read_exact(in, index.bucket_dirs.data(),
                    sizeof(BucketBlockDirEntry) * index.bucket_dirs.size(), "EXAD bucket dir");
-    }
-    if (!index.value_dirs.empty()) {
-        in.seekg(static_cast<std::streamoff>(index.header.value_dir_offset), std::ios::beg);
-        read_exact(in, index.value_dirs.data(),
-                   sizeof(ValueBlockDirEntry) * index.value_dirs.size(), "EXAD value dir");
     }
     return index;
 }
@@ -1231,20 +1224,25 @@ uint32_t dense_ordinal_large_raw(const uint8_t* bitmap, uint32_t rank) {
     return count;
 }
 
-const ValueBlockDirEntry* find_value_block(const std::vector<ValueBlockDirEntry>& dirs, uint64_t value_index) {
-    auto it = std::upper_bound(
-        dirs.begin(), dirs.end(), value_index,
-        [](uint64_t idx, const ValueBlockDirEntry& dir) {
-            return idx < dir.first_value_index;
-        });
-    if (it == dirs.begin()) {
-        return nullptr;
+bool read_value_block_dir_for_index(
+    std::ifstream& in,
+    const CompressedIndex& index,
+    uint64_t value_index,
+    ValueBlockDirEntry& entry) {
+    if (index.header.success_block_values == 0U ||
+        value_index >= index.header.success_value_count) {
+        return false;
     }
-    --it;
-    if (value_index >= it->first_value_index + it->value_count) {
-        return nullptr;
+    const uint64_t block_index = value_index / index.header.success_block_values;
+    if (block_index >= index.header.value_block_count) {
+        return false;
     }
-    return &*it;
+    entry = read_one_from<ValueBlockDirEntry>(
+        in,
+        index.header.value_dir_offset + block_index * sizeof(ValueBlockDirEntry),
+        "EXAD compressed value dir entry");
+    return entry.first_value_index <= value_index &&
+        value_index < entry.first_value_index + entry.value_count;
 }
 
 uint32_t popcount_u32(uint32_t value) {
@@ -1717,26 +1715,26 @@ ColdLookupResult lookup_exad_cold(
     if (value_index >= index.header.success_value_count) {
         throw std::runtime_error("EXAD compressed value index outside success array");
     }
-    const auto* value_block = find_value_block(index.value_dirs, value_index);
-    if (value_block == nullptr) {
+    ValueBlockDirEntry value_block{};
+    if (!read_value_block_dir_for_index(compressed_in, index, value_index, value_block)) {
         throw std::runtime_error("EXAD compressed value block not found");
     }
-    if (value_block->value_size != index.header.value_size ||
-        value_block->value_size != value_size_for_mode(mode)) {
+    if (value_block.value_size != index.header.value_size ||
+        value_block.value_size != value_size_for_mode(mode)) {
         throw std::runtime_error("EXAD compressed value size mismatch");
     }
     const auto compressed_value = read_range_from(
         compressed_in,
-        value_block->compressed_offset,
-        value_block->compressed_size,
+        value_block.compressed_offset,
+        value_block.compressed_size,
         "EXAD compressed value block");
     auto raw_value_block = decompress_block_or_throw(compressed_value.data(), compressed_value.size(),
-                                                     value_block->raw_size);
-    result.value_block_raw_bytes = value_block->raw_size;
-    result.value_block_compressed_bytes = value_block->compressed_size;
-    const uint64_t local_value = value_index - value_block->first_value_index;
-    const uint64_t byte_offset = local_value * value_block->value_size;
-    if (byte_offset + value_block->value_size > raw_value_block.size()) {
+                                                     value_block.raw_size);
+    result.value_block_raw_bytes = value_block.raw_size;
+    result.value_block_compressed_bytes = value_block.compressed_size;
+    const uint64_t local_value = value_index - value_block.first_value_index;
+    const uint64_t byte_offset = local_value * value_block.value_size;
+    if (byte_offset + value_block.value_size > raw_value_block.size()) {
         throw std::runtime_error("EXAD compressed value offset outside block");
     }
     switch (mode) {
