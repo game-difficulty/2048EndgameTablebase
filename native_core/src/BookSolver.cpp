@@ -13,6 +13,7 @@
 #include "VBoardMover.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <ctime>
@@ -250,15 +251,20 @@ uint64_t apply_canonical(uint64_t board, int symm_mode) {
 }
 
 std::string now_string() {
-    std::time_t now = std::time(nullptr);
+    const auto now = std::chrono::system_clock::now();
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()
+    ) % 1000;
+    std::time_t now_time = std::chrono::system_clock::to_time_t(now);
     std::tm local_time{};
 #ifdef _WIN32
-    localtime_s(&local_time, &now);
+    localtime_s(&local_time, &now_time);
 #else
-    localtime_r(&now, &local_time);
+    localtime_r(&now_time, &local_time);
 #endif
     std::ostringstream oss;
-    oss << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S");
+    oss << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S")
+        << '.' << std::setw(3) << std::setfill('0') << millis.count();
     return oss.str();
 }
 

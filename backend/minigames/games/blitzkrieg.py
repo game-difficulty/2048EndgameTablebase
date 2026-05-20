@@ -14,6 +14,7 @@ class BlitzkriegEngine(BaseMinigameEngine):
         self.timer_running = False
         self.timer_anchor_ms: int | None = None
         self.count_1k = 0
+        self.pending_bonus_ms = 0
         super().__init__(definition, difficulty)
         self.count_1k = int(np.sum(self.board == 10))
 
@@ -31,6 +32,7 @@ class BlitzkriegEngine(BaseMinigameEngine):
         self.timer_running = False
         self.timer_anchor_ms = None
         self.count_1k = int(np.sum(self.board == 10))
+        self.pending_bonus_ms = 0
         self.is_over = False
         self.save_to_config()
 
@@ -65,6 +67,7 @@ class BlitzkriegEngine(BaseMinigameEngine):
                 (current_count - previous_count) * bonus_minutes * 60 * 1000
             )
             self.remaining_ms += gained_ms
+            self.pending_bonus_ms = gained_ms
             if self.timer_running:
                 self.timer_anchor_ms = int(time.perf_counter() * 1000)
         self.count_1k = current_count
@@ -102,16 +105,21 @@ class BlitzkriegEngine(BaseMinigameEngine):
     def build_hud(self) -> dict[str, Any]:
         self._sync_timer()
         hud = super().build_hud()
-        hud["customPanels"] = [
-            {
-                "type": "countdown",
-                "title": "Countdown",
-                "remainingMs": int(self.remaining_ms),
-                "running": bool(self.timer_running and not self.is_over),
-                "syncedAt": int(time.perf_counter() * 1000),
-            }
-        ]
+        countdown_panel = {
+            "type": "countdown",
+            "title": "Countdown",
+            "remainingMs": int(self.remaining_ms),
+            "running": bool(self.timer_running and not self.is_over),
+            "syncedAt": int(time.perf_counter() * 1000),
+        }
+        if self.pending_bonus_ms > 0:
+            countdown_panel["bonusMs"] = int(self.pending_bonus_ms)
+        hud["customPanels"] = [countdown_panel]
         return hud
+
+    def clear_animation(self) -> None:
+        super().clear_animation()
+        self.pending_bonus_ms = 0
 
     def get_info_text(self) -> str:
         return "Act quickly to earn bonus time and rack up the highest score!"

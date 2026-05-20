@@ -12,6 +12,20 @@ const isTextEntryElement = (element) => {
   return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT' || element.isContentEditable;
 };
 
+const normalizeHudPanels = (hud, receivedAt = Date.now()) => {
+  const customPanels = Array.isArray(hud?.customPanels) ? hud.customPanels : [];
+  return {
+    ...(hud || {}),
+    customPanels: customPanels.map((panel) => {
+      if (panel?.type !== 'countdown') return panel;
+      return {
+        ...panel,
+        syncedAt: receivedAt,
+      };
+    }),
+  };
+};
+
 export function useMinigameSession(activeRef) {
   const { t } = useI18n();
 
@@ -108,6 +122,7 @@ export function useMinigameSession(activeRef) {
 
   const handleStateData = (payload) => {
     const previousStatus = String(gameState.value?.status || '');
+    const receivedAt = Date.now();
     const nextState = {
       ...createEmptyMinigameState(),
       ...(payload || {}),
@@ -121,7 +136,7 @@ export function useMinigameSession(activeRef) {
       },
       hud: {
         ...createEmptyMinigameState().hud,
-        ...(payload?.hud || {}),
+        ...normalizeHudPanels(payload?.hud || {}, receivedAt),
       },
       powerups: {
         ...createEmptyMinigameState().powerups,

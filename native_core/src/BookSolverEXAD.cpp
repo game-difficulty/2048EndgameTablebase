@@ -36,6 +36,15 @@ inline void prefetch_success_row(const T *row) {
 #endif
 }
 
+template <typename T>
+uint64_t solved_layer_bitmap_bits(const EXAD::SolvedLayer<T> &layer) {
+    uint64_t bits = 0;
+    for (const EXAD::BoardSet &set : layer.sets) {
+        bits += set.aligned_bitmap_bits;
+    }
+    return bits;
+}
+
 constexpr uint32_t kEXADScalarBatchSize = 256U;
 constexpr size_t kEXADScalarBestSlots = static_cast<size_t>(kEXADScalarBatchSize) * 16U;
 constexpr size_t kEXADScalarQueryReserve = static_cast<size_t>(kEXADScalarBatchSize) * 16U * 4U;
@@ -330,6 +339,7 @@ struct EXADChunkMergeSummary {
     uint64_t post_zero_values = 0;
     uint64_t metadata_bytes = 0;
     uint64_t success_bytes = 0;
+    uint64_t bitmap_bits = 0;
     double bitmap_density = 0.0;
 };
 
@@ -370,6 +380,74 @@ bool exad_compressed_file_is_fresh(const std::string &source_path, const std::st
 bool exad_compressed_file_exists(const RunOptions &options, int step) {
     std::error_code ec;
     return fs::exists(exad_compressed_file_path(options, step), ec);
+}
+
+bool exad_raw_solved_file_exists(const RunOptions &options, int step) {
+    return EXAD::solved_file_exists(EXAD::solved_file_path(options.pathname, step));
+}
+
+bool exad_solved_output_exists(const RunOptions &options, int step) {
+    return exad_raw_solved_file_exists(options, step) ||
+        exad_compressed_file_exists(options, step);
+}
+
+struct EXADSolvePlan {
+    int first_step = -1;
+};
+
+EXADSolvePlan make_exad_solve_plan(const RunOptions &options) {
+    EXADSolvePlan plan;
+    const int last_solve_step = options.steps - 3;
+    if (last_solve_step < 0) {
+        return plan;
+    }
+
+    int first_solved = last_solve_step + 1;
+    while (first_solved > 0 && exad_solved_output_exists(options, first_solved - 1)) {
+        --first_solved;
+    }
+
+    for (int step = 0; step < first_solved; ++step) {
+        if (exad_solved_output_exists(options, step)) {
+            throw std::runtime_error(
+                "inconsistent EXAD solve resume state: solved layer appears before the solved suffix at step " +
+                std::to_string(step)
+            );
+        }
+    }
+
+    plan.first_step = first_solved - 1;
+    if (plan.first_step < 0) {
+        return plan;
+    }
+
+    for (int step = 0; step <= plan.first_step; ++step) {
+        if (!EXAD::layer_file_exists(EXAD::layer_file_path(options.pathname, step))) {
+            throw std::runtime_error(
+                "missing EXAD temp layer for solve resume at step " + std::to_string(step) +
+                "; this is not a generation checkpoint"
+            );
+        }
+    }
+
+    if (first_solved <= last_solve_step) {
+        for (int step = plan.first_step + 1; step <= std::min(last_solve_step, plan.first_step + 2); ++step) {
+            if (exad_raw_solved_file_exists(options, step)) {
+                continue;
+            }
+            if (exad_compressed_file_exists(options, step)) {
+                throw std::runtime_error(
+                    "EXAD solve resume needs raw future layer " + std::to_string(step) +
+                    " but only the compressed .exadzbook is present"
+                );
+            }
+            throw std::runtime_error(
+                "missing EXAD solved future layer for solve resume at step " + std::to_string(step)
+            );
+        }
+    }
+
+    return plan;
 }
 
 void remove_exad_solved_file_after_compression(const std::string &solved_path,
@@ -831,6 +909,7 @@ EXADChunkMergeSummary merge_slot_chunks_to_solved_file(
         + sizeof(uint32_t) * bucket_slot_count()
         + metadata_payload_bytes;
     summary.success_bytes = value_cursor * sizeof(T);
+    summary.bitmap_bits = total_aligned_bits;
     summary.bitmap_density = total_aligned_bits == 0U
         ? 0.0
         : static_cast<double>(row_cursor) / static_cast<double>(total_aligned_bits);
@@ -2498,6 +2577,11 @@ void load_future_layer(
     }
     const std::string path = EXAD::solved_file_path(options.pathname, target_step);
     if (!EXAD::solved_file_exists(path)) {
+        if (exad_compressed_file_exists(options, target_step)) {
+            throw std::runtime_error(
+                "EXAD solved future layer is compressed-only and cannot be used for hot resume: " + path
+            );
+        }
         throw std::runtime_error("missing EXAD solved future layer: " + path);
     }
     const double read_t0 = wall_time_seconds();
@@ -2525,6 +2609,8 @@ void recalculate_process_exad_impl(
         RuntimeControls::current_deletion_thresholds(options);
     total_record.deletion_threshold = deletion_threshold_state.absolute;
     total_record.relative_deletion_threshold = deletion_threshold_state.relative;
+    uint64_t total_bitmap_live = 0;
+    uint64_t total_bitmap_bits = 0;
 
     const int num_threads = effective_num_threads(options);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
@@ -2542,8 +2628,9 @@ void recalculate_process_exad_impl(
     int cached_future2_step = std::numeric_limits<int>::min();
     std::unordered_map<uint32_t, MatchCache> match_dict;
     const uint32_t progress_total = build_progress_total(options);
+    const EXADSolvePlan solve_plan = make_exad_solve_plan(options);
 
-    for (int step = options.steps - 3; step >= 0; --step) {
+    for (int step = solve_plan.first_step; step >= 0; --step) {
         FormationProgress::update_build_progress(
             progress_total - static_cast<uint32_t>(step) - 2U,
             progress_total
@@ -2749,7 +2836,11 @@ void recalculate_process_exad_impl(
         total_record.compress_seconds += record.compress_seconds;
         total_record.metadata_bytes += record.metadata_bytes;
         total_record.success_bytes += record.success_bytes;
-        total_record.bitmap_density = record.bitmap_density;
+        total_bitmap_live += record.post_zero_rows;
+        total_bitmap_bits += solved_layer_bitmap_bits(current);
+        total_record.bitmap_density = total_bitmap_bits == 0U
+            ? 0.0
+            : static_cast<double>(total_bitmap_live) / static_cast<double>(total_bitmap_bits);
 
         future2 = std::move(future1);
         cached_future2_step = cached_future1_step;
@@ -2780,6 +2871,8 @@ void recalculate_process_exad_chunked_impl(
         RuntimeControls::current_deletion_thresholds(options);
     total_record.deletion_threshold = deletion_threshold_state.absolute;
     total_record.relative_deletion_threshold = deletion_threshold_state.relative;
+    uint64_t total_bitmap_live = 0;
+    uint64_t total_bitmap_bits = 0;
 
     const int num_threads = effective_num_threads(options);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
@@ -2797,8 +2890,9 @@ void recalculate_process_exad_chunked_impl(
     int cached_future2_step = std::numeric_limits<int>::min();
     std::unordered_map<uint32_t, MatchCache> match_dict;
     const uint32_t progress_total = build_progress_total(options);
+    const EXADSolvePlan solve_plan = make_exad_solve_plan(options);
 
-    for (int step = options.steps - 3; step >= 0; --step) {
+    for (int step = solve_plan.first_step; step >= 0; --step) {
         FormationProgress::update_build_progress(
             progress_total - static_cast<uint32_t>(step) - 2U,
             progress_total
@@ -3076,7 +3170,11 @@ void recalculate_process_exad_chunked_impl(
         total_record.compress_seconds += record.compress_seconds;
         total_record.metadata_bytes += record.metadata_bytes;
         total_record.success_bytes += record.success_bytes;
-        total_record.bitmap_density = record.bitmap_density;
+        total_bitmap_live += record.post_zero_rows;
+        total_bitmap_bits += merge_summary.bitmap_bits;
+        total_record.bitmap_density = total_bitmap_bits == 0U
+            ? 0.0
+            : static_cast<double>(total_bitmap_live) / static_cast<double>(total_bitmap_bits);
 
         future2 = std::move(future1);
         cached_future2_step = cached_future1_step;

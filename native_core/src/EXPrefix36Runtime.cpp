@@ -11,6 +11,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -178,6 +179,24 @@ double now_seconds() {
     static const auto epoch = clock::now();
     return std::chrono::duration<double>(clock::now() - epoch).count();
 #endif
+}
+
+std::string current_timestamp() {
+    const auto now = std::chrono::system_clock::now();
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()
+    ) % 1000;
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    std::tm local_time{};
+#if defined(_WIN32)
+    localtime_s(&local_time, &time);
+#else
+    localtime_r(&time, &local_time);
+#endif
+    std::ostringstream stream;
+    stream << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S")
+           << '.' << std::setw(3) << std::setfill('0') << millis.count();
+    return stream.str();
 }
 
 template <typename T>
@@ -385,6 +404,11 @@ uint64_t layer_metadata_bytes(const Prefix36Layer &layer) {
          + static_cast<uint64_t>(layer.small_bitmap_bytes.size())
          + static_cast<uint64_t>(layer.large_bitmap_words.size()) * sizeof(uint64_t)
          + static_cast<uint64_t>(layer.large_rank_bases.size()) * sizeof(uint16_t);
+}
+
+uint64_t layer_bitmap_bits(const Prefix36Layer &layer) {
+    return static_cast<uint64_t>(layer.small_bitmap_bytes.size()) * 8ULL
+         + static_cast<uint64_t>(layer.large_bitmap_words.size()) * 64ULL;
 }
 
 uint64_t layer_file_bytes(const Prefix36Layer &layer, DTypeMode mode) {
@@ -1623,17 +1647,21 @@ void append_generate_stats(
     double work_seconds,
     double finalize_seconds,
     double cleanup_seconds,
-    double write_seconds
+    double write_seconds,
+    uint64_t bitmap_live_override = 0ULL,
+    uint64_t bitmap_bits_override = 0ULL
 ) {
     const uint64_t primary_live = primary ? primary->live_board_count : 0ULL;
     const uint64_t secondary_live = secondary ? secondary->live_board_count : 0ULL;
     const uint64_t denom_live = primary_live != 0ULL ? primary_live : input_live;
-    const uint64_t bitmap_bits = primary
-        ? static_cast<uint64_t>(primary->small_bitmap_bytes.size()) * 8ULL
-            + static_cast<uint64_t>(primary->large_bitmap_words.size()) * 64ULL
-        : 0ULL;
-    const double density = primary && bitmap_bits != 0ULL
-        ? static_cast<double>(primary->live_board_count) / static_cast<double>(bitmap_bits)
+    const uint64_t bitmap_bits = bitmap_bits_override != 0ULL
+        ? bitmap_bits_override
+        : (primary ? layer_bitmap_bits(*primary) : 0ULL);
+    const uint64_t density_live = bitmap_bits_override != 0ULL
+        ? bitmap_live_override
+        : primary_live;
+    const double density = bitmap_bits != 0ULL
+        ? static_cast<double>(density_live) / static_cast<double>(bitmap_bits)
         : 0.0;
     std::ofstream file(generate_stats_path(options), std::ios::app);
     file << stage << ','
@@ -1664,7 +1692,7 @@ void append_generate_stats(
          << finalize_seconds << ','
          << cleanup_seconds << ','
          << write_seconds << ','
-         << "\n";
+         << current_timestamp() << "\n";
 }
 
 void reset_solve_stats(const RunOptions &options) {
@@ -1701,14 +1729,18 @@ void append_solve_stats(
     double read_seconds,
     double total_seconds,
     double compute_seconds,
-    const Prefix36Layer *layer
+    const Prefix36Layer *layer,
+    uint64_t bitmap_live_override = 0ULL,
+    uint64_t bitmap_bits_override = 0ULL
 ) {
-    const uint64_t bitmap_bits = layer
-        ? static_cast<uint64_t>(layer->small_bitmap_bytes.size()) * 8ULL
-            + static_cast<uint64_t>(layer->large_bitmap_words.size()) * 64ULL
-        : 0ULL;
-    const double density = layer && bitmap_bits != 0ULL
-        ? static_cast<double>(layer->live_board_count) / static_cast<double>(bitmap_bits)
+    const uint64_t bitmap_bits = bitmap_bits_override != 0ULL
+        ? bitmap_bits_override
+        : (layer ? layer_bitmap_bits(*layer) : 0ULL);
+    const uint64_t density_live = bitmap_bits_override != 0ULL
+        ? bitmap_live_override
+        : (layer ? layer->live_board_count : 0ULL);
+    const double density = bitmap_bits != 0ULL
+        ? static_cast<double>(density_live) / static_cast<double>(bitmap_bits)
         : 0.0;
     std::ofstream file(solve_stats_path(options), std::ios::app);
     file << stage << ','
@@ -1742,12 +1774,14 @@ void append_solve_stats(
          << throughput(input_live, total_seconds) << ','
          << (layer ? layer_metadata_bytes(*layer) : 0ULL) << ','
          << density << ','
-         << "\n";
+         << current_timestamp() << "\n";
 }
 
 struct SolveStepSummary {
     uint64_t input_live = 0;
     uint64_t output_live = 0;
+    uint64_t bitmap_live = 0;
+    uint64_t bitmap_bits = 0;
     double recalc_seconds = 0.0;
     double compact_seconds = 0.0;
     double future_index_seconds = 0.0;
@@ -3207,6 +3241,8 @@ void generate_forward_layers(
     Prefix36Layer carry_layer;
     bool has_carry = false;
     uint64_t total_live = current.live_board_count;
+    uint64_t total_bitmap_live = current.live_board_count;
+    uint64_t total_bitmap_bits = layer_bitmap_bits(current);
     double total_prepare = 0.0;
     double total_work = init_t1 - init_t0;
     double total_finalize = 0.0;
@@ -3316,6 +3352,12 @@ void generate_forward_layers(
             layer_write_seconds
         );
         total_live += next_layer.live_board_count + (terminal ? terminal_next2.live_board_count : 0ULL);
+        total_bitmap_live += next_layer.live_board_count;
+        total_bitmap_bits += layer_bitmap_bits(next_layer);
+        if (terminal) {
+            total_bitmap_live += terminal_next2.live_board_count;
+            total_bitmap_bits += layer_bitmap_bits(terminal_next2);
+        }
         total_prepare += prepare_seconds;
         total_work += work_seconds;
         total_finalize += finalize_seconds;
@@ -3347,7 +3389,9 @@ void generate_forward_layers(
         total_work,
         total_finalize,
         total_cleanup,
-        total_write
+        total_write,
+        total_bitmap_live,
+        total_bitmap_bits
     );
 }
 
@@ -3538,6 +3582,8 @@ SolveStepSummary solve_loaded_step_impl(
     SolveStepSummary summary;
     summary.input_live = input_live;
     summary.output_live = current.live_board_count;
+    summary.bitmap_live = current.live_board_count;
+    summary.bitmap_bits = layer_bitmap_bits(current);
     summary.recalc_seconds = recalc.seconds;
     summary.compact_seconds = compact_t1 - compact_t0;
     summary.future_index_seconds = index_t1 - index_t0;
@@ -3728,6 +3774,8 @@ SolveStepSummary keep_only_optimal_branches_prefix36_impl(
 
         total.input_live += target_live_before;
         total.output_live += pruned.live_board_count;
+        total.bitmap_live += pruned.live_board_count;
+        total.bitmap_bits += layer_bitmap_bits(pruned);
         total.recalc_seconds += mark_seconds;
         total.compact_seconds += compact_seconds;
         total.future_index_seconds += index_seconds;
@@ -3925,6 +3973,8 @@ void run_pattern_solve(
             );
             total.input_live += step_summary.input_live;
             total.output_live += step_summary.output_live;
+            total.bitmap_live += step_summary.bitmap_live;
+            total.bitmap_bits += step_summary.bitmap_bits;
             total.recalc_seconds += step_summary.recalc_seconds;
             total.compact_seconds += step_summary.compact_seconds;
             total.future_index_seconds += step_summary.future_index_seconds;
@@ -3942,6 +3992,8 @@ void run_pattern_solve(
         SolveStepSummary optimal_summary = keep_only_optimal_branches_prefix36(spec, options, lut);
         total.input_live += optimal_summary.input_live;
         total.output_live += optimal_summary.output_live;
+        total.bitmap_live += optimal_summary.bitmap_live;
+        total.bitmap_bits += optimal_summary.bitmap_bits;
         total.recalc_seconds += optimal_summary.recalc_seconds;
         total.compact_seconds += optimal_summary.compact_seconds;
         total.future_index_seconds += optimal_summary.future_index_seconds;
@@ -3977,7 +4029,9 @@ void run_pattern_solve(
         total.read_seconds,
         total.total_seconds,
         total.compute_seconds,
-        nullptr
+        nullptr,
+        total.bitmap_live,
+        total.bitmap_bits
     );
 }
 

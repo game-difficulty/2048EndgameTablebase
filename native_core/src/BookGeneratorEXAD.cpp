@@ -2,6 +2,7 @@
 
 #include "BoardMaskerAD.h"
 #include "EXADBuilder.h"
+#include "EXADCompressedResult.h"
 #include "EXADIO.h"
 #include "FileIOUtils.h"
 #include "FormationRuntime.h"
@@ -38,15 +39,20 @@ double throughput_mbps_for(uint64_t count, double seconds) {
 }
 
 std::string now_string() {
-    std::time_t now = std::time(nullptr);
+    const auto now = std::chrono::system_clock::now();
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()
+    ) % 1000;
+    std::time_t now_time = std::chrono::system_clock::to_time_t(now);
     std::tm local_time{};
 #ifdef _WIN32
-    localtime_s(&local_time, &now);
+    localtime_s(&local_time, &now_time);
 #else
-    localtime_r(&now, &local_time);
+    localtime_r(&now_time, &local_time);
 #endif
     std::ostringstream oss;
-    oss << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S");
+    oss << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S")
+        << '.' << std::setw(3) << std::setfill('0') << millis.count();
     return oss.str();
 }
 
@@ -505,9 +511,40 @@ EXAD::ReserveFactors reserve_factors_for_layer(
 
 struct ResumeState {
     int start_step = 1;
+    bool complete = false;
     EXAD::Layer current;
     EXAD::CarryLayer next_seed;
 };
+
+bool exad_solved_output_exists(const RunOptions &options, int step) {
+    const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
+    return EXAD::solved_file_exists(solved_path) ||
+        fs::exists(options.pathname + std::to_string(step) + EXADCompressedResult::kCompressedLayerFileExtension);
+}
+
+bool exad_solve_phase_started(const RunOptions &options) {
+    for (int step = 0; step < options.steps; ++step) {
+        if (exad_solved_output_exists(options, step)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int exad_temp_end_step_for_solve_resume(const RunOptions &options) {
+    const int last_solve_step = options.steps - 3;
+    if (last_solve_step < 0) {
+        return -1;
+    }
+    int first_solved = last_solve_step + 1;
+    while (first_solved > 0 && exad_solved_output_exists(options, first_solved - 1)) {
+        --first_solved;
+    }
+    if (first_solved == last_solve_step + 1) {
+        return -2;
+    }
+    return first_solved - 1;
+}
 
 ResumeState initialize_or_resume(
     const std::vector<uint64_t> &masked_seed,
@@ -517,8 +554,16 @@ ResumeState initialize_or_resume(
     const EXAD::Luts &luts,
     const RunOptions &options,
     FileIOUtils::DirectIoConfig io_config,
-    int num_threads
+    int num_threads,
+    int max_required_step
 ) {
+    ResumeState state;
+    if (max_required_step < 0) {
+        state.complete = true;
+        state.start_step = 0;
+        return state;
+    }
+
     const std::string layer0_path = EXAD::layer_file_path(options.pathname, 0);
     if (!EXAD::layer_file_exists(layer0_path)) {
         const double t0 = wall_time_seconds();
@@ -542,11 +587,16 @@ ResumeState initialize_or_resume(
     }
 
     int first_missing = 1;
-    while (first_missing < options.steps - 1 &&
+    while (first_missing <= max_required_step &&
            EXAD::layer_file_exists(EXAD::layer_file_path(options.pathname, first_missing))) {
         ++first_missing;
     }
-    ResumeState state;
+    if (first_missing > max_required_step) {
+        state.complete = true;
+        state.start_step = max_required_step + 1;
+        return state;
+    }
+
     if (first_missing <= 1) {
         state.start_step = 1;
         state.current = EXAD::read_layer_file(layer0_path, io_config);
@@ -594,6 +644,16 @@ void run_pattern_build_exad_cpp(
         board = FormationAD::mask_board(board);
     }
 
+    const bool solve_phase_started = exad_solve_phase_started(options);
+    int max_required_step = options.steps - 2;
+    if (solve_phase_started) {
+        max_required_step = exad_temp_end_step_for_solve_resume(options);
+    }
+    if (max_required_step < -1) {
+        run_pattern_solve_exad_cpp(arr_init, spec, options);
+        return;
+    }
+
     ResumeState resume = initialize_or_resume(
         masked_seed,
         ini_board_sum,
@@ -602,8 +662,13 @@ void run_pattern_build_exad_cpp(
         luts,
         options,
         io_config,
-        num_threads
+        num_threads,
+        max_required_step
     );
+    if (resume.complete) {
+        run_pattern_solve_exad_cpp(arr_init, spec, options);
+        return;
+    }
 
     EXAD::Layer current = std::move(resume.current);
     EXAD::CarryLayer next_seed = std::move(resume.next_seed);
@@ -631,7 +696,7 @@ void run_pattern_build_exad_cpp(
     total.stage = "_total";
     const uint32_t progress_total = build_progress_total(options);
 
-    for (int step = resume.start_step; step < options.steps - 1; ++step) {
+    for (int step = resume.start_step; step <= max_required_step; ++step) {
         FormationProgress::update_build_progress(static_cast<uint32_t>(step), progress_total);
         const EXAD::ReserveFactors reserve_factors =
             reserve_factors_for_layer(
