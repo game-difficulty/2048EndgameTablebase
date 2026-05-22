@@ -206,6 +206,24 @@ std::runtime_error make_win32_error(const std::string &prefix, DWORD code) {
     return std::runtime_error(prefix + " (win32=" + std::to_string(static_cast<unsigned long>(code)) + ")");
 }
 
+bool is_transient_publish_error(DWORD error) {
+    return error == ERROR_ACCESS_DENIED ||
+           error == ERROR_SHARING_VIOLATION ||
+           error == ERROR_LOCK_VIOLATION ||
+           error == ERROR_BUSY;
+}
+
+bool is_transient_publish_error(const std::error_code &error) {
+    return is_transient_publish_error(static_cast<DWORD>(error.value())) ||
+           error == std::make_error_code(std::errc::permission_denied) ||
+           error == std::make_error_code(std::errc::device_or_resource_busy);
+}
+
+void sleep_before_publish_retry(int attempt) {
+    const DWORD delay_ms = static_cast<DWORD>(std::min(500, 25 * (attempt + 1)));
+    Sleep(delay_ms);
+}
+
 void *alloc_aligned_bytes(size_t bytes) {
     if (bytes == 0U) {
         bytes = static_cast<size_t>(kDirectIoAlignment);
@@ -845,18 +863,17 @@ void finalize_temporary_file(const std::string &temp_path, const std::string &fi
 #ifdef _WIN32
     const std::wstring temp = fs::path(temp_path).wstring();
     const std::wstring final = fs::path(final_path).wstring();
-    constexpr int kRenameRetryCount = 8;
-    constexpr DWORD kRenameRetrySleepMs = 25;
+    constexpr int kRenameRetryCount = 80;
     DWORD move_error = ERROR_SUCCESS;
     for (int attempt = 0; attempt < kRenameRetryCount; ++attempt) {
         if (MoveFileExW(temp.c_str(), final.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
             return;
         }
         move_error = GetLastError();
-        if (move_error != ERROR_ACCESS_DENIED && move_error != ERROR_SHARING_VIOLATION) {
+        if (!is_transient_publish_error(move_error)) {
             break;
         }
-        Sleep(kRenameRetrySleepMs);
+        sleep_before_publish_retry(attempt);
     }
 
     std::error_code remove_error;
@@ -867,11 +884,10 @@ void finalize_temporary_file(const std::string &temp_path, const std::string &fi
         if (!rename_error) {
             return;
         }
-        if (rename_error.value() != static_cast<int>(ERROR_ACCESS_DENIED)
-            && rename_error.value() != static_cast<int>(ERROR_SHARING_VIOLATION)) {
+        if (!is_transient_publish_error(rename_error)) {
             break;
         }
-        Sleep(kRenameRetrySleepMs);
+        sleep_before_publish_retry(attempt);
     }
 
     if (CopyFileW(temp.c_str(), final.c_str(), FALSE)) {

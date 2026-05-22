@@ -346,6 +346,80 @@ uint64_t available_memory_bytes() {
 #endif
 }
 
+#ifdef _WIN32
+bool is_transient_ad_publish_error(DWORD error) {
+    return error == ERROR_ACCESS_DENIED ||
+           error == ERROR_SHARING_VIOLATION ||
+           error == ERROR_LOCK_VIOLATION ||
+           error == ERROR_BUSY;
+}
+#endif
+
+void sleep_before_ad_publish_retry(int attempt) {
+#ifdef _WIN32
+    constexpr DWORD kBaseSleepMs = 25U;
+    constexpr DWORD kMaxSleepMs = 500U;
+    Sleep(std::min(kMaxSleepMs, kBaseSleepMs * static_cast<DWORD>(attempt + 1)));
+#else
+    (void)attempt;
+#endif
+}
+
+void publish_ad_chunked_folder(const fs::path &temp_folder, const fs::path &final_folder) {
+    std::error_code exists_error;
+    if (fs::exists(final_folder, exists_error)) {
+        std::error_code remove_error;
+        fs::remove_all(final_folder, remove_error);
+        if (remove_error) {
+            throw std::runtime_error(
+                "failed to remove stale AD solved folder before publish: " +
+                final_folder.string() + " (" + remove_error.message() + ")"
+            );
+        }
+    } else if (exists_error) {
+        throw std::runtime_error(
+            "failed to inspect AD solved folder before publish: " +
+            final_folder.string() + " (" + exists_error.message() + ")"
+        );
+    }
+
+#ifdef _WIN32
+    const std::wstring temp_native = temp_folder.wstring();
+    const std::wstring final_native = final_folder.wstring();
+    constexpr int kRenameAttempts = 80;
+    DWORD move_error = ERROR_SUCCESS;
+    for (int attempt = 0; attempt < kRenameAttempts; ++attempt) {
+        if (MoveFileExW(temp_native.c_str(), final_native.c_str(), MOVEFILE_WRITE_THROUGH)) {
+            return;
+        }
+        move_error = GetLastError();
+        if (!is_transient_ad_publish_error(move_error)) {
+            break;
+        }
+        sleep_before_ad_publish_retry(attempt);
+    }
+
+    throw std::runtime_error(
+        "failed to publish AD chunked solved folder: " +
+        temp_folder.string() + " -> " + final_folder.string() +
+        " (win32=" + std::to_string(static_cast<unsigned long>(move_error)) + ")"
+    );
+#else
+    std::error_code rename_error;
+    fs::rename(temp_folder, final_folder, rename_error);
+    if (!rename_error) {
+        return;
+    }
+
+    throw std::runtime_error(
+        "failed to publish AD chunked solved folder: " +
+        temp_folder.string() + " -> " + final_folder.string() +
+        " (" + rename_error.message() + ", code=" +
+        std::to_string(rename_error.value()) + ")"
+    );
+#endif
+}
+
 template <typename T>
 std::vector<T> read_binary_vector(const std::string &path, FileIOUtils::DirectIoConfig config = {}) {
     return FileIOUtils::read_binary_vector_direct<T>(path, config);
@@ -2123,13 +2197,7 @@ void iter_ind_dict2(
         }
         input_file.close();
         output_file.close();
-        std::error_code remove_original_error;
-        fs::remove(book_path, remove_original_error);
-        std::error_code rename_error;
-        fs::rename(rewrite_path, book_path, rename_error);
-        if (rename_error) {
-            throw std::runtime_error("failed to replace rewritten book file: " + book_path.string());
-        }
+        FileIOUtils::finalize_temporary_file(rewrite_path, book_path.string());
     }
 }
 
@@ -2338,10 +2406,7 @@ void recalculate_process_ad_chunked_impl(
 
         const fs::path temp_folder = options.pathname + std::to_string(step) + "bt";
         const fs::path final_folder = options.pathname + std::to_string(step) + "b";
-        if (fs::exists(final_folder)) {
-            fs::remove_all(final_folder);
-        }
-        fs::rename(temp_folder, final_folder);
+        publish_ad_chunked_folder(temp_folder, final_folder);
 
         const std::string raw_path = options.pathname + std::to_string(step);
         remove_temp_raw_layer_files(raw_path);

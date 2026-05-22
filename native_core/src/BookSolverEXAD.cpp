@@ -524,12 +524,7 @@ double compress_exad_solved_layer_from_memory(
         solved_path,
         temp_path
     );
-    fs::remove(compressed_path, ec);
-    fs::rename(temp_path, compressed_path, ec);
-    if (ec) {
-        fs::remove(temp_path, ec);
-        throw std::runtime_error("failed to finalize EXAD compressed layer: " + compressed_path);
-    }
+    FileIOUtils::finalize_temporary_file(temp_path, compressed_path);
     fs::remove(solved_path, ec);
     if (ec) {
         throw std::runtime_error("failed to remove EXAD solved layer after in-memory compression: " + solved_path);
@@ -896,11 +891,7 @@ EXADChunkMergeSummary merge_slot_chunks_to_solved_file(
     }
     out.close();
 
-    fs::remove(solved_path, ec);
-    fs::rename(writing_path, solved_path, ec);
-    if (ec) {
-        throw std::runtime_error("failed to publish EXAD chunked solved layer: " + solved_path);
-    }
+    FileIOUtils::finalize_temporary_file(writing_path, solved_path);
 
     EXADChunkMergeSummary summary;
     summary.post_zero_rows = row_cursor;

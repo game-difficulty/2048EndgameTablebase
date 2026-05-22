@@ -1411,10 +1411,7 @@ void promote_generated_layer_input(
         fs::remove(archive_path, ec);
         return;
     }
-    fs::rename(generated_path, final_path, ec);
-    if (ec) {
-        throw std::runtime_error("failed to promote EX generated layer to zbook: " + generated_path);
-    }
+    FileIOUtils::finalize_temporary_file(generated_path, final_path);
 }
 
 std::string compressed_layer_file_path(const std::string &pathname, int step) {
@@ -1557,12 +1554,7 @@ double compress_layer_result_from_memory(
         65536U,
         5
     );
-    fs::remove(output_path, ec);
-    fs::rename(temp_path, output_path, ec);
-    if (ec) {
-        fs::remove(temp_path, ec);
-        throw std::runtime_error("failed to finalize EX compressed result: " + output_path);
-    }
+    FileIOUtils::finalize_temporary_file(temp_path, output_path);
     if (remove_zbook_after) {
         fs::remove(zbook_path, ec);
     }
@@ -1595,12 +1587,7 @@ double compress_layer_result_from_file(const RunOptions &options, int step) {
         65536U,
         5
     );
-    fs::remove(output_path, ec);
-    fs::rename(temp_path, output_path, ec);
-    if (ec) {
-        fs::remove(temp_path, ec);
-        throw std::runtime_error("failed to finalize EX compressed result: " + output_path);
-    }
+    FileIOUtils::finalize_temporary_file(temp_path, output_path);
     fs::remove(zbook_path, ec);
     return now_seconds() - t0;
 }
