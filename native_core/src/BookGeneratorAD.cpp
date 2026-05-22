@@ -531,13 +531,15 @@ RestartResult handle_restart_ad(
     const std::string path_i = pathname + std::to_string(step_index);
     const std::string path_i_plus_1 = pathname + std::to_string(step_index + 1);
     const std::string path_i_minus_1 = pathname + std::to_string(step_index - 1);
+    const bool has_readable_book_archive = is_readable_temp_archive(path_i + "b.7z");
+    const bool has_readable_raw_archive = is_readable_temp_archive(path_i + ".7z");
     if ((fs::exists(path_i_plus_1) && fs::exists(path_i)) ||
         (fs::exists(path_i_plus_1 + "b") && fs::exists(path_i)) ||
         (fs::exists(path_i_plus_1 + ".z") && fs::exists(path_i)) ||
         fs::exists(path_i + "b") ||
         fs::exists(path_i + ".z") ||
-        fs::exists(path_i + "b.7z") ||
-        fs::exists(path_i + ".7z")) {
+        has_readable_book_archive ||
+        has_readable_raw_archive) {
         debug_log("skipping step " + std::to_string(step_index));
         return {};
     }

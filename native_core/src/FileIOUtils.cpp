@@ -900,8 +900,6 @@ void finalize_temporary_file(const std::string &temp_path, const std::string &fi
         " (win32=" + std::to_string(static_cast<unsigned long>(move_error)) + ")"
     );
 #else
-    std::error_code remove_error;
-    fs::remove(final_path, remove_error);
     std::error_code rename_error;
     fs::rename(temp_path, final_path, rename_error);
     if (rename_error) {
@@ -917,12 +915,13 @@ public:
           temp_path_(temp_write_path(path)),
           logical_bytes_(logical_bytes),
           config_(normalize_direct_io_config(config)) {
-        if (!config_.enabled) {
-            buffered_writer_ = std::make_unique<BufferedAppendWriter>(final_path_);
-            return;
-        }
         std::error_code remove_error;
         fs::remove(temp_path_, remove_error);
+        if (!config_.enabled) {
+            buffered_writer_ = std::make_unique<BufferedAppendWriter>(temp_path_);
+            finalize_buffered_temp_ = true;
+            return;
+        }
         if (!direct_io_supported_path(final_path_)) {
             buffered_writer_ = std::make_unique<BufferedAppendWriter>(temp_path_);
             finalize_buffered_temp_ = true;

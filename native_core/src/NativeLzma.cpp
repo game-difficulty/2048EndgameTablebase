@@ -36,6 +36,7 @@ namespace {
 
 constexpr size_t kBlockSize = 32768ULL;
 constexpr size_t kParallelThreshold = 4194304ULL;
+constexpr const char *kArchiveTempSuffix = ".tmp";
 
 #pragma pack(push, 1)
 struct U64SegmentEntry {
@@ -54,6 +55,27 @@ std::vector<T> read_binary_vector(const std::string &path) {
 template <typename T>
 void write_binary_vector(const std::string &path, const std::vector<T> &data) {
     FileIOUtils::write_binary_vector(path, data);
+}
+
+std::string temporary_archive_path(const std::string &archive_path) {
+    return archive_path + kArchiveTempSuffix;
+}
+
+bool is_xz_stream_header(const std::vector<uint8_t> &bytes) {
+    static constexpr uint8_t kMagic[] = {0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00};
+    return bytes.size() >= sizeof(kMagic) &&
+           std::memcmp(bytes.data(), kMagic, sizeof(kMagic)) == 0;
+}
+
+bool publish_file_or_remove_temp(const std::string &temp_path, const std::string &final_path) {
+    try {
+        FileIOUtils::finalize_temporary_file(temp_path, final_path);
+        return true;
+    } catch (...) {
+        std::error_code ec;
+        fs::remove(temp_path, ec);
+        return false;
+    }
 }
 
 struct LzmaApi {
@@ -164,10 +186,10 @@ std::vector<uint8_t> xz_compress_bytes(const uint8_t *data, size_t size, uint32_
     return output;
 }
 
-std::vector<uint8_t> xz_decompress_bytes(const uint8_t *data, size_t size) {
+std::optional<std::vector<uint8_t>> try_xz_decompress_bytes(const uint8_t *data, size_t size) {
     const auto &api = lzma_api();
     if (!api.loaded) {
-        return {};
+        return std::nullopt;
     }
     uint64_t memlimit = std::numeric_limits<uint64_t>::max();
     size_t out_capacity = std::max<size_t>(size * 8, 4096);
@@ -190,11 +212,16 @@ std::vector<uint8_t> xz_decompress_bytes(const uint8_t *data, size_t size) {
             return output;
         }
         if (ret != LZMA_BUF_ERROR) {
-            return {};
+            return std::nullopt;
         }
         out_capacity *= 2;
     }
-    return {};
+    return std::nullopt;
+}
+
+std::vector<uint8_t> xz_decompress_bytes(const uint8_t *data, size_t size) {
+    auto output = try_xz_decompress_bytes(data, size);
+    return output ? std::move(*output) : std::vector<uint8_t>{};
 }
 
 std::optional<std::string> resolve_7z_executable() {
@@ -418,7 +445,8 @@ bool compress_bytes_to_7z_archive_streaming_impl(
     }
     const int max_threads = std::max(2, omp_get_max_threads());
     std::error_code ec;
-    fs::remove(archive_path, ec);
+    const std::string temp_archive_path = temporary_archive_path(archive_path);
+    fs::remove(temp_archive_path, ec);
     const std::vector<std::string> args = {
         *exe,
         "a",
@@ -428,7 +456,7 @@ bool compress_bytes_to_7z_archive_streaming_impl(
         "-mmt=" + std::to_string(max_threads),
         "-bd",
         "-y",
-        archive_path,
+        temp_archive_path,
         "-si" + entry_name
     };
 
@@ -454,25 +482,28 @@ bool compress_bytes_to_7z_archive_streaming_impl(
     CloseHandle(nul_out);
     if (!spawned) {
         CloseHandle(stdin_write);
+        fs::remove(temp_archive_path, ec);
         return false;
     }
     const bool write_ok = write_all_handle(stdin_write, data, size);
     CloseHandle(stdin_write);
     const bool exit_ok = wait_process_success(process_info);
     if (!write_ok || !exit_ok) {
-        fs::remove(archive_path, ec);
+        fs::remove(temp_archive_path, ec);
         return false;
     }
-    return true;
+    return publish_file_or_remove_temp(temp_archive_path, archive_path);
 #else
     int stdin_pipe[2];
     if (pipe(stdin_pipe) != 0) {
+        fs::remove(temp_archive_path, ec);
         return false;
     }
     pid_t pid = fork();
     if (pid < 0) {
         close(stdin_pipe[0]);
         close(stdin_pipe[1]);
+        fs::remove(temp_archive_path, ec);
         return false;
     }
     if (pid == 0) {
@@ -497,10 +528,10 @@ bool compress_bytes_to_7z_archive_streaming_impl(
     close(stdin_pipe[1]);
     const bool exit_ok = wait_pid_success(pid);
     if (!write_ok || !exit_ok) {
-        fs::remove(archive_path, ec);
+        fs::remove(temp_archive_path, ec);
         return false;
     }
-    return true;
+    return publish_file_or_remove_temp(temp_archive_path, archive_path);
 #endif
 }
 
@@ -599,7 +630,11 @@ bool compress_file_xz(const std::string &input_path, const std::string &output_p
     if (compressed.empty() && !bytes.empty()) {
         return false;
     }
-    FileIOUtils::write_binary_bytes(output_path, compressed);
+    const std::string temp_output_path = FileIOUtils::temp_write_path(output_path);
+    FileIOUtils::write_binary_bytes(temp_output_path, compressed);
+    if (!publish_file_or_remove_temp(temp_output_path, output_path)) {
+        return false;
+    }
     fs::remove(input_path);
     return true;
 }
@@ -609,11 +644,15 @@ bool decompress_file_xz(const std::string &input_path, const std::string &output
     if (bytes.empty() && !fs::exists(input_path)) {
         return false;
     }
-    std::vector<uint8_t> decompressed = xz_decompress_bytes(bytes.data(), bytes.size());
-    if (decompressed.empty() && !bytes.empty()) {
+    auto decompressed = try_xz_decompress_bytes(bytes.data(), bytes.size());
+    if (!decompressed) {
         return false;
     }
-    FileIOUtils::write_binary_bytes(output_path, decompressed);
+    const std::string temp_output_path = FileIOUtils::temp_write_path(output_path);
+    FileIOUtils::write_binary_bytes(temp_output_path, *decompressed);
+    if (!publish_file_or_remove_temp(temp_output_path, output_path)) {
+        return false;
+    }
     fs::remove(input_path);
     return true;
 }
@@ -626,10 +665,87 @@ std::vector<uint8_t> read_file_bytes_range(const std::string &path, uint64_t beg
     return FileIOUtils::read_binary_bytes_range(path, begin, end);
 }
 
+bool test_7z_archive_integrity(const std::string &archive_path) {
+    auto exe = resolve_7z_executable();
+    if (!exe || !fs::exists(archive_path)) {
+        return false;
+    }
+    const std::vector<std::string> args = {
+        *exe,
+        "t",
+        "-bd",
+        "-y",
+        archive_path
+    };
+
+#ifdef _WIN32
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE nul_in = CreateFileA(
+        "NUL",
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &sa,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    HANDLE nul_out = CreateFileA(
+        "NUL",
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &sa,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (nul_in == INVALID_HANDLE_VALUE || nul_out == INVALID_HANDLE_VALUE) {
+        if (nul_in != INVALID_HANDLE_VALUE) {
+            CloseHandle(nul_in);
+        }
+        if (nul_out != INVALID_HANDLE_VALUE) {
+            CloseHandle(nul_out);
+        }
+        return false;
+    }
+    PROCESS_INFORMATION process_info{};
+    const bool spawned = spawn_process_with_redirects(args, nul_in, nul_out, nul_out, process_info);
+    CloseHandle(nul_in);
+    CloseHandle(nul_out);
+    return spawned && wait_process_success(process_info);
+#else
+    pid_t pid = fork();
+    if (pid < 0) {
+        return false;
+    }
+    if (pid == 0) {
+        int nul_in = ::open("/dev/null", O_RDONLY);
+        int nul_out = ::open("/dev/null", O_WRONLY);
+        if (nul_in < 0 || nul_out < 0) {
+            _exit(127);
+        }
+        dup2(nul_in, STDIN_FILENO);
+        dup2(nul_out, STDOUT_FILENO);
+        dup2(nul_out, STDERR_FILENO);
+        ::close(nul_in);
+        ::close(nul_out);
+        std::vector<char *> argv;
+        argv.reserve(args.size() + 1);
+        for (const auto &arg : args) {
+            argv.push_back(const_cast<char *>(arg.c_str()));
+        }
+        argv.push_back(nullptr);
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+    return wait_pid_success(pid);
+#endif
+}
+
 } // namespace
 
 struct SevenZipArchiveWriter::Impl {
     std::string archive_path;
+    std::string temp_archive_path;
 #ifdef _WIN32
     HANDLE stdin_write = nullptr;
     PROCESS_INFORMATION process_info{};
@@ -648,9 +764,10 @@ struct SevenZipArchiveWriter::Impl {
             throw std::runtime_error("7z executable not found");
         }
         archive_path = path;
+        temp_archive_path = temporary_archive_path(path);
         const int max_threads = std::max(2, omp_get_max_threads());
         std::error_code ec;
-        fs::remove(archive_path, ec);
+        fs::remove(temp_archive_path, ec);
         const std::vector<std::string> args = {
             *exe,
             "a",
@@ -660,7 +777,7 @@ struct SevenZipArchiveWriter::Impl {
             "-mmt=" + std::to_string(max_threads),
             "-bd",
             "-y",
-            archive_path,
+            temp_archive_path,
             "-si" + entry_name
         };
 
@@ -693,11 +810,13 @@ struct SevenZipArchiveWriter::Impl {
         if (!spawned) {
             CloseHandle(stdin_write);
             stdin_write = nullptr;
+            fs::remove(temp_archive_path, ec);
             throw std::runtime_error("failed to spawn 7z archive writer");
         }
 #else
         int stdin_pipe[2];
         if (pipe(stdin_pipe) != 0) {
+            fs::remove(temp_archive_path, ec);
             throw std::runtime_error("failed to create 7z stdin pipe");
         }
         pid = fork();
@@ -705,6 +824,7 @@ struct SevenZipArchiveWriter::Impl {
             ::close(stdin_pipe[0]);
             ::close(stdin_pipe[1]);
             pid = -1;
+            fs::remove(temp_archive_path, ec);
             throw std::runtime_error("failed to fork 7z archive writer");
         }
         if (pid == 0) {
@@ -776,12 +896,19 @@ struct SevenZipArchiveWriter::Impl {
 #endif
         if (!ok) {
             std::error_code ec;
-            fs::remove(archive_path, ec);
+            fs::remove(temp_archive_path, ec);
             if (throw_on_error) {
                 throw std::runtime_error("7z archive writer failed: " + archive_path);
             }
+            return false;
         }
-        return ok;
+        if (!publish_file_or_remove_temp(temp_archive_path, archive_path)) {
+            if (throw_on_error) {
+                throw std::runtime_error("failed to publish 7z archive writer output: " + archive_path);
+            }
+            return false;
+        }
+        return true;
     }
 
     ~Impl() {
@@ -1068,8 +1195,6 @@ bool compress_spans_to_7z_archive_streaming(
         writer.close();
         return true;
     } catch (...) {
-        std::error_code ec;
-        fs::remove(archive_path, ec);
         return false;
     }
 }
@@ -1077,6 +1202,22 @@ bool compress_spans_to_7z_archive_streaming(
 bool decompress_7z_archive_to_bytes_streaming(const std::string &archive_path, std::vector<uint8_t> &output) {
     output.clear();
     return decompress_7z_archive_to_bytes_streaming_impl(archive_path, output);
+}
+
+bool is_readable_7z_or_xz_archive(const std::string &archive_path) {
+    std::error_code ec;
+    if (!fs::exists(archive_path, ec) || ec ||
+        !fs::is_regular_file(archive_path, ec) || ec ||
+        fs::file_size(archive_path, ec) == 0U || ec) {
+        return false;
+    }
+
+    std::vector<uint8_t> header = FileIOUtils::read_binary_bytes_range(archive_path, 0, 6);
+    if (is_xz_stream_header(header)) {
+        std::vector<uint8_t> archive_bytes = FileIOUtils::read_binary_bytes(archive_path);
+        return try_xz_decompress_bytes(archive_bytes.data(), archive_bytes.size()).has_value();
+    }
+    return test_7z_archive_integrity(archive_path);
 }
 
 std::vector<uint8_t> compress_xz_block_native(const uint8_t *data, size_t size, int lvl) {
@@ -1093,13 +1234,20 @@ bool compress_with_7z_or_xz(const std::string &input_path, int lvl) {
     }
     const std::string output_path = input_path + ".7z";
     if (auto exe = resolve_7z_executable()) {
+        const std::string temp_output_path = temporary_archive_path(output_path);
+        std::error_code ec;
+        fs::remove(temp_output_path, ec);
         const int max_threads = std::max(2, omp_get_max_threads());
         std::string cmd = quote_arg(*exe) + " a -t7z -m0=lzma2 -mx=" + std::to_string(lvl) +
-                          " -mmt=" + std::to_string(max_threads) + " -sdel " +
-                          quote_arg(output_path) + " " + quote_arg(input_path);
+                          " -mmt=" + std::to_string(max_threads) + " " +
+                          quote_arg(temp_output_path) + " " + quote_arg(input_path);
         if (run_command(cmd)) {
-            return true;
+            if (publish_file_or_remove_temp(temp_output_path, output_path)) {
+                fs::remove(input_path);
+                return true;
+            }
         }
+        fs::remove(temp_output_path, ec);
     }
     return compress_file_xz(input_path, output_path, lvl);
 }
@@ -1110,10 +1258,14 @@ bool decompress_with_7z_or_xz(const std::string &archive_path) {
     }
     const std::string output_path = fs::path(archive_path).replace_extension().string();
     if (auto exe = resolve_7z_executable()) {
-        const fs::path output_dir = fs::path(output_path).parent_path();
-        std::string cmd = quote_arg(*exe) + " x " + quote_arg(archive_path) + " -o" +
-                          quote_arg(output_dir.string()) + " -y";
-        if (run_command(cmd)) {
+        (void)exe;
+        std::vector<uint8_t> decompressed;
+        if (decompress_7z_archive_to_bytes_streaming(archive_path, decompressed)) {
+            const std::string temp_output_path = FileIOUtils::temp_write_path(output_path);
+            FileIOUtils::write_binary_bytes(temp_output_path, decompressed);
+            if (!publish_file_or_remove_temp(temp_output_path, output_path)) {
+                return false;
+            }
             fs::remove(archive_path);
             return true;
         }

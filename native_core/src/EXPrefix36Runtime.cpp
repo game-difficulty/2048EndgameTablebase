@@ -1006,7 +1006,9 @@ Prefix36Layer read_layer_file(
     int rebuild_threads = 1
 ) {
     std::string actual_path = path;
-    if (!fs::exists(actual_path) && !has_archive_suffix(actual_path) && fs::exists(actual_path + ".7z")) {
+    if (!fs::exists(actual_path) &&
+        !has_archive_suffix(actual_path) &&
+        is_readable_7z_or_xz_archive(actual_path + ".7z")) {
         actual_path += ".7z";
     }
     if (has_archive_suffix(actual_path)) {
@@ -1265,12 +1267,12 @@ std::string generated_layer_archive_path(const std::string &pathname, int step) 
 bool layer_input_exists(const std::string &pathname, int step) {
     return fs::exists(layer_file_path(pathname, step)) ||
            fs::exists(generated_layer_file_path(pathname, step)) ||
-           fs::exists(generated_layer_archive_path(pathname, step));
+           is_readable_7z_or_xz_archive(generated_layer_archive_path(pathname, step));
 }
 
 bool generated_layer_input_exists(const std::string &pathname, int step) {
     return fs::exists(generated_layer_file_path(pathname, step)) ||
-           fs::exists(generated_layer_archive_path(pathname, step));
+           is_readable_7z_or_xz_archive(generated_layer_archive_path(pathname, step));
 }
 
 bool raw_solved_layer_exists(const std::string &pathname, int step) {
@@ -1393,7 +1395,7 @@ void promote_generated_layer_input(
     const std::string generated_path = generated_layer_file_path(pathname, step);
     if (!fs::exists(generated_path)) {
         const std::string archive_path = generated_layer_archive_path(pathname, step);
-        if (!fs::exists(archive_path)) {
+        if (!is_readable_7z_or_xz_archive(archive_path)) {
             return;
         }
         LayerFileHeader header{};

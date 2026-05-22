@@ -20,3 +20,4 @@ bool write_temp_byte_spans_archive(
     int lvl = 1
 );
 std::vector<uint8_t> read_temp_byte_archive(const std::string &archive_path);
+bool is_readable_temp_archive(const std::string &archive_path);

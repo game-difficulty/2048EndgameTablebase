@@ -122,7 +122,7 @@ std::string existing_layer_storage_path(const std::string &path) {
         return path;
     }
     const std::string archive_path = archive_path_for_layer(path);
-    if (fs::exists(archive_path)) {
+    if (is_readable_7z_or_xz_archive(archive_path)) {
         return archive_path;
     }
     return path;
@@ -205,7 +205,7 @@ std::string lut_file_path(const std::string &pathname) {
 }
 
 bool layer_file_exists(const std::string &path) {
-    return fs::exists(path) || fs::exists(archive_path_for_layer(path));
+    return fs::exists(path) || is_readable_7z_or_xz_archive(archive_path_for_layer(path));
 }
 
 void remove_layer_file(const std::string &path) {

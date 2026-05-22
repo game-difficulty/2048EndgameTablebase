@@ -180,6 +180,9 @@ bool is_valid_restart_file(const std::string &path, uint64_t alignment) {
     if (ec || size == 0U) {
         return false;
     }
+    if (path.size() >= 3U && path.compare(path.size() - 3U, 3U, ".7z") == 0) {
+        return is_readable_temp_archive(path);
+    }
     return alignment == 0U || (size % alignment) == 0U;
 }
 
@@ -1462,8 +1465,8 @@ bool handle_restart_opt_only(
     if (i >= kOptimalBranchOnlyStartStep && d0.empty()) {
         const std::string d0_path = options.pathname + std::to_string(i - 2) + ".book";
         const std::string d1_path = options.pathname + std::to_string(i - 1) + ".book";
-        if ((!fs::exists(d0_path) && !fs::exists(d0_path + ".7z")) ||
-            (!fs::exists(d1_path) && !fs::exists(d1_path + ".7z"))) {
+        if ((!fs::exists(d0_path) && !is_readable_temp_archive(d0_path + ".7z")) ||
+            (!fs::exists(d1_path) && !is_readable_temp_archive(d1_path + ".7z"))) {
             return false;
         }
         const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);

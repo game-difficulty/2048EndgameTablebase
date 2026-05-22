@@ -183,6 +183,9 @@ bool is_valid_restart_file(const std::string &path, uint64_t alignment) {
     if (ec || size == 0U) {
         return false;
     }
+    if (path.size() >= 3U && path.compare(path.size() - 3U, 3U, ".7z") == 0) {
+        return is_readable_temp_archive(path);
+    }
     return alignment == 0U || (size % alignment) == 0U;
 }
 

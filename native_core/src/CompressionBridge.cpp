@@ -131,8 +131,16 @@ bool write_temp_byte_archive(const std::string &archive_path, const std::vector<
     if (compressed.empty() && !data.empty()) {
         return false;
     }
-    FileIOUtils::write_binary_bytes(archive_path, compressed);
-    return true;
+    const std::string temp_path = FileIOUtils::temp_write_path(archive_path);
+    FileIOUtils::write_binary_bytes(temp_path, compressed);
+    try {
+        FileIOUtils::finalize_temporary_file(temp_path, archive_path);
+        return true;
+    } catch (...) {
+        std::error_code ec;
+        fs::remove(temp_path, ec);
+        return false;
+    }
 }
 
 bool write_temp_byte_spans_archive(
@@ -204,4 +212,8 @@ std::vector<uint64_t> read_temp_uint64_archive(const std::string &archive_path) 
         std::memcpy(result.data(), decompressed.data(), decompressed.size());
     }
     return result;
+}
+
+bool is_readable_temp_archive(const std::string &archive_path) {
+    return is_readable_7z_or_xz_archive(archive_path);
 }

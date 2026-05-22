@@ -28,6 +28,7 @@ bool compress_spans_to_7z_archive_streaming(
     int lvl = 1
 );
 bool decompress_7z_archive_to_bytes_streaming(const std::string &archive_path, std::vector<uint8_t> &output);
+bool is_readable_7z_or_xz_archive(const std::string &archive_path);
 
 class SevenZipArchiveWriter {
 public:
