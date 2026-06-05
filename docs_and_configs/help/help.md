@@ -2,8 +2,8 @@
 # User Manual
 
 **Author**: game_difficulty
-**Version**: 12.0.1
-**Date**: 2026.5.16
+**Version**: 12.0.4
+**Date**: 2026.6.5
 
 ---
 
