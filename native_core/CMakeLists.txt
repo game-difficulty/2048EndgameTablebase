@@ -172,6 +172,7 @@ nanobind_add_module(formation_core ${FORMATION_CORE_SOURCES})
 target_link_libraries(formation_core PRIVATE common_config OpenMP::OpenMP_CXX)
 
 set(ADAPTIVE_INDEX_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_adaptive_index.cpp")
+set(BC_FAMILY_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_family.cpp")
 
 if(NATIVE_BUILD_TESTS)
     if(NOT EXISTS "${ADAPTIVE_INDEX_TEST_SOURCE}")
@@ -180,11 +181,22 @@ if(NATIVE_BUILD_TESTS)
             "Test sources are optional and are not required for normal Linux or Windows builds."
         )
     endif()
+    if(NOT EXISTS "${BC_FAMILY_TEST_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${BC_FAMILY_TEST_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
     add_executable(adaptive_index_test
         src/AdaptiveIndex.cpp
         tests/test_adaptive_index.cpp
     )
     target_link_libraries(adaptive_index_test PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_family_test
+        tests_src/test_bc_family.cpp
+    )
+    target_link_libraries(bc_family_test PRIVATE common_config)
 endif()
 
 add_library(bookgen_native SHARED
