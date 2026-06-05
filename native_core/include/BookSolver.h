@@ -43,6 +43,13 @@ void run_pattern_build_exad_cpp(
     const RunOptions &options
 );
 
+void ensure_exad_temp_through_cpp(
+    const std::vector<uint64_t> &arr_init,
+    const AdvancedPatternSpec &spec,
+    const RunOptions &options,
+    int target_step
+);
+
 void run_pattern_solve_exad_cpp(
     const std::vector<uint64_t> &arr_init,
     const AdvancedPatternSpec &spec,

@@ -1382,7 +1382,10 @@ void solve_optimal_success_rate_arr_into(
                 workspace.derived_boards
             );
             match_arr_into(workspace.moved_boards, workspace, workspace.ranked_array);
-            if (use_match_cache && store_if_empty && match_cache.try_claim_empty(hashed_match_ind)) {
+            if (use_match_cache &&
+                store_if_empty &&
+                workspace.ranked_array.size() == derive_size &&
+                match_cache.try_claim_empty(hashed_match_ind)) {
                 match_cache.publish(hashed_match_ind, match_ind, workspace.ranked_array);
                 return {match_cache.row(hashed_match_ind), derive_size};
             }

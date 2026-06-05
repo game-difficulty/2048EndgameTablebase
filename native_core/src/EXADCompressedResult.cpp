@@ -837,6 +837,192 @@ CompressedIndex read_index(const std::string& path) {
     return index;
 }
 
+std::vector<uint8_t> read_range_from(std::ifstream& in, uint64_t offset, uint64_t size, const char* what);
+
+template <typename T>
+EXAD::SolvedLayer<T> read_compressed_layer_impl(
+    const std::string& path,
+    EXAD::DTypeMode expected_mode,
+    const EXAD::Luts& luts) {
+    CompressedIndex index = read_index(path);
+    const EXAD::DTypeMode file_mode = static_cast<EXAD::DTypeMode>(index.header.dtype_mode);
+    if (file_mode != expected_mode || !EXAD::dtype_matches_type<T>(file_mode) ||
+        index.header.value_size != sizeof(T)) {
+        throw std::runtime_error("EXAD compressed layer dtype mismatch: " + path);
+    }
+    if (index.header.lut_signature != 0 && luts.config_signature != 0 &&
+        index.header.lut_signature != luts.config_signature) {
+        throw std::runtime_error("EXAD compressed layer LUT signature mismatch: " + path);
+    }
+    if (index.header.physical_pattern_signature != luts.physical_pattern_signature ||
+        index.header.logical_pattern_signature != luts.logical_pattern_signature ||
+        index.header.physical_transform != luts.physical_transform ||
+        index.header.inverse_physical_transform != luts.inverse_physical_transform) {
+        throw std::runtime_error("EXAD compressed layer physical metadata mismatch: " + path);
+    }
+
+    EXAD::SolvedLayer<T> layer;
+    layer.dtype_mode = file_mode;
+    layer.original_board_sum = index.header.original_board_sum;
+    layer.threshold_bits = index.header.threshold_bits;
+    layer.lut_signature = index.header.lut_signature;
+    layer.physical_transform = index.header.physical_transform;
+    layer.inverse_physical_transform = index.header.inverse_physical_transform;
+    layer.logical_pattern_signature = index.header.logical_pattern_signature;
+    layer.physical_pattern_signature = index.header.physical_pattern_signature;
+    layer.live_board_count = index.header.live_board_count;
+    layer.success_values.resize(static_cast<size_t>(index.header.success_value_count));
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("failed to open EXAD compressed layer: " + path);
+    }
+
+    for (size_t slot = 0; slot < kSlotCount; ++slot) {
+        const SlotDirEntry& dir = index.slots[slot];
+        layer.row_width[slot] = dir.row_width;
+        layer.slot_row_base[slot] = dir.slot_row_base;
+        layer.slot_value_base[slot] = dir.slot_value_base;
+        EXAD::BoardSet& set = layer.sets[slot];
+        set.threshold_bits = index.header.threshold_bits;
+        set.live_board_count = dir.live_board_count;
+        set.buckets.reserve(static_cast<size_t>(dir.bucket_count));
+    }
+
+    for (const BucketBlockDirEntry& dir : index.bucket_dirs) {
+        if (dir.slot >= kSlotCount) {
+            throw std::runtime_error("EXAD compressed bucket block slot out of range: " + path);
+        }
+        auto compressed = read_range_from(
+            in,
+            dir.compressed_offset,
+            dir.compressed_size,
+            "EXAD compressed bucket block"
+        );
+        auto raw = decompress_block_or_throw(compressed.data(), compressed.size(), dir.raw_size);
+        if (raw.size() < sizeof(BucketBlockRawHeader)) {
+            throw std::runtime_error("EXAD compressed bucket block is too small: " + path);
+        }
+
+        const uint8_t* p = raw.data();
+        const auto block_header = load_unaligned<BucketBlockRawHeader>(p);
+        p += sizeof(BucketBlockRawHeader);
+        if (block_header.bucket_count != dir.bucket_count) {
+            throw std::runtime_error("EXAD compressed bucket block count mismatch: " + path);
+        }
+        const size_t count = static_cast<size_t>(block_header.bucket_count);
+        const uint64_t min_payload = sizeof(BucketBlockRawHeader) +
+            count * sizeof(uint64_t) +
+            count * sizeof(uint32_t) +
+            (count + 1U) * sizeof(uint32_t) +
+            block_header.small_bitmap_bytes +
+            static_cast<uint64_t>(block_header.large_bitmap_words) * sizeof(uint64_t);
+        if (min_payload > raw.size()) {
+            throw std::runtime_error("EXAD compressed bucket block payload is truncated: " + path);
+        }
+
+        const uint8_t* keys = p;
+        p += count * sizeof(uint64_t);
+        const uint8_t* dense_offsets = p;
+        p += count * sizeof(uint32_t);
+        const uint8_t* bitmap_offsets = p;
+        p += (count + 1U) * sizeof(uint32_t);
+        const uint8_t* small_payload = p;
+        p += block_header.small_bitmap_bytes;
+        const uint8_t* large_payload = p;
+
+        EXAD::BoardSet& set = layer.sets[dir.slot];
+        for (size_t i = 0; i < count; ++i) {
+            EXAD::BucketEntry bucket{};
+            bucket.key = load_unaligned<uint64_t>(keys + i * sizeof(uint64_t));
+            bucket.dense_offset = block_header.first_dense_offset +
+                load_unaligned<uint32_t>(dense_offsets + i * sizeof(uint32_t));
+            const uint32_t group = EXAD::lut_group_index(EXAD::bucket_key_semantic_sum(bucket.key));
+            if (group >= luts.size_table.size()) {
+                throw std::runtime_error("EXAD compressed bucket semantic group is outside LUT: " + path);
+            }
+            const uint32_t valid_count = luts.size_table[group];
+            const uint32_t local_bitmap_offset =
+                load_unaligned<uint32_t>(bitmap_offsets + i * sizeof(uint32_t));
+            set.exact_bitmap_bits += valid_count;
+            if (valid_count <= layer.threshold_bits) {
+                const size_t bytes = ZMaskFrozen::bytes_for_bits(valid_count);
+                if (static_cast<uint64_t>(local_bitmap_offset) + bytes > block_header.small_bitmap_bytes) {
+                    throw std::runtime_error("EXAD compressed small bitmap offset is outside block: " + path);
+                }
+                bucket.bitmap_offset = static_cast<uint32_t>(set.small_bitmap_bytes.size());
+                const uint8_t* begin = small_payload + local_bitmap_offset;
+                set.small_bitmap_bytes.insert(set.small_bitmap_bytes.end(), begin, begin + bytes);
+                set.aligned_bitmap_bits += static_cast<uint64_t>(bytes) * 8ULL;
+            } else {
+                const size_t words = ZMaskFrozen::words_for_bits(valid_count);
+                if (static_cast<uint64_t>(local_bitmap_offset) + words > block_header.large_bitmap_words) {
+                    throw std::runtime_error("EXAD compressed large bitmap offset is outside block: " + path);
+                }
+                bucket.bitmap_offset = static_cast<uint32_t>(set.large_bitmap_words.size());
+                const uint8_t* begin = large_payload +
+                    static_cast<uint64_t>(local_bitmap_offset) * sizeof(uint64_t);
+                const size_t old_size = set.large_bitmap_words.size();
+                set.large_bitmap_words.resize(old_size + words);
+                std::memcpy(
+                    set.large_bitmap_words.data() + old_size,
+                    begin,
+                    words * sizeof(uint64_t)
+                );
+                set.aligned_bitmap_bits += static_cast<uint64_t>(words) * 64ULL;
+            }
+            set.buckets.push_back(bucket);
+        }
+    }
+
+    for (size_t slot = 0; slot < kSlotCount; ++slot) {
+        EXAD::BoardSet& set = layer.sets[slot];
+        const SlotDirEntry& dir = index.slots[slot];
+        if (set.buckets.size() != dir.bucket_count) {
+            throw std::runtime_error("EXAD compressed slot bucket count mismatch: " + path);
+        }
+    }
+
+    std::vector<ValueBlockDirEntry> value_dirs(static_cast<size_t>(index.header.value_block_count));
+    if (!value_dirs.empty()) {
+        in.seekg(static_cast<std::streamoff>(index.header.value_dir_offset), std::ios::beg);
+        if (!in) {
+            throw std::runtime_error("failed to seek EXAD compressed value dir: " + path);
+        }
+        read_exact(
+            in,
+            value_dirs.data(),
+            value_dirs.size() * sizeof(ValueBlockDirEntry),
+            "EXAD compressed value dir"
+        );
+    }
+    auto* value_bytes = reinterpret_cast<uint8_t*>(layer.success_values.data());
+    for (const ValueBlockDirEntry& dir : value_dirs) {
+        if (dir.value_size != sizeof(T) ||
+            dir.first_value_index + dir.value_count > index.header.success_value_count) {
+            throw std::runtime_error("EXAD compressed value block range mismatch: " + path);
+        }
+        auto compressed = read_range_from(
+            in,
+            dir.compressed_offset,
+            dir.compressed_size,
+            "EXAD compressed value block"
+        );
+        auto raw = decompress_block_or_throw(compressed.data(), compressed.size(), dir.raw_size);
+        const uint64_t expected_raw = static_cast<uint64_t>(dir.value_count) * sizeof(T);
+        if (raw.size() != expected_raw) {
+            throw std::runtime_error("EXAD compressed value block raw size mismatch: " + path);
+        }
+        std::memcpy(
+            value_bytes + dir.first_value_index * sizeof(T),
+            raw.data(),
+            raw.size()
+        );
+    }
+
+    return layer;
+}
+
 template <typename T>
 T read_one_from(std::ifstream& in, uint64_t offset, const char* what) {
     in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
@@ -1575,6 +1761,31 @@ template CompressStats compress_exad_solved_layer_to_result_from_memory<double>(
     uint32_t,
     uint32_t,
     int);
+
+template <typename T>
+EXAD::SolvedLayer<T> read_exad_compressed_layer(
+    const std::string& compressed_path,
+    EXAD::DTypeMode expected_mode,
+    const EXAD::Luts& luts) {
+    return read_compressed_layer_impl<T>(compressed_path, expected_mode, luts);
+}
+
+template EXAD::SolvedLayer<uint32_t> read_exad_compressed_layer<uint32_t>(
+    const std::string&,
+    EXAD::DTypeMode,
+    const EXAD::Luts&);
+template EXAD::SolvedLayer<uint64_t> read_exad_compressed_layer<uint64_t>(
+    const std::string&,
+    EXAD::DTypeMode,
+    const EXAD::Luts&);
+template EXAD::SolvedLayer<float> read_exad_compressed_layer<float>(
+    const std::string&,
+    EXAD::DTypeMode,
+    const EXAD::Luts&);
+template EXAD::SolvedLayer<double> read_exad_compressed_layer<double>(
+    const std::string&,
+    EXAD::DTypeMode,
+    const EXAD::Luts&);
 
 ColdLookupResult lookup_exad_cold(
     const std::string& compressed_path,

@@ -522,30 +522,6 @@ bool exad_solved_output_exists(const RunOptions &options, int step) {
         fs::exists(options.pathname + std::to_string(step) + EXADCompressedResult::kCompressedLayerFileExtension);
 }
 
-bool exad_solve_phase_started(const RunOptions &options) {
-    for (int step = 0; step < options.steps; ++step) {
-        if (exad_solved_output_exists(options, step)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-int exad_temp_end_step_for_solve_resume(const RunOptions &options) {
-    const int last_solve_step = options.steps - 3;
-    if (last_solve_step < 0) {
-        return -1;
-    }
-    int first_solved = last_solve_step + 1;
-    while (first_solved > 0 && exad_solved_output_exists(options, first_solved - 1)) {
-        --first_solved;
-    }
-    if (first_solved == last_solve_step + 1) {
-        return -2;
-    }
-    return first_solved - 1;
-}
-
 ResumeState initialize_or_resume(
     const std::vector<uint64_t> &masked_seed,
     uint32_t ini_board_sum,
@@ -586,18 +562,24 @@ ResumeState initialize_or_resume(
         append_stats(options, init);
     }
 
-    int first_missing = 1;
-    while (first_missing <= max_required_step &&
-           EXAD::layer_file_exists(EXAD::layer_file_path(options.pathname, first_missing))) {
-        ++first_missing;
-    }
-    if (first_missing > max_required_step) {
+    if (EXAD::layer_file_exists(EXAD::layer_file_path(options.pathname, max_required_step))) {
         state.complete = true;
-        state.start_step = max_required_step + 1;
+        state.start_step = max_required_step;
         return state;
     }
 
-    if (first_missing <= 1) {
+    int anchor = 0;
+    for (int step = max_required_step - 1; step >= 0; --step) {
+        if (!EXAD::layer_file_exists(EXAD::layer_file_path(options.pathname, step))) {
+            continue;
+        }
+        if (step == 0 || EXAD::layer_file_exists(EXAD::layer_file_path(options.pathname, step - 1))) {
+            anchor = step;
+            break;
+        }
+    }
+
+    if (anchor == 0) {
         state.start_step = 1;
         state.current = EXAD::read_layer_file(layer0_path, io_config);
         if (!EXAD::physical_metadata_matches(state.current, luts)) {
@@ -606,7 +588,7 @@ ResumeState initialize_or_resume(
         return state;
     }
 
-    state.start_step = first_missing - 1;
+    state.start_step = anchor;
     state.current = EXAD::read_layer_file(EXAD::layer_file_path(options.pathname, state.start_step - 1), io_config);
     if (!EXAD::physical_metadata_matches(state.current, luts)) {
         throw std::runtime_error("EXAD temp layer physical metadata does not match LUT");
@@ -621,12 +603,12 @@ ResumeState initialize_or_resume(
 
 } // namespace
 
-void run_pattern_build_exad_cpp(
+void ensure_exad_temp_through_cpp(
     const std::vector<uint64_t> &arr_init,
     const AdvancedPatternSpec &spec,
-    const RunOptions &options
+    const RunOptions &options,
+    int target_step
 ) {
-    FormationProgress::reset_build_progress(build_progress_total(options));
     ensure_stats_header(options);
     const int num_threads = options.num_threads > 0 ? options.num_threads :
 #if defined(_OPENMP)
@@ -644,13 +626,8 @@ void run_pattern_build_exad_cpp(
         board = FormationAD::mask_board(board);
     }
 
-    const bool solve_phase_started = exad_solve_phase_started(options);
-    int max_required_step = options.steps - 2;
-    if (solve_phase_started) {
-        max_required_step = exad_temp_end_step_for_solve_resume(options);
-    }
-    if (max_required_step < -1) {
-        run_pattern_solve_exad_cpp(arr_init, spec, options);
+    int max_required_step = std::clamp(target_step, 0, std::max(0, options.steps - 2));
+    if (options.steps <= 0 || target_step < 0) {
         return;
     }
 
@@ -666,7 +643,6 @@ void run_pattern_build_exad_cpp(
         max_required_step
     );
     if (resume.complete) {
-        run_pattern_solve_exad_cpp(arr_init, spec, options);
         return;
     }
 
@@ -785,12 +761,14 @@ void run_pattern_build_exad_cpp(
         record.validate_seconds = wall_time_seconds() - validate0;
 
         const double write0 = wall_time_seconds();
-        EXAD::write_layer_file(
-            EXAD::layer_file_path(options.pathname, step),
-            merged,
-            io_config,
-            options.compress_temp_files
-        );
+        if (!exad_solved_output_exists(options, step)) {
+            EXAD::write_layer_file(
+                EXAD::layer_file_path(options.pathname, step),
+                merged,
+                io_config,
+                options.compress_temp_files
+            );
+        }
         record.write_seconds = wall_time_seconds() - write0;
         append_stats(options, record);
 
@@ -824,5 +802,14 @@ void run_pattern_build_exad_cpp(
     }
 
     append_stats(options, total);
+}
+
+void run_pattern_build_exad_cpp(
+    const std::vector<uint64_t> &arr_init,
+    const AdvancedPatternSpec &spec,
+    const RunOptions &options
+) {
+    FormationProgress::reset_build_progress(build_progress_total(options));
+    ensure_exad_temp_through_cpp(arr_init, spec, options, options.steps - 2);
     run_pattern_solve_exad_cpp(arr_init, spec, options);
 }

@@ -85,6 +85,12 @@ CompressStats compress_prefix36_layer_view_to_ex_result(
     int compression_level = 5
 );
 
+void decompress_ex_result_to_zbook(
+    const std::string &compressed_path,
+    const std::string &zlut_path,
+    const std::string &output_path
+);
+
 ColdLookupResult lookup_cold(
     const std::string &compressed_path,
     const std::string &zlut_path,

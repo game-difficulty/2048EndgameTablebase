@@ -60,6 +60,12 @@ CompressStats compress_exad_solved_layer_to_result_from_memory(
     uint32_t success_block_values = 65536u,
     int compression_level = 5);
 
+template <typename T>
+EXAD::SolvedLayer<T> read_exad_compressed_layer(
+    const std::string& compressed_path,
+    EXAD::DTypeMode expected_mode,
+    const EXAD::Luts& luts);
+
 ColdLookupResult lookup_exad_cold(
     const std::string& compressed_path,
     const std::string& exadlut_path,

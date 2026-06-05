@@ -1576,6 +1576,184 @@ CompressStats compress_prefix36_layer_view_impl(
     return stats;
 }
 
+void decompress_prefix36_result_to_zbook_impl(
+    const std::string &compressed_path,
+    const std::string &zlut_path,
+    const std::string &output_path
+) {
+    const Prefix36CompressedFileIndex index = read_prefix36_compressed_index(compressed_path);
+    const Prefix36LutRuntime lut = read_prefix36_lut_runtime(zlut_path);
+    if (index.header.physical_transform != lut.physical_transform ||
+        index.header.inverse_physical_transform != lut.inverse_physical_transform ||
+        index.header.logical_pattern_signature != lut.logical_pattern_signature ||
+        index.header.physical_pattern_signature != lut.physical_pattern_signature) {
+        throw std::runtime_error("EX prefix36 physical pattern metadata does not match compressed layer");
+    }
+    Prefix36LayerHeader header{};
+    std::memcpy(header.magic, kPrefix36LayerMagic, sizeof(kPrefix36LayerMagic));
+    header.version = kPrefix36LayerVersion;
+    header.success_kind = index.header.success_kind;
+    header.layer_sum = index.header.layer_sum;
+    header.threshold_bits = index.header.threshold_bits;
+    header.dtype_mode = index.header.dtype_mode;
+    header.physical_transform = index.header.physical_transform;
+    header.inverse_physical_transform = index.header.inverse_physical_transform;
+    header.logical_pattern_signature = index.header.logical_pattern_signature;
+    header.physical_pattern_signature = index.header.physical_pattern_signature;
+    header.bucket_count = index.header.bucket_count;
+    header.success_value_count = index.header.success_value_count;
+    header.live_board_count = index.header.live_board_count;
+    header.value_size = index.header.value_size;
+
+    std::vector<uint64_t> bucket_keys(static_cast<size_t>(header.bucket_count));
+    std::vector<uint32_t> bitmap_offsets(static_cast<size_t>(header.bucket_count));
+    std::vector<uint32_t> success_offsets(static_cast<size_t>(header.bucket_count));
+    std::vector<uint8_t> small_bitmap_bytes;
+    std::vector<uint64_t> large_bitmap_words;
+    std::vector<uint8_t> success_bytes(
+        static_cast<size_t>(header.success_value_count * header.value_size)
+    );
+
+    std::ifstream in(compressed_path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("failed to open EX prefix36 compressed result: " + compressed_path);
+    }
+
+    for (const Prefix36BucketBlockEntry &entry : index.bucket_dir) {
+        if (entry.bucket_count == 0U) {
+            continue;
+        }
+        std::vector<uint8_t> raw = decompress_block_or_throw_from(
+            in,
+            compressed_path,
+            entry.compressed_offset,
+            entry.compressed_size,
+            entry.raw_size
+        );
+        if (raw.size() < sizeof(Prefix36BucketBlockRawHeader)) {
+            throw std::runtime_error("EX prefix36 compressed bucket block is truncated");
+        }
+        const Prefix36BucketBlockRawHeader raw_header =
+            load_unaligned<Prefix36BucketBlockRawHeader>(raw.data());
+        if (raw_header.bucket_count != entry.bucket_count) {
+            throw std::runtime_error("EX prefix36 compressed bucket block count mismatch");
+        }
+        const uint8_t *cursor = raw.data() + sizeof(Prefix36BucketBlockRawHeader);
+        const uint8_t *end = raw.data() + raw.size();
+        const size_t count = raw_header.bucket_count;
+        const size_t keys_bytes = count * sizeof(uint64_t);
+        const size_t offsets_bytes = count * sizeof(uint32_t);
+        const size_t local_offsets_bytes = (count + 1U) * sizeof(uint32_t);
+        if (cursor + keys_bytes + offsets_bytes + local_offsets_bytes > end) {
+            throw std::runtime_error("EX prefix36 compressed bucket block metadata mismatch");
+        }
+        const uint8_t *keys_ptr = cursor;
+        cursor += keys_bytes;
+        const uint8_t *success_offsets_ptr = cursor;
+        cursor += offsets_bytes;
+        const uint8_t *local_bitmap_offsets_ptr = cursor;
+        cursor += local_offsets_bytes;
+        const uint8_t *small_payload = cursor;
+        cursor += raw_header.small_bitmap_bytes;
+        const uint8_t *large_payload = cursor;
+        cursor += static_cast<size_t>(raw_header.large_bitmap_words) * sizeof(uint64_t);
+        if (cursor != end) {
+            throw std::runtime_error("EX prefix36 compressed bucket block payload size mismatch");
+        }
+
+        const uint32_t first = entry.first_bucket_index;
+        if (static_cast<uint64_t>(first) + count > header.bucket_count) {
+            throw std::runtime_error("EX prefix36 compressed bucket block range mismatch");
+        }
+        std::memcpy(bucket_keys.data() + first, keys_ptr, keys_bytes);
+        std::memcpy(success_offsets.data() + first, success_offsets_ptr, offsets_bytes);
+        const uint64_t old_small = small_bitmap_bytes.size();
+        const uint64_t old_large_words = large_bitmap_words.size();
+        for (uint32_t local = 0; local < raw_header.bucket_count; ++local) {
+            const uint64_t key = load_unaligned<uint64_t>(keys_ptr + static_cast<size_t>(local) * sizeof(uint64_t));
+            const uint32_t group = static_cast<uint32_t>((key & ((1ULL << 18U) - 1ULL)) >> 1U);
+            const uint32_t local_offset = load_unaligned<uint32_t>(
+                local_bitmap_offsets_ptr + static_cast<size_t>(local) * sizeof(uint32_t)
+            );
+            const uint32_t global = first + local;
+            const uint32_t valid_count = group < lut.size_table.size() ? lut.size_table[group] : 0U;
+            if (valid_count <= header.threshold_bits) {
+                bitmap_offsets[global] = static_cast<uint32_t>(old_small + local_offset);
+            } else {
+                bitmap_offsets[global] = static_cast<uint32_t>(old_large_words + local_offset);
+            }
+        }
+
+        small_bitmap_bytes.resize(old_small + raw_header.small_bitmap_bytes);
+        if (raw_header.small_bitmap_bytes != 0U) {
+            std::memcpy(small_bitmap_bytes.data() + old_small, small_payload, raw_header.small_bitmap_bytes);
+        }
+        large_bitmap_words.resize(old_large_words + raw_header.large_bitmap_words);
+        if (raw_header.large_bitmap_words != 0U) {
+            std::memcpy(
+                large_bitmap_words.data() + old_large_words,
+                large_payload,
+                static_cast<size_t>(raw_header.large_bitmap_words) * sizeof(uint64_t)
+            );
+        }
+    }
+
+    for (const Prefix36SuccessBlockEntry &entry : index.success_dir) {
+        if (entry.value_count == 0U) {
+            continue;
+        }
+        if (entry.value_size != header.value_size ||
+            entry.first_value_index + entry.value_count > header.success_value_count) {
+            throw std::runtime_error("EX prefix36 compressed success block range mismatch");
+        }
+        std::vector<uint8_t> raw = decompress_block_or_throw_from(
+            in,
+            compressed_path,
+            entry.compressed_offset,
+            entry.compressed_size,
+            entry.raw_size
+        );
+        const uint64_t offset = entry.first_value_index * header.value_size;
+        const uint64_t bytes = static_cast<uint64_t>(entry.value_count) * header.value_size;
+        if (raw.size() != bytes || offset + bytes > success_bytes.size()) {
+            throw std::runtime_error("EX prefix36 compressed success block payload mismatch");
+        }
+        std::memcpy(success_bytes.data() + offset, raw.data(), static_cast<size_t>(bytes));
+    }
+
+    header.small_bitmap_bytes = small_bitmap_bytes.size();
+    header.large_bitmap_words = large_bitmap_words.size();
+
+    std::fstream out(output_path, std::ios::binary | std::ios::out | std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error("failed to write EX prefix36 zbook: " + output_path);
+    }
+    out.write(reinterpret_cast<const char *>(&header), sizeof(header));
+    if (!bucket_keys.empty()) {
+        out.write(reinterpret_cast<const char *>(bucket_keys.data()),
+                  static_cast<std::streamsize>(bucket_keys.size() * sizeof(uint64_t)));
+        out.write(reinterpret_cast<const char *>(bitmap_offsets.data()),
+                  static_cast<std::streamsize>(bitmap_offsets.size() * sizeof(uint32_t)));
+        out.write(reinterpret_cast<const char *>(success_offsets.data()),
+                  static_cast<std::streamsize>(success_offsets.size() * sizeof(uint32_t)));
+    }
+    if (!small_bitmap_bytes.empty()) {
+        out.write(reinterpret_cast<const char *>(small_bitmap_bytes.data()),
+                  static_cast<std::streamsize>(small_bitmap_bytes.size()));
+    }
+    if (!large_bitmap_words.empty()) {
+        out.write(reinterpret_cast<const char *>(large_bitmap_words.data()),
+                  static_cast<std::streamsize>(large_bitmap_words.size() * sizeof(uint64_t)));
+    }
+    if (!success_bytes.empty()) {
+        out.write(reinterpret_cast<const char *>(success_bytes.data()),
+                  static_cast<std::streamsize>(success_bytes.size()));
+    }
+    if (!out) {
+        throw std::runtime_error("failed to write EX prefix36 zbook: " + output_path);
+    }
+}
+
 ColdLookupResult lookup_prefix36_compressed_cold(
     const std::string &compressed_path,
     const std::string &zlut_path,
@@ -2039,6 +2217,28 @@ CompressStats compress_prefix36_layer_view_to_ex_result(
         success_block_values,
         compression_level
     );
+}
+
+void decompress_ex_result_to_zbook(
+    const std::string &compressed_path,
+    const std::string &zlut_path,
+    const std::string &output_path
+) {
+    if (!is_prefix36_compressed_file(compressed_path)) {
+        throw std::runtime_error("EX decompression only supports current prefix36 compressed files");
+    }
+    const std::string temp_path = output_path + ".tmp";
+    std::error_code ec;
+    fs::remove(temp_path, ec);
+    decompress_prefix36_result_to_zbook_impl(compressed_path, zlut_path, temp_path);
+    fs::rename(temp_path, output_path, ec);
+    if (ec) {
+        fs::remove(output_path, ec);
+        fs::rename(temp_path, output_path, ec);
+    }
+    if (ec) {
+        throw std::runtime_error("failed to finalize EX decompressed zbook: " + output_path);
+    }
 }
 
 ColdLookupResult lookup_cold(
