@@ -334,11 +334,8 @@ void test_parallel_and_small_batch_match_scalar_output() {
     one_thread.num_threads = 1;
     one_thread.canonical_batch_size = 3U;
     one_thread.pending_insert_buffer_size = 3U;
-    one_thread.dynamic_finalize_mode = BC::BCDynamicFinalizeMode::PerCellSort;
     BC::BCResidentGenerationOptions two_threads = one_thread;
     two_threads.num_threads = 2;
-    BC::BCResidentGenerationOptions global_finalize = two_threads;
-    global_finalize.dynamic_finalize_mode = BC::BCDynamicFinalizeMode::GlobalSort;
 
     const BCResidentGenerationResult generated_one =
         BC::generate_resident_position_layer(
@@ -354,17 +351,9 @@ void test_parallel_and_small_batch_match_scalar_output() {
             std::vector<BCResidentGenerationSource>{source2},
             two_threads
         );
-    const BCResidentGenerationResult generated_global =
-        BC::generate_resident_position_layer(
-            lut,
-            target_axis,
-            std::vector<BCResidentGenerationSource>{source2},
-            global_finalize
-        );
 
     const BCPositionLayerReader reader_one(generated_one.position_bytes, lut);
     const BCPositionLayerReader reader_two(generated_two.position_bytes, lut);
-    const BCPositionLayerReader reader_global(generated_global.position_bytes, lut);
     check(
         collect_generated_candidates(reader_one) == collect_generated_candidates(reader_two),
         "num_threads=1 and num_threads=2 generation outputs should match"
@@ -372,14 +361,6 @@ void test_parallel_and_small_batch_match_scalar_output() {
     check(
         descriptor_success_rows_sum(reader_one) == descriptor_success_rows_sum(reader_two),
         "parallel generation output row counts should match"
-    );
-    check(
-        collect_generated_candidates(reader_two) == collect_generated_candidates(reader_global),
-        "global-sort and per-cell-sort finalize outputs should match"
-    );
-    check(
-        descriptor_success_rows_sum(reader_two) == descriptor_success_rows_sum(reader_global),
-        "per-cell finalize output row count should match global finalize"
     );
 }
 

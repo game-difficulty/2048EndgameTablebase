@@ -39,7 +39,6 @@ using BC::BCPositionLayerWriter;
 using BC::BCResidentGenerationOptions;
 using BC::BCResidentGenerationResult;
 using BC::BCResidentGenerationSource;
-using BC::BCDynamicFinalizeMode;
 using BC::CellId;
 
 struct Args {
@@ -55,7 +54,6 @@ struct Args {
     bool detail_timing = true;
     bool file_backed = false;
     std::filesystem::path file_dir = std::filesystem::path("tmp") / "bc_generation_compute_files";
-    BCDynamicFinalizeMode dynamic_finalize_mode = BCDynamicFinalizeMode::PerCellSort;
 };
 
 struct ResidentLayer {
@@ -155,26 +153,6 @@ uint32_t parse_rank_to_extra(const std::string &value) {
     return 1U << rank;
 }
 
-BCDynamicFinalizeMode parse_dynamic_finalize_mode(const std::string &value) {
-    if (value == "global" || value == "global-sort") {
-        return BCDynamicFinalizeMode::GlobalSort;
-    }
-    if (value == "per-cell" || value == "per-cell-sort") {
-        return BCDynamicFinalizeMode::PerCellSort;
-    }
-    throw std::invalid_argument("--dynamic-finalize must be global or per-cell");
-}
-
-const char *dynamic_finalize_mode_name(BCDynamicFinalizeMode mode) {
-    switch (mode) {
-    case BCDynamicFinalizeMode::GlobalSort:
-        return "global-sort";
-    case BCDynamicFinalizeMode::PerCellSort:
-        return "per-cell-sort";
-    }
-    return "unknown";
-}
-
 Args parse_args(int argc, char **argv) {
     Args args;
     for (int i = 1; i < argc; ++i) {
@@ -209,8 +187,6 @@ Args parse_args(int argc, char **argv) {
             args.file_backed = true;
         } else if (key == "--file-dir") {
             args.file_dir = require_value("--file-dir");
-        } else if (key == "--dynamic-finalize") {
-            args.dynamic_finalize_mode = parse_dynamic_finalize_mode(require_value("--dynamic-finalize"));
         } else {
             throw std::invalid_argument("unknown argument: " + key);
         }
@@ -823,7 +799,6 @@ int main(int argc, char **argv) {
         options.num_threads = args.num_threads;
         options.canonical_batch_size = args.batch_size;
         options.pending_insert_buffer_size = args.pending_buffer;
-        options.dynamic_finalize_mode = args.dynamic_finalize_mode;
         options.family_tile_sum_values = &tile_sums;
         options.collect_timing = args.detail_timing;
         options.success_target_rank = static_cast<int>(args.target_rank);
@@ -868,7 +843,7 @@ int main(int argc, char **argv) {
             << " num_threads=" << args.num_threads
             << " batch_size=" << args.batch_size
             << " pending_buffer=" << args.pending_buffer
-            << " dynamic_finalize=" << dynamic_finalize_mode_name(args.dynamic_finalize_mode)
+            << " dynamic_finalize=per-cell-sort"
             << " success_target_rank=" << args.target_rank
             << " success_check_min_source_layer_sum=" << success_check_min_source_layer_sum
             << " verify_layer_rows=" << (args.verify_layer_rows ? 1 : 0)

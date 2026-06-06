@@ -11,11 +11,6 @@
 
 namespace BC {
 
-enum class BCDynamicFinalizeMode : uint8_t {
-    GlobalSort = 0U,
-    PerCellSort = 1U,
-};
-
 struct BCResidentGenerationSource {
     const BCPositionLayerReader *position = nullptr;
     uint8_t spawn_tile_rank = 0U;
@@ -27,7 +22,6 @@ struct BCResidentGenerationOptions {
     uint32_t canonical_batch_size = 8192U;
     uint32_t pending_insert_buffer_size = 128U;
     int canonical_symm_mode = static_cast<int>(SymmMode::Full);
-    BCDynamicFinalizeMode dynamic_finalize_mode = BCDynamicFinalizeMode::PerCellSort;
     bool collect_timing = true;
     BCCellFinalizeOptions finalize_options = {};
     const std::array<uint32_t, 16U> *family_tile_sum_values = nullptr;

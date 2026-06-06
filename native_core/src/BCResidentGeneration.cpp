@@ -273,8 +273,7 @@ using BCWordSumTable = std::vector<uint32_t>;
 
 [[nodiscard]] std::vector<FinalizedCellPayload> finalize_dynamic_state(
     const BCDynamicState &state,
-    int thread_count,
-    BCDynamicFinalizeMode mode
+    int thread_count
 );
 
 [[nodiscard]] BCWordSumTable build_word_sum_table(
@@ -1320,7 +1319,7 @@ void finalize_dynamic_result(
 
     const double finalize_begin = bc_now_seconds();
     std::vector<FinalizedCellPayload> payloads =
-        finalize_dynamic_state(dynamic_state, thread_count, options.dynamic_finalize_mode);
+        finalize_dynamic_state(dynamic_state, thread_count);
     result.finalize_seconds = bc_now_seconds() - finalize_begin;
 
     for (const FinalizedCellPayload &payload : payloads) {
@@ -1418,36 +1417,6 @@ void bc_append_bitmap_le(std::vector<uint8_t> &buffer, const uint64_t *bitmap, u
     return live;
 }
 
-[[nodiscard]] std::vector<BCDynamicSlotRef> collect_dynamic_slot_refs(const BCDynamicState &state) {
-    std::vector<BCDynamicSlotRef> refs;
-    refs.reserve(state.hash_capacity / 4U);
-    for (uint32_t slot = 0U; slot < state.hash_capacity; ++slot) {
-        const uint32_t cid = state.cell_array[slot].load(std::memory_order_acquire);
-        if (cid == BCDynamicState::kEmptyCell) {
-            continue;
-        }
-        if (cid == BCDynamicState::kPendingCell) {
-            throw std::runtime_error("BC dynamic finalize saw pending cell slot");
-        }
-        refs.push_back(BCDynamicSlotRef{
-            static_cast<CellId>(cid),
-            state.key_array[slot],
-            slot
-        });
-    }
-    std::sort(
-        refs.begin(),
-        refs.end(),
-        [](const BCDynamicSlotRef &lhs, const BCDynamicSlotRef &rhs) {
-            if (lhs.cid != rhs.cid) {
-                return lhs.cid < rhs.cid;
-            }
-            return lhs.key < rhs.key;
-        }
-    );
-    return refs;
-}
-
 [[nodiscard]] BCDynamicGroupedSlotRefs collect_dynamic_slot_refs_by_cell(const BCDynamicState &state) {
     BCDynamicGroupedSlotRefs out;
     out.cell_begin.assign(static_cast<size_t>(state.cell_count) + 1U, 0U);
@@ -1543,30 +1512,11 @@ void set_dynamic_stats(
 
 [[nodiscard]] std::vector<FinalizedCellPayload> finalize_dynamic_state(
     const BCDynamicState &state,
-    int thread_count,
-    BCDynamicFinalizeMode mode
+    int thread_count
 ) {
-    std::vector<BCDynamicSlotRef> refs;
-    std::vector<uint32_t> cell_begin(state.cell_count + 1U, 0U);
-    bool sort_cell_ranges = false;
-    if (mode == BCDynamicFinalizeMode::GlobalSort) {
-        refs = collect_dynamic_slot_refs(state);
-        uint32_t cursor = 0U;
-        for (uint32_t cid = 0U; cid < state.cell_count; ++cid) {
-            cell_begin[cid] = cursor;
-            while (cursor < refs.size() && refs[cursor].cid == cid) {
-                ++cursor;
-            }
-        }
-        cell_begin[state.cell_count] = cursor;
-    } else if (mode == BCDynamicFinalizeMode::PerCellSort) {
-        BCDynamicGroupedSlotRefs grouped = collect_dynamic_slot_refs_by_cell(state);
-        refs = std::move(grouped.refs);
-        cell_begin = std::move(grouped.cell_begin);
-        sort_cell_ranges = true;
-    } else {
-        throw std::invalid_argument("BC resident generation unknown dynamic finalize mode");
-    }
+    BCDynamicGroupedSlotRefs grouped = collect_dynamic_slot_refs_by_cell(state);
+    std::vector<BCDynamicSlotRef> refs = std::move(grouped.refs);
+    std::vector<uint32_t> cell_begin = std::move(grouped.cell_begin);
 
     std::vector<FinalizedCellPayload> payloads(state.cell_count);
 
@@ -1580,15 +1530,13 @@ void set_dynamic_stats(
             if (begin == end) {
                 continue;
             }
-            if (sort_cell_ranges) {
-                std::sort(
-                    refs.begin() + static_cast<std::ptrdiff_t>(begin),
-                    refs.begin() + static_cast<std::ptrdiff_t>(end),
-                    [](const BCDynamicSlotRef &lhs, const BCDynamicSlotRef &rhs) {
-                        return lhs.key < rhs.key;
-                    }
-                );
-            }
+            std::sort(
+                refs.begin() + static_cast<std::ptrdiff_t>(begin),
+                refs.begin() + static_cast<std::ptrdiff_t>(end),
+                [](const BCDynamicSlotRef &lhs, const BCDynamicSlotRef &rhs) {
+                    return lhs.key < rhs.key;
+                }
+            );
 
             FinalizedCellPayload payload;
             payload.buckets.reserve(end - begin);
@@ -1756,7 +1704,7 @@ BCResidentGenerationResult generate_resident_position_layer(
 
     const double finalize_begin = bc_now_seconds();
     std::vector<FinalizedCellPayload> payloads =
-        finalize_dynamic_state(dynamic_state, thread_count, options.dynamic_finalize_mode);
+        finalize_dynamic_state(dynamic_state, thread_count);
     result.finalize_seconds = bc_now_seconds() - finalize_begin;
 
     for (const FinalizedCellPayload &payload : payloads) {
