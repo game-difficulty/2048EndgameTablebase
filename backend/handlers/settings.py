@@ -235,8 +235,8 @@ async def handle_settings_action(
             message_type: str, message_payload: dict[str, Any]
         ) -> None:
             try:
-                await websocket.send_json(
-                    {"type": message_type, "payload": message_payload}
+                await manager.broadcast(
+                    json.dumps({"type": message_type, "payload": message_payload})
                 )
             except Exception:
                 pass
