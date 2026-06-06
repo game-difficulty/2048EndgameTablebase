@@ -75,6 +75,12 @@ struct AggregateStats {
     uint64_t encoded_candidates = 0U;
     uint64_t duplicate_candidates = 0U;
     uint64_t position_bytes = 0U;
+    uint64_t generation_retries = 0U;
+    uint32_t max_dynamic_hash_capacity = 0U;
+    uint64_t dynamic_bucket_slots_used = 0U;
+    uint64_t dynamic_bitmap_words_used = 0U;
+    uint64_t dynamic_bitmap_words_allocated = 0U;
+    uint64_t dynamic_bitmap_words_reserved = 0U;
     uint64_t bucket_count = 0U;
     uint64_t bitmap_live_bits = 0U;
     uint64_t bitmap_logical_bits = 0U;
@@ -664,6 +670,13 @@ void accumulate(
     aggregate.encoded_candidates += result.encoded_candidates;
     aggregate.duplicate_candidates += result.duplicate_candidates;
     aggregate.position_bytes += static_cast<uint64_t>(result.position_bytes.size());
+    aggregate.generation_retries += result.generation_retries;
+    aggregate.max_dynamic_hash_capacity =
+        std::max<uint32_t>(aggregate.max_dynamic_hash_capacity, result.dynamic_hash_capacity);
+    aggregate.dynamic_bucket_slots_used += result.dynamic_bucket_slots_used;
+    aggregate.dynamic_bitmap_words_used += result.dynamic_bitmap_words_used;
+    aggregate.dynamic_bitmap_words_allocated += result.dynamic_bitmap_words_allocated;
+    aggregate.dynamic_bitmap_words_reserved += result.dynamic_bitmap_words_reserved;
     aggregate.bucket_count += bitmap_stats.bucket_count;
     aggregate.bitmap_live_bits += bitmap_stats.live_bits;
     aggregate.bitmap_logical_bits += bitmap_stats.logical_bits;
@@ -720,6 +733,12 @@ void print_aggregate(
         << ' ' << label << "_encoded_candidates=" << stats.encoded_candidates
         << ' ' << label << "_duplicates=" << stats.duplicate_candidates
         << ' ' << label << "_position_bytes=" << stats.position_bytes
+        << ' ' << label << "_generation_retries=" << stats.generation_retries
+        << ' ' << label << "_max_dynamic_hash_capacity=" << stats.max_dynamic_hash_capacity
+        << ' ' << label << "_dynamic_bucket_slots_used=" << stats.dynamic_bucket_slots_used
+        << ' ' << label << "_dynamic_bitmap_words_used=" << stats.dynamic_bitmap_words_used
+        << ' ' << label << "_dynamic_bitmap_words_allocated=" << stats.dynamic_bitmap_words_allocated
+        << ' ' << label << "_dynamic_bitmap_words_reserved=" << stats.dynamic_bitmap_words_reserved
         << ' ' << label << "_bucket_count=" << stats.bucket_count
         << ' ' << label << "_bitmap_live_bits=" << stats.bitmap_live_bits
         << ' ' << label << "_bitmap_logical_bits=" << stats.bitmap_logical_bits
@@ -838,6 +857,9 @@ int main(int argc, char **argv) {
         std::cout
             << "layer_sum,effective_threads,input_live,primary_live,throughput_live,source_rows,"
             << "secondary_live,"
+            << "pair_current_boards_scanned,pair_shared_generation_seconds,pair_total_compute_seconds,"
+            << "generation_retries,dynamic_hash_capacity,dynamic_bucket_slots_used,"
+            << "dynamic_bitmap_words_used,dynamic_bitmap_words_allocated,dynamic_bitmap_words_reserved,"
             << "primary_bucket_count,primary_bitmap_bits,primary_bitmap_density,"
             << "primary_bitmap_physical_density,primary_rank_payload_bytes,"
             << "secondary_bucket_count,secondary_bitmap_bits,secondary_bitmap_density,"
@@ -875,6 +897,7 @@ int main(int argc, char **argv) {
                 pair.has_secondary ? pair.secondary.output_success_rows : 0U;
             uint64_t secondary_position_bytes =
                 pair.has_secondary ? static_cast<uint64_t>(pair.secondary.position_bytes.size()) : 0U;
+            double terminal_compact_seconds = 0.0;
             if (terminal) {
                 const double compact_begin = now_seconds();
                 ResidentLayer compacted_primary = compact_position_layer_to_success(
@@ -892,6 +915,7 @@ int main(int argc, char **argv) {
                     success_shifts
                 );
                 const double compact_seconds = now_seconds() - compact_begin;
+                terminal_compact_seconds = compact_seconds;
                 result.position_bytes = std::move(compacted_primary.bytes);
                 result.output_success_rows = compacted_primary.rows;
                 result.finalize_seconds += compact_seconds;
@@ -922,6 +946,15 @@ int main(int argc, char **argv) {
                 << throughput_live << ','
                 << source_rows << ','
                 << secondary_live << ','
+                << pair.current_boards_scanned << ','
+                << pair.shared_generation_seconds << ','
+                << pair.total_pair_compute_seconds + terminal_compact_seconds << ','
+                << result.generation_retries << ','
+                << result.dynamic_hash_capacity << ','
+                << result.dynamic_bucket_slots_used << ','
+                << result.dynamic_bitmap_words_used << ','
+                << result.dynamic_bitmap_words_allocated << ','
+                << result.dynamic_bitmap_words_reserved << ','
                 << primary_bitmap.bucket_count << ','
                 << primary_bitmap.logical_bits << ','
                 << primary_bitmap.logical_density() << ','

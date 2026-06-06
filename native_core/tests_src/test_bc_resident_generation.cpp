@@ -195,6 +195,25 @@ uint64_t descriptor_success_rows_sum(const BCPositionLayerReader &reader) {
     return rows;
 }
 
+void check_dynamic_stats(const BCResidentGenerationResult &generated) {
+    check(generated.generation_retries == 0U, "small resident generation should not retry capacity");
+    check(generated.dynamic_hash_capacity != 0U, "resident generation should report dynamic hash capacity");
+    check(
+        generated.dynamic_bucket_slots_used <= generated.dynamic_hash_capacity,
+        "resident generation dynamic bucket slots exceed hash capacity"
+    );
+    check(generated.dynamic_bucket_slots_used != 0U, "resident generation should report used dynamic buckets");
+    check(generated.dynamic_bitmap_words_used != 0U, "resident generation should report used bitmap words");
+    check(
+        generated.dynamic_bitmap_words_used <= generated.dynamic_bitmap_words_allocated,
+        "resident generation used bitmap words exceed allocated words"
+    );
+    check(
+        generated.dynamic_bitmap_words_allocated <= generated.dynamic_bitmap_words_reserved,
+        "resident generation allocated bitmap words exceed reserved words"
+    );
+}
+
 void check_stats_match(
     const BCResidentGenerationResult &generated,
     const OracleResult &oracle
@@ -212,6 +231,7 @@ void check_stats_match(
         generated.valid_candidates == oracle.valid_candidates,
         "resident generation valid candidate count mismatch"
     );
+    check_dynamic_stats(generated);
 }
 
 void test_single_source_generation_matches_oracle() {
@@ -344,6 +364,84 @@ void test_parallel_and_small_batch_match_scalar_output() {
     );
 }
 
+void test_pair_generation_stats() {
+    const BCLut lut(test_alphabet());
+    const BCFamilyTable source_axis = BCFamilyTable::from_range(8U, 2U, 0U, 2U);
+    const BCFamilyTable primary_axis = BCFamilyTable::from_range(10U, 2U, 0U, 2U);
+    const BCFamilyTable secondary_axis = BCFamilyTable::from_range(12U, 2U, 0U, 3U);
+    const TestPositionLayer source = write_source_layer(
+        lut,
+        source_axis,
+        {
+            make_board({{0U, 1U}, {1U, 1U}, {4U, 1U}, {5U, 1U}}),
+            make_board({{0U, 2U}, {15U, 1U}, {1U, 1U}}),
+        }
+    );
+
+    BC::BCResidentGenerationOptions options;
+    options.num_threads = 2;
+    const BC::BCResidentGenerationPairResult pair =
+        BC::generate_resident_position_layer_pair(
+            lut,
+            primary_axis,
+            source.reader,
+            nullptr,
+            &secondary_axis,
+            options
+        );
+
+    const OracleResult primary_oracle = compute_oracle(
+        lut,
+        primary_axis,
+        {OracleSource{source.canonical_boards, 1U}}
+    );
+    const OracleResult secondary_oracle = compute_oracle(
+        lut,
+        secondary_axis,
+        {OracleSource{source.canonical_boards, 2U}}
+    );
+    const BCPositionLayerReader primary_reader(pair.primary.position_bytes, lut);
+    const BCPositionLayerReader secondary_reader(pair.secondary.position_bytes, lut);
+    check(
+        collect_generated_candidates(primary_reader) == primary_oracle.candidates,
+        "pair primary generated candidates mismatch oracle"
+    );
+    check(
+        collect_generated_candidates(secondary_reader) == secondary_oracle.candidates,
+        "pair secondary generated candidates mismatch oracle"
+    );
+    check(pair.has_secondary, "pair generation should report secondary");
+    check(
+        pair.current_boards_scanned == descriptor_success_rows_sum(source.reader),
+        "pair current_boards_scanned should match current source rows"
+    );
+    check(
+        pair.primary.source_boards_scanned == pair.current_boards_scanned,
+        "pair primary source stats should own current scan count"
+    );
+    check(
+        pair.secondary.source_boards_scanned == 0U,
+        "pair secondary source scan count should remain zero; use pair.current_boards_scanned"
+    );
+    check(
+        pair.shared_generation_seconds == pair.primary.generation_seconds &&
+            pair.shared_generation_seconds == pair.secondary.generation_seconds,
+        "pair shared generation seconds should match both layer result aliases"
+    );
+    check(
+        pair.total_pair_compute_seconds >= pair.shared_generation_seconds,
+        "pair total compute seconds should include shared generation time"
+    );
+    check_stats_match(pair.primary, primary_oracle);
+    check(pair.secondary.spawned_boards == secondary_oracle.spawned_boards,
+        "pair secondary spawn count mismatch");
+    check(pair.secondary.move_candidates == secondary_oracle.move_candidates,
+        "pair secondary move candidate count mismatch");
+    check(pair.secondary.valid_candidates == secondary_oracle.valid_candidates,
+        "pair secondary valid candidate count mismatch");
+    check_dynamic_stats(pair.secondary);
+}
+
 void test_duplicate_candidate_dedup_and_invalid_moves() {
     const BCLut lut(test_alphabet());
     const BCFamilyTable source_axis = BCFamilyTable::from_range(0U, 2U, 0U, 0U);
@@ -405,6 +503,8 @@ int main() {
         test_combined_generation_matches_oracle();
         std::cerr << "test_parallel_and_small_batch_match_scalar_output\n";
         test_parallel_and_small_batch_match_scalar_output();
+        std::cerr << "test_pair_generation_stats\n";
+        test_pair_generation_stats();
         std::cerr << "test_duplicate_candidate_dedup_and_invalid_moves\n";
         test_duplicate_candidate_dedup_and_invalid_moves();
         std::cerr << "test_axis_validation\n";

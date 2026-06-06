@@ -244,7 +244,6 @@ struct BCDynamicResolved {
 };
 
 struct BCThreadGenerationWorkspace {
-    std::vector<std::unique_ptr<BCCellBuilder>> builders;
     std::vector<uint64_t> canonical_buffer;
     std::vector<BCPendingEncodedCandidate> pending_encoded;
     std::vector<BCDynamicResolved> resolved_encoded;
@@ -271,21 +270,6 @@ using BCWordSumTable = std::vector<uint32_t>;
     const BCDynamicState &state,
     int thread_count
 );
-
-[[nodiscard]] BCCellBuilder &ensure_cell_builder(
-    std::vector<std::unique_ptr<BCCellBuilder>> &builders,
-    CellId cid,
-    const BCLut &lut
-) {
-    if (cid >= builders.size()) {
-        throw std::logic_error("BC resident generation encoded cell id exceeds target matrix");
-    }
-    std::unique_ptr<BCCellBuilder> &builder = builders[static_cast<size_t>(cid)];
-    if (!builder) {
-        builder = std::make_unique<BCCellBuilder>(lut);
-    }
-    return *builder;
-}
 
 [[nodiscard]] BCWordSumTable build_word_sum_table(
     const std::array<uint32_t, 16U> *tile_sum_values
@@ -1457,6 +1441,37 @@ void bc_append_bitmap_le(std::vector<uint8_t> &buffer, const uint64_t *bitmap, u
     return refs;
 }
 
+void set_dynamic_stats(
+    BCResidentGenerationResult &result,
+    const BCDynamicState &state,
+    uint32_t generation_retries
+) {
+    result.generation_retries = generation_retries;
+    result.dynamic_hash_capacity = state.hash_capacity;
+    result.dynamic_bitmap_words_reserved = state.reserved_bitmap_words;
+    result.dynamic_bitmap_words_allocated =
+        std::min<uint64_t>(
+            state.bitmap_cursor_words.load(std::memory_order_relaxed),
+            state.reserved_bitmap_words
+        );
+
+    uint64_t used_buckets = 0U;
+    uint64_t used_words = 0U;
+    for (uint32_t slot = 0U; slot < state.hash_capacity; ++slot) {
+        const uint32_t cid = state.cell_array[slot].load(std::memory_order_acquire);
+        if (cid == BCDynamicState::kEmptyCell) {
+            continue;
+        }
+        if (cid == BCDynamicState::kPendingCell) {
+            throw std::runtime_error("BC dynamic stats saw pending cell slot");
+        }
+        ++used_buckets;
+        used_words += state.word_count_array[slot];
+    }
+    result.dynamic_bucket_slots_used = used_buckets;
+    result.dynamic_bitmap_words_used = used_words;
+}
+
 [[nodiscard]] std::vector<FinalizedCellPayload> finalize_dynamic_state(
     const BCDynamicState &state,
     int thread_count
@@ -1550,99 +1565,6 @@ void bc_append_bitmap_le(std::vector<uint8_t> &buffer, const uint64_t *bitmap, u
     return payloads;
 }
 
-[[nodiscard]] std::vector<std::unique_ptr<BCCellBuilder>> merge_thread_local_builders(
-    const BCLut &lut,
-    uint32_t target_cell_count,
-    int thread_count,
-    std::vector<BCThreadGenerationWorkspace> &workspaces
-) {
-    std::vector<std::unique_ptr<BCCellBuilder>> merged(target_cell_count);
-    std::exception_ptr first_exception;
-
-#pragma omp parallel for schedule(dynamic, 1) num_threads(thread_count)
-    for (int64_t cid_i = 0; cid_i < static_cast<int64_t>(target_cell_count); ++cid_i) {
-        try {
-            std::unique_ptr<BCCellBuilder> cell_builder;
-            size_t total_buckets = 0U;
-            size_t total_bitmap_words = 0U;
-            for (const BCThreadGenerationWorkspace &workspace : workspaces) {
-                const std::unique_ptr<BCCellBuilder> &local =
-                    workspace.builders[static_cast<size_t>(cid_i)];
-                if (!local) {
-                    continue;
-                }
-                if (total_buckets > std::numeric_limits<size_t>::max() - local->bucket_count()) {
-                    throw std::overflow_error("BC resident generation merge bucket reserve overflow");
-                }
-                total_buckets += local->bucket_count();
-                if (total_bitmap_words > std::numeric_limits<size_t>::max() - local->live_bitmap_words()) {
-                    throw std::overflow_error("BC resident generation merge bitmap reserve overflow");
-                }
-                total_bitmap_words += local->live_bitmap_words();
-            }
-            if (total_buckets != 0U) {
-                cell_builder = std::make_unique<BCCellBuilder>(lut);
-                cell_builder->reserve_buckets_and_bitmap_words(total_buckets, total_bitmap_words);
-            }
-            for (BCThreadGenerationWorkspace &workspace : workspaces) {
-                const std::unique_ptr<BCCellBuilder> &local =
-                    workspace.builders[static_cast<size_t>(cid_i)];
-                if (!local) {
-                    continue;
-                }
-                if (!cell_builder) {
-                    continue;
-                }
-                (void)cell_builder->merge_from(*local);
-            }
-            merged[static_cast<size_t>(cid_i)] = std::move(cell_builder);
-        } catch (...) {
-#pragma omp critical(BCResidentGenerationException)
-            {
-                if (!first_exception) {
-                    first_exception = std::current_exception();
-                }
-            }
-        }
-    }
-
-    if (first_exception) {
-        std::rethrow_exception(first_exception);
-    }
-    return merged;
-}
-
-[[nodiscard]] std::vector<FinalizedCellPayload> finalize_cells(
-    const std::vector<std::unique_ptr<BCCellBuilder>> &builders,
-    const BCResidentGenerationOptions &options,
-    int thread_count
-) {
-    std::vector<FinalizedCellPayload> payloads(builders.size());
-    std::exception_ptr first_exception;
-
-#pragma omp parallel for schedule(dynamic, 1) num_threads(thread_count)
-    for (int64_t cid_i = 0; cid_i < static_cast<int64_t>(builders.size()); ++cid_i) {
-        try {
-            const std::unique_ptr<BCCellBuilder> &builder = builders[static_cast<size_t>(cid_i)];
-            if (builder) {
-                payloads[static_cast<size_t>(cid_i)] = builder->finalize(options.finalize_options);
-            }
-        } catch (...) {
-#pragma omp critical(BCResidentGenerationException)
-            {
-                if (!first_exception) {
-                    first_exception = std::current_exception();
-                }
-            }
-        }
-    }
-
-    if (first_exception) {
-        std::rethrow_exception(first_exception);
-    }
-    return payloads;
-}
-
 } // namespace
 
 BCResidentGenerationResult generate_resident_position_layer(
@@ -1677,6 +1599,7 @@ BCResidentGenerationResult generate_resident_position_layer(
     constexpr uint32_t kMaxGenerationRetries = 6U;
     double reserve_factor = 1.0;
     bool generated = false;
+    uint32_t successful_retry = 0U;
     for (uint32_t retry = 0U; retry <= kMaxGenerationRetries; ++retry) {
         result = BCResidentGenerationResult{};
         result.effective_threads = thread_count;
@@ -1711,6 +1634,7 @@ BCResidentGenerationResult generate_resident_position_layer(
             result.scan_seconds += bc_now_seconds() - phase_begin;
         }
         if (!dynamic_state.overflowed.load(std::memory_order_acquire)) {
+            successful_retry = retry;
             generated = true;
             break;
         }
@@ -1737,6 +1661,7 @@ BCResidentGenerationResult generate_resident_position_layer(
     result.encode_insert_seconds = result.thread_encode_insert_seconds;
 
     result.merge_seconds = 0.0;
+    set_dynamic_stats(result, dynamic_state, successful_retry);
 
     const double finalize_begin = bc_now_seconds();
     std::vector<FinalizedCellPayload> payloads = finalize_dynamic_state(dynamic_state, thread_count);
@@ -1851,6 +1776,7 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair(
     constexpr uint32_t kMaxGenerationRetries = 6U;
     double reserve_factor = 1.0;
     bool generated = false;
+    uint32_t successful_retry = 0U;
 
     auto prepare_workspaces = [&](std::vector<BCThreadGenerationWorkspace> &workspaces) {
         workspaces.clear();
@@ -1925,6 +1851,7 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair(
         const bool secondary_overflow =
             has_secondary && secondary_state.overflowed.load(std::memory_order_acquire);
         if (!primary_overflow && !secondary_overflow) {
+            successful_retry = retry;
             generated = true;
             break;
         }
@@ -1940,6 +1867,12 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair(
     add_workspace_stats(pair.primary, primary_workspaces);
     if (has_secondary) {
         add_workspace_stats(pair.secondary, secondary_workspaces);
+    }
+    pair.current_boards_scanned = pair.primary.source_boards_scanned;
+    pair.shared_generation_seconds = generation_seconds;
+    set_dynamic_stats(pair.primary, primary_state, successful_retry);
+    if (has_secondary) {
+        set_dynamic_stats(pair.secondary, secondary_state, successful_retry);
     }
 
     finalize_dynamic_result(
@@ -1962,6 +1895,10 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair(
             generation_seconds
         );
     }
+    pair.total_pair_compute_seconds =
+        generation_seconds +
+        pair.primary.finalize_seconds +
+        (has_secondary ? pair.secondary.finalize_seconds : 0.0);
     return pair;
 }
 

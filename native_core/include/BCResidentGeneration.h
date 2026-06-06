@@ -45,6 +45,12 @@ struct BCResidentGenerationResult {
     uint64_t duplicate_candidates_possible = 0U;
 
     int effective_threads = 0;
+    uint32_t generation_retries = 0U;
+    uint32_t dynamic_hash_capacity = 0U;
+    uint64_t dynamic_bucket_slots_used = 0U;
+    uint64_t dynamic_bitmap_words_used = 0U;
+    uint64_t dynamic_bitmap_words_allocated = 0U;
+    uint64_t dynamic_bitmap_words_reserved = 0U;
 
     // Wall-clock source phase time. Kept separate from scan_seconds because the
     // phase includes scan, spawn/move, canonicalize, encode, and thread-local insert.
@@ -117,6 +123,13 @@ struct BCResidentGenerationPairResult {
     BCResidentGenerationResult primary;
     BCResidentGenerationResult secondary;
     bool has_secondary = false;
+
+    // Pair generation scans the current source layer once and may produce both
+    // primary(+2) and secondary(+4) layers. The generation wall time is shared;
+    // do not add primary.generation_seconds and secondary.generation_seconds.
+    uint64_t current_boards_scanned = 0U;
+    double shared_generation_seconds = 0.0;
+    double total_pair_compute_seconds = 0.0;
 };
 
 [[nodiscard]] BCResidentGenerationResult generate_resident_position_layer(
