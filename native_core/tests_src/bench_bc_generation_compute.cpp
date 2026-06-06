@@ -52,6 +52,8 @@ struct Args {
     uint32_t warmup_extra = 16U;
     bool verify_layer_rows = true;
     bool detail_timing = true;
+    bool file_backed = false;
+    std::filesystem::path file_dir = std::filesystem::path("tmp") / "bc_generation_compute_files";
 };
 
 struct ResidentLayer {
@@ -175,6 +177,10 @@ Args parse_args(int argc, char **argv) {
             args.verify_layer_rows = false;
         } else if (key == "--no-detail-timing") {
             args.detail_timing = false;
+        } else if (key == "--file-backed") {
+            args.file_backed = true;
+        } else if (key == "--file-dir") {
+            args.file_dir = require_value("--file-dir");
         } else {
             throw std::invalid_argument("unknown argument: " + key);
         }
@@ -321,6 +327,61 @@ uint64_t descriptor_success_rows_sum(const BCPositionLayerReader &reader) {
         rows += reader.descriptor(cid).success_rows;
     }
     return rows;
+}
+
+std::vector<uint8_t> roundtrip_position_file_if_requested(
+    const Args &args,
+    uint32_t layer_sum,
+    const char *label,
+    const std::vector<uint8_t> &bytes,
+    double &seconds_out,
+    uint64_t &bytes_out
+) {
+    if (!args.file_backed) {
+        return bytes;
+    }
+    const double begin = now_seconds();
+    std::filesystem::create_directories(args.file_dir);
+    std::ostringstream name;
+    name << "bc_" << label << "_" << layer_sum << ".bcpos";
+    const std::filesystem::path path = args.file_dir / name.str();
+    BC::write_position_layer_to_file(path, bytes);
+    std::error_code ec;
+    const uint64_t file_size = std::filesystem::file_size(path, ec);
+    if (ec) {
+        throw std::runtime_error("failed to stat file-backed BC position layer: " + ec.message());
+    }
+    if (file_size != bytes.size()) {
+        throw std::runtime_error("file-backed BC position layer size mismatch");
+    }
+    std::vector<uint8_t> read_bytes = BC::read_position_layer_from_file(path);
+    if (read_bytes.size() != bytes.size()) {
+        throw std::runtime_error("file-backed BC position read size mismatch");
+    }
+    seconds_out += now_seconds() - begin;
+    bytes_out += static_cast<uint64_t>(bytes.size()) * 2ULL;
+    return read_bytes;
+}
+
+void roundtrip_result_position_if_requested(
+    const Args &args,
+    uint32_t layer_sum,
+    const char *label,
+    BCResidentGenerationResult &result
+) {
+    double file_seconds = 0.0;
+    uint64_t file_bytes = 0U;
+    result.position_bytes = roundtrip_position_file_if_requested(
+        args,
+        layer_sum,
+        label,
+        result.position_bytes,
+        file_seconds,
+        file_bytes
+    );
+    (void)file_bytes;
+    result.write_seconds += file_seconds;
+    result.total_seconds += file_seconds;
 }
 
 BitmapStats collect_bitmap_stats(const BCPositionLayerReader &reader) {
@@ -727,6 +788,20 @@ int main(int argc, char **argv) {
 
         ResidentLayer current =
             write_initial_layer(lut, make_axis(seed_sum), initial_boards, tile_sums);
+        if (args.file_backed) {
+            double initial_file_seconds = 0.0;
+            uint64_t initial_file_bytes = 0U;
+            current.bytes = roundtrip_position_file_if_requested(
+                args,
+                current.layer_sum,
+                "initial",
+                current.bytes,
+                initial_file_seconds,
+                initial_file_bytes
+            );
+            current.reader = std::make_unique<BCPositionLayerReader>(current.bytes, lut);
+            current.rows = descriptor_success_rows_sum(*current.reader);
+        }
         check(current.rows == initial_boards.size(), "free9 initial layer row count mismatch");
         std::unique_ptr<ResidentLayer> carry_layer;
 
@@ -753,6 +828,8 @@ int main(int argc, char **argv) {
             << " success_check_min_source_layer_sum=" << success_check_min_source_layer_sum
             << " verify_layer_rows=" << (args.verify_layer_rows ? 1 : 0)
             << " detail_timing=" << (args.detail_timing ? 1 : 0)
+            << " file_backed=" << (args.file_backed ? 1 : 0)
+            << " file_dir=" << args.file_dir.string()
             << " move=BoardMover::move_all_dir"
             << " canonical_batch=CanonicalBatch::canonicalize_inplace"
             << " canonical_backend=" << CanonicalBatch::backend_name()
@@ -823,6 +900,12 @@ int main(int argc, char **argv) {
                 pair.secondary.position_bytes = std::move(compacted_secondary.bytes);
                 pair.secondary.output_success_rows = compacted_secondary.rows;
                 secondary_live = pair.secondary.output_success_rows;
+                secondary_position_bytes = static_cast<uint64_t>(pair.secondary.position_bytes.size());
+            }
+
+            roundtrip_result_position_if_requested(args, layer_sum, "primary", result);
+            if (pair.has_secondary) {
+                roundtrip_result_position_if_requested(args, layer_sum + 2U, "secondary", pair.secondary);
                 secondary_position_bytes = static_cast<uint64_t>(pair.secondary.position_bytes.size());
             }
 
