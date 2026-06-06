@@ -173,6 +173,18 @@ target_link_libraries(formation_core PRIVATE common_config OpenMP::OpenMP_CXX)
 
 set(ADAPTIVE_INDEX_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_adaptive_index.cpp")
 set(BC_FAMILY_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_family.cpp")
+set(BC_KEY_RANK_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_key_rank.cpp")
+set(BC_CELL_BUILDER_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_cell_builder.cpp")
+set(BC_POSITION_FILE_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_position_file.cpp")
+set(BC_SUCCESS_IO_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_success_io.cpp")
+set(BC_POSITION_SCANNER_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_position_scanner.cpp")
+set(BC_BOARD_CODEC_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_board_codec.cpp")
+set(BC_BOARD_OPS_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_board_ops.cpp")
+set(BC_RESIDENT_GENERATION_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_resident_generation.cpp")
+set(BC_FILE_IO_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_file_io.cpp")
+set(BC_BOARD_CODEC_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_board_codec.cpp")
+set(BC_RESIDENT_GENERATION_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_resident_generation.cpp")
+set(BC_GENERATION_COMPUTE_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_generation_compute.cpp")
 
 if(NATIVE_BUILD_TESTS)
     if(NOT EXISTS "${ADAPTIVE_INDEX_TEST_SOURCE}")
@@ -187,6 +199,78 @@ if(NATIVE_BUILD_TESTS)
             "Test sources are optional and are not required for normal Linux or Windows builds."
         )
     endif()
+    if(NOT EXISTS "${BC_KEY_RANK_TEST_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${BC_KEY_RANK_TEST_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
+    if(NOT EXISTS "${BC_CELL_BUILDER_TEST_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${BC_CELL_BUILDER_TEST_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
+    if(NOT EXISTS "${BC_POSITION_FILE_TEST_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${BC_POSITION_FILE_TEST_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
+    if(NOT EXISTS "${BC_SUCCESS_IO_TEST_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${BC_SUCCESS_IO_TEST_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
+    if(NOT EXISTS "${BC_POSITION_SCANNER_TEST_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${BC_POSITION_SCANNER_TEST_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
+    if(NOT EXISTS "${BC_BOARD_CODEC_TEST_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${BC_BOARD_CODEC_TEST_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
+    if(NOT EXISTS "${BC_BOARD_OPS_TEST_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${BC_BOARD_OPS_TEST_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
+    if(NOT EXISTS "${BC_RESIDENT_GENERATION_TEST_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${BC_RESIDENT_GENERATION_TEST_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
+    if(NOT EXISTS "${BC_FILE_IO_TEST_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${BC_FILE_IO_TEST_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
+    if(NOT EXISTS "${BC_BOARD_CODEC_BENCH_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${BC_BOARD_CODEC_BENCH_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
+    if(NOT EXISTS "${BC_RESIDENT_GENERATION_BENCH_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${BC_RESIDENT_GENERATION_BENCH_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
+    if(NOT EXISTS "${BC_GENERATION_COMPUTE_BENCH_SOURCE}")
+        message(FATAL_ERROR
+            "NATIVE_BUILD_TESTS=ON but ${BC_GENERATION_COMPUTE_BENCH_SOURCE} is missing. "
+            "Test sources are optional and are not required for normal Linux or Windows builds."
+        )
+    endif()
     add_executable(adaptive_index_test
         src/AdaptiveIndex.cpp
         tests/test_adaptive_index.cpp
@@ -197,6 +281,72 @@ if(NATIVE_BUILD_TESTS)
         tests_src/test_bc_family.cpp
     )
     target_link_libraries(bc_family_test PRIVATE common_config)
+
+    add_executable(bc_key_rank_test
+        tests_src/test_bc_key_rank.cpp
+    )
+    target_link_libraries(bc_key_rank_test PRIVATE common_config)
+
+    add_executable(bc_cell_builder_test
+        tests_src/test_bc_cell_builder.cpp
+    )
+    target_link_libraries(bc_cell_builder_test PRIVATE common_config)
+
+    add_executable(bc_position_file_test
+        tests_src/test_bc_position_file.cpp
+    )
+    target_link_libraries(bc_position_file_test PRIVATE common_config)
+
+    add_executable(bc_success_io_test
+        tests_src/test_bc_success_io.cpp
+    )
+    target_link_libraries(bc_success_io_test PRIVATE common_config)
+
+    add_executable(bc_position_scanner_test
+        tests_src/test_bc_position_scanner.cpp
+    )
+    target_link_libraries(bc_position_scanner_test PRIVATE common_config)
+
+    add_executable(bc_board_codec_test
+        tests_src/test_bc_board_codec.cpp
+    )
+    target_link_libraries(bc_board_codec_test PRIVATE common_config)
+
+    add_executable(bc_board_ops_test
+        tests_src/test_bc_board_ops.cpp
+    )
+    target_link_libraries(bc_board_ops_test PRIVATE common_config)
+
+    add_executable(bc_resident_generation_test
+        src/BCResidentGeneration.cpp
+        src/CanonicalBatch.cpp
+        tests_src/test_bc_resident_generation.cpp
+    )
+    target_link_libraries(bc_resident_generation_test PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_file_io_test
+        tests_src/test_bc_file_io.cpp
+    )
+    target_link_libraries(bc_file_io_test PRIVATE common_config)
+
+    add_executable(bc_board_codec_bench
+        tests_src/bench_bc_board_codec.cpp
+    )
+    target_link_libraries(bc_board_codec_bench PRIVATE common_config)
+
+    add_executable(bc_resident_generation_bench
+        src/BCResidentGeneration.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_resident_generation.cpp
+    )
+    target_link_libraries(bc_resident_generation_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_generation_compute_bench
+        src/BCResidentGeneration.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_generation_compute.cpp
+    )
+    target_link_libraries(bc_generation_compute_bench PRIVATE common_config OpenMP::OpenMP_CXX)
 endif()
 
 add_library(bookgen_native SHARED
