@@ -379,6 +379,7 @@ using BCWordSumTable = std::vector<uint32_t>;
     const BCPositionLayerReader &position,
     const BCLut &lut
 ) {
+    (void)lut;
     uint64_t item_count = 0U;
     for (CellId cid = 0U; cid < position.cell_count(); ++cid) {
         item_count += position.descriptor(cid).bucket_count;
@@ -391,13 +392,11 @@ using BCWordSumTable = std::vector<uint32_t>;
     for (CellId cid = 0U; cid < position.cell_count(); ++cid) {
         const BCBucketEntryView buckets = position.bucket_entries_for_cell(cid);
         for (uint32_t bucket = 0U; bucket < buckets.size; ++bucket) {
-            const BCBucketRankDecoder decoder(lut, buckets.data[bucket].key);
-            const uint32_t word_count = words_for_bits(decoder.bitmap_len);
             items.push_back(BCSourceBucketWorkItem{
                 cid,
                 bucket,
                 0U,
-                word_count
+                0U
             });
         }
     }
@@ -896,12 +895,13 @@ void process_source_bucket_pair(
     if (bitmap_end > payload.size) {
         throw std::out_of_range("BC resident generation pair bucket bitmap exceeds rank payload");
     }
-    if (item.word_begin > item.word_end || item.word_end > bitmap_word_count) {
+    const uint32_t word_end = item.word_end == 0U ? bitmap_word_count : item.word_end;
+    if (item.word_begin > word_end || word_end > bitmap_word_count) {
         throw std::out_of_range("BC resident generation pair bucket word range is invalid");
     }
 
     const uint8_t *bitmap_words = payload.data + bitmap_offset;
-    for (uint32_t word_i = item.word_begin; word_i < item.word_end; ++word_i) {
+    for (uint32_t word_i = item.word_begin; word_i < word_end; ++word_i) {
         uint64_t word = load_u64_le(bitmap_words + static_cast<size_t>(word_i) * sizeof(uint64_t));
         if (word_i + 1U == bitmap_word_count && (bitmap_len & 63U) != 0U) {
             word &= (1ULL << (bitmap_len & 63U)) - 1ULL;
@@ -964,12 +964,13 @@ void insert_position_bucket_into_dynamic(
     if (bitmap_end > payload.size) {
         throw std::out_of_range("BC resident generation carry bucket bitmap exceeds rank payload");
     }
-    if (item.word_begin > item.word_end || item.word_end > bitmap_word_count) {
+    const uint32_t word_end = item.word_end == 0U ? bitmap_word_count : item.word_end;
+    if (item.word_begin > word_end || word_end > bitmap_word_count) {
         throw std::out_of_range("BC resident generation carry bucket word range is invalid");
     }
 
     const uint8_t *bitmap_words = payload.data + bitmap_offset;
-    for (uint32_t word_i = item.word_begin; word_i < item.word_end; ++word_i) {
+    for (uint32_t word_i = item.word_begin; word_i < word_end; ++word_i) {
         uint64_t word = load_u64_le(bitmap_words + static_cast<size_t>(word_i) * sizeof(uint64_t));
         if (word_i + 1U == bitmap_word_count && (bitmap_len & 63U) != 0U) {
             word &= (1ULL << (bitmap_len & 63U)) - 1ULL;
@@ -1037,12 +1038,13 @@ void process_source_bucket(
     if (bitmap_end > payload.size) {
         throw std::out_of_range("BC resident generation bucket bitmap exceeds rank payload");
     }
-    if (item.word_begin > item.word_end || item.word_end > bitmap_word_count) {
+    const uint32_t word_end = item.word_end == 0U ? bitmap_word_count : item.word_end;
+    if (item.word_begin > word_end || word_end > bitmap_word_count) {
         throw std::out_of_range("BC resident generation bucket word range is invalid");
     }
 
     const uint8_t *bitmap_words = payload.data + bitmap_offset;
-    for (uint32_t word_i = item.word_begin; word_i < item.word_end; ++word_i) {
+    for (uint32_t word_i = item.word_begin; word_i < word_end; ++word_i) {
         uint64_t word = load_u64_le(bitmap_words + static_cast<size_t>(word_i) * sizeof(uint64_t));
         if (word_i + 1U == bitmap_word_count && (bitmap_len & 63U) != 0U) {
             word &= (1ULL << (bitmap_len & 63U)) - 1ULL;
