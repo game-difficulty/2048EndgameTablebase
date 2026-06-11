@@ -2,13 +2,16 @@
 #include "BCCellBuilder.h"
 #include "BCPositionFile.h"
 #include "BCPositionScanner.h"
+#include "BoardMover.h"
 
+#include <array>
 #include <cstdint>
 #include <exception>
 #include <iostream>
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -80,6 +83,75 @@ void test_empty_cell_enumeration() {
     );
 }
 
+void test_zero_cell_mask16_helper() {
+    auto expected_mask = [](uint64_t board) {
+        uint32_t mask = 0U;
+        const BC::BCEmptyCells cells = BC::enumerate_empty_cells(board);
+        for (uint8_t i = 0U; i < cells.count; ++i) {
+            mask |= 1U << cells.cells[i];
+        }
+        return mask;
+    };
+
+    std::vector<uint64_t> boards{0U, ~0ULL};
+    uint64_t edge = 0U;
+    edge = BC::set_board_tile_unchecked(edge, 0U, 1U);
+    edge = BC::set_board_tile_unchecked(edge, 7U, 2U);
+    edge = BC::set_board_tile_unchecked(edge, 15U, 15U);
+    boards.push_back(edge);
+    uint64_t pattern = 0U;
+    for (uint32_t cell = 0U; cell < 16U; ++cell) {
+        if ((cell % 3U) != 0U) {
+            pattern = BC::set_board_tile_unchecked(pattern, cell, static_cast<uint8_t>((cell % 15U) + 1U));
+        }
+    }
+    boards.push_back(pattern);
+    uint64_t x = 0x9e3779b97f4a7c15ULL;
+    for (uint32_t i = 0U; i < 256U; ++i) {
+        x ^= x << 7U;
+        x ^= x >> 9U;
+        x ^= x << 8U;
+        boards.push_back(x);
+    }
+
+    for (uint64_t board : boards) {
+        check(
+            BC::bc_zero_cell_mask16(board) == expected_mask(board),
+            "bc_zero_cell_mask16 should match enumerate_empty_cells"
+        );
+    }
+}
+
+void test_move_pair_helpers() {
+    std::vector<uint64_t> boards{
+        0U,
+        0x1111222233334444ULL,
+        0x0001000200030004ULL,
+        0x4321000000001234ULL,
+        0xfedcba9876543210ULL,
+    };
+    uint64_t x = 0x243f6a8885a308d3ULL;
+    for (uint32_t i = 0U; i < 512U; ++i) {
+        x ^= x << 13U;
+        x ^= x >> 7U;
+        x ^= x << 17U;
+        boards.push_back(x);
+    }
+    for (uint64_t board : boards) {
+        const auto horizontal = BoardMover::move_horizontal_pair(board);
+        check(horizontal.first == BoardMover::move_left(board), "horizontal pair left mismatch");
+        check(horizontal.second == BoardMover::move_right(board), "horizontal pair right mismatch");
+        const auto vertical = BoardMover::move_vertical_pair(board);
+        check(vertical.first == BoardMover::move_up(board), "vertical pair up mismatch");
+        check(vertical.second == BoardMover::move_down(board), "vertical pair down mismatch");
+        const auto all = BoardMover::move_all_dir(board);
+        check(horizontal.first == std::get<0>(all), "horizontal pair should match move_all_dir left");
+        check(horizontal.second == std::get<1>(all), "horizontal pair should match move_all_dir right");
+        check(vertical.first == std::get<2>(all), "vertical pair should match move_all_dir up");
+        check(vertical.second == std::get<3>(all), "vertical pair should match move_all_dir down");
+    }
+}
+
 void test_spawn_tile() {
     uint64_t board = 0U;
     board = BC::spawn_tile(board, 0U, 1U);
@@ -111,6 +183,35 @@ void test_spawn_tile() {
         },
         "spawn tile rank >15 should throw"
     );
+}
+
+void test_hot_encode_matches_public_helper() {
+    const BCLut lut(test_alphabet());
+    const std::array<uint32_t, 16U> tile_sums = {
+        0U, 2U, 4U, 8U, 16U, 32U, 64U, 128U,
+        256U, 512U, 1024U, 2048U, 4096U, 8192U, 16384U, 32768U
+    };
+    const BC::BCQuadrantWordSumTable word_sums =
+        BC::build_quadrant_word_sum_table(&tile_sums);
+    const BCFamilyTable axis = BCFamilyTable::from_range(14U, 2U, 0U, 3U);
+    const std::vector<BCQuadrantWords> quadrants{
+        BCQuadrantWords{0x1111U, 0x0000U, 0x0011U, 0x0001U},
+        BCQuadrantWords{0x0011U, 0x0011U, 0x0001U, 0x0001U},
+        BCQuadrantWords{0x2000U, 0x1000U, 0x0011U, 0x0001U},
+        BCQuadrantWords{0x0002U, 0x0011U, 0x1000U, 0x0001U},
+    };
+    for (const BCQuadrantWords &q : quadrants) {
+        const auto public_encoded = BC::encode_canonical_quadrants_position(lut, axis, q, &tile_sums);
+        const auto hot_encoded = BC::bc_encode_canonical_quadrants_position_hot(lut, axis, q, &word_sums);
+        check(public_encoded.valid == hot_encoded.valid, "hot encode valid mismatch");
+        check(public_encoded.cid == hot_encoded.cid, "hot encode cid mismatch");
+        check(public_encoded.key == hot_encoded.key, "hot encode key mismatch");
+        check(public_encoded.rank == hot_encoded.rank, "hot encode rank mismatch");
+        check(public_encoded.bitmap_len == hot_encoded.bitmap_len, "hot encode bitmap_len mismatch");
+        check(public_encoded.count_ne == hot_encoded.count_ne, "hot encode count_ne mismatch");
+        check(public_encoded.count_sw == hot_encoded.count_sw, "hot encode count_sw mismatch");
+        check(public_encoded.count_se == hot_encoded.count_se, "hot encode count_se mismatch");
+    }
 }
 
 void test_encode_canonical_board_position() {
@@ -266,8 +367,14 @@ int main() {
     try {
         std::cerr << "test_empty_cell_enumeration\n";
         test_empty_cell_enumeration();
+        std::cerr << "test_zero_cell_mask16_helper\n";
+        test_zero_cell_mask16_helper();
+        std::cerr << "test_move_pair_helpers\n";
+        test_move_pair_helpers();
         std::cerr << "test_spawn_tile\n";
         test_spawn_tile();
+        std::cerr << "test_hot_encode_matches_public_helper\n";
+        test_hot_encode_matches_public_helper();
         std::cerr << "test_encode_canonical_board_position\n";
         test_encode_canonical_board_position();
         std::cerr << "test_scanner_board_roundtrip\n";

@@ -123,6 +123,30 @@ struct MoverEngine {
         return reverse_board(move_right(trans));
     }
 
+    static inline std::pair<uint64_t, uint64_t> move_horizontal_pair(uint64_t board) {
+        const RowMove &e0 = row_move_table[board & 0xFFFF];
+        const RowMove &e1 = row_move_table[(board >> 16) & 0xFFFF];
+        const RowMove &e2 = row_move_table[(board >> 32) & 0xFFFF];
+        const RowMove &e3 = row_move_table[(board >> 48) & 0xFFFF];
+        const uint64_t left_delta =
+            static_cast<uint64_t>(e0.movel) |
+            (static_cast<uint64_t>(e1.movel) << 16) |
+            (static_cast<uint64_t>(e2.movel) << 32) |
+            (static_cast<uint64_t>(e3.movel) << 48);
+        const uint64_t right_delta =
+            static_cast<uint64_t>(e0.mover) |
+            (static_cast<uint64_t>(e1.mover) << 16) |
+            (static_cast<uint64_t>(e2.mover) << 32) |
+            (static_cast<uint64_t>(e3.mover) << 48);
+        return {board ^ left_delta, board ^ right_delta};
+    }
+
+    static inline std::pair<uint64_t, uint64_t> move_vertical_pair(uint64_t board) {
+        const uint64_t trans = reverse_board(board);
+        const auto moved = move_horizontal_pair(trans);
+        return {reverse_board(moved.first), reverse_board(moved.second)};
+    }
+
     static inline uint64_t move_board(uint64_t board, int direction) {
         switch (direction) {
             case 1: return move_left(board);
@@ -134,8 +158,9 @@ struct MoverEngine {
     }
 
     static inline std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> move_all_dir(uint64_t board) {
-        uint64_t trans = reverse_board(board);
-        return { move_left(board), move_right(board), reverse_board(move_left(trans)), reverse_board(move_right(trans)) };
+        const auto horizontal = move_horizontal_pair(board);
+        const auto vertical = move_vertical_pair(board);
+        return { horizontal.first, horizontal.second, vertical.first, vertical.second };
     }
 
     static inline std::pair<uint64_t, uint32_t> s_move_left(uint64_t b) {

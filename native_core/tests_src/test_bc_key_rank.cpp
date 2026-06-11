@@ -73,6 +73,35 @@ bool naive_test_bit(const std::vector<uint64_t> &words, uint32_t rank) {
     return ((words[rank / 64U] >> (rank & 63U)) & 1ULL) != 0ULL;
 }
 
+void append_u16_le(std::vector<uint8_t> &out, uint16_t value) {
+    out.push_back(static_cast<uint8_t>(value & 0xFFU));
+    out.push_back(static_cast<uint8_t>((value >> 8U) & 0xFFU));
+}
+
+void append_u64_le(std::vector<uint8_t> &out, uint64_t value) {
+    for (uint32_t i = 0U; i < 8U; ++i) {
+        out.push_back(static_cast<uint8_t>((value >> (i * 8U)) & 0xFFU));
+    }
+}
+
+std::vector<uint8_t> prefix_to_le_bytes(const std::vector<BC::RankPrefix> &prefix) {
+    std::vector<uint8_t> out;
+    out.reserve(prefix.size() * sizeof(BC::RankPrefix));
+    for (BC::RankPrefix value : prefix) {
+        append_u16_le(out, value);
+    }
+    return out;
+}
+
+std::vector<uint8_t> bitmap_to_le_bytes(const std::vector<uint64_t> &words) {
+    std::vector<uint8_t> out;
+    out.reserve(words.size() * sizeof(uint64_t));
+    for (uint64_t value : words) {
+        append_u64_le(out, value);
+    }
+    return out;
+}
+
 std::vector<uint16_t> collect_valid_words(const BCLut &lut) {
     std::vector<uint16_t> words;
     for (uint32_t word = 0; word < BC::kBCQuadrantWordCount; ++word) {
@@ -246,6 +275,71 @@ void test_prefix256_for_len(uint32_t bitmap_len, bool exhaustive) {
     );
     check(pointer_prefix == prefix, "pointer prefix build differs from vector wrapper");
     check(prefix.size() == BC::prefix_count_for_bits(bitmap_len), "prefix count mismatch");
+    const std::vector<uint8_t> prefix_bytes = prefix_to_le_bytes(prefix);
+    const std::vector<uint8_t> bitmap_bytes = bitmap_to_le_bytes(words);
+
+    std::vector<uint32_t> boundary_bits = {
+        0U,
+        1U,
+        63U,
+        64U,
+        65U,
+        255U,
+        256U,
+        257U,
+        511U,
+        512U,
+        bitmap_len
+    };
+    std::sort(boundary_bits.begin(), boundary_bits.end());
+    boundary_bits.erase(std::unique(boundary_bits.begin(), boundary_bits.end()), boundary_bits.end());
+    for (uint32_t bit_index : boundary_bits) {
+        if (bit_index > bitmap_len) {
+            continue;
+        }
+        const uint32_t expected = naive_popcount_before(words, bit_index);
+        const BC::RankPrefix got = BC::rank_before_bit_index(
+            prefix.data(),
+            static_cast<uint32_t>(prefix.size()),
+            words.data(),
+            static_cast<uint32_t>(words.size()),
+            bitmap_len,
+            bit_index
+        );
+        const BC::RankPrefix got_le = BC::rank_before_bit_index_le_bytes(
+            prefix_bytes.data(),
+            static_cast<uint32_t>(prefix.size()),
+            bitmap_bytes.data(),
+            static_cast<uint32_t>(words.size()),
+            bitmap_len,
+            bit_index
+        );
+        check(got == expected, "rank_before_bit_index boundary mismatch");
+        check(got_le == expected, "rank_before_bit_index_le_bytes boundary mismatch");
+    }
+
+    for (uint32_t word_index = 0U; word_index <= words.size(); ++word_index) {
+        const uint32_t bit_index = std::min<uint32_t>(bitmap_len, word_index * BC::kBCBitmapWordBits);
+        const uint32_t expected = naive_popcount_before(words, bit_index);
+        const BC::RankPrefix got = BC::rank_before_word_index(
+            prefix.data(),
+            static_cast<uint32_t>(prefix.size()),
+            words.data(),
+            static_cast<uint32_t>(words.size()),
+            bitmap_len,
+            word_index
+        );
+        const BC::RankPrefix got_le = BC::rank_before_word_index_le_bytes(
+            prefix_bytes.data(),
+            static_cast<uint32_t>(prefix.size()),
+            bitmap_bytes.data(),
+            static_cast<uint32_t>(words.size()),
+            bitmap_len,
+            word_index
+        );
+        check(got == expected, "rank_before_word_index mismatch");
+        check(got_le == expected, "rank_before_word_index_le_bytes mismatch");
+    }
 
     if (exhaustive) {
         for (uint32_t rank = 0; rank < bitmap_len; ++rank) {

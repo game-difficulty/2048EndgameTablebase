@@ -161,6 +161,12 @@ void check_same_quadrants(const BCQuadrantWords &lhs, const BCQuadrantWords &rhs
 
 void check_codec_variants(const BCQuadrantWords &q) {
     const uint64_t board = BC::pack_quadrants_to_board(q);
+    const uint64_t by_parts =
+        BC::pack_nw_quadrant_to_board_bits(q.nw) |
+        BC::pack_ne_quadrant_to_board_bits(q.ne) |
+        BC::pack_sw_quadrant_to_board_bits(q.sw) |
+        BC::pack_se_quadrant_to_board_bits(q.se);
+    check(by_parts == board, "quadrant board bit helpers should match full pack");
     check_same_quadrants(BC::unpack_board_to_quadrants(board), q);
 }
 
@@ -230,6 +236,44 @@ void test_encode_board_adapter() {
         check(from_board.bitmap_len == direct.bitmap_len, "board adapter bitmap_len mismatch");
         check(from_canonical.key == direct.key, "canonical board adapter key mismatch");
         check(from_canonical.rank == direct.rank, "canonical board adapter rank mismatch");
+    }
+}
+
+void test_bucket_board_decoder() {
+    const BCLut lut(test_alphabet());
+    const std::vector<uint16_t> words = collect_valid_words(lut);
+    const GroupChoice group = find_group_with_count(lut, 7U);
+    const uint32_t bitmap_len =
+        static_cast<uint32_t>(group.count) *
+        static_cast<uint32_t>(group.count) *
+        static_cast<uint32_t>(group.count);
+    const std::vector<BucketRank> ranks = {
+        0U,
+        1U,
+        7U,
+        63U,
+        64U,
+        255U,
+        256U,
+        static_cast<BucketRank>(bitmap_len - 1U)
+    };
+
+    for (uint16_t nw : {words.front(), words[words.size() / 2U], words.back()}) {
+        const BCEncodedKeyRank encoded = encode_from_group_mixed_rank(lut, nw, group, 0U);
+        check(encoded.valid, "bucket board decoder fixture key should encode");
+        const BC::BCBucketRankDecoder rank_decoder(lut, encoded.key);
+        const BC::BCBucketBoardDecoder board_decoder(lut, encoded.key);
+        check(board_decoder.bitmap_len() == rank_decoder.bitmap_len, "bucket board decoder bitmap_len mismatch");
+        for (BucketRank rank : ranks) {
+            if (rank >= rank_decoder.bitmap_len) {
+                continue;
+            }
+            const BCQuadrantWords q = rank_decoder.unrank(lut, rank);
+            const uint64_t expected = BC::pack_quadrants_to_board(q);
+            const uint64_t fast = board_decoder.board(rank);
+            check(fast == expected, "bucket board decoder board mismatch");
+            check_same_quadrants(BC::unpack_board_to_quadrants(fast), q);
+        }
     }
 }
 
@@ -311,6 +355,8 @@ int main() {
         test_pack_unpack_roundtrip();
         std::cerr << "test_encode_board_adapter\n";
         test_encode_board_adapter();
+        std::cerr << "test_bucket_board_decoder\n";
+        test_bucket_board_decoder();
         std::cerr << "test_scanner_entries_board_roundtrip\n";
         test_scanner_entries_board_roundtrip();
     } catch (const std::exception &ex) {

@@ -105,6 +105,12 @@ public:
         return count4_[sum_id][empty_mask & 0xFU];
     }
 
+    // Hot path helper for keys produced by BC encode_key_and_rank. This skips
+    // validation because packed sum/mask fields are already trusted there.
+    [[nodiscard]] uint16_t count4_packed_trusted(uint16_t packed_sum_mask) const noexcept {
+        return count4_[packed_sum_mask >> 4U][packed_sum_mask & 0xFU];
+    }
+
     [[nodiscard]] BCWordGroupView word_group(uint16_t sum_id, uint8_t empty_mask) const {
         if (sum_id >= offset4_.size()) {
             throw std::out_of_range("BC word_group sum_id out of range");
@@ -137,6 +143,13 @@ public:
 
     [[nodiscard]] bool is_legal_tile(uint8_t tile) const {
         return tile < legal_tiles_.size() && legal_tiles_[tile];
+    }
+
+    [[nodiscard]] uint32_t tile_sum_value(uint8_t tile) const {
+        if (tile >= tile_sum_values_.size()) {
+            throw std::out_of_range("BC tile rank exceeds 4-bit alphabet");
+        }
+        return tile_sum_values_[tile];
     }
 
     [[nodiscard]] bool is_legal_word(uint16_t word) const {

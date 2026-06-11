@@ -2,8 +2,13 @@
 
 #include "BCKeyRank.h"
 
+#include <array>
 #include <cstdint>
 #include <stdexcept>
+
+#if defined(__BMI2__)
+#include <immintrin.h>
+#endif
 
 namespace BC {
 
@@ -63,6 +68,24 @@ inline constexpr uint64_t kBCBoardTileMask = 0xFULL;
     return set_board_tile_checked(board, cell_index, tile);
 }
 
+[[nodiscard]] inline uint32_t bc_zero_cell_mask16(uint64_t board) {
+    constexpr uint64_t kNibbleLsbMask = 0x1111111111111111ULL;
+    const uint64_t nonzero_lsb =
+        (board | (board >> 1U) | (board >> 2U) | (board >> 3U)) & kNibbleLsbMask;
+    const uint64_t zero_lsb = (~nonzero_lsb) & kNibbleLsbMask;
+#if defined(__BMI2__)
+    return static_cast<uint32_t>(_pext_u64(zero_lsb, kNibbleLsbMask));
+#else
+    uint32_t mask = 0U;
+    for (uint32_t cell = 0U; cell < kBCBoardCellCount; ++cell) {
+        if (((zero_lsb >> (4U * cell)) & 1ULL) != 0ULL) {
+            mask |= 1U << cell;
+        }
+    }
+    return mask;
+#endif
+}
+
 [[nodiscard]] inline BCQuadrantWords unpack_board_to_quadrants(uint64_t b) {
     const uint16_t nw = static_cast<uint16_t>(
         ((b >> 60U) & 0x000FULL) |
@@ -91,31 +114,88 @@ inline constexpr uint64_t kBCBoardTileMask = 0xFULL;
     return BCQuadrantWords{nw, ne, sw, se};
 }
 
-[[nodiscard]] inline uint64_t pack_quadrants_to_board(const BCQuadrantWords &q) {
-    uint64_t b = 0U;
-
-    b |= (static_cast<uint64_t>(q.nw & 0x000FU) << 60U);
-    b |= (static_cast<uint64_t>(q.nw & 0x00F0U) << 52U);
-    b |= (static_cast<uint64_t>(q.nw & 0x0F00U) << 36U);
-    b |= (static_cast<uint64_t>(q.nw & 0xF000U) << 28U);
-
-    b |= (static_cast<uint64_t>(q.ne & 0x000FU) << 52U);
-    b |= (static_cast<uint64_t>(q.ne & 0x00F0U) << 44U);
-    b |= (static_cast<uint64_t>(q.ne & 0x0F00U) << 28U);
-    b |= (static_cast<uint64_t>(q.ne & 0xF000U) << 20U);
-
-    b |= (static_cast<uint64_t>(q.sw & 0x000FU) << 28U);
-    b |= (static_cast<uint64_t>(q.sw & 0x00F0U) << 20U);
-    b |= (static_cast<uint64_t>(q.sw & 0x0F00U) << 4U);
-    b |= (static_cast<uint64_t>(q.sw & 0xF000U) >> 4U);
-
-    b |= (static_cast<uint64_t>(q.se & 0x000FU) << 20U);
-    b |= (static_cast<uint64_t>(q.se & 0x00F0U) << 12U);
-    b |= (static_cast<uint64_t>(q.se & 0x0F00U) >> 4U);
-    b |= (static_cast<uint64_t>(q.se & 0xF000U) >> 12U);
-
-    return b;
+[[nodiscard]] inline uint64_t bc_swapped_nibble_pair_bits(uint16_t word, uint32_t byte_index) {
+    const uint32_t byte = (static_cast<uint32_t>(word) >> (byte_index * 8U)) & 0xFFU;
+    return static_cast<uint64_t>(((byte & 0x0FU) << 4U) | (byte >> 4U));
 }
+
+[[nodiscard]] inline uint64_t pack_nw_quadrant_to_board_bits(uint16_t word) {
+    return (bc_swapped_nibble_pair_bits(word, 0U) << 56U) |
+           (bc_swapped_nibble_pair_bits(word, 1U) << 40U);
+}
+
+[[nodiscard]] inline uint64_t pack_ne_quadrant_to_board_bits(uint16_t word) {
+    return (bc_swapped_nibble_pair_bits(word, 0U) << 48U) |
+           (bc_swapped_nibble_pair_bits(word, 1U) << 32U);
+}
+
+[[nodiscard]] inline uint64_t pack_sw_quadrant_to_board_bits(uint16_t word) {
+    return (bc_swapped_nibble_pair_bits(word, 0U) << 24U) |
+           (bc_swapped_nibble_pair_bits(word, 1U) << 8U);
+}
+
+[[nodiscard]] inline uint64_t pack_se_quadrant_to_board_bits(uint16_t word) {
+    return (bc_swapped_nibble_pair_bits(word, 0U) << 16U) |
+           bc_swapped_nibble_pair_bits(word, 1U);
+}
+
+[[nodiscard]] inline uint64_t pack_quadrants_to_board(const BCQuadrantWords &q) {
+    return pack_nw_quadrant_to_board_bits(q.nw) |
+           pack_ne_quadrant_to_board_bits(q.ne) |
+           pack_sw_quadrant_to_board_bits(q.sw) |
+           pack_se_quadrant_to_board_bits(q.se);
+}
+
+struct BCBucketBoardDecoder {
+    BCBucketRankDecoder rank_decoder;
+    uint64_t nw_bits = 0U;
+    std::array<uint64_t, kBCMaxWordsPerSumMask> ne_bits{};
+    std::array<uint64_t, kBCMaxWordsPerSumMask> sw_bits{};
+    std::array<uint64_t, kBCMaxWordsPerSumMask> se_bits{};
+
+    BCBucketBoardDecoder() = default;
+
+    BCBucketBoardDecoder(const BCLut &lut, uint64_t bucket_key) {
+        reset(lut, bucket_key);
+    }
+
+    void reset(const BCLut &lut, uint64_t bucket_key) {
+        rank_decoder.reset(lut, bucket_key);
+        nw_bits = pack_nw_quadrant_to_board_bits(rank_decoder.nw);
+        for (uint32_t i = 0U; i < rank_decoder.count_ne; ++i) {
+            ne_bits[i] = pack_ne_quadrant_to_board_bits(rank_decoder.ne_group.words[i]);
+        }
+        for (uint32_t i = 0U; i < rank_decoder.count_sw; ++i) {
+            sw_bits[i] = pack_sw_quadrant_to_board_bits(rank_decoder.sw_group.words[i]);
+        }
+        for (uint32_t i = 0U; i < rank_decoder.count_se; ++i) {
+            se_bits[i] = pack_se_quadrant_to_board_bits(rank_decoder.se_group.words[i]);
+        }
+    }
+
+    [[nodiscard]] BucketBitmapLen bitmap_len() const {
+        return rank_decoder.bitmap_len;
+    }
+
+    [[nodiscard]] uint64_t board(BucketRank rank) const {
+        if (rank >= rank_decoder.bitmap_len) {
+            throw std::out_of_range("BC bucket board decoder rank is outside bucket bitmap");
+        }
+        const uint32_t rank_u32 = static_cast<uint32_t>(rank);
+        const uint32_t tmp = rank_decoder.div_count_se.div(rank_u32);
+        const uint32_t rank_se =
+            rank_u32 - tmp * static_cast<uint32_t>(rank_decoder.count_se);
+        const uint32_t rank_ne = rank_decoder.div_count_sw.div(tmp);
+        const uint32_t rank_sw =
+            tmp - rank_ne * static_cast<uint32_t>(rank_decoder.count_sw);
+        if (rank_ne >= rank_decoder.count_ne ||
+            rank_sw >= rank_decoder.count_sw ||
+            rank_se >= rank_decoder.count_se) {
+            throw std::logic_error("BC bucket board decoder computed quadrant rank outside count");
+        }
+        return nw_bits | ne_bits[rank_ne] | sw_bits[rank_sw] | se_bits[rank_se];
+    }
+};
 
 [[nodiscard]] inline BCEncodedKeyRank encode_canonical_board_to_key_rank(
     const BCLut &lut,

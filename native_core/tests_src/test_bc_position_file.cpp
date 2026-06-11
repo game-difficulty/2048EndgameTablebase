@@ -1,12 +1,18 @@
+#include "BCDirectFileIO.h"
+#include "BCPositionCellLoader.h"
 #include "BCPositionFile.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -20,6 +26,7 @@ using BC::BCLookupResult;
 using BC::BCLut;
 using BC::BCPositionLayerReader;
 using BC::BCPositionLayerWriter;
+using BC::BCPositionStreamingReader;
 using BC::BucketRank;
 using BC::CellId;
 using BC::FinalizedCellPayload;
@@ -30,8 +37,38 @@ void check(bool condition, const char *message) {
     }
 }
 
+struct TempDir {
+    std::filesystem::path path;
+
+    TempDir() {
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        path = std::filesystem::temp_directory_path() /
+            ("bc_position_file_test_" + std::to_string(static_cast<long long>(stamp)));
+        std::filesystem::create_directories(path);
+    }
+
+    ~TempDir() {
+        std::error_code ec;
+        std::filesystem::remove_all(path, ec);
+    }
+};
+
 std::vector<uint8_t> test_alphabet() {
     return {0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 15U};
+}
+
+const BCLut &shared_test_lut() {
+    static const BCLut *lut = new BCLut(test_alphabet());
+    return *lut;
+}
+
+bool direct_io_tests_enabled() {
+#if defined(_WIN32) || defined(__linux__)
+    const char *value = std::getenv("BC_RUN_DIRECT_IO_TESTS");
+    return value != nullptr && std::string(value) == "1";
+#else
+    return false;
+#endif
 }
 
 std::vector<uint16_t> collect_valid_words(const BCLut &lut) {
@@ -206,6 +243,7 @@ void check_reader_header(
     check(reader.axis().family_unit() == axis.family_unit(), "reader family_unit mismatch");
     check(reader.axis().axis_base_coord() == axis.axis_base_coord(), "reader axis_base mismatch");
     check(reader.axis().family_count() == axis.family_count(), "reader family_count mismatch");
+    check(reader.axis().coords() == axis.coords(), "reader axis coord table mismatch");
     check(reader.header().key_mode == BC::kBCPositionKeyModeQ4NwExactNeSwSeSumMaskPrefix256,
         "reader key_mode mismatch");
     check(reader.header().rank_prefix_bits == BC::kBCRankPrefixBits, "reader rank_prefix_bits mismatch");
@@ -271,6 +309,36 @@ void check_cold_lookups(
     }
 }
 
+void check_streaming_cold_lookups(
+    const BCLut &lut,
+    const BCPositionStreamingReader &reader,
+    const std::vector<CellFixture> &fixtures
+) {
+    for (const CellFixture &fixture : fixtures) {
+        for (const auto &[key, rank] : fixture.oracle) {
+            const BCLookupResult expected = fixture.payload.lookup(lut, key, rank);
+            const BCLookupResult got = reader.cold_lookup(fixture.cid, key, rank);
+            check(expected.found, "fixture payload should find inserted key/rank");
+            check(got.found, "streaming position cold lookup missed inserted key/rank");
+            check(got.local_success_row == expected.local_success_row,
+                "streaming position cold lookup success row mismatch");
+            check(reader.descriptor(fixture.cid).success_rows == fixture.payload.success_rows,
+                "streaming position descriptor success_rows mismatch");
+        }
+    }
+}
+
+std::vector<const FinalizedCellPayload *> make_payload_views(
+    uint32_t cell_count,
+    const std::vector<CellFixture> &fixtures
+) {
+    std::vector<const FinalizedCellPayload *> payloads(cell_count, nullptr);
+    for (const CellFixture &fixture : fixtures) {
+        payloads[fixture.cid] = &fixture.payload;
+    }
+    return payloads;
+}
+
 void store_u32_le(std::vector<uint8_t> &bytes, size_t offset, uint32_t value) {
     check(offset + 4U <= bytes.size(), "store_u32_le out of range");
     bytes[offset + 0U] = static_cast<uint8_t>(value & 0xFFU);
@@ -302,7 +370,7 @@ void expect_open_failure(
 }
 
 void test_position_roundtrip_and_lookup() {
-    const BCLut lut(test_alphabet());
+    const BCLut &lut = shared_test_lut();
     const BCFamilyTable axis = BCFamilyTable::from_range(6U, 1U, 0U, 3U);
     const BCCellMatrix matrix(axis);
     const std::vector<CellFixture> fixtures = make_cell_fixtures(lut, matrix);
@@ -316,8 +384,26 @@ void test_position_roundtrip_and_lookup() {
     check_cold_lookups(lut, reader, fixtures);
 }
 
+void test_position_noncontiguous_axis_roundtrip() {
+    const BCLut &lut = shared_test_lut();
+    const BCFamilyTable axis(40U, 2U, std::vector<BC::FamilyCoord>{0U, 2U, 5U, 9U});
+    const BCCellMatrix matrix(axis);
+    const std::vector<CellFixture> fixtures = make_cell_fixtures(lut, matrix);
+    const std::vector<uint8_t> bytes = write_synthetic_layer(axis, fixtures);
+
+    const BCPositionLayerReader reader(bytes, lut);
+    check_reader_header(reader, axis);
+    check(reader.header().axis_coord_table_bytes == axis.family_count() * sizeof(uint32_t),
+        "noncontiguous position axis coord byte count mismatch");
+    check(reader.header().descriptor_table_offset ==
+            BC::kBCPositionHeaderBytes + reader.header().axis_coord_table_bytes,
+        "noncontiguous position descriptor table offset mismatch");
+    check(!reader.axis().contains_coord(1U), "noncontiguous position reader should preserve gaps");
+    check_cold_lookups(lut, reader, fixtures);
+}
+
 void test_header_validation_errors() {
-    const BCLut lut(test_alphabet());
+    const BCLut &lut = shared_test_lut();
     const BCFamilyTable axis = BCFamilyTable::from_range(6U, 1U, 0U, 3U);
     const BCCellMatrix matrix(axis);
     const std::vector<CellFixture> fixtures = make_cell_fixtures(lut, matrix);
@@ -333,17 +419,87 @@ void test_header_validation_errors() {
 }
 
 void test_descriptor_validation_errors() {
-    const BCLut lut(test_alphabet());
+    const BCLut &lut = shared_test_lut();
     const BCFamilyTable axis = BCFamilyTable::from_range(6U, 1U, 0U, 3U);
     const BCCellMatrix matrix(axis);
     const std::vector<CellFixture> fixtures = make_cell_fixtures(lut, matrix);
     const std::vector<uint8_t> bytes = write_synthetic_layer(axis, fixtures);
 
     std::vector<uint8_t> bad_descriptor = bytes;
-    const size_t first_descriptor_offset = BC::kBCPositionHeaderBytes;
+    const size_t first_descriptor_offset =
+        static_cast<size_t>(BC::kBCPositionHeaderBytes + BC::bc_axis_coord_table_bytes(axis.family_count()));
     const size_t rank_payload_bytes_offset = first_descriptor_offset + 24U;
     store_u64_le(bad_descriptor, rank_payload_bytes_offset, std::numeric_limits<uint64_t>::max());
     expect_open_failure(bad_descriptor, lut, "bad descriptor rank payload range should fail");
+}
+
+void test_position_streaming_writer_buffered_and_direct() {
+    const BCLut &lut = shared_test_lut();
+    const BCFamilyTable axis = BCFamilyTable::from_range(6U, 1U, 0U, 3U);
+    const BCCellMatrix matrix(axis);
+    const std::vector<CellFixture> fixtures = make_cell_fixtures(lut, matrix);
+    const std::vector<uint8_t> memory_bytes = write_synthetic_layer(axis, fixtures);
+    const std::vector<const FinalizedCellPayload *> payloads =
+        make_payload_views(matrix.cell_count(), fixtures);
+    TempDir tmp;
+
+    const std::filesystem::path buffered_path = tmp.path / "buffered.bcpos";
+    BC::BCFileIOStats buffered_stats;
+    {
+        BC::BCBufferedFileWriter writer(buffered_path);
+        const uint64_t logical_size =
+            BC::write_position_payloads_to_file(writer, axis, payloads, &buffered_stats);
+        check(logical_size == memory_bytes.size(), "buffered streaming position logical size mismatch");
+    }
+    check(std::filesystem::file_size(buffered_path) == memory_bytes.size(),
+        "buffered streaming position file size mismatch");
+    check(buffered_stats.requested_bytes == memory_bytes.size(),
+        "buffered streaming writer requested byte count mismatch");
+    check(buffered_stats.backend_bytes == memory_bytes.size(),
+        "buffered streaming writer backend byte count mismatch");
+    const std::vector<uint8_t> buffered_bytes = BC::read_position_layer_from_file(buffered_path);
+    check(buffered_bytes == memory_bytes, "buffered streaming position bytes mismatch");
+    const BCPositionLayerReader buffered_reader(buffered_bytes, lut);
+    check_cold_lookups(lut, buffered_reader, fixtures);
+
+#if defined(_WIN32) || defined(__linux__)
+    if (!direct_io_tests_enabled()) {
+        std::cerr << "skip direct position streaming writer test; set BC_RUN_DIRECT_IO_TESTS=1 to enable\n";
+        return;
+    }
+    const std::filesystem::path direct_path = tmp.path / "direct.bcpos";
+    BC::BCFileIOStats direct_stats;
+    uint64_t direct_logical_size = 0U;
+    {
+        BC::BCDirectFileWriter writer(direct_path);
+        direct_logical_size =
+            BC::write_position_payloads_to_file(writer, axis, payloads, &direct_stats);
+    }
+    check(direct_logical_size == memory_bytes.size(), "direct streaming position logical size mismatch");
+    const uint64_t direct_physical_size = std::filesystem::file_size(direct_path);
+    check(direct_physical_size >= direct_logical_size, "direct streaming position physical size too small");
+    check((direct_physical_size % 4096U) == 0U, "direct streaming position physical size should be aligned");
+    check(direct_stats.requested_bytes == memory_bytes.size(),
+        "direct streaming writer requested byte count mismatch");
+    check(direct_stats.backend_bytes >= memory_bytes.size(),
+        "direct streaming writer backend bytes should cover logical file");
+
+    std::vector<uint8_t> direct_prefix(static_cast<size_t>(direct_logical_size));
+    BC::BCBufferedFileReader raw_reader(direct_path);
+    raw_reader.read_at(0U, direct_prefix.data(), direct_prefix.size());
+    check(direct_prefix == memory_bytes, "direct streaming position logical bytes mismatch");
+
+    BC::BCDirectFileIOOptions direct_options;
+    direct_options.logical_size = direct_logical_size;
+    direct_options.overlapped = false;
+    BCPositionStreamingReader direct_reader(
+        std::make_unique<BC::BCDirectFileReader>(direct_path, direct_options),
+        lut
+    );
+    check(direct_reader.file_size() == direct_logical_size,
+        "direct streaming reader should expose logical size");
+    check_streaming_cold_lookups(lut, direct_reader, fixtures);
+#endif
 }
 
 } // namespace
@@ -352,10 +508,14 @@ int main() {
     try {
         std::cerr << "test_position_roundtrip_and_lookup\n";
         test_position_roundtrip_and_lookup();
+        std::cerr << "test_position_noncontiguous_axis_roundtrip\n";
+        test_position_noncontiguous_axis_roundtrip();
         std::cerr << "test_header_validation_errors\n";
         test_header_validation_errors();
         std::cerr << "test_descriptor_validation_errors\n";
         test_descriptor_validation_errors();
+        std::cerr << "test_position_streaming_writer_buffered_and_direct\n";
+        test_position_streaming_writer_buffered_and_direct();
     } catch (const std::exception &ex) {
         std::cerr << "bc_position_file_test failed: " << ex.what() << "\n";
         return 1;

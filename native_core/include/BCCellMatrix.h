@@ -128,6 +128,11 @@ public:
         return cells_;
     }
 
+    [[nodiscard]] uint64_t allocated_bytes() const {
+        return static_cast<uint64_t>(marks_.capacity()) * sizeof(uint32_t) +
+            static_cast<uint64_t>(cells_.capacity()) * sizeof(CellId);
+    }
+
 private:
     const BCCellMatrix *matrix_ = nullptr;
     std::vector<uint32_t> marks_;
@@ -147,34 +152,24 @@ inline void collect_boundary_cells(
     }
 
     const BCFamilyTable &axis = matrix.axis();
-    const uint32_t first = std::max<uint32_t>(
-        static_cast<uint32_t>(prev_boundary_coord) + 1U,
-        static_cast<uint32_t>(axis.axis_base_coord())
-    );
-    const uint32_t last = std::min<uint32_t>(
-        static_cast<uint32_t>(current_boundary_coord),
-        static_cast<uint32_t>(axis.axis_base_coord()) + axis.family_count() - 1U
-    );
-    if (first > last) {
-        return;
-    }
-
     uint64_t reserve_count = 0U;
-    for (uint32_t coord = first; coord <= last; ++coord) {
-        const uint32_t boundary_id =
-            coord - static_cast<uint32_t>(axis.axis_base_coord());
-        reserve_count += static_cast<uint64_t>(2U) * boundary_id + 1U;
+    for (FamilyId id = 0U; id < axis.family_count(); ++id) {
+        const FamilyCoord coord = axis.id_to_coord(id);
+        if (coord <= prev_boundary_coord || coord > current_boundary_coord) {
+            continue;
+        }
+        reserve_count += static_cast<uint64_t>(2U) * id + 1U;
     }
     if (reserve_count > out.max_size()) {
         throw std::length_error("BC boundary cell reserve exceeds vector max_size");
     }
     out.reserve(static_cast<size_t>(reserve_count));
 
-    for (uint32_t coord = first; coord <= last; ++coord) {
-        if (coord > std::numeric_limits<FamilyCoord>::max()) {
-            throw std::out_of_range("BC boundary coord exceeds FamilyCoord range");
+    for (FamilyId boundary_id = 0U; boundary_id < axis.family_count(); ++boundary_id) {
+        const FamilyCoord coord = axis.id_to_coord(boundary_id);
+        if (coord <= prev_boundary_coord || coord > current_boundary_coord) {
+            continue;
         }
-        const FamilyId boundary_id = axis.coord_to_id(static_cast<FamilyCoord>(coord));
         for (uint32_t x = 0; x <= boundary_id; ++x) {
             out.push_back(matrix.cid(boundary_id, static_cast<FamilyId>(x)));
         }

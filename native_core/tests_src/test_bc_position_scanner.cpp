@@ -1,11 +1,15 @@
+#include "BCLoadedCellScanner.h"
 #include "BCPositionScanner.h"
 
+#include <chrono>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -17,6 +21,8 @@ using BC::BCEncodedKeyRank;
 using BC::BCFamilyTable;
 using BC::BCLut;
 using BC::BCPositionCellScanner;
+using BC::BCLoadedCellScanner;
+using BC::BCPositionStreamingReader;
 using BC::BCPositionLayerReader;
 using BC::BCPositionLayerWriter;
 using BC::BCScannedPositionEntry;
@@ -29,6 +35,22 @@ void check(bool condition, const char *message) {
         throw std::runtime_error(message);
     }
 }
+
+struct TempDir {
+    std::filesystem::path path;
+
+    TempDir() {
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        path = std::filesystem::temp_directory_path() /
+            ("bc_position_scanner_test_" + std::to_string(static_cast<long long>(stamp)));
+        std::filesystem::create_directories(path);
+    }
+
+    ~TempDir() {
+        std::error_code ec;
+        std::filesystem::remove_all(path, ec);
+    }
+};
 
 std::vector<uint8_t> test_alphabet() {
     return {0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 15U};
@@ -221,6 +243,28 @@ bool same_entries(
     return true;
 }
 
+bool same_board_entry(const BC::BCScannedBoardEntry &lhs, const BC::BCScannedBoardEntry &rhs) {
+    return lhs.key == rhs.key &&
+        lhs.rank == rhs.rank &&
+        lhs.local_success_row == rhs.local_success_row &&
+        lhs.board == rhs.board;
+}
+
+bool same_board_entries(
+    const std::vector<BC::BCScannedBoardEntry> &lhs,
+    const std::vector<BC::BCScannedBoardEntry> &rhs
+) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < lhs.size(); ++i) {
+        if (!same_board_entry(lhs[i], rhs[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void check_same_quadrants(const BC::BCQuadrantWords &lhs, const BC::BCQuadrantWords &rhs) {
     check(lhs.nw == rhs.nw, "quadrant NW mismatch");
     check(lhs.ne == rhs.ne, "quadrant NE mismatch");
@@ -277,10 +321,20 @@ void test_position_cell_scanner() {
     const std::vector<CellFixture> fixtures = make_cell_fixtures(lut, matrix);
     const std::vector<uint8_t> bytes = write_position_layer(axis, fixtures);
     const BCPositionLayerReader reader(bytes, lut);
+    TempDir tmp;
+    const std::filesystem::path path = tmp.path / "layer.bcpos";
+    BC::write_position_layer_to_file(path, bytes);
+    const BCPositionStreamingReader streaming_reader =
+        BCPositionStreamingReader::open_buffered(path, lut);
 
     const std::vector<BCScannedPositionEntry> empty_scan =
         BCPositionCellScanner(reader, matrix.cid(0U, 0U)).scan();
     check(empty_scan.empty(), "empty cell scanner should return no entries");
+    const BC::BCLoadedCell empty_loaded = streaming_reader.load_cell(matrix.cid(0U, 0U));
+    check(
+        BCLoadedCellScanner(lut, empty_loaded.view()).scan().empty(),
+        "loaded empty cell scanner should return no entries"
+    );
 
     for (const CellFixture &fixture : fixtures) {
         std::vector<BCScannedPositionEntry> streamed;
@@ -292,6 +346,27 @@ void test_position_cell_scanner() {
         const std::vector<BCScannedPositionEntry> scanned =
             BCPositionCellScanner(reader, fixture.cid).scan();
         check(same_entries(streamed, scanned), "scanner for_each output should match scan output");
+
+        const BC::BCLoadedCell loaded = streaming_reader.load_cell(fixture.cid);
+        const std::vector<BCScannedPositionEntry> loaded_scanned =
+            BCLoadedCellScanner(lut, loaded.view()).scan();
+        check(same_entries(scanned, loaded_scanned), "loaded cell scanner output should match memory scanner");
+
+        std::vector<BC::BCScannedBoardEntry> memory_boards;
+        std::vector<BC::BCScannedBoardEntry> loaded_boards;
+        BCPositionCellScanner(reader, fixture.cid).for_each_board(
+            [&memory_boards](const BC::BCScannedBoardEntry &entry) {
+                memory_boards.push_back(entry);
+            }
+        );
+        BCLoadedCellScanner(lut, loaded.view()).for_each_board(
+            [&loaded_boards](const BC::BCScannedBoardEntry &entry) {
+                loaded_boards.push_back(entry);
+            }
+        );
+        check(same_board_entries(memory_boards, loaded_boards),
+            "loaded cell board scanner output should match memory scanner");
+
         check(scanned.size() == fixture.oracle.size(), "scanner entry count mismatch");
         uint32_t previous_row = 0U;
         bool first = true;

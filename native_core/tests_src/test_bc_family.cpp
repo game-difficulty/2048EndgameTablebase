@@ -1,10 +1,14 @@
 #include "BCCellMatrix.h"
+#include "BCLut.h"
 
 #include <algorithm>
+#include <array>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -16,6 +20,7 @@ using BC::CellId;
 using BC::FamilyCoord;
 using BC::FamilyId;
 using BC::FamilyIdList2;
+using BC::LayerSum;
 
 void check(bool condition, const char *message) {
     if (!condition) {
@@ -118,9 +123,16 @@ void test_family_axis_roundtrip() {
         check(axis.coord_to_id(coord) == id, "coord/id roundtrip failed");
     }
 
+    const BCFamilyTable sparse_axis(40U, 2U, std::vector<FamilyCoord>{0U, 2U, 5U, 9U});
+    check(sparse_axis.family_count() == 4U, "sparse axis family count mismatch");
+    check(sparse_axis.id_to_coord(0U) == 0U, "sparse axis id 0 mismatch");
+    check(sparse_axis.id_to_coord(1U) == 2U, "sparse axis id 1 mismatch");
+    check(sparse_axis.id_to_coord(2U) == 5U, "sparse axis id 2 mismatch");
+    check(sparse_axis.id_to_coord(3U) == 9U, "sparse axis id 3 mismatch");
+    check(!sparse_axis.contains_coord(1U), "sparse axis should not contain gap coord");
     expect_throws(
-        [] { BCFamilyTable(40U, 2U, std::vector<FamilyCoord>{3U, 5U}); },
-        "discontinuous axis should throw"
+        [&] { (void)sparse_axis.coord_to_id(1U); },
+        "sparse coord_to_id gap should throw"
     );
     expect_throws(
         [] { BCFamilyTable(40U, 2U, std::vector<FamilyCoord>{4U, 3U}); },
@@ -130,6 +142,44 @@ void test_family_axis_roundtrip() {
         [] { BCFamilyTable(41U, 2U, std::vector<FamilyCoord>{0U, 1U}); },
         "non-divisible layer sum should throw"
     );
+}
+
+void test_theory_axis_builder() {
+    std::vector<uint8_t> legal_tiles;
+    for (uint8_t tile = 0U; tile <= 10U; ++tile) {
+        legal_tiles.push_back(tile);
+    }
+    legal_tiles.push_back(15U);
+    const std::array<uint32_t, 16U> tile_values = BC::default_2048_tile_sum_values();
+    check(tile_values[15] == 32768U, "tile 15 must use true sum value");
+
+    const std::vector<LayerSum> possible =
+        BC::build_possible_8tile_sums(legal_tiles, tile_values);
+    const std::unordered_set<LayerSum> possible_set(possible.begin(), possible.end());
+
+    const LayerSum layer_sum = 32768ULL + 64ULL;
+    std::vector<FamilyCoord> expected;
+    for (LayerSum h : possible) {
+        const LayerSum other = layer_sum >= h ? layer_sum - h : std::numeric_limits<LayerSum>::max();
+        if (other == std::numeric_limits<LayerSum>::max() ||
+            possible_set.find(other) == possible_set.end()) {
+            continue;
+        }
+        const LayerSum small = std::min(h, other);
+        if ((small % 2U) != 0U) {
+            continue;
+        }
+        expected.push_back(static_cast<FamilyCoord>(small / 2U));
+    }
+    std::sort(expected.begin(), expected.end());
+    expected.erase(std::unique(expected.begin(), expected.end()), expected.end());
+    check(!expected.empty(), "brute force theory axis should not be empty");
+
+    const BCFamilyTable axis = BC::build_family_axis_for_layer(layer_sum, 2U, possible);
+    check(axis.coords() == expected, "theory axis coords differ from brute force");
+    check(axis.family_count() != layer_sum / 4U + 1U, "theory axis should not equal dense range size");
+    check(axis.contains_coord(0U), "theory axis should contain zero small-side coord for sentinel-heavy layer");
+    check(axis.total_coord() == layer_sum / 2U, "theory axis total coord mismatch");
 }
 
 void test_t_delta_mapping() {
@@ -186,6 +236,23 @@ void test_t_delta_mapping() {
             );
         },
         "missing normalized target coord should throw"
+    );
+
+    const BCFamilyTable sparse_missing_target(
+        48U,
+        2U,
+        std::vector<FamilyCoord>{0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 12U}
+    );
+    expect_throws(
+        [&] {
+            (void)BC::map_source_family_to_target_families(
+                source20,
+                sparse_missing_target,
+                source20.coord_to_id(9U),
+                4U
+            );
+        },
+        "sparse target missing normalized coord should throw"
     );
 }
 
@@ -273,6 +340,8 @@ int main() {
     try {
         std::cerr << "test_family_axis_roundtrip\n";
         test_family_axis_roundtrip();
+        std::cerr << "test_theory_axis_builder\n";
+        test_theory_axis_builder();
         std::cerr << "test_t_delta_mapping\n";
         test_t_delta_mapping();
         std::cerr << "test_cell_matrix_roundtrip\n";

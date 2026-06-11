@@ -2,7 +2,6 @@
 
 #include "BCCellBuilder.h"
 #include "BCCellMatrix.h"
-#include "BCFileIO.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -16,8 +15,12 @@
 
 namespace BC {
 
+class BCReadableFile;
+class BCWritableFile;
+struct BCFileIOStats;
+
 inline constexpr uint32_t kBCPositionMagic = 0x46504342U; // "BCPF" little-endian.
-inline constexpr uint32_t kBCPositionFormatVersion = 1U;
+inline constexpr uint32_t kBCPositionFormatVersion = 2U;
 inline constexpr uint32_t kBCPositionHeaderBytes = 112U;
 inline constexpr uint32_t kBCPositionCellDescriptorBytes = 40U;
 inline constexpr uint32_t kBCPositionBucketEntryBytes = 16U;
@@ -44,7 +47,7 @@ struct BCPositionHeader {
     uint64_t bucket_meta_bytes = 0U;
     uint64_t rank_payload_offset = 0U;
     uint64_t rank_payload_bytes = 0U;
-    uint64_t reserved0 = 0U;
+    uint64_t axis_coord_table_bytes = 0U;
 };
 
 struct BCPositionCellDescriptor {
@@ -76,16 +79,27 @@ struct BCPositionCellDescriptor {
 }
 
 inline void bc_append_u32_le(std::vector<uint8_t> &out, uint32_t value) {
-    out.push_back(static_cast<uint8_t>(value & 0xFFU));
-    out.push_back(static_cast<uint8_t>((value >> 8U) & 0xFFU));
-    out.push_back(static_cast<uint8_t>((value >> 16U) & 0xFFU));
-    out.push_back(static_cast<uint8_t>((value >> 24U) & 0xFFU));
+    const size_t offset = out.size();
+    out.resize(offset + 4U);
+    uint8_t *p = out.data() + offset;
+    p[0] = static_cast<uint8_t>(value & 0xFFU);
+    p[1] = static_cast<uint8_t>((value >> 8U) & 0xFFU);
+    p[2] = static_cast<uint8_t>((value >> 16U) & 0xFFU);
+    p[3] = static_cast<uint8_t>((value >> 24U) & 0xFFU);
 }
 
 inline void bc_append_u64_le(std::vector<uint8_t> &out, uint64_t value) {
-    for (uint32_t i = 0; i < 8U; ++i) {
-        out.push_back(static_cast<uint8_t>((value >> (i * 8U)) & 0xFFU));
-    }
+    const size_t offset = out.size();
+    out.resize(offset + 8U);
+    uint8_t *p = out.data() + offset;
+    p[0] = static_cast<uint8_t>(value & 0xFFU);
+    p[1] = static_cast<uint8_t>((value >> 8U) & 0xFFU);
+    p[2] = static_cast<uint8_t>((value >> 16U) & 0xFFU);
+    p[3] = static_cast<uint8_t>((value >> 24U) & 0xFFU);
+    p[4] = static_cast<uint8_t>((value >> 32U) & 0xFFU);
+    p[5] = static_cast<uint8_t>((value >> 40U) & 0xFFU);
+    p[6] = static_cast<uint8_t>((value >> 48U) & 0xFFU);
+    p[7] = static_cast<uint8_t>((value >> 56U) & 0xFFU);
 }
 
 [[nodiscard]] inline uint32_t bc_load_u32_le(const uint8_t *data) {
@@ -131,7 +145,7 @@ inline void bc_append_header(std::vector<uint8_t> &out, const BCPositionHeader &
     bc_append_u64_le(out, header.bucket_meta_bytes);
     bc_append_u64_le(out, header.rank_payload_offset);
     bc_append_u64_le(out, header.rank_payload_bytes);
-    bc_append_u64_le(out, header.reserved0);
+    bc_append_u64_le(out, header.axis_coord_table_bytes);
     if (out.size() - begin != kBCPositionHeaderBytes) {
         throw std::logic_error("BC position header serialized size mismatch");
     }
@@ -159,8 +173,48 @@ inline void bc_append_header(std::vector<uint8_t> &out, const BCPositionHeader &
     header.bucket_meta_bytes = load_u64_le(p + 80U);
     header.rank_payload_offset = load_u64_le(p + 88U);
     header.rank_payload_bytes = load_u64_le(p + 96U);
-    header.reserved0 = load_u64_le(p + 104U);
+    header.axis_coord_table_bytes = load_u64_le(p + 104U);
     return header;
+}
+
+[[nodiscard]] inline uint64_t bc_axis_coord_table_bytes(uint32_t family_count) {
+    return static_cast<uint64_t>(family_count) * sizeof(uint32_t);
+}
+
+inline void bc_append_axis_coord_table(
+    std::vector<uint8_t> &out,
+    const BCFamilyTable &axis
+) {
+    const std::vector<FamilyCoord> &coords = axis.coords();
+    if (coords.size() != axis.family_count()) {
+        throw std::logic_error("BC position axis coord table size mismatch");
+    }
+    for (FamilyCoord coord : coords) {
+        bc_append_u32_le(out, coord);
+    }
+}
+
+[[nodiscard]] inline std::vector<FamilyCoord> bc_read_axis_coord_table(
+    const std::vector<uint8_t> &bytes,
+    const BCPositionHeader &header
+) {
+    const uint64_t table_bytes = bc_axis_coord_table_bytes(header.family_count);
+    if (header.axis_coord_table_bytes != table_bytes) {
+        throw std::runtime_error("BC position axis coord table byte size mismatch");
+    }
+    bc_require_bytes(
+        bytes,
+        kBCPositionHeaderBytes,
+        table_bytes,
+        "BC position axis coord table exceeds file"
+    );
+    std::vector<FamilyCoord> coords;
+    coords.reserve(static_cast<size_t>(header.family_count));
+    const uint8_t *base = bytes.data() + kBCPositionHeaderBytes;
+    for (uint32_t i = 0U; i < header.family_count; ++i) {
+        coords.push_back(static_cast<FamilyCoord>(bc_load_u32_le(base + i * sizeof(uint32_t))));
+    }
+    return coords;
 }
 
 inline void bc_append_cell_descriptor(
@@ -300,7 +354,12 @@ public:
         const uint64_t descriptor_bytes = descriptor_count * kBCPositionCellDescriptorBytes;
         const uint64_t bucket_bytes = bucket_meta_stream_.size();
         const uint64_t rank_bytes = rank_payload_stream_.size();
-        const uint64_t descriptor_offset = kBCPositionHeaderBytes;
+        const uint64_t axis_coord_bytes = bc_axis_coord_table_bytes(axis_.family_count());
+        const uint64_t descriptor_offset = bc_checked_add_u64(
+            kBCPositionHeaderBytes,
+            axis_coord_bytes,
+            "BC position descriptor table offset overflow"
+        );
         const uint64_t bucket_offset = bc_checked_add_u64(
             descriptor_offset,
             descriptor_bytes,
@@ -317,6 +376,7 @@ public:
         header.axis_base_coord = axis_.axis_base_coord();
         header.family_count = axis_.family_count();
         header.layer_sum = axis_.layer_sum();
+        header.axis_coord_table_bytes = axis_coord_bytes;
         header.descriptor_count = descriptor_count;
         header.descriptor_table_offset = descriptor_offset;
         header.descriptor_table_bytes = descriptor_bytes;
@@ -328,6 +388,7 @@ public:
         std::vector<uint8_t> out;
         out.reserve(static_cast<size_t>(rank_offset + rank_bytes));
         bc_append_header(out, header);
+        bc_append_axis_coord_table(out, axis_);
         for (const BCPositionCellDescriptor &descriptor : descriptors_) {
             bc_append_cell_descriptor(out, descriptor);
         }
@@ -360,6 +421,21 @@ private:
     bool begun_ = false;
 };
 
+void bc_validate_position_payload_for_file(const FinalizedCellPayload &payload);
+
+[[nodiscard]] uint64_t write_position_payloads_to_file(
+    BCWritableFile &file,
+    const BCFamilyTable &axis,
+    const std::vector<const FinalizedCellPayload *> &cell_payloads,
+    BCFileIOStats *stats = nullptr
+);
+
+[[nodiscard]] uint64_t write_position_payloads_to_file(
+    BCWritableFile &file,
+    const BCFamilyTable &axis,
+    const std::vector<FinalizedCellPayload> &cell_payloads,
+    BCFileIOStats *stats = nullptr
+);
 class BCPositionLayerReader {
 public:
     BCPositionLayerReader() = default;
@@ -497,8 +573,9 @@ private:
         if (header_.layer_sum > std::numeric_limits<LayerSum>::max()) {
             throw std::runtime_error("BC position file layer_sum exceeds LayerSum");
         }
-        if (header_.reserved0 != 0U) {
-            throw std::runtime_error("BC position file reserved header field is non-zero");
+        const uint64_t axis_coord_bytes = bc_axis_coord_table_bytes(header_.family_count);
+        if (header_.axis_coord_table_bytes != axis_coord_bytes) {
+            throw std::runtime_error("BC position file axis coord table byte size mismatch");
         }
 
         const uint64_t expected_desc_bytes =
@@ -509,53 +586,57 @@ private:
         if ((header_.bucket_meta_bytes % kBCPositionBucketEntryBytes) != 0U) {
             throw std::runtime_error("BC position file bucket metadata stream is not entry-aligned");
         }
-        if (header_.descriptor_table_offset != kBCPositionHeaderBytes) {
+        const uint64_t expected_descriptor_offset = bc_checked_add_u64(
+            kBCPositionHeaderBytes,
+            axis_coord_bytes,
+            "BC position expected descriptor offset overflow"
+        );
+        if (header_.descriptor_table_offset != expected_descriptor_offset) {
             throw std::runtime_error("BC position file descriptor table offset mismatch");
         }
         const uint64_t expected_bucket_offset = bc_checked_add_u64(
             header_.descriptor_table_offset,
             header_.descriptor_table_bytes,
-            "BC position expected bucket offset overflow"
+            "BC position expected bucket stream offset overflow"
         );
         if (header_.bucket_meta_offset != expected_bucket_offset) {
-            throw std::runtime_error("BC position file bucket metadata offset mismatch");
+            throw std::runtime_error("BC position bucket metadata offset mismatch");
         }
-        const uint64_t expected_rank_offset = bc_checked_add_u64(
+        const uint64_t bucket_end = bc_checked_add_u64(
             header_.bucket_meta_offset,
             header_.bucket_meta_bytes,
-            "BC position expected rank offset overflow"
+            "BC position bucket metadata end overflow"
         );
-        if (header_.rank_payload_offset != expected_rank_offset) {
-            throw std::runtime_error("BC position file rank payload offset mismatch");
+        if (header_.rank_payload_offset != bucket_end) {
+            throw std::runtime_error("BC position rank payload offset mismatch");
         }
+        const uint64_t rank_end = bc_checked_add_u64(
+            header_.rank_payload_offset,
+            header_.rank_payload_bytes,
+            "BC position rank payload end overflow"
+        );
+        bc_require_bytes(bytes_, kBCPositionHeaderBytes, axis_coord_bytes,
+            "BC position axis coord table exceeds file");
         bc_require_bytes(bytes_, header_.descriptor_table_offset, header_.descriptor_table_bytes,
             "BC position descriptor table exceeds file");
         bc_require_bytes(bytes_, header_.bucket_meta_offset, header_.bucket_meta_bytes,
             "BC position bucket metadata exceeds file");
         bc_require_bytes(bytes_, header_.rank_payload_offset, header_.rank_payload_bytes,
             "BC position rank payload exceeds file");
-        const uint64_t expected_file_size = bc_checked_add_u64(
-            header_.rank_payload_offset,
-            header_.rank_payload_bytes,
-            "BC position expected file size overflow"
-        );
-        if (expected_file_size != bytes_.size()) {
+        if (rank_end != bytes_.size()) {
             throw std::runtime_error("BC position file has trailing or missing bytes");
         }
     }
 
     void read_axis() {
-        const uint64_t last_coord =
-            static_cast<uint64_t>(header_.axis_base_coord) + header_.family_count - 1U;
-        if (last_coord > std::numeric_limits<FamilyCoord>::max()) {
-            throw std::runtime_error("BC position file family axis range exceeds FamilyCoord");
-        }
-        axis_ = BCFamilyTable::from_range(
+        axis_ = BCFamilyTable(
             static_cast<LayerSum>(header_.layer_sum),
             static_cast<uint16_t>(header_.family_unit),
-            static_cast<FamilyCoord>(header_.axis_base_coord),
-            static_cast<FamilyCoord>(last_coord)
+            bc_read_axis_coord_table(bytes_, header_)
         );
+        if (axis_.axis_base_coord() != header_.axis_base_coord) {
+            throw std::runtime_error("BC position file axis_base_coord does not match coord table");
+        }
         const BCCellMatrix matrix(axis_);
         if (header_.descriptor_count != matrix.cell_count()) {
             throw std::runtime_error("BC position descriptor count does not match dense cell matrix");
@@ -633,63 +714,41 @@ private:
     std::vector<BCBucketEntry> bucket_entries_;
 };
 
-inline void write_position_layer_to_file(
+void write_position_layer_to_file(
     const std::filesystem::path &path,
     const std::vector<uint8_t> &bytes
-) {
-    write_bytes_to_buffered_file(path, bytes);
-}
+);
 
-[[nodiscard]] inline std::vector<uint8_t> read_position_layer_from_file(
+[[nodiscard]] std::vector<uint8_t> read_position_layer_from_file(
     const std::filesystem::path &path
-) {
-    return read_bytes_from_buffered_file(path);
-}
+);
 
 // Buffered file correctness wrapper. It currently reads the serialized position
 // file into memory and reuses BCPositionLayerReader. Production large-layer
 // loading should replace this with descriptor/cell streaming over BCReadableFile.
 class BCPositionFileReader {
 public:
-    BCPositionFileReader(std::unique_ptr<BCReadableFile> file, const BCLut &lut) {
-        open(std::move(file), lut);
-    }
+    BCPositionFileReader(std::unique_ptr<BCReadableFile> file, const BCLut &lut);
+    ~BCPositionFileReader();
+
+    BCPositionFileReader(BCPositionFileReader &&) noexcept;
+    BCPositionFileReader &operator=(BCPositionFileReader &&) noexcept;
+    BCPositionFileReader(const BCPositionFileReader &) = delete;
+    BCPositionFileReader &operator=(const BCPositionFileReader &) = delete;
 
     static BCPositionFileReader open_buffered(
         const std::filesystem::path &path,
         const BCLut &lut
-    ) {
-        return BCPositionFileReader(std::make_unique<BCBufferedFileReader>(path), lut);
-    }
+    );
 
-    void open(std::unique_ptr<BCReadableFile> file, const BCLut &lut) {
-        if (!file) {
-            throw std::invalid_argument("BC position file reader file is null");
-        }
-        file_ = std::move(file);
-        const uint64_t byte_count = file_->size();
-        if (byte_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-            throw std::overflow_error("BC position file exceeds addressable memory vector size");
-        }
-        bytes_.assign(static_cast<size_t>(byte_count), 0U);
-        if (!bytes_.empty()) {
-            file_->read_at(0U, bytes_.data(), byte_count);
-        }
-        layer_.open(bytes_, lut);
-    }
+    void open(std::unique_ptr<BCReadableFile> file, const BCLut &lut);
 
-    [[nodiscard]] const BCPositionLayerReader &layer() const {
-        return layer_;
-    }
-
-    [[nodiscard]] const std::vector<uint8_t> &bytes() const {
-        return bytes_;
-    }
+    [[nodiscard]] const BCPositionLayerReader &layer() const;
+    [[nodiscard]] const std::vector<uint8_t> &bytes() const;
 
 private:
     std::unique_ptr<BCReadableFile> file_;
     std::vector<uint8_t> bytes_;
     BCPositionLayerReader layer_;
 };
-
 } // namespace BC

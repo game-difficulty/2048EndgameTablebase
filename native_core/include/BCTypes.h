@@ -7,10 +7,10 @@
 
 namespace BC {
 
-using FamilyCoord = uint16_t;
+using FamilyCoord = uint32_t;
 using FamilyId = uint16_t;
 using CellId = uint32_t;
-using LayerSum = uint32_t;
+using LayerSum = uint64_t;
 using SpawnDeltaCoord = uint16_t;
 
 template <typename T, std::size_t Capacity>

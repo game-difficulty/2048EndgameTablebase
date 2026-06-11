@@ -384,18 +384,18 @@ void test_insert_report_and_encoded_insert() {
     check(second.new_rank, "same-key encoded insert should create a new rank");
     check(reported.live_rows() == 2U, "live_rows should track encoded insert");
 
-    BCCellBuilder legacy(lut);
-    legacy.insert(encoded0.key, encoded0.rank);
-    legacy.insert(encoded0.key, encoded0.rank);
-    legacy.insert(encoded1.key, encoded1.rank);
+    BCCellBuilder baseline(lut);
+    baseline.insert(encoded0.key, encoded0.rank);
+    baseline.insert(encoded0.key, encoded0.rank);
+    baseline.insert(encoded1.key, encoded1.rank);
 
     const FinalizedCellPayload reported_payload = reported.finalize();
-    const FinalizedCellPayload legacy_payload = legacy.finalize();
-    check(reported_payload.success_rows == legacy_payload.success_rows, "encoded insert success_rows mismatch");
-    check(reported_payload.buckets.size() == legacy_payload.buckets.size(), "encoded insert bucket count mismatch");
+    const FinalizedCellPayload baseline_payload = baseline.finalize();
+    check(reported_payload.success_rows == baseline_payload.success_rows, "encoded insert success_rows mismatch");
+    check(reported_payload.buckets.size() == baseline_payload.buckets.size(), "encoded insert bucket count mismatch");
     for (const BCEncodedKeyRank &encoded : {encoded0, encoded1}) {
         const auto lhs = reported_payload.lookup(lut, encoded.key, encoded.rank);
-        const auto rhs = legacy_payload.lookup(lut, encoded.key, encoded.rank);
+        const auto rhs = baseline_payload.lookup(lut, encoded.key, encoded.rank);
         check(lhs.found && rhs.found, "encoded insert lookup should find rank");
         check(lhs.local_success_row == rhs.local_success_row, "encoded insert local row mismatch");
     }

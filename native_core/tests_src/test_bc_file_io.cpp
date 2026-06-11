@@ -1,9 +1,11 @@
 #include "BCFileIO.h"
+#include "BCDirectFileIO.h"
 #include "BCSuccessIO.h"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -70,6 +72,20 @@ struct TempDir {
 
 std::vector<uint8_t> test_alphabet() {
     return {0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 15U};
+}
+
+const BCLut &shared_test_lut() {
+    static const BCLut *lut = new BCLut(test_alphabet());
+    return *lut;
+}
+
+bool direct_io_tests_enabled() {
+#if defined(_WIN32) || defined(__linux__)
+    const char *value = std::getenv("BC_RUN_DIRECT_IO_TESTS");
+    return value != nullptr && std::string(value) == "1";
+#else
+    return false;
+#endif
 }
 
 std::vector<uint16_t> collect_valid_words(const BCLut &lut) {
@@ -143,7 +159,7 @@ CellFixture build_cell(
 }
 
 struct SyntheticPosition {
-    BCLut lut;
+    const BCLut &lut;
     BCFamilyTable axis;
     BCCellMatrix matrix;
     std::vector<CellFixture> fixtures;
@@ -151,7 +167,7 @@ struct SyntheticPosition {
     BCPositionLayerReader reader;
 
     SyntheticPosition()
-        : lut(test_alphabet()),
+        : lut(shared_test_lut()),
           axis(BCFamilyTable::from_range(6U, 1U, 0U, 3U)),
           matrix(axis) {
         const std::vector<uint16_t> words = collect_valid_words(lut);
@@ -301,6 +317,126 @@ void test_buffered_positioned_io() {
     );
 }
 
+void test_buffered_batch_io() {
+    TempDir tmp;
+    const std::filesystem::path path = tmp.path / "batch.bin";
+    const std::array<uint8_t, 4U> first = {11U, 12U, 13U, 14U};
+    const std::array<uint8_t, 4U> second = {21U, 22U, 23U, 24U};
+    const std::array<uint8_t, 4U> third = {31U, 32U, 33U, 34U};
+
+    {
+        BC::BCBufferedFileWriter writer(path);
+        writer.resize(12292U);
+        BC::BCFileIOStats stats;
+        writer.write_many(
+            {
+                BC::BCFileWriteRequest{8192U, second.data(), second.size()},
+                BC::BCFileWriteRequest{0U, first.data(), first.size()},
+                BC::BCFileWriteRequest{12288U, third.data(), third.size()},
+            },
+            &stats
+        );
+        writer.flush();
+        check(stats.request_count == 3U, "buffered write_many request count mismatch");
+        check(stats.requested_bytes == 12U, "buffered write_many requested bytes mismatch");
+        check(stats.backend_io_count == 3U, "buffered write_many backend count mismatch");
+        check(stats.backend_bytes == 12U, "buffered write_many backend bytes mismatch");
+    }
+
+    BC::BCBufferedFileReader reader(path);
+    std::array<uint8_t, 4U> got_first = {};
+    std::array<uint8_t, 4U> got_second = {};
+    std::array<uint8_t, 4U> got_third = {};
+    BC::BCFileIOStats stats;
+    reader.read_many(
+        {
+            BC::BCFileReadRequest{12288U, got_third.data(), got_third.size()},
+            BC::BCFileReadRequest{0U, got_first.data(), got_first.size()},
+            BC::BCFileReadRequest{8192U, got_second.data(), got_second.size()},
+        },
+        &stats
+    );
+    check(got_first == first, "buffered read_many first mismatch");
+    check(got_second == second, "buffered read_many second mismatch");
+    check(got_third == third, "buffered read_many third mismatch");
+    check(stats.request_count == 3U, "buffered read_many request count mismatch");
+    check(stats.requested_bytes == 12U, "buffered read_many requested bytes mismatch");
+    check(stats.backend_io_count == 3U, "buffered read_many backend count mismatch");
+    check(stats.backend_bytes == 12U, "buffered read_many backend bytes mismatch");
+}
+
+void test_direct_batch_io() {
+#if defined(_WIN32) || defined(__linux__)
+    if (!direct_io_tests_enabled()) {
+        std::cerr << "skip direct file IO batch test; set BC_RUN_DIRECT_IO_TESTS=1 to enable\n";
+        return;
+    }
+    TempDir tmp;
+    const std::filesystem::path path = tmp.path / "direct_batch.bin";
+    std::vector<uint8_t> expected(9000U, 0U);
+    const std::array<uint8_t, 7U> first = {1U, 2U, 3U, 4U, 5U, 6U, 7U};
+    const std::array<uint8_t, 9U> second = {21U, 22U, 23U, 24U, 25U, 26U, 27U, 28U, 29U};
+    const std::array<uint8_t, 11U> third = {41U, 42U, 43U, 44U, 45U, 46U, 47U, 48U, 49U, 50U, 51U};
+    std::copy(first.begin(), first.end(), expected.begin() + 3U);
+    std::copy(second.begin(), second.end(), expected.begin() + 4093U);
+    std::copy(third.begin(), third.end(), expected.begin() + 8188U);
+
+    {
+        BC::BCDirectFileWriter writer(path);
+        writer.resize(expected.size());
+        BC::BCFileIOStats stats;
+        writer.write_many(
+            {
+                BC::BCFileWriteRequest{4093U, second.data(), second.size()},
+                BC::BCFileWriteRequest{3U, first.data(), first.size()},
+                BC::BCFileWriteRequest{8188U, third.data(), third.size()},
+            },
+            &stats
+        );
+        writer.flush();
+        check(stats.request_count == 3U, "direct write_many request count mismatch");
+        check(stats.requested_bytes == first.size() + second.size() + third.size(),
+            "direct write_many requested bytes mismatch");
+        check(stats.backend_io_count >= 1U, "direct write_many should report backend ops");
+        check(stats.backend_bytes >= 4096U, "direct write_many should report aligned backend bytes");
+    }
+
+    const uint64_t physical_size = std::filesystem::file_size(path);
+    check((physical_size % 4096U) == 0U, "direct writer physical size should be aligned");
+    check(physical_size >= expected.size(), "direct writer physical size should cover logical bytes");
+
+    BC::BCDirectFileIOOptions read_options;
+    read_options.logical_size = expected.size();
+    read_options.overlapped = false;
+    read_options.queue_depth = 2U;
+    BC::BCDirectFileReader reader(path, read_options);
+    check(reader.size() == expected.size(), "direct reader should report logical size");
+    std::vector<uint8_t> actual(expected.size(), 0U);
+    BC::BCFileIOStats stats;
+    reader.read_many(
+        {
+            BC::BCFileReadRequest{8188U, actual.data() + 8188U, third.size()},
+            BC::BCFileReadRequest{0U, actual.data(), 16U},
+            BC::BCFileReadRequest{4088U, actual.data() + 4088U, 24U},
+        },
+        &stats
+    );
+    for (uint32_t i = 0U; i < 16U; ++i) {
+        check(actual[i] == expected[i], "direct read_many first range mismatch");
+    }
+    for (uint32_t i = 4088U; i < 4112U; ++i) {
+        check(actual[i] == expected[i], "direct read_many cross-boundary range mismatch");
+    }
+    for (uint32_t i = 8188U; i < 8199U; ++i) {
+        check(actual[i] == expected[i], "direct read_many tail range mismatch");
+    }
+    check(stats.request_count == 3U, "direct read_many request count mismatch");
+    check(stats.requested_bytes == 16U + 24U + third.size(), "direct read_many requested bytes mismatch");
+    check(stats.backend_io_count > 0U, "direct read_many backend ops should be reported");
+    check(stats.backend_bytes >= 4096U, "direct read_many backend bytes should be aligned");
+#endif
+}
+
 void test_position_file_path_roundtrip() {
     TempDir tmp;
     SyntheticPosition position;
@@ -356,6 +492,10 @@ int main() {
     try {
         std::cerr << "test_buffered_positioned_io\n";
         test_buffered_positioned_io();
+        std::cerr << "test_buffered_batch_io\n";
+        test_buffered_batch_io();
+        std::cerr << "test_direct_batch_io\n";
+        test_direct_batch_io();
         std::cerr << "test_position_file_path_roundtrip\n";
         test_position_file_path_roundtrip();
         std::cerr << "test_success_file_path_roundtrip\n";

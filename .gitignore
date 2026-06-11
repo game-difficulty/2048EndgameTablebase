@@ -43,6 +43,7 @@ docs_and_configs/*.error
 
 # Native build outputs
 native_core/build/
+native_core/build-*/
 native_core/build-formation/
 native_core/src/egtb_data_1256.cpp
 native_core/src/egtb_data_256.cpp
