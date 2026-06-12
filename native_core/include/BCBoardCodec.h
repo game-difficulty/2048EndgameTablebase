@@ -177,11 +177,14 @@ struct BCBucketBoardDecoder {
         return rank_decoder.bitmap_len;
     }
 
-    [[nodiscard]] uint64_t board(BucketRank rank) const {
-        if (rank >= rank_decoder.bitmap_len) {
-            throw std::out_of_range("BC bucket board decoder rank is outside bucket bitmap");
-        }
-        const uint32_t rank_u32 = static_cast<uint32_t>(rank);
+    struct RankParts {
+        uint32_t tmp = 0U;
+        uint32_t rank_ne = 0U;
+        uint32_t rank_sw = 0U;
+        uint32_t rank_se = 0U;
+    };
+
+    [[nodiscard]] RankParts split_rank_unchecked(uint32_t rank_u32) const {
         const uint32_t tmp = rank_decoder.div_count_se.div(rank_u32);
         const uint32_t rank_se =
             rank_u32 - tmp * static_cast<uint32_t>(rank_decoder.count_se);
@@ -193,7 +196,52 @@ struct BCBucketBoardDecoder {
             rank_se >= rank_decoder.count_se) {
             throw std::logic_error("BC bucket board decoder computed quadrant rank outside count");
         }
-        return nw_bits | ne_bits[rank_ne] | sw_bits[rank_sw] | se_bits[rank_se];
+        return RankParts{tmp, rank_ne, rank_sw, rank_se};
+    }
+
+    [[nodiscard]] uint64_t ne_sw_base_bits(uint32_t rank_ne, uint32_t rank_sw) const {
+        return nw_bits | ne_bits[rank_ne] | sw_bits[rank_sw];
+    }
+
+    [[nodiscard]] uint64_t board_from_base_and_se(uint64_t base_bits, uint32_t rank_se) const {
+        return base_bits | se_bits[rank_se];
+    }
+
+    [[nodiscard]] uint64_t board(BucketRank rank) const {
+        if (rank >= rank_decoder.bitmap_len) {
+            throw std::out_of_range("BC bucket board decoder rank is outside bucket bitmap");
+        }
+        const RankParts parts = split_rank_unchecked(static_cast<uint32_t>(rank));
+        return board_from_base_and_se(
+            ne_sw_base_bits(parts.rank_ne, parts.rank_sw),
+            parts.rank_se
+        );
+    }
+
+    [[nodiscard]] uint64_t board_with_tmp_cache(
+        BucketRank rank,
+        uint32_t &last_tmp,
+        uint64_t &last_base_bits
+    ) const {
+        if (rank >= rank_decoder.bitmap_len) {
+            throw std::out_of_range("BC bucket board decoder rank is outside bucket bitmap");
+        }
+        const RankParts parts = split_rank_unchecked(static_cast<uint32_t>(rank));
+        if (parts.tmp != last_tmp) {
+            last_tmp = parts.tmp;
+            last_base_bits = ne_sw_base_bits(parts.rank_ne, parts.rank_sw);
+        }
+        return board_from_base_and_se(last_base_bits, parts.rank_se);
+    }
+
+    [[nodiscard]] uint64_t base_bits_for_tmp(uint32_t tmp) const {
+        const uint32_t rank_ne = rank_decoder.div_count_sw.div(tmp);
+        const uint32_t rank_sw =
+            tmp - rank_ne * static_cast<uint32_t>(rank_decoder.count_sw);
+        if (rank_ne >= rank_decoder.count_ne || rank_sw >= rank_decoder.count_sw) {
+            throw std::logic_error("BC bucket board decoder computed tmp outside quadrant count");
+        }
+        return ne_sw_base_bits(rank_ne, rank_sw);
     }
 };
 

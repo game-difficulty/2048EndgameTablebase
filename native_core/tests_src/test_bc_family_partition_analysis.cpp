@@ -144,7 +144,7 @@ void test_runtime_partition_fanout_uses_exact_coord_groups() {
     check(saw_wide_fanout, "test fixture should expose modulo fanout >2");
 }
 
-void test_real_tile_sum_possible_sums_keep_large_sentinel() {
+void test_real_tile_sum_possible_sums_keep_rank15_value() {
     std::vector<uint8_t> legal_tiles;
     for (uint8_t tile = 0U; tile <= 8U; ++tile) {
         legal_tiles.push_back(tile);
@@ -154,8 +154,8 @@ void test_real_tile_sum_possible_sums_keep_large_sentinel() {
     check(tile_values[15U] == 32768U, "tile 15 should be true value in this test");
     const std::vector<BC::LayerSum> possible =
         BC::build_possible_8tile_sums(legal_tiles, tile_values);
-    check(std::binary_search(possible.begin(), possible.end(), 32768U), "possible sums should include one sentinel");
-    check(std::binary_search(possible.begin(), possible.end(), 2ULL * 32768U), "possible sums should include two sentinels");
+    check(std::binary_search(possible.begin(), possible.end(), 32768U), "possible sums should include one rank-15 tile");
+    check(std::binary_search(possible.begin(), possible.end(), 2ULL * 32768U), "possible sums should include two rank-15 tiles");
 
     const BC::LayerSum source_layer_sum = 32768ULL + 64ULL;
     const BC::BCFamilyPartitionAnalysis exact =
@@ -215,7 +215,7 @@ int main() {
         test_modulo_partition_can_expose_fanout_over_two();
         test_modulo_axis_is_dense_partition_id_axis();
         test_runtime_partition_fanout_uses_exact_coord_groups();
-        test_real_tile_sum_possible_sums_keep_large_sentinel();
+        test_real_tile_sum_possible_sums_keep_rank15_value();
         test_invalid_inputs();
     } catch (const std::exception &ex) {
         std::cerr << "bc_family_partition_analysis_test failed: " << ex.what() << '\n';

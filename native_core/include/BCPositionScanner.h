@@ -3,6 +3,7 @@
 #include "BCBoardCodec.h"
 #include "BCPositionFile.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -28,6 +29,137 @@ struct BCScannedBoardEntry {
     uint32_t local_success_row = 0U;
     uint64_t board = 0U;
 };
+
+[[nodiscard]] inline uint32_t bc_scanner_countr_zero64(uint64_t value) {
+    if (value == 0U) {
+        throw std::invalid_argument("BC scanner countr_zero64 requires non-zero value");
+    }
+#if defined(__GNUC__) || defined(__clang__)
+    return static_cast<uint32_t>(__builtin_ctzll(value));
+#else
+    uint32_t count = 0U;
+    while ((value & 1ULL) == 0ULL) {
+        value >>= 1U;
+        ++count;
+    }
+    return count;
+#endif
+}
+
+template <class Emit>
+inline void bc_scan_bucket_board_se_blocks(
+    const BCBucketEntry &bucket,
+    const BCBucketBoardDecoder &decoder,
+    const uint8_t *bitmap_words,
+    uint32_t bitmap_word_count,
+    uint32_t bitmap_len,
+    uint32_t word_begin,
+    uint32_t word_end,
+    uint64_t success_rows,
+    uint32_t &bucket_seen,
+    Emit &&emit
+) {
+    if (bitmap_words == nullptr && bitmap_word_count != 0U) {
+        throw std::invalid_argument("BC scanner bitmap words pointer is null");
+    }
+    if (word_begin > word_end || word_end > bitmap_word_count) {
+        throw std::out_of_range("BC scanner bucket word range is invalid");
+    }
+    if (decoder.rank_decoder.count_se == 0U) {
+        throw std::logic_error("BC scanner bucket has an empty SE word group");
+    }
+    if (bitmap_len == 0U || word_begin == word_end) {
+        return;
+    }
+
+    const uint32_t count_se = decoder.rank_decoder.count_se;
+    const uint32_t rank_begin = word_begin * kBCBitmapWordBits;
+    const uint64_t raw_rank_end =
+        static_cast<uint64_t>(word_end) * static_cast<uint64_t>(kBCBitmapWordBits);
+    const uint32_t rank_end =
+        static_cast<uint32_t>(std::min<uint64_t>(raw_rank_end, bitmap_len));
+    if (rank_begin >= rank_end) {
+        return;
+    }
+
+    const uint32_t tmp_begin = rank_begin / count_se;
+    const uint32_t tmp_end = (rank_end + count_se - 1U) / count_se;
+    for (uint32_t tmp = tmp_begin; tmp < tmp_end; ++tmp) {
+        const uint32_t block_begin = tmp * count_se;
+        const uint32_t block_end = std::min<uint32_t>(block_begin + count_se, bitmap_len);
+        const uint32_t local_begin =
+            rank_begin > block_begin ? rank_begin - block_begin : 0U;
+        const uint32_t local_end =
+            rank_end < block_end ? rank_end - block_begin : block_end - block_begin;
+        if (local_begin >= local_end) {
+            continue;
+        }
+
+        const uint64_t base_bits = decoder.base_bits_for_tmp(tmp);
+        for (uint32_t rank_se = local_begin; rank_se < local_end; ) {
+            const uint32_t rank = block_begin + rank_se;
+            const uint32_t word_i = rank / kBCBitmapWordBits;
+            const uint32_t bit_i = rank & (kBCBitmapWordBits - 1U);
+            const uint32_t bits_in_word =
+                std::min<uint32_t>(kBCBitmapWordBits - bit_i, local_end - rank_se);
+            uint64_t word =
+                load_u64_le(bitmap_words + static_cast<size_t>(word_i) * sizeof(uint64_t));
+            word >>= bit_i;
+            if (bits_in_word < kBCBitmapWordBits) {
+                word &= (1ULL << bits_in_word) - 1ULL;
+            }
+            while (word != 0U) {
+                const uint32_t bit = bc_scanner_countr_zero64(word);
+                const uint32_t rank_u32 = block_begin + rank_se + bit;
+                if (rank_u32 >= bitmap_len ||
+                    rank_u32 > std::numeric_limits<BucketRank>::max()) {
+                    throw std::logic_error("BC scanner computed invalid rank");
+                }
+                const uint64_t local_row =
+                    static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
+                if (local_row >= success_rows ||
+                    local_row > std::numeric_limits<uint32_t>::max()) {
+                    throw std::out_of_range("BC scanner bucket success row exceeds descriptor");
+                }
+                emit(
+                    static_cast<BucketRank>(rank_u32),
+                    static_cast<uint32_t>(local_row),
+                    decoder.board_from_base_and_se(base_bits, rank_se + bit)
+                );
+                ++bucket_seen;
+                word &= word - 1U;
+            }
+            rank_se += bits_in_word;
+        }
+    }
+}
+
+template <class Emit>
+inline void bc_scan_bucket_board_entries(
+    const BCBucketEntry &bucket,
+    const BCBucketBoardDecoder &decoder,
+    const uint8_t *bitmap_words,
+    uint32_t bitmap_word_count,
+    uint32_t bitmap_len,
+    uint32_t word_begin,
+    uint32_t word_end,
+    uint64_t success_rows,
+    uint32_t &bucket_seen,
+    Emit &&emit
+) {
+    bc_scan_bucket_board_se_blocks(
+        bucket,
+        decoder,
+        bitmap_words,
+        bitmap_word_count,
+        bitmap_len,
+        word_begin,
+        word_end,
+        success_rows,
+        bucket_seen,
+        std::forward<Emit>(emit)
+    );
+}
 
 class BCPositionCellScanner {
 public:
@@ -167,39 +299,24 @@ private:
 
             uint32_t bucket_seen = 0U;
             const uint8_t *bitmap_words = payload.data + bitmap_offset;
-            for (uint32_t word_i = 0; word_i < bitmap_word_count; ++word_i) {
-                uint64_t word = load_u64_le(bitmap_words + static_cast<size_t>(word_i) * sizeof(uint64_t));
-                if (word_i + 1U == bitmap_word_count && (bitmap_len & 63U) != 0U) {
-                    word &= (1ULL << (bitmap_len & 63U)) - 1ULL;
-                }
-                while (word != 0U) {
-                    const uint32_t bit = countr_zero64(word);
-                    const uint32_t rank_u32 = word_i * kBCBitmapWordBits + bit;
-                    if (rank_u32 >= bitmap_len ||
-                        rank_u32 > std::numeric_limits<BucketRank>::max()) {
-                        throw std::logic_error("BC position scanner computed invalid rank");
-                    }
-                    const uint64_t local_row =
-                        static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
-                    if (local_row >= desc.success_rows ||
-                        local_row > std::numeric_limits<uint32_t>::max()) {
-                        throw std::out_of_range("BC position scanner bucket success row exceeds descriptor");
-                    }
-                    const BucketRank rank = static_cast<BucketRank>(rank_u32);
-                    fn(BCScannedBoardEntry{
-                        bucket.key,
-                        rank,
-                        static_cast<uint32_t>(local_row),
-                        decoder.board(rank)
-                    });
-                    ++bucket_seen;
+            bc_scan_bucket_board_entries(
+                bucket,
+                decoder,
+                bitmap_words,
+                bitmap_word_count,
+                bitmap_len,
+                0U,
+                bitmap_word_count,
+                desc.success_rows,
+                bucket_seen,
+                [&](BucketRank rank, uint32_t local_row, uint64_t board) {
+                    fn(BCScannedBoardEntry{bucket.key, rank, local_row, board});
                     ++total_seen;
                     if (total_seen > desc.success_rows) {
                         throw std::out_of_range("BC position scanner emitted too many rows");
                     }
-                    word &= word - 1U;
                 }
-            }
+            );
             const uint64_t bucket_end_row =
                 static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
             if (bucket_end_row > desc.success_rows) {

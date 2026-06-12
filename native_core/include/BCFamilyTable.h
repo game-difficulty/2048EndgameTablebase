@@ -134,6 +134,10 @@ public:
             : kInvalidFamilyId;
     }
 
+    [[nodiscard]] FamilyId coord_to_id_trusted(FamilyCoord coord) const noexcept {
+        return coord_to_id_lut_[coord];
+    }
+
     [[nodiscard]] FamilyId coord_to_id(FamilyCoord coord) const {
         if (coord >= coord_to_id_lut_.size()) {
             throw std::out_of_range(

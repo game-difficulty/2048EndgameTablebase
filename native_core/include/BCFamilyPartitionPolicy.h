@@ -66,6 +66,10 @@ struct BCFamilyPartitionLayerMap {
             : BCFamilyTable::kInvalidFamilyId;
     }
 
+    [[nodiscard]] FamilyId coord_to_family_id_trusted(FamilyCoord coord) const noexcept {
+        return coord_to_family_lut[coord];
+    }
+
     [[nodiscard]] FamilyId coord_to_family_id(FamilyCoord coord) const {
         const FamilyId id = try_coord_to_family_id(coord);
         if (id == BCFamilyTable::kInvalidFamilyId) {

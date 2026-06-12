@@ -4,11 +4,9 @@
 #include "BCFamilyTable.h"
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
-#include <vector>
 
 namespace BC {
 
@@ -30,26 +28,16 @@ struct BCBoardEncodedPosition {
     bool valid = false;
 };
 
-using BCQuadrantWordSumTable = std::vector<uint32_t>;
-
 [[nodiscard]] inline BCBoardEncodedPosition encode_canonical_quadrants_position(
     const BCLut &lut,
     const BCFamilyTable &axis,
     const BCQuadrantWords &q
 );
 
-[[nodiscard]] inline BCBoardEncodedPosition encode_canonical_quadrants_position(
-    const BCLut &lut,
-    const BCFamilyTable &axis,
-    const BCQuadrantWords &q,
-    const std::array<uint32_t, 16U> *family_tile_sum_values
-);
-
 [[nodiscard]] inline BCBoardEncodedPosition bc_encode_canonical_quadrants_position_hot(
     const BCLut &lut,
     const BCFamilyTable &axis,
-    const BCQuadrantWords &q,
-    const BCQuadrantWordSumTable *word_sums
+    const BCQuadrantWords &q
 );
 
 [[nodiscard]] inline BCEmptyCells enumerate_empty_cells(uint64_t board) {
@@ -88,37 +76,8 @@ using BCQuadrantWordSumTable = std::vector<uint32_t>;
     if (!desc.valid) {
         return false;
     }
-    sum_out = lut.sum4_value(desc.sum_id);
+    sum_out = desc.sum;
     return true;
-}
-
-[[nodiscard]] inline uint64_t bc_quadrant_sum_value_from_tiles(
-    uint16_t word,
-    const std::array<uint32_t, 16U> &tile_sum_values
-) {
-    return
-        static_cast<uint64_t>(tile_sum_values[word & 0xFU]) +
-        static_cast<uint64_t>(tile_sum_values[(word >> 4U) & 0xFU]) +
-        static_cast<uint64_t>(tile_sum_values[(word >> 8U) & 0xFU]) +
-        static_cast<uint64_t>(tile_sum_values[(word >> 12U) & 0xFU]);
-}
-
-[[nodiscard]] inline BCQuadrantWordSumTable build_quadrant_word_sum_table(
-    const std::array<uint32_t, 16U> *tile_sum_values
-) {
-    BCQuadrantWordSumTable sums;
-    if (tile_sum_values == nullptr) {
-        return sums;
-    }
-    sums.resize(kBCQuadrantWordCount);
-    for (uint32_t word = 0U; word < kBCQuadrantWordCount; ++word) {
-        sums[word] =
-            (*tile_sum_values)[word & 0xFU] +
-            (*tile_sum_values)[(word >> 4U) & 0xFU] +
-            (*tile_sum_values)[(word >> 8U) & 0xFU] +
-            (*tile_sum_values)[(word >> 12U) & 0xFU];
-    }
-    return sums;
 }
 
 [[nodiscard]] inline bool bc_min_side_coord(
@@ -227,116 +186,13 @@ using BCQuadrantWordSumTable = std::vector<uint32_t>;
     const BCFamilyTable &axis,
     const BCQuadrantWords &q
 ) {
-    return encode_canonical_quadrants_position(
-        lut,
-        axis,
-        q,
-        nullptr
-    );
-}
-
-[[nodiscard]] inline BCBoardEncodedPosition encode_canonical_quadrants_position(
-    const BCLut &lut,
-    const BCFamilyTable &axis,
-    const BCQuadrantWords &q,
-    const std::array<uint32_t, 16U> *family_tile_sum_values
-) {
-    if (family_tile_sum_values == nullptr) {
-        return bc_encode_canonical_quadrants_position_hot(lut, axis, q, nullptr);
-    }
-
-    BCBoardEncodedPosition out;
-
-    const BCWordDesc &nw_desc = lut.word_desc(q.nw);
-    const BCWordDesc &ne_desc = lut.word_desc(q.ne);
-    const BCWordDesc &sw_desc = lut.word_desc(q.sw);
-    const BCWordDesc &se_desc = lut.word_desc(q.se);
-    if (!nw_desc.valid || !ne_desc.valid || !sw_desc.valid || !se_desc.valid) {
-        return out;
-    }
-
-    const uint64_t nw_sum = bc_quadrant_sum_value_from_tiles(q.nw, *family_tile_sum_values);
-    const uint64_t ne_sum = bc_quadrant_sum_value_from_tiles(q.ne, *family_tile_sum_values);
-    const uint64_t sw_sum = bc_quadrant_sum_value_from_tiles(q.sw, *family_tile_sum_values);
-    const uint64_t se_sum = bc_quadrant_sum_value_from_tiles(q.se, *family_tile_sum_values);
-
-    const uint64_t total_sum = nw_sum + ne_sum + sw_sum + se_sum;
-    if (total_sum != axis.layer_sum()) {
-        return out;
-    }
-
-    const uint64_t top_sum = nw_sum + ne_sum;
-    const uint64_t bottom_sum = sw_sum + se_sum;
-    const uint64_t left_sum = nw_sum + sw_sum;
-    const uint64_t right_sum = ne_sum + se_sum;
-
-    const uint16_t family_unit = axis.family_unit();
-    auto min_side_coord_fast = [family_unit](uint64_t first_sum, uint64_t second_sum, FamilyCoord &coord_out) {
-        const uint64_t min_sum = std::min(first_sum, second_sum);
-        uint64_t coord = 0U;
-        if (family_unit == 2U) {
-            if ((min_sum & 1ULL) != 0ULL) {
-                return false;
-            }
-            coord = min_sum >> 1U;
-        } else {
-            if (family_unit == 0U || (min_sum % family_unit) != 0U) {
-                return false;
-            }
-            coord = min_sum / family_unit;
-        }
-        if (coord > std::numeric_limits<FamilyCoord>::max()) {
-            return false;
-        }
-        coord_out = static_cast<FamilyCoord>(coord);
-        return true;
-    };
-
-    FamilyCoord row_coord = 0U;
-    FamilyCoord col_coord = 0U;
-    if (!min_side_coord_fast(top_sum, bottom_sum, row_coord) ||
-        !min_side_coord_fast(left_sum, right_sum, col_coord)) {
-        return out;
-    }
-
-    const uint32_t family_count = axis.family_count();
-    const FamilyId row_id = axis.try_coord_to_id(row_coord);
-    const FamilyId col_id = axis.try_coord_to_id(col_coord);
-    if (row_id == BCFamilyTable::kInvalidFamilyId ||
-        col_id == BCFamilyTable::kInvalidFamilyId) {
-        return out;
-    }
-
-    const BCEncodedKeyRank encoded =
-        bc_encode_key_rank_from_descs(lut, q.nw, nw_desc, ne_desc, sw_desc, se_desc);
-    if (!encoded.valid) {
-        return out;
-    }
-
-    out.row_family = row_id;
-    out.col_family = col_id;
-    const uint64_t cid =
-        static_cast<uint64_t>(out.row_family) * family_count +
-        static_cast<uint32_t>(out.col_family);
-    if (cid > std::numeric_limits<CellId>::max()) {
-        throw std::overflow_error("BC encoded cell id exceeds CellId");
-    }
-    out.cid = static_cast<CellId>(cid);
-    out.key = encoded.key;
-    out.rank = encoded.rank;
-    out.bitmap_len = encoded.bitmap_len;
-    out.count_ne = encoded.count_ne;
-    out.count_sw = encoded.count_sw;
-    out.count_se = encoded.count_se;
-    out.valid = true;
-    return out;
+    return bc_encode_canonical_quadrants_position_hot(lut, axis, q);
 }
 
 [[nodiscard]] inline BCBoardEncodedPosition bc_encode_canonical_quadrants_position_hot(
     const BCLut &lut,
     const BCFamilyTable &axis,
-    const BCQuadrantWords &q,
-    const BCQuadrantWordSumTable *word_sums
+    const BCQuadrantWords &q
 ) {
     BCBoardEncodedPosition out;
 
@@ -348,19 +204,10 @@ using BCQuadrantWordSumTable = std::vector<uint32_t>;
         return out;
     }
 
-    const bool use_word_sums = word_sums != nullptr && !word_sums->empty();
-    const uint64_t nw_sum = use_word_sums
-        ? (*word_sums)[q.nw]
-        : lut.sum4_value(nw_desc.sum_id);
-    const uint64_t ne_sum = use_word_sums
-        ? (*word_sums)[q.ne]
-        : lut.sum4_value(ne_desc.sum_id);
-    const uint64_t sw_sum = use_word_sums
-        ? (*word_sums)[q.sw]
-        : lut.sum4_value(sw_desc.sum_id);
-    const uint64_t se_sum = use_word_sums
-        ? (*word_sums)[q.se]
-        : lut.sum4_value(se_desc.sum_id);
+    const uint64_t nw_sum = nw_desc.sum;
+    const uint64_t ne_sum = ne_desc.sum;
+    const uint64_t sw_sum = sw_desc.sum;
+    const uint64_t se_sum = se_desc.sum;
 
     const uint64_t total_sum =
         nw_sum +

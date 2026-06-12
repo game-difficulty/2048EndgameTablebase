@@ -187,12 +187,6 @@ void test_spawn_tile() {
 
 void test_hot_encode_matches_public_helper() {
     const BCLut lut(test_alphabet());
-    const std::array<uint32_t, 16U> tile_sums = {
-        0U, 2U, 4U, 8U, 16U, 32U, 64U, 128U,
-        256U, 512U, 1024U, 2048U, 4096U, 8192U, 16384U, 32768U
-    };
-    const BC::BCQuadrantWordSumTable word_sums =
-        BC::build_quadrant_word_sum_table(&tile_sums);
     const BCFamilyTable axis = BCFamilyTable::from_range(14U, 2U, 0U, 3U);
     const std::vector<BCQuadrantWords> quadrants{
         BCQuadrantWords{0x1111U, 0x0000U, 0x0011U, 0x0001U},
@@ -201,8 +195,8 @@ void test_hot_encode_matches_public_helper() {
         BCQuadrantWords{0x0002U, 0x0011U, 0x1000U, 0x0001U},
     };
     for (const BCQuadrantWords &q : quadrants) {
-        const auto public_encoded = BC::encode_canonical_quadrants_position(lut, axis, q, &tile_sums);
-        const auto hot_encoded = BC::bc_encode_canonical_quadrants_position_hot(lut, axis, q, &word_sums);
+        const auto public_encoded = BC::encode_canonical_quadrants_position(lut, axis, q);
+        const auto hot_encoded = BC::bc_encode_canonical_quadrants_position_hot(lut, axis, q);
         check(public_encoded.valid == hot_encoded.valid, "hot encode valid mismatch");
         check(public_encoded.cid == hot_encoded.cid, "hot encode cid mismatch");
         check(public_encoded.key == hot_encoded.key, "hot encode key mismatch");

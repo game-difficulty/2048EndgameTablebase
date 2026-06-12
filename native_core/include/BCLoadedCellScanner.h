@@ -211,35 +211,20 @@ private:
             word_begin
         );
 
-        for (uint32_t word_i = word_begin; word_i < effective_word_end; ++word_i) {
-            uint64_t word = load_u64_le(bitmap_words + static_cast<size_t>(word_i) * sizeof(uint64_t));
-            if (word_i + 1U == bitmap_word_count && (bitmap_len & 63U) != 0U) {
-                word &= (1ULL << (bitmap_len & 63U)) - 1ULL;
+        bc_scan_bucket_board_entries(
+            bucket,
+            decoder,
+            bitmap_words,
+            bitmap_word_count,
+            bitmap_len,
+            word_begin,
+            effective_word_end,
+            cell_.success_rows,
+            bucket_seen,
+            [&](BucketRank rank, uint32_t local_row, uint64_t board) {
+                fn(BCScannedBoardEntry{bucket.key, rank, local_row, board});
             }
-            while (word != 0U) {
-                const uint32_t bit = countr_zero64(word);
-                const uint32_t rank_u32 = word_i * kBCBitmapWordBits + bit;
-                if (rank_u32 >= bitmap_len ||
-                    rank_u32 > std::numeric_limits<BucketRank>::max()) {
-                    throw std::logic_error("BC loaded cell scanner range computed invalid rank");
-                }
-                const uint64_t local_row =
-                    static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
-                if (local_row >= cell_.success_rows ||
-                    local_row > std::numeric_limits<uint32_t>::max()) {
-                    throw std::out_of_range("BC loaded cell scanner range success row exceeds descriptor");
-                }
-                const BucketRank rank = static_cast<BucketRank>(rank_u32);
-                fn(BCScannedBoardEntry{
-                    bucket.key,
-                    rank,
-                    static_cast<uint32_t>(local_row),
-                    decoder.board(rank)
-                });
-                ++bucket_seen;
-                word &= word - 1U;
-            }
-        }
+        );
     }
 
     template <class Fn, class Emit>
@@ -340,39 +325,24 @@ private:
 
             uint32_t bucket_seen = 0U;
             const uint8_t *bitmap_words = cell_.rank_payload.data + bitmap_offset;
-            for (uint32_t word_i = 0; word_i < bitmap_word_count; ++word_i) {
-                uint64_t word = load_u64_le(bitmap_words + static_cast<size_t>(word_i) * sizeof(uint64_t));
-                if (word_i + 1U == bitmap_word_count && (bitmap_len & 63U) != 0U) {
-                    word &= (1ULL << (bitmap_len & 63U)) - 1ULL;
-                }
-                while (word != 0U) {
-                    const uint32_t bit = countr_zero64(word);
-                    const uint32_t rank_u32 = word_i * kBCBitmapWordBits + bit;
-                    if (rank_u32 >= bitmap_len ||
-                        rank_u32 > std::numeric_limits<BucketRank>::max()) {
-                        throw std::logic_error("BC loaded cell scanner computed invalid rank");
-                    }
-                    const uint64_t local_row =
-                        static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
-                    if (local_row >= cell_.success_rows ||
-                        local_row > std::numeric_limits<uint32_t>::max()) {
-                        throw std::out_of_range("BC loaded cell scanner bucket success row exceeds descriptor");
-                    }
-                    const BucketRank rank = static_cast<BucketRank>(rank_u32);
-                    fn(BCScannedBoardEntry{
-                        bucket.key,
-                        rank,
-                        static_cast<uint32_t>(local_row),
-                        decoder.board(rank)
-                    });
-                    ++bucket_seen;
+            bc_scan_bucket_board_entries(
+                bucket,
+                decoder,
+                bitmap_words,
+                bitmap_word_count,
+                bitmap_len,
+                0U,
+                bitmap_word_count,
+                cell_.success_rows,
+                bucket_seen,
+                [&](BucketRank rank, uint32_t local_row, uint64_t board) {
+                    fn(BCScannedBoardEntry{bucket.key, rank, local_row, board});
                     ++total_seen;
                     if (total_seen > cell_.success_rows) {
                         throw std::out_of_range("BC loaded cell scanner emitted too many rows");
                     }
-                    word &= word - 1U;
                 }
-            }
+            );
             const uint64_t bucket_end_row =
                 static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
             if (bucket_end_row > cell_.success_rows) {

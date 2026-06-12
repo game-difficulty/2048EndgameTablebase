@@ -178,7 +178,7 @@ void test_theory_axis_builder() {
     const BCFamilyTable axis = BC::build_family_axis_for_layer(layer_sum, 2U, possible);
     check(axis.coords() == expected, "theory axis coords differ from brute force");
     check(axis.family_count() != layer_sum / 4U + 1U, "theory axis should not equal dense range size");
-    check(axis.contains_coord(0U), "theory axis should contain zero small-side coord for sentinel-heavy layer");
+    check(axis.contains_coord(0U), "theory axis should contain zero small-side coord for rank-15-heavy layer");
     check(axis.total_coord() == layer_sum / 2U, "theory axis total coord mismatch");
 }
 

@@ -25,6 +25,7 @@ inline constexpr uint32_t kBCRankPrefixBits = 256U;
 inline constexpr uint32_t kBCBitmapWordBits = 64U;
 
 struct BCWordDesc {
+    uint32_t sum = 0U;
     uint16_t sum_id = 0U;
     uint16_t packed_sum_mask = 0U;
     uint16_t group_count = 0U;
@@ -194,7 +195,7 @@ private:
             legal_tiles_[tile] = true;
         }
         tile_sum_values_ = tile_sum_values;
-        word_descs_.fill(BCWordDesc{});
+        word_descs_.assign(kBCQuadrantWordCount, BCWordDesc{});
 
         std::vector<uint32_t> sums;
         sums.reserve(kBCQuadrantWordCount);
@@ -254,6 +255,7 @@ private:
                 throw std::invalid_argument("BC fixed sum+empty_mask word count exceeds 36");
             }
             word_descs_[word] = BCWordDesc{
+                sum,
                 sum_id,
                 pack_sum_mask(sum_id, empty_mask),
                 0U,
@@ -290,7 +292,7 @@ private:
 
     std::array<bool, 16U> legal_tiles_{};
     std::array<uint32_t, 16U> tile_sum_values_{};
-    std::array<BCWordDesc, kBCQuadrantWordCount> word_descs_{};
+    std::vector<BCWordDesc> word_descs_;
     std::vector<uint32_t> sum4_values_;
     std::vector<std::array<uint16_t, 16U>> count4_;
     std::vector<std::array<uint32_t, 16U>> offset4_;

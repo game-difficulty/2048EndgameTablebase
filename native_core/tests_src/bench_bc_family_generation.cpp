@@ -442,15 +442,9 @@ void check(bool condition, const char *message) {
     return BC::default_2048_tile_sum_values();
 }
 
-[[nodiscard]] std::array<uint32_t, 16U> free_family_id_tile_sums() {
-    std::array<uint32_t, 16U> sums = BC::default_2048_tile_sum_values();
-    sums[15U] = 0U;
-    return sums;
-}
-
 [[nodiscard]] std::vector<uint8_t> make_free_legal_tiles(uint32_t target_rank) {
     if (target_rank >= 15U) {
-        throw std::invalid_argument("free benchmark target rank must be < 15 because tile 15 is the sentinel");
+        throw std::invalid_argument("free benchmark target rank must be < 15");
     }
     std::vector<uint8_t> legal_tiles;
     legal_tiles.reserve(target_rank + 2U);
@@ -760,7 +754,6 @@ void write_raw_bytes_to_file(
     const BCLut &lut,
     const BCFamilyTable &axis,
     const std::vector<uint64_t> &initial_boards,
-    const std::array<uint32_t, 16U> &family_tile_sums,
     const std::vector<BC::LayerSum> &possible_8tile_sums,
     uint32_t family_modulus
 ) {
@@ -777,10 +770,10 @@ void write_raw_bytes_to_file(
         const BC::BCQuadrantWords q = BC::unpack_board_to_quadrants(canonical);
         BC::BCEncodedKeyRank key_rank = BC::encode_key_and_rank(lut, q.nw, q.ne, q.sw, q.se);
         check(key_rank.valid, "free initial board should encode key/rank");
-        const uint64_t nw_sum = BC::bc_quadrant_sum_value_from_tiles(q.nw, family_tile_sums);
-        const uint64_t ne_sum = BC::bc_quadrant_sum_value_from_tiles(q.ne, family_tile_sums);
-        const uint64_t sw_sum = BC::bc_quadrant_sum_value_from_tiles(q.sw, family_tile_sums);
-        const uint64_t se_sum = BC::bc_quadrant_sum_value_from_tiles(q.se, family_tile_sums);
+        const uint64_t nw_sum = lut.word_desc(q.nw).sum;
+        const uint64_t ne_sum = lut.word_desc(q.ne).sum;
+        const uint64_t sw_sum = lut.word_desc(q.sw).sum;
+        const uint64_t se_sum = lut.word_desc(q.se).sum;
         const uint64_t top_sum = nw_sum + ne_sum;
         const uint64_t left_sum = nw_sum + sw_sum;
         const uint64_t bottom_sum = axis.layer_sum() - top_sum;
@@ -815,7 +808,6 @@ void write_raw_bytes_to_file(
     const BCLut &lut,
     const BCFamilyTable &axis,
     const std::vector<uint64_t> &initial_boards,
-    const std::array<uint32_t, 16U> &family_tile_sums,
     const std::vector<BC::LayerSum> &possible_8tile_sums
 ) {
     const std::vector<uint8_t> bytes =
@@ -823,7 +815,6 @@ void write_raw_bytes_to_file(
             lut,
             axis,
             initial_boards,
-            family_tile_sums,
             possible_8tile_sums,
             args.family_modulus
         );
@@ -847,7 +838,6 @@ void cleanup_temp_file(const std::filesystem::path &path) {
 
 [[nodiscard]] BC::BCFamilyGenerationOptions family_options_from_args(
     const Args &args,
-    const std::array<uint32_t, 16U> &tile_sums,
     const std::vector<BC::LayerSum> &possible_8tile_sums,
     const std::vector<uint8_t> &success_shifts,
     BC::LayerSum success_check_min_source_layer_sum,
@@ -868,7 +858,6 @@ void cleanup_temp_file(const std::filesystem::path &path) {
         options.new_cell_reserve_bitmap_words = args.family_reserve_bitmap_words;
     }
     options.collect_hot_counters = args.family_hot_counters;
-    options.family_tile_sum_values = &tile_sums;
     options.family_partition_policy = BC::BCFamilyPartitionPolicy::modulo(args.family_modulus);
     options.family_possible_8tile_sums = &possible_8tile_sums;
     options.success_target_rank = static_cast<int>(args.target_rank);
@@ -896,7 +885,6 @@ struct FamilyLayerResult {
     const BCFamilyTable &target_axis,
     const BCPositionStreamingReader *source4_reader,
     const BCPositionStreamingReader &source2_reader,
-    const std::array<uint32_t, 16U> &tile_sums,
     const std::vector<BC::LayerSum> &possible_8tile_sums,
     const std::vector<uint8_t> &success_shifts,
     BC::LayerSum success_check_min_source_layer_sum,
@@ -942,7 +930,6 @@ struct FamilyLayerResult {
                 const BC::BCFamilyStreamingGenerationSource source2{&source2_reader, 1U, 1U};
                 BC::BCFamilyGenerationOptions options = family_options_from_args(
                     args,
-                    tile_sums,
                     possible_8tile_sums,
                     success_shifts,
                     success_check_min_source_layer_sum,
@@ -1159,14 +1146,14 @@ void print_summary_row(std::ostream &out, const char *label, const AggregateStat
 
 int run_single_layer(const Args &args, std::ostream &out) {
     std::filesystem::create_directories(args.output_dir);
-    const std::array<uint32_t, 16U> id_tile_sums = free_family_id_tile_sums();
+    const std::array<uint32_t, 16U> tile_sums = free_semantic_tile_sums();
     const std::vector<uint8_t> legal_tiles = make_free_legal_tiles(args.target_rank);
     const std::vector<BC::LayerSum> possible_8tile_sums =
-        BC::build_possible_8tile_sums(legal_tiles, id_tile_sums);
+        BC::build_possible_8tile_sums(legal_tiles, tile_sums);
     const BCLut lut = make_free_lut(args.target_rank);
 
     const uint64_t seed_board = load_pattern_seed_board(args.pattern);
-    const BC::LayerSum seed_sum64 = board_semantic_sum(seed_board, id_tile_sums);
+    const BC::LayerSum seed_sum64 = board_semantic_sum(seed_board, tile_sums);
     if (seed_sum64 > std::numeric_limits<uint32_t>::max()) {
         throw std::overflow_error("free benchmark seed sum exceeds uint32");
     }
@@ -1203,7 +1190,6 @@ int run_single_layer(const Args &args, std::ostream &out) {
         target_axis,
         source4_reader.get(),
         *source2_reader,
-        id_tile_sums,
         possible_8tile_sums,
         success_shifts,
         success_check_min_source_layer_sum,
@@ -1379,13 +1365,13 @@ Args parse_args(int argc, char **argv) {
 
 int run_free_chain(const Args &args, std::ostream &out) {
     std::filesystem::create_directories(args.output_dir);
-    const std::array<uint32_t, 16U> id_tile_sums = free_family_id_tile_sums();
+    const std::array<uint32_t, 16U> tile_sums = free_semantic_tile_sums();
     const std::vector<uint8_t> legal_tiles = make_free_legal_tiles(args.target_rank);
     const std::vector<BC::LayerSum> possible_8tile_sums =
-        BC::build_possible_8tile_sums(legal_tiles, id_tile_sums);
+        BC::build_possible_8tile_sums(legal_tiles, tile_sums);
     const BCLut lut = make_free_lut(args.target_rank);
     const uint64_t seed_board = load_pattern_seed_board(args.pattern);
-    const BC::LayerSum seed_sum64 = board_semantic_sum(seed_board, id_tile_sums);
+    const BC::LayerSum seed_sum64 = board_semantic_sum(seed_board, tile_sums);
     if (seed_sum64 > std::numeric_limits<uint32_t>::max()) {
         throw std::overflow_error("free benchmark seed sum exceeds uint32");
     }
@@ -1412,7 +1398,6 @@ int run_free_chain(const Args &args, std::ostream &out) {
             lut,
             make_axis(seed_sum, possible_8tile_sums, args.family_modulus),
             initial_boards,
-            id_tile_sums,
             possible_8tile_sums
         );
     if (seed_layer.rows != initial_boards.size()) {
@@ -1467,7 +1452,6 @@ int run_free_chain(const Args &args, std::ostream &out) {
             target_axis,
             source4_reader.get(),
             *source2_reader,
-            id_tile_sums,
             possible_8tile_sums,
             success_shifts,
             success_check_min_source_layer_sum,

@@ -7,7 +7,6 @@
 #include "BCPositionCellLoader.h"
 #include "FormationRuntime.h"
 
-#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -74,7 +73,6 @@ struct BCFamilyGenerationOptions {
     int canonical_symm_mode = static_cast<int>(SymmMode::Full);
     bool enforce_three_family_window = true;
     bool collect_hot_counters = false;
-    const std::array<uint32_t, 16U> *family_tile_sum_values = nullptr;
     BCFamilyPartitionPolicy family_partition_policy = BCFamilyPartitionPolicy::modulo(29U);
     // Required for the modulo partition map. The vector is used only to build
     // exact-coord groups for each dense partition family; hot encode maps
