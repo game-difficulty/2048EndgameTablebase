@@ -94,12 +94,23 @@ public:
         prepare_target_window_for_family_range(target_families);
     }
 
+    void prepare_target_window_for_families(const FamilyIdList3 &target_families) {
+        prepare_target_window_for_family_range(target_families);
+    }
+
     void prepare_target_window_for_families(const std::vector<FamilyId> &target_families) {
         prepare_target_window_for_family_range(target_families);
     }
 
     void prepare_target_window_for_cached_cells(
         const FamilyIdList2 &target_families,
+        const std::vector<CellId> &need_cells
+    ) {
+        prepare_target_window_for_cached_family_range(target_families, need_cells);
+    }
+
+    void prepare_target_window_for_cached_cells(
+        const FamilyIdList3 &target_families,
         const std::vector<CellId> &need_cells
     ) {
         prepare_target_window_for_cached_family_range(target_families, need_cells);
@@ -142,7 +153,6 @@ public:
             if (reserve_hint.buckets != 0U || reserve_hint.bitmap_words != 0U) {
                 builders_[cid]->reserve(reserve_hint.buckets, reserve_hint.bitmap_words);
             }
-            builders_[cid]->set_fixed_capacity_mode(default_fixed_capacity_);
             builders_[cid]->mark_growth_baseline();
             header.state = BCMutableCellState::Resident;
             builder_ptrs_[cid].store(builders_[cid].get(), std::memory_order_release);
@@ -169,10 +179,6 @@ public:
             throw std::invalid_argument("BC family mutable reserve hint count does not match cell count");
         }
         reserve_hints_ = std::move(hints);
-    }
-
-    void set_default_builder_fixed_capacity(bool fixed_capacity) {
-        default_fixed_capacity_ = fixed_capacity;
     }
 
     void release_except(const std::vector<CellId> &keep_cells) {
@@ -686,7 +692,7 @@ public:
         return blob_->stats();
     }
 
-    [[nodiscard]] const FamilyIdList2 &active_target_families() const {
+    [[nodiscard]] const FamilyIdList3 &active_target_families() const {
         return active_target_families_;
     }
 
@@ -721,8 +727,8 @@ private:
 
     template <typename FamilyIdRange>
     void prepare_target_window_for_family_range(const FamilyIdRange &target_families) {
-        if (target_families.size() > 2U) {
-            throw std::invalid_argument("BC family mutable target window exceeds two target families");
+        if (target_families.size() > 3U) {
+            throw std::invalid_argument("BC family mutable target window exceeds three target families");
         }
         active_target_families_ = {};
         for (FamilyId family : target_families) {
@@ -738,8 +744,8 @@ private:
         const FamilyIdRange &target_families,
         const std::vector<CellId> &need_cells
     ) {
-        if (target_families.size() > 2U) {
-            throw std::invalid_argument("BC family mutable target window exceeds two target families");
+        if (target_families.size() > 3U) {
+            throw std::invalid_argument("BC family mutable target window exceeds three target families");
         }
         active_target_families_ = {};
         for (FamilyId family : target_families) {
@@ -828,7 +834,6 @@ private:
                     throw std::logic_error("BC family mutable blob restored null builder");
                 }
                 builders_[cid] = std::move(restored.builder);
-                builders_[cid]->set_fixed_capacity_mode(default_fixed_capacity_);
                 builders_[cid]->mark_growth_baseline();
                 header.state = BCMutableCellState::Resident;
                 builder_ptrs_[cid].store(builders_[cid].get(), std::memory_order_release);
@@ -1049,14 +1054,13 @@ private:
     std::vector<BCCellBuilderDumpBuffer> finalize_single_dump_scratch_;
     std::vector<BCRestoredCellBuilder> reload_restored_builders_scratch_;
     std::mutex resident_cells_mutex_;
-    FamilyIdList2 active_target_families_;
+    FamilyIdList3 active_target_families_;
     uint32_t active_epoch_ = 1U;
     uint32_t keep_epoch_ = 1U;
     uint32_t active_cell_count_ = 0U;
     uint32_t default_reserve_buckets_ = 0U;
     uint32_t default_reserve_bitmap_words_ = 0U;
     std::vector<BCCellMutableReserveHint> reserve_hints_;
-    bool default_fixed_capacity_ = false;
     uint32_t next_dump_generation_ = 0U;
     uint64_t last_release_batch_builder_bytes_ = 0U;
     std::atomic<bool> builder_overflowed_{false};

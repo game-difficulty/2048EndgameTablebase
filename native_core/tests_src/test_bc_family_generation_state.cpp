@@ -310,8 +310,8 @@ void test_mutable_store_lifecycle() {
         "finalized cell should reject prepare"
     );
     expect_throws(
-        [&] { store.prepare_target_window_for_families(std::vector<BC::FamilyId>{0U, 1U, 2U}); },
-        "more than two target families should be rejected"
+        [&] { store.prepare_target_window_for_families(std::vector<BC::FamilyId>{0U, 1U, 2U, 3U}); },
+        "more than three target families should be rejected"
     );
 }
 
@@ -671,6 +671,43 @@ void test_family_position_writer() {
     );
     cleanup_file(final_path);
     cleanup_file(spool_path);
+
+    const std::filesystem::path rank_first_path = temp_path("position_rank_first.bcpos");
+    const std::filesystem::path bucket_spool_path = temp_path("position_bucket.spool");
+    cleanup_file(rank_first_path);
+    cleanup_file(bucket_spool_path);
+    {
+        BC::BCBufferedFileWriter final_file(rank_first_path);
+        BC::BCBufferedFileWriter bucket_spool_file(bucket_spool_path);
+        BC::BCFamilyPositionWriter writer;
+        BC::BCFamilyPositionWriterOptions options;
+        options.staging_bytes = 1024U;
+        options.backend_preserves_unaligned_positioned_writes = false;
+        options.rank_first_direct_layout = true;
+        writer.begin_layer(final_file, bucket_spool_file, axis, options);
+        writer.write_empty_cell(0U);
+        writer.write_finalized_cell(cid1, payloads[cid1]);
+        writer.write_finalized_cell(cid0, payloads[cid0]);
+        for (CellId cid = 1U; cid < matrix.cell_count(); ++cid) {
+            if (cid == cid0 || cid == cid1) {
+                continue;
+            }
+            writer.write_empty_cell(cid);
+        }
+        writer.flush_pending_streams_for_reader();
+        BC::BCBufferedFileReader bucket_spool_reader(bucket_spool_path);
+        const uint64_t logical_size = writer.finish_layer(bucket_spool_reader);
+        final_file.flush();
+        check(logical_size > 0U, "rank-first family position writer logical size should be non-zero");
+    }
+    const std::vector<uint8_t> rank_first_bytes = BC::read_position_layer_from_file(rank_first_path);
+    const BCPositionLayerReader rank_first_reader(rank_first_bytes, lut);
+    check(
+        collect_candidates(rank_first_reader) == collect_candidates(memory_reader),
+        "rank-first family position writer output should match memory position writer"
+    );
+    cleanup_file(rank_first_path);
+    cleanup_file(bucket_spool_path);
 }
 
 std::unique_ptr<BC::BCPositionStreamingReader> make_streaming_reader(

@@ -588,14 +588,12 @@ struct FamilyThreadStats {
     uint64_t source_bitmap_words_scanned = 0U;
 };
 
-inline constexpr uint32_t kInvalidFamilyActiveIndex = std::numeric_limits<uint32_t>::max();
-
 struct FamilyEncodedCandidate {
-    uint32_t active_index = kInvalidFamilyActiveIndex;
     uint64_t key = 0U;
     BucketRank rank = 0U;
-    BucketBitmapLen bitmap_len = 0U;
 };
+
+inline constexpr uint32_t kInvalidFamilyActiveIndex = std::numeric_limits<uint32_t>::max();
 
 struct FamilyEncodeHotContext {
     const BCFamilyTable *axis = nullptr;
@@ -603,6 +601,7 @@ struct FamilyEncodeHotContext {
     uint32_t family_count = 0U;
     FamilyId active_family0 = 0U;
     FamilyId active_family1 = 0U;
+    FamilyId active_family2 = 0U;
     uint32_t active_family_count = 0U;
     const BCFamilyPartitionLayerMap *partition = nullptr;
 };
@@ -627,14 +626,17 @@ struct FamilyActiveCellBuffer {
     }
 };
 
-[[nodiscard]] uint32_t family_active_index_from_row_col(
+[[nodiscard]] uint32_t family_active_index_from_row_col_array(
     FamilyId row,
     FamilyId col,
-    const FamilyIdList2 &target_families,
+    const FamilyId *target_families,
+    uint32_t active_family_count,
     uint32_t family_count
 ) {
-    const uint32_t active_family_count = static_cast<uint32_t>(target_families.size());
-    if (active_family_count == 0U || family_count == 0U || active_family_count > 2U) {
+    if (target_families == nullptr ||
+        active_family_count == 0U ||
+        family_count == 0U ||
+        active_family_count > 3U) {
         return kInvalidFamilyActiveIndex;
     }
 
@@ -670,7 +672,62 @@ struct FamilyActiveCellBuffer {
             (row_u32 > g1 ? 1U : 0U);
         return base1 + (family_count - 1U) + row_u32 - before;
     }
+    if (active_family_count < 3U) {
+        return kInvalidFamilyActiveIndex;
+    }
+
+    uint32_t base = 0U;
+    for (uint32_t i = 0U; i < active_family_count; ++i) {
+        const uint32_t g = static_cast<uint32_t>(target_families[i]);
+        uint32_t previous_col_less = 0U;
+        uint32_t previous_row_less = 0U;
+        bool col_seen = false;
+        bool row_seen = false;
+        for (uint32_t j = 0U; j < i; ++j) {
+            const uint32_t prev = static_cast<uint32_t>(target_families[j]);
+            col_seen = col_seen || static_cast<uint32_t>(col) == prev;
+            row_seen = row_seen || static_cast<uint32_t>(row) == prev;
+            previous_col_less += prev < static_cast<uint32_t>(col) ? 1U : 0U;
+            previous_row_less += prev < static_cast<uint32_t>(row) ? 1U : 0U;
+        }
+        if (row == target_families[i]) {
+            return col_seen
+                ? kInvalidFamilyActiveIndex
+                : base + static_cast<uint32_t>(col) - previous_col_less;
+        }
+        if (col == target_families[i]) {
+            if (row_seen) {
+                return kInvalidFamilyActiveIndex;
+            }
+            const uint32_t current_and_previous_less =
+                previous_row_less + (g < static_cast<uint32_t>(row) ? 1U : 0U);
+            return base +
+                (family_count - i) +
+                static_cast<uint32_t>(row) -
+                current_and_previous_less;
+        }
+        base += (2U * family_count) - (2U * i) - 1U;
+    }
     return kInvalidFamilyActiveIndex;
+}
+
+[[nodiscard]] uint32_t family_active_index_from_row_col(
+    FamilyId row,
+    FamilyId col,
+    const FamilyIdList3 &target_families,
+    uint32_t family_count
+) {
+    FamilyId families[3] = {};
+    for (uint32_t i = 0U; i < target_families.size(); ++i) {
+        families[i] = target_families[i];
+    }
+    return family_active_index_from_row_col_array(
+        row,
+        col,
+        families,
+        static_cast<uint32_t>(target_families.size()),
+        family_count
+    );
 }
 
 [[nodiscard]] uint32_t family_active_index_from_row_col_fast(
@@ -678,10 +735,11 @@ struct FamilyActiveCellBuffer {
     FamilyId col,
     FamilyId g0,
     FamilyId g1,
+    FamilyId g2,
     uint32_t active_family_count,
     uint32_t family_count
 ) {
-    if (active_family_count == 0U || family_count == 0U || active_family_count > 2U) {
+    if (active_family_count == 0U || family_count == 0U || active_family_count > 3U) {
         return kInvalidFamilyActiveIndex;
     }
     if (row == g0) {
@@ -714,24 +772,34 @@ struct FamilyActiveCellBuffer {
             (row_u32 > static_cast<uint32_t>(g1) ? 1U : 0U);
         return base1 + (family_count - 1U) + row_u32 - before;
     }
-    return kInvalidFamilyActiveIndex;
+    if (active_family_count < 3U) {
+        return kInvalidFamilyActiveIndex;
+    }
+
+    const FamilyId families[3] = {g0, g1, g2};
+    return family_active_index_from_row_col_array(
+        row,
+        col,
+        families,
+        active_family_count,
+        family_count
+    );
 }
 
-[[nodiscard]] FamilyEncodedCandidate encode_family_candidate_compact(
+[[nodiscard]] uint32_t encode_family_candidate_compact(
     const BCLut &lut,
     const BCFamilyTable &axis,
-    const FamilyIdList2 &target_families,
+    const FamilyIdList3 &target_families,
     const BCQuadrantWords &q,
+    FamilyEncodedCandidate &out,
     const BCFamilyPartitionLayerMap *partition = nullptr
 ) {
-    FamilyEncodedCandidate out;
-
     const BCWordDesc &nw_desc = lut.word_desc(q.nw);
     const BCWordDesc &ne_desc = lut.word_desc(q.ne);
     const BCWordDesc &sw_desc = lut.word_desc(q.sw);
     const BCWordDesc &se_desc = lut.word_desc(q.se);
     if (!nw_desc.valid || !ne_desc.valid || !sw_desc.valid || !se_desc.valid) {
-        return out;
+        return kInvalidFamilyActiveIndex;
     }
 
     const uint64_t nw_sum = nw_desc.sum;
@@ -739,7 +807,7 @@ struct FamilyActiveCellBuffer {
     const uint64_t sw_sum = sw_desc.sum;
     const uint64_t se_sum = se_desc.sum;
     if (nw_sum + ne_sum + sw_sum + se_sum != axis.layer_sum()) {
-        return out;
+        return kInvalidFamilyActiveIndex;
     }
 
     const uint16_t family_unit = axis.family_unit();
@@ -768,7 +836,7 @@ struct FamilyActiveCellBuffer {
     FamilyCoord col_coord = 0U;
     if (!min_side_coord_fast(nw_sum + ne_sum, sw_sum + se_sum, row_coord) ||
         !min_side_coord_fast(nw_sum + sw_sum, ne_sum + se_sum, col_coord)) {
-        return out;
+        return kInvalidFamilyActiveIndex;
     }
 
     const uint32_t family_count = axis.family_count();
@@ -780,21 +848,14 @@ struct FamilyActiveCellBuffer {
         : axis.try_coord_to_id(col_coord);
     if (row_id == BCFamilyTable::kInvalidFamilyId ||
         col_id == BCFamilyTable::kInvalidFamilyId) {
-        return out;
+        return kInvalidFamilyActiveIndex;
     }
 
-    const uint32_t count_ne = ne_desc.group_count;
     const uint32_t count_sw = sw_desc.group_count;
     const uint32_t count_se = se_desc.group_count;
-    const uint32_t bitmap_len = count_ne * count_sw * count_se;
-    if (bitmap_len == 0U ||
-        bitmap_len > kBCMaxBucketBitmapLen ||
-        bitmap_len > std::numeric_limits<BucketBitmapLen>::max()) {
-        throw std::logic_error("BC Family compact encode bitmap length is invalid");
-    }
     const uint32_t rank =
         (static_cast<uint32_t>(ne_desc.rank) * count_sw + sw_desc.rank) * count_se + se_desc.rank;
-    if (rank >= bitmap_len || rank > std::numeric_limits<BucketRank>::max()) {
+    if (rank > std::numeric_limits<BucketRank>::max()) {
         throw std::logic_error("BC Family compact encode rank is invalid");
     }
     const uint32_t active_index = family_active_index_from_row_col(
@@ -804,27 +865,25 @@ struct FamilyActiveCellBuffer {
         family_count
     );
     if (active_index == kInvalidFamilyActiveIndex) {
-        return out;
+        return kInvalidFamilyActiveIndex;
     }
-    out.active_index = active_index;
     out.key =
         (static_cast<uint64_t>(q.nw) << 48U) |
         (static_cast<uint64_t>(ne_desc.packed_sum_mask) << 32U) |
         (static_cast<uint64_t>(sw_desc.packed_sum_mask) << 16U) |
         static_cast<uint64_t>(se_desc.packed_sum_mask);
     out.rank = static_cast<BucketRank>(rank);
-    out.bitmap_len = static_cast<BucketBitmapLen>(bitmap_len);
-    return out;
+    return active_index;
 }
 
-[[nodiscard]] FamilyEncodedCandidate encode_family_candidate_compact_unit2(
+[[nodiscard]] uint32_t encode_family_candidate_compact_unit2(
     const BCLut &lut,
     const FamilyEncodeHotContext &ctx,
-    const BCQuadrantWords &q
+    const BCQuadrantWords &q,
+    FamilyEncodedCandidate &out
 ) {
-    FamilyEncodedCandidate out;
     if (ctx.active_family_count == 0U) {
-        return out;
+        return kInvalidFamilyActiveIndex;
     }
 
     const BCWordDesc &nw_desc = lut.word_desc(q.nw);
@@ -836,7 +895,7 @@ struct FamilyActiveCellBuffer {
     // spawn/move/canonicalize, so quadrant validity and total layer sum are
     // invariants here. Public board encode helpers keep those checks.
     if (ctx.axis == nullptr) {
-        return out;
+        return kInvalidFamilyActiveIndex;
     }
     const uint64_t nw_sum = nw_desc.sum;
     const uint64_t ne_sum = ne_desc.sum;
@@ -845,7 +904,7 @@ struct FamilyActiveCellBuffer {
     const uint64_t top_sum = nw_sum + ne_sum;
     const uint64_t left_sum = nw_sum + sw_sum;
     if (top_sum > ctx.layer_sum || left_sum > ctx.layer_sum) {
-        return out;
+        return kInvalidFamilyActiveIndex;
     }
     const uint64_t bottom_sum = ctx.layer_sum - top_sum;
     const uint64_t right_sum = ctx.layer_sum - left_sum;
@@ -855,7 +914,7 @@ struct FamilyActiveCellBuffer {
     const uint64_t col_coord64 = col_min >> 1U;
     if (row_coord64 > std::numeric_limits<FamilyCoord>::max() ||
         col_coord64 > std::numeric_limits<FamilyCoord>::max()) {
-        return out;
+        return kInvalidFamilyActiveIndex;
     }
     const FamilyCoord row_coord = static_cast<FamilyCoord>(row_coord64);
     const FamilyCoord col_coord = static_cast<FamilyCoord>(col_coord64);
@@ -867,57 +926,50 @@ struct FamilyActiveCellBuffer {
         : ctx.axis->try_coord_to_id(col_coord);
     if (row_id == BCFamilyTable::kInvalidFamilyId ||
         col_id == BCFamilyTable::kInvalidFamilyId) {
-        return out;
+        return kInvalidFamilyActiveIndex;
     }
     const uint32_t active_index = family_active_index_from_row_col_fast(
         row_id,
         col_id,
         ctx.active_family0,
         ctx.active_family1,
+        ctx.active_family2,
         ctx.active_family_count,
         ctx.family_count
     );
     if (active_index == kInvalidFamilyActiveIndex) {
-        return out;
+        return kInvalidFamilyActiveIndex;
     }
 
-    const uint32_t count_ne = ne_desc.group_count;
     const uint32_t count_sw = sw_desc.group_count;
     const uint32_t count_se = se_desc.group_count;
-    const uint32_t bitmap_len = count_ne * count_sw * count_se;
-    if (bitmap_len == 0U ||
-        bitmap_len > kBCMaxBucketBitmapLen ||
-        bitmap_len > std::numeric_limits<BucketBitmapLen>::max()) {
-        throw std::logic_error("BC Family compact fast encode bitmap length is invalid");
-    }
     const uint32_t rank =
         (static_cast<uint32_t>(ne_desc.rank) * count_sw + sw_desc.rank) * count_se + se_desc.rank;
-    if (rank >= bitmap_len || rank > std::numeric_limits<BucketRank>::max()) {
+    if (rank > std::numeric_limits<BucketRank>::max()) {
         throw std::logic_error("BC Family compact fast encode rank is invalid");
     }
 
-    out.active_index = active_index;
     out.key =
         (static_cast<uint64_t>(q.nw) << 48U) |
         (static_cast<uint64_t>(ne_desc.packed_sum_mask) << 32U) |
         (static_cast<uint64_t>(sw_desc.packed_sum_mask) << 16U) |
         static_cast<uint64_t>(se_desc.packed_sum_mask);
     out.rank = static_cast<BucketRank>(rank);
-    out.bitmap_len = static_cast<BucketBitmapLen>(bitmap_len);
-    return out;
+    return active_index;
 }
 
 struct FamilyThreadWorkspace {
     static constexpr CellId kInvalidCachedCell = std::numeric_limits<CellId>::max();
 
     std::vector<uint64_t> canonical_buffer;
-    std::vector<BCCellEncodedInsert> active_encoded_storage;
+    std::vector<BCCellTrustedKeyRankInsert> active_encoded_storage;
     std::vector<BCCellResolvedInsert> resolved_batch;
     std::vector<FamilyActiveCellBuffer> active_buffers;
     std::vector<uint32_t> touched_buffer_indices;
     FamilyId active_family0 = 0U;
     FamilyId active_family1 = 0U;
-    FamilyIdList2 active_target_families;
+    FamilyId active_family2 = 0U;
+    FamilyIdList3 active_target_families;
     uint32_t active_family_count = 0U;
     uint32_t active_axis_family_count = 0U;
     FamilyThreadStats stats;
@@ -928,7 +980,7 @@ struct FamilyThreadWorkspace {
     [[nodiscard]] uint64_t allocated_bytes() const {
         uint64_t bytes = 0U;
         bytes += static_cast<uint64_t>(canonical_buffer.capacity()) * sizeof(uint64_t);
-        bytes += static_cast<uint64_t>(active_encoded_storage.capacity()) * sizeof(BCCellEncodedInsert);
+        bytes += static_cast<uint64_t>(active_encoded_storage.capacity()) * sizeof(BCCellTrustedKeyRankInsert);
         bytes += static_cast<uint64_t>(resolved_batch.capacity()) * sizeof(BCCellResolvedInsert);
         bytes += static_cast<uint64_t>(active_buffers.capacity()) * sizeof(FamilyActiveCellBuffer);
         bytes += static_cast<uint64_t>(touched_buffer_indices.capacity()) * sizeof(uint32_t);
@@ -937,22 +989,23 @@ struct FamilyThreadWorkspace {
 
     void prepare_active_window(
         const std::vector<CellId> &cells,
-        const FamilyIdList2 &target_families,
+        const FamilyIdList3 &target_families,
         uint32_t axis_family_count,
         uint32_t cell_count,
         uint32_t pending_insert_buffer_size
     ) {
         active_axis_family_count = axis_family_count;
         active_family_count = static_cast<uint32_t>(target_families.size());
-        if (active_family_count > 2U) {
-            throw std::logic_error("BC Family active window cannot map more than two target families");
+        if (active_family_count > 3U) {
+            throw std::logic_error("BC Family active window cannot map more than three target families");
         }
-        active_target_families = FamilyIdList2{};
+        active_target_families = FamilyIdList3{};
         for (FamilyId family : target_families) {
             active_target_families.push_back(family);
         }
         active_family0 = active_family_count >= 1U ? target_families[0] : 0U;
         active_family1 = active_family_count >= 2U ? target_families[1] : 0U;
+        active_family2 = active_family_count >= 3U ? target_families[2] : 0U;
 
         touched_buffer_indices.clear();
         active_buffers.resize(cells.size());
@@ -980,43 +1033,15 @@ struct FamilyThreadWorkspace {
     }
 
     [[nodiscard]] uint32_t active_index_from_row_col(FamilyId row, FamilyId col) const {
-        const uint32_t f = active_axis_family_count;
-        if (active_family_count == 0U || f == 0U) {
-            return std::numeric_limits<uint32_t>::max();
-        }
-        const uint32_t g0 = active_family0;
-        if (row == g0) {
-            return static_cast<uint32_t>(col);
-        }
-        if (col == g0) {
-            return f + (static_cast<uint32_t>(row) < g0
-                ? static_cast<uint32_t>(row)
-                : static_cast<uint32_t>(row) - 1U);
-        }
-        if (active_family_count < 2U) {
-            return std::numeric_limits<uint32_t>::max();
-        }
-
-        const uint32_t g1 = active_family1;
-        const uint32_t base1 = 2U * f - 1U;
-        if (row == g1) {
-            const uint32_t col_u32 = static_cast<uint32_t>(col);
-            if (col_u32 == g0) {
-                return std::numeric_limits<uint32_t>::max();
-            }
-            return base1 + col_u32 - (col_u32 > g0 ? 1U : 0U);
-        }
-        if (col == g1) {
-            const uint32_t row_u32 = static_cast<uint32_t>(row);
-            if (row_u32 == g0 || row_u32 == g1) {
-                return std::numeric_limits<uint32_t>::max();
-            }
-            const uint32_t before =
-                (row_u32 > g0 ? 1U : 0U) +
-                (row_u32 > g1 ? 1U : 0U);
-            return base1 + (f - 1U) + row_u32 - before;
-        }
-        return std::numeric_limits<uint32_t>::max();
+        return family_active_index_from_row_col_fast(
+            row,
+            col,
+            active_family0,
+            active_family1,
+            active_family2,
+            active_family_count,
+            active_axis_family_count
+        );
     }
 };
 
@@ -1189,7 +1214,8 @@ void flush_family_cell_buffer(
         ++workspace.stats.family_builder_bind_calls;
         buffer.builder = &target_store.get_or_create(buffer.cid);
     }
-    BCCellEncodedInsert *encoded_begin = workspace.active_encoded_storage.data() + buffer.offset;
+    BCCellTrustedKeyRankInsert *encoded_begin =
+        workspace.active_encoded_storage.data() + buffer.offset;
     constexpr uint32_t kMinBatchForBitmapChunk = 1U;
     BCCellBitmapThreadChunk *bitmap_chunk =
         buffer.size >= kMinBatchForBitmapChunk
@@ -1197,15 +1223,14 @@ void flush_family_cell_buffer(
             : nullptr;
     uint64_t probe_steps = 0U;
     const BCCellInsertBatchResult batch =
-        buffer.builder->resolve_and_apply_compact_batch(
-        encoded_begin,
-        nullptr,
-        buffer.size,
-        workspace.resolved_batch,
-        bitmap_chunk,
-        false,
-        options.collect_hot_counters ? &probe_steps : nullptr
-    );
+        buffer.builder->resolve_and_apply_trusted_key_rank_batch(
+            encoded_begin,
+            buffer.size,
+            workspace.resolved_batch,
+            bitmap_chunk,
+            false,
+            options.collect_hot_counters ? &probe_steps : nullptr
+        );
     if (buffer.builder->overflowed() ||
         workspace.resolved_batch.size() != buffer.size) {
         target_store.mark_builder_overflow();
@@ -1256,9 +1281,9 @@ void enqueue_family_encoded_candidate(
     FamilyThreadWorkspace &workspace,
     BCFamilyMutableStore &target_store,
     const BCFamilyGenerationOptions &options,
+    uint32_t active_index,
     const FamilyEncodedCandidate &encoded
 ) {
-    const uint32_t active_index = encoded.active_index;
     if (active_index >= workspace.active_buffers.size()) {
         ++workspace.stats.target_window_skips;
         return;
@@ -1283,14 +1308,9 @@ void enqueue_family_encoded_candidate(
         throw std::logic_error("BC Family active cell buffer did not flush before enqueue");
     }
     const uint32_t write_index = buffer.offset + buffer.size;
-    const uint32_t home_slot = buffer.builder->fixed_capacity_mode()
-        ? buffer.builder->home_slot_for_key(encoded.key)
-        : BCCellEncodedInsert::kInvalidHomeSlot;
-    workspace.active_encoded_storage[write_index] = BCCellEncodedInsert{
+    workspace.active_encoded_storage[write_index] = BCCellTrustedKeyRankInsert{
         encoded.key,
-        encoded.rank,
-        encoded.bitmap_len,
-        home_slot
+        encoded.rank
     };
     ++buffer.size;
     if (buffer.size >= options.pending_insert_buffer_size) {
@@ -1325,6 +1345,7 @@ void flush_family_canonical_buffer(
         target_axis.family_count(),
         workspace.active_family0,
         workspace.active_family1,
+        workspace.active_family2,
         workspace.active_family_count,
         target_partition
     };
@@ -1332,21 +1353,24 @@ void flush_family_canonical_buffer(
     for (uint64_t canonical : workspace.canonical_buffer) {
         ++workspace.stats.encode_attempts;
         const BCQuadrantWords q = unpack_board_to_quadrants(canonical);
-        const FamilyEncodedCandidate encoded =
+        FamilyEncodedCandidate encoded;
+        const uint32_t active_index =
             use_fast_unit2
                 ? encode_family_candidate_compact_unit2(
                     lut,
                     hot_context,
-                    q
+                    q,
+                    encoded
                 )
                 : encode_family_candidate_compact(
                     lut,
                     target_axis,
                     workspace.active_target_families,
                     q,
+                    encoded,
                     target_partition
                 );
-        if (encoded.active_index == kInvalidFamilyActiveIndex) {
+        if (active_index == kInvalidFamilyActiveIndex) {
             ++workspace.stats.target_window_skips;
             continue;
         }
@@ -1355,6 +1379,7 @@ void flush_family_canonical_buffer(
             workspace,
             target_store,
             options,
+            active_index,
             encoded
         );
     }
@@ -1501,20 +1526,28 @@ struct FamilyCachedPass {
     return bytes;
 }
 
-[[nodiscard]] bool add_family_to_small_set(std::vector<FamilyId> &families, FamilyId family) {
+[[nodiscard]] bool add_family_to_small_set(
+    std::vector<FamilyId> &families,
+    FamilyId family,
+    uint32_t max_families
+) {
     if (std::find(families.begin(), families.end(), family) != families.end()) {
         return true;
     }
-    if (families.size() >= 2U) {
+    if (families.size() >= max_families) {
         return false;
     }
     families.push_back(family);
     return true;
 }
 
-[[nodiscard]] bool add_fanout_to_small_set(std::vector<FamilyId> &families, const FamilyIdList2 &fanout) {
+[[nodiscard]] bool add_fanout_to_small_set(
+    std::vector<FamilyId> &families,
+    const FamilyIdList3 &fanout,
+    uint32_t max_families
+) {
     for (FamilyId family : fanout) {
-        if (!add_family_to_small_set(families, family)) {
+        if (!add_family_to_small_set(families, family, max_families)) {
             return false;
         }
     }
@@ -1633,13 +1666,16 @@ void sort_unique_cells(std::vector<CellId> &cells) {
             cached.push_back(std::move(base));
             continue;
         }
-        for (size_t begin = 0U; begin < mapped.size(); begin += 2U) {
+        for (size_t begin = 0U; begin < mapped.size(); begin += 3U) {
             FamilyCachedPass entry = base;
             entry.pass = scheduler.make_pass_existing_targets(source_id, delta_coord, spawn_tile_rank);
-            entry.pass.target_families = FamilyIdList2{};
+            entry.pass.target_families = FamilyIdList3{};
             entry.pass.target_families.push_back(mapped[begin]);
             if (begin + 1U < mapped.size()) {
                 entry.pass.target_families.push_back(mapped[begin + 1U]);
+            }
+            if (begin + 2U < mapped.size()) {
+                entry.pass.target_families.push_back(mapped[begin + 2U]);
             }
             entry.target_need_cells = scheduler.target_need_cells(entry.pass);
             cached.push_back(std::move(entry));
@@ -1701,6 +1737,14 @@ void sort_unique_cells(std::vector<CellId> &cells) {
         }
     }
 
+    uint32_t max_keep_families = 2U;
+    for (const FamilyCachedPass &entry : cached) {
+        if (entry.pass.target_families.size() > 2U) {
+            max_keep_families = 3U;
+            break;
+        }
+    }
+
     for (uint32_t order_i = 0U; order_i < execution_order.size(); ++order_i) {
         const uint32_t pass_index = execution_order[order_i];
         FamilyCachedPass &entry = cached[pass_index];
@@ -1709,7 +1753,7 @@ void sort_unique_cells(std::vector<CellId> &cells) {
             const uint32_t future_index = execution_order[future_i];
             const FamilyCachedPass &future = cached[future_index];
             std::vector<FamilyId> trial = keep_families;
-            if (!add_fanout_to_small_set(trial, future.pass.target_families)) {
+            if (!add_fanout_to_small_set(trial, future.pass.target_families, max_keep_families)) {
                 break;
             }
             keep_families = std::move(trial);
@@ -2195,8 +2239,8 @@ void run_family_phase(
             const std::vector<BCSourceCellWork> &source_work_ref = cached.source_work;
             const std::vector<CellId> &active_cells_ref = cached.target_need_cells;
             pass = cached.pass;
-            if (options.enforce_three_family_window && pass.target_families.size() > 2U) {
-                throw std::logic_error("BC Family generation target fanout exceeds two families");
+            if (options.enforce_family_window && pass.target_families.size() > 3U) {
+                throw std::logic_error("BC Family generation target fanout exceeds three families");
             }
             if (!cached.has_source_rows) {
                 ++stats.source_families_processed;
@@ -2286,7 +2330,7 @@ void run_family_phase(
                 1U + static_cast<uint64_t>(pass.target_families.size())
             );
 
-            if (options.enforce_three_family_window &&
+            if (options.enforce_family_window &&
                 source_work_ref.size() > static_cast<size_t>(2U) * source.position->axis().family_count() - 1U) {
                 throw std::logic_error("BC Family generation source family view exceeds 2F-1 cells");
             }
@@ -2315,9 +2359,9 @@ void run_family_phase(
             if (loaded.size() != source_work_ref.size()) {
                 throw std::logic_error("BC Family generation loaded source cell count mismatch");
             }
-            if (options.enforce_three_family_window &&
-                (1U + static_cast<uint64_t>(pass.target_families.size())) > 3U) {
-                throw std::logic_error("BC Family generation active family window exceeds three families");
+            if (options.enforce_family_window &&
+                (1U + static_cast<uint64_t>(pass.target_families.size())) > 4U) {
+                throw std::logic_error("BC Family generation active family window exceeds four families");
             }
 
             const double build_work_begin = stage_timing ? family_now_seconds() : 0.0;
@@ -2428,6 +2472,10 @@ void run_family_phase(
                 stats.thread_workspace_bytes_peak,
                 family_thread_workspace_bytes(workspaces)
             );
+            stats.active_builder_bytes_peak = std::max<uint64_t>(
+                stats.active_builder_bytes_peak,
+                target_store.active_builder_bytes()
+            );
             record_family_memory_checkpoint(
                 stats,
                 options,
@@ -2469,7 +2517,7 @@ void run_family_phase(
             if (stage_timing) {
                 stats.dump_seconds += family_now_seconds() - dump_begin;
             }
-            if (options.enforce_three_family_window) {
+            if (options.enforce_family_window) {
                 for (CellId resident : target_store.resident_cells_for_testing()) {
                     if (std::find(cached.keep_cells.begin(), cached.keep_cells.end(), resident) == cached.keep_cells.end()) {
                         throw std::logic_error("BC Family generation retained resident cell outside keep window");
@@ -2657,6 +2705,12 @@ BCFamilyGenerationStats generate_family_position_layer_v1(
     stats.writer_rank_stage_flushes = writer_stats.rank_stage_flushes;
     stats.writer_bucket_stage_write_bytes = writer_stats.bucket_stage_write_bytes;
     stats.writer_rank_stage_write_bytes = writer_stats.rank_stage_write_bytes;
+    stats.writer_backend_read_ops = writer_stats.backend_read_ops;
+    stats.writer_backend_read_bytes = writer_stats.backend_read_bytes;
+    stats.writer_backend_write_ops = writer_stats.backend_write_ops;
+    stats.writer_backend_write_bytes = writer_stats.backend_write_bytes;
+    stats.writer_backend_read_seconds = writer_stats.backend_read_seconds;
+    stats.writer_backend_write_seconds = writer_stats.backend_write_seconds;
     if (stage_timing) {
         stats.generation_seconds = family_now_seconds() - generation_begin;
     }
@@ -2703,7 +2757,7 @@ BCFamilyLoadedPassBenchmarkResult benchmark_loaded_family_plus_spawn_pass(
         make_family_partition_layer_for_generation(target_axis, options);
     BCFamilyGenerationPass pass =
         scheduler.make_pass_existing_targets(source_family_id, delta_coord, spawn_tile_rank);
-    pass.target_families = checked_partition_fanout2(
+    pass.target_families = checked_partition_fanout3(
         map_partition_source_family_to_target_families(
             source_partition,
             target_axis,
@@ -2712,14 +2766,14 @@ BCFamilyLoadedPassBenchmarkResult benchmark_loaded_family_plus_spawn_pass(
             delta_coord
         )
     );
-    if (options.enforce_three_family_window && pass.target_families.size() > 2U) {
-        throw std::logic_error("BC Family loaded pass benchmark target fanout exceeds two families");
+    if (options.enforce_family_window && pass.target_families.size() > 3U) {
+        throw std::logic_error("BC Family loaded pass benchmark target fanout exceeds three families");
     }
     const std::vector<BCSourceCellWork> source_work = scheduler.source_cells(pass);
     if (loaded_cells.size() != source_work.size()) {
         throw std::invalid_argument("BC Family loaded pass benchmark loaded cell count mismatch");
     }
-    if (options.enforce_three_family_window &&
+    if (options.enforce_family_window &&
         source_work.size() > static_cast<size_t>(2U) * source_axis.family_count() - 1U) {
         throw std::logic_error("BC Family loaded pass benchmark source family view exceeds 2F-1 cells");
     }

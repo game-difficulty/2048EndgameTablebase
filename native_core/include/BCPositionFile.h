@@ -594,27 +594,30 @@ private:
         if (header_.descriptor_table_offset != expected_descriptor_offset) {
             throw std::runtime_error("BC position file descriptor table offset mismatch");
         }
-        const uint64_t expected_bucket_offset = bc_checked_add_u64(
+        const uint64_t metadata_end = bc_checked_add_u64(
             header_.descriptor_table_offset,
             header_.descriptor_table_bytes,
-            "BC position expected bucket stream offset overflow"
+            "BC position metadata end overflow"
         );
-        if (header_.bucket_meta_offset != expected_bucket_offset) {
-            throw std::runtime_error("BC position bucket metadata offset mismatch");
-        }
         const uint64_t bucket_end = bc_checked_add_u64(
             header_.bucket_meta_offset,
             header_.bucket_meta_bytes,
             "BC position bucket metadata end overflow"
         );
-        if (header_.rank_payload_offset != bucket_end) {
-            throw std::runtime_error("BC position rank payload offset mismatch");
-        }
         const uint64_t rank_end = bc_checked_add_u64(
             header_.rank_payload_offset,
             header_.rank_payload_bytes,
             "BC position rank payload end overflow"
         );
+        if ((header_.bucket_meta_bytes != 0U && header_.bucket_meta_offset < metadata_end) ||
+            (header_.rank_payload_bytes != 0U && header_.rank_payload_offset < metadata_end)) {
+            throw std::runtime_error("BC position data stream overlaps metadata");
+        }
+        if (header_.bucket_meta_bytes != 0U && header_.rank_payload_bytes != 0U &&
+            header_.bucket_meta_offset < rank_end && header_.rank_payload_offset < bucket_end) {
+            throw std::runtime_error("BC position bucket and rank streams overlap");
+        }
+        const uint64_t data_end = std::max(bucket_end, rank_end);
         bc_require_bytes(bytes_, kBCPositionHeaderBytes, axis_coord_bytes,
             "BC position axis coord table exceeds file");
         bc_require_bytes(bytes_, header_.descriptor_table_offset, header_.descriptor_table_bytes,
@@ -623,8 +626,11 @@ private:
             "BC position bucket metadata exceeds file");
         bc_require_bytes(bytes_, header_.rank_payload_offset, header_.rank_payload_bytes,
             "BC position rank payload exceeds file");
-        if (rank_end != bytes_.size()) {
+        if (data_end > bytes_.size()) {
             throw std::runtime_error("BC position file has trailing or missing bytes");
+        }
+        if (bytes_.size() - data_end >= 4096U) {
+            throw std::runtime_error("BC position file has excessive trailing padding");
         }
     }
 

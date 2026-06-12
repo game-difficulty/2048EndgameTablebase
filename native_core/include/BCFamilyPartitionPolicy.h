@@ -231,4 +231,19 @@ struct BCFamilyPartitionLayerMap {
     return out;
 }
 
+[[nodiscard]] inline FamilyIdList3 checked_partition_fanout3(
+    const std::vector<FamilyId> &families
+) {
+    if (families.size() > 3U) {
+        throw std::logic_error(
+            "BC FamilyChain current backend supports at most three target fanout families"
+        );
+    }
+    FamilyIdList3 out;
+    for (FamilyId family : families) {
+        out.push_back(family);
+    }
+    return out;
+}
+
 } // namespace BC

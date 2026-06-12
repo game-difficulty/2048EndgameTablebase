@@ -472,27 +472,30 @@ private:
         if (header_.descriptor_table_offset != expected_descriptor_offset) {
             throw std::runtime_error("BC streaming position descriptor table offset mismatch");
         }
-        const uint64_t expected_bucket_offset = bc_checked_add_u64(
+        const uint64_t metadata_end = bc_checked_add_u64(
             header_.descriptor_table_offset,
             header_.descriptor_table_bytes,
-            "BC streaming position expected bucket stream offset overflow"
+            "BC streaming position metadata end overflow"
         );
-        if (header_.bucket_meta_offset != expected_bucket_offset) {
-            throw std::runtime_error("BC streaming position bucket metadata offset mismatch");
-        }
         const uint64_t bucket_end = bc_checked_add_u64(
             header_.bucket_meta_offset,
             header_.bucket_meta_bytes,
             "BC streaming position bucket metadata end overflow"
         );
-        if (header_.rank_payload_offset != bucket_end) {
-            throw std::runtime_error("BC streaming position rank payload offset mismatch");
-        }
         const uint64_t rank_end = bc_checked_add_u64(
             header_.rank_payload_offset,
             header_.rank_payload_bytes,
             "BC streaming position rank payload end overflow"
         );
+        if ((header_.bucket_meta_bytes != 0U && header_.bucket_meta_offset < metadata_end) ||
+            (header_.rank_payload_bytes != 0U && header_.rank_payload_offset < metadata_end)) {
+            throw std::runtime_error("BC streaming position data stream overlaps metadata");
+        }
+        if (header_.bucket_meta_bytes != 0U && header_.rank_payload_bytes != 0U &&
+            header_.bucket_meta_offset < rank_end && header_.rank_payload_offset < bucket_end) {
+            throw std::runtime_error("BC streaming position bucket and rank streams overlap");
+        }
+        const uint64_t data_end = std::max(bucket_end, rank_end);
         require_file_range(kBCPositionHeaderBytes, axis_coord_bytes,
             "BC streaming position axis coord table exceeds file");
         require_file_range(header_.descriptor_table_offset, header_.descriptor_table_bytes,
@@ -501,8 +504,11 @@ private:
             "BC streaming position bucket metadata exceeds file");
         require_file_range(header_.rank_payload_offset, header_.rank_payload_bytes,
             "BC streaming position rank payload exceeds file");
-        if (rank_end != file_size_) {
+        if (data_end > file_size_) {
             throw std::runtime_error("BC streaming position file has trailing or missing bytes");
+        }
+        if (file_size_ - data_end >= 4096U) {
+            throw std::runtime_error("BC streaming position file has excessive trailing padding");
         }
     }
 

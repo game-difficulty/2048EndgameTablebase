@@ -29,7 +29,7 @@ struct BCFamilyGenerationPass {
     SpawnDeltaCoord delta_coord = 0U;
     FamilyId source_id = 0U;
     FamilyCoord source_coord = 0U;
-    FamilyIdList2 target_families;
+    FamilyIdList3 target_families;
 };
 
 struct BCSourceCellWork {
@@ -72,17 +72,23 @@ public:
         if (spawn_tile_rank == 0U || spawn_tile_rank > 15U) {
             throw std::invalid_argument("BC family generation spawn tile rank is out of range");
         }
-        return BCFamilyGenerationPass{
-            spawn_tile_rank,
-            delta_coord,
-            source_id,
-            source_axis_->id_to_coord(source_id),
+        FamilyIdList3 target_families;
+        const FamilyIdList2 mapped =
             map_source_family_to_target_families(
                 *source_axis_,
                 *target_axis_,
                 source_id,
                 delta_coord
-            )
+            );
+        for (FamilyId family : mapped) {
+            target_families.push_back(family);
+        }
+        return BCFamilyGenerationPass{
+            spawn_tile_rank,
+            delta_coord,
+            source_id,
+            source_axis_->id_to_coord(source_id),
+            target_families
         };
     }
 
@@ -112,7 +118,7 @@ public:
             static_cast<uint64_t>(b)
         ));
 
-        FamilyIdList2 target_families;
+        FamilyIdList3 target_families;
         auto add_if_present = [&](FamilyCoord coord) {
             if (!target_axis_->contains_coord(coord)) {
                 return;
@@ -193,7 +199,7 @@ public:
     }
 
     [[nodiscard]] std::vector<CellId> target_need_cells_for_families(
-        const FamilyIdList2 &families
+        const FamilyIdList3 &families
     ) {
         target_cell_set_.begin_epoch();
         target_cell_set_.add_family_crosses(families);

@@ -104,6 +104,34 @@ LONG WINAPI bc_bench_unhandled_exception_filter(EXCEPTION_POINTERS *exception_in
     return seconds > 0.0 ? static_cast<double>(count) / seconds / 1.0e6 : 0.0;
 }
 
+[[nodiscard]] double gbps(uint64_t bytes, double seconds) {
+    return seconds > 0.0 ? static_cast<double>(bytes) / seconds / 1.0e9 : 0.0;
+}
+
+[[nodiscard]] uint64_t align_up_u64(uint64_t value, uint64_t alignment) {
+    if (alignment == 0U || (alignment & (alignment - 1U)) != 0U) {
+        throw std::invalid_argument("alignment must be a non-zero power of two");
+    }
+    if (value > std::numeric_limits<uint64_t>::max() - (alignment - 1U)) {
+        throw std::overflow_error("align_up_u64 overflow");
+    }
+    return (value + alignment - 1U) & ~(alignment - 1U);
+}
+
+[[nodiscard]] uint64_t position_header_logical_size(const BC::BCPositionHeader &header) {
+    const uint64_t bucket_end = BC::bc_checked_add_u64(
+        header.bucket_meta_offset,
+        header.bucket_meta_bytes,
+        "position header bucket end overflow"
+    );
+    const uint64_t rank_end = BC::bc_checked_add_u64(
+        header.rank_payload_offset,
+        header.rank_payload_bytes,
+        "position header rank end overflow"
+    );
+    return std::max(bucket_end, rank_end);
+}
+
 [[nodiscard]] uint64_t process_current_working_set_bytes() {
 #if defined(_WIN32)
     PROCESS_MEMORY_COUNTERS info{};
@@ -149,6 +177,36 @@ LONG WINAPI bc_bench_unhandled_exception_filter(EXCEPTION_POINTERS *exception_in
 #endif
 }
 
+struct ProcessMemorySnapshot {
+    uint64_t working_set_bytes = 0U;
+    uint64_t peak_working_set_bytes = 0U;
+    uint64_t private_bytes = 0U;
+    uint64_t pagefile_bytes = 0U;
+    uint64_t peak_pagefile_bytes = 0U;
+};
+
+[[nodiscard]] ProcessMemorySnapshot process_memory_snapshot() {
+    ProcessMemorySnapshot snapshot;
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS_EX info{};
+    if (GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&info),
+            sizeof(info)) == 0) {
+        return snapshot;
+    }
+    snapshot.working_set_bytes = static_cast<uint64_t>(info.WorkingSetSize);
+    snapshot.peak_working_set_bytes = static_cast<uint64_t>(info.PeakWorkingSetSize);
+    snapshot.private_bytes = static_cast<uint64_t>(info.PrivateUsage);
+    snapshot.pagefile_bytes = static_cast<uint64_t>(info.PagefileUsage);
+    snapshot.peak_pagefile_bytes = static_cast<uint64_t>(info.PeakPagefileUsage);
+#else
+    snapshot.working_set_bytes = process_current_working_set_bytes();
+    snapshot.peak_working_set_bytes = process_peak_working_set_bytes();
+#endif
+    return snapshot;
+}
+
 struct Args {
     std::string pattern = "free9";
     uint32_t target_rank = 8U;
@@ -164,7 +222,9 @@ struct Args {
     uint32_t warmup_extra = 16U;
     bool verify_layer_rows = true;
     bool output_inspect = true;
-    std::string family_blob = "buffered";
+    std::string family_blob = "direct";
+    std::string family_position_io = "direct-rank-first";
+    std::string family_source_io = "direct-auto";
     bool family_blob_checksum = false;
     bool family_hot_counters = false;
     bool family_memory_checkpoints = false;
@@ -189,6 +249,41 @@ struct LayerFile {
     uint64_t rank_payload_bytes = 0U;
 };
 
+struct FamilyMemoryCheckpointContext {
+    uint64_t baseline_working_set_bytes = 0U;
+    std::vector<BC::BCFamilyMemoryCheckpoint> records;
+};
+
+void family_memory_checkpoint_callback(
+    BC::BCFamilyMemoryCheckpoint &checkpoint,
+    void *context
+) {
+    auto *ctx = static_cast<FamilyMemoryCheckpointContext *>(context);
+    const ProcessMemorySnapshot snapshot = process_memory_snapshot();
+    checkpoint.process_working_set_bytes = snapshot.working_set_bytes;
+    checkpoint.process_peak_working_set_bytes = snapshot.peak_working_set_bytes;
+    checkpoint.process_baseline_working_set_bytes =
+        ctx == nullptr ? 0U : ctx->baseline_working_set_bytes;
+    checkpoint.process_private_bytes = snapshot.private_bytes;
+    checkpoint.process_pagefile_bytes = snapshot.pagefile_bytes;
+    checkpoint.process_peak_pagefile_bytes = snapshot.peak_pagefile_bytes;
+    if (checkpoint.process_working_set_bytes > checkpoint.accounted_bytes) {
+        checkpoint.residual_bytes =
+            checkpoint.process_working_set_bytes - checkpoint.accounted_bytes;
+    }
+    const uint64_t baseline = checkpoint.process_baseline_working_set_bytes;
+    if (checkpoint.accounted_bytes <= std::numeric_limits<uint64_t>::max() - baseline) {
+        const uint64_t baseline_plus_accounted = baseline + checkpoint.accounted_bytes;
+        if (checkpoint.process_working_set_bytes > baseline_plus_accounted) {
+            checkpoint.baseline_adjusted_residual_bytes =
+                checkpoint.process_working_set_bytes - baseline_plus_accounted;
+        }
+    }
+    if (ctx != nullptr) {
+        ctx->records.push_back(checkpoint);
+    }
+}
+
 struct AggregateStats {
     uint32_t layers = 0U;
     int effective_threads = 0;
@@ -208,15 +303,23 @@ struct AggregateStats {
     uint64_t blob_write_bytes = 0U;
     uint64_t blob_read_ops = 0U;
     uint64_t blob_write_ops = 0U;
+    uint64_t blob_backend_read_bytes = 0U;
+    uint64_t blob_backend_write_bytes = 0U;
     uint64_t target_logical_bytes = 0U;
     uint64_t target_write_bytes = 0U;
     uint64_t target_write_ops = 0U;
+    uint64_t target_backend_read_bytes = 0U;
+    uint64_t target_backend_write_bytes = 0U;
     double source_load_seconds = 0.0;
     double parallel_seconds = 0.0;
     double dump_seconds = 0.0;
     double reload_seconds = 0.0;
     double finalize_seconds = 0.0;
     double write_seconds = 0.0;
+    double blob_backend_read_seconds = 0.0;
+    double blob_backend_write_seconds = 0.0;
+    double target_backend_read_seconds = 0.0;
+    double target_backend_write_seconds = 0.0;
     double generation_seconds = 0.0;
     double total_seconds = 0.0;
     uint64_t active_family_window_peak = 0U;
@@ -657,6 +760,49 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
     return std::make_unique<BC::BCBufferedFileReader>(path);
 }
 
+[[nodiscard]] std::unique_ptr<BC::BCWritableFile> open_family_position_writer(
+    const Args &args,
+    const std::filesystem::path &path
+) {
+    if (args.family_position_io == "direct-rank-first") {
+        BC::BCDirectFileIOOptions options;
+        options.queue_depth = args.direct_queue_depth;
+        options.overlapped = args.direct_queue_depth > 1U;
+        options.preserve_unwritten_bytes = false;
+        return std::make_unique<BC::BCDirectFileWriter>(path, options);
+    }
+    return std::make_unique<BC::BCBufferedFileWriter>(path);
+}
+
+[[nodiscard]] std::unique_ptr<BC::BCWritableFile> open_family_position_spool_writer(
+    const Args &args,
+    const std::filesystem::path &path
+) {
+    if (args.family_position_io == "direct-rank-first") {
+        BC::BCDirectFileIOOptions options;
+        options.queue_depth = args.direct_queue_depth;
+        options.overlapped = args.direct_queue_depth > 1U;
+        options.preserve_unwritten_bytes = false;
+        return std::make_unique<BC::BCDirectFileWriter>(path, options);
+    }
+    return std::make_unique<BC::BCBufferedFileWriter>(path);
+}
+
+[[nodiscard]] std::unique_ptr<BC::BCReadableFile> open_family_position_spool_reader(
+    const Args &args,
+    const std::filesystem::path &path,
+    uint64_t logical_size
+) {
+    if (args.family_position_io == "direct-rank-first") {
+        BC::BCDirectFileIOOptions options;
+        options.queue_depth = args.direct_queue_depth;
+        options.overlapped = args.direct_queue_depth > 1U;
+        options.logical_size = logical_size;
+        return std::make_unique<BC::BCDirectFileReader>(path, options);
+    }
+    return std::make_unique<BC::BCBufferedFileReader>(path);
+}
+
 void write_raw_bytes_to_file(
     const std::filesystem::path &path,
     const std::vector<uint8_t> &bytes
@@ -670,12 +816,29 @@ void write_raw_bytes_to_file(
 }
 
 [[nodiscard]] std::unique_ptr<BCPositionStreamingReader> open_position_reader(
+    const Args &args,
     const LayerFile &layer,
     const BCLut &lut
 ) {
-    auto reader = std::make_unique<BCPositionStreamingReader>(
-        BCPositionStreamingReader::open_buffered(layer.path, lut)
-    );
+    std::unique_ptr<BC::BCReadableFile> file;
+    if (args.family_source_io == "direct" || args.family_source_io == "direct-auto") {
+        const uint64_t required_physical = align_up_u64(layer.logical_size, 4096ULL);
+        if (layer.physical_size >= required_physical) {
+            BC::BCDirectFileIOOptions options;
+            options.queue_depth = args.direct_queue_depth;
+            options.overlapped = args.direct_queue_depth > 1U;
+            options.logical_size = layer.logical_size;
+            file = std::make_unique<BC::BCDirectFileReader>(layer.path, options);
+        } else if (args.family_source_io == "direct") {
+            throw std::runtime_error(
+                "source position file is not padded for direct IO: " + layer.path.string()
+            );
+        }
+    }
+    if (!file) {
+        file = std::make_unique<BC::BCBufferedFileReader>(layer.path);
+    }
+    auto reader = std::make_unique<BCPositionStreamingReader>(std::move(file), lut);
     reader->set_validate_loaded_cells(false);
     return reader;
 }
@@ -695,7 +858,10 @@ void write_raw_bytes_to_file(
     if (ec) {
         throw std::runtime_error("failed to stat layer file: " + ec.message());
     }
-    std::unique_ptr<BCPositionStreamingReader> reader = open_position_reader(layer, lut);
+    auto reader = std::make_unique<BCPositionStreamingReader>(
+        BCPositionStreamingReader::open_buffered(layer.path, lut)
+    );
+    reader->set_validate_loaded_cells(false);
     layer.rows = descriptor_rows(*reader);
     layer.bucket_count = descriptor_bucket_count(*reader);
     layer.rank_payload_bytes = reader->header().rank_payload_bytes;
@@ -719,7 +885,7 @@ void write_raw_bytes_to_file(
         "existing layer sum exceeds uint32"
     );
     layer.path = path;
-    layer.logical_size = file_size;
+    layer.logical_size = position_header_logical_size(reader.header());
     layer.physical_size = file_size;
     layer.rows = descriptor_rows(reader);
     layer.bucket_count = descriptor_bucket_count(reader);
@@ -872,6 +1038,7 @@ struct FamilyLayerResult {
     BC::BCFamilyGenerationStats stats;
     BC::BCFamilyPositionWriterStats writer_stats;
     BC::BCGenerationBlobIOStats blob_stats;
+    std::vector<BC::BCFamilyMemoryCheckpoint> memory_checkpoints;
     uint64_t logical_size = 0U;
     uint64_t output_rows = 0U;
     int effective_threads = 1;
@@ -893,9 +1060,10 @@ struct FamilyLayerResult {
 ) {
     const std::filesystem::path rank_spool_path = output_path.string() + ".rank_spool.tmp";
     const std::filesystem::path blob_path = output_path.string() + ".family_blob.tmp";
-    constexpr uint64_t kFamilyDirectBlobStagingBytes = 256ULL * 1024ULL;
+    constexpr uint64_t kFamilyDirectBlobStagingBytes = 32ULL * 1024ULL * 1024ULL;
     constexpr uint64_t kFamilyBufferedBlobStagingBytes = 1ULL * 1024ULL * 1024ULL;
     constexpr uint64_t kFamilyPositionWriterStagingBytes = 1ULL * 1024ULL * 1024ULL;
+    constexpr uint64_t kFamilyDirectPositionWriterStagingBytes = 32ULL * 1024ULL * 1024ULL;
 
     uint32_t reserve_buckets = args.family_reserve_buckets == 0U ? 1024U : args.family_reserve_buckets;
     uint32_t reserve_bitmap_words =
@@ -908,9 +1076,12 @@ struct FamilyLayerResult {
         cleanup_temp_file(output_path);
         try {
             FamilyLayerResult result;
+            FamilyMemoryCheckpointContext memory_checkpoint_context;
             {
-                BC::BCBufferedFileWriter final_writer(output_path);
-                BC::BCBufferedFileWriter rank_spool_writer(rank_spool_path);
+                std::unique_ptr<BC::BCWritableFile> final_writer =
+                    open_family_position_writer(args, output_path);
+                std::unique_ptr<BC::BCWritableFile> rank_spool_writer =
+                    open_family_position_spool_writer(args, rank_spool_path);
                 std::unique_ptr<BC::BCWritableFile> blob_writer = open_family_blob_writer(args, blob_path);
                 std::unique_ptr<BC::BCReadableFile> blob_reader = open_family_blob_reader(args, blob_path);
                 const uint64_t blob_staging_bytes =
@@ -941,8 +1112,21 @@ struct FamilyLayerResult {
                 BC::BCFamilyMutableStore target_store(lut, target_axis, blob);
                 BC::BCFamilyPositionWriter position_writer;
                 BC::BCFamilyPositionWriterOptions writer_options;
-                writer_options.staging_bytes = kFamilyPositionWriterStagingBytes;
-                position_writer.begin_layer(final_writer, rank_spool_writer, target_axis, writer_options);
+                writer_options.rank_first_direct_layout =
+                    args.family_position_io == "direct-rank-first";
+                writer_options.backend_preserves_unaligned_positioned_writes =
+                    !writer_options.rank_first_direct_layout;
+                writer_options.staging_bytes = writer_options.rank_first_direct_layout
+                    ? kFamilyDirectPositionWriterStagingBytes
+                    : kFamilyPositionWriterStagingBytes;
+                position_writer.begin_layer(*final_writer, *rank_spool_writer, target_axis, writer_options);
+                if (args.family_memory_checkpoints) {
+                    memory_checkpoint_context.baseline_working_set_bytes =
+                        process_current_working_set_bytes();
+                    options.memory_checkpoint_callback = family_memory_checkpoint_callback;
+                    options.memory_checkpoint_context = &memory_checkpoint_context;
+                    options.memory_checkpoint_external_staging_bytes = blob_staging_bytes;
+                }
 
                 const double total_begin = now_seconds();
                 BC::BCFamilyGenerationStats stats = BC::generate_family_position_layer_v1(
@@ -954,10 +1138,16 @@ struct FamilyLayerResult {
                     position_writer,
                     options
                 );
+                const double prefinish_flush_begin = now_seconds();
                 position_writer.flush_pending_streams_for_reader();
-                BC::BCBufferedFileReader rank_spool_reader(rank_spool_path);
+                stats.write_seconds += now_seconds() - prefinish_flush_begin;
+                const uint64_t spool_logical_size = writer_options.rank_first_direct_layout
+                    ? position_writer.bucket_meta_bytes()
+                    : position_writer.rank_payload_bytes();
+                std::unique_ptr<BC::BCReadableFile> rank_spool_reader =
+                    open_family_position_spool_reader(args, rank_spool_path, spool_logical_size);
                 const double finish_begin = now_seconds();
-                const uint64_t logical_size = position_writer.finish_layer(rank_spool_reader);
+                const uint64_t logical_size = position_writer.finish_layer(*rank_spool_reader);
                 stats.write_seconds += now_seconds() - finish_begin;
 
                 result.stats = stats;
@@ -969,6 +1159,7 @@ struct FamilyLayerResult {
                 result.retries = attempt;
                 result.total_seconds = now_seconds() - total_begin;
                 result.stats.generation_seconds = result.total_seconds;
+                result.memory_checkpoints = std::move(memory_checkpoint_context.records);
             }
             cleanup_temp_file(rank_spool_path);
             cleanup_temp_file(blob_path);
@@ -1006,6 +1197,11 @@ void print_header(std::ostream &out) {
         << "buffer_flushes,builder_bind_calls,"
         << "hash_lookups,hash_probe_steps,target_cells_created,target_cells_reloaded,"
         << "target_cells_dumped,target_cells_finalized,builder_hash_grows,builder_bitmap_grows,"
+        << "source_load_gbps,blob_dump_gbps,blob_reload_gbps,blob_rw_gbps,"
+        << "blob_backend_read_seconds,blob_backend_read_gbps,"
+        << "blob_backend_write_seconds,blob_backend_write_gbps,target_writer_gbps,"
+        << "target_backend_read_seconds,target_backend_read_gbps,"
+        << "target_backend_write_seconds,target_backend_write_gbps,"
         << "output_path\n";
 }
 
@@ -1022,7 +1218,11 @@ void print_layer_row(
 ) {
     const BC::BCFamilyGenerationStats &s = result.stats;
     const BC::BCFamilyPositionWriterStats &w = result.writer_stats;
-    const BC::BCGenerationBlobIOStats &b = result.blob_stats;
+    const uint64_t target_write_bytes =
+        w.bucket_stage_write_bytes + w.rank_stage_write_bytes +
+        w.metadata_write_bytes + w.rank_copy_write_bytes;
+    const double blob_rw_seconds = s.dump_seconds + s.reload_seconds;
+    const uint64_t blob_rw_bytes = s.blob_read_bytes + s.blob_bytes_written;
     out
         << "layer," << layer_sum << ",1," << result.effective_threads << ','
         << input_live << ',' << result.output_rows << ','
@@ -1034,10 +1234,10 @@ void print_layer_row(
         << s.source_load_seconds << ',' << s.parallel_seconds << ','
         << s.dump_seconds << ',' << s.reload_seconds << ','
         << s.finalize_seconds << ',' << s.write_seconds << ','
-        << s.source_bytes_read << ',' << b.bytes_read << ',' << b.bytes_written << ','
-        << b.backend_read_ops << ',' << b.backend_write_ops << ','
+        << s.source_bytes_read << ',' << s.blob_read_bytes << ',' << s.blob_bytes_written << ','
+        << s.blob_backend_read_ops << ',' << s.blob_backend_write_ops << ','
         << result.logical_size << ','
-        << (w.bucket_stage_write_bytes + w.rank_stage_write_bytes + w.metadata_write_bytes + w.rank_copy_write_bytes) << ','
+        << target_write_bytes << ','
         << (w.bucket_stage_flushes + w.rank_stage_flushes + w.metadata_write_ops + w.rank_copy_chunks) << ','
         << s.active_family_window_peak << ',' << s.target_active_cell_peak << ','
         << s.source_loaded_cell_peak << ',' << s.active_builder_bytes_peak << ','
@@ -1051,6 +1251,19 @@ void print_layer_row(
         << s.target_cells_created << ',' << s.target_cells_reloaded << ','
         << s.target_cells_dumped << ',' << s.target_cells_finalized << ','
         << s.family_builder_hash_grows << ',' << s.family_builder_bitmap_grows << ','
+        << gbps(s.source_bytes_read, s.source_load_seconds) << ','
+        << gbps(s.blob_bytes_written, s.dump_seconds) << ','
+        << gbps(s.blob_read_bytes, s.reload_seconds) << ','
+        << gbps(blob_rw_bytes, blob_rw_seconds) << ','
+        << s.blob_backend_read_seconds << ','
+        << gbps(s.blob_backend_read_bytes, s.blob_backend_read_seconds) << ','
+        << s.blob_backend_write_seconds << ','
+        << gbps(s.blob_backend_write_bytes, s.blob_backend_write_seconds) << ','
+        << gbps(target_write_bytes, s.write_seconds) << ','
+        << w.backend_read_seconds << ','
+        << gbps(w.backend_read_bytes, w.backend_read_seconds) << ','
+        << w.backend_write_seconds << ','
+        << gbps(w.backend_write_bytes, w.backend_write_seconds) << ','
         << output_path.string()
         << '\n';
     (void)source_family_passes;
@@ -1064,7 +1277,6 @@ void accumulate(
 ) {
     const BC::BCFamilyGenerationStats &s = result.stats;
     const BC::BCFamilyPositionWriterStats &w = result.writer_stats;
-    const BC::BCGenerationBlobIOStats &b = result.blob_stats;
     ++agg.layers;
     agg.effective_threads = result.effective_threads;
     agg.input_live += input_live;
@@ -1079,22 +1291,30 @@ void accumulate(
     agg.encoded_candidates += s.encoded_candidates;
     agg.duplicate_candidates += s.duplicate_candidates;
     agg.source_read_bytes += s.source_bytes_read;
-    agg.blob_read_bytes += b.bytes_read;
-    agg.blob_write_bytes += b.bytes_written;
-    agg.blob_read_ops += b.backend_read_ops;
-    agg.blob_write_ops += b.backend_write_ops;
+    agg.blob_read_bytes += s.blob_read_bytes;
+    agg.blob_write_bytes += s.blob_bytes_written;
+    agg.blob_read_ops += s.blob_backend_read_ops;
+    agg.blob_write_ops += s.blob_backend_write_ops;
+    agg.blob_backend_read_bytes += s.blob_backend_read_bytes;
+    agg.blob_backend_write_bytes += s.blob_backend_write_bytes;
     agg.target_logical_bytes += result.logical_size;
     agg.target_write_bytes +=
         w.bucket_stage_write_bytes + w.rank_stage_write_bytes +
         w.metadata_write_bytes + w.rank_copy_write_bytes;
     agg.target_write_ops +=
         w.bucket_stage_flushes + w.rank_stage_flushes + w.metadata_write_ops + w.rank_copy_chunks;
+    agg.target_backend_read_bytes += w.backend_read_bytes;
+    agg.target_backend_write_bytes += w.backend_write_bytes;
     agg.source_load_seconds += s.source_load_seconds;
     agg.parallel_seconds += s.parallel_seconds;
     agg.dump_seconds += s.dump_seconds;
     agg.reload_seconds += s.reload_seconds;
     agg.finalize_seconds += s.finalize_seconds;
     agg.write_seconds += s.write_seconds;
+    agg.blob_backend_read_seconds += s.blob_backend_read_seconds;
+    agg.blob_backend_write_seconds += s.blob_backend_write_seconds;
+    agg.target_backend_read_seconds += w.backend_read_seconds;
+    agg.target_backend_write_seconds += w.backend_write_seconds;
     agg.generation_seconds += s.generation_seconds;
     agg.total_seconds += result.total_seconds;
     agg.active_family_window_peak = std::max(agg.active_family_window_peak, s.active_family_window_peak);
@@ -1117,6 +1337,8 @@ void accumulate(
 }
 
 void print_summary_row(std::ostream &out, const char *label, const AggregateStats &agg) {
+    const double blob_rw_seconds = agg.dump_seconds + agg.reload_seconds;
+    const uint64_t blob_rw_bytes = agg.blob_read_bytes + agg.blob_write_bytes;
     out
         << label << ",0," << agg.layers << ',' << agg.effective_threads << ','
         << agg.input_live << ',' << agg.output_rows << ",0,0,0,"
@@ -1141,7 +1363,116 @@ void print_summary_row(std::ostream &out, const char *label, const AggregateStat
         << agg.hash_lookups << ',' << agg.hash_probe_steps << ','
         << agg.target_cells_created << ',' << agg.target_cells_reloaded << ','
         << agg.target_cells_dumped << ',' << agg.target_cells_finalized << ','
-        << agg.builder_hash_grows << ',' << agg.builder_bitmap_grows << ",\n";
+        << agg.builder_hash_grows << ',' << agg.builder_bitmap_grows << ','
+        << gbps(agg.source_read_bytes, agg.source_load_seconds) << ','
+        << gbps(agg.blob_write_bytes, agg.dump_seconds) << ','
+        << gbps(agg.blob_read_bytes, agg.reload_seconds) << ','
+        << gbps(blob_rw_bytes, blob_rw_seconds) << ','
+        << agg.blob_backend_read_seconds << ','
+        << gbps(agg.blob_backend_read_bytes, agg.blob_backend_read_seconds) << ','
+        << agg.blob_backend_write_seconds << ','
+        << gbps(agg.blob_backend_write_bytes, agg.blob_backend_write_seconds) << ','
+        << gbps(agg.target_write_bytes, agg.write_seconds) << ','
+        << agg.target_backend_read_seconds << ','
+        << gbps(agg.target_backend_read_bytes, agg.target_backend_read_seconds) << ','
+        << agg.target_backend_write_seconds << ','
+        << gbps(agg.target_backend_write_bytes, agg.target_backend_write_seconds) << ",\n";
+}
+
+[[nodiscard]] std::filesystem::path memory_checkpoint_csv_path(const Args &args) {
+    if (!args.stats_csv.empty()) {
+        return std::filesystem::path(args.stats_csv.string() + ".memory.csv");
+    }
+    return args.output_dir / "bc_family_memory_checkpoints.csv";
+}
+
+void write_memory_checkpoint_header(std::ostream &out) {
+    out
+        << "layer_sum,index,label,working_set,peak_working_set,baseline_working_set,"
+        << "private_bytes,pagefile_bytes,peak_pagefile_bytes,accounted,residual,"
+        << "baseline_adjusted_residual,active_builder,thread_workspace,"
+        << "source_loaded_payload,source_loaded_allocated,source_reader_metadata,"
+        << "active_index,range_work,pass_cache,store_static_metadata,store_allocated,"
+        << "position_writer,finalized_payload,external_staging,released_builder_total,"
+        << "last_release_batch_builder\n";
+}
+
+void write_memory_checkpoint_row(
+    std::ostream &out,
+    uint32_t layer_sum,
+    size_t index,
+    const BC::BCFamilyMemoryCheckpoint &c
+) {
+    out
+        << layer_sum << ',' << index << ',' << c.label << ','
+        << c.process_working_set_bytes << ',' << c.process_peak_working_set_bytes << ','
+        << c.process_baseline_working_set_bytes << ',' << c.process_private_bytes << ','
+        << c.process_pagefile_bytes << ',' << c.process_peak_pagefile_bytes << ','
+        << c.accounted_bytes << ',' << c.residual_bytes << ','
+        << c.baseline_adjusted_residual_bytes << ',' << c.active_builder_bytes << ','
+        << c.thread_workspace_bytes << ',' << c.source_loaded_payload_bytes << ','
+        << c.source_loaded_allocated_bytes << ',' << c.source_reader_metadata_bytes << ','
+        << c.active_index_bytes << ',' << c.range_work_bytes << ','
+        << c.pass_cache_bytes << ',' << c.store_static_metadata_bytes << ','
+        << c.store_allocated_bytes << ',' << c.position_writer_bytes << ','
+        << c.finalized_payload_bytes << ',' << c.external_staging_bytes << ','
+        << c.released_builder_bytes_total << ',' << c.last_release_batch_builder_bytes
+        << '\n';
+}
+
+void write_memory_checkpoint_rows(
+    const Args &args,
+    uint32_t layer_sum,
+    const std::vector<BC::BCFamilyMemoryCheckpoint> &checkpoints
+) {
+    if (!args.family_memory_checkpoints || checkpoints.empty()) {
+        return;
+    }
+    const std::filesystem::path path = memory_checkpoint_csv_path(args);
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error("failed to open memory checkpoint CSV: " + path.string());
+    }
+    write_memory_checkpoint_header(out);
+    for (size_t i = 0; i < checkpoints.size(); ++i) {
+        write_memory_checkpoint_row(out, layer_sum, i, checkpoints[i]);
+    }
+}
+
+struct MemoryCheckpointLayerRows {
+    uint32_t layer_sum = 0U;
+    std::vector<BC::BCFamilyMemoryCheckpoint> checkpoints;
+};
+
+void write_memory_checkpoint_rows(
+    const Args &args,
+    const std::vector<MemoryCheckpointLayerRows> &layers
+) {
+    if (!args.family_memory_checkpoints || layers.empty()) {
+        return;
+    }
+    bool has_checkpoints = false;
+    for (const MemoryCheckpointLayerRows &layer : layers) {
+        if (!layer.checkpoints.empty()) {
+            has_checkpoints = true;
+            break;
+        }
+    }
+    if (!has_checkpoints) {
+        return;
+    }
+
+    const std::filesystem::path path = memory_checkpoint_csv_path(args);
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error("failed to open memory checkpoint CSV: " + path.string());
+    }
+    write_memory_checkpoint_header(out);
+    for (const MemoryCheckpointLayerRows &layer : layers) {
+        for (size_t i = 0; i < layer.checkpoints.size(); ++i) {
+            write_memory_checkpoint_row(out, layer.layer_sum, i, layer.checkpoints[i]);
+        }
+    }
 }
 
 int run_single_layer(const Args &args, std::ostream &out) {
@@ -1173,9 +1504,9 @@ int run_single_layer(const Args &args, std::ostream &out) {
     }
 
     std::unique_ptr<BCPositionStreamingReader> source2_reader =
-        open_position_reader(source2_layer, lut);
+        open_position_reader(args, source2_layer, lut);
     std::unique_ptr<BCPositionStreamingReader> source4_reader =
-        open_position_reader(source4_layer, lut);
+        open_position_reader(args, source4_layer, lut);
     const uint64_t source_family_passes =
         static_cast<uint64_t>(source2_reader->axis().family_count()) +
         static_cast<uint64_t>(source4_reader->axis().family_count());
@@ -1241,6 +1572,7 @@ int run_single_layer(const Args &args, std::ostream &out) {
         result,
         final_path
     );
+    write_memory_checkpoint_rows(args, args.single_layer_sum, result.memory_checkpoints);
 
     AggregateStats aggregate;
     accumulate(aggregate, result, source2_layer.rows, source_family_passes);
@@ -1300,6 +1632,10 @@ Args parse_args(int argc, char **argv) {
             args.warmup_extra = static_cast<uint32_t>(std::stoul(require_value("--warmup-extra")));
         } else if (key == "--family-blob") {
             args.family_blob = require_value("--family-blob");
+        } else if (key == "--family-position-io") {
+            args.family_position_io = require_value("--family-position-io");
+        } else if (key == "--family-source-io") {
+            args.family_source_io = require_value("--family-source-io");
         } else if (key == "--family-blob-checksum") {
             args.family_blob_checksum = true;
         } else if (key == "--family-hot-counters") {
@@ -1341,6 +1677,15 @@ Args parse_args(int argc, char **argv) {
     }
     if (args.family_blob != "buffered" && args.family_blob != "direct") {
         throw std::invalid_argument("--family-blob must be buffered or direct");
+    }
+    if (args.family_position_io != "buffered" &&
+        args.family_position_io != "direct-rank-first") {
+        throw std::invalid_argument("--family-position-io must be buffered or direct-rank-first");
+    }
+    if (args.family_source_io != "buffered" &&
+        args.family_source_io != "direct" &&
+        args.family_source_io != "direct-auto") {
+        throw std::invalid_argument("--family-source-io must be buffered, direct, or direct-auto");
     }
     const bool single_mode =
         args.single_layer_sum != 0U ||
@@ -1419,6 +1764,7 @@ int run_free_chain(const Args &args, std::ostream &out) {
     (void)process_baseline_working_set;
     AggregateStats aggregate;
     AggregateStats warm;
+    std::vector<MemoryCheckpointLayerRows> memory_checkpoint_layers;
     print_header(out);
 
     for (uint32_t layer_sum = seed_sum + 2U; layer_sum <= final_primary_sum; layer_sum += 2U) {
@@ -1431,14 +1777,14 @@ int run_free_chain(const Args &args, std::ostream &out) {
             throw std::runtime_error("FamilyChain lost required +2 source layer");
         }
         std::unique_ptr<BCPositionStreamingReader> source2_reader =
-            open_position_reader(source2_it->second, lut);
+            open_position_reader(args, source2_it->second, lut);
         std::unique_ptr<BCPositionStreamingReader> source4_reader;
         if (layer_sum >= seed_sum + 4U) {
             const auto source4_it = layers.find(layer_sum - 4U);
             if (source4_it == layers.end()) {
                 throw std::runtime_error("FamilyChain lost required +4 source layer");
             }
-            source4_reader = open_position_reader(source4_it->second, lut);
+            source4_reader = open_position_reader(args, source4_it->second, lut);
         }
 
         const uint64_t input_live = source2_it->second.rows;
@@ -1507,6 +1853,12 @@ int run_free_chain(const Args &args, std::ostream &out) {
         if (layer_sum >= seed_sum + args.warmup_extra) {
             accumulate(warm, result, input_live, source_family_passes);
         }
+        if (args.family_memory_checkpoints && !result.memory_checkpoints.empty()) {
+            MemoryCheckpointLayerRows checkpoint_rows;
+            checkpoint_rows.layer_sum = layer_sum;
+            checkpoint_rows.checkpoints = std::move(result.memory_checkpoints);
+            memory_checkpoint_layers.push_back(std::move(checkpoint_rows));
+        }
         layers[layer_sum] = std::move(generated_layer);
     }
 
@@ -1514,6 +1866,7 @@ int run_free_chain(const Args &args, std::ostream &out) {
     if (warm.layers != 0U) {
         print_summary_row(out, "warm", warm);
     }
+    write_memory_checkpoint_rows(args, memory_checkpoint_layers);
     return 0;
 }
 

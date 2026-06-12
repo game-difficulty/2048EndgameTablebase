@@ -1863,7 +1863,7 @@ private:
         const uint64_t bytes = append_stage_size_;
         BCFileIOStats io_stats;
         if (writer_->mode() == BCFileIOMode::Direct) {
-            constexpr uint64_t kDirectWriteChunkBytes = 256ULL * 1024ULL;
+            constexpr uint64_t kDirectWriteChunkBytes = 4ULL * 1024ULL * 1024ULL;
             if ((append_stage_file_offset_ & (kDirectBitmapAlignment - 1U)) != 0U ||
                 (bytes & (kDirectBitmapAlignment - 1U)) != 0U) {
                 throw std::logic_error("BC direct generation blob append stage is not 4KB aligned");

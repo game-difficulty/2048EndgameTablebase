@@ -5,17 +5,93 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include <vector>
 
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
+
 namespace BC {
+
+template <typename T, std::size_t Alignment>
+class BCAlignedAllocator {
+public:
+    using value_type = T;
+
+    BCAlignedAllocator() noexcept = default;
+
+    template <typename U>
+    BCAlignedAllocator(const BCAlignedAllocator<U, Alignment> &) noexcept {}
+
+    [[nodiscard]] T *allocate(std::size_t n) {
+        if (n == 0U) {
+            return nullptr;
+        }
+        if (n > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
+            throw std::bad_array_new_length();
+        }
+        const std::size_t bytes = n * sizeof(T);
+#if defined(_WIN32)
+        void *ptr = _aligned_malloc(bytes, Alignment);
+        if (ptr == nullptr) {
+            throw std::bad_alloc();
+        }
+        return static_cast<T *>(ptr);
+#else
+        void *ptr = nullptr;
+        if (posix_memalign(&ptr, Alignment, bytes) != 0) {
+            throw std::bad_alloc();
+        }
+        return static_cast<T *>(ptr);
+#endif
+    }
+
+    void deallocate(T *p, std::size_t) noexcept {
+#if defined(_WIN32)
+        _aligned_free(p);
+#else
+        std::free(p);
+#endif
+    }
+
+    template <typename U>
+    struct rebind {
+        using other = BCAlignedAllocator<U, Alignment>;
+    };
+};
+
+template <typename T, typename U, std::size_t Alignment>
+[[nodiscard]] bool operator==(
+    const BCAlignedAllocator<T, Alignment> &,
+    const BCAlignedAllocator<U, Alignment> &
+) noexcept {
+    return true;
+}
+
+template <typename T, typename U, std::size_t Alignment>
+[[nodiscard]] bool operator!=(
+    const BCAlignedAllocator<T, Alignment> &,
+    const BCAlignedAllocator<U, Alignment> &
+) noexcept {
+    return false;
+}
+
+using BCFamilyPositionAlignedBuffer =
+    std::vector<uint8_t, BCAlignedAllocator<uint8_t, 4096U>>;
 
 struct BCFamilyPositionWriterOptions {
     uint64_t staging_bytes = 16ULL * 1024ULL * 1024ULL;
     bool backend_preserves_unaligned_positioned_writes = true;
+    bool rank_first_direct_layout = false;
+    uint64_t direct_alignment = 4096ULL;
 };
 
 struct BCFamilyPositionWriterStats {
@@ -33,6 +109,12 @@ struct BCFamilyPositionWriterStats {
     uint64_t rank_copy_chunks = 0U;
     uint64_t rank_copy_read_bytes = 0U;
     uint64_t rank_copy_write_bytes = 0U;
+    uint64_t backend_read_ops = 0U;
+    uint64_t backend_read_bytes = 0U;
+    uint64_t backend_write_ops = 0U;
+    uint64_t backend_write_bytes = 0U;
+    double backend_read_seconds = 0.0;
+    double backend_write_seconds = 0.0;
     uint64_t logical_size = 0U;
 };
 
@@ -43,8 +125,10 @@ struct BCFamilyPositionWriterStats {
 // rank-payload stream offset is known only after all bucket metadata is written.
 //
 // Direct-no-buffering backends that do not preserve bytes inside aligned blocks
-// must set backend_preserves_unaligned_positioned_writes=false; this writer then
-// rejects the backend until a planned aligned block writer is added.
+// must set backend_preserves_unaligned_positioned_writes=false. The legacy
+// bucket-then-rank layout rejects that mode; the experimental rank-first layout
+// writes aligned final-file regions and uses the spool for the smaller bucket
+// stream.
 class BCFamilyPositionWriter {
 public:
     BCFamilyPositionWriter() = default;
@@ -58,14 +142,20 @@ public:
         if (axis.family_count() == 0U) {
             throw std::invalid_argument("BC family position writer requires non-empty axis");
         }
-        if (!options.backend_preserves_unaligned_positioned_writes) {
+        if (!options.backend_preserves_unaligned_positioned_writes &&
+            !options.rank_first_direct_layout) {
             throw std::invalid_argument(
                 "BC family position writer requires preserving positioned writes; "
-                "planned direct block writer is not implemented yet"
+                "use rank_first_direct_layout for direct no-buffering output"
             );
         }
         if (options.staging_bytes == 0U) {
             throw std::invalid_argument("BC family position writer staging_bytes must be non-zero");
+        }
+        if (options.rank_first_direct_layout &&
+            (options.direct_alignment == 0U ||
+             (options.direct_alignment & (options.direct_alignment - 1U)) != 0U)) {
+            throw std::invalid_argument("BC family position writer direct alignment must be a power of two");
         }
         axis_ = axis;
         options_ = options;
@@ -82,9 +172,17 @@ public:
         header_scratch_.clear();
         axis_coord_table_scratch_.clear();
         descriptor_table_scratch_.clear();
+        metadata_prefix_scratch_.clear();
         rank_copy_buffer_.clear();
-        bucket_stage_file_offset_ = bucket_stream_file_offset();
-        rank_stage_file_offset_ = 0U;
+        rank_first_rank_file_offset_ = options_.rank_first_direct_layout
+            ? rank_first_rank_stream_file_offset()
+            : 0U;
+        bucket_stage_file_offset_ = options_.rank_first_direct_layout
+            ? 0U
+            : bucket_stream_file_offset();
+        rank_stage_file_offset_ = options_.rank_first_direct_layout
+            ? rank_first_rank_file_offset_
+            : 0U;
         stats_ = {};
         begun_ = true;
         finished_ = false;
@@ -261,13 +359,18 @@ public:
         flush_bucket_stage();
         flush_rank_stage();
         rank_spool_file_->flush();
-        final_file_->flush();
+        if (!options_.rank_first_direct_layout) {
+            final_file_->flush();
+        }
     }
 
     [[nodiscard]] uint64_t finish_layer(const BCReadableFile &rank_spool_reader) {
         require_writable();
         if (written_count_ != descriptors_.size()) {
             throw std::logic_error("BC family position writer cannot finish with unwritten cells");
+        }
+        if (options_.rank_first_direct_layout) {
+            return finish_layer_rank_first(rank_spool_reader);
         }
 
         const uint64_t descriptor_count = descriptors_.size();
@@ -322,14 +425,15 @@ public:
         }
 
         final_file_->resize(logical_size);
-        final_file_->write_at(0U, header_scratch_.data(), header_scratch_.size());
+        write_positioned_bytes(*final_file_, 0U, header_scratch_.data(), header_scratch_.size());
         ++stats_.metadata_write_ops;
         stats_.metadata_write_bytes = bc_checked_add_u64(
             stats_.metadata_write_bytes,
             header_scratch_.size(),
             "BC family position metadata byte stats overflow"
         );
-        final_file_->write_at(
+        write_positioned_bytes(
+            *final_file_,
             kBCPositionHeaderBytes,
             axis_coord_table_scratch_.data(),
             static_cast<uint64_t>(axis_coord_table_scratch_.size())
@@ -340,7 +444,8 @@ public:
             axis_coord_table_scratch_.size(),
             "BC family position metadata byte stats overflow"
         );
-        final_file_->write_at(
+        write_positioned_bytes(
+            *final_file_,
             descriptor_offset,
             descriptor_table_scratch_.data(),
             static_cast<uint64_t>(descriptor_table_scratch_.size())
@@ -383,11 +488,55 @@ public:
             header_scratch_.capacity() +
             axis_coord_table_scratch_.capacity() +
             descriptor_table_scratch_.capacity() +
+            metadata_prefix_scratch_.capacity() +
             rank_copy_buffer_.capacity();
     }
 
 private:
     static constexpr uint64_t kCopyChunkBytes = 4ULL * 1024ULL * 1024ULL;
+
+    [[nodiscard]] static double now_seconds() {
+        using Clock = std::chrono::steady_clock;
+        return std::chrono::duration<double>(Clock::now().time_since_epoch()).count();
+    }
+
+    [[nodiscard]] static uint64_t align_up(uint64_t value, uint64_t alignment) {
+        if (alignment == 0U || (alignment & (alignment - 1U)) != 0U) {
+            throw std::invalid_argument("BC family position writer alignment must be a power of two");
+        }
+        if (value > std::numeric_limits<uint64_t>::max() - (alignment - 1U)) {
+            throw std::overflow_error("BC family position writer align_up overflow");
+        }
+        return (value + alignment - 1U) & ~(alignment - 1U);
+    }
+
+    void record_backend_write_stats(const BCFileIOStats &io_stats, double seconds) {
+        stats_.backend_write_ops = bc_checked_add_u64(
+            stats_.backend_write_ops,
+            io_stats.backend_io_count,
+            "BC family position writer backend write op stats overflow"
+        );
+        stats_.backend_write_bytes = bc_checked_add_u64(
+            stats_.backend_write_bytes,
+            io_stats.backend_bytes,
+            "BC family position writer backend write byte stats overflow"
+        );
+        stats_.backend_write_seconds += seconds;
+    }
+
+    void record_backend_read_stats(const BCFileIOStats &io_stats, double seconds) {
+        stats_.backend_read_ops = bc_checked_add_u64(
+            stats_.backend_read_ops,
+            io_stats.backend_io_count,
+            "BC family position writer backend read op stats overflow"
+        );
+        stats_.backend_read_bytes = bc_checked_add_u64(
+            stats_.backend_read_bytes,
+            io_stats.backend_bytes,
+            "BC family position writer backend read byte stats overflow"
+        );
+        stats_.backend_read_seconds += seconds;
+    }
 
     static void store_u32_le(uint8_t *out, uint32_t value) {
         out[0] = static_cast<uint8_t>(value & 0xFFU);
@@ -446,9 +595,111 @@ private:
         );
     }
 
+    [[nodiscard]] uint64_t metadata_end_offset() const {
+        return bucket_stream_file_offset();
+    }
+
+    [[nodiscard]] uint64_t rank_first_rank_stream_file_offset() const {
+        return align_up(metadata_end_offset(), options_.direct_alignment);
+    }
+
+    [[nodiscard]] uint64_t finish_layer_rank_first(const BCReadableFile &bucket_spool_reader) {
+        const uint64_t descriptor_count = descriptors_.size();
+        const uint64_t descriptor_bytes = descriptor_count * kBCPositionCellDescriptorBytes;
+        const uint64_t axis_coord_bytes = bc_axis_coord_table_bytes(axis_.family_count());
+        const uint64_t descriptor_offset = bc_checked_add_u64(
+            kBCPositionHeaderBytes,
+            axis_coord_bytes,
+            "BC family position rank-first descriptor table offset overflow"
+        );
+        const uint64_t rank_offset = rank_first_rank_file_offset_;
+        const uint64_t rank_end = bc_checked_add_u64(
+            rank_offset,
+            rank_cursor_,
+            "BC family position rank-first rank end overflow"
+        );
+        const uint64_t bucket_offset = align_up(rank_end, options_.direct_alignment);
+        const uint64_t logical_size = bc_checked_add_u64(
+            bucket_offset,
+            bucket_cursor_,
+            "BC family position rank-first logical file size overflow"
+        );
+
+        flush_bucket_stage();
+        flush_rank_stage();
+        rank_spool_file_->flush();
+
+        BCPositionHeader header;
+        header.family_unit = axis_.family_unit();
+        header.axis_base_coord = axis_.axis_base_coord();
+        header.family_count = axis_.family_count();
+        header.layer_sum = axis_.layer_sum();
+        header.axis_coord_table_bytes = axis_coord_bytes;
+        header.descriptor_count = descriptor_count;
+        header.descriptor_table_offset = descriptor_offset;
+        header.descriptor_table_bytes = descriptor_bytes;
+        header.bucket_meta_offset = bucket_offset;
+        header.bucket_meta_bytes = bucket_cursor_;
+        header.rank_payload_offset = rank_offset;
+        header.rank_payload_bytes = rank_cursor_;
+
+        header_scratch_.clear();
+        header_scratch_.reserve(kBCPositionHeaderBytes);
+        bc_append_header(header_scratch_, header);
+
+        axis_coord_table_scratch_.clear();
+        axis_coord_table_scratch_.reserve(static_cast<size_t>(axis_coord_bytes));
+        bc_append_axis_coord_table(axis_coord_table_scratch_, axis_);
+
+        descriptor_table_scratch_.clear();
+        descriptor_table_scratch_.reserve(static_cast<size_t>(descriptor_bytes));
+        for (const BCPositionCellDescriptor &descriptor : descriptors_) {
+            bc_append_cell_descriptor(descriptor_table_scratch_, descriptor);
+        }
+
+        if (rank_offset > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC family position rank-first metadata prefix exceeds size_t");
+        }
+        metadata_prefix_scratch_.assign(static_cast<size_t>(rank_offset), 0U);
+        std::memcpy(metadata_prefix_scratch_.data(), header_scratch_.data(), header_scratch_.size());
+        if (!axis_coord_table_scratch_.empty()) {
+            std::memcpy(
+                metadata_prefix_scratch_.data() + kBCPositionHeaderBytes,
+                axis_coord_table_scratch_.data(),
+                axis_coord_table_scratch_.size()
+            );
+        }
+        if (!descriptor_table_scratch_.empty()) {
+            std::memcpy(
+                metadata_prefix_scratch_.data() + static_cast<size_t>(descriptor_offset),
+                descriptor_table_scratch_.data(),
+                descriptor_table_scratch_.size()
+            );
+        }
+
+        final_file_->resize(logical_size);
+        write_positioned_bytes(
+            *final_file_,
+            0U,
+            metadata_prefix_scratch_.data(),
+            static_cast<uint64_t>(metadata_prefix_scratch_.size())
+        );
+        ++stats_.metadata_write_ops;
+        stats_.metadata_write_bytes = bc_checked_add_u64(
+            stats_.metadata_write_bytes,
+            header_scratch_.size() + axis_coord_table_scratch_.size() + descriptor_table_scratch_.size(),
+            "BC family position rank-first metadata byte stats overflow"
+        );
+        copy_spool_stream(bucket_spool_reader, bucket_offset, bucket_cursor_);
+        final_file_->flush();
+        finished_ = true;
+        stats_.logical_size = logical_size;
+        return logical_size;
+    }
+
     void append_bucket_bytes(const void *data, uint64_t bytes) {
         append_stream_bytes(
-            *final_file_,
+            options_.rank_first_direct_layout ? *rank_spool_file_ : *final_file_,
             bucket_stage_,
             bucket_stage_file_offset_,
             stats_.bucket_stage_flushes,
@@ -460,7 +711,7 @@ private:
 
     void append_rank_spool_bytes(const void *data, uint64_t bytes) {
         append_stream_bytes(
-            *rank_spool_file_,
+            options_.rank_first_direct_layout ? *final_file_ : *rank_spool_file_,
             rank_stage_,
             rank_stage_file_offset_,
             stats_.rank_stage_flushes,
@@ -470,9 +721,10 @@ private:
         );
     }
 
+    template <class StageBuffer>
     void append_stream_bytes(
         BCWritableFile &file,
-        std::vector<uint8_t> &stage,
+        StageBuffer &stage,
         uint64_t &stage_file_offset,
         uint64_t &flush_count,
         uint64_t &write_bytes,
@@ -507,7 +759,7 @@ private:
 
     void flush_bucket_stage() {
         flush_stream_stage(
-            *final_file_,
+            options_.rank_first_direct_layout ? *rank_spool_file_ : *final_file_,
             bucket_stage_,
             bucket_stage_file_offset_,
             stats_.bucket_stage_flushes,
@@ -517,7 +769,7 @@ private:
 
     void flush_rank_stage() {
         flush_stream_stage(
-            *rank_spool_file_,
+            options_.rank_first_direct_layout ? *final_file_ : *rank_spool_file_,
             rank_stage_,
             rank_stage_file_offset_,
             stats_.rank_stage_flushes,
@@ -525,9 +777,10 @@ private:
         );
     }
 
-    static void flush_stream_stage(
+    template <class StageBuffer>
+    void flush_stream_stage(
         BCWritableFile &file,
-        std::vector<uint8_t> &stage,
+        StageBuffer &stage,
         uint64_t &stage_file_offset,
         uint64_t &flush_count,
         uint64_t &write_bytes
@@ -536,7 +789,13 @@ private:
             return;
         }
         const uint64_t bytes = static_cast<uint64_t>(stage.size());
-        file.write_at(stage_file_offset, stage.data(), bytes);
+        BCFileIOStats io_stats;
+        const double write_begin = now_seconds();
+        file.write_many(
+            std::vector<BCFileWriteRequest>{BCFileWriteRequest{stage_file_offset, stage.data(), bytes}},
+            &io_stats
+        );
+        record_backend_write_stats(io_stats, now_seconds() - write_begin);
         ++flush_count;
         write_bytes = bc_checked_add_u64(
             write_bytes,
@@ -551,31 +810,76 @@ private:
         stage.clear();
     }
 
+    void write_positioned_bytes(
+        BCWritableFile &file,
+        uint64_t offset,
+        const void *data,
+        uint64_t bytes
+    ) {
+        if (bytes == 0U) {
+            return;
+        }
+        BCFileIOStats io_stats;
+        const double write_begin = now_seconds();
+        file.write_many(
+            std::vector<BCFileWriteRequest>{BCFileWriteRequest{offset, data, bytes}},
+            &io_stats
+        );
+        record_backend_write_stats(io_stats, now_seconds() - write_begin);
+    }
+
+    void read_positioned_bytes(
+        const BCReadableFile &file,
+        uint64_t offset,
+        void *data,
+        uint64_t bytes
+    ) {
+        if (bytes == 0U) {
+            return;
+        }
+        BCFileIOStats io_stats;
+        const double read_begin = now_seconds();
+        file.read_many(
+            std::vector<BCFileReadRequest>{BCFileReadRequest{offset, data, bytes}},
+            &io_stats
+        );
+        record_backend_read_stats(io_stats, now_seconds() - read_begin);
+    }
+
     void copy_rank_spool(const BCReadableFile &rank_spool_reader, uint64_t rank_offset) {
-        const uint64_t chunk_bytes = std::min<uint64_t>(kCopyChunkBytes, std::max<uint64_t>(rank_cursor_, 1U));
+        copy_spool_stream(rank_spool_reader, rank_offset, rank_cursor_);
+    }
+
+    void copy_spool_stream(
+        const BCReadableFile &spool_reader,
+        uint64_t target_offset,
+        uint64_t bytes
+    ) {
+        const uint64_t chunk_bytes = std::min<uint64_t>(kCopyChunkBytes, std::max<uint64_t>(bytes, 1U));
         if (chunk_bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-            throw std::overflow_error("BC family position rank copy buffer exceeds size_t");
+            throw std::overflow_error("BC family position spool copy buffer exceeds size_t");
         }
         rank_copy_buffer_.resize(static_cast<size_t>(chunk_bytes));
         uint64_t cursor = 0U;
-        while (cursor < rank_cursor_) {
-            const uint64_t take = std::min<uint64_t>(rank_cursor_ - cursor, rank_copy_buffer_.size());
-            rank_spool_reader.read_at(cursor, rank_copy_buffer_.data(), take);
+        while (cursor < bytes) {
+            const uint64_t take = std::min<uint64_t>(bytes - cursor, rank_copy_buffer_.size());
+            read_positioned_bytes(spool_reader, cursor, rank_copy_buffer_.data(), take);
             ++stats_.rank_copy_chunks;
             stats_.rank_copy_read_bytes = bc_checked_add_u64(
                 stats_.rank_copy_read_bytes,
                 take,
-                "BC family position rank copy read stats overflow"
+                "BC family position spool copy read stats overflow"
             );
-            final_file_->write_at(
-                bc_checked_add_u64(rank_offset, cursor, "BC family position rank copy offset overflow"),
+            write_positioned_bytes(
+                *final_file_,
+                bc_checked_add_u64(target_offset, cursor, "BC family position spool copy offset overflow"),
                 rank_copy_buffer_.data(),
                 take
             );
             stats_.rank_copy_write_bytes = bc_checked_add_u64(
                 stats_.rank_copy_write_bytes,
                 take,
-                "BC family position rank copy write stats overflow"
+                "BC family position spool copy write stats overflow"
             );
             cursor += take;
         }
@@ -590,14 +894,16 @@ private:
     uint64_t written_count_ = 0U;
     uint64_t bucket_cursor_ = 0U;
     uint64_t rank_cursor_ = 0U;
-    std::vector<uint8_t> bucket_stage_;
-    std::vector<uint8_t> rank_stage_;
+    BCFamilyPositionAlignedBuffer bucket_stage_;
+    BCFamilyPositionAlignedBuffer rank_stage_;
     std::vector<uint8_t> header_scratch_;
     std::vector<uint8_t> axis_coord_table_scratch_;
     std::vector<uint8_t> descriptor_table_scratch_;
-    std::vector<uint8_t> rank_copy_buffer_;
+    std::vector<uint8_t> metadata_prefix_scratch_;
+    BCFamilyPositionAlignedBuffer rank_copy_buffer_;
     uint64_t bucket_stage_file_offset_ = 0U;
     uint64_t rank_stage_file_offset_ = 0U;
+    uint64_t rank_first_rank_file_offset_ = 0U;
     BCFamilyPositionWriterStats stats_;
     bool begun_ = false;
     bool finished_ = false;

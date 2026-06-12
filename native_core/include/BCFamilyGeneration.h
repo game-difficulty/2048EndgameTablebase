@@ -71,7 +71,7 @@ struct BCFamilyGenerationOptions {
     double neighbor_reserve_quantile = 0.90;
     double neighbor_reserve_scale = 1.25;
     int canonical_symm_mode = static_cast<int>(SymmMode::Full);
-    bool enforce_three_family_window = true;
+    bool enforce_family_window = true;
     bool collect_hot_counters = false;
     BCFamilyPartitionPolicy family_partition_policy = BCFamilyPartitionPolicy::modulo(29U);
     // Required for the modulo partition map. The vector is used only to build
@@ -114,6 +114,12 @@ struct BCFamilyGenerationStats {
     uint64_t writer_rank_stage_flushes = 0U;
     uint64_t writer_bucket_stage_write_bytes = 0U;
     uint64_t writer_rank_stage_write_bytes = 0U;
+    uint64_t writer_backend_read_ops = 0U;
+    uint64_t writer_backend_read_bytes = 0U;
+    uint64_t writer_backend_write_ops = 0U;
+    uint64_t writer_backend_write_bytes = 0U;
+    double writer_backend_read_seconds = 0.0;
+    double writer_backend_write_seconds = 0.0;
     uint64_t source_boards_scanned = 0U;
     uint64_t spawned_boards = 0U;
     uint64_t move_all_dir_calls = 0U;

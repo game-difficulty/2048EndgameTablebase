@@ -70,5 +70,6 @@ private:
 };
 
 using FamilyIdList2 = SmallVector<FamilyId, 2U>;
+using FamilyIdList3 = SmallVector<FamilyId, 3U>;
 
 } // namespace BC
