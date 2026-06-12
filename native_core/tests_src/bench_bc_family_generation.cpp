@@ -390,6 +390,16 @@ void check(bool condition, const char *message) {
 #endif
 }
 
+void configure_global_threads(int requested) {
+#if defined(_OPENMP)
+    if (requested > 0) {
+        omp_set_num_threads(requested);
+    }
+#else
+    (void)requested;
+#endif
+}
+
 [[nodiscard]] std::vector<std::string> split_csv_simple(const std::string &line) {
     std::vector<std::string> cells;
     std::string cell;
@@ -2294,6 +2304,7 @@ int main(int argc, char **argv) {
 #endif
     try {
         const Args args = parse_args(argc, argv);
+        configure_global_threads(args.num_threads);
         if (!args.stats_csv.empty()) {
             std::ofstream out(args.stats_csv);
             if (!out) {

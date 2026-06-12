@@ -5,12 +5,17 @@
 #include "BCPositionCellLoader.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
+
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
 
 namespace BC {
 
@@ -53,6 +58,10 @@ public:
             partition_allocated_bytes(physical_partition_) +
             partition_allocated_bytes(logical_partition_) +
             candidate_old_cids_.capacity() * sizeof(CellId) +
+            batch_old_cids_.capacity() * sizeof(CellId) +
+            old_cells_.capacity() * sizeof(BCLoadedCell) +
+            logical_output_index_.capacity() * sizeof(std::pair<CellId, uint32_t>) +
+            tagged_temp_buckets_.capacity() * sizeof(TaggedTempBucket) +
             temp_buckets_.capacity() * sizeof(TempBucket);
     }
 
@@ -100,11 +109,19 @@ public:
         if (stats != nullptr) {
             *stats = {};
         }
+        if (logical_cids.empty()) {
+            cells.clear();
+            return;
+        }
         if (cells.size() < logical_cids.size()) {
             cells.resize(logical_cids.size());
         }
         if (cells.size() > logical_cids.size()) {
             cells.resize(logical_cids.size());
+        }
+        if (logical_cids.size() > 1U) {
+            load_logical_cells_batch(logical_cids, cells, stats);
+            return;
         }
         for (size_t i = 0U; i < logical_cids.size(); ++i) {
             load_logical_cell(logical_cids[i], cells[i], stats);
@@ -116,6 +133,11 @@ private:
         BCBucketEntry source_entry;
         std::vector<uint8_t> payload;
         uint32_t live_rows = 0U;
+    };
+
+    struct TaggedTempBucket {
+        uint32_t output_index = 0U;
+        TempBucket bucket;
     };
 
     [[nodiscard]] static bool axes_equivalent(
@@ -198,10 +220,10 @@ private:
         out.erase(std::unique(out.begin(), out.end()), out.end());
     }
 
-    [[nodiscard]] bool key_maps_to_logical_cell(
+    [[nodiscard]] bool key_logical_cid(
         const BCLut &lut,
         uint64_t key,
-        CellId logical_cid
+        CellId &out
     ) const {
         const uint16_t nw = static_cast<uint16_t>((key >> 48U) & 0xFFFFU);
         const uint16_t ne = static_cast<uint16_t>((key >> 32U) & 0xFFFFU);
@@ -236,7 +258,21 @@ private:
         }
         const FamilyId row_id = logical_partition_.try_coord_to_family_id(row_coord);
         const FamilyId col_id = logical_partition_.try_coord_to_family_id(col_coord);
-        return row_id == logical_row(logical_cid) && col_id == logical_col(logical_cid);
+        if (row_id == BCFamilyTable::kInvalidFamilyId ||
+            col_id == BCFamilyTable::kInvalidFamilyId) {
+            return false;
+        }
+        out = logical_matrix_.cid(row_id, col_id);
+        return true;
+    }
+
+    [[nodiscard]] bool key_maps_to_logical_cell(
+        const BCLut &lut,
+        uint64_t key,
+        CellId logical_cid
+    ) const {
+        CellId key_cid = 0U;
+        return key_logical_cid(lut, key, key_cid) && key_cid == logical_cid;
     }
 
     [[nodiscard]] static uint32_t rank_payload_slice_end(
@@ -327,6 +363,239 @@ private:
         dst.backend_read_bytes += src.backend_read_bytes;
     }
 
+    [[nodiscard]] static uint64_t loaded_cell_allocated_bytes(const BCLoadedCell &cell) {
+        return static_cast<uint64_t>(cell.buckets.capacity()) * sizeof(BCBucketEntry) +
+            cell.rank_payload.capacity();
+    }
+
+    template <class Fn>
+    void for_each_output_index(CellId logical_cid, Fn &&fn) const {
+        const auto begin = std::lower_bound(
+            logical_output_index_.begin(),
+            logical_output_index_.end(),
+            std::pair<CellId, uint32_t>{logical_cid, 0U},
+            [](const auto &lhs, const auto &rhs) {
+                if (lhs.first != rhs.first) {
+                    return lhs.first < rhs.first;
+                }
+                return lhs.second < rhs.second;
+            }
+        );
+        for (auto it = begin;
+             it != logical_output_index_.end() && it->first == logical_cid;
+             ++it) {
+            fn(it->second);
+        }
+    }
+
+    void scan_old_cell_to_tagged(
+        const BCLoadedCell &old_cell,
+        std::vector<TaggedTempBucket> &out
+    ) const {
+        const BCLoadedCellView old_view = old_cell.view();
+        for (uint32_t i = 0U; i < old_view.buckets.size; ++i) {
+            const BCBucketEntry &bucket = old_view.buckets.data[i];
+            CellId logical_cid = 0U;
+            if (!key_logical_cid(source_->lut(), bucket.key, logical_cid)) {
+                continue;
+            }
+            for_each_output_index(
+                logical_cid,
+                [&](uint32_t output_index) {
+                    TaggedTempBucket tagged;
+                    tagged.output_index = output_index;
+                    keep_bucket(old_cell, bucket, tagged.bucket);
+                    out.push_back(std::move(tagged));
+                }
+            );
+        }
+    }
+
+    [[nodiscard]] static bool should_parallel_remap_scan(
+        size_t old_cell_count,
+        uint64_t bucket_count,
+        uint64_t loaded_bytes,
+        uint64_t source_file_size
+    ) {
+#if defined(_OPENMP)
+        const char *bucket_threshold_env = std::getenv("BC_REMAP_PARALLEL_MIN_BUCKETS");
+        const char *byte_threshold_env = std::getenv("BC_REMAP_PARALLEL_MIN_BYTES");
+        const char *source_threshold_env = std::getenv("BC_REMAP_PARALLEL_MIN_SOURCE_BYTES");
+        const bool has_explicit_threshold =
+            (bucket_threshold_env != nullptr && bucket_threshold_env[0] != '\0') ||
+            (byte_threshold_env != nullptr && byte_threshold_env[0] != '\0') ||
+            (source_threshold_env != nullptr && source_threshold_env[0] != '\0');
+        const uint64_t min_buckets =
+            bucket_threshold_env == nullptr || bucket_threshold_env[0] == '\0'
+                ? 0U
+                : static_cast<uint64_t>(std::strtoull(bucket_threshold_env, nullptr, 10));
+        const uint64_t min_bytes =
+            byte_threshold_env != nullptr && byte_threshold_env[0] != '\0'
+                ? static_cast<uint64_t>(std::strtoull(byte_threshold_env, nullptr, 10))
+                : 0U;
+        const uint64_t min_source_bytes =
+            source_threshold_env != nullptr && source_threshold_env[0] != '\0'
+                ? static_cast<uint64_t>(std::strtoull(source_threshold_env, nullptr, 10))
+                : (has_explicit_threshold ? 0U : 64ULL * 1024ULL * 1024ULL);
+        return old_cell_count >= 4U &&
+            bucket_count >= min_buckets &&
+            loaded_bytes >= min_bytes &&
+            source_file_size >= min_source_bytes &&
+            omp_get_max_threads() > 1;
+#else
+        (void)old_cell_count;
+        (void)bucket_count;
+        (void)loaded_bytes;
+        (void)source_file_size;
+        return false;
+#endif
+    }
+
+    void scan_old_cells_to_tagged(uint64_t bucket_count, uint64_t loaded_bytes) const {
+        tagged_temp_buckets_.clear();
+        if (!should_parallel_remap_scan(
+                old_cells_.size(),
+                bucket_count,
+                loaded_bytes,
+                source_->file_size())) {
+            for (const BCLoadedCell &old_cell : old_cells_) {
+                scan_old_cell_to_tagged(old_cell, tagged_temp_buckets_);
+            }
+            return;
+        }
+#if defined(_OPENMP)
+        const int thread_count = omp_get_max_threads();
+        std::vector<std::vector<TaggedTempBucket>> per_thread(static_cast<size_t>(thread_count));
+#pragma omp parallel
+        {
+            const int tid = omp_get_thread_num();
+            std::vector<TaggedTempBucket> &local = per_thread[static_cast<size_t>(tid)];
+#pragma omp for schedule(dynamic)
+            for (long long i = 0; i < static_cast<long long>(old_cells_.size()); ++i) {
+                scan_old_cell_to_tagged(old_cells_[static_cast<size_t>(i)], local);
+            }
+        }
+        size_t total = 0U;
+        for (const std::vector<TaggedTempBucket> &local : per_thread) {
+            total += local.size();
+        }
+        tagged_temp_buckets_.reserve(total);
+        for (std::vector<TaggedTempBucket> &local : per_thread) {
+            for (TaggedTempBucket &tagged : local) {
+                tagged_temp_buckets_.push_back(std::move(tagged));
+            }
+            local.clear();
+        }
+#endif
+    }
+
+    void reset_output_cells(
+        const std::vector<CellId> &logical_cids,
+        std::vector<BCLoadedCell> &cells
+    ) const {
+        for (size_t i = 0U; i < logical_cids.size(); ++i) {
+            BCLoadedCell &cell = cells[i];
+            cell.cid = logical_cids[i];
+            cell.success_rows = 0U;
+            cell.buckets.clear();
+            cell.rank_payload.clear();
+        }
+    }
+
+    void build_batch_old_cell_list(const std::vector<CellId> &logical_cids) const {
+        batch_old_cids_.clear();
+        logical_output_index_.clear();
+        logical_output_index_.reserve(logical_cids.size());
+        for (size_t i = 0U; i < logical_cids.size(); ++i) {
+            const CellId logical_cid = logical_cids[i];
+            logical_output_index_.push_back({
+                logical_cid,
+                checked_u32_size(i, "BC remap logical output index exceeds uint32")
+            });
+            collect_candidate_old_cids(logical_cid, candidate_old_cids_);
+            batch_old_cids_.insert(
+                batch_old_cids_.end(),
+                candidate_old_cids_.begin(),
+                candidate_old_cids_.end()
+            );
+        }
+        std::sort(batch_old_cids_.begin(), batch_old_cids_.end());
+        batch_old_cids_.erase(
+            std::unique(batch_old_cids_.begin(), batch_old_cids_.end()),
+            batch_old_cids_.end()
+        );
+        std::sort(
+            logical_output_index_.begin(),
+            logical_output_index_.end(),
+            [](const auto &lhs, const auto &rhs) {
+                if (lhs.first != rhs.first) {
+                    return lhs.first < rhs.first;
+                }
+                return lhs.second < rhs.second;
+            }
+        );
+    }
+
+    void load_logical_cells_batch(
+        const std::vector<CellId> &logical_cids,
+        std::vector<BCLoadedCell> &cells,
+        BCCellLoadStats *stats
+    ) const {
+        reset_output_cells(logical_cids, cells);
+        build_batch_old_cell_list(logical_cids);
+        tagged_temp_buckets_.clear();
+        if (batch_old_cids_.empty()) {
+            return;
+        }
+
+        source_->load_cells_into(batch_old_cids_, old_cells_, stats);
+        stats_.physical_cells_loaded += old_cells_.size();
+        uint64_t old_bucket_count = 0U;
+        uint64_t old_loaded_bytes = 0U;
+        for (const BCLoadedCell &old_cell : old_cells_) {
+            const uint64_t loaded_bytes = loaded_cell_allocated_bytes(old_cell);
+            old_loaded_bytes += loaded_bytes;
+            stats_.physical_bytes_loaded += loaded_bytes;
+            old_bucket_count += static_cast<uint64_t>(old_cell.buckets.size());
+        }
+        scan_old_cells_to_tagged(old_bucket_count, old_loaded_bytes);
+        std::sort(
+            tagged_temp_buckets_.begin(),
+            tagged_temp_buckets_.end(),
+            [](const TaggedTempBucket &lhs, const TaggedTempBucket &rhs) {
+                if (lhs.output_index != rhs.output_index) {
+                    return lhs.output_index < rhs.output_index;
+                }
+                return lhs.bucket.source_entry.key < rhs.bucket.source_entry.key;
+            }
+        );
+
+        size_t begin = 0U;
+        while (begin < tagged_temp_buckets_.size()) {
+            const uint32_t output_index = tagged_temp_buckets_[begin].output_index;
+            if (output_index >= cells.size()) {
+                throw std::out_of_range("BC remap tagged output index out of range");
+            }
+            uint32_t success_cursor = 0U;
+            size_t end = begin;
+            while (end < tagged_temp_buckets_.size() &&
+                   tagged_temp_buckets_[end].output_index == output_index) {
+                append_temp_bucket(cells[output_index], tagged_temp_buckets_[end].bucket, success_cursor);
+                ++end;
+            }
+            cells[output_index].success_rows = success_cursor;
+            begin = end;
+        }
+        for (const BCLoadedCell &cell : cells) {
+            stats_.remapped_bytes_kept += loaded_cell_allocated_bytes(cell);
+        }
+        tagged_temp_buckets_.clear();
+        old_cells_.clear();
+        if (stats_.physical_bytes_loaded >= stats_.remapped_bytes_kept) {
+            stats_.discarded_bytes = stats_.physical_bytes_loaded - stats_.remapped_bytes_kept;
+        }
+    }
+
     void load_logical_cell(
         CellId logical_cid,
         BCLoadedCell &out,
@@ -345,8 +614,7 @@ private:
                 add_load_stats(*stats, one_stats);
             }
             const uint64_t loaded_bytes =
-                static_cast<uint64_t>(old_cell.buckets.capacity()) * sizeof(BCBucketEntry) +
-                old_cell.rank_payload.capacity();
+                loaded_cell_allocated_bytes(old_cell);
             stats_.physical_cells_loaded += 1U;
             stats_.physical_bytes_loaded += loaded_bytes;
             const BCLoadedCellView old_view = old_cell.view();
@@ -376,8 +644,7 @@ private:
         }
         out.success_rows = success_cursor;
         const uint64_t kept_bytes =
-            static_cast<uint64_t>(out.buckets.capacity()) * sizeof(BCBucketEntry) +
-            out.rank_payload.capacity();
+            loaded_cell_allocated_bytes(out);
         stats_.remapped_bytes_kept += kept_bytes;
         if (stats_.physical_bytes_loaded >= stats_.remapped_bytes_kept) {
             stats_.discarded_bytes = stats_.physical_bytes_loaded - stats_.remapped_bytes_kept;
@@ -393,6 +660,10 @@ private:
     bool direct_ = false;
     mutable BCPositionFamilyRemapStats stats_;
     mutable std::vector<CellId> candidate_old_cids_;
+    mutable std::vector<CellId> batch_old_cids_;
+    mutable std::vector<BCLoadedCell> old_cells_;
+    mutable std::vector<std::pair<CellId, uint32_t>> logical_output_index_;
+    mutable std::vector<TaggedTempBucket> tagged_temp_buckets_;
     mutable std::vector<TempBucket> temp_buckets_;
 };
 

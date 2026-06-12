@@ -589,7 +589,7 @@ void test_family_remap_reader_filters_by_bucket_key() {
     check(cells[3].buckets.empty(), "non-target remapped cell should keep no buckets");
     check(stats.requested_extents != 0U, "remap should read old physical cells");
     const BC::BCPositionFamilyRemapStats &remap_stats = remap.stats();
-    check(remap_stats.physical_cells_loaded >= 4U, "remap should load over-approx physical cells per logical cell");
+    check(remap_stats.physical_cells_loaded == 1U, "batched remap should load each old physical cell once");
     check(remap_stats.physical_bytes_loaded > 0U, "remap should account physical bytes loaded");
     check(remap_stats.remapped_bytes_kept > 0U, "remap should account kept bytes");
     check(
