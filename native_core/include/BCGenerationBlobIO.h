@@ -1067,7 +1067,7 @@ public:
                                 request.ref.dump_generation,
                                 base,
                                 request.ref.metadata_bytes,
-                                false,
+                                true,
                                 verify_checksums_
                             );
                         const uint64_t bitmap_bytes =
@@ -1091,19 +1091,13 @@ public:
                             }
                         }
                         if (bitmap_bytes != 0U) {
-                            const uint64_t bitmap_owner_offset =
-                                in_range + request.ref.bitmap_relative_offset();
-                            if (bitmap_owner_offset > range.bytes) {
-                                throw std::logic_error("BC file generation blob direct adopt bitmap offset is invalid");
-                            }
-                            builder->adopt_direct_restore_bitmap_buffer(
-                                std::move(range.data),
-                                bitmap_owner_offset,
-                                header.bitmap_words,
-                                range.bytes - bitmap_owner_offset
+                            std::memcpy(
+                                builder->direct_restore_bitmap_bytes(header.bitmap_words),
+                                base + request.ref.bitmap_relative_offset(),
+                                static_cast<size_t>(bitmap_bytes)
                             );
                         }
-                        builder->finish_direct_bitmap_restore(verify_checksums_);
+                        builder->finish_direct_bitmap_restore(true);
                         out[request.index] = BCRestoredCellBuilder{
                             request.cid,
                             std::move(builder)
@@ -1283,7 +1277,7 @@ public:
                             static_cast<size_t>(bitmap_bytes)
                         );
                     }
-                    builder->finish_direct_bitmap_restore(verify_checksums_);
+                    builder->finish_direct_bitmap_restore(true);
                     out[request.index] = BCRestoredCellBuilder{
                         request.cid,
                         std::move(builder)
@@ -1536,7 +1530,7 @@ public:
                         throw std::runtime_error("BC file generation blob checksum mismatch");
                     }
                 }
-                request.builder->finish_direct_bitmap_restore(verify_checksums_);
+                request.builder->finish_direct_bitmap_restore(true);
                 out[request.index] = BCRestoredCellBuilder{
                     request.cid,
                     std::move(request.builder)
@@ -1753,7 +1747,7 @@ private:
                         static_cast<size_t>(bitmap_bytes)
                     );
                 }
-                builder->finish_direct_bitmap_restore(verify_checksums_);
+                builder->finish_direct_bitmap_restore(true);
                 out[static_cast<size_t>(index)] = BCRestoredCellBuilder{
                     cid,
                     std::move(builder)

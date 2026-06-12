@@ -706,14 +706,18 @@ public:
                 result.new_buckets += item.new_bucket ? 1U : 0U;
             }
             if ((atomic_load_bitmap_word(word) & item.mask) != 0ULL) {
-                ++result.duplicate_ranks;
+                if (count_new_buckets) {
+                    ++result.duplicate_ranks;
+                }
                 continue;
             }
             const uint64_t old = atomic_fetch_or_bitmap_word(word, item.mask);
             if ((old & item.mask) == 0U) {
-                ++result.new_ranks;
+                if (count_new_buckets) {
+                    ++result.new_ranks;
+                }
                 any_new_rank = true;
-            } else {
+            } else if (count_new_buckets) {
                 ++result.duplicate_ranks;
             }
         }
@@ -1417,40 +1421,6 @@ public:
         return builder;
     }
 
-    void adopt_direct_restore_bitmap_buffer(
-        BCCellAlignedBytePtr owner,
-        uint64_t bitmap_offset_bytes,
-        uint32_t expected_words,
-        uint64_t available_bitmap_bytes
-    ) {
-        if (expected_words != bitmap_used_words_.load(std::memory_order_acquire)) {
-            throw std::invalid_argument("BC mutable compact direct adopt bitmap word mismatch");
-        }
-        if (expected_words == 0U) {
-            bitmap_external_owner_.reset();
-            bitmap_external_words_ = nullptr;
-            return;
-        }
-        if (!owner) {
-            throw std::invalid_argument("BC mutable compact direct adopt owner is null");
-        }
-        if ((bitmap_offset_bytes & (alignof(uint64_t) - 1U)) != 0U) {
-            throw std::invalid_argument("BC mutable compact direct adopt bitmap offset is unaligned");
-        }
-        const uint64_t required_bytes = static_cast<uint64_t>(expected_words) * sizeof(uint64_t);
-        if (available_bitmap_bytes < required_bytes ||
-            available_bitmap_bytes / sizeof(uint64_t) > std::numeric_limits<uint32_t>::max()) {
-            throw std::out_of_range("BC mutable compact direct adopt bitmap buffer is too small");
-        }
-        bitmap_arena_.reset();
-        bitmap_external_words_ = reinterpret_cast<uint64_t *>(owner.get() + bitmap_offset_bytes);
-        bitmap_external_owner_ = std::move(owner);
-        bitmap_capacity_words_.store(
-            static_cast<uint32_t>(available_bitmap_bytes / sizeof(uint64_t)),
-            std::memory_order_release
-        );
-    }
-
     [[nodiscard]] uint8_t *direct_restore_bitmap_bytes(uint32_t expected_words, uint64_t read_bytes = 0U) {
         if (expected_words != bitmap_used_words_.load(std::memory_order_acquire)) {
             throw std::invalid_argument("BC mutable compact direct restore bitmap word mismatch");
@@ -2048,7 +2018,7 @@ private:
     }
 
     [[nodiscard]] uint64_t *bitmap_base() const {
-        return bitmap_external_words_ != nullptr ? bitmap_external_words_ : bitmap_arena_.get();
+        return bitmap_arena_.get();
     }
 
     [[nodiscard]] uint64_t *slot_bitmap_base(uint32_t slot) const {
@@ -2895,8 +2865,6 @@ private:
         for (uint32_t i = 0U; i < used; ++i) {
             next[i] = old_base != nullptr ? old_base[i] : 0U;
         }
-        bitmap_external_owner_.reset();
-        bitmap_external_words_ = nullptr;
         bitmap_arena_ = std::move(next);
         bitmap_capacity_words_.store(target, std::memory_order_release);
         bitmap_replaced_bytes_total_.fetch_add(replaced_bytes, std::memory_order_relaxed);
@@ -3738,8 +3706,6 @@ private:
     mutable std::array<std::mutex, kCreationLockCount> creation_locks_;
     mutable std::mutex bitmap_alloc_mutex_;
     mutable BCCellBitmapArenaPtr bitmap_arena_;
-    mutable BCCellAlignedBytePtr bitmap_external_owner_;
-    mutable uint64_t *bitmap_external_words_ = nullptr;
     mutable std::atomic<uint32_t> bitmap_used_words_{0U};
     mutable std::atomic<uint32_t> bitmap_capacity_words_{0U};
     mutable std::atomic<uint64_t> hash_grow_count_{0U};

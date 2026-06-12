@@ -2,6 +2,7 @@
 
 #include "BCBoardOps.h"
 #include "BCLoadedCellScanner.h"
+#include "BCPositionFamilyRemapReader.h"
 #include "BoardMover.h"
 #include "CanonicalBatch.h"
 
@@ -79,6 +80,73 @@ void validate_family_store_if_enabled(
     return family_pass_stats_csv_path() != nullptr;
 }
 
+[[nodiscard]] const BCFamilyTable &family_source_axis(
+    const BCFamilyStreamingGenerationSource &source
+) {
+    if (source.remap != nullptr) {
+        return source.remap->axis();
+    }
+    if (source.position == nullptr) {
+        throw std::invalid_argument("BC Family generation source position is null");
+    }
+    return source.position->axis();
+}
+
+[[nodiscard]] uint64_t family_source_reader_metadata_bytes(
+    const BCFamilyStreamingGenerationSource &source
+) {
+    uint64_t bytes = 0U;
+    if (source.position != nullptr) {
+        bytes = bc_checked_add_u64(
+            bytes,
+            source.position->allocated_bytes(),
+            "BC Family source reader metadata overflow"
+        );
+    }
+    if (source.remap != nullptr) {
+        bytes = bc_checked_add_u64(
+            bytes,
+            source.remap->allocated_bytes(),
+            "BC Family source remap metadata overflow"
+        );
+    }
+    return bytes;
+}
+
+[[nodiscard]] bool family_source_has_success_rows(
+    const BCFamilyStreamingGenerationSource &source,
+    const std::vector<CellId> &cids
+) {
+    if (source.remap != nullptr) {
+        return source.remap->has_success_rows(cids);
+    }
+    if (source.position == nullptr) {
+        throw std::invalid_argument("BC Family generation source position is null");
+    }
+    for (CellId cid : cids) {
+        if (source.position->descriptor(cid).success_rows != 0U) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void family_source_load_cells_into(
+    const BCFamilyStreamingGenerationSource &source,
+    const std::vector<CellId> &cids,
+    std::vector<BCLoadedCell> &loaded,
+    BCCellLoadStats *stats
+) {
+    if (source.remap != nullptr) {
+        source.remap->load_cells_into(cids, loaded, stats);
+        return;
+    }
+    if (source.position == nullptr) {
+        throw std::invalid_argument("BC Family generation source position is null");
+    }
+    source.position->load_cells_into(cids, loaded, stats);
+}
+
 void append_family_pass_stats_csv(
     const BCFamilyTable &target_axis,
     const BCFamilyStreamingGenerationSource &source,
@@ -108,43 +176,35 @@ void append_family_pass_stats_csv(
     if (!header_written) {
         out
             << "source_layer,target_layer,finalize_phase,source_id,source_coord,"
-            << "target_family0,target_family1,source_has_rows,source_cells,active_cells,"
+            << "target_family0,target_family1,target_family2,source_has_rows,source_cells,active_cells,"
             << "keep_cells,boundary_cells,loaded_cells,loaded_bytes,source_load_read_bytes,"
-            << "range_work,source_work_items,source_bucket_ranges,source_bitmap_words_scanned,"
-            << "source_boards_scanned,spawned_boards,move_results_produced,"
-            << "canonicalized_candidates,encode_attempts,encode_valid_candidates,"
-            << "encoded_candidates,duplicate_candidates,parallel_seconds,"
+            << "range_work,parallel_seconds,"
             << "load_seconds,reload_seconds,build_work_seconds,dump_seconds,finalize_seconds,"
-            << "write_seconds,buffer_flushes,buffer_flush_items,buffer_flush_max_items,"
-            << "builder_bind_calls,hash_lookups,hash_probe_steps,target_window_skips,"
-            << "move_all_dir_calls,selective_move_calls,"
-            << "output_mboards_per_parallel_second\n";
+            << "write_seconds\n";
         header_written = true;
     }
-    const auto delta_u64 = [](uint64_t lhs, uint64_t rhs) -> uint64_t {
-        return lhs >= rhs ? lhs - rhs : 0U;
-    };
     const auto delta_d = [](double lhs, double rhs) -> double {
         return lhs >= rhs ? lhs - rhs : 0.0;
     };
-    const uint64_t encoded = delta_u64(after.encoded_candidates, before.encoded_candidates);
     const double parallel_seconds = delta_d(after.parallel_seconds, before.parallel_seconds);
-    const double output_mbps =
-        parallel_seconds > 0.0 ? static_cast<double>(encoded) / parallel_seconds / 1.0e6 : 0.0;
     const int32_t target_family0 = pass.target_families.size() >= 1U
         ? static_cast<int32_t>(pass.target_families[0])
         : -1;
     const int32_t target_family1 = pass.target_families.size() >= 2U
         ? static_cast<int32_t>(pass.target_families[1])
         : -1;
+    const int32_t target_family2 = pass.target_families.size() >= 3U
+        ? static_cast<int32_t>(pass.target_families[2])
+        : -1;
     out
-        << source.position->axis().layer_sum() << ','
+        << family_source_axis(source).layer_sum() << ','
         << target_axis.layer_sum() << ','
         << (finalize_boundaries ? 1U : 0U) << ','
         << static_cast<uint32_t>(pass.source_id) << ','
         << static_cast<uint32_t>(pass.source_coord) << ','
         << target_family0 << ','
         << target_family1 << ','
+        << target_family2 << ','
         << (source_has_rows ? 1U : 0U) << ','
         << source_cell_count << ','
         << active_cell_count << ','
@@ -154,34 +214,13 @@ void append_family_pass_stats_csv(
         << loaded_bytes << ','
         << load_read_bytes << ','
         << range_work_count << ','
-        << delta_u64(after.source_work_items, before.source_work_items) << ','
-        << delta_u64(after.source_bucket_ranges, before.source_bucket_ranges) << ','
-        << delta_u64(after.source_bitmap_words_scanned, before.source_bitmap_words_scanned) << ','
-        << delta_u64(after.source_boards_scanned, before.source_boards_scanned) << ','
-        << delta_u64(after.spawned_boards, before.spawned_boards) << ','
-        << delta_u64(after.move_results_produced, before.move_results_produced) << ','
-        << delta_u64(after.canonicalized_candidates, before.canonicalized_candidates) << ','
-        << delta_u64(after.encode_attempts, before.encode_attempts) << ','
-        << delta_u64(after.encode_valid_candidates, before.encode_valid_candidates) << ','
-        << encoded << ','
-        << delta_u64(after.duplicate_candidates, before.duplicate_candidates) << ','
         << parallel_seconds << ','
         << delta_d(after.source_load_seconds, before.source_load_seconds) << ','
         << delta_d(after.reload_seconds, before.reload_seconds) << ','
         << delta_d(after.build_work_seconds, before.build_work_seconds) << ','
         << delta_d(after.dump_seconds, before.dump_seconds) << ','
         << delta_d(after.finalize_seconds, before.finalize_seconds) << ','
-        << delta_d(after.write_seconds, before.write_seconds) << ','
-        << delta_u64(after.family_buffer_flushes, before.family_buffer_flushes) << ','
-        << delta_u64(after.family_buffer_flush_items, before.family_buffer_flush_items) << ','
-        << delta_u64(after.family_buffer_flush_max_items, before.family_buffer_flush_max_items) << ','
-        << delta_u64(after.family_builder_bind_calls, before.family_builder_bind_calls) << ','
-        << delta_u64(after.family_insert_hash_lookups, before.family_insert_hash_lookups) << ','
-        << delta_u64(after.family_insert_hash_probe_steps, before.family_insert_hash_probe_steps) << ','
-        << delta_u64(after.target_window_skips, before.target_window_skips) << ','
-        << delta_u64(after.move_all_dir_calls, before.move_all_dir_calls) << ','
-        << delta_u64(after.selective_move_calls, before.selective_move_calls) << ','
-        << output_mbps
+        << delta_d(after.write_seconds, before.write_seconds)
         << '\n';
 }
 
@@ -281,44 +320,6 @@ void add_load_stats(BCFamilyGenerationStats &stats, const BCCellLoadStats &load)
     return total;
 }
 
-[[nodiscard]] uint32_t family_memory_checkpoint_label_code(const char *label) {
-    if (label == nullptr) {
-        return 0U;
-    }
-    const std::string_view view(label);
-    if (view == "after_pass_cache") {
-        return 1U;
-    }
-    if (view == "before_pass_cache") {
-        return 7U;
-    }
-    if (view == "after_source_activity_scan") {
-        return 8U;
-    }
-    if (view == "pre_parallel") {
-        return 2U;
-    }
-    if (view == "post_parallel") {
-        return 3U;
-    }
-    if (view == "post_release") {
-        return 4U;
-    }
-    if (view == "finalized_payloads") {
-        return 5U;
-    }
-    if (view == "empty_pass_post_release") {
-        return 6U;
-    }
-    if (view == "after_plus4_phase") {
-        return 9U;
-    }
-    if (view == "after_plus2_phase") {
-        return 10U;
-    }
-    return 255U;
-}
-
 void validate_family_source(
     const BCFamilyTable &target_axis,
     const BCFamilyStreamingGenerationSource &source
@@ -329,11 +330,12 @@ void validate_family_source(
     if (source.spawn_tile_rank == 0U || source.spawn_tile_rank > 15U) {
         throw std::invalid_argument("BC Family generation spawn tile rank is invalid");
     }
-    if (source.position->axis().family_unit() != target_axis.family_unit()) {
+    const BCFamilyTable &source_axis = family_source_axis(source);
+    if (source_axis.family_unit() != target_axis.family_unit()) {
         throw std::invalid_argument("BC Family generation source/target family unit mismatch");
     }
     const uint64_t expected_total =
-        static_cast<uint64_t>(source.position->axis().total_coord()) +
+        static_cast<uint64_t>(source_axis.total_coord()) +
         static_cast<uint64_t>(source.delta_coord);
     if (static_cast<uint64_t>(target_axis.total_coord()) != expected_total) {
         throw std::invalid_argument("BC Family generation source/target total coord mismatch");
@@ -455,6 +457,9 @@ void append_source_neighbor_reserve_samples(
     if (!options.enable_neighbor_cell_reserve) {
         return hints;
     }
+    if (source2.remap != nullptr || (source4 != nullptr && source4->remap != nullptr)) {
+        return hints;
+    }
     const uint32_t radius = options.neighbor_reserve_radius;
     std::vector<uint32_t> bucket_samples;
     std::vector<uint32_t> bitmap_word_samples;
@@ -502,18 +507,6 @@ void append_source_neighbor_reserve_samples(
         }
     }
     return hints;
-}
-
-[[nodiscard]] bool source_family_has_success_rows(
-    const BCPositionStreamingReader &position,
-    const std::vector<CellId> &cids
-) {
-    for (CellId cid : cids) {
-        if (position.descriptor(cid).success_rows != 0U) {
-            return true;
-        }
-    }
-    return false;
 }
 
 [[nodiscard]] bool family_success_check_enabled(
@@ -564,29 +557,6 @@ void append_source_neighbor_reserve_samples(
         *options.success_shifts
     );
 }
-
-struct FamilyThreadStats {
-    uint64_t source_boards_scanned = 0U;
-    uint64_t spawned_boards = 0U;
-    uint64_t move_all_dir_calls = 0U;
-    uint64_t selective_move_calls = 0U;
-    uint64_t move_results_produced = 0U;
-    uint64_t canonicalized_candidates = 0U;
-    uint64_t encode_attempts = 0U;
-    uint64_t encode_valid_candidates = 0U;
-    uint64_t encoded_candidates = 0U;
-    uint64_t duplicate_candidates = 0U;
-    uint64_t target_window_skips = 0U;
-    uint64_t family_buffer_flushes = 0U;
-    uint64_t family_buffer_flush_items = 0U;
-    uint64_t family_buffer_flush_max_items = 0U;
-    uint64_t family_builder_bind_calls = 0U;
-    uint64_t family_insert_hash_lookups = 0U;
-    uint64_t family_insert_hash_probe_steps = 0U;
-    uint64_t source_work_items = 0U;
-    uint64_t source_bucket_ranges = 0U;
-    uint64_t source_bitmap_words_scanned = 0U;
-};
 
 struct FamilyEncodedCandidate {
     uint64_t key = 0U;
@@ -972,7 +942,6 @@ struct FamilyThreadWorkspace {
     FamilyIdList3 active_target_families;
     uint32_t active_family_count = 0U;
     uint32_t active_axis_family_count = 0U;
-    FamilyThreadStats stats;
 
     FamilyThreadWorkspace() {
     }
@@ -1082,7 +1051,7 @@ void record_family_memory_checkpoint(
     checkpoint.source_loaded_payload_bytes = source_loaded_payload_bytes;
     checkpoint.source_loaded_allocated_bytes = source_loaded_allocated_bytes;
     checkpoint.source_reader_metadata_bytes =
-        source == nullptr || source->position == nullptr ? 0U : source->position->allocated_bytes();
+        source == nullptr ? 0U : family_source_reader_metadata_bytes(*source);
     checkpoint.active_index_bytes = active_index_bytes;
     checkpoint.range_work_bytes = range_work_bytes;
     checkpoint.pass_cache_bytes = pass_cache_bytes;
@@ -1127,70 +1096,7 @@ void record_family_memory_checkpoint(
         checkpoint.baseline_adjusted_residual_bytes =
             checkpoint.process_working_set_bytes - baseline_plus_accounted;
     }
-    const uint32_t label_code = family_memory_checkpoint_label_code(label);
-
-    ++stats.memory_checkpoint_count;
-    stats.memory_checkpoint_process_bytes_peak = std::max<uint64_t>(
-        stats.memory_checkpoint_process_bytes_peak,
-        checkpoint.process_working_set_bytes
-    );
-    stats.memory_checkpoint_process_peak_bytes_peak = std::max<uint64_t>(
-        stats.memory_checkpoint_process_peak_bytes_peak,
-        checkpoint.process_peak_working_set_bytes
-    );
-    stats.memory_checkpoint_process_private_bytes_peak = std::max<uint64_t>(
-        stats.memory_checkpoint_process_private_bytes_peak,
-        checkpoint.process_private_bytes
-    );
-    stats.memory_checkpoint_process_pagefile_bytes_peak = std::max<uint64_t>(
-        stats.memory_checkpoint_process_pagefile_bytes_peak,
-        checkpoint.process_pagefile_bytes
-    );
-    stats.memory_checkpoint_process_peak_pagefile_bytes_peak = std::max<uint64_t>(
-        stats.memory_checkpoint_process_peak_pagefile_bytes_peak,
-        checkpoint.process_peak_pagefile_bytes
-    );
-    stats.memory_checkpoint_accounted_bytes_peak = std::max<uint64_t>(
-        stats.memory_checkpoint_accounted_bytes_peak,
-        checkpoint.accounted_bytes
-    );
-    stats.store_allocated_bytes_peak = std::max<uint64_t>(
-        stats.store_allocated_bytes_peak,
-        checkpoint.store_allocated_bytes
-    );
-    if (checkpoint.residual_bytes > stats.memory_checkpoint_residual_bytes_peak) {
-        stats.memory_checkpoint_residual_bytes_peak = checkpoint.residual_bytes;
-        stats.memory_checkpoint_residual_peak_label = label_code;
-    }
-    if (checkpoint.baseline_adjusted_residual_bytes >
-        stats.memory_checkpoint_baseline_adjusted_residual_peak) {
-        stats.memory_checkpoint_baseline_adjusted_residual_peak =
-            checkpoint.baseline_adjusted_residual_bytes;
-        stats.memory_checkpoint_baseline_adjusted_residual_peak_label = label_code;
-    }
-}
-
-void add_thread_stats(BCFamilyGenerationStats &dst, const FamilyThreadStats &src) {
-    dst.source_boards_scanned += src.source_boards_scanned;
-    dst.spawned_boards += src.spawned_boards;
-    dst.move_all_dir_calls += src.move_all_dir_calls;
-    dst.selective_move_calls += src.selective_move_calls;
-    dst.move_results_produced += src.move_results_produced;
-    dst.canonicalized_candidates += src.canonicalized_candidates;
-    dst.encode_attempts += src.encode_attempts;
-    dst.encode_valid_candidates += src.encode_valid_candidates;
-    dst.encoded_candidates += src.encoded_candidates;
-    dst.duplicate_candidates += src.duplicate_candidates;
-    dst.target_window_skips += src.target_window_skips;
-    dst.family_buffer_flushes += src.family_buffer_flushes;
-    dst.family_buffer_flush_items += src.family_buffer_flush_items;
-    dst.family_buffer_flush_max_items = std::max(dst.family_buffer_flush_max_items, src.family_buffer_flush_max_items);
-    dst.family_builder_bind_calls += src.family_builder_bind_calls;
-    dst.family_insert_hash_lookups += src.family_insert_hash_lookups;
-    dst.family_insert_hash_probe_steps += src.family_insert_hash_probe_steps;
-    dst.source_work_items += src.source_work_items;
-    dst.source_bucket_ranges += src.source_bucket_ranges;
-    dst.source_bitmap_words_scanned += src.source_bitmap_words_scanned;
+    (void)stats;
 }
 
 void flush_family_cell_buffer(
@@ -1211,7 +1117,6 @@ void flush_family_cell_buffer(
         return;
     }
     if (buffer.builder == nullptr) {
-        ++workspace.stats.family_builder_bind_calls;
         buffer.builder = &target_store.get_or_create(buffer.cid);
     }
     BCCellTrustedKeyRankInsert *encoded_begin =
@@ -1221,16 +1126,14 @@ void flush_family_cell_buffer(
         buffer.size >= kMinBatchForBitmapChunk
             ? &buffer.bitmap_chunk
             : nullptr;
-    uint64_t probe_steps = 0U;
-    const BCCellInsertBatchResult batch =
-        buffer.builder->resolve_and_apply_trusted_key_rank_batch(
-            encoded_begin,
-            buffer.size,
-            workspace.resolved_batch,
-            bitmap_chunk,
-            false,
-            options.collect_hot_counters ? &probe_steps : nullptr
-        );
+    (void)buffer.builder->resolve_and_apply_trusted_key_rank_batch(
+        encoded_begin,
+        buffer.size,
+        workspace.resolved_batch,
+        bitmap_chunk,
+        false,
+        nullptr
+    );
     if (buffer.builder->overflowed() ||
         workspace.resolved_batch.size() != buffer.size) {
         target_store.mark_builder_overflow();
@@ -1239,19 +1142,6 @@ void flush_family_cell_buffer(
             buffer.queued_for_flush = false;
         }
         return;
-    }
-    ++workspace.stats.family_buffer_flushes;
-    workspace.stats.family_buffer_flush_items += buffer.size;
-    workspace.stats.family_buffer_flush_max_items =
-        std::max<uint64_t>(workspace.stats.family_buffer_flush_max_items, buffer.size);
-    workspace.stats.family_insert_hash_lookups += buffer.size;
-    if (options.collect_hot_counters) {
-        workspace.stats.family_insert_hash_probe_steps += probe_steps;
-    }
-    workspace.stats.encoded_candidates += buffer.size;
-    workspace.stats.duplicate_candidates += batch.duplicate_ranks;
-    if (batch.new_ranks + batch.duplicate_ranks != buffer.size) {
-        throw std::logic_error("BC Family active pending insert result count mismatch");
     }
     buffer.size = 0U;
     if (clear_queue_flag) {
@@ -1285,13 +1175,11 @@ void enqueue_family_encoded_candidate(
     const FamilyEncodedCandidate &encoded
 ) {
     if (active_index >= workspace.active_buffers.size()) {
-        ++workspace.stats.target_window_skips;
         return;
     }
     FamilyActiveCellBuffer &buffer = workspace.active_buffers[active_index];
     const CellId cid = buffer.cid;
     if (buffer.builder == nullptr) {
-        ++workspace.stats.family_builder_bind_calls;
         buffer.builder = &target_store.get_or_create(cid);
     }
     if (!buffer.queued_for_flush) {
@@ -1334,7 +1222,6 @@ void flush_family_canonical_buffer(
         workspace.canonical_buffer.size(),
         options.canonical_symm_mode
     );
-    workspace.stats.canonicalized_candidates += workspace.canonical_buffer.size();
 
     const bool use_fast_unit2 =
         target_axis.family_unit() == 2U &&
@@ -1351,7 +1238,6 @@ void flush_family_canonical_buffer(
     };
 
     for (uint64_t canonical : workspace.canonical_buffer) {
-        ++workspace.stats.encode_attempts;
         const BCQuadrantWords q = unpack_board_to_quadrants(canonical);
         FamilyEncodedCandidate encoded;
         const uint32_t active_index =
@@ -1371,10 +1257,8 @@ void flush_family_canonical_buffer(
                     target_partition
                 );
         if (active_index == kInvalidFamilyActiveIndex) {
-            ++workspace.stats.target_window_skips;
             continue;
         }
-        ++workspace.stats.encode_valid_candidates;
         enqueue_family_encoded_candidate(
             workspace,
             target_store,
@@ -1395,7 +1279,6 @@ void push_family_moved_board(
     if (moved == spawned) {
         return;
     }
-    ++workspace.stats.move_results_produced;
     if (options.keep_only_success_generated_boards &&
         !family_is_success_board(moved, options)) {
         return;
@@ -1440,9 +1323,7 @@ void process_family_source_board(
         empty_mask &= empty_mask - 1U;
         const uint64_t spawned =
             board | (static_cast<uint64_t>(spawn_tile_rank) << (4U * cell));
-        ++workspace.stats.spawned_boards;
         if (directions == BCDirectionMask::Both) {
-            ++workspace.stats.move_all_dir_calls;
             const auto moved = BoardMover::move_all_dir(spawned);
             push_family_moved_board(workspace, spawned, std::get<0>(moved), options);
             push_family_moved_board(workspace, spawned, std::get<1>(moved), options);
@@ -1450,7 +1331,6 @@ void process_family_source_board(
             push_family_moved_board(workspace, spawned, std::get<3>(moved), options);
         } else {
             if (bc_has_horizontal(directions)) {
-                workspace.stats.selective_move_calls += 2U;
                 const auto moved = BoardMover::move_horizontal_pair(spawned);
                 push_family_moved_board(
                     workspace,
@@ -1466,7 +1346,6 @@ void process_family_source_board(
                 );
             }
             if (bc_has_vertical(directions)) {
-                workspace.stats.selective_move_calls += 2U;
                 const auto moved = BoardMover::move_vertical_pair(spawned);
                 push_family_moved_board(
                     workspace,
@@ -1610,8 +1489,7 @@ void sort_unique_cells(std::vector<CellId> &cells) {
     BCFamilyGenerationScheduler *next_keep_scheduler,
     SpawnDeltaCoord next_keep_delta,
     const BCFamilyTable &target_axis,
-    bool reverse_execution_order = false,
-    bool use_last_producer_boundary = true
+    bool reverse_execution_order = false
 ) {
     if (finalize_boundaries && reverse_execution_order) {
         throw std::invalid_argument("BC Family boundary-finalize phase cannot run in reverse order");
@@ -1694,7 +1572,7 @@ void sort_unique_cells(std::vector<CellId> &cells) {
         }
     }
 
-    if (finalize_boundaries && use_last_producer_boundary && !execution_order.empty()) {
+    if (finalize_boundaries && !execution_order.empty()) {
         const uint32_t cell_count = scheduler.target_matrix().cell_count();
         std::vector<uint32_t> last(cell_count, std::numeric_limits<uint32_t>::max());
         for (uint32_t order_i = 0U; order_i < execution_order.size(); ++order_i) {
@@ -1721,19 +1599,6 @@ void sort_unique_cells(std::vector<CellId> &cells) {
             if (!entry.boundary_cells.empty()) {
                 std::sort(entry.boundary_cells.begin(), entry.boundary_cells.end());
             }
-        }
-    } else if (finalize_boundaries) {
-        bool has_boundary = false;
-        FamilyCoord prev_boundary = 0U;
-        for (uint32_t pass_index : execution_order) {
-            FamilyCachedPass &entry = cached[pass_index];
-            entry.boundary_cells = scheduler.boundary_cells_for_advance(
-                has_boundary,
-                prev_boundary,
-                entry.pass.source_coord
-            );
-            has_boundary = true;
-            prev_boundary = entry.pass.source_coord;
         }
     }
 
@@ -1886,7 +1751,6 @@ void process_family_source_bucket_words(
         throw std::out_of_range("BC Family generation source range bitmap exceeds rank payload");
     }
     const uint8_t *bitmap_words = view.rank_payload.data + bitmap_offset;
-    workspace.stats.source_bitmap_words_scanned += effective_word_end - word_begin;
 
     const auto emit_rank = [&](uint32_t rank_u32, uint64_t board) {
         if (rank_u32 >= bitmap_len || rank_u32 > std::numeric_limits<BucketRank>::max()) {
@@ -1904,7 +1768,6 @@ void process_family_source_bucket_words(
             options,
             skip_success_source
         );
-        ++workspace.stats.source_boards_scanned;
     };
 
     const uint32_t count_se = decoder.rank_decoder.count_se;
@@ -1978,8 +1841,6 @@ void process_family_source_range(
     if (work.bucket_begin > work.bucket_end || work.bucket_end > view.buckets.size) {
         throw std::out_of_range("BC Family generation source range bucket index out of range");
     }
-    ++workspace.stats.source_work_items;
-    ++workspace.stats.source_bucket_ranges;
 
     for (uint32_t bucket_i = work.bucket_begin; bucket_i < work.bucket_end; ++bucket_i) {
         const BCBucketEntry &bucket = view.buckets.data[bucket_i];
@@ -2111,9 +1972,10 @@ void run_family_phase(
     SpawnDeltaCoord next_keep_delta
 ) {
     validate_family_source(target_axis, source);
-    BCFamilyGenerationScheduler scheduler(source.position->axis(), target_axis);
+    const BCFamilyTable &source_axis = family_source_axis(source);
+    BCFamilyGenerationScheduler scheduler(source_axis, target_axis);
     const BCFamilyPartitionLayerMap source_partition =
-        make_family_partition_layer_for_generation(source.position->axis(), options);
+        make_family_partition_layer_for_generation(source_axis, options);
     const BCFamilyPartitionLayerMap target_partition =
         make_family_partition_layer_for_generation(target_axis, options);
     const int thread_count = family_effective_threads(options.num_threads);
@@ -2123,11 +1985,9 @@ void run_family_phase(
         workspace.canonical_buffer.reserve(options.canonical_batch_size);
     }
 
-    bool has_boundary = false;
-    FamilyCoord prev_boundary = 0U;
-    const uint32_t source_family_count = source.position->axis().family_count();
+    const uint32_t source_family_count = source_axis.family_count();
     const bool skip_success_source =
-        family_success_check_enabled(options, source.position->axis().layer_sum());
+        family_success_check_enabled(options, source_axis.layer_sum());
     const bool progress_enabled = family_progress_enabled();
     std::vector<BCSourceCellWork> source_work;
     std::vector<CellId> cids;
@@ -2164,7 +2024,7 @@ void run_family_phase(
                 family_cids.push_back(work.cid);
             }
             source_family_has_rows[source_id] =
-                source_family_has_success_rows(*source.position, family_cids) ? 1U : 0U;
+                family_source_has_success_rows(source, family_cids) ? 1U : 0U;
         }
         record_family_memory_checkpoint(
             stats,
@@ -2193,14 +2053,9 @@ void run_family_phase(
             next_keep_scheduler,
             next_keep_delta,
             target_axis,
-            !finalize_boundaries && next_keep_scheduler != nullptr,
-            true
+            !finalize_boundaries && next_keep_scheduler != nullptr
         );
         phase_pass_cache_bytes = family_cached_pass_bytes(cached_passes);
-        stats.pass_cache_bytes_peak = std::max<uint64_t>(
-            stats.pass_cache_bytes_peak,
-            phase_pass_cache_bytes
-        );
         record_family_memory_checkpoint(
             stats,
             options,
@@ -2216,8 +2071,8 @@ void run_family_phase(
             phase_pass_cache_bytes,
             0U
         );
-        for (FamilyId source_id = 0U; source_id < source_family_count; ++source_id) {
-            const FamilyCachedPass &cached = cached_passes[source_id];
+        for (size_t cached_index = 0U; cached_index < cached_passes.size(); ++cached_index) {
+            const FamilyCachedPass &cached = cached_passes[cached_index];
             const BCFamilyGenerationStats pass_before = stats;
             uint64_t pass_loaded_bytes = 0U;
             uint64_t pass_load_read_bytes = 0U;
@@ -2226,7 +2081,7 @@ void run_family_phase(
             if (progress_enabled) {
                 std::cerr
                     << "BC_FAMILY_PROGRESS source_layer="
-                    << source.position->axis().layer_sum()
+                    << source_axis.layer_sum()
                     << " target_layer=" << target_axis.layer_sum()
                     << " finalize=" << (finalize_boundaries ? 1 : 0)
                     << " source_id=" << cached.pass.source_id
@@ -2243,7 +2098,6 @@ void run_family_phase(
                 throw std::logic_error("BC Family generation target fanout exceeds three families");
             }
             if (!cached.has_source_rows) {
-                ++stats.source_families_processed;
                 if (finalize_boundaries) {
                     write_finalized_boundary_cells(
                         target_store,
@@ -2257,8 +2111,6 @@ void run_family_phase(
                         &workspaces,
                         phase_pass_cache_bytes
                     );
-                    has_boundary = true;
-                    prev_boundary = pass.source_coord;
                 }
                 const double dump_begin = stage_timing ? family_now_seconds() : 0.0;
                 target_store.release_except(cached.keep_cells);
@@ -2266,10 +2118,6 @@ void run_family_phase(
                 if (stage_timing) {
                     stats.dump_seconds += family_now_seconds() - dump_begin;
                 }
-                stats.active_cell_peak = std::max<uint64_t>(
-                    stats.active_cell_peak,
-                    target_store.resident_cell_count()
-                );
                 stats.active_builder_bytes_peak = std::max<uint64_t>(
                     stats.active_builder_bytes_peak,
                     target_store.active_builder_bytes()
@@ -2314,10 +2162,6 @@ void run_family_phase(
             target_store.prepare_target_window_for_cached_cells(pass.target_families, cached.target_need_cells);
             validate_family_store_if_enabled(target_store, "after_prepare_target_window");
             const uint64_t active_index_bytes = 0U;
-            stats.active_index_bytes_peak = std::max<uint64_t>(
-                stats.active_index_bytes_peak,
-                active_index_bytes
-            );
             if (stage_timing) {
                 stats.reload_seconds += family_now_seconds() - prepare_begin;
             }
@@ -2331,12 +2175,12 @@ void run_family_phase(
             );
 
             if (options.enforce_family_window &&
-                source_work_ref.size() > static_cast<size_t>(2U) * source.position->axis().family_count() - 1U) {
+                source_work_ref.size() > static_cast<size_t>(2U) * source_axis.family_count() - 1U) {
                 throw std::logic_error("BC Family generation source family view exceeds 2F-1 cells");
             }
             BCCellLoadStats load_stats;
             const double load_begin = stage_timing ? family_now_seconds() : 0.0;
-            source.position->load_cells_into(cached.source_cids, loaded, &load_stats);
+            family_source_load_cells_into(source, cached.source_cids, loaded, &load_stats);
             if (stage_timing) {
                 stats.source_load_seconds += family_now_seconds() - load_begin;
             }
@@ -2347,15 +2191,6 @@ void run_family_phase(
             const uint64_t pass_loaded_allocated_bytes = loaded_cells_allocated_bytes(loaded);
             pass_load_read_bytes = load_stats.read_bytes;
             stats.source_loaded_cell_peak = std::max<uint64_t>(stats.source_loaded_cell_peak, loaded.size());
-            stats.source_loaded_bytes_peak = std::max<uint64_t>(
-                stats.source_loaded_bytes_peak,
-                pass_loaded_bytes
-            );
-            stats.source_load_range_bytes_peak = std::max<uint64_t>(
-                stats.source_load_range_bytes_peak,
-                load_stats.read_bytes
-            );
-            ++stats.source_families_processed;
             if (loaded.size() != source_work_ref.size()) {
                 throw std::logic_error("BC Family generation loaded source cell count mismatch");
             }
@@ -2374,10 +2209,6 @@ void run_family_phase(
             pass_range_work_count = range_work.size();
             const uint64_t range_work_bytes =
                 static_cast<uint64_t>(range_work.capacity()) * sizeof(FamilySourceRangeWork);
-            stats.range_work_bytes_peak = std::max<uint64_t>(
-                stats.range_work_bytes_peak,
-                range_work_bytes
-            );
             if (stage_timing) {
                 stats.build_work_seconds += family_now_seconds() - build_work_begin;
             }
@@ -2402,7 +2233,6 @@ void run_family_phase(
                 options.source_work_schedule_chunk
             ));
             std::exception_ptr first_exception;
-            ++stats.parallel_region_count;
             const double parallel_begin = stage_timing ? family_now_seconds() : 0.0;
 #pragma omp parallel num_threads(thread_count)
             {
@@ -2464,10 +2294,6 @@ void run_family_phase(
             if (target_store.builder_overflowed()) {
                 throw BCCellMutableBuilderOverflow("BC Family generation cell builder capacity overflow");
             }
-            for (FamilyThreadWorkspace &ws : workspaces) {
-                add_thread_stats(stats, ws.stats);
-                ws.stats = {};
-            }
             stats.thread_workspace_bytes_peak = std::max<uint64_t>(
                 stats.thread_workspace_bytes_peak,
                 family_thread_workspace_bytes(workspaces)
@@ -2507,8 +2333,6 @@ void run_family_phase(
                     &workspaces,
                     phase_pass_cache_bytes
                 );
-                has_boundary = true;
-                prev_boundary = pass.source_coord;
             }
 
             const double dump_begin = stage_timing ? family_now_seconds() : 0.0;
@@ -2524,10 +2348,6 @@ void run_family_phase(
                     }
                 }
             }
-            stats.active_cell_peak = std::max<uint64_t>(
-                stats.active_cell_peak,
-                target_store.resident_cell_count()
-            );
             stats.active_builder_bytes_peak = std::max<uint64_t>(
                 stats.active_builder_bytes_peak,
                 target_store.active_builder_bytes()
@@ -2569,8 +2389,6 @@ void run_family_phase(
         }
     }
 
-    (void)has_boundary;
-    (void)prev_boundary;
 }
 
 } // namespace
@@ -2609,7 +2427,7 @@ BCFamilyGenerationStats generate_family_position_layer_v1(
     );
     std::unique_ptr<BCFamilyGenerationScheduler> keep_scheduler;
     if (source4 != nullptr) {
-        keep_scheduler = std::make_unique<BCFamilyGenerationScheduler>(source2.position->axis(), target_axis);
+        keep_scheduler = std::make_unique<BCFamilyGenerationScheduler>(family_source_axis(source2), target_axis);
         run_family_phase(
             lut,
             target_axis,
@@ -2670,47 +2488,20 @@ BCFamilyGenerationStats generate_family_position_layer_v1(
     stats.target_cells_reloaded = store_stats.reloaded_builders;
     stats.target_cells_dumped = store_stats.dumped_builders;
     stats.target_cells_finalized = store_stats.finalized_cells;
-    stats.target_cells_kept = store_stats.kept_resident_cells;
     stats.family_builder_hash_grows = store_stats.builder_hash_grows;
     stats.family_builder_bitmap_grows = store_stats.builder_bitmap_grows;
-    stats.family_builder_hash_replaced_bytes = store_stats.builder_hash_replaced_bytes;
-    stats.family_builder_bitmap_replaced_bytes = store_stats.builder_bitmap_replaced_bytes;
-    stats.dump_buffer_bytes_peak = store_stats.dump_buffer_bytes_peak;
-    stats.reload_dump_bytes_peak = store_stats.reload_dump_bytes_peak;
-    stats.restore_builder_bytes_peak = store_stats.restore_builder_bytes_peak;
-    stats.finalize_dump_bytes_peak = store_stats.finalize_dump_bytes_peak;
     stats.store_static_metadata_bytes = store_stats.static_metadata_bytes;
     stats.released_builder_bytes_total = store_stats.released_builder_bytes_total;
-    stats.released_builder_bytes_peak = store_stats.released_builder_bytes_peak;
-    stats.release_batch_builder_bytes_peak = store_stats.release_batch_builder_bytes_peak;
     const BCGenerationBlobIOStats &blob_stats = target_store.blob_read_stats();
-    stats.blob_requested_extents = blob_stats.requested_extents;
-    stats.blob_coalesced_extents = blob_stats.coalesced_extents;
     stats.blob_read_bytes = blob_stats.read_bytes;
     stats.blob_backend_read_ops = blob_stats.backend_read_ops;
     stats.blob_backend_read_bytes = blob_stats.backend_read_bytes;
     stats.blob_backend_read_seconds = blob_stats.backend_read_seconds;
-    stats.blob_restore_seconds = blob_stats.restore_seconds;
     const BCGenerationBlobIOStats append_stats = target_store.blob_append_stats();
-    stats.blob_append_count = append_stats.append_count;
     stats.blob_bytes_written = append_stats.bytes_written;
     stats.blob_backend_write_ops = append_stats.backend_write_ops;
     stats.blob_backend_write_bytes = append_stats.backend_write_bytes;
     stats.blob_backend_write_seconds = append_stats.backend_write_seconds;
-    stats.blob_flush_seconds = append_stats.flush_seconds;
-    const BCFamilyPositionWriterStats &writer_stats = position_writer.stats();
-    stats.writer_bucket_bytes = writer_stats.bucket_bytes;
-    stats.writer_rank_payload_bytes = writer_stats.rank_payload_bytes;
-    stats.writer_bucket_stage_flushes = writer_stats.bucket_stage_flushes;
-    stats.writer_rank_stage_flushes = writer_stats.rank_stage_flushes;
-    stats.writer_bucket_stage_write_bytes = writer_stats.bucket_stage_write_bytes;
-    stats.writer_rank_stage_write_bytes = writer_stats.rank_stage_write_bytes;
-    stats.writer_backend_read_ops = writer_stats.backend_read_ops;
-    stats.writer_backend_read_bytes = writer_stats.backend_read_bytes;
-    stats.writer_backend_write_ops = writer_stats.backend_write_ops;
-    stats.writer_backend_write_bytes = writer_stats.backend_write_bytes;
-    stats.writer_backend_read_seconds = writer_stats.backend_read_seconds;
-    stats.writer_backend_write_seconds = writer_stats.backend_write_seconds;
     if (stage_timing) {
         stats.generation_seconds = family_now_seconds() - generation_begin;
     }
@@ -2871,25 +2662,12 @@ BCFamilyLoadedPassBenchmarkResult benchmark_loaded_family_plus_spawn_pass(
     result.stats.reload_seconds = prepare_seconds;
     result.stats.build_work_seconds = build_work_seconds;
     result.stats.parallel_seconds = parallel_seconds;
-    result.stats.source_families_processed = 1U;
     result.stats.source_cells_loaded = loaded_cells.size();
     result.stats.source_loaded_cell_peak = loaded_cells.size();
-    result.stats.source_loaded_bytes_peak = loaded_cells_payload_bytes(loaded_cells);
-    result.stats.source_load_range_bytes_peak = result.stats.source_loaded_bytes_peak;
     result.stats.target_active_cell_peak = target_store.active_cell_count();
-    result.stats.active_cell_peak = target_store.resident_cell_count();
     result.stats.active_family_window_peak = 1U + static_cast<uint64_t>(pass.target_families.size());
     result.stats.active_builder_bytes_peak = target_store.active_builder_bytes();
-    result.stats.source_work_items = range_work.size();
-    result.stats.parallel_region_count = 1U;
-    for (const FamilyThreadWorkspace &workspace : workspaces) {
-        add_thread_stats(result.stats, workspace.stats);
-    }
     result.stats.generation_seconds = result.timed_seconds;
-    result.unique_encoded_candidates =
-        result.stats.encoded_candidates >= result.stats.duplicate_candidates
-            ? result.stats.encoded_candidates - result.stats.duplicate_candidates
-            : 0U;
     return result;
 }
 

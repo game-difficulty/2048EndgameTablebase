@@ -1,7 +1,9 @@
 #include "BCDirectFileIO.h"
 #include "BCLoadedCellScanner.h"
 #include "BCPositionCellLoader.h"
+#include "BCPositionFamilyRemapReader.h"
 
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <cstdint>
@@ -89,6 +91,16 @@ std::vector<uint16_t> collect_valid_words(const BCLut &lut) {
         }
     }
     return words;
+}
+
+uint16_t find_word_with_sum(const BCLut &lut, uint32_t sum) {
+    for (uint32_t word = 0; word < BC::kBCQuadrantWordCount; ++word) {
+        const BC::BCWordDesc &desc = lut.word_desc(static_cast<uint16_t>(word));
+        if (desc.valid && desc.sum == sum) {
+            return static_cast<uint16_t>(word);
+        }
+    }
+    throw std::runtime_error("failed to find valid word with requested sum");
 }
 
 struct GroupChoice {
@@ -509,6 +521,83 @@ void test_direct_streaming_reader_matches_buffered() {
 #endif
 }
 
+void test_family_remap_reader_filters_by_bucket_key() {
+    TempDir tmp;
+    const BCLut &lut = shared_test_lut();
+    const std::vector<BC::LayerSum> possible_8tile_sums{
+        0U, 2U, 4U, 6U, 8U
+    };
+    const BCFamilyTable physical_axis = BCFamilyTable::from_range(8U, 2U, 0U, 0U);
+    const BCFamilyTable logical_axis = BCFamilyTable::from_range(8U, 2U, 0U, 2U);
+    const BCCellMatrix physical_matrix(physical_axis);
+    const BCCellMatrix logical_matrix(logical_axis);
+
+    const uint16_t sum0 = find_word_with_sum(lut, 0U);
+    const uint16_t sum2 = find_word_with_sum(lut, 2U);
+    const uint16_t sum4 = find_word_with_sum(lut, 4U);
+    const uint16_t sum6 = find_word_with_sum(lut, 6U);
+    const uint16_t sum8 = find_word_with_sum(lut, 8U);
+    const BCEncodedKeyRank coord00 =
+        BC::encode_key_and_rank(lut, sum0, sum0, sum0, sum8);
+    const BCEncodedKeyRank coord11 =
+        BC::encode_key_and_rank(lut, sum2, sum0, sum0, sum6);
+    const BCEncodedKeyRank coord22 =
+        BC::encode_key_and_rank(lut, sum4, sum0, sum0, sum4);
+    check(coord00.valid && coord11.valid && coord22.valid, "remap encoded fixture should be valid");
+
+    const CellFixture mixed = build_cell(
+        lut,
+        physical_matrix.cid(0U, 0U),
+        {coord00, coord11, coord22}
+    );
+    const std::vector<uint8_t> bytes = write_synthetic_layer(physical_axis, {mixed});
+    const std::filesystem::path path = tmp.path / "mixed_old_modulus.bcpos";
+    BC::write_position_layer_to_file(path, bytes);
+    BCPositionStreamingReader source = BCPositionStreamingReader::open_buffered(path, lut);
+    BC::BCPositionFamilyRemapReader remap(source, logical_axis, possible_8tile_sums);
+    check(!remap.direct(), "different modulus should use remap path");
+
+    std::vector<CellId> cids{
+        logical_matrix.cid(0U, 0U),
+        logical_matrix.cid(1U, 1U),
+        logical_matrix.cid(2U, 2U),
+        logical_matrix.cid(0U, 1U)
+    };
+    BC::BCCellLoadStats stats;
+    std::vector<BC::BCLoadedCell> cells;
+    remap.load_cells_into(cids, cells, &stats);
+    check(cells.size() == cids.size(), "remap load should preserve requested cell count");
+    check(remap.has_success_rows(std::vector<CellId>{cids[0]}), "remap should see target success rows");
+
+    const std::array<BCEncodedKeyRank, 3U> expected{coord00, coord11, coord22};
+    for (size_t i = 0U; i < expected.size(); ++i) {
+        check(cells[i].cid == cids[i], "remapped cell cid mismatch");
+        check(cells[i].success_rows == 1U, "remapped target cell should keep one row");
+        check(cells[i].buckets.size() == 1U, "remapped target cell should keep one bucket");
+        const BCLookupResult lookup = cells[i].lookup(lut, expected[i].key, expected[i].rank);
+        check(lookup.found, "remapped target lookup should find expected row");
+        for (size_t j = 0U; j < expected.size(); ++j) {
+            if (i == j) {
+                continue;
+            }
+            const BCLookupResult other = cells[i].lookup(lut, expected[j].key, expected[j].rank);
+            check(!other.found, "remapped target cell should not keep another logical cell row");
+        }
+    }
+    check(cells[3].cid == cids[3], "remapped empty cell cid mismatch");
+    check(cells[3].success_rows == 0U, "non-target remapped cell should be empty");
+    check(cells[3].buckets.empty(), "non-target remapped cell should keep no buckets");
+    check(stats.requested_extents != 0U, "remap should read old physical cells");
+    const BC::BCPositionFamilyRemapStats &remap_stats = remap.stats();
+    check(remap_stats.physical_cells_loaded >= 4U, "remap should load over-approx physical cells per logical cell");
+    check(remap_stats.physical_bytes_loaded > 0U, "remap should account physical bytes loaded");
+    check(remap_stats.remapped_bytes_kept > 0U, "remap should account kept bytes");
+    check(
+        remap_stats.discarded_bytes <= remap_stats.physical_bytes_loaded,
+        "remap discarded byte count should be bounded by physical bytes"
+    );
+}
+
 void test_cell_extents_and_error_paths() {
     FixtureLayer fixture;
     const CellId empty_cid = fixture.matrix.cid(0U, 0U);
@@ -548,6 +637,8 @@ int main() {
         test_load_cells_coalesces_and_preserves_order();
         std::cerr << "test_direct_streaming_reader_matches_buffered\n";
         test_direct_streaming_reader_matches_buffered();
+        std::cerr << "test_family_remap_reader_filters_by_bucket_key\n";
+        test_family_remap_reader_filters_by_bucket_key();
         std::cerr << "test_cell_extents_and_error_paths\n";
         test_cell_extents_and_error_paths();
     } catch (const std::exception &ex) {

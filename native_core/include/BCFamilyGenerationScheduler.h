@@ -206,39 +206,6 @@ public:
         return target_cell_set_.cells();
     }
 
-    [[nodiscard]] std::vector<CellId> boundary_cells_for_advance(
-        bool has_previous_boundary,
-        FamilyCoord previous_boundary_coord,
-        FamilyCoord current_boundary_coord
-    ) const {
-        std::vector<CellId> out;
-        if (has_previous_boundary) {
-            collect_boundary_cells(
-                target_matrix_,
-                previous_boundary_coord,
-                current_boundary_coord,
-                out
-            );
-            return out;
-        }
-        const BCFamilyTable &axis = *target_axis_;
-        const uint32_t f = axis.family_count();
-        for (uint32_t id_u32 = 0U; id_u32 < f; ++id_u32) {
-            const FamilyId boundary_id = static_cast<FamilyId>(id_u32);
-            const FamilyCoord coord = axis.id_to_coord(boundary_id);
-            if (coord > current_boundary_coord) {
-                break;
-            }
-            for (uint32_t x = 0U; x <= boundary_id; ++x) {
-                out.push_back(target_matrix_.cid(boundary_id, static_cast<FamilyId>(x)));
-            }
-            for (uint32_t x = 0U; x < boundary_id; ++x) {
-                out.push_back(target_matrix_.cid(static_cast<FamilyId>(x), boundary_id));
-            }
-        }
-        return out;
-    }
-
 private:
     const BCFamilyTable *source_axis_ = nullptr;
     const BCFamilyTable *target_axis_ = nullptr;

@@ -12,8 +12,11 @@
 
 namespace BC {
 
+class BCPositionFamilyRemapReader;
+
 struct BCFamilyStreamingGenerationSource {
     const BCPositionStreamingReader *position = nullptr;
+    const BCPositionFamilyRemapReader *remap = nullptr;
     uint8_t spawn_tile_rank = 0U;
     SpawnDeltaCoord delta_coord = 0U;
 };
@@ -72,7 +75,6 @@ struct BCFamilyGenerationOptions {
     double neighbor_reserve_scale = 1.25;
     int canonical_symm_mode = static_cast<int>(SymmMode::Full);
     bool enforce_family_window = true;
-    bool collect_hot_counters = false;
     BCFamilyPartitionPolicy family_partition_policy = BCFamilyPartitionPolicy::modulo(29U);
     // Required for the modulo partition map. The vector is used only to build
     // exact-coord groups for each dense partition family; hot encode maps
@@ -90,98 +92,32 @@ struct BCFamilyGenerationOptions {
 };
 
 struct BCFamilyGenerationStats {
-    uint64_t source_families_processed = 0U;
     uint64_t source_cells_loaded = 0U;
     uint64_t source_bytes_read = 0U;
     uint64_t source_backend_read_ops = 0U;
     uint64_t source_backend_read_bytes = 0U;
-    uint64_t blob_requested_extents = 0U;
-    uint64_t blob_coalesced_extents = 0U;
     uint64_t blob_read_bytes = 0U;
     uint64_t blob_backend_read_ops = 0U;
     uint64_t blob_backend_read_bytes = 0U;
-    uint64_t blob_append_count = 0U;
     uint64_t blob_bytes_written = 0U;
     uint64_t blob_backend_write_ops = 0U;
     uint64_t blob_backend_write_bytes = 0U;
     double blob_backend_read_seconds = 0.0;
-    double blob_restore_seconds = 0.0;
     double blob_backend_write_seconds = 0.0;
-    double blob_flush_seconds = 0.0;
-    uint64_t writer_bucket_bytes = 0U;
-    uint64_t writer_rank_payload_bytes = 0U;
-    uint64_t writer_bucket_stage_flushes = 0U;
-    uint64_t writer_rank_stage_flushes = 0U;
-    uint64_t writer_bucket_stage_write_bytes = 0U;
-    uint64_t writer_rank_stage_write_bytes = 0U;
-    uint64_t writer_backend_read_ops = 0U;
-    uint64_t writer_backend_read_bytes = 0U;
-    uint64_t writer_backend_write_ops = 0U;
-    uint64_t writer_backend_write_bytes = 0U;
-    double writer_backend_read_seconds = 0.0;
-    double writer_backend_write_seconds = 0.0;
-    uint64_t source_boards_scanned = 0U;
-    uint64_t spawned_boards = 0U;
-    uint64_t move_all_dir_calls = 0U;
-    uint64_t selective_move_calls = 0U;
-    uint64_t move_results_produced = 0U;
-    uint64_t canonicalized_candidates = 0U;
-    uint64_t encode_attempts = 0U;
-    uint64_t encode_valid_candidates = 0U;
-    uint64_t encoded_candidates = 0U;
-    uint64_t duplicate_candidates = 0U;
-    uint64_t target_window_skips = 0U;
-    uint64_t family_buffer_flushes = 0U;
-    uint64_t family_buffer_flush_items = 0U;
-    uint64_t family_buffer_flush_max_items = 0U;
-    uint64_t family_builder_bind_calls = 0U;
-    uint64_t family_insert_hash_lookups = 0U;
-    uint64_t family_insert_hash_probe_steps = 0U;
     uint64_t target_cells_created = 0U;
     uint64_t target_cells_reloaded = 0U;
     uint64_t target_cells_dumped = 0U;
     uint64_t target_cells_finalized = 0U;
-    uint64_t target_cells_kept = 0U;
     uint64_t family_builder_hash_grows = 0U;
     uint64_t family_builder_bitmap_grows = 0U;
-    uint64_t family_builder_hash_replaced_bytes = 0U;
-    uint64_t family_builder_bitmap_replaced_bytes = 0U;
-    uint64_t source_work_items = 0U;
-    uint64_t source_bucket_ranges = 0U;
-    uint64_t source_bitmap_words_scanned = 0U;
-    uint64_t parallel_region_count = 0U;
-    uint64_t active_cell_peak = 0U;
     uint64_t target_active_cell_peak = 0U;
     uint64_t source_loaded_cell_peak = 0U;
-    uint64_t source_loaded_bytes_peak = 0U;
-    uint64_t source_load_range_bytes_peak = 0U;
     uint64_t active_family_window_peak = 0U;
     uint64_t active_builder_bytes_peak = 0U;
     uint64_t thread_workspace_bytes_peak = 0U;
-    uint64_t pass_cache_bytes_peak = 0U;
-    uint64_t active_index_bytes_peak = 0U;
-    uint64_t range_work_bytes_peak = 0U;
-    uint64_t dump_buffer_bytes_peak = 0U;
-    uint64_t reload_dump_bytes_peak = 0U;
-    uint64_t restore_builder_bytes_peak = 0U;
-    uint64_t finalize_dump_bytes_peak = 0U;
     uint64_t finalize_payload_bytes_peak = 0U;
     uint64_t store_static_metadata_bytes = 0U;
     uint64_t released_builder_bytes_total = 0U;
-    uint64_t released_builder_bytes_peak = 0U;
-    uint64_t release_batch_builder_bytes_peak = 0U;
-    uint64_t store_allocated_bytes_peak = 0U;
-    uint64_t memory_checkpoint_count = 0U;
-    uint64_t memory_checkpoint_process_bytes_peak = 0U;
-    uint64_t memory_checkpoint_process_peak_bytes_peak = 0U;
-    uint64_t memory_checkpoint_process_private_bytes_peak = 0U;
-    uint64_t memory_checkpoint_process_pagefile_bytes_peak = 0U;
-    uint64_t memory_checkpoint_process_peak_pagefile_bytes_peak = 0U;
-    uint64_t memory_checkpoint_accounted_bytes_peak = 0U;
-    uint64_t memory_checkpoint_residual_bytes_peak = 0U;
-    uint64_t memory_checkpoint_baseline_adjusted_residual_peak = 0U;
-    uint32_t memory_checkpoint_residual_peak_label = 0U;
-    uint32_t memory_checkpoint_baseline_adjusted_residual_peak_label = 0U;
 
     double source_load_seconds = 0.0;
     double build_work_seconds = 0.0;
@@ -196,7 +132,6 @@ struct BCFamilyGenerationStats {
 struct BCFamilyLoadedPassBenchmarkResult {
     BCFamilyGenerationStats stats;
     double timed_seconds = 0.0;
-    uint64_t unique_encoded_candidates = 0U;
 };
 
 // Generates one target layer with FamilyChain semantics:

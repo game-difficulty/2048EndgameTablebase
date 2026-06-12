@@ -251,9 +251,6 @@ void test_scheduler() {
         "target NeedCells must equal union of fanout crosses"
     );
 
-    const std::vector<CellId> first_boundary =
-        scheduler.boundary_cells_for_advance(false, 0U, 0U);
-    check(first_boundary.size() == 1U, "first boundary should include diagonal base cell");
 }
 
 void test_mutable_store_lifecycle() {
@@ -371,6 +368,19 @@ void test_direct_file_blob_restore_roundtrip() {
     for (const BCEncodedKeyRank &item : encoded) {
         check(item.valid, "direct blob test encoded item should be valid");
     }
+    const std::vector<BCEncodedKeyRank> mutation_encoded{
+        BC::encode_key_and_rank(lut, 0x0111U, 0x0000U, 0x0000U, 0x0000U),
+        BC::encode_key_and_rank(lut, 0x1011U, 0x0000U, 0x0000U, 0x0000U),
+        BC::encode_key_and_rank(lut, 0x1101U, 0x0000U, 0x0000U, 0x0000U),
+        BC::encode_key_and_rank(lut, 0x1110U, 0x0000U, 0x0000U, 0x0000U),
+        BC::encode_key_and_rank(lut, 0x0012U, 0x0000U, 0x0000U, 0x0000U),
+        BC::encode_key_and_rank(lut, 0x0021U, 0x0000U, 0x0000U, 0x0000U),
+        BC::encode_key_and_rank(lut, 0x0201U, 0x0000U, 0x0000U, 0x0000U),
+        BC::encode_key_and_rank(lut, 0x2001U, 0x0000U, 0x0000U, 0x0000U),
+    };
+    for (const BCEncodedKeyRank &item : mutation_encoded) {
+        check(item.valid, "direct blob mutation item should be valid");
+    }
 
     struct ExpectedCell {
         CellId cid = 0U;
@@ -426,9 +436,11 @@ void test_direct_file_blob_restore_roundtrip() {
         BC::BCGenerationBlobIOStats stats;
         const auto restored = blob.restore_many_builders(lut, shuffled_refs, &stats);
         check(restored.size() == shuffled_refs.size(), "direct blob restored builder count mismatch");
+        std::vector<std::pair<CellId, BC::BCDumpRef>> mutated_refs;
+        mutated_refs.reserve(restored.size());
         for (size_t i = 0U; i < restored.size(); ++i) {
             const CellId cid = shuffled_refs[i].first;
-            const auto expected_it = std::find_if(
+            auto expected_it = std::find_if(
                 expected_cells.begin(),
                 expected_cells.end(),
                 [&](const ExpectedCell &cell) { return cell.cid == cid; }
@@ -440,9 +452,43 @@ void test_direct_file_blob_restore_roundtrip() {
                     "direct blob restored builder missing rank"
                 );
             }
+            const BCEncodedKeyRank extra = mutation_encoded[i % mutation_encoded.size()];
+            (void)restored[i].builder->insert_encoded(extra);
+            expected_it->items.push_back(extra);
+            mutated_refs.emplace_back(
+                cid,
+                blob.append_cell_dump_streamed(*restored[i].builder, generation++)
+            );
         }
         check(stats.backend_read_ops != 0U, "direct blob restore should report backend reads");
         check(stats.backend_read_bytes >= stats.bytes_read, "direct blob backend read bytes should include alignment");
+
+        blob.flush_pending_appends();
+        writer.flush();
+        std::vector<std::pair<CellId, BC::BCDumpRef>> reshuffled_mutated_refs;
+        reshuffled_mutated_refs.reserve(mutated_refs.size());
+        for (size_t i = 0U; i < mutated_refs.size(); ++i) {
+            reshuffled_mutated_refs.push_back(mutated_refs[(i * 53U) % mutated_refs.size()]);
+        }
+        BC::BCGenerationBlobIOStats mutated_stats;
+        const auto mutated = blob.restore_many_builders(lut, reshuffled_mutated_refs, &mutated_stats);
+        check(mutated.size() == reshuffled_mutated_refs.size(), "direct blob mutated restore count mismatch");
+        for (size_t i = 0U; i < mutated.size(); ++i) {
+            const CellId cid = reshuffled_mutated_refs[i].first;
+            const auto expected_it = std::find_if(
+                expected_cells.begin(),
+                expected_cells.end(),
+                [&](const ExpectedCell &cell) { return cell.cid == cid; }
+            );
+            check(expected_it != expected_cells.end(), "direct blob mutated restore unexpected cid");
+            for (const BCEncodedKeyRank &item : expected_it->items) {
+                check(
+                    mutated[i].builder->contains(item.key, item.rank),
+                    "direct blob mutated builder missing rank"
+                );
+            }
+        }
+        check(mutated_stats.backend_read_ops != 0U, "direct blob mutated restore should report backend reads");
     }
     cleanup_file(blob_path);
 #endif
@@ -782,42 +828,33 @@ std::set<Candidate> run_family_generator_to_candidates(
     return out;
 }
 
-void test_family_generator_selective_move_stats() {
+void test_family_generator_direction_masks_generate_candidates() {
     const BCLut lut(test_alphabet());
     const BCFamilyTable source_axis = BCFamilyTable::from_range(8U, 2U, 0U, 2U);
     const BCFamilyTable target_axis = BCFamilyTable::from_range(10U, 2U, 0U, 2U);
     const BCCellMatrix source_matrix(source_axis);
     const uint64_t board = canonicalize(make_board({{0U, 1U}, {1U, 1U}, {4U, 1U}, {5U, 1U}}));
-    const uint64_t empty_count = BC::enumerate_empty_cells(board).count;
 
     auto run_for_cid = [&](CellId cid) {
         const std::vector<uint8_t> bytes = make_position_bytes_for_cell(lut, source_axis, cid, board);
         const std::filesystem::path path = temp_path("family_selective_source.bcpos");
         auto stream = make_streaming_reader(lut, path, bytes);
-        const BCFamilyStreamingGenerationSource source{stream.get(), 1U, 1U};
+        const BCFamilyStreamingGenerationSource source{stream.get(), nullptr, 1U, 1U};
         BCFamilyGenerationOptions options;
         options.num_threads = 2;
         options.canonical_batch_size = 3U;
-        options.collect_hot_counters = true;
         options.family_partition_policy = BC::BCFamilyPartitionPolicy::exact();
-        BC::BCFamilyGenerationStats stats;
-        (void)run_family_generator_to_candidates(lut, target_axis, nullptr, source, &stats, &options);
+        const std::set<Candidate> generated =
+            run_family_generator_to_candidates(lut, target_axis, nullptr, source, nullptr, &options);
         cleanup_file(path);
-        return stats;
+        return generated;
     };
 
-    const BC::BCFamilyGenerationStats offdiag =
-        run_for_cid(source_matrix.cid(0U, 1U));
-    check(offdiag.move_all_dir_calls == 0U, "off-diagonal source cells should not call move_all_dir");
-    check(
-        offdiag.selective_move_calls == empty_count * 4U,
-        "off-diagonal source cells should compute exactly two directions in each family pass"
-    );
+    const std::set<Candidate> offdiag = run_for_cid(source_matrix.cid(0U, 1U));
+    check(!offdiag.empty(), "off-diagonal source cells should generate candidates");
 
-    const BC::BCFamilyGenerationStats diagonal =
-        run_for_cid(source_matrix.cid(0U, 0U));
-    check(diagonal.move_all_dir_calls == empty_count, "diagonal source cell should call move_all_dir once per spawn");
-    check(diagonal.selective_move_calls == 0U, "diagonal source cell should not use selective move calls");
+    const std::set<Candidate> diagonal = run_for_cid(source_matrix.cid(0U, 0U));
+    check(!diagonal.empty(), "diagonal source cells should generate candidates");
 }
 
 void test_family_generator_skips_success_sources() {
@@ -830,7 +867,7 @@ void test_family_generator_skips_success_sources() {
     const std::vector<uint8_t> source_bytes = make_position_bytes(lut, source_axis, boards);
     const std::filesystem::path source_path = temp_path("family_success_source.bcpos");
     auto source_stream = make_streaming_reader(lut, source_path, source_bytes);
-    const BCFamilyStreamingGenerationSource source{source_stream.get(), 1U, 1U};
+    const BCFamilyStreamingGenerationSource source{source_stream.get(), nullptr, 1U, 1U};
 
     std::vector<uint8_t> shifts;
     for (uint8_t cell = 0U; cell < 16U; ++cell) {
@@ -840,17 +877,14 @@ void test_family_generator_skips_success_sources() {
     BCFamilyGenerationOptions skip_options;
     skip_options.num_threads = 2;
     skip_options.canonical_batch_size = 3U;
-    skip_options.collect_hot_counters = true;
     skip_options.family_partition_policy = BC::BCFamilyPartitionPolicy::exact();
     skip_options.success_target_rank = 2;
     skip_options.success_shifts = &shifts;
     skip_options.success_check_min_source_layer_sum = source_axis.layer_sum();
 
-    BC::BCFamilyGenerationStats skipped_stats;
     const std::set<Candidate> skipped =
-        run_family_generator_to_candidates(lut, target_axis, nullptr, source, &skipped_stats, &skip_options);
+        run_family_generator_to_candidates(lut, target_axis, nullptr, source, nullptr, &skip_options);
     check(skipped.empty(), "FamilyGenerator should not expand already-successful source boards");
-    check(skipped_stats.source_boards_scanned == boards.size(), "success skip should still count scanned source boards");
 
     BCFamilyGenerationOptions no_skip_options = skip_options;
     no_skip_options.success_target_rank = 0;
@@ -885,7 +919,7 @@ int main() {
         run("concurrent_mutable_builder_grow_stress", test_concurrent_mutable_builder_grow_stress);
         run("mutable_builder_source_is_concurrent_backend", test_mutable_builder_source_is_concurrent_backend);
         run("family_position_writer", test_family_position_writer);
-        run("family_generator_selective_move_stats", test_family_generator_selective_move_stats);
+        run("family_generator_direction_masks_generate_candidates", test_family_generator_direction_masks_generate_candidates);
         run("family_generator_skips_success_sources", test_family_generator_skips_success_sources);
     } catch (const std::exception &ex) {
         std::cerr << "bc_family_generation_state_test failed: " << ex.what() << "\n";
