@@ -3,6 +3,7 @@
 #include "BCFileIO.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <cstring>
@@ -738,27 +739,27 @@ private:
             active[slot] = 1U;
         };
         auto wait_any_slot = [&]() -> uint32_t {
-            std::vector<HANDLE> events;
-            std::vector<uint32_t> slots;
-            events.reserve(queue_depth);
-            slots.reserve(queue_depth);
+            std::array<HANDLE, MAXIMUM_WAIT_OBJECTS> events{};
+            std::array<uint32_t, MAXIMUM_WAIT_OBJECTS> slots{};
+            DWORD count = 0U;
             for (uint32_t slot = 0U; slot < queue_depth; ++slot) {
                 if (active[slot] == 0U) {
                     continue;
                 }
-                events.push_back(pending[slot].event.get());
-                slots.push_back(slot);
+                events[count] = pending[slot].event.get();
+                slots[count] = slot;
+                ++count;
             }
-            if (events.empty()) {
+            if (count == 0U) {
                 throw std::logic_error("BC direct overlapped read has no active request");
             }
             const DWORD wait = WaitForMultipleObjects(
-                static_cast<DWORD>(events.size()),
+                count,
                 events.data(),
                 FALSE,
                 INFINITE
             );
-            if (wait < WAIT_OBJECT_0 || wait >= WAIT_OBJECT_0 + events.size()) {
+            if (wait < WAIT_OBJECT_0 || wait >= WAIT_OBJECT_0 + count) {
                 throw std::runtime_error(detail::bc_direct_win_error("BC direct overlapped WaitForMultipleObjects failed"));
             }
             return slots[wait - WAIT_OBJECT_0];
@@ -839,10 +840,9 @@ private:
                     }
                 }
             }
-            std::vector<HANDLE> events;
-            events.reserve(batch);
+            std::array<HANDLE, MAXIMUM_WAIT_OBJECTS> events{};
             for (uint32_t i = 0U; i < batch; ++i) {
-                events.push_back(pending[i].event.get());
+                events[i] = pending[i].event.get();
             }
             const DWORD wait_result = WaitForMultipleObjects(
                 batch,
@@ -1290,27 +1290,27 @@ private:
         };
 
         auto wait_any_slot = [&]() -> uint32_t {
-            std::vector<HANDLE> events;
-            std::vector<uint32_t> slots;
-            events.reserve(queue_depth);
-            slots.reserve(queue_depth);
+            std::array<HANDLE, MAXIMUM_WAIT_OBJECTS> events{};
+            std::array<uint32_t, MAXIMUM_WAIT_OBJECTS> slots{};
+            DWORD count = 0U;
             for (uint32_t slot = 0U; slot < queue_depth; ++slot) {
                 if (active[slot] == 0U) {
                     continue;
                 }
-                events.push_back(pending[slot].event.get());
-                slots.push_back(slot);
+                events[count] = pending[slot].event.get();
+                slots[count] = slot;
+                ++count;
             }
-            if (events.empty()) {
+            if (count == 0U) {
                 throw std::logic_error("BC direct overlapped write has no active request");
             }
             const DWORD wait = WaitForMultipleObjects(
-                static_cast<DWORD>(events.size()),
+                count,
                 events.data(),
                 FALSE,
                 INFINITE
             );
-            if (wait < WAIT_OBJECT_0 || wait >= WAIT_OBJECT_0 + events.size()) {
+            if (wait < WAIT_OBJECT_0 || wait >= WAIT_OBJECT_0 + count) {
                 throw std::runtime_error(detail::bc_direct_win_error("BC direct overlapped WaitForMultipleObjects failed"));
             }
             return slots[wait - WAIT_OBJECT_0];

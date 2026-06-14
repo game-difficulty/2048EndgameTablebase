@@ -1,12 +1,14 @@
 #pragma once
 
 #include "BCBoardOps.h"
+#include "BCFutureSuccessLookup.h"
 #include "BCPositionFile.h"
 #include "BCSuccessIO.h"
 #include "FormationRuntime.h"
 
 #include <cstdint>
 #include <filesystem>
+#include <stdexcept>
 #include <vector>
 
 namespace BC {
@@ -45,7 +47,7 @@ struct BCBacksolveResult {
     BCBacksolveStats stats;
 };
 
-class BCFutureValueLayerView {
+class BCFutureValueLayerView : public BCFutureSuccessLookupView<uint32_t> {
 public:
     BCFutureValueLayerView() = default;
 
@@ -61,32 +63,15 @@ public:
         const BCLut &lut,
         const BCPositionLayerReader &position,
         const BCSuccessLayerReader &success
-    );
-
-    [[nodiscard]] bool lookup(uint64_t canonical_board, uint32_t &value_out) const;
-
-private:
-    struct DirectEntry {
-        uint64_t key = 0U;
-        uint32_t rank_payload_offset = 0U;
-        uint32_t success_row_offset = 0U;
-        BucketBitmapLen bitmap_len = 0U;
-        bool occupied = false;
-    };
-
-    struct CellIndex {
-        BCRankPayloadView rank_payload = {};
-        std::vector<uint32_t> values;
-        std::vector<DirectEntry> entries;
-        uint32_t mask = 0U;
-    };
-
-    [[nodiscard]] const DirectEntry *find_entry(const CellIndex &cell, uint64_t key) const;
-    [[nodiscard]] bool lookup_encoded(const BCBoardEncodedPosition &encoded, uint32_t &value_out) const;
-
-    const BCLut *lut_ = nullptr;
-    const BCPositionLayerReader *position_ = nullptr;
-    std::vector<CellIndex> cells_;
+    ) {
+        if (success.row_width() != 1U) {
+            throw std::invalid_argument("BC future success reader row_width must be 1");
+        }
+        if (success.dtype_mode() != BCSuccessDTypeMode::UInt32) {
+            throw std::invalid_argument("BC future success reader dtype must be UInt32");
+        }
+        BCFutureSuccessLookupView<uint32_t>::open(lut, position, success);
+    }
 };
 
 struct BCBacksolveBatchStats {

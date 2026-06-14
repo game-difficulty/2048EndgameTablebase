@@ -22,6 +22,8 @@
 
 namespace BC {
 
+using BCQuadrantWordSumTable = std::vector<uint32_t>;
+
 struct BCSolvePreparedQuery {
     CellId cid = 0U;
     FamilyId row_family = 0U;
@@ -262,11 +264,11 @@ void bc_solve_flush_canonical_candidates(
         stats->canonicalized_candidates += boards.size();
     }
     for (size_t i = 0U; i < boards.size(); ++i) {
+        (void)word_sums;
         const BCBoardEncodedPosition encoded = bc_encode_canonical_quadrants_position_hot(
             lut,
             axis,
-            unpack_board_to_quadrants(boards[i]),
-            word_sums
+            unpack_board_to_quadrants(boards[i])
         );
         if (!encoded.valid) {
             if (stats != nullptr) {
@@ -715,12 +717,8 @@ StorageT bc_solve_reduce_collected_queries(
     const long double inv_empty = 1.0L / static_cast<long double>(summary.empty_count);
     const long double p4 = static_cast<long double>(options.spawn_rate4);
     const long double p2 = 1.0L - p4;
-    const StorageT phase2 =
-        static_cast<StorageT>(sum2 * p2 * inv_empty);
-    const StorageT phase4 =
-        static_cast<StorageT>(sum4 * p4 * inv_empty);
     return static_cast<StorageT>(
-        static_cast<long double>(phase2) + static_cast<long double>(phase4)
+        (sum2 * p2 + sum4 * p4) * inv_empty
     );
 }
 

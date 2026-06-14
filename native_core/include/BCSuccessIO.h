@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BCFileIO.h"
 #include "BCPositionCellLoader.h"
 #include "BCPositionFile.h"
 
@@ -9,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <future>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -714,6 +716,291 @@ inline void write_success_layer_to_file(
     const std::vector<uint8_t> &bytes
 ) {
     write_bytes_to_buffered_file(path, bytes);
+}
+
+inline void bc_success_accumulate_file_stats(BCFileIOStats *dst, const BCFileIOStats &src) {
+    if (dst == nullptr) {
+        return;
+    }
+    if (dst->request_count > std::numeric_limits<uint64_t>::max() - src.request_count ||
+        dst->requested_bytes > std::numeric_limits<uint64_t>::max() - src.requested_bytes ||
+        dst->backend_io_count > std::numeric_limits<uint64_t>::max() - src.backend_io_count ||
+        dst->backend_bytes > std::numeric_limits<uint64_t>::max() - src.backend_bytes) {
+        throw std::overflow_error("BC success streaming write stats overflow");
+    }
+    dst->request_count += src.request_count;
+    dst->requested_bytes += src.requested_bytes;
+    dst->backend_io_count += src.backend_io_count;
+    dst->backend_bytes += src.backend_bytes;
+}
+
+class BCSequentialSuccessWriteStager {
+public:
+    explicit BCSequentialSuccessWriteStager(BCWritableFile &file, BCFileIOStats *stats = nullptr)
+        : file_(file), stats_(stats) {
+        direct_mode_ = file_.mode() == BCFileIOMode::Direct;
+        const uint32_t preferred_alignment = file_.preferred_write_alignment();
+        alignment_ = preferred_alignment == 0U ? 1U : preferred_alignment;
+        stage_bytes_ = kTargetStageBytes - (kTargetStageBytes % alignment_);
+        if (stage_bytes_ == 0U) {
+            stage_bytes_ = alignment_;
+        }
+        max_pending_chunks_ = direct_mode_ ? kDirectPendingChunksPerGroup : 1U;
+        group_count_ = direct_mode_ ? kDirectPipelineGroups : 1U;
+        for (uint32_t group = 0U; group < group_count_; ++group) {
+            groups_[group].buffers.resize(max_pending_chunks_);
+        }
+        if (stats_ != nullptr) {
+            *stats_ = {};
+        }
+    }
+
+    void append(const void *data, uint64_t bytes) {
+        if (bytes == 0U) {
+            return;
+        }
+        if (data == nullptr) {
+            throw std::invalid_argument("BC success streaming write append pointer is null");
+        }
+        const uint8_t *cursor = static_cast<const uint8_t *>(data);
+        uint64_t remaining = bytes;
+        while (remaining != 0U) {
+            ensure_active_buffer();
+            const uint64_t available = stage_bytes_ - active_bytes_;
+            if (available == 0U) {
+                finalize_active_buffer(true);
+                continue;
+            }
+            const uint64_t take = std::min<uint64_t>(available, remaining);
+            PendingGroup &group = groups_[active_group_];
+            StageBuffer &buffer = group.buffers[group.pending_count];
+            std::memcpy(buffer.data + static_cast<size_t>(active_bytes_), cursor, static_cast<size_t>(take));
+            active_bytes_ += take;
+            cursor += take;
+            remaining -= take;
+            if (active_bytes_ == stage_bytes_ && remaining != 0U) {
+                finalize_active_buffer(true);
+            }
+        }
+    }
+
+    template <typename T>
+    void append_values(const std::vector<T> &values) {
+        static_assert(
+            std::is_same_v<T, uint32_t> || std::is_same_v<T, uint64_t> ||
+            std::is_same_v<T, float> || std::is_same_v<T, double>,
+            "unsupported BC success streaming write type"
+        );
+        if (values.empty()) {
+            return;
+        }
+#if defined(_WIN32) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+        append(values.data(), static_cast<uint64_t>(values.size()) * sizeof(T));
+#else
+        for (T value : values) {
+            std::vector<uint8_t> bytes;
+            bytes.reserve(sizeof(T));
+            bc_append_success_value_le(bytes, value);
+            append(bytes.data(), bytes.size());
+        }
+#endif
+    }
+
+    void finish() {
+        if (active_bytes_ != 0U) {
+            finalize_active_buffer(false);
+        }
+        flush_active_group(false);
+        wait_for_in_flight();
+        if (!direct_mode_) {
+            file_.flush();
+        }
+    }
+
+private:
+    static constexpr uint64_t kTargetStageBytes = 16ULL * 1024ULL * 1024ULL;
+    static constexpr uint32_t kDirectPipelineGroups = 2U;
+    static constexpr uint32_t kDirectPendingChunksPerGroup = 2U;
+
+    struct StageBuffer {
+        std::vector<uint8_t> storage;
+        uint8_t *data = nullptr;
+    };
+
+    struct PendingGroup {
+        std::vector<StageBuffer> buffers;
+        std::array<uint64_t, kDirectPendingChunksPerGroup> offsets{};
+        std::array<uint64_t, kDirectPendingChunksPerGroup> bytes{};
+        uint32_t pending_count = 0U;
+    };
+
+    static uint8_t *align_pointer(uint8_t *ptr, uint64_t alignment) {
+        if (alignment <= 1U) {
+            return ptr;
+        }
+        const uintptr_t raw = reinterpret_cast<uintptr_t>(ptr);
+        const uintptr_t rem = raw % alignment;
+        if (rem == 0U) {
+            return ptr;
+        }
+        return reinterpret_cast<uint8_t *>(raw + (alignment - rem));
+    }
+
+    void ensure_active_buffer() {
+        PendingGroup &group = groups_[active_group_];
+        if (group.pending_count >= max_pending_chunks_) {
+            flush_active_group(true);
+        }
+        PendingGroup &active = groups_[active_group_];
+        StageBuffer &buffer = active.buffers[active.pending_count];
+        if (buffer.data != nullptr) {
+            return;
+        }
+        if (stage_bytes_ > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) - alignment_) {
+            throw std::overflow_error("BC success streaming write stage buffer size exceeds size_t");
+        }
+        buffer.storage.resize(static_cast<size_t>(stage_bytes_ + alignment_));
+        buffer.data = align_pointer(buffer.storage.data(), alignment_);
+    }
+
+    void finalize_active_buffer(bool allow_async) {
+        if (active_bytes_ == 0U) {
+            return;
+        }
+        ensure_active_buffer();
+        PendingGroup &group = groups_[active_group_];
+        group.offsets[group.pending_count] = file_cursor_;
+        group.bytes[group.pending_count] = active_bytes_;
+        file_cursor_ = bc_checked_add_u64(
+            file_cursor_,
+            active_bytes_,
+            "BC success streaming write cursor overflow"
+        );
+        active_bytes_ = 0U;
+        ++group.pending_count;
+        if (group.pending_count >= max_pending_chunks_) {
+            flush_active_group(allow_async);
+        }
+    }
+
+    [[nodiscard]] std::vector<BCFileWriteRequest> build_group_requests(PendingGroup &group) {
+        std::vector<BCFileWriteRequest> requests;
+        requests.reserve(group.pending_count);
+        for (uint32_t i = 0U; i < group.pending_count; ++i) {
+            requests.push_back(BCFileWriteRequest{
+                group.offsets[i],
+                group.buffers[i].data,
+                group.bytes[i]
+            });
+        }
+        return requests;
+    }
+
+    void flush_active_group(bool allow_async) {
+        PendingGroup &group = groups_[active_group_];
+        if (group.pending_count == 0U) {
+            return;
+        }
+        std::vector<BCFileWriteRequest> requests = build_group_requests(group);
+        group.pending_count = 0U;
+        if (!direct_mode_) {
+            BCFileIOStats local;
+            file_.write_many(requests, stats_ == nullptr ? nullptr : &local);
+            bc_success_accumulate_file_stats(stats_, local);
+            return;
+        }
+
+        wait_for_in_flight();
+        if (!allow_async) {
+            BCFileIOStats local;
+            file_.write_many(requests, stats_ == nullptr ? nullptr : &local);
+            bc_success_accumulate_file_stats(stats_, local);
+            return;
+        }
+
+        in_flight_ = std::async(
+            std::launch::async,
+            [this, requests = std::move(requests)]() mutable {
+                BCFileIOStats local;
+                file_.write_many(requests, &local);
+                return local;
+            }
+        );
+        active_group_ = (active_group_ + 1U) % group_count_;
+    }
+
+    void wait_for_in_flight() {
+        if (!in_flight_.valid()) {
+            return;
+        }
+        BCFileIOStats local = in_flight_.get();
+        bc_success_accumulate_file_stats(stats_, local);
+    }
+
+    BCWritableFile &file_;
+    BCFileIOStats *stats_ = nullptr;
+    std::array<PendingGroup, kDirectPipelineGroups> groups_{};
+    std::future<BCFileIOStats> in_flight_;
+    uint64_t stage_bytes_ = kTargetStageBytes;
+    uint64_t active_bytes_ = 0U;
+    uint64_t file_cursor_ = 0U;
+    uint64_t alignment_ = 1U;
+    uint32_t max_pending_chunks_ = 1U;
+    uint32_t group_count_ = 1U;
+    uint32_t active_group_ = 0U;
+    bool direct_mode_ = false;
+};
+
+template <typename T>
+uint64_t write_success_values_to_file(
+    BCWritableFile &file,
+    const BCPositionLayerReader &position,
+    uint32_t row_width,
+    BCSuccessDTypeMode dtype,
+    const std::vector<T> &values,
+    BCFileIOStats *stats = nullptr
+) {
+    if (!bc_success_dtype_matches_type<T>(dtype)) {
+        throw std::invalid_argument("BC success streaming writer value type does not match dtype");
+    }
+    const uint64_t expected_values = bc_success_total_values_for(position, row_width);
+    if (expected_values != static_cast<uint64_t>(values.size())) {
+        throw std::invalid_argument("BC success streaming writer value count mismatch");
+    }
+    const uint32_t value_size = bc_success_dtype_value_size(dtype);
+    if (expected_values > std::numeric_limits<uint64_t>::max() / value_size) {
+        throw std::overflow_error("BC success streaming writer payload byte count overflow");
+    }
+    const uint64_t payload_bytes = expected_values * value_size;
+
+    BCSuccessHeader header;
+    header.dtype = static_cast<uint32_t>(dtype);
+    header.row_width = row_width;
+    header.family_count = position.header().family_count;
+    header.descriptor_count = position.cell_count();
+    header.payload_offset = kBCSuccessHeaderBytes;
+    header.payload_bytes = payload_bytes;
+    header.position_key_mode = position.header().key_mode;
+    header.family_unit = position.header().family_unit;
+    header.axis_base_coord = position.header().axis_base_coord;
+    header.layer_sum = position.header().layer_sum;
+    header.position_metadata_fingerprint = bc_success_position_fingerprint(position);
+
+    std::vector<uint8_t> header_bytes;
+    header_bytes.reserve(kBCSuccessHeaderBytes);
+    bc_append_success_header(header_bytes, header);
+
+    const uint64_t logical_size = bc_checked_add_u64(
+        kBCSuccessHeaderBytes,
+        payload_bytes,
+        "BC success streaming writer logical size overflow"
+    );
+    file.prepare_full_overwrite(logical_size);
+    BCSequentialSuccessWriteStager stager(file, stats);
+    stager.append(header_bytes.data(), header_bytes.size());
+    stager.append_values(values);
+    stager.finish();
+    return logical_size;
 }
 
 [[nodiscard]] inline std::vector<uint8_t> read_success_layer_from_file(

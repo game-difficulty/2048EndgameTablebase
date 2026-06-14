@@ -502,6 +502,10 @@ public:
         return *lut_;
     }
 
+    [[nodiscard]] const std::vector<uint8_t> &bytes() const {
+        return bytes_;
+    }
+
     [[nodiscard]] uint32_t cell_count() const {
         return static_cast<uint32_t>(descriptors_.size());
     }
@@ -790,10 +794,10 @@ public:
 
     [[nodiscard]] const BCPositionLayerReader &layer() const;
     [[nodiscard]] const std::vector<uint8_t> &bytes() const;
+    [[nodiscard]] BCPositionLayerReader take_layer();
 
 private:
     std::unique_ptr<BCReadableFile> file_;
-    std::vector<uint8_t> bytes_;
     BCPositionLayerReader layer_;
 };
 } // namespace BC

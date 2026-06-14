@@ -296,7 +296,9 @@ uint64_t write_position_payloads_to_file(
         throw std::logic_error("BC position streaming rank byte count mismatch");
     }
     stager.finish();
-    file.flush();
+    if (file.mode() != BCFileIOMode::Direct) {
+        file.flush();
+    }
     return logical_size;
 }
 
@@ -371,11 +373,30 @@ void BCPositionFileReader::open(std::unique_ptr<BCReadableFile> file, const BCLu
     if (byte_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
         throw std::overflow_error("BC position file exceeds addressable memory vector size");
     }
-    bytes_.assign(static_cast<size_t>(byte_count), 0U);
-    if (!bytes_.empty()) {
-        file_->read_at(0U, bytes_.data(), byte_count);
+    std::vector<uint8_t> bytes(static_cast<size_t>(byte_count), 0U);
+    if (!bytes.empty()) {
+        if (file_->mode() == BCFileIOMode::Direct) {
+            constexpr uint64_t kDirectReadChunkBytes = 16ULL * 1024ULL * 1024ULL;
+            std::vector<BCFileReadRequest> requests;
+            requests.reserve(
+                static_cast<size_t>((byte_count + kDirectReadChunkBytes - 1U) / kDirectReadChunkBytes)
+            );
+            uint64_t offset = 0U;
+            while (offset < byte_count) {
+                const uint64_t take = std::min<uint64_t>(kDirectReadChunkBytes, byte_count - offset);
+                requests.push_back(BCFileReadRequest{
+                    offset,
+                    bytes.data() + static_cast<size_t>(offset),
+                    take
+                });
+                offset += take;
+            }
+            file_->read_many(requests);
+        } else {
+            file_->read_at(0U, bytes.data(), byte_count);
+        }
     }
-    layer_.open(bytes_, lut);
+    layer_.open(std::move(bytes), lut);
 }
 
 const BCPositionLayerReader &BCPositionFileReader::layer() const {
@@ -383,7 +404,11 @@ const BCPositionLayerReader &BCPositionFileReader::layer() const {
 }
 
 const std::vector<uint8_t> &BCPositionFileReader::bytes() const {
-    return bytes_;
+    return layer_.bytes();
+}
+
+BCPositionLayerReader BCPositionFileReader::take_layer() {
+    return std::move(layer_);
 }
 
 } // namespace BC

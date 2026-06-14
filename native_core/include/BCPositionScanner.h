@@ -190,6 +190,16 @@ public:
         scan_board_impl(fn);
     }
 
+    template <class Fn>
+    void for_each_bucket_word_range_board(
+        uint32_t bucket_index,
+        uint32_t word_begin,
+        uint32_t word_end,
+        Fn &&fn
+    ) const {
+        scan_bucket_word_range_board_impl(fn, bucket_index, word_begin, word_end);
+    }
+
     [[nodiscard]] std::vector<BCScannedPositionEntry> scan() const {
         const BCPositionCellDescriptor &desc = position_->descriptor(cid_);
         std::vector<BCScannedPositionEntry> out;
@@ -327,6 +337,81 @@ private:
             throw std::runtime_error("BC position scanner success row count mismatch");
         }
     }
+
+    template <class Fn>
+    void scan_bucket_word_range_board_impl(
+        Fn &fn,
+        uint32_t bucket_index,
+        uint32_t word_begin,
+        uint32_t word_end
+    ) const {
+        const BCPositionCellDescriptor &desc = position_->descriptor(cid_);
+        if (desc.empty()) {
+            return;
+        }
+        if (bucket_index >= desc.bucket_count) {
+            throw std::out_of_range("BC position scanner bucket word range bucket index out of range");
+        }
+
+        const BCLut &lut = position_->lut();
+        const BCBucketEntryView buckets = position_->bucket_entries_for_cell(cid_);
+        const BCRankPayloadView payload = position_->rank_payload_for_cell(cid_);
+        if (bucket_index >= buckets.size) {
+            throw std::out_of_range("BC position scanner bucket word range bucket view is short");
+        }
+        const BCBucketEntry &bucket = buckets.data[bucket_index];
+        const BCBucketBoardDecoder decoder(lut, bucket.key);
+        const uint32_t bitmap_len = decoder.bitmap_len();
+        const uint32_t bitmap_word_count = words_for_bits(bitmap_len);
+        const uint32_t effective_word_end = word_end == 0U ? bitmap_word_count : word_end;
+        if (word_begin > effective_word_end || effective_word_end > bitmap_word_count) {
+            throw std::out_of_range("BC position scanner bucket word range is out of bounds");
+        }
+        if (word_begin == effective_word_end) {
+            return;
+        }
+
+        const uint32_t prefix_count = prefix_count_for_bits(bitmap_len);
+        const uint32_t bitmap_offset = bc_rank_payload_bitmap_offset(
+            bucket.rank_payload_offset,
+            bitmap_len
+        );
+        const uint64_t prefix_end =
+            static_cast<uint64_t>(bucket.rank_payload_offset) +
+            static_cast<uint64_t>(prefix_count) * sizeof(RankPrefix);
+        const uint64_t bitmap_end =
+            static_cast<uint64_t>(bitmap_offset) +
+            static_cast<uint64_t>(bitmap_word_count) * sizeof(uint64_t);
+        if (prefix_end > payload.size || bitmap_end > payload.size) {
+            throw std::out_of_range("BC position scanner bucket word range exceeds rank payload");
+        }
+
+        const uint8_t *prefix = payload.data + bucket.rank_payload_offset;
+        const uint8_t *bitmap_words = payload.data + bitmap_offset;
+        uint32_t bucket_seen = rank_before_word_index_le_bytes(
+            prefix,
+            prefix_count,
+            bitmap_words,
+            bitmap_word_count,
+            bitmap_len,
+            word_begin
+        );
+        bc_scan_bucket_board_entries(
+            bucket,
+            decoder,
+            bitmap_words,
+            bitmap_word_count,
+            bitmap_len,
+            word_begin,
+            effective_word_end,
+            desc.success_rows,
+            bucket_seen,
+            [&](BucketRank rank, uint32_t local_row, uint64_t board) {
+                fn(BCScannedBoardEntry{bucket.key, rank, local_row, board});
+            }
+        );
+    }
+
     [[nodiscard]] static uint32_t countr_zero64(uint64_t value) {
         if (value == 0U) {
             throw std::invalid_argument("BC countr_zero64 requires non-zero value");
