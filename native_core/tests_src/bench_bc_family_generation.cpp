@@ -9,6 +9,8 @@
 #include "BCPositionFamilyRemapReader.h"
 #include "BCPositionFile.h"
 #include "BCResidentGeneration.h"
+#include "BCSingleChunkGeneration.h"
+#include "BCSortUtils.h"
 #include "BoardMover.h"
 #include "Calculator.h"
 #include "CanonicalBatch.h"
@@ -56,8 +58,12 @@ using BC::BCCellBuilder;
 using BC::BCCellMatrix;
 using BC::BCFamilyTable;
 using BC::BCLut;
+using BC::BCPositionCellLayout;
 using BC::BCPositionStreamingReader;
 using BC::CellId;
+using BC::FinalizedCellPayload;
+
+constexpr uint32_t kSingleRouteMaxCellChunkSize = 512U;
 using BC::FamilyCoord;
 using BC::FamilyId;
 
@@ -390,6 +396,13 @@ void check(bool condition, const char *message) {
 #endif
 }
 
+[[nodiscard]] uint32_t single_route_cell_chunk_size(uint32_t cell_count) {
+    return std::min<uint32_t>(
+        kSingleRouteMaxCellChunkSize,
+        std::max<uint32_t>(1U, (cell_count + 1U) / 2U)
+    );
+}
+
 void configure_global_threads(int requested) {
 #if defined(_OPENMP)
     if (requested > 0) {
@@ -531,8 +544,7 @@ struct FamilyRoutePlannerState {
             );
         decision.route_estimated_peak_bytes = decision.family_estimated_peak_bytes;
     }
-    if (script_entry != nullptr && script_entry->target_modulus != 0U &&
-        decision.route == BC::BCFamilyGenerationRoute::Family) {
+    if (script_entry != nullptr && script_entry->target_modulus != 0U) {
         if (!BC::bc_family_route_is_supported_prime(script_entry->target_modulus)) {
             throw std::invalid_argument("--family-route-script target_modulus must be a supported prime in 13..293");
         }
@@ -791,12 +803,35 @@ struct FamilyRoutePlannerState {
 
 [[nodiscard]] BCFamilyTable make_resident_axis(
     BC::LayerSum layer_sum,
-    const std::vector<BC::LayerSum> &possible_8tile_sums
+    const std::vector<BC::LayerSum> &possible_8tile_sums,
+    uint32_t family_modulus
 ) {
     if ((layer_sum & 1U) != 0U) {
         throw std::invalid_argument("free resident benchmark requires even layer sums");
     }
-    return BC::build_family_axis_for_layer(layer_sum, 2U, possible_8tile_sums);
+    return make_axis(layer_sum, possible_8tile_sums, family_modulus);
+}
+
+[[nodiscard]] BCPositionCellLayout make_resident_layout(
+    BC::LayerSum layer_sum,
+    const std::vector<BC::LayerSum> &possible_8tile_sums,
+    uint32_t family_modulus
+) {
+    return BC::build_modulo_position_cell_layout_for_layer(
+        layer_sum,
+        2U,
+        possible_8tile_sums,
+        family_modulus
+    );
+}
+
+[[nodiscard]] bool axes_equivalent(
+    const BCFamilyTable &lhs,
+    const BCFamilyTable &rhs
+) {
+    return lhs.layer_sum() == rhs.layer_sum() &&
+        lhs.family_unit() == rhs.family_unit() &&
+        lhs.coords() == rhs.coords();
 }
 
 [[nodiscard]] BCFamilyTable make_target_axis_for_route(
@@ -807,14 +842,21 @@ struct FamilyRoutePlannerState {
 ) {
     switch (route) {
     case BC::BCFamilyGenerationRoute::Resident:
-        return make_resident_axis(layer_sum, possible_8tile_sums);
+        return make_resident_axis(layer_sum, possible_8tile_sums, family_modulus);
     case BC::BCFamilyGenerationRoute::Single:
-        return make_axis(layer_sum, possible_8tile_sums, 1U);
+        return make_resident_axis(layer_sum, possible_8tile_sums, family_modulus);
     case BC::BCFamilyGenerationRoute::Family:
     case BC::BCFamilyGenerationRoute::Auto:
         return make_axis(layer_sum, possible_8tile_sums, family_modulus);
     }
     throw std::invalid_argument("unknown BC family generation route");
+}
+
+[[nodiscard]] bool layer_matches_layout(
+    const BCPositionStreamingReader &reader,
+    const BCPositionCellLayout &layout
+) {
+    return layout.equivalent_to_axis(reader.axis());
 }
 
 [[nodiscard]] uint64_t descriptor_rows(const BCPositionStreamingReader &reader) {
@@ -1027,16 +1069,24 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
     return std::make_unique<BC::BCBufferedFileReader>(path);
 }
 
-void write_raw_bytes_to_file(
+void write_position_bytes_to_file(
+    const Args &args,
     const std::filesystem::path &path,
-    const std::vector<uint8_t> &bytes
+    const std::vector<uint8_t> &bytes,
+    BC::BCFileIOStats *stats = nullptr
 ) {
-    BC::BCBufferedFileWriter writer(path);
-    writer.resize(static_cast<uint64_t>(bytes.size()));
-    if (!bytes.empty()) {
-        writer.write_at(0U, bytes.data(), static_cast<uint64_t>(bytes.size()));
+    std::unique_ptr<BC::BCWritableFile> writer = open_family_position_writer(args, path);
+    writer->prepare_full_overwrite(static_cast<uint64_t>(bytes.size()));
+    if (stats != nullptr) {
+        *stats = {};
     }
-    writer.flush();
+    if (!bytes.empty()) {
+        const std::vector<BC::BCFileWriteRequest> requests{
+            BC::BCFileWriteRequest{0U, bytes.data(), static_cast<uint64_t>(bytes.size())}
+        };
+        writer->write_many(requests, stats);
+    }
+    writer->flush();
 }
 
 [[nodiscard]] std::unique_ptr<BCPositionStreamingReader> open_position_reader(
@@ -1068,6 +1118,7 @@ void write_raw_bytes_to_file(
 }
 
 [[nodiscard]] LayerFile inspect_layer_file(
+    const Args &args,
     uint32_t layer_sum,
     const std::filesystem::path &path,
     uint64_t logical_size,
@@ -1082,9 +1133,7 @@ void write_raw_bytes_to_file(
     if (ec) {
         throw std::runtime_error("failed to stat layer file: " + ec.message());
     }
-    auto reader = std::make_unique<BCPositionStreamingReader>(
-        BCPositionStreamingReader::open_buffered(layer.path, lut)
-    );
+    auto reader = open_position_reader(args, layer, lut);
     reader->set_validate_loaded_cells(false);
     layer.rows = descriptor_rows(*reader);
     layer.bucket_count = descriptor_bucket_count(*reader);
@@ -1101,7 +1150,8 @@ void write_raw_bytes_to_file(
     if (ec) {
         throw std::runtime_error("failed to stat existing layer file: " + ec.message());
     }
-    BCPositionStreamingReader reader = BCPositionStreamingReader::open_buffered(path, lut);
+    BCPositionStreamingReader reader =
+        BCPositionStreamingReader::open_direct_auto(path, lut, 8U, true);
     reader.set_validate_loaded_cells(false);
     LayerFile layer;
     layer.layer_sum = BC::checked_u32_size(
@@ -1138,6 +1188,95 @@ void write_raw_bytes_to_file(
     layer.bucket_count = bucket_count;
     layer.rank_payload_bytes = rank_payload_bytes;
     return layer;
+}
+
+struct MaterializedLayerView {
+    LayerFile layer;
+    bool temporary = false;
+};
+
+[[nodiscard]] FinalizedCellPayload payload_from_loaded_cell(BC::BCLoadedCell &&cell) {
+    FinalizedCellPayload payload;
+    payload.buckets = std::move(cell.buckets);
+    payload.rank_payload = std::move(cell.rank_payload);
+    payload.success_rows = cell.success_rows;
+    return payload;
+}
+
+[[nodiscard]] MaterializedLayerView ensure_layer_cell_layout(
+    const Args &args,
+    const BCLut &lut,
+    const LayerFile &source_layer,
+    const BCPositionCellLayout &layout,
+    const std::vector<BC::LayerSum> &possible_8tile_sums,
+    const std::filesystem::path &temp_path
+) {
+    std::unique_ptr<BCPositionStreamingReader> reader =
+        open_position_reader(args, source_layer, lut);
+    if (layer_matches_layout(*reader, layout)) {
+        return MaterializedLayerView{source_layer, false};
+    }
+
+    BC::BCPositionFamilyRemapReader remap(
+        *reader,
+        layout.serialization_axis(),
+        possible_8tile_sums
+    );
+    std::vector<FinalizedCellPayload> payloads(layout.cell_count());
+    const uint32_t cell_chunk_size = single_route_cell_chunk_size(layout.cell_count());
+    std::vector<CellId> cids;
+    cids.reserve(cell_chunk_size);
+    std::vector<BC::BCLoadedCell> loaded;
+    for (CellId begin = 0U; begin < layout.cell_count();) {
+        const CellId end = static_cast<CellId>(
+            std::min<uint64_t>(
+                layout.cell_count(),
+                static_cast<uint64_t>(begin) + cell_chunk_size
+            )
+        );
+        cids.clear();
+        for (CellId cid = begin; cid < end; ++cid) {
+            cids.push_back(cid);
+        }
+        remap.load_cells_into(cids, loaded, nullptr);
+        for (BC::BCLoadedCell &cell : loaded) {
+            payloads[static_cast<size_t>(cell.cid)] =
+                payload_from_loaded_cell(std::move(cell));
+        }
+        begin = end;
+    }
+
+    {
+        std::error_code ec;
+        std::filesystem::remove(temp_path, ec);
+    }
+    std::unique_ptr<BC::BCWritableFile> writer =
+        open_family_position_writer(args, temp_path);
+    BC::BCFileIOStats stats;
+    const uint64_t logical_size =
+        BC::write_position_payloads_to_file(
+            *writer,
+            layout.serialization_axis(),
+            payloads,
+            &stats
+        );
+    writer.reset();
+    (void)stats;
+
+    LayerFile materialized =
+        args.output_inspect
+            ? inspect_layer_file(
+                  args,
+                  static_cast<uint32_t>(layout.layer_sum()),
+                  temp_path,
+                  logical_size,
+                  lut)
+            : layer_file_without_inspect(
+                  static_cast<uint32_t>(layout.layer_sum()),
+                  temp_path,
+                  logical_size,
+                  source_layer.rows);
+    return MaterializedLayerView{std::move(materialized), true};
 }
 
 [[nodiscard]] std::vector<uint8_t> build_initial_layer_bytes(
@@ -1208,18 +1347,22 @@ void write_raw_bytes_to_file(
             initial_boards,
             possible_8tile_sums,
             args.family_modulus
-        );
+    );
     const std::filesystem::path path = layer_path(args, seed_sum, axis.layer_sum());
-    write_raw_bytes_to_file(path, bytes);
+    write_position_bytes_to_file(args, path, bytes);
     if (!args.output_inspect) {
         return layer_file_without_inspect(axis.layer_sum(), path, bytes.size(), initial_boards.size());
     }
-    return inspect_layer_file(axis.layer_sum(), path, bytes.size(), lut);
+    return inspect_layer_file(args, axis.layer_sum(), path, bytes.size(), lut);
 }
 
 void cleanup_temp_file(const std::filesystem::path &path) {
     std::error_code ec;
     std::filesystem::remove(path, ec);
+}
+
+[[nodiscard]] uint64_t layer_storage_size_bytes(const LayerFile &layer) {
+    return layer.physical_size != 0U ? layer.physical_size : layer.logical_size;
 }
 
 [[nodiscard]] BC::BCFamilyGenerationOptions family_options_from_args(
@@ -1251,6 +1394,8 @@ void cleanup_temp_file(const std::filesystem::path &path) {
     options.success_check_min_source_layer_sum = success_check_min_source_layer_sum;
     options.success_check_all_cells = true;
     options.keep_only_success_generated_boards = terminal;
+    options.finalize_options.keyvalue_sort = nullptr;
+    options.finalize_options.simd_sort_min_bucket_count = 10000U;
     return options;
 }
 
@@ -1263,13 +1408,17 @@ void cleanup_temp_file(const std::filesystem::path &path) {
     BC::BCResidentGenerationOptions options;
     options.num_threads = args.num_threads;
     options.canonical_batch_size = args.batch_size;
+    options.dynamic_reserve_factor = 2.0;
+    options.collect_timing = false;
     if (args.pending_buffer != 0U) {
         options.pending_insert_buffer_size = args.pending_buffer;
     }
-    options.family_tile_sum_values = &tile_sums;
+    options.tile_sum_values = &tile_sums;
     options.success_target_rank = static_cast<int>(args.target_rank);
     options.success_shifts = &success_shifts;
     options.success_check_min_source_layer_sum = success_check_min_source_layer_sum;
+    options.finalize_options.keyvalue_sort = nullptr;
+    options.finalize_options.simd_sort_min_bucket_count = 10000U;
     return options;
 }
 
@@ -1288,6 +1437,7 @@ struct FamilyLayerResult {
     uint64_t available_memory_bytes = 0U;
     uint64_t route_estimated_peak_bytes = 0U;
     uint64_t route_budget_bytes = 0U;
+    std::shared_ptr<BC::BCPositionLayerReader> resident_memory_layer;
 };
 
 void apply_route_decision_to_result(
@@ -1306,7 +1456,7 @@ void apply_route_decision_to_result(
 [[nodiscard]] FamilyLayerResult generate_resident_layer_to_file(
     const Args &args,
     const BCLut &lut,
-    const BCFamilyTable &target_axis,
+    const BCPositionCellLayout &target_layout,
     const LayerFile *source4_layer,
     const LayerFile &source2_layer,
     const std::array<uint32_t, 16U> &tile_sums,
@@ -1315,15 +1465,16 @@ void apply_route_decision_to_result(
     bool terminal,
     const std::filesystem::path &output_path
 ) {
-    if (terminal) {
-        throw std::runtime_error("resident route does not support terminal keep-only-success generation");
-    }
-
     FamilyLayerResult result;
     const double total_begin = now_seconds();
     const double source_load_begin = now_seconds();
     BC::BCPositionFileReader source2_file =
-        BC::BCPositionFileReader::open_buffered(source2_layer.path, lut);
+        BC::BCPositionFileReader::open_direct_auto(
+            source2_layer.path,
+            lut,
+            args.direct_queue_depth,
+            args.direct_queue_depth > 1U
+        );
     std::optional<BC::BCPositionFileReader> source4_file;
     std::vector<BC::BCResidentGenerationSource> sources;
     sources.reserve(source4_layer == nullptr ? 1U : 2U);
@@ -1331,7 +1482,14 @@ void apply_route_decision_to_result(
         ? source2_layer.physical_size
         : source2_layer.logical_size;
     if (source4_layer != nullptr) {
-        source4_file.emplace(BC::BCPositionFileReader::open_buffered(source4_layer->path, lut));
+        source4_file.emplace(
+            BC::BCPositionFileReader::open_direct_auto(
+                source4_layer->path,
+                lut,
+                args.direct_queue_depth,
+                args.direct_queue_depth > 1U
+            )
+        );
         source_bytes += source4_layer->physical_size != 0U
             ? source4_layer->physical_size
             : source4_layer->logical_size;
@@ -1346,12 +1504,14 @@ void apply_route_decision_to_result(
         success_shifts,
         success_check_min_source_layer_sum
     );
+    options.keep_only_success_generated_boards = terminal;
     BC::BCResidentGenerationResult resident =
-        BC::generate_resident_position_layer(lut, target_axis, sources, options);
+        BC::generate_resident_position_layer(lut, target_layout, sources, options);
 
     cleanup_temp_file(output_path);
+    BC::BCFileIOStats write_stats;
     const double disk_write_begin = now_seconds();
-    write_raw_bytes_to_file(output_path, resident.position_bytes);
+    write_position_bytes_to_file(args, output_path, resident.position_bytes, &write_stats);
     const double disk_write_seconds = now_seconds() - disk_write_begin;
 
     result.logical_size = static_cast<uint64_t>(resident.position_bytes.size());
@@ -1359,14 +1519,16 @@ void apply_route_decision_to_result(
     result.effective_threads = resident.effective_threads;
     result.retries = resident.generation_retries;
     result.total_seconds = now_seconds() - total_begin;
-    result.target_modulus = target_axis.family_count();
+    result.target_modulus = 0U;
     result.writer_stats.success_rows = resident.output_success_rows;
-    result.writer_stats.metadata_write_ops = result.logical_size == 0U ? 0U : 1U;
-    result.writer_stats.metadata_write_bytes = result.logical_size;
-    result.writer_stats.backend_write_ops = result.writer_stats.metadata_write_ops;
-    result.writer_stats.backend_write_bytes = result.logical_size;
+    result.writer_stats.metadata_write_ops = write_stats.request_count;
+    result.writer_stats.metadata_write_bytes = write_stats.requested_bytes;
+    result.writer_stats.backend_write_ops = write_stats.backend_io_count;
+    result.writer_stats.backend_write_bytes = write_stats.backend_bytes;
     result.writer_stats.backend_write_seconds = disk_write_seconds;
     result.writer_stats.logical_size = result.logical_size;
+    result.resident_memory_layer =
+        std::make_shared<BC::BCPositionLayerReader>(std::move(resident.position_bytes), lut);
 
     result.stats.source_bytes_read = source_bytes;
     result.stats.source_backend_read_ops = source4_layer == nullptr ? 1U : 2U;
@@ -1376,11 +1538,283 @@ void apply_route_decision_to_result(
     result.stats.finalize_seconds = resident.finalize_seconds;
     result.stats.write_seconds = resident.write_seconds + disk_write_seconds;
     result.stats.generation_seconds = result.total_seconds;
-    result.stats.target_cells_created = target_axis.family_count() * target_axis.family_count();
+    result.stats.target_cells_created = target_layout.cell_count();
     result.stats.target_cells_finalized = result.stats.target_cells_created;
     result.stats.family_builder_hash_grows = resident.generation_retries;
     result.stats.active_builder_bytes_peak =
         resident.dynamic_bitmap_words_allocated * static_cast<uint64_t>(sizeof(uint64_t));
+    return result;
+}
+
+[[nodiscard]] FamilyLayerResult generate_resident_mutable_carry_layer_to_file(
+    const Args &args,
+    const BCLut &lut,
+    const BCPositionCellLayout &primary_layout,
+    const BCPositionCellLayout &current_layout,
+    const BCPositionCellLayout *secondary_layout,
+    const LayerFile &current_layer,
+    const BC::BCPositionLayerReader *current_memory_layer,
+    std::unique_ptr<BC::BCResidentGenerationMutableLayer> carry_to_primary,
+    const std::array<uint32_t, 16U> &tile_sums,
+    const std::vector<BC::LayerSum> &possible_8tile_sums,
+    const std::vector<uint8_t> &success_shifts,
+    BC::LayerSum success_check_min_source_layer_sum,
+    bool primary_terminal,
+    bool secondary_terminal,
+    const std::filesystem::path &output_path,
+    std::unique_ptr<BC::BCResidentGenerationMutableLayer> &next_carry,
+    uint32_t &next_carry_layer_sum
+) {
+    FamilyLayerResult result;
+    const double total_begin = now_seconds();
+    double source_load_seconds = 0.0;
+    std::optional<BC::BCPositionFileReader> current_file;
+    const BC::BCPositionLayerReader *current_reader = current_memory_layer;
+    if (current_reader == nullptr) {
+        const double source_load_begin = now_seconds();
+        current_file.emplace(
+            BC::BCPositionFileReader::open_direct_auto(
+                current_layer.path,
+                lut,
+                args.direct_queue_depth,
+                args.direct_queue_depth > 1U
+            )
+        );
+        source_load_seconds += now_seconds() - source_load_begin;
+        current_reader = &current_file->layer();
+    }
+    if (!current_layout.equivalent_to_axis(current_reader->axis())) {
+        throw std::runtime_error("resident route current layer was not materialized to requested cell layout");
+    }
+
+    BC::BCResidentGenerationOptions options = resident_options_from_args(
+        args,
+        tile_sums,
+        success_shifts,
+        success_check_min_source_layer_sum
+    );
+    options.keep_only_success_generated_boards = primary_terminal;
+    options.keep_only_success_secondary_generated_boards = secondary_terminal;
+    BC::BCResidentGenerationPairResult pair;
+    double disk_write_seconds = 0.0;
+    pair = BC::generate_resident_position_layer_pair_with_mutable_carry(
+        lut,
+        primary_layout,
+        *current_reader,
+        std::move(carry_to_primary),
+        secondary_layout,
+        options
+    );
+    current_reader = nullptr;
+    current_file.reset();
+
+    cleanup_temp_file(output_path);
+    BC::BCFileIOStats write_stats;
+    const double disk_write_begin = now_seconds();
+    write_position_bytes_to_file(args, output_path, pair.primary.position_bytes, &write_stats);
+    disk_write_seconds = now_seconds() - disk_write_begin;
+
+    if (pair.secondary_carry) {
+        next_carry_layer_sum = static_cast<uint32_t>(pair.secondary_carry->layout().layer_sum());
+        next_carry = std::move(pair.secondary_carry);
+    } else {
+        next_carry_layer_sum = 0U;
+        next_carry.reset();
+    }
+
+    result.logical_size = static_cast<uint64_t>(pair.primary.position_bytes.size());
+    result.output_rows = pair.primary.output_success_rows;
+    result.effective_threads = pair.primary.effective_threads;
+    result.retries = std::max(pair.primary.generation_retries, pair.secondary.generation_retries);
+    result.total_seconds = now_seconds() - total_begin;
+    result.target_modulus = 0U;
+    result.writer_stats.success_rows = pair.primary.output_success_rows;
+    result.writer_stats.metadata_write_ops = write_stats.request_count;
+    result.writer_stats.metadata_write_bytes = write_stats.requested_bytes;
+    result.writer_stats.backend_write_ops = write_stats.backend_io_count;
+    result.writer_stats.backend_write_bytes = write_stats.backend_bytes;
+    result.writer_stats.backend_write_seconds = disk_write_seconds;
+    result.writer_stats.logical_size = result.logical_size;
+    result.resident_memory_layer =
+        std::make_shared<BC::BCPositionLayerReader>(std::move(pair.primary.position_bytes), lut);
+
+    const uint64_t current_bytes = current_memory_layer == nullptr
+        ? (current_layer.physical_size != 0U ? current_layer.physical_size : current_layer.logical_size)
+        : 0U;
+    result.stats.source_bytes_read = current_bytes;
+    result.stats.source_backend_read_ops = current_memory_layer == nullptr ? 1U : 0U;
+    result.stats.source_backend_read_bytes = current_bytes;
+    result.stats.source_load_seconds = source_load_seconds + pair.primary.source_position_load_seconds;
+    result.stats.parallel_seconds = pair.shared_generation_seconds;
+    result.stats.finalize_seconds = pair.primary.finalize_seconds;
+    result.stats.write_seconds = pair.primary.write_seconds + disk_write_seconds;
+    result.stats.generation_seconds = result.total_seconds;
+    result.stats.target_cells_created =
+        primary_layout.cell_count() +
+        (secondary_layout == nullptr
+             ? 0U
+             : secondary_layout->cell_count());
+    result.stats.target_cells_finalized = primary_layout.cell_count();
+    result.stats.family_builder_hash_grows = result.retries;
+    result.stats.active_builder_bytes_peak =
+        (pair.primary.dynamic_bitmap_words_allocated + pair.secondary.dynamic_bitmap_words_allocated) *
+        static_cast<uint64_t>(sizeof(uint64_t));
+    return result;
+}
+
+[[nodiscard]] std::unique_ptr<BC::BCResidentGenerationMutableLayer> build_streaming_carry_to_primary(
+    const Args &args,
+    const BCLut &lut,
+    const BCPositionCellLayout &primary_layout,
+    const BCPositionCellLayout &source_layout,
+    const LayerFile &source4_layer,
+    const LayerFile &current_layer,
+    const std::array<uint32_t, 16U> &tile_sums,
+    const std::vector<BC::LayerSum> &possible_8tile_sums,
+    const std::vector<uint8_t> &success_shifts,
+    BC::LayerSum success_check_min_source_layer_sum,
+    bool terminal
+) {
+    std::unique_ptr<BCPositionStreamingReader> source4_reader =
+        open_position_reader(args, source4_layer, lut);
+    if (!source_layout.equivalent_to_axis(source4_reader->axis())) {
+        throw std::runtime_error("resident carry source layer was not materialized to requested cell layout");
+    }
+    const uint32_t source_cell_chunk_size =
+        single_route_cell_chunk_size(source4_reader->cell_count());
+    BC::BCResidentGenerationOptions options = resident_options_from_args(
+        args,
+        tile_sums,
+        success_shifts,
+        success_check_min_source_layer_sum
+    );
+    options.collect_mutable_output_stats = false;
+    options.collect_dynamic_state_stats = false;
+    options.keep_only_success_generated_boards = terminal;
+    const uint64_t source4_bytes = layer_storage_size_bytes(source4_layer);
+    const uint64_t current_bytes = layer_storage_size_bytes(current_layer);
+    if (source4_bytes != 0U) {
+        const double combined_ratio =
+            static_cast<double>(source4_bytes + current_bytes) /
+            static_cast<double>(source4_bytes);
+        options.dynamic_reserve_factor =
+            std::max(options.dynamic_reserve_factor, options.dynamic_reserve_factor * combined_ratio);
+    }
+    BC::BCResidentMutableGenerationResult carry =
+        BC::generate_resident_mutable_layer_from_streaming_source(
+            lut,
+            primary_layout,
+            BC::BCResidentStreamingGenerationSource{
+                source4_reader.get(),
+                2U,
+                2U,
+                source_cell_chunk_size
+            },
+            nullptr,
+            options
+        );
+    return std::move(carry.mutable_layer);
+}
+
+[[nodiscard]] FamilyLayerResult generate_single_chunk_strict_layer_to_file(
+    const Args &args,
+    const BCLut &lut,
+    const BCPositionCellLayout &primary_layout,
+    const BCPositionCellLayout &current_layout,
+    const BCPositionCellLayout *secondary_layout,
+    const LayerFile &current_layer,
+    std::unique_ptr<BC::BCResidentGenerationMutableLayer> carry_to_primary,
+    const std::array<uint32_t, 16U> &tile_sums,
+    const std::vector<BC::LayerSum> &possible_8tile_sums,
+    const std::vector<uint8_t> &success_shifts,
+    BC::LayerSum success_check_min_source_layer_sum,
+    bool primary_terminal,
+    bool secondary_terminal,
+    const std::filesystem::path &output_path,
+    std::unique_ptr<BC::BCResidentGenerationMutableLayer> &next_carry,
+    uint32_t &next_carry_layer_sum
+) {
+    FamilyLayerResult result;
+    const double total_begin = now_seconds();
+    const double source_load_begin = now_seconds();
+    std::unique_ptr<BCPositionStreamingReader> current_reader =
+        open_position_reader(args, current_layer, lut);
+    const double source_load_seconds = now_seconds() - source_load_begin;
+    if (!current_layout.equivalent_to_axis(current_reader->axis())) {
+        throw std::runtime_error("single route current layer was not materialized to requested cell layout");
+    }
+    const uint32_t current_cell_chunk_size =
+        single_route_cell_chunk_size(current_reader->cell_count());
+
+    BC::BCResidentGenerationOptions options = resident_options_from_args(
+        args,
+        tile_sums,
+        success_shifts,
+        success_check_min_source_layer_sum
+    );
+    options.keep_only_success_generated_boards = primary_terminal;
+    options.keep_only_success_secondary_generated_boards = secondary_terminal;
+    std::unique_ptr<BC::BCWritableFile> writer =
+        open_family_position_writer(args, output_path);
+    BC::BCSingleChunkGenerationStepResult step =
+        BC::generate_single_chunk_position_layer_strict_to_file(
+            lut,
+            primary_layout,
+            BC::BCSingleChunkGenerationSource{
+                current_reader.get(),
+                1U,
+                1U,
+                current_cell_chunk_size
+            },
+            std::move(carry_to_primary),
+            secondary_layout,
+            *writer,
+            options
+        );
+    current_reader.reset();
+    writer.reset();
+
+    if (step.next_carry) {
+        next_carry_layer_sum = static_cast<uint32_t>(step.next_carry->layout().layer_sum());
+        next_carry = std::move(step.next_carry);
+    } else {
+        next_carry_layer_sum = 0U;
+        next_carry.reset();
+    }
+
+    result.logical_size = step.primary.target_position_file_logical_bytes;
+    result.output_rows = step.primary.output_success_rows;
+    result.effective_threads = step.primary.effective_threads;
+    result.retries = std::max(step.primary.generation_retries, step.carry.generation_retries);
+    result.total_seconds = now_seconds() - total_begin;
+    result.target_modulus = 0U;
+    result.writer_stats.success_rows = step.primary.output_success_rows;
+    result.writer_stats.backend_write_ops = step.primary.target_position_write_backend_ops;
+    result.writer_stats.backend_write_bytes = step.primary.target_position_write_backend_bytes;
+    result.writer_stats.backend_write_seconds = step.primary.write_seconds;
+    result.writer_stats.logical_size = result.logical_size;
+
+    const uint64_t current_bytes = current_layer.physical_size != 0U
+        ? current_layer.physical_size
+        : current_layer.logical_size;
+    result.stats.source_bytes_read = current_bytes * (secondary_layout == nullptr ? 1U : 2U);
+    result.stats.source_backend_read_ops = secondary_layout == nullptr ? 1U : 2U;
+    result.stats.source_backend_read_bytes = result.stats.source_bytes_read;
+    result.stats.source_load_seconds = source_load_seconds;
+    result.stats.parallel_seconds = step.total_step_compute_seconds;
+    result.stats.finalize_seconds = step.primary.finalize_seconds;
+    result.stats.write_seconds = step.primary.write_seconds;
+    result.stats.generation_seconds = result.total_seconds;
+    result.stats.target_cells_created =
+        primary_layout.cell_count() +
+        (secondary_layout == nullptr
+             ? 0U
+             : secondary_layout->cell_count());
+    result.stats.target_cells_finalized = primary_layout.cell_count();
+    result.stats.family_builder_hash_grows = result.retries;
+    result.stats.active_builder_bytes_peak =
+        (step.primary.dynamic_bitmap_words_allocated + step.carry.dynamic_bitmap_words_allocated) *
+        static_cast<uint64_t>(sizeof(uint64_t));
     return result;
 }
 
@@ -1564,18 +1998,165 @@ void apply_route_decision_to_result(
     const std::filesystem::path &output_path
 ) {
     if (route == BC::BCFamilyGenerationRoute::Resident) {
-        return generate_resident_layer_to_file(
+        const BCPositionCellLayout target_layout =
+            BCPositionCellLayout::from_modulo_axis(target_axis, target_axis.family_count());
+        const BCPositionCellLayout source2_layout =
+            make_resident_layout(target_axis.layer_sum() - 2U, possible_8tile_sums, target_axis.family_count());
+        MaterializedLayerView source2_view = ensure_layer_cell_layout(
             args,
             lut,
-            target_axis,
-            source4_layer,
             source2_layer,
+            source2_layout,
+            possible_8tile_sums,
+            output_path.string() + ".resident_source2.tmp"
+        );
+        std::optional<MaterializedLayerView> source4_view;
+        if (source4_layer != nullptr) {
+            const BCPositionCellLayout source4_layout =
+                make_resident_layout(target_axis.layer_sum() - 4U, possible_8tile_sums, target_axis.family_count());
+            source4_view.emplace(
+                ensure_layer_cell_layout(
+                    args,
+                    lut,
+                    *source4_layer,
+                    source4_layout,
+                    possible_8tile_sums,
+                    output_path.string() + ".resident_source4.tmp"
+                )
+            );
+        }
+        FamilyLayerResult result = generate_resident_layer_to_file(
+            args,
+            lut,
+            target_layout,
+            source4_view ? &source4_view->layer : nullptr,
+            source2_view.layer,
             tile_sums,
             success_shifts,
             success_check_min_source_layer_sum,
             terminal,
             output_path
         );
+        if (source2_view.temporary) {
+            cleanup_temp_file(source2_view.layer.path);
+        }
+        if (source4_view && source4_view->temporary) {
+            cleanup_temp_file(source4_view->layer.path);
+        }
+        return result;
+    }
+    if (route == BC::BCFamilyGenerationRoute::Single) {
+        const BCPositionCellLayout target_layout =
+            BCPositionCellLayout::from_modulo_axis(target_axis, target_axis.family_count());
+        const BCPositionCellLayout source2_layout =
+            make_resident_layout(target_axis.layer_sum() - 2U, possible_8tile_sums, target_axis.family_count());
+        MaterializedLayerView source2_view = ensure_layer_cell_layout(
+            args,
+            lut,
+            source2_layer,
+            source2_layout,
+            possible_8tile_sums,
+            output_path.string() + ".single_source2.tmp"
+        );
+        std::optional<MaterializedLayerView> source4_view;
+        if (source4_layer != nullptr) {
+            const BCPositionCellLayout source4_layout =
+                make_resident_layout(target_axis.layer_sum() - 4U, possible_8tile_sums, target_axis.family_count());
+            source4_view.emplace(
+                ensure_layer_cell_layout(
+                    args,
+                    lut,
+                    *source4_layer,
+                    source4_layout,
+                    possible_8tile_sums,
+                    output_path.string() + ".single_source4.tmp"
+                )
+            );
+        }
+
+        std::unique_ptr<BCPositionStreamingReader> source2_reader =
+            open_position_reader(args, source2_view.layer, lut);
+        const uint32_t source2_cell_chunk_size =
+            single_route_cell_chunk_size(source2_reader->cell_count());
+        std::unique_ptr<BCPositionStreamingReader> source4_reader;
+        uint32_t source4_cell_chunk_size = source2_cell_chunk_size;
+        std::vector<BC::BCSingleChunkGenerationSource> sources;
+        sources.reserve(source4_view ? 2U : 1U);
+        if (source4_view) {
+            source4_reader = open_position_reader(args, source4_view->layer, lut);
+            source4_cell_chunk_size =
+                single_route_cell_chunk_size(source4_reader->cell_count());
+            sources.push_back(BC::BCSingleChunkGenerationSource{
+                source4_reader.get(),
+                2U,
+                2U,
+                source4_cell_chunk_size
+            });
+        }
+        sources.push_back(BC::BCSingleChunkGenerationSource{
+            source2_reader.get(),
+            1U,
+            1U,
+            source2_cell_chunk_size
+        });
+
+        BC::BCResidentGenerationOptions options = resident_options_from_args(
+            args,
+            tile_sums,
+            success_shifts,
+            success_check_min_source_layer_sum
+        );
+        options.keep_only_success_generated_boards = terminal;
+        cleanup_temp_file(output_path);
+        std::unique_ptr<BC::BCWritableFile> writer =
+            open_family_position_writer(args, output_path);
+        const double total_begin = now_seconds();
+        BC::BCResidentGenerationResult single =
+            BC::generate_single_chunk_position_layer_to_file(
+                lut,
+                target_layout,
+                sources,
+                *writer,
+                options
+            );
+        writer.reset();
+
+        FamilyLayerResult result;
+        result.logical_size = single.target_position_file_logical_bytes;
+        result.output_rows = single.output_success_rows;
+        result.effective_threads = single.effective_threads;
+        result.retries = single.generation_retries;
+        result.total_seconds = now_seconds() - total_begin;
+        result.target_modulus = 0U;
+        result.writer_stats.success_rows = single.output_success_rows;
+        result.writer_stats.backend_write_ops = single.target_position_write_backend_ops;
+        result.writer_stats.backend_write_bytes = single.target_position_write_backend_bytes;
+        result.writer_stats.backend_write_seconds = single.write_seconds;
+        result.writer_stats.logical_size = result.logical_size;
+        result.stats.parallel_seconds = single.generation_seconds;
+        result.stats.finalize_seconds = single.finalize_seconds;
+        result.stats.write_seconds = single.write_seconds;
+        result.stats.generation_seconds = result.total_seconds;
+        result.stats.target_cells_created = target_layout.cell_count();
+        result.stats.target_cells_finalized = target_layout.cell_count();
+        result.stats.family_builder_hash_grows = single.generation_retries;
+        result.stats.active_builder_bytes_peak =
+            single.dynamic_bitmap_words_allocated * static_cast<uint64_t>(sizeof(uint64_t));
+        result.stats.source_bytes_read =
+            (source2_view.layer.physical_size != 0U ? source2_view.layer.physical_size : source2_view.layer.logical_size) +
+            (source4_view
+                 ? (source4_view->layer.physical_size != 0U ? source4_view->layer.physical_size : source4_view->layer.logical_size)
+                 : 0U);
+        result.stats.source_backend_read_ops = source4_view ? 2U : 1U;
+        result.stats.source_backend_read_bytes = result.stats.source_bytes_read;
+        result.stats.source_load_seconds = single.source_position_load_seconds;
+        if (source2_view.temporary) {
+            cleanup_temp_file(source2_view.layer.path);
+        }
+        if (source4_view && source4_view->temporary) {
+            cleanup_temp_file(source4_view->layer.path);
+        }
+        return result;
     }
 
     std::unique_ptr<BCPositionStreamingReader> source2_reader =
@@ -1936,7 +2517,7 @@ int run_single_layer(const Args &args, std::ostream &out) {
 
     LayerFile generated_layer =
         args.output_inspect
-            ? inspect_layer_file(args.single_layer_sum, final_path, result.logical_size, lut)
+            ? inspect_layer_file(args, args.single_layer_sum, final_path, result.logical_size, lut)
             : layer_file_without_inspect(
                   args.single_layer_sum,
                   final_path,
@@ -2047,6 +2628,11 @@ Args parse_args(int argc, char **argv) {
             args.family_modulus = static_cast<uint32_t>(std::stoul(require_value("--family-modulus")));
         } else if (key == "--family-route") {
             args.family_route = BC::bc_parse_family_route(require_value("--family-route"));
+        } else if (key == "--singlechunk-mode") {
+            const std::string mode = require_value("--singlechunk-mode");
+            if (mode != "strict") {
+                throw std::invalid_argument("--singlechunk-mode only supports strict");
+            }
         } else if (key == "--family-route-script") {
             args.family_route_script = require_value("--family-route-script");
         } else if (key == "--target-direct-queue-depth") {
@@ -2056,10 +2642,12 @@ Args parse_args(int argc, char **argv) {
             args.verify_layer_rows = false;
         } else if (key == "--no-output-inspect") {
             args.output_inspect = false;
-        } else if (key == "--family-output") {
+        } else if (key == "--family-output" || key == "--generation-chain" ||
+                   key == "--planner" || key == "--target-output-io") {
             const std::string value = require_value(key.c_str());
-            if (value != "buffered") {
-                throw std::invalid_argument("--family-output only supports buffered in this slim benchmark");
+            if ((key == "--family-output" && value != "buffered") ||
+                (key == "--generation-chain" && value != "family")) {
+                throw std::invalid_argument(key + " only supports the family/buffered production path in this slim benchmark");
             }
         } else {
             throw std::invalid_argument("unknown argument: " + key);
@@ -2175,6 +2763,11 @@ int run_free_chain(const Args &args, std::ostream &out) {
     FamilyRoutePlannerState route_state;
     route_state.previous_modulus = args.family_modulus;
     route_state.previous_route = BC::BCFamilyGenerationRoute::Family;
+    std::unique_ptr<BC::BCResidentGenerationMutableLayer> resident_carry;
+    uint32_t resident_carry_layer_sum = 0U;
+    std::unique_ptr<BC::BCResidentGenerationMutableLayer> single_carry;
+    uint32_t single_carry_layer_sum = 0U;
+    std::map<uint32_t, std::shared_ptr<BC::BCPositionLayerReader>> resident_memory_layers;
     print_header(out);
 
     for (uint32_t layer_sum = seed_sum + 2U; layer_sum <= final_primary_sum; layer_sum += 2U) {
@@ -2201,13 +2794,6 @@ int run_free_chain(const Args &args, std::ostream &out) {
             source2_it->second,
             source4_layer
         );
-        if (terminal && route_decision.route == BC::BCFamilyGenerationRoute::Resident) {
-            route_decision.route = BC::BCFamilyGenerationRoute::Family;
-            route_decision.route_estimated_peak_bytes = route_decision.family_estimated_peak_bytes;
-            if (!BC::bc_family_route_is_supported_prime(route_decision.target_modulus)) {
-                route_decision.target_modulus = args.family_modulus;
-            }
-        }
         const BCFamilyTable target_axis =
             make_target_axis_for_route(
                 route_decision.route,
@@ -2218,25 +2804,192 @@ int run_free_chain(const Args &args, std::ostream &out) {
 
         const uint64_t input_live = source2_it->second.rows;
         const std::filesystem::path final_path = layer_path(args, seed_sum, layer_sum);
-        FamilyLayerResult result = generate_layer_to_file_for_route(
-            args,
-            lut,
-            route_decision.route,
-            target_axis,
-            source4_layer,
-            source2_it->second,
-            tile_sums,
-            possible_8tile_sums,
-            success_shifts,
-            success_check_min_source_layer_sum,
-            terminal,
-            final_path
-        );
+        FamilyLayerResult result;
+        if (route_decision.route == BC::BCFamilyGenerationRoute::Resident) {
+            single_carry.reset();
+            single_carry_layer_sum = 0U;
+            const bool secondary_terminal =
+                ex_terminal_mode && layer_sum + 2U == final_primary_sum;
+            const BCPositionCellLayout primary_layout =
+                make_resident_layout(layer_sum, possible_8tile_sums, route_decision.target_modulus);
+            const BCPositionCellLayout current_layout =
+                make_resident_layout(layer_sum - 2U, possible_8tile_sums, route_decision.target_modulus);
+            std::shared_ptr<BC::BCPositionLayerReader> current_memory_layer;
+            const auto current_memory_it = resident_memory_layers.find(layer_sum - 2U);
+            if (current_memory_it != resident_memory_layers.end() &&
+                current_layout.equivalent_to_axis(current_memory_it->second->axis())) {
+                current_memory_layer = current_memory_it->second;
+            }
+            MaterializedLayerView current_view;
+            const LayerFile *current_layer_for_generation = &source2_it->second;
+            if (!current_memory_layer) {
+                current_view = ensure_layer_cell_layout(
+                    args,
+                    lut,
+                    source2_it->second,
+                    current_layout,
+                    possible_8tile_sums,
+                    final_path.string() + ".resident_current.tmp"
+                );
+                current_layer_for_generation = &current_view.layer;
+            }
+            if ((!resident_carry || resident_carry_layer_sum != layer_sum) &&
+                source4_layer != nullptr) {
+                const BCPositionCellLayout source4_layout =
+                    make_resident_layout(layer_sum - 4U, possible_8tile_sums, route_decision.target_modulus);
+                MaterializedLayerView source4_view = ensure_layer_cell_layout(
+                    args,
+                    lut,
+                    *source4_layer,
+                    source4_layout,
+                    possible_8tile_sums,
+                    final_path.string() + ".resident_source4.tmp"
+                );
+                resident_carry = build_streaming_carry_to_primary(
+                    args,
+                    lut,
+                    primary_layout,
+                    source4_layout,
+                    source4_view.layer,
+                    *current_layer_for_generation,
+                    tile_sums,
+                    possible_8tile_sums,
+                    success_shifts,
+                    success_check_min_source_layer_sum,
+                    terminal
+                );
+                if (source4_view.temporary) {
+                    cleanup_temp_file(source4_view.layer.path);
+                }
+                resident_carry_layer_sum = layer_sum;
+            }
+            std::optional<BCPositionCellLayout> secondary_layout;
+            if (layer_sum + 2U <= final_primary_sum) {
+                secondary_layout.emplace(
+                    make_resident_layout(layer_sum + 2U, possible_8tile_sums, route_decision.target_modulus)
+                );
+            }
+            result = generate_resident_mutable_carry_layer_to_file(
+                args,
+                lut,
+                primary_layout,
+                current_layout,
+                secondary_layout ? &(*secondary_layout) : nullptr,
+                *current_layer_for_generation,
+                current_memory_layer.get(),
+                std::move(resident_carry),
+                tile_sums,
+                possible_8tile_sums,
+                success_shifts,
+                success_check_min_source_layer_sum,
+                terminal,
+                secondary_terminal,
+                final_path,
+                resident_carry,
+                resident_carry_layer_sum
+            );
+            if (!current_memory_layer && current_view.temporary) {
+                cleanup_temp_file(current_view.layer.path);
+            }
+        } else if (route_decision.route == BC::BCFamilyGenerationRoute::Single) {
+            resident_carry.reset();
+            resident_carry_layer_sum = 0U;
+            const bool secondary_terminal =
+                ex_terminal_mode && layer_sum + 2U == final_primary_sum;
+            const BCPositionCellLayout primary_layout =
+                make_resident_layout(layer_sum, possible_8tile_sums, route_decision.target_modulus);
+            const BCPositionCellLayout current_layout =
+                make_resident_layout(layer_sum - 2U, possible_8tile_sums, route_decision.target_modulus);
+            MaterializedLayerView current_view = ensure_layer_cell_layout(
+                args,
+                lut,
+                source2_it->second,
+                current_layout,
+                possible_8tile_sums,
+                final_path.string() + ".single_current.tmp"
+            );
+            if ((!single_carry || single_carry_layer_sum != layer_sum) &&
+                source4_layer != nullptr) {
+                const BCPositionCellLayout source4_layout =
+                    make_resident_layout(layer_sum - 4U, possible_8tile_sums, route_decision.target_modulus);
+                MaterializedLayerView source4_view = ensure_layer_cell_layout(
+                    args,
+                    lut,
+                    *source4_layer,
+                    source4_layout,
+                    possible_8tile_sums,
+                    final_path.string() + ".single_source4.tmp"
+                );
+                single_carry = build_streaming_carry_to_primary(
+                    args,
+                    lut,
+                    primary_layout,
+                    source4_layout,
+                    source4_view.layer,
+                    current_view.layer,
+                    tile_sums,
+                    possible_8tile_sums,
+                    success_shifts,
+                    success_check_min_source_layer_sum,
+                    terminal
+                );
+                if (source4_view.temporary) {
+                    cleanup_temp_file(source4_view.layer.path);
+                }
+                single_carry_layer_sum = layer_sum;
+            }
+            std::optional<BCPositionCellLayout> secondary_layout;
+            if (layer_sum + 2U <= final_primary_sum) {
+                secondary_layout.emplace(
+                    make_resident_layout(layer_sum + 2U, possible_8tile_sums, route_decision.target_modulus)
+                );
+            }
+            result = generate_single_chunk_strict_layer_to_file(
+                args,
+                lut,
+                primary_layout,
+                current_layout,
+                secondary_layout ? &(*secondary_layout) : nullptr,
+                current_view.layer,
+                std::move(single_carry),
+                tile_sums,
+                possible_8tile_sums,
+                success_shifts,
+                success_check_min_source_layer_sum,
+                terminal,
+                secondary_terminal,
+                final_path,
+                single_carry,
+                single_carry_layer_sum
+            );
+            if (current_view.temporary) {
+                cleanup_temp_file(current_view.layer.path);
+            }
+        } else {
+            resident_carry.reset();
+            resident_carry_layer_sum = 0U;
+            single_carry.reset();
+            single_carry_layer_sum = 0U;
+            result = generate_layer_to_file_for_route(
+                args,
+                lut,
+                route_decision.route,
+                target_axis,
+                source4_layer,
+                source2_it->second,
+                tile_sums,
+                possible_8tile_sums,
+                success_shifts,
+                success_check_min_source_layer_sum,
+                terminal,
+                final_path
+            );
+        }
         apply_route_decision_to_result(result, route_decision);
 
         LayerFile generated_layer =
             args.output_inspect
-                ? inspect_layer_file(layer_sum, final_path, result.logical_size, lut)
+                ? inspect_layer_file(args, layer_sum, final_path, result.logical_size, lut)
                 : layer_file_without_inspect(
                       layer_sum,
                       final_path,
@@ -2284,6 +3037,10 @@ int run_free_chain(const Args &args, std::ostream &out) {
             checkpoint_rows.layer_sum = layer_sum;
             checkpoint_rows.checkpoints = std::move(result.memory_checkpoints);
             memory_checkpoint_layers.push_back(std::move(checkpoint_rows));
+        }
+        resident_memory_layers.clear();
+        if (result.resident_memory_layer) {
+            resident_memory_layers[layer_sum] = result.resident_memory_layer;
         }
         layers[layer_sum] = std::move(generated_layer);
     }

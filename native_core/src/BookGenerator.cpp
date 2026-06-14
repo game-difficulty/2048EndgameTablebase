@@ -6,6 +6,7 @@
 #include "CompressionBridge.h"
 #include "FileIOUtils.h"
 #include "Formation.h"
+#include "NativeDiagnostics.h"
 #include "UniqueUtils.h"
 #include "VBoardMover.h"
 #include <immintrin.h>
@@ -1396,6 +1397,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             continue;
         }
         started = true;
+        NativeDiagnostics::mark(
+            "Classic.generate step begin step=" + std::to_string(i) +
+            " live=" + std::to_string(d0.size())
+        );
         FormationProgress::update_build_progress(static_cast<uint32_t>(i), progress_total);
         bool do_check = i > options.docheck_step;
         ClassicGenerateStatsRecord stats_record;
@@ -1421,6 +1426,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             stats_record.stage = use_simple_path
                 ? "simple"
                 : std::string("normal-") + (supports_avx512() ? "avx512" : "buffered-scalar");
+            NativeDiagnostics::mark(
+                "Classic.generate path step=" + std::to_string(i) +
+                " stage=" + stats_record.stage
+            );
             if (use_simple_path) {
                 debug_log("step " + std::to_string(i) + " path: simple");
                 std::tie(d1t, d2) = options.is_variant
@@ -1447,11 +1456,17 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
 
                 size_t min_length = options.is_free ? 9999999ULL : 6999999ULL;
                 size_t capacity = std::max(min_length, static_cast<size_t>(static_cast<double>(d0.size()) * length_factor));
+                NativeDiagnostics::mark(
+                    "Classic.generate allocate normal step=" + std::to_string(i) +
+                    " capacity=" + std::to_string(capacity)
+                );
                 arr1_ptr = std::make_unique<uint64_t[]>(capacity);
                 arr2_ptr = std::make_unique<uint64_t[]>(capacity);
+                NativeDiagnostics::mark("Classic.generate gen_boards begin step=" + std::to_string(i));
                 generated_result = options.is_variant
                     ? gen_boards<VBoardMover>(d0.data(), d0.size(), options.target, spec, hashmap1.data(), hashmap1.size(), hashmap2.data(), hashmap2.size(), arr1_ptr.get(), arr2_ptr.get(), capacity, num_threads, do_check, options.is_free)
                     : gen_boards<BoardMover>(d0.data(), d0.size(), options.target, spec, hashmap1.data(), hashmap1.size(), hashmap2.data(), hashmap2.size(), arr1_ptr.get(), arr2_ptr.get(), capacity, num_threads, do_check, options.is_free);
+                NativeDiagnostics::mark("Classic.generate gen_boards done step=" + std::to_string(i));
                 t1 = wall_time_seconds();
 
                 validate_length_and_balance(
@@ -1487,11 +1502,13 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                     : 5.0;
             }
 
+            NativeDiagnostics::mark("Classic.generate sort_unique begin step=" + std::to_string(i));
             auto [unique_d1t_length, unique_d2_length] = BookGeneratorUtils::sort_and_unique_two_arrays_concurrently(
                 sort_arr1, sort_len1,
                 sort_arr2, sort_len2,
                 num_threads
             );
+            NativeDiagnostics::mark("Classic.generate sort_unique done step=" + std::to_string(i));
             stats_record.arr1_raw = static_cast<uint64_t>(sort_len1);
             stats_record.arr2_raw = static_cast<uint64_t>(sort_len2);
             stats_record.arr1_unique = static_cast<uint64_t>(unique_d1t_length);
@@ -1514,7 +1531,9 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                 }
             }
             std::vector<std::vector<uint64_t>> d1_inputs = {std::move(d1), std::move(d1t)};
+            NativeDiagnostics::mark("Classic.generate merge begin step=" + std::to_string(i));
             d1 = BookGeneratorUtils::concatenate(BookGeneratorUtils::merge_deduplicate_all(d1_inputs, pivots, num_threads));
+            NativeDiagnostics::mark("Classic.generate merge done step=" + std::to_string(i));
             double t3 = wall_time_seconds();
             stats_record.output_live = static_cast<uint64_t>(d1.size());
             stats_record.generate_seconds = t1 - t0;
@@ -1528,6 +1547,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                 update_hashmap_length(hashmap2, d1.size());
             }
         } else {
+            NativeDiagnostics::mark(
+                "Classic.generate path step=" + std::to_string(i) +
+                " stage=big live=" + std::to_string(d0.size())
+            );
             debug_log("step " + std::to_string(i) + " path: big");
             stats_record.stage = "big";
             if (hashmap1.empty()) {
@@ -1575,6 +1598,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
         }
 
         const double validate_t0 = wall_time_seconds();
+        NativeDiagnostics::mark("Classic.generate write begin step=" + std::to_string(i));
         if (options.compress_temp_files) {
             stats_record.validate_seconds += wall_time_seconds() - validate_t0;
             const double write_t0 = wall_time_seconds();
@@ -1590,6 +1614,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             FileIOUtils::write_binary_vector_direct(options.pathname + std::to_string(i), d0, io_config);
             stats_record.write_seconds = wall_time_seconds() - write_t0;
         }
+        NativeDiagnostics::mark("Classic.generate write done step=" + std::to_string(i));
         if (has_stats_record) {
             append_classic_generate_stats_record(options, stats_record);
             total_record.input_live += stats_record.input_live;

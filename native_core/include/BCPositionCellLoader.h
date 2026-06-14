@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BCDirectFileIO.h"
 #include "BCFileIO.h"
 #include "BCPositionFile.h"
 
@@ -87,6 +88,28 @@ public:
         const BCLut &lut
     ) {
         return BCPositionStreamingReader(std::make_unique<BCBufferedFileReader>(path), lut);
+    }
+
+    static BCPositionStreamingReader open_direct_auto(
+        const std::filesystem::path &path,
+        const BCLut &lut,
+        uint32_t queue_depth = 8U,
+        bool overlapped = true
+    ) {
+        BCBufferedFileReader probe(path);
+        std::vector<uint8_t> header_bytes(kBCPositionHeaderBytes);
+        probe.read_at(0U, header_bytes.data(), header_bytes.size());
+        const BCPositionHeader header = bc_read_header(header_bytes);
+        const uint64_t logical_size = bc_position_logical_size_from_header(header);
+        BCDirectFileIOOptions options;
+        options.queue_depth = queue_depth;
+        options.overlapped = overlapped || queue_depth > 1U;
+        options.logical_size = logical_size;
+        const uint64_t required_physical = bc_direct_align_up(logical_size, options.alignment);
+        if (probe.size() >= required_physical) {
+            return BCPositionStreamingReader(std::make_unique<BCDirectFileReader>(path, options), lut);
+        }
+        return open_buffered(path, lut);
     }
 
     void open(std::unique_ptr<BCReadableFile> file, const BCLut &lut) {

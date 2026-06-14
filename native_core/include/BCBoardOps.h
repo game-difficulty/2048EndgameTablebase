@@ -253,11 +253,29 @@ struct BCBoardEncodedPosition {
     }
 
     const uint32_t family_count = axis.family_count();
-    const FamilyId row_id = axis.try_coord_to_id(row_coord);
-    const FamilyId col_id = axis.try_coord_to_id(col_coord);
-    if (row_id == BCFamilyTable::kInvalidFamilyId ||
-        col_id == BCFamilyTable::kInvalidFamilyId) {
-        return out;
+    FamilyId row_id = BCFamilyTable::kInvalidFamilyId;
+    FamilyId col_id = BCFamilyTable::kInvalidFamilyId;
+    if (axis.is_contiguous_range()) {
+        const uint32_t axis_base = axis.axis_base_coord();
+        const uint32_t row_coord_u32 = row_coord;
+        const uint32_t col_coord_u32 = col_coord;
+        if (row_coord_u32 < axis_base || col_coord_u32 < axis_base) {
+            return out;
+        }
+        const uint32_t row_offset = row_coord_u32 - axis_base;
+        const uint32_t col_offset = col_coord_u32 - axis_base;
+        if (row_offset >= family_count || col_offset >= family_count) {
+            return out;
+        }
+        row_id = static_cast<FamilyId>(row_offset);
+        col_id = static_cast<FamilyId>(col_offset);
+    } else {
+        row_id = axis.try_coord_to_id(row_coord);
+        col_id = axis.try_coord_to_id(col_coord);
+        if (row_id == BCFamilyTable::kInvalidFamilyId ||
+            col_id == BCFamilyTable::kInvalidFamilyId) {
+            return out;
+        }
     }
 
     const BCEncodedKeyRank encoded =

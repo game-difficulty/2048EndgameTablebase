@@ -4,8 +4,10 @@
 #include <cstdint>
 #include <cstring>
 #include <numeric>
+#include <string>
 #include <vector>
 
+#include "NativeDiagnostics.h"
 #include "UniqueUtils.h"
 
 extern "C" void xss_avx2_keyvalue_sort_uint64_uint32(
@@ -128,18 +130,38 @@ void simd_keyvalue_sort_uint64_uint32(uint64_t *keys, uint32_t *values, size_t c
 } // namespace
 
 SORT_WRAPPER_EXPORT void sort_uint32(uint32_t *arr, size_t arrsize, bool descending) {
+    NativeDiagnostics::install_crash_handler("bookgen_native");
+    NativeDiagnostics::Scope scope(
+        "bookgen_native.sort_uint32 len=" + std::to_string(arrsize) +
+        " descending=" + (descending ? "1" : "0")
+    );
     simd_sort(arr, arrsize, descending);
 }
 
 SORT_WRAPPER_EXPORT void sort_uint64(uint64_t *arr, size_t arrsize, bool descending) {
+    NativeDiagnostics::install_crash_handler("bookgen_native");
+    NativeDiagnostics::Scope scope(
+        "bookgen_native.sort_uint64 len=" + std::to_string(arrsize) +
+        " descending=" + (descending ? "1" : "0")
+    );
     simd_sort(arr, arrsize, descending);
 }
 
 SORT_WRAPPER_EXPORT void argsort_uint32(const uint32_t *arr, size_t arrsize, size_t *indices, bool descending) {
+    NativeDiagnostics::install_crash_handler("bookgen_native");
+    NativeDiagnostics::Scope scope(
+        "bookgen_native.argsort_uint32 len=" + std::to_string(arrsize) +
+        " descending=" + (descending ? "1" : "0")
+    );
     simd_argsort(arr, arrsize, indices, descending);
 }
 
 SORT_WRAPPER_EXPORT void argsort_uint64(const uint64_t *arr, size_t arrsize, size_t *indices, bool descending) {
+    NativeDiagnostics::install_crash_handler("bookgen_native");
+    NativeDiagnostics::Scope scope(
+        "bookgen_native.argsort_uint64 len=" + std::to_string(arrsize) +
+        " descending=" + (descending ? "1" : "0")
+    );
     simd_argsort(arr, arrsize, indices, descending);
 }
 
@@ -149,5 +171,10 @@ SORT_WRAPPER_EXPORT void keyvalue_sort_uint64_uint32(
     size_t count,
     bool descending
 ) {
+    NativeDiagnostics::install_crash_handler("bookgen_native");
+    NativeDiagnostics::Scope scope(
+        "bookgen_native.keyvalue_sort_uint64_uint32 len=" + std::to_string(count) +
+        " descending=" + (descending ? "1" : "0")
+    );
     simd_keyvalue_sort_uint64_uint32(keys, values, count, descending);
 }

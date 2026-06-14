@@ -1,13 +1,16 @@
 #include "BookGeneratorUtils.h"
 #include "HybridSearch.h"
+#include "NativeDiagnostics.h"
 #include "UniqueUtils.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <filesystem>
 #include <functional>
 #include <numeric>
 #include <omp.h>
+#include <string>
 #include <thread>
 #include <type_traits>
 
@@ -72,17 +75,80 @@ namespace BookGeneratorUtils {
 
     SortFn resolve_sort_uint64() {
         static SortFn fn = []() -> SortFn {
+            NativeDiagnostics::mark("BookGeneratorUtils.resolve_sort_uint64 begin");
+            try {
+#ifdef _WIN32
+                for (const auto &candidate : bookgen_dll_candidates()) {
+                    const std::string candidate_string = candidate.string();
+                    NativeDiagnostics::mark("BookGeneratorUtils.resolve_sort_uint64 candidate=" + candidate_string);
+                    if (!fs::exists(candidate)) {
+                        NativeDiagnostics::mark("BookGeneratorUtils.resolve_sort_uint64 missing path=" + candidate_string);
+                        continue;
+                    }
+                    SetEnvironmentVariableA("XSS_DISABLE_AVX512", "1");
+                    NativeDiagnostics::mark("BookGeneratorUtils.resolve_sort_uint64 forced XSS_DISABLE_AVX512=1");
+                    NativeDiagnostics::mark("BookGeneratorUtils.resolve_sort_uint64 LoadLibrary begin path=" + candidate_string);
+                    HMODULE lib = LoadLibraryA(candidate_string.c_str());
+                    NativeDiagnostics::mark("BookGeneratorUtils.resolve_sort_uint64 LoadLibrary done path=" + candidate_string);
+                    if (!lib) {
+                        NativeDiagnostics::mark(
+                            "BookGeneratorUtils.resolve_sort_uint64 LoadLibrary failed path=" + candidate_string +
+                            " error=" + std::to_string(static_cast<unsigned long>(GetLastError()))
+                        );
+                        continue;
+                    }
+                    auto proc = reinterpret_cast<SortFn>(GetProcAddress(lib, "sort_uint64"));
+                    if (proc) {
+                        NativeDiagnostics::mark("BookGeneratorUtils.resolve_sort_uint64 found path=" + candidate_string);
+                        return proc;
+                    }
+                    NativeDiagnostics::mark("BookGeneratorUtils.resolve_sort_uint64 symbol missing path=" + candidate_string);
+                }
+                return nullptr;
+#else
+                void *lib = dlopen("bookgen_native.so", RTLD_LAZY);
+                if (!lib) {
+                    lib = dlopen("native_core/bookgen_native.so", RTLD_LAZY);
+                }
+                return lib ? reinterpret_cast<SortFn>(dlsym(lib, "sort_uint64")) : nullptr;
+#endif
+            } catch (const std::exception &ex) {
+                NativeDiagnostics::mark(
+                    std::string("BookGeneratorUtils.resolve_sort_uint64 exception; fallback what=") + ex.what()
+                );
+                return nullptr;
+            } catch (...) {
+                NativeDiagnostics::mark("BookGeneratorUtils.resolve_sort_uint64 unknown exception; fallback");
+                return nullptr;
+            }
+        }();
+        return fn;
+    }
+
+    template <typename Fn> Fn resolve_bookgen_symbol(const char *symbol_name) {
+        static_assert(std::is_pointer_v<Fn>, "Fn must be a function pointer");
+        try {
 #ifdef _WIN32
             for (const auto &candidate : bookgen_dll_candidates()) {
+                const std::string candidate_string = candidate.string();
+                NativeDiagnostics::mark(std::string("BookGeneratorUtils.resolve ") + symbol_name + " candidate=" + candidate_string);
                 if (!fs::exists(candidate)) {
                     continue;
                 }
-                HMODULE lib = LoadLibraryA(candidate.string().c_str());
+                NativeDiagnostics::mark(std::string("BookGeneratorUtils.resolve ") + symbol_name + " LoadLibrary begin path=" + candidate_string);
+                HMODULE lib = LoadLibraryA(candidate_string.c_str());
+                NativeDiagnostics::mark(std::string("BookGeneratorUtils.resolve ") + symbol_name + " LoadLibrary done path=" + candidate_string);
                 if (!lib) {
+                    NativeDiagnostics::mark(
+                        std::string("BookGeneratorUtils.resolve ") + symbol_name + " LoadLibrary failed path=" +
+                        candidate_string + " error=" +
+                        std::to_string(static_cast<unsigned long>(GetLastError()))
+                    );
                     continue;
                 }
-                auto proc = reinterpret_cast<SortFn>(GetProcAddress(lib, "sort_uint64"));
+                auto proc = reinterpret_cast<Fn>(GetProcAddress(lib, symbol_name));
                 if (proc) {
+                    NativeDiagnostics::mark(std::string("BookGeneratorUtils.resolve ") + symbol_name + " found path=" + candidate_string);
                     return proc;
                 }
             }
@@ -92,36 +158,17 @@ namespace BookGeneratorUtils {
             if (!lib) {
                 lib = dlopen("native_core/bookgen_native.so", RTLD_LAZY);
             }
-            return lib ? reinterpret_cast<SortFn>(dlsym(lib, "sort_uint64")) : nullptr;
+            return lib ? reinterpret_cast<Fn>(dlsym(lib, symbol_name)) : nullptr;
 #endif
-        }();
-        return fn;
-    }
-
-    template <typename Fn> Fn resolve_bookgen_symbol(const char *symbol_name) {
-        static_assert(std::is_pointer_v<Fn>, "Fn must be a function pointer");
-#ifdef _WIN32
-        for (const auto &candidate : bookgen_dll_candidates()) {
-            if (!fs::exists(candidate)) {
-                continue;
-            }
-            HMODULE lib = LoadLibraryA(candidate.string().c_str());
-            if (!lib) {
-                continue;
-            }
-            auto proc = reinterpret_cast<Fn>(GetProcAddress(lib, symbol_name));
-            if (proc) {
-                return proc;
-            }
+        } catch (const std::exception &ex) {
+            NativeDiagnostics::mark(
+                std::string("BookGeneratorUtils.resolve ") + symbol_name + " exception; fallback what=" + ex.what()
+            );
+            return nullptr;
+        } catch (...) {
+            NativeDiagnostics::mark(std::string("BookGeneratorUtils.resolve ") + symbol_name + " unknown exception; fallback");
+            return nullptr;
         }
-        return nullptr;
-#else
-        void *lib = dlopen("bookgen_native.so", RTLD_LAZY);
-        if (!lib) {
-            lib = dlopen("native_core/bookgen_native.so", RTLD_LAZY);
-        }
-        return lib ? reinterpret_cast<Fn>(dlsym(lib, symbol_name)) : nullptr;
-#endif
     }
 
     MergeTwoPartitionedFn resolve_merge_two_partitioned_u64_dedup() {
@@ -149,12 +196,15 @@ namespace BookGeneratorUtils {
     void sort_array(uint64_t* arr, size_t length, int num_threads) {
         (void) num_threads;
         if (length < 10000) {
+            NativeDiagnostics::Scope scope("BookGeneratorUtils.sort_array fallback len=" + std::to_string(length));
             std::sort(arr, arr + length);
         } else {
             // 调用 DLL 导出的 C 接口
             if (auto fn = resolve_sort_uint64()) {
+                NativeDiagnostics::Scope scope("BookGeneratorUtils.sort_array external len=" + std::to_string(length));
                 fn(arr, length, false);
             } else {
+                NativeDiagnostics::Scope scope("BookGeneratorUtils.sort_array fallback-no-dll len=" + std::to_string(length));
                 std::sort(arr, arr + length);
             }
         }
@@ -170,9 +220,17 @@ namespace BookGeneratorUtils {
             return;
         }
         if (auto fn = resolve_keyvalue_sort_uint64_uint32(); fn != nullptr && length >= 10000) {
+            NativeDiagnostics::Scope scope(
+                "BookGeneratorUtils.sort_keyvalue external len=" + std::to_string(length) +
+                " descending=" + (descending ? "1" : "0")
+            );
             fn(keys, values, length, descending);
             return;
         }
+        NativeDiagnostics::Scope scope(
+            "BookGeneratorUtils.sort_keyvalue fallback len=" + std::to_string(length) +
+            " descending=" + (descending ? "1" : "0")
+        );
         std::vector<size_t> order(length);
         std::iota(order.begin(), order.end(), size_t {0});
         if (descending) {
@@ -212,24 +270,56 @@ namespace BookGeneratorUtils {
         int concurrent_threads_per_sort,
         size_t min_length
     ) {
+        NativeDiagnostics::mark(
+            "BookGeneratorUtils.sort_unique entry len1=" + std::to_string(len1) +
+            " len2=" + std::to_string(len2) +
+            " total_threads=" + std::to_string(total_threads) +
+            " concurrent_threads_per_sort=" + std::to_string(concurrent_threads_per_sort) +
+            " min_length=" + std::to_string(min_length)
+        );
+
+        auto sequential = [&]() -> std::pair<size_t, size_t> {
+            NativeDiagnostics::mark(
+                "BookGeneratorUtils.sort_unique sequential begin len1=" + std::to_string(len1) +
+                " len2=" + std::to_string(len2)
+            );
+            sort_array(arr1, len1, total_threads);
+            sort_array(arr2, len2, total_threads);
+            auto result = std::pair<size_t, size_t>{
+                parallel_unique(arr1, len1, total_threads),
+                parallel_unique(arr2, len2, total_threads)
+            };
+            NativeDiagnostics::mark(
+                "BookGeneratorUtils.sort_unique sequential done unique1=" + std::to_string(result.first) +
+                " unique2=" + std::to_string(result.second)
+            );
+            return result;
+        };
+
+        const char *enable_concurrent_sort = std::getenv("TABLEBASE_ENABLE_CONCURRENT_SORT");
+        if (enable_concurrent_sort == nullptr || std::strcmp(enable_concurrent_sort, "1") != 0) {
+            NativeDiagnostics::mark("BookGeneratorUtils.sort_unique concurrent disabled; using sequential");
+            return sequential();
+        }
+
         if (concurrent_threads_per_sort <= 0 ||
             total_threads < concurrent_threads_per_sort * 2 ||
             len1 == 0 ||
             len2 == 0 ||
             len1 < min_length ||
             len2 < min_length) {
-            sort_array(arr1, len1, total_threads);
-            sort_array(arr2, len2, total_threads);
-            return {
-                parallel_unique(arr1, len1, total_threads),
-                parallel_unique(arr2, len2, total_threads)
-            };
+            return sequential();
         }
 
         size_t unique1 = len1;
         size_t unique2 = len2;
         std::exception_ptr error1;
         std::exception_ptr error2;
+
+        NativeDiagnostics::mark(
+            "BookGeneratorUtils.sort_unique concurrent begin len1=" + std::to_string(len1) +
+            " len2=" + std::to_string(len2)
+        );
 
         auto worker = [concurrent_threads_per_sort](uint64_t *arr, size_t len, size_t &unique_len, std::exception_ptr &error) {
             try {
@@ -242,16 +332,77 @@ namespace BookGeneratorUtils {
             }
         };
 
-        std::thread t1(worker, arr1, len1, std::ref(unique1), std::ref(error1));
-        std::thread t2(worker, arr2, len2, std::ref(unique2), std::ref(error2));
-        t1.join();
-        t2.join();
+        std::thread t1;
+        std::thread t2;
+        try {
+            t1 = std::thread(worker, arr1, len1, std::ref(unique1), std::ref(error1));
+            t2 = std::thread(worker, arr2, len2, std::ref(unique2), std::ref(error2));
+            t1.join();
+            t2.join();
+        } catch (const std::exception &ex) {
+            NativeDiagnostics::mark(
+                "BookGeneratorUtils.concurrent_sort thread setup failed; fallback sequential len1=" +
+                std::to_string(len1) +
+                " len2=" + std::to_string(len2) +
+                " what=" + ex.what()
+            );
+            if (t1.joinable()) {
+                t1.join();
+            }
+            if (t2.joinable()) {
+                t2.join();
+            }
+            return sequential();
+        } catch (...) {
+            NativeDiagnostics::mark(
+                "BookGeneratorUtils.concurrent_sort thread setup failed; fallback sequential len1=" +
+                std::to_string(len1) +
+                " len2=" + std::to_string(len2)
+            );
+            if (t1.joinable()) {
+                t1.join();
+            }
+            if (t2.joinable()) {
+                t2.join();
+            }
+            return sequential();
+        }
 
         if (error1) {
-            std::rethrow_exception(error1);
+            try {
+                std::rethrow_exception(error1);
+            } catch (const std::exception &ex) {
+                NativeDiagnostics::mark(
+                    "BookGeneratorUtils.concurrent_sort worker1 failed; fallback sequential len=" +
+                    std::to_string(len1) +
+                    " what=" + ex.what()
+                );
+                return sequential();
+            } catch (...) {
+                NativeDiagnostics::mark(
+                    "BookGeneratorUtils.concurrent_sort worker1 failed; fallback sequential len=" +
+                    std::to_string(len1)
+                );
+                return sequential();
+            }
         }
         if (error2) {
-            std::rethrow_exception(error2);
+            try {
+                std::rethrow_exception(error2);
+            } catch (const std::exception &ex) {
+                NativeDiagnostics::mark(
+                    "BookGeneratorUtils.concurrent_sort worker2 failed; fallback sequential len=" +
+                    std::to_string(len2) +
+                    " what=" + ex.what()
+                );
+                return sequential();
+            } catch (...) {
+                NativeDiagnostics::mark(
+                    "BookGeneratorUtils.concurrent_sort worker2 failed; fallback sequential len=" +
+                    std::to_string(len2)
+                );
+                return sequential();
+            }
         }
 
         return {unique1, unique2};
@@ -394,6 +545,10 @@ namespace BookGeneratorUtils {
 
         if (arrays.size() == 2) {
             if (auto fn = resolve_merge_two_partitioned_u64_dedup()) {
+                NativeDiagnostics::Scope scope(
+                    "BookGeneratorUtils.merge_two external total=" + std::to_string(total_length) +
+                    " threads=" + std::to_string(n_threads)
+                );
                 std::vector<uint64_t> result(total_length);
                 std::vector<size_t> offsets(static_cast<size_t>(n_threads) + 1U, 0U);
                 std::vector<size_t> sizes(static_cast<size_t>(n_threads), 0U);
@@ -412,6 +567,11 @@ namespace BookGeneratorUtils {
                 return result;
             }
         } else if (auto fn = resolve_merge_tree_partitioned_u64_dedup()) {
+            NativeDiagnostics::Scope scope(
+                "BookGeneratorUtils.merge_tree external arrays=" + std::to_string(arrays.size()) +
+                " total=" + std::to_string(total_length) +
+                " threads=" + std::to_string(n_threads)
+            );
             std::vector<const uint64_t *> ptrs(arrays.size(), nullptr);
             std::vector<size_t> lengths(arrays.size(), 0U);
             for (size_t i = 0; i < arrays.size(); ++i) {

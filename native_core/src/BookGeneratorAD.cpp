@@ -10,6 +10,7 @@
 #include "FileIOUtils.h"
 #include "Formation.h"
 #include "HybridSearch.h"
+#include "NativeDiagnostics.h"
 #include "UniqueUtils.h"
 
 #include <algorithm>
@@ -1654,6 +1655,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
         if (!restart.d1.empty()) {
             d1 = std::move(restart.d1);
         }
+        NativeDiagnostics::mark(
+            "AD.generate step begin step=" + std::to_string(i) +
+            " live=" + std::to_string(d0.size())
+        );
         FormationProgress::update_build_progress(static_cast<uint32_t>(i), progress_total);
 
         uint32_t board_sum = static_cast<uint32_t>(2 * i + ini_board_sum - 2);
@@ -1673,10 +1678,15 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
             stats_record.stage = "normal";
             stats_record.length_factor =
                 effective_length_factor_for_capacity(d0.size(), length_factor, capacity_floor);
+            NativeDiagnostics::mark(
+                "AD.generate path step=" + std::to_string(i) +
+                " stage=normal length_factor=" + std::to_string(stats_record.length_factor)
+            );
             if (hashmap1.empty()) {
                 BookGenerator::update_hashmap_length(hashmap1, d0.size());
                 BookGenerator::update_hashmap_length(hashmap2, d0.size());
             }
+            NativeDiagnostics::mark("AD.generate gen_boards_ad begin step=" + std::to_string(i));
             GenBoardsAdResult result = gen_boards_ad(
                 {d0.data(), d0.size()},
                 spec,
@@ -1690,6 +1700,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
                 capacity_floor,
                 options.is_free
             );
+            NativeDiagnostics::mark("AD.generate gen_boards_ad done step=" + std::to_string(i));
             validate_length_and_balance(
                 d0.size(),
                 result.total_arr2,
@@ -1718,6 +1729,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
                 : 1.0;
             uint64_t *result_arr1 = result.finalized_arr1.get();
             uint64_t *result_arr2 = result.finalized_arr2.get();
+            NativeDiagnostics::mark("AD.generate sort_unique begin step=" + std::to_string(i));
             auto [unique_arr1_length, unique_arr2_length] = BookGeneratorUtils::sort_and_unique_two_arrays_concurrently(
                 result_arr1,
                 result.total_arr1,
@@ -1725,6 +1737,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
                 result.total_arr2,
                 n
             );
+            NativeDiagnostics::mark("AD.generate sort_unique done step=" + std::to_string(i));
             stats_record.arr1_raw = static_cast<uint64_t>(result.total_arr1);
             stats_record.arr2_raw = static_cast<uint64_t>(result.total_arr2);
             stats_record.arr1_unique = static_cast<uint64_t>(unique_arr1_length);
@@ -1741,7 +1754,9 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
                 }
             }
             std::vector<std::vector<uint64_t>> d1_inputs = {std::move(d1), std::move(next_d1t)};
+            NativeDiagnostics::mark("AD.generate merge begin step=" + std::to_string(i));
             d1 = BookGeneratorUtils::merge_deduplicate_all_concat(d1_inputs, pivots, n);
+            NativeDiagnostics::mark("AD.generate merge done step=" + std::to_string(i));
             d0 = std::move(d1);
             d1 = std::move(next_d2);
             double t3 = wall_time_seconds();
@@ -1756,6 +1771,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
                 BookGenerator::update_hashmap_length(hashmap2, d1.size());
             }
         } else {
+            NativeDiagnostics::mark(
+                "AD.generate path step=" + std::to_string(i) +
+                " stage=big live=" + std::to_string(d0.size())
+            );
             if (hashmap1.empty()) {
                 size_t capacity = BookGeneratorUtils::largest_power_of_2(
                     static_cast<uint64_t>(20971520ULL * std::max(1.0, std::round(BookGenerator::get_system_memory_gb()) * 0.75))
@@ -1816,7 +1835,9 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
 
         clear_u64_buffer(hashmap1, n);
         const double write_t0 = wall_time_seconds();
+        NativeDiagnostics::mark("AD.generate write begin step=" + std::to_string(i));
         write_raw_file(options.pathname + std::to_string(i), d0, io_config, options.compress_temp_files);
+        NativeDiagnostics::mark("AD.generate write done step=" + std::to_string(i));
         stats_record.write_seconds = wall_time_seconds() - write_t0;
         if (has_stats_record) {
             append_ad_generate_stats_record(options, stats_record);

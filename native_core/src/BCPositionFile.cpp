@@ -1,5 +1,6 @@
 #include "BCPositionFile.h"
 
+#include "BCDirectFileIO.h"
 #include "BCFileIO.h"
 
 #include <array>
@@ -254,7 +255,7 @@ uint64_t write_position_payloads_to_file(
     if (stats != nullptr) {
         *stats = {};
     }
-    file.resize(logical_size);
+    file.prepare_full_overwrite(logical_size);
     BCSequentialPositionWriteStager stager(file, stats);
     stager.append(header_bytes.data(), static_cast<uint64_t>(header_bytes.size()));
     stager.append(axis_coord_table.data(), static_cast<uint64_t>(axis_coord_table.size()));
@@ -336,6 +337,28 @@ BCPositionFileReader BCPositionFileReader::open_buffered(
     const std::filesystem::path &path,
     const BCLut &lut
 ) {
+    return BCPositionFileReader(std::make_unique<BCBufferedFileReader>(path), lut);
+}
+
+BCPositionFileReader BCPositionFileReader::open_direct_auto(
+    const std::filesystem::path &path,
+    const BCLut &lut,
+    uint32_t queue_depth,
+    bool overlapped
+) {
+    BCBufferedFileReader probe(path);
+    std::vector<uint8_t> header_bytes(kBCPositionHeaderBytes);
+    probe.read_at(0U, header_bytes.data(), header_bytes.size());
+    const BCPositionHeader header = bc_read_header(header_bytes);
+    const uint64_t logical_size = bc_position_logical_size_from_header(header);
+    BCDirectFileIOOptions options;
+    options.queue_depth = queue_depth;
+    options.overlapped = overlapped || queue_depth > 1U;
+    options.logical_size = logical_size;
+    const uint64_t required_physical = bc_direct_align_up(logical_size, options.alignment);
+    if (probe.size() >= required_physical) {
+        return BCPositionFileReader(std::make_unique<BCDirectFileReader>(path, options), lut);
+    }
     return BCPositionFileReader(std::make_unique<BCBufferedFileReader>(path), lut);
 }
 

@@ -1590,6 +1590,7 @@ public:
             throw std::invalid_argument("BC mutable finalize dump bitmap word accounting mismatch");
         }
         const bool use_keyvalue_sort =
+            bc_finalize_keyvalue_sort_allowed() &&
             options.keyvalue_sort != nullptr &&
             scratch.dump_sorted.size() >= options.simd_sort_min_bucket_count;
         if (use_keyvalue_sort) {
@@ -3205,6 +3206,7 @@ private:
         g_bc_cell_finalize_debug_stage.store(2U, std::memory_order_relaxed);
 
         const bool use_keyvalue_sort =
+            bc_finalize_keyvalue_sort_allowed() &&
             options.keyvalue_sort != nullptr &&
             sorted.size() >= options.simd_sort_min_bucket_count;
         if (use_keyvalue_sort) {
@@ -3334,6 +3336,7 @@ private:
         BCCellFinalizeOptions options
     ) {
         const bool use_keyvalue_sort =
+            bc_finalize_keyvalue_sort_allowed() &&
             options.keyvalue_sort != nullptr &&
             scratch.dump_sorted.size() >= options.simd_sort_min_bucket_count;
         if (use_keyvalue_sort) {

@@ -161,6 +161,7 @@ set(FORMATION_CORE_SOURCES
     src/EXADIO.cpp
     src/EXADCompressedResult.cpp
     src/EXADBuilder.cpp
+    src/BCBacksolve.cpp
     src/BookGeneratorEXAD.cpp
     src/BookSolverEXAD.cpp
     src/BoardMaskerAD.cpp
@@ -187,10 +188,14 @@ set(BC_SUCCESS_IO_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_suc
 set(BC_POSITION_SCANNER_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_position_scanner.cpp")
 set(BC_BOARD_CODEC_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_board_codec.cpp")
 set(BC_BOARD_OPS_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_board_ops.cpp")
+set(BC_BACKSOLVE_RESIDENT_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_backsolve_resident.cpp")
 set(BC_FAMILY_GENERATION_STATE_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_family_generation_state.cpp")
 set(BC_RESIDENT_GENERATION_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_resident_generation.cpp")
 set(BC_FILE_IO_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_file_io.cpp")
 set(BC_FAMILY_GENERATION_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_family_generation.cpp")
+set(BC_RESIDENT_GENERATION_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_resident_generation.cpp")
+set(BC_SINGLE_CHUNK_GENERATION_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_single_chunk_generation.cpp")
+set(BC_BACKSOLVE_RESIDENT_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_backsolve_resident.cpp")
 set(BC_FAMILY_LAYER_DIFF_TOOL_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/tool_bc_family_layer_diff.cpp")
 
 if(NATIVE_BUILD_TESTS)
@@ -207,10 +212,14 @@ if(NATIVE_BUILD_TESTS)
         "${BC_POSITION_SCANNER_TEST_SOURCE}"
         "${BC_BOARD_CODEC_TEST_SOURCE}"
         "${BC_BOARD_OPS_TEST_SOURCE}"
+        "${BC_BACKSOLVE_RESIDENT_TEST_SOURCE}"
         "${BC_FAMILY_GENERATION_STATE_TEST_SOURCE}"
         "${BC_RESIDENT_GENERATION_TEST_SOURCE}"
         "${BC_FILE_IO_TEST_SOURCE}"
         "${BC_FAMILY_GENERATION_BENCH_SOURCE}"
+        "${BC_RESIDENT_GENERATION_BENCH_SOURCE}"
+        "${BC_SINGLE_CHUNK_GENERATION_BENCH_SOURCE}"
+        "${BC_BACKSOLVE_RESIDENT_BENCH_SOURCE}"
         "${BC_FAMILY_LAYER_DIFF_TOOL_SOURCE}"
     )
         if(NOT EXISTS "${_bc_required_test_source}")
@@ -286,9 +295,19 @@ if(NATIVE_BUILD_TESTS)
     )
     target_link_libraries(bc_board_ops_test PRIVATE common_config)
 
+    add_executable(bc_backsolve_resident_test
+        src/BCPositionFile.cpp
+        src/BCBacksolve.cpp
+        src/CanonicalBatch.cpp
+        tests_src/test_bc_backsolve_resident.cpp
+    )
+    target_link_libraries(bc_backsolve_resident_test PRIVATE common_config OpenMP::OpenMP_CXX)
+
     add_executable(bc_family_generation_state_test
         src/BCPositionFile.cpp
         src/BCFamilyGeneration.cpp
+        src/BCResidentGeneration.cpp
+        src/BCResidentGenerationStreaming.cpp
         src/CanonicalBatch.cpp
         tests_src/test_bc_family_generation_state.cpp
     )
@@ -312,6 +331,8 @@ if(NATIVE_BUILD_TESTS)
         src/BCPositionFile.cpp
         src/BCFamilyGeneration.cpp
         src/BCResidentGeneration.cpp
+        src/BCResidentGenerationStreaming.cpp
+        src/BCSingleChunkGeneration.cpp
         src/CanonicalBatch.cpp
         tests_src/bench_bc_family_generation.cpp
     )
@@ -319,6 +340,40 @@ if(NATIVE_BUILD_TESTS)
     if(WIN32)
         target_link_libraries(bc_family_generation_bench PRIVATE psapi)
     endif()
+
+    add_executable(bc_resident_generation_bench
+        src/BCPositionFile.cpp
+        src/BCResidentGeneration.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_resident_generation.cpp
+    )
+    target_link_libraries(bc_resident_generation_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_generation_compute_bench
+        src/BCPositionFile.cpp
+        src/BCResidentGeneration.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_generation_compute.cpp
+    )
+    target_link_libraries(bc_generation_compute_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_single_chunk_generation_bench
+        src/BCPositionFile.cpp
+        src/BCResidentGeneration.cpp
+        src/BCResidentGenerationStreaming.cpp
+        src/BCSingleChunkGeneration.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_single_chunk_generation.cpp
+    )
+    target_link_libraries(bc_single_chunk_generation_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_backsolve_resident_bench
+        src/BCPositionFile.cpp
+        src/BCBacksolve.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_backsolve_resident.cpp
+    )
+    target_link_libraries(bc_backsolve_resident_bench PRIVATE common_config OpenMP::OpenMP_CXX)
 
     add_executable(bc_family_layer_diff_tool
         src/BCPositionFile.cpp

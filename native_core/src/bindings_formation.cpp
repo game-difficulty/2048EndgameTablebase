@@ -10,6 +10,7 @@
 #include "BookSolver.h"
 #include "EXADCompressedResult.h"
 #include "EXCompressedResult.h"
+#include "NativeDiagnostics.h"
 #include "ReaderRuntime.h"
 #include "SymmetryUtils.h"
 #include "TrieCompression.h"
@@ -112,6 +113,9 @@ nb::dict exad_cold_lookup_to_python(const EXADCompressedResult::ColdLookupResult
 } // namespace
 
 NB_MODULE(formation_core, m) {
+    NativeDiagnostics::install_crash_handler("formation_core");
+    NativeDiagnostics::mark("formation_core diagnostic build sort-uint64-avx512-disabled-v5");
+
     nb::enum_<SymmMode>(m, "SymmMode")
         .value("Identity", SymmMode::Identity)
         .value("Full", SymmMode::Full)
@@ -348,6 +352,7 @@ NB_MODULE(formation_core, m) {
     m.def(
         "run_pattern_build",
         [](const U64Array &arr_init, const PatternSpec &spec, const RunOptions &options) {
+            NativeDiagnostics::Scope scope("formation_core.run_pattern_build pattern=" + spec.name);
             run_pattern_build_cpp(to_u64_vector(arr_init), spec, options);
         },
         "arr_init"_a,
@@ -359,6 +364,7 @@ NB_MODULE(formation_core, m) {
     m.def(
         "run_pattern_build_ad",
         [](const U64Array &arr_init, const AdvancedPatternSpec &spec, const RunOptions &options) {
+            NativeDiagnostics::Scope scope("formation_core.run_pattern_build_ad pattern=" + spec.name);
             run_pattern_build_ad_cpp(to_u64_vector(arr_init), spec, options);
         },
         "arr_init"_a,
@@ -370,6 +376,7 @@ NB_MODULE(formation_core, m) {
     m.def(
         "run_pattern_build_exad",
         [](const U64Array &arr_init, const AdvancedPatternSpec &spec, const RunOptions &options) {
+            NativeDiagnostics::Scope scope("formation_core.run_pattern_build_exad pattern=" + spec.name);
             run_pattern_build_exad_cpp(to_u64_vector(arr_init), spec, options);
         },
         "arr_init"_a,
@@ -392,6 +399,7 @@ NB_MODULE(formation_core, m) {
     m.def(
         "run_pattern_build_zmask",
         [](const U64Array &arr_init, const PatternSpec &spec, const RunOptions &options) {
+            NativeDiagnostics::Scope scope("formation_core.run_pattern_build_zmask pattern=" + spec.name);
             run_pattern_build_zmask_cpp(to_u64_vector(arr_init), spec, options);
         },
         "arr_init"_a,

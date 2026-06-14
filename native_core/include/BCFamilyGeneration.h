@@ -1,11 +1,10 @@
 #pragma once
 
-#include "BCCellBuilder.h"
 #include "BCFamilyMutableStore.h"
 #include "BCFamilyPartitionPolicy.h"
 #include "BCFamilyPositionWriter.h"
 #include "BCPositionCellLoader.h"
-#include "FormationRuntime.h"
+#include "BCResidentGeneration.h"
 
 #include <cstdint>
 #include <vector>

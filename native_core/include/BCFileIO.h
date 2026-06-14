@@ -70,6 +70,9 @@ public:
     [[nodiscard]] virtual BCFileIOMode mode() const {
         return BCFileIOMode::Buffered;
     }
+    [[nodiscard]] virtual uint32_t preferred_write_alignment() const {
+        return 1U;
+    }
     virtual void write_at(uint64_t offset, const void *data, uint64_t bytes) = 0;
     virtual void write_many(
         const std::vector<BCFileWriteRequest> &requests,

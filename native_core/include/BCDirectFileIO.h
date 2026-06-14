@@ -1050,6 +1050,10 @@ public:
         return BCFileIOMode::Direct;
     }
 
+    [[nodiscard]] uint32_t preferred_write_alignment() const override {
+        return options_.alignment;
+    }
+
     void write_many(
         const std::vector<BCFileWriteRequest> &requests,
         BCFileIOStats *stats = nullptr
@@ -1904,6 +1908,10 @@ public:
         return BCFileIOMode::Direct;
     }
 
+    [[nodiscard]] uint32_t preferred_write_alignment() const override {
+        return options_.alignment;
+    }
+
     void write_many(
         const std::vector<BCFileWriteRequest> &requests,
         BCFileIOStats *stats = nullptr
@@ -2143,6 +2151,9 @@ class BCDirectFileWriter final : public BCWritableFile {
 public:
     explicit BCDirectFileWriter(const std::filesystem::path &, BCDirectFileIOOptions = {}) {
         throw std::runtime_error("BC direct file writer is only implemented on Windows and Linux");
+    }
+    [[nodiscard]] uint32_t preferred_write_alignment() const override {
+        return BCDirectFileIOOptions{}.alignment;
     }
     void write_at(uint64_t, const void *, uint64_t) override {}
     void resize(uint64_t) override {}

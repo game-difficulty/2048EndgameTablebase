@@ -6,6 +6,7 @@
 #include "EXADIO.h"
 #include "FileIOUtils.h"
 #include "FormationRuntime.h"
+#include "NativeDiagnostics.h"
 
 #include <algorithm>
 #include <chrono>
@@ -179,6 +180,7 @@ EXAD::Luts load_or_build_luts(
     int num_threads,
     FileIOUtils::DirectIoConfig io_config
 ) {
+    NativeDiagnostics::Scope scope("EXAD.load_or_build_luts path=" + options.pathname);
     const std::string path = EXAD::lut_file_path(options.pathname);
     const PatternSpec base = make_base_pattern_spec(spec);
     const ZMaskFrozen::TileLimitConfig config = EXAD::make_exad_lut_tile_limit_config(
@@ -189,6 +191,7 @@ EXAD::Luts load_or_build_luts(
         options.is_variant
     );
     if (fs::exists(path)) {
+        NativeDiagnostics::mark("EXAD.load_or_build_luts read existing begin");
         EXAD::Luts luts = EXAD::read_lut_file(path, io_config);
         if (ZMaskFrozen::tile_limit_configs_equal(luts.config, config) &&
             luts.physical_transform == spec.physical_transform &&
@@ -196,15 +199,20 @@ EXAD::Luts load_or_build_luts(
             luts.logical_pattern_signature == spec.logical_pattern_signature &&
             luts.physical_pattern_signature == spec.physical_pattern_signature) {
             EXAD::initialize_runtime_tables(luts);
+            NativeDiagnostics::mark("EXAD.load_or_build_luts read existing accepted");
             return luts;
         }
+        NativeDiagnostics::mark("EXAD.load_or_build_luts existing rejected");
     }
+    NativeDiagnostics::mark("EXAD.load_or_build_luts build begin");
     EXAD::Luts luts = EXAD::build_luts(config, num_threads);
     luts.physical_transform = spec.physical_transform;
     luts.inverse_physical_transform = spec.inverse_physical_transform;
     luts.logical_pattern_signature = spec.logical_pattern_signature;
     luts.physical_pattern_signature = spec.physical_pattern_signature;
+    NativeDiagnostics::mark("EXAD.load_or_build_luts write begin");
     EXAD::write_lut_file(path, luts, io_config);
+    NativeDiagnostics::mark("EXAD.load_or_build_luts write done");
     return luts;
 }
 
@@ -542,6 +550,7 @@ ResumeState initialize_or_resume(
 
     const std::string layer0_path = EXAD::layer_file_path(options.pathname, 0);
     if (!EXAD::layer_file_exists(layer0_path)) {
+        NativeDiagnostics::mark("EXAD.initialize_or_resume build seed layer begin");
         const double t0 = wall_time_seconds();
         EXAD::Layer seed_layer = EXAD::build_layer_from_boards(
             masked_seed,
@@ -552,7 +561,13 @@ ResumeState initialize_or_resume(
             num_threads
         );
         const double t1 = wall_time_seconds();
+        NativeDiagnostics::mark(
+            "EXAD.initialize_or_resume build seed layer done live=" +
+            std::to_string(seed_layer.live_board_count)
+        );
+        NativeDiagnostics::mark("EXAD.initialize_or_resume write seed layer begin");
         EXAD::write_layer_file(layer0_path, seed_layer, io_config, options.compress_temp_files);
+        NativeDiagnostics::mark("EXAD.initialize_or_resume write seed layer done");
         StatsRecord init;
         init.stage = "init";
         init.step = 0;
@@ -581,7 +596,9 @@ ResumeState initialize_or_resume(
 
     if (anchor == 0) {
         state.start_step = 1;
+        NativeDiagnostics::mark("EXAD.initialize_or_resume read layer0 begin");
         state.current = EXAD::read_layer_file(layer0_path, io_config);
+        NativeDiagnostics::mark("EXAD.initialize_or_resume read layer0 done");
         if (!EXAD::physical_metadata_matches(state.current, luts)) {
             throw std::runtime_error("EXAD temp layer physical metadata does not match LUT");
         }
@@ -589,15 +606,19 @@ ResumeState initialize_or_resume(
     }
 
     state.start_step = anchor;
+    NativeDiagnostics::mark("EXAD.initialize_or_resume read anchor-1 begin step=" + std::to_string(state.start_step - 1));
     state.current = EXAD::read_layer_file(EXAD::layer_file_path(options.pathname, state.start_step - 1), io_config);
     if (!EXAD::physical_metadata_matches(state.current, luts)) {
         throw std::runtime_error("EXAD temp layer physical metadata does not match LUT");
     }
+    NativeDiagnostics::mark("EXAD.initialize_or_resume read anchor begin step=" + std::to_string(state.start_step));
     EXAD::Layer seed_layer = EXAD::read_layer_file(EXAD::layer_file_path(options.pathname, state.start_step), io_config);
     if (!EXAD::physical_metadata_matches(seed_layer, luts)) {
         throw std::runtime_error("EXAD temp layer physical metadata does not match LUT");
     }
+    NativeDiagnostics::mark("EXAD.initialize_or_resume carry_from_layer begin step=" + std::to_string(state.start_step));
     state.next_seed = EXAD::carry_from_layer(seed_layer, luts, num_threads);
+    NativeDiagnostics::mark("EXAD.initialize_or_resume carry_from_layer done step=" + std::to_string(state.start_step));
     return state;
 }
 
@@ -673,6 +694,10 @@ void ensure_exad_temp_through_cpp(
     const uint32_t progress_total = build_progress_total(options);
 
     for (int step = resume.start_step; step <= max_required_step; ++step) {
+        NativeDiagnostics::mark(
+            "EXAD.forward step begin step=" + std::to_string(step) +
+            " live=" + std::to_string(current.live_board_count)
+        );
         FormationProgress::update_build_progress(static_cast<uint32_t>(step), progress_total);
         const EXAD::ReserveFactors reserve_factors =
             reserve_factors_for_layer(
@@ -689,6 +714,7 @@ void ensure_exad_temp_through_cpp(
         if (post_validate_floor.remaining_layers > 0) {
             --post_validate_floor.remaining_layers;
         }
+        NativeDiagnostics::mark("EXAD.forward generate_two_layers_carry begin step=" + std::to_string(step));
         EXAD::GeneratePairResult generated = EXAD::generate_two_layers_carry(
             current,
             spec,
@@ -701,9 +727,15 @@ void ensure_exad_temp_through_cpp(
             reserve_factors,
             &derive_hash_state
         );
+        NativeDiagnostics::mark("EXAD.forward generate_two_layers_carry done step=" + std::to_string(step));
         current = EXAD::Layer{};
         const double finalize0 = wall_time_seconds();
+        NativeDiagnostics::mark("EXAD.forward finalize_arr1 begin step=" + std::to_string(step));
         EXAD::Layer merged = EXAD::finalize_carry_layer(generated.arr1, luts, num_threads);
+        NativeDiagnostics::mark(
+            "EXAD.forward finalize_arr1 done step=" + std::to_string(step) +
+            " live=" + std::to_string(merged.live_board_count)
+        );
         const double finalize1 = wall_time_seconds();
         next_seed = std::move(generated.arr2);
 
@@ -731,6 +763,7 @@ void ensure_exad_temp_through_cpp(
 
         const double validate0 = wall_time_seconds();
         if (validate_step_trigger(step, ini_board_sum, masker.param)) {
+            NativeDiagnostics::mark("EXAD.forward validate current begin step=" + std::to_string(step));
             post_validate_floor.floor = reserve_footprint_from_layer(merged);
             post_validate_floor.remaining_layers = 3;
 
@@ -743,10 +776,14 @@ void ensure_exad_temp_through_cpp(
                 luts,
                 num_threads
             );
+            NativeDiagnostics::mark("EXAD.forward validate current done step=" + std::to_string(step));
             record.validate_removed_current = before_current - merged.live_board_count;
 
+            NativeDiagnostics::mark("EXAD.forward finalize_next_for_validate begin step=" + std::to_string(step));
             EXAD::Layer next_layer = EXAD::finalize_carry_layer(next_seed, luts, num_threads);
+            NativeDiagnostics::mark("EXAD.forward finalize_next_for_validate done step=" + std::to_string(step));
             const uint64_t before_next = next_layer.live_board_count;
+            NativeDiagnostics::mark("EXAD.forward validate next begin step=" + std::to_string(step));
             next_layer = EXAD::validate_layer_streaming(
                 next_layer,
                 static_cast<uint32_t>(2 * step + ini_board_sum + 2U),
@@ -755,19 +792,24 @@ void ensure_exad_temp_through_cpp(
                 luts,
                 num_threads
             );
+            NativeDiagnostics::mark("EXAD.forward validate next done step=" + std::to_string(step));
             record.validate_removed_next = before_next - next_layer.live_board_count;
+            NativeDiagnostics::mark("EXAD.forward carry_from_validated_next begin step=" + std::to_string(step));
             next_seed = EXAD::carry_from_layer(next_layer, luts, num_threads);
+            NativeDiagnostics::mark("EXAD.forward carry_from_validated_next done step=" + std::to_string(step));
         }
         record.validate_seconds = wall_time_seconds() - validate0;
 
         const double write0 = wall_time_seconds();
         if (!exad_solved_output_exists(options, step)) {
+            NativeDiagnostics::mark("EXAD.forward write_layer begin step=" + std::to_string(step));
             EXAD::write_layer_file(
                 EXAD::layer_file_path(options.pathname, step),
                 merged,
                 io_config,
                 options.compress_temp_files
             );
+            NativeDiagnostics::mark("EXAD.forward write_layer done step=" + std::to_string(step));
         }
         record.write_seconds = wall_time_seconds() - write0;
         append_stats(options, record);

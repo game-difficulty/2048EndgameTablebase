@@ -11,6 +11,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace BC {
@@ -175,6 +176,22 @@ inline void bc_append_header(std::vector<uint8_t> &out, const BCPositionHeader &
     header.rank_payload_bytes = load_u64_le(p + 96U);
     header.axis_coord_table_bytes = load_u64_le(p + 104U);
     return header;
+}
+
+[[nodiscard]] inline uint64_t bc_position_logical_size_from_header(
+    const BCPositionHeader &header
+) {
+    const uint64_t bucket_end = bc_checked_add_u64(
+        header.bucket_meta_offset,
+        header.bucket_meta_bytes,
+        "BC position bucket logical end overflow"
+    );
+    const uint64_t rank_end = bc_checked_add_u64(
+        header.rank_payload_offset,
+        header.rank_payload_bytes,
+        "BC position rank logical end overflow"
+    );
+    return std::max(bucket_end, rank_end);
 }
 
 [[nodiscard]] inline uint64_t bc_axis_coord_table_bytes(uint32_t family_count) {
@@ -444,8 +461,23 @@ public:
         open(bytes, lut);
     }
 
+    BCPositionLayerReader(std::vector<uint8_t> &&bytes, const BCLut &lut) {
+        open(std::move(bytes), lut);
+    }
+
     void open(const std::vector<uint8_t> &bytes, const BCLut &lut) {
         bytes_ = bytes;
+        lut_ = &lut;
+        header_ = bc_read_header(bytes_);
+        validate_header();
+        read_axis();
+        read_descriptors();
+        read_bucket_entries();
+        validate_descriptors();
+    }
+
+    void open(std::vector<uint8_t> &&bytes, const BCLut &lut) {
+        bytes_ = std::move(bytes);
         lut_ = &lut;
         header_ = bc_read_header(bytes_);
         validate_header();
@@ -745,6 +777,13 @@ public:
     static BCPositionFileReader open_buffered(
         const std::filesystem::path &path,
         const BCLut &lut
+    );
+
+    static BCPositionFileReader open_direct_auto(
+        const std::filesystem::path &path,
+        const BCLut &lut,
+        uint32_t queue_depth = 8U,
+        bool overlapped = true
     );
 
     void open(std::unique_ptr<BCReadableFile> file, const BCLut &lut);

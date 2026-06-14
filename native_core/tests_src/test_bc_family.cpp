@@ -1,4 +1,5 @@
 #include "BCCellMatrix.h"
+#include "BCPositionCellLayout.h"
 #include "BCLut.h"
 
 #include <algorithm>
@@ -334,6 +335,32 @@ void test_boundary_cells() {
     );
 }
 
+void test_modulo_position_cell_layout() {
+    const uint32_t modulus = 13U;
+    const BC::BCPositionCellLayout layout =
+        BC::build_modulo_position_cell_layout_for_layer(
+            100U,
+            2U,
+            std::vector<LayerSum>{0U},
+            modulus
+        );
+
+    check(layout.uses_modulo_cells(), "modulo layout should report modulo cells");
+    check(layout.side_coord_count() == modulus, "modulo physical side count mismatch");
+    check(layout.side_index_to_coord(0U) == 0U, "modulo physical coord 0 mismatch");
+    check(layout.side_index_to_coord(12U) == 12U, "modulo physical coord 12 mismatch");
+    check(layout.try_raw_side_coord_to_physical_index(0U) == 0U, "raw coord 0 should map to id 0");
+    check(layout.try_raw_side_coord_to_physical_index(12U) == 12U, "raw coord 12 should map to id 12");
+    check(layout.try_raw_side_coord_to_physical_index(13U) == 0U, "raw coord 13 should map to id 0");
+    check(layout.try_raw_side_coord_to_physical_index(25U) == 12U, "raw coord 25 should map to id 12");
+    check(
+        layout.try_raw_side_coord_to_physical_index(26U) ==
+            BC::BCPositionCellLayout::kInvalidSideIndex,
+        "raw coord beyond min-side range should be invalid"
+    );
+    check(layout.cell_id(12U, 1U) == 157U, "modulo cell id mismatch");
+}
+
 } // namespace
 
 int main() {
@@ -350,6 +377,8 @@ int main() {
         test_collect_family_crosses();
         std::cerr << "test_boundary_cells\n";
         test_boundary_cells();
+        std::cerr << "test_modulo_position_cell_layout\n";
+        test_modulo_position_cell_layout();
     } catch (const std::exception &ex) {
         std::cerr << "bc_family_test failed: " << ex.what() << "\n";
         return 1;

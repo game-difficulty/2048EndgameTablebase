@@ -7,6 +7,7 @@
 #include "BCFileIO.h"
 #include "BCPositionFile.h"
 #include "BCPositionScanner.h"
+#include "BCResidentGeneration.h"
 #include "BoardMover.h"
 #include "Calculator.h"
 
@@ -45,6 +46,8 @@ using BC::BCMutableCellState;
 using BC::BCPositionCellScanner;
 using BC::BCPositionLayerReader;
 using BC::BCPositionLayerWriter;
+using BC::BCResidentGenerationOptions;
+using BC::BCResidentGenerationSource;
 using BC::BCSourceCellWork;
 using BC::BucketRank;
 using BC::CellId;
@@ -212,6 +215,84 @@ BC::FinalizedCellPayload make_payload(
         builder.insert(item.key, item.rank);
     }
     return builder.finalize();
+}
+
+[[nodiscard]] std::vector<uint8_t> run_toy_family_generation(
+    const BCLut &lut,
+    const BCPositionLayerReader &source,
+    const BCFamilyTable &target_axis,
+    uint8_t spawn_tile_rank,
+    BC::SpawnDeltaCoord delta_coord
+) {
+    BCFamilyGenerationScheduler scheduler(source.axis(), target_axis);
+    BCGenerationBlobIO blob;
+    BCFamilyMutableStore store(lut, target_axis, blob);
+    const BCCellMatrix target_matrix(target_axis);
+
+    for (BC::FamilyId source_id = 0U; source_id < source.axis().family_count(); ++source_id) {
+        const BCFamilyGenerationPass pass =
+            scheduler.make_pass(source_id, delta_coord, spawn_tile_rank);
+        const std::vector<CellId> need = scheduler.target_need_cells(pass);
+        std::set<CellId> need_set(need.begin(), need.end());
+        store.prepare_target_window_for_families(pass.target_families);
+        check(pass.target_families.size() <= 2U, "target fanout must be <=2 families");
+
+        for (const BCSourceCellWork &work : scheduler.source_cells(pass)) {
+            BCPositionCellScanner(source, work.cid).for_each_board(
+                [&](const BC::BCScannedBoardEntry &entry) {
+                    const BC::BCEmptyCells empties = BC::enumerate_empty_cells(entry.board);
+                    for (uint8_t empty_i = 0U; empty_i < empties.count; ++empty_i) {
+                        const uint64_t spawned =
+                            BC::spawn_tile(entry.board, empties.cells[empty_i], spawn_tile_rank);
+                        const uint32_t begin_dir = BC::bc_has_horizontal(work.directions) ? 0U : 2U;
+                        const uint32_t end_dir = BC::bc_has_vertical(work.directions) ? 4U : 2U;
+                        for (uint32_t direction = begin_dir; direction < end_dir; ++direction) {
+                            if (direction >= 2U && !BC::bc_has_vertical(work.directions)) {
+                                continue;
+                            }
+                            if (direction < 2U && !BC::bc_has_horizontal(work.directions)) {
+                                continue;
+                            }
+                            uint64_t moved = 0U;
+                            if (!move_one(spawned, direction, moved)) {
+                                continue;
+                            }
+                            const uint64_t canonical = canonicalize(moved);
+                            const auto encoded =
+                                BC::encode_canonical_board_position(lut, target_axis, canonical);
+                            check(encoded.valid, "toy family candidate should encode");
+                            check(
+                                need_set.find(encoded.cid) != need_set.end(),
+                                "toy family candidate escaped target fanout window"
+                            );
+                            (void)store.get_or_create(encoded.cid).insert(encoded.key, encoded.rank);
+                        }
+                    }
+                }
+            );
+        }
+
+        std::vector<CellId> keep;
+        if (source_id + 1U < source.axis().family_count()) {
+            keep = scheduler.target_need_cells_for_source(
+                static_cast<BC::FamilyId>(source_id + 1U),
+                delta_coord
+            );
+        }
+        store.release_except(keep);
+    }
+
+    BCPositionLayerWriter writer;
+    writer.begin_layer(target_axis);
+    for (CellId cid = 0U; cid < target_matrix.cell_count(); ++cid) {
+        const BC::FinalizedCellPayload payload = store.finalize_cell(cid);
+        if (payload.success_rows == 0U && payload.buckets.empty() && payload.rank_payload.empty()) {
+            writer.mark_empty_cell(cid);
+            continue;
+        }
+        writer.write_cell(cid, payload);
+    }
+    return writer.finish_layer();
 }
 
 void test_scheduler() {
@@ -828,6 +909,88 @@ std::set<Candidate> run_family_generator_to_candidates(
     return out;
 }
 
+void test_parallel_family_generator_matches_resident() {
+    const BCLut lut(test_alphabet());
+    const BCFamilyTable source2_axis = BCFamilyTable::from_range(8U, 2U, 0U, 2U);
+    const BCFamilyTable target_axis = BCFamilyTable::from_range(10U, 2U, 0U, 2U);
+    const std::vector<uint64_t> boards2{
+        make_board({{0U, 1U}, {1U, 1U}, {4U, 1U}, {5U, 1U}}),
+        make_board({{0U, 2U}, {15U, 2U}}),
+    };
+    const std::vector<uint8_t> source2_bytes = make_position_bytes(lut, source2_axis, boards2);
+    const BCPositionLayerReader source2_memory(source2_bytes, lut);
+    const std::filesystem::path source2_path = temp_path("family_source2.bcpos");
+    auto source2_stream = make_streaming_reader(lut, source2_path, source2_bytes);
+    const BCFamilyStreamingGenerationSource source2{
+        source2_stream.get(),
+        nullptr,
+        1U,
+        1U
+    };
+
+    BCResidentGenerationOptions resident_options;
+    resident_options.num_threads = 1;
+    resident_options.canonical_batch_size = 4U;
+    const auto resident = BC::generate_resident_position_layer(
+        lut,
+        target_axis,
+        std::vector<BCResidentGenerationSource>{BCResidentGenerationSource{&source2_memory, 1U, 1U}},
+        resident_options
+    );
+    const BCPositionLayerReader resident_reader(resident.position_bytes, lut);
+    check(
+        run_family_generator_to_candidates(lut, target_axis, nullptr, source2) ==
+            collect_candidates(resident_reader),
+        "parallel FamilyGenerator +2-only output should match Resident generation"
+    );
+    cleanup_file(source2_path);
+}
+
+void test_parallel_family_generator_combined_matches_resident() {
+    const BCLut lut(test_alphabet());
+    const BCFamilyTable source4_axis = BCFamilyTable::from_range(6U, 2U, 0U, 1U);
+    const BCFamilyTable source2_axis = BCFamilyTable::from_range(8U, 2U, 0U, 2U);
+    const BCFamilyTable target_axis = BCFamilyTable::from_range(10U, 2U, 0U, 2U);
+    const std::vector<uint64_t> boards4{
+        make_board({{0U, 2U}, {15U, 1U}}),
+    };
+    const std::vector<uint64_t> boards2{
+        make_board({{0U, 1U}, {1U, 1U}, {4U, 1U}, {5U, 1U}}),
+        make_board({{0U, 2U}, {15U, 2U}}),
+    };
+    const std::vector<uint8_t> source4_bytes = make_position_bytes(lut, source4_axis, boards4);
+    const std::vector<uint8_t> source2_bytes = make_position_bytes(lut, source2_axis, boards2);
+    const BCPositionLayerReader source4_memory(source4_bytes, lut);
+    const BCPositionLayerReader source2_memory(source2_bytes, lut);
+    const std::filesystem::path source4_path = temp_path("family_source4.bcpos");
+    const std::filesystem::path source2_path = temp_path("family_source2_combined.bcpos");
+    auto source4_stream = make_streaming_reader(lut, source4_path, source4_bytes);
+    auto source2_stream = make_streaming_reader(lut, source2_path, source2_bytes);
+    const BCFamilyStreamingGenerationSource source4{source4_stream.get(), nullptr, 2U, 2U};
+    const BCFamilyStreamingGenerationSource source2{source2_stream.get(), nullptr, 1U, 1U};
+
+    BCResidentGenerationOptions resident_options;
+    resident_options.num_threads = 1;
+    resident_options.canonical_batch_size = 4U;
+    const auto resident = BC::generate_resident_position_layer(
+        lut,
+        target_axis,
+        std::vector<BCResidentGenerationSource>{
+            BCResidentGenerationSource{&source4_memory, 2U, 2U},
+            BCResidentGenerationSource{&source2_memory, 1U, 1U}
+        },
+        resident_options
+    );
+    const BCPositionLayerReader resident_reader(resident.position_bytes, lut);
+    check(
+        run_family_generator_to_candidates(lut, target_axis, &source4, source2) ==
+            collect_candidates(resident_reader),
+        "parallel FamilyGenerator +4/+2 output should match Resident generation"
+    );
+    cleanup_file(source4_path);
+    cleanup_file(source2_path);
+}
+
 void test_family_generator_direction_masks_generate_candidates() {
     const BCLut lut(test_alphabet());
     const BCFamilyTable source_axis = BCFamilyTable::from_range(8U, 2U, 0U, 2U);
@@ -895,6 +1058,38 @@ void test_family_generator_skips_success_sources() {
     cleanup_file(source_path);
 }
 
+void test_toy_family_matches_resident() {
+    const BCLut lut(test_alphabet());
+    const BCFamilyTable source_axis = BCFamilyTable::from_range(8U, 2U, 0U, 2U);
+    const BCFamilyTable target_axis = BCFamilyTable::from_range(10U, 2U, 0U, 2U);
+    const std::vector<uint64_t> boards{
+        make_board({{0U, 1U}, {1U, 1U}, {4U, 1U}, {5U, 1U}}),
+        make_board({{0U, 2U}, {15U, 2U}}),
+    };
+    const std::vector<uint8_t> source_bytes = make_position_bytes(lut, source_axis, boards);
+    const BCPositionLayerReader source_reader(source_bytes, lut);
+
+    BCResidentGenerationOptions options;
+    options.num_threads = 1;
+    options.canonical_batch_size = 4U;
+    options.pending_insert_buffer_size = 4U;
+    const auto resident = BC::generate_resident_position_layer(
+        lut,
+        target_axis,
+        std::vector<BCResidentGenerationSource>{BCResidentGenerationSource{&source_reader, 1U, 1U}},
+        options
+    );
+    const BCPositionLayerReader resident_reader(resident.position_bytes, lut);
+
+    const std::vector<uint8_t> family_bytes =
+        run_toy_family_generation(lut, source_reader, target_axis, 1U, 1U);
+    const BCPositionLayerReader family_reader(family_bytes, lut);
+    check(
+        collect_candidates(family_reader) == collect_candidates(resident_reader),
+        "toy FamilyChain candidate set should match Resident generation"
+    );
+}
+
 } // namespace
 
 int main() {
@@ -919,8 +1114,11 @@ int main() {
         run("concurrent_mutable_builder_grow_stress", test_concurrent_mutable_builder_grow_stress);
         run("mutable_builder_source_is_concurrent_backend", test_mutable_builder_source_is_concurrent_backend);
         run("family_position_writer", test_family_position_writer);
+        run("parallel_family_generator_matches_resident", test_parallel_family_generator_matches_resident);
+        run("parallel_family_generator_combined_matches_resident", test_parallel_family_generator_combined_matches_resident);
         run("family_generator_direction_masks_generate_candidates", test_family_generator_direction_masks_generate_candidates);
         run("family_generator_skips_success_sources", test_family_generator_skips_success_sources);
+        run("toy_family_matches_resident", test_toy_family_matches_resident);
     } catch (const std::exception &ex) {
         std::cerr << "bc_family_generation_state_test failed: " << ex.what() << "\n";
         return 1;

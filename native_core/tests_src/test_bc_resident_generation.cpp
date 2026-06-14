@@ -22,6 +22,7 @@ using BC::BCCellBuilder;
 using BC::BCCellMatrix;
 using BC::BCFamilyTable;
 using BC::BCLut;
+using BC::BCPositionCellLayout;
 using BC::BCPositionCellScanner;
 using BC::BCPositionLayerReader;
 using BC::BCPositionLayerWriter;
@@ -59,6 +60,10 @@ uint64_t make_board(const std::vector<std::pair<uint8_t, uint8_t>> &tiles) {
         board = BC::set_board_tile(board, cell, tile);
     }
     return board;
+}
+
+[[nodiscard]] BCPositionCellLayout layout_from_axis(const BCFamilyTable &axis) {
+    return BCPositionCellLayout::from_serialized_axis(axis);
 }
 
 [[nodiscard]] uint64_t oracle_canonicalize(uint64_t board) {
@@ -136,9 +141,6 @@ struct OracleSource {
 struct OracleResult {
     std::set<Candidate> candidates;
     uint64_t source_boards_scanned = 0U;
-    uint64_t spawned_boards = 0U;
-    uint64_t move_candidates = 0U;
-    uint64_t valid_candidates = 0U;
 };
 
 OracleResult compute_oracle(
@@ -154,10 +156,8 @@ OracleResult compute_oracle(
             for (uint32_t empty_i = 0U; empty_i < empties.count; ++empty_i) {
                 const uint64_t spawned =
                     BC::spawn_tile(source_board, empties.cells[empty_i], source.spawn_tile_rank);
-                ++out.spawned_boards;
 
                 for (uint32_t direction = 0U; direction < 4U; ++direction) {
-                    ++out.move_candidates;
                     uint64_t moved = 0U;
                     if (!oracle_move(spawned, direction, moved)) {
                         continue;
@@ -167,7 +167,6 @@ OracleResult compute_oracle(
                         BC::encode_canonical_board_position(lut, target_axis, canonical);
                     check(encoded.valid, "oracle candidate should encode into target axis");
                     out.candidates.insert(Candidate{encoded.cid, encoded.key, encoded.rank});
-                    ++out.valid_candidates;
                 }
             }
         }
@@ -222,15 +221,6 @@ void check_stats_match(
         generated.source_boards_scanned == oracle.source_boards_scanned,
         "resident generation source board scan count mismatch"
     );
-    check(generated.spawned_boards == oracle.spawned_boards, "resident generation spawn count mismatch");
-    check(
-        generated.move_candidates == oracle.move_candidates,
-        "resident generation move candidate count mismatch"
-    );
-    check(
-        generated.valid_candidates == oracle.valid_candidates,
-        "resident generation valid candidate count mismatch"
-    );
     check_dynamic_stats(generated);
 }
 
@@ -249,7 +239,10 @@ void test_single_source_generation_matches_oracle() {
 
     const BCResidentGenerationSource source2{&source.reader, 1U, 1U};
     const BCResidentGenerationResult generated =
-        BC::generate_resident_position_layer(lut, target_axis, std::vector<BCResidentGenerationSource>{source2});
+        BC::generate_resident_position_layer(
+            lut,
+            layout_from_axis(target_axis),
+            std::vector<BCResidentGenerationSource>{source2});
     const OracleResult oracle = compute_oracle(
         lut,
         target_axis,
@@ -289,7 +282,7 @@ void test_combined_generation_matches_oracle() {
     const BCResidentGenerationSource src4{&source4.reader, 2U, 2U};
     const BCResidentGenerationSource src2{&source2.reader, 1U, 1U};
     const BCResidentGenerationResult generated =
-        BC::generate_resident_position_layer(lut, target_axis, src4, src2);
+        BC::generate_resident_position_layer(lut, layout_from_axis(target_axis), src4, src2);
     const OracleResult oracle = compute_oracle(
         lut,
         target_axis,
@@ -307,10 +300,6 @@ void test_combined_generation_matches_oracle() {
 
     std::cerr
         << "sample_stats source_boards=" << generated.source_boards_scanned
-        << " spawned=" << generated.spawned_boards
-        << " move_candidates=" << generated.move_candidates
-        << " valid_candidates=" << generated.valid_candidates
-        << " duplicate_candidates_possible=" << generated.duplicate_candidates_possible
         << " unique_targets=" << oracle.candidates.size()
         << "\n";
 }
@@ -340,14 +329,14 @@ void test_parallel_and_small_batch_match_scalar_output() {
     const BCResidentGenerationResult generated_one =
         BC::generate_resident_position_layer(
             lut,
-            target_axis,
+            layout_from_axis(target_axis),
             std::vector<BCResidentGenerationSource>{source2},
             one_thread
         );
     const BCResidentGenerationResult generated_two =
         BC::generate_resident_position_layer(
             lut,
-            target_axis,
+            layout_from_axis(target_axis),
             std::vector<BCResidentGenerationSource>{source2},
             two_threads
         );
@@ -380,13 +369,15 @@ void test_pair_generation_stats() {
 
     BC::BCResidentGenerationOptions options;
     options.num_threads = 2;
+    const BCPositionCellLayout primary_layout = layout_from_axis(primary_axis);
+    const BCPositionCellLayout secondary_layout = layout_from_axis(secondary_axis);
     const BC::BCResidentGenerationPairResult pair =
         BC::generate_resident_position_layer_pair(
             lut,
-            primary_axis,
+            primary_layout,
             source.reader,
             nullptr,
-            &secondary_axis,
+            &secondary_layout,
             options
         );
 
@@ -433,12 +424,7 @@ void test_pair_generation_stats() {
         "pair total compute seconds should include shared generation time"
     );
     check_stats_match(pair.primary, primary_oracle);
-    check(pair.secondary.spawned_boards == secondary_oracle.spawned_boards,
-        "pair secondary spawn count mismatch");
-    check(pair.secondary.move_candidates == secondary_oracle.move_candidates,
-        "pair secondary move candidate count mismatch");
-    check(pair.secondary.valid_candidates == secondary_oracle.valid_candidates,
-        "pair secondary valid candidate count mismatch");
+    (void)secondary_oracle;
     check_dynamic_stats(pair.secondary);
 }
 
@@ -450,7 +436,10 @@ void test_duplicate_candidate_dedup_and_invalid_moves() {
 
     const BCResidentGenerationSource source2{&source.reader, 1U, 1U};
     const BCResidentGenerationResult generated =
-        BC::generate_resident_position_layer(lut, target_axis, std::vector<BCResidentGenerationSource>{source2});
+        BC::generate_resident_position_layer(
+            lut,
+            layout_from_axis(target_axis),
+            std::vector<BCResidentGenerationSource>{source2});
     const OracleResult oracle = compute_oracle(
         lut,
         target_axis,
@@ -459,15 +448,9 @@ void test_duplicate_candidate_dedup_and_invalid_moves() {
     const BCPositionLayerReader generated_reader(generated.position_bytes, lut);
     const std::set<Candidate> generated_candidates = collect_generated_candidates(generated_reader);
     check(generated_candidates == oracle.candidates, "duplicate generated candidates mismatch oracle");
-    check(generated_candidates.size() < generated.valid_candidates, "generation should dedup repeated paths");
     check(
         descriptor_success_rows_sum(generated_reader) == generated_candidates.size(),
         "dedup success_rows should equal unique generated targets"
-    );
-    check(generated.move_candidates > generated.valid_candidates, "invalid moves should be skipped");
-    check(
-        generated.duplicate_candidates_possible + generated_candidates.size() == generated.valid_candidates,
-        "duplicate stats should explain valid candidate paths"
     );
 }
 
@@ -485,7 +468,7 @@ void test_axis_validation() {
         [&] {
             (void)BC::generate_resident_position_layer(
                 lut,
-                bad_target_axis,
+                layout_from_axis(bad_target_axis),
                 std::vector<BCResidentGenerationSource>{source2}
             );
         },

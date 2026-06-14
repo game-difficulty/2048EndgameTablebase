@@ -87,6 +87,9 @@ public:
         coords_ = axis_coords;
         axis_base_coord_ = coords_.front();
         family_count_ = static_cast<uint16_t>(coords_.size());
+        contiguous_range_ =
+            static_cast<uint64_t>(coords_.back()) ==
+            static_cast<uint64_t>(axis_base_coord_) + static_cast<uint64_t>(family_count_) - 1ULL;
         coord_to_id_lut_.assign(
             static_cast<size_t>(coords_.back()) + 1U,
             kInvalidFamilyId
@@ -121,6 +124,10 @@ public:
 
     [[nodiscard]] uint16_t family_count() const {
         return family_count_;
+    }
+
+    [[nodiscard]] bool is_contiguous_range() const noexcept {
+        return contiguous_range_;
     }
 
     [[nodiscard]] bool contains_coord(FamilyCoord coord) const {
@@ -177,6 +184,7 @@ private:
     FamilyCoord total_coord_ = 0U;
     FamilyCoord axis_base_coord_ = 0U;
     uint16_t family_count_ = 0U;
+    bool contiguous_range_ = false;
     std::vector<FamilyCoord> coords_;
     std::vector<FamilyId> coord_to_id_lut_;
 };

@@ -10,6 +10,10 @@
 #include <utility>
 #include <vector>
 
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
+
 namespace BC {
 
 struct BCBucketEntry {
@@ -176,6 +180,14 @@ struct FinalizedCellPayload {
 };
 
 using BCKeyValueSortUint64Uint32Fn = void (*)(uint64_t *keys, uint32_t *values, size_t count, bool descending);
+
+[[nodiscard]] inline bool bc_finalize_keyvalue_sort_allowed() {
+#if defined(_OPENMP)
+    return omp_in_parallel() == 0;
+#else
+    return true;
+#endif
+}
 
 struct BCCellFinalizeOptions {
     BCKeyValueSortUint64Uint32Fn keyvalue_sort = nullptr;
@@ -497,6 +509,7 @@ private:
         }
 
         const bool use_keyvalue_sort =
+            bc_finalize_keyvalue_sort_allowed() &&
             options.keyvalue_sort != nullptr &&
             keys.size() >= options.simd_sort_min_bucket_count;
         if (use_keyvalue_sort) {
