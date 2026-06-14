@@ -1,144 +1,57 @@
-# BC Resident / SingleChunk Generation Implementation Supplement
+# BC Generation Runtime Design And Handoff
 
-本文是 `exbc_exadbc_dense_family_cell_latest_plan_v7.md` 的实现补充，记录当前已经落地的 BC 非分块生成链路和单分块生成链路。它不替代总设计文档；总设计文档仍描述最终 EXBC / EXADBC dense family-cell 体系、三条链路和未来 FamilyChain 设计。本文只解释当前代码中已经实现并经过 free9-256 generation 验收的部分，以及主设计文档中没有展开的工程接口、性能路径和 caveat。
+This document describes the generation implementation as of checkpoint
+`6ed14a2`. It is the source of truth for the current resident, single, and
+family generation routes.
 
-当前范围：
+## 1. Non-negotiable Semantics
 
-- ResidentChain / non-block generation。
-- SingleChunkChain generation，严格 `1+x` layer residency 路径。
-- Position memory/file format、streaming source loader、target file output。
-- generation hot mutable backend `BCDynamicState`。
-- 不包含 solve、FamilyChain、cell dump/reload、partial/result_accum、generation blob。
+- Every tile contributes its raw tile value to quadrant and layer sums.
+- Physical cells are a storage partition only. A physical cell maps raw exact
+  row/column coordinates through `coord % modulus`.
+- Bucket keys still carry raw quadrant sums/ranks. The file format does not
+  hide or change board semantics when the physical modulus changes.
+- A `.bcpos` file is valid for all three generation routes. Resident, single,
+  and family outputs are byte-layout compatible at the BC position level.
+- `FamilyId` values are layer-local physical ids. Never compare family ids
+  across layers or across different moduli.
+- If an old source file uses a different physical modulus, the reader/remap
+  layer may over-approximate old physical cell reads, but extraction must use
+  bucket keys and keep only target logical cells before compute continues.
 
-## 1. 当前模块地图
+## 2. Position File Naming
 
-| 模块 | 主要文件 | 说明 |
-|---|---|---|
-| family / cell 基础 | `BCTypes.h`, `BCFamilyTable.h`, `BCCellMatrix.h` | layer-local dense axis、cell id、NeedCells 基础工具。 |
-| key/rank/LUT | `BCLut.h`, `BCKeyRank.h` | `NW exact + NE/SW/SE sum_id+empty_mask` key mode、mixed-radix rank、prefix256。 |
-| finalized cell | `BCCellBuilder.h` | correctness builder、`BCBucketEntry`、rank payload、finalized lookup。 |
-| position file | `BCPositionFile.h/.cpp` | memory position layer、file writer、streaming metadata reader。 |
-| source cell loader | `BCPositionCellLoader.h` | descriptor 常驻，按 cell/cell batch 读取 bucket/rank payload。 |
-| scanner | `BCPositionScanner.h`, `BCLoadedCellScanner.h` | memory reader / loaded cell 共用扫描逻辑，支持 board callback。 |
-| board glue | `BCBoardCodec.h`, `BCBoardOps.h` | quadrant pack/unpack、empty cell、spawn、canonical board encode。 |
-| success IO | `BCSuccessIO.h` | memory success file 与 streaming success reader，当前只支持 `uint32_t` 测试 dtype。 |
-| file IO | `BCFileIO.h`, `BCDirectFileIO.h` | buffered positioned IO、direct IO prototype、`read_many/write_many` stats。 |
-| Resident generation | `BCResidentGeneration.h`, `BCResidentGeneration.cpp`, `BCResidentGenerationStreaming.cpp`, `BCResidentGenerationInternal.h` | non-block / streaming source generation、dynamic mutable backend、file output finalize。 |
-| SingleChunk generation | `BCSingleChunkGeneration.h/.cpp` | SingleChunk wrappers，包含 strict `1+x` generation step。 |
-| benchmark | `bench_bc_resident_generation.cpp`, `bench_bc_single_chunk_generation.cpp` | free9 generation benchmark、EX CSV 对照、stats CSV。 |
-
-## 2. 共同生成热路径
-
-Resident 和 SingleChunk 当前共享同一套 board-level generation hot path：
+Production benchmark output no longer puts the layer sum in the filename. The
+name is:
 
 ```text
-source position entries
-  -> scanner.for_each_board / loaded_cell scanner
-  -> zero_cell_mask16(board), ctz enumerate empty cells
-  -> spawn tile rank 1(+2) or 2(+4)
-  -> BoardMover::move_all_dir(spawned)
-  -> skip moved == spawned
-  -> CanonicalBatch::canonicalize_inplace(batch)
-  -> unpack_board_to_quadrants
-  -> encode_canonical_quadrants_position_hot
-  -> BCDynamicState insert: hash(cid,key) + atomic bitmap OR
-  -> dynamic finalize
-  -> BC position file
+<pattern>_<target_tile>_<ordinal>.bcpos
 ```
 
-关键点：
-
-- move/canonicalize 不在 BCBoardOps 里重写，直接接项目已有 `BoardMover::move_all_dir` 和 `CanonicalBatch::canonicalize_inplace`。
-- scanner 使用 board callback，不构造 `vector<BCScannedPositionEntry>` 作为热路径中间结果。
-- empty cell 枚举使用 bitmask + ctz，不走 checked `spawn_tile()`。
-- canonicalize 使用 batch buffer，默认 `canonical_batch_size = 8192`。
-- encoded candidate 先进入每线程 pending buffer，默认 `pending_insert_buffer_size = 1024`，再批量 hash resolve + bitmap OR。
-- `family_tile_sum_values` 支持 free9 这类语义 sum，其中 tile `15` 可以按配置计为 0。
-
-## 3. Target mutable backend: BCDynamicState
-
-当前 ResidentChain 和 SingleChunkChain 的 target mutable 使用 `BCDynamicState`。这是 whole-layer mutable backend，只适用于 Resident / SingleChunk，不用于未来 FamilyChain。
-
-逻辑键：
+Examples:
 
 ```text
-(cid, bucket_key) -> bitmap
+free9_256_0.bcpos
+free9_256_1.bcpos
+free9_256_102.bcpos
 ```
 
-内部结构：
+`ordinal = (layer_sum - seed_sum) / 2`. The layer sum remains in the `.bcpos`
+header.
+
+## 3. Shared `.bcpos` Layout
+
+All generation routes write the same position format:
 
 ```text
-cell_array[slot]          atomic<uint32_t>, empty / pending / cid
-key_array[slot]           uint64_t bucket key
-bitmap_offset_array[slot] uint32_t arena offset
-bitmap_arena[word]        atomic<uint64_t>
-```
-
-插入流程：
-
-1. 用 `(cid,key)` hash 到 home slot。
-2. 线性探测。
-3. 空 slot CAS 到 `kPendingCell`。
-4. 为该 bucket 从 bitmap arena 分配 word range。
-5. 清零 bitmap words。
-6. 写 `key_array` 和 `bitmap_offset_array`。
-7. 发布 `cell_array=cid`。
-8. 对 rank 对应 bit 做 atomic OR。
-
-去重语义：
-
-- 同一 `(cid,key,rank)` 重复生成只设置同一 bit。
-- `duplicate_candidates` 由 atomic OR 发现重复后统计。
-- `output_success_rows` 是所有 live bits 数。
-
-容量与 retry：
-
-- `make_bc_dynamic_state(cell_count, bucket_estimate, bitmap_word_estimate)` 根据估计构造 hash table 与 bitmap arena。
-- hash capacity 使用 power-of-two capacity 和 load guard。
-- overflow 会设置 `overflowed`，外层按 reserve factor retry。
-- 当前生产默认 hash load threshold 已提升到 0.75；实际 layer load 仍受 source estimate、reserve guard、power-of-two rounding 影响。
-
-## 4. Dynamic finalize / file output
-
-动态 finalize 不再把所有 `FinalizedCellPayload` 全层常驻后再统一写文件。file-output 路径使用 streaming finalize：
-
-1. 扫 dynamic hash slots，按 `cid` 统计 bucket_count。
-2. prefix-sum 得到每个 cell 的 slot-ref 区间。
-3. 再扫 hash slots，把 `{key, slot, packed(bitmap_len, live_count)}` 放到 cell-local range。
-4. 对每个 cell 内部按 key 排序。
-5. 并行 measure cell payload：
-   - 统计 live bit count。
-   - 缓存 `bitmap_len` 和 `live_count` 到 slot ref。
-   - 计算 bucket metadata bytes / rank payload bytes。
-6. 生成 header 和 descriptor table。
-7. bucket metadata stream 使用 bounded batch 并行序列化。
-8. rank payload stream 使用 bounded batch 并行序列化。
-9. 通过 `BCDynamicSequentialWriteStager` 顺序写入 `BCWritableFile`。
-
-只要求 cell 内 key 升序，因为 finalized lookup 在单 cell bucket entries 内二分；不同 cell 的 key 没有全局排序语义。当前已经避免全局 bucket sort。
-
-file-output finalize 会返回：
-
-- `target_position_file_logical_bytes`
-- `output_success_rows`
-- `dynamic_bucket_slots_used`
-- `dynamic_bitmap_words_used`
-- `target_position_write_*` stats
-
-因此 strict SingleChunk 的 mutable generation 阶段可以关闭中间 live-bit 预统计，避免同一 bitmap 在 mutable result 和 finalize 中重复扫描。
-
-## 5. Position file 与 streaming source
-
-Position file 仍是总设计文档规定的统一格式：
-
-```text
-header
-descriptor table
+BC position header
+axis coordinate table
+cell descriptor table
 bucket metadata stream
 rank payload stream
 ```
 
-单 cell descriptor 记录：
+Each descriptor records:
 
 ```text
 bucket_count
@@ -149,294 +62,398 @@ rank_payload_bytes
 flags
 ```
 
-`BCPositionStreamingReader` 打开时只常驻：
-
-- header
-- family axis
-- descriptor table
-
-按需加载 cell：
-
-```cpp
-BCLoadedCell load_cell(CellId cid, BCCellLoadStats* stats = nullptr) const;
-std::vector<BCLoadedCell> load_cells(const std::vector<CellId>& cids,
-                                     BCCellLoadStats* stats = nullptr) const;
-```
-
-`load_cells` 保留调用方传入的 `cids` 顺序。它不要求 `cids` 全局有序；连续 chunk 只是 SingleChunk planner 的访问模式，不是数据结构语义。读取时会对当前请求顺序中的相邻 extent 做 coalescing，并通过 `BCReadableFile::read_many` 执行批量 IO。
-
-loaded cell 扫描：
-
-```cpp
-BCLoadedCellScanner(lut, cell.view()).for_each_board(fn);
-```
-
-这与 memory `BCPositionCellScanner` 共用底层 scanning helper。
-
-## 6. BCFileIO 当前约定
-
-统一抽象：
-
-```cpp
-class BCWritableFile {
-    virtual void write_at(uint64_t offset, const void* data, uint64_t bytes) = 0;
-    virtual void write_many(const std::vector<BCFileWriteRequest>&, BCFileIOStats*) = 0;
-    virtual void resize(uint64_t bytes) = 0;
-    virtual void prepare_full_overwrite(uint64_t bytes);
-    virtual void flush() = 0;
-};
-
-class BCReadableFile {
-    virtual void read_at(uint64_t offset, void* data, uint64_t bytes) const = 0;
-    virtual void read_many(const std::vector<BCFileReadRequest>&, BCFileIOStats*) const = 0;
-    virtual uint64_t size() const = 0;
-};
-```
-
-Buffered backend：
-
-- 使用 ordinary OS-buffered file IO。
-- `write_many/read_many` 对连续 requests 只 seek 一次。
-- `prepare_full_overwrite()` 用于新文件完整顺序写，避免 buffered writer 预先 close/reopen resize。
-
-Direct backend：
-
-- 已有 Windows direct IO prototype。
-- 当前 direct writer 注释语义是：不做 read-modify-write preservation，只适合 new-file stream writes / planned full writes。
-- direct 后端当前不是默认 generation output backend。
-
-线程安全约定：
-
-- `BCReadableFile` backend 默认不保证线程安全，除非具体 backend 明确说明。
-- 当前 streaming source load 在单 IO stage 调用；并行发生在 loaded cells 的 board scan / generation 计算阶段。
-
-## 7. ResidentChain / non-block generation
-
-Resident generation 的语义是 source / target 都在内存或可直接访问，不强制 current layer chunking。
-
-主要接口：
-
-```cpp
-BCResidentGenerationResult generate_resident_position_layer(
-    const BCLut& lut,
-    const BCFamilyTable& target_axis,
-    const std::vector<BCResidentGenerationSource>& sources,
-    const BCResidentGenerationOptions& options = {});
-
-BCResidentGenerationResult generate_resident_position_layer_to_file(
-    const BCLut& lut,
-    const BCFamilyTable& target_axis,
-    const std::vector<BCResidentGenerationSource>& sources,
-    BCWritableFile& output_file,
-    const BCResidentGenerationOptions& options = {});
-```
-
-streaming source 兼容接口：
-
-```cpp
-BCResidentGenerationResult generate_resident_position_layer_from_streaming_source(
-    const BCLut& lut,
-    const BCFamilyTable& target_axis,
-    const std::vector<BCResidentStreamingGenerationSource>& sources,
-    const BCResidentGenerationOptions& options = {});
-
-BCResidentGenerationResult generate_resident_position_layer_from_streaming_source_to_file(...);
-```
-
-Pair / mutable carry 接口：
-
-```cpp
-BCResidentGenerationPairResult generate_resident_position_layer_pair_with_mutable_carry_to_file(...);
-BCResidentGenerationPairResult generate_resident_position_layer_pair_from_streaming_source_with_mutable_carry_to_file(...);
-```
-
-Pair path 可以在一次 current scan 中同时生成 primary(+2) 与 secondary(+4)，generation wall time 是共享的。因此 `primary.generation_seconds` 和 `secondary.generation_seconds` 不应相加；pair-level 有：
-
-```cpp
-current_boards_scanned
-shared_generation_seconds
-total_pair_compute_seconds
-```
-
-注意：pair path 是 Resident-like 性能原型或兼容路径，不是 strict SingleChunk 的 `1+x` 内存约束路径；它可能同时持有 primary 和 secondary mutable states。
-
-## 8. Strict SingleChunk generation
-
-SingleChunk 的生产语义：
+Each bucket entry stores:
 
 ```text
-source current layer: 按 cell chunk streaming load
-target mutable: whole-layer BCDynamicState
-output: position file
-memory: 1 + x layers
+key
+rank_payload_offset
+success_row_offset
 ```
 
-其中：
-
-- `1` 是 future/target mutable layer。
-- `x` 是 current source layer 的 loaded cell chunk。
-- 不允许同时持有 primary(+2) 和 secondary(+4) 两个 whole-layer mutable states。
-
-当前 strict step：
-
-```cpp
-BCSingleChunkGenerationStepResult generate_single_chunk_position_layer_strict_to_file(
-    const BCLut& lut,
-    const BCFamilyTable& primary_axis,
-    const BCPositionStreamingReader& current,
-    uint32_t current_cell_chunk_size,
-    std::unique_ptr<BCResidentGenerationMutableLayer> carry_to_primary,
-    const BCFamilyTable* secondary_axis,
-    BCWritableFile& primary_output_file,
-    const BCResidentGenerationOptions& options = {});
-```
-
-严格执行顺序：
+The rank payload is:
 
 ```text
-1. consume current chunks with +2
-   target = carry_to_primary if present, otherwise new primary mutable
-   finalize/write primary position file
-   release primary mutable
-
-2. if secondary exists:
-   rescan current chunks with +4
-   build next_carry mutable only
-   do not finalize
-   do not write +4-only file
+prefix256[ceil(bitmap_len / 256)] as little-endian uint16
+aligned bitmap words as little-endian uint64
 ```
 
-下一层：
+`prefix256[i]` is the number of set bits before the `i`-th 256-bit bitmap
+block. Lookup must use this prefix and must not rescan from bitmap word zero.
+
+## 4. Physical Cell Layout
+
+The shared layout helper is `BCPositionCellLayout`.
+
+For modulo layout:
 
 ```text
-previous next_carry -> carry_to_primary
-current layer +2 inserts into that mutable
-finalize/write complete layer
+raw row coord -> row coord % modulus
+raw col coord -> col coord % modulus
+physical cell id = row_mod * modulus + col_mod
 ```
 
-这解决了之前容易混淆的点：`+4` 分支结果不应单独 finalize/write 成 `secondary` 文件；它以 mutable carry 形式直接参与下一层的 `+2` generation。只有完整 layer 才写 position file。
+The serialization axis has `family_count = modulus`. Bucket keys remain based
+on raw board/quadrant content. This is why changing modulus only changes
+physical grouping, not board identity.
 
-SingleChunk wrapper：
-
-```cpp
-BCResidentGenerationResult generate_single_chunk_position_layer(...);
-BCResidentGenerationResult generate_single_chunk_position_layer_to_file(...);
-```
-
-这些接口保留为普通 SingleChunk / compatibility path；严格 `1+x` 路径应使用 `generate_single_chunk_position_layer_strict_to_file`。
-
-## 9. Benchmark route and stats
-
-benchmark target：
+Relevant files:
 
 ```text
-bc_single_chunk_generation_bench
+native_core/include/BCPositionCellLayout.h
+native_core/include/BCFamilyPartitionPolicy.h
+native_core/include/BCFamilyPartitionAnalysis.h
+native_core/include/BCPositionCellLoader.h
 ```
 
-free9-256 strict file-output 路径：
+## 5. Route Dispatcher
+
+The unified benchmark dispatcher is in:
 
 ```text
-seed layer -> bc_layer_16.bcpos
-for S = 18..340 step 2:
-    current = bc_layer_(S-2).bcpos
-    carry_to_primary = previous +4 mutable, if any
-    +2 current chunks -> complete bc_layer_S.bcpos
-    +4 current chunks -> next_carry, unless terminal
+native_core/tests_src/bench_bc_family_generation.cpp
 ```
 
-输出文件名：
+The route option is:
 
 ```text
-bc_layer_<sum>.bcpos
+--family-route auto|resident|single|family
 ```
 
-不再使用 `primary_` / `secondary_` / `buffered_` 前缀。
+`--family-route family --family-modulus N` remains the reproducible fixed
+FamilyChain path. `--family-route-script <csv>` can force route/modulus and
+available memory per layer for tests.
 
-CSV 口径：
-
-- `compute_seconds = generation_seconds + finalize_seconds`
-- `total_seconds = compute_seconds + write_seconds + small wrapper overhead`
-- `compute_throughput_mbps = throughput_live / compute_seconds / 1e6`
-- `total_throughput_mbps = throughput_live / total_seconds / 1e6`
-- `throughput_live` 对齐 EX generation 口径：有 output rows 时使用 output live，否则使用 source live。
-- 生成性能统一看 EX/live 口径的 compute/total throughput。
-
-最新一次完整 strict SingleChunk free9-256 file-output 验收：
+The CSV output includes:
 
 ```text
-CSV:
-  C:\2048_tables\free9\bc_singlechunk_strict_generation_20260607_152746.csv
-
-Output dir:
-  C:\2048_tables\free9\bc_singlechunk_strict_generation_20260607_152746
-
-Generated files:
-  163 .bcpos files
-  8,754,682,168 bytes total
-
-Layer correctness:
-  162 / 162 generated layers ex_match=1
-
-Total:
-  generation_seconds          121.217532
-  finalize_seconds              5.737336
-  write_seconds                 1.740855
-  compute_seconds             126.954868
-  total_seconds               128.707274
-  compute_throughput_mbps     129.698203
-  total_throughput_mbps       127.932306
+route
+target_modulus
+available_memory_bytes
+route_estimated_peak_bytes
+route_budget_bytes
 ```
 
-## 10. 当前已经应用的 EX 对齐优化
+Do not add duplicate source modulus CSV fields. The source file already carries
+its axis and physical cell table.
 
-当前 BC generation 已经对齐或近似对齐 EX generation 的主要优化：
+## 6. Route Planner
 
-- OpenMP parallel over loaded source cells / buckets。
-- `BoardMover::move_all_dir` 一次生成四方向。
-- bitmask + ctz empty-cell enumeration。
-- `CanonicalBatch::canonicalize_inplace` batch canonicalize。
-- per-thread canonical buffer。
-- per-thread pending insert buffer。
-- dynamic hash insert 单查路径，不做 `contains()+insert()` 双查。
-- atomic bitmap OR 去重。
-- source file streaming load with coalesced extents。
-- dynamic finalize 使用 per-cell grouping + cell-local key sort。
-- rank payload / bucket metadata bounded parallel serialization。
-- output file streaming write，不构造整层 serialized bytes vector。
+Planner code:
 
-与 EX 仍不同的点：
+```text
+native_core/include/BCFamilyRoutePlanner.h
+```
 
-- strict SingleChunk 为满足 `1+x` 内存约束，对非 terminal current layer 做两次 scan：先 +2，再 +4。
-- 当前 target mutable 是 whole-layer `BCDynamicState`，FamilyChain 后续不能复用这个 backend。
-- SingleChunk 暂无 generation blob，因此不会把第一次 scan 的中间结果保存给第二个 delta phase。
-- 当前 output 默认 buffered backend；direct backend 已有 prototype，但不是生产默认。
+Budget:
 
-## 11. Caveats and TODO
+```text
+reserve = max(1 GiB, total_physical_memory * 3%)
+budget  = max(available_physical_memory - reserve, 0)
+```
 
-已冻结或当前可依赖：
+Layer size inputs:
 
-- Position file 格式：header + descriptor + bucket stream + rank payload stream。
-- `BCBucketEntry` / `BCRankPayloadView` / `BCBucketEntryView` / finalized lookup。
-- `BCPositionStreamingReader::load_cells` 与 `BCLoadedCellScanner`。
-- Resident / SingleChunk target mutable backend `BCDynamicState`。
-- Strict SingleChunk 不写 `+4-only` 文件，`+4` 以 mutable carry 进入下一层。
+```text
+L = max(source2_size, source4_size)
+D = abs(source2_size - source4_size)
+if source4 is missing, source4_size = source2_size
+```
 
-后续仍需实现：
+Peak estimates:
 
-- Route planner：按 layer / memory budget 选择 Resident / SingleChunk / FamilyChain，并决定 chunk size。
-- FamilyChain mutable store：cell-local builder + dump/reload + finalize boundary，不能直接使用 `BCDynamicState`。
-- generation blob 或其他机制，若要减少 strict SingleChunk 的 double scan，需要单独设计，不能破坏 `1+x` 约束。
-- Solve chain。
-- Success file production writer/loader 接主链路。
-- Direct IO production policy：Windows high-QD overlapped direct read/write、extent sorting/coalescing、logical/physical size 管理。
-- Streaming position reader 的多线程 reader 策略：当前 backend 默认不保证 shared-reader 并发安全。
+```text
+resident_est = L * 3.5 + D * 2.5
+single_est   = L * 1.2 + D
+family_est   = 0.25 GiB + 12 * L / modulus
+```
 
-## 12. 维护建议
+Supported family moduli are hard-coded primes from `13` through `293`. If no
+prime fits the budget, choose `293` and continue.
 
-1. 不要把 `BCDynamicState` 扩展到 FamilyChain。它是 Resident / SingleChunk whole-layer mutable backend。
-2. strict SingleChunk 的 `+4` carry 不应 finalize/write；只有完整 layer 写 `bc_layer_<sum>.bcpos`。
-3. 如果优化没有稳定收益，应回退。已经验证过无效或不适合保留的方向包括：
-   - 在 insert hot path 上用 atomic 维护 bucket/bitmap stats，统计扫描减少但 hot insert 变慢。
-   - 过大的 sequential write staging buffer，减少 write ops 但 buffered write seconds 变差。
-4. 单分块性能验收应强制 current layer chunking，例如 5-8 chunks，而不是退化为全层 source resident。
-5. CSV 对 EX 校验应继续使用 `free9_256_zmask_generate_stats.csv`，至少检查每层 `input_live` 和 `primary_live`。
+Modulus sticky rule:
+
+```text
+budget = 0.2 GiB + k * L / previous_modulus
+keep previous_modulus when 9 <= k <= 16
+otherwise choose the smallest supported prime satisfying family_est <= budget
+```
+
+Route hysteresis:
+
+```text
+Resident is fastest, then single, then family.
+Downgrade to a lower-memory route is immediate.
+Upgrade to a faster route requires 2 consecutive fitting layers.
+```
+
+Forced route bypasses auto selection, except that route-script fields may still
+override the target modulus and available-memory input.
+
+## 7. Resident Route
+
+Resident route means the generation step is allowed to keep the relevant layers
+or mutable states in memory while still using the shared modulo physical cell
+layout. It does not use FamilyChain scheduling.
+
+Current dispatcher behavior:
+
+```text
+target layer S:
+    current source = layer S - 2
+    carry source   = layer S - 4, if not already carried
+
+    current source may be a resident memory layer from the previous step
+    otherwise it is materialized/remapped to the requested modulo layout
+
+    carry_to_primary contains prior +4 contributions for S
+    current +2 contributions are inserted into carry_to_primary
+    final S is finalized/written
+    current +4 contributions are generated as next carry for S + 2
+```
+
+The final written layer is complete. The carry mutable state is not written as
+a standalone `.bcpos`.
+
+Primary code:
+
+```text
+native_core/include/BCResidentGeneration.h
+native_core/src/BCResidentGeneration.cpp
+native_core/src/BCResidentGenerationInternal.h
+native_core/src/BCResidentGenerationStreaming.cpp
+```
+
+Important entry points:
+
+```text
+generate_resident_mutable_carry_layer_to_file(...)
+generate_resident_position_layer_pair_from_streaming_source_with_mutable_carry_to_file(...)
+build_streaming_carry_to_primary(...)        // bench helper
+```
+
+## 8. Single Route
+
+Single route is strict `1 + x` generation:
+
+```text
+1 = target/future mutable layer
+x = current source cell chunk
+```
+
+It must not keep both `+2` and `+4` target mutable layers at the same time.
+The route still uses modulo physical cells and the same `BCDynamicState`
+target mutable backend as resident.
+
+Current dispatcher behavior:
+
+```text
+target layer S:
+    current source layer S - 2 is loaded in cell chunks
+    carry_to_primary contains prior +4 contributions for S
+    +2 current chunks are inserted into carry_to_primary
+    S is finalized/written and primary mutable is released
+    if S + 2 is still needed:
+        rescan current chunks
+        generate +4 contributions into next carry only
+```
+
+Only complete layers are written. A `+4`-only mutable carry is never finalized
+as a production layer.
+
+Primary code:
+
+```text
+native_core/include/BCSingleChunkGeneration.h
+native_core/src/BCSingleChunkGeneration.cpp
+native_core/src/BCResidentGeneration.cpp
+native_core/src/BCResidentGenerationStreaming.cpp
+```
+
+Important entry point:
+
+```text
+generate_single_chunk_strict_layer_to_file(...)
+```
+
+## 9. Family Route
+
+Family route is the two-blocked FamilyChain generation path. It is the memory
+fallback and uses modulo family partitioning.
+
+Current key properties:
+
+```text
+target family/cell builders are active only for the current family window
+source families/cells are loaded by pass
+physical family fanout may be up to 3
+generation is allowed to keep up to 4 family views in the generation phase
+```
+
+Family route writes the same `.bcpos` format as resident and single. It does
+not use resident/single carry states.
+
+Primary code:
+
+```text
+native_core/include/BCFamilyGeneration.h
+native_core/src/BCFamilyGeneration.cpp
+native_core/include/BCCellMutableBuilder.h
+native_core/include/BCFamilyGenerationScheduler.h
+native_core/include/BCFamilyPartitionPolicy.h
+native_core/include/BCFamilyPartitionAnalysis.h
+```
+
+Important benchmark path:
+
+```text
+generate_layer_to_file_for_route(... route = Family ...)
+```
+
+## 10. Remap / Modulus Changes
+
+Changing physical modulus does not change board identity, but an old physical
+cell can contain several new physical cells. Therefore remap cannot just reuse
+old cell ids.
+
+Current rule:
+
+```text
+read old physical cells as an over-approximation
+scan bucket keys, not boards
+compute the target logical physical cell from raw key sums
+copy only matching bucket/rank payload into the output loaded cell
+release non-target data before compute continues
+```
+
+This is used by generation route switching, modulus switching, checkpoint
+resume, and later solve-side window loading.
+
+## 11. Shared Hot Generation Backend
+
+Resident and single use `BCDynamicState`:
+
+```text
+cell_array[slot]          atomic<uint32_t>, empty / pending / cid
+key_array[slot]           uint64_t bucket key
+bitmap_offset_array[slot] uint32_t arena offset
+bitmap_arena[word]        atomic<uint64_t>
+```
+
+Insertion key:
+
+```text
+(physical cid, bucket key) -> bitmap bit for rank
+```
+
+The hash table is a manually managed flat open-addressing table with atomic
+cell publication. It does not grow in place and does not delete. Capacity
+failure marks overflow and the outer layer retries with larger reserves.
+
+Recent hot-path rules:
+
+```text
+candidate stats that require per-candidate increments are disabled by default
+hash grouping scans use relaxed loads after generation has ended
+prepare initializes only cell_array empty sentinels
+key_array and bitmap_offset_array are left uninitialized for empty slots
+finalize groups hash slots by cell before cell-local sort/measure/write
+parallel grouping is enabled only when cell_count >= 512
+large per-cell key/value sorts use the native x86 SIMD sort adapter
+```
+
+## 12. Direct IO
+
+Generation has direct-aware position IO. Current production defaults:
+
+```text
+Family route source/dump/reload/write paths use direct-capable IO where selected.
+Resident/single file output can use direct writer through benchmark options.
+No-QD paths still use direct sequential writes when direct output is requested.
+```
+
+The benchmark option names are currently:
+
+```text
+--target-output-io direct            // resident compute bench
+--family-position-io direct-rank-first
+--family-source-io direct|direct-auto
+--family-blob direct
+```
+
+For large free9 runs, direct writer backend throughput has reached roughly
+4.5 GB/s on the local SSD.
+
+## 13. Current Validation Snapshot
+
+Recent local runs after checkpoint:
+
+```text
+resident/non-block free9-256, m17:
+    layers = 162
+    total_seconds = 98.8559016
+    total_throughput = 166.563837 M rows/s
+    backend write = 4.527 GB/s
+
+forced family free9-256, m17:
+    layers = 162
+    route = family for every layer
+    total_seconds = 194.702517
+    total_throughput = 84.5691089 M rows/s
+    process peak working set = 191,348,736 bytes
+    active_family_window_peak = 3
+```
+
+The forced family run confirms the FamilyChain path did not regress relative
+to the previous 80-82 M rows/s range.
+
+## 14. File Map For Generation
+
+Core public interfaces:
+
+```text
+native_core/include/BCResidentGeneration.h
+native_core/include/BCSingleChunkGeneration.h
+native_core/include/BCFamilyGeneration.h
+native_core/include/BCFamilyRoutePlanner.h
+native_core/include/BCPositionCellLayout.h
+```
+
+Core implementations:
+
+```text
+native_core/src/BCResidentGeneration.cpp
+native_core/src/BCResidentGenerationStreaming.cpp
+native_core/src/BCSingleChunkGeneration.cpp
+native_core/src/BCFamilyGeneration.cpp
+native_core/src/BCPositionFile.cpp
+```
+
+Shared support:
+
+```text
+native_core/include/BCLut.h
+native_core/include/BCKeyRank.h
+native_core/include/BCCellBuilder.h
+native_core/include/BCCellMutableBuilder.h
+native_core/include/BCPositionFile.h
+native_core/include/BCPositionCellLoader.h
+native_core/include/BCPositionScanner.h
+native_core/include/BCLoadedCellScanner.h
+native_core/include/BCFileIO.h
+native_core/include/BCDirectFileIO.h
+native_core/include/BCSortUtils.h
+```
+
+Benchmarks/tests:
+
+```text
+native_core/tests_src/bench_bc_generation_compute.cpp
+native_core/tests_src/bench_bc_family_generation.cpp
+native_core/tests_src/bench_bc_resident_generation.cpp
+native_core/tests_src/bench_bc_single_chunk_generation.cpp
+native_core/tests_src/test_bc_resident_generation.cpp
+native_core/tests_src/test_bc_family_generation_state.cpp
+native_core/tests_src/test_bc_family_route_planner.cpp
+native_core/tests_src/test_bc_family_partition_analysis.cpp
+native_core/tests_src/test_bc_position_cell_loader.cpp
+```
