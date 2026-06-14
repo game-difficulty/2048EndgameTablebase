@@ -19,7 +19,11 @@ namespace NativeDiagnostics {
 
 inline bool enabled() {
     const char *value = std::getenv("TABLEBASE_NATIVE_DIAG");
-    return value == nullptr || std::strcmp(value, "0") != 0;
+    return value != nullptr &&
+           value[0] != '\0' &&
+           std::strcmp(value, "0") != 0 &&
+           std::strcmp(value, "false") != 0 &&
+           std::strcmp(value, "FALSE") != 0;
 }
 
 inline std::atomic<uint64_t> &sequence() {

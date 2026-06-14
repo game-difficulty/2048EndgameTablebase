@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <vector>
 
+#include "NativeSortPolicy.h"
+
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -59,34 +61,42 @@ inline std::vector<std::filesystem::path> bc_bookgen_native_candidates() {
 
 inline BCSortKeyValueUint64Uint32Fn bc_resolve_keyvalue_sort_uint64_uint32() {
     static BCSortKeyValueUint64Uint32Fn fn = []() -> BCSortKeyValueUint64Uint32Fn {
+        if (NativeSortPolicy::native_sort_disabled()) {
+            return nullptr;
+        }
+        try {
 #ifdef _WIN32
-        for (const std::filesystem::path &candidate : bc_bookgen_native_candidates()) {
-            if (!std::filesystem::exists(candidate)) {
-                continue;
+            for (const std::filesystem::path &candidate : bc_bookgen_native_candidates()) {
+                if (!std::filesystem::exists(candidate)) {
+                    continue;
+                }
+                NativeSortPolicy::prepare_bookgen_native_load(candidate);
+                HMODULE lib = LoadLibraryA(candidate.string().c_str());
+                if (lib == nullptr) {
+                    continue;
+                }
+                auto proc = reinterpret_cast<BCSortKeyValueUint64Uint32Fn>(
+                    GetProcAddress(lib, "keyvalue_sort_uint64_uint32")
+                );
+                if (proc != nullptr) {
+                    return proc;
+                }
             }
-            HMODULE lib = LoadLibraryA(candidate.string().c_str());
-            if (lib == nullptr) {
-                continue;
-            }
-            auto proc = reinterpret_cast<BCSortKeyValueUint64Uint32Fn>(
-                GetProcAddress(lib, "keyvalue_sort_uint64_uint32")
-            );
-            if (proc != nullptr) {
-                return proc;
-            }
-        }
-        return nullptr;
+            return nullptr;
 #else
-        void *lib = dlopen("bookgen_native.so", RTLD_LAZY);
-        if (lib == nullptr) {
-            lib = dlopen("native_core/bookgen_native.so", RTLD_LAZY);
-        }
-        return lib != nullptr
-            ? reinterpret_cast<BCSortKeyValueUint64Uint32Fn>(
-                  dlsym(lib, "keyvalue_sort_uint64_uint32")
-              )
-            : nullptr;
+            void *lib = dlopen("bookgen_native.so", RTLD_LAZY);
+            if (lib == nullptr) {
+                lib = dlopen("native_core/bookgen_native.so", RTLD_LAZY);
+            }
+            return lib != nullptr
+                ? reinterpret_cast<BCSortKeyValueUint64Uint32Fn>(
+                      dlsym(lib, "keyvalue_sort_uint64_uint32")
+                  )
+                : nullptr;
 #endif
+        } catch (...) {
+            return nullptr;
+        }
     }();
     return fn;
 }

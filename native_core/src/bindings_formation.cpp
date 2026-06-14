@@ -114,7 +114,6 @@ nb::dict exad_cold_lookup_to_python(const EXADCompressedResult::ColdLookupResult
 
 NB_MODULE(formation_core, m) {
     NativeDiagnostics::install_crash_handler("formation_core");
-    NativeDiagnostics::mark("formation_core diagnostic build sort-uint64-avx512-disabled-v5");
 
     nb::enum_<SymmMode>(m, "SymmMode")
         .value("Identity", SymmMode::Identity)

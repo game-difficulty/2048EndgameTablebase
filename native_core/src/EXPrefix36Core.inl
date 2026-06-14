@@ -3,6 +3,7 @@
 #include "CanonicalBatch.h"
 #include "EXFrozenLayer.h"
 #include "EXPrefix40Layer.h"
+#include "NativeSortPolicy.h"
 
 #include <algorithm>
 #include <array>
@@ -1764,33 +1765,41 @@ using KeyValueSortUint64Uint32Fn = void (*)(uint64_t *, uint32_t *, size_t, bool
 
 KeyValueSortUint64Uint32Fn resolve_keyvalue_sort_uint64_uint32() {
     static KeyValueSortUint64Uint32Fn fn = []() -> KeyValueSortUint64Uint32Fn {
+        if (NativeSortPolicy::native_sort_disabled()) {
+            return nullptr;
+        }
+        try {
 #if defined(_WIN32)
-        std::vector<std::filesystem::path> candidates;
-        candidates.emplace_back("native_core/bookgen_native.dll");
-        candidates.emplace_back("bookgen_native.dll");
-        candidates.emplace_back(std::filesystem::current_path() / "native_core" / "build-formation" / "bookgen_native.dll");
-        candidates.emplace_back(std::filesystem::current_path() / "native_core" / "bookgen_native.dll");
-        for (const auto &candidate : candidates) {
-            if (!std::filesystem::exists(candidate)) {
-                continue;
+            std::vector<std::filesystem::path> candidates;
+            candidates.emplace_back("native_core/bookgen_native.dll");
+            candidates.emplace_back("bookgen_native.dll");
+            candidates.emplace_back(std::filesystem::current_path() / "native_core" / "build-formation" / "bookgen_native.dll");
+            candidates.emplace_back(std::filesystem::current_path() / "native_core" / "bookgen_native.dll");
+            for (const auto &candidate : candidates) {
+                if (!std::filesystem::exists(candidate)) {
+                    continue;
+                }
+                NativeSortPolicy::prepare_bookgen_native_load(candidate);
+                HMODULE lib = LoadLibraryA(candidate.string().c_str());
+                if (!lib) {
+                    continue;
+                }
+                auto proc = reinterpret_cast<KeyValueSortUint64Uint32Fn>(GetProcAddress(lib, "keyvalue_sort_uint64_uint32"));
+                if (proc) {
+                    return proc;
+                }
             }
-            HMODULE lib = LoadLibraryA(candidate.string().c_str());
-            if (!lib) {
-                continue;
-            }
-            auto proc = reinterpret_cast<KeyValueSortUint64Uint32Fn>(GetProcAddress(lib, "keyvalue_sort_uint64_uint32"));
-            if (proc) {
-                return proc;
-            }
-        }
-        return nullptr;
+            return nullptr;
 #else
-        void *lib = dlopen("bookgen_native.so", RTLD_LAZY);
-        if (!lib) {
-            lib = dlopen("native_core/bookgen_native.so", RTLD_LAZY);
-        }
-        return lib ? reinterpret_cast<KeyValueSortUint64Uint32Fn>(dlsym(lib, "keyvalue_sort_uint64_uint32")) : nullptr;
+            void *lib = dlopen("bookgen_native.so", RTLD_LAZY);
+            if (!lib) {
+                lib = dlopen("native_core/bookgen_native.so", RTLD_LAZY);
+            }
+            return lib ? reinterpret_cast<KeyValueSortUint64Uint32Fn>(dlsym(lib, "keyvalue_sort_uint64_uint32")) : nullptr;
 #endif
+        } catch (...) {
+            return nullptr;
+        }
     }();
     return fn;
 }
