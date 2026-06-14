@@ -39,6 +39,7 @@ struct Args {
     uint32_t direct_queue_depth = 16U;
     bool write_output = true;
     bool verify_expected = true;
+    bool profile_recalc = false;
     uint32_t repeats = 1U;
 };
 
@@ -53,9 +54,20 @@ struct IterationMetric {
     uint64_t queries4 = 0U;
     uint64_t found2 = 0U;
     uint64_t found4 = 0U;
+    uint64_t empty_slots = 0U;
+    uint64_t spawned_boards = 0U;
+    uint64_t unchanged_moves = 0U;
+    uint64_t canonicalized_candidates = 0U;
+    uint64_t encoded_queries = 0U;
+    uint64_t encode_rejects = 0U;
+    uint64_t future_lookup_misses = 0U;
     uint32_t max_value = 0U;
     double current_read_seconds = 0.0;
     double recalc_seconds = 0.0;
+    double recalc_spawn_move_thread_seconds = 0.0;
+    double recalc_canonical_encode_thread_seconds = 0.0;
+    double recalc_lookup_thread_seconds = 0.0;
+    double recalc_finalize_thread_seconds = 0.0;
     double compact_seconds = 0.0;
     double position_write_seconds = 0.0;
     double success_write_seconds = 0.0;
@@ -120,6 +132,7 @@ void print_usage(const char *exe) {
         << "  --threads N                    OpenMP thread count\n"
         << "  --direct-io                    use direct IO for position read/write\n"
         << "  --direct-queue-depth N         direct IO queue depth\n"
+        << "  --profile-recalc              collect thread-accumulated recalc stage timings\n"
         << "  --no-write                     skip output writes\n"
         << "  --no-verify                    skip expected solved comparison\n";
 }
@@ -160,6 +173,8 @@ void print_usage(const char *exe) {
         } else if (flag == "--direct-queue-depth") {
             args.direct_queue_depth = static_cast<uint32_t>(
                 std::stoul(require_value(argc, argv, i, flag.c_str())));
+        } else if (flag == "--profile-recalc") {
+            args.profile_recalc = true;
         } else if (flag == "--no-write") {
             args.write_output = false;
         } else if (flag == "--no-verify") {
@@ -363,7 +378,11 @@ void verify_layer_matches(
 void write_stats_header(std::ofstream &out) {
     out
         << "iteration,current_rows,live_rows,zero_pruned_rows,position_bytes,success_bytes,"
-        << "queries2,queries4,found2,found4,max_value,current_read_seconds,recalc_seconds,"
+        << "queries2,queries4,found2,found4,empty_slots,spawned_boards,unchanged_moves,"
+        << "canonicalized_candidates,encoded_queries,encode_rejects,future_lookup_misses,"
+        << "max_value,current_read_seconds,recalc_seconds,"
+        << "recalc_spawn_move_thread_seconds,recalc_canonical_encode_thread_seconds,"
+        << "recalc_lookup_thread_seconds,recalc_finalize_thread_seconds,"
         << "compact_seconds,position_write_seconds,success_write_seconds,verify_seconds,total_seconds,"
         << "recalc_mrows_per_sec,total_mrows_per_sec,verified\n";
 }
@@ -386,9 +405,20 @@ void write_metric_row(std::ofstream &out, const IterationMetric &m) {
         << m.queries4 << ','
         << m.found2 << ','
         << m.found4 << ','
+        << m.empty_slots << ','
+        << m.spawned_boards << ','
+        << m.unchanged_moves << ','
+        << m.canonicalized_candidates << ','
+        << m.encoded_queries << ','
+        << m.encode_rejects << ','
+        << m.future_lookup_misses << ','
         << m.max_value << ','
         << m.current_read_seconds << ','
         << m.recalc_seconds << ','
+        << m.recalc_spawn_move_thread_seconds << ','
+        << m.recalc_canonical_encode_thread_seconds << ','
+        << m.recalc_lookup_thread_seconds << ','
+        << m.recalc_finalize_thread_seconds << ','
         << m.compact_seconds << ','
         << m.position_write_seconds << ','
         << m.success_write_seconds << ','
@@ -470,6 +500,7 @@ int main(int argc, char **argv) {
             options.edge_options.canonical_symm_mode = args.canonical_symm_mode;
             options.edge_options.spawn_rate4 = args.spawn_rate4;
             options.edge_options.success_target_rank = args.success_target_rank;
+            options.profile_recalc_stages = args.profile_recalc;
 
             BC::BCResidentLayerResult<uint32_t> solve_result =
                 BC::bc_resident_solve_compacted_layer<uint32_t>(
@@ -493,8 +524,24 @@ int main(int argc, char **argv) {
             metric.queries4 = solve_result.solve_stats.queries4;
             metric.found2 = solve_result.solve_stats.found2;
             metric.found4 = solve_result.solve_stats.found4;
+            metric.empty_slots = solve_result.solve_stats.edge.empty_slots;
+            metric.spawned_boards = solve_result.solve_stats.edge.spawned_boards;
+            metric.unchanged_moves = solve_result.solve_stats.edge.unchanged_moves;
+            metric.canonicalized_candidates =
+                solve_result.solve_stats.edge.canonicalized_candidates;
+            metric.encoded_queries = solve_result.solve_stats.edge.encoded_queries;
+            metric.encode_rejects = solve_result.solve_stats.edge.encode_rejects;
+            metric.future_lookup_misses = solve_result.solve_stats.edge.future_lookup_misses;
             metric.current_read_seconds = current_read_seconds;
             metric.recalc_seconds = solve_result.solve_stats.recalc_seconds;
+            metric.recalc_spawn_move_thread_seconds =
+                solve_result.solve_stats.recalc_spawn_move_thread_seconds;
+            metric.recalc_canonical_encode_thread_seconds =
+                solve_result.solve_stats.recalc_canonical_encode_thread_seconds;
+            metric.recalc_lookup_thread_seconds =
+                solve_result.solve_stats.recalc_lookup_thread_seconds;
+            metric.recalc_finalize_thread_seconds =
+                solve_result.solve_stats.recalc_finalize_thread_seconds;
             metric.compact_seconds = solved_layer.compact_stats.compact_seconds;
             metric.max_value = solved_layer.success_values.empty()
                 ? 0U

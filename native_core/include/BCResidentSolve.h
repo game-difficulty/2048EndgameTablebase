@@ -46,6 +46,10 @@ struct BCResidentSolveStats {
     uint64_t terminal_success_rows = 0U;
     double future_index_seconds = 0.0;
     double recalc_seconds = 0.0;
+    double recalc_spawn_move_thread_seconds = 0.0;
+    double recalc_canonical_encode_thread_seconds = 0.0;
+    double recalc_lookup_thread_seconds = 0.0;
+    double recalc_finalize_thread_seconds = 0.0;
     double write_seconds = 0.0;
     BCSolveEdgeStats edge;
 };
@@ -62,6 +66,7 @@ struct BCResidentSolveOptions {
     BCSolveEdgeOptions edge_options;
     const BCQuadrantWordSumTable *word_sums = nullptr;
     int num_threads = 0;
+    bool profile_recalc_stages = false;
 
     void set_dtype(BCSuccessDTypeMode mode) {
         if (!bc_success_dtype_matches_type<StorageT>(mode)) {
@@ -360,6 +365,10 @@ inline void bc_resident_solve_accumulate_stats(
     dst.terminal_success_rows += src.terminal_success_rows;
     dst.future_index_seconds += src.future_index_seconds;
     dst.recalc_seconds += src.recalc_seconds;
+    dst.recalc_spawn_move_thread_seconds += src.recalc_spawn_move_thread_seconds;
+    dst.recalc_canonical_encode_thread_seconds += src.recalc_canonical_encode_thread_seconds;
+    dst.recalc_lookup_thread_seconds += src.recalc_lookup_thread_seconds;
+    dst.recalc_finalize_thread_seconds += src.recalc_finalize_thread_seconds;
     dst.write_seconds += src.write_seconds;
     bc_resident_solve_accumulate_edge_stats(dst.edge, src.edge);
 }
@@ -481,7 +490,7 @@ inline constexpr uint32_t kBCResidentLargeBucketChunkWords = 256U;
 
 template <typename StorageT>
 struct BCResidentBatchWorkspace {
-    static constexpr uint32_t kBatchSize = 256U;
+    static constexpr uint32_t kBatchSize = 512U;
     static constexpr size_t kBestCount = static_cast<size_t>(kBatchSize) * kBCBoardCellCount;
 
     std::array<uint64_t, kBatchSize> boards{};
@@ -548,7 +557,7 @@ template <typename StorageT>
 }
 
 template <typename StorageT>
-inline void bc_resident_push_candidate(
+[[nodiscard]] inline uint8_t bc_resident_push_candidate(
     const BCLut &lut,
     const BCFamilyTable &axis,
     const BCSolveTargetFamilyFilter &filter,
@@ -558,15 +567,12 @@ inline void bc_resident_push_candidate(
     BCDirectionMask move_axis,
     const BCResidentSolveOptions<StorageT> &options,
     std::vector<uint64_t> &boards,
-    std::vector<uint16_t> &refs,
-    BCResidentSolveStats &stats
+    std::vector<uint16_t> &refs
 ) {
     if (moved == spawned) {
-        ++stats.edge.unchanged_moves;
-        return;
+        return 1U;
     }
     if (filter.enabled) {
-        ++stats.edge.prefilter_checks;
         if (!bc_solve_physical_target_family_may_hit(
                 lut,
                 axis,
@@ -574,18 +580,17 @@ inline void bc_resident_push_candidate(
                 moved,
                 move_axis,
                 options.word_sums)) {
-            ++stats.edge.prefilter_skips;
-            return;
+            return 2U;
         }
     }
     boards.push_back(moved);
     refs.push_back(ref);
+    return 0U;
 }
 
 template <typename StorageT>
 inline void bc_resident_flush_canonical(
-    const BCLut &lut,
-    const BCFamilyTable &axis,
+    const BCSolvePreparedQueryEncoder &encoder,
     uint8_t spawn_tile_rank,
     std::vector<uint64_t> &boards,
     std::vector<uint16_t> &refs,
@@ -602,40 +607,26 @@ inline void bc_resident_flush_canonical(
         options.edge_options.canonical_symm_mode
     );
     stats.edge.canonicalized_candidates += boards.size();
+    uint64_t encoded_count = 0U;
+    uint64_t reject_count = 0U;
     for (size_t i = 0U; i < boards.size(); ++i) {
-        bool duplicate = false;
-        for (size_t j = i; j > 0U && refs[j - 1U] == refs[i]; --j) {
-            if (boards[j - 1U] == boards[i]) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (duplicate) {
-            continue;
-        }
-        const BCBoardEncodedPosition encoded = bc_encode_canonical_quadrants_position_hot(
-            lut,
-            axis,
-            unpack_board_to_quadrants(boards[i])
-        );
-        if (!encoded.valid) {
-            ++stats.edge.encode_rejects;
-            continue;
-        }
-        queries.push_back(BCSolvePreparedQuery{
-            encoded.cid,
-            encoded.row_family,
-            encoded.col_family,
-            encoded.key,
-            encoded.rank,
-            encoded.bitmap_len,
+        BCSolvePreparedQuery query;
+        const bool encoded = encoder.encode(
+            unpack_board_to_quadrants(boards[i]),
             refs[i],
             spawn_tile_rank,
             BCDirectionMask::Both,
-            true
-        });
-        ++stats.edge.encoded_queries;
+            query
+        );
+        if (!encoded) {
+            ++reject_count;
+            continue;
+        }
+        queries.push_back(query);
+        ++encoded_count;
     }
+    stats.edge.encoded_queries += encoded_count;
+    stats.edge.encode_rejects += reject_count;
     boards.clear();
     refs.clear();
 }
@@ -663,15 +654,57 @@ inline void bc_resident_solve_batch(
     workspace.queries2.clear();
     workspace.queries4.clear();
 
+    const bool success_check_enabled = bc_solve_success_check_enabled(options.edge_options);
+    const bool profile_stages = options.profile_recalc_stages;
+    double stage_t0 = profile_stages ? bc_resident_solve_now_seconds() : 0.0;
+    uint64_t batch_terminal_success = 0U;
+    uint64_t batch_empty_slots = 0U;
+    uint64_t batch_move_all_dir_calls = 0U;
+    uint64_t batch_selective_move_calls = 0U;
+    uint64_t batch_unchanged_moves = 0U;
+    uint64_t batch_prefilter_checks = 0U;
+    uint64_t batch_prefilter_skips = 0U;
+    auto record_candidate_result = [&](uint8_t result, const BCSolveTargetFamilyFilter &filter) {
+        if (result == 1U) {
+            ++batch_unchanged_moves;
+            return;
+        }
+        if (filter.enabled) {
+            ++batch_prefilter_checks;
+            if (result == 2U) {
+                ++batch_prefilter_skips;
+            }
+        }
+    };
+    const bool fast_unfiltered_both =
+        options.directions == BCDirectionMask::Both &&
+        !options.filter2.enabled &&
+        !options.filter4.enabled;
+    auto push_moved_unfiltered = [&](
+        uint64_t spawned,
+        uint64_t moved,
+        uint16_t ref,
+        std::vector<uint64_t> &canonical_boards,
+        std::vector<uint16_t> &canonical_refs
+    ) {
+        if (moved == spawned) {
+            ++batch_unchanged_moves;
+            return;
+        }
+        canonical_boards.push_back(moved);
+        canonical_refs.push_back(ref);
+    };
     for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
         const uint64_t board = workspace.boards[board_slot];
-        ++stats.edge.source_boards;
-        workspace.terminal[board_slot] = bc_solve_is_success_board(board, options.edge_options) ? 1U : 0U;
         workspace.empty_counts[board_slot] = 0U;
         workspace.empty_masks[board_slot] = 0U;
-        if (workspace.terminal[board_slot] != 0U) {
-            ++stats.edge.terminal_success_boards;
-            continue;
+        if (success_check_enabled) {
+            workspace.terminal[board_slot] =
+                bc_solve_is_success_board(board, options.edge_options) ? 1U : 0U;
+            if (workspace.terminal[board_slot] != 0U) {
+                ++batch_terminal_success;
+                continue;
+            }
         }
         uint32_t empty_mask = bc_zero_cell_mask16(board);
         workspace.empty_masks[board_slot] = static_cast<uint16_t>(empty_mask);
@@ -679,8 +712,46 @@ inline void bc_resident_solve_batch(
             const uint32_t cell = bc_solve_pop_lowest_set_bit_index(empty_mask);
             const uint16_t ref = static_cast<uint16_t>((board_slot << 4U) | cell);
             ++workspace.empty_counts[board_slot];
-            ++stats.edge.empty_slots;
-            stats.edge.spawned_boards += 2U;
+            ++batch_empty_slots;
+
+            if (fast_unfiltered_both) {
+                batch_move_all_dir_calls += 2U;
+
+                const uint64_t spawned2 =
+                    set_board_tile_unchecked(board, cell, options.edge_options.spawn2_tile_rank);
+                const auto moved2_horizontal = BoardMover::move_horizontal_pair(spawned2);
+                const auto moved2_vertical = BoardMover::move_vertical_pair(spawned2);
+                push_moved_unfiltered(
+                    spawned2, moved2_horizontal.first, ref,
+                    workspace.canonical2_boards, workspace.canonical2_refs);
+                push_moved_unfiltered(
+                    spawned2, moved2_horizontal.second, ref,
+                    workspace.canonical2_boards, workspace.canonical2_refs);
+                push_moved_unfiltered(
+                    spawned2, moved2_vertical.first, ref,
+                    workspace.canonical2_boards, workspace.canonical2_refs);
+                push_moved_unfiltered(
+                    spawned2, moved2_vertical.second, ref,
+                    workspace.canonical2_boards, workspace.canonical2_refs);
+
+                const uint64_t spawned4 =
+                    set_board_tile_unchecked(board, cell, options.edge_options.spawn4_tile_rank);
+                const auto moved4_horizontal = BoardMover::move_horizontal_pair(spawned4);
+                const auto moved4_vertical = BoardMover::move_vertical_pair(spawned4);
+                push_moved_unfiltered(
+                    spawned4, moved4_horizontal.first, ref,
+                    workspace.canonical4_boards, workspace.canonical4_refs);
+                push_moved_unfiltered(
+                    spawned4, moved4_horizontal.second, ref,
+                    workspace.canonical4_boards, workspace.canonical4_refs);
+                push_moved_unfiltered(
+                    spawned4, moved4_vertical.first, ref,
+                    workspace.canonical4_boards, workspace.canonical4_refs);
+                push_moved_unfiltered(
+                    spawned4, moved4_vertical.second, ref,
+                    workspace.canonical4_boards, workspace.canonical4_refs);
+                continue;
+            }
 
             auto push_spawn = [&](uint8_t spawn_rank,
                                   const BCFamilyTable &axis,
@@ -689,40 +760,40 @@ inline void bc_resident_solve_batch(
                                   std::vector<uint16_t> &canonical_refs) {
                 const uint64_t spawned = set_board_tile_unchecked(board, cell, spawn_rank);
                 if (options.directions == BCDirectionMask::Both) {
-                    ++stats.edge.move_all_dir_calls;
+                    ++batch_move_all_dir_calls;
                     const auto moved = BoardMover::move_all_dir(spawned);
-                    bc_resident_push_candidate(
+                    record_candidate_result(bc_resident_push_candidate(
                         lut, axis, filter, spawned, std::get<0>(moved), ref,
-                        BCDirectionMask::Horizontal, options, canonical_boards, canonical_refs, stats);
-                    bc_resident_push_candidate(
+                        BCDirectionMask::Horizontal, options, canonical_boards, canonical_refs), filter);
+                    record_candidate_result(bc_resident_push_candidate(
                         lut, axis, filter, spawned, std::get<1>(moved), ref,
-                        BCDirectionMask::Horizontal, options, canonical_boards, canonical_refs, stats);
-                    bc_resident_push_candidate(
+                        BCDirectionMask::Horizontal, options, canonical_boards, canonical_refs), filter);
+                    record_candidate_result(bc_resident_push_candidate(
                         lut, axis, filter, spawned, std::get<2>(moved), ref,
-                        BCDirectionMask::Vertical, options, canonical_boards, canonical_refs, stats);
-                    bc_resident_push_candidate(
+                        BCDirectionMask::Vertical, options, canonical_boards, canonical_refs), filter);
+                    record_candidate_result(bc_resident_push_candidate(
                         lut, axis, filter, spawned, std::get<3>(moved), ref,
-                        BCDirectionMask::Vertical, options, canonical_boards, canonical_refs, stats);
+                        BCDirectionMask::Vertical, options, canonical_boards, canonical_refs), filter);
                 } else {
                     if (bc_has_horizontal(options.directions)) {
-                        stats.edge.selective_move_calls += 2U;
+                        batch_selective_move_calls += 2U;
                         const auto moved = BoardMover::move_horizontal_pair(spawned);
-                        bc_resident_push_candidate(
+                        record_candidate_result(bc_resident_push_candidate(
                             lut, axis, filter, spawned, moved.first, ref,
-                            BCDirectionMask::Horizontal, options, canonical_boards, canonical_refs, stats);
-                        bc_resident_push_candidate(
+                            BCDirectionMask::Horizontal, options, canonical_boards, canonical_refs), filter);
+                        record_candidate_result(bc_resident_push_candidate(
                             lut, axis, filter, spawned, moved.second, ref,
-                            BCDirectionMask::Horizontal, options, canonical_boards, canonical_refs, stats);
+                            BCDirectionMask::Horizontal, options, canonical_boards, canonical_refs), filter);
                     }
                     if (bc_has_vertical(options.directions)) {
-                        stats.edge.selective_move_calls += 2U;
+                        batch_selective_move_calls += 2U;
                         const auto moved = BoardMover::move_vertical_pair(spawned);
-                        bc_resident_push_candidate(
+                        record_candidate_result(bc_resident_push_candidate(
                             lut, axis, filter, spawned, moved.first, ref,
-                            BCDirectionMask::Vertical, options, canonical_boards, canonical_refs, stats);
-                        bc_resident_push_candidate(
+                            BCDirectionMask::Vertical, options, canonical_boards, canonical_refs), filter);
+                        record_candidate_result(bc_resident_push_candidate(
                             lut, axis, filter, spawned, moved.second, ref,
-                            BCDirectionMask::Vertical, options, canonical_boards, canonical_refs, stats);
+                            BCDirectionMask::Vertical, options, canonical_boards, canonical_refs), filter);
                     }
                 }
             };
@@ -743,10 +814,25 @@ inline void bc_resident_solve_batch(
             );
         }
     }
+    stats.edge.source_boards += count;
+    stats.edge.terminal_success_boards += batch_terminal_success;
+    stats.edge.empty_slots += batch_empty_slots;
+    stats.edge.spawned_boards += batch_empty_slots * 2U;
+    stats.edge.move_all_dir_calls += batch_move_all_dir_calls;
+    stats.edge.selective_move_calls += batch_selective_move_calls;
+    stats.edge.unchanged_moves += batch_unchanged_moves;
+    stats.edge.prefilter_checks += batch_prefilter_checks;
+    stats.edge.prefilter_skips += batch_prefilter_skips;
+    if (profile_stages) {
+        const double stage_t1 = bc_resident_solve_now_seconds();
+        stats.recalc_spawn_move_thread_seconds += stage_t1 - stage_t0;
+        stage_t0 = stage_t1;
+    }
 
+    const BCSolvePreparedQueryEncoder future2_encoder(lut, future2_axis);
+    const BCSolvePreparedQueryEncoder future4_encoder(lut, future4_axis);
     bc_resident_flush_canonical(
-        lut,
-        future2_axis,
+        future2_encoder,
         options.edge_options.spawn2_tile_rank,
         workspace.canonical2_boards,
         workspace.canonical2_refs,
@@ -755,8 +841,7 @@ inline void bc_resident_solve_batch(
         stats
     );
     bc_resident_flush_canonical(
-        lut,
-        future4_axis,
+        future4_encoder,
         options.edge_options.spawn4_tile_rank,
         workspace.canonical4_boards,
         workspace.canonical4_refs,
@@ -764,11 +849,19 @@ inline void bc_resident_solve_batch(
         options,
         stats
     );
+    if (profile_stages) {
+        const double stage_t1 = bc_resident_solve_now_seconds();
+        stats.recalc_canonical_encode_thread_seconds += stage_t1 - stage_t0;
+        stage_t0 = stage_t1;
+    }
 
     stats.queries2 += workspace.queries2.size();
     stats.queries4 += workspace.queries4.size();
 
     for (uint32_t lane = 0U; lane < options.row_width; ++lane) {
+        if (profile_stages) {
+            stage_t0 = bc_resident_solve_now_seconds();
+        }
         std::fill_n(
             workspace.best2.data(),
             static_cast<size_t>(count) * kBCBoardCellCount,
@@ -784,21 +877,28 @@ inline void bc_resident_solve_batch(
             workspace.best2.data(),
             static_cast<size_t>(count) * kBCBoardCellCount,
             lane,
-            &stats.edge
+            &stats.edge,
+            true
         );
         const uint64_t found4 = future4_lookup.reduce_max_queries(
             workspace.queries4,
             workspace.best4.data(),
             static_cast<size_t>(count) * kBCBoardCellCount,
             lane,
-            &stats.edge
+            &stats.edge,
+            true
         );
         stats.found2 += found2;
         stats.found4 += found4;
+        if (profile_stages) {
+            const double stage_t1 = bc_resident_solve_now_seconds();
+            stats.recalc_lookup_thread_seconds += stage_t1 - stage_t0;
+            stage_t0 = stage_t1;
+        }
 
         for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
             StorageT value = options.zero_value;
-            if (workspace.terminal[board_slot] != 0U) {
+            if (success_check_enabled && workspace.terminal[board_slot] != 0U) {
                 value = options.terminal_value;
                 if (lane == 0U) {
                     ++stats.terminal_success_rows;
@@ -814,13 +914,20 @@ inline void bc_resident_solve_batch(
                         sum2 += workspace.best2[index];
                         sum4 += workspace.best4[index];
                     }
-                    value = bc_resident_reduce_weighted<StorageT>(
-                        static_cast<long double>(sum2),
-                        static_cast<long double>(sum4),
-                        workspace.empty_counts[board_slot],
-                        options.edge_options.spawn_rate4,
-                        options.zero_value
-                    );
+                    if (options.edge_options.spawn_rate4 == 0.1) {
+                        const uint64_t numerator = 9ULL * sum2 + sum4;
+                        const uint64_t denominator =
+                            10ULL * static_cast<uint64_t>(workspace.empty_counts[board_slot]);
+                        value = static_cast<uint32_t>(numerator / denominator);
+                    } else {
+                        value = bc_resident_reduce_weighted<StorageT>(
+                            static_cast<long double>(sum2),
+                            static_cast<long double>(sum4),
+                            workspace.empty_counts[board_slot],
+                            options.edge_options.spawn_rate4,
+                            options.zero_value
+                        );
+                    }
                 } else {
                     uint32_t mask = workspace.empty_masks[board_slot];
                     long double sum2 = 0.0L;
@@ -840,9 +947,6 @@ inline void bc_resident_solve_batch(
                     );
                 }
             }
-            if (lane == 0U) {
-                ++stats.edge.finalized_boards;
-            }
             const uint64_t row_index = workspace.output_indices[board_slot];
             const uint64_t value_index =
                 row_index * static_cast<uint64_t>(options.row_width) + lane;
@@ -850,6 +954,12 @@ inline void bc_resident_solve_batch(
                 throw std::out_of_range("BC resident batch output value index out of range");
             }
             out_values[static_cast<size_t>(value_index)] = value;
+        }
+        if (lane == 0U) {
+            stats.edge.finalized_boards += count;
+        }
+        if (profile_stages) {
+            stats.recalc_finalize_thread_seconds += bc_resident_solve_now_seconds() - stage_t0;
         }
     }
     workspace.clear_batch();
@@ -904,6 +1014,8 @@ inline BCResidentRawSolveResult<StorageT> bc_resident_solve_raw_values(
         const int tid = 0;
 #endif
         BCResidentSolveStats &thread_stats = per_thread[static_cast<size_t>(tid)];
+        uint64_t local_current_rows = 0U;
+        uint64_t local_current_boards = 0U;
         BCResidentBatchWorkspace<StorageT> workspace;
         auto flush = [&]() {
             bc_resident_solve_batch<StorageT>(
@@ -942,8 +1054,8 @@ inline BCResidentRawSolveResult<StorageT> bc_resident_solve_raw_values(
                         workspace.boards[workspace.count] = entry.board;
                         workspace.output_indices[workspace.count] = cell_base + entry.local_success_row;
                         ++workspace.count;
-                        ++thread_stats.current_rows;
-                        ++thread_stats.current_boards;
+                        ++local_current_rows;
+                        ++local_current_boards;
                         if (workspace.count == BCResidentBatchWorkspace<StorageT>::kBatchSize) {
                             flush();
                         }
@@ -952,6 +1064,8 @@ inline BCResidentRawSolveResult<StorageT> bc_resident_solve_raw_values(
             }
         }
         flush();
+        thread_stats.current_rows += local_current_rows;
+        thread_stats.current_boards += local_current_boards;
     }
     const double recalc_t1 = bc_resident_solve_now_seconds();
     result.stats = work_plan.stats;

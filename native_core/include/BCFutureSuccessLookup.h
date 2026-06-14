@@ -78,9 +78,7 @@ public:
 
             cell.rank_payload = position.rank_payload_for_cell(cid);
             const BCBucketEntryView buckets = position.bucket_entries_for_cell(cid);
-            const uint32_t capacity = next_power_of_two_u32(
-                std::max<uint64_t>(2ULL, static_cast<uint64_t>(buckets.size) * 2ULL)
-            );
+            const uint32_t capacity = direct_capacity_for_bucket_count(buckets.size);
             cell.entries.assign(capacity, DirectEntry{});
             cell.mask = capacity - 1U;
             for (uint32_t i = 0U; i < buckets.size; ++i) {
@@ -157,9 +155,7 @@ public:
 
             cell.rank_payload = position.rank_payload_for_cell(cid);
             const BCBucketEntryView buckets = position.bucket_entries_for_cell(cid);
-            const uint32_t capacity = next_power_of_two_u32(
-                std::max<uint64_t>(2ULL, static_cast<uint64_t>(buckets.size) * 2ULL)
-            );
+            const uint32_t capacity = direct_capacity_for_bucket_count(buckets.size);
             cell.entries.assign(capacity, DirectEntry{});
             cell.mask = capacity - 1U;
             for (uint32_t i = 0U; i < buckets.size; ++i) {
@@ -230,8 +226,6 @@ public:
         }
         BCBoardEncodedPosition encoded;
         encoded.cid = query.cid;
-        encoded.row_family = query.row_family;
-        encoded.col_family = query.col_family;
         encoded.key = query.key;
         encoded.rank = query.rank;
         encoded.bitmap_len = query.bitmap_len;
@@ -244,7 +238,8 @@ public:
         StorageT *best,
         size_t best_count,
         uint32_t lane,
-        BCSolveEdgeStats *stats = nullptr
+        BCSolveEdgeStats *stats = nullptr,
+        bool trusted_queries = false
     ) const {
         if (lane >= row_width_) {
             throw std::out_of_range("BC future batch lookup lane out of range");
@@ -253,22 +248,29 @@ public:
             throw std::invalid_argument("BC future batch lookup best pointer is null");
         }
         uint64_t found_count = 0U;
-        constexpr uint32_t kBatch = 256U;
+        constexpr uint32_t kBatch = 512U;
         uint32_t value_indices[kBatch];
-        uint8_t found[kBatch];
         for (uint32_t base = 0U; base < static_cast<uint32_t>(queries.size()); base += kBatch) {
             const uint32_t count = std::min<uint32_t>(kBatch, static_cast<uint32_t>(queries.size()) - base);
-            lookup_success_indices(queries.data() + base, value_indices, found, count, lane);
-            for (uint32_t i = 0U; i < count; ++i) {
-                if (stats != nullptr) {
-                    ++stats->future_lookup_count;
+            if (trusted_queries) {
+                if (keep_rows_ == nullptr) {
+                    lookup_success_indices<true, false>(queries.data() + base, value_indices, count, lane);
+                } else {
+                    lookup_success_indices<true, true>(queries.data() + base, value_indices, count, lane);
                 }
-                if (found[i] == 0U) {
-                    if (stats != nullptr) {
-                        ++stats->future_lookup_misses;
-                    }
+            } else {
+                if (keep_rows_ == nullptr) {
+                    lookup_success_indices<false, false>(queries.data() + base, value_indices, count, lane);
+                } else {
+                    lookup_success_indices<false, true>(queries.data() + base, value_indices, count, lane);
+                }
+            }
+            uint32_t batch_hits = 0U;
+            for (uint32_t i = 0U; i < count; ++i) {
+                if (value_indices[i] == kMissingValueIndex) {
                     continue;
                 }
+                ++batch_hits;
                 const BCSolvePreparedQuery &query = queries[static_cast<size_t>(base) + i];
                 if (query.ref >= best_count) {
                     continue;
@@ -276,6 +278,19 @@ public:
 #if defined(__GNUC__) || defined(__clang__)
                 __builtin_prefetch(value_data_ + value_indices[i], 0, 1);
 #endif
+            }
+            if (stats != nullptr) {
+                stats->future_lookup_count += count;
+                stats->future_lookup_misses += static_cast<uint64_t>(count - batch_hits);
+            }
+            for (uint32_t i = 0U; i < count; ++i) {
+                if (value_indices[i] == kMissingValueIndex) {
+                    continue;
+                }
+                const BCSolvePreparedQuery &query = queries[static_cast<size_t>(base) + i];
+                if (query.ref >= best_count) {
+                    continue;
+                }
                 ++found_count;
                 StorageT &slot = best[query.ref];
                 const StorageT value = value_data_[value_indices[i]];
@@ -289,6 +304,7 @@ public:
 
 private:
     static constexpr uint32_t kEmptyEntryOffset = std::numeric_limits<uint32_t>::max();
+    static constexpr uint32_t kMissingValueIndex = std::numeric_limits<uint32_t>::max();
 
     struct DirectEntry {
         uint64_t key = 0U;
@@ -324,6 +340,14 @@ private:
             }
         }
         return static_cast<uint32_t>(std::max<uint64_t>(cap, 1U));
+    }
+
+    [[nodiscard]] static uint32_t direct_capacity_for_bucket_count(uint32_t bucket_count) {
+        const uint64_t required = std::max<uint64_t>(
+            4ULL,
+            (static_cast<uint64_t>(bucket_count) * 16ULL + 4ULL) / 5ULL
+        );
+        return next_power_of_two_u32(required);
     }
 
     [[nodiscard]] static bool entry_empty(const DirectEntry &entry) noexcept {
@@ -383,36 +407,35 @@ private:
         }
     }
 
+    template <bool TrustedQueries, bool UseKeepRows>
     void lookup_success_indices(
         const BCSolvePreparedQuery *queries,
         uint32_t *value_indices,
-        uint8_t *found,
         uint32_t count,
         uint32_t lane
     ) const {
-        if (queries == nullptr || value_indices == nullptr || found == nullptr) {
+        if (queries == nullptr || value_indices == nullptr) {
             throw std::invalid_argument("BC future batch lookup pointer is null");
         }
-        uint32_t slots[256U];
-        const CellIndex *query_cells[256U];
-        const DirectEntry *entries[256U];
-        uint16_t retry_a[256U];
-        uint16_t retry_b[256U];
+        uint32_t slots[512U];
+        const DirectEntry *entries[512U];
+        uint16_t retry_a[512U];
+        uint16_t retry_b[512U];
         uint16_t *retry = retry_a;
         uint16_t *next_retry = retry_b;
         for (uint32_t i = 0U; i < count; ++i) {
-            found[i] = 0U;
-            value_indices[i] = 0U;
+            value_indices[i] = kMissingValueIndex;
+            slots[i] = kMissingValueIndex;
             entries[i] = nullptr;
-            query_cells[i] = nullptr;
-            if (!queries[i].valid || queries[i].cid >= cells_.size() || queries[i].bitmap_len == 0U) {
-                continue;
+            if constexpr (!TrustedQueries) {
+                if (!queries[i].valid || queries[i].cid >= cells_.size() || queries[i].bitmap_len == 0U) {
+                    continue;
+                }
             }
             const CellIndex &cell = cells_[static_cast<size_t>(queries[i].cid)];
             if (cell.entries.empty()) {
                 continue;
             }
-            query_cells[i] = &cell;
             slots[i] = static_cast<uint32_t>(mix_u64(queries[i].key)) & cell.mask;
 #if defined(__GNUC__) || defined(__clang__)
             __builtin_prefetch(&cell.entries[slots[i]], 0, 1);
@@ -421,26 +444,25 @@ private:
 
         uint32_t retry_count = 0U;
         for (uint32_t i = 0U; i < count; ++i) {
-            const CellIndex *cell = query_cells[i];
-            if (cell == nullptr) {
+            if (slots[i] == kMissingValueIndex) {
                 continue;
             }
-            const DirectEntry &entry = cell->entries[slots[i]];
+            const CellIndex &cell = cells_[static_cast<size_t>(queries[i].cid)];
+            const DirectEntry &entry = cell.entries[slots[i]];
             if (entry_empty(entry)) {
                 continue;
             }
             if (entry.key == queries[i].key) {
                 entries[i] = &entry;
-                found[i] = 1U;
             } else {
-                slots[i] = (slots[i] + 1U) & cell->mask;
+                slots[i] = (slots[i] + 1U) & cell.mask;
                 retry[retry_count++] = static_cast<uint16_t>(i);
             }
         }
         while (retry_count != 0U) {
             for (uint32_t r = 0U; r < retry_count; ++r) {
                 const uint32_t i = retry[r];
-                const CellIndex &cell = *query_cells[i];
+                const CellIndex &cell = cells_[static_cast<size_t>(queries[i].cid)];
 #if defined(__GNUC__) || defined(__clang__)
                 __builtin_prefetch(&cell.entries[slots[i]], 0, 1);
 #endif
@@ -448,14 +470,13 @@ private:
             uint32_t next_retry_count = 0U;
             for (uint32_t r = 0U; r < retry_count; ++r) {
                 const uint32_t i = retry[r];
-                const CellIndex &cell = *query_cells[i];
+                const CellIndex &cell = cells_[static_cast<size_t>(queries[i].cid)];
                 const DirectEntry &entry = cell.entries[slots[i]];
                 if (entry_empty(entry)) {
                     continue;
                 }
                 if (entry.key == queries[i].key) {
                     entries[i] = &entry;
-                    found[i] = 1U;
                 } else {
                     slots[i] = (slots[i] + 1U) & cell.mask;
                     next_retry[next_retry_count++] = static_cast<uint16_t>(i);
@@ -466,15 +487,17 @@ private:
         }
 
         for (uint32_t i = 0U; i < count; ++i) {
-            if (found[i] == 0U) {
+            if (entries[i] == nullptr) {
                 continue;
             }
             const DirectEntry &entry = *entries[i];
-            if (queries[i].rank >= queries[i].bitmap_len) {
-                found[i] = 0U;
-                continue;
+            if constexpr (!TrustedQueries) {
+                if (queries[i].rank >= queries[i].bitmap_len) {
+                    entries[i] = nullptr;
+                    continue;
+                }
             }
-            const CellIndex &cell = *query_cells[i];
+            const CellIndex &cell = cells_[static_cast<size_t>(queries[i].cid)];
             const uint32_t word_idx = static_cast<uint32_t>(queries[i].rank) >> 6U;
             const uint32_t bitmap_offset =
                 entry_bitmap_offset_unchecked(entry, queries[i].bitmap_len);
@@ -488,11 +511,11 @@ private:
         }
 
         for (uint32_t i = 0U; i < count; ++i) {
-            if (found[i] == 0U) {
+            if (entries[i] == nullptr) {
                 continue;
             }
             const DirectEntry &entry = *entries[i];
-            const CellIndex &cell = *query_cells[i];
+            const CellIndex &cell = cells_[static_cast<size_t>(queries[i].cid)];
             const uint32_t rank = queries[i].rank;
             const uint32_t block = rank / kBCRankPrefixBits;
             const uint32_t rank_in_block = rank & (kBCRankPrefixBits - 1U);
@@ -508,7 +531,6 @@ private:
                 bitmap_words + static_cast<size_t>(target_word) * sizeof(uint64_t)
             );
             if (((target >> bit_in_word) & 1ULL) == 0ULL) {
-                found[i] = 0U;
                 continue;
             }
             uint32_t rank_before = load_u16_le(
@@ -528,12 +550,11 @@ private:
             const uint64_t local_row =
                 static_cast<uint64_t>(entry.success_row_offset) +
                 static_cast<uint64_t>(rank_before);
-            const uint64_t global_row =
-                static_cast<uint64_t>(cell.value_offset / row_width_) + local_row;
-            if (keep_rows_ != nullptr) {
+            if constexpr (UseKeepRows) {
+                const uint64_t global_row =
+                    static_cast<uint64_t>(cell.value_offset / row_width_) + local_row;
                 if (global_row >= keep_row_count_ ||
                     keep_rows_[static_cast<size_t>(global_row)] == 0U) {
-                    found[i] = 0U;
                     continue;
                 }
             }
@@ -543,7 +564,7 @@ private:
             }
             const uint64_t global_index = static_cast<uint64_t>(cell.value_offset) + local_value_index;
             if (global_index >= value_count_ ||
-                global_index > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+                global_index >= static_cast<uint64_t>(kMissingValueIndex)) {
                 throw std::out_of_range("BC future batch lookup value index exceeds success values");
             }
             value_indices[i] = static_cast<uint32_t>(global_index);

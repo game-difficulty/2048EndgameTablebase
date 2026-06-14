@@ -25,10 +25,8 @@ namespace BC {
 using BCQuadrantWordSumTable = std::vector<uint32_t>;
 
 struct BCSolvePreparedQuery {
-    CellId cid = 0U;
-    FamilyId row_family = 0U;
-    FamilyId col_family = 0U;
     uint64_t key = 0U;
+    CellId cid = 0U;
     BucketRank rank = 0U;
     BucketBitmapLen bitmap_len = 0U;
     uint16_t ref = 0U;
@@ -229,6 +227,155 @@ struct BCSolveEdgeWorkspace {
         bc_solve_filter_contains_family(filter, col_family);
 }
 
+struct BCSolvePreparedQueryEncoder {
+    const BCLut *lut = nullptr;
+    const BCFamilyTable *axis = nullptr;
+    LayerSum layer_sum = 0U;
+    uint16_t family_unit = 0U;
+    uint32_t family_count = 0U;
+    uint32_t axis_base = 0U;
+    bool contiguous = false;
+
+    BCSolvePreparedQueryEncoder() = default;
+
+    BCSolvePreparedQueryEncoder(const BCLut &lut_in, const BCFamilyTable &axis_in)
+        : lut(&lut_in),
+          axis(&axis_in),
+          layer_sum(axis_in.layer_sum()),
+          family_unit(axis_in.family_unit()),
+          family_count(axis_in.family_count()),
+          axis_base(axis_in.axis_base_coord()),
+          contiguous(axis_in.is_contiguous_range()) {}
+
+    [[nodiscard]] bool encode(
+        const BCQuadrantWords &q,
+        uint16_t ref,
+        uint8_t spawn_tile_rank,
+        BCDirectionMask move_axis,
+        BCSolvePreparedQuery &out
+    ) const {
+        const BCWordDesc &nw_desc = lut->word_desc(q.nw);
+        const BCWordDesc &ne_desc = lut->word_desc(q.ne);
+        const BCWordDesc &sw_desc = lut->word_desc(q.sw);
+        const BCWordDesc &se_desc = lut->word_desc(q.se);
+        if (!nw_desc.valid || !ne_desc.valid || !sw_desc.valid || !se_desc.valid) {
+            return false;
+        }
+
+        const uint64_t nw_sum = nw_desc.sum;
+        const uint64_t ne_sum = ne_desc.sum;
+        const uint64_t sw_sum = sw_desc.sum;
+        const uint64_t se_sum = se_desc.sum;
+        if (nw_sum + ne_sum + sw_sum + se_sum != layer_sum) {
+            return false;
+        }
+
+        auto min_side_coord_fast = [this](uint64_t first_sum, uint64_t second_sum, FamilyCoord &coord_out) {
+            const uint64_t min_sum = std::min(first_sum, second_sum);
+            uint64_t coord = 0U;
+            if (family_unit == 2U) {
+                if ((min_sum & 1ULL) != 0ULL) {
+                    return false;
+                }
+                coord = min_sum >> 1U;
+            } else {
+                if (family_unit == 0U || (min_sum % family_unit) != 0U) {
+                    return false;
+                }
+                coord = min_sum / family_unit;
+            }
+            if (coord > std::numeric_limits<FamilyCoord>::max()) {
+                return false;
+            }
+            coord_out = static_cast<FamilyCoord>(coord);
+            return true;
+        };
+
+        FamilyCoord row_coord = 0U;
+        FamilyCoord col_coord = 0U;
+        if (!min_side_coord_fast(nw_sum + ne_sum, sw_sum + se_sum, row_coord) ||
+            !min_side_coord_fast(nw_sum + sw_sum, ne_sum + se_sum, col_coord)) {
+            return false;
+        }
+
+        FamilyId row_id = BCFamilyTable::kInvalidFamilyId;
+        FamilyId col_id = BCFamilyTable::kInvalidFamilyId;
+        if (contiguous) {
+            const uint32_t row_coord_u32 = row_coord;
+            const uint32_t col_coord_u32 = col_coord;
+            if (row_coord_u32 < axis_base || col_coord_u32 < axis_base) {
+                return false;
+            }
+            const uint32_t row_offset = row_coord_u32 - axis_base;
+            const uint32_t col_offset = col_coord_u32 - axis_base;
+            if (row_offset >= family_count || col_offset >= family_count) {
+                return false;
+            }
+            row_id = static_cast<FamilyId>(row_offset);
+            col_id = static_cast<FamilyId>(col_offset);
+        } else {
+            row_id = axis->try_coord_to_id(row_coord);
+            col_id = axis->try_coord_to_id(col_coord);
+            if (row_id == BCFamilyTable::kInvalidFamilyId ||
+                col_id == BCFamilyTable::kInvalidFamilyId) {
+                return false;
+            }
+        }
+
+        const uint16_t count_ne = ne_desc.group_count;
+        const uint16_t count_sw = sw_desc.group_count;
+        const uint16_t count_se = se_desc.group_count;
+        const uint32_t bitmap_len =
+            static_cast<uint32_t>(count_ne) *
+            static_cast<uint32_t>(count_sw) *
+            static_cast<uint32_t>(count_se);
+        if (bitmap_len == 0U || bitmap_len > kBCMaxBucketBitmapLen ||
+            bitmap_len > std::numeric_limits<BucketBitmapLen>::max()) {
+            throw std::logic_error("BC solve encoded bitmap length is outside uint16 bounds");
+        }
+
+        const uint32_t rank =
+            (static_cast<uint32_t>(ne_desc.rank) * count_sw + sw_desc.rank) * count_se + se_desc.rank;
+        if (rank >= bitmap_len || rank > std::numeric_limits<BucketRank>::max()) {
+            throw std::logic_error("BC solve encoded rank is outside bitmap length");
+        }
+
+        const uint64_t cid =
+            static_cast<uint64_t>(row_id) * family_count + static_cast<uint32_t>(col_id);
+        if (cid > std::numeric_limits<CellId>::max()) {
+            throw std::overflow_error("BC solve encoded cell id exceeds CellId");
+        }
+
+        out = BCSolvePreparedQuery{
+            (static_cast<uint64_t>(q.nw) << 48U) |
+                (static_cast<uint64_t>(ne_desc.packed_sum_mask) << 32U) |
+                (static_cast<uint64_t>(sw_desc.packed_sum_mask) << 16U) |
+                static_cast<uint64_t>(se_desc.packed_sum_mask),
+            static_cast<CellId>(cid),
+            static_cast<BucketRank>(rank),
+            static_cast<BucketBitmapLen>(bitmap_len),
+            ref,
+            spawn_tile_rank,
+            move_axis,
+            true
+        };
+        return true;
+    }
+};
+
+[[nodiscard]] inline bool bc_solve_encode_prepared_query_hot(
+    const BCLut &lut,
+    const BCFamilyTable &axis,
+    const BCQuadrantWords &q,
+    uint16_t ref,
+    uint8_t spawn_tile_rank,
+    BCDirectionMask move_axis,
+    BCSolvePreparedQuery &out
+) {
+    const BCSolvePreparedQueryEncoder encoder(lut, axis);
+    return encoder.encode(q, ref, spawn_tile_rank, move_axis, out);
+}
+
 template <typename StorageT>
 void bc_solve_prepare_best_arrays(
     BCSolveEdgeWorkspace<StorageT> &workspace,
@@ -265,29 +412,23 @@ void bc_solve_flush_canonical_candidates(
     }
     for (size_t i = 0U; i < boards.size(); ++i) {
         (void)word_sums;
-        const BCBoardEncodedPosition encoded = bc_encode_canonical_quadrants_position_hot(
+        BCSolvePreparedQuery query;
+        const bool encoded = bc_solve_encode_prepared_query_hot(
             lut,
             axis,
-            unpack_board_to_quadrants(boards[i])
+            unpack_board_to_quadrants(boards[i]),
+            canonical[i].ref,
+            spawn_tile_rank,
+            canonical[i].move_axis,
+            query
         );
-        if (!encoded.valid) {
+        if (!encoded) {
             if (stats != nullptr) {
                 ++stats->encode_rejects;
             }
             continue;
         }
-        queries.push_back(BCSolvePreparedQuery{
-            encoded.cid,
-            encoded.row_family,
-            encoded.col_family,
-            encoded.key,
-            encoded.rank,
-            encoded.bitmap_len,
-            canonical[i].ref,
-            spawn_tile_rank,
-            canonical[i].move_axis,
-            true
-        });
+        queries.push_back(query);
         if (stats != nullptr) {
             ++stats->encoded_queries;
         }

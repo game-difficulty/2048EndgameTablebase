@@ -603,8 +603,6 @@ void run_direct_lookup_case(BCSuccessDTypeMode dtype) {
         check(encoded.valid, "stored board should encode for query lookup");
         BC::BCSolvePreparedQuery query;
         query.cid = encoded.cid;
-        query.row_family = encoded.row_family;
-        query.col_family = encoded.col_family;
         query.key = encoded.key;
         query.rank = encoded.rank;
         query.bitmap_len = encoded.bitmap_len;
