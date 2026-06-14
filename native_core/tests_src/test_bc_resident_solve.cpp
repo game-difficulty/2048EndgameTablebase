@@ -202,6 +202,23 @@ std::map<uint64_t, std::vector<T>> assign_typed_values(
 }
 
 template <typename T>
+void apply_dtype_storage_semantics(
+    std::map<uint64_t, std::vector<T>> &values,
+    BCSuccessDTypeMode dtype
+) {
+    if constexpr (std::is_floating_point_v<T>) {
+        if (BC::bc_success_dtype_is_one_minus(dtype)) {
+            for (auto &[board, lanes] : values) {
+                (void)board;
+                for (T &value : lanes) {
+                    value = value - static_cast<T>(1);
+                }
+            }
+        }
+    }
+}
+
+template <typename T>
 std::vector<uint8_t> write_typed_success_layer(
     const BCPositionLayerReader &position,
     const std::map<uint64_t, std::vector<T>> &values_by_board,
@@ -484,6 +501,8 @@ void make_resident_fixture(
     );
     fixture.future2_values = assign_typed_values<T>(futures.boards2, row_width, 1000U);
     fixture.future4_values = assign_typed_values<T>(futures.boards4, row_width, 2000U);
+    apply_dtype_storage_semantics<T>(fixture.future2_values, dtype);
+    apply_dtype_storage_semantics<T>(fixture.future4_values, dtype);
     fixture.future2_success_bytes = write_typed_success_layer<T>(
         fixture.future2.reader,
         fixture.future2_values,
@@ -508,7 +527,7 @@ BCResidentSolveOptions<T> make_resident_options(
     BCResidentSolveOptions<T> options;
     options.num_threads = 2;
     options.row_width = row_width;
-    options.dtype = dtype;
+    options.set_dtype(dtype);
     options.edge_options.canonical_batch_size = 4U;
     options.edge_options.canonical_symm_mode = symm_mode;
     options.edge_options.spawn_rate4 = 0.25;
@@ -624,6 +643,14 @@ void run_typed_resident_case(BCSuccessDTypeMode dtype) {
     );
     BCResidentSolveOptions<T> options =
         make_resident_options<T>(fixture.success_shifts, row_width, dtype, symm_mode);
+    check(
+        options.zero_value == BC::bc_success_zero_value_for_dtype<T>(dtype),
+        "resident option zero value should follow dtype"
+    );
+    check(
+        options.terminal_value == BC::bc_success_terminal_value_for_dtype<T>(dtype),
+        "resident option terminal value should follow dtype"
+    );
     BC::BCResidentSolvedLayer<T> future2_layer =
         solved_layer_from_success_bytes<T>(
             fixture.lut,
@@ -766,13 +793,20 @@ std::vector<uint32_t> flat_uint32_values_for_position(
     return values;
 }
 
-BC::BCResidentUInt32SolvedLayer make_compacted_uint32_layer(
+template <typename T>
+BC::BCResidentSolvedLayer<T> make_compacted_typed_layer(
     const BCPositionLayerReader &position,
-    const std::map<uint64_t, std::vector<uint32_t>> &values_by_board,
+    const std::map<uint64_t, std::vector<T>> &values_by_board,
+    BCSuccessDTypeMode dtype,
     int num_threads = 2
 ) {
+    const uint32_t row_width = values_by_board.empty()
+        ? 1U
+        : static_cast<uint32_t>(values_by_board.begin()->second.size());
+    check(row_width != 0U, "compacted typed layer row_width must be non-zero");
+    const T zero = BC::bc_success_zero_value_for_dtype<T>(dtype);
     const std::vector<uint64_t> offsets = BC::bc_resident_cell_value_offsets(position);
-    std::vector<uint32_t> values(static_cast<size_t>(offsets.back()), 0U);
+    std::vector<T> values(static_cast<size_t>(offsets.back() * row_width), zero);
     for (CellId cid = 0U; cid < position.cell_count(); ++cid) {
         if (position.descriptor(cid).success_rows == 0U || position.descriptor(cid).empty()) {
             continue;
@@ -782,21 +816,39 @@ BC::BCResidentUInt32SolvedLayer make_compacted_uint32_layer(
             [&](const BC::BCScannedBoardEntry &entry) {
                 const auto it = values_by_board.find(entry.board);
                 if (it != values_by_board.end() && !it->second.empty()) {
-                    values[static_cast<size_t>(cell_base + entry.local_success_row)] = it->second[0];
+                    check(it->second.size() == row_width, "typed compact value row_width mismatch");
+                    const uint64_t row_base =
+                        (cell_base + entry.local_success_row) * static_cast<uint64_t>(row_width);
+                    for (uint32_t lane = 0U; lane < row_width; ++lane) {
+                        values[static_cast<size_t>(row_base + lane)] = it->second[lane];
+                    }
                 }
             }
         );
     }
-    BC::BCResidentRawSolveResult<uint32_t> raw;
+    BC::BCResidentRawSolveResult<T> raw;
     raw.values = std::move(values);
     raw.cell_value_offsets = offsets;
-    return BC::bc_resident_compact_zero_in_place<uint32_t>(
+    return BC::bc_resident_compact_zero_in_place<T>(
         position,
         raw,
         position.lut(),
-        1U,
+        row_width,
+        dtype,
+        zero,
+        num_threads
+    );
+}
+
+BC::BCResidentUInt32SolvedLayer make_compacted_uint32_layer(
+    const BCPositionLayerReader &position,
+    const std::map<uint64_t, std::vector<uint32_t>> &values_by_board,
+    int num_threads = 2
+) {
+    return make_compacted_typed_layer<uint32_t>(
+        position,
+        values_by_board,
         BCSuccessDTypeMode::UInt32,
-        0U,
         num_threads
     );
 }
@@ -878,14 +930,45 @@ void test_compact_uint32_layer() {
     std::error_code ec;
     std::filesystem::remove(path, ec);
 
+    BC::BCResidentUInt32SolvedLayer archive_zero_threshold =
+        make_compacted_uint32_layer(fixture.current.reader, values_by_board);
+    const std::vector<uint8_t> zero_threshold_position_bytes =
+        archive_zero_threshold.position.bytes();
+    const std::vector<uint32_t> zero_threshold_success_values =
+        archive_zero_threshold.success_values;
+    const BC::BCResidentArchivePruneResult zero_threshold_prune =
+        BC::bc_resident_archive_prune_if_threshold_enabled_in_place<uint32_t>(
+            archive_zero_threshold,
+            0U,
+            2
+        );
+    check(!zero_threshold_prune.pruned, "archive threshold 0 should skip prune");
+    check(
+        zero_threshold_prune.stats.input_rows == 0U &&
+            zero_threshold_prune.stats.live_rows == 0U &&
+            zero_threshold_prune.stats.zero_pruned_rows == 0U &&
+            zero_threshold_prune.stats.compact_seconds == 0.0,
+        "archive threshold 0 should produce empty stats"
+    );
+    check(
+        archive_zero_threshold.position.bytes() == zero_threshold_position_bytes,
+        "archive threshold 0 should not rewrite position"
+    );
+    check(
+        archive_zero_threshold.success_values == zero_threshold_success_values,
+        "archive threshold 0 should not rewrite success values"
+    );
+
     BC::BCResidentUInt32SolvedLayer archive_pruned =
         make_compacted_uint32_layer(fixture.current.reader, values_by_board);
-    const BC::BCResidentCompactStats archive_stats =
-        BC::bc_resident_prune_below_threshold_for_archive_in_place<uint32_t>(
+    const BC::BCResidentArchivePruneResult archive_prune =
+        BC::bc_resident_archive_prune_if_threshold_enabled_in_place<uint32_t>(
             archive_pruned,
             101U,
             2
         );
+    check(archive_prune.pruned, "archive positive threshold should prune");
+    const BC::BCResidentCompactStats &archive_stats = archive_prune.stats;
     check(
         archive_stats.input_rows == compacted.compact_stats.live_rows,
         "archive prune should scan zero-compacted rows"
@@ -934,6 +1017,93 @@ void test_optimized_uint32_matches_resident() {
     verify_typed_resident_result<uint32_t>(fixture, optimized.layer, options);
 }
 
+void test_one_minus_dtype_value_semantics() {
+    check(
+        BC::bc_success_zero_value_for_dtype<float>(BCSuccessDTypeMode::OneMinusFloat32) == -1.0f,
+        "one-minus float32 zero should be -1"
+    );
+    check(
+        BC::bc_success_terminal_value_for_dtype<float>(BCSuccessDTypeMode::OneMinusFloat32) == 0.0f,
+        "one-minus float32 terminal should be 0"
+    );
+    check(
+        BC::bc_success_zero_value_for_dtype<double>(BCSuccessDTypeMode::OneMinusFloat64) == -1.0,
+        "one-minus float64 zero should be -1"
+    );
+    check(
+        BC::bc_success_terminal_value_for_dtype<double>(BCSuccessDTypeMode::OneMinusFloat64) == 0.0,
+        "one-minus float64 terminal should be 0"
+    );
+
+    BCResidentSolveOptions<float> options;
+    options.set_dtype(BCSuccessDTypeMode::OneMinusFloat32);
+    check(options.zero_value == -1.0f, "one-minus resident option zero should be -1");
+    check(options.terminal_value == 0.0f, "one-minus resident option terminal should be 0");
+
+    ResidentFixture<float> fixture;
+    make_resident_fixture<float>(
+        fixture,
+        1U,
+        BCSuccessDTypeMode::OneMinusFloat32,
+        static_cast<int>(SymmMode::Identity)
+    );
+    std::set<uint64_t> current_boards(
+        fixture.current.stored_boards.begin(),
+        fixture.current.stored_boards.end()
+    );
+    std::map<uint64_t, std::vector<float>> values_by_board =
+        assign_typed_values<float>(current_boards, 1U, 1000U);
+    apply_dtype_storage_semantics<float>(values_by_board, BCSuccessDTypeMode::OneMinusFloat32);
+
+    BC::BCResidentSolvedLayer<float> archive_zero_threshold =
+        make_compacted_typed_layer<float>(
+            fixture.current.reader,
+            values_by_board,
+            BCSuccessDTypeMode::OneMinusFloat32
+        );
+    const std::vector<uint8_t> zero_threshold_position_bytes =
+        archive_zero_threshold.position.bytes();
+    const std::vector<float> zero_threshold_success_values =
+        archive_zero_threshold.success_values;
+    const BC::BCResidentArchivePruneResult zero_threshold_prune =
+        BC::bc_resident_archive_prune_if_threshold_enabled_in_place<float>(
+            archive_zero_threshold,
+            -1.0f,
+            2
+        );
+    check(!zero_threshold_prune.pruned, "one-minus archive zero threshold should skip prune");
+    check(
+        archive_zero_threshold.position.bytes() == zero_threshold_position_bytes,
+        "one-minus zero threshold should not rewrite position"
+    );
+    check(
+        archive_zero_threshold.success_values == zero_threshold_success_values,
+        "one-minus zero threshold should not rewrite success values"
+    );
+
+    BC::BCResidentSolvedLayer<float> archive_pruned =
+        make_compacted_typed_layer<float>(
+            fixture.current.reader,
+            values_by_board,
+            BCSuccessDTypeMode::OneMinusFloat32
+        );
+    const BC::BCResidentArchivePruneResult archive_prune =
+        BC::bc_resident_archive_prune_if_threshold_enabled_in_place<float>(
+            archive_pruned,
+            -0.8995f,
+            2
+        );
+    check(archive_prune.pruned, "one-minus negative archive threshold should prune");
+    check(
+        archive_prune.stats.input_rows == fixture.current.stored_boards.size(),
+        "one-minus archive prune input rows mismatch"
+    );
+    check(
+        archive_prune.stats.zero_pruned_rows != 0U,
+        "one-minus archive prune should remove below-threshold rows"
+    );
+}
+
 void test_no_empty_board_is_zero() {
     const BCLut lut(test_alphabet());
     PositionLayer current = write_position_layer(
@@ -960,6 +1130,7 @@ void test_no_empty_board_is_zero() {
         write_typed_success_layer<uint32_t>(future4.reader, {}, 1U, BCSuccessDTypeMode::UInt32);
     BCResidentSolveOptions<uint32_t> options;
     options.num_threads = 1;
+    options.set_dtype(BCSuccessDTypeMode::UInt32);
     options.edge_options.canonical_symm_mode = static_cast<int>(SymmMode::Identity);
     BC::BCResidentSolvedLayer<uint32_t> future2_layer =
         solved_layer_from_success_bytes<uint32_t>(lut, future2, future2_success_bytes, 1U);
@@ -1016,6 +1187,12 @@ int main() {
         run_typed_resident_case<float>(BCSuccessDTypeMode::Float32);
         std::cerr << "resident float64\n";
         run_typed_resident_case<double>(BCSuccessDTypeMode::Float64);
+        std::cerr << "resident one-minus float32\n";
+        run_typed_resident_case<float>(BCSuccessDTypeMode::OneMinusFloat32);
+        std::cerr << "resident one-minus float64\n";
+        run_typed_resident_case<double>(BCSuccessDTypeMode::OneMinusFloat64);
+        std::cerr << "resident one-minus dtype semantics\n";
+        test_one_minus_dtype_value_semantics();
         std::cerr << "resident no empty board\n";
         test_no_empty_board_is_zero();
     } catch (const std::exception &ex) {

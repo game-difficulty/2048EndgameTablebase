@@ -465,7 +465,7 @@ int main(int argc, char **argv) {
             BC::BCResidentSolveOptions<uint32_t> options;
             options.num_threads = args.num_threads;
             options.row_width = 1U;
-            options.dtype = BC::BCSuccessDTypeMode::UInt32;
+            options.set_dtype(BC::BCSuccessDTypeMode::UInt32);
             options.edge_options.canonical_batch_size = args.canonical_batch_size;
             options.edge_options.canonical_symm_mode = args.canonical_symm_mode;
             options.edge_options.spawn_rate4 = args.spawn_rate4;

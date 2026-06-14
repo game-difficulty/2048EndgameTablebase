@@ -16,8 +16,10 @@
 #include <map>
 #include <memory>
 #include <regex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -43,6 +45,7 @@ struct Args {
     double deletion_threshold = 0.0;
     double relative_deletion_threshold = 0.0;
     std::string deletion_threshold_signal_path;
+    BC::BCSuccessDTypeMode success_dtype = BC::BCSuccessDTypeMode::UInt32;
 };
 
 struct LayerFile {
@@ -79,7 +82,7 @@ struct InspectResult {
     uint32_t ordinal = 0U;
     uint64_t layer_sum = 0U;
     uint64_t rows = 0U;
-    uint32_t max_value = 0U;
+    std::string max_value = "0";
     double max_rate = 0.0;
     uint64_t max_count = 0U;
     uint64_t first_max_board = 0U;
@@ -106,6 +109,57 @@ struct LayerWriteResult {
     }
     ++i;
     return argv[i];
+}
+
+[[nodiscard]] BC::BCSuccessDTypeMode parse_success_dtype(const std::string &value) {
+    if (value == "uint32") {
+        return BC::BCSuccessDTypeMode::UInt32;
+    }
+    if (value == "uint64") {
+        return BC::BCSuccessDTypeMode::UInt64;
+    }
+    if (value == "float32") {
+        return BC::BCSuccessDTypeMode::Float32;
+    }
+    if (value == "float64") {
+        return BC::BCSuccessDTypeMode::Float64;
+    }
+    if (value == "one-minus-float32" || value == "1-float32") {
+        return BC::BCSuccessDTypeMode::OneMinusFloat32;
+    }
+    if (value == "one-minus-float64" || value == "1-float64") {
+        return BC::BCSuccessDTypeMode::OneMinusFloat64;
+    }
+    throw std::invalid_argument("unsupported success dtype: " + value);
+}
+
+[[nodiscard]] std::string success_dtype_name(BC::BCSuccessDTypeMode dtype) {
+    switch (dtype) {
+        case BC::BCSuccessDTypeMode::UInt32:
+            return "uint32";
+        case BC::BCSuccessDTypeMode::UInt64:
+            return "uint64";
+        case BC::BCSuccessDTypeMode::Float32:
+            return "float32";
+        case BC::BCSuccessDTypeMode::Float64:
+            return "float64";
+        case BC::BCSuccessDTypeMode::OneMinusFloat32:
+            return "one-minus-float32";
+        case BC::BCSuccessDTypeMode::OneMinusFloat64:
+            return "one-minus-float64";
+    }
+    throw std::invalid_argument("unsupported success dtype");
+}
+
+template <typename T>
+[[nodiscard]] std::string value_to_string(T value) {
+    std::ostringstream out;
+    if constexpr (std::is_floating_point_v<T>) {
+        out << std::setprecision(std::numeric_limits<T>::max_digits10) << value;
+    } else {
+        out << value;
+    }
+    return out.str();
 }
 
 [[nodiscard]] int parse_symm_mode(const std::string &value) {
@@ -154,6 +208,8 @@ struct LayerWriteResult {
             args.target_rank = static_cast<uint32_t>(std::stoul(require_value(argc, argv, i, "--target-rank")));
         } else if (key == "--success-target-rank") {
             args.success_target_rank = std::stoi(require_value(argc, argv, i, "--success-target-rank"));
+        } else if (key == "--success-dtype" || key == "--dtype") {
+            args.success_dtype = parse_success_dtype(require_value(argc, argv, i, key.c_str()));
         } else if (key == "--canonical-symm-mode") {
             args.canonical_symm_mode = parse_symm_mode(require_value(argc, argv, i, "--canonical-symm-mode"));
         } else if (key == "--spawn-rate4") {
@@ -335,17 +391,21 @@ struct LayerWriteResult {
     return writer.finish_layer();
 }
 
-[[nodiscard]] BC::BCResidentUInt32SolvedLayer make_terminal_solved_layer(
+template <typename StorageT>
+[[nodiscard]] BC::BCResidentSolvedLayer<StorageT> make_terminal_solved_layer(
     const BC::BCPositionLayerReader &position,
     const std::vector<uint8_t> &success_shifts,
     int target_rank,
+    BC::BCSuccessDTypeMode dtype,
     int num_threads
 ) {
     const std::vector<uint64_t> offsets = BC::bc_resident_cell_value_offsets(position);
     if (offsets.back() > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
         throw std::overflow_error("terminal BC layer row count exceeds size_t");
     }
-    std::vector<uint32_t> values(static_cast<size_t>(offsets.back()), 0U);
+    const StorageT zero = BC::bc_success_zero_value_for_dtype<StorageT>(dtype);
+    const StorageT terminal = BC::bc_success_terminal_value_for_dtype<StorageT>(dtype);
+    std::vector<StorageT> values(static_cast<size_t>(offsets.back()), zero);
     for (BC::CellId cid = 0U; cid < position.cell_count(); ++cid) {
         const BC::BCPositionCellDescriptor &desc = position.descriptor(cid);
         if (desc.empty() || desc.success_rows == 0U) {
@@ -356,21 +416,21 @@ struct LayerWriteResult {
             [&](const BC::BCScannedBoardEntry &entry) {
                 if (board_has_target_rank(entry.board, target_rank, success_shifts)) {
                     values[static_cast<size_t>(cell_base + entry.local_success_row)] =
-                        max_scale_value<uint32_t>();
+                        terminal;
                 }
             }
         );
     }
-    BC::BCResidentRawSolveResult<uint32_t> raw;
+    BC::BCResidentRawSolveResult<StorageT> raw;
     raw.values = std::move(values);
     raw.cell_value_offsets = offsets;
-    return BC::bc_resident_compact_zero_in_place<uint32_t>(
+    return BC::bc_resident_compact_zero_in_place<StorageT>(
         position,
         raw,
         position.lut(),
         1U,
-        BC::BCSuccessDTypeMode::UInt32,
-        0U,
+        dtype,
+        zero,
         num_threads
     );
 }
@@ -457,10 +517,11 @@ struct LayerWriteResult {
     return std::make_unique<BC::BCBufferedFileWriter>(path);
 }
 
+template <typename StorageT>
 uint64_t write_position_layer_file(
     const Args &args,
     uint32_t ordinal,
-    const BC::BCResidentUInt32SolvedLayer &layer
+    const BC::BCResidentSolvedLayer<StorageT> &layer
 ) {
     const std::vector<uint8_t> &bytes = layer.position.bytes();
     const uint64_t logical_size = static_cast<uint64_t>(bytes.size());
@@ -478,14 +539,16 @@ uint64_t write_position_layer_file(
     return logical_size;
 }
 
+template <typename StorageT>
 uint64_t write_success_layer_file(
     const Args &args,
     uint32_t ordinal,
-    const BC::BCResidentUInt32SolvedLayer &layer
+    const BC::BCResidentSolvedLayer<StorageT> &layer
 ) {
     const uint64_t logical_size =
         BC::kBCSuccessHeaderBytes +
-        static_cast<uint64_t>(layer.success_values.size()) * sizeof(uint32_t);
+        static_cast<uint64_t>(layer.success_values.size()) *
+            BC::bc_success_dtype_value_size(layer.dtype);
     const std::filesystem::path path = success_path_for(args, ordinal);
     std::unique_ptr<BC::BCWritableFile> file =
         make_output_writer(args, path, logical_size);
@@ -493,7 +556,7 @@ uint64_t write_success_layer_file(
         *file,
         layer.position,
         1U,
-        BC::BCSuccessDTypeMode::UInt32,
+        layer.dtype,
         layer.success_values
     );
     file.reset();
@@ -503,10 +566,11 @@ uint64_t write_success_layer_file(
     return written;
 }
 
+template <typename StorageT>
 LayerWriteResult write_solved_layer_files(
     const Args &args,
     uint32_t ordinal,
-    const BC::BCResidentUInt32SolvedLayer &layer
+    const BC::BCResidentSolvedLayer<StorageT> &layer
 ) {
     LayerWriteResult result;
     result.ordinal = ordinal;
@@ -593,19 +657,31 @@ void write_metric_row(std::ofstream &out, const LayerMetric &m) {
         << total_mrows << '\n';
 }
 
+template <typename StorageT>
 [[nodiscard]] InspectResult inspect_layer_max(
     const Args &args,
     const BC::BCLut &lut,
     uint32_t ordinal
 ) {
+    if (!BC::bc_success_dtype_matches_type<StorageT>(args.success_dtype)) {
+        throw std::invalid_argument("inspect storage type does not match success dtype");
+    }
     const std::filesystem::path pos_path = position_path_for(args, ordinal);
     const std::filesystem::path suc_path = success_path_for(args, ordinal);
     BC::BCPositionFileReader position = BC::BCPositionFileReader::open_buffered(pos_path, lut);
     const BC::BCSuccessFileReader success =
         open_success_for_inspect(args, suc_path, position.layer());
+    if (success.reader().dtype_mode() != args.success_dtype) {
+        throw std::runtime_error("inspect success dtype mismatch");
+    }
     InspectResult result;
     result.ordinal = ordinal;
     result.layer_sum = position.layer().header().layer_sum;
+    const StorageT zero = BC::bc_success_zero_value_for_dtype<StorageT>(args.success_dtype);
+    const StorageT terminal =
+        BC::bc_success_terminal_value_for_dtype<StorageT>(args.success_dtype);
+    StorageT max_value = zero;
+    bool have_value = false;
     for (BC::CellId cid = 0U; cid < position.layer().cell_count(); ++cid) {
         const BC::BCPositionCellDescriptor &desc = position.layer().descriptor(cid);
         if (desc.empty() || desc.success_rows == 0U) {
@@ -614,29 +690,31 @@ void write_metric_row(std::ofstream &out, const LayerMetric &m) {
         BC::BCPositionCellScanner(position.layer(), cid).for_each_board(
             [&](const BC::BCScannedBoardEntry &entry) {
                 ++result.rows;
-                const uint32_t value = success.reader().read_value(cid, entry.local_success_row);
-                if (value > result.max_value) {
-                    result.max_value = value;
+                const StorageT value =
+                    success.reader().read_value_typed<StorageT>(cid, entry.local_success_row);
+                if (!have_value || value > max_value) {
+                    have_value = true;
+                    max_value = value;
                     result.max_count = 1U;
                     result.first_max_board = entry.board;
                     result.first_max_cell = cid;
                     result.first_max_row = entry.local_success_row;
-                } else if (value == result.max_value) {
+                } else if (value == max_value) {
                     ++result.max_count;
                 }
             }
         );
     }
-    result.max_rate =
-        static_cast<double>(result.max_value) / static_cast<double>(max_scale_value<uint32_t>());
+    result.max_value = value_to_string(max_value);
+    result.max_rate = RuntimeControls::normalized_success_value(max_value, zero, terminal);
     return result;
 }
 
-} // namespace
-
-int main(int argc, char **argv) {
-    try {
-        const Args args = parse_args(argc, argv);
+template <typename StorageT>
+int run_typed(const Args &args) {
+        if (!BC::bc_success_dtype_matches_type<StorageT>(args.success_dtype)) {
+            throw std::invalid_argument("run storage type does not match success dtype");
+        }
         const BC::BCLut lut(make_free_legal_tiles(args.target_rank));
         const std::vector<uint8_t> success_shifts = all_board_success_shifts();
         const std::map<uint32_t, LayerFile> layers = discover_layers(args);
@@ -679,7 +757,7 @@ int main(int argc, char **argv) {
         RuntimeControls::DeletionThresholdState deletion_state =
             RuntimeControls::current_deletion_thresholds(deletion_options);
 
-        auto record_sync_write = [&](uint32_t ordinal, const BC::BCResidentUInt32SolvedLayer &layer) {
+        auto record_sync_write = [&](uint32_t ordinal, const BC::BCResidentSolvedLayer<StorageT> &layer) {
             LayerWriteResult write = write_solved_layer_files(args, ordinal, layer);
             const auto it = metric_index_by_ordinal.find(write.ordinal);
             if (it == metric_index_by_ordinal.end()) {
@@ -693,8 +771,8 @@ int main(int argc, char **argv) {
             metric.total_seconds += write.position_write_seconds + write.success_write_seconds;
         };
 
-        auto archive_prune_and_write_if_needed =
-            [&](int64_t ordinal_signed, BC::BCResidentUInt32SolvedLayer &layer) {
+        auto archive_retired_layer_prune_and_write_if_needed =
+            [&](int64_t ordinal_signed, BC::BCResidentSolvedLayer<StorageT> &layer) {
             if (ordinal_signed < static_cast<int64_t>(min_ordinal) ||
                 ordinal_signed > static_cast<int64_t>(max_ordinal)) {
                 return;
@@ -712,24 +790,29 @@ int main(int argc, char **argv) {
             if (!RuntimeControls::deletion_threshold_enabled(deletion_state)) {
                 return;
             }
-            const uint32_t layer_max = layer.success_values.empty()
-                ? 0U
+            const StorageT zero_value =
+                BC::bc_success_zero_value_for_dtype<StorageT>(args.success_dtype);
+            const StorageT terminal_value =
+                BC::bc_success_terminal_value_for_dtype<StorageT>(args.success_dtype);
+            const StorageT layer_max = layer.success_values.empty()
+                ? zero_value
                 : *std::max_element(layer.success_values.begin(), layer.success_values.end());
-            const uint32_t threshold = RuntimeControls::effective_deletion_threshold<uint32_t>(
+            const StorageT threshold = RuntimeControls::effective_deletion_threshold<StorageT>(
                 layer_max,
-                0U,
-                max_scale_value<uint32_t>(),
+                zero_value,
+                terminal_value,
                 deletion_state
             );
-            if (threshold == 0U) {
-                return;
-            }
-            const BC::BCResidentCompactStats archive_stats =
-                BC::bc_resident_prune_below_threshold_for_archive_in_place<uint32_t>(
+            const BC::BCResidentArchivePruneResult archive_prune =
+                BC::bc_resident_archive_prune_if_threshold_enabled_in_place<StorageT>(
                     layer,
                     threshold,
                     args.num_threads
                 );
+            if (!archive_prune.pruned) {
+                return;
+            }
+            const BC::BCResidentCompactStats &archive_stats = archive_prune.stats;
             metric.archive_live_rows = archive_stats.live_rows;
             metric.threshold_pruned_rows = archive_stats.zero_pruned_rows;
             metric.archive_compact_seconds += archive_stats.compact_seconds;
@@ -739,7 +822,7 @@ int main(int argc, char **argv) {
 
         const double solve_begin = now_seconds();
 
-        BC::BCResidentUInt32SolvedLayer top_layer;
+        BC::BCResidentSolvedLayer<StorageT> top_layer;
         uint64_t virtual_layer_sum = 0U;
         uint32_t virtual_family_unit = 0U;
         {
@@ -750,10 +833,11 @@ int main(int argc, char **argv) {
             const uint64_t top_layer_sum = top_position.layer().header().layer_sum;
             const uint32_t top_family_unit = top_position.layer().header().family_unit;
             top_layer =
-                make_terminal_solved_layer(
+                make_terminal_solved_layer<StorageT>(
                     top_position.layer(),
                     success_shifts,
                     args.success_target_rank,
+                    args.success_dtype,
                     args.num_threads
                 );
 
@@ -766,7 +850,8 @@ int main(int argc, char **argv) {
             top_metric.position_bytes = top_layer.position.bytes().size();
             top_metric.success_bytes =
                 BC::kBCSuccessHeaderBytes +
-                static_cast<uint64_t>(top_layer.success_values.size()) * sizeof(uint32_t);
+                static_cast<uint64_t>(top_layer.success_values.size()) *
+                    BC::bc_success_dtype_value_size(args.success_dtype);
             top_metric.compact_seconds = top_layer.compact_stats.compact_seconds;
             top_metric.total_seconds = now_seconds() - top_begin;
             record_metric(top_metric);
@@ -784,9 +869,9 @@ int main(int argc, char **argv) {
 
         std::vector<uint8_t> virtual_empty_position_bytes =
             make_empty_position_bytes(virtual_layer_sum, virtual_family_unit);
-        BC::BCResidentUInt32SolvedLayer future4;
-        future4.open(std::move(virtual_empty_position_bytes), {}, lut, 1U);
-        BC::BCResidentUInt32SolvedLayer future2 = std::move(top_layer);
+        BC::BCResidentSolvedLayer<StorageT> future4;
+        future4.open(std::move(virtual_empty_position_bytes), {}, lut, 1U, args.success_dtype);
+        BC::BCResidentSolvedLayer<StorageT> future2 = std::move(top_layer);
         int64_t future4_ordinal = static_cast<int64_t>(max_ordinal) + 1;
         int64_t future2_ordinal = static_cast<int64_t>(max_ordinal);
 
@@ -795,10 +880,10 @@ int main(int argc, char **argv) {
              --ordinal_signed) {
             const uint32_t ordinal = static_cast<uint32_t>(ordinal_signed);
             const double layer_begin = now_seconds();
-            BC::BCResidentSolveOptions<uint32_t> options;
+            BC::BCResidentSolveOptions<StorageT> options;
             options.num_threads = args.num_threads;
             options.row_width = 1U;
-            options.dtype = BC::BCSuccessDTypeMode::UInt32;
+            options.set_dtype(args.success_dtype);
             options.edge_options.canonical_batch_size = args.canonical_batch_size;
             options.edge_options.canonical_symm_mode = args.canonical_symm_mode;
             options.edge_options.spawn_rate4 = args.spawn_rate4;
@@ -807,24 +892,25 @@ int main(int argc, char **argv) {
 
             double read_seconds = 0.0;
             uint64_t current_layer_sum = 0U;
-            BC::BCResidentLayerResult<uint32_t> solve_result = [&]() {
+            BC::BCResidentLayerResult<StorageT> solve_result = [&]() {
                 const double read_begin = now_seconds();
                 BC::BCPositionFileReader current = open_position_layer(args, layers.at(ordinal), lut);
                 read_seconds = now_seconds() - read_begin;
                 current_layer_sum = current.layer().header().layer_sum;
-                return BC::bc_resident_solve_compacted_layer<uint32_t>(
+                return BC::bc_resident_solve_compacted_layer<StorageT>(
                     current.layer(),
                     future2,
                     future4,
                     options
                 );
             }();
-            BC::BCResidentUInt32SolvedLayer solved_layer = std::move(solve_result.layer);
+            BC::BCResidentSolvedLayer<StorageT> solved_layer = std::move(solve_result.layer);
             const BC::BCResidentCompactStats compact_stats = solved_layer.compact_stats;
             const uint64_t compact_position_bytes = solved_layer.position.bytes().size();
             const uint64_t compact_success_bytes =
                 BC::kBCSuccessHeaderBytes +
-                static_cast<uint64_t>(solved_layer.success_values.size()) * sizeof(uint32_t);
+                static_cast<uint64_t>(solved_layer.success_values.size()) *
+                    BC::bc_success_dtype_value_size(args.success_dtype);
             const double layer_total = now_seconds() - layer_begin;
 
             LayerMetric metric;
@@ -846,6 +932,7 @@ int main(int argc, char **argv) {
             metric.compact_seconds = compact_stats.compact_seconds;
             metric.total_seconds = layer_total;
             record_metric(metric);
+            // This exact zero-compacted layer is the only form allowed to enter the future chain.
             record_sync_write(ordinal, solved_layer);
 
             std::cout
@@ -860,7 +947,12 @@ int main(int argc, char **argv) {
                 << " success_bytes=" << metric.success_bytes
                 << '\n';
 
-            archive_prune_and_write_if_needed(future4_ordinal, future4);
+            if (future4_ordinal != ordinal_signed + 2) {
+                throw std::runtime_error(
+                    "BC optimized bench invariant failed: archive prune must target retired future4"
+                );
+            }
+            archive_retired_layer_prune_and_write_if_needed(future4_ordinal, future4);
             write_checkpoint_manifest(
                 args,
                 ordinal_signed - 1,
@@ -872,8 +964,8 @@ int main(int argc, char **argv) {
             future2 = std::move(solved_layer);
             future2_ordinal = ordinal_signed;
         }
-        archive_prune_and_write_if_needed(future4_ordinal, future4);
-        archive_prune_and_write_if_needed(future2_ordinal, future2);
+        archive_retired_layer_prune_and_write_if_needed(future4_ordinal, future4);
+        archive_retired_layer_prune_and_write_if_needed(future2_ordinal, future2);
         write_checkpoint_manifest(args, -1, -1, -1);
         const double solve_seconds = now_seconds() - solve_begin;
         for (const LayerMetric &metric : metrics) {
@@ -922,7 +1014,8 @@ int main(int argc, char **argv) {
             total_success_write += m.success_write_seconds;
         }
 
-        const InspectResult inspect = inspect_layer_max(args, lut, args.inspect_layer_ordinal);
+        const InspectResult inspect =
+            inspect_layer_max<StorageT>(args, lut, args.inspect_layer_ordinal);
         std::ofstream summary(args.summary_csv);
         if (!summary) {
             throw std::runtime_error("failed to open summary csv: " + args.summary_csv.string());
@@ -1001,9 +1094,30 @@ int main(int argc, char **argv) {
             << " inspect_max_value=" << inspect.max_value
             << " inspect_max_rate=" << inspect.max_rate
             << '\n';
+        return 0;
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+    try {
+        const Args args = parse_args(argc, argv);
+        switch (args.success_dtype) {
+            case BC::BCSuccessDTypeMode::UInt32:
+                return run_typed<uint32_t>(args);
+            case BC::BCSuccessDTypeMode::UInt64:
+                return run_typed<uint64_t>(args);
+            case BC::BCSuccessDTypeMode::Float32:
+            case BC::BCSuccessDTypeMode::OneMinusFloat32:
+                return run_typed<float>(args);
+            case BC::BCSuccessDTypeMode::Float64:
+            case BC::BCSuccessDTypeMode::OneMinusFloat64:
+                return run_typed<double>(args);
+        }
     } catch (const std::exception &ex) {
         std::cerr << "error: " << ex.what() << '\n';
         return 1;
     }
-    return 0;
+    std::cerr << "error: unsupported success dtype\n";
+    return 1;
 }

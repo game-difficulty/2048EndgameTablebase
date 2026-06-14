@@ -3,6 +3,7 @@
 #include "BCFileIO.h"
 #include "BCPositionCellLoader.h"
 #include "BCPositionFile.h"
+#include "FormationRuntime.h"
 
 #include <array>
 #include <algorithm>
@@ -65,6 +66,11 @@ enum class BCSuccessDTypeMode : uint32_t {
     return bc_success_dtype_value_size(bc_success_dtype_from_u32(mode));
 }
 
+[[nodiscard]] inline bool bc_success_dtype_is_one_minus(BCSuccessDTypeMode mode) {
+    return mode == BCSuccessDTypeMode::OneMinusFloat32 ||
+           mode == BCSuccessDTypeMode::OneMinusFloat64;
+}
+
 template <typename T>
 [[nodiscard]] inline BCSuccessDTypeMode bc_success_default_dtype_for_type() {
     if constexpr (std::is_same_v<T, uint32_t>) {
@@ -99,6 +105,32 @@ template <typename T>
     } else {
         return false;
     }
+}
+
+template <typename T>
+[[nodiscard]] inline T bc_success_zero_value_for_dtype(BCSuccessDTypeMode mode) {
+    if (!bc_success_dtype_matches_type<T>(mode)) {
+        throw std::invalid_argument("BC success zero value type does not match dtype");
+    }
+    if constexpr (std::is_floating_point_v<T>) {
+        if (bc_success_dtype_is_one_minus(mode)) {
+            return static_cast<T>(-1);
+        }
+    }
+    return zero_value<T>();
+}
+
+template <typename T>
+[[nodiscard]] inline T bc_success_terminal_value_for_dtype(BCSuccessDTypeMode mode) {
+    if (!bc_success_dtype_matches_type<T>(mode)) {
+        throw std::invalid_argument("BC success terminal value type does not match dtype");
+    }
+    if constexpr (std::is_floating_point_v<T>) {
+        if (bc_success_dtype_is_one_minus(mode)) {
+            return static_cast<T>(0);
+        }
+    }
+    return max_scale_value<T>();
 }
 
 template <typename T>
