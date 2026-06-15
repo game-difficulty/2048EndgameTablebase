@@ -5,6 +5,7 @@
 #include "BCPositionFile.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -24,6 +25,7 @@ struct BCCellLoadStats {
     uint64_t read_bytes = 0U;
     uint64_t backend_read_ops = 0U;
     uint64_t backend_read_bytes = 0U;
+    double backend_read_seconds = 0.0;
 };
 
 struct BCLoadedCellView {
@@ -360,7 +362,7 @@ public:
             while (range_index < ranges.size()) {
                 const uint64_t range_end = bc_checked_add_u64(
                     ranges[range_index].offset,
-                    ranges[range_index].bytes.size(),
+                    ranges[range_index].size(),
                     "BC streaming position loaded range end overflow"
                 );
                 if (range_end > request.offset) {
@@ -374,18 +376,18 @@ public:
             const LoadedRange &range = ranges[range_index];
             const uint64_t range_end = bc_checked_add_u64(
                 range.offset,
-                range.bytes.size(),
+                range.size(),
                 "BC streaming position loaded range end overflow"
             );
             if (request.offset < range.offset || request_end > range_end) {
                 throw std::logic_error("BC streaming position request is not covered by loaded range");
             }
             const uint64_t in_range_offset = request.offset - range.offset;
-            if (in_range_offset > range.bytes.size() ||
-                request.bytes > range.bytes.size() - in_range_offset) {
+            if (in_range_offset > range.size() ||
+                request.bytes > range.size() - in_range_offset) {
                 throw std::logic_error("BC streaming position loaded range does not cover request");
             }
-            const uint8_t *src = range.bytes.data() + static_cast<size_t>(in_range_offset);
+            const uint8_t *src = range.data() + static_cast<size_t>(in_range_offset);
             BCLoadedCell &cell = cells[request.cell_index];
             if (request.kind == ExtentKind::Bucket) {
                 parse_bucket_entries(src, request.bytes, cell.buckets);
@@ -428,6 +430,21 @@ private:
     struct LoadedRange {
         uint64_t offset = 0U;
         std::vector<uint8_t> bytes;
+        detail::BCAlignedBuffer aligned_bytes;
+
+        [[nodiscard]] uint8_t *data() {
+            return aligned_bytes.data() != nullptr ? aligned_bytes.data() : bytes.data();
+        }
+
+        [[nodiscard]] const uint8_t *data() const {
+            return aligned_bytes.data() != nullptr ? aligned_bytes.data() : bytes.data();
+        }
+
+        [[nodiscard]] uint64_t size() const {
+            return aligned_bytes.data() != nullptr
+                ? static_cast<uint64_t>(aligned_bytes.size())
+                : static_cast<uint64_t>(bytes.size());
+        }
     };
 
     void require_open() const {
@@ -645,6 +662,12 @@ private:
         std::vector<ExtentRequest> requests,
         BCCellLoadStats *stats
     ) const {
+        const bool direct_mode = file_->mode() == BCFileIOMode::Direct;
+        const uint32_t read_alignment = file_->preferred_read_alignment();
+        const bool direct_aligned =
+            direct_mode &&
+            read_alignment > 1U &&
+            (read_alignment & (read_alignment - 1U)) == 0U;
         std::vector<BCFileExtent> extents;
         for (const ExtentRequest &request : requests) {
             if (request.bytes == 0U) {
@@ -663,12 +686,14 @@ private:
                     "BC streaming position coalesced extent end overflow"
                 );
                 constexpr uint64_t kMaxCoalesceGapBytes = 64ULL * 1024ULL;
-                constexpr uint64_t kMaxCoalescedExtentBytes = 4ULL * 1024ULL * 1024ULL;
+                const uint64_t max_coalesced_extent_bytes = direct_aligned
+                    ? 64ULL * 1024ULL * 1024ULL
+                    : 4ULL * 1024ULL * 1024ULL;
                 const uint64_t gap = request.offset > last_end ? request.offset - last_end : 0U;
                 if (request.offset >= last.offset &&
                     (request.offset <= last_end ||
                      (gap <= kMaxCoalesceGapBytes &&
-                      end - last.offset <= kMaxCoalescedExtentBytes))) {
+                      end - last.offset <= max_coalesced_extent_bytes))) {
                     if (end > last_end) {
                         last.bytes = end - last.offset;
                     }
@@ -685,13 +710,27 @@ private:
                 throw std::overflow_error("BC streaming position coalesced extent exceeds size_t");
             }
             LoadedRange range;
-            range.offset = extent.offset;
-            range.bytes.assign(static_cast<size_t>(extent.bytes), 0U);
+            uint64_t read_offset = extent.offset;
+            uint64_t read_bytes = extent.bytes;
+            if (direct_aligned) {
+                const uint64_t extent_end = bc_checked_add_u64(
+                    extent.offset,
+                    extent.bytes,
+                    "BC streaming position direct extent end overflow"
+                );
+                read_offset = bc_direct_align_down(extent.offset, read_alignment);
+                const uint64_t read_end = bc_direct_align_up(extent_end, read_alignment);
+                read_bytes = read_end - read_offset;
+                range.aligned_bytes.reset(read_bytes, read_alignment);
+            } else {
+                range.bytes.assign(static_cast<size_t>(read_bytes), 0U);
+            }
+            range.offset = read_offset;
             if (stats != nullptr) {
                 ++stats->coalesced_extents;
                 stats->read_bytes = bc_checked_add_u64(
                     stats->read_bytes,
-                    extent.bytes,
+                    read_bytes,
                     "BC streaming position read byte count overflow"
                 );
             }
@@ -703,15 +742,19 @@ private:
         for (LoadedRange &range : ranges) {
             read_requests.push_back(BCFileReadRequest{
                 range.offset,
-                range.bytes.data(),
-                static_cast<uint64_t>(range.bytes.size())
+                range.data(),
+                range.size()
             });
         }
         BCFileIOStats io_stats;
+        const auto read_t0 = std::chrono::steady_clock::now();
         file_->read_many(read_requests, &io_stats);
+        const double backend_seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - read_t0).count();
         if (stats != nullptr) {
             stats->backend_read_ops = io_stats.backend_io_count;
             stats->backend_read_bytes = io_stats.backend_bytes;
+            stats->backend_read_seconds += backend_seconds;
         }
         return ranges;
     }
@@ -729,7 +772,7 @@ private:
         for (const LoadedRange &range : ranges) {
             const uint64_t range_end = bc_checked_add_u64(
                 range.offset,
-                range.bytes.size(),
+                range.size(),
                 "BC streaming position loaded range end overflow"
             );
             if (offset >= range.offset && request_end <= range_end) {

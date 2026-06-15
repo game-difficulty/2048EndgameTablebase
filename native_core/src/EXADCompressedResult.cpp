@@ -31,6 +31,7 @@ constexpr uint32_t kSlotCount = 48;
 constexpr uint32_t kBucketBlockHardCapBytes = 1024u * 1024u;
 constexpr double kFixed32Scale = 4000000000.0;
 constexpr double kFixed64Scale = 1600000000000000000.0;
+constexpr size_t kStreamIoChunkBytes = 64ULL * 1024ULL * 1024ULL;
 
 struct FileHeader {
     char magic[8];
@@ -184,9 +185,15 @@ void read_exact(std::ifstream& in, void* dst, size_t bytes, const char* what) {
     if (bytes == 0) {
         return;
     }
-    in.read(reinterpret_cast<char*>(dst), static_cast<std::streamsize>(bytes));
-    if (!in || static_cast<size_t>(in.gcount()) != bytes) {
-        throw std::runtime_error(std::string("short read while reading ") + what);
+    auto* out = static_cast<char*>(dst);
+    size_t offset = 0U;
+    while (offset < bytes) {
+        const size_t chunk = std::min(kStreamIoChunkBytes, bytes - offset);
+        in.read(out + offset, static_cast<std::streamsize>(chunk));
+        if (!in || static_cast<size_t>(in.gcount()) != chunk) {
+            throw std::runtime_error(std::string("short read while reading ") + what);
+        }
+        offset += chunk;
     }
 }
 
@@ -211,9 +218,15 @@ void write_exact(std::fstream& out, const void* data, size_t bytes, const char* 
     if (bytes == 0) {
         return;
     }
-    out.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(bytes));
-    if (!out) {
-        throw std::runtime_error(std::string("failed to write ") + what);
+    const auto* input = static_cast<const char*>(data);
+    size_t offset = 0U;
+    while (offset < bytes) {
+        const size_t chunk = std::min(kStreamIoChunkBytes, bytes - offset);
+        out.write(input + offset, static_cast<std::streamsize>(chunk));
+        if (!out) {
+            throw std::runtime_error(std::string("failed to write ") + what);
+        }
+        offset += chunk;
     }
 }
 

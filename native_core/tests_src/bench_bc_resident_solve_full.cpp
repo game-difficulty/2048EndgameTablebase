@@ -889,6 +889,7 @@ int run_typed(const Args &args) {
             options.edge_options.spawn_rate4 = args.spawn_rate4;
             options.edge_options.success_target_rank = args.success_target_rank;
             options.edge_options.success_shifts = &success_shifts;
+            options.edge_options.success_check_all_cells = true;
 
             double read_seconds = 0.0;
             uint64_t current_layer_sum = 0U;
@@ -897,6 +898,7 @@ int run_typed(const Args &args) {
                 BC::BCPositionFileReader current = open_position_layer(args, layers.at(ordinal), lut);
                 read_seconds = now_seconds() - read_begin;
                 current_layer_sum = current.layer().header().layer_sum;
+                options.edge_options.future_cell_modulus = current.layer().header().family_count;
                 return BC::bc_resident_solve_compacted_layer<StorageT>(
                     current.layer(),
                     future2,

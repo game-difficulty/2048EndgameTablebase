@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BCPositionCellLoader.h"
 #include "BCPositionFile.h"
 #include "BCSolveEdgeKernel.h"
 #include "BCSuccessIO.h"
@@ -48,7 +49,9 @@ public:
         lut_ = &lut;
         position_ = &position;
         row_width_ = success.row_width();
+        owned_loaded_position_cells_.clear();
         owned_values_.clear();
+        owned_flat_values_ = {};
         keep_rows_ = nullptr;
         keep_row_count_ = 0U;
         owned_values_.reserve(static_cast<size_t>(
@@ -103,6 +106,253 @@ public:
         value_count_ = owned_values_.size();
     }
 
+    void open_loaded(
+        const BCLut &lut,
+        uint32_t cell_count,
+        std::vector<BCLoadedCell> position_cells,
+        const std::vector<BCLoadedSuccessCell> &success_cells,
+        uint32_t row_width,
+        BCSuccessDTypeMode dtype
+    ) {
+        if (row_width == 0U) {
+            throw std::invalid_argument("BC future loaded lookup row_width must be non-zero");
+        }
+        if (!bc_success_dtype_matches_type<StorageT>(dtype)) {
+            throw std::invalid_argument("BC future loaded lookup dtype does not match storage type");
+        }
+        if (position_cells.size() != success_cells.size()) {
+            throw std::invalid_argument("BC future loaded lookup cell count mismatch");
+        }
+        lut_ = &lut;
+        position_ = nullptr;
+        row_width_ = row_width;
+        owned_values_.clear();
+        owned_flat_values_ = {};
+        value_data_ = nullptr;
+        value_count_ = 0U;
+        keep_rows_ = nullptr;
+        keep_row_count_ = 0U;
+        cells_.clear();
+        cells_.resize(cell_count);
+        owned_loaded_position_cells_ = std::move(position_cells);
+
+        uint64_t total_expected_values = 0U;
+        for (const BCLoadedSuccessCell &loaded_success : success_cells) {
+            if (loaded_success.row_width != row_width ||
+                !bc_success_dtype_matches_type<StorageT>(loaded_success.dtype_mode())) {
+                throw std::invalid_argument("BC future loaded lookup success dtype/row_width mismatch");
+            }
+            if (loaded_success.success_rows >
+                std::numeric_limits<uint64_t>::max() / row_width_) {
+                throw std::overflow_error("BC future loaded lookup value count exceeds uint64");
+            }
+            total_expected_values = bc_checked_add_u64(
+                total_expected_values,
+                static_cast<uint64_t>(loaded_success.success_rows) * row_width_,
+                "BC future loaded lookup total value count overflow"
+            );
+        }
+        if (total_expected_values > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC future loaded lookup total value count exceeds size_t");
+        }
+        owned_values_.reserve(static_cast<size_t>(total_expected_values));
+
+        for (size_t loaded_i = 0U; loaded_i < owned_loaded_position_cells_.size(); ++loaded_i) {
+            BCLoadedCell &loaded_position = owned_loaded_position_cells_[loaded_i];
+            const BCLoadedSuccessCell &loaded_success = success_cells[loaded_i];
+            if (loaded_position.cid != loaded_success.cid) {
+                throw std::invalid_argument("BC future loaded lookup cid mismatch");
+            }
+            if (loaded_position.cid >= cell_count) {
+                throw std::out_of_range("BC future loaded lookup cid out of range");
+            }
+            if (loaded_position.success_rows != loaded_success.success_rows) {
+                throw std::invalid_argument("BC future loaded lookup success row mismatch");
+            }
+
+            CellIndex &cell = cells_[static_cast<size_t>(loaded_position.cid)];
+            if (!cell.entries.empty() || cell.value_count != 0U) {
+                throw std::invalid_argument("BC future loaded lookup duplicate loaded cid");
+            }
+            cell.value_offset = owned_values_.size();
+            const uint64_t expected_values =
+                static_cast<uint64_t>(loaded_position.success_rows) * row_width_;
+            if (expected_values > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+                throw std::overflow_error("BC future loaded lookup value count exceeds size_t");
+            }
+            const uint64_t expected_bytes = expected_values * sizeof(StorageT);
+            if (loaded_success.raw_bytes.size() != expected_bytes) {
+                throw std::invalid_argument("BC future loaded lookup raw success byte mismatch");
+            }
+            cell.value_count = static_cast<size_t>(expected_values);
+            if constexpr (std::is_same_v<StorageT, uint32_t>) {
+                if (loaded_success.values.size() == cell.value_count) {
+                    owned_values_.insert(
+                        owned_values_.end(),
+                        loaded_success.values.begin(),
+                        loaded_success.values.end()
+                    );
+                } else {
+                    for (uint64_t value_i = 0U; value_i < expected_values; ++value_i) {
+                        owned_values_.push_back(
+                            bc_load_success_value_le<StorageT>(
+                                loaded_success.raw_bytes.data() +
+                                static_cast<size_t>(value_i * sizeof(StorageT))
+                            )
+                        );
+                    }
+                }
+            } else {
+                for (uint64_t value_i = 0U; value_i < expected_values; ++value_i) {
+                    owned_values_.push_back(
+                        bc_load_success_value_le<StorageT>(
+                            loaded_success.raw_bytes.data() +
+                            static_cast<size_t>(value_i * sizeof(StorageT))
+                        )
+                    );
+                }
+            }
+
+            const BCLoadedCellView view = loaded_position.view();
+            if (view.empty()) {
+                if (cell.value_count != 0U) {
+                    throw std::runtime_error("BC future loaded empty cell has success values");
+                }
+                continue;
+            }
+            cell.rank_payload = view.rank_payload;
+            const uint32_t capacity = direct_capacity_for_bucket_count(view.buckets.size);
+            cell.entries.assign(capacity, DirectEntry{});
+            cell.mask = capacity - 1U;
+            for (uint32_t i = 0U; i < view.buckets.size; ++i) {
+                const BCBucketEntry &bucket = view.buckets.data[i];
+                uint32_t slot = static_cast<uint32_t>(mix_u64(bucket.key)) & cell.mask;
+                while (!entry_empty(cell.entries[slot])) {
+                    if (cell.entries[slot].key == bucket.key) {
+                        throw std::runtime_error("BC future loaded direct lookup saw duplicate bucket key");
+                    }
+                    slot = (slot + 1U) & cell.mask;
+                }
+                DirectEntry entry;
+                entry.key = bucket.key;
+                entry.rank_payload_offset = bucket.rank_payload_offset;
+                entry.success_row_offset = bucket.success_row_offset;
+                const BucketBitmapLen bitmap_len = bitmap_len_from_trusted_key(lut, bucket.key);
+                validate_entry_payload_range(cell, entry, bitmap_len);
+                cell.entries[slot] = entry;
+            }
+        }
+        value_data_ = owned_values_.empty() ? nullptr : owned_values_.data();
+        value_count_ = owned_values_.size();
+    }
+
+    void open_loaded_flat_values(
+        const BCLut &lut,
+        uint32_t cell_count,
+        std::vector<BCLoadedCell> position_cells,
+        const std::vector<uint64_t> &cell_value_offsets,
+        std::vector<StorageT> values,
+        uint32_t row_width,
+        BCSuccessDTypeMode dtype
+    ) {
+        BCSuccessOwnedValues<StorageT> owned_values;
+        owned_values.vector_values = std::move(values);
+        open_loaded_flat_owned_values(
+            lut,
+            cell_count,
+            std::move(position_cells),
+            cell_value_offsets,
+            std::move(owned_values),
+            row_width,
+            dtype
+        );
+    }
+
+    void open_loaded_flat_owned_values(
+        const BCLut &lut,
+        uint32_t cell_count,
+        std::vector<BCLoadedCell> position_cells,
+        const std::vector<uint64_t> &cell_value_offsets,
+        BCSuccessOwnedValues<StorageT> values,
+        uint32_t row_width,
+        BCSuccessDTypeMode dtype
+    ) {
+        if (row_width == 0U) {
+            throw std::invalid_argument("BC future loaded flat lookup row_width must be non-zero");
+        }
+        if (!bc_success_dtype_matches_type<StorageT>(dtype)) {
+            throw std::invalid_argument("BC future loaded flat lookup dtype does not match storage type");
+        }
+        if (cell_value_offsets.size() != static_cast<size_t>(cell_count) + 1U) {
+            throw std::invalid_argument("BC future loaded flat lookup cell offset count mismatch");
+        }
+        if (cell_value_offsets.back() != static_cast<uint64_t>(values.size())) {
+            throw std::invalid_argument("BC future loaded flat lookup value count mismatch");
+        }
+        lut_ = &lut;
+        position_ = nullptr;
+        row_width_ = row_width;
+        owned_values_.clear();
+        owned_flat_values_ = std::move(values);
+        value_data_ = owned_flat_values_.empty() ? nullptr : owned_flat_values_.data();
+        value_count_ = owned_flat_values_.size();
+        keep_rows_ = nullptr;
+        keep_row_count_ = 0U;
+        cells_.clear();
+        cells_.resize(cell_count);
+        owned_loaded_position_cells_ = std::move(position_cells);
+
+        for (BCLoadedCell &loaded_position : owned_loaded_position_cells_) {
+            if (loaded_position.cid >= cell_count) {
+                throw std::out_of_range("BC future loaded flat lookup cid out of range");
+            }
+            CellIndex &cell = cells_[static_cast<size_t>(loaded_position.cid)];
+            if (!cell.entries.empty() || cell.value_count != 0U) {
+                throw std::invalid_argument("BC future loaded flat lookup duplicate loaded cid");
+            }
+            cell.value_offset = static_cast<size_t>(cell_value_offsets[static_cast<size_t>(loaded_position.cid)]);
+            const uint64_t expected_values =
+                static_cast<uint64_t>(loaded_position.success_rows) * row_width_;
+            if (expected_values > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+                throw std::overflow_error("BC future loaded flat lookup value count exceeds size_t");
+            }
+            cell.value_count = static_cast<size_t>(expected_values);
+            if (static_cast<uint64_t>(cell.value_offset) > value_count_ ||
+                expected_values > value_count_ - static_cast<uint64_t>(cell.value_offset)) {
+                throw std::out_of_range("BC future loaded flat lookup cell values exceed payload");
+            }
+
+            const BCLoadedCellView view = loaded_position.view();
+            if (view.empty()) {
+                if (cell.value_count != 0U) {
+                    throw std::runtime_error("BC future loaded flat empty cell has success values");
+                }
+                continue;
+            }
+            cell.rank_payload = view.rank_payload;
+            const uint32_t capacity = direct_capacity_for_bucket_count(view.buckets.size);
+            cell.entries.assign(capacity, DirectEntry{});
+            cell.mask = capacity - 1U;
+            for (uint32_t i = 0U; i < view.buckets.size; ++i) {
+                const BCBucketEntry &bucket = view.buckets.data[i];
+                uint32_t slot = static_cast<uint32_t>(mix_u64(bucket.key)) & cell.mask;
+                while (!entry_empty(cell.entries[slot])) {
+                    if (cell.entries[slot].key == bucket.key) {
+                        throw std::runtime_error("BC future loaded flat direct lookup saw duplicate bucket key");
+                    }
+                    slot = (slot + 1U) & cell.mask;
+                }
+                DirectEntry entry;
+                entry.key = bucket.key;
+                entry.rank_payload_offset = bucket.rank_payload_offset;
+                entry.success_row_offset = bucket.success_row_offset;
+                const BucketBitmapLen bitmap_len = bitmap_len_from_trusted_key(lut, bucket.key);
+                validate_entry_payload_range(cell, entry, bitmap_len);
+                cell.entries[slot] = entry;
+            }
+        }
+    }
+
     void open_flat(
         const BCLut &lut,
         const BCPositionLayerReader &position,
@@ -129,7 +379,9 @@ public:
         lut_ = &lut;
         position_ = &position;
         row_width_ = row_width;
+        owned_loaded_position_cells_.clear();
         owned_values_.clear();
+        owned_flat_values_ = {};
         value_data_ = values;
         value_count_ = value_count;
         keep_rows_ = keep_rows;
@@ -577,7 +829,7 @@ private:
         StorageT &value_out
     ) const {
         value_out = StorageT{};
-        if (!encoded.valid || position_ == nullptr || lut_ == nullptr) {
+        if (!encoded.valid || lut_ == nullptr) {
             return false;
         }
         if (lane >= row_width_) {
@@ -630,6 +882,8 @@ private:
     const BCPositionLayerReader *position_ = nullptr;
     uint32_t row_width_ = 0U;
     std::vector<StorageT> owned_values_;
+    BCSuccessOwnedValues<StorageT> owned_flat_values_;
+    std::vector<BCLoadedCell> owned_loaded_position_cells_;
     const StorageT *value_data_ = nullptr;
     size_t value_count_ = 0U;
     const uint8_t *keep_rows_ = nullptr;

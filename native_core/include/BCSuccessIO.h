@@ -11,13 +11,18 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
-#include <future>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
+
+#if defined(_WIN32)
+#include <malloc.h>
+#else
+#include <cstdlib>
+#endif
 
 namespace BC {
 
@@ -764,24 +769,29 @@ inline void bc_success_accumulate_file_stats(BCFileIOStats *dst, const BCFileIOS
     dst->requested_bytes += src.requested_bytes;
     dst->backend_io_count += src.backend_io_count;
     dst->backend_bytes += src.backend_bytes;
+    dst->backend_seconds += src.backend_seconds;
 }
 
 class BCSequentialSuccessWriteStager {
 public:
-    explicit BCSequentialSuccessWriteStager(BCWritableFile &file, BCFileIOStats *stats = nullptr)
-        : file_(file), stats_(stats) {
+    explicit BCSequentialSuccessWriteStager(
+        BCWritableFile &file,
+        BCFileIOStats *stats = nullptr,
+        uint64_t base_offset = 0U
+    )
+        : file_(file), stats_(stats), file_cursor_(base_offset) {
         direct_mode_ = file_.mode() == BCFileIOMode::Direct;
         const uint32_t preferred_alignment = file_.preferred_write_alignment();
         alignment_ = preferred_alignment == 0U ? 1U : preferred_alignment;
+        if (direct_mode_ && (base_offset % alignment_) != 0U) {
+            throw std::invalid_argument("BC success streaming direct base offset must be aligned");
+        }
         stage_bytes_ = kTargetStageBytes - (kTargetStageBytes % alignment_);
         if (stage_bytes_ == 0U) {
             stage_bytes_ = alignment_;
         }
         max_pending_chunks_ = direct_mode_ ? kDirectPendingChunksPerGroup : 1U;
-        group_count_ = direct_mode_ ? kDirectPipelineGroups : 1U;
-        for (uint32_t group = 0U; group < group_count_; ++group) {
-            groups_[group].buffers.resize(max_pending_chunks_);
-        }
+        group_.buffers.resize(max_pending_chunks_);
         if (stats_ != nullptr) {
             *stats_ = {};
         }
@@ -800,18 +810,18 @@ public:
             ensure_active_buffer();
             const uint64_t available = stage_bytes_ - active_bytes_;
             if (available == 0U) {
-                finalize_active_buffer(true);
+                finalize_active_buffer();
                 continue;
             }
             const uint64_t take = std::min<uint64_t>(available, remaining);
-            PendingGroup &group = groups_[active_group_];
+            PendingGroup &group = group_;
             StageBuffer &buffer = group.buffers[group.pending_count];
             std::memcpy(buffer.data + static_cast<size_t>(active_bytes_), cursor, static_cast<size_t>(take));
             active_bytes_ += take;
             cursor += take;
             remaining -= take;
             if (active_bytes_ == stage_bytes_ && remaining != 0U) {
-                finalize_active_buffer(true);
+                finalize_active_buffer();
             }
         }
     }
@@ -840,10 +850,9 @@ public:
 
     void finish() {
         if (active_bytes_ != 0U) {
-            finalize_active_buffer(false);
+            finalize_active_buffer();
         }
-        flush_active_group(false);
-        wait_for_in_flight();
+        flush_active_group();
         if (!direct_mode_) {
             file_.flush();
         }
@@ -851,8 +860,7 @@ public:
 
 private:
     static constexpr uint64_t kTargetStageBytes = 16ULL * 1024ULL * 1024ULL;
-    static constexpr uint32_t kDirectPipelineGroups = 2U;
-    static constexpr uint32_t kDirectPendingChunksPerGroup = 2U;
+    static constexpr uint32_t kDirectPendingChunksPerGroup = 8U;
 
     struct StageBuffer {
         std::vector<uint8_t> storage;
@@ -879,11 +887,11 @@ private:
     }
 
     void ensure_active_buffer() {
-        PendingGroup &group = groups_[active_group_];
+        PendingGroup &group = group_;
         if (group.pending_count >= max_pending_chunks_) {
-            flush_active_group(true);
+            flush_active_group();
         }
-        PendingGroup &active = groups_[active_group_];
+        PendingGroup &active = group_;
         StageBuffer &buffer = active.buffers[active.pending_count];
         if (buffer.data != nullptr) {
             return;
@@ -895,12 +903,12 @@ private:
         buffer.data = align_pointer(buffer.storage.data(), alignment_);
     }
 
-    void finalize_active_buffer(bool allow_async) {
+    void finalize_active_buffer() {
         if (active_bytes_ == 0U) {
             return;
         }
         ensure_active_buffer();
-        PendingGroup &group = groups_[active_group_];
+        PendingGroup &group = group_;
         group.offsets[group.pending_count] = file_cursor_;
         group.bytes[group.pending_count] = active_bytes_;
         file_cursor_ = bc_checked_add_u64(
@@ -911,7 +919,7 @@ private:
         active_bytes_ = 0U;
         ++group.pending_count;
         if (group.pending_count >= max_pending_chunks_) {
-            flush_active_group(allow_async);
+            flush_active_group();
         }
     }
 
@@ -928,58 +936,26 @@ private:
         return requests;
     }
 
-    void flush_active_group(bool allow_async) {
-        PendingGroup &group = groups_[active_group_];
+    void flush_active_group() {
+        PendingGroup &group = group_;
         if (group.pending_count == 0U) {
             return;
         }
         std::vector<BCFileWriteRequest> requests = build_group_requests(group);
         group.pending_count = 0U;
-        if (!direct_mode_) {
-            BCFileIOStats local;
-            file_.write_many(requests, stats_ == nullptr ? nullptr : &local);
-            bc_success_accumulate_file_stats(stats_, local);
-            return;
-        }
-
-        wait_for_in_flight();
-        if (!allow_async) {
-            BCFileIOStats local;
-            file_.write_many(requests, stats_ == nullptr ? nullptr : &local);
-            bc_success_accumulate_file_stats(stats_, local);
-            return;
-        }
-
-        in_flight_ = std::async(
-            std::launch::async,
-            [this, requests = std::move(requests)]() mutable {
-                BCFileIOStats local;
-                file_.write_many(requests, &local);
-                return local;
-            }
-        );
-        active_group_ = (active_group_ + 1U) % group_count_;
-    }
-
-    void wait_for_in_flight() {
-        if (!in_flight_.valid()) {
-            return;
-        }
-        BCFileIOStats local = in_flight_.get();
+        BCFileIOStats local;
+        file_.write_many(requests, stats_ == nullptr ? nullptr : &local);
         bc_success_accumulate_file_stats(stats_, local);
     }
 
     BCWritableFile &file_;
     BCFileIOStats *stats_ = nullptr;
-    std::array<PendingGroup, kDirectPipelineGroups> groups_{};
-    std::future<BCFileIOStats> in_flight_;
+    PendingGroup group_{};
     uint64_t stage_bytes_ = kTargetStageBytes;
     uint64_t active_bytes_ = 0U;
     uint64_t file_cursor_ = 0U;
     uint64_t alignment_ = 1U;
     uint32_t max_pending_chunks_ = 1U;
-    uint32_t group_count_ = 1U;
-    uint32_t active_group_ = 0U;
     bool direct_mode_ = false;
 };
 
@@ -1097,6 +1073,139 @@ struct BCLoadedSuccessCell {
     }
 };
 
+class BCSuccessAlignedByteBuffer {
+public:
+    BCSuccessAlignedByteBuffer() = default;
+
+    BCSuccessAlignedByteBuffer(const BCSuccessAlignedByteBuffer &) = delete;
+    BCSuccessAlignedByteBuffer &operator=(const BCSuccessAlignedByteBuffer &) = delete;
+
+    BCSuccessAlignedByteBuffer(BCSuccessAlignedByteBuffer &&other) noexcept {
+        *this = std::move(other);
+    }
+
+    BCSuccessAlignedByteBuffer &operator=(BCSuccessAlignedByteBuffer &&other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+        reset();
+        data_ = other.data_;
+        size_ = other.size_;
+        alignment_ = other.alignment_;
+        other.data_ = nullptr;
+        other.size_ = 0U;
+        other.alignment_ = 0U;
+        return *this;
+    }
+
+    ~BCSuccessAlignedByteBuffer() {
+        reset();
+    }
+
+    void reset() noexcept {
+        if (data_ == nullptr) {
+            size_ = 0U;
+            alignment_ = 0U;
+            return;
+        }
+#if defined(_WIN32)
+        _aligned_free(data_);
+#else
+        std::free(data_);
+#endif
+        data_ = nullptr;
+        size_ = 0U;
+        alignment_ = 0U;
+    }
+
+    void reset(uint64_t size, uint32_t alignment) {
+        reset();
+        if (size == 0U) {
+            return;
+        }
+        if (alignment == 0U || (alignment & (alignment - 1U)) != 0U) {
+            throw std::invalid_argument("BC success aligned buffer alignment must be a power of two");
+        }
+        if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success aligned buffer exceeds size_t");
+        }
+#if defined(_WIN32)
+        data_ = static_cast<uint8_t *>(_aligned_malloc(static_cast<size_t>(size), alignment));
+        if (data_ == nullptr) {
+            throw std::bad_alloc();
+        }
+#else
+        void *ptr = nullptr;
+        if (posix_memalign(&ptr, alignment, static_cast<size_t>(size)) != 0) {
+            throw std::bad_alloc();
+        }
+        data_ = static_cast<uint8_t *>(ptr);
+#endif
+        size_ = static_cast<size_t>(size);
+        alignment_ = alignment;
+    }
+
+    [[nodiscard]] uint8_t *data() noexcept {
+        return data_;
+    }
+
+    [[nodiscard]] const uint8_t *data() const noexcept {
+        return data_;
+    }
+
+    [[nodiscard]] size_t size() const noexcept {
+        return size_;
+    }
+
+    [[nodiscard]] uint32_t alignment() const noexcept {
+        return alignment_;
+    }
+
+private:
+    uint8_t *data_ = nullptr;
+    size_t size_ = 0U;
+    uint32_t alignment_ = 0U;
+};
+
+template <typename T>
+struct BCSuccessOwnedValues {
+    std::vector<T> vector_values;
+    BCSuccessAlignedByteBuffer file_bytes;
+    uint64_t payload_offset = 0U;
+    size_t value_count = 0U;
+    bool file_backed = false;
+
+    BCSuccessOwnedValues() = default;
+    BCSuccessOwnedValues(const BCSuccessOwnedValues &) = delete;
+    BCSuccessOwnedValues &operator=(const BCSuccessOwnedValues &) = delete;
+    BCSuccessOwnedValues(BCSuccessOwnedValues &&) noexcept = default;
+    BCSuccessOwnedValues &operator=(BCSuccessOwnedValues &&) noexcept = default;
+
+    [[nodiscard]] T *data() {
+        if (file_backed) {
+            return reinterpret_cast<T *>(file_bytes.data() + static_cast<size_t>(payload_offset));
+        }
+        return vector_values.empty() ? nullptr : vector_values.data();
+    }
+
+    [[nodiscard]] const T *data() const {
+        if (file_backed) {
+            return reinterpret_cast<const T *>(
+                file_bytes.data() + static_cast<size_t>(payload_offset)
+            );
+        }
+        return vector_values.empty() ? nullptr : vector_values.data();
+    }
+
+    [[nodiscard]] size_t size() const noexcept {
+        return file_backed ? value_count : vector_values.size();
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return size() == 0U;
+    }
+};
+
 class BCSuccessStreamingReader {
 public:
     BCSuccessStreamingReader() = default;
@@ -1121,6 +1230,38 @@ public:
             position,
             expected_row_width
         );
+    }
+
+    template <class PositionReader>
+    static BCSuccessStreamingReader open_direct_auto(
+        const std::filesystem::path &path,
+        const PositionReader &position,
+        uint32_t expected_row_width,
+        uint32_t queue_depth = 8U,
+        bool overlapped = true
+    ) {
+        BCBufferedFileReader probe(path);
+        std::vector<uint8_t> header_bytes(kBCSuccessHeaderBytes);
+        probe.read_at(0U, header_bytes.data(), header_bytes.size());
+        const BCSuccessHeader header = bc_read_success_header(header_bytes);
+        const uint64_t logical_size = bc_checked_add_u64(
+            header.payload_offset,
+            header.payload_bytes,
+            "BC success direct logical size overflow"
+        );
+        BCDirectFileIOOptions options;
+        options.queue_depth = queue_depth;
+        options.overlapped = overlapped || queue_depth > 1U;
+        options.logical_size = logical_size;
+        const uint64_t required_physical = bc_direct_align_up(logical_size, options.alignment);
+        if (probe.size() >= required_physical) {
+            return BCSuccessStreamingReader(
+                std::make_unique<BCDirectFileReader>(path, options),
+                position,
+                expected_row_width
+            );
+        }
+        return open_buffered(path, position, expected_row_width);
     }
 
     template <class PositionReader>
@@ -1191,6 +1332,136 @@ public:
             );
         }
         return bytes;
+    }
+
+    template <typename T>
+    [[nodiscard]] std::vector<T> read_all_values_typed(BCSuccessLoadStats *stats = nullptr) const {
+        require_open();
+        if (!bc_success_dtype_matches_type<T>(dtype_mode())) {
+            throw std::runtime_error("BC success streaming whole payload type does not match dtype");
+        }
+        if ((header_.payload_bytes % sizeof(T)) != 0U) {
+            throw std::runtime_error("BC success streaming whole payload is not value-aligned");
+        }
+        const uint64_t value_count = header_.payload_bytes / sizeof(T);
+        if (value_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success streaming whole payload value count exceeds size_t");
+        }
+        std::vector<T> values(static_cast<size_t>(value_count));
+        if (stats != nullptr) {
+            *stats = {};
+            if (header_.payload_bytes != 0U) {
+                stats->requested_extents = 1U;
+                stats->coalesced_extents = 1U;
+                stats->requested_bytes = header_.payload_bytes;
+                stats->read_bytes = header_.payload_bytes;
+            }
+        }
+        if (header_.payload_bytes == 0U) {
+            return values;
+        }
+#if defined(_WIN32) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+        BCFileIOStats io_stats;
+        file_->read_many(
+            std::vector<BCFileReadRequest>{
+                BCFileReadRequest{header_.payload_offset, values.data(), header_.payload_bytes}
+            },
+            &io_stats
+        );
+        if (stats != nullptr) {
+            stats->backend_read_ops = io_stats.backend_io_count;
+            stats->backend_read_bytes = io_stats.backend_bytes;
+        }
+#else
+        std::vector<uint8_t> bytes(static_cast<size_t>(header_.payload_bytes));
+        BCFileIOStats io_stats;
+        file_->read_many(
+            std::vector<BCFileReadRequest>{
+                BCFileReadRequest{header_.payload_offset, bytes.data(), header_.payload_bytes}
+            },
+            &io_stats
+        );
+        if (stats != nullptr) {
+            stats->backend_read_ops = io_stats.backend_io_count;
+            stats->backend_read_bytes = io_stats.backend_bytes;
+        }
+        for (uint64_t i = 0U; i < value_count; ++i) {
+            values[static_cast<size_t>(i)] =
+                bc_load_success_value_le<T>(bytes.data() + static_cast<size_t>(i * sizeof(T)));
+        }
+#endif
+        return values;
+    }
+
+    template <typename T>
+    [[nodiscard]] BCSuccessOwnedValues<T> read_all_values_typed_owned(
+        BCSuccessLoadStats *stats = nullptr
+    ) const {
+        require_open();
+        if (!bc_success_dtype_matches_type<T>(dtype_mode())) {
+            throw std::runtime_error("BC success streaming whole payload type does not match dtype");
+        }
+        if ((header_.payload_bytes % sizeof(T)) != 0U) {
+            throw std::runtime_error("BC success streaming whole payload is not value-aligned");
+        }
+        const uint64_t value_count_u64 = header_.payload_bytes / sizeof(T);
+        if (value_count_u64 > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success streaming whole payload value count exceeds size_t");
+        }
+        if (stats != nullptr) {
+            *stats = {};
+            if (header_.payload_bytes != 0U) {
+                stats->requested_extents = 1U;
+                stats->coalesced_extents = 1U;
+                stats->requested_bytes = header_.payload_bytes;
+                stats->read_bytes = header_.payload_bytes;
+            }
+        }
+
+        BCSuccessOwnedValues<T> owned;
+        if (header_.payload_bytes == 0U) {
+            return owned;
+        }
+
+#if defined(_WIN32) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+        const uint32_t alignment = file_->preferred_read_alignment();
+        if (file_->mode() == BCFileIOMode::Direct && alignment > 1U &&
+            (alignment & (alignment - 1U)) == 0U) {
+            const uint64_t logical_size = bc_checked_add_u64(
+                header_.payload_offset,
+                header_.payload_bytes,
+                "BC success direct owned logical size overflow"
+            );
+            if (logical_size > std::numeric_limits<uint64_t>::max() - (alignment - 1U)) {
+                throw std::overflow_error("BC success direct owned physical size overflow");
+            }
+            const uint64_t physical_size =
+                (logical_size + static_cast<uint64_t>(alignment - 1U)) &
+                ~static_cast<uint64_t>(alignment - 1U);
+            owned.file_bytes.reset(physical_size, alignment);
+            BCFileIOStats io_stats;
+            if (file_->try_read_physical_prefix_aligned(
+                    owned.file_bytes.data(),
+                    physical_size,
+                    &io_stats
+                )) {
+                owned.payload_offset = header_.payload_offset;
+                owned.value_count = static_cast<size_t>(value_count_u64);
+                owned.file_backed = true;
+                if (stats != nullptr) {
+                    stats->backend_read_ops = io_stats.backend_io_count;
+                    stats->backend_read_bytes = io_stats.backend_bytes;
+                }
+                return owned;
+            }
+            owned.file_bytes.reset();
+        }
+        owned.vector_values = read_all_values_typed<T>(stats);
+        return owned;
+#else
+        owned.vector_values = read_all_values_typed<T>(stats);
+        return owned;
+#endif
     }
 
     [[nodiscard]] BCLoadedSuccessCell load_cell(

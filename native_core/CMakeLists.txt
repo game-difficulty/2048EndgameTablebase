@@ -190,6 +190,7 @@ set(BC_BOARD_CODEC_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_bo
 set(BC_BOARD_OPS_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_board_ops.cpp")
 set(BC_BACKSOLVE_RESIDENT_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_backsolve_resident.cpp")
 set(BC_RESIDENT_SOLVE_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_resident_solve.cpp")
+set(BC_SINGLE_CHUNK_SOLVE_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_single_chunk_solve.cpp")
 set(BC_FAMILY_GENERATION_STATE_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_family_generation_state.cpp")
 set(BC_RESIDENT_GENERATION_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_resident_generation.cpp")
 set(BC_FILE_IO_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_file_io.cpp")
@@ -199,6 +200,8 @@ set(BC_SINGLE_CHUNK_GENERATION_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_s
 set(BC_BACKSOLVE_RESIDENT_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_backsolve_resident.cpp")
 set(BC_RESIDENT_SOLVE_FULL_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_resident_solve_full.cpp")
 set(BC_RESIDENT_SOLVE_LAYER_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_resident_solve_layer.cpp")
+set(BC_SINGLE_CHUNK_SOLVE_LAYER_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_single_chunk_solve_layer.cpp")
+set(BC_SINGLE_CHUNK_SOLVE_FULL_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_single_chunk_solve_full.cpp")
 set(BC_FAMILY_LAYER_DIFF_TOOL_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/tool_bc_family_layer_diff.cpp")
 set(BC_POSITION_REMAP_EXACT_TOOL_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/tool_bc_position_remap_exact.cpp")
 
@@ -218,6 +221,7 @@ if(NATIVE_BUILD_TESTS)
         "${BC_BOARD_OPS_TEST_SOURCE}"
         "${BC_BACKSOLVE_RESIDENT_TEST_SOURCE}"
         "${BC_RESIDENT_SOLVE_TEST_SOURCE}"
+        "${BC_SINGLE_CHUNK_SOLVE_TEST_SOURCE}"
         "${BC_FAMILY_GENERATION_STATE_TEST_SOURCE}"
         "${BC_RESIDENT_GENERATION_TEST_SOURCE}"
         "${BC_FILE_IO_TEST_SOURCE}"
@@ -227,6 +231,8 @@ if(NATIVE_BUILD_TESTS)
         "${BC_BACKSOLVE_RESIDENT_BENCH_SOURCE}"
         "${BC_RESIDENT_SOLVE_FULL_BENCH_SOURCE}"
         "${BC_RESIDENT_SOLVE_LAYER_BENCH_SOURCE}"
+        "${BC_SINGLE_CHUNK_SOLVE_LAYER_BENCH_SOURCE}"
+        "${BC_SINGLE_CHUNK_SOLVE_FULL_BENCH_SOURCE}"
         "${BC_FAMILY_LAYER_DIFF_TOOL_SOURCE}"
         "${BC_POSITION_REMAP_EXACT_TOOL_SOURCE}"
     )
@@ -319,6 +325,13 @@ if(NATIVE_BUILD_TESTS)
     )
     target_link_libraries(bc_resident_solve_test PRIVATE common_config OpenMP::OpenMP_CXX)
 
+    add_executable(bc_single_chunk_solve_test
+        src/BCPositionFile.cpp
+        src/CanonicalBatch.cpp
+        tests_src/test_bc_single_chunk_solve.cpp
+    )
+    target_link_libraries(bc_single_chunk_solve_test PRIVATE common_config OpenMP::OpenMP_CXX)
+
     add_executable(bc_family_generation_state_test
         src/BCPositionFile.cpp
         src/BCFamilyGeneration.cpp
@@ -404,6 +417,23 @@ if(NATIVE_BUILD_TESTS)
         tests_src/bench_bc_resident_solve_layer.cpp
     )
     target_link_libraries(bc_resident_solve_layer_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_single_chunk_solve_layer_bench
+        src/BCPositionFile.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_single_chunk_solve_layer.cpp
+    )
+    target_link_libraries(bc_single_chunk_solve_layer_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_single_chunk_solve_full_bench
+        src/BCPositionFile.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_single_chunk_solve_full.cpp
+    )
+    target_link_libraries(bc_single_chunk_solve_full_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+    if(WIN32)
+        target_link_libraries(bc_single_chunk_solve_full_bench PRIVATE psapi)
+    endif()
 
     add_executable(bc_family_layer_diff_tool
         src/BCPositionFile.cpp

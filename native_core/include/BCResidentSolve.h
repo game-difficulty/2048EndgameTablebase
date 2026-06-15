@@ -46,10 +46,6 @@ struct BCResidentSolveStats {
     uint64_t terminal_success_rows = 0U;
     double future_index_seconds = 0.0;
     double recalc_seconds = 0.0;
-    double recalc_spawn_move_thread_seconds = 0.0;
-    double recalc_canonical_encode_thread_seconds = 0.0;
-    double recalc_lookup_thread_seconds = 0.0;
-    double recalc_finalize_thread_seconds = 0.0;
     double write_seconds = 0.0;
     BCSolveEdgeStats edge;
 };
@@ -66,7 +62,6 @@ struct BCResidentSolveOptions {
     BCSolveEdgeOptions edge_options;
     const BCQuadrantWordSumTable *word_sums = nullptr;
     int num_threads = 0;
-    bool profile_recalc_stages = false;
 
     void set_dtype(BCSuccessDTypeMode mode) {
         if (!bc_success_dtype_matches_type<StorageT>(mode)) {
@@ -345,6 +340,10 @@ inline void bc_resident_solve_accumulate_edge_stats(
     dst.future_lookup_count += src.future_lookup_count;
     dst.future_lookup_misses += src.future_lookup_misses;
     dst.finalized_boards += src.finalized_boards;
+    dst.batch_flushes += src.batch_flushes;
+    dst.batch_tail_flushes += src.batch_tail_flushes;
+    dst.batch_source_boards += src.batch_source_boards;
+    dst.canonical_flushes += src.canonical_flushes;
 }
 
 inline void bc_resident_solve_accumulate_stats(
@@ -365,10 +364,6 @@ inline void bc_resident_solve_accumulate_stats(
     dst.terminal_success_rows += src.terminal_success_rows;
     dst.future_index_seconds += src.future_index_seconds;
     dst.recalc_seconds += src.recalc_seconds;
-    dst.recalc_spawn_move_thread_seconds += src.recalc_spawn_move_thread_seconds;
-    dst.recalc_canonical_encode_thread_seconds += src.recalc_canonical_encode_thread_seconds;
-    dst.recalc_lookup_thread_seconds += src.recalc_lookup_thread_seconds;
-    dst.recalc_finalize_thread_seconds += src.recalc_finalize_thread_seconds;
     dst.write_seconds += src.write_seconds;
     bc_resident_solve_accumulate_edge_stats(dst.edge, src.edge);
 }
@@ -601,6 +596,7 @@ inline void bc_resident_flush_canonical(
     if (boards.empty()) {
         return;
     }
+    ++stats.edge.canonical_flushes;
     CanonicalBatch::canonicalize_inplace(
         boards.data(),
         boards.size(),
@@ -647,6 +643,11 @@ inline void bc_resident_solve_batch(
     if (count == 0U) {
         return;
     }
+    ++stats.edge.batch_flushes;
+    stats.edge.batch_source_boards += count;
+    if (count < BCResidentBatchWorkspace<StorageT>::kBatchSize) {
+        ++stats.edge.batch_tail_flushes;
+    }
     workspace.canonical2_boards.clear();
     workspace.canonical4_boards.clear();
     workspace.canonical2_refs.clear();
@@ -655,8 +656,6 @@ inline void bc_resident_solve_batch(
     workspace.queries4.clear();
 
     const bool success_check_enabled = bc_solve_success_check_enabled(options.edge_options);
-    const bool profile_stages = options.profile_recalc_stages;
-    double stage_t0 = profile_stages ? bc_resident_solve_now_seconds() : 0.0;
     uint64_t batch_terminal_success = 0U;
     uint64_t batch_empty_slots = 0U;
     uint64_t batch_move_all_dir_calls = 0U;
@@ -823,14 +822,16 @@ inline void bc_resident_solve_batch(
     stats.edge.unchanged_moves += batch_unchanged_moves;
     stats.edge.prefilter_checks += batch_prefilter_checks;
     stats.edge.prefilter_skips += batch_prefilter_skips;
-    if (profile_stages) {
-        const double stage_t1 = bc_resident_solve_now_seconds();
-        stats.recalc_spawn_move_thread_seconds += stage_t1 - stage_t0;
-        stage_t0 = stage_t1;
-    }
-
-    const BCSolvePreparedQueryEncoder future2_encoder(lut, future2_axis);
-    const BCSolvePreparedQueryEncoder future4_encoder(lut, future4_axis);
+    const BCSolvePreparedQueryEncoder future2_encoder(
+        lut,
+        future2_axis,
+        options.edge_options.future_cell_modulus
+    );
+    const BCSolvePreparedQueryEncoder future4_encoder(
+        lut,
+        future4_axis,
+        options.edge_options.future_cell_modulus
+    );
     bc_resident_flush_canonical(
         future2_encoder,
         options.edge_options.spawn2_tile_rank,
@@ -849,19 +850,10 @@ inline void bc_resident_solve_batch(
         options,
         stats
     );
-    if (profile_stages) {
-        const double stage_t1 = bc_resident_solve_now_seconds();
-        stats.recalc_canonical_encode_thread_seconds += stage_t1 - stage_t0;
-        stage_t0 = stage_t1;
-    }
-
     stats.queries2 += workspace.queries2.size();
     stats.queries4 += workspace.queries4.size();
 
     for (uint32_t lane = 0U; lane < options.row_width; ++lane) {
-        if (profile_stages) {
-            stage_t0 = bc_resident_solve_now_seconds();
-        }
         std::fill_n(
             workspace.best2.data(),
             static_cast<size_t>(count) * kBCBoardCellCount,
@@ -890,11 +882,6 @@ inline void bc_resident_solve_batch(
         );
         stats.found2 += found2;
         stats.found4 += found4;
-        if (profile_stages) {
-            const double stage_t1 = bc_resident_solve_now_seconds();
-            stats.recalc_lookup_thread_seconds += stage_t1 - stage_t0;
-            stage_t0 = stage_t1;
-        }
 
         for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
             StorageT value = options.zero_value;
@@ -957,9 +944,6 @@ inline void bc_resident_solve_batch(
         }
         if (lane == 0U) {
             stats.edge.finalized_boards += count;
-        }
-        if (profile_stages) {
-            stats.recalc_finalize_thread_seconds += bc_resident_solve_now_seconds() - stage_t0;
         }
     }
     workspace.clear_batch();

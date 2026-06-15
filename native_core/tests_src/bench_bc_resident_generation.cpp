@@ -59,6 +59,8 @@ struct Args {
     uint32_t pending_buffer = 512U;
     bool detail_timing = false;
     uint32_t cell_modulus = 29U;
+    std::filesystem::path output_dir;
+    std::string prefix = "free9_256_";
     std::filesystem::path stats_csv;
 };
 
@@ -152,7 +154,7 @@ void check(bool condition, const char *message) {
     return value;
 }
 
-[[nodiscard]] uint64_t load_free9_seed_board() {
+[[nodiscard]] uint64_t load_pattern_seed_board(const std::string &pattern) {
     std::ifstream file(find_patterns_config());
     if (!file) {
         throw std::runtime_error("failed to open patterns_config.json");
@@ -160,17 +162,17 @@ void check(bool condition, const char *message) {
     std::ostringstream ss;
     ss << file.rdbuf();
     const std::string text = ss.str();
-    const size_t free9 = text.find("\"free9\"");
-    if (free9 == std::string::npos) {
-        throw std::runtime_error("patterns_config.json does not contain free9");
+    const size_t pattern_pos = text.find("\"" + pattern + "\"");
+    if (pattern_pos == std::string::npos) {
+        throw std::runtime_error("patterns_config.json does not contain " + pattern);
     }
-    const size_t seed_boards = text.find("\"seed boards\"", free9);
+    const size_t seed_boards = text.find("\"seed boards\"", pattern_pos);
     if (seed_boards == std::string::npos) {
-        throw std::runtime_error("free9 does not contain seed boards");
+        throw std::runtime_error(pattern + " does not contain seed boards");
     }
     const size_t hex_begin = text.find("0x", seed_boards);
     if (hex_begin == std::string::npos) {
-        throw std::runtime_error("free9 seed board has no hex value");
+        throw std::runtime_error(pattern + " seed board has no hex value");
     }
     size_t hex_end = hex_begin + 2U;
     while (hex_end < text.size() &&
@@ -180,19 +182,32 @@ void check(bool condition, const char *message) {
     return parse_hex_u64(text.substr(hex_begin, hex_end - hex_begin));
 }
 
-[[nodiscard]] std::array<uint32_t, 16U> free9_tile_sums() {
+[[nodiscard]] std::array<uint32_t, 16U> free_tile_sums() {
     return BC::default_2048_tile_sum_values();
 }
 
-[[nodiscard]] std::vector<BC::LayerSum> free9_possible_8tile_sums(
+[[nodiscard]] std::vector<uint8_t> make_free_legal_tiles(uint32_t target_rank) {
+    if (target_rank >= 15U) {
+        throw std::invalid_argument("free benchmark target rank must be < 15");
+    }
+    std::vector<uint8_t> legal_tiles;
+    legal_tiles.reserve(target_rank + 2U);
+    for (uint32_t tile = 0U; tile <= target_rank; ++tile) {
+        legal_tiles.push_back(static_cast<uint8_t>(tile));
+    }
+    legal_tiles.push_back(15U);
+    return legal_tiles;
+}
+
+[[nodiscard]] std::vector<BC::LayerSum> free_possible_8tile_sums(
+    const std::vector<uint8_t> &legal_tiles,
     const std::array<uint32_t, 16U> &tile_sums
 ) {
-    const std::vector<uint8_t> legal_tiles{0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 15U};
     return BC::build_possible_8tile_sums(legal_tiles, tile_sums);
 }
 
-[[nodiscard]] BCLut make_free9_lut() {
-    return BCLut({0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 15U});
+[[nodiscard]] BCLut make_free_lut(uint32_t target_rank) {
+    return BCLut(make_free_legal_tiles(target_rank));
 }
 
 [[nodiscard]] uint32_t board_semantic_sum(
@@ -301,7 +316,7 @@ void check(bool condition, const char *message) {
     uint32_t cell_modulus
 ) {
     if ((layer_sum & 1U) != 0U) {
-        throw std::invalid_argument("free9 resident benchmark requires even layer sums");
+        throw std::invalid_argument("free resident benchmark requires even layer sums");
     }
     return BC::build_modulo_position_cell_layout_for_layer(
         layer_sum,
@@ -369,9 +384,25 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
     return large_corners < 4U;
 }
 
-[[nodiscard]] std::vector<uint64_t> generate_free9_initial_boards() {
-    constexpr uint32_t kFree9LargeTiles = 7U;
-    constexpr uint32_t kFree9InitialTwos = 8U;
+[[nodiscard]] uint32_t free_pattern_index(const std::string &pattern) {
+    constexpr char kPrefix[] = "free";
+    if (pattern.rfind(kPrefix, 0U) != 0U || pattern.size() <= 4U) {
+        throw std::invalid_argument("free benchmark pattern must be named freeN");
+    }
+    size_t parsed = 0U;
+    const uint32_t value = static_cast<uint32_t>(std::stoul(pattern.substr(4U), &parsed));
+    if (parsed != pattern.size() - 4U || value == 0U || value > 16U) {
+        throw std::invalid_argument("invalid freeN benchmark pattern");
+    }
+    return value;
+}
+
+[[nodiscard]] std::vector<uint64_t> generate_free_initial_boards(uint32_t free_cells) {
+    if (free_cells < 2U || free_cells > 16U) {
+        throw std::invalid_argument("free initial generator requires 2..16 free cells");
+    }
+    const uint32_t large_tile_count = 16U - free_cells;
+    const uint32_t initial_twos = free_cells - 1U;
     std::vector<uint8_t> cells(16U);
     for (uint8_t i = 0U; i < cells.size(); ++i) {
         cells[i] = i;
@@ -380,7 +411,7 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
     std::vector<uint64_t> generated;
     generated.reserve(120000U);
     std::vector<uint8_t> large_positions;
-    choose_positions(cells, kFree9LargeTiles, 0U, large_positions, [&](const std::vector<uint8_t> &positions_32k) {
+    choose_positions(cells, large_tile_count, 0U, large_positions, [&](const std::vector<uint8_t> &positions_32k) {
         uint64_t base = 0U;
         bool used[16] = {};
         for (uint8_t pos : positions_32k) {
@@ -395,7 +426,7 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
             }
         }
         std::vector<uint8_t> two_positions;
-        choose_positions(remaining, kFree9InitialTwos, 0U, two_positions, [&](const std::vector<uint8_t> &positions_2) {
+        choose_positions(remaining, initial_twos, 0U, two_positions, [&](const std::vector<uint8_t> &positions_2) {
             uint64_t board = base;
             for (uint8_t pos : positions_2) {
                 board |= 1ULL << (4U * pos);
@@ -440,7 +471,7 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
             BC::unpack_board_to_quadrants(canonical),
             family_tile_sums
         );
-        check(encoded.valid, "free9 initial board should encode into seed axis");
+        check(encoded.valid, "free initial board should encode into seed axis");
         if (!builders[encoded.cid]) {
             builders[encoded.cid] = std::make_unique<BCCellBuilder>(lut);
         }
@@ -471,17 +502,21 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
     const BCLut &lut,
     const std::array<uint32_t, 16U> &tile_sums,
     const std::vector<BC::LayerSum> &possible_8tile_sums,
+    const std::string &pattern,
     const std::string &seed_mode,
+    uint32_t free_cells,
     uint32_t cell_modulus
 ) {
-    const uint64_t seed_board = load_free9_seed_board();
+    const uint64_t seed_board = load_pattern_seed_board(pattern);
     const uint32_t seed_sum = board_semantic_sum(seed_board, tile_sums);
     std::vector<uint64_t> initial_boards;
     if (seed_mode == "single") {
         initial_boards.push_back(seed_board);
     } else if (seed_mode == "expanded") {
-        initial_boards = generate_free9_initial_boards();
-        check(initial_boards.size() == 21283U, "free9 initial board count must match EX");
+        initial_boards = generate_free_initial_boards(free_cells);
+        if (pattern == "free9") {
+            check(initial_boards.size() == 21283U, "free9 initial board count must match EX");
+        }
     } else {
         throw std::invalid_argument("--seed-mode must be single or expanded");
     }
@@ -497,8 +532,24 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
         );
     layer->reader.open(bytes, lut);
     layer->rows = descriptor_rows(layer->reader);
-    check(layer->rows == initial_boards.size(), "free9 initial layer row count mismatch");
+    check(layer->rows == initial_boards.size(), "free initial layer row count mismatch");
     return layer;
+}
+
+[[nodiscard]] std::filesystem::path output_position_path(const Args &args, uint32_t ordinal) {
+    return args.output_dir / (args.prefix + std::to_string(ordinal) + ".bcpos");
+}
+
+void write_position_if_requested(
+    const Args &args,
+    uint32_t ordinal,
+    const std::vector<uint8_t> &bytes
+) {
+    if (args.output_dir.empty()) {
+        return;
+    }
+    std::filesystem::create_directories(args.output_dir);
+    BC::write_position_layer_to_file(output_position_path(args, ordinal), bytes);
 }
 
 void accumulate(AggregateStats &agg, const BCResidentGenerationResult &result) {
@@ -583,15 +634,20 @@ Args parse_args(int argc, char **argv) {
             args.detail_timing = false;
         } else if (key == "--cell-modulus" || key == "--family-modulus") {
             args.cell_modulus = static_cast<uint32_t>(std::stoul(require_value(key.c_str())));
+        } else if (key == "--output-dir") {
+            args.output_dir = require_value("--output-dir");
+        } else if (key == "--prefix") {
+            args.prefix = require_value("--prefix");
         } else if (key == "--stats-csv") {
             args.stats_csv = require_value("--stats-csv");
         } else {
             throw std::invalid_argument("unknown argument: " + key);
         }
     }
-    if (args.pattern != "free9") {
-        throw std::invalid_argument("bc_resident_generation_bench currently supports --pattern free9 only");
+    if (args.pattern.rfind("free", 0U) != 0U) {
+        throw std::invalid_argument("bc_resident_generation_bench currently supports --pattern freeN only");
     }
+    (void)free_pattern_index(args.pattern);
     if (args.seed_mode != "single" && args.seed_mode != "expanded") {
         throw std::invalid_argument("--seed-mode must be single or expanded");
     }
@@ -610,13 +666,23 @@ Args parse_args(int argc, char **argv) {
     return args;
 }
 
-int run_free9_chain(const Args &args, std::ostream &out) {
-    const std::array<uint32_t, 16U> tile_sums = free9_tile_sums();
+int run_free_chain(const Args &args, std::ostream &out) {
+    const uint32_t free_cells = free_pattern_index(args.pattern);
+    const std::vector<uint8_t> legal_tiles = make_free_legal_tiles(args.target_rank);
+    const std::array<uint32_t, 16U> tile_sums = free_tile_sums();
     const std::vector<BC::LayerSum> possible_8tile_sums =
-        free9_possible_8tile_sums(tile_sums);
-    const BCLut lut = make_free9_lut();
+        free_possible_8tile_sums(legal_tiles, tile_sums);
+    const BCLut lut = make_free_lut(args.target_rank);
     std::unique_ptr<LayerState> previous2 =
-        make_initial_layer(lut, tile_sums, possible_8tile_sums, args.seed_mode, args.cell_modulus);
+        make_initial_layer(
+            lut,
+            tile_sums,
+            possible_8tile_sums,
+            args.pattern,
+            args.seed_mode,
+            free_cells,
+            args.cell_modulus
+        );
     std::unique_ptr<BC::BCResidentGenerationMutableLayer> carry_to_primary;
     const uint32_t seed_sum = previous2->layer_sum;
     const uint32_t final_sum =
@@ -648,9 +714,9 @@ int run_free9_chain(const Args &args, std::ostream &out) {
 
     out << "canonical_backend=" << CanonicalBatch::backend_name()
         << " compile_arch=" << BC_PORTABLE_X86_64_ARCH
-        << " pattern=free9"
+        << " pattern=" << args.pattern
         << " seed_mode=" << args.seed_mode
-        << " seed=0x" << std::hex << load_free9_seed_board() << std::dec
+        << " seed=0x" << std::hex << load_pattern_seed_board(args.pattern) << std::dec
         << " seed_sum=" << seed_sum
         << " target_rank=" << args.target_rank
         << " extra_steps=" << args.extra_steps
@@ -668,8 +734,10 @@ int run_free9_chain(const Args &args, std::ostream &out) {
 
     AggregateStats aggregate;
     AggregateStats warm;
+    write_position_if_requested(args, 0U, previous2->reader.bytes());
 
     for (uint32_t layer_sum = seed_sum + 2U; layer_sum <= final_primary_sum; layer_sum += 2U) {
+        const uint32_t ordinal = (layer_sum - seed_sum) / 2U;
         const bool terminal = ex_terminal_mode && layer_sum == final_primary_sum;
         const BCPositionCellLayout target_layout =
             make_layout(layer_sum, possible_8tile_sums, args.cell_modulus);
@@ -698,6 +766,7 @@ int run_free9_chain(const Args &args, std::ostream &out) {
         if (current->rows != result.output_success_rows) {
             throw std::runtime_error("generated resident layer row count mismatch");
         }
+        write_position_if_requested(args, ordinal, result.position_bytes);
 
         print_layer_row(out, layer_sum, result);
         accumulate(aggregate, result);
@@ -738,7 +807,7 @@ int main(int argc, char **argv) {
             out = &stats_file;
         }
         *out << std::setprecision(9);
-        return run_free9_chain(args, *out);
+        return run_free_chain(args, *out);
     } catch (const std::exception &ex) {
         std::cerr << "bc_resident_generation_bench failed: " << ex.what() << "\n";
         return 1;

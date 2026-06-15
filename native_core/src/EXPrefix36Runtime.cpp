@@ -52,6 +52,7 @@ constexpr double kFixedScale = 4000000000.0;
 constexpr double kUInt64Scale = 1600000000000000000.0;
 constexpr int kOptimalBranchOnlyStartStep = 21;
 constexpr int kNoSolveResumeStep = std::numeric_limits<int>::min();
+constexpr size_t kStreamIoChunkBytes = 64ULL * 1024ULL * 1024ULL;
 
 enum class DTypeMode : uint32_t {
     UInt32 = 0,
@@ -210,16 +211,55 @@ T read_one_at(std::ifstream &in, uint64_t offset, const std::string &path) {
     return value;
 }
 
+void read_stream_exact(
+    std::istream &in,
+    void *dst,
+    size_t bytes,
+    const std::string &path
+) {
+    auto *out = static_cast<char *>(dst);
+    size_t offset = 0U;
+    while (offset < bytes) {
+        const size_t chunk = std::min(kStreamIoChunkBytes, bytes - offset);
+        in.read(out + offset, static_cast<std::streamsize>(chunk));
+        if (!in || static_cast<size_t>(in.gcount()) != chunk) {
+            throw std::runtime_error("failed to read EX prefix36 file range: " + path);
+        }
+        offset += chunk;
+    }
+}
+
+void write_stream_exact(
+    std::ostream &out,
+    const void *src,
+    size_t bytes,
+    const std::string &path
+) {
+    const auto *input = static_cast<const char *>(src);
+    size_t offset = 0U;
+    while (offset < bytes) {
+        const size_t chunk = std::min(kStreamIoChunkBytes, bytes - offset);
+        out.write(input + offset, static_cast<std::streamsize>(chunk));
+        if (!out) {
+            throw std::runtime_error("failed to write EX prefix36 file range: " + path);
+        }
+        offset += chunk;
+    }
+}
+
 std::vector<uint8_t> read_bytes_at(
     std::ifstream &in,
     uint64_t offset,
     uint64_t byte_count,
     const std::string &path
 ) {
+    if (byte_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+        throw std::runtime_error("EX prefix36 file range is too large to address in memory: " + path);
+    }
     std::vector<uint8_t> bytes(static_cast<size_t>(byte_count));
     in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
     if (byte_count != 0U) {
-        in.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(byte_count));
+        read_stream_exact(in, bytes.data(), bytes.size(), path);
     }
     if (!in) {
         throw std::runtime_error("failed to read EX prefix36 file range at offset " +
@@ -465,12 +505,9 @@ void validate_layer_header(const LayerFileHeader &header, const std::string &pat
 }
 
 template <typename T>
-void write_vector(std::ofstream &out, const std::vector<T> &values) {
+void write_vector(std::ofstream &out, const std::vector<T> &values, const std::string &path) {
     if (!values.empty()) {
-        out.write(
-            reinterpret_cast<const char *>(values.data()),
-            static_cast<std::streamsize>(values.size() * sizeof(T))
-        );
+        write_stream_exact(out, values.data(), values.size() * sizeof(T), path);
     }
 }
 
@@ -519,13 +556,10 @@ void append_typed_success_values(
 }
 
 template <typename T>
-void read_vector(std::ifstream &in, std::vector<T> &values, uint64_t count) {
+void read_vector(std::ifstream &in, std::vector<T> &values, uint64_t count, const std::string &path) {
     values.resize(static_cast<size_t>(count));
     if (!values.empty()) {
-        in.read(
-            reinterpret_cast<char *>(values.data()),
-            static_cast<std::streamsize>(values.size() * sizeof(T))
-        );
+        read_stream_exact(in, values.data(), values.size() * sizeof(T), path);
     }
 }
 
@@ -788,16 +822,16 @@ void write_lut_file(const std::string &path, const LutBundle &bundle) {
         throw std::runtime_error("failed to write EX prefix36 LUT: " + path);
     }
     out.write(reinterpret_cast<const char *>(&header), sizeof(header));
-    write_vector(out, bundle.config.valid_suffix_masks);
+    write_vector(out, bundle.config.valid_suffix_masks, path);
     for (const auto &table : bundle.dense_lut.rank_tables) {
-        write_vector(out, table);
+        write_vector(out, table, path);
     }
-    write_vector(out, bundle.dense_lut.packed_rank_pair_table);
-    write_vector(out, bundle.dense_lut.packed_meta_table);
-    write_vector(out, bundle.dense_lut.size_table);
-    write_vector(out, bundle.dense_lut.offset_table);
-    write_vector(out, bundle.dense_lut.unrank_array);
-    write_vector(out, bundle.dense_lut.high_base);
+    write_vector(out, bundle.dense_lut.packed_rank_pair_table, path);
+    write_vector(out, bundle.dense_lut.packed_meta_table, path);
+    write_vector(out, bundle.dense_lut.size_table, path);
+    write_vector(out, bundle.dense_lut.offset_table, path);
+    write_vector(out, bundle.dense_lut.unrank_array, path);
+    write_vector(out, bundle.dense_lut.high_base, path);
     if (!out) {
         throw std::runtime_error("failed while writing EX prefix36 LUT: " + path);
     }
@@ -823,7 +857,7 @@ LutBundle read_lut_file(const std::string &path) {
     bundle.physical_pattern_signature = header.physical_pattern_signature;
     std::copy(std::begin(header.max_counts), std::end(header.max_counts), bundle.config.max_counts.begin());
     bundle.config.required_suffix24 = header.required_suffix24 & 0xFFFFFFU;
-    read_vector(in, bundle.config.valid_suffix_masks, header.valid_suffix_mask_count);
+    read_vector(in, bundle.config.valid_suffix_masks, header.valid_suffix_mask_count, path);
     bundle.dense_lut.table_for_high.fill(DenseLow24RankLut::kInvalidTable);
     for (size_t i = 0; i < bundle.dense_lut.table_for_high.size(); ++i) {
         bundle.dense_lut.table_for_high[i] = header.table_for_high[i];
@@ -835,17 +869,17 @@ LutBundle read_lut_file(const std::string &path) {
 
     bundle.dense_lut.rank_tables.resize(static_cast<size_t>(header.rank_table_count));
     for (auto &table : bundle.dense_lut.rank_tables) {
-        read_vector(in, table, ZMaskFrozen::kSuffixStateCount);
+        read_vector(in, table, ZMaskFrozen::kSuffixStateCount, path);
     }
     if (header.rank_table_values != header.rank_table_count * ZMaskFrozen::kSuffixStateCount) {
         throw std::runtime_error("invalid EX prefix36 LUT rank table shape: " + path);
     }
-    read_vector(in, bundle.dense_lut.packed_rank_pair_table, header.packed_rank_pair_values);
-    read_vector(in, bundle.dense_lut.packed_meta_table, header.packed_meta_values);
-    read_vector(in, bundle.dense_lut.size_table, header.size_table_values);
-    read_vector(in, bundle.dense_lut.offset_table, header.offset_table_values);
-    read_vector(in, bundle.dense_lut.unrank_array, header.unrank_array_values);
-    read_vector(in, bundle.dense_lut.high_base, header.high_base_values);
+    read_vector(in, bundle.dense_lut.packed_rank_pair_table, header.packed_rank_pair_values, path);
+    read_vector(in, bundle.dense_lut.packed_meta_table, header.packed_meta_values, path);
+    read_vector(in, bundle.dense_lut.size_table, header.size_table_values, path);
+    read_vector(in, bundle.dense_lut.offset_table, header.offset_table_values, path);
+    read_vector(in, bundle.dense_lut.unrank_array, header.unrank_array_values, path);
+    read_vector(in, bundle.dense_lut.high_base, header.high_base_values, path);
     if (!in) {
         throw std::runtime_error("truncated EX prefix36 LUT: " + path);
     }

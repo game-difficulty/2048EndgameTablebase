@@ -388,7 +388,7 @@ private:
 
         const uint8_t *prefix = payload.data + bucket.rank_payload_offset;
         const uint8_t *bitmap_words = payload.data + bitmap_offset;
-        uint32_t bucket_seen = rank_before_word_index_le_bytes(
+        uint32_t bucket_seen = word_begin == 0U ? 0U : rank_before_word_index_le_bytes(
             prefix,
             prefix_count,
             bitmap_words,

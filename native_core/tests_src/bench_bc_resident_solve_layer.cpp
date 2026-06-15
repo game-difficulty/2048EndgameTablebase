@@ -39,7 +39,6 @@ struct Args {
     uint32_t direct_queue_depth = 16U;
     bool write_output = true;
     bool verify_expected = true;
-    bool profile_recalc = false;
     uint32_t repeats = 1U;
 };
 
@@ -61,13 +60,13 @@ struct IterationMetric {
     uint64_t encoded_queries = 0U;
     uint64_t encode_rejects = 0U;
     uint64_t future_lookup_misses = 0U;
+    uint64_t batch_flushes = 0U;
+    uint64_t batch_tail_flushes = 0U;
+    uint64_t batch_source_boards = 0U;
+    uint64_t canonical_flushes = 0U;
     uint32_t max_value = 0U;
     double current_read_seconds = 0.0;
     double recalc_seconds = 0.0;
-    double recalc_spawn_move_thread_seconds = 0.0;
-    double recalc_canonical_encode_thread_seconds = 0.0;
-    double recalc_lookup_thread_seconds = 0.0;
-    double recalc_finalize_thread_seconds = 0.0;
     double compact_seconds = 0.0;
     double position_write_seconds = 0.0;
     double success_write_seconds = 0.0;
@@ -75,6 +74,15 @@ struct IterationMetric {
     double total_seconds = 0.0;
     bool verified = false;
 };
+
+double accounted_seconds(const IterationMetric &m) {
+    return m.current_read_seconds +
+        m.recalc_seconds +
+        m.compact_seconds +
+        m.position_write_seconds +
+        m.success_write_seconds +
+        m.verify_seconds;
+}
 
 [[nodiscard]] double now_seconds() {
     using clock = std::chrono::steady_clock;
@@ -132,7 +140,6 @@ void print_usage(const char *exe) {
         << "  --threads N                    OpenMP thread count\n"
         << "  --direct-io                    use direct IO for position read/write\n"
         << "  --direct-queue-depth N         direct IO queue depth\n"
-        << "  --profile-recalc              collect thread-accumulated recalc stage timings\n"
         << "  --no-write                     skip output writes\n"
         << "  --no-verify                    skip expected solved comparison\n";
 }
@@ -173,8 +180,6 @@ void print_usage(const char *exe) {
         } else if (flag == "--direct-queue-depth") {
             args.direct_queue_depth = static_cast<uint32_t>(
                 std::stoul(require_value(argc, argv, i, flag.c_str())));
-        } else if (flag == "--profile-recalc") {
-            args.profile_recalc = true;
         } else if (flag == "--no-write") {
             args.write_output = false;
         } else if (flag == "--no-verify") {
@@ -380,9 +385,8 @@ void write_stats_header(std::ofstream &out) {
         << "iteration,current_rows,live_rows,zero_pruned_rows,position_bytes,success_bytes,"
         << "queries2,queries4,found2,found4,empty_slots,spawned_boards,unchanged_moves,"
         << "canonicalized_candidates,encoded_queries,encode_rejects,future_lookup_misses,"
+        << "batch_flushes,batch_tail_flushes,batch_source_boards,canonical_flushes,"
         << "max_value,current_read_seconds,recalc_seconds,"
-        << "recalc_spawn_move_thread_seconds,recalc_canonical_encode_thread_seconds,"
-        << "recalc_lookup_thread_seconds,recalc_finalize_thread_seconds,"
         << "compact_seconds,position_write_seconds,success_write_seconds,verify_seconds,total_seconds,"
         << "recalc_mrows_per_sec,total_mrows_per_sec,verified\n";
 }
@@ -412,13 +416,13 @@ void write_metric_row(std::ofstream &out, const IterationMetric &m) {
         << m.encoded_queries << ','
         << m.encode_rejects << ','
         << m.future_lookup_misses << ','
+        << m.batch_flushes << ','
+        << m.batch_tail_flushes << ','
+        << m.batch_source_boards << ','
+        << m.canonical_flushes << ','
         << m.max_value << ','
         << m.current_read_seconds << ','
         << m.recalc_seconds << ','
-        << m.recalc_spawn_move_thread_seconds << ','
-        << m.recalc_canonical_encode_thread_seconds << ','
-        << m.recalc_lookup_thread_seconds << ','
-        << m.recalc_finalize_thread_seconds << ','
         << m.compact_seconds << ','
         << m.position_write_seconds << ','
         << m.success_write_seconds << ','
@@ -500,7 +504,8 @@ int main(int argc, char **argv) {
             options.edge_options.canonical_symm_mode = args.canonical_symm_mode;
             options.edge_options.spawn_rate4 = args.spawn_rate4;
             options.edge_options.success_target_rank = args.success_target_rank;
-            options.profile_recalc_stages = args.profile_recalc;
+            options.edge_options.success_check_all_cells = true;
+            options.edge_options.future_cell_modulus = current.layer().header().family_count;
 
             BC::BCResidentLayerResult<uint32_t> solve_result =
                 BC::bc_resident_solve_compacted_layer<uint32_t>(
@@ -532,16 +537,12 @@ int main(int argc, char **argv) {
             metric.encoded_queries = solve_result.solve_stats.edge.encoded_queries;
             metric.encode_rejects = solve_result.solve_stats.edge.encode_rejects;
             metric.future_lookup_misses = solve_result.solve_stats.edge.future_lookup_misses;
+            metric.batch_flushes = solve_result.solve_stats.edge.batch_flushes;
+            metric.batch_tail_flushes = solve_result.solve_stats.edge.batch_tail_flushes;
+            metric.batch_source_boards = solve_result.solve_stats.edge.batch_source_boards;
+            metric.canonical_flushes = solve_result.solve_stats.edge.canonical_flushes;
             metric.current_read_seconds = current_read_seconds;
             metric.recalc_seconds = solve_result.solve_stats.recalc_seconds;
-            metric.recalc_spawn_move_thread_seconds =
-                solve_result.solve_stats.recalc_spawn_move_thread_seconds;
-            metric.recalc_canonical_encode_thread_seconds =
-                solve_result.solve_stats.recalc_canonical_encode_thread_seconds;
-            metric.recalc_lookup_thread_seconds =
-                solve_result.solve_stats.recalc_lookup_thread_seconds;
-            metric.recalc_finalize_thread_seconds =
-                solve_result.solve_stats.recalc_finalize_thread_seconds;
             metric.compact_seconds = solved_layer.compact_stats.compact_seconds;
             metric.max_value = solved_layer.success_values.empty()
                 ? 0U
@@ -575,6 +576,7 @@ int main(int argc, char **argv) {
             total_success_write += metric.success_write_seconds;
             total_verify += metric.verify_seconds;
             total_wall += metric.total_seconds;
+            const double accounted = accounted_seconds(metric);
             std::cout << std::setprecision(9)
                 << "iteration=" << iteration
                 << " rows=" << metric.current_rows
@@ -583,6 +585,9 @@ int main(int argc, char **argv) {
                 << " compact_seconds=" << metric.compact_seconds
                 << " position_write_seconds=" << metric.position_write_seconds
                 << " success_write_seconds=" << metric.success_write_seconds
+                << " accounted_seconds=" << accounted
+                << " untracked_seconds=" << (metric.total_seconds - accounted)
+                << " solve_window_seconds=" << metric.total_seconds
                 << " total_seconds=" << metric.total_seconds
                 << " total_mrows_per_sec="
                 << (metric.total_seconds > 0.0
@@ -600,6 +605,17 @@ int main(int argc, char **argv) {
         const double wall_mrows = total_wall > 0.0
             ? static_cast<double>(total_rows) / total_wall / 1.0e6
             : 0.0;
+        const double cold_wall = setup_read + total_wall;
+        const double cold_mrows = cold_wall > 0.0
+            ? static_cast<double>(total_rows) / cold_wall / 1.0e6
+            : 0.0;
+        const double accounted =
+            total_current_read +
+            total_recalc +
+            total_compact +
+            total_position_write +
+            total_success_write +
+            total_verify;
         const double recalc_mrows = total_recalc > 0.0
             ? static_cast<double>(total_rows) / total_recalc / 1.0e6
             : 0.0;
@@ -615,8 +631,13 @@ int main(int argc, char **argv) {
             << " total_position_write_seconds=" << total_position_write
             << " total_success_write_seconds=" << total_success_write
             << " total_verify_seconds=" << total_verify
+            << " total_accounted_seconds=" << accounted
+            << " total_untracked_seconds=" << (total_wall - accounted)
+            << " solve_window_seconds=" << total_wall
             << " total_wall_seconds=" << total_wall
+            << " cold_wall_seconds=" << cold_wall
             << " wall_mrows_per_sec=" << wall_mrows
+            << " cold_wall_mrows_per_sec=" << cold_mrows
             << " recalc_mrows_per_sec=" << recalc_mrows
             << '\n';
     } catch (const std::exception &ex) {

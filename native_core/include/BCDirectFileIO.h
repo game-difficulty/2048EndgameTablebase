@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <exception>
 #include <limits>
@@ -369,6 +370,82 @@ public:
         return BCFileIOMode::Direct;
     }
 
+    [[nodiscard]] uint32_t preferred_read_alignment() const override {
+        return options_.alignment;
+    }
+
+    bool try_read_physical_prefix_aligned(
+        void *data,
+        uint64_t bytes,
+        BCFileIOStats *stats = nullptr
+    ) const override {
+        if (stats != nullptr) {
+            *stats = {};
+        }
+        refresh_size_if_growing();
+        if (bytes == 0U) {
+            return true;
+        }
+        if (data == nullptr) {
+            throw std::invalid_argument("BC direct physical prefix read data pointer is null");
+        }
+        if ((bytes & (options_.alignment - 1U)) != 0U ||
+            (reinterpret_cast<uintptr_t>(data) & (options_.alignment - 1U)) != 0U) {
+            return false;
+        }
+        if (bytes > physical_size_) {
+            return false;
+        }
+        if (bytes > static_cast<uint64_t>(std::numeric_limits<DWORD>::max())) {
+            throw std::overflow_error("BC direct physical prefix read exceeds DWORD bytes");
+        }
+        if (options_.overlapped) {
+            detail::BCWinHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+            if (!event.valid()) {
+                throw std::runtime_error(detail::bc_direct_win_error(
+                    "BC direct physical prefix CreateEventW failed"
+                ));
+            }
+            OVERLAPPED ov = {};
+            ov.Offset = 0U;
+            ov.OffsetHigh = 0U;
+            ov.hEvent = event.get();
+            DWORD immediate = 0U;
+            const BOOL ok = ReadFile(
+                handle_.get(),
+                data,
+                static_cast<DWORD>(bytes),
+                &immediate,
+                &ov
+            );
+            if (!ok) {
+                const DWORD error = GetLastError();
+                if (error != ERROR_IO_PENDING) {
+                    throw std::runtime_error(detail::bc_direct_win_error(
+                        "BC direct physical prefix ReadFile failed",
+                        error
+                    ));
+                }
+            }
+            DWORD transferred = 0U;
+            if (!GetOverlappedResult(handle_.get(), &ov, &transferred, TRUE) ||
+                transferred != static_cast<DWORD>(bytes)) {
+                throw std::runtime_error(detail::bc_direct_win_error(
+                    "BC direct physical prefix GetOverlappedResult failed"
+                ));
+            }
+        } else {
+            detail::direct_read_sync(handle_.get(), 0U, data, bytes);
+        }
+        if (stats != nullptr) {
+            stats->request_count = 1U;
+            stats->requested_bytes = bytes;
+            stats->backend_io_count = 1U;
+            stats->backend_bytes = bytes;
+        }
+        return true;
+    }
+
     void read_many(
         const std::vector<BCFileReadRequest> &requests,
         BCFileIOStats *stats = nullptr
@@ -405,7 +482,12 @@ public:
             if (request.data == nullptr) {
                 throw std::invalid_argument("BC direct read request data pointer is null");
             }
-            if (request.offset > logical_size_ || request.bytes > logical_size_ - request.offset) {
+            const bool request_aligned =
+                (request.offset & (options_.alignment - 1U)) == 0U &&
+                (request.bytes & (options_.alignment - 1U)) == 0U &&
+                (reinterpret_cast<uintptr_t>(request.data) & (options_.alignment - 1U)) == 0U;
+            if (!request_aligned &&
+                (request.offset > logical_size_ || request.bytes > logical_size_ - request.offset)) {
                 throw std::out_of_range("BC direct read request exceeds logical file size");
             }
             const uint64_t physical_offset = bc_direct_align_down(request.offset, options_.alignment);
@@ -506,12 +588,12 @@ private:
             if (request.data == nullptr) {
                 throw std::invalid_argument("BC direct read request data pointer is null");
             }
-            if (request.offset > logical_size_ || request.bytes > logical_size_ - request.offset) {
-                throw std::out_of_range("BC direct read request exceeds logical file size");
-            }
             if ((request.offset & (options_.alignment - 1U)) != 0U ||
                 (request.bytes & (options_.alignment - 1U)) != 0U ||
                 (reinterpret_cast<uintptr_t>(request.data) & (options_.alignment - 1U)) != 0U) {
+                if (request.offset > logical_size_ || request.bytes > logical_size_ - request.offset) {
+                    throw std::out_of_range("BC direct read request exceeds logical file size");
+                }
                 return false;
             }
             if (request.offset + request.bytes > physical_size_) {
@@ -656,7 +738,12 @@ private:
             if (request.data == nullptr) {
                 throw std::invalid_argument("BC direct read request data pointer is null");
             }
-            if (request.offset > logical_size_ || request.bytes > logical_size_ - request.offset) {
+            const bool request_aligned =
+                (request.offset & (options_.alignment - 1U)) == 0U &&
+                (request.bytes & (options_.alignment - 1U)) == 0U &&
+                (reinterpret_cast<uintptr_t>(request.data) & (options_.alignment - 1U)) == 0U;
+            if (!request_aligned &&
+                (request.offset > logical_size_ || request.bytes > logical_size_ - request.offset)) {
                 throw std::out_of_range("BC direct read request exceeds logical file size");
             }
             const uint64_t physical_offset = bc_direct_align_down(request.offset, options_.alignment);
@@ -765,6 +852,7 @@ private:
             return slots[wait - WAIT_OBJECT_0];
         };
 
+        const auto read_t0 = std::chrono::steady_clock::now();
         size_t next_read = 0U;
         size_t completed = 0U;
         for (uint32_t slot = 0U; slot < queue_depth && next_read < reads.size(); ++slot) {
@@ -795,6 +883,10 @@ private:
             }
         }
         detail::add_backend_stats(stats, reads.size(), backend_bytes);
+        if (stats != nullptr) {
+            stats->backend_seconds +=
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - read_t0).count();
+        }
     }
 
     void read_physical_ranges_overlapped(
@@ -1151,9 +1243,14 @@ public:
             logical_size_ = std::max(logical_size_, request.offset + request.bytes);
             copy_pending_request_to_ranges(request, merged);
         }
+        const auto write_t0 = std::chrono::steady_clock::now();
         for (detail::BCPhysicalRange &range : merged) {
             detail::direct_write_sync(handle_.get(), range.offset, range.buffer.data(), range.bytes);
             detail::add_backend_stats(stats, 1U, range.bytes);
+        }
+        if (stats != nullptr) {
+            stats->backend_seconds +=
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - write_t0).count();
         }
     }
 
@@ -1322,6 +1419,7 @@ private:
             }
             return cursor;
         };
+        const auto write_t0 = std::chrono::steady_clock::now();
         size_t next_write = 0U;
         size_t completed = 0U;
         next_write = next_non_empty(next_write);
@@ -1348,6 +1446,10 @@ private:
             }
         }
         detail::add_backend_stats(stats, non_empty_count, backend_bytes);
+        if (stats != nullptr) {
+            stats->backend_seconds +=
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - write_t0).count();
+        }
     }
 
     static void copy_pending_request_to_ranges(
@@ -1759,7 +1861,12 @@ public:
             if (request.data == nullptr) {
                 throw std::invalid_argument("BC direct read request data pointer is null");
             }
-            if (request.offset > logical_size_ || request.bytes > logical_size_ - request.offset) {
+            const bool request_aligned =
+                (request.offset & (options_.alignment - 1U)) == 0U &&
+                (request.bytes & (options_.alignment - 1U)) == 0U &&
+                (reinterpret_cast<uintptr_t>(request.data) & (options_.alignment - 1U)) == 0U;
+            if (!request_aligned &&
+                (request.offset > logical_size_ || request.bytes > logical_size_ - request.offset)) {
                 throw std::out_of_range("BC direct read request exceeds logical file size");
             }
             if (stats != nullptr) {

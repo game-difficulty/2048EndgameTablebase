@@ -39,6 +39,7 @@ struct BCFileIOStats {
     uint64_t requested_bytes = 0U;
     uint64_t backend_io_count = 0U;
     uint64_t backend_bytes = 0U;
+    double backend_seconds = 0.0;
 };
 
 inline void bc_fileio_accumulate_request(
@@ -107,6 +108,9 @@ public:
     [[nodiscard]] virtual BCFileIOMode mode() const {
         return BCFileIOMode::Buffered;
     }
+    [[nodiscard]] virtual uint32_t preferred_read_alignment() const {
+        return 1U;
+    }
     virtual void read_at(uint64_t offset, void *data, uint64_t bytes) const = 0;
     virtual void read_many(
         const std::vector<BCFileReadRequest> &requests,
@@ -119,6 +123,18 @@ public:
             read_at(request.offset, request.data, request.bytes);
             bc_fileio_accumulate_request(stats, request.bytes);
         }
+    }
+    virtual bool try_read_physical_prefix_aligned(
+        void *data,
+        uint64_t bytes,
+        BCFileIOStats *stats = nullptr
+    ) const {
+        (void)data;
+        (void)bytes;
+        if (stats != nullptr) {
+            *stats = {};
+        }
+        return false;
     }
     virtual uint64_t size() const = 0;
 };
@@ -277,13 +293,7 @@ public:
         if (!file_) {
             throw std::runtime_error("BC buffered file reader seekg failed: " + path_.string());
         }
-        file_.read(
-            static_cast<char *>(data),
-            checked_stream_size(bytes, "BC buffered read size exceeds stream range")
-        );
-        if (!file_ || static_cast<uint64_t>(file_.gcount()) != bytes) {
-            throw std::runtime_error("BC buffered file reader short read: " + path_.string());
-        }
+        read_contiguous(data, bytes);
     }
 
     void read_many(
@@ -314,13 +324,7 @@ public:
                 }
                 positioned = true;
             }
-            file_.read(
-                static_cast<char *>(request.data),
-                checked_stream_size(request.bytes, "BC buffered read size exceeds stream range")
-            );
-            if (!file_ || static_cast<uint64_t>(file_.gcount()) != request.bytes) {
-                throw std::runtime_error("BC buffered file reader short read: " + path_.string());
-            }
+            read_contiguous(request.data, request.bytes);
             cursor = request.offset + request.bytes;
             bc_fileio_accumulate_request(stats, request.bytes);
         }
@@ -332,6 +336,27 @@ public:
     }
 
 private:
+    void read_contiguous(void *data, uint64_t bytes) const {
+        uint8_t *cursor = static_cast<uint8_t *>(data);
+        uint64_t remaining = bytes;
+        while (remaining != 0U) {
+            const uint64_t take_u64 =
+                remaining > kMaxBufferedReadChunkBytes
+                    ? kMaxBufferedReadChunkBytes
+                    : remaining;
+            const std::streamsize take = checked_stream_size(
+                take_u64,
+                "BC buffered read size exceeds stream range"
+            );
+            file_.read(reinterpret_cast<char *>(cursor), take);
+            if (!file_ || static_cast<uint64_t>(file_.gcount()) != take_u64) {
+                throw std::runtime_error("BC buffered file reader short read: " + path_.string());
+            }
+            cursor += take_u64;
+            remaining -= take_u64;
+        }
+    }
+
     void refresh_size() const {
         std::error_code ec;
         const uint64_t current = std::filesystem::file_size(path_, ec);
@@ -354,6 +379,8 @@ private:
         }
         return static_cast<std::streamsize>(value);
     }
+
+    static constexpr uint64_t kMaxBufferedReadChunkBytes = 64ULL * 1024ULL * 1024ULL;
 
     std::filesystem::path path_;
     mutable std::ifstream file_;

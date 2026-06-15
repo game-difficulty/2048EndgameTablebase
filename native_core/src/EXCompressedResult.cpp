@@ -34,6 +34,7 @@ constexpr uint32_t kPrefix36LutVersion = 2U;
 constexpr uint16_t kPrefix36InvalidRank = 0xFFFFU;
 constexpr double kPrefix36FixedScale = 4000000000.0;
 constexpr double kPrefix36UInt64Scale = 1600000000000000000.0;
+constexpr size_t kStreamIoChunkBytes = 64ULL * 1024ULL * 1024ULL;
 
 enum class Prefix36DTypeMode : uint32_t {
     UInt32 = 0,
@@ -218,12 +219,38 @@ void write_zero_bytes(std::fstream &out, uint64_t bytes) {
     }
 }
 
-void write_at(std::fstream &out, uint64_t offset, const void *data, uint64_t bytes) {
-    out.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
-    out.write(reinterpret_cast<const char *>(data), static_cast<std::streamsize>(bytes));
-    if (!out) {
-        throw std::runtime_error("failed to write EX compressed zbook");
+void read_stream_exact(std::istream &in, void *dst, size_t bytes, const std::string &path) {
+    auto *out = static_cast<char *>(dst);
+    size_t offset = 0U;
+    while (offset < bytes) {
+        const size_t chunk = std::min(kStreamIoChunkBytes, bytes - offset);
+        in.read(out + offset, static_cast<std::streamsize>(chunk));
+        if (!in || static_cast<size_t>(in.gcount()) != chunk) {
+            throw std::runtime_error("failed to read EX compressed file range: " + path);
+        }
+        offset += chunk;
     }
+}
+
+void write_stream_exact(std::ostream &out, const void *data, size_t bytes, const std::string &path) {
+    const auto *input = static_cast<const char *>(data);
+    size_t offset = 0U;
+    while (offset < bytes) {
+        const size_t chunk = std::min(kStreamIoChunkBytes, bytes - offset);
+        out.write(input + offset, static_cast<std::streamsize>(chunk));
+        if (!out) {
+            throw std::runtime_error("failed to write EX compressed file range: " + path);
+        }
+        offset += chunk;
+    }
+}
+
+void write_at(std::fstream &out, uint64_t offset, const void *data, uint64_t bytes) {
+    if (bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+        throw std::runtime_error("EX compressed write range is too large to address in memory");
+    }
+    out.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
+    write_stream_exact(out, data, static_cast<size_t>(bytes), "EX compressed zbook");
 }
 
 template <typename T>
@@ -253,13 +280,13 @@ T read_one_from(std::ifstream &in, uint64_t offset, const std::string &path) {
 }
 
 std::vector<uint8_t> read_range_from(std::ifstream &in, uint64_t offset, uint64_t size, const std::string &path) {
+    if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+        throw std::runtime_error("EX compressed file range is too large to address in memory: " + path);
+    }
     in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
     std::vector<uint8_t> data(static_cast<size_t>(size));
     if (size != 0U) {
-        in.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(size));
-        if (!in) {
-            throw std::runtime_error("failed to read file range: " + path);
-        }
+        read_stream_exact(in, data.data(), data.size(), path);
     }
     return data;
 }
@@ -588,28 +615,34 @@ Prefix36LutRuntime read_prefix36_lut_runtime(const std::string &zlut_path, bool 
     for (auto &table : lut.rank_tables) {
         table.resize(ZMaskFrozen::kSuffixStateCount);
         if (!table.empty()) {
-            in.read(reinterpret_cast<char *>(table.data()),
-                    static_cast<std::streamsize>(table.size() * sizeof(uint16_t)));
+            read_stream_exact(in, table.data(), table.size() * sizeof(uint16_t), zlut_path);
         }
     }
     if (header.packed_rank_pair_values != 0U) {
         lut.packed_rank_pair_table.resize(static_cast<size_t>(header.packed_rank_pair_values));
-        in.read(reinterpret_cast<char *>(lut.packed_rank_pair_table.data()),
-                static_cast<std::streamsize>(lut.packed_rank_pair_table.size() * sizeof(uint32_t)));
+        read_stream_exact(
+            in,
+            lut.packed_rank_pair_table.data(),
+            lut.packed_rank_pair_table.size() * sizeof(uint32_t),
+            zlut_path
+        );
     }
     if (header.packed_meta_values != 0U) {
         in.seekg(static_cast<std::streamoff>(header.packed_meta_values * sizeof(uint64_t)), std::ios::cur);
     }
     lut.size_table.resize(static_cast<size_t>(header.size_table_values));
     if (!lut.size_table.empty()) {
-        in.read(reinterpret_cast<char *>(lut.size_table.data()),
-                static_cast<std::streamsize>(lut.size_table.size() * sizeof(uint32_t)));
+        read_stream_exact(in, lut.size_table.data(), lut.size_table.size() * sizeof(uint32_t), zlut_path);
     }
     if (load_unrank) {
         lut.offset_table.resize(static_cast<size_t>(header.offset_table_values));
         if (!lut.offset_table.empty()) {
-            in.read(reinterpret_cast<char *>(lut.offset_table.data()),
-                    static_cast<std::streamsize>(lut.offset_table.size() * sizeof(uint32_t)));
+            read_stream_exact(
+                in,
+                lut.offset_table.data(),
+                lut.offset_table.size() * sizeof(uint32_t),
+                zlut_path
+            );
         }
     } else if (header.offset_table_values != 0U) {
         in.seekg(static_cast<std::streamoff>(header.offset_table_values * sizeof(uint32_t)), std::ios::cur);
@@ -617,16 +650,19 @@ Prefix36LutRuntime read_prefix36_lut_runtime(const std::string &zlut_path, bool 
     if (load_unrank) {
         lut.unrank_array.resize(static_cast<size_t>(header.unrank_array_values));
         if (!lut.unrank_array.empty()) {
-            in.read(reinterpret_cast<char *>(lut.unrank_array.data()),
-                    static_cast<std::streamsize>(lut.unrank_array.size() * sizeof(uint32_t)));
+            read_stream_exact(
+                in,
+                lut.unrank_array.data(),
+                lut.unrank_array.size() * sizeof(uint32_t),
+                zlut_path
+            );
         }
     } else if (header.unrank_array_values != 0U) {
         in.seekg(static_cast<std::streamoff>(header.unrank_array_values * sizeof(uint32_t)), std::ios::cur);
     }
     lut.high_base.resize(static_cast<size_t>(header.high_base_values));
     if (!lut.high_base.empty()) {
-        in.read(reinterpret_cast<char *>(lut.high_base.data()),
-                static_cast<std::streamsize>(lut.high_base.size() * sizeof(uint16_t)));
+        read_stream_exact(in, lut.high_base.data(), lut.high_base.size() * sizeof(uint16_t), zlut_path);
     }
     if (!in) {
         throw std::runtime_error("truncated prefix36 LUT: " + zlut_path);
@@ -817,16 +853,20 @@ Prefix36CompressedFileIndex read_prefix36_compressed_index(const std::string &pa
     index.success_dir.resize(static_cast<size_t>(index.header.success_block_count));
     if (!index.bucket_dir.empty()) {
         in.seekg(static_cast<std::streamoff>(index.header.bucket_dir_offset), std::ios::beg);
-        in.read(
-            reinterpret_cast<char *>(index.bucket_dir.data()),
-            static_cast<std::streamsize>(index.bucket_dir.size() * sizeof(Prefix36BucketBlockEntry))
+        read_stream_exact(
+            in,
+            index.bucket_dir.data(),
+            index.bucket_dir.size() * sizeof(Prefix36BucketBlockEntry),
+            path
         );
     }
     if (!index.success_dir.empty()) {
         in.seekg(static_cast<std::streamoff>(index.header.success_dir_offset), std::ios::beg);
-        in.read(
-            reinterpret_cast<char *>(index.success_dir.data()),
-            static_cast<std::streamsize>(index.success_dir.size() * sizeof(Prefix36SuccessBlockEntry))
+        read_stream_exact(
+            in,
+            index.success_dir.data(),
+            index.success_dir.size() * sizeof(Prefix36SuccessBlockEntry),
+            path
         );
     }
     if (!in) {
@@ -1230,16 +1270,23 @@ CompressStats compress_prefix36_layer_file(
                 if (count != 0U) {
                     source_file.seekg(static_cast<std::streamoff>(
                         layout.bucket_keys_offset + static_cast<uint64_t>(begin) * sizeof(uint64_t)));
-                    source_file.read(reinterpret_cast<char *>(keys.data()),
-                                     static_cast<std::streamsize>(keys.size() * sizeof(uint64_t)));
+                    read_stream_exact(source_file, keys.data(), keys.size() * sizeof(uint64_t), zbook_path);
                     source_file.seekg(static_cast<std::streamoff>(
                         layout.bitmap_offsets_offset + static_cast<uint64_t>(begin) * sizeof(uint32_t)));
-                    source_file.read(reinterpret_cast<char *>(bitmap_offsets.data()),
-                                     static_cast<std::streamsize>(bitmap_offsets.size() * sizeof(uint32_t)));
+                    read_stream_exact(
+                        source_file,
+                        bitmap_offsets.data(),
+                        bitmap_offsets.size() * sizeof(uint32_t),
+                        zbook_path
+                    );
                     source_file.seekg(static_cast<std::streamoff>(
                         layout.success_offsets_offset + static_cast<uint64_t>(begin) * sizeof(uint32_t)));
-                    source_file.read(reinterpret_cast<char *>(success_offsets.data()),
-                                     static_cast<std::streamsize>(success_offsets.size() * sizeof(uint32_t)));
+                    read_stream_exact(
+                        source_file,
+                        success_offsets.data(),
+                        success_offsets.size() * sizeof(uint32_t),
+                        zbook_path
+                    );
                     if (!source_file) {
                         throw std::runtime_error("failed to read prefix36 zbook metadata");
                     }
@@ -1310,8 +1357,7 @@ CompressStats compress_prefix36_layer_file(
             CompressedPrefix36BucketBlock result = futures[local].get();
             result.entry.compressed_offset = write_offset;
             bucket_dir[static_cast<size_t>(batch_begin) + local] = result.entry;
-            out.write(reinterpret_cast<const char *>(result.compressed.data()),
-                      static_cast<std::streamsize>(result.compressed.size()));
+            write_stream_exact(out, result.compressed.data(), result.compressed.size(), output_path);
             write_offset += result.compressed.size();
             stats.bucket_raw_bytes += result.raw_size;
             stats.bucket_compressed_bytes += result.compressed.size();
@@ -1354,8 +1400,7 @@ CompressStats compress_prefix36_layer_file(
             CompressedPrefix36SuccessBlock result = futures[local].get();
             result.entry.compressed_offset = write_offset;
             success_dir[static_cast<size_t>(batch_begin) + local] = result.entry;
-            out.write(reinterpret_cast<const char *>(result.compressed.data()),
-                      static_cast<std::streamsize>(result.compressed.size()));
+            write_stream_exact(out, result.compressed.data(), result.compressed.size(), output_path);
             write_offset += result.compressed.size();
             stats.success_raw_bytes += result.raw_size;
             stats.success_compressed_bytes += result.compressed.size();
@@ -1520,8 +1565,7 @@ CompressStats compress_prefix36_layer_view_impl(
             CompressedPrefix36BucketBlock result = futures[local].get();
             result.entry.compressed_offset = write_offset;
             bucket_dir[static_cast<size_t>(batch_begin) + local] = result.entry;
-            out.write(reinterpret_cast<const char *>(result.compressed.data()),
-                      static_cast<std::streamsize>(result.compressed.size()));
+            write_stream_exact(out, result.compressed.data(), result.compressed.size(), output_path);
             write_offset += result.compressed.size();
             stats.bucket_raw_bytes += result.raw_size;
             stats.bucket_compressed_bytes += result.compressed.size();
@@ -1555,8 +1599,7 @@ CompressStats compress_prefix36_layer_view_impl(
             CompressedPrefix36SuccessBlock result = futures[local].get();
             result.entry.compressed_offset = write_offset;
             success_dir[static_cast<size_t>(batch_begin) + local] = result.entry;
-            out.write(reinterpret_cast<const char *>(result.compressed.data()),
-                      static_cast<std::streamsize>(result.compressed.size()));
+            write_stream_exact(out, result.compressed.data(), result.compressed.size(), output_path);
             write_offset += result.compressed.size();
             stats.success_raw_bytes += result.raw_size;
             stats.success_compressed_bytes += result.compressed.size();
@@ -1728,26 +1771,20 @@ void decompress_prefix36_result_to_zbook_impl(
     if (!out) {
         throw std::runtime_error("failed to write EX prefix36 zbook: " + output_path);
     }
-    out.write(reinterpret_cast<const char *>(&header), sizeof(header));
+    write_stream_exact(out, &header, sizeof(header), output_path);
     if (!bucket_keys.empty()) {
-        out.write(reinterpret_cast<const char *>(bucket_keys.data()),
-                  static_cast<std::streamsize>(bucket_keys.size() * sizeof(uint64_t)));
-        out.write(reinterpret_cast<const char *>(bitmap_offsets.data()),
-                  static_cast<std::streamsize>(bitmap_offsets.size() * sizeof(uint32_t)));
-        out.write(reinterpret_cast<const char *>(success_offsets.data()),
-                  static_cast<std::streamsize>(success_offsets.size() * sizeof(uint32_t)));
+        write_stream_exact(out, bucket_keys.data(), bucket_keys.size() * sizeof(uint64_t), output_path);
+        write_stream_exact(out, bitmap_offsets.data(), bitmap_offsets.size() * sizeof(uint32_t), output_path);
+        write_stream_exact(out, success_offsets.data(), success_offsets.size() * sizeof(uint32_t), output_path);
     }
     if (!small_bitmap_bytes.empty()) {
-        out.write(reinterpret_cast<const char *>(small_bitmap_bytes.data()),
-                  static_cast<std::streamsize>(small_bitmap_bytes.size()));
+        write_stream_exact(out, small_bitmap_bytes.data(), small_bitmap_bytes.size(), output_path);
     }
     if (!large_bitmap_words.empty()) {
-        out.write(reinterpret_cast<const char *>(large_bitmap_words.data()),
-                  static_cast<std::streamsize>(large_bitmap_words.size() * sizeof(uint64_t)));
+        write_stream_exact(out, large_bitmap_words.data(), large_bitmap_words.size() * sizeof(uint64_t), output_path);
     }
     if (!success_bytes.empty()) {
-        out.write(reinterpret_cast<const char *>(success_bytes.data()),
-                  static_cast<std::streamsize>(success_bytes.size()));
+        write_stream_exact(out, success_bytes.data(), success_bytes.size(), output_path);
     }
     if (!out) {
         throw std::runtime_error("failed to write EX prefix36 zbook: " + output_path);

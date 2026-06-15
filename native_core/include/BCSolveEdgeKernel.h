@@ -55,6 +55,7 @@ struct BCSolveEdgeOptions {
     int success_target_rank = 0;
     const std::vector<uint8_t> *success_shifts = nullptr;
     bool success_check_all_cells = false;
+    uint32_t future_cell_modulus = 0U;
 };
 
 struct BCSolveEdgeStats {
@@ -73,6 +74,10 @@ struct BCSolveEdgeStats {
     uint64_t future_lookup_count = 0U;
     uint64_t future_lookup_misses = 0U;
     uint64_t finalized_boards = 0U;
+    uint64_t batch_flushes = 0U;
+    uint64_t batch_tail_flushes = 0U;
+    uint64_t batch_source_boards = 0U;
+    uint64_t canonical_flushes = 0U;
 };
 
 struct BCSolveBoardQuerySummary {
@@ -235,17 +240,27 @@ struct BCSolvePreparedQueryEncoder {
     uint32_t family_count = 0U;
     uint32_t axis_base = 0U;
     bool contiguous = false;
+    uint32_t cell_modulus = 0U;
 
     BCSolvePreparedQueryEncoder() = default;
 
-    BCSolvePreparedQueryEncoder(const BCLut &lut_in, const BCFamilyTable &axis_in)
+    BCSolvePreparedQueryEncoder(
+        const BCLut &lut_in,
+        const BCFamilyTable &axis_in,
+        uint32_t cell_modulus_in = 0U
+    )
         : lut(&lut_in),
           axis(&axis_in),
           layer_sum(axis_in.layer_sum()),
           family_unit(axis_in.family_unit()),
           family_count(axis_in.family_count()),
           axis_base(axis_in.axis_base_coord()),
-          contiguous(axis_in.is_contiguous_range()) {}
+          contiguous(axis_in.is_contiguous_range()),
+          cell_modulus(cell_modulus_in) {
+        if (cell_modulus != 0U && cell_modulus > std::numeric_limits<FamilyCoord>::max()) {
+            throw std::invalid_argument("BC solve future cell modulus exceeds FamilyCoord");
+        }
+    }
 
     [[nodiscard]] bool encode(
         const BCQuadrantWords &q,
@@ -298,28 +313,33 @@ struct BCSolvePreparedQueryEncoder {
             return false;
         }
 
+        auto coord_to_id = [this](FamilyCoord coord, FamilyId &id_out) {
+            uint32_t coord_u32 = coord;
+            if (cell_modulus != 0U) {
+                coord_u32 %= cell_modulus;
+            }
+            if (contiguous) {
+                if (coord_u32 < axis_base) {
+                    return false;
+                }
+                const uint32_t offset = coord_u32 - axis_base;
+                if (offset >= family_count) {
+                    return false;
+                }
+                id_out = static_cast<FamilyId>(offset);
+                return true;
+            }
+            if (coord_u32 > std::numeric_limits<FamilyCoord>::max()) {
+                return false;
+            }
+            id_out = axis->try_coord_to_id(static_cast<FamilyCoord>(coord_u32));
+            return id_out != BCFamilyTable::kInvalidFamilyId;
+        };
+
         FamilyId row_id = BCFamilyTable::kInvalidFamilyId;
         FamilyId col_id = BCFamilyTable::kInvalidFamilyId;
-        if (contiguous) {
-            const uint32_t row_coord_u32 = row_coord;
-            const uint32_t col_coord_u32 = col_coord;
-            if (row_coord_u32 < axis_base || col_coord_u32 < axis_base) {
+        if (!coord_to_id(row_coord, row_id) || !coord_to_id(col_coord, col_id)) {
                 return false;
-            }
-            const uint32_t row_offset = row_coord_u32 - axis_base;
-            const uint32_t col_offset = col_coord_u32 - axis_base;
-            if (row_offset >= family_count || col_offset >= family_count) {
-                return false;
-            }
-            row_id = static_cast<FamilyId>(row_offset);
-            col_id = static_cast<FamilyId>(col_offset);
-        } else {
-            row_id = axis->try_coord_to_id(row_coord);
-            col_id = axis->try_coord_to_id(col_coord);
-            if (row_id == BCFamilyTable::kInvalidFamilyId ||
-                col_id == BCFamilyTable::kInvalidFamilyId) {
-                return false;
-            }
         }
 
         const uint16_t count_ne = ne_desc.group_count;
@@ -370,9 +390,10 @@ struct BCSolvePreparedQueryEncoder {
     uint16_t ref,
     uint8_t spawn_tile_rank,
     BCDirectionMask move_axis,
-    BCSolvePreparedQuery &out
+    BCSolvePreparedQuery &out,
+    uint32_t cell_modulus = 0U
 ) {
-    const BCSolvePreparedQueryEncoder encoder(lut, axis);
+    const BCSolvePreparedQueryEncoder encoder(lut, axis, cell_modulus);
     return encoder.encode(q, ref, spawn_tile_rank, move_axis, out);
 }
 
@@ -420,7 +441,8 @@ void bc_solve_flush_canonical_candidates(
             canonical[i].ref,
             spawn_tile_rank,
             canonical[i].move_axis,
-            query
+            query,
+            options.future_cell_modulus
         );
         if (!encoded) {
             if (stats != nullptr) {
