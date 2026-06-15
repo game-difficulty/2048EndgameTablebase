@@ -95,10 +95,11 @@ public:
                 }
                 DirectEntry entry;
                 entry.key = bucket.key;
-                entry.rank_payload_offset = bucket.rank_payload_offset;
-                entry.success_row_offset = bucket.success_row_offset;
                 const BucketBitmapLen bitmap_len = bitmap_len_from_trusted_key(lut, bucket.key);
+                entry.bitmap_offset = bc_rank_payload_bitmap_offset(bucket.rank_payload_offset, bitmap_len);
+                entry.success_row_offset = bucket.success_row_offset;
                 validate_entry_payload_range(cell, entry, bitmap_len);
+                populate_entry_word_rank_bases(cell, entry, bitmap_len);
                 cell.entries[slot] = entry;
             }
         }
@@ -235,10 +236,11 @@ public:
                 }
                 DirectEntry entry;
                 entry.key = bucket.key;
-                entry.rank_payload_offset = bucket.rank_payload_offset;
-                entry.success_row_offset = bucket.success_row_offset;
                 const BucketBitmapLen bitmap_len = bitmap_len_from_trusted_key(lut, bucket.key);
+                entry.bitmap_offset = bc_rank_payload_bitmap_offset(bucket.rank_payload_offset, bitmap_len);
+                entry.success_row_offset = bucket.success_row_offset;
                 validate_entry_payload_range(cell, entry, bitmap_len);
+                populate_entry_word_rank_bases(cell, entry, bitmap_len);
                 cell.entries[slot] = entry;
             }
         }
@@ -344,10 +346,11 @@ public:
                 }
                 DirectEntry entry;
                 entry.key = bucket.key;
-                entry.rank_payload_offset = bucket.rank_payload_offset;
-                entry.success_row_offset = bucket.success_row_offset;
                 const BucketBitmapLen bitmap_len = bitmap_len_from_trusted_key(lut, bucket.key);
+                entry.bitmap_offset = bc_rank_payload_bitmap_offset(bucket.rank_payload_offset, bitmap_len);
+                entry.success_row_offset = bucket.success_row_offset;
                 validate_entry_payload_range(cell, entry, bitmap_len);
+                populate_entry_word_rank_bases(cell, entry, bitmap_len);
                 cell.entries[slot] = entry;
             }
         }
@@ -421,10 +424,11 @@ public:
                 }
                 DirectEntry entry;
                 entry.key = bucket.key;
-                entry.rank_payload_offset = bucket.rank_payload_offset;
-                entry.success_row_offset = bucket.success_row_offset;
                 const BucketBitmapLen bitmap_len = bitmap_len_from_trusted_key(lut, bucket.key);
+                entry.bitmap_offset = bc_rank_payload_bitmap_offset(bucket.rank_payload_offset, bitmap_len);
+                entry.success_row_offset = bucket.success_row_offset;
                 validate_entry_payload_range(cell, entry, bitmap_len);
+                populate_entry_word_rank_bases(cell, entry, bitmap_len);
                 cell.entries[slot] = entry;
             }
         }
@@ -499,7 +503,7 @@ public:
         if (best_count != 0U && best == nullptr) {
             throw std::invalid_argument("BC future batch lookup best pointer is null");
         }
-        uint64_t found_count = 0U;
+        (void)stats;
         constexpr uint32_t kBatch = 512U;
         uint32_t value_indices[kBatch];
         for (uint32_t base = 0U; base < static_cast<uint32_t>(queries.size()); base += kBatch) {
@@ -517,12 +521,10 @@ public:
                     lookup_success_indices<false, true>(queries.data() + base, value_indices, count, lane);
                 }
             }
-            uint32_t batch_hits = 0U;
             for (uint32_t i = 0U; i < count; ++i) {
                 if (value_indices[i] == kMissingValueIndex) {
                     continue;
                 }
-                ++batch_hits;
                 const BCSolvePreparedQuery &query = queries[static_cast<size_t>(base) + i];
                 if (query.ref >= best_count) {
                     continue;
@@ -531,10 +533,6 @@ public:
                 __builtin_prefetch(value_data_ + value_indices[i], 0, 1);
 #endif
             }
-            if (stats != nullptr) {
-                stats->future_lookup_count += count;
-                stats->future_lookup_misses += static_cast<uint64_t>(count - batch_hits);
-            }
             for (uint32_t i = 0U; i < count; ++i) {
                 if (value_indices[i] == kMissingValueIndex) {
                     continue;
@@ -543,7 +541,6 @@ public:
                 if (query.ref >= best_count) {
                     continue;
                 }
-                ++found_count;
                 StorageT &slot = best[query.ref];
                 const StorageT value = value_data_[value_indices[i]];
                 if (value > slot) {
@@ -551,7 +548,7 @@ public:
                 }
             }
         }
-        return found_count;
+        return 0U;
     }
 
 private:
@@ -560,7 +557,7 @@ private:
 
     struct DirectEntry {
         uint64_t key = 0U;
-        uint32_t rank_payload_offset = kEmptyEntryOffset;
+        uint32_t bitmap_offset = kEmptyEntryOffset;
         uint32_t success_row_offset = 0U;
     };
 
@@ -571,6 +568,7 @@ private:
         size_t value_offset = 0U;
         size_t value_count = 0U;
         std::vector<DirectEntry> entries;
+        std::vector<uint32_t> word_rank_bases;
         uint32_t mask = 0U;
     };
 
@@ -603,18 +601,22 @@ private:
     }
 
     [[nodiscard]] static bool entry_empty(const DirectEntry &entry) noexcept {
-        return entry.rank_payload_offset == kEmptyEntryOffset;
+        return entry.bitmap_offset == kEmptyEntryOffset;
     }
 
-    [[nodiscard]] static uint32_t entry_bitmap_offset_unchecked(
-        const DirectEntry &entry,
-        uint32_t bitmap_len
-    ) noexcept {
+    [[nodiscard]] static uint32_t aligned_prefix_bytes_for_bitmap_len(uint32_t bitmap_len) noexcept {
         const uint32_t prefix_count =
             (bitmap_len + kBCRankPrefixBits - 1U) / kBCRankPrefixBits;
         const uint32_t prefix_bytes =
             prefix_count * static_cast<uint32_t>(sizeof(RankPrefix));
-        return (entry.rank_payload_offset + prefix_bytes + 7U) & ~7U;
+        return (prefix_bytes + 7U) & ~7U;
+    }
+
+    [[nodiscard]] static uint32_t entry_prefix_offset_unchecked(
+        const DirectEntry &entry,
+        uint32_t bitmap_len
+    ) noexcept {
+        return entry.bitmap_offset - aligned_prefix_bytes_for_bitmap_len(bitmap_len);
     }
 
     static void validate_entry_payload_range(
@@ -622,23 +624,63 @@ private:
         const DirectEntry &entry,
         BucketBitmapLen bitmap_len
     ) {
-        if (bitmap_len == 0U || entry.rank_payload_offset == kEmptyEntryOffset) {
+        if (bitmap_len == 0U || entry.bitmap_offset == kEmptyEntryOffset) {
             throw std::logic_error("BC future direct lookup saw invalid bucket metadata");
         }
         const uint32_t prefix_count = prefix_count_for_bits(bitmap_len);
         const uint32_t bitmap_word_count = words_for_bits(bitmap_len);
-        const uint32_t bitmap_offset = bc_rank_payload_bitmap_offset(
-            entry.rank_payload_offset,
-            bitmap_len
-        );
+        const uint32_t prefix_offset = entry_prefix_offset_unchecked(entry, bitmap_len);
+        const uint32_t bitmap_offset = entry.bitmap_offset;
         const uint64_t prefix_end =
-            static_cast<uint64_t>(entry.rank_payload_offset) +
+            static_cast<uint64_t>(prefix_offset) +
             static_cast<uint64_t>(prefix_count) * sizeof(RankPrefix);
         const uint64_t bitmap_end =
             static_cast<uint64_t>(bitmap_offset) +
             static_cast<uint64_t>(bitmap_word_count) * sizeof(uint64_t);
         if (prefix_end > cell.rank_payload.size || bitmap_end > cell.rank_payload.size) {
             throw std::out_of_range("BC future direct lookup payload range is truncated");
+        }
+    }
+
+    static void ensure_word_rank_base_capacity(CellIndex &cell) {
+        const size_t words = (static_cast<size_t>(cell.rank_payload.size) + sizeof(uint64_t) - 1U) /
+            sizeof(uint64_t);
+        if (cell.word_rank_bases.size() < words) {
+            cell.word_rank_bases.assign(words, 0U);
+        }
+    }
+
+    static void populate_entry_word_rank_bases(
+        CellIndex &cell,
+        const DirectEntry &entry,
+        BucketBitmapLen bitmap_len
+    ) {
+        const uint32_t bitmap_word_count = words_for_bits(bitmap_len);
+        if (bitmap_word_count == 0U) {
+            return;
+        }
+        ensure_word_rank_base_capacity(cell);
+        const uint32_t prefix_offset = entry_prefix_offset_unchecked(entry, bitmap_len);
+        const uint32_t bitmap_offset = entry.bitmap_offset;
+        const uint8_t *bitmap_words = cell.rank_payload.data + bitmap_offset;
+        const size_t rank_base_offset = static_cast<size_t>(bitmap_offset) / sizeof(uint64_t);
+        for (uint32_t word_idx = 0U; word_idx < bitmap_word_count; ++word_idx) {
+            const uint32_t block = word_idx / (kBCRankPrefixBits / kBCBitmapWordBits);
+            const uint32_t word_in_block = word_idx & ((kBCRankPrefixBits / kBCBitmapWordBits) - 1U);
+            uint32_t rank_before = load_u16_le(
+                cell.rank_payload.data +
+                static_cast<size_t>(prefix_offset) +
+                static_cast<size_t>(block) * sizeof(RankPrefix)
+            );
+            for (uint32_t offset = 0U; offset < word_in_block; ++offset) {
+                rank_before += popcount64(load_u64_le(
+                    bitmap_words +
+                    static_cast<size_t>(
+                        word_idx - word_in_block + offset
+                    ) * sizeof(uint64_t)
+                ));
+            }
+            cell.word_rank_bases[rank_base_offset + word_idx] = rank_before;
         }
     }
 
@@ -751,8 +793,7 @@ private:
             }
             const CellIndex &cell = cells_[static_cast<size_t>(queries[i].cid)];
             const uint32_t word_idx = static_cast<uint32_t>(queries[i].rank) >> 6U;
-            const uint32_t bitmap_offset =
-                entry_bitmap_offset_unchecked(entry, queries[i].bitmap_len);
+            const uint32_t bitmap_offset = entry.bitmap_offset;
 #if defined(__GNUC__) || defined(__clang__)
             __builtin_prefetch(
                 cell.rank_payload.data + bitmap_offset + static_cast<size_t>(word_idx) * sizeof(uint64_t),
@@ -769,15 +810,9 @@ private:
             const DirectEntry &entry = *entries[i];
             const CellIndex &cell = cells_[static_cast<size_t>(queries[i].cid)];
             const uint32_t rank = queries[i].rank;
-            const uint32_t block = rank / kBCRankPrefixBits;
-            const uint32_t rank_in_block = rank & (kBCRankPrefixBits - 1U);
-            const uint32_t word_in_block = rank_in_block / kBCBitmapWordBits;
             const uint32_t bit_in_word = rank & (kBCBitmapWordBits - 1U);
-            const uint32_t block_first_word =
-                block * (kBCRankPrefixBits / kBCBitmapWordBits);
-            const uint32_t target_word = block_first_word + word_in_block;
-            const uint32_t bitmap_offset =
-                entry_bitmap_offset_unchecked(entry, queries[i].bitmap_len);
+            const uint32_t target_word = rank >> 6U;
+            const uint32_t bitmap_offset = entry.bitmap_offset;
             const uint8_t *bitmap_words = cell.rank_payload.data + bitmap_offset;
             const uint64_t target = load_u64_le(
                 bitmap_words + static_cast<size_t>(target_word) * sizeof(uint64_t)
@@ -785,17 +820,12 @@ private:
             if (((target >> bit_in_word) & 1ULL) == 0ULL) {
                 continue;
             }
-            uint32_t rank_before = load_u16_le(
-                cell.rank_payload.data +
-                static_cast<size_t>(entry.rank_payload_offset) +
-                static_cast<size_t>(block) * sizeof(RankPrefix)
-            );
-            for (uint32_t offset = 0U; offset < word_in_block; ++offset) {
-                rank_before += popcount64(load_u64_le(
-                    bitmap_words +
-                    static_cast<size_t>(block_first_word + offset) * sizeof(uint64_t)
-                ));
+            const size_t rank_base_index =
+                static_cast<size_t>(bitmap_offset / sizeof(uint64_t)) + target_word;
+            if (rank_base_index >= cell.word_rank_bases.size()) {
+                throw std::out_of_range("BC future lookup word rank base is missing");
             }
+            uint32_t rank_before = cell.word_rank_bases[rank_base_index];
             if (bit_in_word != 0U) {
                 rank_before += popcount64(target & ((1ULL << bit_in_word) - 1ULL));
             }
@@ -844,9 +874,10 @@ private:
             return false;
         }
 
-        const uint32_t bitmap_offset = entry_bitmap_offset_unchecked(*entry, encoded.bitmap_len);
+        const uint32_t prefix_offset = entry_prefix_offset_unchecked(*entry, encoded.bitmap_len);
+        const uint32_t bitmap_offset = entry->bitmap_offset;
         const BCBitmapRankResult rank_result = bitmap_test_and_rank_le_bytes(
-            cell.rank_payload.data + entry->rank_payload_offset,
+            cell.rank_payload.data + prefix_offset,
             prefix_count_for_bits(encoded.bitmap_len),
             cell.rank_payload.data + bitmap_offset,
             words_for_bits(encoded.bitmap_len),

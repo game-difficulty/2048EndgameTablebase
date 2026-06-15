@@ -165,13 +165,7 @@ public:
         if (!file_) {
             throw std::runtime_error("BC buffered file writer seekp failed: " + path_.string());
         }
-        file_.write(
-            static_cast<const char *>(data),
-            checked_stream_size(bytes, "BC buffered write size exceeds stream range")
-        );
-        if (!file_) {
-            throw std::runtime_error("BC buffered file writer write failed: " + path_.string());
-        }
+        static_cast<void>(write_contiguous(data, bytes));
     }
 
     void write_many(
@@ -198,15 +192,20 @@ public:
                 }
                 positioned = true;
             }
-            file_.write(
-                static_cast<const char *>(request.data),
-                checked_stream_size(request.bytes, "BC buffered write size exceeds stream range")
-            );
-            if (!file_) {
-                throw std::runtime_error("BC buffered file writer write failed: " + path_.string());
-            }
+            const uint64_t backend_chunks = write_contiguous(request.data, request.bytes);
             cursor = request.offset + request.bytes;
-            bc_fileio_accumulate_request(stats, request.bytes);
+            if (stats != nullptr) {
+                if (stats->request_count == std::numeric_limits<uint64_t>::max() ||
+                    stats->requested_bytes > std::numeric_limits<uint64_t>::max() - request.bytes ||
+                    stats->backend_io_count > std::numeric_limits<uint64_t>::max() - backend_chunks ||
+                    stats->backend_bytes > std::numeric_limits<uint64_t>::max() - request.bytes) {
+                    throw std::overflow_error("BC buffered file writer stats overflow");
+                }
+                ++stats->request_count;
+                stats->requested_bytes += request.bytes;
+                stats->backend_io_count += backend_chunks;
+                stats->backend_bytes += request.bytes;
+            }
         }
     }
 
@@ -244,6 +243,30 @@ public:
     }
 
 private:
+    [[nodiscard]] uint64_t write_contiguous(const void *data, uint64_t bytes) {
+        const uint8_t *cursor = static_cast<const uint8_t *>(data);
+        uint64_t remaining = bytes;
+        uint64_t chunks = 0U;
+        while (remaining != 0U) {
+            const uint64_t take_u64 =
+                remaining > kMaxBufferedWriteChunkBytes
+                    ? kMaxBufferedWriteChunkBytes
+                    : remaining;
+            const std::streamsize take = checked_stream_size(
+                take_u64,
+                "BC buffered write size exceeds stream range"
+            );
+            file_.write(reinterpret_cast<const char *>(cursor), take);
+            if (!file_) {
+                throw std::runtime_error("BC buffered file writer write failed: " + path_.string());
+            }
+            cursor += take_u64;
+            remaining -= take_u64;
+            ++chunks;
+        }
+        return chunks;
+    }
+
     [[nodiscard]] static std::streamoff checked_stream_offset(uint64_t value, const char *label) {
         if (value > static_cast<uint64_t>(std::numeric_limits<std::streamoff>::max())) {
             throw std::overflow_error(label);
@@ -257,6 +280,8 @@ private:
         }
         return static_cast<std::streamsize>(value);
     }
+
+    static constexpr uint64_t kMaxBufferedWriteChunkBytes = 64ULL * 1024ULL * 1024ULL;
 
     std::filesystem::path path_;
     std::fstream file_;

@@ -1,4 +1,3 @@
-#include "BCBacksolve.h"
 #include "BCCellBuilder.h"
 #include "BCFutureSuccessLookup.h"
 #include "BCPositionScanner.h"
@@ -671,101 +670,6 @@ void run_typed_resident_case(BCSuccessDTypeMode dtype) {
     );
     verify_typed_resident_result<T>(fixture, result.layer, options);
     check(result.solve_stats.current_rows == fixture.current.stored_boards.size(), "resident stats current_rows mismatch");
-    check(result.solve_stats.terminal_success_rows == 1U, "resident stats terminal_success_rows mismatch");
-    check(
-        result.solve_stats.queries2 != 0U && result.solve_stats.queries4 != 0U,
-        "resident stats should count queries"
-    );
-    check(
-        result.solve_stats.found2 != 0U && result.solve_stats.found4 != 0U,
-        "resident stats should count found queries"
-    );
-}
-
-void run_uint32_matches_backsolve() {
-    constexpr uint32_t row_width = 1U;
-    constexpr int symm_mode = static_cast<int>(SymmMode::Full);
-    ResidentFixture<uint32_t> fixture;
-    make_resident_fixture<uint32_t>(fixture, row_width, BCSuccessDTypeMode::UInt32, symm_mode);
-    const BCSuccessLayerReader future2_success(
-        fixture.future2_success_bytes,
-        fixture.future2.reader,
-        row_width
-    );
-    const BCSuccessLayerReader future4_success(
-        fixture.future4_success_bytes,
-        fixture.future4.reader,
-        row_width
-    );
-
-    BC::BCBacksolveOptions backsolve_options;
-    backsolve_options.num_threads = 2;
-    backsolve_options.canonical_batch_size = 4U;
-    backsolve_options.canonical_symm_mode = symm_mode;
-    backsolve_options.spawn_rate4 = 0.25;
-    backsolve_options.success_target_rank = 3;
-    backsolve_options.success_shifts = &fixture.success_shifts;
-
-    const BC::BCBacksolveResult backsolve = BC::backsolve_resident_layer(
-        fixture.lut,
-        fixture.current.reader,
-        fixture.future2.reader,
-        future2_success,
-        fixture.future4.reader,
-        future4_success,
-        backsolve_options
-    );
-
-    BCResidentSolveOptions<uint32_t> resident_options =
-        make_resident_options<uint32_t>(
-            fixture.success_shifts,
-            row_width,
-            BCSuccessDTypeMode::UInt32,
-            symm_mode
-        );
-    BC::BCResidentSolvedLayer<uint32_t> compact_future2 =
-        solved_layer_from_success_bytes<uint32_t>(
-            fixture.lut,
-            fixture.future2,
-            fixture.future2_success_bytes,
-            row_width
-        );
-    BC::BCResidentSolvedLayer<uint32_t> compact_future4 =
-        solved_layer_from_success_bytes<uint32_t>(
-            fixture.lut,
-            fixture.future4,
-            fixture.future4_success_bytes,
-            row_width
-        );
-    const auto resident = BC::bc_resident_solve_compacted_layer<uint32_t>(
-        fixture.current.reader,
-        compact_future2,
-        compact_future4,
-        resident_options
-    );
-    const BCSuccessLayerReader backsolve_success(backsolve.success_bytes, fixture.current.reader, row_width);
-    for (CellId cid = 0U; cid < fixture.current.reader.cell_count(); ++cid) {
-        if (fixture.current.reader.descriptor(cid).success_rows == 0U) {
-            continue;
-        }
-        BCPositionCellScanner(fixture.current.reader, cid).for_each_board(
-            [&](const BC::BCScannedBoardEntry &entry) {
-                const uint32_t expected = backsolve_success.read_value(cid, entry.local_success_row);
-                uint32_t actual = 0U;
-                const bool found = resident.layer.lookup.lookup(entry.board, actual);
-                if (expected == 0U) {
-                    check(!found, "ResidentSolve UInt32 compacted zero row should be pruned");
-                } else {
-                    check(found, "ResidentSolve UInt32 compacted row should be present");
-                    check(actual == expected, "ResidentSolve UInt32 must match BCBacksolve value");
-                }
-            }
-        );
-    }
-    check(
-        resident.solve_stats.current_rows == backsolve.stats.current_rows,
-        "ResidentSolve UInt32 stats current_rows mismatch"
-    );
 }
 
 std::vector<uint32_t> flat_uint32_values_for_position(
@@ -1173,8 +1077,8 @@ int main() {
         std::cerr << "direct lookup double one-minus\n";
         run_direct_lookup_case<double>(BCSuccessDTypeMode::OneMinusFloat64);
 
-        std::cerr << "resident uint32 matches backsolve\n";
-        run_uint32_matches_backsolve();
+        std::cerr << "resident uint32 oracle\n";
+        run_typed_resident_case<uint32_t>(BCSuccessDTypeMode::UInt32);
         std::cerr << "resident compact uint32\n";
         test_compact_uint32_layer();
         std::cerr << "resident optimized uint32\n";

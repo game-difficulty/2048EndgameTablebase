@@ -437,6 +437,31 @@ void test_direct_batch_io() {
 #endif
 }
 
+void test_windows_direct_io_chunk_limits() {
+#if defined(_WIN32)
+    constexpr uint32_t kAlignment = 4096U;
+    const uint64_t max_chunk = BC::detail::windows_max_io_chunk_bytes(kAlignment);
+    check(max_chunk != 0U, "Windows direct max chunk should be non-zero");
+    check(max_chunk <= 0xFFFFFFFFULL, "Windows direct max chunk should fit DWORD");
+    check((max_chunk % kAlignment) == 0U, "Windows direct max chunk should be aligned");
+    check(
+        BC::detail::windows_io_chunk_count(max_chunk + kAlignment, kAlignment) == 2U,
+        "Windows direct chunk count should split over-DWORD requests"
+    );
+
+    std::vector<BC::detail::BCPhysicalRange> ranges;
+    ranges.push_back(BC::detail::BCPhysicalRange{0U, max_chunk + 2U * kAlignment, {}});
+    BC::detail::split_physical_ranges_for_windows_io(ranges, kAlignment);
+    check(ranges.size() == 2U, "Windows direct physical range should split");
+    check(ranges[0].bytes == max_chunk, "Windows direct first split chunk mismatch");
+    check(ranges[1].bytes == 2U * kAlignment, "Windows direct second split chunk mismatch");
+    for (const BC::detail::BCPhysicalRange &range : ranges) {
+        check(range.bytes <= max_chunk, "Windows direct split chunk exceeds max");
+        check((range.bytes % kAlignment) == 0U, "Windows direct split chunk should be aligned");
+    }
+#endif
+}
+
 void test_position_file_path_roundtrip() {
     TempDir tmp;
     SyntheticPosition position;
@@ -496,6 +521,8 @@ int main() {
         test_buffered_batch_io();
         std::cerr << "test_direct_batch_io\n";
         test_direct_batch_io();
+        std::cerr << "test_windows_direct_io_chunk_limits\n";
+        test_windows_direct_io_chunk_limits();
         std::cerr << "test_position_file_path_roundtrip\n";
         test_position_file_path_roundtrip();
         std::cerr << "test_success_file_path_roundtrip\n";

@@ -25,7 +25,7 @@
 namespace {
 
 struct Args {
-    std::filesystem::path generated_position_dir = "tmp/free9_256_backsolve_inputs";
+    std::filesystem::path generated_position_dir = "tmp/free9_256_resident_generated";
     std::filesystem::path solved_output_dir = "tmp/free9_256_resident_solve_optimized_outputs";
     std::filesystem::path stats_csv = "tmp/free9_256_resident_solve_optimized_outputs_stats.csv";
     std::filesystem::path summary_csv = "tmp/free9_256_resident_solve_optimized_outputs_summary.csv";

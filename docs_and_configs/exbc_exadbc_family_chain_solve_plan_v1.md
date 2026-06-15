@@ -11,21 +11,22 @@ FamilyChain solve is not implemented yet.
 Available building blocks:
 
 ```text
-BCSolveEdgeKernel.h          header-only edge kernel scaffold
+BCSolveEdgeKernel.h          shared resident/single edge kernel
+BCFutureSuccessLookup.h      production typed direct future lookup
+BCResidentSolve.h            production resident solve route
+BCSingleChunkSolve.h         production strict 1+x single-chunk solve route
 BCFutureFamilyWindow.h       active future cell window scaffold
-BCPartialStore.h             typed current-cell partial block store
-BCSingleChunkSolve.h         two-phase solve scaffold
-BCBacksolve.cpp              implemented resident UInt32 baseline
+BCPartialStore.h             typed current-cell partial block store scaffold
 ```
 
 There is no production FamilyChainSolve executor, no benchmark, and no
-free9-256 solve validation yet.
+free9/free10 full-run FamilyChain solve validation yet.
 
 ## 2. Design Goal
 
 FamilyChain solve exists to lower peak memory when resident/single solve cannot
 fit. It must use the same recurrence and the same `.bcpos/.bcsuc` semantics as
-resident solve.
+resident and single-chunk solve.
 
 It must not use generation-only structures:
 
@@ -36,7 +37,9 @@ BCGenerationBlobIO
 BCFamilyPositionWriter
 ```
 
-It must not create target position entries. It only writes current success.
+It must not create generated-position entries. It writes a solved, compacted
+current `.bcpos + .bcsuc` pair whose format matches resident and single-chunk
+solve output.
 
 ## 3. Scheduling Order
 
@@ -63,6 +66,11 @@ spawn2 finalize/add pass second
 
 This allows a bounded partial representation and avoids needing two resident
 future layers at once.
+
+Unlike current strict single-chunk solve, FamilyChain solve will need real
+partial accumulation across target-family windows. Single-chunk `tmp4` is only
+a per-current-row weighted spawn4 contribution buffer and is not a partial max
+store.
 
 ## 4. Future View V(G)
 
@@ -188,24 +196,29 @@ bc_solve_physical_target_family_may_hit(...)
 This function should be reviewed before FamilyChain solve production work. It
 must use raw sums consistently with generation's `BCPositionCellLayout`.
 
-## 9. Success Output
+## 9. Solved Output
 
-Family solve writes `.bcsuc`, not `.bcpos`.
-
-Required first writer:
+Family solve writes the same solved file pair as resident/single solve:
 
 ```text
-CellId-order streaming success writer
-typed block input
-raw dtype output
-empty-cell marking
-finish-time validation
-write stats
+compacted current .bcpos
+typed current .bcsuc
 ```
 
-If target-family finalization order is not CellId order, the executor must
-stage completed cells until they can be flushed in order. Random-access success
-writer can be added later, but should not be required for v1.
+Required first output path:
+
+```text
+CellId-order streaming position + success writer
+typed success block input
+raw dtype payload output
+empty-cell descriptor marking
+finish-time validation that every current cell is written exactly once
+write bytes/seconds/backend stats
+```
+
+If target-family finalization order is not CellId order, the executor must stage
+completed cells until they can be flushed in order. Random-access output can be
+added later, but should not be required for v1.
 
 ## 10. Runtime Invariants
 
@@ -217,6 +230,7 @@ no generation mutable builders are created
 future success dtype matches the typed executor
 future success metadata matches future position metadata
 every current success cell is written exactly once
+every compacted position cell is written exactly once
 partial rows are finalized only after both spawn phases
 ```
 
@@ -230,6 +244,7 @@ lookup miss count
 prefilter skip count
 partial active bytes peak
 success write bytes and seconds
+position write bytes and seconds
 ```
 
 Avoid per-candidate stats in the default hot path; make detailed counters
@@ -240,9 +255,8 @@ diagnostic-only.
 Small tests:
 
 ```text
-BCBacksolve resident oracle still passes
-ResidentSolve shared-edge output equals BCBacksolve
-SingleChunkSolve output equals ResidentSolve for chunk sizes 1, 3, all
+ResidentSolve output equals synthetic oracle on UInt32 and typed fixtures
+SingleChunkSolve output equals ResidentSolve for row-slab chunk sizes 1, 3, all
 FamilyChainSolve output equals ResidentSolve on synthetic small layers
 FamilyChainSolve handles different current/future moduli
 target-family prefilter on/off produces identical output
@@ -254,7 +268,7 @@ Integration tests:
 generate a small free pattern with resident/single/family routes
 solve one layer with ResidentSolve
 solve same layer with FamilyChainSolve
-compare .bcsuc byte-for-byte or row-by-row
+compare compacted `.bcpos + .bcsuc` byte-for-byte or row-by-row
 ```
 
 Performance gate:
@@ -266,26 +280,15 @@ report recalc rows/s, IO GB/s, peak working set, active window peak
 
 ## 12. Recommended Next Step
 
-Do not begin with the full FamilyChain executor.
-
-First:
-
-```text
-extract BCBacksolve direct future index into a typed reusable view
-wire BCSolveEdgeKernel into ResidentSolve
-prove ResidentSolve == BCBacksolve
-add success streaming writer
-```
-
-Then:
+Resident and strict single-chunk solve are now production routes. Do not start
+with free-size FamilyChain full-run. Start with the smallest target-family
+executor that reuses existing solve pieces:
 
 ```text
-make SingleChunkSolve use the same edge kernel and direct lookup
-prove SingleChunkSolve == ResidentSolve
-```
-
-Only after that:
-
-```text
+reuse BCFutureSuccessLookupView and BCSolveEdgeKernel
+reuse the single-chunk/resident compacted output format
+define the target-family window lifetime
+define partial max file format and flush policy
+prove one small layer against ResidentSolve before performance work
 implement FamilyChainSolve target-family-major scheduler
 ```

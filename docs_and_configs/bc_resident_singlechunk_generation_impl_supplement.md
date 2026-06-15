@@ -4,6 +4,16 @@ This document describes the generation implementation as of checkpoint
 `6ed14a2`. It is the source of truth for the current resident, single, and
 family generation routes.
 
+Solve-side runtime details are maintained in:
+
+```text
+docs_and_configs/exbc_exadbc_three_solve_chains_runtime_design_v1.md
+```
+
+Both generation and solve use the same `.bcpos` layout. Solve output writes a
+compacted `.bcpos + .bcsuc` pair into a separate solved directory and does not
+overwrite generated `.bcpos` inputs.
+
 ## 1. Non-negotiable Semantics
 
 - Every tile contributes its raw tile value to quadrant and layer sums.
@@ -363,12 +373,16 @@ large per-cell key/value sorts use the native x86 SIMD sort adapter
 
 ## 12. Direct IO
 
-Generation has direct-aware position IO. Current production defaults:
+Generation and solve have direct-aware position IO. Current production
+defaults:
 
 ```text
 Family route source/dump/reload/write paths use direct-capable IO where selected.
 Resident/single file output can use direct writer through benchmark options.
 No-QD paths still use direct sequential writes when direct output is requested.
+Single-chunk solve uses direct-capable readers/writers for current/future
+position, success payloads, tmp4 files, and final solved outputs when --direct-io
+is selected.
 ```
 
 The benchmark option names are currently:
@@ -382,6 +396,11 @@ The benchmark option names are currently:
 
 For large free9 runs, direct writer backend throughput has reached roughly
 4.5 GB/s on the local SSD.
+
+Windows direct IO requests are split before submission when a physical request
+would exceed the Win32 DWORD byte-count limit. Buffered write paths also split
+large logical writes, so large BC files should not fail because one backend
+request is larger than the platform API accepts.
 
 ## 13. Current Validation Snapshot
 
@@ -405,6 +424,22 @@ forced family free9-256, m17:
 
 The forced family run confirms the FamilyChain path did not regress relative
 to the previous 80-82 M rows/s range.
+
+Current solve-side snapshot:
+
+```text
+single-chunk backsolve free10-256:
+    generated_position_dir = tmp/free10_256_resident_generated
+    solved_output_dir      = tmp/free10_256_single_chunk_solved
+    total_rows             = 92,740,544,730
+    solve_wall_seconds     = 1197.789
+    recalc_seconds         = 829.870
+    wall throughput        = 77.426 M rows/s
+    recalc throughput      = 111.753 M rows/s
+    peak working set       = 5,033,488,384 bytes
+    max layer written size = 2,764,431,468 bytes
+    layer1 max success     = 3996176335 / 4000000000 = 0.99904408375
+```
 
 ## 14. File Map For Generation
 
@@ -456,4 +491,16 @@ native_core/tests_src/test_bc_family_generation_state.cpp
 native_core/tests_src/test_bc_family_route_planner.cpp
 native_core/tests_src/test_bc_family_partition_analysis.cpp
 native_core/tests_src/test_bc_position_cell_loader.cpp
+```
+
+Solve-side implementation map:
+
+```text
+docs_and_configs/exbc_exadbc_three_solve_chains_runtime_design_v1.md
+native_core/include/BCResidentSolve.h
+native_core/include/BCSingleChunkSolve.h
+native_core/include/BCFutureSuccessLookup.h
+native_core/include/BCSuccessIO.h
+native_core/tests_src/bench_bc_single_chunk_solve_full.cpp
+native_core/tests_src/test_bc_single_chunk_solve.cpp
 ```

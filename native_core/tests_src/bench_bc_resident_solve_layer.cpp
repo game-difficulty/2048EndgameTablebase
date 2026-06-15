@@ -271,6 +271,15 @@ void print_usage(const char *exe) {
     const std::filesystem::path &path
 ) {
     std::vector<uint8_t> bytes = BC::read_success_layer_from_file(path);
+    const BC::BCSuccessHeader header = BC::bc_read_success_header(bytes);
+    if (header.payload_offset > std::numeric_limits<uint64_t>::max() - header.payload_bytes) {
+        throw std::overflow_error("single-layer bench success logical size overflow");
+    }
+    const uint64_t logical_size = header.payload_offset + header.payload_bytes;
+    if (logical_size > bytes.size()) {
+        throw std::runtime_error("single-layer bench success file is shorter than logical payload");
+    }
+    bytes.resize(static_cast<size_t>(logical_size));
     BC::BCSuccessLayerReader reader(bytes, position, 1U);
     if (reader.dtype_mode() != BC::BCSuccessDTypeMode::UInt32) {
         throw std::runtime_error("single-layer bench currently requires UInt32 success files");
@@ -281,7 +290,7 @@ void print_usage(const char *exe) {
     }
     std::vector<uint32_t> values(static_cast<size_t>(value_count));
     const uint64_t payload_bytes = value_count * sizeof(uint32_t);
-    std::memcpy(values.data(), bytes.data() + BC::kBCSuccessHeaderBytes, static_cast<size_t>(payload_bytes));
+    std::memcpy(values.data(), bytes.data() + static_cast<size_t>(header.payload_offset), static_cast<size_t>(payload_bytes));
     return values;
 }
 

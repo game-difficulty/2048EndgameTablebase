@@ -973,17 +973,12 @@ inline void bc_single_chunk_push_candidate(
     BCDirectionMask move_axis,
     const BCResidentSolveOptions<StorageT> &options,
     std::vector<uint64_t> &boards,
-    std::vector<uint16_t> &refs,
-    uint64_t &unchanged_moves,
-    uint64_t &prefilter_checks,
-    uint64_t &prefilter_skips
+    std::vector<uint16_t> &refs
 ) {
     if (moved == spawned) {
-        ++unchanged_moves;
         return;
     }
     if (filter.enabled) {
-        ++prefilter_checks;
         if (!bc_solve_physical_target_family_may_hit(
                 lut,
                 axis,
@@ -991,7 +986,6 @@ inline void bc_single_chunk_push_candidate(
                 moved,
                 move_axis,
                 options.word_sums)) {
-            ++prefilter_skips;
             return;
         }
     }
@@ -1020,11 +1014,7 @@ void bc_single_chunk_solve_phase_batch(
     if (count == 0U) {
         return;
     }
-    ++stats.edge.batch_flushes;
-    stats.edge.batch_source_boards += count;
-    if (count < BCResidentBatchWorkspace<StorageT>::kBatchSize) {
-        ++stats.edge.batch_tail_flushes;
-    }
+    (void)stats;
     workspace.canonical2_boards.clear();
     workspace.canonical2_refs.clear();
     workspace.queries2.clear();
@@ -1036,14 +1026,6 @@ void bc_single_chunk_solve_phase_batch(
     const BCSolveTargetFamilyFilter &filter = phase2 ? options.solve.filter2 : options.solve.filter4;
     const bool success_check_enabled =
         bc_solve_success_check_enabled(options.solve.edge_options);
-    uint64_t batch_terminal_success = 0U;
-    uint64_t batch_empty_slots = 0U;
-    uint64_t batch_spawned_boards = 0U;
-    uint64_t batch_move_all_dir_calls = 0U;
-    uint64_t batch_selective_move_calls = 0U;
-    uint64_t batch_unchanged_moves = 0U;
-    uint64_t batch_prefilter_checks = 0U;
-    uint64_t batch_prefilter_skips = 0U;
     const bool fast_unfiltered_both =
         options.solve.directions == BCDirectionMask::Both && !filter.enabled;
     auto push_moved_unfiltered = [&](
@@ -1052,7 +1034,6 @@ void bc_single_chunk_solve_phase_batch(
         uint16_t ref
     ) {
         if (moved == spawned) {
-            ++batch_unchanged_moves;
             return;
         }
         workspace.canonical2_boards.push_back(moved);
@@ -1067,9 +1048,6 @@ void bc_single_chunk_solve_phase_batch(
         if (success_check_enabled &&
             bc_solve_is_success_board(board, options.solve.edge_options)) {
             workspace.terminal[board_slot] = 1U;
-            if (phase2) {
-                ++batch_terminal_success;
-            }
             continue;
         }
         uint32_t empty_mask = bc_zero_cell_mask16(board);
@@ -1078,13 +1056,8 @@ void bc_single_chunk_solve_phase_batch(
             const uint32_t cell = bc_solve_pop_lowest_set_bit_index(empty_mask);
             const uint16_t ref = static_cast<uint16_t>((board_slot << 4U) | cell);
             ++workspace.empty_counts[board_slot];
-            if (phase2) {
-                ++batch_empty_slots;
-                batch_spawned_boards += 2U;
-            }
             const uint64_t spawned = set_board_tile_unchecked(board, cell, spawn_rank);
             if (fast_unfiltered_both) {
-                ++batch_move_all_dir_calls;
                 const auto moved_h = BoardMover::move_horizontal_pair(spawned);
                 const auto moved_v = BoardMover::move_vertical_pair(spawned);
                 push_moved_unfiltered(spawned, moved_h.first, ref);
@@ -1094,70 +1067,57 @@ void bc_single_chunk_solve_phase_batch(
                 continue;
             }
             if (options.solve.directions == BCDirectionMask::Both) {
-                ++batch_move_all_dir_calls;
                 const auto moved_h = BoardMover::move_horizontal_pair(spawned);
                 const auto moved_v = BoardMover::move_vertical_pair(spawned);
                 bc_single_chunk_push_candidate<StorageT>(
                     lut, future_axis, filter, spawned, moved_h.first, ref,
                     BCDirectionMask::Horizontal, options.solve,
-                    workspace.canonical2_boards, workspace.canonical2_refs,
-                    batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                    workspace.canonical2_boards, workspace.canonical2_refs);
                 bc_single_chunk_push_candidate<StorageT>(
                     lut, future_axis, filter, spawned, moved_h.second, ref,
                     BCDirectionMask::Horizontal, options.solve,
-                    workspace.canonical2_boards, workspace.canonical2_refs,
-                    batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                    workspace.canonical2_boards, workspace.canonical2_refs);
                 bc_single_chunk_push_candidate<StorageT>(
                     lut, future_axis, filter, spawned, moved_v.first, ref,
                     BCDirectionMask::Vertical, options.solve,
-                    workspace.canonical2_boards, workspace.canonical2_refs,
-                    batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                    workspace.canonical2_boards, workspace.canonical2_refs);
                 bc_single_chunk_push_candidate<StorageT>(
                     lut, future_axis, filter, spawned, moved_v.second, ref,
                     BCDirectionMask::Vertical, options.solve,
-                    workspace.canonical2_boards, workspace.canonical2_refs,
-                    batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                    workspace.canonical2_boards, workspace.canonical2_refs);
             } else {
                 if (bc_has_horizontal(options.solve.directions)) {
-                    batch_selective_move_calls += 2U;
                     const auto moved = BoardMover::move_horizontal_pair(spawned);
                     bc_single_chunk_push_candidate<StorageT>(
                         lut, future_axis, filter, spawned, moved.first, ref,
                         BCDirectionMask::Horizontal, options.solve,
-                        workspace.canonical2_boards, workspace.canonical2_refs,
-                        batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                        workspace.canonical2_boards, workspace.canonical2_refs);
                     bc_single_chunk_push_candidate<StorageT>(
                         lut, future_axis, filter, spawned, moved.second, ref,
                         BCDirectionMask::Horizontal, options.solve,
-                        workspace.canonical2_boards, workspace.canonical2_refs,
-                        batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                        workspace.canonical2_boards, workspace.canonical2_refs);
                 }
                 if (bc_has_vertical(options.solve.directions)) {
-                    batch_selective_move_calls += 2U;
                     const auto moved = BoardMover::move_vertical_pair(spawned);
                     bc_single_chunk_push_candidate<StorageT>(
                         lut, future_axis, filter, spawned, moved.first, ref,
                         BCDirectionMask::Vertical, options.solve,
-                        workspace.canonical2_boards, workspace.canonical2_refs,
-                        batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                        workspace.canonical2_boards, workspace.canonical2_refs);
                     bc_single_chunk_push_candidate<StorageT>(
                         lut, future_axis, filter, spawned, moved.second, ref,
                         BCDirectionMask::Vertical, options.solve,
-                        workspace.canonical2_boards, workspace.canonical2_refs,
-                        batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                        workspace.canonical2_boards, workspace.canonical2_refs);
                 }
             }
         }
     }
 
     if (!workspace.canonical2_boards.empty()) {
-        ++stats.edge.canonical_flushes;
         CanonicalBatch::canonicalize_inplace(
             workspace.canonical2_boards.data(),
             workspace.canonical2_boards.size(),
             options.solve.edge_options.canonical_symm_mode
         );
-        stats.edge.canonicalized_candidates += workspace.canonical2_boards.size();
         const BCSolvePreparedQueryEncoder encoder(
             lut,
             future_axis,
@@ -1173,26 +1133,13 @@ void bc_single_chunk_solve_phase_batch(
                 query
             );
             if (!encoded) {
-                ++stats.edge.encode_rejects;
                 continue;
             }
             workspace.queries2.push_back(query);
-            ++stats.edge.encoded_queries;
         }
         workspace.canonical2_boards.clear();
         workspace.canonical2_refs.clear();
     }
-    if (phase2) {
-        stats.edge.source_boards += count;
-        stats.edge.terminal_success_boards += batch_terminal_success;
-        stats.edge.empty_slots += batch_empty_slots;
-        stats.edge.spawned_boards += batch_spawned_boards;
-    }
-    stats.edge.move_all_dir_calls += batch_move_all_dir_calls;
-    stats.edge.selective_move_calls += batch_selective_move_calls;
-    stats.edge.unchanged_moves += batch_unchanged_moves;
-    stats.edge.prefilter_checks += batch_prefilter_checks;
-    stats.edge.prefilter_skips += batch_prefilter_skips;
 
     for (uint32_t lane = 0U; lane < options.solve.row_width; ++lane) {
         std::fill_n(
@@ -1205,12 +1152,9 @@ void bc_single_chunk_solve_phase_batch(
             workspace.best2.data(),
             static_cast<size_t>(count) * kBCBoardCellCount,
             lane,
-            &stats.edge,
+            nullptr,
             true
         );
-        if (phase2) {
-            stats.edge.finalized_boards += lane == 0U ? count : 0U;
-        }
         if (phase == BCSingleChunkSolvePhase::Spawn4) {
             for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
                 StorageT contribution = options.solve.zero_value;
@@ -1397,10 +1341,6 @@ void bc_single_chunk_solve_phase_for_current_cells(
                         workspace.boards[workspace.count] = entry.board;
                         workspace.output_indices[workspace.count] = cell_base + entry.local_success_row;
                         ++workspace.count;
-                        if (phase == BCSingleChunkSolvePhase::Spawn2) {
-                            ++thread_stats.current_rows;
-                            ++thread_stats.current_boards;
-                        }
                         if (workspace.count == BCResidentBatchWorkspace<StorageT>::kBatchSize) {
                             flush();
                         }
@@ -1412,9 +1352,20 @@ void bc_single_chunk_solve_phase_for_current_cells(
         flush();
     }
     stats.recalc_seconds += bc_single_chunk_now_seconds() - t0;
+    if (phase == BCSingleChunkSolvePhase::Spawn2) {
+        const uint64_t rows = cell_offsets.back();
+        stats.current_rows = bc_checked_add_u64(
+            stats.current_rows,
+            rows,
+            "BC single chunk current row count overflow"
+        );
+        stats.current_boards = bc_checked_add_u64(
+            stats.current_boards,
+            rows,
+            "BC single chunk current board count overflow"
+        );
+    }
     for (const BCSingleChunkSolveStats &thread_stats : per_thread) {
-        stats.current_rows += thread_stats.current_rows;
-        stats.current_boards += thread_stats.current_boards;
         bc_resident_solve_accumulate_edge_stats(stats.edge, thread_stats.edge);
     }
 }
@@ -1487,11 +1438,7 @@ void bc_single_chunk_solve_weighted_phase_batch(
     if (count == 0U) {
         return;
     }
-    ++stats.edge.batch_flushes;
-    stats.edge.batch_source_boards += count;
-    if (count < BCResidentBatchWorkspace<StorageT>::kBatchSize) {
-        ++stats.edge.batch_tail_flushes;
-    }
+    (void)stats;
     workspace.canonical2_boards.clear();
     workspace.canonical2_refs.clear();
     workspace.queries2.clear();
@@ -1503,14 +1450,6 @@ void bc_single_chunk_solve_weighted_phase_batch(
     const BCSolveTargetFamilyFilter &filter = phase2 ? options.solve.filter2 : options.solve.filter4;
     const bool success_check_enabled =
         bc_solve_success_check_enabled(options.solve.edge_options);
-    uint64_t batch_terminal_success = 0U;
-    uint64_t batch_empty_slots = 0U;
-    uint64_t batch_spawned_boards = 0U;
-    uint64_t batch_move_all_dir_calls = 0U;
-    uint64_t batch_selective_move_calls = 0U;
-    uint64_t batch_unchanged_moves = 0U;
-    uint64_t batch_prefilter_checks = 0U;
-    uint64_t batch_prefilter_skips = 0U;
     const bool fast_unfiltered_both =
         options.solve.directions == BCDirectionMask::Both && !filter.enabled;
     auto push_moved_unfiltered = [&](
@@ -1519,7 +1458,6 @@ void bc_single_chunk_solve_weighted_phase_batch(
         uint16_t ref
     ) {
         if (moved == spawned) {
-            ++batch_unchanged_moves;
             return;
         }
         workspace.canonical2_boards.push_back(moved);
@@ -1534,9 +1472,6 @@ void bc_single_chunk_solve_weighted_phase_batch(
         if (success_check_enabled &&
             bc_solve_is_success_board(board, options.solve.edge_options)) {
             workspace.terminal[board_slot] = 1U;
-            if constexpr (phase2) {
-                ++batch_terminal_success;
-            }
             continue;
         }
         uint32_t empty_mask = bc_zero_cell_mask16(board);
@@ -1545,13 +1480,8 @@ void bc_single_chunk_solve_weighted_phase_batch(
             const uint32_t cell = bc_solve_pop_lowest_set_bit_index(empty_mask);
             const uint16_t ref = static_cast<uint16_t>((board_slot << 4U) | cell);
             ++workspace.empty_counts[board_slot];
-            if constexpr (phase2) {
-                ++batch_empty_slots;
-                batch_spawned_boards += 2U;
-            }
             const uint64_t spawned = set_board_tile_unchecked(board, cell, spawn_rank);
             if (fast_unfiltered_both) {
-                ++batch_move_all_dir_calls;
                 const auto moved_h = BoardMover::move_horizontal_pair(spawned);
                 const auto moved_v = BoardMover::move_vertical_pair(spawned);
                 push_moved_unfiltered(spawned, moved_h.first, ref);
@@ -1561,70 +1491,57 @@ void bc_single_chunk_solve_weighted_phase_batch(
                 continue;
             }
             if (options.solve.directions == BCDirectionMask::Both) {
-                ++batch_move_all_dir_calls;
                 const auto moved_h = BoardMover::move_horizontal_pair(spawned);
                 const auto moved_v = BoardMover::move_vertical_pair(spawned);
                 bc_single_chunk_push_candidate<StorageT>(
                     lut, future_axis, filter, spawned, moved_h.first, ref,
                     BCDirectionMask::Horizontal, options.solve,
-                    workspace.canonical2_boards, workspace.canonical2_refs,
-                    batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                    workspace.canonical2_boards, workspace.canonical2_refs);
                 bc_single_chunk_push_candidate<StorageT>(
                     lut, future_axis, filter, spawned, moved_h.second, ref,
                     BCDirectionMask::Horizontal, options.solve,
-                    workspace.canonical2_boards, workspace.canonical2_refs,
-                    batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                    workspace.canonical2_boards, workspace.canonical2_refs);
                 bc_single_chunk_push_candidate<StorageT>(
                     lut, future_axis, filter, spawned, moved_v.first, ref,
                     BCDirectionMask::Vertical, options.solve,
-                    workspace.canonical2_boards, workspace.canonical2_refs,
-                    batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                    workspace.canonical2_boards, workspace.canonical2_refs);
                 bc_single_chunk_push_candidate<StorageT>(
                     lut, future_axis, filter, spawned, moved_v.second, ref,
                     BCDirectionMask::Vertical, options.solve,
-                    workspace.canonical2_boards, workspace.canonical2_refs,
-                    batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                    workspace.canonical2_boards, workspace.canonical2_refs);
             } else {
                 if (bc_has_horizontal(options.solve.directions)) {
-                    batch_selective_move_calls += 2U;
                     const auto moved = BoardMover::move_horizontal_pair(spawned);
                     bc_single_chunk_push_candidate<StorageT>(
                         lut, future_axis, filter, spawned, moved.first, ref,
                         BCDirectionMask::Horizontal, options.solve,
-                        workspace.canonical2_boards, workspace.canonical2_refs,
-                        batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                        workspace.canonical2_boards, workspace.canonical2_refs);
                     bc_single_chunk_push_candidate<StorageT>(
                         lut, future_axis, filter, spawned, moved.second, ref,
                         BCDirectionMask::Horizontal, options.solve,
-                        workspace.canonical2_boards, workspace.canonical2_refs,
-                        batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                        workspace.canonical2_boards, workspace.canonical2_refs);
                 }
                 if (bc_has_vertical(options.solve.directions)) {
-                    batch_selective_move_calls += 2U;
                     const auto moved = BoardMover::move_vertical_pair(spawned);
                     bc_single_chunk_push_candidate<StorageT>(
                         lut, future_axis, filter, spawned, moved.first, ref,
                         BCDirectionMask::Vertical, options.solve,
-                        workspace.canonical2_boards, workspace.canonical2_refs,
-                        batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                        workspace.canonical2_boards, workspace.canonical2_refs);
                     bc_single_chunk_push_candidate<StorageT>(
                         lut, future_axis, filter, spawned, moved.second, ref,
                         BCDirectionMask::Vertical, options.solve,
-                        workspace.canonical2_boards, workspace.canonical2_refs,
-                        batch_unchanged_moves, batch_prefilter_checks, batch_prefilter_skips);
+                        workspace.canonical2_boards, workspace.canonical2_refs);
                 }
             }
         }
     }
 
     if (!workspace.canonical2_boards.empty()) {
-        ++stats.edge.canonical_flushes;
         CanonicalBatch::canonicalize_inplace(
             workspace.canonical2_boards.data(),
             workspace.canonical2_boards.size(),
             options.solve.edge_options.canonical_symm_mode
         );
-        stats.edge.canonicalized_candidates += workspace.canonical2_boards.size();
         const BCSolvePreparedQueryEncoder encoder(
             lut,
             future_axis,
@@ -1640,26 +1557,13 @@ void bc_single_chunk_solve_weighted_phase_batch(
                 query
             );
             if (!encoded) {
-                ++stats.edge.encode_rejects;
                 continue;
             }
             workspace.queries2.push_back(query);
-            ++stats.edge.encoded_queries;
         }
         workspace.canonical2_boards.clear();
         workspace.canonical2_refs.clear();
     }
-    if constexpr (phase2) {
-        stats.edge.source_boards += count;
-        stats.edge.terminal_success_boards += batch_terminal_success;
-        stats.edge.empty_slots += batch_empty_slots;
-        stats.edge.spawned_boards += batch_spawned_boards;
-    }
-    stats.edge.move_all_dir_calls += batch_move_all_dir_calls;
-    stats.edge.selective_move_calls += batch_selective_move_calls;
-    stats.edge.unchanged_moves += batch_unchanged_moves;
-    stats.edge.prefilter_checks += batch_prefilter_checks;
-    stats.edge.prefilter_skips += batch_prefilter_skips;
 
     for (uint32_t lane = 0U; lane < options.solve.row_width; ++lane) {
         std::fill_n(
@@ -1672,12 +1576,9 @@ void bc_single_chunk_solve_weighted_phase_batch(
             workspace.best2.data(),
             static_cast<size_t>(count) * kBCBoardCellCount,
             lane,
-            &stats.edge,
+            nullptr,
             true
         );
-        if constexpr (phase2) {
-            stats.edge.finalized_boards += lane == 0U ? count : 0U;
-        }
         for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
             const uint64_t row_index = workspace.output_indices[board_slot];
             const uint64_t value_index =
@@ -1842,10 +1743,6 @@ void bc_single_chunk_solve_weighted_phase_for_current_cells(
                         workspace.boards[workspace.count] = entry.board;
                         workspace.output_indices[workspace.count] = cell_base + entry.local_success_row;
                         ++workspace.count;
-                        if (phase == BCSingleChunkSolvePhase::Spawn2) {
-                            ++thread_stats.current_rows;
-                            ++thread_stats.current_boards;
-                        }
                         if (workspace.count == BCResidentBatchWorkspace<StorageT>::kBatchSize) {
                             flush();
                         }
@@ -1856,9 +1753,20 @@ void bc_single_chunk_solve_weighted_phase_for_current_cells(
         flush();
     }
     stats.recalc_seconds += bc_single_chunk_now_seconds() - t0;
+    if (phase == BCSingleChunkSolvePhase::Spawn2) {
+        const uint64_t rows = cell_offsets.back();
+        stats.current_rows = bc_checked_add_u64(
+            stats.current_rows,
+            rows,
+            "BC single chunk weighted current row count overflow"
+        );
+        stats.current_boards = bc_checked_add_u64(
+            stats.current_boards,
+            rows,
+            "BC single chunk weighted current board count overflow"
+        );
+    }
     for (const BCSingleChunkSolveStats &thread_stats : per_thread) {
-        stats.current_rows += thread_stats.current_rows;
-        stats.current_boards += thread_stats.current_boards;
         bc_resident_solve_accumulate_edge_stats(stats.edge, thread_stats.edge);
     }
 }
