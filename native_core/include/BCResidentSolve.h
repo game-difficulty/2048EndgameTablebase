@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -90,8 +91,100 @@ struct BCResidentArchivePruneResult {
 };
 
 template <typename StorageT>
+class BCResidentRawValueBuffer {
+public:
+    BCResidentRawValueBuffer() = default;
+    explicit BCResidentRawValueBuffer(size_t size) {
+        resize_uninitialized(size);
+    }
+
+    BCResidentRawValueBuffer(const BCResidentRawValueBuffer &) = delete;
+    BCResidentRawValueBuffer &operator=(const BCResidentRawValueBuffer &) = delete;
+    BCResidentRawValueBuffer(BCResidentRawValueBuffer &&) noexcept = default;
+    BCResidentRawValueBuffer &operator=(BCResidentRawValueBuffer &&) noexcept = default;
+
+    BCResidentRawValueBuffer &operator=(std::vector<StorageT> &&values) {
+        resize_uninitialized(values.size());
+        if (!values.empty()) {
+            std::memcpy(data(), values.data(), values.size() * sizeof(StorageT));
+        }
+        return *this;
+    }
+
+    [[nodiscard]] size_t size() const noexcept {
+        return size_;
+    }
+
+    [[nodiscard]] size_t capacity() const noexcept {
+        return capacity_;
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return size_ == 0U;
+    }
+
+    [[nodiscard]] StorageT *data() noexcept {
+        return values_.get();
+    }
+
+    [[nodiscard]] const StorageT *data() const noexcept {
+        return values_.get();
+    }
+
+    [[nodiscard]] StorageT *begin() noexcept {
+        return data();
+    }
+
+    [[nodiscard]] const StorageT *begin() const noexcept {
+        return data();
+    }
+
+    [[nodiscard]] StorageT *end() noexcept {
+        return size_ == 0U ? data() : data() + size_;
+    }
+
+    [[nodiscard]] const StorageT *end() const noexcept {
+        return size_ == 0U ? data() : data() + size_;
+    }
+
+    [[nodiscard]] StorageT &operator[](size_t index) noexcept {
+        return values_[index];
+    }
+
+    [[nodiscard]] const StorageT &operator[](size_t index) const noexcept {
+        return values_[index];
+    }
+
+    void resize_uninitialized(size_t size) {
+        if (size > capacity_) {
+            values_.reset(size == 0U ? nullptr : new StorageT[size]);
+            capacity_ = size;
+        }
+        size_ = size;
+    }
+
+    void resize(size_t size) {
+        if (size > capacity_) {
+            throw std::invalid_argument("BC resident raw value buffer cannot grow with resize()");
+        }
+        size_ = size;
+    }
+
+    void reset() noexcept {
+        values_.reset();
+        size_ = 0U;
+        capacity_ = 0U;
+    }
+
+private:
+    std::unique_ptr<StorageT[]> values_;
+    size_t size_ = 0U;
+    size_t capacity_ = 0U;
+};
+
+template <typename StorageT>
 struct BCResidentRawSolveResult {
-    std::vector<StorageT> values;
+    BCResidentRawValueBuffer<StorageT> values;
     std::vector<uint64_t> cell_value_offsets;
     BCResidentSolveStats stats;
 };
@@ -488,13 +581,13 @@ struct BCResidentBatchWorkspace {
     static constexpr uint32_t kBatchSize = 512U;
     static constexpr size_t kBestCount = static_cast<size_t>(kBatchSize) * kBCBoardCellCount;
 
-    std::array<uint64_t, kBatchSize> boards{};
-    std::array<uint64_t, kBatchSize> output_indices{};
-    std::array<uint16_t, kBatchSize> empty_masks{};
-    std::array<uint8_t, kBatchSize> terminal{};
-    std::array<uint32_t, kBatchSize> empty_counts{};
-    std::array<StorageT, kBestCount> best2{};
-    std::array<StorageT, kBestCount> best4{};
+    std::array<uint64_t, kBatchSize> boards;
+    std::array<uint64_t, kBatchSize> output_indices;
+    std::array<uint16_t, kBatchSize> empty_masks;
+    std::array<uint8_t, kBatchSize> terminal;
+    std::array<uint32_t, kBatchSize> empty_counts;
+    std::array<StorageT, kBestCount> best2;
+    std::array<StorageT, kBestCount> best4;
     std::vector<uint64_t> canonical2_boards;
     std::vector<uint64_t> canonical4_boards;
     std::vector<uint16_t> canonical2_refs;
@@ -620,10 +713,10 @@ inline void bc_resident_flush_canonical(
     refs.clear();
 }
 
-template <typename StorageT>
+template <typename StorageT, typename OutValuesT>
 inline void bc_resident_solve_batch(
     BCResidentBatchWorkspace<StorageT> &workspace,
-    std::vector<StorageT> &out_values,
+    OutValuesT &out_values,
     const BCLut &lut,
     const BCFamilyTable &future2_axis,
     const BCFamilyTable &future4_axis,
@@ -923,10 +1016,7 @@ inline BCResidentRawSolveResult<StorageT> bc_resident_solve_raw_values(
     }
     BCResidentRawSolveResult<StorageT> result;
     result.cell_value_offsets = bc_resident_cell_value_offsets(current_position);
-    result.values.assign(
-        static_cast<size_t>(current_rows * options.row_width),
-        options.zero_value
-    );
+    result.values.resize_uninitialized(static_cast<size_t>(current_rows * options.row_width));
     const BCResidentSolveWorkPlan work_plan =
         bc_resident_build_solve_work_plan(current_position, options.row_width);
 
@@ -1401,11 +1491,11 @@ inline void bc_resident_compact_cell(
     }
 }
 
-template <typename StorageT, typename KeepRowFn>
+template <typename StorageT, typename RawValuesT, typename KeepRowFn>
 inline void bc_resident_compact_cell_in_place_if(
     const BCPositionLayerReader &position,
     CellId cid,
-    std::vector<StorageT> &raw_values,
+    RawValuesT &raw_values,
     uint64_t cell_value_offset,
     uint32_t row_width,
     FinalizedCellPayload &payload,
@@ -1520,11 +1610,11 @@ inline void bc_resident_compact_cell_in_place_if(
     }
 }
 
-template <typename StorageT>
+template <typename StorageT, typename RawValuesT>
 inline void bc_resident_compact_zero_cell_in_place(
     const BCPositionLayerReader &position,
     CellId cid,
-    std::vector<StorageT> &raw_values,
+    RawValuesT &raw_values,
     uint64_t cell_value_offset,
     uint32_t row_width,
     StorageT zero_value,
@@ -1570,23 +1660,19 @@ inline void bc_resident_compact_zero_cell_in_place(
             if (payload_end > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
                 throw std::overflow_error("BC resident compact rank payload exceeds uint32");
             }
-            payload.rank_payload.resize(static_cast<size_t>(payload_end), 0U);
 
             uint32_t bucket_seen = 0U;
             uint32_t bucket_kept = 0U;
             uint32_t prefix_running = 0U;
+            std::vector<uint64_t> keep_words;
+            keep_words.reserve(word_count);
             const uint8_t *bitmap_words = rank_payload.data + bitmap_offset;
             for (uint32_t word_i = 0U; word_i < word_count; ++word_i) {
                 if ((word_i & 3U) == 0U) {
                     if (prefix_running > std::numeric_limits<RankPrefix>::max()) {
                         throw std::logic_error("BC resident compact prefix running popcount exceeds uint16");
                     }
-                    bc_resident_store_u16_le(
-                        payload.rank_payload.data() +
-                            static_cast<size_t>(rank_payload_offset) +
-                            static_cast<size_t>(word_i / 4U) * sizeof(RankPrefix),
-                        static_cast<RankPrefix>(prefix_running)
-                    );
+                    bc_resident_append_u16_le(payload.rank_payload, static_cast<RankPrefix>(prefix_running));
                 }
                 uint64_t word = load_u64_le(bitmap_words + static_cast<size_t>(word_i) * sizeof(uint64_t));
                 if (word_i + 1U == word_count && (bitmap_len & 63U) != 0U) {
@@ -1620,17 +1706,23 @@ inline void bc_resident_compact_zero_cell_in_place(
                     ++bucket_seen;
                     word &= word - 1ULL;
                 }
-                bc_resident_store_u64_le(
-                    payload.rank_payload.data() +
-                        static_cast<size_t>(out_bitmap_offset) +
-                        static_cast<size_t>(word_i) * sizeof(uint64_t),
-                    keep_word
-                );
+                keep_words.push_back(keep_word);
                 prefix_running += popcount64(keep_word);
             }
             if (bucket_kept == 0U) {
                 payload.rank_payload.resize(payload_start);
                 continue;
+            }
+            if (payload.rank_payload.size() > out_bitmap_offset) {
+                throw std::logic_error("BC resident compact prefix exceeded bitmap offset");
+            }
+            bc_resident_append_padding(
+                payload.rank_payload,
+                out_bitmap_offset - static_cast<uint32_t>(payload.rank_payload.size())
+            );
+            bc_resident_append_bitmap_le(payload.rank_payload, keep_words.data(), word_count);
+            if (payload.rank_payload.size() != payload_end) {
+                throw std::logic_error("BC resident compact rank payload size mismatch");
             }
             if (bucket_success_offset > std::numeric_limits<uint32_t>::max()) {
                 throw std::overflow_error("BC resident in-place compact success row offset exceeds uint32");
@@ -1851,9 +1943,11 @@ inline BCResidentSolvedLayer<StorageT> bc_resident_compact_zero_in_place(
     const uint64_t compact_value_count =
         out.compact_stats.live_rows * static_cast<uint64_t>(row_width);
     raw.values.resize(static_cast<size_t>(compact_value_count));
-    if (raw.values.capacity() != raw.values.size()) {
-        std::vector<StorageT>(raw.values.begin(), raw.values.end()).swap(raw.values);
+    std::vector<StorageT> compact_values;
+    if (!raw.values.empty()) {
+        compact_values.assign(raw.values.begin(), raw.values.end());
     }
+    raw.values.reset();
     raw.cell_value_offsets.clear();
     raw.cell_value_offsets.shrink_to_fit();
 
@@ -1862,8 +1956,8 @@ inline BCResidentSolvedLayer<StorageT> bc_resident_compact_zero_in_place(
     out.compact_stats.position_bytes = position_bytes.size();
     out.compact_stats.success_bytes =
         kBCSuccessHeaderBytes +
-        static_cast<uint64_t>(raw.values.size()) * bc_success_dtype_value_size(dtype);
-    out.open(std::move(position_bytes), std::move(raw.values), lut, row_width, dtype);
+        static_cast<uint64_t>(compact_values.size()) * bc_success_dtype_value_size(dtype);
+    out.open(std::move(position_bytes), std::move(compact_values), lut, row_width, dtype);
     out.compact_stats.compact_seconds = bc_resident_solve_now_seconds() - compact_t0;
     return out;
 }

@@ -1934,23 +1934,19 @@ void bc_single_chunk_compact_loaded_cell_in_place(
         if (payload_end > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
             throw std::overflow_error("BC single chunk compact rank payload exceeds uint32");
         }
-        payload.rank_payload.resize(static_cast<size_t>(payload_end), 0U);
 
         uint32_t bucket_seen = 0U;
         uint32_t bucket_kept = 0U;
         uint32_t prefix_running = 0U;
+        std::vector<uint64_t> keep_words;
+        keep_words.reserve(word_count);
         const uint8_t *bitmap_words = view.rank_payload.data + bitmap_offset;
         for (uint32_t word_i = 0U; word_i < word_count; ++word_i) {
             if ((word_i & 3U) == 0U) {
                 if (prefix_running > std::numeric_limits<RankPrefix>::max()) {
                     throw std::logic_error("BC single chunk compact prefix exceeds uint16");
                 }
-                bc_resident_store_u16_le(
-                    payload.rank_payload.data() +
-                        static_cast<size_t>(rank_payload_offset) +
-                        static_cast<size_t>(word_i / 4U) * sizeof(RankPrefix),
-                    static_cast<RankPrefix>(prefix_running)
-                );
+                bc_resident_append_u16_le(payload.rank_payload, static_cast<RankPrefix>(prefix_running));
             }
             uint64_t word = load_u64_le(
                 bitmap_words + static_cast<size_t>(word_i) * sizeof(uint64_t)
@@ -2007,17 +2003,23 @@ void bc_single_chunk_compact_loaded_cell_in_place(
                 ++bucket_seen;
                 word &= word - 1ULL;
             }
-            bc_resident_store_u64_le(
-                payload.rank_payload.data() +
-                    static_cast<size_t>(out_bitmap_offset) +
-                    static_cast<size_t>(word_i) * sizeof(uint64_t),
-                keep_word
-            );
+            keep_words.push_back(keep_word);
             prefix_running += popcount64(keep_word);
         }
         if (bucket_kept == 0U) {
             payload.rank_payload.resize(payload_start);
             continue;
+        }
+        if (payload.rank_payload.size() > out_bitmap_offset) {
+            throw std::logic_error("BC single chunk compact prefix exceeded bitmap offset");
+        }
+        bc_resident_append_padding(
+            payload.rank_payload,
+            out_bitmap_offset - static_cast<uint32_t>(payload.rank_payload.size())
+        );
+        bc_resident_append_bitmap_le(payload.rank_payload, keep_words.data(), word_count);
+        if (payload.rank_payload.size() != payload_end) {
+            throw std::logic_error("BC single chunk compact rank payload size mismatch");
         }
         if (bucket_success_offset > std::numeric_limits<uint32_t>::max()) {
             throw std::overflow_error(

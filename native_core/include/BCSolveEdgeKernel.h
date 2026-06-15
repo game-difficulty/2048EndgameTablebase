@@ -102,8 +102,8 @@ struct BCSolveEdgeWorkspace {
     std::vector<BCSolveCanonicalCandidate> canonical4;
     std::vector<BCSolvePreparedQuery> queries2;
     std::vector<BCSolvePreparedQuery> queries4;
-    std::array<StorageT, kBCBoardCellCount> best2{};
-    std::array<StorageT, kBCBoardCellCount> best4{};
+    std::array<StorageT, kBCBoardCellCount> best2;
+    std::array<StorageT, kBCBoardCellCount> best4;
 
     void clear_queries() {
         canonical2.clear();
