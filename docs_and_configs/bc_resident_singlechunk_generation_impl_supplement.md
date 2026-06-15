@@ -177,8 +177,10 @@ single_est   = L * 1.2 + D
 family_est   = 0.25 GiB + 12 * L / modulus
 ```
 
-Supported family moduli are hard-coded primes from `13` through `293`. If no
-prime fits the budget, choose `293` and continue.
+Supported family moduli are hard-coded primes from `13` through `251`. The max
+prime intentionally stays below `256`, so solve-time physical cell ids still fit
+the 16-bit prepared query layout. If no prime fits the budget, choose `251` and
+continue.
 
 Modulus sticky rule:
 

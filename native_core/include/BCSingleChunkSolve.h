@@ -799,7 +799,7 @@ inline void bc_single_chunk_mark_query_cids(
     std::vector<CellId> &out
 ) {
     for (const BCSolvePreparedQuery &query : queries) {
-        if (!query.valid || query.cid >= mark.size()) {
+        if (query.cid >= mark.size()) {
             continue;
         }
         uint8_t &slot = mark[static_cast<size_t>(query.cid)];

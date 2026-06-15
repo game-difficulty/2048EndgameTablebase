@@ -1141,8 +1141,8 @@ Args parse_args(int argc, char **argv) {
     if (args.pattern != "free9") {
         throw std::invalid_argument("bc_single_chunk_generation_bench currently supports --pattern free9 only");
     }
-    if (args.cell_modulus == 0U || args.cell_modulus > std::numeric_limits<BC::FamilyId>::max()) {
-        throw std::invalid_argument("--cell-modulus must be in 1..65535");
+    if (args.cell_modulus == 0U || args.cell_modulus > 256U) {
+        throw std::invalid_argument("--cell-modulus must be in 1..256");
     }
     if (args.target_rank >= 31U) {
         throw std::invalid_argument("--target-rank is too large");

@@ -546,7 +546,7 @@ struct FamilyRoutePlannerState {
     }
     if (script_entry != nullptr && script_entry->target_modulus != 0U) {
         if (!BC::bc_family_route_is_supported_prime(script_entry->target_modulus)) {
-            throw std::invalid_argument("--family-route-script target_modulus must be a supported prime in 13..293");
+            throw std::invalid_argument("--family-route-script target_modulus must be a supported prime in 13..251");
         }
         decision.target_modulus = script_entry->target_modulus;
         decision.family_estimated_peak_bytes =
@@ -2667,6 +2667,9 @@ Args parse_args(int argc, char **argv) {
         args.family_source_words_per_item == 0U || args.family_modulus == 0U ||
         args.direct_queue_depth == 0U) {
         throw std::invalid_argument("family benchmark numeric options must be non-zero");
+    }
+    if (!BC::bc_family_route_is_supported_prime(args.family_modulus)) {
+        throw std::invalid_argument("--family-modulus must be a supported prime in 13..251");
     }
     if (args.family_blob != "buffered" && args.family_blob != "direct") {
         throw std::invalid_argument("--family-blob must be buffered or direct");

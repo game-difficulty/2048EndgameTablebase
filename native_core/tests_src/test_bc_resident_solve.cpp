@@ -601,12 +601,9 @@ void run_direct_lookup_case(BCSuccessDTypeMode dtype) {
         );
         check(encoded.valid, "stored board should encode for query lookup");
         BC::BCSolvePreparedQuery query;
-        query.cid = encoded.cid;
+        query.cid = static_cast<uint16_t>(encoded.cid);
         query.key = encoded.key;
         query.rank = encoded.rank;
-        query.bitmap_len = encoded.bitmap_len;
-        query.spawn_tile_rank = 1U;
-        query.valid = true;
         const BC::BCSolveLookupResult<T> query_result = lookup.lookup(query, 1U);
         check(query_result.found, "future query lookup should find stored board");
         check_value_close<T>(query_result.value, lanes[1], "future query value mismatch");

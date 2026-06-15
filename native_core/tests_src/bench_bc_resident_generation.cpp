@@ -660,8 +660,8 @@ Args parse_args(int argc, char **argv) {
     if (args.batch_size == 0U || args.pending_buffer == 0U) {
         throw std::invalid_argument("--batch-size and --pending-buffer must be non-zero");
     }
-    if (args.cell_modulus == 0U || args.cell_modulus > std::numeric_limits<BC::FamilyId>::max()) {
-        throw std::invalid_argument("--cell-modulus must be in 1..65535");
+    if (args.cell_modulus == 0U || args.cell_modulus > 256U) {
+        throw std::invalid_argument("--cell-modulus must be in 1..256");
     }
     return args;
 }

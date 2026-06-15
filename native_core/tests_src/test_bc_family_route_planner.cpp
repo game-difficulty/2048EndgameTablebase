@@ -58,9 +58,21 @@ void test_family_modulus_selection() {
         "family modulus should choose smallest satisfying prime"
     );
     check(
-        BC::bc_choose_family_modulus(largest, 0U) == 293U,
-        "family modulus should fall back to 293 when no prime fits"
+        BC::bc_choose_family_modulus(largest, 0U) == BC::kBCFamilyRouteMaxPrime,
+        "family modulus should fall back to max supported prime when no prime fits"
     );
+}
+
+void test_family_prime_table_stays_below_256() {
+    uint32_t count = 0U;
+    const uint32_t *primes = BC::bc_family_route_primes(count);
+    check(count != 0U, "family route prime table should not be empty");
+    check(primes[count - 1U] == BC::kBCFamilyRouteMaxPrime, "family route max prime mismatch");
+    for (uint32_t i = 0U; i < count; ++i) {
+        check(primes[i] < 256U, "family route prime should stay below 256");
+    }
+    check(BC::bc_family_route_is_supported_prime(251U), "251 should remain supported");
+    check(!BC::bc_family_route_is_supported_prime(257U), "257 should not be supported");
 }
 
 void test_previous_modulus_sticky_band() {
@@ -151,6 +163,7 @@ int main() {
     try {
         test_explicit_routes_use_requested_estimates();
         test_family_modulus_selection();
+        test_family_prime_table_stays_below_256();
         test_previous_modulus_sticky_band();
         test_auto_upgrade_requires_two_layers();
         test_auto_downgrade_is_immediate();

@@ -26,14 +26,13 @@ using BCQuadrantWordSumTable = std::vector<uint32_t>;
 
 struct BCSolvePreparedQuery {
     uint64_t key = 0U;
-    CellId cid = 0U;
+    uint16_t cid = 0U;
     BucketRank rank = 0U;
-    BucketBitmapLen bitmap_len = 0U;
     uint16_t ref = 0U;
-    uint8_t spawn_tile_rank = 0U;
-    BCDirectionMask move_axis = BCDirectionMask::None;
-    bool valid = false;
+    uint16_t reserved = 0U;
 };
+
+static_assert(sizeof(BCSolvePreparedQuery) == 16U, "BC solve prepared query should stay 16 bytes");
 
 template <typename StorageT>
 struct BCSolveLookupResult {
@@ -260,6 +259,10 @@ struct BCSolvePreparedQueryEncoder {
         if (cell_modulus != 0U && cell_modulus > std::numeric_limits<FamilyCoord>::max()) {
             throw std::invalid_argument("BC solve future cell modulus exceeds FamilyCoord");
         }
+        if (static_cast<uint64_t>(family_count) * static_cast<uint64_t>(family_count) >
+            static_cast<uint64_t>(std::numeric_limits<uint16_t>::max()) + 1ULL) {
+            throw std::invalid_argument("BC solve prepared query requires <= 65536 future cells");
+        }
     }
 
     [[nodiscard]] bool encode(
@@ -269,6 +272,8 @@ struct BCSolvePreparedQueryEncoder {
         BCDirectionMask move_axis,
         BCSolvePreparedQuery &out
     ) const {
+        (void)spawn_tile_rank;
+        (void)move_axis;
         const BCWordDesc &nw_desc = lut->word_desc(q.nw);
         const BCWordDesc &ne_desc = lut->word_desc(q.ne);
         const BCWordDesc &sw_desc = lut->word_desc(q.sw);
@@ -362,22 +367,16 @@ struct BCSolvePreparedQueryEncoder {
 
         const uint64_t cid =
             static_cast<uint64_t>(row_id) * family_count + static_cast<uint32_t>(col_id);
-        if (cid > std::numeric_limits<CellId>::max()) {
-            throw std::overflow_error("BC solve encoded cell id exceeds CellId");
-        }
 
         out = BCSolvePreparedQuery{
             (static_cast<uint64_t>(q.nw) << 48U) |
                 (static_cast<uint64_t>(ne_desc.packed_sum_mask) << 32U) |
                 (static_cast<uint64_t>(sw_desc.packed_sum_mask) << 16U) |
                 static_cast<uint64_t>(se_desc.packed_sum_mask),
-            static_cast<CellId>(cid),
+            static_cast<uint16_t>(cid),
             static_cast<BucketRank>(rank),
-            static_cast<BucketBitmapLen>(bitmap_len),
             ref,
-            spawn_tile_rank,
-            move_axis,
-            true
+            0U
         };
         return true;
     }
@@ -787,7 +786,7 @@ StorageT bc_solve_reduce_spawn_phase_partial(
 
     best.fill(zero_value);
     for (const BCSolvePreparedQuery &query : queries) {
-        if (!query.valid || query.ref >= best.size()) {
+        if (query.ref >= best.size()) {
             continue;
         }
         if (stats != nullptr) {
@@ -845,7 +844,7 @@ StorageT bc_solve_reduce_collected_queries(
     auto reduce = [&](const std::vector<BCSolvePreparedQuery> &queries,
                       std::array<StorageT, kBCBoardCellCount> &best) {
         for (const BCSolvePreparedQuery &query : queries) {
-            if (!query.valid || query.ref >= best.size()) {
+            if (query.ref >= best.size()) {
                 continue;
             }
             if (stats != nullptr) {

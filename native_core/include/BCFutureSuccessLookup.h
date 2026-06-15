@@ -477,14 +477,14 @@ public:
         StorageT &value_out
     ) const {
         value_out = StorageT{};
-        if (!query.valid) {
+        if (lut_ == nullptr) {
             return false;
         }
         BCBoardEncodedPosition encoded;
         encoded.cid = query.cid;
         encoded.key = query.key;
         encoded.rank = query.rank;
-        encoded.bitmap_len = query.bitmap_len;
+        encoded.bitmap_len = bitmap_len_from_trusted_key(*lut_, query.key);
         encoded.valid = true;
         return lookup_encoded(encoded, lane, value_out);
     }
@@ -722,7 +722,7 @@ private:
             slots[i] = kMissingValueIndex;
             entries[i] = nullptr;
             if constexpr (!TrustedQueries) {
-                if (!queries[i].valid || queries[i].cid >= cells_.size() || queries[i].bitmap_len == 0U) {
+                if (queries[i].cid >= cells_.size()) {
                     continue;
                 }
             }
@@ -786,7 +786,8 @@ private:
             }
             const DirectEntry &entry = *entries[i];
             if constexpr (!TrustedQueries) {
-                if (queries[i].rank >= queries[i].bitmap_len) {
+                const BucketBitmapLen bitmap_len = bitmap_len_from_trusted_key(*lut_, queries[i].key);
+                if (queries[i].rank >= bitmap_len) {
                     entries[i] = nullptr;
                     continue;
                 }

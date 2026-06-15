@@ -8,6 +8,8 @@
 
 namespace BC {
 
+inline constexpr uint32_t kBCFamilyRouteMaxPrime = 251U;
+
 enum class BCFamilyGenerationRoute {
     Auto,
     Resident,
@@ -124,8 +126,8 @@ inline constexpr uint64_t kBCFamilyRouteGiB = 1024ULL * 1024ULL * 1024ULL;
         53U, 59U, 61U, 67U, 71U, 73U, 79U, 83U, 89U, 97U,
         101U, 103U, 107U, 109U, 113U, 127U, 131U, 137U, 139U, 149U,
         151U, 157U, 163U, 167U, 173U, 179U, 181U, 191U, 193U, 197U,
-        199U, 211U, 223U, 227U, 229U, 233U, 239U, 241U, 251U, 257U,
-        263U, 269U, 271U, 277U, 281U, 283U, 293U
+        199U, 211U, 223U, 227U, 229U, 233U, 239U, 241U,
+        kBCFamilyRouteMaxPrime
     };
     count = static_cast<uint32_t>(sizeof(kPrimes) / sizeof(kPrimes[0]));
     return kPrimes;
@@ -161,7 +163,7 @@ inline constexpr uint64_t kBCFamilyRouteGiB = 1024ULL * 1024ULL * 1024ULL;
             return primes[i];
         }
     }
-    return 293U;
+    return kBCFamilyRouteMaxPrime;
 }
 
 [[nodiscard]] inline bool bc_keep_previous_family_modulus(
@@ -206,7 +208,7 @@ inline constexpr uint64_t kBCFamilyRouteGiB = 1024ULL * 1024ULL * 1024ULL;
     if (!bc_keep_previous_family_modulus(largest, budget, modulus)) {
         modulus = bc_choose_family_modulus(largest, budget);
     }
-    decision.target_modulus = modulus == 0U ? 293U : modulus;
+    decision.target_modulus = modulus == 0U ? kBCFamilyRouteMaxPrime : modulus;
     decision.family_estimated_peak_bytes =
         bc_family_estimate_for_modulus(largest, decision.target_modulus);
 
