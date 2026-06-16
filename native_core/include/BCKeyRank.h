@@ -193,6 +193,7 @@ struct BCBucketRankDecoder {
 
     uint64_t key = 0U;
     uint16_t nw = 0U;
+    uint8_t nw_empty_mask = 0U;
     uint16_t ne_sum_id = 0U;
     uint16_t sw_sum_id = 0U;
     uint16_t se_sum_id = 0U;
@@ -221,9 +222,11 @@ struct BCBucketRankDecoder {
         const uint16_t ne = static_cast<uint16_t>((key >> 32U) & 0xFFFFU);
         const uint16_t sw = static_cast<uint16_t>((key >> 16U) & 0xFFFFU);
         const uint16_t se = static_cast<uint16_t>(key & 0xFFFFU);
-        if (!lut.word_desc(nw).valid) {
+        const BCWordDesc &nw_desc = lut.word_desc(nw);
+        if (!nw_desc.valid) {
             throw std::invalid_argument("BC bucket decoder key has invalid NW exact word");
         }
+        nw_empty_mask = nw_desc.empty_mask;
 
         ne_sum_id = packed_sum_id(ne);
         sw_sum_id = packed_sum_id(sw);

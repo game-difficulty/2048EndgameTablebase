@@ -825,6 +825,7 @@ static void process_source_board_pair(
     BCDynamicState &primary_state,
     BCDynamicState *secondary_state,
     uint64_t board,
+    uint16_t source_empty_mask,
     const BCResidentGenerationOptions &options,
     const BCWordSumTable *word_sums,
     bool skip_success_source
@@ -834,7 +835,7 @@ static void process_source_board_pair(
         bc_is_success_by_shifts(board, options.success_target_rank, *options.success_shifts)) {
         return;
     }
-    uint32_t empty_mask = bc_zero_cell_mask16(board);
+    uint32_t empty_mask = source_empty_mask;
     while (empty_mask != 0U) {
         const uint32_t cell = countr_zero32(empty_mask);
         empty_mask &= empty_mask - 1U;
@@ -889,6 +890,7 @@ static void process_source_board(
     const BCResidentGenerationSource &source,
     BCDynamicState &dynamic_state,
     uint64_t board,
+    uint16_t source_empty_mask,
     const BCResidentGenerationOptions &options,
     const BCWordSumTable *word_sums,
     bool skip_success_source
@@ -898,7 +900,7 @@ static void process_source_board(
         bc_is_success_by_shifts(board, options.success_target_rank, *options.success_shifts)) {
         return;
     }
-    uint32_t empty_mask = bc_zero_cell_mask16(board);
+    uint32_t empty_mask = source_empty_mask;
     while (empty_mask != 0U) {
         const uint32_t cell = countr_zero32(empty_mask);
         empty_mask &= empty_mask - 1U;
@@ -996,8 +998,8 @@ static void for_each_bucket_board(
         bitmap_word_count,
         std::numeric_limits<uint64_t>::max(),
         bucket_seen,
-        [&](BucketRank, uint32_t, uint64_t board) {
-            fn(board);
+        [&](BucketRank, uint32_t, uint64_t board, uint16_t empty_mask) {
+            fn(board, empty_mask);
         }
     );
 }
@@ -1031,7 +1033,7 @@ static void process_source_bucket_pair(
         lut,
         bucket,
         payload,
-        [&](uint64_t board) {
+        [&](uint64_t board, uint16_t empty_mask) {
             process_source_board_pair(
                 primary_workspace,
                 secondary_workspace,
@@ -1041,6 +1043,7 @@ static void process_source_bucket_pair(
                 primary_state,
                 secondary_state,
                 board,
+                empty_mask,
                 options,
                 word_sums,
                 skip_success_source
@@ -1077,7 +1080,7 @@ static void process_loaded_cell_bucket_pair(
         lut,
         bucket,
         view.rank_payload,
-        [&](uint64_t board) {
+        [&](uint64_t board, uint16_t empty_mask) {
             process_source_board_pair(
                 primary_workspace,
                 secondary_workspace,
@@ -1087,6 +1090,7 @@ static void process_loaded_cell_bucket_pair(
                 primary_state,
                 secondary_state,
                 board,
+                empty_mask,
                 options,
                 word_sums,
                 skip_success_source
@@ -1116,7 +1120,7 @@ static void process_loaded_cell_bucket_delta(
         lut,
         bucket,
         view.rank_payload,
-        [&](uint64_t board) {
+        [&](uint64_t board, uint16_t empty_mask) {
             process_source_board(
                 workspace,
                 lut,
@@ -1124,6 +1128,7 @@ static void process_loaded_cell_bucket_delta(
                 source,
                 dynamic_state,
                 board,
+                empty_mask,
                 options,
                 word_sums,
                 skip_success_source
@@ -1202,7 +1207,7 @@ static void process_source_bucket(
         lut,
         bucket,
         payload,
-        [&](uint64_t board) {
+        [&](uint64_t board, uint16_t empty_mask) {
             process_source_board(
                 workspace,
                 lut,
@@ -1210,6 +1215,7 @@ static void process_source_bucket(
                 source,
                 dynamic_state,
                 board,
+                empty_mask,
                 options,
                 word_sums,
                 skip_success_source

@@ -1310,6 +1310,7 @@ void process_family_source_board(
     BCDirectionMask directions,
     uint8_t spawn_tile_rank,
     uint64_t board,
+    uint16_t source_empty_mask,
     BCFamilyMutableStore &target_store,
     const BCFamilyGenerationOptions &options,
     bool skip_success_source
@@ -1317,7 +1318,7 @@ void process_family_source_board(
     if (skip_success_source && family_is_success_board(board, options)) {
         return;
     }
-    uint32_t empty_mask = bc_zero_cell_mask16(board);
+    uint32_t empty_mask = source_empty_mask;
     while (empty_mask != 0U) {
         const uint32_t cell = family_countr_zero32(empty_mask);
         empty_mask &= empty_mask - 1U;
@@ -1751,6 +1752,7 @@ void process_family_source_bucket_words(
         throw std::out_of_range("BC Family generation source range bitmap exceeds rank payload");
     }
     const uint8_t *bitmap_words = view.rank_payload.data + bitmap_offset;
+    const uint16_t bucket_empty_mask = bc_bucket_empty_mask16(decoder.rank_decoder);
 
     const auto emit_rank = [&](uint32_t rank_u32, uint64_t board) {
         if (rank_u32 >= bitmap_len || rank_u32 > std::numeric_limits<BucketRank>::max()) {
@@ -1764,6 +1766,7 @@ void process_family_source_bucket_words(
             directions,
             spawn_tile_rank,
             board,
+            bucket_empty_mask,
             target_store,
             options,
             skip_success_source

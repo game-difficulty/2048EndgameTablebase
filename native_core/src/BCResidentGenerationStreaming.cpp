@@ -512,6 +512,7 @@ void process_source_board(
     const BCResidentGenerationSource &source,
     BCDynamicState &dynamic_state,
     uint64_t board,
+    uint16_t source_empty_mask,
     const BCResidentGenerationOptions &options,
     const BCWordSumTable *word_sums,
     bool skip_success_source
@@ -521,7 +522,7 @@ void process_source_board(
         bc_is_success_by_shifts(board, options.success_target_rank, *options.success_shifts)) {
         return;
     }
-    uint32_t empty_mask = bc_zero_cell_mask16(board);
+    uint32_t empty_mask = source_empty_mask;
     while (empty_mask != 0U) {
         const uint32_t cell = countr_zero32(empty_mask);
         empty_mask &= empty_mask - 1U;
@@ -615,6 +616,7 @@ void run_streaming_source_phase(
                                 board_source,
                                 dynamic_state,
                                 entry.board,
+                                entry.empty_mask,
                                 options,
                                 word_sums,
                                 skip_success_source

@@ -28,6 +28,7 @@ struct BCScannedBoardEntry {
     BucketRank rank = 0U;
     uint32_t local_success_row = 0U;
     uint64_t board = 0U;
+    uint16_t empty_mask = 0U;
 };
 
 [[nodiscard]] inline uint32_t bc_scanner_countr_zero64(uint64_t value) {
@@ -73,6 +74,7 @@ inline void bc_scan_bucket_board_se_blocks(
     }
 
     const uint32_t count_se = decoder.rank_decoder.count_se;
+    const uint16_t bucket_empty_mask = bc_bucket_empty_mask16(decoder.rank_decoder);
     const uint32_t rank_begin = word_begin * kBCBitmapWordBits;
     const uint64_t raw_rank_end =
         static_cast<uint64_t>(word_end) * static_cast<uint64_t>(kBCBitmapWordBits);
@@ -124,7 +126,8 @@ inline void bc_scan_bucket_board_se_blocks(
                 emit(
                     static_cast<BucketRank>(rank_u32),
                     static_cast<uint32_t>(local_row),
-                    decoder.board_from_base_and_se(base_bits, rank_se + bit)
+                    decoder.board_from_base_and_se(base_bits, rank_se + bit),
+                    bucket_empty_mask
                 );
                 ++bucket_seen;
                 word &= word - 1U;
@@ -319,8 +322,8 @@ private:
                 bitmap_word_count,
                 desc.success_rows,
                 bucket_seen,
-                [&](BucketRank rank, uint32_t local_row, uint64_t board) {
-                    fn(BCScannedBoardEntry{bucket.key, rank, local_row, board});
+                [&](BucketRank rank, uint32_t local_row, uint64_t board, uint16_t empty_mask) {
+                    fn(BCScannedBoardEntry{bucket.key, rank, local_row, board, empty_mask});
                     ++total_seen;
                     if (total_seen > desc.success_rows) {
                         throw std::out_of_range("BC position scanner emitted too many rows");
@@ -406,8 +409,8 @@ private:
             effective_word_end,
             desc.success_rows,
             bucket_seen,
-            [&](BucketRank rank, uint32_t local_row, uint64_t board) {
-                fn(BCScannedBoardEntry{bucket.key, rank, local_row, board});
+            [&](BucketRank rank, uint32_t local_row, uint64_t board, uint16_t empty_mask) {
+                fn(BCScannedBoardEntry{bucket.key, rank, local_row, board, empty_mask});
             }
         );
     }

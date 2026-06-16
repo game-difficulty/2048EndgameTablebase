@@ -551,6 +551,104 @@ public:
         return 0U;
     }
 
+    template <typename SumT>
+    // Queries must be grouped by ref. Each group contributes
+    // max(found values) - zero_value to sums[ref >> 4]; callers initialize
+    // each sum with empty_count * zero_value when zero is not numeric 0.
+    [[nodiscard]] uint64_t reduce_grouped_query_sums(
+        const std::vector<BCSolvePreparedQuery> &queries,
+        SumT *sums,
+        size_t sum_count,
+        uint32_t lane,
+        StorageT zero_value,
+        bool trusted_queries = false
+    ) const {
+        static_assert(
+            std::is_arithmetic_v<SumT>,
+            "BC future grouped query sums require arithmetic output"
+        );
+        if (lane >= row_width_) {
+            throw std::out_of_range("BC future grouped batch lookup lane out of range");
+        }
+        if (sum_count != 0U && sums == nullptr) {
+            throw std::invalid_argument("BC future grouped batch lookup sums pointer is null");
+        }
+        constexpr uint32_t kBatch = 512U;
+        uint32_t value_indices[kBatch];
+        uint32_t current_ref = std::numeric_limits<uint32_t>::max();
+        StorageT current_best = zero_value;
+        bool current_found = false;
+        uint64_t found_count = 0U;
+        const uint64_t ref_limit =
+            std::min<uint64_t>(
+                static_cast<uint64_t>(std::numeric_limits<uint16_t>::max()) + 1ULL,
+                static_cast<uint64_t>(sum_count) * static_cast<uint64_t>(kBCBoardCellCount)
+            );
+
+        auto flush_group = [&]() {
+            if (!current_found) {
+                return;
+            }
+            const size_t sum_index = static_cast<size_t>(current_ref >> 4U);
+            if (sum_index < sum_count) {
+                sums[sum_index] +=
+                    static_cast<SumT>(current_best) - static_cast<SumT>(zero_value);
+            }
+        };
+
+        for (uint32_t base = 0U; base < static_cast<uint32_t>(queries.size()); base += kBatch) {
+            const uint32_t count = std::min<uint32_t>(kBatch, static_cast<uint32_t>(queries.size()) - base);
+            if (trusted_queries) {
+                if (keep_rows_ == nullptr) {
+                    lookup_success_indices<true, false>(queries.data() + base, value_indices, count, lane);
+                } else {
+                    lookup_success_indices<true, true>(queries.data() + base, value_indices, count, lane);
+                }
+            } else {
+                if (keep_rows_ == nullptr) {
+                    lookup_success_indices<false, false>(queries.data() + base, value_indices, count, lane);
+                } else {
+                    lookup_success_indices<false, true>(queries.data() + base, value_indices, count, lane);
+                }
+            }
+            for (uint32_t i = 0U; i < count; ++i) {
+                if (value_indices[i] == kMissingValueIndex) {
+                    continue;
+                }
+                const BCSolvePreparedQuery &query = queries[static_cast<size_t>(base) + i];
+                if (static_cast<uint64_t>(query.ref) >= ref_limit) {
+                    continue;
+                }
+#if defined(__GNUC__) || defined(__clang__)
+                __builtin_prefetch(value_data_ + value_indices[i], 0, 1);
+#endif
+            }
+            for (uint32_t i = 0U; i < count; ++i) {
+                if (value_indices[i] == kMissingValueIndex) {
+                    continue;
+                }
+                const BCSolvePreparedQuery &query = queries[static_cast<size_t>(base) + i];
+                if (static_cast<uint64_t>(query.ref) >= ref_limit) {
+                    continue;
+                }
+                if (query.ref != current_ref) {
+                    flush_group();
+                    current_ref = query.ref;
+                    current_best = zero_value;
+                    current_found = false;
+                }
+                const StorageT value = value_data_[value_indices[i]];
+                if (!current_found || value > current_best) {
+                    current_best = value;
+                    current_found = true;
+                }
+                ++found_count;
+            }
+        }
+        flush_group();
+        return found_count;
+    }
+
 private:
     static constexpr uint32_t kEmptyEntryOffset = std::numeric_limits<uint32_t>::max();
     static constexpr uint32_t kMissingValueIndex = std::numeric_limits<uint32_t>::max();

@@ -146,6 +146,41 @@ inline constexpr uint64_t kBCBoardTileMask = 0xFULL;
            pack_se_quadrant_to_board_bits(q.se);
 }
 
+[[nodiscard]] inline uint16_t bc_quadrant_empty_masks_to_board_mask16(
+    uint8_t nw_empty_mask,
+    uint8_t ne_empty_mask,
+    uint8_t sw_empty_mask,
+    uint8_t se_empty_mask
+) noexcept {
+    return static_cast<uint16_t>(
+        (((nw_empty_mask >> 0U) & 1U) << 15U) |
+        (((nw_empty_mask >> 1U) & 1U) << 14U) |
+        (((nw_empty_mask >> 2U) & 1U) << 11U) |
+        (((nw_empty_mask >> 3U) & 1U) << 10U) |
+        (((ne_empty_mask >> 0U) & 1U) << 13U) |
+        (((ne_empty_mask >> 1U) & 1U) << 12U) |
+        (((ne_empty_mask >> 2U) & 1U) << 9U) |
+        (((ne_empty_mask >> 3U) & 1U) << 8U) |
+        (((sw_empty_mask >> 0U) & 1U) << 7U) |
+        (((sw_empty_mask >> 1U) & 1U) << 6U) |
+        (((sw_empty_mask >> 2U) & 1U) << 3U) |
+        (((sw_empty_mask >> 3U) & 1U) << 2U) |
+        (((se_empty_mask >> 0U) & 1U) << 5U) |
+        (((se_empty_mask >> 1U) & 1U) << 4U) |
+        (((se_empty_mask >> 2U) & 1U) << 1U) |
+        (((se_empty_mask >> 3U) & 1U) << 0U)
+    );
+}
+
+[[nodiscard]] inline uint16_t bc_bucket_empty_mask16(const BCBucketRankDecoder &decoder) noexcept {
+    return bc_quadrant_empty_masks_to_board_mask16(
+        decoder.nw_empty_mask,
+        decoder.ne_empty_mask,
+        decoder.sw_empty_mask,
+        decoder.se_empty_mask
+    );
+}
+
 struct BCBucketBoardDecoder {
     BCBucketRankDecoder rank_decoder;
     uint64_t nw_bits = 0U;

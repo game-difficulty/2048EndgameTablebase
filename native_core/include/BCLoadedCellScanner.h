@@ -221,8 +221,8 @@ private:
             effective_word_end,
             cell_.success_rows,
             bucket_seen,
-            [&](BucketRank rank, uint32_t local_row, uint64_t board) {
-                fn(BCScannedBoardEntry{bucket.key, rank, local_row, board});
+            [&](BucketRank rank, uint32_t local_row, uint64_t board, uint16_t empty_mask) {
+                fn(BCScannedBoardEntry{bucket.key, rank, local_row, board, empty_mask});
             }
         );
     }
@@ -335,8 +335,8 @@ private:
                 bitmap_word_count,
                 cell_.success_rows,
                 bucket_seen,
-                [&](BucketRank rank, uint32_t local_row, uint64_t board) {
-                    fn(BCScannedBoardEntry{bucket.key, rank, local_row, board});
+                [&](BucketRank rank, uint32_t local_row, uint64_t board, uint16_t empty_mask) {
+                    fn(BCScannedBoardEntry{bucket.key, rank, local_row, board, empty_mask});
                     ++total_seen;
                     if (total_seen > cell_.success_rows) {
                         throw std::out_of_range("BC loaded cell scanner emitted too many rows");

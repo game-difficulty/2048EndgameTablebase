@@ -1043,20 +1043,19 @@ void bc_single_chunk_solve_phase_batch(
     for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
         const uint64_t board = workspace.boards[board_slot];
         workspace.empty_counts[board_slot] = 0U;
-        workspace.empty_masks[board_slot] = 0U;
         workspace.terminal[board_slot] = 0U;
         if (success_check_enabled &&
             bc_solve_is_success_board(board, options.solve.edge_options)) {
             workspace.terminal[board_slot] = 1U;
             continue;
         }
-        uint32_t empty_mask = bc_zero_cell_mask16(board);
-        workspace.empty_masks[board_slot] = static_cast<uint16_t>(empty_mask);
+        uint32_t empty_mask = workspace.empty_masks[board_slot];
         while (empty_mask != 0U) {
             const uint32_t cell = bc_solve_pop_lowest_set_bit_index(empty_mask);
             const uint16_t ref = static_cast<uint16_t>((board_slot << 4U) | cell);
             ++workspace.empty_counts[board_slot];
-            const uint64_t spawned = set_board_tile_unchecked(board, cell, spawn_rank);
+            const uint64_t spawned =
+                board | (static_cast<uint64_t>(spawn_rank) << (4U * cell));
             if (fast_unfiltered_both) {
                 const auto moved_h = BoardMover::move_horizontal_pair(spawned);
                 const auto moved_v = BoardMover::move_vertical_pair(spawned);
@@ -1142,50 +1141,48 @@ void bc_single_chunk_solve_phase_batch(
     }
 
     for (uint32_t lane = 0U; lane < options.solve.row_width; ++lane) {
-        std::fill_n(
-            workspace.best2.data(),
-            static_cast<size_t>(count) * kBCBoardCellCount,
-            options.solve.zero_value
-        );
-        (void)future_lookup.reduce_max_queries(
-            workspace.queries2,
-            workspace.best2.data(),
-            static_cast<size_t>(count) * kBCBoardCellCount,
-            lane,
-            nullptr,
-            true
-        );
+        if constexpr (std::is_same_v<StorageT, uint32_t>) {
+            std::fill_n(workspace.integer_sum2.data(), count, 0U);
+            (void)future_lookup.reduce_grouped_query_sums(
+                workspace.queries2,
+                workspace.integer_sum2.data(),
+                count,
+                lane,
+                options.solve.zero_value,
+                true
+            );
+        } else {
+            for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
+                workspace.float_sum2[board_slot] =
+                    workspace.empty_counts[board_slot] == 0U
+                        ? 0.0L
+                        : static_cast<long double>(options.solve.zero_value) *
+                            static_cast<long double>(workspace.empty_counts[board_slot]);
+            }
+            (void)future_lookup.reduce_grouped_query_sums(
+                workspace.queries2,
+                workspace.float_sum2.data(),
+                count,
+                lane,
+                options.solve.zero_value,
+                true
+            );
+        }
         if (phase == BCSingleChunkSolvePhase::Spawn4) {
             for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
                 StorageT contribution = options.solve.zero_value;
                 if (workspace.empty_counts[board_slot] != 0U) {
                     if constexpr (std::is_same_v<StorageT, uint32_t>) {
-                        uint64_t integer_sum = 0U;
-                        uint32_t mask = workspace.empty_masks[board_slot];
-                        while (mask != 0U) {
-                            const uint32_t cell = bc_solve_pop_lowest_set_bit_index(mask);
-                            const size_t index =
-                                static_cast<size_t>(board_slot) * kBCBoardCellCount + cell;
-                            integer_sum += static_cast<uint64_t>(workspace.best2[index]);
-                        }
                         contribution = bc_single_chunk_scale_average_contribution<StorageT>(
-                            static_cast<long double>(integer_sum),
+                            static_cast<long double>(workspace.integer_sum2[board_slot]),
                             workspace.empty_counts[board_slot],
                             options.solve.edge_options.spawn_rate4,
                             true,
                             options.solve.zero_value
                         );
                     } else {
-                        long double sum = 0.0L;
-                        uint32_t mask = workspace.empty_masks[board_slot];
-                        while (mask != 0U) {
-                            const uint32_t cell = bc_solve_pop_lowest_set_bit_index(mask);
-                            const size_t index =
-                                static_cast<size_t>(board_slot) * kBCBoardCellCount + cell;
-                            sum += static_cast<long double>(workspace.best2[index]);
-                        }
                         contribution = bc_single_chunk_scale_average_contribution<StorageT>(
-                            sum,
+                            workspace.float_sum2[board_slot],
                             workspace.empty_counts[board_slot],
                             options.solve.edge_options.spawn_rate4,
                             true,
@@ -1217,31 +1214,15 @@ void bc_single_chunk_solve_phase_batch(
             } else if (workspace.empty_counts[board_slot] != 0U) {
                 StorageT contribution = options.solve.zero_value;
                 if constexpr (std::is_same_v<StorageT, uint32_t>) {
-                    uint64_t integer_sum = 0U;
-                    uint32_t mask = workspace.empty_masks[board_slot];
-                    while (mask != 0U) {
-                        const uint32_t cell = bc_solve_pop_lowest_set_bit_index(mask);
-                        const size_t index =
-                            static_cast<size_t>(board_slot) * kBCBoardCellCount + cell;
-                        integer_sum += static_cast<uint64_t>(workspace.best2[index]);
-                    }
                     contribution = bc_single_chunk_scale_average_contribution<StorageT>(
-                            static_cast<long double>(integer_sum),
+                            static_cast<long double>(workspace.integer_sum2[board_slot]),
                             workspace.empty_counts[board_slot],
                             options.solve.edge_options.spawn_rate4,
                             false,
                             options.solve.zero_value);
                 } else {
-                    long double sum2 = 0.0L;
-                    uint32_t mask = workspace.empty_masks[board_slot];
-                    while (mask != 0U) {
-                        const uint32_t cell = bc_solve_pop_lowest_set_bit_index(mask);
-                        const size_t index =
-                            static_cast<size_t>(board_slot) * kBCBoardCellCount + cell;
-                        sum2 += static_cast<long double>(workspace.best2[index]);
-                    }
                     contribution = bc_single_chunk_scale_average_contribution<StorageT>(
-                        sum2,
+                        workspace.float_sum2[board_slot],
                         workspace.empty_counts[board_slot],
                         options.solve.edge_options.spawn_rate4,
                         false,
@@ -1339,6 +1320,7 @@ void bc_single_chunk_solve_phase_for_current_cells(
                     ranged_bucket ? item.word_end : 0U,
                     [&](const BCScannedBoardEntry &entry) {
                         workspace.boards[workspace.count] = entry.board;
+                        workspace.empty_masks[workspace.count] = entry.empty_mask;
                         workspace.output_indices[workspace.count] = cell_base + entry.local_success_row;
                         ++workspace.count;
                         if (workspace.count == BCResidentBatchWorkspace<StorageT>::kBatchSize) {
@@ -1467,20 +1449,19 @@ void bc_single_chunk_solve_weighted_phase_batch(
     for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
         const uint64_t board = workspace.boards[board_slot];
         workspace.empty_counts[board_slot] = 0U;
-        workspace.empty_masks[board_slot] = 0U;
         workspace.terminal[board_slot] = 0U;
         if (success_check_enabled &&
             bc_solve_is_success_board(board, options.solve.edge_options)) {
             workspace.terminal[board_slot] = 1U;
             continue;
         }
-        uint32_t empty_mask = bc_zero_cell_mask16(board);
-        workspace.empty_masks[board_slot] = static_cast<uint16_t>(empty_mask);
+        uint32_t empty_mask = workspace.empty_masks[board_slot];
         while (empty_mask != 0U) {
             const uint32_t cell = bc_solve_pop_lowest_set_bit_index(empty_mask);
             const uint16_t ref = static_cast<uint16_t>((board_slot << 4U) | cell);
             ++workspace.empty_counts[board_slot];
-            const uint64_t spawned = set_board_tile_unchecked(board, cell, spawn_rank);
+            const uint64_t spawned =
+                board | (static_cast<uint64_t>(spawn_rank) << (4U * cell));
             if (fast_unfiltered_both) {
                 const auto moved_h = BoardMover::move_horizontal_pair(spawned);
                 const auto moved_v = BoardMover::move_vertical_pair(spawned);
@@ -1566,19 +1547,33 @@ void bc_single_chunk_solve_weighted_phase_batch(
     }
 
     for (uint32_t lane = 0U; lane < options.solve.row_width; ++lane) {
-        std::fill_n(
-            workspace.best2.data(),
-            static_cast<size_t>(count) * kBCBoardCellCount,
-            options.solve.zero_value
-        );
-        (void)future_lookup.reduce_max_queries(
-            workspace.queries2,
-            workspace.best2.data(),
-            static_cast<size_t>(count) * kBCBoardCellCount,
-            lane,
-            nullptr,
-            true
-        );
+        if constexpr (std::is_same_v<StorageT, uint32_t>) {
+            std::fill_n(workspace.integer_sum2.data(), count, 0U);
+            (void)future_lookup.reduce_grouped_query_sums(
+                workspace.queries2,
+                workspace.integer_sum2.data(),
+                count,
+                lane,
+                options.solve.zero_value,
+                true
+            );
+        } else {
+            for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
+                workspace.float_sum2[board_slot] =
+                    workspace.empty_counts[board_slot] == 0U
+                        ? 0.0L
+                        : static_cast<long double>(options.solve.zero_value) *
+                            static_cast<long double>(workspace.empty_counts[board_slot]);
+            }
+            (void)future_lookup.reduce_grouped_query_sums(
+                workspace.queries2,
+                workspace.float_sum2.data(),
+                count,
+                lane,
+                options.solve.zero_value,
+                true
+            );
+        }
         for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
             const uint64_t row_index = workspace.output_indices[board_slot];
             const uint64_t value_index =
@@ -1597,23 +1592,16 @@ void bc_single_chunk_solve_weighted_phase_batch(
             }
             StorageT contribution = options.solve.zero_value;
             if constexpr (std::is_same_v<StorageT, uint32_t>) {
-                uint64_t integer_sum = 0U;
-                uint32_t mask = workspace.empty_masks[board_slot];
-                while (mask != 0U) {
-                    const uint32_t cell = bc_solve_pop_lowest_set_bit_index(mask);
-                    const size_t index = static_cast<size_t>(board_slot) * kBCBoardCellCount + cell;
-                    integer_sum += static_cast<uint64_t>(workspace.best2[index]);
-                }
                 if (options.solve.edge_options.spawn_rate4 == 0.1) {
                     const uint64_t numerator = !phase2
-                        ? integer_sum
-                        : 9ULL * integer_sum;
+                        ? workspace.integer_sum2[board_slot]
+                        : 9ULL * workspace.integer_sum2[board_slot];
                     const uint64_t denominator =
                         10ULL * static_cast<uint64_t>(workspace.empty_counts[board_slot]);
                     contribution = static_cast<uint32_t>(numerator / denominator);
                 } else {
                     contribution = bc_single_chunk_scale_average_contribution<StorageT>(
-                        static_cast<long double>(integer_sum),
+                        static_cast<long double>(workspace.integer_sum2[board_slot]),
                         workspace.empty_counts[board_slot],
                         options.solve.edge_options.spawn_rate4,
                         !phase2,
@@ -1621,16 +1609,9 @@ void bc_single_chunk_solve_weighted_phase_batch(
                     );
                 }
             } else {
-                long double sum = 0.0L;
-                uint32_t mask = workspace.empty_masks[board_slot];
-                while (mask != 0U) {
-                    const uint32_t cell = bc_solve_pop_lowest_set_bit_index(mask);
-                    const size_t index = static_cast<size_t>(board_slot) * kBCBoardCellCount + cell;
-                    sum += static_cast<long double>(workspace.best2[index]);
-                }
                 contribution =
                     bc_single_chunk_scale_average_contribution<StorageT>(
-                        sum,
+                        workspace.float_sum2[board_slot],
                         workspace.empty_counts[board_slot],
                         options.solve.edge_options.spawn_rate4,
                         !phase2,
@@ -1741,6 +1722,7 @@ void bc_single_chunk_solve_weighted_phase_for_current_cells(
                     ranged_bucket ? item.word_end : 0U,
                     [&](const BCScannedBoardEntry &entry) {
                         workspace.boards[workspace.count] = entry.board;
+                        workspace.empty_masks[workspace.count] = entry.empty_mask;
                         workspace.output_indices[workspace.count] = cell_base + entry.local_success_row;
                         ++workspace.count;
                         if (workspace.count == BCResidentBatchWorkspace<StorageT>::kBatchSize) {
