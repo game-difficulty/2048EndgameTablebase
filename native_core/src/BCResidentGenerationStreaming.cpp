@@ -287,9 +287,10 @@ void flush_pending_encoded(
         return;
     }
 
-    workspace.resolved_encoded.resize(workspace.pending_encoded.size());
     constexpr uint32_t kPrefetchDistance = 16U;
     const uint32_t count = static_cast<uint32_t>(workspace.pending_encoded.size());
+    workspace.resolved_encoded.clear();
+    workspace.resolved_encoded.reserve(count);
     const uint32_t prefetch_count = std::min<uint32_t>(count, kPrefetchDistance);
     for (uint32_t i = 0U; i < prefetch_count; ++i) {
         __builtin_prefetch(&state.cell_array[workspace.pending_encoded[i].home_slot], 0, 1);
@@ -303,18 +304,20 @@ void flush_pending_encoded(
             );
         }
         const BCPendingEncodedCandidate &candidate = workspace.pending_encoded[i];
-        BCDynamicResolved &resolved = workspace.resolved_encoded[i];
-        resolved.bitmap_offset = bc_dynamic_find_or_insert(
+        const uint32_t bitmap_offset = bc_dynamic_find_or_insert(
             state,
             candidate,
             workspace.dynamic_chunks
         );
-        if (resolved.bitmap_offset == BCDynamicState::kPendingCell) {
+        if (bitmap_offset == BCDynamicState::kPendingCell) {
             return;
         }
-        resolved.rank = candidate.rank;
+        workspace.resolved_encoded.push_back(BCDynamicResolved{
+            bitmap_offset,
+            candidate.rank
+        });
         __builtin_prefetch(
-            &state.bitmap_arena[resolved.bitmap_offset + (static_cast<uint32_t>(resolved.rank) >> 6U)],
+            &state.bitmap_arena[bitmap_offset + (static_cast<uint32_t>(candidate.rank) >> 6U)],
             1,
             1
         );
@@ -777,7 +780,11 @@ BCResidentGenerationResult generate_resident_position_layer_from_streaming_sourc
     copy_cell_load_stats_to_result(result, successful_load_stats);
     add_workspace_stats(result, workspaces);
     result.source_boards_scanned = source_success_row_count_sum(sources);
-    set_dynamic_stats(result, lut, dynamic_state, successful_retry);
+    if (options.collect_dynamic_state_stats) {
+        set_dynamic_stats(result, lut, dynamic_state, successful_retry);
+    } else {
+        set_dynamic_capacity_stats(result, dynamic_state, successful_retry);
+    }
     finalize_dynamic_result(
         result,
         lut,
@@ -921,7 +928,11 @@ BCResidentGenerationResult generate_resident_position_layer_from_streaming_sourc
     copy_cell_load_stats_to_result(result, successful_load_stats);
     add_workspace_stats(result, workspaces);
     result.source_boards_scanned = source_success_row_count_sum(sources);
-    set_dynamic_stats(result, lut, dynamic_state, successful_retry);
+    if (options.collect_dynamic_state_stats) {
+        set_dynamic_stats(result, lut, dynamic_state, successful_retry);
+    } else {
+        set_dynamic_capacity_stats(result, dynamic_state, successful_retry);
+    }
     finalize_dynamic_result(
         result,
         lut,

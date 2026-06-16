@@ -651,9 +651,10 @@ static void flush_pending_encoded(
         return;
     }
 
-    workspace.resolved_encoded.resize(workspace.pending_encoded.size());
     constexpr uint32_t kPrefetchDistance = 16U;
     const uint32_t count = static_cast<uint32_t>(workspace.pending_encoded.size());
+    workspace.resolved_encoded.clear();
+    workspace.resolved_encoded.reserve(count);
     const uint32_t prefetch_count = std::min<uint32_t>(count, kPrefetchDistance);
     for (uint32_t i = 0U; i < prefetch_count; ++i) {
         __builtin_prefetch(&state.cell_array[workspace.pending_encoded[i].home_slot], 0, 1);
@@ -667,18 +668,20 @@ static void flush_pending_encoded(
             );
         }
         const BCPendingEncodedCandidate &candidate = workspace.pending_encoded[i];
-        BCDynamicResolved &resolved = workspace.resolved_encoded[i];
-        resolved.bitmap_offset = bc_dynamic_find_or_insert(
+        const uint32_t bitmap_offset = bc_dynamic_find_or_insert(
             state,
             candidate,
             workspace.dynamic_chunks
         );
-        if (resolved.bitmap_offset == BCDynamicState::kPendingCell) {
+        if (bitmap_offset == BCDynamicState::kPendingCell) {
             return;
         }
-        resolved.rank = candidate.rank;
+        workspace.resolved_encoded.push_back(BCDynamicResolved{
+            bitmap_offset,
+            candidate.rank
+        });
         __builtin_prefetch(
-            &state.bitmap_arena[resolved.bitmap_offset + (static_cast<uint32_t>(resolved.rank) >> 6U)],
+            &state.bitmap_arena[bitmap_offset + (static_cast<uint32_t>(candidate.rank) >> 6U)],
             1,
             1
         );
@@ -3398,7 +3401,11 @@ BCResidentGenerationResult generate_resident_position_layer(
 
     add_workspace_stats(result, workspaces);
     result.source_boards_scanned = source_success_row_count_sum(sources);
-    set_dynamic_stats(result, lut, dynamic_state, successful_retry);
+    if (options.collect_dynamic_state_stats) {
+        set_dynamic_stats(result, lut, dynamic_state, successful_retry);
+    } else {
+        set_dynamic_capacity_stats(result, dynamic_state, successful_retry);
+    }
     finalize_dynamic_result(
         result,
         lut,
@@ -3528,7 +3535,11 @@ BCResidentGenerationResult generate_resident_position_layer_to_file(
 
     add_workspace_stats(result, workspaces);
     result.source_boards_scanned = source_success_row_count_sum(sources);
-    set_dynamic_stats(result, lut, dynamic_state, successful_retry);
+    if (options.collect_dynamic_state_stats) {
+        set_dynamic_stats(result, lut, dynamic_state, successful_retry);
+    } else {
+        set_dynamic_capacity_stats(result, dynamic_state, successful_retry);
+    }
     finalize_dynamic_result(
         result,
         lut,
@@ -3755,9 +3766,17 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair_impl(
     pair.primary.source_boards_scanned = position_success_row_count(current);
     pair.current_boards_scanned = pair.primary.source_boards_scanned;
     pair.shared_generation_seconds = generation_seconds;
-    set_dynamic_stats(pair.primary, lut, primary_state, successful_retry);
+    if (options.collect_dynamic_state_stats) {
+        set_dynamic_stats(pair.primary, lut, primary_state, successful_retry);
+    } else {
+        set_dynamic_capacity_stats(pair.primary, primary_state, successful_retry);
+    }
     if (has_secondary) {
-        set_dynamic_stats(pair.secondary, lut, secondary_state, successful_retry);
+        if (options.collect_dynamic_state_stats) {
+            set_dynamic_stats(pair.secondary, lut, secondary_state, successful_retry);
+        } else {
+            set_dynamic_capacity_stats(pair.secondary, secondary_state, successful_retry);
+        }
     }
 
     finalize_dynamic_result(
@@ -4093,9 +4112,17 @@ static BCResidentGenerationPairResult generate_resident_position_layer_pair_with
     pair.primary.source_boards_scanned = position_success_row_count(current);
     pair.current_boards_scanned = pair.primary.source_boards_scanned;
     pair.shared_generation_seconds = generation_seconds;
-    set_dynamic_stats(pair.primary, lut, primary_state, successful_retry);
+    if (options.collect_dynamic_state_stats) {
+        set_dynamic_stats(pair.primary, lut, primary_state, successful_retry);
+    } else {
+        set_dynamic_capacity_stats(pair.primary, primary_state, successful_retry);
+    }
     if (has_secondary) {
-        set_dynamic_stats(pair.secondary, lut, secondary_state, successful_retry);
+        if (options.collect_dynamic_state_stats) {
+            set_dynamic_stats(pair.secondary, lut, secondary_state, successful_retry);
+        } else {
+            set_dynamic_capacity_stats(pair.secondary, secondary_state, successful_retry);
+        }
     }
 
     finalize_dynamic_result(
@@ -4123,7 +4150,9 @@ static BCResidentGenerationPairResult generate_resident_position_layer_pair_with
                 terminal_secondary_output_file
             );
         } else {
-            pair.secondary.output_success_rows = count_dynamic_live_bits(lut, secondary_state);
+            if (options.collect_mutable_output_stats) {
+                pair.secondary.output_success_rows = count_dynamic_live_bits(lut, secondary_state);
+            }
             refresh_compat_result_stats(pair.secondary);
             pair.secondary.generation_seconds = generation_seconds;
             pair.secondary.compute_seconds = generation_seconds;
@@ -4472,9 +4501,17 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair_from_stream
     pair.primary.source_boards_scanned = position_success_row_count(current);
     pair.current_boards_scanned = pair.primary.source_boards_scanned;
     pair.shared_generation_seconds = generation_seconds;
-    set_dynamic_stats(pair.primary, lut, primary_state, successful_retry);
+    if (options.collect_dynamic_state_stats) {
+        set_dynamic_stats(pair.primary, lut, primary_state, successful_retry);
+    } else {
+        set_dynamic_capacity_stats(pair.primary, primary_state, successful_retry);
+    }
     if (has_secondary) {
-        set_dynamic_stats(pair.secondary, lut, secondary_state, successful_retry);
+        if (options.collect_dynamic_state_stats) {
+            set_dynamic_stats(pair.secondary, lut, secondary_state, successful_retry);
+        } else {
+            set_dynamic_capacity_stats(pair.secondary, secondary_state, successful_retry);
+        }
     }
 
     finalize_dynamic_result(
@@ -4489,7 +4526,9 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair_from_stream
         &primary_output_file
     );
     if (has_secondary) {
-        pair.secondary.output_success_rows = count_dynamic_live_bits(lut, secondary_state);
+        if (options.collect_mutable_output_stats) {
+            pair.secondary.output_success_rows = count_dynamic_live_bits(lut, secondary_state);
+        }
         refresh_compat_result_stats(pair.secondary);
         pair.secondary.generation_seconds = generation_seconds;
         pair.secondary.compute_seconds = generation_seconds;

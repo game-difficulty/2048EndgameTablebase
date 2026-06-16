@@ -705,6 +705,8 @@ int run_free_chain(const Args &args, std::ostream &out) {
     options.pending_insert_buffer_size = args.pending_buffer;
     options.dynamic_reserve_factor = 2.0;
     options.collect_timing = args.detail_timing;
+    options.collect_dynamic_state_stats = args.detail_timing;
+    options.collect_mutable_output_stats = args.detail_timing;
     options.tile_sum_values = &tile_sums;
     options.success_target_rank = static_cast<int>(args.target_rank);
     options.success_shifts = &success_shifts;

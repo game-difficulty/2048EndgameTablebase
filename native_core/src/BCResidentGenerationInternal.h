@@ -144,6 +144,12 @@ void set_dynamic_stats(
     uint32_t generation_retries
 );
 
+void set_dynamic_capacity_stats(
+    BCResidentGenerationResult &result,
+    const BCDynamicState &state,
+    uint32_t generation_retries
+);
+
 void finalize_dynamic_result(
     BCResidentGenerationResult &result,
     const BCLut &lut,

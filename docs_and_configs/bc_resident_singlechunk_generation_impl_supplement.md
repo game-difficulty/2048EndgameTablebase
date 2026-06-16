@@ -1,8 +1,8 @@
 # BC Generation Runtime Design And Handoff
 
-This document describes the generation implementation as of checkpoint
-`6ed14a2`. It is the source of truth for the current resident, single, and
-family generation routes.
+This document describes the current generation implementation after the BC
+generation hot-path cleanup checkpoint. It is the source of truth for the
+current resident, single, and family generation routes.
 
 Solve-side runtime details are maintained in:
 
@@ -365,6 +365,12 @@ Recent hot-path rules:
 
 ```text
 candidate stats that require per-candidate increments are disabled by default
+production resident/single/family generation paths do not collect full dynamic
+    state or mutable-output live-bit stats unless detailed timing/debug stats
+    are explicitly requested
+capacity/retry stats remain available without scanning every live dynamic bit
+pending encoded resolution appends only successful resolved entries and does
+    not resize/zero the resolved buffer before every flush
 hash grouping scans use relaxed loads after generation has ended
 prepare initializes only cell_array empty sentinels
 key_array and bitmap_offset_array are left uninitialized for empty slots
@@ -464,6 +470,11 @@ native_core/src/BCSingleChunkGeneration.cpp
 native_core/src/BCFamilyGeneration.cpp
 native_core/src/BCPositionFile.cpp
 ```
+
+There is no active legacy generation implementation. The old
+`native_core/src/BCResidentGenerationLegacy.cpp` duplicate implementation has
+been removed from the tree; current targets build only the resident,
+streaming-source, single-chunk, and family implementations listed above.
 
 Shared support:
 
