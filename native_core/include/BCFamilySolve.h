@@ -2759,15 +2759,17 @@ void bc_family_flush_phase_batch(
             workspace.spawn2_batch_reduce_seconds += reduce_seconds;
         }
     }
-    bc_family_record_batch_query_stats(
-        workspace,
-        spawn4_phase,
-        candidate_count,
-        encoded_count,
-        reduce_found,
-        lookup_stats.entry_misses,
-        lookup_stats.bitmap_misses
-    );
+    if (collect_batch_timing) {
+        bc_family_record_batch_query_stats(
+            workspace,
+            spawn4_phase,
+            candidate_count,
+            encoded_count,
+            reduce_found,
+            lookup_stats.entry_misses,
+            lookup_stats.bitmap_misses
+        );
+    }
 
     const double emit_t0 = collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
     for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
@@ -3362,15 +3364,17 @@ void bc_family_flush_first_direction_batch_multi_cell(
             workspace.spawn2_batch_reduce_seconds += reduce_seconds;
         }
     }
-    bc_family_record_batch_query_stats(
-        workspace,
-        spawn4_phase,
-        candidate_count,
-        encoded_count,
-        reduce_found,
-        lookup_stats.entry_misses,
-        lookup_stats.bitmap_misses
-    );
+    if (collect_batch_timing) {
+        bc_family_record_batch_query_stats(
+            workspace,
+            spawn4_phase,
+            candidate_count,
+            encoded_count,
+            reduce_found,
+            lookup_stats.entry_misses,
+            lookup_stats.bitmap_misses
+        );
+    }
 
     const double emit_t0 = collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
     for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
@@ -3553,15 +3557,17 @@ void bc_family_flush_phase_partial_sum_batch_multi_cell(
             workspace.spawn2_batch_reduce_seconds += reduce_seconds;
         }
     }
-    bc_family_record_batch_query_stats(
-        workspace,
-        spawn4_phase,
-        candidate_count,
-        encoded_count,
-        reduce_found,
-        lookup_stats.entry_misses,
-        lookup_stats.bitmap_misses
-    );
+    if (collect_batch_timing) {
+        bc_family_record_batch_query_stats(
+            workspace,
+            spawn4_phase,
+            candidate_count,
+            encoded_count,
+            reduce_found,
+            lookup_stats.entry_misses,
+            lookup_stats.bitmap_misses
+        );
+    }
 
     const double emit_t0 = collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
     for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
@@ -3700,15 +3706,17 @@ void bc_family_flush_phase_sum_batch(
             workspace.spawn2_batch_reduce_seconds += reduce_seconds;
         }
     }
-    bc_family_record_batch_query_stats(
-        workspace,
-        spawn4_phase,
-        candidate_count,
-        encoded_count,
-        reduce_found,
-        lookup_stats.entry_misses,
-        lookup_stats.bitmap_misses
-    );
+    if (collect_batch_timing) {
+        bc_family_record_batch_query_stats(
+            workspace,
+            spawn4_phase,
+            candidate_count,
+            encoded_count,
+            reduce_found,
+            lookup_stats.entry_misses,
+            lookup_stats.bitmap_misses
+        );
+    }
 
     const double emit_t0 = collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
     for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
@@ -3873,15 +3881,17 @@ void bc_family_flush_phase_partial_sum_batch(
             workspace.spawn2_batch_reduce_seconds += reduce_seconds;
         }
     }
-    bc_family_record_batch_query_stats(
-        workspace,
-        spawn4_phase,
-        candidate_count,
-        encoded_count,
-        reduce_found,
-        lookup_stats.entry_misses,
-        lookup_stats.bitmap_misses
-    );
+    if (collect_batch_timing) {
+        bc_family_record_batch_query_stats(
+            workspace,
+            spawn4_phase,
+            candidate_count,
+            encoded_count,
+            reduce_found,
+            lookup_stats.entry_misses,
+            lookup_stats.bitmap_misses
+        );
+    }
 
     const double emit_t0 = collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
     for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
