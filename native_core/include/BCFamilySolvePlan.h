@@ -195,7 +195,7 @@ private:
 };
 
 struct BCFamilyPartialBucketLayout {
-    uint64_t value_offset = 0U;
+    uint32_t value_offset = 0U;
     uint32_t success_row_begin = 0U;
     uint32_t success_row_end_value = 0U;
     uint16_t empty_mask = 0U;
@@ -228,7 +228,7 @@ struct BCFamilyPartialBucketLayout {
 };
 
 static_assert(
-    sizeof(BCFamilyPartialBucketLayout) == 24U,
+    sizeof(BCFamilyPartialBucketLayout) == 16U,
     "BC family partial bucket layout should stay compact"
 );
 
@@ -350,7 +350,10 @@ struct BCFamilyPartialCellLayout {
             "BC family partial bucket value overflow"
         );
         BCFamilyPartialBucketLayout partial_bucket;
-        partial_bucket.value_offset = value_cursor;
+        if (value_cursor > std::numeric_limits<uint32_t>::max()) {
+            throw std::overflow_error("BC family partial bucket value offset exceeds uint32");
+        }
+        partial_bucket.value_offset = static_cast<uint32_t>(value_cursor);
         partial_bucket.success_row_begin = begin;
         partial_bucket.success_row_end_value = end;
         if (empty_count > kBCBoardCellCount) {
