@@ -195,8 +195,6 @@ private:
 };
 
 struct BCFamilyPartialBucketLayout {
-    uint32_t bucket_index = 0U;
-    uint64_t key = 0U;
     uint32_t success_row_begin = 0U;
     uint32_t success_row_end = 0U;
     uint16_t empty_mask = 0U;
@@ -333,8 +331,6 @@ struct BCFamilyPartialCellLayout {
             "BC family partial bucket value overflow"
         );
         BCFamilyPartialBucketLayout partial_bucket;
-        partial_bucket.bucket_index = i;
-        partial_bucket.key = bucket.key;
         partial_bucket.success_row_begin = begin;
         partial_bucket.success_row_end = end;
         partial_bucket.empty_mask = empty_mask;

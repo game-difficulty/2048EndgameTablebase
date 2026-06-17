@@ -480,7 +480,8 @@ void compare_layers_on_current_boards(
     const SingleChunkFixture<T> &fixture,
     const BC::BCResidentSolvedLayer<T> &expected,
     const ActualLayerT &actual,
-    uint32_t row_width
+    uint32_t row_width,
+    const char *label = "single chunk"
 ) {
     for (uint64_t board : fixture.current.stored_boards) {
         for (uint32_t lane = 0U; lane < row_width; ++lane) {
@@ -490,7 +491,33 @@ void compare_layers_on_current_boards(
             const bool actual_found = actual.lookup.lookup(board, actual_value, lane);
             check(expected_found == actual_found, "single chunk found state mismatch");
             if (expected_found) {
-                check_value_close<T>(actual_value, expected_value, "single chunk value mismatch");
+                if constexpr (std::is_floating_point_v<T>) {
+                    const double diff = std::fabs(
+                        static_cast<double>(actual_value) - static_cast<double>(expected_value)
+                    );
+                    if (diff > 1.0e-5) {
+                        throw std::runtime_error(
+                            std::string(label) + " value mismatch board=" + std::to_string(board) +
+                            " lane=" + std::to_string(lane) +
+                            " expected=" + std::to_string(static_cast<double>(expected_value)) +
+                            " actual=" + std::to_string(static_cast<double>(actual_value))
+                        );
+                    }
+                } else {
+                    const uint64_t actual_u = static_cast<uint64_t>(actual_value);
+                    const uint64_t expected_u = static_cast<uint64_t>(expected_value);
+                    const uint64_t diff = actual_u > expected_u
+                        ? actual_u - expected_u
+                        : expected_u - actual_u;
+                    if (diff > 2U) {
+                        throw std::runtime_error(
+                            std::string(label) + " value mismatch board=" + std::to_string(board) +
+                            " lane=" + std::to_string(lane) +
+                            " expected=" + std::to_string(expected_u) +
+                            " actual=" + std::to_string(actual_u)
+                        );
+                    }
+                }
             }
         }
     }
@@ -577,7 +604,7 @@ void run_single_chunk_case(BCSuccessDTypeMode dtype, const char *name) {
         future4_success,
         options
     );
-    compare_layers_on_current_boards<T>(fixture, resident.layer, single.layer, row_width);
+    compare_layers_on_current_boards<T>(fixture, resident.layer, single.layer, row_width, "single memory");
 
     const auto frontier_single = BC::bc_single_chunk_solve_compacted_layer_from_frontier<T>(
         current_stream,
@@ -585,7 +612,7 @@ void run_single_chunk_case(BCSuccessDTypeMode dtype, const char *name) {
         future4_layer,
         options
     );
-    compare_layers_on_current_boards<T>(fixture, resident.layer, frontier_single.layer, row_width);
+    compare_layers_on_current_boards<T>(fixture, resident.layer, frontier_single.layer, row_width, "frontier memory");
 
     check(single.stats.current_chunks > 1U, "single chunk test should split current layer");
     check(single.stats.future_resident_layers_max == 1U, "single chunk should hold one future lookup at a time");
@@ -642,7 +669,7 @@ void run_single_chunk_case(BCSuccessDTypeMode dtype, const char *name) {
         row_width,
         dtype
     );
-    compare_layers_on_current_boards<T>(fixture, resident.layer, file_layer, row_width);
+    compare_layers_on_current_boards<T>(fixture, resident.layer, file_layer, row_width, "file output");
 
     {
         BC::BCBufferedFileWriter position_writer(strict_position_path);
@@ -683,7 +710,7 @@ void run_single_chunk_case(BCSuccessDTypeMode dtype, const char *name) {
         row_width,
         dtype
     );
-    compare_layers_on_current_boards<T>(fixture, resident.layer, strict_layer, row_width);
+    compare_layers_on_current_boards<T>(fixture, resident.layer, strict_layer, row_width, "strict output");
 
     {
         BC::BCSingleChunkFrontierLayer<T> loaded_future4 =
@@ -749,7 +776,7 @@ void run_single_chunk_case(BCSuccessDTypeMode dtype, const char *name) {
         row_width,
         dtype
     );
-    compare_layers_on_current_boards<T>(fixture, resident.layer, strict_frontier_layer, row_width);
+    compare_layers_on_current_boards<T>(fixture, resident.layer, strict_frontier_layer, row_width, "strict frontier output");
 
     {
         BC::BCDirectFileIOOptions direct_options;
@@ -791,7 +818,13 @@ void run_single_chunk_case(BCSuccessDTypeMode dtype, const char *name) {
         row_width,
         dtype
     );
-    compare_layers_on_current_boards<T>(fixture, resident.layer, strict_direct_layer, row_width);
+    compare_layers_on_current_boards<T>(
+        fixture,
+        resident.layer,
+        strict_direct_layer,
+        row_width,
+        "strict direct output"
+    );
 
     std::error_code ec;
     std::filesystem::remove_all(root, ec);

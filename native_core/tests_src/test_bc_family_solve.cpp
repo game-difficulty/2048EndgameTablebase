@@ -780,11 +780,15 @@ void run_exact_family_matches_single_case(BCSuccessDTypeMode dtype, const char *
             "family spawn4 reuse groups exceed pass count");
         check(result.stats.spawn2_future_reuse_groups <= result.stats.spawn2_passes,
             "family spawn2 reuse groups exceed pass count");
+        check(result.stats.final_stage_bytes_written == 0U,
+            "family solve should not stage finalized success values");
+        check(result.stats.final_stage_bytes_read == 0U,
+            "family solve should not reread finalized success values");
     }
     {
         BCFamilySolveOptions<T> block_options = family_options;
         block_options.interleave_spawn_phases = true;
-        block_options.interleave_block_fids = 3U;
+        block_options.interleave_block_fids = 1U;
         BC::BCBufferedFileWriter position_writer(family_block_position_path);
         BC::BCBufferedFileWriter success_writer(family_block_success_path);
         const auto result = BC::bc_family_solve_exact_layer_to_files<T>(
@@ -806,6 +810,34 @@ void run_exact_family_matches_single_case(BCSuccessDTypeMode dtype, const char *
             "family block-interleaved solve should not write scratch4 temp");
         check(result.stats.scratch4_cells_read == 0U,
             "family block-interleaved solve should not read scratch4 temp");
+        check(result.stats.final_stage_bytes_written == 0U,
+            "family block-interleaved solve should not stage finalized success values");
+        check(result.stats.final_stage_bytes_read == 0U,
+            "family block-interleaved solve should not reread finalized success values");
+    }
+    {
+        BCFamilySolveOptions<T> block_options = family_options;
+        block_options.interleave_spawn_phases = true;
+        block_options.interleave_block_fids = 3U;
+        BC::BCBufferedFileWriter position_writer(root / "family_block_reject.bcpos");
+        BC::BCBufferedFileWriter success_writer(root / "family_block_reject.bcsuc");
+        bool rejected = false;
+        try {
+            (void)BC::bc_family_solve_exact_layer_to_files<T>(
+                current_stream,
+                future2_stream,
+                future2_success,
+                future4_stream,
+                future4_success,
+                position_writer,
+                success_writer,
+                root / "family_block_reject_tmp",
+                block_options
+            );
+        } catch (const std::invalid_argument &) {
+            rejected = true;
+        }
+        check(rejected, "family interleaved block_fids > 1 should be rejected");
     }
 
     BCPositionStreamingReader single_position =

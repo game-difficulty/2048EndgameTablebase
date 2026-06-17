@@ -27,8 +27,9 @@
 namespace BC {
 
 inline constexpr uint32_t kBCSuccessMagic = 0x46534342U; // "BCSF" little-endian.
-inline constexpr uint32_t kBCSuccessFormatVersion = 1U;
+inline constexpr uint32_t kBCSuccessFormatVersion = 2U;
 inline constexpr uint32_t kBCSuccessHeaderBytes = 88U;
+inline constexpr uint32_t kBCSuccessCellValueOffsetBytes = 8U;
 inline constexpr uint32_t kBCSuccessDTypeUint32 = 1U;
 
 enum class BCSuccessDTypeMode : uint32_t {
@@ -200,7 +201,7 @@ struct BCSuccessHeader {
     uint32_t reserved32 = 0U;
     uint64_t layer_sum = 0U;
     uint64_t position_metadata_fingerprint = 0U;
-    uint64_t reserved64 = 0U;
+    uint64_t cell_value_offsets_offset = kBCSuccessHeaderBytes;
 };
 
 inline void bc_append_success_header(std::vector<uint8_t> &out, const BCSuccessHeader &header) {
@@ -220,7 +221,7 @@ inline void bc_append_success_header(std::vector<uint8_t> &out, const BCSuccessH
     bc_append_u32_le(out, header.reserved32);
     bc_append_u64_le(out, header.layer_sum);
     bc_append_u64_le(out, header.position_metadata_fingerprint);
-    bc_append_u64_le(out, header.reserved64);
+    bc_append_u64_le(out, header.cell_value_offsets_offset);
     if (out.size() - begin != kBCSuccessHeaderBytes) {
         throw std::logic_error("BC success header serialized size mismatch");
     }
@@ -245,8 +246,38 @@ inline void bc_append_success_header(std::vector<uint8_t> &out, const BCSuccessH
     header.reserved32 = bc_load_u32_le(p + 60U);
     header.layer_sum = load_u64_le(p + 64U);
     header.position_metadata_fingerprint = load_u64_le(p + 72U);
-    header.reserved64 = load_u64_le(p + 80U);
+    header.cell_value_offsets_offset = load_u64_le(p + 80U);
     return header;
+}
+
+[[nodiscard]] inline uint64_t bc_success_cell_value_offsets_bytes(uint64_t descriptor_count) {
+    if (descriptor_count > std::numeric_limits<uint64_t>::max() / kBCSuccessCellValueOffsetBytes) {
+        throw std::overflow_error("BC success cell value offset table byte count overflow");
+    }
+    return descriptor_count * kBCSuccessCellValueOffsetBytes;
+}
+
+[[nodiscard]] inline uint64_t bc_success_logical_size(const BCSuccessHeader &header) {
+    const uint64_t payload_end = bc_checked_add_u64(
+        header.payload_offset,
+        header.payload_bytes,
+        "BC success payload end overflow"
+    );
+    const uint64_t offsets_end = bc_checked_add_u64(
+        header.cell_value_offsets_offset,
+        bc_success_cell_value_offsets_bytes(header.descriptor_count),
+        "BC success cell value offset table end overflow"
+    );
+    return std::max(payload_end, offsets_end);
+}
+
+inline void bc_append_success_cell_value_offsets(
+    std::vector<uint8_t> &out,
+    const std::vector<uint64_t> &offsets
+) {
+    for (uint64_t offset : offsets) {
+        bc_append_u64_le(out, offset);
+    }
 }
 
 template <class PositionReader>
@@ -441,12 +472,31 @@ public:
                 throw std::logic_error("BC success writer cannot finish with unwritten cells");
             }
         }
+        std::vector<uint64_t> cell_value_offsets(descriptors_.size(), 0U);
+        uint64_t value_cursor = 0U;
+        for (CellId cid = 0; cid < descriptors_.size(); ++cid) {
+            const BCPositionCellDescriptor &desc = descriptors_[static_cast<size_t>(cid)];
+            cell_value_offsets[static_cast<size_t>(cid)] = value_cursor;
+            value_cursor = bc_checked_add_u64(
+                value_cursor,
+                expected_values_for_cell(desc),
+                "BC success writer cell value offset overflow"
+            );
+        }
+        const uint64_t offset_table_bytes =
+            bc_success_cell_value_offsets_bytes(descriptors_.size());
+
         BCSuccessHeader header;
         header.dtype = static_cast<uint32_t>(dtype_);
         header.row_width = row_width_;
         header.family_count = position_header_.family_count;
         header.descriptor_count = descriptors_.size();
-        header.payload_offset = kBCSuccessHeaderBytes;
+        header.cell_value_offsets_offset = kBCSuccessHeaderBytes;
+        header.payload_offset = bc_checked_add_u64(
+            header.cell_value_offsets_offset,
+            offset_table_bytes,
+            "BC success writer payload offset overflow"
+        );
         header.payload_bytes = payload_bytes_;
         header.position_key_mode = position_header_.key_mode;
         header.family_unit = position_header_.family_unit;
@@ -455,8 +505,16 @@ public:
         header.position_metadata_fingerprint = position_fingerprint_;
 
         std::vector<uint8_t> out;
-        out.reserve(static_cast<size_t>(kBCSuccessHeaderBytes + payload_bytes_));
+        const uint64_t logical_size = bc_success_logical_size(header);
+        if (logical_size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success writer output exceeds size_t");
+        }
+        out.reserve(static_cast<size_t>(logical_size));
         bc_append_success_header(out, header);
+        bc_append_success_cell_value_offsets(out, cell_value_offsets);
+        if (out.size() != header.payload_offset) {
+            throw std::logic_error("BC success writer payload offset mismatch");
+        }
         for (CellId cid = 0; cid < descriptors_.size(); ++cid) {
             const BCPositionCellDescriptor &desc = descriptors_[static_cast<size_t>(cid)];
             if (desc.success_rows == 0U) {
@@ -468,7 +526,7 @@ public:
             }
             out.insert(out.end(), bytes.begin(), bytes.end());
         }
-        if (out.size() != kBCSuccessHeaderBytes + payload_bytes_) {
+        if (out.size() != logical_size) {
             throw std::logic_error("BC success writer emitted unexpected byte size");
         }
         return out;
@@ -656,9 +714,6 @@ private:
         if (header_.descriptor_count != position_->cell_count()) {
             throw std::runtime_error("BC success file descriptor_count mismatch");
         }
-        if (header_.payload_offset != kBCSuccessHeaderBytes) {
-            throw std::runtime_error("BC success file payload offset mismatch");
-        }
         if (header_.position_key_mode != position_->header().key_mode ||
             header_.family_unit != position_->header().family_unit ||
             header_.axis_base_coord != position_->header().axis_base_coord ||
@@ -666,7 +721,7 @@ private:
             header_.position_metadata_fingerprint != bc_success_position_fingerprint(*position_)) {
             throw std::runtime_error("BC success file position metadata mismatch");
         }
-        if (header_.reserved32 != 0U || header_.reserved64 != 0U) {
+        if (header_.reserved32 != 0U) {
             throw std::runtime_error("BC success file reserved field is non-zero");
         }
         const uint64_t expected_payload_bytes =
@@ -674,34 +729,37 @@ private:
         if (header_.payload_bytes != expected_payload_bytes) {
             throw std::runtime_error("BC success file payload byte size mismatch");
         }
+        bc_require_bytes(
+            bytes_,
+            header_.cell_value_offsets_offset,
+            bc_success_cell_value_offsets_bytes(header_.descriptor_count),
+            "BC success cell value offset table exceeds file"
+        );
         bc_require_bytes(bytes_, header_.payload_offset, header_.payload_bytes,
             "BC success payload exceeds file");
-        const uint64_t expected_file_size = bc_checked_add_u64(
-            header_.payload_offset,
-            header_.payload_bytes,
-            "BC success expected file size overflow"
-        );
+        const uint64_t expected_file_size = bc_success_logical_size(header_);
         if (expected_file_size != bytes_.size()) {
             throw std::runtime_error("BC success file has trailing or missing bytes");
         }
     }
 
     void build_cell_value_offsets() {
-        cell_value_offsets_.assign(position_->cell_count() + 1U, 0U);
-        uint64_t cursor = 0U;
+        cell_value_offsets_.assign(position_->cell_count(), 0U);
+        if (position_->cell_count() != header_.descriptor_count) {
+            throw std::logic_error("BC success reader descriptor count mismatch");
+        }
+        const uint64_t table_offset = header_.cell_value_offsets_offset;
         for (CellId cid = 0; cid < position_->cell_count(); ++cid) {
-            cell_value_offsets_[static_cast<size_t>(cid)] = cursor;
-            const uint64_t values =
-                static_cast<uint64_t>(position_->descriptor(cid).success_rows) *
-                header_.row_width;
-            cursor = bc_checked_add_u64(cursor, values, "BC success cell value offset overflow");
+            const uint64_t entry_offset = bc_checked_add_u64(
+                table_offset,
+                static_cast<uint64_t>(cid) * kBCSuccessCellValueOffsetBytes,
+                "BC success cell value offset entry overflow"
+            );
+            cell_value_offsets_[static_cast<size_t>(cid)] = load_u64_le(
+                bytes_.data() + static_cast<size_t>(entry_offset)
+            );
         }
-        cell_value_offsets_.back() = cursor;
-        const uint32_t value_size = bc_success_dtype_value_size(dtype_mode());
-        if (cursor > std::numeric_limits<uint64_t>::max() / value_size ||
-            cursor * value_size != header_.payload_bytes) {
-            throw std::runtime_error("BC success derived cell offsets do not match payload bytes");
-        }
+        validate_cell_value_offsets();
     }
 
     [[nodiscard]] uint64_t value_byte_offset(CellId cid) const {
@@ -721,6 +779,49 @@ private:
         const uint64_t cell_bytes = cell_byte_count(cid);
         bc_require_bytes(bytes_, byte_offset, cell_bytes, "BC success cell payload exceeds file");
         return byte_offset;
+    }
+
+    void validate_cell_value_offsets() const {
+        const uint32_t value_size = bc_success_dtype_value_size(dtype_mode());
+        if ((header_.payload_bytes % value_size) != 0U) {
+            throw std::runtime_error("BC success payload is not value-aligned");
+        }
+        const uint64_t total_values = header_.payload_bytes / value_size;
+        struct Range {
+            uint64_t begin = 0U;
+            uint64_t end = 0U;
+        };
+        std::vector<Range> ranges;
+        ranges.reserve(cell_value_offsets_.size());
+        for (CellId cid = 0; cid < position_->cell_count(); ++cid) {
+            const uint64_t begin = cell_value_offsets_[static_cast<size_t>(cid)];
+            const uint64_t count =
+                static_cast<uint64_t>(position_->descriptor(cid).success_rows) *
+                header_.row_width;
+            if (begin > total_values || count > total_values - begin) {
+                throw std::runtime_error("BC success cell value range exceeds payload");
+            }
+            if (count != 0U) {
+                ranges.push_back(Range{begin, begin + count});
+            }
+        }
+        std::sort(
+            ranges.begin(),
+            ranges.end(),
+            [](const Range &lhs, const Range &rhs) {
+                return lhs.begin < rhs.begin;
+            }
+        );
+        uint64_t cursor = 0U;
+        for (const Range &range : ranges) {
+            if (range.begin != cursor) {
+                throw std::runtime_error("BC success cell value ranges do not densely cover payload");
+            }
+            cursor = range.end;
+        }
+        if (cursor != total_values) {
+            throw std::runtime_error("BC success cell value ranges do not match payload bytes");
+        }
     }
 
     [[nodiscard]] uint64_t cell_byte_count(CellId cid) const {
@@ -980,13 +1081,31 @@ uint64_t write_success_values_to_file(
         throw std::overflow_error("BC success streaming writer payload byte count overflow");
     }
     const uint64_t payload_bytes = expected_values * value_size;
+    std::vector<uint64_t> cell_value_offsets(position.cell_count(), 0U);
+    uint64_t value_cursor = 0U;
+    for (CellId cid = 0; cid < position.cell_count(); ++cid) {
+        cell_value_offsets[static_cast<size_t>(cid)] = value_cursor;
+        const uint64_t values_for_cell =
+            static_cast<uint64_t>(position.descriptor(cid).success_rows) *
+            static_cast<uint64_t>(row_width);
+        value_cursor = bc_checked_add_u64(
+            value_cursor,
+            values_for_cell,
+            "BC success streaming writer cell offset overflow"
+        );
+    }
 
     BCSuccessHeader header;
     header.dtype = static_cast<uint32_t>(dtype);
     header.row_width = row_width;
     header.family_count = position.header().family_count;
     header.descriptor_count = position.cell_count();
-    header.payload_offset = kBCSuccessHeaderBytes;
+    header.cell_value_offsets_offset = kBCSuccessHeaderBytes;
+    header.payload_offset = bc_checked_add_u64(
+        header.cell_value_offsets_offset,
+        bc_success_cell_value_offsets_bytes(header.descriptor_count),
+        "BC success streaming writer payload offset overflow"
+    );
     header.payload_bytes = payload_bytes;
     header.position_key_mode = position.header().key_mode;
     header.family_unit = position.header().family_unit;
@@ -997,15 +1116,17 @@ uint64_t write_success_values_to_file(
     std::vector<uint8_t> header_bytes;
     header_bytes.reserve(kBCSuccessHeaderBytes);
     bc_append_success_header(header_bytes, header);
+    std::vector<uint8_t> offset_bytes;
+    offset_bytes.reserve(static_cast<size_t>(
+        bc_success_cell_value_offsets_bytes(header.descriptor_count)
+    ));
+    bc_append_success_cell_value_offsets(offset_bytes, cell_value_offsets);
 
-    const uint64_t logical_size = bc_checked_add_u64(
-        kBCSuccessHeaderBytes,
-        payload_bytes,
-        "BC success streaming writer logical size overflow"
-    );
+    const uint64_t logical_size = bc_success_logical_size(header);
     file.prepare_full_overwrite(logical_size);
     BCSequentialSuccessWriteStager stager(file, stats);
     stager.append(header_bytes.data(), header_bytes.size());
+    stager.append(offset_bytes.data(), offset_bytes.size());
     stager.append_values(values);
     stager.finish();
     return logical_size;
@@ -1279,11 +1400,7 @@ public:
             std::vector<uint8_t> header_bytes(kBCSuccessHeaderBytes);
             direct->read_at(0U, header_bytes.data(), header_bytes.size());
             const BCSuccessHeader header = bc_read_success_header(header_bytes);
-            const uint64_t logical_size = bc_checked_add_u64(
-                header.payload_offset,
-                header.payload_bytes,
-                "BC success direct logical size overflow"
-            );
+            const uint64_t logical_size = bc_success_logical_size(header);
             const uint64_t required_physical = bc_direct_align_up(logical_size, options.alignment);
             if (physical_size >= required_physical) {
                 direct->set_logical_size(logical_size);
@@ -1380,7 +1497,7 @@ public:
         if (value_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
             throw std::overflow_error("BC success streaming whole payload value count exceeds size_t");
         }
-        std::vector<T> values(static_cast<size_t>(value_count));
+        std::vector<T> physical_values(static_cast<size_t>(value_count));
         if (stats != nullptr) {
             *stats = {};
             if (header_.payload_bytes != 0U) {
@@ -1391,13 +1508,13 @@ public:
             }
         }
         if (header_.payload_bytes == 0U) {
-            return values;
+            return physical_values;
         }
 #if defined(_WIN32) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
         BCFileIOStats io_stats;
         file_->read_many(
             std::vector<BCFileReadRequest>{
-                BCFileReadRequest{header_.payload_offset, values.data(), header_.payload_bytes}
+                BCFileReadRequest{header_.payload_offset, physical_values.data(), header_.payload_bytes}
             },
             &io_stats
         );
@@ -1421,11 +1538,34 @@ public:
             stats->backend_read_seconds += io_stats.backend_seconds;
         }
         for (uint64_t i = 0U; i < value_count; ++i) {
-            values[static_cast<size_t>(i)] =
+            physical_values[static_cast<size_t>(i)] =
                 bc_load_success_value_le<T>(bytes.data() + static_cast<size_t>(i * sizeof(T)));
         }
 #endif
-        return values;
+        std::vector<T> logical_values(static_cast<size_t>(value_count));
+        uint64_t logical_cursor = 0U;
+        for (size_t cid = 0U; cid < success_rows_.size(); ++cid) {
+            const uint64_t count =
+                static_cast<uint64_t>(success_rows_[cid]) * header_.row_width;
+            if (count == 0U) {
+                continue;
+            }
+            const uint64_t physical_begin = cell_value_offsets_[cid];
+            if (physical_begin > value_count || count > value_count - physical_begin ||
+                logical_cursor > value_count || count > value_count - logical_cursor) {
+                throw std::runtime_error("BC success streaming whole payload reorder range mismatch");
+            }
+            std::copy_n(
+                physical_values.data() + static_cast<size_t>(physical_begin),
+                static_cast<size_t>(count),
+                logical_values.data() + static_cast<size_t>(logical_cursor)
+            );
+            logical_cursor += count;
+        }
+        if (logical_cursor != value_count) {
+            throw std::runtime_error("BC success streaming whole payload logical value count mismatch");
+        }
+        return logical_values;
     }
 
     template <typename T>
@@ -1454,50 +1594,8 @@ public:
         }
 
         BCSuccessOwnedValues<T> owned;
-        if (header_.payload_bytes == 0U) {
-            return owned;
-        }
-
-#if defined(_WIN32) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
-        const uint32_t alignment = file_->preferred_read_alignment();
-        if (file_->mode() == BCFileIOMode::Direct && alignment > 1U &&
-            (alignment & (alignment - 1U)) == 0U) {
-            const uint64_t logical_size = bc_checked_add_u64(
-                header_.payload_offset,
-                header_.payload_bytes,
-                "BC success direct owned logical size overflow"
-            );
-            if (logical_size > std::numeric_limits<uint64_t>::max() - (alignment - 1U)) {
-                throw std::overflow_error("BC success direct owned physical size overflow");
-            }
-            const uint64_t physical_size =
-                (logical_size + static_cast<uint64_t>(alignment - 1U)) &
-                ~static_cast<uint64_t>(alignment - 1U);
-            owned.file_bytes.reset(physical_size, alignment);
-            BCFileIOStats io_stats;
-            if (file_->try_read_physical_prefix_aligned(
-                    owned.file_bytes.data(),
-                    physical_size,
-                    &io_stats
-                )) {
-                owned.payload_offset = header_.payload_offset;
-                owned.value_count = static_cast<size_t>(value_count_u64);
-                owned.file_backed = true;
-                if (stats != nullptr) {
-                    stats->backend_read_ops = io_stats.backend_io_count;
-                    stats->backend_read_bytes = io_stats.backend_bytes;
-                    stats->backend_read_seconds += io_stats.backend_seconds;
-                }
-                return owned;
-            }
-            owned.file_bytes.reset();
-        }
         owned.vector_values = read_all_values_typed<T>(stats);
         return owned;
-#else
-        owned.vector_values = read_all_values_typed<T>(stats);
-        return owned;
-#endif
     }
 
     [[nodiscard]] BCLoadedSuccessCell load_cell(
@@ -1787,9 +1885,6 @@ private:
         if (header_.descriptor_count != position.cell_count) {
             throw std::runtime_error("BC success streaming file descriptor_count mismatch");
         }
-        if (header_.payload_offset != kBCSuccessHeaderBytes) {
-            throw std::runtime_error("BC success streaming file payload offset mismatch");
-        }
         if (header_.position_key_mode != position.key_mode ||
             header_.family_unit != position.family_unit ||
             header_.axis_base_coord != position.axis_base_coord ||
@@ -1797,20 +1892,21 @@ private:
             header_.position_metadata_fingerprint != position.fingerprint) {
             throw std::runtime_error("BC success streaming file position metadata mismatch");
         }
-        if (header_.reserved32 != 0U || header_.reserved64 != 0U) {
+        if (header_.reserved32 != 0U) {
             throw std::runtime_error("BC success streaming file reserved field is non-zero");
         }
         const uint64_t expected_payload_bytes = expected_payload_bytes_from_success_rows(header_.row_width);
         if (header_.payload_bytes != expected_payload_bytes) {
             throw std::runtime_error("BC success streaming file payload byte size mismatch");
         }
+        require_file_range(
+            header_.cell_value_offsets_offset,
+            bc_success_cell_value_offsets_bytes(header_.descriptor_count),
+            "BC success streaming cell value offset table exceeds file"
+        );
         require_file_range(header_.payload_offset, header_.payload_bytes,
             "BC success streaming payload exceeds file");
-        const uint64_t expected_file_size = bc_checked_add_u64(
-            header_.payload_offset,
-            header_.payload_bytes,
-            "BC success streaming expected file size overflow"
-        );
+        const uint64_t expected_file_size = bc_success_logical_size(header_);
         if (expected_file_size != file_size_) {
             throw std::runtime_error("BC success streaming file has trailing or missing bytes");
         }
@@ -1831,18 +1927,22 @@ private:
     }
 
     void build_cell_value_offsets() {
-        cell_value_offsets_.assign(success_rows_.size() + 1U, 0U);
-        uint64_t cursor = 0U;
+        cell_value_offsets_.assign(success_rows_.size(), 0U);
+        const uint64_t table_bytes =
+            bc_success_cell_value_offsets_bytes(header_.descriptor_count);
+        if (table_bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success streaming cell offset table exceeds size_t");
+        }
+        std::vector<uint8_t> table(static_cast<size_t>(table_bytes));
+        if (table_bytes != 0U) {
+            file_->read_at(header_.cell_value_offsets_offset, table.data(), table_bytes);
+        }
         for (size_t cid = 0U; cid < success_rows_.size(); ++cid) {
-            cell_value_offsets_[cid] = cursor;
-            const uint64_t values =
-                static_cast<uint64_t>(success_rows_[cid]) * header_.row_width;
-            cursor = bc_checked_add_u64(cursor, values, "BC success streaming cell offset overflow");
+            cell_value_offsets_[cid] = load_u64_le(
+                table.data() + cid * kBCSuccessCellValueOffsetBytes
+            );
         }
-        cell_value_offsets_.back() = cursor;
-        if (checked_value_bytes(cursor) != header_.payload_bytes) {
-            throw std::runtime_error("BC success streaming derived cell offsets do not match payload bytes");
-        }
+        validate_cell_value_offsets();
     }
 
     [[nodiscard]] uint64_t value_byte_offset(CellId cid) const {
@@ -1854,6 +1954,48 @@ private:
             payload_delta,
             "BC success streaming value byte offset overflow"
         );
+    }
+
+    void validate_cell_value_offsets() const {
+        const uint32_t value_size = bc_success_dtype_value_size(dtype_mode());
+        if ((header_.payload_bytes % value_size) != 0U) {
+            throw std::runtime_error("BC success streaming payload is not value-aligned");
+        }
+        const uint64_t total_values = header_.payload_bytes / value_size;
+        struct Range {
+            uint64_t begin = 0U;
+            uint64_t end = 0U;
+        };
+        std::vector<Range> ranges;
+        ranges.reserve(success_rows_.size());
+        for (size_t cid = 0U; cid < success_rows_.size(); ++cid) {
+            const uint64_t begin = cell_value_offsets_[cid];
+            const uint64_t count =
+                static_cast<uint64_t>(success_rows_[cid]) * header_.row_width;
+            if (begin > total_values || count > total_values - begin) {
+                throw std::runtime_error("BC success streaming cell value range exceeds payload");
+            }
+            if (count != 0U) {
+                ranges.push_back(Range{begin, begin + count});
+            }
+        }
+        std::sort(
+            ranges.begin(),
+            ranges.end(),
+            [](const Range &lhs, const Range &rhs) {
+                return lhs.begin < rhs.begin;
+            }
+        );
+        uint64_t cursor = 0U;
+        for (const Range &range : ranges) {
+            if (range.begin != cursor) {
+                throw std::runtime_error("BC success streaming cell value ranges do not densely cover payload");
+            }
+            cursor = range.end;
+        }
+        if (cursor != total_values) {
+            throw std::runtime_error("BC success streaming cell value ranges do not match payload bytes");
+        }
     }
 
     [[nodiscard]] uint64_t checked_value_bytes(uint64_t value_count) const {

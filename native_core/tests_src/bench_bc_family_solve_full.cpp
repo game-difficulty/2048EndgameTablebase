@@ -45,12 +45,13 @@ struct Args {
     uint32_t cell_parallel_min_work_items = 4U;
     uint64_t final_pending_value_memory_cap_bytes = 0U;
     bool direct_io = false;
+    bool temp_buffered = false;
     bool keep_direct_padding = true;
     bool collect_batch_timing = false;
     bool collect_temp_sparsity = false;
     bool collect_resident_breakdown = false;
     bool interleave_spawn_phases = false;
-    bool interleaved_keep_future_reuse = false;
+    bool interleaved_keep_future_reuse = true;
     bool interleaved_keep_future4_reuse = false;
     bool interleaved_keep_future2_reuse = false;
     uint32_t interleave_block_fids = 1U;
@@ -349,6 +350,8 @@ struct LayerMetric {
                 1024ULL * 1024ULL;
         } else if (key == "--direct-io") {
             args.direct_io = true;
+        } else if (key == "--temp-buffered") {
+            args.temp_buffered = true;
         } else if (key == "--collect-batch-timing") {
             args.collect_batch_timing = true;
         } else if (key == "--collect-temp-sparsity") {
@@ -371,6 +374,8 @@ struct LayerMetric {
                 1024ULL * 1024ULL;
         } else if (key == "--interleaved-keep-future-reuse") {
             args.interleaved_keep_future_reuse = true;
+        } else if (key == "--interleaved-no-keep-future-reuse") {
+            args.interleaved_keep_future_reuse = false;
         } else if (key == "--interleaved-keep-future4-reuse") {
             args.interleaved_keep_future4_reuse = true;
         } else if (key == "--interleaved-keep-future2-reuse") {
@@ -399,6 +404,11 @@ struct LayerMetric {
         args.future_reuse_max_families == 0U || args.source_words_per_item == 0U ||
         args.work_schedule_chunk == 0U || args.interleave_block_fids == 0U) {
         throw std::invalid_argument("numeric options must be non-zero");
+    }
+    if (args.interleave_block_fids != 1U) {
+        throw std::invalid_argument(
+            "--interleave-block-fids must be 1"
+        );
     }
     return args;
 }
@@ -1550,7 +1560,8 @@ int main(int argc, char **argv) {
             options.future_index_recycle_max_bytes = args.future_index_recycle_max_bytes;
             options.final_pending_value_memory_cap_bytes =
                 args.final_pending_value_memory_cap_bytes;
-            options.temp_direct_io = args.direct_io;
+            options.temp_direct_io = args.direct_io && !args.temp_buffered;
+            options.force_temp_buffered_io = args.temp_buffered;
             options.temp_direct_queue_depth = args.direct_queue_depth;
             options.collect_batch_timing = args.collect_batch_timing;
             options.collect_temp_sparsity = args.collect_temp_sparsity;
