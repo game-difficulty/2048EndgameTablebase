@@ -195,17 +195,42 @@ private:
 };
 
 struct BCFamilyPartialBucketLayout {
-    uint32_t success_row_begin = 0U;
-    uint32_t success_row_end = 0U;
-    uint16_t empty_mask = 0U;
-    uint32_t empty_count = 0U;
     uint64_t value_offset = 0U;
-    std::array<uint8_t, kBCBoardCellCount> empty_slot_ordinals{};
+    uint32_t success_row_begin = 0U;
+    uint32_t success_row_end_value = 0U;
+    uint16_t empty_mask = 0U;
+    uint8_t empty_count = 0U;
+    uint8_t reserved = 0U;
 
     [[nodiscard]] uint32_t live_rows() const {
-        return success_row_end - success_row_begin;
+        return success_row_end_value - success_row_begin;
+    }
+
+    [[nodiscard]] uint32_t success_row_end() const {
+        return success_row_end_value;
+    }
+
+    [[nodiscard]] uint32_t empty_slot_ordinal(uint32_t empty_cell) const {
+        if (empty_cell >= kBCBoardCellCount) {
+            throw std::out_of_range("BC family partial empty cell out of range");
+        }
+        const uint32_t empty_bit = 1U << empty_cell;
+        if ((empty_mask & empty_bit) == 0U) {
+            throw std::invalid_argument("BC family partial cell is not empty in this bucket");
+        }
+        const uint32_t lower_mask = empty_mask & (empty_bit - 1U);
+        const uint32_t ordinal = popcount64(static_cast<uint64_t>(lower_mask));
+        if (ordinal >= empty_count) {
+            throw std::logic_error("BC family partial empty slot ordinal is invalid");
+        }
+        return ordinal;
     }
 };
+
+static_assert(
+    sizeof(BCFamilyPartialBucketLayout) == 24U,
+    "BC family partial bucket layout should stay compact"
+);
 
 struct BCFamilyPartialCellLayout {
     CellId cid = 0U;
@@ -229,12 +254,12 @@ struct BCFamilyPartialCellLayout {
             buckets.end(),
             success_row,
             [](uint32_t row, const BCFamilyPartialBucketLayout &bucket) {
-                return row < bucket.success_row_end;
+                return row < bucket.success_row_end();
             }
         );
         if (it == buckets.end() ||
             success_row < it->success_row_begin ||
-            success_row >= it->success_row_end) {
+            success_row >= it->success_row_end()) {
             throw std::logic_error("BC family partial row is not covered by any bucket");
         }
         return *it;
@@ -260,17 +285,10 @@ struct BCFamilyPartialCellLayout {
         if (empty_cell >= kBCBoardCellCount) {
             throw std::out_of_range("BC family partial empty cell out of range");
         }
-        if (success_row < bucket.success_row_begin || success_row >= bucket.success_row_end) {
+        if (success_row < bucket.success_row_begin || success_row >= bucket.success_row_end()) {
             throw std::out_of_range("BC family partial row is outside supplied bucket");
         }
-        const uint32_t empty_bit = 1U << empty_cell;
-        if ((bucket.empty_mask & empty_bit) == 0U) {
-            throw std::invalid_argument("BC family partial cell is not empty in this bucket");
-        }
-        const uint32_t slot_ordinal = bucket.empty_slot_ordinals[empty_cell];
-        if (slot_ordinal >= bucket.empty_count) {
-            throw std::logic_error("BC family partial empty slot ordinal is invalid");
-        }
+        const uint32_t slot_ordinal = bucket.empty_slot_ordinal(empty_cell);
         const uint64_t row_ordinal =
             static_cast<uint64_t>(success_row - bucket.success_row_begin);
         const uint64_t slot_offset =
@@ -279,6 +297,7 @@ struct BCFamilyPartialCellLayout {
             lane;
         return bucket.value_offset + slot_offset;
     }
+
 };
 
 [[nodiscard]] inline uint64_t bc_family_checked_mul_u64(
@@ -331,18 +350,14 @@ struct BCFamilyPartialCellLayout {
             "BC family partial bucket value overflow"
         );
         BCFamilyPartialBucketLayout partial_bucket;
-        partial_bucket.success_row_begin = begin;
-        partial_bucket.success_row_end = end;
-        partial_bucket.empty_mask = empty_mask;
-        partial_bucket.empty_count = empty_count;
         partial_bucket.value_offset = value_cursor;
-        partial_bucket.empty_slot_ordinals.fill(0xFFU);
-        uint32_t slot_ordinal = 0U;
-        uint32_t slot_mask = empty_mask;
-        while (slot_mask != 0U) {
-            const uint32_t cell = bc_solve_pop_lowest_set_bit_index(slot_mask);
-            partial_bucket.empty_slot_ordinals[cell] = static_cast<uint8_t>(slot_ordinal++);
+        partial_bucket.success_row_begin = begin;
+        partial_bucket.success_row_end_value = end;
+        if (empty_count > kBCBoardCellCount) {
+            throw std::overflow_error("BC family partial bucket empty count exceeds uint8");
         }
+        partial_bucket.empty_mask = empty_mask;
+        partial_bucket.empty_count = static_cast<uint8_t>(empty_count);
         out.buckets.push_back(partial_bucket);
         value_cursor = bc_checked_add_u64(
             value_cursor,
@@ -455,11 +470,13 @@ public:
             static_cast<uint64_t>(success_row - bucket.success_row_begin) *
                 static_cast<uint64_t>(bucket.empty_count) *
                 static_cast<uint64_t>(layout.row_width);
+        uint32_t slot_ordinal = 0U;
         while (mask != 0U) {
             const uint32_t cell = bc_solve_pop_lowest_set_bit_index(mask);
             const uint64_t cell_base = row_base +
-                static_cast<uint64_t>(bucket.empty_slot_ordinals[cell]) *
+                static_cast<uint64_t>(slot_ordinal) *
                     static_cast<uint64_t>(layout.row_width);
+            ++slot_ordinal;
             if (layout.row_width == 1U) {
                 best_by_cell_lane[cell] = values_[static_cast<size_t>(cell_base)];
                 continue;
@@ -521,7 +538,7 @@ private:
         const BCFamilyPartialBucketLayout &bucket,
         uint32_t success_row
     ) {
-        if (success_row < bucket.success_row_begin || success_row >= bucket.success_row_end) {
+        if (success_row < bucket.success_row_begin || success_row >= bucket.success_row_end()) {
             throw std::out_of_range("BC family partial compact row is outside supplied bucket");
         }
         return bucket.value_offset +
@@ -591,11 +608,13 @@ private:
             static_cast<uint64_t>(success_row - bucket.success_row_begin) *
                 static_cast<uint64_t>(bucket.empty_count) *
                 static_cast<uint64_t>(layout.row_width);
+        uint32_t slot_ordinal = 0U;
         while (mask != 0U) {
             const uint32_t cell = bc_solve_pop_lowest_set_bit_index(mask);
             const uint64_t cell_base = row_base +
-                static_cast<uint64_t>(bucket.empty_slot_ordinals[cell]) *
+                static_cast<uint64_t>(slot_ordinal) *
                     static_cast<uint64_t>(layout.row_width);
+            ++slot_ordinal;
             if (layout.row_width == 1U) {
                 StorageT &dst = values_[static_cast<size_t>(cell_base)];
                 const StorageT src = best_by_cell_lane[cell];

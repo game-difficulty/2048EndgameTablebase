@@ -454,7 +454,7 @@ template <typename StorageT>
                 continue;
             }
             for (uint32_t row = bucket.success_row_begin;
-                 row < bucket.success_row_end;
+                 row < bucket.success_row_end();
                  ++row) {
                 const uint64_t base = bucket.value_offset +
                     static_cast<uint64_t>(row - bucket.success_row_begin) *
@@ -540,14 +540,14 @@ template <typename StorageT>
             previous_row = row;
             have_previous_row = true;
             while (bucket_i < layout.buckets.size() &&
-                   row >= layout.buckets[bucket_i].success_row_end) {
+                   row >= layout.buckets[bucket_i].success_row_end()) {
                 ++bucket_i;
             }
             if (bucket_i >= layout.buckets.size()) {
                 throw std::out_of_range("BC family sparse partial decode row has no bucket");
             }
             const BCFamilyPartialBucketLayout &bucket = layout.buckets[bucket_i];
-            if (row < bucket.success_row_begin || row >= bucket.success_row_end) {
+            if (row < bucket.success_row_begin || row >= bucket.success_row_end()) {
                 throw std::out_of_range("BC family sparse partial decode row is outside bucket");
             }
             const size_t row_values =
@@ -601,16 +601,17 @@ template <typename StorageT>
 }
 
 struct BCFamilySolveTempRecord {
-    bool written = false;
-    uint64_t value_offset = 0U;
+    static constexpr uint64_t kUnwrittenOffset = std::numeric_limits<uint64_t>::max();
+
+    uint64_t value_offset = kUnwrittenOffset;
     uint64_t value_count = 0U;
+
+    [[nodiscard]] bool written() const noexcept {
+        return value_offset != kUnwrittenOffset;
+    }
 };
 
-template <typename StorageT>
-struct BCFamilySolveTempReadBatchResult {
-    std::vector<BCFamilyValueVector<StorageT>> values;
-    BCFamilySolveStats stats;
-};
+static_assert(sizeof(BCFamilySolveTempRecord) == 16U, "BC family temp record should stay compact");
 
 struct BCFamilyCurrentCellLoadResult {
     std::vector<BCLoadedCell> cells;
@@ -740,7 +741,6 @@ public:
             BCFamilySolveTempRecord &record = records[i];
             record.value_offset = value_cursor_;
             record.value_count = values->size();
-            record.written = true;
             const uint64_t bytes = checked_bytes(values->size());
             if (bytes != 0U) {
                 requests.push_back(BCFileWriteRequest{
@@ -854,7 +854,7 @@ public:
                 throw std::out_of_range("BC family solve temp batch cid out of range");
             }
             const BCFamilySolveTempRecord &record = records[static_cast<size_t>(cid)];
-            if (!record.written) {
+            if (!record.written()) {
                 throw std::runtime_error("BC family solve missing temp batch record");
             }
             if (record.value_offset > value_cursor_ ||
@@ -1172,12 +1172,11 @@ private:
     ) {
         require_cid(cid, records);
         BCFamilySolveTempRecord &record = records[static_cast<size_t>(cid)];
-        if (record.written) {
+        if (record.written()) {
             throw std::runtime_error("BC family solve duplicate temp record");
         }
         record.value_offset = file.append(values, &stats);
         record.value_count = values.size();
-        record.written = true;
     }
 
     static void write_records_batch(
@@ -1198,7 +1197,7 @@ private:
         for (size_t i = 0U; i < cids.size(); ++i) {
             const CellId cid = cids[i];
             require_cid(cid, records);
-            if (records[static_cast<size_t>(cid)].written) {
+            if (records[static_cast<size_t>(cid)].written()) {
                 throw std::runtime_error("BC family solve duplicate temp batch record");
             }
             value_views.push_back(&values[i]);
@@ -1221,7 +1220,7 @@ private:
     ) {
         require_cid(cid, records);
         const BCFamilySolveTempRecord &record = records[static_cast<size_t>(cid)];
-        if (!record.written) {
+        if (!record.written()) {
             throw std::runtime_error("BC family solve missing temp record");
         }
         if (record.value_count != expected_count) {
@@ -1238,7 +1237,7 @@ private:
     ) {
         require_cid(cid, records);
         const BCFamilySolveTempRecord &record = records[static_cast<size_t>(cid)];
-        if (!record.written) {
+        if (!record.written()) {
             throw std::runtime_error("BC family solve missing temp record");
         }
         return file.read(record.value_offset, record.value_count, &stats);
@@ -1328,13 +1327,12 @@ public:
     void write(CellId cid, const BCFamilyValueVector<StorageT> &values, BCFamilySolveStats &stats) {
         require_cid(cid);
         BCFamilySolveTempRecord &record = records_[static_cast<size_t>(cid)];
-        if (record.written) {
+        if (record.written()) {
             throw std::runtime_error("BC family final stage duplicate record");
         }
         BCFamilySolveStats local;
         record.value_offset = values_.append(values, &local);
         record.value_count = values.size();
-        record.written = true;
         ++stats.final_stage_cells_written;
         bc_family_accumulate_final_stage_write_stats(stats, local);
     }
@@ -1355,7 +1353,7 @@ public:
             if (values[i] == nullptr) {
                 throw std::invalid_argument("BC family final stage batch values are null");
             }
-            if (records_[static_cast<size_t>(cids[i])].written) {
+            if (records_[static_cast<size_t>(cids[i])].written()) {
                 throw std::runtime_error("BC family final stage duplicate batch record");
             }
         }
@@ -1373,19 +1371,19 @@ public:
 
     [[nodiscard]] bool written(CellId cid) const {
         require_cid(cid);
-        return records_[static_cast<size_t>(cid)].written;
+        return records_[static_cast<size_t>(cid)].written();
     }
 
     [[nodiscard]] uint64_t value_count(CellId cid) const {
         require_cid(cid);
         const BCFamilySolveTempRecord &record = records_[static_cast<size_t>(cid)];
-        return record.written ? record.value_count : 0U;
+        return record.written() ? record.value_count : 0U;
     }
 
     [[nodiscard]] BCFamilyValueVector<StorageT> read(CellId cid, BCFamilySolveStats &stats) {
         require_cid(cid);
         const BCFamilySolveTempRecord &record = records_[static_cast<size_t>(cid)];
-        if (!record.written) {
+        if (!record.written()) {
             return {};
         }
         BCFamilySolveStats local;
@@ -1402,7 +1400,7 @@ public:
     ) {
         for (CellId cid : cids) {
             require_cid(cid);
-            if (!records_[static_cast<size_t>(cid)].written) {
+            if (!records_[static_cast<size_t>(cid)].written()) {
                 throw std::runtime_error("BC family final stage missing batch record");
             }
         }
