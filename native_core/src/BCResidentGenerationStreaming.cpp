@@ -522,18 +522,15 @@ void process_source_board(
         bc_is_success_by_shifts(board, options.success_target_rank, *options.success_shifts)) {
         return;
     }
-    uint32_t empty_mask = source_empty_mask;
-    while (empty_mask != 0U) {
-        const uint32_t cell = countr_zero32(empty_mask);
-        empty_mask &= empty_mask - 1U;
-        const uint64_t spawned =
-            board | (static_cast<uint64_t>(source.spawn_tile_rank) << (4U * cell));
-        const auto moved = BoardMover::move_all_dir(spawned);
-        push_moved_board(workspace, spawned, std::get<0>(moved), options);
-        push_moved_board(workspace, spawned, std::get<1>(moved), options);
-        push_moved_board(workspace, spawned, std::get<2>(moved), options);
-        push_moved_board(workspace, spawned, std::get<3>(moved), options);
-    }
+    bc_generate_spawn_move_candidates(
+        board,
+        source_empty_mask,
+        source.spawn_tile_rank,
+        BCDirectionMask::Both,
+        [&](uint64_t spawned, uint64_t moved) {
+            push_moved_board(workspace, spawned, moved, options);
+        }
+    );
     if (workspace.canonical_buffer.size() >= options.canonical_batch_size) {
         flush_canonical_buffer(workspace, lut, target_layout, dynamic_state, options, word_sums);
     }

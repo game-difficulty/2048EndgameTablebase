@@ -1024,6 +1024,7 @@ struct BCSuccessLoadStats {
     uint64_t read_bytes = 0U;
     uint64_t backend_read_ops = 0U;
     uint64_t backend_read_bytes = 0U;
+    double backend_read_seconds = 0.0;
 };
 
 struct BCLoadedSuccessCell {
@@ -1033,6 +1034,9 @@ struct BCLoadedSuccessCell {
     uint32_t success_rows = 0U;
     std::vector<uint8_t> raw_bytes;
     std::vector<uint32_t> values;
+    std::shared_ptr<detail::BCAlignedBuffer> external_value_bytes;
+    const uint32_t *external_values = nullptr;
+    size_t external_value_count = 0U;
 
     [[nodiscard]] bool empty() const {
         return success_rows == 0U;
@@ -1065,11 +1069,31 @@ struct BCLoadedSuccessCell {
             throw std::out_of_range("BC loaded success cell lane out of range");
         }
         const uint64_t index = static_cast<uint64_t>(row) * row_width + lane;
+        if constexpr (std::is_same_v<T, uint32_t>) {
+            const uint32_t *typed = uint32_values_data();
+            if (typed != nullptr) {
+                if (index >= uint32_value_count()) {
+                    throw std::out_of_range("BC loaded success cell typed value index exceeds payload");
+                }
+                return typed[static_cast<size_t>(index)];
+            }
+        }
         const uint64_t offset = index * value_size();
         if (offset > raw_bytes.size() || value_size() > raw_bytes.size() - offset) {
             throw std::out_of_range("BC loaded success cell value index exceeds payload");
         }
         return bc_load_success_value_le<T>(raw_bytes.data() + static_cast<size_t>(offset));
+    }
+
+    [[nodiscard]] const uint32_t *uint32_values_data() const noexcept {
+        if (external_values != nullptr) {
+            return external_values;
+        }
+        return values.empty() ? nullptr : values.data();
+    }
+
+    [[nodiscard]] size_t uint32_value_count() const noexcept {
+        return external_values != nullptr ? external_value_count : values.size();
     }
 };
 
@@ -1240,26 +1264,35 @@ public:
         uint32_t queue_depth = 8U,
         bool overlapped = true
     ) {
-        BCBufferedFileReader probe(path);
-        std::vector<uint8_t> header_bytes(kBCSuccessHeaderBytes);
-        probe.read_at(0U, header_bytes.data(), header_bytes.size());
-        const BCSuccessHeader header = bc_read_success_header(header_bytes);
-        const uint64_t logical_size = bc_checked_add_u64(
-            header.payload_offset,
-            header.payload_bytes,
-            "BC success direct logical size overflow"
-        );
         BCDirectFileIOOptions options;
         options.queue_depth = queue_depth;
         options.overlapped = overlapped || queue_depth > 1U;
-        options.logical_size = logical_size;
-        const uint64_t required_physical = bc_direct_align_up(logical_size, options.alignment);
-        if (probe.size() >= required_physical) {
-            return BCSuccessStreamingReader(
-                std::make_unique<BCDirectFileReader>(path, options),
-                position,
-                expected_row_width
+        std::error_code ec;
+        const uint64_t physical_size = std::filesystem::file_size(path, ec);
+        if (ec) {
+            throw std::runtime_error("BC success streaming direct-auto file_size failed: " + ec.message());
+        }
+        if ((physical_size & (static_cast<uint64_t>(options.alignment) - 1U)) == 0U) {
+            options.physical_size = physical_size;
+            options.logical_size = physical_size;
+            auto direct = std::make_unique<BCDirectFileReader>(path, options);
+            std::vector<uint8_t> header_bytes(kBCSuccessHeaderBytes);
+            direct->read_at(0U, header_bytes.data(), header_bytes.size());
+            const BCSuccessHeader header = bc_read_success_header(header_bytes);
+            const uint64_t logical_size = bc_checked_add_u64(
+                header.payload_offset,
+                header.payload_bytes,
+                "BC success direct logical size overflow"
             );
+            const uint64_t required_physical = bc_direct_align_up(logical_size, options.alignment);
+            if (physical_size >= required_physical) {
+                direct->set_logical_size(logical_size);
+                return BCSuccessStreamingReader(
+                    std::move(direct),
+                    position,
+                    expected_row_width
+                );
+            }
         }
         return open_buffered(path, position, expected_row_width);
     }
@@ -1371,6 +1404,7 @@ public:
         if (stats != nullptr) {
             stats->backend_read_ops = io_stats.backend_io_count;
             stats->backend_read_bytes = io_stats.backend_bytes;
+            stats->backend_read_seconds += io_stats.backend_seconds;
         }
 #else
         std::vector<uint8_t> bytes(static_cast<size_t>(header_.payload_bytes));
@@ -1384,6 +1418,7 @@ public:
         if (stats != nullptr) {
             stats->backend_read_ops = io_stats.backend_io_count;
             stats->backend_read_bytes = io_stats.backend_bytes;
+            stats->backend_read_seconds += io_stats.backend_seconds;
         }
         for (uint64_t i = 0U; i < value_count; ++i) {
             values[static_cast<size_t>(i)] =
@@ -1451,6 +1486,7 @@ public:
                 if (stats != nullptr) {
                     stats->backend_read_ops = io_stats.backend_io_count;
                     stats->backend_read_bytes = io_stats.backend_bytes;
+                    stats->backend_read_seconds += io_stats.backend_seconds;
                 }
                 return owned;
             }
@@ -1468,16 +1504,17 @@ public:
         CellId cid,
         BCSuccessLoadStats *stats = nullptr
     ) const {
-        const std::vector<BCLoadedSuccessCell> cells = load_cells(std::vector<CellId>{cid}, stats);
+        std::vector<BCLoadedSuccessCell> cells = load_cells(std::vector<CellId>{cid}, stats);
         if (cells.size() != 1U) {
             throw std::logic_error("BC success streaming load_cell internal result size mismatch");
         }
-        return cells.front();
+        return std::move(cells.front());
     }
 
     [[nodiscard]] std::vector<BCLoadedSuccessCell> load_cells(
         const std::vector<CellId> &cids,
-        BCSuccessLoadStats *stats = nullptr
+        BCSuccessLoadStats *stats = nullptr,
+        bool omit_raw_bytes_for_uint32 = false
     ) const {
         require_open();
         if (stats != nullptr) {
@@ -1505,9 +1542,12 @@ public:
             if (byte_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
                 throw std::overflow_error("BC success streaming cell byte count exceeds size_t");
             }
-            cell.raw_bytes.assign(static_cast<size_t>(byte_count), 0U);
-            if (dtype_mode() == BCSuccessDTypeMode::UInt32) {
+            if (dtype_mode() == BCSuccessDTypeMode::UInt32 &&
+                !(omit_raw_bytes_for_uint32 && value_count != 0U)) {
                 cell.values.assign(static_cast<size_t>(value_count), 0U);
+            }
+            if (!(omit_raw_bytes_for_uint32 && dtype_mode() == BCSuccessDTypeMode::UInt32)) {
+                cell.raw_bytes.assign(static_cast<size_t>(byte_count), 0U);
             }
             cells.push_back(std::move(cell));
             if (value_count == 0U) {
@@ -1528,6 +1568,71 @@ public:
             }
         }
 
+        if (omit_raw_bytes_for_uint32 && dtype_mode() == BCSuccessDTypeMode::UInt32) {
+            std::vector<BCFileReadRequest> read_requests;
+            read_requests.reserve(requests.size());
+            const uint32_t alignment = std::max<uint32_t>(1U, file_->preferred_read_alignment());
+            for (const ExtentRequest &request : requests) {
+                BCLoadedSuccessCell &cell = cells[request.cell_index];
+                if ((request.bytes % sizeof(uint32_t)) != 0U) {
+                    throw std::logic_error("BC success streaming direct value byte count is not uint32-aligned");
+                }
+                const size_t value_count = static_cast<size_t>(request.bytes / sizeof(uint32_t));
+                const uint64_t physical_offset = alignment > 1U
+                    ? bc_direct_align_down(request.offset, alignment)
+                    : request.offset;
+                const uint64_t request_end = bc_checked_add_u64(
+                    request.offset,
+                    request.bytes,
+                    "BC success streaming direct request end overflow"
+                );
+                const uint64_t physical_end = alignment > 1U
+                    ? bc_direct_align_up(request_end, alignment)
+                    : request_end;
+                const uint64_t physical_bytes = physical_end - physical_offset;
+                if (physical_bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+                    throw std::overflow_error("BC success streaming direct physical range exceeds size_t");
+                }
+                const uint64_t in_physical = request.offset - physical_offset;
+                if ((in_physical % sizeof(uint32_t)) != 0U) {
+                    throw std::logic_error("BC success streaming direct value pointer is not uint32-aligned");
+                }
+                auto buffer = std::make_shared<detail::BCAlignedBuffer>(physical_bytes, alignment);
+                cell.external_value_bytes = std::move(buffer);
+                cell.external_values = reinterpret_cast<const uint32_t *>(
+                    cell.external_value_bytes->data() + static_cast<size_t>(in_physical)
+                );
+                cell.external_value_count = value_count;
+                if (request.bytes != cell.uint32_value_count() * sizeof(uint32_t)) {
+                    throw std::logic_error("BC success streaming direct value byte count mismatch");
+                }
+                if (request.bytes == 0U) {
+                    continue;
+                }
+                if (stats != nullptr) {
+                    ++stats->coalesced_extents;
+                    stats->read_bytes = bc_checked_add_u64(
+                        stats->read_bytes,
+                        request.bytes,
+                        "BC success streaming direct value read byte count overflow"
+                    );
+                }
+                read_requests.push_back(BCFileReadRequest{
+                    physical_offset,
+                    cell.external_value_bytes->data(),
+                    physical_bytes
+                });
+            }
+            BCFileIOStats io_stats;
+            file_->read_many(read_requests, &io_stats);
+            if (stats != nullptr) {
+                stats->backend_read_ops = io_stats.backend_io_count;
+                stats->backend_read_bytes = io_stats.backend_bytes;
+                stats->backend_read_seconds += io_stats.backend_seconds;
+            }
+            return cells;
+        }
+
         std::vector<LoadedRange> ranges = read_coalesced_ranges(requests, stats);
         for (const ExtentRequest &request : requests) {
             const LoadedRange &range = find_loaded_range(ranges, request.offset, request.bytes);
@@ -1538,12 +1643,28 @@ public:
             }
             const uint8_t *src = range.bytes.data() + static_cast<size_t>(in_range_offset);
             BCLoadedSuccessCell &cell = cells[request.cell_index];
-            if (request.bytes != cell.raw_bytes.size()) {
+            if (!cell.raw_bytes.empty() && request.bytes != cell.raw_bytes.size()) {
                 throw std::logic_error("BC success streaming loaded raw byte count mismatch");
             }
-            std::copy(src, src + static_cast<size_t>(request.bytes), cell.raw_bytes.begin());
             if (dtype_mode() == BCSuccessDTypeMode::UInt32) {
-                parse_u32_values(cell.raw_bytes.data(), request.bytes, cell.values);
+                if (request.bytes != cell.values.size() * sizeof(uint32_t)) {
+                    throw std::logic_error("BC success streaming loaded uint32 value byte count mismatch");
+                }
+                if (cell.raw_bytes.empty()) {
+#if defined(_WIN32) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+                    std::memcpy(cell.values.data(), src, static_cast<size_t>(request.bytes));
+#else
+                    parse_u32_values(src, request.bytes, cell.values);
+#endif
+                } else {
+                    std::copy(src, src + static_cast<size_t>(request.bytes), cell.raw_bytes.begin());
+                    parse_u32_values(cell.raw_bytes.data(), request.bytes, cell.values);
+                }
+            } else {
+                if (request.bytes != cell.raw_bytes.size()) {
+                    throw std::logic_error("BC success streaming loaded raw byte count mismatch");
+                }
+                std::copy(src, src + static_cast<size_t>(request.bytes), cell.raw_bytes.begin());
             }
         }
         return cells;
@@ -1836,6 +1957,7 @@ private:
         if (stats != nullptr) {
             stats->backend_read_ops = io_stats.backend_io_count;
             stats->backend_read_bytes = io_stats.backend_bytes;
+            stats->backend_read_seconds += io_stats.backend_seconds;
         }
         return ranges;
     }

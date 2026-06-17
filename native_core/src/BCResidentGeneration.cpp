@@ -835,26 +835,25 @@ static void process_source_board_pair(
         bc_is_success_by_shifts(board, options.success_target_rank, *options.success_shifts)) {
         return;
     }
-    uint32_t empty_mask = source_empty_mask;
-    while (empty_mask != 0U) {
-        const uint32_t cell = countr_zero32(empty_mask);
-        empty_mask &= empty_mask - 1U;
-
-        const uint64_t spawn2 = board | (1ULL << (4U * cell));
-        const auto moved2 = BoardMover::move_all_dir(spawn2);
-        push_moved_board(primary_workspace, spawn2, std::get<0>(moved2));
-        push_moved_board(primary_workspace, spawn2, std::get<1>(moved2));
-        push_moved_board(primary_workspace, spawn2, std::get<2>(moved2));
-        push_moved_board(primary_workspace, spawn2, std::get<3>(moved2));
-
-        if (secondary_workspace != nullptr && secondary_layout != nullptr && secondary_state != nullptr) {
-            const uint64_t spawn4 = board | (2ULL << (4U * cell));
-            const auto moved4 = BoardMover::move_all_dir(spawn4);
-            push_moved_board(*secondary_workspace, spawn4, std::get<0>(moved4));
-            push_moved_board(*secondary_workspace, spawn4, std::get<1>(moved4));
-            push_moved_board(*secondary_workspace, spawn4, std::get<2>(moved4));
-            push_moved_board(*secondary_workspace, spawn4, std::get<3>(moved4));
+    bc_generate_spawn_move_candidates(
+        board,
+        source_empty_mask,
+        1U,
+        BCDirectionMask::Both,
+        [&](uint64_t spawned, uint64_t moved) {
+            push_moved_board(primary_workspace, spawned, moved);
         }
+    );
+    if (secondary_workspace != nullptr && secondary_layout != nullptr && secondary_state != nullptr) {
+        bc_generate_spawn_move_candidates(
+            board,
+            source_empty_mask,
+            2U,
+            BCDirectionMask::Both,
+            [&](uint64_t spawned, uint64_t moved) {
+                push_moved_board(*secondary_workspace, spawned, moved);
+            }
+        );
     }
     if (primary_workspace.canonical_buffer.size() >= options.canonical_batch_size) {
         flush_canonical_buffer(
@@ -900,18 +899,15 @@ static void process_source_board(
         bc_is_success_by_shifts(board, options.success_target_rank, *options.success_shifts)) {
         return;
     }
-    uint32_t empty_mask = source_empty_mask;
-    while (empty_mask != 0U) {
-        const uint32_t cell = countr_zero32(empty_mask);
-        empty_mask &= empty_mask - 1U;
-        const uint64_t spawned =
-            board | (static_cast<uint64_t>(source.spawn_tile_rank) << (4U * cell));
-        const auto moved = BoardMover::move_all_dir(spawned);
-        push_moved_board(workspace, spawned, std::get<0>(moved));
-        push_moved_board(workspace, spawned, std::get<1>(moved));
-        push_moved_board(workspace, spawned, std::get<2>(moved));
-        push_moved_board(workspace, spawned, std::get<3>(moved));
-    }
+    bc_generate_spawn_move_candidates(
+        board,
+        source_empty_mask,
+        source.spawn_tile_rank,
+        BCDirectionMask::Both,
+        [&](uint64_t spawned, uint64_t moved) {
+            push_moved_board(workspace, spawned, moved);
+        }
+    );
     if (workspace.canonical_buffer.size() >= options.canonical_batch_size) {
         flush_canonical_buffer(
             workspace,

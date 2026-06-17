@@ -350,7 +350,7 @@ BCPositionFileReader BCPositionFileReader::open_direct_auto(
 ) {
     BCBufferedFileReader probe(path);
     std::vector<uint8_t> header_bytes(kBCPositionHeaderBytes);
-    probe.read_at(0U, header_bytes.data(), header_bytes.size());
+    probe.read_at_cached_size(0U, header_bytes.data(), header_bytes.size());
     const BCPositionHeader header = bc_read_header(header_bytes);
     const uint64_t logical_size = bc_position_logical_size_from_header(header);
     BCDirectFileIOOptions options;
@@ -358,7 +358,7 @@ BCPositionFileReader BCPositionFileReader::open_direct_auto(
     options.overlapped = overlapped || queue_depth > 1U;
     options.logical_size = logical_size;
     const uint64_t required_physical = bc_direct_align_up(logical_size, options.alignment);
-    if (probe.size() >= required_physical) {
+    if (probe.cached_size() >= required_physical) {
         return BCPositionFileReader(std::make_unique<BCDirectFileReader>(path, options), lut);
     }
     return BCPositionFileReader(std::make_unique<BCBufferedFileReader>(path), lut);

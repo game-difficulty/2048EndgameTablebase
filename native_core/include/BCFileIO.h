@@ -321,6 +321,24 @@ public:
         read_contiguous(data, bytes);
     }
 
+    void read_at_cached_size(uint64_t offset, void *data, uint64_t bytes) const {
+        if (bytes == 0U) {
+            return;
+        }
+        if (data == nullptr) {
+            throw std::invalid_argument("BC buffered file reader data pointer is null");
+        }
+        if (offset > size_ || bytes > size_ - offset) {
+            throw std::out_of_range("BC buffered file reader read exceeds cached file size");
+        }
+        file_.clear();
+        file_.seekg(checked_stream_offset(offset, "BC buffered read offset exceeds stream range"));
+        if (!file_) {
+            throw std::runtime_error("BC buffered file reader seekg failed: " + path_.string());
+        }
+        read_contiguous(data, bytes);
+    }
+
     void read_many(
         const std::vector<BCFileReadRequest> &requests,
         BCFileIOStats *stats = nullptr
@@ -357,6 +375,10 @@ public:
 
     [[nodiscard]] uint64_t size() const override {
         refresh_size();
+        return size_;
+    }
+
+    [[nodiscard]] uint64_t cached_size() const {
         return size_;
     }
 

@@ -29,6 +29,7 @@ struct Args {
     std::string input_prefix = "bc_layer_";
     std::string output_prefix = "free9_256_";
     uint32_t target_rank = 8U;
+    uint32_t target_modulus = 0U;
     bool direct_io = false;
     uint32_t direct_queue_depth = 16U;
     int num_threads = 0;
@@ -69,6 +70,10 @@ Args parse_args(int argc, char **argv) {
             args.target_rank = static_cast<uint32_t>(
                 std::stoul(require_value(argc, argv, i, "--target-rank"))
             );
+        } else if (key == "--target-modulus") {
+            args.target_modulus = static_cast<uint32_t>(
+                std::stoul(require_value(argc, argv, i, "--target-modulus"))
+            );
         } else if (key == "--direct-io") {
             args.direct_io = true;
         } else if (key == "--direct-queue-depth") {
@@ -91,6 +96,9 @@ Args parse_args(int argc, char **argv) {
     }
     if (args.target_rank >= 15U) {
         throw std::invalid_argument("--target-rank must be < 15");
+    }
+    if (args.target_modulus > std::numeric_limits<BC::FamilyId>::max()) {
+        throw std::invalid_argument("--target-modulus exceeds FamilyId range");
     }
     if (args.direct_queue_depth == 0U) {
         throw std::invalid_argument("--direct-queue-depth must be non-zero");
@@ -223,7 +231,7 @@ int main(int argc, char **argv) {
             stats = &stats_file;
         }
         *stats << std::setprecision(9)
-               << "ordinal,layer_sum,source_family_count,target_family_count,rows,buckets,"
+               << "ordinal,layer_sum,source_family_count,target_family_count,target_modulus,rows,buckets,"
                << "rank_payload_bytes,logical_bytes,read_remap_seconds,write_seconds,total_seconds,path\n";
 
         uint64_t total_rows = 0U;
@@ -237,7 +245,14 @@ int main(int argc, char **argv) {
             const double read_begin = now_seconds();
             BC::BCPositionStreamingReader source = open_reader(args, input.path, lut);
             const BC::BCFamilyTable logical_axis =
-                BC::build_family_axis_for_layer(input.layer_sum, 2U, possible_8tile_sums);
+                args.target_modulus == 0U
+                    ? BC::build_family_axis_for_layer(input.layer_sum, 2U, possible_8tile_sums)
+                    : BC::build_family_partition_axis_for_layer(
+                          input.layer_sum,
+                          2U,
+                          possible_8tile_sums,
+                          BC::BCFamilyPartitionPolicy::modulo(args.target_modulus)
+                      );
             BC::BCPositionFamilyRemapReader remap(source, logical_axis, possible_8tile_sums);
             const BC::BCCellMatrix matrix(logical_axis);
             std::vector<BC::CellId> cids(matrix.cell_count());
@@ -278,6 +293,7 @@ int main(int argc, char **argv) {
                    << input.layer_sum << ','
                    << source.axis().family_count() << ','
                    << logical_axis.family_count() << ','
+                   << args.target_modulus << ','
                    << rows << ','
                    << buckets << ','
                    << rank_bytes << ','
@@ -288,7 +304,7 @@ int main(int argc, char **argv) {
                    << output_path.string() << '\n';
         }
         const double wall = now_seconds() - all_begin;
-        *stats << "total,,,"
+        *stats << "total,,,,"
                << ',' << total_rows
                << ",,,"
                << total_logical_bytes << ','

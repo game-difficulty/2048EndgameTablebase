@@ -51,6 +51,10 @@ struct BCDirectFileIOOptions {
     // files through direct IO without changing their logical format.
     std::optional<uint64_t> logical_size = std::nullopt;
 
+    // Optional physical size supplied by a caller that already probed the file.
+    // This avoids a second filesystem stat during direct-auto open paths.
+    std::optional<uint64_t> physical_size = std::nullopt;
+
     // Preserve bytes in aligned physical blocks that are not covered by a
     // write request. This is slower but required for append-style streams that
     // may issue non-4KB-aligned writes into an existing tail block.
@@ -412,10 +416,14 @@ public:
     )
         : path_(path), options_(detail::normalize_direct_options(options)) {
         handle_ = detail::open_direct_handle(path_, false, options_.overlapped);
-        std::error_code ec;
-        physical_size_ = std::filesystem::file_size(path_, ec);
-        if (ec) {
-            throw std::runtime_error("BC direct reader file_size failed: " + ec.message());
+        if (options_.physical_size.has_value()) {
+            physical_size_ = *options_.physical_size;
+        } else {
+            std::error_code ec;
+            physical_size_ = std::filesystem::file_size(path_, ec);
+            if (ec) {
+                throw std::runtime_error("BC direct reader file_size failed: " + ec.message());
+            }
         }
         logical_size_ = options_.logical_size.value_or(physical_size_);
         if (logical_size_ > physical_size_) {
@@ -425,6 +433,18 @@ public:
         if (required_physical > physical_size_) {
             throw std::runtime_error("BC direct reader requires padded physical file size");
         }
+    }
+
+    void set_logical_size(uint64_t logical_size) {
+        if (logical_size > physical_size_) {
+            throw std::runtime_error("BC direct reader logical size exceeds physical file size");
+        }
+        const uint64_t required_physical = bc_direct_align_up(logical_size, options_.alignment);
+        if (required_physical > physical_size_) {
+            throw std::runtime_error("BC direct reader requires padded physical file size");
+        }
+        logical_size_ = logical_size;
+        options_.logical_size = logical_size;
     }
 
     void read_at(uint64_t offset, void *data, uint64_t bytes) const override {
@@ -588,6 +608,7 @@ private:
             }
             bytes_sum += range.bytes;
         }
+        const auto read_t0 = std::chrono::steady_clock::now();
         if (!options_.overlapped || options_.queue_depth <= 1U) {
             for (detail::BCPhysicalRange &range : ranges) {
                 detail::direct_read_sync(
@@ -603,10 +624,18 @@ private:
                 io_count += detail::windows_io_chunk_count(range.bytes, options_.alignment);
             }
             detail::add_backend_stats(stats, io_count, bytes_sum);
+            if (stats != nullptr) {
+                stats->backend_seconds +=
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - read_t0).count();
+            }
             return;
         }
         read_physical_ranges_overlapped(ranges, worker_count);
         detail::add_backend_stats(stats, ranges.size(), bytes_sum);
+        if (stats != nullptr) {
+            stats->backend_seconds +=
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - read_t0).count();
+        }
     }
 
     [[nodiscard]] bool try_read_many_direct_aligned_sync(
@@ -646,6 +675,7 @@ private:
         if (non_empty == 0U) {
             return true;
         }
+        const auto read_t0 = std::chrono::steady_clock::now();
         for (const BCFileReadRequest &request : requests) {
             if (request.bytes == 0U) {
                 continue;
@@ -682,6 +712,8 @@ private:
             }
             stats->backend_io_count += io_count;
             stats->backend_bytes += requested_bytes;
+            stats->backend_seconds +=
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - read_t0).count();
         }
         return true;
     }
@@ -753,6 +785,7 @@ private:
                 stats->requested_bytes += local.requested_bytes;
                 stats->backend_io_count += local.backend_io_count;
                 stats->backend_bytes += local.backend_bytes;
+                stats->backend_seconds += local.backend_seconds;
             }
         }
     }
@@ -1165,6 +1198,7 @@ public:
                 stats->requested_bytes += local.requested_bytes;
                 stats->backend_io_count += local.backend_io_count;
                 stats->backend_bytes += local.backend_bytes;
+                stats->backend_seconds += local.backend_seconds;
             }
         }
     }
@@ -1917,7 +1951,7 @@ public:
     )
         : path_(path), options_(detail::normalize_direct_options(options)) {
         fd_ = detail::BCLinuxFd(detail::open_direct_fd(path_, false));
-        physical_size_ = detail::fd_file_size(fd_.get());
+        physical_size_ = options_.physical_size.value_or(detail::fd_file_size(fd_.get()));
         logical_size_ = options_.logical_size.value_or(physical_size_);
         if (logical_size_ > physical_size_) {
             throw std::runtime_error("BC direct reader logical size exceeds physical file size");
@@ -1926,6 +1960,18 @@ public:
         if (required_physical > physical_size_) {
             throw std::runtime_error("BC direct reader requires padded physical file size");
         }
+    }
+
+    void set_logical_size(uint64_t logical_size) {
+        if (logical_size > physical_size_) {
+            throw std::runtime_error("BC direct reader logical size exceeds physical file size");
+        }
+        const uint64_t required_physical = bc_direct_align_up(logical_size, options_.alignment);
+        if (required_physical > physical_size_) {
+            throw std::runtime_error("BC direct reader requires padded physical file size");
+        }
+        logical_size_ = logical_size;
+        options_.logical_size = logical_size;
     }
 
     void read_at(uint64_t offset, void *data, uint64_t bytes) const override {
@@ -2340,6 +2386,7 @@ public:
     explicit BCDirectFileReader(const std::filesystem::path &, BCDirectFileIOOptions = {}) {
         throw std::runtime_error("BC direct file reader is only implemented on Windows and Linux");
     }
+    void set_logical_size(uint64_t) {}
     void read_at(uint64_t, void *, uint64_t) const override {}
     uint64_t size() const override {
         return 0U;

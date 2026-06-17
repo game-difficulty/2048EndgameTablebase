@@ -42,7 +42,7 @@ struct BCSolveLookupResult {
 
 struct BCSolveTargetFamilyFilter {
     bool enabled = false;
-    FamilyIdList2 families;
+    FamilyIdList3 families;
 };
 
 struct BCSolveEdgeOptions {
@@ -229,6 +229,141 @@ struct BCSolveEdgeWorkspace {
     }
     return bc_solve_filter_contains_family(filter, row_family) ||
         bc_solve_filter_contains_family(filter, col_family);
+}
+
+struct BCSolvePhysicalTargetFamilyHits {
+    bool horizontal = true;
+    bool vertical = true;
+};
+
+[[nodiscard]] inline BCSolvePhysicalTargetFamilyHits bc_solve_spawned_target_family_hits(
+    const BCLut &lut,
+    const BCFamilyTable &axis,
+    const BCSolveTargetFamilyFilter &filter,
+    uint64_t spawned_board,
+    const BCQuadrantWordSumTable *word_sums,
+    uint32_t cell_modulus = 0U
+) {
+    if (!filter.enabled) {
+        return {};
+    }
+
+    const BCQuadrantWords q = unpack_board_to_quadrants(spawned_board);
+    const BCWordDesc &nw_desc = lut.word_desc(q.nw);
+    const BCWordDesc &ne_desc = lut.word_desc(q.ne);
+    const BCWordDesc &sw_desc = lut.word_desc(q.sw);
+    const BCWordDesc &se_desc = lut.word_desc(q.se);
+    if (!nw_desc.valid || !ne_desc.valid || !sw_desc.valid || !se_desc.valid) {
+        return {};
+    }
+
+    const bool use_word_sums = word_sums != nullptr && !word_sums->empty();
+    const uint64_t nw_sum = use_word_sums ? (*word_sums)[q.nw] : lut.sum4_value(nw_desc.sum_id);
+    const uint64_t ne_sum = use_word_sums ? (*word_sums)[q.ne] : lut.sum4_value(ne_desc.sum_id);
+    const uint64_t sw_sum = use_word_sums ? (*word_sums)[q.sw] : lut.sum4_value(sw_desc.sum_id);
+    const uint64_t se_sum = use_word_sums ? (*word_sums)[q.se] : lut.sum4_value(se_desc.sum_id);
+    if (nw_sum + ne_sum + sw_sum + se_sum != axis.layer_sum()) {
+        return {};
+    }
+
+    FamilyCoord row_coord = 0U;
+    FamilyCoord col_coord = 0U;
+    if (!bc_min_side_coord_u64(nw_sum + ne_sum, sw_sum + se_sum, axis.family_unit(), row_coord) ||
+        !bc_min_side_coord_u64(nw_sum + sw_sum, ne_sum + se_sum, axis.family_unit(), col_coord)) {
+        return {};
+    }
+
+    auto coord_to_id = [&](FamilyCoord coord, FamilyId &id_out) {
+        uint32_t coord_u32 = coord;
+        if (cell_modulus != 0U) {
+            coord_u32 %= cell_modulus;
+        }
+        if (coord_u32 > std::numeric_limits<FamilyCoord>::max()) {
+            return false;
+        }
+        id_out = axis.try_coord_to_id(static_cast<FamilyCoord>(coord_u32));
+        return id_out != BCFamilyTable::kInvalidFamilyId;
+    };
+
+    FamilyId row_family = BCFamilyTable::kInvalidFamilyId;
+    FamilyId col_family = BCFamilyTable::kInvalidFamilyId;
+    if (!coord_to_id(row_coord, row_family) || !coord_to_id(col_coord, col_family)) {
+        return {};
+    }
+
+    return BCSolvePhysicalTargetFamilyHits{
+        bc_solve_filter_contains_family(filter, row_family),
+        bc_solve_filter_contains_family(filter, col_family)
+    };
+}
+
+[[nodiscard]] inline bool bc_solve_spawned_target_family_axis_hit(
+    const BCLut &lut,
+    const BCFamilyTable &axis,
+    const BCSolveTargetFamilyFilter &filter,
+    uint64_t spawned_board,
+    BCDirectionMask direction,
+    const BCQuadrantWordSumTable *word_sums,
+    uint32_t cell_modulus = 0U
+) {
+    if (!filter.enabled) {
+        return true;
+    }
+    if (direction != BCDirectionMask::Horizontal &&
+        direction != BCDirectionMask::Vertical) {
+        const BCSolvePhysicalTargetFamilyHits hits =
+            bc_solve_spawned_target_family_hits(
+                lut,
+                axis,
+                filter,
+                spawned_board,
+                word_sums,
+                cell_modulus
+            );
+        return hits.horizontal || hits.vertical;
+    }
+
+    const BCQuadrantWords q = unpack_board_to_quadrants(spawned_board);
+    const BCWordDesc &nw_desc = lut.word_desc(q.nw);
+    const BCWordDesc &ne_desc = lut.word_desc(q.ne);
+    const BCWordDesc &sw_desc = lut.word_desc(q.sw);
+    const BCWordDesc &se_desc = lut.word_desc(q.se);
+    if (!nw_desc.valid || !ne_desc.valid || !sw_desc.valid || !se_desc.valid) {
+        return true;
+    }
+
+    const bool use_word_sums = word_sums != nullptr && !word_sums->empty();
+    const uint64_t nw_sum = use_word_sums ? (*word_sums)[q.nw] : lut.sum4_value(nw_desc.sum_id);
+    const uint64_t ne_sum = use_word_sums ? (*word_sums)[q.ne] : lut.sum4_value(ne_desc.sum_id);
+    const uint64_t sw_sum = use_word_sums ? (*word_sums)[q.sw] : lut.sum4_value(sw_desc.sum_id);
+    const uint64_t se_sum = use_word_sums ? (*word_sums)[q.se] : lut.sum4_value(se_desc.sum_id);
+    if (nw_sum + ne_sum + sw_sum + se_sum != axis.layer_sum()) {
+        return true;
+    }
+
+    const uint64_t side_a = direction == BCDirectionMask::Horizontal
+        ? nw_sum + ne_sum
+        : nw_sum + sw_sum;
+    const uint64_t side_b = direction == BCDirectionMask::Horizontal
+        ? sw_sum + se_sum
+        : ne_sum + se_sum;
+    FamilyCoord coord = 0U;
+    if (!bc_min_side_coord_u64(side_a, side_b, axis.family_unit(), coord)) {
+        return true;
+    }
+
+    uint32_t coord_u32 = coord;
+    if (cell_modulus != 0U) {
+        coord_u32 %= cell_modulus;
+    }
+    if (coord_u32 > std::numeric_limits<FamilyCoord>::max()) {
+        return true;
+    }
+    const FamilyId family = axis.try_coord_to_id(static_cast<FamilyCoord>(coord_u32));
+    if (family == BCFamilyTable::kInvalidFamilyId) {
+        return true;
+    }
+    return bc_solve_filter_contains_family(filter, family);
 }
 
 struct BCSolvePreparedQueryEncoder {

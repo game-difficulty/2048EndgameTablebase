@@ -53,6 +53,7 @@ inline void bc_single_chunk_add_success_load_stats(BCSuccessLoadStats &dst, cons
     dst.read_bytes += src.read_bytes;
     dst.backend_read_ops += src.backend_read_ops;
     dst.backend_read_bytes += src.backend_read_bytes;
+    dst.backend_read_seconds += src.backend_read_seconds;
 }
 
 struct BCSingleChunkSolveStats {
@@ -1406,353 +1407,6 @@ template <typename StorageT>
     return static_cast<StorageT>(base + contribution);
 }
 
-template <typename StorageT, BCSingleChunkSolvePhase Phase>
-void bc_single_chunk_solve_weighted_phase_batch(
-    BCResidentBatchWorkspace<StorageT> &workspace,
-    BCSingleChunkValueBuffer<StorageT> &values,
-    const BCLut &lut,
-    const BCFamilyTable &future_axis,
-    const BCFutureSuccessLookupView<StorageT> &future_lookup,
-    const BCSingleChunkSolveOptions<StorageT> &options,
-    BCSingleChunkSolveStats &stats
-) {
-    const uint32_t count = workspace.count;
-    if (count == 0U) {
-        return;
-    }
-    (void)stats;
-    workspace.canonical2_boards.clear();
-    workspace.canonical2_refs.clear();
-    workspace.queries2.clear();
-
-    constexpr bool phase2 = Phase == BCSingleChunkSolvePhase::Spawn2;
-    const uint8_t spawn_rank = phase2
-        ? options.solve.edge_options.spawn2_tile_rank
-        : options.solve.edge_options.spawn4_tile_rank;
-    const BCSolveTargetFamilyFilter &filter = phase2 ? options.solve.filter2 : options.solve.filter4;
-    const bool success_check_enabled =
-        bc_solve_success_check_enabled(options.solve.edge_options);
-    const bool fast_unfiltered_both =
-        options.solve.directions == BCDirectionMask::Both && !filter.enabled;
-    auto push_moved_unfiltered = [&](
-        uint64_t spawned,
-        uint64_t moved,
-        uint16_t ref
-    ) {
-        if (moved == spawned) {
-            return;
-        }
-        workspace.canonical2_boards.push_back(moved);
-        workspace.canonical2_refs.push_back(ref);
-    };
-
-    for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
-        const uint64_t board = workspace.boards[board_slot];
-        workspace.empty_counts[board_slot] = 0U;
-        workspace.terminal[board_slot] = 0U;
-        if (success_check_enabled &&
-            bc_solve_is_success_board(board, options.solve.edge_options)) {
-            workspace.terminal[board_slot] = 1U;
-            continue;
-        }
-        uint32_t empty_mask = workspace.empty_masks[board_slot];
-        while (empty_mask != 0U) {
-            const uint32_t cell = bc_solve_pop_lowest_set_bit_index(empty_mask);
-            const uint16_t ref = static_cast<uint16_t>((board_slot << 4U) | cell);
-            ++workspace.empty_counts[board_slot];
-            const uint64_t spawned =
-                board | (static_cast<uint64_t>(spawn_rank) << (4U * cell));
-            if (fast_unfiltered_both) {
-                const auto moved_h = BoardMover::move_horizontal_pair(spawned);
-                const auto moved_v = BoardMover::move_vertical_pair(spawned);
-                push_moved_unfiltered(spawned, moved_h.first, ref);
-                push_moved_unfiltered(spawned, moved_h.second, ref);
-                push_moved_unfiltered(spawned, moved_v.first, ref);
-                push_moved_unfiltered(spawned, moved_v.second, ref);
-                continue;
-            }
-            if (options.solve.directions == BCDirectionMask::Both) {
-                const auto moved_h = BoardMover::move_horizontal_pair(spawned);
-                const auto moved_v = BoardMover::move_vertical_pair(spawned);
-                bc_single_chunk_push_candidate<StorageT>(
-                    lut, future_axis, filter, spawned, moved_h.first, ref,
-                    BCDirectionMask::Horizontal, options.solve,
-                    workspace.canonical2_boards, workspace.canonical2_refs);
-                bc_single_chunk_push_candidate<StorageT>(
-                    lut, future_axis, filter, spawned, moved_h.second, ref,
-                    BCDirectionMask::Horizontal, options.solve,
-                    workspace.canonical2_boards, workspace.canonical2_refs);
-                bc_single_chunk_push_candidate<StorageT>(
-                    lut, future_axis, filter, spawned, moved_v.first, ref,
-                    BCDirectionMask::Vertical, options.solve,
-                    workspace.canonical2_boards, workspace.canonical2_refs);
-                bc_single_chunk_push_candidate<StorageT>(
-                    lut, future_axis, filter, spawned, moved_v.second, ref,
-                    BCDirectionMask::Vertical, options.solve,
-                    workspace.canonical2_boards, workspace.canonical2_refs);
-            } else {
-                if (bc_has_horizontal(options.solve.directions)) {
-                    const auto moved = BoardMover::move_horizontal_pair(spawned);
-                    bc_single_chunk_push_candidate<StorageT>(
-                        lut, future_axis, filter, spawned, moved.first, ref,
-                        BCDirectionMask::Horizontal, options.solve,
-                        workspace.canonical2_boards, workspace.canonical2_refs);
-                    bc_single_chunk_push_candidate<StorageT>(
-                        lut, future_axis, filter, spawned, moved.second, ref,
-                        BCDirectionMask::Horizontal, options.solve,
-                        workspace.canonical2_boards, workspace.canonical2_refs);
-                }
-                if (bc_has_vertical(options.solve.directions)) {
-                    const auto moved = BoardMover::move_vertical_pair(spawned);
-                    bc_single_chunk_push_candidate<StorageT>(
-                        lut, future_axis, filter, spawned, moved.first, ref,
-                        BCDirectionMask::Vertical, options.solve,
-                        workspace.canonical2_boards, workspace.canonical2_refs);
-                    bc_single_chunk_push_candidate<StorageT>(
-                        lut, future_axis, filter, spawned, moved.second, ref,
-                        BCDirectionMask::Vertical, options.solve,
-                        workspace.canonical2_boards, workspace.canonical2_refs);
-                }
-            }
-        }
-    }
-
-    if (!workspace.canonical2_boards.empty()) {
-        CanonicalBatch::canonicalize_inplace(
-            workspace.canonical2_boards.data(),
-            workspace.canonical2_boards.size(),
-            options.solve.edge_options.canonical_symm_mode
-        );
-        const BCSolvePreparedQueryEncoder encoder(
-            lut,
-            future_axis,
-            options.solve.edge_options.future_cell_modulus
-        );
-        for (size_t i = 0U; i < workspace.canonical2_boards.size(); ++i) {
-            BCSolvePreparedQuery query;
-            const bool encoded = encoder.encode(
-                unpack_board_to_quadrants(workspace.canonical2_boards[i]),
-                workspace.canonical2_refs[i],
-                spawn_rank,
-                BCDirectionMask::Both,
-                query
-            );
-            if (!encoded) {
-                continue;
-            }
-            workspace.queries2.push_back(query);
-        }
-        workspace.canonical2_boards.clear();
-        workspace.canonical2_refs.clear();
-    }
-
-    for (uint32_t lane = 0U; lane < options.solve.row_width; ++lane) {
-        if constexpr (std::is_same_v<StorageT, uint32_t>) {
-            std::fill_n(workspace.integer_sum2.data(), count, 0U);
-            (void)future_lookup.reduce_grouped_query_sums(
-                workspace.queries2,
-                workspace.integer_sum2.data(),
-                count,
-                lane,
-                options.solve.zero_value,
-                true
-            );
-        } else {
-            for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
-                workspace.float_sum2[board_slot] =
-                    workspace.empty_counts[board_slot] == 0U
-                        ? 0.0L
-                        : static_cast<long double>(options.solve.zero_value) *
-                            static_cast<long double>(workspace.empty_counts[board_slot]);
-            }
-            (void)future_lookup.reduce_grouped_query_sums(
-                workspace.queries2,
-                workspace.float_sum2.data(),
-                count,
-                lane,
-                options.solve.zero_value,
-                true
-            );
-        }
-        for (uint32_t board_slot = 0U; board_slot < count; ++board_slot) {
-            const uint64_t row_index = workspace.output_indices[board_slot];
-            const uint64_t value_index =
-                row_index * static_cast<uint64_t>(options.solve.row_width) + lane;
-            if (value_index >= values.size()) {
-                throw std::out_of_range("BC single chunk weighted output index out of range");
-            }
-            if (workspace.terminal[board_slot] != 0U) {
-                values[static_cast<size_t>(value_index)] =
-                    phase2 ? options.solve.terminal_value : options.solve.zero_value;
-                continue;
-            }
-            if (workspace.empty_counts[board_slot] == 0U) {
-                values[static_cast<size_t>(value_index)] = options.solve.zero_value;
-                continue;
-            }
-            StorageT contribution = options.solve.zero_value;
-            if constexpr (std::is_same_v<StorageT, uint32_t>) {
-                if (options.solve.edge_options.spawn_rate4 == 0.1) {
-                    const uint64_t numerator = !phase2
-                        ? workspace.integer_sum2[board_slot]
-                        : 9ULL * workspace.integer_sum2[board_slot];
-                    const uint64_t denominator =
-                        10ULL * static_cast<uint64_t>(workspace.empty_counts[board_slot]);
-                    contribution = static_cast<uint32_t>(numerator / denominator);
-                } else {
-                    contribution = bc_single_chunk_scale_average_contribution<StorageT>(
-                        static_cast<long double>(workspace.integer_sum2[board_slot]),
-                        workspace.empty_counts[board_slot],
-                        options.solve.edge_options.spawn_rate4,
-                        !phase2,
-                        options.solve.zero_value
-                    );
-                }
-            } else {
-                contribution =
-                    bc_single_chunk_scale_average_contribution<StorageT>(
-                        workspace.float_sum2[board_slot],
-                        workspace.empty_counts[board_slot],
-                        options.solve.edge_options.spawn_rate4,
-                        !phase2,
-                        options.solve.zero_value
-                    );
-            }
-            if constexpr (phase2) {
-                if (contribution == options.solve.zero_value) {
-                    continue;
-                }
-                values[static_cast<size_t>(value_index)] =
-                    bc_single_chunk_add_success_contribution<StorageT>(
-                        values[static_cast<size_t>(value_index)],
-                        contribution
-                    );
-            } else {
-                values[static_cast<size_t>(value_index)] = contribution;
-            }
-        }
-    }
-    workspace.clear_batch();
-}
-
-template <typename StorageT>
-void bc_single_chunk_solve_weighted_phase_for_current_cells(
-    const std::vector<BCLoadedCell> &current_cells,
-    const std::vector<BCSingleChunkLoadedWorkItem> &work_items,
-    const std::vector<uint64_t> &cell_offsets,
-    BCSingleChunkValueBuffer<StorageT> &values,
-    const BCLut &lut,
-    const BCFamilyTable &future_axis,
-    const BCFutureSuccessLookupView<StorageT> &future_lookup,
-    const BCSingleChunkSolveOptions<StorageT> &options,
-    BCSingleChunkSolvePhase phase,
-    BCSingleChunkSolveStats &stats,
-    std::vector<BCResidentBatchWorkspace<StorageT>> *batch_workspaces = nullptr
-) {
-    if (cell_offsets.size() != current_cells.size() + 1U) {
-        throw std::invalid_argument("BC single chunk weighted current cell offsets mismatch");
-    }
-    const int threads = bc_resident_solve_effective_threads(options.solve.num_threads);
-    std::vector<BCSingleChunkSolveStats> per_thread(static_cast<size_t>(threads));
-    std::vector<BCResidentBatchWorkspace<StorageT>> local_workspaces;
-    if (batch_workspaces == nullptr) {
-        local_workspaces.resize(static_cast<size_t>(threads));
-        batch_workspaces = &local_workspaces;
-    } else if (batch_workspaces->size() < static_cast<size_t>(threads)) {
-        batch_workspaces->resize(static_cast<size_t>(threads));
-    }
-    const double t0 = bc_single_chunk_now_seconds();
-#pragma omp parallel num_threads(threads)
-    {
-#if defined(_OPENMP)
-        const int tid = omp_get_thread_num();
-#else
-        const int tid = 0;
-#endif
-        BCSingleChunkSolveStats &thread_stats = per_thread[static_cast<size_t>(tid)];
-        BCResidentBatchWorkspace<StorageT> &workspace =
-            (*batch_workspaces)[static_cast<size_t>(tid)];
-        workspace.clear_batch();
-        auto flush = [&]() {
-            if (phase == BCSingleChunkSolvePhase::Spawn2) {
-                bc_single_chunk_solve_weighted_phase_batch<
-                    StorageT,
-                    BCSingleChunkSolvePhase::Spawn2>(
-                    workspace,
-                    values,
-                    lut,
-                    future_axis,
-                    future_lookup,
-                    options,
-                    thread_stats
-                );
-            } else {
-                bc_single_chunk_solve_weighted_phase_batch<
-                    StorageT,
-                    BCSingleChunkSolvePhase::Spawn4>(
-                    workspace,
-                    values,
-                    lut,
-                    future_axis,
-                    future_lookup,
-                    options,
-                    thread_stats
-                );
-            }
-        };
-#pragma omp for schedule(dynamic, 4)
-        for (int64_t item_i_signed = 0;
-             item_i_signed < static_cast<int64_t>(work_items.size());
-             ++item_i_signed) {
-            const BCSingleChunkLoadedWorkItem &item =
-                work_items[static_cast<size_t>(item_i_signed)];
-            const size_t cell_i = item.cell_index;
-            const BCLoadedCell &cell = current_cells[cell_i];
-            if (cell.success_rows == 0U || cell.buckets.empty()) {
-                continue;
-            }
-            const uint64_t cell_base = cell_offsets[cell_i];
-            BCLoadedCellScanner scanner(lut, cell.view());
-            for (uint32_t bucket_i = item.bucket_begin; bucket_i < item.bucket_end; ++bucket_i) {
-                const bool ranged_bucket =
-                    item.bucket_end == item.bucket_begin + 1U && item.word_end != 0U;
-                scanner.for_each_bucket_word_range_board(
-                    bucket_i,
-                    ranged_bucket ? item.word_begin : 0U,
-                    ranged_bucket ? item.word_end : 0U,
-                    [&](const BCScannedBoardEntry &entry) {
-                        workspace.boards[workspace.count] = entry.board;
-                        workspace.empty_masks[workspace.count] = entry.empty_mask;
-                        workspace.output_indices[workspace.count] = cell_base + entry.local_success_row;
-                        ++workspace.count;
-                        if (workspace.count == BCResidentBatchWorkspace<StorageT>::kBatchSize) {
-                            flush();
-                        }
-                    }
-                );
-            }
-        }
-        flush();
-    }
-    stats.recalc_seconds += bc_single_chunk_now_seconds() - t0;
-    if (phase == BCSingleChunkSolvePhase::Spawn2) {
-        const uint64_t rows = cell_offsets.back();
-        stats.current_rows = bc_checked_add_u64(
-            stats.current_rows,
-            rows,
-            "BC single chunk weighted current row count overflow"
-        );
-        stats.current_boards = bc_checked_add_u64(
-            stats.current_boards,
-            rows,
-            "BC single chunk weighted current board count overflow"
-        );
-    }
-    for (const BCSingleChunkSolveStats &thread_stats : per_thread) {
-        bc_resident_solve_accumulate_edge_stats(stats.edge, thread_stats.edge);
-    }
-}
-
 template <typename StorageT>
 void bc_single_chunk_compact_loaded_cell(
     const BCLut &lut,
@@ -2516,6 +2170,89 @@ public:
         success_stream_cursor_ = kBCSuccessHeaderBytes;
     }
 
+    void write_cell_metadata(CellId cid, const FinalizedCellPayload &payload) {
+        const double assembly_t0 = bc_single_chunk_now_seconds();
+        if (cid >= descriptors_.size()) {
+            throw std::out_of_range("BC single chunk final streamer cell id out of range");
+        }
+        if (written_[static_cast<size_t>(cid)] != 0U) {
+            throw std::runtime_error("BC single chunk final streamer duplicate cell");
+        }
+        written_[static_cast<size_t>(cid)] = 1U;
+        if (payload.buckets.empty()) {
+            if (payload.success_rows != 0U || !payload.rank_payload.empty()) {
+                throw std::invalid_argument("BC single chunk final streamer empty payload mismatch");
+            }
+            BCPositionCellDescriptor descriptor;
+            descriptor.flags_or_padding = kBCPositionCellFlagEmpty;
+            descriptors_[static_cast<size_t>(cid)] = descriptor;
+            stats_.result_assembly_seconds += bc_single_chunk_now_seconds() - assembly_t0;
+            return;
+        }
+        if (payload.buckets.size() > std::numeric_limits<uint32_t>::max()) {
+            throw std::overflow_error("BC single chunk final streamer bucket count exceeds uint32");
+        }
+        if (payload.rank_payload.size() > std::numeric_limits<uint64_t>::max()) {
+            throw std::overflow_error("BC single chunk final streamer rank payload exceeds uint64");
+        }
+
+        std::vector<uint8_t> bucket_bytes;
+        bucket_bytes.reserve(payload.buckets.size() * kBCPositionBucketEntryBytes);
+        for (const BCBucketEntry &bucket : payload.buckets) {
+            bc_append_bucket_entry(bucket_bytes, bucket);
+        }
+
+        BCPositionCellDescriptor descriptor;
+        descriptor.bucket_count = static_cast<uint32_t>(payload.buckets.size());
+        descriptor.success_rows = payload.success_rows;
+        descriptor.bucket_meta_offset = bucket_cursor_;
+        descriptor.rank_payload_offset = rank_cursor_;
+        descriptor.rank_payload_bytes = payload.rank_payload.size();
+        descriptor.reserved0 = 0U;
+        descriptor.flags_or_padding = 0U;
+        descriptors_[static_cast<size_t>(cid)] = descriptor;
+        stats_.result_assembly_seconds += bc_single_chunk_now_seconds() - assembly_t0;
+
+        append_position_payload(*bucket_stager_, bucket_bytes);
+        append_position_payload(*rank_stager_, payload.rank_payload);
+        bucket_cursor_ = bc_checked_add_u64(
+            bucket_cursor_,
+            bucket_bytes.size(),
+            "BC single chunk final streamer bucket cursor overflow"
+        );
+        rank_cursor_ = bc_checked_add_u64(
+            rank_cursor_,
+            payload.rank_payload.size(),
+            "BC single chunk final streamer rank cursor overflow"
+        );
+    }
+
+    template <typename Alloc>
+    void write_success_cell_values(CellId cid, const std::vector<StorageT, Alloc> &values) {
+        if (cid >= descriptors_.size()) {
+            throw std::out_of_range("BC single chunk final streamer success cid out of range");
+        }
+        if (cid != success_cell_cursor_) {
+            throw std::logic_error("BC single chunk final streamer success cells must be written in cid order");
+        }
+        if (written_[static_cast<size_t>(cid)] == 0U) {
+            throw std::logic_error("BC single chunk final streamer success metadata is missing");
+        }
+        const BCPositionCellDescriptor &descriptor = descriptors_[static_cast<size_t>(cid)];
+        const uint64_t expected_values =
+            static_cast<uint64_t>(descriptor.success_rows) * row_width_;
+        if (expected_values != static_cast<uint64_t>(values.size())) {
+            throw std::runtime_error("BC single chunk final streamer success value count mismatch");
+        }
+        write_success_values(values);
+        success_value_cursor_ = bc_checked_add_u64(
+            success_value_cursor_,
+            static_cast<uint64_t>(values.size()),
+            "BC single chunk final streamer success cursor overflow"
+        );
+        ++success_cell_cursor_;
+    }
+
     void write_chunk(
         const std::vector<BCLoadedCell> &current_cells,
         const std::vector<FinalizedCellPayload> &payloads,
@@ -2749,7 +2486,8 @@ private:
         stats_.position_write_seconds += bc_single_chunk_now_seconds() - t0;
     }
 
-    void write_success_values(const std::vector<StorageT> &values) {
+    template <typename Alloc>
+    void write_success_values(const std::vector<StorageT, Alloc> &values) {
         if (values.size() == 0U) {
             return;
         }
@@ -2812,6 +2550,7 @@ private:
     uint64_t bucket_cursor_ = 0U;
     uint64_t rank_cursor_ = 0U;
     uint64_t success_value_cursor_ = 0U;
+    CellId success_cell_cursor_ = 0U;
     std::unique_ptr<BCSequentialSuccessWriteStager> bucket_stager_;
     std::unique_ptr<BCSequentialSuccessWriteStager> rank_stager_;
     std::unique_ptr<BCSequentialSuccessWriteStager> success_tail_stager_;

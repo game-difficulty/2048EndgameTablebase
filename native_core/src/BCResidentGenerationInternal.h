@@ -1,12 +1,15 @@
 #pragma once
 
+#include "BCFamilyGenerationScheduler.h"
 #include "BCResidentGeneration.h"
+#include "BoardMover.h"
 
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <tuple>
 #include <vector>
 
 namespace BC {
@@ -19,6 +22,50 @@ namespace ResidentGenerationInternal {
     const BCResidentGenerationOptions &options,
     LayerSum source_layer_sum
 );
+
+template <class Emit, class Mover = BoardMover>
+inline void bc_generate_spawn_move_candidates(
+    uint64_t board,
+    uint16_t empty_mask16,
+    uint8_t spawn_tile_rank,
+    BCDirectionMask directions,
+    Emit &&emit
+) {
+    uint32_t empty_mask = empty_mask16;
+    while (empty_mask != 0U) {
+#if defined(__GNUC__) || defined(__clang__)
+        const uint32_t cell = static_cast<uint32_t>(__builtin_ctz(empty_mask));
+#else
+        uint32_t cell = 0U;
+        uint32_t probe = empty_mask;
+        while ((probe & 1U) == 0U) {
+            probe >>= 1U;
+            ++cell;
+        }
+#endif
+        empty_mask &= empty_mask - 1U;
+        const uint64_t spawned =
+            board | (static_cast<uint64_t>(spawn_tile_rank) << (4U * cell));
+        if (directions == BCDirectionMask::Both) {
+            const auto moved = Mover::move_all_dir(spawned);
+            emit(spawned, std::get<0>(moved));
+            emit(spawned, std::get<1>(moved));
+            emit(spawned, std::get<2>(moved));
+            emit(spawned, std::get<3>(moved));
+            continue;
+        }
+        if (bc_has_horizontal(directions)) {
+            const auto moved = Mover::move_horizontal_pair(spawned);
+            emit(spawned, moved.first);
+            emit(spawned, moved.second);
+        }
+        if (bc_has_vertical(directions)) {
+            const auto moved = Mover::move_vertical_pair(spawned);
+            emit(spawned, moved.first);
+            emit(spawned, moved.second);
+        }
+    }
+}
 
 struct BCThreadGenerationStats {
     double spawn_move_seconds = 0.0;

@@ -1,0 +1,439 @@
+# BC FamilyChain Double-Block Solve Discussion Notes
+
+This note records the agreed design context for the upcoming BC double-block
+backsolve work. It is a discussion snapshot, not a replacement for the broader
+solve runtime design documents.
+
+Related documents:
+
+```text
+docs_and_configs/exbc_exadbc_three_solve_chains_runtime_design_v1.md
+docs_and_configs/exbc_exadbc_family_chain_solve_plan_v1.md
+docs_and_configs/bc_resident_singlechunk_generation_impl_supplement.md
+```
+
+## 1. Scope For The First Implementation
+
+The first FamilyChain solve implementation should focus on one layer and on
+correct double-block solve semantics.
+
+Initial assumptions:
+
+```text
+current layer modulus == future2 layer modulus == future4 layer modulus
+layer-internal resume is not required
+single-layer correctness is required
+per-module performance should be reasonable from the first version
+```
+
+Changing modulus between layers is a later step. It should follow the generation
+route/remap model: before solving the next layer, every layer that will be used
+by that solve step is remapped to the selected new modulus.
+
+Small struct layouts can be refined while implementing. Large structures and
+the large execution flow should be kept explicit and stable.
+
+## 2. Shared Semantics
+
+FamilyChain solve computes the same BC recurrence as resident and single-chunk
+solve. It reads generated current `.bcpos` and solved future `.bcpos + .bcsuc`,
+then writes solved compacted current `.bcpos + .bcsuc`.
+
+It must not change success semantics, dtype semantics, or position/success file
+formats. The final logical output should stay compatible with existing
+resident/single solve readers.
+
+Generation `.bcpos` stores boards after move and before spawn. Boards with no
+empty tile are not valid stored current positions, because such boards are not
+generated into these files.
+
+Success boards are still processed through the same solve flow. They are not a
+special case that avoids all partial/scratch bookkeeping.
+
+## 3. Family Sweep And Direction Ownership
+
+The sweep order is by increasing family id:
+
+```text
+for fid = 0..F-1:
+    load current family cross for fid
+```
+
+The current family cross contains:
+
+```text
+row fid: cells (fid, x)
+col fid: cells (x, fid), x != fid
+```
+
+Direction ownership follows how the cell enters the cross:
+
+```text
+(fid, x) row side     -> horizontal moves
+(x, fid) column side  -> vertical moves
+(fid, fid) diagonal   -> both horizontal and vertical moves
+```
+
+This matches the generation-side `BCFamilyGenerationScheduler` logic:
+
+```text
+source row cross cells are Horizontal
+source column cross cells are Vertical
+diagonal cell is Both
+```
+
+For a non-diagonal cell, the two directions are computed in two appearances:
+
+```text
+first appearance  -> compute one direction and write partial max
+second appearance -> read partial max, compute the other direction, finalize
+```
+
+For a diagonal cell, both directions can be computed in one appearance and no
+partial max file is needed for that cell.
+
+The completed cells form the controlled L-shaped boundary of the top-left
+rectangle as `fid` increases. Calculation order is fid order. Physical write
+order does not have to be identical to cell-id order, as long as the final file
+format remains logically compatible.
+
+## 4. Future Family Fanout
+
+Future family fanout should follow the generation-side double-block algorithm.
+The useful references are:
+
+```text
+native_core/include/BCFamilyGenerationScheduler.h
+native_core/include/BCFamilyPartitionPolicy.h
+native_core/src/BCFamilyGeneration.cpp
+```
+
+Generation maps one source/current family to target/future families using:
+
+```text
+map_partition_source_family_to_target_families(...)
+checked_partition_fanout3(...)
+```
+
+For the first solve implementation with equal current/future modulus, the fanout
+is still conceptually the same:
+
+```text
+current fid + spawn delta -> future target family ids
+```
+
+The future window normally needs two families and can occasionally need three.
+The implementation should calculate this explicitly from the same family
+mapping rules instead of relying on broad fallback checks in the hot path.
+
+### Exact-coordinate proof
+
+For one axis, let the two side sums be `(A, B)`. After side normalization:
+
+```text
+a = min(A, B)
+b = max(A, B)
+N = a + b
+```
+
+The exact family coordinate is `a`. If the spawned tile has axis delta `d`,
+then the spawned tile can land on either side.
+
+If it lands on the heavier side:
+
+```text
+(a, b) -> (a, b + d)
+normalized family = a
+```
+
+If it lands on the lighter side:
+
+```text
+(a, b) -> (a + d, b)
+normalized family = min(a + d, b)
+```
+
+Therefore exact-coordinate fanout is:
+
+```text
+{ a, min(a + d, b) }
+```
+
+It is strictly at most two. When the two candidates coincide, this is a repeated
+root rather than a third family.
+
+Horizontal moves preserve the top/bottom side sums, so the horizontal direction
+uses row-family fanout. Vertical moves preserve the left/right side sums, so the
+vertical direction uses column-family fanout.
+
+Canonicalization may transform horizontal-looking boards into vertical-looking
+canonical forms. That can change the final `cid`, but it does not invalidate
+the fanout proof: the future window loads the whole row/column cross for each
+fanout family, so a canonicalized result with that family on either axis is
+still covered.
+
+### Modulo fanout
+
+With physical modulo `M`, one physical family `r` represents many exact
+coordinates:
+
+```text
+a = r + kM
+```
+
+The exact candidates above map into the modulo set:
+
+```text
+{ r, r + d, N - r } mod M
+```
+
+The third candidate appears only because modulo merges many exact coordinates
+and the light-side spawn can cross the normalization center. Duplicates are
+common, so the practical fanout is one, two, or three families.
+
+## 5. Two Spawn-Phase Sweeps
+
+FamilyChain solve uses the same high-level phase order as single-chunk solve:
+
+```text
+Spawn4 sweep first
+Spawn2 sweep second
+```
+
+Each phase sweeps `fid = 0..F-1`.
+
+Spawn4:
+
+```text
+first direction of a non-diagonal cell:
+    compute directional max4
+    write compact partial max4
+
+second direction of that cell:
+    read compact partial max4
+    compute second directional max4
+    max4 = max(partial max4, second directional max4)
+    avg4 = average(max4 over empty slots)
+    scale avg4 by spawn4 probability
+    write per-cell normal success scratch contribution
+```
+
+Spawn2:
+
+```text
+first direction of a non-diagonal cell:
+    compute directional max2
+    write compact partial max2
+
+second direction of that cell:
+    read compact partial max2
+    compute second directional max2
+    max2 = max(partial max2, second directional max2)
+    avg2 = average(max2 over empty slots)
+    scale avg2 by spawn2 probability
+    read per-cell normal success scratch contribution from Spawn4
+    add Spawn2 contribution
+    zero-compact the cell
+    stage/write the final compacted cell
+```
+
+The normal success scratch logic, timing of compaction, and use pattern should
+match single-chunk solve as closely as possible. The scratch is dense over the
+generated current cell rows. It is not compacted after Spawn4, because Spawn2
+still needs alignment with the original current cell row order.
+
+Equivalently, for each current row:
+
+```text
+Spawn4:
+    success[row] = p4 * average(max4_per_empty_slot)
+
+Spawn2:
+    success[row] += p2 * average(max2_per_empty_slot)
+```
+
+Partial max stores only the per-empty-slot max for one spawn phase and one
+already-computed direction. It never stores the average and never stores a
+weighted contribution.
+
+## 6. Per-Cell Normal Success Scratch
+
+Normal success scratch is per cell, not a whole-layer resident array.
+
+For a cell with `success_rows` generated current rows:
+
+```text
+value_count = success_rows * row_width
+layout      = generated current cell row order
+content     = weighted Spawn4 contribution
+```
+
+The scratch is released after the same cell is finalized in Spawn2.
+
+This avoids keeping full-layer success values resident. It also avoids changing
+the final `.bcsuc` format.
+
+## 7. Compact Partial Max Format
+
+Partial max is not a normal success array. It stores unweighted max values for
+one spawn phase and one already-computed direction.
+
+Partial max should be compact by using the bucket empty-mask invariant:
+
+```text
+one bucket key determines the board empty mask
+all boards under that bucket have the same empty count
+all boards under that bucket have the same empty cell positions
+```
+
+For each current cell, partial max can be represented as a logical matrix per
+bucket:
+
+```text
+rows:    live board rows in bucket rank order
+columns: empty slots from bucket_empty_mask, in ctz order
+lanes:   row_width
+```
+
+Physical storage can be one contiguous 1D array. Offsets are computed from:
+
+```text
+bucket partial base
+bucket-local live row ordinal
+empty slot ordinal within bucket_empty_mask
+lane
+row_width
+```
+
+The value count for one bucket is:
+
+```text
+bucket_live_rows * popcount(bucket_empty_mask) * row_width
+```
+
+The partial value count is therefore based on actual empty count, not 16 fixed
+cell slots.
+
+After the first direction is computed, every partial max position for that cell
+and phase is written. There should be no sparse holes and no need to rely on
+zero-value fill inside the partial max payload.
+
+If a direction has no legal move/query for a logical slot, the written value is
+that direction's computed `zero_value`. This is still a real dense value, not a
+missing entry.
+
+The partial payload does not need to store:
+
+```text
+cell id
+rank
+empty cell index
+empty count
+direction
+spawn rank
+row offset
+```
+
+Those are determined by the outer scheduler, the current cell `.bcpos` bucket
+layout, dtype, row width, and phase.
+
+## 8. Final Output Staging
+
+The first implementation should use per-cell scratch/staging and avoid changing
+the success file format.
+
+The physical order in which cells are calculated or staged does not have to
+match cell-id order. The final logical `.bcpos + .bcsuc` output should remain
+compatible with resident and single-chunk solve:
+
+```text
+.bcpos carries final compacted cell descriptors
+.bcsuc payload is interpreted through the final position descriptors
+success cell offsets are derived from final compacted success_rows
+```
+
+Using per-cell staging first is preferred over changing the success format or
+requiring a new reader.
+
+## 9. Future Lookup Shape
+
+`BCFutureFamilyWindow` is useful as a scaffold for family-window ownership and
+load/retain/release accounting.
+
+The production hot path should use the typed direct lookup view:
+
+```text
+load active future cells
+build BCFutureSuccessLookupView<StorageT> with open_loaded(...)
+batch lookup/reduce through the same direct lookup machinery used by
+resident/single solve
+```
+
+This keeps the initial FamilyChain solve path closer to the optimized
+resident/single implementation.
+
+## 10. Memory Window Invariant
+
+For double-block solve, board-scale resident data must stay bounded by the
+family window, not by layer board count.
+
+At any point in the full flow:
+
+```text
+future resident board data <= 3 families
+future resident board data + current/source family cross <= 4 families occasionally
+```
+
+This is the corrected bound. The earlier "around one hundred families" note was
+an input mistake and should not be used as an implementation target.
+
+Metadata may be resident when it is family-scale rather than board-scale:
+
+```text
+O(F) metadata is acceptable
+O(F^2) metadata is acceptable
+family-cell matrices and pass/keep plans are acceptable
+```
+
+What is not acceptable is `O(n)` resident board data, where `n` is the number of
+positions/boards in the layer.
+
+Future-family reuse must follow the fid execution order. For each pass, compute
+which later passes are guaranteed to need the same future cells within the
+three-family window; retain those cells after the pass and release the rest.
+It should not blindly union adjacent passes and hope for cache hits.
+
+Practical benchmark memory budget update:
+
+```text
+family modulus: 29
+each cell is solved twice
+average effective family volume: roughly layer / 15
+one mid-layer family data volume: roughly 0.26 GB
+current/future/partial-max live data may be budgeted as about 5 families
+reasonable peak memory target for the tested mid-layer: <= 2 GB
+```
+
+Under this budget, bounded block interleave with `interleave_block_fids=4` is
+acceptable when measured peak memory stays below 2 GB. It reduces scratch4 temp
+IO by keeping the block-local Spawn4 scratch in memory, while still releasing
+the +4 future window before loading the +2 future window. Larger block sizes
+need separate peak-memory validation before they can be considered production
+candidates.
+
+## 11. Suggested Module Order
+
+Recommended implementation order:
+
+```text
+1. Family solve plan / scheduler
+2. Compact partial max codec
+3. Directional phase kernel for one current cell
+4. Per-cell normal success scratch
+5. FamilyChain solve executor
+6. Small-layer correctness tests against ResidentSolve/SingleChunkSolve
+```
+
+Each module should have focused tests before it is integrated into the full
+executor. The initial implementation should still avoid obvious performance
+dead ends, because cross-module performance debugging later would be expensive.

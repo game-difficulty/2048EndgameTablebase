@@ -3,6 +3,7 @@
 #include "BCBoardOps.h"
 #include "BCLoadedCellScanner.h"
 #include "BCPositionFamilyRemapReader.h"
+#include "BCResidentGenerationInternal.h"
 #include "BoardMover.h"
 #include "CanonicalBatch.h"
 
@@ -1286,22 +1287,6 @@ void push_family_moved_board(
     workspace.canonical_buffer.push_back(moved);
 }
 
-[[nodiscard]] uint32_t family_countr_zero32(uint32_t value) {
-    if (value == 0U) {
-        throw std::invalid_argument("BC family countr_zero32 requires non-zero value");
-    }
-#if defined(__GNUC__) || defined(__clang__)
-    return static_cast<uint32_t>(__builtin_ctz(value));
-#else
-    uint32_t count = 0U;
-    while ((value & 1U) == 0U) {
-        value >>= 1U;
-        ++count;
-    }
-    return count;
-#endif
-}
-
 void process_family_source_board(
     FamilyThreadWorkspace &workspace,
     const BCLut &lut,
@@ -1318,61 +1303,25 @@ void process_family_source_board(
     if (skip_success_source && family_is_success_board(board, options)) {
         return;
     }
-    uint32_t empty_mask = source_empty_mask;
-    while (empty_mask != 0U) {
-        const uint32_t cell = family_countr_zero32(empty_mask);
-        empty_mask &= empty_mask - 1U;
-        const uint64_t spawned =
-            board | (static_cast<uint64_t>(spawn_tile_rank) << (4U * cell));
-        if (directions == BCDirectionMask::Both) {
-            const auto moved = BoardMover::move_all_dir(spawned);
-            push_family_moved_board(workspace, spawned, std::get<0>(moved), options);
-            push_family_moved_board(workspace, spawned, std::get<1>(moved), options);
-            push_family_moved_board(workspace, spawned, std::get<2>(moved), options);
-            push_family_moved_board(workspace, spawned, std::get<3>(moved), options);
-        } else {
-            if (bc_has_horizontal(directions)) {
-                const auto moved = BoardMover::move_horizontal_pair(spawned);
-                push_family_moved_board(
+    ResidentGenerationInternal::bc_generate_spawn_move_candidates(
+        board,
+        source_empty_mask,
+        spawn_tile_rank,
+        directions,
+        [&](uint64_t spawned, uint64_t moved) {
+            push_family_moved_board(workspace, spawned, moved, options);
+            if (workspace.canonical_buffer.size() >= options.canonical_batch_size) {
+                flush_family_canonical_buffer(
                     workspace,
-                    spawned,
-                    moved.first,
-                    options
-                );
-                push_family_moved_board(
-                    workspace,
-                    spawned,
-                    moved.second,
-                    options
-                );
-            }
-            if (bc_has_vertical(directions)) {
-                const auto moved = BoardMover::move_vertical_pair(spawned);
-                push_family_moved_board(
-                    workspace,
-                    spawned,
-                    moved.first,
-                    options
-                );
-                push_family_moved_board(
-                    workspace,
-                    spawned,
-                    moved.second,
+                    lut,
+                    target_axis,
+                    target_partition,
+                    target_store,
                     options
                 );
             }
         }
-        if (workspace.canonical_buffer.size() >= options.canonical_batch_size) {
-            flush_family_canonical_buffer(
-                workspace,
-                lut,
-                target_axis,
-                target_partition,
-                target_store,
-                options
-            );
-        }
-    }
+    );
 }
 
 struct FamilySourceRangeWork {

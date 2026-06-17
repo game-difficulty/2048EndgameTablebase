@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BCCellMatrix.h"
+#include "BCFutureSuccessLookup.h"
 #include "BCPositionCellLoader.h"
 #include "BCSuccessIO.h"
 
@@ -10,7 +11,13 @@
 #include <iterator>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 #include <vector>
+
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
 
 namespace BC {
 
@@ -29,6 +36,7 @@ struct BCFutureFamilyWindowStats {
     uint64_t position_read_bytes = 0U;
     uint64_t position_backend_read_ops = 0U;
     uint64_t position_backend_read_bytes = 0U;
+    double position_backend_read_seconds = 0.0;
 
     uint64_t success_requested_extents = 0U;
     uint64_t success_coalesced_extents = 0U;
@@ -36,14 +44,29 @@ struct BCFutureFamilyWindowStats {
     uint64_t success_read_bytes = 0U;
     uint64_t success_backend_read_ops = 0U;
     uint64_t success_backend_read_bytes = 0U;
+    double success_backend_read_seconds = 0.0;
 
     uint64_t lookup_count = 0U;
     uint64_t lookup_miss_count = 0U;
     uint64_t batch_lookup_count = 0U;
+    uint64_t recycled_index_bytes = 0U;
+    uint64_t recycled_index_bytes_max = 0U;
+    uint64_t recycled_index_cells = 0U;
+    uint64_t recycled_index_cells_max = 0U;
+    uint64_t recycled_index_hits = 0U;
 
     double position_read_seconds = 0.0;
     double success_read_seconds = 0.0;
     double lookup_seconds = 0.0;
+    double prepare_normalize_seconds = 0.0;
+    double prepare_select_seconds = 0.0;
+    double prepare_index_build_seconds = 0.0;
+    double prepare_insert_sort_seconds = 0.0;
+    double release_all_clear_seconds = 0.0;
+    double release_except_normalize_seconds = 0.0;
+    double release_except_filter_seconds = 0.0;
+    double release_except_erase_seconds = 0.0;
+    double release_except_ids_seconds = 0.0;
 };
 
 template <typename T>
@@ -70,6 +93,8 @@ struct BCFutureBatchLookupResult {
 
 struct BCFutureFamilyWindowOptions {
     bool measure_scalar_lookup_seconds = false;
+    uint64_t max_recycled_index_bytes = 0U;
+    uint32_t release_threads = 1U;
 };
 
 [[nodiscard]] inline std::vector<CellId> bc_future_family_view_cells(
@@ -131,11 +156,71 @@ public:
         return checked_u32_size(active_.size(), "BC future family active cell count exceeds uint32");
     }
 
+    void prepare_cells(const std::vector<CellId> &need_cells) {
+        std::vector<CellId> next_cells = active_cell_ids_;
+        next_cells.insert(next_cells.end(), need_cells.begin(), need_cells.end());
+        load_cells(std::move(next_cells));
+    }
+
     void release_all() {
         stats_.future_cells_released += active_.size();
+        const auto clear_begin = std::chrono::steady_clock::now();
+        release_success_payloads(0U, active_.size());
+        for (ActiveCell &cell : active_) {
+            recycle_released_cell(std::move(cell), true);
+        }
         active_.clear();
         active_cell_ids_.clear();
+        stats_.release_all_clear_seconds += seconds_since(clear_begin);
         update_active_stats();
+    }
+
+    void release_except(std::vector<CellId> keep_cells) {
+        require_open();
+        const auto normalize_begin = std::chrono::steady_clock::now();
+        normalize_cell_list(keep_cells);
+        stats_.release_except_normalize_seconds += seconds_since(normalize_begin);
+
+        const size_t old_active_size = active_.size();
+        size_t write_index = 0U;
+        size_t active_index = 0U;
+        const auto filter_begin = std::chrono::steady_clock::now();
+        for (CellId cid : keep_cells) {
+            while (active_index < active_.size() && active_[active_index].cid < cid) {
+                ++active_index;
+            }
+            if (active_index == active_.size()) {
+                break;
+            }
+            if (active_[active_index].cid != cid) {
+                continue;
+            }
+            if (write_index != active_index) {
+                std::swap(active_[write_index], active_[active_index]);
+            }
+            ++write_index;
+            ++active_index;
+        }
+        stats_.release_except_filter_seconds += seconds_since(filter_begin);
+
+        stats_.future_cells_retained += write_index;
+        stats_.future_cells_released +=
+            old_active_size >= write_index ? old_active_size - write_index : 0U;
+        const auto erase_begin = std::chrono::steady_clock::now();
+        release_success_payloads(write_index, active_.size());
+        for (size_t i = write_index; i < active_.size(); ++i) {
+            recycle_released_cell(std::move(active_[i]), true);
+        }
+        active_.erase(active_.begin() + static_cast<std::ptrdiff_t>(write_index), active_.end());
+        stats_.release_except_erase_seconds += seconds_since(erase_begin);
+        const auto ids_begin = std::chrono::steady_clock::now();
+        active_cell_ids_.clear();
+        active_cell_ids_.reserve(active_.size());
+        for (const ActiveCell &cell : active_) {
+            active_cell_ids_.push_back(cell.cid);
+        }
+        update_active_stats();
+        stats_.release_except_ids_seconds += seconds_since(ids_begin);
     }
 
     void load_family(FamilyId family_id) {
@@ -144,37 +229,49 @@ public:
 
     void load_cells(std::vector<CellId> next_cells) {
         require_open();
+        const auto normalize_begin = std::chrono::steady_clock::now();
         normalize_cell_list(next_cells);
+        stats_.prepare_normalize_seconds += seconds_since(normalize_begin);
 
         ++stats_.future_views_loaded;
         stats_.requested_view_cells += next_cells.size();
 
-        std::vector<ActiveCell> retained;
-        retained.reserve(std::min(active_.size(), next_cells.size()));
         std::vector<CellId> missing;
         missing.reserve(next_cells.size());
 
+        const size_t old_active_size = active_.size();
+        size_t write_index = 0U;
         size_t active_index = 0U;
+        const auto select_begin = std::chrono::steady_clock::now();
         for (CellId cid : next_cells) {
             while (active_index < active_.size() && active_[active_index].cid < cid) {
                 ++active_index;
             }
             if (active_index < active_.size() && active_[active_index].cid == cid) {
-                retained.push_back(std::move(active_[active_index]));
+                if (write_index != active_index) {
+                    std::swap(active_[write_index], active_[active_index]);
+                }
+                ++write_index;
                 ++active_index;
             } else {
                 missing.push_back(cid);
             }
         }
 
-        const uint64_t retained_count = retained.size();
+        const uint64_t retained_count = write_index;
         const uint64_t released_count =
-            active_.size() >= retained.size() ? active_.size() - retained.size() : 0U;
+            old_active_size >= write_index ? old_active_size - write_index : 0U;
         stats_.future_cells_retained += retained_count;
         stats_.future_cells_released += released_count;
 
+        release_success_payloads(write_index, active_.size());
+        for (size_t i = write_index; i < active_.size(); ++i) {
+            recycle_released_cell(std::move(active_[i]), true);
+        }
+        active_.erase(active_.begin() + static_cast<std::ptrdiff_t>(write_index), active_.end());
+        stats_.prepare_select_seconds += seconds_since(select_begin);
         std::vector<ActiveCell> loaded = load_missing_cells(missing);
-        active_ = std::move(retained);
+        const auto insert_begin = std::chrono::steady_clock::now();
         active_.insert(
             active_.end(),
             std::make_move_iterator(loaded.begin()),
@@ -189,6 +286,7 @@ public:
         );
         active_cell_ids_ = std::move(next_cells);
         update_active_stats();
+        stats_.prepare_insert_sort_seconds += seconds_since(insert_begin);
     }
 
     [[nodiscard]] BCFutureLookupResult<SuccessT> lookup(
@@ -225,11 +323,118 @@ public:
         return out;
     }
 
+    [[nodiscard]] uint64_t active_position_resident_bytes() const {
+        uint64_t bytes = 0U;
+        for (const ActiveCell &cell : active_) {
+            bytes += static_cast<uint64_t>(cell.position.buckets.capacity()) * sizeof(BCBucketEntry);
+            bytes += static_cast<uint64_t>(cell.position.rank_payload.capacity());
+            bytes += static_cast<uint64_t>(cell.index.entries.capacity()) *
+                sizeof(typename BCFutureSuccessLookupView<SuccessT>::DirectEntry);
+            bytes += static_cast<uint64_t>(cell.index.word_rank_bases.capacity()) *
+                sizeof(uint32_t);
+        }
+        return bytes;
+    }
+
+    [[nodiscard]] uint64_t active_success_resident_bytes() const {
+        uint64_t bytes = 0U;
+        std::vector<const detail::BCAlignedBuffer *> external_buffers;
+        external_buffers.reserve(active_.size());
+        for (const ActiveCell &cell : active_) {
+            bytes += static_cast<uint64_t>(cell.success.raw_bytes.capacity());
+            bytes += static_cast<uint64_t>(cell.success.values.capacity()) * sizeof(uint32_t);
+            if (cell.success.external_value_bytes) {
+                external_buffers.push_back(cell.success.external_value_bytes.get());
+            }
+        }
+        std::sort(external_buffers.begin(), external_buffers.end());
+        external_buffers.erase(
+            std::unique(external_buffers.begin(), external_buffers.end()),
+            external_buffers.end()
+        );
+        for (const detail::BCAlignedBuffer *buffer : external_buffers) {
+            bytes += static_cast<uint64_t>(buffer->size());
+        }
+        return bytes;
+    }
+
+    [[nodiscard]] uint64_t recycled_index_resident_bytes() const {
+        return recycled_index_bytes_;
+    }
+
+    [[nodiscard]] BCFutureSuccessLookupView<SuccessT> open_success_lookup(
+        uint32_t row_width,
+        BCSuccessDTypeMode dtype,
+        double &index_seconds,
+        uint64_t &resident_position_bytes,
+        uint64_t &resident_success_bytes
+    ) const {
+        require_open();
+        resident_position_bytes = 0U;
+        resident_success_bytes = 0U;
+
+        const auto begin = std::chrono::steady_clock::now();
+        BCFutureSuccessLookupView<SuccessT> lookup;
+        if constexpr (std::is_same_v<SuccessT, uint32_t>) {
+            std::vector<typename BCFutureSuccessLookupView<SuccessT>::CachedCellRef> refs;
+            refs.reserve(active_.size());
+            for (const ActiveCell &cell : active_) {
+                typename BCFutureSuccessLookupView<SuccessT>::CachedCellRef ref;
+                ref.cid = cell.cid;
+                ref.rank_payload = cell.position.view().rank_payload;
+                ref.index = &cell.index;
+                ref.value_count = cell.success.uint32_value_count();
+                ref.value_ptr = cell.success.uint32_values_data();
+                refs.push_back(ref);
+            }
+            lookup.open_loaded_cached_refs(
+                position_reader_->lut(),
+                position_reader_->cell_count(),
+                refs,
+                row_width,
+                dtype
+            );
+        } else {
+            std::vector<BCLoadedCell> position_cells;
+            position_cells.reserve(active_.size());
+            std::vector<BCLoadedSuccessCell> success_cells;
+            success_cells.reserve(active_.size());
+            for (const ActiveCell &cell : active_) {
+                position_cells.push_back(cell.position);
+                success_cells.push_back(cell.success);
+            }
+            for (const BCLoadedCell &cell : position_cells) {
+                resident_position_bytes +=
+                    static_cast<uint64_t>(cell.buckets.capacity()) * sizeof(BCBucketEntry) +
+                    static_cast<uint64_t>(cell.rank_payload.capacity());
+            }
+            for (const BCLoadedSuccessCell &cell : success_cells) {
+                resident_success_bytes += static_cast<uint64_t>(cell.raw_bytes.capacity()) +
+                    static_cast<uint64_t>(cell.values.capacity()) * sizeof(uint32_t);
+                if (cell.external_value_bytes) {
+                    resident_success_bytes +=
+                        static_cast<uint64_t>(cell.external_value_bytes->size());
+                }
+            }
+            lookup.open_loaded(
+                position_reader_->lut(),
+                position_reader_->cell_count(),
+                std::move(position_cells),
+                success_cells,
+                row_width,
+                dtype
+            );
+        }
+        index_seconds += seconds_since(begin);
+        return lookup;
+    }
+
 private:
     struct ActiveCell {
         CellId cid = 0U;
         BCLoadedCell position;
         BCLoadedSuccessCell success;
+        typename BCFutureSuccessLookupView<SuccessT>::CachedCellIndex index;
     };
 
     using ActiveIterator = typename std::vector<ActiveCell>::iterator;
@@ -262,6 +467,111 @@ private:
         cells.erase(std::unique(cells.begin(), cells.end()), cells.end());
     }
 
+    [[nodiscard]] static uint64_t index_resident_bytes(
+        const typename BCFutureSuccessLookupView<SuccessT>::CachedCellIndex &index
+    ) {
+        return static_cast<uint64_t>(index.entries.capacity()) *
+                sizeof(typename BCFutureSuccessLookupView<SuccessT>::DirectEntry) +
+            static_cast<uint64_t>(index.word_rank_bases.capacity()) * sizeof(uint32_t);
+    }
+
+    [[nodiscard]] static uint64_t position_resident_bytes(const BCLoadedCell &position) {
+        return static_cast<uint64_t>(position.buckets.capacity()) * sizeof(BCBucketEntry) +
+            static_cast<uint64_t>(position.rank_payload.capacity());
+    }
+
+    [[nodiscard]] static uint64_t recycled_cell_resident_bytes(const ActiveCell &cell) {
+        return index_resident_bytes(cell.index) + position_resident_bytes(cell.position);
+    }
+
+    void update_recycled_index_stats() {
+        stats_.recycled_index_bytes = recycled_index_bytes_;
+        stats_.recycled_index_cells = recycled_cells_.size();
+        stats_.recycled_index_bytes_max = std::max(
+            stats_.recycled_index_bytes_max,
+            recycled_index_bytes_
+        );
+        stats_.recycled_index_cells_max = std::max<uint64_t>(
+            stats_.recycled_index_cells_max,
+            recycled_cells_.size()
+        );
+    }
+
+    [[nodiscard]] ActiveCell acquire_recycled_cell() {
+        if (recycled_cells_.empty()) {
+            return {};
+        }
+        ActiveCell cell = std::move(recycled_cells_.back());
+        recycled_cells_.pop_back();
+        const uint64_t bytes = recycled_cell_resident_bytes(cell);
+        recycled_index_bytes_ = recycled_index_bytes_ >= bytes
+            ? recycled_index_bytes_ - bytes
+            : 0U;
+        ++stats_.recycled_index_hits;
+        update_recycled_index_stats();
+        return cell;
+    }
+
+    static void release_success_payload(BCLoadedSuccessCell &success) {
+        std::vector<uint8_t>().swap(success.raw_bytes);
+        std::vector<uint32_t>().swap(success.values);
+        success.external_value_bytes.reset();
+        success.external_values = nullptr;
+        success.external_value_count = 0U;
+        success.cid = 0U;
+        success.dtype = kBCSuccessDTypeUint32;
+        success.row_width = 0U;
+        success.success_rows = 0U;
+    }
+
+    void release_success_payloads(size_t begin, size_t end) {
+        if (begin >= end || begin >= active_.size()) {
+            return;
+        }
+        end = std::min(end, active_.size());
+        const size_t count = end - begin;
+        const int threads = static_cast<int>(std::max<uint32_t>(1U, options_.release_threads));
+        if (count >= 8U && threads > 1) {
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(static) num_threads(threads)
+            for (int64_t i = static_cast<int64_t>(begin);
+                 i < static_cast<int64_t>(end);
+                 ++i) {
+                release_success_payload(active_[static_cast<size_t>(i)].success);
+            }
+#else
+            for (size_t i = begin; i < end; ++i) {
+                release_success_payload(active_[i].success);
+            }
+#endif
+        } else {
+            for (size_t i = begin; i < end; ++i) {
+                release_success_payload(active_[i].success);
+            }
+        }
+    }
+
+    void recycle_released_cell(ActiveCell &&cell, bool success_already_released = false) {
+        cell.position.cid = 0U;
+        cell.position.success_rows = 0U;
+        cell.position.buckets.clear();
+        cell.position.rank_payload.clear();
+        const uint64_t bytes = recycled_cell_resident_bytes(cell);
+        cell.cid = 0U;
+        if (!success_already_released) {
+            cell.success = {};
+        }
+        if (bytes == 0U || options_.max_recycled_index_bytes == 0U ||
+            bytes > options_.max_recycled_index_bytes ||
+            recycled_index_bytes_ > options_.max_recycled_index_bytes - bytes) {
+            update_recycled_index_stats();
+            return;
+        }
+        recycled_index_bytes_ += bytes;
+        recycled_cells_.push_back(std::move(cell));
+        update_recycled_index_stats();
+    }
+
     [[nodiscard]] std::vector<ActiveCell> load_missing_cells(const std::vector<CellId> &missing) {
         std::vector<ActiveCell> loaded;
         loaded.reserve(missing.size());
@@ -271,14 +581,27 @@ private:
 
         BCCellLoadStats position_stats;
         const auto position_begin = std::chrono::steady_clock::now();
-        std::vector<BCLoadedCell> position_cells =
-            position_reader_->load_cells(missing, &position_stats);
+        for (CellId cid : missing) {
+            ActiveCell cell = acquire_recycled_cell();
+            cell.cid = cid;
+            loaded.push_back(std::move(cell));
+        }
+        std::vector<BCLoadedCell> position_cells;
+        position_cells.reserve(missing.size());
+        for (ActiveCell &cell : loaded) {
+            position_cells.push_back(std::move(cell.position));
+        }
+        position_reader_->load_cells_into(missing, position_cells, &position_stats);
         stats_.position_read_seconds += seconds_since(position_begin);
 
         BCSuccessLoadStats success_stats;
         const auto success_begin = std::chrono::steady_clock::now();
         std::vector<BCLoadedSuccessCell> success_cells =
-            success_reader_->load_cells(missing, &success_stats);
+            success_reader_->load_cells(
+                missing,
+                &success_stats,
+                std::is_same_v<SuccessT, uint32_t>
+            );
         stats_.success_read_seconds += seconds_since(success_begin);
 
         if (position_cells.size() != missing.size() || success_cells.size() != missing.size()) {
@@ -296,11 +619,16 @@ private:
             if (position_cells[i].success_rows != success_cells[i].success_rows) {
                 throw std::logic_error("BC future family window position/success row mismatch");
             }
-            ActiveCell cell;
-            cell.cid = missing[i];
+            ActiveCell &cell = loaded[i];
             cell.position = std::move(position_cells[i]);
             cell.success = std::move(success_cells[i]);
-            loaded.push_back(std::move(cell));
+            const auto index_begin = std::chrono::steady_clock::now();
+            BCFutureSuccessLookupView<SuccessT>::build_loaded_cell_index(
+                position_reader_->lut(),
+                cell.position,
+                cell.index
+            );
+            stats_.prepare_index_build_seconds += seconds_since(index_begin);
         }
         return loaded;
     }
@@ -312,6 +640,7 @@ private:
         stats_.position_read_bytes += stats.read_bytes;
         stats_.position_backend_read_ops += stats.backend_read_ops;
         stats_.position_backend_read_bytes += stats.backend_read_bytes;
+        stats_.position_backend_read_seconds += stats.backend_read_seconds;
     }
 
     void add_success_stats(const BCSuccessLoadStats &stats) {
@@ -321,6 +650,7 @@ private:
         stats_.success_read_bytes += stats.read_bytes;
         stats_.success_backend_read_ops += stats.backend_read_ops;
         stats_.success_backend_read_bytes += stats.backend_read_bytes;
+        stats_.success_backend_read_seconds += stats.backend_read_seconds;
     }
 
     void update_active_stats() {
@@ -382,7 +712,9 @@ private:
     const BCSuccessStreamingReader *success_reader_ = nullptr;
     BCFutureFamilyWindowOptions options_;
     std::vector<ActiveCell> active_;
+    std::vector<ActiveCell> recycled_cells_;
     std::vector<CellId> active_cell_ids_;
+    uint64_t recycled_index_bytes_ = 0U;
     BCFutureFamilyWindowStats stats_;
 };
 

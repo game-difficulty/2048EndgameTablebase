@@ -98,18 +98,27 @@ public:
         uint32_t queue_depth = 8U,
         bool overlapped = true
     ) {
-        BCBufferedFileReader probe(path);
-        std::vector<uint8_t> header_bytes(kBCPositionHeaderBytes);
-        probe.read_at(0U, header_bytes.data(), header_bytes.size());
-        const BCPositionHeader header = bc_read_header(header_bytes);
-        const uint64_t logical_size = bc_position_logical_size_from_header(header);
         BCDirectFileIOOptions options;
         options.queue_depth = queue_depth;
         options.overlapped = overlapped || queue_depth > 1U;
-        options.logical_size = logical_size;
-        const uint64_t required_physical = bc_direct_align_up(logical_size, options.alignment);
-        if (probe.size() >= required_physical) {
-            return BCPositionStreamingReader(std::make_unique<BCDirectFileReader>(path, options), lut);
+        std::error_code ec;
+        const uint64_t physical_size = std::filesystem::file_size(path, ec);
+        if (ec) {
+            throw std::runtime_error("BC streaming position direct-auto file_size failed: " + ec.message());
+        }
+        if ((physical_size & (static_cast<uint64_t>(options.alignment) - 1U)) == 0U) {
+            options.physical_size = physical_size;
+            options.logical_size = physical_size;
+            auto direct = std::make_unique<BCDirectFileReader>(path, options);
+            std::vector<uint8_t> header_bytes(kBCPositionHeaderBytes);
+            direct->read_at(0U, header_bytes.data(), header_bytes.size());
+            const BCPositionHeader header = bc_read_header(header_bytes);
+            const uint64_t logical_size = bc_position_logical_size_from_header(header);
+            const uint64_t required_physical = bc_direct_align_up(logical_size, options.alignment);
+            if (physical_size >= required_physical) {
+                direct->set_logical_size(logical_size);
+                return BCPositionStreamingReader(std::move(direct), lut);
+            }
         }
         return open_buffered(path, lut);
     }
