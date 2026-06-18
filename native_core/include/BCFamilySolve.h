@@ -50,10 +50,6 @@ struct BCFamilySolveStats {
     uint64_t final_stage_values_read = 0U;
     uint64_t final_stage_bytes_written = 0U;
     uint64_t final_stage_bytes_read = 0U;
-    uint64_t partial4_profiled_values = 0U;
-    uint64_t partial4_profiled_zero_values = 0U;
-    uint64_t partial2_profiled_values = 0U;
-    uint64_t partial2_profiled_zero_values = 0U;
     BCFileIOStats temp_write_io;
     BCFileIOStats temp_read_io;
     BCFileIOStats final_stage_write_io;
@@ -90,26 +86,6 @@ struct BCFamilySolveStats {
     double spawn2_cell_compute_seconds = 0.0;
     double spawn4_bucket_hit_seconds = 0.0;
     double spawn2_bucket_hit_seconds = 0.0;
-    double spawn4_batch_candidate_thread_seconds = 0.0;
-    double spawn4_batch_canonical_thread_seconds = 0.0;
-    double spawn4_batch_setup_thread_seconds = 0.0;
-    double spawn4_batch_reduce_thread_seconds = 0.0;
-    double spawn4_batch_emit_thread_seconds = 0.0;
-    double spawn2_batch_candidate_thread_seconds = 0.0;
-    double spawn2_batch_canonical_thread_seconds = 0.0;
-    double spawn2_batch_setup_thread_seconds = 0.0;
-    double spawn2_batch_reduce_thread_seconds = 0.0;
-    double spawn2_batch_emit_thread_seconds = 0.0;
-    uint64_t spawn4_batch_canonical_candidates = 0U;
-    uint64_t spawn4_batch_encoded_queries = 0U;
-    uint64_t spawn4_batch_reduce_found = 0U;
-    uint64_t spawn4_batch_entry_misses = 0U;
-    uint64_t spawn4_batch_bitmap_misses = 0U;
-    uint64_t spawn2_batch_canonical_candidates = 0U;
-    uint64_t spawn2_batch_encoded_queries = 0U;
-    uint64_t spawn2_batch_reduce_found = 0U;
-    uint64_t spawn2_batch_entry_misses = 0U;
-    uint64_t spawn2_batch_bitmap_misses = 0U;
     uint64_t temp_compressed_bytes = 0U;
     double final_dense_copy_seconds = 0.0;
     double compact_value_copy_seconds = 0.0;
@@ -150,10 +126,6 @@ struct BCFamilySolveOptions {
     bool compress_temp_files = false;
     uint32_t temp_direct_queue_depth = 16U;
     uint64_t final_pending_value_memory_cap_bytes = 0U;
-    bool use_diagonal_grouped_sum = false;
-    bool collect_edge_stats = false;
-    bool collect_batch_timing = false;
-    bool collect_temp_sparsity = false;
 };
 
 struct BCFamilySolveFileResult {
@@ -378,44 +350,6 @@ void bc_family_release_success_scratch(
 }
 
 template <typename StorageT>
-void bc_family_profile_partial_temp_value_vector(
-    const BCFamilyValueVector<StorageT> &values,
-    StorageT zero_value,
-    bool spawn4,
-    BCFamilySolveStats &stats
-) {
-    uint64_t zero = 0U;
-    for (const StorageT value : values) {
-        if (value == zero_value) {
-            ++zero;
-        }
-    }
-    if (spawn4) {
-        stats.partial4_profiled_values = bc_checked_add_u64(
-            stats.partial4_profiled_values,
-            values.size(),
-            "BC family partial4 sparsity stats overflow"
-        );
-        stats.partial4_profiled_zero_values = bc_checked_add_u64(
-            stats.partial4_profiled_zero_values,
-            zero,
-            "BC family partial4 zero sparsity stats overflow"
-        );
-    } else {
-        stats.partial2_profiled_values = bc_checked_add_u64(
-            stats.partial2_profiled_values,
-            values.size(),
-            "BC family partial2 sparsity stats overflow"
-        );
-        stats.partial2_profiled_zero_values = bc_checked_add_u64(
-            stats.partial2_profiled_zero_values,
-            zero,
-            "BC family partial2 zero sparsity stats overflow"
-        );
-    }
-}
-
-template <typename StorageT>
 [[nodiscard]] BCFamilyValueVector<StorageT> bc_family_prepare_partial_temp_output(
     const BCFamilyPartialCellLayout &layout,
     BCFamilyValueVector<StorageT> dense_values,
@@ -423,16 +357,11 @@ template <typename StorageT>
     const BCFamilySolveOptions<StorageT> &options,
     BCFamilySolveStats &stats
 ) {
+    (void)spawn4;
+    (void)options;
+    (void)stats;
     if (dense_values.size() != static_cast<size_t>(layout.value_count)) {
         throw std::runtime_error("BC family partial temp dense count mismatch");
-    }
-    if (options.collect_temp_sparsity) {
-        bc_family_profile_partial_temp_value_vector(
-            dense_values,
-            options.solve.zero_value,
-            spawn4,
-            stats
-        );
     }
     return dense_values;
 }
@@ -1441,7 +1370,7 @@ void bc_family_flush_ready_outputs(
     std::vector<BCFamilyPendingOutputCell<StorageT>> &pending,
     uint64_t &pending_value_bytes,
     CellId &next_output_cid,
-    BCSingleChunkFinalFileStreamer<StorageT> &streamer,
+    BCFinalLayerFileStreamer<StorageT> &streamer,
     BCFamilySolveStats &stats
 ) {
     (void)streamer;
@@ -1458,7 +1387,7 @@ void bc_family_mark_compacted_outputs_ready(
     uint64_t &pending_value_bytes,
     uint64_t pending_value_memory_cap_bytes,
     CellId next_output_cid,
-    BCSingleChunkFinalFileStreamer<StorageT> &streamer,
+    BCFinalLayerFileStreamer<StorageT> &streamer,
     BCFamilySolveStats &stats
 ) {
     const double t0 = bc_single_chunk_now_seconds();
@@ -1492,7 +1421,7 @@ template <typename StorageT>
 void bc_family_mark_empty_outputs(
     const BCPositionStreamingReader &current_position,
     std::vector<BCFamilyPendingOutputCell<StorageT>> &pending,
-    BCSingleChunkFinalFileStreamer<StorageT> &streamer,
+    BCFinalLayerFileStreamer<StorageT> &streamer,
     BCFamilySolveStats &stats
 ) {
     for (CellId cid = 0U; cid < current_position.cell_count(); ++cid) {
@@ -1824,26 +1753,8 @@ void bc_family_accumulate_cell_workspace_batch_stats(
     BCFamilySolveStats &stats,
     const BCFamilySolveCellWorkspace<StorageT> &workspace
 ) {
-    stats.spawn4_batch_candidate_thread_seconds += workspace.spawn4_batch_candidate_seconds;
-    stats.spawn4_batch_canonical_thread_seconds += workspace.spawn4_batch_canonical_seconds;
-    stats.spawn4_batch_setup_thread_seconds += workspace.spawn4_batch_setup_seconds;
-    stats.spawn4_batch_reduce_thread_seconds += workspace.spawn4_batch_reduce_seconds;
-    stats.spawn4_batch_emit_thread_seconds += workspace.spawn4_batch_emit_seconds;
-    stats.spawn2_batch_candidate_thread_seconds += workspace.spawn2_batch_candidate_seconds;
-    stats.spawn2_batch_canonical_thread_seconds += workspace.spawn2_batch_canonical_seconds;
-    stats.spawn2_batch_setup_thread_seconds += workspace.spawn2_batch_setup_seconds;
-    stats.spawn2_batch_reduce_thread_seconds += workspace.spawn2_batch_reduce_seconds;
-    stats.spawn2_batch_emit_thread_seconds += workspace.spawn2_batch_emit_seconds;
-    stats.spawn4_batch_canonical_candidates += workspace.spawn4_batch_canonical_candidates;
-    stats.spawn4_batch_encoded_queries += workspace.spawn4_batch_encoded_queries;
-    stats.spawn4_batch_reduce_found += workspace.spawn4_batch_reduce_found;
-    stats.spawn4_batch_entry_misses += workspace.spawn4_batch_entry_misses;
-    stats.spawn4_batch_bitmap_misses += workspace.spawn4_batch_bitmap_misses;
-    stats.spawn2_batch_canonical_candidates += workspace.spawn2_batch_canonical_candidates;
-    stats.spawn2_batch_encoded_queries += workspace.spawn2_batch_encoded_queries;
-    stats.spawn2_batch_reduce_found += workspace.spawn2_batch_reduce_found;
-    stats.spawn2_batch_entry_misses += workspace.spawn2_batch_entry_misses;
-    stats.spawn2_batch_bitmap_misses += workspace.spawn2_batch_bitmap_misses;
+    (void)stats;
+    (void)workspace;
 }
 
 [[nodiscard]] inline bool bc_family_can_encode_trusted_unit2_modulo(
@@ -1906,7 +1817,6 @@ inline void bc_family_encode_trusted_unit2_modulo(
 
 [[nodiscard]] inline uint64_t bc_family_flush_canonical_boards(
     const BCSolvePreparedQueryEncoder &encoder,
-    uint8_t spawn_rank,
     std::vector<uint64_t> &boards,
     std::vector<uint16_t> &refs,
     std::vector<BCSolvePreparedQuery> &queries,
@@ -1934,8 +1844,6 @@ inline void bc_family_encode_trusted_unit2_modulo(
         const bool encoded = encoder.encode(
                 q,
                 refs[i],
-                spawn_rank,
-                BCDirectionMask::Both,
                 query
             );
         if (encoded) {
@@ -2437,7 +2345,7 @@ uint32_t bc_family_collect_phase_batch_candidates(
         ? options.solve.edge_options.spawn4_tile_rank
         : options.solve.edge_options.spawn2_tile_rank;
     BCSolveEdgeStats *edge_stats =
-        options.collect_edge_stats ? &workspace.stats.edge : nullptr;
+        false ? &workspace.stats.edge : nullptr;
     const bool horizontal = bc_has_horizontal(directions);
     const bool vertical = bc_has_vertical(directions);
     const bool fast_trusted_axis = edge_stats == nullptr && filter.enabled;
@@ -2710,12 +2618,8 @@ void bc_family_flush_phase_batch(
 
     const bool success_check_enabled =
         bc_solve_success_check_enabled(options.solve.edge_options);
-    const uint8_t spawn_rank = phase == BCSolveSpawnPhase::Spawn4
-        ? options.solve.edge_options.spawn4_tile_rank
-        : options.solve.edge_options.spawn2_tile_rank;
-
     const bool spawn4_phase = phase == BCSolveSpawnPhase::Spawn4;
-    const bool collect_batch_timing = options.collect_batch_timing;
+    const bool collect_batch_timing = false;
     const double candidate_t0 = collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
     const uint32_t compact_slot_count =
         bc_family_collect_phase_batch_candidates<StorageT, false>(
@@ -2742,7 +2646,6 @@ void bc_family_flush_phase_batch(
         static_cast<uint64_t>(batch.canonical2_boards.size());
     const uint64_t encoded_count = bc_family_flush_canonical_boards(
         encoder,
-        spawn_rank,
         batch.canonical2_boards,
         batch.canonical2_refs,
         batch.queries2,
@@ -2778,7 +2681,7 @@ void bc_family_flush_phase_batch(
 
     const double reduce_t0 = collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
     BCSolveEdgeStats *edge_stats =
-        options.collect_edge_stats ? &workspace.stats.edge : nullptr;
+        false ? &workspace.stats.edge : nullptr;
     typename BCFutureSuccessLookupView<StorageT>::BatchLookupStats lookup_stats;
     auto *lookup_stats_ptr = collect_batch_timing ? &lookup_stats : nullptr;
     uint64_t reduce_found = 0U;
@@ -3003,7 +2906,7 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
         ? options.solve.edge_options.spawn4_tile_rank
         : options.solve.edge_options.spawn2_tile_rank;
     BCSolveEdgeStats *edge_stats =
-        options.collect_edge_stats ? &workspace.stats.edge : nullptr;
+        false ? &workspace.stats.edge : nullptr;
     const bool horizontal = bc_has_horizontal(directions);
     const bool vertical = bc_has_vertical(directions);
     const bool fast_trusted_axis = edge_stats == nullptr && filter.enabled;
@@ -3323,7 +3226,7 @@ void bc_family_flush_first_direction_batch_multi_cell(
     batch.canonical2_refs.clear();
     batch.queries2.clear();
 
-    const bool collect_batch_timing = options.collect_batch_timing;
+    const bool collect_batch_timing = false;
     const bool spawn4_phase = phase == BCSolveSpawnPhase::Spawn4;
     const double candidate_t0 = collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
     const uint32_t compact_slot_count =
@@ -3347,14 +3250,10 @@ void bc_family_flush_first_direction_batch_multi_cell(
     }
 
     const double canonical_t0 = collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
-    const uint8_t spawn_rank = spawn4_phase
-        ? options.solve.edge_options.spawn4_tile_rank
-        : options.solve.edge_options.spawn2_tile_rank;
     const uint64_t candidate_count =
         static_cast<uint64_t>(batch.canonical2_boards.size());
     const uint64_t encoded_count = bc_family_flush_canonical_boards(
         encoder,
-        spawn_rank,
         batch.canonical2_boards,
         batch.canonical2_refs,
         batch.queries2,
@@ -3390,7 +3289,7 @@ void bc_family_flush_first_direction_batch_multi_cell(
 
     const double reduce_t0 = collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
     BCSolveEdgeStats *edge_stats =
-        options.collect_edge_stats ? &workspace.stats.edge : nullptr;
+        false ? &workspace.stats.edge : nullptr;
     typename BCFutureSuccessLookupView<StorageT>::BatchLookupStats lookup_stats;
     auto *lookup_stats_ptr = collect_batch_timing ? &lookup_stats : nullptr;
     uint64_t reduce_found = 0U;
@@ -3515,11 +3414,8 @@ void bc_family_flush_phase_partial_sum_batch_multi_cell(
     batch.canonical2_refs.clear();
     batch.queries2.clear();
 
-    const uint8_t spawn_rank = phase == BCSolveSpawnPhase::Spawn4
-        ? options.solve.edge_options.spawn4_tile_rank
-        : options.solve.edge_options.spawn2_tile_rank;
     const bool spawn4_phase = phase == BCSolveSpawnPhase::Spawn4;
-    const bool collect_batch_timing = options.collect_batch_timing;
+    const bool collect_batch_timing = false;
 
     const double candidate_t0 = collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
     const uint32_t compact_slot_count =
@@ -3547,7 +3443,6 @@ void bc_family_flush_phase_partial_sum_batch_multi_cell(
         static_cast<uint64_t>(batch.canonical2_boards.size());
     const uint64_t encoded_count = bc_family_flush_canonical_boards(
         encoder,
-        spawn_rank,
         batch.canonical2_boards,
         batch.canonical2_refs,
         batch.queries2,
@@ -3689,12 +3584,8 @@ void bc_family_flush_phase_sum_batch(
     batch.canonical2_refs.clear();
     batch.queries2.clear();
 
-    const uint8_t spawn_rank = phase == BCSolveSpawnPhase::Spawn4
-        ? options.solve.edge_options.spawn4_tile_rank
-        : options.solve.edge_options.spawn2_tile_rank;
-
     const bool spawn4_phase = phase == BCSolveSpawnPhase::Spawn4;
-    const bool collect_batch_timing = options.collect_batch_timing;
+    const bool collect_batch_timing = false;
     const double candidate_t0 = collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
     const uint32_t compact_slot_count =
         bc_family_collect_phase_batch_candidates<StorageT, true>(
@@ -3721,7 +3612,6 @@ void bc_family_flush_phase_sum_batch(
         static_cast<uint64_t>(batch.canonical2_boards.size());
     const uint64_t encoded_count = bc_family_flush_canonical_boards(
         encoder,
-        spawn_rank,
         batch.canonical2_boards,
         batch.canonical2_refs,
         batch.queries2,
@@ -3839,12 +3729,8 @@ void bc_family_flush_phase_partial_sum_batch(
     batch.canonical2_refs.clear();
     batch.queries2.clear();
 
-    const uint8_t spawn_rank = phase == BCSolveSpawnPhase::Spawn4
-        ? options.solve.edge_options.spawn4_tile_rank
-        : options.solve.edge_options.spawn2_tile_rank;
-
     const bool spawn4_phase = phase == BCSolveSpawnPhase::Spawn4;
-    const bool collect_batch_timing = options.collect_batch_timing;
+    const bool collect_batch_timing = false;
     const double candidate_t0 = collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
     const uint32_t compact_slot_count =
         bc_family_collect_phase_batch_candidates<StorageT, true>(
@@ -3871,7 +3757,6 @@ void bc_family_flush_phase_partial_sum_batch(
         static_cast<uint64_t>(batch.canonical2_boards.size());
     const uint64_t encoded_count = bc_family_flush_canonical_boards(
         encoder,
-        spawn_rank,
         batch.canonical2_boards,
         batch.canonical2_refs,
         batch.queries2,
@@ -4018,7 +3903,7 @@ void bc_family_scan_cell_phase_batches_with_flush(
         workspace.bucket_target_hits;
     bucket_target_hits.clear();
     const std::vector<BCFamilyBucketSpawnTargetHits> *bucket_target_hits_ptr = nullptr;
-    const bool build_bucket_hits_for_stats = options.collect_edge_stats;
+    const bool build_bucket_hits_for_stats = false;
 #ifndef NDEBUG
     const bool build_bucket_hits_for_debug = filter.enabled;
 #else
@@ -4029,7 +3914,7 @@ void bc_family_scan_cell_phase_batches_with_flush(
             ? options.solve.edge_options.spawn4_tile_rank
             : options.solve.edge_options.spawn2_tile_rank;
         const double bucket_hit_t0 =
-            options.collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
+            false ? bc_single_chunk_now_seconds() : 0.0;
         bc_family_build_bucket_spawn_target_hits(
             lut,
             cell.view(),
@@ -4051,7 +3936,7 @@ void bc_family_scan_cell_phase_batches_with_flush(
             );
         }
 #endif
-        if (options.collect_batch_timing) {
+        if (false) {
             const double bucket_hit_seconds = bc_single_chunk_now_seconds() - bucket_hit_t0;
             if (phase == BCSolveSpawnPhase::Spawn4) {
                 stats.spawn4_bucket_hit_seconds += bucket_hit_seconds;
@@ -4107,7 +3992,7 @@ void bc_family_scan_cell_phase_batches_with_flush(
             }
         }
         flush(local, bucket_target_hits_ptr);
-        if (options.collect_edge_stats) {
+        if (false) {
             bc_resident_solve_accumulate_edge_stats(stats.single.edge, local.stats.edge);
         }
         bc_family_accumulate_cell_workspace_batch_stats(stats, local);
@@ -4183,7 +4068,7 @@ void bc_family_scan_cell_phase_batches_with_flush(
         std::rethrow_exception(first_exception);
     }
     for (int i = 0; i < threads; ++i) {
-        if (options.collect_edge_stats) {
+        if (false) {
             bc_resident_solve_accumulate_edge_stats(
                 stats.single.edge,
                 workspace.cell_workspaces[static_cast<size_t>(i)].stats.edge
@@ -4248,7 +4133,7 @@ void bc_family_first_direction_cells_batch(
         );
 #ifndef NDEBUG
         const double bucket_hit_t0 =
-            options.collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
+            false ? bc_single_chunk_now_seconds() : 0.0;
         bc_family_build_bucket_spawn_target_hits(
             lut,
             cell.view(),
@@ -4266,7 +4151,7 @@ void bc_family_first_direction_cells_batch(
             directions,
             bucket_hits_by_cell[cell_index]
         );
-        if (options.collect_batch_timing) {
+        if (false) {
             const double bucket_hit_seconds = bc_single_chunk_now_seconds() - bucket_hit_t0;
             if (spawn4_phase) {
                 stats.spawn4_bucket_hit_seconds += bucket_hit_seconds;
@@ -4392,7 +4277,7 @@ void bc_family_first_direction_cells_batch(
         std::rethrow_exception(first_exception);
     }
     for (int i = 0; i < threads; ++i) {
-        if (options.collect_edge_stats) {
+        if (false) {
             bc_resident_solve_accumulate_edge_stats(
                 stats.single.edge,
                 workspace.cell_workspaces[static_cast<size_t>(i)].stats.edge
@@ -4461,7 +4346,7 @@ void bc_family_partial_sum_cells_batch(
         );
 #ifndef NDEBUG
         const double bucket_hit_t0 =
-            options.collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
+            false ? bc_single_chunk_now_seconds() : 0.0;
         bc_family_build_bucket_spawn_target_hits(
             lut,
             cell.view(),
@@ -4479,7 +4364,7 @@ void bc_family_partial_sum_cells_batch(
             directions,
             bucket_hits_by_cell[cell_index]
         );
-        if (options.collect_batch_timing) {
+        if (false) {
             const double bucket_hit_seconds = bc_single_chunk_now_seconds() - bucket_hit_t0;
             if (spawn4_phase) {
                 stats.spawn4_bucket_hit_seconds += bucket_hit_seconds;
@@ -4606,7 +4491,7 @@ void bc_family_partial_sum_cells_batch(
         std::rethrow_exception(first_exception);
     }
     for (int i = 0; i < threads; ++i) {
-        if (options.collect_edge_stats) {
+        if (false) {
             bc_resident_solve_accumulate_edge_stats(
                 stats.single.edge,
                 workspace.cell_workspaces[static_cast<size_t>(i)].stats.edge
@@ -4830,7 +4715,7 @@ void bc_family_scan_cell_entries(
                 );
             }
         }
-        if (options.collect_edge_stats) {
+        if (false) {
             bc_resident_solve_accumulate_edge_stats(stats.single.edge, local.stats.edge);
         }
         stats.single.recalc_seconds += bc_single_chunk_now_seconds() - t0;
@@ -4899,7 +4784,7 @@ void bc_family_scan_cell_entries(
         std::rethrow_exception(first_exception);
     }
     for (int i = 0; i < threads; ++i) {
-        if (options.collect_edge_stats) {
+        if (false) {
             bc_resident_solve_accumulate_edge_stats(
                 stats.single.edge,
                 workspace.cell_workspaces[static_cast<size_t>(i)].stats.edge
@@ -5244,7 +5129,7 @@ void bc_family_spawn4_cell(
         return;
     }
 
-    if (options.use_diagonal_grouped_sum && !first && !second && options.solve.row_width == 1U) {
+    if (!first && !second && options.solve.row_width == 1U) {
         detail::bc_family_scan_cell_phase_sum_batches<StorageT>(
             lut,
             cell,
@@ -5520,7 +5405,7 @@ void bc_family_spawn2_cell(
     }
 
     if (!used_partial_sum_path &&
-        options.use_diagonal_grouped_sum && !first && !second && options.solve.row_width == 1U) {
+        !first && !second && options.solve.row_width == 1U) {
         detail::bc_family_scan_cell_phase_sum_batches<StorageT>(
             lut,
             cell,
@@ -6127,7 +6012,7 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
     const double output_streamer_t0 = bc_single_chunk_now_seconds();
     const double position_write_before = stats.single.position_write_seconds;
     const double success_write_before = stats.single.success_write_seconds;
-    BCSingleChunkFinalFileStreamer<StorageT> output_streamer(
+    BCFinalLayerFileStreamer<StorageT> output_streamer(
         current_position,
         position_file,
         success_file,

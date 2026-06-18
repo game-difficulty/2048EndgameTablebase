@@ -89,13 +89,6 @@ namespace ResidentGenerationInternal {
         : options.family_tile_sum_values;
 }
 
-static void refresh_compat_result_stats(BCResidentGenerationResult &result) {
-    result.spawn_move_seconds = result.thread_spawn_move_seconds;
-    result.canonical_seconds = result.thread_canonical_seconds;
-    result.encode_insert_seconds = result.thread_encode_insert_seconds;
-    result.merge_seconds = 0.0;
-}
-
 [[nodiscard]] static bool bc_is_success_by_shifts(
     uint64_t board,
     int target_rank,
@@ -1790,7 +1783,6 @@ void add_workspace_stats(
         result.thread_canonical_seconds += workspace.stats.canonical_seconds;
         result.thread_encode_insert_seconds += workspace.stats.encode_insert_seconds;
     }
-    refresh_compat_result_stats(result);
 }
 
 [[nodiscard]] static uint64_t write_dynamic_state_to_file_streaming(
@@ -1859,8 +1851,6 @@ void finalize_dynamic_result(
         for (const FinalizedCellPayload &payload : payloads) {
             result.output_success_rows += payload.success_rows;
         }
-        refresh_compat_result_stats(result);
-
         const double write_begin = bc_now_seconds();
         BCPositionLayerWriter writer;
         writer.begin_layer(axis);
@@ -1880,7 +1870,6 @@ void finalize_dynamic_result(
         result.write_seconds = bc_now_seconds() - write_begin;
     }
 
-    refresh_compat_result_stats(result);
     result.compute_seconds = generation_seconds + result.finalize_seconds;
     (void)options;
     result.total_seconds = bc_now_seconds() - total_begin;
@@ -4155,7 +4144,6 @@ static BCResidentGenerationPairResult generate_resident_position_layer_pair_with
             if (options.collect_mutable_output_stats) {
                 pair.secondary.output_success_rows = count_dynamic_live_bits(lut, secondary_state);
             }
-            refresh_compat_result_stats(pair.secondary);
             pair.secondary.generation_seconds = generation_seconds;
             pair.secondary.compute_seconds = generation_seconds;
             pair.secondary.total_seconds = bc_now_seconds() - total_begin;
@@ -4531,7 +4519,6 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair_from_stream
         if (options.collect_mutable_output_stats) {
             pair.secondary.output_success_rows = count_dynamic_live_bits(lut, secondary_state);
         }
-        refresh_compat_result_stats(pair.secondary);
         pair.secondary.generation_seconds = generation_seconds;
         pair.secondary.compute_seconds = generation_seconds;
         pair.secondary.total_seconds = bc_now_seconds() - total_begin;
@@ -4707,7 +4694,6 @@ BCResidentMutableGenerationResult generate_resident_mutable_layer_from_streaming
     if (options.collect_mutable_output_stats) {
         out.result.output_success_rows = count_dynamic_live_bits(lut, dynamic_state);
     }
-    refresh_compat_result_stats(out.result);
     out.result.compute_seconds = generation_seconds;
     out.result.total_seconds = bc_now_seconds() - total_begin;
     out.mutable_layer = BCResidentGenerationMutableLayerAccess::make(target_axis, std::move(dynamic_state));

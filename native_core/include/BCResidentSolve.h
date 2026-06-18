@@ -1,7 +1,6 @@
 #pragma once
 
 #include "BCFutureSuccessLookup.h"
-#include "BCPartialStore.h"
 #include "BCPositionScanner.h"
 #include "BCSolveEdgeKernel.h"
 #include "BCSuccessIO.h"
@@ -622,22 +621,6 @@ struct BCResidentBatchWorkspace {
 using BCResidentUInt32BatchWorkspace = BCResidentBatchWorkspace<uint32_t>;
 
 template <typename StorageT>
-[[nodiscard]] inline StorageT bc_resident_reduce_weighted(
-    long double sum2,
-    long double sum4,
-    uint32_t empty_count,
-    double spawn_rate4,
-    StorageT zero_value
-) {
-    if (empty_count == 0U) {
-        return zero_value;
-    }
-    const long double p4 = static_cast<long double>(spawn_rate4);
-    const long double p2 = 1.0L - p4;
-    return static_cast<StorageT>((sum2 * p2 + sum4 * p4) / static_cast<long double>(empty_count));
-}
-
-template <typename StorageT>
 [[nodiscard]] inline uint8_t bc_resident_push_candidate(
     const BCLut &lut,
     const BCFamilyTable &axis,
@@ -672,7 +655,6 @@ template <typename StorageT>
 template <typename StorageT>
 inline void bc_resident_flush_canonical(
     const BCSolvePreparedQueryEncoder &encoder,
-    uint8_t spawn_tile_rank,
     std::vector<uint64_t> &boards,
     std::vector<uint16_t> &refs,
     std::vector<BCSolvePreparedQuery> &queries,
@@ -693,8 +675,6 @@ inline void bc_resident_flush_canonical(
         const bool encoded = encoder.encode(
             unpack_board_to_quadrants(boards[i]),
             refs[i],
-            spawn_tile_rank,
-            BCDirectionMask::Both,
             query
         );
         if (!encoded) {
@@ -872,7 +852,6 @@ inline void bc_resident_solve_batch(
     );
     bc_resident_flush_canonical(
         future2_encoder,
-        options.edge_options.spawn2_tile_rank,
         workspace.canonical2_boards,
         workspace.canonical2_refs,
         workspace.queries2,
@@ -881,7 +860,6 @@ inline void bc_resident_solve_batch(
     );
     bc_resident_flush_canonical(
         future4_encoder,
-        options.edge_options.spawn4_tile_rank,
         workspace.canonical4_boards,
         workspace.canonical4_refs,
         workspace.queries4,
@@ -945,7 +923,7 @@ inline void bc_resident_solve_batch(
                 if constexpr (std::is_same_v<StorageT, uint32_t>) {
                     const uint64_t sum2 = workspace.integer_sum2[board_slot];
                     const uint64_t sum4 = workspace.integer_sum4[board_slot];
-                    value = bc_resident_reduce_weighted<StorageT>(
+                    value = bc_solve_reduce_weighted_success_sums<StorageT>(
                         static_cast<long double>(sum2),
                         static_cast<long double>(sum4),
                         workspace.empty_counts[board_slot],
@@ -953,7 +931,7 @@ inline void bc_resident_solve_batch(
                         options.zero_value
                     );
                 } else {
-                    value = bc_resident_reduce_weighted<StorageT>(
+                    value = bc_solve_reduce_weighted_success_sums<StorageT>(
                         workspace.float_sum2[board_slot],
                         workspace.float_sum4[board_slot],
                         workspace.empty_counts[board_slot],
@@ -2138,55 +2116,6 @@ inline BCResidentLayerResult<StorageT> bc_resident_solve_compacted_layer(
         result.layer.compact_stats.live_rows * static_cast<uint64_t>(options.row_width);
     result.solve_stats.output_bytes = result.layer.compact_stats.success_bytes;
     return result;
-}
-
-// Legacy scaffold kept for SingleChunkSolve experiments. Production resident solve
-// uses bc_resident_solve_compacted_layer() and batch direct future lookup instead.
-template <typename StorageT, typename PrepareLookupFn, typename LookupFn>
-void bc_solve_scanned_board_into_partial(
-    const BCLut &lut,
-    const BCFamilyTable &future2_axis,
-    const BCFamilyTable &future4_axis,
-    CellId current_cid,
-    const BCScannedBoardEntry &entry,
-    const BCResidentSolveOptions<StorageT> &options,
-    PrepareLookupFn &&prepare_lookup,
-    LookupFn &&lookup,
-    BCPartialStore<StorageT> &partial,
-    BCSolveEdgeWorkspace<StorageT> &workspace,
-    BCSolveEdgeStats &edge_stats
-) {
-    const BCSolveBoardQuerySummary summary =
-        bc_solve_collect_board_queries<StorageT>(
-            lut,
-            future2_axis,
-            future4_axis,
-            entry.board,
-            options.directions,
-            options.filter2,
-            options.filter4,
-            workspace,
-            options.edge_options,
-            options.word_sums,
-            &edge_stats
-        );
-
-    prepare_lookup(summary, workspace);
-    for (uint32_t lane = 0U; lane < options.row_width; ++lane) {
-        const StorageT value =
-            bc_solve_reduce_collected_queries<StorageT>(
-                summary,
-                workspace,
-                lookup,
-                lane,
-                options.zero_value,
-                options.terminal_value,
-                options.edge_options,
-                &edge_stats,
-                lane == 0U
-            );
-        partial.set(current_cid, entry.local_success_row, lane, value);
-    }
 }
 
 } // namespace BC

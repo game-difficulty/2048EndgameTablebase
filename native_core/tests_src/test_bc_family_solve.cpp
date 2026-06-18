@@ -560,23 +560,21 @@ T direct_oracle_board_value(
     if (empty_count == 0U) {
         return options.zero_value;
     }
-    const T spawn4_contribution = BC::bc_single_chunk_scale_average_contribution<T>(
+    const T spawn4_contribution = BC::bc_solve_scale_success_sum_contribution<T>(
         sum4,
         empty_count,
         options.edge_options.spawn_rate4,
-        true,
         options.zero_value
     );
-    const T spawn2_contribution = BC::bc_single_chunk_scale_average_contribution<T>(
+    const T spawn2_contribution = BC::bc_solve_scale_success_sum_contribution<T>(
         sum2,
         empty_count,
-        options.edge_options.spawn_rate4,
-        false,
+        1.0L - static_cast<long double>(options.edge_options.spawn_rate4),
         options.zero_value
     );
     T value = spawn4_contribution;
     if (spawn2_contribution != options.zero_value) {
-        value = BC::bc_single_chunk_add_success_contribution<T>(
+        value = BC::bc_solve_add_success_contribution<T>(
             value,
             spawn2_contribution
         );

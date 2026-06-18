@@ -112,13 +112,9 @@ struct BCResidentGenerationResult {
     double thread_spawn_move_seconds = 0.0;
     double thread_canonical_seconds = 0.0;
     double thread_encode_insert_seconds = 0.0;
-    double spawn_move_seconds = 0.0;
-    double canonical_seconds = 0.0;
-    double encode_insert_seconds = 0.0;
 
     double prepare_seconds = 0.0;
     double work_seconds = 0.0;
-    double merge_seconds = 0.0;
     double finalize_seconds = 0.0;
     double cleanup_seconds = 0.0;
     double write_seconds = 0.0;

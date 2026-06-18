@@ -938,9 +938,6 @@ void accumulate(AggregateStats &dst, const BCResidentGenerationResult &result, u
     result.thread_spawn_move_seconds += carry.thread_spawn_move_seconds;
     result.thread_canonical_seconds += carry.thread_canonical_seconds;
     result.thread_encode_insert_seconds += carry.thread_encode_insert_seconds;
-    result.spawn_move_seconds += carry.spawn_move_seconds;
-    result.canonical_seconds += carry.canonical_seconds;
-    result.encode_insert_seconds += carry.encode_insert_seconds;
     result.prepare_seconds += carry.prepare_seconds;
     result.work_seconds += carry.work_seconds;
     result.finalize_seconds += carry.finalize_seconds;

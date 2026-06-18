@@ -48,9 +48,6 @@ struct Args {
     bool direct_io = false;
     bool temp_buffered = false;
     bool keep_direct_padding = true;
-    bool collect_batch_timing = false;
-    bool collect_temp_sparsity = false;
-    bool use_diagonal_grouped_sum = false;
     BC::BCSuccessDTypeMode success_dtype = BC::BCSuccessDTypeMode::UInt32;
     uint32_t direct_queue_depth = 16U;
     std::optional<uint32_t> start_ordinal;
@@ -110,10 +107,6 @@ struct LayerMetric {
     uint64_t final_stage_read_backend_ops = 0U;
     uint64_t final_stage_read_backend_bytes = 0U;
     double final_stage_read_backend_seconds = 0.0;
-    uint64_t partial4_profiled_values = 0U;
-    uint64_t partial4_profiled_zero_values = 0U;
-    uint64_t partial2_profiled_values = 0U;
-    uint64_t partial2_profiled_zero_values = 0U;
     uint64_t temp_write_backend_ops = 0U;
     uint64_t temp_write_backend_bytes = 0U;
     double temp_write_backend_seconds = 0.0;
@@ -210,26 +203,6 @@ struct LayerMetric {
     double family_spawn2_cell_compute_seconds = 0.0;
     double family_spawn4_bucket_hit_seconds = 0.0;
     double family_spawn2_bucket_hit_seconds = 0.0;
-    double family_spawn4_batch_candidate_thread_seconds = 0.0;
-    double family_spawn4_batch_canonical_thread_seconds = 0.0;
-    double family_spawn4_batch_setup_thread_seconds = 0.0;
-    double family_spawn4_batch_reduce_thread_seconds = 0.0;
-    double family_spawn4_batch_emit_thread_seconds = 0.0;
-    double family_spawn2_batch_candidate_thread_seconds = 0.0;
-    double family_spawn2_batch_canonical_thread_seconds = 0.0;
-    double family_spawn2_batch_setup_thread_seconds = 0.0;
-    double family_spawn2_batch_reduce_thread_seconds = 0.0;
-    double family_spawn2_batch_emit_thread_seconds = 0.0;
-    uint64_t family_spawn4_batch_canonical_candidates = 0U;
-    uint64_t family_spawn4_batch_encoded_queries = 0U;
-    uint64_t family_spawn4_batch_reduce_found = 0U;
-    uint64_t family_spawn4_batch_entry_misses = 0U;
-    uint64_t family_spawn4_batch_bitmap_misses = 0U;
-    uint64_t family_spawn2_batch_canonical_candidates = 0U;
-    uint64_t family_spawn2_batch_encoded_queries = 0U;
-    uint64_t family_spawn2_batch_reduce_found = 0U;
-    uint64_t family_spawn2_batch_entry_misses = 0U;
-    uint64_t family_spawn2_batch_bitmap_misses = 0U;
     double family_final_dense_copy_seconds = 0.0;
     double family_compact_value_copy_seconds = 0.0;
     double family_pending_mark_seconds = 0.0;
@@ -356,12 +329,6 @@ struct LayerMetric {
             args.direct_io = true;
         } else if (key == "--temp-buffered") {
             args.temp_buffered = true;
-        } else if (key == "--collect-batch-timing") {
-            args.collect_batch_timing = true;
-        } else if (key == "--collect-temp-sparsity") {
-            args.collect_temp_sparsity = true;
-        } else if (key == "--use-diagonal-grouped-sum") {
-            args.use_diagonal_grouped_sum = true;
         } else if (key == "--keep-direct-padding") {
             args.keep_direct_padding = true;
         } else if (key == "--trim-direct-padding") {
@@ -756,9 +723,7 @@ void write_stats_header(std::ofstream &out) {
         << "final_stage_bytes_read,final_stage_write_backend_ops,"
         << "final_stage_write_backend_bytes,final_stage_write_backend_seconds,"
         << "final_stage_read_backend_ops,final_stage_read_backend_bytes,"
-        << "final_stage_read_backend_seconds,partial4_profiled_values,"
-        << "partial4_profiled_zero_values,partial2_profiled_values,"
-        << "partial2_profiled_zero_values,temp_write_backend_ops,"
+        << "final_stage_read_backend_seconds,temp_write_backend_ops,"
         << "temp_write_backend_bytes,temp_write_backend_seconds,temp_read_backend_ops,"
         << "temp_read_backend_bytes,temp_read_backend_seconds,current_position_read_bytes,"
         << "future2_position_read_bytes,future2_success_read_bytes,"
@@ -811,26 +776,6 @@ void write_stats_header(std::ofstream &out) {
         << "family_spawn2_phase_untracked_seconds,"
         << "family_spawn4_cell_compute_seconds,family_spawn2_cell_compute_seconds,"
         << "family_spawn4_bucket_hit_seconds,family_spawn2_bucket_hit_seconds,"
-        << "family_spawn4_batch_candidate_thread_seconds,"
-        << "family_spawn4_batch_canonical_thread_seconds,"
-        << "family_spawn4_batch_setup_thread_seconds,"
-        << "family_spawn4_batch_reduce_thread_seconds,"
-        << "family_spawn4_batch_emit_thread_seconds,"
-        << "family_spawn2_batch_candidate_thread_seconds,"
-        << "family_spawn2_batch_canonical_thread_seconds,"
-        << "family_spawn2_batch_setup_thread_seconds,"
-        << "family_spawn2_batch_reduce_thread_seconds,"
-        << "family_spawn2_batch_emit_thread_seconds,"
-        << "family_spawn4_batch_canonical_candidates,"
-        << "family_spawn4_batch_encoded_queries,"
-        << "family_spawn4_batch_reduce_found,"
-        << "family_spawn4_batch_entry_misses,"
-        << "family_spawn4_batch_bitmap_misses,"
-        << "family_spawn2_batch_canonical_candidates,"
-        << "family_spawn2_batch_encoded_queries,"
-        << "family_spawn2_batch_reduce_found,"
-        << "family_spawn2_batch_entry_misses,"
-        << "family_spawn2_batch_bitmap_misses,"
         << "family_final_dense_copy_seconds,family_compact_value_copy_seconds,"
         << "family_pending_mark_seconds,family_output_finish_seconds,"
         << "family_output_streamer_open_seconds,"
@@ -919,8 +864,6 @@ void write_metric_row(std::ofstream &out, const LayerMetric &m) {
         << m.final_stage_read_backend_ops << ','
         << m.final_stage_read_backend_bytes << ','
         << m.final_stage_read_backend_seconds << ','
-        << m.partial4_profiled_values << ',' << m.partial4_profiled_zero_values << ','
-        << m.partial2_profiled_values << ',' << m.partial2_profiled_zero_values << ','
         << m.temp_write_backend_ops << ','
         << m.temp_write_backend_bytes << ','
         << m.temp_write_backend_seconds << ','
@@ -1005,26 +948,6 @@ void write_metric_row(std::ofstream &out, const LayerMetric &m) {
         << m.family_spawn2_cell_compute_seconds << ','
         << m.family_spawn4_bucket_hit_seconds << ','
         << m.family_spawn2_bucket_hit_seconds << ','
-        << m.family_spawn4_batch_candidate_thread_seconds << ','
-        << m.family_spawn4_batch_canonical_thread_seconds << ','
-        << m.family_spawn4_batch_setup_thread_seconds << ','
-        << m.family_spawn4_batch_reduce_thread_seconds << ','
-        << m.family_spawn4_batch_emit_thread_seconds << ','
-        << m.family_spawn2_batch_candidate_thread_seconds << ','
-        << m.family_spawn2_batch_canonical_thread_seconds << ','
-        << m.family_spawn2_batch_setup_thread_seconds << ','
-        << m.family_spawn2_batch_reduce_thread_seconds << ','
-        << m.family_spawn2_batch_emit_thread_seconds << ','
-        << m.family_spawn4_batch_canonical_candidates << ','
-        << m.family_spawn4_batch_encoded_queries << ','
-        << m.family_spawn4_batch_reduce_found << ','
-        << m.family_spawn4_batch_entry_misses << ','
-        << m.family_spawn4_batch_bitmap_misses << ','
-        << m.family_spawn2_batch_canonical_candidates << ','
-        << m.family_spawn2_batch_encoded_queries << ','
-        << m.family_spawn2_batch_reduce_found << ','
-        << m.family_spawn2_batch_entry_misses << ','
-        << m.family_spawn2_batch_bitmap_misses << ','
         << m.family_final_dense_copy_seconds << ','
         << m.family_compact_value_copy_seconds << ','
         << m.family_pending_mark_seconds << ','
@@ -1123,10 +1046,6 @@ void add_to_summary(LayerMetric &dst, const LayerMetric &src) {
     dst.final_stage_read_backend_ops += src.final_stage_read_backend_ops;
     dst.final_stage_read_backend_bytes += src.final_stage_read_backend_bytes;
     dst.final_stage_read_backend_seconds += src.final_stage_read_backend_seconds;
-    dst.partial4_profiled_values += src.partial4_profiled_values;
-    dst.partial4_profiled_zero_values += src.partial4_profiled_zero_values;
-    dst.partial2_profiled_values += src.partial2_profiled_values;
-    dst.partial2_profiled_zero_values += src.partial2_profiled_zero_values;
     dst.temp_write_backend_ops += src.temp_write_backend_ops;
     dst.temp_write_backend_bytes += src.temp_write_backend_bytes;
     dst.temp_write_backend_seconds += src.temp_write_backend_seconds;
@@ -1227,46 +1146,6 @@ void add_to_summary(LayerMetric &dst, const LayerMetric &src) {
     dst.family_spawn2_cell_compute_seconds += src.family_spawn2_cell_compute_seconds;
     dst.family_spawn4_bucket_hit_seconds += src.family_spawn4_bucket_hit_seconds;
     dst.family_spawn2_bucket_hit_seconds += src.family_spawn2_bucket_hit_seconds;
-    dst.family_spawn4_batch_candidate_thread_seconds +=
-        src.family_spawn4_batch_candidate_thread_seconds;
-    dst.family_spawn4_batch_canonical_thread_seconds +=
-        src.family_spawn4_batch_canonical_thread_seconds;
-    dst.family_spawn4_batch_setup_thread_seconds +=
-        src.family_spawn4_batch_setup_thread_seconds;
-    dst.family_spawn4_batch_reduce_thread_seconds +=
-        src.family_spawn4_batch_reduce_thread_seconds;
-    dst.family_spawn4_batch_emit_thread_seconds +=
-        src.family_spawn4_batch_emit_thread_seconds;
-    dst.family_spawn2_batch_candidate_thread_seconds +=
-        src.family_spawn2_batch_candidate_thread_seconds;
-    dst.family_spawn2_batch_canonical_thread_seconds +=
-        src.family_spawn2_batch_canonical_thread_seconds;
-    dst.family_spawn2_batch_setup_thread_seconds +=
-        src.family_spawn2_batch_setup_thread_seconds;
-    dst.family_spawn2_batch_reduce_thread_seconds +=
-        src.family_spawn2_batch_reduce_thread_seconds;
-    dst.family_spawn2_batch_emit_thread_seconds +=
-        src.family_spawn2_batch_emit_thread_seconds;
-    dst.family_spawn4_batch_canonical_candidates +=
-        src.family_spawn4_batch_canonical_candidates;
-    dst.family_spawn4_batch_encoded_queries +=
-        src.family_spawn4_batch_encoded_queries;
-    dst.family_spawn4_batch_reduce_found +=
-        src.family_spawn4_batch_reduce_found;
-    dst.family_spawn4_batch_entry_misses +=
-        src.family_spawn4_batch_entry_misses;
-    dst.family_spawn4_batch_bitmap_misses +=
-        src.family_spawn4_batch_bitmap_misses;
-    dst.family_spawn2_batch_canonical_candidates +=
-        src.family_spawn2_batch_canonical_candidates;
-    dst.family_spawn2_batch_encoded_queries +=
-        src.family_spawn2_batch_encoded_queries;
-    dst.family_spawn2_batch_reduce_found +=
-        src.family_spawn2_batch_reduce_found;
-    dst.family_spawn2_batch_entry_misses +=
-        src.family_spawn2_batch_entry_misses;
-    dst.family_spawn2_batch_bitmap_misses +=
-        src.family_spawn2_batch_bitmap_misses;
     dst.family_final_dense_copy_seconds += src.family_final_dense_copy_seconds;
     dst.family_compact_value_copy_seconds += src.family_compact_value_copy_seconds;
     dst.family_pending_mark_seconds += src.family_pending_mark_seconds;
@@ -1422,10 +1301,6 @@ void run_bench_typed(const Args &args) {
             metric.final_stage_read_backend_ops = fs.final_stage_read_io.backend_io_count;
             metric.final_stage_read_backend_bytes = fs.final_stage_read_io.backend_bytes;
             metric.final_stage_read_backend_seconds = fs.final_stage_read_io.backend_seconds;
-            metric.partial4_profiled_values = fs.partial4_profiled_values;
-            metric.partial4_profiled_zero_values = fs.partial4_profiled_zero_values;
-            metric.partial2_profiled_values = fs.partial2_profiled_values;
-            metric.partial2_profiled_zero_values = fs.partial2_profiled_zero_values;
             metric.temp_write_backend_ops = fs.temp_write_io.backend_io_count;
             metric.temp_write_backend_bytes = fs.temp_write_io.backend_bytes;
             metric.temp_write_backend_seconds = fs.temp_write_io.backend_seconds;
@@ -1514,38 +1389,6 @@ void run_bench_typed(const Args &args) {
             metric.family_spawn2_cell_compute_seconds = fs.spawn2_cell_compute_seconds;
             metric.family_spawn4_bucket_hit_seconds = fs.spawn4_bucket_hit_seconds;
             metric.family_spawn2_bucket_hit_seconds = fs.spawn2_bucket_hit_seconds;
-            metric.family_spawn4_batch_candidate_thread_seconds =
-                fs.spawn4_batch_candidate_thread_seconds;
-            metric.family_spawn4_batch_canonical_thread_seconds =
-                fs.spawn4_batch_canonical_thread_seconds;
-            metric.family_spawn4_batch_setup_thread_seconds =
-                fs.spawn4_batch_setup_thread_seconds;
-            metric.family_spawn4_batch_reduce_thread_seconds =
-                fs.spawn4_batch_reduce_thread_seconds;
-            metric.family_spawn4_batch_emit_thread_seconds =
-                fs.spawn4_batch_emit_thread_seconds;
-            metric.family_spawn2_batch_candidate_thread_seconds =
-                fs.spawn2_batch_candidate_thread_seconds;
-            metric.family_spawn2_batch_canonical_thread_seconds =
-                fs.spawn2_batch_canonical_thread_seconds;
-            metric.family_spawn2_batch_setup_thread_seconds =
-                fs.spawn2_batch_setup_thread_seconds;
-            metric.family_spawn2_batch_reduce_thread_seconds =
-                fs.spawn2_batch_reduce_thread_seconds;
-            metric.family_spawn2_batch_emit_thread_seconds =
-                fs.spawn2_batch_emit_thread_seconds;
-            metric.family_spawn4_batch_canonical_candidates =
-                fs.spawn4_batch_canonical_candidates;
-            metric.family_spawn4_batch_encoded_queries = fs.spawn4_batch_encoded_queries;
-            metric.family_spawn4_batch_reduce_found = fs.spawn4_batch_reduce_found;
-            metric.family_spawn4_batch_entry_misses = fs.spawn4_batch_entry_misses;
-            metric.family_spawn4_batch_bitmap_misses = fs.spawn4_batch_bitmap_misses;
-            metric.family_spawn2_batch_canonical_candidates =
-                fs.spawn2_batch_canonical_candidates;
-            metric.family_spawn2_batch_encoded_queries = fs.spawn2_batch_encoded_queries;
-            metric.family_spawn2_batch_reduce_found = fs.spawn2_batch_reduce_found;
-            metric.family_spawn2_batch_entry_misses = fs.spawn2_batch_entry_misses;
-            metric.family_spawn2_batch_bitmap_misses = fs.spawn2_batch_bitmap_misses;
             metric.family_final_dense_copy_seconds = fs.final_dense_copy_seconds;
             metric.family_compact_value_copy_seconds = fs.compact_value_copy_seconds;
             metric.family_pending_mark_seconds = fs.pending_mark_seconds;
@@ -1839,9 +1682,6 @@ void run_bench_typed(const Args &args) {
             options.temp_direct_io = args.direct_io && !args.temp_buffered;
             options.force_temp_buffered_io = args.temp_buffered;
             options.temp_direct_queue_depth = args.direct_queue_depth;
-            options.collect_batch_timing = args.collect_batch_timing;
-            options.collect_temp_sparsity = args.collect_temp_sparsity;
-            options.use_diagonal_grouped_sum = args.use_diagonal_grouped_sum;
 
             const double writer_open_t0 = now_seconds();
             std::unique_ptr<BC::BCWritableFile> position_writer =
@@ -1924,10 +1764,6 @@ void run_bench_typed(const Args &args) {
             metric.final_stage_read_backend_ops = fs.final_stage_read_io.backend_io_count;
             metric.final_stage_read_backend_bytes = fs.final_stage_read_io.backend_bytes;
             metric.final_stage_read_backend_seconds = fs.final_stage_read_io.backend_seconds;
-            metric.partial4_profiled_values = fs.partial4_profiled_values;
-            metric.partial4_profiled_zero_values = fs.partial4_profiled_zero_values;
-            metric.partial2_profiled_values = fs.partial2_profiled_values;
-            metric.partial2_profiled_zero_values = fs.partial2_profiled_zero_values;
             metric.temp_write_backend_ops = fs.temp_write_io.backend_io_count;
             metric.temp_write_backend_bytes = fs.temp_write_io.backend_bytes;
             metric.temp_write_backend_seconds = fs.temp_write_io.backend_seconds;
@@ -2060,46 +1896,6 @@ void run_bench_typed(const Args &args) {
             metric.family_spawn2_cell_compute_seconds = fs.spawn2_cell_compute_seconds;
             metric.family_spawn4_bucket_hit_seconds = fs.spawn4_bucket_hit_seconds;
             metric.family_spawn2_bucket_hit_seconds = fs.spawn2_bucket_hit_seconds;
-            metric.family_spawn4_batch_candidate_thread_seconds =
-                fs.spawn4_batch_candidate_thread_seconds;
-            metric.family_spawn4_batch_canonical_thread_seconds =
-                fs.spawn4_batch_canonical_thread_seconds;
-            metric.family_spawn4_batch_setup_thread_seconds =
-                fs.spawn4_batch_setup_thread_seconds;
-            metric.family_spawn4_batch_reduce_thread_seconds =
-                fs.spawn4_batch_reduce_thread_seconds;
-            metric.family_spawn4_batch_emit_thread_seconds =
-                fs.spawn4_batch_emit_thread_seconds;
-            metric.family_spawn2_batch_candidate_thread_seconds =
-                fs.spawn2_batch_candidate_thread_seconds;
-            metric.family_spawn2_batch_canonical_thread_seconds =
-                fs.spawn2_batch_canonical_thread_seconds;
-            metric.family_spawn2_batch_setup_thread_seconds =
-                fs.spawn2_batch_setup_thread_seconds;
-            metric.family_spawn2_batch_reduce_thread_seconds =
-                fs.spawn2_batch_reduce_thread_seconds;
-            metric.family_spawn2_batch_emit_thread_seconds =
-                fs.spawn2_batch_emit_thread_seconds;
-            metric.family_spawn4_batch_canonical_candidates =
-                fs.spawn4_batch_canonical_candidates;
-            metric.family_spawn4_batch_encoded_queries =
-                fs.spawn4_batch_encoded_queries;
-            metric.family_spawn4_batch_reduce_found =
-                fs.spawn4_batch_reduce_found;
-            metric.family_spawn4_batch_entry_misses =
-                fs.spawn4_batch_entry_misses;
-            metric.family_spawn4_batch_bitmap_misses =
-                fs.spawn4_batch_bitmap_misses;
-            metric.family_spawn2_batch_canonical_candidates =
-                fs.spawn2_batch_canonical_candidates;
-            metric.family_spawn2_batch_encoded_queries =
-                fs.spawn2_batch_encoded_queries;
-            metric.family_spawn2_batch_reduce_found =
-                fs.spawn2_batch_reduce_found;
-            metric.family_spawn2_batch_entry_misses =
-                fs.spawn2_batch_entry_misses;
-            metric.family_spawn2_batch_bitmap_misses =
-                fs.spawn2_batch_bitmap_misses;
             metric.family_final_dense_copy_seconds = fs.final_dense_copy_seconds;
             metric.family_compact_value_copy_seconds = fs.compact_value_copy_seconds;
             metric.family_pending_mark_seconds = fs.pending_mark_seconds;

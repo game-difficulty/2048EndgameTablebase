@@ -107,7 +107,6 @@ void print_usage(const char *exe) {
         << "  --current-chunk-max-bytes N    strict row-slab success bytes cap, default 268435456\n"
         << "  --restrict-future-cells        prepass current chunk and only load touched future cells\n"
         << "  --trace-stages                 print per-stage progress before layer completion\n"
-        << "  --no-current-board-cache       deprecated no-op; current board cache has been removed\n"
         << "  --frontier-api                 pre-load future layers and solve through production frontier API\n"
         << "  --strict-1x                    solve through strict AD-style 1+x two-pass chunk pipeline\n"
         << "  --direct-io                    use direct IO for position read and output write\n"
@@ -159,8 +158,6 @@ void print_usage(const char *exe) {
             args.restrict_future_cells = true;
         } else if (flag == "--trace-stages") {
             args.trace_stages = true;
-        } else if (flag == "--no-current-board-cache") {
-            // Deprecated compatibility flag. Single solve always streams current cells.
         } else if (flag == "--frontier-api") {
             args.frontier_api = true;
         } else if (flag == "--strict-1x") {
@@ -341,7 +338,6 @@ double accounted_seconds(const BC::BCSingleChunkSolveStats &s) {
         s.prepass_seconds +
         s.current_plan_seconds +
         s.future_cid_select_seconds +
-        s.current_board_cache_seconds +
         s.raw_alloc_seconds +
         s.future_release_seconds +
         s.recalc_seconds +
@@ -377,7 +373,6 @@ void trace_stage(
         << " index_seconds=" << index_seconds(s)
         << " current_plan_seconds=" << s.current_plan_seconds
         << " future_cid_select_seconds=" << s.future_cid_select_seconds
-        << " current_board_cache_seconds=" << s.current_board_cache_seconds
         << " raw_alloc_seconds=" << s.raw_alloc_seconds
         << " future_release_seconds=" << s.future_release_seconds
         << " recalc_seconds=" << s.recalc_seconds
@@ -402,7 +397,7 @@ void write_stats_header(std::ofstream &out) {
     out
         << "iteration,current_rows,live_rows,zero_pruned_rows,current_chunks,current_cells,current_work_items,"
         << "future2_cells_loaded,future4_cells_loaded,future2_active_cells_max,future4_active_cells_max,"
-        << "future_resident_bytes_max,current_board_cache_bytes,output_values,output_bytes,"
+        << "future_resident_bytes_max,output_values,output_bytes,"
         << "tmp4_write_bytes,tmp4_read_bytes,current_position_backend_read_bytes,"
         << "future2_position_backend_read_bytes,future2_success_backend_read_bytes,"
         << "future4_position_backend_read_bytes,future4_success_backend_read_bytes,"
@@ -414,7 +409,7 @@ void write_stats_header(std::ofstream &out) {
         << "current_position_read_seconds,future2_position_read_seconds,future2_success_read_seconds,"
         << "future2_index_seconds,future4_position_read_seconds,future4_success_read_seconds,"
         << "future4_index_seconds,prepass_seconds,current_plan_seconds,future_cid_select_seconds,"
-        << "current_board_cache_seconds,raw_alloc_seconds,"
+        << "raw_alloc_seconds,"
         << "future_release_seconds,recalc_seconds,compact_seconds,tmp4_write_seconds,"
         << "tmp4_read_seconds,temp_prepare_seconds,partial_cleanup_seconds,"
         << "workspace_release_seconds,"
@@ -449,7 +444,6 @@ void write_stats_row(
         << s.future2_active_cells_max << ','
         << s.future4_active_cells_max << ','
         << s.future_resident_bytes_max << ','
-        << s.current_board_cache_bytes << ','
         << s.output_values << ','
         << s.output_bytes << ','
         << s.partial_write_bytes << ','
@@ -478,7 +472,6 @@ void write_stats_row(
         << s.prepass_seconds << ','
         << s.current_plan_seconds << ','
         << s.future_cid_select_seconds << ','
-        << s.current_board_cache_seconds << ','
         << s.raw_alloc_seconds << ','
         << s.future_release_seconds << ','
         << s.recalc_seconds << ','
@@ -543,7 +536,6 @@ int main(int argc, char **argv) {
         double total_prepass = 0.0;
         double total_current_plan = 0.0;
         double total_future_cid_select = 0.0;
-        double total_current_board_cache = 0.0;
         double total_raw_alloc = 0.0;
         double total_future_release = 0.0;
         double total_workspace_release = 0.0;
@@ -785,7 +777,6 @@ int main(int argc, char **argv) {
             total_prepass += stats.prepass_seconds;
             total_current_plan += stats.current_plan_seconds;
             total_future_cid_select += stats.future_cid_select_seconds;
-            total_current_board_cache += stats.current_board_cache_seconds;
             total_raw_alloc += stats.raw_alloc_seconds;
             total_future_release += stats.future_release_seconds;
             total_workspace_release += stats.workspace_release_seconds;
@@ -808,8 +799,6 @@ int main(int argc, char **argv) {
                 << " prepass_seconds=" << stats.prepass_seconds
                 << " current_plan_seconds=" << stats.current_plan_seconds
                 << " future_cid_select_seconds=" << stats.future_cid_select_seconds
-                << " current_board_cache_seconds=" << stats.current_board_cache_seconds
-                << " current_board_cache_bytes=" << stats.current_board_cache_bytes
                 << " raw_alloc_seconds=" << stats.raw_alloc_seconds
                 << " future_release_seconds=" << stats.future_release_seconds
                 << " recalc_seconds=" << stats.recalc_seconds
@@ -848,7 +837,6 @@ int main(int argc, char **argv) {
             << " total_prepass_seconds=" << total_prepass
             << " total_current_plan_seconds=" << total_current_plan
             << " total_future_cid_select_seconds=" << total_future_cid_select
-            << " total_current_board_cache_seconds=" << total_current_board_cache
             << " total_raw_alloc_seconds=" << total_raw_alloc
             << " total_future_release_seconds=" << total_future_release
             << " total_recalc_seconds=" << total_recalc

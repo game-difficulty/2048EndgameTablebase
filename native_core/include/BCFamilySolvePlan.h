@@ -766,11 +766,13 @@ public:
             write_zero_row(success_row, zero_value);
             return;
         }
-        const long double sum_ld = static_cast<long double>(sum);
-        const StorageT contribution = static_cast<StorageT>(
-            (sum_ld * static_cast<long double>(spawn_rate4)) /
-            static_cast<long double>(empty_count)
-        );
+        const StorageT contribution =
+            bc_solve_scale_success_sum_contribution<StorageT>(
+                static_cast<long double>(sum),
+                empty_count,
+                static_cast<long double>(spawn_rate4),
+                zero_value
+            );
         values_[value_index(success_row, 0U)] = contribution;
     }
 
@@ -825,13 +827,15 @@ public:
             write_zero_row(success_row, zero_value);
             return;
         }
-        const long double sum_ld = static_cast<long double>(sum);
-        const StorageT contribution = static_cast<StorageT>(
-            (sum_ld * (1.0L - static_cast<long double>(spawn_rate4))) /
-            static_cast<long double>(empty_count)
-        );
+        const StorageT contribution =
+            bc_solve_scale_success_sum_contribution<StorageT>(
+                static_cast<long double>(sum),
+                empty_count,
+                1.0L - static_cast<long double>(spawn_rate4),
+                zero_value
+            );
         StorageT &dst = values_[value_index(success_row, 0U)];
-        dst = static_cast<StorageT>(dst + contribution);
+        dst = bc_solve_add_success_contribution<StorageT>(dst, contribution);
     }
 
 private:
@@ -872,9 +876,16 @@ private:
                 );
             }
             const StorageT contribution =
-                static_cast<StorageT>((sum * weight) / static_cast<long double>(empty_count));
+                bc_solve_scale_success_sum_contribution<StorageT>(
+                    sum,
+                    empty_count,
+                    weight,
+                    zero_value
+                );
             StorageT &dst = values_[value_index(success_row, lane)];
-            dst = add_to_existing ? static_cast<StorageT>(dst + contribution) : contribution;
+            dst = add_to_existing
+                ? bc_solve_add_success_contribution<StorageT>(dst, contribution)
+                : contribution;
         }
     }
 
@@ -904,9 +915,16 @@ private:
                 );
             }
             const StorageT contribution =
-                static_cast<StorageT>((sum * weight) / static_cast<long double>(empty_count));
+                bc_solve_scale_success_sum_contribution<StorageT>(
+                    sum,
+                    empty_count,
+                    weight,
+                    zero_value
+                );
             StorageT &dst = values_[value_index(success_row, lane)];
-            dst = add_to_existing ? static_cast<StorageT>(dst + contribution) : contribution;
+            dst = add_to_existing
+                ? bc_solve_add_success_contribution<StorageT>(dst, contribution)
+                : contribution;
         }
     }
 

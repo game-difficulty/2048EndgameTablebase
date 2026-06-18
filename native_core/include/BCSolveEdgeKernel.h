@@ -403,12 +403,8 @@ struct BCSolvePreparedQueryEncoder {
     [[nodiscard]] bool encode(
         const BCQuadrantWords &q,
         uint16_t ref,
-        uint8_t spawn_tile_rank,
-        BCDirectionMask move_axis,
         BCSolvePreparedQuery &out
     ) const {
-        (void)spawn_tile_rank;
-        (void)move_axis;
         const BCWordDesc &nw_desc = lut->word_desc(q.nw);
         const BCWordDesc &ne_desc = lut->word_desc(q.ne);
         const BCWordDesc &sw_desc = lut->word_desc(q.sw);
@@ -522,13 +518,11 @@ struct BCSolvePreparedQueryEncoder {
     const BCFamilyTable &axis,
     const BCQuadrantWords &q,
     uint16_t ref,
-    uint8_t spawn_tile_rank,
-    BCDirectionMask move_axis,
     BCSolvePreparedQuery &out,
     uint32_t cell_modulus = 0U
 ) {
     const BCSolvePreparedQueryEncoder encoder(lut, axis, cell_modulus);
-    return encoder.encode(q, ref, spawn_tile_rank, move_axis, out);
+    return encoder.encode(q, ref, out);
 }
 
 template <typename StorageT>
@@ -544,7 +538,6 @@ template <typename StorageT>
 void bc_solve_flush_canonical_candidates(
     const BCLut &lut,
     const BCFamilyTable &axis,
-    uint8_t spawn_tile_rank,
     std::vector<BCSolveCanonicalCandidate> &canonical,
     std::vector<BCSolvePreparedQuery> &queries,
     const BCSolveEdgeOptions &options,
@@ -573,8 +566,6 @@ void bc_solve_flush_canonical_candidates(
             axis,
             unpack_board_to_quadrants(boards[i]),
             canonical[i].ref,
-            spawn_tile_rank,
-            canonical[i].move_axis,
             query,
             options.future_cell_modulus
         );
@@ -734,7 +725,7 @@ BCSolveBoardQuerySummary bc_solve_collect_board_queries(
                     ? workspace.queries2
                     : workspace.queries4;
                 bc_solve_flush_canonical_candidates<StorageT>(
-                    lut, axis, spawn_tile_rank, canonical, queries, options, word_sums, stats);
+                    lut, axis, canonical, queries, options, word_sums, stats);
             }
         };
 
@@ -745,7 +736,6 @@ BCSolveBoardQuerySummary bc_solve_collect_board_queries(
     bc_solve_flush_canonical_candidates<StorageT>(
         lut,
         future2_axis,
-        options.spawn2_tile_rank,
         workspace.canonical2,
         workspace.queries2,
         options,
@@ -755,7 +745,6 @@ BCSolveBoardQuerySummary bc_solve_collect_board_queries(
     bc_solve_flush_canonical_candidates<StorageT>(
         lut,
         future4_axis,
-        options.spawn4_tile_rank,
         workspace.canonical4,
         workspace.queries4,
         options,
@@ -865,14 +854,13 @@ BCSolveBoardQuerySummary bc_solve_collect_board_phase_queries(
         }
         if (canonical.size() >= options.canonical_batch_size) {
             bc_solve_flush_canonical_candidates<StorageT>(
-                lut, future_axis, spawn_tile_rank, canonical, queries, options, word_sums, stats);
+                lut, future_axis, canonical, queries, options, word_sums, stats);
         }
     }
 
     bc_solve_flush_canonical_candidates<StorageT>(
         lut,
         future_axis,
-        spawn_tile_rank,
         canonical,
         queries,
         options,
@@ -880,6 +868,67 @@ BCSolveBoardQuerySummary bc_solve_collect_board_phase_queries(
         stats
     );
     return summary;
+}
+
+template <typename StorageT>
+[[nodiscard]] StorageT bc_solve_cast_weighted_success(long double value) {
+    if constexpr (std::is_integral_v<StorageT>) {
+        if (value <= 0.0L) {
+            return StorageT{};
+        }
+        const long double max_value =
+            static_cast<long double>(std::numeric_limits<StorageT>::max());
+        if (value >= max_value) {
+            return std::numeric_limits<StorageT>::max();
+        }
+    }
+    return static_cast<StorageT>(value);
+}
+
+template <typename StorageT>
+[[nodiscard]] StorageT bc_solve_scale_success_sum_contribution(
+    long double sum,
+    uint32_t empty_count,
+    long double weight,
+    StorageT zero_value
+) {
+    if (empty_count == 0U) {
+        return zero_value;
+    }
+    return bc_solve_cast_weighted_success<StorageT>(
+        (sum * weight) / static_cast<long double>(empty_count)
+    );
+}
+
+template <typename StorageT>
+[[nodiscard]] StorageT bc_solve_add_success_contribution(
+    StorageT base,
+    StorageT contribution
+) {
+    if constexpr (std::is_integral_v<StorageT>) {
+        if (base > std::numeric_limits<StorageT>::max() - contribution) {
+            return std::numeric_limits<StorageT>::max();
+        }
+    }
+    return static_cast<StorageT>(base + contribution);
+}
+
+template <typename StorageT>
+[[nodiscard]] StorageT bc_solve_reduce_weighted_success_sums(
+    long double sum2,
+    long double sum4,
+    uint32_t empty_count,
+    double spawn_rate4,
+    StorageT zero_value
+) {
+    if (empty_count == 0U) {
+        return zero_value;
+    }
+    const long double p4 = static_cast<long double>(spawn_rate4);
+    const long double p2 = 1.0L - p4;
+    return bc_solve_cast_weighted_success<StorageT>(
+        (sum2 * p2 + sum4 * p4) / static_cast<long double>(empty_count)
+    );
 }
 
 template <typename StorageT>

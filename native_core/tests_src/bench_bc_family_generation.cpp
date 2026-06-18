@@ -95,10 +95,6 @@ LONG WINAPI bc_bench_unhandled_exception_filter(EXCEPTION_POINTERS *exception_in
         << std::dec
         << " layer_sum=" << g_current_bench_layer_sum.load(std::memory_order_relaxed)
         << " canonical_backend=" << CanonicalBatch::backend_name()
-        << " finalize_cid=" << BC::g_bc_cell_finalize_debug_cid.load(std::memory_order_relaxed)
-        << " finalize_bucket_count=" << BC::g_bc_cell_finalize_debug_bucket_count.load(std::memory_order_relaxed)
-        << " finalize_sorted_size=" << BC::g_bc_cell_finalize_debug_sorted_size.load(std::memory_order_relaxed)
-        << " finalize_stage=" << BC::g_bc_cell_finalize_debug_stage.load(std::memory_order_relaxed)
         << '\n';
     return EXCEPTION_CONTINUE_SEARCH;
 }

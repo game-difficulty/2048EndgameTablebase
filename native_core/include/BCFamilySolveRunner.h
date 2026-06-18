@@ -1003,7 +1003,7 @@ template <typename StorageT>
             bc_family_runner_make_writer(options, position_tmp);
         std::unique_ptr<BCWritableFile> success_writer =
             bc_family_runner_make_writer(options, success_tmp);
-        BCSingleChunkFinalFileStreamer<StorageT> streamer(
+        BCFinalLayerFileStreamer<StorageT> streamer(
             retired.position,
             *position_writer,
             *success_writer,
@@ -1622,11 +1622,6 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
             solve_options.keep_temp_files = options.compress_temp_files;
             solve_options.compress_temp_files = options.compress_temp_files;
             solve_options.temp_direct_queue_depth = options.direct_queue_depth;
-            solve_options.collect_edge_stats = false;
-            solve_options.collect_batch_timing = false;
-            solve_options.collect_temp_sparsity = false;
-            solve_options.use_diagonal_grouped_sum = true;
-
             t0 = bc_family_solve_runner_now_seconds();
             std::unique_ptr<BCWritableFile> position_writer =
                 bc_family_runner_make_writer(options, output_position);

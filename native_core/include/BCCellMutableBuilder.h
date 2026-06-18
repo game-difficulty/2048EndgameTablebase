@@ -35,10 +35,6 @@
 
 namespace BC {
 
-inline std::atomic<uint32_t> g_bc_cell_finalize_debug_cid{0U};
-inline std::atomic<uint32_t> g_bc_cell_finalize_debug_bucket_count{0U};
-inline std::atomic<uint32_t> g_bc_cell_finalize_debug_sorted_size{0U};
-inline std::atomic<uint32_t> g_bc_cell_finalize_debug_stage{0U};
 inline constexpr uint32_t kBCMutableBatchPrefetchDistance = 16U;
 
 inline void bc_cell_mutable_spin_pause() {
@@ -3161,13 +3157,6 @@ private:
         std::vector<uint32_t> &indices,
         std::vector<SortedBucketRef> &reordered
     ) const {
-        g_bc_cell_finalize_debug_cid.store(cid_, std::memory_order_relaxed);
-        g_bc_cell_finalize_debug_bucket_count.store(
-            bucket_count_.load(std::memory_order_relaxed),
-            std::memory_order_relaxed
-        );
-        g_bc_cell_finalize_debug_sorted_size.store(0U, std::memory_order_relaxed);
-        g_bc_cell_finalize_debug_stage.store(1U, std::memory_order_relaxed);
         sorted.clear();
         sorted.reserve(bucket_count_.load(std::memory_order_relaxed));
         const uint32_t buckets = bucket_count_.load(std::memory_order_relaxed);
@@ -3199,18 +3188,11 @@ private:
             }
             sorted.push_back(SortedBucketRef{key, slot, bitmap_offset, bitmap_len, word_count, bucket_live});
         }
-        g_bc_cell_finalize_debug_sorted_size.store(
-            static_cast<uint32_t>(std::min<size_t>(sorted.size(), std::numeric_limits<uint32_t>::max())),
-            std::memory_order_relaxed
-        );
-        g_bc_cell_finalize_debug_stage.store(2U, std::memory_order_relaxed);
-
         const bool use_keyvalue_sort =
             bc_finalize_keyvalue_sort_allowed() &&
             options.keyvalue_sort != nullptr &&
             sorted.size() >= options.simd_sort_min_bucket_count;
         if (use_keyvalue_sort) {
-            g_bc_cell_finalize_debug_stage.store(3U, std::memory_order_relaxed);
             keys.clear();
             indices.clear();
             keys.reserve(sorted.size());
@@ -3233,7 +3215,6 @@ private:
             }
             sorted.swap(reordered);
         } else {
-            g_bc_cell_finalize_debug_stage.store(4U, std::memory_order_relaxed);
             indices.clear();
             indices.reserve(sorted.size());
             for (uint32_t i = 0U; i < sorted.size(); ++i) {
@@ -3256,7 +3237,6 @@ private:
             }
             sorted.swap(reordered);
         }
-        g_bc_cell_finalize_debug_stage.store(5U, std::memory_order_relaxed);
     }
 
     [[nodiscard]] uint32_t estimate_rank_payload_bytes(const std::vector<SortedBucketRef> &sorted) const {

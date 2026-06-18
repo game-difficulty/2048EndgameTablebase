@@ -691,10 +691,6 @@ void run_single_chunk_case(BCSuccessDTypeMode dtype, const char *name) {
             strict_result.stats.future_resident_layers_max == 1U,
             "strict single should hold at most one future layer"
         );
-        check(
-            strict_result.stats.current_board_cache_bytes == 0U,
-            "strict single should not build a current board cache"
-        );
     }
 
     BCPositionStreamingReader strict_position =

@@ -87,7 +87,6 @@ struct BCSingleChunkSolveStats {
     uint64_t compact_zero_pruned_rows = 0U;
     uint64_t compact_live_cells = 0U;
     uint64_t compact_empty_cells = 0U;
-    uint64_t current_board_cache_bytes = 0U;
 
     BCCellLoadStats current_position_load;
     BCCellLoadStats future2_position_load;
@@ -110,7 +109,6 @@ struct BCSingleChunkSolveStats {
     double future2_index_seconds = 0.0;
     double future4_index_seconds = 0.0;
     double future_cid_select_seconds = 0.0;
-    double current_board_cache_seconds = 0.0;
     double raw_alloc_seconds = 0.0;
     double future_release_seconds = 0.0;
     double recalc_seconds = 0.0;
@@ -271,21 +269,6 @@ template <typename StorageT>
 // tmp4 stores the already weighted spawn-4 contribution. UInt32 accepts the
 // extra rounding so the temporary payload stays one StorageT per current row.
 using BCSingleChunkSum4T = StorageT;
-
-template <typename StorageT>
-[[nodiscard]] inline StorageT bc_single_chunk_scale_average_contribution(
-    long double sum,
-    uint32_t empty_count,
-    double spawn_rate4,
-    bool spawn4,
-    StorageT zero_value
-);
-
-template <typename StorageT>
-[[nodiscard]] inline StorageT bc_single_chunk_add_success_contribution(
-    StorageT base,
-    StorageT contribution
-);
 
 template <typename T>
 class BCSingleChunkValueBuffer {
@@ -1128,8 +1111,6 @@ void bc_single_chunk_solve_phase_batch(
             const bool encoded = encoder.encode(
                 unpack_board_to_quadrants(workspace.canonical2_boards[i]),
                 workspace.canonical2_refs[i],
-                spawn_rank,
-                BCDirectionMask::Both,
                 query
             );
             if (!encoded) {
@@ -1174,19 +1155,17 @@ void bc_single_chunk_solve_phase_batch(
                 StorageT contribution = options.solve.zero_value;
                 if (workspace.empty_counts[board_slot] != 0U) {
                     if constexpr (std::is_same_v<StorageT, uint32_t>) {
-                        contribution = bc_single_chunk_scale_average_contribution<StorageT>(
+                        contribution = bc_solve_scale_success_sum_contribution<StorageT>(
                             static_cast<long double>(workspace.integer_sum2[board_slot]),
                             workspace.empty_counts[board_slot],
-                            options.solve.edge_options.spawn_rate4,
-                            true,
+                            static_cast<long double>(options.solve.edge_options.spawn_rate4),
                             options.solve.zero_value
                         );
                     } else {
-                        contribution = bc_single_chunk_scale_average_contribution<StorageT>(
+                        contribution = bc_solve_scale_success_sum_contribution<StorageT>(
                             workspace.float_sum2[board_slot],
                             workspace.empty_counts[board_slot],
-                            options.solve.edge_options.spawn_rate4,
-                            true,
+                            static_cast<long double>(options.solve.edge_options.spawn_rate4),
                             options.solve.zero_value
                         );
                     }
@@ -1215,24 +1194,22 @@ void bc_single_chunk_solve_phase_batch(
             } else if (workspace.empty_counts[board_slot] != 0U) {
                 StorageT contribution = options.solve.zero_value;
                 if constexpr (std::is_same_v<StorageT, uint32_t>) {
-                    contribution = bc_single_chunk_scale_average_contribution<StorageT>(
+                    contribution = bc_solve_scale_success_sum_contribution<StorageT>(
                             static_cast<long double>(workspace.integer_sum2[board_slot]),
                             workspace.empty_counts[board_slot],
-                            options.solve.edge_options.spawn_rate4,
-                            false,
+                            1.0L - static_cast<long double>(options.solve.edge_options.spawn_rate4),
                             options.solve.zero_value);
                 } else {
-                    contribution = bc_single_chunk_scale_average_contribution<StorageT>(
+                    contribution = bc_solve_scale_success_sum_contribution<StorageT>(
                         workspace.float_sum2[board_slot],
                         workspace.empty_counts[board_slot],
-                        options.solve.edge_options.spawn_rate4,
-                        false,
+                        1.0L - static_cast<long double>(options.solve.edge_options.spawn_rate4),
                         options.solve.zero_value
                     );
                 }
                 value = sum4_values[static_cast<size_t>(value_index)];
                 if (contribution != options.solve.zero_value) {
-                    value = bc_single_chunk_add_success_contribution<StorageT>(
+                    value = bc_solve_add_success_contribution<StorageT>(
                         value,
                         contribution
                     );
@@ -1351,52 +1328,6 @@ void bc_single_chunk_solve_phase_for_current_cells(
     for (const BCSingleChunkSolveStats &thread_stats : per_thread) {
         bc_resident_solve_accumulate_edge_stats(stats.edge, thread_stats.edge);
     }
-}
-
-template <typename StorageT>
-[[nodiscard]] inline StorageT bc_single_chunk_cast_weighted_success(long double value) {
-    if constexpr (std::is_integral_v<StorageT>) {
-        if (value <= 0.0L) {
-            return StorageT{};
-        }
-        const long double max_value =
-            static_cast<long double>(std::numeric_limits<StorageT>::max());
-        if (value >= max_value) {
-            return std::numeric_limits<StorageT>::max();
-        }
-    }
-    return static_cast<StorageT>(value);
-}
-
-template <typename StorageT>
-[[nodiscard]] inline StorageT bc_single_chunk_scale_average_contribution(
-    long double sum,
-    uint32_t empty_count,
-    double spawn_rate4,
-    bool spawn4,
-    StorageT zero_value
-) {
-    if (empty_count == 0U) {
-        return zero_value;
-    }
-    const long double p4 = static_cast<long double>(spawn_rate4);
-    const long double weight = spawn4 ? p4 : (1.0L - p4);
-    return bc_single_chunk_cast_weighted_success<StorageT>(
-        (sum * weight) / static_cast<long double>(empty_count)
-    );
-}
-
-template <typename StorageT>
-[[nodiscard]] inline StorageT bc_single_chunk_add_success_contribution(
-    StorageT base,
-    StorageT contribution
-) {
-    if constexpr (std::is_integral_v<StorageT>) {
-        if (base > std::numeric_limits<StorageT>::max() - contribution) {
-            return std::numeric_limits<StorageT>::max();
-        }
-    }
-    return static_cast<StorageT>(base + contribution);
 }
 
 template <typename StorageT>
@@ -2066,9 +1997,9 @@ inline void bc_single_chunk_flush_for_stream_finish(BCWritableFile &file) {
 }
 
 template <typename StorageT>
-class BCSingleChunkFinalFileStreamer {
+class BCFinalLayerFileStreamer {
 public:
-    BCSingleChunkFinalFileStreamer(
+    BCFinalLayerFileStreamer(
         const BCPositionStreamingReader &current_position,
         BCWritableFile &position_file,
         BCWritableFile &success_file,
@@ -2084,10 +2015,10 @@ public:
           value_size_(bc_success_dtype_value_size(dtype)),
           stats_(stats) {
         if (!bc_success_dtype_matches_type<StorageT>(dtype_)) {
-            throw std::invalid_argument("BC single chunk final streamer dtype mismatch");
+            throw std::invalid_argument("BC final layer streamer dtype mismatch");
         }
         if (row_width_ == 0U) {
-            throw std::invalid_argument("BC single chunk final streamer row_width must be non-zero");
+            throw std::invalid_argument("BC final layer streamer row_width must be non-zero");
         }
         descriptors_.assign(current_position_.cell_count(), BCPositionCellDescriptor{});
         written_.assign(current_position_.cell_count(), 0U);
@@ -2102,28 +2033,28 @@ public:
         descriptor_offset_ = bc_checked_add_u64(
             kBCPositionHeaderBytes,
             axis_coord_bytes_,
-            "BC single chunk final descriptor offset overflow"
+            "BC final layer descriptor offset overflow"
         );
         descriptor_bytes_ =
             static_cast<uint64_t>(descriptors_.size()) * kBCPositionCellDescriptorBytes;
         bucket_offset_ = bc_checked_add_u64(
             descriptor_offset_,
             descriptor_bytes_,
-            "BC single chunk final bucket offset overflow"
+            "BC final layer bucket offset overflow"
         );
         bucket_offset_ = bc_direct_align_up(bucket_offset_, kBCSingleChunkDirectBlockBytes);
         bucket_capacity_bytes_ = source_header.bucket_meta_bytes;
         rank_offset_ = bc_checked_add_u64(
             bucket_offset_,
             bucket_capacity_bytes_,
-            "BC single chunk final rank offset overflow"
+            "BC final layer rank offset overflow"
         );
         rank_offset_ = bc_direct_align_up(rank_offset_, kBCSingleChunkDirectBlockBytes);
         rank_capacity_bytes_ = source_header.rank_payload_bytes;
         const uint64_t position_upper = bc_checked_add_u64(
             rank_offset_,
             rank_capacity_bytes_,
-            "BC single chunk final position upper size overflow"
+            "BC final layer position upper size overflow"
         );
         const uint64_t success_payload_upper =
             bc_success_expected_payload_bytes_for(current_position_, row_width_, dtype_);
@@ -2131,14 +2062,14 @@ public:
         const uint64_t success_payload_end = bc_checked_add_u64(
             success_payload_offset_,
             success_payload_upper,
-            "BC single chunk final success payload upper size overflow"
+            "BC final layer success payload upper size overflow"
         );
         const uint64_t success_offset_table_upper =
             bc_direct_align_up(success_payload_end, kBCSingleChunkDirectBlockBytes);
         const uint64_t success_upper = bc_checked_add_u64(
             success_offset_table_upper,
             bc_success_cell_value_offsets_bytes(descriptors_.size()),
-            "BC single chunk final success upper size overflow"
+            "BC final layer success upper size overflow"
         );
 
         double t0 = bc_single_chunk_now_seconds();
@@ -2174,15 +2105,15 @@ public:
     void write_cell_metadata(CellId cid, const FinalizedCellPayload &payload) {
         const double assembly_t0 = bc_single_chunk_now_seconds();
         if (cid >= descriptors_.size()) {
-            throw std::out_of_range("BC single chunk final streamer cell id out of range");
+            throw std::out_of_range("BC final layer streamer cell id out of range");
         }
         if (written_[static_cast<size_t>(cid)] != 0U) {
-            throw std::runtime_error("BC single chunk final streamer duplicate cell");
+            throw std::runtime_error("BC final layer streamer duplicate cell");
         }
         written_[static_cast<size_t>(cid)] = 1U;
         if (payload.buckets.empty()) {
             if (payload.success_rows != 0U || !payload.rank_payload.empty()) {
-                throw std::invalid_argument("BC single chunk final streamer empty payload mismatch");
+                throw std::invalid_argument("BC final layer streamer empty payload mismatch");
             }
             BCPositionCellDescriptor descriptor;
             descriptor.flags_or_padding = kBCPositionCellFlagEmpty;
@@ -2193,10 +2124,10 @@ public:
             return;
         }
         if (payload.buckets.size() > std::numeric_limits<uint32_t>::max()) {
-            throw std::overflow_error("BC single chunk final streamer bucket count exceeds uint32");
+            throw std::overflow_error("BC final layer streamer bucket count exceeds uint32");
         }
         if (payload.rank_payload.size() > std::numeric_limits<uint64_t>::max()) {
-            throw std::overflow_error("BC single chunk final streamer rank payload exceeds uint64");
+            throw std::overflow_error("BC final layer streamer rank payload exceeds uint64");
         }
 
         std::vector<uint8_t> bucket_bytes;
@@ -2221,12 +2152,12 @@ public:
         bucket_cursor_ = bc_checked_add_u64(
             bucket_cursor_,
             bucket_bytes.size(),
-            "BC single chunk final streamer bucket cursor overflow"
+            "BC final layer streamer bucket cursor overflow"
         );
         rank_cursor_ = bc_checked_add_u64(
             rank_cursor_,
             payload.rank_payload.size(),
-            "BC single chunk final streamer rank cursor overflow"
+            "BC final layer streamer rank cursor overflow"
         );
     }
 
@@ -2249,22 +2180,22 @@ public:
 
     void write_success_cell_values_raw(CellId cid, const StorageT *values, uint64_t value_count) {
         if (cid >= descriptors_.size()) {
-            throw std::out_of_range("BC single chunk final streamer success cid out of range");
+            throw std::out_of_range("BC final layer streamer success cid out of range");
         }
         if (written_[static_cast<size_t>(cid)] == 0U) {
-            throw std::logic_error("BC single chunk final streamer success metadata is missing");
+            throw std::logic_error("BC final layer streamer success metadata is missing");
         }
         if (success_values_written_[static_cast<size_t>(cid)] != 0U) {
-            throw std::runtime_error("BC single chunk final streamer duplicate success values");
+            throw std::runtime_error("BC final layer streamer duplicate success values");
         }
         const BCPositionCellDescriptor &descriptor = descriptors_[static_cast<size_t>(cid)];
         const uint64_t expected_values =
             static_cast<uint64_t>(descriptor.success_rows) * row_width_;
         if (expected_values != value_count) {
-            throw std::runtime_error("BC single chunk final streamer success value count mismatch");
+            throw std::runtime_error("BC final layer streamer success value count mismatch");
         }
         if (value_count != 0U && values == nullptr) {
-            throw std::invalid_argument("BC single chunk final streamer success values pointer is null");
+            throw std::invalid_argument("BC final layer streamer success values pointer is null");
         }
         success_value_offsets_[static_cast<size_t>(cid)] = success_value_cursor_;
         success_values_written_[static_cast<size_t>(cid)] = 1U;
@@ -2272,7 +2203,7 @@ public:
         success_value_cursor_ = bc_checked_add_u64(
             success_value_cursor_,
             value_count,
-            "BC single chunk final streamer success cursor overflow"
+            "BC final layer streamer success cursor overflow"
         );
     }
 
@@ -2283,7 +2214,7 @@ public:
     ) {
         const double assembly_t0 = bc_single_chunk_now_seconds();
         if (current_cells.size() != payloads.size()) {
-            throw std::invalid_argument("BC single chunk final streamer payload count mismatch");
+            throw std::invalid_argument("BC final layer streamer payload count mismatch");
         }
         std::vector<uint8_t> bucket_bytes;
         std::vector<uint8_t> rank_bytes;
@@ -2291,16 +2222,16 @@ public:
         for (size_t i = 0U; i < current_cells.size(); ++i) {
             const BCLoadedCell &cell = current_cells[i];
             if (cell.cid >= descriptors_.size()) {
-                throw std::out_of_range("BC single chunk final streamer cell id out of range");
+                throw std::out_of_range("BC final layer streamer cell id out of range");
             }
             if (written_[static_cast<size_t>(cell.cid)] != 0U) {
-                throw std::runtime_error("BC single chunk final streamer duplicate cell");
+                throw std::runtime_error("BC final layer streamer duplicate cell");
             }
             written_[static_cast<size_t>(cell.cid)] = 1U;
             const FinalizedCellPayload &payload = payloads[i];
             if (payload.buckets.empty()) {
                 if (payload.success_rows != 0U || !payload.rank_payload.empty()) {
-                    throw std::invalid_argument("BC single chunk final streamer empty payload mismatch");
+                    throw std::invalid_argument("BC final layer streamer empty payload mismatch");
                 }
                 BCPositionCellDescriptor descriptor;
                 descriptor.flags_or_padding = kBCPositionCellFlagEmpty;
@@ -2310,22 +2241,22 @@ public:
                 continue;
             }
             if (payload.buckets.size() > std::numeric_limits<uint32_t>::max()) {
-                throw std::overflow_error("BC single chunk final streamer bucket count exceeds uint32");
+                throw std::overflow_error("BC final layer streamer bucket count exceeds uint32");
             }
             if (payload.rank_payload.size() > std::numeric_limits<uint32_t>::max()) {
-                throw std::overflow_error("BC single chunk final streamer rank payload exceeds uint32");
+                throw std::overflow_error("BC final layer streamer rank payload exceeds uint32");
             }
             const uint64_t local_bucket_offset =
                 bc_checked_add_u64(
                     bucket_cursor_,
                     bucket_bytes.size(),
-                    "BC single chunk final streamer bucket cursor overflow"
+                    "BC final layer streamer bucket cursor overflow"
                 );
             const uint64_t local_rank_offset =
                 bc_checked_add_u64(
                     rank_cursor_,
                     rank_bytes.size(),
-                    "BC single chunk final streamer rank cursor overflow"
+                    "BC final layer streamer rank cursor overflow"
                 );
             BCPositionCellDescriptor descriptor;
             descriptor.bucket_count = static_cast<uint32_t>(payload.buckets.size());
@@ -2347,10 +2278,10 @@ public:
             expected_values = bc_checked_add_u64(
                 expected_values,
                 static_cast<uint64_t>(payload.success_rows) * row_width_,
-                "BC single chunk final streamer value count overflow"
+                "BC final layer streamer value count overflow"
             );
             if (success_values_written_[static_cast<size_t>(cell.cid)] != 0U) {
-                throw std::runtime_error("BC single chunk final streamer duplicate chunk success values");
+                throw std::runtime_error("BC final layer streamer duplicate chunk success values");
             }
             success_value_offsets_[static_cast<size_t>(cell.cid)] =
                 success_value_cursor_ + expected_values -
@@ -2358,7 +2289,7 @@ public:
             success_values_written_[static_cast<size_t>(cell.cid)] = 1U;
         }
         if (expected_values != static_cast<uint64_t>(compact_values.size())) {
-            throw std::runtime_error("BC single chunk final streamer compact value count mismatch");
+            throw std::runtime_error("BC final layer streamer compact value count mismatch");
         }
         stats_.result_assembly_seconds += bc_single_chunk_now_seconds() - assembly_t0;
 
@@ -2367,12 +2298,12 @@ public:
         bucket_cursor_ = bc_checked_add_u64(
             bucket_cursor_,
             bucket_bytes.size(),
-            "BC single chunk final streamer bucket cursor overflow"
+            "BC final layer streamer bucket cursor overflow"
         );
         rank_cursor_ = bc_checked_add_u64(
             rank_cursor_,
             rank_bytes.size(),
-            "BC single chunk final streamer rank cursor overflow"
+            "BC final layer streamer rank cursor overflow"
         );
         write_success_values(
             compact_values.empty() ? nullptr : compact_values.data(),
@@ -2381,7 +2312,7 @@ public:
         success_value_cursor_ = bc_checked_add_u64(
             success_value_cursor_,
             static_cast<uint64_t>(compact_values.size()),
-            "BC single chunk final streamer success cursor overflow"
+            "BC final layer streamer success cursor overflow"
         );
     }
 
@@ -2389,19 +2320,19 @@ public:
         double assembly_t0 = bc_single_chunk_now_seconds();
         for (uint8_t written : written_) {
             if (written == 0U) {
-                throw std::runtime_error("BC single chunk final streamer missing cell");
+                throw std::runtime_error("BC final layer streamer missing cell");
             }
         }
         for (uint8_t written : success_values_written_) {
             if (written == 0U) {
-                throw std::runtime_error("BC single chunk final streamer missing success values");
+                throw std::runtime_error("BC final layer streamer missing success values");
             }
         }
         if (bucket_cursor_ > bucket_capacity_bytes_) {
-            throw std::overflow_error("BC single chunk final bucket payload exceeds reserved output range");
+            throw std::overflow_error("BC final layer bucket payload exceeds reserved output range");
         }
         if (rank_cursor_ > rank_capacity_bytes_) {
-            throw std::overflow_error("BC single chunk final rank payload exceeds reserved output range");
+            throw std::overflow_error("BC final layer rank payload exceeds reserved output range");
         }
         BCPositionHeader position_header;
         position_header.family_unit = current_position_.axis().family_unit();
@@ -2419,7 +2350,7 @@ public:
 
         std::vector<uint8_t> position_metadata;
         if (bucket_offset_ > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-            throw std::overflow_error("BC single chunk final position metadata exceeds size_t");
+            throw std::overflow_error("BC final layer position metadata exceeds size_t");
         }
         position_metadata.reserve(static_cast<size_t>(bucket_offset_));
         bc_append_header(position_metadata, position_header);
@@ -2428,14 +2359,14 @@ public:
             bc_append_cell_descriptor(position_metadata, descriptor);
         }
         if (position_metadata.size() > bucket_offset_) {
-            throw std::logic_error("BC single chunk final position metadata exceeds bucket offset");
+            throw std::logic_error("BC final layer position metadata exceeds bucket offset");
         }
         position_metadata.resize(static_cast<size_t>(bucket_offset_), 0U);
 
         const uint64_t position_logical_size = bc_checked_add_u64(
             rank_offset_,
             rank_cursor_,
-            "BC single chunk final position logical size overflow"
+            "BC final layer position logical size overflow"
         );
         stats_.result_assembly_seconds += bc_single_chunk_now_seconds() - assembly_t0;
         double t0 = bc_single_chunk_now_seconds();
@@ -2460,7 +2391,7 @@ public:
         const uint64_t payload_end = bc_checked_add_u64(
             success_payload_offset_,
             payload_bytes,
-            "BC single chunk final success payload end overflow"
+            "BC final layer success payload end overflow"
         );
         const uint64_t offset_table_offset =
             bc_direct_align_up(payload_end, kBCSingleChunkDirectBlockBytes);
@@ -2484,7 +2415,7 @@ public:
         bc_append_success_header(success_header_bytes, success_header);
         const uint64_t success_logical_size = bc_success_logical_size(success_header);
         if (success_stream_cursor_ != payload_end) {
-            throw std::logic_error("BC single chunk final success stream cursor mismatch");
+            throw std::logic_error("BC final layer success stream cursor mismatch");
         }
         stats_.result_assembly_seconds += bc_single_chunk_now_seconds() - assembly_t0;
         t0 = bc_single_chunk_now_seconds();
@@ -2495,7 +2426,7 @@ public:
         t0 = bc_single_chunk_now_seconds();
         std::vector<uint8_t> offset_bytes;
         if (offset_table_bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-            throw std::overflow_error("BC single chunk final success offset table exceeds size_t");
+            throw std::overflow_error("BC final layer success offset table exceeds size_t");
         }
         offset_bytes.reserve(static_cast<size_t>(offset_table_bytes));
         bc_append_success_cell_value_offsets(offset_bytes, success_value_offsets_);
@@ -2531,7 +2462,7 @@ public:
 private:
     [[nodiscard]] uint64_t checked_value_bytes(uint64_t values) const {
         if (values > std::numeric_limits<uint64_t>::max() / value_size_) {
-            throw std::overflow_error("BC single chunk final value byte count overflow");
+            throw std::overflow_error("BC final layer value byte count overflow");
         }
         return values * value_size_;
     }
@@ -2550,7 +2481,7 @@ private:
             return;
         }
         if (values == nullptr) {
-            throw std::invalid_argument("BC single chunk final success values pointer is null");
+            throw std::invalid_argument("BC final layer success values pointer is null");
         }
         const double t0 = bc_single_chunk_now_seconds();
 #if defined(_WIN32) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
@@ -3523,7 +3454,7 @@ BCSingleChunkSolveFileResult bc_single_chunk_solve_strict_1x_to_files(
             position_bytes + success_bytes
         );
 
-        BCSingleChunkFinalFileStreamer<StorageT> output_streamer(
+        BCFinalLayerFileStreamer<StorageT> output_streamer(
             current_position,
             position_file,
             success_file,
@@ -3921,7 +3852,7 @@ bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier(
     );
 
     uint32_t pass2_chunks = 0U;
-    BCSingleChunkFinalFileStreamer<StorageT> output_streamer(
+    BCFinalLayerFileStreamer<StorageT> output_streamer(
         current_position,
         position_file,
         success_file,
