@@ -1379,14 +1379,6 @@ template <typename StorageT>
     if (empty_count == 0U) {
         return zero_value;
     }
-    if constexpr (std::is_same_v<StorageT, uint32_t>) {
-        if (spawn_rate4 == 0.1) {
-            const uint64_t integer_sum = static_cast<uint64_t>(sum);
-            const uint64_t numerator = spawn4 ? integer_sum : 9ULL * integer_sum;
-            const uint64_t denominator = 10ULL * static_cast<uint64_t>(empty_count);
-            return static_cast<uint32_t>(numerator / denominator);
-        }
-    }
     const long double p4 = static_cast<long double>(spawn_rate4);
     const long double weight = spawn4 ? p4 : (1.0L - p4);
     return bc_single_chunk_cast_weighted_success<StorageT>(
@@ -1521,11 +1513,11 @@ void bc_single_chunk_compact_loaded_cell(
     }
 }
 
-template <typename StorageT>
+template <typename StorageT, typename RawValueBuffer>
 void bc_single_chunk_compact_loaded_cell_in_place(
     const BCLut &lut,
     const BCLoadedCell &cell,
-    BCSingleChunkValueBuffer<StorageT> &raw_values,
+    RawValueBuffer &raw_values,
     uint64_t cell_value_offset,
     uint32_t row_width,
     StorageT zero_value,

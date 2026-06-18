@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -37,21 +38,43 @@ FileIOUtils::DirectIoConfig compression_direct_io_config() {
     return FileIOUtils::normalize_direct_io_config(FileIOUtils::DirectIoConfig{true, 16U, 8U});
 }
 
+bool write_temp_byte_payload_archive(
+    const std::string &archive_path,
+    const uint8_t *data,
+    size_t size,
+    int lvl
+) {
+    static constexpr uint8_t kEmptyPayloadByte = 0U;
+    if (size != 0U && data == nullptr) {
+        return false;
+    }
+    const uint8_t *payload = size == 0U ? &kEmptyPayloadByte : data;
+    if (compress_bytes_to_7z_archive_streaming(
+            payload,
+            size,
+            archive_path,
+            temp_archive_entry_name(archive_path),
+            lvl)) {
+        return true;
+    }
+
+    std::vector<uint8_t> compressed = compress_xz_block_native(payload, size, lvl);
+    if (compressed.empty() && size != 0U) {
+        return false;
+    }
+    const std::string temp_path = FileIOUtils::temp_write_path(archive_path);
+    FileIOUtils::write_binary_bytes(temp_path, compressed);
+    try {
+        FileIOUtils::finalize_temporary_file(temp_path, archive_path);
+        return true;
+    } catch (...) {
+        std::error_code ec;
+        fs::remove(temp_path, ec);
+        return false;
+    }
+}
+
 } // namespace
-
-void maybe_compress_with_7z(const std::string &path) {
-    if (!fs::exists(path)) {
-        return;
-    }
-    compress_with_7z_or_xz(path, 1);
-}
-
-void maybe_decompress_with_7z(const std::string &archive_path) {
-    if (!fs::exists(archive_path)) {
-        return;
-    }
-    decompress_with_7z_or_xz(archive_path);
-}
 
 void maybe_do_compress_classic(const std::string &book_path, const std::string &success_rate_dtype) {
     if (!fs::exists(book_path)) {
@@ -108,39 +131,11 @@ std::vector<uint64_t> maybe_decompress_uint64_array(const std::string &compresse
 bool write_temp_uint64_archive(const std::string &archive_path, const std::vector<uint64_t> &data, int lvl) {
     const uint8_t *bytes = reinterpret_cast<const uint8_t *>(data.data());
     const size_t byte_size = data.size() * sizeof(uint64_t);
-    return compress_bytes_to_7z_archive_streaming(
-        bytes,
-        byte_size,
-        archive_path,
-        temp_archive_entry_name(archive_path),
-        lvl
-    );
+    return write_temp_byte_payload_archive(archive_path, bytes, byte_size, lvl);
 }
 
 bool write_temp_byte_archive(const std::string &archive_path, const std::vector<uint8_t> &data, int lvl) {
-    if (compress_bytes_to_7z_archive_streaming(
-            data.data(),
-            data.size(),
-            archive_path,
-            temp_archive_entry_name(archive_path),
-            lvl)) {
-        return true;
-    }
-
-    std::vector<uint8_t> compressed = compress_xz_block_native(data.data(), data.size(), lvl);
-    if (compressed.empty() && !data.empty()) {
-        return false;
-    }
-    const std::string temp_path = FileIOUtils::temp_write_path(archive_path);
-    FileIOUtils::write_binary_bytes(temp_path, compressed);
-    try {
-        FileIOUtils::finalize_temporary_file(temp_path, archive_path);
-        return true;
-    } catch (...) {
-        std::error_code ec;
-        fs::remove(temp_path, ec);
-        return false;
-    }
+    return write_temp_byte_payload_archive(archive_path, data.data(), data.size(), lvl);
 }
 
 bool write_temp_byte_spans_archive(
@@ -148,12 +143,33 @@ bool write_temp_byte_spans_archive(
     const std::vector<ArchiveByteSpan> &spans,
     int lvl
 ) {
-    return compress_spans_to_7z_archive_streaming(
-        spans,
-        archive_path,
-        temp_archive_entry_name(archive_path),
-        lvl
-    );
+    if (compress_spans_to_7z_archive_streaming(
+            spans,
+            archive_path,
+            temp_archive_entry_name(archive_path),
+            lvl)) {
+        return true;
+    }
+
+    size_t total_size = 0U;
+    for (const ArchiveByteSpan &span : spans) {
+        if (span.size > std::numeric_limits<size_t>::max() - total_size) {
+            return false;
+        }
+        total_size += span.size;
+    }
+    std::vector<uint8_t> bytes;
+    bytes.reserve(total_size);
+    for (const ArchiveByteSpan &span : spans) {
+        if (span.size == 0U) {
+            continue;
+        }
+        if (span.data == nullptr) {
+            return false;
+        }
+        bytes.insert(bytes.end(), span.data, span.data + span.size);
+    }
+    return write_temp_byte_payload_archive(archive_path, bytes.data(), bytes.size(), lvl);
 }
 
 std::vector<uint8_t> read_temp_byte_archive(const std::string &archive_path) {
@@ -179,29 +195,8 @@ std::vector<uint8_t> read_temp_byte_archive(const std::string &archive_path) {
 }
 
 std::vector<uint64_t> read_temp_uint64_archive(const std::string &archive_path) {
-    if (!fs::exists(archive_path)) {
-        return {};
-    }
-
-    std::vector<uint8_t> header = FileIOUtils::read_binary_bytes_range(archive_path, 0, 6);
-    if (is_xz_stream(header)) {
-        std::vector<uint8_t> archive_bytes = FileIOUtils::read_binary_bytes(archive_path);
-        std::vector<uint8_t> decompressed = decompress_xz_block_native(archive_bytes.data(), archive_bytes.size());
-        if (decompressed.empty() && !archive_bytes.empty()) {
-            return {};
-        }
-        if ((decompressed.size() % sizeof(uint64_t)) != 0) {
-            return {};
-        }
-        std::vector<uint64_t> result(decompressed.size() / sizeof(uint64_t));
-        if (!result.empty()) {
-            std::memcpy(result.data(), decompressed.data(), decompressed.size());
-        }
-        return result;
-    }
-
-    std::vector<uint8_t> decompressed;
-    if (!decompress_7z_archive_to_bytes_streaming(archive_path, decompressed)) {
+    std::vector<uint8_t> decompressed = read_temp_byte_archive(archive_path);
+    if (decompressed.empty()) {
         return {};
     }
     if ((decompressed.size() % sizeof(uint64_t)) != 0) {

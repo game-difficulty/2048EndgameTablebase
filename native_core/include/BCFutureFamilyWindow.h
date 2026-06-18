@@ -375,56 +375,31 @@ public:
 
         const auto begin = std::chrono::steady_clock::now();
         BCFutureSuccessLookupView<SuccessT> lookup;
-        if constexpr (std::is_same_v<SuccessT, uint32_t>) {
-            std::vector<typename BCFutureSuccessLookupView<SuccessT>::CachedCellRef> refs;
-            refs.reserve(active_.size());
-            for (const ActiveCell &cell : active_) {
-                typename BCFutureSuccessLookupView<SuccessT>::CachedCellRef ref;
-                ref.cid = cell.cid;
-                ref.rank_payload = cell.position.view().rank_payload;
-                ref.index = &cell.index;
-                ref.value_count = cell.success.uint32_value_count();
-                ref.value_ptr = cell.success.uint32_values_data();
-                refs.push_back(ref);
+        std::vector<typename BCFutureSuccessLookupView<SuccessT>::CachedCellRef> refs;
+        refs.reserve(active_.size());
+        for (const ActiveCell &cell : active_) {
+            typename BCFutureSuccessLookupView<SuccessT>::CachedCellRef ref;
+            ref.cid = cell.cid;
+            ref.rank_payload = cell.position.view().rank_payload;
+            ref.index = &cell.index;
+            ref.value_count = cell.success.template typed_value_count<SuccessT>();
+            ref.value_ptr = cell.success.template typed_values_data<SuccessT>();
+            const uint64_t expected_values =
+                static_cast<uint64_t>(cell.success.success_rows) * row_width;
+            if (expected_values > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
+                ref.value_count != static_cast<size_t>(expected_values) ||
+                (ref.value_count != 0U && ref.value_ptr == nullptr)) {
+                throw std::runtime_error("BC future cached lookup active value refs are invalid");
             }
-            lookup.open_loaded_cached_refs(
-                position_reader_->lut(),
-                position_reader_->cell_count(),
-                refs,
-                row_width,
-                dtype
-            );
-        } else {
-            std::vector<BCLoadedCell> position_cells;
-            position_cells.reserve(active_.size());
-            std::vector<BCLoadedSuccessCell> success_cells;
-            success_cells.reserve(active_.size());
-            for (const ActiveCell &cell : active_) {
-                position_cells.push_back(cell.position);
-                success_cells.push_back(cell.success);
-            }
-            for (const BCLoadedCell &cell : position_cells) {
-                resident_position_bytes +=
-                    static_cast<uint64_t>(cell.buckets.capacity()) * sizeof(BCBucketEntry) +
-                    static_cast<uint64_t>(cell.rank_payload.capacity());
-            }
-            for (const BCLoadedSuccessCell &cell : success_cells) {
-                resident_success_bytes += static_cast<uint64_t>(cell.raw_bytes.capacity()) +
-                    static_cast<uint64_t>(cell.values.capacity()) * sizeof(uint32_t);
-                if (cell.external_value_bytes) {
-                    resident_success_bytes +=
-                        static_cast<uint64_t>(cell.external_value_bytes->size());
-                }
-            }
-            lookup.open_loaded(
-                position_reader_->lut(),
-                position_reader_->cell_count(),
-                std::move(position_cells),
-                success_cells,
-                row_width,
-                dtype
-            );
+            refs.push_back(ref);
         }
+        lookup.open_loaded_cached_refs(
+            position_reader_->lut(),
+            position_reader_->cell_count(),
+            refs,
+            row_width,
+            dtype
+        );
         index_seconds += seconds_since(begin);
         return lookup;
     }
@@ -516,6 +491,7 @@ private:
         std::vector<uint8_t>().swap(success.raw_bytes);
         std::vector<uint32_t>().swap(success.values);
         success.external_value_bytes.reset();
+        success.external_value_data = nullptr;
         success.external_values = nullptr;
         success.external_value_count = 0U;
         success.cid = 0U;
@@ -600,7 +576,7 @@ private:
             success_reader_->load_cells(
                 missing,
                 &success_stats,
-                std::is_same_v<SuccessT, uint32_t>
+                true
             );
         stats_.success_read_seconds += seconds_since(success_begin);
 

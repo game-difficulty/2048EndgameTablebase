@@ -8,8 +8,6 @@
 
 namespace BC {
 
-inline constexpr uint32_t kBCFamilyRouteMaxPrime = 251U;
-
 enum class BCFamilyGenerationRoute {
     Auto,
     Resident,
@@ -23,6 +21,7 @@ struct BCFamilyRouteInputs {
     bool has_source4 = false;
     uint64_t available_memory_bytes = 0U;
     uint64_t total_memory_bytes = 0U;
+    uint32_t fixed_modulus = 0U;
     uint32_t previous_modulus = 0U;
     BCFamilyGenerationRoute previous_route = BCFamilyGenerationRoute::Family;
     uint32_t resident_upgrade_streak = 0U;
@@ -120,30 +119,6 @@ inline constexpr uint64_t kBCFamilyRouteGiB = 1024ULL * 1024ULL * 1024ULL;
     return available_memory_bytes > reserve ? available_memory_bytes - reserve : 0U;
 }
 
-[[nodiscard]] inline const uint32_t *bc_family_route_primes(uint32_t &count) {
-    static constexpr uint32_t kPrimes[] = {
-        13U, 17U, 19U, 23U, 29U, 31U, 37U, 41U, 43U, 47U,
-        53U, 59U, 61U, 67U, 71U, 73U, 79U, 83U, 89U, 97U,
-        101U, 103U, 107U, 109U, 113U, 127U, 131U, 137U, 139U, 149U,
-        151U, 157U, 163U, 167U, 173U, 179U, 181U, 191U, 193U, 197U,
-        199U, 211U, 223U, 227U, 229U, 233U, 239U, 241U,
-        kBCFamilyRouteMaxPrime
-    };
-    count = static_cast<uint32_t>(sizeof(kPrimes) / sizeof(kPrimes[0]));
-    return kPrimes;
-}
-
-[[nodiscard]] inline bool bc_family_route_is_supported_prime(uint32_t value) {
-    uint32_t count = 0U;
-    const uint32_t *primes = bc_family_route_primes(count);
-    for (uint32_t i = 0U; i < count; ++i) {
-        if (primes[i] == value) {
-            return true;
-        }
-    }
-    return false;
-}
-
 [[nodiscard]] inline uint64_t bc_family_estimate_for_modulus(uint64_t largest_source_size, uint32_t modulus) {
     if (modulus == 0U) {
         throw std::invalid_argument("BC family route modulus must be non-zero");
@@ -152,37 +127,14 @@ inline constexpr uint64_t kBCFamilyRouteGiB = 1024ULL * 1024ULL * 1024ULL;
     return fixed + bc_route_mul_div_ceil_u64(largest_source_size, 12U, modulus);
 }
 
-[[nodiscard]] inline uint32_t bc_choose_family_modulus(
-    uint64_t largest_source_size,
-    uint64_t budget
-) {
-    uint32_t count = 0U;
-    const uint32_t *primes = bc_family_route_primes(count);
-    for (uint32_t i = 0U; i < count; ++i) {
-        if (bc_family_estimate_for_modulus(largest_source_size, primes[i]) <= budget) {
-            return primes[i];
-        }
+[[nodiscard]] inline uint32_t bc_family_route_fixed_modulus(const BCFamilyRouteInputs &inputs) {
+    if (inputs.fixed_modulus != 0U) {
+        return inputs.fixed_modulus;
     }
-    return kBCFamilyRouteMaxPrime;
-}
-
-[[nodiscard]] inline bool bc_keep_previous_family_modulus(
-    uint64_t largest_source_size,
-    uint64_t budget,
-    uint32_t previous_modulus
-) {
-    if (previous_modulus == 0U) {
-        return false;
+    if (inputs.previous_modulus != 0U) {
+        return inputs.previous_modulus;
     }
-    const uint64_t fixed = kBCFamilyRouteGiB / 5U;
-    if (budget <= fixed || largest_source_size == 0U) {
-        return false;
-    }
-    const long double k =
-        (static_cast<long double>(budget - fixed) *
-         static_cast<long double>(previous_modulus)) /
-        static_cast<long double>(largest_source_size);
-    return k >= 9.0L && k <= 16.0L;
+    return 29U;
 }
 
 [[nodiscard]] inline BCFamilyRouteDecision bc_plan_family_generation_route(
@@ -204,11 +156,7 @@ inline constexpr uint64_t kBCFamilyRouteGiB = 1024ULL * 1024ULL * 1024ULL;
     decision.single_estimated_peak_bytes =
         bc_route_mul_div_ceil_u64(largest, 6U, 5U) + delta;
 
-    uint32_t modulus = inputs.previous_modulus;
-    if (!bc_keep_previous_family_modulus(largest, budget, modulus)) {
-        modulus = bc_choose_family_modulus(largest, budget);
-    }
-    decision.target_modulus = modulus == 0U ? kBCFamilyRouteMaxPrime : modulus;
+    decision.target_modulus = bc_family_route_fixed_modulus(inputs);
     decision.family_estimated_peak_bytes =
         bc_family_estimate_for_modulus(largest, decision.target_modulus);
 
@@ -280,6 +228,145 @@ inline constexpr uint64_t kBCFamilyRouteGiB = 1024ULL * 1024ULL * 1024ULL;
         selected = BCFamilyGenerationRoute::Family;
     }
     set_route(selected);
+    return decision;
+}
+
+enum class BCSolveRoute {
+    Auto,
+    Resident,
+    Single,
+    Family,
+};
+
+struct BCSolveRouteInputs {
+    uint64_t current_rows = 0U;
+    uint64_t future2_live_rows = 0U;
+    uint64_t future4_live_rows = 0U;
+    uint64_t available_memory_bytes = 0U;
+    uint32_t fixed_modulus = 0U;
+};
+
+struct BCSolveRouteDecision {
+    BCSolveRoute route = BCSolveRoute::Family;
+    uint32_t family_modulus = 0U;
+    uint64_t available_memory_bytes = 0U;
+    uint64_t resident_required_bytes = 0U;
+    uint64_t single_required_bytes = 0U;
+    uint64_t route_required_bytes = 0U;
+};
+
+[[nodiscard]] inline const char *bc_solve_route_name(BCSolveRoute route) {
+    switch (route) {
+    case BCSolveRoute::Auto:
+        return "auto";
+    case BCSolveRoute::Resident:
+        return "resident";
+    case BCSolveRoute::Single:
+        return "single";
+    case BCSolveRoute::Family:
+        return "family";
+    }
+    return "family";
+}
+
+[[nodiscard]] inline BCSolveRoute bc_parse_solve_route(const std::string &value) {
+    if (value == "auto") {
+        return BCSolveRoute::Auto;
+    }
+    if (value == "resident") {
+        return BCSolveRoute::Resident;
+    }
+    if (value == "single") {
+        return BCSolveRoute::Single;
+    }
+    if (value == "family") {
+        return BCSolveRoute::Family;
+    }
+    throw std::invalid_argument("--solve-route must be auto, resident, single, or family");
+}
+
+[[nodiscard]] inline uint64_t bc_route_saturating_add_u64(uint64_t lhs, uint64_t rhs) {
+    if (lhs > std::numeric_limits<uint64_t>::max() - rhs) {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    return lhs + rhs;
+}
+
+[[nodiscard]] inline uint64_t bc_route_saturating_mul_u64(uint64_t value, uint64_t multiplier) {
+    if (multiplier != 0U && value > std::numeric_limits<uint64_t>::max() / multiplier) {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    return value * multiplier;
+}
+
+[[nodiscard]] inline uint64_t bc_solve_resident_required_bytes(
+    uint64_t current_rows,
+    uint64_t future2_live_rows,
+    uint64_t future4_live_rows
+) {
+    uint64_t rows = bc_route_saturating_add_u64(current_rows, future2_live_rows);
+    rows = bc_route_saturating_add_u64(rows, future4_live_rows);
+    return bc_route_saturating_add_u64(
+        kBCFamilyRouteGiB,
+        bc_route_saturating_mul_u64(rows, 5U));
+}
+
+[[nodiscard]] inline uint64_t bc_solve_single_required_bytes(
+    uint64_t future2_live_rows,
+    uint64_t future4_live_rows
+) {
+    const uint64_t max_future_rows = std::max<uint64_t>(future2_live_rows, future4_live_rows);
+    return bc_route_saturating_add_u64(
+        kBCFamilyRouteGiB,
+        bc_route_saturating_mul_u64(max_future_rows, 6U));
+}
+
+[[nodiscard]] inline BCSolveRouteDecision bc_plan_solve_route(
+    const BCSolveRouteInputs &inputs,
+    BCSolveRoute requested_route = BCSolveRoute::Auto
+) {
+    if (inputs.fixed_modulus == 0U) {
+        throw std::invalid_argument("BC solve route fixed_modulus must be non-zero");
+    }
+    BCSolveRouteDecision decision;
+    decision.family_modulus = inputs.fixed_modulus;
+    decision.available_memory_bytes = inputs.available_memory_bytes;
+    decision.resident_required_bytes = bc_solve_resident_required_bytes(
+        inputs.current_rows,
+        inputs.future2_live_rows,
+        inputs.future4_live_rows);
+    decision.single_required_bytes = bc_solve_single_required_bytes(
+        inputs.future2_live_rows,
+        inputs.future4_live_rows);
+
+    auto set_route = [&](BCSolveRoute route) {
+        decision.route = route == BCSolveRoute::Auto ? BCSolveRoute::Family : route;
+        switch (decision.route) {
+        case BCSolveRoute::Resident:
+            decision.route_required_bytes = decision.resident_required_bytes;
+            break;
+        case BCSolveRoute::Single:
+            decision.route_required_bytes = decision.single_required_bytes;
+            break;
+        case BCSolveRoute::Family:
+        case BCSolveRoute::Auto:
+            decision.route = BCSolveRoute::Family;
+            decision.route_required_bytes = 0U;
+            break;
+        }
+    };
+
+    if (requested_route != BCSolveRoute::Auto) {
+        set_route(requested_route);
+        return decision;
+    }
+    if (inputs.available_memory_bytes >= decision.resident_required_bytes) {
+        set_route(BCSolveRoute::Resident);
+    } else if (inputs.available_memory_bytes >= decision.single_required_bytes) {
+        set_route(BCSolveRoute::Single);
+    } else {
+        set_route(BCSolveRoute::Family);
+    }
     return decision;
 }
 

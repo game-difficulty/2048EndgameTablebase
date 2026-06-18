@@ -632,14 +632,6 @@ template <typename StorageT>
     if (empty_count == 0U) {
         return zero_value;
     }
-    if constexpr (std::is_same_v<StorageT, uint32_t>) {
-        if (spawn_rate4 == 0.1) {
-            const uint64_t numerator =
-                9ULL * static_cast<uint64_t>(sum2) + static_cast<uint64_t>(sum4);
-            const uint64_t denominator = 10ULL * static_cast<uint64_t>(empty_count);
-            return static_cast<uint32_t>(numerator / denominator);
-        }
-    }
     const long double p4 = static_cast<long double>(spawn_rate4);
     const long double p2 = 1.0L - p4;
     return static_cast<StorageT>((sum2 * p2 + sum4 * p4) / static_cast<long double>(empty_count));
@@ -953,20 +945,13 @@ inline void bc_resident_solve_batch(
                 if constexpr (std::is_same_v<StorageT, uint32_t>) {
                     const uint64_t sum2 = workspace.integer_sum2[board_slot];
                     const uint64_t sum4 = workspace.integer_sum4[board_slot];
-                    if (options.edge_options.spawn_rate4 == 0.1) {
-                        const uint64_t numerator = 9ULL * sum2 + sum4;
-                        const uint64_t denominator =
-                            10ULL * static_cast<uint64_t>(workspace.empty_counts[board_slot]);
-                        value = static_cast<uint32_t>(numerator / denominator);
-                    } else {
-                        value = bc_resident_reduce_weighted<StorageT>(
-                            static_cast<long double>(sum2),
-                            static_cast<long double>(sum4),
-                            workspace.empty_counts[board_slot],
-                            options.edge_options.spawn_rate4,
-                            options.zero_value
-                        );
-                    }
+                    value = bc_resident_reduce_weighted<StorageT>(
+                        static_cast<long double>(sum2),
+                        static_cast<long double>(sum4),
+                        workspace.empty_counts[board_slot],
+                        options.edge_options.spawn_rate4,
+                        options.zero_value
+                    );
                 } else {
                     value = bc_resident_reduce_weighted<StorageT>(
                         workspace.float_sum2[board_slot],

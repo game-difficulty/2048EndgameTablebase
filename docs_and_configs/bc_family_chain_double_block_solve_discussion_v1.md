@@ -21,14 +21,30 @@ Initial assumptions:
 
 ```text
 current layer modulus == future2 layer modulus == future4 layer modulus
+the modulus is supplied by the caller before BC calculation starts
+generation and solve must keep using that modulus
 layer-internal resume is not required
 single-layer correctness is required
 per-module performance should be reasonable from the first version
 ```
 
-Changing modulus between layers is a later step. It should follow the generation
-route/remap model: before solving the next layer, every layer that will be used
-by that solve step is remapped to the selected new modulus.
+Modulus selection is deliberately left to the caller. The BC runtime may route a
+layer through resident, single-chunk, or FamilyChain execution, but route
+selection must not change the modulus. Generation-side auto routing still exists
+for memory/performance choice; it uses the externally supplied modulus for every
+route. Solve-side routing follows the same rule.
+
+Solve-side auto route uses layer row counts:
+
+```text
+a = current generated layer row count
+b = future n+2 exact/live row count after zero-success compaction
+c = future n+4 exact/live row count after zero-success compaction
+
+resident route fits when available physical memory >= 1 GiB + 5 * (a + b + c)
+single route fits when available physical memory >= 1 GiB + 6 * max(b, c)
+otherwise use FamilyChain double-block solve with the preset modulus
+```
 
 Small struct layouts can be refined while implementing. Large structures and
 the large execution flow should be kept explicit and stable.
@@ -414,12 +430,20 @@ current/future/partial-max live data may be budgeted as about 5 families
 reasonable peak memory target for the tested mid-layer: <= 2 GB
 ```
 
-Under this budget, bounded block interleave with `interleave_block_fids=4` is
-acceptable when measured peak memory stays below 2 GB. It reduces scratch4 temp
-IO by keeping the block-local Spawn4 scratch in memory, while still releasing
-the +4 future window before loading the +2 future window. Larger block sizes
-need separate peak-memory validation before they can be considered production
-candidates.
+BC double-block solve must keep Spawn4 and Spawn2 as separate full sweeps:
+finish the Spawn4 fid sweep and persist its scratch/partial output, then start
+the Spawn2 sweep and finalize cells. The previous bounded block interleave route
+is deprecated and removed because it mixes the +4 and +2 phases and complicates
+the production memory model.
+
+Success dtype handling is also a production invariant. The six success dtypes
+(`UInt32`, `UInt64`, `Float32`, `Float64`, `OneMinusFloat32`,
+`OneMinusFloat64`) must run the same family solve control flow: same Spawn4
+sweep, same Spawn2 sweep, same partial/scratch/finalize semantics, and same
+cell ordering rules. The dtype dispatch may choose the `StorageT` instantiation
+and typed zero/terminal values; 64-bit dtypes naturally move more bytes. It
+must not select a different algorithm route for integral versus floating-point
+success files.
 
 ## 11. Suggested Module Order
 

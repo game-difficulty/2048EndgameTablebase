@@ -156,6 +156,7 @@ set(FORMATION_CORE_SOURCES
     src/EXPrefix36Runtime.cpp
     src/EXFrozenLayer.cpp
     src/EXCompressedResult.cpp
+    src/BCCompressedResult.cpp
     src/BookGeneratorEX.cpp
     src/EXADLayer.cpp
     src/EXADIO.cpp
@@ -175,6 +176,16 @@ set(FORMATION_CORE_SOURCES
 nanobind_add_module(formation_core ${FORMATION_CORE_SOURCES})
 target_link_libraries(formation_core PRIVATE common_config OpenMP::OpenMP_CXX)
 
+add_executable(bc_family_solve_full
+    src/BCCompressedResult.cpp
+    src/BCPositionFile.cpp
+    src/CanonicalBatch.cpp
+    src/FileIOUtils.cpp
+    src/NativeLzma.cpp
+    src/bc_family_solve_full.cpp
+)
+target_link_libraries(bc_family_solve_full PRIVATE common_config OpenMP::OpenMP_CXX)
+
 set(CANONICAL_BATCH_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_canonical_batch.cpp")
 set(BC_FAMILY_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_family.cpp")
 set(BC_FAMILY_ROUTE_PLANNER_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_family_route_planner.cpp")
@@ -184,6 +195,7 @@ set(BC_CELL_BUILDER_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_c
 set(BC_POSITION_FILE_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_position_file.cpp")
 set(BC_POSITION_CELL_LOADER_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_position_cell_loader.cpp")
 set(BC_SUCCESS_IO_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_success_io.cpp")
+set(BC_COMPRESSED_RESULT_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_compressed_result.cpp")
 set(BC_POSITION_SCANNER_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_position_scanner.cpp")
 set(BC_BOARD_CODEC_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_board_codec.cpp")
 set(BC_BOARD_OPS_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_board_ops.cpp")
@@ -216,6 +228,7 @@ if(NATIVE_BUILD_TESTS)
         "${BC_POSITION_FILE_TEST_SOURCE}"
         "${BC_POSITION_CELL_LOADER_TEST_SOURCE}"
         "${BC_SUCCESS_IO_TEST_SOURCE}"
+        "${BC_COMPRESSED_RESULT_TEST_SOURCE}"
         "${BC_POSITION_SCANNER_TEST_SOURCE}"
         "${BC_BOARD_CODEC_TEST_SOURCE}"
         "${BC_BOARD_OPS_TEST_SOURCE}"
@@ -294,6 +307,15 @@ if(NATIVE_BUILD_TESTS)
     )
     target_link_libraries(bc_success_io_test PRIVATE common_config)
 
+    add_executable(bc_compressed_result_test
+        src/BCCompressedResult.cpp
+        src/FileIOUtils.cpp
+        src/BCPositionFile.cpp
+        src/NativeLzma.cpp
+        tests_src/test_bc_compressed_result.cpp
+    )
+    target_link_libraries(bc_compressed_result_test PRIVATE common_config)
+
     add_executable(bc_position_scanner_test
         src/BCPositionFile.cpp
         tests_src/test_bc_position_scanner.cpp
@@ -343,6 +365,8 @@ if(NATIVE_BUILD_TESTS)
     add_executable(bc_family_solve_test
         src/BCPositionFile.cpp
         src/CanonicalBatch.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
         tests_src/test_bc_family_solve.cpp
     )
     target_link_libraries(bc_family_solve_test PRIVATE common_config OpenMP::OpenMP_CXX)
@@ -433,8 +457,11 @@ if(NATIVE_BUILD_TESTS)
     endif()
 
     add_executable(bc_family_solve_full_bench
+        src/BCCompressedResult.cpp
         src/BCPositionFile.cpp
         src/CanonicalBatch.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
         tests_src/bench_bc_family_solve_full.cpp
     )
     target_link_libraries(bc_family_solve_full_bench PRIVATE common_config OpenMP::OpenMP_CXX)

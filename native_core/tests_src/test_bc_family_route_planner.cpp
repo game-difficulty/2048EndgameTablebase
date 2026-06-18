@@ -22,6 +22,7 @@ BC::BCFamilyRouteInputs base_inputs() {
     inputs.has_source4 = true;
     inputs.total_memory_bytes = 0U;
     inputs.available_memory_bytes = 16U * GiB;
+    inputs.fixed_modulus = 29U;
     inputs.previous_modulus = 29U;
     inputs.previous_route = BC::BCFamilyGenerationRoute::Family;
     return inputs;
@@ -46,54 +47,25 @@ void test_explicit_routes_use_requested_estimates() {
     );
 }
 
-void test_family_modulus_selection() {
-    const uint64_t largest = 10U * GiB;
-    const uint64_t budget_for_47 =
-        BC::bc_family_estimate_for_modulus(largest, 47U);
-    const uint64_t below_43 =
-        BC::bc_family_estimate_for_modulus(largest, 43U) - 1U;
-    check(budget_for_47 <= below_43, "test budget ordering should put 47 before 43");
-    check(
-        BC::bc_choose_family_modulus(largest, below_43) == 47U,
-        "family modulus should choose smallest satisfying prime"
-    );
-    check(
-        BC::bc_choose_family_modulus(largest, 0U) == BC::kBCFamilyRouteMaxPrime,
-        "family modulus should fall back to max supported prime when no prime fits"
-    );
-}
+void test_generation_modulus_stays_fixed() {
+    BC::BCFamilyRouteInputs inputs = base_inputs();
+    inputs.fixed_modulus = 61U;
+    inputs.previous_modulus = 29U;
+    inputs.available_memory_bytes = 16U * GiB;
+    const BC::BCFamilyRouteDecision resident =
+        BC::bc_plan_family_generation_route(inputs, BC::BCFamilyGenerationRoute::Auto);
+    check(resident.target_modulus == 61U, "auto generation route should keep fixed modulus");
 
-void test_family_prime_table_stays_below_256() {
-    uint32_t count = 0U;
-    const uint32_t *primes = BC::bc_family_route_primes(count);
-    check(count != 0U, "family route prime table should not be empty");
-    check(primes[count - 1U] == BC::kBCFamilyRouteMaxPrime, "family route max prime mismatch");
-    for (uint32_t i = 0U; i < count; ++i) {
-        check(primes[i] < 256U, "family route prime should stay below 256");
-    }
-    check(BC::bc_family_route_is_supported_prime(251U), "251 should remain supported");
-    check(!BC::bc_family_route_is_supported_prime(257U), "257 should not be supported");
-}
+    inputs.available_memory_bytes = 0U;
+    const BC::BCFamilyRouteDecision family =
+        BC::bc_plan_family_generation_route(inputs, BC::BCFamilyGenerationRoute::Auto);
+    check(family.route == BC::BCFamilyGenerationRoute::Family, "tight generation route should fall back to family");
+    check(family.target_modulus == 61U, "family generation route should keep fixed modulus");
 
-void test_previous_modulus_sticky_band() {
-    const uint64_t largest = GiB;
-    const uint32_t previous = 47U;
-    const uint64_t fixed = GiB / 5U;
-    const uint64_t sticky_budget = fixed + (12U * largest) / previous;
-    const uint64_t too_tight_budget = fixed + (8U * largest) / previous;
-    const uint64_t too_loose_budget = fixed + (17U * largest) / previous;
-    check(
-        BC::bc_keep_previous_family_modulus(largest, sticky_budget, previous),
-        "previous modulus should stay in 9..16 k band"
-    );
-    check(
-        !BC::bc_keep_previous_family_modulus(largest, too_tight_budget, previous),
-        "previous modulus should adjust below sticky band"
-    );
-    check(
-        !BC::bc_keep_previous_family_modulus(largest, too_loose_budget, previous),
-        "previous modulus should adjust above sticky band"
-    );
+    inputs.fixed_modulus = 100U;
+    const BC::BCFamilyRouteDecision non_prime =
+        BC::bc_plan_family_generation_route(inputs, BC::BCFamilyGenerationRoute::Family);
+    check(non_prime.target_modulus == 100U, "generation route should not require prime modulus");
 }
 
 void test_auto_upgrade_requires_two_layers() {
@@ -157,17 +129,71 @@ void test_auto_route_transitions_cover_three_routes() {
     check(down_to_family.route == BC::BCFamilyGenerationRoute::Family, "single to family downgrade should be immediate");
 }
 
+BC::BCSolveRouteInputs base_solve_inputs() {
+    BC::BCSolveRouteInputs inputs;
+    inputs.current_rows = 100U;
+    inputs.future2_live_rows = 40U;
+    inputs.future4_live_rows = 20U;
+    inputs.fixed_modulus = 101U;
+    return inputs;
+}
+
+void test_solve_route_thresholds() {
+    BC::BCSolveRouteInputs inputs = base_solve_inputs();
+    const uint64_t resident_required = BC::bc_solve_resident_required_bytes(
+        inputs.current_rows,
+        inputs.future2_live_rows,
+        inputs.future4_live_rows);
+    const uint64_t single_required = BC::bc_solve_single_required_bytes(
+        inputs.future2_live_rows,
+        inputs.future4_live_rows);
+    check(resident_required == GiB + 5U * 160U, "resident solve memory formula mismatch");
+    check(single_required == GiB + 6U * 40U, "single solve memory formula mismatch");
+
+    inputs.available_memory_bytes = resident_required;
+    BC::BCSolveRouteDecision resident = BC::bc_plan_solve_route(inputs);
+    check(resident.route == BC::BCSolveRoute::Resident, "solve route should choose resident when it fits");
+    check(resident.family_modulus == 101U, "resident solve route should keep fixed modulus");
+
+    inputs.available_memory_bytes = resident_required - 1U;
+    BC::BCSolveRouteDecision single = BC::bc_plan_solve_route(inputs);
+    check(single.route == BC::BCSolveRoute::Single, "solve route should choose single when resident does not fit");
+    check(single.route_required_bytes == single_required, "single solve route required bytes mismatch");
+
+    inputs.available_memory_bytes = single_required - 1U;
+    BC::BCSolveRouteDecision family = BC::bc_plan_solve_route(inputs);
+    check(family.route == BC::BCSolveRoute::Family, "solve route should choose family when single does not fit");
+    check(family.route_required_bytes == 0U, "family solve route should not claim a memory threshold");
+    check(family.family_modulus == 101U, "family solve route should keep fixed modulus");
+}
+
+void test_solve_route_forced_selection_keeps_estimates() {
+    BC::BCSolveRouteInputs inputs = base_solve_inputs();
+    inputs.available_memory_bytes = 0U;
+    const BC::BCSolveRouteDecision resident =
+        BC::bc_plan_solve_route(inputs, BC::BCSolveRoute::Resident);
+    check(resident.route == BC::BCSolveRoute::Resident, "forced resident solve route mismatch");
+    check(
+        resident.route_required_bytes == resident.resident_required_bytes,
+        "forced resident should report resident requirement"
+    );
+    const BC::BCSolveRouteDecision single =
+        BC::bc_plan_solve_route(inputs, BC::BCSolveRoute::Single);
+    check(single.route == BC::BCSolveRoute::Single, "forced single solve route mismatch");
+    check(single.family_modulus == 101U, "forced single solve route should keep fixed modulus");
+}
+
 } // namespace
 
 int main() {
     try {
         test_explicit_routes_use_requested_estimates();
-        test_family_modulus_selection();
-        test_family_prime_table_stays_below_256();
-        test_previous_modulus_sticky_band();
+        test_generation_modulus_stays_fixed();
         test_auto_upgrade_requires_two_layers();
         test_auto_downgrade_is_immediate();
         test_auto_route_transitions_cover_three_routes();
+        test_solve_route_thresholds();
+        test_solve_route_forced_selection_keeps_estimates();
         std::cout << "bc_family_route_planner_test passed\n";
         return 0;
     } catch (const std::exception &ex) {

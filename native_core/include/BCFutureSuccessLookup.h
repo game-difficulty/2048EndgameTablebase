@@ -230,36 +230,23 @@ public:
                 throw std::overflow_error("BC future loaded lookup value count exceeds size_t");
             }
             const uint64_t expected_bytes = expected_values * sizeof(StorageT);
-            const size_t typed_value_count = std::is_same_v<StorageT, uint32_t>
-                ? loaded_success.uint32_value_count()
-                : 0U;
-            const uint32_t *typed_value_data = std::is_same_v<StorageT, uint32_t>
-                ? loaded_success.uint32_values_data()
-                : nullptr;
+            const size_t typed_value_count =
+                loaded_success.template typed_value_count<StorageT>();
+            const StorageT *typed_value_data =
+                loaded_success.template typed_values_data<StorageT>();
             const bool has_typed_values =
-                std::is_same_v<StorageT, uint32_t> &&
+                typed_value_data != nullptr &&
                 typed_value_count == static_cast<size_t>(expected_values);
             if (!has_typed_values && loaded_success.raw_bytes.size() != expected_bytes) {
                 throw std::invalid_argument("BC future loaded lookup raw success byte mismatch");
             }
             cell.value_count = static_cast<size_t>(expected_values);
-            if constexpr (std::is_same_v<StorageT, uint32_t>) {
-                if (typed_value_count == cell.value_count) {
-                    owned_values_.insert(
-                        owned_values_.end(),
-                        typed_value_data,
-                        typed_value_data + typed_value_count
-                    );
-                } else {
-                    for (uint64_t value_i = 0U; value_i < expected_values; ++value_i) {
-                        owned_values_.push_back(
-                            bc_load_success_value_le<StorageT>(
-                                loaded_success.raw_bytes.data() +
-                                static_cast<size_t>(value_i * sizeof(StorageT))
-                            )
-                        );
-                    }
-                }
+            if (has_typed_values) {
+                owned_values_.insert(
+                    owned_values_.end(),
+                    typed_value_data,
+                    typed_value_data + typed_value_count
+                );
             } else {
                 for (uint64_t value_i = 0U; value_i < expected_values; ++value_i) {
                     owned_values_.push_back(
@@ -320,104 +307,104 @@ public:
         if (!bc_success_dtype_matches_type<StorageT>(dtype)) {
             throw std::invalid_argument("BC future loaded ref lookup dtype does not match storage type");
         }
-        if constexpr (!std::is_same_v<StorageT, uint32_t>) {
-            throw std::invalid_argument("BC future loaded ref lookup currently requires uint32 values");
-        } else {
-            if (position_cells.size() != success_cells.size()) {
-                throw std::invalid_argument("BC future loaded ref lookup cell count mismatch");
-            }
-            lut_ = &lut;
-            position_ = nullptr;
-            row_width_ = row_width;
-            owned_values_.clear();
-            owned_flat_values_ = {};
-            value_data_ = nullptr;
-            value_count_ = 0U;
-            keep_rows_ = nullptr;
-            keep_row_count_ = 0U;
-            cells_.clear();
-            cells_.resize(cell_count);
-            owned_loaded_position_cells_ = std::move(position_cells);
-
-            uint64_t virtual_value_cursor = 0U;
-            for (size_t loaded_i = 0U; loaded_i < owned_loaded_position_cells_.size(); ++loaded_i) {
-                BCLoadedCell &loaded_position = owned_loaded_position_cells_[loaded_i];
-                const BCLoadedSuccessCell *loaded_success = success_cells[loaded_i];
-                if (loaded_success == nullptr) {
-                    throw std::invalid_argument("BC future loaded ref lookup success cell pointer is null");
-                }
-                if (loaded_position.cid != loaded_success->cid) {
-                    throw std::invalid_argument("BC future loaded ref lookup cid mismatch");
-                }
-                if (loaded_position.cid >= cell_count) {
-                    throw std::out_of_range("BC future loaded ref lookup cid out of range");
-                }
-                if (loaded_position.success_rows != loaded_success->success_rows) {
-                    throw std::invalid_argument("BC future loaded ref lookup success row mismatch");
-                }
-                if (loaded_success->row_width != row_width ||
-                    !bc_success_dtype_matches_type<StorageT>(loaded_success->dtype_mode())) {
-                    throw std::invalid_argument("BC future loaded ref lookup success dtype/row_width mismatch");
-                }
-
-                CellIndex &cell = cells_[static_cast<size_t>(loaded_position.cid)];
-                if (!cell.entries.empty() || cell.value_count != 0U) {
-                    throw std::invalid_argument("BC future loaded ref lookup duplicate loaded cid");
-                }
-                const uint64_t expected_values =
-                    static_cast<uint64_t>(loaded_position.success_rows) * row_width_;
-                if (expected_values > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-                    throw std::overflow_error("BC future loaded ref lookup value count exceeds size_t");
-                }
-                const size_t typed_value_count = loaded_success->uint32_value_count();
-                if (typed_value_count != static_cast<size_t>(expected_values)) {
-                    throw std::invalid_argument("BC future loaded ref lookup success value count mismatch");
-                }
-                cell.value_offset = static_cast<size_t>(virtual_value_cursor);
-                cell.value_count = static_cast<size_t>(expected_values);
-                cell.value_ptr = loaded_success->uint32_values_data();
-                virtual_value_cursor = bc_checked_add_u64(
-                    virtual_value_cursor,
-                    expected_values,
-                    "BC future loaded ref lookup virtual value count overflow"
-                );
-
-                const BCLoadedCellView view = loaded_position.view();
-                if (view.empty()) {
-                    if (cell.value_count != 0U) {
-                        throw std::runtime_error("BC future loaded ref empty cell has success values");
-                    }
-                    continue;
-                }
-                cell.rank_payload = view.rank_payload;
-                const uint32_t capacity = direct_capacity_for_bucket_count(view.buckets.size);
-                cell.entries.assign(capacity, DirectEntry{});
-                cell.mask = capacity - 1U;
-                for (uint32_t i = 0U; i < view.buckets.size; ++i) {
-                    const BCBucketEntry &bucket = view.buckets.data[i];
-                    uint32_t slot = static_cast<uint32_t>(mix_u64(bucket.key)) & cell.mask;
-                    while (!entry_empty(cell.entries[slot])) {
-                        if (cell.entries[slot].key == bucket.key) {
-                            throw std::runtime_error("BC future loaded ref direct lookup saw duplicate bucket key");
-                        }
-                        slot = (slot + 1U) & cell.mask;
-                    }
-                    DirectEntry entry;
-                    entry.key = bucket.key;
-                    const BucketBitmapLen bitmap_len = bitmap_len_from_trusted_key(lut, bucket.key);
-                    entry.bitmap_offset = bc_rank_payload_bitmap_offset(bucket.rank_payload_offset, bitmap_len);
-                    entry.success_row_offset = bucket.success_row_offset;
-                    validate_entry_payload_range(cell, entry, bitmap_len);
-                    populate_entry_word_rank_bases(cell, entry, bitmap_len);
-                    cell.entries[slot] = entry;
-                }
-            }
-            if (virtual_value_cursor > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-                throw std::overflow_error("BC future loaded ref lookup virtual value count exceeds size_t");
-            }
-            value_count_ = static_cast<size_t>(virtual_value_cursor);
-            bind_owned_cell_index_refs();
+        if (position_cells.size() != success_cells.size()) {
+            throw std::invalid_argument("BC future loaded ref lookup cell count mismatch");
         }
+        lut_ = &lut;
+        position_ = nullptr;
+        row_width_ = row_width;
+        owned_values_.clear();
+        owned_flat_values_ = {};
+        value_data_ = nullptr;
+        value_count_ = 0U;
+        keep_rows_ = nullptr;
+        keep_row_count_ = 0U;
+        cells_.clear();
+        cells_.resize(cell_count);
+        owned_loaded_position_cells_ = std::move(position_cells);
+
+        uint64_t virtual_value_cursor = 0U;
+        for (size_t loaded_i = 0U; loaded_i < owned_loaded_position_cells_.size(); ++loaded_i) {
+            BCLoadedCell &loaded_position = owned_loaded_position_cells_[loaded_i];
+            const BCLoadedSuccessCell *loaded_success = success_cells[loaded_i];
+            if (loaded_success == nullptr) {
+                throw std::invalid_argument("BC future loaded ref lookup success cell pointer is null");
+            }
+            if (loaded_position.cid != loaded_success->cid) {
+                throw std::invalid_argument("BC future loaded ref lookup cid mismatch");
+            }
+            if (loaded_position.cid >= cell_count) {
+                throw std::out_of_range("BC future loaded ref lookup cid out of range");
+            }
+            if (loaded_position.success_rows != loaded_success->success_rows) {
+                throw std::invalid_argument("BC future loaded ref lookup success row mismatch");
+            }
+            if (loaded_success->row_width != row_width ||
+                !bc_success_dtype_matches_type<StorageT>(loaded_success->dtype_mode())) {
+                throw std::invalid_argument("BC future loaded ref lookup success dtype/row_width mismatch");
+            }
+
+            CellIndex &cell = cells_[static_cast<size_t>(loaded_position.cid)];
+            if (!cell.entries.empty() || cell.value_count != 0U) {
+                throw std::invalid_argument("BC future loaded ref lookup duplicate loaded cid");
+            }
+            const uint64_t expected_values =
+                static_cast<uint64_t>(loaded_position.success_rows) * row_width_;
+            if (expected_values > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+                throw std::overflow_error("BC future loaded ref lookup value count exceeds size_t");
+            }
+            const size_t typed_value_count =
+                loaded_success->template typed_value_count<StorageT>();
+            const StorageT *typed_value_data =
+                loaded_success->template typed_values_data<StorageT>();
+            if (typed_value_count != static_cast<size_t>(expected_values) ||
+                (typed_value_count != 0U && typed_value_data == nullptr)) {
+                throw std::invalid_argument("BC future loaded ref lookup success value count mismatch");
+            }
+            cell.value_offset = static_cast<size_t>(virtual_value_cursor);
+            cell.value_count = static_cast<size_t>(expected_values);
+            cell.value_ptr = typed_value_data;
+            virtual_value_cursor = bc_checked_add_u64(
+                virtual_value_cursor,
+                expected_values,
+                "BC future loaded ref lookup virtual value count overflow"
+            );
+
+            const BCLoadedCellView view = loaded_position.view();
+            if (view.empty()) {
+                if (cell.value_count != 0U) {
+                    throw std::runtime_error("BC future loaded ref empty cell has success values");
+                }
+                continue;
+            }
+            cell.rank_payload = view.rank_payload;
+            const uint32_t capacity = direct_capacity_for_bucket_count(view.buckets.size);
+            cell.entries.assign(capacity, DirectEntry{});
+            cell.mask = capacity - 1U;
+            for (uint32_t i = 0U; i < view.buckets.size; ++i) {
+                const BCBucketEntry &bucket = view.buckets.data[i];
+                uint32_t slot = static_cast<uint32_t>(mix_u64(bucket.key)) & cell.mask;
+                while (!entry_empty(cell.entries[slot])) {
+                    if (cell.entries[slot].key == bucket.key) {
+                        throw std::runtime_error("BC future loaded ref direct lookup saw duplicate bucket key");
+                    }
+                    slot = (slot + 1U) & cell.mask;
+                }
+                DirectEntry entry;
+                entry.key = bucket.key;
+                const BucketBitmapLen bitmap_len = bitmap_len_from_trusted_key(lut, bucket.key);
+                entry.bitmap_offset = bc_rank_payload_bitmap_offset(bucket.rank_payload_offset, bitmap_len);
+                entry.success_row_offset = bucket.success_row_offset;
+                validate_entry_payload_range(cell, entry, bitmap_len);
+                populate_entry_word_rank_bases(cell, entry, bitmap_len);
+                cell.entries[slot] = entry;
+            }
+        }
+        if (virtual_value_cursor > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC future loaded ref lookup virtual value count exceeds size_t");
+        }
+        value_count_ = static_cast<size_t>(virtual_value_cursor);
+        bind_owned_cell_index_refs();
     }
 
     static void build_loaded_cell_index(

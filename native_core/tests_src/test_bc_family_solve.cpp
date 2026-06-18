@@ -707,8 +707,6 @@ void run_exact_family_matches_single_case(BCSuccessDTypeMode dtype, const char *
     const std::filesystem::path single_success_path = root / "single_out.bcsuc";
     const std::filesystem::path family_position_path = root / "family_out.bcpos";
     const std::filesystem::path family_success_path = root / "family_out.bcsuc";
-    const std::filesystem::path family_block_position_path = root / "family_block_out.bcpos";
-    const std::filesystem::path family_block_success_path = root / "family_block_out.bcsuc";
 
     BC::write_position_layer_to_file(current_path, current.bytes);
     BC::write_position_layer_to_file(future2_path, future2.bytes);
@@ -785,61 +783,6 @@ void run_exact_family_matches_single_case(BCSuccessDTypeMode dtype, const char *
         check(result.stats.final_stage_bytes_read == 0U,
             "family solve should not reread finalized success values");
     }
-    {
-        BCFamilySolveOptions<T> block_options = family_options;
-        block_options.interleave_spawn_phases = true;
-        block_options.interleave_block_fids = 1U;
-        BC::BCBufferedFileWriter position_writer(family_block_position_path);
-        BC::BCBufferedFileWriter success_writer(family_block_success_path);
-        const auto result = BC::bc_family_solve_exact_layer_to_files<T>(
-            current_stream,
-            future2_stream,
-            future2_success,
-            future4_stream,
-            future4_success,
-            position_writer,
-            success_writer,
-            root / "family_block_tmp",
-            block_options
-        );
-        check(result.position_bytes != 0U,
-            "family block-interleaved position output should be non-empty");
-        check(result.success_bytes != 0U,
-            "family block-interleaved success output should be non-empty");
-        check(result.stats.scratch4_cells_written == 0U,
-            "family block-interleaved solve should not write scratch4 temp");
-        check(result.stats.scratch4_cells_read == 0U,
-            "family block-interleaved solve should not read scratch4 temp");
-        check(result.stats.final_stage_bytes_written == 0U,
-            "family block-interleaved solve should not stage finalized success values");
-        check(result.stats.final_stage_bytes_read == 0U,
-            "family block-interleaved solve should not reread finalized success values");
-    }
-    {
-        BCFamilySolveOptions<T> block_options = family_options;
-        block_options.interleave_spawn_phases = true;
-        block_options.interleave_block_fids = 3U;
-        BC::BCBufferedFileWriter position_writer(root / "family_block_reject.bcpos");
-        BC::BCBufferedFileWriter success_writer(root / "family_block_reject.bcsuc");
-        bool rejected = false;
-        try {
-            (void)BC::bc_family_solve_exact_layer_to_files<T>(
-                current_stream,
-                future2_stream,
-                future2_success,
-                future4_stream,
-                future4_success,
-                position_writer,
-                success_writer,
-                root / "family_block_reject_tmp",
-                block_options
-            );
-        } catch (const std::invalid_argument &) {
-            rejected = true;
-        }
-        check(rejected, "family interleaved block_fids > 1 should be rejected");
-    }
-
     BCPositionStreamingReader single_position =
         BCPositionStreamingReader::open_buffered(single_position_path, lut);
     BCSuccessStreamingReader single_success =
@@ -848,14 +791,6 @@ void run_exact_family_matches_single_case(BCSuccessDTypeMode dtype, const char *
         BCPositionStreamingReader::open_buffered(family_position_path, lut);
     BCSuccessStreamingReader family_success =
         BCSuccessStreamingReader::open_buffered(family_success_path, family_position, row_width);
-    BCPositionStreamingReader family_block_position =
-        BCPositionStreamingReader::open_buffered(family_block_position_path, lut);
-    BCSuccessStreamingReader family_block_success =
-        BCSuccessStreamingReader::open_buffered(
-            family_block_success_path,
-            family_block_position,
-            row_width
-        );
     check(family_success.dtype_mode() == dtype, "family output dtype mismatch");
     check(family_success.row_width() == row_width, "family output row_width mismatch");
     compare_success_on_current_boards<T>(
@@ -870,13 +805,6 @@ void run_exact_family_matches_single_case(BCSuccessDTypeMode dtype, const char *
         single_success,
         family_position,
         family_success,
-        row_width
-    );
-    compare_success_layers<T>(
-        single_position,
-        single_success,
-        family_block_position,
-        family_block_success,
         row_width
     );
     const BCPositionLayerReader single_position_mem(
@@ -1138,8 +1066,28 @@ int main() {
     try {
         run_exact_family_matches_single_case<uint32_t>(BCSuccessDTypeMode::UInt32, "uint32");
         run_exact_family_matches_single_case<uint64_t>(BCSuccessDTypeMode::UInt64, "uint64");
+        run_exact_family_matches_single_case<float>(BCSuccessDTypeMode::Float32, "float32");
         run_exact_family_matches_single_case<double>(BCSuccessDTypeMode::Float64, "float64");
+        run_exact_family_matches_single_case<float>(
+            BCSuccessDTypeMode::OneMinusFloat32,
+            "one_minus_float32"
+        );
+        run_exact_family_matches_single_case<double>(
+            BCSuccessDTypeMode::OneMinusFloat64,
+            "one_minus_float64"
+        );
         run_modulo_family_matches_single_case<uint32_t>(BCSuccessDTypeMode::UInt32, "mod_uint32");
+        run_modulo_family_matches_single_case<uint64_t>(BCSuccessDTypeMode::UInt64, "mod_uint64");
+        run_modulo_family_matches_single_case<float>(BCSuccessDTypeMode::Float32, "mod_float32");
+        run_modulo_family_matches_single_case<double>(BCSuccessDTypeMode::Float64, "mod_float64");
+        run_modulo_family_matches_single_case<float>(
+            BCSuccessDTypeMode::OneMinusFloat32,
+            "mod_one_minus_float32"
+        );
+        run_modulo_family_matches_single_case<double>(
+            BCSuccessDTypeMode::OneMinusFloat64,
+            "mod_one_minus_float64"
+        );
     } catch (const std::exception &ex) {
         std::cerr << "test_bc_family_solve failed: " << ex.what() << '\n';
         return 1;

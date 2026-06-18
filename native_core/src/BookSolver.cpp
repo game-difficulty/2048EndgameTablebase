@@ -8,7 +8,6 @@
 #include "FileIOUtils.h"
 #include "Formation.h"
 #include "HybridSearch.h"
-#include "NativeLzma.h"
 #include "UniqueUtils.h"
 #include "VBoardMover.h"
 
@@ -150,12 +149,6 @@ void debug_log(const std::string &message) {
         nb::module_::import_("Config").attr("logger").attr("debug")(nb::str(message.c_str()));
     } catch (...) {
     }
-}
-
-bool is_xz_magic_header(const std::vector<uint8_t> &bytes) {
-    static constexpr uint8_t kMagic[] = {0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00};
-    return bytes.size() >= sizeof(kMagic) &&
-           std::memcmp(bytes.data(), kMagic, sizeof(kMagic)) == 0;
 }
 
 void remove_file_if_exists(const std::string &path) {
@@ -320,15 +313,8 @@ SplitLayer<T> read_split_layer_file_or_archive(const std::string &path, FileIOUt
         return read_split_layer_file<T>(path, config);
     }
     const std::string archive_path = path + ".7z";
-    std::vector<uint8_t> decompressed;
-    std::vector<uint8_t> header = FileIOUtils::read_binary_bytes_range(archive_path, 0, 6);
-    if (is_xz_magic_header(header)) {
-        std::vector<uint8_t> archive_bytes = FileIOUtils::read_binary_bytes(archive_path);
-        decompressed = decompress_xz_block_native(archive_bytes.data(), archive_bytes.size());
-        if (decompressed.empty() && !archive_bytes.empty()) {
-            return {};
-        }
-    } else if (!decompress_7z_archive_to_bytes_streaming(archive_path, decompressed)) {
+    std::vector<uint8_t> decompressed = read_temp_byte_archive(archive_path);
+    if (decompressed.empty() && !fs::exists(archive_path)) {
         return {};
     }
     return split_layer_from_entry_bytes<T>(decompressed.data(), decompressed.size());
@@ -373,8 +359,7 @@ void write_layer_file(
 template <typename T>
 void write_split_layer_archive_file(const std::string &archive_path, const SplitLayer<T> &data, int lvl = 1) {
     std::vector<uint8_t> bytes = split_layer_to_entry_bytes(data);
-    const std::string entry_name = fs::path(archive_path).stem().string() + ".book";
-    if (!compress_bytes_to_7z_archive_streaming(bytes.data(), bytes.size(), archive_path, entry_name, lvl)) {
+    if (!write_temp_byte_archive(archive_path, bytes, lvl)) {
         throw std::runtime_error("failed to write archived split layer: " + archive_path);
     }
     std::error_code ec;

@@ -130,8 +130,9 @@ The route option is:
 ```
 
 `--family-route family --family-modulus N` remains the reproducible fixed
-FamilyChain path. `--family-route-script <csv>` can force route/modulus and
-available memory per layer for tests.
+FamilyChain path. `--family-route-script <csv>` can force route and available
+memory per layer for tests, but it must not change the fixed modulus. If the CSV
+contains `target_modulus`, it must match `--family-modulus`.
 
 The CSV output includes:
 
@@ -177,18 +178,11 @@ single_est   = L * 1.2 + D
 family_est   = 0.25 GiB + 12 * L / modulus
 ```
 
-Supported family moduli are hard-coded primes from `13` through `251`. The max
-prime intentionally stays below `256`, so solve-time physical cell ids still fit
-the 16-bit prepared query layout. If no prime fits the budget, choose `251` and
-continue.
-
-Modulus sticky rule:
-
-```text
-budget = 0.2 GiB + k * L / previous_modulus
-keep previous_modulus when 9 <= k <= 16
-otherwise choose the smallest supported prime satisfying family_est <= budget
-```
+The planner no longer chooses or adjusts the modulus. The caller supplies one
+fixed modulus before BC calculation starts; generation routing uses it for every
+route and every layer. The route planner does not require the modulus to be a
+prime; only the lower-level axis/layout builders may reject structurally invalid
+values such as zero.
 
 Route hysteresis:
 
@@ -198,8 +192,8 @@ Downgrade to a lower-memory route is immediate.
 Upgrade to a faster route requires 2 consecutive fitting layers.
 ```
 
-Forced route bypasses auto selection, except that route-script fields may still
-override the target modulus and available-memory input.
+Forced route bypasses auto selection. Route-script fields may still override the
+available-memory input, but not the target modulus.
 
 ## 7. Resident Route
 

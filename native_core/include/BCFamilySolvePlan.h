@@ -723,21 +723,6 @@ public:
         double spawn_rate4,
         StorageT zero_value
     ) {
-        if constexpr (std::is_same_v<StorageT, uint32_t>) {
-            if (spawn_rate4 == 0.1) {
-                write_weighted_average_row_ratio(
-                    success_row,
-                    best_by_cell_lane,
-                    empty_mask,
-                    empty_count,
-                    1U,
-                    10U,
-                    zero_value,
-                    false
-                );
-                return;
-            }
-        }
         write_weighted_average_row(
             success_row,
             best_by_cell_lane,
@@ -756,20 +741,6 @@ public:
         double spawn_rate4,
         StorageT zero_value
     ) {
-        if constexpr (std::is_same_v<StorageT, uint32_t>) {
-            if (spawn_rate4 == 0.1) {
-                write_weighted_average_compact_row_ratio(
-                    success_row,
-                    best_by_empty_slot_lane,
-                    empty_count,
-                    1U,
-                    10U,
-                    zero_value,
-                    false
-                );
-                return;
-            }
-        }
         write_weighted_average_compact_row(
             success_row,
             best_by_empty_slot_lane,
@@ -780,9 +751,10 @@ public:
         );
     }
 
+    template <typename SumT>
     void write_spawn4_sum_contribution(
         uint32_t success_row,
-        uint64_t sum,
+        SumT sum,
         uint32_t empty_count,
         double spawn_rate4,
         StorageT zero_value
@@ -794,24 +766,11 @@ public:
             write_zero_row(success_row, zero_value);
             return;
         }
-        StorageT contribution = zero_value;
-        if constexpr (std::is_same_v<StorageT, uint32_t>) {
-            if (spawn_rate4 == 0.1) {
-                contribution = static_cast<uint32_t>(
-                    sum / (10ULL * static_cast<uint64_t>(empty_count))
-                );
-            } else {
-                contribution = static_cast<uint32_t>(
-                    (static_cast<long double>(sum) * static_cast<long double>(spawn_rate4)) /
-                    static_cast<long double>(empty_count)
-                );
-            }
-        } else {
-            contribution = static_cast<StorageT>(
-                (static_cast<long double>(sum) * static_cast<long double>(spawn_rate4)) /
-                static_cast<long double>(empty_count)
-            );
-        }
+        const long double sum_ld = static_cast<long double>(sum);
+        const StorageT contribution = static_cast<StorageT>(
+            (sum_ld * static_cast<long double>(spawn_rate4)) /
+            static_cast<long double>(empty_count)
+        );
         values_[value_index(success_row, 0U)] = contribution;
     }
 
@@ -823,21 +782,6 @@ public:
         double spawn_rate4,
         StorageT zero_value
     ) {
-        if constexpr (std::is_same_v<StorageT, uint32_t>) {
-            if (spawn_rate4 == 0.1) {
-                write_weighted_average_row_ratio(
-                    success_row,
-                    best_by_cell_lane,
-                    empty_mask,
-                    empty_count,
-                    9U,
-                    10U,
-                    zero_value,
-                    true
-                );
-                return;
-            }
-        }
         write_weighted_average_row(
             success_row,
             best_by_cell_lane,
@@ -856,20 +800,6 @@ public:
         double spawn_rate4,
         StorageT zero_value
     ) {
-        if constexpr (std::is_same_v<StorageT, uint32_t>) {
-            if (spawn_rate4 == 0.1) {
-                write_weighted_average_compact_row_ratio(
-                    success_row,
-                    best_by_empty_slot_lane,
-                    empty_count,
-                    9U,
-                    10U,
-                    zero_value,
-                    true
-                );
-                return;
-            }
-        }
         write_weighted_average_compact_row(
             success_row,
             best_by_empty_slot_lane,
@@ -880,9 +810,10 @@ public:
         );
     }
 
+    template <typename SumT>
     void finalize_spawn2_sum_row(
         uint32_t success_row,
-        uint64_t sum,
+        SumT sum,
         uint32_t empty_count,
         double spawn_rate4,
         StorageT zero_value
@@ -894,26 +825,11 @@ public:
             write_zero_row(success_row, zero_value);
             return;
         }
-        StorageT contribution = zero_value;
-        if constexpr (std::is_same_v<StorageT, uint32_t>) {
-            if (spawn_rate4 == 0.1) {
-                contribution = static_cast<uint32_t>(
-                    (9ULL * sum) / (10ULL * static_cast<uint64_t>(empty_count))
-                );
-            } else {
-                contribution = static_cast<uint32_t>(
-                    (static_cast<long double>(sum) *
-                        (1.0L - static_cast<long double>(spawn_rate4))) /
-                    static_cast<long double>(empty_count)
-                );
-            }
-        } else {
-            contribution = static_cast<StorageT>(
-                (static_cast<long double>(sum) *
-                    (1.0L - static_cast<long double>(spawn_rate4))) /
-                static_cast<long double>(empty_count)
-            );
-        }
+        const long double sum_ld = static_cast<long double>(sum);
+        const StorageT contribution = static_cast<StorageT>(
+            (sum_ld * (1.0L - static_cast<long double>(spawn_rate4))) /
+            static_cast<long double>(empty_count)
+        );
         StorageT &dst = values_[value_index(success_row, 0U)];
         dst = static_cast<StorageT>(dst + contribution);
     }
@@ -962,45 +878,6 @@ private:
         }
     }
 
-    void write_weighted_average_row_ratio(
-        uint32_t success_row,
-        const StorageT *best_by_cell_lane,
-        uint16_t empty_mask,
-        uint32_t empty_count,
-        uint32_t numerator,
-        uint32_t denominator,
-        StorageT zero_value,
-        bool add_to_existing
-    ) {
-        check_row(success_row);
-        if (best_by_cell_lane == nullptr) {
-            throw std::invalid_argument("BC family success scratch best pointer is null");
-        }
-        if (empty_count == 0U) {
-            write_zero_row(success_row, zero_value);
-            return;
-        }
-        if (denominator == 0U) {
-            throw std::invalid_argument("BC family success scratch denominator is zero");
-        }
-        for (uint32_t lane = 0U; lane < row_width_; ++lane) {
-            uint64_t sum = 0U;
-            uint32_t mask = empty_mask;
-            while (mask != 0U) {
-                const uint32_t cell = bc_solve_pop_lowest_set_bit_index(mask);
-                sum += static_cast<uint64_t>(
-                    best_by_cell_lane[static_cast<size_t>(cell) * row_width_ + lane]
-                );
-            }
-            const uint64_t divisor =
-                static_cast<uint64_t>(denominator) * static_cast<uint64_t>(empty_count);
-            const StorageT contribution =
-                static_cast<StorageT>((sum * numerator) / divisor);
-            StorageT &dst = values_[value_index(success_row, lane)];
-            dst = add_to_existing ? static_cast<StorageT>(dst + contribution) : contribution;
-        }
-    }
-
     void write_weighted_average_compact_row(
         uint32_t success_row,
         const StorageT *best_by_empty_slot_lane,
@@ -1028,44 +905,6 @@ private:
             }
             const StorageT contribution =
                 static_cast<StorageT>((sum * weight) / static_cast<long double>(empty_count));
-            StorageT &dst = values_[value_index(success_row, lane)];
-            dst = add_to_existing ? static_cast<StorageT>(dst + contribution) : contribution;
-        }
-    }
-
-    void write_weighted_average_compact_row_ratio(
-        uint32_t success_row,
-        const StorageT *best_by_empty_slot_lane,
-        uint32_t empty_count,
-        uint32_t numerator,
-        uint32_t denominator,
-        StorageT zero_value,
-        bool add_to_existing
-    ) {
-        check_row(success_row);
-        if (best_by_empty_slot_lane == nullptr) {
-            throw std::invalid_argument("BC family success scratch compact best pointer is null");
-        }
-        if (empty_count == 0U) {
-            write_zero_row(success_row, zero_value);
-            return;
-        }
-        if (denominator == 0U) {
-            throw std::invalid_argument("BC family success scratch compact denominator is zero");
-        }
-        for (uint32_t lane = 0U; lane < row_width_; ++lane) {
-            uint64_t sum = 0U;
-            for (uint32_t slot = 0U; slot < empty_count; ++slot) {
-                sum += static_cast<uint64_t>(
-                    best_by_empty_slot_lane[
-                        static_cast<size_t>(slot) * row_width_ + lane
-                    ]
-                );
-            }
-            const uint64_t divisor =
-                static_cast<uint64_t>(denominator) * static_cast<uint64_t>(empty_count);
-            const StorageT contribution =
-                static_cast<StorageT>((sum * numerator) / divisor);
             StorageT &dst = values_[value_index(success_row, lane)];
             dst = add_to_existing ? static_cast<StorageT>(dst + contribution) : contribution;
         }

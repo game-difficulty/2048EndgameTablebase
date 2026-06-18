@@ -1,5 +1,6 @@
 #include "BCDirectFileIO.h"
 #include "BCFamilySolve.h"
+#include "BCFamilySolveRunner.h"
 #include "BCPositionScanner.h"
 #include "BCSuccessIO.h"
 #include "SymmetryUtils.h"
@@ -49,15 +50,8 @@ struct Args {
     bool keep_direct_padding = true;
     bool collect_batch_timing = false;
     bool collect_temp_sparsity = false;
-    bool collect_resident_breakdown = false;
-    bool interleave_spawn_phases = false;
-    bool interleaved_keep_future_reuse = true;
-    bool interleaved_keep_future4_reuse = false;
-    bool interleaved_keep_future2_reuse = false;
-    uint32_t interleave_block_fids = 1U;
-    uint64_t interleaved_scratch4_memory_cap_bytes = 0U;
     bool use_diagonal_grouped_sum = false;
-    bool sparse_partial_temp = false;
+    BC::BCSuccessDTypeMode success_dtype = BC::BCSuccessDTypeMode::UInt32;
     uint32_t direct_queue_depth = 16U;
     std::optional<uint32_t> start_ordinal;
     std::optional<uint32_t> min_ordinal;
@@ -92,11 +86,6 @@ struct LayerMetric {
     uint64_t future4_position_resident_bytes = 0U;
     uint64_t future4_success_resident_bytes = 0U;
     uint64_t future_resident_bytes_max = 0U;
-    uint64_t family_block_current_resident_bytes_max = 0U;
-    uint64_t family_block_scratch4_resident_bytes_max = 0U;
-    uint64_t family_block_partial_prefetch_resident_bytes_max = 0U;
-    uint64_t family_block_dense_resident_bytes_max = 0U;
-    uint64_t family_block_total_resident_bytes_max = 0U;
     uint64_t spawn4_passes = 0U;
     uint64_t spawn2_passes = 0U;
     uint64_t spawn4_reuse_windows = 0U;
@@ -261,7 +250,6 @@ struct LayerMetric {
     double family_workspace_release_spawn2_dense_seconds = 0.0;
     double family_workspace_release_spawn2_prefetch_seconds = 0.0;
     double family_workspace_release_spawn2_temp_values_seconds = 0.0;
-    double family_workspace_release_block_state_seconds = 0.0;
     double partial_cleanup_seconds = 0.0;
     double position_write_seconds = 0.0;
     double success_write_seconds = 0.0;
@@ -294,6 +282,20 @@ struct LayerMetric {
     return std::stoi(value);
 }
 
+[[nodiscard]] BC::BCSuccessDTypeMode parse_success_dtype(const std::string &value) {
+    if (value == "uint32") return BC::BCSuccessDTypeMode::UInt32;
+    if (value == "uint64") return BC::BCSuccessDTypeMode::UInt64;
+    if (value == "float32") return BC::BCSuccessDTypeMode::Float32;
+    if (value == "float64") return BC::BCSuccessDTypeMode::Float64;
+    if (value == "one-minus-float32" || value == "1-float32") {
+        return BC::BCSuccessDTypeMode::OneMinusFloat32;
+    }
+    if (value == "one-minus-float64" || value == "1-float64") {
+        return BC::BCSuccessDTypeMode::OneMinusFloat64;
+    }
+    throw std::invalid_argument("unsupported success dtype: " + value);
+}
+
 [[nodiscard]] Args parse_args(int argc, char **argv) {
     Args args;
     for (int i = 1; i < argc; ++i) {
@@ -312,6 +314,8 @@ struct LayerMetric {
             args.target_rank = static_cast<uint32_t>(std::stoul(require_value(argc, argv, i, key.c_str())));
         } else if (key == "--success-target-rank") {
             args.success_target_rank = std::stoi(require_value(argc, argv, i, key.c_str()));
+        } else if (key == "--success-dtype" || key == "--dtype") {
+            args.success_dtype = parse_success_dtype(require_value(argc, argv, i, key.c_str()));
         } else if (key == "--canonical-symm-mode") {
             args.canonical_symm_mode = parse_symm_mode(require_value(argc, argv, i, key.c_str()));
         } else if (key == "--spawn-rate4") {
@@ -356,32 +360,8 @@ struct LayerMetric {
             args.collect_batch_timing = true;
         } else if (key == "--collect-temp-sparsity") {
             args.collect_temp_sparsity = true;
-        } else if (key == "--collect-resident-breakdown") {
-            args.collect_resident_breakdown = true;
         } else if (key == "--use-diagonal-grouped-sum") {
             args.use_diagonal_grouped_sum = true;
-        } else if (key == "--interleave-spawn-phases") {
-            args.interleave_spawn_phases = true;
-        } else if (key == "--interleave-block-fids") {
-            args.interleave_block_fids =
-                static_cast<uint32_t>(std::stoul(require_value(argc, argv, i, key.c_str())));
-        } else if (key == "--interleaved-scratch4-cap-bytes") {
-            args.interleaved_scratch4_memory_cap_bytes =
-                static_cast<uint64_t>(std::stoull(require_value(argc, argv, i, key.c_str())));
-        } else if (key == "--interleaved-scratch4-cap-mib") {
-            args.interleaved_scratch4_memory_cap_bytes =
-                static_cast<uint64_t>(std::stoull(require_value(argc, argv, i, key.c_str()))) *
-                1024ULL * 1024ULL;
-        } else if (key == "--interleaved-keep-future-reuse") {
-            args.interleaved_keep_future_reuse = true;
-        } else if (key == "--interleaved-no-keep-future-reuse") {
-            args.interleaved_keep_future_reuse = false;
-        } else if (key == "--interleaved-keep-future4-reuse") {
-            args.interleaved_keep_future4_reuse = true;
-        } else if (key == "--interleaved-keep-future2-reuse") {
-            args.interleaved_keep_future2_reuse = true;
-        } else if (key == "--sparse-partial-temp") {
-            args.sparse_partial_temp = true;
         } else if (key == "--keep-direct-padding") {
             args.keep_direct_padding = true;
         } else if (key == "--trim-direct-padding") {
@@ -402,13 +382,8 @@ struct LayerMetric {
     }
     if (args.family_modulus == 0U || args.direct_queue_depth == 0U ||
         args.future_reuse_max_families == 0U || args.source_words_per_item == 0U ||
-        args.work_schedule_chunk == 0U || args.interleave_block_fids == 0U) {
+        args.work_schedule_chunk == 0U) {
         throw std::invalid_argument("numeric options must be non-zero");
-    }
-    if (args.interleave_block_fids != 1U) {
-        throw std::invalid_argument(
-            "--interleave-block-fids must be 1"
-        );
     }
     return args;
 }
@@ -580,17 +555,24 @@ template <class PositionReader>
     return std::make_unique<BC::BCBufferedFileWriter>(path);
 }
 
-[[nodiscard]] BC::BCResidentSolvedLayer<uint32_t> make_terminal_solved_layer(
+template <typename StorageT>
+[[nodiscard]] BC::BCResidentSolvedLayer<StorageT> make_terminal_solved_layer(
     const BC::BCPositionLayerReader &position,
     const std::vector<uint8_t> &success_shifts,
     int target_rank,
+    BC::BCSuccessDTypeMode dtype,
     int num_threads
 ) {
+    if (!BC::bc_success_dtype_matches_type<StorageT>(dtype)) {
+        throw std::invalid_argument("terminal layer storage type does not match success dtype");
+    }
     const std::vector<uint64_t> offsets = BC::bc_resident_cell_value_offsets(position);
     if (offsets.back() > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
         throw std::overflow_error("terminal layer row count exceeds size_t");
     }
-    std::vector<uint32_t> values(static_cast<size_t>(offsets.back()), 0U);
+    const StorageT zero = BC::bc_success_zero_value_for_dtype<StorageT>(dtype);
+    const StorageT terminal = BC::bc_success_terminal_value_for_dtype<StorageT>(dtype);
+    std::vector<StorageT> values(static_cast<size_t>(offsets.back()), zero);
     for (BC::CellId cid = 0U; cid < position.cell_count(); ++cid) {
         const BC::BCPositionCellDescriptor &desc = position.descriptor(cid);
         if (desc.empty() || desc.success_rows == 0U) {
@@ -601,20 +583,20 @@ template <class PositionReader>
             [&](const BC::BCScannedBoardEntry &entry) {
                 if (board_has_target_rank(entry.board, target_rank, success_shifts)) {
                     values[static_cast<size_t>(cell_base + entry.local_success_row)] =
-                        max_scale_value<uint32_t>();
+                        terminal;
                 }
             });
     }
-    BC::BCResidentRawSolveResult<uint32_t> raw;
+    BC::BCResidentRawSolveResult<StorageT> raw;
     raw.values = std::move(values);
     raw.cell_value_offsets = offsets;
-    return BC::bc_resident_compact_zero_in_place<uint32_t>(
+    return BC::bc_resident_compact_zero_in_place<StorageT>(
         position,
         raw,
         position.lut(),
         1U,
-        BC::BCSuccessDTypeMode::UInt32,
-        0U,
+        dtype,
+        zero,
         num_threads);
 }
 
@@ -625,10 +607,11 @@ struct WriteResult {
     double success_seconds = 0.0;
 };
 
+template <typename StorageT>
 [[nodiscard]] WriteResult write_solved_layer_files(
     const Args &args,
     uint32_t ordinal,
-    const BC::BCResidentSolvedLayer<uint32_t> &layer
+    const BC::BCResidentSolvedLayer<StorageT> &layer
 ) {
     WriteResult result;
     result.position_bytes = static_cast<uint64_t>(layer.position.bytes().size());
@@ -637,7 +620,7 @@ struct WriteResult {
             make_output_writer(args, position_path_for(args, ordinal), result.position_bytes);
         BC::BCFileIOStats stats;
         const double t0 = now_seconds();
-        BC::bc_single_chunk_write_position_bytes<uint32_t>(*writer, layer.position.bytes(), &stats);
+        BC::bc_single_chunk_write_position_bytes<StorageT>(*writer, layer.position.bytes(), &stats);
         writer.reset();
         result.position_seconds = now_seconds() - t0;
         if (args.direct_io && !args.keep_direct_padding) {
@@ -646,17 +629,18 @@ struct WriteResult {
     }
     const uint64_t success_logical_size =
         BC::kBCSuccessHeaderBytes +
-        static_cast<uint64_t>(layer.success_values.size()) * sizeof(uint32_t);
+        static_cast<uint64_t>(layer.success_values.size()) *
+            BC::bc_success_dtype_value_size(layer.dtype);
     {
         std::unique_ptr<BC::BCWritableFile> writer =
             make_output_writer(args, success_path_for(args, ordinal), success_logical_size);
         BC::BCFileIOStats stats;
         const double t0 = now_seconds();
-        result.success_bytes = BC::write_success_values_to_file<uint32_t>(
+        result.success_bytes = BC::write_success_values_to_file<StorageT>(
             *writer,
             layer.position,
             1U,
-            BC::BCSuccessDTypeMode::UInt32,
+            layer.dtype,
             layer.success_values,
             &stats);
         writer.reset();
@@ -762,11 +746,6 @@ void write_stats_header(std::ofstream &out) {
         << "future4_active_cells_max,future2_position_resident_bytes,"
         << "future2_success_resident_bytes,future4_position_resident_bytes,"
         << "future4_success_resident_bytes,future_resident_bytes_max,"
-        << "family_block_current_resident_bytes_max,"
-        << "family_block_scratch4_resident_bytes_max,"
-        << "family_block_partial_prefetch_resident_bytes_max,"
-        << "family_block_dense_resident_bytes_max,"
-        << "family_block_total_resident_bytes_max,"
         << "spawn4_passes,spawn2_passes,"
         << "spawn4_reuse_windows,spawn2_reuse_windows,"
         << "future_release_all_calls,future_release_except_calls,"
@@ -868,7 +847,6 @@ void write_stats_header(std::ofstream &out) {
         << "family_workspace_release_spawn2_dense_seconds,"
         << "family_workspace_release_spawn2_prefetch_seconds,"
         << "family_workspace_release_spawn2_temp_values_seconds,"
-        << "family_workspace_release_block_state_seconds,"
         << "partial_cleanup_seconds,position_write_seconds,success_write_seconds,"
         << "writer_close_seconds,post_resize_seconds,accounted_seconds,"
         << "untracked_seconds,total_seconds,total_mrows_per_sec,final_mrows_per_sec,"
@@ -926,11 +904,6 @@ void write_metric_row(std::ofstream &out, const LayerMetric &m) {
         << m.future4_position_resident_bytes << ','
         << m.future4_success_resident_bytes << ','
         << m.future_resident_bytes_max << ','
-        << m.family_block_current_resident_bytes_max << ','
-        << m.family_block_scratch4_resident_bytes_max << ','
-        << m.family_block_partial_prefetch_resident_bytes_max << ','
-        << m.family_block_dense_resident_bytes_max << ','
-        << m.family_block_total_resident_bytes_max << ','
         << m.spawn4_passes << ',' << m.spawn2_passes << ','
         << m.spawn4_reuse_windows << ',' << m.spawn2_reuse_windows << ','
         << m.future_release_all_calls << ',' << m.future_release_except_calls << ','
@@ -1071,7 +1044,6 @@ void write_metric_row(std::ofstream &out, const LayerMetric &m) {
         << m.family_workspace_release_spawn2_dense_seconds << ','
         << m.family_workspace_release_spawn2_prefetch_seconds << ','
         << m.family_workspace_release_spawn2_temp_values_seconds << ','
-        << m.family_workspace_release_block_state_seconds << ','
         << m.partial_cleanup_seconds << ','
         << m.position_write_seconds << ',' << m.success_write_seconds << ','
         << m.writer_close_seconds << ',' << m.post_resize_seconds << ','
@@ -1127,26 +1099,6 @@ void add_to_summary(LayerMetric &dst, const LayerMetric &src) {
         std::max(dst.future4_success_resident_bytes, src.future4_success_resident_bytes);
     dst.future_resident_bytes_max =
         std::max(dst.future_resident_bytes_max, src.future_resident_bytes_max);
-    dst.family_block_current_resident_bytes_max = std::max(
-        dst.family_block_current_resident_bytes_max,
-        src.family_block_current_resident_bytes_max
-    );
-    dst.family_block_scratch4_resident_bytes_max = std::max(
-        dst.family_block_scratch4_resident_bytes_max,
-        src.family_block_scratch4_resident_bytes_max
-    );
-    dst.family_block_partial_prefetch_resident_bytes_max = std::max(
-        dst.family_block_partial_prefetch_resident_bytes_max,
-        src.family_block_partial_prefetch_resident_bytes_max
-    );
-    dst.family_block_dense_resident_bytes_max = std::max(
-        dst.family_block_dense_resident_bytes_max,
-        src.family_block_dense_resident_bytes_max
-    );
-    dst.family_block_total_resident_bytes_max = std::max(
-        dst.family_block_total_resident_bytes_max,
-        src.family_block_total_resident_bytes_max
-    );
     dst.spawn4_passes += src.spawn4_passes;
     dst.spawn2_passes += src.spawn2_passes;
     dst.spawn4_reuse_windows += src.spawn4_reuse_windows;
@@ -1345,8 +1297,6 @@ void add_to_summary(LayerMetric &dst, const LayerMetric &src) {
         src.family_workspace_release_spawn2_prefetch_seconds;
     dst.family_workspace_release_spawn2_temp_values_seconds +=
         src.family_workspace_release_spawn2_temp_values_seconds;
-    dst.family_workspace_release_block_state_seconds +=
-        src.family_workspace_release_block_state_seconds;
     dst.partial_cleanup_seconds += src.partial_cleanup_seconds;
     dst.position_write_seconds += src.position_write_seconds;
     dst.success_write_seconds += src.success_write_seconds;
@@ -1355,11 +1305,336 @@ void add_to_summary(LayerMetric &dst, const LayerMetric &src) {
     dst.total_seconds += src.total_seconds;
 }
 
-} // namespace
+template <typename StorageT>
+void run_bench_typed(const Args &args) {
+        if (!BC::bc_success_dtype_matches_type<StorageT>(args.success_dtype)) {
+            throw std::invalid_argument("bench storage type does not match success dtype");
+        }
+        {
+        BC::BCFamilySolveRunOptions run_options;
+        run_options.generated_position_dir = args.generated_position_dir;
+        run_options.solved_output_dir = args.solved_output_dir;
+        run_options.prefix = args.prefix;
+        run_options.target_rank = args.target_rank;
+        run_options.success_target_rank = args.success_target_rank;
+        run_options.canonical_symm_mode = args.canonical_symm_mode;
+        run_options.spawn_rate4 = args.spawn_rate4;
+        run_options.num_threads = args.num_threads;
+        run_options.canonical_batch_size = args.canonical_batch_size;
+        run_options.family_modulus = args.family_modulus;
+        run_options.future_reuse_max_families = args.future_reuse_max_families;
+        run_options.future_index_recycle_max_bytes = args.future_index_recycle_max_bytes;
+        run_options.source_words_per_item = args.source_words_per_item;
+        run_options.work_schedule_chunk = args.work_schedule_chunk;
+        run_options.cell_parallel_min_work_items = args.cell_parallel_min_work_items;
+        run_options.final_pending_value_memory_cap_bytes =
+            args.final_pending_value_memory_cap_bytes;
+        run_options.success_dtype = args.success_dtype;
+        run_options.direct_queue_depth = args.direct_queue_depth;
+        run_options.start_ordinal = args.start_ordinal;
+        run_options.min_ordinal = args.min_ordinal;
+        run_options.direct_io = args.direct_io;
+        run_options.keep_direct_padding = args.keep_direct_padding;
+        run_options.resume_from_checkpoint = false;
 
-int main(int argc, char **argv) {
-    try {
-        const Args args = parse_args(argc, argv);
+        std::filesystem::create_directories(args.solved_output_dir);
+        if (!args.stats_csv.parent_path().empty()) {
+            std::filesystem::create_directories(args.stats_csv.parent_path());
+        }
+        if (!args.summary_csv.parent_path().empty()) {
+            std::filesystem::create_directories(args.summary_csv.parent_path());
+        }
+        std::ofstream stats(args.stats_csv);
+        if (!stats) {
+            throw std::runtime_error("failed to open stats csv: " + args.stats_csv.string());
+        }
+        stats << std::setprecision(9);
+        write_stats_header(stats);
+
+        auto convert_metric = [](const BC::BCFamilySolveRunLayerMetric &src) {
+            LayerMetric metric;
+            metric.kind = src.kind;
+            metric.ordinal = src.ordinal;
+            metric.layer_sum = src.layer_sum;
+            metric.current_rows = src.current_rows;
+            metric.live_rows = src.live_rows;
+            metric.zero_pruned_rows = src.zero_pruned_rows;
+            metric.position_bytes = src.position_bytes;
+            metric.success_bytes = src.success_bytes;
+            metric.output_position_write_bytes = src.output_position_write_bytes;
+            metric.output_success_write_bytes = src.output_success_write_bytes;
+            metric.open_seconds = src.open_seconds;
+            metric.open_current_position_seconds = src.open_current_position_seconds;
+            metric.open_future2_position_seconds = src.open_future2_position_seconds;
+            metric.open_future2_success_seconds = src.open_future2_success_seconds;
+            metric.open_future4_position_seconds = src.open_future4_position_seconds;
+            metric.open_future4_success_seconds = src.open_future4_success_seconds;
+            metric.descriptor_rows_seconds = src.descriptor_rows_seconds;
+            metric.partition_seconds = src.partition_seconds;
+            metric.writer_open_seconds = src.writer_open_seconds;
+            metric.solve_call_seconds = src.solve_call_seconds;
+            metric.position_write_seconds = src.position_write_seconds;
+            metric.success_write_seconds = src.success_write_seconds;
+            metric.writer_close_seconds = src.writer_close_seconds;
+            metric.post_resize_seconds = src.post_resize_seconds;
+            metric.total_seconds = src.total_seconds;
+            if (!src.has_family_stats) {
+                return metric;
+            }
+            const BC::BCFamilySolveStats &fs = src.family_stats;
+            const BC::BCSingleChunkSolveStats &s = fs.single;
+            metric.current_chunks = s.current_chunks;
+            metric.current_cells = s.current_cells;
+            metric.current_work_items = s.current_work_items;
+            metric.family_current_cells_loaded = fs.family_current_cells_loaded;
+            metric.future2_batch_loads = s.future2_batch_loads;
+            metric.future4_batch_loads = s.future4_batch_loads;
+            metric.future2_cells_loaded = s.future2_cells_loaded;
+            metric.future4_cells_loaded = s.future4_cells_loaded;
+            metric.future2_active_cells_max = s.future2_active_cells_max;
+            metric.future4_active_cells_max = s.future4_active_cells_max;
+            metric.future2_position_resident_bytes = s.future2_position_resident_bytes;
+            metric.future2_success_resident_bytes = s.future2_success_resident_bytes;
+            metric.future4_position_resident_bytes = s.future4_position_resident_bytes;
+            metric.future4_success_resident_bytes = s.future4_success_resident_bytes;
+            metric.future_resident_bytes_max = s.future_resident_bytes_max;
+            metric.spawn4_passes = fs.spawn4_passes;
+            metric.spawn2_passes = fs.spawn2_passes;
+            metric.spawn4_reuse_windows = fs.spawn4_future_reuse_groups;
+            metric.spawn2_reuse_windows = fs.spawn2_future_reuse_groups;
+            metric.future_release_all_calls = fs.future_release_all_calls;
+            metric.future_release_except_calls = fs.future_release_except_calls;
+            metric.partial4_cells_written = fs.partial4_cells_written;
+            metric.partial4_cells_read = fs.partial4_cells_read;
+            metric.partial2_cells_written = fs.partial2_cells_written;
+            metric.partial2_cells_read = fs.partial2_cells_read;
+            metric.scratch4_cells_written = fs.scratch4_cells_written;
+            metric.scratch4_cells_read = fs.scratch4_cells_read;
+            metric.finalized_cells = fs.finalized_cells;
+            metric.pending_cells_max = fs.pending_cells_max;
+            metric.temp_bytes_written = fs.temp_bytes_written;
+            metric.temp_bytes_read = fs.temp_bytes_read;
+            metric.final_stage_bytes_written = fs.final_stage_bytes_written;
+            metric.final_stage_bytes_read = fs.final_stage_bytes_read;
+            metric.final_stage_write_backend_ops = fs.final_stage_write_io.backend_io_count;
+            metric.final_stage_write_backend_bytes = fs.final_stage_write_io.backend_bytes;
+            metric.final_stage_write_backend_seconds = fs.final_stage_write_io.backend_seconds;
+            metric.final_stage_read_backend_ops = fs.final_stage_read_io.backend_io_count;
+            metric.final_stage_read_backend_bytes = fs.final_stage_read_io.backend_bytes;
+            metric.final_stage_read_backend_seconds = fs.final_stage_read_io.backend_seconds;
+            metric.partial4_profiled_values = fs.partial4_profiled_values;
+            metric.partial4_profiled_zero_values = fs.partial4_profiled_zero_values;
+            metric.partial2_profiled_values = fs.partial2_profiled_values;
+            metric.partial2_profiled_zero_values = fs.partial2_profiled_zero_values;
+            metric.temp_write_backend_ops = fs.temp_write_io.backend_io_count;
+            metric.temp_write_backend_bytes = fs.temp_write_io.backend_bytes;
+            metric.temp_write_backend_seconds = fs.temp_write_io.backend_seconds;
+            metric.temp_read_backend_ops = fs.temp_read_io.backend_io_count;
+            metric.temp_read_backend_bytes = fs.temp_read_io.backend_bytes;
+            metric.temp_read_backend_seconds = fs.temp_read_io.backend_seconds;
+            metric.current_position_read_bytes = s.current_position_load.read_bytes;
+            metric.future2_position_read_bytes = s.future2_position_load.read_bytes;
+            metric.future2_success_read_bytes = s.future2_success_load.read_bytes;
+            metric.future4_position_read_bytes = s.future4_position_load.read_bytes;
+            metric.future4_success_read_bytes = s.future4_success_load.read_bytes;
+            metric.current_position_requested_extents = s.current_position_load.requested_extents;
+            metric.current_position_coalesced_extents = s.current_position_load.coalesced_extents;
+            metric.current_position_requested_bytes = s.current_position_load.requested_bytes;
+            metric.current_position_backend_ops = s.current_position_load.backend_read_ops;
+            metric.current_position_backend_bytes = s.current_position_load.backend_read_bytes;
+            metric.current_position_backend_seconds = s.current_position_load.backend_read_seconds;
+            metric.future2_position_requested_extents = s.future2_position_load.requested_extents;
+            metric.future2_position_coalesced_extents = s.future2_position_load.coalesced_extents;
+            metric.future2_position_requested_bytes = s.future2_position_load.requested_bytes;
+            metric.future2_position_backend_ops = s.future2_position_load.backend_read_ops;
+            metric.future2_position_backend_bytes = s.future2_position_load.backend_read_bytes;
+            metric.future2_position_backend_seconds = s.future2_position_load.backend_read_seconds;
+            metric.future2_success_requested_extents = s.future2_success_load.requested_extents;
+            metric.future2_success_coalesced_extents = s.future2_success_load.coalesced_extents;
+            metric.future2_success_requested_bytes = s.future2_success_load.requested_bytes;
+            metric.future2_success_backend_ops = s.future2_success_load.backend_read_ops;
+            metric.future2_success_backend_bytes = s.future2_success_load.backend_read_bytes;
+            metric.future2_success_backend_seconds = s.future2_success_load.backend_read_seconds;
+            metric.future4_position_requested_extents = s.future4_position_load.requested_extents;
+            metric.future4_position_coalesced_extents = s.future4_position_load.coalesced_extents;
+            metric.future4_position_requested_bytes = s.future4_position_load.requested_bytes;
+            metric.future4_position_backend_ops = s.future4_position_load.backend_read_ops;
+            metric.future4_position_backend_bytes = s.future4_position_load.backend_read_bytes;
+            metric.future4_position_backend_seconds = s.future4_position_load.backend_read_seconds;
+            metric.future4_success_requested_extents = s.future4_success_load.requested_extents;
+            metric.future4_success_coalesced_extents = s.future4_success_load.coalesced_extents;
+            metric.future4_success_requested_bytes = s.future4_success_load.requested_bytes;
+            metric.future4_success_backend_ops = s.future4_success_load.backend_read_ops;
+            metric.future4_success_backend_bytes = s.future4_success_load.backend_read_bytes;
+            metric.future4_success_backend_seconds = s.future4_success_load.backend_read_seconds;
+            metric.current_position_read_seconds = s.current_position_read_seconds;
+            metric.future2_position_read_seconds = s.future2_position_read_seconds;
+            metric.future2_success_read_seconds = s.future2_success_read_seconds;
+            metric.future2_index_seconds = s.future2_index_seconds;
+            metric.future4_position_read_seconds = s.future4_position_read_seconds;
+            metric.future4_success_read_seconds = s.future4_success_read_seconds;
+            metric.future4_index_seconds = s.future4_index_seconds;
+            metric.temp_prepare_seconds = s.temp_prepare_seconds;
+            metric.temp_write_seconds = fs.temp_write_seconds;
+            metric.temp_read_prepare_seconds = fs.temp_read_prepare_seconds;
+            metric.temp_read_seconds = fs.temp_read_seconds;
+            metric.final_stage_write_seconds = fs.final_stage_write_seconds;
+            metric.final_stage_read_seconds = fs.final_stage_read_seconds;
+            metric.output_pending_seconds = fs.output_pending_seconds;
+            metric.compact_seconds = s.compact_seconds;
+            metric.result_assembly_seconds = s.result_assembly_seconds;
+            metric.current_plan_seconds = s.current_plan_seconds;
+            metric.future_release_seconds = s.future_release_seconds;
+            metric.workspace_release_seconds = s.workspace_release_seconds;
+            metric.family_plan_seconds = fs.plan_seconds;
+            metric.family_workspace_prepare_seconds = fs.workspace_prepare_seconds;
+            metric.family_mark_empty_seconds = fs.mark_empty_seconds;
+            metric.family_current_layout_seconds = fs.current_layout_seconds;
+            metric.family_future4_prepare_overhead_seconds = fs.future4_prepare_overhead_seconds;
+            metric.family_future2_prepare_overhead_seconds = fs.future2_prepare_overhead_seconds;
+            metric.family_future4_prepare_normalize_seconds = fs.future4_prepare_normalize_seconds;
+            metric.family_future2_prepare_normalize_seconds = fs.future2_prepare_normalize_seconds;
+            metric.family_future4_prepare_select_seconds = fs.future4_prepare_select_seconds;
+            metric.family_future2_prepare_select_seconds = fs.future2_prepare_select_seconds;
+            metric.family_future4_prepare_index_build_seconds =
+                fs.future4_prepare_index_build_seconds;
+            metric.family_future2_prepare_index_build_seconds =
+                fs.future2_prepare_index_build_seconds;
+            metric.family_future4_prepare_insert_sort_seconds =
+                fs.future4_prepare_insert_sort_seconds;
+            metric.family_future2_prepare_insert_sort_seconds =
+                fs.future2_prepare_insert_sort_seconds;
+            metric.family_future4_lookup_copy_seconds = fs.future4_lookup_copy_seconds;
+            metric.family_future2_lookup_copy_seconds = fs.future2_lookup_copy_seconds;
+            metric.family_spawn4_phase_wall_seconds = fs.spawn4_phase_wall_seconds;
+            metric.family_spawn2_phase_wall_seconds = fs.spawn2_phase_wall_seconds;
+            metric.family_spawn4_phase_untracked_seconds = fs.spawn4_phase_untracked_seconds;
+            metric.family_spawn2_phase_untracked_seconds = fs.spawn2_phase_untracked_seconds;
+            metric.family_spawn4_cell_compute_seconds = fs.spawn4_cell_compute_seconds;
+            metric.family_spawn2_cell_compute_seconds = fs.spawn2_cell_compute_seconds;
+            metric.family_spawn4_bucket_hit_seconds = fs.spawn4_bucket_hit_seconds;
+            metric.family_spawn2_bucket_hit_seconds = fs.spawn2_bucket_hit_seconds;
+            metric.family_spawn4_batch_candidate_thread_seconds =
+                fs.spawn4_batch_candidate_thread_seconds;
+            metric.family_spawn4_batch_canonical_thread_seconds =
+                fs.spawn4_batch_canonical_thread_seconds;
+            metric.family_spawn4_batch_setup_thread_seconds =
+                fs.spawn4_batch_setup_thread_seconds;
+            metric.family_spawn4_batch_reduce_thread_seconds =
+                fs.spawn4_batch_reduce_thread_seconds;
+            metric.family_spawn4_batch_emit_thread_seconds =
+                fs.spawn4_batch_emit_thread_seconds;
+            metric.family_spawn2_batch_candidate_thread_seconds =
+                fs.spawn2_batch_candidate_thread_seconds;
+            metric.family_spawn2_batch_canonical_thread_seconds =
+                fs.spawn2_batch_canonical_thread_seconds;
+            metric.family_spawn2_batch_setup_thread_seconds =
+                fs.spawn2_batch_setup_thread_seconds;
+            metric.family_spawn2_batch_reduce_thread_seconds =
+                fs.spawn2_batch_reduce_thread_seconds;
+            metric.family_spawn2_batch_emit_thread_seconds =
+                fs.spawn2_batch_emit_thread_seconds;
+            metric.family_spawn4_batch_canonical_candidates =
+                fs.spawn4_batch_canonical_candidates;
+            metric.family_spawn4_batch_encoded_queries = fs.spawn4_batch_encoded_queries;
+            metric.family_spawn4_batch_reduce_found = fs.spawn4_batch_reduce_found;
+            metric.family_spawn4_batch_entry_misses = fs.spawn4_batch_entry_misses;
+            metric.family_spawn4_batch_bitmap_misses = fs.spawn4_batch_bitmap_misses;
+            metric.family_spawn2_batch_canonical_candidates =
+                fs.spawn2_batch_canonical_candidates;
+            metric.family_spawn2_batch_encoded_queries = fs.spawn2_batch_encoded_queries;
+            metric.family_spawn2_batch_reduce_found = fs.spawn2_batch_reduce_found;
+            metric.family_spawn2_batch_entry_misses = fs.spawn2_batch_entry_misses;
+            metric.family_spawn2_batch_bitmap_misses = fs.spawn2_batch_bitmap_misses;
+            metric.family_final_dense_copy_seconds = fs.final_dense_copy_seconds;
+            metric.family_compact_value_copy_seconds = fs.compact_value_copy_seconds;
+            metric.family_pending_mark_seconds = fs.pending_mark_seconds;
+            metric.family_output_finish_seconds = fs.output_finish_seconds;
+            metric.family_output_streamer_open_seconds = fs.output_streamer_open_seconds;
+            metric.family_temp_open_seconds = fs.temp_open_seconds;
+            metric.family_temp_close_seconds = fs.temp_close_seconds;
+            metric.family_future_release_all_seconds = fs.future_release_all_seconds;
+            metric.family_future_release_except_seconds = fs.future_release_except_seconds;
+            metric.family_future_release_all_clear_seconds = fs.future_release_all_clear_seconds;
+            metric.family_future_release_except_normalize_seconds =
+                fs.future_release_except_normalize_seconds;
+            metric.family_future_release_except_filter_seconds =
+                fs.future_release_except_filter_seconds;
+            metric.family_future_release_except_erase_seconds =
+                fs.future_release_except_erase_seconds;
+            metric.family_future_release_except_ids_seconds =
+                fs.future_release_except_ids_seconds;
+            metric.family_workspace_release_spawn4_partial_seconds =
+                fs.workspace_release_spawn4_partial_seconds;
+            metric.family_workspace_release_spawn4_scratch_seconds =
+                fs.workspace_release_spawn4_scratch_seconds;
+            metric.family_workspace_release_spawn4_temp_values_seconds =
+                fs.workspace_release_spawn4_temp_values_seconds;
+            metric.family_workspace_release_spawn2_dense_seconds =
+                fs.workspace_release_spawn2_dense_seconds;
+            metric.family_workspace_release_spawn2_prefetch_seconds =
+                fs.workspace_release_spawn2_prefetch_seconds;
+            metric.family_workspace_release_spawn2_temp_values_seconds =
+                fs.workspace_release_spawn2_temp_values_seconds;
+            metric.partial_cleanup_seconds = s.partial_cleanup_seconds;
+            return metric;
+        };
+
+        LayerMetric summary;
+        summary.kind = "summary";
+        const double run_t0 = now_seconds();
+        BC::BCFamilySolveRunResult run_result =
+            BC::bc_family_solve_full_run_typed<StorageT>(
+                run_options,
+                [&](const BC::BCFamilySolveRunLayerMetric &runner_metric) {
+                    LayerMetric metric = convert_metric(runner_metric);
+                    add_to_summary(summary, metric);
+                    write_metric_row(stats, metric);
+                    stats.flush();
+                    std::cout << std::setprecision(9)
+                        << "kind=" << metric.kind
+                        << " ordinal=" << metric.ordinal
+                        << " rows=" << metric.current_rows
+                        << " live_rows=" << metric.live_rows
+                        << " total_seconds=" << metric.total_seconds
+                        << " accounted_seconds=" << accounted_seconds(metric)
+                        << " untracked_seconds="
+                        << (metric.total_seconds - accounted_seconds(metric))
+                        << " position_bytes=" << metric.position_bytes
+                        << " success_bytes=" << metric.success_bytes
+                        << '\n';
+                });
+        summary.total_seconds = now_seconds() - run_t0;
+        write_metric_row(stats, summary);
+        stats.flush();
+
+        std::ofstream summary_out(args.summary_csv);
+        if (!summary_out) {
+            throw std::runtime_error("failed to open summary csv: " + args.summary_csv.string());
+        }
+        summary_out << std::setprecision(12);
+        summary_out
+            << "generated_position_dir,solved_output_dir,min_ordinal,max_ordinal,"
+            << "completed,total_rows,total_live_rows,total_zero_pruned_rows,"
+            << "total_position_bytes,total_success_bytes,total_seconds,total_mrows_per_sec\n"
+            << args.generated_position_dir.string() << ','
+            << args.solved_output_dir.string() << ','
+            << run_result.min_ordinal << ','
+            << run_result.max_ordinal << ','
+            << (run_result.completed ? 1 : 0) << ','
+            << summary.current_rows << ','
+            << summary.live_rows << ','
+            << summary.zero_pruned_rows << ','
+            << summary.position_bytes << ','
+            << summary.success_bytes << ','
+            << summary.total_seconds << ','
+            << (summary.total_seconds > 0.0
+                    ? static_cast<double>(summary.current_rows) / summary.total_seconds / 1.0e6
+                    : 0.0)
+            << '\n';
+        return;
+        }
+
         const BC::BCLut lut(make_free_legal_tiles(args.target_rank));
         const std::vector<uint8_t> success_shifts = all_board_success_shifts();
         const BC::BCQuadrantWordSumTable word_sums = build_word_sum_table(lut);
@@ -1402,12 +1677,13 @@ int main(int argc, char **argv) {
             if (top_position.layer().header().family_count != args.family_modulus) {
                 throw std::runtime_error("top generated layer is not in requested family modulus");
             }
-            BC::BCResidentSolvedLayer<uint32_t> top_layer = make_terminal_solved_layer(
+            BC::BCResidentSolvedLayer<StorageT> top_layer = make_terminal_solved_layer<StorageT>(
                 top_position.layer(),
                 success_shifts,
                 args.success_target_rank,
+                args.success_dtype,
                 args.num_threads);
-            WriteResult write = write_solved_layer_files(args, max_ordinal, top_layer);
+            WriteResult write = write_solved_layer_files<StorageT>(args, max_ordinal, top_layer);
             LayerMetric metric;
             metric.kind = "terminal";
             metric.ordinal = max_ordinal;
@@ -1427,14 +1703,14 @@ int main(int argc, char **argv) {
                 top_position.layer().header().layer_sum + 2U,
                 top_position.layer().header().family_unit,
                 args.family_modulus);
-            BC::BCResidentSolvedLayer<uint32_t> empty_layer;
+            BC::BCResidentSolvedLayer<StorageT> empty_layer;
             empty_layer.open(
                 empty_position_bytes,
                 {},
                 lut,
                 1U,
-                BC::BCSuccessDTypeMode::UInt32);
-            (void)write_solved_layer_files(args, max_ordinal + 1U, empty_layer);
+                args.success_dtype);
+            (void)write_solved_layer_files<StorageT>(args, max_ordinal + 1U, empty_layer);
         } else {
             if (*args.start_ordinal >= max_ordinal) {
                 throw std::invalid_argument("--start-ordinal must be less than max generated ordinal");
@@ -1447,7 +1723,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        BC::BCFamilySolveWorkspace<uint32_t> workspace;
+        BC::BCFamilySolveWorkspace<StorageT> workspace;
         LayerMetric summary;
         summary.kind = "summary";
         const int64_t first_solve_ordinal = args.start_ordinal.has_value()
@@ -1542,10 +1818,10 @@ int main(int argc, char **argv) {
                 partition_for(future4_position, possible_8tile_sums, args.family_modulus);
             const double partition_seconds = now_seconds() - partition_t0;
 
-            BC::BCFamilySolveOptions<uint32_t> options;
+            BC::BCFamilySolveOptions<StorageT> options;
             options.solve.num_threads = args.num_threads;
             options.solve.row_width = 1U;
-            options.solve.set_dtype(BC::BCSuccessDTypeMode::UInt32);
+            options.solve.set_dtype(args.success_dtype);
             options.solve.edge_options.canonical_batch_size = args.canonical_batch_size;
             options.solve.edge_options.canonical_symm_mode = args.canonical_symm_mode;
             options.solve.edge_options.spawn_rate4 = args.spawn_rate4;
@@ -1565,19 +1841,7 @@ int main(int argc, char **argv) {
             options.temp_direct_queue_depth = args.direct_queue_depth;
             options.collect_batch_timing = args.collect_batch_timing;
             options.collect_temp_sparsity = args.collect_temp_sparsity;
-            options.collect_resident_breakdown = args.collect_resident_breakdown;
-            options.sparse_partial_temp = args.sparse_partial_temp;
             options.use_diagonal_grouped_sum = args.use_diagonal_grouped_sum;
-            options.interleave_spawn_phases = args.interleave_spawn_phases;
-            options.interleave_block_fids = args.interleave_block_fids;
-            options.interleave_scratch4_memory_cap_bytes =
-                args.interleaved_scratch4_memory_cap_bytes;
-            options.interleave_release_future_between_phases =
-                !args.interleaved_keep_future_reuse;
-            options.interleave_keep_future4_between_blocks =
-                args.interleaved_keep_future_reuse || args.interleaved_keep_future4_reuse;
-            options.interleave_keep_future2_between_blocks =
-                args.interleaved_keep_future_reuse || args.interleaved_keep_future2_reuse;
 
             const double writer_open_t0 = now_seconds();
             std::unique_ptr<BC::BCWritableFile> position_writer =
@@ -1586,7 +1850,7 @@ int main(int argc, char **argv) {
                 make_output_writer(args, success_path_for(args, ordinal));
             const double writer_open_seconds = now_seconds() - writer_open_t0;
             const double solve_call_t0 = now_seconds();
-            BC::BCFamilySolveFileResult result = BC::bc_family_solve_layer_to_files<uint32_t>(
+            BC::BCFamilySolveFileResult result = BC::bc_family_solve_layer_to_files<StorageT>(
                 current,
                 future2_position,
                 future2_success,
@@ -1638,16 +1902,6 @@ int main(int argc, char **argv) {
             metric.future4_position_resident_bytes = s.future4_position_resident_bytes;
             metric.future4_success_resident_bytes = s.future4_success_resident_bytes;
             metric.future_resident_bytes_max = s.future_resident_bytes_max;
-            metric.family_block_current_resident_bytes_max =
-                fs.block_current_resident_bytes_max;
-            metric.family_block_scratch4_resident_bytes_max =
-                fs.block_scratch4_resident_bytes_max;
-            metric.family_block_partial_prefetch_resident_bytes_max =
-                fs.block_partial_prefetch_resident_bytes_max;
-            metric.family_block_dense_resident_bytes_max =
-                fs.block_dense_resident_bytes_max;
-            metric.family_block_total_resident_bytes_max =
-                fs.block_total_resident_bytes_max;
             metric.spawn4_passes = fs.spawn4_passes;
             metric.spawn2_passes = fs.spawn2_passes;
             metric.spawn4_reuse_windows = fs.spawn4_future_reuse_groups;
@@ -1794,8 +2048,6 @@ int main(int argc, char **argv) {
                 fs.workspace_release_spawn2_prefetch_seconds;
             metric.family_workspace_release_spawn2_temp_values_seconds =
                 fs.workspace_release_spawn2_temp_values_seconds;
-            metric.family_workspace_release_block_state_seconds =
-                fs.workspace_release_block_state_seconds;
             metric.family_future4_lookup_copy_seconds = fs.future4_lookup_copy_seconds;
             metric.family_future2_lookup_copy_seconds = fs.future2_lookup_copy_seconds;
             metric.family_spawn4_phase_wall_seconds = fs.spawn4_phase_wall_seconds;
@@ -1912,6 +2164,29 @@ int main(int argc, char **argv) {
                                 summary.total_seconds / 1.0e6
                           : 0.0)
                   << '\n';
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+    try {
+        const Args args = parse_args(argc, argv);
+        switch (args.success_dtype) {
+            case BC::BCSuccessDTypeMode::UInt32:
+                run_bench_typed<uint32_t>(args);
+                break;
+            case BC::BCSuccessDTypeMode::UInt64:
+                run_bench_typed<uint64_t>(args);
+                break;
+            case BC::BCSuccessDTypeMode::Float32:
+            case BC::BCSuccessDTypeMode::OneMinusFloat32:
+                run_bench_typed<float>(args);
+                break;
+            case BC::BCSuccessDTypeMode::Float64:
+            case BC::BCSuccessDTypeMode::OneMinusFloat64:
+                run_bench_typed<double>(args);
+                break;
+        }
     } catch (const std::exception &ex) {
         std::cerr << "bc_family_solve_full_bench failed: " << ex.what() << '\n';
         return 1;

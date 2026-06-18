@@ -159,8 +159,6 @@ void test_cached_pass_keep_window_four_families() {
     BCFamilySolveOptions<uint32_t> options;
     check(options.future_reuse_max_families == 4U,
         "family solve default future reuse window should be four families");
-    check(options.interleave_block_fids == 1U,
-        "family solve default interleaved block size should be one fid");
 
     const std::vector<BC::LayerSum> possible = dense_possible_sums(18U);
     const BC::BCFamilyPartitionPolicy policy = BC::BCFamilyPartitionPolicy::modulo(5U);
@@ -258,12 +256,13 @@ void test_success_scratch_weights() {
 
     BC::BCFamilyCellSuccessScratch<uint32_t> scratch;
     scratch.reset(7U, 1U, kRowWidth, 0U);
-    scratch.write_spawn4_contribution(0U, best4.data(), empty_mask, 2U, 0.1, 0U);
-    check(scratch.values()[0U] == 20U, "spawn4 lane0 contribution mismatch");
-    check(scratch.values()[1U] == 30U, "spawn4 lane1 contribution mismatch");
-    scratch.finalize_spawn2_row(0U, best2.data(), empty_mask, 2U, 0.1, 0U);
-    check(scratch.values()[0U] == 1820U, "spawn2 lane0 final value mismatch");
-    check(scratch.values()[1U] == 2730U, "spawn2 lane1 final value mismatch");
+    constexpr double kSpawnRate4 = 0.25;
+    scratch.write_spawn4_contribution(0U, best4.data(), empty_mask, 2U, kSpawnRate4, 0U);
+    check(scratch.values()[0U] == 50U, "spawn4 lane0 contribution mismatch");
+    check(scratch.values()[1U] == 75U, "spawn4 lane1 contribution mismatch");
+    scratch.finalize_spawn2_row(0U, best2.data(), empty_mask, 2U, kSpawnRate4, 0U);
+    check(scratch.values()[0U] == 1550U, "spawn2 lane0 final value mismatch");
+    check(scratch.values()[1U] == 2325U, "spawn2 lane1 final value mismatch");
     scratch.write_terminal_row(0U, 42U);
     check(scratch.values()[0U] == 42U && scratch.values()[1U] == 42U,
         "terminal scratch row mismatch");

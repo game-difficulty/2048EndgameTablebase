@@ -524,6 +524,7 @@ struct FamilyRoutePlannerState {
     inputs.has_source4 = source4_layer != nullptr;
     inputs.available_memory_bytes = available;
     inputs.total_memory_bytes = memory.total_bytes;
+    inputs.fixed_modulus = args.family_modulus;
     inputs.previous_modulus = state.previous_modulus == 0U ? args.family_modulus : state.previous_modulus;
     inputs.previous_route = state.previous_route;
     inputs.resident_upgrade_streak = state.resident_upgrade_streak;
@@ -534,28 +535,11 @@ struct FamilyRoutePlannerState {
             : args.family_route;
     BC::BCFamilyRouteDecision decision =
         BC::bc_plan_family_generation_route(inputs, requested);
-    if (requested == BC::BCFamilyGenerationRoute::Family &&
-        (script_entry == nullptr || script_entry->target_modulus == 0U)) {
-        decision.target_modulus = args.family_modulus;
-        decision.family_estimated_peak_bytes =
-            BC::bc_family_estimate_for_modulus(
-                std::max<uint64_t>(inputs.source2_size, inputs.source4_size),
-                decision.target_modulus
-            );
-        decision.route_estimated_peak_bytes = decision.family_estimated_peak_bytes;
-    }
     if (script_entry != nullptr && script_entry->target_modulus != 0U) {
-        if (!BC::bc_family_route_is_supported_prime(script_entry->target_modulus)) {
-            throw std::invalid_argument("--family-route-script target_modulus must be a supported prime in 13..251");
-        }
-        decision.target_modulus = script_entry->target_modulus;
-        decision.family_estimated_peak_bytes =
-            BC::bc_family_estimate_for_modulus(
-                std::max<uint64_t>(inputs.source2_size, inputs.source4_size),
-                decision.target_modulus
+        if (script_entry->target_modulus != args.family_modulus) {
+            throw std::invalid_argument(
+                "--family-route-script target_modulus cannot change the fixed --family-modulus"
             );
-        if (decision.route == BC::BCFamilyGenerationRoute::Family) {
-            decision.route_estimated_peak_bytes = decision.family_estimated_peak_bytes;
         }
     }
     state.previous_route = decision.route;
@@ -2667,9 +2651,6 @@ Args parse_args(int argc, char **argv) {
         args.family_source_words_per_item == 0U || args.family_modulus == 0U ||
         args.direct_queue_depth == 0U) {
         throw std::invalid_argument("family benchmark numeric options must be non-zero");
-    }
-    if (!BC::bc_family_route_is_supported_prime(args.family_modulus)) {
-        throw std::invalid_argument("--family-modulus must be a supported prime in 13..251");
     }
     if (args.family_blob != "buffered" && args.family_blob != "direct") {
         throw std::invalid_argument("--family-blob must be buffered or direct");

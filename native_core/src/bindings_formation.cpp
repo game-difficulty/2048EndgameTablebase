@@ -8,6 +8,9 @@
 #include <nanobind/stl/vector.h>
 
 #include "BookSolver.h"
+#include "BCCompressedResult.h"
+#include "BCLut.h"
+#include "CommonMover.h"
 #include "EXADCompressedResult.h"
 #include "EXCompressedResult.h"
 #include "NativeDiagnostics.h"
@@ -28,6 +31,19 @@ std::vector<uint64_t> to_u64_vector(const U64Array &array) {
         std::memcpy(result.data(), array.data(), result.size() * sizeof(uint64_t));
     }
     return result;
+}
+
+std::vector<uint8_t> bc_free_legal_tiles(uint32_t target_rank) {
+    if (target_rank >= 15U) {
+        throw std::invalid_argument("BC target_rank must be < 15");
+    }
+    std::vector<uint8_t> legal_tiles;
+    legal_tiles.reserve(static_cast<size_t>(target_rank) + 2U);
+    for (uint32_t tile = 0U; tile <= target_rank; ++tile) {
+        legal_tiles.push_back(static_cast<uint8_t>(tile));
+    }
+    legal_tiles.push_back(15U);
+    return legal_tiles;
 }
 
 nb::tuple reader_result_to_python(const ReaderMoveResult &result) {
@@ -572,5 +588,33 @@ NB_MODULE(formation_core, m) {
         "ad_key"_a,
         "canonical_board"_a,
         "column"_a
+    );
+
+    m.def(
+        "sample_bc_compressed_random_state",
+        [](const std::string &compressed_path,
+           uint32_t target_rank,
+           double spawn_rate4) {
+            uint64_t board = 0ULL;
+            uint64_t raw_value_bits = 0ULL;
+            double numeric_value = 0.0;
+            bool ok = false;
+            {
+                nb::gil_scoped_release release;
+                const BC::BCLut lut(bc_free_legal_tiles(target_rank));
+                ok = BCCompressedResult::sample_cold(
+                    compressed_path,
+                    lut,
+                    board,
+                    raw_value_bits,
+                    numeric_value);
+            }
+            (void)raw_value_bits;
+            (void)numeric_value;
+            return ok ? gen_new_num(board, static_cast<float>(spawn_rate4)).first : 0ULL;
+        },
+        "compressed_path"_a,
+        "target_rank"_a = 8U,
+        "spawn_rate4"_a = 0.1
     );
 }
