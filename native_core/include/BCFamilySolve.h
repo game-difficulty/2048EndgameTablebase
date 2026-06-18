@@ -2363,6 +2363,35 @@ inline void bc_family_build_bucket_spawn_target_hits(
     }
 }
 
+#ifndef NDEBUG
+inline void bc_family_debug_require_bucket_spawn_target_hits_cover(
+    const BCLut &lut,
+    const BCLoadedCellView &cell,
+    BCDirectionMask directions,
+    const std::vector<BCFamilyBucketSpawnTargetHits> &hits
+) {
+    if (hits.size() != cell.buckets.size) {
+        throw std::logic_error("BC family bucket hit debug check size mismatch");
+    }
+    const bool require_horizontal = bc_has_horizontal(directions);
+    const bool require_vertical = bc_has_vertical(directions);
+    for (uint32_t bucket_i = 0U; bucket_i < cell.buckets.size; ++bucket_i) {
+        const BCBucketEntry &bucket = cell.buckets.data[bucket_i];
+        const BCBucketRankDecoder decoder(lut, bucket.key);
+        const uint16_t empty_mask = bc_bucket_empty_mask16(decoder);
+        const BCFamilyBucketSpawnTargetHits &bucket_hits = hits[static_cast<size_t>(bucket_i)];
+        if (require_horizontal &&
+            static_cast<uint16_t>(bucket_hits.horizontal_mask & empty_mask) != empty_mask) {
+            throw std::logic_error("BC family trusted horizontal pass target coverage mismatch");
+        }
+        if (require_vertical &&
+            static_cast<uint16_t>(bucket_hits.vertical_mask & empty_mask) != empty_mask) {
+            throw std::logic_error("BC family trusted vertical pass target coverage mismatch");
+        }
+    }
+}
+#endif
+
 template <typename StorageT, bool RecordCompactRefBoardSlots>
 uint32_t bc_family_collect_phase_batch_candidates(
     BCFamilySolveCellWorkspace<StorageT> &workspace,
@@ -2801,13 +2830,18 @@ void bc_family_flush_phase_batch(
     batch.clear_batch();
 }
 
-template <typename StorageT, bool RecordCompactRefBoardSlots, bool HorizontalAxis>
-uint32_t bc_family_collect_phase_batch_candidates_multi_cell_precomputed_axis(
+template <typename StorageT, bool RecordCompactRefBoardSlots, BCDirectionMask TrustedDirections>
+uint32_t bc_family_collect_phase_batch_candidates_multi_cell_trusted_axis(
     BCFamilySolveCellWorkspace<StorageT> &workspace,
     BCSolveSpawnPhase phase,
-    const BCFamilySolveOptions<StorageT> &options,
-    const std::vector<std::vector<BCFamilyBucketSpawnTargetHits>> &bucket_target_hits_by_cell
+    const BCFamilySolveOptions<StorageT> &options
 ) {
+    static_assert(
+        TrustedDirections == BCDirectionMask::Horizontal ||
+            TrustedDirections == BCDirectionMask::Vertical ||
+            TrustedDirections == BCDirectionMask::Both,
+        "BC family trusted axis collector requires a fixed move direction"
+    );
     static_assert(
         static_cast<size_t>(BCResidentBatchWorkspace<StorageT>::kBatchSize) *
             static_cast<size_t>(kBCBoardCellCount) <=
@@ -2852,11 +2886,6 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell_precomputed_axis(
             continue;
         }
 
-        const uint32_t cell_index = workspace.local_cell_indices[board_slot];
-        const uint32_t bucket_i = workspace.local_bucket_indices[board_slot];
-        const BCFamilyBucketSpawnTargetHits &hits =
-            bucket_target_hits_by_cell[static_cast<size_t>(cell_index)]
-                [static_cast<size_t>(bucket_i)];
         uint32_t empty_mask = batch.empty_masks[board_slot];
         while (empty_mask != 0U) {
             const uint32_t cell = bc_solve_pop_lowest_set_bit_index(empty_mask);
@@ -2865,16 +2894,13 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell_precomputed_axis(
                 workspace.compact_ref_board_slots.push_back(static_cast<uint16_t>(board_slot));
             }
             ++batch.empty_counts[board_slot];
-            const bool target_hit = HorizontalAxis
-                ? bc_family_bucket_hit_horizontal(hits, cell)
-                : bc_family_bucket_hit_vertical(hits, cell);
-            if (!target_hit) {
-                continue;
-            }
 
             const uint64_t spawned =
                 board | (static_cast<uint64_t>(spawn_rank) << (4U * cell));
-            if constexpr (HorizontalAxis) {
+            if constexpr (
+                TrustedDirections == BCDirectionMask::Horizontal ||
+                TrustedDirections == BCDirectionMask::Both
+            ) {
                 const auto moved = BoardMover::move_horizontal_pair(spawned);
                 bc_family_push_moved_candidate_no_stats(
                     spawned,
@@ -2890,7 +2916,11 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell_precomputed_axis(
                     batch.canonical2_boards,
                     batch.canonical2_refs
                 );
-            } else {
+            }
+            if constexpr (
+                TrustedDirections == BCDirectionMask::Vertical ||
+                TrustedDirections == BCDirectionMask::Both
+            ) {
                 const auto moved = BoardMover::move_vertical_pair(spawned);
                 bc_family_push_moved_candidate_no_stats(
                     spawned,
@@ -2941,21 +2971,27 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
         options.collect_edge_stats ? &workspace.stats.edge : nullptr;
     const bool horizontal = bc_has_horizontal(directions);
     const bool vertical = bc_has_vertical(directions);
-    const bool fast_precomputed_hits =
-        edge_stats == nullptr && filter.enabled && bucket_target_hits_by_cell != nullptr;
-    if (fast_precomputed_hits && directions == BCDirectionMask::Horizontal) {
-        return bc_family_collect_phase_batch_candidates_multi_cell_precomputed_axis<
+    const bool fast_trusted_axis = edge_stats == nullptr && filter.enabled;
+    if (fast_trusted_axis && directions == BCDirectionMask::Horizontal) {
+        return bc_family_collect_phase_batch_candidates_multi_cell_trusted_axis<
             StorageT,
             RecordCompactRefBoardSlots,
-            true
-        >(workspace, phase, options, *bucket_target_hits_by_cell);
+            BCDirectionMask::Horizontal
+        >(workspace, phase, options);
     }
-    if (fast_precomputed_hits && directions == BCDirectionMask::Vertical) {
-        return bc_family_collect_phase_batch_candidates_multi_cell_precomputed_axis<
+    if (fast_trusted_axis && directions == BCDirectionMask::Vertical) {
+        return bc_family_collect_phase_batch_candidates_multi_cell_trusted_axis<
             StorageT,
             RecordCompactRefBoardSlots,
-            false
-        >(workspace, phase, options, *bucket_target_hits_by_cell);
+            BCDirectionMask::Vertical
+        >(workspace, phase, options);
+    }
+    if (fast_trusted_axis && directions == BCDirectionMask::Both) {
+        return bc_family_collect_phase_batch_candidates_multi_cell_trusted_axis<
+            StorageT,
+            RecordCompactRefBoardSlots,
+            BCDirectionMask::Both
+        >(workspace, phase, options);
     }
 
     if constexpr (RecordCompactRefBoardSlots) {
@@ -2990,7 +3026,7 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
         const uint32_t cell_index = workspace.local_cell_indices[board_slot];
         const uint32_t bucket_i = workspace.local_bucket_indices[board_slot];
         const BCFamilyBucketSpawnTargetHits *precomputed_hits = nullptr;
-        if (fast_precomputed_hits) {
+        if (filter.enabled && bucket_target_hits_by_cell != nullptr) {
             precomputed_hits =
                 &(*bucket_target_hits_by_cell)[static_cast<size_t>(cell_index)]
                     [static_cast<size_t>(bucket_i)];
@@ -4138,16 +4174,18 @@ void bc_family_first_direction_cells_batch(
         throw std::logic_error("BC family first-direction batch row_width is zero");
     }
 
+    std::vector<BCSingleChunkLoadedWorkItem> &work_items = workspace.pass_cell_work_items;
+    work_items.clear();
+#ifndef NDEBUG
     const bool spawn4_phase = phase == BCSolveSpawnPhase::Spawn4;
     const uint8_t spawn_rank = spawn4_phase
         ? options.solve.edge_options.spawn4_tile_rank
         : options.solve.edge_options.spawn2_tile_rank;
-    std::vector<BCSingleChunkLoadedWorkItem> &work_items = workspace.pass_cell_work_items;
-    work_items.clear();
     std::vector<std::vector<BCFamilyBucketSpawnTargetHits>> &bucket_hits_by_cell =
         workspace.pass_bucket_target_hits;
     bucket_hits_by_cell.clear();
     bucket_hits_by_cell.resize(current_cells.size());
+#endif
 
     for (size_t cell_index : cell_indices) {
         const BCLoadedCell &cell = current_cells[cell_index];
@@ -4162,6 +4200,7 @@ void bc_family_first_direction_cells_batch(
             options.source_bitmap_words_per_work_item,
             work_items
         );
+#ifndef NDEBUG
         const double bucket_hit_t0 =
             options.collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
         bc_family_build_bucket_spawn_target_hits(
@@ -4175,6 +4214,12 @@ void bc_family_first_direction_cells_batch(
             options.solve.edge_options.future_cell_modulus,
             bucket_hits_by_cell[cell_index]
         );
+        bc_family_debug_require_bucket_spawn_target_hits_cover(
+            lut,
+            cell.view(),
+            directions,
+            bucket_hits_by_cell[cell_index]
+        );
         if (options.collect_batch_timing) {
             const double bucket_hit_seconds = bc_single_chunk_now_seconds() - bucket_hit_t0;
             if (spawn4_phase) {
@@ -4183,6 +4228,7 @@ void bc_family_first_direction_cells_batch(
                 stats.spawn2_bucket_hit_seconds += bucket_hit_seconds;
             }
         }
+#endif
     }
     stats.single.current_work_items = bc_checked_add_u64(
         stats.single.current_work_items,
@@ -4211,8 +4257,6 @@ void bc_family_first_direction_cells_batch(
         future_axis,
         options.solve.edge_options.future_cell_modulus
     );
-    const std::vector<std::vector<BCFamilyBucketSpawnTargetHits>> *bucket_hits_ptr =
-        filter.enabled ? &bucket_hits_by_cell : nullptr;
     const int schedule_chunk = static_cast<int>(std::max<uint32_t>(
         1U,
         options.source_work_schedule_chunk
@@ -4242,7 +4286,7 @@ void bc_family_first_direction_cells_batch(
                 options,
                 layouts,
                 partials,
-                bucket_hits_ptr
+                nullptr
             );
         };
         try {
@@ -4344,16 +4388,18 @@ void bc_family_partial_sum_cells_batch(
         throw std::logic_error("BC family multi-cell partial sum path requires row_width=1");
     }
 
+    std::vector<BCSingleChunkLoadedWorkItem> &work_items = workspace.pass_cell_work_items;
+    work_items.clear();
+#ifndef NDEBUG
     const bool spawn4_phase = phase == BCSolveSpawnPhase::Spawn4;
     const uint8_t spawn_rank = spawn4_phase
         ? options.solve.edge_options.spawn4_tile_rank
         : options.solve.edge_options.spawn2_tile_rank;
-    std::vector<BCSingleChunkLoadedWorkItem> &work_items = workspace.pass_cell_work_items;
-    work_items.clear();
     std::vector<std::vector<BCFamilyBucketSpawnTargetHits>> &bucket_hits_by_cell =
         workspace.pass_bucket_target_hits;
     bucket_hits_by_cell.clear();
     bucket_hits_by_cell.resize(current_cells.size());
+#endif
 
     for (size_t cell_index : cell_indices) {
         const BCLoadedCell &cell = current_cells[cell_index];
@@ -4371,6 +4417,7 @@ void bc_family_partial_sum_cells_batch(
             options.source_bitmap_words_per_work_item,
             work_items
         );
+#ifndef NDEBUG
         const double bucket_hit_t0 =
             options.collect_batch_timing ? bc_single_chunk_now_seconds() : 0.0;
         bc_family_build_bucket_spawn_target_hits(
@@ -4384,6 +4431,12 @@ void bc_family_partial_sum_cells_batch(
             options.solve.edge_options.future_cell_modulus,
             bucket_hits_by_cell[cell_index]
         );
+        bc_family_debug_require_bucket_spawn_target_hits_cover(
+            lut,
+            cell.view(),
+            directions,
+            bucket_hits_by_cell[cell_index]
+        );
         if (options.collect_batch_timing) {
             const double bucket_hit_seconds = bc_single_chunk_now_seconds() - bucket_hit_t0;
             if (spawn4_phase) {
@@ -4392,6 +4445,7 @@ void bc_family_partial_sum_cells_batch(
                 stats.spawn2_bucket_hit_seconds += bucket_hit_seconds;
             }
         }
+#endif
     }
     stats.single.current_work_items = bc_checked_add_u64(
         stats.single.current_work_items,
@@ -4420,8 +4474,6 @@ void bc_family_partial_sum_cells_batch(
         future_axis,
         options.solve.edge_options.future_cell_modulus
     );
-    const std::vector<std::vector<BCFamilyBucketSpawnTargetHits>> *bucket_hits_ptr =
-        filter.enabled ? &bucket_hits_by_cell : nullptr;
     const int schedule_chunk = static_cast<int>(std::max<uint32_t>(
         1U,
         options.source_work_schedule_chunk
@@ -4451,7 +4503,7 @@ void bc_family_partial_sum_cells_batch(
                 options,
                 layouts,
                 partials,
-                bucket_hits_ptr,
+                nullptr,
                 emit
             );
         };

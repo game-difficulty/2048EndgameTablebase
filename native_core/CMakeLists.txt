@@ -450,6 +450,18 @@ if(NATIVE_BUILD_TESTS)
         tests_src/tool_bc_position_remap_exact.cpp
     )
     target_link_libraries(bc_position_remap_exact_tool PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_layer_remap_with_success_tool
+        src/BCPositionFile.cpp
+        tests_src/tool_bc_layer_remap_with_success.cpp
+    )
+    target_link_libraries(bc_layer_remap_with_success_tool PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_success_max_tool
+        src/BCPositionFile.cpp
+        tests_src/tool_bc_success_max.cpp
+    )
+    target_link_libraries(bc_success_max_tool PRIVATE common_config)
 endif()
 
 add_library(bookgen_native SHARED
