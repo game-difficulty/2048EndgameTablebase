@@ -64,9 +64,18 @@ inline std::string quote_arg(const std::string &arg) {
     return result;
 }
 
+inline std::wstring quote_arg_w(const std::wstring &arg) {
+    std::wstring result;
+    result.reserve(arg.size() + 2U);
+    result.push_back(L'"');
+    result.append(arg);
+    result.push_back(L'"');
+    return result;
+}
+
 inline bool run_avx512_sort_probe(const std::filesystem::path &bookgen_native_path) {
-    char system_dir[MAX_PATH] = {};
-    const UINT system_dir_len = GetSystemDirectoryA(system_dir, MAX_PATH);
+    wchar_t system_dir[MAX_PATH] = {};
+    const UINT system_dir_len = GetSystemDirectoryW(system_dir, MAX_PATH);
     if (system_dir_len == 0U || system_dir_len >= MAX_PATH) {
         return false;
     }
@@ -78,19 +87,19 @@ inline bool run_avx512_sort_probe(const std::filesystem::path &bookgen_native_pa
         dll_path = bookgen_native_path;
     }
 
-    const std::string rundll32 =
-        (std::filesystem::path(system_dir) / "rundll32.exe").string();
-    const std::string command =
-        quote_arg(rundll32) + " " +
-        quote_arg(dll_path.string()) + ",native_sort_probe_rundll32";
+    const std::wstring rundll32 =
+        (std::filesystem::path(system_dir) / L"rundll32.exe").wstring();
+    const std::wstring command =
+        quote_arg_w(rundll32) + L" " +
+        quote_arg_w(dll_path.wstring()) + L",native_sort_probe_rundll32";
 
-    std::vector<char> command_buffer(command.begin(), command.end());
-    command_buffer.push_back('\0');
+    std::vector<wchar_t> command_buffer(command.begin(), command.end());
+    command_buffer.push_back(L'\0');
 
-    STARTUPINFOA startup_info = {};
+    STARTUPINFOW startup_info = {};
     startup_info.cb = sizeof(startup_info);
     PROCESS_INFORMATION process_info = {};
-    if (!CreateProcessA(
+    if (!CreateProcessW(
             nullptr,
             command_buffer.data(),
             nullptr,

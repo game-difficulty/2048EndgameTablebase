@@ -30,6 +30,7 @@
       "algorithmAD": "AD",
       "algorithmEX": "EX",
       "algorithmEXAD": "EXAD",
+      "algorithmBC": "BC",
       "advanced": "Advanced Algorithm",
       "zmask": "EX Algorithm",
       "compress": "Compress results",
@@ -42,6 +43,7 @@
       "deletionThresholdRelative": "Relative",
       "deletionThreshold": "Deletion threshold",
       "successRateDtype": "Data Format",
+      "bcFamilyModulus": "BC Modulus",
       "smallTileSumLimit": "Small Tile Sum Limit",
       "chunkedSolve": "Chunked Solve",
       "progress": "Build Progress",
@@ -58,6 +60,7 @@
       "deletionThresholdMode": "Turn pruning off, use a fixed success-rate threshold, or prune by a fraction of each layer's best success rate.",
       "deletionThreshold": "Threshold value used by the selected mode. Larger values create smaller tables but may lose useful states.",
       "successRateDtype": "Success rate data storage format. Recommended default: uint32.",
+      "bcFamilyModulus": "Fixed family modulus for BC generation and solve. It is selected before the run and is not changed mid-computation.",
       "smallTileSumLimit": "Controls pruning strength in the advanced algorithm. Higher values keep more low-value tile combinations and increase table size."
     },
     "game": {

@@ -23,7 +23,7 @@ struct BCFamilyRouteInputs {
     uint64_t total_memory_bytes = 0U;
     uint32_t fixed_modulus = 0U;
     uint32_t previous_modulus = 0U;
-    BCFamilyGenerationRoute previous_route = BCFamilyGenerationRoute::Family;
+    BCFamilyGenerationRoute previous_route = BCFamilyGenerationRoute::Resident;
     uint32_t resident_upgrade_streak = 0U;
     uint32_t single_upgrade_streak = 0U;
 };
@@ -192,7 +192,7 @@ inline constexpr uint64_t kBCFamilyRouteGiB = 1024ULL * 1024ULL * 1024ULL;
     }
 
     BCFamilyGenerationRoute previous = inputs.previous_route == BCFamilyGenerationRoute::Auto
-        ? BCFamilyGenerationRoute::Family
+        ? BCFamilyGenerationRoute::Resident
         : inputs.previous_route;
     decision.resident_upgrade_streak = inputs.resident_upgrade_streak;
     decision.single_upgrade_streak = inputs.single_upgrade_streak;

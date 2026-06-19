@@ -2,6 +2,7 @@
 
 #include "EXADIO.h"
 #include "FileIOUtils.h"
+#include "PathUtils.h"
 
 #include <algorithm>
 #include <array>
@@ -1061,7 +1062,7 @@ inline constexpr char kSolvedMagic[8] = {'E', 'X', 'A', 'D', '7', 'S', 'L', 'V'}
 
 inline uint64_t file_size_or_throw(const std::string &path, const char *kind) {
     std::error_code ec;
-    const uintmax_t size = std::filesystem::file_size(path, ec);
+    const uintmax_t size = NativePath::file_size(path, ec);
     if (ec) {
         throw std::runtime_error(std::string("failed to determine EXAD ") + kind + " file size: " + path);
     }
@@ -1100,7 +1101,7 @@ inline void write_solved_layer_file(
     const SolvedLayer<T> &layer,
     FileIOUtils::DirectIoConfig config = {}
 ) {
-    if (std::filesystem::is_directory(path)) {
+    if (std::filesystem::is_directory(NativePath::from_utf8(path))) {
         throw std::runtime_error("refusing to overwrite old EXAD directory-format solved layer: " + path);
     }
     detail::SolvedFileHeader header{};
@@ -1157,7 +1158,7 @@ inline SolvedLayer<T> read_solved_layer_file(
     DTypeMode expected_mode,
     FileIOUtils::DirectIoConfig config = {}
 ) {
-    if (std::filesystem::is_directory(path)) {
+    if (std::filesystem::is_directory(NativePath::from_utf8(path))) {
         throw std::runtime_error("old EXAD directory-format solved layer is not compatible: " + path);
     }
     FileIOUtils::DirectSequentialReader in(
@@ -1221,13 +1222,13 @@ inline SolvedLayer<T> read_solved_layer_file(
 }
 
 inline bool solved_file_exists(const std::string &path) {
-    if (std::filesystem::is_directory(path)) {
+    if (std::filesystem::is_directory(NativePath::from_utf8(path))) {
         throw std::runtime_error("old EXAD directory-format solved layer is not compatible: " + path);
     }
-    if (!std::filesystem::exists(path)) {
+    if (!NativePath::exists(path)) {
         return false;
     }
-    if (std::filesystem::file_size(path) < sizeof(detail::SolvedFileHeader)) {
+    if (NativePath::file_size(path) < sizeof(detail::SolvedFileHeader)) {
         throw std::runtime_error("incomplete EXAD solved layer file: " + path);
     }
     return true;

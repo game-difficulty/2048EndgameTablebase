@@ -3,6 +3,7 @@
 #include "FileIOUtils.h"
 #include "FormationRuntime.h"
 #include "NativeLzma.h"
+#include "PathUtils.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -215,7 +216,7 @@ std::vector<TrieSegmentEntry> compress_and_save_serial(
             const size_t byte_count = (end - start) * sizeof(CompactBookEntry<T>);
             std::vector<uint8_t> block = compress_xz_block_native(bytes, byte_count, 1);
             if (!block.empty()) {
-                FileIOUtils::write_exact(out, block.data(), block.size(), z_path.string());
+                FileIOUtils::write_exact(out, block.data(), block.size(), NativePath::to_utf8_string(z_path));
             }
             current_size += static_cast<uint64_t>(block.size());
             ind3[i].next = 0;
@@ -230,7 +231,7 @@ std::vector<TrieSegmentEntry> compress_and_save_serial(
     const size_t tail_count = (book.size() - start) * sizeof(CompactBookEntry<T>);
     std::vector<uint8_t> block = compress_xz_block_native(tail_bytes, tail_count, 1);
     if (!block.empty()) {
-        FileIOUtils::write_exact(out, block.data(), block.size(), z_path.string());
+        FileIOUtils::write_exact(out, block.data(), block.size(), NativePath::to_utf8_string(z_path));
     }
     current_size += static_cast<uint64_t>(block.size());
     if (!ind3.empty()) {
@@ -292,7 +293,7 @@ std::vector<TrieSegmentEntry> compress_and_save_parallel(
     for (size_t idx = 0; idx < infos.size(); ++idx) {
         const auto &block = blocks[idx];
         if (!block.empty()) {
-            FileIOUtils::write_exact(out, block.data(), block.size(), z_path.string());
+            FileIOUtils::write_exact(out, block.data(), block.size(), NativePath::to_utf8_string(z_path));
         }
         current_size += static_cast<uint64_t>(block.size());
         segments.push_back({infos[idx].split_index, current_size});
@@ -302,7 +303,7 @@ std::vector<TrieSegmentEntry> compress_and_save_parallel(
 
 template <typename T>
 bool trie_compress_typed(const std::string &book_path) {
-    const fs::path input_path(book_path);
+    const fs::path input_path = NativePath::from_utf8(book_path);
     std::vector<SuccessEntry<T>> rows =
         FileIOUtils::read_binary_vector_direct<SuccessEntry<T>>(input_path, trie_direct_io_config());
     const size_t size = rows.size() * sizeof(SuccessEntry<T>);
@@ -318,13 +319,15 @@ bool trie_compress_typed(const std::string &book_path) {
     }
     fs::create_directories(final_dir);
 
-    const std::string filename = input_path.filename().string();
+    const std::string filename = NativePath::to_utf8_string(input_path.filename());
     const std::string stem = filename.substr(0, filename.size() - 4U);
     const fs::path prefix = final_dir / stem;
+    fs::path z_path = prefix;
+    z_path += "z";
     std::vector<TrieSegmentEntry> segments =
         (data.book.size() >= kTrieParallelThreshold)
-            ? compress_and_save_parallel(data.ind3, data.book, prefix.string() + "z")
-            : compress_and_save_serial(data.ind3, data.book, prefix.string() + "z");
+            ? compress_and_save_parallel(data.ind3, data.book, z_path)
+            : compress_and_save_serial(data.ind3, data.book, z_path);
     if (segments.empty()) {
         return false;
     }
@@ -349,9 +352,15 @@ bool trie_compress_typed(const std::string &book_path) {
         ind3_short[i].next = static_cast<uint16_t>(data.ind3[i].next);
     }
 
-    write_binary_vector(prefix.string() + "ii", ind3_short);
-    write_binary_vector(prefix.string() + "i", ind);
-    write_binary_vector(prefix.string() + "s", segments);
+    fs::path ii_path = prefix;
+    ii_path += "ii";
+    fs::path i_path = prefix;
+    i_path += "i";
+    fs::path s_path = prefix;
+    s_path += "s";
+    write_binary_vector(ii_path, ind3_short);
+    write_binary_vector(i_path, ind);
+    write_binary_vector(s_path, segments);
     return true;
 }
 
@@ -447,9 +456,14 @@ bool search_ind3_relative_position(const std::vector<TrieNode16> &ind3_seg, uint
 
 template <typename T>
 std::optional<double> trie_decompress_search_typed(const std::string &path_prefix, uint64_t board, T missing_value) {
-    const fs::path prefix(path_prefix);
-    const std::vector<TrieNode32> ind = read_binary_vector<TrieNode32>(prefix.string() + "i");
-    const std::vector<TrieSegmentEntry> segments = read_binary_vector<TrieSegmentEntry>(prefix.string() + "s");
+    const fs::path prefix = NativePath::from_utf8(path_prefix);
+    const std::string prefix_utf8 = NativePath::to_utf8_string(prefix);
+    fs::path i_path = prefix;
+    i_path += "i";
+    fs::path s_path = prefix;
+    s_path += "s";
+    const std::vector<TrieNode32> ind = read_binary_vector<TrieNode32>(i_path);
+    const std::vector<TrieSegmentEntry> segments = read_binary_vector<TrieSegmentEntry>(s_path);
     if (ind.size() < 2 || segments.size() < 2) {
         return std::nullopt;
     }
@@ -459,7 +473,7 @@ std::optional<double> trie_decompress_search_typed(const std::string &path_prefi
         return std::nullopt;
     }
 
-    std::ifstream ii_file(prefix.string() + "ii", std::ios::binary);
+    std::ifstream ii_file(NativePath::from_utf8(prefix_utf8 + "ii"), std::ios::binary);
     if (!ii_file) {
         return std::nullopt;
     }
@@ -470,7 +484,7 @@ std::optional<double> trie_decompress_search_typed(const std::string &path_prefi
         ii_file,
         ind3_seg.data(),
         count * sizeof(TrieNode16),
-        prefix.string() + "ii"
+        prefix_utf8 + "ii"
     );
 
     const uint8_t target_prefix = static_cast<uint8_t>((board >> 32U) & 0xFFU);
@@ -480,14 +494,14 @@ std::optional<double> trie_decompress_search_typed(const std::string &path_prefi
     }
 
     const auto [start, end] = get_segment_position(segments, static_cast<uint32_t>(last_pos + low));
-    std::ifstream z_file(prefix.string() + "z", std::ios::binary);
+    std::ifstream z_file(NativePath::from_utf8(prefix_utf8 + "z"), std::ios::binary);
     if (!z_file || end < start) {
         return std::nullopt;
     }
     z_file.seekg(static_cast<std::streamoff>(start), std::ios::beg);
     std::vector<uint8_t> compressed(static_cast<size_t>(end - start));
     if (!compressed.empty()) {
-        FileIOUtils::read_exact(z_file, compressed.data(), compressed.size(), prefix.string() + "z");
+        FileIOUtils::read_exact(z_file, compressed.data(), compressed.size(), prefix_utf8 + "z");
     }
     std::vector<uint8_t> decompressed = decompress_xz_block_native(compressed.data(), compressed.size());
     using BlockEntry = CompactBookEntry<T>;

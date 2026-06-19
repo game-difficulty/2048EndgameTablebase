@@ -828,25 +828,26 @@ static void process_source_board_pair(
         bc_is_success_by_shifts(board, options.success_target_rank, *options.success_shifts)) {
         return;
     }
-    bc_generate_spawn_move_candidates(
-        board,
-        source_empty_mask,
-        1U,
-        BCDirectionMask::Both,
-        [&](uint64_t spawned, uint64_t moved) {
-            push_moved_board(primary_workspace, spawned, moved);
+    uint32_t empty_mask = source_empty_mask;
+    while (empty_mask != 0U) {
+        const uint32_t cell = countr_zero32(empty_mask);
+        empty_mask &= empty_mask - 1U;
+
+        const uint64_t spawn2 = board | (1ULL << (4U * cell));
+        const auto moved2 = BoardMover::move_all_dir(spawn2);
+        push_moved_board(primary_workspace, spawn2, std::get<0>(moved2));
+        push_moved_board(primary_workspace, spawn2, std::get<1>(moved2));
+        push_moved_board(primary_workspace, spawn2, std::get<2>(moved2));
+        push_moved_board(primary_workspace, spawn2, std::get<3>(moved2));
+
+        if (secondary_workspace != nullptr && secondary_layout != nullptr && secondary_state != nullptr) {
+            const uint64_t spawn4 = board | (2ULL << (4U * cell));
+            const auto moved4 = BoardMover::move_all_dir(spawn4);
+            push_moved_board(*secondary_workspace, spawn4, std::get<0>(moved4));
+            push_moved_board(*secondary_workspace, spawn4, std::get<1>(moved4));
+            push_moved_board(*secondary_workspace, spawn4, std::get<2>(moved4));
+            push_moved_board(*secondary_workspace, spawn4, std::get<3>(moved4));
         }
-    );
-    if (secondary_workspace != nullptr && secondary_layout != nullptr && secondary_state != nullptr) {
-        bc_generate_spawn_move_candidates(
-            board,
-            source_empty_mask,
-            2U,
-            BCDirectionMask::Both,
-            [&](uint64_t spawned, uint64_t moved) {
-                push_moved_board(*secondary_workspace, spawned, moved);
-            }
-        );
     }
     if (primary_workspace.canonical_buffer.size() >= options.canonical_batch_size) {
         flush_canonical_buffer(
@@ -892,15 +893,18 @@ static void process_source_board(
         bc_is_success_by_shifts(board, options.success_target_rank, *options.success_shifts)) {
         return;
     }
-    bc_generate_spawn_move_candidates(
-        board,
-        source_empty_mask,
-        source.spawn_tile_rank,
-        BCDirectionMask::Both,
-        [&](uint64_t spawned, uint64_t moved) {
-            push_moved_board(workspace, spawned, moved);
-        }
-    );
+    uint32_t empty_mask = source_empty_mask;
+    while (empty_mask != 0U) {
+        const uint32_t cell = countr_zero32(empty_mask);
+        empty_mask &= empty_mask - 1U;
+        const uint64_t spawned =
+            board | (static_cast<uint64_t>(source.spawn_tile_rank) << (4U * cell));
+        const auto moved = BoardMover::move_all_dir(spawned);
+        push_moved_board(workspace, spawned, std::get<0>(moved));
+        push_moved_board(workspace, spawned, std::get<1>(moved));
+        push_moved_board(workspace, spawned, std::get<2>(moved));
+        push_moved_board(workspace, spawned, std::get<3>(moved));
+    }
     if (workspace.canonical_buffer.size() >= options.canonical_batch_size) {
         flush_canonical_buffer(
             workspace,
@@ -1785,6 +1789,198 @@ void add_workspace_stats(
     }
 }
 
+[[nodiscard]] static size_t bc_checked_size_t_u64(uint64_t value, const char *label) {
+    if (value > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+        throw std::overflow_error(label);
+    }
+    return static_cast<size_t>(value);
+}
+
+static void bc_store_u16_le(uint8_t *out, uint16_t value) {
+    out[0] = static_cast<uint8_t>(value & 0xFFU);
+    out[1] = static_cast<uint8_t>((value >> 8U) & 0xFFU);
+}
+
+static void bc_store_u32_le(uint8_t *out, uint32_t value) {
+    out[0] = static_cast<uint8_t>(value & 0xFFU);
+    out[1] = static_cast<uint8_t>((value >> 8U) & 0xFFU);
+    out[2] = static_cast<uint8_t>((value >> 16U) & 0xFFU);
+    out[3] = static_cast<uint8_t>((value >> 24U) & 0xFFU);
+}
+
+static void bc_store_u64_le(uint8_t *out, uint64_t value) {
+    out[0] = static_cast<uint8_t>(value & 0xFFU);
+    out[1] = static_cast<uint8_t>((value >> 8U) & 0xFFU);
+    out[2] = static_cast<uint8_t>((value >> 16U) & 0xFFU);
+    out[3] = static_cast<uint8_t>((value >> 24U) & 0xFFU);
+    out[4] = static_cast<uint8_t>((value >> 32U) & 0xFFU);
+    out[5] = static_cast<uint8_t>((value >> 40U) & 0xFFU);
+    out[6] = static_cast<uint8_t>((value >> 48U) & 0xFFU);
+    out[7] = static_cast<uint8_t>((value >> 56U) & 0xFFU);
+}
+
+static void bc_store_cell_descriptor_le(uint8_t *out, const BCPositionCellDescriptor &descriptor) {
+    bc_store_u32_le(out + 0U, descriptor.bucket_count);
+    bc_store_u32_le(out + 4U, descriptor.success_rows);
+    bc_store_u64_le(out + 8U, descriptor.bucket_meta_offset);
+    bc_store_u64_le(out + 16U, descriptor.rank_payload_offset);
+    bc_store_u64_le(out + 24U, descriptor.rank_payload_bytes);
+    bc_store_u32_le(out + 32U, descriptor.reserved0);
+    bc_store_u32_le(out + 36U, descriptor.flags_or_padding);
+}
+
+static void bc_store_bucket_entry_le(uint8_t *out, const BCBucketEntry &entry) {
+    bc_store_u64_le(out + 0U, entry.key);
+    bc_store_u32_le(out + 8U, entry.rank_payload_offset);
+    bc_store_u32_le(out + 12U, entry.success_row_offset);
+}
+
+[[nodiscard]] static std::vector<uint8_t> build_position_layer_bytes_from_payloads(
+    const BCFamilyTable &axis,
+    const std::vector<FinalizedCellPayload> &payloads
+) {
+    const BCCellMatrix matrix(axis);
+    if (payloads.size() != matrix.cell_count()) {
+        throw std::invalid_argument("BC position payload count does not match axis cell count");
+    }
+
+    std::vector<BCPositionCellDescriptor> descriptors(payloads.size());
+    uint64_t bucket_cursor = 0U;
+    uint64_t rank_cursor = 0U;
+    for (CellId cid = 0U; cid < payloads.size(); ++cid) {
+        const FinalizedCellPayload &payload = payloads[static_cast<size_t>(cid)];
+        if (payload.buckets.empty()) {
+            if (payload.success_rows != 0U || !payload.rank_payload.empty()) {
+                throw std::invalid_argument("BC empty finalized payload has non-empty metadata");
+            }
+            BCPositionCellDescriptor descriptor;
+            descriptor.flags_or_padding = kBCPositionCellFlagEmpty;
+            descriptors[static_cast<size_t>(cid)] = descriptor;
+            continue;
+        }
+        if (payload.buckets.size() > std::numeric_limits<uint32_t>::max()) {
+            throw std::overflow_error("BC position cell bucket_count exceeds uint32");
+        }
+        for (size_t i = 1U; i < payload.buckets.size(); ++i) {
+            if (payload.buckets[i - 1U].key >= payload.buckets[i].key) {
+                throw std::invalid_argument("BC position writer requires sorted unique bucket keys");
+            }
+        }
+
+        BCPositionCellDescriptor descriptor;
+        descriptor.bucket_count = static_cast<uint32_t>(payload.buckets.size());
+        descriptor.success_rows = payload.success_rows;
+        descriptor.bucket_meta_offset = bucket_cursor;
+        descriptor.rank_payload_offset = rank_cursor;
+        descriptor.rank_payload_bytes = payload.rank_payload.size();
+        descriptor.reserved0 = 0U;
+        descriptor.flags_or_padding = 0U;
+        descriptors[static_cast<size_t>(cid)] = descriptor;
+
+        bucket_cursor = bc_checked_add_u64(
+            bucket_cursor,
+            static_cast<uint64_t>(payload.buckets.size()) * kBCPositionBucketEntryBytes,
+            "BC position payload bucket byte count overflow"
+        );
+        rank_cursor = bc_checked_add_u64(
+            rank_cursor,
+            static_cast<uint64_t>(payload.rank_payload.size()),
+            "BC position payload rank byte count overflow"
+        );
+    }
+
+    const uint64_t descriptor_count = descriptors.size();
+    const uint64_t descriptor_bytes =
+        descriptor_count * static_cast<uint64_t>(kBCPositionCellDescriptorBytes);
+    const uint64_t axis_coord_bytes = bc_axis_coord_table_bytes(axis.family_count());
+    const uint64_t descriptor_offset = bc_checked_add_u64(
+        kBCPositionHeaderBytes,
+        axis_coord_bytes,
+        "BC position descriptor table offset overflow"
+    );
+    const uint64_t bucket_offset = bc_checked_add_u64(
+        descriptor_offset,
+        descriptor_bytes,
+        "BC position bucket stream offset overflow"
+    );
+    const uint64_t rank_offset = bc_checked_add_u64(
+        bucket_offset,
+        bucket_cursor,
+        "BC position rank stream offset overflow"
+    );
+    const uint64_t logical_size = bc_checked_add_u64(
+        rank_offset,
+        rank_cursor,
+        "BC position layer logical size overflow"
+    );
+
+    BCPositionHeader header;
+    header.family_unit = axis.family_unit();
+    header.axis_base_coord = axis.axis_base_coord();
+    header.family_count = axis.family_count();
+    header.layer_sum = axis.layer_sum();
+    header.axis_coord_table_bytes = axis_coord_bytes;
+    header.descriptor_count = descriptor_count;
+    header.descriptor_table_offset = descriptor_offset;
+    header.descriptor_table_bytes = descriptor_bytes;
+    header.bucket_meta_offset = bucket_offset;
+    header.bucket_meta_bytes = bucket_cursor;
+    header.rank_payload_offset = rank_offset;
+    header.rank_payload_bytes = rank_cursor;
+
+    std::vector<uint8_t> out(bc_checked_size_t_u64(logical_size, "BC position layer exceeds size_t"));
+    std::vector<uint8_t> scratch;
+    scratch.reserve(static_cast<size_t>(std::max<uint64_t>(kBCPositionHeaderBytes, axis_coord_bytes)));
+    bc_append_header(scratch, header);
+    std::memcpy(
+        out.data(),
+        scratch.data(),
+        scratch.size()
+    );
+    scratch.clear();
+    bc_append_axis_coord_table(scratch, axis);
+    std::memcpy(
+        out.data() + bc_checked_size_t_u64(kBCPositionHeaderBytes, "BC position header offset exceeds size_t"),
+        scratch.data(),
+        scratch.size()
+    );
+
+    uint8_t *descriptor_cursor =
+        out.data() + bc_checked_size_t_u64(descriptor_offset, "BC descriptor offset exceeds size_t");
+    for (const BCPositionCellDescriptor &descriptor : descriptors) {
+        bc_store_cell_descriptor_le(descriptor_cursor, descriptor);
+        descriptor_cursor += kBCPositionCellDescriptorBytes;
+    }
+
+    for (CellId cid = 0U; cid < payloads.size(); ++cid) {
+        const FinalizedCellPayload &payload = payloads[static_cast<size_t>(cid)];
+        if (payload.buckets.empty()) {
+            continue;
+        }
+        const BCPositionCellDescriptor &descriptor = descriptors[static_cast<size_t>(cid)];
+        uint8_t *bucket_cursor_ptr =
+            out.data() + bc_checked_size_t_u64(
+                bucket_offset + descriptor.bucket_meta_offset,
+                "BC bucket payload offset exceeds size_t"
+            );
+        for (const BCBucketEntry &bucket : payload.buckets) {
+            bc_store_bucket_entry_le(bucket_cursor_ptr, bucket);
+            bucket_cursor_ptr += kBCPositionBucketEntryBytes;
+        }
+        if (!payload.rank_payload.empty()) {
+            std::memcpy(
+                out.data() + bc_checked_size_t_u64(
+                    rank_offset + descriptor.rank_payload_offset,
+                    "BC rank payload offset exceeds size_t"
+                ),
+                payload.rank_payload.data(),
+                payload.rank_payload.size()
+            );
+        }
+    }
+    return out;
+}
+
 [[nodiscard]] static uint64_t write_dynamic_state_to_file_streaming(
     const BCLut &lut,
     const BCFamilyTable &axis,
@@ -1852,17 +2048,7 @@ void finalize_dynamic_result(
             result.output_success_rows += payload.success_rows;
         }
         const double write_begin = bc_now_seconds();
-        BCPositionLayerWriter writer;
-        writer.begin_layer(axis);
-        for (CellId cid = 0U; cid < dynamic_state.cell_count; ++cid) {
-            const FinalizedCellPayload &payload = payloads[static_cast<size_t>(cid)];
-            if (payload.success_rows == 0U) {
-                writer.mark_empty_cell(cid);
-                continue;
-            }
-            writer.write_cell(cid, payload);
-        }
-        result.position_bytes = writer.finish_layer();
+        result.position_bytes = build_position_layer_bytes_from_payloads(axis, payloads);
         result.target_position_file_logical_bytes =
             static_cast<uint64_t>(result.position_bytes.size());
         result.target_position_write_requested_bytes =
@@ -1949,6 +2135,88 @@ static void bc_append_bitmap_le(std::vector<uint8_t> &buffer, const uint64_t *bi
         p[6] = static_cast<uint8_t>((value >> 48U) & 0xFFU);
         p[7] = static_cast<uint8_t>((value >> 56U) & 0xFFU);
         p += sizeof(uint64_t);
+    }
+}
+
+static void bc_append_rank_payload_le_from_atomic_arena(
+    std::vector<uint8_t> &buffer,
+    const BCDynamicState &state,
+    uint32_t bitmap_offset,
+    uint32_t word_count,
+    uint32_t bitmap_len,
+    uint32_t rank_payload_offset
+) {
+    if (static_cast<uint64_t>(bitmap_offset) + word_count > state.reserved_bitmap_words) {
+        throw std::out_of_range("BC dynamic rank bitmap offset exceeds arena");
+    }
+    if (checked_u32_size(buffer.size(), "BC dynamic rank payload buffer offset exceeds uint32") !=
+        rank_payload_offset) {
+        throw std::logic_error("BC dynamic rank payload buffer is not positioned at payload offset");
+    }
+
+    const uint32_t prefix_count = prefix_count_for_bits(bitmap_len);
+    const uint32_t prefix_bytes = prefix_count * static_cast<uint32_t>(sizeof(RankPrefix));
+    const uint32_t prefix_end = checked_u32_add(
+        rank_payload_offset,
+        prefix_bytes,
+        "BC dynamic rank prefix payload end overflow"
+    );
+    const uint32_t out_bitmap_offset = bc_rank_payload_bitmap_offset(rank_payload_offset, bitmap_len);
+    const uint64_t payload_end = bc_checked_add_u64(
+        out_bitmap_offset,
+        static_cast<uint64_t>(word_count) * sizeof(uint64_t),
+        "BC dynamic rank payload byte count overflow"
+    );
+    if (payload_end > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+        throw std::overflow_error("BC dynamic rank payload exceeds size_t");
+    }
+    buffer.resize(static_cast<size_t>(payload_end));
+
+    uint8_t *prefix_out = buffer.data() + rank_payload_offset;
+    uint8_t *bitmap_out = buffer.data() + out_bitmap_offset;
+    if (prefix_end < out_bitmap_offset) {
+        std::memset(
+            buffer.data() + prefix_end,
+            0,
+            static_cast<size_t>(out_bitmap_offset - prefix_end)
+        );
+    }
+
+    uint32_t running = 0U;
+    for (uint32_t block = 0U; block < prefix_count; ++block) {
+        if (running > std::numeric_limits<RankPrefix>::max()) {
+            throw std::logic_error("BC dynamic rank prefix running popcount exceeds uint16");
+        }
+        bc_store_u16_le(
+            prefix_out + static_cast<size_t>(block) * sizeof(RankPrefix),
+            static_cast<RankPrefix>(running)
+        );
+        const uint32_t block_first_bit = block * kBCRankPrefixBits;
+        const uint32_t block_last_bit = std::min<uint32_t>(
+            bitmap_len,
+            block_first_bit + kBCRankPrefixBits
+        );
+        const uint32_t first_word = block_first_bit / kBCBitmapWordBits;
+        const uint32_t last_word_exclusive = words_for_bits(block_last_bit);
+        if (last_word_exclusive > word_count) {
+            throw std::logic_error("BC dynamic rank bitmap is shorter than bitmap_len");
+        }
+        for (uint32_t word = first_word; word < last_word_exclusive; ++word) {
+            uint64_t value =
+                state.bitmap_arena[bitmap_offset + word].load(std::memory_order_relaxed);
+            if (word + 1U == last_word_exclusive && (block_last_bit & 63U) != 0U) {
+                value &= (1ULL << (block_last_bit & 63U)) - 1ULL;
+            }
+            bc_store_u64_le(
+                bitmap_out + static_cast<size_t>(word) * sizeof(uint64_t),
+                value
+            );
+            running += popcount64(value);
+        }
+    }
+    if (checked_u32_size(buffer.size(), "BC dynamic rank payload end exceeds uint32") <
+        out_bitmap_offset) {
+        throw std::logic_error("BC dynamic rank payload append did not reach bitmap offset");
     }
 }
 
@@ -2602,7 +2870,6 @@ static void append_dynamic_cell_rank_payload(
 ) {
     out.clear();
     out.reserve(static_cast<size_t>(descriptor.rank_payload_bytes));
-    std::vector<uint64_t> bitmap;
     uint32_t bucket_count = 0U;
     uint64_t success_cursor = 0U;
     for (uint32_t i = begin; i < end; ++i) {
@@ -2617,26 +2884,20 @@ static void append_dynamic_cell_rank_payload(
         if (static_cast<uint64_t>(bitmap_offset) + word_count > state.reserved_bitmap_words) {
             throw std::out_of_range("BC dynamic streaming rank bitmap offset exceeds arena");
         }
-        bitmap.resize(word_count);
-        for (uint32_t word = 0U; word < word_count; ++word) {
-            bitmap[word] = state.bitmap_arena[bitmap_offset + word].load(std::memory_order_relaxed);
-        }
         const uint32_t payload_offset =
             checked_u32_size(out.size(), "BC dynamic streaming rank payload offset exceeds uint32");
         const uint32_t aligned_payload_offset = align_up_u32(payload_offset, 8U);
         bc_append_padding(out, aligned_payload_offset - payload_offset);
         const uint32_t rank_payload_offset =
             checked_u32_size(out.size(), "BC dynamic streaming rank aligned payload offset exceeds uint32");
-        bc_append_prefix256_le(out, bitmap.data(), word_count, bitmap_len);
-        const uint32_t out_bitmap_offset = bc_rank_payload_bitmap_offset(rank_payload_offset, bitmap_len);
-        bc_append_padding(
+        bc_append_rank_payload_le_from_atomic_arena(
             out,
-            out_bitmap_offset - checked_u32_size(
-                out.size(),
-                "BC dynamic streaming rank prefix payload end exceeds uint32"
-            )
+            state,
+            bitmap_offset,
+            word_count,
+            bitmap_len,
+            rank_payload_offset
         );
-        bc_append_bitmap_le(out, bitmap.data(), word_count);
         success_cursor += live;
         if (success_cursor > std::numeric_limits<uint32_t>::max()) {
             throw std::overflow_error("BC dynamic streaming rank success_rows exceeds uint32");

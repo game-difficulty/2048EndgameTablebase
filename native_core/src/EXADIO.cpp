@@ -1,6 +1,7 @@
 #include "EXADIO.h"
 
 #include "NativeLzma.h"
+#include "PathUtils.h"
 
 #include <array>
 #include <cstring>
@@ -102,7 +103,7 @@ uint64_t serialized_size(const Layer &layer) {
 
 uint64_t file_size_or_throw(const std::string &path, const char *kind) {
     std::error_code ec;
-    const uintmax_t size = fs::file_size(path, ec);
+    const uintmax_t size = NativePath::file_size(path, ec);
     if (ec) {
         throw std::runtime_error(std::string("failed to determine EXAD ") + kind + " file size: " + path);
     }
@@ -118,7 +119,7 @@ bool has_archive_suffix(const std::string &path) {
 }
 
 std::string existing_layer_storage_path(const std::string &path) {
-    if (fs::exists(path) || has_archive_suffix(path)) {
+    if (NativePath::exists(path) || has_archive_suffix(path)) {
         return path;
     }
     const std::string archive_path = archive_path_for_layer(path);
@@ -129,7 +130,7 @@ std::string existing_layer_storage_path(const std::string &path) {
 }
 
 std::string archive_entry_name_for_path(const std::string &path) {
-    std::string name = fs::path(path).stem().string();
+    std::string name = NativePath::to_utf8_string(NativePath::from_utf8(path).stem());
     if (name.empty()) {
         name = "data";
     }
@@ -205,13 +206,13 @@ std::string lut_file_path(const std::string &pathname) {
 }
 
 bool layer_file_exists(const std::string &path) {
-    return fs::exists(path) || is_readable_7z_or_xz_archive(archive_path_for_layer(path));
+    return NativePath::exists(path) || is_readable_7z_or_xz_archive(archive_path_for_layer(path));
 }
 
 void remove_layer_file(const std::string &path) {
     std::error_code ec;
-    fs::remove(path, ec);
-    fs::remove(archive_path_for_layer(path), ec);
+    NativePath::remove(path, ec);
+    NativePath::remove(archive_path_for_layer(path), ec);
 }
 
 class LayerSlotReader::Impl {
@@ -348,7 +349,7 @@ void write_layer_file(
         append_layer_payload(out, header, slots, layer);
         out.close();
         std::error_code ec;
-        fs::remove(path, ec);
+        NativePath::remove(path, ec);
         return;
     }
 
@@ -356,7 +357,7 @@ void write_layer_file(
     append_layer_payload(out, header, slots, layer);
     out.close();
     std::error_code ec;
-    fs::remove(archive_path_for_layer(path), ec);
+    NativePath::remove(archive_path_for_layer(path), ec);
 }
 
 Layer read_layer_file(

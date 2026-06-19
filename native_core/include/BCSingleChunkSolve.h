@@ -2316,6 +2316,133 @@ public:
         );
     }
 
+    void write_chunk_from_raw_spans(
+        const std::vector<BCLoadedCell> &current_cells,
+        const std::vector<FinalizedCellPayload> &payloads,
+        const BCSingleChunkValueBuffer<StorageT> &raw_values,
+        const std::vector<uint64_t> &cell_offsets
+    ) {
+        const double assembly_t0 = bc_single_chunk_now_seconds();
+        if (current_cells.size() != payloads.size() ||
+            cell_offsets.size() != current_cells.size() + 1U) {
+            throw std::invalid_argument("BC final layer streamer raw span chunk shape mismatch");
+        }
+        std::vector<uint8_t> bucket_bytes;
+        std::vector<uint8_t> rank_bytes;
+        uint64_t total_values = 0U;
+        for (size_t i = 0U; i < current_cells.size(); ++i) {
+            const BCLoadedCell &cell = current_cells[i];
+            if (cell.cid >= descriptors_.size()) {
+                throw std::out_of_range("BC final layer streamer raw span cell id out of range");
+            }
+            if (written_[static_cast<size_t>(cell.cid)] != 0U) {
+                throw std::runtime_error("BC final layer streamer duplicate raw span cell");
+            }
+            written_[static_cast<size_t>(cell.cid)] = 1U;
+            const FinalizedCellPayload &payload = payloads[i];
+            if (payload.buckets.empty()) {
+                if (payload.success_rows != 0U || !payload.rank_payload.empty()) {
+                    throw std::invalid_argument("BC final layer streamer empty raw span payload mismatch");
+                }
+                BCPositionCellDescriptor descriptor;
+                descriptor.flags_or_padding = kBCPositionCellFlagEmpty;
+                descriptors_[static_cast<size_t>(cell.cid)] = descriptor;
+                success_values_written_[static_cast<size_t>(cell.cid)] = 1U;
+                success_value_offsets_[static_cast<size_t>(cell.cid)] = 0U;
+                continue;
+            }
+            if (payload.buckets.size() > std::numeric_limits<uint32_t>::max()) {
+                throw std::overflow_error("BC final layer streamer raw span bucket count exceeds uint32");
+            }
+            if (payload.rank_payload.size() > std::numeric_limits<uint32_t>::max()) {
+                throw std::overflow_error("BC final layer streamer raw span rank payload exceeds uint32");
+            }
+            const uint64_t local_bucket_offset =
+                bc_checked_add_u64(
+                    bucket_cursor_,
+                    bucket_bytes.size(),
+                    "BC final layer streamer raw span bucket cursor overflow"
+                );
+            const uint64_t local_rank_offset =
+                bc_checked_add_u64(
+                    rank_cursor_,
+                    rank_bytes.size(),
+                    "BC final layer streamer raw span rank cursor overflow"
+                );
+            BCPositionCellDescriptor descriptor;
+            descriptor.bucket_count = static_cast<uint32_t>(payload.buckets.size());
+            descriptor.success_rows = payload.success_rows;
+            descriptor.bucket_meta_offset = local_bucket_offset;
+            descriptor.rank_payload_offset = local_rank_offset;
+            descriptor.rank_payload_bytes = payload.rank_payload.size();
+            descriptor.reserved0 = 0U;
+            descriptor.flags_or_padding = 0U;
+            descriptors_[static_cast<size_t>(cell.cid)] = descriptor;
+            for (const BCBucketEntry &bucket : payload.buckets) {
+                bc_append_bucket_entry(bucket_bytes, bucket);
+            }
+            rank_bytes.insert(
+                rank_bytes.end(),
+                payload.rank_payload.begin(),
+                payload.rank_payload.end()
+            );
+            const uint64_t value_count =
+                static_cast<uint64_t>(payload.success_rows) * row_width_;
+            const uint64_t src_offset =
+                cell_offsets[i] * static_cast<uint64_t>(row_width_);
+            if (src_offset + value_count > raw_values.size()) {
+                throw std::out_of_range("BC final layer streamer raw span values exceed raw buffer");
+            }
+            if (success_values_written_[static_cast<size_t>(cell.cid)] != 0U) {
+                throw std::runtime_error("BC final layer streamer duplicate raw span success values");
+            }
+            success_value_offsets_[static_cast<size_t>(cell.cid)] =
+                success_value_cursor_ + total_values;
+            success_values_written_[static_cast<size_t>(cell.cid)] = 1U;
+            total_values = bc_checked_add_u64(
+                total_values,
+                value_count,
+                "BC final layer streamer raw span value count overflow"
+            );
+        }
+        stats_.result_assembly_seconds += bc_single_chunk_now_seconds() - assembly_t0;
+
+        append_position_payload(*bucket_stager_, bucket_bytes);
+        append_position_payload(*rank_stager_, rank_bytes);
+        bucket_cursor_ = bc_checked_add_u64(
+            bucket_cursor_,
+            bucket_bytes.size(),
+            "BC final layer streamer raw span bucket cursor overflow"
+        );
+        rank_cursor_ = bc_checked_add_u64(
+            rank_cursor_,
+            rank_bytes.size(),
+            "BC final layer streamer raw span rank cursor overflow"
+        );
+        for (size_t i = 0U; i < current_cells.size(); ++i) {
+            const FinalizedCellPayload &payload = payloads[i];
+            if (payload.buckets.empty()) {
+                continue;
+            }
+            const uint64_t value_count =
+                static_cast<uint64_t>(payload.success_rows) * row_width_;
+            if (value_count == 0U) {
+                continue;
+            }
+            const uint64_t src_offset =
+                cell_offsets[i] * static_cast<uint64_t>(row_width_);
+            write_success_values(
+                raw_values.data() + static_cast<std::ptrdiff_t>(src_offset),
+                value_count
+            );
+        }
+        success_value_cursor_ = bc_checked_add_u64(
+            success_value_cursor_,
+            total_values,
+            "BC final layer streamer raw span success cursor overflow"
+        );
+    }
+
     [[nodiscard]] BCSingleChunkSolveFileResult finish() {
         double assembly_t0 = bc_single_chunk_now_seconds();
         for (uint8_t written : written_) {
@@ -3579,38 +3706,12 @@ BCSingleChunkSolveFileResult bc_single_chunk_solve_strict_1x_to_files(
                 stats.compact_live_cells += compact_stats.live_cells;
                 stats.compact_empty_cells += compact_stats.empty_cells;
             }
-            uint64_t compact_chunk_values = 0U;
-            for (size_t i = 0U; i < current_cells.size(); ++i) {
-                const FinalizedCellPayload &payload = payloads[i];
-                compact_chunk_values = bc_checked_add_u64(
-                    compact_chunk_values,
-                    static_cast<uint64_t>(payload.success_rows) * options.solve.row_width,
-                    "BC strict single compact chunk value count overflow"
-                );
-            }
-            std::vector<StorageT> compact_values;
-            compact_values.reserve(static_cast<size_t>(compact_chunk_values));
-            for (size_t i = 0U; i < current_cells.size(); ++i) {
-                const FinalizedCellPayload &payload = payloads[i];
-                const uint64_t local_values =
-                    static_cast<uint64_t>(payload.success_rows) * options.solve.row_width;
-                const uint64_t src_offset = cell_offsets[i] * static_cast<uint64_t>(options.solve.row_width);
-                if (src_offset + local_values > scratch.raw_values.size()) {
-                    throw std::out_of_range("BC strict single compact values exceed raw buffer");
-                }
-                const StorageT *begin =
-                    scratch.raw_values.data() + static_cast<std::ptrdiff_t>(src_offset);
-                compact_values.insert(
-                    compact_values.end(),
-                    begin,
-                    begin + static_cast<std::ptrdiff_t>(local_values)
-                );
-            }
             stats.compact_seconds += bc_single_chunk_now_seconds() - compact_t0;
-            output_streamer.write_chunk(
+            output_streamer.write_chunk_from_raw_spans(
                 current_cells,
                 payloads,
-                compact_values
+                scratch.raw_values,
+                cell_offsets
             );
             const double partial_cleanup_t0 = bc_single_chunk_now_seconds();
             std::error_code remove_partial_ec;
@@ -3623,7 +3724,6 @@ BCSingleChunkSolveFileResult bc_single_chunk_solve_strict_1x_to_files(
             std::vector<BCSingleChunkLoadedWorkItem>().swap(work_items);
             std::vector<FinalizedCellPayload>().swap(payloads);
             std::vector<BCResidentCompactStats>().swap(per_compact_thread);
-            std::vector<StorageT>().swap(compact_values);
             stats.workspace_release_seconds += bc_single_chunk_now_seconds() - workspace_release_t0;
             ++pass2_chunks;
         }
@@ -3977,38 +4077,12 @@ bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier(
             stats.compact_live_cells += compact_stats.live_cells;
             stats.compact_empty_cells += compact_stats.empty_cells;
         }
-        uint64_t compact_chunk_values = 0U;
-        for (size_t i = 0U; i < current_cells.size(); ++i) {
-            const FinalizedCellPayload &payload = payloads[i];
-            compact_chunk_values = bc_checked_add_u64(
-                compact_chunk_values,
-                static_cast<uint64_t>(payload.success_rows) * options.solve.row_width,
-                "BC strict frontier compact chunk value count overflow"
-            );
-        }
-        std::vector<StorageT> compact_values;
-        compact_values.reserve(static_cast<size_t>(compact_chunk_values));
-        for (size_t i = 0U; i < current_cells.size(); ++i) {
-            const FinalizedCellPayload &payload = payloads[i];
-            const uint64_t local_values =
-                static_cast<uint64_t>(payload.success_rows) * options.solve.row_width;
-            const uint64_t src_offset = cell_offsets[i] * static_cast<uint64_t>(options.solve.row_width);
-            if (src_offset + local_values > scratch.raw_values.size()) {
-                throw std::out_of_range("BC strict frontier compact values exceed raw buffer");
-            }
-            const StorageT *begin =
-                scratch.raw_values.data() + static_cast<std::ptrdiff_t>(src_offset);
-            compact_values.insert(
-                compact_values.end(),
-                begin,
-                begin + static_cast<std::ptrdiff_t>(local_values)
-            );
-        }
         stats.compact_seconds += bc_single_chunk_now_seconds() - compact_t0;
-        output_streamer.write_chunk(
+        output_streamer.write_chunk_from_raw_spans(
             current_cells,
             payloads,
-            compact_values
+            scratch.raw_values,
+            cell_offsets
         );
         const double partial_cleanup_t0 = bc_single_chunk_now_seconds();
         std::error_code remove_partial_ec;
@@ -4021,7 +4095,6 @@ bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier(
         std::vector<BCSingleChunkLoadedWorkItem>().swap(work_items);
         std::vector<FinalizedCellPayload>().swap(payloads);
         std::vector<BCResidentCompactStats>().swap(per_compact_thread);
-        std::vector<StorageT>().swap(compact_values);
         stats.workspace_release_seconds += bc_single_chunk_now_seconds() - workspace_release_t0;
         ++pass2_chunks;
     }

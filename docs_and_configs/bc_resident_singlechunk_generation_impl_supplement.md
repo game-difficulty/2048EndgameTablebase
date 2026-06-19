@@ -117,10 +117,11 @@ native_core/include/BCPositionCellLoader.h
 
 ## 5. Route Dispatcher
 
-The unified benchmark dispatcher is in:
+The production dispatcher is in:
 
 ```text
-native_core/tests_src/bench_bc_family_generation.cpp
+native_core/include/BCFamilyGenerationRunner.h
+native_core/src/BCFamilyGenerationRunner.cpp
 ```
 
 The route option is:
@@ -129,19 +130,31 @@ The route option is:
 --family-route auto|resident|single|family
 ```
 
-`--family-route family --family-modulus N` remains the reproducible fixed
-FamilyChain path. `--family-route-script <csv>` can force route and available
-memory per layer for tests, but it must not change the fixed modulus. If the CSV
-contains `target_modulus`, it must match `--family-modulus`.
+`family_route=family` with `family_modulus=N` remains the reproducible fixed
+FamilyChain path. `family_route=auto` is the production default. The thin CLI
+wrapper `native_core/src/bc_family_generation_full.cpp` maps command-line
+options onto the same runner; benchmark code is not the production owner.
+
+The first generated layer defaults to resident routing. This matters because
+the first layers are usually small, and starting from FamilyChain would add
+avoidable scheduling overhead. Later layers follow the auto planner and route
+hysteresis.
+
+Route scripts can force route and available memory per layer for tests, but
+they must not change the fixed modulus. If a CSV contains `target_modulus`, it
+must match `family_modulus`.
 
 The CSV output includes:
 
 ```text
+row_type = layer | total
 route
 target_modulus
 available_memory_bytes
 route_estimated_peak_bytes
 route_budget_bytes
+generation_throughput_mbps
+total_throughput_mbps
 ```
 
 Do not add duplicate source modulus CSV fields. The source file already carries
@@ -331,8 +344,10 @@ copy only matching bucket/rank payload into the output loaded cell
 release non-target data before compute continues
 ```
 
-This is used by generation route switching, modulus switching, checkpoint
-resume, and later solve-side window loading.
+This remains useful for route switching, diagnostic remap tools, checkpoint
+validation, and solve-side window loading. Production BC runs currently keep a
+fixed caller-supplied modulus for generation and solve; they do not rely on
+mid-run modulus switching.
 
 ## 11. Shared Hot Generation Backend
 
@@ -373,7 +388,7 @@ parallel grouping is enabled only when cell_count >= 512
 large per-cell key/value sorts use the native x86 SIMD sort adapter
 ```
 
-## 12. Direct IO
+## 12. Production Runtime And Direct IO
 
 Generation and solve have direct-aware position IO. Current production
 defaults:
@@ -399,14 +414,24 @@ The benchmark option names are currently:
 For large free9 runs, direct writer backend throughput has reached roughly
 4.5 GB/s on the local SSD.
 
+The frontend does not spawn the BC generation executable. It calls
+`formation_core.run_bc_family_build(...)`, which invokes
+`bc_family_generation_full_run(...)` in-process and updates
+`FormationProgress` after each generated `.bcpos` layer. The standalone
+`bc_family_generation_full` executable is a thin wrapper kept for command-line
+reproduction.
+
 Windows direct IO requests are split before submission when a physical request
 would exceed the Win32 DWORD byte-count limit. Buffered write paths also split
 large logical writes, so large BC files should not fail because one backend
 request is larger than the platform API accepts.
 
-## 13. Current Validation Snapshot
+## 13. Historical Validation Snapshot
 
-Recent local runs after checkpoint:
+These local runs were checkpoint snapshots. They are useful for regression
+orientation, but they are not a promise that later hardware, route settings,
+modulus, direct-IO settings, or code checkpoints will reproduce identical
+seconds:
 
 ```text
 resident/non-block free9-256, m17:

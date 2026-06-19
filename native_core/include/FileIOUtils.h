@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FormationRuntime.h"
+#include "PathUtils.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -24,9 +25,21 @@ struct DirectIoConfig {
     uint32_t chunk_mib = 8U;
 };
 
+inline std::string path_string(const std::string &path_like) {
+    return path_like;
+}
+
+inline std::string path_string(const char *path_like) {
+    return std::string(path_like == nullptr ? "" : path_like);
+}
+
+inline std::string path_string(const std::filesystem::path &path_like) {
+    return NativePath::to_utf8_string(path_like);
+}
+
 template <typename PathLike>
 std::string path_string(const PathLike &path_like) {
-    return std::filesystem::path(path_like).string();
+    return NativePath::to_utf8_string(std::filesystem::path(path_like));
 }
 
 inline uint64_t align_up_u64(uint64_t value, uint64_t alignment) {
@@ -121,7 +134,7 @@ private:
 template <typename PathLike>
 std::vector<uint8_t> read_binary_bytes(const PathLike &path_like) {
     const std::string path = path_string(path_like);
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    std::ifstream file(NativePath::from_utf8(path), std::ios::binary | std::ios::ate);
     if (!file) {
         return {};
     }
@@ -141,7 +154,7 @@ std::vector<uint8_t> read_binary_bytes_range(
     uint64_t end
 ) {
     const std::string path = path_string(path_like);
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(NativePath::from_utf8(path), std::ios::binary);
     if (!file || end < begin) {
         return {};
     }
@@ -157,7 +170,7 @@ std::vector<uint8_t> read_binary_bytes_range(
 template <typename PathLike>
 void write_binary_bytes(const PathLike &path_like, const std::vector<uint8_t> &data) {
     const std::string path = path_string(path_like);
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    std::ofstream out(NativePath::from_utf8(path), std::ios::binary | std::ios::trunc);
     if (!out) {
         throw std::runtime_error("failed to open for write: " + path);
     }
@@ -170,7 +183,7 @@ template <typename T, typename PathLike>
 std::vector<T> read_binary_vector(const PathLike &path_like) {
     static_assert(std::is_trivially_copyable_v<T>, "binary vector I/O requires trivially copyable types");
     const std::string path = path_string(path_like);
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    std::ifstream file(NativePath::from_utf8(path), std::ios::binary | std::ios::ate);
     if (!file) {
         return {};
     }
@@ -197,7 +210,7 @@ std::vector<T> read_binary_vector_direct(
         return read_binary_vector<T>(path_like);
     }
     const std::string path = path_string(path_like);
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    std::ifstream file(NativePath::from_utf8(path), std::ios::binary | std::ios::ate);
     if (!file) {
         return {};
     }
@@ -218,7 +231,7 @@ template <typename T, typename PathLike>
 void write_binary_span(const PathLike &path_like, const T *data, size_t count) {
     static_assert(std::is_trivially_copyable_v<T>, "binary span I/O requires trivially copyable types");
     const std::string path = path_string(path_like);
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    std::ofstream out(NativePath::from_utf8(path), std::ios::binary | std::ios::trunc);
     if (!out) {
         throw std::runtime_error("failed to open for write: " + path);
     }

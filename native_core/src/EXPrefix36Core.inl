@@ -1780,7 +1780,7 @@ KeyValueSortUint64Uint32Fn resolve_keyvalue_sort_uint64_uint32() {
                     continue;
                 }
                 NativeSortPolicy::prepare_bookgen_native_load(candidate);
-                HMODULE lib = LoadLibraryA(candidate.string().c_str());
+                HMODULE lib = LoadLibraryW(candidate.wstring().c_str());
                 if (!lib) {
                     continue;
                 }

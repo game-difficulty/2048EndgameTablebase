@@ -86,17 +86,17 @@ std::string ad_generate_stats_header() {
 
 void ensure_ad_generate_stats_header(const RunOptions &options) {
     const std::string path = ad_generate_stats_file_path(options);
-    if (fs::exists(path)) {
-        std::ifstream in(path);
+    if (NativePath::exists(path)) {
+        std::ifstream in(NativePath::from_utf8(path));
         std::string first_line;
         if (std::getline(in, first_line) && first_line == ad_generate_stats_header()) {
             return;
         }
         in.close();
         std::error_code ec;
-        fs::remove(path, ec);
+        NativePath::remove(path, ec);
     }
-    std::ofstream file(path, std::ios::app);
+    std::ofstream file(NativePath::from_utf8(path), std::ios::app);
     file << ad_generate_stats_header() << "\n";
 }
 
@@ -125,7 +125,7 @@ void append_ad_generate_stats_record(
     const double compute_seconds =
         record.generate_seconds + record.sort_unique_seconds + record.merge_seconds + record.validate_seconds;
     const double total_seconds = compute_seconds + record.write_seconds;
-    std::ofstream file(ad_generate_stats_file_path(options), std::ios::app);
+    std::ofstream file(NativePath::from_utf8(ad_generate_stats_file_path(options)), std::ios::app);
     file << record.stage << ","
          << record.step << ","
          << record.input_live << ","
@@ -224,7 +224,7 @@ std::pair<uint64_t, int> apply_sym_pair(uint64_t board, int symm_mode) {
 std::vector<uint64_t> read_raw_file(const std::string &path, FileIOUtils::DirectIoConfig config) {
     const double t0 = wall_time_seconds();
     std::vector<uint64_t> data;
-    if (fs::exists(path)) {
+    if (NativePath::exists(path)) {
         data = FileIOUtils::read_binary_vector_direct<uint64_t>(path, config);
     } else {
         data = read_temp_uint64_archive(path + ".7z");
@@ -256,7 +256,7 @@ void write_raw_file(
             throw std::runtime_error("failed to write compressed temp layer: " + path + ".7z");
         }
         std::error_code ec;
-        fs::remove(path, ec);
+        NativePath::remove(path, ec);
     } else {
         FileIOUtils::write_binary_vector_direct(path, data, config);
     }
@@ -276,7 +276,7 @@ void write_raw_file(
 
 std::vector<std::vector<double>> load_length_factors(const std::string &path, double default_value) {
     std::vector<std::vector<double>> result;
-    std::ifstream file(path);
+    std::ifstream file(NativePath::from_utf8(path));
     std::string line;
     while (std::getline(file, line)) {
         std::vector<double> row;
@@ -298,7 +298,7 @@ std::vector<std::vector<double>> load_length_factors(const std::string &path, do
 }
 
 void save_length_factors(const std::string &path, const std::vector<std::vector<double>> &lists) {
-    std::ofstream out(path, std::ios::trunc);
+    std::ofstream out(NativePath::from_utf8(path), std::ios::trunc);
     if (!out) {
         return;
     }
@@ -325,8 +325,8 @@ struct InitParams {
 
 InitParams initialize_parameters_internal(const std::string &pathname, bool isfree) {
     InitParams params;
-    fs::path base_path(pathname);
-    params.length_factors_list_path = (base_path.parent_path() / "length_factors_list.txt").string();
+    fs::path base_path = NativePath::from_utf8(pathname);
+    params.length_factors_list_path = NativePath::to_utf8_string(base_path.parent_path() / "length_factors_list.txt");
     params.length_factors_list = load_length_factors(params.length_factors_list_path, 3.2);
     params.length_factors = BookGenerator::harmonic_mean_by_column(params.length_factors_list);
     if (params.length_factors.empty()) {
@@ -534,11 +534,11 @@ RestartResult handle_restart_ad(
     const std::string path_i_minus_1 = pathname + std::to_string(step_index - 1);
     const bool has_readable_book_archive = is_readable_temp_archive(path_i + "b.7z");
     const bool has_readable_raw_archive = is_readable_temp_archive(path_i + ".7z");
-    if ((fs::exists(path_i_plus_1) && fs::exists(path_i)) ||
-        (fs::exists(path_i_plus_1 + "b") && fs::exists(path_i)) ||
-        (fs::exists(path_i_plus_1 + ".z") && fs::exists(path_i)) ||
-        fs::exists(path_i + "b") ||
-        fs::exists(path_i + ".z") ||
+    if ((NativePath::exists(path_i_plus_1) && NativePath::exists(path_i)) ||
+        (NativePath::exists(path_i_plus_1 + "b") && NativePath::exists(path_i)) ||
+        (NativePath::exists(path_i_plus_1 + ".z") && NativePath::exists(path_i)) ||
+        NativePath::exists(path_i + "b") ||
+        NativePath::exists(path_i + ".z") ||
         has_readable_book_archive ||
         has_readable_raw_archive) {
         debug_log("skipping step " + std::to_string(step_index));

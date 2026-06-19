@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PathUtils.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -79,7 +81,7 @@ inline DeletionThresholdState current_deletion_thresholds(const RunOptions &opti
         options.relative_deletion_threshold
     };
     if (!options.deletion_threshold_signal_path.empty()) {
-        std::ifstream in(options.deletion_threshold_signal_path);
+        std::ifstream in(NativePath::from_utf8(options.deletion_threshold_signal_path));
         double signaled_absolute = 0.0;
         if (in >> signaled_absolute) {
             state.absolute = signaled_absolute;
@@ -101,7 +103,7 @@ inline DeletionThresholdState refresh_deletion_thresholds(
     if (options.deletion_threshold_signal_path.empty()) {
         return clamp_deletion_thresholds(current_state);
     }
-    std::ifstream in(options.deletion_threshold_signal_path);
+    std::ifstream in(NativePath::from_utf8(options.deletion_threshold_signal_path));
     double signaled_absolute = 0.0;
     if (in >> signaled_absolute) {
         current_state.absolute = signaled_absolute;

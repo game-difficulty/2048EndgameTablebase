@@ -86,17 +86,17 @@ std::string classic_generate_stats_header() {
 
 void ensure_classic_generate_stats_header(const RunOptions &options) {
     const std::string path = classic_generate_stats_file_path(options);
-    if (fs::exists(path)) {
-        std::ifstream in(path);
+    if (NativePath::exists(path)) {
+        std::ifstream in(NativePath::from_utf8(path));
         std::string first_line;
         if (std::getline(in, first_line) && first_line == classic_generate_stats_header()) {
             return;
         }
         in.close();
         std::error_code ec;
-        fs::remove(path, ec);
+        NativePath::remove(path, ec);
     }
-    std::ofstream file(path, std::ios::app);
+    std::ofstream file(NativePath::from_utf8(path), std::ios::app);
     file << classic_generate_stats_header() << "\n";
 }
 
@@ -125,7 +125,7 @@ void append_classic_generate_stats_record(
     const double compute_seconds =
         record.generate_seconds + record.sort_unique_seconds + record.merge_seconds + record.validate_seconds;
     const double total_seconds = compute_seconds + record.write_seconds;
-    std::ofstream file(classic_generate_stats_file_path(options), std::ios::app);
+    std::ofstream file(NativePath::from_utf8(classic_generate_stats_file_path(options)), std::ios::app);
     file << record.stage << ","
          << record.step << ","
          << record.input_live << ","
@@ -174,13 +174,13 @@ size_t success_entry_size_for_dtype(const std::string &name) {
 
 bool is_valid_restart_file(const std::string &path, uint64_t alignment) {
     std::error_code ec;
-    if (!fs::exists(path, ec) || ec) {
+    if (!NativePath::exists(path, ec) || ec) {
         return false;
     }
-    if (!fs::is_regular_file(path, ec) || ec) {
+    if (!NativePath::is_regular_file(path, ec) || ec) {
         return false;
     }
-    const auto size = fs::file_size(path, ec);
+    const auto size = NativePath::file_size(path, ec);
     if (ec || size == 0U) {
         return false;
     }
@@ -192,13 +192,13 @@ bool is_valid_restart_file(const std::string &path, uint64_t alignment) {
 
 void remove_invalid_restart_file(const std::string &path, uint64_t alignment) {
     std::error_code ec;
-    if (!fs::exists(path, ec) || ec) {
+    if (!NativePath::exists(path, ec) || ec) {
         return;
     }
     if (is_valid_restart_file(path, alignment)) {
         return;
     }
-    fs::remove(path, ec);
+    NativePath::remove(path, ec);
     if (ec) {
         throw std::runtime_error("failed to remove invalid restart file: " + path);
     }
@@ -629,7 +629,7 @@ uint64_t apply_canonical(uint64_t board, int symm_mode) {
 
 std::vector<std::vector<double>> load_length_factors(const std::string &path, double default_value) {
     std::vector<std::vector<double>> result;
-    std::ifstream file(path);
+    std::ifstream file(NativePath::from_utf8(path));
     std::string line;
     while (std::getline(file, line)) {
         std::vector<double> row;
@@ -662,8 +662,8 @@ struct InitParams {
 InitParams initialize_parameters_internal(int num_threads, const std::string &pathname, bool isfree) {
     (void) num_threads;
     InitParams params;
-    fs::path base_path(pathname);
-    params.length_factors_list_path = (base_path.parent_path() / "length_factors_list.txt").string();
+    fs::path base_path = NativePath::from_utf8(pathname);
+    params.length_factors_list_path = NativePath::to_utf8_string(base_path.parent_path() / "length_factors_list.txt");
     params.length_factors_list = load_length_factors(params.length_factors_list_path, 3.2);
     params.length_factors = BookGenerator::harmonic_mean_by_column(params.length_factors_list);
     if (params.length_factors.empty()) {
@@ -682,7 +682,7 @@ InitParams initialize_parameters_internal(int num_threads, const std::string &pa
 namespace {
 
 void save_length_factors(const std::string &path, const std::vector<std::vector<double>> &lists) {
-    std::ofstream out(path, std::ios::trunc);
+    std::ofstream out(NativePath::from_utf8(path), std::ios::trunc);
     if (!out) {
         return;
     }
@@ -780,7 +780,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> handle_restart(
     const uint64_t raw_alignment = sizeof(uint64_t);
     const uint64_t book_alignment = success_entry_size_for_dtype(options.success_rate_dtype);
     auto read_temp_layer = [&io_config](const std::string &path) {
-        if (fs::exists(path)) {
+        if (NativePath::exists(path)) {
             return FileIOUtils::read_binary_vector_direct<uint64_t>(path, io_config);
         }
         return read_temp_uint64_archive(path + ".7z");
@@ -791,7 +791,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> handle_restart(
                 throw std::runtime_error("failed to write compressed temp layer: " + path + ".7z");
             }
             std::error_code ec;
-            fs::remove(path, ec);
+            NativePath::remove(path, ec);
             return;
         }
         FileIOUtils::write_binary_vector_direct(path, data, io_config);
@@ -1606,7 +1606,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                 throw std::runtime_error("failed to write compressed temp layer: " + options.pathname + std::to_string(i) + ".7z");
             }
             std::error_code ec;
-            fs::remove(options.pathname + std::to_string(i), ec);
+            NativePath::remove(options.pathname + std::to_string(i), ec);
             stats_record.write_seconds = wall_time_seconds() - write_t0;
         } else {
             stats_record.validate_seconds += wall_time_seconds() - validate_t0;

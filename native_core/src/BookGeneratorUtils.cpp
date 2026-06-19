@@ -43,13 +43,13 @@ namespace BookGeneratorUtils {
 
 #ifdef _WIN32
         HMODULE module = nullptr;
-        if (GetModuleHandleExA(
+        if (GetModuleHandleExW(
                 GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                reinterpret_cast<LPCSTR>(&bookgen_dll_candidates),
+                reinterpret_cast<LPCWSTR>(&bookgen_dll_candidates),
                 &module) &&
             module != nullptr) {
-            char module_path[MAX_PATH];
-            DWORD module_len = GetModuleFileNameA(module, module_path, MAX_PATH);
+            wchar_t module_path[MAX_PATH];
+            DWORD module_len = GetModuleFileNameW(module, module_path, MAX_PATH);
             if (module_len > 0) {
                 fs::path module_dir = fs::path(module_path).parent_path();
                 append_unique(module_dir / "bookgen_native.dll");
@@ -57,8 +57,8 @@ namespace BookGeneratorUtils {
             }
         }
 
-        char exe_path[MAX_PATH];
-        DWORD exe_len = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
+        wchar_t exe_path[MAX_PATH];
+        DWORD exe_len = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
         if (exe_len > 0) {
             fs::path exe_dir = fs::path(exe_path).parent_path();
             append_unique(exe_dir / "native_core" / "bookgen_native.dll");
@@ -80,12 +80,11 @@ namespace BookGeneratorUtils {
             try {
 #ifdef _WIN32
                 for (const auto &candidate : bookgen_dll_candidates()) {
-                    const std::string candidate_string = candidate.string();
                     if (!fs::exists(candidate)) {
                         continue;
                     }
                     NativeSortPolicy::prepare_bookgen_native_load(candidate);
-                    HMODULE lib = LoadLibraryA(candidate_string.c_str());
+                    HMODULE lib = LoadLibraryW(candidate.wstring().c_str());
                     if (!lib) {
                         continue;
                     }
@@ -116,12 +115,11 @@ namespace BookGeneratorUtils {
         try {
 #ifdef _WIN32
             for (const auto &candidate : bookgen_dll_candidates()) {
-                const std::string candidate_string = candidate.string();
                 if (!fs::exists(candidate)) {
                     continue;
                 }
                 NativeSortPolicy::prepare_bookgen_native_load(candidate);
-                HMODULE lib = LoadLibraryA(candidate_string.c_str());
+                HMODULE lib = LoadLibraryW(candidate.wstring().c_str());
                 if (!lib) {
                     continue;
                 }

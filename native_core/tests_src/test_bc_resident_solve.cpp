@@ -1,5 +1,6 @@
 #include "BCCellBuilder.h"
 #include "BCFutureSuccessLookup.h"
+#include "BCFamilySolveRunner.h"
 #include "BCPositionScanner.h"
 #include "BCResidentSolve.h"
 #include "BoardMover.h"
@@ -1061,6 +1062,28 @@ void test_no_empty_board_is_zero() {
     check(seen_rows == 1U, "full-board layer should contain exactly one row");
 }
 
+void test_runner_resident_options_set_future_modulus() {
+    BC::BCFamilySolveRunOptions run_options;
+    run_options.family_modulus = 29U;
+    run_options.target_rank = 8U;
+    run_options.success_dtype = BCSuccessDTypeMode::UInt32;
+    const BCLut lut(test_alphabet());
+    const std::vector<uint8_t> success_shifts =
+        BC::detail::bc_family_runner_success_shifts();
+    const BC::BCQuadrantWordSumTable word_sums =
+        BC::detail::bc_family_runner_word_sums(lut);
+    const BCResidentSolveOptions<uint32_t> solve_options =
+        BC::detail::bc_family_runner_make_resident_solve_options<uint32_t>(
+            run_options,
+            success_shifts,
+            word_sums
+        );
+    check(
+        solve_options.edge_options.future_cell_modulus == run_options.family_modulus,
+        "runner resident options should set future cell modulus"
+    );
+}
+
 } // namespace
 
 int main() {
@@ -1094,6 +1117,8 @@ int main() {
         test_one_minus_dtype_value_semantics();
         std::cerr << "resident no empty board\n";
         test_no_empty_board_is_zero();
+        std::cerr << "runner resident future modulus\n";
+        test_runner_resident_options_set_future_modulus();
     } catch (const std::exception &ex) {
         std::cerr << "bc_resident_solve_test failed: " << ex.what() << "\n";
         return 1;

@@ -91,6 +91,7 @@ void scan_typed(
     uint64_t max_count = 0U;
     BC::CellId first_max_cell = 0U;
     uint32_t first_max_row = 0U;
+    uint64_t first_max_board = 0U;
 
     for (BC::CellId cid = 0U; cid < position.cell_count(); ++cid) {
         const BC::BCPositionCellDescriptor &desc = position.descriptor(cid);
@@ -112,6 +113,20 @@ void scan_typed(
         }
     }
 
+    if (have_value) {
+        bool found_board = false;
+        BC::BCPositionCellScanner scanner(position, first_max_cell);
+        scanner.for_each_board([&](const BC::BCScannedBoardEntry &entry) {
+            if (!found_board && entry.local_success_row == first_max_row) {
+                first_max_board = entry.board;
+                found_board = true;
+            }
+        });
+        if (!found_board) {
+            throw std::runtime_error("failed to locate first max board");
+        }
+    }
+
     std::cout << std::setprecision(15)
               << "rows=" << rows
               << " max_value=" << value_to_string(max_value)
@@ -120,6 +135,7 @@ void scan_typed(
               << " max_count=" << max_count
               << " first_max_cell=" << first_max_cell
               << " first_max_row=" << first_max_row
+              << " first_max_board=0x" << std::hex << first_max_board << std::dec
               << '\n';
 }
 

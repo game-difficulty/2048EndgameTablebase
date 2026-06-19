@@ -516,10 +516,12 @@ class SingletonConfig:
             "compress": False,
             "optimal_branch_only": False,
             "compress_temp_files": False,
+            "algorithm_mode": "classic",
             "SmallTileSumLimit": 96,
             "advanced_algo": False,
             "zmask_algo": False,
             "chunked_solve": False,
+            "bc_family_modulus": 29,
             "direct_io": True,
             "direct_io_queue_depth": 16,
             "direct_io_chunk_mib": 8,
@@ -545,10 +547,30 @@ class SingletonConfig:
                     data = pickle.load(file)
                     # Merge data with defaults to ensure missing keys are added
                     updated = False
+                    if data.get("algorithm_mode") not in ("classic", "ad", "ex", "exad", "bc"):
+                        advanced = bool(data.get("advanced_algo", defaults["advanced_algo"]))
+                        zmask = bool(data.get("zmask_algo", defaults["zmask_algo"]))
+                        if advanced and zmask:
+                            data["algorithm_mode"] = "exad"
+                        elif advanced:
+                            data["algorithm_mode"] = "ad"
+                        elif zmask:
+                            data["algorithm_mode"] = "ex"
+                        else:
+                            data["algorithm_mode"] = "classic"
+                        updated = True
                     for k, v in defaults.items():
                         if k not in data:
                             data[k] = v
                             updated = True
+                    try:
+                        bc_family_modulus = int(data.get("bc_family_modulus", defaults["bc_family_modulus"]))
+                    except (TypeError, ValueError):
+                        bc_family_modulus = defaults["bc_family_modulus"]
+                    bc_family_modulus = min(65535, max(1, bc_family_modulus))
+                    if data.get("bc_family_modulus") != bc_family_modulus:
+                        data["bc_family_modulus"] = bc_family_modulus
+                        updated = True
                     for direct_io_key in (
                         "direct_io",
                         "direct_io_queue_depth",
@@ -677,6 +699,7 @@ class SingletonConfig:
                         ".exzbook",
                         ".exadbook",
                         ".exadzbook",
+                        ".bccmp",
                     )
                 ):
                     return True

@@ -887,10 +887,11 @@ public:
         if (direct_mode_ && (base_offset % alignment_) != 0U) {
             throw std::invalid_argument("BC success streaming direct base offset must be aligned");
         }
-        stage_bytes_ = kTargetStageBytes - (kTargetStageBytes % alignment_);
-        if (stage_bytes_ == 0U) {
-            stage_bytes_ = alignment_;
+        external_chunk_bytes_ = kTargetStageBytes - (kTargetStageBytes % alignment_);
+        if (external_chunk_bytes_ == 0U) {
+            external_chunk_bytes_ = alignment_;
         }
+        stage_bytes_ = direct_mode_ ? alignment_ : external_chunk_bytes_;
         max_pending_chunks_ = direct_mode_ ? kDirectPendingChunksPerGroup : 1U;
         group_.buffers.resize(max_pending_chunks_);
         if (stats_ != nullptr) {
@@ -907,24 +908,11 @@ public:
         }
         const uint8_t *cursor = static_cast<const uint8_t *>(data);
         uint64_t remaining = bytes;
-        while (remaining != 0U) {
-            ensure_active_buffer();
-            const uint64_t available = stage_bytes_ - active_bytes_;
-            if (available == 0U) {
-                finalize_active_buffer();
-                continue;
-            }
-            const uint64_t take = std::min<uint64_t>(available, remaining);
-            PendingGroup &group = group_;
-            StageBuffer &buffer = group.buffers[group.pending_count];
-            std::memcpy(buffer.data + static_cast<size_t>(active_bytes_), cursor, static_cast<size_t>(take));
-            active_bytes_ += take;
-            cursor += take;
-            remaining -= take;
-            if (active_bytes_ == stage_bytes_ && remaining != 0U) {
-                finalize_active_buffer();
-            }
+        if (!direct_mode_ || alignment_ <= 1U) {
+            append_staged_only(cursor, remaining);
+            return;
         }
+        append_direct_external_first(cursor, remaining);
     }
 
     template <typename T>
@@ -985,6 +973,122 @@ private:
             return ptr;
         }
         return reinterpret_cast<uint8_t *>(raw + (alignment - rem));
+    }
+
+    void append_staged_only(const uint8_t *cursor, uint64_t bytes) {
+        uint64_t remaining = bytes;
+        while (remaining != 0U) {
+            ensure_active_buffer();
+            const uint64_t available = stage_bytes_ - active_bytes_;
+            if (available == 0U) {
+                finalize_active_buffer();
+                continue;
+            }
+            const uint64_t take = std::min<uint64_t>(available, remaining);
+            PendingGroup &group = group_;
+            StageBuffer &buffer = group.buffers[group.pending_count];
+            std::memcpy(buffer.data + static_cast<size_t>(active_bytes_), cursor, static_cast<size_t>(take));
+            active_bytes_ += take;
+            cursor += take;
+            remaining -= take;
+            if (active_bytes_ == stage_bytes_ && remaining != 0U) {
+                finalize_active_buffer();
+            }
+        }
+    }
+
+    void append_direct_external_first(const uint8_t *cursor, uint64_t bytes) {
+        uint64_t remaining = bytes;
+        while (remaining != 0U) {
+            if (active_bytes_ != 0U) {
+                const uint64_t available = alignment_ - active_bytes_;
+                const uint64_t take = std::min<uint64_t>(available, remaining);
+                append_staged_only(cursor, take);
+                cursor += take;
+                remaining -= take;
+                if (active_bytes_ == alignment_) {
+                    finalize_active_buffer();
+                }
+                continue;
+            }
+
+            const uint64_t file_mod = file_cursor_ % alignment_;
+            if (file_mod != 0U) {
+                const uint64_t take = std::min<uint64_t>(remaining, alignment_ - file_mod);
+                append_staged_only(cursor, take);
+                cursor += take;
+                remaining -= take;
+                if ((file_cursor_ + active_bytes_) % alignment_ == 0U) {
+                    finalize_active_buffer();
+                }
+                continue;
+            }
+
+            if (remaining < alignment_) {
+                append_staged_only(cursor, remaining);
+                return;
+            }
+
+            const uint64_t external_bytes = remaining - (remaining % alignment_);
+            write_external_aligned_stream(cursor, external_bytes);
+            cursor += external_bytes;
+            remaining -= external_bytes;
+        }
+    }
+
+    void write_external_aligned_stream(const uint8_t *cursor, uint64_t bytes) {
+        if (bytes == 0U) {
+            return;
+        }
+        if (active_bytes_ != 0U) {
+            throw std::logic_error("BC success streaming external write with active staged bytes");
+        }
+        if ((file_cursor_ % alignment_) != 0U ||
+            (bytes % alignment_) != 0U) {
+            throw std::logic_error("BC success streaming external stream is not file-aligned");
+        }
+        flush_active_group();
+
+        uint64_t remaining = bytes;
+        while (remaining != 0U) {
+            std::vector<BCFileWriteRequest> requests;
+            requests.reserve(max_pending_chunks_);
+            uint64_t batch_cursor = file_cursor_;
+            uint64_t batch_bytes = 0U;
+            while (remaining != 0U && requests.size() < max_pending_chunks_) {
+                uint64_t take = std::min<uint64_t>(remaining, external_chunk_bytes_);
+                if (take != remaining) {
+                    take -= take % alignment_;
+                }
+                if (take == 0U) {
+                    take = remaining;
+                }
+                if ((take % alignment_) != 0U) {
+                    throw std::logic_error("BC success streaming external chunk is not aligned");
+                }
+                requests.push_back(BCFileWriteRequest{batch_cursor, cursor, take});
+                batch_cursor = bc_checked_add_u64(
+                    batch_cursor,
+                    take,
+                    "BC success streaming external write cursor overflow"
+                );
+                cursor += take;
+                remaining -= take;
+                batch_bytes = bc_checked_add_u64(
+                    batch_bytes,
+                    take,
+                    "BC success streaming external write batch byte overflow"
+                );
+            }
+            BCFileIOStats local;
+            file_.write_many(requests, stats_ == nullptr ? nullptr : &local);
+            bc_success_accumulate_file_stats(stats_, local);
+            file_cursor_ = bc_checked_add_u64(
+                file_cursor_,
+                batch_bytes,
+                "BC success streaming write cursor overflow"
+            );
+        }
     }
 
     void ensure_active_buffer() {
@@ -1053,6 +1157,7 @@ private:
     BCFileIOStats *stats_ = nullptr;
     PendingGroup group_{};
     uint64_t stage_bytes_ = kTargetStageBytes;
+    uint64_t external_chunk_bytes_ = kTargetStageBytes;
     uint64_t active_bytes_ = 0U;
     uint64_t file_cursor_ = 0U;
     uint64_t alignment_ = 1U;
@@ -1571,6 +1676,9 @@ public:
                 bc_load_success_value_le<T>(bytes.data() + static_cast<size_t>(i * sizeof(T)));
         }
 #endif
+        if (is_contiguous_logical_payload_order(value_count)) {
+            return physical_values;
+        }
         std::vector<T> logical_values(static_cast<size_t>(value_count));
         uint64_t logical_cursor = 0U;
         for (size_t cid = 0U; cid < success_rows_.size(); ++cid) {
@@ -1890,6 +1998,25 @@ private:
         if (!file_ || !position_.has_value()) {
             throw std::logic_error("BC success streaming reader is not open");
         }
+    }
+
+    [[nodiscard]] bool is_contiguous_logical_payload_order(uint64_t value_count) const {
+        uint64_t cursor = 0U;
+        for (size_t cid = 0U; cid < success_rows_.size(); ++cid) {
+            if (cell_value_offsets_[cid] != cursor) {
+                return false;
+            }
+            const uint64_t rows = success_rows_[cid];
+            if (rows > std::numeric_limits<uint64_t>::max() / header_.row_width) {
+                return false;
+            }
+            const uint64_t values = rows * header_.row_width;
+            if (cursor > value_count || values > value_count - cursor) {
+                return false;
+            }
+            cursor += values;
+        }
+        return cursor == value_count;
     }
 
     void require_cell(CellId cid) const {

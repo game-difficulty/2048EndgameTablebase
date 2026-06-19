@@ -31,13 +31,13 @@ inline std::vector<std::filesystem::path> bc_bookgen_native_candidates() {
 
 #ifdef _WIN32
     HMODULE module = nullptr;
-    if (GetModuleHandleExA(
+    if (GetModuleHandleExW(
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCSTR>(&bc_bookgen_native_candidates),
+            reinterpret_cast<LPCWSTR>(&bc_bookgen_native_candidates),
             &module) &&
         module != nullptr) {
-        char module_path[MAX_PATH];
-        const DWORD module_len = GetModuleFileNameA(module, module_path, MAX_PATH);
+        wchar_t module_path[MAX_PATH];
+        const DWORD module_len = GetModuleFileNameW(module, module_path, MAX_PATH);
         if (module_len > 0U) {
             const std::filesystem::path module_dir =
                 std::filesystem::path(module_path).parent_path();
@@ -46,8 +46,8 @@ inline std::vector<std::filesystem::path> bc_bookgen_native_candidates() {
         }
     }
 
-    char exe_path[MAX_PATH];
-    const DWORD exe_len = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
+    wchar_t exe_path[MAX_PATH];
+    const DWORD exe_len = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
     if (exe_len > 0U) {
         const std::filesystem::path exe_dir = std::filesystem::path(exe_path).parent_path();
         append_unique(exe_dir / "bookgen_native.dll");
@@ -71,7 +71,7 @@ inline BCSortKeyValueUint64Uint32Fn bc_resolve_keyvalue_sort_uint64_uint32() {
                     continue;
                 }
                 NativeSortPolicy::prepare_bookgen_native_load(candidate);
-                HMODULE lib = LoadLibraryA(candidate.string().c_str());
+                HMODULE lib = LoadLibraryW(candidate.wstring().c_str());
                 if (lib == nullptr) {
                     continue;
                 }

@@ -14,9 +14,11 @@ const DEFAULT_CONFIG = {
   compress: false,
   optimal_branch_only: false,
   compress_temp_files: false,
+  algorithm_mode: 'classic',
   advanced_algo: false,
   zmask_algo: false,
   chunked_solve: false,
+  bc_family_modulus: 29,
   deletion_threshold: 0,
   deletion_threshold_mode: 'absolute',
   SmallTileSumLimit: 96,
@@ -41,6 +43,9 @@ const config = ref({ ...DEFAULT_CONFIG });
 const categories = ref({});
 const themeMap = ref({});
 const targetTiles = ref([]);
+const buildProgressCurrent = ref(0);
+const buildProgressTotal = ref(0);
+const isBuilding = ref(false);
 
 let client = null;
 let started = false;
@@ -61,6 +66,17 @@ const normalizeDeletionThreshold = (value) => {
 const normalizeDeletionThresholdMode = (value) =>
   value === 'relative' || value === 'off' ? value : 'absolute';
 
+const normalizeAlgorithmMode = (value) =>
+  ['classic', 'ad', 'ex', 'exad', 'bc'].includes(value) ? value : DEFAULT_CONFIG.algorithm_mode;
+
+const normalizeBCFamilyModulus = (value) => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_CONFIG.bc_family_modulus;
+  }
+  return Math.min(65535, Math.max(1, parsed));
+};
+
 const mergeConfig = (nextConfig = {}) => {
   const previous = config.value;
   const nextUiScale = Number(nextConfig.ui_scale ?? previous.ui_scale ?? DEFAULT_CONFIG.ui_scale) || DEFAULT_CONFIG.ui_scale;
@@ -74,6 +90,16 @@ const mergeConfig = (nextConfig = {}) => {
       nextConfig.deletion_threshold_mode
         ?? previous.deletion_threshold_mode
         ?? DEFAULT_CONFIG.deletion_threshold_mode
+    ),
+    algorithm_mode: normalizeAlgorithmMode(
+      nextConfig.algorithm_mode
+        ?? previous.algorithm_mode
+        ?? DEFAULT_CONFIG.algorithm_mode
+    ),
+    bc_family_modulus: normalizeBCFamilyModulus(
+      nextConfig.bc_family_modulus
+        ?? previous.bc_family_modulus
+        ?? DEFAULT_CONFIG.bc_family_modulus
     ),
     ui_scale: Math.min(125, Math.max(90, nextUiScale)),
     colors: clonePalette(nextConfig.colors ?? previous.colors, DEFAULT_CONFIG.colors),
@@ -128,11 +154,56 @@ const applyGlobalConfig = () => {
   document.documentElement.style.setProperty('--ui-scale', String(uiScale / 100));
 };
 
+const normalizeBuildProgress = (current, total) => {
+  const nextCurrent = Math.max(0, Number(current) || 0);
+  const nextTotal = Math.max(nextCurrent, Number(total) || 0);
+  return { current: nextCurrent, total: nextTotal };
+};
+
+const applyBuildState = (buildState = {}) => {
+  const { current, total } = normalizeBuildProgress(
+    buildState.current,
+    buildState.total
+  );
+  buildProgressCurrent.value = current;
+  buildProgressTotal.value = total;
+  isBuilding.value = Boolean(buildState.is_building);
+};
+
+const applyBuildStarted = (payload = {}) => {
+  const { current, total } = normalizeBuildProgress(
+    payload.current,
+    payload.total
+  );
+  buildProgressCurrent.value = current;
+  buildProgressTotal.value = total;
+  isBuilding.value = true;
+};
+
+const applyBuildProgress = (payload = {}) => {
+  const { current, total } = normalizeBuildProgress(
+    payload.current,
+    payload.total
+  );
+  buildProgressCurrent.value = current;
+  buildProgressTotal.value = total;
+  isBuilding.value = !(total > 0 && current >= total);
+};
+
+const applyBuildFailed = () => {
+  isBuilding.value = false;
+  buildProgressCurrent.value = 0;
+  buildProgressTotal.value = 0;
+};
+
 const handleSettingsData = (payload = {}) => {
   categories.value = payload.categories || {};
   themeMap.value = payload.theme_map || {};
   targetTiles.value = payload.target_tiles || [];
   mergeConfig(payload.config || {});
+  if (Object.prototype.hasOwnProperty.call(payload, 'build_state')) {
+    applyBuildState(payload.build_state || {});
+  }
   loaded.value = true;
   applyGlobalConfig();
 };
@@ -174,6 +245,12 @@ const connect = () => {
         handleSettingsData(message.payload);
       } else if (message.type === 'SETTING_UPDATED') {
         handleSettingUpdated(message.payload);
+      } else if (message.type === 'BUILD_STARTED') {
+        applyBuildStarted(message.payload);
+      } else if (message.type === 'BUILD_PROGRESS') {
+        applyBuildProgress(message.payload);
+      } else if (message.type === 'BUILD_FAILED') {
+        applyBuildFailed();
       }
     },
     onClose: () => {
@@ -301,6 +378,9 @@ export function useAppSettingsStore() {
     categories,
     themeMap,
     targetTiles,
+    buildProgressCurrent,
+    buildProgressTotal,
+    isBuilding,
     themes,
     currentPalette,
     start,
@@ -311,5 +391,9 @@ export function useAppSettingsStore() {
     setTheme,
     setCustomMode,
     changeLanguage,
+    applyBuildState,
+    applyBuildStarted,
+    applyBuildProgress,
+    applyBuildFailed,
   };
 }

@@ -1,5 +1,6 @@
 #include "BCFamilySolveRunner.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -184,18 +185,127 @@ void print_usage(std::ostream &out) {
     return args;
 }
 
+[[nodiscard]] double stats_mrows_per_sec(uint64_t rows, double seconds) {
+    return seconds > 0.0 ? static_cast<double>(rows) / seconds / 1.0e6 : 0.0;
+}
+
+struct StatsTotals {
+    uint64_t current_rows = 0U;
+    uint64_t live_rows = 0U;
+    uint64_t zero_pruned_rows = 0U;
+    uint64_t archive_live_rows = 0U;
+    uint64_t threshold_pruned_rows = 0U;
+    uint64_t position_bytes = 0U;
+    uint64_t success_bytes = 0U;
+    uint64_t output_position_write_bytes = 0U;
+    uint64_t output_success_write_bytes = 0U;
+    uint64_t temp_compressed_bytes = 0U;
+    uint64_t route_available_memory_bytes = 0U;
+    uint64_t route_resident_required_bytes = 0U;
+    uint64_t route_single_required_bytes = 0U;
+    uint64_t route_required_bytes = 0U;
+    double open_seconds = 0.0;
+    double open_current_position_seconds = 0.0;
+    double open_future2_position_seconds = 0.0;
+    double open_future2_success_seconds = 0.0;
+    double open_future4_position_seconds = 0.0;
+    double open_future4_success_seconds = 0.0;
+    double descriptor_rows_seconds = 0.0;
+    double partition_seconds = 0.0;
+    double writer_open_seconds = 0.0;
+    double solve_call_seconds = 0.0;
+    double spawn4_compute_seconds = 0.0;
+    double spawn2_compute_seconds = 0.0;
+    double compact_seconds = 0.0;
+    double temp_write_seconds = 0.0;
+    double temp_read_seconds = 0.0;
+    double temp_compress_seconds = 0.0;
+    double final_stage_write_seconds = 0.0;
+    double final_stage_read_seconds = 0.0;
+    double position_write_seconds = 0.0;
+    double success_write_seconds = 0.0;
+    double writer_close_seconds = 0.0;
+    double post_resize_seconds = 0.0;
+    double archive_scan_seconds = 0.0;
+    double archive_prune_write_seconds = 0.0;
+    double final_compress_seconds = 0.0;
+    double total_seconds = 0.0;
+};
+
+void accumulate_stats_total(StatsTotals &total, const BC::BCFamilySolveRunLayerMetric &m) {
+    const BC::BCFamilySolveStats &fs = m.family_stats;
+    const BC::BCSingleChunkSolveStats &s = fs.single;
+    total.current_rows += m.current_rows;
+    total.live_rows += m.live_rows;
+    total.zero_pruned_rows += m.zero_pruned_rows;
+    total.archive_live_rows += m.archive_live_rows;
+    total.threshold_pruned_rows += m.threshold_pruned_rows;
+    total.position_bytes += m.position_bytes;
+    total.success_bytes += m.success_bytes;
+    total.output_position_write_bytes += m.output_position_write_bytes;
+    total.output_success_write_bytes += m.output_success_write_bytes;
+    total.temp_compressed_bytes += m.temp_compressed_bytes;
+    total.route_available_memory_bytes =
+        std::max(total.route_available_memory_bytes, m.route_available_memory_bytes);
+    total.route_resident_required_bytes =
+        std::max(total.route_resident_required_bytes, m.route_resident_required_bytes);
+    total.route_single_required_bytes =
+        std::max(total.route_single_required_bytes, m.route_single_required_bytes);
+    total.route_required_bytes = std::max(total.route_required_bytes, m.route_required_bytes);
+    total.open_seconds += m.open_seconds;
+    total.open_current_position_seconds += m.open_current_position_seconds;
+    total.open_future2_position_seconds += m.open_future2_position_seconds;
+    total.open_future2_success_seconds += m.open_future2_success_seconds;
+    total.open_future4_position_seconds += m.open_future4_position_seconds;
+    total.open_future4_success_seconds += m.open_future4_success_seconds;
+    total.descriptor_rows_seconds += m.descriptor_rows_seconds;
+    total.partition_seconds += m.partition_seconds;
+    total.writer_open_seconds += m.writer_open_seconds;
+    total.solve_call_seconds += m.solve_call_seconds;
+    if (m.has_family_stats) {
+        total.spawn4_compute_seconds += fs.spawn4_cell_compute_seconds;
+        total.spawn2_compute_seconds += fs.spawn2_cell_compute_seconds;
+        total.compact_seconds += s.compact_seconds;
+        total.temp_write_seconds += fs.temp_write_seconds;
+        total.temp_read_seconds += fs.temp_read_seconds;
+        total.final_stage_write_seconds += fs.final_stage_write_seconds;
+        total.final_stage_read_seconds += fs.final_stage_read_seconds;
+    }
+    total.temp_compress_seconds += m.temp_compress_seconds;
+    total.position_write_seconds += m.position_write_seconds;
+    total.success_write_seconds += m.success_write_seconds;
+    total.writer_close_seconds += m.writer_close_seconds;
+    total.post_resize_seconds += m.post_resize_seconds;
+    total.archive_scan_seconds += m.archive_scan_seconds;
+    total.archive_prune_write_seconds += m.archive_prune_write_seconds;
+    total.final_compress_seconds += m.final_compress_seconds;
+    total.total_seconds += m.total_seconds;
+}
+
+[[nodiscard]] StatsTotals stats_totals(const BC::BCFamilySolveRunResult &result) {
+    StatsTotals total;
+    for (const BC::BCFamilySolveRunLayerMetric &m : result.layers) {
+        accumulate_stats_total(total, m);
+    }
+    return total;
+}
+
 void write_stats_header(std::ostream &out) {
     out
         << "kind,ordinal,solve_route,layer_sum,current_rows,live_rows,zero_pruned_rows,"
         << "archive_live_rows,threshold_pruned_rows,position_bytes,success_bytes,"
-        << "temp_compressed_bytes,"
+        << "output_position_write_bytes,output_success_write_bytes,temp_compressed_bytes,"
         << "route_available_memory_bytes,route_resident_required_bytes,"
         << "route_single_required_bytes,route_required_bytes,"
-        << "open_seconds,partition_seconds,solve_call_seconds,spawn4_compute_seconds,"
+        << "total_mrows_per_sec,solve_call_mrows_per_sec,"
+        << "open_seconds,open_current_position_seconds,open_future2_position_seconds,"
+        << "open_future2_success_seconds,open_future4_position_seconds,"
+        << "open_future4_success_seconds,descriptor_rows_seconds,partition_seconds,"
+        << "writer_open_seconds,solve_call_seconds,spawn4_compute_seconds,"
         << "spawn2_compute_seconds,compact_seconds,temp_write_seconds,temp_read_seconds,"
         << "temp_compress_seconds,final_stage_write_seconds,final_stage_read_seconds,"
-        << "position_write_seconds,"
-        << "success_write_seconds,archive_scan_seconds,archive_prune_write_seconds,"
+        << "position_write_seconds,success_write_seconds,writer_close_seconds,"
+        << "post_resize_seconds,archive_scan_seconds,archive_prune_write_seconds,"
         << "final_compress_seconds,total_seconds\n";
 }
 
@@ -214,13 +324,24 @@ void write_stats_row(std::ostream &out, const BC::BCFamilySolveRunLayerMetric &m
         << m.threshold_pruned_rows << ','
         << m.position_bytes << ','
         << m.success_bytes << ','
+        << m.output_position_write_bytes << ','
+        << m.output_success_write_bytes << ','
         << m.temp_compressed_bytes << ','
         << m.route_available_memory_bytes << ','
         << m.route_resident_required_bytes << ','
         << m.route_single_required_bytes << ','
         << m.route_required_bytes << ','
+        << stats_mrows_per_sec(m.current_rows, m.total_seconds) << ','
+        << stats_mrows_per_sec(m.current_rows, m.solve_call_seconds) << ','
         << m.open_seconds << ','
+        << m.open_current_position_seconds << ','
+        << m.open_future2_position_seconds << ','
+        << m.open_future2_success_seconds << ','
+        << m.open_future4_position_seconds << ','
+        << m.open_future4_success_seconds << ','
+        << m.descriptor_rows_seconds << ','
         << m.partition_seconds << ','
+        << m.writer_open_seconds << ','
         << m.solve_call_seconds << ','
         << (m.has_family_stats ? fs.spawn4_cell_compute_seconds : 0.0) << ','
         << (m.has_family_stats ? fs.spawn2_cell_compute_seconds : 0.0) << ','
@@ -232,10 +353,60 @@ void write_stats_row(std::ostream &out, const BC::BCFamilySolveRunLayerMetric &m
         << (m.has_family_stats ? fs.final_stage_read_seconds : 0.0) << ','
         << m.position_write_seconds << ','
         << m.success_write_seconds << ','
+        << m.writer_close_seconds << ','
+        << m.post_resize_seconds << ','
         << m.archive_scan_seconds << ','
         << m.archive_prune_write_seconds << ','
         << m.final_compress_seconds << ','
         << m.total_seconds << '\n';
+}
+
+void write_stats_total_row(std::ostream &out, const BC::BCFamilySolveRunResult &result) {
+    const StatsTotals total = stats_totals(result);
+    out
+        << "total,0,,0,"
+        << total.current_rows << ','
+        << total.live_rows << ','
+        << total.zero_pruned_rows << ','
+        << total.archive_live_rows << ','
+        << total.threshold_pruned_rows << ','
+        << total.position_bytes << ','
+        << total.success_bytes << ','
+        << total.output_position_write_bytes << ','
+        << total.output_success_write_bytes << ','
+        << total.temp_compressed_bytes << ','
+        << total.route_available_memory_bytes << ','
+        << total.route_resident_required_bytes << ','
+        << total.route_single_required_bytes << ','
+        << total.route_required_bytes << ','
+        << stats_mrows_per_sec(total.current_rows, total.total_seconds) << ','
+        << stats_mrows_per_sec(total.current_rows, total.solve_call_seconds) << ','
+        << total.open_seconds << ','
+        << total.open_current_position_seconds << ','
+        << total.open_future2_position_seconds << ','
+        << total.open_future2_success_seconds << ','
+        << total.open_future4_position_seconds << ','
+        << total.open_future4_success_seconds << ','
+        << total.descriptor_rows_seconds << ','
+        << total.partition_seconds << ','
+        << total.writer_open_seconds << ','
+        << total.solve_call_seconds << ','
+        << total.spawn4_compute_seconds << ','
+        << total.spawn2_compute_seconds << ','
+        << total.compact_seconds << ','
+        << total.temp_write_seconds << ','
+        << total.temp_read_seconds << ','
+        << total.temp_compress_seconds << ','
+        << total.final_stage_write_seconds << ','
+        << total.final_stage_read_seconds << ','
+        << total.position_write_seconds << ','
+        << total.success_write_seconds << ','
+        << total.writer_close_seconds << ','
+        << total.post_resize_seconds << ','
+        << total.archive_scan_seconds << ','
+        << total.archive_prune_write_seconds << ','
+        << total.final_compress_seconds << ','
+        << total.total_seconds << '\n';
 }
 
 void write_summary(
@@ -251,58 +422,47 @@ void write_summary(
         throw std::runtime_error("failed to open summary CSV: " + args.summary_csv.string());
     }
     out << std::setprecision(12);
-    uint64_t solve_rows = 0U;
-    uint64_t live_rows = 0U;
-    uint64_t zero_rows = 0U;
-    uint64_t archive_rows = 0U;
-    uint64_t threshold_rows = 0U;
-    uint64_t temp_compressed_bytes = 0U;
+    const StatsTotals total = stats_totals(result);
     double solve_seconds = 0.0;
     double archive_seconds = 0.0;
-    double temp_compress_seconds = 0.0;
-    double final_compress_seconds = 0.0;
     for (const BC::BCFamilySolveRunLayerMetric &m : result.layers) {
         if (m.kind == "solve") {
-            solve_rows += m.current_rows;
-            live_rows += m.live_rows;
-            zero_rows += m.zero_pruned_rows;
             solve_seconds += m.total_seconds;
-            temp_compressed_bytes += m.temp_compressed_bytes;
-            temp_compress_seconds += m.temp_compress_seconds;
-            final_compress_seconds += m.final_compress_seconds;
         } else if (m.kind == "archive") {
-            archive_rows += m.archive_live_rows;
-            threshold_rows += m.threshold_pruned_rows;
             archive_seconds += m.total_seconds;
-            final_compress_seconds += m.final_compress_seconds;
         }
     }
-    const double wall_mrows = wall_seconds > 0.0
-        ? static_cast<double>(solve_rows) / wall_seconds / 1.0e6
-        : 0.0;
     out
         << "generated_position_dir,solved_output_dir,archive_output_dir,min_ordinal,max_ordinal,"
-        << "completed,solve_rows,live_rows,zero_pruned_rows,archive_live_rows,"
-        << "threshold_pruned_rows,temp_compressed_bytes,solve_seconds,archive_seconds,"
-        << "temp_compress_seconds,final_compress_seconds,wall_seconds,wall_mrows_per_sec\n"
+        << "completed,current_rows,live_rows,zero_pruned_rows,archive_live_rows,"
+        << "threshold_pruned_rows,position_bytes,success_bytes,temp_compressed_bytes,"
+        << "solve_seconds,archive_seconds,solve_call_seconds,total_seconds,"
+        << "wall_seconds,total_mrows_per_sec,solve_call_mrows_per_sec,wall_mrows_per_sec,"
+        << "temp_compress_seconds,final_compress_seconds\n"
         << args.run.generated_position_dir.string() << ','
         << args.run.solved_output_dir.string() << ','
         << args.run.archive_output_dir.string() << ','
         << result.min_ordinal << ','
         << result.max_ordinal << ','
         << (result.completed ? 1 : 0) << ','
-        << solve_rows << ','
-        << live_rows << ','
-        << zero_rows << ','
-        << archive_rows << ','
-        << threshold_rows << ','
-        << temp_compressed_bytes << ','
+        << total.current_rows << ','
+        << total.live_rows << ','
+        << total.zero_pruned_rows << ','
+        << total.archive_live_rows << ','
+        << total.threshold_pruned_rows << ','
+        << total.position_bytes << ','
+        << total.success_bytes << ','
+        << total.temp_compressed_bytes << ','
         << solve_seconds << ','
         << archive_seconds << ','
-        << temp_compress_seconds << ','
-        << final_compress_seconds << ','
+        << total.solve_call_seconds << ','
+        << total.total_seconds << ','
         << wall_seconds << ','
-        << wall_mrows << '\n';
+        << stats_mrows_per_sec(total.current_rows, total.total_seconds) << ','
+        << stats_mrows_per_sec(total.current_rows, total.solve_call_seconds) << ','
+        << stats_mrows_per_sec(total.current_rows, wall_seconds) << ','
+        << total.temp_compress_seconds << ','
+        << total.final_compress_seconds << '\n';
 }
 
 } // namespace
@@ -338,6 +498,8 @@ int main(int argc, char **argv) {
                     << '\n';
             });
         const double wall_seconds = BC::detail::bc_family_solve_runner_now_seconds() - begin;
+        write_stats_total_row(stats, result);
+        stats.flush();
         write_summary(args, result, wall_seconds);
         std::cout << std::setprecision(12)
             << "summary"

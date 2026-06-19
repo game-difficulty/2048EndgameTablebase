@@ -5,6 +5,7 @@
 #include "EXPrefix40Layer.h"
 #include "CompressionBridge.h"
 #include "Formation.h"
+#include "PathUtils.h"
 #include "VBoardMover.h"
 
 #include <algorithm>
@@ -817,7 +818,7 @@ void write_lut_file(const std::string &path, const LutBundle &bundle) {
     header.high_base_values = bundle.dense_lut.high_base.size();
     header.valid_suffix_count = bundle.dense_lut.valid_suffix_count;
 
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    std::ofstream out(NativePath::from_utf8(path), std::ios::binary | std::ios::trunc);
     if (!out) {
         throw std::runtime_error("failed to write EX prefix36 LUT: " + path);
     }
@@ -838,7 +839,7 @@ void write_lut_file(const std::string &path, const LutBundle &bundle) {
 }
 
 LutBundle read_lut_file(const std::string &path) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to read EX prefix36 LUT: " + path);
     }
@@ -902,7 +903,7 @@ LutBundle make_lut_bundle(const ZMaskFrozen::TileLimitConfig &config) {
 }
 
 std::string archive_entry_name_for_path(const std::string &path) {
-    std::string name = fs::path(path).stem().string();
+    std::string name = NativePath::to_utf8_string(NativePath::from_utf8(path).stem());
     if (name.empty()) {
         name = "data";
     }
@@ -1039,7 +1040,7 @@ Prefix36Layer read_layer_file(
     int rebuild_threads = 1
 ) {
     std::string actual_path = path;
-    if (!fs::exists(actual_path) &&
+    if (!NativePath::exists(actual_path) &&
         !has_archive_suffix(actual_path) &&
         is_readable_7z_or_xz_archive(actual_path + ".7z")) {
         actual_path += ".7z";
@@ -1051,7 +1052,7 @@ Prefix36Layer read_layer_file(
         return layer;
     }
 
-    std::ifstream header_in(actual_path, std::ios::binary);
+    std::ifstream header_in(NativePath::from_utf8(actual_path), std::ios::binary);
     if (!header_in) {
         throw std::runtime_error("failed to read EX prefix36 layer: " + actual_path);
     }
@@ -1062,7 +1063,7 @@ Prefix36Layer read_layer_file(
     }
     validate_layer_header(header, actual_path);
     const uint64_t expected_bytes = layer_file_bytes(header);
-    if (fs::exists(actual_path) && fs::file_size(actual_path) < expected_bytes) {
+    if (NativePath::exists(actual_path) && NativePath::file_size(actual_path) < expected_bytes) {
         throw std::runtime_error("truncated EX prefix36 layer: " + actual_path);
     }
     header_in.close();
@@ -1087,7 +1088,7 @@ LutBundle load_or_build_prefix36_lut(
             options.is_variant
         );
     const std::string path = lut_file_path(options.pathname);
-    if (fs::exists(path)) {
+    if (NativePath::exists(path)) {
         try {
             LutBundle bundle = read_lut_file(path);
             if (ZMaskFrozen::tile_limit_configs_equal(bundle.config, config) &&
@@ -1148,7 +1149,7 @@ ColdFileQuery prepare_cold_query_from_lut_file(
     const std::string &zlut_path,
     uint64_t board
 ) {
-    std::ifstream in(zlut_path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(zlut_path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EX prefix36 LUT: " + zlut_path);
     }
@@ -1245,7 +1246,7 @@ bool all_layers_exist(const RunOptions &options) {
         return false;
     }
     for (int step = 0; step < options.steps; ++step) {
-        if (!fs::exists(layer_file_path(options.pathname, step))) {
+        if (!NativePath::exists(layer_file_path(options.pathname, step))) {
             return false;
         }
     }
@@ -1261,11 +1262,11 @@ std::string optimal_complete_marker_path(const std::string &pathname) {
 }
 
 bool optimal_complete_marker_exists(const RunOptions &options) {
-    return fs::exists(optimal_complete_marker_path(options.pathname));
+    return NativePath::exists(optimal_complete_marker_path(options.pathname));
 }
 
 int read_optimal_layer_marker(const RunOptions &options) {
-    std::ifstream in(optimal_layer_marker_path(options.pathname));
+    std::ifstream in(NativePath::from_utf8(optimal_layer_marker_path(options.pathname)));
     int step = kOptimalBranchOnlyStartStep - 1;
     if (in) {
         in >> step;
@@ -1274,7 +1275,7 @@ int read_optimal_layer_marker(const RunOptions &options) {
 }
 
 void write_optimal_layer_marker(const RunOptions &options, int step) {
-    std::ofstream out(optimal_layer_marker_path(options.pathname), std::ios::trunc);
+    std::ofstream out(NativePath::from_utf8(optimal_layer_marker_path(options.pathname)), std::ios::trunc);
     if (!out) {
         throw std::runtime_error("failed to write EX optimal branch marker");
     }
@@ -1282,7 +1283,7 @@ void write_optimal_layer_marker(const RunOptions &options, int step) {
 }
 
 void write_optimal_complete_marker(const RunOptions &options) {
-    std::ofstream out(optimal_complete_marker_path(options.pathname), std::ios::trunc);
+    std::ofstream out(NativePath::from_utf8(optimal_complete_marker_path(options.pathname)), std::ios::trunc);
     if (!out) {
         throw std::runtime_error("failed to write EX optimal completion marker");
     }
@@ -1302,23 +1303,23 @@ std::string compressed_layer_file_path(const std::string &pathname, int step) {
 }
 
 bool layer_input_exists(const std::string &pathname, int step) {
-    return fs::exists(layer_file_path(pathname, step)) ||
-           fs::exists(compressed_layer_file_path(pathname, step)) ||
-           fs::exists(generated_layer_file_path(pathname, step)) ||
+    return NativePath::exists(layer_file_path(pathname, step)) ||
+           NativePath::exists(compressed_layer_file_path(pathname, step)) ||
+           NativePath::exists(generated_layer_file_path(pathname, step)) ||
            is_readable_7z_or_xz_archive(generated_layer_archive_path(pathname, step));
 }
 
 bool generated_layer_input_exists(const std::string &pathname, int step) {
-    return fs::exists(generated_layer_file_path(pathname, step)) ||
+    return NativePath::exists(generated_layer_file_path(pathname, step)) ||
            is_readable_7z_or_xz_archive(generated_layer_archive_path(pathname, step));
 }
 
 bool raw_solved_layer_exists(const std::string &pathname, int step) {
-    return fs::exists(layer_file_path(pathname, step));
+    return NativePath::exists(layer_file_path(pathname, step));
 }
 
 bool compressed_solved_layer_exists(const std::string &pathname, int step) {
-    return fs::exists(compressed_layer_file_path(pathname, step));
+    return NativePath::exists(compressed_layer_file_path(pathname, step));
 }
 
 bool solved_layer_exists(const std::string &pathname, int step) {
@@ -1349,19 +1350,19 @@ int find_generation_resume_step(const RunOptions &options, int target_step) {
 
 std::string existing_layer_input_path(const std::string &pathname, int step) {
     const std::string final_path = layer_file_path(pathname, step);
-    if (fs::exists(final_path)) {
+    if (NativePath::exists(final_path)) {
         return final_path;
     }
     const std::string compressed_path = compressed_layer_file_path(pathname, step);
-    if (fs::exists(compressed_path)) {
+    if (NativePath::exists(compressed_path)) {
         return compressed_path;
     }
     const std::string generated_path = generated_layer_file_path(pathname, step);
-    if (fs::exists(generated_path)) {
+    if (NativePath::exists(generated_path)) {
         return generated_path;
     }
     const std::string generated_archive = generated_layer_archive_path(pathname, step);
-    if (fs::exists(generated_archive)) {
+    if (NativePath::exists(generated_archive)) {
         return generated_archive;
     }
     return final_path;
@@ -1369,11 +1370,11 @@ std::string existing_layer_input_path(const std::string &pathname, int step) {
 
 void materialize_compressed_layer_input(const std::string &pathname, int step) {
     const std::string final_path = layer_file_path(pathname, step);
-    if (fs::exists(final_path)) {
+    if (NativePath::exists(final_path)) {
         return;
     }
     const std::string compressed_path = compressed_layer_file_path(pathname, step);
-    if (!fs::exists(compressed_path)) {
+    if (!NativePath::exists(compressed_path)) {
         return;
     }
     EXCompressedResult::decompress_ex_result_to_zbook(
@@ -1411,8 +1412,8 @@ Prefix36Layer read_layer_input(
 
 void remove_generated_layer_input(const std::string &pathname, int step) {
     std::error_code ec;
-    fs::remove(generated_layer_file_path(pathname, step), ec);
-    fs::remove(generated_layer_archive_path(pathname, step), ec);
+    NativePath::remove(generated_layer_file_path(pathname, step), ec);
+    NativePath::remove(generated_layer_archive_path(pathname, step), ec);
 }
 
 void write_generated_layer_file(
@@ -1427,16 +1428,16 @@ void write_generated_layer_file(
     const std::string archive_path = generated_layer_archive_path(options.pathname, step);
     std::error_code ec;
     if (solved_layer_exists(options.pathname, step)) {
-        fs::remove(raw_path, ec);
-        fs::remove(archive_path, ec);
+        NativePath::remove(raw_path, ec);
+        NativePath::remove(archive_path, ec);
         return;
     }
     if (options.compress_temp_files) {
         write_layer_archive_file(archive_path, layer, spec, mode);
-        fs::remove(raw_path, ec);
+        NativePath::remove(raw_path, ec);
     } else {
         write_layer_file(raw_path, layer, spec, mode, io_config);
-        fs::remove(archive_path, ec);
+        NativePath::remove(archive_path, ec);
     }
 }
 
@@ -1452,12 +1453,12 @@ void promote_generated_layer_input(
     const std::string final_path = layer_file_path(pathname, step);
     std::error_code ec;
     if (solved_layer_exists(pathname, step)) {
-        fs::remove(generated_layer_file_path(pathname, step), ec);
-        fs::remove(generated_layer_archive_path(pathname, step), ec);
+        NativePath::remove(generated_layer_file_path(pathname, step), ec);
+        NativePath::remove(generated_layer_archive_path(pathname, step), ec);
         return;
     }
     const std::string generated_path = generated_layer_file_path(pathname, step);
-    if (!fs::exists(generated_path)) {
+    if (!NativePath::exists(generated_path)) {
         const std::string archive_path = generated_layer_archive_path(pathname, step);
         if (!is_readable_7z_or_xz_archive(archive_path)) {
             return;
@@ -1474,7 +1475,7 @@ void promote_generated_layer_input(
             throw std::runtime_error("EX prefix36 physical pattern metadata does not match generated archive: " + archive_path);
         }
         write_layer_file(final_path, layer, spec, mode, io_config);
-        fs::remove(archive_path, ec);
+        NativePath::remove(archive_path, ec);
         return;
     }
     FileIOUtils::finalize_temporary_file(generated_path, final_path);
@@ -1485,7 +1486,7 @@ bool all_compressed_layers_exist(const RunOptions &options) {
         return false;
     }
     for (int step = 0; step < options.steps; ++step) {
-        if (!fs::exists(compressed_layer_file_path(options.pathname, step))) {
+        if (!NativePath::exists(compressed_layer_file_path(options.pathname, step))) {
             return false;
         }
     }
@@ -1541,15 +1542,15 @@ EXCompressedResult::Prefix36LayerView layer_compression_view(
 }
 
 bool compressed_layer_is_fresh(const std::string &source_path, const std::string &output_path) {
-    if (!fs::exists(source_path) || !fs::exists(output_path)) {
+    if (!NativePath::exists(source_path) || !NativePath::exists(output_path)) {
         return false;
     }
     std::error_code ec;
-    const auto output_time = fs::last_write_time(output_path, ec);
+    const auto output_time = fs::last_write_time(NativePath::from_utf8(output_path), ec);
     if (ec) {
         return false;
     }
-    const auto source_time = fs::last_write_time(source_path, ec);
+    const auto source_time = fs::last_write_time(NativePath::from_utf8(source_path), ec);
     return !ec && output_time >= source_time;
 }
 
@@ -1569,14 +1570,14 @@ double compress_layer_result_from_memory(
     if (compressed_layer_is_fresh(zbook_path, output_path)) {
         if (remove_zbook_after) {
             std::error_code ec;
-            fs::remove(zbook_path, ec);
+            NativePath::remove(zbook_path, ec);
         }
         return 0.0;
     }
     const double t0 = now_seconds();
     const std::string temp_path = output_path + ".tmp";
     std::error_code ec;
-    fs::remove(temp_path, ec);
+    NativePath::remove(temp_path, ec);
     EXCompressedResult::compress_prefix36_layer_view_to_ex_result(
         layer_compression_view(layer, spec, mode),
         lut_file_path(options.pathname),
@@ -1587,7 +1588,7 @@ double compress_layer_result_from_memory(
     );
     FileIOUtils::finalize_temporary_file(temp_path, output_path);
     if (remove_zbook_after) {
-        fs::remove(zbook_path, ec);
+        NativePath::remove(zbook_path, ec);
     }
     return now_seconds() - t0;
 }
@@ -1597,19 +1598,19 @@ double compress_layer_result_from_file(const RunOptions &options, int step) {
         return 0.0;
     }
     const std::string zbook_path = layer_file_path(options.pathname, step);
-    if (!fs::exists(zbook_path)) {
+    if (!NativePath::exists(zbook_path)) {
         return 0.0;
     }
     const std::string output_path = compressed_layer_file_path(options.pathname, step);
     if (compressed_layer_is_fresh(zbook_path, output_path)) {
         std::error_code ec;
-        fs::remove(zbook_path, ec);
+        NativePath::remove(zbook_path, ec);
         return 0.0;
     }
     const double t0 = now_seconds();
     const std::string temp_path = output_path + ".tmp";
     std::error_code ec;
-    fs::remove(temp_path, ec);
+    NativePath::remove(temp_path, ec);
     EXCompressedResult::compress_zbook_to_ex_result(
         zbook_path,
         lut_file_path(options.pathname),
@@ -1619,7 +1620,7 @@ double compress_layer_result_from_file(const RunOptions &options, int step) {
         5
     );
     FileIOUtils::finalize_temporary_file(temp_path, output_path);
-    fs::remove(zbook_path, ec);
+    NativePath::remove(zbook_path, ec);
     return now_seconds() - t0;
 }
 
@@ -1643,7 +1644,7 @@ std::string solve_stats_path(const RunOptions &options) {
 }
 
 void reset_generate_stats(const RunOptions &options) {
-    std::ofstream file(generate_stats_path(options), std::ios::trunc);
+    std::ofstream file(NativePath::from_utf8(generate_stats_path(options)), std::ios::trunc);
     file << "stage,step,layout,dtype_mode,canonical_batch_backend,direct_index_type,input_live,primary_live,secondary_live,"
             "bucket_count,input_bucket_count,primary_small_bitmap_bytes,primary_large_bitmap_words,"
             "secondary_bucket_count,secondary_small_bitmap_bytes,secondary_large_bitmap_words,"
@@ -1681,7 +1682,7 @@ void append_generate_stats(
     const double density = bitmap_bits != 0ULL
         ? static_cast<double>(density_live) / static_cast<double>(bitmap_bits)
         : 0.0;
-    std::ofstream file(generate_stats_path(options), std::ios::app);
+    std::ofstream file(NativePath::from_utf8(generate_stats_path(options)), std::ios::app);
     file << stage << ','
          << step << ','
          << kLayoutName << ','
@@ -1714,7 +1715,7 @@ void append_generate_stats(
 }
 
 void reset_solve_stats(const RunOptions &options) {
-    std::ofstream file(solve_stats_path(options), std::ios::trunc);
+    std::ofstream file(NativePath::from_utf8(solve_stats_path(options)), std::ios::trunc);
     file << "stage,step,layout,dtype_mode,canonical_batch_backend,direct_index_type,input_live,output_live,"
             "future1_live,future2_live,future2_post_threshold_live,deletion_threshold,"
             "relative_deletion_threshold,effective_deletion_threshold,current_retained_ratio,"
@@ -1760,7 +1761,7 @@ void append_solve_stats(
     const double density = bitmap_bits != 0ULL
         ? static_cast<double>(density_live) / static_cast<double>(bitmap_bits)
         : 0.0;
-    std::ofstream file(solve_stats_path(options), std::ios::app);
+    std::ofstream file(NativePath::from_utf8(solve_stats_path(options)), std::ios::app);
     file << stage << ','
          << step << ','
          << kLayoutName << ','
@@ -3297,7 +3298,7 @@ void ensure_ex_generated_through(
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     const int generation_resume_step = find_generation_resume_step(options, target_step);
     const bool resume_generation = generation_resume_step != kNoSolveResumeStep;
-    if (!resume_generation || !fs::exists(generate_stats_path(options))) {
+    if (!resume_generation || !NativePath::exists(generate_stats_path(options))) {
         reset_generate_stats(options);
     }
     const double total_t0 = now_seconds();
@@ -3916,7 +3917,7 @@ SolveStepSummary keep_only_optimal_branches_prefix36_impl(
         if (options.compress && step - 2 >= 0) {
             compress_seconds += compress_layer_result_from_memory(options, step - 2, prev2, spec, mode);
             std::error_code ec;
-            fs::remove(layer_file_path(options.pathname, step - 2), ec);
+            NativePath::remove(layer_file_path(options.pathname, step - 2), ec);
         }
 
         const double total_seconds = now_seconds() - total_t0;
@@ -4095,13 +4096,13 @@ void run_pattern_solve(
 
     const bool resume_solve_phase = any_solved_layer_exists(options);
     ensure_ex_generated_through(arr_init, spec, options, lut, options.steps - 1);
-    if (!resume_solve_phase || !fs::exists(solve_stats_path(options))) {
+    if (!resume_solve_phase || !NativePath::exists(solve_stats_path(options))) {
         reset_solve_stats(options);
     }
     if (options.optimal_branch_only && !resume_solve_phase) {
         std::error_code ec;
-        fs::remove(optimal_layer_marker_path(options.pathname), ec);
-        fs::remove(optimal_complete_marker_path(options.pathname), ec);
+        NativePath::remove(optimal_layer_marker_path(options.pathname), ec);
+        NativePath::remove(optimal_complete_marker_path(options.pathname), ec);
     }
     SolveStepSummary total;
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
@@ -4360,7 +4361,7 @@ EXCompressedResult::ColdLookupResult lookup_zbook_cold(
     const std::string &zlut_path,
     uint64_t board
 ) {
-    std::ifstream in(zbook_path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(zbook_path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EX prefix36 zbook: " + zbook_path);
     }
@@ -4371,14 +4372,14 @@ EXCompressedResult::ColdLookupResult lookup_zbook_cold(
     }
     validate_layer_header(header, zbook_path);
     const uint64_t expected_bytes = layer_file_bytes(header);
-    if (fs::exists(zbook_path) && fs::file_size(zbook_path) < expected_bytes) {
+    if (NativePath::exists(zbook_path) && NativePath::file_size(zbook_path) < expected_bytes) {
         throw std::runtime_error("truncated EX prefix36 zbook: " + zbook_path);
     }
     const DTypeMode mode = dtype_mode_from_header(header);
     EXCompressedResult::ColdLookupResult result;
     result.success_kind = storage_kind_for_dtype_mode(mode);
     {
-        std::ifstream lut_in(zlut_path, std::ios::binary);
+        std::ifstream lut_in(NativePath::from_utf8(zlut_path), std::ios::binary);
         if (!lut_in) {
             throw std::runtime_error("failed to open EX prefix36 LUT: " + zlut_path);
         }
@@ -4503,8 +4504,8 @@ bool sample_zbook_state(
     uint64_t &raw_value_bits,
     double &numeric_value
 ) {
-    std::ifstream layer_in(zbook_path, std::ios::binary);
-    std::ifstream lut_in(zlut_path, std::ios::binary);
+    std::ifstream layer_in(NativePath::from_utf8(zbook_path), std::ios::binary);
+    std::ifstream lut_in(NativePath::from_utf8(zlut_path), std::ios::binary);
     if (!layer_in || !lut_in) {
         return false;
     }

@@ -4,6 +4,7 @@
 #include "EXADCompressedResult.h"
 #include "EXADSolvedLayer.h"
 #include "HybridSearch.h"
+#include "PathUtils.h"
 
 // EXAD recalculate still reuses AD's semantic helper routines (derive ranking,
 // mask-new-tile dispatch, permutation matching, and workspaces).  The storage
@@ -196,17 +197,17 @@ std::string exad_solve_stats_header() {
 
 void ensure_exad_solve_stats_header(const RunOptions &options) {
     const std::string path = exad_solve_stats_file_path(options);
-    if (fs::exists(path)) {
-        std::ifstream in(path);
+    if (NativePath::exists(path)) {
+        std::ifstream in(NativePath::from_utf8(path));
         std::string first_line;
         if (std::getline(in, first_line) && first_line == exad_solve_stats_header()) {
             return;
         }
         in.close();
         std::error_code ec;
-        fs::remove(path, ec);
+        NativePath::remove(path, ec);
     }
-    std::ofstream file(path, std::ios::app);
+    std::ofstream file(NativePath::from_utf8(path), std::ios::app);
     file << exad_solve_stats_header() << "\n";
 }
 
@@ -251,7 +252,7 @@ void append_exad_solve_stats_record(
     const double total_seconds =
         record.current_read_seconds + record.future_read_seconds + compute_seconds
         + record.current_write_seconds + record.future_write_seconds + record.compress_seconds;
-    std::ofstream file(exad_solve_stats_file_path(options), std::ios::app);
+    std::ofstream file(NativePath::from_utf8(exad_solve_stats_file_path(options)), std::ios::app);
     file << record.stage << ","
          << "exad_prefix36_suffix28_solved,per_ad_bucket_entry,"
          << record.step << ","
@@ -453,9 +454,9 @@ void cleanup_exad_chunk_work_files(const RunOptions &options, int step) {
     std::error_code ec;
     const std::string chunk_dir = exad_chunk_dir_path(options, step);
     const std::string writing_path = exad_chunk_writing_path(options, step);
-    fs::remove_all(chunk_dir, ec);
-    fs::remove(writing_path, ec);
-    fs::remove(FileIOUtils::temp_write_path(writing_path), ec);
+    NativePath::remove_all(chunk_dir, ec);
+    NativePath::remove(writing_path, ec);
+    NativePath::remove(FileIOUtils::temp_write_path(writing_path), ec);
 }
 
 std::string exad_compressed_file_path(const RunOptions &options, int step) {
@@ -464,14 +465,14 @@ std::string exad_compressed_file_path(const RunOptions &options, int step) {
 
 bool exad_compressed_file_is_fresh(const std::string &source_path, const std::string &output_path) {
     std::error_code ec;
-    if (!fs::exists(output_path, ec)) {
+    if (!NativePath::exists(output_path, ec)) {
         return false;
     }
-    const auto out_time = fs::last_write_time(output_path, ec);
+    const auto out_time = fs::last_write_time(NativePath::from_utf8(output_path), ec);
     if (ec) {
         return false;
     }
-    const auto src_time = fs::last_write_time(source_path, ec);
+    const auto src_time = fs::last_write_time(NativePath::from_utf8(source_path), ec);
     if (ec) {
         return false;
     }
@@ -480,7 +481,7 @@ bool exad_compressed_file_is_fresh(const std::string &source_path, const std::st
 
 bool exad_compressed_file_exists(const RunOptions &options, int step) {
     std::error_code ec;
-    return fs::exists(exad_compressed_file_path(options, step), ec);
+    return NativePath::exists(exad_compressed_file_path(options, step), ec);
 }
 
 bool exad_raw_solved_file_exists(const RunOptions &options, int step) {
@@ -512,7 +513,7 @@ void remove_exad_solved_file_after_compression(const std::string &solved_path,
         throw std::runtime_error("EXAD compressed layer is not fresh after compression: " + compressed_path);
     }
     std::error_code ec;
-    fs::remove(solved_path, ec);
+    NativePath::remove(solved_path, ec);
     if (ec) {
         throw std::runtime_error("failed to remove EXAD solved layer after compression: " + solved_path);
     }
@@ -572,7 +573,7 @@ double compress_exad_solved_layer_from_memory(
     const std::string compressed_path = exad_compressed_file_path(options, step);
     const std::string temp_path = compressed_path + ".tmp";
     std::error_code ec;
-    fs::remove(temp_path, ec);
+    NativePath::remove(temp_path, ec);
     const double t0 = wall_time_seconds();
     EXADCompressedResult::compress_exad_solved_layer_to_result_from_memory(
         layer,
@@ -581,7 +582,7 @@ double compress_exad_solved_layer_from_memory(
         temp_path
     );
     FileIOUtils::finalize_temporary_file(temp_path, compressed_path);
-    fs::remove(solved_path, ec);
+    NativePath::remove(solved_path, ec);
     if (ec) {
         throw std::runtime_error("failed to remove EXAD solved layer after in-memory compression: " + solved_path);
     }
@@ -590,7 +591,7 @@ double compress_exad_solved_layer_from_memory(
 
 uint64_t exad_file_size_or_throw(const std::string &path, const char *kind) {
     std::error_code ec;
-    const uintmax_t size = fs::file_size(path, ec);
+    const uintmax_t size = NativePath::file_size(path, ec);
     if (ec) {
         throw std::runtime_error(std::string("failed to determine EXAD ") + kind + " file size: " + path);
     }
@@ -666,7 +667,7 @@ EXADSlotChunkManifest read_slot_chunk_manifest(
     EXAD::DTypeMode expected_mode,
     size_t expected_slot
 ) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EXAD slot chunk: " + path);
     }
@@ -1007,7 +1008,7 @@ void append_slot_chunk_metadata(
     FileIOUtils::DirectIoConfig config
 ) {
     (void)config;
-    std::ifstream in(manifest.path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(manifest.path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EXAD slot chunk metadata: " + manifest.path);
     }
@@ -1036,7 +1037,7 @@ void append_slot_chunk_success(
     FileIOUtils::DirectIoConfig config
 ) {
     (void)config;
-    std::ifstream in(manifest.path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(manifest.path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EXAD slot chunk success: " + manifest.path);
     }
@@ -1069,7 +1070,7 @@ void append_slot_chunk_file_bytes(
     if (bytes == 0U) {
         return;
     }
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EXAD slot chunk segment: " + path);
     }
@@ -1129,7 +1130,7 @@ EXADSlotChunkManifest merge_slot_part_chunks_to_slot_chunk(
             }
         }
 
-        std::ifstream in(path, std::ios::binary);
+        std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
         if (!in) {
             throw std::runtime_error("failed to open EXAD slot part metadata: " + path);
         }
@@ -1339,8 +1340,8 @@ EXADChunkMergeSummary merge_slot_chunks_to_solved_file(
         + value_cursor * sizeof(T);
 
     std::error_code ec;
-    fs::remove(writing_path, ec);
-    fs::remove(FileIOUtils::temp_write_path(writing_path), ec);
+    NativePath::remove(writing_path, ec);
+    NativePath::remove(FileIOUtils::temp_write_path(writing_path), ec);
     FileIOUtils::DirectIoConfig final_merge_config = config;
     final_merge_config.enabled = false;
     FileIOUtils::DirectAppendWriter out(writing_path, serialized_size, final_merge_config);
@@ -1399,7 +1400,7 @@ EXAD::Luts exad_load_or_build_luts(
         options.is_free,
         options.is_variant
     );
-    if (fs::exists(path)) {
+    if (NativePath::exists(path)) {
         EXAD::Luts luts = EXAD::read_lut_file(path, io_config);
         if (ZMaskFrozen::tile_limit_configs_equal(luts.config, config) &&
             luts.physical_transform == spec.physical_transform &&
@@ -3526,7 +3527,7 @@ void load_future_layer(
     }
     const std::string path = EXAD::solved_file_path(options.pathname, target_step);
     const std::string compressed_path = exad_compressed_file_path(options, target_step);
-    if (!EXAD::solved_file_exists(path) && !fs::exists(compressed_path)) {
+    if (!EXAD::solved_file_exists(path) && !NativePath::exists(compressed_path)) {
         throw std::runtime_error("missing EXAD solved future layer: " + path);
     }
     const double read_t0 = wall_time_seconds();
@@ -3890,16 +3891,16 @@ void recalculate_process_exad_chunked_impl(
         const std::string chunk_dir = exad_chunk_dir_path(options, step);
         const std::string writing_path = exad_chunk_writing_path(options, step);
         std::error_code cleanup_ec;
-        fs::remove_all(chunk_dir, cleanup_ec);
+        NativePath::remove_all(chunk_dir, cleanup_ec);
         if (cleanup_ec) {
             throw std::runtime_error("failed to remove stale EXAD chunk directory: " + chunk_dir);
         }
-        fs::create_directories(chunk_dir, cleanup_ec);
+        NativePath::create_directories(chunk_dir, cleanup_ec);
         if (cleanup_ec) {
             throw std::runtime_error("failed to create EXAD chunk directory: " + chunk_dir);
         }
-        fs::remove(writing_path, cleanup_ec);
-        fs::remove(FileIOUtils::temp_write_path(writing_path), cleanup_ec);
+        NativePath::remove(writing_path, cleanup_ec);
+        NativePath::remove(FileIOUtils::temp_write_path(writing_path), cleanup_ec);
 
         double future_read_seconds = 0.0;
         double future_index_seconds = 0.0;
@@ -4082,7 +4083,7 @@ void recalculate_process_exad_chunked_impl(
                     } else {
                         final_part_paths.push_back(chunk_path);
                     }
-                    fs::remove(partial_path, cleanup_ec);
+                    NativePath::remove(partial_path, cleanup_ec);
                 }
 
                 if (partial_chunk_paths[slot].size() > 1U) {
@@ -4098,7 +4099,7 @@ void recalculate_process_exad_chunked_impl(
                     );
                     current_write_seconds += wall_time_seconds() - merge_part_t0;
                     for (const std::string &path : final_part_paths) {
-                        fs::remove(path, cleanup_ec);
+                        NativePath::remove(path, cleanup_ec);
                     }
                 }
             }
@@ -4186,7 +4187,7 @@ void recalculate_process_exad_chunked_impl(
             "after_solved_write"
         );
 
-        fs::remove_all(chunk_dir, cleanup_ec);
+        NativePath::remove_all(chunk_dir, cleanup_ec);
         if (cleanup_ec) {
             throw std::runtime_error("failed to remove EXAD chunk directory: " + chunk_dir);
         }

@@ -3,6 +3,7 @@
 #include "EXADIO.h"
 #include "EXADSolvedLayer.h"
 #include "NativeLzma.h"
+#include "PathUtils.h"
 
 #include <algorithm>
 #include <array>
@@ -177,7 +178,7 @@ double wall_time_seconds() {
 
 uint64_t file_size_or_zero(const std::string& path) {
     std::error_code ec;
-    const auto sz = std::filesystem::file_size(path, ec);
+    const auto sz = NativePath::file_size(path, ec);
     return ec ? 0ull : static_cast<uint64_t>(sz);
 }
 
@@ -201,7 +202,7 @@ std::vector<uint8_t> read_range(const std::string& path, uint64_t offset, uint64
     if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
         throw std::runtime_error("range too large to read");
     }
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open file for reading: " + path);
     }
@@ -373,7 +374,7 @@ size_t value_size_for_mode(EXAD::DTypeMode mode) {
 
 EXAD::DTypeMode read_exadbook_dtype_mode(const std::string& path) {
     EXAD::detail::SolvedFileHeader header{};
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EXAD solved layer: " + path);
     }
@@ -630,11 +631,11 @@ CompressStats compress_layer_impl(
     std::vector<BucketBlockDirEntry> bucket_dirs(bucket_blocks.size());
     std::vector<ValueBlockDirEntry> value_dirs(value_block_count);
 
-    std::filesystem::path out_path(output_path);
+    std::filesystem::path out_path = NativePath::from_utf8(output_path);
     if (!out_path.parent_path().empty()) {
         std::filesystem::create_directories(out_path.parent_path());
     }
-    std::fstream out(output_path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+    std::fstream out(out_path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
     if (!out) {
         throw std::runtime_error("failed to open EXAD compressed output: " + output_path);
     }
@@ -809,11 +810,11 @@ std::unordered_map<std::string, CachedFileEntry<SolvedFileIndex>> g_solved_index
 FileStamp file_stamp(const std::string& path) {
     FileStamp stamp;
     std::error_code ec;
-    const auto size = std::filesystem::file_size(path, ec);
+    const auto size = NativePath::file_size(path, ec);
     if (ec) {
         return stamp;
     }
-    const auto write_time = std::filesystem::last_write_time(path, ec);
+    const auto write_time = std::filesystem::last_write_time(NativePath::from_utf8(path), ec);
     if (ec) {
         return stamp;
     }
@@ -829,7 +830,7 @@ bool same_stamp(const FileStamp& lhs, const FileStamp& rhs) {
 
 CompressedIndex read_index(const std::string& path) {
     CompressedIndex index;
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EXAD compressed file: " + path);
     }
@@ -886,7 +887,7 @@ EXAD::SolvedLayer<T> read_compressed_layer_impl(
     layer.live_board_count = index.header.live_board_count;
     layer.success_values.resize(static_cast<size_t>(index.header.success_value_count));
 
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EXAD compressed layer: " + path);
     }
@@ -1127,7 +1128,7 @@ uint32_t low24_sum_direct(uint32_t low24) {
 }
 
 ExadLutPointIndex read_exad_lut_point_index(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EXAD LUT: " + path);
     }
@@ -1367,7 +1368,7 @@ std::shared_ptr<const SolvedFileIndex> cached_solved_file_index(const std::strin
         }
     }
 
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EXAD solved layer: " + path);
     }
@@ -1680,7 +1681,7 @@ bool sample_from_solved_bucket(
 } // namespace
 
 bool is_exad_compressed_file(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         return false;
     }
@@ -1863,7 +1864,7 @@ ColdLookupResult lookup_exad_cold(
         return result;
     }
 
-    std::ifstream compressed_in(compressed_path, std::ios::binary);
+    std::ifstream compressed_in(NativePath::from_utf8(compressed_path), std::ios::binary);
     if (!compressed_in) {
         throw std::runtime_error("failed to open EXAD compressed file: " + compressed_path);
     }
@@ -1996,7 +1997,7 @@ ColdLookupResult lookup_exadbook_cold(
     int ad_key,
     uint64_t canonical_board,
     uint32_t column) {
-    std::ifstream in(exadbook_path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(exadbook_path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EXAD solved layer: " + exadbook_path);
     }
@@ -2148,7 +2149,7 @@ bool sample_exad_cold(
         if (index.header.live_board_count == 0U || index.header.bucket_block_count == 0U) {
             return false;
         }
-        std::ifstream compressed_in(compressed_path, std::ios::binary);
+        std::ifstream compressed_in(NativePath::from_utf8(compressed_path), std::ios::binary);
         if (!compressed_in) {
             return false;
         }
@@ -2273,7 +2274,7 @@ bool sample_exadbook_cold(
     const std::string& exadlut_path,
     uint64_t& board) {
     try {
-        std::ifstream in(exadbook_path, std::ios::binary);
+        std::ifstream in(NativePath::from_utf8(exadbook_path), std::ios::binary);
         if (!in) {
             return false;
         }

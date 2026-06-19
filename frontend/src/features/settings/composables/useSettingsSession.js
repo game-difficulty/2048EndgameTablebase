@@ -21,15 +21,19 @@ export function useSettingsSession(activeRef) {
     setTheme,
     setCustomMode,
     changeLanguage,
+    buildProgressCurrent,
+    buildProgressTotal,
+    isBuilding,
+    applyBuildState,
+    applyBuildStarted,
+    applyBuildProgress,
+    applyBuildFailed,
   } = useAppSettingsStore();
 
   const selectedCategory = ref('');
   const selectedPattern = ref('');
   const selectedTarget = ref('512');
   const buildPath = ref('C:/2048_tables/');
-  const buildProgressCurrent = ref(0);
-  const buildProgressTotal = ref(0);
-  const isBuilding = ref(false);
   const builderAlgorithm = ref('classic');
   const builderAdvancedAlgo = ref(false);
   const builderZMaskAlgo = ref(false);
@@ -37,11 +41,13 @@ export function useSettingsSession(activeRef) {
   const builderCompressTempFiles = ref(false);
   const builderOptimalBranchOnly = ref(false);
   const builderChunkedSolve = ref(false);
+  const builderBCFamilyModulus = ref(29);
   const builderSuccessRateDtype = ref('uint32');
   const builderSmallTileSumLimit = ref(96);
   const builderDeletionThresholdMode = ref('absolute');
   const MAX_DELETION_THRESHOLD = 0.999999;
   const DEFAULT_DELETION_THRESHOLD_DECIMALS = 6;
+  const DEFAULT_BC_FAMILY_MODULUS = 29;
 
   const countFractionDigits = (value) => {
     const decimalPart = String(value).split('.')[1];
@@ -118,8 +124,16 @@ export function useSettingsSession(activeRef) {
   const normalizeDeletionThresholdMode = (value) =>
     value === 'relative' || value === 'off' ? value : 'absolute';
 
+  const normalizeBCFamilyModulus = (value) => {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) {
+      return DEFAULT_BC_FAMILY_MODULUS;
+    }
+    return Math.min(65535, Math.max(1, parsed));
+  };
+
   const normalizeBuilderAlgorithm = (value) => {
-    if (value === 'ad' || value === 'ex' || value === 'exad') {
+    if (value === 'ad' || value === 'ex' || value === 'exad' || value === 'bc') {
       return value;
     }
     return 'classic';
@@ -152,6 +166,7 @@ export function useSettingsSession(activeRef) {
       algorithm: normalized,
       advanced: normalized === 'ad' || normalized === 'exad',
       ex: normalized === 'ex' || normalized === 'exad',
+      bc: normalized === 'bc',
     };
   };
 
@@ -163,7 +178,7 @@ export function useSettingsSession(activeRef) {
     if (!flags.advanced) {
       builderChunkedSolve.value = false;
     }
-    if (flags.advanced) {
+    if (flags.advanced || flags.bc) {
       builderOptimalBranchOnly.value = false;
     }
 
@@ -171,13 +186,19 @@ export function useSettingsSession(activeRef) {
       return flags;
     }
 
+    saveSetting('algorithm_mode', flags.algorithm);
     saveSetting('advanced_algo', flags.advanced);
     saveSetting('zmask_algo', flags.ex);
     if (!flags.advanced) {
       saveSetting('chunked_solve', false);
     }
-    if (flags.advanced) {
+    if (flags.advanced || flags.bc) {
       saveSetting('optimal_branch_only', false);
+    }
+    if (flags.bc) {
+      const normalizedModulus = normalizeBCFamilyModulus(builderBCFamilyModulus.value);
+      builderBCFamilyModulus.value = normalizedModulus;
+      saveSetting('bc_family_modulus', normalizedModulus);
     }
     return flags;
   };
@@ -195,14 +216,17 @@ export function useSettingsSession(activeRef) {
   const syncBuilderStateFromConfig = () => {
     builderAdvancedAlgo.value = Boolean(config.value.advanced_algo);
     builderZMaskAlgo.value = Boolean(config.value.zmask_algo);
-    builderAlgorithm.value = algorithmFromFlags(
-      builderAdvancedAlgo.value,
-      builderZMaskAlgo.value
-    );
+    const configuredAlgorithm = normalizeBuilderAlgorithm(config.value.algorithm_mode);
+    builderAlgorithm.value = configuredAlgorithm === 'bc'
+      ? 'bc'
+      : algorithmFromFlags(builderAdvancedAlgo.value, builderZMaskAlgo.value);
     builderCompress.value = Boolean(config.value.compress);
     builderCompressTempFiles.value = Boolean(config.value.compress_temp_files);
     builderOptimalBranchOnly.value = Boolean(config.value.optimal_branch_only);
     builderChunkedSolve.value = Boolean(config.value.chunked_solve);
+    builderBCFamilyModulus.value = normalizeBCFamilyModulus(
+      config.value.bc_family_modulus
+    );
     builderSuccessRateDtype.value =
       config.value.success_rate_dtype || 'uint32';
     builderSmallTileSumLimit.value =
@@ -217,12 +241,14 @@ export function useSettingsSession(activeRef) {
 
   watch(
     () => [
+      config.value.algorithm_mode,
       config.value.advanced_algo,
       config.value.zmask_algo,
       config.value.compress,
       config.value.compress_temp_files,
       config.value.optimal_branch_only,
       config.value.chunked_solve,
+      config.value.bc_family_modulus,
       config.value.success_rate_dtype,
       config.value.SmallTileSumLimit,
       config.value.deletion_threshold,
@@ -278,17 +304,11 @@ export function useSettingsSession(activeRef) {
 
   let buildClient = null;
 
-  const applyBuildState = (buildState = {}) => {
-    const nextCurrent = Math.max(0, Number(buildState.current) || 0);
-    const nextTotal = Math.max(nextCurrent, Number(buildState.total) || 0);
-    buildProgressCurrent.value = nextCurrent;
-    buildProgressTotal.value = nextTotal;
-    isBuilding.value = Boolean(buildState.is_building);
-  };
-
   const handleMessage = (data) => {
     if (data.type === 'SETTINGS_DATA') {
-      applyBuildState(data.payload?.build_state || {});
+      if (Object.prototype.hasOwnProperty.call(data.payload || {}, 'build_state')) {
+        applyBuildState(data.payload?.build_state || {});
+      }
       return;
     }
 
@@ -301,27 +321,17 @@ export function useSettingsSession(activeRef) {
     }
 
     if (data.type === 'BUILD_STARTED') {
-      const nextCurrent = Math.max(0, Number(data.payload?.current) || 0);
-      const nextTotal = Math.max(nextCurrent, Number(data.payload?.total) || 0);
-      isBuilding.value = true;
-      buildProgressCurrent.value = nextCurrent;
-      buildProgressTotal.value = nextTotal;
+      applyBuildStarted(data.payload || {});
       return;
     }
 
     if (data.type === 'BUILD_PROGRESS') {
-      const nextCurrent = Math.max(0, Number(data.payload?.current) || 0);
-      const nextTotal = Math.max(nextCurrent, Number(data.payload?.total) || 0);
-      buildProgressCurrent.value = nextCurrent;
-      buildProgressTotal.value = nextTotal;
-      isBuilding.value = !(nextTotal > 0 && nextCurrent >= nextTotal);
+      applyBuildProgress(data.payload || {});
       return;
     }
 
     if (data.type === 'BUILD_FAILED') {
-      isBuilding.value = false;
-      buildProgressCurrent.value = 0;
-      buildProgressTotal.value = 0;
+      applyBuildFailed();
       console.error('Build failed:', data.payload?.message || 'Unknown error');
       return;
     }
@@ -387,6 +397,7 @@ export function useSettingsSession(activeRef) {
     }
     const nextValue = Boolean(builderAdvancedAlgo.value);
     builderAlgorithm.value = algorithmFromFlags(nextValue, builderZMaskAlgo.value);
+    saveSetting('algorithm_mode', builderAlgorithm.value);
     saveSetting('advanced_algo', nextValue);
     if (!nextValue) {
       builderChunkedSolve.value = false;
@@ -401,6 +412,7 @@ export function useSettingsSession(activeRef) {
   const handleZMaskAlgoChange = () => {
     const nextValue = Boolean(builderZMaskAlgo.value);
     builderAlgorithm.value = algorithmFromFlags(builderAdvancedAlgo.value, nextValue);
+    saveSetting('algorithm_mode', builderAlgorithm.value);
     saveSetting('zmask_algo', nextValue);
     if (builderAdvancedAlgo.value) {
       builderOptimalBranchOnly.value = false;
@@ -417,7 +429,7 @@ export function useSettingsSession(activeRef) {
   };
 
   const handleOptimalBranchOnlyChange = () => {
-    if (builderAdvancedAlgo.value) {
+    if (builderAdvancedAlgo.value || builderAlgorithm.value === 'bc') {
       builderOptimalBranchOnly.value = false;
       saveSetting('optimal_branch_only', false);
       return;
@@ -426,7 +438,18 @@ export function useSettingsSession(activeRef) {
   };
 
   const handleChunkedSolveChange = () => {
+    if (builderAlgorithm.value === 'bc') {
+      builderChunkedSolve.value = false;
+      saveSetting('chunked_solve', false);
+      return;
+    }
     saveSetting('chunked_solve', Boolean(builderChunkedSolve.value));
+  };
+
+  const handleBCFamilyModulusChange = () => {
+    const normalized = normalizeBCFamilyModulus(builderBCFamilyModulus.value);
+    builderBCFamilyModulus.value = normalized;
+    saveSetting('bc_family_modulus', normalized);
   };
 
   const handleSuccessRateDtypeChange = () => {
@@ -488,12 +511,21 @@ export function useSettingsSession(activeRef) {
     builderAdvancedAlgo.value = algorithmFlags.advanced;
     builderZMaskAlgo.value = algorithmFlags.ex;
     const advancedEnabled = algorithmFlags.advanced;
+    const bcEnabled = algorithmFlags.bc;
     if (!advancedEnabled) {
       builderChunkedSolve.value = false;
     }
-    if (advancedEnabled) {
+    if (advancedEnabled || bcEnabled) {
       builderOptimalBranchOnly.value = false;
     }
+    if (bcEnabled) {
+      builderChunkedSolve.value = false;
+    }
+    const normalizedBCFamilyModulus = normalizeBCFamilyModulus(
+      builderBCFamilyModulus.value
+    );
+    builderBCFamilyModulus.value = normalizedBCFamilyModulus;
+    saveSetting('algorithm_mode', algorithmFlags.algorithm);
     saveSetting('advanced_algo', advancedEnabled);
     saveSetting('zmask_algo', algorithmFlags.ex);
     saveSetting('compress', Boolean(builderCompress.value));
@@ -503,12 +535,13 @@ export function useSettingsSession(activeRef) {
     );
     saveSetting(
       'optimal_branch_only',
-      advancedEnabled ? false : Boolean(builderOptimalBranchOnly.value)
+      advancedEnabled || bcEnabled ? false : Boolean(builderOptimalBranchOnly.value)
     );
     saveSetting(
       'chunked_solve',
-      advancedEnabled ? Boolean(builderChunkedSolve.value) : false
+      advancedEnabled && !bcEnabled ? Boolean(builderChunkedSolve.value) : false
     );
+    saveSetting('bc_family_modulus', normalizedBCFamilyModulus);
     saveSetting('deletion_threshold_mode', normalizedDeletionThresholdMode);
     saveSetting('deletion_threshold', normalizedDeletionThreshold);
     saveSetting('success_rate_dtype', builderSuccessRateDtype.value);
@@ -565,6 +598,7 @@ export function useSettingsSession(activeRef) {
     builderCompressTempFiles,
     builderOptimalBranchOnly,
     builderChunkedSolve,
+    builderBCFamilyModulus,
     builderSuccessRateDtype,
     builderSmallTileSumLimit,
     builderDeletionThresholdMode,
@@ -580,6 +614,7 @@ export function useSettingsSession(activeRef) {
     handleCompressTempFilesChange,
     handleOptimalBranchOnlyChange,
     handleChunkedSolveChange,
+    handleBCFamilyModulusChange,
     handleSuccessRateDtypeChange,
     handleDeletionThresholdModeChange,
     handleDeletionThresholdInput,

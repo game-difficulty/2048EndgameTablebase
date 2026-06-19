@@ -92,6 +92,8 @@ class DispatcherCommon(BaseDispatcher):
             self.book_reader.book_reader_ex,
             self.book_reader.use_exad,
             self.book_reader.book_reader_exad,
+            self.book_reader.use_bc,
+            self.book_reader.book_reader_bc,
         )
 
     def _restore_reader_state(self, state):
@@ -102,6 +104,8 @@ class DispatcherCommon(BaseDispatcher):
             self.book_reader.book_reader_ex,
             self.book_reader.use_exad,
             self.book_reader.book_reader_exad,
+            self.book_reader.use_bc,
+            self.book_reader.book_reader_bc,
         ) = state
 
     def reset(self, board, board_encoded):

@@ -2,7 +2,9 @@
 
 #include "EXFrozenLayer.h"
 #include "EXPrefix36Runtime.h"
+#include "FileIOUtils.h"
 #include "NativeLzma.h"
+#include "PathUtils.h"
 
 #include <algorithm>
 #include <chrono>
@@ -186,7 +188,7 @@ double wall_time_seconds() {
 }
 
 uint64_t file_size_u64(const std::string &path) {
-    return static_cast<uint64_t>(fs::file_size(path));
+    return static_cast<uint64_t>(NativePath::file_size(path));
 }
 
 template <typename T>
@@ -255,7 +257,7 @@ void write_at(std::fstream &out, uint64_t offset, const void *data, uint64_t byt
 
 template <typename T>
 T read_one_at(const std::string &path, uint64_t offset) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open file: " + path);
     }
@@ -589,7 +591,7 @@ std::vector<uint8_t> prefix36_success_raw_from_fixed_view(
 }
 
 Prefix36LutRuntime read_prefix36_lut_runtime(const std::string &zlut_path, bool load_unrank = false) {
-    std::ifstream in(zlut_path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(zlut_path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open prefix36 LUT: " + zlut_path);
     }
@@ -812,11 +814,11 @@ std::unordered_map<std::string, CachedFileEntry<Prefix36LutPointIndex>> g_prefix
 FileStamp file_stamp(const std::string &path) {
     FileStamp stamp;
     std::error_code ec;
-    const auto size = std::filesystem::file_size(path, ec);
+    const auto size = NativePath::file_size(path, ec);
     if (ec) {
         return stamp;
     }
-    const auto write_time = std::filesystem::last_write_time(path, ec);
+    const auto write_time = std::filesystem::last_write_time(NativePath::from_utf8(path), ec);
     if (ec) {
         return stamp;
     }
@@ -831,7 +833,7 @@ bool same_stamp(const FileStamp &lhs, const FileStamp &rhs) {
 }
 
 Prefix36CompressedFileIndex read_prefix36_compressed_index(const std::string &path) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EX prefix36 compressed result: " + path);
     }
@@ -938,7 +940,7 @@ bool prefix36_physical_metadata_matches_lut(const Prefix36LayerView &layer, cons
 }
 
 Prefix36LutPointIndex read_prefix36_lut_point_index(const std::string &path) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open prefix36 LUT: " + path);
     }
@@ -1168,7 +1170,7 @@ uint32_t find_prefix36_bucket_in_raw_block(
 
 bool is_prefix36_layer_file(const std::string &path) {
     constexpr char kPrefix36Magic[8] = {'E', 'X', 'P', '3', '6', 'B', 'K', '\0'};
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         return false;
     }
@@ -1178,7 +1180,7 @@ bool is_prefix36_layer_file(const std::string &path) {
 }
 
 bool is_prefix36_compressed_file(const std::string &path) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
     if (!in) {
         return false;
     }
@@ -1234,7 +1236,7 @@ CompressStats compress_prefix36_layer_file(
     std::vector<Prefix36BucketBlockEntry> bucket_dir(static_cast<size_t>(bucket_block_count));
     std::vector<Prefix36SuccessBlockEntry> success_dir(static_cast<size_t>(success_block_count));
 
-    std::fstream out(output_path, std::ios::binary | std::ios::out | std::ios::trunc);
+    std::fstream out(NativePath::from_utf8(output_path), std::ios::binary | std::ios::out | std::ios::trunc);
     if (!out) {
         throw std::runtime_error("failed to write EX prefix36 compressed result: " + output_path);
     }
@@ -1256,7 +1258,7 @@ CompressStats compress_prefix36_layer_file(
         futures.reserve(static_cast<size_t>(batch_end - batch_begin));
         for (uint64_t block_idx = batch_begin; block_idx < batch_end; ++block_idx) {
             futures.emplace_back(std::async(std::launch::async, [&, block_idx]() {
-                std::ifstream source_file(zbook_path, std::ios::binary);
+                std::ifstream source_file(NativePath::from_utf8(zbook_path), std::ios::binary);
                 if (!source_file) {
                     throw std::runtime_error("failed to open prefix36 zbook: " + zbook_path);
                 }
@@ -1371,7 +1373,7 @@ CompressStats compress_prefix36_layer_file(
         futures.reserve(static_cast<size_t>(batch_end - batch_begin));
         for (uint64_t block_idx = batch_begin; block_idx < batch_end; ++block_idx) {
             futures.emplace_back(std::async(std::launch::async, [&, block_idx]() {
-                std::ifstream source_file(zbook_path, std::ios::binary);
+                std::ifstream source_file(NativePath::from_utf8(zbook_path), std::ios::binary);
                 if (!source_file) {
                     throw std::runtime_error("failed to open prefix36 zbook: " + zbook_path);
                 }
@@ -1468,7 +1470,7 @@ CompressStats compress_prefix36_layer_view_impl(
     std::vector<Prefix36BucketBlockEntry> bucket_dir(static_cast<size_t>(bucket_block_count));
     std::vector<Prefix36SuccessBlockEntry> success_dir(static_cast<size_t>(success_block_count));
 
-    std::fstream out(output_path, std::ios::binary | std::ios::out | std::ios::trunc);
+    std::fstream out(NativePath::from_utf8(output_path), std::ios::binary | std::ios::out | std::ios::trunc);
     if (!out) {
         throw std::runtime_error("failed to write EX prefix36 compressed result: " + output_path);
     }
@@ -1657,7 +1659,7 @@ void decompress_prefix36_result_to_zbook_impl(
         static_cast<size_t>(header.success_value_count * header.value_size)
     );
 
-    std::ifstream in(compressed_path, std::ios::binary);
+    std::ifstream in(NativePath::from_utf8(compressed_path), std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open EX prefix36 compressed result: " + compressed_path);
     }
@@ -1767,7 +1769,7 @@ void decompress_prefix36_result_to_zbook_impl(
     header.small_bitmap_bytes = small_bitmap_bytes.size();
     header.large_bitmap_words = large_bitmap_words.size();
 
-    std::fstream out(output_path, std::ios::binary | std::ios::out | std::ios::trunc);
+    std::fstream out(NativePath::from_utf8(output_path), std::ios::binary | std::ios::out | std::ios::trunc);
     if (!out) {
         throw std::runtime_error("failed to write EX prefix36 zbook: " + output_path);
     }
@@ -1822,7 +1824,7 @@ ColdLookupResult lookup_prefix36_compressed_cold(
         return miss;
     }
 
-    std::ifstream compressed_in(compressed_path, std::ios::binary);
+    std::ifstream compressed_in(NativePath::from_utf8(compressed_path), std::ios::binary);
     if (!compressed_in) {
         throw std::runtime_error("failed to open EX prefix36 compressed result: " + compressed_path);
     }
@@ -2000,7 +2002,7 @@ bool sample_prefix36_compressed_cold(
     if (!prefix36_physical_metadata_matches_lut(index.header, lut.header())) {
         return false;
     }
-    std::ifstream compressed_in(compressed_path, std::ios::binary);
+    std::ifstream compressed_in(NativePath::from_utf8(compressed_path), std::ios::binary);
     if (!compressed_in) {
         return false;
     }
@@ -2266,16 +2268,9 @@ void decompress_ex_result_to_zbook(
     }
     const std::string temp_path = output_path + ".tmp";
     std::error_code ec;
-    fs::remove(temp_path, ec);
+    NativePath::remove(temp_path, ec);
     decompress_prefix36_result_to_zbook_impl(compressed_path, zlut_path, temp_path);
-    fs::rename(temp_path, output_path, ec);
-    if (ec) {
-        fs::remove(output_path, ec);
-        fs::rename(temp_path, output_path, ec);
-    }
-    if (ec) {
-        throw std::runtime_error("failed to finalize EX decompressed zbook: " + output_path);
-    }
+    FileIOUtils::finalize_temporary_file(temp_path, output_path);
 }
 
 ColdLookupResult lookup_cold(

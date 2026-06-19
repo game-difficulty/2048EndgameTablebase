@@ -2,6 +2,7 @@
 
 #include "FileIOUtils.h"
 #include "NativeLzma.h"
+#include "PathUtils.h"
 #include "TrieCompression.h"
 
 #include <filesystem>
@@ -21,7 +22,7 @@ bool has_suffix(const std::string &value, const std::string &suffix) {
 }
 
 std::string temp_archive_entry_name(const std::string &archive_path) {
-    std::string name = fs::path(archive_path).stem().string();
+    std::string name = NativePath::to_utf8_string(NativePath::from_utf8(archive_path).stem());
     if (name.empty()) {
         name = "data";
     }
@@ -69,7 +70,7 @@ bool write_temp_byte_payload_archive(
         return true;
     } catch (...) {
         std::error_code ec;
-        fs::remove(temp_path, ec);
+        NativePath::remove(temp_path, ec);
         return false;
     }
 }
@@ -77,7 +78,7 @@ bool write_temp_byte_payload_archive(
 } // namespace
 
 void maybe_do_compress_classic(const std::string &book_path, const std::string &success_rate_dtype) {
-    if (!fs::exists(book_path)) {
+    if (!NativePath::exists(book_path)) {
         return;
     }
     if (!has_suffix(book_path, "book")) {
@@ -86,42 +87,47 @@ void maybe_do_compress_classic(const std::string &book_path, const std::string &
     if (has_suffix(book_path, "_0.book") || has_suffix(book_path, "_1.book") || has_suffix(book_path, "_2.book")) {
         return;
     }
-    if (fs::file_size(book_path) <= 2097152ULL) {
+    if (NativePath::file_size(book_path) <= 2097152ULL) {
         return;
     }
     if (!trie_compress_progress_native(book_path, success_rate_dtype)) {
         return;
     }
-    if (fs::exists(book_path)) {
-        fs::remove(book_path);
+    if (NativePath::exists(book_path)) {
+        NativePath::remove(book_path);
     }
 }
 
 void maybe_do_compress_ad(const std::string &folder_path) {
-    if (!fs::exists(folder_path) || !fs::is_directory(folder_path)) {
+    std::error_code folder_ec;
+    if (!NativePath::exists(folder_path) || !NativePath::is_directory(folder_path, folder_ec)) {
         return;
     }
-    for (const auto &entry : fs::directory_iterator(folder_path)) {
+    for (const auto &entry : fs::directory_iterator(NativePath::from_utf8(folder_path))) {
         if (!entry.is_regular_file() || entry.path().extension() != ".i") {
             continue;
         }
         const fs::path index_path = entry.path();
         const fs::path base_path = index_path.parent_path() / index_path.stem();
         const fs::path zi_path = base_path;
-        if (!fs::exists(zi_path.string() + ".zi")) {
+        const std::string zi_path_utf8 = NativePath::to_utf8_string(zi_path);
+        if (!NativePath::exists(zi_path_utf8 + ".zi")) {
             std::vector<uint64_t> data =
-                FileIOUtils::read_binary_vector_direct<uint64_t>(index_path.string(), compression_direct_io_config());
-            compress_uint64_array_native(data, base_path.string(), 1);
+                FileIOUtils::read_binary_vector_direct<uint64_t>(
+                    NativePath::to_utf8_string(index_path),
+                    compression_direct_io_config());
+            compress_uint64_array_native(data, NativePath::to_utf8_string(base_path), 1);
         }
-        if (fs::exists(index_path) && fs::exists(zi_path.string() + ".zi")) {
+        if (fs::exists(index_path) && NativePath::exists(zi_path_utf8 + ".zi")) {
             fs::remove(index_path);
         }
     }
 }
 
 std::vector<uint64_t> maybe_decompress_uint64_array(const std::string &compressed_path) {
-    const fs::path zi_path(compressed_path);
-    const fs::path segments_path = zi_path.parent_path() / (zi_path.stem().string() + ".s");
+    const fs::path zi_path = NativePath::from_utf8(compressed_path);
+    fs::path segments_path = zi_path;
+    segments_path.replace_extension(".s");
     if (!fs::exists(zi_path) || !fs::exists(segments_path)) {
         return {};
     }
@@ -173,7 +179,7 @@ bool write_temp_byte_spans_archive(
 }
 
 std::vector<uint8_t> read_temp_byte_archive(const std::string &archive_path) {
-    if (!fs::exists(archive_path)) {
+    if (!NativePath::exists(archive_path)) {
         return {};
     }
 

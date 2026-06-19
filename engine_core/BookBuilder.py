@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 from itertools import combinations
+from pathlib import Path
 
 import numpy as np
 
@@ -17,6 +19,7 @@ from Config import (
 )
 from engine_core import mover_runtime
 from engine_core.EXPhysicalPattern import PhysicalPatternResolution, resolve_ex_physical_pattern
+from SignalHub import progress_signal
 
 try:
     from native_core import formation_core
@@ -167,6 +170,67 @@ def _steps_and_docheck(tile_sum: int, target: int, extra_steps: int) -> tuple[in
     return steps, docheck_step
 
 
+def _selected_algorithm_mode(config: dict) -> str:
+    mode = str(config.get("algorithm_mode", "")).lower()
+    if mode in {"classic", "ad", "ex", "exad", "bc"}:
+        return mode
+    use_ex_algo = bool(config.get("zmask_algo", False))
+    use_ad_algo = bool(config.get("advanced_algo", False))
+    if use_ex_algo and use_ad_algo:
+        return "exad"
+    if use_ex_algo:
+        return "ex"
+    if use_ad_algo:
+        return "ad"
+    return "classic"
+
+
+def _bc_expected_generated_layers(steps: int) -> int:
+    return max(0, int(steps) - 1)
+
+
+def _bc_family_modulus(config: dict) -> int:
+    return max(1, min(65535, int(config.get("bc_family_modulus", 29))))
+
+
+def _bc_build_layout(pathname: str, pattern: str, target: int, modulus: int) -> dict[str, Path | str]:
+    prefix_path = Path(str(pathname).rstrip("\\/"))
+    output_dir = prefix_path.parent
+    prefix = prefix_path.name or f"{pattern}_{2**target}_"
+    if not prefix.endswith("_"):
+        prefix += "_"
+    suffix = f"bc_m{int(modulus)}"
+    return {
+        "output_dir": output_dir,
+        "generated_dir": output_dir / f".{prefix}{suffix}_generated",
+        "solved_dir": output_dir / f".{prefix}{suffix}_exact",
+        "archive_dir": output_dir,
+        "stats_dir": output_dir / f".{prefix}{suffix}_stats",
+        "prefix": prefix,
+    }
+
+
+def _count_bc_prefixed_files(folder: Path, prefix: str, suffix: str) -> int:
+    if not folder.is_dir():
+        return 0
+    try:
+        return sum(
+            1
+            for item in folder.iterdir()
+            if item.is_file() and item.name.startswith(prefix) and item.name.endswith(suffix)
+        )
+    except OSError:
+        return 0
+
+
+def _remove_bc_work_dir(path: Path) -> None:
+    if not path.name.startswith("."):
+        logger.warning("Refusing to remove non-hidden BC work directory: %s", path)
+        return
+    if path.exists():
+        shutil.rmtree(path)
+
+
 def _path_exists_any(paths) -> bool:
     return any(os.path.exists(path) for path in paths)
 
@@ -200,10 +264,45 @@ def estimate_build_progress(pattern: str, target: int, pathname: str) -> tuple[i
     config = SingletonConfig().config
     meta, tile_sum, _seed_boards, extra_steps = _resolve_build_meta(pattern)
     steps, _docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
-    use_ex_algo = bool(config.get("zmask_algo", False))
-    use_ad_algo = bool(config.get("advanced_algo", False))
-    use_exad_algo = use_ex_algo and use_ad_algo
-    optimal = bool(config.get("optimal_branch_only", False)) and not use_ad_algo
+    algorithm_mode = _selected_algorithm_mode(config)
+    use_ex_algo = algorithm_mode in {"ex", "exad"}
+    use_ad_algo = algorithm_mode in {"ad", "exad"}
+    use_exad_algo = algorithm_mode == "exad"
+    optimal = bool(config.get("optimal_branch_only", False)) and not use_ad_algo and algorithm_mode != "bc"
+    if algorithm_mode == "bc":
+        expected_layers = _bc_expected_generated_layers(steps)
+        total = expected_layers * 2
+        if total <= 0:
+            return 0, 0
+        modulus = _bc_family_modulus(config)
+        layout = _bc_build_layout(pathname, pattern, target, modulus)
+        prefix = str(layout["prefix"])
+        generated = _count_bc_prefixed_files(
+            Path(layout["generated_dir"]),
+            prefix,
+            ".bcpos",
+        )
+        solved = _count_bc_prefixed_files(
+            Path(layout["solved_dir"]),
+            prefix,
+            ".bcsuc",
+        )
+        compressed = _count_bc_prefixed_files(
+            Path(layout["archive_dir"]),
+            prefix,
+            ".bccmp",
+        )
+        archived = _count_bc_prefixed_files(
+            Path(layout["archive_dir"]),
+            prefix,
+            ".bcsuc",
+        )
+        final_count = max(archived, compressed)
+        if final_count >= expected_layers:
+            return int(total), int(total)
+        current = min(expected_layers, generated) + min(expected_layers, max(solved, final_count))
+        return int(current), int(total)
+
     total = steps * (3 if optimal else 2)
     if steps <= 0:
         return 0, 0
@@ -257,8 +356,10 @@ def save_config_to_txt(output_path: str) -> None:
         "compress",
         "optimal_branch_only",
         "compress_temp_files",
+        "algorithm_mode",
         "advanced_algo",
         "zmask_algo",
+        "bc_family_modulus",
         "direct_io",
         "direct_io_queue_depth",
         "direct_io_chunk_mib",
@@ -446,6 +547,99 @@ def _run_exad_build(
     )
 
 
+def _run_bc_build(
+    pattern: str,
+    target: int,
+    steps: int,
+    extra_steps: int,
+    pathname: str,
+    spawn_rate4: float,
+) -> None:
+    if not pattern.startswith("free"):
+        raise ValueError("BC build currently supports freeN patterns only")
+
+    config = SingletonConfig().config
+    modulus = _bc_family_modulus(config)
+    layout = _bc_build_layout(pathname, pattern, target, modulus)
+    generated_dir = Path(layout["generated_dir"])
+    solved_dir = Path(layout["solved_dir"])
+    archive_dir = Path(layout["archive_dir"])
+    stats_dir = Path(layout["stats_dir"])
+    prefix = str(layout["prefix"])
+    for folder in (generated_dir, solved_dir, archive_dir, stats_dir):
+        folder.mkdir(parents=True, exist_ok=True)
+
+    expected_layers = max(1, _bc_expected_generated_layers(steps))
+    progress_signal.progress_updated.emit(0, expected_layers * 2)
+
+    num_threads = int(max(4, min(32, os.cpu_count() or 2)))
+    direct_io = bool(config.get("direct_io", True))
+    direct_queue_depth = int(config.get("direct_io_queue_depth", 16))
+
+    if formation_core is None or not hasattr(formation_core, "run_bc_family_build"):
+        raise RuntimeError("formation_core does not expose BC family build runtime")
+
+    generation_count = _count_bc_prefixed_files(generated_dir, prefix, ".bcpos")
+
+    deletion_threshold_mode = config.get("deletion_threshold_mode", "absolute")
+    absolute_threshold, relative_threshold = deletion_threshold_components(
+        config.get("deletion_threshold", 0.0),
+        deletion_threshold_mode,
+    )
+    write_runtime_deletion_threshold_signal(
+        config.get("deletion_threshold", 0.0),
+        mode=deletion_threshold_mode,
+    )
+
+    bc_options = {
+        "pattern": pattern,
+        "target_rank": int(target),
+        "success_target_rank": int(target),
+        "extra_steps": int(extra_steps),
+        "generated_dir": str(generated_dir),
+        "solved_dir": str(solved_dir),
+        "archive_dir": str(archive_dir),
+        "stats_dir": str(stats_dir),
+        "generation_stats_csv": str(stats_dir / "generation.csv"),
+        "solve_stats_csv": str(stats_dir / "solve_layers.csv"),
+        "solve_summary_csv": str(stats_dir / "solve_summary.csv"),
+        "prefix": prefix,
+        "success_dtype": str(config.get("success_rate_dtype", "uint32")),
+        "family_modulus": int(modulus),
+        "threads": int(num_threads),
+        "direct_queue_depth": int(direct_queue_depth),
+        "spawn_rate4": float(spawn_rate4),
+        "family_route": "auto",
+        "solve_route": "auto",
+        "direct_io": bool(direct_io),
+        "keep_direct_padding": False,
+        "deletion_threshold": float(absolute_threshold),
+        "relative_deletion_threshold": float(relative_threshold),
+        "deletion_threshold_signal_path": str(RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH),
+        "compress": bool(config.get("compress", False)),
+        "compress_temp_files": bool(config.get("compress_temp_files", False)),
+        "expected_layers": int(expected_layers),
+        "progress_total": int(expected_layers * 2),
+        "skip_generation": bool(generation_count >= expected_layers),
+        "resume": True,
+        "restart": False,
+    }
+    logger.info(
+        "BC family build runtime: pattern=%s target=%s modulus=%s generated=%s exact=%s archive=%s",
+        pattern,
+        int(target),
+        modulus,
+        generated_dir,
+        solved_dir,
+        archive_dir,
+    )
+    summary = formation_core.run_bc_family_build(bc_options)
+    if bool(summary.get("solve_completed", False)):
+        _remove_bc_work_dir(generated_dir)
+        _remove_bc_work_dir(solved_dir)
+    progress_signal.progress_updated.emit(expected_layers * 2, expected_layers * 2)
+
+
 def _should_retry_build_resume(exc: Exception) -> bool:
     message = str(exc).strip()
     if not message:
@@ -480,10 +674,22 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
     meta, tile_sum, seed_boards, extra_steps = _resolve_build_meta(pattern)
     steps, docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
     is_variant = pattern in category_info.get("variant", [])
-    use_ex_algo = bool(config.get("zmask_algo", False))
-    use_ad_algo = bool(config.get("advanced_algo", False))
-    use_exad_algo = use_ex_algo and use_ad_algo
+    algorithm_mode = _selected_algorithm_mode(config)
+    use_ex_algo = algorithm_mode in {"ex", "exad"}
+    use_ad_algo = algorithm_mode in {"ad", "exad"}
+    use_exad_algo = algorithm_mode == "exad"
     save_config_to_txt(pathname + "config.txt")
+
+    if algorithm_mode == "bc":
+        _run_bc_build(
+            pattern,
+            target,
+            steps,
+            extra_steps,
+            pathname,
+            spawn_rate4,
+        )
+        return True
 
     if pattern.startswith("free"):
         decoded_seed = mover_runtime.decode_board(seed_boards[0])
@@ -582,9 +788,12 @@ def v_start_build(pattern: str, target: int, pathname: str) -> bool:
     spawn_rate4 = float(config["4_spawn_rate"])
     meta, tile_sum, seed_boards, extra_steps = _resolve_build_meta(pattern)
     steps, docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
-    use_ex_algo = bool(config.get("zmask_algo", False))
-    use_ad_algo = bool(config.get("advanced_algo", False))
-    use_exad_algo = use_ex_algo and use_ad_algo
+    algorithm_mode = _selected_algorithm_mode(config)
+    if algorithm_mode == "bc":
+        raise ValueError("Variant patterns do not support BC algorithm")
+    use_ex_algo = algorithm_mode in {"ex", "exad"}
+    use_ad_algo = algorithm_mode in {"ad", "exad"}
+    use_exad_algo = algorithm_mode == "exad"
     if use_ad_algo:
         raise ValueError("Variant patterns do not support advanced or EXAD algorithms; use classic or EX.")
     save_config_to_txt(pathname + "config.txt")

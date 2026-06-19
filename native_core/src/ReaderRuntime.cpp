@@ -8,6 +8,7 @@
 #include "FileIOUtils.h"
 #include "Formation.h"
 #include "NativeLzma.h"
+#include "PathUtils.h"
 #include "SymmetryUtils.h"
 #include "TrieCompression.h"
 #include "VBoardMover.h"
@@ -417,7 +418,7 @@ std::optional<double> trie_search_with_context(
         return dtype_info.zero_value;
     }
 
-    std::ifstream ii_file(path_prefix + "ii", std::ios::binary);
+    std::ifstream ii_file(NativePath::from_utf8(path_prefix + "ii"), std::ios::binary);
     if (!ii_file) {
         return std::nullopt;
     }
@@ -438,7 +439,7 @@ std::optional<double> trie_search_with_context(
     }
 
     const auto [start, end] = get_segment_position(segments, static_cast<uint32_t>(last_pos + low));
-    std::ifstream z_file(path_prefix + "z", std::ios::binary);
+    std::ifstream z_file(NativePath::from_utf8(path_prefix + "z"), std::ios::binary);
     if (!z_file || end < start) {
         return std::nullopt;
     }
@@ -489,14 +490,14 @@ ClassicLookupContext make_classic_lookup_context(
     context.pathname = pathname;
     context.filename = filename;
     context.success_rate_dtype = success_rate_dtype;
-    context.book_path = fs::path(pathname) / filename;
+    context.book_path = NativePath::from_utf8(pathname) / filename;
     context.compressed_dir = context.book_path;
     context.compressed_dir.replace_extension(".z");
     context.book_exists = fs::exists(context.book_path);
     context.compressed_exists = fs::exists(context.compressed_dir);
     if (context.compressed_exists) {
         const std::string stem = filename.substr(0, filename.size() - 4U);
-        context.prefix = (context.compressed_dir / stem).string();
+        context.prefix = NativePath::to_utf8_string(context.compressed_dir / stem);
         context.ind = read_binary_vector<TrieNode32>(context.prefix + "i");
         context.segments = read_binary_vector<TrieSegmentEntry>(context.prefix + "s");
     }
@@ -611,7 +612,7 @@ SearchValue find_advanced_value(
         symm_index = pair.second;
     }
 
-    const fs::path root = fs::path(pathname) / filename;
+    const fs::path root = NativePath::from_utf8(pathname) / filename;
     const fs::path index_path = root / (std::to_string(count_32k) + ".i");
     const fs::path compressed_index_path = root / (std::to_string(count_32k) + ".zi");
     const fs::path segments_path = root / (std::to_string(count_32k) + ".s");
@@ -644,7 +645,7 @@ SearchValue find_advanced_value(
             }
         }
     } else if (fs::exists(compressed_index_path) && fs::exists(segments_path)) {
-        ind = find_value_uint64_compressed_native(compressed_index_path.string(), search_key);
+        ind = find_value_uint64_compressed_native(NativePath::to_utf8_string(compressed_index_path), search_key);
     } else {
         return string_search_value("?");
     }
@@ -860,7 +861,8 @@ std::vector<fs::path> exad_compressed_candidates(const fs::path &exadbook_path) 
     fs::path replaced = exadbook_path;
     replaced.replace_extension(EXADCompressedResult::kCompressedLayerFileExtension);
     candidates.push_back(replaced);
-    candidates.push_back(fs::path(exadbook_path.string() + EXADCompressedResult::kCompressedLayerFileExtension));
+    candidates.push_back(NativePath::from_utf8(
+        NativePath::to_utf8_string(exadbook_path) + EXADCompressedResult::kCompressedLayerFileExtension));
     return candidates;
 }
 
@@ -874,7 +876,7 @@ SearchValue find_exad_value(
     const std::string &success_rate_dtype
 ) {
     const DTypeInfo dtype_info = dtype_info_for_name(success_rate_dtype);
-    const fs::path root(pathname);
+    const fs::path root = NativePath::from_utf8(pathname);
     const fs::path exadlut_path = root / (pattern_full + "_.exadlut");
     if (!fs::exists(exadlut_path)) {
         return string_search_value("?");
@@ -892,8 +894,8 @@ SearchValue find_exad_value(
     try {
         if (fs::exists(exadbook_path)) {
             const auto lookup = EXADCompressedResult::lookup_exadbook_cold(
-                exadbook_path.string(),
-                exadlut_path.string(),
+                NativePath::to_utf8_string(exadbook_path),
+                NativePath::to_utf8_string(exadlut_path),
                 target.ad_key,
                 target.board,
                 target.column
@@ -905,8 +907,8 @@ SearchValue find_exad_value(
                 continue;
             }
             const auto lookup = EXADCompressedResult::lookup_exad_cold(
-                candidate.string(),
-                exadlut_path.string(),
+                NativePath::to_utf8_string(candidate),
+                NativePath::to_utf8_string(exadlut_path),
                 target.ad_key,
                 target.board,
                 target.column
@@ -924,7 +926,8 @@ std::vector<fs::path> ex_compressed_candidates(const fs::path &zbook_path) {
     fs::path replaced = zbook_path;
     replaced.replace_extension(EXCompressedResult::kCompressedLayerFileExtension);
     candidates.push_back(replaced);
-    candidates.push_back(fs::path(zbook_path.string() + EXCompressedResult::kCompressedLayerFileExtension));
+    candidates.push_back(NativePath::from_utf8(
+        NativePath::to_utf8_string(zbook_path) + EXCompressedResult::kCompressedLayerFileExtension));
     return candidates;
 }
 
@@ -936,7 +939,7 @@ SearchValue find_ex_value(
     const std::string &success_rate_dtype
 ) {
     const DTypeInfo dtype_info = dtype_info_for_name(success_rate_dtype);
-    const fs::path root(pathname);
+    const fs::path root = NativePath::from_utf8(pathname);
     const fs::path zlut_path = root / (pattern_full + "_.zlut");
     if (!fs::exists(zlut_path)) {
         return string_search_value("?");
@@ -947,14 +950,17 @@ SearchValue find_ex_value(
         EXCompressedResult::ColdLookupResult lookup;
         if (fs::exists(zbook_path)) {
             lookup = EXPrefix36Runtime::lookup_zbook_cold(
-                zbook_path.string(), zlut_path.string(), board);
+                NativePath::to_utf8_string(zbook_path), NativePath::to_utf8_string(zlut_path), board);
         } else {
             bool found_compressed = false;
             for (const fs::path &candidate : ex_compressed_candidates(zbook_path)) {
                 if (!fs::exists(candidate)) {
                     continue;
                 }
-                lookup = EXCompressedResult::lookup_cold(candidate.string(), zlut_path.string(), board);
+                lookup = EXCompressedResult::lookup_cold(
+                    NativePath::to_utf8_string(candidate),
+                    NativePath::to_utf8_string(zlut_path),
+                    board);
                 found_compressed = true;
                 break;
             }
@@ -979,7 +985,11 @@ bool sample_ex_zbook_state(
     double numeric = 0.0;
     try {
         return EXPrefix36Runtime::sample_zbook_state(
-            zbook_path.string(), zlut_path.string(), state, raw, numeric);
+            NativePath::to_utf8_string(zbook_path),
+            NativePath::to_utf8_string(zlut_path),
+            state,
+            raw,
+            numeric);
     } catch (...) {
         return false;
     }
@@ -1462,7 +1472,7 @@ uint64_t sample_classic_book_state(
             const int book_id = book_indices[chosen];
             book_indices.erase(book_indices.begin() + static_cast<ptrdiff_t>(chosen));
 
-            const fs::path filepath = fs::path(path_entry.first) / (pattern_full + "_" + std::to_string(book_id) + ".book");
+            const fs::path filepath = NativePath::from_utf8(path_entry.first) / (pattern_full + "_" + std::to_string(book_id) + ".book");
             if (!fs::exists(filepath)) {
                 continue;
             }
@@ -1502,7 +1512,7 @@ uint64_t sample_advanced_book_state(
             const int book_id = book_indices[chosen];
             book_indices.erase(book_indices.begin() + static_cast<ptrdiff_t>(chosen));
 
-            const fs::path filepath = fs::path(path_entry.first) / (pattern_full + "_" + std::to_string(book_id) + "b");
+            const fs::path filepath = NativePath::from_utf8(path_entry.first) / (pattern_full + "_" + std::to_string(book_id) + "b");
             if (!fs::exists(filepath) || !fs::is_directory(filepath)) {
                 continue;
             }
@@ -1550,7 +1560,7 @@ uint64_t sample_exad_book_state(
     static thread_local std::mt19937 rng(std::random_device{}());
     for (const auto &path_entry : path_list) {
         std::vector<int> book_indices = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
-        const fs::path exadlut_path = fs::path(path_entry.first) / (pattern_full + "_.exadlut");
+        const fs::path exadlut_path = NativePath::from_utf8(path_entry.first) / (pattern_full + "_.exadlut");
         if (!fs::exists(exadlut_path)) {
             continue;
         }
@@ -1561,17 +1571,23 @@ uint64_t sample_exad_book_state(
             book_indices.erase(book_indices.begin() + static_cast<ptrdiff_t>(chosen));
 
             const fs::path exadbook_path =
-                fs::path(path_entry.first) / (pattern_full + "_" + std::to_string(book_id) + ".exadbook");
+                NativePath::from_utf8(path_entry.first) / (pattern_full + "_" + std::to_string(book_id) + ".exadbook");
             uint64_t state = 0ULL;
             if (fs::exists(exadbook_path) &&
-                EXADCompressedResult::sample_exadbook_cold(exadbook_path.string(), exadlut_path.string(), state)) {
+                EXADCompressedResult::sample_exadbook_cold(
+                    NativePath::to_utf8_string(exadbook_path),
+                    NativePath::to_utf8_string(exadlut_path),
+                    state)) {
                 return gen_new_num(apply_sym_like(state, inverse_transform), static_cast<float>(spawn_rate4)).first;
             }
             for (const fs::path &candidate : exad_compressed_candidates(exadbook_path)) {
                 if (!fs::exists(candidate)) {
                     continue;
                 }
-                if (EXADCompressedResult::sample_exad_cold(candidate.string(), exadlut_path.string(), state)) {
+                if (EXADCompressedResult::sample_exad_cold(
+                        NativePath::to_utf8_string(candidate),
+                        NativePath::to_utf8_string(exadlut_path),
+                        state)) {
                     return gen_new_num(apply_sym_like(state, inverse_transform), static_cast<float>(spawn_rate4)).first;
                 }
             }
@@ -1589,7 +1605,7 @@ uint64_t sample_ex_book_state(
     static thread_local std::mt19937 rng(std::random_device{}());
     for (const auto &path_entry : path_list) {
         std::vector<int> book_indices = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
-        const fs::path zlut_path = fs::path(path_entry.first) / (pattern_full + "_.zlut");
+        const fs::path zlut_path = NativePath::from_utf8(path_entry.first) / (pattern_full + "_.zlut");
         if (!fs::exists(zlut_path)) {
             continue;
         }
@@ -1600,7 +1616,7 @@ uint64_t sample_ex_book_state(
             book_indices.erase(book_indices.begin() + static_cast<ptrdiff_t>(chosen));
 
             const fs::path zbook_path =
-                fs::path(path_entry.first) / (pattern_full + "_" + std::to_string(book_id) + ".zbook");
+                NativePath::from_utf8(path_entry.first) / (pattern_full + "_" + std::to_string(book_id) + ".zbook");
             uint64_t state = 0ULL;
             if (fs::exists(zbook_path) && sample_ex_zbook_state(zbook_path, zlut_path, rng, state)) {
                 return gen_new_num(apply_sym_like(state, inverse_transform), static_cast<float>(spawn_rate4)).first;
@@ -1612,7 +1628,12 @@ uint64_t sample_ex_book_state(
                     }
                     uint64_t raw = 0ULL;
                     double numeric = 0.0;
-                    if (EXCompressedResult::sample_cold(candidate.string(), zlut_path.string(), state, raw, numeric)) {
+                    if (EXCompressedResult::sample_cold(
+                            NativePath::to_utf8_string(candidate),
+                            NativePath::to_utf8_string(zlut_path),
+                            state,
+                            raw,
+                            numeric)) {
                         return gen_new_num(apply_sym_like(state, inverse_transform), static_cast<float>(spawn_rate4)).first;
                     }
                 }
@@ -1755,7 +1776,7 @@ double find_classic_value_native(
     bool &found
 ) {
     const DTypeInfo dtype_info = dtype_info_for_name(success_rate_dtype);
-    const fs::path path = fs::path(pathname) / filename;
+    const fs::path path = NativePath::from_utf8(pathname) / filename;
     double result = 0.0;
     switch (dtype_info.kind) {
         case SuccessRateKind::UInt64:

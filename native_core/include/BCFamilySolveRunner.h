@@ -65,7 +65,7 @@ struct BCFamilySolveRunOptions {
     std::optional<uint32_t> start_ordinal;
     std::optional<uint32_t> min_ordinal;
     bool direct_io = false;
-    bool keep_direct_padding = true;
+    bool keep_direct_padding = false;
     bool compress = false;
     bool compress_temp_files = false;
     bool optimal_branch_only = false;
@@ -368,6 +368,20 @@ inline void bc_family_runner_remove_exact_layer_files(
         ec);
 }
 
+inline void bc_family_runner_remove_file_quiet(const std::filesystem::path &path) {
+    if (path.empty()) {
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+}
+
+inline void bc_family_runner_remove_generated_layer_file(
+    const BCFamilySolveRunLayerFile &layer
+) {
+    bc_family_runner_remove_file_quiet(layer.path);
+}
+
 template <typename StorageT>
 [[nodiscard]] inline bool bc_family_runner_exact_layer_valid(
     const BCFamilySolveRunOptions &options,
@@ -442,6 +456,43 @@ inline void bc_family_runner_publish_file(
     if (ec) {
         throw std::runtime_error("BC family runner failed to publish file: " + ec.message());
     }
+}
+
+inline void bc_family_runner_move_or_copy_file(
+    const std::filesystem::path &source,
+    const std::filesystem::path &target
+) {
+    if (source.empty() || target.empty()) {
+        throw std::invalid_argument("BC family runner cannot publish empty path");
+    }
+    if (std::filesystem::absolute(source).lexically_normal() ==
+        std::filesystem::absolute(target).lexically_normal()) {
+        return;
+    }
+    if (!target.parent_path().empty()) {
+        std::filesystem::create_directories(target.parent_path());
+    }
+    std::error_code ec;
+    std::filesystem::rename(source, target, ec);
+    if (!ec) {
+        return;
+    }
+    std::filesystem::remove(target, ec);
+    ec.clear();
+    std::filesystem::rename(source, target, ec);
+    if (!ec) {
+        return;
+    }
+    ec.clear();
+    std::filesystem::copy_file(
+        source,
+        target,
+        std::filesystem::copy_options::overwrite_existing,
+        ec);
+    if (ec) {
+        throw std::runtime_error("BC family runner failed to publish exact file: " + ec.message());
+    }
+    std::filesystem::remove(source, ec);
 }
 
 [[nodiscard]] inline double bc_family_runner_final_compression_hook(
@@ -656,10 +707,18 @@ template <typename StorageT>
             metric.position_bytes);
     }
 
-    const uint64_t success_logical_size =
-        kBCSuccessHeaderBytes +
+    const uint64_t success_payload_bytes =
         static_cast<uint64_t>(layer.success_values.size()) *
             bc_success_dtype_value_size(layer.dtype);
+    BCSuccessHeader success_header;
+    success_header.descriptor_count = layer.position.cell_count();
+    success_header.cell_value_offsets_offset = kBCSuccessHeaderBytes;
+    success_header.payload_offset = bc_checked_add_u64(
+        success_header.cell_value_offsets_offset,
+        bc_success_cell_value_offsets_bytes(success_header.descriptor_count),
+        "BC family runner resident success offset table overflow");
+    success_header.payload_bytes = success_payload_bytes;
+    const uint64_t success_logical_size = bc_success_logical_size(success_header);
     const double success_t0 = bc_family_solve_runner_now_seconds();
     {
         std::unique_ptr<BCWritableFile> writer = bc_family_runner_make_writer(
@@ -704,6 +763,8 @@ struct BCFamilySolveFrontierLayer {
     BCPositionStreamingReader position;
     BCSuccessStreamingReader success;
     BCFamilyPartitionLayerMap partition;
+    std::unique_ptr<BCResidentSolvedLayer<StorageT>> resident_cache;
+    std::unique_ptr<BCSingleChunkFrontierLayer<StorageT>> single_frontier_cache;
     double open_position_seconds = 0.0;
     double open_success_seconds = 0.0;
     double partition_seconds = 0.0;
@@ -788,6 +849,7 @@ template <typename StorageT>
             : options.success_target_rank;
     solve.edge_options.success_shifts = &success_shifts;
     solve.edge_options.success_check_all_cells = true;
+    solve.edge_options.future_cell_modulus = options.family_modulus;
     solve.word_sums = &word_sums;
     return solve;
 }
@@ -835,6 +897,51 @@ template <typename StorageT>
         1U,
         options.success_dtype);
     return layer;
+}
+
+template <typename StorageT>
+[[nodiscard]] inline const BCResidentSolvedLayer<StorageT> &
+bc_family_runner_resident_frontier_layer(
+    BCFamilySolveFrontierLayer<StorageT> &frontier,
+    const BCLut &lut,
+    const BCFamilySolveRunOptions &options,
+    double *position_read_seconds = nullptr,
+    double *success_read_seconds = nullptr
+) {
+    if (!frontier.resident_cache) {
+        frontier.resident_cache =
+            std::make_unique<BCResidentSolvedLayer<StorageT>>(
+                bc_family_runner_load_resident_frontier<StorageT>(
+                    frontier,
+                    lut,
+                    options,
+                    position_read_seconds,
+                    success_read_seconds));
+    }
+    return *frontier.resident_cache;
+}
+
+template <typename StorageT>
+[[nodiscard]] inline BCSingleChunkFrontierLayer<StorageT>
+bc_family_runner_take_single_frontier_layer(
+    BCFamilySolveFrontierLayer<StorageT> &frontier,
+    const BCLut &lut,
+    const BCFamilySolveRunOptions &options
+) {
+    if (!frontier.single_frontier_cache) {
+        frontier.single_frontier_cache =
+            std::make_unique<BCSingleChunkFrontierLayer<StorageT>>(
+                bc_single_chunk_load_frontier_layer<StorageT>(
+                    frontier.position,
+                    frontier.success,
+                    lut,
+                    1U,
+                    options.success_dtype));
+    }
+    BCSingleChunkFrontierLayer<StorageT> out =
+        std::move(*frontier.single_frontier_cache);
+    frontier.single_frontier_cache.reset();
+    return out;
 }
 
 [[nodiscard]] inline BCPositionLayerReader bc_family_runner_load_current_resident_position(
@@ -940,6 +1047,200 @@ inline void bc_family_runner_append_row_values(
 }
 
 template <typename StorageT>
+inline void bc_family_runner_compact_loaded_cell_threshold(
+    const BCLut &lut,
+    const BCLoadedCell &cell,
+    const BCLoadedSuccessCell &success_cell,
+    StorageT threshold,
+    uint32_t row_width,
+    FinalizedCellPayload &payload,
+    std::vector<StorageT> &compact_values,
+    BCFamilySolveRunLayerMetric &metric
+) {
+    if (cell.success_rows == 0U || cell.buckets.empty()) {
+        return;
+    }
+    if (success_cell.success_rows != cell.success_rows) {
+        throw std::runtime_error("BC family runner archive position/success row mismatch");
+    }
+    if (success_cell.row_width != row_width) {
+        throw std::runtime_error("BC family runner archive success row_width mismatch");
+    }
+    metric.current_rows = bc_checked_add_u64(
+        metric.current_rows,
+        cell.success_rows,
+        "BC family runner archive current row count overflow");
+
+    const BCLoadedCellView view = cell.view();
+    payload.buckets.reserve(view.buckets.size);
+    payload.rank_payload.reserve(view.rank_payload.size);
+    compact_values.clear();
+    compact_values.reserve(static_cast<size_t>(cell.success_rows) * row_width);
+
+    const StorageT *values = success_cell.typed_values_data<StorageT>();
+    const size_t typed_value_count = success_cell.typed_value_count<StorageT>();
+    if (values != nullptr &&
+        typed_value_count < static_cast<size_t>(cell.success_rows) * row_width) {
+        throw std::runtime_error("BC family runner archive success payload is truncated");
+    }
+
+    uint64_t success_cursor = 0U;
+    for (uint32_t bucket_i = 0U; bucket_i < view.buckets.size; ++bucket_i) {
+        const BCBucketEntry &bucket = view.buckets.data[bucket_i];
+        const uint32_t bitmap_len = bitmap_len_from_trusted_key(lut, bucket.key);
+        const uint32_t word_count = words_for_bits(bitmap_len);
+        const uint32_t bitmap_offset = bc_rank_payload_bitmap_offset(
+            bucket.rank_payload_offset,
+            bitmap_len);
+        const uint64_t bitmap_end =
+            static_cast<uint64_t>(bitmap_offset) +
+            static_cast<uint64_t>(word_count) * sizeof(uint64_t);
+        if (bitmap_end > view.rank_payload.size) {
+            throw std::out_of_range("BC family runner archive source bitmap exceeds rank payload");
+        }
+
+        const uint64_t bucket_success_offset = success_cursor;
+        const uint32_t payload_start = static_cast<uint32_t>(payload.rank_payload.size());
+        const uint32_t aligned_payload_offset = align_up_u32(payload_start, 8U);
+        bc_resident_append_padding(payload.rank_payload, aligned_payload_offset - payload_start);
+        const uint32_t rank_payload_offset = static_cast<uint32_t>(payload.rank_payload.size());
+        const uint32_t out_bitmap_offset =
+            bc_rank_payload_bitmap_offset(rank_payload_offset, bitmap_len);
+        const uint64_t payload_end =
+            static_cast<uint64_t>(out_bitmap_offset) +
+            static_cast<uint64_t>(word_count) * sizeof(uint64_t);
+        if (payload_end > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+            throw std::overflow_error("BC family runner archive rank payload exceeds uint32");
+        }
+
+        uint32_t bucket_seen = 0U;
+        uint32_t bucket_kept = 0U;
+        uint32_t prefix_running = 0U;
+        std::vector<uint64_t> keep_words;
+        keep_words.reserve(word_count);
+        const uint8_t *bitmap_words = view.rank_payload.data + bitmap_offset;
+        for (uint32_t word_i = 0U; word_i < word_count; ++word_i) {
+            if ((word_i & 3U) == 0U) {
+                if (prefix_running > std::numeric_limits<RankPrefix>::max()) {
+                    throw std::logic_error("BC family runner archive prefix exceeds uint16");
+                }
+                bc_resident_append_u16_le(
+                    payload.rank_payload,
+                    static_cast<RankPrefix>(prefix_running));
+            }
+            uint64_t word = load_u64_le(
+                bitmap_words + static_cast<size_t>(word_i) * sizeof(uint64_t));
+            if (word_i + 1U == word_count && (bitmap_len & 63U) != 0U) {
+                word &= (1ULL << (bitmap_len & 63U)) - 1ULL;
+            }
+            uint64_t keep_word = 0U;
+            while (word != 0U) {
+                const uint32_t bit = bc_resident_countr_zero64(word);
+                const uint64_t local_row =
+                    static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
+                if (local_row >= cell.success_rows) {
+                    throw std::out_of_range("BC family runner archive source row exceeds cell");
+                }
+                const uint64_t row_base = local_row * static_cast<uint64_t>(row_width);
+                if (row_base + row_width > typed_value_count && values != nullptr) {
+                    throw std::out_of_range("BC family runner archive row exceeds success values");
+                }
+
+                bool keep = false;
+                if (row_width == 1U) {
+                    const StorageT value = values != nullptr
+                        ? values[static_cast<size_t>(row_base)]
+                        : success_cell.read_value_typed<StorageT>(
+                              static_cast<uint32_t>(local_row),
+                              0U);
+                    keep = value > threshold;
+                } else {
+                    for (uint32_t lane = 0U; lane < row_width; ++lane) {
+                        const StorageT value = values != nullptr
+                            ? values[static_cast<size_t>(row_base + lane)]
+                            : success_cell.read_value_typed<StorageT>(
+                                  static_cast<uint32_t>(local_row),
+                                  lane);
+                        if (value > threshold) {
+                            keep = true;
+                            break;
+                        }
+                    }
+                }
+                if (keep) {
+                    keep_word |= (1ULL << bit);
+                    if (row_width == 1U) {
+                        compact_values.push_back(values != nullptr
+                            ? values[static_cast<size_t>(row_base)]
+                            : success_cell.read_value_typed<StorageT>(
+                                  static_cast<uint32_t>(local_row),
+                                  0U));
+                    } else {
+                        for (uint32_t lane = 0U; lane < row_width; ++lane) {
+                            compact_values.push_back(values != nullptr
+                                ? values[static_cast<size_t>(row_base + lane)]
+                                : success_cell.read_value_typed<StorageT>(
+                                      static_cast<uint32_t>(local_row),
+                                      lane));
+                        }
+                    }
+                    ++success_cursor;
+                    ++bucket_kept;
+                    ++metric.archive_live_rows;
+                } else {
+                    ++metric.threshold_pruned_rows;
+                }
+                ++bucket_seen;
+                word &= word - 1ULL;
+            }
+            keep_words.push_back(keep_word);
+            prefix_running += popcount64(keep_word);
+        }
+
+        const uint32_t expected_bucket_end = (bucket_i + 1U < view.buckets.size)
+            ? view.buckets.data[bucket_i + 1U].success_row_offset
+            : cell.success_rows;
+        const uint64_t observed_bucket_end =
+            static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
+        if (bucket.success_row_offset > expected_bucket_end ||
+            observed_bucket_end != expected_bucket_end) {
+            throw std::runtime_error("BC family runner archive bucket row count mismatch");
+        }
+
+        if (bucket_kept == 0U) {
+            payload.rank_payload.resize(payload_start);
+            continue;
+        }
+        if (payload.rank_payload.size() > out_bitmap_offset) {
+            throw std::logic_error("BC family runner archive prefix exceeded bitmap offset");
+        }
+        bc_resident_append_padding(
+            payload.rank_payload,
+            out_bitmap_offset - static_cast<uint32_t>(payload.rank_payload.size()));
+        bc_resident_append_bitmap_le(payload.rank_payload, keep_words.data(), word_count);
+        if (payload.rank_payload.size() != payload_end) {
+            throw std::logic_error("BC family runner archive rank payload size mismatch");
+        }
+        if (bucket_success_offset > std::numeric_limits<uint32_t>::max()) {
+            throw std::overflow_error("BC family runner archive success row offset exceeds uint32");
+        }
+        payload.buckets.push_back(BCBucketEntry{
+            bucket.key,
+            rank_payload_offset,
+            static_cast<uint32_t>(bucket_success_offset)});
+    }
+
+    if (success_cursor > std::numeric_limits<uint32_t>::max()) {
+        throw std::overflow_error("BC family runner archive success rows exceed uint32");
+    }
+    payload.success_rows = static_cast<uint32_t>(success_cursor);
+    if (payload.success_rows == 0U) {
+        payload.buckets.clear();
+        payload.rank_payload.clear();
+    }
+}
+
+template <typename StorageT>
 [[nodiscard]] inline BCFamilySolveRunLayerMetric bc_family_runner_archive_prune_retired(
     const BCFamilySolveRunOptions &options,
     BCFamilySolveFrontierLayer<StorageT> &retired,
@@ -961,13 +1262,54 @@ template <typename StorageT>
     deletion_state = RuntimeControls::refresh_deletion_thresholds(
         deletion_options,
         deletion_state);
-    if (!RuntimeControls::deletion_threshold_enabled(deletion_state)) {
-        return metric;
-    }
 
     const StorageT zero_value = bc_success_zero_value_for_dtype<StorageT>(options.success_dtype);
     const StorageT terminal_value =
         bc_success_terminal_value_for_dtype<StorageT>(options.success_dtype);
+    const std::filesystem::path exact_position_path = retired.position_path;
+    const std::filesystem::path exact_success_path = retired.success_path;
+    const std::filesystem::path archive_dir =
+        options.archive_output_dir.empty() ? options.solved_output_dir : options.archive_output_dir;
+    const std::filesystem::path position_target =
+        bc_family_runner_position_path(archive_dir, options.prefix, metric.ordinal);
+    const std::filesystem::path success_target =
+        bc_family_runner_success_path(archive_dir, options.prefix, metric.ordinal);
+    if (!archive_dir.empty()) {
+        std::filesystem::create_directories(archive_dir);
+    }
+
+    if (!RuntimeControls::deletion_threshold_enabled(deletion_state)) {
+        const double publish_t0 = bc_family_solve_runner_now_seconds();
+        std::error_code ec;
+        metric.position_bytes = std::filesystem::file_size(exact_position_path, ec);
+        if (ec) {
+            throw std::runtime_error("BC family runner exact position file_size failed: " + ec.message());
+        }
+        ec.clear();
+        metric.success_bytes = std::filesystem::file_size(exact_success_path, ec);
+        if (ec) {
+            throw std::runtime_error("BC family runner exact success file_size failed: " + ec.message());
+        }
+        metric.live_rows = bc_family_runner_success_value_rows(retired.success);
+        metric.archive_live_rows = metric.live_rows;
+        retired = BCFamilySolveFrontierLayer<StorageT>();
+        bc_family_runner_move_or_copy_file(exact_position_path, position_target);
+        bc_family_runner_move_or_copy_file(exact_success_path, success_target);
+        metric.archive_prune_write_seconds =
+            bc_family_solve_runner_now_seconds() - publish_t0;
+        if (options.compress) {
+            metric.final_compress_seconds += bc_family_runner_final_compression_hook(
+                options,
+                metric.ordinal,
+                position_target,
+                success_target);
+        }
+        metric.total_seconds =
+            metric.archive_prune_write_seconds +
+            metric.final_compress_seconds;
+        return metric;
+    }
+
     const double scan_t0 = bc_family_solve_runner_now_seconds();
     const StorageT layer_max = deletion_state.relative > 0.0
         ? bc_family_runner_stream_layer_max(retired, zero_value)
@@ -979,20 +1321,40 @@ template <typename StorageT>
         deletion_state);
     metric.archive_scan_seconds = bc_family_solve_runner_now_seconds() - scan_t0;
     if (!(threshold > zero_value)) {
+        const double publish_t0 = bc_family_solve_runner_now_seconds();
+        std::error_code ec;
+        metric.position_bytes = std::filesystem::file_size(exact_position_path, ec);
+        if (ec) {
+            throw std::runtime_error("BC family runner exact position file_size failed: " + ec.message());
+        }
+        ec.clear();
+        metric.success_bytes = std::filesystem::file_size(exact_success_path, ec);
+        if (ec) {
+            throw std::runtime_error("BC family runner exact success file_size failed: " + ec.message());
+        }
+        metric.live_rows = bc_family_runner_success_value_rows(retired.success);
+        metric.archive_live_rows = metric.live_rows;
+        retired = BCFamilySolveFrontierLayer<StorageT>();
+        bc_family_runner_move_or_copy_file(exact_position_path, position_target);
+        bc_family_runner_move_or_copy_file(exact_success_path, success_target);
+        metric.archive_prune_write_seconds =
+            bc_family_solve_runner_now_seconds() - publish_t0;
+        if (options.compress) {
+            metric.final_compress_seconds += bc_family_runner_final_compression_hook(
+                options,
+                metric.ordinal,
+                position_target,
+                success_target);
+        }
+        metric.total_seconds =
+            metric.archive_scan_seconds +
+            metric.archive_prune_write_seconds +
+            metric.final_compress_seconds;
         return metric;
     }
 
-    const std::filesystem::path archive_dir =
-        options.archive_output_dir.empty() ? options.solved_output_dir : options.archive_output_dir;
-    const std::filesystem::path position_target =
-        bc_family_runner_position_path(archive_dir, options.prefix, metric.ordinal);
-    const std::filesystem::path success_target =
-        bc_family_runner_success_path(archive_dir, options.prefix, metric.ordinal);
     const std::filesystem::path position_tmp = position_target.string() + ".archive_tmp";
     const std::filesystem::path success_tmp = success_target.string() + ".archive_tmp";
-    if (!archive_dir.empty()) {
-        std::filesystem::create_directories(archive_dir);
-    }
 
     BCSingleChunkSolveStats write_stats;
     const double write_t0 = bc_family_solve_runner_now_seconds();
@@ -1012,73 +1374,86 @@ template <typename StorageT>
             write_stats);
 
         const uint32_t row_width = retired.success.row_width();
-        for (CellId cid = 0U; cid < retired.position.cell_count(); ++cid) {
-            const BCPositionCellDescriptor &desc = retired.position.descriptor(cid);
-            if (desc.empty() || desc.success_rows == 0U) {
-                FinalizedCellPayload empty_payload;
-                streamer.write_cell_metadata(cid, empty_payload);
-                continue;
+        constexpr CellId kArchiveLoadBatchCells = 64U;
+        std::vector<CellId> batch_cids;
+        batch_cids.reserve(kArchiveLoadBatchCells);
+        std::vector<StorageT> compact_values;
+        FinalizedCellPayload payload;
+        FinalizedCellPayload empty_payload;
+        const CellId cell_count = retired.position.cell_count();
+        for (CellId chunk_begin = 0U; chunk_begin < cell_count; chunk_begin += kArchiveLoadBatchCells) {
+            const CellId chunk_end = std::min<CellId>(
+                cell_count,
+                chunk_begin + kArchiveLoadBatchCells);
+            batch_cids.clear();
+            for (CellId cid = chunk_begin; cid < chunk_end; ++cid) {
+                const BCPositionCellDescriptor &desc = retired.position.descriptor(cid);
+                if (!desc.empty() && desc.success_rows != 0U) {
+                    batch_cids.push_back(cid);
+                }
             }
 
-            BCLoadedCell position_cell = retired.position.load_cell(cid);
+            std::vector<BCLoadedCell> position_cells =
+                batch_cids.empty()
+                    ? std::vector<BCLoadedCell>{}
+                    : retired.position.load_cells(batch_cids);
             std::vector<BCLoadedSuccessCell> loaded_success =
-                retired.success.load_cells(std::vector<CellId>{cid}, nullptr, true);
-            if (loaded_success.size() != 1U) {
-                throw std::logic_error("BC family runner archive success load size mismatch");
+                batch_cids.empty()
+                    ? std::vector<BCLoadedSuccessCell>{}
+                    : retired.success.load_cells(batch_cids, nullptr, true);
+            if (position_cells.size() != batch_cids.size() ||
+                loaded_success.size() != batch_cids.size()) {
+                throw std::logic_error("BC family runner archive batch load size mismatch");
             }
-            const BCLoadedSuccessCell &success_cell = loaded_success.front();
-            const StorageT *values = success_cell.typed_values_data<StorageT>();
 
-            BCCellBuilder builder(lut);
-            builder.reserve_buckets(desc.bucket_count);
-            std::vector<StorageT> compact_values;
-            compact_values.reserve(static_cast<size_t>(desc.success_rows) * row_width);
+            size_t loaded_index = 0U;
+            for (CellId cid = chunk_begin; cid < chunk_end; ++cid) {
+                const BCPositionCellDescriptor &desc = retired.position.descriptor(cid);
+                if (desc.empty() || desc.success_rows == 0U) {
+                    streamer.write_cell_metadata(cid, empty_payload);
+                    continue;
+                }
+                if (loaded_index >= batch_cids.size() || batch_cids[loaded_index] != cid) {
+                    throw std::logic_error("BC family runner archive batch cid mismatch");
+                }
+                const BCLoadedCell &position_cell = position_cells[loaded_index];
+                const BCLoadedSuccessCell &success_cell = loaded_success[loaded_index];
+                if (position_cell.cid != cid || success_cell.cid != cid) {
+                    throw std::logic_error("BC family runner archive loaded cid mismatch");
+                }
 
-            BCLoadedCellScanner(lut, position_cell.view()).for_each_board(
-                [&](const BCScannedBoardEntry &entry) {
-                    ++metric.current_rows;
-                    const uint64_t base =
-                        static_cast<uint64_t>(entry.local_success_row) * row_width;
-                    bool keep = false;
-                    for (uint32_t lane = 0U; lane < row_width; ++lane) {
-                        const StorageT value = values != nullptr
-                            ? values[static_cast<size_t>(base + lane)]
-                            : success_cell.read_value_typed<StorageT>(
-                                  entry.local_success_row,
-                                  lane);
-                        if (value > threshold) {
-                            keep = true;
-                        }
-                    }
-                    if (!keep) {
-                        ++metric.threshold_pruned_rows;
-                        return;
-                    }
-                    builder.insert(entry.key, entry.rank);
-                    bc_family_runner_append_row_values(
-                        compact_values,
-                        success_cell,
-                        values,
-                        entry.local_success_row,
-                        row_width);
-                    ++metric.archive_live_rows;
-                });
+                payload.buckets.clear();
+                payload.rank_payload.clear();
+                payload.success_rows = 0U;
+                bc_family_runner_compact_loaded_cell_threshold(
+                    lut,
+                    position_cell,
+                    success_cell,
+                    threshold,
+                    row_width,
+                    payload,
+                    compact_values,
+                    metric);
 
-            if (builder.live_rows() == 0U) {
-                FinalizedCellPayload empty_payload;
-                streamer.write_cell_metadata(cid, empty_payload);
-                continue;
+                if (payload.success_rows == 0U) {
+                    streamer.write_cell_metadata(cid, empty_payload);
+                    ++loaded_index;
+                    continue;
+                }
+                if (payload.success_rows * static_cast<uint64_t>(row_width) !=
+                    static_cast<uint64_t>(compact_values.size())) {
+                    throw std::runtime_error("BC family runner archive compact value mismatch");
+                }
+                streamer.write_cell_metadata(cid, payload);
+                streamer.write_success_cell_values_raw(
+                    cid,
+                    compact_values.data(),
+                    static_cast<uint64_t>(compact_values.size()));
+                ++loaded_index;
             }
-            FinalizedCellPayload payload = builder.finalize();
-            if (payload.success_rows * static_cast<uint64_t>(row_width) !=
-                static_cast<uint64_t>(compact_values.size())) {
-                throw std::runtime_error("BC family runner archive compact value mismatch");
+            if (loaded_index != batch_cids.size()) {
+                throw std::logic_error("BC family runner archive did not consume loaded batch");
             }
-            streamer.write_cell_metadata(cid, payload);
-            streamer.write_success_cell_values_raw(
-                cid,
-                compact_values.data(),
-                static_cast<uint64_t>(compact_values.size()));
         }
         BCSingleChunkSolveFileResult result = streamer.finish();
         position_bytes = result.position_bytes;
@@ -1098,6 +1473,14 @@ template <typename StorageT>
     retired = BCFamilySolveFrontierLayer<StorageT>();
     bc_family_runner_publish_file(position_tmp, position_target);
     bc_family_runner_publish_file(success_tmp, success_target);
+    if (std::filesystem::absolute(exact_position_path).lexically_normal() !=
+        std::filesystem::absolute(position_target).lexically_normal()) {
+        bc_family_runner_remove_file_quiet(exact_position_path);
+    }
+    if (std::filesystem::absolute(exact_success_path).lexically_normal() !=
+        std::filesystem::absolute(success_target).lexically_normal()) {
+        bc_family_runner_remove_file_quiet(exact_success_path);
+    }
     if (options.direct_io && !options.keep_direct_padding) {
         std::filesystem::resize_file(position_target, position_bytes);
         std::filesystem::resize_file(success_target, success_bytes);
@@ -1424,8 +1807,13 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
         const std::filesystem::path output_success =
             bc_family_runner_success_path(options.solved_output_dir, options.prefix, ordinal);
 
+        std::unique_ptr<BCResidentSolvedLayer<StorageT>> produced_resident_cache;
+        std::unique_ptr<BCSingleChunkFrontierLayer<StorageT>> produced_single_future4_cache;
+
         switch (route_decision.route) {
         case BCSolveRoute::Resident: {
+            future2.single_frontier_cache.reset();
+            future4.single_frontier_cache.reset();
             BCResidentSolveOptions<StorageT> solve_options =
                 bc_family_runner_make_resident_solve_options<StorageT>(
                     options,
@@ -1443,8 +1831,8 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
 
             double future2_position_read_seconds = 0.0;
             double future2_success_read_seconds = 0.0;
-            BCResidentSolvedLayer<StorageT> resident_future2 =
-                bc_family_runner_load_resident_frontier<StorageT>(
+            const BCResidentSolvedLayer<StorageT> &resident_future2 =
+                bc_family_runner_resident_frontier_layer<StorageT>(
                     future2,
                     lut,
                     options,
@@ -1456,8 +1844,8 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
 
             double future4_position_read_seconds = 0.0;
             double future4_success_read_seconds = 0.0;
-            BCResidentSolvedLayer<StorageT> resident_future4 =
-                bc_family_runner_load_resident_frontier<StorageT>(
+            const BCResidentSolvedLayer<StorageT> &resident_future4 =
+                bc_family_runner_resident_frontier_layer<StorageT>(
                     future4,
                     lut,
                     options,
@@ -1482,11 +1870,14 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                     ordinal,
                     resident_result.layer,
                     "solve");
+            produced_resident_cache =
+                std::make_unique<BCResidentSolvedLayer<StorageT>>(
+                    std::move(resident_result.layer));
             metric.current_rows = resident_result.solve_stats.current_rows != 0U
                 ? resident_result.solve_stats.current_rows
                 : descriptor_row_count;
-            metric.live_rows = resident_result.layer.compact_stats.live_rows;
-            metric.zero_pruned_rows = resident_result.layer.compact_stats.zero_pruned_rows;
+            metric.live_rows = produced_resident_cache->compact_stats.live_rows;
+            metric.zero_pruned_rows = produced_resident_cache->compact_stats.zero_pruned_rows;
             metric.position_bytes = write_metric.position_bytes;
             metric.success_bytes = write_metric.success_bytes;
             metric.output_position_write_bytes = write_metric.output_position_write_bytes;
@@ -1499,11 +1890,13 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
             metric.family_stats.single.compact_live_rows = metric.live_rows;
             metric.family_stats.single.compact_zero_pruned_rows = metric.zero_pruned_rows;
             metric.family_stats.single.compact_seconds =
-                resident_result.layer.compact_stats.compact_seconds;
+                produced_resident_cache->compact_stats.compact_seconds;
             metric.has_family_stats = true;
             break;
         }
         case BCSolveRoute::Single: {
+            future2.resident_cache.reset();
+            future4.resident_cache.reset();
             BCSingleChunkSolveOptions<StorageT> solve_options =
                 bc_family_runner_make_single_solve_options<StorageT>(
                     options,
@@ -1518,13 +1911,15 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
             metric.writer_open_seconds = bc_family_solve_runner_now_seconds() - t0;
 
             const double solve_t0 = bc_family_solve_runner_now_seconds();
-            BCSingleChunkSolveFileResult solve_result =
-                bc_single_chunk_solve_strict_1x_to_files<StorageT>(
+            BCSingleChunkStrictFrontierFileResult<StorageT> solve_result =
+                bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier<StorageT>(
                     current,
                     future2.position,
                     future2.success,
-                    future4.position,
-                    future4.success,
+                    bc_family_runner_take_single_frontier_layer<StorageT>(
+                        future4,
+                        lut,
+                        options),
                     *position_writer,
                     *success_writer,
                     options.solved_output_dir /
@@ -1532,6 +1927,9 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                     solve_options,
                     &single_workspace);
             metric.solve_call_seconds = bc_family_solve_runner_now_seconds() - solve_t0;
+            produced_single_future4_cache =
+                std::make_unique<BCSingleChunkFrontierLayer<StorageT>>(
+                    std::move(solve_result.next_future4_layer));
 
             t0 = bc_family_solve_runner_now_seconds();
             position_writer.reset();
@@ -1573,6 +1971,10 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
             break;
         }
         case BCSolveRoute::Family: {
+            future2.resident_cache.reset();
+            future4.resident_cache.reset();
+            future2.single_frontier_cache.reset();
+            future4.single_frontier_cache.reset();
             t0 = bc_family_solve_runner_now_seconds();
             BCFamilyPartitionLayerMap current_partition =
                 bc_family_runner_partition_for(
@@ -1689,12 +2091,17 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
         case BCSolveRoute::Auto:
             throw std::logic_error("BC family runner received unresolved auto solve route");
         }
+        current = BCPositionStreamingReader();
+        bc_family_runner_remove_generated_layer_file(layers.at(ordinal));
         metric.total_seconds = bc_family_solve_runner_now_seconds() - layer_t0;
         bc_family_runner_emit_metric<StorageT>(run_result, callback, metric);
 
         const double frontier_t0 = bc_family_solve_runner_now_seconds();
         BCFamilySolveFrontierLayer<StorageT> retired_future4 = std::move(future4);
         future4 = std::move(future2);
+        if (produced_single_future4_cache) {
+            future4.single_frontier_cache = std::move(produced_single_future4_cache);
+        }
         bc_family_runner_write_checkpoint(
             options,
             BCFamilySolveCheckpoint{
@@ -1718,6 +2125,9 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
             ordinal_signed,
             lut,
             possible_8tile_sums);
+        if (produced_resident_cache) {
+            future2.resident_cache = std::move(produced_resident_cache);
+        }
         (void)frontier_t0;
     }
 

@@ -153,7 +153,7 @@ void debug_log(const std::string &message) {
 
 void remove_file_if_exists(const std::string &path) {
     std::error_code ec;
-    fs::remove(path, ec);
+    NativePath::remove(path, ec);
 }
 
 void remove_temp_raw_layer_files(const std::string &path) {
@@ -163,13 +163,13 @@ void remove_temp_raw_layer_files(const std::string &path) {
 
 bool is_valid_restart_file(const std::string &path, uint64_t alignment) {
     std::error_code ec;
-    if (!fs::exists(path, ec) || ec) {
+    if (!NativePath::exists(path, ec) || ec) {
         return false;
     }
-    if (!fs::is_regular_file(path, ec) || ec) {
+    if (!NativePath::is_regular_file(path, ec) || ec) {
         return false;
     }
-    const auto size = fs::file_size(path, ec);
+    const auto size = NativePath::file_size(path, ec);
     if (ec || size == 0U) {
         return false;
     }
@@ -181,13 +181,13 @@ bool is_valid_restart_file(const std::string &path, uint64_t alignment) {
 
 void remove_invalid_restart_file(const std::string &path, uint64_t alignment) {
     std::error_code ec;
-    if (!fs::exists(path, ec) || ec) {
+    if (!NativePath::exists(path, ec) || ec) {
         return;
     }
     if (is_valid_restart_file(path, alignment)) {
         return;
     }
-    fs::remove(path, ec);
+    NativePath::remove(path, ec);
     if (ec) {
         throw std::runtime_error("failed to remove invalid restart file: " + path);
     }
@@ -276,7 +276,7 @@ SplitLayer<T> read_split_layer_file(const std::string &path, FileIOUtils::Direct
         return split_layer_from_entries<T>(read_layer_file<T>(path, config));
     }
 
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    std::ifstream file(NativePath::from_utf8(path), std::ios::binary | std::ios::ate);
     if (!file) {
         return {};
     }
@@ -309,12 +309,12 @@ SplitLayer<T> read_split_layer_file(const std::string &path, FileIOUtils::Direct
 
 template <typename T>
 SplitLayer<T> read_split_layer_file_or_archive(const std::string &path, FileIOUtils::DirectIoConfig config = {}) {
-    if (fs::exists(path)) {
+    if (NativePath::exists(path)) {
         return read_split_layer_file<T>(path, config);
     }
     const std::string archive_path = path + ".7z";
     std::vector<uint8_t> decompressed = read_temp_byte_archive(archive_path);
-    if (decompressed.empty() && !fs::exists(archive_path)) {
+    if (decompressed.empty() && !NativePath::exists(archive_path)) {
         return {};
     }
     return split_layer_from_entry_bytes<T>(decompressed.data(), decompressed.size());
@@ -363,11 +363,11 @@ void write_split_layer_archive_file(const std::string &archive_path, const Split
         throw std::runtime_error("failed to write archived split layer: " + archive_path);
     }
     std::error_code ec;
-    fs::remove(fs::path(archive_path).replace_extension().string(), ec);
+    NativePath::remove(NativePath::replace_extension_utf8(archive_path), ec);
 }
 
 std::vector<uint64_t> read_raw_file(const std::string &path, FileIOUtils::DirectIoConfig config = {}) {
-    if (fs::exists(path)) {
+    if (NativePath::exists(path)) {
         return FileIOUtils::read_binary_vector_direct<uint64_t>(path, config);
     }
     return read_temp_uint64_archive(path + ".7z");
@@ -436,20 +436,20 @@ std::string classic_solve_stats_header() {
 void ensure_classic_solve_stats_header(const RunOptions &options) {
     {
         std::error_code ec;
-        fs::remove(options.pathname + "stats.txt", ec);
+        NativePath::remove(options.pathname + "stats.txt", ec);
     }
     const std::string path = classic_solve_stats_file_path(options);
-    if (fs::exists(path)) {
-        std::ifstream in(path);
+    if (NativePath::exists(path)) {
+        std::ifstream in(NativePath::from_utf8(path));
         std::string first_line;
         if (std::getline(in, first_line) && first_line == classic_solve_stats_header()) {
             return;
         }
         in.close();
         std::error_code ec;
-        fs::remove(path, ec);
+        NativePath::remove(path, ec);
     }
-    std::ofstream file(path, std::ios::app);
+    std::ofstream file(NativePath::from_utf8(path), std::ios::app);
     file << classic_solve_stats_header() << "\n";
 }
 
@@ -489,7 +489,7 @@ void append_classic_solve_stats_record(
     const double total_seconds =
         record.current_read_seconds + compute_seconds + record.current_write_seconds
         + record.future_write_seconds + record.compress_seconds;
-    std::ofstream file(classic_solve_stats_file_path(options), std::ios::app);
+    std::ofstream file(NativePath::from_utf8(classic_solve_stats_file_path(options)), std::ios::app);
     file << record.stage << ","
          << record.step << ","
          << record.input_live << ","
@@ -1434,13 +1434,13 @@ bool handle_restart_opt_only(
 ) {
     auto optlayer_path = options.pathname + "optlayer";
     if (started) {
-        std::ofstream out(optlayer_path, std::ios::trunc);
+        std::ofstream out(NativePath::from_utf8(optlayer_path), std::ios::trunc);
         out << (i - 1);
         return true;
     }
 
     int current_layer = i - 1;
-    std::ifstream in(optlayer_path);
+    std::ifstream in(NativePath::from_utf8(optlayer_path));
     if (in) {
         in >> current_layer;
     }
@@ -1450,18 +1450,18 @@ bool handle_restart_opt_only(
     if (i >= kOptimalBranchOnlyStartStep && d0.empty()) {
         const std::string d0_path = options.pathname + std::to_string(i - 2) + ".book";
         const std::string d1_path = options.pathname + std::to_string(i - 1) + ".book";
-        if ((!fs::exists(d0_path) && !is_readable_temp_archive(d0_path + ".7z")) ||
-            (!fs::exists(d1_path) && !is_readable_temp_archive(d1_path + ".7z"))) {
+        if ((!NativePath::exists(d0_path) && !is_readable_temp_archive(d0_path + ".7z")) ||
+            (!NativePath::exists(d1_path) && !is_readable_temp_archive(d1_path + ".7z"))) {
             return false;
         }
         const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
         d0 = read_split_layer_file_or_archive<T>(d0_path, io_config);
         d1 = read_split_layer_file_or_archive<T>(d1_path, io_config);
-        if (!fs::exists(d0_path)) {
+        if (!NativePath::exists(d0_path)) {
             write_layer_file(d0_path, d0, io_config);
             remove_file_if_exists(d0_path + ".7z");
         }
-        if (!fs::exists(d1_path)) {
+        if (!NativePath::exists(d1_path)) {
             write_layer_file(d1_path, d1, io_config);
             remove_file_if_exists(d1_path + ".7z");
         }
@@ -1515,8 +1515,8 @@ void keep_only_optimal_branches_impl(const PatternSpec &spec, const RunOptions &
     }
 
     auto optlayer_path = options.pathname + "optlayer";
-    if (fs::exists(optlayer_path)) {
-        fs::remove(optlayer_path);
+    if (NativePath::exists(optlayer_path)) {
+        NativePath::remove(optlayer_path);
     }
 }
 

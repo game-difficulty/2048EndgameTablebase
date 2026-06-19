@@ -30,6 +30,7 @@
       "algorithmAD": "AD",
       "algorithmEX": "EX",
       "algorithmEXAD": "EXAD",
+      "algorithmBC": "BC",
       "advanced": "使用进阶算法",
       "zmask": "使用 EX 算法",
       "compress": "压缩结果文件",
@@ -42,6 +43,7 @@
       "deletionThresholdRelative": "相对比例",
       "deletionThreshold": "删除成功率阈值",
       "successRateDtype": "数据精度类型",
+      "bcFamilyModulus": "BC 模数",
       "smallTileSumLimit": "小方块和上限(STSL)",
       "chunkedSolve": "分块回算",
       "progress": "构建进度",
@@ -57,6 +59,7 @@
       "deletionThresholdMode": "可关闭裁剪，或选择固定成功率阈值，也可按每层最高成功率的比例裁剪。",
       "deletionThreshold": "该数值会按所选模式解释。数值越大，表越小，但也可能丢失有用状态。",
       "successRateDtype": "成功率数据的存储格式。推荐默认值：uint32。",
+      "bcFamilyModulus": "BC 生成和回算全程固定使用的 family 模数。开始计算前确定，中途不切换。",
       "smallTileSumLimit": "控制进阶算法的剪枝强度。数值越大，保留的低值小方块组合越多，表体积也会更大。",
       "zmask": "使用 EX 算法，以更紧凑的 prefix/suffix bitmap 和 dense 结果结构存储每一层。相比经典结构，它通常占用更少内存和磁盘空间，在大层上速度也更快。"
     },

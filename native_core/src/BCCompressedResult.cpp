@@ -870,6 +870,89 @@ void validate_header(const Header &header) {
     return 0U;
 }
 
+[[nodiscard]] bool axis_looks_like_modulo_partition(const BC::BCFamilyTable &axis) {
+    if (!axis.is_contiguous_range() || axis.axis_base_coord() != 0U ||
+        axis.family_count() == 0U) {
+        return false;
+    }
+    for (BC::FamilyId id = 0U; id < axis.family_count(); ++id) {
+        if (axis.id_to_coord(id) != id) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] BC::BCBoardEncodedPosition encode_for_compressed_reader(
+    const BC::BCLut &lut,
+    const BC::BCFamilyTable &axis,
+    uint64_t board
+) {
+    BC::BCBoardEncodedPosition out =
+        BC::encode_spawned_canonical_board(lut, axis, board);
+    if (out.valid || !axis_looks_like_modulo_partition(axis)) {
+        return out;
+    }
+
+    const BC::BCQuadrantWords q = BC::unpack_board_to_quadrants(board);
+    const BC::BCWordDesc &nw_desc = lut.word_desc(q.nw);
+    const BC::BCWordDesc &ne_desc = lut.word_desc(q.ne);
+    const BC::BCWordDesc &sw_desc = lut.word_desc(q.sw);
+    const BC::BCWordDesc &se_desc = lut.word_desc(q.se);
+    if (!nw_desc.valid || !ne_desc.valid || !sw_desc.valid || !se_desc.valid) {
+        return {};
+    }
+
+    const uint64_t total_sum =
+        static_cast<uint64_t>(nw_desc.sum) +
+        static_cast<uint64_t>(ne_desc.sum) +
+        static_cast<uint64_t>(sw_desc.sum) +
+        static_cast<uint64_t>(se_desc.sum);
+    if (total_sum != axis.layer_sum()) {
+        return {};
+    }
+
+    BC::FamilyCoord row_coord = 0U;
+    BC::FamilyCoord col_coord = 0U;
+    if (!BC::bc_min_side_coord_u64(
+            static_cast<uint64_t>(nw_desc.sum) + ne_desc.sum,
+            static_cast<uint64_t>(sw_desc.sum) + se_desc.sum,
+            axis.family_unit(),
+            row_coord) ||
+        !BC::bc_min_side_coord_u64(
+            static_cast<uint64_t>(nw_desc.sum) + sw_desc.sum,
+            static_cast<uint64_t>(ne_desc.sum) + se_desc.sum,
+            axis.family_unit(),
+            col_coord)) {
+        return {};
+    }
+
+    const BC::BCEncodedKeyRank encoded =
+        BC::bc_encode_key_rank_from_descs(lut, q.nw, nw_desc, ne_desc, sw_desc, se_desc);
+    if (!encoded.valid) {
+        return {};
+    }
+
+    const uint32_t family_count = axis.family_count();
+    out.row_family = static_cast<BC::FamilyId>(row_coord % family_count);
+    out.col_family = static_cast<BC::FamilyId>(col_coord % family_count);
+    const uint64_t cid =
+        static_cast<uint64_t>(out.row_family) * family_count +
+        static_cast<uint32_t>(out.col_family);
+    if (cid > std::numeric_limits<BC::CellId>::max()) {
+        throw std::overflow_error("BC compressed modulo cid exceeds CellId");
+    }
+    out.cid = static_cast<BC::CellId>(cid);
+    out.key = encoded.key;
+    out.rank = encoded.rank;
+    out.bitmap_len = encoded.bitmap_len;
+    out.count_ne = encoded.count_ne;
+    out.count_sw = encoded.count_sw;
+    out.count_se = encoded.count_se;
+    out.valid = true;
+    return out;
+}
+
 [[nodiscard]] bool rank_for_bucket_payload_ordinal(
     const BC::BCLut &lut,
     uint64_t key,
@@ -1077,7 +1160,7 @@ ColdLookupResult PointReader::lookup(uint64_t board, uint32_t lane) const {
     }
 
     const BC::BCBoardEncodedPosition encoded =
-        BC::encode_spawned_canonical_board(*impl_->lut, impl_->axis, board);
+        encode_for_compressed_reader(*impl_->lut, impl_->axis, board);
     if (!encoded.valid || encoded.cid >= impl_->cell_dirs.size()) {
         return miss;
     }

@@ -150,6 +150,12 @@ set(FORMATION_CORE_SOURCES
     src/AdaptiveIndex.cpp
     src/HybridSearch.cpp
     src/CanonicalBatch.cpp
+    src/BCPositionFile.cpp
+    src/BCFamilyGeneration.cpp
+    src/BCResidentGeneration.cpp
+    src/BCResidentGenerationStreaming.cpp
+    src/BCSingleChunkGeneration.cpp
+    src/BCFamilyGenerationRunner.cpp
     src/BookGeneratorUtils.cpp
     src/BookGenerator.cpp
     src/EXPrefix40Layer.cpp
@@ -175,6 +181,9 @@ set(FORMATION_CORE_SOURCES
 
 nanobind_add_module(formation_core ${FORMATION_CORE_SOURCES})
 target_link_libraries(formation_core PRIVATE common_config OpenMP::OpenMP_CXX)
+if(WIN32)
+    target_link_libraries(formation_core PRIVATE psapi)
+endif()
 
 add_executable(bc_family_solve_full
     src/BCCompressedResult.cpp
@@ -185,6 +194,21 @@ add_executable(bc_family_solve_full
     src/bc_family_solve_full.cpp
 )
 target_link_libraries(bc_family_solve_full PRIVATE common_config OpenMP::OpenMP_CXX)
+
+add_executable(bc_family_generation_full
+    src/BCPositionFile.cpp
+    src/BCFamilyGeneration.cpp
+    src/BCFamilyGenerationRunner.cpp
+    src/BCResidentGeneration.cpp
+    src/BCResidentGenerationStreaming.cpp
+    src/BCSingleChunkGeneration.cpp
+    src/CanonicalBatch.cpp
+    src/bc_family_generation_full.cpp
+)
+target_link_libraries(bc_family_generation_full PRIVATE common_config OpenMP::OpenMP_CXX)
+if(WIN32)
+    target_link_libraries(bc_family_generation_full PRIVATE psapi)
+endif()
 
 set(CANONICAL_BATCH_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_canonical_batch.cpp")
 set(BC_FAMILY_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_family.cpp")
@@ -388,6 +412,7 @@ if(NATIVE_BUILD_TESTS)
     add_executable(bc_family_generation_bench
         src/BCPositionFile.cpp
         src/BCFamilyGeneration.cpp
+        src/BCFamilyGenerationRunner.cpp
         src/BCResidentGeneration.cpp
         src/BCResidentGenerationStreaming.cpp
         src/BCSingleChunkGeneration.cpp

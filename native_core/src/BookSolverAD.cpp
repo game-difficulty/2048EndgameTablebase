@@ -426,7 +426,7 @@ std::vector<T> read_binary_vector(const std::string &path, FileIOUtils::DirectIo
 }
 
 std::vector<uint64_t> read_temp_raw_layer(const std::string &path, FileIOUtils::DirectIoConfig config = {}) {
-    if (fs::exists(path)) {
+    if (NativePath::exists(path)) {
         return FileIOUtils::read_binary_vector_direct<uint64_t>(path, config);
     }
     return read_temp_uint64_archive(path + ".7z");
@@ -457,20 +457,20 @@ std::string ad_solve_stats_header() {
 void ensure_ad_solve_stats_header(const RunOptions &options) {
     {
         std::error_code ec;
-        fs::remove(options.pathname + "stats.txt", ec);
+        NativePath::remove(options.pathname + "stats.txt", ec);
     }
     const std::string path = ad_solve_stats_file_path(options);
-    if (fs::exists(path)) {
-        std::ifstream in(path);
+    if (NativePath::exists(path)) {
+        std::ifstream in(NativePath::from_utf8(path));
         std::string first_line;
         if (std::getline(in, first_line) && first_line == ad_solve_stats_header()) {
             return;
         }
         in.close();
         std::error_code ec;
-        fs::remove(path, ec);
+        NativePath::remove(path, ec);
     }
-    std::ofstream file(path, std::ios::app);
+    std::ofstream file(NativePath::from_utf8(path), std::ios::app);
     file << ad_solve_stats_header() << "\n";
 }
 
@@ -509,7 +509,7 @@ void append_ad_solve_stats_record(
     const double total_seconds =
         record.current_read_seconds + compute_seconds + record.current_write_seconds
         + record.future_write_seconds + record.compress_seconds;
-    std::ofstream file(ad_solve_stats_file_path(options), std::ios::app);
+    std::ofstream file(NativePath::from_utf8(ad_solve_stats_file_path(options)), std::ios::app);
     file << record.stage << ","
          << record.step << ","
          << record.input_live << ","
@@ -579,7 +579,7 @@ void clear_index_store(IndexStore &index_store) {
 
 void remove_file_if_exists(const std::string &path) {
     std::error_code ec;
-    fs::remove(path, ec);
+    NativePath::remove(path, ec);
 }
 
 void remove_temp_raw_layer_files(const std::string &path) {
@@ -607,7 +607,7 @@ void dict_tofile(
     int step,
     bool compress_indices
 ) {
-    const fs::path folder_path = options.pathname + std::to_string(step) + "b";
+    const fs::path folder_path = NativePath::from_utf8(options.pathname + std::to_string(step) + "b");
     fs::create_directories(folder_path);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
 
@@ -625,12 +625,12 @@ void dict_tofile(
             }
             continue;
         }
-        write_binary_vector<uint64_t>(ind_filename.string(), indices, io_config);
-        write_binary_vector<T>(book_filename.string(), book_bucket.data, io_config);
+        write_binary_vector<uint64_t>(NativePath::to_utf8_string(ind_filename), indices, io_config);
+        write_binary_vector<T>(NativePath::to_utf8_string(book_filename), book_bucket.data, io_config);
     }
 
     if (compress_indices && options.compress) {
-        maybe_do_compress_ad(folder_path.string());
+        maybe_do_compress_ad(NativePath::to_utf8_string(folder_path));
     }
 }
 
@@ -644,10 +644,10 @@ void dict_fromfile(
     clear_book_store(book_dict);
     clear_index_store(ind_dict);
 
-    const fs::path folder_path = options.pathname + std::to_string(step) + "b";
+    const fs::path folder_path = NativePath::from_utf8(options.pathname + std::to_string(step) + "b");
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     if (!fs::exists(folder_path)) {
-        throw std::runtime_error("Missing AD solve bucket folder: " + folder_path.string());
+        throw std::runtime_error("Missing AD solve bucket folder: " + NativePath::to_utf8_string(folder_path));
     }
 
     for (const auto &entry : fs::directory_iterator(folder_path)) {
@@ -658,7 +658,7 @@ void dict_fromfile(
         const std::string ext = path.extension().string();
         if (ext == ".zi") {
             const int key = std::stoi(path.stem().string());
-            auto decompressed = maybe_decompress_uint64_array(path.string());
+            auto decompressed = maybe_decompress_uint64_array(NativePath::to_utf8_string(path));
             if (!decompressed.empty()) {
                 ind_dict.at(key) = std::move(decompressed);
             }
@@ -668,7 +668,7 @@ void dict_fromfile(
             continue;
         }
         const int key = std::stoi(path.stem().string());
-        ind_dict.at(key) = read_binary_vector<uint64_t>(path.string(), io_config);
+        ind_dict.at(key) = read_binary_vector<uint64_t>(NativePath::to_utf8_string(path), io_config);
     }
 
     for (const auto &entry : fs::directory_iterator(folder_path)) {
@@ -684,7 +684,7 @@ void dict_fromfile(
         if (indices.empty()) {
             continue;
         }
-        auto values = read_binary_vector<T>(path.string(), io_config);
+        auto values = read_binary_vector<T>(NativePath::to_utf8_string(path), io_config);
         MatrixBucket<T> bucket;
         bucket.rows = indices.size();
         bucket.cols = bucket.rows == 0 ? 0 : (values.empty() ? 0 : values.size() / bucket.rows);
@@ -713,7 +713,7 @@ std::unique_ptr<PrefixStore> create_index_ad(const IndexStore &ind_dict, int num
 }
 
 std::vector<int> write_ind_chunked(const IndexStore &ind_dict, const RunOptions &options, int step) {
-    const fs::path folder_path = options.pathname + std::to_string(step) + "bt";
+    const fs::path folder_path = NativePath::from_utf8(options.pathname + std::to_string(step) + "bt");
     if (fs::exists(folder_path)) {
         fs::remove_all(folder_path);
     }
@@ -727,7 +727,11 @@ std::vector<int> write_ind_chunked(const IndexStore &ind_dict, const RunOptions 
         if (indices.empty()) {
             continue;
         }
-        write_binary_vector<uint64_t>((folder_path / (std::to_string(key) + ".i")).string(), indices, io_config);
+        write_binary_vector<uint64_t>(
+            NativePath::to_utf8_string(folder_path / (std::to_string(key) + ".i")),
+            indices,
+            io_config
+        );
         keys.push_back(key);
     }
     return keys;
@@ -2021,11 +2025,11 @@ void iter_ind_dict4(
     T &max_rate,
     int num_threads
 ) {
-    const fs::path folder = options.pathname + std::to_string(step) + "bt";
+    const fs::path folder = NativePath::from_utf8(options.pathname + std::to_string(step) + "bt");
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     for (int key : ind_dict0_keys) {
         std::vector<uint64_t> positions_array = read_binary_vector<uint64_t>(
-            (folder / (std::to_string(key) + ".i")).string(),
+            NativePath::to_utf8_string(folder / (std::to_string(key) + ".i")),
             io_config
         );
         if (positions_array.empty()) {
@@ -2036,7 +2040,7 @@ void iter_ind_dict4(
         const uint64_t chunk_size = std::max<uint64_t>(1ULL << 28, static_cast<uint64_t>(static_cast<double>(free_mem) * 0.9 / static_cast<double>(sizeof(T))));
         const size_t chunk_length = std::max<size_t>(1U, static_cast<size_t>(chunk_size / std::max<size_t>(derive_size, 1U)));
         FileIOUtils::DirectAppendWriter out(
-            (folder / (std::to_string(key) + ".b")).string(),
+            NativePath::to_utf8_string(folder / (std::to_string(key) + ".b")),
             static_cast<uint64_t>(positions_array.size()) *
                 static_cast<uint64_t>(derive_size) *
                 static_cast<uint64_t>(sizeof(T)),
@@ -2116,11 +2120,11 @@ void iter_ind_dict2(
     T &max_rate,
     int num_threads
 ) {
-    const fs::path folder = options.pathname + std::to_string(step) + "bt";
+    const fs::path folder = NativePath::from_utf8(options.pathname + std::to_string(step) + "bt");
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     for (int key : ind_dict0_keys) {
         std::vector<uint64_t> positions_array = read_binary_vector<uint64_t>(
-            (folder / (std::to_string(key) + ".i")).string(),
+            NativePath::to_utf8_string(folder / (std::to_string(key) + ".i")),
             io_config
         );
         if (positions_array.empty()) {
@@ -2138,11 +2142,12 @@ void iter_ind_dict2(
             static_cast<uint64_t>(positions_array.size()) *
             static_cast<uint64_t>(derive_size) *
             static_cast<uint64_t>(sizeof(T));
-        const std::string rewrite_path = book_path.string() + ".rewrite";
+        const std::string book_path_utf8 = NativePath::to_utf8_string(book_path);
+        const std::string rewrite_path = book_path_utf8 + ".rewrite";
         std::error_code remove_rewrite_error;
-        fs::remove(rewrite_path, remove_rewrite_error);
+        NativePath::remove(rewrite_path, remove_rewrite_error);
 
-        FileIOUtils::DirectSequentialReader input_file(book_path.string(), logical_bytes, io_config);
+        FileIOUtils::DirectSequentialReader input_file(book_path_utf8, logical_bytes, io_config);
         FileIOUtils::DirectAppendWriter output_file(rewrite_path, logical_bytes, io_config);
         for (size_t start_idx = 0; start_idx < positions_array.size(); start_idx += chunk_length) {
             const double t0 = wall_time_seconds();
@@ -2200,7 +2205,7 @@ void iter_ind_dict2(
         }
         input_file.close();
         output_file.close();
-        FileIOUtils::finalize_temporary_file(rewrite_path, book_path.string());
+        FileIOUtils::finalize_temporary_file(rewrite_path, book_path_utf8);
     }
 }
 
@@ -2237,8 +2242,10 @@ void recalculate_process_ad_chunked_impl(
     clear_index_store(ind_dict2);
 
     if (started_from_generate) {
-        fs::create_directories(options.pathname + std::to_string(options.steps - 1) + "b");
-        fs::create_directories(options.pathname + std::to_string(options.steps - 2) + "b");
+        std::error_code create_ec1;
+        std::error_code create_ec2;
+        NativePath::create_directories(options.pathname + std::to_string(options.steps - 1) + "b", create_ec1);
+        NativePath::create_directories(options.pathname + std::to_string(options.steps - 2) + "b", create_ec2);
     }
     const std::string final_raw_path = options.pathname + std::to_string(options.steps - 2);
     remove_temp_raw_layer_files(final_raw_path);
@@ -2254,7 +2261,7 @@ void recalculate_process_ad_chunked_impl(
             progress_total
         );
         const std::string solved_folder = options.pathname + std::to_string(step) + "b";
-        if (fs::exists(solved_folder)) {
+        if (NativePath::exists(solved_folder)) {
             if (options.compress) {
                 maybe_do_compress_ad(options.pathname + std::to_string(step + 2) + "b");
             }
@@ -2407,8 +2414,8 @@ void recalculate_process_ad_chunked_impl(
             num_threads
         );
 
-        const fs::path temp_folder = options.pathname + std::to_string(step) + "bt";
-        const fs::path final_folder = options.pathname + std::to_string(step) + "b";
+        const fs::path temp_folder = NativePath::from_utf8(options.pathname + std::to_string(step) + "bt");
+        const fs::path final_folder = NativePath::from_utf8(options.pathname + std::to_string(step) + "b");
         publish_ad_chunked_folder(temp_folder, final_folder);
 
         const std::string raw_path = options.pathname + std::to_string(step);
@@ -2498,8 +2505,10 @@ void recalculate_process_ad_impl(
     clear_index_store(ind_dict2);
 
     if (started_from_generate) {
-        fs::create_directories(options.pathname + std::to_string(options.steps - 1) + "b");
-        fs::create_directories(options.pathname + std::to_string(options.steps - 2) + "b");
+        std::error_code create_ec1;
+        std::error_code create_ec2;
+        NativePath::create_directories(options.pathname + std::to_string(options.steps - 1) + "b", create_ec1);
+        NativePath::create_directories(options.pathname + std::to_string(options.steps - 2) + "b", create_ec2);
     }
     const std::string final_raw_path = options.pathname + std::to_string(options.steps - 2);
     remove_temp_raw_layer_files(final_raw_path);
@@ -2515,7 +2524,7 @@ void recalculate_process_ad_impl(
             progress_total
         );
         const std::string solved_folder = options.pathname + std::to_string(step) + "b";
-        if (fs::exists(solved_folder)) {
+        if (NativePath::exists(solved_folder)) {
             if (options.compress) {
                 maybe_do_compress_ad(options.pathname + std::to_string(step + 2) + "b");
             }

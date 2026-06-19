@@ -3,7 +3,7 @@
 This document is the current solve-side handoff. It is aligned with the BC
 position generation design in
 `docs_and_configs/bc_resident_singlechunk_generation_impl_supplement.md` and
-with the current resident/single-chunk solve implementation.
+with the current resident, single-chunk, and FamilyChain solve implementation.
 
 Current production state:
 
@@ -12,17 +12,19 @@ Implemented and tested:
     typed BCFutureSuccessLookupView
     typed BCResidentSolve
     strict 1+x BCSingleChunkSolve full-run path
+    BCFamilySolve double-block route
+    automatic solve route dispatcher
+    BCFamilySolveRunner production full-run runtime
     direct-capable success/position/tmp4 IO
+    BC success format v2 with per-cell value-offset table
+    BC .bccmp final compression and cold lookup
     ResidentSolve synthetic oracle tests for UInt32 and typed dtypes
 
 Implemented as support or legacy entry points:
     in-memory single-chunk compacted build APIs
     file/file strict single solve API
-    BCFutureFamilyWindow and BCPartialStore scaffolding
-
-Not implemented as a production chain:
-    FamilyChainSolve executor
-    automatic solve route dispatcher
+    BCFutureFamilyWindow support for FamilyChain
+    thin CLI wrappers for generation/solve full-run reproduction
 ```
 
 ## 1. Solve Is Not Generation In Reverse
@@ -63,6 +65,20 @@ to a separate solved directory with the same suffixes and file formats:
 The solved `.bcpos` is a zero-compacted position file. Its layout remains the
 same BC position layout as generation output, so it can be used directly as a
 future layer by lower layers.
+
+The solved `.bcsuc` is BC success format v2. It carries a per-cell value-offset
+table in addition to the typed payload. Readers must use those offsets; they
+must not infer cell payload offsets solely from descriptor prefix sums.
+
+Production full-run solve is in:
+
+```text
+native_core/include/BCFamilySolveRunner.h
+```
+
+The frontend calls it through `formation_core.run_bc_family_build(...)`. The
+standalone `bc_family_solve_full` executable is a thin wrapper around the same
+runner.
 
 ## 2. Shared Recurrence
 
@@ -119,6 +135,24 @@ Single solve also keeps these rules. The current production full-run uses a
 single generated/current modulus family for the tested free tables, but the
 lookup and loader boundaries are axis-local and do not rely on current cell id
 being equal to future cell id.
+
+The modulus is supplied before BC calculation starts. Generation routing and
+solve routing may choose resident/single/family routes, but they do not change
+the modulus.
+
+Solve-side `auto` route is memory based:
+
+```text
+a = current generated rows
+b = future n+2 exact/live rows after zero-success compaction
+c = future n+4 exact/live rows after zero-success compaction
+
+resident fits when available memory >= 1 GiB + 5 * (a + b + c)
+single fits when available memory >= 1 GiB + 6 * max(b, c)
+otherwise route = FamilyChain
+```
+
+The route decision and required-memory fields are written into solve CSV stats.
 
 ## 4. Success DType Policy
 
@@ -463,7 +497,60 @@ payloads can be kept in aligned file-backed storage instead of forcing an extra
 
 ## 12. Statistics And Production Benchmarks
 
-Single full-run CSV is produced by:
+Production BC solve CSV is produced by `BCFamilySolveRunner` and by the
+`bc_family_solve_full` wrapper. It includes all three routes.
+
+Layer CSV fields include:
+
+```text
+kind
+ordinal
+solve_route
+layer_sum
+current_rows
+live_rows
+zero_pruned_rows
+archive_live_rows
+threshold_pruned_rows
+position_bytes
+success_bytes
+output_position_write_bytes
+output_success_write_bytes
+temp_compressed_bytes
+route_available_memory_bytes
+route_resident_required_bytes
+route_single_required_bytes
+route_required_bytes
+total_mrows_per_sec
+solve_call_mrows_per_sec
+open_current/future seconds
+descriptor_rows_seconds
+partition_seconds
+writer_open_seconds
+solve_call_seconds
+spawn4_compute_seconds
+spawn2_compute_seconds
+compact_seconds
+temp_write/read/compress_seconds
+final_stage_write/read_seconds
+position_write_seconds
+success_write_seconds
+writer_close_seconds
+post_resize_seconds
+archive_scan_seconds
+archive_prune_write_seconds
+final_compress_seconds
+total_seconds
+```
+
+The CSV ends with `kind=total`, which sums row counts, bytes, and timings and
+reports total throughput.
+
+The separate solve summary CSV includes generation/solve layer counts, solve
+completion, total row counts, total seconds, and total/solve-call Mrows/s.
+
+Older single-route benchmark CSVs are still useful when isolating one route.
+The single full-run CSV is produced by:
 
 ```text
 native_core/tests_src/bench_bc_single_chunk_solve_full.cpp
@@ -506,7 +593,8 @@ recalc_mrows_per_sec
 peak_working_set_bytes
 ```
 
-Current validation snapshot from the latest free10-256 single full-run:
+Historical validation snapshot from a free10-256 single full-run. Treat these
+numbers as regression orientation rather than a current performance promise:
 
 ```text
 generated_position_dir = tmp/free10_256_resident_generated
@@ -522,25 +610,35 @@ input read seconds     = 93.196 s after current direct/padded read optimization
 layer1 max success     = 3996176335 / 4000000000 = 0.99904408375
 ```
 
-## 13. FamilyChainSolve Boundary
+## 13. FamilyChain Solve Boundary
 
-FamilyChain solve remains a future production route. Its intended direction is
-target-family-major, not source-family-major.
-
-For each target future family pass:
+FamilyChain solve is the production fallback route when resident and
+single-chunk do not fit. Its scheduler is source-family fid order:
 
 ```text
-load the needed future family view V(G)
-scan relevant current cells/source families
-generate prepared queries with target-family prefilter
-apply partial updates for current cells
-release future cells that leave the window
-finalize current success cells only after both spawn phases are complete
+for phase in Spawn4 then Spawn2:
+    for fid = 0..F-1:
+        row cross cells    -> horizontal moves
+        column cross cells -> vertical moves
+        diagonal cell      -> both directions
 ```
 
-Family solve is the route that will need `BCPartialStore` and disk partial max
-semantics. Resident and current single-chunk solve do not use partial max
-storage.
+Spawn4 writes compact partial4 and per-cell scratch4. Spawn2 writes compact
+partial2, reads partial2 and scratch4, then finalizes compacted cells. The
+production implementation keeps partial max in bucket-empty compact layout
+rather than in a full 16-cell best array.
+
+FamilyChain uses `BCFutureFamilyWindow`, typed future lookup, direct-capable
+temporary files, and optional in-memory temp-file compression when retained
+temps are requested. It may use `family_final_values.bcfstmp` as a low-memory
+staging file if finalized cells cannot be immediately flushed.
+
+See:
+
+```text
+docs_and_configs/exbc_exadbc_family_chain_solve_plan_v1.md
+docs_and_configs/bc_family_chain_double_block_solve_discussion_v1.md
+```
 
 ## 14. Solve File Map
 
@@ -568,7 +666,8 @@ Shared solve support:
 native_core/include/BCSolveEdgeKernel.h
 native_core/include/BCFutureSuccessLookup.h
 native_core/include/BCFutureFamilyWindow.h
-native_core/include/BCPartialStore.h
+native_core/include/BCFamilySolve.h
+native_core/include/BCFamilySolvePlan.h
 native_core/include/BCSuccessIO.h
 native_core/include/BCPositionFile.h
 native_core/include/BCPositionCellLoader.h
@@ -576,4 +675,13 @@ native_core/include/BCPositionScanner.h
 native_core/include/BCLoadedCellScanner.h
 native_core/include/BCFileIO.h
 native_core/include/BCDirectFileIO.h
+```
+
+Compressed result and frontend reader:
+
+```text
+docs_and_configs/bc_compressed_result_format.md
+native_core/include/BCCompressedResult.h
+native_core/src/BCCompressedResult.cpp
+engine_core/BookReaderBC.py
 ```

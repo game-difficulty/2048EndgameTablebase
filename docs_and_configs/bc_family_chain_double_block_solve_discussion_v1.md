@@ -1,8 +1,8 @@
 # BC FamilyChain Double-Block Solve Discussion Notes
 
-This note records the agreed design context for the upcoming BC double-block
-backsolve work. It is a discussion snapshot, not a replacement for the broader
-solve runtime design documents.
+This note records the agreed design context for BC double-block backsolve work.
+It is a discussion snapshot plus current implementation notes, not a
+replacement for the broader solve runtime design documents.
 
 Related documents:
 
@@ -10,14 +10,24 @@ Related documents:
 docs_and_configs/exbc_exadbc_three_solve_chains_runtime_design_v1.md
 docs_and_configs/exbc_exadbc_family_chain_solve_plan_v1.md
 docs_and_configs/bc_resident_singlechunk_generation_impl_supplement.md
+docs_and_configs/bc_compressed_result_format.md
 ```
 
-## 1. Scope For The First Implementation
+Current implementation owner:
 
-The first FamilyChain solve implementation should focus on one layer and on
-correct double-block solve semantics.
+```text
+native_core/include/BCFamilySolve.h
+native_core/include/BCFamilySolvePlan.h
+native_core/include/BCFamilySolveRunner.h
+```
 
-Initial assumptions:
+## 1. Scope And Current Production State
+
+FamilyChain solve is implemented as the low-memory route under
+`BCFamilySolveRunner`. It is selected by solve-side routing when resident and
+single-chunk do not fit, or by a forced `solve_route=family`.
+
+Current assumptions and invariants:
 
 ```text
 current layer modulus == future2 layer modulus == future4 layer modulus
@@ -46,8 +56,11 @@ single route fits when available physical memory >= 1 GiB + 6 * max(b, c)
 otherwise use FamilyChain double-block solve with the preset modulus
 ```
 
-Small struct layouts can be refined while implementing. Large structures and
-the large execution flow should be kept explicit and stable.
+Layer-level checkpoint/resume is implemented in the runner. Layer-internal
+resume is intentionally not supported.
+
+Small struct layouts may still be refined, but the large execution flow is
+settled: full Spawn4 fid sweep, then full Spawn2 fid sweep.
 
 ## 2. Shared Semantics
 
@@ -55,9 +68,10 @@ FamilyChain solve computes the same BC recurrence as resident and single-chunk
 solve. It reads generated current `.bcpos` and solved future `.bcpos + .bcsuc`,
 then writes solved compacted current `.bcpos + .bcsuc`.
 
-It must not change success semantics, dtype semantics, or position/success file
-formats. The final logical output should stay compatible with existing
-resident/single solve readers.
+It must not change success semantics, dtype semantics, or final exact
+position/success file semantics. The current `.bcsuc` format is v2 and includes
+a per-cell success value offset table; resident, single, FamilyChain, exact
+reader, and compressed-result builder all use the same format.
 
 Generation `.bcpos` stores boards after move and before spawn. Boards with no
 empty tile are not valid stored current positions, because such boards are not
@@ -131,8 +145,8 @@ map_partition_source_family_to_target_families(...)
 checked_partition_fanout3(...)
 ```
 
-For the first solve implementation with equal current/future modulus, the fanout
-is still conceptually the same:
+In current production, current and future layers are expected to use the fixed
+caller-supplied modulus. The fanout is conceptually:
 
 ```text
 current fid + spawn delta -> future target family ids
@@ -355,21 +369,23 @@ layout, dtype, row width, and phase.
 
 ## 8. Final Output Staging
 
-The first implementation should use per-cell scratch/staging and avoid changing
-the success file format.
-
 The physical order in which cells are calculated or staged does not have to
 match cell-id order. The final logical `.bcpos + .bcsuc` output should remain
 compatible with resident and single-chunk solve:
 
 ```text
 .bcpos carries final compacted cell descriptors
-.bcsuc payload is interpreted through the final position descriptors
-success cell offsets are derived from final compacted success_rows
+.bcsuc v2 carries per-cell value offsets and typed success payload
+success readers use the offset table plus final compacted success_rows
 ```
 
-Using per-cell staging first is preferred over changing the success format or
-requiring a new reader.
+FamilyChain may stage finalized cells in `family_final_values.bcfstmp` when the
+configured final pending memory cap does not allow immediate flush. That staging
+file is not part of the public result format. It is accounted in
+`final_stage_write/read_seconds` and related byte counters.
+
+The `.bcsuc` v2 offset table is intentionally small, O(cell_count), and is not
+O(layer board count).
 
 ## 9. Future Lookup Shape
 
@@ -387,6 +403,10 @@ resident/single solve
 
 This keeps the initial FamilyChain solve path closer to the optimized
 resident/single implementation.
+
+The current implementation uses trusted-axis collectors in production. Planner
+coverage is treated as a correctness invariant; release hot loops do not use
+bucket hit masks as per-empty-slot fallback filters.
 
 ## 10. Memory Window Invariant
 
@@ -430,7 +450,7 @@ current/future/partial-max live data may be budgeted as about 5 families
 reasonable peak memory target for the tested mid-layer: <= 2 GB
 ```
 
-BC double-block solve must keep Spawn4 and Spawn2 as separate full sweeps:
+BC double-block solve keeps Spawn4 and Spawn2 as separate full sweeps:
 finish the Spawn4 fid sweep and persist its scratch/partial output, then start
 the Spawn2 sweep and finalize cells. The previous bounded block interleave route
 is deprecated and removed because it mixes the +4 and +2 phases and complicates
@@ -445,19 +465,16 @@ and typed zero/terminal values; 64-bit dtypes naturally move more bytes. It
 must not select a different algorithm route for integral versus floating-point
 success files.
 
-## 11. Suggested Module Order
+## 11. Runtime And Statistics
 
-Recommended implementation order:
+Production execution is in-process through `formation_core.run_bc_family_build`.
+The frontend no longer launches BC helper executables for production builds.
+Progress is updated through `FormationProgress` after each generated layer and
+after each archived/retired solved layer.
 
-```text
-1. Family solve plan / scheduler
-2. Compact partial max codec
-3. Directional phase kernel for one current cell
-4. Per-cell normal success scratch
-5. FamilyChain solve executor
-6. Small-layer correctness tests against ResidentSolve/SingleChunkSolve
-```
+Solve stats now include route decision fields, route memory thresholds, total
+and solve-call throughput, and detailed open/compute/temp/final/archive timing.
+The solve-layer CSV ends with a `total` row.
 
-Each module should have focused tests before it is integrated into the full
-executor. The initial implementation should still avoid obvious performance
-dead ends, because cross-module performance debugging later would be expensive.
+The standalone `bc_family_solve_full` executable is a thin CLI wrapper around
+the same runtime and emits the same solve stats shape.

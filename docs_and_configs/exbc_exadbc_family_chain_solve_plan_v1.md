@@ -1,34 +1,57 @@
-# BC FamilyChain Solve Plan
+# BC FamilyChain Solve Implementation Notes
 
-This document is the FamilyChain-specific solve plan. For shared solve
-semantics, dtype policy, and current implementation status, read
-`exbc_exadbc_three_solve_chains_runtime_design_v1.md` first.
+This document records the current FamilyChain solve implementation. It replaces
+the older pre-implementation plan. For shared recurrence, dtype semantics, and
+the production runner, read
+`docs_and_configs/exbc_exadbc_three_solve_chains_runtime_design_v1.md` first.
 
 ## 1. Current Status
 
-FamilyChain solve is not implemented yet.
+FamilyChain solve is implemented as the low-memory BC backsolve route.
 
-Available building blocks:
+Primary code:
 
 ```text
-BCSolveEdgeKernel.h          shared resident/single edge kernel
-BCFutureSuccessLookup.h      production typed direct future lookup
-BCResidentSolve.h            production resident solve route
-BCSingleChunkSolve.h         production strict 1+x single-chunk solve route
-BCFutureFamilyWindow.h       active future cell window scaffold
-BCPartialStore.h             typed current-cell partial block store scaffold
+native_core/include/BCFamilySolve.h
+native_core/include/BCFamilySolvePlan.h
+native_core/include/BCFutureFamilyWindow.h
+native_core/include/BCFutureSuccessLookup.h
+native_core/include/BCFamilySolveRunner.h
+native_core/tests_src/test_bc_family_solve.cpp
+native_core/tests_src/test_bc_family_solve_plan.cpp
+native_core/tests_src/bench_bc_family_solve_full.cpp
 ```
 
-There is no production FamilyChainSolve executor, no benchmark, and no
-free9/free10 full-run FamilyChain solve validation yet.
+Production dispatch is owned by `BCFamilySolveRunner`. The route can be forced,
+but normal production uses `solve_route=auto` and selects resident, single, or
+FamilyChain from the current/future row counts and available memory. The route
+does not change the family modulus.
 
-## 2. Design Goal
+## 2. Scope And Output Contract
 
-FamilyChain solve exists to lower peak memory when resident/single solve cannot
-fit. It must use the same recurrence and the same `.bcpos/.bcsuc` semantics as
-resident and single-chunk solve.
+FamilyChain solve computes the same recurrence as resident and single-chunk
+solve. It reads:
 
-It must not use generation-only structures:
+```text
+current generated <prefix><ordinal>.bcpos
+future2 exact     <prefix><ordinal+1>.bcpos + .bcsuc
+future4 exact     <prefix><ordinal+2>.bcpos + .bcsuc
+```
+
+It writes the exact solved current layer:
+
+```text
+<prefix><ordinal>.bcpos
+<prefix><ordinal>.bcsuc
+```
+
+The solved `.bcpos` is zero-compacted and can become a future layer. The solved
+`.bcsuc` uses BC success format v2 with a per-cell value-offset table; readers
+must use the offset table rather than assuming that success payloads are a
+plain cid-prefix layout.
+
+FamilyChain does not create generated-position entries and does not use
+generation mutable structures:
 
 ```text
 BCCellMutableBuilder
@@ -37,258 +60,205 @@ BCGenerationBlobIO
 BCFamilyPositionWriter
 ```
 
-It must not create generated-position entries. It writes a solved, compacted
-current `.bcpos + .bcsuc` pair whose format matches resident and single-chunk
-solve output.
+## 3. Fixed Modulus Rule
 
-## 3. Scheduling Order
+BC calculation receives one caller-supplied family modulus. Generation and
+solve routing must keep using that modulus for every layer and every route.
 
-The main order is target-family-major:
+The runner does not attempt to infer or switch modulus mid-run. Reconnect and
+resume read the recorded checkpoint and exact files but do not remap already
+generated layers to a new modulus.
+
+## 4. Source-Family Sweep
+
+The implemented scheduler is source-family ordered, not target-family-major.
+For a modulus/family count `F`:
 
 ```text
-for phase in spawn4 then spawn2:
-    for target future family G in solve order:
-        load future view V(G)
-        scan current/source cells that can query V(G)
-        apply partial contribution to current rows
-        release future cells that leave V(G)
+for fid = 0..F-1:
+    row side:    cells (fid, x)       -> horizontal moves
+    column side: cells (x, fid), x!=fid -> vertical moves
+    diagonal:    cell  (fid, fid)     -> both horizontal and vertical moves
 ```
 
-Do not use source-family-major as the main order. It tends to reload future
-views and makes IO amplification hard to bound.
+The order is fid ascending. This gives a controlled completion order for the
+L-shaped cell boundary. Physical final-value writes may still be staged when a
+cell completes before it can be flushed.
 
-The phase order mirrors single solve:
+The removed interleave/block route is not a production path. Spawn4 and Spawn2
+are separate full fid sweeps.
+
+## 5. Future Fanout And Window
+
+Future family coverage follows the same modulo family mapping rules as
+double-block generation. For one exact axis coordinate, spawn fanout is at most
+two. The third physical family appears only after modulo grouping. Therefore a
+current fid pass normally needs two future families and occasionally three.
+
+The production invariant is:
 
 ```text
-spawn4 partial pass first
-spawn2 finalize/add pass second
+future board-scale resident data <= 3 families
+future resident data + current/source family cross <= 4 families occasionally
 ```
 
-This allows a bounded partial representation and avoids needing two resident
-future layers at once.
+Family-scale metadata such as pass plans and family-cell matrices may be
+resident. Full layer board data must not be resident in the FamilyChain route.
 
-Unlike current strict single-chunk solve, FamilyChain solve will need real
-partial accumulation across target-family windows. Single-chunk `tmp4` is only
-a per-current-row weighted spawn4 contribution buffer and is not a partial max
-store.
+Future reuse is deterministic. The runner retains only cells that later fid
+passes are guaranteed to need within the window; it does not keep arbitrary
+adjacent families as a best-effort cache.
 
-## 4. Future View V(G)
+## 6. Two Spawn Sweeps
 
-For a future axis with physical modulus `M`, the physical target family `G`
-requires the row/column cross:
+FamilyChain solve uses two phase sweeps:
 
 ```text
-row family G: cells (G, x), all x in [0, M)
-col family G: cells (x, G), all x in [0, M), x != G
+Spawn4 sweep:
+    first direction of a non-diagonal cell writes compact partial4
+    second direction reads partial4, merges max4, averages over empty slots
+    writes weighted Spawn4 contribution into per-cell scratch4
+
+Spawn2 sweep:
+    first direction writes compact partial2
+    second direction reads partial2 and scratch4
+    merges max2, averages over empty slots, adds weighted Spawn2 contribution
+    zero-compacts the cell and stages/writes final values
 ```
 
-The helper equivalent is:
+For each row:
 
 ```text
-bc_future_family_view_cells(axis, G)
+final = p4 * average(max4_per_empty_slot) +
+        p2 * average(max2_per_empty_slot)
 ```
 
-The active window object should:
+`spawn_rate4` is an external option. It is not hard-coded as 0.1/0.9 inside the
+algorithm.
+
+If a direction has no legal move/query for an empty slot, the stored value for
+that slot is the dtype-specific `zero_value`. That value is a real dense slot,
+not a hole.
+
+## 7. Compact Partial Layout
+
+Partial max is bucket-empty compact. It does not use a fixed 16-cell best array
+as its primary layout.
+
+For a current bucket:
 
 ```text
-load missing position/success cells
-retain cells that stay in the next V(G)
-release cells that leave the window
-support typed success values
-support direct-aware/coalesced reads
-record active cell and IO stats
+rows    = live board rows in bucket rank order
+columns = empty cells from bucket_empty_mask in ctz order
+lanes   = row_width
 ```
 
-Existing scaffold:
+Physical value count:
 
 ```text
-native_core/include/BCFutureFamilyWindow.h
+bucket_live_rows * popcount(bucket_empty_mask) * row_width
 ```
 
-## 5. Modulus And Remap Rules
+The hot layout stores only data needed for compact access. Redundant debug or
+generic fields such as bucket key copies, bucket index copies, and
+`empty_slot_ordinals[16]` are not on the production hot path.
 
-Generation now uses modulo physical cells for every route. Family solve must
-inherit that model.
+## 8. Temporary Files
 
-Rules:
+FamilyChain uses file-backed temporary values for:
 
 ```text
-candidate future board is encoded against the future layer's own axis
-current physical cell ids are not comparable to future physical cell ids
-FamilyId is local to one axis/layer
-raw bucket keys preserve board sums and are the source of truth
+partial4
+partial2
+scratch4
+family_final_values when final values cannot be flushed immediately
 ```
 
-If current/future files use different moduli, the loader may over-approximate
-physical reads. Filtering must use encoded query or bucket-key semantics before
-the data enters compute.
-
-No over-approx loaded data should remain resident after extraction/window
-construction.
-
-## 6. Work Items
-
-Preferred work item granularity:
+Temporary records use compact metadata:
 
 ```text
-current cell
-current bucket
-current bitmap word range
+value_offset: uint64_t, UINT64_MAX means unwritten
+value_count:  uint64_t
 ```
 
-The rank payload prefix256 table allows each bitmap word-range item to compute
-its starting local success row without scanning from the bucket beginning.
+Temp IO supports direct-capable batched reads/writes. `compress_temp_files`
+compresses retained temporary files in memory using the shared temporary-file
+compression bridge; it does not decompress to a separate on-disk expanded file.
+When `keep_temp_files=false`, temp files are removed at the end of the layer.
 
-For each source board in an item:
+## 9. Future Lookup And Hot Path
+
+The compute path reuses `BCFutureSuccessLookupView<StorageT>` and
+`BCSolveEdgeKernel` logic. The trusted-axis collectors are the production fast
+path:
 
 ```text
-run BCSolveEdgeKernel for one phase
-target-family prefilter rejects candidates that cannot hit current G
-prepared queries carry cid/key/rank/ref/lane
-future window resolves queries to typed success values
-partial store is updated for current row/ref/lane
+horizontal pass -> horizontal trusted collector
+vertical pass   -> vertical trusted collector
+diagonal pass   -> both trusted collectors
 ```
 
-## 7. Partial Store
+The planner is responsible for ensuring future-family coverage. In production
+hot loops, bucket hit masks are not used as a defensive per-empty-slot filter.
+Debug builds may assert coverage.
 
-Family solve cannot finalize a current row until all relevant target-family
-passes for both spawn phases have contributed.
+Detailed per-candidate counters are diagnostic-only. Production timing and CSV
+stats should avoid query-level increments in the hot loop.
 
-Use typed partial blocks:
+## 10. DType Policy
+
+The six success dtype modes share the same FamilyChain control flow:
 
 ```text
-current CellId
-local_success_row
-lane
-partial value
-dirty/finalization state
+UInt32
+UInt64
+Float32
+Float64
+OneMinusFloat32
+OneMinusFloat64
 ```
 
-Existing scaffold:
+The dtype dispatch chooses `StorageT` and dtype-derived zero/terminal values.
+It must not choose a different algorithm route. Larger dtypes naturally perform
+more IO.
+
+One-minus float modes store `success - 1`; their zero and terminal values are
+`-1` and `0` respectively. The max and weighted-average recurrence remains the
+same because the transform is monotonic.
+
+## 11. Final Output
+
+Final `.bcpos/.bcsuc` writing uses the same exact output contract as resident
+and single-chunk solve. `.bcsuc` v2 carries per-cell value offsets, so the
+physical value payload order is described by the file metadata.
+
+FamilyChain may stage completed final cell values in `family_final_values`
+when immediate flush is not possible under the configured pending memory cap.
+This staging is an implementation detail; readers see only the final exact
+`.bcpos/.bcsuc` pair.
+
+## 12. Tests And Benchmarks
+
+Required validation:
 
 ```text
-native_core/include/BCPartialStore.h
+FamilyChain small fixtures equal ResidentSolve/SingleChunkSolve
+all six dtypes use the same control flow and match typed expectations
+single-layer forced resident/single/family routes produce equivalent exact rows
+full-run benchmarks report compute, IO, temp, final-stage, and throughput stats
 ```
 
-The first production version may keep active partial cells in memory and spill
-only when leaving the target-family window. Large-route production should add a
-file-backed partial spool before full-size benchmarks.
-
-## 8. Target-Family Prefilter
-
-The prefilter is optional for correctness but important for performance.
-
-It must answer:
+Useful performance fields are emitted by `BCFamilySolveRunner` and the
+`bc_family_solve_full` thin CLI:
 
 ```text
-can this moved future board physically land in target family G of the future axis?
-```
-
-It should compute raw row/column coordinates from raw quadrant sums, then apply
-the future axis modulo. Do not use current layer family ids.
-
-Existing scaffold:
-
-```text
-bc_solve_physical_target_family_may_hit(...)
-```
-
-This function should be reviewed before FamilyChain solve production work. It
-must use raw sums consistently with generation's `BCPositionCellLayout`.
-
-## 9. Solved Output
-
-Family solve writes the same solved file pair as resident/single solve:
-
-```text
-compacted current .bcpos
-typed current .bcsuc
-```
-
-Required first output path:
-
-```text
-CellId-order streaming position + success writer
-typed success block input
-raw dtype payload output
-empty-cell descriptor marking
-finish-time validation that every current cell is written exactly once
-write bytes/seconds/backend stats
-```
-
-If target-family finalization order is not CellId order, the executor must stage
-completed cells until they can be flushed in order. Random-access output can be
-added later, but should not be required for v1.
-
-## 10. Runtime Invariants
-
-Production FamilyChain solve must assert:
-
-```text
-future active cell count is bounded by the configured V(G) window
-no generation mutable builders are created
-future success dtype matches the typed executor
-future success metadata matches future position metadata
-every current success cell is written exactly once
-every compacted position cell is written exactly once
-partial rows are finalized only after both spawn phases
-```
-
-It should record:
-
-```text
-future cells loaded/retained/released
-future position/success read bytes and seconds
-prepared query count
-lookup miss count
-prefilter skip count
-partial active bytes peak
-success write bytes and seconds
-position write bytes and seconds
-```
-
-Avoid per-candidate stats in the default hot path; make detailed counters
-diagnostic-only.
-
-## 11. Correctness Plan
-
-Small tests:
-
-```text
-ResidentSolve output equals synthetic oracle on UInt32 and typed fixtures
-SingleChunkSolve output equals ResidentSolve for row-slab chunk sizes 1, 3, all
-FamilyChainSolve output equals ResidentSolve on synthetic small layers
-FamilyChainSolve handles different current/future moduli
-target-family prefilter on/off produces identical output
-```
-
-Integration tests:
-
-```text
-generate a small free pattern with resident/single/family routes
-solve one layer with ResidentSolve
-solve same layer with FamilyChainSolve
-compare compacted `.bcpos + .bcsuc` byte-for-byte or row-by-row
-```
-
-Performance gate:
-
-```text
-free9 medium layer benchmark before free9-256
-report recalc rows/s, IO GB/s, peak working set, active window peak
-```
-
-## 12. Recommended Next Step
-
-Resident and strict single-chunk solve are now production routes. Do not start
-with free-size FamilyChain full-run. Start with the smallest target-family
-executor that reuses existing solve pieces:
-
-```text
-reuse BCFutureSuccessLookupView and BCSolveEdgeKernel
-reuse the single-chunk/resident compacted output format
-define the target-family window lifetime
-define partial max file format and flush policy
-prove one small layer against ResidentSolve before performance work
-implement FamilyChainSolve target-family-major scheduler
+solve_route
+current_rows/live_rows/zero_pruned_rows
+route_available_memory_bytes
+route_resident_required_bytes
+route_single_required_bytes
+route_required_bytes
+total_mrows_per_sec
+solve_call_mrows_per_sec
+open/partition/solve/compact/temp/final/archive/compress timings
 ```

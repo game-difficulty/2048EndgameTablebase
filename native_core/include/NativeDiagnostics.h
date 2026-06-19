@@ -5,8 +5,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <utility>
+
+#include "PathUtils.h"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -39,8 +42,30 @@ inline void append_file(const char *path, const char *text) {
     if (path == nullptr || path[0] == '\0' || text == nullptr) {
         return;
     }
-    HANDLE file = CreateFileA(
-        path,
+    const std::filesystem::path native_path = NativePath::from_utf8(path);
+    HANDLE file = CreateFileW(
+        native_path.wstring().c_str(),
+        FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+    );
+    if (file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    DWORD written = 0;
+    WriteFile(file, text, static_cast<DWORD>(std::strlen(text)), &written, nullptr);
+    CloseHandle(file);
+}
+
+inline void append_file_w(const std::filesystem::path &path, const char *text) {
+    if (text == nullptr) {
+        return;
+    }
+    HANDLE file = CreateFileW(
+        path.wstring().c_str(),
         FILE_APPEND_DATA,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
@@ -67,26 +92,17 @@ inline void append_line(const char *line) {
         return;
     }
 
-    char exe_path[MAX_PATH] = {};
-    const DWORD exe_len = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
+    wchar_t exe_path[MAX_PATH] = {};
+    const DWORD exe_len = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
     if (exe_len > 0 && exe_len < MAX_PATH) {
-        for (DWORD i = exe_len; i > 0; --i) {
-            if (exe_path[i - 1] == '\\' || exe_path[i - 1] == '/') {
-                exe_path[i] = '\0';
-                break;
-            }
-        }
-        char path[MAX_PATH] = {};
-        std::snprintf(path, sizeof(path), "%snative_diagnostics.log", exe_path);
-        append_file(path, line);
+        const std::filesystem::path exe_dir = std::filesystem::path(exe_path).parent_path();
+        append_file_w(exe_dir / L"native_diagnostics.log", line);
     }
 
-    char temp_path[MAX_PATH] = {};
-    const DWORD temp_len = GetTempPathA(MAX_PATH, temp_path);
+    wchar_t temp_path[MAX_PATH] = {};
+    const DWORD temp_len = GetTempPathW(MAX_PATH, temp_path);
     if (temp_len > 0 && temp_len < MAX_PATH) {
-        char path[MAX_PATH] = {};
-        std::snprintf(path, sizeof(path), "%s2048_native_diagnostics.log", temp_path);
-        append_file(path, line);
+        append_file_w(std::filesystem::path(temp_path) / L"2048_native_diagnostics.log", line);
     }
 }
 

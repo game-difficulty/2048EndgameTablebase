@@ -67,17 +67,17 @@ std::string stats_header() {
 
 void ensure_stats_header(const RunOptions &options) {
     const std::string path = stats_file_path(options);
-    if (fs::exists(path)) {
-        std::ifstream in(path);
+    if (NativePath::exists(path)) {
+        std::ifstream in(NativePath::from_utf8(path));
         std::string first;
         if (std::getline(in, first) && first == stats_header()) {
             return;
         }
         in.close();
         std::error_code ec;
-        fs::remove(path, ec);
+        NativePath::remove(path, ec);
     }
-    std::ofstream out(path, std::ios::app);
+    std::ofstream out(NativePath::from_utf8(path), std::ios::app);
     out << stats_header() << "\n";
 }
 
@@ -113,7 +113,7 @@ void append_stats(const RunOptions &options, const StatsRecord &record) {
     const double compute_seconds =
         record.prepare_seconds + record.generate_seconds + record.finalize_seconds + record.validate_seconds;
     const double total_seconds = compute_seconds + record.write_seconds;
-    std::ofstream out(stats_file_path(options), std::ios::app);
+    std::ofstream out(NativePath::from_utf8(stats_file_path(options)), std::ios::app);
     out << record.stage << ","
         << record.step << ","
         << record.input_live << ","
@@ -190,7 +190,7 @@ EXAD::Luts load_or_build_luts(
         options.is_free,
         options.is_variant
     );
-    if (fs::exists(path)) {
+    if (NativePath::exists(path)) {
         NativeDiagnostics::mark("EXAD.load_or_build_luts read existing begin");
         EXAD::Luts luts = EXAD::read_lut_file(path, io_config);
         if (ZMaskFrozen::tile_limit_configs_equal(luts.config, config) &&
@@ -454,7 +454,7 @@ std::vector<std::string> split_csv_simple(const std::string &line) {
 
 DerivedOutputHistory load_recent_derived_output_history(const RunOptions &options, int start_step) {
     DerivedOutputHistory history;
-    std::ifstream file(stats_file_path(options));
+    std::ifstream file(NativePath::from_utf8(stats_file_path(options)));
     if (!file) {
         return history;
     }
@@ -527,7 +527,7 @@ struct ResumeState {
 bool exad_solved_output_exists(const RunOptions &options, int step) {
     const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
     return EXAD::solved_file_exists(solved_path) ||
-        fs::exists(options.pathname + std::to_string(step) + EXADCompressedResult::kCompressedLayerFileExtension);
+        NativePath::exists(options.pathname + std::to_string(step) + EXADCompressedResult::kCompressedLayerFileExtension);
 }
 
 ResumeState initialize_or_resume(

@@ -57,4 +57,6 @@ if [ -n "$PORTABLE_X86_64_TUNE" ]; then
 fi
 
 cmake "${CMAKE_ARGS[@]}"
-cmake --build "$BUILD_DIR" --config Release --target ai_core mover_core formation_core bookgen_native -j
+cmake --build "$BUILD_DIR" --config Release --target \
+  ai_core mover_core formation_core bookgen_native \
+  bc_family_generation_full bc_family_solve_full -j
