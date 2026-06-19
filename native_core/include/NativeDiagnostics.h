@@ -106,11 +106,26 @@ inline void append_line(const char *line) {
     }
 }
 
+inline const char *logger_file_path() {
+    const char *override_path = std::getenv("TABLEBASE_NATIVE_LOG_FILE");
+    if (override_path != nullptr && override_path[0] != '\0') {
+        return override_path;
+    }
+    return "logger.txt";
+}
+
+inline void append_logger_line(const char *line) {
+    if (line == nullptr || line[0] == '\0') {
+        return;
+    }
+    append_file(logger_file_path(), line);
+}
+
 inline void mark(const std::string &stage) {
+    std::snprintf(last_stage, sizeof(last_stage), "%s", stage.c_str());
     if (!enabled()) {
         return;
     }
-    std::snprintf(last_stage, sizeof(last_stage), "%s", stage.c_str());
     SYSTEMTIME st;
     GetLocalTime(&st);
     char line[1024] = {};
@@ -133,18 +148,56 @@ inline void mark(const std::string &stage) {
     append_line(line);
 }
 
-inline LONG WINAPI crash_filter(EXCEPTION_POINTERS *info) {
+inline void format_crash_line(EXCEPTION_POINTERS *info, char *line, size_t line_size) {
+    if (line == nullptr || line_size == 0U) {
+        return;
+    }
     if (info != nullptr && info->ExceptionRecord != nullptr) {
-        char line[1024] = {};
         std::snprintf(
             line,
-            sizeof(line),
+            line_size,
             "NATIVE_EXCEPTION code=0x%08lx address=%p last_stage=%s\n",
             static_cast<unsigned long>(info->ExceptionRecord->ExceptionCode),
             info->ExceptionRecord->ExceptionAddress,
             last_stage
         );
+    } else {
+        std::snprintf(line, line_size, "NATIVE_EXCEPTION code=unknown address=unknown last_stage=%s\n", last_stage);
+    }
+}
+
+inline LONG WINAPI diagnostic_crash_filter(EXCEPTION_POINTERS *info) {
+    if (enabled()) {
+        char line[1024] = {};
+        format_crash_line(info, line, sizeof(line));
         append_line(line);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+inline LONG WINAPI unhandled_crash_filter(EXCEPTION_POINTERS *info) {
+    char crash_line[1024] = {};
+    format_crash_line(info, crash_line, sizeof(crash_line));
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char logger_line[1400] = {};
+    std::snprintf(
+        logger_line,
+        sizeof(logger_line),
+        "%04u-%02u-%02u %02u:%02u:%02u,%03u - ERROR - Native crash in formation_core: %s",
+        static_cast<unsigned>(st.wYear),
+        static_cast<unsigned>(st.wMonth),
+        static_cast<unsigned>(st.wDay),
+        static_cast<unsigned>(st.wHour),
+        static_cast<unsigned>(st.wMinute),
+        static_cast<unsigned>(st.wSecond),
+        static_cast<unsigned>(st.wMilliseconds),
+        crash_line
+    );
+    append_logger_line(logger_line);
+    if (enabled()) {
+        append_line(crash_line);
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -155,8 +208,8 @@ inline void install_crash_handler(const char *module_name) {
     if (!installed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         return;
     }
-    AddVectoredExceptionHandler(1, crash_filter);
-    SetUnhandledExceptionFilter(crash_filter);
+    AddVectoredExceptionHandler(1, diagnostic_crash_filter);
+    SetUnhandledExceptionFilter(unhandled_crash_filter);
     mark(std::string("diagnostics installed module=") + (module_name == nullptr ? "unknown" : module_name));
 }
 

@@ -13,6 +13,7 @@ import markdown
 from Config import (
     SingletonConfig,
     category_info,
+    logger,
     normalize_deletion_threshold_mode,
     theme_map,
     write_runtime_deletion_threshold_signal,
@@ -389,6 +390,15 @@ async def handle_settings_action(
                 )
             except Exception as e:
                 print(f"Build error: {e}")
+                if not getattr(e, "_tablebase_logged", False):
+                    logger.error(
+                        "Build worker failed",
+                        exc_info=(type(e), e, e.__traceback__),
+                    )
+                    try:
+                        setattr(e, "_tablebase_logged", True)
+                    except Exception:
+                        pass
                 update_build_state(is_building=False, error=str(e))
                 notify_build_failed(e)
             finally:

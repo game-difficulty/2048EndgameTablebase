@@ -106,7 +106,10 @@ console_handler = logging.StreamHandler()
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 console_handler.setFormatter(formatter)
 
-file_handler = logging.FileHandler("logger.txt")
+LOGGER_FILE_PATH = os.path.abspath("logger.txt")
+os.environ.setdefault("TABLEBASE_NATIVE_LOG_FILE", LOGGER_FILE_PATH)
+
+file_handler = logging.FileHandler(LOGGER_FILE_PATH, encoding="utf-8")
 file_handler.setLevel(logging.WARNING)
 file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 file_handler.setFormatter(file_formatter)

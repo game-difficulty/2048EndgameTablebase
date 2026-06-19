@@ -649,6 +649,20 @@ def _should_retry_build_resume(exc: Exception) -> bool:
     return message.startswith("length multiplier ")
 
 
+def _log_build_exception_once(build_label: str, exc: Exception) -> None:
+    if getattr(exc, "_tablebase_logged", False):
+        return
+    logger.error(
+        "%s failed in native build runtime",
+        build_label,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    try:
+        setattr(exc, "_tablebase_logged", True)
+    except Exception:
+        pass
+
+
 def _run_with_single_resume_retry(build_label: str, build_fn) -> None:
     retried = False
     while True:
@@ -657,6 +671,7 @@ def _run_with_single_resume_retry(build_label: str, build_fn) -> None:
             return
         except Exception as exc:
             if retried or not _should_retry_build_resume(exc):
+                _log_build_exception_once(build_label, exc)
                 raise
             retried = True
             logger.warning(
