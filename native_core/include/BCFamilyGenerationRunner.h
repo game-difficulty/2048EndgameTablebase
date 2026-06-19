@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BCFamilyRoutePlanner.h"
+#include "FormationRuntime.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -14,6 +15,11 @@ struct BCFamilyGenerationRunOptions {
     std::string pattern = "free9";
     uint32_t target_rank = 8U;
     uint32_t extra_steps = 36U;
+    std::vector<uint64_t> seed_boards;
+    std::vector<uint64_t> pattern_masks;
+    std::vector<uint8_t> success_shifts;
+    int canonical_symm_mode = static_cast<int>(SymmMode::Full);
+    uint32_t success_check_min_source_layer_sum = 0U;
     int num_threads = 0;
     uint32_t batch_size = 8192U;
     uint32_t pending_buffer = 0U;

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -54,6 +55,7 @@ struct BCSolveEdgeOptions {
     int success_target_rank = 0;
     const std::vector<uint8_t> *success_shifts = nullptr;
     bool success_check_all_cells = false;
+    const std::vector<uint64_t> *pattern_masks = nullptr;
     uint32_t future_cell_modulus = 0U;
 };
 
@@ -158,6 +160,21 @@ struct BCSolveEdgeWorkspace {
     const uint64_t target = static_cast<uint64_t>(options.success_target_rank);
     for (uint8_t shift : *options.success_shifts) {
         if (((board >> shift) & 0xFULL) == target) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] inline bool bc_solve_matches_pattern(
+    uint64_t board,
+    const BCSolveEdgeOptions &options
+) {
+    if (options.pattern_masks == nullptr || options.pattern_masks->empty()) {
+        return true;
+    }
+    for (uint64_t mask : *options.pattern_masks) {
+        if ((board & mask) == mask) {
             return true;
         }
     }
@@ -485,16 +502,14 @@ struct BCSolvePreparedQueryEncoder {
             static_cast<uint32_t>(count_ne) *
             static_cast<uint32_t>(count_sw) *
             static_cast<uint32_t>(count_se);
-        if (bitmap_len == 0U || bitmap_len > kBCMaxBucketBitmapLen ||
-            bitmap_len > std::numeric_limits<BucketBitmapLen>::max()) {
-            throw std::logic_error("BC solve encoded bitmap length is outside uint16 bounds");
-        }
+        assert(bitmap_len != 0U);
+        assert(bitmap_len <= kBCMaxBucketBitmapLen);
+        assert(bitmap_len <= std::numeric_limits<BucketBitmapLen>::max());
 
         const uint32_t rank =
             (static_cast<uint32_t>(ne_desc.rank) * count_sw + sw_desc.rank) * count_se + se_desc.rank;
-        if (rank >= bitmap_len || rank > std::numeric_limits<BucketRank>::max()) {
-            throw std::logic_error("BC solve encoded rank is outside bitmap length");
-        }
+        assert(rank < bitmap_len);
+        assert(rank <= std::numeric_limits<BucketRank>::max());
 
         const uint64_t cid =
             static_cast<uint64_t>(row_id) * family_count + static_cast<uint32_t>(col_id);
@@ -601,6 +616,9 @@ void bc_solve_push_moved_candidate(
         if (stats != nullptr) {
             ++stats->unchanged_moves;
         }
+        return;
+    }
+    if (!bc_solve_matches_pattern(moved, options)) {
         return;
     }
     if (filter.enabled) {

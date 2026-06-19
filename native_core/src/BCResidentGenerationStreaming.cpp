@@ -169,6 +169,21 @@ void copy_cell_load_stats_to_result(
     return false;
 }
 
+[[nodiscard]] bool bc_matches_pattern_masks(
+    uint64_t board,
+    const std::vector<uint64_t> *pattern_masks
+) {
+    if (pattern_masks == nullptr || pattern_masks->empty()) {
+        return true;
+    }
+    for (uint64_t mask : *pattern_masks) {
+        if ((board & mask) == mask) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] uint32_t countr_zero32(uint32_t value) {
     if (value == 0U) {
         throw std::invalid_argument("BC countr_zero32 requires non-zero value");
@@ -500,6 +515,9 @@ void push_moved_board(
     const BCResidentGenerationOptions &options
 ) {
     if (moved == spawned) {
+        return;
+    }
+    if (!bc_matches_pattern_masks(moved, options.pattern_masks)) {
         return;
     }
     workspace.canonical_buffer.push_back(moved);

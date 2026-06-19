@@ -3,12 +3,16 @@
 #include "NativeLzma.h"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
+#include <exception>
 #include <fstream>
-#include <future>
 #include <limits>
+#include <mutex>
 #include <random>
 #include <stdexcept>
 #include <thread>
@@ -219,11 +223,20 @@ enum class BlockKind : uint8_t {
     Value,
 };
 
-struct PendingBlock {
+struct CompressionTask {
+    BlockKind kind = BlockKind::Bucket;
+    size_t dir_index = 0U;
+    const uint8_t *data = nullptr;
+    size_t bytes = 0U;
+    std::shared_ptr<const void> owner;
+};
+
+struct CompressedBlock {
     BlockKind kind = BlockKind::Bucket;
     size_t dir_index = 0U;
     uint64_t raw_size = 0U;
-    std::future<std::vector<uint8_t>> compressed;
+    std::vector<uint8_t> compressed;
+    double worker_seconds = 0.0;
 };
 
 struct BuilderState {
@@ -249,60 +262,187 @@ struct BuilderState {
 class BlockCompressor {
 public:
     BlockCompressor(std::fstream &out, BuilderState &state)
-        : out_(out), state_(state), max_pending_(normalized_worker_count(state.options)) {}
+        : out_(out),
+          state_(state),
+          worker_count_(normalized_worker_count(state.options)),
+          max_pending_(std::max<size_t>(1U, static_cast<size_t>(worker_count_) * 2U)) {
+        workers_.reserve(worker_count_);
+        for (uint32_t i = 0U; i < worker_count_; ++i) {
+            workers_.emplace_back([this]() { worker_loop(); });
+        }
+    }
+
+    ~BlockCompressor() {
+        stop_workers();
+    }
 
     void submit(BlockKind kind, size_t dir_index, std::vector<uint8_t> raw) {
-        const uint64_t raw_size = static_cast<uint64_t>(raw.size());
-        const int level = static_cast<int>(state_.options.compression_level);
-        pending_.push_back(PendingBlock{
+        auto owner = std::make_shared<std::vector<uint8_t>>(std::move(raw));
+        const uint8_t *data = owner->data();
+        const uint64_t bytes = static_cast<uint64_t>(owner->size());
+        submit_span(
             kind,
             dir_index,
-            raw_size,
-            std::async(
-                std::launch::async,
-                [bytes = std::move(raw), level]() {
-                    return compress_xz_block_native(bytes.data(), bytes.size(), level);
-                })
-        });
-        if (pending_.size() >= max_pending_) {
+            data,
+            bytes,
+            std::move(owner));
+    }
+
+    void submit_span(
+        BlockKind kind,
+        size_t dir_index,
+        const uint8_t *data,
+        uint64_t bytes,
+        std::shared_ptr<const void> owner = {}
+    ) {
+        if (bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC compressed block exceeds size_t");
+        }
+        if (bytes != 0U && data == nullptr) {
+            throw std::invalid_argument("BC compressed block span is null");
+        }
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            check_exception_locked();
+            tasks_.push_back(CompressionTask{
+                kind,
+                dir_index,
+                data,
+                static_cast<size_t>(bytes),
+                std::move(owner)
+            });
+            ++pending_count_;
+        }
+        task_cv_.notify_one();
+        while (pending_count_.load() >= max_pending_) {
             flush_one();
         }
     }
 
     void finish() {
-        while (!pending_.empty()) {
+        while (pending_count_.load() != 0U) {
             flush_one();
         }
+        stop_workers();
     }
 
 private:
+    void worker_loop() {
+        for (;;) {
+            CompressionTask task;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                task_cv_.wait(lock, [&]() {
+                    return stop_ || !tasks_.empty();
+                });
+                if (stop_ && tasks_.empty()) {
+                    return;
+                }
+                task = std::move(tasks_.front());
+                tasks_.pop_front();
+            }
+
+            try {
+                const double t0 = now_seconds();
+                CompressedBlock result;
+                result.kind = task.kind;
+                result.dir_index = task.dir_index;
+                result.raw_size = static_cast<uint64_t>(task.bytes);
+                const int level = static_cast<int>(state_.options.compression_level);
+                result.compressed =
+                    compress_xz_block_native(task.data, task.bytes, level);
+                result.worker_seconds = now_seconds() - t0;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    results_.push_back(std::move(result));
+                }
+                result_cv_.notify_one();
+            } catch (...) {
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (!exception_) {
+                        exception_ = std::current_exception();
+                    }
+                    stop_ = true;
+                }
+                task_cv_.notify_all();
+                result_cv_.notify_one();
+                return;
+            }
+        }
+    }
+
+    void stop_workers() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stop_ = true;
+        }
+        task_cv_.notify_all();
+        for (std::thread &worker : workers_) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+        workers_.clear();
+    }
+
+    void check_exception_locked() const {
+        if (exception_) {
+            std::rethrow_exception(exception_);
+        }
+    }
+
     void flush_one() {
-        PendingBlock block = std::move(pending_.front());
-        pending_.erase(pending_.begin());
-        std::vector<uint8_t> compressed = block.compressed.get();
+        CompressedBlock block;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            result_cv_.wait(lock, [&]() {
+                return exception_ || !results_.empty();
+            });
+            check_exception_locked();
+            block = std::move(results_.front());
+            results_.pop_front();
+        }
         const uint64_t offset = file_offset(out_);
-        write_bytes(out_, compressed.data(), static_cast<uint64_t>(compressed.size()), "BC compressed data block");
+        const double write_t0 = now_seconds();
+        write_bytes(
+            out_,
+            block.compressed.data(),
+            static_cast<uint64_t>(block.compressed.size()),
+            "BC compressed data block");
+        state_.stats.write_seconds += now_seconds() - write_t0;
+        state_.stats.compress_worker_seconds += block.worker_seconds;
         if (block.kind == BlockKind::Bucket) {
             BucketBlockDirEntry &entry = state_.bucket_dirs.at(block.dir_index);
             entry.compressed_offset = offset;
-            entry.compressed_size = static_cast<uint64_t>(compressed.size());
+            entry.compressed_size = static_cast<uint64_t>(block.compressed.size());
             entry.raw_size = block.raw_size;
             state_.stats.bucket_raw_bytes += block.raw_size;
-            state_.stats.bucket_compressed_bytes += static_cast<uint64_t>(compressed.size());
+            state_.stats.bucket_compressed_bytes += static_cast<uint64_t>(block.compressed.size());
         } else {
             ValueBlockDirEntry &entry = state_.value_dirs.at(block.dir_index);
             entry.compressed_offset = offset;
-            entry.compressed_size = static_cast<uint64_t>(compressed.size());
+            entry.compressed_size = static_cast<uint64_t>(block.compressed.size());
             entry.raw_size = block.raw_size;
             state_.stats.value_raw_bytes += block.raw_size;
-            state_.stats.value_compressed_bytes += static_cast<uint64_t>(compressed.size());
+            state_.stats.value_compressed_bytes += static_cast<uint64_t>(block.compressed.size());
         }
+        --pending_count_;
     }
 
     std::fstream &out_;
     BuilderState &state_;
+    uint32_t worker_count_ = 1U;
     size_t max_pending_ = 1U;
-    std::vector<PendingBlock> pending_;
+    std::vector<std::thread> workers_;
+    std::deque<CompressionTask> tasks_;
+    std::deque<CompressedBlock> results_;
+    std::atomic<size_t> pending_count_{0U};
+    mutable std::mutex mutex_;
+    std::condition_variable task_cv_;
+    std::condition_variable result_cv_;
+    bool stop_ = false;
+    std::exception_ptr exception_;
 };
 
 [[nodiscard]] uint32_t bucket_rank_payload_end(
@@ -318,16 +458,27 @@ private:
     return BC::checked_u32_add(bitmap_offset, bitmap_bytes, "BC compressed bucket payload end overflow");
 }
 
-void append_bucket_block_raw(
+void append_bucket_block_raw_view(
     const BC::BCLut &lut,
-    const std::vector<BC::BCBucketEntry> &buckets,
-    const std::vector<uint8_t> &rank_payload,
+    const BC::BCBucketEntry *buckets,
+    uint32_t bucket_count,
+    const uint8_t *rank_payload,
+    uint32_t rank_payload_size,
     uint32_t begin,
     uint32_t end,
     std::vector<uint8_t> &raw
 ) {
     raw.clear();
     const uint32_t count = end - begin;
+    if (end < begin || end > bucket_count) {
+        throw std::out_of_range("BC compressed bucket block range exceeds bucket view");
+    }
+    if (bucket_count != 0U && buckets == nullptr) {
+        throw std::invalid_argument("BC compressed bucket view is null");
+    }
+    if (rank_payload_size != 0U && rank_payload == nullptr) {
+        throw std::invalid_argument("BC compressed rank payload view is null");
+    }
     std::vector<uint64_t> keys;
     std::vector<uint32_t> success_offsets;
     std::vector<uint32_t> local_offsets;
@@ -339,18 +490,18 @@ void append_bucket_block_raw(
     uint32_t payload_cursor = 0U;
     local_offsets.push_back(0U);
     for (uint32_t i = begin; i < end; ++i) {
-        const BC::BCBucketEntry &bucket = buckets.at(i);
+        const BC::BCBucketEntry &bucket = buckets[i];
         const uint32_t slice_begin = bucket.rank_payload_offset;
         const uint32_t slice_end = bucket_rank_payload_end(lut, bucket);
-        if (slice_end < slice_begin || slice_end > rank_payload.size()) {
+        if (slice_end < slice_begin || slice_end > rank_payload_size) {
             throw std::runtime_error("BC compressed bucket rank payload slice exceeds cell payload");
         }
         keys.push_back(bucket.key);
         success_offsets.push_back(bucket.success_row_offset);
         payload.insert(
             payload.end(),
-            rank_payload.begin() + static_cast<std::ptrdiff_t>(slice_begin),
-            rank_payload.begin() + static_cast<std::ptrdiff_t>(slice_end));
+            rank_payload + slice_begin,
+            rank_payload + slice_end);
         payload_cursor = BC::checked_u32_add(
             payload_cursor,
             slice_end - slice_begin,
@@ -371,13 +522,20 @@ void append_bucket_block_raw(
 
 [[nodiscard]] uint64_t bucket_block_raw_estimate(
     const BC::BCLut &lut,
-    const std::vector<BC::BCBucketEntry> &buckets,
+    const BC::BCBucketEntry *buckets,
+    uint32_t bucket_count,
     uint32_t begin,
     uint32_t end
 ) {
+    if (end < begin || end > bucket_count) {
+        throw std::out_of_range("BC compressed bucket estimate range exceeds bucket view");
+    }
+    if (bucket_count != 0U && buckets == nullptr) {
+        throw std::invalid_argument("BC compressed bucket estimate view is null");
+    }
     uint64_t payload = 0U;
     for (uint32_t i = begin; i < end; ++i) {
-        const BC::BCBucketEntry &bucket = buckets.at(i);
+        const BC::BCBucketEntry &bucket = buckets[i];
         const uint32_t slice_end = bucket_rank_payload_end(lut, bucket);
         if (slice_end < bucket.rank_payload_offset) {
             throw std::runtime_error("BC compressed bucket rank payload invalid range");
@@ -397,18 +555,21 @@ void emit_bucket_blocks_for_cell(
     BlockCompressor &compressor,
     const BC::BCLut &lut,
     BC::CellId cid,
-    const std::vector<BC::BCBucketEntry> &buckets,
-    const std::vector<uint8_t> &rank_payload
+    const BC::BCBucketEntry *buckets,
+    uint32_t bucket_count,
+    const uint8_t *rank_payload,
+    uint32_t rank_payload_size
 ) {
     CellDirEntry &cell = state.cell_dirs.at(cid);
     cell.bucket_block_begin = BC::checked_u32_size(
         state.bucket_dirs.size(),
         "BC compressed bucket dir count exceeds uint32");
     uint32_t begin = 0U;
-    while (begin < buckets.size()) {
+    while (begin < bucket_count) {
         uint32_t end = begin + 1U;
-        while (end < buckets.size()) {
-            const uint64_t estimate = bucket_block_raw_estimate(lut, buckets, begin, end + 1U);
+        while (end < bucket_count) {
+            const uint64_t estimate =
+                bucket_block_raw_estimate(lut, buckets, bucket_count, begin, end + 1U);
             if (estimate > state.options.bucket_block_raw_target_bytes && end > begin) {
                 break;
             }
@@ -419,7 +580,15 @@ void emit_bucket_blocks_for_cell(
         }
 
         std::vector<uint8_t> raw;
-        append_bucket_block_raw(lut, buckets, rank_payload, begin, end, raw);
+        append_bucket_block_raw_view(
+            lut,
+            buckets,
+            bucket_count,
+            rank_payload,
+            rank_payload_size,
+            begin,
+            end,
+            raw);
         if (raw.size() > state.options.bucket_block_raw_hard_cap_bytes) {
             throw std::runtime_error("BC compressed bucket block exceeds hard cap");
         }
@@ -428,9 +597,9 @@ void emit_bucket_blocks_for_cell(
         dir.cid = cid;
         dir.first_bucket_index = begin;
         dir.bucket_count = end - begin;
-        dir.first_success_row = buckets.at(begin).success_row_offset;
-        dir.first_key = buckets.at(begin).key;
-        dir.last_key = buckets.at(end - 1U).key;
+        dir.first_success_row = buckets[begin].success_row_offset;
+        dir.first_key = buckets[begin].key;
+        dir.last_key = buckets[end - 1U].key;
         const size_t dir_index = state.bucket_dirs.size();
         state.bucket_dirs.push_back(dir);
         compressor.submit(BlockKind::Bucket, dir_index, std::move(raw));
@@ -441,12 +610,32 @@ void emit_bucket_blocks_for_cell(
         "BC compressed cell bucket block count exceeds uint32");
 }
 
+void emit_bucket_blocks_for_cell(
+    BuilderState &state,
+    BlockCompressor &compressor,
+    const BC::BCLut &lut,
+    BC::CellId cid,
+    const std::vector<BC::BCBucketEntry> &buckets,
+    const std::vector<uint8_t> &rank_payload
+) {
+    emit_bucket_blocks_for_cell(
+        state,
+        compressor,
+        lut,
+        cid,
+        buckets.empty() ? nullptr : buckets.data(),
+        BC::checked_u32_size(buckets.size(), "BC compressed bucket vector exceeds uint32"),
+        rank_payload.empty() ? nullptr : rank_payload.data(),
+        BC::checked_u32_size(rank_payload.size(), "BC compressed rank payload exceeds uint32"));
+}
+
 void emit_value_blocks_for_cell(
     BuilderState &state,
     BlockCompressor &compressor,
     BC::CellId cid,
     const uint8_t *bytes,
-    uint64_t byte_count
+    uint64_t byte_count,
+    std::shared_ptr<const void> owner = {}
 ) {
     const uint32_t value_size = state.header.value_size;
     if ((byte_count % value_size) != 0U) {
@@ -465,45 +654,114 @@ void emit_value_blocks_for_cell(
         if (raw_bytes > state.options.value_block_raw_hard_cap_bytes) {
             throw std::runtime_error("BC compressed value block exceeds hard cap");
         }
-        std::vector<uint8_t> raw(
-            bytes + static_cast<size_t>(cursor * value_size),
-            bytes + static_cast<size_t>((cursor + take) * value_size));
         ValueBlockDirEntry dir;
         dir.first_value_index = state.value_cursor + cursor;
         dir.value_count = BC::checked_u32_size(take, "BC compressed value block count exceeds uint32");
         dir.value_size = value_size;
         const size_t dir_index = state.value_dirs.size();
         state.value_dirs.push_back(dir);
-        compressor.submit(BlockKind::Value, dir_index, std::move(raw));
+        const uint64_t raw_offset = cursor * value_size;
+        if (raw_offset > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC compressed value block offset exceeds size_t");
+        }
+        compressor.submit_span(
+            BlockKind::Value,
+            dir_index,
+            bytes + static_cast<size_t>(raw_offset),
+            raw_bytes,
+            owner);
         cursor += take;
     }
     state.value_cursor += value_count;
     state.stats.success_values += value_count;
 }
 
-[[nodiscard]] const uint8_t *success_cell_bytes(
-    const BC::BCLoadedSuccessCell &cell,
+void emit_value_blocks_for_payload(
+    BuilderState &state,
+    BlockCompressor &compressor,
+    const uint8_t *bytes,
+    uint64_t value_count,
+    std::shared_ptr<const void> owner = {}
+) {
+    const uint32_t value_size = state.header.value_size;
+    if (value_count != 0U && bytes == nullptr) {
+        throw std::invalid_argument("BC compressed success payload is null");
+    }
+    const uint64_t values_per_block = std::max<uint64_t>(
+        1U,
+        state.options.value_block_raw_target_bytes / value_size);
+    uint64_t cursor = 0U;
+    while (cursor < value_count) {
+        const uint64_t take = std::min<uint64_t>(values_per_block, value_count - cursor);
+        const uint64_t raw_bytes = take * value_size;
+        if (raw_bytes > state.options.value_block_raw_hard_cap_bytes) {
+            throw std::runtime_error("BC compressed value block exceeds hard cap");
+        }
+        ValueBlockDirEntry dir;
+        dir.first_value_index = cursor;
+        dir.value_count = BC::checked_u32_size(take, "BC compressed value block count exceeds uint32");
+        dir.value_size = value_size;
+        const size_t dir_index = state.value_dirs.size();
+        state.value_dirs.push_back(dir);
+        const uint64_t raw_offset = cursor * value_size;
+        if (raw_offset > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC compressed value block offset exceeds size_t");
+        }
+        compressor.submit_span(
+            BlockKind::Value,
+            dir_index,
+            bytes + static_cast<size_t>(raw_offset),
+            raw_bytes,
+            owner);
+        cursor += take;
+    }
+    state.stats.success_values += value_count;
+}
+
+struct SuccessCellByteSpan {
+    const uint8_t *data = nullptr;
+    std::shared_ptr<const void> owner;
+};
+
+[[nodiscard]] SuccessCellByteSpan success_cell_bytes(
+    BC::BCLoadedSuccessCell &cell,
     std::vector<uint8_t> &scratch
 ) {
     scratch.clear();
     if (cell.external_value_data != nullptr) {
-        return cell.external_value_data;
+        return SuccessCellByteSpan{
+            cell.external_value_data,
+            cell.external_value_bytes
+        };
     }
     if (!cell.raw_bytes.empty()) {
-        return cell.raw_bytes.data();
+        auto owner = std::make_shared<std::vector<uint8_t>>(std::move(cell.raw_bytes));
+        return SuccessCellByteSpan{
+            owner->data(),
+            std::move(owner)
+        };
     }
     if (!cell.values.empty()) {
 #if defined(_WIN32) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
-        return reinterpret_cast<const uint8_t *>(cell.values.data());
+        auto owner = std::make_shared<std::vector<uint32_t>>(std::move(cell.values));
+        return SuccessCellByteSpan{
+            reinterpret_cast<const uint8_t *>(owner->data()),
+            std::move(owner)
+        };
 #else
         scratch.reserve(cell.values.size() * sizeof(uint32_t));
         for (uint32_t value : cell.values) {
             BC::bc_append_u32_le(scratch, value);
         }
-        return scratch.data();
+        auto owner = std::make_shared<std::vector<uint8_t>>(std::move(scratch));
+        scratch.clear();
+        return SuccessCellByteSpan{
+            owner->data(),
+            std::move(owner)
+        };
 #endif
     }
-    return nullptr;
+    return SuccessCellByteSpan{};
 }
 
 void initialize_state_from_position(
@@ -577,6 +835,7 @@ void finalize_file(std::fstream &out, BuilderState &state, const std::filesystem
 
     state.header.success_value_count = state.value_cursor;
     state.header.live_rows = state.stats.live_rows;
+    const uint64_t final_output_bytes = file_offset(out);
     write_at(out, 0U, &state.header, sizeof(state.header), "BC compressed header");
     out.flush();
     if (!out) {
@@ -584,7 +843,9 @@ void finalize_file(std::fstream &out, BuilderState &state, const std::filesystem
     }
     state.stats.bucket_blocks = state.bucket_dirs.size();
     state.stats.value_blocks = state.value_dirs.size();
-    state.stats.output_bytes = file_offset(out);
+    state.stats.output_bytes = final_output_bytes;
+    state.stats.original_position_bytes = state.header.original_position_bytes;
+    state.stats.original_success_bytes = state.header.original_success_bytes;
 }
 
 [[nodiscard]] BC::BCSuccessHeader read_success_header_from_path(const std::filesystem::path &path) {
@@ -649,8 +910,74 @@ void validate_options(const CompressOptions &options) {
     if (!out) {
         throw std::runtime_error("failed to open BC compressed output: " + tmp_path.string());
     }
+    double write_t0 = now_seconds();
     write_bytes(out, &state.header, sizeof(state.header), "BC compressed provisional header");
+    state.stats.write_seconds += now_seconds() - write_t0;
     BlockCompressor compressor(out, state);
+
+    constexpr uint32_t kMaxBatchCells = 256U;
+    constexpr uint64_t kMaxBatchRawBytes = 64ULL * 1024ULL * 1024ULL;
+    std::vector<BC::CellId> batch_cids;
+    batch_cids.reserve(kMaxBatchCells);
+    uint64_t batch_estimated_bytes = 0U;
+
+    auto flush_batch = [&]() {
+        if (batch_cids.empty()) {
+            return;
+        }
+        double read_t0 = now_seconds();
+        std::vector<BC::BCLoadedCell> position_cells =
+            position.load_cells(batch_cids);
+        state.stats.read_seconds += now_seconds() - read_t0;
+        if (position_cells.size() != batch_cids.size()) {
+            throw std::logic_error("BC compressed position batch size mismatch");
+        }
+
+        read_t0 = now_seconds();
+        std::vector<BC::BCLoadedSuccessCell> success_cells =
+            success.load_cells(batch_cids, nullptr, false);
+        state.stats.read_seconds += now_seconds() - read_t0;
+        if (success_cells.size() != batch_cids.size()) {
+            throw std::logic_error("BC compressed success batch size mismatch");
+        }
+
+        std::vector<uint8_t> scratch;
+        for (size_t i = 0U; i < batch_cids.size(); ++i) {
+            const BC::CellId cid = batch_cids[i];
+            const BC::BCPositionCellDescriptor &desc = position.descriptor(cid);
+            BC::BCLoadedCell &cell = position_cells[i];
+            if (cell.cid != cid || success_cells[i].cid != cid) {
+                throw std::logic_error("BC compressed batch cell order mismatch");
+            }
+            emit_bucket_blocks_for_cell(
+                state,
+                compressor,
+                position.lut(),
+                cid,
+                cell.buckets,
+                cell.rank_payload);
+
+            BC::BCLoadedSuccessCell &success_cell = success_cells[i];
+            SuccessCellByteSpan success_data = success_cell_bytes(success_cell, scratch);
+            const uint64_t success_bytes =
+                static_cast<uint64_t>(desc.success_rows) *
+                success.row_width() *
+                success.value_size();
+            if (success_bytes != 0U && success_data.data == nullptr) {
+                throw std::runtime_error("BC compressed success cell payload is null");
+            }
+            emit_value_blocks_for_cell(
+                state,
+                compressor,
+                cid,
+                success_data.data,
+                success_bytes,
+                std::move(success_data.owner));
+        }
+
+        batch_cids.clear();
+        batch_estimated_bytes = 0U;
+    };
 
     for (BC::CellId cid = 0U; cid < position.cell_count(); ++cid) {
         const BC::BCPositionCellDescriptor &desc = position.descriptor(cid);
@@ -662,69 +989,138 @@ void validate_options(const CompressOptions &options) {
         }
         ++state.stats.non_empty_cells;
         state.stats.live_rows += desc.success_rows;
-        BC::BCLoadedCell cell = position.load_cell(cid);
-        emit_bucket_blocks_for_cell(
-            state,
-            compressor,
-            position.lut(),
-            cid,
-            cell.buckets,
-            cell.rank_payload);
 
-        std::vector<BC::BCLoadedSuccessCell> success_cells =
-            success.load_cells(std::vector<BC::CellId>{cid}, nullptr, true);
-        if (success_cells.size() != 1U) {
-            throw std::logic_error("BC compressed success load_cell size mismatch");
-        }
-        BC::BCLoadedSuccessCell &success_cell = success_cells.front();
-        std::vector<uint8_t> scratch;
-        const uint8_t *success_data = success_cell_bytes(success_cell, scratch);
+        const uint64_t position_bytes =
+            static_cast<uint64_t>(desc.bucket_count) * BC::kBCPositionBucketEntryBytes +
+            desc.rank_payload_bytes;
         const uint64_t success_bytes =
             static_cast<uint64_t>(desc.success_rows) *
             success.row_width() *
             success.value_size();
-        if (success_bytes != 0U && success_data == nullptr) {
-            throw std::runtime_error("BC compressed success cell payload is null");
+        const uint64_t cell_bytes = position_bytes + success_bytes;
+        if (!batch_cids.empty() &&
+            (batch_cids.size() >= kMaxBatchCells ||
+             batch_estimated_bytes + cell_bytes > kMaxBatchRawBytes)) {
+            flush_batch();
         }
-        emit_value_blocks_for_cell(state, compressor, cid, success_data, success_bytes);
+        batch_cids.push_back(cid);
+        batch_estimated_bytes += cell_bytes;
     }
+    flush_batch();
     (void)position_path;
     (void)success_path;
     compressor.finish();
+    write_t0 = now_seconds();
     finalize_file(out, state, tmp_path);
+    state.stats.write_seconds += now_seconds() - write_t0;
     out.close();
     publish_file(tmp_path, output_path);
     state.stats.total_seconds = now_seconds() - t0;
     return state.stats;
 }
 
-struct InMemoryPositionAdapter {
-    const BC::BCPositionLayerReader &position;
+struct FlatSuccessAdapter {
+    FlatSuccessAdapter(
+        const BC::BCPositionLayerReader &position_in,
+        const void *success_values,
+        uint64_t success_value_count,
+        uint32_t row_width_in,
+        BC::BCSuccessDTypeMode dtype_in
+    ) : position(position_in),
+        data(reinterpret_cast<const uint8_t *>(success_values)),
+        row_width_(row_width_in),
+        dtype_(dtype_in) {
+        if (row_width_ == 0U) {
+            throw std::invalid_argument("BC compressed flat success row_width must be non-zero");
+        }
+        if (success_value_count != 0U && data == nullptr) {
+            throw std::invalid_argument("BC compressed flat success payload is null");
+        }
+        const uint32_t value_size = BC::bc_success_dtype_value_size(dtype_);
+        if (success_value_count > std::numeric_limits<uint64_t>::max() / value_size) {
+            throw std::overflow_error("BC compressed flat success payload byte count overflow");
+        }
+        cell_value_offsets_.assign(position.cell_count(), 0U);
+        uint64_t cursor = 0U;
+        for (BC::CellId cid = 0U; cid < position.cell_count(); ++cid) {
+            cell_value_offsets_[static_cast<size_t>(cid)] = cursor;
+            const uint64_t values_for_cell =
+                static_cast<uint64_t>(position.descriptor(cid).success_rows) * row_width_;
+            cursor = BC::bc_checked_add_u64(
+                cursor,
+                values_for_cell,
+                "BC compressed flat success value offset overflow");
+        }
+        if (cursor != success_value_count) {
+            throw std::invalid_argument("BC compressed flat success value count mismatch");
+        }
 
-    [[nodiscard]] const BC::BCPositionHeader &header() const { return position.header(); }
-    [[nodiscard]] const BC::BCFamilyTable &axis() const { return position.axis(); }
-    [[nodiscard]] uint32_t cell_count() const { return position.cell_count(); }
-    [[nodiscard]] const BC::BCLut &lut() const { return position.lut(); }
-    [[nodiscard]] const BC::BCPositionCellDescriptor &descriptor(BC::CellId cid) const {
-        return position.descriptor(cid);
+        header_.dtype = static_cast<uint32_t>(dtype_);
+        header_.row_width = row_width_;
+        header_.family_count = position.header().family_count;
+        header_.descriptor_count = position.cell_count();
+        header_.cell_value_offsets_offset = BC::kBCSuccessHeaderBytes;
+        header_.payload_offset = BC::bc_checked_add_u64(
+            header_.cell_value_offsets_offset,
+            BC::bc_success_cell_value_offsets_bytes(header_.descriptor_count),
+            "BC compressed flat success payload offset overflow");
+        header_.payload_bytes = success_value_count * value_size;
+        header_.position_key_mode = position.header().key_mode;
+        header_.family_unit = position.header().family_unit;
+        header_.axis_base_coord = position.header().axis_base_coord;
+        header_.layer_sum = position.header().layer_sum;
+        header_.position_metadata_fingerprint = BC::bc_success_position_fingerprint(position);
     }
-    [[nodiscard]] BC::BCLoadedCell load_cell(BC::CellId cid) const {
-        BC::BCLoadedCell cell;
-        cell.cid = cid;
-        cell.success_rows = position.descriptor(cid).success_rows;
-        const BC::BCBucketEntryView buckets = position.bucket_entries_for_cell(cid);
-        cell.buckets.assign(buckets.data, buckets.data + buckets.size);
-        const BC::BCRankPayloadView payload = position.rank_payload_for_cell(cid);
-        cell.rank_payload.assign(payload.data, payload.data + payload.size);
-        return cell;
+
+    [[nodiscard]] const BC::BCSuccessHeader &header() const noexcept {
+        return header_;
     }
+
+    [[nodiscard]] uint32_t row_width() const noexcept {
+        return row_width_;
+    }
+
+    [[nodiscard]] uint32_t value_size() const {
+        return BC::bc_success_dtype_value_size(dtype_);
+    }
+
+    [[nodiscard]] BC::BCSuccessRawCellView cell_raw_view(BC::CellId cid) const {
+        if (cid >= position.cell_count()) {
+            throw std::out_of_range("BC compressed flat success cid out of range");
+        }
+        const uint64_t value_offset = cell_value_offsets_[static_cast<size_t>(cid)];
+        const uint64_t value_count =
+            static_cast<uint64_t>(position.descriptor(cid).success_rows) * row_width_;
+        const uint32_t bytes_per_value = value_size();
+        if (value_offset > std::numeric_limits<uint64_t>::max() / bytes_per_value ||
+            value_count > std::numeric_limits<uint64_t>::max() / bytes_per_value) {
+            throw std::overflow_error("BC compressed flat success byte range overflow");
+        }
+        const uint64_t byte_offset = value_offset * bytes_per_value;
+        const uint64_t byte_count = value_count * bytes_per_value;
+        if (byte_count == 0U) {
+            return {};
+        }
+        return BC::BCSuccessRawCellView{data + byte_offset, byte_count};
+    }
+
+    const BC::BCPositionLayerReader &position;
+    const uint8_t *data = nullptr;
+    uint32_t row_width_ = 0U;
+    BC::BCSuccessDTypeMode dtype_ = BC::BCSuccessDTypeMode::UInt32;
+    BC::BCSuccessHeader header_{};
+    std::vector<uint64_t> cell_value_offsets_;
 };
 
+template <class SuccessAdapter>
 [[nodiscard]] CompressStats compress_in_memory_impl(
     const BC::BCPositionLayerReader &position,
-    const BC::BCSuccessLayerReader &success,
+    const SuccessAdapter &success,
     const std::filesystem::path &output_path,
-    const CompressOptions &options
+    const CompressOptions &options,
+    bool use_global_success_payload = false,
+    const uint8_t *global_success_payload = nullptr,
+    uint64_t global_success_value_count = 0U
 ) {
     validate_options(options);
     const double t0 = now_seconds();
@@ -770,10 +1166,11 @@ struct InMemoryPositionAdapter {
     if (!out) {
         throw std::runtime_error("failed to open BC compressed output: " + tmp_path.string());
     }
+    double write_t0 = now_seconds();
     write_bytes(out, &state.header, sizeof(state.header), "BC compressed provisional header");
+    state.stats.write_seconds += now_seconds() - write_t0;
     BlockCompressor compressor(out, state);
 
-    InMemoryPositionAdapter adapter{position};
     for (BC::CellId cid = 0U; cid < position.cell_count(); ++cid) {
         const BC::BCPositionCellDescriptor &desc = position.descriptor(cid);
         CellDirEntry &cell_dir = state.cell_dirs.at(cid);
@@ -784,24 +1181,48 @@ struct InMemoryPositionAdapter {
         }
         ++state.stats.non_empty_cells;
         state.stats.live_rows += desc.success_rows;
-        BC::BCLoadedCell cell = adapter.load_cell(cid);
+        const uint64_t cell_value_count =
+            static_cast<uint64_t>(desc.success_rows) * success.row_width();
+        const BC::BCBucketEntryView buckets = position.bucket_entries_for_cell(cid);
+        const BC::BCRankPayloadView rank_payload = position.rank_payload_for_cell(cid);
         emit_bucket_blocks_for_cell(
             state,
             compressor,
             position.lut(),
             cid,
-            cell.buckets,
-            cell.rank_payload);
-        std::vector<uint8_t> success_bytes = success.read_cell_raw(cid);
-        emit_value_blocks_for_cell(
+            buckets.data,
+            buckets.size,
+            rank_payload.data,
+            rank_payload.size);
+        if (use_global_success_payload) {
+            state.value_cursor = BC::bc_checked_add_u64(
+                state.value_cursor,
+                cell_value_count,
+                "BC compressed global success cursor overflow");
+        } else {
+            const BC::BCSuccessRawCellView success_bytes = success.cell_raw_view(cid);
+            emit_value_blocks_for_cell(
+                state,
+                compressor,
+                cid,
+                success_bytes.data,
+                success_bytes.bytes);
+        }
+    }
+    if (use_global_success_payload) {
+        if (state.value_cursor != global_success_value_count) {
+            throw std::logic_error("BC compressed global success value count mismatch");
+        }
+        emit_value_blocks_for_payload(
             state,
             compressor,
-            cid,
-            success_bytes.data(),
-            static_cast<uint64_t>(success_bytes.size()));
+            global_success_payload,
+            global_success_value_count);
     }
     compressor.finish();
+    write_t0 = now_seconds();
     finalize_file(out, state, tmp_path);
+    state.stats.write_seconds += now_seconds() - write_t0;
     out.close();
     publish_file(tmp_path, output_path);
     state.stats.total_seconds = now_seconds() - t0;
@@ -1040,6 +1461,280 @@ CompressStats compress_in_memory_layer_to_result(
     const CompressOptions &options
 ) {
     return compress_in_memory_impl(position, success, output_path, options);
+}
+
+CompressStats compress_flat_success_layer_to_result(
+    const BC::BCPositionLayerReader &position,
+    const void *success_values,
+    uint64_t success_value_count,
+    uint32_t row_width,
+    BC::BCSuccessDTypeMode dtype,
+    const std::filesystem::path &output_path,
+    const CompressOptions &options
+) {
+#if !defined(_WIN32) && (!defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__)
+    throw std::runtime_error("BC flat success compression requires little-endian native values");
+#else
+    FlatSuccessAdapter success(
+        position,
+        success_values,
+        success_value_count,
+        row_width,
+        dtype);
+    return compress_in_memory_impl(
+        position,
+        success,
+        output_path,
+        options,
+        true,
+        reinterpret_cast<const uint8_t *>(success_values),
+        success_value_count);
+#endif
+}
+
+struct StreamingBuilder::Impl {
+    BuilderState state;
+    std::filesystem::path output_path;
+    std::filesystem::path tmp_path;
+    std::fstream out;
+    std::unique_ptr<BlockCompressor> compressor;
+    const BC::BCLut *lut = nullptr;
+    BC::CellId next_cid = 0U;
+    uint64_t position_bucket_bytes = 0U;
+    uint64_t position_rank_bytes = 0U;
+    double start_seconds = 0.0;
+    bool finished = false;
+};
+
+StreamingBuilder::StreamingBuilder(
+    const BC::BCPositionStreamingReader &position,
+    uint32_t row_width,
+    BC::BCSuccessDTypeMode dtype,
+    const std::filesystem::path &output_path,
+    const CompressOptions &options
+) {
+    open(position, row_width, dtype, output_path, options);
+}
+
+StreamingBuilder::~StreamingBuilder() = default;
+
+StreamingBuilder::StreamingBuilder(StreamingBuilder &&) noexcept = default;
+
+StreamingBuilder &StreamingBuilder::operator=(StreamingBuilder &&) noexcept = default;
+
+void StreamingBuilder::open(
+    const BC::BCPositionStreamingReader &position,
+    uint32_t row_width,
+    BC::BCSuccessDTypeMode dtype,
+    const std::filesystem::path &output_path,
+    const CompressOptions &options
+) {
+    validate_options(options);
+    if (row_width == 0U) {
+        throw std::invalid_argument("BC compressed streaming builder row_width must be non-zero");
+    }
+    auto impl = std::make_unique<Impl>();
+    impl->state.options = options;
+    BC::BCSuccessHeader success_header;
+    success_header.dtype = static_cast<uint32_t>(dtype);
+    success_header.row_width = row_width;
+    success_header.family_count = position.header().family_count;
+    success_header.descriptor_count = position.cell_count();
+    success_header.position_key_mode = position.header().key_mode;
+    success_header.family_unit = position.header().family_unit;
+    success_header.axis_base_coord = position.header().axis_base_coord;
+    success_header.layer_sum = position.header().layer_sum;
+    success_header.position_metadata_fingerprint =
+        BC::bc_success_position_fingerprint_for(position);
+    initialize_state_from_position(
+        impl->state,
+        position,
+        success_header,
+        0U,
+        0U);
+    impl->output_path = output_path;
+    impl->tmp_path = output_path.string() + ".tmp";
+    impl->lut = &position.lut();
+    impl->start_seconds = now_seconds();
+    if (!output_path.parent_path().empty()) {
+        std::filesystem::create_directories(output_path.parent_path());
+    }
+    std::error_code ec;
+    std::filesystem::remove(impl->tmp_path, ec);
+    impl->out.open(
+        impl->tmp_path,
+        std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+    if (!impl->out) {
+        throw std::runtime_error(
+            "failed to open BC compressed streaming output: " + impl->tmp_path.string());
+    }
+    const double write_t0 = now_seconds();
+    write_bytes(
+        impl->out,
+        &impl->state.header,
+        sizeof(impl->state.header),
+        "BC compressed streaming provisional header");
+    impl->state.stats.write_seconds += now_seconds() - write_t0;
+    impl->compressor = std::make_unique<BlockCompressor>(impl->out, impl->state);
+    impl_ = std::move(impl);
+}
+
+void StreamingBuilder::write_cell(
+    BC::CellId cid,
+    const BC::FinalizedCellPayload &payload,
+    const void *success_values,
+    uint64_t success_value_count,
+    std::shared_ptr<const void> owner
+) {
+    if (!impl_ || impl_->finished) {
+        throw std::logic_error("BC compressed streaming builder is not open");
+    }
+    Impl &impl = *impl_;
+    if (cid != impl.next_cid) {
+        throw std::logic_error("BC compressed streaming builder requires cid order");
+    }
+    if (cid >= impl.state.cell_dirs.size()) {
+        throw std::out_of_range("BC compressed streaming builder cid out of range");
+    }
+    ++impl.next_cid;
+
+    const uint32_t row_width = impl.state.header.row_width;
+    const uint64_t expected_values =
+        static_cast<uint64_t>(payload.success_rows) * row_width;
+    if (success_value_count != expected_values) {
+        throw std::runtime_error("BC compressed streaming cell value count mismatch");
+    }
+    if (success_value_count != 0U && success_values == nullptr) {
+        throw std::invalid_argument("BC compressed streaming cell values are null");
+    }
+    if (payload.buckets.empty()) {
+        if (payload.success_rows != 0U || !payload.rank_payload.empty() ||
+            success_value_count != 0U) {
+            throw std::invalid_argument("BC compressed streaming empty cell mismatch");
+        }
+        impl.state.cell_dirs[static_cast<size_t>(cid)].value_base =
+            impl.state.value_cursor;
+        return;
+    }
+    if (payload.success_rows == 0U || payload.rank_payload.empty()) {
+        throw std::invalid_argument("BC compressed streaming non-empty cell mismatch");
+    }
+
+    impl.position_bucket_bytes = BC::bc_checked_add_u64(
+        impl.position_bucket_bytes,
+        static_cast<uint64_t>(payload.buckets.size()) * BC::kBCPositionBucketEntryBytes,
+        "BC compressed streaming bucket byte count overflow");
+    impl.position_rank_bytes = BC::bc_checked_add_u64(
+        impl.position_rank_bytes,
+        payload.rank_payload.size(),
+        "BC compressed streaming rank byte count overflow");
+
+    CellDirEntry &cell_dir = impl.state.cell_dirs[static_cast<size_t>(cid)];
+    cell_dir.value_base = impl.state.value_cursor;
+    cell_dir.success_rows = payload.success_rows;
+    ++impl.state.stats.non_empty_cells;
+    impl.state.stats.live_rows = BC::bc_checked_add_u64(
+        impl.state.stats.live_rows,
+        payload.success_rows,
+        "BC compressed streaming live row count overflow");
+
+    emit_bucket_blocks_for_cell(
+        impl.state,
+        *impl.compressor,
+        *impl.lut,
+        cid,
+        payload.buckets,
+        payload.rank_payload);
+
+    const uint32_t value_size = impl.state.header.value_size;
+    if (success_value_count >
+        std::numeric_limits<uint64_t>::max() / value_size) {
+        throw std::overflow_error("BC compressed streaming success byte count overflow");
+    }
+    const uint64_t success_bytes = success_value_count * value_size;
+#if !defined(_WIN32) && (!defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__)
+    if (success_bytes != 0U) {
+        throw std::runtime_error("BC streaming compression requires little-endian native values");
+    }
+#endif
+    if (!owner && success_bytes != 0U) {
+        if (success_bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC compressed streaming success cell exceeds size_t");
+        }
+        auto bytes = std::make_shared<std::vector<uint8_t>>(
+            static_cast<size_t>(success_bytes));
+        std::memcpy(bytes->data(), success_values, static_cast<size_t>(success_bytes));
+        owner = bytes;
+        success_values = bytes->data();
+    }
+    emit_value_blocks_for_cell(
+        impl.state,
+        *impl.compressor,
+        cid,
+        reinterpret_cast<const uint8_t *>(success_values),
+        success_bytes,
+        std::move(owner));
+}
+
+CompressStats StreamingBuilder::finish() {
+    if (!impl_ || impl_->finished) {
+        throw std::logic_error("BC compressed streaming builder is not open");
+    }
+    Impl &impl = *impl_;
+    if (impl.next_cid != impl.state.cell_dirs.size()) {
+        throw std::logic_error("BC compressed streaming builder has unwritten cells");
+    }
+    impl.compressor->finish();
+    impl.compressor.reset();
+
+    const uint64_t axis_bytes =
+        BC::bc_axis_coord_table_bytes(impl.state.header.family_count);
+    const uint64_t descriptor_bytes =
+        static_cast<uint64_t>(impl.state.cell_dirs.size()) *
+        BC::kBCPositionCellDescriptorBytes;
+    uint64_t position_bytes = BC::bc_checked_add_u64(
+        BC::kBCPositionHeaderBytes,
+        axis_bytes,
+        "BC compressed streaming position size overflow");
+    position_bytes = BC::bc_checked_add_u64(
+        position_bytes,
+        descriptor_bytes,
+        "BC compressed streaming position descriptor size overflow");
+    position_bytes = BC::bc_checked_add_u64(
+        position_bytes,
+        impl.position_bucket_bytes,
+        "BC compressed streaming position bucket size overflow");
+    position_bytes = BC::bc_checked_add_u64(
+        position_bytes,
+        impl.position_rank_bytes,
+        "BC compressed streaming position rank size overflow");
+    const uint64_t value_bytes =
+        impl.state.value_cursor * impl.state.header.value_size;
+    uint64_t success_bytes = BC::bc_checked_add_u64(
+        BC::kBCSuccessHeaderBytes,
+        BC::bc_success_cell_value_offsets_bytes(impl.state.cell_dirs.size()),
+        "BC compressed streaming success size overflow");
+    success_bytes = BC::bc_checked_add_u64(
+        success_bytes,
+        value_bytes,
+        "BC compressed streaming success payload size overflow");
+    impl.state.header.original_position_bytes = position_bytes;
+    impl.state.header.original_success_bytes = success_bytes;
+
+    const double write_t0 = now_seconds();
+    finalize_file(impl.out, impl.state, impl.tmp_path);
+    impl.state.stats.write_seconds += now_seconds() - write_t0;
+    impl.out.close();
+    publish_file(impl.tmp_path, impl.output_path);
+    impl.state.stats.total_seconds = now_seconds() - impl.start_seconds;
+    impl.finished = true;
+    CompressStats stats = impl.state.stats;
+    impl_.reset();
+    return stats;
+}
+
+bool StreamingBuilder::is_open() const noexcept {
+    return impl_ != nullptr && !impl_->finished;
 }
 
 struct PointReader::Impl {

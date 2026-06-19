@@ -19,6 +19,7 @@ namespace {
 void print_usage(std::ostream &out) {
     out
         << "bc_family_generation_full --pattern freeN --target-rank N --extra-steps N --output-dir DIR [options]\n"
+        << "  Non-free BC patterns should be started through formation_core runtime so seed/mask metadata is supplied.\n"
         << "  --stats-csv PATH --num-threads N --family-modulus N\n"
         << "  --family-route auto|resident|single|family\n"
         << "  --target-direct-queue-depth N\n"

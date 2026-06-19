@@ -1,8 +1,9 @@
-#include "BCFamilySolveRunner.h"
-#include "BCFamilyStatsCsv.h"
+#pragma once
 
-#include <algorithm>
+#include "BCFamilySolveRunner.h"
+
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -11,24 +12,23 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
-namespace {
+namespace BCSolveBench {
 
 struct Args {
     BC::BCFamilySolveRunOptions run;
-    std::filesystem::path stats_csv = "tmp/bc_family_solve_full_stats.csv";
-    std::filesystem::path summary_csv = "tmp/bc_family_solve_full_summary.csv";
+    std::filesystem::path stats_csv;
+    std::filesystem::path summary_csv;
 };
 
-[[nodiscard]] std::string require_value(int argc, char **argv, int &i, const char *flag) {
+[[nodiscard]] inline std::string require_value(int argc, char **argv, int &i, const char *flag) {
     if (i + 1 >= argc) {
         throw std::invalid_argument(std::string(flag) + " requires a value");
     }
     return argv[++i];
 }
 
-[[nodiscard]] int parse_symm_mode(const std::string &value) {
+[[nodiscard]] inline int parse_symm_mode(const std::string &value) {
     if (value == "identity") return static_cast<int>(SymmMode::Identity);
     if (value == "full") return static_cast<int>(SymmMode::Full);
     if (value == "diagonal") return static_cast<int>(SymmMode::Diagonal);
@@ -40,7 +40,7 @@ struct Args {
     return std::stoi(value);
 }
 
-[[nodiscard]] BC::BCSuccessDTypeMode parse_success_dtype(const std::string &value) {
+[[nodiscard]] inline BC::BCSuccessDTypeMode parse_success_dtype(const std::string &value) {
     if (value == "uint32") return BC::BCSuccessDTypeMode::UInt32;
     if (value == "uint64") return BC::BCSuccessDTypeMode::UInt64;
     if (value == "float32") return BC::BCSuccessDTypeMode::Float32;
@@ -54,31 +54,38 @@ struct Args {
     throw std::invalid_argument("unsupported success dtype: " + value);
 }
 
-void print_usage(std::ostream &out) {
+inline void print_usage(std::ostream &out, const char *name) {
     out
-        << "bc_family_solve_full --position-dir DIR --output-dir DIR --prefix PREFIX [options]\n"
-        << "  --archive-dir DIR\n"
-        << "  --stats-csv PATH --summary-csv PATH\n"
+        << name << " --position-dir DIR --output-dir DIR --prefix PREFIX [options]\n"
+        << "  --archive-dir DIR --stats-csv PATH --summary-csv PATH\n"
         << "  --target-rank N --success-target-rank N --success-dtype MODE\n"
         << "  --family-modulus N --threads N --direct-io --direct-queue-depth N\n"
-        << "  --solve-route auto|resident|single|family\n"
-        << "  --available-memory-bytes N --available-memory-mib N\n"
-        << "  --deletion-threshold R --relative-deletion-threshold R\n"
-        << "  --compress --compress-temp-files --optimal-branch-only\n"
-        << "  --start-ordinal N --min-ordinal N --restart --no-resume\n";
+        << "  --solve-route auto|resident|single|family\n";
 }
 
-[[nodiscard]] Args parse_args(int argc, char **argv) {
+[[nodiscard]] inline Args parse_solve_runner_args(
+    int argc,
+    char **argv,
+    const char *bench_name,
+    BC::BCSolveRoute default_route,
+    bool allow_route_override
+) {
     Args args;
-    args.run.generated_position_dir = "tmp/free10_256_resident_generated_m17";
-    args.run.solved_output_dir = "tmp/free10_256_family_solve_m17";
-    args.run.prefix = "free10_256_";
+    args.run.solve_route = default_route;
+    args.run.generated_position_dir = std::filesystem::path("tmp") / (std::string(bench_name) + "_generated");
+    args.run.solved_output_dir = std::filesystem::path("tmp") / (std::string(bench_name) + "_solved");
+    args.run.archive_output_dir = args.run.solved_output_dir;
+    args.run.prefix = "free9_256_";
+    args.stats_csv = std::filesystem::path("tmp") / (std::string(bench_name) + "_layers.csv");
+    args.summary_csv = std::filesystem::path("tmp") / (std::string(bench_name) + "_summary.csv");
+
     for (int i = 1; i < argc; ++i) {
         const std::string key = argv[i];
         if (key == "--help" || key == "-h") {
-            print_usage(std::cout);
+            print_usage(std::cout, bench_name);
             std::exit(0);
-        } else if (key == "--position-dir" || key == "--generated-position-dir") {
+        } else if (key == "--position-dir" || key == "--generated-position-dir" ||
+                   key == "--current-dir") {
             args.run.generated_position_dir = require_value(argc, argv, i, key.c_str());
         } else if (key == "--output-dir" || key == "--solved-output-dir") {
             args.run.solved_output_dir = require_value(argc, argv, i, key.c_str());
@@ -101,16 +108,21 @@ void print_usage(std::ostream &out) {
             args.run.canonical_symm_mode = parse_symm_mode(require_value(argc, argv, i, key.c_str()));
         } else if (key == "--spawn-rate4") {
             args.run.spawn_rate4 = std::stod(require_value(argc, argv, i, key.c_str()));
-        } else if (key == "--threads") {
+        } else if (key == "--threads" || key == "--num-threads") {
             args.run.num_threads = std::stoi(require_value(argc, argv, i, key.c_str()));
         } else if (key == "--batch-size") {
             args.run.canonical_batch_size =
                 static_cast<uint32_t>(std::stoul(require_value(argc, argv, i, key.c_str())));
-        } else if (key == "--family-modulus") {
+        } else if (key == "--family-modulus" || key == "--cell-modulus") {
             args.run.family_modulus =
                 static_cast<uint32_t>(std::stoul(require_value(argc, argv, i, key.c_str())));
         } else if (key == "--solve-route") {
-            args.run.solve_route = BC::bc_parse_solve_route(require_value(argc, argv, i, key.c_str()));
+            const BC::BCSolveRoute requested =
+                BC::bc_parse_solve_route(require_value(argc, argv, i, key.c_str()));
+            if (!allow_route_override && requested != default_route) {
+                throw std::invalid_argument("this benchmark target has a fixed production solve route");
+            }
+            args.run.solve_route = requested;
         } else if (key == "--available-memory-bytes") {
             args.run.available_memory_override_bytes =
                 static_cast<uint64_t>(std::stoull(require_value(argc, argv, i, key.c_str())));
@@ -146,6 +158,8 @@ void print_usage(std::ostream &out) {
                 1024ULL * 1024ULL;
         } else if (key == "--direct-io") {
             args.run.direct_io = true;
+        } else if (key == "--buffered-io") {
+            args.run.direct_io = false;
         } else if (key == "--keep-direct-padding") {
             args.run.keep_direct_padding = true;
         } else if (key == "--trim-direct-padding") {
@@ -166,8 +180,7 @@ void print_usage(std::ostream &out) {
         } else if (key == "--deletion-threshold") {
             args.run.deletion_threshold = std::stod(require_value(argc, argv, i, key.c_str()));
         } else if (key == "--relative-deletion-threshold") {
-            args.run.relative_deletion_threshold =
-                std::stod(require_value(argc, argv, i, key.c_str()));
+            args.run.relative_deletion_threshold = std::stod(require_value(argc, argv, i, key.c_str()));
         } else if (key == "--deletion-threshold-signal") {
             args.run.deletion_threshold_signal_path = require_value(argc, argv, i, key.c_str());
         } else if (key == "--compress") {
@@ -183,128 +196,91 @@ void print_usage(std::ostream &out) {
     if (args.run.success_target_rank < 0) {
         args.run.success_target_rank = static_cast<int>(args.run.target_rank);
     }
+    if (args.run.archive_output_dir.empty()) {
+        args.run.archive_output_dir = args.run.solved_output_dir;
+    }
     return args;
 }
 
-void write_summary(
-    const Args &args,
-    const BC::BCFamilySolveRunResult &result,
-    double wall_seconds
-) {
-    if (!args.summary_csv.parent_path().empty()) {
-        std::filesystem::create_directories(args.summary_csv.parent_path());
-    }
-    std::ofstream out(args.summary_csv);
-    if (!out) {
-        throw std::runtime_error("failed to open summary CSV: " + args.summary_csv.string());
-    }
-    out << std::setprecision(12);
-    const BC::BCSolveStatsTotals total = BC::bc_solve_stats_totals(result);
-    double solve_seconds = 0.0;
-    double archive_seconds = 0.0;
-    for (const BC::BCFamilySolveRunLayerMetric &m : result.layers) {
-        if (m.kind == "solve") {
-            solve_seconds += m.total_seconds;
-        } else if (m.kind == "archive") {
-            archive_seconds += m.total_seconds;
-        }
-    }
+inline void write_stats_header(std::ostream &out) {
     out
-        << "generated_position_dir,solved_output_dir,archive_output_dir,min_ordinal,max_ordinal,"
-        << "completed,current_rows,live_rows,zero_pruned_rows,archive_live_rows,"
-        << "threshold_pruned_rows,position_bytes,success_bytes,temp_compressed_bytes,"
-        << "solve_seconds,archive_seconds,solve_call_seconds,total_seconds,"
-        << "wall_seconds,total_mrows_per_sec,solve_call_mrows_per_sec,wall_mrows_per_sec,"
-        << "temp_compress_seconds,final_compress_seconds,final_compress_read_seconds,"
-        << "final_compress_write_seconds,final_compress_worker_seconds,"
-        << "final_compress_bucket_blocks,final_compress_value_blocks,"
-        << "final_compress_bucket_raw_bytes,final_compress_bucket_compressed_bytes,"
-        << "final_compress_value_raw_bytes,final_compress_value_compressed_bytes,"
-        << "final_compress_output_bytes,final_compress_raw_mib_per_sec\n"
-        << args.run.generated_position_dir.string() << ','
-        << args.run.solved_output_dir.string() << ','
-        << args.run.archive_output_dir.string() << ','
-        << result.min_ordinal << ','
-        << result.max_ordinal << ','
-        << (result.completed ? 1 : 0) << ','
-        << total.current_rows << ','
-        << total.live_rows << ','
-        << total.zero_pruned_rows << ','
-        << total.archive_live_rows << ','
-        << total.threshold_pruned_rows << ','
-        << total.position_bytes << ','
-        << total.success_bytes << ','
-        << total.temp_compressed_bytes << ','
-        << solve_seconds << ','
-        << archive_seconds << ','
-        << total.solve_call_seconds << ','
-        << total.total_seconds << ','
-        << wall_seconds << ','
-        << BC::bc_stats_mrows_per_sec(total.current_rows, total.total_seconds) << ','
-        << BC::bc_stats_mrows_per_sec(total.current_rows, total.solve_call_seconds) << ','
-        << BC::bc_stats_mrows_per_sec(total.current_rows, wall_seconds) << ','
-        << total.temp_compress_seconds << ','
-        << total.final_compress_seconds << ','
-        << total.final_compress_read_seconds << ','
-        << total.final_compress_write_seconds << ','
-        << total.final_compress_worker_seconds << ','
-        << total.final_compress_bucket_blocks << ','
-        << total.final_compress_value_blocks << ','
-        << total.final_compress_bucket_raw_bytes << ','
-        << total.final_compress_bucket_compressed_bytes << ','
-        << total.final_compress_value_raw_bytes << ','
-        << total.final_compress_value_compressed_bytes << ','
-        << total.final_compress_output_bytes << ','
-        << BC::bc_stats_mib_per_sec(
-            total.final_compress_bucket_raw_bytes + total.final_compress_value_raw_bytes,
-            total.final_compress_seconds) << '\n';
+        << "kind,solve_route,ordinal,layer_sum,current_rows,live_rows,zero_pruned_rows,"
+        << "archive_live_rows,total_seconds,solve_call_seconds\n";
 }
 
-} // namespace
+inline void write_stats_row(std::ostream &out, const BC::BCFamilySolveRunLayerMetric &m) {
+    out
+        << m.kind << ','
+        << m.solve_route << ','
+        << m.ordinal << ','
+        << m.layer_sum << ','
+        << m.current_rows << ','
+        << m.live_rows << ','
+        << m.zero_pruned_rows << ','
+        << m.archive_live_rows << ','
+        << m.total_seconds << ','
+        << m.solve_call_seconds << '\n';
+}
 
-int main(int argc, char **argv) {
+inline int run_solve_runner_bench(
+    int argc,
+    char **argv,
+    const char *bench_name,
+    BC::BCSolveRoute default_route,
+    bool allow_route_override
+) {
     try {
-        Args args = parse_args(argc, argv);
-        if (!args.stats_csv.parent_path().empty()) {
-            std::filesystem::create_directories(args.stats_csv.parent_path());
+        Args args = parse_solve_runner_args(argc, argv, bench_name, default_route, allow_route_override);
+        std::optional<std::ofstream> stats;
+        if (!args.stats_csv.empty()) {
+            if (!args.stats_csv.parent_path().empty()) {
+                std::filesystem::create_directories(args.stats_csv.parent_path());
+            }
+            stats.emplace(args.stats_csv);
+            if (!*stats) {
+                throw std::runtime_error("failed to open stats CSV");
+            }
+            *stats << std::setprecision(12);
+            write_stats_header(*stats);
         }
-        std::ofstream stats(args.stats_csv);
-        if (!stats) {
-            throw std::runtime_error("failed to open stats CSV: " + args.stats_csv.string());
-        }
-        stats << std::setprecision(12);
-        BC::write_bc_solve_stats_header(stats);
-
-        const double begin = BC::detail::bc_family_solve_runner_now_seconds();
-        BC::BCFamilySolveRunResult result = BC::bc_family_solve_full_run(
+        const BC::BCFamilySolveRunResult result = BC::bc_family_solve_full_run(
             args.run,
             [&](const BC::BCFamilySolveRunLayerMetric &metric) {
-                BC::write_bc_solve_stats_row(stats, metric);
-                stats.flush();
-                std::cout << std::setprecision(9)
+                if (stats) {
+                    write_stats_row(*stats, metric);
+                    stats->flush();
+                }
+                std::cout
                     << "kind=" << metric.kind
-                    << " ordinal=" << metric.ordinal
                     << " route=" << metric.solve_route
-                    << " rows=" << metric.current_rows
-                    << " live_rows=" << metric.live_rows
+                    << " ordinal=" << metric.ordinal
+                    << " rows=" << metric.live_rows
                     << " total_seconds=" << metric.total_seconds
-                    << " position_bytes=" << metric.position_bytes
-                    << " success_bytes=" << metric.success_bytes
                     << '\n';
             });
-        const double wall_seconds = BC::detail::bc_family_solve_runner_now_seconds() - begin;
-        BC::write_bc_solve_stats_total_row(stats, result);
-        stats.flush();
-        write_summary(args, result, wall_seconds);
-        std::cout << std::setprecision(12)
-            << "summary"
-            << " layers=" << result.layers.size()
+        if (!args.summary_csv.empty()) {
+            if (!args.summary_csv.parent_path().empty()) {
+                std::filesystem::create_directories(args.summary_csv.parent_path());
+            }
+            std::ofstream summary(args.summary_csv);
+            if (!summary) {
+                throw std::runtime_error("failed to open summary CSV");
+            }
+            summary << "layers,completed,min_ordinal,max_ordinal\n"
+                    << result.layers.size() << ','
+                    << (result.completed ? 1 : 0) << ','
+                    << result.min_ordinal << ','
+                    << result.max_ordinal << '\n';
+        }
+        std::cout
+            << "summary layers=" << result.layers.size()
             << " completed=" << (result.completed ? 1 : 0)
-            << " wall_seconds=" << wall_seconds
             << '\n';
-        return 0;
+        return result.completed ? 0 : 2;
     } catch (const std::exception &ex) {
-        std::cerr << "bc_family_solve_full failed: " << ex.what() << '\n';
+        std::cerr << bench_name << " failed: " << ex.what() << '\n';
         return 1;
     }
 }
+
+} // namespace BCSolveBench

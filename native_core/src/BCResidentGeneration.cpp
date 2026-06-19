@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -106,6 +107,21 @@ namespace ResidentGenerationInternal {
     return false;
 }
 
+[[nodiscard]] static bool bc_matches_pattern_masks(
+    uint64_t board,
+    const std::vector<uint64_t> *pattern_masks
+) {
+    if (pattern_masks == nullptr || pattern_masks->empty()) {
+        return true;
+    }
+    for (uint64_t mask : *pattern_masks) {
+        if ((board & mask) == mask) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] static bool bc_family_axes_equal(
     const BCFamilyTable &lhs,
     const BCFamilyTable &rhs
@@ -116,9 +132,7 @@ namespace ResidentGenerationInternal {
 }
 
 [[nodiscard]] static uint32_t countr_zero32(uint32_t value) {
-    if (value == 0U) {
-        throw std::invalid_argument("BC countr_zero32 requires non-zero value");
-    }
+    assert(value != 0U);
 #if defined(__GNUC__) || defined(__clang__)
     return static_cast<uint32_t>(__builtin_ctz(value));
 #else
@@ -132,9 +146,7 @@ namespace ResidentGenerationInternal {
 }
 
 [[nodiscard]] static uint32_t countr_zero64(uint64_t value) {
-    if (value == 0U) {
-        throw std::invalid_argument("BC countr_zero64 requires non-zero value");
-    }
+    assert(value != 0U);
 #if defined(__GNUC__) || defined(__clang__)
     return static_cast<uint32_t>(__builtin_ctzll(value));
 #else
@@ -327,7 +339,7 @@ static void validate_resident_generation_source(
 }
 
 [[nodiscard]] static uint32_t choose_bc_dynamic_capacity(uint64_t bucket_estimate) {
-    constexpr uint64_t kLoadNumerator = 60U;
+    constexpr uint64_t kLoadNumerator = 75U;
     constexpr uint64_t kLoadDenominator = 100U;
     const uint64_t required =
         (std::max<uint64_t>(bucket_estimate, 1U) * kLoadDenominator + (kLoadNumerator - 1U)) /
@@ -801,9 +813,13 @@ static void push_pending_encoded_candidate(
 static void push_moved_board(
     BCThreadGenerationWorkspace &workspace,
     uint64_t spawned,
-    uint64_t moved
+    uint64_t moved,
+    const BCResidentGenerationOptions &options
 ) {
     if (moved == spawned) {
+        return;
+    }
+    if (!bc_matches_pattern_masks(moved, options.pattern_masks)) {
         return;
     }
     workspace.canonical_buffer.push_back(moved);
@@ -835,18 +851,18 @@ static void process_source_board_pair(
 
         const uint64_t spawn2 = board | (1ULL << (4U * cell));
         const auto moved2 = BoardMover::move_all_dir(spawn2);
-        push_moved_board(primary_workspace, spawn2, std::get<0>(moved2));
-        push_moved_board(primary_workspace, spawn2, std::get<1>(moved2));
-        push_moved_board(primary_workspace, spawn2, std::get<2>(moved2));
-        push_moved_board(primary_workspace, spawn2, std::get<3>(moved2));
+        push_moved_board(primary_workspace, spawn2, std::get<0>(moved2), options);
+        push_moved_board(primary_workspace, spawn2, std::get<1>(moved2), options);
+        push_moved_board(primary_workspace, spawn2, std::get<2>(moved2), options);
+        push_moved_board(primary_workspace, spawn2, std::get<3>(moved2), options);
 
         if (secondary_workspace != nullptr && secondary_layout != nullptr && secondary_state != nullptr) {
             const uint64_t spawn4 = board | (2ULL << (4U * cell));
             const auto moved4 = BoardMover::move_all_dir(spawn4);
-            push_moved_board(*secondary_workspace, spawn4, std::get<0>(moved4));
-            push_moved_board(*secondary_workspace, spawn4, std::get<1>(moved4));
-            push_moved_board(*secondary_workspace, spawn4, std::get<2>(moved4));
-            push_moved_board(*secondary_workspace, spawn4, std::get<3>(moved4));
+            push_moved_board(*secondary_workspace, spawn4, std::get<0>(moved4), options);
+            push_moved_board(*secondary_workspace, spawn4, std::get<1>(moved4), options);
+            push_moved_board(*secondary_workspace, spawn4, std::get<2>(moved4), options);
+            push_moved_board(*secondary_workspace, spawn4, std::get<3>(moved4), options);
         }
     }
     if (primary_workspace.canonical_buffer.size() >= options.canonical_batch_size) {
@@ -900,10 +916,10 @@ static void process_source_board(
         const uint64_t spawned =
             board | (static_cast<uint64_t>(source.spawn_tile_rank) << (4U * cell));
         const auto moved = BoardMover::move_all_dir(spawned);
-        push_moved_board(workspace, spawned, std::get<0>(moved));
-        push_moved_board(workspace, spawned, std::get<1>(moved));
-        push_moved_board(workspace, spawned, std::get<2>(moved));
-        push_moved_board(workspace, spawned, std::get<3>(moved));
+        push_moved_board(workspace, spawned, std::get<0>(moved), options);
+        push_moved_board(workspace, spawned, std::get<1>(moved), options);
+        push_moved_board(workspace, spawned, std::get<2>(moved), options);
+        push_moved_board(workspace, spawned, std::get<3>(moved), options);
     }
     if (workspace.canonical_buffer.size() >= options.canonical_batch_size) {
         flush_canonical_buffer(

@@ -6,6 +6,7 @@
 #include "BCSuccessIO.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -978,6 +979,7 @@ public:
         StorageT current_best = zero_value;
         bool current_found = false;
         uint64_t found_count = 0U;
+        const bool trusted_no_keep = trusted_queries && keep_rows_ == nullptr;
 
         auto flush_group = [&]() {
             if (!current_found || current_ref >= compact_ref_count) {
@@ -1005,6 +1007,42 @@ public:
                 } else {
                     lookup_success_value_ptrs<false, true>(queries.data() + base, value_ptrs, count, lane);
                 }
+            }
+            if (trusted_no_keep) {
+                for (uint32_t i = 0U; i < count; ++i) {
+                    if (value_ptrs[i] == nullptr) {
+                        continue;
+                    }
+#if defined(__GNUC__) || defined(__clang__)
+                    __builtin_prefetch(value_ptrs[i], 0, 1);
+#endif
+                }
+                for (uint32_t i = 0U; i < count; ++i) {
+                    if (value_ptrs[i] == nullptr) {
+                        continue;
+                    }
+                    const BCSolvePreparedQuery &query = queries[static_cast<size_t>(base) + i];
+                    assert(static_cast<size_t>(query.ref) < compact_ref_count);
+                    if (query.ref != current_ref) {
+                        if (current_found) {
+                            assert(current_ref < compact_ref_count);
+                            const size_t sum_index = compact_ref_to_sum[current_ref];
+                            assert(sum_index < sum_count);
+                            sums[sum_index] +=
+                                static_cast<SumT>(current_best) - static_cast<SumT>(zero_value);
+                        }
+                        current_ref = query.ref;
+                        current_best = zero_value;
+                        current_found = false;
+                    }
+                    const StorageT value = *value_ptrs[i];
+                    if (!current_found || value > current_best) {
+                        current_best = value;
+                        current_found = true;
+                    }
+                    ++found_count;
+                }
+                continue;
             }
             for (uint32_t i = 0U; i < count; ++i) {
                 if (value_ptrs[i] == nullptr) {
@@ -1040,7 +1078,17 @@ public:
                 ++found_count;
             }
         }
-        flush_group();
+        if (trusted_no_keep) {
+            if (current_found) {
+                assert(current_ref < compact_ref_count);
+                const size_t sum_index = compact_ref_to_sum[current_ref];
+                assert(sum_index < sum_count);
+                sums[sum_index] +=
+                    static_cast<SumT>(current_best) - static_cast<SumT>(zero_value);
+            }
+        } else {
+            flush_group();
+        }
         return found_count;
     }
 
@@ -1129,9 +1177,12 @@ public:
                         continue;
                     }
                     const BCSolvePreparedQuery &query = queries[static_cast<size_t>(base) + i];
+                    assert(static_cast<size_t>(query.ref) < compact_ref_count);
                     if (query.ref != current_ref) {
                         if (current_found && current_best > current_base) {
+                            assert(current_ref < compact_ref_count);
                             const size_t sum_index = compact_ref_to_sum[current_ref];
+                            assert(sum_index < sum_count);
                             sums[sum_index] +=
                                 static_cast<SumT>(current_best) - static_cast<SumT>(current_base);
                         }
@@ -1185,7 +1236,9 @@ public:
         }
         if (trusted_no_keep) {
             if (current_found && current_best > current_base) {
+                assert(current_ref < compact_ref_count);
                 const size_t sum_index = compact_ref_to_sum[current_ref];
+                assert(sum_index < sum_count);
                 sums[sum_index] +=
                     static_cast<SumT>(current_best) - static_cast<SumT>(current_base);
             }
@@ -1614,10 +1667,8 @@ private:
             }
             const size_t rank_base_index =
                 static_cast<size_t>(bitmap_offset / sizeof(uint64_t)) + target_word;
-            if (rank_base_index >= cell.word_rank_base_count ||
-                cell.word_rank_bases_data == nullptr) {
-                throw std::out_of_range("BC future lookup word rank base is missing");
-            }
+            assert(rank_base_index < cell.word_rank_base_count);
+            assert(cell.word_rank_bases_data != nullptr);
             uint32_t rank_before = cell.word_rank_bases_data[rank_base_index];
             if (bit_in_word != 0U) {
                 rank_before += popcount64(target & ((1ULL << bit_in_word) - 1ULL));
@@ -1634,16 +1685,12 @@ private:
                 }
             }
             const uint64_t local_value_index = local_row * row_width_ + lane;
-            if (local_value_index >= cell.value_count) {
-                throw std::out_of_range("BC future batch lookup local row exceeds success values");
-            }
-            if (cell.value_ptr == nullptr) {
-                throw std::out_of_range("BC future batch lookup value pointer is missing");
-            }
+            assert(local_value_index < cell.value_count);
+            assert(cell.value_ptr != nullptr);
+#ifndef NDEBUG
             const uint64_t global_index = static_cast<uint64_t>(cell.value_offset) + local_value_index;
-            if (global_index >= value_count_) {
-                throw std::out_of_range("BC future batch lookup value index exceeds success values");
-            }
+            assert(global_index < value_count_);
+#endif
             value_ptrs[i] = cell.value_ptr + static_cast<size_t>(local_value_index);
         }
     }

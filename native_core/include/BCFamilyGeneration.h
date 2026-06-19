@@ -82,6 +82,7 @@ struct BCFamilyGenerationOptions {
     BCFamilyMemoryCheckpointCallback memory_checkpoint_callback = nullptr;
     void *memory_checkpoint_context = nullptr;
     uint64_t memory_checkpoint_external_staging_bytes = 0U;
+    const std::vector<uint64_t> *pattern_masks = nullptr;
     int success_target_rank = 0;
     const std::vector<uint8_t> *success_shifts = nullptr;
     LayerSum success_check_min_source_layer_sum = 0U;

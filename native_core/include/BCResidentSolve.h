@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -636,6 +637,9 @@ template <typename StorageT>
     if (moved == spawned) {
         return 1U;
     }
+    if (!bc_solve_matches_pattern(moved, options.edge_options)) {
+        return 2U;
+    }
     if (filter.enabled) {
         if (!bc_solve_physical_target_family_may_hit(
                 lut,
@@ -723,6 +727,9 @@ inline void bc_resident_solve_batch(
         std::vector<uint16_t> &canonical_refs
     ) {
         if (moved == spawned) {
+            return;
+        }
+        if (!bc_solve_matches_pattern(moved, options.edge_options)) {
             return;
         }
         canonical_boards.push_back(moved);
@@ -943,9 +950,7 @@ inline void bc_resident_solve_batch(
             const uint64_t row_index = workspace.output_indices[board_slot];
             const uint64_t value_index =
                 row_index * static_cast<uint64_t>(options.row_width) + lane;
-            if (value_index >= out_values.size()) {
-                throw std::out_of_range("BC resident batch output value index out of range");
-            }
+            assert(value_index < out_values.size());
             out_values[static_cast<size_t>(value_index)] = value;
         }
     }
@@ -1319,9 +1324,7 @@ inline void bc_resident_append_bitmap_le(
 }
 
 [[nodiscard]] inline uint32_t bc_resident_countr_zero64(uint64_t value) {
-    if (value == 0U) {
-        throw std::invalid_argument("BC resident countr_zero64 requires non-zero value");
-    }
+    assert(value != 0U);
 #if defined(_MSC_VER)
     unsigned long index = 0U;
 #if defined(_M_X64) || defined(_M_ARM64)
@@ -1374,9 +1377,7 @@ inline void bc_resident_compact_cell(
         const uint64_t bitmap_end =
             static_cast<uint64_t>(bitmap_offset) +
             static_cast<uint64_t>(word_count) * sizeof(uint64_t);
-        if (bitmap_end > rank_payload.size) {
-            throw std::out_of_range("BC resident compact source bitmap exceeds rank payload");
-        }
+        assert(bitmap_end <= rank_payload.size);
         std::vector<uint64_t> keep_bitmap(word_count, 0U);
         uint32_t bucket_seen = 0U;
         uint32_t bucket_kept = 0U;
@@ -1388,17 +1389,16 @@ inline void bc_resident_compact_cell(
             }
             while (word != 0U) {
                 const uint32_t bit = bc_resident_countr_zero64(word);
+#ifndef NDEBUG
                 const uint32_t rank = word_i * kBCBitmapWordBits + bit;
+#endif
                 const uint64_t local_row =
                     static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
-                if (rank >= bitmap_len || local_row >= desc.success_rows) {
-                    throw std::out_of_range("BC resident compact source row exceeds descriptor");
-                }
+                assert(rank < bitmap_len);
+                assert(local_row < desc.success_rows);
                 const uint64_t row_base =
                     (cell_value_offset + local_row) * static_cast<uint64_t>(row_width);
-                if (row_base + row_width > raw_values.size()) {
-                    throw std::out_of_range("BC resident compact source row exceeds raw values");
-                }
+                assert(row_base + row_width <= raw_values.size());
                 bool keep_row = false;
                 for (uint32_t lane = 0U; lane < row_width; ++lane) {
                     if (raw_values[static_cast<size_t>(row_base + lane)] != zero_value) {
@@ -1491,9 +1491,7 @@ inline void bc_resident_compact_cell_in_place_if(
         const uint64_t bitmap_end =
             static_cast<uint64_t>(bitmap_offset) +
             static_cast<uint64_t>(word_count) * sizeof(uint64_t);
-        if (bitmap_end > rank_payload.size) {
-            throw std::out_of_range("BC resident in-place compact source bitmap exceeds rank payload");
-        }
+        assert(bitmap_end <= rank_payload.size);
         std::vector<uint64_t> keep_bitmap(word_count, 0U);
         const uint64_t bucket_success_offset = success_cursor;
         uint32_t bucket_seen = 0U;
@@ -1506,26 +1504,23 @@ inline void bc_resident_compact_cell_in_place_if(
             }
             while (word != 0U) {
                 const uint32_t bit = bc_resident_countr_zero64(word);
+#ifndef NDEBUG
                 const uint32_t rank = word_i * kBCBitmapWordBits + bit;
+#endif
                 const uint64_t local_row =
                     static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
-                if (rank >= bitmap_len || local_row >= desc.success_rows) {
-                    throw std::out_of_range("BC resident in-place compact source row exceeds descriptor");
-                }
+                assert(rank < bitmap_len);
+                assert(local_row < desc.success_rows);
                 const uint64_t row_base =
                     (cell_value_offset + local_row) * static_cast<uint64_t>(row_width);
-                if (row_base + row_width > raw_values.size()) {
-                    throw std::out_of_range("BC resident in-place compact source row exceeds raw values");
-                }
+                assert(row_base + row_width <= raw_values.size());
                 const bool keep_row =
                     keep_row_fn(raw_values.data() + static_cast<size_t>(row_base), row_width);
                 if (keep_row) {
                     keep_bitmap[word_i] |= (1ULL << bit);
                     const uint64_t dst_base =
                         (cell_value_offset + success_cursor) * static_cast<uint64_t>(row_width);
-                    if (dst_base + row_width > raw_values.size()) {
-                        throw std::out_of_range("BC resident in-place compact destination exceeds raw values");
-                    }
+                    assert(dst_base + row_width <= raw_values.size());
                     if (dst_base != row_base) {
                         for (uint32_t lane = 0U; lane < row_width; ++lane) {
                             raw_values[static_cast<size_t>(dst_base + lane)] =
@@ -1613,9 +1608,7 @@ inline void bc_resident_compact_zero_cell_in_place(
             const uint64_t bitmap_end =
                 static_cast<uint64_t>(bitmap_offset) +
                 static_cast<uint64_t>(word_count) * sizeof(uint64_t);
-            if (bitmap_end > rank_payload.size) {
-                throw std::out_of_range("BC resident in-place compact source bitmap exceeds rank payload");
-            }
+            assert(bitmap_end <= rank_payload.size);
             const uint64_t bucket_success_offset = success_cursor;
             const uint32_t payload_start = static_cast<uint32_t>(payload.rank_payload.size());
             const uint32_t aligned_payload_offset = align_up_u32(payload_start, 8U);
@@ -1652,15 +1645,11 @@ inline void bc_resident_compact_zero_cell_in_place(
                     const uint64_t local_row =
                         static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
                     const uint64_t row_index = cell_value_offset + local_row;
-                    if (row_index >= raw_values.size()) {
-                        throw std::out_of_range("BC resident in-place compact source row exceeds raw values");
-                    }
+                    assert(row_index < raw_values.size());
                     if (raw_values[static_cast<size_t>(row_index)] != zero_value) {
                         keep_word |= (1ULL << bit);
                         const uint64_t dst_index = cell_value_offset + success_cursor;
-                        if (dst_index >= raw_values.size()) {
-                            throw std::out_of_range("BC resident in-place compact destination exceeds raw values");
-                        }
+                        assert(dst_index < raw_values.size());
                         if (dst_index != row_index) {
                             raw_values[static_cast<size_t>(dst_index)] =
                                 raw_values[static_cast<size_t>(row_index)];

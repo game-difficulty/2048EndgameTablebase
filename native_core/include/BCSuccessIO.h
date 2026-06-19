@@ -579,6 +579,11 @@ private:
     bool begun_ = false;
 };
 
+struct BCSuccessRawCellView {
+    const uint8_t *data = nullptr;
+    uint64_t bytes = 0U;
+};
+
 class BCSuccessLayerReader {
 public:
     BCSuccessLayerReader() = default;
@@ -658,6 +663,23 @@ public:
             bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
             bytes_.begin() + static_cast<std::ptrdiff_t>(offset + bytes)
         );
+    }
+
+    [[nodiscard]] BCSuccessRawCellView cell_raw_view(CellId cid) const {
+        require_open();
+        const uint64_t offset = value_byte_offset(cid);
+        const uint64_t bytes = cell_byte_count(cid);
+        if (bytes == 0U) {
+            return BCSuccessRawCellView{};
+        }
+        if (offset > bytes_.size() ||
+            bytes > static_cast<uint64_t>(bytes_.size()) - offset) {
+            throw std::logic_error("BC success raw cell view exceeds payload");
+        }
+        return BCSuccessRawCellView{
+            bytes_.data() + static_cast<size_t>(offset),
+            bytes
+        };
     }
 
     [[nodiscard]] uint32_t read_value(CellId cid, uint32_t row, uint32_t lane = 0U) const {

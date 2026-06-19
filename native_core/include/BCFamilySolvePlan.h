@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -507,9 +508,7 @@ public:
             return;
         }
         const uint64_t base = compact_row_base(layout, bucket, success_row);
-        if (base + value_count > values_.size()) {
-            throw std::out_of_range("BC family partial compact row read is out of range");
-        }
+        assert(base + value_count <= values_.size());
         (void)zero_value;
         std::copy_n(
             values_.data() + static_cast<size_t>(base),
@@ -529,9 +528,7 @@ public:
             return nullptr;
         }
         const uint64_t base = compact_row_base(layout, bucket, success_row);
-        if (base + value_count > values_.size()) {
-            throw std::out_of_range("BC family partial compact row data is out of range");
-        }
+        assert(base + value_count <= values_.size());
         return values_.data() + static_cast<size_t>(base);
     }
 
@@ -541,9 +538,8 @@ private:
         const BCFamilyPartialBucketLayout &bucket,
         uint32_t success_row
     ) {
-        if (success_row < bucket.success_row_begin || success_row >= bucket.success_row_end()) {
-            throw std::out_of_range("BC family partial compact row is outside supplied bucket");
-        }
+        assert(success_row >= bucket.success_row_begin);
+        assert(success_row < bucket.success_row_end());
         return bucket.value_offset +
             static_cast<uint64_t>(success_row - bucket.success_row_begin) *
                 static_cast<uint64_t>(bucket.empty_count) *
@@ -566,9 +562,7 @@ private:
             return;
         }
         const uint64_t base = compact_row_base(layout, bucket, success_row);
-        if (base + value_count > values_.size()) {
-            throw std::out_of_range("BC family partial compact row write is out of range");
-        }
+        assert(base + value_count <= values_.size());
         StorageT *dst = values_.data() + static_cast<size_t>(base);
         if (!merge) {
             std::copy_n(best_by_empty_slot_lane, value_count, dst);
@@ -776,6 +770,27 @@ public:
         values_[value_index(success_row, 0U)] = contribution;
     }
 
+    template <typename SumT>
+    void write_spawn4_sum_contribution_unchecked_row_width1(
+        uint32_t success_row,
+        SumT sum,
+        uint32_t empty_count,
+        double spawn_rate4,
+        StorageT zero_value
+    ) {
+        assert(row_width_ == 1U);
+        assert(success_row < success_rows_);
+        assert(empty_count != 0U);
+        const StorageT contribution =
+            bc_solve_scale_success_sum_contribution<StorageT>(
+                static_cast<long double>(sum),
+                empty_count,
+                static_cast<long double>(spawn_rate4),
+                zero_value
+            );
+        values_[static_cast<size_t>(success_row)] = contribution;
+    }
+
     void finalize_spawn2_row(
         uint32_t success_row,
         const StorageT *best_by_cell_lane,
@@ -835,6 +850,28 @@ public:
                 zero_value
             );
         StorageT &dst = values_[value_index(success_row, 0U)];
+        dst = bc_solve_add_success_contribution<StorageT>(dst, contribution);
+    }
+
+    template <typename SumT>
+    void finalize_spawn2_sum_row_unchecked_row_width1(
+        uint32_t success_row,
+        SumT sum,
+        uint32_t empty_count,
+        double spawn_rate4,
+        StorageT zero_value
+    ) {
+        assert(row_width_ == 1U);
+        assert(success_row < success_rows_);
+        assert(empty_count != 0U);
+        const StorageT contribution =
+            bc_solve_scale_success_sum_contribution<StorageT>(
+                static_cast<long double>(sum),
+                empty_count,
+                1.0L - static_cast<long double>(spawn_rate4),
+                zero_value
+            );
+        StorageT &dst = values_[static_cast<size_t>(success_row)];
         dst = bc_solve_add_success_contribution<StorageT>(dst, contribution);
     }
 

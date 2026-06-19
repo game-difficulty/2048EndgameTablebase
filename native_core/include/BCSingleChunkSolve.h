@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <chrono>
 #include <cstring>
 #include <cstdint>
@@ -962,6 +963,9 @@ inline void bc_single_chunk_push_candidate(
     if (moved == spawned) {
         return;
     }
+    if (!bc_solve_matches_pattern(moved, options.edge_options)) {
+        return;
+    }
     if (filter.enabled) {
         if (!bc_solve_physical_target_family_may_hit(
                 lut,
@@ -1018,6 +1022,9 @@ void bc_single_chunk_solve_phase_batch(
         uint16_t ref
     ) {
         if (moved == spawned) {
+            return;
+        }
+        if (!bc_solve_matches_pattern(moved, options.solve.edge_options)) {
             return;
         }
         workspace.canonical2_boards.push_back(moved);
@@ -1173,9 +1180,7 @@ void bc_single_chunk_solve_phase_batch(
                 const uint64_t row_index = workspace.output_indices[board_slot];
                 const uint64_t value_index =
                     row_index * static_cast<uint64_t>(options.solve.row_width) + lane;
-                if (value_index >= sum4_values.size()) {
-                    throw std::out_of_range("BC single chunk phase4 contribution index out of range");
-                }
+                assert(value_index < sum4_values.size());
                 sum4_values[static_cast<size_t>(value_index)] = contribution;
             }
             continue;
@@ -1185,9 +1190,7 @@ void bc_single_chunk_solve_phase_batch(
             const uint64_t row_index = workspace.output_indices[board_slot];
             const uint64_t value_index =
                 row_index * static_cast<uint64_t>(options.solve.row_width) + lane;
-            if (value_index >= sum4_values.size()) {
-                throw std::out_of_range("BC single chunk phase2 contribution index out of range");
-            }
+            assert(value_index < sum4_values.size());
             StorageT value = options.solve.zero_value;
             if (workspace.terminal[board_slot] != 0U) {
                 value = options.solve.terminal_value;
@@ -1215,9 +1218,7 @@ void bc_single_chunk_solve_phase_batch(
                     );
                 }
             }
-            if (value_index >= raw_values.size()) {
-                throw std::out_of_range("BC single chunk raw output index out of range");
-            }
+            assert(value_index < raw_values.size());
             raw_values[static_cast<size_t>(value_index)] = value;
         }
     }
@@ -1362,9 +1363,7 @@ void bc_single_chunk_compact_loaded_cell(
         const uint64_t bitmap_end =
             static_cast<uint64_t>(bitmap_offset) +
             static_cast<uint64_t>(word_count) * sizeof(uint64_t);
-        if (bitmap_end > view.rank_payload.size) {
-            throw std::out_of_range("BC single chunk compact source bitmap exceeds rank payload");
-        }
+        assert(bitmap_end <= view.rank_payload.size);
         std::vector<uint64_t> keep_bitmap(word_count, 0U);
         uint32_t bucket_seen = 0U;
         uint32_t bucket_kept = 0U;
@@ -1378,14 +1377,10 @@ void bc_single_chunk_compact_loaded_cell(
                 const uint32_t bit = bc_resident_countr_zero64(word);
                 const uint64_t local_row =
                     static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
-                if (local_row >= cell.success_rows) {
-                    throw std::out_of_range("BC single chunk compact source row exceeds descriptor");
-                }
+                assert(local_row < cell.success_rows);
                 const uint64_t row_base =
                     (cell_value_offset + local_row) * static_cast<uint64_t>(row_width);
-                if (row_base + row_width > raw_values.size()) {
-                    throw std::out_of_range("BC single chunk compact source row exceeds raw values");
-                }
+                assert(row_base + row_width <= raw_values.size());
                 bool keep_row = false;
                 for (uint32_t lane = 0U; lane < row_width; ++lane) {
                     if (raw_values[static_cast<size_t>(row_base + lane)] != zero_value) {
@@ -1475,11 +1470,7 @@ void bc_single_chunk_compact_loaded_cell_in_place(
         const uint64_t bitmap_end =
             static_cast<uint64_t>(bitmap_offset) +
             static_cast<uint64_t>(word_count) * sizeof(uint64_t);
-        if (bitmap_end > view.rank_payload.size) {
-            throw std::out_of_range(
-                "BC single chunk in-place compact source bitmap exceeds rank payload"
-            );
-        }
+        assert(bitmap_end <= view.rank_payload.size);
         const uint64_t bucket_success_offset = success_cursor;
         const uint32_t payload_start = static_cast<uint32_t>(payload.rank_payload.size());
         const uint32_t aligned_payload_offset = align_up_u32(payload_start, 8U);
@@ -1518,18 +1509,10 @@ void bc_single_chunk_compact_loaded_cell_in_place(
                 const uint32_t bit = bc_resident_countr_zero64(word);
                 const uint64_t local_row =
                     static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
-                if (local_row >= cell.success_rows) {
-                    throw std::out_of_range(
-                        "BC single chunk compact source row exceeds descriptor"
-                    );
-                }
+                assert(local_row < cell.success_rows);
                 const uint64_t row_base =
                     (cell_value_offset + local_row) * static_cast<uint64_t>(row_width);
-                if (row_base + row_width > raw_values.size()) {
-                    throw std::out_of_range(
-                        "BC single chunk compact source row exceeds raw values"
-                    );
-                }
+                assert(row_base + row_width <= raw_values.size());
                 bool keep_row = false;
                 for (uint32_t lane = 0U; lane < row_width; ++lane) {
                     if (raw_values[static_cast<size_t>(row_base + lane)] != zero_value) {
@@ -1542,11 +1525,7 @@ void bc_single_chunk_compact_loaded_cell_in_place(
                     const uint64_t dst_base =
                         (cell_value_offset + success_cursor) *
                         static_cast<uint64_t>(row_width);
-                    if (dst_base + row_width > raw_values.size()) {
-                        throw std::out_of_range(
-                            "BC single chunk compact destination exceeds raw values"
-                        );
-                    }
+                    assert(dst_base + row_width <= raw_values.size());
                     if (dst_base != row_base) {
                         for (uint32_t lane = 0U; lane < row_width; ++lane) {
                             raw_values[static_cast<size_t>(dst_base + lane)] =

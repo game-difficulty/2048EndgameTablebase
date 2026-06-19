@@ -65,6 +65,7 @@ struct BCResidentGenerationOptions {
     BCCellFinalizeOptions finalize_options = {};
     const std::array<uint32_t, 16U> *tile_sum_values = nullptr;
     const std::array<uint32_t, 16U> *family_tile_sum_values = nullptr;
+    const std::vector<uint64_t> *pattern_masks = nullptr;
     int success_target_rank = 0;
     const std::vector<uint8_t> *success_shifts = nullptr;
     LayerSum success_check_min_source_layer_sum = 0U;

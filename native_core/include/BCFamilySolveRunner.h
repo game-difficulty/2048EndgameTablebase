@@ -48,6 +48,8 @@ struct BCFamilySolveRunOptions {
     uint32_t target_rank = 8U;
     int success_target_rank = -1;
     int canonical_symm_mode = static_cast<int>(SymmMode::Full);
+    std::vector<uint64_t> pattern_masks;
+    std::vector<uint8_t> success_shifts;
     double spawn_rate4 = 0.1;
     int num_threads = 0;
     uint32_t canonical_batch_size = 8192U;
@@ -81,6 +83,12 @@ struct BCFamilySolveRunLayerFile {
     std::filesystem::path path;
 };
 
+struct BCFamilySolveArchiveExactLayer {
+    uint32_t ordinal = 0U;
+    std::filesystem::path position_path;
+    std::filesystem::path success_path;
+};
+
 struct BCFamilySolveRunLayerMetric {
     std::string kind = "solve";
     std::string solve_route = "";
@@ -96,6 +104,14 @@ struct BCFamilySolveRunLayerMetric {
     uint64_t output_position_write_bytes = 0U;
     uint64_t output_success_write_bytes = 0U;
     uint64_t temp_compressed_bytes = 0U;
+    uint64_t final_compress_bucket_blocks = 0U;
+    uint64_t final_compress_value_blocks = 0U;
+    uint64_t final_compress_success_values = 0U;
+    uint64_t final_compress_bucket_raw_bytes = 0U;
+    uint64_t final_compress_bucket_compressed_bytes = 0U;
+    uint64_t final_compress_value_raw_bytes = 0U;
+    uint64_t final_compress_value_compressed_bytes = 0U;
+    uint64_t final_compress_output_bytes = 0U;
     uint64_t route_available_memory_bytes = 0U;
     uint64_t route_resident_required_bytes = 0U;
     uint64_t route_single_required_bytes = 0U;
@@ -113,6 +129,9 @@ struct BCFamilySolveRunLayerMetric {
     double archive_scan_seconds = 0.0;
     double archive_prune_write_seconds = 0.0;
     double final_compress_seconds = 0.0;
+    double final_compress_read_seconds = 0.0;
+    double final_compress_write_seconds = 0.0;
+    double final_compress_worker_seconds = 0.0;
     double temp_compress_seconds = 0.0;
     double position_write_seconds = 0.0;
     double success_write_seconds = 0.0;
@@ -181,7 +200,7 @@ namespace detail {
         static_cast<uint64_t>(row_width);
 }
 
-[[nodiscard]] inline std::vector<uint8_t> bc_family_runner_free_legal_tiles(
+[[nodiscard]] inline std::vector<uint8_t> bc_family_runner_legal_tiles(
     uint32_t target_rank
 ) {
     if (target_rank >= 15U) {
@@ -252,9 +271,34 @@ namespace detail {
     return options.solved_output_dir / (options.prefix + "family_checkpoint.csv");
 }
 
+[[nodiscard]] inline std::filesystem::path bc_family_runner_archive_dir(
+    const BCFamilySolveRunOptions &options
+) {
+    return options.archive_output_dir.empty()
+        ? options.solved_output_dir
+        : options.archive_output_dir;
+}
+
+[[nodiscard]] inline bool bc_family_runner_same_path(
+    const std::filesystem::path &lhs,
+    const std::filesystem::path &rhs
+) {
+    if (lhs.empty() || rhs.empty()) {
+        return false;
+    }
+    return std::filesystem::absolute(lhs).lexically_normal() ==
+        std::filesystem::absolute(rhs).lexically_normal();
+}
+
 [[nodiscard]] inline std::map<uint32_t, BCFamilySolveRunLayerFile>
-bc_family_runner_discover_layers(const BCFamilySolveRunOptions &options) {
+bc_family_runner_discover_layers_impl(
+    const BCFamilySolveRunOptions &options,
+    bool allow_missing_or_empty
+) {
     if (!std::filesystem::is_directory(options.generated_position_dir)) {
+        if (allow_missing_or_empty) {
+            return {};
+        }
         throw std::runtime_error(
             "BC family runner generated position dir does not exist: " +
             options.generated_position_dir.string()
@@ -276,22 +320,113 @@ bc_family_runner_discover_layers(const BCFamilySolveRunOptions &options) {
         layers.emplace(ordinal, BCFamilySolveRunLayerFile{ordinal, entry.path()});
     }
     if (layers.empty()) {
+        if (allow_missing_or_empty) {
+            return {};
+        }
         throw std::runtime_error(
             "BC family runner found no generated layers with prefix: " + options.prefix
         );
     }
-    uint32_t expected = layers.begin()->first;
-    for (const auto &[ordinal, layer] : layers) {
+    return layers;
+}
+
+[[nodiscard]] inline std::map<uint32_t, BCFamilySolveRunLayerFile>
+bc_family_runner_discover_layers(const BCFamilySolveRunOptions &options) {
+    return bc_family_runner_discover_layers_impl(options, false);
+}
+
+[[nodiscard]] inline std::map<uint32_t, BCFamilySolveRunLayerFile>
+bc_family_runner_discover_layers_or_empty(const BCFamilySolveRunOptions &options) {
+    return bc_family_runner_discover_layers_impl(options, true);
+}
+
+[[nodiscard]] inline std::map<uint32_t, BCFamilySolveArchiveExactLayer>
+bc_family_runner_discover_archive_exact_layers(const BCFamilySolveRunOptions &options) {
+    const std::filesystem::path archive_dir = bc_family_runner_archive_dir(options);
+    std::map<uint32_t, BCFamilySolveArchiveExactLayer> layers;
+    if (archive_dir.empty() || !std::filesystem::is_directory(archive_dir)) {
+        return layers;
+    }
+    const std::regex pattern("^" + options.prefix + "([0-9]+)\\.bcpos$");
+    for (const std::filesystem::directory_entry &entry :
+         std::filesystem::directory_iterator(archive_dir)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const std::string name = entry.path().filename().string();
+        std::smatch match;
+        if (!std::regex_match(name, match, pattern)) {
+            continue;
+        }
+        const uint32_t ordinal = static_cast<uint32_t>(std::stoul(match[1].str()));
+        const std::filesystem::path success_path =
+            bc_family_runner_success_path(archive_dir, options.prefix, ordinal);
+        std::error_code ec;
+        if (!std::filesystem::exists(success_path, ec) || ec) {
+            continue;
+        }
+        layers.emplace(
+            ordinal,
+            BCFamilySolveArchiveExactLayer{ordinal, entry.path(), success_path});
+    }
+    return layers;
+}
+
+[[nodiscard]] inline std::map<uint32_t, std::filesystem::path>
+bc_family_runner_discover_archive_compressed_layers(const BCFamilySolveRunOptions &options) {
+    const std::filesystem::path archive_dir = bc_family_runner_archive_dir(options);
+    std::map<uint32_t, std::filesystem::path> layers;
+    if (archive_dir.empty() || !std::filesystem::is_directory(archive_dir)) {
+        return layers;
+    }
+    const std::regex pattern(
+        "^" + options.prefix + "([0-9]+)\\.bccmp$");
+    for (const std::filesystem::directory_entry &entry :
+         std::filesystem::directory_iterator(archive_dir)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const std::string name = entry.path().filename().string();
+        std::smatch match;
+        if (!std::regex_match(name, match, pattern)) {
+            continue;
+        }
+        const uint32_t ordinal = static_cast<uint32_t>(std::stoul(match[1].str()));
+        layers.emplace(ordinal, entry.path());
+    }
+    return layers;
+}
+
+[[nodiscard]] inline bool bc_family_runner_archive_layers_are_contiguous_from_zero(
+    const BCFamilySolveRunOptions &options,
+    uint32_t *max_ordinal_out = nullptr
+) {
+    std::map<uint32_t, uint8_t> ordinals;
+    for (const auto &[ordinal, layer] :
+         bc_family_runner_discover_archive_exact_layers(options)) {
         (void)layer;
+        ordinals.emplace(ordinal, 1U);
+    }
+    for (const auto &[ordinal, path] :
+         bc_family_runner_discover_archive_compressed_layers(options)) {
+        (void)path;
+        ordinals.emplace(ordinal, 1U);
+    }
+    if (ordinals.empty() || ordinals.begin()->first != 0U) {
+        return false;
+    }
+    uint32_t expected = 0U;
+    for (const auto &[ordinal, marker] : ordinals) {
+        (void)marker;
         if (ordinal != expected) {
-            throw std::runtime_error(
-                "BC family runner generated ordinals are not contiguous at " +
-                std::to_string(expected)
-            );
+            return false;
         }
         ++expected;
     }
-    return layers;
+    if (max_ordinal_out != nullptr) {
+        *max_ordinal_out = expected - 1U;
+    }
+    return true;
 }
 
 [[nodiscard]] inline uint64_t bc_family_runner_descriptor_rows(
@@ -389,6 +524,10 @@ template <typename StorageT>
     const BCLut &lut,
     bool remove_invalid = false
 ) {
+    (void)lut;
+    (void)remove_invalid;
+    // Resume/checkpoint decisions intentionally only inspect filenames. File
+    // contents are opened later only when the layer is actually used.
     const std::filesystem::path position_path =
         bc_family_runner_position_path(options.solved_output_dir, options.prefix, ordinal);
     const std::filesystem::path success_path =
@@ -397,29 +536,7 @@ template <typename StorageT>
     const bool has_position = std::filesystem::exists(position_path, ec) && !ec;
     ec.clear();
     const bool has_success = std::filesystem::exists(success_path, ec) && !ec;
-    if (!has_position && !has_success) {
-        return false;
-    }
-    bool valid = false;
-    if (has_position && has_success) {
-        try {
-            BCPositionStreamingReader position =
-                bc_family_runner_open_position_stream(options, position_path, lut);
-            if (position.header().family_count == options.family_modulus) {
-                BCSuccessStreamingReader success =
-                    bc_family_runner_open_success_stream(options, success_path, position);
-                valid =
-                    success.dtype_mode() == options.success_dtype &&
-                    bc_success_dtype_matches_type<StorageT>(success.dtype_mode());
-            }
-        } catch (...) {
-            valid = false;
-        }
-    }
-    if (!valid && remove_invalid) {
-        bc_family_runner_remove_exact_layer_files(options, ordinal);
-    }
-    return valid;
+    return has_position && has_success;
 }
 
 [[nodiscard]] inline std::unique_ptr<BCWritableFile> bc_family_runner_make_writer(
@@ -495,32 +612,372 @@ inline void bc_family_runner_move_or_copy_file(
     std::filesystem::remove(source, ec);
 }
 
-[[nodiscard]] inline double bc_family_runner_final_compression_hook(
+inline void bc_family_runner_add_final_compress_stats(
+    BCFamilySolveRunLayerMetric &metric,
+    const BCCompressedResult::CompressStats &stats
+) {
+    metric.final_compress_seconds += stats.total_seconds;
+    metric.final_compress_read_seconds += stats.read_seconds;
+    metric.final_compress_write_seconds += stats.write_seconds;
+    metric.final_compress_worker_seconds += stats.compress_worker_seconds;
+    metric.final_compress_bucket_blocks += stats.bucket_blocks;
+    metric.final_compress_value_blocks += stats.value_blocks;
+    metric.final_compress_success_values += stats.success_values;
+    metric.final_compress_bucket_raw_bytes += stats.bucket_raw_bytes;
+    metric.final_compress_bucket_compressed_bytes += stats.bucket_compressed_bytes;
+    metric.final_compress_value_raw_bytes += stats.value_raw_bytes;
+    metric.final_compress_value_compressed_bytes += stats.value_compressed_bytes;
+    metric.final_compress_output_bytes += stats.output_bytes;
+}
+
+[[nodiscard]] inline BCCompressedResult::CompressOptions bc_family_runner_make_compress_options(
+    const BCFamilySolveRunOptions &options
+) {
+    BCCompressedResult::CompressOptions compress_options;
+    compress_options.worker_count =
+        options.num_threads > 0 ? static_cast<uint32_t>(options.num_threads) : 0U;
+    return compress_options;
+}
+
+[[nodiscard]] inline std::filesystem::path bc_family_runner_compressed_output_path(
     const BCFamilySolveRunOptions &options,
     uint32_t ordinal,
-    const std::filesystem::path &position_path,
-    const std::filesystem::path &success_path
+    const std::filesystem::path &position_path
 ) {
-    const double t0 = bc_family_solve_runner_now_seconds();
     const std::filesystem::path output_dir =
         options.archive_output_dir.empty() ? position_path.parent_path() : options.archive_output_dir;
     if (!output_dir.empty()) {
         std::filesystem::create_directories(output_dir);
     }
+    return output_dir / (
+        options.prefix + std::to_string(ordinal) +
+        BCCompressedResult::kCompressedLayerFileExtension);
+}
+
+[[nodiscard]] inline std::optional<uint32_t> bc_family_runner_parse_archive_tmp_ordinal(
+    const std::string &name,
+    const std::string &prefix,
+    const std::string &suffix
+) {
+    if (name.size() <= prefix.size() + suffix.size()) {
+        return std::nullopt;
+    }
+    if (name.compare(0U, prefix.size(), prefix) != 0) {
+        return std::nullopt;
+    }
+    if (name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0) {
+        return std::nullopt;
+    }
+    const size_t begin = prefix.size();
+    const size_t count = name.size() - prefix.size() - suffix.size();
+    for (size_t i = 0U; i < count; ++i) {
+        const char ch = name[begin + i];
+        if (ch < '0' || ch > '9') {
+            return std::nullopt;
+        }
+    }
+    const unsigned long value = std::stoul(name.substr(begin, count));
+    if (value > std::numeric_limits<uint32_t>::max()) {
+        return std::nullopt;
+    }
+    return static_cast<uint32_t>(value);
+}
+
+[[nodiscard]] inline bool bc_family_runner_file_magic_matches(
+    const std::filesystem::path &path,
+    uint32_t expected_magic
+) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    uint8_t bytes[sizeof(uint32_t)] = {};
+    in.read(reinterpret_cast<char *>(bytes), sizeof(bytes));
+    if (in.gcount() != static_cast<std::streamsize>(sizeof(bytes))) {
+        return false;
+    }
+    return bc_load_u32_le(bytes) == expected_magic;
+}
+
+struct BCFamilyArchiveTmpPair {
+    std::filesystem::path position_tmp;
+    std::filesystem::path success_tmp;
+};
+
+inline void bc_family_runner_cleanup_archive_tmp_layers(
+    const BCFamilySolveRunOptions &options
+) {
+    const std::filesystem::path archive_dir = bc_family_runner_archive_dir(options);
+    if (archive_dir.empty() || !std::filesystem::is_directory(archive_dir)) {
+        return;
+    }
+
+    std::map<uint32_t, BCFamilyArchiveTmpPair> tmp_layers;
+    const std::string position_suffix = ".bcpos.archive_tmp";
+    const std::string success_suffix = ".bcsuc.archive_tmp";
+    for (const std::filesystem::directory_entry &entry :
+         std::filesystem::directory_iterator(archive_dir)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const std::string name = entry.path().filename().string();
+        if (std::optional<uint32_t> ordinal =
+                bc_family_runner_parse_archive_tmp_ordinal(
+                    name,
+                    options.prefix,
+                    position_suffix)) {
+            tmp_layers[*ordinal].position_tmp = entry.path();
+            continue;
+        }
+        if (std::optional<uint32_t> ordinal =
+                bc_family_runner_parse_archive_tmp_ordinal(
+                    name,
+                    options.prefix,
+                    success_suffix)) {
+            tmp_layers[*ordinal].success_tmp = entry.path();
+        }
+    }
+
+    for (const auto &[ordinal, pair] : tmp_layers) {
+        const std::filesystem::path position_target =
+            bc_family_runner_position_path(archive_dir, options.prefix, ordinal);
+        const std::filesystem::path success_target =
+            bc_family_runner_success_path(archive_dir, options.prefix, ordinal);
+        const std::filesystem::path compressed_target =
+            archive_dir / (
+                options.prefix + std::to_string(ordinal) +
+                BCCompressedResult::kCompressedLayerFileExtension);
+
+        std::error_code ec;
+        const bool has_compressed =
+            std::filesystem::exists(compressed_target, ec) && !ec;
+        ec.clear();
+        const bool has_position =
+            std::filesystem::exists(position_target, ec) && !ec;
+        ec.clear();
+        const bool has_success =
+            std::filesystem::exists(success_target, ec) && !ec;
+
+        if (has_compressed || (has_position && has_success)) {
+            bc_family_runner_remove_file_quiet(pair.position_tmp);
+            bc_family_runner_remove_file_quiet(pair.success_tmp);
+            continue;
+        }
+
+        const bool position_tmp_valid =
+            !pair.position_tmp.empty() &&
+            bc_family_runner_file_magic_matches(pair.position_tmp, kBCPositionMagic);
+        const bool success_tmp_valid =
+            !pair.success_tmp.empty() &&
+            bc_family_runner_file_magic_matches(pair.success_tmp, kBCSuccessMagic);
+        const bool can_recover_position = has_position || position_tmp_valid;
+        const bool can_recover_success = has_success || success_tmp_valid;
+        if (can_recover_position && can_recover_success) {
+            if (!has_position) {
+                bc_family_runner_publish_file(pair.position_tmp, position_target);
+            } else {
+                bc_family_runner_remove_file_quiet(pair.position_tmp);
+            }
+            if (!has_success) {
+                bc_family_runner_publish_file(pair.success_tmp, success_target);
+            } else {
+                bc_family_runner_remove_file_quiet(pair.success_tmp);
+            }
+            continue;
+        }
+
+        bc_family_runner_remove_file_quiet(pair.position_tmp);
+        bc_family_runner_remove_file_quiet(pair.success_tmp);
+        if (has_position != has_success) {
+            bc_family_runner_remove_file_quiet(position_target);
+            bc_family_runner_remove_file_quiet(success_target);
+        }
+    }
+}
+
+[[nodiscard]] inline bool bc_family_runner_compressed_file_is_fresh(
+    const std::filesystem::path &output_path,
+    const std::filesystem::path &position_path,
+    const std::filesystem::path &success_path
+) {
+    std::error_code ec;
+    if (!std::filesystem::exists(output_path, ec) || ec) {
+        return false;
+    }
+    const auto compressed_time = std::filesystem::last_write_time(output_path, ec);
+    if (ec) {
+        return false;
+    }
+    const auto position_time = std::filesystem::last_write_time(position_path, ec);
+    if (ec) {
+        return false;
+    }
+    const auto success_time = std::filesystem::last_write_time(success_path, ec);
+    if (ec) {
+        return false;
+    }
+    return compressed_time >= position_time && compressed_time >= success_time;
+}
+
+inline void bc_family_runner_remove_exact_sources_after_compress(
+    const std::filesystem::path &output_path,
+    const std::filesystem::path &position_path,
+    const std::filesystem::path &success_path
+) {
+    if (!bc_family_runner_compressed_file_is_fresh(output_path, position_path, success_path)) {
+        throw std::runtime_error(
+            "BC compressed layer is not fresh after compression: " +
+            output_path.string());
+    }
+    auto remove_one = [](const std::filesystem::path &path) {
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+        if (ec) {
+            throw std::runtime_error(
+                "BC family runner failed to remove exact file after compression: " +
+                path.string() + ": " + ec.message());
+        }
+    };
+    remove_one(position_path);
+    remove_one(success_path);
+}
+
+[[nodiscard]] inline BCCompressedResult::CompressStats bc_family_runner_final_compression_hook(
+    const BCFamilySolveRunOptions &options,
+    uint32_t ordinal,
+    const std::filesystem::path &position_path,
+    const std::filesystem::path &success_path,
+    bool remove_sources_after_compress = false
+) {
+    if (!options.compress) {
+        return {};
+    }
     const std::filesystem::path output_path =
-        output_dir / (options.prefix + std::to_string(ordinal) +
-            BCCompressedResult::kCompressedLayerFileExtension);
-    const BCLut lut(bc_family_runner_free_legal_tiles(options.target_rank));
-    BCCompressedResult::CompressOptions compress_options;
-    compress_options.worker_count =
-        options.num_threads > 0 ? static_cast<uint32_t>(options.num_threads) : 0U;
-    (void)BCCompressedResult::compress_exact_layer_to_result(
+        bc_family_runner_compressed_output_path(options, ordinal, position_path);
+
+    if (bc_family_runner_compressed_file_is_fresh(output_path, position_path, success_path)) {
+        if (remove_sources_after_compress) {
+            bc_family_runner_remove_exact_sources_after_compress(
+                output_path,
+                position_path,
+                success_path);
+        }
+        return {};
+    }
+
+    const BCLut lut(bc_family_runner_legal_tiles(options.target_rank));
+    BCCompressedResult::CompressStats stats =
+        BCCompressedResult::compress_exact_layer_to_result(
         position_path,
         success_path,
         lut,
         output_path,
-        compress_options);
-    return bc_family_solve_runner_now_seconds() - t0;
+        bc_family_runner_make_compress_options(options));
+    if (remove_sources_after_compress) {
+        bc_family_runner_remove_exact_sources_after_compress(
+            output_path,
+            position_path,
+            success_path);
+    }
+    return stats;
+}
+
+template <typename StorageT>
+struct BCFamilySolveFrontierLayer;
+
+template <typename StorageT>
+[[nodiscard]] inline BCCompressedResult::CompressStats
+bc_family_runner_final_compression_hook_flat(
+    const BCFamilySolveRunOptions &options,
+    uint32_t ordinal,
+    const BCPositionLayerReader &position,
+    const StorageT *success_values,
+    uint64_t success_value_count,
+    uint32_t row_width,
+    BCSuccessDTypeMode dtype,
+    const std::filesystem::path &position_path,
+    const std::filesystem::path &success_path,
+    bool remove_sources_after_compress = false
+) {
+    if (!options.compress) {
+        return {};
+    }
+    const std::filesystem::path output_path =
+        bc_family_runner_compressed_output_path(options, ordinal, position_path);
+    if (bc_family_runner_compressed_file_is_fresh(output_path, position_path, success_path)) {
+        if (remove_sources_after_compress) {
+            bc_family_runner_remove_exact_sources_after_compress(
+                output_path,
+                position_path,
+                success_path);
+        }
+        return {};
+    }
+
+    BCCompressedResult::CompressStats stats =
+        BCCompressedResult::compress_flat_success_layer_to_result(
+            position,
+            success_values,
+            success_value_count,
+            row_width,
+            dtype,
+            output_path,
+            bc_family_runner_make_compress_options(options));
+    if (remove_sources_after_compress) {
+        bc_family_runner_remove_exact_sources_after_compress(
+            output_path,
+            position_path,
+            success_path);
+    }
+    return stats;
+}
+
+template <typename StorageT>
+[[nodiscard]] inline bool bc_family_runner_try_final_compress_retired_in_memory(
+    const BCFamilySolveRunOptions &options,
+    BCFamilySolveRunLayerMetric &metric,
+    const BCFamilySolveFrontierLayer<StorageT> &retired,
+    const std::filesystem::path &position_path,
+    const std::filesystem::path &success_path
+) {
+    if (!options.compress) {
+        return false;
+    }
+    if (retired.resident_cache) {
+        const BCResidentSolvedLayer<StorageT> &layer = *retired.resident_cache;
+        bc_family_runner_add_final_compress_stats(
+            metric,
+            bc_family_runner_final_compression_hook_flat<StorageT>(
+                options,
+                metric.ordinal,
+                layer.position,
+                layer.success_values.empty() ? nullptr : layer.success_values.data(),
+                static_cast<uint64_t>(layer.success_values.size()),
+                layer.row_width,
+                layer.dtype,
+                position_path,
+                success_path,
+                false));
+        return true;
+    }
+    if (retired.single_frontier_cache) {
+        const BCSingleChunkFrontierLayer<StorageT> &layer = *retired.single_frontier_cache;
+        bc_family_runner_add_final_compress_stats(
+            metric,
+            bc_family_runner_final_compression_hook_flat<StorageT>(
+                options,
+                metric.ordinal,
+                layer.position,
+                layer.success_values.empty() ? nullptr : layer.success_values.data(),
+                static_cast<uint64_t>(layer.success_values.size()),
+                layer.row_width,
+                layer.dtype,
+                position_path,
+                success_path,
+                false));
+        return true;
+    }
+    return false;
 }
 
 [[nodiscard]] inline std::vector<uint8_t> bc_family_runner_make_empty_position_bytes(
@@ -741,17 +1198,9 @@ template <typename StorageT>
             bc_family_runner_success_path(options.solved_output_dir, options.prefix, ordinal),
             metric.success_bytes);
     }
-    if (options.compress) {
-        metric.final_compress_seconds += bc_family_runner_final_compression_hook(
-            options,
-            ordinal,
-            bc_family_runner_position_path(options.solved_output_dir, options.prefix, ordinal),
-            bc_family_runner_success_path(options.solved_output_dir, options.prefix, ordinal));
-    }
     metric.total_seconds =
         metric.position_write_seconds +
-        metric.success_write_seconds +
-        metric.final_compress_seconds;
+        metric.success_write_seconds;
     return metric;
 }
 
@@ -848,7 +1297,8 @@ template <typename StorageT>
             ? static_cast<int>(options.target_rank)
             : options.success_target_rank;
     solve.edge_options.success_shifts = &success_shifts;
-    solve.edge_options.success_check_all_cells = true;
+    solve.edge_options.success_check_all_cells = options.success_shifts.empty();
+    solve.edge_options.pattern_masks = &options.pattern_masks;
     solve.edge_options.future_cell_modulus = options.family_modulus;
     solve.word_sums = &word_sums;
     return solve;
@@ -1279,7 +1729,6 @@ template <typename StorageT>
     }
 
     if (!RuntimeControls::deletion_threshold_enabled(deletion_state)) {
-        const double publish_t0 = bc_family_solve_runner_now_seconds();
         std::error_code ec;
         metric.position_bytes = std::filesystem::file_size(exact_position_path, ec);
         if (ec) {
@@ -1292,21 +1741,43 @@ template <typename StorageT>
         }
         metric.live_rows = bc_family_runner_success_value_rows(retired.success);
         metric.archive_live_rows = metric.live_rows;
+        if (options.compress) {
+            const bool compressed_in_memory =
+                bc_family_runner_try_final_compress_retired_in_memory<StorageT>(
+                    options,
+                    metric,
+                    retired,
+                    exact_position_path,
+                    exact_success_path);
+            retired = BCFamilySolveFrontierLayer<StorageT>();
+            if (compressed_in_memory) {
+                bc_family_runner_remove_exact_sources_after_compress(
+                    bc_family_runner_compressed_output_path(
+                        options,
+                        metric.ordinal,
+                        exact_position_path),
+                    exact_position_path,
+                    exact_success_path);
+            } else {
+                bc_family_runner_add_final_compress_stats(
+                    metric,
+                    bc_family_runner_final_compression_hook(
+                        options,
+                        metric.ordinal,
+                        exact_position_path,
+                        exact_success_path,
+                        true));
+            }
+            metric.total_seconds = metric.final_compress_seconds;
+            return metric;
+        }
         retired = BCFamilySolveFrontierLayer<StorageT>();
+        const double publish_t0 = bc_family_solve_runner_now_seconds();
         bc_family_runner_move_or_copy_file(exact_position_path, position_target);
         bc_family_runner_move_or_copy_file(exact_success_path, success_target);
         metric.archive_prune_write_seconds =
             bc_family_solve_runner_now_seconds() - publish_t0;
-        if (options.compress) {
-            metric.final_compress_seconds += bc_family_runner_final_compression_hook(
-                options,
-                metric.ordinal,
-                position_target,
-                success_target);
-        }
-        metric.total_seconds =
-            metric.archive_prune_write_seconds +
-            metric.final_compress_seconds;
+        metric.total_seconds = metric.archive_prune_write_seconds;
         return metric;
     }
 
@@ -1321,7 +1792,6 @@ template <typename StorageT>
         deletion_state);
     metric.archive_scan_seconds = bc_family_solve_runner_now_seconds() - scan_t0;
     if (!(threshold > zero_value)) {
-        const double publish_t0 = bc_family_solve_runner_now_seconds();
         std::error_code ec;
         metric.position_bytes = std::filesystem::file_size(exact_position_path, ec);
         if (ec) {
@@ -1334,27 +1804,166 @@ template <typename StorageT>
         }
         metric.live_rows = bc_family_runner_success_value_rows(retired.success);
         metric.archive_live_rows = metric.live_rows;
+        if (options.compress) {
+            const bool compressed_in_memory =
+                bc_family_runner_try_final_compress_retired_in_memory<StorageT>(
+                    options,
+                    metric,
+                    retired,
+                    exact_position_path,
+                    exact_success_path);
+            retired = BCFamilySolveFrontierLayer<StorageT>();
+            if (compressed_in_memory) {
+                bc_family_runner_remove_exact_sources_after_compress(
+                    bc_family_runner_compressed_output_path(
+                        options,
+                        metric.ordinal,
+                        exact_position_path),
+                    exact_position_path,
+                    exact_success_path);
+            } else {
+                bc_family_runner_add_final_compress_stats(
+                    metric,
+                    bc_family_runner_final_compression_hook(
+                        options,
+                        metric.ordinal,
+                        exact_position_path,
+                        exact_success_path,
+                        true));
+            }
+            metric.total_seconds =
+                metric.archive_scan_seconds +
+                metric.final_compress_seconds;
+            return metric;
+        }
         retired = BCFamilySolveFrontierLayer<StorageT>();
+        const double publish_t0 = bc_family_solve_runner_now_seconds();
         bc_family_runner_move_or_copy_file(exact_position_path, position_target);
         bc_family_runner_move_or_copy_file(exact_success_path, success_target);
         metric.archive_prune_write_seconds =
             bc_family_solve_runner_now_seconds() - publish_t0;
-        if (options.compress) {
-            metric.final_compress_seconds += bc_family_runner_final_compression_hook(
-                options,
-                metric.ordinal,
-                position_target,
-                success_target);
-        }
         metric.total_seconds =
             metric.archive_scan_seconds +
-            metric.archive_prune_write_seconds +
+            metric.archive_prune_write_seconds;
+        return metric;
+    }
+
+    if (options.compress) {
+        const std::filesystem::path compressed_output =
+            bc_family_runner_compressed_output_path(
+                options,
+                metric.ordinal,
+                position_target);
+        BCCompressedResult::StreamingBuilder builder(
+            retired.position,
+            retired.success.row_width(),
+            options.success_dtype,
+            compressed_output,
+            bc_family_runner_make_compress_options(options));
+
+        const uint32_t row_width = retired.success.row_width();
+        constexpr CellId kArchiveLoadBatchCells = 64U;
+        std::vector<CellId> batch_cids;
+        batch_cids.reserve(kArchiveLoadBatchCells);
+        std::vector<StorageT> compact_values;
+        FinalizedCellPayload payload;
+        FinalizedCellPayload empty_payload;
+        const CellId cell_count = retired.position.cell_count();
+        for (CellId chunk_begin = 0U; chunk_begin < cell_count; chunk_begin += kArchiveLoadBatchCells) {
+            const CellId chunk_end = std::min<CellId>(
+                cell_count,
+                chunk_begin + kArchiveLoadBatchCells);
+            batch_cids.clear();
+            for (CellId cid = chunk_begin; cid < chunk_end; ++cid) {
+                const BCPositionCellDescriptor &desc = retired.position.descriptor(cid);
+                if (!desc.empty() && desc.success_rows != 0U) {
+                    batch_cids.push_back(cid);
+                }
+            }
+
+            std::vector<BCLoadedCell> position_cells =
+                batch_cids.empty()
+                    ? std::vector<BCLoadedCell>{}
+                    : retired.position.load_cells(batch_cids);
+            std::vector<BCLoadedSuccessCell> loaded_success =
+                batch_cids.empty()
+                    ? std::vector<BCLoadedSuccessCell>{}
+                    : retired.success.load_cells(batch_cids, nullptr, true);
+            if (position_cells.size() != batch_cids.size() ||
+                loaded_success.size() != batch_cids.size()) {
+                throw std::logic_error("BC family runner compressed archive batch load size mismatch");
+            }
+
+            size_t loaded_index = 0U;
+            for (CellId cid = chunk_begin; cid < chunk_end; ++cid) {
+                const BCPositionCellDescriptor &desc = retired.position.descriptor(cid);
+                if (desc.empty() || desc.success_rows == 0U) {
+                    builder.write_cell(cid, empty_payload, nullptr, 0U);
+                    continue;
+                }
+                if (loaded_index >= batch_cids.size() || batch_cids[loaded_index] != cid) {
+                    throw std::logic_error("BC family runner compressed archive batch cid mismatch");
+                }
+                const BCLoadedCell &position_cell = position_cells[loaded_index];
+                const BCLoadedSuccessCell &success_cell = loaded_success[loaded_index];
+                if (position_cell.cid != cid || success_cell.cid != cid) {
+                    throw std::logic_error("BC family runner compressed archive loaded cid mismatch");
+                }
+
+                payload.buckets.clear();
+                payload.rank_payload.clear();
+                payload.success_rows = 0U;
+                bc_family_runner_compact_loaded_cell_threshold(
+                    lut,
+                    position_cell,
+                    success_cell,
+                    threshold,
+                    row_width,
+                    payload,
+                    compact_values,
+                    metric);
+
+                if (payload.success_rows == 0U) {
+                    builder.write_cell(cid, empty_payload, nullptr, 0U);
+                    ++loaded_index;
+                    continue;
+                }
+                if (payload.success_rows * static_cast<uint64_t>(row_width) !=
+                    static_cast<uint64_t>(compact_values.size())) {
+                    throw std::runtime_error(
+                        "BC family runner compressed archive compact value mismatch");
+                }
+                builder.write_cell(
+                    cid,
+                    payload,
+                    compact_values.empty() ? nullptr : compact_values.data(),
+                    static_cast<uint64_t>(compact_values.size()));
+                ++loaded_index;
+            }
+            if (loaded_index != batch_cids.size()) {
+                throw std::logic_error("BC family runner compressed archive did not consume batch");
+            }
+        }
+        BCCompressedResult::CompressStats compress_stats = builder.finish();
+        metric.position_bytes = compress_stats.original_position_bytes;
+        metric.success_bytes = compress_stats.original_success_bytes;
+        metric.live_rows = metric.archive_live_rows;
+        bc_family_runner_add_final_compress_stats(metric, compress_stats);
+        retired = BCFamilySolveFrontierLayer<StorageT>();
+        bc_family_runner_remove_exact_sources_after_compress(
+            compressed_output,
+            exact_position_path,
+            exact_success_path);
+        metric.total_seconds =
+            metric.archive_scan_seconds +
             metric.final_compress_seconds;
         return metric;
     }
 
     const std::filesystem::path position_tmp = position_target.string() + ".archive_tmp";
     const std::filesystem::path success_tmp = success_target.string() + ".archive_tmp";
+    bc_family_runner_remove_file_quiet(position_tmp);
+    bc_family_runner_remove_file_quiet(success_tmp);
 
     BCSingleChunkSolveStats write_stats;
     const double write_t0 = bc_family_solve_runner_now_seconds();
@@ -1486,11 +2095,14 @@ template <typename StorageT>
         std::filesystem::resize_file(success_target, success_bytes);
     }
     if (options.compress) {
-        metric.final_compress_seconds += bc_family_runner_final_compression_hook(
-            options,
-            metric.ordinal,
-            position_target,
-            success_target);
+        bc_family_runner_add_final_compress_stats(
+            metric,
+            bc_family_runner_final_compression_hook(
+                options,
+                metric.ordinal,
+                position_target,
+                success_target,
+                true));
     }
     metric.total_seconds =
         metric.archive_scan_seconds +
@@ -1511,6 +2123,71 @@ inline void bc_family_runner_emit_metric(
     result.layers.push_back(metric);
     if (callback) {
         callback(result.layers.back());
+    }
+}
+
+template <typename StorageT>
+inline void bc_family_runner_compress_existing_archive_exact_layers(
+    const BCFamilySolveRunOptions &options,
+    const BCLut &lut,
+    BCFamilySolveRunResult &result,
+    const BCFamilySolveLayerCallback &callback
+) {
+    if (!options.compress) {
+        return;
+    }
+    const std::map<uint32_t, BCFamilySolveArchiveExactLayer> layers =
+        bc_family_runner_discover_archive_exact_layers(options);
+    for (const auto &[ordinal, layer] : layers) {
+        const double t0 = bc_family_solve_runner_now_seconds();
+        BCFamilySolveRunLayerMetric metric;
+        metric.kind = "archive";
+        metric.solve_route = "existing_archive_compress";
+        metric.ordinal = ordinal;
+
+        const std::filesystem::path compressed_path =
+            bc_family_runner_compressed_output_path(options, ordinal, layer.position_path);
+        if (bc_family_runner_compressed_file_is_fresh(
+                compressed_path,
+                layer.position_path,
+                layer.success_path)) {
+            bc_family_runner_remove_exact_sources_after_compress(
+                compressed_path,
+                layer.position_path,
+                layer.success_path);
+            metric.total_seconds = bc_family_solve_runner_now_seconds() - t0;
+            bc_family_runner_emit_metric<StorageT>(result, callback, metric);
+            continue;
+        }
+
+        std::error_code ec;
+        metric.position_bytes = std::filesystem::file_size(layer.position_path, ec);
+        if (ec) {
+            throw std::runtime_error(
+                "BC family runner archive position file_size failed: " + ec.message());
+        }
+        ec.clear();
+        metric.success_bytes = std::filesystem::file_size(layer.success_path, ec);
+        if (ec) {
+            throw std::runtime_error(
+                "BC family runner archive success file_size failed: " + ec.message());
+        }
+
+        (void)lut;
+        const BCCompressedResult::CompressStats compress_stats =
+            bc_family_runner_final_compression_hook(
+                options,
+                ordinal,
+                layer.position_path,
+                layer.success_path,
+                true);
+        bc_family_runner_add_final_compress_stats(metric, compress_stats);
+        if (compress_stats.live_rows != 0U) {
+            metric.live_rows = compress_stats.live_rows;
+            metric.archive_live_rows = compress_stats.live_rows;
+        }
+        metric.total_seconds = bc_family_solve_runner_now_seconds() - t0;
+        bc_family_runner_emit_metric<StorageT>(result, callback, metric);
     }
 }
 
@@ -1542,15 +2219,49 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
     }
 
     BCFamilySolveRunResult run_result;
+    bc_family_runner_cleanup_archive_tmp_layers(options);
     const std::vector<uint8_t> legal_tiles =
-        bc_family_runner_free_legal_tiles(options.target_rank);
+        bc_family_runner_legal_tiles(options.target_rank);
     const BCLut lut(legal_tiles);
-    const std::vector<uint8_t> success_shifts = bc_family_runner_success_shifts();
+    const std::vector<uint8_t> success_shifts =
+        options.success_shifts.empty()
+            ? bc_family_runner_success_shifts()
+            : options.success_shifts;
     const BCQuadrantWordSumTable word_sums = bc_family_runner_word_sums(lut);
     const std::vector<LayerSum> possible_8tile_sums =
         build_possible_8tile_sums(legal_tiles, default_2048_tile_sum_values());
-    const std::map<uint32_t, BCFamilySolveRunLayerFile> layers =
-        bc_family_runner_discover_layers(options);
+    std::map<uint32_t, BCFamilySolveRunLayerFile> layers =
+        bc_family_runner_discover_layers_or_empty(options);
+    const std::filesystem::path archive_dir = bc_family_runner_archive_dir(options);
+    const bool separate_archive_dir =
+        !bc_family_runner_same_path(archive_dir, options.solved_output_dir);
+    if (!options.force_restart && !options.start_ordinal &&
+        (separate_archive_dir || layers.empty())) {
+        bc_family_runner_compress_existing_archive_exact_layers<StorageT>(
+            options,
+            lut,
+            run_result,
+            callback);
+    }
+    uint32_t archive_max_ordinal = 0U;
+    if (!options.force_restart && !options.start_ordinal &&
+        bc_family_runner_archive_layers_are_contiguous_from_zero(
+            options,
+            &archive_max_ordinal)) {
+        const bool generated_has_full_base =
+            !layers.empty() && layers.begin()->first == 0U;
+        const uint32_t generated_max_ordinal =
+            layers.empty() ? 0U : layers.rbegin()->first;
+        if (!generated_has_full_base || archive_max_ordinal >= generated_max_ordinal) {
+            run_result.min_ordinal = 0U;
+            run_result.max_ordinal = archive_max_ordinal;
+            run_result.completed = true;
+            return run_result;
+        }
+    }
+    if (layers.empty()) {
+        layers = bc_family_runner_discover_layers(options);
+    }
     const uint32_t discovered_min_ordinal = layers.begin()->first;
     const uint32_t max_ordinal = layers.rbegin()->first;
     if (discovered_min_ordinal != 0U || max_ordinal < 2U) {
@@ -1683,7 +2394,16 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
     if (checkpoint &&
         checkpoint->dtype == static_cast<uint32_t>(options.success_dtype) &&
         checkpoint->family_modulus == options.family_modulus) {
-        if (checkpoint->next_ordinal < static_cast<int64_t>(min_ordinal)) {
+        int64_t resume_next_ordinal = checkpoint->next_ordinal;
+        while (resume_next_ordinal >= static_cast<int64_t>(min_ordinal) &&
+               bc_family_runner_exact_layer_valid<StorageT>(
+                   options,
+                   static_cast<uint32_t>(resume_next_ordinal),
+                   lut,
+                   true)) {
+            --resume_next_ordinal;
+        }
+        if (resume_next_ordinal < static_cast<int64_t>(min_ordinal)) {
             bool all_requested_exact = true;
             for (uint32_t ordinal = min_ordinal; ordinal <= max_ordinal + 1U; ++ordinal) {
                 if (!bc_family_runner_exact_layer_valid<StorageT>(options, ordinal, lut, true)) {
@@ -1695,20 +2415,18 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                 run_result.completed = true;
                 return run_result;
             }
-        } else if (checkpoint->next_ordinal <= static_cast<int64_t>(max_ordinal) - 1 &&
-                   checkpoint->exact_future2_ordinal == checkpoint->next_ordinal + 1 &&
-                   checkpoint->exact_future4_ordinal == checkpoint->next_ordinal + 2 &&
+        } else if (resume_next_ordinal <= static_cast<int64_t>(max_ordinal) - 1 &&
                    bc_family_runner_exact_layer_valid<StorageT>(
                        options,
-                       static_cast<uint32_t>(checkpoint->exact_future2_ordinal),
+                       static_cast<uint32_t>(resume_next_ordinal + 1),
                        lut,
                        true) &&
                    bc_family_runner_exact_layer_valid<StorageT>(
                        options,
-                       static_cast<uint32_t>(checkpoint->exact_future4_ordinal),
+                       static_cast<uint32_t>(resume_next_ordinal + 2),
                        lut,
                        true)) {
-            first_solve_ordinal = checkpoint->next_ordinal;
+            first_solve_ordinal = resume_next_ordinal;
             open_frontier_pair_for(first_solve_ordinal);
             initialized_from_checkpoint = true;
         }
@@ -1941,14 +2659,6 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                 std::filesystem::resize_file(output_success, solve_result.success_bytes);
                 metric.post_resize_seconds = bc_family_solve_runner_now_seconds() - t0;
             }
-            if (options.compress) {
-                metric.final_compress_seconds += bc_family_runner_final_compression_hook(
-                    options,
-                    ordinal,
-                    output_position,
-                    output_success);
-            }
-
             const BCSingleChunkSolveStats &single_stats = solve_result.stats;
             metric.current_rows = single_stats.current_rows != 0U
                 ? single_stats.current_rows
@@ -2010,7 +2720,9 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                     ? static_cast<int>(options.target_rank)
                     : options.success_target_rank;
             solve_options.solve.edge_options.success_shifts = &success_shifts;
-            solve_options.solve.edge_options.success_check_all_cells = true;
+            solve_options.solve.edge_options.success_check_all_cells =
+                options.success_shifts.empty();
+            solve_options.solve.edge_options.pattern_masks = &options.pattern_masks;
             solve_options.solve.word_sums = &word_sums;
             solve_options.source_bitmap_words_per_work_item = options.source_words_per_item;
             solve_options.source_work_schedule_chunk = options.work_schedule_chunk;
@@ -2060,14 +2772,6 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                 std::filesystem::resize_file(output_success, solve_result.success_bytes);
                 metric.post_resize_seconds = bc_family_solve_runner_now_seconds() - t0;
             }
-            if (options.compress) {
-                metric.final_compress_seconds += bc_family_runner_final_compression_hook(
-                    options,
-                    ordinal,
-                    output_position,
-                    output_success);
-            }
-
             const BCSingleChunkSolveStats &single_stats = solve_result.stats.single;
             metric.current_rows = single_stats.current_rows != 0U
                 ? single_stats.current_rows
@@ -2092,9 +2796,6 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
             throw std::logic_error("BC family runner received unresolved auto solve route");
         }
         current = BCPositionStreamingReader();
-        bc_family_runner_remove_generated_layer_file(layers.at(ordinal));
-        metric.total_seconds = bc_family_solve_runner_now_seconds() - layer_t0;
-        bc_family_runner_emit_metric<StorageT>(run_result, callback, metric);
 
         const double frontier_t0 = bc_family_solve_runner_now_seconds();
         BCFamilySolveFrontierLayer<StorageT> retired_future4 = std::move(future4);
@@ -2111,6 +2812,9 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                 static_cast<uint32_t>(options.success_dtype),
                 options.family_modulus
             });
+        bc_family_runner_remove_generated_layer_file(layers.at(ordinal));
+        metric.total_seconds = bc_family_solve_runner_now_seconds() - layer_t0;
+        bc_family_runner_emit_metric<StorageT>(run_result, callback, metric);
         BCFamilySolveRunLayerMetric archive_metric =
             bc_family_runner_archive_prune_retired<StorageT>(
                 options,

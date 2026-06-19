@@ -45,7 +45,7 @@ def _require_native_build() -> None:
 
 
 def _symm_mode_value(name: str) -> int:
-    mode = _SYMM_MODE_BY_NAME.get(name, 0)
+    mode = _SYMM_MODE_BY_NAME.get(str(name).lower(), 0)
     return int(mode.value if hasattr(mode, "value") else mode)
 
 
@@ -223,12 +223,175 @@ def _count_bc_prefixed_files(folder: Path, prefix: str, suffix: str) -> int:
         return 0
 
 
+def _count_bc_contiguous_prefixed_files(folder: Path, prefix: str, suffix: str) -> int:
+    if not folder.is_dir():
+        return 0
+    ordinals: set[int] = set()
+    try:
+        for item in folder.iterdir():
+            if not item.is_file():
+                continue
+            name = item.name
+            if not name.startswith(prefix) or not name.endswith(suffix):
+                continue
+            ordinal_text = name[len(prefix):-len(suffix)]
+            if ordinal_text.isdigit():
+                ordinals.add(int(ordinal_text))
+    except OSError:
+        return 0
+    expected = 0
+    while expected in ordinals:
+        expected += 1
+    return expected
+
+
+def _has_bc_prefixed_files(folder: Path, prefix: str, suffixes: tuple[str, ...]) -> bool:
+    if not folder.is_dir():
+        return False
+    try:
+        return any(
+            item.is_file()
+            and item.name.startswith(prefix)
+            and any(item.name.endswith(suffix) for suffix in suffixes)
+            for item in folder.iterdir()
+        )
+    except OSError:
+        return False
+
+
+def _has_bc_prefixed_exact_pairs(folder: Path, prefix: str) -> bool:
+    if not folder.is_dir():
+        return False
+    positions: set[str] = set()
+    successes: set[str] = set()
+    try:
+        for item in folder.iterdir():
+            if not item.is_file() or not item.name.startswith(prefix):
+                continue
+            if item.name.endswith(".bcpos"):
+                positions.add(item.name[:-len(".bcpos")])
+            elif item.name.endswith(".bcsuc"):
+                successes.add(item.name[:-len(".bcsuc")])
+    except OSError:
+        return False
+    return not positions.isdisjoint(successes)
+
+
+def _has_bc_solve_resume_files(
+    solved_dir: Path,
+    archive_dir: Path,
+    prefix: str,
+) -> bool:
+    checkpoint = solved_dir / f"{prefix}family_checkpoint.csv"
+    if checkpoint.is_file():
+        return True
+    return (
+        _has_bc_prefixed_exact_pairs(solved_dir, prefix) or
+        _has_bc_prefixed_exact_pairs(archive_dir, prefix) or
+        _has_bc_prefixed_files(archive_dir, prefix, (".bccmp",))
+    )
+
+
 def _remove_bc_work_dir(path: Path) -> None:
     if not path.name.startswith("."):
         logger.warning("Refusing to remove non-hidden BC work directory: %s", path)
         return
     if path.exists():
         shutil.rmtree(path)
+
+
+def _build_bc_runtime_options(
+    *,
+    pattern: str,
+    meta: dict,
+    resolution: PhysicalPatternResolution | None,
+    tile_sum: int,
+    seed_boards: np.ndarray,
+    target: int,
+    docheck_step: int,
+    extra_steps: int,
+    generated_dir: Path,
+    solved_dir: Path,
+    archive_dir: Path,
+    stats_dir: Path,
+    prefix: str,
+    modulus: int,
+    expected_layers: int,
+    generation_resume_count: int,
+    skip_generation: bool,
+    spawn_rate4: float,
+) -> dict:
+    config = SingletonConfig().config
+    deletion_threshold_mode = config.get("deletion_threshold_mode", "absolute")
+    absolute_threshold, relative_threshold = deletion_threshold_components(
+        config.get("deletion_threshold", 0.0),
+        deletion_threshold_mode,
+    )
+    write_runtime_deletion_threshold_signal(
+        config.get("deletion_threshold", 0.0),
+        mode=deletion_threshold_mode,
+    )
+
+    is_free_pattern = pattern.startswith("free")
+    success_check_min_source_layer_sum = 0
+    if not is_free_pattern:
+        success_check_min_source_layer_sum = int(tile_sum) + 2 * (int(docheck_step) + 1)
+
+    if is_free_pattern:
+        bc_pattern_masks = []
+        bc_success_shifts = []
+        bc_canonical_mode = "full"
+        bc_seed_boards = seed_boards
+    elif resolution is not None:
+        bc_pattern_masks = [int(mask) for mask in resolution.pattern_masks]
+        bc_success_shifts = [int(shift) for shift in resolution.success_shifts]
+        bc_canonical_mode = str(resolution.physical_canonical_mode)
+        bc_seed_boards = resolution.initial_boards
+    else:
+        bc_pattern_masks = [int(mask) for mask in meta.get("pattern_masks", ())]
+        bc_success_shifts = [int(shift) for shift in meta.get("success_shifts", ())]
+        bc_canonical_mode = str(meta.get("canonical_mode", "identity"))
+        bc_seed_boards = seed_boards
+
+    return {
+        "pattern": pattern,
+        "target_rank": int(target),
+        "success_target_rank": int(target),
+        "extra_steps": int(extra_steps),
+        "seed_boards": [int(board) for board in np.asarray(bc_seed_boards, dtype=np.uint64)],
+        "pattern_masks": bc_pattern_masks,
+        "success_shifts": bc_success_shifts,
+        "canonical_symm_mode": int(_symm_mode_value(bc_canonical_mode)),
+        "success_check_min_source_layer_sum": int(success_check_min_source_layer_sum),
+        "generated_dir": str(generated_dir),
+        "solved_dir": str(solved_dir),
+        "archive_dir": str(archive_dir),
+        "stats_dir": str(stats_dir),
+        "generation_stats_csv": str(stats_dir / "generation.csv"),
+        "solve_stats_csv": str(stats_dir / "solve_layers.csv"),
+        "solve_summary_csv": str(stats_dir / "solve_summary.csv"),
+        "prefix": prefix,
+        "success_dtype": str(config.get("success_rate_dtype", "uint32")),
+        "family_modulus": int(modulus),
+        "threads": int(max(4, min(32, os.cpu_count() or 2))),
+        "direct_queue_depth": int(config.get("direct_io_queue_depth", 16)),
+        "spawn_rate4": float(spawn_rate4),
+        "family_route": "auto",
+        "solve_route": "auto",
+        "direct_io": bool(config.get("direct_io", True)),
+        "keep_direct_padding": False,
+        "deletion_threshold": float(absolute_threshold),
+        "relative_deletion_threshold": float(relative_threshold),
+        "deletion_threshold_signal_path": str(RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH),
+        "compress": bool(config.get("compress", False)),
+        "compress_temp_files": bool(config.get("compress_temp_files", False)),
+        "expected_layers": int(expected_layers),
+        "progress_total": int(expected_layers * 2),
+        "generation_resume_count": int(generation_resume_count),
+        "skip_generation": bool(skip_generation),
+        "resume": True,
+        "restart": False,
+    }
 
 
 def _path_exists_any(paths) -> bool:
@@ -282,6 +445,11 @@ def estimate_build_progress(pattern: str, target: int, pathname: str) -> tuple[i
             prefix,
             ".bcpos",
         )
+        generated_contiguous = _count_bc_contiguous_prefixed_files(
+            Path(layout["generated_dir"]),
+            prefix,
+            ".bcpos",
+        )
         solved = _count_bc_prefixed_files(
             Path(layout["solved_dir"]),
             prefix,
@@ -297,10 +465,16 @@ def estimate_build_progress(pattern: str, target: int, pathname: str) -> tuple[i
             prefix,
             ".bcsuc",
         )
+        solve_resume_exists = _has_bc_solve_resume_files(
+            Path(layout["solved_dir"]),
+            Path(layout["archive_dir"]),
+            prefix,
+        )
         final_count = max(archived, compressed)
         if final_count >= expected_layers:
             return int(total), int(total)
-        current = min(expected_layers, generated) + min(expected_layers, max(solved, final_count))
+        generation_progress = expected_layers if solve_resume_exists else min(expected_layers, generated_contiguous)
+        current = generation_progress + min(expected_layers, max(solved, final_count))
         return int(current), int(total)
 
     total = steps * (3 if optimal else 2)
@@ -549,15 +723,16 @@ def _run_exad_build(
 
 def _run_bc_build(
     pattern: str,
+    meta: dict,
+    tile_sum: int,
+    seed_boards: np.ndarray,
     target: int,
     steps: int,
+    docheck_step: int,
     extra_steps: int,
     pathname: str,
     spawn_rate4: float,
 ) -> None:
-    if not pattern.startswith("free"):
-        raise ValueError("BC build currently supports freeN patterns only")
-
     config = SingletonConfig().config
     modulus = _bc_family_modulus(config)
     layout = _bc_build_layout(pathname, pattern, target, modulus)
@@ -570,60 +745,73 @@ def _run_bc_build(
         folder.mkdir(parents=True, exist_ok=True)
 
     expected_layers = max(1, _bc_expected_generated_layers(steps))
-    progress_signal.progress_updated.emit(0, expected_layers * 2)
-
-    num_threads = int(max(4, min(32, os.cpu_count() or 2)))
-    direct_io = bool(config.get("direct_io", True))
-    direct_queue_depth = int(config.get("direct_io_queue_depth", 16))
 
     if formation_core is None or not hasattr(formation_core, "run_bc_family_build"):
         raise RuntimeError("formation_core does not expose BC family build runtime")
 
+    bc_resolution = None
+    if not pattern.startswith("free"):
+        bc_resolution = resolve_ex_physical_pattern(
+            pattern,
+            seed_boards,
+            target,
+            int(config.get("SmallTileSumLimit", 96)),
+            advanced=False,
+        )
+        append_ex_physical_config(pathname + "config.txt", bc_resolution)
+
     generation_count = _count_bc_prefixed_files(generated_dir, prefix, ".bcpos")
-
-    deletion_threshold_mode = config.get("deletion_threshold_mode", "absolute")
-    absolute_threshold, relative_threshold = deletion_threshold_components(
-        config.get("deletion_threshold", 0.0),
-        deletion_threshold_mode,
+    generation_resume_count = _count_bc_contiguous_prefixed_files(
+        generated_dir,
+        prefix,
+        ".bcpos",
     )
-    write_runtime_deletion_threshold_signal(
-        config.get("deletion_threshold", 0.0),
-        mode=deletion_threshold_mode,
+    archived_count = _count_bc_prefixed_files(archive_dir, prefix, ".bcsuc")
+    compressed_count = _count_bc_prefixed_files(archive_dir, prefix, ".bccmp")
+    solve_resume_exists = _has_bc_solve_resume_files(
+        solved_dir,
+        archive_dir,
+        prefix,
     )
-
-    bc_options = {
-        "pattern": pattern,
-        "target_rank": int(target),
-        "success_target_rank": int(target),
-        "extra_steps": int(extra_steps),
-        "generated_dir": str(generated_dir),
-        "solved_dir": str(solved_dir),
-        "archive_dir": str(archive_dir),
-        "stats_dir": str(stats_dir),
-        "generation_stats_csv": str(stats_dir / "generation.csv"),
-        "solve_stats_csv": str(stats_dir / "solve_layers.csv"),
-        "solve_summary_csv": str(stats_dir / "solve_summary.csv"),
-        "prefix": prefix,
-        "success_dtype": str(config.get("success_rate_dtype", "uint32")),
-        "family_modulus": int(modulus),
-        "threads": int(num_threads),
-        "direct_queue_depth": int(direct_queue_depth),
-        "spawn_rate4": float(spawn_rate4),
-        "family_route": "auto",
-        "solve_route": "auto",
-        "direct_io": bool(direct_io),
-        "keep_direct_padding": False,
-        "deletion_threshold": float(absolute_threshold),
-        "relative_deletion_threshold": float(relative_threshold),
-        "deletion_threshold_signal_path": str(RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH),
-        "compress": bool(config.get("compress", False)),
-        "compress_temp_files": bool(config.get("compress_temp_files", False)),
-        "expected_layers": int(expected_layers),
-        "progress_total": int(expected_layers * 2),
-        "skip_generation": bool(generation_count >= expected_layers),
-        "resume": True,
-        "restart": False,
-    }
+    skip_generation = (
+        generation_resume_count >= expected_layers or
+        solve_resume_exists or
+        max(archived_count, compressed_count) >= expected_layers
+    )
+    logger.info(
+        "BC resume scan: generated=%s generated_contiguous=%s archived_exact=%s compressed=%s solve_resume=%s skip_generation=%s expected=%s",
+        generation_count,
+        generation_resume_count,
+        archived_count,
+        compressed_count,
+        solve_resume_exists,
+        skip_generation,
+        expected_layers,
+    )
+    progress_signal.progress_updated.emit(
+        expected_layers if skip_generation else 0,
+        expected_layers * 2,
+    )
+    bc_options = _build_bc_runtime_options(
+        pattern=pattern,
+        meta=meta,
+        resolution=bc_resolution,
+        tile_sum=tile_sum,
+        seed_boards=seed_boards,
+        target=target,
+        docheck_step=docheck_step,
+        extra_steps=extra_steps,
+        generated_dir=generated_dir,
+        solved_dir=solved_dir,
+        archive_dir=archive_dir,
+        stats_dir=stats_dir,
+        prefix=prefix,
+        modulus=modulus,
+        expected_layers=expected_layers,
+        generation_resume_count=generation_resume_count,
+        skip_generation=skip_generation,
+        spawn_rate4=spawn_rate4,
+    )
     logger.info(
         "BC family build runtime: pattern=%s target=%s modulus=%s generated=%s exact=%s archive=%s",
         pattern,
@@ -696,14 +884,22 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
     save_config_to_txt(pathname + "config.txt")
 
     if algorithm_mode == "bc":
-        _run_bc_build(
-            pattern,
-            target,
-            steps,
-            extra_steps,
-            pathname,
-            spawn_rate4,
-        )
+        try:
+            _run_bc_build(
+                pattern,
+                meta,
+                tile_sum,
+                seed_boards,
+                target,
+                steps,
+                docheck_step,
+                extra_steps,
+                pathname,
+                spawn_rate4,
+            )
+        except Exception as exc:
+            _log_build_exception_once(f"BC build {pattern}_{2**target}", exc)
+            raise
         return True
 
     if pattern.startswith("free"):

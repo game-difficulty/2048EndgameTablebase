@@ -7,6 +7,7 @@
 
 #include <array>
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -1887,6 +1888,7 @@ inline void bc_family_push_candidate_with_axis_hit(
     uint16_t ref,
     bool axis_hit,
     bool filter_enabled,
+    const BCSolveEdgeOptions &edge_options,
     std::vector<uint64_t> &boards,
     std::vector<uint16_t> &refs,
     BCSolveEdgeStats *stats
@@ -1895,6 +1897,9 @@ inline void bc_family_push_candidate_with_axis_hit(
         if (stats != nullptr) {
             ++stats->unchanged_moves;
         }
+        return;
+    }
+    if (!bc_solve_matches_pattern(moved, edge_options)) {
         return;
     }
     if (filter_enabled) {
@@ -1916,10 +1921,14 @@ inline void bc_family_push_moved_candidate_no_stats(
     uint64_t spawned,
     uint64_t moved,
     uint16_t ref,
+    const BCSolveEdgeOptions &edge_options,
     std::vector<uint64_t> &boards,
     std::vector<uint16_t> &refs
 ) {
     if (moved == spawned) {
+        return;
+    }
+    if (!bc_solve_matches_pattern(moved, edge_options)) {
         return;
     }
     boards.push_back(moved);
@@ -2277,14 +2286,14 @@ uint32_t bc_family_collect_phase_batch_candidates_trusted_axis(
                     spawned,
                     moved.first,
                     ref,
-                    batch.canonical2_boards,
+                    options.solve.edge_options, batch.canonical2_boards,
                     batch.canonical2_refs
                 );
                 bc_family_push_moved_candidate_no_stats(
                     spawned,
                     moved.second,
                     ref,
-                    batch.canonical2_boards,
+                    options.solve.edge_options, batch.canonical2_boards,
                     batch.canonical2_refs
                 );
             }
@@ -2297,14 +2306,14 @@ uint32_t bc_family_collect_phase_batch_candidates_trusted_axis(
                     spawned,
                     moved.first,
                     ref,
-                    batch.canonical2_boards,
+                    options.solve.edge_options, batch.canonical2_boards,
                     batch.canonical2_refs
                 );
                 bc_family_push_moved_candidate_no_stats(
                     spawned,
                     moved.second,
                     ref,
-                    batch.canonical2_boards,
+                    options.solve.edge_options, batch.canonical2_boards,
                     batch.canonical2_refs
                 );
             }
@@ -2445,7 +2454,7 @@ uint32_t bc_family_collect_phase_batch_candidates(
                         ref,
                         target_hits.horizontal,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -2455,7 +2464,7 @@ uint32_t bc_family_collect_phase_batch_candidates(
                         ref,
                         target_hits.horizontal,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -2468,7 +2477,7 @@ uint32_t bc_family_collect_phase_batch_candidates(
                         ref,
                         target_hits.vertical,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -2478,7 +2487,7 @@ uint32_t bc_family_collect_phase_batch_candidates(
                         ref,
                         target_hits.vertical,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -2517,7 +2526,7 @@ uint32_t bc_family_collect_phase_batch_candidates(
                         ref,
                         target_hit,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -2527,7 +2536,7 @@ uint32_t bc_family_collect_phase_batch_candidates(
                         ref,
                         target_hit,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -2565,7 +2574,7 @@ uint32_t bc_family_collect_phase_batch_candidates(
                         ref,
                         target_hit,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -2575,7 +2584,7 @@ uint32_t bc_family_collect_phase_batch_candidates(
                         ref,
                         target_hit,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -2844,14 +2853,14 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell_trusted_axis(
                     spawned,
                     moved.first,
                     ref,
-                    batch.canonical2_boards,
+                    options.solve.edge_options, batch.canonical2_boards,
                     batch.canonical2_refs
                 );
                 bc_family_push_moved_candidate_no_stats(
                     spawned,
                     moved.second,
                     ref,
-                    batch.canonical2_boards,
+                    options.solve.edge_options, batch.canonical2_boards,
                     batch.canonical2_refs
                 );
             }
@@ -2864,14 +2873,14 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell_trusted_axis(
                     spawned,
                     moved.first,
                     ref,
-                    batch.canonical2_boards,
+                    options.solve.edge_options, batch.canonical2_boards,
                     batch.canonical2_refs
                 );
                 bc_family_push_moved_candidate_no_stats(
                     spawned,
                     moved.second,
                     ref,
-                    batch.canonical2_boards,
+                    options.solve.edge_options, batch.canonical2_boards,
                     batch.canonical2_refs
                 );
             }
@@ -2992,16 +3001,16 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
                     if (bc_family_bucket_hit_horizontal(hits, cell)) {
                         const auto moved = BoardMover::move_horizontal_pair(spawned);
                         bc_family_push_moved_candidate_no_stats(
-                            spawned, moved.first, ref, batch.canonical2_boards, batch.canonical2_refs);
+                            spawned, moved.first, ref, options.solve.edge_options, batch.canonical2_boards, batch.canonical2_refs);
                         bc_family_push_moved_candidate_no_stats(
-                            spawned, moved.second, ref, batch.canonical2_boards, batch.canonical2_refs);
+                            spawned, moved.second, ref, options.solve.edge_options, batch.canonical2_boards, batch.canonical2_refs);
                     }
                     if (bc_family_bucket_hit_vertical(hits, cell)) {
                         const auto moved = BoardMover::move_vertical_pair(spawned);
                         bc_family_push_moved_candidate_no_stats(
-                            spawned, moved.first, ref, batch.canonical2_boards, batch.canonical2_refs);
+                            spawned, moved.first, ref, options.solve.edge_options, batch.canonical2_boards, batch.canonical2_refs);
                         bc_family_push_moved_candidate_no_stats(
-                            spawned, moved.second, ref, batch.canonical2_boards, batch.canonical2_refs);
+                            spawned, moved.second, ref, options.solve.edge_options, batch.canonical2_boards, batch.canonical2_refs);
                     }
                     continue;
                 }
@@ -3011,9 +3020,9 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
                     }
                     const auto moved = BoardMover::move_horizontal_pair(spawned);
                     bc_family_push_moved_candidate_no_stats(
-                        spawned, moved.first, ref, batch.canonical2_boards, batch.canonical2_refs);
+                        spawned, moved.first, ref, options.solve.edge_options, batch.canonical2_boards, batch.canonical2_refs);
                     bc_family_push_moved_candidate_no_stats(
-                        spawned, moved.second, ref, batch.canonical2_boards, batch.canonical2_refs);
+                        spawned, moved.second, ref, options.solve.edge_options, batch.canonical2_boards, batch.canonical2_refs);
                     continue;
                 }
                 if (vertical) {
@@ -3022,9 +3031,9 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
                     }
                     const auto moved = BoardMover::move_vertical_pair(spawned);
                     bc_family_push_moved_candidate_no_stats(
-                        spawned, moved.first, ref, batch.canonical2_boards, batch.canonical2_refs);
+                        spawned, moved.first, ref, options.solve.edge_options, batch.canonical2_boards, batch.canonical2_refs);
                     bc_family_push_moved_candidate_no_stats(
-                        spawned, moved.second, ref, batch.canonical2_boards, batch.canonical2_refs);
+                        spawned, moved.second, ref, options.solve.edge_options, batch.canonical2_boards, batch.canonical2_refs);
                     continue;
                 }
             }
@@ -3058,7 +3067,7 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
                         ref,
                         target_hits.horizontal,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -3068,7 +3077,7 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
                         ref,
                         target_hits.horizontal,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -3081,7 +3090,7 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
                         ref,
                         target_hits.vertical,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -3091,7 +3100,7 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
                         ref,
                         target_hits.vertical,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -3131,7 +3140,7 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
                         ref,
                         target_hit,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -3141,7 +3150,7 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
                         ref,
                         target_hit,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -3180,7 +3189,7 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
                         ref,
                         target_hit,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -3190,7 +3199,7 @@ uint32_t bc_family_collect_phase_batch_candidates_multi_cell(
                         ref,
                         target_hit,
                         filter.enabled,
-                        batch.canonical2_boards,
+                        options.solve.edge_options, batch.canonical2_boards,
                         batch.canonical2_refs,
                         edge_stats
                     );
@@ -3360,9 +3369,7 @@ void bc_family_flush_first_direction_batch_multi_cell(
         const uint32_t local_bucket_index = workspace.local_bucket_indices[board_slot];
         const BCFamilyPartialBucketLayout &partial_bucket =
             layout.buckets[static_cast<size_t>(local_bucket_index)];
-        if (summary.empty_count != partial_bucket.empty_count) {
-            throw std::logic_error("BC family spawn4 multi-cell partial empty count mismatch");
-        }
+        assert(summary.empty_count == partial_bucket.empty_count);
         const StorageT *best =
             workspace.compact_best_values.data() +
             static_cast<size_t>(workspace.local_compact_offsets[board_slot]) *
@@ -3470,9 +3477,7 @@ void bc_family_flush_phase_partial_sum_batch_multi_cell(
             partials[static_cast<size_t>(cell_index)];
         const BCFamilyPartialBucketLayout &partial_bucket =
             layout.buckets[static_cast<size_t>(workspace.local_bucket_indices[board_slot])];
-        if (batch.empty_counts[board_slot] != partial_bucket.empty_count) {
-            throw std::logic_error("BC family multi-cell partial grouped sum empty count mismatch");
-        }
+        assert(batch.empty_counts[board_slot] == partial_bucket.empty_count);
         const StorageT *previous =
             partial.compact_success_row_data(
                 layout,
@@ -3780,9 +3785,7 @@ void bc_family_flush_phase_partial_sum_batch(
         }
         const BCFamilyPartialBucketLayout &partial_bucket =
             layout.buckets[static_cast<size_t>(workspace.local_bucket_indices[board_slot])];
-        if (batch.empty_counts[board_slot] != partial_bucket.empty_count) {
-            throw std::logic_error("BC family partial grouped sum empty count mismatch");
-        }
+        assert(batch.empty_counts[board_slot] == partial_bucket.empty_count);
         const StorageT *previous =
             partial.compact_success_row_data(
                 layout,
@@ -5112,7 +5115,7 @@ void bc_family_spawn4_cell(
             if (summary.terminal_success || summary.empty_count == 0U) {
                 scratch.write_zero_row(local_success_row, options.solve.zero_value);
             } else {
-                scratch.write_spawn4_sum_contribution(
+                scratch.write_spawn4_sum_contribution_unchecked_row_width1(
                     local_success_row,
                     sum,
                     summary.empty_count,
@@ -5149,7 +5152,7 @@ void bc_family_spawn4_cell(
             if (summary.terminal_success || summary.empty_count == 0U) {
                 scratch.write_zero_row(local_success_row, options.solve.zero_value);
             } else {
-                scratch.write_spawn4_sum_contribution(
+                scratch.write_spawn4_sum_contribution_unchecked_row_width1(
                     local_success_row,
                     sum,
                     summary.empty_count,
@@ -5181,9 +5184,7 @@ void bc_family_spawn4_cell(
                 if (summary.terminal_success || summary.empty_count == 0U) {
                     return;
                 }
-                if (summary.empty_count != partial_bucket.empty_count) {
-                    throw std::logic_error("BC family spawn4 compact partial empty count mismatch");
-                }
+                assert(summary.empty_count == partial_bucket.empty_count);
                 partial.write_compact_success_row(layout, partial_bucket, local_success_row, best);
                 return;
             }
@@ -5191,9 +5192,7 @@ void bc_family_spawn4_cell(
                 if (summary.terminal_success || summary.empty_count == 0U) {
                     scratch.write_zero_row(local_success_row, options.solve.zero_value);
                 } else {
-                    if (summary.empty_count != partial_bucket.empty_count) {
-                        throw std::logic_error("BC family spawn4 compact merge empty count mismatch");
-                    }
+                    assert(summary.empty_count == partial_bucket.empty_count);
                     if (options.solve.row_width == 1U) {
                         const StorageT *previous =
                             partial.compact_success_row_data(
@@ -5207,7 +5206,7 @@ void bc_family_spawn4_cell(
                                 previous,
                                 summary.empty_count
                             );
-                        scratch.write_spawn4_sum_contribution(
+                        scratch.write_spawn4_sum_contribution_unchecked_row_width1(
                             local_success_row,
                             sum,
                             summary.empty_count,
@@ -5251,7 +5250,7 @@ void bc_family_spawn4_cell(
                             best,
                             summary.empty_count
                         );
-                    scratch.write_spawn4_sum_contribution(
+                    scratch.write_spawn4_sum_contribution_unchecked_row_width1(
                         local_success_row,
                         sum,
                         summary.empty_count,
@@ -5392,7 +5391,7 @@ void bc_family_spawn2_cell(
             } else if (summary.empty_count == 0U) {
                 final_values.write_zero_row(local_success_row, options.solve.zero_value);
             } else {
-                final_values.finalize_spawn2_sum_row(
+                final_values.finalize_spawn2_sum_row_unchecked_row_width1(
                     local_success_row,
                     sum,
                     summary.empty_count,
@@ -5427,7 +5426,7 @@ void bc_family_spawn2_cell(
             } else if (summary.empty_count == 0U) {
                 final_values.write_zero_row(local_success_row, options.solve.zero_value);
             } else {
-                final_values.finalize_spawn2_sum_row(
+                final_values.finalize_spawn2_sum_row_unchecked_row_width1(
                     local_success_row,
                     sum,
                     summary.empty_count,
@@ -5459,18 +5458,14 @@ void bc_family_spawn2_cell(
                 if (summary.terminal_success || summary.empty_count == 0U) {
                     return;
                 }
-                if (summary.empty_count != partial_bucket.empty_count) {
-                    throw std::logic_error("BC family spawn2 compact partial empty count mismatch");
-                }
+                assert(summary.empty_count == partial_bucket.empty_count);
                 partial.write_compact_success_row(layout, partial_bucket, local_success_row, best);
                 return;
             }
             const StorageT *best_for_final = best;
             if (second) {
                 if (!summary.terminal_success && summary.empty_count != 0U) {
-                    if (summary.empty_count != partial_bucket.empty_count) {
-                        throw std::logic_error("BC family spawn2 compact merge empty count mismatch");
-                    }
+                    assert(summary.empty_count == partial_bucket.empty_count);
                     if (options.solve.row_width == 1U) {
                         const StorageT *previous =
                             partial.compact_success_row_data(
@@ -5484,7 +5479,7 @@ void bc_family_spawn2_cell(
                                 previous,
                                 summary.empty_count
                             );
-                        final_values.finalize_spawn2_sum_row(
+                        final_values.finalize_spawn2_sum_row_unchecked_row_width1(
                             local_success_row,
                             sum,
                             summary.empty_count,
@@ -5523,7 +5518,7 @@ void bc_family_spawn2_cell(
                             best_for_final,
                             summary.empty_count
                         );
-                    final_values.finalize_spawn2_sum_row(
+                    final_values.finalize_spawn2_sum_row_unchecked_row_width1(
                         local_success_row,
                         sum,
                         summary.empty_count,
@@ -5903,7 +5898,7 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
                 if (summary.terminal_success || summary.empty_count == 0U) {
                     cell_scratch.write_zero_row(local_success_row, options.solve.zero_value);
                 } else {
-                    cell_scratch.write_spawn4_sum_contribution(
+                    cell_scratch.write_spawn4_sum_contribution_unchecked_row_width1(
                         local_success_row,
                         sum,
                         summary.empty_count,
@@ -6372,7 +6367,7 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
                 } else if (summary.empty_count == 0U) {
                     final_values.write_zero_row(local_success_row, options.solve.zero_value);
                 } else {
-                    final_values.finalize_spawn2_sum_row(
+                    final_values.finalize_spawn2_sum_row_unchecked_row_width1(
                         local_success_row,
                         sum,
                         summary.empty_count,

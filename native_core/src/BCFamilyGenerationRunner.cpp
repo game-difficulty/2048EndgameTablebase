@@ -307,6 +307,11 @@ struct Args {
     uint32_t target_rank = 8U;
     uint32_t extra_steps = 36U;
     uint32_t target_extra_override = 0U;
+    std::vector<uint64_t> seed_boards;
+    std::vector<uint64_t> pattern_masks;
+    std::vector<uint8_t> success_shifts;
+    int canonical_symm_mode = static_cast<int>(SymmMode::Full);
+    uint32_t success_check_min_source_layer_sum_override = 0U;
     int num_threads = 0;
     uint32_t batch_size = 8192U;
     uint32_t pending_buffer = 0U;
@@ -745,6 +750,56 @@ struct FamilyRoutePlannerState {
          std::to_string(layer_ordinal_for_sum(seed_sum, layer_sum)) + ".bcpos");
 }
 
+[[nodiscard]] std::map<uint32_t, std::filesystem::path> discover_existing_layer_paths(
+    const Args &args
+) {
+    std::map<uint32_t, std::filesystem::path> layers;
+    if (!std::filesystem::is_directory(args.output_dir)) {
+        return layers;
+    }
+    const std::string prefix = layer_file_prefix(args) + "_";
+    const std::string suffix = ".bcpos";
+    for (const std::filesystem::directory_entry &entry :
+         std::filesystem::directory_iterator(args.output_dir)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const std::string name = entry.path().filename().string();
+        if (name.size() <= prefix.size() + suffix.size() ||
+            name.compare(0U, prefix.size(), prefix) != 0 ||
+            name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0) {
+            continue;
+        }
+        const std::string ordinal_text =
+            name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
+        if (ordinal_text.empty() ||
+            !std::all_of(ordinal_text.begin(), ordinal_text.end(), [](char ch) {
+                return ch >= '0' && ch <= '9';
+            })) {
+            continue;
+        }
+        const unsigned long parsed = std::stoul(ordinal_text);
+        if (parsed > std::numeric_limits<uint32_t>::max()) {
+            continue;
+        }
+        layers.emplace(static_cast<uint32_t>(parsed), entry.path());
+    }
+    return layers;
+}
+
+[[nodiscard]] uint32_t contiguous_existing_layer_count(
+    const std::map<uint32_t, std::filesystem::path> &layers
+) {
+    uint32_t expected = 0U;
+    while (layers.find(expected) != layers.end()) {
+        if (expected == std::numeric_limits<uint32_t>::max()) {
+            break;
+        }
+        ++expected;
+    }
+    return expected;
+}
+
 [[nodiscard]] uint32_t ex_forward_steps(const Args &args) {
     if (args.target_extra_override != 0U) {
         return args.target_extra_override / 2U;
@@ -828,9 +883,9 @@ struct FamilyRoutePlannerState {
     return BC::default_2048_tile_sum_values();
 }
 
-[[nodiscard]] std::vector<uint8_t> make_free_legal_tiles(uint32_t target_rank) {
+[[nodiscard]] std::vector<uint8_t> make_bc_legal_tiles(uint32_t target_rank) {
     if (target_rank >= 15U) {
-        throw std::invalid_argument("free generation target rank must be < 15");
+        throw std::invalid_argument("BC generation target rank must be < 15");
     }
     std::vector<uint8_t> legal_tiles;
     legal_tiles.reserve(target_rank + 2U);
@@ -841,8 +896,8 @@ struct FamilyRoutePlannerState {
     return legal_tiles;
 }
 
-[[nodiscard]] BCLut make_free_lut(uint32_t target_rank) {
-    return BCLut(make_free_legal_tiles(target_rank));
+[[nodiscard]] BCLut make_bc_lut(uint32_t target_rank) {
+    return BCLut(make_bc_legal_tiles(target_rank));
 }
 
 [[nodiscard]] BC::LayerSum board_semantic_sum(
@@ -1212,7 +1267,7 @@ public:
         pending.future = std::async(
             std::launch::async,
             [args_copy = std::move(args_copy), path, reader = pending.reader] {
-                write_position_bytes_to_file_buffered_padded(args_copy, path, reader->bytes());
+                write_position_bytes_to_file(args_copy, path, reader->bytes());
             }
         );
         pending_.push_back(std::move(pending));
@@ -1684,7 +1739,8 @@ struct MaterializedLayerView {
     const BCFamilyTable &axis,
     const std::vector<uint64_t> &initial_boards,
     const std::vector<BC::LayerSum> &possible_8tile_sums,
-    uint32_t family_modulus
+    uint32_t family_modulus,
+    int canonical_symm_mode
 ) {
     const BCCellMatrix matrix(axis);
     const BC::BCFamilyPartitionLayerMap partition =
@@ -1695,10 +1751,11 @@ struct MaterializedLayerView {
         );
     std::vector<std::unique_ptr<BCCellBuilder>> builders(matrix.cell_count());
     for (uint64_t board : initial_boards) {
-        const uint64_t canonical = Calculator::canonical_full(board);
+        uint64_t canonical = board;
+        CanonicalBatch::canonicalize_inplace(&canonical, 1U, canonical_symm_mode);
         const BC::BCQuadrantWords q = BC::unpack_board_to_quadrants(canonical);
         BC::BCEncodedKeyRank key_rank = BC::encode_key_and_rank(lut, q.nw, q.ne, q.sw, q.se);
-        check(key_rank.valid, "free initial board should encode key/rank");
+        check(key_rank.valid, "BC initial board should encode key/rank");
         const uint64_t nw_sum = lut.word_desc(q.nw).sum;
         const uint64_t ne_sum = lut.word_desc(q.ne).sum;
         const uint64_t sw_sum = lut.word_desc(q.sw).sum;
@@ -1746,12 +1803,27 @@ struct MaterializedLayerView {
             axis,
             initial_boards,
             possible_8tile_sums,
-            args.family_modulus
+            args.family_modulus,
+            args.canonical_symm_mode
     );
+    BC::BCPositionLayerReader initial_reader(bytes, lut);
+    uint64_t success_rows = 0U;
+    for (CellId cid = 0U; cid < initial_reader.cell_count(); ++cid) {
+        success_rows += initial_reader.descriptor(cid).success_rows;
+    }
+    const uint64_t bucket_count =
+        initial_reader.header().bucket_meta_bytes / BC::kBCPositionBucketEntryBytes;
+    const uint64_t rank_payload_bytes = initial_reader.header().rank_payload_bytes;
     const std::filesystem::path path = layer_path(args, seed_sum, axis.layer_sum());
     write_position_bytes_to_file(args, path, bytes);
     if (!args.output_inspect) {
-        return layer_file_without_inspect(axis.layer_sum(), path, bytes.size(), initial_boards.size());
+        return layer_file_without_inspect(
+            axis.layer_sum(),
+            path,
+            bytes.size(),
+            success_rows,
+            bucket_count,
+            rank_payload_bytes);
     }
     return inspect_layer_file(args, axis.layer_sum(), path, bytes.size(), lut);
 }
@@ -1776,6 +1848,7 @@ void cleanup_temp_file(const std::filesystem::path &path) {
     BC::BCFamilyGenerationOptions options;
     options.num_threads = args.num_threads;
     options.canonical_batch_size = args.batch_size;
+    options.canonical_symm_mode = args.canonical_symm_mode;
     if (args.pending_buffer != 0U) {
         options.pending_insert_buffer_size = args.pending_buffer;
     }
@@ -1789,10 +1862,13 @@ void cleanup_temp_file(const std::filesystem::path &path) {
     }
     options.family_partition_policy = BC::BCFamilyPartitionPolicy::modulo(target_modulus);
     options.family_possible_8tile_sums = &possible_8tile_sums;
+    options.pattern_masks = &args.pattern_masks;
     options.success_target_rank = static_cast<int>(args.target_rank);
     options.success_shifts = &success_shifts;
     options.success_check_min_source_layer_sum = success_check_min_source_layer_sum;
-    options.success_check_all_cells = true;
+    const bool is_free_pattern = args.pattern.rfind("free", 0U) == 0U;
+    options.success_check_all_cells =
+        is_free_pattern || args.success_shifts.empty();
     options.keep_only_success_generated_boards = terminal;
     options.finalize_options.keyvalue_sort = nullptr;
     options.finalize_options.simd_sort_min_bucket_count = 10000U;
@@ -1809,11 +1885,13 @@ void cleanup_temp_file(const std::filesystem::path &path) {
     BC::BCResidentGenerationOptions options;
     options.num_threads = args.num_threads;
     options.canonical_batch_size = args.batch_size;
+    options.canonical_symm_mode = args.canonical_symm_mode;
     options.dynamic_reserve_factor = 2.0;
     options.collect_timing = false;
     options.pending_insert_buffer_size =
         args.pending_buffer != 0U ? args.pending_buffer : route_default_pending_buffer;
     options.tile_sum_values = &tile_sums;
+    options.pattern_masks = &args.pattern_masks;
     options.success_target_rank = static_cast<int>(args.target_rank);
     options.success_shifts = &success_shifts;
     options.success_check_min_source_layer_sum = success_check_min_source_layer_sum;
@@ -3162,17 +3240,22 @@ void write_memory_checkpoint_rows(
     }
 }
 
-int run_free_chain(const Args &args, std::ostream &out) {
+[[nodiscard]] bool bc_pattern_is_free(const std::string &pattern) {
+    return pattern.rfind("free", 0U) == 0U;
+}
+
+int run_bc_chain(const Args &args, std::ostream &out) {
     std::filesystem::create_directories(args.output_dir);
     const std::array<uint32_t, 16U> tile_sums = free_semantic_tile_sums();
-    const std::vector<uint8_t> legal_tiles = make_free_legal_tiles(args.target_rank);
+    const std::vector<uint8_t> legal_tiles = make_bc_legal_tiles(args.target_rank);
     const std::vector<BC::LayerSum> possible_8tile_sums =
         BC::build_possible_8tile_sums(legal_tiles, tile_sums);
-    const BCLut lut = make_free_lut(args.target_rank);
-    const uint64_t seed_board = load_pattern_seed_board(args.pattern);
+    const BCLut lut = make_bc_lut(args.target_rank);
+    const uint64_t seed_board =
+        !args.seed_boards.empty() ? args.seed_boards.front() : load_pattern_seed_board(args.pattern);
     const BC::LayerSum seed_sum64 = board_semantic_sum(seed_board, tile_sums);
     if (seed_sum64 > std::numeric_limits<uint32_t>::max()) {
-        throw std::overflow_error("free generation seed sum exceeds uint32");
+        throw std::overflow_error("BC generation seed sum exceeds uint32");
     }
     const uint32_t seed_sum = static_cast<uint32_t>(seed_sum64);
     const uint32_t forward_steps = ex_forward_steps(args);
@@ -3180,41 +3263,122 @@ int run_free_chain(const Args &args, std::ostream &out) {
     const bool ex_terminal_mode = args.target_extra_override == 0U && final_sum >= seed_sum + 4U;
     const uint32_t final_primary_sum = ex_terminal_mode ? final_sum - 2U : final_sum;
     const uint32_t docheck_step = ex_docheck_step_for_target_rank(args.target_rank);
-    const uint32_t success_check_min_source_layer_sum = seed_sum + 2U * (docheck_step + 1U);
-    const std::vector<uint8_t> success_shifts = all_board_success_shifts();
+    const uint32_t default_success_check_min_source_layer_sum =
+        seed_sum + 2U * (docheck_step + 1U);
+    const uint32_t success_check_min_source_layer_sum =
+        args.success_check_min_source_layer_sum_override != 0U
+            ? args.success_check_min_source_layer_sum_override
+            : default_success_check_min_source_layer_sum;
+    const bool is_free_pattern = bc_pattern_is_free(args.pattern);
+    const std::vector<uint8_t> success_shifts =
+        (is_free_pattern || args.success_shifts.empty())
+            ? all_board_success_shifts()
+            : args.success_shifts;
     const ExExpectedStats ex_expected = load_ex_expected_stats(args.ex_stats_csv, seed_sum);
 
-    std::vector<uint64_t> initial_boards =
-        generate_free_initial_boards(free_pattern_index(args.pattern));
+    std::vector<uint64_t> initial_boards;
+    if (is_free_pattern) {
+        initial_boards = generate_free_initial_boards(free_pattern_index(args.pattern));
+    } else {
+        if (args.seed_boards.empty()) {
+            throw std::invalid_argument("BC non-free generation requires seed_boards");
+        }
+        initial_boards = args.seed_boards;
+        initial_boards.erase(
+            std::remove_if(
+                initial_boards.begin(),
+                initial_boards.end(),
+                [&](uint64_t board) {
+                    return board_semantic_sum(board, tile_sums) != seed_sum64;
+                }),
+            initial_boards.end());
+        sort_unique_boards(initial_boards);
+        if (initial_boards.empty()) {
+            throw std::invalid_argument("BC non-free generation has no seed boards at seed sum");
+        }
+    }
     if (args.pattern == "free9") {
         check(initial_boards.size() == 21283U, "free9 initial board count must match EX");
     }
 
+    const uint32_t final_primary_ordinal =
+        layer_ordinal_for_sum(seed_sum, final_primary_sum);
+    const std::map<uint32_t, std::filesystem::path> existing_layer_paths =
+        discover_existing_layer_paths(args);
+    uint32_t existing_prefix_count =
+        contiguous_existing_layer_count(existing_layer_paths);
+    if (existing_prefix_count > final_primary_ordinal + 1U) {
+        existing_prefix_count = final_primary_ordinal + 1U;
+    }
+
     std::map<uint32_t, LayerFile> layers;
-    LayerFile seed_layer =
-        write_initial_layer_file(
-            args,
-            seed_sum,
-            lut,
-            make_axis(seed_sum, possible_8tile_sums, args.family_modulus),
-            initial_boards,
-            possible_8tile_sums
-        );
-    if (seed_layer.rows != initial_boards.size()) {
-        throw std::runtime_error("free initial layer row count mismatch");
-    }
-    if (ex_expected.enabled) {
-        const auto init_it = ex_expected.by_layer_sum.find(seed_sum);
-        if (init_it == ex_expected.by_layer_sum.end()) {
-            throw std::runtime_error("EX stats CSV is missing init row");
+    uint32_t first_generation_ordinal = 1U;
+    std::optional<LayerFile> seed_layer_for_validation;
+    auto load_existing_layer = [&](uint32_t ordinal) {
+        const auto existing_it = existing_layer_paths.find(ordinal);
+        if (existing_it == existing_layer_paths.end()) {
+            throw std::runtime_error(
+                "BC generation resume lost existing layer ordinal " +
+                std::to_string(ordinal));
         }
-        if (seed_layer.rows != init_it->second.input_live ||
-            seed_layer.rows != init_it->second.primary_live) {
-            throw std::runtime_error("BC seed layer rows do not match EX stats");
+        LayerFile layer = inspect_existing_layer_file(existing_it->second, lut);
+        const uint32_t expected_layer_sum = seed_sum + ordinal * 2U;
+        if (layer.layer_sum != expected_layer_sum) {
+            throw std::runtime_error(
+                "BC generation resume existing layer sum mismatch at ordinal " +
+                std::to_string(ordinal));
+        }
+        return layer;
+    };
+
+    if (existing_prefix_count == 0U) {
+        LayerFile seed_layer =
+            write_initial_layer_file(
+                args,
+                seed_sum,
+                lut,
+                make_axis(seed_sum, possible_8tile_sums, args.family_modulus),
+                initial_boards,
+                possible_8tile_sums
+            );
+        seed_layer_for_validation = seed_layer;
+        emit_seed_layer_metric(layer_ordinal_for_sum(seed_sum, seed_sum), seed_sum, seed_layer);
+        layers.emplace(seed_sum, std::move(seed_layer));
+        first_generation_ordinal = 1U;
+    } else if (existing_prefix_count > final_primary_ordinal) {
+        print_header(out);
+        return 0;
+    } else {
+        const uint32_t highest_existing_ordinal = existing_prefix_count - 1U;
+        const uint32_t first_source_ordinal =
+            highest_existing_ordinal == 0U ? 0U : highest_existing_ordinal - 1U;
+        for (uint32_t ordinal = first_source_ordinal;
+             ordinal <= highest_existing_ordinal;
+             ++ordinal) {
+            LayerFile layer = load_existing_layer(ordinal);
+            if (ordinal == 0U) {
+                seed_layer_for_validation = layer;
+            }
+            layers.emplace(layer.layer_sum, std::move(layer));
+        }
+        first_generation_ordinal = highest_existing_ordinal + 1U;
+    }
+
+    if (seed_layer_for_validation) {
+        if (is_free_pattern && seed_layer_for_validation->rows != initial_boards.size()) {
+            throw std::runtime_error("free initial layer row count mismatch");
+        }
+        if (ex_expected.enabled) {
+            const auto init_it = ex_expected.by_layer_sum.find(seed_sum);
+            if (init_it == ex_expected.by_layer_sum.end()) {
+                throw std::runtime_error("EX stats CSV is missing init row");
+            }
+            if (seed_layer_for_validation->rows != init_it->second.input_live ||
+                seed_layer_for_validation->rows != init_it->second.primary_live) {
+                throw std::runtime_error("BC seed layer rows do not match EX stats");
+            }
         }
     }
-    emit_seed_layer_metric(layer_ordinal_for_sum(seed_sum, seed_sum), seed_sum, seed_layer);
-    layers.emplace(seed_sum, std::move(seed_layer));
 
     const uint64_t process_baseline_working_set = process_current_working_set_bytes();
     (void)process_baseline_working_set;
@@ -3237,7 +3401,9 @@ int run_free_chain(const Args &args, std::ostream &out) {
     BCAsyncPositionWriteQueue async_position_writes;
     print_header(out);
 
-    for (uint32_t layer_sum = seed_sum + 2U; layer_sum <= final_primary_sum; layer_sum += 2U) {
+    for (uint32_t layer_sum = seed_sum + first_generation_ordinal * 2U;
+         layer_sum <= final_primary_sum;
+         layer_sum += 2U) {
         g_current_generation_layer_sum.store(layer_sum, std::memory_order_relaxed);
         const uint32_t current_step = layer_ordinal_for_sum(seed_sum, layer_sum) - 1U;
         const bool terminal = ex_terminal_mode && layer_sum == final_primary_sum;
@@ -3596,9 +3762,6 @@ BCFamilyGenerationRunResult bc_family_generation_full_run(
     const BCFamilyGenerationRunOptions &options,
     const BCFamilyGenerationLayerCallback &callback
 ) {
-    if (options.pattern.rfind("free", 0U) != 0U) {
-        throw std::invalid_argument("BC family generation supports freeN patterns only");
-    }
     if (options.target_rank >= 31U) {
         throw std::invalid_argument("BC family generation target_rank is too large");
     }
@@ -3614,6 +3777,12 @@ BCFamilyGenerationRunResult bc_family_generation_full_run(
     args.pattern = options.pattern;
     args.target_rank = options.target_rank;
     args.extra_steps = options.extra_steps;
+    args.seed_boards = options.seed_boards;
+    args.pattern_masks = options.pattern_masks;
+    args.success_shifts = options.success_shifts;
+    args.canonical_symm_mode = options.canonical_symm_mode;
+    args.success_check_min_source_layer_sum_override =
+        options.success_check_min_source_layer_sum;
     args.num_threads = options.num_threads;
     args.batch_size = options.batch_size;
     args.pending_buffer = options.pending_buffer;
@@ -3658,10 +3827,10 @@ BCFamilyGenerationRunResult bc_family_generation_full_run(
         if (!out) {
             throw std::runtime_error("failed to open BC family generation stats CSV");
         }
-        run_free_chain(args, out);
+        run_bc_chain(args, out);
     } else {
         std::ostringstream sink;
-        run_free_chain(args, sink);
+        run_bc_chain(args, sink);
     }
     result.completed = true;
     return result;

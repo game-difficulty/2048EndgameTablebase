@@ -559,6 +559,21 @@ void append_source_neighbor_reserve_samples(
     );
 }
 
+[[nodiscard]] bool family_matches_pattern_masks(
+    uint64_t board,
+    const std::vector<uint64_t> *pattern_masks
+) {
+    if (pattern_masks == nullptr || pattern_masks->empty()) {
+        return true;
+    }
+    for (uint64_t mask : *pattern_masks) {
+        if ((board & mask) == mask) {
+            return true;
+        }
+    }
+    return false;
+}
+
 struct FamilyEncodedCandidate {
     uint64_t key = 0U;
     BucketRank rank = 0U;
@@ -1278,6 +1293,9 @@ void push_family_moved_board(
     const BCFamilyGenerationOptions &options
 ) {
     if (moved == spawned) {
+        return;
+    }
+    if (!family_matches_pattern_masks(moved, options.pattern_masks)) {
         return;
     }
     if (options.keep_only_success_generated_boards &&

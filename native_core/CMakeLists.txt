@@ -156,6 +156,7 @@ set(FORMATION_CORE_SOURCES
     src/BCResidentGenerationStreaming.cpp
     src/BCSingleChunkGeneration.cpp
     src/BCFamilyGenerationRunner.cpp
+    src/BCFamilyStatsCsv.cpp
     src/BookGeneratorUtils.cpp
     src/BookGenerator.cpp
     src/EXPrefix40Layer.cpp
@@ -179,14 +180,20 @@ set(FORMATION_CORE_SOURCES
     src/bindings_formation.cpp
 )
 
-nanobind_add_module(formation_core ${FORMATION_CORE_SOURCES})
+nanobind_add_module(formation_core NOMINSIZE ${FORMATION_CORE_SOURCES})
 target_link_libraries(formation_core PRIVATE common_config OpenMP::OpenMP_CXX)
+set_target_properties(formation_core PROPERTIES
+    INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF
+    INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO OFF
+    INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL OFF
+)
 if(WIN32)
     target_link_libraries(formation_core PRIVATE psapi)
 endif()
 
 add_executable(bc_family_solve_full
     src/BCCompressedResult.cpp
+    src/BCFamilyStatsCsv.cpp
     src/BCPositionFile.cpp
     src/CanonicalBatch.cpp
     src/FileIOUtils.cpp
@@ -426,22 +433,38 @@ if(NATIVE_BUILD_TESTS)
 
     add_executable(bc_resident_generation_bench
         src/BCPositionFile.cpp
+        src/BCFamilyGeneration.cpp
+        src/BCFamilyGenerationRunner.cpp
         src/BCResidentGeneration.cpp
+        src/BCResidentGenerationStreaming.cpp
+        src/BCSingleChunkGeneration.cpp
         src/CanonicalBatch.cpp
         tests_src/bench_bc_resident_generation.cpp
     )
     target_link_libraries(bc_resident_generation_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+    if(WIN32)
+        target_link_libraries(bc_resident_generation_bench PRIVATE psapi)
+    endif()
 
     add_executable(bc_generation_compute_bench
         src/BCPositionFile.cpp
+        src/BCFamilyGeneration.cpp
+        src/BCFamilyGenerationRunner.cpp
         src/BCResidentGeneration.cpp
+        src/BCResidentGenerationStreaming.cpp
+        src/BCSingleChunkGeneration.cpp
         src/CanonicalBatch.cpp
         tests_src/bench_bc_generation_compute.cpp
     )
     target_link_libraries(bc_generation_compute_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+    if(WIN32)
+        target_link_libraries(bc_generation_compute_bench PRIVATE psapi)
+    endif()
 
     add_executable(bc_single_chunk_generation_bench
         src/BCPositionFile.cpp
+        src/BCFamilyGeneration.cpp
+        src/BCFamilyGenerationRunner.cpp
         src/BCResidentGeneration.cpp
         src/BCResidentGenerationStreaming.cpp
         src/BCSingleChunkGeneration.cpp
@@ -449,10 +472,16 @@ if(NATIVE_BUILD_TESTS)
         tests_src/bench_bc_single_chunk_generation.cpp
     )
     target_link_libraries(bc_single_chunk_generation_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+    if(WIN32)
+        target_link_libraries(bc_single_chunk_generation_bench PRIVATE psapi)
+    endif()
 
     add_executable(bc_resident_solve_full_bench
+        src/BCCompressedResult.cpp
         src/BCPositionFile.cpp
         src/CanonicalBatch.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
         tests_src/bench_bc_resident_solve_full.cpp
     )
     target_link_libraries(bc_resident_solve_full_bench PRIVATE common_config OpenMP::OpenMP_CXX)
@@ -472,8 +501,11 @@ if(NATIVE_BUILD_TESTS)
     target_link_libraries(bc_single_chunk_solve_layer_bench PRIVATE common_config OpenMP::OpenMP_CXX)
 
     add_executable(bc_single_chunk_solve_full_bench
+        src/BCCompressedResult.cpp
         src/BCPositionFile.cpp
         src/CanonicalBatch.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
         tests_src/bench_bc_single_chunk_solve_full.cpp
     )
     target_link_libraries(bc_single_chunk_solve_full_bench PRIVATE common_config OpenMP::OpenMP_CXX)
@@ -601,8 +633,10 @@ foreach(target ${ALL_PYD_MODULES})
     )
 
     if(ipo_supported)
-        set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
-        set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
+        if(NOT "${target}" STREQUAL "formation_core")
+            set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+            set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
+        endif()
     endif()
 endforeach()
 
