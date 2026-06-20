@@ -57,6 +57,7 @@ def _build_native_run_options(
     is_free: bool,
     is_variant: bool,
     spawn_rate4: float,
+    cold_pathnames: list[str] | None = None,
 ):
     _require_native_build()
     config = SingletonConfig().config
@@ -65,6 +66,8 @@ def _build_native_run_options(
     options.steps = int(steps)
     options.docheck_step = int(docheck_step)
     options.pathname = str(pathname)
+    if cold_pathnames and hasattr(options, "cold_pathnames"):
+        options.cold_pathnames = [str(path) for path in cold_pathnames if str(path)]
     options.is_free = bool(is_free)
     options.is_variant = bool(is_variant)
     options.spawn_rate4 = float(spawn_rate4)
@@ -193,7 +196,36 @@ def _bc_family_modulus(config: dict) -> int:
     return max(1, min(65535, int(config.get("bc_family_modulus", 29))))
 
 
-def _bc_build_layout(pathname: str, pattern: str, target: int, modulus: int) -> dict[str, Path | str]:
+def _primary_cold_pathname(pathname: str, cold_pathnames: list[str] | None = None) -> str:
+    if cold_pathnames:
+        for path in cold_pathnames:
+            if str(path):
+                return str(path)
+    return str(pathname)
+
+
+def _dedupe_pathnames(pathname: str, cold_pathnames: list[str] | None = None) -> list[str]:
+    pathnames: list[str] = []
+
+    def add(path: str | Path | None) -> None:
+        if path is None:
+            return
+        text = str(path)
+        if text and text not in pathnames:
+            pathnames.append(text)
+
+    add(pathname)
+    for path in cold_pathnames or []:
+        add(path)
+    return pathnames
+
+
+def _bc_layout_for_pathname(
+    pathname: str,
+    pattern: str,
+    target: int,
+    modulus: int,
+) -> dict[str, Path | str]:
     prefix_path = Path(str(pathname).rstrip("\\/"))
     output_dir = prefix_path.parent
     prefix = prefix_path.name or f"{pattern}_{2**target}_"
@@ -210,6 +242,59 @@ def _bc_build_layout(pathname: str, pattern: str, target: int, modulus: int) -> 
     }
 
 
+def _bc_build_layout(
+    pathname: str,
+    pattern: str,
+    target: int,
+    modulus: int,
+    cold_pathnames: list[str] | None = None,
+) -> dict[str, object]:
+    hot_layout = _bc_layout_for_pathname(pathname, pattern, target, modulus)
+    primary_cold_layout = _bc_layout_for_pathname(
+        _primary_cold_pathname(pathname, cold_pathnames),
+        pattern,
+        target,
+        modulus,
+    )
+    all_layouts = [
+        _bc_layout_for_pathname(path, pattern, target, modulus)
+        for path in _dedupe_pathnames(pathname, cold_pathnames)
+    ]
+    archive_pathnames = _dedupe_pathnames("", cold_pathnames)
+    if str(pathname) not in archive_pathnames:
+        archive_pathnames.append(str(pathname))
+    archive_layouts = [
+        _bc_layout_for_pathname(path, pattern, target, modulus)
+        for path in archive_pathnames
+    ]
+    return {
+        "output_dir": hot_layout["output_dir"],
+        "generated_dir": hot_layout["generated_dir"],
+        "solved_dir": hot_layout["solved_dir"],
+        "archive_dir": primary_cold_layout["archive_dir"],
+        "stats_dir": hot_layout["stats_dir"],
+        "generated_dirs": tuple(layout["generated_dir"] for layout in all_layouts),
+        "solved_dirs": tuple(layout["solved_dir"] for layout in all_layouts),
+        "archive_dirs": tuple(layout["archive_dir"] for layout in archive_layouts),
+        "stats_dirs": tuple(layout["stats_dir"] for layout in all_layouts),
+        "prefix": hot_layout["prefix"],
+    }
+
+
+def _bc_prefixed_file_names(folders: tuple[Path, ...], prefix: str, suffix: str) -> set[str]:
+    names: set[str] = set()
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        try:
+            for item in folder.iterdir():
+                if item.is_file() and item.name.startswith(prefix) and item.name.endswith(suffix):
+                    names.add(item.name)
+        except OSError:
+            continue
+    return names
+
+
 def _count_bc_prefixed_files(folder: Path, prefix: str, suffix: str) -> int:
     if not folder.is_dir():
         return 0
@@ -221,6 +306,10 @@ def _count_bc_prefixed_files(folder: Path, prefix: str, suffix: str) -> int:
         )
     except OSError:
         return 0
+
+
+def _count_bc_prefixed_files_multi(folders: tuple[Path, ...], prefix: str, suffix: str) -> int:
+    return len(_bc_prefixed_file_names(folders, prefix, suffix))
 
 
 def _count_bc_contiguous_prefixed_files(folder: Path, prefix: str, suffix: str) -> int:
@@ -245,6 +334,51 @@ def _count_bc_contiguous_prefixed_files(folder: Path, prefix: str, suffix: str) 
     return expected
 
 
+def _count_bc_contiguous_prefixed_files_multi(folders: tuple[Path, ...], prefix: str, suffix: str) -> int:
+    ordinals: set[int] = set()
+    for name in _bc_prefixed_file_names(folders, prefix, suffix):
+        ordinal_text = name[len(prefix):-len(suffix)]
+        if ordinal_text.isdigit():
+            ordinals.add(int(ordinal_text))
+    expected = 0
+    while expected in ordinals:
+        expected += 1
+    return expected
+
+
+def _bc_generated_ordinals(folders: tuple[Path, ...], prefix: str) -> set[int]:
+    ordinals: set[int] = set()
+    suffixes = (".bcpos", ".bcposc", ".bcpos.7z")
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        try:
+            for item in folder.iterdir():
+                if not item.is_file() or not item.name.startswith(prefix):
+                    continue
+                for suffix in suffixes:
+                    if item.name.endswith(suffix):
+                        ordinal_text = item.name[len(prefix):-len(suffix)]
+                        if ordinal_text.isdigit():
+                            ordinals.add(int(ordinal_text))
+                        break
+        except OSError:
+            continue
+    return ordinals
+
+
+def _count_bc_generated_files_multi(folders: tuple[Path, ...], prefix: str) -> int:
+    return len(_bc_generated_ordinals(folders, prefix))
+
+
+def _count_bc_contiguous_generated_files_multi(folders: tuple[Path, ...], prefix: str) -> int:
+    ordinals = _bc_generated_ordinals(folders, prefix)
+    expected = 0
+    while expected in ordinals:
+        expected += 1
+    return expected
+
+
 def _has_bc_prefixed_files(folder: Path, prefix: str, suffixes: tuple[str, ...]) -> bool:
     if not folder.is_dir():
         return False
@@ -257,6 +391,10 @@ def _has_bc_prefixed_files(folder: Path, prefix: str, suffixes: tuple[str, ...])
         )
     except OSError:
         return False
+
+
+def _has_bc_prefixed_files_multi(folders: tuple[Path, ...], prefix: str, suffixes: tuple[str, ...]) -> bool:
+    return any(_has_bc_prefixed_files(folder, prefix, suffixes) for folder in folders)
 
 
 def _has_bc_prefixed_exact_pairs(folder: Path, prefix: str) -> bool:
@@ -277,6 +415,25 @@ def _has_bc_prefixed_exact_pairs(folder: Path, prefix: str) -> bool:
     return not positions.isdisjoint(successes)
 
 
+def _has_bc_prefixed_exact_pairs_multi(folders: tuple[Path, ...], prefix: str) -> bool:
+    positions: set[str] = set()
+    successes: set[str] = set()
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        try:
+            for item in folder.iterdir():
+                if not item.is_file() or not item.name.startswith(prefix):
+                    continue
+                if item.name.endswith(".bcpos"):
+                    positions.add(item.name[:-len(".bcpos")])
+                elif item.name.endswith(".bcsuc"):
+                    successes.add(item.name[:-len(".bcsuc")])
+        except OSError:
+            continue
+    return not positions.isdisjoint(successes)
+
+
 def _has_bc_solve_resume_files(
     solved_dir: Path,
     archive_dir: Path,
@@ -289,6 +446,20 @@ def _has_bc_solve_resume_files(
         _has_bc_prefixed_exact_pairs(solved_dir, prefix) or
         _has_bc_prefixed_exact_pairs(archive_dir, prefix) or
         _has_bc_prefixed_files(archive_dir, prefix, (".bccmp",))
+    )
+
+
+def _has_bc_solve_resume_files_multi(
+    solved_dirs: tuple[Path, ...],
+    archive_dirs: tuple[Path, ...],
+    prefix: str,
+) -> bool:
+    if any((solved_dir / f"{prefix}family_checkpoint.csv").is_file() for solved_dir in solved_dirs):
+        return True
+    candidate_dirs = tuple(dict.fromkeys((*solved_dirs, *archive_dirs)))
+    return (
+        _has_bc_prefixed_exact_pairs_multi(candidate_dirs, prefix) or
+        _has_bc_prefixed_files_multi(archive_dirs, prefix, (".bccmp",))
     )
 
 
@@ -313,6 +484,9 @@ def _build_bc_runtime_options(
     generated_dir: Path,
     solved_dir: Path,
     archive_dir: Path,
+    generated_dirs: tuple[Path, ...],
+    solved_dirs: tuple[Path, ...],
+    archive_dirs: tuple[Path, ...],
     stats_dir: Path,
     prefix: str,
     modulus: int,
@@ -366,6 +540,9 @@ def _build_bc_runtime_options(
         "generated_dir": str(generated_dir),
         "solved_dir": str(solved_dir),
         "archive_dir": str(archive_dir),
+        "generated_dirs": [str(path) for path in generated_dirs],
+        "solved_dirs": [str(path) for path in solved_dirs],
+        "archive_dirs": [str(path) for path in archive_dirs],
         "stats_dir": str(stats_dir),
         "generation_stats_csv": str(stats_dir / "generation.csv"),
         "solve_stats_csv": str(stats_dir / "solve_layers.csv"),
@@ -406,6 +583,19 @@ def _count_existing_steps(pathname: str, steps: int, suffixes) -> int:
     )
 
 
+def _count_existing_steps_multi(pathnames, steps: int, suffixes) -> int:
+    prefixes = [str(pathname) for pathname in pathnames if str(pathname)]
+    return sum(
+        1
+        for step in range(max(0, int(steps)))
+        if _path_exists_any(
+            f"{pathname}{step}{suffix}"
+            for pathname in prefixes
+            for suffix in suffixes
+        )
+    )
+
+
 def _all_existing_steps(pathname: str, steps: int, suffixes) -> bool:
     if steps <= 0:
         return False
@@ -423,7 +613,26 @@ def _read_int_marker(path: str) -> int | None:
         return None
 
 
-def estimate_build_progress(pattern: str, target: int, pathname: str) -> tuple[int, int]:
+def _all_existing_steps_multi(pathnames, steps: int, suffixes) -> bool:
+    prefixes = [str(pathname) for pathname in pathnames if str(pathname)]
+    if steps <= 0 or not prefixes:
+        return False
+    return all(
+        _path_exists_any(
+            f"{pathname}{step}{suffix}"
+            for pathname in prefixes
+            for suffix in suffixes
+        )
+        for step in range(int(steps))
+    )
+
+
+def estimate_build_progress(
+    pattern: str,
+    target: int,
+    pathname: str,
+    cold_pathnames: list[str] | None = None,
+) -> tuple[int, int]:
     config = SingletonConfig().config
     meta, tile_sum, _seed_boards, extra_steps = _resolve_build_meta(pattern)
     steps, _docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
@@ -438,36 +647,19 @@ def estimate_build_progress(pattern: str, target: int, pathname: str) -> tuple[i
         if total <= 0:
             return 0, 0
         modulus = _bc_family_modulus(config)
-        layout = _bc_build_layout(pathname, pattern, target, modulus)
+        layout = _bc_build_layout(pathname, pattern, target, modulus, cold_pathnames)
         prefix = str(layout["prefix"])
-        generated = _count_bc_prefixed_files(
-            Path(layout["generated_dir"]),
-            prefix,
-            ".bcpos",
-        )
-        generated_contiguous = _count_bc_contiguous_prefixed_files(
-            Path(layout["generated_dir"]),
-            prefix,
-            ".bcpos",
-        )
-        solved = _count_bc_prefixed_files(
-            Path(layout["solved_dir"]),
-            prefix,
-            ".bcsuc",
-        )
-        compressed = _count_bc_prefixed_files(
-            Path(layout["archive_dir"]),
-            prefix,
-            ".bccmp",
-        )
-        archived = _count_bc_prefixed_files(
-            Path(layout["archive_dir"]),
-            prefix,
-            ".bcsuc",
-        )
-        solve_resume_exists = _has_bc_solve_resume_files(
-            Path(layout["solved_dir"]),
-            Path(layout["archive_dir"]),
+        generated_dirs = tuple(Path(path) for path in layout["generated_dirs"])
+        solved_dirs = tuple(Path(path) for path in layout["solved_dirs"])
+        archive_dirs = tuple(Path(path) for path in layout["archive_dirs"])
+        generated = _count_bc_generated_files_multi(generated_dirs, prefix)
+        generated_contiguous = _count_bc_contiguous_generated_files_multi(generated_dirs, prefix)
+        solved = _count_bc_prefixed_files_multi(solved_dirs, prefix, ".bcsuc")
+        compressed = _count_bc_prefixed_files_multi(archive_dirs, prefix, ".bccmp")
+        archived = _count_bc_prefixed_files_multi(archive_dirs, prefix, ".bcsuc")
+        solve_resume_exists = _has_bc_solve_resume_files_multi(
+            solved_dirs,
+            archive_dirs,
             prefix,
         )
         final_count = max(archived, compressed)
@@ -482,23 +674,24 @@ def estimate_build_progress(pattern: str, target: int, pathname: str) -> tuple[i
         return 0, 0
 
     current = 0
+    result_pathnames = [pathname, *([str(path) for path in cold_pathnames] if cold_pathnames else [])]
     if use_exad_algo:
-        solved_count = _count_existing_steps(pathname, steps, (".exadbook", ".exadzbook"))
+        solved_count = _count_existing_steps_multi(result_pathnames, steps, (".exadbook", ".exadzbook"))
         if solved_count:
             current = steps + solved_count
         else:
-            current = _count_existing_steps(pathname, steps, (".exadtmp", ".exadtmp.7z"))
+            current = _count_existing_steps_multi(result_pathnames, steps, (".exadtmp", ".exadtmp.7z"))
     elif use_ex_algo:
         if optimal and os.path.exists(pathname + "ex_optimal_complete"):
             current = total
-        elif not optimal and _all_existing_steps(pathname, steps, (".exzbook",)):
+        elif not optimal and _all_existing_steps_multi(result_pathnames, steps, (".exzbook",)):
             current = total
         else:
-            solved_count = _count_existing_steps(pathname, steps, (".zbook", ".exzbook"))
+            solved_count = _count_existing_steps_multi(result_pathnames, steps, (".zbook", ".exzbook"))
             if solved_count:
                 current = steps + solved_count
             else:
-                current = _count_existing_steps(pathname, steps, (".exgen", ".exgen.7z"))
+                current = _count_existing_steps_multi(result_pathnames, steps, (".exgen", ".exgen.7z"))
             if optimal:
                 opt_step = _read_int_marker(pathname + "ex_optlayer")
                 if opt_step is not None:
@@ -506,13 +699,13 @@ def estimate_build_progress(pattern: str, target: int, pathname: str) -> tuple[i
                 elif solved_count >= steps:
                     current = max(current, 2 * steps)
     elif use_ad_algo:
-        solved_count = _count_existing_steps(pathname, steps, ("b", ".z", "b.7z"))
+        solved_count = _count_existing_steps_multi(result_pathnames, steps, ("b", ".z", "b.7z"))
         if solved_count:
             current = steps + solved_count
         else:
             current = _count_existing_steps(pathname, steps, ("", ".7z"))
     else:
-        solved_count = _count_existing_steps(pathname, steps, (".book", ".z", ".book.7z"))
+        solved_count = _count_existing_steps_multi(result_pathnames, steps, (".book", ".z", ".book.7z"))
         if solved_count:
             current = steps + solved_count
         else:
@@ -624,6 +817,7 @@ def _run_classic_build(
     is_free: bool,
     is_variant: bool,
     spawn_rate4: float,
+    cold_pathnames: list[str] | None = None,
 ) -> None:
     pattern_spec = _build_native_pattern_spec(pattern)
     run_options = _build_native_run_options(
@@ -634,6 +828,7 @@ def _run_classic_build(
         is_free,
         is_variant,
         spawn_rate4,
+        cold_pathnames,
     )
     formation_core.run_pattern_build(
         np.asarray(arr_init, dtype=np.uint64), pattern_spec, run_options
@@ -650,6 +845,7 @@ def _run_advanced_build(
     is_free: bool,
     is_variant: bool,
     spawn_rate4: float,
+    cold_pathnames: list[str] | None = None,
 ) -> None:
     pattern_spec = _build_native_advanced_pattern_spec(pattern, target)
     run_options = _build_native_run_options(
@@ -660,6 +856,7 @@ def _run_advanced_build(
         is_free,
         is_variant,
         spawn_rate4,
+        cold_pathnames,
     )
     formation_core.run_pattern_build_ad(
         np.asarray(arr_init, dtype=np.uint64), pattern_spec, run_options
@@ -677,6 +874,7 @@ def _run_zmask_build(
     is_variant: bool,
     spawn_rate4: float,
     resolution: PhysicalPatternResolution | None = None,
+    cold_pathnames: list[str] | None = None,
 ) -> None:
     pattern_spec = _build_native_pattern_spec(pattern, resolution)
     run_options = _build_native_run_options(
@@ -687,6 +885,7 @@ def _run_zmask_build(
         is_free,
         is_variant,
         spawn_rate4,
+        cold_pathnames,
     )
     run_options.chunked_solve = False
     formation_core.run_pattern_build_zmask(
@@ -705,6 +904,7 @@ def _run_exad_build(
     is_variant: bool,
     spawn_rate4: float,
     resolution: PhysicalPatternResolution | None = None,
+    cold_pathnames: list[str] | None = None,
 ) -> None:
     pattern_spec = _build_native_advanced_pattern_spec(pattern, target, resolution)
     run_options = _build_native_run_options(
@@ -715,6 +915,7 @@ def _run_exad_build(
         is_free,
         is_variant,
         spawn_rate4,
+        cold_pathnames,
     )
     formation_core.run_pattern_build_exad(
         np.asarray(arr_init, dtype=np.uint64), pattern_spec, run_options
@@ -732,14 +933,18 @@ def _run_bc_build(
     extra_steps: int,
     pathname: str,
     spawn_rate4: float,
+    cold_pathnames: list[str] | None = None,
 ) -> None:
     config = SingletonConfig().config
     modulus = _bc_family_modulus(config)
-    layout = _bc_build_layout(pathname, pattern, target, modulus)
+    layout = _bc_build_layout(pathname, pattern, target, modulus, cold_pathnames)
     generated_dir = Path(layout["generated_dir"])
     solved_dir = Path(layout["solved_dir"])
     archive_dir = Path(layout["archive_dir"])
     stats_dir = Path(layout["stats_dir"])
+    generated_dirs = tuple(Path(path) for path in layout["generated_dirs"])
+    solved_dirs = tuple(Path(path) for path in layout["solved_dirs"])
+    archive_dirs = tuple(Path(path) for path in layout["archive_dirs"])
     prefix = str(layout["prefix"])
     for folder in (generated_dir, solved_dir, archive_dir, stats_dir):
         folder.mkdir(parents=True, exist_ok=True)
@@ -760,17 +965,13 @@ def _run_bc_build(
         )
         append_ex_physical_config(pathname + "config.txt", bc_resolution)
 
-    generation_count = _count_bc_prefixed_files(generated_dir, prefix, ".bcpos")
-    generation_resume_count = _count_bc_contiguous_prefixed_files(
-        generated_dir,
-        prefix,
-        ".bcpos",
-    )
-    archived_count = _count_bc_prefixed_files(archive_dir, prefix, ".bcsuc")
-    compressed_count = _count_bc_prefixed_files(archive_dir, prefix, ".bccmp")
-    solve_resume_exists = _has_bc_solve_resume_files(
-        solved_dir,
-        archive_dir,
+    generation_count = _count_bc_generated_files_multi(generated_dirs, prefix)
+    generation_resume_count = _count_bc_contiguous_generated_files_multi(generated_dirs, prefix)
+    archived_count = _count_bc_prefixed_files_multi(archive_dirs, prefix, ".bcsuc")
+    compressed_count = _count_bc_prefixed_files_multi(archive_dirs, prefix, ".bccmp")
+    solve_resume_exists = _has_bc_solve_resume_files_multi(
+        solved_dirs,
+        archive_dirs,
         prefix,
     )
     skip_generation = (
@@ -804,6 +1005,9 @@ def _run_bc_build(
         generated_dir=generated_dir,
         solved_dir=solved_dir,
         archive_dir=archive_dir,
+        generated_dirs=generated_dirs,
+        solved_dirs=solved_dirs,
+        archive_dirs=archive_dirs,
         stats_dir=stats_dir,
         prefix=prefix,
         modulus=modulus,
@@ -823,8 +1027,8 @@ def _run_bc_build(
     )
     summary = formation_core.run_bc_family_build(bc_options)
     if bool(summary.get("solve_completed", False)):
-        _remove_bc_work_dir(generated_dir)
-        _remove_bc_work_dir(solved_dir)
+        for folder in dict.fromkeys((*generated_dirs, *solved_dirs)):
+            _remove_bc_work_dir(folder)
     progress_signal.progress_updated.emit(expected_layers * 2, expected_layers * 2)
 
 
@@ -870,7 +1074,12 @@ def _run_with_single_resume_retry(build_label: str, build_fn) -> None:
             )
 
 
-def start_build(pattern: str, target: int, pathname: str) -> bool:
+def start_build(
+    pattern: str,
+    target: int,
+    pathname: str,
+    cold_pathnames: list[str] | None = None,
+) -> bool:
     _require_native_build()
     config = SingletonConfig().config
     spawn_rate4 = float(config["4_spawn_rate"])
@@ -896,6 +1105,7 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
                 extra_steps,
                 pathname,
                 spawn_rate4,
+                cold_pathnames,
             )
         except Exception as exc:
             _log_build_exception_once(f"BC build {pattern}_{2**target}", exc)
@@ -942,6 +1152,7 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
                 is_variant,
                 spawn_rate4,
                 ex_resolution,
+                cold_pathnames,
             ),
         )
     elif use_ex_algo:
@@ -958,6 +1169,7 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
                 is_variant,
                 spawn_rate4,
                 ex_resolution,
+                cold_pathnames,
             ),
         )
     elif use_ad_algo:
@@ -973,6 +1185,7 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
                 is_free,
                 is_variant,
                 spawn_rate4,
+                cold_pathnames,
             ),
         )
     else:
@@ -988,12 +1201,18 @@ def start_build(pattern: str, target: int, pathname: str) -> bool:
                 is_free,
                 is_variant,
                 spawn_rate4,
+                cold_pathnames,
             ),
         )
     return True
 
 
-def v_start_build(pattern: str, target: int, pathname: str) -> bool:
+def v_start_build(
+    pattern: str,
+    target: int,
+    pathname: str,
+    cold_pathnames: list[str] | None = None,
+) -> bool:
     _require_native_build()
     config = SingletonConfig().config
     spawn_rate4 = float(config["4_spawn_rate"])
@@ -1034,6 +1253,7 @@ def v_start_build(pattern: str, target: int, pathname: str) -> bool:
                 True,
                 spawn_rate4,
                 ex_resolution,
+                cold_pathnames,
             ),
         )
     elif use_ex_algo:
@@ -1050,6 +1270,7 @@ def v_start_build(pattern: str, target: int, pathname: str) -> bool:
                 True,
                 spawn_rate4,
                 ex_resolution,
+                cold_pathnames,
             ),
         )
     elif use_ad_algo:
@@ -1065,6 +1286,7 @@ def v_start_build(pattern: str, target: int, pathname: str) -> bool:
                 True,
                 True,
                 spawn_rate4,
+                cold_pathnames,
             ),
         )
     else:
@@ -1080,6 +1302,7 @@ def v_start_build(pattern: str, target: int, pathname: str) -> bool:
                 True,
                 True,
                 spawn_rate4,
+                cold_pathnames,
             ),
         )
     return True

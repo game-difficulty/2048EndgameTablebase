@@ -1576,6 +1576,39 @@ struct BCSearchResult {
     bool found = false;
 };
 
+std::vector<std::pair<fs::path, fs::path>> bc_exact_path_pairs_for_layer_prefix(
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &prefix
+) {
+    std::vector<fs::path> position_paths;
+    std::vector<fs::path> success_paths;
+    for (const auto &path_entry : path_list) {
+        if (path_entry.first.empty()) {
+            continue;
+        }
+        const fs::path root = NativePath::from_utf8(path_entry.first);
+        if (!fs::exists(root)) {
+            continue;
+        }
+        const fs::path position_candidate = root / (prefix + ".bcpos");
+        if (fs::exists(position_candidate)) {
+            position_paths.push_back(position_candidate);
+        }
+        const fs::path success_candidate = root / (prefix + ".bcsuc");
+        if (fs::exists(success_candidate)) {
+            success_paths.push_back(success_candidate);
+        }
+    }
+    std::vector<std::pair<fs::path, fs::path>> pairs;
+    pairs.reserve(position_paths.size() * success_paths.size());
+    for (const fs::path &position_path : position_paths) {
+        for (const fs::path &success_path : success_paths) {
+            pairs.push_back({position_path, success_path});
+        }
+    }
+    return pairs;
+}
+
 BCSearchResult find_bc_value(
     const BCBookReader &reader,
     const std::vector<std::pair<std::string, std::string>> &path_list,
@@ -1615,25 +1648,26 @@ BCSearchResult find_bc_value(
                     };
                 }
             }
-
-            const fs::path position_path = root / (prefix + ".bcpos");
-            const fs::path success_path = root / (prefix + ".bcsuc");
-            if (fs::exists(position_path) && fs::exists(success_path)) {
-                const BCCompressedResult::ColdLookupResult lookup =
-                    BCRuntime::lookup_exact_result_cached(
-                        position_path,
-                        success_path,
-                        reader.target_rank_,
-                        canonical_board,
-                        0U);
-                if (lookup.found) {
-                    const std::string dtype = bc_dtype_name(lookup.dtype);
-                    return BCSearchResult{
-                        numeric_search_value(normalize_bc_lookup_value(lookup), dtype),
-                        dtype,
-                        true
-                    };
-                }
+        } catch (...) {
+            continue;
+        }
+    }
+    for (const auto &exact_paths : bc_exact_path_pairs_for_layer_prefix(path_list, prefix)) {
+        try {
+            const BCCompressedResult::ColdLookupResult lookup =
+                BCRuntime::lookup_exact_result_cached(
+                    exact_paths.first,
+                    exact_paths.second,
+                    reader.target_rank_,
+                    canonical_board,
+                    0U);
+            if (lookup.found) {
+                const std::string dtype = bc_dtype_name(lookup.dtype);
+                return BCSearchResult{
+                    numeric_search_value(normalize_bc_lookup_value(lookup), dtype),
+                    dtype,
+                    true
+                };
             }
         } catch (...) {
             continue;
@@ -1958,18 +1992,31 @@ std::vector<fs::path> exad_compressed_candidates(const fs::path &exadbook_path) 
     return candidates;
 }
 
+std::optional<fs::path> first_existing_exad_lut_path(
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &pattern_full
+) {
+    for (const auto &path_entry : path_list) {
+        const fs::path exadlut_path = NativePath::from_utf8(path_entry.first) / (pattern_full + "_.exadlut");
+        if (fs::exists(exadlut_path)) {
+            return exadlut_path;
+        }
+    }
+    return std::nullopt;
+}
+
 SearchValue find_exad_value(
     const AdvancedPatternSpec &spec,
     const FormationAD::MaskerContext &masker,
     const std::string &pathname,
     const std::string &filename,
+    const fs::path &exadlut_path,
     const std::string &pattern_full,
     uint64_t board,
     const std::string &success_rate_dtype
 ) {
     const DTypeInfo dtype_info = dtype_info_for_name(success_rate_dtype);
     const fs::path root = NativePath::from_utf8(pathname);
-    const fs::path exadlut_path = root / (pattern_full + "_.exadlut");
     if (!fs::exists(exadlut_path)) {
         return string_search_value("?");
     }
@@ -2013,6 +2060,27 @@ SearchValue find_exad_value(
     }
 }
 
+SearchValue find_exad_value(
+    const AdvancedPatternSpec &spec,
+    const FormationAD::MaskerContext &masker,
+    const std::string &pathname,
+    const std::string &filename,
+    const std::string &pattern_full,
+    uint64_t board,
+    const std::string &success_rate_dtype
+) {
+    const fs::path exadlut_path = NativePath::from_utf8(pathname) / (pattern_full + "_.exadlut");
+    return find_exad_value(
+        spec,
+        masker,
+        pathname,
+        filename,
+        exadlut_path,
+        pattern_full,
+        board,
+        success_rate_dtype);
+}
+
 std::vector<fs::path> ex_compressed_candidates(const fs::path &zbook_path) {
     std::vector<fs::path> candidates;
     fs::path replaced = zbook_path;
@@ -2023,16 +2091,29 @@ std::vector<fs::path> ex_compressed_candidates(const fs::path &zbook_path) {
     return candidates;
 }
 
+std::optional<fs::path> first_existing_ex_zlut_path(
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &pattern_full
+) {
+    for (const auto &path_entry : path_list) {
+        const fs::path zlut_path = NativePath::from_utf8(path_entry.first) / (pattern_full + "_.zlut");
+        if (fs::exists(zlut_path)) {
+            return zlut_path;
+        }
+    }
+    return std::nullopt;
+}
+
 SearchValue find_ex_value(
     const std::string &pathname,
     const std::string &filename,
+    const fs::path &zlut_path,
     const std::string &pattern_full,
     uint64_t board,
     const std::string &success_rate_dtype
 ) {
     const DTypeInfo dtype_info = dtype_info_for_name(success_rate_dtype);
     const fs::path root = NativePath::from_utf8(pathname);
-    const fs::path zlut_path = root / (pattern_full + "_.zlut");
     if (!fs::exists(zlut_path)) {
         return string_search_value("?");
     }
@@ -2064,6 +2145,23 @@ SearchValue find_ex_value(
     } catch (...) {
         return string_search_value("?");
     }
+}
+
+SearchValue find_ex_value(
+    const std::string &pathname,
+    const std::string &filename,
+    const std::string &pattern_full,
+    uint64_t board,
+    const std::string &success_rate_dtype
+) {
+    const fs::path zlut_path = NativePath::from_utf8(pathname) / (pattern_full + "_.zlut");
+    return find_ex_value(
+        pathname,
+        filename,
+        zlut_path,
+        pattern_full,
+        board,
+        success_rate_dtype);
 }
 
 bool sample_ex_zbook_state(
@@ -2364,6 +2462,10 @@ ReaderMoveResult evaluate_exad_result_candidates(
     double max_success_rate = 0.0;
     std::string success_rate_dtype;
     const std::string filename = pattern_full + "_" + std::to_string(nums) + ".exadbook";
+    const std::optional<fs::path> exadlut_path = first_existing_exad_lut_path(path_list, pattern_full);
+    if (!exadlut_path) {
+        return {blank_direction_entries(), {}};
+    }
     const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
 
     for (const auto &path_entry : path_list) {
@@ -2399,6 +2501,7 @@ ReaderMoveResult evaluate_exad_result_candidates(
                     reader.masker_,
                     path_entry.first,
                     filename,
+                    *exadlut_path,
                     pattern_full,
                     physical_moved,
                     path_entry.second
@@ -2469,6 +2572,10 @@ ReaderMoveResult evaluate_ex_result_candidates(
     }
 
     const std::string filename = pattern_full + "_" + std::to_string(nums) + ".zbook";
+    const std::optional<fs::path> zlut_path = first_existing_ex_zlut_path(path_list, pattern_full);
+    if (!zlut_path) {
+        return {blank_direction_entries(), {}};
+    }
     const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
 
     for (const auto &path_entry : path_list) {
@@ -2502,6 +2609,7 @@ ReaderMoveResult evaluate_ex_result_candidates(
                 const SearchValue value = find_ex_value(
                     path_entry.first,
                     filename,
+                    *zlut_path,
                     pattern_full,
                     canonical_by_mode(physical_moved, reader.spec_.symm_mode),
                     path_entry.second
@@ -2697,11 +2805,29 @@ std::vector<std::pair<uint32_t, fs::path>> bc_compressed_candidates(
     return candidates;
 }
 
-std::vector<std::pair<uint32_t, fs::path>> bc_exact_candidates(
+struct BCExactCandidate {
+    uint32_t ordinal = 0U;
+    fs::path position_path;
+    fs::path success_path;
+};
+
+uint32_t bc_candidate_ordinal(const std::pair<uint32_t, fs::path> &item) {
+    return item.first;
+}
+
+uint32_t bc_candidate_ordinal(const BCExactCandidate &item) {
+    return item.ordinal;
+}
+
+std::vector<BCExactCandidate> bc_exact_candidates(
     const std::vector<std::pair<std::string, std::string>> &path_list,
     const std::string &pattern_full
 ) {
-    std::vector<std::pair<uint32_t, fs::path>> candidates;
+    struct Partial {
+        std::vector<fs::path> position_paths;
+        std::vector<fs::path> success_paths;
+    };
+    std::unordered_map<uint32_t, Partial> partials;
     for (const auto &path_entry : path_list) {
         if (path_entry.first.empty()) {
             continue;
@@ -2715,18 +2841,28 @@ std::vector<std::pair<uint32_t, fs::path>> bc_exact_candidates(
                 continue;
             }
             uint32_t ordinal = 0U;
-            if (!parse_bc_layer_filename(entry.path(), pattern_full, ".bcpos", ordinal)) {
-                continue;
+            if (parse_bc_layer_filename(entry.path(), pattern_full, ".bcpos", ordinal)) {
+                partials[ordinal].position_paths.push_back(entry.path());
+            } else if (parse_bc_layer_filename(entry.path(), pattern_full, ".bcsuc", ordinal)) {
+                partials[ordinal].success_paths.push_back(entry.path());
             }
-            fs::path success_path = entry.path();
-            success_path.replace_extension(".bcsuc");
-            if (fs::exists(success_path)) {
-                candidates.push_back({ordinal, entry.path()});
+        }
+    }
+    std::vector<BCExactCandidate> candidates;
+    candidates.reserve(partials.size());
+    for (const auto &entry : partials) {
+        for (const fs::path &position_path : entry.second.position_paths) {
+            for (const fs::path &success_path : entry.second.success_paths) {
+                candidates.push_back({
+                    entry.first,
+                    position_path,
+                    success_path,
+                });
             }
         }
     }
     std::sort(candidates.begin(), candidates.end(), [](const auto &lhs, const auto &rhs) {
-        return lhs.first < rhs.first;
+        return lhs.ordinal < rhs.ordinal;
     });
     return candidates;
 }
@@ -2746,9 +2882,9 @@ uint64_t sample_bc_book_state(
 ) {
     static thread_local std::mt19937 rng(std::random_device{}());
 
-    auto order_candidates = [](std::vector<std::pair<uint32_t, fs::path>> candidates) {
+    auto order_candidates = [](auto candidates) {
         auto split = std::partition(candidates.begin(), candidates.end(), [](const auto &item) {
-            return item.first < 10U;
+            return bc_candidate_ordinal(item) < 10U;
         });
         std::shuffle(candidates.begin(), split, rng);
         std::shuffle(split, candidates.end(), rng);
@@ -2796,7 +2932,10 @@ uint64_t sample_bc_book_state(
         for (uint32_t attempt = 0U; attempt < 8U; ++attempt) {
             uint64_t board = 0ULL;
             try {
-                board = BCRuntime::sample_exact_random_board_cached(item.second, reader.target_rank_);
+                board = BCRuntime::sample_exact_random_board_cached(
+                    item.position_path,
+                    item.success_path,
+                    reader.target_rank_);
             } catch (...) {
                 continue;
             }
@@ -2934,12 +3073,12 @@ uint64_t sample_exad_book_state(
     double spawn_rate4
 ) {
     static thread_local std::mt19937 rng(std::random_device{}());
+    const std::optional<fs::path> exadlut_path = first_existing_exad_lut_path(path_list, pattern_full);
+    if (!exadlut_path) {
+        return 0ULL;
+    }
     for (const auto &path_entry : path_list) {
         std::vector<int> book_indices = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
-        const fs::path exadlut_path = NativePath::from_utf8(path_entry.first) / (pattern_full + "_.exadlut");
-        if (!fs::exists(exadlut_path)) {
-            continue;
-        }
         while (!book_indices.empty()) {
             std::uniform_int_distribution<size_t> pick(0, book_indices.size() - 1U);
             const size_t chosen = pick(rng);
@@ -2952,7 +3091,7 @@ uint64_t sample_exad_book_state(
             if (fs::exists(exadbook_path) &&
                 EXADCompressedResult::sample_exadbook_cold(
                     NativePath::to_utf8_string(exadbook_path),
-                    NativePath::to_utf8_string(exadlut_path),
+                    NativePath::to_utf8_string(*exadlut_path),
                     state)) {
                 return gen_new_num(apply_sym_like(state, inverse_transform), static_cast<float>(spawn_rate4)).first;
             }
@@ -2962,7 +3101,7 @@ uint64_t sample_exad_book_state(
                 }
                 if (EXADCompressedResult::sample_exad_cold(
                         NativePath::to_utf8_string(candidate),
-                        NativePath::to_utf8_string(exadlut_path),
+                        NativePath::to_utf8_string(*exadlut_path),
                         state)) {
                     return gen_new_num(apply_sym_like(state, inverse_transform), static_cast<float>(spawn_rate4)).first;
                 }
@@ -2979,12 +3118,12 @@ uint64_t sample_ex_book_state(
     double spawn_rate4
 ) {
     static thread_local std::mt19937 rng(std::random_device{}());
+    const std::optional<fs::path> zlut_path = first_existing_ex_zlut_path(path_list, pattern_full);
+    if (!zlut_path) {
+        return 0ULL;
+    }
     for (const auto &path_entry : path_list) {
         std::vector<int> book_indices = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
-        const fs::path zlut_path = NativePath::from_utf8(path_entry.first) / (pattern_full + "_.zlut");
-        if (!fs::exists(zlut_path)) {
-            continue;
-        }
         while (!book_indices.empty()) {
             std::uniform_int_distribution<size_t> pick(0, book_indices.size() - 1U);
             const size_t chosen = pick(rng);
@@ -2994,7 +3133,7 @@ uint64_t sample_ex_book_state(
             const fs::path zbook_path =
                 NativePath::from_utf8(path_entry.first) / (pattern_full + "_" + std::to_string(book_id) + ".zbook");
             uint64_t state = 0ULL;
-            if (fs::exists(zbook_path) && sample_ex_zbook_state(zbook_path, zlut_path, rng, state)) {
+            if (fs::exists(zbook_path) && sample_ex_zbook_state(zbook_path, *zlut_path, rng, state)) {
                 return gen_new_num(apply_sym_like(state, inverse_transform), static_cast<float>(spawn_rate4)).first;
             }
             if (!fs::exists(zbook_path)) {
@@ -3006,7 +3145,7 @@ uint64_t sample_ex_book_state(
                     double numeric = 0.0;
                     if (EXCompressedResult::sample_cold(
                             NativePath::to_utf8_string(candidate),
-                            NativePath::to_utf8_string(zlut_path),
+                            NativePath::to_utf8_string(*zlut_path),
                             state,
                             raw,
                             numeric)) {
@@ -3071,11 +3210,19 @@ bool sample_compressed_result_cached(
 
 uint64_t sample_exact_random_board_cached(
     const std::filesystem::path &position_path,
+    const std::filesystem::path &success_path,
+    uint32_t target_rank
+) {
+    return cached_bc_exact_reader(position_path, success_path, target_rank)->sample_board();
+}
+
+uint64_t sample_exact_random_board_cached(
+    const std::filesystem::path &position_path,
     uint32_t target_rank
 ) {
     std::filesystem::path success_path = position_path;
     success_path.replace_extension(".bcsuc");
-    return cached_bc_exact_reader(position_path, success_path, target_rank)->sample_board();
+    return sample_exact_random_board_cached(position_path, success_path, target_rank);
 }
 
 } // namespace BCRuntime

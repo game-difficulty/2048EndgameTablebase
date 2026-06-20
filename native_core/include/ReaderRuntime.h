@@ -185,6 +185,12 @@ bool sample_compressed_result_cached(
 
 uint64_t sample_exact_random_board_cached(
     const std::filesystem::path &position_path,
+    const std::filesystem::path &success_path,
+    uint32_t target_rank
+);
+
+uint64_t sample_exact_random_board_cached(
+    const std::filesystem::path &position_path,
     uint32_t target_rank
 );
 

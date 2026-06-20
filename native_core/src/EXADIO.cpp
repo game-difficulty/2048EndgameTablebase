@@ -360,6 +360,10 @@ void write_layer_file(
     NativePath::remove(archive_path_for_layer(path), ec);
 }
 
+uint64_t layer_serialized_size(const Layer &layer) {
+    return serialized_size(layer);
+}
+
 Layer read_layer_file(
     const std::string &path,
     FileIOUtils::DirectIoConfig config

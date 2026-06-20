@@ -65,11 +65,19 @@
 
             <div class="flex flex-col border-t border-border-main pt-4 mt-2">
               <label class="ui-control font-bold text-text-main mb-2 uppercase tracking-wider">{{ $t('settings.builder.path') }}</label>
-              <div class="flex gap-2">
-                <input type="text" v-model="buildPath" class="w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-kicker text-text-main outline-none focus:border-accent transition-colors flex-1 appearance-none" />
+              <div class="flex gap-2 items-start">
+                <textarea v-model="buildPath" rows="3" class="w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-kicker text-text-main outline-none focus:border-accent transition-colors flex-1 appearance-none resize-y" />
                 <button @click="browseFolder" class="px-3 py-1.5 bg-btn-bg text-white rounded-lg font-black ui-control hover:bg-btn-hover active:scale-95 transition-all whitespace-nowrap shadow-sm">
                   {{ $t('settings.builder.browse') }}
                 </button>
+              </div>
+              <div v-if="normalizedBuildPaths.length" class="mt-2 flex flex-col gap-1">
+                <div v-for="(path, index) in normalizedBuildPaths" :key="`${index}-${path}`" class="flex min-w-0 items-center gap-2 text-xs text-text-muted">
+                  <span class="shrink-0 rounded border border-border-main px-1.5 py-0.5 font-bold uppercase text-text-main">
+                    {{ index === 0 ? $t('settings.builder.hotPath') : $t('settings.builder.coldPath') }}
+                  </span>
+                  <span class="truncate">{{ path }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -400,6 +408,7 @@ const props = defineProps({
   selectedTarget,
   selectedPatternIsVariant,
   buildPath,
+  normalizedBuildPaths,
   isBuilding,
   builderAlgorithm,
   builderCompress,

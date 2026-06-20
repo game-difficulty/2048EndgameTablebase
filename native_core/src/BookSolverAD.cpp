@@ -432,6 +432,22 @@ std::vector<uint64_t> read_temp_raw_layer(const std::string &path, FileIOUtils::
     return read_temp_uint64_archive(path + ".7z");
 }
 
+std::vector<uint64_t> read_temp_raw_layer(
+    const RunOptions &options,
+    int step,
+    FileIOUtils::DirectIoConfig config = {}
+) {
+    const std::string raw_path = StoragePaths::existing_path_for(options, step, "", false);
+    if (!raw_path.empty()) {
+        return FileIOUtils::read_binary_vector_direct<uint64_t>(raw_path, config);
+    }
+    const std::string archive_path = StoragePaths::existing_path_for(options, step, ".7z", false);
+    if (!archive_path.empty()) {
+        return read_temp_uint64_archive(archive_path);
+    }
+    return {};
+}
+
 template <typename T>
 void write_binary_vector(
     const std::string &path,
@@ -599,6 +615,14 @@ void clear_prefix_store(PrefixStore &prefix_store) {
     }
 }
 
+std::string ad_book_folder_path(const RunOptions &options, int step) {
+    const std::string existing = StoragePaths::existing_path_for(options, step, "b", false);
+    if (!existing.empty()) {
+        return existing;
+    }
+    return options.pathname + std::to_string(step) + "b";
+}
+
 template <typename T>
 void dict_tofile(
     const BookStore<T> &book_dict,
@@ -607,13 +631,42 @@ void dict_tofile(
     int step,
     bool compress_indices
 ) {
-    const fs::path folder_path = NativePath::from_utf8(options.pathname + std::to_string(step) + "b");
-    fs::create_directories(folder_path);
+    uint64_t raw_index_bytes = 0ULL;
+    uint64_t raw_book_bytes = 0ULL;
+    for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
+        raw_index_bytes = StoragePaths::saturating_add(
+            raw_index_bytes,
+            static_cast<uint64_t>(ind_dict.at(key).size()) * static_cast<uint64_t>(sizeof(uint64_t))
+        );
+        raw_book_bytes = StoragePaths::saturating_add(
+            raw_book_bytes,
+            static_cast<uint64_t>(book_dict.at(key).data.size()) * static_cast<uint64_t>(sizeof(T))
+        );
+    }
+    uint64_t estimated_bytes = StoragePaths::saturating_add(raw_index_bytes, raw_book_bytes);
+    if (compress_indices && options.compress) {
+        estimated_bytes = StoragePaths::saturating_add(
+            estimated_bytes,
+            StoragePaths::scale_ratio(raw_index_bytes, 25ULL)
+        );
+    }
+    auto lease = StoragePaths::reserve_write_path(
+        options,
+        StoragePaths::ArtifactRole::Hot,
+        step,
+        "b",
+        estimated_bytes
+    );
+    const fs::path folder_path = NativePath::from_utf8(lease.path());
+    const fs::path temp_folder_path = NativePath::from_utf8(lease.path() + ".tmp");
+    std::error_code cleanup_error;
+    fs::remove_all(temp_folder_path, cleanup_error);
+    fs::create_directories(temp_folder_path);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
 
     for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
-        const fs::path ind_filename = folder_path / (std::to_string(key) + ".i");
-        const fs::path book_filename = folder_path / (std::to_string(key) + ".b");
+        const fs::path ind_filename = temp_folder_path / (std::to_string(key) + ".i");
+        const fs::path book_filename = temp_folder_path / (std::to_string(key) + ".b");
         const auto &indices = ind_dict.at(key);
         const auto &book_bucket = book_dict.at(key);
         if (indices.empty()) {
@@ -630,8 +683,10 @@ void dict_tofile(
     }
 
     if (compress_indices && options.compress) {
-        maybe_do_compress_ad(NativePath::to_utf8_string(folder_path));
+        maybe_do_compress_ad(NativePath::to_utf8_string(temp_folder_path));
     }
+    publish_ad_chunked_folder(temp_folder_path, folder_path);
+    lease.release();
 }
 
 template <typename T>
@@ -644,7 +699,7 @@ void dict_fromfile(
     clear_book_store(book_dict);
     clear_index_store(ind_dict);
 
-    const fs::path folder_path = NativePath::from_utf8(options.pathname + std::to_string(step) + "b");
+    const fs::path folder_path = NativePath::from_utf8(ad_book_folder_path(options, step));
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     if (!fs::exists(folder_path)) {
         throw std::runtime_error("Missing AD solve bucket folder: " + NativePath::to_utf8_string(folder_path));
@@ -712,8 +767,36 @@ std::unique_ptr<PrefixStore> create_index_ad(const IndexStore &ind_dict, int num
     return result;
 }
 
-std::vector<int> write_ind_chunked(const IndexStore &ind_dict, const RunOptions &options, int step) {
-    const fs::path folder_path = NativePath::from_utf8(options.pathname + std::to_string(step) + "bt");
+template <typename T>
+uint64_t estimate_chunked_current_folder_bytes(
+    const IndexStore &ind_dict,
+    const AdvancedMaskParam &param
+) {
+    uint64_t estimated_bytes = 0ULL;
+    for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
+        const auto &indices = ind_dict.at(key);
+        if (indices.empty()) {
+            continue;
+        }
+        const uint64_t rows = static_cast<uint64_t>(indices.size());
+        const uint64_t derive_size = static_cast<uint64_t>(derive_size_for_bucket(key, param.num_free_32k));
+        estimated_bytes = StoragePaths::saturating_add(
+            estimated_bytes,
+            rows * static_cast<uint64_t>(sizeof(uint64_t))
+        );
+        estimated_bytes = StoragePaths::saturating_add(
+            estimated_bytes,
+            rows * derive_size * static_cast<uint64_t>(sizeof(T))
+        );
+    }
+    return estimated_bytes;
+}
+
+std::vector<int> write_ind_chunked(
+    const IndexStore &ind_dict,
+    const RunOptions &options,
+    const fs::path &folder_path
+) {
     if (fs::exists(folder_path)) {
         fs::remove_all(folder_path);
     }
@@ -2020,12 +2103,12 @@ void iter_ind_dict4(
     double spawn_rate4,
     const RunOptions &options,
     int step,
+    const fs::path &folder,
     double &timer_acc,
     size_t &counter_acc,
     T &max_rate,
     int num_threads
 ) {
-    const fs::path folder = NativePath::from_utf8(options.pathname + std::to_string(step) + "bt");
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     for (int key : ind_dict0_keys) {
         std::vector<uint64_t> positions_array = read_binary_vector<uint64_t>(
@@ -2115,12 +2198,12 @@ void iter_ind_dict2(
     double spawn_rate4,
     const RunOptions &options,
     int step,
+    const fs::path &folder,
     double &timer_acc,
     size_t &counter_acc,
     T &max_rate,
     int num_threads
 ) {
-    const fs::path folder = NativePath::from_utf8(options.pathname + std::to_string(step) + "bt");
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     for (int key : ind_dict0_keys) {
         std::vector<uint64_t> positions_array = read_binary_vector<uint64_t>(
@@ -2247,8 +2330,8 @@ void recalculate_process_ad_chunked_impl(
         NativePath::create_directories(options.pathname + std::to_string(options.steps - 1) + "b", create_ec1);
         NativePath::create_directories(options.pathname + std::to_string(options.steps - 2) + "b", create_ec2);
     }
-    const std::string final_raw_path = options.pathname + std::to_string(options.steps - 2);
-    remove_temp_raw_layer_files(final_raw_path);
+    StoragePaths::remove_all_candidates(options, options.steps - 2, "", false);
+    StoragePaths::remove_all_candidates(options, options.steps - 2, ".7z", false);
 
     std::unordered_map<uint32_t, MatchCache> match_dict;
     bool started = false;
@@ -2260,10 +2343,10 @@ void recalculate_process_ad_chunked_impl(
             progress_total - static_cast<uint32_t>(step) - 2U,
             progress_total
         );
-        const std::string solved_folder = options.pathname + std::to_string(step) + "b";
-        if (NativePath::exists(solved_folder)) {
+        const std::string solved_folder = ad_book_folder_path(options, step);
+        if (StoragePaths::filename_exists(solved_folder)) {
             if (options.compress) {
-                maybe_do_compress_ad(options.pathname + std::to_string(step + 2) + "b");
+                maybe_do_compress_ad(ad_book_folder_path(options, step + 2));
             }
             debug_log("skipping step " + std::to_string(step));
             continue;
@@ -2281,10 +2364,7 @@ void recalculate_process_ad_chunked_impl(
         }
         const uint32_t original_board_sum = static_cast<uint32_t>(2 * step) + ini_board_sum;
         const double current_read_t0 = wall_time_seconds();
-        std::vector<uint64_t> d0 = read_temp_raw_layer(
-            options.pathname + std::to_string(step),
-            io_config
-        );
+        std::vector<uint64_t> d0 = read_temp_raw_layer(options, step, io_config);
         const double current_read_t1 = wall_time_seconds();
         const uint64_t raw_input_live = static_cast<uint64_t>(d0.size());
 
@@ -2306,7 +2386,17 @@ void recalculate_process_ad_chunked_impl(
         d0.clear();
         d0.shrink_to_fit();
 
-        std::vector<int> ind_dict0_keys = write_ind_chunked(ind_dict0, options, step);
+        auto current_folder_lease = StoragePaths::reserve_write_path(
+            options,
+            StoragePaths::ArtifactRole::Hot,
+            step,
+            "b",
+            estimate_chunked_current_folder_bytes<T>(ind_dict0, param)
+        );
+        const fs::path final_folder = NativePath::from_utf8(current_folder_lease.path());
+        fs::path temp_folder = final_folder;
+        temp_folder += ".tmp";
+        std::vector<int> ind_dict0_keys = write_ind_chunked(ind_dict0, options, temp_folder);
         release_index_store(ind_dict0);
         const double expand_t1 = wall_time_seconds();
 
@@ -2338,6 +2428,7 @@ void recalculate_process_ad_chunked_impl(
             options.spawn_rate4,
             options,
             step,
+            temp_folder,
             timer_acc,
             counter_acc,
             max_rate,
@@ -2408,18 +2499,18 @@ void recalculate_process_ad_chunked_impl(
             options.spawn_rate4,
             options,
             step,
+            temp_folder,
             timer_acc,
             counter_acc,
             max_rate,
             num_threads
         );
 
-        const fs::path temp_folder = NativePath::from_utf8(options.pathname + std::to_string(step) + "bt");
-        const fs::path final_folder = NativePath::from_utf8(options.pathname + std::to_string(step) + "b");
         publish_ad_chunked_folder(temp_folder, final_folder);
+        current_folder_lease.release();
 
-        const std::string raw_path = options.pathname + std::to_string(step);
-        remove_temp_raw_layer_files(raw_path);
+        StoragePaths::remove_all_candidates(options, step, "", false);
+        StoragePaths::remove_all_candidates(options, step, ".7z", false);
 
         AdSolveStatsRecord record;
         record.stage = "chunked_solve";
@@ -2510,8 +2601,8 @@ void recalculate_process_ad_impl(
         NativePath::create_directories(options.pathname + std::to_string(options.steps - 1) + "b", create_ec1);
         NativePath::create_directories(options.pathname + std::to_string(options.steps - 2) + "b", create_ec2);
     }
-    const std::string final_raw_path = options.pathname + std::to_string(options.steps - 2);
-    remove_temp_raw_layer_files(final_raw_path);
+    StoragePaths::remove_all_candidates(options, options.steps - 2, "", false);
+    StoragePaths::remove_all_candidates(options, options.steps - 2, ".7z", false);
 
     std::unordered_map<uint32_t, MatchCache> match_dict;
     bool started = false;
@@ -2523,10 +2614,10 @@ void recalculate_process_ad_impl(
             progress_total - static_cast<uint32_t>(step) - 2U,
             progress_total
         );
-        const std::string solved_folder = options.pathname + std::to_string(step) + "b";
-        if (NativePath::exists(solved_folder)) {
+        const std::string solved_folder = ad_book_folder_path(options, step);
+        if (StoragePaths::filename_exists(solved_folder)) {
             if (options.compress) {
-                maybe_do_compress_ad(options.pathname + std::to_string(step + 2) + "b");
+                maybe_do_compress_ad(ad_book_folder_path(options, step + 2));
             }
             debug_log("skipping step " + std::to_string(step));
             continue;
@@ -2544,10 +2635,7 @@ void recalculate_process_ad_impl(
         }
         const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
         const double current_read_t0 = wall_time_seconds();
-        std::vector<uint64_t> d0 = read_temp_raw_layer(
-            options.pathname + std::to_string(step),
-            io_config
-        );
+        std::vector<uint64_t> d0 = read_temp_raw_layer(options, step, io_config);
         const double current_read_t1 = wall_time_seconds();
         const uint64_t raw_input_live = static_cast<uint64_t>(d0.size());
         double t0 = wall_time_seconds();
@@ -2655,8 +2743,8 @@ void recalculate_process_ad_impl(
         dict_tofile(book_dict0, ind_dict0, options, step, false);
         const double current_write_t1 = wall_time_seconds();
 
-        const std::string raw_path = options.pathname + std::to_string(step);
-        remove_temp_raw_layer_files(raw_path);
+        StoragePaths::remove_all_candidates(options, step, "", false);
+        StoragePaths::remove_all_candidates(options, step, ".7z", false);
 
         AdSolveStatsRecord record;
         record.stage = "solve";

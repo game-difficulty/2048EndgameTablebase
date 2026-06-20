@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -292,6 +293,51 @@ void write_binary_vector_direct(
     DirectIoConfig config = {}
 ) {
     write_binary_span_direct(path_like, data.data(), data.size(), config);
+}
+
+template <typename T>
+std::string write_routed_binary_span_direct(
+    const RunOptions &options,
+    StoragePaths::ArtifactRole role,
+    int step,
+    const std::string &suffix,
+    const T *data,
+    size_t count,
+    DirectIoConfig config = {},
+    uint64_t estimated_bytes = std::numeric_limits<uint64_t>::max()
+) {
+    static_assert(std::is_trivially_copyable_v<T>, "binary span I/O requires trivially copyable types");
+    const uint64_t bytes =
+        estimated_bytes == std::numeric_limits<uint64_t>::max()
+            ? static_cast<uint64_t>(count) * static_cast<uint64_t>(sizeof(T))
+            : estimated_bytes;
+    auto lease = StoragePaths::reserve_write_path(options, role, step, suffix, bytes);
+    write_binary_span_direct(lease.path(), data, count, config);
+    std::string final_path = lease.path();
+    lease.release();
+    return final_path;
+}
+
+template <typename T>
+std::string write_routed_binary_vector_direct(
+    const RunOptions &options,
+    StoragePaths::ArtifactRole role,
+    int step,
+    const std::string &suffix,
+    const std::vector<T> &data,
+    DirectIoConfig config = {},
+    uint64_t estimated_bytes = std::numeric_limits<uint64_t>::max()
+) {
+    return write_routed_binary_span_direct(
+        options,
+        role,
+        step,
+        suffix,
+        data.data(),
+        data.size(),
+        config,
+        estimated_bytes
+    );
 }
 
 } // namespace FileIOUtils

@@ -244,6 +244,32 @@ std::vector<uint64_t> read_raw_file(const std::string &path, FileIOUtils::Direct
     return data;
 }
 
+std::vector<uint64_t> read_raw_file(const RunOptions &options, int step, FileIOUtils::DirectIoConfig config) {
+    const std::string raw_path = StoragePaths::existing_path_for(options, step, "", false);
+    if (!raw_path.empty()) {
+        return read_raw_file(raw_path, config);
+    }
+    const std::string archive_path = StoragePaths::existing_path_for(options, step, ".7z", false);
+    if (!archive_path.empty()) {
+        const double t0 = wall_time_seconds();
+        std::vector<uint64_t> data = read_temp_uint64_archive(archive_path);
+        const double t1 = wall_time_seconds();
+        const double elapsed = std::max(t1 - t0, 1e-12);
+        const uint64_t bytes = static_cast<uint64_t>(data.size()) * static_cast<uint64_t>(sizeof(uint64_t));
+        std::ostringstream oss;
+        oss << "ad raw read path=" << archive_path
+            << " bytes=" << bytes
+            << " direct_io=" << (config.enabled ? 1 : 0)
+            << " qd=" << config.queue_depth
+            << " chunk_mib=" << config.chunk_mib
+            << " seconds=" << round_to_2(elapsed)
+            << " gibps=" << round_to_2(static_cast<double>(bytes) / elapsed / 1024.0 / 1024.0 / 1024.0);
+        debug_log(oss.str());
+        return data;
+    }
+    return {};
+}
+
 void write_raw_file(
     const std::string &path,
     const std::vector<uint64_t> &data,
@@ -272,6 +298,39 @@ void write_raw_file(
         << " seconds=" << round_to_2(elapsed)
         << " gibps=" << round_to_2(static_cast<double>(bytes) / elapsed / 1024.0 / 1024.0 / 1024.0);
     debug_log(oss.str());
+}
+
+void write_raw_file(
+    const RunOptions &options,
+    int step,
+    const std::vector<uint64_t> &data,
+    FileIOUtils::DirectIoConfig config,
+    bool compressed = false
+) {
+    const uint64_t raw_bytes = static_cast<uint64_t>(data.size()) * static_cast<uint64_t>(sizeof(uint64_t));
+    if (compressed) {
+        auto lease = StoragePaths::reserve_write_path(
+            options,
+            StoragePaths::ArtifactRole::Hot,
+            step,
+            ".7z",
+            StoragePaths::scale_ratio(raw_bytes, 25ULL)
+        );
+        write_raw_file(NativePath::replace_extension_utf8(lease.path()), data, config, true);
+        StoragePaths::remove_all_candidates(options, step, "", false);
+        lease.release();
+    } else {
+        FileIOUtils::write_routed_binary_vector_direct(
+            options,
+            StoragePaths::ArtifactRole::Hot,
+            step,
+            "",
+            data,
+            config,
+            raw_bytes
+        );
+        StoragePaths::remove_all_candidates(options, step, ".7z", false);
+    }
 }
 
 std::vector<std::vector<double>> load_length_factors(const std::string &path, double default_value) {
@@ -523,33 +582,56 @@ std::pair<std::vector<std::vector<double>>, double> update_parameters_big(
 
 RestartResult handle_restart_ad(
     int step_index,
-    const std::string &pathname,
+    const RunOptions &options,
     const std::vector<uint64_t> &arr_init,
     bool started,
     FileIOUtils::DirectIoConfig io_config,
     bool compress_temp_files
 ) {
+    const std::string &pathname = options.pathname;
     const std::string path_i = pathname + std::to_string(step_index);
     const std::string path_i_plus_1 = pathname + std::to_string(step_index + 1);
     const std::string path_i_minus_1 = pathname + std::to_string(step_index - 1);
-    const bool has_readable_book_archive = is_readable_temp_archive(path_i + "b.7z");
-    const bool has_readable_raw_archive = is_readable_temp_archive(path_i + ".7z");
-    if ((NativePath::exists(path_i_plus_1) && NativePath::exists(path_i)) ||
-        (NativePath::exists(path_i_plus_1 + "b") && NativePath::exists(path_i)) ||
-        (NativePath::exists(path_i_plus_1 + ".z") && NativePath::exists(path_i)) ||
-        NativePath::exists(path_i + "b") ||
-        NativePath::exists(path_i + ".z") ||
-        has_readable_book_archive ||
-        has_readable_raw_archive) {
+    (void)path_i;
+    (void)path_i_plus_1;
+    (void)path_i_minus_1;
+    const bool current_raw_exists =
+        StoragePaths::filename_exists_any(options, step_index, "", false);
+    const bool next_raw_exists =
+        StoragePaths::filename_exists_any(options, step_index + 1, "", false);
+    const bool current_book_exists =
+        StoragePaths::filename_exists_any(options, step_index, "b", false);
+    const bool next_book_exists =
+        StoragePaths::filename_exists_any(options, step_index + 1, "b", false);
+    const bool current_compressed_exists =
+        StoragePaths::filename_exists_any(options, step_index, ".z", true);
+    const bool next_compressed_exists =
+        StoragePaths::filename_exists_any(options, step_index + 1, ".z", true);
+    const bool current_book_archive_exists =
+        StoragePaths::filename_exists_any(options, step_index, "b.7z", false);
+    const bool current_raw_archive_exists =
+        StoragePaths::filename_exists_any(options, step_index, ".7z", false);
+    if ((next_raw_exists && current_raw_exists) ||
+        (next_book_exists && current_raw_exists) ||
+        (next_compressed_exists && current_raw_exists) ||
+        current_book_exists ||
+        current_compressed_exists ||
+        current_book_archive_exists ||
+        current_raw_archive_exists) {
         debug_log("skipping step " + std::to_string(step_index));
         return {};
     }
     if (step_index == 1) {
-        write_raw_file(path_i_minus_1, arr_init, io_config, compress_temp_files);
+        write_raw_file(options, step_index - 1, arr_init, io_config, compress_temp_files);
         return {true, true, arr_init, {}};
     }
     if (!started) {
-        return {true, true, read_raw_file(path_i_minus_1, io_config), read_raw_file(path_i, io_config)};
+        return {
+            true,
+            true,
+            read_raw_file(options, step_index - 1, io_config),
+            read_raw_file(options, step_index, io_config)
+        };
     }
     return {true, true, {}, {}};
 }
@@ -1644,7 +1726,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
     PostValidateCapacityFloor post_validate_floor;
 
     for (int i = 1; i < options.steps - 1; ++i) {
-        RestartResult restart = handle_restart_ad(i, options.pathname, arr_init, started, io_config, options.compress_temp_files);
+        RestartResult restart = handle_restart_ad(i, options, arr_init, started, io_config, options.compress_temp_files);
         if (!restart.run) {
             continue;
         }
@@ -1836,7 +1918,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
         clear_u64_buffer(hashmap1, n);
         const double write_t0 = wall_time_seconds();
         NativeDiagnostics::mark("AD.generate write begin step=" + std::to_string(i));
-        write_raw_file(options.pathname + std::to_string(i), d0, io_config, options.compress_temp_files);
+        write_raw_file(options, i, d0, io_config, options.compress_temp_files);
         NativeDiagnostics::mark("AD.generate write done step=" + std::to_string(i));
         stats_record.write_seconds = wall_time_seconds() - write_t0;
         if (has_stats_record) {

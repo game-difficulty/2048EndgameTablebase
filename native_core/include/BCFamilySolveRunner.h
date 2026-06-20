@@ -2,13 +2,16 @@
 
 #include "BCDirectFileIO.h"
 #include "BCFamilyRoutePlanner.h"
+#include "BCCellCompressedPositionFile.h"
 #include "BCCompressedResult.h"
 #include "BCFamilySolve.h"
 #include "BCLoadedCellScanner.h"
 #include "BCPositionScanner.h"
 #include "BCResidentSolve.h"
 #include "BCSingleChunkSolve.h"
+#include "CompressionBridge.h"
 #include "FormationRuntime.h"
+#include "PathUtils.h"
 #include "SymmetryUtils.h"
 
 #include <algorithm>
@@ -44,6 +47,9 @@ struct BCFamilySolveRunOptions {
     std::filesystem::path generated_position_dir;
     std::filesystem::path solved_output_dir;
     std::filesystem::path archive_output_dir;
+    std::vector<std::filesystem::path> generated_position_dirs;
+    std::vector<std::filesystem::path> solved_output_dirs;
+    std::vector<std::filesystem::path> archive_output_dirs;
     std::string prefix;
     uint32_t target_rank = 8U;
     int success_target_rank = -1;
@@ -257,6 +263,21 @@ namespace detail {
     return dir / (prefix + std::to_string(ordinal) + ".bcpos");
 }
 
+[[nodiscard]] inline bool bc_family_runner_is_position_archive_path(
+    const std::filesystem::path &path
+) {
+    const std::string name = path.filename().string();
+    const std::string suffix = ".bcpos.7z";
+    return name.size() > suffix.size() &&
+        name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+[[nodiscard]] inline bool bc_family_runner_is_cell_compressed_position_path(
+    const std::filesystem::path &path
+) {
+    return bc_is_cell_compressed_position_path(path);
+}
+
 [[nodiscard]] inline std::filesystem::path bc_family_runner_success_path(
     const std::filesystem::path &dir,
     const std::string &prefix,
@@ -290,12 +311,60 @@ namespace detail {
         std::filesystem::absolute(rhs).lexically_normal();
 }
 
+[[nodiscard]] inline std::vector<std::filesystem::path> bc_family_runner_unique_dirs(
+    const std::filesystem::path &primary,
+    const std::vector<std::filesystem::path> &extra
+) {
+    std::vector<std::filesystem::path> dirs;
+    auto add = [&dirs](const std::filesystem::path &dir) {
+        if (dir.empty()) {
+            return;
+        }
+        for (const std::filesystem::path &existing : dirs) {
+            if (bc_family_runner_same_path(existing, dir)) {
+                return;
+            }
+        }
+        dirs.push_back(dir);
+    };
+    add(primary);
+    for (const std::filesystem::path &dir : extra) {
+        add(dir);
+    }
+    return dirs;
+}
+
+[[nodiscard]] inline std::vector<std::filesystem::path> bc_family_runner_generated_dirs(
+    const BCFamilySolveRunOptions &options
+) {
+    return bc_family_runner_unique_dirs(options.generated_position_dir, options.generated_position_dirs);
+}
+
+[[nodiscard]] inline std::vector<std::filesystem::path> bc_family_runner_solved_dirs(
+    const BCFamilySolveRunOptions &options
+) {
+    return bc_family_runner_unique_dirs(options.solved_output_dir, options.solved_output_dirs);
+}
+
+[[nodiscard]] inline std::vector<std::filesystem::path> bc_family_runner_archive_dirs(
+    const BCFamilySolveRunOptions &options
+) {
+    return bc_family_runner_unique_dirs(
+        bc_family_runner_archive_dir(options),
+        options.archive_output_dirs);
+}
+
 [[nodiscard]] inline std::map<uint32_t, BCFamilySolveRunLayerFile>
 bc_family_runner_discover_layers_impl(
     const BCFamilySolveRunOptions &options,
     bool allow_missing_or_empty
 ) {
-    if (!std::filesystem::is_directory(options.generated_position_dir)) {
+    const std::vector<std::filesystem::path> generated_dirs = bc_family_runner_generated_dirs(options);
+    const bool has_any_dir = std::any_of(
+        generated_dirs.begin(),
+        generated_dirs.end(),
+        [](const std::filesystem::path &dir) { return std::filesystem::is_directory(dir); });
+    if (!has_any_dir) {
         if (allow_missing_or_empty) {
             return {};
         }
@@ -304,20 +373,34 @@ bc_family_runner_discover_layers_impl(
             options.generated_position_dir.string()
         );
     }
-    const std::regex pattern("^" + options.prefix + "([0-9]+)\\.bcpos$");
+    const std::regex pattern("^" + options.prefix + "([0-9]+)\\.bcpos(c|\\.7z)?$");
     std::map<uint32_t, BCFamilySolveRunLayerFile> layers;
-    for (const std::filesystem::directory_entry &entry :
-         std::filesystem::directory_iterator(options.generated_position_dir)) {
-        if (!entry.is_regular_file()) {
+    for (const std::filesystem::path &dir : generated_dirs) {
+        if (!std::filesystem::is_directory(dir)) {
             continue;
         }
-        const std::string name = entry.path().filename().string();
-        std::smatch match;
-        if (!std::regex_match(name, match, pattern)) {
-            continue;
+        for (const std::filesystem::directory_entry &entry :
+             std::filesystem::directory_iterator(dir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            const std::string name = entry.path().filename().string();
+            std::smatch match;
+            if (!std::regex_match(name, match, pattern)) {
+                continue;
+            }
+            const uint32_t ordinal = static_cast<uint32_t>(std::stoul(match[1].str()));
+            const auto existing = layers.find(ordinal);
+            const bool is_raw = !bc_family_runner_is_position_archive_path(entry.path()) &&
+                !bc_family_runner_is_cell_compressed_position_path(entry.path());
+            const bool replace_archive =
+                bc_family_runner_is_cell_compressed_position_path(entry.path()) &&
+                existing != layers.end() &&
+                bc_family_runner_is_position_archive_path(existing->second.path);
+            if (is_raw || replace_archive || existing == layers.end()) {
+                layers[ordinal] = BCFamilySolveRunLayerFile{ordinal, entry.path()};
+            }
         }
-        const uint32_t ordinal = static_cast<uint32_t>(std::stoul(match[1].str()));
-        layers.emplace(ordinal, BCFamilySolveRunLayerFile{ordinal, entry.path()});
     }
     if (layers.empty()) {
         if (allow_missing_or_empty) {
@@ -342,57 +425,59 @@ bc_family_runner_discover_layers_or_empty(const BCFamilySolveRunOptions &options
 
 [[nodiscard]] inline std::map<uint32_t, BCFamilySolveArchiveExactLayer>
 bc_family_runner_discover_archive_exact_layers(const BCFamilySolveRunOptions &options) {
-    const std::filesystem::path archive_dir = bc_family_runner_archive_dir(options);
     std::map<uint32_t, BCFamilySolveArchiveExactLayer> layers;
-    if (archive_dir.empty() || !std::filesystem::is_directory(archive_dir)) {
-        return layers;
-    }
     const std::regex pattern("^" + options.prefix + "([0-9]+)\\.bcpos$");
-    for (const std::filesystem::directory_entry &entry :
-         std::filesystem::directory_iterator(archive_dir)) {
-        if (!entry.is_regular_file()) {
+    for (const std::filesystem::path &archive_dir : bc_family_runner_archive_dirs(options)) {
+        if (archive_dir.empty() || !std::filesystem::is_directory(archive_dir)) {
             continue;
         }
-        const std::string name = entry.path().filename().string();
-        std::smatch match;
-        if (!std::regex_match(name, match, pattern)) {
-            continue;
+        for (const std::filesystem::directory_entry &entry :
+             std::filesystem::directory_iterator(archive_dir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            const std::string name = entry.path().filename().string();
+            std::smatch match;
+            if (!std::regex_match(name, match, pattern)) {
+                continue;
+            }
+            const uint32_t ordinal = static_cast<uint32_t>(std::stoul(match[1].str()));
+            const std::filesystem::path success_path =
+                bc_family_runner_success_path(archive_dir, options.prefix, ordinal);
+            std::error_code ec;
+            if (!std::filesystem::exists(success_path, ec) || ec) {
+                continue;
+            }
+            layers.emplace(
+                ordinal,
+                BCFamilySolveArchiveExactLayer{ordinal, entry.path(), success_path});
         }
-        const uint32_t ordinal = static_cast<uint32_t>(std::stoul(match[1].str()));
-        const std::filesystem::path success_path =
-            bc_family_runner_success_path(archive_dir, options.prefix, ordinal);
-        std::error_code ec;
-        if (!std::filesystem::exists(success_path, ec) || ec) {
-            continue;
-        }
-        layers.emplace(
-            ordinal,
-            BCFamilySolveArchiveExactLayer{ordinal, entry.path(), success_path});
     }
     return layers;
 }
 
 [[nodiscard]] inline std::map<uint32_t, std::filesystem::path>
 bc_family_runner_discover_archive_compressed_layers(const BCFamilySolveRunOptions &options) {
-    const std::filesystem::path archive_dir = bc_family_runner_archive_dir(options);
     std::map<uint32_t, std::filesystem::path> layers;
-    if (archive_dir.empty() || !std::filesystem::is_directory(archive_dir)) {
-        return layers;
-    }
     const std::regex pattern(
         "^" + options.prefix + "([0-9]+)\\.bccmp$");
-    for (const std::filesystem::directory_entry &entry :
-         std::filesystem::directory_iterator(archive_dir)) {
-        if (!entry.is_regular_file()) {
+    for (const std::filesystem::path &archive_dir : bc_family_runner_archive_dirs(options)) {
+        if (archive_dir.empty() || !std::filesystem::is_directory(archive_dir)) {
             continue;
         }
-        const std::string name = entry.path().filename().string();
-        std::smatch match;
-        if (!std::regex_match(name, match, pattern)) {
-            continue;
+        for (const std::filesystem::directory_entry &entry :
+             std::filesystem::directory_iterator(archive_dir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            const std::string name = entry.path().filename().string();
+            std::smatch match;
+            if (!std::regex_match(name, match, pattern)) {
+                continue;
+            }
+            const uint32_t ordinal = static_cast<uint32_t>(std::stoul(match[1].str()));
+            layers.emplace(ordinal, entry.path());
         }
-        const uint32_t ordinal = static_cast<uint32_t>(std::stoul(match[1].str()));
-        layers.emplace(ordinal, entry.path());
     }
     return layers;
 }
@@ -448,6 +533,24 @@ bc_family_runner_discover_archive_compressed_layers(const BCFamilySolveRunOption
     const std::filesystem::path &path,
     const BCLut &lut
 ) {
+    if (bc_family_runner_is_position_archive_path(path)) {
+        std::vector<uint8_t> bytes = read_temp_byte_archive(NativePath::to_utf8_string(path));
+        if (bytes.empty()) {
+            throw std::runtime_error("failed to read BC generated position archive: " + path.string());
+        }
+        BCPositionStreamingReader reader(
+            std::make_unique<BCMemoryReadableFile>(std::move(bytes)),
+            lut);
+        reader.set_validate_loaded_cells(false);
+        return reader;
+    }
+    if (bc_family_runner_is_cell_compressed_position_path(path)) {
+        BCPositionStreamingReader reader(
+            std::make_unique<BCCellCompressedPositionReadableFile>(path),
+            lut);
+        reader.set_validate_loaded_cells(false);
+        return reader;
+    }
     BCPositionStreamingReader reader = options.direct_io
         ? BCPositionStreamingReader::open_direct_auto(
               path,
@@ -464,6 +567,20 @@ bc_family_runner_discover_archive_compressed_layers(const BCFamilySolveRunOption
     const std::filesystem::path &path,
     const BCLut &lut
 ) {
+    if (bc_family_runner_is_position_archive_path(path)) {
+        std::vector<uint8_t> bytes = read_temp_byte_archive(NativePath::to_utf8_string(path));
+        if (bytes.empty()) {
+            throw std::runtime_error("failed to read BC generated position archive: " + path.string());
+        }
+        return BCPositionFileReader(
+            std::make_unique<BCMemoryReadableFile>(std::move(bytes)),
+            lut);
+    }
+    if (bc_family_runner_is_cell_compressed_position_path(path)) {
+        return BCPositionFileReader(
+            std::make_unique<BCCellCompressedPositionReadableFile>(path),
+            lut);
+    }
     return options.direct_io
         ? BCPositionFileReader::open_direct_auto(
               path,
@@ -494,13 +611,16 @@ inline void bc_family_runner_remove_exact_layer_files(
     uint32_t ordinal
 ) {
     std::error_code ec;
-    std::filesystem::remove(
-        bc_family_runner_position_path(options.solved_output_dir, options.prefix, ordinal),
-        ec);
-    ec.clear();
-    std::filesystem::remove(
-        bc_family_runner_success_path(options.solved_output_dir, options.prefix, ordinal),
-        ec);
+    for (const std::filesystem::path &dir : bc_family_runner_solved_dirs(options)) {
+        std::filesystem::remove(
+            bc_family_runner_position_path(dir, options.prefix, ordinal),
+            ec);
+        ec.clear();
+        std::filesystem::remove(
+            bc_family_runner_success_path(dir, options.prefix, ordinal),
+            ec);
+        ec.clear();
+    }
 }
 
 inline void bc_family_runner_remove_file_quiet(const std::filesystem::path &path) {
@@ -517,6 +637,27 @@ inline void bc_family_runner_remove_generated_layer_file(
     bc_family_runner_remove_file_quiet(layer.path);
 }
 
+[[nodiscard]] inline std::optional<std::pair<std::filesystem::path, std::filesystem::path>>
+bc_family_runner_find_exact_layer_paths(
+    const BCFamilySolveRunOptions &options,
+    uint32_t ordinal
+) {
+    for (const std::filesystem::path &dir : bc_family_runner_solved_dirs(options)) {
+        const std::filesystem::path position_path =
+            bc_family_runner_position_path(dir, options.prefix, ordinal);
+        const std::filesystem::path success_path =
+            bc_family_runner_success_path(dir, options.prefix, ordinal);
+        std::error_code ec;
+        const bool has_position = std::filesystem::exists(position_path, ec) && !ec;
+        ec.clear();
+        const bool has_success = std::filesystem::exists(success_path, ec) && !ec;
+        if (has_position && has_success) {
+            return std::make_pair(position_path, success_path);
+        }
+    }
+    return std::nullopt;
+}
+
 template <typename StorageT>
 [[nodiscard]] inline bool bc_family_runner_exact_layer_valid(
     const BCFamilySolveRunOptions &options,
@@ -528,15 +669,7 @@ template <typename StorageT>
     (void)remove_invalid;
     // Resume/checkpoint decisions intentionally only inspect filenames. File
     // contents are opened later only when the layer is actually used.
-    const std::filesystem::path position_path =
-        bc_family_runner_position_path(options.solved_output_dir, options.prefix, ordinal);
-    const std::filesystem::path success_path =
-        bc_family_runner_success_path(options.solved_output_dir, options.prefix, ordinal);
-    std::error_code ec;
-    const bool has_position = std::filesystem::exists(position_path, ec) && !ec;
-    ec.clear();
-    const bool has_success = std::filesystem::exists(success_path, ec) && !ec;
-    return has_position && has_success;
+    return bc_family_runner_find_exact_layer_paths(options, ordinal).has_value();
 }
 
 [[nodiscard]] inline std::unique_ptr<BCWritableFile> bc_family_runner_make_writer(
@@ -654,6 +787,59 @@ inline void bc_family_runner_add_final_compress_stats(
         BCCompressedResult::kCompressedLayerFileExtension);
 }
 
+[[nodiscard]] inline std::vector<std::filesystem::path> bc_family_runner_compressed_output_candidates(
+    const BCFamilySolveRunOptions &options,
+    uint32_t ordinal,
+    const std::filesystem::path &position_path
+) {
+    std::vector<std::filesystem::path> dirs = bc_family_runner_archive_dirs(options);
+    if (dirs.empty()) {
+        dirs.push_back(position_path.parent_path());
+    }
+    std::vector<std::filesystem::path> paths;
+    paths.reserve(dirs.size());
+    for (const std::filesystem::path &dir : dirs) {
+        paths.push_back(dir / (
+            options.prefix + std::to_string(ordinal) +
+            BCCompressedResult::kCompressedLayerFileExtension));
+    }
+    return paths;
+}
+
+[[nodiscard]] inline uint64_t bc_family_runner_file_size_or_zero(const std::filesystem::path &path) {
+    std::error_code ec;
+    const uintmax_t size = std::filesystem::file_size(path, ec);
+    return ec ? 0ULL : static_cast<uint64_t>(size);
+}
+
+[[nodiscard]] inline uint64_t bc_family_runner_estimate_compressed_output_bytes(
+    const std::filesystem::path &position_path,
+    const std::filesystem::path &success_path
+) {
+    return StoragePaths::estimate_compressed_bytes(
+        bc_family_runner_file_size_or_zero(position_path),
+        bc_family_runner_file_size_or_zero(success_path));
+}
+
+[[nodiscard]] inline StoragePaths::ReservedWritePath bc_family_runner_reserve_compressed_output(
+    const BCFamilySolveRunOptions &options,
+    uint32_t ordinal,
+    const std::filesystem::path &position_path,
+    const std::filesystem::path &success_path
+) {
+    std::vector<std::string> candidates;
+    for (const std::filesystem::path &path :
+         bc_family_runner_compressed_output_candidates(options, ordinal, position_path)) {
+        if (!path.parent_path().empty()) {
+            std::filesystem::create_directories(path.parent_path());
+        }
+        candidates.push_back(NativePath::to_utf8_string(path));
+    }
+    return StoragePaths::reserve_write_path_from_candidates(
+        candidates,
+        bc_family_runner_estimate_compressed_output_bytes(position_path, success_path));
+}
+
 [[nodiscard]] inline std::optional<uint32_t> bc_family_runner_parse_archive_tmp_ordinal(
     const std::string &name,
     const std::string &prefix,
@@ -707,90 +893,90 @@ struct BCFamilyArchiveTmpPair {
 inline void bc_family_runner_cleanup_archive_tmp_layers(
     const BCFamilySolveRunOptions &options
 ) {
-    const std::filesystem::path archive_dir = bc_family_runner_archive_dir(options);
-    if (archive_dir.empty() || !std::filesystem::is_directory(archive_dir)) {
-        return;
-    }
-
-    std::map<uint32_t, BCFamilyArchiveTmpPair> tmp_layers;
     const std::string position_suffix = ".bcpos.archive_tmp";
     const std::string success_suffix = ".bcsuc.archive_tmp";
-    for (const std::filesystem::directory_entry &entry :
-         std::filesystem::directory_iterator(archive_dir)) {
-        if (!entry.is_regular_file()) {
+    for (const std::filesystem::path &archive_dir : bc_family_runner_archive_dirs(options)) {
+        if (archive_dir.empty() || !std::filesystem::is_directory(archive_dir)) {
             continue;
         }
-        const std::string name = entry.path().filename().string();
-        if (std::optional<uint32_t> ordinal =
-                bc_family_runner_parse_archive_tmp_ordinal(
-                    name,
-                    options.prefix,
-                    position_suffix)) {
-            tmp_layers[*ordinal].position_tmp = entry.path();
-            continue;
+        std::map<uint32_t, BCFamilyArchiveTmpPair> tmp_layers;
+        for (const std::filesystem::directory_entry &entry :
+             std::filesystem::directory_iterator(archive_dir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            const std::string name = entry.path().filename().string();
+            if (std::optional<uint32_t> ordinal =
+                    bc_family_runner_parse_archive_tmp_ordinal(
+                        name,
+                        options.prefix,
+                        position_suffix)) {
+                tmp_layers[*ordinal].position_tmp = entry.path();
+                continue;
+            }
+            if (std::optional<uint32_t> ordinal =
+                    bc_family_runner_parse_archive_tmp_ordinal(
+                        name,
+                        options.prefix,
+                        success_suffix)) {
+                tmp_layers[*ordinal].success_tmp = entry.path();
+            }
         }
-        if (std::optional<uint32_t> ordinal =
-                bc_family_runner_parse_archive_tmp_ordinal(
-                    name,
-                    options.prefix,
-                    success_suffix)) {
-            tmp_layers[*ordinal].success_tmp = entry.path();
-        }
-    }
 
-    for (const auto &[ordinal, pair] : tmp_layers) {
-        const std::filesystem::path position_target =
-            bc_family_runner_position_path(archive_dir, options.prefix, ordinal);
-        const std::filesystem::path success_target =
-            bc_family_runner_success_path(archive_dir, options.prefix, ordinal);
-        const std::filesystem::path compressed_target =
-            archive_dir / (
-                options.prefix + std::to_string(ordinal) +
-                BCCompressedResult::kCompressedLayerFileExtension);
+        for (const auto &[ordinal, pair] : tmp_layers) {
+            const std::filesystem::path position_target =
+                bc_family_runner_position_path(archive_dir, options.prefix, ordinal);
+            const std::filesystem::path success_target =
+                bc_family_runner_success_path(archive_dir, options.prefix, ordinal);
+            const std::filesystem::path compressed_target =
+                archive_dir / (
+                    options.prefix + std::to_string(ordinal) +
+                    BCCompressedResult::kCompressedLayerFileExtension);
 
-        std::error_code ec;
-        const bool has_compressed =
-            std::filesystem::exists(compressed_target, ec) && !ec;
-        ec.clear();
-        const bool has_position =
-            std::filesystem::exists(position_target, ec) && !ec;
-        ec.clear();
-        const bool has_success =
-            std::filesystem::exists(success_target, ec) && !ec;
+            std::error_code ec;
+            const bool has_compressed =
+                std::filesystem::exists(compressed_target, ec) && !ec;
+            ec.clear();
+            const bool has_position =
+                std::filesystem::exists(position_target, ec) && !ec;
+            ec.clear();
+            const bool has_success =
+                std::filesystem::exists(success_target, ec) && !ec;
 
-        if (has_compressed || (has_position && has_success)) {
+            if (has_compressed || (has_position && has_success)) {
+                bc_family_runner_remove_file_quiet(pair.position_tmp);
+                bc_family_runner_remove_file_quiet(pair.success_tmp);
+                continue;
+            }
+
+            const bool position_tmp_valid =
+                !pair.position_tmp.empty() &&
+                bc_family_runner_file_magic_matches(pair.position_tmp, kBCPositionMagic);
+            const bool success_tmp_valid =
+                !pair.success_tmp.empty() &&
+                bc_family_runner_file_magic_matches(pair.success_tmp, kBCSuccessMagic);
+            const bool can_recover_position = has_position || position_tmp_valid;
+            const bool can_recover_success = has_success || success_tmp_valid;
+            if (can_recover_position && can_recover_success) {
+                if (!has_position) {
+                    bc_family_runner_publish_file(pair.position_tmp, position_target);
+                } else {
+                    bc_family_runner_remove_file_quiet(pair.position_tmp);
+                }
+                if (!has_success) {
+                    bc_family_runner_publish_file(pair.success_tmp, success_target);
+                } else {
+                    bc_family_runner_remove_file_quiet(pair.success_tmp);
+                }
+                continue;
+            }
+
             bc_family_runner_remove_file_quiet(pair.position_tmp);
             bc_family_runner_remove_file_quiet(pair.success_tmp);
-            continue;
-        }
-
-        const bool position_tmp_valid =
-            !pair.position_tmp.empty() &&
-            bc_family_runner_file_magic_matches(pair.position_tmp, kBCPositionMagic);
-        const bool success_tmp_valid =
-            !pair.success_tmp.empty() &&
-            bc_family_runner_file_magic_matches(pair.success_tmp, kBCSuccessMagic);
-        const bool can_recover_position = has_position || position_tmp_valid;
-        const bool can_recover_success = has_success || success_tmp_valid;
-        if (can_recover_position && can_recover_success) {
-            if (!has_position) {
-                bc_family_runner_publish_file(pair.position_tmp, position_target);
-            } else {
-                bc_family_runner_remove_file_quiet(pair.position_tmp);
+            if (has_position != has_success) {
+                bc_family_runner_remove_file_quiet(position_target);
+                bc_family_runner_remove_file_quiet(success_target);
             }
-            if (!has_success) {
-                bc_family_runner_publish_file(pair.success_tmp, success_target);
-            } else {
-                bc_family_runner_remove_file_quiet(pair.success_tmp);
-            }
-            continue;
-        }
-
-        bc_family_runner_remove_file_quiet(pair.position_tmp);
-        bc_family_runner_remove_file_quiet(pair.success_tmp);
-        if (has_position != has_success) {
-            bc_family_runner_remove_file_quiet(position_target);
-            bc_family_runner_remove_file_quiet(success_target);
         }
     }
 }
@@ -817,6 +1003,21 @@ inline void bc_family_runner_cleanup_archive_tmp_layers(
         return false;
     }
     return compressed_time >= position_time && compressed_time >= success_time;
+}
+
+[[nodiscard]] inline std::optional<std::filesystem::path> bc_family_runner_find_fresh_compressed_output(
+    const BCFamilySolveRunOptions &options,
+    uint32_t ordinal,
+    const std::filesystem::path &position_path,
+    const std::filesystem::path &success_path
+) {
+    for (const std::filesystem::path &candidate :
+         bc_family_runner_compressed_output_candidates(options, ordinal, position_path)) {
+        if (bc_family_runner_compressed_file_is_fresh(candidate, position_path, success_path)) {
+            return candidate;
+        }
+    }
+    return std::nullopt;
 }
 
 inline void bc_family_runner_remove_exact_sources_after_compress(
@@ -852,19 +1053,23 @@ inline void bc_family_runner_remove_exact_sources_after_compress(
     if (!options.compress) {
         return {};
     }
-    const std::filesystem::path output_path =
-        bc_family_runner_compressed_output_path(options, ordinal, position_path);
-
-    if (bc_family_runner_compressed_file_is_fresh(output_path, position_path, success_path)) {
+    if (const std::optional<std::filesystem::path> fresh_output =
+            bc_family_runner_find_fresh_compressed_output(options, ordinal, position_path, success_path)) {
         if (remove_sources_after_compress) {
             bc_family_runner_remove_exact_sources_after_compress(
-                output_path,
+                *fresh_output,
                 position_path,
                 success_path);
         }
         return {};
     }
 
+    auto output_lease = bc_family_runner_reserve_compressed_output(
+        options,
+        ordinal,
+        position_path,
+        success_path);
+    const std::filesystem::path output_path = NativePath::from_utf8(output_lease.path());
     const BCLut lut(bc_family_runner_legal_tiles(options.target_rank));
     BCCompressedResult::CompressStats stats =
         BCCompressedResult::compress_exact_layer_to_result(
@@ -873,6 +1078,7 @@ inline void bc_family_runner_remove_exact_sources_after_compress(
         lut,
         output_path,
         bc_family_runner_make_compress_options(options));
+    output_lease.release();
     if (remove_sources_after_compress) {
         bc_family_runner_remove_exact_sources_after_compress(
             output_path,
@@ -902,18 +1108,23 @@ bc_family_runner_final_compression_hook_flat(
     if (!options.compress) {
         return {};
     }
-    const std::filesystem::path output_path =
-        bc_family_runner_compressed_output_path(options, ordinal, position_path);
-    if (bc_family_runner_compressed_file_is_fresh(output_path, position_path, success_path)) {
+    if (const std::optional<std::filesystem::path> fresh_output =
+            bc_family_runner_find_fresh_compressed_output(options, ordinal, position_path, success_path)) {
         if (remove_sources_after_compress) {
             bc_family_runner_remove_exact_sources_after_compress(
-                output_path,
+                *fresh_output,
                 position_path,
                 success_path);
         }
         return {};
     }
 
+    auto output_lease = bc_family_runner_reserve_compressed_output(
+        options,
+        ordinal,
+        position_path,
+        success_path);
+    const std::filesystem::path output_path = NativePath::from_utf8(output_lease.path());
     BCCompressedResult::CompressStats stats =
         BCCompressedResult::compress_flat_success_layer_to_result(
             position,
@@ -923,6 +1134,7 @@ bc_family_runner_final_compression_hook_flat(
             dtype,
             output_path,
             bc_family_runner_make_compress_options(options));
+    output_lease.release();
     if (remove_sources_after_compress) {
         bc_family_runner_remove_exact_sources_after_compress(
             output_path,
@@ -957,7 +1169,7 @@ template <typename StorageT>
                 layer.dtype,
                 position_path,
                 success_path,
-                false));
+                true));
         return true;
     }
     if (retired.single_frontier_cache) {
@@ -974,7 +1186,7 @@ template <typename StorageT>
                 layer.dtype,
                 position_path,
                 success_path,
-                false));
+                true));
         return true;
     }
     return false;
@@ -1236,15 +1448,16 @@ template <typename StorageT>
     const uint32_t ord = static_cast<uint32_t>(ordinal);
     BCFamilySolveFrontierLayer<StorageT> layer;
     layer.ordinal = ordinal;
-    layer.position_path = bc_family_runner_position_path(options.solved_output_dir, options.prefix, ord);
-    layer.success_path = bc_family_runner_success_path(options.solved_output_dir, options.prefix, ord);
-    if (!std::filesystem::exists(layer.position_path) ||
-        !std::filesystem::exists(layer.success_path)) {
+    const std::optional<std::pair<std::filesystem::path, std::filesystem::path>> exact_paths =
+        bc_family_runner_find_exact_layer_paths(options, ord);
+    if (!exact_paths.has_value()) {
         throw std::runtime_error(
             "BC family runner missing exact frontier files for ordinal " +
             std::to_string(ord)
         );
     }
+    layer.position_path = exact_paths->first;
+    layer.success_path = exact_paths->second;
     double t0 = bc_family_solve_runner_now_seconds();
     layer.position = bc_family_runner_open_position_stream(options, layer.position_path, lut);
     layer.open_position_seconds = bc_family_solve_runner_now_seconds() - t0;
@@ -1750,15 +1963,7 @@ template <typename StorageT>
                     exact_position_path,
                     exact_success_path);
             retired = BCFamilySolveFrontierLayer<StorageT>();
-            if (compressed_in_memory) {
-                bc_family_runner_remove_exact_sources_after_compress(
-                    bc_family_runner_compressed_output_path(
-                        options,
-                        metric.ordinal,
-                        exact_position_path),
-                    exact_position_path,
-                    exact_success_path);
-            } else {
+            if (!compressed_in_memory) {
                 bc_family_runner_add_final_compress_stats(
                     metric,
                     bc_family_runner_final_compression_hook(
@@ -1813,15 +2018,7 @@ template <typename StorageT>
                     exact_position_path,
                     exact_success_path);
             retired = BCFamilySolveFrontierLayer<StorageT>();
-            if (compressed_in_memory) {
-                bc_family_runner_remove_exact_sources_after_compress(
-                    bc_family_runner_compressed_output_path(
-                        options,
-                        metric.ordinal,
-                        exact_position_path),
-                    exact_position_path,
-                    exact_success_path);
-            } else {
+            if (!compressed_in_memory) {
                 bc_family_runner_add_final_compress_stats(
                     metric,
                     bc_family_runner_final_compression_hook(
@@ -1849,11 +2046,12 @@ template <typename StorageT>
     }
 
     if (options.compress) {
-        const std::filesystem::path compressed_output =
-            bc_family_runner_compressed_output_path(
-                options,
-                metric.ordinal,
-                position_target);
+        auto compressed_lease = bc_family_runner_reserve_compressed_output(
+            options,
+            metric.ordinal,
+            exact_position_path,
+            exact_success_path);
+        const std::filesystem::path compressed_output = NativePath::from_utf8(compressed_lease.path());
         BCCompressedResult::StreamingBuilder builder(
             retired.position,
             retired.success.row_width(),
@@ -1949,6 +2147,7 @@ template <typename StorageT>
         metric.success_bytes = compress_stats.original_success_bytes;
         metric.live_rows = metric.archive_live_rows;
         bc_family_runner_add_final_compress_stats(metric, compress_stats);
+        compressed_lease.release();
         retired = BCFamilySolveFrontierLayer<StorageT>();
         bc_family_runner_remove_exact_sources_after_compress(
             compressed_output,
@@ -2145,14 +2344,14 @@ inline void bc_family_runner_compress_existing_archive_exact_layers(
         metric.solve_route = "existing_archive_compress";
         metric.ordinal = ordinal;
 
-        const std::filesystem::path compressed_path =
-            bc_family_runner_compressed_output_path(options, ordinal, layer.position_path);
-        if (bc_family_runner_compressed_file_is_fresh(
-                compressed_path,
-                layer.position_path,
-                layer.success_path)) {
+        if (const std::optional<std::filesystem::path> compressed_path =
+                bc_family_runner_find_fresh_compressed_output(
+                    options,
+                    ordinal,
+                    layer.position_path,
+                    layer.success_path)) {
             bc_family_runner_remove_exact_sources_after_compress(
-                compressed_path,
+                *compressed_path,
                 layer.position_path,
                 layer.success_path);
             metric.total_seconds = bc_family_solve_runner_now_seconds() - t0;

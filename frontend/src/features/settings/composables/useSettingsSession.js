@@ -132,6 +132,35 @@ export function useSettingsSession(activeRef) {
     return Math.min(65535, Math.max(1, parsed));
   };
 
+  const normalizeBuildPathList = (value) => {
+    const rawItems = Array.isArray(value)
+      ? value
+      : String(value || '')
+          .split(/\r?\n/);
+    const seen = new Set();
+    const paths = [];
+    for (const rawItem of rawItems) {
+      const path = String(rawItem || '').trim();
+      const key = path;
+      if (!path || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      paths.push(path);
+    }
+    return paths;
+  };
+
+  const normalizedBuildPaths = computed(() => normalizeBuildPathList(buildPath.value));
+
+  const setBuildPaths = (paths) => {
+    buildPath.value = normalizeBuildPathList(paths).join('\n');
+  };
+
+  const appendBuildPath = (path) => {
+    setBuildPaths([...normalizedBuildPaths.value, path]);
+  };
+
   const normalizeBuilderAlgorithm = (value) => {
     if (value === 'ad' || value === 'ex' || value === 'exad' || value === 'bc') {
       return value;
@@ -315,7 +344,7 @@ export function useSettingsSession(activeRef) {
     if (data.type === 'FOLDER_SELECTED') {
       const path = String(data.payload?.path || '').trim();
       if (path) {
-        buildPath.value = path;
+        appendBuildPath(path);
       }
       return;
     }
@@ -471,7 +500,7 @@ export function useSettingsSession(activeRef) {
     const { handled, value } = await tryDesktopDialog('select_folder');
     if (handled) {
       if (value) {
-        buildPath.value = value;
+        appendBuildPath(value);
       }
       return;
     }
@@ -479,7 +508,8 @@ export function useSettingsSession(activeRef) {
   };
 
   const startBuild = () => {
-    if (!selectedPattern.value || !selectedTarget.value || !buildPath.value) {
+    const buildPaths = normalizedBuildPaths.value;
+    if (!selectedPattern.value || !selectedTarget.value || !buildPaths.length) {
       return;
     }
 
@@ -554,8 +584,9 @@ export function useSettingsSession(activeRef) {
       pattern: selectedPattern.value,
       target: targetExponent,
       target_tile: selectedTarget.value,
-      folder_path: buildPath.value,
-      pathname: `${buildPath.value}/${selectedPattern.value}_${selectedTarget.value}_`,
+      folder_paths: buildPaths,
+      folder_path: buildPaths[0],
+      pathname: `${buildPaths[0]}/${selectedPattern.value}_${selectedTarget.value}_`,
     });
   };
 
@@ -590,6 +621,7 @@ export function useSettingsSession(activeRef) {
     selectedTarget,
     selectedPatternIsVariant,
     buildPath,
+    normalizedBuildPaths,
     isBuilding,
     builderAlgorithm,
     builderAdvancedAlgo,

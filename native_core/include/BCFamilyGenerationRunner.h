@@ -35,10 +35,12 @@ struct BCFamilyGenerationRunOptions {
     std::string family_source_io = "direct-auto";
     bool family_blob_checksum = false;
     bool family_memory_checkpoints = false;
+    bool compress_temp_files = false;
     uint32_t family_modulus = 29U;
     BCFamilyGenerationRoute family_route = BCFamilyGenerationRoute::Auto;
     uint32_t direct_queue_depth = 8U;
     std::filesystem::path output_dir;
+    std::vector<std::filesystem::path> output_dirs;
     std::filesystem::path stats_csv;
 };
 

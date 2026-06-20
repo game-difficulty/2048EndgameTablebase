@@ -23,6 +23,8 @@
       "category": "分类",
       "target": "目标方块",
       "path": "存放路径",
+      "hotPath": "热",
+      "coldPath": "冷",
       "browse": "浏览",
       "build": "开始构建",
       "algorithmMode": "算法模式",

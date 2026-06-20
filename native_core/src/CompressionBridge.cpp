@@ -77,7 +77,11 @@ bool write_temp_byte_payload_archive(
 
 } // namespace
 
-void maybe_do_compress_classic(const std::string &book_path, const std::string &success_rate_dtype) {
+void maybe_do_compress_classic(
+    const std::string &book_path,
+    const std::string &success_rate_dtype,
+    const std::string &output_book_path
+) {
     if (!NativePath::exists(book_path)) {
         return;
     }
@@ -90,7 +94,7 @@ void maybe_do_compress_classic(const std::string &book_path, const std::string &
     if (NativePath::file_size(book_path) <= 2097152ULL) {
         return;
     }
-    if (!trie_compress_progress_native(book_path, success_rate_dtype)) {
+    if (!trie_compress_progress_native(book_path, success_rate_dtype, output_book_path)) {
         return;
     }
     if (NativePath::exists(book_path)) {

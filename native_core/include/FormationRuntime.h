@@ -9,8 +9,14 @@
 #include <atomic>
 #include <array>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
+#include <limits>
+#include <mutex>
+#include <system_error>
 #include <type_traits>
+#include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -34,6 +40,7 @@ struct RunOptions {
     int steps = 0;
     int docheck_step = 0;
     std::string pathname;
+    std::vector<std::string> cold_pathnames;
     bool is_free = false;
     bool is_variant = false;
     double spawn_rate4 = 0.1;
@@ -50,6 +57,370 @@ struct RunOptions {
     int direct_io_queue_depth = 16;
     int direct_io_chunk_mib = 8;
 };
+
+namespace StoragePaths {
+
+enum class ArtifactRole {
+    Hot,
+    Cold
+};
+
+inline constexpr uint64_t kDefaultSafetyMarginBytes = 1024ULL * 1024ULL * 1024ULL;
+
+inline const std::string &hot_pathname(const RunOptions &options) {
+    return options.pathname;
+}
+
+inline const std::string &cold_pathname(const RunOptions &options) {
+    for (const std::string &path : options.cold_pathnames) {
+        if (!path.empty()) {
+            return path;
+        }
+    }
+    return options.pathname;
+}
+
+inline std::string pathname_for(const RunOptions &options, ArtifactRole role) {
+    return role == ArtifactRole::Cold
+        ? cold_pathname(options)
+        : hot_pathname(options);
+}
+
+inline std::string path_for(
+    const RunOptions &options,
+    ArtifactRole role,
+    int step,
+    const std::string &suffix
+) {
+    return pathname_for(options, role) + std::to_string(step) + suffix;
+}
+
+inline std::string hot_path_for(const RunOptions &options, int step, const std::string &suffix) {
+    return path_for(options, ArtifactRole::Hot, step, suffix);
+}
+
+inline std::string cold_path_for(const RunOptions &options, int step, const std::string &suffix) {
+    return path_for(options, ArtifactRole::Cold, step, suffix);
+}
+
+inline std::vector<std::string> candidate_pathnames(
+    const RunOptions &options,
+    bool cold_first = true
+) {
+    std::vector<std::string> paths;
+    auto add_unique = [&paths](const std::string &path) {
+        if (path.empty()) {
+            return;
+        }
+        for (const std::string &existing : paths) {
+            if (existing == path) {
+                return;
+            }
+        }
+        paths.push_back(path);
+    };
+    if (cold_first) {
+        for (const std::string &path : options.cold_pathnames) {
+            add_unique(path);
+        }
+        add_unique(options.pathname);
+    } else {
+        add_unique(options.pathname);
+        for (const std::string &path : options.cold_pathnames) {
+            add_unique(path);
+        }
+    }
+    return paths;
+}
+
+inline bool filename_exists(const std::string &path) {
+    std::error_code ec;
+    return NativePath::exists(path, ec) && !ec;
+}
+
+inline std::string existing_path_for(
+    const RunOptions &options,
+    int step,
+    const std::string &suffix,
+    bool cold_first = true
+) {
+    for (const std::string &pathname : candidate_pathnames(options, cold_first)) {
+        const std::string path = pathname + std::to_string(step) + suffix;
+        if (filename_exists(path)) {
+            return path;
+        }
+    }
+    return {};
+}
+
+inline bool filename_exists_any(
+    const RunOptions &options,
+    int step,
+    const std::string &suffix,
+    bool cold_first = true
+) {
+    return !existing_path_for(options, step, suffix, cold_first).empty();
+}
+
+inline void remove_all_candidates(
+    const RunOptions &options,
+    int step,
+    const std::string &suffix,
+    bool cold_first = false
+) {
+    std::error_code ec;
+    for (const std::string &pathname : candidate_pathnames(options, cold_first)) {
+        NativePath::remove(pathname + std::to_string(step) + suffix, ec);
+        ec.clear();
+    }
+}
+
+inline bool multi_path_enabled(const RunOptions &options) {
+    for (const std::string &path : options.cold_pathnames) {
+        if (!path.empty() && path != options.pathname) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline uint64_t saturating_add(uint64_t a, uint64_t b) {
+    if (a > std::numeric_limits<uint64_t>::max() - b) {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    return a + b;
+}
+
+inline uint64_t scale_ratio(uint64_t bytes, uint64_t numerator, uint64_t denominator = 100ULL) {
+    if (bytes == 0ULL || numerator == 0ULL) {
+        return 0ULL;
+    }
+    if (bytes > std::numeric_limits<uint64_t>::max() / numerator) {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    return (bytes * numerator + denominator - 1ULL) / denominator;
+}
+
+inline uint64_t estimate_compressed_bytes(
+    uint64_t position_bytes,
+    uint64_t success_bytes,
+    uint64_t overhead_bytes = 16ULL * 1024ULL * 1024ULL
+) {
+    return saturating_add(
+        saturating_add(scale_ratio(position_bytes, 25ULL), scale_ratio(success_bytes, 80ULL)),
+        overhead_bytes
+    );
+}
+
+inline uint64_t success_value_size_for_dtype(const std::string &dtype) {
+    if (dtype == "uint64" || dtype == "float64") {
+        return 8ULL;
+    }
+    return 4ULL;
+}
+
+inline uint64_t success_entry_size_for_dtype(const std::string &dtype) {
+    return 8ULL + success_value_size_for_dtype(dtype);
+}
+
+inline std::vector<std::string> write_path_candidates(
+    const RunOptions &options,
+    ArtifactRole role,
+    int step,
+    const std::string &suffix
+) {
+    const bool cold_first = role == ArtifactRole::Cold;
+    std::vector<std::string> paths;
+    for (const std::string &pathname : candidate_pathnames(options, cold_first)) {
+        paths.push_back(pathname + std::to_string(step) + suffix);
+    }
+    return paths;
+}
+
+inline std::filesystem::path parent_dir_for_final_path(const std::string &final_path) {
+    std::filesystem::path parent = NativePath::from_utf8(final_path).parent_path();
+    if (parent.empty()) {
+        parent = std::filesystem::current_path();
+    }
+    return parent;
+}
+
+inline std::string reservation_key_for_final_path(const std::string &final_path) {
+    std::error_code ec;
+    std::filesystem::path parent = std::filesystem::absolute(parent_dir_for_final_path(final_path), ec);
+    if (ec) {
+        parent = parent_dir_for_final_path(final_path);
+    }
+    return NativePath::to_utf8_string(parent.lexically_normal());
+}
+
+struct ReservationState {
+    std::mutex mutex;
+    std::unordered_map<std::string, uint64_t> reserved_bytes;
+};
+
+inline ReservationState &reservation_state() {
+    static ReservationState state;
+    return state;
+}
+
+inline bool try_reserve_for_path(
+    const std::string &final_path,
+    uint64_t required_bytes,
+    uint64_t safety_margin_bytes,
+    std::string *reason = nullptr
+) {
+    const std::filesystem::path parent = parent_dir_for_final_path(final_path);
+    std::error_code ec;
+    const std::filesystem::space_info info = std::filesystem::space(parent, ec);
+    if (ec) {
+        if (reason != nullptr) {
+            *reason = "space check failed for " + NativePath::to_utf8_string(parent) + ": " + ec.message();
+        }
+        return false;
+    }
+    const std::string key = reservation_key_for_final_path(final_path);
+    const uint64_t needed = saturating_add(required_bytes, safety_margin_bytes);
+    ReservationState &state = reservation_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    const uint64_t already_reserved = state.reserved_bytes[key];
+    const uint64_t available =
+        info.available > already_reserved
+            ? static_cast<uint64_t>(info.available - already_reserved)
+            : 0ULL;
+    if (available < needed) {
+        if (reason != nullptr) {
+            *reason =
+                "insufficient space for " + final_path +
+                " (available=" + std::to_string(available) +
+                ", required=" + std::to_string(required_bytes) +
+                ", margin=" + std::to_string(safety_margin_bytes) + ")";
+        }
+        return false;
+    }
+    state.reserved_bytes[key] = saturating_add(already_reserved, required_bytes);
+    return true;
+}
+
+inline void release_reservation(const std::string &final_path, uint64_t reserved_bytes) {
+    if (reserved_bytes == 0ULL) {
+        return;
+    }
+    const std::string key = reservation_key_for_final_path(final_path);
+    ReservationState &state = reservation_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    auto it = state.reserved_bytes.find(key);
+    if (it == state.reserved_bytes.end()) {
+        return;
+    }
+    if (it->second <= reserved_bytes) {
+        state.reserved_bytes.erase(it);
+    } else {
+        it->second -= reserved_bytes;
+    }
+}
+
+class ReservedWritePath {
+public:
+    ReservedWritePath() = default;
+
+    ReservedWritePath(std::string final_path, uint64_t reserved_bytes, bool active)
+        : final_path_(std::move(final_path)),
+          reserved_bytes_(reserved_bytes),
+          active_(active) {}
+
+    ReservedWritePath(ReservedWritePath &&other) noexcept {
+        *this = std::move(other);
+    }
+
+    ReservedWritePath &operator=(ReservedWritePath &&other) noexcept {
+        if (this != &other) {
+            release();
+            final_path_ = std::move(other.final_path_);
+            reserved_bytes_ = other.reserved_bytes_;
+            active_ = other.active_;
+            other.reserved_bytes_ = 0ULL;
+            other.active_ = false;
+        }
+        return *this;
+    }
+
+    ReservedWritePath(const ReservedWritePath &) = delete;
+    ReservedWritePath &operator=(const ReservedWritePath &) = delete;
+
+    ~ReservedWritePath() {
+        release();
+    }
+
+    [[nodiscard]] const std::string &path() const {
+        return final_path_;
+    }
+
+    void release() {
+        if (active_) {
+            release_reservation(final_path_, reserved_bytes_);
+            active_ = false;
+            reserved_bytes_ = 0ULL;
+        }
+    }
+
+private:
+    std::string final_path_;
+    uint64_t reserved_bytes_ = 0ULL;
+    bool active_ = false;
+};
+
+inline ReservedWritePath reserve_write_path_from_candidates(
+    const std::vector<std::string> &candidates,
+    uint64_t required_bytes,
+    uint64_t safety_margin_bytes = kDefaultSafetyMarginBytes
+) {
+    if (candidates.empty()) {
+        throw std::invalid_argument("no write path candidates");
+    }
+    if (candidates.size() == 1U) {
+        return ReservedWritePath(candidates.front(), 0ULL, false);
+    }
+    std::vector<std::string> reasons;
+    reasons.reserve(candidates.size());
+    for (const std::string &candidate : candidates) {
+        std::string reason;
+        if (try_reserve_for_path(candidate, required_bytes, safety_margin_bytes, &reason)) {
+            return ReservedWritePath(candidate, required_bytes, true);
+        }
+        reasons.push_back(std::move(reason));
+    }
+    std::string message =
+        "no write path has enough free space (required=" +
+        std::to_string(required_bytes) +
+        ", margin=" + std::to_string(safety_margin_bytes) + ")";
+    for (const std::string &reason : reasons) {
+        if (!reason.empty()) {
+            message += "\n" + reason;
+        }
+    }
+    throw std::runtime_error(message);
+}
+
+inline ReservedWritePath reserve_write_path(
+    const RunOptions &options,
+    ArtifactRole role,
+    int step,
+    const std::string &suffix,
+    uint64_t required_bytes,
+    uint64_t safety_margin_bytes = kDefaultSafetyMarginBytes
+) {
+    if (!multi_path_enabled(options)) {
+        return ReservedWritePath(path_for(options, role, step, suffix), 0ULL, false);
+    }
+    return reserve_write_path_from_candidates(
+        write_path_candidates(options, role, step, suffix),
+        required_bytes,
+        safety_margin_bytes
+    );
+}
+
+} // namespace StoragePaths
 
 namespace RuntimeControls {
 

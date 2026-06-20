@@ -15,7 +15,10 @@
 #include "BoardMover.h"
 #include "Calculator.h"
 #include "CanonicalBatch.h"
+#include "CompressionBridge.h"
 #include "FormationRuntime.h"
+#include "NativeLzma.h"
+#include "PathUtils.h"
 
 #include <algorithm>
 #include <array>
@@ -118,7 +121,8 @@ LONG WINAPI bc_generation_unhandled_exception_filter(EXCEPTION_POINTERS *excepti
 }
 
 constexpr double kBCDefaultReserveFactor = 2.0;
-constexpr double kBCEarlyLayerReserveFactor = 2.0;
+constexpr double kBCMaxReserveFactor = 4.0;
+constexpr double kBCEarlyLayerReserveFactor = 4.0;
 constexpr uint32_t kBCEarlyLayerReserveFactorSteps = 10U;
 constexpr double kBCLearnedReserveMinFactor = 1.08;
 constexpr double kBCLearnedReserveQuantileGuard = 1.10;
@@ -154,7 +158,7 @@ double bc_regular_reserve_factor(
         bc_reserve_need_recent_quantile(history, history_window) * kBCLearnedReserveQuantileGuard
     );
     factor = std::max(factor, retry_guard_factor);
-    return std::min(kBCDefaultReserveFactor, std::max(kBCLearnedReserveMinFactor, factor));
+    return std::min(kBCMaxReserveFactor, std::max(kBCLearnedReserveMinFactor, factor));
 }
 
 double bc_reserve_factor_for_step(
@@ -327,12 +331,14 @@ struct Args {
     std::string family_source_io = "direct-auto";
     bool family_blob_checksum = false;
     bool family_memory_checkpoints = false;
+    bool compress_temp_files = false;
     uint32_t family_modulus = 29U;
     BC::BCFamilyGenerationRoute family_route = BC::BCFamilyGenerationRoute::Auto;
     std::filesystem::path family_route_script;
     uint32_t direct_queue_depth = 8U;
     std::filesystem::path output_dir =
         std::filesystem::path("tmp") / "bc_family_free";
+    std::vector<std::filesystem::path> output_dirs;
     std::filesystem::path stats_csv;
     std::filesystem::path ex_stats_csv;
     uint32_t single_layer_sum = 0U;
@@ -740,6 +746,19 @@ struct FamilyRoutePlannerState {
     return (layer_sum - seed_sum) / 2U;
 }
 
+[[nodiscard]] uint64_t bc_position_bucket_stream_offset(const BCFamilyTable &axis) {
+    const BCCellMatrix matrix(axis);
+    const uint64_t descriptor_bytes =
+        static_cast<uint64_t>(matrix.cell_count()) * BC::kBCPositionCellDescriptorBytes;
+    return BC::bc_checked_add_u64(
+        BC::bc_checked_add_u64(
+            BC::kBCPositionHeaderBytes,
+            BC::bc_axis_coord_table_bytes(axis.family_count()),
+            "BC position archive axis table offset overflow"),
+        descriptor_bytes,
+        "BC position archive bucket stream offset overflow");
+}
+
 [[nodiscard]] std::filesystem::path layer_path(
     const Args &args,
     uint32_t seed_sum,
@@ -750,39 +769,145 @@ struct FamilyRoutePlannerState {
          std::to_string(layer_ordinal_for_sum(seed_sum, layer_sum)) + ".bcpos");
 }
 
+[[nodiscard]] std::filesystem::path layer_archive_path(const std::filesystem::path &position_path) {
+    return std::filesystem::path(position_path.string() + ".7z");
+}
+
+[[nodiscard]] std::filesystem::path layer_cell_compressed_path(const std::filesystem::path &position_path) {
+    return BC::bc_cell_compressed_position_path(position_path);
+}
+
+[[nodiscard]] bool is_position_archive_path(const std::filesystem::path &path) {
+    const std::string name = path.filename().string();
+    const std::string suffix = ".bcpos.7z";
+    return name.size() > suffix.size() &&
+        name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+[[nodiscard]] bool is_cell_compressed_position_path(const std::filesystem::path &path) {
+    return BC::bc_is_cell_compressed_position_path(path);
+}
+
+[[nodiscard]] std::string archive_entry_name_for_path(const std::filesystem::path &path) {
+    std::string name = NativePath::to_utf8_string(path.filename());
+    if (name.size() > 3U && name.compare(name.size() - 3U, 3U, ".7z") == 0) {
+        name.resize(name.size() - 3U);
+    }
+    if (name.empty()) {
+        name = "data.bcpos";
+    }
+    return name;
+}
+
+[[nodiscard]] std::filesystem::path layer_artifact_path(
+    const Args &args,
+    const std::filesystem::path &position_path
+) {
+    return args.compress_temp_files ? layer_archive_path(position_path) : position_path;
+}
+
+[[nodiscard]] std::filesystem::path layer_artifact_path(
+    const Args &args,
+    const std::filesystem::path &position_path,
+    BC::BCFamilyGenerationRoute route
+) {
+    if (args.compress_temp_files && route == BC::BCFamilyGenerationRoute::Family) {
+        return layer_cell_compressed_path(position_path);
+    }
+    return layer_artifact_path(args, position_path);
+}
+
+[[nodiscard]] bool same_path(
+    const std::filesystem::path &lhs,
+    const std::filesystem::path &rhs
+) {
+    return std::filesystem::absolute(lhs).lexically_normal() ==
+        std::filesystem::absolute(rhs).lexically_normal();
+}
+
+[[nodiscard]] std::vector<std::filesystem::path> generated_candidate_dirs(const Args &args) {
+    std::vector<std::filesystem::path> dirs;
+    auto add = [&dirs](const std::filesystem::path &dir) {
+        if (dir.empty()) {
+            return;
+        }
+        for (const std::filesystem::path &existing : dirs) {
+            if (same_path(existing, dir)) {
+                return;
+            }
+        }
+        dirs.push_back(dir);
+    };
+    add(args.output_dir);
+    for (const std::filesystem::path &dir : args.output_dirs) {
+        add(dir);
+    }
+    return dirs;
+}
+
 [[nodiscard]] std::map<uint32_t, std::filesystem::path> discover_existing_layer_paths(
     const Args &args
 ) {
     std::map<uint32_t, std::filesystem::path> layers;
-    if (!std::filesystem::is_directory(args.output_dir)) {
-        return layers;
-    }
     const std::string prefix = layer_file_prefix(args) + "_";
     const std::string suffix = ".bcpos";
-    for (const std::filesystem::directory_entry &entry :
-         std::filesystem::directory_iterator(args.output_dir)) {
-        if (!entry.is_regular_file()) {
+    const std::string cell_suffix = ".bcposc";
+    const std::string archive_suffix = ".bcpos.7z";
+    for (const std::filesystem::path &dir : generated_candidate_dirs(args)) {
+        if (!std::filesystem::is_directory(dir)) {
             continue;
         }
-        const std::string name = entry.path().filename().string();
-        if (name.size() <= prefix.size() + suffix.size() ||
-            name.compare(0U, prefix.size(), prefix) != 0 ||
-            name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0) {
-            continue;
+        for (const std::filesystem::directory_entry &entry :
+             std::filesystem::directory_iterator(dir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            const std::string name = entry.path().filename().string();
+            if (name.size() <= prefix.size() + suffix.size() ||
+                name.compare(0U, prefix.size(), prefix) != 0) {
+                continue;
+            }
+            std::string ordinal_text;
+            const bool is_raw =
+                name.size() > prefix.size() + suffix.size() &&
+                name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+            const bool is_cell_compressed =
+                name.size() > prefix.size() + cell_suffix.size() &&
+                name.compare(name.size() - cell_suffix.size(), cell_suffix.size(), cell_suffix) == 0;
+            const bool is_archive =
+                name.size() > prefix.size() + archive_suffix.size() &&
+                name.compare(name.size() - archive_suffix.size(), archive_suffix.size(), archive_suffix) == 0;
+            if (is_raw) {
+                ordinal_text = name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
+            } else if (is_cell_compressed) {
+                ordinal_text =
+                    name.substr(prefix.size(), name.size() - prefix.size() - cell_suffix.size());
+            } else if (is_archive) {
+                ordinal_text =
+                    name.substr(prefix.size(), name.size() - prefix.size() - archive_suffix.size());
+            } else {
+                continue;
+            }
+            if (ordinal_text.empty() ||
+                !std::all_of(ordinal_text.begin(), ordinal_text.end(), [](char ch) {
+                    return ch >= '0' && ch <= '9';
+                })) {
+                continue;
+            }
+            const unsigned long parsed = std::stoul(ordinal_text);
+            if (parsed > std::numeric_limits<uint32_t>::max()) {
+                continue;
+            }
+            const uint32_t ordinal = static_cast<uint32_t>(parsed);
+            const auto existing = layers.find(ordinal);
+            const bool replace_archive =
+                is_cell_compressed &&
+                existing != layers.end() &&
+                is_position_archive_path(existing->second);
+            if (is_raw || replace_archive || existing == layers.end()) {
+                layers[ordinal] = entry.path();
+            }
         }
-        const std::string ordinal_text =
-            name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
-        if (ordinal_text.empty() ||
-            !std::all_of(ordinal_text.begin(), ordinal_text.end(), [](char ch) {
-                return ch >= '0' && ch <= '9';
-            })) {
-            continue;
-        }
-        const unsigned long parsed = std::stoul(ordinal_text);
-        if (parsed > std::numeric_limits<uint32_t>::max()) {
-            continue;
-        }
-        layers.emplace(static_cast<uint32_t>(parsed), entry.path());
     }
     return layers;
 }
@@ -1199,6 +1324,156 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
     return std::make_unique<BC::BCBufferedFileReader>(path);
 }
 
+class BCSequentialArchiveWritableFile final : public BC::BCWritableFile {
+public:
+    explicit BCSequentialArchiveWritableFile(const std::filesystem::path &archive_path)
+        : archive_path_(archive_path),
+          writer_(
+              NativePath::to_utf8_string(archive_path),
+              archive_entry_name_for_path(archive_path),
+              1) {}
+
+    void write_at(uint64_t offset, const void *data, uint64_t bytes) override {
+        const std::vector<BC::BCFileWriteRequest> requests{
+            BC::BCFileWriteRequest{offset, data, bytes}
+        };
+        write_many(requests);
+    }
+
+    void write_many(
+        const std::vector<BC::BCFileWriteRequest> &requests,
+        BC::BCFileIOStats *stats = nullptr
+    ) override {
+        if (stats != nullptr) {
+            *stats = {};
+        }
+        if (closed_) {
+            throw std::runtime_error("BC archive writer is already closed: " + archive_path_.string());
+        }
+        for (const BC::BCFileWriteRequest &request : requests) {
+            if (request.bytes == 0U) {
+                continue;
+            }
+            if (request.data == nullptr) {
+                throw std::invalid_argument("BC archive writer data pointer is null");
+            }
+            if (request.offset != cursor_) {
+                throw std::runtime_error("BC archive writer requires sequential writes: " + archive_path_.string());
+            }
+            if (request.bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+                throw std::overflow_error("BC archive writer request exceeds size_t");
+            }
+            writer_.append(request.data, static_cast<size_t>(request.bytes));
+            cursor_ = BC::bc_checked_add_u64(cursor_, request.bytes, "BC archive writer cursor overflow");
+            BC::bc_fileio_accumulate_request(stats, request.bytes);
+        }
+    }
+
+    void resize(uint64_t bytes) override {
+        prepare_full_overwrite(bytes);
+    }
+
+    void prepare_full_overwrite(uint64_t bytes) override {
+        if (cursor_ != 0U) {
+            throw std::runtime_error("BC archive writer cannot resize after writing: " + archive_path_.string());
+        }
+        expected_size_ = bytes;
+    }
+
+    void flush() override {
+        if (closed_) {
+            return;
+        }
+        if (expected_size_.has_value() && cursor_ != *expected_size_) {
+            throw std::runtime_error("BC archive writer byte count mismatch: " + archive_path_.string());
+        }
+        writer_.close();
+        closed_ = true;
+    }
+
+private:
+    std::filesystem::path archive_path_;
+    SevenZipArchiveWriter writer_;
+    std::optional<uint64_t> expected_size_;
+    uint64_t cursor_ = 0U;
+    bool closed_ = false;
+};
+
+class BCOffsetWritableFile final : public BC::BCWritableFile {
+public:
+    BCOffsetWritableFile(std::unique_ptr<BC::BCWritableFile> inner, uint64_t base_offset)
+        : inner_(std::move(inner)), base_offset_(base_offset) {
+        if (!inner_) {
+            throw std::invalid_argument("BC offset writer requires an inner writer");
+        }
+    }
+
+    [[nodiscard]] BC::BCFileIOMode mode() const override {
+        return inner_->mode();
+    }
+
+    [[nodiscard]] uint32_t preferred_write_alignment() const override {
+        return inner_->preferred_write_alignment();
+    }
+
+    void write_at(uint64_t offset, const void *data, uint64_t bytes) override {
+        const std::vector<BC::BCFileWriteRequest> requests{
+            BC::BCFileWriteRequest{offset, data, bytes}
+        };
+        write_many(requests);
+    }
+
+    void write_many(
+        const std::vector<BC::BCFileWriteRequest> &requests,
+        BC::BCFileIOStats *stats = nullptr
+    ) override {
+        shifted_requests_.clear();
+        shifted_requests_.reserve(requests.size());
+        for (const BC::BCFileWriteRequest &request : requests) {
+            if (request.offset < base_offset_) {
+                throw std::runtime_error("BC offset writer saw write before base offset");
+            }
+            shifted_requests_.push_back(BC::BCFileWriteRequest{
+                request.offset - base_offset_,
+                request.data,
+                request.bytes
+            });
+        }
+        inner_->write_many(shifted_requests_, stats);
+    }
+
+    void resize(uint64_t bytes) override {
+        if (bytes <= base_offset_) {
+            inner_->resize(0U);
+            return;
+        }
+        inner_->resize(bytes - base_offset_);
+    }
+
+    void prepare_full_overwrite(uint64_t bytes) override {
+        resize(bytes);
+    }
+
+    void flush() override {
+        inner_->flush();
+    }
+
+private:
+    std::unique_ptr<BC::BCWritableFile> inner_;
+    uint64_t base_offset_ = 0U;
+    std::vector<BC::BCFileWriteRequest> shifted_requests_;
+};
+
+[[nodiscard]] std::unique_ptr<BC::BCWritableFile> open_position_layer_artifact_writer(
+    const Args &args,
+    const std::filesystem::path &position_path
+) {
+    if (args.compress_temp_files) {
+        return std::make_unique<BCSequentialArchiveWritableFile>(layer_archive_path(position_path));
+    }
+    return open_family_position_writer(args, position_path);
+}
+
 void write_position_bytes_to_file(
     const Args &args,
     const std::filesystem::path &path,
@@ -1217,6 +1492,36 @@ void write_position_bytes_to_file(
         writer->write_many(requests, stats);
     }
     writer->flush();
+}
+
+[[nodiscard]] std::filesystem::path write_position_bytes_to_layer_artifact(
+    const Args &args,
+    const std::filesystem::path &position_path,
+    const std::vector<uint8_t> &bytes,
+    BC::BCFileIOStats *stats = nullptr
+) {
+    if (!args.compress_temp_files) {
+        write_position_bytes_to_file(args, position_path, bytes, stats);
+        std::error_code ec;
+        std::filesystem::remove(layer_archive_path(position_path), ec);
+        return position_path;
+    }
+    const std::filesystem::path archive_path = layer_archive_path(position_path);
+    BCSequentialArchiveWritableFile writer(archive_path);
+    writer.prepare_full_overwrite(static_cast<uint64_t>(bytes.size()));
+    if (stats != nullptr) {
+        *stats = {};
+    }
+    if (!bytes.empty()) {
+        const std::vector<BC::BCFileWriteRequest> requests{
+            BC::BCFileWriteRequest{0U, bytes.data(), static_cast<uint64_t>(bytes.size())}
+        };
+        writer.write_many(requests, stats);
+    }
+    writer.flush();
+    std::error_code ec;
+    std::filesystem::remove(position_path, ec);
+    return archive_path;
 }
 
 void write_position_bytes_to_file_buffered_padded(
@@ -1267,7 +1572,7 @@ public:
         pending.future = std::async(
             std::launch::async,
             [args_copy = std::move(args_copy), path, reader = pending.reader] {
-                write_position_bytes_to_file(args_copy, path, reader->bytes());
+                (void)write_position_bytes_to_layer_artifact(args_copy, path, reader->bytes());
             }
         );
         pending_.push_back(std::move(pending));
@@ -1521,6 +1826,22 @@ void fill_writer_stats_from_resident_result(
     const BCLut &lut
 ) {
     std::unique_ptr<BC::BCReadableFile> file;
+    if (is_position_archive_path(layer.path)) {
+        std::vector<uint8_t> bytes = read_temp_byte_archive(NativePath::to_utf8_string(layer.path));
+        if (bytes.empty()) {
+            throw std::runtime_error("failed to read BC generated position archive: " + layer.path.string());
+        }
+        file = std::make_unique<BC::BCMemoryReadableFile>(std::move(bytes));
+        auto reader = std::make_unique<BCPositionStreamingReader>(std::move(file), lut);
+        reader->set_validate_loaded_cells(false);
+        return reader;
+    }
+    if (is_cell_compressed_position_path(layer.path)) {
+        file = std::make_unique<BC::BCCellCompressedPositionReadableFile>(layer.path);
+        auto reader = std::make_unique<BCPositionStreamingReader>(std::move(file), lut);
+        reader->set_validate_loaded_cells(false);
+        return reader;
+    }
     if (args.family_source_io == "direct" || args.family_source_io == "direct-auto") {
         const uint64_t required_physical = align_up_u64(layer.logical_size, 4096ULL);
         if (layer.physical_size >= required_physical) {
@@ -1543,6 +1864,32 @@ void fill_writer_stats_from_resident_result(
     return reader;
 }
 
+[[nodiscard]] BC::BCPositionFileReader open_position_file_reader(
+    const Args &args,
+    const LayerFile &layer,
+    const BCLut &lut
+) {
+    if (is_position_archive_path(layer.path)) {
+        std::vector<uint8_t> bytes = read_temp_byte_archive(NativePath::to_utf8_string(layer.path));
+        if (bytes.empty()) {
+            throw std::runtime_error("failed to read BC generated position archive: " + layer.path.string());
+        }
+        return BC::BCPositionFileReader(
+            std::make_unique<BC::BCMemoryReadableFile>(std::move(bytes)),
+            lut);
+    }
+    if (is_cell_compressed_position_path(layer.path)) {
+        return BC::BCPositionFileReader(
+            std::make_unique<BC::BCCellCompressedPositionReadableFile>(layer.path),
+            lut);
+    }
+    return BC::BCPositionFileReader::open_direct_auto(
+        layer.path,
+        lut,
+        args.direct_queue_depth,
+        args.direct_queue_depth > 1U);
+}
+
 [[nodiscard]] LayerFile inspect_layer_file(
     const Args &args,
     uint32_t layer_sum,
@@ -1558,6 +1905,9 @@ void fill_writer_stats_from_resident_result(
     layer.physical_size = std::filesystem::file_size(path, ec);
     if (ec) {
         throw std::runtime_error("failed to stat layer file: " + ec.message());
+    }
+    if (is_position_archive_path(path) || is_cell_compressed_position_path(path)) {
+        layer.physical_size = logical_size;
     }
     auto reader = open_position_reader(args, layer, lut);
     reader->set_validate_loaded_cells(false);
@@ -1576,8 +1926,29 @@ void fill_writer_stats_from_resident_result(
     if (ec) {
         throw std::runtime_error("failed to stat existing layer file: " + ec.message());
     }
-    BCPositionStreamingReader reader =
-        BCPositionStreamingReader::open_direct_auto(path, lut, 8U, true);
+    std::unique_ptr<BCPositionStreamingReader> archive_reader;
+    std::unique_ptr<BCPositionStreamingReader> cell_compressed_reader;
+    BCPositionStreamingReader raw_reader;
+    BCPositionStreamingReader *reader_ptr = nullptr;
+    if (is_position_archive_path(path)) {
+        std::vector<uint8_t> bytes = read_temp_byte_archive(NativePath::to_utf8_string(path));
+        if (bytes.empty()) {
+            throw std::runtime_error("failed to read existing BC generated position archive: " + path.string());
+        }
+        archive_reader = std::make_unique<BCPositionStreamingReader>(
+            std::make_unique<BC::BCMemoryReadableFile>(std::move(bytes)),
+            lut);
+        reader_ptr = archive_reader.get();
+    } else if (is_cell_compressed_position_path(path)) {
+        cell_compressed_reader = std::make_unique<BCPositionStreamingReader>(
+            std::make_unique<BC::BCCellCompressedPositionReadableFile>(path),
+            lut);
+        reader_ptr = cell_compressed_reader.get();
+    } else {
+        raw_reader = BCPositionStreamingReader::open_direct_auto(path, lut, 8U, true);
+        reader_ptr = &raw_reader;
+    }
+    BCPositionStreamingReader &reader = *reader_ptr;
     reader.set_validate_loaded_cells(false);
     LayerFile layer;
     layer.layer_sum = BC::checked_u32_size(
@@ -1586,7 +1957,10 @@ void fill_writer_stats_from_resident_result(
     );
     layer.path = path;
     layer.logical_size = position_header_logical_size(reader.header());
-    layer.physical_size = file_size;
+    layer.physical_size =
+        (is_position_archive_path(path) || is_cell_compressed_position_path(path))
+            ? layer.logical_size
+            : file_size;
     layer.rows = descriptor_rows(reader);
     layer.bucket_count = descriptor_bucket_count(reader);
     layer.rank_payload_bytes = reader.header().rank_payload_bytes;
@@ -1609,6 +1983,9 @@ void fill_writer_stats_from_resident_result(
     layer.physical_size = std::filesystem::file_size(path, ec);
     if (ec) {
         throw std::runtime_error("failed to stat layer file: " + ec.message());
+    }
+    if (is_cell_compressed_position_path(path) || is_position_archive_path(path)) {
+        layer.physical_size = logical_size;
     }
     layer.rows = rows;
     layer.bucket_count = bucket_count;
@@ -1815,17 +2192,18 @@ struct MaterializedLayerView {
         initial_reader.header().bucket_meta_bytes / BC::kBCPositionBucketEntryBytes;
     const uint64_t rank_payload_bytes = initial_reader.header().rank_payload_bytes;
     const std::filesystem::path path = layer_path(args, seed_sum, axis.layer_sum());
-    write_position_bytes_to_file(args, path, bytes);
+    const std::filesystem::path artifact_path =
+        write_position_bytes_to_layer_artifact(args, path, bytes);
     if (!args.output_inspect) {
         return layer_file_without_inspect(
             axis.layer_sum(),
-            path,
+            artifact_path,
             bytes.size(),
             success_rows,
             bucket_count,
             rank_payload_bytes);
     }
-    return inspect_layer_file(args, axis.layer_sum(), path, bytes.size(), lut);
+    return inspect_layer_file(args, axis.layer_sum(), artifact_path, bytes.size(), lut);
 }
 
 void cleanup_temp_file(const std::filesystem::path &path) {
@@ -1886,7 +2264,7 @@ void cleanup_temp_file(const std::filesystem::path &path) {
     options.num_threads = args.num_threads;
     options.canonical_batch_size = args.batch_size;
     options.canonical_symm_mode = args.canonical_symm_mode;
-    options.dynamic_reserve_factor = 2.0;
+    options.dynamic_reserve_factor = kBCDefaultReserveFactor;
     options.collect_timing = false;
     options.pending_insert_buffer_size =
         args.pending_buffer != 0U ? args.pending_buffer : route_default_pending_buffer;
@@ -1933,7 +2311,7 @@ struct FamilyLayerResult {
     std::shared_ptr<BC::BCPositionLayerReader> resident_memory_layer;
 };
 
-double bc_single_observed_reserve_need(
+double bc_observed_reserve_need(
     const LayerFile &current,
     const FamilyLayerResult &result
 ) {
@@ -2040,12 +2418,7 @@ void apply_route_decision_to_result(
     const double total_begin = now_seconds();
     const double source_load_begin = now_seconds();
     BC::BCPositionFileReader source2_file =
-        BC::BCPositionFileReader::open_direct_auto(
-            source2_layer.path,
-            lut,
-            args.direct_queue_depth,
-            args.direct_queue_depth > 1U
-        );
+        open_position_file_reader(args, source2_layer, lut);
     std::optional<BC::BCPositionFileReader> source4_file;
     std::vector<BC::BCResidentGenerationSource> sources;
     sources.reserve(source4_layer == nullptr ? 1U : 2U);
@@ -2053,14 +2426,7 @@ void apply_route_decision_to_result(
         ? source2_layer.physical_size
         : source2_layer.logical_size;
     if (source4_layer != nullptr) {
-        source4_file.emplace(
-            BC::BCPositionFileReader::open_direct_auto(
-                source4_layer->path,
-                lut,
-                args.direct_queue_depth,
-                args.direct_queue_depth > 1U
-            )
-        );
+        source4_file.emplace(open_position_file_reader(args, *source4_layer, lut));
         source_bytes += source4_layer->physical_size != 0U
             ? source4_layer->physical_size
             : source4_layer->logical_size;
@@ -2078,17 +2444,20 @@ void apply_route_decision_to_result(
     );
     options.keep_only_success_generated_boards = terminal;
     cleanup_temp_file(output_path);
+    cleanup_temp_file(layer_archive_path(output_path));
+    cleanup_temp_file(layer_cell_compressed_path(output_path));
     std::unique_ptr<BC::BCWritableFile> writer =
-        open_family_position_writer(args, output_path);
+        open_position_layer_artifact_writer(args, output_path);
+    BCMemoryMirrorWritableFile mirror_writer(std::move(writer));
     BC::BCResidentGenerationResult resident =
         BC::generate_resident_position_layer_to_file(
             lut,
             target_layout,
             sources,
-            *writer,
+            mirror_writer,
             options
         );
-    writer.reset();
+    mirror_writer.flush();
 
     result.logical_size = resident.target_position_file_logical_bytes;
     result.output_rows = resident.output_success_rows;
@@ -2100,11 +2469,7 @@ void apply_route_decision_to_result(
     result.dynamic_bitmap_words_allocated = resident.dynamic_bitmap_words_allocated;
     result.writer_stats.success_rows = resident.output_success_rows;
     fill_writer_stats_from_resident_result(result.writer_stats, resident);
-    std::vector<uint8_t> position_bytes = read_position_file_to_memory(
-        args,
-        output_path,
-        resident.target_position_file_logical_bytes
-    );
+    std::vector<uint8_t> position_bytes = std::move(mirror_writer).take_mirror();
     if (!position_bytes.empty()) {
         const BC::BCPositionHeader header = BC::bc_read_header(position_bytes);
         result.output_bucket_count = header.bucket_meta_bytes / BC::kBCPositionBucketEntryBytes;
@@ -2165,14 +2530,7 @@ void apply_route_decision_to_result(
     const BC::BCPositionLayerReader *current_reader = current_memory_layer;
     if (current_reader == nullptr) {
         const double source_load_begin = now_seconds();
-        current_file.emplace(
-            BC::BCPositionFileReader::open_direct_auto(
-                current_layer.path,
-                lut,
-                args.direct_queue_depth,
-                args.direct_queue_depth > 1U
-            )
-        );
+        current_file.emplace(open_position_file_reader(args, current_layer, lut));
         source_load_seconds += now_seconds() - source_load_begin;
         current_reader = &current_file->layer();
     }
@@ -2192,7 +2550,9 @@ void apply_route_decision_to_result(
     options.keep_only_success_secondary_generated_boards = secondary_terminal;
     options.collect_mutable_output_stats = false;
     cleanup_temp_file(output_path);
-    auto file_writer = open_family_position_writer(args, output_path);
+    cleanup_temp_file(layer_archive_path(output_path));
+    cleanup_temp_file(layer_cell_compressed_path(output_path));
+    auto file_writer = open_position_layer_artifact_writer(args, output_path);
     BCMemoryMirrorWritableFile mirror_writer(std::move(file_writer));
     BC::BCResidentGenerationPairResult pair =
         BC::generate_resident_position_layer_pair_with_mutable_carry_to_file(
@@ -2205,6 +2565,7 @@ void apply_route_decision_to_result(
         nullptr,
         options
     );
+    mirror_writer.flush();
     current_reader = nullptr;
     current_file.reset();
 
@@ -2298,14 +2659,7 @@ void apply_route_decision_to_result(
     const BC::BCPositionLayerReader *current_reader = current_memory_layer;
     if (current_reader == nullptr) {
         const double source_load_begin = now_seconds();
-        current_file.emplace(
-            BC::BCPositionFileReader::open_direct_auto(
-                current_layer.path,
-                lut,
-                args.direct_queue_depth,
-                args.direct_queue_depth > 1U
-            )
-        );
+        current_file.emplace(open_position_file_reader(args, current_layer, lut));
         source_load_seconds += now_seconds() - source_load_begin;
         current_reader = &current_file->layer();
     }
@@ -2500,8 +2854,11 @@ void apply_route_decision_to_result(
     options.keep_only_success_generated_boards = primary_terminal;
     options.keep_only_success_secondary_generated_boards = secondary_terminal;
     options.collect_mutable_output_stats = false;
+    cleanup_temp_file(output_path);
+    cleanup_temp_file(layer_archive_path(output_path));
+    cleanup_temp_file(layer_cell_compressed_path(output_path));
     std::unique_ptr<BC::BCWritableFile> writer =
-        open_family_position_writer(args, output_path);
+        open_position_layer_artifact_writer(args, output_path);
     BC::BCSingleChunkGenerationStepResult step =
         BC::generate_single_chunk_position_layer_strict_to_file(
             lut,
@@ -2518,6 +2875,7 @@ void apply_route_decision_to_result(
             options
         );
     current_reader.reset();
+    writer->flush();
     writer.reset();
 
     if (step.next_carry) {
@@ -2584,6 +2942,7 @@ void apply_route_decision_to_result(
     const std::filesystem::path &output_path
 ) {
     const std::filesystem::path rank_spool_path = output_path.string() + ".rank_spool.tmp";
+    const std::filesystem::path bucket_spool_path = output_path.string() + ".bucket_spool.tmp";
     const std::filesystem::path blob_path = output_path.string() + ".family_blob.tmp";
     constexpr uint64_t kFamilyDirectBlobStagingBytes = 32ULL * 1024ULL * 1024ULL;
     constexpr uint64_t kFamilyBufferedBlobStagingBytes = 1ULL * 1024ULL * 1024ULL;
@@ -2597,16 +2956,27 @@ void apply_route_decision_to_result(
     const double retry_begin = now_seconds();
     for (uint32_t attempt = 0U; attempt <= kMaxFamilyBuilderRetries; ++attempt) {
         cleanup_temp_file(rank_spool_path);
+        cleanup_temp_file(bucket_spool_path);
         cleanup_temp_file(blob_path);
         cleanup_temp_file(output_path);
+        cleanup_temp_file(layer_archive_path(output_path));
+        cleanup_temp_file(layer_cell_compressed_path(output_path));
+        cleanup_temp_file(layer_cell_compressed_path(output_path));
         try {
             FamilyLayerResult result;
             FamilyMemoryCheckpointContext memory_checkpoint_context;
             {
-                std::unique_ptr<BC::BCWritableFile> final_writer =
-                    open_family_position_writer(args, output_path);
-                std::unique_ptr<BC::BCWritableFile> rank_spool_writer =
-                    open_family_position_spool_writer(args, rank_spool_path);
+                const bool cell_compressed_output = args.compress_temp_files;
+                std::unique_ptr<BC::BCWritableFile> final_writer;
+                std::unique_ptr<BC::BCWritableFile> rank_spool_writer;
+                std::unique_ptr<BC::BCCellCompressedPositionWriter> compressed_writer;
+                if (cell_compressed_output) {
+                    compressed_writer = std::make_unique<BC::BCCellCompressedPositionWriter>(
+                        layer_cell_compressed_path(output_path));
+                } else {
+                    rank_spool_writer = open_family_position_spool_writer(args, rank_spool_path);
+                    final_writer = open_family_position_writer(args, output_path);
+                }
                 std::unique_ptr<BC::BCWritableFile> blob_writer = open_family_blob_writer(args, blob_path);
                 std::unique_ptr<BC::BCReadableFile> blob_reader = open_family_blob_reader(args, blob_path);
                 const uint64_t blob_staging_bytes =
@@ -2666,13 +3036,20 @@ void apply_route_decision_to_result(
                 BC::BCFamilyPositionWriter position_writer;
                 BC::BCFamilyPositionWriterOptions writer_options;
                 writer_options.rank_first_direct_layout =
-                    args.family_position_io == "direct-rank-first";
+                    !cell_compressed_output && args.family_position_io == "direct-rank-first";
                 writer_options.backend_preserves_unaligned_positioned_writes =
-                    !writer_options.rank_first_direct_layout;
+                    cell_compressed_output || !writer_options.rank_first_direct_layout;
                 writer_options.staging_bytes = writer_options.rank_first_direct_layout
                     ? kFamilyDirectPositionWriterStagingBytes
                     : kFamilyPositionWriterStagingBytes;
-                position_writer.begin_layer(*final_writer, *rank_spool_writer, target_axis, writer_options);
+                if (cell_compressed_output) {
+                    position_writer.begin_cell_compressed_layer(
+                        *compressed_writer,
+                        target_axis,
+                        writer_options);
+                } else {
+                    position_writer.begin_layer(*final_writer, *rank_spool_writer, target_axis, writer_options);
+                }
                 if (args.family_memory_checkpoints) {
                     memory_checkpoint_context.baseline_working_set_bytes =
                         process_current_working_set_bytes();
@@ -2697,10 +3074,17 @@ void apply_route_decision_to_result(
                 const uint64_t spool_logical_size = writer_options.rank_first_direct_layout
                     ? position_writer.bucket_meta_bytes()
                     : position_writer.rank_payload_bytes();
-                std::unique_ptr<BC::BCReadableFile> rank_spool_reader =
-                    open_family_position_spool_reader(args, rank_spool_path, spool_logical_size);
                 const double finish_begin = now_seconds();
-                const uint64_t logical_size = position_writer.finish_layer(*rank_spool_reader);
+                uint64_t logical_size = 0U;
+                if (cell_compressed_output) {
+                    (void)spool_logical_size;
+                    logical_size = position_writer.finish_cell_compressed_layer();
+                    compressed_writer.reset();
+                } else {
+                    std::unique_ptr<BC::BCReadableFile> rank_spool_reader =
+                        open_family_position_spool_reader(args, rank_spool_path, spool_logical_size);
+                    logical_size = position_writer.finish_layer(*rank_spool_reader);
+                }
                 stats.write_seconds += now_seconds() - finish_begin;
 
                 result.stats = stats;
@@ -2719,12 +3103,17 @@ void apply_route_decision_to_result(
                 result.memory_checkpoints = std::move(memory_checkpoint_context.records);
             }
             cleanup_temp_file(rank_spool_path);
+            cleanup_temp_file(bucket_spool_path);
             cleanup_temp_file(blob_path);
             return result;
         } catch (const BC::BCCellMutableBuilderOverflow &) {
             cleanup_temp_file(rank_spool_path);
+            cleanup_temp_file(bucket_spool_path);
             cleanup_temp_file(blob_path);
             cleanup_temp_file(output_path);
+            cleanup_temp_file(layer_archive_path(output_path));
+            cleanup_temp_file(layer_cell_compressed_path(output_path));
+            cleanup_temp_file(layer_cell_compressed_path(output_path));
             if (attempt == kMaxFamilyBuilderRetries) {
                 throw;
             }
@@ -2865,8 +3254,10 @@ void apply_route_decision_to_result(
         );
         options.keep_only_success_generated_boards = terminal;
         cleanup_temp_file(output_path);
+        cleanup_temp_file(layer_archive_path(output_path));
+        cleanup_temp_file(layer_cell_compressed_path(output_path));
         std::unique_ptr<BC::BCWritableFile> writer =
-            open_family_position_writer(args, output_path);
+            open_position_layer_artifact_writer(args, output_path);
         const double total_begin = now_seconds();
         BC::BCResidentGenerationResult single =
             BC::generate_single_chunk_position_layer_to_file(
@@ -2876,6 +3267,7 @@ void apply_route_decision_to_result(
                 *writer,
                 options
             );
+        writer->flush();
         writer.reset();
 
         FamilyLayerResult result;
@@ -3662,32 +4054,39 @@ int run_bc_chain(const Args &args, std::ostream &out) {
         if (args.output_inspect) {
             async_position_writes.wait_for_layer(layer_sum);
         }
+        const std::filesystem::path final_artifact_path =
+            layer_artifact_path(args, final_path, route_decision.route);
         LayerFile generated_layer =
             args.output_inspect
-                ? inspect_layer_file(args, layer_sum, final_path, result.logical_size, lut)
+                ? inspect_layer_file(args, layer_sum, final_artifact_path, result.logical_size, lut)
                 : layer_file_from_known_metadata(
                       args,
                       layer_sum,
-                      final_path,
+                      final_artifact_path,
                       result.logical_size,
                       result.output_rows,
                       result.output_bucket_count,
                       result.output_rank_payload_bytes);
         result.output_rows = generated_layer.rows;
         if (route_decision.route == BC::BCFamilyGenerationRoute::Resident) {
+            const double observed_reserve_need =
+                bc_observed_reserve_need(source2_it->second, result);
+            if (observed_reserve_need > 0.0) {
+                resident_reserve_need_history.push_back(observed_reserve_need);
+            }
             if (result.retries != 0U) {
                 resident_retry_guard_factor =
-                    std::min(kBCDefaultReserveFactor, dynamic_reserve_factor * kBCLearnedReserveRetryGuard);
+                    std::min(kBCMaxReserveFactor, dynamic_reserve_factor * kBCLearnedReserveRetryGuard);
             }
         } else if (route_decision.route == BC::BCFamilyGenerationRoute::Single) {
             const double observed_reserve_need =
-                bc_single_observed_reserve_need(source2_it->second, result);
+                bc_observed_reserve_need(source2_it->second, result);
             if (observed_reserve_need > 0.0) {
                 single_reserve_need_history.push_back(observed_reserve_need);
             }
             if (result.retries != 0U) {
                 single_retry_guard_factor =
-                    std::min(kBCDefaultReserveFactor, dynamic_reserve_factor * kBCLearnedReserveRetryGuard);
+                    std::min(kBCMaxReserveFactor, dynamic_reserve_factor * kBCLearnedReserveRetryGuard);
             }
         }
 
@@ -3718,7 +4117,7 @@ int run_bc_chain(const Args &args, std::ostream &out) {
             ex_primary_live,
             ex_match,
             result,
-            final_path
+            final_artifact_path
         );
         out.flush();
         emit_generation_layer_metric(
@@ -3726,7 +4125,7 @@ int run_bc_chain(const Args &args, std::ostream &out) {
             layer_sum,
             input_live,
             result,
-            final_path
+            final_artifact_path
         );
         accumulate(aggregate, result, input_live);
         if (layer_sum >= seed_sum + args.warmup_extra) {
@@ -3798,10 +4197,12 @@ BCFamilyGenerationRunResult bc_family_generation_full_run(
     args.family_source_io = options.family_source_io;
     args.family_blob_checksum = options.family_blob_checksum;
     args.family_memory_checkpoints = options.family_memory_checkpoints;
+    args.compress_temp_files = options.compress_temp_files;
     args.family_modulus = options.family_modulus;
     args.family_route = options.family_route;
     args.direct_queue_depth = options.direct_queue_depth;
     args.output_dir = options.output_dir;
+    args.output_dirs = options.output_dirs;
     args.stats_csv = options.stats_csv;
 
     BCFamilyGenerationRunResult result;

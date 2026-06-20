@@ -196,21 +196,22 @@ class BookReaderDispatcher:
         if not pattern or not target:
             return
 
+        prefer_bc = str(SingletonConfig().config.get("algorithm_mode", "")).lower() == "bc"
         found_ad = False
         found_ex = False
         found_exad = False
         found_bc = False
+        has_ex_lut = False
+        has_ex_layer = False
+        has_exad_lut = False
+        has_exad_layer = False
+        bc_positions: set[str] = set()
+        bc_successes: set[str] = set()
         ex_prefix = f"{pattern}_{2 ** target}_"
         for path, _success_rate_dtype in path_list:
             if not os.path.exists(path):
                 continue
 
-            has_ex_lut = False
-            has_ex_layer = False
-            has_exad_lut = False
-            has_exad_layer = False
-            bc_positions: set[str] = set()
-            bc_successes: set[str] = set()
             with os.scandir(path) as entries:
                 for entry in entries:
                     if entry.name == f"{ex_prefix}.zlut":
@@ -243,12 +244,13 @@ class BookReaderDispatcher:
                     if has_ex_lut and has_ex_layer:
                         found_ex = True
                         break
-            if found_exad:
+            if prefer_bc and found_bc:
                 break
-            if found_ex:
+            if found_exad and not prefer_bc:
+                break
+            if found_ex and not prefer_bc:
                 break
 
-        prefer_bc = str(SingletonConfig().config.get("algorithm_mode", "")).lower() == "bc"
         if prefer_bc and found_bc:
             self.use_ad = False
             self.use_ex = False

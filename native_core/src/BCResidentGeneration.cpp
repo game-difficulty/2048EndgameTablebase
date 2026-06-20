@@ -2269,6 +2269,10 @@ static void bc_append_rank_payload_le_from_atomic_arena(
             static_cast<size_t>(effective_threads) * static_cast<size_t>(cell_stride),
             0U
         );
+        std::vector<uint32_t> local_cursors(
+            static_cast<size_t>(effective_threads) * static_cast<size_t>(cell_stride),
+            0U
+        );
         std::atomic<int> error_code{0};
 
 #pragma omp parallel num_threads(effective_threads)
@@ -2344,7 +2348,7 @@ static void bc_append_rank_payload_le_from_atomic_arena(
             for (int tid = 0; tid < effective_threads; ++tid) {
                 const size_t base = static_cast<size_t>(tid) * static_cast<size_t>(cell_stride);
                 const uint32_t count = local_counts[base + static_cast<size_t>(cid) + 1U];
-                local_counts[base + static_cast<size_t>(cid)] = cursor;
+                local_cursors[base + static_cast<size_t>(cid)] = cursor;
                 cursor += count;
             }
             if (cursor != out.cell_begin[static_cast<size_t>(cid) + 1U]) {
@@ -2359,7 +2363,7 @@ static void bc_append_rank_payload_le_from_atomic_arena(
         {
             const int tid = omp_get_thread_num();
             uint32_t *cursors =
-                local_counts.data() + static_cast<size_t>(tid) * static_cast<size_t>(cell_stride);
+                local_cursors.data() + static_cast<size_t>(tid) * static_cast<size_t>(cell_stride);
 #pragma omp for schedule(static)
             for (int64_t slot_i = 0; slot_i < static_cast<int64_t>(state.hash_capacity); ++slot_i) {
                 const uint32_t slot = static_cast<uint32_t>(slot_i);

@@ -56,6 +56,24 @@ T dict_get_or(const nb::dict &options, const char *key, T fallback) {
     return nb::cast<T>(value);
 }
 
+std::vector<std::filesystem::path> dict_get_path_vector(const nb::dict &options, const char *key) {
+    std::vector<std::filesystem::path> paths;
+    nb::str py_key(key);
+    if (!options.contains(py_key)) {
+        return paths;
+    }
+    nb::handle value = options[py_key];
+    if (value.is_none()) {
+        return paths;
+    }
+    for (const std::string &path : nb::cast<std::vector<std::string>>(value)) {
+        if (!path.empty()) {
+            paths.emplace_back(path);
+        }
+    }
+    return paths;
+}
+
 BC::BCSuccessDTypeMode parse_bc_success_dtype_binding(const std::string &value) {
     if (value == "uint32") return BC::BCSuccessDTypeMode::UInt32;
     if (value == "uint64") return BC::BCSuccessDTypeMode::UInt64;
@@ -104,6 +122,7 @@ BC::BCFamilyGenerationRunOptions bc_generation_options_from_dict(const nb::dict 
         "success_check_min_source_layer_sum",
         run.success_check_min_source_layer_sum);
     run.output_dir = dict_get_or<std::string>(options, "generated_dir", run.output_dir.string());
+    run.output_dirs = dict_get_path_vector(options, "generated_dirs");
     run.stats_csv = dict_get_or<std::string>(options, "generation_stats_csv", run.stats_csv.string());
     run.num_threads = dict_get_or<int>(options, "threads", run.num_threads);
     run.family_modulus = dict_get_or<uint32_t>(options, "family_modulus", run.family_modulus);
@@ -125,6 +144,10 @@ BC::BCFamilyGenerationRunOptions bc_generation_options_from_dict(const nb::dict 
         run.family_source_words_per_item);
     run.verify_layer_rows = dict_get_or<bool>(options, "verify_layer_rows", false);
     run.output_inspect = dict_get_or<bool>(options, "output_inspect", false);
+    run.compress_temp_files = dict_get_or<bool>(
+        options,
+        "compress_temp_files",
+        run.compress_temp_files);
     const bool direct_io = dict_get_or<bool>(options, "direct_io", true);
     if (!direct_io) {
         run.family_blob = "buffered";
@@ -151,6 +174,9 @@ BC::BCFamilySolveRunOptions bc_solve_options_from_dict(const nb::dict &options) 
         dict_get_or<std::string>(options, "solved_dir", run.solved_output_dir.string());
     run.archive_output_dir =
         dict_get_or<std::string>(options, "archive_dir", run.archive_output_dir.string());
+    run.generated_position_dirs = dict_get_path_vector(options, "generated_dirs");
+    run.solved_output_dirs = dict_get_path_vector(options, "solved_dirs");
+    run.archive_output_dirs = dict_get_path_vector(options, "archive_dirs");
     run.prefix = dict_get_or<std::string>(options, "prefix", run.prefix);
     run.target_rank = dict_get_or<uint32_t>(options, "target_rank", run.target_rank);
     run.success_target_rank = dict_get_or<int>(
@@ -341,6 +367,7 @@ NB_MODULE(formation_core, m) {
         .def_rw("steps", &RunOptions::steps)
         .def_rw("docheck_step", &RunOptions::docheck_step)
         .def_rw("pathname", &RunOptions::pathname)
+        .def_rw("cold_pathnames", &RunOptions::cold_pathnames)
         .def_rw("is_free", &RunOptions::is_free)
         .def_rw("is_variant", &RunOptions::is_variant)
         .def_rw("spawn_rate4", &RunOptions::spawn_rate4)
@@ -639,7 +666,8 @@ NB_MODULE(formation_core, m) {
         "trie_compress_book",
         &trie_compress_progress_native,
         "book_path"_a,
-        "success_rate_dtype"_a = "uint32"
+        "success_rate_dtype"_a = "uint32",
+        "output_book_path"_a = ""
     );
 
     m.def(

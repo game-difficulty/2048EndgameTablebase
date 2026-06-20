@@ -12,6 +12,7 @@
 #include <fstream>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -302,8 +303,11 @@ std::vector<TrieSegmentEntry> compress_and_save_parallel(
 }
 
 template <typename T>
-bool trie_compress_typed(const std::string &book_path) {
+bool trie_compress_typed(const std::string &book_path, const std::string &output_book_path = {}) {
     const fs::path input_path = NativePath::from_utf8(book_path);
+    const fs::path output_reference_path = output_book_path.empty()
+        ? input_path
+        : NativePath::from_utf8(output_book_path);
     std::vector<SuccessEntry<T>> rows =
         FileIOUtils::read_binary_vector_direct<SuccessEntry<T>>(input_path, trie_direct_io_config());
     const size_t size = rows.size() * sizeof(SuccessEntry<T>);
@@ -312,56 +316,74 @@ bool trie_compress_typed(const std::string &book_path) {
     }
 
     TrieIndexData<T> data = build_trie_index(rows);
-    fs::path final_dir = input_path;
+    fs::path final_dir = output_reference_path;
     final_dir.replace_extension(".z");
-    if (fs::exists(final_dir)) {
-        fs::remove_all(final_dir);
-    }
-    fs::create_directories(final_dir);
+    fs::path temp_dir = final_dir;
+    temp_dir += ".tmp";
+    std::error_code cleanup_ec;
+    fs::remove_all(temp_dir, cleanup_ec);
+    cleanup_ec.clear();
+    fs::create_directories(temp_dir);
 
-    const std::string filename = NativePath::to_utf8_string(input_path.filename());
-    const std::string stem = filename.substr(0, filename.size() - 4U);
-    const fs::path prefix = final_dir / stem;
-    fs::path z_path = prefix;
-    z_path += "z";
-    std::vector<TrieSegmentEntry> segments =
-        (data.book.size() >= kTrieParallelThreshold)
-            ? compress_and_save_parallel(data.ind3, data.book, z_path)
-            : compress_and_save_serial(data.ind3, data.book, z_path);
-    if (segments.empty()) {
-        return false;
-    }
+    try {
+        const std::string filename = NativePath::to_utf8_string(output_reference_path.filename());
+        const std::string stem = filename.substr(0, filename.size() - 4U);
+        const fs::path prefix = temp_dir / stem;
+        fs::path z_path = prefix;
+        z_path += "z";
+        std::vector<TrieSegmentEntry> segments =
+            (data.book.size() >= kTrieParallelThreshold)
+                ? compress_and_save_parallel(data.ind3, data.book, z_path)
+                : compress_and_save_serial(data.ind3, data.book, z_path);
+        if (segments.empty()) {
+            fs::remove_all(temp_dir, cleanup_ec);
+            return false;
+        }
 
-    for (auto &entry : data.ind0) {
-        entry.next += 1U + static_cast<uint32_t>(data.ind0.size());
-    }
-    for (auto &entry : data.ind1) {
-        entry.next += 1U + static_cast<uint32_t>(data.ind0.size()) + static_cast<uint32_t>(data.ind1.size());
-    }
+        for (auto &entry : data.ind0) {
+            entry.next += 1U + static_cast<uint32_t>(data.ind0.size());
+        }
+        for (auto &entry : data.ind1) {
+            entry.next += 1U + static_cast<uint32_t>(data.ind0.size()) + static_cast<uint32_t>(data.ind1.size());
+        }
 
-    std::vector<TrieNode32> ind;
-    ind.reserve(1ULL + data.ind0.size() + data.ind1.size() + data.ind2.size());
-    ind.push_back({0U, 1U});
-    ind.insert(ind.end(), data.ind0.begin(), data.ind0.end());
-    ind.insert(ind.end(), data.ind1.begin(), data.ind1.end());
-    ind.insert(ind.end(), data.ind2.begin(), data.ind2.end());
+        std::vector<TrieNode32> ind;
+        ind.reserve(1ULL + data.ind0.size() + data.ind1.size() + data.ind2.size());
+        ind.push_back({0U, 1U});
+        ind.insert(ind.end(), data.ind0.begin(), data.ind0.end());
+        ind.insert(ind.end(), data.ind1.begin(), data.ind1.end());
+        ind.insert(ind.end(), data.ind2.begin(), data.ind2.end());
 
-    std::vector<TrieNode16> ind3_short(data.ind3.size());
-    for (size_t i = 0; i < data.ind3.size(); ++i) {
-        ind3_short[i].key = data.ind3[i].key;
-        ind3_short[i].next = static_cast<uint16_t>(data.ind3[i].next);
+        std::vector<TrieNode16> ind3_short(data.ind3.size());
+        for (size_t i = 0; i < data.ind3.size(); ++i) {
+            ind3_short[i].key = data.ind3[i].key;
+            ind3_short[i].next = static_cast<uint16_t>(data.ind3[i].next);
+        }
+
+        fs::path ii_path = prefix;
+        ii_path += "ii";
+        fs::path i_path = prefix;
+        i_path += "i";
+        fs::path s_path = prefix;
+        s_path += "s";
+        write_binary_vector(ii_path, ind3_short);
+        write_binary_vector(i_path, ind);
+        write_binary_vector(s_path, segments);
+
+        std::error_code publish_ec;
+        fs::remove_all(final_dir, publish_ec);
+        if (publish_ec) {
+            throw std::runtime_error("failed to remove stale trie output: " + publish_ec.message());
+        }
+        fs::rename(temp_dir, final_dir, publish_ec);
+        if (publish_ec) {
+            throw std::runtime_error("failed to publish trie output: " + publish_ec.message());
+        }
+        return true;
+    } catch (...) {
+        fs::remove_all(temp_dir, cleanup_ec);
+        throw;
     }
-
-    fs::path ii_path = prefix;
-    ii_path += "ii";
-    fs::path i_path = prefix;
-    i_path += "i";
-    fs::path s_path = prefix;
-    s_path += "s";
-    write_binary_vector(ii_path, ind3_short);
-    write_binary_vector(i_path, ind);
-    write_binary_vector(s_path, segments);
-    return true;
 }
 
 template <typename T>
@@ -538,8 +560,8 @@ std::optional<double> trie_decompress_search_typed(const std::string &path_prefi
 }
 
 template <typename T>
-bool dispatch_trie_compress(const std::string &book_path) {
-    return trie_compress_typed<T>(book_path);
+bool dispatch_trie_compress(const std::string &book_path, const std::string &output_book_path) {
+    return trie_compress_typed<T>(book_path, output_book_path);
 }
 
 template <typename T>
@@ -549,17 +571,21 @@ std::optional<double> dispatch_trie_search(const std::string &path_prefix, uint6
 
 } // namespace
 
-bool trie_compress_progress_native(const std::string &book_path, const std::string &success_rate_dtype) {
+bool trie_compress_progress_native(
+    const std::string &book_path,
+    const std::string &success_rate_dtype,
+    const std::string &output_book_path
+) {
     switch (success_rate_kind_from_name(success_rate_dtype)) {
         case SuccessRateKind::UInt64:
-            return dispatch_trie_compress<uint64_t>(book_path);
+            return dispatch_trie_compress<uint64_t>(book_path, output_book_path);
         case SuccessRateKind::Float32:
-            return dispatch_trie_compress<float>(book_path);
+            return dispatch_trie_compress<float>(book_path, output_book_path);
         case SuccessRateKind::Float64:
-            return dispatch_trie_compress<double>(book_path);
+            return dispatch_trie_compress<double>(book_path, output_book_path);
         case SuccessRateKind::UInt32:
         default:
-            return dispatch_trie_compress<uint32_t>(book_path);
+            return dispatch_trie_compress<uint32_t>(book_path, output_book_path);
     }
 }
 

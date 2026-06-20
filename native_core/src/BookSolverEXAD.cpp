@@ -460,7 +460,27 @@ void cleanup_exad_chunk_work_files(const RunOptions &options, int step) {
 }
 
 std::string exad_compressed_file_path(const RunOptions &options, int step) {
-    return options.pathname + std::to_string(step) + EXADCompressedResult::kCompressedLayerFileExtension;
+    return StoragePaths::cold_path_for(
+        options,
+        step,
+        EXADCompressedResult::kCompressedLayerFileExtension
+    );
+}
+
+std::string exad_solved_file_path(const RunOptions &options, int step) {
+    const std::string existing = StoragePaths::existing_path_for(options, step, ".exadbook", false);
+    return existing.empty() ? EXAD::solved_file_path(options.pathname, step) : existing;
+}
+
+std::string exad_existing_compressed_file_path(const RunOptions &options, int step) {
+    for (const std::string &pathname : StoragePaths::candidate_pathnames(options, true)) {
+        const std::string path =
+            pathname + std::to_string(step) + EXADCompressedResult::kCompressedLayerFileExtension;
+        if (NativePath::exists(path)) {
+            return path;
+        }
+    }
+    return exad_compressed_file_path(options, step);
 }
 
 bool exad_compressed_file_is_fresh(const std::string &source_path, const std::string &output_path) {
@@ -481,16 +501,69 @@ bool exad_compressed_file_is_fresh(const std::string &source_path, const std::st
 
 bool exad_compressed_file_exists(const RunOptions &options, int step) {
     std::error_code ec;
-    return NativePath::exists(exad_compressed_file_path(options, step), ec);
+    return NativePath::exists(exad_existing_compressed_file_path(options, step), ec);
+}
+
+std::string exad_existing_temp_layer_path(const RunOptions &options, int step) {
+    for (const std::string &pathname : StoragePaths::candidate_pathnames(options, false)) {
+        const std::string path = EXAD::layer_file_path(pathname, step);
+        if (EXAD::layer_file_exists(path)) {
+            return path;
+        }
+    }
+    return EXAD::layer_file_path(options.pathname, step);
+}
+
+bool exad_temp_layer_exists(const RunOptions &options, int step) {
+    for (const std::string &pathname : StoragePaths::candidate_pathnames(options, false)) {
+        if (EXAD::layer_file_exists(EXAD::layer_file_path(pathname, step))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void remove_exad_temp_layer_candidates(const RunOptions &options, int step) {
+    StoragePaths::remove_all_candidates(options, step, EXAD::kLayerFileExtension, false);
+    StoragePaths::remove_all_candidates(options, step, std::string(EXAD::kLayerFileExtension) + ".7z", false);
 }
 
 bool exad_raw_solved_file_exists(const RunOptions &options, int step) {
-    return EXAD::solved_file_exists(EXAD::solved_file_path(options.pathname, step));
+    return StoragePaths::filename_exists_any(options, step, ".exadbook", false);
 }
 
 bool exad_solved_output_exists(const RunOptions &options, int step) {
     return exad_raw_solved_file_exists(options, step) ||
         exad_compressed_file_exists(options, step);
+}
+
+template <typename T>
+uint64_t estimate_exad_compressed_bytes(const EXAD::SolvedLayer<T> &layer) {
+    const uint64_t raw_bytes = EXAD::solved_serialized_size(layer);
+    const uint64_t success_bytes =
+        static_cast<uint64_t>(layer.success_values.size()) * static_cast<uint64_t>(sizeof(T));
+    const uint64_t position_bytes = raw_bytes > success_bytes ? raw_bytes - success_bytes : 0ULL;
+    return StoragePaths::estimate_compressed_bytes(position_bytes, success_bytes);
+}
+
+template <typename T>
+std::string write_exad_solved_layer_file(
+    const RunOptions &options,
+    int step,
+    const EXAD::SolvedLayer<T> &layer,
+    FileIOUtils::DirectIoConfig io_config
+) {
+    auto lease = StoragePaths::reserve_write_path(
+        options,
+        StoragePaths::ArtifactRole::Hot,
+        step,
+        ".exadbook",
+        EXAD::solved_serialized_size(layer)
+    );
+    EXAD::write_solved_layer_file(lease.path(), layer, io_config);
+    std::string final_path = lease.path();
+    lease.release();
+    return final_path;
 }
 
 struct EXADSolvePlan {
@@ -523,14 +596,27 @@ double maybe_compress_exad_solved_file(const RunOptions &options, int step, bool
     if (!options.compress) {
         return 0.0;
     }
-    const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
-    const std::string compressed_path = exad_compressed_file_path(options, step);
-    if (exad_compressed_file_is_fresh(solved_path, compressed_path)) {
+    const std::string solved_path = exad_solved_file_path(options, step);
+    if (!EXAD::solved_file_exists(solved_path)) {
+        return 0.0;
+    }
+    const std::string existing_compressed_path = exad_existing_compressed_file_path(options, step);
+    if (exad_compressed_file_is_fresh(solved_path, existing_compressed_path)) {
         if (remove_source_after_compress) {
-            remove_exad_solved_file_after_compression(solved_path, compressed_path);
+            remove_exad_solved_file_after_compression(solved_path, existing_compressed_path);
         }
         return 0.0;
     }
+    std::error_code size_ec;
+    const uint64_t source_bytes = static_cast<uint64_t>(NativePath::file_size(solved_path, size_ec));
+    auto lease = StoragePaths::reserve_write_path(
+        options,
+        StoragePaths::ArtifactRole::Cold,
+        step,
+        EXADCompressedResult::kCompressedLayerFileExtension,
+        size_ec ? StoragePaths::kDefaultSafetyMarginBytes : source_bytes
+    );
+    const std::string compressed_path = lease.path();
     const double t0 = wall_time_seconds();
     EXADCompressedResult::compress_exad_solved_layer_to_result(
         solved_path,
@@ -541,6 +627,7 @@ double maybe_compress_exad_solved_file(const RunOptions &options, int step, bool
     if (remove_source_after_compress) {
         remove_exad_solved_file_after_compression(solved_path, compressed_path);
     }
+    lease.release();
     return elapsed;
 }
 
@@ -550,7 +637,7 @@ double compress_all_exad_solved_files(const RunOptions &options, bool remove_sou
     }
     double elapsed = 0.0;
     for (int step = 0; step <= options.steps - 3; ++step) {
-        const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
+        const std::string solved_path = exad_solved_file_path(options, step);
         if (!EXAD::solved_file_exists(solved_path)) {
             continue;
         }
@@ -569,8 +656,21 @@ double compress_exad_solved_layer_from_memory(
     if (!options.compress) {
         return 0.0;
     }
-    const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
-    const std::string compressed_path = exad_compressed_file_path(options, step);
+    const std::string solved_path = exad_solved_file_path(options, step);
+    const std::string existing_compressed_path = exad_existing_compressed_file_path(options, step);
+    if (exad_compressed_file_is_fresh(solved_path, existing_compressed_path)) {
+        std::error_code ec;
+        NativePath::remove(solved_path, ec);
+        return 0.0;
+    }
+    auto lease = StoragePaths::reserve_write_path(
+        options,
+        StoragePaths::ArtifactRole::Cold,
+        step,
+        EXADCompressedResult::kCompressedLayerFileExtension,
+        estimate_exad_compressed_bytes(layer)
+    );
+    const std::string compressed_path = lease.path();
     const std::string temp_path = compressed_path + ".tmp";
     std::error_code ec;
     NativePath::remove(temp_path, ec);
@@ -586,6 +686,7 @@ double compress_exad_solved_layer_from_memory(
     if (ec) {
         throw std::runtime_error("failed to remove EXAD solved layer after in-memory compression: " + solved_path);
     }
+    lease.release();
     return wall_time_seconds() - t0;
 }
 
@@ -1266,6 +1367,24 @@ EXADSlotChunkManifest merge_slot_part_chunks_to_slot_chunk(
     }
     out.close();
     return read_slot_chunk_manifest<T>(merged_path, dtype_mode, slot);
+}
+
+template <typename T>
+uint64_t estimate_exad_chunk_merge_bytes(
+    const std::array<EXADSlotChunkManifest, bucket_slot_count()> &manifests
+) {
+    uint64_t metadata_payload_bytes = 0;
+    uint64_t success_value_count = 0;
+    for (const EXADSlotChunkManifest &manifest : manifests) {
+        metadata_payload_bytes += manifest.bucket_count * sizeof(EXAD::BucketEntry)
+            + manifest.small_bitmap_bytes
+            + manifest.large_bitmap_words * sizeof(uint64_t);
+        success_value_count += manifest.success_value_count;
+    }
+    return sizeof(EXAD::detail::SolvedFileHeader)
+        + sizeof(EXAD::detail::SolvedSlotHeader) * bucket_slot_count()
+        + metadata_payload_bytes
+        + success_value_count * sizeof(T);
 }
 
 template <typename T>
@@ -3501,7 +3620,7 @@ bool solved_physical_metadata_matches(const EXAD::SolvedLayer<T> &layer, const E
 
 void remove_exad_temp_layers(const RunOptions &options) {
     for (int step = 0; step < options.steps; ++step) {
-        EXAD::remove_layer_file(EXAD::layer_file_path(options.pathname, step));
+        remove_exad_temp_layer_candidates(options, step);
     }
 }
 
@@ -3525,8 +3644,8 @@ void load_future_layer(
         cached_step = target_step;
         return;
     }
-    const std::string path = EXAD::solved_file_path(options.pathname, target_step);
-    const std::string compressed_path = exad_compressed_file_path(options, target_step);
+    const std::string path = exad_solved_file_path(options, target_step);
+    const std::string compressed_path = exad_existing_compressed_file_path(options, target_step);
     if (!EXAD::solved_file_exists(path) && !NativePath::exists(compressed_path)) {
         throw std::runtime_error("missing EXAD solved future layer: " + path);
     }
@@ -3585,8 +3704,7 @@ void recalculate_process_exad_impl(
             progress_total - static_cast<uint32_t>(step) - 2U,
             progress_total
         );
-        const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
-        if (EXAD::solved_file_exists(solved_path)) {
+        if (exad_raw_solved_file_exists(options, step)) {
             cleanup_exad_chunk_work_files(options, step);
             continue;
         }
@@ -3599,15 +3717,15 @@ void recalculate_process_exad_impl(
         const double layer_deletion_threshold = deletion_threshold_state.absolute;
 
         const double current_read_t0 = wall_time_seconds();
-        const std::string current_temp_path = EXAD::layer_file_path(options.pathname, step);
-        if (!EXAD::layer_file_exists(current_temp_path)) {
+        if (!exad_temp_layer_exists(options, step)) {
             ensure_exad_temp_through_cpp(arr_init, spec, options, step);
         }
-        if (!EXAD::layer_file_exists(current_temp_path)) {
+        if (!exad_temp_layer_exists(options, step)) {
             throw std::runtime_error(
                 "missing EXAD temp layer for local solve resume at step " + std::to_string(step)
             );
         }
+        const std::string current_temp_path = exad_existing_temp_layer_path(options, step);
         EXAD::Layer generation_layer = EXAD::read_layer_file(current_temp_path, io_config);
         const double current_read_t1 = wall_time_seconds();
         if (!EXAD::physical_metadata_matches(generation_layer, luts)) {
@@ -3709,11 +3827,7 @@ void recalculate_process_exad_impl(
                     );
                 } else {
                     const double future_write_t0 = wall_time_seconds();
-                    EXAD::write_solved_layer_file(
-                        EXAD::solved_file_path(options.pathname, step + 2),
-                        compacted_future,
-                        io_config
-                    );
+                    write_exad_solved_layer_file(options, step + 2, compacted_future, io_config);
                     future_write_seconds = wall_time_seconds() - future_write_t0;
                 }
                 if (cached_future2_step == step + 2) {
@@ -3735,10 +3849,10 @@ void recalculate_process_exad_impl(
         future_index_seconds += wall_time_seconds() - current_index_t0;
 
         const double write_t0 = wall_time_seconds();
-        EXAD::write_solved_layer_file(solved_path, current, io_config);
+        write_exad_solved_layer_file(options, step, current, io_config);
         const double write_t1 = wall_time_seconds();
         compress_seconds += maybe_compress_exad_solved_file(options, step);
-        EXAD::remove_layer_file(EXAD::layer_file_path(options.pathname, step));
+        remove_exad_temp_layer_candidates(options, step);
 
         EXADSolveStatsRecord record;
         record.stage = "solve";
@@ -3872,8 +3986,7 @@ void recalculate_process_exad_chunked_impl(
             progress_total - static_cast<uint32_t>(step) - 2U,
             progress_total
         );
-        const std::string solved_path = EXAD::solved_file_path(options.pathname, step);
-        if (EXAD::solved_file_exists(solved_path)) {
+        if (exad_raw_solved_file_exists(options, step)) {
             cleanup_exad_chunk_work_files(options, step);
             continue;
         }
@@ -3889,7 +4002,7 @@ void recalculate_process_exad_chunked_impl(
         ensure_future_available(step + 2);
 
         const std::string chunk_dir = exad_chunk_dir_path(options, step);
-        const std::string writing_path = exad_chunk_writing_path(options, step);
+        const std::string stale_writing_path = exad_chunk_writing_path(options, step);
         std::error_code cleanup_ec;
         NativePath::remove_all(chunk_dir, cleanup_ec);
         if (cleanup_ec) {
@@ -3899,8 +4012,8 @@ void recalculate_process_exad_chunked_impl(
         if (cleanup_ec) {
             throw std::runtime_error("failed to create EXAD chunk directory: " + chunk_dir);
         }
-        NativePath::remove(writing_path, cleanup_ec);
-        NativePath::remove(FileIOUtils::temp_write_path(writing_path), cleanup_ec);
+        NativePath::remove(stale_writing_path, cleanup_ec);
+        NativePath::remove(FileIOUtils::temp_write_path(stale_writing_path), cleanup_ec);
 
         double future_read_seconds = 0.0;
         double future_index_seconds = 0.0;
@@ -3916,15 +4029,15 @@ void recalculate_process_exad_chunked_impl(
         std::array<std::vector<std::string>, bucket_slot_count()> partial_chunk_paths{};
         EXAD::LayerFileInfo layer_info{};
 
-        const std::string layer_path = EXAD::layer_file_path(options.pathname, step);
-        if (!EXAD::layer_file_exists(layer_path)) {
+        if (!exad_temp_layer_exists(options, step)) {
             ensure_exad_temp_through_cpp(arr_init, spec, options, step);
         }
-        if (!EXAD::layer_file_exists(layer_path)) {
+        if (!exad_temp_layer_exists(options, step)) {
             throw std::runtime_error(
                 "missing EXAD temp layer for local chunked solve resume at step " + std::to_string(step)
             );
         }
+        const std::string layer_path = exad_existing_temp_layer_path(options, step);
         {
             EXAD::SolvedLayer<T> future = empty_future_layer<T>(dtype_mode);
             int cached_future_step = std::numeric_limits<int>::min();
@@ -4148,11 +4261,7 @@ void recalculate_process_exad_chunked_impl(
                         );
                     } else {
                         const double future_write_t0 = wall_time_seconds();
-                        EXAD::write_solved_layer_file(
-                            EXAD::solved_file_path(options.pathname, step + 2),
-                            compacted_future,
-                            io_config
-                        );
+                        write_exad_solved_layer_file(options, step + 2, compacted_future, io_config);
                         future_write_seconds = wall_time_seconds() - future_write_t0;
                     }
                 }
@@ -4166,6 +4275,17 @@ void recalculate_process_exad_chunked_impl(
         );
 
         const double merge_t0 = wall_time_seconds();
+        auto solved_lease = StoragePaths::reserve_write_path(
+            options,
+            StoragePaths::ArtifactRole::Hot,
+            step,
+            ".exadbook",
+            estimate_exad_chunk_merge_bytes<T>(manifests)
+        );
+        const std::string solved_path = solved_lease.path();
+        const std::string writing_path = solved_path + ".writing";
+        NativePath::remove(writing_path, cleanup_ec);
+        NativePath::remove(FileIOUtils::temp_write_path(writing_path), cleanup_ec);
         const EXADChunkMergeSummary merge_summary = merge_slot_chunks_to_solved_file<T>(
             solved_path,
             writing_path,
@@ -4180,6 +4300,7 @@ void recalculate_process_exad_chunked_impl(
             manifests,
             io_config
         );
+        solved_lease.release();
         current_write_seconds += wall_time_seconds() - merge_t0;
         maybe_throw_exad_chunked_test_stop(
             "EXAD_TEST_STOP_AFTER_CHUNKED_SOLVED_WRITE_STEP",
@@ -4191,7 +4312,7 @@ void recalculate_process_exad_chunked_impl(
         if (cleanup_ec) {
             throw std::runtime_error("failed to remove EXAD chunk directory: " + chunk_dir);
         }
-        EXAD::remove_layer_file(layer_path);
+        remove_exad_temp_layer_candidates(options, step);
 
         const double normalized_max_rate = static_cast<double>(max_rate - zero_val) /
             static_cast<double>(max_scale - zero_val);

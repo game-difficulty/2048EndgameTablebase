@@ -2,12 +2,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace BC {
@@ -137,6 +139,35 @@ public:
         return false;
     }
     virtual uint64_t size() const = 0;
+};
+
+class BCMemoryReadableFile final : public BCReadableFile {
+public:
+    explicit BCMemoryReadableFile(std::vector<uint8_t> bytes)
+        : bytes_(std::move(bytes)) {}
+
+    void read_at(uint64_t offset, void *data, uint64_t bytes) const override {
+        if (bytes == 0U) {
+            return;
+        }
+        if (data == nullptr) {
+            throw std::invalid_argument("BC memory file reader data pointer is null");
+        }
+        if (offset > bytes_.size() || bytes > static_cast<uint64_t>(bytes_.size()) - offset) {
+            throw std::out_of_range("BC memory file reader read exceeds file size");
+        }
+        std::memcpy(
+            data,
+            bytes_.data() + static_cast<size_t>(offset),
+            static_cast<size_t>(bytes));
+    }
+
+    [[nodiscard]] uint64_t size() const override {
+        return static_cast<uint64_t>(bytes_.size());
+    }
+
+private:
+    std::vector<uint8_t> bytes_;
 };
 
 // Buffered correctness backend. It intentionally uses ordinary OS-buffered file

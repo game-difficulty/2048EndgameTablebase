@@ -23,6 +23,8 @@
       "category": "Category",
       "target": "Target Tile",
       "path": "Storage Path",
+      "hotPath": "Hot",
+      "coldPath": "Cold",
       "browse": "Browse",
       "build": "Start Build",
       "algorithmMode": "Algorithm",
