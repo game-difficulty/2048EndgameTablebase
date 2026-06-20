@@ -39,6 +39,13 @@ def _symm_mode_value(name: str) -> int:
     return int(mode.value if hasattr(mode, "value") else mode)
 
 
+def _target_rank(target: str | int) -> int:
+    value = int(target)
+    if value >= 32 and (value & (value - 1)) == 0:
+        return int(np.log2(value))
+    return value
+
+
 class BookReader:
     _native_readers: dict[str, Any] = {}
 
@@ -188,9 +195,7 @@ class BookReaderDispatcher:
 
     def dispatch(self, path_list: list, pattern: str, target: str | int):
         try:
-            target = int(target)
-            if target >= 128:
-                target = int(np.log2(target))
+            target = _target_rank(target)
         except ValueError:
             return
         if not pattern or not target:

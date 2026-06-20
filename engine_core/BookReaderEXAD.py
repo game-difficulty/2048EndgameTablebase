@@ -28,6 +28,13 @@ def _symm_mode_value(name: str) -> int:
     return int(mode.value if hasattr(mode, "value") else mode)
 
 
+def _target_rank(target: int) -> int:
+    value = int(target)
+    if value >= 32 and (value & (value - 1)) == 0:
+        return int(np.log2(value))
+    return value
+
+
 class BookReaderEXAD:
     def __new__(cls, pattern: str, target: int):
         if pattern in pattern_32k_tiles_map:
@@ -38,7 +45,7 @@ class BookReaderEXAD:
         if formation_core is None:
             raise RuntimeError("formation_core is unavailable")
 
-        native_target = int(np.log2(target)) if int(target) >= 128 else int(target)
+        native_target = _target_rank(target)
         self.pattern = pattern
         self.target = native_target
         meta = pattern_catalog.get(pattern, {})
