@@ -61,6 +61,7 @@ export function useTrainerSession(activeRef) {
   const showResults = ref(true);
   const recordingState = ref(false);
   const replayResultsActive = ref(false);
+  const recordPlaybackLoaded = ref(false);
   const queuedStepCount = ref(0);
   const stepExecutionPending = ref(false);
   const demoSpeed = ref(40);
@@ -100,6 +101,11 @@ export function useTrainerSession(activeRef) {
       const restored = restoreSuccessRate(val, tableResult.value.dtype || '');
       return typeof restored === 'number' && Number.isFinite(restored) && restored > 0;
     })
+  );
+  const recordOpen = computed(() => recordPlaybackLoaded.value && !recordingState.value);
+  const recordPlaybackActive = computed(() => recordOpen.value && recordMax.value > 1);
+  const recordPlaybackAtEnd = computed(() =>
+    recordPlaybackActive.value && recordStep.value >= recordMax.value - 1
   );
   const bestResultMove = computed(() => {
     const dtype = tableResult.value.dtype || '';
@@ -217,12 +223,16 @@ export function useTrainerSession(activeRef) {
   }));
 
   const displayedResults = computed(() => (
-    resultsRefreshPhase.value === 'placeholder' ? createPlaceholderResults() : sortedResults.value
+    !recordOpen.value && resultsRefreshPhase.value === 'placeholder'
+      ? createPlaceholderResults()
+      : sortedResults.value
   ));
 
-  const resultsRefreshing = computed(() => resultsRefreshPhase.value !== 'idle');
+  const resultsRefreshing = computed(() => !recordOpen.value && resultsRefreshPhase.value !== 'idle');
   const resultsUpdatingVisible = computed(
-    () => resultsRefreshPhase.value === 'stale' || resultsRefreshPhase.value === 'placeholder'
+    () => !recordOpen.value && (
+      resultsRefreshPhase.value === 'stale' || resultsRefreshPhase.value === 'placeholder'
+    )
   );
 
   const getResultRowStyle = (item) => ({
@@ -383,8 +393,9 @@ export function useTrainerSession(activeRef) {
 
   const invalidateResults = ({ clearDisplay = false } = {}) => {
     resultsBoardHex.value = '';
-    if (clearDisplay && !replayResultsActive.value) {
+    if (clearDisplay) {
       tableResult.value = { dtype: '?', results: {} };
+      replayResultsActive.value = false;
     }
   };
 
@@ -400,18 +411,28 @@ export function useTrainerSession(activeRef) {
   const scheduleDemoStep = (delayMs = getDemoDelayMs()) => {
     clearDemoTimer();
     if (!demoActive.value || awaitingSpawn.value) return;
+    if (recordPlaybackAtEnd.value) {
+      demoActive.value = false;
+      clearStepQueue();
+      return;
+    }
     demoTimer = window.setTimeout(() => {
       demoTimer = null;
       if (!demoActive.value || awaitingSpawn.value) return;
-      trainerStep();
+      if (recordPlaybackActive.value) {
+        playRecordStep(1, { fromDemo: true });
+      } else {
+        trainerStep();
+      }
     }, Math.max(1, delayMs));
   };
 
   const queryResults = (reason = 'manual') => {
-    if ((reason !== 'step' && !showResults.value) || awaitingSpawn.value || replayResultsActive.value) return null;
+    if (recordOpen.value || (reason !== 'step' && !showResults.value) || awaitingSpawn.value) return null;
     const boardHex = currentBoardHex.value || hexInput.value;
     if (!boardHex) return null;
-    if (resultsBoardHex.value === boardHex || hasPendingResultsForBoard(boardHex)) return null;
+    if (reason !== 'manual' && resultsBoardHex.value === boardHex) return null;
+    if (hasPendingResultsForBoard(boardHex)) return null;
 
     const requestId = `${clientId}_${++nextResultsRequestId}`;
     pendingResultsRequests.set(requestId, { boardHex, reason });
@@ -451,6 +472,11 @@ export function useTrainerSession(activeRef) {
   const handleMessage = async (data) => {
     if (data.action === 'RECORDING_STARTED') {
       recordingState.value = true;
+      recordPlaybackLoaded.value = false;
+      replayResultsActive.value = false;
+      pendingResultsRequests.clear();
+      finishResultsRefresh();
+      invalidateResults({ clearDisplay: true });
       recordingLength.value = data.data?.recording_length ?? 1;
       return;
     }
@@ -482,22 +508,39 @@ export function useTrainerSession(activeRef) {
         recordStep.value = data.data.record_step || 0;
         recordMax.value = data.data.record_max || 0;
         recordingLength.value = data.data.recording_length || 0;
+        recordPlaybackLoaded.value = !!data.data.record_playback_loaded;
         fullHistory.value = data.data.history || [];
         fullMoves.value = data.data.moves || [];
       }
-      if (data.data.record_results_mode === 'embedded') {
+      awaitingSpawn.value = !!data.data.awaiting_spawn;
+      if (recordOpen.value) {
+        pendingResultsRequests.clear();
+        finishResultsRefresh();
+        clearStepQueue();
         replayResultsActive.value = true;
         tableResult.value = {
           dtype: data.data.record_results_dtype || 'recorded',
-          results: data.data.record_results || {},
+          results: data.data.record_results_mode === 'embedded'
+            ? (data.data.record_results || {})
+            : {},
         };
         resultsBoardHex.value = currentBoardHex.value;
-      } else if (replayResultsActive.value) {
-        replayResultsActive.value = false;
-        invalidateResults();
+        if (awaitingSpawn.value) {
+          demoActive.value = false;
+          clearDemoTimer();
+        } else if (demoActive.value) {
+          if (recordPlaybackAtEnd.value) {
+            demoActive.value = false;
+            clearDemoTimer();
+          } else {
+            scheduleDemoStep();
+          }
+        }
+        return;
       }
-      awaitingSpawn.value = !!data.data.awaiting_spawn;
-      if (boardChanged && !replayResultsActive.value) {
+
+      replayResultsActive.value = false;
+      if (boardChanged) {
         invalidateResults();
       }
       if (awaitingSpawn.value) {
@@ -509,7 +552,6 @@ export function useTrainerSession(activeRef) {
         stepExecutionPending.value = false;
         queryResults(queuedStepCount.value > 0 || demoActive.value ? 'step' : 'auto');
       }
-
       return;
     }
 
@@ -522,14 +564,18 @@ export function useTrainerSession(activeRef) {
       if (resultBoardHex !== currentBoardHex.value) {
         return;
       }
+      if (recordOpen.value) {
+        finishResultsRefresh();
+        return;
+      }
       finishResultsRefresh();
       replayResultsActive.value = false;
       tableResult.value = {
-        dtype: data.data.dtype,
-        results: data.data.results,
+        dtype: data.data.dtype || '?',
+        results: data.data.results || {},
       };
       resultsBoardHex.value = resultBoardHex;
-      if (!hasPlayableResults.value) {
+      if (!hasPlayableResults.value && !recordPlaybackActive.value) {
         demoActive.value = false;
         clearDemoTimer();
         clearStepQueue();
@@ -691,6 +737,11 @@ export function useTrainerSession(activeRef) {
     if (!patternType.value || !targetValue.value) return;
     const fullPattern = `${patternType.value}_${targetValue.value}`;
     const targetFilepath = typeof filepath === 'string' ? filepath : null;
+    recordPlaybackLoaded.value = false;
+    replayResultsActive.value = false;
+    pendingResultsRequests.clear();
+    invalidateResults({ clearDisplay: true });
+    startResultsRefresh();
     triggerAction('TRAINER_SET_FILEPATH', {
       filepath: targetFilepath,
       pattern: fullPattern,
@@ -699,8 +750,26 @@ export function useTrainerSession(activeRef) {
   };
 
   const trainerStep = () => {
+    if (recordPlaybackActive.value) {
+      playRecordStep(1);
+      return;
+    }
     queuedStepCount.value += 1;
     pumpQueuedSteps();
+  };
+
+  const playRecordStep = (delta, { fromDemo = false } = {}) => {
+    if (!recordPlaybackActive.value) return false;
+    if ((delta > 0 && recordPlaybackAtEnd.value) || (delta < 0 && recordStep.value <= 0)) {
+      if (fromDemo) {
+        demoActive.value = false;
+        clearDemoTimer();
+        clearStepQueue();
+      }
+      return true;
+    }
+    triggerAction('RECORD_STEP', { dir: delta });
+    return true;
   };
 
   const trainerUndo = () => {
@@ -720,7 +789,9 @@ export function useTrainerSession(activeRef) {
   const toggleDemo = () => {
     demoActive.value = !demoActive.value;
     if (demoActive.value) {
-      if (resultsBoardHex.value === currentBoardHex.value && hasPlayableResults.value) {
+      if (recordPlaybackActive.value) {
+        scheduleDemoStep();
+      } else if (resultsBoardHex.value === currentBoardHex.value && hasPlayableResults.value) {
         scheduleDemoStep();
       } else {
         queryResults('step');
@@ -744,9 +815,16 @@ export function useTrainerSession(activeRef) {
         triggerAction('START_RECORDING');
       }
     } else if (cmd === 'OPEN') {
+      demoActive.value = false;
+      clearDemoTimer();
+      clearStepQueue();
       await openRecord();
     } else if (cmd === 'PREV' || cmd === 'NEXT') {
-      triggerAction('RECORD_STEP', { dir: cmd === 'PREV' ? -1 : 1 });
+      demoActive.value = false;
+      clearDemoTimer();
+      clearStepQueue();
+      const delta = cmd === 'PREV' ? -1 : 1;
+      playRecordStep(delta);
     }
   };
 

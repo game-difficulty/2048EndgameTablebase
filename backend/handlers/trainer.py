@@ -44,7 +44,16 @@ async def handle_trainer_action(
         filepath = payload.get("filepath")
         pattern = payload.get("pattern", "L3")
         target = payload.get("target", "32768")
+        current_board = np_u64(session.board_encoded)
+        current_score = int(session.score)
         _clear_record_replay(session)
+        session.board_encoded = current_board
+        session.score = current_score
+        session.history = [(session.board_encoded, session.score)]
+        session.move_history = [None]
+        session.played_length = 0
+        session.moved = 0
+        session.trainer_results = {}
         config = SingletonConfig().config
         filepath_map = config["filepath_map"]
         pattern_key = SingletonConfig.get_pattern_key(pattern, spawn_rate4)
@@ -80,24 +89,8 @@ async def handle_trainer_action(
         session.pattern_settings = [pattern.split("_")[0], target]
         session.use_variant = pattern.split("_")[0] in category_info.get("variant", [])
 
-        if path_list:
-            try:
-                random_board = session.ensure_book_reader().get_random_state(
-                    path_list, session.current_pattern
-                )
-                session.board_encoded = np_u64(random_board)
-                session.score = 0
-                session.history = [(session.board_encoded, session.score)]
-                session.move_history = [None]
-                session.moved = 0
-                session.played_length = 0
-                session.trainer_results = {}
-            except Exception as e:
-                print("TRAINER_SET_FILEPATH default load err:", e)
-
         await manager.send_state(websocket)
-        if path_list:
-            await send_trainer_results(session, websocket)
+        await send_trainer_results(session, websocket)
         return True
 
     if action == Action.TRAINER_GET_RESULTS:
@@ -367,6 +360,7 @@ async def handle_trainer_action(
                         for i in range(len(session.history))
                     ]
                     session.record_result_dtype = "recorded"
+                    session.record_playback_loaded = True
                     session.played_length = 0
                     session.board_encoded, session.score = session.history[0]
                     await manager.send_state(websocket)
@@ -385,6 +379,7 @@ async def handle_trainer_action(
                     session.history = [(row["board"], row["score"]) for row in arr]
                     session.move_history = [None] * len(session.history)
                     session.record_animation_history = [{}] * len(session.history)
+                    session.record_playback_loaded = True
                     session.played_length = 0
                     session.board_encoded = np_u64(session.history[0][0])
                     session.score = session.history[0][1]
@@ -470,8 +465,6 @@ async def handle_trainer_action(
             if new_idx == old_idx + 1 and new_idx < len(record_animation_history):
                 metadata = record_animation_history[new_idx] or {}
             await manager.send_state(websocket, metadata)
-            if not getattr(session, "record_result_history", []):
-                await send_trainer_results(session, websocket)
         return True
 
     if action == Action.TRIGGER_SELECT_FOLDER:
