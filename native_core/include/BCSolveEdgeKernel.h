@@ -411,9 +411,8 @@ struct BCSolvePreparedQueryEncoder {
         if (cell_modulus != 0U && cell_modulus > std::numeric_limits<FamilyCoord>::max()) {
             throw std::invalid_argument("BC solve future cell modulus exceeds FamilyCoord");
         }
-        if (static_cast<uint64_t>(family_count) * static_cast<uint64_t>(family_count) >
-            static_cast<uint64_t>(std::numeric_limits<uint16_t>::max()) + 1ULL) {
-            throw std::invalid_argument("BC solve prepared query requires <= 65536 future cells");
+        if (family_count > kBCMaxFamilyModulusForPackedCellId) {
+            throw std::invalid_argument("BC solve prepared query requires family_count <= 256");
         }
     }
 

@@ -4171,6 +4171,9 @@ BCFamilyGenerationRunResult bc_family_generation_full_run(
         options.direct_queue_depth == 0U) {
         throw std::invalid_argument("BC family generation numeric options must be non-zero");
     }
+    if (options.family_modulus > BC::kBCMaxFamilyModulusForPackedCellId) {
+        throw std::invalid_argument("BC family generation family_modulus is outside 1..256");
+    }
 
     Args args;
     args.pattern = options.pattern;

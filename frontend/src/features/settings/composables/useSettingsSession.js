@@ -3,9 +3,11 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
+import { normalizeBCFamilyModulus } from '../../../utils/bcFamilyModulus';
 import { isVariantPattern } from '../../../utils/patternCategories';
 
 export function useSettingsSession(activeRef) {
+  const DEFAULT_BUILD_PATH = 'C:/2048_tables/';
   const activeSubTab = ref('builder');
   const {
     wsStatus,
@@ -33,10 +35,10 @@ export function useSettingsSession(activeRef) {
   const selectedCategory = ref('');
   const selectedPattern = ref('');
   const selectedTarget = ref('512');
-  const buildPath = ref('C:/2048_tables/');
-  const builderAlgorithm = ref('classic');
+  const buildPath = ref(DEFAULT_BUILD_PATH);
+  const builderAlgorithm = ref('ex');
   const builderAdvancedAlgo = ref(false);
-  const builderZMaskAlgo = ref(false);
+  const builderZMaskAlgo = ref(true);
   const builderCompress = ref(false);
   const builderCompressTempFiles = ref(false);
   const builderOptimalBranchOnly = ref(false);
@@ -47,7 +49,6 @@ export function useSettingsSession(activeRef) {
   const builderDeletionThresholdMode = ref('absolute');
   const MAX_DELETION_THRESHOLD = 0.999999;
   const DEFAULT_DELETION_THRESHOLD_DECIMALS = 6;
-  const DEFAULT_BC_FAMILY_MODULUS = 29;
 
   const countFractionDigits = (value) => {
     const decimalPart = String(value).split('.')[1];
@@ -124,14 +125,6 @@ export function useSettingsSession(activeRef) {
   const normalizeDeletionThresholdMode = (value) =>
     value === 'relative' || value === 'off' ? value : 'absolute';
 
-  const normalizeBCFamilyModulus = (value) => {
-    const parsed = Number.parseInt(value, 10);
-    if (!Number.isFinite(parsed)) {
-      return DEFAULT_BC_FAMILY_MODULUS;
-    }
-    return Math.min(65535, Math.max(1, parsed));
-  };
-
   const normalizeBuildPathList = (value) => {
     const rawItems = Array.isArray(value)
       ? value
@@ -151,6 +144,13 @@ export function useSettingsSession(activeRef) {
     return paths;
   };
 
+  const normalizePathKey = (path) =>
+    String(path || '')
+      .trim()
+      .replace(/\\/g, '/')
+      .replace(/\/+$/, '')
+      .toLowerCase();
+
   const normalizedBuildPaths = computed(() => normalizeBuildPathList(buildPath.value));
 
   const setBuildPaths = (paths) => {
@@ -159,6 +159,24 @@ export function useSettingsSession(activeRef) {
 
   const appendBuildPath = (path) => {
     setBuildPaths([...normalizedBuildPaths.value, path]);
+  };
+
+  const addSelectedBuildPath = (path) => {
+    const currentPaths = normalizedBuildPaths.value;
+    const selectedPath = String(path || '').trim();
+    if (!selectedPath) {
+      return;
+    }
+
+    const defaultPathKey = normalizePathKey(DEFAULT_BUILD_PATH);
+    const currentIsOnlyDefault =
+      currentPaths.length === 1 && normalizePathKey(currentPaths[0]) === defaultPathKey;
+    if (currentIsOnlyDefault) {
+      setBuildPaths([selectedPath]);
+      return;
+    }
+
+    appendBuildPath(selectedPath);
   };
 
   const normalizeBuilderAlgorithm = (value) => {
@@ -243,12 +261,14 @@ export function useSettingsSession(activeRef) {
   });
 
   const syncBuilderStateFromConfig = () => {
-    builderAdvancedAlgo.value = Boolean(config.value.advanced_algo);
-    builderZMaskAlgo.value = Boolean(config.value.zmask_algo);
     const configuredAlgorithm = normalizeBuilderAlgorithm(config.value.algorithm_mode);
-    builderAlgorithm.value = configuredAlgorithm === 'bc'
-      ? 'bc'
-      : algorithmFromFlags(builderAdvancedAlgo.value, builderZMaskAlgo.value);
+    const algorithmFlags = flagsFromAlgorithm(
+      configuredAlgorithm,
+      isVariantPattern(selectedPattern.value, categories.value)
+    );
+    builderAlgorithm.value = algorithmFlags.algorithm;
+    builderAdvancedAlgo.value = algorithmFlags.advanced;
+    builderZMaskAlgo.value = algorithmFlags.ex;
     builderCompress.value = Boolean(config.value.compress);
     builderCompressTempFiles.value = Boolean(config.value.compress_temp_files);
     builderOptimalBranchOnly.value = Boolean(config.value.optimal_branch_only);
@@ -344,7 +364,7 @@ export function useSettingsSession(activeRef) {
     if (data.type === 'FOLDER_SELECTED') {
       const path = String(data.payload?.path || '').trim();
       if (path) {
-        appendBuildPath(path);
+        addSelectedBuildPath(path);
       }
       return;
     }
@@ -500,7 +520,7 @@ export function useSettingsSession(activeRef) {
     const { handled, value } = await tryDesktopDialog('select_folder');
     if (handled) {
       if (value) {
-        appendBuildPath(value);
+        addSelectedBuildPath(value);
       }
       return;
     }

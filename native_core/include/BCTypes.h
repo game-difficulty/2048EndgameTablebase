@@ -13,6 +13,8 @@ using CellId = uint32_t;
 using LayerSum = uint64_t;
 using SpawnDeltaCoord = uint16_t;
 
+inline constexpr uint32_t kBCMaxFamilyModulusForPackedCellId = 256U;
+
 template <typename T, std::size_t Capacity>
 class SmallVector {
 public:

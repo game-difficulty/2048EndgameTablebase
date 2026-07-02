@@ -98,7 +98,7 @@
                     { value: 'ad', label: $t('settings.builder.algorithmAD'), disabled: selectedPatternIsVariant },
                     { value: 'ex', label: $t('settings.builder.algorithmEX') },
                     { value: 'exad', label: $t('settings.builder.algorithmEXAD'), disabled: selectedPatternIsVariant },
-                    { value: 'bc', label: $t('settings.builder.algorithmBC') },
+                    { value: 'bc', label: $t('settings.builder.algorithmBC'), badge: 'beta' },
                   ]"
                   :aria-label="$t('settings.builder.algorithmMode')"
                   trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-control font-black text-text-main shadow-sm hover:border-accent/45"
@@ -130,8 +130,8 @@
                 </label>
                 <input
                   type="number"
-                  min="1"
-                  max="65535"
+                  min="13"
+                  max="256"
                   step="1"
                   v-model.number="builderBCFamilyModulus"
                   :aria-label="$t('settings.builder.bcFamilyModulus')"

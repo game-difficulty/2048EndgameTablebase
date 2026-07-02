@@ -119,6 +119,9 @@ logger.addHandler(file_handler)
 
 
 MAX_DELETION_THRESHOLD = 0.999999
+MIN_BC_FAMILY_MODULUS = 13
+MAX_BC_FAMILY_MODULUS = 256
+DEFAULT_BC_FAMILY_MODULUS = 29
 RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH = os.path.join(
     os.path.dirname(__file__),
     "docs_and_configs",
@@ -140,6 +143,51 @@ def normalize_deletion_threshold_mode(value):
     if value == "off":
         return "off"
     return "absolute"
+
+
+def _is_prime(value: int) -> bool:
+    if value < 2:
+        return False
+    if value == 2:
+        return True
+    if value % 2 == 0:
+        return False
+
+    divisor = 3
+    while divisor * divisor <= value:
+        if value % divisor == 0:
+            return False
+        divisor += 2
+    return True
+
+
+def normalize_bc_family_modulus(value):
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_BC_FAMILY_MODULUS
+
+    clamped = min(
+        MAX_BC_FAMILY_MODULUS,
+        max(MIN_BC_FAMILY_MODULUS, parsed),
+    )
+    if _is_prime(clamped):
+        return clamped
+
+    max_distance = max(
+        clamped - MIN_BC_FAMILY_MODULUS,
+        MAX_BC_FAMILY_MODULUS - clamped,
+    )
+    for distance in range(1, max_distance + 1):
+        lower = clamped - distance
+        if lower >= MIN_BC_FAMILY_MODULUS and _is_prime(lower):
+            return lower
+
+        upper = clamped + distance
+        if upper <= MAX_BC_FAMILY_MODULUS and _is_prime(upper):
+            return upper
+
+    return DEFAULT_BC_FAMILY_MODULUS
 
 
 def deletion_threshold_components(value, mode="absolute"):
@@ -519,12 +567,12 @@ class SingletonConfig:
             "compress": False,
             "optimal_branch_only": False,
             "compress_temp_files": False,
-            "algorithm_mode": "classic",
+            "algorithm_mode": "ex",
             "SmallTileSumLimit": 96,
             "advanced_algo": False,
-            "zmask_algo": False,
+            "zmask_algo": True,
             "chunked_solve": False,
-            "bc_family_modulus": 29,
+            "bc_family_modulus": DEFAULT_BC_FAMILY_MODULUS,
             "direct_io": True,
             "direct_io_queue_depth": 16,
             "direct_io_chunk_mib": 8,
@@ -566,11 +614,9 @@ class SingletonConfig:
                         if k not in data:
                             data[k] = v
                             updated = True
-                    try:
-                        bc_family_modulus = int(data.get("bc_family_modulus", defaults["bc_family_modulus"]))
-                    except (TypeError, ValueError):
-                        bc_family_modulus = defaults["bc_family_modulus"]
-                    bc_family_modulus = min(65535, max(1, bc_family_modulus))
+                    bc_family_modulus = normalize_bc_family_modulus(
+                        data.get("bc_family_modulus", defaults["bc_family_modulus"])
+                    )
                     if data.get("bc_family_modulus") != bc_family_modulus:
                         data["bc_family_modulus"] = bc_family_modulus
                         updated = True

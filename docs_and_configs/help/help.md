@@ -2,7 +2,7 @@
 # User Manual
 
 **Author**: game_difficulty
-**Version**: 12.0.4
+**Version**: 13.0.0
 **Date**: 2026.6.5
 
 ---
@@ -163,6 +163,7 @@ The Settings interface is split into two primary sections: **Table Calculation**
 - **Table Name**: Select the target table pattern from the dropdown menu (e.g., `L3`, `442`, `free9`).
 - **Target Number**: Choose the tiles to be achieved (128, 256, 512, 1024, 2048...).
 - **Save Path**: Specify the storage location for table data; using a local SSD is strongly recommended for better I/O performance.
+- **Hot/Cold Paths**: When multiple paths are entered, the first path is the hot path and should usually be a fast SSD. Additional paths are cold paths for less frequently accessed data, useful when a large table must be split across multiple drives.
 
 **Calculation Options**:
 
@@ -174,6 +175,7 @@ The Settings interface is split into two primary sections: **Table Calculation**
 **Advanced Options**:
 
 - **Advanced Algorithm**: Utilizes specialized logic for massive tables, drastically reducing computation time and memory overhead (recommended for large tables only).
+- **BC Algorithm**: Experimental large-table mode that partitions table data by family modulus to lower peak memory pressure. Use the default modulus unless you are comparing performance.
 - **Small Tile Sum Limit (STSL)**: Controls the pruning intensity of the advanced algorithm鈥攁 trade-off between success rate precision and calculation speed.
 - **Chunked Backward Solving**: Lowers the memory ceiling via chunked I/O. Ideal for memory-constrained systems computing massive endgames; best paired with an SSD.
 - **Success Rate Precision**: Allows customization of the storage format and bit-depth for success rate data.
@@ -604,6 +606,12 @@ Its main advantages are:
 EXAD combines EX with the Advanced Algorithm: it uses the large-number masking idea of the Advanced Algorithm for very large tables, while using EX-style compact storage to reduce file size and lookup pressure.
 
 It is suitable for very large tables that already benefit from the Advanced Algorithm, and further improves disk usage and lookup efficiency.
+
+## 6.5 BC Algorithm
+
+BC is an experimental calculation mode for very large tables. It splits position data into family groups controlled by a modulus, reducing the memory pressure of generation and solving at the cost of more complex disk I/O and more parameters.
+
+The modulus should be a prime number in the supported 13-256 range. The settings page automatically adjusts invalid values to a nearby valid prime; for normal use, keep the default value.
 
 
 # 7. About the AI

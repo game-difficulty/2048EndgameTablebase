@@ -2,6 +2,7 @@ import { computed, ref } from 'vue';
 
 import i18n from './i18n';
 import { createWsClient } from '../services/ws/createWsClient';
+import { normalizeBCFamilyModulus } from '../utils/bcFamilyModulus';
 import { applyTileColors } from '../utils/tileColors';
 
 const EMPTY_COLOR_SET = Array(36).fill('#000000');
@@ -14,9 +15,9 @@ const DEFAULT_CONFIG = {
   compress: false,
   optimal_branch_only: false,
   compress_temp_files: false,
-  algorithm_mode: 'classic',
+  algorithm_mode: 'ex',
   advanced_algo: false,
-  zmask_algo: false,
+  zmask_algo: true,
   chunked_solve: false,
   bc_family_modulus: 29,
   deletion_threshold: 0,
@@ -68,14 +69,6 @@ const normalizeDeletionThresholdMode = (value) =>
 
 const normalizeAlgorithmMode = (value) =>
   ['classic', 'ad', 'ex', 'exad', 'bc'].includes(value) ? value : DEFAULT_CONFIG.algorithm_mode;
-
-const normalizeBCFamilyModulus = (value) => {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) {
-    return DEFAULT_CONFIG.bc_family_modulus;
-  }
-  return Math.min(65535, Math.max(1, parsed));
-};
 
 const mergeConfig = (nextConfig = {}) => {
   const previous = config.value;
@@ -293,6 +286,9 @@ const ensureStarted = () => {
 
 const saveSetting = (key, explicitValue = config.value[key]) => {
   ensureStarted();
+  if (key === 'bc_family_modulus') {
+    explicitValue = normalizeBCFamilyModulus(explicitValue);
+  }
   if (key === 'colors') {
     mergeConfig({ colors: explicitValue });
   } else if (key === 'custom_colors') {

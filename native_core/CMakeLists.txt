@@ -67,6 +67,9 @@ target_include_directories(common_config INTERFACE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "${LIBLZMA_INCLUDE_DIR}"
 )
+if(CMAKE_DL_LIBS)
+    target_link_libraries(common_config INTERFACE ${CMAKE_DL_LIBS})
+endif()
 
 if(MSVC)
     target_compile_options(common_config INTERFACE
@@ -196,14 +199,20 @@ add_executable(bc_family_solve_full
     src/BCFamilyStatsCsv.cpp
     src/BCPositionFile.cpp
     src/CanonicalBatch.cpp
+    src/CompressionBridge.cpp
     src/FileIOUtils.cpp
     src/NativeLzma.cpp
+    src/TrieCompression.cpp
     src/bc_family_solve_full.cpp
 )
 target_link_libraries(bc_family_solve_full PRIVATE common_config OpenMP::OpenMP_CXX)
 
 add_executable(bc_family_generation_full
     src/BCPositionFile.cpp
+    src/CompressionBridge.cpp
+    src/FileIOUtils.cpp
+    src/NativeLzma.cpp
+    src/TrieCompression.cpp
     src/BCFamilyGeneration.cpp
     src/BCFamilyGenerationRunner.cpp
     src/BCResidentGeneration.cpp
@@ -379,6 +388,8 @@ if(NATIVE_BUILD_TESTS)
 
     add_executable(bc_family_generation_state_test
         src/BCPositionFile.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
         src/BCFamilyGeneration.cpp
         src/BCResidentGeneration.cpp
         src/BCResidentGenerationStreaming.cpp
@@ -396,8 +407,10 @@ if(NATIVE_BUILD_TESTS)
     add_executable(bc_family_solve_test
         src/BCPositionFile.cpp
         src/CanonicalBatch.cpp
+        src/CompressionBridge.cpp
         src/FileIOUtils.cpp
         src/NativeLzma.cpp
+        src/TrieCompression.cpp
         tests_src/test_bc_family_solve.cpp
     )
     target_link_libraries(bc_family_solve_test PRIVATE common_config OpenMP::OpenMP_CXX)
@@ -418,6 +431,10 @@ if(NATIVE_BUILD_TESTS)
 
     add_executable(bc_family_generation_bench
         src/BCPositionFile.cpp
+        src/CompressionBridge.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
+        src/TrieCompression.cpp
         src/BCFamilyGeneration.cpp
         src/BCFamilyGenerationRunner.cpp
         src/BCResidentGeneration.cpp
@@ -433,6 +450,10 @@ if(NATIVE_BUILD_TESTS)
 
     add_executable(bc_resident_generation_bench
         src/BCPositionFile.cpp
+        src/CompressionBridge.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
+        src/TrieCompression.cpp
         src/BCFamilyGeneration.cpp
         src/BCFamilyGenerationRunner.cpp
         src/BCResidentGeneration.cpp
@@ -448,6 +469,10 @@ if(NATIVE_BUILD_TESTS)
 
     add_executable(bc_generation_compute_bench
         src/BCPositionFile.cpp
+        src/CompressionBridge.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
+        src/TrieCompression.cpp
         src/BCFamilyGeneration.cpp
         src/BCFamilyGenerationRunner.cpp
         src/BCResidentGeneration.cpp
@@ -463,6 +488,10 @@ if(NATIVE_BUILD_TESTS)
 
     add_executable(bc_single_chunk_generation_bench
         src/BCPositionFile.cpp
+        src/CompressionBridge.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
+        src/TrieCompression.cpp
         src/BCFamilyGeneration.cpp
         src/BCFamilyGenerationRunner.cpp
         src/BCResidentGeneration.cpp
@@ -480,8 +509,10 @@ if(NATIVE_BUILD_TESTS)
         src/BCCompressedResult.cpp
         src/BCPositionFile.cpp
         src/CanonicalBatch.cpp
+        src/CompressionBridge.cpp
         src/FileIOUtils.cpp
         src/NativeLzma.cpp
+        src/TrieCompression.cpp
         tests_src/bench_bc_resident_solve_full.cpp
     )
     target_link_libraries(bc_resident_solve_full_bench PRIVATE common_config OpenMP::OpenMP_CXX)
@@ -504,8 +535,10 @@ if(NATIVE_BUILD_TESTS)
         src/BCCompressedResult.cpp
         src/BCPositionFile.cpp
         src/CanonicalBatch.cpp
+        src/CompressionBridge.cpp
         src/FileIOUtils.cpp
         src/NativeLzma.cpp
+        src/TrieCompression.cpp
         tests_src/bench_bc_single_chunk_solve_full.cpp
     )
     target_link_libraries(bc_single_chunk_solve_full_bench PRIVATE common_config OpenMP::OpenMP_CXX)
@@ -517,8 +550,10 @@ if(NATIVE_BUILD_TESTS)
         src/BCCompressedResult.cpp
         src/BCPositionFile.cpp
         src/CanonicalBatch.cpp
+        src/CompressionBridge.cpp
         src/FileIOUtils.cpp
         src/NativeLzma.cpp
+        src/TrieCompression.cpp
         tests_src/bench_bc_family_solve_full.cpp
     )
     target_link_libraries(bc_family_solve_full_bench PRIVATE common_config OpenMP::OpenMP_CXX)

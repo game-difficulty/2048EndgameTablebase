@@ -13,6 +13,7 @@ from Config import (
     category_info,
     deletion_threshold_components,
     logger,
+    normalize_bc_family_modulus,
     pattern_32k_tiles_map,
     pattern_catalog,
     write_runtime_deletion_threshold_signal,
@@ -193,7 +194,7 @@ def _bc_expected_generated_layers(steps: int) -> int:
 
 
 def _bc_family_modulus(config: dict) -> int:
-    return max(1, min(65535, int(config.get("bc_family_modulus", 29))))
+    return normalize_bc_family_modulus(config.get("bc_family_modulus", 29))
 
 
 def _primary_cold_pathname(pathname: str, cold_pathnames: list[str] | None = None) -> str:

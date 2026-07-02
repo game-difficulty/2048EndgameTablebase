@@ -2403,8 +2403,8 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
         throw std::invalid_argument("BC family runner requires position/output dirs and prefix");
     }
     if (options.family_modulus == 0U ||
-        options.family_modulus > std::numeric_limits<FamilyId>::max()) {
-        throw std::invalid_argument("BC family runner family_modulus is outside 1..65535");
+        options.family_modulus > kBCMaxFamilyModulusForPackedCellId) {
+        throw std::invalid_argument("BC family runner family_modulus is outside 1..256");
     }
     if (options.direct_queue_depth == 0U ||
         options.future_reuse_max_families == 0U || options.source_words_per_item == 0U ||

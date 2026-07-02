@@ -14,6 +14,7 @@ from Config import (
     SingletonConfig,
     category_info,
     logger,
+    normalize_bc_family_modulus,
     normalize_deletion_threshold_mode,
     theme_map,
     write_runtime_deletion_threshold_signal,
@@ -85,6 +86,9 @@ async def handle_settings_action(
         config["deletion_threshold_mode"] = normalize_deletion_threshold_mode(
             config.get("deletion_threshold_mode", "absolute")
         )
+        config["bc_family_modulus"] = normalize_bc_family_modulus(
+            config.get("bc_family_modulus", 29)
+        )
         await websocket.send_json(
             {
                 "type": EventType.SETTINGS_DATA,
@@ -109,6 +113,9 @@ async def handle_settings_action(
         )
         config["deletion_threshold_mode"] = normalize_deletion_threshold_mode(
             config.get("deletion_threshold_mode", "absolute")
+        )
+        config["bc_family_modulus"] = normalize_bc_family_modulus(
+            config.get("bc_family_modulus", 29)
         )
 
         if key == "theme":
@@ -144,6 +151,9 @@ async def handle_settings_action(
                 config.get("deletion_threshold", 0.0),
                 mode=value,
             )
+        elif key == "bc_family_modulus":
+            value = normalize_bc_family_modulus(value)
+            config[key] = value
         else:
             config[key] = value
 
