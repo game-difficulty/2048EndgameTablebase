@@ -8,6 +8,13 @@
 
 #include "UniqueUtils.h"
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 extern "C" void xss_avx2_keyvalue_sort_uint64_uint32(
     uint64_t *keys,
     uint32_t *values,
@@ -125,6 +132,32 @@ void simd_keyvalue_sort_uint64_uint32(uint64_t *keys, uint32_t *values, size_t c
     xss_avx2_keyvalue_sort_uint64_uint32(keys, values, count, descending);
 }
 
+bool run_uint64_sort_probe_once(size_t count) {
+    std::vector<uint64_t> values(count);
+    uint64_t state = 0x9E3779B97F4A7C15ULL ^ static_cast<uint64_t>(count);
+    for (size_t i = 0; i < count; ++i) {
+        state ^= state >> 12U;
+        state ^= state << 25U;
+        state ^= state >> 27U;
+        values[i] = state * 2685821657736338717ULL;
+    }
+
+    simd_sort(values.data(), values.size(), false);
+    return std::is_sorted(values.begin(), values.end());
+}
+
+int run_native_sort_probe() {
+    try {
+        return run_uint64_sort_probe_once(12414U) &&
+               run_uint64_sort_probe_once(32768U) &&
+               run_uint64_sort_probe_once(131071U)
+            ? 0
+            : 2;
+    } catch (...) {
+        return 3;
+    }
+}
+
 } // namespace
 
 SORT_WRAPPER_EXPORT void sort_uint32(uint32_t *arr, size_t arrsize, bool descending) {
@@ -151,3 +184,18 @@ SORT_WRAPPER_EXPORT void keyvalue_sort_uint64_uint32(
 ) {
     simd_keyvalue_sort_uint64_uint32(keys, values, count, descending);
 }
+
+SORT_WRAPPER_EXPORT int native_sort_probe() {
+    return run_native_sort_probe();
+}
+
+#if defined(_WIN32)
+SORT_WRAPPER_EXPORT void CALLBACK native_sort_probe_rundll32(
+    HWND,
+    HINSTANCE,
+    LPSTR,
+    int
+) {
+    ExitProcess(static_cast<UINT>(run_native_sort_probe()));
+}
+#endif

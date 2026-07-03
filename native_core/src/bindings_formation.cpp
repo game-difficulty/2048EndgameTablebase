@@ -1,4 +1,11 @@
+#include <algorithm>
+#include <array>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <memory>
+#include <random>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
@@ -8,8 +15,15 @@
 #include <nanobind/stl/vector.h>
 
 #include "BookSolver.h"
+#include "BCCompressedResult.h"
+#include "BCFamilyGenerationRunner.h"
+#include "BCFamilySolveRunner.h"
+#include "BCFamilyStatsCsv.h"
+#include "CommonMover.h"
 #include "EXADCompressedResult.h"
 #include "EXCompressedResult.h"
+#include "FormationRuntime.h"
+#include "NativeDiagnostics.h"
 #include "ReaderRuntime.h"
 #include "SymmetryUtils.h"
 #include "TrieCompression.h"
@@ -26,6 +40,201 @@ std::vector<uint64_t> to_u64_vector(const U64Array &array) {
     if (!result.empty()) {
         std::memcpy(result.data(), array.data(), result.size() * sizeof(uint64_t));
     }
+    return result;
+}
+
+template <typename T>
+T dict_get_or(const nb::dict &options, const char *key, T fallback) {
+    nb::str py_key(key);
+    if (!options.contains(py_key)) {
+        return fallback;
+    }
+    nb::handle value = options[py_key];
+    if (value.is_none()) {
+        return fallback;
+    }
+    return nb::cast<T>(value);
+}
+
+std::vector<std::filesystem::path> dict_get_path_vector(const nb::dict &options, const char *key) {
+    std::vector<std::filesystem::path> paths;
+    nb::str py_key(key);
+    if (!options.contains(py_key)) {
+        return paths;
+    }
+    nb::handle value = options[py_key];
+    if (value.is_none()) {
+        return paths;
+    }
+    for (const std::string &path : nb::cast<std::vector<std::string>>(value)) {
+        if (!path.empty()) {
+            paths.emplace_back(path);
+        }
+    }
+    return paths;
+}
+
+BC::BCSuccessDTypeMode parse_bc_success_dtype_binding(const std::string &value) {
+    if (value == "uint32") return BC::BCSuccessDTypeMode::UInt32;
+    if (value == "uint64") return BC::BCSuccessDTypeMode::UInt64;
+    if (value == "float32") return BC::BCSuccessDTypeMode::Float32;
+    if (value == "float64") return BC::BCSuccessDTypeMode::Float64;
+    if (value == "one-minus-float32" || value == "1-float32") {
+        return BC::BCSuccessDTypeMode::OneMinusFloat32;
+    }
+    if (value == "one-minus-float64" || value == "1-float64") {
+        return BC::BCSuccessDTypeMode::OneMinusFloat64;
+    }
+    throw std::invalid_argument("unsupported BC success dtype: " + value);
+}
+
+BC::BCFamilyGenerationRoute parse_bc_generation_route_binding(const std::string &value) {
+    return BC::bc_parse_family_route(value);
+}
+
+BC::BCSolveRoute parse_bc_solve_route_binding(const std::string &value) {
+    return BC::bc_parse_solve_route(value);
+}
+
+BC::BCFamilyGenerationRunOptions bc_generation_options_from_dict(const nb::dict &options) {
+    BC::BCFamilyGenerationRunOptions run;
+    run.pattern = dict_get_or<std::string>(options, "pattern", run.pattern);
+    run.target_rank = dict_get_or<uint32_t>(options, "target_rank", run.target_rank);
+    run.extra_steps = dict_get_or<uint32_t>(options, "extra_steps", run.extra_steps);
+    run.seed_boards = dict_get_or<std::vector<uint64_t>>(
+        options,
+        "seed_boards",
+        run.seed_boards);
+    run.pattern_masks = dict_get_or<std::vector<uint64_t>>(
+        options,
+        "pattern_masks",
+        run.pattern_masks);
+    run.success_shifts = dict_get_or<std::vector<uint8_t>>(
+        options,
+        "success_shifts",
+        run.success_shifts);
+    run.canonical_symm_mode = dict_get_or<int>(
+        options,
+        "canonical_symm_mode",
+        run.canonical_symm_mode);
+    run.success_check_min_source_layer_sum = dict_get_or<uint32_t>(
+        options,
+        "success_check_min_source_layer_sum",
+        run.success_check_min_source_layer_sum);
+    run.output_dir = dict_get_or<std::string>(options, "generated_dir", run.output_dir.string());
+    run.output_dirs = dict_get_path_vector(options, "generated_dirs");
+    run.stats_csv = dict_get_or<std::string>(options, "generation_stats_csv", run.stats_csv.string());
+    run.num_threads = dict_get_or<int>(options, "threads", run.num_threads);
+    run.family_modulus = dict_get_or<uint32_t>(options, "family_modulus", run.family_modulus);
+    run.family_route = parse_bc_generation_route_binding(
+        dict_get_or<std::string>(options, "family_route", "auto"));
+    run.direct_queue_depth = dict_get_or<uint32_t>(
+        options,
+        "direct_queue_depth",
+        run.direct_queue_depth);
+    run.batch_size = dict_get_or<uint32_t>(options, "batch_size", run.batch_size);
+    run.pending_buffer = dict_get_or<uint32_t>(options, "pending_buffer", run.pending_buffer);
+    run.family_work_schedule_chunk = dict_get_or<uint32_t>(
+        options,
+        "family_work_schedule_chunk",
+        run.family_work_schedule_chunk);
+    run.family_source_words_per_item = dict_get_or<uint32_t>(
+        options,
+        "family_source_words_per_item",
+        run.family_source_words_per_item);
+    run.verify_layer_rows = dict_get_or<bool>(options, "verify_layer_rows", false);
+    run.output_inspect = dict_get_or<bool>(options, "output_inspect", false);
+    run.compress_temp_files = dict_get_or<bool>(
+        options,
+        "compress_temp_files",
+        run.compress_temp_files);
+    const bool direct_io = dict_get_or<bool>(options, "direct_io", true);
+    if (!direct_io) {
+        run.family_blob = "buffered";
+        run.family_position_io = "buffered";
+        run.family_source_io = "buffered";
+    }
+    run.family_blob = dict_get_or<std::string>(options, "family_blob", run.family_blob);
+    run.family_position_io = dict_get_or<std::string>(
+        options,
+        "family_position_io",
+        run.family_position_io);
+    run.family_source_io = dict_get_or<std::string>(
+        options,
+        "family_source_io",
+        run.family_source_io);
+    return run;
+}
+
+BC::BCFamilySolveRunOptions bc_solve_options_from_dict(const nb::dict &options) {
+    BC::BCFamilySolveRunOptions run;
+    run.generated_position_dir =
+        dict_get_or<std::string>(options, "generated_dir", run.generated_position_dir.string());
+    run.solved_output_dir =
+        dict_get_or<std::string>(options, "solved_dir", run.solved_output_dir.string());
+    run.archive_output_dir =
+        dict_get_or<std::string>(options, "archive_dir", run.archive_output_dir.string());
+    run.generated_position_dirs = dict_get_path_vector(options, "generated_dirs");
+    run.solved_output_dirs = dict_get_path_vector(options, "solved_dirs");
+    run.archive_output_dirs = dict_get_path_vector(options, "archive_dirs");
+    run.prefix = dict_get_or<std::string>(options, "prefix", run.prefix);
+    run.target_rank = dict_get_or<uint32_t>(options, "target_rank", run.target_rank);
+    run.success_target_rank = dict_get_or<int>(
+        options,
+        "success_target_rank",
+        static_cast<int>(run.target_rank));
+    run.pattern_masks = dict_get_or<std::vector<uint64_t>>(
+        options,
+        "pattern_masks",
+        run.pattern_masks);
+    run.success_shifts = dict_get_or<std::vector<uint8_t>>(
+        options,
+        "success_shifts",
+        run.success_shifts);
+    run.canonical_symm_mode = dict_get_or<int>(
+        options,
+        "canonical_symm_mode",
+        run.canonical_symm_mode);
+    run.spawn_rate4 = dict_get_or<double>(options, "spawn_rate4", run.spawn_rate4);
+    run.num_threads = dict_get_or<int>(options, "threads", run.num_threads);
+    run.family_modulus = dict_get_or<uint32_t>(options, "family_modulus", run.family_modulus);
+    run.solve_route = parse_bc_solve_route_binding(
+        dict_get_or<std::string>(options, "solve_route", "auto"));
+    run.direct_queue_depth = dict_get_or<uint32_t>(
+        options,
+        "direct_queue_depth",
+        run.direct_queue_depth);
+    run.direct_io = dict_get_or<bool>(options, "direct_io", run.direct_io);
+    run.keep_direct_padding = dict_get_or<bool>(options, "keep_direct_padding", false);
+    run.success_dtype = parse_bc_success_dtype_binding(
+        dict_get_or<std::string>(options, "success_dtype", "uint32"));
+    run.compress = dict_get_or<bool>(options, "compress", true);
+    run.compress_temp_files = dict_get_or<bool>(options, "compress_temp_files", false);
+    run.deletion_threshold = dict_get_or<double>(options, "deletion_threshold", 0.0);
+    run.relative_deletion_threshold = dict_get_or<double>(
+        options,
+        "relative_deletion_threshold",
+        0.0);
+    run.deletion_threshold_signal_path = dict_get_or<std::string>(
+        options,
+        "deletion_threshold_signal_path",
+        "");
+    run.resume_from_checkpoint = dict_get_or<bool>(options, "resume", true);
+    run.force_restart = dict_get_or<bool>(options, "restart", false);
+    return run;
+}
+
+nb::dict bc_family_build_summary_to_python(
+    const BC::BCFamilyGenerationRunResult &generation,
+    const BC::BCFamilySolveRunResult &solve
+) {
+    nb::dict result;
+    result["generation_layers"] = generation.layers.size();
+    result["solve_layers"] = solve.layers.size();
+    result["generation_completed"] = generation.completed;
+    result["solve_completed"] = solve.completed;
+    result["min_ordinal"] = solve.min_ordinal;
+    result["max_ordinal"] = solve.max_ordinal;
     return result;
 }
 
@@ -109,9 +318,28 @@ nb::dict exad_cold_lookup_to_python(const EXADCompressedResult::ColdLookupResult
     return result;
 }
 
+nb::dict bc_cold_lookup_to_python(const BCCompressedResult::ColdLookupResult &lookup) {
+    nb::dict result;
+    result["found"] = lookup.found;
+    result["dtype"] = lookup.dtype;
+    result["row_width"] = lookup.row_width;
+    result["raw_value_bits"] = lookup.raw_value_bits;
+    result["numeric_value"] = lookup.numeric_value;
+    result["cid"] = lookup.cid;
+    result["local_success_row"] = lookup.local_success_row;
+    result["value_index"] = lookup.value_index;
+    result["bucket_block_raw_bytes"] = lookup.bucket_block_raw_bytes;
+    result["bucket_block_compressed_bytes"] = lookup.bucket_block_compressed_bytes;
+    result["value_block_raw_bytes"] = lookup.value_block_raw_bytes;
+    result["value_block_compressed_bytes"] = lookup.value_block_compressed_bytes;
+    return result;
+}
+
 } // namespace
 
 NB_MODULE(formation_core, m) {
+    NativeDiagnostics::install_crash_handler("formation_core");
+
     nb::enum_<SymmMode>(m, "SymmMode")
         .value("Identity", SymmMode::Identity)
         .value("Full", SymmMode::Full)
@@ -139,6 +367,7 @@ NB_MODULE(formation_core, m) {
         .def_rw("steps", &RunOptions::steps)
         .def_rw("docheck_step", &RunOptions::docheck_step)
         .def_rw("pathname", &RunOptions::pathname)
+        .def_rw("cold_pathnames", &RunOptions::cold_pathnames)
         .def_rw("is_free", &RunOptions::is_free)
         .def_rw("is_variant", &RunOptions::is_variant)
         .def_rw("spawn_rate4", &RunOptions::spawn_rate4)
@@ -266,6 +495,31 @@ NB_MODULE(formation_core, m) {
             "spawn_rate4"_a
         );
 
+    nb::class_<BCBookReader>(m, "BCBookReader")
+        .def(nb::init<PatternSpec, uint32_t, bool>(), "pattern_spec"_a, "target_rank"_a, "is_variant"_a = false)
+        .def(
+            "move_on_dic",
+            [](BCBookReader &reader,
+               const std::vector<std::vector<int>> &board,
+               const std::vector<std::pair<std::string, std::string>> &path_list,
+               const std::string &pattern_full,
+               int64_t nums_adjust) {
+                return reader_result_to_python(reader.move_on_dic(board, path_list, pattern_full, nums_adjust));
+            },
+            "board"_a,
+            "path_list"_a,
+            "pattern_full"_a,
+            "nums_adjust"_a
+        )
+        .def(
+            "get_random_state",
+            &BCBookReader::get_random_state,
+            "path_list"_a,
+            "pattern_full"_a,
+            "spawn_rate4"_a,
+            "nums_adjust"_a = 0
+        );
+
     nb::class_<PatternLayer>(m, "PatternLayer")
         .def(nb::init<>())
         .def_prop_ro("size", &PatternLayer::size)
@@ -289,10 +543,131 @@ NB_MODULE(formation_core, m) {
     );
 
     m.def(
+        "run_bc_family_build",
+        [](const nb::dict &options) {
+            BC::BCFamilyGenerationRunOptions generation_options =
+                bc_generation_options_from_dict(options);
+            BC::BCFamilySolveRunOptions solve_options =
+                bc_solve_options_from_dict(options);
+            const uint32_t expected_layers =
+                dict_get_or<uint32_t>(options, "expected_layers", 0U);
+            const uint32_t progress_total =
+                dict_get_or<uint32_t>(
+                    options,
+                    "progress_total",
+                    expected_layers == 0U ? 0U : expected_layers * 2U);
+            const bool skip_generation =
+                dict_get_or<bool>(options, "skip_generation", false);
+            const uint32_t generation_resume_count =
+                dict_get_or<uint32_t>(options, "generation_resume_count", 0U);
+            const std::filesystem::path solve_stats_csv =
+                dict_get_or<std::string>(options, "solve_stats_csv", "");
+            const std::filesystem::path solve_summary_csv =
+                dict_get_or<std::string>(options, "solve_summary_csv", "");
+
+            BC::BCFamilyGenerationRunResult generation_result;
+            BC::BCFamilySolveRunResult solve_result;
+            {
+                nb::gil_scoped_release release;
+                FormationProgress::reset_build_progress(progress_total);
+                uint32_t generation_progress = expected_layers == 0U
+                    ? generation_resume_count
+                    : std::min(generation_resume_count, expected_layers);
+                uint32_t solve_progress = 0U;
+
+                if (skip_generation) {
+                    generation_progress = expected_layers;
+                    FormationProgress::update_build_progress(
+                        generation_progress,
+                        progress_total);
+                    generation_result.completed = true;
+                } else {
+                    if (progress_total != 0U && generation_progress != 0U) {
+                        FormationProgress::update_build_progress(
+                            generation_progress,
+                            progress_total);
+                    }
+                    generation_result = BC::bc_family_generation_full_run(
+                        generation_options,
+                        [&](const BC::BCFamilyGenerationRunLayerMetric &) {
+                            if (progress_total != 0U) {
+                                if (expected_layers == 0U ||
+                                    generation_progress < expected_layers) {
+                                    ++generation_progress;
+                                }
+                                FormationProgress::update_build_progress(
+                                    generation_progress,
+                                    progress_total);
+                            }
+                        });
+                }
+
+                std::unique_ptr<std::ofstream> solve_stats;
+                if (!solve_stats_csv.empty()) {
+                    if (!solve_stats_csv.parent_path().empty()) {
+                        std::filesystem::create_directories(solve_stats_csv.parent_path());
+                    }
+                    solve_stats = std::make_unique<std::ofstream>(solve_stats_csv);
+                    if (!*solve_stats) {
+                        throw std::runtime_error("failed to open BC solve stats CSV");
+                    }
+                    *solve_stats << std::setprecision(12);
+                    BC::write_bc_solve_stats_header(*solve_stats);
+                }
+
+                solve_result = BC::bc_family_solve_full_run(
+                    solve_options,
+                    [&](const BC::BCFamilySolveRunLayerMetric &metric) {
+                        if (solve_stats) {
+                            BC::write_bc_solve_stats_row(*solve_stats, metric);
+                            solve_stats->flush();
+                        }
+                        const bool metric_finishes_archive_layer =
+                            metric.kind == "archive" &&
+                            (expected_layers == 0U || metric.ordinal < expected_layers);
+                        if (progress_total != 0U && metric_finishes_archive_layer) {
+                            if (expected_layers == 0U || solve_progress < expected_layers) {
+                                ++solve_progress;
+                            }
+                            const uint32_t base = expected_layers == 0U
+                                ? generation_progress
+                                : expected_layers;
+                            FormationProgress::update_build_progress(
+                                base + solve_progress,
+                                progress_total);
+                        }
+                    });
+                if (solve_stats) {
+                    BC::write_bc_solve_stats_total_row(*solve_stats, solve_result);
+                    solve_stats->flush();
+                }
+
+                if (!solve_summary_csv.empty()) {
+                    if (!solve_summary_csv.parent_path().empty()) {
+                        std::filesystem::create_directories(solve_summary_csv.parent_path());
+                    }
+                    std::ofstream summary(solve_summary_csv);
+                    if (!summary) {
+                        throw std::runtime_error("failed to open BC solve summary CSV");
+                    }
+                    BC::write_bc_solve_summary(summary, generation_result, solve_result);
+                }
+
+                if (progress_total != 0U) {
+                    FormationProgress::update_build_progress(progress_total, progress_total);
+                }
+            }
+            return bc_family_build_summary_to_python(generation_result, solve_result);
+        },
+        "options"_a
+    );
+
+    m.def(
         "trie_compress_book",
         &trie_compress_progress_native,
         "book_path"_a,
-        "success_rate_dtype"_a = "uint32"
+        "success_rate_dtype"_a = "uint32",
+        "output_book_path"_a = ""
     );
 
     m.def(
@@ -348,6 +723,7 @@ NB_MODULE(formation_core, m) {
     m.def(
         "run_pattern_build",
         [](const U64Array &arr_init, const PatternSpec &spec, const RunOptions &options) {
+            NativeDiagnostics::Scope scope("formation_core.run_pattern_build pattern=" + spec.name);
             run_pattern_build_cpp(to_u64_vector(arr_init), spec, options);
         },
         "arr_init"_a,
@@ -359,6 +735,7 @@ NB_MODULE(formation_core, m) {
     m.def(
         "run_pattern_build_ad",
         [](const U64Array &arr_init, const AdvancedPatternSpec &spec, const RunOptions &options) {
+            NativeDiagnostics::Scope scope("formation_core.run_pattern_build_ad pattern=" + spec.name);
             run_pattern_build_ad_cpp(to_u64_vector(arr_init), spec, options);
         },
         "arr_init"_a,
@@ -370,6 +747,7 @@ NB_MODULE(formation_core, m) {
     m.def(
         "run_pattern_build_exad",
         [](const U64Array &arr_init, const AdvancedPatternSpec &spec, const RunOptions &options) {
+            NativeDiagnostics::Scope scope("formation_core.run_pattern_build_exad pattern=" + spec.name);
             run_pattern_build_exad_cpp(to_u64_vector(arr_init), spec, options);
         },
         "arr_init"_a,
@@ -392,6 +770,7 @@ NB_MODULE(formation_core, m) {
     m.def(
         "run_pattern_build_zmask",
         [](const U64Array &arr_init, const PatternSpec &spec, const RunOptions &options) {
+            NativeDiagnostics::Scope scope("formation_core.run_pattern_build_zmask pattern=" + spec.name);
             run_pattern_build_zmask_cpp(to_u64_vector(arr_init), spec, options);
         },
         "arr_init"_a,
@@ -565,5 +944,98 @@ NB_MODULE(formation_core, m) {
         "ad_key"_a,
         "canonical_board"_a,
         "column"_a
+    );
+
+    m.def(
+        "lookup_bc_compressed_result_cold",
+        [](const std::string &compressed_path,
+           uint32_t target_rank,
+           uint64_t board,
+           uint32_t lane) {
+            BCCompressedResult::ColdLookupResult result;
+            {
+                nb::gil_scoped_release release;
+                result = BCRuntime::lookup_compressed_result_cached(
+                    compressed_path,
+                    target_rank,
+                    board,
+                    lane);
+            }
+            return bc_cold_lookup_to_python(result);
+        },
+        "compressed_path"_a,
+        "target_rank"_a,
+        "board"_a,
+        "lane"_a = 0U
+    );
+
+    m.def(
+        "lookup_bc_exact_result_cold",
+        [](const std::string &position_path,
+           const std::string &success_path,
+           uint32_t target_rank,
+           uint64_t board,
+           uint32_t lane) {
+            BCCompressedResult::ColdLookupResult result;
+            {
+                nb::gil_scoped_release release;
+                result = BCRuntime::lookup_exact_result_cached(
+                    position_path,
+                    success_path,
+                    target_rank,
+                    board,
+                    lane);
+            }
+            return bc_cold_lookup_to_python(result);
+        },
+        "position_path"_a,
+        "success_path"_a,
+        "target_rank"_a,
+        "board"_a,
+        "lane"_a = 0U
+    );
+
+    m.def(
+        "sample_bc_compressed_random_state",
+        [](const std::string &compressed_path,
+           uint32_t target_rank,
+           double spawn_rate4) {
+            uint64_t board = 0ULL;
+            uint64_t raw_value_bits = 0ULL;
+            double numeric_value = 0.0;
+            bool ok = false;
+            {
+                nb::gil_scoped_release release;
+                ok = BCRuntime::sample_compressed_result_cached(
+                    compressed_path,
+                    target_rank,
+                    board,
+                    raw_value_bits,
+                    numeric_value);
+            }
+            (void)raw_value_bits;
+            (void)numeric_value;
+            return ok ? gen_new_num(board, static_cast<float>(spawn_rate4)).first : 0ULL;
+        },
+        "compressed_path"_a,
+        "target_rank"_a = 8U,
+        "spawn_rate4"_a = 0.1
+    );
+
+    m.def(
+        "sample_bc_exact_random_state",
+        [](const std::string &position_path,
+           uint32_t target_rank,
+           double spawn_rate4) {
+            uint64_t board = 0ULL;
+            {
+                nb::gil_scoped_release release;
+                board = BCRuntime::sample_exact_random_board_cached(position_path, target_rank);
+            }
+            return board != 0ULL ? gen_new_num(board, static_cast<float>(spawn_rate4)).first : 0ULL;
+        },
+        "position_path"_a,
+        "target_rank"_a = 8U,
+        "spawn_rate4"_a = 0.1
     );
 }

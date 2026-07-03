@@ -5,6 +5,7 @@
 #include "UniqueUtils.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386) || defined(_M_IX86)
@@ -565,6 +566,21 @@ CANONICAL_AVX512 void avx512_impl(const uint64_t *src, uint64_t *dst, size_t cou
 
 BatchImpl select_impl() {
 #if (defined(__x86_64__) || defined(_M_X64) || defined(__i386) || defined(_M_IX86)) && (defined(__GNUC__) || defined(__clang__))
+    const char *override_backend = std::getenv("CANONICAL_BATCH_BACKEND");
+    if (override_backend != nullptr) {
+        if (std::strcmp(override_backend, "scalar") == 0) {
+            return scalar_impl;
+        }
+        if (std::strcmp(override_backend, "avx2") == 0 && UniqueUtils::cpu_has_avx2()) {
+            return avx2_impl;
+        }
+        if (std::strcmp(override_backend, "avx512") == 0 && UniqueUtils::cpu_has_avx512_dq_bw_vl()) {
+            return avx512_impl;
+        }
+        if (std::strcmp(override_backend, "auto") != 0) {
+            return scalar_impl;
+        }
+    }
     if (UniqueUtils::cpu_has_avx512_dq_bw_vl()) {
         return avx512_impl;
     }
@@ -577,6 +593,21 @@ BatchImpl select_impl() {
 
 const char *select_backend_name() {
 #if (defined(__x86_64__) || defined(_M_X64) || defined(__i386) || defined(_M_IX86)) && (defined(__GNUC__) || defined(__clang__))
+    const char *override_backend = std::getenv("CANONICAL_BATCH_BACKEND");
+    if (override_backend != nullptr) {
+        if (std::strcmp(override_backend, "scalar") == 0) {
+            return "scalar";
+        }
+        if (std::strcmp(override_backend, "avx2") == 0 && UniqueUtils::cpu_has_avx2()) {
+            return "avx2";
+        }
+        if (std::strcmp(override_backend, "avx512") == 0 && UniqueUtils::cpu_has_avx512_dq_bw_vl()) {
+            return "avx512";
+        }
+        if (std::strcmp(override_backend, "auto") != 0) {
+            return "scalar";
+        }
+    }
     if (UniqueUtils::cpu_has_avx512_dq_bw_vl()) {
         return "avx512";
     }

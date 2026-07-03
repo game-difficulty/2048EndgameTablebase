@@ -110,6 +110,15 @@
               {{ option.label }}
             </span>
             <span
+              v-if="option.badge"
+              :class="[
+                'shrink-0 rounded-full border border-accent/28 bg-accent/12 px-1.5 py-0.5 text-[10px] font-black uppercase leading-none tracking-normal text-accent',
+                option.badgeClass
+              ]"
+            >
+              {{ option.badge }}
+            </span>
+            <span
               v-if="option.value === modelValue"
               class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/14 text-accent"
               aria-hidden="true"
@@ -218,6 +227,8 @@ const normalizedOptions = computed(() =>
         label: option.label ?? String(option.value ?? ''),
         disabled: Boolean(option.disabled),
         title: option.title ?? '',
+        badge: option.badge ?? '',
+        badgeClass: option.badgeClass ?? '',
       };
     }
 
@@ -227,6 +238,8 @@ const normalizedOptions = computed(() =>
       label: String(option ?? ''),
       disabled: false,
       title: '',
+      badge: '',
+      badgeClass: '',
     };
   })
 );

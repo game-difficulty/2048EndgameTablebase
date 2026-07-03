@@ -66,6 +66,8 @@ void write_layer_file(
     bool compressed_archive = false
 );
 
+uint64_t layer_serialized_size(const Layer &layer);
+
 Layer read_layer_file(
     const std::string &path,
     FileIOUtils::DirectIoConfig config = {}

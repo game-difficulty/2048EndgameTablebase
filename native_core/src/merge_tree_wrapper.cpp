@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #if defined(_OPENMP)
@@ -14,6 +15,7 @@
 #endif
 
 #include "HybridSearch.h"
+#include "NativeDiagnostics.h"
 #include "UniqueUtils.h"
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -808,6 +810,8 @@ MERGE_TREE_EXPORT size_t merge_tree_u64_dedup(const uint64_t *const *inputs,
                                               size_t count,
                                               uint64_t *output,
                                               uint64_t *scratch) {
+    NativeDiagnostics::install_crash_handler("bookgen_native");
+    NativeDiagnostics::Scope scope("bookgen_native.merge_tree_u64_dedup count=" + std::to_string(count));
     return merge_tree_u64_dedup_impl(inputs, lengths, count, output, scratch);
 }
 
@@ -816,6 +820,11 @@ MERGE_TREE_EXPORT size_t merge_two_u64_dedup(const uint64_t *left,
                                              const uint64_t *right,
                                              size_t right_len,
                                              uint64_t *output) {
+    NativeDiagnostics::install_crash_handler("bookgen_native");
+    NativeDiagnostics::Scope scope(
+        "bookgen_native.merge_two_u64_dedup left=" + std::to_string(left_len) +
+        " right=" + std::to_string(right_len)
+    );
     return merge_two_dedup(left, left_len, right, right_len, output, UniqueUtils::cpu_has_avx512_dq_vl());
 }
 
@@ -828,6 +837,12 @@ MERGE_TREE_EXPORT size_t merge_two_u64_partitioned_dedup(const uint64_t *left,
                                                          uint64_t *output,
                                                          size_t *partition_offsets,
                                                          size_t *partition_lengths) {
+    NativeDiagnostics::install_crash_handler("bookgen_native");
+    NativeDiagnostics::Scope scope(
+        "bookgen_native.merge_two_u64_partitioned_dedup left=" + std::to_string(left_len) +
+        " right=" + std::to_string(right_len) +
+        " partitions=" + std::to_string(partition_count)
+    );
     return merge_two_partitioned_direct_dedup(left,
                                               left_len,
                                               right,
@@ -841,6 +856,7 @@ MERGE_TREE_EXPORT size_t merge_two_u64_partitioned_dedup(const uint64_t *left,
 }
 
 MERGE_TREE_EXPORT int merge_tree_u64_dedup_has_avx512() {
+    NativeDiagnostics::install_crash_handler("bookgen_native");
     return UniqueUtils::cpu_has_avx512_dq_vl() ? 1 : 0;
 }
 
@@ -854,6 +870,11 @@ MERGE_TREE_EXPORT size_t merge_tree_partitioned_u64_dedup(
     size_t *partition_offsets,
     size_t *partition_lengths,
     uint64_t *scratch) {
+    NativeDiagnostics::install_crash_handler("bookgen_native");
+    NativeDiagnostics::Scope scope(
+        "bookgen_native.merge_tree_partitioned_u64_dedup count=" + std::to_string(count) +
+        " partitions=" + std::to_string(partition_count)
+    );
     return merge_tree_partitioned_u64_dedup_impl(
         inputs,
         lengths,

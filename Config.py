@@ -106,7 +106,10 @@ console_handler = logging.StreamHandler()
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 console_handler.setFormatter(formatter)
 
-file_handler = logging.FileHandler("logger.txt")
+LOGGER_FILE_PATH = os.path.abspath("logger.txt")
+os.environ.setdefault("TABLEBASE_NATIVE_LOG_FILE", LOGGER_FILE_PATH)
+
+file_handler = logging.FileHandler(LOGGER_FILE_PATH, encoding="utf-8")
 file_handler.setLevel(logging.WARNING)
 file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 file_handler.setFormatter(file_formatter)
@@ -116,6 +119,9 @@ logger.addHandler(file_handler)
 
 
 MAX_DELETION_THRESHOLD = 0.999999
+MIN_BC_FAMILY_MODULUS = 13
+MAX_BC_FAMILY_MODULUS = 256
+DEFAULT_BC_FAMILY_MODULUS = 29
 RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH = os.path.join(
     os.path.dirname(__file__),
     "docs_and_configs",
@@ -137,6 +143,51 @@ def normalize_deletion_threshold_mode(value):
     if value == "off":
         return "off"
     return "absolute"
+
+
+def _is_prime(value: int) -> bool:
+    if value < 2:
+        return False
+    if value == 2:
+        return True
+    if value % 2 == 0:
+        return False
+
+    divisor = 3
+    while divisor * divisor <= value:
+        if value % divisor == 0:
+            return False
+        divisor += 2
+    return True
+
+
+def normalize_bc_family_modulus(value):
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_BC_FAMILY_MODULUS
+
+    clamped = min(
+        MAX_BC_FAMILY_MODULUS,
+        max(MIN_BC_FAMILY_MODULUS, parsed),
+    )
+    if _is_prime(clamped):
+        return clamped
+
+    max_distance = max(
+        clamped - MIN_BC_FAMILY_MODULUS,
+        MAX_BC_FAMILY_MODULUS - clamped,
+    )
+    for distance in range(1, max_distance + 1):
+        lower = clamped - distance
+        if lower >= MIN_BC_FAMILY_MODULUS and _is_prime(lower):
+            return lower
+
+        upper = clamped + distance
+        if upper <= MAX_BC_FAMILY_MODULUS and _is_prime(upper):
+            return upper
+
+    return DEFAULT_BC_FAMILY_MODULUS
 
 
 def deletion_threshold_components(value, mode="absolute"):
@@ -516,10 +567,12 @@ class SingletonConfig:
             "compress": False,
             "optimal_branch_only": False,
             "compress_temp_files": False,
+            "algorithm_mode": "ex",
             "SmallTileSumLimit": 96,
             "advanced_algo": False,
-            "zmask_algo": False,
+            "zmask_algo": True,
             "chunked_solve": False,
+            "bc_family_modulus": DEFAULT_BC_FAMILY_MODULUS,
             "direct_io": True,
             "direct_io_queue_depth": 16,
             "direct_io_chunk_mib": 8,
@@ -545,10 +598,28 @@ class SingletonConfig:
                     data = pickle.load(file)
                     # Merge data with defaults to ensure missing keys are added
                     updated = False
+                    if data.get("algorithm_mode") not in ("classic", "ad", "ex", "exad", "bc"):
+                        advanced = bool(data.get("advanced_algo", defaults["advanced_algo"]))
+                        zmask = bool(data.get("zmask_algo", defaults["zmask_algo"]))
+                        if advanced and zmask:
+                            data["algorithm_mode"] = "exad"
+                        elif advanced:
+                            data["algorithm_mode"] = "ad"
+                        elif zmask:
+                            data["algorithm_mode"] = "ex"
+                        else:
+                            data["algorithm_mode"] = "classic"
+                        updated = True
                     for k, v in defaults.items():
                         if k not in data:
                             data[k] = v
                             updated = True
+                    bc_family_modulus = normalize_bc_family_modulus(
+                        data.get("bc_family_modulus", defaults["bc_family_modulus"])
+                    )
+                    if data.get("bc_family_modulus") != bc_family_modulus:
+                        data["bc_family_modulus"] = bc_family_modulus
+                        updated = True
                     for direct_io_key in (
                         "direct_io",
                         "direct_io_queue_depth",
@@ -677,6 +748,7 @@ class SingletonConfig:
                         ".exzbook",
                         ".exadbook",
                         ".exadzbook",
+                        ".bccmp",
                     )
                 ):
                     return True

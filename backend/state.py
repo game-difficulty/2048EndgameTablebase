@@ -78,6 +78,9 @@ class ConnectionManager:
                     "record_step": getattr(session, "played_length", 0),
                     "record_max": len(getattr(session, "history", [])),
                     "recording_length": getattr(session, "record_length", 0),
+                    "record_playback_loaded": bool(
+                        getattr(session, "record_playback_loaded", False)
+                    ),
                     "history": [
                         safe_hex(h[0]) for h in getattr(session, "history", [])
                     ],

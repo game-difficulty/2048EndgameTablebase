@@ -58,11 +58,18 @@ endif()
 
 add_library(common_config INTERFACE)
 target_compile_features(common_config INTERFACE cxx_std_17)
-target_compile_definitions(common_config INTERFACE NB_NDOC NB_LEAK_WARNINGS=0)
+target_compile_definitions(common_config INTERFACE
+    NB_NDOC
+    NB_LEAK_WARNINGS=0
+    BC_PORTABLE_X86_64_ARCH="${PORTABLE_X86_64_ARCH}"
+)
 target_include_directories(common_config INTERFACE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "${LIBLZMA_INCLUDE_DIR}"
 )
+if(CMAKE_DL_LIBS)
+    target_link_libraries(common_config INTERFACE ${CMAKE_DL_LIBS})
+endif()
 
 if(MSVC)
     target_compile_options(common_config INTERFACE
@@ -146,12 +153,20 @@ set(FORMATION_CORE_SOURCES
     src/AdaptiveIndex.cpp
     src/HybridSearch.cpp
     src/CanonicalBatch.cpp
+    src/BCPositionFile.cpp
+    src/BCFamilyGeneration.cpp
+    src/BCResidentGeneration.cpp
+    src/BCResidentGenerationStreaming.cpp
+    src/BCSingleChunkGeneration.cpp
+    src/BCFamilyGenerationRunner.cpp
+    src/BCFamilyStatsCsv.cpp
     src/BookGeneratorUtils.cpp
     src/BookGenerator.cpp
     src/EXPrefix40Layer.cpp
     src/EXPrefix36Runtime.cpp
     src/EXFrozenLayer.cpp
     src/EXCompressedResult.cpp
+    src/BCCompressedResult.cpp
     src/BookGeneratorEX.cpp
     src/EXADLayer.cpp
     src/EXADIO.cpp
@@ -168,23 +183,404 @@ set(FORMATION_CORE_SOURCES
     src/bindings_formation.cpp
 )
 
-nanobind_add_module(formation_core ${FORMATION_CORE_SOURCES})
+nanobind_add_module(formation_core NOMINSIZE ${FORMATION_CORE_SOURCES})
 target_link_libraries(formation_core PRIVATE common_config OpenMP::OpenMP_CXX)
+set_target_properties(formation_core PROPERTIES
+    INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF
+    INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO OFF
+    INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL OFF
+)
+if(WIN32)
+    target_link_libraries(formation_core PRIVATE psapi)
+endif()
 
-set(ADAPTIVE_INDEX_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_adaptive_index.cpp")
+add_executable(bc_family_solve_full
+    src/BCCompressedResult.cpp
+    src/BCFamilyStatsCsv.cpp
+    src/BCPositionFile.cpp
+    src/CanonicalBatch.cpp
+    src/CompressionBridge.cpp
+    src/FileIOUtils.cpp
+    src/NativeLzma.cpp
+    src/TrieCompression.cpp
+    src/bc_family_solve_full.cpp
+)
+target_link_libraries(bc_family_solve_full PRIVATE common_config OpenMP::OpenMP_CXX)
+
+add_executable(bc_family_generation_full
+    src/BCPositionFile.cpp
+    src/CompressionBridge.cpp
+    src/FileIOUtils.cpp
+    src/NativeLzma.cpp
+    src/TrieCompression.cpp
+    src/BCFamilyGeneration.cpp
+    src/BCFamilyGenerationRunner.cpp
+    src/BCResidentGeneration.cpp
+    src/BCResidentGenerationStreaming.cpp
+    src/BCSingleChunkGeneration.cpp
+    src/CanonicalBatch.cpp
+    src/bc_family_generation_full.cpp
+)
+target_link_libraries(bc_family_generation_full PRIVATE common_config OpenMP::OpenMP_CXX)
+if(WIN32)
+    target_link_libraries(bc_family_generation_full PRIVATE psapi)
+endif()
+
+set(CANONICAL_BATCH_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_canonical_batch.cpp")
+set(BC_FAMILY_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_family.cpp")
+set(BC_FAMILY_ROUTE_PLANNER_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_family_route_planner.cpp")
+set(BC_FAMILY_PARTITION_ANALYSIS_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_family_partition_analysis.cpp")
+set(BC_KEY_RANK_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_key_rank.cpp")
+set(BC_CELL_BUILDER_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_cell_builder.cpp")
+set(BC_POSITION_FILE_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_position_file.cpp")
+set(BC_POSITION_CELL_LOADER_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_position_cell_loader.cpp")
+set(BC_SUCCESS_IO_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_success_io.cpp")
+set(BC_COMPRESSED_RESULT_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_compressed_result.cpp")
+set(BC_POSITION_SCANNER_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_position_scanner.cpp")
+set(BC_BOARD_CODEC_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_board_codec.cpp")
+set(BC_BOARD_OPS_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_board_ops.cpp")
+set(BC_RESIDENT_SOLVE_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_resident_solve.cpp")
+set(BC_SINGLE_CHUNK_SOLVE_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_single_chunk_solve.cpp")
+set(BC_FAMILY_GENERATION_STATE_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_family_generation_state.cpp")
+set(BC_FAMILY_SOLVE_PLAN_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_family_solve_plan.cpp")
+set(BC_FAMILY_SOLVE_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_family_solve.cpp")
+set(BC_RESIDENT_GENERATION_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_resident_generation.cpp")
+set(BC_FILE_IO_TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/test_bc_file_io.cpp")
+set(BC_FAMILY_GENERATION_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_family_generation.cpp")
+set(BC_RESIDENT_GENERATION_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_resident_generation.cpp")
+set(BC_SINGLE_CHUNK_GENERATION_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_single_chunk_generation.cpp")
+set(BC_RESIDENT_SOLVE_FULL_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_resident_solve_full.cpp")
+set(BC_RESIDENT_SOLVE_LAYER_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_resident_solve_layer.cpp")
+set(BC_SINGLE_CHUNK_SOLVE_LAYER_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_single_chunk_solve_layer.cpp")
+set(BC_SINGLE_CHUNK_SOLVE_FULL_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_single_chunk_solve_full.cpp")
+set(BC_FAMILY_SOLVE_FULL_BENCH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/bench_bc_family_solve_full.cpp")
+set(BC_FAMILY_LAYER_DIFF_TOOL_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/tool_bc_family_layer_diff.cpp")
+set(BC_POSITION_REMAP_EXACT_TOOL_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tests_src/tool_bc_position_remap_exact.cpp")
 
 if(NATIVE_BUILD_TESTS)
-    if(NOT EXISTS "${ADAPTIVE_INDEX_TEST_SOURCE}")
-        message(FATAL_ERROR
-            "NATIVE_BUILD_TESTS=ON but ${ADAPTIVE_INDEX_TEST_SOURCE} is missing. "
-            "Test sources are optional and are not required for normal Linux or Windows builds."
-        )
-    endif()
-    add_executable(adaptive_index_test
-        src/AdaptiveIndex.cpp
-        tests/test_adaptive_index.cpp
+    foreach(_bc_required_test_source
+        "${CANONICAL_BATCH_TEST_SOURCE}"
+        "${BC_FAMILY_TEST_SOURCE}"
+        "${BC_FAMILY_ROUTE_PLANNER_TEST_SOURCE}"
+        "${BC_FAMILY_PARTITION_ANALYSIS_TEST_SOURCE}"
+        "${BC_KEY_RANK_TEST_SOURCE}"
+        "${BC_CELL_BUILDER_TEST_SOURCE}"
+        "${BC_POSITION_FILE_TEST_SOURCE}"
+        "${BC_POSITION_CELL_LOADER_TEST_SOURCE}"
+        "${BC_SUCCESS_IO_TEST_SOURCE}"
+        "${BC_COMPRESSED_RESULT_TEST_SOURCE}"
+        "${BC_POSITION_SCANNER_TEST_SOURCE}"
+        "${BC_BOARD_CODEC_TEST_SOURCE}"
+        "${BC_BOARD_OPS_TEST_SOURCE}"
+        "${BC_RESIDENT_SOLVE_TEST_SOURCE}"
+        "${BC_SINGLE_CHUNK_SOLVE_TEST_SOURCE}"
+        "${BC_FAMILY_GENERATION_STATE_TEST_SOURCE}"
+        "${BC_FAMILY_SOLVE_PLAN_TEST_SOURCE}"
+        "${BC_FAMILY_SOLVE_TEST_SOURCE}"
+        "${BC_RESIDENT_GENERATION_TEST_SOURCE}"
+        "${BC_FILE_IO_TEST_SOURCE}"
+        "${BC_FAMILY_GENERATION_BENCH_SOURCE}"
+        "${BC_RESIDENT_GENERATION_BENCH_SOURCE}"
+        "${BC_SINGLE_CHUNK_GENERATION_BENCH_SOURCE}"
+        "${BC_RESIDENT_SOLVE_FULL_BENCH_SOURCE}"
+        "${BC_RESIDENT_SOLVE_LAYER_BENCH_SOURCE}"
+        "${BC_SINGLE_CHUNK_SOLVE_LAYER_BENCH_SOURCE}"
+        "${BC_SINGLE_CHUNK_SOLVE_FULL_BENCH_SOURCE}"
+        "${BC_FAMILY_SOLVE_FULL_BENCH_SOURCE}"
+        "${BC_FAMILY_LAYER_DIFF_TOOL_SOURCE}"
+        "${BC_POSITION_REMAP_EXACT_TOOL_SOURCE}"
     )
-    target_link_libraries(adaptive_index_test PRIVATE common_config OpenMP::OpenMP_CXX)
+        if(NOT EXISTS "${_bc_required_test_source}")
+            message(FATAL_ERROR
+                "NATIVE_BUILD_TESTS=ON but ${_bc_required_test_source} is missing. "
+                "Test sources are optional and are not required for normal Linux or Windows builds."
+            )
+        endif()
+    endforeach()
+
+    add_executable(canonical_batch_test
+        src/CanonicalBatch.cpp
+        tests_src/test_canonical_batch.cpp
+    )
+    target_link_libraries(canonical_batch_test PRIVATE common_config)
+
+    add_executable(bc_family_test
+        tests_src/test_bc_family.cpp
+    )
+    target_link_libraries(bc_family_test PRIVATE common_config)
+
+    add_executable(bc_family_route_planner_test
+        tests_src/test_bc_family_route_planner.cpp
+    )
+    target_link_libraries(bc_family_route_planner_test PRIVATE common_config)
+
+    add_executable(bc_family_partition_analysis_test
+        tests_src/test_bc_family_partition_analysis.cpp
+    )
+    target_link_libraries(bc_family_partition_analysis_test PRIVATE common_config)
+
+    add_executable(bc_key_rank_test
+        tests_src/test_bc_key_rank.cpp
+    )
+    target_link_libraries(bc_key_rank_test PRIVATE common_config)
+
+    add_executable(bc_cell_builder_test
+        tests_src/test_bc_cell_builder.cpp
+    )
+    target_link_libraries(bc_cell_builder_test PRIVATE common_config)
+
+    add_executable(bc_position_file_test
+        src/BCPositionFile.cpp
+        tests_src/test_bc_position_file.cpp
+    )
+    target_link_libraries(bc_position_file_test PRIVATE common_config)
+
+    add_executable(bc_position_cell_loader_test
+        src/BCPositionFile.cpp
+        tests_src/test_bc_position_cell_loader.cpp
+    )
+    target_link_libraries(bc_position_cell_loader_test PRIVATE common_config)
+
+    add_executable(bc_success_io_test
+        src/BCPositionFile.cpp
+        tests_src/test_bc_success_io.cpp
+    )
+    target_link_libraries(bc_success_io_test PRIVATE common_config)
+
+    add_executable(bc_compressed_result_test
+        src/BCCompressedResult.cpp
+        src/FileIOUtils.cpp
+        src/BCPositionFile.cpp
+        src/NativeLzma.cpp
+        tests_src/test_bc_compressed_result.cpp
+    )
+    target_link_libraries(bc_compressed_result_test PRIVATE common_config)
+
+    add_executable(bc_position_scanner_test
+        src/BCPositionFile.cpp
+        tests_src/test_bc_position_scanner.cpp
+    )
+    target_link_libraries(bc_position_scanner_test PRIVATE common_config)
+
+    add_executable(bc_board_codec_test
+        tests_src/test_bc_board_codec.cpp
+    )
+    target_link_libraries(bc_board_codec_test PRIVATE common_config)
+
+    add_executable(bc_board_ops_test
+        tests_src/test_bc_board_ops.cpp
+    )
+    target_link_libraries(bc_board_ops_test PRIVATE common_config)
+
+    add_executable(bc_resident_solve_test
+        src/BCPositionFile.cpp
+        src/CanonicalBatch.cpp
+        tests_src/test_bc_resident_solve.cpp
+    )
+    target_link_libraries(bc_resident_solve_test PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_single_chunk_solve_test
+        src/BCPositionFile.cpp
+        src/CanonicalBatch.cpp
+        tests_src/test_bc_single_chunk_solve.cpp
+    )
+    target_link_libraries(bc_single_chunk_solve_test PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_family_generation_state_test
+        src/BCPositionFile.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
+        src/BCFamilyGeneration.cpp
+        src/BCResidentGeneration.cpp
+        src/BCResidentGenerationStreaming.cpp
+        src/CanonicalBatch.cpp
+        tests_src/test_bc_family_generation_state.cpp
+    )
+    target_link_libraries(bc_family_generation_state_test PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_family_solve_plan_test
+        src/CanonicalBatch.cpp
+        tests_src/test_bc_family_solve_plan.cpp
+    )
+    target_link_libraries(bc_family_solve_plan_test PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_family_solve_test
+        src/BCPositionFile.cpp
+        src/CanonicalBatch.cpp
+        src/CompressionBridge.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
+        src/TrieCompression.cpp
+        tests_src/test_bc_family_solve.cpp
+    )
+    target_link_libraries(bc_family_solve_test PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_resident_generation_test
+        src/BCPositionFile.cpp
+        src/BCResidentGeneration.cpp
+        src/CanonicalBatch.cpp
+        tests_src/test_bc_resident_generation.cpp
+    )
+    target_link_libraries(bc_resident_generation_test PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_file_io_test
+        src/BCPositionFile.cpp
+        tests_src/test_bc_file_io.cpp
+    )
+    target_link_libraries(bc_file_io_test PRIVATE common_config)
+
+    add_executable(bc_family_generation_bench
+        src/BCPositionFile.cpp
+        src/CompressionBridge.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
+        src/TrieCompression.cpp
+        src/BCFamilyGeneration.cpp
+        src/BCFamilyGenerationRunner.cpp
+        src/BCResidentGeneration.cpp
+        src/BCResidentGenerationStreaming.cpp
+        src/BCSingleChunkGeneration.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_family_generation.cpp
+    )
+    target_link_libraries(bc_family_generation_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+    if(WIN32)
+        target_link_libraries(bc_family_generation_bench PRIVATE psapi)
+    endif()
+
+    add_executable(bc_resident_generation_bench
+        src/BCPositionFile.cpp
+        src/CompressionBridge.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
+        src/TrieCompression.cpp
+        src/BCFamilyGeneration.cpp
+        src/BCFamilyGenerationRunner.cpp
+        src/BCResidentGeneration.cpp
+        src/BCResidentGenerationStreaming.cpp
+        src/BCSingleChunkGeneration.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_resident_generation.cpp
+    )
+    target_link_libraries(bc_resident_generation_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+    if(WIN32)
+        target_link_libraries(bc_resident_generation_bench PRIVATE psapi)
+    endif()
+
+    add_executable(bc_generation_compute_bench
+        src/BCPositionFile.cpp
+        src/CompressionBridge.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
+        src/TrieCompression.cpp
+        src/BCFamilyGeneration.cpp
+        src/BCFamilyGenerationRunner.cpp
+        src/BCResidentGeneration.cpp
+        src/BCResidentGenerationStreaming.cpp
+        src/BCSingleChunkGeneration.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_generation_compute.cpp
+    )
+    target_link_libraries(bc_generation_compute_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+    if(WIN32)
+        target_link_libraries(bc_generation_compute_bench PRIVATE psapi)
+    endif()
+
+    add_executable(bc_single_chunk_generation_bench
+        src/BCPositionFile.cpp
+        src/CompressionBridge.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
+        src/TrieCompression.cpp
+        src/BCFamilyGeneration.cpp
+        src/BCFamilyGenerationRunner.cpp
+        src/BCResidentGeneration.cpp
+        src/BCResidentGenerationStreaming.cpp
+        src/BCSingleChunkGeneration.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_single_chunk_generation.cpp
+    )
+    target_link_libraries(bc_single_chunk_generation_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+    if(WIN32)
+        target_link_libraries(bc_single_chunk_generation_bench PRIVATE psapi)
+    endif()
+
+    add_executable(bc_resident_solve_full_bench
+        src/BCCompressedResult.cpp
+        src/BCPositionFile.cpp
+        src/CanonicalBatch.cpp
+        src/CompressionBridge.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
+        src/TrieCompression.cpp
+        tests_src/bench_bc_resident_solve_full.cpp
+    )
+    target_link_libraries(bc_resident_solve_full_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_resident_solve_layer_bench
+        src/BCPositionFile.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_resident_solve_layer.cpp
+    )
+    target_link_libraries(bc_resident_solve_layer_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_single_chunk_solve_layer_bench
+        src/BCPositionFile.cpp
+        src/CanonicalBatch.cpp
+        tests_src/bench_bc_single_chunk_solve_layer.cpp
+    )
+    target_link_libraries(bc_single_chunk_solve_layer_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_single_chunk_solve_full_bench
+        src/BCCompressedResult.cpp
+        src/BCPositionFile.cpp
+        src/CanonicalBatch.cpp
+        src/CompressionBridge.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
+        src/TrieCompression.cpp
+        tests_src/bench_bc_single_chunk_solve_full.cpp
+    )
+    target_link_libraries(bc_single_chunk_solve_full_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+    if(WIN32)
+        target_link_libraries(bc_single_chunk_solve_full_bench PRIVATE psapi)
+    endif()
+
+    add_executable(bc_family_solve_full_bench
+        src/BCCompressedResult.cpp
+        src/BCPositionFile.cpp
+        src/CanonicalBatch.cpp
+        src/CompressionBridge.cpp
+        src/FileIOUtils.cpp
+        src/NativeLzma.cpp
+        src/TrieCompression.cpp
+        tests_src/bench_bc_family_solve_full.cpp
+    )
+    target_link_libraries(bc_family_solve_full_bench PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_family_layer_diff_tool
+        src/BCPositionFile.cpp
+        tests_src/tool_bc_family_layer_diff.cpp
+    )
+    target_link_libraries(bc_family_layer_diff_tool PRIVATE common_config)
+
+    add_executable(bc_position_remap_exact_tool
+        src/BCPositionFile.cpp
+        tests_src/tool_bc_position_remap_exact.cpp
+    )
+    target_link_libraries(bc_position_remap_exact_tool PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_layer_remap_with_success_tool
+        src/BCPositionFile.cpp
+        tests_src/tool_bc_layer_remap_with_success.cpp
+    )
+    target_link_libraries(bc_layer_remap_with_success_tool PRIVATE common_config OpenMP::OpenMP_CXX)
+
+    add_executable(bc_success_max_tool
+        src/BCPositionFile.cpp
+        tests_src/tool_bc_success_max.cpp
+    )
+    target_link_libraries(bc_success_max_tool PRIVATE common_config)
 endif()
 
 add_library(bookgen_native SHARED
@@ -272,8 +668,10 @@ foreach(target ${ALL_PYD_MODULES})
     )
 
     if(ipo_supported)
-        set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
-        set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
+        if(NOT "${target}" STREQUAL "formation_core")
+            set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+            set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
+        endif()
     endif()
 endforeach()
 

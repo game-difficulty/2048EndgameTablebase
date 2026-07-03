@@ -65,11 +65,19 @@
 
             <div class="flex flex-col border-t border-border-main pt-4 mt-2">
               <label class="ui-control font-bold text-text-main mb-2 uppercase tracking-wider">{{ $t('settings.builder.path') }}</label>
-              <div class="flex gap-2">
-                <input type="text" v-model="buildPath" class="w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-kicker text-text-main outline-none focus:border-accent transition-colors flex-1 appearance-none" />
+              <div class="flex gap-2 items-start">
+                <textarea v-model="buildPath" rows="3" class="w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-kicker text-text-main outline-none focus:border-accent transition-colors flex-1 appearance-none resize-y" />
                 <button @click="browseFolder" class="px-3 py-1.5 bg-btn-bg text-white rounded-lg font-black ui-control hover:bg-btn-hover active:scale-95 transition-all whitespace-nowrap shadow-sm">
                   {{ $t('settings.builder.browse') }}
                 </button>
+              </div>
+              <div v-if="normalizedBuildPaths.length" class="mt-2 flex flex-col gap-1">
+                <div v-for="(path, index) in normalizedBuildPaths" :key="`${index}-${path}`" class="flex min-w-0 items-center gap-2 text-xs text-text-muted">
+                  <span class="shrink-0 rounded border border-border-main px-1.5 py-0.5 font-bold uppercase text-text-main">
+                    {{ index === 0 ? $t('settings.builder.hotPath') : $t('settings.builder.coldPath') }}
+                  </span>
+                  <span class="truncate">{{ path }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -90,6 +98,7 @@
                     { value: 'ad', label: $t('settings.builder.algorithmAD'), disabled: selectedPatternIsVariant },
                     { value: 'ex', label: $t('settings.builder.algorithmEX') },
                     { value: 'exad', label: $t('settings.builder.algorithmEXAD'), disabled: selectedPatternIsVariant },
+                    { value: 'bc', label: $t('settings.builder.algorithmBC'), badge: 'beta' },
                   ]"
                   :aria-label="$t('settings.builder.algorithmMode')"
                   trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-control font-black text-text-main shadow-sm hover:border-accent/45"
@@ -111,6 +120,23 @@
                   trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-control font-black text-text-main shadow-sm hover:border-accent/45"
                   option-class="ui-control font-black"
                   @change="handleSuccessRateDtypeChange"
+                />
+              </div>
+
+              <div v-if="builderUsesBC" class="flex flex-col">
+                <label class="builder-field-label">
+                  <span>{{ $t('settings.builder.bcFamilyModulus') }}</span>
+                  <span class="setting-tooltip" tabindex="0" :title="$t('settings.tooltips.bcFamilyModulus')" :data-tooltip="$t('settings.tooltips.bcFamilyModulus')">?</span>
+                </label>
+                <input
+                  type="number"
+                  min="13"
+                  max="256"
+                  step="1"
+                  v-model.number="builderBCFamilyModulus"
+                  :aria-label="$t('settings.builder.bcFamilyModulus')"
+                  @change="handleBCFamilyModulusChange"
+                  class="builder-number-input h-[42px] w-full bg-bg-main border border-border-main rounded-lg px-3 ui-control font-black text-text-main outline-none hover:border-accent transition-colors shadow-sm"
                 />
               </div>
 
@@ -178,7 +204,7 @@
                 </span>
               </label>
 
-              <label class="builder-toggle-option cursor-pointer group" v-if="!builderUsesAdvanced">
+              <label class="builder-toggle-option cursor-pointer group" v-if="builderSupportsOptimalOnly">
                 <div class="builder-toggle-switch relative">
                   <input type="checkbox" v-model="builderOptimalBranchOnly" class="sr-only peer" @change="handleOptimalBranchOnlyChange" />
                   <div class="w-10 h-5 bg-border-main/30 rounded-full peer peer-checked:bg-accent transition-colors"></div>
@@ -382,12 +408,14 @@ const props = defineProps({
   selectedTarget,
   selectedPatternIsVariant,
   buildPath,
+  normalizedBuildPaths,
   isBuilding,
   builderAlgorithm,
   builderCompress,
   builderCompressTempFiles,
   builderOptimalBranchOnly,
   builderChunkedSolve,
+  builderBCFamilyModulus,
   builderSuccessRateDtype,
   builderSmallTileSumLimit,
   builderDeletionThresholdMode,
@@ -401,6 +429,7 @@ const props = defineProps({
   handleCompressTempFilesChange,
   handleOptimalBranchOnlyChange,
   handleChunkedSolveChange,
+  handleBCFamilyModulusChange,
   handleSuccessRateDtypeChange,
   handleDeletionThresholdModeChange,
   handleDeletionThresholdInput,
@@ -447,6 +476,12 @@ const successRateDtypeOptions = [
 
 const builderUsesAdvanced = computed(() =>
   builderAlgorithm.value === 'ad' || builderAlgorithm.value === 'exad'
+);
+
+const builderUsesBC = computed(() => builderAlgorithm.value === 'bc');
+
+const builderSupportsOptimalOnly = computed(() =>
+  !builderUsesAdvanced.value && !builderUsesBC.value
 );
 </script>
 

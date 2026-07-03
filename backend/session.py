@@ -101,6 +101,7 @@ class GameSession:
         self.record_result_history = []
         self.record_result_dtype = None
         self.record_animation_history = []
+        self.record_playback_loaded = False
 
         self.tester_pattern = ["?", "?"]
         self.tester_full_pattern = ""

@@ -1,6 +1,7 @@
 #include "NativeLzma.h"
 
 #include "FileIOUtils.h"
+#include "PathUtils.h"
 
 #include <algorithm>
 #include <array>
@@ -73,10 +74,39 @@ bool publish_file_or_remove_temp(const std::string &temp_path, const std::string
         return true;
     } catch (...) {
         std::error_code ec;
-        fs::remove(temp_path, ec);
+        NativePath::remove(temp_path, ec);
         return false;
     }
 }
+
+#ifdef _WIN32
+std::wstring utf8_to_wide(const std::string &value) {
+    if (value.empty()) {
+        return {};
+    }
+    const int length = MultiByteToWideChar(
+        CP_UTF8,
+        MB_ERR_INVALID_CHARS,
+        value.data(),
+        static_cast<int>(value.size()),
+        nullptr,
+        0
+    );
+    if (length <= 0) {
+        return std::wstring(value.begin(), value.end());
+    }
+    std::wstring wide(static_cast<size_t>(length), L'\0');
+    MultiByteToWideChar(
+        CP_UTF8,
+        MB_ERR_INVALID_CHARS,
+        value.data(),
+        static_cast<int>(value.size()),
+        wide.data(),
+        length
+    );
+    return wide;
+}
+#endif
 
 struct LzmaApi {
 #ifdef _WIN32
@@ -121,14 +151,14 @@ LzmaApi &lzma_api() {
 
 #ifdef _WIN32
         std::vector<std::string> candidates = {"liblzma.dll", "liblzma-5.dll"};
-        char exe_path[MAX_PATH] = {};
-        if (GetModuleFileNameA(nullptr, exe_path, MAX_PATH) > 0) {
+        wchar_t exe_path[MAX_PATH] = {};
+        if (GetModuleFileNameW(nullptr, exe_path, MAX_PATH) > 0) {
             fs::path root = fs::path(exe_path).parent_path();
-            candidates.push_back((root / "Library" / "bin" / "liblzma.dll").string());
-            candidates.push_back((root / "Library" / "bin" / "liblzma-5.dll").string());
+            candidates.push_back(NativePath::to_utf8_string(root / "Library" / "bin" / "liblzma.dll"));
+            candidates.push_back(NativePath::to_utf8_string(root / "Library" / "bin" / "liblzma-5.dll"));
         }
         for (const auto &candidate : candidates) {
-            api.module = LoadLibraryA(candidate.c_str());
+            api.module = LoadLibraryW(utf8_to_wide(candidate).c_str());
             if (api.module) {
                 break;
             }
@@ -241,8 +271,8 @@ std::optional<std::string> resolve_7z_executable() {
     };
 
 #ifdef _WIN32
-    char exe_path[MAX_PATH] = {};
-    if (GetModuleFileNameA(nullptr, exe_path, MAX_PATH) > 0) {
+    wchar_t exe_path[MAX_PATH] = {};
+    if (GetModuleFileNameW(nullptr, exe_path, MAX_PATH) > 0) {
         fs::path root = fs::path(exe_path).parent_path();
         candidates.push_back(root / "7z.exe");
         candidates.push_back(root / "_internal" / "7z.exe");
@@ -252,7 +282,7 @@ std::optional<std::string> resolve_7z_executable() {
 
     for (const auto &candidate : candidates) {
         if (fs::exists(candidate)) {
-            return candidate.string();
+            return NativePath::to_utf8_string(candidate);
         }
     }
     const char *path = std::getenv("PATH");
@@ -264,14 +294,14 @@ std::optional<std::string> resolve_7z_executable() {
 
 bool run_command(const std::string &command_line) {
 #ifdef _WIN32
-    STARTUPINFOA startup_info{};
+    STARTUPINFOW startup_info{};
     PROCESS_INFORMATION process_info{};
     startup_info.cb = sizeof(startup_info);
     startup_info.dwFlags |= STARTF_USESHOWWINDOW;
     startup_info.wShowWindow = SW_HIDE;
-    std::vector<char> command(command_line.begin(), command_line.end());
-    command.push_back('\0');
-    const BOOL ok = CreateProcessA(
+    std::wstring command = utf8_to_wide(command_line);
+    command.push_back(L'\0');
+    const BOOL ok_wide = CreateProcessW(
         nullptr,
         command.data(),
         nullptr,
@@ -282,7 +312,7 @@ bool run_command(const std::string &command_line) {
         nullptr,
         &startup_info,
         &process_info);
-    if (!ok) {
+    if (!ok_wide) {
         return false;
     }
     WaitForSingleObject(process_info.hProcess, INFINITE);
@@ -362,7 +392,7 @@ bool spawn_process_with_redirects(
     HANDLE child_stderr,
     PROCESS_INFORMATION &process_info
 ) {
-    STARTUPINFOA startup_info{};
+    STARTUPINFOW startup_info{};
     startup_info.cb = sizeof(startup_info);
     startup_info.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
     startup_info.wShowWindow = SW_HIDE;
@@ -370,9 +400,9 @@ bool spawn_process_with_redirects(
     startup_info.hStdOutput = child_stdout;
     startup_info.hStdError = child_stderr;
     std::string command_line = build_command_line(args);
-    std::vector<char> command(command_line.begin(), command_line.end());
-    command.push_back('\0');
-    return CreateProcessA(
+    std::wstring command = utf8_to_wide(command_line);
+    command.push_back(L'\0');
+    return CreateProcessW(
         nullptr,
         command.data(),
         nullptr,
@@ -446,7 +476,7 @@ bool compress_bytes_to_7z_archive_streaming_impl(
     const int max_threads = std::max(2, omp_get_max_threads());
     std::error_code ec;
     const std::string temp_archive_path = temporary_archive_path(archive_path);
-    fs::remove(temp_archive_path, ec);
+    NativePath::remove(temp_archive_path, ec);
     const std::vector<std::string> args = {
         *exe,
         "a",
@@ -470,7 +500,7 @@ bool compress_bytes_to_7z_archive_streaming_impl(
         return false;
     }
     SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0);
-    HANDLE nul_out = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE nul_out = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (nul_out == INVALID_HANDLE_VALUE) {
         CloseHandle(stdin_read);
         CloseHandle(stdin_write);
@@ -482,28 +512,28 @@ bool compress_bytes_to_7z_archive_streaming_impl(
     CloseHandle(nul_out);
     if (!spawned) {
         CloseHandle(stdin_write);
-        fs::remove(temp_archive_path, ec);
+        NativePath::remove(temp_archive_path, ec);
         return false;
     }
     const bool write_ok = write_all_handle(stdin_write, data, size);
     CloseHandle(stdin_write);
     const bool exit_ok = wait_process_success(process_info);
     if (!write_ok || !exit_ok) {
-        fs::remove(temp_archive_path, ec);
+        NativePath::remove(temp_archive_path, ec);
         return false;
     }
     return publish_file_or_remove_temp(temp_archive_path, archive_path);
 #else
     int stdin_pipe[2];
     if (pipe(stdin_pipe) != 0) {
-        fs::remove(temp_archive_path, ec);
+        NativePath::remove(temp_archive_path, ec);
         return false;
     }
     pid_t pid = fork();
     if (pid < 0) {
         close(stdin_pipe[0]);
         close(stdin_pipe[1]);
-        fs::remove(temp_archive_path, ec);
+        NativePath::remove(temp_archive_path, ec);
         return false;
     }
     if (pid == 0) {
@@ -528,7 +558,7 @@ bool compress_bytes_to_7z_archive_streaming_impl(
     close(stdin_pipe[1]);
     const bool exit_ok = wait_pid_success(pid);
     if (!write_ok || !exit_ok) {
-        fs::remove(temp_archive_path, ec);
+        NativePath::remove(temp_archive_path, ec);
         return false;
     }
     return publish_file_or_remove_temp(temp_archive_path, archive_path);
@@ -537,7 +567,7 @@ bool compress_bytes_to_7z_archive_streaming_impl(
 
 bool decompress_7z_archive_to_bytes_streaming_impl(const std::string &archive_path, std::vector<uint8_t> &output) {
     auto exe = resolve_7z_executable();
-    if (!exe || !fs::exists(archive_path)) {
+    if (!exe || !NativePath::exists(archive_path)) {
         return false;
     }
     const std::vector<std::string> args = {
@@ -559,8 +589,8 @@ bool decompress_7z_archive_to_bytes_streaming_impl(const std::string &archive_pa
         return false;
     }
     SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
-    HANDLE nul_in = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    HANDLE nul_err = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE nul_in = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE nul_err = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (nul_in == INVALID_HANDLE_VALUE || nul_err == INVALID_HANDLE_VALUE) {
         if (nul_in != INVALID_HANDLE_VALUE) CloseHandle(nul_in);
         if (nul_err != INVALID_HANDLE_VALUE) CloseHandle(nul_err);
@@ -623,7 +653,7 @@ bool decompress_7z_archive_to_bytes_streaming_impl(const std::string &archive_pa
 
 bool compress_file_xz(const std::string &input_path, const std::string &output_path, int lvl) {
     std::vector<uint8_t> bytes = FileIOUtils::read_binary_bytes(input_path);
-    if (bytes.empty() && !fs::exists(input_path)) {
+    if (bytes.empty() && !NativePath::exists(input_path)) {
         return false;
     }
     std::vector<uint8_t> compressed = xz_compress_bytes(bytes.data(), bytes.size(), static_cast<uint32_t>(lvl));
@@ -635,13 +665,13 @@ bool compress_file_xz(const std::string &input_path, const std::string &output_p
     if (!publish_file_or_remove_temp(temp_output_path, output_path)) {
         return false;
     }
-    fs::remove(input_path);
+    NativePath::remove(input_path);
     return true;
 }
 
 bool decompress_file_xz(const std::string &input_path, const std::string &output_path) {
     std::vector<uint8_t> bytes = FileIOUtils::read_binary_bytes(input_path);
-    if (bytes.empty() && !fs::exists(input_path)) {
+    if (bytes.empty() && !NativePath::exists(input_path)) {
         return false;
     }
     auto decompressed = try_xz_decompress_bytes(bytes.data(), bytes.size());
@@ -653,12 +683,12 @@ bool decompress_file_xz(const std::string &input_path, const std::string &output
     if (!publish_file_or_remove_temp(temp_output_path, output_path)) {
         return false;
     }
-    fs::remove(input_path);
+    NativePath::remove(input_path);
     return true;
 }
 
 std::vector<U64SegmentEntry> read_u64_segments(const fs::path &segments_path) {
-    return read_binary_vector<U64SegmentEntry>(segments_path.string());
+    return read_binary_vector<U64SegmentEntry>(NativePath::to_utf8_string(segments_path));
 }
 
 std::vector<uint8_t> read_file_bytes_range(const std::string &path, uint64_t begin, uint64_t end) {
@@ -667,7 +697,7 @@ std::vector<uint8_t> read_file_bytes_range(const std::string &path, uint64_t beg
 
 bool test_7z_archive_integrity(const std::string &archive_path) {
     auto exe = resolve_7z_executable();
-    if (!exe || !fs::exists(archive_path)) {
+    if (!exe || !NativePath::exists(archive_path)) {
         return false;
     }
     const std::vector<std::string> args = {
@@ -682,16 +712,16 @@ bool test_7z_archive_integrity(const std::string &archive_path) {
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
-    HANDLE nul_in = CreateFileA(
-        "NUL",
+    HANDLE nul_in = CreateFileW(
+        L"NUL",
         GENERIC_READ,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         &sa,
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL,
         nullptr);
-    HANDLE nul_out = CreateFileA(
-        "NUL",
+    HANDLE nul_out = CreateFileW(
+        L"NUL",
         GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         &sa,
@@ -767,7 +797,7 @@ struct SevenZipArchiveWriter::Impl {
         temp_archive_path = temporary_archive_path(path);
         const int max_threads = std::max(2, omp_get_max_threads());
         std::error_code ec;
-        fs::remove(temp_archive_path, ec);
+        NativePath::remove(temp_archive_path, ec);
         const std::vector<std::string> args = {
             *exe,
             "a",
@@ -790,8 +820,8 @@ struct SevenZipArchiveWriter::Impl {
             throw std::runtime_error("failed to create 7z stdin pipe");
         }
         SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0);
-        HANDLE nul_out = CreateFileA(
-            "NUL",
+        HANDLE nul_out = CreateFileW(
+            L"NUL",
             GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             &sa,
@@ -810,13 +840,13 @@ struct SevenZipArchiveWriter::Impl {
         if (!spawned) {
             CloseHandle(stdin_write);
             stdin_write = nullptr;
-            fs::remove(temp_archive_path, ec);
+            NativePath::remove(temp_archive_path, ec);
             throw std::runtime_error("failed to spawn 7z archive writer");
         }
 #else
         int stdin_pipe[2];
         if (pipe(stdin_pipe) != 0) {
-            fs::remove(temp_archive_path, ec);
+            NativePath::remove(temp_archive_path, ec);
             throw std::runtime_error("failed to create 7z stdin pipe");
         }
         pid = fork();
@@ -824,7 +854,7 @@ struct SevenZipArchiveWriter::Impl {
             ::close(stdin_pipe[0]);
             ::close(stdin_pipe[1]);
             pid = -1;
-            fs::remove(temp_archive_path, ec);
+            NativePath::remove(temp_archive_path, ec);
             throw std::runtime_error("failed to fork 7z archive writer");
         }
         if (pid == 0) {
@@ -896,7 +926,7 @@ struct SevenZipArchiveWriter::Impl {
 #endif
         if (!ok) {
             std::error_code ec;
-            fs::remove(temp_archive_path, ec);
+            NativePath::remove(temp_archive_path, ec);
             if (throw_on_error) {
                 throw std::runtime_error("7z archive writer failed: " + archive_path);
             }
@@ -935,7 +965,7 @@ struct SevenZipSequentialReader::Impl {
             throw std::runtime_error("7z archive reader is already open");
         }
         auto exe = resolve_7z_executable();
-        if (!exe || !fs::exists(path)) {
+        if (!exe || !NativePath::exists(path)) {
             throw std::runtime_error("7z archive not available: " + path);
         }
         archive_path = path;
@@ -957,16 +987,16 @@ struct SevenZipSequentialReader::Impl {
             throw std::runtime_error("failed to create 7z stdout pipe");
         }
         SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
-        HANDLE nul_in = CreateFileA(
-            "NUL",
+        HANDLE nul_in = CreateFileW(
+            L"NUL",
             GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             &sa,
             OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL,
             nullptr);
-        HANDLE nul_err = CreateFileA(
-            "NUL",
+        HANDLE nul_err = CreateFileW(
+            L"NUL",
             GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             &sa,
@@ -1206,9 +1236,9 @@ bool decompress_7z_archive_to_bytes_streaming(const std::string &archive_path, s
 
 bool is_readable_7z_or_xz_archive(const std::string &archive_path) {
     std::error_code ec;
-    if (!fs::exists(archive_path, ec) || ec ||
-        !fs::is_regular_file(archive_path, ec) || ec ||
-        fs::file_size(archive_path, ec) == 0U || ec) {
+    if (!NativePath::exists(archive_path, ec) || ec ||
+        !NativePath::is_regular_file(archive_path, ec) || ec ||
+        NativePath::file_size(archive_path, ec) == 0U || ec) {
         return false;
     }
 
@@ -1229,34 +1259,34 @@ std::vector<uint8_t> decompress_xz_block_native(const uint8_t *data, size_t size
 }
 
 bool compress_with_7z_or_xz(const std::string &input_path, int lvl) {
-    if (!fs::exists(input_path)) {
+    if (!NativePath::exists(input_path)) {
         return false;
     }
     const std::string output_path = input_path + ".7z";
     if (auto exe = resolve_7z_executable()) {
         const std::string temp_output_path = temporary_archive_path(output_path);
         std::error_code ec;
-        fs::remove(temp_output_path, ec);
+        NativePath::remove(temp_output_path, ec);
         const int max_threads = std::max(2, omp_get_max_threads());
         std::string cmd = quote_arg(*exe) + " a -t7z -m0=lzma2 -mx=" + std::to_string(lvl) +
                           " -mmt=" + std::to_string(max_threads) + " " +
                           quote_arg(temp_output_path) + " " + quote_arg(input_path);
         if (run_command(cmd)) {
             if (publish_file_or_remove_temp(temp_output_path, output_path)) {
-                fs::remove(input_path);
+                NativePath::remove(input_path);
                 return true;
             }
         }
-        fs::remove(temp_output_path, ec);
+        NativePath::remove(temp_output_path, ec);
     }
     return compress_file_xz(input_path, output_path, lvl);
 }
 
 bool decompress_with_7z_or_xz(const std::string &archive_path) {
-    if (!fs::exists(archive_path)) {
+    if (!NativePath::exists(archive_path)) {
         return false;
     }
-    const std::string output_path = fs::path(archive_path).replace_extension().string();
+    const std::string output_path = NativePath::replace_extension_utf8(archive_path);
     if (auto exe = resolve_7z_executable()) {
         (void)exe;
         std::vector<uint8_t> decompressed;
@@ -1266,7 +1296,7 @@ bool decompress_with_7z_or_xz(const std::string &archive_path) {
             if (!publish_file_or_remove_temp(temp_output_path, output_path)) {
                 return false;
             }
-            fs::remove(archive_path);
+            NativePath::remove(archive_path);
             return true;
         }
     }
@@ -1304,7 +1334,7 @@ bool compress_uint64_array_native(const std::vector<uint64_t> &data, const std::
     }
 
     uint64_t current_offset = 0;
-    std::ofstream out(output_base + ".zi", std::ios::binary | std::ios::trunc);
+    std::ofstream out(NativePath::from_utf8(output_base + ".zi"), std::ios::binary | std::ios::trunc);
     if (!out) {
         return false;
     }
@@ -1321,8 +1351,9 @@ bool compress_uint64_array_native(const std::vector<uint64_t> &data, const std::
 }
 
 std::vector<uint64_t> decompress_uint64_array_native(const std::string &compressed_path) {
-    const fs::path zi_path(compressed_path);
-    const fs::path segments_path = zi_path.parent_path() / (zi_path.stem().string() + ".s");
+    const fs::path zi_path = NativePath::from_utf8(compressed_path);
+    fs::path segments_path = zi_path;
+    segments_path.replace_extension(".s");
     std::vector<U64SegmentEntry> segments = read_u64_segments(segments_path);
     if (segments.empty()) {
         return {};
@@ -1337,7 +1368,7 @@ std::vector<uint64_t> decompress_uint64_array_native(const std::string &compress
         } else {
             end = fs::file_size(zi_path);
         }
-        std::vector<uint8_t> compressed = read_file_bytes_range(zi_path.string(), begin, end);
+        std::vector<uint8_t> compressed = read_file_bytes_range(NativePath::to_utf8_string(zi_path), begin, end);
         std::vector<uint8_t> decompressed = decompress_xz_block_native(compressed.data(), compressed.size());
         const size_t item_count = decompressed.size() / sizeof(uint64_t);
         const size_t old_size = result.size();
@@ -1350,8 +1381,9 @@ std::vector<uint64_t> decompress_uint64_array_native(const std::string &compress
 }
 
 std::optional<size_t> find_value_uint64_compressed_native(const std::string &compressed_path, uint64_t value) {
-    const fs::path zi_path(compressed_path);
-    const fs::path segments_path = zi_path.parent_path() / (zi_path.stem().string() + ".s");
+    const fs::path zi_path = NativePath::from_utf8(compressed_path);
+    fs::path segments_path = zi_path;
+    segments_path.replace_extension(".s");
     std::vector<U64SegmentEntry> segments = read_u64_segments(segments_path);
     if (segments.empty() || value < segments.front().first_value) {
         return std::nullopt;
@@ -1376,7 +1408,7 @@ std::optional<size_t> find_value_uint64_compressed_native(const std::string &com
     const uint64_t begin = segments[seg_idx].file_offset;
     const uint64_t end =
         (seg_idx + 1 < segments.size()) ? segments[seg_idx + 1].file_offset : fs::file_size(zi_path);
-    std::vector<uint8_t> compressed = read_file_bytes_range(zi_path.string(), begin, end);
+    std::vector<uint8_t> compressed = read_file_bytes_range(NativePath::to_utf8_string(zi_path), begin, end);
     std::vector<uint8_t> decompressed = decompress_xz_block_native(compressed.data(), compressed.size());
     const uint64_t *data = reinterpret_cast<const uint64_t *>(decompressed.data());
     const size_t length = decompressed.size() / sizeof(uint64_t);

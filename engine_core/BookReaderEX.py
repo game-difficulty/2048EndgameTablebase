@@ -28,13 +28,20 @@ def _symm_mode_value(name: str) -> int:
     return int(mode.value if hasattr(mode, "value") else mode)
 
 
+def _target_rank(target: int) -> int:
+    value = int(target)
+    if value >= 32 and (value & (value - 1)) == 0:
+        return int(np.log2(value))
+    return value
+
+
 class BookReaderEX:
     def __init__(self, pattern: str, target: int):
         if formation_core is None:
             raise RuntimeError("formation_core is unavailable")
 
         self.pattern = pattern
-        self.target = int(np.log2(target)) if int(target) >= 128 else int(target)
+        self.target = _target_rank(target)
         meta = pattern_catalog.get(pattern)
         if meta is None:
             raise KeyError(f"Unknown pattern: {pattern}")

@@ -116,7 +116,22 @@ def _compute_spawns(session, new_board):
 
 
 async def send_trainer_results(session, websocket, request_id=None):
+    async def send_empty(dtype="?"):
+        session.trainer_results = {}
+        await websocket.send_json(
+            {
+                "action": "TRAINER_RESULTS",
+                "data": {
+                    "results": {},
+                    "dtype": str(dtype or "?"),
+                    "board_hex": safe_hex(session.board_encoded),
+                    "request_id": request_id,
+                },
+            }
+        )
+
     if session.book_reader is None:
+        await send_empty()
         return
     pattern = session.pattern_settings[0]
     _32ks = pattern_32k_tiles_map.get(pattern, [0])[0]
@@ -156,12 +171,15 @@ async def send_trainer_results(session, websocket, request_id=None):
             result = {k: safe_float(v) for k, v in result.items()}
 
         session.trainer_results = result
+        dtype_name = str(dtype) if dtype else "?"
+        if dtype_name != "?":
+            session.success_rate_dtype = dtype_name
         await websocket.send_json(
             {
                 "action": "TRAINER_RESULTS",
                 "data": {
                     "results": result,
-                    "dtype": str(dtype) if result else "?",
+                    "dtype": dtype_name if result else "?",
                     "board_hex": safe_hex(session.board_encoded),
                     "request_id": request_id,
                 },
@@ -169,12 +187,14 @@ async def send_trainer_results(session, websocket, request_id=None):
         )
     except Exception as e:
         print("send_trainer_results Err:", e)
+        await send_empty()
 
 
 def _clear_record_replay(session):
     session.record_result_history = []
     session.record_result_dtype = None
     session.record_animation_history = []
+    session.record_playback_loaded = False
 
 
 def _decode_record_rates(raw_rates):
@@ -198,6 +218,25 @@ def _get_current_record_results(session):
     return None, getattr(session, "record_result_dtype", None) or "recorded"
 
 
+def _restore_record_rate(value, dtype):
+    if not isinstance(value, (float, int, np.integer, np.floating)):
+        return 0.0
+
+    try:
+        rate = float(value)
+    except Exception:
+        return 0.0
+
+    if not np.isfinite(rate):
+        return 0.0
+
+    _, _, _, zero_val = DTYPE_CONFIG.get(dtype, DTYPE_CONFIG["uint32"])
+    if zero_val < 0:
+        rate = float(abs(zero_val)) + rate
+
+    return max(0.0, min(1.0, rate))
+
+
 def _record_state(session, move_str, gen_pos=0, gen_val=1):
     if not session.recording_state or session.record_length >= 10000:
         return
@@ -208,12 +247,11 @@ def _record_state(session, move_str, gen_pos=0, gen_val=1):
         move_bits | ((gen_pos & 0b1111) << 2) | (((gen_val - 1) & 0b1) << 6)
     )
 
-    zero_val = DTYPE_CONFIG.get(session.success_rate_dtype, DTYPE_CONFIG["uint32"])[3]
+    dtype = getattr(session, "success_rate_dtype", "uint32")
     rates = []
     for d in ("up", "down", "left", "right"):
-        r = session.trainer_results.get(d, 0)
-        r = r if isinstance(r, (float, int, np.integer, np.floating)) else 0
-        rates.append(np.uint32((r - zero_val) * 4e9))
+        r = _restore_record_rate(session.trainer_results.get(d, 0), dtype)
+        rates.append(np.uint32(round(r * 4e9)))
 
     session.records[session.record_length] = (changes, rates)
     session.record_length += 1

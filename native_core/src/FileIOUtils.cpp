@@ -41,7 +41,7 @@ size_t direct_chunk_bytes(DirectIoConfig config) {
 class BufferedAppendWriter {
 public:
     explicit BufferedAppendWriter(const std::string &path)
-        : path_(path), out_(path, std::ios::binary | std::ios::trunc) {
+        : path_(path), out_(NativePath::from_utf8(path), std::ios::binary | std::ios::trunc) {
         if (!out_) {
             throw_io_error("failed to open for write: " + path_);
         }
@@ -67,7 +67,7 @@ private:
 class BufferedSequentialReader {
 public:
     explicit BufferedSequentialReader(const std::string &path)
-        : path_(path), in_(path, std::ios::binary) {
+        : path_(path), in_(NativePath::from_utf8(path), std::ios::binary) {
         if (!in_) {
             throw_io_error("failed to open for read: " + path_);
         }
@@ -97,11 +97,11 @@ void free_aligned_bytes(void *ptr);
 bool direct_io_supported_path(const std::string &path) {
     std::string key;
     try {
-        fs::path directory = fs::absolute(fs::path(path)).parent_path();
+        fs::path directory = fs::absolute(NativePath::from_utf8(path)).parent_path();
         if (directory.empty()) {
             directory = fs::current_path();
         }
-        key = directory.string();
+        key = NativePath::to_utf8_string(directory);
     } catch (...) {
         return false;
     }
@@ -121,7 +121,7 @@ bool direct_io_supported_path(const std::string &path) {
     bool supported = false;
 #ifdef _WIN32
     std::error_code fs_error;
-    const fs::path directory(key);
+    const fs::path directory = NativePath::from_utf8(key);
     if (fs::exists(directory, fs_error) && fs::is_directory(directory, fs_error)) {
         static std::atomic<uint64_t> probe_counter{0ULL};
         const std::wstring probe_path = (
@@ -259,11 +259,11 @@ public:
           chunk_bytes_(direct_chunk_bytes(config_)) {
         try {
             scratch_ = alloc_aligned_bytes(chunk_bytes_);
-            buffered_tail_.open(path_, std::ios::binary);
+            buffered_tail_.open(NativePath::from_utf8(path_), std::ios::binary);
             if (!buffered_tail_) {
                 throw_io_error("failed to open buffered tail reader: " + path_);
             }
-            const std::wstring native_path = fs::path(path_).wstring();
+            const std::wstring native_path = NativePath::from_utf8(path_).wstring();
             handle_ = CreateFileW(
                 native_path.c_str(),
                 GENERIC_READ,
@@ -381,7 +381,7 @@ public:
           config_(normalize_direct_io_config(config)),
           chunk_bytes_(direct_chunk_bytes(config_)) {
         try {
-            const std::wstring native_path = fs::path(path_).wstring();
+            const std::wstring native_path = NativePath::from_utf8(path_).wstring();
             handle_ = CreateFileW(
                 native_path.c_str(),
                 GENERIC_READ | GENERIC_WRITE,
@@ -856,13 +856,13 @@ DirectIoConfig direct_io_config_from_options(const RunOptions &options) {
 }
 
 std::string temp_write_path(const std::string &final_path) {
-    return fs::path(final_path + ".tmp").string();
+    return final_path + ".tmp";
 }
 
 void finalize_temporary_file(const std::string &temp_path, const std::string &final_path) {
 #ifdef _WIN32
-    const std::wstring temp = fs::path(temp_path).wstring();
-    const std::wstring final = fs::path(final_path).wstring();
+    const std::wstring temp = NativePath::from_utf8(temp_path).wstring();
+    const std::wstring final = NativePath::from_utf8(final_path).wstring();
     constexpr int kRenameRetryCount = 80;
     DWORD move_error = ERROR_SUCCESS;
     for (int attempt = 0; attempt < kRenameRetryCount; ++attempt) {
@@ -877,10 +877,10 @@ void finalize_temporary_file(const std::string &temp_path, const std::string &fi
     }
 
     std::error_code remove_error;
-    fs::remove(final_path, remove_error);
+    NativePath::remove(final_path, remove_error);
     std::error_code rename_error;
     for (int attempt = 0; attempt < kRenameRetryCount; ++attempt) {
-        fs::rename(temp_path, final_path, rename_error);
+        NativePath::rename(temp_path, final_path, rename_error);
         if (!rename_error) {
             return;
         }
@@ -892,7 +892,7 @@ void finalize_temporary_file(const std::string &temp_path, const std::string &fi
 
     if (CopyFileW(temp.c_str(), final.c_str(), FALSE)) {
         std::error_code cleanup_error;
-        fs::remove(temp_path, cleanup_error);
+        NativePath::remove(temp_path, cleanup_error);
         return;
     }
     throw std::runtime_error(
@@ -916,7 +916,7 @@ public:
           logical_bytes_(logical_bytes),
           config_(normalize_direct_io_config(config)) {
         std::error_code remove_error;
-        fs::remove(temp_path_, remove_error);
+        NativePath::remove(temp_path_, remove_error);
         if (!config_.enabled) {
             buffered_writer_ = std::make_unique<BufferedAppendWriter>(temp_path_);
             finalize_buffered_temp_ = true;

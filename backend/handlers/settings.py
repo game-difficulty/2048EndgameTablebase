@@ -13,11 +13,17 @@ import markdown
 from Config import (
     SingletonConfig,
     category_info,
+    logger,
+    normalize_bc_family_modulus,
     normalize_deletion_threshold_mode,
     theme_map,
     write_runtime_deletion_threshold_signal,
 )
 from engine_core import BookBuilder
+from engine_core.StoragePathPlan import (
+    StoragePathPlan,
+    normalize_build_folder_paths,
+)
 from fastapi import WebSocket
 from SignalHub import progress_signal
 from typing import Any
@@ -41,6 +47,7 @@ BUILD_STATE = {
     "pattern": "",
     "target_tile": "",
     "folder_path": "",
+    "folder_paths": [],
     "error": "",
 }
 
@@ -79,6 +86,9 @@ async def handle_settings_action(
         config["deletion_threshold_mode"] = normalize_deletion_threshold_mode(
             config.get("deletion_threshold_mode", "absolute")
         )
+        config["bc_family_modulus"] = normalize_bc_family_modulus(
+            config.get("bc_family_modulus", 29)
+        )
         await websocket.send_json(
             {
                 "type": EventType.SETTINGS_DATA,
@@ -103,6 +113,9 @@ async def handle_settings_action(
         )
         config["deletion_threshold_mode"] = normalize_deletion_threshold_mode(
             config.get("deletion_threshold_mode", "absolute")
+        )
+        config["bc_family_modulus"] = normalize_bc_family_modulus(
+            config.get("bc_family_modulus", 29)
         )
 
         if key == "theme":
@@ -138,6 +151,9 @@ async def handle_settings_action(
                 config.get("deletion_threshold", 0.0),
                 mode=value,
             )
+        elif key == "bc_family_modulus":
+            value = normalize_bc_family_modulus(value)
+            config[key] = value
         else:
             config[key] = value
 
@@ -187,6 +203,7 @@ async def handle_settings_action(
         target = payload.get("target")
         target_tile = payload.get("target_tile")
         folder_path = payload.get("folder_path")
+        folder_paths_payload = payload.get("folder_paths")
         pathname = payload.get("pathname")
         try:
             target = int(target)
@@ -197,22 +214,31 @@ async def handle_settings_action(
             target = int(math.log2(target))
         if target_tile is None and target > 0:
             target_tile = str(2**target)
-        if not folder_path:
-            folder_path = os.path.dirname(pathname.rstrip("\\/"))
-        if not folder_path or not os.path.isdir(folder_path):
-            raise ValueError(f"Invalid build folder: {folder_path}")
+        folder_paths = normalize_build_folder_paths(
+            folder_paths_payload,
+            folder_path=folder_path,
+            pathname=pathname,
+        )
+        storage_plan = StoragePathPlan.from_folder_paths(folder_paths)
+        storage_plan.validate_existing_dirs()
+        folder_path = str(storage_plan.hot_root)
+        pathname = storage_plan.hot_pathname(str(pattern), str(target_tile))
+        cold_pathnames = storage_plan.cold_pathnames(str(pattern), str(target_tile))
 
         config = SingletonConfig().config
         spawn_rate4 = config["4_spawn_rate"]
         success_rate_dtype = config.get("success_rate_dtype", "uint32")
         pattern_key = f"{pattern}_{target_tile}"
-        config["filepath_map"][(pattern_key, spawn_rate4)] = [
-            (folder_path, success_rate_dtype)
-        ]
+        config["filepath_map"][(pattern_key, spawn_rate4)] = (
+            storage_plan.filepath_map_entries(success_rate_dtype)
+        )
         SingletonConfig().save_config(config)
         try:
             initial_current, initial_total = BookBuilder.estimate_build_progress(
-                str(pattern), int(target), str(pathname)
+                str(pattern),
+                int(target),
+                str(pathname),
+                cold_pathnames=cold_pathnames,
             )
         except Exception:
             initial_current, initial_total = 0, 0
@@ -235,8 +261,8 @@ async def handle_settings_action(
             message_type: str, message_payload: dict[str, Any]
         ) -> None:
             try:
-                await websocket.send_json(
-                    {"type": message_type, "payload": message_payload}
+                await manager.broadcast(
+                    json.dumps({"type": message_type, "payload": message_payload})
                 )
             except Exception:
                 pass
@@ -367,9 +393,19 @@ async def handle_settings_action(
             stop_event, poll_thread = start_native_progress_polling()
             try:
                 if pattern in category_info.get("variant", []):
-                    BookBuilder.v_start_build(pattern, target, pathname)
+                    BookBuilder.v_start_build(
+                        pattern,
+                        target,
+                        pathname,
+                        cold_pathnames=cold_pathnames,
+                    )
                 else:
-                    BookBuilder.start_build(pattern, target, pathname)
+                    BookBuilder.start_build(
+                        pattern,
+                        target,
+                        pathname,
+                        cold_pathnames=cold_pathnames,
+                    )
 
                 native_snapshot = read_native_progress_snapshot()
                 if native_snapshot is not None and native_snapshot[1] > 0:
@@ -389,6 +425,15 @@ async def handle_settings_action(
                 )
             except Exception as e:
                 print(f"Build error: {e}")
+                if not getattr(e, "_tablebase_logged", False):
+                    logger.error(
+                        "Build worker failed",
+                        exc_info=(type(e), e, e.__traceback__),
+                    )
+                    try:
+                        setattr(e, "_tablebase_logged", True)
+                    except Exception:
+                        pass
                 update_build_state(is_building=False, error=str(e))
                 notify_build_failed(e)
             finally:
@@ -402,6 +447,7 @@ async def handle_settings_action(
             pattern=str(pattern or ""),
             target_tile=str(target_tile or ""),
             folder_path=str(folder_path or ""),
+            folder_paths=[str(path) for path in storage_plan.roots],
             error="",
         )
         threading.Thread(target=run_build, daemon=True).start()

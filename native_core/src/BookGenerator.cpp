@@ -6,6 +6,7 @@
 #include "CompressionBridge.h"
 #include "FileIOUtils.h"
 #include "Formation.h"
+#include "NativeDiagnostics.h"
 #include "UniqueUtils.h"
 #include "VBoardMover.h"
 #include <immintrin.h>
@@ -85,17 +86,17 @@ std::string classic_generate_stats_header() {
 
 void ensure_classic_generate_stats_header(const RunOptions &options) {
     const std::string path = classic_generate_stats_file_path(options);
-    if (fs::exists(path)) {
-        std::ifstream in(path);
+    if (NativePath::exists(path)) {
+        std::ifstream in(NativePath::from_utf8(path));
         std::string first_line;
         if (std::getline(in, first_line) && first_line == classic_generate_stats_header()) {
             return;
         }
         in.close();
         std::error_code ec;
-        fs::remove(path, ec);
+        NativePath::remove(path, ec);
     }
-    std::ofstream file(path, std::ios::app);
+    std::ofstream file(NativePath::from_utf8(path), std::ios::app);
     file << classic_generate_stats_header() << "\n";
 }
 
@@ -124,7 +125,7 @@ void append_classic_generate_stats_record(
     const double compute_seconds =
         record.generate_seconds + record.sort_unique_seconds + record.merge_seconds + record.validate_seconds;
     const double total_seconds = compute_seconds + record.write_seconds;
-    std::ofstream file(classic_generate_stats_file_path(options), std::ios::app);
+    std::ofstream file(NativePath::from_utf8(classic_generate_stats_file_path(options)), std::ios::app);
     file << record.stage << ","
          << record.step << ","
          << record.input_live << ","
@@ -172,32 +173,19 @@ size_t success_entry_size_for_dtype(const std::string &name) {
 }
 
 bool is_valid_restart_file(const std::string &path, uint64_t alignment) {
-    std::error_code ec;
-    if (!fs::exists(path, ec) || ec) {
-        return false;
-    }
-    if (!fs::is_regular_file(path, ec) || ec) {
-        return false;
-    }
-    const auto size = fs::file_size(path, ec);
-    if (ec || size == 0U) {
-        return false;
-    }
-    if (path.size() >= 3U && path.compare(path.size() - 3U, 3U, ".7z") == 0) {
-        return is_readable_temp_archive(path);
-    }
-    return alignment == 0U || (size % alignment) == 0U;
+    (void)alignment;
+    return StoragePaths::filename_exists(path);
 }
 
 void remove_invalid_restart_file(const std::string &path, uint64_t alignment) {
     std::error_code ec;
-    if (!fs::exists(path, ec) || ec) {
+    if (!NativePath::exists(path, ec) || ec) {
         return;
     }
     if (is_valid_restart_file(path, alignment)) {
         return;
     }
-    fs::remove(path, ec);
+    NativePath::remove(path, ec);
     if (ec) {
         throw std::runtime_error("failed to remove invalid restart file: " + path);
     }
@@ -628,7 +616,7 @@ uint64_t apply_canonical(uint64_t board, int symm_mode) {
 
 std::vector<std::vector<double>> load_length_factors(const std::string &path, double default_value) {
     std::vector<std::vector<double>> result;
-    std::ifstream file(path);
+    std::ifstream file(NativePath::from_utf8(path));
     std::string line;
     while (std::getline(file, line)) {
         std::vector<double> row;
@@ -661,8 +649,8 @@ struct InitParams {
 InitParams initialize_parameters_internal(int num_threads, const std::string &pathname, bool isfree) {
     (void) num_threads;
     InitParams params;
-    fs::path base_path(pathname);
-    params.length_factors_list_path = (base_path.parent_path() / "length_factors_list.txt").string();
+    fs::path base_path = NativePath::from_utf8(pathname);
+    params.length_factors_list_path = NativePath::to_utf8_string(base_path.parent_path() / "length_factors_list.txt");
     params.length_factors_list = load_length_factors(params.length_factors_list_path, 3.2);
     params.length_factors = BookGenerator::harmonic_mean_by_column(params.length_factors_list);
     if (params.length_factors.empty()) {
@@ -681,7 +669,7 @@ InitParams initialize_parameters_internal(int num_threads, const std::string &pa
 namespace {
 
 void save_length_factors(const std::string &path, const std::vector<std::vector<double>> &lists) {
-    std::ofstream out(path, std::ios::trunc);
+    std::ofstream out(NativePath::from_utf8(path), std::ios::trunc);
     if (!out) {
         return;
     }
@@ -778,22 +766,46 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> handle_restart(
     auto path_i_minus_1 = options.pathname + std::to_string(step_index - 1);
     const uint64_t raw_alignment = sizeof(uint64_t);
     const uint64_t book_alignment = success_entry_size_for_dtype(options.success_rate_dtype);
-    auto read_temp_layer = [&io_config](const std::string &path) {
-        if (fs::exists(path)) {
-            return FileIOUtils::read_binary_vector_direct<uint64_t>(path, io_config);
+    auto read_temp_layer = [&options, &io_config](int step) {
+        const std::string raw_path = StoragePaths::existing_path_for(options, step, "", false);
+        if (!raw_path.empty()) {
+            return FileIOUtils::read_binary_vector_direct<uint64_t>(raw_path, io_config);
         }
-        return read_temp_uint64_archive(path + ".7z");
+        const std::string archive_path = StoragePaths::existing_path_for(options, step, ".7z", false);
+        if (!archive_path.empty()) {
+            return read_temp_uint64_archive(archive_path);
+        }
+        return std::vector<uint64_t>{};
     };
-    auto write_temp_layer = [&io_config, &options](const std::string &path, const std::vector<uint64_t> &data) {
+    auto write_temp_layer = [&io_config, &options](int step, const std::vector<uint64_t> &data) {
+        const uint64_t raw_bytes = static_cast<uint64_t>(data.size()) * static_cast<uint64_t>(sizeof(uint64_t));
         if (options.compress_temp_files) {
-            if (!write_temp_uint64_archive(path + ".7z", data, 1)) {
-                throw std::runtime_error("failed to write compressed temp layer: " + path + ".7z");
+            auto lease = StoragePaths::reserve_write_path(
+                options,
+                StoragePaths::ArtifactRole::Hot,
+                step,
+                ".7z",
+                StoragePaths::scale_ratio(raw_bytes, 25ULL)
+            );
+            if (!write_temp_uint64_archive(lease.path(), data, 1)) {
+                throw std::runtime_error("failed to write compressed temp layer: " + lease.path());
             }
             std::error_code ec;
-            fs::remove(path, ec);
+            (void)ec;
+            StoragePaths::remove_all_candidates(options, step, "", false);
+            lease.release();
             return;
         }
-        FileIOUtils::write_binary_vector_direct(path, data, io_config);
+        FileIOUtils::write_routed_binary_vector_direct(
+            options,
+            StoragePaths::ArtifactRole::Hot,
+            step,
+            "",
+            data,
+            io_config,
+            raw_bytes
+        );
+        StoragePaths::remove_all_candidates(options, step, ".7z", false);
     };
 
     remove_invalid_restart_file(path_i, raw_alignment);
@@ -805,24 +817,40 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> handle_restart(
     remove_invalid_restart_file(path_i + ".7z", 0U);
     remove_invalid_restart_file(path_i_plus_1 + ".z", 0U);
 
-    if ((is_valid_restart_file(path_i_plus_1, raw_alignment) && is_valid_restart_file(path_i, raw_alignment)) ||
-        (is_valid_restart_file(path_i_plus_1 + ".book", book_alignment) && is_valid_restart_file(path_i, raw_alignment)) ||
-        (is_valid_restart_file(path_i_plus_1 + ".z", 0U) && is_valid_restart_file(path_i, raw_alignment)) ||
-        is_valid_restart_file(path_i + ".book", book_alignment) ||
-        is_valid_restart_file(path_i + ".z", 0U) ||
-        is_valid_restart_file(path_i + ".book.7z", 0U) ||
-        is_valid_restart_file(path_i + ".7z", 0U)) {
+    const bool current_compressed_exists =
+        StoragePaths::filename_exists_any(options, step_index, ".z", true);
+    const bool next_compressed_exists =
+        StoragePaths::filename_exists_any(options, step_index + 1, ".z", true);
+    const bool current_raw_exists =
+        StoragePaths::filename_exists_any(options, step_index, "", false);
+    const bool next_raw_exists =
+        StoragePaths::filename_exists_any(options, step_index + 1, "", false);
+    const bool current_book_exists =
+        StoragePaths::filename_exists_any(options, step_index, ".book", false);
+    const bool next_book_exists =
+        StoragePaths::filename_exists_any(options, step_index + 1, ".book", false);
+    const bool current_book_archive_exists =
+        StoragePaths::filename_exists_any(options, step_index, ".book.7z", false);
+    const bool current_raw_archive_exists =
+        StoragePaths::filename_exists_any(options, step_index, ".7z", false);
+    if ((next_raw_exists && current_raw_exists) ||
+        (next_book_exists && current_raw_exists) ||
+        (next_compressed_exists && current_raw_exists) ||
+        current_book_exists ||
+        current_compressed_exists ||
+        current_book_archive_exists ||
+        current_raw_archive_exists) {
         debug_log("skipping step " + std::to_string(step_index));
         return {false, {}, {}};
     }
 
     if (step_index == 1) {
-        write_temp_layer(path_i_minus_1, arr_init);
+        write_temp_layer(step_index - 1, arr_init);
         return {true, arr_init, {}};
     }
 
     if (!started) {
-        return {true, read_temp_layer(path_i_minus_1), read_temp_layer(path_i)};
+        return {true, read_temp_layer(step_index - 1), read_temp_layer(step_index)};
     }
 
     return {true, {}, {}};
@@ -1396,6 +1424,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             continue;
         }
         started = true;
+        NativeDiagnostics::mark(
+            "Classic.generate step begin step=" + std::to_string(i) +
+            " live=" + std::to_string(d0.size())
+        );
         FormationProgress::update_build_progress(static_cast<uint32_t>(i), progress_total);
         bool do_check = i > options.docheck_step;
         ClassicGenerateStatsRecord stats_record;
@@ -1421,6 +1453,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             stats_record.stage = use_simple_path
                 ? "simple"
                 : std::string("normal-") + (supports_avx512() ? "avx512" : "buffered-scalar");
+            NativeDiagnostics::mark(
+                "Classic.generate path step=" + std::to_string(i) +
+                " stage=" + stats_record.stage
+            );
             if (use_simple_path) {
                 debug_log("step " + std::to_string(i) + " path: simple");
                 std::tie(d1t, d2) = options.is_variant
@@ -1447,11 +1483,17 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
 
                 size_t min_length = options.is_free ? 9999999ULL : 6999999ULL;
                 size_t capacity = std::max(min_length, static_cast<size_t>(static_cast<double>(d0.size()) * length_factor));
+                NativeDiagnostics::mark(
+                    "Classic.generate allocate normal step=" + std::to_string(i) +
+                    " capacity=" + std::to_string(capacity)
+                );
                 arr1_ptr = std::make_unique<uint64_t[]>(capacity);
                 arr2_ptr = std::make_unique<uint64_t[]>(capacity);
+                NativeDiagnostics::mark("Classic.generate gen_boards begin step=" + std::to_string(i));
                 generated_result = options.is_variant
                     ? gen_boards<VBoardMover>(d0.data(), d0.size(), options.target, spec, hashmap1.data(), hashmap1.size(), hashmap2.data(), hashmap2.size(), arr1_ptr.get(), arr2_ptr.get(), capacity, num_threads, do_check, options.is_free)
                     : gen_boards<BoardMover>(d0.data(), d0.size(), options.target, spec, hashmap1.data(), hashmap1.size(), hashmap2.data(), hashmap2.size(), arr1_ptr.get(), arr2_ptr.get(), capacity, num_threads, do_check, options.is_free);
+                NativeDiagnostics::mark("Classic.generate gen_boards done step=" + std::to_string(i));
                 t1 = wall_time_seconds();
 
                 validate_length_and_balance(
@@ -1487,11 +1529,13 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                     : 5.0;
             }
 
+            NativeDiagnostics::mark("Classic.generate sort_unique begin step=" + std::to_string(i));
             auto [unique_d1t_length, unique_d2_length] = BookGeneratorUtils::sort_and_unique_two_arrays_concurrently(
                 sort_arr1, sort_len1,
                 sort_arr2, sort_len2,
                 num_threads
             );
+            NativeDiagnostics::mark("Classic.generate sort_unique done step=" + std::to_string(i));
             stats_record.arr1_raw = static_cast<uint64_t>(sort_len1);
             stats_record.arr2_raw = static_cast<uint64_t>(sort_len2);
             stats_record.arr1_unique = static_cast<uint64_t>(unique_d1t_length);
@@ -1514,7 +1558,9 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                 }
             }
             std::vector<std::vector<uint64_t>> d1_inputs = {std::move(d1), std::move(d1t)};
+            NativeDiagnostics::mark("Classic.generate merge begin step=" + std::to_string(i));
             d1 = BookGeneratorUtils::concatenate(BookGeneratorUtils::merge_deduplicate_all(d1_inputs, pivots, num_threads));
+            NativeDiagnostics::mark("Classic.generate merge done step=" + std::to_string(i));
             double t3 = wall_time_seconds();
             stats_record.output_live = static_cast<uint64_t>(d1.size());
             stats_record.generate_seconds = t1 - t0;
@@ -1528,6 +1574,10 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
                 update_hashmap_length(hashmap2, d1.size());
             }
         } else {
+            NativeDiagnostics::mark(
+                "Classic.generate path step=" + std::to_string(i) +
+                " stage=big live=" + std::to_string(d0.size())
+            );
             debug_log("step " + std::to_string(i) + " path: big");
             stats_record.stage = "big";
             if (hashmap1.empty()) {
@@ -1575,21 +1625,42 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
         }
 
         const double validate_t0 = wall_time_seconds();
+        NativeDiagnostics::mark("Classic.generate write begin step=" + std::to_string(i));
+        const uint64_t raw_bytes = static_cast<uint64_t>(d0.size()) * static_cast<uint64_t>(sizeof(uint64_t));
         if (options.compress_temp_files) {
             stats_record.validate_seconds += wall_time_seconds() - validate_t0;
             const double write_t0 = wall_time_seconds();
-            if (!write_temp_uint64_archive(options.pathname + std::to_string(i) + ".7z", d0, 1)) {
-                throw std::runtime_error("failed to write compressed temp layer: " + options.pathname + std::to_string(i) + ".7z");
+            auto lease = StoragePaths::reserve_write_path(
+                options,
+                StoragePaths::ArtifactRole::Hot,
+                i,
+                ".7z",
+                StoragePaths::scale_ratio(raw_bytes, 25ULL)
+            );
+            if (!write_temp_uint64_archive(lease.path(), d0, 1)) {
+                throw std::runtime_error("failed to write compressed temp layer: " + lease.path());
             }
             std::error_code ec;
-            fs::remove(options.pathname + std::to_string(i), ec);
+            (void)ec;
+            StoragePaths::remove_all_candidates(options, i, "", false);
+            lease.release();
             stats_record.write_seconds = wall_time_seconds() - write_t0;
         } else {
             stats_record.validate_seconds += wall_time_seconds() - validate_t0;
             const double write_t0 = wall_time_seconds();
-            FileIOUtils::write_binary_vector_direct(options.pathname + std::to_string(i), d0, io_config);
+            FileIOUtils::write_routed_binary_vector_direct(
+                options,
+                StoragePaths::ArtifactRole::Hot,
+                i,
+                "",
+                d0,
+                io_config,
+                raw_bytes
+            );
+            StoragePaths::remove_all_candidates(options, i, ".7z", false);
             stats_record.write_seconds = wall_time_seconds() - write_t0;
         }
+        NativeDiagnostics::mark("Classic.generate write done step=" + std::to_string(i));
         if (has_stats_record) {
             append_classic_generate_stats_record(options, stats_record);
             total_record.input_live += stats_record.input_live;

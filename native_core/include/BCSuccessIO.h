@@ -1,0 +1,2410 @@
+#pragma once
+
+#include "BCFileIO.h"
+#include "BCPositionCellLoader.h"
+#include "BCPositionFile.h"
+#include "FormationRuntime.h"
+
+#include <array>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <type_traits>
+#include <vector>
+
+#if defined(_WIN32)
+#include <malloc.h>
+#else
+#include <cstdlib>
+#endif
+
+namespace BC {
+
+inline constexpr uint32_t kBCSuccessMagic = 0x46534342U; // "BCSF" little-endian.
+inline constexpr uint32_t kBCSuccessFormatVersion = 2U;
+inline constexpr uint32_t kBCSuccessHeaderBytes = 88U;
+inline constexpr uint32_t kBCSuccessCellValueOffsetBytes = 8U;
+inline constexpr uint32_t kBCSuccessDTypeUint32 = 1U;
+
+enum class BCSuccessDTypeMode : uint32_t {
+    UInt32 = 1U,
+    UInt64 = 2U,
+    Float32 = 3U,
+    Float64 = 4U,
+    OneMinusFloat32 = 5U,
+    OneMinusFloat64 = 6U,
+};
+
+[[nodiscard]] inline BCSuccessDTypeMode bc_success_dtype_from_u32(uint32_t value) {
+    switch (static_cast<BCSuccessDTypeMode>(value)) {
+        case BCSuccessDTypeMode::UInt32:
+        case BCSuccessDTypeMode::UInt64:
+        case BCSuccessDTypeMode::Float32:
+        case BCSuccessDTypeMode::Float64:
+        case BCSuccessDTypeMode::OneMinusFloat32:
+        case BCSuccessDTypeMode::OneMinusFloat64:
+            return static_cast<BCSuccessDTypeMode>(value);
+    }
+    throw std::runtime_error("BC success unsupported dtype mode");
+}
+
+[[nodiscard]] inline uint32_t bc_success_dtype_value_size(BCSuccessDTypeMode mode) {
+    switch (mode) {
+        case BCSuccessDTypeMode::UInt64:
+        case BCSuccessDTypeMode::Float64:
+        case BCSuccessDTypeMode::OneMinusFloat64:
+            return 8U;
+        case BCSuccessDTypeMode::UInt32:
+        case BCSuccessDTypeMode::Float32:
+        case BCSuccessDTypeMode::OneMinusFloat32:
+            return 4U;
+    }
+    throw std::runtime_error("BC success unsupported dtype mode");
+}
+
+[[nodiscard]] inline uint32_t bc_success_dtype_value_size(uint32_t mode) {
+    return bc_success_dtype_value_size(bc_success_dtype_from_u32(mode));
+}
+
+[[nodiscard]] inline bool bc_success_dtype_is_one_minus(BCSuccessDTypeMode mode) {
+    return mode == BCSuccessDTypeMode::OneMinusFloat32 ||
+           mode == BCSuccessDTypeMode::OneMinusFloat64;
+}
+
+template <typename T>
+[[nodiscard]] inline BCSuccessDTypeMode bc_success_default_dtype_for_type() {
+    if constexpr (std::is_same_v<T, uint32_t>) {
+        return BCSuccessDTypeMode::UInt32;
+    } else if constexpr (std::is_same_v<T, uint64_t>) {
+        return BCSuccessDTypeMode::UInt64;
+    } else if constexpr (std::is_same_v<T, float>) {
+        return BCSuccessDTypeMode::Float32;
+    } else if constexpr (std::is_same_v<T, double>) {
+        return BCSuccessDTypeMode::Float64;
+    } else {
+        static_assert(
+            std::is_same_v<T, uint32_t> || std::is_same_v<T, uint64_t> ||
+            std::is_same_v<T, float> || std::is_same_v<T, double>,
+            "unsupported BC success value type"
+        );
+    }
+}
+
+template <typename T>
+[[nodiscard]] inline bool bc_success_dtype_matches_type(BCSuccessDTypeMode mode) {
+    if constexpr (std::is_same_v<T, uint32_t>) {
+        return mode == BCSuccessDTypeMode::UInt32;
+    } else if constexpr (std::is_same_v<T, uint64_t>) {
+        return mode == BCSuccessDTypeMode::UInt64;
+    } else if constexpr (std::is_same_v<T, float>) {
+        return mode == BCSuccessDTypeMode::Float32 ||
+               mode == BCSuccessDTypeMode::OneMinusFloat32;
+    } else if constexpr (std::is_same_v<T, double>) {
+        return mode == BCSuccessDTypeMode::Float64 ||
+               mode == BCSuccessDTypeMode::OneMinusFloat64;
+    } else {
+        return false;
+    }
+}
+
+template <typename T>
+[[nodiscard]] inline T bc_success_zero_value_for_dtype(BCSuccessDTypeMode mode) {
+    if (!bc_success_dtype_matches_type<T>(mode)) {
+        throw std::invalid_argument("BC success zero value type does not match dtype");
+    }
+    if constexpr (std::is_floating_point_v<T>) {
+        if (bc_success_dtype_is_one_minus(mode)) {
+            return static_cast<T>(-1);
+        }
+    }
+    return zero_value<T>();
+}
+
+template <typename T>
+[[nodiscard]] inline T bc_success_terminal_value_for_dtype(BCSuccessDTypeMode mode) {
+    if (!bc_success_dtype_matches_type<T>(mode)) {
+        throw std::invalid_argument("BC success terminal value type does not match dtype");
+    }
+    if constexpr (std::is_floating_point_v<T>) {
+        if (bc_success_dtype_is_one_minus(mode)) {
+            return static_cast<T>(0);
+        }
+    }
+    return max_scale_value<T>();
+}
+
+template <typename T>
+inline void bc_append_success_value_le(std::vector<uint8_t> &out, T value) {
+    static_assert(
+        std::is_same_v<T, uint32_t> || std::is_same_v<T, uint64_t> ||
+        std::is_same_v<T, float> || std::is_same_v<T, double>,
+        "unsupported BC success value type"
+    );
+    if constexpr (std::is_same_v<T, uint32_t>) {
+        bc_append_u32_le(out, value);
+    } else if constexpr (std::is_same_v<T, uint64_t>) {
+        bc_append_u64_le(out, value);
+    } else if constexpr (std::is_same_v<T, float>) {
+        uint32_t bits = 0U;
+        std::memcpy(&bits, &value, sizeof(value));
+        bc_append_u32_le(out, bits);
+    } else if constexpr (std::is_same_v<T, double>) {
+        uint64_t bits = 0U;
+        std::memcpy(&bits, &value, sizeof(value));
+        bc_append_u64_le(out, bits);
+    }
+}
+
+template <typename T>
+[[nodiscard]] inline T bc_load_success_value_le(const uint8_t *data) {
+    static_assert(
+        std::is_same_v<T, uint32_t> || std::is_same_v<T, uint64_t> ||
+        std::is_same_v<T, float> || std::is_same_v<T, double>,
+        "unsupported BC success value type"
+    );
+    if constexpr (std::is_same_v<T, uint32_t>) {
+        return bc_load_u32_le(data);
+    } else if constexpr (std::is_same_v<T, uint64_t>) {
+        return load_u64_le(data);
+    } else if constexpr (std::is_same_v<T, float>) {
+        const uint32_t bits = bc_load_u32_le(data);
+        float value = 0.0f;
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
+    } else {
+        const uint64_t bits = load_u64_le(data);
+        double value = 0.0;
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
+    }
+}
+
+struct BCSuccessHeader {
+    uint32_t magic = kBCSuccessMagic;
+    uint32_t format_version = kBCSuccessFormatVersion;
+    uint32_t header_bytes = kBCSuccessHeaderBytes;
+    uint32_t dtype = kBCSuccessDTypeUint32;
+    uint32_t row_width = 0U;
+    uint32_t family_count = 0U;
+    uint64_t descriptor_count = 0U;
+    uint64_t payload_offset = kBCSuccessHeaderBytes;
+    uint64_t payload_bytes = 0U;
+    uint32_t position_key_mode = 0U;
+    uint32_t family_unit = 0U;
+    uint32_t axis_base_coord = 0U;
+    uint32_t reserved32 = 0U;
+    uint64_t layer_sum = 0U;
+    uint64_t position_metadata_fingerprint = 0U;
+    uint64_t cell_value_offsets_offset = kBCSuccessHeaderBytes;
+};
+
+inline void bc_append_success_header(std::vector<uint8_t> &out, const BCSuccessHeader &header) {
+    const size_t begin = out.size();
+    bc_append_u32_le(out, header.magic);
+    bc_append_u32_le(out, header.format_version);
+    bc_append_u32_le(out, header.header_bytes);
+    bc_append_u32_le(out, header.dtype);
+    bc_append_u32_le(out, header.row_width);
+    bc_append_u32_le(out, header.family_count);
+    bc_append_u64_le(out, header.descriptor_count);
+    bc_append_u64_le(out, header.payload_offset);
+    bc_append_u64_le(out, header.payload_bytes);
+    bc_append_u32_le(out, header.position_key_mode);
+    bc_append_u32_le(out, header.family_unit);
+    bc_append_u32_le(out, header.axis_base_coord);
+    bc_append_u32_le(out, header.reserved32);
+    bc_append_u64_le(out, header.layer_sum);
+    bc_append_u64_le(out, header.position_metadata_fingerprint);
+    bc_append_u64_le(out, header.cell_value_offsets_offset);
+    if (out.size() - begin != kBCSuccessHeaderBytes) {
+        throw std::logic_error("BC success header serialized size mismatch");
+    }
+}
+
+[[nodiscard]] inline BCSuccessHeader bc_read_success_header(const std::vector<uint8_t> &bytes) {
+    bc_require_bytes(bytes, 0U, kBCSuccessHeaderBytes, "BC success file is smaller than header");
+    const uint8_t *p = bytes.data();
+    BCSuccessHeader header;
+    header.magic = bc_load_u32_le(p + 0U);
+    header.format_version = bc_load_u32_le(p + 4U);
+    header.header_bytes = bc_load_u32_le(p + 8U);
+    header.dtype = bc_load_u32_le(p + 12U);
+    header.row_width = bc_load_u32_le(p + 16U);
+    header.family_count = bc_load_u32_le(p + 20U);
+    header.descriptor_count = load_u64_le(p + 24U);
+    header.payload_offset = load_u64_le(p + 32U);
+    header.payload_bytes = load_u64_le(p + 40U);
+    header.position_key_mode = bc_load_u32_le(p + 48U);
+    header.family_unit = bc_load_u32_le(p + 52U);
+    header.axis_base_coord = bc_load_u32_le(p + 56U);
+    header.reserved32 = bc_load_u32_le(p + 60U);
+    header.layer_sum = load_u64_le(p + 64U);
+    header.position_metadata_fingerprint = load_u64_le(p + 72U);
+    header.cell_value_offsets_offset = load_u64_le(p + 80U);
+    return header;
+}
+
+[[nodiscard]] inline uint64_t bc_success_cell_value_offsets_bytes(uint64_t descriptor_count) {
+    if (descriptor_count > std::numeric_limits<uint64_t>::max() / kBCSuccessCellValueOffsetBytes) {
+        throw std::overflow_error("BC success cell value offset table byte count overflow");
+    }
+    return descriptor_count * kBCSuccessCellValueOffsetBytes;
+}
+
+[[nodiscard]] inline uint64_t bc_success_logical_size(const BCSuccessHeader &header) {
+    const uint64_t payload_end = bc_checked_add_u64(
+        header.payload_offset,
+        header.payload_bytes,
+        "BC success payload end overflow"
+    );
+    const uint64_t offsets_end = bc_checked_add_u64(
+        header.cell_value_offsets_offset,
+        bc_success_cell_value_offsets_bytes(header.descriptor_count),
+        "BC success cell value offset table end overflow"
+    );
+    return std::max(payload_end, offsets_end);
+}
+
+inline void bc_append_success_cell_value_offsets(
+    std::vector<uint8_t> &out,
+    const std::vector<uint64_t> &offsets
+) {
+    for (uint64_t offset : offsets) {
+        bc_append_u64_le(out, offset);
+    }
+}
+
+template <class PositionReader>
+[[nodiscard]] inline uint64_t bc_success_position_fingerprint_for(const PositionReader &position) {
+    // Placeholder compatibility fingerprint for the memory-format stage.
+    // It is intentionally simple and only guards against obvious mismatches.
+    const BCPositionHeader &p = position.header();
+    uint64_t value = 0x9E3779B97F4A7C15ULL;
+    auto mix = [&value](uint64_t x) {
+        value ^= x + 0x9E3779B97F4A7C15ULL + (value << 6U) + (value >> 2U);
+    };
+    mix(p.key_mode);
+    mix(p.family_unit);
+    mix(p.axis_base_coord);
+    mix(p.family_count);
+    mix(p.axis_coord_table_bytes);
+    mix(p.layer_sum);
+    mix(position.cell_count());
+    for (FamilyCoord coord : position.axis().coords()) {
+        mix(coord);
+    }
+    return value;
+}
+
+[[nodiscard]] inline uint64_t bc_success_position_fingerprint(const BCPositionLayerReader &position) {
+    return bc_success_position_fingerprint_for(position);
+}
+
+template <class PositionReader>
+[[nodiscard]] inline uint64_t bc_success_total_values_for(
+    const PositionReader &position,
+    uint32_t row_width
+) {
+    if (row_width == 0U) {
+        throw std::invalid_argument("BC success row_width must be non-zero");
+    }
+    uint64_t rows = 0U;
+    for (CellId cid = 0; cid < position.cell_count(); ++cid) {
+        rows = bc_checked_add_u64(
+            rows,
+            position.descriptor(cid).success_rows,
+            "BC success total rows overflow"
+        );
+    }
+    if (rows > std::numeric_limits<uint64_t>::max() / row_width) {
+        throw std::overflow_error("BC success total value count overflow");
+    }
+    return rows * row_width;
+}
+
+[[nodiscard]] inline uint64_t bc_success_expected_payload_bytes(
+    const BCPositionLayerReader &position,
+    uint32_t row_width,
+    BCSuccessDTypeMode dtype = BCSuccessDTypeMode::UInt32
+) {
+    const uint64_t values = bc_success_total_values_for(position, row_width);
+    const uint32_t value_size = bc_success_dtype_value_size(dtype);
+    if (values > std::numeric_limits<uint64_t>::max() / value_size) {
+        throw std::overflow_error("BC success payload byte count overflow");
+    }
+    return values * value_size;
+}
+
+template <class PositionReader>
+[[nodiscard]] inline uint64_t bc_success_expected_payload_bytes_for(
+    const PositionReader &position,
+    uint32_t row_width,
+    BCSuccessDTypeMode dtype = BCSuccessDTypeMode::UInt32
+) {
+    const uint64_t values = bc_success_total_values_for(position, row_width);
+    const uint32_t value_size = bc_success_dtype_value_size(dtype);
+    if (values > std::numeric_limits<uint64_t>::max() / value_size) {
+        throw std::overflow_error("BC success payload byte count overflow");
+    }
+    return values * value_size;
+}
+
+class BCSuccessLayerWriter {
+public:
+    BCSuccessLayerWriter() = default;
+
+    void begin_layer(const BCPositionLayerReader &position, uint32_t row_width) {
+        begin_layer(position, row_width, BCSuccessDTypeMode::UInt32);
+    }
+
+    void begin_layer(const BCPositionStreamingReader &position, uint32_t row_width) {
+        begin_layer(position, row_width, BCSuccessDTypeMode::UInt32);
+    }
+
+    void begin_layer(
+        const BCPositionLayerReader &position,
+        uint32_t row_width,
+        BCSuccessDTypeMode dtype
+    ) {
+        begin_layer_impl(position, row_width, dtype);
+    }
+
+    void begin_layer(
+        const BCPositionStreamingReader &position,
+        uint32_t row_width,
+        BCSuccessDTypeMode dtype
+    ) {
+        begin_layer_impl(position, row_width, dtype);
+    }
+
+    template <class PositionReader>
+    void begin_layer_impl(
+        const PositionReader &position,
+        uint32_t row_width,
+        BCSuccessDTypeMode dtype
+    ) {
+        if (row_width == 0U) {
+            throw std::invalid_argument("BC success writer row_width must be non-zero");
+        }
+        (void)bc_success_dtype_value_size(dtype);
+        position_header_ = position.header();
+        position_fingerprint_ = bc_success_position_fingerprint_for(position);
+        row_width_ = row_width;
+        dtype_ = dtype;
+        const uint32_t cell_count = position.cell_count();
+        descriptors_.assign(cell_count, BCPositionCellDescriptor{});
+        for (CellId cid = 0U; cid < cell_count; ++cid) {
+            descriptors_[static_cast<size_t>(cid)] = position.descriptor(cid);
+        }
+        payload_bytes_ = bc_success_expected_payload_bytes_for(position, row_width, dtype);
+        cell_bytes_.assign(cell_count, {});
+        written_.assign(cell_count, false);
+        begun_ = true;
+    }
+
+    void write_cell(CellId cid, const std::vector<uint32_t> &values) {
+        write_cell_typed<uint32_t>(cid, values);
+    }
+
+    template <typename T>
+    void write_cell_typed(CellId cid, const std::vector<T> &values) {
+        require_begun();
+        require_cell_for_write(cid);
+        if (!bc_success_dtype_matches_type<T>(dtype_)) {
+            throw std::invalid_argument("BC success writer value type does not match dtype");
+        }
+        const BCPositionCellDescriptor &desc = descriptor(cid);
+        if (desc.success_rows == 0U || desc.empty()) {
+            throw std::invalid_argument("BC success writer cannot write values for an empty cell");
+        }
+        const uint64_t expected = expected_values_for_cell(desc);
+        if (values.size() != expected) {
+            throw std::invalid_argument("BC success writer cell value count mismatch");
+        }
+        std::vector<uint8_t> bytes;
+        const uint32_t value_size = bc_success_dtype_value_size(dtype_);
+        if (expected > std::numeric_limits<size_t>::max() / value_size) {
+            throw std::overflow_error("BC success writer cell byte count exceeds size_t");
+        }
+        bytes.reserve(static_cast<size_t>(expected) * value_size);
+        for (T value : values) {
+            bc_append_success_value_le(bytes, value);
+        }
+        cell_bytes_[static_cast<size_t>(cid)] = std::move(bytes);
+        written_[static_cast<size_t>(cid)] = true;
+    }
+
+    void write_cell_raw(CellId cid, const std::vector<uint8_t> &bytes) {
+        require_begun();
+        require_cell_for_write(cid);
+        const BCPositionCellDescriptor &desc = descriptor(cid);
+        if (desc.success_rows == 0U || desc.empty()) {
+            throw std::invalid_argument("BC success writer cannot write raw values for an empty cell");
+        }
+        const uint64_t expected = expected_bytes_for_cell(desc);
+        if (bytes.size() != expected) {
+            throw std::invalid_argument("BC success writer raw cell byte count mismatch");
+        }
+        cell_bytes_[static_cast<size_t>(cid)] = bytes;
+        written_[static_cast<size_t>(cid)] = true;
+    }
+
+    void mark_empty_cell(CellId cid) {
+        require_begun();
+        require_cell_for_write(cid);
+        const BCPositionCellDescriptor &desc = descriptor(cid);
+        if (desc.success_rows != 0U || !desc.empty()) {
+            throw std::invalid_argument("BC success writer can only mark empty position cells as empty");
+        }
+        written_[static_cast<size_t>(cid)] = true;
+    }
+
+    [[nodiscard]] std::vector<uint8_t> finish_layer() const {
+        require_begun();
+        for (bool written : written_) {
+            if (!written) {
+                throw std::logic_error("BC success writer cannot finish with unwritten cells");
+            }
+        }
+        std::vector<uint64_t> cell_value_offsets(descriptors_.size(), 0U);
+        uint64_t value_cursor = 0U;
+        for (CellId cid = 0; cid < descriptors_.size(); ++cid) {
+            const BCPositionCellDescriptor &desc = descriptors_[static_cast<size_t>(cid)];
+            cell_value_offsets[static_cast<size_t>(cid)] = value_cursor;
+            value_cursor = bc_checked_add_u64(
+                value_cursor,
+                expected_values_for_cell(desc),
+                "BC success writer cell value offset overflow"
+            );
+        }
+        const uint64_t offset_table_bytes =
+            bc_success_cell_value_offsets_bytes(descriptors_.size());
+
+        BCSuccessHeader header;
+        header.dtype = static_cast<uint32_t>(dtype_);
+        header.row_width = row_width_;
+        header.family_count = position_header_.family_count;
+        header.descriptor_count = descriptors_.size();
+        header.cell_value_offsets_offset = kBCSuccessHeaderBytes;
+        header.payload_offset = bc_checked_add_u64(
+            header.cell_value_offsets_offset,
+            offset_table_bytes,
+            "BC success writer payload offset overflow"
+        );
+        header.payload_bytes = payload_bytes_;
+        header.position_key_mode = position_header_.key_mode;
+        header.family_unit = position_header_.family_unit;
+        header.axis_base_coord = position_header_.axis_base_coord;
+        header.layer_sum = position_header_.layer_sum;
+        header.position_metadata_fingerprint = position_fingerprint_;
+
+        std::vector<uint8_t> out;
+        const uint64_t logical_size = bc_success_logical_size(header);
+        if (logical_size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success writer output exceeds size_t");
+        }
+        out.reserve(static_cast<size_t>(logical_size));
+        bc_append_success_header(out, header);
+        bc_append_success_cell_value_offsets(out, cell_value_offsets);
+        if (out.size() != header.payload_offset) {
+            throw std::logic_error("BC success writer payload offset mismatch");
+        }
+        for (CellId cid = 0; cid < descriptors_.size(); ++cid) {
+            const BCPositionCellDescriptor &desc = descriptors_[static_cast<size_t>(cid)];
+            if (desc.success_rows == 0U) {
+                continue;
+            }
+            const std::vector<uint8_t> &bytes = cell_bytes_[static_cast<size_t>(cid)];
+            if (bytes.size() != expected_bytes_for_cell(desc)) {
+                throw std::logic_error("BC success writer stored malformed cell values");
+            }
+            out.insert(out.end(), bytes.begin(), bytes.end());
+        }
+        if (out.size() != logical_size) {
+            throw std::logic_error("BC success writer emitted unexpected byte size");
+        }
+        return out;
+    }
+
+private:
+    void require_begun() const {
+        if (!begun_) {
+            throw std::logic_error("BC success writer layer has not begun");
+        }
+    }
+
+    void require_cell_for_write(CellId cid) const {
+        if (cid >= written_.size()) {
+            throw std::out_of_range("BC success writer cell id out of range");
+        }
+        if (written_[static_cast<size_t>(cid)]) {
+            throw std::logic_error("BC success writer cell already written");
+        }
+    }
+
+    [[nodiscard]] const BCPositionCellDescriptor &descriptor(CellId cid) const {
+        if (cid >= descriptors_.size()) {
+            throw std::out_of_range("BC success writer descriptor cell id out of range");
+        }
+        return descriptors_[static_cast<size_t>(cid)];
+    }
+
+    [[nodiscard]] uint64_t expected_values_for_cell(const BCPositionCellDescriptor &desc) const {
+        return static_cast<uint64_t>(desc.success_rows) * row_width_;
+    }
+
+    [[nodiscard]] uint64_t expected_bytes_for_cell(const BCPositionCellDescriptor &desc) const {
+        const uint64_t values = expected_values_for_cell(desc);
+        const uint32_t value_size = bc_success_dtype_value_size(dtype_);
+        if (values > std::numeric_limits<uint64_t>::max() / value_size) {
+            throw std::overflow_error("BC success writer cell byte count overflow");
+        }
+        return values * value_size;
+    }
+
+    BCPositionHeader position_header_;
+    uint64_t position_fingerprint_ = 0U;
+    uint64_t payload_bytes_ = 0U;
+    uint32_t row_width_ = 0U;
+    BCSuccessDTypeMode dtype_ = BCSuccessDTypeMode::UInt32;
+    std::vector<BCPositionCellDescriptor> descriptors_;
+    std::vector<std::vector<uint8_t>> cell_bytes_;
+    std::vector<bool> written_;
+    bool begun_ = false;
+};
+
+struct BCSuccessRawCellView {
+    const uint8_t *data = nullptr;
+    uint64_t bytes = 0U;
+};
+
+class BCSuccessLayerReader {
+public:
+    BCSuccessLayerReader() = default;
+
+    BCSuccessLayerReader(
+        const std::vector<uint8_t> &bytes,
+        const BCPositionLayerReader &position,
+        uint32_t expected_row_width
+    ) {
+        open(bytes, position, expected_row_width);
+    }
+
+    void open(
+        const std::vector<uint8_t> &bytes,
+        const BCPositionLayerReader &position,
+        uint32_t expected_row_width
+    ) {
+        bytes_ = bytes;
+        position_ = &position;
+        expected_row_width_ = expected_row_width;
+        header_ = bc_read_success_header(bytes_);
+        validate_header();
+        build_cell_value_offsets();
+    }
+
+    [[nodiscard]] const BCSuccessHeader &header() const {
+        return header_;
+    }
+
+    [[nodiscard]] uint32_t row_width() const {
+        return header_.row_width;
+    }
+
+    [[nodiscard]] BCSuccessDTypeMode dtype_mode() const {
+        return bc_success_dtype_from_u32(header_.dtype);
+    }
+
+    [[nodiscard]] uint32_t value_size() const {
+        return bc_success_dtype_value_size(dtype_mode());
+    }
+
+    [[nodiscard]] std::vector<uint32_t> read_cell(CellId cid) const {
+        require_dtype_type<uint32_t>();
+        return read_cell_typed<uint32_t>(cid);
+    }
+
+    template <typename T>
+    [[nodiscard]] std::vector<T> read_cell_typed(CellId cid) const {
+        require_open();
+        require_dtype_type<T>();
+        const BCPositionCellDescriptor &desc = position_->descriptor(cid);
+        const uint64_t value_count = static_cast<uint64_t>(desc.success_rows) * header_.row_width;
+        if (value_count > std::numeric_limits<size_t>::max()) {
+            throw std::overflow_error("BC success read_cell value count exceeds size_t");
+        }
+        std::vector<T> values;
+        values.reserve(static_cast<size_t>(value_count));
+        const uint64_t byte_offset = value_byte_offset(cid);
+        for (uint64_t i = 0; i < value_count; ++i) {
+            values.push_back(
+                bc_load_success_value_le<T>(
+                    bytes_.data() + static_cast<size_t>(byte_offset + i * sizeof(T))
+                )
+            );
+        }
+        return values;
+    }
+
+    [[nodiscard]] std::vector<uint8_t> read_cell_raw(CellId cid) const {
+        require_open();
+        const uint64_t offset = value_byte_offset(cid);
+        const uint64_t bytes = cell_byte_count(cid);
+        if (bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success raw cell byte count exceeds size_t");
+        }
+        return std::vector<uint8_t>(
+            bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
+            bytes_.begin() + static_cast<std::ptrdiff_t>(offset + bytes)
+        );
+    }
+
+    [[nodiscard]] BCSuccessRawCellView cell_raw_view(CellId cid) const {
+        require_open();
+        const uint64_t offset = value_byte_offset(cid);
+        const uint64_t bytes = cell_byte_count(cid);
+        if (bytes == 0U) {
+            return BCSuccessRawCellView{};
+        }
+        if (offset > bytes_.size() ||
+            bytes > static_cast<uint64_t>(bytes_.size()) - offset) {
+            throw std::logic_error("BC success raw cell view exceeds payload");
+        }
+        return BCSuccessRawCellView{
+            bytes_.data() + static_cast<size_t>(offset),
+            bytes
+        };
+    }
+
+    [[nodiscard]] uint32_t read_value(CellId cid, uint32_t row, uint32_t lane = 0U) const {
+        require_dtype_type<uint32_t>();
+        return read_value_typed<uint32_t>(cid, row, lane);
+    }
+
+    template <typename T>
+    [[nodiscard]] T read_value_typed(CellId cid, uint32_t row, uint32_t lane = 0U) const {
+        require_open();
+        require_dtype_type<T>();
+        const BCPositionCellDescriptor &desc = position_->descriptor(cid);
+        if (row >= desc.success_rows) {
+            throw std::out_of_range("BC success read_value row out of range");
+        }
+        if (lane >= header_.row_width) {
+            throw std::out_of_range("BC success read_value lane out of range");
+        }
+        const uint64_t value_index =
+            static_cast<uint64_t>(row) * header_.row_width + lane;
+        const uint32_t value_size = bc_success_dtype_value_size(dtype_mode());
+        const uint64_t byte_offset = value_byte_offset(cid) + value_index * value_size;
+        return bc_load_success_value_le<T>(bytes_.data() + static_cast<size_t>(byte_offset));
+    }
+
+private:
+    void require_open() const {
+        if (position_ == nullptr) {
+            throw std::logic_error("BC success reader is not open");
+        }
+    }
+
+    void validate_header() const {
+        require_open();
+        if (expected_row_width_ == 0U) {
+            throw std::invalid_argument("BC success reader expected row_width must be non-zero");
+        }
+        if (header_.magic != kBCSuccessMagic) {
+            throw std::runtime_error("BC success file magic mismatch");
+        }
+        if (header_.format_version != kBCSuccessFormatVersion) {
+            throw std::runtime_error("BC success file format version mismatch");
+        }
+        if (header_.header_bytes != kBCSuccessHeaderBytes) {
+            throw std::runtime_error("BC success file header size mismatch");
+        }
+        (void)bc_success_dtype_from_u32(header_.dtype);
+        if (header_.row_width != expected_row_width_) {
+            throw std::runtime_error("BC success file row_width mismatch");
+        }
+        if (header_.family_count != position_->header().family_count) {
+            throw std::runtime_error("BC success file family_count mismatch");
+        }
+        if (header_.descriptor_count != position_->cell_count()) {
+            throw std::runtime_error("BC success file descriptor_count mismatch");
+        }
+        if (header_.position_key_mode != position_->header().key_mode ||
+            header_.family_unit != position_->header().family_unit ||
+            header_.axis_base_coord != position_->header().axis_base_coord ||
+            header_.layer_sum != position_->header().layer_sum ||
+            header_.position_metadata_fingerprint != bc_success_position_fingerprint(*position_)) {
+            throw std::runtime_error("BC success file position metadata mismatch");
+        }
+        if (header_.reserved32 != 0U) {
+            throw std::runtime_error("BC success file reserved field is non-zero");
+        }
+        const uint64_t expected_payload_bytes =
+            bc_success_expected_payload_bytes(*position_, header_.row_width, dtype_mode());
+        if (header_.payload_bytes != expected_payload_bytes) {
+            throw std::runtime_error("BC success file payload byte size mismatch");
+        }
+        bc_require_bytes(
+            bytes_,
+            header_.cell_value_offsets_offset,
+            bc_success_cell_value_offsets_bytes(header_.descriptor_count),
+            "BC success cell value offset table exceeds file"
+        );
+        bc_require_bytes(bytes_, header_.payload_offset, header_.payload_bytes,
+            "BC success payload exceeds file");
+        const uint64_t expected_file_size = bc_success_logical_size(header_);
+        if (expected_file_size != bytes_.size()) {
+            throw std::runtime_error("BC success file has trailing or missing bytes");
+        }
+    }
+
+    void build_cell_value_offsets() {
+        cell_value_offsets_.assign(position_->cell_count(), 0U);
+        if (position_->cell_count() != header_.descriptor_count) {
+            throw std::logic_error("BC success reader descriptor count mismatch");
+        }
+        const uint64_t table_offset = header_.cell_value_offsets_offset;
+        for (CellId cid = 0; cid < position_->cell_count(); ++cid) {
+            const uint64_t entry_offset = bc_checked_add_u64(
+                table_offset,
+                static_cast<uint64_t>(cid) * kBCSuccessCellValueOffsetBytes,
+                "BC success cell value offset entry overflow"
+            );
+            cell_value_offsets_[static_cast<size_t>(cid)] = load_u64_le(
+                bytes_.data() + static_cast<size_t>(entry_offset)
+            );
+        }
+        validate_cell_value_offsets();
+    }
+
+    [[nodiscard]] uint64_t value_byte_offset(CellId cid) const {
+        if (cid >= position_->cell_count()) {
+            throw std::out_of_range("BC success reader cell id out of range");
+        }
+        const uint64_t value_offset = cell_value_offsets_[static_cast<size_t>(cid)];
+        const uint32_t value_size = bc_success_dtype_value_size(dtype_mode());
+        if (value_offset > std::numeric_limits<uint64_t>::max() / value_size) {
+            throw std::overflow_error("BC success value byte offset overflow");
+        }
+        const uint64_t byte_offset = bc_checked_add_u64(
+            header_.payload_offset,
+            value_offset * value_size,
+            "BC success value byte offset overflow"
+        );
+        const uint64_t cell_bytes = cell_byte_count(cid);
+        bc_require_bytes(bytes_, byte_offset, cell_bytes, "BC success cell payload exceeds file");
+        return byte_offset;
+    }
+
+    void validate_cell_value_offsets() const {
+        const uint32_t value_size = bc_success_dtype_value_size(dtype_mode());
+        if ((header_.payload_bytes % value_size) != 0U) {
+            throw std::runtime_error("BC success payload is not value-aligned");
+        }
+        const uint64_t total_values = header_.payload_bytes / value_size;
+        struct Range {
+            uint64_t begin = 0U;
+            uint64_t end = 0U;
+        };
+        std::vector<Range> ranges;
+        ranges.reserve(cell_value_offsets_.size());
+        for (CellId cid = 0; cid < position_->cell_count(); ++cid) {
+            const uint64_t begin = cell_value_offsets_[static_cast<size_t>(cid)];
+            const uint64_t count =
+                static_cast<uint64_t>(position_->descriptor(cid).success_rows) *
+                header_.row_width;
+            if (begin > total_values || count > total_values - begin) {
+                throw std::runtime_error("BC success cell value range exceeds payload");
+            }
+            if (count != 0U) {
+                ranges.push_back(Range{begin, begin + count});
+            }
+        }
+        std::sort(
+            ranges.begin(),
+            ranges.end(),
+            [](const Range &lhs, const Range &rhs) {
+                return lhs.begin < rhs.begin;
+            }
+        );
+        uint64_t cursor = 0U;
+        for (const Range &range : ranges) {
+            if (range.begin != cursor) {
+                throw std::runtime_error("BC success cell value ranges do not densely cover payload");
+            }
+            cursor = range.end;
+        }
+        if (cursor != total_values) {
+            throw std::runtime_error("BC success cell value ranges do not match payload bytes");
+        }
+    }
+
+    [[nodiscard]] uint64_t cell_byte_count(CellId cid) const {
+        const uint64_t cell_values =
+            static_cast<uint64_t>(position_->descriptor(cid).success_rows) *
+            header_.row_width;
+        const uint32_t value_size = bc_success_dtype_value_size(dtype_mode());
+        if (cell_values > std::numeric_limits<uint64_t>::max() / value_size) {
+            throw std::overflow_error("BC success cell byte count overflow");
+        }
+        return cell_values * value_size;
+    }
+
+    template <typename T>
+    void require_dtype_type() const {
+        if (!bc_success_dtype_matches_type<T>(dtype_mode())) {
+            throw std::runtime_error("BC success reader value type does not match dtype");
+        }
+    }
+
+    const BCPositionLayerReader *position_ = nullptr;
+    uint32_t expected_row_width_ = 0U;
+    BCSuccessHeader header_;
+    std::vector<uint8_t> bytes_;
+    std::vector<uint64_t> cell_value_offsets_;
+};
+
+inline void write_success_layer_to_file(
+    const std::filesystem::path &path,
+    const std::vector<uint8_t> &bytes
+) {
+    write_bytes_to_buffered_file(path, bytes);
+}
+
+inline void bc_success_accumulate_file_stats(BCFileIOStats *dst, const BCFileIOStats &src) {
+    if (dst == nullptr) {
+        return;
+    }
+    if (dst->request_count > std::numeric_limits<uint64_t>::max() - src.request_count ||
+        dst->requested_bytes > std::numeric_limits<uint64_t>::max() - src.requested_bytes ||
+        dst->backend_io_count > std::numeric_limits<uint64_t>::max() - src.backend_io_count ||
+        dst->backend_bytes > std::numeric_limits<uint64_t>::max() - src.backend_bytes) {
+        throw std::overflow_error("BC success streaming write stats overflow");
+    }
+    dst->request_count += src.request_count;
+    dst->requested_bytes += src.requested_bytes;
+    dst->backend_io_count += src.backend_io_count;
+    dst->backend_bytes += src.backend_bytes;
+    dst->backend_seconds += src.backend_seconds;
+}
+
+class BCSequentialSuccessWriteStager {
+public:
+    explicit BCSequentialSuccessWriteStager(
+        BCWritableFile &file,
+        BCFileIOStats *stats = nullptr,
+        uint64_t base_offset = 0U
+    )
+        : file_(file), stats_(stats), file_cursor_(base_offset) {
+        direct_mode_ = file_.mode() == BCFileIOMode::Direct;
+        const uint32_t preferred_alignment = file_.preferred_write_alignment();
+        alignment_ = preferred_alignment == 0U ? 1U : preferred_alignment;
+        if (direct_mode_ && (base_offset % alignment_) != 0U) {
+            throw std::invalid_argument("BC success streaming direct base offset must be aligned");
+        }
+        external_chunk_bytes_ = kTargetStageBytes - (kTargetStageBytes % alignment_);
+        if (external_chunk_bytes_ == 0U) {
+            external_chunk_bytes_ = alignment_;
+        }
+        stage_bytes_ = direct_mode_ ? alignment_ : external_chunk_bytes_;
+        max_pending_chunks_ = direct_mode_ ? kDirectPendingChunksPerGroup : 1U;
+        group_.buffers.resize(max_pending_chunks_);
+        if (stats_ != nullptr) {
+            *stats_ = {};
+        }
+    }
+
+    void append(const void *data, uint64_t bytes) {
+        if (bytes == 0U) {
+            return;
+        }
+        if (data == nullptr) {
+            throw std::invalid_argument("BC success streaming write append pointer is null");
+        }
+        const uint8_t *cursor = static_cast<const uint8_t *>(data);
+        uint64_t remaining = bytes;
+        if (!direct_mode_ || alignment_ <= 1U) {
+            append_staged_only(cursor, remaining);
+            return;
+        }
+        append_direct_external_first(cursor, remaining);
+    }
+
+    template <typename T>
+    void append_values(const std::vector<T> &values) {
+        static_assert(
+            std::is_same_v<T, uint32_t> || std::is_same_v<T, uint64_t> ||
+            std::is_same_v<T, float> || std::is_same_v<T, double>,
+            "unsupported BC success streaming write type"
+        );
+        if (values.empty()) {
+            return;
+        }
+#if defined(_WIN32) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+        append(values.data(), static_cast<uint64_t>(values.size()) * sizeof(T));
+#else
+        for (T value : values) {
+            std::vector<uint8_t> bytes;
+            bytes.reserve(sizeof(T));
+            bc_append_success_value_le(bytes, value);
+            append(bytes.data(), bytes.size());
+        }
+#endif
+    }
+
+    void finish() {
+        if (active_bytes_ != 0U) {
+            finalize_active_buffer();
+        }
+        flush_active_group();
+        if (!direct_mode_) {
+            file_.flush();
+        }
+    }
+
+private:
+    static constexpr uint64_t kTargetStageBytes = 16ULL * 1024ULL * 1024ULL;
+    static constexpr uint32_t kDirectPendingChunksPerGroup = 8U;
+
+    struct StageBuffer {
+        std::vector<uint8_t> storage;
+        uint8_t *data = nullptr;
+    };
+
+    struct PendingGroup {
+        std::vector<StageBuffer> buffers;
+        std::array<uint64_t, kDirectPendingChunksPerGroup> offsets{};
+        std::array<uint64_t, kDirectPendingChunksPerGroup> bytes{};
+        uint32_t pending_count = 0U;
+    };
+
+    static uint8_t *align_pointer(uint8_t *ptr, uint64_t alignment) {
+        if (alignment <= 1U) {
+            return ptr;
+        }
+        const uintptr_t raw = reinterpret_cast<uintptr_t>(ptr);
+        const uintptr_t rem = raw % alignment;
+        if (rem == 0U) {
+            return ptr;
+        }
+        return reinterpret_cast<uint8_t *>(raw + (alignment - rem));
+    }
+
+    void append_staged_only(const uint8_t *cursor, uint64_t bytes) {
+        uint64_t remaining = bytes;
+        while (remaining != 0U) {
+            ensure_active_buffer();
+            const uint64_t available = stage_bytes_ - active_bytes_;
+            if (available == 0U) {
+                finalize_active_buffer();
+                continue;
+            }
+            const uint64_t take = std::min<uint64_t>(available, remaining);
+            PendingGroup &group = group_;
+            StageBuffer &buffer = group.buffers[group.pending_count];
+            std::memcpy(buffer.data + static_cast<size_t>(active_bytes_), cursor, static_cast<size_t>(take));
+            active_bytes_ += take;
+            cursor += take;
+            remaining -= take;
+            if (active_bytes_ == stage_bytes_ && remaining != 0U) {
+                finalize_active_buffer();
+            }
+        }
+    }
+
+    void append_direct_external_first(const uint8_t *cursor, uint64_t bytes) {
+        uint64_t remaining = bytes;
+        while (remaining != 0U) {
+            if (active_bytes_ != 0U) {
+                const uint64_t available = alignment_ - active_bytes_;
+                const uint64_t take = std::min<uint64_t>(available, remaining);
+                append_staged_only(cursor, take);
+                cursor += take;
+                remaining -= take;
+                if (active_bytes_ == alignment_) {
+                    finalize_active_buffer();
+                }
+                continue;
+            }
+
+            const uint64_t file_mod = file_cursor_ % alignment_;
+            if (file_mod != 0U) {
+                const uint64_t take = std::min<uint64_t>(remaining, alignment_ - file_mod);
+                append_staged_only(cursor, take);
+                cursor += take;
+                remaining -= take;
+                if ((file_cursor_ + active_bytes_) % alignment_ == 0U) {
+                    finalize_active_buffer();
+                }
+                continue;
+            }
+
+            if (remaining < alignment_) {
+                append_staged_only(cursor, remaining);
+                return;
+            }
+
+            const uint64_t external_bytes = remaining - (remaining % alignment_);
+            write_external_aligned_stream(cursor, external_bytes);
+            cursor += external_bytes;
+            remaining -= external_bytes;
+        }
+    }
+
+    void write_external_aligned_stream(const uint8_t *cursor, uint64_t bytes) {
+        if (bytes == 0U) {
+            return;
+        }
+        if (active_bytes_ != 0U) {
+            throw std::logic_error("BC success streaming external write with active staged bytes");
+        }
+        if ((file_cursor_ % alignment_) != 0U ||
+            (bytes % alignment_) != 0U) {
+            throw std::logic_error("BC success streaming external stream is not file-aligned");
+        }
+        flush_active_group();
+
+        uint64_t remaining = bytes;
+        while (remaining != 0U) {
+            std::vector<BCFileWriteRequest> requests;
+            requests.reserve(max_pending_chunks_);
+            uint64_t batch_cursor = file_cursor_;
+            uint64_t batch_bytes = 0U;
+            while (remaining != 0U && requests.size() < max_pending_chunks_) {
+                uint64_t take = std::min<uint64_t>(remaining, external_chunk_bytes_);
+                if (take != remaining) {
+                    take -= take % alignment_;
+                }
+                if (take == 0U) {
+                    take = remaining;
+                }
+                if ((take % alignment_) != 0U) {
+                    throw std::logic_error("BC success streaming external chunk is not aligned");
+                }
+                requests.push_back(BCFileWriteRequest{batch_cursor, cursor, take});
+                batch_cursor = bc_checked_add_u64(
+                    batch_cursor,
+                    take,
+                    "BC success streaming external write cursor overflow"
+                );
+                cursor += take;
+                remaining -= take;
+                batch_bytes = bc_checked_add_u64(
+                    batch_bytes,
+                    take,
+                    "BC success streaming external write batch byte overflow"
+                );
+            }
+            BCFileIOStats local;
+            file_.write_many(requests, stats_ == nullptr ? nullptr : &local);
+            bc_success_accumulate_file_stats(stats_, local);
+            file_cursor_ = bc_checked_add_u64(
+                file_cursor_,
+                batch_bytes,
+                "BC success streaming write cursor overflow"
+            );
+        }
+    }
+
+    void ensure_active_buffer() {
+        PendingGroup &group = group_;
+        if (group.pending_count >= max_pending_chunks_) {
+            flush_active_group();
+        }
+        PendingGroup &active = group_;
+        StageBuffer &buffer = active.buffers[active.pending_count];
+        if (buffer.data != nullptr) {
+            return;
+        }
+        if (stage_bytes_ > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) - alignment_) {
+            throw std::overflow_error("BC success streaming write stage buffer size exceeds size_t");
+        }
+        buffer.storage.resize(static_cast<size_t>(stage_bytes_ + alignment_));
+        buffer.data = align_pointer(buffer.storage.data(), alignment_);
+    }
+
+    void finalize_active_buffer() {
+        if (active_bytes_ == 0U) {
+            return;
+        }
+        ensure_active_buffer();
+        PendingGroup &group = group_;
+        group.offsets[group.pending_count] = file_cursor_;
+        group.bytes[group.pending_count] = active_bytes_;
+        file_cursor_ = bc_checked_add_u64(
+            file_cursor_,
+            active_bytes_,
+            "BC success streaming write cursor overflow"
+        );
+        active_bytes_ = 0U;
+        ++group.pending_count;
+        if (group.pending_count >= max_pending_chunks_) {
+            flush_active_group();
+        }
+    }
+
+    [[nodiscard]] std::vector<BCFileWriteRequest> build_group_requests(PendingGroup &group) {
+        std::vector<BCFileWriteRequest> requests;
+        requests.reserve(group.pending_count);
+        for (uint32_t i = 0U; i < group.pending_count; ++i) {
+            requests.push_back(BCFileWriteRequest{
+                group.offsets[i],
+                group.buffers[i].data,
+                group.bytes[i]
+            });
+        }
+        return requests;
+    }
+
+    void flush_active_group() {
+        PendingGroup &group = group_;
+        if (group.pending_count == 0U) {
+            return;
+        }
+        std::vector<BCFileWriteRequest> requests = build_group_requests(group);
+        group.pending_count = 0U;
+        BCFileIOStats local;
+        file_.write_many(requests, stats_ == nullptr ? nullptr : &local);
+        bc_success_accumulate_file_stats(stats_, local);
+    }
+
+    BCWritableFile &file_;
+    BCFileIOStats *stats_ = nullptr;
+    PendingGroup group_{};
+    uint64_t stage_bytes_ = kTargetStageBytes;
+    uint64_t external_chunk_bytes_ = kTargetStageBytes;
+    uint64_t active_bytes_ = 0U;
+    uint64_t file_cursor_ = 0U;
+    uint64_t alignment_ = 1U;
+    uint32_t max_pending_chunks_ = 1U;
+    bool direct_mode_ = false;
+};
+
+template <typename T>
+uint64_t write_success_values_to_file(
+    BCWritableFile &file,
+    const BCPositionLayerReader &position,
+    uint32_t row_width,
+    BCSuccessDTypeMode dtype,
+    const std::vector<T> &values,
+    BCFileIOStats *stats = nullptr
+) {
+    if (!bc_success_dtype_matches_type<T>(dtype)) {
+        throw std::invalid_argument("BC success streaming writer value type does not match dtype");
+    }
+    const uint64_t expected_values = bc_success_total_values_for(position, row_width);
+    if (expected_values != static_cast<uint64_t>(values.size())) {
+        throw std::invalid_argument("BC success streaming writer value count mismatch");
+    }
+    const uint32_t value_size = bc_success_dtype_value_size(dtype);
+    if (expected_values > std::numeric_limits<uint64_t>::max() / value_size) {
+        throw std::overflow_error("BC success streaming writer payload byte count overflow");
+    }
+    const uint64_t payload_bytes = expected_values * value_size;
+    std::vector<uint64_t> cell_value_offsets(position.cell_count(), 0U);
+    uint64_t value_cursor = 0U;
+    for (CellId cid = 0; cid < position.cell_count(); ++cid) {
+        cell_value_offsets[static_cast<size_t>(cid)] = value_cursor;
+        const uint64_t values_for_cell =
+            static_cast<uint64_t>(position.descriptor(cid).success_rows) *
+            static_cast<uint64_t>(row_width);
+        value_cursor = bc_checked_add_u64(
+            value_cursor,
+            values_for_cell,
+            "BC success streaming writer cell offset overflow"
+        );
+    }
+
+    BCSuccessHeader header;
+    header.dtype = static_cast<uint32_t>(dtype);
+    header.row_width = row_width;
+    header.family_count = position.header().family_count;
+    header.descriptor_count = position.cell_count();
+    header.cell_value_offsets_offset = kBCSuccessHeaderBytes;
+    header.payload_offset = bc_checked_add_u64(
+        header.cell_value_offsets_offset,
+        bc_success_cell_value_offsets_bytes(header.descriptor_count),
+        "BC success streaming writer payload offset overflow"
+    );
+    header.payload_bytes = payload_bytes;
+    header.position_key_mode = position.header().key_mode;
+    header.family_unit = position.header().family_unit;
+    header.axis_base_coord = position.header().axis_base_coord;
+    header.layer_sum = position.header().layer_sum;
+    header.position_metadata_fingerprint = bc_success_position_fingerprint(position);
+
+    std::vector<uint8_t> header_bytes;
+    header_bytes.reserve(kBCSuccessHeaderBytes);
+    bc_append_success_header(header_bytes, header);
+    std::vector<uint8_t> offset_bytes;
+    offset_bytes.reserve(static_cast<size_t>(
+        bc_success_cell_value_offsets_bytes(header.descriptor_count)
+    ));
+    bc_append_success_cell_value_offsets(offset_bytes, cell_value_offsets);
+
+    const uint64_t logical_size = bc_success_logical_size(header);
+    file.prepare_full_overwrite(logical_size);
+    BCSequentialSuccessWriteStager stager(file, stats);
+    stager.append(header_bytes.data(), header_bytes.size());
+    stager.append(offset_bytes.data(), offset_bytes.size());
+    stager.append_values(values);
+    stager.finish();
+    return logical_size;
+}
+
+[[nodiscard]] inline std::vector<uint8_t> read_success_layer_from_file(
+    const std::filesystem::path &path
+) {
+    return read_bytes_from_buffered_file(path);
+}
+
+struct BCSuccessLoadStats {
+    uint64_t requested_extents = 0U;
+    uint64_t coalesced_extents = 0U;
+    uint64_t requested_bytes = 0U;
+    uint64_t read_bytes = 0U;
+    uint64_t backend_read_ops = 0U;
+    uint64_t backend_read_bytes = 0U;
+    double backend_read_seconds = 0.0;
+};
+
+struct BCLoadedSuccessCell {
+    CellId cid = 0U;
+    uint32_t dtype = kBCSuccessDTypeUint32;
+    uint32_t row_width = 0U;
+    uint32_t success_rows = 0U;
+    std::vector<uint8_t> raw_bytes;
+    std::vector<uint32_t> values;
+    std::shared_ptr<detail::BCAlignedBuffer> external_value_bytes;
+    const uint8_t *external_value_data = nullptr;
+    const uint32_t *external_values = nullptr;
+    size_t external_value_count = 0U;
+
+    [[nodiscard]] bool empty() const {
+        return success_rows == 0U;
+    }
+
+    [[nodiscard]] BCSuccessDTypeMode dtype_mode() const {
+        return bc_success_dtype_from_u32(dtype);
+    }
+
+    [[nodiscard]] uint32_t value_size() const {
+        return bc_success_dtype_value_size(dtype_mode());
+    }
+
+    [[nodiscard]] uint32_t read_value(uint32_t row, uint32_t lane = 0U) const {
+        if (dtype_mode() != BCSuccessDTypeMode::UInt32) {
+            throw std::runtime_error("BC loaded success cell read_value requires uint32 dtype");
+        }
+        return read_value_typed<uint32_t>(row, lane);
+    }
+
+    template <typename T>
+    [[nodiscard]] T read_value_typed(uint32_t row, uint32_t lane = 0U) const {
+        if (!bc_success_dtype_matches_type<T>(dtype_mode())) {
+            throw std::runtime_error("BC loaded success cell value type does not match dtype");
+        }
+        if (row >= success_rows) {
+            throw std::out_of_range("BC loaded success cell row out of range");
+        }
+        if (lane >= row_width) {
+            throw std::out_of_range("BC loaded success cell lane out of range");
+        }
+        const uint64_t index = static_cast<uint64_t>(row) * row_width + lane;
+        const T *typed = typed_values_data<T>();
+        if (typed != nullptr) {
+            if (index >= typed_value_count<T>()) {
+                throw std::out_of_range("BC loaded success cell typed value index exceeds payload");
+            }
+            return typed[static_cast<size_t>(index)];
+        }
+        const uint64_t offset = index * value_size();
+        if (offset > raw_bytes.size() || value_size() > raw_bytes.size() - offset) {
+            throw std::out_of_range("BC loaded success cell value index exceeds payload");
+        }
+        return bc_load_success_value_le<T>(raw_bytes.data() + static_cast<size_t>(offset));
+    }
+
+    template <typename T>
+    [[nodiscard]] const T *typed_values_data() const noexcept {
+        if (!bc_success_dtype_matches_type<T>(dtype_mode())) {
+            return nullptr;
+        }
+        if (external_value_data != nullptr) {
+            return reinterpret_cast<const T *>(external_value_data);
+        }
+        if constexpr (std::is_same_v<T, uint32_t>) {
+            if (external_values != nullptr) {
+                return external_values;
+            }
+            return values.empty() ? nullptr : values.data();
+        } else {
+            return nullptr;
+        }
+    }
+
+    template <typename T>
+    [[nodiscard]] size_t typed_value_count() const noexcept {
+        if (!bc_success_dtype_matches_type<T>(dtype_mode())) {
+            return 0U;
+        }
+        if (external_value_data != nullptr) {
+            return external_value_count;
+        }
+        if constexpr (std::is_same_v<T, uint32_t>) {
+            return external_values != nullptr ? external_value_count : values.size();
+        } else {
+            return 0U;
+        }
+    }
+
+    [[nodiscard]] const uint32_t *uint32_values_data() const noexcept {
+        return typed_values_data<uint32_t>();
+    }
+
+    [[nodiscard]] size_t uint32_value_count() const noexcept {
+        return typed_value_count<uint32_t>();
+    }
+};
+
+class BCSuccessAlignedByteBuffer {
+public:
+    BCSuccessAlignedByteBuffer() = default;
+
+    BCSuccessAlignedByteBuffer(const BCSuccessAlignedByteBuffer &) = delete;
+    BCSuccessAlignedByteBuffer &operator=(const BCSuccessAlignedByteBuffer &) = delete;
+
+    BCSuccessAlignedByteBuffer(BCSuccessAlignedByteBuffer &&other) noexcept {
+        *this = std::move(other);
+    }
+
+    BCSuccessAlignedByteBuffer &operator=(BCSuccessAlignedByteBuffer &&other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+        reset();
+        data_ = other.data_;
+        size_ = other.size_;
+        alignment_ = other.alignment_;
+        other.data_ = nullptr;
+        other.size_ = 0U;
+        other.alignment_ = 0U;
+        return *this;
+    }
+
+    ~BCSuccessAlignedByteBuffer() {
+        reset();
+    }
+
+    void reset() noexcept {
+        if (data_ == nullptr) {
+            size_ = 0U;
+            alignment_ = 0U;
+            return;
+        }
+#if defined(_WIN32)
+        _aligned_free(data_);
+#else
+        std::free(data_);
+#endif
+        data_ = nullptr;
+        size_ = 0U;
+        alignment_ = 0U;
+    }
+
+    void reset(uint64_t size, uint32_t alignment) {
+        reset();
+        if (size == 0U) {
+            return;
+        }
+        if (alignment == 0U || (alignment & (alignment - 1U)) != 0U) {
+            throw std::invalid_argument("BC success aligned buffer alignment must be a power of two");
+        }
+        if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success aligned buffer exceeds size_t");
+        }
+#if defined(_WIN32)
+        data_ = static_cast<uint8_t *>(_aligned_malloc(static_cast<size_t>(size), alignment));
+        if (data_ == nullptr) {
+            throw std::bad_alloc();
+        }
+#else
+        void *ptr = nullptr;
+        if (posix_memalign(&ptr, alignment, static_cast<size_t>(size)) != 0) {
+            throw std::bad_alloc();
+        }
+        data_ = static_cast<uint8_t *>(ptr);
+#endif
+        size_ = static_cast<size_t>(size);
+        alignment_ = alignment;
+    }
+
+    [[nodiscard]] uint8_t *data() noexcept {
+        return data_;
+    }
+
+    [[nodiscard]] const uint8_t *data() const noexcept {
+        return data_;
+    }
+
+    [[nodiscard]] size_t size() const noexcept {
+        return size_;
+    }
+
+    [[nodiscard]] uint32_t alignment() const noexcept {
+        return alignment_;
+    }
+
+private:
+    uint8_t *data_ = nullptr;
+    size_t size_ = 0U;
+    uint32_t alignment_ = 0U;
+};
+
+template <typename T>
+struct BCSuccessOwnedValues {
+    std::vector<T> vector_values;
+    BCSuccessAlignedByteBuffer file_bytes;
+    uint64_t payload_offset = 0U;
+    size_t value_count = 0U;
+    bool file_backed = false;
+
+    BCSuccessOwnedValues() = default;
+    BCSuccessOwnedValues(const BCSuccessOwnedValues &) = delete;
+    BCSuccessOwnedValues &operator=(const BCSuccessOwnedValues &) = delete;
+    BCSuccessOwnedValues(BCSuccessOwnedValues &&) noexcept = default;
+    BCSuccessOwnedValues &operator=(BCSuccessOwnedValues &&) noexcept = default;
+
+    [[nodiscard]] T *data() {
+        if (file_backed) {
+            return reinterpret_cast<T *>(file_bytes.data() + static_cast<size_t>(payload_offset));
+        }
+        return vector_values.empty() ? nullptr : vector_values.data();
+    }
+
+    [[nodiscard]] const T *data() const {
+        if (file_backed) {
+            return reinterpret_cast<const T *>(
+                file_bytes.data() + static_cast<size_t>(payload_offset)
+            );
+        }
+        return vector_values.empty() ? nullptr : vector_values.data();
+    }
+
+    [[nodiscard]] size_t size() const noexcept {
+        return file_backed ? value_count : vector_values.size();
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return size() == 0U;
+    }
+};
+
+class BCSuccessStreamingReader {
+public:
+    BCSuccessStreamingReader() = default;
+
+    template <class PositionReader>
+    BCSuccessStreamingReader(
+        std::unique_ptr<BCReadableFile> file,
+        const PositionReader &position,
+        uint32_t expected_row_width
+    ) {
+        open(std::move(file), position, expected_row_width);
+    }
+
+    template <class PositionReader>
+    static BCSuccessStreamingReader open_buffered(
+        const std::filesystem::path &path,
+        const PositionReader &position,
+        uint32_t expected_row_width
+    ) {
+        return BCSuccessStreamingReader(
+            std::make_unique<BCBufferedFileReader>(path),
+            position,
+            expected_row_width
+        );
+    }
+
+    template <class PositionReader>
+    static BCSuccessStreamingReader open_direct_auto(
+        const std::filesystem::path &path,
+        const PositionReader &position,
+        uint32_t expected_row_width,
+        uint32_t queue_depth = 8U,
+        bool overlapped = true
+    ) {
+        BCDirectFileIOOptions options;
+        options.queue_depth = queue_depth;
+        options.overlapped = overlapped || queue_depth > 1U;
+        std::error_code ec;
+        const uint64_t physical_size = std::filesystem::file_size(path, ec);
+        if (ec) {
+            throw std::runtime_error("BC success streaming direct-auto file_size failed: " + ec.message());
+        }
+        if ((physical_size & (static_cast<uint64_t>(options.alignment) - 1U)) == 0U) {
+            options.physical_size = physical_size;
+            options.logical_size = physical_size;
+            auto direct = std::make_unique<BCDirectFileReader>(path, options);
+            std::vector<uint8_t> header_bytes(kBCSuccessHeaderBytes);
+            direct->read_at(0U, header_bytes.data(), header_bytes.size());
+            const BCSuccessHeader header = bc_read_success_header(header_bytes);
+            const uint64_t logical_size = bc_success_logical_size(header);
+            const uint64_t required_physical = bc_direct_align_up(logical_size, options.alignment);
+            if (physical_size >= required_physical) {
+                direct->set_logical_size(logical_size);
+                return BCSuccessStreamingReader(
+                    std::move(direct),
+                    position,
+                    expected_row_width
+                );
+            }
+        }
+        return open_buffered(path, position, expected_row_width);
+    }
+
+    template <class PositionReader>
+    void open(
+        std::unique_ptr<BCReadableFile> file,
+        const PositionReader &position,
+        uint32_t expected_row_width
+    ) {
+        if (!file) {
+            throw std::invalid_argument("BC success streaming reader file is null");
+        }
+        if (expected_row_width == 0U) {
+            throw std::invalid_argument("BC success streaming reader expected row_width must be non-zero");
+        }
+        file_ = std::move(file);
+        file_size_ = file_->size();
+        expected_row_width_ = expected_row_width;
+        capture_position_metadata(position);
+        if (file_size_ < kBCSuccessHeaderBytes) {
+            throw std::runtime_error("BC success streaming file is smaller than header");
+        }
+        std::vector<uint8_t> header_bytes(kBCSuccessHeaderBytes);
+        file_->read_at(0U, header_bytes.data(), header_bytes.size());
+        header_ = bc_read_success_header(header_bytes);
+        validate_header();
+        build_cell_value_offsets();
+    }
+
+    [[nodiscard]] const BCSuccessHeader &header() const {
+        return header_;
+    }
+
+    [[nodiscard]] uint32_t row_width() const {
+        return header_.row_width;
+    }
+
+    [[nodiscard]] BCSuccessDTypeMode dtype_mode() const {
+        return bc_success_dtype_from_u32(header_.dtype);
+    }
+
+    [[nodiscard]] uint32_t value_size() const {
+        return bc_success_dtype_value_size(dtype_mode());
+    }
+
+    [[nodiscard]] uint32_t cell_count() const {
+        return checked_u32_size(success_rows_.size(), "BC success streaming cell count exceeds uint32");
+    }
+
+    [[nodiscard]] uint64_t file_size() const {
+        return file_size_;
+    }
+
+    [[nodiscard]] std::vector<uint8_t> read_all_bytes(BCFileIOStats *stats = nullptr) const {
+        require_open();
+        if (stats != nullptr) {
+            *stats = {};
+        }
+        if (file_size_ > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success streaming file exceeds addressable memory vector size");
+        }
+        std::vector<uint8_t> bytes(static_cast<size_t>(file_size_));
+        if (!bytes.empty()) {
+            file_->read_many(
+                std::vector<BCFileReadRequest>{
+                    BCFileReadRequest{0U, bytes.data(), file_size_}
+                },
+                stats
+            );
+        }
+        return bytes;
+    }
+
+    template <typename T>
+    [[nodiscard]] std::vector<T> read_all_values_typed(BCSuccessLoadStats *stats = nullptr) const {
+        require_open();
+        if (!bc_success_dtype_matches_type<T>(dtype_mode())) {
+            throw std::runtime_error("BC success streaming whole payload type does not match dtype");
+        }
+        if ((header_.payload_bytes % sizeof(T)) != 0U) {
+            throw std::runtime_error("BC success streaming whole payload is not value-aligned");
+        }
+        const uint64_t value_count = header_.payload_bytes / sizeof(T);
+        if (value_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success streaming whole payload value count exceeds size_t");
+        }
+        std::vector<T> physical_values(static_cast<size_t>(value_count));
+        if (stats != nullptr) {
+            *stats = {};
+            if (header_.payload_bytes != 0U) {
+                stats->requested_extents = 1U;
+                stats->coalesced_extents = 1U;
+                stats->requested_bytes = header_.payload_bytes;
+                stats->read_bytes = header_.payload_bytes;
+            }
+        }
+        if (header_.payload_bytes == 0U) {
+            return physical_values;
+        }
+#if defined(_WIN32) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+        BCFileIOStats io_stats;
+        file_->read_many(
+            std::vector<BCFileReadRequest>{
+                BCFileReadRequest{header_.payload_offset, physical_values.data(), header_.payload_bytes}
+            },
+            &io_stats
+        );
+        if (stats != nullptr) {
+            stats->backend_read_ops = io_stats.backend_io_count;
+            stats->backend_read_bytes = io_stats.backend_bytes;
+            stats->backend_read_seconds += io_stats.backend_seconds;
+        }
+#else
+        std::vector<uint8_t> bytes(static_cast<size_t>(header_.payload_bytes));
+        BCFileIOStats io_stats;
+        file_->read_many(
+            std::vector<BCFileReadRequest>{
+                BCFileReadRequest{header_.payload_offset, bytes.data(), header_.payload_bytes}
+            },
+            &io_stats
+        );
+        if (stats != nullptr) {
+            stats->backend_read_ops = io_stats.backend_io_count;
+            stats->backend_read_bytes = io_stats.backend_bytes;
+            stats->backend_read_seconds += io_stats.backend_seconds;
+        }
+        for (uint64_t i = 0U; i < value_count; ++i) {
+            physical_values[static_cast<size_t>(i)] =
+                bc_load_success_value_le<T>(bytes.data() + static_cast<size_t>(i * sizeof(T)));
+        }
+#endif
+        if (is_contiguous_logical_payload_order(value_count)) {
+            return physical_values;
+        }
+        std::vector<T> logical_values(static_cast<size_t>(value_count));
+        uint64_t logical_cursor = 0U;
+        for (size_t cid = 0U; cid < success_rows_.size(); ++cid) {
+            const uint64_t count =
+                static_cast<uint64_t>(success_rows_[cid]) * header_.row_width;
+            if (count == 0U) {
+                continue;
+            }
+            const uint64_t physical_begin = cell_value_offsets_[cid];
+            if (physical_begin > value_count || count > value_count - physical_begin ||
+                logical_cursor > value_count || count > value_count - logical_cursor) {
+                throw std::runtime_error("BC success streaming whole payload reorder range mismatch");
+            }
+            std::copy_n(
+                physical_values.data() + static_cast<size_t>(physical_begin),
+                static_cast<size_t>(count),
+                logical_values.data() + static_cast<size_t>(logical_cursor)
+            );
+            logical_cursor += count;
+        }
+        if (logical_cursor != value_count) {
+            throw std::runtime_error("BC success streaming whole payload logical value count mismatch");
+        }
+        return logical_values;
+    }
+
+    template <typename T>
+    [[nodiscard]] BCSuccessOwnedValues<T> read_all_values_typed_owned(
+        BCSuccessLoadStats *stats = nullptr
+    ) const {
+        require_open();
+        if (!bc_success_dtype_matches_type<T>(dtype_mode())) {
+            throw std::runtime_error("BC success streaming whole payload type does not match dtype");
+        }
+        if ((header_.payload_bytes % sizeof(T)) != 0U) {
+            throw std::runtime_error("BC success streaming whole payload is not value-aligned");
+        }
+        const uint64_t value_count_u64 = header_.payload_bytes / sizeof(T);
+        if (value_count_u64 > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success streaming whole payload value count exceeds size_t");
+        }
+        if (stats != nullptr) {
+            *stats = {};
+            if (header_.payload_bytes != 0U) {
+                stats->requested_extents = 1U;
+                stats->coalesced_extents = 1U;
+                stats->requested_bytes = header_.payload_bytes;
+                stats->read_bytes = header_.payload_bytes;
+            }
+        }
+
+        BCSuccessOwnedValues<T> owned;
+        owned.vector_values = read_all_values_typed<T>(stats);
+        return owned;
+    }
+
+    [[nodiscard]] BCLoadedSuccessCell load_cell(
+        CellId cid,
+        BCSuccessLoadStats *stats = nullptr
+    ) const {
+        std::vector<BCLoadedSuccessCell> cells = load_cells(std::vector<CellId>{cid}, stats);
+        if (cells.size() != 1U) {
+            throw std::logic_error("BC success streaming load_cell internal result size mismatch");
+        }
+        return std::move(cells.front());
+    }
+
+    [[nodiscard]] std::vector<BCLoadedSuccessCell> load_cells(
+        const std::vector<CellId> &cids,
+        BCSuccessLoadStats *stats = nullptr,
+        bool prefer_direct_value_refs = false
+    ) const {
+        require_open();
+        if (stats != nullptr) {
+            *stats = {};
+        }
+
+        std::vector<BCLoadedSuccessCell> cells;
+        cells.reserve(cids.size());
+        std::vector<ExtentRequest> requests;
+        requests.reserve(cids.size());
+        for (size_t index = 0U; index < cids.size(); ++index) {
+            const CellId cid = cids[index];
+            require_cell(cid);
+            BCLoadedSuccessCell cell;
+            cell.cid = cid;
+            cell.dtype = header_.dtype;
+            cell.row_width = header_.row_width;
+            cell.success_rows = success_rows_[static_cast<size_t>(cid)];
+            const uint64_t value_count =
+                static_cast<uint64_t>(cell.success_rows) * header_.row_width;
+            if (value_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+                throw std::overflow_error("BC success streaming cell value count exceeds size_t");
+            }
+            const uint64_t byte_count = checked_value_bytes(value_count);
+            if (byte_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+                throw std::overflow_error("BC success streaming cell byte count exceeds size_t");
+            }
+            const bool use_direct_value_ref =
+                prefer_direct_value_refs && value_count != 0U;
+            if (dtype_mode() == BCSuccessDTypeMode::UInt32 && !use_direct_value_ref) {
+                cell.values.assign(static_cast<size_t>(value_count), 0U);
+            }
+            if (!use_direct_value_ref) {
+                cell.raw_bytes.assign(static_cast<size_t>(byte_count), 0U);
+            }
+            cells.push_back(std::move(cell));
+            if (value_count == 0U) {
+                continue;
+            }
+            const uint64_t offset = value_byte_offset(cid);
+            append_request(requests, index, offset, byte_count);
+        }
+
+        if (stats != nullptr) {
+            stats->requested_extents = requests.size();
+            for (const ExtentRequest &request : requests) {
+                stats->requested_bytes = bc_checked_add_u64(
+                    stats->requested_bytes,
+                    request.bytes,
+                    "BC success streaming requested bytes overflow"
+                );
+            }
+        }
+
+        if (prefer_direct_value_refs) {
+            std::vector<BCFileReadRequest> read_requests;
+            read_requests.reserve(requests.size());
+            const uint32_t alignment = std::max<uint32_t>(1U, file_->preferred_read_alignment());
+            const uint32_t value_size = bc_success_dtype_value_size(dtype_mode());
+            for (const ExtentRequest &request : requests) {
+                BCLoadedSuccessCell &cell = cells[request.cell_index];
+                if ((request.bytes % value_size) != 0U) {
+                    throw std::logic_error("BC success streaming direct value byte count is not value-aligned");
+                }
+                const size_t value_count = static_cast<size_t>(request.bytes / value_size);
+                const uint64_t physical_offset = alignment > 1U
+                    ? bc_direct_align_down(request.offset, alignment)
+                    : request.offset;
+                const uint64_t request_end = bc_checked_add_u64(
+                    request.offset,
+                    request.bytes,
+                    "BC success streaming direct request end overflow"
+                );
+                const uint64_t physical_end = alignment > 1U
+                    ? bc_direct_align_up(request_end, alignment)
+                    : request_end;
+                const uint64_t physical_bytes = physical_end - physical_offset;
+                if (physical_bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+                    throw std::overflow_error("BC success streaming direct physical range exceeds size_t");
+                }
+                const uint64_t in_physical = request.offset - physical_offset;
+                if ((in_physical % value_size) != 0U) {
+                    throw std::logic_error("BC success streaming direct value pointer is not value-aligned");
+                }
+                auto buffer = std::make_shared<detail::BCAlignedBuffer>(physical_bytes, alignment);
+                cell.external_value_bytes = std::move(buffer);
+                cell.external_value_data =
+                    cell.external_value_bytes->data() + static_cast<size_t>(in_physical);
+                if (dtype_mode() == BCSuccessDTypeMode::UInt32) {
+                    cell.external_values = reinterpret_cast<const uint32_t *>(
+                        cell.external_value_data
+                    );
+                }
+                cell.external_value_count = value_count;
+                if (request.bytes != cell.external_value_count * value_size) {
+                    throw std::logic_error("BC success streaming direct value byte count mismatch");
+                }
+                if (request.bytes == 0U) {
+                    continue;
+                }
+                if (stats != nullptr) {
+                    ++stats->coalesced_extents;
+                    stats->read_bytes = bc_checked_add_u64(
+                        stats->read_bytes,
+                        request.bytes,
+                        "BC success streaming direct value read byte count overflow"
+                    );
+                }
+                read_requests.push_back(BCFileReadRequest{
+                    physical_offset,
+                    cell.external_value_bytes->data(),
+                    physical_bytes
+                });
+            }
+            BCFileIOStats io_stats;
+            file_->read_many(read_requests, &io_stats);
+            if (stats != nullptr) {
+                stats->backend_read_ops = io_stats.backend_io_count;
+                stats->backend_read_bytes = io_stats.backend_bytes;
+                stats->backend_read_seconds += io_stats.backend_seconds;
+            }
+            return cells;
+        }
+
+        std::vector<LoadedRange> ranges = read_coalesced_ranges(requests, stats);
+        for (const ExtentRequest &request : requests) {
+            const LoadedRange &range = find_loaded_range(ranges, request.offset, request.bytes);
+            const uint64_t in_range_offset = request.offset - range.offset;
+            if (in_range_offset > range.bytes.size() ||
+                request.bytes > range.bytes.size() - in_range_offset) {
+                throw std::logic_error("BC success streaming loaded range does not cover request");
+            }
+            const uint8_t *src = range.bytes.data() + static_cast<size_t>(in_range_offset);
+            BCLoadedSuccessCell &cell = cells[request.cell_index];
+            if (!cell.raw_bytes.empty() && request.bytes != cell.raw_bytes.size()) {
+                throw std::logic_error("BC success streaming loaded raw byte count mismatch");
+            }
+            if (dtype_mode() == BCSuccessDTypeMode::UInt32) {
+                if (request.bytes != cell.values.size() * sizeof(uint32_t)) {
+                    throw std::logic_error("BC success streaming loaded uint32 value byte count mismatch");
+                }
+                if (cell.raw_bytes.empty()) {
+#if defined(_WIN32) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+                    std::memcpy(cell.values.data(), src, static_cast<size_t>(request.bytes));
+#else
+                    parse_u32_values(src, request.bytes, cell.values);
+#endif
+                } else {
+                    std::copy(src, src + static_cast<size_t>(request.bytes), cell.raw_bytes.begin());
+                    parse_u32_values(cell.raw_bytes.data(), request.bytes, cell.values);
+                }
+            } else {
+                if (request.bytes != cell.raw_bytes.size()) {
+                    throw std::logic_error("BC success streaming loaded raw byte count mismatch");
+                }
+                std::copy(src, src + static_cast<size_t>(request.bytes), cell.raw_bytes.begin());
+            }
+        }
+        return cells;
+    }
+
+    [[nodiscard]] uint32_t read_value(CellId cid, uint32_t row, uint32_t lane = 0U) const {
+        if (dtype_mode() != BCSuccessDTypeMode::UInt32) {
+            throw std::runtime_error("BC success streaming read_value requires uint32 dtype");
+        }
+        return read_value_typed<uint32_t>(cid, row, lane);
+    }
+
+    template <typename T>
+    [[nodiscard]] T read_value_typed(CellId cid, uint32_t row, uint32_t lane = 0U) const {
+        require_open();
+        if (!bc_success_dtype_matches_type<T>(dtype_mode())) {
+            throw std::runtime_error("BC success streaming value type does not match dtype");
+        }
+        require_cell(cid);
+        const uint32_t rows = success_rows_[static_cast<size_t>(cid)];
+        if (row >= rows) {
+            throw std::out_of_range("BC success streaming read_value row out of range");
+        }
+        if (lane >= header_.row_width) {
+            throw std::out_of_range("BC success streaming read_value lane out of range");
+        }
+        const uint64_t value_index =
+            static_cast<uint64_t>(row) * header_.row_width + lane;
+        const uint64_t byte_offset = bc_checked_add_u64(
+            value_byte_offset(cid),
+            checked_value_bytes(value_index),
+            "BC success streaming read_value byte offset overflow"
+        );
+        std::array<uint8_t, sizeof(T)> bytes = {};
+        BCFileIOStats stats;
+        file_->read_many(
+            std::vector<BCFileReadRequest>{
+                BCFileReadRequest{byte_offset, bytes.data(), bytes.size()}
+            },
+            &stats
+        );
+        (void)stats;
+        return bc_load_success_value_le<T>(bytes.data());
+    }
+
+private:
+    struct PositionMetadata {
+        uint32_t key_mode = 0U;
+        uint32_t family_unit = 0U;
+        uint32_t axis_base_coord = 0U;
+        uint32_t family_count = 0U;
+        uint64_t layer_sum = 0U;
+        uint64_t cell_count = 0U;
+        uint64_t fingerprint = 0U;
+    };
+
+    struct ExtentRequest {
+        uint64_t offset = 0U;
+        uint64_t bytes = 0U;
+        size_t cell_index = 0U;
+    };
+
+    struct LoadedRange {
+        uint64_t offset = 0U;
+        std::vector<uint8_t> bytes;
+    };
+
+    template <class PositionReader>
+    void capture_position_metadata(const PositionReader &position) {
+        const BCPositionHeader &p = position.header();
+        position_ = PositionMetadata{
+            p.key_mode,
+            p.family_unit,
+            p.axis_base_coord,
+            p.family_count,
+            p.layer_sum,
+            position.cell_count(),
+            bc_success_position_fingerprint_for(position)
+        };
+        if (position_->cell_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success streaming position cell count exceeds size_t");
+        }
+        success_rows_.assign(static_cast<size_t>(position_->cell_count), 0U);
+        for (CellId cid = 0; cid < position.cell_count(); ++cid) {
+            success_rows_[static_cast<size_t>(cid)] = position.descriptor(cid).success_rows;
+        }
+    }
+
+    void require_open() const {
+        if (!file_ || !position_.has_value()) {
+            throw std::logic_error("BC success streaming reader is not open");
+        }
+    }
+
+    [[nodiscard]] bool is_contiguous_logical_payload_order(uint64_t value_count) const {
+        uint64_t cursor = 0U;
+        for (size_t cid = 0U; cid < success_rows_.size(); ++cid) {
+            if (cell_value_offsets_[cid] != cursor) {
+                return false;
+            }
+            const uint64_t rows = success_rows_[cid];
+            if (rows > std::numeric_limits<uint64_t>::max() / header_.row_width) {
+                return false;
+            }
+            const uint64_t values = rows * header_.row_width;
+            if (cursor > value_count || values > value_count - cursor) {
+                return false;
+            }
+            cursor += values;
+        }
+        return cursor == value_count;
+    }
+
+    void require_cell(CellId cid) const {
+        if (cid >= success_rows_.size()) {
+            throw std::out_of_range("BC success streaming cell id out of range");
+        }
+    }
+
+    void validate_header() const {
+        require_open();
+        const PositionMetadata &position = *position_;
+        if (header_.magic != kBCSuccessMagic) {
+            throw std::runtime_error("BC success streaming file magic mismatch");
+        }
+        if (header_.format_version != kBCSuccessFormatVersion) {
+            throw std::runtime_error("BC success streaming file format version mismatch");
+        }
+        if (header_.header_bytes != kBCSuccessHeaderBytes) {
+            throw std::runtime_error("BC success streaming file header size mismatch");
+        }
+        (void)bc_success_dtype_from_u32(header_.dtype);
+        if (header_.row_width != expected_row_width_) {
+            throw std::runtime_error("BC success streaming file row_width mismatch");
+        }
+        if (header_.family_count != position.family_count) {
+            throw std::runtime_error("BC success streaming file family_count mismatch");
+        }
+        if (header_.descriptor_count != position.cell_count) {
+            throw std::runtime_error("BC success streaming file descriptor_count mismatch");
+        }
+        if (header_.position_key_mode != position.key_mode ||
+            header_.family_unit != position.family_unit ||
+            header_.axis_base_coord != position.axis_base_coord ||
+            header_.layer_sum != position.layer_sum ||
+            header_.position_metadata_fingerprint != position.fingerprint) {
+            throw std::runtime_error("BC success streaming file position metadata mismatch");
+        }
+        if (header_.reserved32 != 0U) {
+            throw std::runtime_error("BC success streaming file reserved field is non-zero");
+        }
+        const uint64_t expected_payload_bytes = expected_payload_bytes_from_success_rows(header_.row_width);
+        if (header_.payload_bytes != expected_payload_bytes) {
+            throw std::runtime_error("BC success streaming file payload byte size mismatch");
+        }
+        require_file_range(
+            header_.cell_value_offsets_offset,
+            bc_success_cell_value_offsets_bytes(header_.descriptor_count),
+            "BC success streaming cell value offset table exceeds file"
+        );
+        require_file_range(header_.payload_offset, header_.payload_bytes,
+            "BC success streaming payload exceeds file");
+        const uint64_t expected_file_size = bc_success_logical_size(header_);
+        if (expected_file_size != file_size_) {
+            throw std::runtime_error("BC success streaming file has trailing or missing bytes");
+        }
+    }
+
+    [[nodiscard]] uint64_t expected_payload_bytes_from_success_rows(uint32_t row_width) const {
+        if (row_width == 0U) {
+            throw std::invalid_argument("BC success streaming row_width must be non-zero");
+        }
+        uint64_t rows = 0U;
+        for (uint32_t success_rows : success_rows_) {
+            rows = bc_checked_add_u64(rows, success_rows, "BC success streaming total rows overflow");
+        }
+        if (rows > std::numeric_limits<uint64_t>::max() / row_width) {
+            throw std::overflow_error("BC success streaming total value count overflow");
+        }
+        return checked_value_bytes(rows * row_width);
+    }
+
+    void build_cell_value_offsets() {
+        cell_value_offsets_.assign(success_rows_.size(), 0U);
+        const uint64_t table_bytes =
+            bc_success_cell_value_offsets_bytes(header_.descriptor_count);
+        if (table_bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success streaming cell offset table exceeds size_t");
+        }
+        std::vector<uint8_t> table(static_cast<size_t>(table_bytes));
+        if (table_bytes != 0U) {
+            file_->read_at(header_.cell_value_offsets_offset, table.data(), table_bytes);
+        }
+        for (size_t cid = 0U; cid < success_rows_.size(); ++cid) {
+            cell_value_offsets_[cid] = load_u64_le(
+                table.data() + cid * kBCSuccessCellValueOffsetBytes
+            );
+        }
+        validate_cell_value_offsets();
+    }
+
+    [[nodiscard]] uint64_t value_byte_offset(CellId cid) const {
+        require_cell(cid);
+        const uint64_t value_offset = cell_value_offsets_[static_cast<size_t>(cid)];
+        const uint64_t payload_delta = checked_value_bytes(value_offset);
+        return bc_checked_add_u64(
+            header_.payload_offset,
+            payload_delta,
+            "BC success streaming value byte offset overflow"
+        );
+    }
+
+    void validate_cell_value_offsets() const {
+        const uint32_t value_size = bc_success_dtype_value_size(dtype_mode());
+        if ((header_.payload_bytes % value_size) != 0U) {
+            throw std::runtime_error("BC success streaming payload is not value-aligned");
+        }
+        const uint64_t total_values = header_.payload_bytes / value_size;
+        struct Range {
+            uint64_t begin = 0U;
+            uint64_t end = 0U;
+        };
+        std::vector<Range> ranges;
+        ranges.reserve(success_rows_.size());
+        for (size_t cid = 0U; cid < success_rows_.size(); ++cid) {
+            const uint64_t begin = cell_value_offsets_[cid];
+            const uint64_t count =
+                static_cast<uint64_t>(success_rows_[cid]) * header_.row_width;
+            if (begin > total_values || count > total_values - begin) {
+                throw std::runtime_error("BC success streaming cell value range exceeds payload");
+            }
+            if (count != 0U) {
+                ranges.push_back(Range{begin, begin + count});
+            }
+        }
+        std::sort(
+            ranges.begin(),
+            ranges.end(),
+            [](const Range &lhs, const Range &rhs) {
+                return lhs.begin < rhs.begin;
+            }
+        );
+        uint64_t cursor = 0U;
+        for (const Range &range : ranges) {
+            if (range.begin != cursor) {
+                throw std::runtime_error("BC success streaming cell value ranges do not densely cover payload");
+            }
+            cursor = range.end;
+        }
+        if (cursor != total_values) {
+            throw std::runtime_error("BC success streaming cell value ranges do not match payload bytes");
+        }
+    }
+
+    [[nodiscard]] uint64_t checked_value_bytes(uint64_t value_count) const {
+        const uint32_t value_size = bc_success_dtype_value_size(dtype_mode());
+        if (value_count > std::numeric_limits<uint64_t>::max() / value_size) {
+            throw std::overflow_error("BC success streaming value byte count overflow");
+        }
+        return value_count * value_size;
+    }
+
+    void require_file_range(uint64_t offset, uint64_t bytes, const char *label) const {
+        const uint64_t end = bc_checked_add_u64(offset, bytes, label);
+        if (end > file_size_) {
+            throw std::out_of_range(label);
+        }
+    }
+
+    void append_request(
+        std::vector<ExtentRequest> &requests,
+        size_t cell_index,
+        uint64_t offset,
+        uint64_t bytes
+    ) const {
+        if (bytes == 0U) {
+            return;
+        }
+        require_file_range(offset, bytes, "BC success streaming request exceeds file");
+        requests.push_back(ExtentRequest{offset, bytes, cell_index});
+    }
+
+    [[nodiscard]] std::vector<LoadedRange> read_coalesced_ranges(
+        std::vector<ExtentRequest> requests,
+        BCSuccessLoadStats *stats
+    ) const {
+        std::sort(
+            requests.begin(),
+            requests.end(),
+            [](const ExtentRequest &lhs, const ExtentRequest &rhs) {
+                if (lhs.offset != rhs.offset) {
+                    return lhs.offset < rhs.offset;
+                }
+                return lhs.bytes < rhs.bytes;
+            }
+        );
+
+        std::vector<BCFileExtent> extents;
+        for (const ExtentRequest &request : requests) {
+            const uint64_t end = bc_checked_add_u64(
+                request.offset,
+                request.bytes,
+                "BC success streaming request end overflow"
+            );
+            if (!extents.empty()) {
+                BCFileExtent &last = extents.back();
+                const uint64_t last_end = bc_checked_add_u64(
+                    last.offset,
+                    last.bytes,
+                    "BC success streaming coalesced extent end overflow"
+                );
+                if (request.offset <= last_end) {
+                    if (end > last_end) {
+                        last.bytes = end - last.offset;
+                    }
+                    continue;
+                }
+            }
+            extents.push_back(BCFileExtent{request.offset, request.bytes});
+        }
+
+        std::vector<LoadedRange> ranges;
+        ranges.reserve(extents.size());
+        for (const BCFileExtent &extent : extents) {
+            if (extent.bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+                throw std::overflow_error("BC success streaming coalesced extent exceeds size_t");
+            }
+            LoadedRange range;
+            range.offset = extent.offset;
+            range.bytes.assign(static_cast<size_t>(extent.bytes), 0U);
+            if (stats != nullptr) {
+                ++stats->coalesced_extents;
+                stats->read_bytes = bc_checked_add_u64(
+                    stats->read_bytes,
+                    extent.bytes,
+                    "BC success streaming read byte count overflow"
+                );
+            }
+            ranges.push_back(std::move(range));
+        }
+
+        std::vector<BCFileReadRequest> read_requests;
+        read_requests.reserve(ranges.size());
+        for (LoadedRange &range : ranges) {
+            read_requests.push_back(BCFileReadRequest{
+                range.offset,
+                range.bytes.data(),
+                static_cast<uint64_t>(range.bytes.size())
+            });
+        }
+        BCFileIOStats io_stats;
+        file_->read_many(read_requests, &io_stats);
+        if (stats != nullptr) {
+            stats->backend_read_ops = io_stats.backend_io_count;
+            stats->backend_read_bytes = io_stats.backend_bytes;
+            stats->backend_read_seconds += io_stats.backend_seconds;
+        }
+        return ranges;
+    }
+
+    [[nodiscard]] const LoadedRange &find_loaded_range(
+        const std::vector<LoadedRange> &ranges,
+        uint64_t offset,
+        uint64_t bytes
+    ) const {
+        const auto it = std::upper_bound(
+            ranges.begin(),
+            ranges.end(),
+            offset,
+            [](uint64_t value, const LoadedRange &range) {
+                return value < range.offset;
+            }
+        );
+        if (it == ranges.begin()) {
+            throw std::logic_error("BC success streaming request is before loaded ranges");
+        }
+        const LoadedRange &range = *(it - 1);
+        const uint64_t range_end = bc_checked_add_u64(
+            range.offset,
+            range.bytes.size(),
+            "BC success streaming loaded range end overflow"
+        );
+        const uint64_t request_end = bc_checked_add_u64(
+            offset,
+            bytes,
+            "BC success streaming request end overflow"
+        );
+        if (offset < range.offset || request_end > range_end) {
+            throw std::logic_error("BC success streaming request is not covered by loaded range");
+        }
+        return range;
+    }
+
+    static void parse_u32_values(
+        const uint8_t *data,
+        uint64_t bytes,
+        std::vector<uint32_t> &out
+    ) {
+        if ((bytes % sizeof(uint32_t)) != 0U) {
+            throw std::runtime_error("BC success streaming loaded value bytes are not u32-aligned");
+        }
+        const uint64_t value_count = bytes / sizeof(uint32_t);
+        if (value_count != out.size()) {
+            throw std::runtime_error("BC success streaming loaded value count mismatch");
+        }
+        for (uint64_t i = 0U; i < value_count; ++i) {
+            out[static_cast<size_t>(i)] =
+                bc_load_u32_le(data + static_cast<size_t>(i * sizeof(uint32_t)));
+        }
+    }
+
+    std::unique_ptr<BCReadableFile> file_;
+    uint64_t file_size_ = 0U;
+    uint32_t expected_row_width_ = 0U;
+    BCSuccessHeader header_;
+    std::optional<PositionMetadata> position_;
+    std::vector<uint32_t> success_rows_;
+    std::vector<uint64_t> cell_value_offsets_;
+};
+
+// Buffered file correctness wrapper. It currently reads the serialized success
+// file into memory and reuses BCSuccessLayerReader. Production solve hot paths
+// should use a streaming/cell-view reader backed by BCReadableFile.
+class BCSuccessFileReader {
+public:
+    BCSuccessFileReader(
+        std::unique_ptr<BCReadableFile> file,
+        const BCPositionLayerReader &position,
+        uint32_t expected_row_width
+    ) {
+        open(std::move(file), position, expected_row_width);
+    }
+
+    static BCSuccessFileReader open_buffered(
+        const std::filesystem::path &path,
+        const BCPositionLayerReader &position,
+        uint32_t expected_row_width
+    ) {
+        return BCSuccessFileReader(
+            std::make_unique<BCBufferedFileReader>(path),
+            position,
+            expected_row_width
+        );
+    }
+
+    void open(
+        std::unique_ptr<BCReadableFile> file,
+        const BCPositionLayerReader &position,
+        uint32_t expected_row_width
+    ) {
+        if (!file) {
+            throw std::invalid_argument("BC success file reader file is null");
+        }
+        file_ = std::move(file);
+        const uint64_t byte_count = file_->size();
+        if (byte_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::overflow_error("BC success file exceeds addressable memory vector size");
+        }
+        bytes_.assign(static_cast<size_t>(byte_count), 0U);
+        if (!bytes_.empty()) {
+            file_->read_at(0U, bytes_.data(), byte_count);
+        }
+        reader_.open(bytes_, position, expected_row_width);
+    }
+
+    [[nodiscard]] const BCSuccessLayerReader &reader() const {
+        return reader_;
+    }
+
+    [[nodiscard]] const std::vector<uint8_t> &bytes() const {
+        return bytes_;
+    }
+
+private:
+    std::unique_ptr<BCReadableFile> file_;
+    std::vector<uint8_t> bytes_;
+    BCSuccessLayerReader reader_;
+};
+
+} // namespace BC

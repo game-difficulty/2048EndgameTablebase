@@ -295,6 +295,16 @@
     ],
     "extra steps": 36
   },
+  "free13": {
+    "category": "free",
+    "valid pattern": [],
+    "target pos": "0xffffffffffffffff",
+    "canonical mode": "full",
+    "seed boards": [
+      "0x0111111111111fff"
+    ],
+    "extra steps": 36
+  },
   "2x4": {
     "category": "variant",
     "valid pattern": [],

@@ -6,6 +6,7 @@
 #include "Calculator.h"
 #include "CanonicalBatch.h"
 #include "Formation.h"
+#include "NativeDiagnostics.h"
 
 #include <algorithm>
 #include <array>
@@ -1838,6 +1839,10 @@ Layer build_layer_from_boards(
 ) {
     const int thread_count = effective_threads(num_threads);
     for (uint32_t retry = 0; retry < 7U; ++retry) {
+        NativeDiagnostics::mark(
+            "EXADBuilder.build_layer_from_boards retry=" + std::to_string(retry) +
+            " boards=" + std::to_string(masked_boards.size())
+        );
         CarryLayer carry = make_carry(
             original_board_sum,
             estimate_from_boards(masked_boards, original_board_sum, tiles_table, param, luts, factors, thread_count),
@@ -1845,6 +1850,7 @@ Layer build_layer_from_boards(
         );
         insert_boards_into_carry(carry, masked_boards, tiles_table, param, luts, thread_count);
         if (!any_overflow(carry)) {
+            NativeDiagnostics::mark("EXADBuilder.build_layer_from_boards finalize begin");
             return finalize_carry_layer(carry, luts, thread_count);
         }
         factors = doubled(factors);
@@ -1901,6 +1907,7 @@ Layer finalize_carry_layer(
     const Luts &luts,
     int num_threads
 ) {
+    NativeDiagnostics::Scope scope("EXADBuilder.finalize_carry_layer");
     const int thread_count = effective_threads(num_threads);
     Layer layer;
     layer.original_board_sum = carry.original_board_sum;
@@ -1939,6 +1946,10 @@ GeneratePairResult generate_two_layers_carry(
     GenerateStats stats;
     stats.input_live = current.live_board_count;
     for (;;) {
+        NativeDiagnostics::mark(
+            "EXADBuilder.generate_two_layers_carry attempt retry=" + std::to_string(stats.retry_count) +
+            " input_live=" + std::to_string(current.live_board_count)
+        );
         const double prepare0 =
 #if defined(_OPENMP)
             omp_get_wtime();
@@ -1946,6 +1957,20 @@ GeneratePairResult generate_two_layers_carry(
             0.0;
 #endif
         const EstimateSet estimate = estimate_from_layer(current, factors, thread_count);
+        uint64_t estimated_buckets = 0;
+        uint64_t estimated_small = 0;
+        uint64_t estimated_large = 0;
+        for (const Estimate &slot_estimate : estimate.slots) {
+            estimated_buckets += slot_estimate.buckets;
+            estimated_small += slot_estimate.small_bytes;
+            estimated_large += slot_estimate.large_words;
+        }
+        NativeDiagnostics::mark(
+            "EXADBuilder.generate_two_layers_carry estimate done buckets=" +
+            std::to_string(estimated_buckets) +
+            " small=" + std::to_string(estimated_small) +
+            " large=" + std::to_string(estimated_large)
+        );
         const double estimate_done =
 #if defined(_OPENMP)
             omp_get_wtime();
@@ -1953,6 +1978,7 @@ GeneratePairResult generate_two_layers_carry(
             0.0;
 #endif
         CarryLayer arr1 = prepare_arr1(std::move(arr1_seed), current.original_board_sum + 2U, estimate, thread_count);
+        NativeDiagnostics::mark("EXADBuilder.generate_two_layers_carry prepare_arr1 done");
         const double arr1_done =
 #if defined(_OPENMP)
             omp_get_wtime();
@@ -1960,6 +1986,7 @@ GeneratePairResult generate_two_layers_carry(
             0.0;
 #endif
         CarryLayer arr2 = make_carry(current.original_board_sum + 4U, estimate, thread_count);
+        NativeDiagnostics::mark("EXADBuilder.generate_two_layers_carry make_arr2 done");
         const double prepare1 =
 #if defined(_OPENMP)
             omp_get_wtime();
@@ -1980,6 +2007,7 @@ GeneratePairResult generate_two_layers_carry(
             derive_hash_state,
             stats
         );
+        NativeDiagnostics::mark("EXADBuilder.generate_two_layers_carry hot loop done");
         const double gen1 =
 #if defined(_OPENMP)
             omp_get_wtime();
