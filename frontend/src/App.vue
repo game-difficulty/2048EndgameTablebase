@@ -52,33 +52,6 @@
             </span>
             <span class="hidden max-w-[9rem] truncate sm:inline">{{ accountDisplayName }}</span>
           </button>
-          <div
-            v-if="accountMenuOpen"
-            class="absolute right-0 top-[calc(100%+0.5rem)] z-[90] w-[18rem] rounded-2xl border border-border-main bg-bg-card/98 p-4 text-text-main shadow-[0_20px_70px_rgba(15,23,42,0.35)]"
-          >
-            <div class="min-w-0">
-              <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('auth.account.title') }}</div>
-              <div class="mt-1 truncate ui-body font-black">{{ accountDisplayName }}</div>
-              <div class="truncate text-[0.72rem] font-bold text-text-secondary">{{ authUser.email }}</div>
-            </div>
-            <div class="mt-4 grid gap-2 rounded-xl border border-border-main bg-bg-main/55 p-3">
-              <div class="flex items-center justify-between gap-3">
-                <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.bonusTokens') }}</span>
-                <span class="ui-caption font-black text-text-main">{{ formatTokens(authUser.token_balance?.bonus) }}</span>
-              </div>
-              <div class="flex items-center justify-between gap-3">
-                <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.paidTokens') }}</span>
-                <span class="ui-caption font-black text-text-main">{{ formatTokens(authUser.token_balance?.paid) }}</span>
-              </div>
-              <div class="flex items-center justify-between gap-3 border-t border-border-main pt-2">
-                <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.totalTokens') }}</span>
-                <span class="ui-body font-black text-accent">{{ formatTokens(authUser.token_balance?.total) }}</span>
-              </div>
-            </div>
-            <button type="button" class="action-btn-small mt-4 w-full justify-center" @click="handleLogout">
-              {{ $t('auth.actions.logout') }}
-            </button>
-          </div>
         </template>
         <template v-else>
           <button type="button" class="action-btn-small" @click="openAuthDialog('login')">
@@ -89,6 +62,35 @@
           </button>
         </template>
       </div>
+    </div>
+
+    <div
+      v-if="accountMenuOpen && authUser"
+      class="fixed right-3 top-[3.75rem] z-[110] w-[18rem] rounded-2xl border border-border-main bg-bg-card/98 p-4 text-text-main shadow-[0_20px_70px_rgba(15,23,42,0.35)]"
+      data-account-menu
+    >
+      <div class="min-w-0">
+        <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('auth.account.title') }}</div>
+        <div class="mt-1 truncate ui-body font-black">{{ accountDisplayName }}</div>
+        <div class="truncate text-[0.72rem] font-bold text-text-secondary">{{ authUser.email }}</div>
+      </div>
+      <div class="mt-4 grid gap-2 rounded-xl border border-border-main bg-bg-main/55 p-3">
+        <div class="flex items-center justify-between gap-3">
+          <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.bonusTokens') }}</span>
+          <span class="ui-caption font-black text-text-main">{{ formatTokens(authUser.token_balance?.bonus) }}</span>
+        </div>
+        <div class="flex items-center justify-between gap-3">
+          <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.paidTokens') }}</span>
+          <span class="ui-caption font-black text-text-main">{{ formatTokens(authUser.token_balance?.paid) }}</span>
+        </div>
+        <div class="flex items-center justify-between gap-3 border-t border-border-main pt-2">
+          <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.totalTokens') }}</span>
+          <span class="ui-body font-black text-accent">{{ formatTokens(authUser.token_balance?.total) }}</span>
+        </div>
+      </div>
+      <button type="button" class="action-btn-small mt-4 w-full justify-center" @click="handleLogout">
+        {{ $t('auth.actions.logout') }}
+      </button>
     </div>
 
     <div class="flex-1 relative overflow-hidden">
