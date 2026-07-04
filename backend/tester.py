@@ -22,7 +22,10 @@ from engine_core.performance_evaluation import (
 
 from .serialization import sanitize_config
 from .session import np_u64, safe_hex, u64
+from .tablebase_catalog import build_filepath_map_entry
 from .trainer_helpers import replace_board_for_lookup
+from .quota.errors import InsufficientTokens
+from .quota.service import finalize_reservation, has_numeric_result, reserve_operation_tokens
 
 
 TESTER_PERFORMANCE_ORDER = PERFORMANCE_LABELS
@@ -92,6 +95,12 @@ def _cache_tester_replay(session):
         return
     replay = session.tester_record[: session.tester_step_count + 1].copy()
     replay[session.tester_step_count] = TESTER_REPLAY_SENTINEL
+    session.latest_tester_replay = {
+        "record": strip_replay_sentinel(replay),
+        "pattern": session.tester_full_pattern,
+        "source": "Tester session",
+        "use_variant": bool(session.use_variant),
+    }
     LATEST_TESTER_REPLAY["record"] = strip_replay_sentinel(replay)
     LATEST_TESTER_REPLAY["pattern"] = session.tester_full_pattern
     LATEST_TESTER_REPLAY["source"] = "Tester session"
@@ -251,12 +260,9 @@ def _tester_prepare_selection(session, pattern, target):
         session.tester_table_found = False
         return False, []
 
-    spawn_rate4 = SingletonConfig().config["4_spawn_rate"]
-    session.tester_table_found = SingletonConfig().check_pattern_file(
-        session.tester_full_pattern
-    )
-    pattern_key = SingletonConfig.get_pattern_key(session.tester_full_pattern, spawn_rate4)
-    path_list = SingletonConfig().config["filepath_map"].get(pattern_key, [])
+    spawn_rate4 = float(SingletonConfig().config.get("4_spawn_rate", 0.1))
+    path_list = build_filepath_map_entry(session.tester_full_pattern, spawn_rate4)
+    session.tester_table_found = bool(path_list)
     if session.tester_table_found and path_list:
         session.ensure_book_reader().dispatch(path_list, pattern, target)
         session.tester_status = f"Loaded {session.tester_full_pattern}"
@@ -273,6 +279,15 @@ def _tester_compute_results(session):
         session.tester_best_move = None
         return
 
+    reservation = getattr(session, "_tester_lookup_reservation", None)
+    session._tester_lookup_reservation = None
+    if reservation is None:
+        reservation = reserve_operation_tokens(
+            user_id=session.user_id,
+            session_id=session.auth_session_id,
+            operation_key="tester_lookup_hit",
+            full_pattern=session.tester_full_pattern,
+        )
     pattern = session.tester_pattern[0]
     target = session.tester_pattern[1]
     n_large_tiles = pattern_32k_tiles_map.get(pattern, [0])[0]
@@ -283,24 +298,48 @@ def _tester_compute_results(session):
         target,
         session.use_variant,
     )
-    result, dtype = session.ensure_book_reader().move_on_dic(
-        decode_board(np.uint64(u64(lookup_board))),
-        pattern,
-        target,
-        session.tester_full_pattern,
-    )
+    try:
+        result, dtype = session.ensure_book_reader().move_on_dic(
+            decode_board(np.uint64(u64(lookup_board))),
+            pattern,
+            target,
+            session.tester_full_pattern,
+        )
 
-    if not isinstance(result, dict):
-        session.tester_results = {}
+        if not isinstance(result, dict):
+            session.tester_results = {}
+            session.tester_result_dtype = str(dtype or "?")
+            session.tester_best_move = None
+            finalize_reservation(
+                reservation,
+                actual_operation_key="tester_lookup_miss",
+                metadata={"board_hex": safe_hex(session.board_encoded)},
+            )
+            return
+
+        session.tester_best_move = _tester_best_move(result)
+        session.tester_results = _tester_sanitize_results(result)
         session.tester_result_dtype = str(dtype or "?")
-        session.tester_best_move = None
-        return
-
-    session.tester_best_move = _tester_best_move(result)
-    session.tester_results = _tester_sanitize_results(result)
-    session.tester_result_dtype = str(dtype or "?")
-    if session.tester_result_dtype and session.tester_result_dtype != "?":
-        session.success_rate_dtype = session.tester_result_dtype
+        if session.tester_result_dtype and session.tester_result_dtype != "?":
+            session.success_rate_dtype = session.tester_result_dtype
+        finalize_reservation(
+            reservation,
+            actual_operation_key=(
+                "tester_lookup_hit"
+                if has_numeric_result(session.tester_results)
+                else "tester_lookup_miss"
+            ),
+            metadata={"board_hex": safe_hex(session.board_encoded)},
+        )
+    except InsufficientTokens:
+        raise
+    except Exception:
+        finalize_reservation(
+            reservation,
+            actual_operation_key="tester_lookup_miss",
+            metadata={"board_hex": safe_hex(session.board_encoded), "error": "lookup"},
+        )
+        raise
 
 
 def _tester_start_practice(session, board_encoded, opening_text):
@@ -367,47 +406,54 @@ def _tester_append_summary(session):
     )
 
 
-async def send_tester_state(websocket, session, metadata=None):
+async def send_tester_state(websocket, session, metadata=None, logs_since=None):
     board_encoded = np_u64(session.board_encoded)
     board_array = decode_board(board_encoded)
     config = SingletonConfig().config
+    data = {
+        "board": board_array.flatten().tolist(),
+        "animation": sanitize_config(metadata or {}),
+        "hex_str": safe_hex(session.board_encoded),
+        "pattern": session.tester_pattern[0],
+        "target": session.tester_pattern[1],
+        "full_pattern": session.tester_full_pattern,
+        "results": sanitize_config(session.tester_results),
+        "dtype": session.tester_result_dtype,
+        "best_move": session.tester_best_move,
+        "last_step": sanitize_config(session.tester_last_step),
+        "text_visible": session.tester_text_visible,
+        "ready": session.tester_ready,
+        "table_found": session.tester_table_found,
+        "status": session.tester_status,
+        "use_variant": session.use_variant,
+        "metrics": {
+            "combo": session.tester_combo,
+            "max_combo": session.tester_max_combo,
+            "goodness_of_fit": session.tester_goodness_of_fit,
+            "performance_stats": session.tester_performance_stats,
+            "performance_labels": list(TESTER_PERFORMANCE_ORDER),
+            "score": int(session.score),
+            "best_score": int(session.best_score),
+        },
+        "record": {"length": session.tester_step_count},
+        "settings": {
+            "colors": config.get("colors", []),
+            "dis_32k": config.get("dis_32k", False),
+            "dis_text": config.get("dis_text", True),
+            "language": config.get("language", "en"),
+        },
+    }
+
+    if logs_since is None:
+        data["logs"] = session.tester_logs
+    else:
+        start = max(0, int(logs_since))
+        data["logs_delta"] = session.tester_logs[start:]
+        data["logs_total"] = len(session.tester_logs)
 
     await websocket.send_json(
         {
             "action": "TESTER_STATE",
-            "data": {
-                "board": board_array.flatten().tolist(),
-                "animation": sanitize_config(metadata or {}),
-                "hex_str": safe_hex(session.board_encoded),
-                "pattern": session.tester_pattern[0],
-                "target": session.tester_pattern[1],
-                "full_pattern": session.tester_full_pattern,
-                "results": sanitize_config(session.tester_results),
-                "dtype": session.tester_result_dtype,
-                "best_move": session.tester_best_move,
-                "logs": session.tester_logs,
-                "last_step": sanitize_config(session.tester_last_step),
-                "text_visible": session.tester_text_visible,
-                "ready": session.tester_ready,
-                "table_found": session.tester_table_found,
-                "status": session.tester_status,
-                "use_variant": session.use_variant,
-                "metrics": {
-                    "combo": session.tester_combo,
-                    "max_combo": session.tester_max_combo,
-                    "goodness_of_fit": session.tester_goodness_of_fit,
-                    "performance_stats": session.tester_performance_stats,
-                    "performance_labels": list(TESTER_PERFORMANCE_ORDER),
-                    "score": int(session.score),
-                    "best_score": int(session.best_score),
-                },
-                "record": {"length": session.tester_step_count},
-                "settings": {
-                    "colors": config.get("colors", []),
-                    "dis_32k": config.get("dis_32k", False),
-                    "dis_text": config.get("dis_text", True),
-                    "language": config.get("language", "en"),
-                },
-            },
+            "data": data,
         }
     )

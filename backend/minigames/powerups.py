@@ -7,6 +7,7 @@ import numpy as np
 
 from Config import SingletonConfig
 
+from ..cloud_safety import is_cloud_mode
 from .session import MinigameSessionState
 
 
@@ -27,6 +28,8 @@ def _new_game_default_counts(state: MinigameSessionState) -> dict[str, int]:
 def load_powerup_counts(state: MinigameSessionState) -> dict[str, int]:
     if state.engine is None:
         return {"bomb": 0, "glove": 0, "twist": 0}
+    if is_cloud_mode():
+        return _new_game_default_counts(state)
     config = SingletonConfig().config
     difficulty_state = config.setdefault("power_ups_state", [dict(), dict()])[state.difficulty]
     saved_counts = difficulty_state.get(getattr(state.engine, "legacy_name", ""), None)
@@ -40,6 +43,8 @@ def load_powerup_counts(state: MinigameSessionState) -> dict[str, int]:
 
 def save_powerup_counts(state: MinigameSessionState) -> None:
     if state.engine is None:
+        return
+    if is_cloud_mode():
         return
     config = SingletonConfig().config
     difficulty_state = config.setdefault("power_ups_state", [dict(), dict()])[state.difficulty]

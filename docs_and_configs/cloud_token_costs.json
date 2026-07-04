@@ -1,0 +1,8 @@
+{
+  "trainer_lookup_hit": 1,
+  "trainer_lookup_miss": 0.2,
+  "tester_lookup_hit": 1,
+  "tester_lookup_miss": 0.2,
+  "analysis_per_replay": 100,
+  "replay_load": 3
+}

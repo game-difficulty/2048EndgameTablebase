@@ -21,6 +21,7 @@ from ..animation import build_move_animation_metadata
 from ..session import GameSession
 from ..session import np_u64, u64
 from ..state import ConnectionManager
+from ..tablebase_catalog import build_filepath_map_entry
 from ..trainer_helpers import (
     _clear_record_replay,
     _compute_spawns,
@@ -41,9 +42,10 @@ async def handle_trainer_action(
     spawn_rate4 = float(SingletonConfig().config.get("4_spawn_rate", 0.1))
 
     if action == Action.TRAINER_SET_FILEPATH:
-        filepath = payload.get("filepath")
-        pattern = payload.get("pattern", "L3")
+        pattern = str(payload.get("pattern", "L3")).strip()
         target = payload.get("target", "32768")
+        full_pattern = pattern if "_" in pattern else f"{pattern}_{target}"
+        base_pattern = full_pattern.split("_")[0]
         current_board = np_u64(session.board_encoded)
         current_score = int(session.score)
         _clear_record_replay(session)
@@ -54,40 +56,11 @@ async def handle_trainer_action(
         session.played_length = 0
         session.moved = 0
         session.trainer_results = {}
-        config = SingletonConfig().config
-        filepath_map = config["filepath_map"]
-        pattern_key = SingletonConfig.get_pattern_key(pattern, spawn_rate4)
-        current_path_list = list(filepath_map.get(pattern_key, []))
-        normalized_path_list = [
-            (path, success_rate_dtype)
-            for path, success_rate_dtype in current_path_list
-            if path and os.path.exists(path)
-        ]
-        updated_config = normalized_path_list != current_path_list
-
-        if filepath:
-            success_rate_dtype = SingletonConfig.read_success_rate_dtype(filepath, pattern)
-            table_4sr = SingletonConfig.read_4sr(filepath, pattern)
-            table_4sr = table_4sr if table_4sr is not None else spawn_rate4
-            pattern_key = SingletonConfig.get_pattern_key(pattern, table_4sr)
-            current_path_list = list(filepath_map.get(pattern_key, []))
-            normalized_path_list = [
-                (path, dtype)
-                for path, dtype in current_path_list
-                if path and os.path.exists(path) and path != filepath
-            ]
-            normalized_path_list.append((filepath, success_rate_dtype))
-            updated_config = True
-
-        filepath_map[pattern_key] = normalized_path_list
-        if updated_config:
-            SingletonConfig().save_config(config)
-
-        path_list = list(filepath_map.get(pattern_key, []))
-        session.ensure_book_reader().dispatch(path_list, pattern.split("_")[0], target)
-        session.current_pattern = pattern
-        session.pattern_settings = [pattern.split("_")[0], target]
-        session.use_variant = pattern.split("_")[0] in category_info.get("variant", [])
+        path_list = build_filepath_map_entry(full_pattern, spawn_rate4)
+        session.ensure_book_reader().dispatch(path_list, base_pattern, target)
+        session.current_pattern = full_pattern
+        session.pattern_settings = [base_pattern, target]
+        session.use_variant = base_pattern in category_info.get("variant", [])
 
         await manager.send_state(websocket)
         await send_trainer_results(session, websocket)
@@ -196,12 +169,7 @@ async def handle_trainer_action(
 
     if action == Action.TRAINER_DEFAULT:
         _clear_record_replay(session)
-        pattern_key = SingletonConfig.get_pattern_key(session.current_pattern, spawn_rate4)
-        path_list = (
-            SingletonConfig()
-            .config["filepath_map"]
-            .get(pattern_key, [])
-        )
+        path_list = build_filepath_map_entry(session.current_pattern, spawn_rate4)
         if path_list:
             try:
                 random_board = session.ensure_book_reader().get_random_state(

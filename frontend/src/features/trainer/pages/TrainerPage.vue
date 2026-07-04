@@ -72,12 +72,6 @@
           @change="handleTargetChange"
         />
         <button
-          @click="selectFolder"
-          class="ml-2 ui-kicker bg-btn-bg hover:bg-btn-hover text-white px-2.5 py-1.5 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm"
-        >
-          {{ $t('trainer.top.path') }}
-        </button>
-        <button
           @click="applyTablebase"
           class="btn-prominent ui-kicker px-2.5 py-1.5 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm"
         >
@@ -243,24 +237,6 @@
           </div>
         </div>
 
-        <div class="console-card">
-          <div class="console-card-header mb-2 leading-none">
-            <span>{{ $t('trainer.recording.title') }}</span>
-            <span class="ui-control font-mono text-text-secondary opacity-60">{{ recordStep }} / {{ recordMax }}</span>
-          </div>
-          <div class="grid grid-cols-4 gap-2 mt-2">
-            <button @click="manageRecord('OPEN')" class="action-btn">{{ $t('trainer.recording.load') }}</button>
-            <button
-              @click="manageRecord('TOGGLE')"
-              :class="recordingState ? '!bg-red-500 !border-red-600 hover:!bg-red-600' : ''"
-              class="action-btn"
-            >
-              {{ recordingState ? $t('trainer.recording.save') : $t('trainer.recording.record') }}
-            </button>
-            <button @click="manageRecord('PREV')" class="action-btn font-black ui-control">{{ $t('trainer.recording.prev') }}</button>
-            <button @click="manageRecord('NEXT')" class="action-btn font-black ui-control">{{ $t('trainer.recording.next') }}</button>
-          </div>
-        </div>
       </div>
     </div>
   </div>
@@ -295,7 +271,6 @@ const {
   targetValue,
   availableTargets,
   onPatternChange,
-  selectFolder,
   applyTablebase,
   hexInput,
   setBoard,
@@ -328,10 +303,6 @@ const {
   spawnMode,
   setSpawnMode,
   triggerAction,
-  recordStep,
-  recordMax,
-  recordingState,
-  manageRecord,
   onDis32kChange,
   patternMenuRoot,
 } = useTrainerSession(toRef(props, 'active'));

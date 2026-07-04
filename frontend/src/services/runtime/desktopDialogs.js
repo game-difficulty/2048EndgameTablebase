@@ -1,3 +1,5 @@
+import { getPywebviewApi } from './capabilities';
+
 const EMPTY_LIST = Object.freeze([]);
 
 const DIALOG_METHOD_FALLBACKS = Object.freeze({
@@ -9,14 +11,6 @@ const DIALOG_METHOD_FALLBACKS = Object.freeze({
   select_save_tester_log: 'select_save_tester_log',
   select_save_tester_replay: 'select_save_tester_replay',
 });
-
-function getPywebviewApi() {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-  const api = window.pywebview?.api;
-  return api && typeof api === 'object' ? api : null;
-}
 
 function normalizeSinglePath(value) {
   if (typeof value === 'string') {

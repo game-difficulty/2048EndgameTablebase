@@ -8,6 +8,8 @@ from Config import category_info
 from fastapi import WebSocket
 
 from ..actions import Action, EventType
+from ..cloud_analysis_jobs import analysis_job_payload, get_analysis_job
+from ..cloud_safety import is_cloud_mode
 from ..analysis import normalize_target_value, resolve_analysis_inputs, run_batch_analysis
 from ..session import GameSession
 from ..webview_api import Api
@@ -41,7 +43,58 @@ async def handle_analysis_action(
         )
         return True
 
+    if action == Action.ANALYSIS_SUBSCRIBE:
+        job_id = str(payload.get("job_id") or "").strip()
+        if not job_id:
+            raise ValueError("Missing analysis job_id")
+
+        async def stream_job_updates() -> None:
+            last_payload: dict[str, Any] | None = None
+            while True:
+                try:
+                    job = get_analysis_job(job_id, user_id=session.user_id)
+                    current_payload = analysis_job_payload(job)
+                    if current_payload != last_payload:
+                        event_type = (
+                            EventType.ANALYSIS_FINISHED
+                            if current_payload.get("status") == "finished"
+                            else EventType.ANALYSIS_FAILED
+                            if current_payload.get("status") == "failed"
+                            else EventType.ANALYSIS_PROGRESS
+                        )
+                        await websocket.send_json(
+                            {"type": event_type, "payload": current_payload}
+                        )
+                        last_payload = dict(current_payload)
+                    if current_payload.get("status") in {"finished", "failed"}:
+                        break
+                    await asyncio.sleep(0.5)
+                except Exception as exc:
+                    try:
+                        await websocket.send_json(
+                            {
+                                "type": EventType.ANALYSIS_FAILED,
+                                "payload": {"job_id": job_id, "message": str(exc)},
+                            }
+                        )
+                    except Exception:
+                        pass
+                    break
+
+        asyncio.create_task(stream_job_updates())
+        await websocket.send_json(
+            {
+                "type": EventType.ANALYSIS_STARTED,
+                "payload": analysis_job_payload(
+                    get_analysis_job(job_id, user_id=session.user_id)
+                ),
+            }
+        )
+        return True
+
     if action == Action.ANALYSIS_START:
+        if is_cloud_mode():
+            raise PermissionError("Use HTTP analysis jobs in cloud mode.")
         pattern = str(payload.get("pattern") or "").strip()
         target = payload.get("target")
         raw_paths = payload.get("paths") or []

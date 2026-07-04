@@ -1,0 +1,207 @@
+from __future__ import annotations
+
+import os
+import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_AUTH_DB = PROJECT_ROOT / "docs_and_configs" / "cloud_runtime" / "auth.sqlite3"
+
+
+def get_auth_db_path() -> Path:
+    return Path(os.getenv("CLOUD_AUTH_DB") or DEFAULT_AUTH_DB)
+
+
+@contextmanager
+def auth_db() -> Iterator[sqlite3.Connection]:
+    path = get_auth_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def init_auth_db() -> None:
+    with auth_db() as db:
+        db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              email TEXT NOT NULL UNIQUE,
+              email_verified_at TEXT,
+              password_hash TEXT NOT NULL,
+              display_name TEXT,
+              role TEXT NOT NULL DEFAULT 'user',
+              status TEXT NOT NULL DEFAULT 'active',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              last_login_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS sessions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL,
+              session_token_hash TEXT NOT NULL UNIQUE,
+              user_agent TEXT,
+              ip_address TEXT,
+              created_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              revoked_at TEXT,
+              FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL,
+              token_hash TEXT NOT NULL UNIQUE,
+              session_id INTEGER,
+              created_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              revoked_at TEXT,
+              replaced_by_id INTEGER,
+              FOREIGN KEY(user_id) REFERENCES users(id),
+              FOREIGN KEY(session_id) REFERENCES sessions(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS invite_codes (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              code_hash TEXT NOT NULL UNIQUE,
+              label TEXT,
+              created_by_user_id INTEGER,
+              max_uses INTEGER NOT NULL DEFAULT 1,
+              used_count INTEGER NOT NULL DEFAULT 0,
+              allowed_email TEXT,
+              allowed_domain TEXT,
+              expires_at TEXT,
+              disabled_at TEXT,
+              created_at TEXT NOT NULL,
+              FOREIGN KEY(created_by_user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS email_verification_codes (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              email TEXT NOT NULL,
+              purpose TEXT NOT NULL,
+              code_hash TEXT NOT NULL,
+              invite_code_id INTEGER,
+              attempts INTEGER NOT NULL DEFAULT 0,
+              max_attempts INTEGER NOT NULL DEFAULT 5,
+              created_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              consumed_at TEXT,
+              ip_address TEXT,
+              FOREIGN KEY(invite_code_id) REFERENCES invite_codes(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS user_quotas (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL,
+              quota_key TEXT NOT NULL,
+              period TEXT NOT NULL DEFAULT 'lifetime',
+              limit_value INTEGER NOT NULL DEFAULT 0,
+              used_value INTEGER NOT NULL DEFAULT 0,
+              resets_at TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(user_id, quota_key, period),
+              FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS usage_events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL,
+              session_id INTEGER,
+              event_type TEXT NOT NULL,
+              quota_key TEXT,
+              cost INTEGER NOT NULL DEFAULT 0,
+              metadata_json TEXT,
+              ip_address TEXT,
+              created_at TEXT NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id),
+              FOREIGN KEY(session_id) REFERENCES sessions(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS token_accounts (
+              user_id INTEGER PRIMARY KEY,
+              bonus_balance_units INTEGER NOT NULL DEFAULT 0,
+              paid_balance_units INTEGER NOT NULL DEFAULT 0,
+              last_weekly_grant_at TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS token_ledger (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL,
+              session_id INTEGER,
+              event_type TEXT NOT NULL,
+              operation_key TEXT,
+              table_pattern TEXT,
+              table_multiplier_units INTEGER NOT NULL DEFAULT 1000,
+              base_cost_units INTEGER NOT NULL DEFAULT 0,
+              final_cost_units INTEGER NOT NULL DEFAULT 0,
+              bonus_delta_units INTEGER NOT NULL DEFAULT 0,
+              paid_delta_units INTEGER NOT NULL DEFAULT 0,
+              balance_before_units INTEGER NOT NULL DEFAULT 0,
+              balance_after_units INTEGER NOT NULL DEFAULT 0,
+              metadata_json TEXT,
+              created_at TEXT NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id),
+              FOREIGN KEY(session_id) REFERENCES sessions(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS uploads (
+              upload_id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              session_id INTEGER,
+              kind TEXT NOT NULL,
+              filename TEXT NOT NULL,
+              path TEXT NOT NULL,
+              size INTEGER NOT NULL,
+              content_type TEXT,
+              created_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id),
+              FOREIGN KEY(session_id) REFERENCES sessions(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS analysis_jobs (
+              job_id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              session_id INTEGER,
+              pattern TEXT NOT NULL,
+              target TEXT NOT NULL,
+              status TEXT NOT NULL,
+              total INTEGER NOT NULL DEFAULT 0,
+              done INTEGER NOT NULL DEFAULT 0,
+              failed INTEGER NOT NULL DEFAULT 0,
+              output_dir TEXT,
+              zip_path TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id),
+              FOREIGN KEY(session_id) REFERENCES sessions(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+            CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_events(user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_token_ledger_user_created ON token_ledger(user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_uploads_user ON uploads(user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_analysis_jobs_user ON analysis_jobs(user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_verification_codes(email, purpose);
+            """
+        )

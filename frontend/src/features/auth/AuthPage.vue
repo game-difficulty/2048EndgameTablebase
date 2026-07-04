@@ -1,0 +1,234 @@
+<template>
+  <div class="auth-page">
+    <section class="auth-panel">
+      <div class="auth-heading">
+        <div class="auth-kicker">2048 Endgame Tablebase</div>
+        <h1>{{ mode === 'login' ? $t('auth.title.login') : $t('auth.title.register') }}</h1>
+      </div>
+
+      <div class="auth-tabs">
+        <button :class="{ active: mode === 'login' }" @click="mode = 'login'">{{ $t('auth.tabs.login') }}</button>
+        <button :class="{ active: mode === 'register' }" @click="mode = 'register'">{{ $t('auth.tabs.register') }}</button>
+      </div>
+
+      <form class="auth-form" @submit.prevent="submit">
+        <label v-if="mode === 'register'">
+          <span>{{ $t('auth.fields.inviteCode') }}</span>
+          <input v-model="inviteCode" autocomplete="off" :placeholder="$t('auth.placeholders.inviteCode')" required />
+        </label>
+
+        <label>
+          <span>{{ $t('auth.fields.email') }}</span>
+          <input v-model="email" type="email" autocomplete="email" :placeholder="$t('auth.placeholders.email')" required />
+        </label>
+
+        <div v-if="mode === 'register'" class="auth-send-row">
+          <button type="button" class="auth-secondary" :disabled="sendingCode || !email || !inviteCode" @click="sendCode">
+            {{ sendingCode ? $t('auth.actions.sendingCode') : $t('auth.actions.sendCode') }}
+          </button>
+        </div>
+
+        <label v-if="mode === 'register'">
+          <span>{{ $t('auth.fields.emailCode') }}</span>
+          <input v-model="verificationCode" inputmode="numeric" autocomplete="one-time-code" :placeholder="$t('auth.placeholders.emailCode')" required />
+        </label>
+
+        <label>
+          <span>{{ $t('auth.fields.password') }}</span>
+          <input
+            v-model="password"
+            type="password"
+            :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
+            :placeholder="$t('auth.placeholders.password')"
+            required
+          />
+        </label>
+
+        <label v-if="mode === 'register'">
+          <span>{{ $t('auth.fields.displayName') }}</span>
+          <input v-model="displayName" autocomplete="name" :placeholder="$t('auth.placeholders.displayName')" />
+        </label>
+
+        <button type="submit" class="auth-primary" :disabled="submitting">
+          {{ submitting ? $t('auth.actions.pleaseWait') : (mode === 'login' ? $t('auth.actions.login') : $t('auth.actions.register')) }}
+        </button>
+      </form>
+
+      <div v-if="message" class="auth-message" :class="{ error: messageType === 'error' }">
+        {{ message }}
+      </div>
+    </section>
+  </div>
+</template>
+
+<script setup>
+import { ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
+
+import { authClient } from '../../services/auth/authClient';
+
+const emit = defineEmits(['authenticated']);
+const props = defineProps({
+  initialMode: {
+    type: String,
+    default: 'login',
+  },
+});
+const { t } = useI18n();
+
+const mode = ref(props.initialMode === 'register' ? 'register' : 'login');
+const email = ref('');
+const password = ref('');
+const inviteCode = ref('');
+const verificationCode = ref('');
+const displayName = ref('');
+const submitting = ref(false);
+const sendingCode = ref(false);
+const message = ref('');
+const messageType = ref('info');
+
+const showMessage = (text, type = 'info') => {
+  message.value = text;
+  messageType.value = type;
+};
+
+watch(
+  () => props.initialMode,
+  (nextMode) => {
+    mode.value = nextMode === 'register' ? 'register' : 'login';
+    showMessage('');
+  }
+);
+
+const sendCode = async () => {
+  sendingCode.value = true;
+  showMessage('');
+  try {
+    const result = await authClient.sendEmailCode({
+      email: email.value,
+      invite_code: inviteCode.value,
+    });
+    showMessage(result.dev_code ? t('auth.messages.devCode', { code: result.dev_code }) : t('auth.messages.codeSent'));
+  } catch (error) {
+    showMessage(error.message || String(error), 'error');
+  } finally {
+    sendingCode.value = false;
+  }
+};
+
+const submit = async () => {
+  submitting.value = true;
+  showMessage('');
+  try {
+    const result = mode.value === 'login'
+      ? await authClient.login({ email: email.value, password: password.value })
+      : await authClient.register({
+        email: email.value,
+        password: password.value,
+        invite_code: inviteCode.value,
+        verification_code: verificationCode.value,
+        display_name: displayName.value,
+      });
+    emit('authenticated', result.user);
+  } catch (error) {
+    showMessage(error.message || String(error), 'error');
+  } finally {
+    submitting.value = false;
+  }
+};
+</script>
+
+<style scoped>
+.auth-page {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  background: var(--bg-main);
+}
+
+.auth-panel {
+  width: min(28rem, 100%);
+  border: 1px solid var(--border-main);
+  border-radius: 24px;
+  background: var(--bg-card);
+  padding: 2rem;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.22);
+}
+
+.auth-heading h1 {
+  margin: 0.35rem 0 0;
+  color: var(--text-main);
+  font-size: 2rem;
+  font-weight: 900;
+}
+
+.auth-kicker,
+.auth-form span {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin: 1.5rem 0;
+}
+
+.auth-tabs button,
+.auth-secondary,
+.auth-primary {
+  border: 1px solid var(--border-main);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  background: var(--bg-main);
+  color: var(--text-main);
+  font-weight: 900;
+}
+
+.auth-tabs button.active,
+.auth-primary {
+  background: var(--btn-bg);
+  color: white;
+}
+
+.auth-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.auth-form label {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.auth-form input {
+  min-height: 2.85rem;
+  border: 1px solid var(--border-main);
+  border-radius: 12px;
+  background: var(--bg-main);
+  color: var(--text-main);
+  padding: 0 0.9rem;
+  font-weight: 800;
+  outline: none;
+}
+
+.auth-send-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.auth-message {
+  margin-top: 1rem;
+  color: var(--text-secondary);
+  font-weight: 800;
+}
+
+.auth-message.error {
+  color: #ef4444;
+}
+</style>

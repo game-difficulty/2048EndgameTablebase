@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue';
 
 import i18n from './i18n';
+import { createLocalStorageStore } from '../services/storage/localStorageStore';
 import { createWsClient } from '../services/ws/createWsClient';
 import { normalizeBCFamilyModulus } from '../utils/bcFamilyModulus';
 import { applyTileColors } from '../utils/tileColors';
@@ -37,6 +38,39 @@ const DEFAULT_CONFIG = {
 };
 
 const MAX_DELETION_THRESHOLD = 0.999999;
+const USER_PREFERENCE_KEYS = [
+  'colors',
+  'custom_colors',
+  'use_custom_theme',
+  'compress',
+  'optimal_branch_only',
+  'compress_temp_files',
+  'algorithm_mode',
+  'advanced_algo',
+  'zmask_algo',
+  'chunked_solve',
+  'bc_family_modulus',
+  'deletion_threshold',
+  'deletion_threshold_mode',
+  'SmallTileSumLimit',
+  'success_rate_dtype',
+  'demo_speed',
+  'record_player_slider_threshold',
+  'dis_32k',
+  'dark_mode',
+  '4_spawn_rate',
+  'do_animation',
+  'font_size_factor',
+  'ui_scale',
+  'theme',
+  'language',
+];
+
+const userPreferencesStore = createLocalStorageStore({
+  key: 'user-preferences',
+  version: 1,
+  defaultValue: {},
+});
 
 const wsStatus = ref('connecting');
 const loaded = ref(false);
@@ -55,6 +89,41 @@ const clientId = `app_settings_${Math.random().toString(36).slice(2, 9)}`;
 
 const clonePalette = (palette, fallback = EMPTY_COLOR_SET) =>
   Array.isArray(palette) && palette.length > 0 ? [...palette] : [...fallback];
+
+const clonePreferenceValue = (value) => {
+  if (Array.isArray(value)) {
+    return [...value];
+  }
+  if (value && typeof value === 'object') {
+    return JSON.parse(JSON.stringify(value));
+  }
+  return value;
+};
+
+const readStoredUserPreferences = () => {
+  const stored = userPreferencesStore.read() || {};
+  const preferences = {};
+  for (const key of USER_PREFERENCE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(stored, key)) {
+      preferences[key] = clonePreferenceValue(stored[key]);
+    }
+  }
+  return preferences;
+};
+
+const persistUserPreferences = (nextPreferences = {}) => {
+  userPreferencesStore.update((current = {}) => {
+    const merged = { ...current };
+    for (const [key, value] of Object.entries(nextPreferences)) {
+      if (USER_PREFERENCE_KEYS.includes(key)) {
+        merged[key] = clonePreferenceValue(value);
+      }
+    }
+    return merged;
+  });
+};
+
+const shouldSendSettingToServer = (key) => !USER_PREFERENCE_KEYS.includes(key);
 
 const normalizeDeletionThreshold = (value) => {
   const parsed = Number(value);
@@ -193,7 +262,10 @@ const handleSettingsData = (payload = {}) => {
   categories.value = payload.categories || {};
   themeMap.value = payload.theme_map || {};
   targetTiles.value = payload.target_tiles || [];
-  mergeConfig(payload.config || {});
+  mergeConfig({
+    ...(payload.config || {}),
+    ...readStoredUserPreferences(),
+  });
   if (Object.prototype.hasOwnProperty.call(payload, 'build_state')) {
     applyBuildState(payload.build_state || {});
   }
@@ -218,6 +290,7 @@ const handleSettingUpdated = (payload = {}) => {
   }
 
   loaded.value = true;
+  persistUserPreferences({ [key]: config.value[key] });
   applyGlobalConfig();
 };
 
@@ -289,6 +362,7 @@ const saveSetting = (key, explicitValue = config.value[key]) => {
   if (key === 'bc_family_modulus') {
     explicitValue = normalizeBCFamilyModulus(explicitValue);
   }
+  let persistedPreferences = { [key]: explicitValue };
   if (key === 'colors') {
     mergeConfig({ colors: explicitValue });
   } else if (key === 'custom_colors') {
@@ -296,12 +370,21 @@ const saveSetting = (key, explicitValue = config.value[key]) => {
       custom_colors: explicitValue,
       colors: config.value.use_custom_theme ? explicitValue : config.value.colors,
     });
+    persistedPreferences = {
+      custom_colors: config.value.custom_colors,
+      colors: config.value.colors,
+    };
   } else if (key === 'theme') {
     mergeConfig({
       theme: explicitValue,
       use_custom_theme: false,
       colors: clonePalette(themeMap.value?.[explicitValue], config.value.colors),
     });
+    persistedPreferences = {
+      theme: config.value.theme,
+      use_custom_theme: config.value.use_custom_theme,
+      colors: config.value.colors,
+    };
   } else if (key === 'use_custom_theme') {
     const useCustomTheme = Boolean(explicitValue);
     mergeConfig({
@@ -310,17 +393,28 @@ const saveSetting = (key, explicitValue = config.value[key]) => {
         ? clonePalette(config.value.custom_colors, config.value.colors)
         : clonePalette(themeMap.value?.[config.value.theme], config.value.colors),
     });
+    persistedPreferences = {
+      use_custom_theme: config.value.use_custom_theme,
+      colors: config.value.colors,
+    };
   } else if (key === 'ui_scale') {
     const nextUiScale = Math.min(125, Math.max(90, Number(explicitValue) || DEFAULT_CONFIG.ui_scale));
     mergeConfig({ ui_scale: nextUiScale });
     applyGlobalConfig();
-    client?.send('UPDATE_SETTING', { key, value: nextUiScale });
+    persistUserPreferences({ ui_scale: config.value.ui_scale });
+    if (shouldSendSettingToServer(key)) {
+      client?.send('UPDATE_SETTING', { key, value: nextUiScale });
+    }
     return;
   } else {
     mergeConfig({ [key]: explicitValue });
+    persistedPreferences = { [key]: config.value[key] };
   }
   applyGlobalConfig();
-  client?.send('UPDATE_SETTING', { key, value: explicitValue });
+  persistUserPreferences(persistedPreferences);
+  if (shouldSendSettingToServer(key)) {
+    client?.send('UPDATE_SETTING', { key, value: explicitValue });
+  }
 };
 
 const saveCustomColors = (colors = config.value.custom_colors) => {
@@ -331,7 +425,14 @@ const saveCustomColors = (colors = config.value.custom_colors) => {
   });
   applyGlobalConfig();
   ensureStarted();
-  client?.send('UPDATE_SETTING', { key: 'colors', value: nextColors });
+  persistUserPreferences({
+    custom_colors: config.value.custom_colors,
+    colors: config.value.colors,
+    use_custom_theme: config.value.use_custom_theme,
+  });
+  if (shouldSendSettingToServer('colors')) {
+    client?.send('UPDATE_SETTING', { key: 'colors', value: nextColors });
+  }
 };
 
 const setTheme = (themeName) => {
@@ -363,6 +464,7 @@ const currentPalette = computed(() => {
 
 export function useAppSettingsStore() {
   if (!loaded.value) {
+    mergeConfig(readStoredUserPreferences());
     config.value.ui_scale = Number(config.value.ui_scale ?? DEFAULT_CONFIG.ui_scale) || DEFAULT_CONFIG.ui_scale;
     applyGlobalConfig();
   }

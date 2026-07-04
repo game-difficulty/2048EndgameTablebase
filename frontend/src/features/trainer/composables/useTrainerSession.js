@@ -1,7 +1,12 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import { useAppSettingsStore } from '../../../app/useAppSettings';
-import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
+import { useAuthState } from '../../../services/auth/authState';
+import {
+  fetchTablebaseCatalog,
+  getCatalogTargets,
+  groupTablebasesByPattern,
+} from '../../../services/tablebases/catalogClient';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
@@ -23,6 +28,7 @@ export function useTrainerSession(activeRef) {
     refreshSettings,
     saveSetting,
   } = useAppSettingsStore();
+  const { isAuthenticated, requireAuth } = useAuthState();
 
   const fallbackPatternCategories = {
     basic: ['L3', 'L4', 'I3', 'I4', 'LL', 'free8', 'free9', 'free10', '444'],
@@ -46,6 +52,7 @@ export function useTrainerSession(activeRef) {
   const resultsBoardHex = ref('');
   const patternCategories = ref(fallbackPatternCategories);
   const availableTargets = ref(['64', '128', '256', '512', '1024', '2048', '4096', '8192']);
+  const catalogTables = ref([]);
   const patternMenuOpen = ref(false);
   const activePatternCategory = ref(Object.keys(fallbackPatternCategories)[0] || '');
   const patternMenuRoot = ref(null);
@@ -264,35 +271,47 @@ export function useTrainerSession(activeRef) {
     };
   };
 
+  const protectedActions = new Set([
+    'TRAINER_SET_FILEPATH',
+    'TRAINER_GET_RESULTS',
+    'TRAINER_DEFAULT',
+    'TRAINER_MOVE',
+    'TRAINER_MANUAL_SPAWN',
+    'TRAINER_STEP',
+    'SET_BOARD',
+    'SET_CELL',
+    'UNDO',
+  ]);
+
   const triggerAction = (action, payload = {}) => {
+    if (protectedActions.has(action) && !requireAuth()) {
+      return false;
+    }
     client?.send(action, payload);
+    return true;
   };
 
-  const selectPathWithDesktopDialog = async (dialogId) => {
-    const result = await tryDesktopDialog(dialogId);
-    return result;
-  };
-
-  const openRecord = async () => {
-    const { handled, value } = await selectPathWithDesktopDialog('select_open_record');
-    if (handled) {
-      if (value) {
-        triggerAction('RECORD_OPEN', { path: value });
+  const loadCatalog = async () => {
+    try {
+      const tables = await fetchTablebaseCatalog();
+      catalogTables.value = tables;
+      const groupedTables = groupTablebasesByPattern(tables);
+      const patterns = Object.keys(groupedTables).sort();
+      if (patterns.length) {
+        patternCategories.value = { cloud: patterns };
+        availableTargets.value = getCatalogTargets(tables);
+        if (!patternType.value || !patterns.includes(patternType.value)) {
+          patternType.value = patterns[0] || '';
+        }
+        if (!targetValue.value || !availableTargets.value.includes(targetValue.value)) {
+          targetValue.value = availableTargets.value.includes('512') ? '512' : (availableTargets.value[0] || '');
+        }
+        syncActivePatternCategory();
+        applyTrainerJump();
       }
-      return;
+    } catch (error) {
+      console.error(error);
     }
-    triggerAction('TRIGGER_RECORD_OPEN');
-  };
-
-  const saveRecord = async () => {
-    const { handled, value } = await selectPathWithDesktopDialog('select_save_record');
-    if (handled) {
-      if (value) {
-        triggerAction('RECORD_SAVE', { path: value });
-      }
-      return;
-    }
-    triggerAction('TRIGGER_RECORD_SAVE');
   };
 
   const applyTrainerJump = () => {
@@ -310,7 +329,7 @@ export function useTrainerSession(activeRef) {
         patternType.value = parsed.pattern;
         targetValue.value = parsed.target;
         syncActivePatternCategory();
-        applyTablebase(null);
+        applyTablebase();
       }
     }
 
@@ -433,6 +452,10 @@ export function useTrainerSession(activeRef) {
     if (!boardHex) return null;
     if (reason !== 'manual' && resultsBoardHex.value === boardHex) return null;
     if (hasPendingResultsForBoard(boardHex)) return null;
+    if (!isAuthenticated.value) {
+      if (reason === 'auto') return null;
+      if (!requireAuth()) return null;
+    }
 
     const requestId = `${clientId}_${++nextResultsRequestId}`;
     pendingResultsRequests.set(requestId, { boardHex, reason });
@@ -487,16 +510,11 @@ export function useTrainerSession(activeRef) {
       return;
     }
 
-    if (data.action === 'RECORD_SAVE_REQUIRED') {
-      await saveRecord();
-      return;
-    }
-
     if (data.action === 'UPDATE_STATE') {
       metadata.value = data.data.animation;
       board.value = data.data.board;
-      if (typeof data.data.tablebase_path === 'string') {
-        tablebasePath.value = data.data.tablebase_path;
+      if (typeof data.data.tablebase_status === 'string') {
+        tablebasePath.value = data.data.tablebase_status;
       }
       const nextBoardHex = data.data.hex_str || hexInput.value;
       const boardChanged = !!nextBoardHex && nextBoardHex !== currentBoardHex.value;
@@ -604,14 +622,6 @@ export function useTrainerSession(activeRef) {
       return;
     }
 
-    if (data.action === 'FOLDER_SELECTED') {
-      if (data.data.path) {
-        tablebasePath.value = data.data.path;
-        applyTablebase(data.data.path);
-      }
-      return;
-    }
-
   };
 
   const connect = () => {
@@ -622,6 +632,7 @@ export function useTrainerSession(activeRef) {
       clientId,
       onOpen: () => {
         wsStatus.value = 'connected';
+        loadCatalog();
         triggerAction('GET_STATE');
       },
       onMessage: handleMessage,
@@ -714,36 +725,20 @@ export function useTrainerSession(activeRef) {
     clearDemoTimer();
     clearStepQueue();
     if (!patternType.value || !targetValue.value) return;
-    applyTablebase(null);
+    applyTablebase();
   };
 
-  const selectFolder = async () => {
-    try {
-      const { handled, value } = await selectPathWithDesktopDialog('select_folder');
-      if (handled) {
-        if (value) {
-          tablebasePath.value = value;
-          applyTablebase(value);
-        }
-        return;
-      }
-      triggerAction('TRIGGER_SELECT_FOLDER');
-    } catch (error) {
-      console.error(error);
-    }
-  };
+  const selectFolder = () => applyTablebase();
 
-  const applyTablebase = (filepath = null) => {
+  const applyTablebase = () => {
     if (!patternType.value || !targetValue.value) return;
     const fullPattern = `${patternType.value}_${targetValue.value}`;
-    const targetFilepath = typeof filepath === 'string' ? filepath : null;
     recordPlaybackLoaded.value = false;
     replayResultsActive.value = false;
     pendingResultsRequests.clear();
     invalidateResults({ clearDisplay: true });
     startResultsRefresh();
     triggerAction('TRAINER_SET_FILEPATH', {
-      filepath: targetFilepath,
       pattern: fullPattern,
       target: targetValue.value,
     });
@@ -808,17 +803,10 @@ export function useTrainerSession(activeRef) {
   };
 
   const manageRecord = async (cmd) => {
-    if (cmd === 'TOGGLE') {
-      if (recordingState.value) {
-        triggerAction('PREPARE_STOP_RECORDING');
-      } else {
-        triggerAction('START_RECORDING');
-      }
-    } else if (cmd === 'OPEN') {
+    if (cmd === 'TOGGLE' || cmd === 'OPEN') {
       demoActive.value = false;
       clearDemoTimer();
       clearStepQueue();
-      await openRecord();
     } else if (cmd === 'PREV' || cmd === 'NEXT') {
       demoActive.value = false;
       clearDemoTimer();
@@ -909,6 +897,7 @@ export function useTrainerSession(activeRef) {
   watch(
     appCategories,
     (nextCategories) => {
+      if (catalogTables.value.length) return;
       patternCategories.value = Object.keys(nextCategories || {}).length > 0
         ? nextCategories
         : fallbackPatternCategories;
@@ -924,6 +913,7 @@ export function useTrainerSession(activeRef) {
   watch(
     appTargetTiles,
     (nextTargets) => {
+      if (catalogTables.value.length) return;
       const normalizedTargets = (nextTargets || []).map(String);
       if (normalizedTargets.length > 0) {
         availableTargets.value = normalizedTargets;
@@ -972,6 +962,7 @@ export function useTrainerSession(activeRef) {
       if (isActive) {
         connect();
         refreshSettings();
+        loadCatalog();
       }
     },
     { immediate: true }

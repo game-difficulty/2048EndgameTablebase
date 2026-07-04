@@ -7,6 +7,7 @@ import numpy as np
 
 from Config import SingletonConfig
 
+from ...cloud_safety import is_cloud_mode
 from ..engine.base import BaseMinigameEngine
 from ..engine.mover import create_mover
 
@@ -15,6 +16,8 @@ class ShapeShifterEngine(BaseMinigameEngine):
     n = 12
 
     def get_initial_shape(self) -> tuple[int, int]:
+        if is_cloud_mode():
+            return self.n, self.n
         config = SingletonConfig().config
         saved = config.get("minigame_state", [dict(), dict()])[int(self.difficulty)].get(self.legacy_name)
         if saved:

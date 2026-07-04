@@ -1,8 +1,10 @@
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
+import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { createWsClient } from '../../../services/ws/createWsClient';
 
 export function useHelpSession(activeRef) {
+  const { config, start: startSettings } = useAppSettingsStore();
   const htmlContent = ref('');
   const toc = ref([]);
   const loading = ref(true);
@@ -27,6 +29,8 @@ export function useHelpSession(activeRef) {
   };
 
   let client = null;
+
+  startSettings();
 
   const escapeRegExp = (value) =>
     value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -276,9 +280,12 @@ export function useHelpSession(activeRef) {
     }
   };
 
+  const currentLanguage = () =>
+    String(config.value?.language || 'en').startsWith('zh') ? 'zh' : 'en';
+
   const fetchHelp = () => {
     loading.value = true;
-    client?.send('GET_HELP');
+    client?.send('GET_HELP', { language: currentLanguage() });
   };
 
   const connect = () => {
@@ -349,6 +356,17 @@ export function useHelpSession(activeRef) {
       }
     },
     { immediate: true }
+  );
+
+  watch(
+    () => config.value.language,
+    (nextLanguage, previousLanguage) => {
+      if (!activeRef?.value || nextLanguage === previousLanguage) {
+        return;
+      }
+      connect();
+      fetchHelp();
+    }
   );
 
   watch(searchQuery, () => {

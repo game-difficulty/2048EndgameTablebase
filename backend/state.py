@@ -7,6 +7,7 @@ from Config import SingletonConfig
 from engine_core.VBoardMover import decode_board
 from fastapi import WebSocket
 
+from .cloud_safety import is_cloud_mode
 from .serialization import sanitize_config
 from .session import GameSession, normalize_gamer_special_tiles, np_u64, safe_hex, u64
 from .trainer_helpers import _get_current_record_results
@@ -52,16 +53,14 @@ class ConnectionManager:
                 board_array, getattr(session, "gamer_special_tiles", {})
             )
         config = SingletonConfig().config
-        tablebase_path = ""
+        tablebase_status = "not_selected"
+        tablebase_full_pattern = ""
+        tablebase_dtype = ""
         if session.client_id.startswith("trainer_"):
-            pattern_key = session.current_pattern
-            if pattern_key:
-                table_key = SingletonConfig.get_pattern_key(
-                    pattern_key, float(config.get("4_spawn_rate", 0.1))
-                )
-                path_list = config.get("filepath_map", {}).get(table_key, [])
-                if path_list:
-                    tablebase_path = str(path_list[0][0] or "")
+            tablebase_full_pattern = str(getattr(session, "current_pattern", "") or "")
+            if tablebase_full_pattern:
+                tablebase_status = "loaded"
+                tablebase_dtype = str(getattr(session, "success_rate_dtype", "") or "")
         record_results, record_results_dtype = _get_current_record_results(session)
 
         await websocket.send_json(
@@ -99,7 +98,9 @@ class ConnectionManager:
                     "record_results": record_results,
                     "record_results_dtype": record_results_dtype,
                     "awaiting_spawn": (session.spawn_mode == 3 and session.moved == 1),
-                    "tablebase_path": tablebase_path,
+                    "tablebase_status": tablebase_status,
+                    "tablebase_full_pattern": tablebase_full_pattern,
+                    "tablebase_dtype": tablebase_dtype,
                     "settings": {
                         "difficulty": getattr(session, "difficulty", 0) * 100.0,
                         "speed": getattr(session, "speed", 100.0),
@@ -116,6 +117,8 @@ class ConnectionManager:
 
 def save_game_state(session_or_data: GameSession | dict[str, Any]) -> None:
     try:
+        if is_cloud_mode():
+            return
         if isinstance(session_or_data, GameSession):
             minigame_state = getattr(session_or_data, "minigame_session", None)
             engine = getattr(minigame_state, "engine", None)

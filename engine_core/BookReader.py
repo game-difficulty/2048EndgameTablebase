@@ -98,13 +98,15 @@ class BookReader:
         pattern: str,
         target: str,
         pattern_full: str,
+        path_list: list | None = None,
     ) -> tuple[dict[str, str | float | int | None], str]:
         del target
         meta = pattern_catalog.get(pattern)
         reader = cls._get_native_reader(pattern)
-        spawn_rate4 = SingletonConfig().config["4_spawn_rate"]
-        pattern_key = SingletonConfig.get_pattern_key(pattern_full, spawn_rate4)
-        path_list = SingletonConfig().config["filepath_map"].get(pattern_key, [])
+        if path_list is None:
+            spawn_rate4 = SingletonConfig().config["4_spawn_rate"]
+            pattern_key = SingletonConfig.get_pattern_key(pattern_full, spawn_rate4)
+            path_list = SingletonConfig().config["filepath_map"].get(pattern_key, [])
         if meta is None or reader is None:
             return {"?": "?"}, ""
         return reader.move_on_dic(
@@ -141,6 +143,7 @@ class BookReaderDispatcher:
         self.use_ex = False
         self.use_exad = False
         self.use_bc = False
+        self._path_lists: dict[str, list] = {}
 
     def set_book_reader_ad(self, pattern: str, target: int):
         if self.book_reader_ad is not None:
@@ -173,14 +176,24 @@ class BookReaderDispatcher:
         pattern_full: str,
     ) -> tuple[dict[str, str | float | int | None], str]:
         if self.use_exad and self.book_reader_exad is not None:
-            return self.book_reader_exad.move_on_dic(board, pattern_full)
+            return self.book_reader_exad.move_on_dic(
+                board, pattern_full, self._path_lists.get(pattern_full)
+            )
         if self.use_ad and self.book_reader_ad is not None:
-            return self.book_reader_ad.move_on_dic(board, pattern_full)
+            return self.book_reader_ad.move_on_dic(
+                board, pattern_full, self._path_lists.get(pattern_full)
+            )
         if self.use_ex and self.book_reader_ex is not None:
-            return self.book_reader_ex.move_on_dic(board, pattern_full)
+            return self.book_reader_ex.move_on_dic(
+                board, pattern_full, self._path_lists.get(pattern_full)
+            )
         if self.use_bc and self.book_reader_bc is not None:
-            return self.book_reader_bc.move_on_dic(board, pattern_full)
-        return self._book_reader.move_on_dic(board, pattern, target, pattern_full)
+            return self.book_reader_bc.move_on_dic(
+                board, pattern_full, self._path_lists.get(pattern_full)
+            )
+        return self._book_reader.move_on_dic(
+            board, pattern, target, pattern_full, self._path_lists.get(pattern_full)
+        )
 
     def get_random_state(self, path_list: list, pattern_full: str):
         if self.use_exad and self.book_reader_exad is not None:
@@ -200,6 +213,7 @@ class BookReaderDispatcher:
             return
         if not pattern or not target:
             return
+        self._path_lists[f"{pattern}_{2 ** target}"] = list(path_list or [])
 
         prefer_bc = str(SingletonConfig().config.get("algorithm_mode", "")).lower() == "bc"
         found_ad = False

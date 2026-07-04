@@ -29,9 +29,11 @@ from SignalHub import progress_signal
 from typing import Any
 
 from ..actions import Action, EventType
+from ..cloud_safety import is_cloud_mode
 from ..serialization import sanitize_config
 from ..session import GameSession
 from ..state import ConnectionManager
+from ..tablebase_catalog import get_available_tablebases, get_catalog_target_tiles
 from ..webview_api import Api
 
 
@@ -50,6 +52,65 @@ BUILD_STATE = {
     "folder_paths": [],
     "error": "",
 }
+USER_PREFERENCE_SETTING_KEYS = frozenset(
+    {
+        "colors",
+        "custom_colors",
+        "use_custom_theme",
+        "compress",
+        "optimal_branch_only",
+        "compress_temp_files",
+        "algorithm_mode",
+        "advanced_algo",
+        "zmask_algo",
+        "chunked_solve",
+        "bc_family_modulus",
+        "deletion_threshold",
+        "deletion_threshold_mode",
+        "SmallTileSumLimit",
+        "success_rate_dtype",
+        "demo_speed",
+        "record_player_slider_threshold",
+        "dis_32k",
+        "dark_mode",
+        "4_spawn_rate",
+        "do_animation",
+        "font_size_factor",
+        "ui_scale",
+        "theme",
+        "language",
+    }
+)
+CLOUD_CONFIG_PRIVATE_KEYS = frozenset(
+    {
+        "filepath_map",
+        "game_state",
+        "minigame_state",
+        "power_ups_state",
+    }
+)
+CLOUD_BUILD_STATE_PRIVATE_KEYS = frozenset(
+    {
+        "folder_path",
+        "folder_paths",
+    }
+)
+
+
+def public_settings_config(config: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(config)
+    if is_cloud_mode():
+        for key in CLOUD_CONFIG_PRIVATE_KEYS:
+            payload.pop(key, None)
+    return payload
+
+
+def public_build_state() -> dict[str, Any]:
+    payload = get_build_state_snapshot()
+    if is_cloud_mode():
+        for key in CLOUD_BUILD_STATE_PRIVATE_KEYS:
+            payload.pop(key, None)
+    return payload
 
 
 def normalize_deletion_threshold(value: Any) -> float:
@@ -78,6 +139,8 @@ async def handle_settings_action(
     manager: ConnectionManager,
 ) -> bool:
     if action == Action.GET_SETTINGS:
+        available_tablebases = get_available_tablebases()
+        catalog_targets = get_catalog_target_tiles()
         config = SingletonConfig().config.copy()
         config["ui_scale"] = config.get("ui_scale", 100)
         config["deletion_threshold"] = normalize_deletion_threshold(
@@ -93,11 +156,12 @@ async def handle_settings_action(
             {
                 "type": EventType.SETTINGS_DATA,
                 "payload": {
-                    "config": sanitize_config(config),
+                    "config": sanitize_config(public_settings_config(config)),
                     "categories": sanitize_config(category_info),
                     "theme_map": sanitize_config(theme_map),
-                    "target_tiles": [2**i for i in range(6, 15)],
-                    "build_state": sanitize_config(get_build_state_snapshot()),
+                    "target_tiles": catalog_targets or [2**i for i in range(6, 15)],
+                    "available_tablebases": sanitize_config(available_tablebases),
+                    "build_state": sanitize_config(public_build_state()),
                 },
             }
         )
@@ -106,6 +170,19 @@ async def handle_settings_action(
     if action == Action.UPDATE_SETTING:
         key = payload.get("key")
         value = payload.get("value")
+        if is_cloud_mode() and key in USER_PREFERENCE_SETTING_KEYS:
+            await websocket.send_json(
+                {
+                    "type": EventType.SETTING_UPDATED,
+                    "payload": {
+                        "key": key,
+                        "value": value,
+                        "status": "local_only",
+                    },
+                }
+            )
+            return True
+
         config = SingletonConfig().config
         config["ui_scale"] = config.get("ui_scale", 100)
         config["deletion_threshold"] = normalize_deletion_threshold(
@@ -199,6 +276,8 @@ async def handle_settings_action(
         return True
 
     if action == Action.START_BUILD:
+        raise PermissionError("Tablebase building is disabled in cloud mode.")
+
         pattern = payload.get("pattern")
         target = payload.get("target")
         target_tile = payload.get("target_tile")
@@ -468,7 +547,9 @@ async def handle_settings_action(
         return True
 
     if action == Action.GET_HELP:
-        lang = SingletonConfig().config.get("language", "en")
+        requested_lang = payload.get("language")
+        lang = requested_lang or SingletonConfig().config.get("language", "en")
+        lang = "zh" if str(lang or "").lower().startswith("zh") else "en"
         md_file = "helpZH.md" if lang == "zh" else "help.md"
         docs_root = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),

@@ -1,0 +1,9 @@
+{
+  "default_multiplier": 1,
+  "rules": [
+    { "prefix": "L3", "multiplier": 1 },
+    { "prefix": "442t", "multiplier": 1 },
+    { "prefix": "free9", "multiplier": 3 },
+    { "prefix": "free10", "multiplier": 5 }
+  ]
+}

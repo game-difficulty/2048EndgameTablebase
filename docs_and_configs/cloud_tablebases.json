@@ -1,0 +1,61 @@
+{
+  "root": "/opt/2048tables/tablebases",
+  "tables": [
+    {
+      "pattern": "L3",
+      "target": "128",
+      "relative_path": "L3_128",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    },
+    {
+      "pattern": "L3",
+      "target": "256",
+      "relative_path": "L3_256",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    },
+    {
+      "pattern": "L3",
+      "target": "512",
+      "relative_path": "L3_512",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    },
+    {
+      "pattern": "L3",
+      "target": "1024",
+      "relative_path": "L3_1024",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    },
+    {
+      "pattern": "free9",
+      "target": "128",
+      "relative_path": "free9_128",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    },
+    {
+      "pattern": "free10",
+      "target": "256",
+      "relative_path": "free10_256",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    },
+    {
+      "pattern": "442t",
+      "target": "256",
+      "relative_path": "442t_256",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    },
+    {
+      "pattern": "442t",
+      "target": "512",
+      "relative_path": "442t_512",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    }
+  ]
+}

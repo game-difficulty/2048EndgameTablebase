@@ -9,6 +9,8 @@ from engine_core.VBoardMover import decode_board
 
 from .serialization import sanitize_config
 from .session import safe_hex, u64
+from .quota.errors import InsufficientTokens
+from .quota.service import finalize_reservation, has_numeric_result, reserve_operation_tokens
 
 
 def replace_largest_tiles(board_encoded, n, target: str):
@@ -136,6 +138,12 @@ async def send_trainer_results(session, websocket, request_id=None):
     pattern = session.pattern_settings[0]
     _32ks = pattern_32k_tiles_map.get(pattern, [0])[0]
     target = session.pattern_settings[1]
+    reservation = reserve_operation_tokens(
+        user_id=session.user_id,
+        session_id=session.auth_session_id,
+        operation_key="trainer_lookup_hit",
+        full_pattern=session.current_pattern,
+    )
     try:
         board_encoded_replaced = np.uint64(
             u64(
@@ -174,6 +182,18 @@ async def send_trainer_results(session, websocket, request_id=None):
         dtype_name = str(dtype) if dtype else "?"
         if dtype_name != "?":
             session.success_rate_dtype = dtype_name
+        finalize_reservation(
+            reservation,
+            actual_operation_key=(
+                "trainer_lookup_hit"
+                if has_numeric_result(result)
+                else "trainer_lookup_miss"
+            ),
+            metadata={
+                "board_hex": safe_hex(session.board_encoded),
+                "request_id": request_id,
+            },
+        )
         await websocket.send_json(
             {
                 "action": "TRAINER_RESULTS",
@@ -185,8 +205,15 @@ async def send_trainer_results(session, websocket, request_id=None):
                 },
             }
         )
+    except InsufficientTokens:
+        raise
     except Exception as e:
         print("send_trainer_results Err:", e)
+        finalize_reservation(
+            reservation,
+            actual_operation_key="trainer_lookup_miss",
+            metadata={"board_hex": safe_hex(session.board_encoded), "error": type(e).__name__},
+        )
         await send_empty()
 
 

@@ -3,11 +3,16 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import numpy as np
 from Config import category_info
 from fastapi import WebSocket
-from engine_core.replay_utils import load_replay_file
+from engine_core.replay_utils import REPLAY_DTYPE, load_replay_file, strip_replay_sentinel
 
 from ..actions import Action
+from ..cloud_files import get_upload_record
+from ..cloud_safety import is_cloud_mode
+from ..quota.config import MULTIPLIER_UNIT
+from ..quota.service import consume_operation_tokens
 from ..replay import (
     _replay_load_record,
     _replay_pattern_from_path,
@@ -37,6 +42,36 @@ def _load_replay_path(session: GameSession, path: str) -> None:
         _replay_reset(session, f"Failed to load replay: {exc}")
 
 
+def _load_replay_upload(session: GameSession, upload_id: str, filename: str = "", pattern: str = "") -> None:
+    try:
+        upload = get_upload_record(upload_id, user_id=session.user_id)
+        raw_bytes = upload.path.read_bytes()
+        if len(raw_bytes) == 0 or len(raw_bytes) % REPLAY_DTYPE.itemsize != 0:
+            _replay_reset(session, "Recording file corrupted")
+            return
+        record = np.frombuffer(raw_bytes, dtype=REPLAY_DTYPE).copy()
+        record = strip_replay_sentinel(record)
+        if len(record) == 0:
+            _replay_reset(session, "Recording file corrupted")
+            return
+        source_name = filename or upload.filename
+        resolved_pattern = pattern or _replay_pattern_from_path(source_name)
+        use_variant = resolved_pattern.split("_")[0] in category_info.get("variant", [])
+        _replay_load_record(session, record, resolved_pattern, source_name, use_variant)
+    except Exception as exc:
+        _replay_reset(session, f"Failed to load replay upload")
+
+
+def _get_latest_tester_replay(session: GameSession) -> dict[str, Any]:
+    if is_cloud_mode():
+        return getattr(
+            session,
+            "latest_tester_replay",
+            {"record": [], "pattern": "", "source": "", "use_variant": False},
+        )
+    return LATEST_TESTER_REPLAY
+
+
 async def handle_replay_action(
     action: str,
     payload: dict[str, Any],
@@ -44,13 +79,14 @@ async def handle_replay_action(
     websocket: WebSocket,
 ) -> bool:
     if action == Action.REPLAY_GET_INIT:
-        if not session.replay_loaded and len(LATEST_TESTER_REPLAY["record"]) > 0:
+        latest_replay = _get_latest_tester_replay(session)
+        if not session.replay_loaded and len(latest_replay["record"]) > 0:
             _replay_load_record(
                 session,
-                LATEST_TESTER_REPLAY["record"],
-                LATEST_TESTER_REPLAY["pattern"],
-                LATEST_TESTER_REPLAY["source"],
-                LATEST_TESTER_REPLAY["use_variant"],
+                latest_replay["record"],
+                latest_replay["pattern"],
+                latest_replay["source"],
+                latest_replay["use_variant"],
             )
         elif not session.replay_loaded:
             _replay_reset(session, "No tester replay available yet.")
@@ -58,13 +94,14 @@ async def handle_replay_action(
         return True
 
     if action == Action.REPLAY_LOAD_LATEST:
-        if len(LATEST_TESTER_REPLAY["record"]) > 0:
+        latest_replay = _get_latest_tester_replay(session)
+        if len(latest_replay["record"]) > 0:
             _replay_load_record(
                 session,
-                LATEST_TESTER_REPLAY["record"],
-                LATEST_TESTER_REPLAY["pattern"],
-                LATEST_TESTER_REPLAY["source"],
-                LATEST_TESTER_REPLAY["use_variant"],
+                latest_replay["record"],
+                latest_replay["pattern"],
+                latest_replay["source"],
+                latest_replay["use_variant"],
             )
         else:
             _replay_reset(session, "No tester replay available yet.")
@@ -76,6 +113,27 @@ async def handle_replay_action(
         if not path:
             return True
         _load_replay_path(session, path)
+        await send_replay_state(websocket, session)
+        return True
+
+    if action == Action.REPLAY_LOAD_UPLOAD:
+        upload_id = str(payload.get("upload_id") or "").strip()
+        if not upload_id:
+            return True
+        consume_operation_tokens(
+            user_id=session.user_id,
+            session_id=session.auth_session_id,
+            operation_key="replay_load",
+            full_pattern="",
+            multiplier_override_units=MULTIPLIER_UNIT,
+            metadata={"upload_id": upload_id},
+        )
+        _load_replay_upload(
+            session,
+            upload_id,
+            filename=str(payload.get("filename") or ""),
+            pattern=str(payload.get("pattern") or ""),
+        )
         await send_replay_state(websocket, session)
         return True
 

@@ -1,4 +1,5 @@
 import { getBackendWebSocketUrl } from '../runtime/backendUrl';
+import { emitAuthRequired, emitTokenRequired } from '../auth/authEvents';
 
 export function createWsClient({
   clientId,
@@ -31,6 +32,7 @@ export function createWsClient({
 
   const connect = () => {
     clearReconnectTimer();
+    shouldReconnect = true;
     socket = new WebSocket(resolveUrl());
 
     socket.onopen = () => {
@@ -47,6 +49,12 @@ export function createWsClient({
       } catch (error) {
         onError?.(error, event);
         return;
+      }
+      if (message?.action === 'AUTH_REQUIRED' || message?.data?.code === 'AUTH_REQUIRED') {
+        emitAuthRequired();
+      }
+      if (message?.action === 'TOKEN_REQUIRED' || message?.data?.code === 'INSUFFICIENT_TOKENS') {
+        emitTokenRequired(message?.data || {});
       }
       onMessage?.(message, event, socket);
     };
@@ -67,6 +75,7 @@ export function createWsClient({
   const disconnect = () => {
     shouldReconnect = false;
     clearReconnectTimer();
+    window.removeEventListener('auth-changed', handleAuthChanged);
     pendingPayloads.length = 0;
     if (socket) {
       socket.onclose = null;
@@ -91,6 +100,15 @@ export function createWsClient({
   };
 
   const getSocket = () => socket;
+
+  const handleAuthChanged = () => {
+    if (!shouldReconnect || !socket) {
+      return;
+    }
+    socket.close();
+  };
+
+  window.addEventListener('auth-changed', handleAuthChanged);
 
   return {
     connect,

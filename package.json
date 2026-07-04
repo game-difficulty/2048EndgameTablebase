@@ -1,0 +1,24 @@
+{
+  "name": "src---cloud",
+  "version": "1.0.0",
+  "description": "**2048EndgameTablebase** is the world's fastest and most space-efficient tablebase solution, designed to push the theoretical boundaries of 2048. By integrating massive pre-computed tables, our AI achieves groundbreaking success rates under **no-undo** conditions:",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/game-difficulty/2048EndgameTablebase.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/game-difficulty/2048EndgameTablebase/issues"
+  },
+  "homepage": "https://github.com/game-difficulty/2048EndgameTablebase#readme"
+}

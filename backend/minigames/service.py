@@ -4,6 +4,7 @@ from typing import Any
 
 from Config import SingletonConfig
 
+from ..cloud_safety import is_cloud_mode
 from .games.blitzkrieg import BlitzkriegEngine
 from .games.column_chaos import ColumnChaosEngine
 from .games.design_master import DesignMasterEngine
@@ -46,9 +47,11 @@ ENGINE_BY_MODULE = {
 
 
 def _summary_for_game(definition: MinigameDefinition, difficulty: int) -> dict[str, Any]:
-    config = SingletonConfig().config
-    game_state = config.get("minigame_state", [dict(), dict()])
-    saved = game_state[difficulty].get(definition.legacy_name)
+    saved = None
+    if not is_cloud_mode():
+        config = SingletonConfig().config
+        game_state = config.get("minigame_state", [dict(), dict()])
+        saved = game_state[difficulty].get(definition.legacy_name)
     best_score = 0
     highest_exp = 0
     trophy = 0
@@ -102,7 +105,7 @@ def create_engine(definition: MinigameDefinition, difficulty: int):
     return engine_cls(definition, difficulty)
 
 
-def start_minigame(state: MinigameSessionState, game_id: str):
+def start_minigame(state: MinigameSessionState, game_id: str, snapshot: dict[str, Any] | None = None):
     definition = MINIGAME_BY_ID.get(game_id)
     if definition is None:
         raise ValueError("Unknown minigame")
@@ -115,6 +118,16 @@ def start_minigame(state: MinigameSessionState, game_id: str):
     state.interaction_phase = 0
     state.selection_cache = None
     state.powerup_counts = load_powerup_counts(state)
+    if isinstance(snapshot, dict):
+        engine_snapshot = snapshot.get("engine")
+        if isinstance(engine_snapshot, dict):
+            engine.import_snapshot(engine_snapshot)
+        powerups = snapshot.get("powerupCounts")
+        if isinstance(powerups, dict):
+            state.powerup_counts = {
+                key: max(0, int(powerups.get(key, state.powerup_counts.get(key, 0)) or 0))
+                for key in ("bomb", "glove", "twist")
+            }
     engine.save_to_config()
     return engine
 
@@ -131,6 +144,12 @@ def build_state_payload(state: MinigameSessionState) -> dict[str, Any]:
     payload = state.engine.serialize_state()
     payload["powerups"] = build_powerups_payload(state)
     payload["interaction"] = build_interaction_payload(state)
+    payload["snapshot"] = {
+        "gameId": state.current_game_id,
+        "difficulty": int(state.difficulty),
+        "engine": state.engine.export_snapshot(),
+        "powerupCounts": dict(state.powerup_counts),
+    }
     return payload
 
 

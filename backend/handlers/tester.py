@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import asyncio
+import base64
+import time
 from typing import Any
 
 import numpy as np
@@ -11,7 +12,6 @@ from engine_core.BoardMover import s_gen_new_num as r_gen_new_num, s_move_board 
 
 from ..actions import Action, Message
 from ..animation import build_move_animation_metadata
-from ..notebook import mistakes_book_store
 from ..session import GameSession
 from ..session import np_u64, u64
 from ..tester import (
@@ -36,7 +36,7 @@ from ..tester import (
     _tester_start_practice,
     send_tester_state,
 )
-from ..webview_api import Api
+from ..quota.service import reserve_operation_tokens
 
 
 async def handle_tester_action(
@@ -204,6 +204,7 @@ async def handle_tester_action(
             return True
 
         old_board_encoded = np_u64(session.board_encoded)
+        logs_since = len(session.tester_logs)
 
         move_fn = v_move_board if session.use_variant else r_move_board
         gen_fn = v_gen_new_num if session.use_variant else r_gen_new_num
@@ -213,6 +214,13 @@ async def handle_tester_action(
         new_board = np.uint64(u64(new_board))
         if new_board == old_board_encoded:
             return True
+
+        session._tester_lookup_reservation = reserve_operation_tokens(
+            user_id=session.user_id,
+            session_id=session.auth_session_id,
+            operation_key="tester_lookup_hit",
+            full_pattern=session.tester_full_pattern,
+        )
 
         result_lines = []
         for key, value in session.tester_results.items():
@@ -257,12 +265,6 @@ async def handle_tester_action(
             session.tester_goodness_of_fit *= loss
             evaluation = _tester_evaluation_of_performance(loss)
             session.tester_performance_stats[evaluation] += 1
-            mistakes_book_store.add_mistake(
-                session.tester_full_pattern,
-                old_board_encoded,
-                loss,
-                best_move,
-            )
             result_lines.append(evaluation)
             result_lines.append(
                 f"one-step loss: {1 - loss:.4f}, goodness of fit: {session.tester_goodness_of_fit:.4f}"
@@ -335,46 +337,37 @@ async def handle_tester_action(
             spawn_index=num_pos_1d,
             spawn_value=2**val_exp if val_exp > 0 else 0,
         )
-        await send_tester_state(websocket, session, metadata)
+        await send_tester_state(websocket, session, metadata, logs_since=logs_since)
         return True
 
-    if action == Action.TESTER_TRIGGER_SAVE_LOG:
-        path = await asyncio.to_thread(Api().select_save_tester_log)
-        if not path:
-            return True
-        payload = dict(payload)
-        payload["path"] = path
-        action = Action.TESTER_SAVE_LOG
-
-    if action == Action.TESTER_TRIGGER_SAVE_REPLAY:
-        path = await asyncio.to_thread(Api().select_save_tester_replay)
-        if not path:
-            return True
-        payload = dict(payload)
-        payload["path"] = path
-        action = Action.TESTER_SAVE_REPLAY
-
-    if action == Action.TESTER_SAVE_LOG:
-        path = str(payload.get("path") or "").strip()
-        if path:
-            if not path.lower().endswith(".txt"):
-                path += ".txt"
-            with open(path, "w", encoding="utf-8") as file:
-                file.write("\n".join(session.tester_logs))
-            session.tester_status = f"Saved log to {path}"
-            await send_tester_state(websocket, session)
+    if action == Action.TESTER_EXPORT_LOG:
+        filename = f"tester_log_{int(time.time())}.txt"
+        await websocket.send_json(
+            {
+                "action": Action.TESTER_EXPORT_LOG,
+                "data": {
+                    "filename": filename,
+                    "mime": "text/plain;charset=utf-8",
+                    "text": "\n".join(session.tester_logs),
+                },
+            }
+        )
         return True
 
-    if action == Action.TESTER_SAVE_REPLAY:
-        path = str(payload.get("path") or "").strip()
-        if path and session.tester_step_count > 0:
-            if not path.lower().endswith(".rpl"):
-                path += ".rpl"
+    if action == Action.TESTER_EXPORT_REPLAY:
+        if session.tester_step_count > 0:
             replay = session.tester_record[: session.tester_step_count + 1].copy()
             replay[session.tester_step_count] = TESTER_REPLAY_SENTINEL
-            replay.tofile(path)
-            session.tester_status = f"Saved replay to {path}"
-            await send_tester_state(websocket, session)
+            await websocket.send_json(
+                {
+                    "action": Action.TESTER_EXPORT_REPLAY,
+                    "data": {
+                        "filename": f"tester_replay_{int(time.time())}.rpl",
+                        "mime": "application/octet-stream",
+                        "base64": base64.b64encode(replay.tobytes()).decode("ascii"),
+                    },
+                }
+            )
         return True
 
     return False

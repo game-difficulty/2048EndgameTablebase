@@ -2,7 +2,8 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { useAppSettingsStore } from '../../../app/useAppSettings';
-import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
+import { useAuthState } from '../../../services/auth/authState';
+import { pickSingleBrowserFile, uploadBrowserFiles } from '../../../services/files/browserFiles';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
@@ -12,6 +13,7 @@ export function useReplaySession(activeRef, emit) {
   const RESULT_REFRESH_GRACE_MS = 1200;
   const RESULT_REFRESH_PLACEHOLDER_MS = 2400;
   const { config: appConfig, categories: appCategories, saveSetting } = useAppSettingsStore();
+  const { requireAuth } = useAuthState();
   const { t } = useI18n();
 
   const COLOR_GREEN = '#2e7d32';
@@ -298,8 +300,17 @@ export function useReplaySession(activeRef, emit) {
     }
   };
 
+  const protectedActions = new Set([
+    'REPLAY_LOAD_UPLOAD',
+    'REPLAY_LOAD_LATEST',
+  ]);
+
   const triggerAction = (action, payload = {}) => {
+    if (protectedActions.has(action) && !requireAuth()) {
+      return false;
+    }
     client?.send(action, payload);
+    return true;
   };
 
   const consumePendingLatestReplayLoad = () => {
@@ -410,15 +421,22 @@ export function useReplaySession(activeRef, emit) {
 
   const openReplayFile = async () => {
     menuOpen.value = false;
+    if (!requireAuth()) return;
     stopDemo();
-    const { handled, value } = await tryDesktopDialog('select_open_replay_file');
-    if (handled) {
-      if (value) {
-        triggerAction('REPLAY_LOAD_FILE', { path: value });
+    try {
+      const file = await pickSingleBrowserFile({ accept: '.rpl' });
+      if (!file) return;
+      const response = await uploadBrowserFiles(file, { kind: 'replay' });
+      const upload = response.uploads?.[0];
+      if (upload?.upload_id) {
+        triggerAction('REPLAY_LOAD_UPLOAD', {
+          upload_id: upload.upload_id,
+          filename: upload.filename || file.name,
+        });
       }
-      return;
+    } catch (error) {
+      console.error('Failed to upload replay file', error);
     }
-    triggerAction('REPLAY_TRIGGER_OPEN_FILE');
   };
 
   const loadLatestReplay = () => {

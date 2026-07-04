@@ -39,6 +39,56 @@
           ×
         </button>
       </div>
+      <div class="relative ml-auto flex items-center gap-2 whitespace-nowrap pl-3" data-account-menu>
+        <template v-if="authUser">
+          <button
+            type="button"
+            class="action-btn-small flex items-center gap-2"
+            :aria-expanded="accountMenuOpen ? 'true' : 'false'"
+            @click="accountMenuOpen = !accountMenuOpen"
+          >
+            <span class="flex h-6 w-6 items-center justify-center rounded-full bg-accent/18 text-[0.72rem] font-black text-accent">
+              {{ accountInitials }}
+            </span>
+            <span class="hidden max-w-[9rem] truncate sm:inline">{{ accountDisplayName }}</span>
+          </button>
+          <div
+            v-if="accountMenuOpen"
+            class="absolute right-0 top-[calc(100%+0.5rem)] z-[90] w-[18rem] rounded-2xl border border-border-main bg-bg-card/98 p-4 text-text-main shadow-[0_20px_70px_rgba(15,23,42,0.35)]"
+          >
+            <div class="min-w-0">
+              <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('auth.account.title') }}</div>
+              <div class="mt-1 truncate ui-body font-black">{{ accountDisplayName }}</div>
+              <div class="truncate text-[0.72rem] font-bold text-text-secondary">{{ authUser.email }}</div>
+            </div>
+            <div class="mt-4 grid gap-2 rounded-xl border border-border-main bg-bg-main/55 p-3">
+              <div class="flex items-center justify-between gap-3">
+                <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.bonusTokens') }}</span>
+                <span class="ui-caption font-black text-text-main">{{ formatTokens(authUser.token_balance?.bonus) }}</span>
+              </div>
+              <div class="flex items-center justify-between gap-3">
+                <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.paidTokens') }}</span>
+                <span class="ui-caption font-black text-text-main">{{ formatTokens(authUser.token_balance?.paid) }}</span>
+              </div>
+              <div class="flex items-center justify-between gap-3 border-t border-border-main pt-2">
+                <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.totalTokens') }}</span>
+                <span class="ui-body font-black text-accent">{{ formatTokens(authUser.token_balance?.total) }}</span>
+              </div>
+            </div>
+            <button type="button" class="action-btn-small mt-4 w-full justify-center" @click="handleLogout">
+              {{ $t('auth.actions.logout') }}
+            </button>
+          </div>
+        </template>
+        <template v-else>
+          <button type="button" class="action-btn-small" @click="openAuthDialog('login')">
+            {{ $t('auth.actions.login') }}
+          </button>
+          <button type="button" class="action-btn-small" @click="openAuthDialog('register')">
+            {{ $t('auth.actions.register') }}
+          </button>
+        </template>
+      </div>
     </div>
 
     <div class="flex-1 relative overflow-hidden">
@@ -48,13 +98,6 @@
         v-show="activeTab === TAB_IDS.MAIN_MENU"
       >
         <MainMenuView :active="activeTab === TAB_IDS.MAIN_MENU" @selectTab="openTab" />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.GAMER)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.GAMER"
-      >
-        <GamerView :active="activeTab === TAB_IDS.GAMER" />
       </div>
       <div
         v-if="isTabOpen(TAB_IDS.TRAINER)"
@@ -93,16 +136,6 @@
         />
       </div>
       <div
-        v-if="isTabOpen(TAB_IDS.NOTEBOOK)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.NOTEBOOK"
-      >
-        <NotebookView
-          :active="activeTab === TAB_IDS.NOTEBOOK"
-          @navigate-tab="openTab"
-        />
-      </div>
-      <div
         v-if="isTabOpen(TAB_IDS.SETTINGS)"
         class="absolute inset-0"
         v-show="activeTab === TAB_IDS.SETTINGS"
@@ -123,6 +156,16 @@
       :context="analysisDialogContext"
       @close="closeAnalysisDialog"
     />
+
+    <div
+      v-if="authDialogOpen"
+      class="absolute inset-0 z-[115] flex items-center justify-center p-6"
+    >
+      <div class="absolute inset-0 bg-slate-950/42 backdrop-blur-sm" @click="closeAuthDialog" />
+      <div class="relative z-10 w-full max-w-[28rem]">
+        <AuthPage :initial-mode="authDialogMode" @authenticated="handleAuthenticated" />
+      </div>
+    </div>
 
     <div
       v-if="globalErrorDialog.open"
@@ -174,6 +217,26 @@
         </div>
       </div>
     </div>
+
+    <div
+      v-if="tokenRequiredDialog.open"
+      class="absolute inset-0 z-[121] flex items-center justify-center p-6"
+    >
+      <div class="absolute inset-0 bg-slate-950/42 backdrop-blur-sm" @click="closeTokenRequiredDialog" />
+      <div class="relative z-10 w-full max-w-md rounded-2xl border border-border-main bg-bg-card/96 p-6 shadow-[0_24px_80px_rgba(15,23,42,0.32)]">
+        <div class="ui-metric font-black tracking-tight text-text-main">
+          {{ $t('auth.tokens.insufficientTitle') }}
+        </div>
+        <div class="mt-2 ui-body text-text-secondary">
+          {{ $t('auth.tokens.insufficientMessage', tokenRequiredDialog) }}
+        </div>
+        <div class="mt-5 flex justify-end">
+          <button type="button" class="action-btn-small" @click="closeTokenRequiredDialog">
+            {{ $t('common.close') }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -185,17 +248,26 @@ import { useAppSettingsStore } from './app/useAppSettings';
 import { TAB_IDS } from './app/tabRegistry';
 import { useTabManager } from './app/useTabManager';
 import MainMenuView from './components/MainMenuView.vue';
-import GamerView from './features/gamer/pages/GamerPage.vue';
+import AuthPage from './features/auth/AuthPage.vue';
 import HelpView from './features/help/pages/HelpPage.vue';
 import MinigamesView from './features/minigames/pages/MinigamesPage.vue';
-import NotebookView from './features/notebook/pages/NotebookPage.vue';
 import ReplayAnalysisDialog from './features/replay/components/ReplayAnalysisDialog.vue';
 import ReplayReviewView from './features/replay/pages/ReplayPage.vue';
 import SettingsView from './features/settings/pages/SettingsPage.vue';
 import TesterView from './features/tester/pages/TesterPage.vue';
 import TrainerView from './features/trainer/pages/TrainerPage.vue';
+import { useAuthState } from './services/auth/authState';
 
 const { t } = useI18n();
+const {
+  user: authUser,
+  dialogOpen: authDialogOpen,
+  dialogMode: authDialogMode,
+  refreshAuth,
+  openAuthDialog,
+  closeAuthDialog,
+  logout,
+} = useAuthState();
 const analysisDialogOpen = ref(false);
 const analysisDialogContext = ref({});
 const globalErrorDialog = ref({
@@ -206,6 +278,12 @@ const globalErrorDialog = ref({
 const globalErrorExpanded = ref(false);
 const globalErrorQueue = [];
 const globalErrorCopied = ref(false);
+const accountMenuOpen = ref(false);
+const tokenRequiredDialog = ref({
+  open: false,
+  required_tokens: 0,
+  balance_tokens: 0,
+});
 const { start: startAppSettings, stop: stopAppSettings } = useAppSettingsStore();
 const {
   activeTab,
@@ -220,6 +298,20 @@ const draggedTabId = ref(null);
 const dragTargetTabId = ref(null);
 
 const getTabLabel = (tab) => (tab.titleKey ? t(tab.titleKey) : tab.title);
+const accountDisplayName = computed(() => authUser.value?.display_name || authUser.value?.email || '');
+const accountInitials = computed(() => {
+  const name = accountDisplayName.value.trim();
+  if (!name) return '?';
+  return name.slice(0, 2).toUpperCase();
+});
+const formatTokens = (value) => {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return '0';
+  return number.toLocaleString(undefined, {
+    minimumFractionDigits: number % 1 === 0 ? 0 : 1,
+    maximumFractionDigits: 3,
+  });
+};
 const openAnalysisDialog = (context = {}) => {
   analysisDialogContext.value = { ...(context || {}) };
   analysisDialogOpen.value = true;
@@ -447,18 +539,73 @@ const handleTabDragEnd = () => {
   clearTabDragState();
 };
 
-onMounted(() => {
+const handleAuthenticated = async () => {
+  await refreshAuth();
+  closeAuthDialog();
+};
+
+const handleLogout = async () => {
+  try {
+    await logout();
+    accountMenuOpen.value = false;
+  } catch (error) {
+    console.error('Failed to log out', error);
+  }
+};
+
+const handleAuthRequired = () => {
+  openAuthDialog('login');
+};
+
+const handleTokenRequired = (event) => {
+  const detail = event?.detail || {};
+  refreshAuth();
+  tokenRequiredDialog.value = {
+    open: true,
+    required_tokens: Number(detail.required_tokens || 0),
+    balance_tokens: Number(detail.balance_tokens || 0),
+  };
+};
+
+const closeTokenRequiredDialog = () => {
+  tokenRequiredDialog.value = {
+    open: false,
+    required_tokens: 0,
+    balance_tokens: 0,
+  };
+};
+
+const handleAccountMenuPointerDown = (event) => {
+  if (!accountMenuOpen.value) {
+    return;
+  }
+  const target = event.target;
+  if (target instanceof Element && target.closest('[data-account-menu]')) {
+    return;
+  }
+  accountMenuOpen.value = false;
+};
+
+onMounted(async () => {
   startAppSettings();
+  refreshAuth();
+
   for (const payload of readPendingGlobalErrors()) {
     enqueueGlobalError(payload);
   }
   window.addEventListener('app-global-error', handleGlobalErrorEvent);
+  window.addEventListener('auth-required', handleAuthRequired);
+  window.addEventListener('token-required', handleTokenRequired);
+  document.addEventListener('pointerdown', handleAccountMenuPointerDown, true);
   document.addEventListener('pointerup', handleGlobalPointerUp, true);
   document.addEventListener('keydown', handleGlobalBoardHotkeyFocus, true);
 });
 
 onUnmounted(() => {
   window.removeEventListener('app-global-error', handleGlobalErrorEvent);
+  window.removeEventListener('auth-required', handleAuthRequired);
+  window.removeEventListener('token-required', handleTokenRequired);
+  document.removeEventListener('pointerdown', handleAccountMenuPointerDown, true);
   document.removeEventListener('pointerup', handleGlobalPointerUp, true);
   document.removeEventListener('keydown', handleGlobalBoardHotkeyFocus, true);
   stopAppSettings();

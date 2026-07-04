@@ -8,6 +8,7 @@ import numpy as np
 
 from Config import SingletonConfig
 
+from ...cloud_safety import is_cloud_mode
 from ..animation import build_minigame_move_animation_metadata
 from ..registry import MinigameDefinition
 from .mover import create_mover
@@ -100,9 +101,11 @@ class BaseMinigameEngine:
         return int(positive_values.max()) if positive_values.size else 0
 
     def _load_or_initialize(self) -> None:
-        config = SingletonConfig().config
-        state_by_difficulty = config.setdefault("minigame_state", [dict(), dict()])
-        saved_entry = state_by_difficulty[self.difficulty].get(self.legacy_name)
+        saved_entry = None
+        if not is_cloud_mode():
+            config = SingletonConfig().config
+            state_by_difficulty = config.setdefault("minigame_state", [dict(), dict()])
+            saved_entry = state_by_difficulty[self.difficulty].get(self.legacy_name)
         if saved_entry:
             try:
                 main_state = saved_entry[0]
@@ -168,6 +171,8 @@ class BaseMinigameEngine:
         self.setup_new_game()
 
     def save_to_config(self) -> None:
+        if is_cloud_mode():
+            return
         config = SingletonConfig().config
         config.setdefault("minigame_state", [dict(), dict()])
         config["minigame_state"][self.difficulty][self.legacy_name] = (
@@ -183,6 +188,49 @@ class BaseMinigameEngine:
             self.export_legacy_extra(),
         )
         SingletonConfig().save_config(config)
+
+    def export_snapshot(self) -> dict[str, Any]:
+        return {
+            "gameId": self.game_id,
+            "legacyName": self.legacy_name,
+            "difficulty": int(self.difficulty),
+            "board": np.array(self.board, dtype=np.int32).tolist(),
+            "score": int(self.score),
+            "maxScore": int(self.max_score),
+            "maxNum": int(self.max_num),
+            "currentMaxNum": int(self.current_max_num),
+            "isPassed": int(self.is_passed),
+            "newtilePos": int(self.newtile_pos),
+            "newtile": int(self.newtile),
+            "highestTileExp": int(self.highest_tile_exp),
+            "isOver": bool(self.is_over),
+            "extra": self.export_legacy_extra(),
+        }
+
+    def import_snapshot(self, snapshot: dict[str, Any]) -> None:
+        if not isinstance(snapshot, dict):
+            return
+        board = np.array(snapshot.get("board", []), dtype=np.int32)
+        if board.shape == (self.rows, self.cols):
+            self.board = board
+        self.score = int(snapshot.get("score", self.score) or 0)
+        self.max_score = int(snapshot.get("maxScore", self.max_score) or 0)
+        self.max_num = int(snapshot.get("maxNum", self.max_num) or 0)
+        self.current_max_num = int(
+            snapshot.get("currentMaxNum", self.current_max_num) or 0
+        )
+        self.is_passed = int(snapshot.get("isPassed", self.is_passed) or 0)
+        self.newtile_pos = int(snapshot.get("newtilePos", self.newtile_pos) or -1)
+        self.newtile = int(snapshot.get("newtile", self.newtile) or 0)
+        self.highest_tile_exp = int(
+            snapshot.get("highestTileExp", self.highest_tile_exp) or 0
+        )
+        self.is_over = bool(snapshot.get("isOver", self.is_over))
+        extra_state = snapshot.get("extra")
+        if isinstance(extra_state, list):
+            self.load_legacy_extra(extra_state)
+        self.current_max_num = max(self.current_max_num, self._positive_max(self.board))
+        self._refresh_highest_tile_exp()
 
     def queue_message(self, key: str, value: Any) -> None:
         self._pending_messages[key] = value
@@ -373,6 +421,18 @@ class BaseMinigameEngine:
         }
 
     def build_powerups(self) -> dict[str, Any]:
+        if is_cloud_mode():
+            init_count = 1 if self.difficulty == 1 else 5
+            counts = [init_count, init_count, init_count]
+            return {
+                "enabled": bool(self.definition.supports_powerups),
+                "counts": {
+                    "bomb": int(counts[0]),
+                    "glove": int(counts[1]),
+                    "twist": int(counts[2]),
+                },
+                "activeMode": None,
+            }
         config = SingletonConfig().config
         init_count = 1 if self.difficulty == 1 else 5
         counts = config.setdefault("power_ups_state", [dict(), dict()])[

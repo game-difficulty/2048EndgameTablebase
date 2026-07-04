@@ -10,6 +10,52 @@
     "settings": "设置",
     "help": "帮助"
   },
+  "auth": {
+    "title": {
+      "login": "登录",
+      "register": "创建账号"
+    },
+    "tabs": {
+      "login": "登录",
+      "register": "注册"
+    },
+    "fields": {
+      "inviteCode": "邀请码",
+      "email": "邮箱",
+      "emailCode": "邮箱验证码",
+      "password": "密码",
+      "displayName": "显示名称"
+    },
+    "placeholders": {
+      "inviteCode": "输入邀请码",
+      "email": "邮箱地址",
+      "emailCode": "6 位验证码",
+      "password": "至少 8 个字符",
+      "displayName": "可选"
+    },
+    "actions": {
+      "login": "登录",
+      "register": "注册",
+      "logout": "退出",
+      "sendCode": "发送验证码",
+      "sendingCode": "发送中",
+      "pleaseWait": "请稍候"
+    },
+    "messages": {
+      "codeSent": "验证码已发送。",
+      "devCode": "验证码：{code}"
+    },
+    "account": {
+      "title": "账号",
+      "bonusTokens": "赠送 token",
+      "paidTokens": "充值 token",
+      "totalTokens": "总余额"
+    },
+    "tokens": {
+      "insufficientTitle": "Token 余额不足",
+      "insufficientMessage": "本次操作需要 {required_tokens} token，当前余额为 {balance_tokens} token。"
+    }
+  },
   "settings": {
     "title": "系统设置",
     "loading": "正在加载设置...",
@@ -303,7 +349,8 @@
       "paths": "回放文件 / 文件夹",
       "pathsPlaceholder": "在此粘贴 .txt / .vrs 文件或文件夹路径，每行一条",
       "selectFiles": "选择文件",
-      "analyze": "开始分析"
+      "analyze": "开始分析",
+      "downloadResults": "下载结果"
     },
     "progress": {
       "title": "批处理进度",

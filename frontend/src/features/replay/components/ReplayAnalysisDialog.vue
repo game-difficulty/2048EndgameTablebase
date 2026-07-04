@@ -88,6 +88,7 @@
                 <div class="mb-2 ui-caption font-black uppercase tracking-[0.22em] text-text-secondary">{{ $t('analysis.input.paths') }}</div>
                 <textarea
                   v-model="pathsInput"
+                  readonly
                   spellcheck="false"
                   class="analysis-textarea"
                   :placeholder="$t('analysis.input.pathsPlaceholder')"
@@ -105,6 +106,13 @@
                   {{ isRunning ? $t('analysis.progress.running') : $t('analysis.input.analyze') }}
                 </button>
               </div>
+              <button
+                v-if="downloadUrl"
+                class="analysis-secondary-btn"
+                @click="downloadResults"
+              >
+                {{ $t('analysis.input.downloadResults') }}
+              </button>
             </div>
           </section>
 
@@ -178,7 +186,9 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import UiSelect from '../../../components/UiSelect.vue';
-import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
+import { downloadResponse, pickBrowserFiles, postMultipart } from '../../../services/files/browserFiles';
+import { useAuthState } from '../../../services/auth/authState';
+import { getBackendUrl } from '../../../services/runtime/backendUrl';
 import { createWsClient } from '../../../services/ws/createWsClient';
 
 const props = defineProps({
@@ -192,6 +202,7 @@ const props = defineProps({
 defineEmits(['close']);
 
 const { t } = useI18n();
+const { requireAuth } = useAuthState();
 
 const wsStatus = ref('disconnected');
 const categories = ref({});
@@ -199,6 +210,8 @@ const targetTiles = ref(['64', '128', '256', '512', '1024', '2048', '4096', '819
 const selectedPattern = ref('');
 const selectedTarget = ref('2048');
 const pathsInput = ref('');
+const selectedFiles = ref([]);
+const downloadUrl = ref('');
 const patternMenuOpen = ref(false);
 const patternMenuRoot = ref(null);
 const activePatternCategory = ref('');
@@ -241,11 +254,11 @@ const progressPercent = computed(() => {
   if (totalCount.value <= 0) return 0;
   return Math.max(0, Math.min(100, (completedCount.value / totalCount.value) * 100));
 });
-const canAnalyze = computed(() => Boolean(selectedPattern.value && selectedTarget.value && pathsInput.value.trim()));
+const canAnalyze = computed(() => Boolean(selectedPattern.value && selectedTarget.value && selectedFiles.value.length));
 const normalizedEntries = computed(() =>
   entries.value.map((entry, index) => ({
-    key: `${entry.path}-${entry.status}-${index}`,
-    path: entry.path,
+    key: `${entry.filename || entry.path}-${entry.status}-${index}`,
+    path: entry.filename || entry.path,
     status: entry.status,
     message: entry.message || '',
   }))
@@ -316,31 +329,16 @@ const applyContext = (context) => {
   }
 };
 
-const mergeSelectedPaths = (paths) => {
-  const existing = new Set(
-    pathsInput.value
-      .split(/\r?\n/u)
-      .map((item) => item.trim())
-      .filter(Boolean)
-  );
-  for (const path of paths) {
-    const normalized = String(path || '').trim();
-    if (normalized) existing.add(normalized);
-  }
-  pathsInput.value = [...existing].join('\n');
-};
-
 const pickFiles = async () => {
-  const { handled, value } = await tryDesktopDialog('select_analysis_files', {
+  const files = await pickBrowserFiles({
+    accept: '.txt,.vrs,.rpl',
     multiple: true,
   });
-  if (handled) {
-    if (value.length) {
-      mergeSelectedPaths(value);
-    }
-    return;
+  if (files.length) {
+    selectedFiles.value = files;
+    pathsInput.value = files.map((file) => file.name).join('\n');
+    downloadUrl.value = '';
   }
-  client?.send('ANALYSIS_TRIGGER_SELECT_FILES');
 };
 
 const handleListScroll = (event) => {
@@ -349,13 +347,11 @@ const handleListScroll = (event) => {
   listScrollTop.value = target.scrollTop;
 };
 
-const startAnalysis = () => {
+const startAnalysis = async () => {
+  if (!requireAuth()) return;
   if (!canAnalyze.value || !client) return;
-  const paths = pathsInput.value
-    .split(/\r?\n/u)
-    .map((item) => item.trim())
-    .filter(Boolean);
   isRunning.value = true;
+  downloadUrl.value = '';
   completedCount.value = 0;
   totalCount.value = 0;
   doneCount.value = 0;
@@ -364,11 +360,27 @@ const startAnalysis = () => {
   entries.value = [];
   listScrollTop.value = 0;
   if (listViewportRef.value) listViewportRef.value.scrollTop = 0;
-  client.send('ANALYSIS_START', {
-    pattern: selectedPattern.value,
-    target: selectedTarget.value,
-    paths,
-  });
+  try {
+    const payload = await postMultipart('/api/analysis/jobs', {
+      files: selectedFiles.value,
+      fields: {
+        pattern: selectedPattern.value,
+        target: selectedTarget.value,
+      },
+    });
+    client.send('ANALYSIS_SUBSCRIBE', { job_id: payload.job_id });
+  } catch (error) {
+    isRunning.value = false;
+    failedCount.value = 1;
+    currentFile.value = String(error?.message || error);
+  }
+};
+
+const downloadResults = async () => {
+  if (!requireAuth()) return;
+  if (!downloadUrl.value) return;
+  const response = await fetch(getBackendUrl(downloadUrl.value), { credentials: 'include' });
+  await downloadResponse(response);
 };
 
 const handleMessage = (message) => {
@@ -395,6 +407,7 @@ const handleMessage = (message) => {
     failedCount.value = 0;
     currentFile.value = '';
     entries.value = [];
+    downloadUrl.value = message.payload?.download_url || downloadUrl.value;
     listScrollTop.value = 0;
     if (listViewportRef.value) listViewportRef.value.scrollTop = 0;
     return;
@@ -415,6 +428,7 @@ const handleMessage = (message) => {
     failedCount.value = Number(message.payload?.failed || 0);
     currentFile.value = message.payload?.current_file || '';
     entries.value = Array.isArray(message.payload?.entries) ? message.payload.entries : entries.value;
+    downloadUrl.value = message.payload?.download_url || downloadUrl.value;
     return;
   }
 
@@ -425,6 +439,7 @@ const handleMessage = (message) => {
     doneCount.value = Number(message.payload?.done || doneCount.value);
     failedCount.value = Number(message.payload?.failed || failedCount.value);
     entries.value = Array.isArray(message.payload?.entries) ? message.payload.entries : entries.value;
+    downloadUrl.value = message.payload?.download_url || downloadUrl.value;
     return;
   }
 

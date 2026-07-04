@@ -70,12 +70,12 @@
             class="flex-1 rounded-lg border border-border-main bg-bg-main px-3 py-2 font-[Consolas,Monaco,monospace] ui-body font-black tracking-[0.06em] text-text-main outline-none transition-colors placeholder:opacity-50 hover:border-accent/40 focus:border-accent"
             placeholder="0000000000000000"
           />
-          <button class="action-btn min-w-[58px]" :disabled="!hexInput.trim()" @click="applyManualBoard">{{ $t('tester.controls.set') }}</button>
-          <button class="action-btn min-w-[72px]" :disabled="!selectedPattern || !selectedTarget" @click="resetRandom">{{ $t('tester.controls.random') }}</button>
+          <button class="action-btn min-w-[58px]" :disabled="!hexInput.trim()" @click="handleApplyManualBoard">{{ $t('tester.controls.set') }}</button>
+          <button class="action-btn min-w-[72px]" :disabled="!selectedPattern || !selectedTarget" @click="handleResetRandom">{{ $t('tester.controls.random') }}</button>
         </div>
 
         <div ref="boardHotkeyTarget" tabindex="-1" class="tester-board-shell mx-auto w-full outline-none focus:outline-none">
-          <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @swipe="move" />
+          <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @swipe="handleMove" />
         </div>
 
         <div class="mt-4 grid grid-cols-3 gap-2">
@@ -86,9 +86,8 @@
       </section>
 
       <section class="flex min-w-0 flex-col gap-3">
-        <div class="grid grid-cols-3 gap-2">
+        <div class="grid grid-cols-2 gap-2">
           <button class="action-btn" @click="openReplayView">{{ $t('tester.controls.goToReplay') }}</button>
-          <button class="action-btn" @click="$emit('navigate-tab', 'NotebookView')">{{ $t('tester.controls.goToNotebook') }}</button>
           <button
             class="action-btn tester-btn-accent btn-prominent"
             @click="$emit('open-analysis', { pattern: selectedPattern, target: selectedTarget })"
@@ -197,7 +196,7 @@
 </template>
 
 <script setup>
-import { computed, ref, toRef } from 'vue';
+import { computed, nextTick, ref, toRef, watch } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
 import UiSelect from '../../../components/UiSelect.vue';
@@ -309,6 +308,31 @@ const handleApplyPatternSelection = (event) => {
   applyPatternSelection();
   focusBoardHotkeys(event);
 };
+
+const handleResetRandom = (event) => {
+  resetRandom();
+  focusBoardHotkeys(event);
+};
+
+const handleApplyManualBoard = (event) => {
+  applyManualBoard();
+  focusBoardHotkeys(event);
+};
+
+const handleMove = (dir) => {
+  move(dir);
+  refocusBoardHotkeyTarget(boardHotkeyTarget);
+};
+
+watch(
+  () => props.active,
+  async (isActive) => {
+    if (!isActive) return;
+    await nextTick();
+    refocusBoardHotkeyTarget(boardHotkeyTarget);
+  },
+  { immediate: true }
+);
 </script>
 
 <style scoped>

@@ -6,6 +6,7 @@ from Config import SingletonConfig
 from fastapi import WebSocket
 
 from ..actions import Action, Message
+from ..cloud_safety import is_cloud_mode
 from ..minigames.service import (
     build_menu_payload,
     build_state_payload,
@@ -55,9 +56,10 @@ async def handle_minigame_action(
     if action == Action.MINIGAME_SET_DIFFICULTY:
         difficulty = 1 if int(payload.get("difficulty", 0)) else 0
         session.minigame_session.difficulty = difficulty
-        config = SingletonConfig().config
-        config["minigame_difficulty"] = difficulty
-        SingletonConfig().save_config(config)
+        if not is_cloud_mode():
+            config = SingletonConfig().config
+            config["minigame_difficulty"] = difficulty
+            SingletonConfig().save_config(config)
         await _send_menu(websocket, session)
         if session.minigame_session.engine is not None:
             await _send_state(websocket, session)
@@ -65,7 +67,8 @@ async def handle_minigame_action(
 
     if action == Action.MINIGAME_START:
         game_id = str(payload.get("gameId") or "")
-        start_minigame(session.minigame_session, game_id)
+        snapshot = payload.get("snapshot") if isinstance(payload, dict) else None
+        start_minigame(session.minigame_session, game_id, snapshot if isinstance(snapshot, dict) else None)
         await _send_menu(websocket, session)
         await _send_state(websocket, session)
         return True

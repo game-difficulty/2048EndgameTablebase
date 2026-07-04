@@ -4,14 +4,18 @@ from dataclasses import dataclass, field
 
 from Config import SingletonConfig
 
+from ..cloud_safety import is_cloud_mode
+
+
+def default_minigame_difficulty() -> int:
+    if is_cloud_mode():
+        return 1
+    return int(SingletonConfig().config.get("minigame_difficulty", 1))
+
 
 @dataclass
 class MinigameSessionState:
-    difficulty: int = field(
-        default_factory=lambda: int(
-            SingletonConfig().config.get("minigame_difficulty", 1)
-        )
-    )
+    difficulty: int = field(default_factory=default_minigame_difficulty)
     current_game_id: str = ""
     engine: object | None = None
     powerup_counts: dict[str, int] = field(

@@ -10,6 +10,52 @@
     "settings": "Settings",
     "help": "Help"
   },
+  "auth": {
+    "title": {
+      "login": "Sign in",
+      "register": "Create account"
+    },
+    "tabs": {
+      "login": "Login",
+      "register": "Register"
+    },
+    "fields": {
+      "inviteCode": "Invite Code",
+      "email": "Email",
+      "emailCode": "Email Code",
+      "password": "Password",
+      "displayName": "Display Name"
+    },
+    "placeholders": {
+      "inviteCode": "Enter your invite code",
+      "email": "Email address",
+      "emailCode": "6-digit code",
+      "password": "At least 8 characters",
+      "displayName": "Optional"
+    },
+    "actions": {
+      "login": "Login",
+      "register": "Register",
+      "logout": "Logout",
+      "sendCode": "Send Code",
+      "sendingCode": "Sending",
+      "pleaseWait": "Please wait"
+    },
+    "messages": {
+      "codeSent": "Verification code sent.",
+      "devCode": "Verification code: {code}"
+    },
+    "account": {
+      "title": "Account",
+      "bonusTokens": "Bonus tokens",
+      "paidTokens": "Paid tokens",
+      "totalTokens": "Total"
+    },
+    "tokens": {
+      "insufficientTitle": "Insufficient token balance",
+      "insufficientMessage": "This action requires {required_tokens} tokens. Your current balance is {balance_tokens} tokens."
+    }
+  },
   "settings": {
     "title": "System Settings",
     "loading": "Loading settings...",
@@ -303,7 +349,8 @@
       "paths": "Replay Files / Folders",
       "pathsPlaceholder": "Paste .txt / .vrs files or folders here, one path per line",
       "selectFiles": "Select Files",
-      "analyze": "Analyze"
+      "analyze": "Analyze",
+      "downloadResults": "Download Results"
     },
     "progress": {
       "title": "Batch Progress",

@@ -1,0 +1,20 @@
+[Unit]
+Description=2048 Endgame Tablebase Cloud API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/2048tables/app
+EnvironmentFile=/etc/2048tables/cloud.env
+ExecStart=/opt/2048tables/venv/bin/python cloud_server.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+

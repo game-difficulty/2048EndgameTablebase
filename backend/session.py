@@ -58,6 +58,10 @@ def normalize_gamer_special_tiles(raw):
 class GameSession:
     def __init__(self, client_id=""):
         self.client_id = client_id
+        self.user_id = None
+        self.auth_session_id = None
+        self.user_email = ""
+        self.user_role = ""
         if client_id.startswith("gamer_"):
             game_state = SingletonConfig().config.get("game_state", [0, 0, 0])
         else:
@@ -225,8 +229,6 @@ class GameSession:
         return self.ai_fallback_player, self.ai_fallback_logic
 
     def ensure_book_reader(self):
-        global _SHARED_BOOK_READER
-        if _SHARED_BOOK_READER is None:
-            _SHARED_BOOK_READER = BookReaderDispatcher()
-        self.book_reader = _SHARED_BOOK_READER
+        if self.book_reader is None:
+            self.book_reader = BookReaderDispatcher()
         return self.book_reader

@@ -1,7 +1,13 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import { useAppSettingsStore } from '../../../app/useAppSettings';
-import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
+import { useAuthState } from '../../../services/auth/authState';
+import { downloadBlob, downloadText } from '../../../services/files/browserFiles';
+import {
+  fetchTablebaseCatalog,
+  getCatalogTargets,
+  groupTablebasesByPattern,
+} from '../../../services/tablebases/catalogClient';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
@@ -15,6 +21,7 @@ import {
 
 export function useTesterSession(activeRef) {
   const { config: appConfig } = useAppSettingsStore();
+  const { isAuthenticated, requireAuth } = useAuthState();
 
   const fallbackPatternCategories = {
     basic: ['L3', 'LL', 'free8', 'free9', 'free10', '444'],
@@ -101,6 +108,7 @@ export function useTesterSession(activeRef) {
     best_score: 0,
   });
   const patternMenuRoot = ref(null);
+  const catalogTables = ref([]);
 
   let client = null;
   let bootstrapSelectionSent = false;
@@ -410,13 +418,42 @@ export function useTesterSession(activeRef) {
     syncCategoryFromPattern(selectedPattern.value);
   };
 
+  const loadCatalog = async () => {
+    try {
+      const tables = await fetchTablebaseCatalog();
+      catalogTables.value = tables;
+      const groupedTables = groupTablebasesByPattern(tables);
+      const nextCategories = { cloud: Object.keys(groupedTables).sort() };
+      if (nextCategories.cloud.length) {
+        patternCategories.value = nextCategories;
+        availableTargets.value = getCatalogTargets(tables);
+        ensureDefaultSelection();
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
   const togglePatternMenu = () => {
     syncCategoryFromPattern(selectedPattern.value);
     patternMenuOpen.value = !patternMenuOpen.value;
   };
 
+  const protectedActions = new Set([
+    'TESTER_SELECT_PATTERN',
+    'TESTER_RESET_RANDOM',
+    'TESTER_MOVE',
+    'TESTER_SET_BOARD',
+    'TESTER_EXPORT_LOG',
+    'TESTER_EXPORT_REPLAY',
+  ]);
+
   const triggerAction = (action, payload = {}) => {
+    if (protectedActions.has(action) && !requireAuth()) {
+      return false;
+    }
     client?.send(action, payload);
+    return true;
   };
 
   const selectPattern = (pattern) => {
@@ -446,28 +483,14 @@ export function useTesterSession(activeRef) {
   const toggleInsights = () => { showInsights.value = !showInsights.value; };
   const move = (dir) => canMove.value && triggerAction('TESTER_MOVE', { dir });
 
-  const saveLog = async () => {
+  const saveLog = () => {
     if (!logs.value.length) return;
-    const { handled, value } = await tryDesktopDialog('select_save_tester_log');
-    if (handled) {
-      if (value) {
-        triggerAction('TESTER_SAVE_LOG', { path: value });
-      }
-      return;
-    }
-    triggerAction('TESTER_TRIGGER_SAVE_LOG');
+    triggerAction('TESTER_EXPORT_LOG');
   };
 
-  const saveReplay = async () => {
+  const saveReplay = () => {
     if (recordLength.value < 1) return;
-    const { handled, value } = await tryDesktopDialog('select_save_tester_replay');
-    if (handled) {
-      if (value) {
-        triggerAction('TESTER_SAVE_REPLAY', { path: value });
-      }
-      return;
-    }
-    triggerAction('TESTER_TRIGGER_SAVE_REPLAY');
+    triggerAction('TESTER_EXPORT_REPLAY');
   };
 
   const handlePracticeJump = (event) => {
@@ -486,10 +509,12 @@ export function useTesterSession(activeRef) {
   };
 
   const handleTesterBootstrap = (payload) => {
-    patternCategories.value = payload?.categories || fallbackPatternCategories;
-    availableTargets.value = (payload?.target_tiles || []).map(String);
+    if (!catalogTables.value.length) {
+      patternCategories.value = payload?.categories || fallbackPatternCategories;
+      availableTargets.value = (payload?.target_tiles || []).map(String);
+    }
     ensureDefaultSelection();
-    if (!bootstrapSelectionSent && selectedPattern.value && selectedTarget.value) {
+    if (isAuthenticated.value && !bootstrapSelectionSent && selectedPattern.value && selectedTarget.value) {
       bootstrapSelectionSent = true;
       applyPatternSelection();
     }
@@ -506,7 +531,11 @@ export function useTesterSession(activeRef) {
     hexInput.value = currentBoardHex.value;
     resultDtype.value = payload?.dtype || '?';
     results.value = payload?.results || {};
-    logs.value = Array.isArray(payload?.logs) ? payload.logs : [];
+    if (Array.isArray(payload?.logs)) {
+      logs.value = payload.logs;
+    } else if (Array.isArray(payload?.logs_delta)) {
+      logs.value = [...logs.value, ...payload.logs_delta];
+    }
     lastStep.value = payload?.last_step || {
       board_lines: [],
       result_lines: [],
@@ -552,6 +581,15 @@ export function useTesterSession(activeRef) {
   const handleWSMessage = (message) => {
     if (message.action === 'TESTER_BOOTSTRAP') handleTesterBootstrap(message.data);
     else if (message.action === 'TESTER_STATE') handleTesterState(message.data);
+    else if (message.action === 'TESTER_EXPORT_LOG') {
+      const payload = message.data || {};
+      downloadText(payload.text || '', payload.filename || 'tester_log.txt', payload.mime || 'text/plain;charset=utf-8');
+    } else if (message.action === 'TESTER_EXPORT_REPLAY') {
+      const payload = message.data || {};
+      const binary = atob(payload.base64 || '');
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      downloadBlob(new Blob([bytes], { type: payload.mime || 'application/octet-stream' }), payload.filename || 'tester_replay.rpl');
+    }
   };
 
   const connect = () => {
@@ -563,6 +601,7 @@ export function useTesterSession(activeRef) {
       onOpen: () => {
         wsStatus.value = 'connected';
         bootstrapSelectionSent = false;
+        loadCatalog();
         triggerAction('TESTER_GET_INIT');
       },
       onMessage: handleWSMessage,
@@ -586,12 +625,25 @@ export function useTesterSession(activeRef) {
       patternMenuOpen.value = false;
       return;
     }
+    const code = event.code;
+    const arrowMove = {
+      ArrowUp: 'up',
+      ArrowDown: 'down',
+      ArrowLeft: 'left',
+      ArrowRight: 'right',
+    }[code];
     const target = event.target;
     if (target instanceof HTMLElement) {
       if (target.isContentEditable) return;
-      if (target.closest('[data-tester-text-input="true"]')) return;
+      if (target.closest('[data-tester-text-input="true"]')) {
+        if (arrowMove) {
+          event.preventDefault();
+          target.blur();
+          move(arrowMove);
+        }
+        return;
+      }
     }
-    const code = event.code;
     if (code === 'ArrowUp' || code === 'KeyW') { event.preventDefault(); move('up'); }
     else if (code === 'ArrowDown' || code === 'KeyS') { event.preventDefault(); move('down'); }
     else if (code === 'ArrowLeft' || code === 'KeyA') { event.preventDefault(); move('left'); }
@@ -602,6 +654,7 @@ export function useTesterSession(activeRef) {
 
   onMounted(() => {
     syncCategoryFromPattern(selectedPattern.value);
+    loadCatalog();
     window.addEventListener('keydown', handleKeyDown, true);
     window.addEventListener('tester-practice-jump', handlePracticeJump);
     document.addEventListener('click', closePatternMenuOnClick);

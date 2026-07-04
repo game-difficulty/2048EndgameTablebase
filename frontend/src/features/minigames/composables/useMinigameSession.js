@@ -1,6 +1,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
+import { createLocalStorageStore } from '../../../services/storage/localStorageStore';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { createEmptyMinigameMenu, createEmptyMinigameState } from '../model/minigameViewState';
 
@@ -26,11 +27,34 @@ const normalizeHudPanels = (hud, receivedAt = Date.now()) => {
   };
 };
 
+const minigameStore = createLocalStorageStore({
+  key: 'minigames',
+  version: 1,
+  defaultValue: {
+    difficulty: 1,
+    summaries: {},
+    activeGameSnapshots: {},
+  },
+});
+
+const normalizeStoredState = () => ({
+  difficulty: 1,
+  summaries: {},
+  activeGameSnapshots: {},
+  ...(minigameStore.read() || {}),
+});
+
+const snapshotKey = (gameId, difficulty) => `${gameId || ''}:${Number(difficulty) ? 1 : 0}`;
+
 export function useMinigameSession(activeRef) {
   const { t } = useI18n();
 
   const wsStatus = ref('disconnected');
-  const menuData = ref(createEmptyMinigameMenu());
+  const storedState = ref(normalizeStoredState());
+  const menuData = ref({
+    ...createEmptyMinigameMenu(),
+    difficulty: Number(storedState.value.difficulty) ? 1 : 0,
+  });
   const gameState = ref(createEmptyMinigameState());
   const lastMenuFocusGameId = ref('');
   const toastMessage = ref('');
@@ -114,10 +138,36 @@ export function useMinigameSession(activeRef) {
   };
 
   const handleMenuData = (payload) => {
+    const summaries = storedState.value.summaries || {};
+    const difficultyValue = Number(storedState.value.difficulty) ? 1 : 0;
+    const sections = (payload?.sections || []).map((section) => ({
+      ...section,
+      items: (section.items || []).map((item) => ({
+        ...item,
+        summary: {
+          ...(item.summary || {}),
+          ...(summaries[snapshotKey(item.id, difficultyValue)] || {}),
+        },
+      })),
+    }));
     menuData.value = {
       ...createEmptyMinigameMenu(),
       ...(payload || {}),
+      difficulty: difficultyValue,
+      sections,
     };
+  };
+
+  const persistState = (updater) => {
+    storedState.value = minigameStore.update((current) => {
+      const base = {
+        difficulty: 1,
+        summaries: {},
+        activeGameSnapshots: {},
+        ...(current || {}),
+      };
+      return updater(base);
+    });
   };
 
   const handleStateData = (payload) => {
@@ -149,6 +199,32 @@ export function useMinigameSession(activeRef) {
       messages: payload?.messages || {},
     };
     gameState.value = nextState;
+    const snapshot = nextState.snapshot;
+    if (snapshot?.gameId) {
+      const key = snapshotKey(snapshot.gameId, snapshot.difficulty ?? difficulty.value);
+      const boardValues = Array.isArray(nextState.board) ? nextState.board : [];
+      const highestExp = boardValues.reduce((maxExp, value) => {
+        const numeric = Number(value || 0);
+        if (numeric <= 0) return maxExp;
+        return Math.max(maxExp, Math.round(Math.log2(numeric)));
+      }, 0);
+      persistState((current) => ({
+        ...current,
+        difficulty: Number(snapshot.difficulty) ? 1 : 0,
+        activeGameSnapshots: {
+          ...(current.activeGameSnapshots || {}),
+          [key]: snapshot,
+        },
+        summaries: {
+          ...(current.summaries || {}),
+          [key]: {
+            bestScore: Number(nextState.best || 0),
+            highestTile: highestExp > 0 ? 2 ** highestExp : 0,
+            highestExp,
+          },
+        },
+      }));
+    }
 
     const animation = gameState.value.animation || {};
     const followUp = animation.followUp || null;
@@ -217,6 +293,7 @@ export function useMinigameSession(activeRef) {
       clientId: 'minigames_main',
       onOpen: () => {
         wsStatus.value = 'connected';
+        client?.send('MINIGAME_SET_DIFFICULTY', { difficulty: Number(storedState.value.difficulty) ? 1 : 0 });
         client?.send('MINIGAME_GET_MENU');
       },
       onMessage: (message) => {
@@ -256,13 +333,24 @@ export function useMinigameSession(activeRef) {
   };
 
   const setDifficulty = (value) => {
-    sendAction('MINIGAME_SET_DIFFICULTY', { difficulty: Number(value) ? 1 : 0 });
+    const nextDifficulty = Number(value) ? 1 : 0;
+    persistState((current) => ({
+      ...current,
+      difficulty: nextDifficulty,
+    }));
+    menuData.value = {
+      ...menuData.value,
+      difficulty: nextDifficulty,
+    };
+    sendAction('MINIGAME_SET_DIFFICULTY', { difficulty: nextDifficulty });
   };
 
   const startGame = (gameId) => {
     lastMenuFocusGameId.value = String(gameId || '');
     closeOverlay();
-    sendAction('MINIGAME_START', { gameId });
+    const key = snapshotKey(gameId, difficulty.value);
+    const snapshot = storedState.value.activeGameSnapshots?.[key] || null;
+    sendAction('MINIGAME_START', { gameId, snapshot });
   };
 
   const backToMenu = () => {
@@ -274,6 +362,17 @@ export function useMinigameSession(activeRef) {
 
   const newGame = () => {
     closeOverlay();
+    if (gameState.value?.gameId) {
+      const key = snapshotKey(gameState.value.gameId, difficulty.value);
+      persistState((current) => {
+        const activeGameSnapshots = { ...(current.activeGameSnapshots || {}) };
+        delete activeGameSnapshots[key];
+        return {
+          ...current,
+          activeGameSnapshots,
+        };
+      });
+    }
     sendAction('MINIGAME_NEW_GAME');
   };
 

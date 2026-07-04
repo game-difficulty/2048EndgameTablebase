@@ -18,11 +18,13 @@ from engine_core.performance_evaluation import (
     evaluation_of_performance as shared_evaluation_of_performance,
     markdown_label,
 )
+from .tablebase_catalog import build_filepath_map_entry
 
 
 logger = Config.logger
 is_zh = SingletonConfig().config.get("language") == "zh"
 ANALYSIS_PERFECT_LABEL = markdown_label(PERFORMANCE_PERFECT_LABEL)
+SAFE_REPORT_STEM_RE = re.compile(r"[^A-Za-z0-9._-]+")
 direction_map = defaultdict(lambda: "?")
 direction_map.update(
     {
@@ -320,7 +322,13 @@ class Analyzer:
     pattern_map = Config.pattern_32k_tiles_map
 
     def __init__(
-        self, file_path: str, pattern: str, target: int, full_pattern: str, target_path: str
+        self,
+        file_path: str,
+        pattern: str,
+        target: int,
+        full_pattern: str,
+        target_path: str,
+        source_filename: str | None = None,
     ) -> None:
         self.full_pattern = full_pattern
         self.pattern = pattern
@@ -333,12 +341,12 @@ class Analyzer:
         self.vbm = vbm
         self.variant_wall_mask = self._build_variant_wall_mask()
         self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
-        spawn_rate4 = SingletonConfig().config["4_spawn_rate"]
-        pattern_key = SingletonConfig.get_pattern_key(full_pattern, spawn_rate4)
-        bookfile_path_list = SingletonConfig().config["filepath_map"].get(pattern_key, [])
+        spawn_rate4 = float(SingletonConfig().config.get("4_spawn_rate", 0.1))
+        bookfile_path_list = build_filepath_map_entry(full_pattern, spawn_rate4)
         self.book_reader.dispatch(bookfile_path_list, pattern, target)
 
         self.filepath = file_path
+        self.source_stem = self._safe_report_stem(source_filename or Path(file_path).name)
         decoder = ReplayDecoder(self.filepath, self.bm, self.vbm)
         decoder.decode()
         self.record_list = decoder.record_list
@@ -357,6 +365,12 @@ class Analyzer:
         self.rec_step_count = 0
         self.log_difficulty = 0.0
         self.prev_expected_success_rate = None
+
+    @staticmethod
+    def _safe_report_stem(filename: str) -> str:
+        stem = Path(str(filename or "")).stem or "replay"
+        safe_stem = SAFE_REPORT_STEM_RE.sub("_", stem).strip("._")
+        return (safe_stem or "replay")[:96]
 
     @staticmethod
     def tr(text: str) -> str:
@@ -606,7 +620,7 @@ class Analyzer:
         filename = (
             self.full_pattern
             + "_"
-            + Path(self.filepath).stem
+            + self.source_stem
             + "_"
             + str(step)
             + f"_{self.goodness_of_fit:.4f}.txt"
@@ -678,7 +692,7 @@ class Analyzer:
         filename = (
             self.full_pattern
             + "_"
-            + Path(self.filepath).stem
+            + self.source_stem
             + "_"
             + str(step)
             + f"_{self.goodness_of_fit:.4f}.rpl"
