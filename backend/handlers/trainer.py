@@ -209,6 +209,25 @@ async def handle_trainer_action(
                 await manager.send_state(websocket, metadata)
         return True
 
+    if action == Action.SET_BOARD:
+        hex_str = str(payload.get("hex_str") or "").strip()
+        try:
+            board_encoded = np_u64(int(hex_str, 16))
+        except ValueError:
+            await manager.send_state(websocket)
+            return True
+
+        _clear_record_replay(session)
+        session.board_encoded = board_encoded
+        session.score = 0
+        session.moved = 0
+        session.trainer_results = {}
+        session.history = [(session.board_encoded, session.score)]
+        session.move_history = [None]
+        session.played_length = 0
+        await manager.send_state(websocket)
+        return True
+
     if action == Action.SET_CELL:
         row = payload.get("row", 0)
         col = payload.get("col", 0)
