@@ -44,6 +44,20 @@
       "spawn_rate": 0.1
     },
     {
+      "pattern": "free10",
+      "target": "512",
+      "relative_path": "free10_512",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    },
+    {
+      "pattern": "442t",
+      "target": "128",
+      "relative_path": "442t_128",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    },
+    {
       "pattern": "442t",
       "target": "256",
       "relative_path": "442t_256",

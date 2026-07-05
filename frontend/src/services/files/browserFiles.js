@@ -1,5 +1,5 @@
 import { getBackendUrl } from '../runtime/backendUrl';
-import { emitAuthRequired, emitTokenRequired } from '../auth/authEvents';
+import { emitAuthRequired, emitTokenBalanceUpdated, emitTokenRequired } from '../auth/authEvents';
 
 async function handleProtectedResponseError(response, fallbackPrefix) {
   if (!response) {
@@ -161,7 +161,11 @@ export async function uploadBrowserFiles(files, { kind = 'generic', fields = {} 
   if (!response.ok) {
     await handleProtectedResponseError(response, 'Upload failed');
   }
-  return response.json();
+  const payload = await response.json();
+  if (payload?.token_balance) {
+    emitTokenBalanceUpdated(payload.token_balance);
+  }
+  return payload;
 }
 
 export async function postMultipart(url, { files = [], fields = {} } = {}) {
@@ -182,5 +186,9 @@ export async function postMultipart(url, { files = [], fields = {} } = {}) {
   if (!response.ok) {
     await handleProtectedResponseError(response, 'Request failed');
   }
-  return response.json();
+  const payload = await response.json();
+  if (payload?.token_balance) {
+    emitTokenBalanceUpdated(payload.token_balance);
+  }
+  return payload;
 }

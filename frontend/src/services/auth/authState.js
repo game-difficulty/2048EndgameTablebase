@@ -10,6 +10,22 @@ const dialogMode = ref('login');
 
 const isAuthenticated = computed(() => !!user.value);
 
+const applyTokenBalance = (tokenBalance) => {
+  if (!user.value || !tokenBalance) {
+    return;
+  }
+  user.value = {
+    ...user.value,
+    token_balance: tokenBalance,
+  };
+};
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('token-balance-updated', (event) => {
+    applyTokenBalance(event?.detail || null);
+  });
+}
+
 export function useAuthState() {
   const refreshAuth = async () => {
     const wasReady = ready.value;
@@ -67,5 +83,6 @@ export function useAuthState() {
     closeAuthDialog,
     requireAuth,
     logout,
+    applyTokenBalance,
   };
 }

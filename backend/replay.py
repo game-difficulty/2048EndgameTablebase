@@ -15,6 +15,7 @@ from engine_core.replay_utils import (
 
 from .serialization import sanitize_config
 from .session import np_u64, safe_hex, u64
+from .quota.service import get_token_balance
 from .tester import TESTER_PERFORMANCE_ORDER
 
 
@@ -136,41 +137,44 @@ async def send_replay_state(websocket, session, metadata=None):
     board_array = decode_board(board_encoded)
     config = SingletonConfig().config
     summary = sanitize_config(session.replay_summary)
+    data = {
+        "board": board_array.flatten().tolist(),
+        "animation": sanitize_config(metadata or {}),
+        "hex_str": safe_hex(board_encoded),
+        "loaded": session.replay_loaded,
+        "status": session.replay_status,
+        "pattern": session.replay_pattern,
+        "source": session.replay_source,
+        "current_step": session.replay_current_step,
+        "total_steps": int(len(session.replay_record)),
+        "results": sanitize_config(session.replay_results),
+        "current_move": session.replay_current_move,
+        "best_move": session.replay_best_move,
+        "loss": session.replay_loss,
+        "goodness_of_fit": session.replay_gof,
+        "combo": session.replay_combo,
+        "evaluation": (
+            replay_evaluation_of_performance(session.replay_loss)
+            if session.replay_loss is not None
+            else None
+        ),
+        "points_rank": session.replay_points_rank,
+        "losses": session.replay_losses,
+        "summary": summary,
+        "performance_labels": list(TESTER_PERFORMANCE_ORDER),
+        "settings": {
+            "colors": config.get("colors", []),
+            "dis_32k": config.get("dis_32k", False),
+            "slider_threshold": config.get(
+                "record_player_slider_threshold", 1
+            ),
+        },
+    }
+    if session.user_id is not None:
+        data["token_balance"] = get_token_balance(session.user_id)
     await websocket.send_json(
         {
             "action": "REPLAY_STATE",
-            "data": {
-                "board": board_array.flatten().tolist(),
-                "animation": sanitize_config(metadata or {}),
-                "hex_str": safe_hex(board_encoded),
-                "loaded": session.replay_loaded,
-                "status": session.replay_status,
-                "pattern": session.replay_pattern,
-                "source": session.replay_source,
-                "current_step": session.replay_current_step,
-                "total_steps": int(len(session.replay_record)),
-                "results": sanitize_config(session.replay_results),
-                "current_move": session.replay_current_move,
-                "best_move": session.replay_best_move,
-                "loss": session.replay_loss,
-                "goodness_of_fit": session.replay_gof,
-                "combo": session.replay_combo,
-                "evaluation": (
-                    replay_evaluation_of_performance(session.replay_loss)
-                    if session.replay_loss is not None
-                    else None
-                ),
-                "points_rank": session.replay_points_rank,
-                "losses": session.replay_losses,
-                "summary": summary,
-                "performance_labels": list(TESTER_PERFORMANCE_ORDER),
-                "settings": {
-                    "colors": config.get("colors", []),
-                    "dis_32k": config.get("dis_32k", False),
-                    "slider_threshold": config.get(
-                        "record_player_slider_threshold", 1
-                    ),
-                },
-            },
+            "data": data,
         }
     )

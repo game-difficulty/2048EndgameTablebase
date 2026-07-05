@@ -1,5 +1,5 @@
 import { getBackendWebSocketUrl } from '../runtime/backendUrl';
-import { emitAuthRequired, emitTokenRequired } from '../auth/authEvents';
+import { emitAuthRequired, emitTokenBalanceUpdated, emitTokenRequired } from '../auth/authEvents';
 
 export function createWsClient({
   clientId,
@@ -55,6 +55,9 @@ export function createWsClient({
       }
       if (message?.action === 'TOKEN_REQUIRED' || message?.data?.code === 'INSUFFICIENT_TOKENS') {
         emitTokenRequired(message?.data || {});
+      }
+      if (message?.data?.token_balance) {
+        emitTokenBalanceUpdated(message.data.token_balance);
       }
       onMessage?.(message, event, socket);
     };

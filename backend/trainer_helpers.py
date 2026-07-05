@@ -10,7 +10,7 @@ from engine_core.VBoardMover import decode_board
 from .serialization import sanitize_config
 from .session import safe_hex, u64
 from .quota.errors import InsufficientTokens
-from .quota.service import finalize_reservation, has_numeric_result, reserve_operation_tokens
+from .quota.service import finalize_reservation, get_token_balance, has_numeric_result, reserve_operation_tokens
 
 
 def replace_largest_tiles(board_encoded, n, target: str):
@@ -128,6 +128,11 @@ async def send_trainer_results(session, websocket, request_id=None):
                     "dtype": str(dtype or "?"),
                     "board_hex": safe_hex(session.board_encoded),
                     "request_id": request_id,
+                    "token_balance": (
+                        get_token_balance(session.user_id)
+                        if session.user_id is not None
+                        else None
+                    ),
                 },
             }
         )
@@ -202,6 +207,11 @@ async def send_trainer_results(session, websocket, request_id=None):
                     "dtype": dtype_name if result else "?",
                     "board_hex": safe_hex(session.board_encoded),
                     "request_id": request_id,
+                    "token_balance": (
+                        get_token_balance(session.user_id)
+                        if session.user_id is not None
+                        else None
+                    ),
                 },
             }
         )

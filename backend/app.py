@@ -37,7 +37,7 @@ from backend.cloud_safety import (
     is_cloud_mode,
 )
 from backend.quota.errors import InsufficientTokens
-from backend.quota.service import consume_operation_tokens
+from backend.quota.service import consume_operation_tokens, get_token_balance
 CLOUD_MODE = is_cloud_mode()
 
 from backend.handlers.analysis import handle_analysis_action
@@ -401,7 +401,11 @@ async def create_analysis_job_route(
         raise HTTPException(status_code=402, detail=exc.payload) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"job_id": job.job_id, "total": job.total}
+    return {
+        "job_id": job.job_id,
+        "total": job.total,
+        "token_balance": get_token_balance(int(user["id"])),
+    }
 
 
 @app.get("/api/analysis/jobs/{job_id}")

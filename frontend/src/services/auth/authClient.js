@@ -1,5 +1,5 @@
 import { getBackendUrl } from '../runtime/backendUrl';
-import { emitAuthRequired, emitTokenRequired } from './authEvents';
+import { emitAuthRequired, emitTokenBalanceUpdated, emitTokenRequired } from './authEvents';
 
 async function requestJson(path, { method = 'GET', body } = {}) {
   const response = await fetch(getBackendUrl(path), {
@@ -20,6 +20,9 @@ async function requestJson(path, { method = 'GET', body } = {}) {
       ? payload.detail
       : payload?.detail?.message;
     throw new Error(detail || `Request failed: ${response.status}`);
+  }
+  if (payload?.token_balance) {
+    emitTokenBalanceUpdated(payload.token_balance);
   }
   return payload;
 }

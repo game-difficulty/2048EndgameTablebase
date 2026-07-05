@@ -25,7 +25,7 @@ from .session import np_u64, safe_hex, u64
 from .tablebase_catalog import build_filepath_map_entry
 from .trainer_helpers import replace_board_for_lookup
 from .quota.errors import InsufficientTokens
-from .quota.service import finalize_reservation, has_numeric_result, reserve_operation_tokens
+from .quota.service import finalize_reservation, get_token_balance, has_numeric_result, reserve_operation_tokens
 
 
 TESTER_PERFORMANCE_ORDER = PERFORMANCE_LABELS
@@ -443,6 +443,8 @@ async def send_tester_state(websocket, session, metadata=None, logs_since=None):
             "language": config.get("language", "en"),
         },
     }
+    if session.user_id is not None:
+        data["token_balance"] = get_token_balance(session.user_id)
 
     if logs_since is None:
         data["logs"] = session.tester_logs
