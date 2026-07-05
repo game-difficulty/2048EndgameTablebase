@@ -228,6 +228,39 @@ async def handle_trainer_action(
         await manager.send_state(websocket)
         return True
 
+    if action == Action.UNDO:
+        _clear_record_replay(session)
+        history = getattr(session, "history", [])
+        move_history = getattr(session, "move_history", [])
+        if len(history) <= 1:
+            await manager.send_state(websocket)
+            return True
+
+        current_board = np_u64(session.board_encoded)
+
+        def pop_last_state():
+            if len(session.history) > 1:
+                session.history.pop()
+            if len(session.move_history) > 1:
+                session.move_history.pop()
+
+        pop_last_state()
+        while len(session.history) > 1 and np_u64(session.history[-1][0]) == current_board:
+            pop_last_state()
+
+        session.board_encoded, session.score = session.history[-1]
+        session.board_encoded = np_u64(session.board_encoded)
+        session.played_length = len(session.history) - 1
+        session.trainer_results = {}
+        last_move = session.move_history[-1] if session.move_history else None
+        session.moved = (
+            1
+            if session.spawn_mode == 3 and last_move not in (None, "spawn")
+            else 0
+        )
+        await manager.send_state(websocket)
+        return True
+
     if action == Action.SET_CELL:
         row = payload.get("row", 0)
         col = payload.get("col", 0)
