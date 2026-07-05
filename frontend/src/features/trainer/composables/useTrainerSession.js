@@ -80,6 +80,7 @@ export function useTrainerSession(activeRef) {
   const fullMoves = ref([]);
 
   let client = null;
+  let autoDefaultAfterTablebaseLoad = false;
 
   const currentPatternDisplay = computed(() =>
     patternType.value && targetValue.value ? `${patternType.value}_${targetValue.value}` : ''
@@ -301,6 +302,7 @@ export function useTrainerSession(activeRef) {
 
     hexInput.value = pending.hex;
     currentBoardHex.value = pending.hex;
+    autoDefaultAfterTablebaseLoad = false;
     triggerAction('SET_BOARD', { hex_str: pending.hex });
 
     const parsed = parseFullPattern(pending.fullPattern);
@@ -575,6 +577,14 @@ export function useTrainerSession(activeRef) {
         results: data.data.results || {},
       };
       resultsBoardHex.value = resultBoardHex;
+      if (autoDefaultAfterTablebaseLoad) {
+        autoDefaultAfterTablebaseLoad = false;
+        demoActive.value = false;
+        clearDemoTimer();
+        clearStepQueue();
+        triggerAction('TRAINER_DEFAULT');
+        return;
+      }
       if (!hasPlayableResults.value && !recordPlaybackActive.value) {
         demoActive.value = false;
         clearDemoTimer();
@@ -607,7 +617,7 @@ export function useTrainerSession(activeRef) {
     if (data.action === 'FOLDER_SELECTED') {
       if (data.data.path) {
         tablebasePath.value = data.data.path;
-        applyTablebase(data.data.path);
+        applyTablebase(data.data.path, { autoDefault: true });
       }
       return;
     }
@@ -639,6 +649,7 @@ export function useTrainerSession(activeRef) {
   };
 
   const disconnect = () => {
+    autoDefaultAfterTablebaseLoad = false;
     demoActive.value = false;
     clearDemoTimer();
     finishResultsRefresh();
@@ -651,6 +662,7 @@ export function useTrainerSession(activeRef) {
 
   const setBoard = () => {
     if (!hexInput.value) return;
+    autoDefaultAfterTablebaseLoad = false;
     demoActive.value = false;
     clearDemoTimer();
     finishResultsRefresh();
@@ -675,6 +687,7 @@ export function useTrainerSession(activeRef) {
       if (cellVal === 0) {
         const spawnVal = (btn === 2) ? 4 : 2;
         awaitingSpawn.value = false;
+        autoDefaultAfterTablebaseLoad = false;
         demoActive.value = false;
         clearDemoTimer();
         clearStepQueue();
@@ -688,6 +701,7 @@ export function useTrainerSession(activeRef) {
     }
 
     if (btn === 0) {
+      autoDefaultAfterTablebaseLoad = false;
       demoActive.value = false;
       clearDemoTimer();
       clearStepQueue();
@@ -695,6 +709,7 @@ export function useTrainerSession(activeRef) {
     } else if (btn === 2) {
       const cellVal = board.value[row * 4 + col];
       const nextVal = getCycledTileValue(cellVal, 1);
+      autoDefaultAfterTablebaseLoad = false;
       demoActive.value = false;
       clearDemoTimer();
       clearStepQueue();
@@ -702,6 +717,7 @@ export function useTrainerSession(activeRef) {
     } else {
       const cellVal = board.value[row * 4 + col];
       const prevVal = getCycledTileValue(cellVal, -1);
+      autoDefaultAfterTablebaseLoad = false;
       demoActive.value = false;
       clearDemoTimer();
       clearStepQueue();
@@ -710,6 +726,7 @@ export function useTrainerSession(activeRef) {
   };
 
   const onPatternChange = () => {
+    autoDefaultAfterTablebaseLoad = false;
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
@@ -723,7 +740,7 @@ export function useTrainerSession(activeRef) {
       if (handled) {
         if (value) {
           tablebasePath.value = value;
-          applyTablebase(value);
+          applyTablebase(value, { autoDefault: true });
         }
         return;
       }
@@ -733,10 +750,11 @@ export function useTrainerSession(activeRef) {
     }
   };
 
-  const applyTablebase = (filepath = null) => {
+  const applyTablebase = (filepath = null, { autoDefault = false } = {}) => {
     if (!patternType.value || !targetValue.value) return;
     const fullPattern = `${patternType.value}_${targetValue.value}`;
     const targetFilepath = typeof filepath === 'string' ? filepath : null;
+    autoDefaultAfterTablebaseLoad = !!autoDefault;
     recordPlaybackLoaded.value = false;
     replayResultsActive.value = false;
     pendingResultsRequests.clear();
@@ -754,6 +772,7 @@ export function useTrainerSession(activeRef) {
       playRecordStep(1);
       return;
     }
+    autoDefaultAfterTablebaseLoad = false;
     queuedStepCount.value += 1;
     pumpQueuedSteps();
   };
@@ -773,6 +792,7 @@ export function useTrainerSession(activeRef) {
   };
 
   const trainerUndo = () => {
+    autoDefaultAfterTablebaseLoad = false;
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
@@ -780,6 +800,7 @@ export function useTrainerSession(activeRef) {
   };
 
   const trainerDefault = () => {
+    autoDefaultAfterTablebaseLoad = false;
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
@@ -787,6 +808,7 @@ export function useTrainerSession(activeRef) {
   };
 
   const toggleDemo = () => {
+    autoDefaultAfterTablebaseLoad = false;
     demoActive.value = !demoActive.value;
     if (demoActive.value) {
       if (recordPlaybackActive.value) {
@@ -803,11 +825,13 @@ export function useTrainerSession(activeRef) {
   };
 
   const setSpawnMode = (mode) => {
+    autoDefaultAfterTablebaseLoad = false;
     spawnMode.value = mode;
     triggerAction('SET_SPAWN_MODE', { mode });
   };
 
   const manageRecord = async (cmd) => {
+    autoDefaultAfterTablebaseLoad = false;
     if (cmd === 'TOGGLE') {
       if (recordingState.value) {
         triggerAction('PREPARE_STOP_RECORDING');
@@ -815,11 +839,13 @@ export function useTrainerSession(activeRef) {
         triggerAction('START_RECORDING');
       }
     } else if (cmd === 'OPEN') {
+      autoDefaultAfterTablebaseLoad = false;
       demoActive.value = false;
       clearDemoTimer();
       clearStepQueue();
       await openRecord();
     } else if (cmd === 'PREV' || cmd === 'NEXT') {
+      autoDefaultAfterTablebaseLoad = false;
       demoActive.value = false;
       clearDemoTimer();
       clearStepQueue();
@@ -831,6 +857,7 @@ export function useTrainerSession(activeRef) {
   const moveBoard = (dir) => {
     const normalized = String(dir || '').toLowerCase();
     if (!['up', 'down', 'left', 'right'].includes(normalized) || awaitingSpawn.value) return;
+    autoDefaultAfterTablebaseLoad = false;
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
@@ -873,6 +900,7 @@ export function useTrainerSession(activeRef) {
       moveBoard(map[event.code]);
     } else if (event.code === 'Backspace' || event.code === 'Delete') {
       event.preventDefault();
+      autoDefaultAfterTablebaseLoad = false;
       demoActive.value = false;
       clearDemoTimer();
       clearStepQueue();
