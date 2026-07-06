@@ -12,7 +12,7 @@
     <!-- Menu Grid -->
     <div class="grid w-full grid-cols-1 gap-6 px-4 md:grid-cols-3 md:auto-rows-fr">
       <!-- Play Game Card -->
-      <button @click="openCloudGame"
+      <button @click="$emit('selectTab', 'GamerView')"
         class="menu-card menu-card-primary h-full min-h-[220px] rounded-2xl p-6 transition-all duration-300 transform hover:-translate-y-2 flex flex-col items-center text-center group border backdrop-blur-sm">
         <div class="menu-card-icon-shell menu-card-icon-primary mb-4 group-hover:scale-110 transition-transform duration-500">
           <svg class="menu-card-icon-svg" viewBox="0 0 64 64" aria-hidden="true">
@@ -142,11 +142,6 @@ defineProps(['active']);
 defineEmits(['selectTab']);
 
 const showBrowserModeButton = ref(false);
-const CLOUD_GAME_URL = 'https://2048-endgame-tablebase.netlify.app/';
-
-const openCloudGame = () => {
-  window.location.href = CLOUD_GAME_URL;
-};
 
 const syncBrowserModeButtonVisibility = () => {
   showBrowserModeButton.value = !!window.pywebview?.api?.open_external_url;

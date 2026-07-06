@@ -1,5 +1,6 @@
 export const TAB_IDS = {
   MAIN_MENU: 'MainMenuView',
+  GAMER: 'GamerView',
   TRAINER: 'TrainerView',
   TESTER: 'TesterView',
   MINIGAMES: 'MinigamesView',
@@ -12,6 +13,7 @@ export const MAIN_TAB_ID = TAB_IDS.MAIN_MENU;
 
 export const TAB_ORDER = [
   TAB_IDS.MAIN_MENU,
+  TAB_IDS.GAMER,
   TAB_IDS.TRAINER,
   TAB_IDS.TESTER,
   TAB_IDS.MINIGAMES,
@@ -25,6 +27,11 @@ export const TAB_REGISTRY = {
     id: TAB_IDS.MAIN_MENU,
     titleKey: 'tabs.home',
     closable: false,
+  },
+  [TAB_IDS.GAMER]: {
+    id: TAB_IDS.GAMER,
+    titleKey: 'tabs.gamer',
+    closable: true,
   },
   [TAB_IDS.TRAINER]: {
     id: TAB_IDS.TRAINER,

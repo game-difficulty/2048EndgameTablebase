@@ -19,7 +19,6 @@
               {{ state.title }}
             </h1>
           </div>
-          <span :class="connectionBadgeClass">{{ $t(`status.${wsStatus}`) }}</span>
         </div>
         <div class="flex space-x-2">
           <div class="bg-board-bg w-[122px] h-[56px] flex flex-col items-center justify-center rounded-md relative shadow-sm transition-all duration-300">
@@ -109,14 +108,6 @@ const props = defineProps({
   toastMessage: {
     type: String,
     default: '',
-  },
-  wsStatus: {
-    type: String,
-    default: 'connecting',
-  },
-  connectionBadgeClass: {
-    type: String,
-    default: 'badge-base badge-connection-pending',
   },
 });
 

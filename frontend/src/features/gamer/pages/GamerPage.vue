@@ -3,29 +3,14 @@
     <div class="w-full max-w-lg flex flex-col items-center">
       <div class="flex justify-between w-full mb-6 items-center">
         <div class="flex items-center gap-4">
-          <button
-            type="button"
-            @click="openBrowserAi"
-            class="group flex items-center gap-2 rounded-xl px-1 py-1 text-left transition-all hover:bg-bg-card/50"
-            :title="$t('gamer.browserAi.title')"
-          >
-            <h1 class="text-6xl font-bold text-text-main leading-none transition-colors group-hover:text-accent">2048</h1>
-          </button>
+          <h1 class="text-6xl font-bold text-text-main leading-none">2048</h1>
           <div class="flex flex-col gap-1.5">
             <span :class="['badge-base', wsStatus === 'connected' ? 'badge-connection-connected' : 'badge-connection-pending']">
               {{ $t(`status.${wsStatus.toLowerCase().replace('...', '')}`) }}
             </span>
-            <button
-              type="button"
-              @click="openBrowserAi"
-              class="badge-base badge-link inline-flex items-center justify-center px-2.5 py-1 transition-all"
-              :title="$t('gamer.browserAi.title')"
-            >
-              <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" aria-hidden="true">
-                <path fill="currentColor" d="M9.75 2.5h3.75v3.75h-1.5V5.06L7.53 9.53 6.47 8.47 10.94 4H9.75z"/>
-                <path fill="currentColor" d="M3.5 4.25A1.75 1.75 0 0 1 5.25 2.5H8v1.5H5.25a.25.25 0 0 0-.25.25v6.5c0 .138.112.25.25.25h6.5a.25.25 0 0 0 .25-.25V8h1.5v2.75a1.75 1.75 0 0 1-1.75 1.75h-6.5A1.75 1.75 0 0 1 3.5 10.75z"/>
-              </svg>
-            </button>
+            <span class="badge-base badge-link inline-flex items-center justify-center px-2.5 py-1">
+              {{ aiWorkerReady ? 'WASM' : 'WASM...' }}
+            </span>
           </div>
         </div>
         <div class="flex space-x-2">
@@ -54,10 +39,20 @@
           <button @click="triggerAction('UNDO')" class="flex-1 bg-btn-bg text-white font-bold py-2 px-2 rounded hover:bg-btn-hover ui-body whitespace-nowrap">
             {{ $t('buttons.undo') }}
           </button>
-          <button @click="triggerAction('AI_STEP')" class="flex-1 bg-btn-bg text-white font-bold py-2 px-2 rounded hover:bg-btn-hover ui-body whitespace-nowrap">
+          <button
+            @click="triggerAction('AI_STEP')"
+            :disabled="!aiWorkerReady"
+            :class="!aiWorkerReady ? 'opacity-55 cursor-not-allowed' : ''"
+            class="flex-1 bg-btn-bg text-white font-bold py-2 px-2 rounded hover:bg-btn-hover ui-body whitespace-nowrap"
+          >
             {{ $t('buttons.oneStep') }}
           </button>
-          <button @click="toggleAI" :class="aiEnabled ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'" class="flex-1 text-white font-bold py-2 px-2 rounded ui-body whitespace-nowrap">
+          <button
+            @click="toggleAI"
+            :disabled="!aiWorkerReady"
+            :class="[aiEnabled ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600', !aiWorkerReady ? 'opacity-55 cursor-not-allowed' : '']"
+            class="flex-1 text-white font-bold py-2 px-2 rounded ui-body whitespace-nowrap"
+          >
             {{ aiEnabled ? $t('buttons.aiOn') : $t('buttons.aiOff') }}
           </button>
         </div>
@@ -121,12 +116,12 @@ const {
   aiSpeed,
   hexInput,
   scoreAnimations,
+  aiWorkerReady,
   triggerAction,
   toggleAI,
   updateSettings,
   setBoard,
   writeCurrentBoardToHex,
-  openBrowserAi,
 } = useGamerSession(toRef(props, 'active'));
 
 const handleUpdateSettings = (event) => {

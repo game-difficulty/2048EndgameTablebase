@@ -4,8 +4,6 @@
     :sections="menuSections"
     :difficulty="difficulty"
     :focus-game-id="lastMenuFocusGameId"
-    :ws-status="wsStatus"
-    :connection-badge-class="connectionBadgeClass"
     @set-difficulty="setDifficulty"
     @start-game="startGame"
   />
@@ -14,8 +12,6 @@
     :state="gameState"
     :overlay="overlay"
     :toast-message="toastMessage"
-    :ws-status="wsStatus"
-    :connection-badge-class="connectionBadgeClass"
     @back-menu="backToMenu"
     @new-game="newGame"
     @info="requestInfo"
@@ -40,8 +36,6 @@ const props = defineProps({
 });
 
 const {
-  wsStatus,
-  connectionBadgeClass,
   menuSections,
   difficulty,
   currentView,

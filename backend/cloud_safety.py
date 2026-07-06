@@ -46,7 +46,12 @@ CLOUD_BLOCKED_ACTIONS = frozenset(
 def is_cloud_action_blocked(action: str | None) -> bool:
     if not is_cloud_mode() or not action:
         return False
-    return action in CLOUD_BLOCKED_ACTIONS or str(action).startswith("NOTEBOOK_")
+    action_name = str(action)
+    return (
+        action in CLOUD_BLOCKED_ACTIONS
+        or action_name.startswith("NOTEBOOK_")
+        or action_name.startswith("MINIGAME_")
+    )
 
 
 def cloud_disabled_message(action: str | None) -> str:

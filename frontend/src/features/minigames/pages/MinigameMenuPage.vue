@@ -18,7 +18,6 @@
           </div>
         </div>
         <div class="flex items-center gap-3">
-          <span :class="connectionBadgeClass">{{ $t(`status.${wsStatus}`) }}</span>
           <div class="top-menu-shell surface-prominent-soft">
             <span class="ui-kicker font-black uppercase tracking-widest text-text-secondary">{{ $t('minigames.menu.difficulty') }}</span>
             <div class="flex overflow-hidden rounded-lg border border-border-main/50 shadow-sm">
@@ -72,14 +71,6 @@ const props = defineProps({
   difficulty: {
     type: Number,
     default: 1,
-  },
-  wsStatus: {
-    type: String,
-    default: 'connecting',
-  },
-  connectionBadgeClass: {
-    type: String,
-    default: 'badge-base badge-connection-pending',
   },
   focusGameId: {
     type: String,

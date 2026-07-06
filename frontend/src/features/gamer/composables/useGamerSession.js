@@ -1,47 +1,274 @@
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 
-import { createWsClient } from '../../../services/ws/createWsClient';
+import { createLocalStorageStore } from '../../../services/storage/localStorageStore';
+import { getEvilCore } from '../../../services/wasm/aiCoreClient';
+
+const VALID_DIRECTIONS = new Set(['left', 'right', 'up', 'down']);
+const DIRECTION_BY_CODE = {
+  1: 'left',
+  2: 'right',
+  3: 'up',
+  4: 'down',
+};
+const SPAWN_RATE4 = 0.1;
+const GAMER_TOP_TILE = 32768;
+const MAX_HISTORY_LENGTH = 1000;
+const AI_WORKER_VERSION = 'worker-614a4af-20260706';
+
+const gamerStore = createLocalStorageStore({
+  key: 'gamer',
+  version: 1,
+  defaultValue: null,
+});
+
+function exponentToValue(exponent) {
+  const exp = Number(exponent) || 0;
+  return exp > 0 ? 2 ** exp : 0;
+}
+
+function valueToExponent(value) {
+  const number = Number(value) || 0;
+  if (number <= 0) return 0;
+  if (number >= GAMER_TOP_TILE) return 15;
+  const exponent = Math.log2(number);
+  return Number.isInteger(exponent) && exponent > 0 ? Math.min(15, exponent) : 0;
+}
+
+function normalizeHex(hex) {
+  return String(hex || '')
+    .trim()
+    .replace(/^0x/i, '')
+    .replace(/[^0-9a-f]/gi, '')
+    .padStart(16, '0')
+    .slice(-16)
+    .toLowerCase();
+}
+
+function boardFromHex(hex) {
+  return normalizeHex(hex)
+    .split('')
+    .map((digit) => exponentToValue(Number.parseInt(digit, 16)));
+}
+
+function boardToHex(values) {
+  return values
+    .slice(0, 16)
+    .map((value) => valueToExponent(value).toString(16))
+    .join('');
+}
+
+function boardToEncoded(values) {
+  let encoded = 0n;
+  values.slice(0, 16).forEach((value, index) => {
+    encoded |= BigInt(valueToExponent(value) & 0xf) << BigInt((15 - index) * 4);
+  });
+  return encoded;
+}
+
+function extractSpecialTiles(values) {
+  return values.reduce((acc, value, index) => {
+    const number = Number(value) || 0;
+    if (number > GAMER_TOP_TILE) {
+      acc.push({ index, value: number });
+    }
+    return acc;
+  }, []);
+}
+
+function applySpecialTiles(values, tiles) {
+  const next = values.slice(0, 16);
+  for (const tile of Array.isArray(tiles) ? tiles : []) {
+    const index = Number(tile?.index);
+    const value = Number(tile?.value);
+    if (Number.isInteger(index) && index >= 0 && index < 16 && value > GAMER_TOP_TILE) {
+      next[index] = value;
+    }
+  }
+  return next;
+}
+
+function linePositions(direction) {
+  if (direction === 'left') {
+    return Array.from({ length: 4 }, (_unused, row) =>
+      Array.from({ length: 4 }, (__unused, col) => row * 4 + col)
+    );
+  }
+  if (direction === 'right') {
+    return Array.from({ length: 4 }, (_unused, row) =>
+      Array.from({ length: 4 }, (__unused, offset) => row * 4 + (3 - offset))
+    );
+  }
+  if (direction === 'up') {
+    return Array.from({ length: 4 }, (_unused, col) =>
+      Array.from({ length: 4 }, (__unused, row) => row * 4 + col)
+    );
+  }
+  if (direction === 'down') {
+    return Array.from({ length: 4 }, (_unused, col) =>
+      Array.from({ length: 4 }, (__unused, offset) => (3 - offset) * 4 + col)
+    );
+  }
+  return [];
+}
+
+function simulateLine(values) {
+  const result = [0, 0, 0, 0];
+  const distances = [0, 0, 0, 0];
+  const pops = [0, 0, 0, 0];
+  let scoreDelta = 0;
+
+  const nonZero = values
+    .map((value, index) => [index, Number(value) || 0])
+    .filter(([_index, value]) => value !== 0);
+
+  let read = 0;
+  let write = 0;
+  while (read < nonZero.length) {
+    const [sourceIndex, value] = nonZero[read];
+    if (read + 1 < nonZero.length && nonZero[read + 1][1] === value) {
+      const [nextSourceIndex] = nonZero[read + 1];
+      const mergedValue = value * 2;
+      result[write] = mergedValue;
+      scoreDelta += mergedValue;
+      distances[sourceIndex] = sourceIndex - write;
+      distances[nextSourceIndex] = nextSourceIndex - write;
+      pops[write] = 1;
+      read += 2;
+    } else {
+      result[write] = value;
+      distances[sourceIndex] = sourceIndex - write;
+      read += 1;
+    }
+    write += 1;
+  }
+
+  return { result, distances, pops, scoreDelta };
+}
+
+function simulateMove(values, direction) {
+  const nextBoard = new Array(16).fill(0);
+  const slideDistances = new Array(16).fill(0);
+  const popPositions = new Array(16).fill(0);
+  let scoreDelta = 0;
+
+  for (const positions of linePositions(direction)) {
+    const lineValues = positions.map((index) => Number(values[index]) || 0);
+    const simulated = simulateLine(lineValues);
+    scoreDelta += simulated.scoreDelta;
+
+    positions.forEach((boardIndex, offset) => {
+      slideDistances[boardIndex] = simulated.distances[offset];
+      if (simulated.pops[offset]) {
+        popPositions[boardIndex] = 1;
+      }
+      nextBoard[boardIndex] = simulated.result[offset];
+    });
+  }
+
+  return {
+    board: nextBoard,
+    slideDistances,
+    popPositions,
+    scoreDelta,
+  };
+}
+
+function boardsEqual(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function legalMoves(values) {
+  return ['left', 'right', 'up', 'down'].filter((direction) => (
+    !boardsEqual(simulateMove(values, direction).board, values)
+  ));
+}
+
+function randomSpawn(values) {
+  const emptyIndices = values
+    .map((value, index) => (Number(value) === 0 ? index : null))
+    .filter((index) => index !== null);
+  if (!emptyIndices.length) {
+    return null;
+  }
+  const index = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
+  const exponent = Math.random() < SPAWN_RATE4 ? 2 : 1;
+  return {
+    index,
+    value: exponentToValue(exponent),
+  };
+}
+
+function aiSearchTimeout(speed) {
+  const normalized = Number(speed);
+  if (!Number.isFinite(normalized)) return 160;
+  const ratio = 10 ** ((100 - normalized) / 100);
+  return Math.max(40, Math.min(800, Math.round(160 * ratio)));
+}
+
+function historyEntry(values, currentScore, specialTiles) {
+  return {
+    board: values.slice(0, 16),
+    score: Number(currentScore) || 0,
+    specialTiles: Array.isArray(specialTiles) ? specialTiles.map((tile) => ({ ...tile })) : [],
+  };
+}
 
 export function useGamerSession(activeRef) {
-  const VALID_DIRECTIONS = new Set(['left', 'right', 'up', 'down']);
-  const AI_MOVE_ACK_TIMEOUT_MS = 2000;
-  const AI_RETRY_DELAY_MS = 150;
-  const AI_MAX_STALLED_MOVES = 4;
-  const AI_MAX_NO_OP_RETRIES_PER_BOARD = 5;
-
-  const board = ref([0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 65536]);
+  const board = ref(new Array(16).fill(0));
   const metadata = ref(null);
   const score = ref({ current: 0, best: 0 });
-  const wsStatus = ref('connecting');
+  const wsStatus = ref('connected');
   const aiEnabled = ref(false);
   const difficulty = ref(0);
   const aiSpeed = ref(100);
   const hexInput = ref('');
   const currentHex = ref('0000000000000000');
   const specialTiles = ref([]);
-
   const scoreAnimations = ref([]);
+  const aiWorkerReady = ref(false);
+
   let animIdCounter = 0;
-  let client = null;
   let aiContinuationTimer = null;
-  let aiMoveAckTimer = null;
-  let aiPhase = null;
-  let stalledAiMoveCount = 0;
-  let aiNoOpRetriesByHex = new Map();
+  let aiRunning = false;
+  let evilCoreModule = null;
+  let aiWorker = null;
+  let pendingAiMove = null;
+  let evilGen = null;
+  const history = [];
 
-  watch(() => score.value.current, (newVal, oldVal) => {
-    if (newVal > oldVal && oldVal !== undefined && oldVal !== 0) {
-      const diff = newVal - oldVal;
-      const id = animIdCounter++;
-      scoreAnimations.value.push({ id, value: diff });
-      window.setTimeout(() => {
-        scoreAnimations.value = scoreAnimations.value.filter((item) => item.id !== id);
-      }, 1000);
+  const persistState = () => {
+    gamerStore.write({
+      board: board.value.slice(0, 16),
+      metadata: null,
+      score: score.value,
+      difficulty: difficulty.value,
+      aiSpeed: aiSpeed.value,
+      currentHex: currentHex.value,
+      specialTiles: specialTiles.value,
+    });
+  };
+
+  const pushHistory = () => {
+    history.push(historyEntry(board.value, score.value.current, specialTiles.value));
+    if (history.length > MAX_HISTORY_LENGTH) {
+      history.splice(0, history.length - MAX_HISTORY_LENGTH);
     }
-  });
+  };
 
-  const triggerAction = (action, payload = {}) => {
-    return client?.send(action, payload) === true;
+  const syncDerivedState = () => {
+    currentHex.value = boardToHex(board.value);
+    specialTiles.value = extractSpecialTiles(board.value);
+  };
+
+  const applyBoardState = (values, animation = null, nextScore = score.value.current) => {
+    board.value = applySpecialTiles(values, specialTiles.value);
+    metadata.value = animation;
+    score.value = {
+      current: Number(nextScore) || 0,
+      best: Math.max(Number(score.value.best) || 0, Number(nextScore) || 0),
+    };
+    syncDerivedState();
+    persistState();
   };
 
   const clearAiContinuationTimer = () => {
@@ -51,180 +278,343 @@ export function useGamerSession(activeRef) {
     }
   };
 
-  const clearAiMoveAckTimer = () => {
-    if (aiMoveAckTimer !== null) {
-      window.clearTimeout(aiMoveAckTimer);
-      aiMoveAckTimer = null;
-    }
-  };
-
-  const clearAiTimers = () => {
-    clearAiContinuationTimer();
-    clearAiMoveAckTimer();
-  };
-
   const stopAI = () => {
     aiEnabled.value = false;
-    aiPhase = null;
-    stalledAiMoveCount = 0;
-    aiNoOpRetriesByHex.clear();
-    clearAiTimers();
+    aiRunning = false;
+    clearAiContinuationTimer();
   };
 
-  const canContinueAI = () => (
-    aiEnabled.value &&
-    activeRef?.value &&
-    wsStatus.value === 'connected'
-  );
+  const canContinueAI = () => aiEnabled.value && activeRef?.value && wsStatus.value === 'connected';
 
-  const requestAiStep = (delay = 0) => {
+  const scheduleAiStep = (delay = 0) => {
     clearAiContinuationTimer();
-    if (!canContinueAI() || aiPhase !== null) {
+    if (!canContinueAI() || aiRunning) {
       return;
     }
-
-    aiContinuationTimer = window.setTimeout(() => {
+    aiContinuationTimer = window.setTimeout(async () => {
       aiContinuationTimer = null;
-      if (!canContinueAI() || aiPhase !== null) {
+      if (!canContinueAI() || aiRunning) {
         return;
       }
-      if (triggerAction('AI_STEP')) {
-        aiPhase = 'ai-step';
-      }
+      await runAiStep(true);
     }, delay);
   };
 
-  const handleAiMoveStalled = () => {
-    if (aiPhase !== 'user-move' || !aiEnabled.value) {
-      return;
+  const spawnEvil = async (values) => {
+    const fallback = () => randomSpawn(values);
+    try {
+      const module = evilCoreModule || await getEvilCore();
+      evilCoreModule = module;
+      if (!module?.EvilGen) {
+        return fallback();
+      }
+      const encoded = boardToEncoded(values);
+      evilGen = evilGen || new module.EvilGen(encoded);
+      evilGen.reset_board(encoded);
+      const result = evilGen.gen_new_num(5);
+      const index = Number(result?.[1]);
+      const exponent = Number(result?.[2]);
+      if (!Number.isInteger(index) || index < 0 || index >= 16 || exponent <= 0 || values[index] !== 0) {
+        return fallback();
+      }
+      return {
+        index,
+        value: exponentToValue(exponent),
+      };
+    } catch (error) {
+      console.error('EvilGen WASM spawn failed; falling back to random spawn.', error);
+      return fallback();
+    }
+  };
+
+  const disposeAiWorker = () => {
+    if (pendingAiMove) {
+      pendingAiMove.reject(new Error('AI worker disposed.'));
+      pendingAiMove = null;
+    }
+    aiWorker?.terminate();
+    aiWorker = null;
+    aiWorkerReady.value = false;
+  };
+
+  const ensureAiWorker = () => {
+    if (aiWorker) {
+      return aiWorker;
     }
 
-    aiPhase = null;
-    stalledAiMoveCount += 1;
-    if (stalledAiMoveCount > AI_MAX_STALLED_MOVES) {
-      console.warn('Gamer AI stopped after repeated moves without state updates.');
+    aiWorker = new Worker(`/wasm/ai_worker.js?v=${AI_WORKER_VERSION}`, { type: 'module' });
+    aiWorker.onmessage = (event) => {
+      const data = event.data || {};
+      if (data.type === 'ready') {
+        aiWorkerReady.value = true;
+        return;
+      }
+      if (data.type === 'move_result' && pendingAiMove) {
+        const pending = pendingAiMove;
+        pendingAiMove = null;
+        window.clearTimeout(pending.timeoutId);
+        pending.resolve(Number(data.best_move) || 0);
+      }
+    };
+    aiWorker.onerror = (event) => {
+      aiWorkerReady.value = false;
+      if (pendingAiMove) {
+        const pending = pendingAiMove;
+        pendingAiMove = null;
+        window.clearTimeout(pending.timeoutId);
+        pending.reject(new Error(event.message || 'AI worker error.'));
+      }
+    };
+    return aiWorker;
+  };
+
+  const requestWorkerAiMove = () => new Promise((resolve, reject) => {
+    const worker = ensureAiWorker();
+    if (pendingAiMove) {
+      pendingAiMove.reject(new Error('AI worker request superseded.'));
+      window.clearTimeout(pendingAiMove.timeoutId);
+      pendingAiMove = null;
+    }
+    const timeoutId = window.setTimeout(() => {
+      if (!pendingAiMove) return;
+      pendingAiMove = null;
+      reject(new Error('AI worker timed out.'));
+    }, 60000);
+    pendingAiMove = { resolve, reject, timeoutId };
+    worker.postMessage({
+      type: 'update_speed',
+      ratio: aiSearchTimeout(aiSpeed.value) / 160,
+    });
+    worker.postMessage({
+      type: 'calculate',
+      board_encoded: boardToHex(board.value),
+    });
+  });
+
+  const chooseAiMove = async () => {
+    const moves = legalMoves(board.value);
+    if (!moves.length) {
+      return null;
+    }
+
+    try {
+      const candidate = DIRECTION_BY_CODE[await requestWorkerAiMove()];
+      return moves.includes(candidate) ? candidate : moves[0];
+    } catch (error) {
+      console.error('AI worker step failed; using first legal move.', error);
+      return moves[0];
+    }
+  };
+
+  const moveBoard = async (direction, source = 'manual') => {
+    if (!VALID_DIRECTIONS.has(direction)) {
+      return false;
+    }
+
+    const before = board.value.slice(0, 16);
+    const simulated = simulateMove(before, direction);
+    if (boardsEqual(simulated.board, before)) {
+      if (source === 'ai') {
+        stopAI();
+      }
+      return false;
+    }
+
+    const nextScore = score.value.current + simulated.scoreDelta;
+    const spawn = Math.random() > (Number(difficulty.value) || 0) / 100
+      ? randomSpawn(simulated.board)
+      : await spawnEvil(simulated.board);
+    const nextBoard = simulated.board.slice(0, 16);
+    if (spawn) {
+      nextBoard[spawn.index] = spawn.value;
+    }
+
+    specialTiles.value = extractSpecialTiles(nextBoard);
+    applyBoardState(nextBoard, {
+      direction,
+      slide_distances: simulated.slideDistances,
+      pop_positions: simulated.popPositions,
+      appear_tile: spawn
+        ? {
+            index: spawn.index,
+            value: spawn.value,
+          }
+        : null,
+    }, nextScore);
+    pushHistory();
+    return true;
+  };
+
+  const newGame = () => {
+    stopAI();
+    const nextBoard = new Array(16).fill(0);
+    const first = randomSpawn(nextBoard);
+    if (first) nextBoard[first.index] = first.value;
+    const second = randomSpawn(nextBoard);
+    if (second) nextBoard[second.index] = second.value;
+
+    specialTiles.value = [];
+    board.value = nextBoard;
+    metadata.value = null;
+    score.value = {
+      current: 0,
+      best: Number(score.value.best) || 0,
+    };
+    syncDerivedState();
+    history.length = 0;
+    pushHistory();
+    persistState();
+  };
+
+  const undo = () => {
+    if (history.length <= 1) {
+      return false;
+    }
+    stopAI();
+    history.pop();
+    const previous = history[history.length - 1];
+    specialTiles.value = previous.specialTiles;
+    board.value = applySpecialTiles(previous.board, previous.specialTiles);
+    metadata.value = null;
+    score.value = {
+      current: Number(previous.score) || 0,
+      best: Number(score.value.best) || 0,
+    };
+    syncDerivedState();
+    persistState();
+    return true;
+  };
+
+  const setBoardFromHex = (hex) => {
+    const normalized = normalizeHex(hex);
+    if (!normalized) {
+      return false;
+    }
+    stopAI();
+    specialTiles.value = [];
+    board.value = boardFromHex(normalized);
+    metadata.value = null;
+    score.value = {
+      current: 0,
+      best: Number(score.value.best) || 0,
+    };
+    syncDerivedState();
+    history.length = 0;
+    pushHistory();
+    persistState();
+    return true;
+  };
+
+  const runAiStep = async (fromContinuousAI = false) => {
+    if (aiRunning) {
+      return false;
+    }
+    aiRunning = true;
+    let shouldContinue = false;
+    try {
+      const direction = await chooseAiMove();
+      if (!direction) {
+        stopAI();
+        return false;
+      }
+      const moved = await moveBoard(direction, fromContinuousAI ? 'ai' : 'manual-ai-step');
+      shouldContinue = Boolean(moved && fromContinuousAI && canContinueAI());
+      return moved;
+    } finally {
+      aiRunning = false;
+      if (shouldContinue) {
+        scheduleAiStep(Math.max(20, 220 - Number(aiSpeed.value || 100)));
+      }
+    }
+  };
+
+  const triggerAction = (action, payload = {}) => {
+    if (action === 'INIT_GAME') {
+      newGame();
+      return true;
+    }
+    if (action === 'UNDO') {
+      return undo();
+    }
+    if (action === 'SET_BOARD') {
+      return setBoardFromHex(payload.hex_str);
+    }
+    if (action === 'USER_MOVE') {
+      moveBoard(String(payload.dir || '').toLowerCase(), payload.source || 'manual');
+      return true;
+    }
+    if (action === 'AI_STEP') {
+      runAiStep(false);
+      return true;
+    }
+    if (action === 'SAVE_GAME_STATE') {
+      persistState();
+      return true;
+    }
+    return false;
+  };
+
+  const toggleAI = () => {
+    if (aiEnabled.value) {
       stopAI();
       return;
     }
-
-    triggerAction('GET_STATE');
+    aiEnabled.value = true;
+    scheduleAiStep();
   };
 
-  const watchAiMoveAck = () => {
-    clearAiMoveAckTimer();
-    aiMoveAckTimer = window.setTimeout(() => {
-      aiMoveAckTimer = null;
-      handleAiMoveStalled();
-    }, AI_MOVE_ACK_TIMEOUT_MS);
+  const updateSettings = () => {
+    difficulty.value = Math.max(0, Math.min(100, Number(difficulty.value) || 0));
+    aiSpeed.value = Math.max(0, Math.min(200, Number(aiSpeed.value) || 0));
+    persistState();
   };
 
-  const handleMessage = (data) => {
-    if (data.action === 'UPDATE_STATE') {
-      const previousHex = currentHex.value;
-      const completedAiMove = aiPhase === 'user-move';
-      board.value = data.data.board;
-      score.value = data.data.score;
-      metadata.value = data.data.animation;
-      currentHex.value = data.data.hex_str || currentHex.value;
-      specialTiles.value = Array.isArray(data.data.gamer_special_tiles)
-        ? data.data.gamer_special_tiles
-        : [];
+  const setBoard = () => {
+    const value = hexInput.value.trim();
+    if (!value) return;
+    setBoardFromHex(value);
+  };
 
-      if (data.data.settings) {
-        difficulty.value = data.data.settings.difficulty;
-        aiSpeed.value = data.data.settings.speed;
-      }
+  const writeCurrentBoardToHex = () => {
+    hexInput.value = boardToHex(board.value);
+  };
 
-      aiPhase = null;
-      clearAiMoveAckTimer();
-      if (completedAiMove || (data.data.hex_str && data.data.hex_str !== previousHex)) {
-        stalledAiMoveCount = 0;
-        aiNoOpRetriesByHex.clear();
-      }
+  const openBrowserAi = () => false;
 
-      if (canContinueAI()) {
-        requestAiStep();
-      }
+  const loadSavedState = () => {
+    const saved = gamerStore.read();
+    if (!saved?.board || !Array.isArray(saved.board) || saved.board.length !== 16) {
+      newGame();
       return;
     }
+    difficulty.value = Math.max(0, Math.min(100, Number(saved.difficulty) || 0));
+    aiSpeed.value = Math.max(0, Math.min(200, Number(saved.aiSpeed) || 100));
+    specialTiles.value = Array.isArray(saved.specialTiles) ? saved.specialTiles : [];
+    board.value = applySpecialTiles(saved.board, specialTiles.value);
+    metadata.value = null;
+    score.value = {
+      current: Number(saved.score?.current) || 0,
+      best: Number(saved.score?.best) || 0,
+    };
+    syncDerivedState();
+    history.length = 0;
+    pushHistory();
+  };
 
-    if (data.action === 'DO_AI_MOVE_CMD') {
-      const dir = String(data.data?.dir || '').toLowerCase();
-      if (VALID_DIRECTIONS.has(dir)) {
-        const fromContinuousAI = aiEnabled.value;
-        aiPhase = fromContinuousAI ? 'user-move' : null;
-        if (fromContinuousAI && !activeRef?.value) {
-          aiPhase = null;
-          return;
+  const prewarmWasmEngines = () => {
+    ensureAiWorker();
+    getEvilCore()
+      .then((module) => {
+        evilCoreModule = module;
+        if (module?.EvilGen) {
+          const warmupEvilGen = new module.EvilGen(0n);
+          warmupEvilGen.gen_new_num(1);
+          warmupEvilGen.delete?.();
         }
-        triggerAction('USER_MOVE', {
-          dir,
-          source: fromContinuousAI ? 'ai' : 'manual-ai-step',
-        });
-        if (fromContinuousAI) {
-          watchAiMoveAck();
-        }
-      } else {
-        if (aiEnabled.value) {
-          stopAI();
-        }
-      }
-      return;
-    }
-
-    if (data.action === 'AI_MOVE_SKIPPED') {
-      aiPhase = null;
-      clearAiMoveAckTimer();
-      if (!aiEnabled.value) {
-        return;
-      }
-      if (data.data?.has_legal_moves === false) {
-        stopAI();
-        return;
-      }
-
-      const boardHex = String(data.data?.hex_str || currentHex.value || '');
-      const retryCount = (aiNoOpRetriesByHex.get(boardHex) || 0) + 1;
-      aiNoOpRetriesByHex.set(boardHex, retryCount);
-      if (retryCount > AI_MAX_NO_OP_RETRIES_PER_BOARD) {
-        console.warn('Gamer AI stopped after repeated no-op AI moves on the same board.');
-        stopAI();
-        return;
-      }
-      requestAiStep(AI_RETRY_DELAY_MS * retryCount);
-      return;
-    }
-  };
-
-  const connect = () => {
-    if (client) {
-      return;
-    }
-    client = createWsClient({
-      clientId: `gamer_${Math.random().toString(36).substring(2, 9)}`,
-      onOpen: () => {
-        wsStatus.value = 'connected';
-        aiPhase = null;
-        triggerAction('GET_STATE');
-      },
-      onMessage: handleMessage,
-      onClose: () => {
-        wsStatus.value = 'disconnected';
-        aiPhase = null;
-        clearAiTimers();
-      },
-    });
-    wsStatus.value = 'connecting';
-    client.connect();
-  };
-
-  const disconnect = () => {
-    aiPhase = null;
-    clearAiTimers();
-    onBeforeUnload();
-    client?.disconnect();
-    client = null;
-    wsStatus.value = 'disconnected';
+      })
+      .catch((error) => {
+        console.error('Failed to prewarm EvilGen WASM module.', error);
+      });
   };
 
   const handleKeydown = (event) => {
@@ -241,10 +631,14 @@ export function useGamerSession(activeRef) {
     }
 
     const map = {
-      ArrowUp: 'up', KeyW: 'up',
-      ArrowDown: 'down', KeyS: 'down',
-      ArrowLeft: 'left', KeyA: 'left',
-      ArrowRight: 'right', KeyD: 'right',
+      ArrowUp: 'up',
+      KeyW: 'up',
+      ArrowDown: 'down',
+      KeyS: 'down',
+      ArrowLeft: 'left',
+      KeyA: 'left',
+      ArrowRight: 'right',
+      KeyD: 'right',
     };
 
     if (map[event.code]) {
@@ -267,94 +661,46 @@ export function useGamerSession(activeRef) {
     }
   };
 
-  const toggleAI = () => {
-    if (aiEnabled.value) {
-      stopAI();
-      return;
+  watch(() => score.value.current, (newVal, oldVal) => {
+    if (newVal > oldVal && oldVal !== undefined && oldVal !== 0) {
+      const diff = newVal - oldVal;
+      const id = animIdCounter++;
+      scoreAnimations.value.push({ id, value: diff });
+      window.setTimeout(() => {
+        scoreAnimations.value = scoreAnimations.value.filter((item) => item.id !== id);
+      }, 1000);
     }
-
-    aiEnabled.value = true;
-    stalledAiMoveCount = 0;
-    aiNoOpRetriesByHex.clear();
-    aiPhase = null;
-    requestAiStep();
-  };
-
-  const updateSettings = () => {
-    triggerAction('UPDATE_SETTINGS', {
-      difficulty: difficulty.value,
-      speed: aiSpeed.value,
-    });
-  };
-
-  const setBoard = () => {
-    const val = hexInput.value.trim();
-    if (!val) return;
-    triggerAction('SET_BOARD', { hex_str: val });
-  };
-
-  const writeCurrentBoardToHex = () => {
-    const digits = board.value.slice(0, 16).map((tile) => {
-      const value = Number(tile) || 0;
-      if (value <= 0) {
-        return '0';
-      }
-      if (value > 32768) {
-        return 'f';
-      }
-      const exponent = Math.log2(value);
-      if (!Number.isInteger(exponent) || exponent < 0) {
-        return '0';
-      }
-      return exponent.toString(16);
-    });
-
-    while (digits.length < 16) {
-      digits.push('0');
-    }
-    hexInput.value = digits.join('');
-  };
-
-  const openBrowserAi = async () => {
-    const url = 'https://2048-endgame-tablebase.netlify.app/';
-    window.open(url, '_blank', 'noopener,noreferrer');
-  };
-
-  const onBeforeUnload = () => {
-    client?.send('SAVE_GAME_STATE', {
-      board_encoded: currentHex.value,
-      score: score.value.current,
-      best_score: score.value.best,
-      special_tiles: specialTiles.value,
-    });
-  };
-
-  onMounted(() => {
-    window.addEventListener('keydown', handleKeydown);
-    window.addEventListener('beforeunload', onBeforeUnload);
   });
 
   watch(
     activeRef,
     (isActive) => {
-      if (isActive) {
-        connect();
-        if (aiEnabled.value) {
-          aiPhase = null;
-          requestAiStep();
-        }
+      if (isActive && aiEnabled.value) {
+        scheduleAiStep();
       } else {
-        aiPhase = null;
-        clearAiTimers();
+        clearAiContinuationTimer();
       }
     },
     { immediate: true }
   );
 
+  onMounted(() => {
+    loadSavedState();
+    prewarmWasmEngines();
+    window.addEventListener('keydown', handleKeydown);
+    window.addEventListener('beforeunload', persistState);
+  });
+
   onUnmounted(() => {
     window.removeEventListener('keydown', handleKeydown);
-    window.removeEventListener('beforeunload', onBeforeUnload);
-    disconnect();
+    window.removeEventListener('beforeunload', persistState);
+    stopAI();
+    disposeAiWorker();
+    if (evilGen?.delete) {
+      evilGen.delete();
+      evilGen = null;
+    }
+    persistState();
   });
 
   return {
@@ -367,6 +713,7 @@ export function useGamerSession(activeRef) {
     aiSpeed,
     hexInput,
     scoreAnimations,
+    aiWorkerReady,
     triggerAction,
     toggleAI,
     updateSettings,

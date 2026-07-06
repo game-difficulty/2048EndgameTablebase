@@ -41,7 +41,6 @@ from backend.quota.service import consume_operation_tokens, get_token_balance
 CLOUD_MODE = is_cloud_mode()
 
 from backend.handlers.analysis import handle_analysis_action
-from backend.handlers.minigames import handle_minigame_action
 from backend.handlers.replay import handle_replay_action
 from backend.handlers.settings import handle_settings_action
 from backend.handlers.tester import handle_tester_action
@@ -184,9 +183,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
                     continue
 
                 elif await handle_analysis_action(action, payload, session, websocket):
-                    continue
-
-                elif await handle_minigame_action(action, payload, session, websocket):
                     continue
 
                 elif await handle_settings_action(

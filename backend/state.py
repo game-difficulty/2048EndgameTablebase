@@ -119,11 +119,6 @@ def save_game_state(session_or_data: GameSession | dict[str, Any]) -> None:
     try:
         if is_cloud_mode():
             return
-        if isinstance(session_or_data, GameSession):
-            minigame_state = getattr(session_or_data, "minigame_session", None)
-            engine = getattr(minigame_state, "engine", None)
-            if engine is not None:
-                engine.save_to_config()
         config = SingletonConfig().config
         if isinstance(session_or_data, dict):
             if not session_or_data.get("is_gamer", True):

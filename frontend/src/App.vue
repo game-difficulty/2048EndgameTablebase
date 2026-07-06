@@ -102,6 +102,13 @@
         <MainMenuView :active="activeTab === TAB_IDS.MAIN_MENU" @selectTab="openTab" />
       </div>
       <div
+        v-if="isTabOpen(TAB_IDS.GAMER)"
+        class="absolute inset-0"
+        v-show="activeTab === TAB_IDS.GAMER"
+      >
+        <GamerView :active="activeTab === TAB_IDS.GAMER" />
+      </div>
+      <div
         v-if="isTabOpen(TAB_IDS.TRAINER)"
         class="absolute inset-0"
         v-show="activeTab === TAB_IDS.TRAINER"
@@ -251,6 +258,7 @@ import { TAB_IDS } from './app/tabRegistry';
 import { useTabManager } from './app/useTabManager';
 import MainMenuView from './components/MainMenuView.vue';
 import AuthPage from './features/auth/AuthPage.vue';
+import GamerView from './features/gamer/pages/GamerPage.vue';
 import HelpView from './features/help/pages/HelpPage.vue';
 import MinigamesView from './features/minigames/pages/MinigamesPage.vue';
 import ReplayAnalysisDialog from './features/replay/components/ReplayAnalysisDialog.vue';

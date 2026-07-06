@@ -53,3 +53,27 @@ set_target_properties(ai_core_wasm PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${DOCS_ROOT}"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${DOCS_ROOT}"
 )
+
+set(EVIL_CORE_SOURCES
+    "${CANONICAL_ROOT}/src/AIPlayer - wasm.cpp"
+    "${CANONICAL_ROOT}/src/bindings_evil_wasm.cpp"
+)
+
+add_executable(evil_core_wasm ${EVIL_CORE_SOURCES})
+target_link_libraries(evil_core_wasm PRIVATE common_config)
+target_link_options(evil_core_wasm PRIVATE
+    -lembind
+    -sEXPORT_ES6=1
+    -sMODULARIZE=1
+    -sEXPORT_NAME="createEvilCore"
+    -sWASM_BIGINT=1
+    -sERROR_ON_UNDEFINED_SYMBOLS=0
+    -sALLOW_MEMORY_GROWTH=1
+)
+set_target_properties(evil_core_wasm PROPERTIES
+    OUTPUT_NAME "evil_core"
+    SUFFIX ".js"
+    RUNTIME_OUTPUT_DIRECTORY "${DOCS_ROOT}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${DOCS_ROOT}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${DOCS_ROOT}"
+)

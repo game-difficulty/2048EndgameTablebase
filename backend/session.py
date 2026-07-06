@@ -3,7 +3,6 @@ import os
 import numpy as np
 
 from engine_core.BookReader import BookReaderDispatcher
-from backend.minigames.session import MinigameSessionState
 from Config import SingletonConfig
 from engine_core.VBoardMover import decode_board
 from engine_core.replay_utils import empty_replay
@@ -174,8 +173,6 @@ class GameSession:
         self.notebook_last_direction = None
         self.notebook_answer_correct = None
         self.notebook_status = ""
-
-        self.minigame_session = MinigameSessionState()
 
     def ensure_evil_gen(self):
         global _SHARED_EVIL_GEN
