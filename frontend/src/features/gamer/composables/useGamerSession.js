@@ -198,11 +198,10 @@ function randomSpawn(values) {
   };
 }
 
-function aiSearchTimeout(speed) {
+function aiSpeedRatio(speed) {
   const normalized = Number(speed);
-  if (!Number.isFinite(normalized)) return 160;
-  const ratio = 10 ** ((100 - normalized) / 100);
-  return Math.max(40, Math.min(800, Math.round(160 * ratio)));
+  const clamped = Number.isFinite(normalized) ? Math.max(0, Math.min(200, normalized)) : 100;
+  return 10 ** ((100 - clamped) / 100);
 }
 
 function historyEntry(values, currentScore, specialTiles) {
@@ -234,9 +233,11 @@ export function useGamerSession(activeRef) {
   let aiWorker = null;
   let pendingAiMove = null;
   let evilGen = null;
+  let lastAiSpeedRatio = null;
+  let persistTimer = null;
   const history = [];
 
-  const persistState = () => {
+  const writePersistedState = () => {
     gamerStore.write({
       board: board.value.slice(0, 16),
       metadata: null,
@@ -246,6 +247,33 @@ export function useGamerSession(activeRef) {
       currentHex: currentHex.value,
       specialTiles: specialTiles.value,
     });
+  };
+
+  const clearPersistTimer = () => {
+    if (persistTimer !== null) {
+      window.clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+  };
+
+  const persistState = ({ immediate = false } = {}) => {
+    if (immediate || !aiEnabled.value) {
+      clearPersistTimer();
+      writePersistedState();
+      return;
+    }
+    if (persistTimer !== null) {
+      return;
+    }
+    persistTimer = window.setTimeout(() => {
+      persistTimer = null;
+      writePersistedState();
+    }, 1000);
+  };
+
+  const flushPersistState = () => {
+    clearPersistTimer();
+    writePersistedState();
   };
 
   const pushHistory = () => {
@@ -282,6 +310,7 @@ export function useGamerSession(activeRef) {
     aiEnabled.value = false;
     aiRunning = false;
     clearAiContinuationTimer();
+    flushPersistState();
   };
 
   const canContinueAI = () => aiEnabled.value && activeRef?.value && wsStatus.value === 'connected';
@@ -327,6 +356,21 @@ export function useGamerSession(activeRef) {
     }
   };
 
+  const syncAiSpeedToWorker = (worker = aiWorker, force = false) => {
+    if (!worker) {
+      return;
+    }
+    const ratio = aiSpeedRatio(aiSpeed.value);
+    if (!force && lastAiSpeedRatio !== null && Math.abs(ratio - lastAiSpeedRatio) < 0.000001) {
+      return;
+    }
+    lastAiSpeedRatio = ratio;
+    worker.postMessage({
+      type: 'update_speed',
+      ratio,
+    });
+  };
+
   const disposeAiWorker = () => {
     if (pendingAiMove) {
       pendingAiMove.reject(new Error('AI worker disposed.'));
@@ -335,6 +379,7 @@ export function useGamerSession(activeRef) {
     aiWorker?.terminate();
     aiWorker = null;
     aiWorkerReady.value = false;
+    lastAiSpeedRatio = null;
   };
 
   const ensureAiWorker = () => {
@@ -343,6 +388,7 @@ export function useGamerSession(activeRef) {
     }
 
     aiWorker = new Worker(`/wasm/ai_worker.js?v=${AI_WORKER_VERSION}`, { type: 'module' });
+    syncAiSpeedToWorker(aiWorker, true);
     aiWorker.onmessage = (event) => {
       const data = event.data || {};
       if (data.type === 'ready') {
@@ -381,10 +427,7 @@ export function useGamerSession(activeRef) {
       reject(new Error('AI worker timed out.'));
     }, 60000);
     pendingAiMove = { resolve, reject, timeoutId };
-    worker.postMessage({
-      type: 'update_speed',
-      ratio: aiSearchTimeout(aiSpeed.value) / 160,
-    });
+    syncAiSpeedToWorker(worker);
     worker.postMessage({
       type: 'calculate',
       board_encoded: boardToHex(board.value),
@@ -523,7 +566,7 @@ export function useGamerSession(activeRef) {
     } finally {
       aiRunning = false;
       if (shouldContinue) {
-        scheduleAiStep(Math.max(20, 220 - Number(aiSpeed.value || 100)));
+        scheduleAiStep(0);
       }
     }
   };
@@ -566,7 +609,8 @@ export function useGamerSession(activeRef) {
   const updateSettings = () => {
     difficulty.value = Math.max(0, Math.min(100, Number(difficulty.value) || 0));
     aiSpeed.value = Math.max(0, Math.min(200, Number(aiSpeed.value) || 0));
-    persistState();
+    syncAiSpeedToWorker();
+    persistState({ immediate: true });
   };
 
   const setBoard = () => {
@@ -661,6 +705,10 @@ export function useGamerSession(activeRef) {
     }
   };
 
+  const handleBeforeUnload = () => {
+    flushPersistState();
+  };
+
   watch(() => score.value.current, (newVal, oldVal) => {
     if (newVal > oldVal && oldVal !== undefined && oldVal !== 0) {
       const diff = newVal - oldVal;
@@ -688,19 +736,19 @@ export function useGamerSession(activeRef) {
     loadSavedState();
     prewarmWasmEngines();
     window.addEventListener('keydown', handleKeydown);
-    window.addEventListener('beforeunload', persistState);
+    window.addEventListener('beforeunload', handleBeforeUnload);
   });
 
   onUnmounted(() => {
     window.removeEventListener('keydown', handleKeydown);
-    window.removeEventListener('beforeunload', persistState);
+    window.removeEventListener('beforeunload', handleBeforeUnload);
     stopAI();
     disposeAiWorker();
     if (evilGen?.delete) {
       evilGen.delete();
       evilGen = null;
     }
-    persistState();
+    persistState({ immediate: true });
   });
 
   return {
