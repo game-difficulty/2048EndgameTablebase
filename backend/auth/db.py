@@ -205,3 +205,10 @@ def init_auth_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_verification_codes(email, purpose);
             """
         )
+        existing_user_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "password_changed_at" not in existing_user_columns:
+            db.execute("ALTER TABLE users ADD COLUMN password_changed_at TEXT")
+        if "deactivated_at" not in existing_user_columns:
+            db.execute("ALTER TABLE users ADD COLUMN deactivated_at TEXT")

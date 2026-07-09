@@ -47,7 +47,7 @@ export function useAuthState() {
   };
 
   const openAuthDialog = (mode = 'login') => {
-    dialogMode.value = mode === 'register' ? 'register' : 'login';
+    dialogMode.value = ['login', 'register', 'forgot', 'reset'].includes(mode) ? mode : 'login';
     dialogOpen.value = true;
   };
 

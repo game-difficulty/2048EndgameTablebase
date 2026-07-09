@@ -13,7 +13,9 @@
   "auth": {
     "title": {
       "login": "Sign in",
-      "register": "Create account"
+      "register": "Create account",
+      "forgot": "Reset password",
+      "reset": "Enter reset code"
     },
     "tabs": {
       "login": "Login",
@@ -24,6 +26,9 @@
       "email": "Email",
       "emailCode": "Email Code",
       "password": "Password",
+      "newPassword": "New Password",
+      "currentPassword": "Current Password",
+      "confirmText": "Confirmation",
       "displayName": "Display Name"
     },
     "placeholders": {
@@ -31,6 +36,7 @@
       "email": "Email address",
       "emailCode": "6-digit code",
       "password": "At least 8 characters",
+      "currentPassword": "Current password",
       "displayName": "Optional"
     },
     "actions": {
@@ -38,18 +44,32 @@
       "register": "Register",
       "logout": "Logout",
       "sendCode": "Send Code",
+      "sendResetCode": "Send Reset Code",
+      "resetPassword": "Reset Password",
+      "forgotPassword": "Forgot password?",
+      "backToLogin": "Back to login",
+      "changePassword": "Change Password",
+      "deactivate": "Deactivate Account",
       "sendingCode": "Sending",
       "pleaseWait": "Please wait"
     },
     "messages": {
       "codeSent": "Verification code sent.",
+      "resetCodeSent": "If the account exists, a reset code has been sent.",
+      "passwordChanged": "Password updated.",
       "devCode": "Verification code: {code}"
     },
     "account": {
       "title": "Account",
       "bonusTokens": "Bonus tokens",
       "paidTokens": "Paid tokens",
-      "totalTokens": "Total"
+      "totalTokens": "Total",
+      "changePassword": "Change Password",
+      "deactivateAccount": "Deactivate"
+    },
+    "deactivate": {
+      "warning": "This disables your account and signs out all sessions. Historical usage records are retained for audit.",
+      "confirmPlaceholder": "Type DELETE to confirm"
     },
     "tokens": {
       "insufficientTitle": "Insufficient token balance",

@@ -13,7 +13,9 @@
   "auth": {
     "title": {
       "login": "登录",
-      "register": "创建账号"
+      "register": "创建账号",
+      "forgot": "重置密码",
+      "reset": "输入重置验证码"
     },
     "tabs": {
       "login": "登录",
@@ -24,6 +26,9 @@
       "email": "邮箱",
       "emailCode": "邮箱验证码",
       "password": "密码",
+      "newPassword": "新密码",
+      "currentPassword": "当前密码",
+      "confirmText": "确认文本",
       "displayName": "显示名称"
     },
     "placeholders": {
@@ -31,6 +36,7 @@
       "email": "邮箱地址",
       "emailCode": "6 位验证码",
       "password": "至少 8 个字符",
+      "currentPassword": "当前密码",
       "displayName": "可选"
     },
     "actions": {
@@ -38,18 +44,32 @@
       "register": "注册",
       "logout": "退出",
       "sendCode": "发送验证码",
+      "sendResetCode": "发送重置验证码",
+      "resetPassword": "重置密码",
+      "forgotPassword": "忘记密码？",
+      "backToLogin": "返回登录",
+      "changePassword": "修改密码",
+      "deactivate": "注销账号",
       "sendingCode": "发送中",
       "pleaseWait": "请稍候"
     },
     "messages": {
       "codeSent": "验证码已发送。",
+      "resetCodeSent": "如果账号存在，重置验证码已发送。",
+      "passwordChanged": "密码已更新。",
       "devCode": "验证码：{code}"
     },
     "account": {
       "title": "账号",
       "bonusTokens": "赠送 token",
       "paidTokens": "充值 token",
-      "totalTokens": "总余额"
+      "totalTokens": "总余额",
+      "changePassword": "修改密码",
+      "deactivateAccount": "注销账号"
+    },
+    "deactivate": {
+      "warning": "这会禁用你的账号并退出所有会话。历史使用记录会保留用于审计。",
+      "confirmPlaceholder": "输入 DELETE 确认"
     },
     "tokens": {
       "insufficientTitle": "Token 余额不足",

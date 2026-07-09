@@ -3,7 +3,7 @@
     <section class="auth-panel">
       <div class="auth-heading">
         <div class="auth-kicker">2048 Endgame Tablebase</div>
-        <h1>{{ mode === 'login' ? $t('auth.title.login') : $t('auth.title.register') }}</h1>
+        <h1>{{ $t(`auth.title.${mode}`) }}</h1>
       </div>
 
       <div class="auth-tabs">
@@ -28,13 +28,13 @@
           </button>
         </div>
 
-        <label v-if="mode === 'register'">
+        <label v-if="mode === 'register' || mode === 'reset'">
           <span>{{ $t('auth.fields.emailCode') }}</span>
           <input v-model="verificationCode" inputmode="numeric" autocomplete="one-time-code" :placeholder="$t('auth.placeholders.emailCode')" required />
         </label>
 
-        <label>
-          <span>{{ $t('auth.fields.password') }}</span>
+        <label v-if="mode !== 'forgot'">
+          <span>{{ mode === 'reset' ? $t('auth.fields.newPassword') : $t('auth.fields.password') }}</span>
           <input
             v-model="password"
             type="password"
@@ -50,7 +50,25 @@
         </label>
 
         <button type="submit" class="auth-primary" :disabled="submitting">
-          {{ submitting ? $t('auth.actions.pleaseWait') : (mode === 'login' ? $t('auth.actions.login') : $t('auth.actions.register')) }}
+          {{ submitting ? $t('auth.actions.pleaseWait') : submitLabel }}
+        </button>
+
+        <button
+          v-if="mode === 'login'"
+          type="button"
+          class="auth-link"
+          @click="mode = 'forgot'"
+        >
+          {{ $t('auth.actions.forgotPassword') }}
+        </button>
+
+        <button
+          v-if="mode === 'forgot' || mode === 'reset'"
+          type="button"
+          class="auth-link"
+          @click="mode = 'login'"
+        >
+          {{ $t('auth.actions.backToLogin') }}
         </button>
       </form>
 
@@ -62,7 +80,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { authClient } from '../../services/auth/authClient';
@@ -76,7 +94,11 @@ const props = defineProps({
 });
 const { t } = useI18n();
 
-const mode = ref(props.initialMode === 'register' ? 'register' : 'login');
+const normalizeMode = (value) => (
+  ['login', 'register', 'forgot', 'reset'].includes(value) ? value : 'login'
+);
+
+const mode = ref(normalizeMode(props.initialMode));
 const email = ref('');
 const password = ref('');
 const inviteCode = ref('');
@@ -92,13 +114,24 @@ const showMessage = (text, type = 'info') => {
   messageType.value = type;
 };
 
+const submitLabel = computed(() => {
+  if (mode.value === 'register') return t('auth.actions.register');
+  if (mode.value === 'forgot') return t('auth.actions.sendResetCode');
+  if (mode.value === 'reset') return t('auth.actions.resetPassword');
+  return t('auth.actions.login');
+});
+
 watch(
   () => props.initialMode,
   (nextMode) => {
-    mode.value = nextMode === 'register' ? 'register' : 'login';
+    mode.value = normalizeMode(nextMode);
     showMessage('');
   }
 );
+
+watch(mode, () => {
+  showMessage('');
+});
 
 const sendCode = async () => {
   sendingCode.value = true;
@@ -120,9 +153,21 @@ const submit = async () => {
   submitting.value = true;
   showMessage('');
   try {
+    if (mode.value === 'forgot') {
+      await authClient.requestPasswordReset({ email: email.value });
+      mode.value = 'reset';
+      showMessage(t('auth.messages.resetCodeSent'));
+      return;
+    }
     const result = mode.value === 'login'
       ? await authClient.login({ email: email.value, password: password.value })
-      : await authClient.register({
+      : mode.value === 'reset'
+        ? await authClient.resetPassword({
+          email: email.value,
+          verification_code: verificationCode.value,
+          new_password: password.value,
+        })
+        : await authClient.register({
         email: email.value,
         password: password.value,
         invite_code: inviteCode.value,
@@ -181,7 +226,8 @@ const submit = async () => {
 
 .auth-tabs button,
 .auth-secondary,
-.auth-primary {
+.auth-primary,
+.auth-link {
   border: 1px solid var(--border-main);
   border-radius: 12px;
   padding: 0.85rem 1rem;
@@ -194,6 +240,15 @@ const submit = async () => {
 .auth-primary {
   background: var(--btn-bg);
   color: white;
+}
+
+.auth-link {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.auth-link:hover {
+  color: var(--accent);
 }
 
 .auth-form {

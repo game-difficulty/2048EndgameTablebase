@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, HTTPException, Request, Response
 
-from .dependencies import client_ip, cookie_secure, current_user_from_request
+from .dependencies import client_ip, cookie_secure, current_user_from_request, require_user
 from .service import (
     SESSION_COOKIE_NAME,
+    change_password,
+    deactivate_account,
     login_user,
     register_user,
+    request_password_reset_code,
+    reset_password,
     revoke_session,
     send_register_email_code,
 )
@@ -81,6 +85,63 @@ async def login(request: Request, response: Response, payload: dict = Body(...))
         return {"authenticated": True, "user": result["user"]}
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+@router.post("/request-password-reset")
+async def request_password_reset(request: Request, payload: dict = Body(...)):
+    try:
+        return request_password_reset_code(
+            email=str(payload.get("email") or ""),
+            ip_address=client_ip(request),
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/reset-password")
+async def reset_password_route(request: Request, response: Response, payload: dict = Body(...)):
+    try:
+        result = reset_password(
+            email=str(payload.get("email") or ""),
+            verification_code=str(payload.get("verification_code") or ""),
+            new_password=str(payload.get("new_password") or ""),
+            user_agent=request.headers.get("user-agent", ""),
+            ip_address=client_ip(request),
+        )
+        _set_session_cookie(response, result["token"], result["expires_at"])
+        return {"authenticated": True, "user": result["user"]}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/change-password")
+async def change_password_route(request: Request, payload: dict = Body(...)):
+    user = require_user(request)
+    try:
+        result = change_password(
+            user_id=int(user["id"]),
+            session_id=int(user["session_id"]) if user.get("session_id") else None,
+            current_password=str(payload.get("current_password") or ""),
+            new_password=str(payload.get("new_password") or ""),
+        )
+        return {"authenticated": True, "user": result["user"]}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/deactivate")
+async def deactivate(request: Request, response: Response, payload: dict = Body(...)):
+    user = require_user(request)
+    try:
+        deactivate_account(
+            user_id=int(user["id"]),
+            password=str(payload.get("password") or ""),
+            confirm=str(payload.get("confirm") or ""),
+        )
+        _clear_session_cookie(response)
+        return {"authenticated": False, "user": None}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/logout")

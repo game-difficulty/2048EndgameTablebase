@@ -16,6 +16,10 @@ from backend.quota.service import get_token_balance, grant_weekly_tokens_if_due
 SESSION_COOKIE_NAME = "tb_session"
 DEFAULT_SESSION_DAYS = 14
 EMAIL_CODE_MINUTES = 10
+EMAIL_CODE_RATE_WINDOW_MINUTES = 60
+EMAIL_CODE_MAX_PER_EMAIL = 5
+EMAIL_CODE_MAX_PER_IP = 20
+ACCOUNT_DEACTIVATE_CONFIRM_TEXT = "DELETE"
 DEFAULT_QUOTA_KEYS = (
     "trainer_query",
     "tester_move",
@@ -145,6 +149,94 @@ def create_session(
     return token, int(cursor.lastrowid), iso(expires_at)
 
 
+def _validate_password(password: str) -> None:
+    if len(password or "") < 8:
+        raise ValueError("Password must contain at least 8 characters.")
+
+
+def _check_email_code_rate_limit(
+    db: sqlite3.Connection,
+    *,
+    email: str,
+    purpose: str,
+    ip_address: str = "",
+) -> None:
+    cutoff = iso(utcnow() - timedelta(minutes=EMAIL_CODE_RATE_WINDOW_MINUTES))
+    email_count = db.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM email_verification_codes
+        WHERE email = ? AND purpose = ? AND created_at >= ?
+        """,
+        (email, purpose, cutoff),
+    ).fetchone()["count"]
+    if int(email_count) >= EMAIL_CODE_MAX_PER_EMAIL:
+        raise ValueError("Too many verification emails. Please try again later.")
+
+    if ip_address:
+        ip_count = db.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM email_verification_codes
+            WHERE ip_address = ? AND purpose = ? AND created_at >= ?
+            """,
+            (ip_address, purpose, cutoff),
+        ).fetchone()["count"]
+        if int(ip_count) >= EMAIL_CODE_MAX_PER_IP:
+            raise ValueError("Too many verification emails. Please try again later.")
+
+
+def _create_email_code(
+    db: sqlite3.Connection,
+    *,
+    email: str,
+    purpose: str,
+    ip_address: str = "",
+    invite_code_id: int | None = None,
+) -> str:
+    _check_email_code_rate_limit(
+        db,
+        email=email,
+        purpose=purpose,
+        ip_address=ip_address,
+    )
+    code = f"{random.SystemRandom().randint(0, 999999):06d}"
+    db.execute(
+        """
+        INSERT INTO email_verification_codes
+        (email, purpose, code_hash, invite_code_id, created_at, expires_at, ip_address)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            email,
+            purpose,
+            hash_token(code),
+            invite_code_id,
+            iso(),
+            iso(utcnow() + timedelta(minutes=EMAIL_CODE_MINUTES)),
+            ip_address,
+        ),
+    )
+    return code
+
+
+def _send_code_or_raise(email: str, code: str, *, purpose: str) -> dict[str, Any]:
+    try:
+        sent = send_verification_email(email, code, purpose=purpose)
+    except Exception as exc:
+        if os.getenv("AUTH_ALLOW_DEV_EMAIL_CODES", "0") != "1":
+            raise RuntimeError("Email service is not available.") from exc
+        sent = False
+
+    if not sent and os.getenv("AUTH_ALLOW_DEV_EMAIL_CODES", "0") != "1":
+        raise RuntimeError("Email service is not configured.")
+
+    payload = {"sent": sent, "expires_in": EMAIL_CODE_MINUTES * 60}
+    if not sent:
+        payload["dev_code"] = code
+    return payload
+
+
 def send_register_email_code(
     *,
     email: str,
@@ -157,33 +249,47 @@ def send_register_email_code(
     if not str(invite_code or "").strip():
         raise ValueError("Invite code is required.")
 
-    code = f"{random.SystemRandom().randint(0, 999999):06d}"
     with auth_db() as db:
         invite = _validate_invite(db, invite_code, normalized)
-        db.execute(
-            """
-            INSERT INTO email_verification_codes
-            (email, purpose, code_hash, invite_code_id, created_at, expires_at, ip_address)
-            VALUES (?, 'register', ?, ?, ?, ?, ?)
-            """,
-            (
-                normalized,
-                hash_token(code),
-                invite["id"],
-                iso(),
-                iso(utcnow() + timedelta(minutes=EMAIL_CODE_MINUTES)),
-                ip_address,
-            ),
+        code = _create_email_code(
+            db,
+            email=normalized,
+            purpose="register",
+            invite_code_id=int(invite["id"]),
+            ip_address=ip_address,
         )
 
-    sent = send_verification_email(normalized, code)
-    if not sent and os.getenv("AUTH_ALLOW_DEV_EMAIL_CODES", "0") != "1":
-        raise RuntimeError("Email service is not configured.")
+    return _send_code_or_raise(normalized, code, purpose="register")
 
-    payload = {"sent": sent, "expires_in": EMAIL_CODE_MINUTES * 60}
-    if not sent:
-        payload["dev_code"] = code
-    return payload
+
+def request_password_reset_code(
+    *,
+    email: str,
+    ip_address: str = "",
+) -> dict[str, Any]:
+    normalized = normalize_email(email)
+    if not normalized or "@" not in normalized:
+        raise ValueError("Invalid email.")
+
+    generic_payload: dict[str, Any] = {
+        "sent": True,
+        "expires_in": EMAIL_CODE_MINUTES * 60,
+    }
+    with auth_db() as db:
+        user = db.execute(
+            "SELECT id, status FROM users WHERE email = ?",
+            (normalized,),
+        ).fetchone()
+        if user is None or user["status"] != "active":
+            return generic_payload
+        code = _create_email_code(
+            db,
+            email=normalized,
+            purpose="password_reset",
+            ip_address=ip_address,
+        )
+
+    return _send_code_or_raise(normalized, code, purpose="password_reset")
 
 
 def _consume_email_code(
@@ -191,14 +297,15 @@ def _consume_email_code(
     *,
     email: str,
     code: str,
+    purpose: str,
 ) -> None:
     row = db.execute(
         """
         SELECT * FROM email_verification_codes
-        WHERE email = ? AND purpose = 'register' AND consumed_at IS NULL
+        WHERE email = ? AND purpose = ? AND consumed_at IS NULL
         ORDER BY id DESC LIMIT 1
         """,
-        (email,),
+        (email, purpose),
     ).fetchone()
     if row is None:
         raise ValueError("Verification code not found.")
@@ -231,12 +338,16 @@ def register_user(
     normalized = normalize_email(email)
     if not normalized or "@" not in normalized:
         raise ValueError("Invalid email.")
-    if len(password or "") < 8:
-        raise ValueError("Password must contain at least 8 characters.")
+    _validate_password(password)
 
     with auth_db() as db:
         invite = _validate_invite(db, invite_code, normalized)
-        _consume_email_code(db, email=normalized, code=verification_code)
+        _consume_email_code(
+            db,
+            email=normalized,
+            code=verification_code,
+            purpose="register",
+        )
         now = iso()
         try:
             cursor = db.execute(
@@ -310,6 +421,146 @@ def login_user(
             "expires_at": expires_at,
             "user": public_user(fresh_user, db=db),
         }
+
+
+def _revoke_user_sessions(
+    db: sqlite3.Connection,
+    user_id: int,
+    *,
+    except_session_id: int | None = None,
+) -> None:
+    now = iso()
+    if except_session_id is None:
+        db.execute(
+            "UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+            (now, user_id),
+        )
+        db.execute(
+            "UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+            (now, user_id),
+        )
+        return
+
+    db.execute(
+        """
+        UPDATE sessions
+        SET revoked_at = ?
+        WHERE user_id = ? AND id != ? AND revoked_at IS NULL
+        """,
+        (now, user_id, except_session_id),
+    )
+    db.execute(
+        """
+        UPDATE refresh_tokens
+        SET revoked_at = ?
+        WHERE user_id = ? AND (session_id IS NULL OR session_id != ?) AND revoked_at IS NULL
+        """,
+        (now, user_id, except_session_id),
+    )
+
+
+def reset_password(
+    *,
+    email: str,
+    verification_code: str,
+    new_password: str,
+    user_agent: str = "",
+    ip_address: str = "",
+) -> dict[str, Any]:
+    normalized = normalize_email(email)
+    if not normalized or "@" not in normalized:
+        raise ValueError("Invalid email.")
+    _validate_password(new_password)
+
+    with auth_db() as db:
+        user = db.execute("SELECT * FROM users WHERE email = ?", (normalized,)).fetchone()
+        if user is None or user["status"] != "active":
+            raise ValueError("Invalid verification code.")
+        _consume_email_code(
+            db,
+            email=normalized,
+            code=verification_code,
+            purpose="password_reset",
+        )
+        now = iso()
+        user_id = int(user["id"])
+        _revoke_user_sessions(db, user_id)
+        db.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, password_changed_at = ?, last_login_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (hash_password(new_password), now, now, now, user_id),
+        )
+        token, session_id, expires_at = create_session(
+            db,
+            user_id,
+            user_agent=user_agent,
+            ip_address=ip_address,
+        )
+        grant_weekly_tokens_if_due(user_id, db=db)
+        fresh_user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return {
+            "token": token,
+            "session_id": session_id,
+            "expires_at": expires_at,
+            "user": public_user(fresh_user, db=db),
+        }
+
+
+def change_password(
+    *,
+    user_id: int,
+    session_id: int | None,
+    current_password: str,
+    new_password: str,
+) -> dict[str, Any]:
+    _validate_password(new_password)
+    with auth_db() as db:
+        user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if user is None or user["status"] != "active":
+            raise ValueError("Account is not active.")
+        if not verify_password(current_password or "", user["password_hash"]):
+            raise ValueError("Invalid current password.")
+        now = iso()
+        db.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, password_changed_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (hash_password(new_password), now, now, user_id),
+        )
+        _revoke_user_sessions(db, user_id, except_session_id=session_id)
+        fresh_user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return {"user": public_user(fresh_user, db=db)}
+
+
+def deactivate_account(
+    *,
+    user_id: int,
+    password: str,
+    confirm: str,
+) -> None:
+    if str(confirm or "").strip() != ACCOUNT_DEACTIVATE_CONFIRM_TEXT:
+        raise ValueError("Confirmation text is incorrect.")
+    with auth_db() as db:
+        user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if user is None or user["status"] != "active":
+            raise ValueError("Account is not active.")
+        if not verify_password(password or "", user["password_hash"]):
+            raise ValueError("Invalid password.")
+        now = iso()
+        db.execute(
+            """
+            UPDATE users
+            SET status = 'disabled', deactivated_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, now, user_id),
+        )
+        _revoke_user_sessions(db, user_id)
 
 
 def authenticate_session_token(token: str | None) -> dict[str, Any] | None:

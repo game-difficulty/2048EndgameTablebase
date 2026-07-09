@@ -149,6 +149,89 @@ def list_invites(_args: argparse.Namespace) -> None:
         )
 
 
+def disable_user(args: argparse.Namespace) -> None:
+    email = normalize_email(args.email)
+    with auth_db() as db:
+        now = iso()
+        cursor = db.execute(
+            """
+            UPDATE users
+            SET status = 'disabled', deactivated_at = COALESCE(deactivated_at, ?), updated_at = ?
+            WHERE email = ?
+            """,
+            (now, now, email),
+        )
+        if cursor.rowcount < 1:
+            raise SystemExit(f"user not found: {email}")
+        db.execute(
+            """
+            UPDATE sessions
+            SET revoked_at = ?
+            WHERE user_id IN (SELECT id FROM users WHERE email = ?) AND revoked_at IS NULL
+            """,
+            (now, email),
+        )
+        db.execute(
+            """
+            UPDATE refresh_tokens
+            SET revoked_at = ?
+            WHERE user_id IN (SELECT id FROM users WHERE email = ?) AND revoked_at IS NULL
+            """,
+            (now, email),
+        )
+    print(f"disabled={email}")
+
+
+def enable_user(args: argparse.Namespace) -> None:
+    email = normalize_email(args.email)
+    with auth_db() as db:
+        now = iso()
+        cursor = db.execute(
+            """
+            UPDATE users
+            SET status = 'active', deactivated_at = NULL, updated_at = ?
+            WHERE email = ?
+            """,
+            (now, email),
+        )
+        if cursor.rowcount < 1:
+            raise SystemExit(f"user not found: {email}")
+    print(f"enabled={email}")
+
+
+def set_password(args: argparse.Namespace) -> None:
+    email = normalize_email(args.email)
+    with auth_db() as db:
+        now = iso()
+        cursor = db.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, password_changed_at = ?, updated_at = ?
+            WHERE email = ?
+            """,
+            (hash_password(args.password), now, now, email),
+        )
+        if cursor.rowcount < 1:
+            raise SystemExit(f"user not found: {email}")
+        db.execute(
+            """
+            UPDATE sessions
+            SET revoked_at = ?
+            WHERE user_id IN (SELECT id FROM users WHERE email = ?) AND revoked_at IS NULL
+            """,
+            (now, email),
+        )
+        db.execute(
+            """
+            UPDATE refresh_tokens
+            SET revoked_at = ?
+            WHERE user_id IN (SELECT id FROM users WHERE email = ?) AND revoked_at IS NULL
+            """,
+            (now, email),
+        )
+    print(f"password_updated={email}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="2048 cloud auth administration")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -174,6 +257,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     invites_parser = subparsers.add_parser("list-invites", help="List invite metadata")
     invites_parser.set_defaults(func=list_invites)
+
+    disable_parser = subparsers.add_parser("disable-user", help="Disable a user and revoke sessions")
+    disable_parser.add_argument("--email", required=True)
+    disable_parser.set_defaults(func=disable_user)
+
+    enable_parser = subparsers.add_parser("enable-user", help="Enable a disabled user")
+    enable_parser.add_argument("--email", required=True)
+    enable_parser.set_defaults(func=enable_user)
+
+    password_parser = subparsers.add_parser("set-password", help="Set user password and revoke sessions")
+    password_parser.add_argument("--email", required=True)
+    password_parser.add_argument("--password", required=True)
+    password_parser.set_defaults(func=set_password)
     return parser
 
 

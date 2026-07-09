@@ -5,7 +5,7 @@ import smtplib
 from email.message import EmailMessage
 
 
-def send_verification_email(email: str, code: str) -> bool:
+def send_verification_email(email: str, code: str, *, purpose: str = "register") -> bool:
     host = os.getenv("SMTP_HOST", "").strip()
     username = os.getenv("SMTP_USERNAME", "").strip()
     password = os.getenv("SMTP_PASSWORD", "")
@@ -15,18 +15,26 @@ def send_verification_email(email: str, code: str) -> bool:
 
     port = int(os.getenv("SMTP_PORT", "587"))
     use_tls = os.getenv("SMTP_TLS", "1") != "0"
+    if purpose == "password_reset":
+        subject = "2048tables password reset code"
+        intro = "Your 2048tables password reset code is:"
+    else:
+        subject = "2048tables verification code"
+        intro = "Your 2048tables verification code is:"
     message = EmailMessage()
     message["From"] = sender
     message["To"] = email
-    message["Subject"] = "2048tables verification code"
+    message["Subject"] = subject
     message.set_content(
         "\n".join(
             [
-                "Your 2048tables verification code is:",
+                intro,
                 "",
                 code,
                 "",
                 "This code expires in 10 minutes.",
+                "",
+                "If you did not request this code, you can ignore this email.",
             ]
         )
     )

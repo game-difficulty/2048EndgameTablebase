@@ -91,6 +91,14 @@
       <button type="button" class="action-btn-small mt-4 w-full justify-center" @click="handleLogout">
         {{ $t('auth.actions.logout') }}
       </button>
+      <div class="mt-2 grid grid-cols-2 gap-2">
+        <button type="button" class="action-btn-small justify-center" @click="openAccountSecurity('changePassword')">
+          {{ $t('auth.account.changePassword') }}
+        </button>
+        <button type="button" class="action-btn-small justify-center !border-red-400/40 !text-red-500" @click="openAccountSecurity('deactivate')">
+          {{ $t('auth.account.deactivateAccount') }}
+        </button>
+      </div>
     </div>
 
     <div class="flex-1 relative overflow-hidden">
@@ -164,6 +172,14 @@
       :open="analysisDialogOpen"
       :context="analysisDialogContext"
       @close="closeAnalysisDialog"
+    />
+
+    <AccountSecurityDialog
+      :open="accountSecurityDialog.open"
+      :mode="accountSecurityDialog.mode"
+      @close="closeAccountSecurity"
+      @success="handleAccountSecuritySuccess"
+      @deactivated="handleAccountDeactivated"
     />
 
     <div
@@ -257,6 +273,7 @@ import { useAppSettingsStore } from './app/useAppSettings';
 import { TAB_IDS } from './app/tabRegistry';
 import { useTabManager } from './app/useTabManager';
 import MainMenuView from './components/MainMenuView.vue';
+import AccountSecurityDialog from './features/auth/AccountSecurityDialog.vue';
 import AuthPage from './features/auth/AuthPage.vue';
 import GamerView from './features/gamer/pages/GamerPage.vue';
 import HelpView from './features/help/pages/HelpPage.vue';
@@ -289,6 +306,10 @@ const globalErrorExpanded = ref(false);
 const globalErrorQueue = [];
 const globalErrorCopied = ref(false);
 const accountMenuOpen = ref(false);
+const accountSecurityDialog = ref({
+  open: false,
+  mode: 'changePassword',
+});
 const tokenRequiredDialog = ref({
   open: false,
   required_tokens: 0,
@@ -561,6 +582,31 @@ const handleLogout = async () => {
   } catch (error) {
     console.error('Failed to log out', error);
   }
+};
+
+const openAccountSecurity = (mode) => {
+  accountMenuOpen.value = false;
+  accountSecurityDialog.value = {
+    open: true,
+    mode: mode === 'deactivate' ? 'deactivate' : 'changePassword',
+  };
+};
+
+const closeAccountSecurity = () => {
+  accountSecurityDialog.value = {
+    open: false,
+    mode: 'changePassword',
+  };
+};
+
+const handleAccountSecuritySuccess = async () => {
+  await refreshAuth();
+  closeAccountSecurity();
+};
+
+const handleAccountDeactivated = async () => {
+  await refreshAuth();
+  closeAccountSecurity();
 };
 
 const handleAuthRequired = () => {
