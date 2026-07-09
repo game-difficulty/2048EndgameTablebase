@@ -5,12 +5,12 @@
     @click.self="$emit('close')"
   >
     <section class="security-dialog">
-      <div class="flex items-start justify-between gap-4">
-        <div>
+      <div class="security-dialog-header">
+        <div class="min-w-0">
           <div class="auth-kicker">{{ $t('auth.account.title') }}</div>
           <h2>{{ title }}</h2>
         </div>
-        <button type="button" class="action-btn-small" @click="$emit('close')">
+        <button type="button" class="action-btn-small security-close-button" @click="$emit('close')">
           {{ $t('common.close') }}
         </button>
       </div>
@@ -273,7 +273,7 @@ onUnmounted(() => {
 
 <style scoped>
 .security-dialog {
-  width: min(28rem, 100%);
+  width: min(34rem, calc(100vw - 3rem));
   border: 1px solid var(--border-main);
   border-radius: 24px;
   background: var(--bg-card);
@@ -282,10 +282,26 @@ onUnmounted(() => {
   box-shadow: 0 24px 80px rgba(15, 23, 42, 0.32);
 }
 
+.security-dialog-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 1.25rem;
+}
+
+.security-close-button {
+  width: auto;
+  min-width: 4.75rem;
+  padding-inline: 0.85rem;
+}
+
 .security-dialog h2 {
   margin: 0.35rem 0 0;
-  font-size: 1.45rem;
+  font-size: 1.62rem;
   font-weight: 900;
+  line-height: 1.15;
+  word-break: keep-all;
+  overflow-wrap: normal;
 }
 
 .auth-kicker,
@@ -314,6 +330,8 @@ onUnmounted(() => {
 }
 
 .security-form input {
+  box-sizing: border-box;
+  width: 100%;
   min-height: 2.85rem;
   border: 1px solid var(--border-main);
   border-radius: 12px;
@@ -327,6 +345,7 @@ onUnmounted(() => {
 .auth-primary,
 .auth-danger,
 .auth-secondary {
+  box-sizing: border-box;
   min-height: 2.85rem;
   border: 1px solid var(--border-main);
   border-radius: 12px;
@@ -358,5 +377,23 @@ onUnmounted(() => {
 
 .security-message.error {
   color: #ef4444;
+}
+
+@media (max-width: 520px) {
+  .security-dialog {
+    width: min(100%, calc(100vw - 1.5rem));
+    border-radius: 18px;
+    padding: 1.2rem;
+  }
+
+  .security-dialog-header {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .security-close-button {
+    width: 100%;
+    justify-content: center;
+  }
 }
 </style>
