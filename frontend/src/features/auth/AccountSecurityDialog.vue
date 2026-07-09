@@ -41,6 +41,26 @@
 
         <template v-else>
           <p class="security-warning">{{ $t('auth.deactivate.warning') }}</p>
+          <div class="security-send-row">
+            <button
+              type="button"
+              class="auth-secondary"
+              :disabled="sendDeactivateCodeDisabled"
+              @click="sendDeactivateCode"
+            >
+              {{ deactivateCooldownRemaining > 0 ? cooldownLabel(deactivateCooldownRemaining) : (sendingCode ? $t('auth.actions.sendingCode') : $t('auth.actions.sendDeactivateCode')) }}
+            </button>
+          </div>
+          <label>
+            <span>{{ $t('auth.fields.emailCode') }}</span>
+            <input
+              v-model="verificationCode"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              :placeholder="$t('auth.placeholders.emailCode')"
+              required
+            />
+          </label>
           <label>
             <span>{{ $t('auth.fields.password') }}</span>
             <input
@@ -79,7 +99,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { authClient } from '../../services/auth/authClient';
@@ -97,14 +117,21 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'success', 'deactivated']);
 const { t } = useI18n();
+const COOLDOWN_SECONDS = 5 * 60;
+const COOLDOWN_STORAGE_KEY = '2048tables:auth-code-cooldowns:v1';
+const DEACTIVATE_PURPOSE = 'account_deactivate';
 
 const currentPassword = ref('');
 const newPassword = ref('');
 const password = ref('');
 const confirmText = ref('');
+const verificationCode = ref('');
 const submitting = ref(false);
+const sendingCode = ref(false);
 const message = ref('');
 const messageType = ref('info');
+const nowMs = ref(Date.now());
+let cooldownTimer = null;
 
 const title = computed(() => (
   props.mode === 'deactivate'
@@ -123,6 +150,7 @@ const resetForm = () => {
   newPassword.value = '';
   password.value = '';
   confirmText.value = '';
+  verificationCode.value = '';
   message.value = '';
   messageType.value = 'info';
 };
@@ -139,6 +167,70 @@ const showMessage = (text, type = 'info') => {
   messageType.value = type;
 };
 
+const readCooldowns = () => {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(window.localStorage.getItem(COOLDOWN_STORAGE_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+};
+
+const writeCooldowns = (cooldowns) => {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(COOLDOWN_STORAGE_KEY, JSON.stringify(cooldowns || {}));
+};
+
+const setCooldown = (purpose, seconds = COOLDOWN_SECONDS) => {
+  const cooldowns = readCooldowns();
+  cooldowns[purpose] = Date.now() + Math.max(1, Number(seconds || COOLDOWN_SECONDS)) * 1000;
+  writeCooldowns(cooldowns);
+  nowMs.value = Date.now();
+};
+
+const cooldownRemaining = (purpose) => {
+  const until = Number(readCooldowns()[purpose] || 0);
+  return Math.max(0, Math.ceil((until - nowMs.value) / 1000));
+};
+
+const cooldownLabel = (seconds) => {
+  const remaining = Math.max(0, Number(seconds || 0));
+  const minutes = Math.floor(remaining / 60);
+  const rest = String(remaining % 60).padStart(2, '0');
+  return t('auth.actions.codeCooldown', { time: `${minutes}:${rest}` });
+};
+
+const deactivateCooldownRemaining = computed(() => cooldownRemaining(DEACTIVATE_PURPOSE));
+const sendDeactivateCodeDisabled = computed(() => (
+  sendingCode.value || deactivateCooldownRemaining.value > 0
+));
+
+const applyServerCooldown = (error) => {
+  if (error?.detail?.code !== 'EMAIL_CODE_COOLDOWN') {
+    return false;
+  }
+  const retryAfter = Number(error.detail.retry_after_seconds || COOLDOWN_SECONDS);
+  setCooldown(DEACTIVATE_PURPOSE, retryAfter);
+  showMessage(cooldownLabel(retryAfter), 'error');
+  return true;
+};
+
+const sendDeactivateCode = async () => {
+  sendingCode.value = true;
+  showMessage('');
+  try {
+    const result = await authClient.requestDeactivationCode();
+    setCooldown(DEACTIVATE_PURPOSE);
+    showMessage(result.dev_code ? t('auth.messages.devCode', { code: result.dev_code }) : t('auth.messages.deactivateCodeSent'));
+  } catch (error) {
+    if (!applyServerCooldown(error)) {
+      showMessage(error.message || String(error), 'error');
+    }
+  } finally {
+    sendingCode.value = false;
+  }
+};
+
 const submit = async () => {
   submitting.value = true;
   showMessage('');
@@ -147,6 +239,7 @@ const submit = async () => {
       await authClient.deactivate({
         password: password.value,
         confirm: confirmText.value,
+        verification_code: verificationCode.value,
       });
       emit('deactivated');
       return;
@@ -163,6 +256,19 @@ const submit = async () => {
     submitting.value = false;
   }
 };
+
+onMounted(() => {
+  cooldownTimer = window.setInterval(() => {
+    nowMs.value = Date.now();
+  }, 1000);
+});
+
+onUnmounted(() => {
+  if (cooldownTimer) {
+    window.clearInterval(cooldownTimer);
+    cooldownTimer = null;
+  }
+});
 </script>
 
 <style scoped>
@@ -197,6 +303,11 @@ const submit = async () => {
   margin-top: 1.35rem;
 }
 
+.security-send-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .security-form label {
   display: grid;
   gap: 0.45rem;
@@ -214,7 +325,8 @@ const submit = async () => {
 }
 
 .auth-primary,
-.auth-danger {
+.auth-danger,
+.auth-secondary {
   min-height: 2.85rem;
   border: 1px solid var(--border-main);
   border-radius: 12px;
@@ -230,6 +342,11 @@ const submit = async () => {
 .auth-danger {
   border-color: rgba(239, 68, 68, 0.5);
   background: #dc2626;
+}
+
+.auth-secondary {
+  background: var(--bg-main);
+  color: var(--text-main);
 }
 
 .security-warning,

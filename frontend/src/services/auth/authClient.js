@@ -38,6 +38,7 @@ export const authClient = {
   requestPasswordReset: (payload) => requestJson('/api/auth/request-password-reset', { method: 'POST', body: payload }),
   resetPassword: (payload) => requestJson('/api/auth/reset-password', { method: 'POST', body: payload }),
   changePassword: (payload) => requestJson('/api/auth/change-password', { method: 'POST', body: payload }),
+  requestDeactivationCode: () => requestJson('/api/auth/request-deactivation-code', { method: 'POST' }),
   deactivate: (payload) => requestJson('/api/auth/deactivate', { method: 'POST', body: payload }),
   logout: () => requestJson('/api/auth/logout', { method: 'POST' }),
 };

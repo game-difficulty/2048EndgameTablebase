@@ -50,6 +50,7 @@
       "backToLogin": "Back to login",
       "changePassword": "Change Password",
       "deactivate": "Deactivate Account",
+      "sendDeactivateCode": "Send Deactivation Code",
       "codeCooldown": "Wait {time}",
       "sendingCode": "Sending",
       "pleaseWait": "Please wait"
@@ -57,8 +58,13 @@
     "messages": {
       "codeSent": "Verification code sent.",
       "resetCodeSent": "If the account exists, a reset code has been sent.",
+      "deactivateCodeSent": "Deactivation code sent.",
       "passwordChanged": "Password updated.",
       "devCode": "Verification code: {code}"
+    },
+    "hints": {
+      "supportedEmailDomains": "Supported email domains: {domains}.",
+      "unsupportedEmailDomain": "This email domain is not supported. Use one of: {domains}."
     },
     "account": {
       "title": "Account",

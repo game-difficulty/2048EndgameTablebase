@@ -18,6 +18,9 @@ def send_verification_email(email: str, code: str, *, purpose: str = "register")
     if purpose == "password_reset":
         subject = "2048tables password reset code"
         intro = "Your 2048tables password reset code is:"
+    elif purpose == "account_deactivate":
+        subject = "2048tables account deactivation code"
+        intro = "Your 2048tables account deactivation code is:"
     else:
         subject = "2048tables verification code"
         intro = "Your 2048tables verification code is:"

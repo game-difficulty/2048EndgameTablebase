@@ -9,6 +9,27 @@ from typing import Iterator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_AUTH_DB = PROJECT_ROOT / "docs_and_configs" / "cloud_runtime" / "auth.sqlite3"
+PLUS_ALIAS_DOMAINS = {
+    "gmail.com",
+    "googlemail.com",
+    "outlook.com",
+    "hotmail.com",
+    "icloud.com",
+}
+
+
+def _canonical_email_identity(email: str) -> str:
+    value = str(email or "").strip().lower()
+    local, separator, domain = value.rpartition("@")
+    if not separator or not local or not domain or "@" in local:
+        return value
+    if domain == "googlemail.com":
+        domain = "gmail.com"
+    if domain == "gmail.com":
+        local = local.split("+", 1)[0].replace(".", "")
+    elif domain in PLUS_ALIAS_DOMAINS:
+        local = local.split("+", 1)[0]
+    return f"{local}@{domain}"
 
 
 def get_auth_db_path() -> Path:
@@ -39,6 +60,7 @@ def init_auth_db() -> None:
             CREATE TABLE IF NOT EXISTS users (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               email TEXT NOT NULL UNIQUE,
+              email_identity TEXT,
               email_verified_at TEXT,
               password_hash TEXT NOT NULL,
               display_name TEXT,
@@ -220,3 +242,32 @@ def init_auth_db() -> None:
             db.execute("ALTER TABLE users ADD COLUMN password_changed_at TEXT")
         if "deactivated_at" not in existing_user_columns:
             db.execute("ALTER TABLE users ADD COLUMN deactivated_at TEXT")
+        if "email_identity" not in existing_user_columns:
+            db.execute("ALTER TABLE users ADD COLUMN email_identity TEXT")
+
+        used_identities = {
+            row["email_identity"]
+            for row in db.execute(
+                "SELECT email_identity FROM users WHERE email_identity IS NOT NULL AND email_identity != ''"
+            ).fetchall()
+        }
+        for row in db.execute(
+            "SELECT id, email FROM users WHERE email_identity IS NULL OR email_identity = '' ORDER BY id"
+        ).fetchall():
+            identity = _canonical_email_identity(row["email"])
+            stored_identity = identity
+            if stored_identity in used_identities:
+                stored_identity = f"legacy-conflict:{row['id']}:{identity}"
+            used_identities.add(stored_identity)
+            db.execute(
+                "UPDATE users SET email_identity = ? WHERE id = ?",
+                (stored_identity, row["id"]),
+            )
+
+        db.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_identity
+            ON users(email_identity)
+            WHERE email_identity IS NOT NULL
+            """
+        )

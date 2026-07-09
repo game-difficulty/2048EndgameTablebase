@@ -50,6 +50,7 @@
       "backToLogin": "返回登录",
       "changePassword": "修改密码",
       "deactivate": "注销账号",
+      "sendDeactivateCode": "发送注销验证码",
       "codeCooldown": "等待 {time}",
       "sendingCode": "发送中",
       "pleaseWait": "请稍候"
@@ -57,6 +58,7 @@
     "messages": {
       "codeSent": "验证码已发送。",
       "resetCodeSent": "如果账号存在，重置验证码已发送。",
+      "deactivateCodeSent": "注销验证码已发送。",
       "passwordChanged": "密码已更新。",
       "devCode": "验证码：{code}"
     },
@@ -75,6 +77,10 @@
     "tokens": {
       "insufficientTitle": "Token 余额不足",
       "insufficientMessage": "本次操作需要 {required_tokens} token，当前余额为 {balance_tokens} token。"
+    },
+    "hints": {
+      "supportedEmailDomains": "支持的邮箱后缀：{domains}。",
+      "unsupportedEmailDomain": "当前邮箱后缀暂不支持。请使用：{domains}。"
     }
   },
   "settings": {

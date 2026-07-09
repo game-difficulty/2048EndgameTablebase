@@ -22,6 +22,24 @@ EMAIL_CODE_RATE_WINDOW_MINUTES = 60
 EMAIL_CODE_MAX_PER_EMAIL = 5
 EMAIL_CODE_MAX_PER_IP = 20
 ACCOUNT_DEACTIVATE_CONFIRM_TEXT = "DELETE"
+DEFAULT_REGISTRATION_EMAIL_DOMAINS = (
+    "qq.com",
+    "foxmail.com",
+    "163.com",
+    "126.com",
+    "yeah.net",
+    "gmail.com",
+    "outlook.com",
+    "hotmail.com",
+    "icloud.com",
+)
+PLUS_ALIAS_DOMAINS = {
+    "gmail.com",
+    "googlemail.com",
+    "outlook.com",
+    "hotmail.com",
+    "icloud.com",
+}
 DEFAULT_QUOTA_KEYS = (
     "trainer_query",
     "tester_move",
@@ -57,6 +75,48 @@ def parse_iso(value: str | None) -> datetime | None:
 
 def normalize_email(email: str) -> str:
     return str(email or "").strip().lower()
+
+
+def split_email(email: str) -> tuple[str, str]:
+    normalized = normalize_email(email)
+    local, separator, domain = normalized.rpartition("@")
+    if not separator or not local or not domain or "@" in local:
+        raise ValueError("Invalid email.")
+    return local, domain
+
+
+def registration_email_domains() -> tuple[str, ...]:
+    raw = os.getenv("AUTH_REGISTRATION_EMAIL_DOMAINS", "").strip()
+    if not raw:
+        return DEFAULT_REGISTRATION_EMAIL_DOMAINS
+    domains = tuple(
+        item.strip().lower().lstrip("@")
+        for item in raw.split(",")
+        if item.strip()
+    )
+    return domains or DEFAULT_REGISTRATION_EMAIL_DOMAINS
+
+
+def canonical_email_identity(email: str) -> str:
+    local, domain = split_email(email)
+    if domain == "googlemail.com":
+        domain = "gmail.com"
+    if domain == "gmail.com":
+        local = local.split("+", 1)[0].replace(".", "")
+    elif domain in PLUS_ALIAS_DOMAINS:
+        local = local.split("+", 1)[0]
+    if not local:
+        raise ValueError("Invalid email.")
+    return f"{local}@{domain}"
+
+
+def validate_registration_email(email: str) -> tuple[str, str]:
+    normalized = normalize_email(email)
+    split_email(normalized)
+    domain = normalized.rsplit("@", 1)[1]
+    if domain not in set(registration_email_domains()):
+        raise ValueError("Email domain is not currently supported for registration.")
+    return normalized, canonical_email_identity(normalized)
 
 
 def public_user(
@@ -312,14 +372,18 @@ def send_register_email_code(
     ip_address: str = "",
     browser_id: str = "",
 ) -> dict[str, Any]:
-    normalized = normalize_email(email)
-    if not normalized or "@" not in normalized:
-        raise ValueError("Invalid email.")
+    normalized, email_identity = validate_registration_email(email)
     if not str(invite_code or "").strip():
         raise ValueError("Invite code is required.")
 
     with auth_db() as db:
         invite = _validate_invite(db, invite_code, normalized)
+        existing_user = db.execute(
+            "SELECT id FROM users WHERE email = ? OR email_identity = ?",
+            (normalized, email_identity),
+        ).fetchone()
+        if existing_user is not None:
+            raise ValueError("Email is already registered.")
         code = _create_email_code(
             db,
             email=normalized,
@@ -362,6 +426,28 @@ def request_password_reset_code(
         )
 
     return _send_code_or_raise(normalized, code, purpose="password_reset")
+
+
+def request_account_deactivation_code(
+    *,
+    user_id: int,
+    ip_address: str = "",
+    browser_id: str = "",
+) -> dict[str, Any]:
+    with auth_db() as db:
+        user = db.execute("SELECT email, status FROM users WHERE id = ?", (user_id,)).fetchone()
+        if user is None or user["status"] != "active":
+            raise ValueError("Account is not active.")
+        email = normalize_email(user["email"])
+        code = _create_email_code(
+            db,
+            email=email,
+            purpose="account_deactivate",
+            ip_address=ip_address,
+            browser_id=browser_id,
+        )
+
+    return _send_code_or_raise(email, code, purpose="account_deactivate")
 
 
 def _consume_email_code(
@@ -413,13 +499,17 @@ def register_user(
     user_agent: str = "",
     ip_address: str = "",
 ) -> dict[str, Any]:
-    normalized = normalize_email(email)
-    if not normalized or "@" not in normalized:
-        raise ValueError("Invalid email.")
+    normalized, email_identity = validate_registration_email(email)
     _validate_password(password)
 
     with auth_db() as db:
         invite = _validate_invite(db, invite_code, normalized)
+        existing_user = db.execute(
+            "SELECT id FROM users WHERE email = ? OR email_identity = ?",
+            (normalized, email_identity),
+        ).fetchone()
+        if existing_user is not None:
+            raise ValueError("Email is already registered.")
         _consume_email_code(
             db,
             email=normalized,
@@ -431,11 +521,12 @@ def register_user(
             cursor = db.execute(
                 """
                 INSERT INTO users
-                (email, email_verified_at, password_hash, display_name, role, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'user', 'active', ?, ?)
+                (email, email_identity, email_verified_at, password_hash, display_name, role, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'user', 'active', ?, ?)
                 """,
                 (
                     normalized,
+                    email_identity,
                     now,
                     hash_password(password),
                     str(display_name or "").strip()[:80] or None,
@@ -620,6 +711,7 @@ def deactivate_account(
     user_id: int,
     password: str,
     confirm: str,
+    verification_code: str,
 ) -> None:
     if str(confirm or "").strip() != ACCOUNT_DEACTIVATE_CONFIRM_TEXT:
         raise ValueError("Confirmation text is incorrect.")
@@ -629,6 +721,12 @@ def deactivate_account(
             raise ValueError("Account is not active.")
         if not verify_password(password or "", user["password_hash"]):
             raise ValueError("Invalid password.")
+        _consume_email_code(
+            db,
+            email=normalize_email(user["email"]),
+            code=verification_code,
+            purpose="account_deactivate",
+        )
         now = iso()
         db.execute(
             """

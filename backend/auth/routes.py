@@ -12,6 +12,7 @@ from .service import (
     deactivate_account,
     login_user,
     register_user,
+    request_account_deactivation_code,
     request_password_reset_code,
     reset_password,
     revoke_session,
@@ -168,6 +169,21 @@ async def change_password_route(request: Request, payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/request-deactivation-code")
+async def request_deactivation_code(request: Request, response: Response):
+    user = require_user(request)
+    try:
+        return request_account_deactivation_code(
+            user_id=int(user["id"]),
+            ip_address=client_ip(request),
+            browser_id=_browser_id(request, response),
+        )
+    except EmailCodeCooldownError as exc:
+        raise _cooldown_response(exc) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/deactivate")
 async def deactivate(request: Request, response: Response, payload: dict = Body(...)):
     user = require_user(request)
@@ -176,6 +192,7 @@ async def deactivate(request: Request, response: Response, payload: dict = Body(
             user_id=int(user["id"]),
             password=str(payload.get("password") or ""),
             confirm=str(payload.get("confirm") or ""),
+            verification_code=str(payload.get("verification_code") or ""),
         )
         _clear_session_cookie(response)
         return {"authenticated": False, "user": None}
