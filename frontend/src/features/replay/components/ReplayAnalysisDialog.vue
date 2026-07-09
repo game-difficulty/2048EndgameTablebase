@@ -81,6 +81,7 @@
                   trigger-class="analysis-select-trigger w-full min-h-[3.25rem] rounded-[0.9rem] border border-border-main bg-bg-card px-[0.95rem] py-[0.78rem] ui-control font-black uppercase tracking-[0.06em] text-text-main"
                   option-class="ui-control font-black uppercase tracking-[0.06em]"
                   menu-class="z-[240]"
+                  @change="markTargetSelection"
                 />
               </div>
 
@@ -189,6 +190,12 @@ import UiSelect from '../../../components/UiSelect.vue';
 import { downloadResponse, pickBrowserFiles, postMultipart } from '../../../services/files/browserFiles';
 import { useAuthState } from '../../../services/auth/authState';
 import { getBackendUrl } from '../../../services/runtime/backendUrl';
+import {
+  fetchTablebaseCatalog,
+  getCatalogTargets,
+  getCatalogTargetsForPattern,
+  groupTablebasesByPattern,
+} from '../../../services/tablebases/catalogClient';
 import { createWsClient } from '../../../services/ws/createWsClient';
 
 const props = defineProps({
@@ -207,8 +214,10 @@ const { requireAuth } = useAuthState();
 const wsStatus = ref('disconnected');
 const categories = ref({});
 const targetTiles = ref(['64', '128', '256', '512', '1024', '2048', '4096', '8192', '16384']);
+const catalogTables = ref([]);
 const selectedPattern = ref('');
 const selectedTarget = ref('2048');
+const userSelectionTouched = ref(false);
 const pathsInput = ref('');
 const selectedFiles = ref([]);
 const downloadUrl = ref('');
@@ -242,8 +251,15 @@ const activePatternOptions = computed(() => {
   return group?.items || [];
 });
 
+const availableTargetsForPattern = computed(() => {
+  if (!catalogTables.value.length) {
+    return targetTiles.value;
+  }
+  return getCatalogTargetsForPattern(catalogTables.value, selectedPattern.value);
+});
+
 const targetOptions = computed(() =>
-  targetTiles.value.map((target) => ({
+  availableTargetsForPattern.value.map((target) => ({
     value: target,
     label: target,
   }))
@@ -312,8 +328,14 @@ const getEntryStatusLabel = (status) => {
 };
 
 const selectPattern = (pattern) => {
+  userSelectionTouched.value = true;
   selectedPattern.value = pattern;
+  ensureValidSelection();
   patternMenuOpen.value = false;
+};
+
+const markTargetSelection = () => {
+  userSelectionTouched.value = true;
 };
 
 const applyContext = (context) => {
@@ -324,8 +346,55 @@ const applyContext = (context) => {
     const matchedGroup = patternGroups.value.find((group) => group.items.includes(nextPattern));
     if (matchedGroup) activePatternCategory.value = matchedGroup.category;
   }
-  if (nextTarget && targetTiles.value.includes(nextTarget)) {
+  ensureValidSelection();
+  if (nextTarget && availableTargetsForPattern.value.includes(nextTarget)) {
     selectedTarget.value = nextTarget;
+  }
+};
+
+const preferredTargetFrom = (targets) => (
+  targets.includes('512') ? '512' : (targets[0] || '')
+);
+
+const ensureValidSelection = () => {
+  const groups = patternGroups.value;
+  const allPatterns = groups.flatMap((group) => group.items);
+  if (allPatterns.length && !allPatterns.includes(selectedPattern.value)) {
+    selectedPattern.value = allPatterns[0] || '';
+  }
+  if (!activePatternCategory.value && groups.length) {
+    activePatternCategory.value = groups[0].category;
+  }
+  const matchedGroup = groups.find((group) => group.items.includes(selectedPattern.value));
+  if (matchedGroup) {
+    activePatternCategory.value = matchedGroup.category;
+  }
+  const targets = availableTargetsForPattern.value;
+  if (!targets.length) {
+    selectedTarget.value = '';
+    return;
+  }
+  if (!targets.includes(selectedTarget.value)) {
+    selectedTarget.value = preferredTargetFrom(targets);
+  }
+};
+
+const loadCatalog = async () => {
+  try {
+    const tables = await fetchTablebaseCatalog();
+    catalogTables.value = tables;
+    const groupedTables = groupTablebasesByPattern(tables);
+    const patterns = Object.keys(groupedTables).sort();
+    if (patterns.length) {
+      categories.value = { cloud: patterns };
+      targetTiles.value = getCatalogTargets(tables);
+      ensureValidSelection();
+      if (!userSelectionTouched.value) {
+        applyContext(props.context);
+      }
+    }
+  } catch (error) {
+    console.error(error);
   }
 };
 
@@ -385,17 +454,16 @@ const downloadResults = async () => {
 
 const handleMessage = (message) => {
   if (message.type === 'ANALYSIS_BOOTSTRAP') {
-    categories.value = message.payload?.categories || {};
-    targetTiles.value = Array.isArray(message.payload?.target_tiles) && message.payload.target_tiles.length
-      ? message.payload.target_tiles.map(String)
-      : targetTiles.value;
-    if (!activePatternCategory.value && patternGroups.value.length) {
-      activePatternCategory.value = patternGroups.value[0].category;
+    if (!catalogTables.value.length) {
+      categories.value = message.payload?.categories || {};
+      targetTiles.value = Array.isArray(message.payload?.target_tiles) && message.payload.target_tiles.length
+        ? message.payload.target_tiles.map(String)
+        : targetTiles.value;
     }
-    if (!selectedPattern.value && activePatternOptions.value.length) {
-      selectedPattern.value = activePatternOptions.value[0];
+    ensureValidSelection();
+    if (!userSelectionTouched.value) {
+      applyContext(props.context);
     }
-    applyContext(props.context);
     return;
   }
 
@@ -477,7 +545,9 @@ watch(
   () => props.open,
   (isOpen) => {
     if (isOpen) {
+      userSelectionTouched.value = false;
       document.addEventListener('click', closePatternMenuOnClick);
+      loadCatalog();
       connect();
     } else {
       patternMenuOpen.value = false;
@@ -495,6 +565,7 @@ watch(patternGroups, (groups) => {
   if (!selectedPattern.value && activePatternOptions.value.length) {
     selectedPattern.value = activePatternOptions.value[0];
   }
+  ensureValidSelection();
 });
 
 watch(
@@ -509,6 +580,7 @@ watch(activePatternCategory, (category) => {
   const group = patternGroups.value.find((item) => item.category === category);
   if (group && !group.items.includes(selectedPattern.value)) {
     selectedPattern.value = group.items[0] || '';
+    ensureValidSelection();
   }
 });
 

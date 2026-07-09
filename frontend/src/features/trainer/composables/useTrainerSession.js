@@ -5,6 +5,7 @@ import { useAuthState } from '../../../services/auth/authState';
 import {
   fetchTablebaseCatalog,
   getCatalogTargets,
+  getCatalogTargetsForPattern,
   groupTablebasesByPattern,
 } from '../../../services/tablebases/catalogClient';
 import { createWsClient } from '../../../services/ws/createWsClient';
@@ -101,6 +102,12 @@ export function useTrainerSession(activeRef) {
   );
   const flatPatterns = computed(() => patternGroups.value.flatMap((group) => group.patterns));
   const activePatternOptions = computed(() => patternCategories.value[activePatternCategory.value] || []);
+  const availableTargetsForPattern = computed(() => {
+    if (!catalogTables.value.length) {
+      return availableTargets.value;
+    }
+    return getCatalogTargetsForPattern(catalogTables.value, patternType.value);
+  });
   const hasUsableResults = computed(() =>
     Object.values(tableResult.value.results || {}).some((val) => typeof val === 'number' && Number.isFinite(val))
   );
@@ -262,6 +269,21 @@ export function useTrainerSession(activeRef) {
     activePatternCategory.value = matchedGroup?.category || patternGroups.value[0]?.category || '';
   };
 
+  const preferredTargetFrom = (targets) => (
+    targets.includes('512') ? '512' : (targets[0] || '')
+  );
+
+  const ensureTargetForCurrentPattern = () => {
+    const targets = availableTargetsForPattern.value;
+    if (!targets.length) {
+      targetValue.value = '';
+      return;
+    }
+    if (!targets.includes(targetValue.value)) {
+      targetValue.value = preferredTargetFrom(targets);
+    }
+  };
+
   const parseFullPattern = (fullPattern) => {
     const raw = String(fullPattern || '').trim();
     const splitIndex = raw.lastIndexOf('_');
@@ -304,9 +326,7 @@ export function useTrainerSession(activeRef) {
         if (!patternType.value || !patterns.includes(patternType.value)) {
           patternType.value = patterns[0] || '';
         }
-        if (!targetValue.value || !availableTargets.value.includes(targetValue.value)) {
-          targetValue.value = availableTargets.value.includes('512') ? '512' : (availableTargets.value[0] || '');
-        }
+        ensureTargetForCurrentPattern();
         syncActivePatternCategory();
         applyTrainerJump();
       }
@@ -325,7 +345,15 @@ export function useTrainerSession(activeRef) {
     triggerAction('SET_BOARD', { hex_str: pending.hex });
 
     const parsed = parseFullPattern(pending.fullPattern);
-    if (parsed && flatPatterns.value.includes(parsed.pattern) && availableTargets.value.includes(parsed.target)) {
+    if (
+      parsed &&
+      flatPatterns.value.includes(parsed.pattern) &&
+      (
+        catalogTables.value.length
+          ? getCatalogTargetsForPattern(catalogTables.value, parsed.pattern).includes(parsed.target)
+          : availableTargets.value.includes(parsed.target)
+      )
+    ) {
       const shouldSwitchPattern = currentPatternDisplay.value !== pending.fullPattern;
       if (shouldSwitchPattern) {
         patternType.value = parsed.pattern;
@@ -362,6 +390,7 @@ export function useTrainerSession(activeRef) {
     patternType.value = pattern;
     syncActivePatternCategory();
     patternMenuOpen.value = false;
+    ensureTargetForCurrentPattern();
     if (targetValue.value) {
       onPatternChange();
     }
@@ -945,9 +974,7 @@ export function useTrainerSession(activeRef) {
       if (normalizedTargets.length > 0) {
         availableTargets.value = normalizedTargets;
       }
-      if (targetValue.value && !availableTargets.value.includes(targetValue.value)) {
-        targetValue.value = '';
-      }
+      ensureTargetForCurrentPattern();
       applyTrainerJump();
     },
     { immediate: true, deep: true }
@@ -1016,6 +1043,7 @@ export function useTrainerSession(activeRef) {
     activePatternOptions,
     targetValue,
     availableTargets,
+    availableTargetsForPattern,
     onPatternChange,
     selectFolder,
     applyTablebase,

@@ -269,7 +269,7 @@ const {
   activePatternCategory,
   activePatternOptions,
   targetValue,
-  availableTargets,
+  availableTargetsForPattern,
   onPatternChange,
   applyTablebase,
   hexInput,
@@ -308,7 +308,7 @@ const {
 } = useTrainerSession(toRef(props, 'active'));
 
 const targetOptions = computed(() =>
-  availableTargets.value.map((target) => ({
+  availableTargetsForPattern.value.map((target) => ({
     value: target,
     label: target,
   }))

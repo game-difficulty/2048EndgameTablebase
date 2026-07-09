@@ -241,7 +241,7 @@ const {
   metadata,
   dis32k,
   showInsights,
-  availableTargets,
+  availableTargetsForPattern,
   selectedPattern,
   selectedTarget,
   activePatternCategory,
@@ -289,7 +289,7 @@ const {
 } = useTesterSession(toRef(props, 'active'));
 
 const targetOptions = computed(() =>
-  availableTargets.value.map((target) => ({
+  availableTargetsForPattern.value.map((target) => ({
     value: target,
     label: target,
   }))

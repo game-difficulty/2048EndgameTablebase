@@ -6,6 +6,7 @@ import { downloadBlob, downloadText } from '../../../services/files/browserFiles
 import {
   fetchTablebaseCatalog,
   getCatalogTargets,
+  getCatalogTargetsForPattern,
   groupTablebasesByPattern,
 } from '../../../services/tablebases/catalogClient';
 import { createWsClient } from '../../../services/ws/createWsClient';
@@ -121,6 +122,12 @@ export function useTesterSession(activeRef) {
   );
   const flatPatterns = computed(() => patternGroups.value.flatMap((group) => group.patterns));
   const activePatternOptions = computed(() => patternCategories.value[activePatternCategory.value] || []);
+  const availableTargetsForPattern = computed(() => {
+    if (!catalogTables.value.length) {
+      return availableTargets.value;
+    }
+    return getCatalogTargetsForPattern(catalogTables.value, selectedPattern.value);
+  });
   const currentPatternDisplay = computed(() => (
     selectedPattern.value && selectedTarget.value ? `${selectedPattern.value}_${selectedTarget.value}` : 'Select Pattern'
   ));
@@ -412,9 +419,10 @@ export function useTesterSession(activeRef) {
     selectedPattern.value = flatPatterns.value.includes(selectedPattern.value)
       ? selectedPattern.value
       : (groups[0].patterns[0] || '');
-    selectedTarget.value = availableTargets.value.includes(selectedTarget.value)
+    const targets = availableTargetsForPattern.value;
+    selectedTarget.value = targets.includes(selectedTarget.value)
       ? selectedTarget.value
-      : (availableTargets.value.includes('512') ? '512' : (availableTargets.value[0] || ''));
+      : (targets.includes('512') ? '512' : (targets[0] || ''));
     syncCategoryFromPattern(selectedPattern.value);
   };
 
@@ -459,6 +467,7 @@ export function useTesterSession(activeRef) {
   const selectPattern = (pattern) => {
     selectedPattern.value = pattern;
     syncCategoryFromPattern(pattern);
+    ensureDefaultSelection();
     patternMenuOpen.value = false;
     applyPatternSelection();
   };
@@ -499,12 +508,26 @@ export function useTesterSession(activeRef) {
     const hex = String(detail.hex || '').trim();
     if (!parsed || !hex) return;
 
-    pendingPracticeJump.value = { ...parsed, hex };
     selectedPattern.value = parsed.pattern;
-    selectedTarget.value = parsed.target;
+    selectedTarget.value = (
+      catalogTables.value.length
+        ? getCatalogTargetsForPattern(catalogTables.value, parsed.pattern).includes(parsed.target)
+        : availableTargets.value.includes(parsed.target)
+    )
+      ? parsed.target
+      : selectedTarget.value;
+    ensureDefaultSelection();
     syncCategoryFromPattern(parsed.pattern);
+    pendingPracticeJump.value = {
+      pattern: selectedPattern.value,
+      target: selectedTarget.value,
+      hex,
+    };
     if (wsStatus.value === 'connected') {
-      triggerAction('TESTER_SELECT_PATTERN', { pattern: parsed.pattern, target: parsed.target });
+      triggerAction('TESTER_SELECT_PATTERN', {
+        pattern: selectedPattern.value,
+        target: selectedTarget.value,
+      });
     }
   };
 
@@ -564,7 +587,11 @@ export function useTesterSession(activeRef) {
       selectedPattern.value = payload.pattern;
       syncCategoryFromPattern(payload.pattern);
     }
-    if (payload?.target && payload.target !== '?' && availableTargets.value.includes(String(payload.target))) {
+    if (
+      payload?.target &&
+      payload.target !== '?' &&
+      availableTargetsForPattern.value.includes(String(payload.target))
+    ) {
       selectedTarget.value = String(payload.target);
     }
     if (
@@ -700,6 +727,7 @@ export function useTesterSession(activeRef) {
     dis32k,
     showInsights,
     availableTargets,
+    availableTargetsForPattern,
     selectedPattern,
     selectedTarget,
     activePatternCategory,

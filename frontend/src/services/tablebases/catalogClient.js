@@ -42,3 +42,10 @@ export function getCatalogTargets(tables = []) {
   return [...new Set(tables.map((table) => table.target).filter(Boolean))]
     .sort((left, right) => Number(left) - Number(right));
 }
+
+export function getCatalogTargetsForPattern(tables = [], pattern = '') {
+  const normalizedPattern = String(pattern || '');
+  return getCatalogTargets(
+    tables.filter((table) => table.pattern === normalizedPattern)
+  );
+}
