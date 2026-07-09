@@ -4,6 +4,9 @@ from fastapi import APIRouter, Body, HTTPException, Request, Response
 
 from .dependencies import client_ip, cookie_secure, current_user_from_request, require_user
 from .service import (
+    BROWSER_COOKIE_NAME,
+    EMAIL_CODE_BROWSER_COOLDOWN_SECONDS,
+    EmailCodeCooldownError,
     SESSION_COOKIE_NAME,
     change_password,
     deactivate_account,
@@ -14,6 +17,7 @@ from .service import (
     revoke_session,
     send_register_email_code,
 )
+from .security import new_token
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -35,6 +39,35 @@ def _clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
 
 
+def _browser_id(request: Request, response: Response) -> str:
+    existing = str(request.cookies.get(BROWSER_COOKIE_NAME) or "").strip()
+    if existing:
+        return existing
+    token = new_token(18)
+    response.set_cookie(
+        BROWSER_COOKIE_NAME,
+        token,
+        httponly=True,
+        secure=cookie_secure(),
+        samesite="lax",
+        max_age=365 * 24 * 60 * 60,
+        path="/",
+    )
+    return token
+
+
+def _cooldown_response(exc: EmailCodeCooldownError) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        detail={
+            "code": "EMAIL_CODE_COOLDOWN",
+            "message": "Please wait before requesting another verification code.",
+            "retry_after_seconds": exc.retry_after_seconds,
+            "cooldown_seconds": EMAIL_CODE_BROWSER_COOLDOWN_SECONDS,
+        },
+    )
+
+
 @router.get("/me")
 async def me(request: Request):
     user = current_user_from_request(request)
@@ -42,14 +75,17 @@ async def me(request: Request):
 
 
 @router.post("/send-email-code")
-async def send_email_code(request: Request, payload: dict = Body(...)):
+async def send_email_code(request: Request, response: Response, payload: dict = Body(...)):
     try:
         result = send_register_email_code(
             email=str(payload.get("email") or ""),
             invite_code=str(payload.get("invite_code") or ""),
             ip_address=client_ip(request),
+            browser_id=_browser_id(request, response),
         )
         return result
+    except EmailCodeCooldownError as exc:
+        raise _cooldown_response(exc) from exc
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -88,12 +124,15 @@ async def login(request: Request, response: Response, payload: dict = Body(...))
 
 
 @router.post("/request-password-reset")
-async def request_password_reset(request: Request, payload: dict = Body(...)):
+async def request_password_reset(request: Request, response: Response, payload: dict = Body(...)):
     try:
         return request_password_reset_code(
             email=str(payload.get("email") or ""),
             ip_address=client_ip(request),
+            browser_id=_browser_id(request, response),
         )
+    except EmailCodeCooldownError as exc:
+        raise _cooldown_response(exc) from exc
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

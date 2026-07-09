@@ -50,6 +50,7 @@
       "backToLogin": "返回登录",
       "changePassword": "修改密码",
       "deactivate": "注销账号",
+      "codeCooldown": "等待 {time}",
       "sendingCode": "发送中",
       "pleaseWait": "请稍候"
     },

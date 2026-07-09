@@ -50,6 +50,7 @@
       "backToLogin": "Back to login",
       "changePassword": "Change Password",
       "deactivate": "Deactivate Account",
+      "codeCooldown": "Wait {time}",
       "sendingCode": "Sending",
       "pleaseWait": "Please wait"
     },

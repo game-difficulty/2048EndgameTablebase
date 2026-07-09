@@ -19,7 +19,10 @@ async function requestJson(path, { method = 'GET', body } = {}) {
     const detail = typeof payload?.detail === 'string'
       ? payload.detail
       : payload?.detail?.message;
-    throw new Error(detail || `Request failed: ${response.status}`);
+    const error = new Error(detail || `Request failed: ${response.status}`);
+    error.status = response.status;
+    error.detail = payload?.detail || null;
+    throw error;
   }
   if (payload?.token_balance) {
     emitTokenBalanceUpdated(payload.token_balance);

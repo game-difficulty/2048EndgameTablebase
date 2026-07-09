@@ -104,6 +104,14 @@ def init_auth_db() -> None:
               FOREIGN KEY(invite_code_id) REFERENCES invite_codes(id)
             );
 
+            CREATE TABLE IF NOT EXISTS auth_browser_cooldowns (
+              browser_token_hash TEXT NOT NULL,
+              purpose TEXT NOT NULL,
+              last_sent_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY(browser_token_hash, purpose)
+            );
+
             CREATE TABLE IF NOT EXISTS user_quotas (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               user_id INTEGER NOT NULL,

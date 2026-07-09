@@ -23,8 +23,8 @@
         </label>
 
         <div v-if="mode === 'register'" class="auth-send-row">
-          <button type="button" class="auth-secondary" :disabled="sendingCode || !email || !inviteCode" @click="sendCode">
-            {{ sendingCode ? $t('auth.actions.sendingCode') : $t('auth.actions.sendCode') }}
+          <button type="button" class="auth-secondary" :disabled="sendCodeDisabled" @click="sendCode">
+            {{ registerCooldownRemaining > 0 ? cooldownLabel(registerCooldownRemaining) : (sendingCode ? $t('auth.actions.sendingCode') : $t('auth.actions.sendCode')) }}
           </button>
         </div>
 
@@ -49,7 +49,7 @@
           <input v-model="displayName" autocomplete="name" :placeholder="$t('auth.placeholders.displayName')" />
         </label>
 
-        <button type="submit" class="auth-primary" :disabled="submitting">
+        <button type="submit" class="auth-primary" :disabled="submitDisabled">
           {{ submitting ? $t('auth.actions.pleaseWait') : submitLabel }}
         </button>
 
@@ -80,7 +80,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { authClient } from '../../services/auth/authClient';
@@ -93,6 +93,8 @@ const props = defineProps({
   },
 });
 const { t } = useI18n();
+const COOLDOWN_SECONDS = 5 * 60;
+const COOLDOWN_STORAGE_KEY = '2048tables:auth-code-cooldowns:v1';
 
 const normalizeMode = (value) => (
   ['login', 'register', 'forgot', 'reset'].includes(value) ? value : 'login'
@@ -108,6 +110,8 @@ const submitting = ref(false);
 const sendingCode = ref(false);
 const message = ref('');
 const messageType = ref('info');
+const nowMs = ref(Date.now());
+let cooldownTimer = null;
 
 const showMessage = (text, type = 'info') => {
   message.value = text;
@@ -116,10 +120,66 @@ const showMessage = (text, type = 'info') => {
 
 const submitLabel = computed(() => {
   if (mode.value === 'register') return t('auth.actions.register');
-  if (mode.value === 'forgot') return t('auth.actions.sendResetCode');
+  if (mode.value === 'forgot') {
+    return resetCooldownRemaining.value > 0
+      ? cooldownLabel(resetCooldownRemaining.value)
+      : t('auth.actions.sendResetCode');
+  }
   if (mode.value === 'reset') return t('auth.actions.resetPassword');
   return t('auth.actions.login');
 });
+
+const readCooldowns = () => {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(window.localStorage.getItem(COOLDOWN_STORAGE_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+};
+
+const writeCooldowns = (cooldowns) => {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(COOLDOWN_STORAGE_KEY, JSON.stringify(cooldowns || {}));
+};
+
+const setCooldown = (purpose, seconds = COOLDOWN_SECONDS) => {
+  const cooldowns = readCooldowns();
+  cooldowns[purpose] = Date.now() + Math.max(1, Number(seconds || COOLDOWN_SECONDS)) * 1000;
+  writeCooldowns(cooldowns);
+  nowMs.value = Date.now();
+};
+
+const cooldownRemaining = (purpose) => {
+  const until = Number(readCooldowns()[purpose] || 0);
+  return Math.max(0, Math.ceil((until - nowMs.value) / 1000));
+};
+
+const cooldownLabel = (seconds) => {
+  const remaining = Math.max(0, Number(seconds || 0));
+  const minutes = Math.floor(remaining / 60);
+  const rest = String(remaining % 60).padStart(2, '0');
+  return t('auth.actions.codeCooldown', { time: `${minutes}:${rest}` });
+};
+
+const registerCooldownRemaining = computed(() => cooldownRemaining('register'));
+const resetCooldownRemaining = computed(() => cooldownRemaining('password_reset'));
+const sendCodeDisabled = computed(() => (
+  sendingCode.value || !email.value || !inviteCode.value || registerCooldownRemaining.value > 0
+));
+const submitDisabled = computed(() => (
+  submitting.value || (mode.value === 'forgot' && resetCooldownRemaining.value > 0)
+));
+
+const applyServerCooldown = (error, purpose) => {
+  if (error?.detail?.code !== 'EMAIL_CODE_COOLDOWN') {
+    return false;
+  }
+  const retryAfter = Number(error.detail.retry_after_seconds || COOLDOWN_SECONDS);
+  setCooldown(purpose, retryAfter);
+  showMessage(cooldownLabel(retryAfter), 'error');
+  return true;
+};
 
 watch(
   () => props.initialMode,
@@ -141,9 +201,12 @@ const sendCode = async () => {
       email: email.value,
       invite_code: inviteCode.value,
     });
+    setCooldown('register');
     showMessage(result.dev_code ? t('auth.messages.devCode', { code: result.dev_code }) : t('auth.messages.codeSent'));
   } catch (error) {
-    showMessage(error.message || String(error), 'error');
+    if (!applyServerCooldown(error, 'register')) {
+      showMessage(error.message || String(error), 'error');
+    }
   } finally {
     sendingCode.value = false;
   }
@@ -155,6 +218,7 @@ const submit = async () => {
   try {
     if (mode.value === 'forgot') {
       await authClient.requestPasswordReset({ email: email.value });
+      setCooldown('password_reset');
       mode.value = 'reset';
       showMessage(t('auth.messages.resetCodeSent'));
       return;
@@ -176,11 +240,26 @@ const submit = async () => {
       });
     emit('authenticated', result.user);
   } catch (error) {
-    showMessage(error.message || String(error), 'error');
+    if (!applyServerCooldown(error, mode.value === 'forgot' ? 'password_reset' : 'register')) {
+      showMessage(error.message || String(error), 'error');
+    }
   } finally {
     submitting.value = false;
   }
 };
+
+onMounted(() => {
+  cooldownTimer = window.setInterval(() => {
+    nowMs.value = Date.now();
+  }, 1000);
+});
+
+onUnmounted(() => {
+  if (cooldownTimer) {
+    window.clearInterval(cooldownTimer);
+    cooldownTimer = null;
+  }
+});
 </script>
 
 <style scoped>

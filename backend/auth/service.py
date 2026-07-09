@@ -14,8 +14,10 @@ from backend.quota.service import get_token_balance, grant_weekly_tokens_if_due
 
 
 SESSION_COOKIE_NAME = "tb_session"
+BROWSER_COOKIE_NAME = "tb_browser"
 DEFAULT_SESSION_DAYS = 14
 EMAIL_CODE_MINUTES = 10
+EMAIL_CODE_BROWSER_COOLDOWN_SECONDS = 5 * 60
 EMAIL_CODE_RATE_WINDOW_MINUTES = 60
 EMAIL_CODE_MAX_PER_EMAIL = 5
 EMAIL_CODE_MAX_PER_IP = 20
@@ -28,6 +30,12 @@ DEFAULT_QUOTA_KEYS = (
     "upload_replay",
     "replay_load",
 )
+
+
+class EmailCodeCooldownError(ValueError):
+    def __init__(self, retry_after_seconds: int) -> None:
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+        super().__init__("Please wait before requesting another verification code.")
 
 
 def utcnow() -> datetime:
@@ -186,6 +194,60 @@ def _check_email_code_rate_limit(
             raise ValueError("Too many verification emails. Please try again later.")
 
 
+def _reserve_browser_email_code_cooldown(
+    db: sqlite3.Connection,
+    *,
+    browser_id: str = "",
+    purpose: str,
+) -> None:
+    browser_token_hash = hash_token(str(browser_id or "").strip())
+    if not str(browser_id or "").strip():
+        return
+
+    now = utcnow()
+    now_text = iso(now)
+    cutoff_text = iso(now - timedelta(seconds=EMAIL_CODE_BROWSER_COOLDOWN_SECONDS))
+    try:
+        db.execute(
+            """
+            INSERT INTO auth_browser_cooldowns
+            (browser_token_hash, purpose, last_sent_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (browser_token_hash, purpose, now_text, now_text),
+        )
+        return
+    except sqlite3.IntegrityError:
+        pass
+
+    cursor = db.execute(
+        """
+        UPDATE auth_browser_cooldowns
+        SET last_sent_at = ?, updated_at = ?
+        WHERE browser_token_hash = ? AND purpose = ? AND last_sent_at <= ?
+        """,
+        (now_text, now_text, browser_token_hash, purpose, cutoff_text),
+    )
+    if cursor.rowcount == 1:
+        return
+
+    row = db.execute(
+        """
+        SELECT last_sent_at
+        FROM auth_browser_cooldowns
+        WHERE browser_token_hash = ? AND purpose = ?
+        """,
+        (browser_token_hash, purpose),
+    ).fetchone()
+    last_sent_at = parse_iso(row["last_sent_at"] if row else None)
+    if last_sent_at is None:
+        retry_after = EMAIL_CODE_BROWSER_COOLDOWN_SECONDS
+    else:
+        elapsed = max(0, int((now - last_sent_at).total_seconds()))
+        retry_after = EMAIL_CODE_BROWSER_COOLDOWN_SECONDS - elapsed
+    raise EmailCodeCooldownError(retry_after)
+
+
 def _create_email_code(
     db: sqlite3.Connection,
     *,
@@ -193,12 +255,18 @@ def _create_email_code(
     purpose: str,
     ip_address: str = "",
     invite_code_id: int | None = None,
+    browser_id: str = "",
 ) -> str:
     _check_email_code_rate_limit(
         db,
         email=email,
         purpose=purpose,
         ip_address=ip_address,
+    )
+    _reserve_browser_email_code_cooldown(
+        db,
+        browser_id=browser_id,
+        purpose=purpose,
     )
     code = f"{random.SystemRandom().randint(0, 999999):06d}"
     db.execute(
@@ -242,6 +310,7 @@ def send_register_email_code(
     email: str,
     invite_code: str,
     ip_address: str = "",
+    browser_id: str = "",
 ) -> dict[str, Any]:
     normalized = normalize_email(email)
     if not normalized or "@" not in normalized:
@@ -257,6 +326,7 @@ def send_register_email_code(
             purpose="register",
             invite_code_id=int(invite["id"]),
             ip_address=ip_address,
+            browser_id=browser_id,
         )
 
     return _send_code_or_raise(normalized, code, purpose="register")
@@ -266,6 +336,7 @@ def request_password_reset_code(
     *,
     email: str,
     ip_address: str = "",
+    browser_id: str = "",
 ) -> dict[str, Any]:
     normalized = normalize_email(email)
     if not normalized or "@" not in normalized:
@@ -287,6 +358,7 @@ def request_password_reset_code(
             email=normalized,
             purpose="password_reset",
             ip_address=ip_address,
+            browser_id=browser_id,
         )
 
     return _send_code_or_raise(normalized, code, purpose="password_reset")
