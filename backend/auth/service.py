@@ -319,10 +319,16 @@ def _consume_email_code(
     )
     if not constant_time_equal(hash_token(code.strip()), row["code_hash"]):
         raise ValueError("Invalid verification code.")
-    db.execute(
-        "UPDATE email_verification_codes SET consumed_at = ? WHERE id = ?",
+    cursor = db.execute(
+        """
+        UPDATE email_verification_codes
+        SET consumed_at = ?
+        WHERE id = ? AND consumed_at IS NULL
+        """,
         (iso(), row["id"]),
     )
+    if cursor.rowcount != 1:
+        raise ValueError("Verification code has already been used.")
 
 
 def register_user(
