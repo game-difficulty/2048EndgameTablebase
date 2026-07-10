@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from email.utils import format_datetime
+
 from fastapi import APIRouter, Body, HTTPException, Request, Response
 
 from .dependencies import client_ip, cookie_secure, current_user_from_request, require_user
@@ -25,13 +28,21 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 def _set_session_cookie(response: Response, token: str, expires_at: str) -> None:
+    try:
+        expires_dt = datetime.fromisoformat(str(expires_at)).astimezone(timezone.utc)
+        max_age = max(1, int((expires_dt - datetime.now(timezone.utc)).total_seconds()))
+        expires = format_datetime(expires_dt, usegmt=True)
+    except Exception:
+        max_age = 14 * 24 * 60 * 60
+        expires = None
     response.set_cookie(
         SESSION_COOKIE_NAME,
         token,
         httponly=True,
         secure=cookie_secure(),
         samesite="lax",
-        expires=expires_at,
+        max_age=max_age,
+        expires=expires,
         path="/",
     )
 

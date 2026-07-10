@@ -310,6 +310,7 @@ const {
   refreshAuth,
   openAuthDialog,
   closeAuthDialog,
+  setAuthenticatedUser,
   logout,
 } = useAuthState();
 const analysisDialogOpen = ref(false);
@@ -592,8 +593,8 @@ const handleTabDragEnd = () => {
   clearTabDragState();
 };
 
-const handleAuthenticated = async () => {
-  await refreshAuth();
+const handleAuthenticated = (authenticatedUser) => {
+  setAuthenticatedUser(authenticatedUser);
   closeAuthDialog();
 };
 

@@ -7,6 +7,8 @@ const ready = ref(false);
 const user = ref(null);
 const dialogOpen = ref(false);
 const dialogMode = ref('login');
+let authGeneration = 0;
+let latestRefreshId = 0;
 
 const isAuthenticated = computed(() => !!user.value);
 
@@ -29,14 +31,26 @@ if (typeof window !== 'undefined') {
 export function useAuthState() {
   const refreshAuth = async () => {
     const previousUserId = user.value?.id ?? null;
+    const requestId = latestRefreshId + 1;
+    latestRefreshId = requestId;
+    const generationAtStart = authGeneration;
     try {
       const result = await authClient.me();
+      if (requestId !== latestRefreshId || generationAtStart !== authGeneration) {
+        return user.value;
+      }
       user.value = result?.authenticated ? result.user : null;
       return user.value;
     } catch (error) {
+      if (requestId !== latestRefreshId || generationAtStart !== authGeneration) {
+        return user.value;
+      }
       user.value = null;
       return null;
     } finally {
+      if (requestId !== latestRefreshId || generationAtStart !== authGeneration) {
+        return;
+      }
       ready.value = true;
       const nextUserId = user.value?.id ?? null;
       if (previousUserId !== nextUserId) {
@@ -54,6 +68,18 @@ export function useAuthState() {
     dialogOpen.value = false;
   };
 
+  const setAuthenticatedUser = (authenticatedUser) => {
+    const previousUserId = user.value?.id ?? null;
+    authGeneration += 1;
+    latestRefreshId += 1;
+    user.value = authenticatedUser || null;
+    ready.value = true;
+    const nextUserId = user.value?.id ?? null;
+    if (previousUserId !== nextUserId) {
+      emitAuthChanged();
+    }
+  };
+
   const requireAuth = () => {
     if (user.value) {
       return true;
@@ -66,6 +92,8 @@ export function useAuthState() {
     try {
       await authClient.logout();
     } finally {
+      authGeneration += 1;
+      latestRefreshId += 1;
       user.value = null;
       emitAuthChanged();
     }
@@ -80,6 +108,7 @@ export function useAuthState() {
     refreshAuth,
     openAuthDialog,
     closeAuthDialog,
+    setAuthenticatedUser,
     requireAuth,
     logout,
     applyTokenBalance,
