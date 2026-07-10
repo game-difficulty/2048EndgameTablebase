@@ -7,6 +7,7 @@ export const TAB_IDS = {
   REPLAY: 'ReplayReviewView',
   SETTINGS: 'SettingsView',
   HELP: 'HelpView',
+  ADMIN: 'AdminView',
 };
 
 export const MAIN_TAB_ID = TAB_IDS.MAIN_MENU;
@@ -20,6 +21,7 @@ export const TAB_ORDER = [
   TAB_IDS.REPLAY,
   TAB_IDS.SETTINGS,
   TAB_IDS.HELP,
+  TAB_IDS.ADMIN,
 ];
 
 export const TAB_REGISTRY = {
@@ -61,6 +63,11 @@ export const TAB_REGISTRY = {
   [TAB_IDS.HELP]: {
     id: TAB_IDS.HELP,
     titleKey: 'tabs.help',
+    closable: true,
+  },
+  [TAB_IDS.ADMIN]: {
+    id: TAB_IDS.ADMIN,
+    titleKey: 'tabs.admin',
     closable: true,
   },
 };

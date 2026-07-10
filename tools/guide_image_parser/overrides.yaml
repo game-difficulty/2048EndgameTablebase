@@ -1,0 +1,19 @@
+# Manual corrections for guide image parsing.
+#
+# Keys can be an image_id from media_manifest.jsonl or an image sha256.
+# Values replace or augment the parser output for that image.
+#
+# Example:
+# img_0012:
+#   status: accepted
+#   boards:
+#     - board_id: img_0012_b00
+#       bbox: [12, 8, 188, 188]
+#       visible_rows: 4
+#       visible_cols: 4
+#       hex: "123400000000ffff"
+#       confidence: 1.0
+#       flags: ["manual_override"]
+#       cells: []
+#   annotations: []
+

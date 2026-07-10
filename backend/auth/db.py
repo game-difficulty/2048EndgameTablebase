@@ -64,11 +64,14 @@ def init_auth_db() -> None:
               email_verified_at TEXT,
               password_hash TEXT NOT NULL,
               display_name TEXT,
+              registered_with_invite INTEGER NOT NULL DEFAULT 1,
+              invite_code_id INTEGER,
               role TEXT NOT NULL DEFAULT 'user',
               status TEXT NOT NULL DEFAULT 'active',
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL,
-              last_login_at TEXT
+              last_login_at TEXT,
+              FOREIGN KEY(invite_code_id) REFERENCES invite_codes(id)
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
@@ -244,6 +247,10 @@ def init_auth_db() -> None:
             db.execute("ALTER TABLE users ADD COLUMN deactivated_at TEXT")
         if "email_identity" not in existing_user_columns:
             db.execute("ALTER TABLE users ADD COLUMN email_identity TEXT")
+        if "registered_with_invite" not in existing_user_columns:
+            db.execute("ALTER TABLE users ADD COLUMN registered_with_invite INTEGER NOT NULL DEFAULT 1")
+        if "invite_code_id" not in existing_user_columns:
+            db.execute("ALTER TABLE users ADD COLUMN invite_code_id INTEGER REFERENCES invite_codes(id)")
 
         used_identities = {
             row["email_identity"]

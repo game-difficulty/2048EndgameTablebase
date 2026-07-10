@@ -11,11 +11,11 @@
     @click="$emit('start', item.id)"
   >
     <div v-if="trophyVisual" class="minigame-card-trophy-corner" aria-hidden="true">
-      <img :src="trophyVisual.backgroundSrc" alt="" class="minigame-card-trophy-bg" />
-      <img :src="trophyVisual.trophySrc" :alt="trophyVisual.trophyAlt" class="minigame-card-trophy-icon" />
+      <img :src="trophyVisual.backgroundSrc" alt="" class="minigame-card-trophy-bg" loading="lazy" decoding="async" />
+      <img :src="trophyVisual.trophySrc" :alt="trophyVisual.trophyAlt" class="minigame-card-trophy-icon" loading="lazy" decoding="async" />
     </div>
     <div class="mb-3 w-full flex-none overflow-hidden rounded-xl border border-border-main/60 bg-bg-main/70 aspect-square">
-      <img :src="coverUrl" :alt="item.title" class="h-full w-full object-cover" />
+      <img :src="coverUrl" :alt="item.title" class="h-full w-full object-cover" loading="lazy" decoding="async" />
     </div>
     <div class="flex items-start justify-between gap-3">
       <div class="min-w-0">

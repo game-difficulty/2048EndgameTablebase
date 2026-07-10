@@ -21,22 +21,6 @@
         }
       })();
     </script>
-    <script>
-      window.MathJax = {
-        tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']], processEscapes: true, processEnvironments: true },
-        svg: { fontCache: 'global' },
-        options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] }
-      };
-    </script>
-    <script>
-      (() => {
-        const script = document.createElement('script');
-        script.id = 'MathJax-script';
-        script.async = true;
-        script.src = `${window.__APP_BACKEND_ORIGIN__ || window.location.origin}/mathjax/tex-svg.js`;
-        document.head.appendChild(script);
-      })();
-    </script>
   </head>
   <body>
     <div id="app"></div>

@@ -13,8 +13,8 @@
 
       <form class="auth-form" @submit.prevent="submit">
         <label v-if="mode === 'register'">
-          <span>{{ $t('auth.fields.inviteCode') }}</span>
-          <input v-model="inviteCode" autocomplete="off" :placeholder="$t('auth.placeholders.inviteCode')" required />
+          <span>{{ $t('auth.fields.displayName') }}</span>
+          <input v-model="displayName" autocomplete="username" :placeholder="$t('auth.placeholders.displayName')" maxlength="80" required />
         </label>
 
         <div v-if="mode === 'register'" class="auth-email-row">
@@ -35,6 +35,11 @@
           <input v-model="email" type="email" autocomplete="email" :placeholder="$t('auth.placeholders.email')" required />
         </label>
 
+        <label v-if="mode === 'register'">
+          <span>{{ $t('auth.fields.inviteCode') }}</span>
+          <input v-model="inviteCode" autocomplete="off" :placeholder="$t('auth.placeholders.inviteCode')" />
+        </label>
+
         <label v-if="mode === 'register' || mode === 'reset'">
           <span>{{ $t('auth.fields.emailCode') }}</span>
           <input v-model="verificationCode" inputmode="numeric" autocomplete="one-time-code" :placeholder="$t('auth.placeholders.emailCode')" required />
@@ -49,11 +54,6 @@
             :placeholder="$t('auth.placeholders.password')"
             required
           />
-        </label>
-
-        <label v-if="mode === 'register'">
-          <span>{{ $t('auth.fields.displayName') }}</span>
-          <input v-model="displayName" autocomplete="name" :placeholder="$t('auth.placeholders.displayName')" />
         </label>
 
         <button type="submit" class="auth-primary" :disabled="submitDisabled">
@@ -203,9 +203,9 @@ const emailDomainHint = computed(() => (
 ));
 const sendCodeDisabled = computed(() => (
   sendingCode.value
+  || !String(displayName.value || '').trim()
   || !email.value
   || !registrationEmailDomain.value
-  || !inviteCode.value
   || emailDomainUnsupported.value
   || registerCooldownRemaining.value > 0
 ));
@@ -213,6 +213,7 @@ const submitDisabled = computed(() => (
   submitting.value
   || (mode.value === 'forgot' && resetCooldownRemaining.value > 0)
   || (mode.value === 'register' && emailDomainUnsupported.value)
+  || (mode.value === 'register' && !String(displayName.value || '').trim())
 ));
 
 const applyServerCooldown = (error, purpose) => {

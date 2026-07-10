@@ -28,7 +28,6 @@ if (typeof window !== 'undefined') {
 
 export function useAuthState() {
   const refreshAuth = async () => {
-    const wasReady = ready.value;
     const previousUserId = user.value?.id ?? null;
     try {
       const result = await authClient.me();
@@ -40,7 +39,7 @@ export function useAuthState() {
     } finally {
       ready.value = true;
       const nextUserId = user.value?.id ?? null;
-      if (wasReady && previousUserId !== nextUserId) {
+      if (previousUserId !== nextUserId) {
         emitAuthChanged();
       }
     }

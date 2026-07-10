@@ -235,6 +235,7 @@ export function useGamerSession(activeRef) {
   let evilGen = null;
   let lastAiSpeedRatio = null;
   let persistTimer = null;
+  let wasmPrewarmed = false;
   const history = [];
 
   const writePersistedState = () => {
@@ -661,6 +662,12 @@ export function useGamerSession(activeRef) {
       });
   };
 
+  const ensureWasmPrewarmed = () => {
+    if (wasmPrewarmed) return;
+    wasmPrewarmed = true;
+    prewarmWasmEngines();
+  };
+
   const handleKeydown = (event) => {
     if (!activeRef?.value) return;
     const target = event.target;
@@ -723,6 +730,9 @@ export function useGamerSession(activeRef) {
   watch(
     activeRef,
     (isActive) => {
+      if (isActive) {
+        ensureWasmPrewarmed();
+      }
       if (isActive && aiEnabled.value) {
         scheduleAiStep();
       } else {
@@ -734,7 +744,9 @@ export function useGamerSession(activeRef) {
 
   onMounted(() => {
     loadSavedState();
-    prewarmWasmEngines();
+    if (activeRef?.value) {
+      ensureWasmPrewarmed();
+    }
     window.addEventListener('keydown', handleKeydown);
     window.addEventListener('beforeunload', handleBeforeUnload);
   });

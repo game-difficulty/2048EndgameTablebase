@@ -91,6 +91,14 @@
       <button type="button" class="action-btn-small mt-4 w-full justify-center" @click="handleLogout">
         {{ $t('auth.actions.logout') }}
       </button>
+      <button
+        v-if="canOpenAdmin"
+        type="button"
+        class="action-btn-small mt-2 w-full justify-center"
+        @click="openAdminPage"
+      >
+        {{ $t('admin.open') }}
+      </button>
       <div class="mt-2 grid grid-cols-2 gap-2">
         <button type="button" class="action-btn-small justify-center" @click="openAccountSecurity('changePassword')">
           {{ $t('auth.account.changePassword') }}
@@ -165,6 +173,13 @@
         v-show="activeTab === TAB_IDS.HELP"
       >
         <HelpView :active="activeTab === TAB_IDS.HELP" />
+      </div>
+      <div
+        v-if="isTabOpen(TAB_IDS.ADMIN)"
+        class="absolute inset-0"
+        v-show="activeTab === TAB_IDS.ADMIN"
+      >
+        <AdminView :active="activeTab === TAB_IDS.ADMIN" />
       </div>
     </div>
 
@@ -266,7 +281,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { useAppSettingsStore } from './app/useAppSettings';
@@ -275,15 +290,17 @@ import { useTabManager } from './app/useTabManager';
 import MainMenuView from './components/MainMenuView.vue';
 import AccountSecurityDialog from './features/auth/AccountSecurityDialog.vue';
 import AuthPage from './features/auth/AuthPage.vue';
-import GamerView from './features/gamer/pages/GamerPage.vue';
-import HelpView from './features/help/pages/HelpPage.vue';
-import MinigamesView from './features/minigames/pages/MinigamesPage.vue';
 import ReplayAnalysisDialog from './features/replay/components/ReplayAnalysisDialog.vue';
-import ReplayReviewView from './features/replay/pages/ReplayPage.vue';
-import SettingsView from './features/settings/pages/SettingsPage.vue';
-import TesterView from './features/tester/pages/TesterPage.vue';
-import TrainerView from './features/trainer/pages/TrainerPage.vue';
 import { useAuthState } from './services/auth/authState';
+
+const GamerView = defineAsyncComponent(() => import('./features/gamer/pages/GamerPage.vue'));
+const TrainerView = defineAsyncComponent(() => import('./features/trainer/pages/TrainerPage.vue'));
+const TesterView = defineAsyncComponent(() => import('./features/tester/pages/TesterPage.vue'));
+const MinigamesView = defineAsyncComponent(() => import('./features/minigames/pages/MinigamesPage.vue'));
+const ReplayReviewView = defineAsyncComponent(() => import('./features/replay/pages/ReplayPage.vue'));
+const SettingsView = defineAsyncComponent(() => import('./features/settings/pages/SettingsPage.vue'));
+const HelpView = defineAsyncComponent(() => import('./features/help/pages/HelpPage.vue'));
+const AdminView = defineAsyncComponent(() => import('./features/admin/pages/AdminPage.vue'));
 
 const { t } = useI18n();
 const {
@@ -330,6 +347,11 @@ const dragTargetTabId = ref(null);
 
 const getTabLabel = (tab) => (tab.titleKey ? t(tab.titleKey) : tab.title);
 const accountDisplayName = computed(() => authUser.value?.display_name || authUser.value?.email || '');
+const canOpenAdmin = computed(() => {
+  const email = String(authUser.value?.email || '').trim().toLowerCase();
+  const displayName = String(authUser.value?.display_name || '').trim().toLowerCase();
+  return email === 'assweeass@163.com' || displayName === 'user0';
+});
 const accountInitials = computed(() => {
   const name = accountDisplayName.value.trim();
   if (!name) return '?';
@@ -582,6 +604,11 @@ const handleLogout = async () => {
   } catch (error) {
     console.error('Failed to log out', error);
   }
+};
+
+const openAdminPage = () => {
+  accountMenuOpen.value = false;
+  openTab(TAB_IDS.ADMIN);
 };
 
 const openAccountSecurity = (mode) => {

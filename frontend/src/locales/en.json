@@ -8,7 +8,8 @@
     "replay": "Replay",
     "notebook": "Notebook",
     "settings": "Settings",
-    "help": "Help"
+    "help": "Help",
+    "admin": "Admin"
   },
   "auth": {
     "title": {
@@ -22,22 +23,22 @@
       "register": "Register"
     },
     "fields": {
-      "inviteCode": "Invite Code",
+      "inviteCode": "Invite Code (Optional)",
       "email": "Email",
       "emailCode": "Email Code",
       "password": "Password",
       "newPassword": "New Password",
       "currentPassword": "Current Password",
       "confirmText": "Confirmation",
-      "displayName": "Display Name"
+      "displayName": "Username"
     },
     "placeholders": {
-      "inviteCode": "Enter your invite code",
+      "inviteCode": "Optional; must be valid if provided",
       "email": "Email address",
       "emailCode": "6-digit code",
       "password": "At least 8 characters",
       "currentPassword": "Current password",
-      "displayName": "Optional"
+      "displayName": "Required"
     },
     "actions": {
       "login": "Login",
@@ -393,6 +394,47 @@
       "failedState": "Failed",
       "completedState": "Completed",
       "completedWithErrors": "Completed With Errors"
+    }
+  },
+  "admin": {
+    "open": "Admin",
+    "kicker": "Operations",
+    "title": "Admin",
+    "subtitle": "Monitor user count, recent service activity, and look up accounts by email, username, or ID.",
+    "refresh": "Refresh",
+    "empty": "No data",
+    "summary": {
+      "usersTotal": "Total users",
+      "usersActive": "Active users",
+      "newUsers24h": "New users 24h",
+      "sessions24h": "Sessions 24h",
+      "usage24h": "Actions 24h",
+      "tokens24h": "Tokens 24h"
+    },
+    "traffic": {
+      "title": "Recent Traffic",
+      "range": "Last 14 days",
+      "row": "Sessions {sessions} / Actions {usage_events} / Uploads {uploads} / Analysis {analysis_jobs}"
+    },
+    "operations": {
+      "title": "Operation Mix",
+      "range": "Last 7 days"
+    },
+    "users": {
+      "title": "User Lookup",
+      "searchPlaceholder": "Email, username, or ID",
+      "search": "Search",
+      "id": "ID",
+      "user": "User",
+      "status": "Status",
+      "tokens": "Balance",
+      "sessions": "Sessions",
+      "usage": "Actions",
+      "created": "Created",
+      "lastLogin": "Last Login"
+    },
+    "errors": {
+      "loadFailed": "Failed to load admin data."
     }
   },
   "menu": {

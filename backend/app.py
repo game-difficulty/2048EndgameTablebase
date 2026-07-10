@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.actions import Action, Message
+from backend.admin.routes import router as admin_router
 from backend.auth.db import init_auth_db
 from backend.auth.dependencies import client_ip, current_user_from_websocket, require_user
 from backend.auth.routes import router as auth_router
@@ -65,6 +66,20 @@ mathjax_path = get_resource_path("mathjax")
 pic_path = get_resource_path("pic")
 minigame_assets_path = pic_path
 frontend_dist_path = get_resource_path(os.path.join("frontend", "dist"))
+frontend_assets_path = os.path.join(frontend_dist_path, "assets")
+frontend_wasm_path = os.path.join(frontend_dist_path, "wasm")
+
+
+class CacheControlledStaticFiles(StaticFiles):
+    def __init__(self, *args, cache_control: str = "", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cache_control = cache_control
+
+    async def get_response(self, path, scope):  # type: ignore[override]
+        response = await super().get_response(path, scope)
+        if self.cache_control and response.status_code == 200:
+            response.headers["Cache-Control"] = self.cache_control
+        return response
 
 
 @asynccontextmanager
@@ -79,6 +94,7 @@ async def app_lifespan(_app: FastAPI):
 
 app = FastAPI(lifespan=app_lifespan)
 app.include_router(auth_router)
+app.include_router(admin_router)
 
 
 async def _send_ws_error(websocket: WebSocket, message: str):
@@ -429,18 +445,54 @@ async def download_analysis_job(job_id: str, user: dict = Depends(require_user))
 
 
 if os.path.exists(mathjax_path):
-    app.mount("/mathjax", StaticFiles(directory=mathjax_path), name="mathjax")
+    app.mount(
+        "/mathjax",
+        CacheControlledStaticFiles(
+            directory=mathjax_path,
+            cache_control="public, max-age=31536000, immutable",
+        ),
+        name="mathjax",
+    )
 
 if os.path.exists(minigame_assets_path):
     app.mount(
         "/minigames-assets",
-        StaticFiles(directory=minigame_assets_path),
+        CacheControlledStaticFiles(
+            directory=minigame_assets_path,
+            cache_control="public, max-age=604800",
+        ),
         name="minigames-assets",
+    )
+
+if os.path.exists(frontend_assets_path):
+    app.mount(
+        "/assets",
+        CacheControlledStaticFiles(
+            directory=frontend_assets_path,
+            cache_control="public, max-age=31536000, immutable",
+        ),
+        name="frontend-assets",
+    )
+
+if os.path.exists(frontend_wasm_path):
+    app.mount(
+        "/wasm",
+        CacheControlledStaticFiles(
+            directory=frontend_wasm_path,
+            cache_control="public, max-age=31536000, immutable",
+        ),
+        name="frontend-wasm",
     )
 
 if os.path.exists(frontend_dist_path):
     app.mount(
-        "/", StaticFiles(directory=frontend_dist_path, html=True), name="frontend"
+        "/",
+        CacheControlledStaticFiles(
+            directory=frontend_dist_path,
+            html=True,
+            cache_control="no-cache",
+        ),
+        name="frontend",
     )
 
 

@@ -3,6 +3,67 @@ import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { createWsClient } from '../../../services/ws/createWsClient';
 
+const MATHJAX_VERSION = 'tex-svg-20260710';
+
+let mathJaxLoadPromise = null;
+
+function configureMathJax() {
+  window.MathJax = window.MathJax || {
+    tex: {
+      inlineMath: [['$', '$'], ['\\(', '\\)']],
+      displayMath: [['$$', '$$'], ['\\[', '\\]']],
+      processEscapes: true,
+      processEnvironments: true,
+    },
+    svg: { fontCache: 'global' },
+    options: {
+      skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+    },
+  };
+}
+
+function waitForMathJaxStartup() {
+  const startup = window.MathJax?.startup?.promise;
+  return startup && typeof startup.then === 'function' ? startup : Promise.resolve();
+}
+
+function ensureMathJaxLoaded() {
+  if (typeof window === 'undefined') {
+    return Promise.resolve(null);
+  }
+
+  if (window.MathJax?.typesetPromise || window.MathJax?.typeset) {
+    return waitForMathJaxStartup().then(() => window.MathJax);
+  }
+
+  if (mathJaxLoadPromise) {
+    return mathJaxLoadPromise;
+  }
+
+  configureMathJax();
+  mathJaxLoadPromise = new Promise((resolve, reject) => {
+    const existingScript = document.getElementById('MathJax-script');
+    if (existingScript) {
+      existingScript.addEventListener('load', () => waitForMathJaxStartup().then(() => resolve(window.MathJax)), { once: true });
+      existingScript.addEventListener('error', reject, { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.id = 'MathJax-script';
+    script.async = true;
+    script.src = `${window.__APP_BACKEND_ORIGIN__ || window.location.origin}/mathjax/tex-svg.js?v=${MATHJAX_VERSION}`;
+    script.onload = () => waitForMathJaxStartup().then(() => resolve(window.MathJax));
+    script.onerror = reject;
+    document.head.appendChild(script);
+  }).catch((error) => {
+    mathJaxLoadPromise = null;
+    throw error;
+  });
+
+  return mathJaxLoadPromise;
+}
+
 export function useHelpSession(activeRef) {
   const { config, start: startSettings } = useAppSettingsStore();
   const htmlContent = ref('');
@@ -21,9 +82,16 @@ export function useHelpSession(activeRef) {
 
   const typesetMath = async () => {
     await nextTick();
-    window.setTimeout(() => {
-      if (window.MathJax && window.MathJax.typeset) {
-        window.MathJax.typeset();
+    window.setTimeout(async () => {
+      try {
+        const mathJax = await ensureMathJaxLoaded();
+        if (mathJax?.typesetPromise) {
+          await mathJax.typesetPromise(articleRef.value ? [articleRef.value] : undefined);
+        } else if (mathJax?.typeset) {
+          mathJax.typeset(articleRef.value ? [articleRef.value] : undefined);
+        }
+      } catch (error) {
+        console.error('Failed to load MathJax for help page.', error);
       }
     }, 100);
   };

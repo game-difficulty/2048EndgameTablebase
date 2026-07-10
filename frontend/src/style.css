@@ -2,7 +2,7 @@
 
 @font-face {
   font-family: "Clear Sans Web";
-  src: url("../../font/ClearSans/ClearSans-Regular.ttf") format("truetype");
+  src: url("../../font/ClearSans/ClearSans-Regular.woff2") format("woff2");
   font-style: normal;
   font-weight: 400;
   font-display: swap;
@@ -10,7 +10,7 @@
 
 @font-face {
   font-family: "Clear Sans Web";
-  src: url("../../font/ClearSans/ClearSans-Bold.ttf") format("truetype");
+  src: url("../../font/ClearSans/ClearSans-Bold.woff2") format("woff2");
   font-style: normal;
   font-weight: 700;
   font-display: swap;

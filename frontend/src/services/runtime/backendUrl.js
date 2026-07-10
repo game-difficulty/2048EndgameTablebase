@@ -39,7 +39,11 @@ export const getBackendWebSocketUrl = (clientId) => {
 
 export const getMinigameAssetBase = () => getBackendUrl('/minigames-assets/');
 
+const MINIGAME_ASSET_VERSION = 'minigames-img-20260710b';
+
 export const getMinigameAssetUrl = (assetPath = '') => {
   const normalizedAssetPath = String(assetPath).replace(/^\/+/, '');
-  return new URL(normalizedAssetPath, getMinigameAssetBase()).toString();
+  const url = new URL(normalizedAssetPath, getMinigameAssetBase());
+  url.searchParams.set('v', MINIGAME_ASSET_VERSION);
+  return url.toString();
 };

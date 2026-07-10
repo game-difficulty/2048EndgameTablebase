@@ -222,6 +222,15 @@ def _validate_password(password: str) -> None:
         raise ValueError("Password must contain at least 8 characters.")
 
 
+def _validate_display_name(display_name: str) -> str:
+    value = str(display_name or "").strip()
+    if not value:
+        raise ValueError("Username is required.")
+    if len(value) > 80:
+        raise ValueError("Username must contain at most 80 characters.")
+    return value
+
+
 def _check_email_code_rate_limit(
     db: sqlite3.Connection,
     *,
@@ -373,11 +382,10 @@ def send_register_email_code(
     browser_id: str = "",
 ) -> dict[str, Any]:
     normalized, email_identity = validate_registration_email(email)
-    if not str(invite_code or "").strip():
-        raise ValueError("Invite code is required.")
 
     with auth_db() as db:
-        invite = _validate_invite(db, invite_code, normalized)
+        invite_code_value = str(invite_code or "").strip()
+        invite = _validate_invite(db, invite_code_value, normalized) if invite_code_value else None
         existing_user = db.execute(
             "SELECT id FROM users WHERE email = ? OR email_identity = ?",
             (normalized, email_identity),
@@ -388,7 +396,7 @@ def send_register_email_code(
             db,
             email=normalized,
             purpose="register",
-            invite_code_id=int(invite["id"]),
+            invite_code_id=int(invite["id"]) if invite is not None else None,
             ip_address=ip_address,
             browser_id=browser_id,
         )
@@ -501,9 +509,11 @@ def register_user(
 ) -> dict[str, Any]:
     normalized, email_identity = validate_registration_email(email)
     _validate_password(password)
+    display_name_value = _validate_display_name(display_name)
 
     with auth_db() as db:
-        invite = _validate_invite(db, invite_code, normalized)
+        invite_code_value = str(invite_code or "").strip()
+        invite = _validate_invite(db, invite_code_value, normalized) if invite_code_value else None
         existing_user = db.execute(
             "SELECT id FROM users WHERE email = ? OR email_identity = ?",
             (normalized, email_identity),
@@ -521,15 +531,18 @@ def register_user(
             cursor = db.execute(
                 """
                 INSERT INTO users
-                (email, email_identity, email_verified_at, password_hash, display_name, role, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 'user', 'active', ?, ?)
+                (email, email_identity, email_verified_at, password_hash, display_name,
+                 registered_with_invite, invite_code_id, role, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'user', 'active', ?, ?)
                 """,
                 (
                     normalized,
                     email_identity,
                     now,
                     hash_password(password),
-                    str(display_name or "").strip()[:80] or None,
+                    display_name_value,
+                    1 if invite is not None else 0,
+                    int(invite["id"]) if invite is not None else None,
                     now,
                     now,
                 ),
@@ -537,10 +550,11 @@ def register_user(
         except sqlite3.IntegrityError as exc:
             raise ValueError("Email is already registered.") from exc
         user_id = int(cursor.lastrowid)
-        db.execute(
-            "UPDATE invite_codes SET used_count = used_count + 1 WHERE id = ?",
-            (invite["id"],),
-        )
+        if invite is not None:
+            db.execute(
+                "UPDATE invite_codes SET used_count = used_count + 1 WHERE id = ?",
+                (invite["id"],),
+            )
         create_default_quotas(db, user_id)
         token, session_id, expires_at = create_session(
             db,

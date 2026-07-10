@@ -18,8 +18,8 @@ from .config import (
 from .errors import InsufficientTokens
 
 
-WEEKLY_GRANT_UNITS = token_to_units(1000)
-BONUS_BALANCE_CAP_UNITS = token_to_units(2000)
+INVITED_WEEKLY_GRANT_UNITS = token_to_units(4096)
+PUBLIC_WEEKLY_GRANT_UNITS = token_to_units(256)
 WEEKLY_GRANT_INTERVAL = timedelta(days=7)
 
 
@@ -107,9 +107,21 @@ def get_token_balance(user_id: int, *, db: sqlite3.Connection | None = None) -> 
         return _public_balance(row)
 
 
+def _weekly_grant_for_user(db: sqlite3.Connection, user_id: int) -> tuple[int, str]:
+    row = db.execute(
+        "SELECT registered_with_invite FROM users WHERE id = ?",
+        (int(user_id),),
+    ).fetchone()
+    if row is None or int(row["registered_with_invite"] or 0):
+        return INVITED_WEEKLY_GRANT_UNITS, "invite"
+    return PUBLIC_WEEKLY_GRANT_UNITS, "public"
+
+
 def grant_weekly_tokens_if_due(user_id: int, *, db: sqlite3.Connection | None = None) -> dict[str, Any]:
     with _maybe_connection(db) as connection:
         row = _ensure_token_account(connection, int(user_id))
+        weekly_grant_units, grant_tier = _weekly_grant_for_user(connection, int(user_id))
+        bonus_balance_cap_units = weekly_grant_units
         now_dt = utcnow()
         last_grant = parse_iso(row["last_weekly_grant_at"])
         if last_grant is not None and now_dt - last_grant < WEEKLY_GRANT_INTERVAL:
@@ -117,7 +129,7 @@ def grant_weekly_tokens_if_due(user_id: int, *, db: sqlite3.Connection | None = 
 
         before = _balance_units(row)
         current_bonus = int(row["bonus_balance_units"])
-        grant_units = max(0, min(WEEKLY_GRANT_UNITS, BONUS_BALANCE_CAP_UNITS - current_bonus))
+        grant_units = max(0, min(weekly_grant_units, bonus_balance_cap_units - current_bonus))
         if grant_units > 0:
             connection.execute(
                 """
@@ -153,7 +165,11 @@ def grant_weekly_tokens_if_due(user_id: int, *, db: sqlite3.Connection | None = 
             paid_delta_units=0,
             balance_before_units=before,
             balance_after_units=_balance_units(after_row),
-            metadata={"cap_units": BONUS_BALANCE_CAP_UNITS},
+            metadata={
+                "cap_units": bonus_balance_cap_units,
+                "grant_tier": grant_tier,
+                "weekly_grant_units": weekly_grant_units,
+            },
         )
         return _public_balance(after_row)
 

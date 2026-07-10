@@ -8,7 +8,8 @@
     "replay": "回放",
     "notebook": "错题本",
     "settings": "设置",
-    "help": "帮助"
+    "help": "帮助",
+    "admin": "站长"
   },
   "auth": {
     "title": {
@@ -22,22 +23,22 @@
       "register": "注册"
     },
     "fields": {
-      "inviteCode": "邀请码",
+      "inviteCode": "邀请码（可选）",
       "email": "邮箱",
       "emailCode": "邮箱验证码",
       "password": "密码",
       "newPassword": "新密码",
       "currentPassword": "当前密码",
       "confirmText": "确认文本",
-      "displayName": "显示名称"
+      "displayName": "用户名"
     },
     "placeholders": {
-      "inviteCode": "输入邀请码",
+      "inviteCode": "可选；填写后必须有效",
       "email": "邮箱地址",
       "emailCode": "6 位验证码",
       "password": "至少 8 个字符",
       "currentPassword": "当前密码",
-      "displayName": "可选"
+      "displayName": "必填"
     },
     "actions": {
       "login": "登录",
@@ -393,6 +394,47 @@
       "failedState": "失败",
       "completedState": "已完成",
       "completedWithErrors": "已完成（含错误）"
+    }
+  },
+  "admin": {
+    "open": "站长页",
+    "kicker": "管理",
+    "title": "站长页",
+    "subtitle": "查看用户规模、近期服务使用情况，并按邮箱、用户名或 ID 查询账号。",
+    "refresh": "刷新",
+    "empty": "暂无数据",
+    "summary": {
+      "usersTotal": "用户总数",
+      "usersActive": "活跃用户",
+      "newUsers24h": "24小时新增",
+      "sessions24h": "24小时登录",
+      "usage24h": "24小时操作",
+      "tokens24h": "24小时消耗"
+    },
+    "traffic": {
+      "title": "近期流量",
+      "range": "最近14天",
+      "row": "会话 {sessions} / 操作 {usage_events} / 上传 {uploads} / 分析 {analysis_jobs}"
+    },
+    "operations": {
+      "title": "操作分布",
+      "range": "最近7天"
+    },
+    "users": {
+      "title": "用户查询",
+      "searchPlaceholder": "邮箱、用户名或 ID",
+      "search": "查询",
+      "id": "ID",
+      "user": "用户",
+      "status": "状态",
+      "tokens": "余额",
+      "sessions": "会话",
+      "usage": "操作",
+      "created": "创建时间",
+      "lastLogin": "最近登录"
+    },
+    "errors": {
+      "loadFailed": "站长数据加载失败。"
     }
   },
   "menu": {

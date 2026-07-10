@@ -70,6 +70,27 @@
       "relative_path": "442t_512",
       "dtype": "uint32",
       "spawn_rate": 0.1
+    },
+    {
+      "pattern": "3x3",
+      "target": "1024",
+      "relative_path": "3x3_1024",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    },
+    {
+      "pattern": "3x4441",
+      "target": "512",
+      "relative_path": "3x4441_512",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    },
+    {
+      "pattern": "2x4",
+      "target": "512",
+      "relative_path": "2x4_512",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
     }
   ]
 }

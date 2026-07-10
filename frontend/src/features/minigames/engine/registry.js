@@ -1,6 +1,8 @@
 const ASSET_BASE_PATH = '/minigames-assets';
+const ASSET_VERSION = 'minigames-img-20260710b';
 
 const encodeAssetPath = (assetPath) => String(assetPath).split('/').map(encodeURIComponent).join('/');
+const withAssetVersion = (url) => `${url}?v=${ASSET_VERSION}`;
 
 const makeDefinition = ({
   id,
@@ -30,7 +32,7 @@ const makeDefinition = ({
   hudSchema,
   viewFlags,
   implemented,
-  coverUrl: `${ASSET_BASE_PATH}/${encodeAssetPath(coverAsset.includes('/') ? coverAsset : `covers/${coverAsset}`)}`,
+  coverUrl: withAssetVersion(`${ASSET_BASE_PATH}/${encodeAssetPath(coverAsset.includes('/') ? coverAsset : `covers/${coverAsset}`)}`),
 });
 
 export const MINIGAME_REGISTRY = [
