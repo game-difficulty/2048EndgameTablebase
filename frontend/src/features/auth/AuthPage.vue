@@ -22,10 +22,16 @@
             <span>{{ $t('auth.fields.email') }}</span>
             <input v-model="email" type="email" autocomplete="email" :placeholder="$t('auth.placeholders.email')" required />
           </label>
-          <button type="button" class="auth-secondary auth-send-code" :disabled="sendCodeDisabled" @click="sendCode">
+          <button
+            type="button"
+            class="auth-secondary auth-send-code"
+            :disabled="sendCodeDisabled"
+            :title="sendCodeDisabledReason"
+            @click="sendCode"
+          >
             {{ registerCooldownRemaining > 0 ? cooldownLabel(registerCooldownRemaining) : (sendingCode ? $t('auth.actions.sendingCode') : $t('auth.actions.sendCode')) }}
           </button>
-          <p class="auth-field-hint" :class="{ error: emailDomainUnsupported }">
+          <p class="auth-field-hint" :class="{ error: sendCodeHintIsError }">
             {{ emailDomainHint }}
           </p>
         </div>
@@ -196,16 +202,33 @@ const emailDomainUnsupported = computed(() => (
   && registrationEmailDomain.value
   && !SUPPORTED_EMAIL_DOMAINS.includes(registrationEmailDomain.value)
 ));
-const emailDomainHint = computed(() => (
-  emailDomainUnsupported.value
-    ? t('auth.hints.unsupportedEmailDomain', { domains: supportedEmailDomainsText.value })
-    : t('auth.hints.supportedEmailDomains', { domains: supportedEmailDomainsText.value })
+const displayNameMissing = computed(() => mode.value === 'register' && !String(displayName.value || '').trim());
+const emailMissing = computed(() => mode.value === 'register' && !email.value);
+const emailDomainMissing = computed(() => mode.value === 'register' && email.value && !registrationEmailDomain.value);
+const sendCodeHintIsError = computed(() => (
+  displayNameMissing.value
+  || emailMissing.value
+  || emailDomainMissing.value
+  || emailDomainUnsupported.value
 ));
+const emailDomainHint = computed(() => {
+  if (displayNameMissing.value) {
+    return t('auth.hints.usernameRequiredForCode');
+  }
+  if (emailMissing.value || emailDomainMissing.value) {
+    return t('auth.hints.emailRequiredForCode');
+  }
+  if (emailDomainUnsupported.value) {
+    return t('auth.hints.unsupportedEmailDomain', { domains: supportedEmailDomainsText.value });
+  }
+  return t('auth.hints.supportedEmailDomains', { domains: supportedEmailDomainsText.value });
+});
+const sendCodeDisabledReason = computed(() => (sendCodeDisabled.value ? emailDomainHint.value : ''));
 const sendCodeDisabled = computed(() => (
   sendingCode.value
-  || !String(displayName.value || '').trim()
-  || !email.value
-  || !registrationEmailDomain.value
+  || displayNameMissing.value
+  || emailMissing.value
+  || emailDomainMissing.value
   || emailDomainUnsupported.value
   || registerCooldownRemaining.value > 0
 ));
@@ -389,6 +412,24 @@ onUnmounted(() => {
 .auth-primary:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 14px 30px rgba(15, 23, 42, 0.18);
+}
+
+.auth-tabs button:disabled,
+.auth-secondary:disabled,
+.auth-primary:disabled,
+.auth-link:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  filter: saturate(0.55);
+  box-shadow: none;
+  transform: none;
+}
+
+.auth-secondary:disabled,
+.auth-primary:disabled {
+  border-color: color-mix(in srgb, var(--border-main) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-main) 72%, var(--border-main) 28%);
+  color: color-mix(in srgb, var(--text-secondary) 72%, transparent);
 }
 
 .auth-link {

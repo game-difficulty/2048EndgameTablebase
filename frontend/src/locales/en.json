@@ -64,6 +64,8 @@
       "devCode": "Verification code: {code}"
     },
     "hints": {
+      "usernameRequiredForCode": "Enter a username before sending the verification code.",
+      "emailRequiredForCode": "Enter a valid email address before sending the verification code.",
       "supportedEmailDomains": "Supported email domains: {domains}.",
       "unsupportedEmailDomain": "This email domain is not supported. Use one of: {domains}."
     },
