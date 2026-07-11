@@ -1,6 +1,6 @@
 <template>
   <div class="auth-page">
-    <section class="auth-panel">
+    <section ref="panelRef" class="auth-panel">
       <div class="auth-heading">
         <div class="auth-kicker">2048 Endgame Tablebase</div>
         <h1>{{ $t(`auth.title.${mode}`) }}</h1>
@@ -9,6 +9,16 @@
       <div class="auth-tabs">
         <button :class="{ active: mode === 'login' }" @click="mode = 'login'">{{ $t('auth.tabs.login') }}</button>
         <button :class="{ active: mode === 'register' }" @click="mode = 'register'">{{ $t('auth.tabs.register') }}</button>
+      </div>
+
+      <div
+        v-if="message"
+        class="auth-message"
+        :class="{ error: messageType === 'error' }"
+        :role="messageType === 'error' ? 'alert' : 'status'"
+        aria-live="polite"
+      >
+        {{ message }}
       </div>
 
       <form class="auth-form" @submit.prevent="submit">
@@ -84,16 +94,12 @@
           {{ $t('auth.actions.backToLogin') }}
         </button>
       </form>
-
-      <div v-if="message" class="auth-message" :class="{ error: messageType === 'error' }">
-        {{ message }}
-      </div>
     </section>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { authClient } from '../../services/auth/authClient';
@@ -134,12 +140,18 @@ const submitting = ref(false);
 const sendingCode = ref(false);
 const message = ref('');
 const messageType = ref('info');
+const panelRef = ref(null);
 const nowMs = ref(Date.now());
 let cooldownTimer = null;
 
 const showMessage = (text, type = 'info') => {
   message.value = text;
   messageType.value = type;
+  if (text) {
+    nextTick(() => {
+      panelRef.value?.scrollTo?.({ top: 0, behavior: type === 'error' ? 'smooth' : 'auto' });
+    });
+  }
 };
 
 const submitLabel = computed(() => {
@@ -519,16 +531,22 @@ onUnmounted(() => {
 }
 
 .auth-message {
-  margin-top: 0.9rem;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 0 0.95rem;
   border: 1px solid color-mix(in srgb, var(--border-main) 82%, transparent);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--bg-main) 62%, transparent);
+  background: color-mix(in srgb, var(--bg-card) 94%, var(--bg-main) 6%);
   padding: 0.75rem 0.85rem;
   color: var(--text-secondary);
   font-weight: 800;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1);
 }
 
 .auth-message.error {
+  border-color: color-mix(in srgb, #ef4444 42%, var(--border-main));
+  background: color-mix(in srgb, #ef4444 10%, var(--bg-card));
   color: #ef4444;
 }
 
