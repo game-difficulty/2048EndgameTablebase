@@ -398,6 +398,18 @@
       "completedWithErrors": "已完成（含错误）"
     }
   },
+  "billing": {
+    "open": "赞助充值",
+    "kicker": "赞助",
+    "title": "赞助 / 充值",
+    "subtitle": "扫码付款后由站长人工确认到账，充值额度会进入充值 token 余额。",
+    "qrAlt": "微信收款码",
+    "wechatQr": "微信收款码",
+    "sponsorAmount": "赞助金额",
+    "manualTitle": "人工确认到账",
+    "manualNote": "当前版本不会自动到账。付款后请等待站长人工确认；确认前账号余额不会变化。",
+    "remarkNote": "付款备注建议填写：{identity}，便于人工对账。"
+  },
   "admin": {
     "open": "站长页",
     "kicker": "管理",
@@ -433,7 +445,27 @@
       "sessions": "会话",
       "usage": "操作",
       "created": "创建时间",
-      "lastLogin": "最近登录"
+      "lastLogin": "最近登录",
+      "actions": "操作"
+    },
+    "tokens": {
+      "adjust": "调整 token",
+      "kicker": "充值余额",
+      "title": "调整充值 token",
+      "balanceDetail": "赠送 {bonus} / 充值 {paid}",
+      "presetSmall": "+100,000（¥9.9）",
+      "presetLarge": "+2,000,000（¥99）",
+      "mode": "模式",
+      "modeAdd": "增加充值 token",
+      "modeSet": "设置充值 token 余额",
+      "amount": "Token 数量",
+      "paymentAmount": "支付金额（CNY）",
+      "paymentChannel": "支付渠道",
+      "reason": "备注",
+      "submit": "提交调整",
+      "updated": "Token 已更新。",
+      "updateFailed": "Token 调整失败。",
+      "defaultReason": "微信赞助人工确认"
     },
     "errors": {
       "loadFailed": "站长数据加载失败。"

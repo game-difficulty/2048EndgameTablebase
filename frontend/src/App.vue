@@ -88,8 +88,12 @@
           <span class="ui-body font-black text-accent">{{ formatTokens(authUser.token_balance?.total) }}</span>
         </div>
       </div>
-      <button type="button" class="action-btn-small mt-4 w-full justify-center" @click="handleLogout">
-        {{ $t('auth.actions.logout') }}
+      <button
+        type="button"
+        class="action-btn-small mt-4 w-full justify-center"
+        @click="openSponsorDialog"
+      >
+        {{ $t('billing.open') }}
       </button>
       <button
         v-if="canOpenAdmin"
@@ -107,6 +111,9 @@
           {{ $t('auth.account.deactivateAccount') }}
         </button>
       </div>
+      <button type="button" class="action-btn-small mt-2 w-full justify-center" @click="handleLogout">
+        {{ $t('auth.actions.logout') }}
+      </button>
     </div>
 
     <div class="flex-1 relative overflow-hidden">
@@ -195,6 +202,12 @@
       @close="closeAccountSecurity"
       @success="handleAccountSecuritySuccess"
       @deactivated="handleAccountDeactivated"
+    />
+
+    <SponsorDialog
+      :open="sponsorDialogOpen"
+      :user="authUser"
+      @close="closeSponsorDialog"
     />
 
     <div
@@ -290,6 +303,7 @@ import { useTabManager } from './app/useTabManager';
 import MainMenuView from './components/MainMenuView.vue';
 import AccountSecurityDialog from './features/auth/AccountSecurityDialog.vue';
 import AuthPage from './features/auth/AuthPage.vue';
+import SponsorDialog from './features/billing/SponsorDialog.vue';
 import ReplayAnalysisDialog from './features/replay/components/ReplayAnalysisDialog.vue';
 import { useAuthState } from './services/auth/authState';
 
@@ -324,6 +338,7 @@ const globalErrorExpanded = ref(false);
 const globalErrorQueue = [];
 const globalErrorCopied = ref(false);
 const accountMenuOpen = ref(false);
+const sponsorDialogOpen = ref(false);
 const accountSecurityDialog = ref({
   open: false,
   mode: 'changePassword',
@@ -610,6 +625,15 @@ const handleLogout = async () => {
 const openAdminPage = () => {
   accountMenuOpen.value = false;
   openTab(TAB_IDS.ADMIN);
+};
+
+const openSponsorDialog = () => {
+  accountMenuOpen.value = false;
+  sponsorDialogOpen.value = true;
+};
+
+const closeSponsorDialog = () => {
+  sponsorDialogOpen.value = false;
 };
 
 const openAccountSecurity = (mode) => {

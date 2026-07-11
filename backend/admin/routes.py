@@ -4,11 +4,12 @@ import os
 from datetime import timedelta
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 from backend.auth.db import auth_db
 from backend.auth.dependencies import require_user
 from backend.auth.service import iso, normalize_email, utcnow
+from backend.quota.service import adjust_paid_tokens_for_admin
 
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -166,6 +167,35 @@ def _query_users(db, q: str, limit: int) -> list[dict[str, Any]]:
     return [_user_payload(row) for row in rows]
 
 
+def _get_user_payload_by_id(db, user_id: int) -> dict[str, Any] | None:
+    rows = db.execute(
+        """
+        SELECT
+          users.id,
+          users.email,
+          users.display_name,
+          users.role,
+          users.status,
+          users.registered_with_invite,
+          users.created_at,
+          users.last_login_at,
+          COALESCE(token_accounts.bonus_balance_units, 0) AS bonus_balance_units,
+          COALESCE(token_accounts.paid_balance_units, 0) AS paid_balance_units,
+          COUNT(DISTINCT sessions.id) AS session_count,
+          COUNT(DISTINCT usage_events.id) AS usage_count
+        FROM users
+        LEFT JOIN token_accounts ON token_accounts.user_id = users.id
+        LEFT JOIN sessions ON sessions.user_id = users.id
+        LEFT JOIN usage_events ON usage_events.user_id = users.id
+        WHERE users.id = ?
+        GROUP BY users.id
+        LIMIT 1
+        """,
+        (int(user_id),),
+    ).fetchall()
+    return _user_payload(rows[0]) if rows else None
+
+
 @router.get("/overview")
 async def admin_overview(
     request: Request,
@@ -232,3 +262,32 @@ async def admin_overview(
         "users": users,
         "query": q,
     }
+
+
+@router.post("/users/{user_id}/tokens")
+async def admin_adjust_user_tokens(
+    user_id: int,
+    request: Request,
+    payload: dict = Body(...),
+):
+    admin_user = _require_admin(request)
+    try:
+        adjustment = adjust_paid_tokens_for_admin(
+            target_user_id=int(user_id),
+            admin_user=admin_user,
+            mode=str(payload.get("mode") or ""),
+            tokens=payload.get("tokens"),
+            reason=str(payload.get("reason") or ""),
+            payment_amount_cny=payload.get("payment_amount_cny"),
+            payment_channel=str(payload.get("payment_channel") or ""),
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="User not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    with auth_db() as db:
+        user = _get_user_payload_by_id(db, int(user_id))
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return {"user": user, "adjustment": adjustment}

@@ -1,9 +1,12 @@
 import { getBackendUrl } from '../runtime/backendUrl';
 import { emitAuthRequired } from '../auth/authEvents';
 
-async function requestJson(path) {
+async function requestJson(path, { method = 'GET', body } = {}) {
   const response = await fetch(getBackendUrl(path), {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
     credentials: 'include',
+    body: body ? JSON.stringify(body) : undefined,
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -30,4 +33,8 @@ export const adminClient = {
     params.set('limit', String(limit));
     return requestJson(`/api/admin/overview?${params.toString()}`);
   },
+  adjustUserTokens: (userId, payload) => requestJson(`/api/admin/users/${encodeURIComponent(userId)}/tokens`, {
+    method: 'POST',
+    body: payload,
+  }),
 };

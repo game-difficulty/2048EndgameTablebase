@@ -398,6 +398,18 @@
       "completedWithErrors": "Completed With Errors"
     }
   },
+  "billing": {
+    "open": "Sponsor / Recharge",
+    "kicker": "Sponsor",
+    "title": "Sponsor / Recharge",
+    "subtitle": "Scan the WeChat QR code. The balance is credited manually after admin confirmation.",
+    "qrAlt": "WeChat payment QR code",
+    "wechatQr": "WeChat payment QR",
+    "sponsorAmount": "Sponsor Amount",
+    "manualTitle": "Manual confirmation",
+    "manualNote": "This version does not credit tokens automatically. Please wait for admin confirmation after payment; your balance will not change before that.",
+    "remarkNote": "Suggested payment note: {identity}, so the admin can match the payment."
+  },
   "admin": {
     "open": "Admin",
     "kicker": "Operations",
@@ -433,7 +445,27 @@
       "sessions": "Sessions",
       "usage": "Actions",
       "created": "Created",
-      "lastLogin": "Last Login"
+      "lastLogin": "Last Login",
+      "actions": "Actions"
+    },
+    "tokens": {
+      "adjust": "Adjust tokens",
+      "kicker": "Paid balance",
+      "title": "Adjust paid tokens",
+      "balanceDetail": "Bonus {bonus} / Paid {paid}",
+      "presetSmall": "+100,000 (¥9.9)",
+      "presetLarge": "+2,000,000 (¥99)",
+      "mode": "Mode",
+      "modeAdd": "Add paid tokens",
+      "modeSet": "Set paid token balance",
+      "amount": "Token amount",
+      "paymentAmount": "Payment amount (CNY)",
+      "paymentChannel": "Payment channel",
+      "reason": "Reason",
+      "submit": "Submit adjustment",
+      "updated": "Tokens updated.",
+      "updateFailed": "Failed to adjust tokens.",
+      "defaultReason": "Manual WeChat sponsor confirmation"
     },
     "errors": {
       "loadFailed": "Failed to load admin data."

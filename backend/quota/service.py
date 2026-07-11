@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -21,6 +22,7 @@ from .errors import InsufficientTokens
 INVITED_WEEKLY_GRANT_UNITS = token_to_units(4096)
 PUBLIC_WEEKLY_GRANT_UNITS = token_to_units(256)
 WEEKLY_GRANT_INTERVAL = timedelta(days=7)
+MAX_ADMIN_TOKEN_ADJUSTMENT = 100_000_000
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,131 @@ def get_token_balance(user_id: int, *, db: sqlite3.Connection | None = None) -> 
     with _maybe_connection(db) as connection:
         row = _ensure_token_account(connection, int(user_id))
         return _public_balance(row)
+
+
+def _parse_admin_token_amount(value: Any, *, mode: str) -> tuple[int, float]:
+    try:
+        token_value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Token amount must be numeric.") from exc
+    if not math.isfinite(token_value):
+        raise ValueError("Token amount must be finite.")
+    if token_value < 0:
+        raise ValueError("Token amount must not be negative.")
+    if mode == "add_paid" and token_value <= 0:
+        raise ValueError("Token amount must be greater than zero.")
+    if token_value > MAX_ADMIN_TOKEN_ADJUSTMENT:
+        raise ValueError("Token amount is too large.")
+    units = token_to_units(token_value)
+    if units < 0:
+        raise ValueError("Token amount must not be negative.")
+    return units, units / TOKEN_UNIT
+
+
+def adjust_paid_tokens_for_admin(
+    *,
+    target_user_id: int,
+    admin_user: dict[str, Any],
+    mode: str,
+    tokens: Any,
+    reason: str = "",
+    payment_amount_cny: Any = None,
+    payment_channel: str = "",
+) -> dict[str, Any]:
+    normalized_mode = str(mode or "").strip()
+    if normalized_mode not in {"add_paid", "set_paid"}:
+        raise ValueError("Invalid token adjustment mode.")
+    reason_value = str(reason or "").strip()
+    if not reason_value:
+        raise ValueError("Reason is required.")
+    if len(reason_value) > 240:
+        raise ValueError("Reason is too long.")
+
+    token_units, token_value = _parse_admin_token_amount(tokens, mode=normalized_mode)
+    admin_user_id = int(admin_user.get("id") or 0)
+    admin_email = str(admin_user.get("email") or "")
+    admin_display_name = str(admin_user.get("display_name") or "")
+    payment_channel_value = str(payment_channel or "").strip()[:40]
+    payment_amount_value = None
+    if payment_amount_cny not in (None, ""):
+        try:
+            payment_amount_value = round(float(payment_amount_cny), 2)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Payment amount must be numeric.") from exc
+        if not math.isfinite(payment_amount_value) or payment_amount_value < 0:
+            raise ValueError("Payment amount must not be negative.")
+
+    with auth_db() as db:
+        target_user = db.execute(
+            "SELECT id, email, display_name, status FROM users WHERE id = ?",
+            (int(target_user_id),),
+        ).fetchone()
+        if target_user is None:
+            raise FileNotFoundError("User not found.")
+
+        before = _ensure_token_account(db, int(target_user_id))
+        before_paid_units = int(before["paid_balance_units"])
+        before_total_units = _balance_units(before)
+
+        if normalized_mode == "add_paid":
+            new_paid_units = before_paid_units + token_units
+            event_type = "admin_topup"
+        else:
+            new_paid_units = token_units
+            event_type = "admin_set_paid_balance"
+
+        if new_paid_units < 0:
+            raise ValueError("Paid token balance must not be negative.")
+        paid_delta_units = new_paid_units - before_paid_units
+        db.execute(
+            """
+            UPDATE token_accounts
+            SET paid_balance_units = ?, updated_at = ?
+            WHERE user_id = ?
+            """,
+            (new_paid_units, iso(), int(target_user_id)),
+        )
+        after = _ensure_token_account(db, int(target_user_id))
+        after_total_units = _balance_units(after)
+        ledger_id = _insert_ledger(
+            db,
+            user_id=int(target_user_id),
+            session_id=None,
+            event_type=event_type,
+            operation_key=normalized_mode,
+            table_pattern="",
+            table_multiplier_units=1000,
+            base_cost_units=-paid_delta_units if paid_delta_units > 0 else 0,
+            final_cost_units=-paid_delta_units if paid_delta_units > 0 else 0,
+            bonus_delta_units=0,
+            paid_delta_units=paid_delta_units,
+            balance_before_units=before_total_units,
+            balance_after_units=after_total_units,
+            metadata={
+                "admin_user_id": admin_user_id,
+                "admin_email": admin_email,
+                "admin_display_name": admin_display_name,
+                "target_user_id": int(target_user_id),
+                "target_email": target_user["email"],
+                "target_display_name": target_user["display_name"] or "",
+                "mode": normalized_mode,
+                "tokens": token_value,
+                "reason": reason_value,
+                "payment_amount_cny": payment_amount_value,
+                "payment_channel": payment_channel_value,
+                "before_paid_tokens": before_paid_units / TOKEN_UNIT,
+                "after_paid_tokens": new_paid_units / TOKEN_UNIT,
+                "before_total_tokens": before_total_units / TOKEN_UNIT,
+                "after_total_tokens": after_total_units / TOKEN_UNIT,
+            },
+        )
+        return {
+            "ledger_id": ledger_id,
+            "token_balance": _public_balance(after),
+            "paid_delta": paid_delta_units / TOKEN_UNIT,
+            "before_paid": before_paid_units / TOKEN_UNIT,
+            "after_paid": new_paid_units / TOKEN_UNIT,
+        }
 
 
 def _weekly_grant_for_user(db: sqlite3.Connection, user_id: int) -> tuple[int, str]:
