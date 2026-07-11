@@ -408,7 +408,7 @@
     "sponsorAmount": "赞助金额",
     "manualTitle": "人工确认到账",
     "manualNote": "当前版本不会自动到账。付款后请等待站长人工确认；确认前账号余额不会变化。",
-    "remarkNote": "付款备注建议填写：{identity}，便于人工对账。"
+    "remarkNote": "付款备注务必填写注册邮箱或用户名，推荐直接填写：{identity}。未备注可能无法人工确认到账。"
   },
   "admin": {
     "open": "站长页",

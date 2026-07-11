@@ -408,7 +408,7 @@
     "sponsorAmount": "Sponsor Amount",
     "manualTitle": "Manual confirmation",
     "manualNote": "This version does not credit tokens automatically. Please wait for admin confirmation after payment; your balance will not change before that.",
-    "remarkNote": "Suggested payment note: {identity}, so the admin can match the payment."
+    "remarkNote": "Your payment note must include your registered email or username. Recommended exact note: {identity}. Without a note, the payment may not be credited manually."
   },
   "admin": {
     "open": "Admin",
