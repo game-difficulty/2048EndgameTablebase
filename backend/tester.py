@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 import random
 
 import numpy as np
@@ -51,6 +52,31 @@ LATEST_TESTER_REPLAY = {
     "source": "",
     "use_variant": False,
 }
+LATEST_TESTER_REPLAY_BY_SCOPE = OrderedDict()
+MAX_SCOPED_LATEST_TESTER_REPLAYS = 256
+
+
+def _empty_latest_tester_replay():
+    return {"record": empty_replay(), "pattern": "", "source": "", "use_variant": False}
+
+
+def _latest_tester_replay_scope_key(session):
+    auth_session_id = getattr(session, "auth_session_id", None)
+    if auth_session_id is not None:
+        return f"session:{int(auth_session_id)}"
+    user_id = getattr(session, "user_id", None)
+    if user_id is not None:
+        return f"user:{int(user_id)}"
+    return ""
+
+
+def get_scoped_latest_tester_replay(session):
+    key = _latest_tester_replay_scope_key(session)
+    if key and key in LATEST_TESTER_REPLAY_BY_SCOPE:
+        cached = LATEST_TESTER_REPLAY_BY_SCOPE.pop(key)
+        LATEST_TESTER_REPLAY_BY_SCOPE[key] = cached
+        return cached
+    return getattr(session, "latest_tester_replay", _empty_latest_tester_replay())
 
 
 def _tester_reset_metrics(session):
@@ -95,13 +121,25 @@ def _cache_tester_replay(session):
         return
     replay = session.tester_record[: session.tester_step_count + 1].copy()
     replay[session.tester_step_count] = TESTER_REPLAY_SENTINEL
-    session.latest_tester_replay = {
-        "record": strip_replay_sentinel(replay),
+    cached_record = strip_replay_sentinel(replay)
+    latest_replay = {
+        "record": cached_record.copy(),
         "pattern": session.tester_full_pattern,
         "source": "Tester session",
         "use_variant": bool(session.use_variant),
     }
-    LATEST_TESTER_REPLAY["record"] = strip_replay_sentinel(replay)
+    session.latest_tester_replay = latest_replay
+    key = _latest_tester_replay_scope_key(session)
+    if key:
+        LATEST_TESTER_REPLAY_BY_SCOPE[key] = {
+            **latest_replay,
+            "record": cached_record.copy(),
+        }
+        LATEST_TESTER_REPLAY_BY_SCOPE.move_to_end(key)
+        while len(LATEST_TESTER_REPLAY_BY_SCOPE) > MAX_SCOPED_LATEST_TESTER_REPLAYS:
+            LATEST_TESTER_REPLAY_BY_SCOPE.popitem(last=False)
+
+    LATEST_TESTER_REPLAY["record"] = cached_record.copy()
     LATEST_TESTER_REPLAY["pattern"] = session.tester_full_pattern
     LATEST_TESTER_REPLAY["source"] = "Tester session"
     LATEST_TESTER_REPLAY["use_variant"] = bool(session.use_variant)

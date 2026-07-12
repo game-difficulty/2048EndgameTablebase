@@ -21,7 +21,7 @@ from ..replay import (
     send_replay_state,
 )
 from ..session import GameSession
-from ..tester import LATEST_TESTER_REPLAY
+from ..tester import LATEST_TESTER_REPLAY, get_scoped_latest_tester_replay
 from ..webview_api import Api
 
 
@@ -64,11 +64,7 @@ def _load_replay_upload(session: GameSession, upload_id: str, filename: str = ""
 
 def _get_latest_tester_replay(session: GameSession) -> dict[str, Any]:
     if is_cloud_mode():
-        return getattr(
-            session,
-            "latest_tester_replay",
-            {"record": [], "pattern": "", "source": "", "use_variant": False},
-        )
+        return get_scoped_latest_tester_replay(session)
     return LATEST_TESTER_REPLAY
 
 
