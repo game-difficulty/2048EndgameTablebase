@@ -21,6 +21,8 @@ import {
 } from '../../../utils/successRate';
 
 export function useTesterSession(activeRef) {
+  const DEFAULT_TABLEBASE_PATTERN = '442t';
+  const DEFAULT_TABLEBASE_TARGET = '512';
   const { config: appConfig } = useAppSettingsStore();
   const { isAuthenticated, requireAuth } = useAuthState();
 
@@ -74,8 +76,8 @@ export function useTesterSession(activeRef) {
   const showInsights = ref(true);
   const patternCategories = ref(fallbackPatternCategories);
   const availableTargets = ref(['64', '128', '256', '512', '1024', '2048', '4096', '8192', '16384']);
-  const selectedPattern = ref('L3');
-  const selectedTarget = ref('512');
+  const selectedPattern = ref(DEFAULT_TABLEBASE_PATTERN);
+  const selectedTarget = ref(DEFAULT_TABLEBASE_TARGET);
   const activePatternCategory = ref(Object.keys(fallbackPatternCategories)[0] || '');
   const patternMenuOpen = ref(false);
   const currentBoardHex = ref('0000000000000000');
@@ -413,16 +415,24 @@ export function useTesterSession(activeRef) {
     };
   };
 
+  const preferredTargetFrom = (targets) => (
+    targets.includes(DEFAULT_TABLEBASE_TARGET) ? DEFAULT_TABLEBASE_TARGET : (targets[0] || '')
+  );
+
   const ensureDefaultSelection = () => {
     const groups = patternGroups.value;
     if (!groups.length) return;
     selectedPattern.value = flatPatterns.value.includes(selectedPattern.value)
       ? selectedPattern.value
-      : (groups[0].patterns[0] || '');
+      : (
+        flatPatterns.value.includes(DEFAULT_TABLEBASE_PATTERN)
+          ? DEFAULT_TABLEBASE_PATTERN
+          : (groups[0].patterns[0] || '')
+      );
     const targets = availableTargetsForPattern.value;
     selectedTarget.value = targets.includes(selectedTarget.value)
       ? selectedTarget.value
-      : (targets.includes('512') ? '512' : (targets[0] || ''));
+      : preferredTargetFrom(targets);
     syncCategoryFromPattern(selectedPattern.value);
   };
 

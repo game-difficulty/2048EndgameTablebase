@@ -22,6 +22,8 @@ import {
 export function useTrainerSession(activeRef) {
   const RESULT_REFRESH_GRACE_MS = 180;
   const RESULT_REFRESH_PLACEHOLDER_MS = 1400;
+  const DEFAULT_TABLEBASE_PATTERN = '442t';
+  const DEFAULT_TABLEBASE_TARGET = '512';
   const {
     config: appConfig,
     categories: appCategories,
@@ -270,8 +272,21 @@ export function useTrainerSession(activeRef) {
   };
 
   const preferredTargetFrom = (targets) => (
-    targets.includes('512') ? '512' : (targets[0] || '')
+    targets.includes(DEFAULT_TABLEBASE_TARGET) ? DEFAULT_TABLEBASE_TARGET : (targets[0] || '')
   );
+
+  const chooseDefaultCatalogSelection = (patterns) => {
+    const nextPattern = patterns.includes(DEFAULT_TABLEBASE_PATTERN)
+      ? DEFAULT_TABLEBASE_PATTERN
+      : (patterns[0] || '');
+    const nextTargets = getCatalogTargetsForPattern(catalogTables.value, nextPattern);
+    return {
+      pattern: nextPattern,
+      target: nextTargets.includes(DEFAULT_TABLEBASE_TARGET)
+        ? DEFAULT_TABLEBASE_TARGET
+        : preferredTargetFrom(nextTargets),
+    };
+  };
 
   const ensureTargetForCurrentPattern = () => {
     const targets = availableTargetsForPattern.value;
@@ -324,7 +339,9 @@ export function useTrainerSession(activeRef) {
         patternCategories.value = { cloud: patterns };
         availableTargets.value = getCatalogTargets(tables);
         if (!patternType.value || !patterns.includes(patternType.value)) {
-          patternType.value = patterns[0] || '';
+          const defaults = chooseDefaultCatalogSelection(patterns);
+          patternType.value = defaults.pattern;
+          targetValue.value = defaults.target;
         }
         ensureTargetForCurrentPattern();
         syncActivePatternCategory();
