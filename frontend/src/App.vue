@@ -51,9 +51,6 @@
               {{ accountInitials }}
             </span>
             <span class="hidden max-w-[9rem] truncate sm:inline">{{ accountDisplayName }}</span>
-            <span v-if="hasSupporterPresentation" class="account-mini-badge">
-              {{ $t('auth.account.supporterShort') }}
-            </span>
           </button>
         </template>
         <template v-else>
@@ -80,9 +77,6 @@
           <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('auth.account.title') }}</div>
           <div class="mt-1 truncate ui-body font-black">{{ accountDisplayName }}</div>
           <div class="truncate text-[0.72rem] font-bold text-text-secondary">{{ authUser.email }}</div>
-          <div v-if="hasSupporterPresentation" class="mt-2">
-            <span class="account-supporter-pill">{{ $t('auth.account.supporter') }}</span>
-          </div>
         </div>
       </div>
       <div class="mt-4 grid gap-2 rounded-xl border border-border-main bg-bg-main/55 p-3">
@@ -801,6 +795,7 @@ onUnmounted(() => {
 
 .account-avatar {
   display: inline-flex;
+  position: relative;
   width: 1.5rem;
   height: 1.5rem;
   align-items: center;
@@ -830,29 +825,30 @@ onUnmounted(() => {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
-.account-mini-badge,
-.account-supporter-pill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--accent) 54%, transparent);
+.account-avatar.supporter::after {
+  content: "";
+  position: absolute;
+  right: -0.12rem;
+  bottom: -0.12rem;
+  width: 0.58rem;
+  height: 0.58rem;
+  border: 1px solid color-mix(in srgb, var(--bg-card) 92%, white);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
-  font-size: 0.65rem;
-  font-weight: 950;
-  line-height: 1;
+  background:
+    radial-gradient(circle at 50% 50%, var(--bg-card) 0 16%, transparent 18%),
+    conic-gradient(from 45deg,
+      var(--accent) 0 25%,
+      color-mix(in srgb, var(--success) 76%, var(--accent)) 25% 50%,
+      var(--accent) 50% 75%,
+      color-mix(in srgb, var(--success) 76%, var(--accent)) 75% 100%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
-.account-mini-badge {
-  min-width: 1.2rem;
-  height: 1.2rem;
-  padding: 0 0.3rem;
-}
-
-.account-supporter-pill {
-  padding: 0.24rem 0.55rem;
-  text-transform: uppercase;
+.account-avatar.large.supporter::after {
+  right: -0.08rem;
+  bottom: -0.08rem;
+  width: 0.68rem;
+  height: 0.68rem;
 }
 
 .account-menu-head {
