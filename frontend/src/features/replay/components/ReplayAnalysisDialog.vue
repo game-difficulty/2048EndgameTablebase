@@ -107,12 +107,16 @@
                   {{ isRunning ? $t('analysis.progress.running') : $t('analysis.input.analyze') }}
                 </button>
               </div>
+              <div v-if="analysisError" class="analysis-error" role="alert">
+                {{ analysisError }}
+              </div>
               <button
                 v-if="downloadUrl"
                 class="analysis-secondary-btn"
+                :disabled="isDownloading"
                 @click="downloadResults"
               >
-                {{ $t('analysis.input.downloadResults') }}
+                {{ isDownloading ? $t('analysis.input.downloadingResults') : $t('analysis.input.downloadResults') }}
               </button>
             </div>
           </section>
@@ -189,6 +193,7 @@ import { useI18n } from 'vue-i18n';
 import UiSelect from '../../../components/UiSelect.vue';
 import { downloadResponse, pickBrowserFiles, postMultipart } from '../../../services/files/browserFiles';
 import { useAuthState } from '../../../services/auth/authState';
+import { authHeaders } from '../../../services/auth/sessionTokenStore';
 import { getBackendUrl } from '../../../services/runtime/backendUrl';
 import {
   fetchTablebaseCatalog,
@@ -233,6 +238,8 @@ const currentFile = ref('');
 const entries = ref([]);
 const listViewportRef = ref(null);
 const listScrollTop = ref(0);
+const analysisError = ref('');
+const isDownloading = ref(false);
 
 let client = null;
 const LIST_ITEM_HEIGHT = 62;
@@ -404,10 +411,30 @@ const pickFiles = async () => {
     multiple: true,
   });
   if (files.length) {
+    analysisError.value = '';
     selectedFiles.value = files;
     pathsInput.value = files.map((file) => file.name).join('\n');
     downloadUrl.value = '';
   }
+};
+
+const formatAnalysisError = (error) => {
+  if (error?.code === 'NETWORK_ERROR' || /failed to fetch/i.test(String(error?.message || ''))) {
+    return t('analysis.errors.network');
+  }
+  if (error?.status === 401) {
+    return t('analysis.errors.authRequired');
+  }
+  if (error?.status === 402 || error?.code === 'INSUFFICIENT_TOKENS') {
+    return t('analysis.errors.insufficientTokens');
+  }
+  if (error?.status === 404 || /analysis job not found/i.test(String(error?.message || ''))) {
+    return t('analysis.errors.expired');
+  }
+  if (error?.status === 409) {
+    return t('analysis.errors.notReady');
+  }
+  return String(error?.message || error || t('analysis.errors.generic'));
 };
 
 const handleListScroll = (event) => {
@@ -420,6 +447,7 @@ const startAnalysis = async () => {
   if (!requireAuth()) return;
   if (!canAnalyze.value || !client) return;
   isRunning.value = true;
+  analysisError.value = '';
   downloadUrl.value = '';
   completedCount.value = 0;
   totalCount.value = 0;
@@ -441,15 +469,30 @@ const startAnalysis = async () => {
   } catch (error) {
     isRunning.value = false;
     failedCount.value = 1;
-    currentFile.value = String(error?.message || error);
+    analysisError.value = formatAnalysisError(error);
+    currentFile.value = analysisError.value;
   }
 };
 
 const downloadResults = async () => {
   if (!requireAuth()) return;
   if (!downloadUrl.value) return;
-  const response = await fetch(getBackendUrl(downloadUrl.value), { credentials: 'include' });
-  await downloadResponse(response);
+  isDownloading.value = true;
+  analysisError.value = '';
+  try {
+    const response = await fetch(getBackendUrl(downloadUrl.value), {
+      credentials: 'include',
+      headers: authHeaders(),
+    });
+    await downloadResponse(response);
+  } catch (error) {
+    analysisError.value = formatAnalysisError(error);
+    if (error?.status === 404) {
+      downloadUrl.value = '';
+    }
+  } finally {
+    isDownloading.value = false;
+  }
 };
 
 const handleMessage = (message) => {
@@ -469,6 +512,7 @@ const handleMessage = (message) => {
 
   if (message.type === 'ANALYSIS_STARTED') {
     isRunning.value = true;
+    analysisError.value = '';
     completedCount.value = 0;
     totalCount.value = Number(message.payload?.total || 0);
     doneCount.value = 0;
@@ -502,6 +546,7 @@ const handleMessage = (message) => {
 
   if (message.type === 'ANALYSIS_FINISHED') {
     isRunning.value = false;
+    analysisError.value = '';
     totalCount.value = Number(message.payload?.total || totalCount.value);
     completedCount.value = totalCount.value;
     doneCount.value = Number(message.payload?.done || doneCount.value);
@@ -514,7 +559,8 @@ const handleMessage = (message) => {
   if (message.type === 'ANALYSIS_FAILED') {
     isRunning.value = false;
     failedCount.value = Math.max(1, failedCount.value);
-    currentFile.value = message.payload?.message || '';
+    analysisError.value = formatAnalysisError({ message: message.payload?.message || '' });
+    currentFile.value = analysisError.value;
   }
 };
 
@@ -681,6 +727,17 @@ onMounted(() => {
 .analysis-primary-btn:disabled {
   cursor: not-allowed;
   opacity: 0.48;
+}
+
+.analysis-error {
+  border-radius: 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 45%, var(--border-main));
+  background: color-mix(in srgb, var(--danger, #ef4444) 10%, var(--bg-card));
+  color: color-mix(in srgb, var(--danger, #ef4444) 85%, var(--text-main));
+  padding: 0.72rem 0.9rem;
+  font-size: var(--font-ui-sm);
+  font-weight: 900;
+  line-height: 1.45;
 }
 
 .analysis-primary-btn {

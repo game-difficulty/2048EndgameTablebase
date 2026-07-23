@@ -259,7 +259,10 @@ def cleanup_expired_jobs(
     removed = 0
     with JOB_LOCK:
         for job_id, job in list(JOBS.items()):
-            if job.created_at >= cutoff:
+            if job.status in {"queued", "running"}:
+                continue
+            cleanup_timestamp = job.updated_at or job.created_at
+            if cleanup_timestamp >= cutoff:
                 continue
             _remove_job_files(job)
             JOBS.pop(job_id, None)

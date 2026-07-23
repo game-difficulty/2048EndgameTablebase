@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from backend.auth.db import auth_db
+from backend.auth.entitlements import mark_user_supporter
 
 from .config import (
     TOKEN_UNIT,
@@ -137,6 +138,7 @@ def adjust_paid_tokens_for_admin(
     reason: str = "",
     payment_amount_cny: Any = None,
     payment_channel: str = "",
+    set_supporter: bool = False,
 ) -> dict[str, Any]:
     normalized_mode = str(mode or "").strip()
     if normalized_mode not in {"add_paid", "set_paid"}:
@@ -193,6 +195,13 @@ def adjust_paid_tokens_for_admin(
         )
         after = _ensure_token_account(db, int(target_user_id))
         after_total_units = _balance_units(after)
+        entitlements = None
+        if bool(set_supporter):
+            entitlements = mark_user_supporter(
+                db,
+                int(target_user_id),
+                notes=reason_value,
+            )
         ledger_id = _insert_ledger(
             db,
             user_id=int(target_user_id),
@@ -219,6 +228,7 @@ def adjust_paid_tokens_for_admin(
                 "reason": reason_value,
                 "payment_amount_cny": payment_amount_value,
                 "payment_channel": payment_channel_value,
+                "set_supporter": bool(set_supporter),
                 "before_paid_tokens": before_paid_units / TOKEN_UNIT,
                 "after_paid_tokens": new_paid_units / TOKEN_UNIT,
                 "before_total_tokens": before_total_units / TOKEN_UNIT,
@@ -231,6 +241,7 @@ def adjust_paid_tokens_for_admin(
             "paid_delta": paid_delta_units / TOKEN_UNIT,
             "before_paid": before_paid_units / TOKEN_UNIT,
             "after_paid": new_paid_units / TOKEN_UNIT,
+            "entitlements": entitlements,
         }
 
 

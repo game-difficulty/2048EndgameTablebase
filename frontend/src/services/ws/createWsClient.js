@@ -1,5 +1,6 @@
 import { getBackendWebSocketUrl } from '../runtime/backendUrl';
 import { emitAuthRequired, emitTokenBalanceUpdated, emitTokenRequired } from '../auth/authEvents';
+import { clearDeviceSession, getDeviceSessionToken } from '../auth/sessionTokenStore';
 
 export function createWsClient({
   clientId,
@@ -13,6 +14,7 @@ export function createWsClient({
   let socket = null;
   let reconnectTimer = null;
   let shouldReconnect = true;
+  let authTokenSent = '';
   const pendingPayloads = [];
 
   const clearReconnectTimer = () => {
@@ -36,6 +38,14 @@ export function createWsClient({
     socket = new WebSocket(resolveUrl());
 
     socket.onopen = () => {
+      const token = getDeviceSessionToken();
+      if (token && socket?.readyState === WebSocket.OPEN) {
+        authTokenSent = token;
+        socket.send(JSON.stringify({
+          action: 'AUTH_SESSION',
+          data: { token },
+        }));
+      }
       while (pendingPayloads.length > 0 && socket?.readyState === WebSocket.OPEN) {
         socket.send(pendingPayloads.shift());
       }
@@ -51,6 +61,9 @@ export function createWsClient({
         return;
       }
       if (message?.action === 'AUTH_REQUIRED' || message?.data?.code === 'AUTH_REQUIRED') {
+        if (authTokenSent && getDeviceSessionToken() === authTokenSent) {
+          clearDeviceSession();
+        }
         emitAuthRequired();
       }
       if (message?.action === 'TOKEN_REQUIRED' || message?.data?.code === 'INSUFFICIENT_TOKENS') {
@@ -64,6 +77,7 @@ export function createWsClient({
 
     socket.onclose = (event) => {
       socket = null;
+      authTokenSent = '';
       onClose?.(event);
       if (shouldReconnect) {
         reconnectTimer = window.setTimeout(connect, reconnectDelay);

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .db import auth_db
+from .entitlements import get_user_entitlements
 from .mailer import send_verification_email
 from .security import constant_time_equal, hash_password, hash_token, new_token, verify_password
 from backend.quota.service import get_token_balance, grant_weekly_tokens_if_due
@@ -133,6 +134,7 @@ def public_user(
         "status": row["status"],
         "email_verified": bool(row["email_verified_at"]),
         "token_balance": get_token_balance(user_id, db=db),
+        "entitlements": get_user_entitlements(user_id, db=db),
     }
 
 

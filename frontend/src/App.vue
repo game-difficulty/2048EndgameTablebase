@@ -348,6 +348,9 @@ const tokenRequiredDialog = ref({
   required_tokens: 0,
   balance_tokens: 0,
 });
+const AUTH_REFRESH_CHECK_KEY = '2048tables:last-auth-refresh-check';
+const AUTH_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+let scheduledAuthRefreshTimer = null;
 const { start: startAppSettings, stop: stopAppSettings } = useAppSettingsStore();
 const {
   activeTab,
@@ -381,6 +384,45 @@ const formatTokens = (value) => {
     maximumFractionDigits: 3,
   });
 };
+
+const readLastScheduledAuthRefresh = () => {
+  try {
+    return Number.parseInt(window.localStorage.getItem(AUTH_REFRESH_CHECK_KEY) || '0', 10) || 0;
+  } catch (error) {
+    return 0;
+  }
+};
+
+const writeLastScheduledAuthRefresh = (value = Date.now()) => {
+  try {
+    window.localStorage.setItem(AUTH_REFRESH_CHECK_KEY, String(value));
+  } catch (error) {
+    // localStorage may be unavailable in strict privacy modes; the server still guards grants.
+  }
+};
+
+const shouldRunScheduledAuthRefresh = (now = Date.now()) => (
+  now - readLastScheduledAuthRefresh() >= AUTH_REFRESH_INTERVAL_MS
+);
+
+const runScheduledAuthRefresh = async () => {
+  if (!authUser.value) {
+    return;
+  }
+  const now = Date.now();
+  if (!shouldRunScheduledAuthRefresh(now)) {
+    return;
+  }
+  writeLastScheduledAuthRefresh(now);
+  await refreshAuth();
+};
+
+const handleAuthVisibilityChange = () => {
+  if (document.visibilityState === 'visible') {
+    runScheduledAuthRefresh();
+  }
+};
+
 const openAnalysisDialog = (context = {}) => {
   analysisDialogContext.value = { ...(context || {}) };
   analysisDialogOpen.value = true;
@@ -609,6 +651,7 @@ const handleTabDragEnd = () => {
 };
 
 const handleAuthenticated = (authenticatedUser) => {
+  writeLastScheduledAuthRefresh();
   setAuthenticatedUser(authenticatedUser);
   closeAuthDialog();
 };
@@ -696,7 +739,12 @@ const handleAccountMenuPointerDown = (event) => {
 
 onMounted(async () => {
   startAppSettings();
-  refreshAuth();
+  refreshAuth().then((nextUser) => {
+    if (nextUser) {
+      writeLastScheduledAuthRefresh();
+    }
+  });
+  scheduledAuthRefreshTimer = window.setInterval(runScheduledAuthRefresh, AUTH_REFRESH_INTERVAL_MS);
 
   for (const payload of readPendingGlobalErrors()) {
     enqueueGlobalError(payload);
@@ -704,6 +752,7 @@ onMounted(async () => {
   window.addEventListener('app-global-error', handleGlobalErrorEvent);
   window.addEventListener('auth-required', handleAuthRequired);
   window.addEventListener('token-required', handleTokenRequired);
+  document.addEventListener('visibilitychange', handleAuthVisibilityChange);
   document.addEventListener('pointerdown', handleAccountMenuPointerDown, true);
   document.addEventListener('pointerup', handleGlobalPointerUp, true);
   document.addEventListener('keydown', handleGlobalBoardHotkeyFocus, true);
@@ -713,9 +762,14 @@ onUnmounted(() => {
   window.removeEventListener('app-global-error', handleGlobalErrorEvent);
   window.removeEventListener('auth-required', handleAuthRequired);
   window.removeEventListener('token-required', handleTokenRequired);
+  document.removeEventListener('visibilitychange', handleAuthVisibilityChange);
   document.removeEventListener('pointerdown', handleAccountMenuPointerDown, true);
   document.removeEventListener('pointerup', handleGlobalPointerUp, true);
   document.removeEventListener('keydown', handleGlobalBoardHotkeyFocus, true);
+  if (scheduledAuthRefreshTimer !== null) {
+    window.clearInterval(scheduledAuthRefreshTimer);
+    scheduledAuthRefreshTimer = null;
+  }
   stopAppSettings();
 });
 </script>

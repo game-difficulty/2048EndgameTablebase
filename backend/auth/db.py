@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -34,6 +35,10 @@ def _canonical_email_identity(email: str) -> str:
 
 def get_auth_db_path() -> Path:
     return Path(os.getenv("CLOUD_AUTH_DB") or DEFAULT_AUTH_DB)
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 @contextmanager
@@ -175,6 +180,19 @@ def init_auth_db() -> None:
               FOREIGN KEY(user_id) REFERENCES users(id)
             );
 
+            CREATE TABLE IF NOT EXISTS user_entitlements (
+              user_id INTEGER PRIMARY KEY,
+              tier TEXT NOT NULL DEFAULT 'free',
+              supporter_since TEXT,
+              supporter_until TEXT,
+              show_supporter_badge INTEGER NOT NULL DEFAULT 1,
+              can_upload_avatar INTEGER NOT NULL DEFAULT 0,
+              notes TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
             CREATE TABLE IF NOT EXISTS token_ledger (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               user_id INTEGER NOT NULL,
@@ -233,6 +251,7 @@ def init_auth_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_events(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_token_ledger_user_created ON token_ledger(user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_user_entitlements_tier ON user_entitlements(tier);
             CREATE INDEX IF NOT EXISTS idx_uploads_user ON uploads(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_analysis_jobs_user ON analysis_jobs(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_verification_codes(email, purpose);
@@ -277,4 +296,37 @@ def init_auth_db() -> None:
             ON users(email_identity)
             WHERE email_identity IS NOT NULL
             """
+        )
+
+        now = _iso_now()
+        db.execute(
+            """
+            INSERT OR IGNORE INTO user_entitlements
+            (user_id, tier, supporter_since, show_supporter_badge, can_upload_avatar, created_at, updated_at)
+            SELECT
+              users.id,
+              CASE WHEN COALESCE(token_accounts.paid_balance_units, 0) > 0 THEN 'supporter' ELSE 'free' END,
+              CASE WHEN COALESCE(token_accounts.paid_balance_units, 0) > 0 THEN ? ELSE NULL END,
+              1,
+              0,
+              ?,
+              ?
+            FROM users
+            LEFT JOIN token_accounts ON token_accounts.user_id = users.id
+            """,
+            (now, now, now),
+        )
+        db.execute(
+            """
+            UPDATE user_entitlements
+            SET tier = 'supporter',
+                supporter_since = COALESCE(supporter_since, ?),
+                show_supporter_badge = 1,
+                updated_at = ?
+            WHERE tier != 'supporter'
+              AND user_id IN (
+                SELECT user_id FROM token_accounts WHERE paid_balance_units > 0
+              )
+            """,
+            (now, now),
         )

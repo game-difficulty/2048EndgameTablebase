@@ -25,38 +25,136 @@
         </div>
       </section>
 
-      <section class="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-        <div class="admin-panel">
-          <div class="admin-panel-head">
-            <h2>{{ $t('admin.traffic.title') }}</h2>
-            <span>{{ $t('admin.traffic.range') }}</span>
+      <section class="admin-panel">
+        <div class="admin-panel-head">
+          <div>
+            <h2>{{ $t('admin.tokenActivity.title') }}</h2>
+            <span>{{ $t('admin.tokenActivity.range') }}</span>
           </div>
-          <div class="mt-4 grid gap-2">
-            <div v-for="row in trafficRows" :key="row.date" class="admin-traffic-row">
-              <span class="admin-date">{{ row.date.slice(5) }}</span>
-              <div class="admin-bar-track">
-                <div class="admin-bar" :style="{ width: `${trafficWidth(row)}%` }" />
-              </div>
-              <span class="admin-count">{{ rowTotal(row) }}</span>
-              <span class="admin-row-note">
-                {{ $t('admin.traffic.row', row) }}
-              </span>
-            </div>
+          <div class="admin-chart-legend">
+            <span><i class="legend-token" />{{ $t('admin.tokenActivity.tokens') }}</span>
+            <span><i class="legend-users" />{{ $t('admin.tokenActivity.users') }}</span>
           </div>
         </div>
-
-        <div class="admin-panel">
-          <div class="admin-panel-head">
-            <h2>{{ $t('admin.operations.title') }}</h2>
-            <span>{{ $t('admin.operations.range') }}</span>
-          </div>
-          <div class="mt-4 grid gap-2">
-            <div v-if="!operations.length" class="admin-empty">{{ $t('admin.empty') }}</div>
-            <div v-for="item in operations" :key="item.event_type" class="flex items-center justify-between gap-3 rounded-xl border border-border-main bg-bg-main/55 px-3 py-2">
-              <span class="truncate ui-caption font-black text-text-secondary">{{ item.event_type }}</span>
-              <span class="ui-body font-black text-text-main">{{ formatNumber(item.count) }}</span>
-            </div>
-          </div>
+        <div class="admin-chart-wrap">
+          <svg
+            class="admin-line-chart"
+            viewBox="0 0 960 340"
+            role="img"
+            :aria-label="$t('admin.tokenActivity.title')"
+            @pointerleave="hideChartTooltip"
+          >
+            <g class="chart-grid">
+              <line
+                v-for="tick in tokenChart.leftTicks"
+                :key="`grid-${tick.y}`"
+                :x1="tokenChart.left"
+                :x2="tokenChart.right"
+                :y1="tick.y"
+                :y2="tick.y"
+              />
+            </g>
+            <g class="chart-axis">
+              <line :x1="tokenChart.left" :x2="tokenChart.left" :y1="tokenChart.top" :y2="tokenChart.bottom" />
+              <line :x1="tokenChart.right" :x2="tokenChart.right" :y1="tokenChart.top" :y2="tokenChart.bottom" />
+              <line :x1="tokenChart.left" :x2="tokenChart.right" :y1="tokenChart.bottom" :y2="tokenChart.bottom" />
+            </g>
+            <g class="chart-labels">
+              <text
+                v-for="tick in tokenChart.leftTicks"
+                :key="`left-${tick.y}`"
+                :x="tokenChart.left - 12"
+                :y="tick.y + 4"
+                text-anchor="end"
+              >
+                {{ formatCompact(tick.value) }}
+              </text>
+              <text
+                v-for="tick in tokenChart.rightTicks"
+                :key="`right-${tick.y}`"
+                :x="tokenChart.right + 12"
+                :y="tick.y + 4"
+              >
+                {{ formatCompact(tick.value) }}
+              </text>
+              <text
+                v-for="label in tokenChart.xLabels"
+                :key="label.date"
+                :x="label.x"
+                :y="tokenChart.bottom + 30"
+                text-anchor="middle"
+              >
+                {{ label.label }}
+              </text>
+            </g>
+            <polyline class="chart-line token-line" :points="tokenChart.tokenPoints" />
+            <polyline class="chart-line users-line" :points="tokenChart.userPoints" />
+            <g v-if="activeChartPoint" class="chart-hover-layer">
+              <line
+                class="chart-hover-line"
+                :x1="activeChartPoint.x"
+                :x2="activeChartPoint.x"
+                :y1="tokenChart.top"
+                :y2="tokenChart.bottom"
+              />
+              <circle class="chart-point token-point active" :cx="activeChartPoint.x" :cy="activeChartPoint.tokenY" r="6" />
+              <circle class="chart-point users-point active" :cx="activeChartPoint.x" :cy="activeChartPoint.userY" r="6" />
+              <foreignObject
+                class="chart-tooltip-object"
+                :x="activeChartPoint.tooltipX"
+                :y="activeChartPoint.tooltipY"
+                width="188"
+                height="88"
+              >
+                <div xmlns="http://www.w3.org/1999/xhtml" class="admin-chart-tooltip">
+                  <div class="tooltip-date">{{ activeChartPoint.date }}</div>
+                  <div class="tooltip-row">
+                    <span><i class="legend-token" />{{ $t('admin.tokenActivity.tokens') }}</span>
+                    <strong>{{ formatTokens(activeChartPoint.tokens) }}</strong>
+                  </div>
+                  <div class="tooltip-row">
+                    <span><i class="legend-users" />{{ $t('admin.tokenActivity.users') }}</span>
+                    <strong>{{ formatNumber(activeChartPoint.usersCount) }}</strong>
+                  </div>
+                </div>
+              </foreignObject>
+            </g>
+            <g>
+              <circle
+                v-for="point in tokenChart.points"
+                :key="`token-point-${point.date}`"
+                class="chart-point token-point"
+                :cx="point.x"
+                :cy="point.tokenY"
+                r="4"
+              />
+              <circle
+                v-for="point in tokenChart.points"
+                :key="`user-point-${point.date}`"
+                class="chart-point users-point"
+                :cx="point.x"
+                :cy="point.userY"
+                r="4"
+              />
+            </g>
+            <g class="chart-hit-layer">
+              <rect
+                v-for="point in tokenChart.points"
+                :key="`hit-${point.date}`"
+                class="chart-hit-area"
+                :x="point.hitX"
+                :y="tokenChart.top"
+                :width="point.hitWidth"
+                :height="tokenChart.bottom - tokenChart.top"
+                tabindex="0"
+                :aria-label="`${point.date}: ${formatTokens(point.tokens)} tokens, ${formatNumber(point.usersCount)} users`"
+                @pointerenter="showChartTooltip(point.index)"
+                @pointermove="showChartTooltip(point.index)"
+                @pointerdown.prevent="showChartTooltip(point.index)"
+                @focus="showChartTooltip(point.index)"
+              />
+            </g>
+          </svg>
         </div>
       </section>
 
@@ -68,9 +166,9 @@
               v-model="query"
               class="admin-search"
               :placeholder="$t('admin.users.searchPlaceholder')"
-              @keydown.enter.prevent="refresh"
+              @keydown.enter.prevent="runSearch"
             />
-            <button type="button" class="action-btn-small justify-center" @click="refresh">
+            <button type="button" class="action-btn-small justify-center" @click="runSearch">
               {{ $t('admin.users.search') }}
             </button>
           </div>
@@ -99,6 +197,9 @@
                 <td>
                   <div class="font-black text-text-main">{{ item.display_name || '-' }}</div>
                   <div class="text-[0.75rem] font-bold text-text-secondary">{{ item.email }}</div>
+                  <div v-if="item.entitlements?.is_supporter" class="mt-1">
+                    <span class="admin-tier-pill">{{ $t('admin.entitlements.supporter') }}</span>
+                  </div>
                 </td>
                 <td>
                   <span :class="['admin-status', item.status === 'active' ? 'active' : 'disabled']">
@@ -126,6 +227,52 @@
               </tr>
             </tbody>
           </table>
+        </div>
+        <div class="admin-pagination">
+          <button
+            type="button"
+            class="admin-page-nav-btn"
+            :aria-label="$t('admin.users.prevPage')"
+            :disabled="currentPage <= 1 || loading"
+            @click="goToPage(currentPage - 1)"
+          >
+            &lt;
+          </button>
+          <div class="admin-pagination-center">
+            <div class="ui-caption font-black text-text-secondary">
+              {{ $t('admin.users.pagination', {
+                start: userRangeStart,
+                end: userRangeEnd,
+                total: usersPage.total || 0,
+                page: usersPage.page || 1,
+                page_count: usersPage.page_count || 1
+              }) }}
+            </div>
+            <div class="admin-pagination-controls">
+              <template v-for="item in paginationItems" :key="item.key">
+                <span v-if="item.type === 'ellipsis'" class="admin-page-ellipsis">...</span>
+                <button
+                  v-else
+                  type="button"
+                  :class="['admin-page-btn', item.page === currentPage ? 'active' : '']"
+                  :disabled="loading || item.page === currentPage"
+                  :aria-current="item.page === currentPage ? 'page' : undefined"
+                  @click="goToPage(item.page)"
+                >
+                  {{ item.page }}
+                </button>
+              </template>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="admin-page-nav-btn"
+            :aria-label="$t('admin.users.nextPage')"
+            :disabled="currentPage >= pageCount || loading"
+            @click="goToPage(currentPage + 1)"
+          >
+            &gt;
+          </button>
         </div>
       </section>
     </div>
@@ -209,6 +356,11 @@
             <textarea v-model.trim="tokenAdjust.reason" class="admin-input min-h-[5rem] resize-y" />
           </label>
 
+          <label class="admin-check-row">
+            <input v-model="tokenAdjust.set_supporter" type="checkbox" />
+            <span>{{ $t('admin.tokens.setSupporter') }}</span>
+          </label>
+
           <div v-if="tokenAdjust.error" class="admin-alert error">{{ tokenAdjust.error }}</div>
           <div v-if="tokenAdjust.success" class="admin-alert success">{{ tokenAdjust.success }}</div>
 
@@ -235,7 +387,10 @@ const { t } = useI18n();
 const loading = ref(false);
 const error = ref('');
 const query = ref('');
+const currentPage = ref(1);
+const pageSize = 20;
 const overview = ref(null);
+const activeChartIndex = ref(null);
 const tokenAdjust = ref({
   open: false,
   user: null,
@@ -244,12 +399,18 @@ const tokenAdjust = ref({
   reason: '',
   payment_amount_cny: '9.9',
   payment_channel: 'wechat_manual',
+  set_supporter: true,
   submitting: false,
   error: '',
   success: '',
 });
 
 const formatNumber = (value) => Number(value || 0).toLocaleString();
+const formatCompact = (value) => Intl.NumberFormat(undefined, {
+  notation: Number(value || 0) >= 10000 ? 'compact' : 'standard',
+  minimumFractionDigits: 0,
+  maximumFractionDigits: Number(value || 0) >= 10000 ? 1 : 0,
+}).format(Number(value || 0));
 const formatTokens = (value) => Number(value || 0).toLocaleString(undefined, {
   minimumFractionDigits: 0,
   maximumFractionDigits: 3,
@@ -260,9 +421,54 @@ const formatDate = (value) => {
 };
 
 const summary = computed(() => overview.value?.summary || {});
-const trafficRows = computed(() => overview.value?.traffic || []);
-const operations = computed(() => overview.value?.operations || []);
+const activityRows = computed(() => overview.value?.token_activity || []);
 const users = computed(() => overview.value?.users || []);
+const usersPage = computed(() => overview.value?.users_page || {
+  page: 1,
+  page_size: pageSize,
+  total: users.value.length,
+  page_count: 1,
+});
+const pageCount = computed(() => Math.max(1, Number(usersPage.value.page_count || 1)));
+const paginationItems = computed(() => {
+  const totalPages = pageCount.value;
+  const page = Math.max(1, Math.min(Number(currentPage.value || 1), totalPages));
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_item, index) => {
+      const pageNumber = index + 1;
+      return { key: `page-${pageNumber}`, type: 'page', page: pageNumber };
+    });
+  }
+
+  const pages = new Set([1, totalPages, page - 1, page, page + 1]);
+  if (page <= 4) {
+    [2, 3, 4, 5].forEach((pageNumber) => pages.add(pageNumber));
+  }
+  if (page >= totalPages - 3) {
+    [totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1].forEach((pageNumber) => pages.add(pageNumber));
+  }
+
+  const sortedPages = Array.from(pages)
+    .filter((pageNumber) => pageNumber >= 1 && pageNumber <= totalPages)
+    .sort((a, b) => a - b);
+  const items = [];
+  sortedPages.forEach((pageNumber, index) => {
+    const previous = sortedPages[index - 1];
+    if (previous && pageNumber - previous > 1) {
+      items.push({ key: `ellipsis-${previous}-${pageNumber}`, type: 'ellipsis' });
+    }
+    items.push({ key: `page-${pageNumber}`, type: 'page', page: pageNumber });
+  });
+  return items;
+});
+const userRangeStart = computed(() => {
+  if (!Number(usersPage.value.total || 0)) return 0;
+  return ((Number(usersPage.value.page || 1) - 1) * Number(usersPage.value.page_size || pageSize)) + 1;
+});
+const userRangeEnd = computed(() => Math.min(
+  Number(usersPage.value.total || 0),
+  Number(userRangeStart.value || 0) + users.value.length - 1,
+));
 
 const summaryCards = computed(() => [
   { key: 'users_total', label: t('admin.summary.usersTotal'), value: formatNumber(summary.value.users_total) },
@@ -273,13 +479,138 @@ const summaryCards = computed(() => [
   { key: 'tokens_spent_24h', label: t('admin.summary.tokens24h'), value: formatTokens(summary.value.tokens_spent_24h) },
 ]);
 
-const rowTotal = (row) => Number(row.sessions || 0)
-  + Number(row.usage_events || 0)
-  + Number(row.uploads || 0)
-  + Number(row.analysis_jobs || 0);
+const linePoints = (points, key) => points.map((point) => `${point.x},${point[key]}`).join(' ');
 
-const maxTrafficTotal = computed(() => Math.max(1, ...trafficRows.value.map(rowTotal)));
-const trafficWidth = (row) => Math.max(4, Math.round((rowTotal(row) / maxTrafficTotal.value) * 100));
+const niceStep = (maxValue, targetTicks = 7) => {
+  const rawStep = Math.max(1e-9, Number(maxValue || 0) / Math.max(1, targetTicks - 1));
+  const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+  const normalized = rawStep / magnitude;
+  let niceNormalized = 10;
+  if (normalized <= 1) niceNormalized = 1;
+  else if (normalized <= 2) niceNormalized = 2;
+  else if (normalized <= 2.5) niceNormalized = 2.5;
+  else if (normalized <= 5) niceNormalized = 5;
+  return niceNormalized * magnitude;
+};
+
+const buildNiceTicks = (maxValue, top, bottom, { targetTicks = 7, integer = false } = {}) => {
+  let step = niceStep(maxValue, targetTicks);
+  if (integer) {
+    step = Math.max(1, Math.ceil(step));
+  }
+  const axisMax = Math.max(step, Math.ceil(Number(maxValue || 0) / step) * step);
+  const count = Math.max(2, Math.round(axisMax / step) + 1);
+  const ticks = Array.from({ length: count }, (_item, index) => {
+    const value = axisMax - (step * index);
+    const y = top + ((bottom - top) * (axisMax - value)) / axisMax;
+    return { value: integer ? Math.round(value) : value, y };
+  });
+  return { axisMax, ticks };
+};
+
+const tokenChart = computed(() => {
+  const left = 72;
+  const right = 890;
+  const top = 30;
+  const bottom = 282;
+  const rows = activityRows.value.length ? activityRows.value : [];
+  const tokenAxis = buildNiceTicks(
+    Math.max(1, ...rows.map((row) => Number(row.tokens_spent || 0))),
+    top,
+    bottom,
+    { targetTicks: 7 },
+  );
+  const userAxis = buildNiceTicks(
+    Math.max(1, ...rows.map((row) => Number(row.spending_users || 0))),
+    top,
+    bottom,
+    { targetTicks: 8, integer: true },
+  );
+  const span = Math.max(1, rows.length - 1);
+  const rawPoints = rows.map((row, index) => {
+    const x = left + ((right - left) * index) / span;
+    const tokens = Number(row.tokens_spent || 0);
+    const usersCount = Number(row.spending_users || 0);
+    return {
+      index,
+      date: row.date,
+      label: String(row.date || '').slice(5),
+      x,
+      tokens,
+      usersCount,
+      tokenY: bottom - ((bottom - top) * tokens) / tokenAxis.axisMax,
+      userY: bottom - ((bottom - top) * usersCount) / userAxis.axisMax,
+    };
+  });
+  const points = rawPoints.map((point, index) => {
+    const previousX = rawPoints[index - 1]?.x ?? left;
+    const nextX = rawPoints[index + 1]?.x ?? right;
+    const hitX = index === 0 ? left : (previousX + point.x) / 2;
+    const hitRight = index === rawPoints.length - 1 ? right : (point.x + nextX) / 2;
+    const tooltipWidth = 188;
+    const tooltipHeight = 88;
+    const minY = Math.min(point.tokenY, point.userY);
+    const tooltipX = Math.min(
+      right - tooltipWidth,
+      Math.max(left, point.x - tooltipWidth / 2),
+    );
+    const tooltipY = Math.max(
+      top,
+      Math.min(bottom - tooltipHeight, minY - tooltipHeight - 12),
+    );
+    return {
+      ...point,
+      hitX,
+      hitWidth: Math.max(20, hitRight - hitX),
+      tooltipX,
+      tooltipY,
+    };
+  });
+  return {
+    left,
+    right,
+    top,
+    bottom,
+    points,
+    leftTicks: tokenAxis.ticks,
+    rightTicks: userAxis.ticks,
+    xLabels: points.filter((_point, index) => rows.length <= 8 || index % 2 === 0 || index === rows.length - 1),
+    tokenPoints: linePoints(points, 'tokenY'),
+    userPoints: linePoints(points, 'userY'),
+  };
+});
+
+const activeChartPoint = computed(() => {
+  if (activeChartIndex.value === null) {
+    return null;
+  }
+  return tokenChart.value.points[activeChartIndex.value] || null;
+});
+
+const showChartTooltip = (index) => {
+  activeChartIndex.value = Number(index);
+};
+
+const hideChartTooltip = (event) => {
+  if (event?.pointerType === 'touch') {
+    return;
+  }
+  activeChartIndex.value = null;
+};
+
+const runSearch = () => {
+  currentPage.value = 1;
+  refresh();
+};
+
+const goToPage = (page) => {
+  const nextPage = Math.max(1, Math.min(Number(page || 1), pageCount.value));
+  if (nextPage === currentPage.value) {
+    return;
+  }
+  currentPage.value = nextPage;
+  refresh();
+};
 
 const replaceUserInOverview = (updatedUser) => {
   if (!updatedUser || !overview.value) {
@@ -306,6 +637,7 @@ const openTokenAdjust = (user) => {
     reason: defaultTokenReason(),
     payment_amount_cny: '9.9',
     payment_channel: 'wechat_manual',
+    set_supporter: true,
     submitting: false,
     error: '',
     success: '',
@@ -329,6 +661,7 @@ const applyTokenPreset = (tokens, amount) => {
     tokens: String(tokens),
     payment_amount_cny: String(amount),
     payment_channel: 'wechat_manual',
+    set_supporter: true,
     reason: defaultTokenReason(),
     error: '',
     success: '',
@@ -352,6 +685,7 @@ const submitTokenAdjust = async () => {
       reason: tokenAdjust.value.reason,
       payment_amount_cny: tokenAdjust.value.payment_amount_cny,
       payment_channel: tokenAdjust.value.payment_channel,
+      set_supporter: tokenAdjust.value.set_supporter,
     });
     replaceUserInOverview(response.user);
     tokenAdjust.value = {
@@ -373,7 +707,12 @@ const refresh = async () => {
   loading.value = true;
   error.value = '';
   try {
-    overview.value = await adminClient.overview({ q: query.value, limit: 30 });
+    overview.value = await adminClient.overview({
+      q: query.value,
+      page: currentPage.value,
+      pageSize,
+    });
+    currentPage.value = Number(overview.value?.users_page?.page || currentPage.value);
   } catch (requestError) {
     error.value = requestError?.message || t('admin.errors.loadFailed');
   } finally {
@@ -431,6 +770,172 @@ watch(() => props.active, (active) => {
   font-weight: 900;
   color: var(--text-secondary);
   text-transform: uppercase;
+}
+
+.admin-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.7rem;
+}
+
+.admin-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  text-transform: none;
+}
+
+.admin-chart-legend i {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 999px;
+}
+
+.legend-token {
+  background: var(--accent);
+}
+
+.legend-users {
+  background: color-mix(in srgb, var(--text-main) 88%, black);
+}
+
+.admin-chart-wrap {
+  margin-top: 1rem;
+  overflow-x: auto;
+  border: 1px solid var(--border-main);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--bg-main) 58%, transparent);
+  padding: 0.75rem;
+}
+
+.admin-line-chart {
+  display: block;
+  width: 100%;
+  min-width: 48rem;
+  height: auto;
+}
+
+.chart-grid line {
+  stroke: color-mix(in srgb, var(--border-main) 72%, transparent);
+  stroke-width: 1;
+}
+
+.chart-axis line {
+  stroke: color-mix(in srgb, var(--text-secondary) 36%, transparent);
+  stroke-width: 1.4;
+}
+
+.chart-labels text {
+  fill: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.chart-line {
+  fill: none;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.token-line {
+  stroke: var(--accent);
+}
+
+.users-line {
+  opacity: 0.9;
+  stroke: color-mix(in srgb, var(--text-main) 88%, black);
+  stroke-dasharray: 8 7;
+  stroke-width: 3.5;
+}
+
+.chart-point {
+  stroke: var(--bg-card);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.token-point {
+  fill: var(--accent);
+}
+
+.users-point {
+  fill: color-mix(in srgb, var(--text-main) 88%, black);
+}
+
+.chart-point.active {
+  stroke-width: 3;
+}
+
+.chart-hover-line {
+  opacity: 0.56;
+  stroke: var(--text-secondary);
+  stroke-dasharray: 5 6;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-hit-area {
+  cursor: crosshair;
+  fill: transparent;
+  outline: none;
+  pointer-events: all;
+}
+
+.chart-hit-area:focus-visible {
+  stroke: color-mix(in srgb, var(--accent) 62%, transparent);
+  stroke-width: 2;
+}
+
+.chart-tooltip-object {
+  overflow: visible;
+  pointer-events: none;
+}
+
+.admin-chart-tooltip {
+  min-height: 5.2rem;
+  border: 1px solid color-mix(in srgb, var(--border-main) 76%, transparent);
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--bg-card) 96%, var(--bg-main) 4%);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.2);
+  color: var(--text-main);
+  font-size: 0.75rem;
+  font-weight: 850;
+  padding: 0.7rem 0.8rem;
+}
+
+.tooltip-date {
+  color: var(--text-main);
+  font-weight: 950;
+  margin-bottom: 0.45rem;
+}
+
+.tooltip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  line-height: 1.5;
+}
+
+.tooltip-row span {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-secondary);
+  gap: 0.35rem;
+}
+
+.tooltip-row i {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 999px;
+}
+
+.tooltip-row strong {
+  color: var(--text-main);
+  font-weight: 950;
 }
 
 .admin-traffic-row {
@@ -521,6 +1026,76 @@ watch(() => props.active, (active) => {
   border-radius: 0 0.85rem 0.85rem 0;
 }
 
+.admin-pagination {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  border-top: 1px solid var(--border-main);
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+
+.admin-pagination-center {
+  display: grid;
+  min-width: 0;
+  justify-items: center;
+  gap: 0.55rem;
+  text-align: center;
+}
+
+.admin-pagination-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.admin-page-btn,
+.admin-page-nav-btn,
+.admin-page-ellipsis {
+  display: inline-flex;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  font-size: var(--font-ui-xs);
+  font-weight: 950;
+}
+
+.admin-page-nav-btn {
+  min-width: 2.65rem;
+  min-height: 2.65rem;
+  border-radius: 0.9rem;
+  font-size: 1.05rem;
+}
+
+.admin-page-btn,
+.admin-page-nav-btn {
+  border: 1px solid var(--border-main);
+  background: color-mix(in srgb, var(--bg-main) 68%, transparent);
+  color: var(--text-main);
+  transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease;
+}
+
+.admin-page-btn:hover:not(:disabled),
+.admin-page-nav-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.admin-page-btn.active {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border-main));
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-main));
+  color: var(--text-main);
+}
+
+.admin-page-ellipsis {
+  color: var(--text-secondary);
+}
+
 .admin-status {
   display: inline-flex;
   border-radius: 999px;
@@ -538,6 +1113,20 @@ watch(() => props.active, (active) => {
 .admin-status.disabled {
   background: rgba(239, 68, 68, 0.14);
   color: rgb(239, 68, 68);
+}
+
+.admin-tier-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 950;
+  line-height: 1;
+  padding: 0.18rem 0.45rem;
+  text-transform: uppercase;
 }
 
 .admin-empty {
@@ -589,6 +1178,26 @@ watch(() => props.active, (active) => {
   text-transform: uppercase;
 }
 
+.admin-check-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  border: 1px solid var(--border-main);
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--bg-main) 66%, transparent);
+  color: var(--text-main);
+  cursor: pointer;
+  font-size: var(--font-ui-sm);
+  font-weight: 900;
+  padding: 0.7rem 0.8rem;
+}
+
+.admin-check-row input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent);
+}
+
 .admin-input {
   width: 100%;
   min-height: 2.7rem;
@@ -637,6 +1246,30 @@ watch(() => props.active, (active) => {
   .admin-panel-head {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .admin-chart-legend {
+    justify-content: flex-start;
+  }
+
+  .admin-pagination {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.65rem;
+  }
+
+  .admin-pagination-controls {
+    justify-content: center;
+  }
+
+  .admin-page-btn,
+  .admin-page-ellipsis {
+    min-width: 2rem;
+    min-height: 2rem;
+  }
+
+  .admin-page-nav-btn {
+    min-width: 2.4rem;
+    min-height: 2.4rem;
   }
 
   .admin-modal {

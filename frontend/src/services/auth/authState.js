@@ -2,6 +2,7 @@ import { computed, ref } from 'vue';
 
 import { authClient } from './authClient';
 import { emitAuthChanged } from './authEvents';
+import { clearDeviceSession } from './sessionTokenStore';
 
 const ready = ref(false);
 const user = ref(null);
@@ -39,14 +40,23 @@ export function useAuthState() {
       if (requestId !== latestRefreshId || generationAtStart !== authGeneration) {
         return user.value;
       }
-      user.value = result?.authenticated ? result.user : null;
+      if (result?.authenticated) {
+        user.value = result.user;
+      } else {
+        clearDeviceSession();
+        user.value = null;
+      }
       return user.value;
     } catch (error) {
       if (requestId !== latestRefreshId || generationAtStart !== authGeneration) {
         return user.value;
       }
-      user.value = null;
-      return null;
+      if (error?.status === 401) {
+        clearDeviceSession();
+        user.value = null;
+        return null;
+      }
+      return user.value;
     } finally {
       if (requestId !== latestRefreshId || generationAtStart !== authGeneration) {
         return;
@@ -94,6 +104,7 @@ export function useAuthState() {
     } finally {
       authGeneration += 1;
       latestRefreshId += 1;
+      clearDeviceSession();
       user.value = null;
       emitAuthChanged();
     }

@@ -380,7 +380,8 @@
       "pathsPlaceholder": "Paste .txt / .vrs files or folders here, one path per line",
       "selectFiles": "Select Files",
       "analyze": "Analyze",
-      "downloadResults": "Download Results"
+      "downloadResults": "Download Results",
+      "downloadingResults": "Downloading..."
     },
     "progress": {
       "title": "Batch Progress",
@@ -396,6 +397,14 @@
       "failedState": "Failed",
       "completedState": "Completed",
       "completedWithErrors": "Completed With Errors"
+    },
+    "errors": {
+      "network": "Network request failed. Please check your connection, switch networks if needed, then select the files and try again.",
+      "authRequired": "Please log in again before running analysis.",
+      "insufficientTokens": "Insufficient token balance for this analysis.",
+      "expired": "The analysis result has expired or the service was restarted. Please run the analysis again.",
+      "notReady": "The analysis job is not finished yet.",
+      "generic": "Analysis failed. Please try again."
     }
   },
   "billing": {
@@ -425,14 +434,11 @@
       "usage24h": "Actions 24h",
       "tokens24h": "Tokens 24h"
     },
-    "traffic": {
-      "title": "Recent Traffic",
-      "range": "Last 14 days",
-      "row": "Sessions {sessions} / Actions {usage_events} / Uploads {uploads} / Analysis {analysis_jobs}"
-    },
-    "operations": {
-      "title": "Operation Mix",
-      "range": "Last 7 days"
+    "tokenActivity": {
+      "title": "Token Activity",
+      "range": "Last 14 natural days",
+      "tokens": "Token spent",
+      "users": "Spending users"
     },
     "users": {
       "title": "User Lookup",
@@ -446,7 +452,10 @@
       "usage": "Actions",
       "created": "Created",
       "lastLogin": "Last Login",
-      "actions": "Actions"
+      "actions": "Actions",
+      "pagination": "{start}-{end} / {total}, page {page} of {page_count}",
+      "prevPage": "Previous",
+      "nextPage": "Next"
     },
     "tokens": {
       "adjust": "Adjust tokens",
@@ -462,10 +471,14 @@
       "paymentAmount": "Payment amount (CNY)",
       "paymentChannel": "Payment channel",
       "reason": "Reason",
+      "setSupporter": "Also mark as supporter",
       "submit": "Submit adjustment",
       "updated": "Tokens updated.",
       "updateFailed": "Failed to adjust tokens.",
       "defaultReason": "Manual WeChat sponsor confirmation"
+    },
+    "entitlements": {
+      "supporter": "Supporter"
     },
     "errors": {
       "loadFailed": "Failed to load admin data."

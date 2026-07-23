@@ -13,7 +13,30 @@ def cookie_secure() -> bool:
 
 
 def current_user_from_request(request: Request) -> dict[str, Any] | None:
-    return authenticate_session_token(request.cookies.get(SESSION_COOKIE_NAME))
+    for token in auth_tokens_from_request(request):
+        user = authenticate_session_token(token)
+        if user is not None:
+            return user
+    return None
+
+
+def bearer_token_from_authorization(value: str | None) -> str:
+    if not value:
+        return ""
+    scheme, _, token = value.strip().partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return ""
+    return token.strip()
+
+
+def auth_tokens_from_request(request: Request) -> list[str]:
+    tokens: list[str] = []
+    cookie_token = str(request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
+    bearer_token = bearer_token_from_authorization(request.headers.get("authorization"))
+    for token in (cookie_token, bearer_token):
+        if token and token not in tokens:
+            tokens.append(token)
+    return tokens
 
 
 def require_user(request: Request) -> dict[str, Any]:

@@ -2,6 +2,7 @@
 
 
 class Action:
+    AUTH_SESSION = "AUTH_SESSION"
     GET_STATE = "GET_STATE"
 
     INIT_GAME = "INIT_GAME"

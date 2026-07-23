@@ -380,7 +380,8 @@
       "pathsPlaceholder": "在此粘贴 .txt / .vrs 文件或文件夹路径，每行一条",
       "selectFiles": "选择文件",
       "analyze": "开始分析",
-      "downloadResults": "下载结果"
+      "downloadResults": "下载结果",
+      "downloadingResults": "下载中..."
     },
     "progress": {
       "title": "批处理进度",
@@ -396,6 +397,14 @@
       "failedState": "失败",
       "completedState": "已完成",
       "completedWithErrors": "已完成（含错误）"
+    },
+    "errors": {
+      "network": "网络请求失败。请检查网络，必要时切换网络后重新选择文件并重试。",
+      "authRequired": "请重新登录后再运行分析。",
+      "insufficientTokens": "当前 token 余额不足，无法运行这次分析。",
+      "expired": "分析结果已过期，或服务刚刚重启。请重新运行分析。",
+      "notReady": "分析任务尚未完成，请稍后再下载。",
+      "generic": "分析失败，请重试。"
     }
   },
   "billing": {
@@ -425,15 +434,6 @@
       "usage24h": "24小时操作",
       "tokens24h": "24小时消耗"
     },
-    "traffic": {
-      "title": "近期流量",
-      "range": "最近14天",
-      "row": "会话 {sessions} / 操作 {usage_events} / 上传 {uploads} / 分析 {analysis_jobs}"
-    },
-    "operations": {
-      "title": "操作分布",
-      "range": "最近7天"
-    },
     "users": {
       "title": "用户查询",
       "searchPlaceholder": "邮箱、用户名或 ID",
@@ -446,7 +446,10 @@
       "usage": "操作",
       "created": "创建时间",
       "lastLogin": "最近登录",
-      "actions": "操作"
+      "actions": "操作",
+      "pagination": "{start}-{end} / {total}，第 {page} / {page_count} 页",
+      "prevPage": "上一页",
+      "nextPage": "下一页"
     },
     "tokens": {
       "adjust": "调整 token",
@@ -462,13 +465,23 @@
       "paymentAmount": "支付金额（CNY）",
       "paymentChannel": "支付渠道",
       "reason": "备注",
+      "setSupporter": "同时设为赞助者",
       "submit": "提交调整",
       "updated": "Token 已更新。",
       "updateFailed": "Token 调整失败。",
       "defaultReason": "微信赞助人工确认"
     },
+    "entitlements": {
+      "supporter": "赞助者"
+    },
     "errors": {
       "loadFailed": "站长数据加载失败。"
+    },
+    "tokenActivity": {
+      "title": "Token 消耗趋势",
+      "range": "最近 14 个自然日",
+      "tokens": "Token 消耗量",
+      "users": "消耗用户数"
     }
   },
   "menu": {

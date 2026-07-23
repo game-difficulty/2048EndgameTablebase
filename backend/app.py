@@ -6,8 +6,18 @@ import json
 import os
 
 import uvicorn
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.actions import Action, Message
@@ -15,7 +25,7 @@ from backend.admin.routes import router as admin_router
 from backend.auth.db import init_auth_db
 from backend.auth.dependencies import client_ip, current_user_from_websocket, require_user
 from backend.auth.routes import router as auth_router
-from backend.auth.service import record_usage
+from backend.auth.service import authenticate_session_token, record_usage
 from backend.cloud_analysis_jobs import (
     analysis_job_payload,
     cleanup_expired_jobs,
@@ -97,6 +107,20 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 
 
+@app.middleware("http")
+async def canonicalize_www_domain(request: Request, call_next):
+    host = str(request.headers.get("host") or "").lower().split(":", 1)[0]
+    if host == "www.2048tables.online":
+        path = request.url.path
+        if request.url.query:
+            path = f"{path}?{request.url.query}"
+        return RedirectResponse(
+            f"https://2048tables.online{path}",
+            status_code=308,
+        )
+    return await call_next(request)
+
+
 async def _send_ws_error(websocket: WebSocket, message: str):
     try:
         await websocket.send_json(
@@ -133,6 +157,44 @@ async def _send_token_required(websocket: WebSocket, exc: InsufficientTokens):
         print(f"Send token required message failed: {send_error}")
 
 
+def _bind_auth_user(session, auth_user: dict) -> None:
+    session.user_id = int(auth_user["id"])
+    session.auth_session_id = (
+        int(auth_user["session_id"]) if auth_user.get("session_id") else None
+    )
+    session.user_email = str(auth_user["email"])
+    session.user_role = str(auth_user["role"])
+
+
+async def _handle_auth_session(websocket: WebSocket, session, payload: dict) -> None:
+    token = str((payload or {}).get("token") or "").strip()
+    auth_user = authenticate_session_token(token)
+    if auth_user is None or (
+        session.user_id is not None and int(auth_user["id"]) != int(session.user_id)
+    ):
+        if session.user_id is not None:
+            await websocket.send_json(
+                {
+                    "action": Action.AUTH_SESSION,
+                    "data": {"authenticated": True},
+                }
+            )
+            return
+        await _send_auth_required(websocket)
+        return
+    _bind_auth_user(session, auth_user)
+    await websocket.send_json(
+        {
+            "action": Action.AUTH_SESSION,
+            "data": {
+                "authenticated": True,
+                "user": auth_user,
+                "token_balance": auth_user.get("token_balance"),
+            },
+        }
+    )
+
+
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ignore
     auth_user = current_user_from_websocket(websocket)
@@ -140,10 +202,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
     await manager.connect(websocket, client_id)
     session = manager.active_connections[websocket]
     if auth_user is not None:
-        session.user_id = int(auth_user["id"])
-        session.auth_session_id = int(auth_user["session_id"])
-        session.user_email = str(auth_user["email"])
-        session.user_role = str(auth_user["role"])
+        _bind_auth_user(session, auth_user)
 
     try:
         while True:
@@ -162,6 +221,10 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
                         websocket,
                         cloud_disabled_message(action),
                     )
+                    continue
+
+                if action == Action.AUTH_SESSION:
+                    await _handle_auth_session(websocket, session, payload)
                     continue
 
                 if _action_requires_auth(action) and session.user_id is None:

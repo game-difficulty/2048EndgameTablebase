@@ -1,16 +1,18 @@
 import { getBackendUrl } from '../runtime/backendUrl';
 import { emitAuthRequired, emitTokenBalanceUpdated, emitTokenRequired } from './authEvents';
+import { authHeaders, clearDeviceSession, storeDeviceSession } from './sessionTokenStore';
 
 async function requestJson(path, { method = 'GET', body } = {}) {
   const response = await fetch(getBackendUrl(path), {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: authHeaders(body ? { 'Content-Type': 'application/json' } : {}),
     credentials: 'include',
     body: body ? JSON.stringify(body) : undefined,
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401) {
+      clearDeviceSession();
       emitAuthRequired();
     }
     if (response.status === 402 && payload?.detail?.code === 'INSUFFICIENT_TOKENS') {
@@ -27,6 +29,10 @@ async function requestJson(path, { method = 'GET', body } = {}) {
   if (payload?.token_balance) {
     emitTokenBalanceUpdated(payload.token_balance);
   }
+  if (payload?.authenticated === false) {
+    clearDeviceSession();
+  }
+  storeDeviceSession(payload);
   return payload;
 }
 

@@ -5,7 +5,15 @@ from email.utils import format_datetime
 
 from fastapi import APIRouter, Body, HTTPException, Request, Response
 
-from .dependencies import client_ip, cookie_secure, current_user_from_request, require_user
+from backend.quota.service import grant_weekly_tokens_if_due
+
+from .dependencies import (
+    auth_tokens_from_request,
+    client_ip,
+    cookie_secure,
+    current_user_from_request,
+    require_user,
+)
 from .service import (
     BROWSER_COOKIE_NAME,
     EMAIL_CODE_BROWSER_COOLDOWN_SECONDS,
@@ -51,6 +59,15 @@ def _clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
 
 
+def _authenticated_response(result: dict) -> dict:
+    return {
+        "authenticated": True,
+        "user": result["user"],
+        "device_session_token": result["token"],
+        "expires_at": result["expires_at"],
+    }
+
+
 def _browser_id(request: Request, response: Response) -> str:
     existing = str(request.cookies.get(BROWSER_COOKIE_NAME) or "").strip()
     if existing:
@@ -83,6 +100,9 @@ def _cooldown_response(exc: EmailCodeCooldownError) -> HTTPException:
 @router.get("/me")
 async def me(request: Request):
     user = current_user_from_request(request)
+    if user is not None:
+        token_balance = grant_weekly_tokens_if_due(int(user["id"]))
+        user = {**user, "token_balance": token_balance}
     return {"authenticated": user is not None, "user": user}
 
 
@@ -115,7 +135,7 @@ async def register(request: Request, response: Response, payload: dict = Body(..
             ip_address=client_ip(request),
         )
         _set_session_cookie(response, result["token"], result["expires_at"])
-        return {"authenticated": True, "user": result["user"]}
+        return _authenticated_response(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -130,7 +150,7 @@ async def login(request: Request, response: Response, payload: dict = Body(...))
             ip_address=client_ip(request),
         )
         _set_session_cookie(response, result["token"], result["expires_at"])
-        return {"authenticated": True, "user": result["user"]}
+        return _authenticated_response(result)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
@@ -160,7 +180,7 @@ async def reset_password_route(request: Request, response: Response, payload: di
             ip_address=client_ip(request),
         )
         _set_session_cookie(response, result["token"], result["expires_at"])
-        return {"authenticated": True, "user": result["user"]}
+        return _authenticated_response(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -213,6 +233,7 @@ async def deactivate(request: Request, response: Response, payload: dict = Body(
 
 @router.post("/logout")
 async def logout(request: Request, response: Response):
-    revoke_session(request.cookies.get(SESSION_COOKIE_NAME))
+    for token in auth_tokens_from_request(request):
+        revoke_session(token)
     _clear_session_cookie(response)
     return {"authenticated": False, "user": None}

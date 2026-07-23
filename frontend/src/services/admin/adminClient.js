@@ -1,16 +1,18 @@
 import { getBackendUrl } from '../runtime/backendUrl';
 import { emitAuthRequired } from '../auth/authEvents';
+import { authHeaders, clearDeviceSession } from '../auth/sessionTokenStore';
 
 async function requestJson(path, { method = 'GET', body } = {}) {
   const response = await fetch(getBackendUrl(path), {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: authHeaders(body ? { 'Content-Type': 'application/json' } : {}),
     credentials: 'include',
     body: body ? JSON.stringify(body) : undefined,
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401) {
+      clearDeviceSession();
       emitAuthRequired();
     }
     const detail = typeof payload?.detail === 'string'
@@ -25,12 +27,17 @@ async function requestJson(path, { method = 'GET', body } = {}) {
 }
 
 export const adminClient = {
-  overview: ({ q = '', limit = 20 } = {}) => {
+  overview: ({
+    q = '',
+    page = 1,
+    pageSize = 20,
+  } = {}) => {
     const params = new URLSearchParams();
     if (q) {
       params.set('q', q);
     }
-    params.set('limit', String(limit));
+    params.set('page', String(page));
+    params.set('page_size', String(pageSize));
     return requestJson(`/api/admin/overview?${params.toString()}`);
   },
   adjustUserTokens: (userId, payload) => requestJson(`/api/admin/users/${encodeURIComponent(userId)}/tokens`, {

@@ -1,11 +1,13 @@
 import { getBackendUrl } from '../runtime/backendUrl';
 import { emitAuthRequired, emitTokenBalanceUpdated, emitTokenRequired } from '../auth/authEvents';
+import { authHeaders, clearDeviceSession } from '../auth/sessionTokenStore';
 
 async function handleProtectedResponseError(response, fallbackPrefix) {
   if (!response) {
     throw new Error(`${fallbackPrefix}: unknown`);
   }
   if (response?.status === 401) {
+    clearDeviceSession();
     emitAuthRequired();
   }
   const text = await response.text();
@@ -21,7 +23,94 @@ async function handleProtectedResponseError(response, fallbackPrefix) {
   const detail = typeof payload?.detail === 'string'
     ? payload.detail
     : payload?.detail?.message || text;
-  throw new Error(`${fallbackPrefix}: ${response?.status || 'unknown'} ${detail || ''}`.trim());
+  const error = new Error(`${fallbackPrefix}: ${response?.status || 'unknown'} ${detail || ''}`.trim());
+  error.status = response?.status || 0;
+  error.payload = payload;
+  error.code = payload?.detail?.code || '';
+  throw error;
+}
+
+async function fetchWithNetworkError(url, options, fallbackPrefix) {
+  try {
+    return await fetch(url, options);
+  } catch (cause) {
+    const error = new Error(`${fallbackPrefix}: network error`);
+    error.code = 'NETWORK_ERROR';
+    error.cause = cause;
+    throw error;
+  }
+}
+
+function isLegacyAndroidUploadClient() {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+  const match = /Android\s+(\d+)/i.exec(navigator.userAgent || '');
+  return Boolean(match && Number(match[1]) <= 8);
+}
+
+function parseHeaders(rawHeaders = '') {
+  const headers = new Map();
+  String(rawHeaders || '').trim().split(/[\r\n]+/).forEach((line) => {
+    const index = line.indexOf(':');
+    if (index <= 0) {
+      return;
+    }
+    headers.set(line.slice(0, index).trim().toLowerCase(), line.slice(index + 1).trim());
+  });
+  return {
+    get(name) {
+      return headers.get(String(name || '').toLowerCase()) || '';
+    },
+  };
+}
+
+function textResponseFromXhr(xhr) {
+  const body = String(xhr.responseText || '');
+  return {
+    ok: xhr.status >= 200 && xhr.status < 300,
+    status: xhr.status,
+    statusText: xhr.statusText,
+    headers: parseHeaders(xhr.getAllResponseHeaders()),
+    text: () => Promise.resolve(body),
+    json: () => Promise.resolve(body ? JSON.parse(body) : null),
+    blob: () => Promise.resolve(new Blob([body])),
+  };
+}
+
+function xhrMultipartRequest(url, formData, fallbackPrefix) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url, true);
+    xhr.withCredentials = true;
+    for (const [key, value] of Object.entries(authHeaders())) {
+      xhr.setRequestHeader(key, value);
+    }
+    xhr.onload = () => resolve(textResponseFromXhr(xhr));
+    xhr.onerror = () => {
+      const error = new Error(`${fallbackPrefix}: network error`);
+      error.code = 'NETWORK_ERROR';
+      reject(error);
+    };
+    xhr.onabort = () => {
+      const error = new Error(`${fallbackPrefix}: aborted`);
+      error.code = 'NETWORK_ERROR';
+      reject(error);
+    };
+    xhr.send(formData);
+  });
+}
+
+function sendMultipartRequest(url, formData, fallbackPrefix) {
+  if (isLegacyAndroidUploadClient()) {
+    return xhrMultipartRequest(url, formData, fallbackPrefix);
+  }
+  return fetchWithNetworkError(url, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: formData,
+    credentials: 'include',
+  }, fallbackPrefix);
 }
 
 const EMPTY_FILES = Object.freeze([]);
@@ -153,11 +242,7 @@ export async function uploadBrowserFiles(files, { kind = 'generic', fields = {} 
   for (const file of fileList) {
     formData.append('files', file, file.name || 'upload.bin');
   }
-  const response = await fetch(getBackendUrl('/api/uploads'), {
-    method: 'POST',
-    body: formData,
-    credentials: 'include',
-  });
+  const response = await sendMultipartRequest(getBackendUrl('/api/uploads'), formData, 'Upload failed');
   if (!response.ok) {
     await handleProtectedResponseError(response, 'Upload failed');
   }
@@ -178,11 +263,7 @@ export async function postMultipart(url, { files = [], fields = {} } = {}) {
   for (const file of files) {
     formData.append('files', file, file.name || 'upload.bin');
   }
-  const response = await fetch(getBackendUrl(url), {
-    method: 'POST',
-    body: formData,
-    credentials: 'include',
-  });
+  const response = await sendMultipartRequest(getBackendUrl(url), formData, 'Request failed');
   if (!response.ok) {
     await handleProtectedResponseError(response, 'Request failed');
   }

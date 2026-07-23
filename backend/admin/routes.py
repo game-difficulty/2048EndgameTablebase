@@ -48,55 +48,35 @@ def _scalar(db, query: str, params: tuple[Any, ...] = ()) -> int:
     return int(row[0] or 0)
 
 
-def _daily_counts(db, table: str, cutoff: str) -> dict[str, int]:
-    rows = db.execute(
-        f"""
-        SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS count
-        FROM {table}
-        WHERE created_at >= ?
-        GROUP BY day
-        """,
-        (cutoff,),
-    ).fetchall()
-    return {str(row["day"]): int(row["count"] or 0) for row in rows}
-
-
-def _daily_token_costs(db, cutoff: str) -> dict[str, float]:
-    rows = db.execute(
-        """
-        SELECT substr(created_at, 1, 10) AS day, SUM(final_cost_units) AS units
-        FROM token_ledger
-        WHERE created_at >= ? AND final_cost_units > 0
-        GROUP BY day
-        """,
-        (cutoff,),
-    ).fetchall()
-    return {str(row["day"]): _token_value(row["units"]) for row in rows}
-
-
-def _daily_traffic(db, days: int) -> list[dict[str, Any]]:
+def _daily_token_activity(db, days: int) -> list[dict[str, Any]]:
     today = utcnow().date()
     first_day = today - timedelta(days=days - 1)
     cutoff = f"{first_day.isoformat()}T00:00:00"
-    sessions = _daily_counts(db, "sessions", cutoff)
-    usage = _daily_counts(db, "usage_events", cutoff)
-    token_events = _daily_counts(db, "token_ledger", cutoff)
-    uploads = _daily_counts(db, "uploads", cutoff)
-    analysis_jobs = _daily_counts(db, "analysis_jobs", cutoff)
-    token_costs = _daily_token_costs(db, cutoff)
+    rows_by_day = {
+        str(row["day"]): row
+        for row in db.execute(
+            """
+            SELECT
+              substr(created_at, 1, 10) AS day,
+              SUM(final_cost_units) AS units,
+              COUNT(DISTINCT user_id) AS spending_users
+            FROM token_ledger
+            WHERE created_at >= ? AND final_cost_units > 0
+            GROUP BY day
+            """,
+            (cutoff,),
+        ).fetchall()
+    }
 
     rows = []
     for offset in range(days):
         day = (first_day + timedelta(days=offset)).isoformat()
+        row = rows_by_day.get(day)
         rows.append(
             {
                 "date": day,
-                "sessions": sessions.get(day, 0),
-                "usage_events": usage.get(day, 0),
-                "token_events": token_events.get(day, 0),
-                "tokens_spent": token_costs.get(day, 0),
-                "uploads": uploads.get(day, 0),
-                "analysis_jobs": analysis_jobs.get(day, 0),
+                "tokens_spent": _token_value(row["units"]) if row else 0,
+                "spending_users": int(row["spending_users"] or 0) if row else 0,
             }
         )
     return rows
@@ -105,6 +85,7 @@ def _daily_traffic(db, days: int) -> list[dict[str, Any]]:
 def _user_payload(row) -> dict[str, Any]:
     bonus_units = int(row["bonus_balance_units"] or 0)
     paid_units = int(row["paid_balance_units"] or 0)
+    entitlement_tier = str(row["entitlement_tier"] or "free")
     return {
         "id": int(row["id"]),
         "email": row["email"],
@@ -114,6 +95,14 @@ def _user_payload(row) -> dict[str, Any]:
         "registered_with_invite": bool(row["registered_with_invite"]),
         "created_at": row["created_at"],
         "last_login_at": row["last_login_at"],
+        "entitlements": {
+            "tier": entitlement_tier,
+            "is_supporter": entitlement_tier == "supporter",
+            "supporter_since": row["supporter_since"],
+            "supporter_until": row["supporter_until"],
+            "show_supporter_badge": bool(row["show_supporter_badge"]),
+            "can_upload_avatar": bool(row["can_upload_avatar"]),
+        },
         "sessions": int(row["session_count"] or 0),
         "usage_events": int(row["usage_count"] or 0),
         "token_balance": {
@@ -124,7 +113,13 @@ def _user_payload(row) -> dict[str, Any]:
     }
 
 
-def _query_users(db, q: str, limit: int) -> list[dict[str, Any]]:
+def _query_users(
+    db,
+    q: str,
+    *,
+    page: int,
+    page_size: int,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     normalized_query = str(q or "").strip().lower()
     params: list[Any] = []
     where = ""
@@ -136,7 +131,12 @@ def _query_users(db, q: str, limit: int) -> list[dict[str, Any]]:
         """
         like = f"%{normalized_query}%"
         params.extend([like, like, normalized_query])
-    params.append(max(1, min(100, int(limit))))
+    total = _scalar(db, f"SELECT COUNT(*) FROM users {where}", tuple(params))
+    resolved_page_size = max(1, min(100, int(page_size)))
+    page_count = max(1, (total + resolved_page_size - 1) // resolved_page_size)
+    resolved_page = max(1, min(int(page), page_count))
+    offset = (resolved_page - 1) * resolved_page_size
+    query_params = [*params, resolved_page_size, offset]
 
     rows = db.execute(
         f"""
@@ -151,20 +151,31 @@ def _query_users(db, q: str, limit: int) -> list[dict[str, Any]]:
           users.last_login_at,
           COALESCE(token_accounts.bonus_balance_units, 0) AS bonus_balance_units,
           COALESCE(token_accounts.paid_balance_units, 0) AS paid_balance_units,
+          COALESCE(user_entitlements.tier, 'free') AS entitlement_tier,
+          user_entitlements.supporter_since,
+          user_entitlements.supporter_until,
+          COALESCE(user_entitlements.show_supporter_badge, 1) AS show_supporter_badge,
+          COALESCE(user_entitlements.can_upload_avatar, 0) AS can_upload_avatar,
           COUNT(DISTINCT sessions.id) AS session_count,
           COUNT(DISTINCT usage_events.id) AS usage_count
         FROM users
         LEFT JOIN token_accounts ON token_accounts.user_id = users.id
+        LEFT JOIN user_entitlements ON user_entitlements.user_id = users.id
         LEFT JOIN sessions ON sessions.user_id = users.id
         LEFT JOIN usage_events ON usage_events.user_id = users.id
         {where}
         GROUP BY users.id
         ORDER BY users.created_at DESC
-        LIMIT ?
+        LIMIT ? OFFSET ?
         """,
-        tuple(params),
+        tuple(query_params),
     ).fetchall()
-    return [_user_payload(row) for row in rows]
+    return [_user_payload(row) for row in rows], {
+        "page": resolved_page,
+        "page_size": resolved_page_size,
+        "total": total,
+        "page_count": page_count,
+    }
 
 
 def _get_user_payload_by_id(db, user_id: int) -> dict[str, Any] | None:
@@ -181,10 +192,16 @@ def _get_user_payload_by_id(db, user_id: int) -> dict[str, Any] | None:
           users.last_login_at,
           COALESCE(token_accounts.bonus_balance_units, 0) AS bonus_balance_units,
           COALESCE(token_accounts.paid_balance_units, 0) AS paid_balance_units,
+          COALESCE(user_entitlements.tier, 'free') AS entitlement_tier,
+          user_entitlements.supporter_since,
+          user_entitlements.supporter_until,
+          COALESCE(user_entitlements.show_supporter_badge, 1) AS show_supporter_badge,
+          COALESCE(user_entitlements.can_upload_avatar, 0) AS can_upload_avatar,
           COUNT(DISTINCT sessions.id) AS session_count,
           COUNT(DISTINCT usage_events.id) AS usage_count
         FROM users
         LEFT JOIN token_accounts ON token_accounts.user_id = users.id
+        LEFT JOIN user_entitlements ON user_entitlements.user_id = users.id
         LEFT JOIN sessions ON sessions.user_id = users.id
         LEFT JOIN usage_events ON usage_events.user_id = users.id
         WHERE users.id = ?
@@ -200,7 +217,8 @@ def _get_user_payload_by_id(db, user_id: int) -> dict[str, Any] | None:
 async def admin_overview(
     request: Request,
     q: str = Query("", max_length=120),
-    limit: int = Query(20, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
 ):
     _require_admin(request)
     now = utcnow()
@@ -235,31 +253,16 @@ async def admin_overview(
                 )
             ),
         }
-        recent_users = _query_users(db, "", 8)
-        users = _query_users(db, q, limit)
-        traffic = _daily_traffic(db, 14)
-        operation_rows = db.execute(
-            """
-            SELECT event_type, COUNT(*) AS count
-            FROM usage_events
-            WHERE created_at >= ?
-            GROUP BY event_type
-            ORDER BY count DESC, event_type ASC
-            LIMIT 12
-            """,
-            (cutoff_7d,),
-        ).fetchall()
-        operations = [
-            {"event_type": row["event_type"] or "unknown", "count": int(row["count"] or 0)}
-            for row in operation_rows
-        ]
+        recent_users, _recent_users_page = _query_users(db, "", page=1, page_size=8)
+        users, users_page = _query_users(db, q, page=page, page_size=page_size)
+        token_activity = _daily_token_activity(db, 14)
 
     return {
         "summary": summary,
-        "traffic": traffic,
-        "operations": operations,
+        "token_activity": token_activity,
         "recent_users": recent_users,
         "users": users,
+        "users_page": users_page,
         "query": q,
     }
 
@@ -280,6 +283,7 @@ async def admin_adjust_user_tokens(
             reason=str(payload.get("reason") or ""),
             payment_amount_cny=payload.get("payment_amount_cny"),
             payment_channel=str(payload.get("payment_channel") or ""),
+            set_supporter=bool(payload.get("set_supporter", False)),
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="User not found.") from exc
