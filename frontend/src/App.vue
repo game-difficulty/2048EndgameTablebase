@@ -828,13 +828,13 @@ onUnmounted(() => {
 .account-avatar.supporter::before {
   content: "";
   position: absolute;
-  right: 0.01rem;
-  bottom: 0.02rem;
+  right: -0.03rem;
+  bottom: -0.01rem;
   z-index: 2;
-  width: 0.25rem;
-  height: 0.25rem;
+  width: 0.38rem;
+  height: 0.38rem;
   background: var(--bg-card);
-  clip-path: polygon(50% 0, 62% 36%, 100% 50%, 62% 64%, 50% 100%, 38% 64%, 0 50%, 38% 36%);
+  clip-path: polygon(50% 0, 62% 34%, 100% 50%, 62% 66%, 50% 100%, 38% 66%, 0 50%, 38% 34%);
   pointer-events: none;
 }
 
@@ -855,10 +855,10 @@ onUnmounted(() => {
 }
 
 .account-avatar.large.supporter::before {
-  right: 0.08rem;
-  bottom: 0.08rem;
-  width: 0.3rem;
-  height: 0.3rem;
+  right: 0.02rem;
+  bottom: 0.03rem;
+  width: 0.45rem;
+  height: 0.45rem;
 }
 
 .account-avatar.large.supporter::after {
