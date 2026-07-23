@@ -68,6 +68,8 @@
       "bonusTokens": "赠送 token",
       "paidTokens": "充值 token",
       "totalTokens": "总余额",
+      "supporter": "赞助者",
+      "supporterShort": "赞",
       "changePassword": "修改密码",
       "deactivateAccount": "注销账号"
     },
@@ -447,6 +449,10 @@
       "created": "创建时间",
       "lastLogin": "最近登录",
       "actions": "操作",
+      "tierFilter": "用户身份筛选",
+      "tierAll": "全部",
+      "tierSupporter": "赞助者",
+      "tierFree": "普通",
       "pagination": "{start}-{end} / {total}，第 {page} / {page_count} 页",
       "prevPage": "上一页",
       "nextPage": "下一页"

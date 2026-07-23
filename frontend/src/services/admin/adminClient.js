@@ -31,6 +31,7 @@ export const adminClient = {
     q = '',
     page = 1,
     pageSize = 20,
+    tier = 'all',
   } = {}) => {
     const params = new URLSearchParams();
     if (q) {
@@ -38,6 +39,9 @@ export const adminClient = {
     }
     params.set('page', String(page));
     params.set('page_size', String(pageSize));
+    if (tier && tier !== 'all') {
+      params.set('tier', String(tier));
+    }
     return requestJson(`/api/admin/overview?${params.toString()}`);
   },
   adjustUserTokens: (userId, payload) => requestJson(`/api/admin/users/${encodeURIComponent(userId)}/tokens`, {

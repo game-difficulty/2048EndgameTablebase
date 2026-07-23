@@ -43,14 +43,17 @@
         <template v-if="authUser">
           <button
             type="button"
-            class="action-btn-small flex items-center gap-2"
+            :class="['action-btn-small account-trigger flex items-center gap-2', hasSupporterPresentation ? 'supporter' : '']"
             :aria-expanded="accountMenuOpen ? 'true' : 'false'"
             @click="accountMenuOpen = !accountMenuOpen"
           >
-            <span class="flex h-6 w-6 items-center justify-center rounded-full bg-accent/18 text-[0.72rem] font-black text-accent">
+            <span :class="['account-avatar', hasSupporterPresentation ? 'supporter' : '']">
               {{ accountInitials }}
             </span>
             <span class="hidden max-w-[9rem] truncate sm:inline">{{ accountDisplayName }}</span>
+            <span v-if="hasSupporterPresentation" class="account-mini-badge">
+              {{ $t('auth.account.supporterShort') }}
+            </span>
           </button>
         </template>
         <template v-else>
@@ -69,10 +72,18 @@
       class="fixed right-3 top-[3.75rem] z-[110] w-[18rem] rounded-2xl border border-border-main bg-bg-card/98 p-4 text-text-main shadow-[0_20px_70px_rgba(15,23,42,0.35)]"
       data-account-menu
     >
-      <div class="min-w-0">
-        <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('auth.account.title') }}</div>
-        <div class="mt-1 truncate ui-body font-black">{{ accountDisplayName }}</div>
-        <div class="truncate text-[0.72rem] font-bold text-text-secondary">{{ authUser.email }}</div>
+      <div class="account-menu-head">
+        <span :class="['account-avatar large', hasSupporterPresentation ? 'supporter' : '']">
+          {{ accountInitials }}
+        </span>
+        <div class="min-w-0">
+          <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('auth.account.title') }}</div>
+          <div class="mt-1 truncate ui-body font-black">{{ accountDisplayName }}</div>
+          <div class="truncate text-[0.72rem] font-bold text-text-secondary">{{ authUser.email }}</div>
+          <div v-if="hasSupporterPresentation" class="mt-2">
+            <span class="account-supporter-pill">{{ $t('auth.account.supporter') }}</span>
+          </div>
+        </div>
       </div>
       <div class="mt-4 grid gap-2 rounded-xl border border-border-main bg-bg-main/55 p-3">
         <div class="flex items-center justify-between gap-3">
@@ -371,6 +382,9 @@ const canOpenAdmin = computed(() => {
   const displayName = String(authUser.value?.display_name || '').trim().toLowerCase();
   return email === 'assweeass@163.com' || displayName === 'user0';
 });
+const hasSupporterPresentation = computed(() => (
+  authUser.value?.entitlements?.tier === 'supporter' || canOpenAdmin.value
+));
 const accountInitials = computed(() => {
   const name = accountDisplayName.value.trim();
   if (!name) return '?';
@@ -778,5 +792,72 @@ onUnmounted(() => {
 .app-shell {
   background-color: var(--bg-main);
   background-image: var(--bg-main-gradient);
+}
+
+.account-trigger.supporter {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border-main));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.account-avatar {
+  display: inline-flex;
+  width: 1.5rem;
+  height: 1.5rem;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.account-avatar.large {
+  width: 2.25rem;
+  height: 2.25rem;
+  font-size: 0.82rem;
+}
+
+.account-avatar.supporter {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-main));
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--accent) 26%, transparent),
+      color-mix(in srgb, var(--success) 16%, transparent));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.account-mini-badge,
+.account-supporter-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 54%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 0.65rem;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.account-mini-badge {
+  min-width: 1.2rem;
+  height: 1.2rem;
+  padding: 0 0.3rem;
+}
+
+.account-supporter-pill {
+  padding: 0.24rem 0.55rem;
+  text-transform: uppercase;
+}
+
+.account-menu-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
 }
 </style>

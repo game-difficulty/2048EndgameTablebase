@@ -161,7 +161,19 @@
       <section class="admin-panel">
         <div class="admin-panel-head">
           <h2>{{ $t('admin.users.title') }}</h2>
-          <div class="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[20rem] sm:flex-row">
+          <div class="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[28rem] sm:flex-row sm:items-center">
+            <div class="admin-segmented" role="group" :aria-label="$t('admin.users.tierFilter')">
+              <button
+                v-for="option in tierFilterOptions"
+                :key="option.value"
+                type="button"
+                :class="['admin-segment-btn', tierFilter === option.value ? 'active' : '']"
+                :disabled="loading"
+                @click="setTierFilter(option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
             <input
               v-model="query"
               class="admin-search"
@@ -387,6 +399,7 @@ const { t } = useI18n();
 const loading = ref(false);
 const error = ref('');
 const query = ref('');
+const tierFilter = ref('all');
 const currentPage = ref(1);
 const pageSize = 20;
 const overview = ref(null);
@@ -477,6 +490,11 @@ const summaryCards = computed(() => [
   { key: 'sessions_24h', label: t('admin.summary.sessions24h'), value: formatNumber(summary.value.sessions_24h) },
   { key: 'usage_events_24h', label: t('admin.summary.usage24h'), value: formatNumber(summary.value.usage_events_24h) },
   { key: 'tokens_spent_24h', label: t('admin.summary.tokens24h'), value: formatTokens(summary.value.tokens_spent_24h) },
+]);
+const tierFilterOptions = computed(() => [
+  { value: 'all', label: t('admin.users.tierAll') },
+  { value: 'supporter', label: t('admin.users.tierSupporter') },
+  { value: 'free', label: t('admin.users.tierFree') },
 ]);
 
 const linePoints = (points, key) => points.map((point) => `${point.x},${point[key]}`).join(' ');
@@ -603,6 +621,16 @@ const runSearch = () => {
   refresh();
 };
 
+const setTierFilter = (value) => {
+  const nextValue = ['all', 'supporter', 'free'].includes(value) ? value : 'all';
+  if (tierFilter.value === nextValue) {
+    return;
+  }
+  tierFilter.value = nextValue;
+  currentPage.value = 1;
+  refresh();
+};
+
 const goToPage = (page) => {
   const nextPage = Math.max(1, Math.min(Number(page || 1), pageCount.value));
   if (nextPage === currentPage.value) {
@@ -711,6 +739,7 @@ const refresh = async () => {
       q: query.value,
       page: currentPage.value,
       pageSize,
+      tier: tierFilter.value,
     });
     currentPage.value = Number(overview.value?.users_page?.page || currentPage.value);
   } catch (requestError) {
@@ -989,6 +1018,36 @@ watch(() => props.active, (active) => {
 
 .admin-search:focus {
   border-color: var(--accent);
+}
+
+.admin-segmented {
+  display: inline-grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border-main);
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--bg-main) 74%, transparent);
+}
+
+.admin-segment-btn {
+  min-height: 2.35rem;
+  border: 0;
+  border-right: 1px solid var(--border-main);
+  color: var(--text-secondary);
+  font-size: var(--font-ui-xs);
+  font-weight: 950;
+  padding: 0.45rem 0.7rem;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.admin-segment-btn:last-child {
+  border-right: 0;
+}
+
+.admin-segment-btn:hover:not(:disabled),
+.admin-segment-btn.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-main);
 }
 
 .admin-table {

@@ -74,6 +74,8 @@
       "bonusTokens": "Bonus tokens",
       "paidTokens": "Paid tokens",
       "totalTokens": "Total",
+      "supporter": "Supporter",
+      "supporterShort": "S",
       "changePassword": "Change Password",
       "deactivateAccount": "Deactivate"
     },
@@ -453,6 +455,10 @@
       "created": "Created",
       "lastLogin": "Last Login",
       "actions": "Actions",
+      "tierFilter": "User tier filter",
+      "tierAll": "All",
+      "tierSupporter": "Supporters",
+      "tierFree": "Free",
       "pagination": "{start}-{end} / {total}, page {page} of {page_count}",
       "prevPage": "Previous",
       "nextPage": "Next"

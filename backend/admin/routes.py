@@ -119,19 +119,40 @@ def _query_users(
     *,
     page: int,
     page_size: int,
+    tier: str = "all",
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     normalized_query = str(q or "").strip().lower()
+    normalized_tier = str(tier or "all").strip().lower()
+    if normalized_tier not in {"all", "supporter", "free"}:
+        normalized_tier = "all"
     params: list[Any] = []
-    where = ""
+    where_parts: list[str] = []
     if normalized_query:
-        where = """
-        WHERE lower(users.email) LIKE ?
-           OR lower(COALESCE(users.display_name, '')) LIKE ?
-           OR CAST(users.id AS TEXT) = ?
-        """
+        where_parts.append(
+            """
+            (
+              lower(users.email) LIKE ?
+              OR lower(COALESCE(users.display_name, '')) LIKE ?
+              OR CAST(users.id AS TEXT) = ?
+            )
+            """
+        )
         like = f"%{normalized_query}%"
         params.extend([like, like, normalized_query])
-    total = _scalar(db, f"SELECT COUNT(*) FROM users {where}", tuple(params))
+    if normalized_tier != "all":
+        where_parts.append("COALESCE(user_entitlements.tier, 'free') = ?")
+        params.append(normalized_tier)
+    where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    total = _scalar(
+        db,
+        f"""
+        SELECT COUNT(*)
+        FROM users
+        LEFT JOIN user_entitlements ON user_entitlements.user_id = users.id
+        {where}
+        """,
+        tuple(params),
+    )
     resolved_page_size = max(1, min(100, int(page_size)))
     page_count = max(1, (total + resolved_page_size - 1) // resolved_page_size)
     resolved_page = max(1, min(int(page), page_count))
@@ -219,6 +240,7 @@ async def admin_overview(
     q: str = Query("", max_length=120),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    tier: str = Query("all", max_length=20),
 ):
     _require_admin(request)
     now = utcnow()
@@ -254,7 +276,7 @@ async def admin_overview(
             ),
         }
         recent_users, _recent_users_page = _query_users(db, "", page=1, page_size=8)
-        users, users_page = _query_users(db, q, page=page, page_size=page_size)
+        users, users_page = _query_users(db, q, page=page, page_size=page_size, tier=tier)
         token_activity = _daily_token_activity(db, 14)
 
     return {
@@ -264,6 +286,7 @@ async def admin_overview(
         "users": users,
         "users_page": users_page,
         "query": q,
+        "tier": tier,
     }
 
 
