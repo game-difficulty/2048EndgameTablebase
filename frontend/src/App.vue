@@ -825,30 +825,47 @@ onUnmounted(() => {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
+.account-avatar.supporter::before {
+  content: "";
+  position: absolute;
+  right: 0.01rem;
+  bottom: 0.02rem;
+  z-index: 2;
+  width: 0.25rem;
+  height: 0.25rem;
+  background: var(--bg-card);
+  clip-path: polygon(50% 0, 62% 36%, 100% 50%, 62% 64%, 50% 100%, 38% 64%, 0 50%, 38% 36%);
+  pointer-events: none;
+}
+
 .account-avatar.supporter::after {
   content: "";
   position: absolute;
-  right: -0.12rem;
-  bottom: -0.12rem;
-  width: 0.58rem;
-  height: 0.58rem;
-  border: 1px solid color-mix(in srgb, var(--bg-card) 92%, white);
+  right: -0.16rem;
+  bottom: -0.14rem;
+  z-index: 1;
+  width: 0.7rem;
+  height: 0.7rem;
+  border: 2px solid color-mix(in srgb, var(--bg-card) 94%, white);
   border-radius: 999px;
-  background:
-    radial-gradient(circle at 50% 50%, var(--bg-card) 0 16%, transparent 18%),
-    conic-gradient(from 45deg,
-      var(--accent) 0 25%,
-      color-mix(in srgb, var(--success) 76%, var(--accent)) 25% 50%,
-      var(--accent) 50% 75%,
-      color-mix(in srgb, var(--success) 76%, var(--accent)) 75% 100%);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--success) 72%, var(--accent)));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent),
+    0 2px 4px rgba(15, 23, 42, 0.24);
+}
+
+.account-avatar.large.supporter::before {
+  right: 0.08rem;
+  bottom: 0.08rem;
+  width: 0.3rem;
+  height: 0.3rem;
 }
 
 .account-avatar.large.supporter::after {
-  right: -0.08rem;
-  bottom: -0.08rem;
-  width: 0.68rem;
-  height: 0.68rem;
+  right: -0.12rem;
+  bottom: -0.12rem;
+  width: 0.82rem;
+  height: 0.82rem;
 }
 
 .account-menu-head {
