@@ -2,7 +2,7 @@
 # User Manual
 
 **Author**: game_difficulty
-**Version**: 13.0.0
+**Version**: 13.0.1
 **Date**: 2026.6.5
 
 ---

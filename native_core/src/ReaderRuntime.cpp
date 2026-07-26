@@ -2259,7 +2259,7 @@ ReaderMoveResult evaluate_classic_result_candidates(
     const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
 
     for (const auto &path_entry : path_list) {
-        if (!fs::exists(path_entry.first) || max_success_rate > 0.0) {
+        if (!NativePath::exists(path_entry.first) || max_success_rate > 0.0) {
             continue;
         }
         const ClassicLookupContext lookup = make_classic_lookup_context(path_entry.first, filename, path_entry.second);
@@ -2362,7 +2362,7 @@ ReaderMoveResult evaluate_advanced_result_candidates(
     const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
 
     for (const auto &path_entry : path_list) {
-        if (!fs::exists(path_entry.first) || max_success_rate > 0.0) {
+        if (!NativePath::exists(path_entry.first) || max_success_rate > 0.0) {
             continue;
         }
 
@@ -2469,7 +2469,7 @@ ReaderMoveResult evaluate_exad_result_candidates(
     const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
 
     for (const auto &path_entry : path_list) {
-        if (!fs::exists(path_entry.first) || max_success_rate > 0.0) {
+        if (!NativePath::exists(path_entry.first) || max_success_rate > 0.0) {
             continue;
         }
 
@@ -2579,7 +2579,7 @@ ReaderMoveResult evaluate_ex_result_candidates(
     const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
 
     for (const auto &path_entry : path_list) {
-        if (!fs::exists(path_entry.first)) {
+        if (!NativePath::exists(path_entry.first)) {
             continue;
         }
 

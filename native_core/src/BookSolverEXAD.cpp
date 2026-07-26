@@ -362,7 +362,7 @@ std::string exad_chunk_writing_path(const RunOptions &options, int step) {
 std::string exad_slot_chunk_path(const std::string &chunk_dir, size_t slot) {
     std::ostringstream stream;
     stream << "slot_" << std::setw(2) << std::setfill('0') << slot << ".exadslot";
-    return (fs::path(chunk_dir) / stream.str()).string();
+    return NativePath::to_utf8_string(NativePath::from_utf8(chunk_dir) / stream.str());
 }
 
 std::string exad_slot_part_chunk_path(
@@ -378,7 +378,7 @@ std::string exad_slot_part_chunk_path(
     if (suffix != nullptr && *suffix != '\0') {
         stream << suffix;
     }
-    return (fs::path(chunk_dir) / stream.str()).string();
+    return NativePath::to_utf8_string(NativePath::from_utf8(chunk_dir) / stream.str());
 }
 
 bool env_flag_enabled_local(const char *name) {
@@ -3851,7 +3851,7 @@ void recalculate_process_exad_impl(
         const double write_t0 = wall_time_seconds();
         write_exad_solved_layer_file(options, step, current, io_config);
         const double write_t1 = wall_time_seconds();
-        compress_seconds += maybe_compress_exad_solved_file(options, step);
+        compress_seconds += maybe_compress_exad_solved_file(options, step, true);
         remove_exad_temp_layer_candidates(options, step);
 
         EXADSolveStatsRecord record;
@@ -4307,6 +4307,7 @@ void recalculate_process_exad_chunked_impl(
             step,
             "after_solved_write"
         );
+        compress_seconds += maybe_compress_exad_solved_file(options, step, true);
 
         NativePath::remove_all(chunk_dir, cleanup_ec);
         if (cleanup_ec) {
