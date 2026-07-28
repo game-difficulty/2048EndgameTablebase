@@ -41,6 +41,7 @@ from backend.cloud_files import (
     build_file_download_response,
     cleanup_expired_uploads,
     get_download_root,
+    get_max_upload_bytes_for_kind,
     get_download_record,
     get_upload_record,
     register_upload,
@@ -557,6 +558,7 @@ async def upload_files(
             saved = await save_upload_file(
                 upload,
                 allowed_extensions=allowed_extensions or None,
+                max_bytes=get_max_upload_bytes_for_kind(normalized_kind),
             )
             record = register_upload(
                 saved,
@@ -622,6 +624,7 @@ async def create_analysis_job_route(
             saved = await save_upload_file(
                 upload,
                 allowed_extensions=allowed_extensions_for_kind("analysis"),
+                max_bytes=get_max_upload_bytes_for_kind("analysis"),
             )
             uploads.append(
                 register_upload(

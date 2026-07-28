@@ -118,7 +118,9 @@ const EMPTY_FILES = Object.freeze([]);
 function createInput({ accept = '', multiple = false } = {}) {
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = accept;
+  if (accept) {
+    input.accept = accept;
+  }
   input.multiple = multiple;
   input.style.position = 'fixed';
   input.style.left = '-9999px';

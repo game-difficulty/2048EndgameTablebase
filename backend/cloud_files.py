@@ -19,6 +19,8 @@ from .auth.service import iso, utcnow
 
 DEFAULT_UPLOAD_ROOT = Path(tempfile.gettempdir()) / "2048tables-cloud" / "uploads"
 DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+DEFAULT_REPLAY_UPLOAD_BYTES = 500 * 1024
+DEFAULT_ANALYSIS_UPLOAD_BYTES = 500 * 1024
 DEFAULT_UPLOAD_TTL_SECONDS = 6 * 60 * 60
 SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -75,8 +77,27 @@ def get_download_root() -> Path:
 
 
 def get_max_upload_bytes(default: int = DEFAULT_MAX_UPLOAD_BYTES) -> int:
+    return _positive_int_from_env("CLOUD_MAX_UPLOAD_BYTES", default)
+
+
+def get_max_upload_bytes_for_kind(kind: str) -> int:
+    normalized_kind = str(kind or "").strip().lower()
+    if normalized_kind == "replay":
+        return _positive_int_from_env(
+            "CLOUD_MAX_REPLAY_UPLOAD_BYTES",
+            DEFAULT_REPLAY_UPLOAD_BYTES,
+        )
+    if normalized_kind == "analysis":
+        return _positive_int_from_env(
+            "CLOUD_MAX_ANALYSIS_UPLOAD_BYTES",
+            DEFAULT_ANALYSIS_UPLOAD_BYTES,
+        )
+    return get_max_upload_bytes()
+
+
+def _positive_int_from_env(name: str, default: int) -> int:
     try:
-        return max(1, int(os.getenv("CLOUD_MAX_UPLOAD_BYTES", str(default))))
+        return max(1, int(os.getenv(name, str(default))))
     except ValueError:
         return default
 

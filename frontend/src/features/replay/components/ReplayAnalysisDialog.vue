@@ -405,11 +405,20 @@ const loadCatalog = async () => {
   }
 };
 
+const shouldRelaxAnalysisFileAccept = () => {
+  if (typeof navigator === 'undefined') return false;
+  const userAgent = navigator.userAgent || '';
+  const platform = navigator.platform || '';
+  return /iPad|iPhone|iPod/u.test(userAgent)
+    || (platform === 'MacIntel' && Number(navigator.maxTouchPoints || 0) > 1);
+};
+
 const pickFiles = async () => {
-  const files = await pickBrowserFiles({
-    accept: '.txt,.vrs,.rpl',
-    multiple: true,
-  });
+  const options = { multiple: true };
+  if (!shouldRelaxAnalysisFileAccept()) {
+    options.accept = '.txt,.vrs,.rpl';
+  }
+  const files = await pickBrowserFiles(options);
   if (files.length) {
     analysisError.value = '';
     selectedFiles.value = files;
