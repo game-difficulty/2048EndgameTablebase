@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import atexit
+from collections import Counter, defaultdict, deque
 from contextlib import asynccontextmanager
 import json
+import logging
 import os
+import time
 
 import uvicorn
 from fastapi import (
@@ -19,6 +22,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.websockets import WebSocketState
 
 from backend.actions import Action, Message
 from backend.admin.routes import router as admin_router
@@ -72,12 +76,39 @@ else:
 
 
 manager = ConnectionManager()
+logger = logging.getLogger("2048tables.websocket")
 mathjax_path = get_resource_path("mathjax")
 pic_path = get_resource_path("pic")
 minigame_assets_path = pic_path
 frontend_dist_path = get_resource_path(os.path.join("frontend", "dist"))
 frontend_assets_path = os.path.join(frontend_dist_path, "assets")
 frontend_wasm_path = os.path.join(frontend_dist_path, "wasm")
+
+WS_MAX_ACTIVE_CONNECTIONS = int(os.getenv("WS_MAX_ACTIVE_CONNECTIONS", "512"))
+WS_MAX_ACTIVE_CONNECTIONS_PER_IP = int(
+    os.getenv("WS_MAX_ACTIVE_CONNECTIONS_PER_IP", "24")
+)
+WS_ACCEPT_RATE_WINDOW_SECONDS = int(
+    os.getenv("WS_ACCEPT_RATE_WINDOW_SECONDS", "60")
+)
+WS_MAX_ACCEPTS_PER_WINDOW_PER_IP = int(
+    os.getenv("WS_MAX_ACCEPTS_PER_WINDOW_PER_IP", "60")
+)
+WS_LOG_INTERVAL_SECONDS = int(os.getenv("WS_LOG_INTERVAL_SECONDS", "60"))
+WS_LOG_BURST = int(os.getenv("WS_LOG_BURST", "5"))
+
+_ws_active_by_ip: Counter[str] = Counter()
+_ws_accepts_by_ip: defaultdict[str, deque[float]] = defaultdict(deque)
+_ws_log_windows: dict[str, dict[str, float | int]] = {}
+_WS_CLOSED_ERROR_MARKERS = (
+    "WebSocket is not connected",
+    "Cannot call \"send\" once a close message has been sent",
+    "Cannot call \"receive\" once a disconnect message has been received",
+    "after sending 'websocket.close'",
+    "Unexpected ASGI message",
+    "ClientDisconnected",
+    "ConnectionClosed",
+)
 
 
 class CacheControlledStaticFiles(StaticFiles):
@@ -121,40 +152,157 @@ async def canonicalize_www_domain(request: Request, call_next):
     return await call_next(request)
 
 
-async def _send_ws_error(websocket: WebSocket, message: str):
+def _rate_limited_log(
+    key: str,
+    message: str,
+    *,
+    exc: BaseException | None = None,
+) -> None:
+    now = time.monotonic()
+    window = _ws_log_windows.get(key)
+    if window is None or now - float(window["start"]) >= WS_LOG_INTERVAL_SECONDS:
+        if window and int(window.get("suppressed", 0)) > 0:
+            logger.warning(
+                "Suppressed %s similar websocket log messages for %s.",
+                int(window["suppressed"]),
+                key,
+            )
+        _ws_log_windows[key] = {"start": now, "count": 1, "suppressed": 0}
+        if exc is None:
+            logger.warning(message)
+        else:
+            logger.warning(message, exc_info=(type(exc), exc, exc.__traceback__))
+        return
+
+    if int(window["count"]) < WS_LOG_BURST:
+        window["count"] = int(window["count"]) + 1
+        if exc is None:
+            logger.warning(message)
+        else:
+            logger.warning(message, exc_info=(type(exc), exc, exc.__traceback__))
+        return
+
+    window["suppressed"] = int(window.get("suppressed", 0)) + 1
+
+
+def _is_websocket_closed_error(exc: BaseException) -> bool:
+    if isinstance(exc, WebSocketDisconnect):
+        return True
+    message = str(exc)
+    return any(marker in message for marker in _WS_CLOSED_ERROR_MARKERS)
+
+
+def _websocket_can_send(websocket: WebSocket) -> bool:
     try:
-        await websocket.send_json(
-            {"action": Message.ERROR, "data": {"message": message}}
+        return (
+            websocket.application_state == WebSocketState.CONNECTED
+            and websocket.client_state == WebSocketState.CONNECTED
         )
-    except Exception as send_error:
-        print(f"Send error message failed: {send_error}")
+    except Exception:
+        return False
 
 
-async def _send_auth_required(websocket: WebSocket):
+async def _safe_send_json(
+    websocket: WebSocket,
+    payload: dict,
+    *,
+    log_key: str,
+) -> bool:
+    if not _websocket_can_send(websocket):
+        return False
     try:
-        await websocket.send_json(
-            {
-                "action": Message.AUTH_REQUIRED,
-                "data": {
-                    "code": "AUTH_REQUIRED",
-                    "message": "Authentication required.",
-                },
-            }
-        )
-    except Exception as send_error:
-        print(f"Send auth required message failed: {send_error}")
+        await websocket.send_json(payload)
+        return True
+    except Exception as exc:
+        if not _is_websocket_closed_error(exc):
+            _rate_limited_log(
+                log_key,
+                f"WebSocket send failed: {type(exc).__name__}: {exc}",
+                exc=exc,
+            )
+        return False
 
 
-async def _send_token_required(websocket: WebSocket, exc: InsufficientTokens):
+async def _send_ws_error(websocket: WebSocket, message: str) -> bool:
+    return await _safe_send_json(
+        websocket,
+        {"action": Message.ERROR, "data": {"message": message}},
+        log_key="send_error",
+    )
+
+
+async def _send_auth_required(websocket: WebSocket) -> bool:
+    return await _safe_send_json(
+        websocket,
+        {
+            "action": Message.AUTH_REQUIRED,
+            "data": {
+                "code": "AUTH_REQUIRED",
+                "message": "Authentication required.",
+            },
+        },
+        log_key="send_auth_required",
+    )
+
+
+async def _send_token_required(websocket: WebSocket, exc: InsufficientTokens) -> bool:
+    return await _safe_send_json(
+        websocket,
+        {
+            "action": Message.TOKEN_REQUIRED,
+            "data": exc.payload,
+        },
+        log_key="send_token_required",
+    )
+
+
+async def _close_websocket_quietly(websocket: WebSocket, code: int = 1008) -> None:
     try:
-        await websocket.send_json(
-            {
-                "action": Message.TOKEN_REQUIRED,
-                "data": exc.payload,
-            }
-        )
-    except Exception as send_error:
-        print(f"Send token required message failed: {send_error}")
+        await websocket.close(code=code)
+    except Exception as exc:
+        if not _is_websocket_closed_error(exc):
+            _rate_limited_log(
+                "ws_close_failed",
+                f"WebSocket close failed: {type(exc).__name__}: {exc}",
+                exc=exc,
+            )
+
+
+def _websocket_client_ip(websocket: WebSocket) -> str:
+    forwarded = websocket.headers.get("cf-connecting-ip", "").strip()
+    if forwarded:
+        return forwarded
+    forwarded = websocket.headers.get("x-forwarded-for", "").strip()
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip()
+    return websocket.client.host if websocket.client else "unknown"
+
+
+def _reserve_websocket_slot(ip_address: str) -> tuple[bool, str]:
+    now = time.monotonic()
+    attempts = _ws_accepts_by_ip[ip_address]
+    while attempts and now - attempts[0] > WS_ACCEPT_RATE_WINDOW_SECONDS:
+        attempts.popleft()
+
+    if sum(_ws_active_by_ip.values()) >= WS_MAX_ACTIVE_CONNECTIONS:
+        return False, "global connection limit reached"
+    if _ws_active_by_ip[ip_address] >= WS_MAX_ACTIVE_CONNECTIONS_PER_IP:
+        return False, "per-client connection limit reached"
+    if len(attempts) >= WS_MAX_ACCEPTS_PER_WINDOW_PER_IP:
+        return False, "per-client connection rate limit reached"
+
+    attempts.append(now)
+    _ws_active_by_ip[ip_address] += 1
+    return True, ""
+
+
+def _release_websocket_slot(ip_address: str) -> None:
+    if not ip_address:
+        return
+    if _ws_active_by_ip[ip_address] <= 1:
+        _ws_active_by_ip.pop(ip_address, None)
+    else:
+        _ws_active_by_ip[ip_address] -= 1
 
 
 def _bind_auth_user(session, auth_user: dict) -> None:
@@ -173,17 +321,20 @@ async def _handle_auth_session(websocket: WebSocket, session, payload: dict) -> 
         session.user_id is not None and int(auth_user["id"]) != int(session.user_id)
     ):
         if session.user_id is not None:
-            await websocket.send_json(
+            await _safe_send_json(
+                websocket,
                 {
                     "action": Action.AUTH_SESSION,
                     "data": {"authenticated": True},
-                }
+                },
+                log_key="send_auth_session",
             )
             return
         await _send_auth_required(websocket)
         return
     _bind_auth_user(session, auth_user)
-    await websocket.send_json(
+    await _safe_send_json(
+        websocket,
         {
             "action": Action.AUTH_SESSION,
             "data": {
@@ -191,20 +342,34 @@ async def _handle_auth_session(websocket: WebSocket, session, payload: dict) -> 
                 "user": auth_user,
                 "token_balance": auth_user.get("token_balance"),
             },
-        }
+        },
+        log_key="send_auth_session",
     )
 
 
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ignore
-    auth_user = current_user_from_websocket(websocket)
+    ws_ip = _websocket_client_ip(websocket)
+    slot_reserved = False
+    session = None
 
-    await manager.connect(websocket, client_id)
-    session = manager.active_connections[websocket]
-    if auth_user is not None:
-        _bind_auth_user(session, auth_user)
+    allowed, reject_reason = _reserve_websocket_slot(ws_ip)
+    if not allowed:
+        _rate_limited_log(
+            f"ws_reject_{reject_reason}",
+            f"Rejected websocket from {ws_ip}: {reject_reason}.",
+        )
+        await _close_websocket_quietly(websocket)
+        return
+    slot_reserved = True
 
     try:
+        auth_user = current_user_from_websocket(websocket)
+        await manager.connect(websocket, client_id)
+        session = manager.active_connections[websocket]
+        if auth_user is not None:
+            _bind_auth_user(session, auth_user)
+
         while True:
             try:
                 data = await websocket.receive_text()
@@ -286,17 +451,35 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
             except WebSocketDisconnect:
                 break
             except InsufficientTokens as exc:
-                await _send_token_required(websocket, exc)
+                sent = await _send_token_required(websocket, exc)
+                if not sent:
+                    break
             except Exception as exc:
-                print(f"WebSocket action error: {exc}")
+                if _is_websocket_closed_error(exc):
+                    break
+                _rate_limited_log(
+                    "ws_action_error",
+                    f"WebSocket action error: {type(exc).__name__}: {exc}",
+                    exc=exc,
+                )
                 publish_frontend_exception("WebSocket Action Error", exc)
-                await _send_ws_error(websocket, str(exc))
+                sent = await _send_ws_error(websocket, str(exc))
+                if not sent:
+                    break
     except Exception as exc:
-        print(f"Connection error: {exc}")
-        publish_frontend_exception("WebSocket Connection Error", exc)
+        if not _is_websocket_closed_error(exc):
+            _rate_limited_log(
+                "ws_connection_error",
+                f"WebSocket connection error: {type(exc).__name__}: {exc}",
+                exc=exc,
+            )
+            publish_frontend_exception("WebSocket Connection Error", exc)
     finally:
-        save_game_state(session)
+        if session is not None:
+            save_game_state(session)
         manager.disconnect(websocket)
+        if slot_reserved:
+            _release_websocket_slot(ws_ip)
 
 
 def _usage_for_ws_action(action: str | None) -> tuple[str, str] | None:
