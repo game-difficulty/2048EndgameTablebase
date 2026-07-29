@@ -11,6 +11,7 @@ from engine_core.replay_utils import (
     decode_replay_change,
     empty_replay,
     evaluation_of_performance as replay_evaluation_of_performance,
+    replay_transition_matches_next_snapshot,
 )
 
 from .serialization import sanitize_config
@@ -86,6 +87,9 @@ def _replay_sync_step(session, step, animate=False, previous_step=None):
         and previous_step is not None
         and previous_step + 1 == step
         and previous_step < total_moves
+        and replay_transition_matches_next_snapshot(
+            session.replay_record, previous_step, session.replay_use_variant
+        )
     ):
         transition = build_step_transition(
             session.replay_record, previous_step, session.replay_use_variant

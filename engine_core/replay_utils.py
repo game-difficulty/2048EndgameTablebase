@@ -53,6 +53,11 @@ def decode_replay_change(encoded):
     return replay_move_bits_to_dir(move_bits), int(spawn_pos), int(spawn_exp)
 
 
+def replay_spawn_pos_to_board_pos(spawn_pos):
+    """Convert the row-major replay cell index to the packed-board nibble index."""
+    return 15 - int(spawn_pos)
+
+
 def validate_replay_array(record):
     if len(record) < 1:
         return False
@@ -158,7 +163,10 @@ def build_step_transition(record, step, use_variant=False):
     animation_board = _normalize_board_for_animation(board_2d, use_variant)
     non_merging_values = _non_merging_values_for_animation(use_variant)
     moved_board, move_score = move_fn(board_encoded, ENGINE_DIR_MAP[move_name])
-    next_board = np.uint64(int(moved_board) | (int(spawn_exp) << (int(spawn_pos) * 4)))
+    board_spawn_pos = replay_spawn_pos_to_board_pos(spawn_pos)
+    next_board = np.uint64(
+        int(moved_board) | (int(spawn_exp) << (board_spawn_pos * 4))
+    )
 
     return {
         "board_encoded": board_encoded,
@@ -172,6 +180,26 @@ def build_step_transition(record, step, use_variant=False):
         },
         "score_delta": int(move_score),
     }
+
+
+def replay_transition_matches_next_snapshot(record, step, use_variant=False):
+    """Return whether a recorded move reaches the following board snapshot.
+
+    The final record has no following snapshot, so its transition is considered
+    valid as long as it can be decoded.
+    """
+    if step < 0 or step >= len(record):
+        return False
+
+    transition = build_step_transition(record, step, use_variant)
+    if transition is None:
+        return False
+    if step + 1 >= len(record):
+        return True
+
+    expected = int(transition["next_board_encoded"])
+    actual = int(record[step + 1]["f0"])
+    return expected == actual
 
 
 def board_for_replay_step(record, step, use_variant=False):
