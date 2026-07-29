@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from backend.auth.db import auth_db
-from backend.auth.entitlements import mark_user_supporter
+from backend.auth.entitlements import SUPPORTER_TIER, mark_user_supporter
 
 from .config import (
     TOKEN_UNIT,
@@ -22,6 +22,7 @@ from .errors import InsufficientTokens
 
 INVITED_WEEKLY_GRANT_UNITS = token_to_units(4096)
 PUBLIC_WEEKLY_GRANT_UNITS = token_to_units(256)
+SUPPORTER_WEEKLY_GRANT_UNITS = token_to_units(32768)
 WEEKLY_GRANT_INTERVAL = timedelta(days=7)
 MAX_ADMIN_TOKEN_ADJUSTMENT = 100_000_000
 
@@ -247,9 +248,18 @@ def adjust_paid_tokens_for_admin(
 
 def _weekly_grant_for_user(db: sqlite3.Connection, user_id: int) -> tuple[int, str]:
     row = db.execute(
-        "SELECT registered_with_invite FROM users WHERE id = ?",
+        """
+        SELECT
+          users.registered_with_invite,
+          COALESCE(user_entitlements.tier, 'free') AS entitlement_tier
+        FROM users
+        LEFT JOIN user_entitlements ON user_entitlements.user_id = users.id
+        WHERE users.id = ?
+        """,
         (int(user_id),),
     ).fetchone()
+    if row is not None and str(row["entitlement_tier"] or "").strip().lower() == SUPPORTER_TIER:
+        return SUPPORTER_WEEKLY_GRANT_UNITS, SUPPORTER_TIER
     if row is None or int(row["registered_with_invite"] or 0):
         return INVITED_WEEKLY_GRANT_UNITS, "invite"
     return PUBLIC_WEEKLY_GRANT_UNITS, "public"
