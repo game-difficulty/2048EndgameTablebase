@@ -53,14 +53,14 @@ class WeeklyTokenGrantTests(unittest.TestCase):
                 )
             return user_id
 
-    def test_public_user_gets_256_weekly_bonus_tokens(self) -> None:
+    def test_public_user_gets_512_weekly_bonus_tokens(self) -> None:
         user_id = self._create_user("public@example.com", invited=False)
 
         balance = grant_weekly_tokens_if_due(user_id)
 
-        self.assertEqual(balance["bonus"], 256)
+        self.assertEqual(balance["bonus"], 512)
         self.assertEqual(balance["paid"], 0)
-        self.assertEqual(balance["total"], 256)
+        self.assertEqual(balance["total"], 512)
 
     def test_invited_user_gets_4096_weekly_bonus_tokens(self) -> None:
         user_id = self._create_user("invited@example.com", invited=True)

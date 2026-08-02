@@ -21,7 +21,7 @@ from .errors import InsufficientTokens
 
 
 INVITED_WEEKLY_GRANT_UNITS = token_to_units(4096)
-PUBLIC_WEEKLY_GRANT_UNITS = token_to_units(256)
+PUBLIC_WEEKLY_GRANT_UNITS = token_to_units(512)
 SUPPORTER_WEEKLY_GRANT_UNITS = token_to_units(32768)
 WEEKLY_GRANT_INTERVAL = timedelta(days=7)
 MAX_ADMIN_TOKEN_ADJUSTMENT = 100_000_000
