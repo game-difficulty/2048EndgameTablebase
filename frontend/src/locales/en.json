@@ -84,7 +84,9 @@
     },
     "tokens": {
       "insufficientTitle": "Insufficient token balance",
-      "insufficientMessage": "This action requires {required_tokens} tokens. Your current balance is {balance_tokens} tokens."
+      "insufficientMessage": "This action requires {required_tokens} tokens. Your current balance is {balance_tokens} tokens.",
+      "rechargeHint": "You can sponsor / recharge to get more tokens. Payments are credited after manual admin confirmation.",
+      "rechargeAction": "Sponsor / Recharge"
     }
   },
   "settings": {

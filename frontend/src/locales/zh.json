@@ -78,7 +78,9 @@
     },
     "tokens": {
       "insufficientTitle": "Token 余额不足",
-      "insufficientMessage": "本次操作需要 {required_tokens} token，当前余额为 {balance_tokens} token。"
+      "insufficientMessage": "本次操作需要 {required_tokens} token，当前余额为 {balance_tokens} token。",
+      "rechargeHint": "可以通过赞助充值获得更多 token。付款后需等待站长人工确认到账。",
+      "rechargeAction": "去赞助充值"
     },
     "hints": {
       "usernameRequiredForCode": "请先填写用户名，然后再发送验证码。",

@@ -288,7 +288,13 @@
         <div class="mt-2 ui-body text-text-secondary">
           {{ $t('auth.tokens.insufficientMessage', tokenRequiredDialog) }}
         </div>
-        <div class="mt-5 flex justify-end">
+        <div class="mt-3 ui-body text-text-secondary">
+          {{ $t('auth.tokens.rechargeHint') }}
+        </div>
+        <div class="mt-5 flex flex-wrap justify-end gap-2">
+          <button type="button" class="action-btn-small surface-prominent text-white" @click="openSponsorFromTokenRequired">
+            {{ $t('auth.tokens.rechargeAction') }}
+          </button>
           <button type="button" class="action-btn-small" @click="closeTokenRequiredDialog">
             {{ $t('common.close') }}
           </button>
@@ -732,6 +738,15 @@ const closeTokenRequiredDialog = () => {
     required_tokens: 0,
     balance_tokens: 0,
   };
+};
+
+const openSponsorFromTokenRequired = () => {
+  closeTokenRequiredDialog();
+  if (!authUser.value) {
+    openAuthDialog('login');
+    return;
+  }
+  openSponsorDialog();
 };
 
 const handleAccountMenuPointerDown = (event) => {
