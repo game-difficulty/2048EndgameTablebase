@@ -35,6 +35,7 @@
 
           <div class="sponsor-note">
             <div class="font-black text-text-main">{{ $t('billing.manualTitle') }}</div>
+            <p class="sponsor-benefit">{{ $t('billing.weeklyBenefit') }}</p>
             <p>{{ $t('billing.manualNote') }}</p>
             <p>{{ $t('billing.remarkNote', { identity: paymentRemark }) }}</p>
           </div>
@@ -133,6 +134,10 @@ const formatTokens = (value) => Number(value || 0).toLocaleString();
   font-size: var(--font-ui-sm);
   font-weight: 800;
   line-height: 1.45;
+}
+
+.sponsor-benefit {
+  color: var(--accent);
 }
 
 @media (max-width: 520px) {

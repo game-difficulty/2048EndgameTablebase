@@ -419,6 +419,7 @@
     "wechatQr": "微信收款码",
     "sponsorAmount": "赞助金额",
     "manualTitle": "人工确认到账",
+    "weeklyBenefit": "赞助者用户每周免费额度提升为 32,768 token。",
     "manualNote": "当前版本不会自动到账。付款后请等待站长人工确认；确认前账号余额不会变化。",
     "remarkNote": "付款备注务必填写注册邮箱或用户名，推荐直接填写：{identity}。未备注可能无法人工确认到账。"
   },

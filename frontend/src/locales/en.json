@@ -419,6 +419,7 @@
     "wechatQr": "WeChat payment QR",
     "sponsorAmount": "Sponsor Amount",
     "manualTitle": "Manual confirmation",
+    "weeklyBenefit": "Supporter accounts receive 32,768 free tokens every week.",
     "manualNote": "This version does not credit tokens automatically. Please wait for admin confirmation after payment; your balance will not change before that.",
     "remarkNote": "Your payment note must include your registered email or username. Recommended exact note: {identity}. Without a note, the payment may not be credited manually."
   },
