@@ -8,6 +8,7 @@ from Config import SingletonConfig, category_info
 from fastapi import WebSocket
 from engine_core.VBoardMover import s_gen_new_num as v_gen_new_num, s_move_board as v_move_board
 from engine_core.BoardMover import s_gen_new_num as r_gen_new_num, s_move_board as r_move_board
+from engine_core.replay_utils import replay_sentinel
 
 from ..actions import Action, Message
 from ..animation import build_move_animation_metadata
@@ -16,7 +17,6 @@ from ..session import GameSession
 from ..session import np_u64, u64
 from ..tester import (
     PERFORMANCE_PERFECT_LABEL,
-    TESTER_REPLAY_SENTINEL,
     _cache_tester_replay,
     _tester_append_log,
     _tester_append_summary,
@@ -371,7 +371,7 @@ async def handle_tester_action(
             if not path.lower().endswith(".rpl"):
                 path += ".rpl"
             replay = session.tester_record[: session.tester_step_count + 1].copy()
-            replay[session.tester_step_count] = TESTER_REPLAY_SENTINEL
+            replay[session.tester_step_count] = replay_sentinel(session.board_encoded)
             replay.tofile(path)
             session.tester_status = f"Saved replay to {path}"
             await send_tester_state(websocket, session)

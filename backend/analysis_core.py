@@ -17,6 +17,7 @@ from backend.replay_2048next import (
     is_2048next_replay,
 )
 from engine_core.BookReader import BookReaderDispatcher
+from engine_core.replay_utils import build_step_transition, replay_sentinel
 from Config import DTYPE_CONFIG, SingletonConfig, category_info, pattern_catalog
 from engine_core.performance_evaluation import (
     PERFORMANCE_PERFECT_LABEL,
@@ -415,17 +416,22 @@ class ReplayDecoder:
             moves_made += 1
 
     def _decode_test_replay(self, arr) -> None:
-        self.record_list = np.full(
-            len(arr), 1, dtype="uint64,uint32,uint8,uint8,uint8"
+        transition_count = max(0, len(arr) - 1)
+        self.record_list = np.zeros(
+            transition_count, dtype="uint64,uint32,uint8,uint8,uint8"
         )
-        self.record_list["f0"] = arr["f0"]
-        self.record_list["f1"] = arr["f1"]
-        self.record_list["f2"][:-1] = arr["f2"][1:]
-        for i in range(1, len(arr) - 1):
+        self.record_list["f0"] = arr["f0"][:-1]
+        self.record_list["f1"] = arr["f1"][:-1]
+        self.record_list["f2"] = arr["f2"][1:]
+        for i in range(transition_count):
             moved = bm.move_board(arr["f0"][i], arr["f2"][i + 1])
             diff = moved ^ arr["f0"][i + 1]
+            if diff == 0:
+                raise ValueError("Tester replay transition has no spawned tile")
             pos = (int(diff).bit_length() - 1) // 4
             value = diff >> (pos * 4)
+            if value not in (1, 2) or int(diff) != int(value) << (pos * 4):
+                raise ValueError("Invalid tester replay transition")
             self.record_list["f3"][i] = value
             self.record_list["f4"][i] = 15 - pos
 
@@ -799,14 +805,16 @@ class Analyzer:
             + f"_{self.goodness_of_fit:.4f}.rpl"
         )
         target_file_path = os.path.join(self.target_path, filename)
-        self.record[rec_step_count] = (
-            0,
-            88,
-            666666666,
-            233333333,
-            314159265,
-            987654321,
-        )
+        terminal_board = 0
+        if rec_step_count > 0:
+            transition = build_step_transition(
+                self.record[:rec_step_count],
+                rec_step_count - 1,
+                self.pattern in category_info.get("variant", []),
+            )
+            if transition:
+                terminal_board = transition["next_board_encoded"]
+        self.record[rec_step_count] = replay_sentinel(terminal_board)
         self.record[: rec_step_count + 1].tofile(target_file_path)
 
 

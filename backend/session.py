@@ -142,6 +142,7 @@ class GameSession:
         self.replay_use_variant = False
         self.replay_current_step = 0
         self.replay_board_encoded = np_u64(0)
+        self.replay_terminal_board_encoded = None
         self.replay_results = {}
         self.replay_current_move = None
         self.replay_best_move = None

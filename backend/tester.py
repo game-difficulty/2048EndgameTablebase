@@ -12,7 +12,7 @@ from Config import (
 )
 from engine_core.BookReader import BookReader
 from engine_core.VBoardMover import decode_board, encode_board
-from engine_core.replay_utils import empty_replay, strip_replay_sentinel
+from engine_core.replay_utils import empty_replay, replay_sentinel, strip_replay_sentinel
 from engine_core.performance_evaluation import (
     PERFORMANCE_LABELS,
     PERFORMANCE_PERFECT_LABEL,
@@ -34,19 +34,12 @@ TESTER_EVALUATION_LABELS = {
     "en": {label: label for label in TESTER_PERFORMANCE_ORDER},
     "zh": {label: label for label in TESTER_PERFORMANCE_ORDER},
 }
-TESTER_REPLAY_SENTINEL = (
-    np.uint64(0),
-    np.uint8(88),
-    np.uint32(666666666),
-    np.uint32(233333333),
-    np.uint32(314159265),
-    np.uint32(987654321),
-)
 LATEST_TESTER_REPLAY = {
     "record": empty_replay(),
     "pattern": "",
     "source": "",
     "use_variant": False,
+    "terminal_board": None,
 }
 
 
@@ -91,11 +84,12 @@ def _cache_tester_replay(session):
     if session.tester_step_count <= 0:
         return
     replay = session.tester_record[: session.tester_step_count + 1].copy()
-    replay[session.tester_step_count] = TESTER_REPLAY_SENTINEL
+    replay[session.tester_step_count] = replay_sentinel(session.board_encoded)
     LATEST_TESTER_REPLAY["record"] = strip_replay_sentinel(replay)
     LATEST_TESTER_REPLAY["pattern"] = session.tester_full_pattern
     LATEST_TESTER_REPLAY["source"] = "Tester session"
     LATEST_TESTER_REPLAY["use_variant"] = bool(session.use_variant)
+    LATEST_TESTER_REPLAY["terminal_board"] = np.uint64(u64(session.board_encoded))
 
 
 def _tester_reset_history(session, board_encoded, score=0):

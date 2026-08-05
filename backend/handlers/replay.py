@@ -5,7 +5,7 @@ from typing import Any
 
 from Config import category_info
 from fastapi import WebSocket
-from engine_core.replay_utils import load_replay_file
+from engine_core.replay_utils import load_replay_file_with_terminal_board
 
 from ..actions import Action
 from ..replay import (
@@ -25,14 +25,21 @@ def _load_replay_path(session: GameSession, path: str) -> None:
     if not normalized_path:
         return
     try:
-        record = load_replay_file(normalized_path)
+        record, terminal_board = load_replay_file_with_terminal_board(normalized_path)
         if len(record) == 0:
             _replay_reset(session, "Recording file corrupted")
             return
 
         pattern = _replay_pattern_from_path(normalized_path)
         use_variant = pattern.split("_")[0] in category_info.get("variant", [])
-        _replay_load_record(session, record, pattern, normalized_path, use_variant)
+        _replay_load_record(
+            session,
+            record,
+            pattern,
+            normalized_path,
+            use_variant,
+            terminal_board,
+        )
     except Exception as exc:
         _replay_reset(session, f"Failed to load replay: {exc}")
 
@@ -51,6 +58,7 @@ async def handle_replay_action(
                 LATEST_TESTER_REPLAY["pattern"],
                 LATEST_TESTER_REPLAY["source"],
                 LATEST_TESTER_REPLAY["use_variant"],
+                LATEST_TESTER_REPLAY["terminal_board"],
             )
         elif not session.replay_loaded:
             _replay_reset(session, "No tester replay available yet.")
@@ -65,6 +73,7 @@ async def handle_replay_action(
                 LATEST_TESTER_REPLAY["pattern"],
                 LATEST_TESTER_REPLAY["source"],
                 LATEST_TESTER_REPLAY["use_variant"],
+                LATEST_TESTER_REPLAY["terminal_board"],
             )
         else:
             _replay_reset(session, "No tester replay available yet.")

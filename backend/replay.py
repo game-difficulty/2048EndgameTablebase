@@ -28,6 +28,7 @@ def _replay_reset(session, status=""):
     session.replay_use_variant = False
     session.replay_current_step = 0
     session.replay_board_encoded = np_u64(0)
+    session.replay_terminal_board_encoded = None
     session.replay_results = {}
     session.replay_current_move = None
     session.replay_best_move = None
@@ -55,8 +56,11 @@ def _replay_sync_step(session, step, animate=False, previous_step=None):
     session.replay_current_step = step
     session.replay_board_encoded = np_u64(
         board_for_replay_step(
-        session.replay_record, step, session.replay_use_variant
-    )
+            session.replay_record,
+            step,
+            session.replay_use_variant,
+            getattr(session, "replay_terminal_board_encoded", None),
+        )
     )
     session.replay_results = {}
     session.replay_current_move = None
@@ -88,7 +92,10 @@ def _replay_sync_step(session, step, animate=False, previous_step=None):
         and previous_step + 1 == step
         and previous_step < total_moves
         and replay_transition_matches_next_snapshot(
-            session.replay_record, previous_step, session.replay_use_variant
+            session.replay_record,
+            previous_step,
+            session.replay_use_variant,
+            getattr(session, "replay_terminal_board_encoded", None),
         )
     ):
         transition = build_step_transition(
@@ -105,11 +112,21 @@ def _replay_sync_step(session, step, animate=False, previous_step=None):
     return metadata
 
 
-def _replay_load_record(session, record, pattern="", source="", use_variant=False):
+def _replay_load_record(
+    session,
+    record,
+    pattern="",
+    source="",
+    use_variant=False,
+    terminal_board=None,
+):
     session.replay_record = record.copy()
     session.replay_pattern = pattern
     session.replay_source = source
     session.replay_use_variant = bool(use_variant)
+    session.replay_terminal_board_encoded = (
+        np_u64(terminal_board) if terminal_board is not None else None
+    )
     session.replay_loaded = len(record) > 0
     session.replay_status = (
         f"Loaded {source}" if source else (f"Loaded {pattern}" if pattern else "")
