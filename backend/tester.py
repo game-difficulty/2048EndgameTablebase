@@ -13,7 +13,7 @@ from Config import (
 )
 from engine_core.BookReader import BookReader
 from engine_core.VBoardMover import decode_board, encode_board
-from engine_core.replay_utils import empty_replay, strip_replay_sentinel
+from engine_core.replay_utils import empty_replay, replay_sentinel, strip_replay_sentinel
 from engine_core.performance_evaluation import (
     PERFORMANCE_LABELS,
     PERFORMANCE_PERFECT_LABEL,
@@ -38,26 +38,25 @@ TESTER_EVALUATION_LABELS = {
     "en": {label: label for label in TESTER_PERFORMANCE_ORDER},
     "zh": {label: label for label in TESTER_PERFORMANCE_ORDER},
 }
-TESTER_REPLAY_SENTINEL = (
-    np.uint64(0),
-    np.uint8(88),
-    np.uint32(666666666),
-    np.uint32(233333333),
-    np.uint32(314159265),
-    np.uint32(987654321),
-)
 LATEST_TESTER_REPLAY = {
     "record": empty_replay(),
     "pattern": "",
     "source": "",
     "use_variant": False,
+    "terminal_board": None,
 }
 LATEST_TESTER_REPLAY_BY_SCOPE = OrderedDict()
 MAX_SCOPED_LATEST_TESTER_REPLAYS = 256
 
 
 def _empty_latest_tester_replay():
-    return {"record": empty_replay(), "pattern": "", "source": "", "use_variant": False}
+    return {
+        "record": empty_replay(),
+        "pattern": "",
+        "source": "",
+        "use_variant": False,
+        "terminal_board": None,
+    }
 
 
 def _latest_tester_replay_scope_key(session):
@@ -120,13 +119,15 @@ def _cache_tester_replay(session):
     if session.tester_step_count <= 0:
         return
     replay = session.tester_record[: session.tester_step_count + 1].copy()
-    replay[session.tester_step_count] = TESTER_REPLAY_SENTINEL
+    terminal_board = np.uint64(u64(session.board_encoded))
+    replay[session.tester_step_count] = replay_sentinel(terminal_board)
     cached_record = strip_replay_sentinel(replay)
     latest_replay = {
         "record": cached_record.copy(),
         "pattern": session.tester_full_pattern,
         "source": "Tester session",
         "use_variant": bool(session.use_variant),
+        "terminal_board": terminal_board,
     }
     session.latest_tester_replay = latest_replay
     key = _latest_tester_replay_scope_key(session)
@@ -143,6 +144,7 @@ def _cache_tester_replay(session):
     LATEST_TESTER_REPLAY["pattern"] = session.tester_full_pattern
     LATEST_TESTER_REPLAY["source"] = "Tester session"
     LATEST_TESTER_REPLAY["use_variant"] = bool(session.use_variant)
+    LATEST_TESTER_REPLAY["terminal_board"] = terminal_board
 
 
 def _tester_reset_history(session, board_encoded, score=0):

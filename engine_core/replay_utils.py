@@ -39,6 +39,11 @@ def empty_replay():
     return np.empty(0, dtype=REPLAY_DTYPE)
 
 
+def replay_sentinel(terminal_board=0):
+    """Build the existing sentinel with an optional terminal board in f0."""
+    return (np.uint64(int(terminal_board)), *REPLAY_SENTINEL[1:])
+
+
 def replay_move_bits_to_dir(move_bits):
     if 0 <= int(move_bits) < len(REPLAY_DIRS):
         return REPLAY_DIRS[int(move_bits)]
@@ -67,14 +72,26 @@ def validate_replay_array(record):
 
 
 def strip_replay_sentinel(record):
-    if len(record) and validate_replay_array(record):
-        return record[:-1].copy()
-    return empty_replay()
+    replay, _ = split_replay_sentinel(record)
+    return replay
+
+
+def split_replay_sentinel(record):
+    """Remove the sentinel and recover its optional terminal board snapshot."""
+    if not len(record) or not validate_replay_array(record):
+        return empty_replay(), None
+    terminal_board = np.uint64(int(record[-1]["f0"]))
+    return record[:-1].copy(), terminal_board if terminal_board else None
 
 
 def load_replay_file(path):
     record = np.fromfile(path, dtype=REPLAY_DTYPE)
     return strip_replay_sentinel(record)
+
+
+def load_replay_file_with_terminal_board(path):
+    record = np.fromfile(path, dtype=REPLAY_DTYPE)
+    return split_replay_sentinel(record)
 
 
 def current_results(record, step):
@@ -160,10 +177,53 @@ def build_step_transition(record, step, use_variant=False):
 
     move_fn = vbm.s_move_board if use_variant else bm.s_move_board
     board_2d = vbm.decode_board(board_encoded)
+    board_for_move = board_encoded
+    score_adjustment = 0
+    if not use_variant:
+        # Packed boards cap exponents at 15, so emulate a 32k+32k merge as
+        # 16k+16k and restore the missing half of the score.
+        positions = np.argwhere(board_2d == 32768)
+        if len(positions) == 2:
+            first, second = positions
+            first_row, first_column = (int(first[0]), int(first[1]))
+            second_row, second_column = (int(second[0]), int(second[1]))
+            horizontal_pair = (
+                first_row == second_row
+                and move_name in ("left", "right")
+                and not np.any(
+                    board_2d[
+                        first_row,
+                        min(first_column, second_column) + 1 : max(
+                            first_column, second_column
+                        ),
+                    ]
+                )
+            )
+            vertical_pair = (
+                first_column == second_column
+                and move_name in ("up", "down")
+                and not np.any(
+                    board_2d[
+                        min(first_row, second_row) + 1 : max(first_row, second_row),
+                        first_column,
+                    ]
+                )
+            )
+            if horizontal_pair or vertical_pair:
+                board_2d = np.array(board_2d, copy=True)
+                board_2d[tuple(first)] = 16384
+                board_2d[tuple(second)] = 16384
+                board_for_move = np.uint64(vbm.encode_board(board_2d))
+                score_adjustment = 32768
+
     animation_board = _normalize_board_for_animation(board_2d, use_variant)
     non_merging_values = _non_merging_values_for_animation(use_variant)
-    moved_board, move_score = move_fn(board_encoded, ENGINE_DIR_MAP[move_name])
+    moved_board, move_score = move_fn(board_for_move, ENGINE_DIR_MAP[move_name])
+    if int(moved_board) == int(board_for_move):
+        return None
     board_spawn_pos = replay_spawn_pos_to_board_pos(spawn_pos)
+    if (int(moved_board) >> (board_spawn_pos * 4)) & 0xF:
+        return None
     next_board = np.uint64(
         int(moved_board) | (int(spawn_exp) << (board_spawn_pos * 4))
     )
@@ -178,15 +238,17 @@ def build_step_transition(record, step, use_variant=False):
             "index": int(spawn_pos),
             "value": int(2 ** spawn_exp),
         },
-        "score_delta": int(move_score),
+        "score_delta": int(move_score) + score_adjustment,
     }
 
 
-def replay_transition_matches_next_snapshot(record, step, use_variant=False):
+def replay_transition_matches_next_snapshot(
+    record, step, use_variant=False, terminal_board=None
+):
     """Return whether a recorded move reaches the following board snapshot.
 
-    The final record has no following snapshot, so its transition is considered
-    valid as long as it can be decoded.
+    A terminal snapshot stored in the sentinel validates the final transition.
+    Legacy files without one fall back to validating the move itself.
     """
     if step < 0 or step >= len(record):
         return False
@@ -195,19 +257,23 @@ def replay_transition_matches_next_snapshot(record, step, use_variant=False):
     if transition is None:
         return False
     if step + 1 >= len(record):
-        return True
+        return terminal_board is None or int(transition["next_board_encoded"]) == int(
+            terminal_board
+        )
 
     expected = int(transition["next_board_encoded"])
     actual = int(record[step + 1]["f0"])
     return expected == actual
 
 
-def board_for_replay_step(record, step, use_variant=False):
+def board_for_replay_step(record, step, use_variant=False, terminal_board=None):
     if len(record) == 0:
         return np.uint64(0)
     if step <= 0:
         return np.uint64(int(record[0]["f0"]))
     if step < len(record):
         return np.uint64(int(record[step]["f0"]))
+    if terminal_board is not None:
+        return np.uint64(int(terminal_board))
     transition = build_step_transition(record, len(record) - 1, use_variant)
     return np.uint64(int(transition["next_board_encoded"])) if transition else np.uint64(int(record[-1]["f0"]))

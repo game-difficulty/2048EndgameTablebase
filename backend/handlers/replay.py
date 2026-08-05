@@ -6,7 +6,11 @@ from typing import Any
 import numpy as np
 from Config import category_info
 from fastapi import WebSocket
-from engine_core.replay_utils import REPLAY_DTYPE, load_replay_file, strip_replay_sentinel
+from engine_core.replay_utils import (
+    REPLAY_DTYPE,
+    load_replay_file_with_terminal_board,
+    split_replay_sentinel,
+)
 
 from ..actions import Action
 from ..cloud_files import get_upload_record
@@ -30,14 +34,21 @@ def _load_replay_path(session: GameSession, path: str) -> None:
     if not normalized_path:
         return
     try:
-        record = load_replay_file(normalized_path)
+        record, terminal_board = load_replay_file_with_terminal_board(normalized_path)
         if len(record) == 0:
             _replay_reset(session, "Recording file corrupted")
             return
 
         pattern = _replay_pattern_from_path(normalized_path)
         use_variant = pattern.split("_")[0] in category_info.get("variant", [])
-        _replay_load_record(session, record, pattern, normalized_path, use_variant)
+        _replay_load_record(
+            session,
+            record,
+            pattern,
+            normalized_path,
+            use_variant,
+            terminal_board,
+        )
     except Exception as exc:
         _replay_reset(session, f"Failed to load replay: {exc}")
 
@@ -50,14 +61,21 @@ def _load_replay_upload(session: GameSession, upload_id: str, filename: str = ""
             _replay_reset(session, "Recording file corrupted")
             return
         record = np.frombuffer(raw_bytes, dtype=REPLAY_DTYPE).copy()
-        record = strip_replay_sentinel(record)
+        record, terminal_board = split_replay_sentinel(record)
         if len(record) == 0:
             _replay_reset(session, "Recording file corrupted")
             return
         source_name = filename or upload.filename
         resolved_pattern = pattern or _replay_pattern_from_path(source_name)
         use_variant = resolved_pattern.split("_")[0] in category_info.get("variant", [])
-        _replay_load_record(session, record, resolved_pattern, source_name, use_variant)
+        _replay_load_record(
+            session,
+            record,
+            resolved_pattern,
+            source_name,
+            use_variant,
+            terminal_board,
+        )
     except Exception as exc:
         _replay_reset(session, f"Failed to load replay upload")
 
@@ -83,6 +101,7 @@ async def handle_replay_action(
                 latest_replay["pattern"],
                 latest_replay["source"],
                 latest_replay["use_variant"],
+                latest_replay.get("terminal_board"),
             )
         elif not session.replay_loaded:
             _replay_reset(session, "No tester replay available yet.")
@@ -98,6 +117,7 @@ async def handle_replay_action(
                 latest_replay["pattern"],
                 latest_replay["source"],
                 latest_replay["use_variant"],
+                latest_replay.get("terminal_board"),
             )
         else:
             _replay_reset(session, "No tester replay available yet.")
