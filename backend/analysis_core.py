@@ -10,6 +10,12 @@ import numpy as np
 import engine_core.BoardMover as bm
 import Config
 import engine_core.VBoardMover as vbm
+from backend.replay_2048next import (
+    MoveRecord as Replay2048NextMove,
+    UndoRecord as Replay2048NextUndo,
+    decode_2048next_replay,
+    is_2048next_replay,
+)
 from engine_core.BookReader import BookReaderDispatcher
 from Config import DTYPE_CONFIG, SingletonConfig, category_info, pattern_catalog
 from engine_core.performance_evaluation import (
@@ -61,6 +67,7 @@ NEW_CHARS_LIST = [
 ]
 NEW_CHAR_MAP = {char: idx for idx, char in enumerate(NEW_CHARS_LIST)}
 NEW_TO_OLD_MOVE = {0: 3, 1: 4, 2: 1, 3: 2}
+NEXT_TO_INTERNAL_MOVE = {0: 3, 1: 2, 2: 4, 3: 1}
 
 
 class ReplayDecoder:
@@ -126,6 +133,10 @@ class ReplayDecoder:
     def decode(self) -> None:
         replay_text = self.read_replay()
         if isinstance(replay_text, str):
+            if is_2048next_replay(replay_text):
+                self._decode_2048next_format(replay_text)
+                return
+
             new_format_match = re.match(r"^(\d+x\d+)-([^_]*)_(.*)$", replay_text)
             if new_format_match:
                 self._decode_new_format(
@@ -136,6 +147,109 @@ class ReplayDecoder:
             return
 
         self._decode_test_replay(replay_text)
+
+    def _decode_2048next_format(self, replay_text: str) -> None:
+        replay = decode_2048next_replay(replay_text)
+        ruleset = replay.text_extension(2)
+        if ruleset not in (None, "pow2"):
+            raise ValueError(
+                f"Unsupported 2048next replay ruleset for analysis: {ruleset}"
+            )
+
+        dimensions = (replay.width, replay.height)
+        if dimensions == (4, 4):
+            board = np.uint64(0)
+            mover = self.bm
+            row_offset = 0
+            self.variant = "4x4"
+        elif dimensions == (4, 3):
+            board = np.uint64(0x000000000000FFFF)
+            mover = self.vbm
+            row_offset = 0
+            self.variant = "3x4"
+        elif dimensions == (3, 3):
+            board = np.uint64(0x000F000F000FFFFF)
+            mover = self.vbm
+            row_offset = 0
+            self.variant = "3x3"
+        elif dimensions == (4, 2):
+            board = np.uint64(0xFFFF00000000FFFF)
+            mover = self.vbm
+            row_offset = 1
+            self.variant = "2x4"
+        else:
+            raise ValueError(
+                "Unsupported 2048next replay board size for analysis: "
+                f"{replay.width}x{replay.height}"
+            )
+
+        for cell_index, value_bit in replay.initial_tiles:
+            visual_position = self._2048next_visual_position(
+                cell_index, replay.width, row_offset
+            )
+            board_position = 15 - visual_position
+            if (int(board) >> (board_position * 4)) & 0x0F:
+                raise ValueError("Duplicate 2048next replay initial tile position")
+            board |= np.uint64(value_bit + 1) << np.uint64(board_position * 4)
+
+        rows: list[tuple[np.uint64, int, int, int, int]] = []
+        states: list[tuple[np.uint64, int]] = []
+        current_score = 0
+
+        for record in replay.records:
+            if isinstance(record, Replay2048NextUndo):
+                if record.count > len(states):
+                    raise ValueError("2048next replay undo exceeds move history")
+                for _ in range(record.count):
+                    board, current_score = states.pop()
+                    rows.pop()
+                continue
+            if not isinstance(record, Replay2048NextMove):
+                continue
+            if record.direction not in NEXT_TO_INTERNAL_MOVE:
+                raise ValueError(
+                    "Unsupported 2048next replay move direction for analysis: "
+                    f"{record.direction}"
+                )
+
+            replay_move = NEXT_TO_INTERNAL_MOVE[record.direction]
+            visual_position = self._2048next_visual_position(
+                record.spawn_index, replay.width, row_offset
+            )
+            replay_tile = record.spawn_value_bit + 1
+            states.append((board, current_score))
+            rows.append(
+                (board, current_score, replay_move, replay_tile, visual_position)
+            )
+
+            board_for_move = board
+            if len(rows) - 1 > 27000 and count_32ks(board_for_move) == 2:
+                board_for_move, current_score = self._apply_special_32k_rule(
+                    board_for_move, replay_move, current_score, mover
+                )
+            moved_board, move_score = mover.s_move_board(board_for_move, replay_move)
+            moved_board = np.uint64(moved_board)
+            if moved_board == board_for_move:
+                raise ValueError("2048next replay contains an invalid move")
+
+            board_position = 15 - visual_position
+            if (int(moved_board) >> (board_position * 4)) & 0x0F:
+                raise ValueError("2048next replay spawns a tile on an occupied cell")
+            board = moved_board | (
+                np.uint64(replay_tile) << np.uint64(board_position * 4)
+            )
+            current_score += int(move_score)
+
+        self.record_list = np.asarray(
+            rows, dtype="uint64,uint32,uint8,uint8,uint8"
+        )
+
+    @staticmethod
+    def _2048next_visual_position(
+        cell_index: int, width: int, row_offset: int
+    ) -> int:
+        row, column = divmod(cell_index, width)
+        return (row + row_offset) * 4 + column
 
     @staticmethod
     def _apply_special_32k_rule(
@@ -342,6 +456,7 @@ class Analyzer:
         decoder = ReplayDecoder(self.filepath, self.bm, self.vbm)
         decoder.decode()
         self.record_list = decoder.record_list
+        self.variant = decoder.variant
 
         self.target_path = target_path
         self.text_list: list[str] = []
