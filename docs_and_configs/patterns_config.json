@@ -4,7 +4,7 @@
     "valid pattern": [
       "0xfff0fff"
     ],
-    "target pos": "0xffffffffffffffff",
+    "target pos": "0xf00f0000000",
     "canonical mode": "identity",
     "seed boards": [
       "0x100000001fff2fff",
@@ -12,25 +12,14 @@
     ],
     "extra steps": 48
   },
-  "L3f": {
+  "L3t": {
     "category": "10 space",
     "valid pattern": [
       "0xfff0fff",
       "0xf0fff0ff0",
-      "0xf000f0ff00ff0",
-      "0xf00fff0ff0",
-      "0xf000fff0ff0",
-      "0xff0ff00ff0",
-      "0xff00ff00ff0",
-      "0xf000fff00ff",
-      "0xf00fff00ff",
-      "0xff0fff0f00",
-      "f00f00ff00ff0",
-      "fff0fff0000",
-      "ff00fff0f00",
-      "f00fff0f0f"
+      "0xf000f0ff00ff0"
     ],
-    "target pos": "0xffffffffffffffff",
+    "target pos": "0xffff00000000",
     "canonical mode": "identity",
     "seed boards": [
       "0x100000001fff2fff",
@@ -101,19 +90,6 @@
     ],
     "extra steps": 48
   },
-  "LL2": {
-    "category": "12 space",
-    "valid pattern": [
-      "0xff00ff0000000000"
-    ],
-    "target pos": "0xff00ffffffffff",
-    "canonical mode": "diagonal",
-    "seed boards": [
-      "0xff12ff1200000011",
-      "0xff21ff1200000110"
-    ],
-    "extra steps": 48
-  },
   "4431": {
     "category": "12 space",
     "valid pattern": [
@@ -149,8 +125,7 @@
     "canonical mode": "diagonal",
     "seed boards": [
       "0x00001000121f2fff",
-      "0x00010000121ff2ff",
-      "0x0001000012ff21ff"
+      "0x00010000121ff2ff"
     ],
     "extra steps": 48
   },
@@ -233,18 +208,6 @@
     ],
     "extra steps": 48
   },
-  "44": {
-    "category": "others",
-    "valid pattern": [
-      "0xffffffff"
-    ],
-    "target pos": "0xffff00000000",
-    "canonical mode": "identity",
-    "seed boards": [
-      "0x00001000ffffffff"
-    ],
-    "extra steps": 48
-  },
   "free8": {
     "category": "free",
     "valid pattern": [],
@@ -295,16 +258,6 @@
     ],
     "extra steps": 36
   },
-  "free13": {
-    "category": "free",
-    "valid pattern": [],
-    "target pos": "0xffffffffffffffff",
-    "canonical mode": "full",
-    "seed boards": [
-      "0x0111111111111fff"
-    ],
-    "extra steps": 36
-  },
   "2x4": {
     "category": "variant",
     "valid pattern": [],
@@ -334,15 +287,5 @@
       "0x000000000000ffff"
     ],
     "extra steps": 60
-  },
-  "3x4441": {
-    "category": "variant",
-    "valid pattern": [],
-    "target pos": "0xffffffffffff0000",
-    "canonical mode": "min34",
-    "seed boards": [
-      "0x000000000eeeffff"
-    ],
-    "extra steps": 30
   }
 }
