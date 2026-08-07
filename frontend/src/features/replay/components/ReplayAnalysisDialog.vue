@@ -240,11 +240,16 @@ const listViewportRef = ref(null);
 const listScrollTop = ref(0);
 const analysisError = ref('');
 const isDownloading = ref(false);
+const activeJobId = ref('');
 
 let client = null;
+let pollTimer = null;
+let subscribedJobId = '';
 const LIST_ITEM_HEIGHT = 62;
 const LIST_VIEWPORT_HEIGHT = 312;
 const LIST_OVERSCAN = 4;
+const ACTIVE_ANALYSIS_JOB_KEY = '2048tables:analysis-active-job:v1';
+const ANALYSIS_POLL_INTERVAL_MS = 2500;
 
 const patternGroups = computed(() =>
   Object.entries(categories.value || {}).map(([category, items]) => ({
@@ -446,6 +451,190 @@ const formatAnalysisError = (error) => {
   return String(error?.message || error || t('analysis.errors.generic'));
 };
 
+const readStoredAnalysisJob = () => {
+  if (typeof sessionStorage === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(ACTIVE_ANALYSIS_JOB_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const jobId = String(parsed?.job_id || '').trim();
+    if (!jobId) return null;
+    return { ...parsed, job_id: jobId };
+  } catch (_error) {
+    return null;
+  }
+};
+
+const storeAnalysisJob = (payload = {}) => {
+  const jobId = String(payload?.job_id || activeJobId.value || '').trim();
+  if (!jobId || typeof sessionStorage === 'undefined') return;
+  const previous = readStoredAnalysisJob() || {};
+  const record = {
+    ...previous,
+    job_id: jobId,
+    pattern: payload.pattern || selectedPattern.value || previous.pattern || '',
+    target: payload.target || selectedTarget.value || previous.target || '',
+    status: payload.status || previous.status || (isRunning.value ? 'running' : ''),
+    total: Number(payload.total ?? previous.total ?? totalCount.value ?? 0),
+    completed: Number(payload.completed ?? previous.completed ?? completedCount.value ?? 0),
+    done: Number(payload.done ?? previous.done ?? doneCount.value ?? 0),
+    failed: Number(payload.failed ?? previous.failed ?? failedCount.value ?? 0),
+    download_url: payload.download_url || previous.download_url || downloadUrl.value || '',
+    updated_at: Date.now(),
+    created_at: previous.created_at || Date.now(),
+  };
+  sessionStorage.setItem(ACTIVE_ANALYSIS_JOB_KEY, JSON.stringify(record));
+};
+
+const clearStoredAnalysisJob = (jobId = '') => {
+  if (typeof sessionStorage === 'undefined') return;
+  const current = readStoredAnalysisJob();
+  if (jobId && current?.job_id && current.job_id !== jobId) return;
+  sessionStorage.removeItem(ACTIVE_ANALYSIS_JOB_KEY);
+};
+
+const applyAnalysisJobPayload = (payload = {}) => {
+  const status = String(payload.status || '').toLowerCase();
+  const jobId = String(payload.job_id || activeJobId.value || '').trim();
+  if (jobId) activeJobId.value = jobId;
+  totalCount.value = Number(payload.total ?? totalCount.value ?? 0);
+  completedCount.value = Number(payload.completed ?? completedCount.value ?? 0);
+  doneCount.value = Number(payload.done ?? doneCount.value ?? 0);
+  failedCount.value = Number(payload.failed ?? failedCount.value ?? 0);
+  currentFile.value = payload.current_file || (status === 'finished' ? '' : currentFile.value);
+  entries.value = Array.isArray(payload.entries) ? payload.entries : entries.value;
+  downloadUrl.value = payload.download_url || downloadUrl.value;
+
+  if (status === 'finished') {
+    isRunning.value = false;
+    analysisError.value = '';
+    completedCount.value = totalCount.value;
+    storeAnalysisJob(payload);
+    stopAnalysisPolling();
+    return;
+  }
+
+  if (status === 'failed') {
+    isRunning.value = false;
+    analysisError.value = formatAnalysisError({ message: payload.message || '' });
+    currentFile.value = analysisError.value;
+    storeAnalysisJob(payload);
+    stopAnalysisPolling();
+    return;
+  }
+
+  if (status === 'queued' || status === 'running') {
+    isRunning.value = true;
+    analysisError.value = '';
+    storeAnalysisJob(payload);
+  }
+};
+
+const fetchAnalysisJobStatus = async (jobId) => {
+  let response;
+  try {
+    response = await fetch(getBackendUrl(`/api/analysis/jobs/${encodeURIComponent(jobId)}`), {
+      credentials: 'include',
+      headers: authHeaders(),
+    });
+  } catch (cause) {
+    const error = new Error('Analysis job status failed: network error');
+    error.code = 'NETWORK_ERROR';
+    error.cause = cause;
+    throw error;
+  }
+  if (!response.ok) {
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      payload = null;
+    }
+    const detail = typeof payload?.detail === 'string'
+      ? payload.detail
+      : payload?.detail?.message || response.statusText;
+    const error = new Error(detail || `Analysis job status failed: ${response.status}`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+  return response.json();
+};
+
+const refreshAnalysisJobStatus = async ({ keepPollingOnNetworkError = true } = {}) => {
+  const jobId = activeJobId.value || readStoredAnalysisJob()?.job_id || '';
+  if (!jobId) return;
+  try {
+    const payload = await fetchAnalysisJobStatus(jobId);
+    applyAnalysisJobPayload(payload);
+  } catch (error) {
+    if (error?.status === 404) {
+      isRunning.value = false;
+      analysisError.value = formatAnalysisError(error);
+      currentFile.value = analysisError.value;
+      clearStoredAnalysisJob(jobId);
+      activeJobId.value = '';
+      stopAnalysisPolling();
+      return;
+    }
+    if (error?.status === 401) {
+      isRunning.value = false;
+      analysisError.value = formatAnalysisError(error);
+      currentFile.value = analysisError.value;
+      stopAnalysisPolling();
+      return;
+    }
+    analysisError.value = formatAnalysisError(error);
+    currentFile.value = analysisError.value;
+    if (!keepPollingOnNetworkError) {
+      stopAnalysisPolling();
+    }
+  }
+};
+
+function stopAnalysisPolling() {
+  if (pollTimer !== null) {
+    window.clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+const startAnalysisPolling = () => {
+  if (!activeJobId.value || pollTimer !== null) return;
+  pollTimer = window.setInterval(() => {
+    refreshAnalysisJobStatus();
+  }, ANALYSIS_POLL_INTERVAL_MS);
+};
+
+const subscribeActiveAnalysisJob = () => {
+  const jobId = activeJobId.value || readStoredAnalysisJob()?.job_id || '';
+  if (!jobId || !client) return;
+  activeJobId.value = jobId;
+  if (subscribedJobId === jobId) return;
+  client.send('ANALYSIS_SUBSCRIBE', { job_id: jobId });
+  subscribedJobId = jobId;
+  startAnalysisPolling();
+};
+
+const restoreStoredAnalysisJob = () => {
+  const stored = readStoredAnalysisJob();
+  if (!stored?.job_id) return;
+  activeJobId.value = stored.job_id;
+  if (stored.pattern) selectedPattern.value = stored.pattern;
+  if (stored.target) selectedTarget.value = String(stored.target);
+  totalCount.value = Number(stored.total || totalCount.value || 0);
+  completedCount.value = Number(stored.completed || completedCount.value || 0);
+  doneCount.value = Number(stored.done || doneCount.value || 0);
+  failedCount.value = Number(stored.failed || failedCount.value || 0);
+  downloadUrl.value = stored.download_url || downloadUrl.value;
+  isRunning.value = !['finished', 'failed'].includes(String(stored.status || '').toLowerCase());
+  refreshAnalysisJobStatus({ keepPollingOnNetworkError: true });
+  if (isRunning.value) {
+    startAnalysisPolling();
+    subscribeActiveAnalysisJob();
+  }
+};
+
 const handleListScroll = (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
@@ -464,6 +653,10 @@ const startAnalysis = async () => {
   failedCount.value = 0;
   currentFile.value = '';
   entries.value = [];
+  activeJobId.value = '';
+  subscribedJobId = '';
+  stopAnalysisPolling();
+  clearStoredAnalysisJob();
   listScrollTop.value = 0;
   if (listViewportRef.value) listViewportRef.value.scrollTop = 0;
   try {
@@ -474,12 +667,19 @@ const startAnalysis = async () => {
         target: selectedTarget.value,
       },
     });
-    client.send('ANALYSIS_SUBSCRIBE', { job_id: payload.job_id });
+    activeJobId.value = String(payload.job_id || '');
+    totalCount.value = Number(payload.total || 0);
+    completedCount.value = 0;
+    storeAnalysisJob({ ...payload, pattern: selectedPattern.value, target: selectedTarget.value, status: 'queued' });
+    subscribeActiveAnalysisJob();
+    refreshAnalysisJobStatus({ keepPollingOnNetworkError: true });
   } catch (error) {
     isRunning.value = false;
     failedCount.value = 1;
     analysisError.value = formatAnalysisError(error);
     currentFile.value = analysisError.value;
+    activeJobId.value = '';
+    stopAnalysisPolling();
   }
 };
 
@@ -520,15 +720,8 @@ const handleMessage = (message) => {
   }
 
   if (message.type === 'ANALYSIS_STARTED') {
-    isRunning.value = true;
-    analysisError.value = '';
-    completedCount.value = 0;
-    totalCount.value = Number(message.payload?.total || 0);
-    doneCount.value = 0;
-    failedCount.value = 0;
-    currentFile.value = '';
-    entries.value = [];
-    downloadUrl.value = message.payload?.download_url || downloadUrl.value;
+    applyAnalysisJobPayload({ ...(message.payload || {}), status: message.payload?.status || 'running' });
+    startAnalysisPolling();
     listScrollTop.value = 0;
     if (listViewportRef.value) listViewportRef.value.scrollTop = 0;
     return;
@@ -543,33 +736,17 @@ const handleMessage = (message) => {
   }
 
   if (message.type === 'ANALYSIS_PROGRESS') {
-    completedCount.value = Number(message.payload?.completed || 0);
-    totalCount.value = Number(message.payload?.total || totalCount.value);
-    doneCount.value = Number(message.payload?.done || 0);
-    failedCount.value = Number(message.payload?.failed || 0);
-    currentFile.value = message.payload?.current_file || '';
-    entries.value = Array.isArray(message.payload?.entries) ? message.payload.entries : entries.value;
-    downloadUrl.value = message.payload?.download_url || downloadUrl.value;
+    applyAnalysisJobPayload(message.payload || {});
     return;
   }
 
   if (message.type === 'ANALYSIS_FINISHED') {
-    isRunning.value = false;
-    analysisError.value = '';
-    totalCount.value = Number(message.payload?.total || totalCount.value);
-    completedCount.value = totalCount.value;
-    doneCount.value = Number(message.payload?.done || doneCount.value);
-    failedCount.value = Number(message.payload?.failed || failedCount.value);
-    entries.value = Array.isArray(message.payload?.entries) ? message.payload.entries : entries.value;
-    downloadUrl.value = message.payload?.download_url || downloadUrl.value;
+    applyAnalysisJobPayload(message.payload || {});
     return;
   }
 
   if (message.type === 'ANALYSIS_FAILED') {
-    isRunning.value = false;
-    failedCount.value = Math.max(1, failedCount.value);
-    analysisError.value = formatAnalysisError({ message: message.payload?.message || '' });
-    currentFile.value = analysisError.value;
+    applyAnalysisJobPayload({ ...(message.payload || {}), status: 'failed' });
   }
 };
 
@@ -580,10 +757,12 @@ const connect = () => {
     onOpen: () => {
       wsStatus.value = 'connected';
       client?.send('ANALYSIS_GET_INIT');
+      subscribeActiveAnalysisJob();
     },
     onMessage: handleMessage,
     onClose: () => {
       wsStatus.value = 'disconnected';
+      subscribedJobId = '';
     },
   });
   wsStatus.value = 'connecting';
@@ -593,7 +772,9 @@ const connect = () => {
 const disconnect = () => {
   client?.disconnect();
   client = null;
+  subscribedJobId = '';
   wsStatus.value = 'disconnected';
+  stopAnalysisPolling();
 };
 
 watch(
@@ -604,6 +785,7 @@ watch(
       document.addEventListener('click', closePatternMenuOnClick);
       loadCatalog();
       connect();
+      restoreStoredAnalysisJob();
     } else {
       patternMenuOpen.value = false;
       document.removeEventListener('click', closePatternMenuOnClick);
@@ -642,6 +824,7 @@ watch(activePatternCategory, (category) => {
 onUnmounted(() => {
   document.removeEventListener('click', closePatternMenuOnClick);
   disconnect();
+  stopAnalysisPolling();
 });
 
 onMounted(() => {
