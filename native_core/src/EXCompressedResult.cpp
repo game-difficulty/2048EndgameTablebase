@@ -369,95 +369,26 @@ uint32_t prefix36_value_size(Prefix36DTypeMode mode) {
     }
 }
 
-uint32_t prefix36_fixed_from_unit(double value) {
-    if (value <= 0.0) {
-        return 0U;
-    }
-    if (value >= 1.0) {
-        return 4000000000U;
-    }
-    return static_cast<uint32_t>(value * kPrefix36FixedScale);
-}
-
-uint32_t prefix36_fixed_from_raw_bits(uint64_t raw, Prefix36DTypeMode mode) {
+double prefix36_numeric_from_raw_bits(uint64_t raw, Prefix36DTypeMode mode) {
     switch (mode) {
         case Prefix36DTypeMode::UInt64:
-            return prefix36_fixed_from_unit(static_cast<double>(raw) / kPrefix36UInt64Scale);
-        case Prefix36DTypeMode::Float32: {
+            return static_cast<double>(raw) / kPrefix36UInt64Scale;
+        case Prefix36DTypeMode::Float32:
+        case Prefix36DTypeMode::OneMinusFloat32: {
             const uint32_t bits = static_cast<uint32_t>(raw);
             float value = 0.0f;
             std::memcpy(&value, &bits, sizeof(value));
-            return prefix36_fixed_from_unit(static_cast<double>(value));
+            return static_cast<double>(value);
         }
-        case Prefix36DTypeMode::Float64: {
+        case Prefix36DTypeMode::Float64:
+        case Prefix36DTypeMode::OneMinusFloat64: {
             double value = 0.0;
             std::memcpy(&value, &raw, sizeof(value));
-            return prefix36_fixed_from_unit(value);
-        }
-        case Prefix36DTypeMode::OneMinusFloat32: {
-            const uint32_t bits = static_cast<uint32_t>(raw);
-            float value = -1.0f;
-            std::memcpy(&value, &bits, sizeof(value));
-            return prefix36_fixed_from_unit(static_cast<double>(value) + 1.0);
-        }
-        case Prefix36DTypeMode::OneMinusFloat64: {
-            double value = -1.0;
-            std::memcpy(&value, &raw, sizeof(value));
-            return prefix36_fixed_from_unit(value + 1.0);
+            return value;
         }
         case Prefix36DTypeMode::UInt32:
         default:
-            return static_cast<uint32_t>(raw);
-    }
-}
-
-uint64_t prefix36_raw_bits_from_fixed(uint32_t fixed, Prefix36DTypeMode mode) {
-    const double unit = static_cast<double>(fixed) / kPrefix36FixedScale;
-    switch (mode) {
-        case Prefix36DTypeMode::UInt64:
-            return static_cast<uint64_t>(unit * kPrefix36UInt64Scale);
-        case Prefix36DTypeMode::Float32: {
-            const float value = static_cast<float>(unit);
-            uint32_t bits = 0U;
-            std::memcpy(&bits, &value, sizeof(value));
-            return bits;
-        }
-        case Prefix36DTypeMode::Float64: {
-            const double value = unit;
-            uint64_t bits = 0ULL;
-            std::memcpy(&bits, &value, sizeof(value));
-            return bits;
-        }
-        case Prefix36DTypeMode::OneMinusFloat32: {
-            const float value = static_cast<float>(unit - 1.0);
-            uint32_t bits = 0U;
-            std::memcpy(&bits, &value, sizeof(value));
-            return bits;
-        }
-        case Prefix36DTypeMode::OneMinusFloat64: {
-            const double value = unit - 1.0;
-            uint64_t bits = 0ULL;
-            std::memcpy(&bits, &value, sizeof(value));
-            return bits;
-        }
-        case Prefix36DTypeMode::UInt32:
-        default:
-            return fixed;
-    }
-}
-
-double prefix36_numeric_from_fixed(uint32_t fixed, Prefix36DTypeMode mode) {
-    const double unit = static_cast<double>(fixed) / kPrefix36FixedScale;
-    switch (mode) {
-        case Prefix36DTypeMode::OneMinusFloat32:
-        case Prefix36DTypeMode::OneMinusFloat64:
-            return unit - 1.0;
-        case Prefix36DTypeMode::UInt32:
-        case Prefix36DTypeMode::UInt64:
-        case Prefix36DTypeMode::Float32:
-        case Prefix36DTypeMode::Float64:
-        default:
-            return unit;
+            return static_cast<double>(static_cast<uint32_t>(raw)) / kPrefix36FixedScale;
     }
 }
 
@@ -561,13 +492,12 @@ void validate_prefix36_layer_view(const Prefix36LayerView &layer) {
     }
 }
 
-std::vector<uint8_t> prefix36_success_raw_from_fixed_view(
+std::vector<uint8_t> prefix36_success_raw_from_view(
     const Prefix36LayerView &layer,
     uint64_t first,
-    uint32_t count,
-    Prefix36DTypeMode mode
+    uint32_t count
 ) {
-    const uint32_t value_size = prefix36_value_size(mode);
+    const uint32_t value_size = layer.value_size;
     std::vector<uint8_t> raw(static_cast<size_t>(count) * value_size);
     if (count == 0U) {
         return raw;
@@ -575,18 +505,8 @@ std::vector<uint8_t> prefix36_success_raw_from_fixed_view(
     if (first + count > layer.success_value_count) {
         throw std::runtime_error("prefix36 layer view success range out of bounds");
     }
-    if (mode == Prefix36DTypeMode::UInt32) {
-        std::memcpy(
-            raw.data(),
-            layer.success_values + first,
-            static_cast<size_t>(count) * sizeof(uint32_t)
-        );
-        return raw;
-    }
-    for (uint32_t i = 0; i < count; ++i) {
-        const uint64_t bits = prefix36_raw_bits_from_fixed(layer.success_values[first + i], mode);
-        std::memcpy(raw.data() + static_cast<size_t>(i) * value_size, &bits, value_size);
-    }
+    const auto *bytes = static_cast<const uint8_t *>(layer.success_values);
+    std::memcpy(raw.data(), bytes + first * value_size, raw.size());
     return raw;
 }
 
@@ -1435,7 +1355,6 @@ CompressStats compress_prefix36_layer_view_impl(
         throw std::runtime_error("prefix36 compressed block sizes must be non-zero");
     }
     validate_prefix36_layer_view(layer);
-    const Prefix36DTypeMode mode = prefix36_dtype_mode_from_u32(layer.dtype_mode);
     const Prefix36LutRuntime lut = read_prefix36_lut_runtime(zlut_path);
     if (!prefix36_physical_metadata_matches_lut(layer, lut)) {
         throw std::runtime_error("EX prefix36 physical pattern metadata does not match LUT");
@@ -1585,7 +1504,7 @@ CompressStats compress_prefix36_layer_view_impl(
                 const uint32_t count = static_cast<uint32_t>(
                     std::min<uint64_t>(layer.success_value_count - first, success_block_values)
                 );
-                std::vector<uint8_t> raw = prefix36_success_raw_from_fixed_view(layer, first, count, mode);
+                std::vector<uint8_t> raw = prefix36_success_raw_from_view(layer, first, count);
                 CompressedPrefix36SuccessBlock result;
                 result.compressed = compress_block_or_throw(raw.data(), raw.size(), compression_level);
                 result.raw_size = raw.size();
@@ -1930,12 +1849,11 @@ ColdLookupResult lookup_prefix36_compressed_cold(
     } else {
         raw_value = load_unaligned<uint64_t>(success_raw.data() + value_offset);
     }
-    const uint32_t fixed_value = prefix36_fixed_from_raw_bits(raw_value, mode);
     ColdLookupResult result;
     result.found = true;
     result.global_dense_index = success_index;
-    result.raw_value_bits = prefix36_raw_bits_from_fixed(fixed_value, mode);
-    result.numeric_value = prefix36_numeric_from_fixed(fixed_value, mode);
+    result.raw_value_bits = raw_value;
+    result.numeric_value = prefix36_numeric_from_raw_bits(raw_value, mode);
     result.success_kind = storage_kind_for_prefix36_mode(mode);
     result.bucket_block_raw_bytes = bucket_entry->raw_size;
     result.bucket_block_compressed_bytes = bucket_entry->compressed_size;
@@ -1977,9 +1895,7 @@ bool load_prefix36_compressed_success_value(
     raw_value_bits = index.header.value_size == sizeof(uint32_t)
         ? load_unaligned<uint32_t>(raw.data() + value_offset)
         : load_unaligned<uint64_t>(raw.data() + value_offset);
-    const uint32_t fixed_value = prefix36_fixed_from_raw_bits(raw_value_bits, mode);
-    raw_value_bits = prefix36_raw_bits_from_fixed(fixed_value, mode);
-    numeric_value = prefix36_numeric_from_fixed(fixed_value, mode);
+    numeric_value = prefix36_numeric_from_raw_bits(raw_value_bits, mode);
     return true;
 }
 

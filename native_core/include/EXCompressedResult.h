@@ -63,7 +63,7 @@ struct Prefix36LayerView {
     const uint64_t *large_bitmap_words = nullptr;
     uint64_t large_bitmap_word_count = 0;
 
-    const uint32_t *success_values = nullptr;
+    const void *success_values = nullptr;
     uint64_t success_value_count = 0;
 };
 

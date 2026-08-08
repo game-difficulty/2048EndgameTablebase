@@ -726,7 +726,7 @@ struct DirectEntryIndex {
     std::vector<BucketEntry> entries;
 };
 
-struct Prefix36Layer {
+struct Prefix36LayerBase {
     uint32_t layer_sum = 0;
     uint32_t threshold_bits = ZMaskFrozen::kEstimatedLargeSuccessStride * 8U;
     uint64_t live_board_count = 0;
@@ -738,10 +738,16 @@ struct Prefix36Layer {
     std::vector<uint8_t> small_bitmap_bytes;
     std::vector<uint64_t> large_bitmap_words;
     std::vector<uint16_t> large_rank_bases;
-    std::vector<uint32_t> success_values;
     DirectIndex direct_index;
     DirectEntryIndex direct_entry_index;
 };
+
+template <typename T>
+struct Prefix36LayerT : Prefix36LayerBase {
+    std::vector<T> success_values;
+};
+
+using Prefix36Layer = Prefix36LayerT<uint32_t>;
 
 uint64_t direct_slot(const DirectIndex &index, uint64_t key) {
     const uint64_t mixed = key * 11400714819323198485ULL;
@@ -775,7 +781,7 @@ bool direct_entry_is_empty(const BucketEntry &entry) {
     return entry.bitmap_offset == DirectEntryIndex::kEmptyBitmapOffset;
 }
 
-uint32_t fill_large_rank_bases(Prefix36Layer &layer, uint32_t offset, uint32_t rank_offset, uint32_t words) {
+uint32_t fill_large_rank_bases(Prefix36LayerBase &layer, uint32_t offset, uint32_t rank_offset, uint32_t words) {
     uint32_t running = 0U;
     for (uint32_t word = 0; word < words; ++word) {
         if (running > std::numeric_limits<uint16_t>::max()) {
@@ -787,7 +793,7 @@ uint32_t fill_large_rank_bases(Prefix36Layer &layer, uint32_t offset, uint32_t r
     return running;
 }
 
-void build_direct_index(Prefix36Layer &layer, const std::vector<uint32_t> &size_table) {
+void build_direct_index(Prefix36LayerBase &layer, const std::vector<uint32_t> &size_table) {
     layer.bucket_entries.resize(layer.bucket_keys.size());
     for (size_t i = 0; i < layer.bucket_keys.size(); ++i) {
         const uint64_t prefix36 = key_prefix36(layer.bucket_keys[i]);
@@ -1135,7 +1141,7 @@ bool suffix28_rank_group_dense_hot(
 }
 
 bool success_index_from_bucket(
-    const Prefix36Layer &layer,
+    const Prefix36LayerBase &layer,
     const PreparedQuery &query,
     const BucketEntry &bucket,
     uint32_t bucket_index,
@@ -1169,7 +1175,7 @@ bool success_index_from_bucket(
 }
 
 void lookup_prepared_batch(
-    const Prefix36Layer &layer,
+    const Prefix36LayerBase &layer,
     const PreparedQuery *queries,
     uint32_t *success_indices,
     uint8_t *found_flags,
@@ -1289,7 +1295,7 @@ void lookup_prepared_batch(
 }
 
 void lookup_prepared_batch_direct_entry(
-    const Prefix36Layer &layer,
+    const Prefix36LayerBase &layer,
     const PreparedQuery *queries,
     uint32_t *success_indices,
     uint8_t *found_flags,
@@ -2492,6 +2498,7 @@ Prefix36Layer finalize_prefix36_dynamic_state(
     return out;
 }
 
+template <typename T>
 struct RecalcWorkspace {
     std::vector<PreparedQuery> queries1;
     std::vector<PreparedQuery> queries2;
@@ -2502,8 +2509,8 @@ struct RecalcWorkspace {
     std::vector<uint8_t> found_flags1;
     std::vector<uint8_t> found_flags2;
     std::array<uint16_t, kBatchSize> empty_masks{};
-    std::array<uint32_t, kBatchSize * 16U> best2{};
-    std::array<uint32_t, kBatchSize * 16U> best4{};
+    std::array<T, kBatchSize * 16U> best2{};
+    std::array<T, kBatchSize * 16U> best4{};
 
     RecalcWorkspace() {
         constexpr size_t kMaxQueriesPerBatch = static_cast<size_t>(kBatchSize) * 16U * 4U;
@@ -2530,8 +2537,16 @@ struct RecalcStats {
     uint64_t checksum = 0;
 };
 
+template <typename T>
+uint64_t success_checksum_bits(T value) {
+    uint64_t bits = 0U;
+    std::memcpy(&bits, &value, sizeof(T));
+    return bits;
+}
+
+template <typename T>
 void lookup_query_vector_dense(
-    const Prefix36Layer &future,
+    const Prefix36LayerT<T> &future,
     std::vector<PreparedQuery> &queries,
     std::vector<uint32_t> &success_indices,
     std::vector<uint8_t> &found_flags
@@ -2550,10 +2565,11 @@ void lookup_query_vector_dense(
     }
 }
 
+template <typename T>
 uint64_t lookup_reduce_query_vector_dense(
-    const Prefix36Layer &future,
+    const Prefix36LayerT<T> &future,
     std::vector<PreparedQuery> &queries,
-    std::array<uint32_t, kBatchSize * 16U> &best
+    std::array<T, kBatchSize * 16U> &best
 ) {
     uint64_t found = 0U;
     uint32_t success_indices[kBatchSize];
@@ -2577,17 +2593,18 @@ uint64_t lookup_reduce_query_vector_dense(
                 continue;
             }
             ++found;
-            uint32_t &slot = best[queries[base + i].ref];
+            T &slot = best[queries[base + i].ref];
             slot = std::max(slot, future.success_values[static_cast<size_t>(success_indices[i])]);
         }
     }
     return found;
 }
 
+template <typename T>
 uint64_t lookup_reduce_query_vector_dense_direct_entry(
-    const Prefix36Layer &future,
+    const Prefix36LayerT<T> &future,
     std::vector<PreparedQuery> &queries,
-    std::array<uint32_t, kBatchSize * 16U> &best
+    std::array<T, kBatchSize * 16U> &best
 ) {
     uint64_t found = 0U;
     uint32_t success_indices[kBatchSize];
@@ -2611,7 +2628,7 @@ uint64_t lookup_reduce_query_vector_dense_direct_entry(
                 continue;
             }
             ++found;
-            uint32_t &slot = best[queries[base + i].ref];
+            T &slot = best[queries[base + i].ref];
             slot = std::max(slot, future.success_values[static_cast<size_t>(success_indices[i])]);
         }
     }
@@ -2623,10 +2640,11 @@ struct SuccessRef {
     uint16_t ref = 0;
 };
 
+template <typename T>
 uint64_t lookup_reduce_query_vector_dense_direct_entry_sorted_success(
-    const Prefix36Layer &future,
+    const Prefix36LayerT<T> &future,
     std::vector<PreparedQuery> &queries,
-    std::array<uint32_t, kBatchSize * 16U> &best
+    std::array<T, kBatchSize * 16U> &best
 ) {
     uint64_t found = 0U;
     uint32_t success_indices[kBatchSize];
@@ -2656,20 +2674,21 @@ uint64_t lookup_reduce_query_vector_dense_direct_entry_sorted_success(
         }
         for (uint32_t i = 0; i < ref_count; ++i) {
             ++found;
-            uint32_t &slot = best[refs[i].ref];
+            T &slot = best[refs[i].ref];
             slot = std::max(slot, future.success_values[static_cast<size_t>(refs[i].success_index)]);
         }
     }
     return found;
 }
 
+template <typename T>
 void lookup_reduce_query_vectors_dense_interleaved(
-    const Prefix36Layer &future1,
+    const Prefix36LayerT<T> &future1,
     std::vector<PreparedQuery> &queries1,
-    std::array<uint32_t, kBatchSize * 16U> &best1,
-    const Prefix36Layer &future2,
+    std::array<T, kBatchSize * 16U> &best1,
+    const Prefix36LayerT<T> &future2,
     std::vector<PreparedQuery> &queries2,
-    std::array<uint32_t, kBatchSize * 16U> &best2,
+    std::array<T, kBatchSize * 16U> &best2,
     uint64_t &found1,
     uint64_t &found2
 ) {
@@ -2721,7 +2740,7 @@ void lookup_reduce_query_vectors_dense_interleaved(
                 continue;
             }
             ++found1;
-            uint32_t &slot = best1[queries1[base1 + i].ref];
+            T &slot = best1[queries1[base1 + i].ref];
             slot = std::max(slot, future1.success_values[static_cast<size_t>(success_indices1[i])]);
         }
         for (uint32_t i = 0; i < count2; ++i) {
@@ -2729,7 +2748,7 @@ void lookup_reduce_query_vectors_dense_interleaved(
                 continue;
             }
             ++found2;
-            uint32_t &slot = best2[queries2[base2 + i].ref];
+            T &slot = best2[queries2[base2 + i].ref];
             slot = std::max(slot, future2.success_values[static_cast<size_t>(success_indices2[i])]);
         }
         base1 += count1;
@@ -2737,12 +2756,13 @@ void lookup_reduce_query_vectors_dense_interleaved(
     }
 }
 
+template <typename T>
 uint64_t lookup_reduce_late_query_vector_dense(
-    const Prefix36Layer &future,
+    const Prefix36LayerT<T> &future,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     std::vector<LateQuery> &queries,
-    std::array<uint32_t, kBatchSize * 16U> &best
+    std::array<T, kBatchSize * 16U> &best
 ) {
     uint64_t found = 0U;
     uint64_t slots[kBatchSize];
@@ -2850,29 +2870,32 @@ uint64_t lookup_reduce_late_query_vector_dense(
                 continue;
             }
             ++found;
-            uint32_t &slot = best[queries[base + i].ref];
+            T &slot = best[queries[base + i].ref];
             slot = std::max(slot, future.success_values[static_cast<size_t>(success_indices[i])]);
         }
     }
     return found;
 }
 
+template <typename T>
 void recalculate_batch_prefix36(
     const uint64_t *boards,
     const uint64_t *output_positions,
     uint32_t board_count,
-    const Prefix36Layer &future1,
-    const Prefix36Layer &future2,
+    const Prefix36LayerT<T> &future1,
+    const Prefix36LayerT<T> &future2,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     int symm_mode,
-    RecalcWorkspace &workspace,
+    T zero_value,
+    RecalcWorkspace<T> &workspace,
     RecalcStats &stats,
     bool interleave_lookups = false,
     bool dedup_canonical_moves = false,
     bool use_direct_entries = false,
     bool sort_success_reads = false
 ) {
+    using Acc = SuccessAccumulator<T>;
     workspace.queries1.clear();
     workspace.queries2.clear();
 
@@ -2948,8 +2971,8 @@ void recalculate_batch_prefix36(
                 std::get<0>(moves2), std::get<1>(moves2), std::get<2>(moves2), std::get<3>(moves2)
             };
             const uint16_t ref = static_cast<uint16_t>((board_slot << 4U) | cell);
-            workspace.best2[ref] = 0U;
-            workspace.best4[ref] = 0U;
+            workspace.best2[ref] = zero_value;
+            workspace.best4[ref] = zero_value;
             uint64_t seen_canon2[4];
             uint32_t seen_canon2_count = 0U;
             if (dedup_canonical_moves) {
@@ -3080,20 +3103,21 @@ void recalculate_batch_prefix36(
     const double finalize_t0 = wall_time_seconds();
     uint64_t checksum = 0U;
     for (uint32_t board_slot = 0; board_slot < board_count; ++board_slot) {
-        double success_probability = 0.0;
+        Acc success_probability = 0;
         uint32_t empty_count = 0U;
         uint32_t empty_mask = workspace.empty_masks[board_slot];
         while (empty_mask != 0U) {
             const uint32_t cell = countr_zero_u32(empty_mask);
             empty_mask &= (empty_mask - 1U);
             const size_t best_index = static_cast<size_t>(board_slot) * 16U + static_cast<size_t>(cell);
-            success_probability += static_cast<double>(workspace.best2[best_index]) * 0.9;
-            success_probability += static_cast<double>(workspace.best4[best_index]) * 0.1;
+            success_probability += static_cast<Acc>(workspace.best2[best_index]) * static_cast<Acc>(0.9);
+            success_probability += static_cast<Acc>(workspace.best4[best_index]) * static_cast<Acc>(0.1);
             ++empty_count;
         }
-        const uint32_t value =
-            empty_count > 0U ? static_cast<uint32_t>(success_probability / static_cast<double>(empty_count)) : 0U;
-        checksum += static_cast<uint64_t>(value) * (output_positions[board_slot] + 1ULL);
+        const T value = empty_count > 0U
+            ? static_cast<T>(success_probability / static_cast<Acc>(empty_count))
+            : zero_value;
+        checksum += success_checksum_bits(value) * (output_positions[board_slot] + 1ULL);
     }
     const double finalize_t1 = wall_time_seconds();
 
@@ -3110,18 +3134,21 @@ void recalculate_batch_prefix36(
     stats.checksum += checksum;
 }
 
+template <typename T>
 void recalculate_batch_prefix36_late(
     const uint64_t *boards,
     const uint64_t *output_positions,
     uint32_t board_count,
-    const Prefix36Layer &future1,
-    const Prefix36Layer &future2,
+    const Prefix36LayerT<T> &future1,
+    const Prefix36LayerT<T> &future2,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     int symm_mode,
-    RecalcWorkspace &workspace,
+    T zero_value,
+    RecalcWorkspace<T> &workspace,
     RecalcStats &stats
 ) {
+    using Acc = SuccessAccumulator<T>;
     workspace.late_queries1.clear();
     workspace.late_queries2.clear();
 
@@ -3183,8 +3210,8 @@ void recalculate_batch_prefix36_late(
                 std::get<0>(moves2), std::get<1>(moves2), std::get<2>(moves2), std::get<3>(moves2)
             };
             const uint16_t ref = static_cast<uint16_t>((board_slot << 4U) | cell);
-            workspace.best2[ref] = 0U;
-            workspace.best4[ref] = 0U;
+            workspace.best2[ref] = zero_value;
+            workspace.best4[ref] = zero_value;
             for (uint64_t moved : boards2) {
                 if (moved == spawn2) {
                     continue;
@@ -3234,20 +3261,21 @@ void recalculate_batch_prefix36_late(
     const double finalize_t0 = wall_time_seconds();
     uint64_t checksum = 0U;
     for (uint32_t board_slot = 0; board_slot < board_count; ++board_slot) {
-        double success_probability = 0.0;
+        Acc success_probability = 0;
         uint32_t empty_count = 0U;
         uint32_t empty_mask = workspace.empty_masks[board_slot];
         while (empty_mask != 0U) {
             const uint32_t cell = countr_zero_u32(empty_mask);
             empty_mask &= (empty_mask - 1U);
             const size_t best_index = static_cast<size_t>(board_slot) * 16U + static_cast<size_t>(cell);
-            success_probability += static_cast<double>(workspace.best2[best_index]) * 0.9;
-            success_probability += static_cast<double>(workspace.best4[best_index]) * 0.1;
+            success_probability += static_cast<Acc>(workspace.best2[best_index]) * static_cast<Acc>(0.9);
+            success_probability += static_cast<Acc>(workspace.best4[best_index]) * static_cast<Acc>(0.1);
             ++empty_count;
         }
-        const uint32_t value =
-            empty_count > 0U ? static_cast<uint32_t>(success_probability / static_cast<double>(empty_count)) : 0U;
-        checksum += static_cast<uint64_t>(value) * (output_positions[board_slot] + 1ULL);
+        const T value = empty_count > 0U
+            ? static_cast<T>(success_probability / static_cast<Acc>(empty_count))
+            : zero_value;
+        checksum += success_checksum_bits(value) * (output_positions[board_slot] + 1ULL);
     }
     const double finalize_t1 = wall_time_seconds();
 
@@ -3264,15 +3292,17 @@ void recalculate_batch_prefix36_late(
     stats.checksum += checksum;
 }
 
+template <typename T>
 RecalcStats run_recalculate_prefix36(
     const Prefix40Baseline::Layer &current,
     const Prefix40Baseline::Luts &prefix_luts,
-    const Prefix36Layer &future1,
-    const Prefix36Layer &future2,
+    const Prefix36LayerT<T> &future1,
+    const Prefix36LayerT<T> &future2,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     int num_threads,
     int symm_mode,
+    T zero_value = T{},
     bool dedup_canonical_moves = false,
     bool use_direct_entries = false,
     bool sort_success_reads = false
@@ -3286,7 +3316,7 @@ RecalcStats run_recalculate_prefix36(
         std::array<uint64_t, kBatchSize> board_buffer{};
         std::array<uint64_t, kBatchSize> output_buffer{};
         uint32_t board_buffer_count = 0U;
-        RecalcWorkspace workspace;
+        RecalcWorkspace<T> workspace;
 
         auto flush = [&]() {
             if (board_buffer_count == 0U) {
@@ -3301,6 +3331,7 @@ RecalcStats run_recalculate_prefix36(
                 dense_lut,
                 z_luts,
                 symm_mode,
+                zero_value,
                 workspace,
                 stats,
                 false,
@@ -3393,14 +3424,16 @@ RecalcStats run_recalculate_prefix36(
     return total;
 }
 
+template <typename T>
 RecalcStats run_recalculate_prefix36_current(
-    const Prefix36Layer &current,
-    const Prefix36Layer &future1,
-    const Prefix36Layer &future2,
+    const Prefix36LayerT<T> &current,
+    const Prefix36LayerT<T> &future1,
+    const Prefix36LayerT<T> &future2,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     int num_threads,
     int symm_mode,
+    T zero_value = T{},
     bool dedup_canonical_moves = false,
     bool use_direct_entries = false,
     bool sort_success_reads = false
@@ -3414,7 +3447,7 @@ RecalcStats run_recalculate_prefix36_current(
         std::array<uint64_t, kBatchSize> board_buffer{};
         std::array<uint64_t, kBatchSize> output_buffer{};
         uint32_t board_buffer_count = 0U;
-        RecalcWorkspace workspace;
+        RecalcWorkspace<T> workspace;
 
         auto flush = [&]() {
             if (board_buffer_count == 0U) {
@@ -3429,6 +3462,7 @@ RecalcStats run_recalculate_prefix36_current(
                 dense_lut,
                 z_luts,
                 symm_mode,
+                zero_value,
                 workspace,
                 stats,
                 false,
@@ -3523,14 +3557,16 @@ RecalcStats run_recalculate_prefix36_current(
     return total;
 }
 
+template <typename T>
 RecalcStats run_recalculate_prefix36_current_interleaved(
-    const Prefix36Layer &current,
-    const Prefix36Layer &future1,
-    const Prefix36Layer &future2,
+    const Prefix36LayerT<T> &current,
+    const Prefix36LayerT<T> &future1,
+    const Prefix36LayerT<T> &future2,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     int num_threads,
-    int symm_mode
+    int symm_mode,
+    T zero_value = T{}
 ) {
     const double t0 = wall_time_seconds();
     std::vector<RecalcStats> per_thread(static_cast<size_t>(num_threads));
@@ -3541,7 +3577,7 @@ RecalcStats run_recalculate_prefix36_current_interleaved(
         std::array<uint64_t, kBatchSize> board_buffer{};
         std::array<uint64_t, kBatchSize> output_buffer{};
         uint32_t board_buffer_count = 0U;
-        RecalcWorkspace workspace;
+        RecalcWorkspace<T> workspace;
 
         auto flush = [&]() {
             if (board_buffer_count == 0U) {
@@ -3556,6 +3592,7 @@ RecalcStats run_recalculate_prefix36_current_interleaved(
                 dense_lut,
                 z_luts,
                 symm_mode,
+                zero_value,
                 workspace,
                 stats,
                 true
@@ -3647,14 +3684,16 @@ RecalcStats run_recalculate_prefix36_current_interleaved(
     return total;
 }
 
+template <typename T>
 RecalcStats run_recalculate_prefix36_current_late(
-    const Prefix36Layer &current,
-    const Prefix36Layer &future1,
-    const Prefix36Layer &future2,
+    const Prefix36LayerT<T> &current,
+    const Prefix36LayerT<T> &future1,
+    const Prefix36LayerT<T> &future2,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     int num_threads,
-    int symm_mode
+    int symm_mode,
+    T zero_value = T{}
 ) {
     const double t0 = wall_time_seconds();
     std::vector<RecalcStats> per_thread(static_cast<size_t>(num_threads));
@@ -3665,7 +3704,7 @@ RecalcStats run_recalculate_prefix36_current_late(
         std::array<uint64_t, kBatchSize> board_buffer{};
         std::array<uint64_t, kBatchSize> output_buffer{};
         uint32_t board_buffer_count = 0U;
-        RecalcWorkspace workspace;
+        RecalcWorkspace<T> workspace;
 
         auto flush = [&]() {
             if (board_buffer_count == 0U) {
@@ -3680,6 +3719,7 @@ RecalcStats run_recalculate_prefix36_current_late(
                 dense_lut,
                 z_luts,
                 symm_mode,
+                zero_value,
                 workspace,
                 stats
             );

@@ -844,6 +844,18 @@ template <> constexpr double max_scale_value<double>() {
     return 1.0;
 }
 
+static_assert(
+    std::numeric_limits<long double>::digits >= std::numeric_limits<uint64_t>::digits,
+    "uint64 success rates require at least 64 bits of long double precision"
+);
+
+template <typename T>
+using SuccessAccumulator = std::conditional_t<
+    std::is_same_v<std::remove_cv_t<T>, uint64_t>,
+    long double,
+    double
+>;
+
 template <typename T> inline T zero_value_for_dtype(const std::string &name) {
     if constexpr (std::is_floating_point_v<T>) {
         if (is_one_minus_success_rate_dtype(name)) {

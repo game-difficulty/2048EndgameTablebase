@@ -153,7 +153,7 @@ struct EXADVectorBatchWorkspace {
     std::vector<uint16_t> empty_masks;
     std::vector<T> best2;
     std::vector<T> best4;
-    std::vector<double> success_probability;
+    std::vector<SuccessAccumulator<T>> success_probability;
 
     void prepare(uint32_t width, uint32_t board_count, T zero_val) {
         queries1.clear();
@@ -2563,6 +2563,7 @@ void recalculate_exad_scalar_batch(
     double spawn_rate4,
     EXADScalarBatchWorkspace<T> &workspace
 ) {
+    using Acc = SuccessAccumulator<T>;
     if (board_count == 0U) {
         return;
     }
@@ -2660,21 +2661,23 @@ void recalculate_exad_scalar_batch(
     );
 
     for (uint32_t board_slot = 0; board_slot < board_count; ++board_slot) {
-        double success_probability = 0.0;
+        Acc success_probability = 0;
         uint32_t empty_count = 0U;
         uint32_t empty_mask = workspace.empty_masks[board_slot];
         while (empty_mask != 0U) {
             const uint32_t pos = ctz_u32(empty_mask);
             empty_mask &= empty_mask - 1U;
             const size_t best_index = static_cast<size_t>(board_slot) * 16U + pos;
-            success_probability += static_cast<double>(workspace.best2[best_index]) * (1.0 - spawn_rate4);
-            success_probability += static_cast<double>(workspace.best4[best_index]) * spawn_rate4;
+            success_probability += static_cast<Acc>(workspace.best2[best_index]) *
+                (static_cast<Acc>(1) - static_cast<Acc>(spawn_rate4));
+            success_probability +=
+                static_cast<Acc>(workspace.best4[best_index]) * static_cast<Acc>(spawn_rate4);
             ++empty_count;
         }
         T *dst = EXAD::row_ptr(current, current_slot, local_rows[board_slot]);
         dst[0] = empty_count == 0U
             ? zero_val
-            : static_cast<T>(success_probability / static_cast<double>(empty_count));
+            : static_cast<T>(success_probability / static_cast<Acc>(empty_count));
     }
 }
 
@@ -2689,8 +2692,9 @@ void finish_vector_batch_rows_bounded(
     T zero_val,
     EXADVectorBatchWorkspace<T> &batch_workspace
 ) {
+    using Acc = SuccessAccumulator<T>;
     for (uint32_t board_slot = 0; board_slot < board_count; ++board_slot) {
-        std::array<double, MaxWidth> success_probability{};
+        std::array<Acc, MaxWidth> success_probability{};
         uint32_t empty_count = 0U;
         uint32_t empty_mask = batch_workspace.empty_masks[board_slot];
         while (empty_mask != 0U) {
@@ -2702,9 +2706,10 @@ void finish_vector_batch_rows_bounded(
                     break;
                 }
                 success_probability[idx] +=
-                    static_cast<double>(batch_workspace.best2[best_index + idx]) * (1.0 - spawn_rate4);
+                    static_cast<Acc>(batch_workspace.best2[best_index + idx]) *
+                    (static_cast<Acc>(1) - static_cast<Acc>(spawn_rate4));
                 success_probability[idx] +=
-                    static_cast<double>(batch_workspace.best4[best_index + idx]) * spawn_rate4;
+                    static_cast<Acc>(batch_workspace.best4[best_index + idx]) * static_cast<Acc>(spawn_rate4);
             }
             ++empty_count;
         }
@@ -2713,7 +2718,7 @@ void finish_vector_batch_rows_bounded(
             std::fill(dst, dst + width, zero_val);
             continue;
         }
-        const double inv_empty = 1.0 / static_cast<double>(empty_count);
+        const Acc inv_empty = static_cast<Acc>(1) / static_cast<Acc>(empty_count);
         for (uint32_t idx = 0; idx < MaxWidth; ++idx) {
             if (idx >= width) {
                 break;
@@ -2892,6 +2897,7 @@ void recalculate_exad_scalar_batch_single_future(
     T zero_val,
     EXADScalarBatchWorkspace<T> &workspace
 ) {
+    using Acc = SuccessAccumulator<T>;
     if (board_count == 0U) {
         return;
     }
@@ -2958,13 +2964,14 @@ void recalculate_exad_scalar_batch_single_future(
 
     for (uint32_t board_slot = 0; board_slot < board_count; ++board_slot) {
         uint32_t empty_count = 0U;
-        double contribution = 0.0;
+        Acc contribution = 0;
         uint32_t empty_mask = workspace.empty_masks[board_slot];
         while (empty_mask != 0U) {
             const uint32_t pos = ctz_u32(empty_mask);
             empty_mask &= empty_mask - 1U;
             const size_t best_index = static_cast<size_t>(board_slot) * 16U + pos;
-            contribution += static_cast<double>(workspace.best2[best_index]) * contribution_weight;
+            contribution +=
+                static_cast<Acc>(workspace.best2[best_index]) * static_cast<Acc>(contribution_weight);
             ++empty_count;
         }
         T *dst = EXAD::row_ptr(current, current_slot, local_rows[board_slot]);
@@ -2972,7 +2979,7 @@ void recalculate_exad_scalar_batch_single_future(
             dst[0] = zero_val;
         } else {
             dst[0] = static_cast<T>(
-                static_cast<double>(dst[0]) + contribution / static_cast<double>(empty_count)
+                static_cast<Acc>(dst[0]) + contribution / static_cast<Acc>(empty_count)
             );
         }
     }
@@ -2989,6 +2996,7 @@ void add_vector_batch_rows_single_future(
     T zero_val,
     EXADVectorBatchWorkspace<T> &batch_workspace
 ) {
+    using Acc = SuccessAccumulator<T>;
     for (uint32_t board_slot = 0; board_slot < board_count; ++board_slot) {
         uint32_t empty_count = 0U;
         uint32_t empty_mask = batch_workspace.empty_masks[board_slot];
@@ -3008,14 +3016,15 @@ void add_vector_batch_rows_single_future(
             const size_t best_index = (static_cast<size_t>(board_slot) * 16U + pos) * width;
             for (uint32_t idx = 0; idx < width; ++idx) {
                 batch_workspace.success_probability[idx] +=
-                    static_cast<double>(batch_workspace.best2[best_index + idx]) * contribution_weight;
+                    static_cast<Acc>(batch_workspace.best2[best_index + idx]) *
+                    static_cast<Acc>(contribution_weight);
             }
             ++empty_count;
         }
-        const double inv_empty = 1.0 / static_cast<double>(empty_count);
+        const Acc inv_empty = static_cast<Acc>(1) / static_cast<Acc>(empty_count);
         for (uint32_t idx = 0; idx < width; ++idx) {
             dst[idx] = static_cast<T>(
-                static_cast<double>(dst[idx]) + batch_workspace.success_probability[idx] * inv_empty
+                static_cast<Acc>(dst[idx]) + batch_workspace.success_probability[idx] * inv_empty
             );
         }
     }
@@ -3124,6 +3133,7 @@ void recalculate_exad_direct_single_future(
     int num_threads,
     std::unordered_map<uint32_t, MatchCache> &match_dict
 ) {
+    using Acc = SuccessAccumulator<T>;
     for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
         const size_t slot = bucket_to_index(key);
         const EXAD::BoardSet &set = current.sets[slot];
@@ -3294,11 +3304,12 @@ void recalculate_exad_direct_single_future(
                         *match_cache, tiles_table, permutation_table, param, zero_val, max_scale,
                         workspace, workspace.optimal_values
                     );
-                    const double factor = contribution_weight / static_cast<double>(empty_slots);
+                    const Acc factor =
+                        static_cast<Acc>(contribution_weight) / static_cast<Acc>(empty_slots);
                     for (size_t idx = 0; idx < derive_size; ++idx) {
                         dst[idx] = static_cast<T>(
-                            static_cast<double>(dst[idx]) +
-                            static_cast<double>(workspace.optimal_values[idx]) * factor
+                            static_cast<Acc>(dst[idx]) +
+                            static_cast<Acc>(workspace.optimal_values[idx]) * factor
                         );
                     }
                 }
@@ -3380,6 +3391,7 @@ void recalculate_exad_direct(
     int num_threads,
     std::unordered_map<uint32_t, MatchCache> &match_dict
 ) {
+    using Acc = SuccessAccumulator<T>;
     for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
         const size_t slot = bucket_to_index(key);
         const EXAD::BoardSet &set = current.sets[slot];
@@ -3535,7 +3547,8 @@ void recalculate_exad_direct(
                         workspace, workspace.optimal_values
                     );
                     for (size_t idx = 0; idx < derive_size; ++idx) {
-                        success_probability[idx] += static_cast<double>(workspace.optimal_values[idx]) * (1.0 - spawn_rate4);
+                        success_probability[idx] += static_cast<Acc>(workspace.optimal_values[idx]) *
+                            (static_cast<Acc>(1) - static_cast<Acc>(spawn_rate4));
                     }
                     solve_optimal_success_rate_arr_into_exad(
                         board, 2ULL, pos, rep_t, rep_t_rev, derive_size, spec, rep_v,
@@ -3544,13 +3557,14 @@ void recalculate_exad_direct(
                         workspace, workspace.temp_values
                     );
                     for (size_t idx = 0; idx < derive_size; ++idx) {
-                        success_probability[idx] += static_cast<double>(workspace.temp_values[idx]) * spawn_rate4;
+                        success_probability[idx] +=
+                            static_cast<Acc>(workspace.temp_values[idx]) * static_cast<Acc>(spawn_rate4);
                     }
                 }
                 for (size_t idx = 0; idx < derive_size; ++idx) {
                     dst[idx] = empty_slots == 0
                         ? zero_val
-                        : static_cast<T>(success_probability[idx] / static_cast<double>(empty_slots));
+                        : static_cast<T>(success_probability[idx] / static_cast<Acc>(empty_slots));
                 }
             };
 

@@ -156,7 +156,7 @@ template <typename T> struct AdSolveWorkspace {
     std::vector<uint32_t> ranked_array;
     std::vector<T> optimal_values;
     std::vector<T> temp_values;
-    std::vector<double> success_probability;
+    std::vector<SuccessAccumulator<T>> success_probability;
 };
 
 constexpr size_t kNotFoundIndex = std::numeric_limits<size_t>::max();
@@ -1738,6 +1738,7 @@ void recalculate_ad(
     int num_threads,
     std::unordered_map<uint32_t, MatchCache> &match_dict
 ) {
+    using Acc = SuccessAccumulator<T>;
     for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
         const auto &indices = ind_dict0.at(key);
         auto &book_bucket0 = book_dict0.at(key);
@@ -1773,7 +1774,7 @@ void recalculate_ad(
                 AdSolveWorkspace<T> &workspace = thread_workspaces[thread_index];
                 uint64_t board = indices[static_cast<size_t>(k)];
                 if (derive_size == 1U) {
-                    double success_probability = 0.0;
+                    Acc success_probability = 0;
                     uint32_t empty_mask = empty_cell_mask16(board);
                     const int empty_slots = static_cast<int>(popcount_u32(empty_mask));
                     while (empty_mask != 0U) {
@@ -1797,7 +1798,8 @@ void recalculate_ad(
                             zero_val,
                             max_scale
                         );
-                        success_probability += static_cast<double>(success2) * (1.0 - spawn_rate4);
+                        success_probability += static_cast<Acc>(success2) *
+                            (static_cast<Acc>(1) - static_cast<Acc>(spawn_rate4));
 
                         T success4 = solve_optimal_success_rate(
                             board,
@@ -1817,11 +1819,11 @@ void recalculate_ad(
                             zero_val,
                             max_scale
                         );
-                        success_probability += static_cast<double>(success4) * spawn_rate4;
+                        success_probability += static_cast<Acc>(success4) * static_cast<Acc>(spawn_rate4);
                     }
                     book_bucket0.row(static_cast<size_t>(k))[0] = empty_slots == 0
                         ? zero_val
-                        : static_cast<T>(success_probability / static_cast<double>(empty_slots));
+                        : static_cast<T>(success_probability / static_cast<Acc>(empty_slots));
                     continue;
                 }
 
@@ -1861,7 +1863,8 @@ void recalculate_ad(
                         workspace.optimal_values
                     );
                     for (size_t idx = 0; idx < derive_size; ++idx) {
-                        success_probability[idx] += static_cast<double>(workspace.optimal_values[idx]) * (1.0 - spawn_rate4);
+                        success_probability[idx] += static_cast<Acc>(workspace.optimal_values[idx]) *
+                            (static_cast<Acc>(1) - static_cast<Acc>(spawn_rate4));
                     }
 
                     solve_optimal_success_rate_arr_into(
@@ -1891,14 +1894,15 @@ void recalculate_ad(
                         workspace.temp_values
                     );
                     for (size_t idx = 0; idx < derive_size; ++idx) {
-                        success_probability[idx] += static_cast<double>(workspace.temp_values[idx]) * spawn_rate4;
+                        success_probability[idx] +=
+                            static_cast<Acc>(workspace.temp_values[idx]) * static_cast<Acc>(spawn_rate4);
                     }
                 }
                 T *dst = book_bucket0.row(static_cast<size_t>(k));
                 for (size_t idx = 0; idx < derive_size; ++idx) {
                     dst[idx] = empty_slots == 0
                         ? zero_val
-                        : static_cast<T>(success_probability[idx] / static_cast<double>(empty_slots));
+                        : static_cast<T>(success_probability[idx] / static_cast<Acc>(empty_slots));
                 }
             }
         }
@@ -1942,6 +1946,7 @@ void recalculate_ad_chunk(
     double spawn_rate4,
     int num_threads
 ) {
+    using Acc = SuccessAccumulator<T>;
     const auto &book_bucket = book_dict.at(bucket_key);
     const auto &ind_arr = ind_dict.at(bucket_key);
     const auto &indind_arr = indind_dict.at(bucket_key);
@@ -1956,7 +1961,9 @@ void recalculate_ad_chunk(
     std::vector<AdSolveWorkspace<T>> thread_workspaces(static_cast<size_t>(num_threads));
 
     const uint64_t new_value = is_gen2_step ? 1ULL : 2ULL;
-    const double probability = is_gen2_step ? (1.0 - spawn_rate4) : spawn_rate4;
+    const Acc probability = is_gen2_step
+        ? static_cast<Acc>(1) - static_cast<Acc>(spawn_rate4)
+        : static_cast<Acc>(spawn_rate4);
     const uint32_t board_sum_after_spawn = original_board_sum + (is_gen2_step ? 2U : 4U);
 
     int chunk_count = std::max(
@@ -1980,7 +1987,7 @@ void recalculate_ad_chunk(
             AdSolveWorkspace<T> &workspace = thread_workspaces[thread_index];
             const uint64_t board = positions_chunk[static_cast<size_t>(row_index)];
             if (derive_size == 1U) {
-                double success_probability = 0.0;
+                Acc success_probability = 0;
                 uint32_t empty_mask = empty_cell_mask16(board);
                 const int empty_slots = static_cast<int>(popcount_u32(empty_mask));
                 while (empty_mask != 0U) {
@@ -2004,18 +2011,20 @@ void recalculate_ad_chunk(
                         zero_val,
                         max_scale
                     );
-                    success_probability += static_cast<double>(success);
+                    success_probability += static_cast<Acc>(success);
                 }
                 T *dst = book_chunk.row(static_cast<size_t>(row_index));
                 if (empty_slots == 0) {
-                    dst[0] = is_gen2_step ? static_cast<T>(static_cast<double>(dst[0]) * spawn_rate4) : zero_val;
+                    dst[0] = is_gen2_step
+                        ? static_cast<T>(static_cast<Acc>(dst[0]) * static_cast<Acc>(spawn_rate4))
+                        : zero_val;
                 } else if (is_gen2_step) {
                     dst[0] = static_cast<T>(
-                        static_cast<double>(dst[0]) * spawn_rate4
-                        + (success_probability * probability / static_cast<double>(empty_slots))
+                        static_cast<Acc>(dst[0]) * static_cast<Acc>(spawn_rate4)
+                        + (success_probability * probability / static_cast<Acc>(empty_slots))
                     );
                 } else {
-                    dst[0] = static_cast<T>(success_probability / static_cast<double>(empty_slots));
+                    dst[0] = static_cast<T>(success_probability / static_cast<Acc>(empty_slots));
                 }
                 continue;
             }
@@ -2056,14 +2065,16 @@ void recalculate_ad_chunk(
                     workspace.optimal_values
                 );
                 for (size_t idx = 0; idx < derive_size; ++idx) {
-                    success_probability[idx] += static_cast<double>(workspace.optimal_values[idx]);
+                    success_probability[idx] += static_cast<Acc>(workspace.optimal_values[idx]);
                 }
             }
             T *dst = book_chunk.row(static_cast<size_t>(row_index));
             if (empty_slots == 0) {
                 if (is_gen2_step) {
                     for (size_t idx = 0; idx < derive_size; ++idx) {
-                        dst[idx] = static_cast<T>(static_cast<double>(dst[idx]) * spawn_rate4);
+                        dst[idx] = static_cast<T>(
+                            static_cast<Acc>(dst[idx]) * static_cast<Acc>(spawn_rate4)
+                        );
                     }
                 } else {
                     std::fill(dst, dst + derive_size, zero_val);
@@ -2073,13 +2084,13 @@ void recalculate_ad_chunk(
             if (is_gen2_step) {
                 for (size_t idx = 0; idx < derive_size; ++idx) {
                     dst[idx] = static_cast<T>(
-                        static_cast<double>(dst[idx]) * spawn_rate4
-                        + (success_probability[idx] * probability / static_cast<double>(empty_slots))
+                        static_cast<Acc>(dst[idx]) * static_cast<Acc>(spawn_rate4)
+                        + (success_probability[idx] * probability / static_cast<Acc>(empty_slots))
                     );
                 }
             } else {
                 for (size_t idx = 0; idx < derive_size; ++idx) {
-                    dst[idx] = static_cast<T>(success_probability[idx] / static_cast<double>(empty_slots));
+                    dst[idx] = static_cast<T>(success_probability[idx] / static_cast<Acc>(empty_slots));
                 }
             }
         }

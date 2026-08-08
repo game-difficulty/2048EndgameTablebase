@@ -1225,6 +1225,7 @@ void recalculate_layer(
     const AdaptiveIndex::Index *ind2,
     bool do_check
 ) {
+    using Acc = SuccessAccumulator<T>;
     T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
     T zero_val = zero_value_for_dtype<T>(options.success_rate_dtype);
     int num_threads = effective_num_threads(options);
@@ -1237,7 +1238,7 @@ void recalculate_layer(
             continue;
         }
 
-        double success_probability = 0.0;
+        Acc success_probability = 0;
         int empty_slots = 0;
         for (int i = 0; i < 16; ++i) {
             if (((board >> (4 * i)) & 0xFULL) != 0) {
@@ -1254,7 +1255,8 @@ void recalculate_layer(
                     best2 = std::max(best2, search_arr(arr1, apply_canonical(new_board, spec.symm_mode), ind1, zero_val));
                 }
             }
-            success_probability += static_cast<double>(best2) * (1.0 - options.spawn_rate4);
+            success_probability += static_cast<Acc>(best2) *
+                (static_cast<Acc>(1) - static_cast<Acc>(options.spawn_rate4));
 
             uint64_t spawn4 = board | (2ULL << (4 * i));
             T best4 = zero_val;
@@ -1265,11 +1267,11 @@ void recalculate_layer(
                     best4 = std::max(best4, search_arr(arr2, apply_canonical(new_board, spec.symm_mode), ind2, zero_val));
                 }
             }
-            success_probability += static_cast<double>(best4) * options.spawn_rate4;
+            success_probability += static_cast<Acc>(best4) * static_cast<Acc>(options.spawn_rate4);
         }
 
         arr0.success[static_cast<size_t>(k)] =
-            empty_slots > 0 ? static_cast<T>(success_probability / static_cast<double>(empty_slots)) : zero_val;
+            empty_slots > 0 ? static_cast<T>(success_probability / static_cast<Acc>(empty_slots)) : zero_val;
     }
 }
 

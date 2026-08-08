@@ -21,6 +21,7 @@
 #include <random>
 #include <sstream>
 #include <stdexcept>
+#include <type_traits>
 
 #if defined(_OPENMP)
 #include <omp.h>
@@ -343,6 +344,20 @@ uint64_t value_size_for_dtype_mode(DTypeMode mode) {
     }
 }
 
+template <typename T>
+bool dtype_mode_matches_value_type(DTypeMode mode) {
+    if constexpr (std::is_same_v<T, uint32_t>) {
+        return mode == DTypeMode::UInt32;
+    } else if constexpr (std::is_same_v<T, uint64_t>) {
+        return mode == DTypeMode::UInt64;
+    } else if constexpr (std::is_same_v<T, float>) {
+        return mode == DTypeMode::Float32 || mode == DTypeMode::OneMinusFloat32;
+    } else if constexpr (std::is_same_v<T, double>) {
+        return mode == DTypeMode::Float64 || mode == DTypeMode::OneMinusFloat64;
+    }
+    return false;
+}
+
 uint32_t fixed_from_unit(double value) {
     if (value <= 0.0) {
         return 0U;
@@ -388,19 +403,27 @@ uint64_t raw_bits_from_fixed(uint32_t fixed, DTypeMode mode) {
     }
 }
 
-double numeric_from_fixed(uint32_t fixed, DTypeMode mode) {
-    const double unit = static_cast<double>(fixed) / kFixedScale;
+double numeric_from_raw_bits(uint64_t raw, DTypeMode mode) {
     switch (mode) {
         case DTypeMode::UInt64:
+            return static_cast<double>(raw) / kUInt64Scale;
         case DTypeMode::Float32:
+        case DTypeMode::OneMinusFloat32: {
+            const uint32_t bits = static_cast<uint32_t>(raw);
+            float value = 0.0f;
+            std::memcpy(&value, &bits, sizeof(value));
+            return static_cast<double>(value);
+        }
         case DTypeMode::Float64:
+        case DTypeMode::OneMinusFloat64: {
+            double value = 0.0;
+            std::memcpy(&value, &raw, sizeof(value));
+            return value;
+        }
         case DTypeMode::UInt32:
-            return unit;
-        case DTypeMode::OneMinusFloat32:
-        case DTypeMode::OneMinusFloat64:
-            return unit - 1.0;
+        default:
+            return static_cast<double>(static_cast<uint32_t>(raw)) / kFixedScale;
     }
-    return unit;
 }
 
 uint32_t fixed_from_raw_bits(uint64_t raw, DTypeMode mode) {
@@ -435,7 +458,7 @@ uint32_t fixed_from_raw_bits(uint64_t raw, DTypeMode mode) {
     }
 }
 
-uint64_t layer_metadata_bytes(const Prefix36Layer &layer) {
+uint64_t layer_metadata_bytes(const Prefix36LayerBase &layer) {
     return static_cast<uint64_t>(layer.bucket_keys.size()) * sizeof(uint64_t)
          + static_cast<uint64_t>(layer.bitmap_offsets.size()) * sizeof(uint32_t)
          + static_cast<uint64_t>(layer.success_offsets.size()) * sizeof(uint32_t)
@@ -446,12 +469,13 @@ uint64_t layer_metadata_bytes(const Prefix36Layer &layer) {
          + static_cast<uint64_t>(layer.large_rank_bases.size()) * sizeof(uint16_t);
 }
 
-uint64_t layer_bitmap_bits(const Prefix36Layer &layer) {
+uint64_t layer_bitmap_bits(const Prefix36LayerBase &layer) {
     return static_cast<uint64_t>(layer.small_bitmap_bytes.size()) * 8ULL
          + static_cast<uint64_t>(layer.large_bitmap_words.size()) * 64ULL;
 }
 
-uint64_t layer_file_bytes(const Prefix36Layer &layer, DTypeMode mode) {
+template <typename T>
+uint64_t layer_file_bytes(const Prefix36LayerT<T> &layer, DTypeMode mode) {
     return sizeof(LayerFileHeader)
          + static_cast<uint64_t>(layer.bucket_keys.size()) * sizeof(uint64_t)
          + static_cast<uint64_t>(layer.bitmap_offsets.size()) * sizeof(uint32_t)
@@ -519,18 +543,21 @@ void append_vector(Writer &out, const std::vector<T> &values) {
     }
 }
 
-template <typename Writer>
+template <typename Writer, typename T>
 void append_typed_success_values(
     Writer &out,
-    const std::vector<uint32_t> &values,
+    const std::vector<T> &values,
     DTypeMode mode
 ) {
     if (values.empty()) {
         return;
     }
-    if (mode == DTypeMode::UInt32) {
-        out.append(values.data(), values.size() * sizeof(uint32_t));
+    if (dtype_mode_matches_value_type<T>(mode)) {
+        out.append(values.data(), values.size() * sizeof(T));
         return;
+    }
+    if constexpr (!std::is_same_v<T, uint32_t>) {
+        throw std::runtime_error("EX prefix36 success value type does not match dtype");
     }
 
     constexpr size_t kConvertChunkValues = 1U << 20;
@@ -572,10 +599,10 @@ void read_vector(Reader &in, std::vector<T> &values, uint64_t count) {
     }
 }
 
-template <typename Reader>
+template <typename Reader, typename T>
 void read_typed_success_values(
     Reader &in,
-    std::vector<uint32_t> &values,
+    std::vector<T> &values,
     uint64_t count,
     DTypeMode mode
 ) {
@@ -583,9 +610,12 @@ void read_typed_success_values(
     if (count == 0U) {
         return;
     }
-    if (mode == DTypeMode::UInt32) {
-        in.read(values.data(), values.size() * sizeof(uint32_t));
+    if (dtype_mode_matches_value_type<T>(mode)) {
+        in.read(values.data(), values.size() * sizeof(T));
         return;
+    }
+    if constexpr (!std::is_same_v<T, uint32_t>) {
+        throw std::runtime_error("EX prefix36 success value type does not match dtype");
     }
 
     constexpr size_t kConvertChunkValues = 1U << 20;
@@ -623,7 +653,7 @@ uint32_t valid_suffix_count_for_key(
 }
 
 void rebuild_large_rank_metadata(
-    Prefix36Layer &layer,
+    Prefix36LayerBase &layer,
     const std::vector<uint32_t> &size_table,
     int requested_threads,
     const std::string &path
@@ -910,8 +940,9 @@ std::string archive_entry_name_for_path(const std::string &path) {
     return name + ".bin";
 }
 
+template <typename T>
 LayerFileHeader make_layer_header(
-    const Prefix36Layer &layer,
+    const Prefix36LayerT<T> &layer,
     const PatternSpec &spec,
     DTypeMode mode
 ) {
@@ -934,11 +965,11 @@ LayerFileHeader make_layer_header(
     return header;
 }
 
-template <typename Writer>
+template <typename Writer, typename T>
 void append_layer_payload(
     Writer &out,
     const LayerFileHeader &header,
-    const Prefix36Layer &layer,
+    const Prefix36LayerT<T> &layer,
     DTypeMode mode
 ) {
     out.append(&header, sizeof(header));
@@ -958,9 +989,10 @@ void append_layer_payload(
     }
 }
 
+template <typename T>
 void write_layer_file(
     const std::string &path,
-    const Prefix36Layer &layer,
+    const Prefix36LayerT<T> &layer,
     const PatternSpec &spec,
     DTypeMode mode,
     FileIOUtils::DirectIoConfig io_config = {}
@@ -971,12 +1003,13 @@ void write_layer_file(
     out.close();
 }
 
+template <typename T>
 std::string write_routed_layer_file(
     const RunOptions &options,
     StoragePaths::ArtifactRole role,
     int step,
     const std::string &suffix,
-    const Prefix36Layer &layer,
+    const Prefix36LayerT<T> &layer,
     const PatternSpec &spec,
     DTypeMode mode,
     FileIOUtils::DirectIoConfig io_config = {}
@@ -994,7 +1027,8 @@ std::string write_routed_layer_file(
     return final_path;
 }
 
-uint64_t estimate_compressed_layer_bytes(const Prefix36Layer &layer, DTypeMode mode) {
+template <typename T>
+uint64_t estimate_compressed_layer_bytes(const Prefix36LayerT<T> &layer, DTypeMode mode) {
     const uint64_t success_bytes =
         static_cast<uint64_t>(layer.success_values.size()) *
         static_cast<uint64_t>(value_size_for_dtype_mode(mode));
@@ -1024,9 +1058,10 @@ uint64_t estimate_compressed_layer_file_bytes(const std::string &path) {
 }
 
 
+template <typename T>
 void write_layer_archive_file(
     const std::string &archive_path,
-    const Prefix36Layer &layer,
+    const Prefix36LayerT<T> &layer,
     const PatternSpec &spec,
     DTypeMode mode
 ) {
@@ -1036,8 +1071,8 @@ void write_layer_archive_file(
     out.close();
 }
 
-template <typename Reader>
-Prefix36Layer read_layer_file_from_reader(
+template <typename T = uint32_t, typename Reader>
+Prefix36LayerT<T> read_layer_file_from_reader(
     Reader &in,
     const std::string &path,
     LayerFileHeader *out_header,
@@ -1051,7 +1086,7 @@ Prefix36Layer read_layer_file_from_reader(
         *out_header = header;
     }
     const DTypeMode mode = dtype_mode_from_header(header);
-    Prefix36Layer layer;
+    Prefix36LayerT<T> layer;
     layer.layer_sum = header.layer_sum;
     layer.threshold_bits = header.threshold_bits;
     layer.live_board_count = header.live_board_count;
@@ -1085,7 +1120,8 @@ bool has_archive_suffix(const std::string &path) {
     return path.size() >= 3U && path.compare(path.size() - 3U, 3U, ".7z") == 0;
 }
 
-Prefix36Layer read_layer_file(
+template <typename T = uint32_t>
+Prefix36LayerT<T> read_layer_file(
     const std::string &path,
     LayerFileHeader *out_header = nullptr,
     FileIOUtils::DirectIoConfig io_config = {},
@@ -1100,7 +1136,7 @@ Prefix36Layer read_layer_file(
     }
     if (has_archive_suffix(actual_path)) {
         SevenZipSequentialReader in(actual_path);
-        Prefix36Layer layer = read_layer_file_from_reader(in, actual_path, out_header, size_table, rebuild_threads);
+        Prefix36LayerT<T> layer = read_layer_file_from_reader<T>(in, actual_path, out_header, size_table, rebuild_threads);
         in.close();
         return layer;
     }
@@ -1122,7 +1158,7 @@ Prefix36Layer read_layer_file(
     header_in.close();
 
     FileIOUtils::DirectSequentialReader in(actual_path, expected_bytes, io_config);
-    Prefix36Layer layer = read_layer_file_from_reader(in, actual_path, out_header, size_table, rebuild_threads);
+    Prefix36LayerT<T> layer = read_layer_file_from_reader<T>(in, actual_path, out_header, size_table, rebuild_threads);
     in.close();
     return layer;
 }
@@ -1507,7 +1543,8 @@ void materialize_compressed_layer_input(const RunOptions &options, int step) {
     );
 }
 
-Prefix36Layer read_layer_input(
+template <typename T = uint32_t>
+Prefix36LayerT<T> read_layer_input(
     const RunOptions &options,
     int step,
     FileIOUtils::DirectIoConfig io_config,
@@ -1517,7 +1554,7 @@ Prefix36Layer read_layer_input(
 ) {
     materialize_compressed_layer_input(options, step);
     LayerFileHeader header{};
-    Prefix36Layer layer = read_layer_file(
+    Prefix36LayerT<T> layer = read_layer_file<T>(
         existing_layer_input_path(options, step),
         &header,
         io_config,
@@ -1661,8 +1698,9 @@ bool compressed_results_are_complete_for_options(const RunOptions &options) {
     return !options.optimal_branch_only || optimal_complete_marker_exists(options);
 }
 
+template <typename T>
 EXCompressedResult::Prefix36LayerView layer_compression_view(
-    const Prefix36Layer &layer,
+    const Prefix36LayerT<T> &layer,
     const PatternSpec &spec,
     DTypeMode mode
 ) {
@@ -1706,10 +1744,11 @@ bool compressed_layer_is_fresh(const std::string &source_path, const std::string
     return !ec && output_time >= source_time;
 }
 
+template <typename T>
 double compress_layer_result_from_memory(
     const RunOptions &options,
     int step,
-    const Prefix36Layer &layer,
+    const Prefix36LayerT<T> &layer,
     const PatternSpec &spec,
     DTypeMode mode,
     bool remove_zbook_after = false
@@ -1828,8 +1867,8 @@ void append_generate_stats(
     const std::string &stage,
     int step,
     uint64_t input_live,
-    const Prefix36Layer *primary,
-    const Prefix36Layer *secondary,
+    const Prefix36LayerBase *primary,
+    const Prefix36LayerBase *secondary,
     uint32_t retry_count,
     double total_seconds,
     double compute_seconds,
@@ -1919,7 +1958,7 @@ void append_solve_stats(
     double read_seconds,
     double total_seconds,
     double compute_seconds,
-    const Prefix36Layer *layer,
+    const Prefix36LayerBase *layer,
     uint64_t bitmap_live_override = 0ULL,
     uint64_t bitmap_bits_override = 0ULL
 ) {
@@ -1993,7 +2032,7 @@ double transition_component_reserve_need(uint64_t current_size, uint64_t next_si
     return static_cast<double>(next_size - padding) / static_cast<double>(current_size);
 }
 
-double transition_reserve_need(const Prefix36Layer &current, const Prefix36Layer &next) {
+double transition_reserve_need(const Prefix36LayerBase &current, const Prefix36LayerBase &next) {
     double need = 0.0;
     need = std::max(
         need,
@@ -2060,7 +2099,7 @@ double reserve_factor_for_step(
 Prefix36DynamicState make_dynamic_for_current(
     uint32_t layer_sum,
     uint32_t threshold_bits,
-    const Prefix36Layer &current,
+    const Prefix36LayerBase &current,
     double reserve_factor
 ) {
     const double factor = std::max(0.25, reserve_factor);
@@ -2076,7 +2115,7 @@ Prefix36DynamicState make_dynamic_for_current(
 }
 
 void insert_layer_into_dynamic(
-    const Prefix36Layer &source,
+    const Prefix36LayerBase &source,
     Prefix36DynamicState &target,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
@@ -2139,9 +2178,11 @@ void insert_layer_into_dynamic(
     }
 }
 
-void build_terminal_success(Prefix36Layer &layer, const DenseLow24RankLut &dense_lut, const PatternSpec &spec, const RunOptions &options, int num_threads) {
-    layer.success_values.assign(static_cast<size_t>(layer.live_board_count), 0U);
-    const uint32_t max_scale = max_scale_value_for_dtype<uint32_t>(options.success_rate_dtype);
+template <typename T>
+void build_terminal_success(Prefix36LayerT<T> &layer, const DenseLow24RankLut &dense_lut, const PatternSpec &spec, const RunOptions &options, int num_threads) {
+    const T zero_value = zero_value_for_dtype<T>(options.success_rate_dtype);
+    const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
+    layer.success_values.assign(static_cast<size_t>(layer.live_board_count), zero_value);
 #pragma omp parallel for schedule(dynamic, 256) num_threads(num_threads)
     for (int64_t bucket_idx_signed = 0; bucket_idx_signed < static_cast<int64_t>(layer.bucket_keys.size()); ++bucket_idx_signed) {
         const uint32_t bucket_idx = static_cast<uint32_t>(bucket_idx_signed);
@@ -2155,7 +2196,7 @@ void build_terminal_success(Prefix36Layer &layer, const DenseLow24RankLut &dense
         auto set_success = [&](uint32_t rank) {
             const uint64_t board = (prefix36 << kSuffixBits) | dense_lut.unrank_array[unrank_offset + rank];
             layer.success_values[static_cast<size_t>(success_base + ordinal)] =
-                is_success_by_shifts(board, options.target, spec.success_shifts) ? max_scale : 0U;
+                is_success_by_shifts(board, options.target, spec.success_shifts) ? max_scale : zero_value;
             ++ordinal;
         };
         if (valid_count <= layer.threshold_bits) {
@@ -2207,7 +2248,7 @@ struct CompactBucketPlan {
 };
 
 uint32_t compact_count_bitmap_live(
-    const Prefix36Layer &input,
+    const Prefix36LayerBase &input,
     const CompactBucketPlan &plan
 ) {
     uint32_t live = 0U;
@@ -2232,24 +2273,26 @@ uint32_t compact_count_bitmap_live(
     return live;
 }
 
+template <typename T>
 uint32_t compact_count_success_kept(
-    const std::vector<uint32_t> &success_values,
+    const std::vector<T> &success_values,
     uint32_t begin,
     uint32_t count,
-    uint32_t threshold
+    T threshold
 ) {
     uint32_t kept = 0U;
-    const uint32_t *ptr = success_values.data() + begin;
+    const T *ptr = success_values.data() + begin;
     for (uint32_t i = 0; i < count; ++i) {
         kept += ptr[i] > threshold ? 1U : 0U;
     }
     return kept;
 }
 
+template <typename T>
 uint32_t compact_count_kept_by_bitmap(
-    const Prefix36Layer &input,
+    const Prefix36LayerT<T> &input,
     const CompactBucketPlan &plan,
-    uint32_t threshold,
+    T threshold,
     uint32_t &live_count
 ) {
     uint32_t kept = 0U;
@@ -2292,13 +2335,14 @@ uint32_t compact_count_kept_by_bitmap(
     return kept;
 }
 
-Prefix36Layer compact_layer(
-    const Prefix36Layer &input,
+template <typename T>
+Prefix36LayerT<T> compact_layer(
+    const Prefix36LayerT<T> &input,
     const DenseLow24RankLut &dense_lut,
-    uint32_t threshold,
+    T threshold,
     int num_threads
 ) {
-    Prefix36Layer out;
+    Prefix36LayerT<T> out;
     out.layer_sum = input.layer_sum;
     out.threshold_bits = input.threshold_bits;
 
@@ -2444,7 +2488,7 @@ Prefix36Layer compact_layer(
                     if (rank >= plan.valid_count) {
                         break;
                     }
-                    const uint32_t success =
+                    const T success =
                         input.success_values[static_cast<size_t>(plan.old_success_offset + ordinal)];
                     if (success > threshold) {
                         out_value = static_cast<uint8_t>(out_value | static_cast<uint8_t>(1U << bit));
@@ -2466,7 +2510,7 @@ Prefix36Layer compact_layer(
                     if (rank >= plan.valid_count) {
                         break;
                     }
-                    const uint32_t success =
+                    const T success =
                         input.success_values[static_cast<size_t>(plan.old_success_offset + ordinal)];
                     if (success > threshold) {
                         out_value |= (1ULL << bit);
@@ -2523,13 +2567,14 @@ uint32_t count_keep_range(const std::vector<uint64_t> &keep_bits, uint32_t begin
     return kept;
 }
 
-Prefix36Layer compact_layer_by_keep_bits(
-    const Prefix36Layer &input,
+template <typename T>
+Prefix36LayerT<T> compact_layer_by_keep_bits(
+    const Prefix36LayerT<T> &input,
     const DenseLow24RankLut &dense_lut,
     const std::vector<uint64_t> &keep_bits,
     int num_threads
 ) {
-    Prefix36Layer out;
+    Prefix36LayerT<T> out;
     out.layer_sum = input.layer_sum;
     out.threshold_bits = input.threshold_bits;
 
@@ -2719,10 +2764,11 @@ struct OptimalBranchStats {
     double mark_seconds = 0.0;
 };
 
+template <typename T>
 struct OptimalMarkWorkspace {
     static constexpr size_t kMaxCells = static_cast<size_t>(kBatchSize) * 16U;
     static constexpr size_t kMaxCandidates = kMaxCells * 4U;
-    std::array<uint32_t, kMaxCells> best_success{};
+    std::array<T, kMaxCells> best_success{};
     std::array<uint32_t, kMaxCells> best_index{};
     std::array<uint64_t, kMaxCandidates> canonical_candidates{};
     std::array<uint16_t, kMaxCandidates> candidate_refs{};
@@ -2744,17 +2790,18 @@ void mark_keep_index(std::vector<std::atomic<uint64_t>> &keep_words, uint32_t su
     );
 }
 
-template <typename Mover>
+template <typename Mover, typename T>
 OptimalBranchStats mark_optimal_batch(
     const uint64_t *boards,
     uint32_t board_count,
-    const Prefix36Layer &target,
+    const Prefix36LayerT<T> &target,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     const PatternSpec &spec,
     uint32_t spawn_exp,
+    T zero_value,
     std::vector<std::atomic<uint64_t>> &keep_words,
-    OptimalMarkWorkspace &workspace
+    OptimalMarkWorkspace<T> &workspace
 ) {
     OptimalBranchStats stats;
     stats.source_live = board_count;
@@ -2789,7 +2836,7 @@ OptimalBranchStats mark_optimal_batch(
         workspace.candidate_refs[canonical_count] = ref;
         ++canonical_count;
         ++stats.candidates;
-        if (canonical_count == OptimalMarkWorkspace::kMaxCandidates) {
+        if (canonical_count == OptimalMarkWorkspace<T>::kMaxCandidates) {
             flush_canonical();
         }
     };
@@ -2801,7 +2848,7 @@ OptimalBranchStats mark_optimal_batch(
             const uint32_t cell = countr_zero_u32(empty_mask);
             empty_mask &= empty_mask - 1U;
             const uint16_t ref = static_cast<uint16_t>(cell_count++);
-            workspace.best_success[ref] = 0U;
+            workspace.best_success[ref] = zero_value;
             workspace.best_index[ref] = std::numeric_limits<uint32_t>::max();
             const uint64_t spawned = board | (static_cast<uint64_t>(spawn_exp) << (4U * cell));
             const auto moves = Mover::move_all_dir(spawned);
@@ -2840,7 +2887,7 @@ OptimalBranchStats mark_optimal_batch(
             }
             ++stats.found;
             const uint32_t success_index = success_indices[i];
-            const uint32_t success = target.success_values[static_cast<size_t>(success_index)];
+            const T success = target.success_values[static_cast<size_t>(success_index)];
             const uint16_t ref = workspace.queries[base + i].ref;
             if (success > workspace.best_success[ref]) {
                 workspace.best_success[ref] = success;
@@ -2851,7 +2898,7 @@ OptimalBranchStats mark_optimal_batch(
 
     for (uint32_t ref = 0; ref < cell_count; ++ref) {
         const uint32_t success_index = workspace.best_index[ref];
-        if (workspace.best_success[ref] != 0U &&
+        if (workspace.best_success[ref] != zero_value &&
             success_index != std::numeric_limits<uint32_t>::max()) {
             mark_keep_index(keep_words, success_index);
             ++stats.marked;
@@ -2860,14 +2907,15 @@ OptimalBranchStats mark_optimal_batch(
     return stats;
 }
 
-template <typename Mover>
+template <typename Mover, typename T>
 OptimalBranchStats mark_optimal_branches_from_source(
-    const Prefix36Layer &source,
-    const Prefix36Layer &target,
+    const Prefix36LayerT<T> &source,
+    const Prefix36LayerT<T> &target,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     const PatternSpec &spec,
     uint32_t spawn_exp,
+    T zero_value,
     std::vector<std::atomic<uint64_t>> &keep_words,
     int num_threads
 ) {
@@ -2879,12 +2927,12 @@ OptimalBranchStats mark_optimal_branches_from_source(
         OptimalBranchStats &stats = per_thread[static_cast<size_t>(tid)];
         std::array<uint64_t, kBatchSize> board_buffer{};
         uint32_t board_buffer_count = 0U;
-        OptimalMarkWorkspace workspace;
+        OptimalMarkWorkspace<T> workspace;
         auto flush = [&]() {
             if (board_buffer_count == 0U) {
                 return;
             }
-            OptimalBranchStats batch = mark_optimal_batch<Mover>(
+            OptimalBranchStats batch = mark_optimal_batch<Mover, T>(
                 board_buffer.data(),
                 board_buffer_count,
                 target,
@@ -2892,6 +2940,7 @@ OptimalBranchStats mark_optimal_branches_from_source(
                 z_luts,
                 spec,
                 spawn_exp,
+                zero_value,
                 keep_words,
                 workspace
             );
@@ -2962,21 +3011,23 @@ OptimalBranchStats mark_optimal_branches_from_source(
     return total;
 }
 
-template <typename Mover>
+template <typename Mover, typename T>
 void recalculate_batch_prefix36_write(
     const uint64_t *boards,
     const uint64_t *output_positions,
     uint32_t board_count,
-    const Prefix36Layer &future1,
-    const Prefix36Layer &future2,
+    const Prefix36LayerT<T> &future1,
+    const Prefix36LayerT<T> &future2,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     const PatternSpec &spec,
     double spawn_rate4,
-    RecalcWorkspace &workspace,
+    T zero_value,
+    RecalcWorkspace<T> &workspace,
     RecalcStats &stats,
-    Prefix36Layer &current
+    Prefix36LayerT<T> &current
 ) {
+    using Acc = SuccessAccumulator<T>;
     workspace.queries1.clear();
     workspace.queries2.clear();
     const double gen_t0 = now_seconds();
@@ -3033,8 +3084,8 @@ void recalculate_batch_prefix36_write(
             const uint32_t cell = countr_zero_u32(empty_mask);
             empty_mask &= empty_mask - 1U;
             const uint16_t ref = static_cast<uint16_t>((board_slot << 4U) | cell);
-            workspace.best2[ref] = 0U;
-            workspace.best4[ref] = 0U;
+            workspace.best2[ref] = zero_value;
+            workspace.best4[ref] = zero_value;
             const uint64_t spawn2 = board | (1ULL << (4U * cell));
             const auto moves2 = Mover::move_all_dir(spawn2);
             const uint64_t b2[4] = {std::get<0>(moves2), std::get<1>(moves2), std::get<2>(moves2), std::get<3>(moves2)};
@@ -3067,22 +3118,24 @@ void recalculate_batch_prefix36_write(
     const double finalize_t0 = now_seconds();
     uint64_t checksum = 0U;
     for (uint32_t board_slot = 0; board_slot < board_count; ++board_slot) {
-        double success_probability = 0.0;
+        Acc success_probability = 0;
         uint32_t empty_count = 0U;
         uint32_t empty_mask = workspace.empty_masks[board_slot];
         while (empty_mask != 0U) {
             const uint32_t cell = countr_zero_u32(empty_mask);
             empty_mask &= empty_mask - 1U;
             const size_t best_index = static_cast<size_t>(board_slot) * 16U + static_cast<size_t>(cell);
-            success_probability += static_cast<double>(workspace.best2[best_index]) * (1.0 - spawn_rate4);
-            success_probability += static_cast<double>(workspace.best4[best_index]) * spawn_rate4;
+            success_probability += static_cast<Acc>(workspace.best2[best_index]) *
+                (static_cast<Acc>(1) - static_cast<Acc>(spawn_rate4));
+            success_probability +=
+                static_cast<Acc>(workspace.best4[best_index]) * static_cast<Acc>(spawn_rate4);
             ++empty_count;
         }
-        const uint32_t value = empty_count > 0U
-            ? static_cast<uint32_t>(success_probability / static_cast<double>(empty_count))
-            : 0U;
+        const T value = empty_count > 0U
+            ? static_cast<T>(success_probability / static_cast<Acc>(empty_count))
+            : zero_value;
         current.success_values[static_cast<size_t>(output_positions[board_slot])] = value;
-        checksum += static_cast<uint64_t>(value) * (output_positions[board_slot] + 1ULL);
+        checksum += success_checksum_bits(value) * (output_positions[board_slot] + 1ULL);
     }
     const double finalize_t1 = now_seconds();
 
@@ -3098,11 +3151,11 @@ void recalculate_batch_prefix36_write(
     stats.checksum += checksum;
 }
 
-template <typename Mover>
+template <typename Mover, typename T>
 RecalcStats recalculate_current_layer(
-    Prefix36Layer &current,
-    const Prefix36Layer &future1,
-    const Prefix36Layer &future2,
+    Prefix36LayerT<T> &current,
+    const Prefix36LayerT<T> &future1,
+    const Prefix36LayerT<T> &future2,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     const PatternSpec &spec,
@@ -3110,8 +3163,9 @@ RecalcStats recalculate_current_layer(
     bool do_check,
     int num_threads
 ) {
-    current.success_values.assign(static_cast<size_t>(current.live_board_count), 0U);
-    const uint32_t max_scale = max_scale_value_for_dtype<uint32_t>(options.success_rate_dtype);
+    const T zero_value = zero_value_for_dtype<T>(options.success_rate_dtype);
+    const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
+    current.success_values.assign(static_cast<size_t>(current.live_board_count), zero_value);
     const double t0 = now_seconds();
     std::vector<RecalcStats> per_thread(static_cast<size_t>(num_threads));
 #pragma omp parallel num_threads(num_threads)
@@ -3121,12 +3175,12 @@ RecalcStats recalculate_current_layer(
         std::array<uint64_t, kBatchSize> board_buffer{};
         std::array<uint64_t, kBatchSize> output_buffer{};
         uint32_t board_buffer_count = 0U;
-        RecalcWorkspace workspace;
+        RecalcWorkspace<T> workspace;
         auto flush = [&]() {
             if (board_buffer_count == 0U) {
                 return;
             }
-            recalculate_batch_prefix36_write<Mover>(
+            recalculate_batch_prefix36_write<Mover, T>(
                 board_buffer.data(),
                 output_buffer.data(),
                 board_buffer_count,
@@ -3136,6 +3190,7 @@ RecalcStats recalculate_current_layer(
                 z_luts,
                 spec,
                 options.spawn_rate4,
+                zero_value,
                 workspace,
                 stats,
                 current
@@ -3160,7 +3215,7 @@ RecalcStats recalculate_current_layer(
                 if (do_check && is_success_by_shifts(board, options.target, spec.success_shifts)) {
                     current.success_values[static_cast<size_t>(output_pos)] = max_scale;
                     stats.boards += 1U;
-                    stats.checksum += static_cast<uint64_t>(max_scale) * (static_cast<uint64_t>(output_pos) + 1ULL);
+                    stats.checksum += success_checksum_bits(max_scale) * (static_cast<uint64_t>(output_pos) + 1ULL);
                     return;
                 }
                 board_buffer[board_buffer_count] = board;
@@ -3742,7 +3797,7 @@ void generate_forward_layers(
     ensure_ex_generated_through(arr_init, spec, options, lut, options.steps - 1);
 }
 
-void ensure_direct_index_built(Prefix36Layer &layer, const std::vector<uint32_t> &size_table) {
+void ensure_direct_index_built(Prefix36LayerBase &layer, const std::vector<uint32_t> &size_table) {
     if (layer.live_board_count == 0U) {
         return;
     }
@@ -3752,9 +3807,10 @@ void ensure_direct_index_built(Prefix36Layer &layer, const std::vector<uint32_t>
     build_direct_index(layer, size_table);
 }
 
-uint32_t max_success_value(const Prefix36Layer &layer) {
-    uint32_t max_value = 0U;
-    for (const uint32_t value : layer.success_values) {
+template <typename T>
+T max_success_value(const Prefix36LayerT<T> &layer, T zero_value) {
+    T max_value = zero_value;
+    for (const T value : layer.success_values) {
         if (value > max_value) {
             max_value = value;
         }
@@ -3762,20 +3818,23 @@ uint32_t max_success_value(const Prefix36Layer &layer) {
     return max_value;
 }
 
+template <typename T>
 SolveStepSummary solve_loaded_step_impl(
     const PatternSpec &spec,
     const RunOptions &options,
     const DenseLow24RankLut &dense_lut,
     const ZMaskFrozen::ZMaskLuts &z_luts,
     int step,
-    Prefix36Layer &current,
-    Prefix36Layer &future1,
-    Prefix36Layer &future2,
+    Prefix36LayerT<T> &current,
+    Prefix36LayerT<T> &future1,
+    Prefix36LayerT<T> &future2,
     double read_seconds,
     RuntimeControls::DeletionThresholdState deletion_threshold_state
 ) {
     const int num_threads = thread_count_from_options(options);
     const DTypeMode mode = dtype_mode_from_name(options.success_rate_dtype);
+    const T zero_value = zero_value_for_dtype<T>(options.success_rate_dtype);
+    const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     const double total_t0 = now_seconds();
     const double index_t0 = now_seconds();
@@ -3795,14 +3854,14 @@ SolveStepSummary solve_loaded_step_impl(
         current.success_values.clear();
         recalc.boards = current.live_board_count;
     } else if (futures_empty) {
-        current.success_values.assign(static_cast<size_t>(current.live_board_count), 0U);
+        current.success_values.assign(static_cast<size_t>(current.live_board_count), zero_value);
         if (do_check) {
             build_terminal_success(current, dense_lut, spec, options, num_threads);
         }
         recalc.boards = current.live_board_count;
     } else {
         if (options.is_variant) {
-            recalc = recalculate_current_layer<VBoardMover>(
+            recalc = recalculate_current_layer<VBoardMover, T>(
                 current,
                 future1,
                 future2,
@@ -3814,7 +3873,7 @@ SolveStepSummary solve_loaded_step_impl(
                 num_threads
             );
         } else {
-            recalc = recalculate_current_layer<BoardMover>(
+            recalc = recalculate_current_layer<BoardMover, T>(
                 current,
                 future1,
                 future2,
@@ -3832,12 +3891,12 @@ SolveStepSummary solve_loaded_step_impl(
     recalc.mbps = throughput(recalc.boards, recalc.seconds);
     const double compact_t0 = now_seconds();
     if (all_zero_output) {
-        Prefix36Layer empty;
+        Prefix36LayerT<T> empty;
         empty.layer_sum = current.layer_sum;
         empty.threshold_bits = current.threshold_bits;
         current = std::move(empty);
     } else {
-        current = compact_layer(current, dense_lut, 0U, num_threads);
+        current = compact_layer(current, dense_lut, zero_value, num_threads);
     }
     const double compact_t1 = now_seconds();
     const double write_t0 = now_seconds();
@@ -3860,19 +3919,18 @@ SolveStepSummary solve_loaded_step_impl(
     uint64_t future2_post_live = future2.live_board_count;
     double effective_deletion_threshold = 0.0;
     if (RuntimeControls::deletion_threshold_enabled(deletion_threshold_state)) {
-        const uint32_t max_scale = max_scale_value_for_dtype<uint32_t>(options.success_rate_dtype);
         bool should_compact_future = deletion_threshold_state.absolute > 0.0;
-        uint32_t threshold = RuntimeControls::absolute_deletion_threshold(
-            0U,
+        T threshold = RuntimeControls::absolute_deletion_threshold(
+            zero_value,
             max_scale,
             deletion_threshold_state
         );
         if (deletion_threshold_state.relative > 0.0) {
-            const uint32_t future_max = max_success_value(future2);
-            if (future_max > 0U) {
-                const uint32_t relative_threshold = RuntimeControls::relative_deletion_threshold(
+            const T future_max = max_success_value(future2, zero_value);
+            if (future_max > zero_value) {
+                const T relative_threshold = RuntimeControls::relative_deletion_threshold(
                     future_max,
-                    0U,
+                    zero_value,
                     deletion_threshold_state
                 );
                 threshold = RuntimeControls::max_deletion_threshold(threshold, relative_threshold);
@@ -3882,7 +3940,7 @@ SolveStepSummary solve_loaded_step_impl(
         if (should_compact_future) {
             effective_deletion_threshold = RuntimeControls::normalized_deletion_threshold(
                 threshold,
-                0U,
+                zero_value,
                 max_scale
             );
             const double fc_t0 = now_seconds();
@@ -3961,7 +4019,7 @@ SolveStepSummary solve_loaded_step_impl(
     return summary;
 }
 
-template <typename Mover>
+template <typename Mover, typename T>
 SolveStepSummary keep_only_optimal_branches_prefix36_impl(
     const PatternSpec &spec,
     const RunOptions &options,
@@ -3991,6 +4049,7 @@ SolveStepSummary keep_only_optimal_branches_prefix36_impl(
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     const int num_threads = thread_count_from_options(options);
     const DTypeMode mode = dtype_mode_from_name(options.success_rate_dtype);
+    const T zero_value = zero_value_for_dtype<T>(options.success_rate_dtype);
     int last_done = std::max(kOptimalBranchOnlyStartStep - 1, read_optimal_layer_marker(options));
     if (last_done >= options.steps - 1) {
         if (options.compress) {
@@ -4004,8 +4063,8 @@ SolveStepSummary keep_only_optimal_branches_prefix36_impl(
         return total;
     }
 
-    Prefix36Layer prev2;
-    Prefix36Layer prev1;
+    Prefix36LayerT<T> prev2;
+    Prefix36LayerT<T> prev1;
     int prev2_step = std::numeric_limits<int>::min();
     int prev1_step = std::numeric_limits<int>::min();
 
@@ -4021,7 +4080,7 @@ SolveStepSummary keep_only_optimal_branches_prefix36_impl(
         const double total_t0 = now_seconds();
         const double read_t0 = now_seconds();
         if (prev2_step != step - 2) {
-            prev2 = read_layer_input(
+            prev2 = read_layer_input<T>(
                 options,
                 step - 2,
                 io_config,
@@ -4032,7 +4091,7 @@ SolveStepSummary keep_only_optimal_branches_prefix36_impl(
             prev2_step = step - 2;
         }
         if (prev1_step != step - 1) {
-            prev1 = read_layer_input(
+            prev1 = read_layer_input<T>(
                 options,
                 step - 1,
                 io_config,
@@ -4042,7 +4101,7 @@ SolveStepSummary keep_only_optimal_branches_prefix36_impl(
             );
             prev1_step = step - 1;
         }
-        Prefix36Layer target = read_layer_input(
+        Prefix36LayerT<T> target = read_layer_input<T>(
             options,
             step,
             io_config,
@@ -4065,23 +4124,25 @@ SolveStepSummary keep_only_optimal_branches_prefix36_impl(
         }
 
         const double mark_t0 = now_seconds();
-        OptimalBranchStats from_prev2 = mark_optimal_branches_from_source<Mover>(
+        OptimalBranchStats from_prev2 = mark_optimal_branches_from_source<Mover, T>(
             prev2,
             target,
             lut.dense_lut,
             lut.row_luts,
             spec,
             2U,
+            zero_value,
             keep_words,
             num_threads
         );
-        OptimalBranchStats from_prev1 = mark_optimal_branches_from_source<Mover>(
+        OptimalBranchStats from_prev1 = mark_optimal_branches_from_source<Mover, T>(
             prev1,
             target,
             lut.dense_lut,
             lut.row_luts,
             spec,
             1U,
+            zero_value,
             keep_words,
             num_threads
         );
@@ -4093,7 +4154,7 @@ SolveStepSummary keep_only_optimal_branches_prefix36_impl(
         }
 
         const double compact_t0 = now_seconds();
-        Prefix36Layer pruned = compact_layer_by_keep_bits(target, lut.dense_lut, keep_bits, num_threads);
+        Prefix36LayerT<T> pruned = compact_layer_by_keep_bits(target, lut.dense_lut, keep_bits, num_threads);
         const double compact_seconds = now_seconds() - compact_t0;
 
         const double write_t0 = now_seconds();
@@ -4178,16 +4239,18 @@ SolveStepSummary keep_only_optimal_branches_prefix36_impl(
     return total;
 }
 
+template <typename T>
 SolveStepSummary keep_only_optimal_branches_prefix36(
     const PatternSpec &spec,
     const RunOptions &options,
     const LutBundle &lut
 ) {
     return options.is_variant
-        ? keep_only_optimal_branches_prefix36_impl<VBoardMover>(spec, options, lut)
-        : keep_only_optimal_branches_prefix36_impl<BoardMover>(spec, options, lut);
+        ? keep_only_optimal_branches_prefix36_impl<VBoardMover, T>(spec, options, lut)
+        : keep_only_optimal_branches_prefix36_impl<BoardMover, T>(spec, options, lut);
 }
 
+template <typename T>
 SolveStepSummary solve_single_step_impl(
     const PatternSpec &spec,
     const RunOptions &options,
@@ -4197,11 +4260,11 @@ SolveStepSummary solve_single_step_impl(
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     const int num_threads = thread_count_from_options(options);
     const double read_t0 = now_seconds();
-    Prefix36Layer future1 = read_layer_input(
+    Prefix36LayerT<T> future1 = read_layer_input<T>(
         options, step + 1, io_config, lut.dense_lut, num_threads, &lut);
-    Prefix36Layer future2 = read_layer_input(
+    Prefix36LayerT<T> future2 = read_layer_input<T>(
         options, step + 2, io_config, lut.dense_lut, num_threads, &lut);
-    Prefix36Layer current = read_layer_input(
+    Prefix36LayerT<T> current = read_layer_input<T>(
         options, step, io_config, lut.dense_lut, num_threads, &lut);
     const double read_t1 = now_seconds();
     return solve_loaded_step_impl(
@@ -4242,7 +4305,8 @@ void run_pattern_build(
     run_pattern_solve(arr_init, spec, options);
 }
 
-void run_pattern_solve(
+template <typename T>
+void run_pattern_solve_typed(
     const std::vector<uint64_t> &arr_init,
     const PatternSpec &spec,
     const RunOptions &options
@@ -4260,7 +4324,7 @@ void run_pattern_solve(
     if (options.optimal_branch_only && !optimal_complete_marker_exists(options)) {
         const int last_done = read_optimal_layer_marker(options);
         if (last_done >= kOptimalBranchOnlyStartStep) {
-            SolveStepSummary optimal_summary = keep_only_optimal_branches_prefix36(spec, options, lut);
+            SolveStepSummary optimal_summary = keep_only_optimal_branches_prefix36<T>(spec, options, lut);
             const RuntimeControls::DeletionThresholdState deletion_threshold_state =
                 RuntimeControls::current_deletion_thresholds(options);
             append_solve_stats(
@@ -4309,11 +4373,11 @@ void run_pattern_solve(
     RuntimeControls::DeletionThresholdState deletion_threshold_state =
         RuntimeControls::current_deletion_thresholds(options);
     if (options.steps >= 3) {
-        Prefix36Layer future1;
-        Prefix36Layer future2;
+        Prefix36LayerT<T> future1;
+        Prefix36LayerT<T> future2;
         int cached_future1_step = std::numeric_limits<int>::min();
         int cached_future2_step = std::numeric_limits<int>::min();
-        auto load_cached_future = [&](int target_step, Prefix36Layer &target, int &cached_step) -> double {
+        auto load_cached_future = [&](int target_step, Prefix36LayerT<T> &target, int &cached_step) -> double {
             if (cached_step == target_step) {
                 return 0.0;
             }
@@ -4328,7 +4392,7 @@ void run_pattern_solve(
             }
             promote_generated_layer_input(options, target_step, spec, mode, io_config, lut, num_threads);
             const double t0 = now_seconds();
-            target = read_layer_input(options, target_step, io_config, lut.dense_lut, num_threads, &lut);
+            target = read_layer_input<T>(options, target_step, io_config, lut.dense_lut, num_threads, &lut);
             cached_step = target_step;
             return now_seconds() - t0;
         };
@@ -4363,7 +4427,7 @@ void run_pattern_solve(
             carried_read_seconds += load_cached_future(step + 1, future1, cached_future1_step);
             carried_read_seconds += load_cached_future(step + 2, future2, cached_future2_step);
             const double read_t0 = now_seconds();
-            Prefix36Layer current = read_layer_input(
+            Prefix36LayerT<T> current = read_layer_input<T>(
                 options, step, io_config, lut.dense_lut, num_threads, &lut);
             const double read_seconds = carried_read_seconds + (now_seconds() - read_t0);
             carried_read_seconds = 0.0;
@@ -4401,7 +4465,7 @@ void run_pattern_solve(
         }
     }
     if (options.optimal_branch_only) {
-        SolveStepSummary optimal_summary = keep_only_optimal_branches_prefix36(spec, options, lut);
+        SolveStepSummary optimal_summary = keep_only_optimal_branches_prefix36<T>(spec, options, lut);
         total.input_live += optimal_summary.input_live;
         total.output_live += optimal_summary.output_live;
         total.bitmap_live += optimal_summary.bitmap_live;
@@ -4447,6 +4511,30 @@ void run_pattern_solve(
     );
 }
 
+void run_pattern_solve(
+    const std::vector<uint64_t> &arr_init,
+    const PatternSpec &spec,
+    const RunOptions &options
+) {
+    switch (dtype_mode_from_name(options.success_rate_dtype)) {
+        case DTypeMode::UInt64:
+            run_pattern_solve_typed<uint64_t>(arr_init, spec, options);
+            return;
+        case DTypeMode::Float32:
+        case DTypeMode::OneMinusFloat32:
+            run_pattern_solve_typed<float>(arr_init, spec, options);
+            return;
+        case DTypeMode::Float64:
+        case DTypeMode::OneMinusFloat64:
+            run_pattern_solve_typed<double>(arr_init, spec, options);
+            return;
+        case DTypeMode::UInt32:
+        default:
+            run_pattern_solve_typed<uint32_t>(arr_init, spec, options);
+            return;
+    }
+}
+
 void run_pattern_solve_single_layer(
     const std::vector<uint64_t> &arr_init,
     const PatternSpec &spec,
@@ -4454,7 +4542,23 @@ void run_pattern_solve_single_layer(
     int step
 ) {
     const LutBundle lut = load_or_build_prefix36_lut(arr_init, spec, options);
-    (void)solve_single_step_impl(spec, options, lut, step);
+    switch (dtype_mode_from_name(options.success_rate_dtype)) {
+        case DTypeMode::UInt64:
+            (void)solve_single_step_impl<uint64_t>(spec, options, lut, step);
+            return;
+        case DTypeMode::Float32:
+        case DTypeMode::OneMinusFloat32:
+            (void)solve_single_step_impl<float>(spec, options, lut, step);
+            return;
+        case DTypeMode::Float64:
+        case DTypeMode::OneMinusFloat64:
+            (void)solve_single_step_impl<double>(spec, options, lut, step);
+            return;
+        case DTypeMode::UInt32:
+        default:
+            (void)solve_single_step_impl<uint32_t>(spec, options, lut, step);
+            return;
+    }
 }
 
 uint32_t find_bucket_in_layer_file(
@@ -4686,11 +4790,10 @@ EXCompressedResult::ColdLookupResult lookup_zbook_cold(
         success_index,
         header.value_size
     );
-    const uint32_t fixed = fixed_from_raw_bits(raw_value, mode);
     result.found = true;
     result.global_dense_index = success_index;
-    result.raw_value_bits = raw_bits_from_fixed(fixed, mode);
-    result.numeric_value = numeric_from_fixed(fixed, mode);
+    result.raw_value_bits = raw_value;
+    result.numeric_value = numeric_from_raw_bits(raw_value, mode);
     result.success_block_raw_bytes = header.value_size;
     return result;
 }
@@ -4870,10 +4973,9 @@ bool sample_zbook_state(
             target_success_index,
             header.value_size
         );
-        const uint32_t fixed = fixed_from_raw_bits(raw, mode);
         board = (prefix36 << kSuffixBits) | suffix28;
-        raw_value_bits = raw_bits_from_fixed(fixed, mode);
-        numeric_value = numeric_from_fixed(fixed, mode);
+        raw_value_bits = raw;
+        numeric_value = numeric_from_raw_bits(raw, mode);
         return true;
     }
     return false;
