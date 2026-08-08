@@ -327,21 +327,23 @@ def canonical_min34(board):
 def simulate_move_and_merge(
     line: np.typing.NDArray,
     non_merging_values: tuple[int, ...] = (32768,),
+    barrier_values: tuple[int, ...] = (-1,),
 ) -> Tuple[List[int], List[int]]:
     values = [int(value) for value in np.asarray(line).reshape(-1).tolist()]
     non_merging = set(non_merging_values)
+    barriers = set(barrier_values)
     merged = [0] * len(values)
     new_line = [0] * len(values)
 
     index = 0
     while index < len(values):
-        if values[index] in (-1, 32768):
+        if values[index] in barriers:
             new_line[index] = values[index]
             index += 1
             continue
 
         next_barrier = index
-        while next_barrier < len(values) and values[next_barrier] not in (-1, 32768):
+        while next_barrier < len(values) and values[next_barrier] not in barriers:
             next_barrier += 1
 
         non_zero = [value for value in values[index:next_barrier] if value != 0]
@@ -370,6 +372,7 @@ def find_merge_positions(
     current_board: np.typing.NDArray,
     move_direction: str,
     non_merging_values: tuple[int, ...] = (32768,),
+    barrier_values: tuple[int, ...] = (-1,),
 ) -> np.typing.NDArray:
     merge_positions = np.zeros_like(current_board)
     move_direction = move_direction.lower()
@@ -378,7 +381,11 @@ def find_merge_positions(
     for index in range(rows if move_direction in ["left", "right"] else cols):
         line = current_board[index, :] if move_direction in ["left", "right"] else current_board[:, index]
         line_to_process = line[::-1] if move_direction in ["down", "right"] else line
-        _, merge_line = simulate_move_and_merge(line_to_process, non_merging_values)
+        _, merge_line = simulate_move_and_merge(
+            line_to_process,
+            non_merging_values,
+            barrier_values,
+        )
         if move_direction in ["right", "down"]:
             merge_line = merge_line[::-1]
         if move_direction in ["left", "right"]:
