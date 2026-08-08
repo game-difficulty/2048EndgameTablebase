@@ -5,6 +5,7 @@ __pycache__/
 *.so
 .Python
 .pytest_cache/
+/tests/
 .mypy_cache/
 .ruff_cache/
 .coverage

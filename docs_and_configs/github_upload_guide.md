@@ -54,6 +54,8 @@ The goal is to keep all source needed for building the app while excluding local
 - any local tablebase folders
 - `*.book`, `*.z`
 - `frontend/node_modules/`, `frontend/dist/`
+- root-level `tests/` (temporary Python regression tests stay local and are not
+  part of release commits)
 
 ## 3. Recommended repository structure
 
