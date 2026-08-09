@@ -125,7 +125,6 @@ async def handle_trainer_action(
             new_board = np_u64(new_board)
         elif session.spawn_mode == 3:
             session.moved = 1
-            session.history.append((new_board, session.score))
         elif session.spawn_mode in (1, 2):
             session.moved = 0
             spawns = _compute_spawns(session, new_board)
@@ -146,12 +145,8 @@ async def handle_trainer_action(
                 new_board = np_u64(new_board)
 
         session.board_encoded = np_u64(new_board)
-        if session.spawn_mode != 3:
-            session.history.append((session.board_encoded, session.score))
-            session.move_history.append(direction_str)
-        else:
-            session.history.append((session.board_encoded, session.score))
-            session.move_history.append(direction_str)
+        session.history.append((session.board_encoded, session.score))
+        session.move_history.append(direction_str)
         session.played_length = len(session.history) - 1
 
         metadata = build_move_animation_metadata(
