@@ -234,7 +234,11 @@ async def handle_game_action(
         if len(session.history) > 1:
             from ..trainer_helpers import _clear_record_replay
 
-            if session.client_id.startswith("trainer_"):
+            is_trainer = session.client_id.startswith("trainer_")
+            undone_action = (
+                session.move_history[-1] if len(session.move_history) > 1 else None
+            )
+            if is_trainer:
                 _clear_record_replay(session)
             session.history.pop()
             session.move_history.pop() if len(session.move_history) > 1 else None
@@ -245,6 +249,10 @@ async def handle_game_action(
             last_state = session.history[-1]
             session.board_encoded = last_state[0]
             session.score = last_state[1]
+            if is_trainer:
+                session.moved = int(
+                    session.spawn_mode == 3 and undone_action == "spawn"
+                )
             if session.client_id.startswith("gamer_"):
                 session.gamer_special_tiles = (
                     dict(session.gamer_special_history[-1])

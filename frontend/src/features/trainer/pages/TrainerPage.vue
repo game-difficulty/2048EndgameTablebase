@@ -172,35 +172,41 @@
               </button>
             </div>
           </div>
-          <template v-if="showResults && !awaitingSpawn">
-            <div class="mt-2 flex flex-col gap-1 transition-opacity" :class="resultsUpdatingVisible ? 'opacity-70' : 'opacity-100'">
-              <div
-                v-for="item in displayedResults"
-                :key="item.dir"
-                class="grid grid-cols-[1.25rem_23ch_minmax(0,1fr)] items-center gap-3 px-3 py-2 rounded-lg border border-border-main/20 bg-bg-main/30 group hover:bg-bg-main/50 transition-colors"
-                :style="getResultRowStyle(item)"
-              >
-                <span class="text-[16px] font-black w-5 text-center text-text-secondary group-hover:text-text-main">{{ dirLabels[item.dir] }}</span>
-                <div class="min-w-0 overflow-hidden">
-                  <span
-                    class="block w-full whitespace-nowrap text-left font-mono font-black tabular-nums leading-none"
-                    :style="getResultValueStyle(item)"
-                  >
-                    {{ item.display }}
-                  </span>
-                </div>
-                <div class="data-bar-track">
-                  <div
-                    class="data-bar-fill shadow-[0_0_8px_rgba(0,0,0,0.1)]"
-                    :style="{ width: `${item.pct}%`, background: item.gradient }"
-                  ></div>
+          <div class="trainer-results-body">
+            <template v-if="showResults && !awaitingSpawn">
+              <div class="mt-2 flex flex-col gap-1 transition-opacity" :class="resultsUpdatingVisible ? 'opacity-70' : 'opacity-100'">
+                <div
+                  v-for="item in displayedResults"
+                  :key="item.dir"
+                  class="grid grid-cols-[1.25rem_23ch_minmax(0,1fr)] items-center gap-3 px-3 py-2 rounded-lg border border-border-main/20 bg-bg-main/30 group hover:bg-bg-main/50 transition-colors"
+                  :style="getResultRowStyle(item)"
+                >
+                  <span class="text-[16px] font-black w-5 text-center text-text-secondary group-hover:text-text-main">{{ dirLabels[item.dir] }}</span>
+                  <div class="min-w-0 overflow-hidden">
+                    <span
+                      class="block w-full whitespace-nowrap text-left font-mono font-black tabular-nums leading-none"
+                      :style="getResultValueStyle(item)"
+                    >
+                      {{ item.display }}
+                    </span>
+                  </div>
+                  <div class="data-bar-track">
+                    <div
+                      class="data-bar-fill shadow-[0_0_8px_rgba(0,0,0,0.1)]"
+                      :style="{ width: `${item.pct}%`, background: item.gradient }"
+                    ></div>
+                  </div>
                 </div>
               </div>
+              <div class="mt-1.5 ui-kicker text-text-secondary opacity-50 font-mono">{{ $t('trainer.results.dtype') }}: {{ tableResult.dtype }}</div>
+            </template>
+            <div
+              v-else
+              class="absolute inset-0 flex items-center justify-center px-4 text-center ui-kicker text-text-secondary italic opacity-60"
+              role="status"
+            >
+              {{ awaitingSpawn ? $t('trainer.results.awaitingManualSpawn') : $t('trainer.results.hidden') }}
             </div>
-            <div class="mt-1.5 ui-kicker text-text-secondary opacity-50 font-mono">{{ $t('trainer.results.dtype') }}: {{ tableResult.dtype }}</div>
-          </template>
-          <div v-else class="mt-2 ui-kicker text-text-secondary italic opacity-60">
-            {{ awaitingSpawn ? $t('trainer.results.awaitingManualSpawn') : $t('trainer.results.hidden') }}
           </div>
         </div>
 
@@ -359,6 +365,11 @@ const handleTargetChange = (event) => {
 </script>
 
 <style scoped>
+.trainer-results-body {
+  position: relative;
+  height: 13rem;
+}
+
 .palette-btn {
   aspect-ratio: 1;
   border-radius: 0.48rem;
