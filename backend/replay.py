@@ -38,6 +38,7 @@ def _replay_reset(session, status=""):
     session.replay_combo = 0
     session.replay_points_rank = []
     session.replay_losses = []
+    session.replay_forced_steps = []
     session.replay_summary = {
         "total_moves": 0,
         "final_gof": 0.0,
@@ -77,7 +78,11 @@ def _replay_sync_step(session, step, animate=False, previous_step=None):
         session.replay_best_move = next(iter(current.keys()), None)
         move_name, _, _ = decode_replay_change(session.replay_record[step]["f1"])
         session.replay_current_move = move_name
-        if step < len(session.replay_losses):
+        forced_steps = getattr(session, "replay_forced_steps", [])
+        if step < len(session.replay_losses) and not (
+            step < len(forced_steps)
+            and forced_steps[step]
+        ):
             session.replay_loss = float(session.replay_losses[step])
         analysis = analyze_replay(session.replay_record)
         gof_values = analysis["goodness_of_fit"]
@@ -140,6 +145,7 @@ def _replay_load_record(
     marker_threshold = SingletonConfig().config.get("record_player_slider_threshold", 1)
     analysis = analyze_replay(session.replay_record, marker_threshold)
     session.replay_losses = [float(item) for item in analysis["losses"].tolist()]
+    session.replay_forced_steps = [bool(item) for item in analysis["forced"].tolist()]
     session.replay_points_rank = [int(item) for item in analysis["points_rank"].tolist()]
 
     summary_counts = {label: 0 for label in TESTER_PERFORMANCE_ORDER}

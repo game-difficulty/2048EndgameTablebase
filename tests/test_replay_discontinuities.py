@@ -11,6 +11,7 @@ from backend.analysis_core import ReplayDecoder
 from backend.replay import _replay_sync_step
 from engine_core.replay_utils import (
     REPLAY_DTYPE,
+    analyze_replay,
     build_step_transition,
     load_replay_file_with_terminal_board,
     replay_sentinel,
@@ -27,6 +28,33 @@ def _change(move_bits, spawn_pos, spawn_exp):
 
 
 class ReplayDiscontinuityTests(unittest.TestCase):
+    def test_forced_replay_steps_are_preserved_but_not_scored(self):
+        record = np.zeros(2, dtype=REPLAY_DTYPE)
+        record[0]["f0"] = np.uint64(0x0210030129AB4CDE)
+        record[0]["f1"] = _change(0, 0, 1)
+        record[0]["f2"] = np.uint32(4_000_000_000)
+        record[1]["f0"] = np.uint64(0x1021003129AB4CDE)
+        record[1]["f1"] = _change(1, 1, 1)
+        record[1]["f2"] = np.uint32(3_000_000_000)
+        record[1]["f3"] = np.uint32(2_000_000_000)
+
+        analysis = analyze_replay(record)
+
+        self.assertEqual(analysis["forced"].tolist(), [True, False])
+        self.assertEqual(analysis["summary"]["total_moves"], 1)
+
+        session = SimpleNamespace(
+            replay_record=record,
+            replay_current_step=0,
+            replay_use_variant=False,
+            replay_losses=[float(item) for item in analysis["losses"].tolist()],
+            replay_forced_steps=[bool(item) for item in analysis["forced"].tolist()],
+        )
+
+        _replay_sync_step(session, 0)
+
+        self.assertIsNone(session.replay_loss)
+
     def test_transition_uses_row_major_spawn_position(self):
         record = np.zeros(2, dtype=REPLAY_DTYPE)
         record[0]["f0"] = np.uint64(0x0210030129AB4CDE)
