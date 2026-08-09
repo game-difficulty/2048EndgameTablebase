@@ -402,7 +402,10 @@
       "completedWithErrors": "Completed With Errors"
     },
     "errors": {
-      "network": "Network request failed. Please check your connection, switch networks if needed, then select the files and try again.",
+      "network": "Network request failed. Please try again later.",
+      "uploadNetwork": "The file upload did not finish. The browser, network, or file picker may have interrupted it. Please select the files again and retry.",
+      "statusNetwork": "The analysis job was submitted, but status sync temporarily failed. This page will keep retrying; you can also reopen the analysis window later to check the result.",
+      "downloadNetwork": "Result download failed. Please try again later; if the result has expired, run the analysis again.",
       "authRequired": "Please log in again before running analysis.",
       "insufficientTokens": "Insufficient token balance for this analysis.",
       "expired": "The analysis result has expired or the service was restarted. Please run the analysis again.",

@@ -432,8 +432,11 @@ const pickFiles = async () => {
   }
 };
 
-const formatAnalysisError = (error) => {
+const formatAnalysisError = (error, phase = '') => {
   if (error?.code === 'NETWORK_ERROR' || /failed to fetch/i.test(String(error?.message || ''))) {
+    if (phase === 'upload') return t('analysis.errors.uploadNetwork');
+    if (phase === 'status') return t('analysis.errors.statusNetwork');
+    if (phase === 'download') return t('analysis.errors.downloadNetwork');
     return t('analysis.errors.network');
   }
   if (error?.status === 401) {
@@ -516,7 +519,7 @@ const applyAnalysisJobPayload = (payload = {}) => {
 
   if (status === 'failed') {
     isRunning.value = false;
-    analysisError.value = formatAnalysisError({ message: payload.message || '' });
+    analysisError.value = formatAnalysisError({ message: payload.message || '' }, 'status');
     currentFile.value = analysisError.value;
     storeAnalysisJob(payload);
     stopAnalysisPolling();
@@ -570,7 +573,7 @@ const refreshAnalysisJobStatus = async ({ keepPollingOnNetworkError = true } = {
   } catch (error) {
     if (error?.status === 404) {
       isRunning.value = false;
-      analysisError.value = formatAnalysisError(error);
+      analysisError.value = formatAnalysisError(error, 'status');
       currentFile.value = analysisError.value;
       clearStoredAnalysisJob(jobId);
       activeJobId.value = '';
@@ -579,13 +582,15 @@ const refreshAnalysisJobStatus = async ({ keepPollingOnNetworkError = true } = {
     }
     if (error?.status === 401) {
       isRunning.value = false;
-      analysisError.value = formatAnalysisError(error);
+      analysisError.value = formatAnalysisError(error, 'status');
       currentFile.value = analysisError.value;
       stopAnalysisPolling();
       return;
     }
-    analysisError.value = formatAnalysisError(error);
-    currentFile.value = analysisError.value;
+    analysisError.value = formatAnalysisError(error, 'status');
+    if (error?.code !== 'NETWORK_ERROR') {
+      currentFile.value = analysisError.value;
+    }
     if (!keepPollingOnNetworkError) {
       stopAnalysisPolling();
     }
@@ -676,7 +681,7 @@ const startAnalysis = async () => {
   } catch (error) {
     isRunning.value = false;
     failedCount.value = 1;
-    analysisError.value = formatAnalysisError(error);
+    analysisError.value = formatAnalysisError(error, 'upload');
     currentFile.value = analysisError.value;
     activeJobId.value = '';
     stopAnalysisPolling();
@@ -695,7 +700,7 @@ const downloadResults = async () => {
     });
     await downloadResponse(response);
   } catch (error) {
-    analysisError.value = formatAnalysisError(error);
+    analysisError.value = formatAnalysisError(error, 'download');
     if (error?.status === 404) {
       downloadUrl.value = '';
     }
