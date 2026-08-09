@@ -115,6 +115,7 @@ def analyze_replay(record, marker_threshold=1.0):
             "losses": np.empty(0, dtype=float),
             "goodness_of_fit": np.empty(0, dtype=float),
             "combo": np.empty(0, dtype=np.uint16),
+            "forced": np.empty(0, dtype=bool),
             "points_rank": np.empty(0, dtype=int),
             "summary": {
                 "total_moves": 0,
@@ -125,19 +126,26 @@ def analyze_replay(record, marker_threshold=1.0):
         }
 
     moves = ((record["f1"] >> 5) & 0b11).astype(np.uint8)
-    arr_rates = np.vstack((record["f2"], record["f3"], record["f4"], record["f5"])).T.astype(float) / 4e9
+    arr_rates_raw = np.vstack(
+        (record["f2"], record["f3"], record["f4"], record["f5"])
+    ).T
+    forced = np.max(arr_rates_raw, axis=1) == np.uint32(4_000_000_000)
+    arr_rates = arr_rates_raw.astype(float) / 4e9
     optimal = np.max(arr_rates, axis=1)
     optimal[optimal <= 0] = 1
     player = arr_rates[np.arange(len(moves)), moves]
 
     losses = player / optimal
     losses[losses == 0] = 1
+    losses[forced] = 1
     goodness_of_fit = np.cumprod(losses)
 
     combo = np.empty(len(losses), dtype=np.uint16)
     count = 0
     for index, loss in enumerate(losses):
-        if loss > 1 - 3e-10:
+        if forced[index]:
+            pass
+        elif loss > 1 - 3e-10:
             count += 1
         else:
             count = 0
@@ -147,7 +155,9 @@ def analyze_replay(record, marker_threshold=1.0):
     points_rank = np.where((losses < threshold) & (losses < 1))[0]
 
     counts = {}
-    for loss in losses:
+    for index, loss in enumerate(losses):
+        if forced[index]:
+            continue
         label = evaluation_of_performance(float(loss))
         counts[label] = counts.get(label, 0) + 1
 
@@ -156,9 +166,10 @@ def analyze_replay(record, marker_threshold=1.0):
         "losses": losses,
         "goodness_of_fit": goodness_of_fit,
         "combo": combo,
+        "forced": forced,
         "points_rank": points_rank,
         "summary": {
-            "total_moves": int(len(losses)),
+            "total_moves": int(np.count_nonzero(~forced)),
             "final_gof": float(goodness_of_fit[-1]) if len(goodness_of_fit) else 0.0,
             "max_combo": int(np.max(combo)) if len(combo) else 0,
             "counts": counts,

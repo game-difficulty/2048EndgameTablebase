@@ -495,6 +495,7 @@ class Analyzer:
         self.performance_stats = build_performance_stats(markdown=True)
         self.log_difficulty = 0.0
         self.prev_expected_success_rate = None
+        self.rec_step_count = 0
 
     def check_nth_largest(self, board_encoded: np.uint64) -> bool:
         count = [0] * 16
@@ -551,12 +552,12 @@ class Analyzer:
             if large_tile_changed:
                 if len(self.text_list) > 100:
                     self.write_analysis(i)
-                    self.save_rec_to_file(i)
+                self.save_rec_to_file(i)
                 self.clear_analysis()
 
         if len(self.text_list) > 100:
             self.write_analysis(len(self.record_list))
-            self.save_rec_to_file(len(self.record_list))
+        self.save_rec_to_file(len(self.record_list))
         self.clear_analysis()
 
     def print_board(self, board: np.typing.NDArray) -> None:
@@ -596,16 +597,15 @@ class Analyzer:
         self.result = {
             key: formatting(value, zero_val) for key, value in self.result.items()
         }
-        self.record_replay(board, move, new_tile, spawn_position)
 
         best_move = list(self.result.keys())[0]
         if best_move == "?":
             return None
-        if (
-            not self.result[best_move]
-            or self.result[best_move] == 1
-            or self.result[best_move] == "?"
-        ):
+        best_result = self.result[best_move]
+        if not best_result or best_result == "?":
+            return False
+        if best_result == 1:
+            self.record_replay(board, move, new_tile, spawn_position)
             return False
 
         if self.prev_expected_success_rate:
@@ -629,12 +629,12 @@ class Analyzer:
             self.prev_expected_success_rate = None
             return False
 
+        self.record_replay(board, move, new_tile, spawn_position)
         self.step_count += 1
         if self.step_count < 5:
             return True
 
         move_result = self.result[move.lower()]
-        best_result = self.result[best_move]
         if move_result is not None and best_result - move_result <= 3e-10:
             self.combo += 1
             self.max_combo = max(self.max_combo, self.combo)
@@ -771,7 +771,10 @@ class Analyzer:
     def record_replay(
         self, board, direction: str, new_tile: int, spawn_position: int
     ) -> None:
-        rec_step_count = self.step_count - 5
+        if self.step_count < 5:
+            return
+
+        rec_step_count = self.rec_step_count
         direct = {"Left": 0, "Right": 1, "Up": 2, "Down": 3}[direction.capitalize()]
         encoded = self.encode(direct, spawn_position, new_tile - 1)
         success_rates = []
@@ -786,13 +789,14 @@ class Analyzer:
             encoded,
             *success_rates,
         )
+        self.rec_step_count += 1
 
     @staticmethod
     def encode(a, b, c):
         return np.uint8(((a << 5) | (b << 1) | c) & 0xFF)
 
     def save_rec_to_file(self, step: int) -> None:
-        rec_step_count = self.step_count - 5
+        rec_step_count = self.rec_step_count
         if self.full_pattern is None or rec_step_count < 2:
             return
 
