@@ -30,25 +30,6 @@ async function handleProtectedResponseError(response, fallbackPrefix) {
   throw error;
 }
 
-async function fetchWithNetworkError(url, options, fallbackPrefix) {
-  try {
-    return await fetch(url, options);
-  } catch (cause) {
-    const error = new Error(`${fallbackPrefix}: network error`);
-    error.code = 'NETWORK_ERROR';
-    error.cause = cause;
-    throw error;
-  }
-}
-
-function isLegacyAndroidUploadClient() {
-  if (typeof navigator === 'undefined') {
-    return false;
-  }
-  const match = /Android\s+(\d+)/i.exec(navigator.userAgent || '');
-  return Boolean(match && Number(match[1]) <= 8);
-}
-
 function parseHeaders(rawHeaders = '') {
   const headers = new Map();
   String(rawHeaders || '').trim().split(/[\r\n]+/).forEach((line) => {
@@ -97,20 +78,17 @@ function xhrMultipartRequest(url, formData, fallbackPrefix) {
       error.code = 'NETWORK_ERROR';
       reject(error);
     };
+    xhr.ontimeout = () => {
+      const error = new Error(`${fallbackPrefix}: timeout`);
+      error.code = 'NETWORK_ERROR';
+      reject(error);
+    };
     xhr.send(formData);
   });
 }
 
 function sendMultipartRequest(url, formData, fallbackPrefix) {
-  if (isLegacyAndroidUploadClient()) {
-    return xhrMultipartRequest(url, formData, fallbackPrefix);
-  }
-  return fetchWithNetworkError(url, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: formData,
-    credentials: 'include',
-  }, fallbackPrefix);
+  return xhrMultipartRequest(url, formData, fallbackPrefix);
 }
 
 const EMPTY_FILES = Object.freeze([]);
