@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <meta
+      name="description"
+      content="带连续秒表、单步用时和节点用时的 2048Verse 回放查看器"
+    />
+    <title>2048Verse 回放计时器</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="replay-core.js" defer></script>
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main id="app" class="app-shell">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">2048VERSE REPLAY</p>
+        </div>
+        <p id="file-name" class="file-name">尚未载入回放</p>
+      </header>
+
+      <section class="toolbar" aria-label="载入与步速设置">
+        <button id="input-button" class="primary-button" type="button">输入回放代码</button>
+        <button id="upload-button" class="primary-button" type="button">上传回放文件</button>
+        <button id="speed-button" class="primary-button" type="button">原始步速 · 1×</button>
+        <input id="file-input" type="file" accept=".vrs" hidden />
+      </section>
+
+      <p id="error-message" class="error-message" role="alert" hidden></p>
+
+      <section class="stat-grid" aria-label="回放数据">
+        <article class="stat-card">
+          <span>分数</span>
+          <strong id="score-value">0</strong>
+        </article>
+        <article class="stat-card stat-card-accent">
+          <span>单步用时</span>
+          <strong id="next-time-value">—</strong>
+        </article>
+        <article class="stat-card">
+          <span>用时</span>
+          <strong id="total-time-value">0:00.000</strong>
+        </article>
+        <article class="stat-card">
+          <span>进度</span>
+          <strong id="step-value">0 / 0</strong>
+        </article>
+      </section>
+
+      <section class="viewer-layout">
+        <div class="board-column">
+          <div id="board-placeholder" class="board-placeholder">
+            <div class="placeholder-mark">2048</div>
+            <p>输入回放代码，或上传一个 <strong>.vrs</strong> 文件</p>
+            <small>也可以把文件直接拖到此页面</small>
+          </div>
+          <div id="board" class="board" aria-label="2048 回放棋盘" hidden></div>
+        </div>
+
+        <aside class="timeline-panel" aria-labelledby="timeline-title">
+          <div class="timeline-header">
+            <span id="timeline-title">节点用时</span>
+            <small>到达时的总用时</small>
+          </div>
+          <div id="node-timeline" class="node-timeline">
+            <p class="timeline-empty">载入回放后显示</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="replay-control" aria-label="回放控制">
+        <div class="progress-labels" aria-hidden="true">
+          <span id="progress-current">0</span>
+          <span id="progress-total">0</span>
+        </div>
+        <div class="progress-wrap">
+          <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+          <input id="progress" type="range" min="0" max="0" value="0" aria-label="回放进度" />
+        </div>
+        <div class="control-buttons">
+          <button id="back-ten" type="button" aria-label="后退十步" title="后退十步（Shift + ←）">−10</button>
+          <button id="back-one" type="button" aria-label="后退一步" title="后退一步（←）">◀│</button>
+          <button id="play-pause" class="play-button" type="button" aria-label="播放" title="播放（空格）">▶</button>
+          <button id="forward-one" type="button" aria-label="前进一步" title="前进一步（→）">│▶</button>
+          <button id="forward-ten" type="button" aria-label="前进十步" title="前进十步（Shift + →）">+10</button>
+        </div>
+      </section>
+
+      <p id="timing-note" class="timing-note"></p>
+    </main>
+
+    <div id="drop-hint" class="drop-hint" hidden>松开以载入回放</div>
+
+    <dialog id="input-dialog" class="modal">
+      <form method="dialog" onsubmit="return false">
+        <div class="modal-heading">
+          <div>
+            <p class="eyebrow">REPLAY CODE</p>
+            <h2>输入回放代码</h2>
+          </div>
+          <button id="input-cancel" class="icon-button" type="button" aria-label="关闭">×</button>
+        </div>
+        <label for="input-code">完整粘贴以 <code>4x4-1_</code> 开头的内容</label>
+        <textarea id="input-code" rows="9" spellcheck="false" placeholder="4x4-1_..."></textarea>
+        <div class="modal-actions">
+          <button id="input-load" class="primary-button" type="button">载入回放</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="speed-dialog" class="modal speed-modal">
+      <form method="dialog" onsubmit="return false">
+        <div class="modal-heading">
+          <div>
+            <p class="eyebrow">PLAYBACK SPEED</p>
+            <h2>步速设置</h2>
+          </div>
+          <button id="speed-cancel" class="icon-button" type="button" aria-label="关闭">×</button>
+        </div>
+
+        <label class="speed-option">
+          <input type="radio" name="speed-mode" value="original" checked />
+          <span><strong>原始步速</strong><small>按回放记录的每一步用时播放</small></span>
+        </label>
+        <div id="original-speed-fields" class="speed-fields">
+          <label for="original-rate">播放倍速</label>
+          <div class="input-with-unit">
+            <input id="original-rate" type="number" value="1" min="0.01" step="0.05" />
+            <span>×</span>
+          </div>
+        </div>
+
+        <label class="speed-option">
+          <input type="radio" name="speed-mode" value="constant" />
+          <span><strong>恒定步速</strong><small>每一步使用相同等待时间</small></span>
+        </label>
+        <div id="fixed-speed-fields" class="speed-fields" hidden>
+          <label for="constant-ms">每步时长</label>
+          <div class="input-with-unit">
+            <input id="constant-ms" type="number" value="100" min="0" step="10" />
+            <span>ms</span>
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button id="speed-save" class="primary-button" type="button">应用设置</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

@@ -103,7 +103,7 @@
       </button>
     </div>
 
-    <div :class="['menu-bottom-row', { 'menu-bottom-row-with-button': showBrowserModeButton }]">
+    <div class="menu-bottom-row menu-bottom-row-with-tools">
       <div class="menu-footer text-center shadow-sm px-5 py-4 rounded-[1.75rem] bg-bg-card backdrop-blur-md border border-border-main">
         <p class="text-text-secondary font-black ui-control uppercase tracking-widest flex items-center gap-2 justify-center">
         {{ $t('menu.githubNote') }}
@@ -122,14 +122,24 @@
         </p>
       </div>
 
-      <button
-        v-if="showBrowserModeButton"
-        type="button"
-        class="menu-utility-btn menu-utility-btn-floating"
-        @click="openBrowserMode"
-      >
-        {{ $t('menu.openBrowserMode') }}
-      </button>
+      <div class="menu-utility-actions">
+        <a
+          class="menu-utility-btn"
+          href="/verse-replay/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {{ $t('menu.openVerseReplay') }}
+        </a>
+        <button
+          v-if="showBrowserModeButton"
+          type="button"
+          class="menu-utility-btn"
+          @click="openBrowserMode"
+        >
+          {{ $t('menu.openBrowserMode') }}
+        </button>
+      </div>
     </div>
     </div>
   </div>
@@ -191,7 +201,18 @@ onUnmounted(() => {
   margin-inline: auto;
 }
 
+.menu-utility-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+  margin: 1rem auto 0;
+}
+
 .menu-utility-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--border-main);
   border-radius: 999px;
   background:
@@ -204,11 +225,7 @@ onUnmounted(() => {
   text-transform: uppercase;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
   transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
-}
-
-.menu-utility-btn-floating {
-  display: block;
-  margin: 1rem auto 0;
+  text-decoration: none;
 }
 
 .menu-utility-btn:hover {
@@ -312,20 +329,18 @@ onUnmounted(() => {
     min-height: 7.5rem;
   }
 
-  .menu-bottom-row-with-button {
+  .menu-bottom-row-with-tools {
     padding-inline: 13rem;
   }
 
-  .menu-utility-btn-floating {
+  .menu-utility-actions {
     position: absolute;
     right: 1rem;
-    top: calc(50% - 0.45rem);
+    top: 50%;
+    flex-direction: column;
+    align-items: stretch;
     margin: 0;
     transform: translateY(-50%);
-  }
-
-  .menu-utility-btn-floating:hover {
-    transform: translateY(calc(-50% - 2px));
   }
 }
 </style>
