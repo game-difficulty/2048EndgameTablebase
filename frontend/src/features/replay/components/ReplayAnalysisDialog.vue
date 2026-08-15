@@ -463,11 +463,9 @@ watch(
   (isOpen) => {
     if (isOpen) {
       document.addEventListener('click', closePatternMenuOnClick);
-      connect();
     } else {
       patternMenuOpen.value = false;
       document.removeEventListener('click', closePatternMenuOnClick);
-      disconnect();
     }
   },
   { immediate: true }
@@ -504,6 +502,7 @@ onUnmounted(() => {
 
 onMounted(() => {
   listScrollTop.value = 0;
+  connect();
 });
 </script>
 
