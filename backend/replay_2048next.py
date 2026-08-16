@@ -4,6 +4,7 @@ import base64
 import binascii
 import zlib
 from dataclasses import dataclass
+from typing import Union
 
 
 REPLAY_PREFIX = "REPLAY_v1RPL_B64_"
@@ -53,7 +54,13 @@ class EndRecord:
     pass
 
 
-ReplayRecord = MoveRecord | UndoRecord | CheckpointRecord | ExtensionRecord | EndRecord
+ReplayRecord = Union[
+    MoveRecord,
+    UndoRecord,
+    CheckpointRecord,
+    ExtensionRecord,
+    EndRecord,
+]
 
 
 @dataclass(frozen=True)
