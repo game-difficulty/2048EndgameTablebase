@@ -463,9 +463,6 @@ std::optional<double> trie_search_with_context(
     size_t sub_low = static_cast<size_t>(ind3_seg[last_pos].next);
     size_t sub_high = static_cast<size_t>(ind3_seg[last_pos + 1].next) + 1ULL;
     if (sub_high == 1ULL) {
-        if (block_size != 0 && target == block[0].lower32) {
-            return normalize_raw_value(block[0].success, dtype_info.max_scale);
-        }
         sub_high = block_size;
     }
     if (sub_low != 0ULL) {
