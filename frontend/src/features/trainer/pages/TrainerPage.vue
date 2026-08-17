@@ -1,8 +1,8 @@
 <template>
   <div class="page-root">
-    <div class="relative z-[120] w-full max-w-6xl flex items-center justify-between mb-4">
-      <div class="flex items-center gap-3">
-        <span class="text-3xl font-extrabold tracking-tight text-text-main font-[Cambria,serif]">{{ currentPatternDisplay || '\u00a0' }}</span>
+    <div class="tool-page-header relative z-[120] w-full max-w-6xl flex items-center justify-between mb-4">
+      <div class="tool-page-title-row flex items-center gap-3">
+        <span class="tool-page-title text-3xl font-extrabold tracking-tight text-text-main font-[Cambria,serif]">{{ currentPatternDisplay || '\u00a0' }}</span>
         <span :class="['badge-base', wsStatus === 'connected' ? 'badge-connection-connected' : 'badge-connection-disconnected']">
           {{ $t(`status.${wsStatus}`) }}
         </span>
@@ -20,7 +20,7 @@
           </button>
           <div
             v-if="patternMenuOpen"
-            class="absolute right-0 top-full z-[150] mt-2 flex min-w-[360px] overflow-hidden rounded-xl border border-border-main bg-bg-card shadow-xl"
+            class="tool-pattern-menu absolute right-0 top-full z-[150] mt-2 flex min-w-[360px] overflow-hidden rounded-xl border border-border-main bg-bg-card shadow-xl"
           >
             <div class="max-h-[320px] w-[132px] overflow-y-auto border-r border-border-main/60 bg-bg-main/60 p-1.5">
               <button
@@ -80,8 +80,8 @@
       </div>
     </div>
 
-    <div class="relative z-0 w-full max-w-6xl flex flex-row gap-6 items-start">
-      <div class="flex flex-col items-center" style="width: 442px; min-width: 240px;">
+    <div class="tool-page-layout relative z-0 w-full max-w-6xl flex flex-row gap-6 items-start">
+      <div class="tool-page-board-column flex flex-col items-center">
         <div class="w-full flex gap-2 mb-3">
           <input
             type="text"
@@ -122,7 +122,7 @@
               </span>
             </div>
           </div>
-          <div class="grid grid-cols-8 gap-1.5">
+          <div class="tool-palette-grid grid grid-cols-8 gap-1.5">
             <button
               @click="togglePalette(0)"
               :class="['palette-btn', currentPaletteValue === 0 ? 'ring-2 ring-accent shadow-lg scale-110' : '']"
@@ -143,7 +143,7 @@
         </div>
       </div>
 
-      <div class="flex-1 min-w-[340px] flex flex-col gap-3">
+      <div class="tool-page-side-column flex-1 flex flex-col gap-3">
         <div class="console-card">
           <div class="console-card-header border-b border-border-main/20 pb-2 mb-2">
             <span>{{ $t('trainer.results.title') }}</span>
@@ -172,7 +172,7 @@
                 <div
                   v-for="item in displayedResults"
                   :key="item.dir"
-                  class="grid grid-cols-[1.25rem_23ch_minmax(0,1fr)] items-center gap-3 px-3 py-2 rounded-lg border border-border-main/20 bg-bg-main/30 group hover:bg-bg-main/50 transition-colors"
+                  class="trainer-result-row grid grid-cols-[1.25rem_23ch_minmax(0,1fr)] items-center gap-3 px-3 py-2 rounded-lg border border-border-main/20 bg-bg-main/30 group hover:bg-bg-main/50 transition-colors"
                   :style="getResultRowStyle(item)"
                 >
                   <span class="text-[16px] font-black w-5 text-center text-text-secondary group-hover:text-text-main">{{ dirLabels[item.dir] }}</span>
@@ -206,7 +206,7 @@
 
         <div class="console-card">
           <div class="console-card-header"><span>{{ $t('trainer.actions.title') }}</span></div>
-          <div class="grid grid-cols-4 gap-2 mt-2">
+          <div class="tool-action-grid-4 grid grid-cols-4 gap-2 mt-2">
             <button @click="toggleDemo" :class="['action-btn', demoActive ? 'bg-red-500 hover:bg-red-600 text-white' : '']">
               {{ demoActive ? $t('trainer.actions.stop') : $t('trainer.actions.demo') }}
             </button>
@@ -235,7 +235,7 @@
 
         <div class="console-card">
           <div class="console-card-header"><span>{{ $t('trainer.transform.title') }}</span></div>
-          <div class="grid grid-cols-4 gap-2 mt-2">
+          <div class="tool-action-grid-4 grid grid-cols-4 gap-2 mt-2">
             <button @click="triggerAction('ROTATE', { type: 'UD' })" class="action-btn">{{ $t('trainer.transform.vFlip') }}</button>
             <button @click="triggerAction('ROTATE', { type: 'LR' })" class="action-btn">{{ $t('trainer.transform.hFlip') }}</button>
             <button @click="triggerAction('ROTATE', { type: 'R90' })" class="action-btn">{{ $t('trainer.transform.r90') }}</button>

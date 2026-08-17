@@ -1,8 +1,8 @@
 <template>
   <div class="page-root">
-    <div class="mb-3 flex w-full max-w-6xl items-start justify-between gap-6">
+    <div class="tool-page-header mb-3 flex w-full max-w-6xl items-start justify-between gap-6">
       <div class="min-w-0 flex-1">
-        <div class="truncate text-left font-[Cambria,serif] text-3xl font-extrabold tracking-tight text-text-main" :title="fileDisplay">
+        <div class="tool-page-title truncate text-left font-[Cambria,serif] text-3xl font-extrabold tracking-tight text-text-main" :title="fileDisplay">
           {{ fileDisplay }}
         </div>
       </div>
@@ -18,8 +18,8 @@
       </div>
     </div>
 
-    <div class="grid w-full max-w-6xl grid-cols-[clamp(280px,60vh,480px)_minmax(0,1fr)] items-start gap-6">
-      <section class="flex min-w-0 flex-col">
+    <div class="tool-page-layout grid w-full max-w-6xl grid-cols-[clamp(280px,60vh,480px)_minmax(0,1fr)] items-start gap-6">
+      <section class="tool-page-board-column flex min-w-0 flex-col">
         <ReplayMarkSlider
           :losses="losses"
           :current-step="currentStep"
@@ -44,8 +44,8 @@
         </div>
       </section>
 
-      <section class="flex min-w-0 flex-col gap-4">
-        <div class="grid grid-cols-3 gap-2">
+      <section class="tool-page-side-column flex min-w-0 flex-col gap-4">
+        <div class="tool-action-grid-3 grid grid-cols-3 gap-2">
           <button class="action-btn" :disabled="!loaded" @click="toggleDemo">{{ demoActive ? $t('replay.actions.stop') : $t('replay.actions.autoDemo') }}</button>
           <button class="action-btn" :disabled="!loaded" @click="stepReplay(1)">{{ $t('replay.actions.step') }}</button>
           <button class="action-btn" :disabled="currentStep <= 0" @click="stepReplay(-1)">{{ $t('replay.actions.undo') }}</button>

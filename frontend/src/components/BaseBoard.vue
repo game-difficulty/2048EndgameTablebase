@@ -2,7 +2,6 @@
   <div
     ref="boardRef"
     class="board relative bg-board-bg rounded-xl aspect-square w-full max-w-[600px] mx-auto touch-none"
-    style="container-type: size;"
     @pointermove="handleBoardPointerMove"
     @pointerup="handleBoardPointerUp"
     @pointercancel="clearTouchGesture"
@@ -456,9 +455,22 @@ const getTileLabelStyle = (tile) => {
 
 <style scoped>
 .board {
-  /* Proportional: pad and gap as % of board container width via cqw */
-  --padding: 2.5cqw;
-  --grid-gap: 2.5cqw;
+  --padding: 2.5%;
+  --grid-gap: 2.5%;
+  --tile-size: calc((100% - var(--padding) * 2 - var(--grid-gap) * 3) / 4);
+}
+
+@supports (container-type: size) {
+  .board {
+    container-type: size;
+  }
+}
+
+@supports (width: 1cqw) {
+  .board {
+    --padding: 2.5cqw;
+    --grid-gap: 2.5cqw;
+  }
 }
 
 /* Background Grid aligns strictly to the padding offset */
@@ -486,22 +498,12 @@ const getTileLabelStyle = (tile) => {
 .tile {
   pointer-events: none;
   position: absolute;
-  top: 0;
-  left: 0;
+  top: calc(var(--padding) + var(--row) * (var(--tile-size) + var(--grid-gap)));
+  left: calc(var(--padding) + var(--col) * (var(--tile-size) + var(--grid-gap)));
   z-index: 10;
-  
-  /* The 100% inside this `calc()` refers to the width of `.board` */
-  width: calc((100% - var(--padding) * 2 - var(--grid-gap) * 3) / 4);
-  height: calc((100% - var(--padding) * 2 - var(--grid-gap) * 3) / 4);
-  
-  /* The 100% inside `translate` refers to `.tile`'s own width */
-  transform: translate(
-    calc(var(--padding) + var(--col) * (100% + var(--grid-gap))), 
-    calc(var(--padding) + var(--row) * (100% + var(--grid-gap)))
-  );
-  
-  /* Transition for when position properties update */
-  transition: transform 0.1s ease-in-out;
+  width: var(--tile-size);
+  height: var(--tile-size);
+  transition: top 0.1s ease-in-out, left 0.1s ease-in-out;
 }
 
 .no-transition {

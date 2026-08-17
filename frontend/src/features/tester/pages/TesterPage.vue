@@ -1,8 +1,8 @@
 <template>
   <div class="page-root">
-    <div class="relative z-[120] mb-4 flex w-full max-w-6xl items-center justify-between gap-4">
-      <div class="flex items-center gap-3">
-        <span class="font-[Cambria,serif] text-3xl font-extrabold tracking-tight text-text-main">{{ currentPatternDisplay }}</span>
+    <div class="tool-page-header relative z-[120] mb-4 flex w-full max-w-6xl items-center justify-between gap-4">
+      <div class="tool-page-title-row flex items-center gap-3">
+        <span class="tool-page-title font-[Cambria,serif] text-3xl font-extrabold tracking-tight text-text-main">{{ currentPatternDisplay }}</span>
         <span :class="connectionBadgeClass">{{ $t(`status.${wsStatus}`) }}</span>
       </div>
 
@@ -12,7 +12,7 @@
             <span>{{ selectedPattern }}</span>
             <span class="ui-kicker opacity-60">{{ patternMenuOpen ? '▲' : '▼' }}</span>
           </button>
-          <div v-if="patternMenuOpen" class="absolute right-0 top-full z-[150] mt-2 flex min-w-[360px] overflow-hidden rounded-xl border border-border-main bg-bg-card shadow-xl">
+          <div v-if="patternMenuOpen" class="tool-pattern-menu absolute right-0 top-full z-[150] mt-2 flex min-w-[360px] overflow-hidden rounded-xl border border-border-main bg-bg-card shadow-xl">
             <div class="max-h-[320px] w-[132px] overflow-y-auto border-r border-border-main/60 bg-bg-main/60 p-1.5">
               <button
                 v-for="group in patternGroups"
@@ -59,8 +59,8 @@
       </div>
     </div>
 
-    <div class="relative z-0 grid w-full max-w-6xl grid-cols-[clamp(260px,58vh,442px)_minmax(0,1fr)] items-start gap-6">
-      <section class="flex min-w-0 flex-col">
+    <div class="tool-page-layout relative z-0 grid w-full max-w-6xl grid-cols-[clamp(260px,58vh,442px)_minmax(0,1fr)] items-start gap-6">
+      <section class="tool-page-board-column flex min-w-0 flex-col">
         <div class="mb-4 flex gap-2">
           <input
             v-model="hexInput"
@@ -85,8 +85,8 @@
         </div>
       </section>
 
-      <section class="flex min-w-0 flex-col gap-3">
-        <div class="grid grid-cols-2 gap-2">
+      <section class="tool-page-side-column flex min-w-0 flex-col gap-3">
+        <div class="tool-action-grid-2 grid grid-cols-2 gap-2">
           <button class="action-btn" @click="openReplayView">{{ $t('tester.controls.goToReplay') }}</button>
           <button
             class="action-btn tester-btn-accent btn-prominent"
