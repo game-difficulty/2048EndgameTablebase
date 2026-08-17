@@ -9,6 +9,7 @@ import {
   groupTablebasesByPattern,
 } from '../../../services/tablebases/catalogClient';
 import { createWsClient } from '../../../services/ws/createWsClient';
+import { getStableWsClientId } from '../../../services/ws/clientIds';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
 import {
@@ -37,7 +38,7 @@ export function useTrainerSession(activeRef) {
     basic: ['L3', 'L4', 'I3', 'I4', 'LL', 'free8', 'free9', 'free10', '444'],
   };
   const wsStatus = ref('connecting');
-  const clientId = `trainer_${Math.random().toString(36).substring(2, 9)}`;
+  const clientId = getStableWsClientId('trainer');
 
   const board = ref([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
   const metadata = ref(null);

@@ -10,6 +10,7 @@ import {
   groupTablebasesByPattern,
 } from '../../../services/tablebases/catalogClient';
 import { createWsClient } from '../../../services/ws/createWsClient';
+import { getStableWsClientId } from '../../../services/ws/clientIds';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
 import {
@@ -69,6 +70,7 @@ export function useTesterSession(activeRef) {
   ];
 
   const wsStatus = ref('connecting');
+  const clientId = getStableWsClientId('tester');
   const board = ref(new Array(16).fill(0));
   const metadata = ref({});
   const dis32k = ref(false);
@@ -493,6 +495,14 @@ export function useTesterSession(activeRef) {
     triggerAction('TESTER_SELECT_PATTERN', { pattern: selectedPattern.value, target: selectedTarget.value });
   };
 
+  const hasLocalPracticeState = () => (
+    ready.value ||
+    tableFound.value ||
+    currentBoardHex.value !== '0000000000000000' ||
+    logs.value.length > 0 ||
+    recordLength.value > 0
+  );
+
   const resetRandom = () => triggerAction('TESTER_RESET_RANDOM');
   const applyManualBoard = () => {
     if (hexInput.value.trim()) {
@@ -547,7 +557,13 @@ export function useTesterSession(activeRef) {
       availableTargets.value = (payload?.target_tiles || []).map(String);
     }
     ensureDefaultSelection();
-    if (isAuthenticated.value && !bootstrapSelectionSent && selectedPattern.value && selectedTarget.value) {
+    if (
+      isAuthenticated.value &&
+      !bootstrapSelectionSent &&
+      selectedPattern.value &&
+      selectedTarget.value &&
+      !hasLocalPracticeState()
+    ) {
       bootstrapSelectionSent = true;
       applyPatternSelection();
     }
@@ -634,7 +650,7 @@ export function useTesterSession(activeRef) {
       return;
     }
     client = createWsClient({
-      clientId: `tester_${Math.random().toString(36).slice(2, 9)}`,
+      clientId,
       onOpen: () => {
         wsStatus.value = 'connected';
         bootstrapSelectionSent = false;

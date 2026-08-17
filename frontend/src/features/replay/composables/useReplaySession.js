@@ -5,6 +5,7 @@ import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { useAuthState } from '../../../services/auth/authState';
 import { pickSingleBrowserFile, uploadBrowserFiles } from '../../../services/files/browserFiles';
 import { createWsClient } from '../../../services/ws/createWsClient';
+import { getStableWsClientId } from '../../../services/ws/clientIds';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
 import { resultValueFontSize } from '../../../utils/successRate';
@@ -56,6 +57,7 @@ export function useReplaySession(activeRef, emit) {
   ];
 
   const wsStatus = ref('connecting');
+  const clientId = getStableWsClientId('replay');
   const board = ref(new Array(16).fill(0));
   const metadata = ref({});
   const currentHex = ref('0000000000000000');
@@ -507,7 +509,7 @@ export function useReplaySession(activeRef, emit) {
       return;
     }
     client = createWsClient({
-      clientId: `replay_${Math.random().toString(36).slice(2, 9)}`,
+      clientId,
       onOpen: () => {
         wsStatus.value = 'connected';
         triggerAction('REPLAY_GET_INIT');

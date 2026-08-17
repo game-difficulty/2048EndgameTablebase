@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import time
 from typing import Any, Optional
 
 import numpy as np
@@ -11,6 +13,14 @@ from .cloud_safety import is_cloud_mode
 from .serialization import sanitize_config
 from .session import GameSession, normalize_gamer_special_tiles, np_u64, safe_hex, u64
 from .trainer_helpers import _get_current_record_results
+
+
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
 
 
 def _apply_gamer_special_tiles(board_array, special_tiles):
@@ -27,13 +37,94 @@ def _apply_gamer_special_tiles(board_array, special_tiles):
 class ConnectionManager:
     def __init__(self):
         self.active_connections: dict[WebSocket, GameSession] = {}
+        self.detached_sessions: dict[tuple[int, str], tuple[GameSession, float]] = {}
+        self.detached_session_ttl_seconds = _env_int(
+            "WS_DETACHED_SESSION_TTL_SECONDS",
+            3600,
+            minimum=60,
+        )
+        self.max_detached_sessions = _env_int(
+            "WS_MAX_DETACHED_SESSIONS",
+            512,
+            minimum=16,
+        )
 
     async def connect(self, websocket: WebSocket, client_id: str = "") -> None:
         await websocket.accept()
         self.active_connections[websocket] = GameSession(client_id)
 
     def disconnect(self, websocket: WebSocket) -> None:
-        self.active_connections.pop(websocket, None)
+        session = self.active_connections.pop(websocket, None)
+        if session is None:
+            return
+        if any(active_session is session for active_session in self.active_connections.values()):
+            return
+        key = self._session_cache_key(session)
+        if key is not None:
+            self._cleanup_detached_sessions()
+            self.detached_sessions[key] = (session, time.monotonic())
+            self._trim_detached_sessions()
+
+    def restore_detached_session(
+        self,
+        websocket: WebSocket,
+        auth_user: dict[str, Any],
+    ) -> GameSession | None:
+        current = self.active_connections.get(websocket)
+        if current is None:
+            return None
+        client_id = str(getattr(current, "client_id", "") or "")
+        if not client_id:
+            return current
+
+        key = (int(auth_user["id"]), client_id)
+        self._cleanup_detached_sessions()
+        for other_websocket, active_session in self.active_connections.items():
+            if other_websocket is websocket:
+                continue
+            if self._session_cache_key(active_session) == key:
+                self.active_connections[websocket] = active_session
+                return active_session
+
+        cached = self.detached_sessions.pop(key, None)
+        if cached is None:
+            return current
+        session, detached_at = cached
+        if time.monotonic() - detached_at > self.detached_session_ttl_seconds:
+            return current
+        self.active_connections[websocket] = session
+        return session
+
+    @staticmethod
+    def _session_cache_key(session: GameSession) -> tuple[int, str] | None:
+        user_id = getattr(session, "user_id", None)
+        client_id = str(getattr(session, "client_id", "") or "")
+        if user_id is None or not client_id:
+            return None
+        return int(user_id), client_id
+
+    def _cleanup_detached_sessions(self) -> None:
+        if not self.detached_sessions:
+            return
+        now = time.monotonic()
+        expired_keys = [
+            key
+            for key, (_session, detached_at) in self.detached_sessions.items()
+            if now - detached_at > self.detached_session_ttl_seconds
+        ]
+        for key in expired_keys:
+            self.detached_sessions.pop(key, None)
+
+    def _trim_detached_sessions(self) -> None:
+        overflow = len(self.detached_sessions) - self.max_detached_sessions
+        if overflow <= 0:
+            return
+        oldest_keys = sorted(
+            self.detached_sessions,
+            key=lambda key: self.detached_sessions[key][1],
+        )[:overflow]
+        for key in oldest_keys:
+            self.detached_sessions.pop(key, None)
 
     async def broadcast(self, message: str) -> None:
         for connection in self.active_connections:

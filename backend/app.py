@@ -315,7 +315,17 @@ def _bind_auth_user(session, auth_user: dict) -> None:
     session.user_role = str(auth_user["role"])
 
 
-async def _handle_auth_session(websocket: WebSocket, session, payload: dict) -> None:
+def _bind_or_restore_auth_user(
+    websocket: WebSocket,
+    session,
+    auth_user: dict,
+):
+    restored_session = manager.restore_detached_session(websocket, auth_user) or session
+    _bind_auth_user(restored_session, auth_user)
+    return restored_session
+
+
+async def _handle_auth_session(websocket: WebSocket, session, payload: dict):
     token = str((payload or {}).get("token") or "").strip()
     auth_user = authenticate_session_token(token)
     if auth_user is None or (
@@ -330,10 +340,10 @@ async def _handle_auth_session(websocket: WebSocket, session, payload: dict) -> 
                 },
                 log_key="send_auth_session",
             )
-            return
+            return session
         await _send_auth_required(websocket)
-        return
-    _bind_auth_user(session, auth_user)
+        return session
+    session = _bind_or_restore_auth_user(websocket, session, auth_user)
     await _safe_send_json(
         websocket,
         {
@@ -346,6 +356,7 @@ async def _handle_auth_session(websocket: WebSocket, session, payload: dict) -> 
         },
         log_key="send_auth_session",
     )
+    return session
 
 
 @app.websocket("/ws/{client_id}")
@@ -369,7 +380,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
         await manager.connect(websocket, client_id)
         session = manager.active_connections[websocket]
         if auth_user is not None:
-            _bind_auth_user(session, auth_user)
+            session = _bind_or_restore_auth_user(websocket, session, auth_user)
 
         while True:
             try:
@@ -390,7 +401,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
                     continue
 
                 if action == Action.AUTH_SESSION:
-                    await _handle_auth_session(websocket, session, payload)
+                    session = await _handle_auth_session(websocket, session, payload)
                     continue
 
                 if _action_requires_auth(action) and session.user_id is None:
