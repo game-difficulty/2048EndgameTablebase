@@ -117,6 +117,7 @@ export function useTesterSession(activeRef) {
 
   let client = null;
   let bootstrapSelectionSent = false;
+  let initialStateSeen = false;
 
   const patternGroups = computed(() =>
     Object.entries(patternCategories.value || {}).map(([category, patterns]) => ({
@@ -448,6 +449,7 @@ export function useTesterSession(activeRef) {
         patternCategories.value = nextCategories;
         availableTargets.value = getCatalogTargets(tables);
         ensureDefaultSelection();
+        maybeApplyInitialPatternSelection();
       }
     } catch (error) {
       console.error(error);
@@ -503,6 +505,23 @@ export function useTesterSession(activeRef) {
     recordLength.value > 0
   );
 
+  const maybeApplyInitialPatternSelection = () => {
+    if (
+      !activeRef?.value ||
+      wsStatus.value !== 'connected' ||
+      !isAuthenticated.value ||
+      !initialStateSeen ||
+      bootstrapSelectionSent ||
+      !selectedPattern.value ||
+      !selectedTarget.value ||
+      hasLocalPracticeState()
+    ) {
+      return;
+    }
+    bootstrapSelectionSent = true;
+    applyPatternSelection();
+  };
+
   const resetRandom = () => triggerAction('TESTER_RESET_RANDOM');
   const applyManualBoard = () => {
     if (hexInput.value.trim()) {
@@ -557,16 +576,7 @@ export function useTesterSession(activeRef) {
       availableTargets.value = (payload?.target_tiles || []).map(String);
     }
     ensureDefaultSelection();
-    if (
-      isAuthenticated.value &&
-      !bootstrapSelectionSent &&
-      selectedPattern.value &&
-      selectedTarget.value &&
-      !hasLocalPracticeState()
-    ) {
-      bootstrapSelectionSent = true;
-      applyPatternSelection();
-    }
+    maybeApplyInitialPatternSelection();
   };
 
   const handleTesterState = (payload) => {
@@ -629,6 +639,8 @@ export function useTesterSession(activeRef) {
       pendingPracticeJump.value = null;
       triggerAction('TESTER_SET_BOARD', { hex_str: hex });
     }
+    initialStateSeen = true;
+    maybeApplyInitialPatternSelection();
   };
 
   const handleWSMessage = (message) => {
@@ -654,6 +666,7 @@ export function useTesterSession(activeRef) {
       onOpen: () => {
         wsStatus.value = 'connected';
         bootstrapSelectionSent = false;
+        initialStateSeen = false;
         loadCatalog();
         triggerAction('TESTER_GET_INIT');
       },
@@ -734,10 +747,17 @@ export function useTesterSession(activeRef) {
     (isActive) => {
       if (isActive) {
         connect();
+        maybeApplyInitialPatternSelection();
       }
     },
     { immediate: true }
   );
+
+  watch(isAuthenticated, (authenticated) => {
+    if (authenticated) {
+      maybeApplyInitialPatternSelection();
+    }
+  });
 
   onUnmounted(() => {
     window.removeEventListener('keydown', handleKeyDown, true);

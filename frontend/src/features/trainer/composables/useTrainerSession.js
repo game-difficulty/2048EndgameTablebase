@@ -49,6 +49,7 @@ export function useTrainerSession(activeRef) {
   const awaitingSpawn = ref(false);
 
   const tablebasePath = ref('');
+  const loadedTablebaseFullPattern = ref('');
   const patternType = ref('');
   const targetValue = ref('');
   const tableResult = ref({ dtype: '?', results: {} });
@@ -92,6 +93,8 @@ export function useTrainerSession(activeRef) {
 
   let client = null;
   let autoDefaultAfterTablebaseLoad = false;
+  let initialStateSeen = false;
+  let defaultTablebaseAutoApplyAttempted = false;
 
   const currentPatternDisplay = computed(() =>
     patternType.value && targetValue.value ? `${patternType.value}_${targetValue.value}` : ''
@@ -310,6 +313,50 @@ export function useTrainerSession(activeRef) {
     };
   };
 
+  const syncSelectionFromFullPattern = (fullPattern) => {
+    const parsed = parseFullPattern(fullPattern);
+    if (!parsed || !flatPatterns.value.includes(parsed.pattern)) {
+      return false;
+    }
+    const targets = catalogTables.value.length
+      ? getCatalogTargetsForPattern(catalogTables.value, parsed.pattern)
+      : availableTargets.value;
+    if (!targets.includes(parsed.target)) {
+      return false;
+    }
+    patternType.value = parsed.pattern;
+    targetValue.value = parsed.target;
+    syncActivePatternCategory();
+    return true;
+  };
+
+  const selectedTablebaseExists = () => {
+    if (!patternType.value || !targetValue.value || !flatPatterns.value.includes(patternType.value)) {
+      return false;
+    }
+    const targets = catalogTables.value.length
+      ? getCatalogTargetsForPattern(catalogTables.value, patternType.value)
+      : availableTargetsForPattern.value;
+    return targets.includes(targetValue.value);
+  };
+
+  const maybeAutoApplyDefaultTablebase = () => {
+    if (
+      !activeRef?.value ||
+      wsStatus.value !== 'connected' ||
+      !isAuthenticated.value ||
+      !initialStateSeen ||
+      defaultTablebaseAutoApplyAttempted ||
+      pendingTrainerJump.value ||
+      tablebasePath.value === 'loaded' ||
+      !selectedTablebaseExists()
+    ) {
+      return;
+    }
+    defaultTablebaseAutoApplyAttempted = true;
+    applyTablebase({ autoDefault: true });
+  };
+
   const protectedActions = new Set([
     'TRAINER_SET_FILEPATH',
     'TRAINER_GET_RESULTS',
@@ -345,8 +392,12 @@ export function useTrainerSession(activeRef) {
           targetValue.value = defaults.target;
         }
         ensureTargetForCurrentPattern();
+        if (loadedTablebaseFullPattern.value) {
+          syncSelectionFromFullPattern(loadedTablebaseFullPattern.value);
+        }
         syncActivePatternCategory();
         applyTrainerJump();
+        maybeAutoApplyDefaultTablebase();
       }
     } catch (error) {
       console.error(error);
@@ -562,8 +613,13 @@ export function useTrainerSession(activeRef) {
     if (data.action === 'UPDATE_STATE') {
       metadata.value = data.data.animation;
       board.value = data.data.board;
+      initialStateSeen = true;
       if (typeof data.data.tablebase_status === 'string') {
         tablebasePath.value = data.data.tablebase_status;
+      }
+      loadedTablebaseFullPattern.value = data.data.tablebase_full_pattern || '';
+      if (loadedTablebaseFullPattern.value) {
+        syncSelectionFromFullPattern(loadedTablebaseFullPattern.value);
       }
       const nextBoardHex = data.data.hex_str || hexInput.value;
       const boardChanged = !!nextBoardHex && nextBoardHex !== currentBoardHex.value;
@@ -619,6 +675,7 @@ export function useTrainerSession(activeRef) {
         stepExecutionPending.value = false;
         queryResults(queuedStepCount.value > 0 || demoActive.value ? 'step' : 'auto');
       }
+      maybeAutoApplyDefaultTablebase();
       return;
     }
 
@@ -689,6 +746,8 @@ export function useTrainerSession(activeRef) {
       clientId,
       onOpen: () => {
         wsStatus.value = 'connected';
+        initialStateSeen = false;
+        defaultTablebaseAutoApplyAttempted = false;
         loadCatalog();
         triggerAction('GET_STATE');
       },
@@ -1035,10 +1094,17 @@ export function useTrainerSession(activeRef) {
         connect();
         refreshSettings();
         loadCatalog();
+        maybeAutoApplyDefaultTablebase();
       }
     },
     { immediate: true }
   );
+
+  watch(isAuthenticated, (authenticated) => {
+    if (authenticated) {
+      maybeAutoApplyDefaultTablebase();
+    }
+  });
 
   onUnmounted(() => {
     window.removeEventListener('keydown', handleKeydown);
