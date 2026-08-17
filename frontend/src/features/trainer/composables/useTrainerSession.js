@@ -6,7 +6,7 @@ import {
   fetchTablebaseCatalog,
   getCatalogTargets,
   getCatalogTargetsForPattern,
-  groupTablebasesByPattern,
+  groupTablebasePatternsByCategory,
 } from '../../../services/tablebases/catalogClient';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { getStableWsClientId } from '../../../services/ws/clientIds';
@@ -381,10 +381,10 @@ export function useTrainerSession(activeRef) {
     try {
       const tables = await fetchTablebaseCatalog();
       catalogTables.value = tables;
-      const groupedTables = groupTablebasesByPattern(tables);
-      const patterns = Object.keys(groupedTables).sort();
+      const nextCategories = groupTablebasePatternsByCategory(tables);
+      const patterns = Object.values(nextCategories).flat();
       if (patterns.length) {
-        patternCategories.value = { cloud: patterns };
+        patternCategories.value = nextCategories;
         availableTargets.value = getCatalogTargets(tables);
         if (!patternType.value || !patterns.includes(patternType.value)) {
           const defaults = chooseDefaultCatalogSelection(patterns);

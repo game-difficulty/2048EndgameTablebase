@@ -1,4 +1,4 @@
-const FALLBACK_VARIANT_PATTERNS = ['2x4', '3x3', '3x4'];
+const FALLBACK_VARIANT_PATTERNS = ['2x4', '3x3', '3x4', '3x4441'];
 
 export const normalizePatternName = (patternLike) => {
   const raw = String(patternLike || '').trim();

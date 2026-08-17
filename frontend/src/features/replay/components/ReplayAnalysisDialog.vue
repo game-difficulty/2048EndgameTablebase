@@ -199,7 +199,7 @@ import {
   fetchTablebaseCatalog,
   getCatalogTargets,
   getCatalogTargetsForPattern,
-  groupTablebasesByPattern,
+  groupTablebasePatternsByCategory,
 } from '../../../services/tablebases/catalogClient';
 import { createWsClient } from '../../../services/ws/createWsClient';
 
@@ -395,10 +395,10 @@ const loadCatalog = async () => {
   try {
     const tables = await fetchTablebaseCatalog();
     catalogTables.value = tables;
-    const groupedTables = groupTablebasesByPattern(tables);
-    const patterns = Object.keys(groupedTables).sort();
+    const nextCategories = groupTablebasePatternsByCategory(tables);
+    const patterns = Object.values(nextCategories).flat();
     if (patterns.length) {
-      categories.value = { cloud: patterns };
+      categories.value = nextCategories;
       targetTiles.value = getCatalogTargets(tables);
       ensureValidSelection();
       if (!userSelectionTouched.value) {

@@ -1,5 +1,8 @@
 import { getBackendUrl } from '../runtime/backendUrl';
 
+const VARIANT_PATTERNS = new Set(['2x4', '3x3', '3x4', '3x4441']);
+const CATEGORY_ORDER = ['4x4', 'variant'];
+
 function normalizeTable(rawTable = {}) {
   return {
     pattern: String(rawTable.pattern || ''),
@@ -36,6 +39,30 @@ export function groupTablebasesByPattern(tables = []) {
     groups[table.pattern].push(table);
   }
   return groups;
+}
+
+export function groupTablebasePatternsByCategory(tables = []) {
+  const patternsByCategory = {
+    '4x4': new Set(),
+    variant: new Set(),
+  };
+
+  for (const table of tables) {
+    const pattern = String(table?.pattern || '');
+    if (!pattern) {
+      continue;
+    }
+    const category = VARIANT_PATTERNS.has(pattern) ? 'variant' : '4x4';
+    patternsByCategory[category].add(pattern);
+  }
+
+  return CATEGORY_ORDER.reduce((categories, category) => {
+    const patterns = [...patternsByCategory[category]].sort();
+    if (patterns.length) {
+      categories[category] = patterns;
+    }
+    return categories;
+  }, {});
 }
 
 export function getCatalogTargets(tables = []) {
