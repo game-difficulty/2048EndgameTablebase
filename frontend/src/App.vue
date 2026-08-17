@@ -150,7 +150,7 @@
       >
         <TesterView
           :active="activeTab === TAB_IDS.TESTER"
-          @navigate-tab="openTab"
+          @navigate-tab="handleNavigateTab"
           @open-analysis="openAnalysisDialog"
         />
       </div>
@@ -168,7 +168,7 @@
       >
         <ReplayReviewView
           :active="activeTab === TAB_IDS.REPLAY"
-          @navigate-tab="openTab"
+          @navigate-tab="handleNavigateTab"
           @open-analysis="openAnalysisDialog"
         />
       </div>
@@ -305,7 +305,7 @@
 </template>
 
 <script setup>
-import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue';
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { useAppSettingsStore } from './app/useAppSettings';
@@ -396,6 +396,16 @@ const formatTokens = (value) => {
   return number.toLocaleString(undefined, {
     minimumFractionDigits: number % 1 === 0 ? 0 : 1,
     maximumFractionDigits: 3,
+  });
+};
+
+const handleNavigateTab = (tabId, detail = null) => {
+  openTab(tabId);
+  if (tabId !== TAB_IDS.TRAINER || !detail?.hex) {
+    return;
+  }
+  nextTick(() => {
+    window.dispatchEvent(new CustomEvent('trainer-practice-jump', { detail }));
   });
 };
 

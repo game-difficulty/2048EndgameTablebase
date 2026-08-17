@@ -32,6 +32,19 @@ from ..trainer_helpers import (
 from ..webview_api import Api
 
 
+def _set_random_trainer_board(session: GameSession, path_list) -> None:
+    random_board = session.ensure_book_reader().get_random_state(
+        path_list, session.current_pattern
+    )
+    session.board_encoded = np_u64(random_board)
+    session.score = 0
+    session.history = [(session.board_encoded, session.score)]
+    session.move_history = [None]
+    session.moved = 0
+    session.played_length = 0
+    session.trainer_results = {}
+
+
 async def handle_trainer_action(
     action: str,
     payload: dict[str, Any],
@@ -61,6 +74,12 @@ async def handle_trainer_action(
         session.current_pattern = full_pattern
         session.pattern_settings = [base_pattern, target]
         session.use_variant = base_pattern in category_info.get("variant", [])
+
+        if payload.get("load_default") and path_list:
+            try:
+                _set_random_trainer_board(session, path_list)
+            except Exception as e:
+                print("TRAINER_SET_FILEPATH default err:", e)
 
         await manager.send_state(websocket)
         await send_trainer_results(session, websocket)
@@ -167,16 +186,7 @@ async def handle_trainer_action(
         path_list = build_filepath_map_entry(session.current_pattern, spawn_rate4)
         if path_list:
             try:
-                random_board = session.ensure_book_reader().get_random_state(
-                    path_list, session.current_pattern
-                )
-                session.board_encoded = np_u64(random_board)
-                session.score = 0
-                session.history = [(session.board_encoded, session.score)]
-                session.move_history = [None]
-                session.moved = 0
-                session.played_length = 0
-                session.trainer_results = {}
+                _set_random_trainer_board(session, path_list)
                 await manager.send_state(websocket)
                 await send_trainer_results(session, websocket)
             except Exception as e:
