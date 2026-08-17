@@ -440,13 +440,10 @@ export function useReplaySession(activeRef, emit) {
 
   const jumpToPractice = () => {
     if (!loaded.value || !currentHex.value) return;
-    window.dispatchEvent(new CustomEvent('trainer-practice-jump', {
-      detail: {
-        fullPattern: guessFullPattern(),
-        hex: currentHex.value,
-      },
-    }));
-    emit('navigate-tab', 'TrainerView');
+    emit('navigate-tab', 'TrainerView', {
+      fullPattern: guessFullPattern(),
+      hex: currentHex.value,
+    });
   };
 
   const closeMenuOnClick = (event) => {

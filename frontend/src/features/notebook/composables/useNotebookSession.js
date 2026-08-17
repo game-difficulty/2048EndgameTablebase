@@ -233,12 +233,11 @@ export function useNotebookSession(activeRef) {
   const jumpToTrainer = (emit) => {
     stopNextCountdown();
     if (hasProblem.value && currentHex.value) {
-      window.dispatchEvent(new CustomEvent('trainer-practice-jump', {
-        detail: {
-          fullPattern: selectedPattern.value,
-          hex: currentHex.value,
-        },
-      }));
+      emit('navigate-tab', 'TrainerView', {
+        fullPattern: selectedPattern.value,
+        hex: currentHex.value,
+      });
+      return;
     }
     emit('navigate-tab', 'TrainerView');
   };

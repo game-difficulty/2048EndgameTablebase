@@ -70,7 +70,7 @@
       >
         <TesterView
           :active="activeTab === TAB_IDS.TESTER"
-          @navigate-tab="openTab"
+          @navigate-tab="handleNavigateTab"
           @open-analysis="openAnalysisDialog"
         />
       </div>
@@ -88,7 +88,7 @@
       >
         <ReplayReviewView
           :active="activeTab === TAB_IDS.REPLAY"
-          @navigate-tab="openTab"
+          @navigate-tab="handleNavigateTab"
           @open-analysis="openAnalysisDialog"
         />
       </div>
@@ -99,7 +99,7 @@
       >
         <NotebookView
           :active="activeTab === TAB_IDS.NOTEBOOK"
-          @navigate-tab="openTab"
+          @navigate-tab="handleNavigateTab"
         />
       </div>
       <div
@@ -178,7 +178,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { useAppSettingsStore } from './app/useAppSettings';
@@ -228,6 +228,16 @@ const openAnalysisDialog = (context = {}) => {
 const closeAnalysisDialog = () => {
   analysisDialogOpen.value = false;
   analysisDialogContext.value = {};
+};
+
+const handleNavigateTab = (tabId, detail = null) => {
+  openTab(tabId);
+  if (tabId !== TAB_IDS.TRAINER || !detail?.hex) {
+    return;
+  }
+  nextTick(() => {
+    window.dispatchEvent(new CustomEvent('trainer-practice-jump', { detail }));
+  });
 };
 
 const globalErrorSummary = computed(() => {
