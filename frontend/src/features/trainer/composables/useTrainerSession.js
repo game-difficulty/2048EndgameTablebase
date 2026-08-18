@@ -633,6 +633,10 @@ export function useTrainerSession(activeRef) {
         fullHistory.value = data.data.history || [];
         fullMoves.value = data.data.moves || [];
       }
+      const nextSpawnMode = Number(data.data.spawn_mode);
+      if (Number.isInteger(nextSpawnMode) && nextSpawnMode >= 0 && nextSpawnMode < spawnModes.length) {
+        spawnMode.value = nextSpawnMode;
+      }
       awaitingSpawn.value = !!data.data.awaiting_spawn;
       if (recordOpen.value) {
         pendingResultsRequests.clear();

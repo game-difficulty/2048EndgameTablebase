@@ -188,6 +188,7 @@ class ConnectionManager:
                     ),
                     "record_results": record_results,
                     "record_results_dtype": record_results_dtype,
+                    "spawn_mode": int(getattr(session, "spawn_mode", 0)),
                     "awaiting_spawn": (session.spawn_mode == 3 and session.moved == 1),
                     "tablebase_status": tablebase_status,
                     "tablebase_full_pattern": tablebase_full_pattern,

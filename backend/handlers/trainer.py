@@ -92,8 +92,15 @@ async def handle_trainer_action(
         return True
 
     if action == Action.SET_SPAWN_MODE:
-        session.spawn_mode = int(payload.get("mode", 0))
+        try:
+            next_mode = int(payload.get("mode", 0))
+        except (TypeError, ValueError):
+            next_mode = 0
+        if next_mode not in (0, 1, 2, 3):
+            next_mode = 0
+        session.spawn_mode = next_mode
         session.moved = 0
+        await manager.send_state(websocket)
         return True
 
     if action == Action.TRAINER_STEP:
