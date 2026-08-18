@@ -213,6 +213,18 @@ def init_auth_db() -> None:
               FOREIGN KEY(session_id) REFERENCES sessions(id)
             );
 
+            CREATE TABLE IF NOT EXISTS token_operation_requests (
+              request_id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              session_id INTEGER,
+              operation_key TEXT NOT NULL,
+              ledger_id INTEGER,
+              created_at TEXT NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id),
+              FOREIGN KEY(session_id) REFERENCES sessions(id),
+              FOREIGN KEY(ledger_id) REFERENCES token_ledger(id)
+            );
+
             CREATE TABLE IF NOT EXISTS uploads (
               upload_id TEXT PRIMARY KEY,
               user_id INTEGER NOT NULL,
@@ -251,6 +263,7 @@ def init_auth_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_events(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_token_ledger_user_created ON token_ledger(user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_token_operation_requests_user_created ON token_operation_requests(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_user_entitlements_tier ON user_entitlements(tier);
             CREATE INDEX IF NOT EXISTS idx_uploads_user ON uploads(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_analysis_jobs_user ON analysis_jobs(user_id, created_at);

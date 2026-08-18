@@ -330,7 +330,13 @@
     "status": {
       "noReplayLoaded": "No Replay Loaded",
       "testerSession": "Tester Session",
-      "replayComplete": "Replay Complete"
+      "replayComplete": "Replay Complete",
+      "loading": "Loading replay...",
+      "loaded": "Replay loaded",
+      "noLatest": "No Tester replay is available yet.",
+      "invalidFile": "The replay file is invalid or corrupted.",
+      "tooLarge": "Replay files must not exceed 500 KB.",
+      "networkError": "The replay could not be loaded because the network request failed. Please try again."
     }
   },
   "minigames": {

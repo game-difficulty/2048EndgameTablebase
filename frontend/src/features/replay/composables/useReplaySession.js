@@ -3,16 +3,26 @@ import { useI18n } from 'vue-i18n';
 
 import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { useAuthState } from '../../../services/auth/authState';
-import { pickSingleBrowserFile, uploadBrowserFiles } from '../../../services/files/browserFiles';
-import { createWsClient } from '../../../services/ws/createWsClient';
-import { getStableWsClientId } from '../../../services/ws/clientIds';
+import { pickSingleBrowserFile, readFileAsArrayBuffer } from '../../../services/files/browserFiles';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
 import { resultValueFontSize } from '../../../utils/successRate';
+import { PERFORMANCE_LABELS } from '../engine/replayAnalysis';
+import { ReplayController } from '../engine/replayController';
+import { parseReplayAsync } from '../engine/replayLoader';
+import { MAX_RPL_BYTES } from '../engine/rplParser';
+import {
+  authorizeLocalReplayLoad,
+  createReplayRequestId,
+  fetchLatestReplay,
+} from '../services/replayClient';
+import {
+  restoreReplaySession,
+  saveReplayPosition,
+  saveReplaySource,
+} from '../services/replaySessionStore';
 
 export function useReplaySession(activeRef, emit) {
-  const RESULT_REFRESH_GRACE_MS = 1200;
-  const RESULT_REFRESH_PLACEHOLDER_MS = 2400;
   const { config: appConfig, categories: appCategories, saveSetting } = useAppSettingsStore();
   const { requireAuth } = useAuthState();
   const { t } = useI18n();
@@ -21,11 +31,7 @@ export function useReplaySession(activeRef, emit) {
   const COLOR_YG = '#8bc34a';
   const COLOR_ORANGE = '#ff9800';
   const COLOR_RED = '#f44336';
-  const dirLabels = computed(() => (
-    isZh()
-      ? { left: '左', right: '右', up: '上', down: '下' }
-      : { left: 'L', right: 'R', up: 'U', down: 'D' }
-  ));
+  const fallbackPerformanceLabels = [...PERFORMANCE_LABELS];
   const evaluationColors = {
     'Perfect!': '#2e7d32',
     'Excellent!': '#7cb342',
@@ -35,29 +41,8 @@ export function useReplaySession(activeRef, emit) {
     'Blunder!': '#e53935',
     'Terrible!': '#b71c1c',
   };
-  const fallbackPerformanceLabels = ['Perfect!', 'Excellent!', 'Nice try!', 'Not bad!', 'Mistake!', 'Blunder!', 'Terrible!'];
-  const performanceLabels = ref([...fallbackPerformanceLabels]);
-  const zhEvaluationLabels = {
-    'Perfect!': 'Perfect!',
-    'Excellent!': 'Excellent!',
-    'Nice try!': 'Nice try!',
-    'Not bad!': 'Not bad!',
-    'Mistake!': 'Mistake!',
-    'Blunder!': 'Blunder!',
-    'Terrible!': 'Terrible!',
-  };
-  const evaluationColorPalette = [
-    '#2e7d32',
-    '#7cb342',
-    '#c0ca33',
-    '#fb8c00',
-    '#f4511e',
-    '#e53935',
-    '#b71c1c',
-  ];
+  const evaluationColorPalette = ['#2e7d32', '#7cb342', '#c0ca33', '#fb8c00', '#f4511e', '#e53935', '#b71c1c'];
 
-  const wsStatus = ref('connecting');
-  const clientId = getStableWsClientId('replay');
   const board = ref(new Array(16).fill(0));
   const metadata = ref({});
   const currentHex = ref('0000000000000000');
@@ -65,6 +50,7 @@ export function useReplaySession(activeRef, emit) {
   const replayStatus = ref('');
   const replayPattern = ref('');
   const replaySource = ref('');
+  const replayUseVariant = ref(false);
   const currentStep = ref(0);
   const totalSteps = ref(0);
   const replayResults = ref({});
@@ -76,6 +62,7 @@ export function useReplaySession(activeRef, emit) {
   const combo = ref(0);
   const summary = ref({ total_moves: 0, final_gof: 0, max_combo: 0, counts: {} });
   const losses = ref([]);
+  const performanceLabels = ref([...fallbackPerformanceLabels]);
   const sliderThreshold = ref(1);
   const demoSpeed = ref(40);
   const dis32k = ref(false);
@@ -83,13 +70,56 @@ export function useReplaySession(activeRef, emit) {
   const menuOpen = ref(false);
   const menuRoot = ref(null);
   const demoActive = ref(false);
+  const loadingReplay = ref(false);
+  const loadError = ref('');
 
-  let client = null;
+  let controller = null;
   let demoTimer = null;
-  let resultsStaleTimer = null;
-  let resultsPlaceholderTimer = null;
-  const resultsRefreshPhase = ref('idle');
-  const pendingLatestReplayLoad = ref(false);
+  let positionTimer = null;
+  let restoreStarted = false;
+
+  const isZh = () => String(currentLanguage.value || 'en').startsWith('zh');
+  const dirLabels = computed(() => (
+    isZh()
+      ? { left: '左', right: '右', up: '上', down: '下' }
+      : { left: 'L', right: 'R', up: 'U', down: 'D' }
+  ));
+  const zhEvaluationLabels = Object.fromEntries(fallbackPerformanceLabels.map((label) => [label, label]));
+  const getEvaluationLabel = (label) => (isZh() ? (zhEvaluationLabels[label] || label) : label);
+  const perfectLabel = computed(() => performanceLabels.value[0] || fallbackPerformanceLabels[0]);
+  const getEvaluationColor = (label) => {
+    if (evaluationColors[label]) return evaluationColors[label];
+    const index = performanceLabels.value.indexOf(label);
+    return index >= 0 ? evaluationColorPalette[index % evaluationColorPalette.length] : 'var(--accent)';
+  };
+  const trimTrailingZeros = (value) => value
+    .replace(/(\.\d*?[1-9])0+$/u, '$1')
+    .replace(/\.0+$/u, '')
+    .replace(/\.$/u, '');
+  const formatReplayRate = (value) => trimTrailingZeros(Number(value || 0).toFixed(9));
+
+  const lerpColor = (c1, c2, ratio) => {
+    const parseRgbColor = (color) => color.slice(1).match(/.{2}/gu).map((part) => parseInt(part, 16));
+    const mix = (a, b) => Math.round(a + (b - a) * ratio);
+    const [r1, g1, b1] = parseRgbColor(c1);
+    const [r2, g2, b2] = parseRgbColor(c2);
+    return `rgb(${mix(r1, r2)}, ${mix(g1, g2)}, ${mix(b1, b2)})`;
+  };
+
+  const fileDisplay = computed(() => {
+    if (replaySource.value) {
+      const source = String(replaySource.value);
+      const display = source.split(/[\\/]/u).pop() || source;
+      if (display.toLowerCase().replace(/[\s-]+/gu, '_') === 'tester_session') {
+        return replayPattern.value || t('replay.status.testerSession');
+      }
+      return display;
+    }
+    if (replayPattern.value) return replayPattern.value;
+    return t('replay.status.noReplayLoaded');
+  });
+  const goodnessDisplay = computed(() => Number(goodnessOfFit.value ?? 0).toFixed(4));
+  const summaryMaxCombo = computed(() => Number(summary.value?.max_combo ?? 0));
 
   const makePlaceholderResults = () => ['up', 'down', 'right', 'left'].map((dir) => ({
     dir,
@@ -100,75 +130,36 @@ export function useReplaySession(activeRef, emit) {
     val: null,
   }));
 
-  const isZh = () => String(currentLanguage.value || 'en').startsWith('zh');
-  const getEvaluationLabel = (label) => (isZh() ? (zhEvaluationLabels[label] || label) : label);
-  const perfectLabel = computed(() => performanceLabels.value[0] || fallbackPerformanceLabels[0]);
-  const getEvaluationColor = (label) => {
-    if (evaluationColors[label]) return evaluationColors[label];
-    const index = performanceLabels.value.indexOf(label);
-    if (index >= 0) return evaluationColorPalette[index % evaluationColorPalette.length];
-    return 'var(--accent)';
-  };
-  const trimTrailingZeros = (value) =>
-    value.replace(/(\.\d*?[1-9])0+$/u, '$1').replace(/\.0+$/u, '').replace(/\.$/u, '');
-  const formatReplayRate = (value) => trimTrailingZeros(Number(value || 0).toFixed(9));
-
-  const lerpColor = (c1, c2, ratio) => {
-    const parseRgbColor = (color) => color.slice(1).match(/.{2}/g).map(part => parseInt(part, 16));
-    const mix = (a, b) => Math.round(a + (b - a) * ratio);
-    const [r1, g1, b1] = parseRgbColor(c1);
-    const [r2, g2, b2] = parseRgbColor(c2);
-    return `rgb(${mix(r1, r2)}, ${mix(g1, g2)}, ${mix(b1, b2)})`;
-  };
-
-  const fileDisplay = computed(() => {
-    if (replaySource.value) {
-      const source = String(replaySource.value);
-      const parts = source.split(/[\\/]/u);
-      const display = parts[parts.length - 1] || source;
-      const normalizedDisplay = display.toLowerCase().replace(/[\s-]+/gu, '_');
-      if (normalizedDisplay === 'tester_session') {
-        return replayPattern.value || t('replay.status.testerSession');
-      }
-      return display;
-    }
-    if (replayPattern.value) return replayPattern.value;
-    return t('replay.status.noReplayLoaded');
-  });
-
-  const goodnessDisplay = computed(() => Number(goodnessOfFit.value ?? 0).toFixed(4));
-  const summaryMaxCombo = computed(() => Number(summary.value?.max_combo ?? 0));
-
   const sortedResults = computed(() => {
     const entries = ['left', 'right', 'down', 'up']
-      .map((dir) => {
-        const val = replayResults.value?.[dir];
-        return { dir, val: typeof val === 'number' ? val : null };
-      })
-      .sort((a, b) => {
-        if (a.val == null && b.val == null) return 0;
-        if (a.val == null) return 1;
-        if (b.val == null) return -1;
-        return b.val - a.val;
+      .map((dir) => ({
+        dir,
+        val: typeof replayResults.value?.[dir] === 'number' ? replayResults.value[dir] : null,
+      }))
+      .sort((left, right) => {
+        if (left.val == null && right.val == null) return 0;
+        if (left.val == null) return 1;
+        if (right.val == null) return -1;
+        return right.val - left.val;
       });
     const bestVal = entries.find((item) => item.val != null)?.val || 0;
     return entries.map((item, index) => {
       let pct = 0;
       let color = 'var(--border-main)';
       if (item.val != null && bestVal > 0) {
-        const relLoss = 1 - item.val / bestVal;
+        const relativeLoss = 1 - item.val / bestVal;
         if (index === 0) {
           pct = 100;
           color = COLOR_GREEN;
-        } else if (relLoss <= 0.10) {
-          pct = (1 - relLoss / 0.10) * 100;
-          color = relLoss <= 0.001
+        } else if (relativeLoss <= 0.10) {
+          pct = (1 - relativeLoss / 0.10) * 100;
+          color = relativeLoss <= 0.001
             ? COLOR_GREEN
-            : (relLoss <= 0.01
-              ? lerpColor(COLOR_GREEN, COLOR_YG, (relLoss - 0.001) / 0.009)
-              : (relLoss <= 0.03
-                ? lerpColor(COLOR_YG, COLOR_ORANGE, (relLoss - 0.01) / 0.02)
-                : lerpColor(COLOR_ORANGE, COLOR_RED, (relLoss - 0.03) / 0.07)));
+            : relativeLoss <= 0.01
+              ? lerpColor(COLOR_GREEN, COLOR_YG, (relativeLoss - 0.001) / 0.009)
+              : relativeLoss <= 0.03
+                ? lerpColor(COLOR_YG, COLOR_ORANGE, (relativeLoss - 0.01) / 0.02)
+                : lerpColor(COLOR_ORANGE, COLOR_RED, (relativeLoss - 0.03) / 0.07);
         } else {
           color = COLOR_RED;
         }
@@ -182,19 +173,11 @@ export function useReplaySession(activeRef, emit) {
       };
     });
   });
-
-  const displayedResults = computed(() => {
-    if (loaded.value && currentStep.value < totalSteps.value) {
-      return resultsRefreshPhase.value === 'placeholder' ? makePlaceholderResults() : sortedResults.value;
-    }
-    return makePlaceholderResults();
-  });
-
-  const resultsRefreshing = computed(() => resultsRefreshPhase.value !== 'idle');
-  const resultsUpdatingVisible = computed(
-    () => resultsRefreshPhase.value === 'stale' || resultsRefreshPhase.value === 'placeholder'
-  );
-
+  const displayedResults = computed(() => (
+    loaded.value && currentStep.value < totalSteps.value ? sortedResults.value : makePlaceholderResults()
+  ));
+  const resultsRefreshing = computed(() => loadingReplay.value);
+  const resultsUpdatingVisible = computed(() => loadingReplay.value);
   const currentEvaluation = computed(() => evaluation.value || (loss.value == null ? null : perfectLabel.value));
 
   const feedbackBadgeText = computed(() => {
@@ -202,23 +185,18 @@ export function useReplaySession(activeRef, emit) {
     if (currentStep.value >= totalSteps.value) return t('replay.status.replayComplete');
     return getEvaluationLabel(currentEvaluation.value || perfectLabel.value);
   });
-
-  const feedbackBadgeStyle = computed(() => {
-    if (!loaded.value || currentStep.value >= totalSteps.value) {
-      return { color: 'var(--text-secondary)' };
-    }
-    return { color: getEvaluationColor(currentEvaluation.value) };
-  });
-
+  const feedbackBadgeStyle = computed(() => ({
+    color: !loaded.value || currentStep.value >= totalSteps.value
+      ? 'var(--text-secondary)'
+      : getEvaluationColor(currentEvaluation.value),
+  }));
   const feedbackLossText = computed(() => {
     if (
-      !loaded.value ||
-      currentStep.value >= totalSteps.value ||
-      currentEvaluation.value === perfectLabel.value ||
-      loss.value == null
-    ) {
-      return '';
-    }
+      !loaded.value
+      || currentStep.value >= totalSteps.value
+      || currentEvaluation.value === perfectLabel.value
+      || loss.value == null
+    ) return '';
     return isZh()
       ? `单步损失 ${((1 - Number(loss.value)) * 100).toFixed(2)}%`
       : `One-step loss ${((1 - Number(loss.value)) * 100).toFixed(2)}%`;
@@ -233,14 +211,10 @@ export function useReplaySession(activeRef, emit) {
   const feedbackBestLabel = computed(() => (isZh() ? '最优解' : 'Best move'));
   const feedbackConnector = computed(() => (isZh() ? '·' : 'and'));
   const feedbackPressedMove = computed(() => (
-    loaded.value && currentStep.value < totalSteps.value
-      ? (moveLabels.value[currentMove.value] || '--')
-      : '--'
+    loaded.value && currentStep.value < totalSteps.value ? (moveLabels.value[currentMove.value] || '--') : '--'
   ));
   const feedbackBestMove = computed(() => (
-    loaded.value && currentStep.value < totalSteps.value
-      ? (moveLabels.value[bestMove.value] || '--')
-      : '--'
+    loaded.value && currentStep.value < totalSteps.value ? (moveLabels.value[bestMove.value] || '--') : '--'
   ));
   const feedbackPressedMoveStyle = computed(() => ({
     color: loaded.value && currentStep.value < totalSteps.value
@@ -250,194 +224,185 @@ export function useReplaySession(activeRef, emit) {
   const feedbackBestMoveStyle = computed(() => ({
     color: loaded.value && currentStep.value < totalSteps.value ? COLOR_GREEN : 'var(--text-secondary)',
   }));
-
   const evaluationTotal = computed(() => Number(summary.value?.total_moves || 0));
   const evaluationSegments = computed(() => performanceLabels.value.map((label) => {
     const count = Number(summary.value?.counts?.[label] || 0);
-    const total = evaluationTotal.value || 1;
     return {
       label,
       shortLabel: getEvaluationLabel(label),
       count,
-      percent: evaluationTotal.value ? (count / total) * 100 : 0,
+      percent: evaluationTotal.value ? (count / evaluationTotal.value) * 100 : 0,
       color: getEvaluationColor(label),
     };
   }));
 
   const markerIndices = computed(() => {
-    const arr = Array.isArray(losses.value) ? losses.value.map(Number).filter(Number.isFinite) : [];
-    if (!arr.length) return [];
-    const sorted = [...arr].sort((a, b) => a - b);
-    const qIndex = Math.max(
-      0,
-      Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * 0.1))
-    );
-    const threshold = Math.min(sorted[qIndex], Number(sliderThreshold.value) || 1);
-    return arr
+    const values = Array.isArray(losses.value) ? losses.value.map(Number).filter(Number.isFinite) : [];
+    if (!values.length) return [];
+    const sorted = [...values].sort((left, right) => left - right);
+    const position = (sorted.length - 1) * 0.1;
+    const lower = Math.floor(position);
+    const upper = Math.ceil(position);
+    const quantile = lower === upper
+      ? sorted[lower]
+      : sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
+    const threshold = Math.min(quantile, Number(sliderThreshold.value) || 1);
+    return values
       .map((item, index) => ({ item, index }))
       .filter(({ item }) => item < 1 && item < threshold)
       .map(({ index }) => index);
   });
-
-  const hasNextPoint = computed(() =>
-    markerIndices.value.some((point) => point > currentStep.value)
-  );
-
+  const hasNextPoint = computed(() => markerIndices.value.some((point) => point > currentStep.value));
   const resultFontSize = computed(() => resultValueFontSize(displayedResults.value.map((item) => item.display)));
-
-  const getResultValueStyle = (item) => {
-    return { color: item.textColor, fontSize: resultFontSize.value };
-  };
+  const getResultValueStyle = (item) => ({ color: item.textColor, fontSize: resultFontSize.value });
 
   const stopDemo = () => {
     if (demoTimer) window.clearTimeout(demoTimer);
     demoTimer = null;
     demoActive.value = false;
   };
-
   const blurActiveControl = () => {
-    const activeElement = document.activeElement;
-    if (activeElement instanceof HTMLElement) {
-      activeElement.blur();
-    }
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   };
-
-  const protectedActions = new Set([
-    'REPLAY_LOAD_UPLOAD',
-    'REPLAY_LOAD_LATEST',
-  ]);
-
-  const triggerAction = (action, payload = {}) => {
-    if (protectedActions.has(action) && !requireAuth()) {
-      return false;
-    }
-    client?.send(action, payload);
-    return true;
-  };
-
   const consumePendingLatestReplayLoad = () => {
-    if (!window.__pendingReplayLatestLoad) {
-      return false;
-    }
+    if (!window.__pendingReplayLatestLoad) return false;
     window.__pendingReplayLatestLoad = false;
     return true;
   };
 
-  const requestLatestReplayLoad = () => {
-    stopDemo();
-    startResultsRefresh();
-    triggerAction('REPLAY_LOAD_LATEST');
+  const persistPositionSoon = () => {
+    if (positionTimer) window.clearTimeout(positionTimer);
+    positionTimer = window.setTimeout(() => {
+      positionTimer = null;
+      saveReplayPosition(currentStep.value);
+    }, 250);
   };
 
-  const flushPendingLatestReplayLoad = () => {
-    if (!pendingLatestReplayLoad.value || wsStatus.value !== 'connected') {
-      return;
+  const applyState = (state) => {
+    board.value = state.board;
+    metadata.value = state.animation || {};
+    currentHex.value = state.hex_str;
+    loaded.value = !!state.loaded;
+    replayStatus.value = state.status || '';
+    replayPattern.value = state.pattern || '';
+    replaySource.value = state.source || '';
+    currentStep.value = Number(state.current_step || 0);
+    totalSteps.value = Number(state.total_steps || 0);
+    replayResults.value = state.results || {};
+    currentMove.value = state.current_move || null;
+    bestMove.value = state.best_move || null;
+    loss.value = typeof state.loss === 'number' ? state.loss : null;
+    evaluation.value = state.evaluation || null;
+    goodnessOfFit.value = typeof state.goodness_of_fit === 'number' ? state.goodness_of_fit : null;
+    combo.value = Number(state.combo || 0);
+  };
+
+  const installReplay = async (buffer, replayMetadata, { step = 0, persist = true } = {}) => {
+    const parsed = await parseReplayAsync(buffer, sliderThreshold.value);
+    controller = new ReplayController({
+      replay: parsed.replay,
+      analysis: parsed.analysis,
+      pattern: replayMetadata.pattern,
+      source: replayMetadata.source || replayMetadata.filename,
+      useVariant: replayMetadata.useVariant,
+    });
+    replayUseVariant.value = !!replayMetadata.useVariant;
+    losses.value = Array.from(parsed.analysis.losses);
+    summary.value = parsed.analysis.summary;
+    performanceLabels.value = [...PERFORMANCE_LABELS];
+    applyState(controller.setStep(step));
+    if (persist) {
+      saveReplaySource(parsed.rawBuffer, replayMetadata);
+      saveReplayPosition(currentStep.value);
     }
-    pendingLatestReplayLoad.value = false;
-    requestLatestReplayLoad();
   };
 
-  const clearResultsRefreshTimers = () => {
-    if (resultsStaleTimer) {
-      window.clearTimeout(resultsStaleTimer);
-      resultsStaleTimer = null;
+  const formatLoadError = (error) => {
+    if (error?.status === 401 || error?.status === 402 || error?.code === 'INSUFFICIENT_TOKENS') {
+      return '';
     }
-    if (resultsPlaceholderTimer) {
-      window.clearTimeout(resultsPlaceholderTimer);
-      resultsPlaceholderTimer = null;
+    if (error?.code === 'NO_LATEST_REPLAY' || error?.payload?.detail?.code === 'NO_LATEST_REPLAY') {
+      return t('replay.status.noLatest');
     }
-  };
-
-  const startResultsRefresh = () => {
-    clearResultsRefreshTimers();
-    resultsRefreshPhase.value = 'grace';
-    resultsStaleTimer = window.setTimeout(() => {
-      resultsRefreshPhase.value = 'stale';
-      resultsStaleTimer = null;
-    }, RESULT_REFRESH_GRACE_MS);
-    resultsPlaceholderTimer = window.setTimeout(() => {
-      resultsRefreshPhase.value = 'placeholder';
-      resultsPlaceholderTimer = null;
-    }, RESULT_REFRESH_PLACEHOLDER_MS);
-  };
-
-  const finishResultsRefresh = () => {
-    clearResultsRefreshTimers();
-    resultsRefreshPhase.value = 'idle';
-  };
-
-  const scheduleDemo = () => {
-    if (demoTimer) window.clearTimeout(demoTimer);
-    if (!demoActive.value) return;
-    if (!loaded.value || currentStep.value >= totalSteps.value) {
-      stopDemo();
-      return;
+    if (error?.code === 'REPLAY_TOO_LARGE') return t('replay.status.tooLarge');
+    if (error?.code === 'NETWORK_ERROR' || /failed to fetch|network/iu.test(String(error?.message || ''))) {
+      return t('replay.status.networkError');
     }
-    const delayMs = Math.max(1, Math.round(Number(demoSpeed.value) || 40));
-    demoTimer = window.setTimeout(() => {
-      if (!demoActive.value) return;
-      startResultsRefresh();
-      triggerAction('REPLAY_STEP', { delta: 1 });
-    }, delayMs);
+    return t('replay.status.invalidFile');
   };
 
-  const toggleDemo = () => {
-    if (demoActive.value) {
-      stopDemo();
-      return;
-    }
-    if (!loaded.value) return;
-    demoActive.value = true;
-    scheduleDemo();
+  const guessPatternFromFilename = (filename) => {
+    const name = String(filename || '').split(/[\\/]/u).pop() || '';
+    return name.match(/^([A-Za-z0-9]+_\d+)/u)?.[1] || '';
   };
-
-  const stepReplay = (delta) => {
-    stopDemo();
-    blurActiveControl();
-    if (!loaded.value) return;
-    startResultsRefresh();
-    triggerAction('REPLAY_STEP', { delta });
-  };
-
-  const handleSliderStep = (step) => {
-    stopDemo();
-    blurActiveControl();
-    if (!loaded.value) return;
-    startResultsRefresh();
-    triggerAction('REPLAY_SET_STEP', { step });
-  };
-
-  const updateSliderThreshold = (value) => {
-    sliderThreshold.value = value;
-    saveSetting('record_player_slider_threshold', value);
-  };
-
-  const nextInaccuracy = () => {
-    const point = markerIndices.value.find((item) => item > currentStep.value);
-    if (point == null) return;
-    stopDemo();
-    blurActiveControl();
-    startResultsRefresh();
-    triggerAction('REPLAY_SET_STEP', { step: point });
+  const shouldRelaxFileAccept = () => {
+    if (typeof navigator === 'undefined') return false;
+    return /iPad|iPhone|iPod/u.test(navigator.userAgent || '')
+      || (navigator.platform === 'MacIntel' && Number(navigator.maxTouchPoints || 0) > 1);
   };
 
   const openReplayFile = async () => {
     menuOpen.value = false;
-    if (!requireAuth()) return;
+    if (!requireAuth() || loadingReplay.value) return;
     stopDemo();
+    loadError.value = '';
     try {
-      const file = await pickSingleBrowserFile({ accept: '.rpl' });
+      const file = await pickSingleBrowserFile(shouldRelaxFileAccept() ? {} : { accept: '.rpl' });
       if (!file) return;
-      const response = await uploadBrowserFiles(file, { kind: 'replay' });
-      const upload = response.uploads?.[0];
-      if (upload?.upload_id) {
-        triggerAction('REPLAY_LOAD_UPLOAD', {
-          upload_id: upload.upload_id,
-          filename: upload.filename || file.name,
-        });
+      if (!String(file.name || '').toLowerCase().endsWith('.rpl')) {
+        loadError.value = t('replay.status.invalidFile');
+        return;
       }
+      if (file.size <= 0 || file.size > MAX_RPL_BYTES) {
+        loadError.value = file.size > MAX_RPL_BYTES
+          ? t('replay.status.tooLarge')
+          : t('replay.status.invalidFile');
+        return;
+      }
+      loadingReplay.value = true;
+      replayStatus.value = t('replay.status.loading');
+      const buffer = await readFileAsArrayBuffer(file);
+      await authorizeLocalReplayLoad({
+        requestId: createReplayRequestId(),
+        filename: file.name,
+        size: file.size,
+      });
+      const pattern = guessPatternFromFilename(file.name);
+      await installReplay(buffer, {
+        filename: file.name,
+        source: file.name,
+        pattern,
+        useVariant: isVariantPattern(pattern, appCategories.value),
+      });
     } catch (error) {
-      console.error('Failed to upload replay file', error);
+      console.error('Failed to load replay file', error);
+      loadError.value = formatLoadError(error);
+      if (!loaded.value) replayStatus.value = loadError.value || '';
+    } finally {
+      loadingReplay.value = false;
+    }
+  };
+
+  const requestLatestReplayLoad = async () => {
+    if (!requireAuth() || loadingReplay.value) return;
+    stopDemo();
+    loadError.value = '';
+    loadingReplay.value = true;
+    replayStatus.value = t('replay.status.loading');
+    try {
+      const latest = await fetchLatestReplay({ requestId: createReplayRequestId() });
+      await installReplay(latest.buffer, {
+        filename: latest.filename,
+        source: latest.source,
+        pattern: latest.pattern,
+        useVariant: latest.useVariant,
+      });
+    } catch (error) {
+      console.error('Failed to load latest replay', error);
+      loadError.value = formatLoadError(error);
+      if (!loaded.value) replayStatus.value = loadError.value || '';
+    } finally {
+      loadingReplay.value = false;
     }
   };
 
@@ -446,108 +411,76 @@ export function useReplaySession(activeRef, emit) {
     requestLatestReplayLoad();
   };
 
-  const guessFullPattern = () => {
-    if (replayPattern.value && String(replayPattern.value).includes('_')) return replayPattern.value;
-    const source = String(replaySource.value || '');
-    const fileName = source.split(/[\\/]/u).pop() || '';
-    const match = fileName.match(/^([A-Za-z0-9]+_\d+)/u);
-    return match ? match[1] : '';
-  };
-
-  const isVariant = computed(() => (
-    isVariantPattern(replayPattern.value || guessFullPattern(), appCategories.value)
-  ));
-
-  const jumpToPractice = () => {
-    if (!loaded.value || !currentHex.value) return;
-    emit('navigate-tab', 'TrainerView', {
-      fullPattern: guessFullPattern(),
-      hex: currentHex.value,
-    });
-  };
-
-  const closeMenuOnClick = (event) => {
-    if (!menuOpen.value || !menuRoot.value) return;
-    if (!menuRoot.value.contains(event.target)) menuOpen.value = false;
-  };
-
-  const handleReplayState = (payload) => {
-    finishResultsRefresh();
-    performanceLabels.value = Array.isArray(payload?.performance_labels) && payload.performance_labels.length
-      ? [...payload.performance_labels]
-      : [...fallbackPerformanceLabels];
-    board.value = Array.isArray(payload?.board) ? payload.board : new Array(16).fill(0);
-    metadata.value = payload?.animation || {};
-    currentHex.value = payload?.hex_str || '0000000000000000';
-    loaded.value = !!payload?.loaded;
-    replayStatus.value = payload?.status || '';
-    replayPattern.value = payload?.pattern || '';
-    replaySource.value = payload?.source || '';
-    currentStep.value = Number(payload?.current_step || 0);
-    totalSteps.value = Number(payload?.total_steps || 0);
-    replayResults.value = payload?.results || {};
-    currentMove.value = payload?.current_move || null;
-    bestMove.value = payload?.best_move || null;
-    loss.value = typeof payload?.loss === 'number' ? payload.loss : null;
-    evaluation.value = payload?.evaluation || null;
-    goodnessOfFit.value = typeof payload?.goodness_of_fit === 'number' ? payload.goodness_of_fit : null;
-    combo.value = Number(payload?.combo || 0);
-    summary.value = payload?.summary || { total_moves: 0, final_gof: 0, max_combo: 0, counts: {} };
-    losses.value = Array.isArray(payload?.losses) ? payload.losses : [];
-    if (demoActive.value) scheduleDemo();
-  };
-
-  const handleWSMessage = (message) => {
-    if (message.action === 'REPLAY_STATE') handleReplayState(message.data);
-  };
-
-  const connect = () => {
-    if (client) {
+  const scheduleDemo = () => {
+    if (demoTimer) window.clearTimeout(demoTimer);
+    if (!demoActive.value || !controller) return;
+    if (currentStep.value >= totalSteps.value) {
+      stopDemo();
       return;
     }
-    client = createWsClient({
-      clientId,
-      onOpen: () => {
-        wsStatus.value = 'connected';
-        triggerAction('REPLAY_GET_INIT');
-        flushPendingLatestReplayLoad();
-      },
-      onMessage: handleWSMessage,
-      onClose: () => {
-        wsStatus.value = 'disconnected';
-        finishResultsRefresh();
-        stopDemo();
-      },
-    });
-    wsStatus.value = 'connecting';
-    client.connect();
+    const delayMs = Math.max(1, Math.round(Number(demoSpeed.value) || 40));
+    demoTimer = window.setTimeout(() => {
+      if (!demoActive.value || !controller) return;
+      applyState(controller.step(1));
+      persistPositionSoon();
+      scheduleDemo();
+    }, delayMs);
   };
 
-  const disconnect = () => {
-    finishResultsRefresh();
+  const toggleDemo = () => {
+    if (demoActive.value) {
+      stopDemo();
+      return;
+    }
+    if (!controller) return;
+    demoActive.value = true;
+    scheduleDemo();
+  };
+  const stepReplay = (delta) => {
     stopDemo();
-    client?.disconnect();
-    client = null;
-    wsStatus.value = 'disconnected';
+    blurActiveControl();
+    if (!controller) return;
+    applyState(controller.step(delta));
+    persistPositionSoon();
+  };
+  const handleSliderStep = (step) => {
+    stopDemo();
+    blurActiveControl();
+    if (!controller) return;
+    applyState(controller.setStep(step));
+    persistPositionSoon();
+  };
+  const updateSliderThreshold = (value) => {
+    sliderThreshold.value = value;
+    saveSetting('record_player_slider_threshold', value);
+  };
+  const nextInaccuracy = () => {
+    const point = markerIndices.value.find((item) => item > currentStep.value);
+    if (point != null) handleSliderStep(point);
   };
 
+  const guessFullPattern = () => replayPattern.value || guessPatternFromFilename(replaySource.value);
+  const isVariant = computed(() => replayUseVariant.value || isVariantPattern(guessFullPattern(), appCategories.value));
+  const jumpToPractice = () => {
+    if (!loaded.value || !currentHex.value) return;
+    emit('navigate-tab', 'TrainerView', { fullPattern: guessFullPattern(), hex: currentHex.value });
+  };
+  const closeMenuOnClick = (event) => {
+    if (menuOpen.value && menuRoot.value && !menuRoot.value.contains(event.target)) menuOpen.value = false;
+  };
   const handleKeyDown = (event) => {
     if (!activeRef?.value) return;
     const target = event.target;
     if (target instanceof HTMLElement) {
-      const isReplaySliderRange = target.matches('[data-replay-slider-range="true"]');
-      if (!isReplaySliderRange && (target.isContentEditable || target.closest('input, textarea, select'))) return;
+      const slider = target.matches('[data-replay-slider-range="true"]');
+      if (!slider && (target.isContentEditable || target.closest('input, textarea, select'))) return;
     }
     if (event.key === 'Escape' && menuOpen.value) {
       menuOpen.value = false;
-      return;
-    }
-    if (event.ctrlKey && event.code === 'KeyN') {
+    } else if (event.ctrlKey && event.code === 'KeyN') {
       event.preventDefault();
       openReplayFile();
-      return;
-    }
-    if (event.key === 'Enter') {
+    } else if (event.key === 'Enter') {
       event.preventDefault();
       stepReplay(1);
     } else if (event.key === 'Backspace' || event.key === 'Delete') {
@@ -556,66 +489,48 @@ export function useReplaySession(activeRef, emit) {
     }
   };
 
-  onMounted(() => {
+  const restorePreviousReplay = async () => {
+    if (restoreStarted) return;
+    restoreStarted = true;
+    const stored = restoreReplaySession();
+    if (!stored) return;
+    loadingReplay.value = true;
+    try {
+      await installReplay(stored.buffer, stored, { step: stored.step, persist: false });
+    } catch (error) {
+      console.error('Failed to restore replay session', error);
+    } finally {
+      loadingReplay.value = false;
+    }
+  };
+
+  onMounted(async () => {
     window.addEventListener('keydown', handleKeyDown, true);
     document.addEventListener('click', closeMenuOnClick);
+    const loadLatest = activeRef?.value && consumePendingLatestReplayLoad();
+    await restorePreviousReplay();
+    if (loadLatest) requestLatestReplayLoad();
+  });
+  onUnmounted(() => {
+    window.removeEventListener('keydown', handleKeyDown, true);
+    document.removeEventListener('click', closeMenuOnClick);
+    stopDemo();
+    if (positionTimer) window.clearTimeout(positionTimer);
+    if (loaded.value) saveReplayPosition(currentStep.value);
   });
 
   watch(demoSpeed, () => {
     if (demoActive.value) scheduleDemo();
   });
-
-  watch(
-    () => appConfig.value.dis_32k,
-    (value) => {
-      dis32k.value = !!value;
-    },
-    { immediate: true }
-  );
-
-  watch(
-    () => appConfig.value.language,
-    (value) => {
-      currentLanguage.value = value || 'en';
-    },
-    { immediate: true }
-  );
-
-  watch(
-    () => appConfig.value.demo_speed,
-    (value) => {
-      demoSpeed.value = Number(value) || 40;
-    },
-    { immediate: true }
-  );
-
-  watch(
-    () => appConfig.value.record_player_slider_threshold,
-    (value) => {
-      const parsed = Number(value);
-      sliderThreshold.value = Number.isFinite(parsed) ? parsed : 1;
-    },
-    { immediate: true }
-  );
-
-  watch(
-    activeRef,
-    (isActive) => {
-      if (isActive) {
-        if (consumePendingLatestReplayLoad()) {
-          pendingLatestReplayLoad.value = true;
-        }
-        connect();
-        flushPendingLatestReplayLoad();
-      }
-    },
-    { immediate: true }
-  );
-
-  onUnmounted(() => {
-    window.removeEventListener('keydown', handleKeyDown, true);
-    document.removeEventListener('click', closeMenuOnClick);
-    disconnect();
+  watch(() => appConfig.value.dis_32k, (value) => { dis32k.value = !!value; }, { immediate: true });
+  watch(() => appConfig.value.language, (value) => { currentLanguage.value = value || 'en'; }, { immediate: true });
+  watch(() => appConfig.value.demo_speed, (value) => { demoSpeed.value = Number(value) || 40; }, { immediate: true });
+  watch(() => appConfig.value.record_player_slider_threshold, (value) => {
+    const parsed = Number(value);
+    sliderThreshold.value = Number.isFinite(parsed) ? parsed : 1;
+  }, { immediate: true });
+  watch(activeRef, (isActive) => {
+    if (isActive && consumePendingLatestReplayLoad()) requestLatestReplayLoad();
   });
 
   return {
@@ -625,7 +540,6 @@ export function useReplaySession(activeRef, emit) {
     loaded,
     replayStatus,
     replayPattern,
-    isVariant,
     replaySource,
     currentStep,
     totalSteps,
@@ -635,6 +549,8 @@ export function useReplaySession(activeRef, emit) {
     menuOpen,
     menuRoot,
     demoActive,
+    loadingReplay,
+    loadError,
     dirLabels,
     fileDisplay,
     goodnessDisplay,
@@ -656,6 +572,7 @@ export function useReplaySession(activeRef, emit) {
     evaluationSegments,
     hasNextPoint,
     combo,
+    isVariant,
     getResultValueStyle,
     toggleDemo,
     stepReplay,

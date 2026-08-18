@@ -2,7 +2,7 @@ import { getBackendUrl } from '../runtime/backendUrl';
 import { emitAuthRequired, emitTokenBalanceUpdated, emitTokenRequired } from '../auth/authEvents';
 import { authHeaders, clearDeviceSession } from '../auth/sessionTokenStore';
 
-async function handleProtectedResponseError(response, fallbackPrefix) {
+export async function handleProtectedResponseError(response, fallbackPrefix) {
   if (!response) {
     throw new Error(`${fallbackPrefix}: unknown`);
   }

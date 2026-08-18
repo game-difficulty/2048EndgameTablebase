@@ -54,6 +54,7 @@ from backend.cloud_safety import (
 )
 from backend.quota.errors import InsufficientTokens
 from backend.quota.service import consume_operation_tokens, get_token_balance
+from backend.replay_routes import router as replay_router
 CLOUD_MODE = is_cloud_mode()
 
 from backend.handlers.analysis import handle_analysis_action
@@ -137,6 +138,7 @@ async def app_lifespan(_app: FastAPI):
 app = FastAPI(lifespan=app_lifespan)
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(replay_router)
 
 
 @app.middleware("http")

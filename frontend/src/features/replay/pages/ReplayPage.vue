@@ -12,10 +12,18 @@
           <span class="ui-kicker opacity-80">{{ menuOpen ? '^' : 'v' }}</span>
         </button>
         <div v-if="menuOpen" class="absolute right-0 top-full z-[130] mt-2 w-52 overflow-hidden rounded-xl border border-border-main/70 bg-bg-card/96 shadow-xl backdrop-blur-md">
-          <button class="replay-menu-item" @click="openReplayFile">{{ $t('replay.toolbar.openFile') }}</button>
-          <button class="replay-menu-item" @click="loadLatestReplay">{{ $t('replay.toolbar.loadLatest') }}</button>
+          <button class="replay-menu-item" :disabled="loadingReplay" @click="openReplayFile">{{ $t('replay.toolbar.openFile') }}</button>
+          <button class="replay-menu-item" :disabled="loadingReplay" @click="loadLatestReplay">{{ $t('replay.toolbar.loadLatest') }}</button>
         </div>
       </div>
+    </div>
+
+    <div
+      v-if="loadError"
+      class="mb-3 w-full max-w-6xl rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 ui-caption font-black text-red-500"
+      role="alert"
+    >
+      {{ loadError }}
     </div>
 
     <div class="tool-page-layout grid w-full max-w-6xl grid-cols-[clamp(280px,60vh,480px)_minmax(0,1fr)] items-start gap-6">
@@ -210,6 +218,8 @@ const {
   menuOpen,
   menuRoot,
   demoActive,
+  loadingReplay,
+  loadError,
   dirLabels,
   fileDisplay,
   goodnessDisplay,

@@ -330,7 +330,13 @@
     "status": {
       "noReplayLoaded": "未载入回放",
       "testerSession": "Tester 会话",
-      "replayComplete": "回放结束"
+      "replayComplete": "回放结束",
+      "loading": "正在载入回放...",
+      "loaded": "回放已载入",
+      "noLatest": "当前还没有可用的 Tester 回放。",
+      "invalidFile": "回放文件无效或已损坏。",
+      "tooLarge": "回放文件不得超过 500KB。",
+      "networkError": "网络请求失败，无法载入回放，请重试。"
     }
   },
   "minigames": {

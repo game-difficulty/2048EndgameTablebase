@@ -667,6 +667,103 @@ def consume_operation_tokens(
         )
 
 
+def consume_operation_tokens_once(
+    *,
+    request_id: str,
+    user_id: int | None,
+    session_id: int | None,
+    operation_key: str,
+    full_pattern: str | None = "",
+    multiplier_override_units: int | None = None,
+    quantity: int = 1,
+    metadata: dict[str, Any] | None = None,
+    idempotency_scope: str | None = None,
+) -> bool:
+    """Consume tokens once for a client-generated idempotency key."""
+    if user_id is None:
+        return False
+    normalized_request_id = str(request_id or "").strip()
+    if not normalized_request_id:
+        raise ValueError("request_id is required")
+
+    base_units = operation_cost_units(operation_key) * max(1, int(quantity))
+    multiplier_units = (
+        int(multiplier_override_units)
+        if multiplier_override_units is not None
+        else table_multiplier_units(full_pattern)
+    )
+    cost_units = apply_multiplier(base_units, multiplier_units)
+    request_scope = str(idempotency_scope or operation_key)
+
+    with auth_db() as db:
+        cursor = db.execute(
+            """
+            INSERT OR IGNORE INTO token_operation_requests
+            (request_id, user_id, session_id, operation_key, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_request_id,
+                int(user_id),
+                session_id,
+                request_scope,
+                iso(),
+            ),
+        )
+        if cursor.rowcount == 0:
+            existing = db.execute(
+                """
+                SELECT user_id, operation_key
+                FROM token_operation_requests
+                WHERE request_id = ?
+                """,
+                (normalized_request_id,),
+            ).fetchone()
+            if (
+                existing is None
+                or int(existing["user_id"]) != int(user_id)
+                or str(existing["operation_key"]) != request_scope
+            ):
+                raise ValueError("request_id is already in use")
+            return False
+
+        ledger_id = None
+        if cost_units > 0:
+            before, after, bonus_spent, paid_spent = _subtract_from_account(
+                db,
+                user_id=int(user_id),
+                required_units=cost_units,
+            )
+            ledger_id = _insert_ledger(
+                db,
+                user_id=int(user_id),
+                session_id=session_id,
+                event_type="consume",
+                operation_key=operation_key,
+                table_pattern=str(full_pattern or ""),
+                table_multiplier_units=multiplier_units,
+                base_cost_units=base_units,
+                final_cost_units=cost_units,
+                bonus_delta_units=-bonus_spent,
+                paid_delta_units=-paid_spent,
+                balance_before_units=_balance_units(before),
+                balance_after_units=_balance_units(after),
+                metadata={
+                    "request_id": normalized_request_id,
+                    **(metadata or {}),
+                },
+            )
+        db.execute(
+            """
+            UPDATE token_operation_requests
+            SET ledger_id = ?
+            WHERE request_id = ?
+            """,
+            (ledger_id, normalized_request_id),
+        )
+    return True
+
+
 def has_numeric_result(result: dict[str, Any] | None) -> bool:
     if not isinstance(result, dict):
         return False

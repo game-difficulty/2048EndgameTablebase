@@ -46,7 +46,7 @@ LATEST_TESTER_REPLAY = {
     "terminal_board": None,
 }
 LATEST_TESTER_REPLAY_BY_SCOPE = OrderedDict()
-MAX_SCOPED_LATEST_TESTER_REPLAYS = 256
+MAX_SCOPED_LATEST_TESTER_REPLAYS = 512
 
 
 def _empty_latest_tester_replay():
@@ -76,6 +76,19 @@ def get_scoped_latest_tester_replay(session):
         LATEST_TESTER_REPLAY_BY_SCOPE[key] = cached
         return cached
     return getattr(session, "latest_tester_replay", _empty_latest_tester_replay())
+
+
+def get_latest_tester_replay_for_identity(*, user_id: int, session_id: int | None):
+    keys = []
+    if session_id is not None:
+        keys.append(f"session:{int(session_id)}")
+    keys.append(f"user:{int(user_id)}")
+    for key in keys:
+        if key in LATEST_TESTER_REPLAY_BY_SCOPE:
+            cached = LATEST_TESTER_REPLAY_BY_SCOPE.pop(key)
+            LATEST_TESTER_REPLAY_BY_SCOPE[key] = cached
+            return cached
+    return _empty_latest_tester_replay()
 
 
 def _tester_reset_metrics(session):
@@ -131,14 +144,19 @@ def _cache_tester_replay(session):
     }
     session.latest_tester_replay = latest_replay
     key = _latest_tester_replay_scope_key(session)
-    if key:
-        LATEST_TESTER_REPLAY_BY_SCOPE[key] = {
+    cache_keys = [key] if key else []
+    if getattr(session, "user_id", None) is not None:
+        user_key = f"user:{int(session.user_id)}"
+        if user_key not in cache_keys:
+            cache_keys.append(user_key)
+    for cache_key in cache_keys:
+        LATEST_TESTER_REPLAY_BY_SCOPE[cache_key] = {
             **latest_replay,
             "record": cached_record.copy(),
         }
-        LATEST_TESTER_REPLAY_BY_SCOPE.move_to_end(key)
-        while len(LATEST_TESTER_REPLAY_BY_SCOPE) > MAX_SCOPED_LATEST_TESTER_REPLAYS:
-            LATEST_TESTER_REPLAY_BY_SCOPE.popitem(last=False)
+        LATEST_TESTER_REPLAY_BY_SCOPE.move_to_end(cache_key)
+    while len(LATEST_TESTER_REPLAY_BY_SCOPE) > MAX_SCOPED_LATEST_TESTER_REPLAYS:
+        LATEST_TESTER_REPLAY_BY_SCOPE.popitem(last=False)
 
     LATEST_TESTER_REPLAY["record"] = cached_record.copy()
     LATEST_TESTER_REPLAY["pattern"] = session.tester_full_pattern
