@@ -62,10 +62,15 @@ from backend.handlers.replay import handle_replay_action
 from backend.handlers.settings import handle_settings_action
 from backend.handlers.tester import handle_tester_action
 from backend.handlers.trainer import handle_trainer_action
+from backend.handlers.tablebase_query import (
+    drain_tablebase_query_tasks,
+    handle_tablebase_query_action,
+)
 from backend.preload import start_preload_thread
 from backend.resource_paths import get_resource_path
 from backend.state import ConnectionManager, save_game_state
-from backend.tablebase_catalog import get_available_tablebases
+from backend.tablebase_catalog import get_available_tablebases, get_catalog_version
+from backend.tablebase_query_service import tablebase_query_scheduler
 from Config import SingletonConfig
 from error_bridge import publish_frontend_exception
 
@@ -132,7 +137,11 @@ async def app_lifespan(_app: FastAPI):
     cleanup_expired_uploads()
     cleanup_expired_jobs()
     start_preload_thread()
-    yield
+    try:
+        yield
+    finally:
+        await tablebase_query_scheduler.close()
+        await drain_tablebase_query_tasks()
 
 
 app = FastAPI(lifespan=app_lifespan)
@@ -315,6 +324,9 @@ def _bind_auth_user(session, auth_user: dict) -> None:
     )
     session.user_email = str(auth_user["email"])
     session.user_role = str(auth_user["role"])
+    session.user_entitlement_tier = str(
+        (auth_user.get("entitlements") or {}).get("tier") or "free"
+    )
 
 
 def _bind_or_restore_auth_user(
@@ -425,6 +437,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
                 if action == Action.GET_STATE:
                     await manager.send_state(websocket)
 
+                elif await handle_tablebase_query_action(
+                    action, payload, session, websocket
+                ):
+                    continue
+
                 elif await handle_tester_action(action, payload, session, websocket):
                     continue
 
@@ -520,6 +537,7 @@ def _action_requires_auth(action: str | None) -> bool:
         Action.REPLAY_LOAD_UPLOAD,
         Action.REPLAY_LOAD_LATEST,
         Action.ANALYSIS_SUBSCRIBE,
+        Action.TABLEBASE_QUERY,
     }
 
 
@@ -553,7 +571,10 @@ async def favicon():
 
 @app.get("/api/tablebases")
 async def tablebases():
-    return {"tables": get_available_tablebases()}
+    return {
+        "catalog_version": get_catalog_version(),
+        "tables": get_available_tablebases(),
+    }
 
 
 @app.post("/api/uploads")

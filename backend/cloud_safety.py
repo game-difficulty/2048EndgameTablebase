@@ -45,6 +45,7 @@ CLOUD_BLOCKED_ACTIONS = frozenset(
         Action.STOP_RECORDING,
         Action.PREPARE_STOP_RECORDING,
         Action.RECORD_STEP,
+        Action.TRAINER_GET_RESULTS,
     }
 )
 

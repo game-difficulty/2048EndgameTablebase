@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,7 @@ TABLE_EXTENSIONS = (
     ".exadzbook",
     ".bccmp",
 )
+_CATALOG_VERSION_CACHE: tuple[float, str] = (0.0, "")
 
 
 def _manifest_path() -> Path:
@@ -100,6 +103,36 @@ def get_available_tablebases() -> list[dict[str, Any]]:
             }
         )
     return tables
+
+
+def get_catalog_version() -> str:
+    global _CATALOG_VERSION_CACHE
+    now = time.monotonic()
+    expires_at, cached_version = _CATALOG_VERSION_CACHE
+    if cached_version and expires_at > now:
+        return cached_version
+    manifest_path = _manifest_path()
+    version_parts: list[Any] = [get_available_tablebases()]
+    try:
+        version_parts.append(manifest_path.stat().st_mtime_ns)
+    except OSError:
+        version_parts.append(0)
+    for entry in _iter_available_entries():
+        try:
+            version_parts.append(
+                (entry["_full_pattern"], Path(entry["_absolute_path"]).stat().st_mtime_ns)
+            )
+        except OSError:
+            continue
+    encoded = json.dumps(
+        version_parts,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    version = hashlib.sha256(encoded).hexdigest()[:16]
+    _CATALOG_VERSION_CACHE = (now + 5.0, version)
+    return version
 
 
 def resolve_tablebase(

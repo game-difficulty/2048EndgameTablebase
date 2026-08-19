@@ -5,12 +5,19 @@ import { useAuthState } from '../../../services/auth/authState';
 import { downloadBlob, downloadText } from '../../../services/files/browserFiles';
 import {
   fetchTablebaseCatalog,
+  getCatalogVersion,
   getCatalogTargets,
   getCatalogTargetsForPattern,
   groupTablebasePatternsByCategory,
 } from '../../../services/tablebases/catalogClient';
+import {
+  clearTablebaseResultCache,
+  getCachedTablebaseResult,
+  setCachedTablebaseResult,
+} from '../../../services/tablebases/tablebaseResultCache';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { getStableWsClientId } from '../../../services/ws/clientIds';
+import { buildOptimisticMoveTransition } from '../../replay/engine/replayTransition';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
 import {
@@ -89,6 +96,7 @@ export function useTesterSession(activeRef) {
   const logs = ref([]);
   const tableFound = ref(false);
   const ready = ref(false);
+  const lookupPending = ref(false);
   const statusMessage = ref('');
   const recordLength = ref(0);
   const pendingPracticeJump = ref(null);
@@ -114,10 +122,15 @@ export function useTesterSession(activeRef) {
   });
   const patternMenuRoot = ref(null);
   const catalogTables = ref([]);
+  const catalogVersion = ref('');
 
   let client = null;
   let bootstrapSelectionSent = false;
   let initialStateSeen = false;
+  let nextQueryId = 0;
+  let lastQueryScope = '';
+  let activeQuery = null;
+  let queryRetryTimer = null;
 
   const patternGroups = computed(() =>
     Object.entries(patternCategories.value || {}).map(([category, patterns]) => ({
@@ -137,7 +150,13 @@ export function useTesterSession(activeRef) {
     selectedPattern.value && selectedTarget.value ? `${selectedPattern.value}_${selectedTarget.value}` : 'Select Pattern'
   ));
   const isVariant = computed(() => isVariantPattern(selectedPattern.value, patternCategories.value));
-  const canMove = computed(() => ready.value && tableFound.value && wsStatus.value === 'connected');
+  const canMove = computed(() => (
+    ready.value
+    && tableFound.value
+    && !lookupPending.value
+    && Object.values(results.value).some((value) => typeof value === 'number')
+    && wsStatus.value === 'connected'
+  ));
   const goodnessDisplay = computed(() => Number(metrics.value.goodness_of_fit ?? 1).toFixed(4));
   const resultPrecision = computed(() => String(resultDtype.value || '').includes('64') ? 15 : 8);
   const displayedResultDtype = computed(() => (
@@ -443,12 +462,21 @@ export function useTesterSession(activeRef) {
     try {
       const tables = await fetchTablebaseCatalog();
       catalogTables.value = tables;
+      catalogVersion.value = tables.catalogVersion || getCatalogVersion();
       const nextCategories = groupTablebasePatternsByCategory(tables);
       if (Object.values(nextCategories).some((patterns) => patterns.length)) {
         patternCategories.value = nextCategories;
         availableTargets.value = getCatalogTargets(tables);
         ensureDefaultSelection();
         maybeApplyInitialPatternSelection();
+        if (
+          ready.value
+          && tableFound.value
+          && currentBoardHex.value !== '0000000000000000'
+          && !Object.values(results.value).some((value) => typeof value === 'number')
+        ) {
+          queryTablebase(currentBoardHex.value);
+        }
       }
     } catch (error) {
       console.error(error);
@@ -467,6 +495,7 @@ export function useTesterSession(activeRef) {
     'TESTER_SET_BOARD',
     'TESTER_EXPORT_LOG',
     'TESTER_EXPORT_REPLAY',
+    'TABLEBASE_QUERY',
   ]);
 
   const triggerAction = (action, payload = {}) => {
@@ -492,6 +521,9 @@ export function useTesterSession(activeRef) {
 
   const applyPatternSelection = () => {
     if (!selectedPattern.value || !selectedTarget.value) return;
+    clearTablebaseResultCache();
+    lastQueryScope = '';
+    activeQuery = null;
     syncCategoryFromPattern(selectedPattern.value);
     triggerAction('TESTER_SELECT_PATTERN', { pattern: selectedPattern.value, target: selectedTarget.value });
   };
@@ -528,7 +560,87 @@ export function useTesterSession(activeRef) {
     }
   };
   const toggleInsights = () => { showInsights.value = !showInsights.value; };
-  const move = (dir) => canMove.value && triggerAction('TESTER_MOVE', { dir });
+
+  const tablebaseCacheKey = (boardHex) => ({
+    catalogVersion: catalogVersion.value || getCatalogVersion(),
+    fullPattern: currentPatternDisplay.value,
+    boardHex,
+  });
+
+  const applyCachedTablebaseResult = (boardHex) => {
+    if (!boardHex || !catalogVersion.value || !currentPatternDisplay.value) return false;
+    const cached = getCachedTablebaseResult(tablebaseCacheKey(boardHex));
+    if (!cached) return false;
+    resultDtype.value = cached.dtype || '?';
+    results.value = cached.results || {};
+    lookupPending.value = false;
+    return true;
+  };
+
+  const queryTablebase = (boardHex, { useCache = true } = {}) => {
+    const normalizedBoard = String(boardHex || '').trim().toLowerCase();
+    if (
+      !normalizedBoard
+      || !catalogVersion.value
+      || !currentPatternDisplay.value
+      || !tableFound.value
+      || wsStatus.value !== 'connected'
+      || !isAuthenticated.value
+    ) {
+      return false;
+    }
+    const cacheHit = useCache && applyCachedTablebaseResult(normalizedBoard);
+    if (queryRetryTimer) {
+      window.clearTimeout(queryRetryTimer);
+      queryRetryTimer = null;
+    }
+    if (!cacheHit) {
+      resultDtype.value = '?';
+      results.value = {};
+      lookupPending.value = true;
+    }
+    const queryId = `${clientId}_${++nextQueryId}`;
+    lastQueryScope = `${currentPatternDisplay.value}:${normalizedBoard}`;
+    activeQuery = {
+      queryId,
+      boardHex: normalizedBoard,
+      fullPattern: currentPatternDisplay.value,
+    };
+    client?.send('TABLEBASE_QUERY', {
+      page: 'tester',
+      query_id: queryId,
+      catalog_version: catalogVersion.value,
+      full_pattern: currentPatternDisplay.value,
+      board_hex: normalizedBoard,
+    });
+    return cacheHit;
+  };
+
+  const move = (dir) => {
+    if (!canMove.value || !requireAuth()) return false;
+    const fromBoardHex = currentBoardHex.value;
+    const transition = buildOptimisticMoveTransition(
+      board.value,
+      dir,
+      isVariant.value,
+      Number(appConfig.value['4_spawn_rate'] ?? 0.1),
+    );
+    if (!transition) return false;
+
+    board.value = transition.board;
+    metadata.value = transition.metadata;
+    currentBoardHex.value = transition.hex;
+    hexInput.value = transition.hex;
+    client?.send('TESTER_MOVE', {
+      dir,
+      from_board_hex: fromBoardHex,
+      board_hex: transition.hex,
+      spawn_index: transition.spawnIndex,
+      spawn_value: transition.spawnValue,
+    });
+    queryTablebase(transition.hex);
+    return true;
+  };
 
   const saveLog = () => {
     if (!logs.value.length) return;
@@ -579,6 +691,7 @@ export function useTesterSession(activeRef) {
   };
 
   const handleTesterState = (payload) => {
+    const previousBoardHex = currentBoardHex.value;
     const incomingLabels = payload?.metrics?.performance_labels;
     performanceLabels.value = Array.isArray(incomingLabels) && incomingLabels.length
       ? [...incomingLabels]
@@ -607,6 +720,7 @@ export function useTesterSession(activeRef) {
       goodness_of_fit: null,
     };
     ready.value = !!payload?.ready;
+    lookupPending.value = !!payload?.lookup_pending;
     tableFound.value = !!payload?.table_found;
     statusMessage.value = payload?.status || '';
     recordLength.value = payload?.record?.length || 0;
@@ -640,11 +754,165 @@ export function useTesterSession(activeRef) {
     }
     initialStateSeen = true;
     maybeApplyInitialPatternSelection();
+    const hasServerResults = Object.values(results.value).some((value) => typeof value === 'number');
+    if (hasServerResults && catalogVersion.value && currentPatternDisplay.value) {
+      setCachedTablebaseResult(tablebaseCacheKey(currentBoardHex.value), {
+        found: true,
+        dtype: resultDtype.value,
+        results: results.value,
+      });
+      lookupPending.value = false;
+    } else if (
+      ready.value
+      && tableFound.value
+      && currentBoardHex.value !== '0000000000000000'
+      && (
+        previousBoardHex !== currentBoardHex.value
+        || lastQueryScope !== `${currentPatternDisplay.value}:${currentBoardHex.value}`
+      )
+    ) {
+      queryTablebase(currentBoardHex.value);
+    }
+  };
+
+  const handleTesterResults = (payload) => {
+    const resultBoardHex = String(payload?.board_hex || '');
+    if (!resultBoardHex || resultBoardHex !== currentBoardHex.value) return;
+    resultDtype.value = payload?.dtype || '?';
+    results.value = payload?.results || {};
+    lookupPending.value = !!payload?.lookup_pending;
+    if (Array.isArray(payload?.logs_delta)) {
+      logs.value = [...logs.value, ...payload.logs_delta];
+    }
+  };
+
+  const handleTesterMoveAccepted = (payload) => {
+    const acceptedBoardHex = String(payload?.board_hex || '');
+    if (!acceptedBoardHex || acceptedBoardHex !== currentBoardHex.value) return;
+    lastStep.value = payload?.last_step || lastStep.value;
+    lookupPending.value = !!payload?.lookup_pending
+      && !Object.values(results.value).some((value) => typeof value === 'number');
+    recordLength.value = payload?.record?.length ?? recordLength.value;
+    metrics.value = {
+      combo: payload?.metrics?.combo ?? metrics.value.combo,
+      max_combo: payload?.metrics?.max_combo ?? metrics.value.max_combo,
+      goodness_of_fit: payload?.metrics?.goodness_of_fit ?? metrics.value.goodness_of_fit,
+      performance_stats: payload?.metrics?.performance_stats || metrics.value.performance_stats,
+      score: payload?.metrics?.score ?? metrics.value.score,
+      best_score: payload?.metrics?.best_score ?? metrics.value.best_score,
+    };
+    if (Array.isArray(payload?.logs_delta)) {
+      logs.value = [...logs.value, ...payload.logs_delta];
+    }
+  };
+
+  const handleTablebaseQueryResult = (payload) => {
+    if (payload?.page !== 'tester') return;
+    if (payload?.code) {
+      if (payload?.query_id && payload.query_id === activeQuery?.queryId) {
+        activeQuery = null;
+      }
+      if (
+        payload.code !== 'STALE_TABLEBASE_QUERY'
+        && String(payload?.board_hex || '').toLowerCase() === currentBoardHex.value
+      ) {
+        lookupPending.value = false;
+        statusMessage.value = payload?.message || statusMessage.value;
+      }
+      return;
+    }
+    const resultBoardHex = String(payload?.board_hex || '').toLowerCase();
+    const fullPattern = String(payload?.full_pattern || '');
+    const resultCatalogVersion = String(payload?.catalog_version || catalogVersion.value);
+    if (!resultBoardHex || !fullPattern || !resultCatalogVersion) return;
+    if (resultCatalogVersion !== catalogVersion.value) {
+      loadCatalog();
+      return;
+    }
+    if (fullPattern !== currentPatternDisplay.value) return;
+    setCachedTablebaseResult({
+      catalogVersion: resultCatalogVersion,
+      fullPattern,
+      boardHex: resultBoardHex,
+    }, payload);
+    if (
+      resultBoardHex !== currentBoardHex.value
+    ) {
+      return;
+    }
+    resultDtype.value = payload?.dtype || '?';
+    results.value = payload?.results || {};
+    lookupPending.value = false;
+    if (!payload?.query_id || payload.query_id === activeQuery?.queryId) {
+      activeQuery = null;
+    }
+    statusMessage.value = '';
+    if (Array.isArray(payload?.logs_delta)) {
+      logs.value = [...logs.value, ...payload.logs_delta];
+    }
+  };
+
+  const handleTablebasePrefetch = (payload) => {
+    if (payload?.page !== 'tester') return;
+    const fullPattern = String(payload?.full_pattern || '');
+    const resultCatalogVersion = String(payload?.catalog_version || '');
+    if (
+      !fullPattern
+      || !resultCatalogVersion
+      || resultCatalogVersion !== catalogVersion.value
+      || fullPattern !== currentPatternDisplay.value
+    ) return;
+    for (const entry of payload?.entries || []) {
+      if (!entry?.board_hex) continue;
+      setCachedTablebaseResult({
+        catalogVersion: resultCatalogVersion,
+        fullPattern,
+        boardHex: entry.board_hex,
+      }, entry);
+    }
   };
 
   const handleWSMessage = (message) => {
     if (message.action === 'TESTER_BOOTSTRAP') handleTesterBootstrap(message.data);
     else if (message.action === 'TESTER_STATE') handleTesterState(message.data);
+    else if (message.action === 'TESTER_MOVE_ACCEPTED') handleTesterMoveAccepted(message.data);
+    else if (message.action === 'TESTER_RESULTS') handleTesterResults(message.data);
+    else if (message.action === 'TABLEBASE_QUERY_RESULT') handleTablebaseQueryResult(message.data);
+    else if (message.action === 'TABLEBASE_PREFETCH') handleTablebasePrefetch(message.data);
+    else if (message.action === 'TABLEBASE_BUSY' && message.data?.page === 'tester') {
+      const retryBoard = currentBoardHex.value;
+      const retryPattern = currentPatternDisplay.value;
+      lookupPending.value = !Object.values(results.value).some((value) => typeof value === 'number');
+      statusMessage.value = message.data?.message || statusMessage.value;
+      queryRetryTimer = window.setTimeout(() => {
+        queryRetryTimer = null;
+        if (
+          currentBoardHex.value === retryBoard
+          && currentPatternDisplay.value === retryPattern
+          && wsStatus.value === 'connected'
+        ) {
+          queryTablebase(retryBoard);
+        }
+      }, Math.max(250, Number(message.data?.retry_after_ms) || 1000));
+    }
+    else if (message.action === 'TOKEN_REQUIRED' && activeQuery) {
+      activeQuery = null;
+      clearTablebaseResultCache();
+      resultDtype.value = '?';
+      results.value = {};
+      lookupPending.value = false;
+      if (queryRetryTimer) {
+        window.clearTimeout(queryRetryTimer);
+        queryRetryTimer = null;
+      }
+    }
+    else if (
+      (lookupPending.value || activeQuery)
+      && ['AUTH_REQUIRED', 'TOKEN_REQUIRED', 'ERROR'].includes(message.action)
+    ) {
+      activeQuery = null;
+      client?.send('TESTER_GET_INIT');
+    }
     else if (message.action === 'TESTER_EXPORT_LOG') {
       const payload = message.data || {};
       downloadText(payload.text || '', payload.filename || 'tester_log.txt', payload.mime || 'text/plain;charset=utf-8');
@@ -679,6 +947,11 @@ export function useTesterSession(activeRef) {
   };
 
   const disconnect = () => {
+    if (queryRetryTimer) {
+      window.clearTimeout(queryRetryTimer);
+      queryRetryTimer = null;
+    }
+    activeQuery = null;
     client?.disconnect();
     client = null;
     wsStatus.value = 'disconnected';

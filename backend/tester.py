@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from dataclasses import dataclass
 import random
+from typing import Any
 
 import numpy as np
 from Config import (
@@ -47,6 +49,17 @@ LATEST_TESTER_REPLAY = {
 }
 LATEST_TESTER_REPLAY_BY_SCOPE = OrderedDict()
 MAX_SCOPED_LATEST_TESTER_REPLAYS = 512
+
+
+@dataclass(frozen=True)
+class TesterLookupRequest:
+    board_encoded: int
+    pattern: str
+    target: str
+    full_pattern: str
+    use_variant: bool
+    book_reader: Any
+    reservation: Any
 
 
 def _empty_latest_tester_replay():
@@ -330,15 +343,10 @@ def _tester_prepare_selection(session, pattern, target):
     return False, path_list
 
 
-def _tester_compute_results(session):
+def _tester_prepare_lookup_request(session, reservation=None):
     if not session.tester_full_pattern or not session.tester_table_found:
-        session.tester_results = {}
-        session.tester_result_dtype = "?"
-        session.tester_best_move = None
-        return
+        return None
 
-    reservation = getattr(session, "_tester_lookup_reservation", None)
-    session._tester_lookup_reservation = None
     if reservation is None:
         reservation = reserve_operation_tokens(
             user_id=session.user_id,
@@ -346,66 +354,133 @@ def _tester_compute_results(session):
             operation_key="tester_lookup_hit",
             full_pattern=session.tester_full_pattern,
         )
-    pattern = session.tester_pattern[0]
-    target = session.tester_pattern[1]
-    n_large_tiles = pattern_32k_tiles_map.get(pattern, [0])[0]
+    return TesterLookupRequest(
+        board_encoded=u64(session.board_encoded),
+        pattern=str(session.tester_pattern[0]),
+        target=str(session.tester_pattern[1]),
+        full_pattern=str(session.tester_full_pattern),
+        use_variant=bool(session.use_variant),
+        book_reader=session.ensure_book_reader(),
+        reservation=reservation,
+    )
+
+
+def _tester_execute_lookup(request: TesterLookupRequest):
+    n_large_tiles = pattern_32k_tiles_map.get(request.pattern, [0])[0]
     lookup_board = replace_board_for_lookup(
-        np.uint64(u64(session.board_encoded)),
-        pattern,
+        np.uint64(request.board_encoded),
+        request.pattern,
         n_large_tiles,
-        target,
-        session.use_variant,
+        request.target,
+        request.use_variant,
     )
     try:
-        result, dtype = session.ensure_book_reader().move_on_dic(
+        result, dtype = request.book_reader.move_on_dic(
             decode_board(np.uint64(u64(lookup_board))),
-            pattern,
-            target,
-            session.tester_full_pattern,
+            request.pattern,
+            request.target,
+            request.full_pattern,
         )
 
         if not isinstance(result, dict):
-            session.tester_results = {}
-            session.tester_result_dtype = str(dtype or "?")
-            session.tester_best_move = None
             finalize_reservation(
-                reservation,
+                request.reservation,
                 actual_operation_key="tester_lookup_miss",
-                metadata={"board_hex": safe_hex(session.board_encoded)},
+                metadata={"board_hex": safe_hex(request.board_encoded)},
             )
-            return
+            return {
+                "results": {},
+                "dtype": str(dtype or "?"),
+                "best_move": None,
+            }
 
-        session.tester_best_move = _tester_best_move(result)
-        session.tester_results = _tester_sanitize_results(result)
-        session.tester_result_dtype = str(dtype or "?")
-        if session.tester_result_dtype and session.tester_result_dtype != "?":
-            session.success_rate_dtype = session.tester_result_dtype
+        sanitized_results = _tester_sanitize_results(result)
+        dtype_name = str(dtype or "?")
         finalize_reservation(
-            reservation,
+            request.reservation,
             actual_operation_key=(
                 "tester_lookup_hit"
-                if has_numeric_result(session.tester_results)
+                if has_numeric_result(sanitized_results)
                 else "tester_lookup_miss"
             ),
-            metadata={"board_hex": safe_hex(session.board_encoded)},
+            metadata={"board_hex": safe_hex(request.board_encoded)},
         )
+        return {
+            "results": sanitized_results,
+            "dtype": dtype_name,
+            "best_move": _tester_best_move(result),
+        }
     except InsufficientTokens:
         raise
     except Exception:
         finalize_reservation(
-            reservation,
+            request.reservation,
             actual_operation_key="tester_lookup_miss",
-            metadata={"board_hex": safe_hex(session.board_encoded), "error": "lookup"},
+            metadata={"board_hex": safe_hex(request.board_encoded), "error": "lookup"},
         )
         raise
 
 
-def _tester_start_practice(session, board_encoded, opening_text):
+def _tester_apply_lookup_result(session, result):
+    session.tester_results = dict(result.get("results") or {})
+    session.tester_result_dtype = str(result.get("dtype") or "?")
+    session.tester_best_move = result.get("best_move")
+    session.tester_results_board = np_u64(session.board_encoded)
+    session.tester_lookup_pending = False
+    if session.tester_result_dtype != "?":
+        session.success_rate_dtype = session.tester_result_dtype
+
+
+def _tester_mark_lookup_pending(session):
+    session.tester_results = {}
+    session.tester_result_dtype = "?"
+    session.tester_best_move = None
+    session.tester_results_board = np_u64(0)
+    session.tester_lookup_pending = True
+
+
+def _tester_append_post_lookup_logs(session):
+    next_best_rate = _tester_restore_success_rate(
+        session.tester_results.get(session.tester_best_move),
+        session.tester_result_dtype,
+    )
+    if session.tester_best_move is None:
+        _tester_append_log(session, "Game Over: no possible moves left.")
+        _tester_append_summary(session)
+    elif next_best_rate is not None and next_best_rate >= 1 - 3e-10:
+        _tester_append_log(
+            session,
+            "Congratulations! You're about to reach the target tile.",
+        )
+        _tester_append_summary(session)
+    else:
+        _tester_append_log(
+            session,
+            f"Total Goodness of Fit: {session.tester_goodness_of_fit:.4f}",
+            f"Maximum Combo: {session.tester_max_combo}",
+        )
+
+
+def _tester_compute_results(session):
+    request = _tester_prepare_lookup_request(session)
+    if request is None:
+        _tester_mark_lookup_pending(session)
+        session.tester_lookup_pending = False
+        return
+    result = _tester_execute_lookup(request)
+    _tester_apply_lookup_result(session, result)
+
+
+def _tester_start_practice(session, board_encoded, opening_text, *, compute_results=True):
     _tester_reset_metrics(session)
     _tester_reset_last_step(session)
     _tester_reset_history(session, board_encoded, 0)
     _tester_reset_record(session)
-    _tester_compute_results(session)
+    session.tester_post_lookup_context = None
+    if compute_results:
+        _tester_compute_results(session)
+    else:
+        _tester_mark_lookup_pending(session)
     session.tester_ready = True
     session.tester_logs = [
         f"Selected pattern: {session.tester_full_pattern}",
@@ -481,6 +556,7 @@ async def send_tester_state(websocket, session, metadata=None, logs_since=None):
         "last_step": sanitize_config(session.tester_last_step),
         "text_visible": session.tester_text_visible,
         "ready": session.tester_ready,
+        "lookup_pending": bool(getattr(session, "tester_lookup_pending", False)),
         "table_found": session.tester_table_found,
         "status": session.tester_status,
         "use_variant": session.use_variant,
@@ -517,3 +593,54 @@ async def send_tester_state(websocket, session, metadata=None, logs_since=None):
             "data": data,
         }
     )
+
+
+async def send_tester_results(websocket, session, expected_board, logs_since=None):
+    if u64(session.board_encoded) != u64(expected_board):
+        return False
+    data = {
+        "board_hex": safe_hex(expected_board),
+        "results": sanitize_config(session.tester_results),
+        "dtype": session.tester_result_dtype,
+        "best_move": session.tester_best_move,
+        "lookup_pending": bool(getattr(session, "tester_lookup_pending", False)),
+    }
+    if session.user_id is not None:
+        data["token_balance"] = get_token_balance(session.user_id)
+    if logs_since is not None:
+        start = max(0, int(logs_since))
+        data["logs_delta"] = session.tester_logs[start:]
+        data["logs_total"] = len(session.tester_logs)
+    if u64(session.board_encoded) != u64(expected_board):
+        return False
+    await websocket.send_json({"action": "TESTER_RESULTS", "data": data})
+    return True
+
+
+async def send_tester_move_accepted(websocket, session, expected_board, logs_since=None):
+    if u64(session.board_encoded) != u64(expected_board):
+        return False
+    data = {
+        "board_hex": safe_hex(expected_board),
+        "last_step": sanitize_config(session.tester_last_step),
+        "lookup_pending": bool(getattr(session, "tester_lookup_pending", False)),
+        "metrics": {
+            "combo": session.tester_combo,
+            "max_combo": session.tester_max_combo,
+            "goodness_of_fit": session.tester_goodness_of_fit,
+            "performance_stats": session.tester_performance_stats,
+            "score": int(session.score),
+            "best_score": int(session.best_score),
+        },
+        "record": {"length": session.tester_step_count},
+    }
+    if session.user_id is not None:
+        data["token_balance"] = get_token_balance(session.user_id)
+    if logs_since is not None:
+        start = max(0, int(logs_since))
+        data["logs_delta"] = session.tester_logs[start:]
+        data["logs_total"] = len(session.tester_logs)
+    if u64(session.board_encoded) != u64(expected_board):
+        return False
+    await websocket.send_json({"action": "TESTER_MOVE_ACCEPTED", "data": data})
+    return True

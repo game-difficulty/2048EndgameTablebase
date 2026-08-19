@@ -12,6 +12,7 @@ import {
   parseRplArrayBuffer,
 } from '../src/features/replay/engine/rplParser.js';
 import {
+  buildOptimisticMoveTransition,
   buildStepTransition,
   decodeBoard,
   encodeBoard,
@@ -145,6 +146,37 @@ test('variant walls split lines and 16k tiles never merge', () => {
   const cappedTransition = buildStepTransition(cappedReplay, 0, true);
   assert.deepEqual(decodeBoard(cappedTransition.nextBoardEncoded).slice(0, 4), [0, 0, 16384, 16384]);
   assert.equal(cappedTransition.metadata.pop_positions.some(Boolean), false);
+});
+
+test('optimistic tester move applies movement, spawn and animation locally', () => {
+  const rolls = [0, 0.99];
+  const transition = buildOptimisticMoveTransition(
+    [0, 2, 2, 0, ...new Array(12).fill(0)],
+    'left',
+    false,
+    0.1,
+    () => rolls.shift(),
+  );
+  assert.deepEqual(transition.board.slice(0, 4), [4, 2, 0, 0]);
+  assert.equal(transition.hex, '2100000000000000');
+  assert.equal(transition.spawnIndex, 1);
+  assert.equal(transition.spawnValue, 2);
+  assert.equal(transition.metadata.direction, 'left');
+  assert.deepEqual(transition.metadata.appear_tile, { index: 1, value: 2 });
+});
+
+test('optimistic tester move keeps variant walls and non-merging 16k tiles', () => {
+  const rolls = [0.1, 0];
+  const transition = buildOptimisticMoveTransition(
+    [2, 2, 32768, 0, 16384, 16384, 0, 0, ...new Array(8).fill(0)],
+    'right',
+    true,
+    1,
+    () => rolls.shift(),
+  );
+  assert.deepEqual(transition.board.slice(0, 4), [0, 4, 32768, 4]);
+  assert.deepEqual(transition.board.slice(4, 8), [0, 0, 16384, 16384]);
+  assert.equal(transition.metadata.pop_positions[1], 1);
 });
 
 test('frontend performance thresholds match the shared JSON config', async () => {

@@ -120,6 +120,7 @@ def _compute_spawns(session, new_board):
 async def send_trainer_results(session, websocket, request_id=None):
     async def send_empty(dtype="?"):
         session.trainer_results = {}
+        session.trainer_results_board = np.uint64(u64(session.board_encoded))
         await websocket.send_json(
             {
                 "action": "TRAINER_RESULTS",
@@ -184,6 +185,7 @@ async def send_trainer_results(session, websocket, request_id=None):
             result = {k: safe_float(v) for k, v in result.items()}
 
         session.trainer_results = result
+        session.trainer_results_board = np.uint64(u64(session.board_encoded))
         dtype_name = str(dtype) if dtype else "?"
         if dtype_name != "?":
             session.success_rate_dtype = dtype_name

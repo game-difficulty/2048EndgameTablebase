@@ -2253,7 +2253,8 @@ ReaderMoveResult evaluate_classic_result_candidates(
     double max_success_rate = 0.0;
     std::string success_rate_dtype;
     const std::string filename = pattern_full + "_" + std::to_string(nums) + ".book";
-    const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
+    const std::vector<int> operations = operation_sequence(
+        reader.is_variant_, reader.last_operation_index_.load(std::memory_order_relaxed));
 
     for (const auto &path_entry : path_list) {
         if (!fs::exists(path_entry.first) || max_success_rate > 0.0) {
@@ -2321,7 +2322,7 @@ ReaderMoveResult evaluate_classic_result_candidates(
                 continue;
             }
 
-            reader.last_operation_index_ = operation_index;
+            reader.last_operation_index_.store(operation_index, std::memory_order_relaxed);
             if (reader.prefer_max_result_) {
                 if (first_numeric > max_success_rate) {
                     max_success_rate = first_numeric;
@@ -2356,7 +2357,8 @@ ReaderMoveResult evaluate_advanced_result_candidates(
     double max_success_rate = 0.0;
     std::string success_rate_dtype;
     const std::string filename = pattern_full + "_" + std::to_string(nums) + "b";
-    const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
+    const std::vector<int> operations = operation_sequence(
+        reader.is_variant_, reader.last_operation_index_.load(std::memory_order_relaxed));
 
     for (const auto &path_entry : path_list) {
         if (!fs::exists(path_entry.first) || max_success_rate > 0.0) {
@@ -2424,7 +2426,7 @@ ReaderMoveResult evaluate_advanced_result_candidates(
                 continue;
             }
 
-            reader.last_operation_index_ = operation_index;
+            reader.last_operation_index_.store(operation_index, std::memory_order_relaxed);
             if (reader.prefer_max_result_) {
                 if (first_numeric > max_success_rate) {
                     max_success_rate = first_numeric;
@@ -2463,7 +2465,8 @@ ReaderMoveResult evaluate_exad_result_candidates(
     if (!exadlut_path) {
         return {blank_direction_entries(), {}};
     }
-    const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
+    const std::vector<int> operations = operation_sequence(
+        reader.is_variant_, reader.last_operation_index_.load(std::memory_order_relaxed));
 
     for (const auto &path_entry : path_list) {
         if (!fs::exists(path_entry.first) || max_success_rate > 0.0) {
@@ -2537,7 +2540,7 @@ ReaderMoveResult evaluate_exad_result_candidates(
                 continue;
             }
 
-            reader.last_operation_index_ = operation_index;
+            reader.last_operation_index_.store(operation_index, std::memory_order_relaxed);
             if (reader.prefer_max_result_) {
                 if (first_numeric > max_success_rate) {
                     max_success_rate = first_numeric;
@@ -2573,7 +2576,8 @@ ReaderMoveResult evaluate_ex_result_candidates(
     if (!zlut_path) {
         return {blank_direction_entries(), {}};
     }
-    const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
+    const std::vector<int> operations = operation_sequence(
+        reader.is_variant_, reader.last_operation_index_.load(std::memory_order_relaxed));
 
     for (const auto &path_entry : path_list) {
         if (!fs::exists(path_entry.first)) {
@@ -2645,7 +2649,7 @@ ReaderMoveResult evaluate_ex_result_candidates(
                 continue;
             }
 
-            reader.last_operation_index_ = operation_index;
+            reader.last_operation_index_.store(operation_index, std::memory_order_relaxed);
             return {sorted_entries, path_entry.second};
         }
     }
@@ -2664,7 +2668,8 @@ ReaderMoveResult evaluate_bc_result_candidates(
         return {question_entries(), "uint32"};
     }
 
-    const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
+    const std::vector<int> operations = operation_sequence(
+        reader.is_variant_, reader.last_operation_index_.load(std::memory_order_relaxed));
     for (int operation_index : operations) {
         const BoardMatrix transformed_board = apply_operation(board_matrix, operation_index);
         const uint64_t encoded = encode_board_matrix(transformed_board);
@@ -2730,7 +2735,7 @@ ReaderMoveResult evaluate_bc_result_candidates(
             continue;
         }
 
-        reader.last_operation_index_ = operation_index;
+        reader.last_operation_index_.store(operation_index, std::memory_order_relaxed);
         return {sorted_entries, dtype_name};
     }
 
@@ -2913,7 +2918,10 @@ uint64_t sample_bc_book_state(
             if (spawned == 0ULL) {
                 continue;
             }
-            BCBookReader probe = reader;
+            BCBookReader probe(reader.spec_, reader.target_rank_, reader.is_variant_);
+            probe.last_operation_index_.store(
+                reader.last_operation_index_.load(std::memory_order_relaxed),
+                std::memory_order_relaxed);
             if (bc_result_has_numeric(evaluate_bc_result_candidates(
                     probe,
                     decode_board_matrix(spawned),
@@ -2945,7 +2953,10 @@ uint64_t sample_bc_book_state(
             if (spawned == 0ULL) {
                 continue;
             }
-            BCBookReader probe = reader;
+            BCBookReader probe(reader.spec_, reader.target_rank_, reader.is_variant_);
+            probe.last_operation_index_.store(
+                reader.last_operation_index_.load(std::memory_order_relaxed),
+                std::memory_order_relaxed);
             if (bc_result_has_numeric(evaluate_bc_result_candidates(
                     probe,
                     decode_board_matrix(spawned),

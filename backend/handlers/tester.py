@@ -7,24 +7,22 @@ from typing import Any
 import numpy as np
 from Config import SingletonConfig, category_info
 from fastapi import WebSocket
-from engine_core.VBoardMover import s_gen_new_num as v_gen_new_num, s_move_board as v_move_board
-from engine_core.BoardMover import s_gen_new_num as r_gen_new_num, s_move_board as r_move_board
+from engine_core.VBoardMover import decode_board, encode_board, s_move_board as v_move_board
+from engine_core.BoardMover import s_move_board as r_move_board
 from engine_core.replay_utils import replay_sentinel
 
 from ..actions import Action, Message
-from ..animation import build_move_animation_metadata
 from ..session import GameSession
 from ..session import np_u64, u64
 from ..tester import (
     PERFORMANCE_PERFECT_LABEL,
     _cache_tester_replay,
     _tester_append_log,
-    _tester_append_summary,
     _tester_board_lines,
-    _tester_compute_results,
     _tester_evaluation_of_performance,
     _tester_feedback_lines,
     _tester_format_rate_for_log,
+    _tester_mark_lookup_pending,
     _tester_prepare_selection,
     _tester_random_rotate,
     _tester_record_step,
@@ -34,9 +32,9 @@ from ..tester import (
     _tester_reset_record,
     _tester_restore_success_rate,
     _tester_start_practice,
+    send_tester_move_accepted,
     send_tester_state,
 )
-from ..quota.service import reserve_operation_tokens
 
 
 async def handle_tester_action(
@@ -45,8 +43,6 @@ async def handle_tester_action(
     session: GameSession,
     websocket: WebSocket,
 ) -> bool:
-    spawn_rate4 = float(SingletonConfig().config.get("4_spawn_rate", 0.1))
-
     if action == Action.TESTER_GET_INIT:
         session.tester_text_visible = bool(
             SingletonConfig().config.get("dis_text", True)
@@ -81,6 +77,7 @@ async def handle_tester_action(
         session.tester_result_dtype = "?"
         session.tester_best_move = None
         session.tester_ready = False
+        session.tester_lookup_pending = False
         _tester_reset_last_step(session)
 
         if found and path_list:
@@ -89,7 +86,12 @@ async def handle_tester_action(
                     path_list, session.tester_full_pattern
                 )
                 random_board = _tester_random_rotate(random_board, pattern)
-                _tester_start_practice(session, random_board, "We'll start from:")
+                _tester_start_practice(
+                    session,
+                    random_board,
+                    "We'll start from:",
+                    compute_results=False,
+                )
             except Exception as e:
                 session.tester_status = f"Failed to initialize board: {e}"
                 session.tester_logs = [
@@ -115,7 +117,12 @@ async def handle_tester_action(
                     path_list, session.tester_full_pattern
                 )
                 random_board = _tester_random_rotate(random_board, pattern)
-                _tester_start_practice(session, random_board, "We'll start from:")
+                _tester_start_practice(
+                    session,
+                    random_board,
+                    "We'll start from:",
+                    compute_results=False,
+                )
             except Exception as e:
                 session.tester_status = f"Failed to initialize board: {e}"
                 session.tester_logs = [
@@ -130,6 +137,7 @@ async def handle_tester_action(
             session.tester_result_dtype = "?"
             session.tester_best_move = None
             session.tester_ready = False
+            session.tester_lookup_pending = False
             _tester_reset_last_step(session)
             session.tester_logs = [
                 f"Selected pattern: {session.tester_full_pattern or '?'}",
@@ -151,7 +159,12 @@ async def handle_tester_action(
             return True
 
         if found:
-            _tester_start_practice(session, board_encoded, "Manual board:")
+            _tester_start_practice(
+                session,
+                board_encoded,
+                "Manual board:",
+                compute_results=False,
+            )
             session.tester_status = (
                 f"Manual board loaded for {session.tester_full_pattern}"
             )
@@ -163,6 +176,7 @@ async def handle_tester_action(
             session.tester_results = {}
             session.tester_result_dtype = "?"
             session.tester_best_move = None
+            session.tester_lookup_pending = False
             _tester_reset_last_step(session)
             session.tester_logs = [
                 f"Selected pattern: {session.tester_full_pattern or '?'}",
@@ -187,9 +201,24 @@ async def handle_tester_action(
         if (
             not session.tester_ready
             or direction_str not in direction_map
-            or not session.tester_results
         ):
             return True
+
+        old_board_encoded = np_u64(session.board_encoded)
+        logs_since = len(session.tester_logs)
+        if (
+            np_u64(getattr(session, "tester_results_board", 0)) != old_board_encoded
+            or not session.tester_results
+        ):
+            await send_tester_state(websocket, session)
+            return True
+        post_lookup_context = getattr(session, "tester_post_lookup_context", None)
+        if (
+            isinstance(post_lookup_context, dict)
+            and np_u64(post_lookup_context.get("board_encoded", 0)) == old_board_encoded
+        ):
+            _tester_append_post_lookup_logs(session)
+            session.tester_post_lookup_context = None
 
         selected_rate = _tester_restore_success_rate(
             session.tester_results.get(direction_str),
@@ -203,24 +232,43 @@ async def handle_tester_action(
         if selected_rate is None or best_move is None or best_rate is None:
             return True
 
-        old_board_encoded = np_u64(session.board_encoded)
-        logs_since = len(session.tester_logs)
-
         move_fn = v_move_board if session.use_variant else r_move_board
-        gen_fn = v_gen_new_num if session.use_variant else r_gen_new_num
-        new_board, move_score = move_fn(
+        moved_board, move_score = move_fn(
             old_board_encoded, direction_map[direction_str]
         )
-        new_board = np.uint64(u64(new_board))
-        if new_board == old_board_encoded:
+        moved_board = np.uint64(u64(moved_board))
+        if moved_board == old_board_encoded:
+            await send_tester_state(websocket, session)
             return True
 
-        session._tester_lookup_reservation = reserve_operation_tokens(
-            user_id=session.user_id,
-            session_id=session.auth_session_id,
-            operation_key="tester_lookup_hit",
-            full_pattern=session.tester_full_pattern,
-        )
+        try:
+            from_board_encoded = np_u64(int(str(payload.get("from_board_hex") or ""), 16))
+            client_board_encoded = np_u64(int(str(payload.get("board_hex") or ""), 16))
+            spawn_index = int(payload.get("spawn_index"))
+            spawn_value = int(payload.get("spawn_value"))
+        except (TypeError, ValueError):
+            await send_tester_state(websocket, session)
+            return True
+
+        if (
+            from_board_encoded != old_board_encoded
+            or spawn_index < 0
+            or spawn_index >= 16
+            or spawn_value not in (2, 4)
+        ):
+            await send_tester_state(websocket, session)
+            return True
+
+        moved_array = decode_board(moved_board).copy()
+        spawn_row, spawn_col = divmod(spawn_index, 4)
+        if int(moved_array[spawn_row, spawn_col]) != 0:
+            await send_tester_state(websocket, session)
+            return True
+        moved_array[spawn_row, spawn_col] = spawn_value
+        validated_board = np_u64(encode_board(moved_array))
+        if validated_board != client_board_encoded:
+            await send_tester_state(websocket, session)
+            return True
 
         result_lines = []
         for key, value in session.tester_results.items():
@@ -296,48 +344,34 @@ async def handle_tester_action(
 
         session.score += int(move_score)
         session.best_score = max(session.best_score, session.score)
-        new_board, _, num_pos_1d, val_exp = gen_fn(new_board, spawn_rate4)
-        session.board_encoded = np_u64(new_board)
+        session.board_encoded = validated_board
         session.history.append((session.board_encoded, session.score))
         session.move_history.append(direction_str)
         session.played_length = len(session.history) - 1
-        _tester_record_step(session, direction_str, num_pos_1d, val_exp)
+        _tester_record_step(
+            session,
+            direction_str,
+            spawn_index,
+            2 if spawn_value == 4 else 1,
+        )
         _cache_tester_replay(session)
 
         _tester_append_log(session, result_lines)
         _tester_append_log(session, "--------------------------------------------------")
-        _tester_compute_results(session)
         _tester_append_log(session, _tester_board_lines(session.board_encoded))
         _tester_append_log(session, "")
+        session.tester_post_lookup_context = {
+            "board_encoded": u64(session.board_encoded),
+            "logs_since": len(session.tester_logs),
+        }
+        _tester_mark_lookup_pending(session)
 
-        next_best_rate = _tester_restore_success_rate(
-            session.tester_results.get(session.tester_best_move),
-            session.tester_result_dtype,
+        await send_tester_move_accepted(
+            websocket,
+            session,
+            session.board_encoded,
+            logs_since=logs_since,
         )
-        if session.tester_best_move is None:
-            _tester_append_log(session, "Game Over: no possible moves left.")
-            _tester_append_summary(session)
-        elif next_best_rate is not None and next_best_rate >= 1 - 3e-10:
-            _tester_append_log(
-                session,
-                "Congratulations! You're about to reach the target tile.",
-            )
-            _tester_append_summary(session)
-        else:
-            _tester_append_log(
-                session,
-                f"Total Goodness of Fit: {session.tester_goodness_of_fit:.4f}",
-                f"Maximum Combo: {session.tester_max_combo}",
-            )
-
-        metadata = build_move_animation_metadata(
-            direction_str,
-            board_encoded=old_board_encoded,
-            use_variant=session.use_variant,
-            spawn_index=num_pos_1d,
-            spawn_value=2**val_exp if val_exp > 0 else 0,
-        )
-        await send_tester_state(websocket, session, metadata, logs_since=logs_since)
         return True
 
     if action == Action.TESTER_EXPORT_LOG:

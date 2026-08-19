@@ -61,6 +61,7 @@ class GameSession:
         self.auth_session_id = None
         self.user_email = ""
         self.user_role = ""
+        self.user_entitlement_tier = "free"
         if client_id.startswith("gamer_"):
             game_state = SingletonConfig().config.get("game_state", [0, 0, 0])
         else:
@@ -93,6 +94,8 @@ class GameSession:
         self.speed = 100.0
         self.played_length = 0
         self.trainer_results = {}
+        self.trainer_results_board = np_u64(0)
+        self.trainer_query_handle = None
         self.use_variant = False
 
         self.recording_state = False
@@ -111,6 +114,7 @@ class GameSession:
         self.tester_results = {}
         self.tester_result_dtype = "?"
         self.tester_best_move = None
+        self.tester_results_board = np_u64(0)
         self.tester_text_visible = bool(
             SingletonConfig().config.get("dis_text", True)
         )
@@ -122,6 +126,10 @@ class GameSession:
         self.tester_ready = False
         self.tester_table_found = False
         self.tester_status = ""
+        self.tester_lookup_pending = False
+        self.tester_lookup_task = None
+        self.tester_query_handle = None
+        self.tester_post_lookup_context = None
         self.tester_record = np.zeros(
             4000, dtype="uint64,uint8,uint32,uint32,uint32,uint32"
         )

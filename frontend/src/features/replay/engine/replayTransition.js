@@ -194,6 +194,53 @@ function animationMetadata(board, direction, useVariant, spawnIndex, spawnValue)
   };
 }
 
+export function buildOptimisticMoveTransition(
+  board,
+  direction,
+  useVariant = false,
+  spawnRate4 = 0.1,
+  randomSource = Math.random,
+) {
+  if (!Array.isArray(board) || board.length < 16 || !REPLAY_DIRECTIONS.includes(direction)) {
+    return null;
+  }
+  const originalBoard = board.slice(0, 16).map((value) => Number(value) || 0);
+  const boardForMove = useVariant
+    ? originalBoard.slice()
+    : prepareClassic32kMerge(originalBoard, direction);
+  const movedBoard = moveBoard(boardForMove, direction, useVariant);
+  if (encodeBoard(movedBoard) === encodeBoard(boardForMove)) return null;
+
+  const emptyIndices = movedBoard.reduce((indices, value, index) => {
+    if (value === 0) indices.push(index);
+    return indices;
+  }, []);
+  if (!emptyIndices.length) return null;
+
+  const chooseRandom = typeof randomSource === 'function' ? randomSource : Math.random;
+  const positionRoll = Math.max(0, Math.min(0.999999999999, Number(chooseRandom()) || 0));
+  const spawnIndex = emptyIndices[Math.floor(positionRoll * emptyIndices.length)];
+  const normalizedRate4 = Math.max(0, Math.min(1, Number(spawnRate4) || 0));
+  const spawnValue = (Number(chooseRandom()) || 0) < normalizedRate4 ? 4 : 2;
+  const nextBoard = movedBoard.slice();
+  nextBoard[spawnIndex] = spawnValue;
+
+  return {
+    board: nextBoard,
+    boardEncoded: encodeBoard(nextBoard),
+    hex: boardHex(encodeBoard(nextBoard)),
+    spawnIndex,
+    spawnValue,
+    metadata: animationMetadata(
+      useVariant ? originalBoard : boardForMove,
+      direction,
+      useVariant,
+      spawnIndex,
+      spawnValue,
+    ),
+  };
+}
+
 export function buildStepTransition(replay, step, useVariant = false) {
   if (!replay || step < 0 || step >= replay.moveCount) return null;
   const boardEncoded = replay.boards[step];

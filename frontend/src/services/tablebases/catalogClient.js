@@ -1,7 +1,9 @@
-import { getBackendUrl } from '../runtime/backendUrl';
+import { getBackendUrl } from '../runtime/backendUrl.js';
+import { tablebaseResultCache } from './tablebaseResultCache.js';
 
 const VARIANT_PATTERNS = new Set(['2x4', '3x3', '3x4', '3x4441']);
 const CATEGORY_ORDER = ['4x4', 'variant'];
+let currentCatalogVersion = '';
 
 function normalizeTable(rawTable = {}) {
   return {
@@ -11,6 +13,37 @@ function normalizeTable(rawTable = {}) {
     dtype: String(rawTable.dtype || ''),
     spawnRate: Number(rawTable.spawn_rate ?? rawTable.spawnRate ?? 0.1),
   };
+}
+
+function deriveCatalogVersion(tables) {
+  const serialized = JSON.stringify(tables.map((table) => [
+    table.fullPattern,
+    table.dtype,
+    table.spawnRate,
+  ]));
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < serialized.length; index += 1) {
+    hash ^= serialized.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `derived-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+function resolveCatalogVersion(payload, tables) {
+  const serverVersion = payload?.catalog_version ?? payload?.catalogVersion ?? payload?.version;
+  return String(serverVersion || deriveCatalogVersion(tables));
+}
+
+function updateCatalogVersion(nextVersion) {
+  const normalizedVersion = String(nextVersion || '');
+  if (currentCatalogVersion && normalizedVersion !== currentCatalogVersion) {
+    tablebaseResultCache.clear();
+  }
+  currentCatalogVersion = normalizedVersion;
+}
+
+export function getCatalogVersion() {
+  return currentCatalogVersion;
 }
 
 export async function fetchTablebaseCatalog({ signal } = {}) {
@@ -23,8 +56,17 @@ export async function fetchTablebaseCatalog({ signal } = {}) {
     throw new Error(`Failed to load tablebase catalog: ${response.status}`);
   }
   const payload = await response.json();
-  const tables = Array.isArray(payload.tables) ? payload.tables : [];
-  return tables.map(normalizeTable);
+  const rawTables = Array.isArray(payload.tables) ? payload.tables : [];
+  const tables = rawTables.map(normalizeTable);
+  const catalogVersion = resolveCatalogVersion(payload, tables);
+  updateCatalogVersion(catalogVersion);
+  Object.defineProperty(tables, 'catalogVersion', {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: catalogVersion,
+  });
+  return tables;
 }
 
 export function groupTablebasesByPattern(tables = []) {

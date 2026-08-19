@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -50,7 +51,7 @@ public:
     PatternSpec spec_;
     bool is_variant_ = false;
     bool prefer_max_result_ = false;
-    int last_operation_index_ = 0;
+    std::atomic<int> last_operation_index_{0};
 };
 
 class AdvancedBookReader {
@@ -75,7 +76,7 @@ public:
     FormationAD::MaskerContext masker_;
     bool is_variant_ = false;
     bool prefer_max_result_ = false;
-    int last_operation_index_ = 0;
+    std::atomic<int> last_operation_index_{0};
 };
 
 class EXADBookReader {
@@ -100,7 +101,7 @@ public:
     FormationAD::MaskerContext masker_;
     bool is_variant_ = false;
     bool prefer_max_result_ = false;
-    int last_operation_index_ = 0;
+    std::atomic<int> last_operation_index_{0};
 };
 
 class EXBookReader {
@@ -123,7 +124,7 @@ public:
 public:
     PatternSpec spec_;
     bool is_variant_ = false;
-    int last_operation_index_ = 0;
+    std::atomic<int> last_operation_index_{0};
 };
 
 class BCBookReader {
@@ -148,7 +149,7 @@ public:
     PatternSpec spec_;
     uint32_t target_rank_ = 8U;
     bool is_variant_ = false;
-    int last_operation_index_ = 0;
+    std::atomic<int> last_operation_index_{0};
 };
 
 namespace BCRuntime {

@@ -622,6 +622,55 @@ def finalize_reservation(reservation: TokenReservation | None, *, actual_operati
         )
 
 
+def cancel_reservation(
+    reservation: TokenReservation | None,
+    *,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    if reservation is None:
+        return
+    with auth_db() as db:
+        before = _ensure_token_account(db, reservation.user_id)
+        db.execute(
+            """
+            UPDATE token_accounts
+            SET bonus_balance_units = bonus_balance_units + ?,
+                paid_balance_units = paid_balance_units + ?,
+                updated_at = ?
+            WHERE user_id = ?
+            """,
+            (
+                reservation.reserved_bonus_units,
+                reservation.reserved_paid_units,
+                iso(),
+                reservation.user_id,
+            ),
+        )
+        after = _ensure_token_account(db, reservation.user_id)
+        _insert_ledger(
+            db,
+            user_id=reservation.user_id,
+            session_id=reservation.session_id,
+            event_type="cancel_reservation",
+            operation_key=reservation.operation_key,
+            table_pattern=reservation.table_pattern,
+            table_multiplier_units=reservation.table_multiplier_units,
+            base_cost_units=0,
+            final_cost_units=0,
+            bonus_delta_units=reservation.reserved_bonus_units,
+            paid_delta_units=reservation.reserved_paid_units,
+            balance_before_units=_balance_units(before),
+            balance_after_units=_balance_units(after),
+            metadata={
+                "reservation_id": reservation.ledger_id,
+                "reserved_units": reservation.reserved_units,
+                "reason": str(reason or "cancelled")[:120],
+                **(metadata or {}),
+            },
+        )
+
+
 def consume_operation_tokens(
     *,
     user_id: int | None,

@@ -4,10 +4,16 @@ import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { useAuthState } from '../../../services/auth/authState';
 import {
   fetchTablebaseCatalog,
+  getCatalogVersion,
   getCatalogTargets,
   getCatalogTargetsForPattern,
   groupTablebasePatternsByCategory,
 } from '../../../services/tablebases/catalogClient';
+import {
+  clearTablebaseResultCache,
+  getCachedTablebaseResult,
+  setCachedTablebaseResult,
+} from '../../../services/tablebases/tablebaseResultCache';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { getStableWsClientId } from '../../../services/ws/clientIds';
 import { isVariantPattern } from '../../../utils/patternCategories';
@@ -58,6 +64,7 @@ export function useTrainerSession(activeRef) {
   const patternCategories = ref(fallbackPatternCategories);
   const availableTargets = ref(['64', '128', '256', '512', '1024', '2048', '4096', '8192']);
   const catalogTables = ref([]);
+  const catalogVersion = ref('');
   const patternMenuOpen = ref(false);
   const activePatternCategory = ref(Object.keys(fallbackPatternCategories)[0] || '');
   const patternMenuRoot = ref(null);
@@ -83,6 +90,7 @@ export function useTrainerSession(activeRef) {
   let demoTimer = null;
   let resultsStaleTimer = null;
   let resultsPlaceholderTimer = null;
+  let tablebaseRetryTimer = null;
   const resultsRefreshPhase = ref('idle');
 
   const recordStep = ref(0);
@@ -359,6 +367,7 @@ export function useTrainerSession(activeRef) {
   const protectedActions = new Set([
     'TRAINER_SET_FILEPATH',
     'TRAINER_GET_RESULTS',
+    'TABLEBASE_QUERY',
     'TRAINER_DEFAULT',
     'TRAINER_MOVE',
     'TRAINER_MANUAL_SPAWN',
@@ -380,6 +389,7 @@ export function useTrainerSession(activeRef) {
     try {
       const tables = await fetchTablebaseCatalog();
       catalogTables.value = tables;
+      catalogVersion.value = tables.catalogVersion || getCatalogVersion();
       const nextCategories = groupTablebasePatternsByCategory(tables);
       const patterns = Object.values(nextCategories).flat();
       if (patterns.length) {
@@ -397,6 +407,13 @@ export function useTrainerSession(activeRef) {
         syncActivePatternCategory();
         applyTrainerJump();
         maybeAutoApplyDefaultTablebase();
+        if (
+          tablebasePath.value === 'loaded'
+          && currentBoardHex.value
+          && resultsBoardHex.value !== currentBoardHex.value
+        ) {
+          queryResults('auto');
+        }
       }
     } catch (error) {
       console.error(error);
@@ -548,7 +565,6 @@ export function useTrainerSession(activeRef) {
     if (recordOpen.value || (reason !== 'step' && !showResults.value) || awaitingSpawn.value) return null;
     const boardHex = currentBoardHex.value || hexInput.value;
     if (!boardHex) return null;
-    if (reason !== 'manual' && resultsBoardHex.value === boardHex) return null;
     if (hasPendingResultsForBoard(boardHex)) return null;
     if (!isAuthenticated.value) {
       if (reason === 'auto') return null;
@@ -556,9 +572,37 @@ export function useTrainerSession(activeRef) {
     }
 
     const requestId = `${clientId}_${++nextResultsRequestId}`;
+    if (tablebaseRetryTimer) {
+      window.clearTimeout(tablebaseRetryTimer);
+      tablebaseRetryTimer = null;
+    }
+    pendingResultsRequests.clear();
     pendingResultsRequests.set(requestId, { boardHex, reason });
-    startResultsRefresh();
-    triggerAction('TRAINER_GET_RESULTS', { request_id: requestId });
+    const fullPattern = loadedTablebaseFullPattern.value || currentPatternDisplay.value;
+    const version = catalogVersion.value || getCatalogVersion();
+    const cached = version && fullPattern
+      ? getCachedTablebaseResult({ catalogVersion: version, fullPattern, boardHex })
+      : null;
+    if (cached) {
+      tableResult.value = {
+        dtype: cached.dtype || '?',
+        results: cached.results || {},
+      };
+      resultsBoardHex.value = boardHex;
+      finishResultsRefresh();
+      if (queuedStepCount.value > 0 || demoActive.value) {
+        window.queueMicrotask(pumpQueuedSteps);
+      }
+    } else {
+      startResultsRefresh();
+    }
+    triggerAction('TABLEBASE_QUERY', {
+      page: 'trainer',
+      query_id: requestId,
+      catalog_version: version,
+      full_pattern: fullPattern,
+      board_hex: boardHex,
+    });
     return requestId;
   };
 
@@ -591,6 +635,18 @@ export function useTrainerSession(activeRef) {
   };
 
   const handleMessage = async (data) => {
+    if (
+      ['TOKEN_REQUIRED', 'AUTH_REQUIRED'].includes(data.action)
+      && pendingResultsRequests.size > 0
+    ) {
+      pendingResultsRequests.clear();
+      clearTablebaseResultCache();
+      invalidateResults({ clearDisplay: true });
+      finishResultsRefresh();
+      clearStepQueue();
+      return;
+    }
+
     if (data.action === 'RECORDING_STARTED') {
       recordingState.value = true;
       recordPlaybackLoaded.value = false;
@@ -681,11 +737,17 @@ export function useTrainerSession(activeRef) {
       return;
     }
 
-    if (data.action === 'TRAINER_RESULTS') {
+    if (data.action === 'TRAINER_RESULTS' || (
+      data.action === 'TABLEBASE_QUERY_RESULT' && data.data?.page === 'trainer'
+    )) {
       const requestId = data.data.request_id;
       const resultBoardHex = data.data.board_hex || currentBoardHex.value;
       if (requestId && pendingResultsRequests.has(requestId)) {
         pendingResultsRequests.delete(requestId);
+      }
+      if (data.data?.code) {
+        if (resultBoardHex === currentBoardHex.value) finishResultsRefresh();
+        return;
       }
       if (resultBoardHex !== currentBoardHex.value) {
         return;
@@ -693,6 +755,25 @@ export function useTrainerSession(activeRef) {
       if (recordOpen.value) {
         finishResultsRefresh();
         return;
+      }
+      const resultCatalogVersion = data.data.catalog_version || catalogVersion.value;
+      const resultFullPattern = data.data.full_pattern
+        || loadedTablebaseFullPattern.value
+        || currentPatternDisplay.value;
+      const activeFullPattern = loadedTablebaseFullPattern.value || currentPatternDisplay.value;
+      if (resultCatalogVersion && resultCatalogVersion !== catalogVersion.value) {
+        loadCatalog();
+        return;
+      }
+      if (resultFullPattern && activeFullPattern && resultFullPattern !== activeFullPattern) {
+        return;
+      }
+      if (resultCatalogVersion && resultFullPattern && resultBoardHex) {
+        setCachedTablebaseResult({
+          catalogVersion: resultCatalogVersion,
+          fullPattern: resultFullPattern,
+          boardHex: resultBoardHex,
+        }, data.data);
       }
       finishResultsRefresh();
       replayResultsActive.value = false;
@@ -727,6 +808,46 @@ export function useTrainerSession(activeRef) {
     if (data.action === 'TRAINER_STEP_FAILED') {
       demoActive.value = false;
       clearStepQueue();
+      return;
+    }
+
+    if (data.action === 'TABLEBASE_PREFETCH' && data.data?.page === 'trainer') {
+      const resultCatalogVersion = String(data.data.catalog_version || '');
+      const resultFullPattern = String(data.data.full_pattern || '');
+      const activeFullPattern = loadedTablebaseFullPattern.value || currentPatternDisplay.value;
+      if (
+        !resultCatalogVersion
+        || !resultFullPattern
+        || resultCatalogVersion !== catalogVersion.value
+        || resultFullPattern !== activeFullPattern
+      ) {
+        return;
+      }
+      for (const entry of data.data.entries || []) {
+        if (!entry?.board_hex) continue;
+        setCachedTablebaseResult({
+          catalogVersion: resultCatalogVersion,
+          fullPattern: resultFullPattern,
+          boardHex: entry.board_hex,
+        }, entry);
+      }
+      return;
+    }
+
+    if (data.action === 'TABLEBASE_BUSY' && data.data?.page === 'trainer') {
+      const requestId = data.data?.query_id;
+      if (requestId) pendingResultsRequests.delete(requestId);
+      const retryBoardHex = String(data.data?.board_hex || currentBoardHex.value || '');
+      const retryAfterMs = Math.max(250, Number(data.data?.retry_after_ms) || 750);
+      if (retryBoardHex && retryBoardHex === currentBoardHex.value) {
+        if (tablebaseRetryTimer) window.clearTimeout(tablebaseRetryTimer);
+        tablebaseRetryTimer = window.setTimeout(() => {
+          tablebaseRetryTimer = null;
+          if (retryBoardHex === currentBoardHex.value) queryResults('auto');
+        }, retryAfterMs);
+      } else {
+        finishResultsRefresh();
+      }
       return;
     }
 
@@ -766,6 +887,10 @@ export function useTrainerSession(activeRef) {
     finishResultsRefresh();
     pendingResultsRequests.clear();
     clearStepQueue();
+    if (tablebaseRetryTimer) {
+      window.clearTimeout(tablebaseRetryTimer);
+      tablebaseRetryTimer = null;
+    }
     client?.disconnect();
     client = null;
     wsStatus.value = 'disconnected';
@@ -844,6 +969,7 @@ export function useTrainerSession(activeRef) {
   const applyTablebase = ({ loadDefault = false } = {}) => {
     if (!patternType.value || !targetValue.value) return;
     const fullPattern = `${patternType.value}_${targetValue.value}`;
+    clearTablebaseResultCache();
     recordPlaybackLoaded.value = false;
     replayResultsActive.value = false;
     pendingResultsRequests.clear();
@@ -861,6 +987,7 @@ export function useTrainerSession(activeRef) {
       playRecordStep(1);
       return;
     }
+
     queuedStepCount.value += 1;
     pumpQueuedSteps();
   };

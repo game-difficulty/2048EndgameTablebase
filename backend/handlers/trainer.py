@@ -32,6 +32,11 @@ from ..trainer_helpers import (
 from ..webview_api import Api
 
 
+def _clear_trainer_results(session: GameSession) -> None:
+    session.trainer_results = {}
+    session.trainer_results_board = np_u64(0)
+
+
 def _set_random_trainer_board(session: GameSession, path_list) -> None:
     random_board = session.ensure_book_reader().get_random_state(
         path_list, session.current_pattern
@@ -42,7 +47,7 @@ def _set_random_trainer_board(session: GameSession, path_list) -> None:
     session.move_history = [None]
     session.moved = 0
     session.played_length = 0
-    session.trainer_results = {}
+    _clear_trainer_results(session)
 
 
 async def handle_trainer_action(
@@ -68,7 +73,7 @@ async def handle_trainer_action(
         session.move_history = [None]
         session.played_length = 0
         session.moved = 0
-        session.trainer_results = {}
+        _clear_trainer_results(session)
         path_list = build_filepath_map_entry(full_pattern, spawn_rate4)
         session.ensure_book_reader().dispatch(path_list, base_pattern, target)
         session.current_pattern = full_pattern
@@ -82,7 +87,6 @@ async def handle_trainer_action(
                 print("TRAINER_SET_FILEPATH default err:", e)
 
         await manager.send_state(websocket)
-        await send_trainer_results(session, websocket)
         return True
 
     if action == Action.TRAINER_GET_RESULTS:
@@ -104,7 +108,11 @@ async def handle_trainer_action(
         return True
 
     if action == Action.TRAINER_STEP:
-        if session.trainer_results:
+        if (
+            session.trainer_results
+            and np_u64(getattr(session, "trainer_results_board", 0))
+            == np_u64(session.board_encoded)
+        ):
             move = list(session.trainer_results.keys())[0]
             val = session.trainer_results.get(move)
             if isinstance(val, (int, float)) and val:
@@ -171,6 +179,7 @@ async def handle_trainer_action(
                 new_board = np_u64(new_board)
 
         session.board_encoded = np_u64(new_board)
+        _clear_trainer_results(session)
         session.history.append((session.board_encoded, session.score))
         session.move_history.append(direction_str)
         session.played_length = len(session.history) - 1
@@ -195,7 +204,6 @@ async def handle_trainer_action(
             try:
                 _set_random_trainer_board(session, path_list)
                 await manager.send_state(websocket)
-                await send_trainer_results(session, websocket)
             except Exception as e:
                 print("TRAINER_DEFAULT err:", e)
         return True
@@ -211,6 +219,7 @@ async def handle_trainer_action(
             if board_2d[row, col] == 0:
                 board_2d[row, col] = val
                 session.board_encoded = np_u64(encode_board(board_2d))
+                _clear_trainer_results(session)
                 session.moved = 0
                 session.history.append((session.board_encoded, session.score))
                 session.move_history.append("spawn")
@@ -233,7 +242,7 @@ async def handle_trainer_action(
         session.board_encoded = board_encoded
         session.score = 0
         session.moved = 0
-        session.trainer_results = {}
+        _clear_trainer_results(session)
         session.history = [(session.board_encoded, session.score)]
         session.move_history = [None]
         session.played_length = 0
@@ -263,7 +272,7 @@ async def handle_trainer_action(
         session.board_encoded, session.score = session.history[-1]
         session.board_encoded = np_u64(session.board_encoded)
         session.played_length = len(session.history) - 1
-        session.trainer_results = {}
+        _clear_trainer_results(session)
         last_move = session.move_history[-1] if session.move_history else None
         session.moved = (
             1
@@ -283,6 +292,7 @@ async def handle_trainer_action(
         board_2d[row, col] = int(val)
 
         session.board_encoded = np_u64(encode_board(board_2d))
+        _clear_trainer_results(session)
         session.history = [(session.board_encoded, session.score)]
         session.move_history = [None]
         session.played_length = 0
@@ -305,7 +315,7 @@ async def handle_trainer_action(
             )
             session.score = 0
             session.moved = 0
-            session.trainer_results = {}
+            _clear_trainer_results(session)
             session.history = [(session.board_encoded, session.score)]
             session.move_history = [None]
             session.played_length = 0
@@ -332,7 +342,7 @@ async def handle_trainer_action(
         path = payload.get("path")
         if path and os.path.exists(path):
             _clear_record_replay(session)
-            session.trainer_results = {}
+            _clear_trainer_results(session)
             session.moved = 0
             filesize = os.path.getsize(path)
             if filesize % 17 == 0:

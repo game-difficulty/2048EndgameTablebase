@@ -252,6 +252,17 @@ nb::tuple reader_result_to_python(const ReaderMoveResult &result) {
     return nb::make_tuple(entries, result.success_rate_dtype);
 }
 
+template <typename Reader>
+ReaderMoveResult reader_move_without_gil(
+    Reader &reader,
+    const std::vector<std::vector<int>> &board,
+    const std::vector<std::pair<std::string, std::string>> &path_list,
+    const std::string &pattern_full,
+    int64_t nums_adjust) {
+    nb::gil_scoped_release release;
+    return reader.move_on_dic(board, path_list, pattern_full, nums_adjust);
+}
+
 nb::dict ex_compress_stats_to_python(const EXCompressedResult::CompressStats &stats) {
     nb::dict result;
     result["original_bytes"] = stats.original_bytes;
@@ -408,7 +419,8 @@ NB_MODULE(formation_core, m) {
                const std::vector<std::pair<std::string, std::string>> &path_list,
                const std::string &pattern_full,
                int64_t nums_adjust) {
-                return reader_result_to_python(reader.move_on_dic(board, path_list, pattern_full, nums_adjust));
+                return reader_result_to_python(reader_move_without_gil(
+                    reader, board, path_list, pattern_full, nums_adjust));
             },
             "board"_a,
             "path_list"_a,
@@ -420,7 +432,8 @@ NB_MODULE(formation_core, m) {
             &ClassicBookReader::get_random_state,
             "path_list"_a,
             "pattern_full"_a,
-            "spawn_rate4"_a
+            "spawn_rate4"_a,
+            nb::call_guard<nb::gil_scoped_release>()
         );
 
     nb::class_<AdvancedBookReader>(m, "AdvancedBookReader")
@@ -432,7 +445,8 @@ NB_MODULE(formation_core, m) {
                const std::vector<std::pair<std::string, std::string>> &path_list,
                const std::string &pattern_full,
                int64_t nums_adjust) {
-                return reader_result_to_python(reader.move_on_dic(board, path_list, pattern_full, nums_adjust));
+                return reader_result_to_python(reader_move_without_gil(
+                    reader, board, path_list, pattern_full, nums_adjust));
             },
             "board"_a,
             "path_list"_a,
@@ -444,7 +458,8 @@ NB_MODULE(formation_core, m) {
             &AdvancedBookReader::get_random_state,
             "path_list"_a,
             "pattern_full"_a,
-            "spawn_rate4"_a
+            "spawn_rate4"_a,
+            nb::call_guard<nb::gil_scoped_release>()
         );
 
     nb::class_<EXADBookReader>(m, "EXADBookReader")
@@ -456,7 +471,8 @@ NB_MODULE(formation_core, m) {
                const std::vector<std::pair<std::string, std::string>> &path_list,
                const std::string &pattern_full,
                int64_t nums_adjust) {
-                return reader_result_to_python(reader.move_on_dic(board, path_list, pattern_full, nums_adjust));
+                return reader_result_to_python(reader_move_without_gil(
+                    reader, board, path_list, pattern_full, nums_adjust));
             },
             "board"_a,
             "path_list"_a,
@@ -468,7 +484,8 @@ NB_MODULE(formation_core, m) {
             &EXADBookReader::get_random_state,
             "path_list"_a,
             "pattern_full"_a,
-            "spawn_rate4"_a
+            "spawn_rate4"_a,
+            nb::call_guard<nb::gil_scoped_release>()
         );
 
     nb::class_<EXBookReader>(m, "EXBookReader")
@@ -480,7 +497,8 @@ NB_MODULE(formation_core, m) {
                const std::vector<std::pair<std::string, std::string>> &path_list,
                const std::string &pattern_full,
                int64_t nums_adjust) {
-                return reader_result_to_python(reader.move_on_dic(board, path_list, pattern_full, nums_adjust));
+                return reader_result_to_python(reader_move_without_gil(
+                    reader, board, path_list, pattern_full, nums_adjust));
             },
             "board"_a,
             "path_list"_a,
@@ -492,7 +510,8 @@ NB_MODULE(formation_core, m) {
             &EXBookReader::get_random_state,
             "path_list"_a,
             "pattern_full"_a,
-            "spawn_rate4"_a
+            "spawn_rate4"_a,
+            nb::call_guard<nb::gil_scoped_release>()
         );
 
     nb::class_<BCBookReader>(m, "BCBookReader")
@@ -504,7 +523,8 @@ NB_MODULE(formation_core, m) {
                const std::vector<std::pair<std::string, std::string>> &path_list,
                const std::string &pattern_full,
                int64_t nums_adjust) {
-                return reader_result_to_python(reader.move_on_dic(board, path_list, pattern_full, nums_adjust));
+                return reader_result_to_python(reader_move_without_gil(
+                    reader, board, path_list, pattern_full, nums_adjust));
             },
             "board"_a,
             "path_list"_a,
@@ -517,7 +537,8 @@ NB_MODULE(formation_core, m) {
             "path_list"_a,
             "pattern_full"_a,
             "spawn_rate4"_a,
-            "nums_adjust"_a = 0
+            "nums_adjust"_a = 0,
+            nb::call_guard<nb::gil_scoped_release>()
         );
 
     nb::class_<PatternLayer>(m, "PatternLayer")
