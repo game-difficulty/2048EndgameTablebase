@@ -68,7 +68,7 @@
 
     <div
       v-if="accountMenuOpen && authUser"
-      class="fixed right-3 top-[3.75rem] z-[110] w-[18rem] rounded-2xl border border-border-main bg-bg-card/98 p-4 text-text-main shadow-[0_20px_70px_rgba(15,23,42,0.35)]"
+      class="fixed right-3 top-[3.75rem] z-[300] w-[18rem] rounded-2xl border border-border-main bg-bg-card/98 p-4 text-text-main shadow-[0_20px_70px_rgba(15,23,42,0.35)]"
       data-account-menu
     >
       <div class="account-menu-head">
