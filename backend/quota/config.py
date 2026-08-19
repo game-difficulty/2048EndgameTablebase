@@ -38,6 +38,8 @@ def table_multiplier_config() -> dict[str, Any]:
                 {"prefix": "3x4441", "multiplier": 3},
                 {"prefix": "free9", "multiplier": 3},
                 {"prefix": "free10", "multiplier": 5},
+                {"prefix": "free11", "multiplier": 50},
+                {"prefix": "4442f", "multiplier": 50},
             ],
         },
     )

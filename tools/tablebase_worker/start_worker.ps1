@@ -15,7 +15,19 @@ if (-not (Test-Path -LiteralPath $ResolvedConfig -PathType Leaf)) {
     throw "Worker config not found: $ResolvedConfig"
 }
 if (-not $env:TABLEBASE_WORKER_TOKEN) {
-    throw "TABLEBASE_WORKER_TOKEN is not set in this process."
+    $env:TABLEBASE_WORKER_TOKEN = [System.Environment]::GetEnvironmentVariable(
+        "TABLEBASE_WORKER_TOKEN",
+        "User"
+    )
+}
+if (-not $env:TABLEBASE_WORKER_TOKEN) {
+    $env:TABLEBASE_WORKER_TOKEN = [System.Environment]::GetEnvironmentVariable(
+        "TABLEBASE_WORKER_TOKEN",
+        "Machine"
+    )
+}
+if (-not $env:TABLEBASE_WORKER_TOKEN) {
+    throw "TABLEBASE_WORKER_TOKEN is not set in the process, user, or machine environment."
 }
 
 Set-Location -LiteralPath $ProjectRoot

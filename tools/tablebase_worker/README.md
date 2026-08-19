@@ -51,6 +51,20 @@
    tools/tablebase_worker/start_worker.ps1 -PythonExe C:/path/to/python.exe
    ```
 
+### Windows 常驻运行
+
+生产环境建议为当前 Windows 用户创建“登录时启动”的计划任务，动作使用隐藏窗口运行 `start_worker.ps1`，并配置失败后每分钟重启。密钥可保存为用户级环境变量；启动脚本会依次读取当前进程、用户级和机器级 `TABLEBASE_WORKER_TOKEN`：
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "TABLEBASE_WORKER_TOKEN",
+  "replace-with-server-secret",
+  "User"
+)
+```
+
+计划任务应设置为“已有实例运行时不启动新实例”，避免同一 `worker_id` 重复连接。用户未登录时 Worker 不运行；若要求无人登录也提供服务，应改用专用 Windows 服务账号和 Windows 服务管理器，并将密钥放入该服务账号的安全环境。
+
 ## 运行行为
 
 - 连接地址默认为 `wss://2048tables.online/worker-ws/tablebase`，不需要开放家庭网络入站端口。

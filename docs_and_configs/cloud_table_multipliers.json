@@ -7,6 +7,8 @@
     { "prefix": "3x3", "multiplier": 1 },
     { "prefix": "3x4441", "multiplier": 3 },
     { "prefix": "free9", "multiplier": 3 },
-    { "prefix": "free10", "multiplier": 5 }
+    { "prefix": "free10", "multiplier": 5 },
+    { "prefix": "free11", "multiplier": 50 },
+    { "prefix": "4442f", "multiplier": 50 }
   ]
 }
