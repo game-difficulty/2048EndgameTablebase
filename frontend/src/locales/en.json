@@ -414,6 +414,7 @@
       "downloadNetwork": "Result download failed. Please try again later; if the result has expired, run the analysis again.",
       "authRequired": "Please log in again before running analysis.",
       "insufficientTokens": "Insufficient token balance for this analysis.",
+      "tablebaseUnavailable": "The selected tablebase is temporarily unavailable. Please retry later; no tokens were charged.",
       "expired": "The analysis result has expired or the service was restarted. Please run the analysis again.",
       "notReady": "The analysis job is not finished yet.",
       "generic": "Analysis failed. Please try again."
@@ -558,6 +559,7 @@
   "status": {
     "connecting": "Connecting...",
     "connected": "Connected",
-    "disconnected": "Disconnected"
+    "disconnected": "Disconnected",
+    "tablebaseUnavailable": "Tablebase unavailable"
   }
 }

@@ -21,10 +21,15 @@ from ..animation import build_move_animation_metadata
 from ..session import GameSession
 from ..session import np_u64, u64
 from ..state import ConnectionManager
-from ..tablebase_catalog import build_filepath_map_entry
+from ..remote_workers.errors import RemoteTablebaseError
+from ..remote_workers.registry import remote_worker_registry
+from ..tablebase_catalog import (
+    build_filepath_map_entry,
+    resolve_configured_tablebase,
+)
 from ..trainer_helpers import (
     _clear_record_replay,
-    _compute_spawns,
+    compute_spawns_async,
     _decode_record_rates,
     _record_state,
     send_trainer_results,
@@ -37,10 +42,21 @@ def _clear_trainer_results(session: GameSession) -> None:
     session.trainer_results_board = np_u64(0)
 
 
-def _set_random_trainer_board(session: GameSession, path_list) -> None:
-    random_board = session.ensure_book_reader().get_random_state(
-        path_list, session.current_pattern
-    )
+async def _set_random_trainer_board(session: GameSession, path_list) -> None:
+    if session.tablebase_provider_kind == "remote":
+        response = await remote_worker_registry.random_state(
+            full_pattern=session.current_pattern,
+            pattern=str(session.pattern_settings[0]),
+            target=str(session.pattern_settings[1]),
+        )
+        random_board = response.get("board") or response.get("board_hex")
+        if not isinstance(random_board, (str, int)):
+            raise RuntimeError("Remote tablebase returned an invalid random state.")
+        random_board = int(random_board, 16) if isinstance(random_board, str) else random_board
+    else:
+        random_board = session.ensure_book_reader().get_random_state(
+            path_list, session.current_pattern
+        )
     session.board_encoded = np_u64(random_board)
     session.score = 0
     session.history = [(session.board_encoded, session.score)]
@@ -74,17 +90,39 @@ async def handle_trainer_action(
         session.played_length = 0
         session.moved = 0
         _clear_trainer_results(session)
+        descriptor = resolve_configured_tablebase(full_pattern, spawn_rate4)
+        provider_kind = (
+            str(descriptor.get("_provider")) if descriptor else "unavailable"
+        )
         path_list = build_filepath_map_entry(full_pattern, spawn_rate4)
-        session.ensure_book_reader().dispatch(path_list, base_pattern, target)
+        if provider_kind == "local":
+            session.ensure_book_reader().dispatch(path_list, base_pattern, target)
         session.current_pattern = full_pattern
         session.pattern_settings = [base_pattern, target]
         session.use_variant = base_pattern in category_info.get("variant", [])
+        session.tablebase_provider_kind = provider_kind
+        session.success_rate_dtype = str(
+            descriptor.get("dtype") if descriptor else "?"
+        )
+        session.tablebase_status = (
+            "loaded"
+            if descriptor
+            and (
+                provider_kind == "local"
+                or bool(descriptor.get("_available", False))
+            )
+            else "temporarily_unavailable"
+            if provider_kind == "remote"
+            else "not_found"
+        )
 
-        if payload.get("load_default") and path_list:
+        if payload.get("load_default") and session.tablebase_status == "loaded":
             try:
-                _set_random_trainer_board(session, path_list)
-            except Exception as e:
-                print("TRAINER_SET_FILEPATH default err:", e)
+                await _set_random_trainer_board(session, path_list)
+            except RemoteTablebaseError:
+                session.tablebase_status = "temporarily_unavailable"
+            except Exception:
+                session.tablebase_status = "not_found"
 
         await manager.send_state(websocket)
         return True
@@ -161,7 +199,24 @@ async def handle_trainer_action(
             session.moved = 1
         elif session.spawn_mode in (1, 2):
             session.moved = 0
-            spawns = _compute_spawns(session, new_board)
+            try:
+                spawns = await compute_spawns_async(session, new_board)
+            except RemoteTablebaseError as exc:
+                session.tablebase_status = "temporarily_unavailable"
+                await websocket.send_json(
+                    {
+                        "action": Message.TABLEBASE_QUERY_RESULT,
+                        "data": {
+                            "page": "trainer",
+                            "full_pattern": session.current_pattern,
+                            "board_hex": format(int(new_board), "016x"),
+                            "results": {},
+                            "dtype": "?",
+                            **exc.payload,
+                        },
+                    }
+                )
+                return True
             if spawns:
                 key = (
                     max(spawns, key=spawns.get)
@@ -200,12 +255,29 @@ async def handle_trainer_action(
     if action == Action.TRAINER_DEFAULT:
         _clear_record_replay(session)
         path_list = build_filepath_map_entry(session.current_pattern, spawn_rate4)
-        if path_list:
+        if session.tablebase_provider_kind == "remote" or path_list:
             try:
-                _set_random_trainer_board(session, path_list)
+                await _set_random_trainer_board(session, path_list)
+                session.tablebase_status = "loaded"
                 await manager.send_state(websocket)
-            except Exception as e:
-                print("TRAINER_DEFAULT err:", e)
+            except RemoteTablebaseError as exc:
+                session.tablebase_status = "temporarily_unavailable"
+                await manager.send_state(websocket)
+                await websocket.send_json(
+                    {
+                        "action": Message.TABLEBASE_QUERY_RESULT,
+                        "data": {
+                            "page": "trainer",
+                            "full_pattern": session.current_pattern,
+                            "results": {},
+                            "dtype": "?",
+                            **exc.payload,
+                        },
+                    }
+                )
+            except Exception:
+                session.tablebase_status = "not_found"
+                await manager.send_state(websocket)
         return True
 
     if action == Action.TRAINER_MANUAL_SPAWN:

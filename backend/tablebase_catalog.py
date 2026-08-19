@@ -7,6 +7,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .remote_workers.config import configured_remote_tables
+from .remote_workers.registry import remote_worker_registry
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MANIFEST_PATH = PROJECT_ROOT / "docs_and_configs" / "cloud_tablebases.json"
@@ -21,7 +24,7 @@ TABLE_EXTENSIONS = (
     ".exadzbook",
     ".bccmp",
 )
-_CATALOG_VERSION_CACHE: tuple[float, str] = (0.0, "")
+_CATALOG_VERSION_CACHE: tuple[float, str, int] = (0.0, "", -1)
 
 
 def _manifest_path() -> Path:
@@ -72,7 +75,7 @@ def _path_has_table_file(path: Path, full_pattern: str) -> bool:
     return False
 
 
-def _iter_available_entries() -> list[dict[str, Any]]:
+def _iter_local_entries() -> list[dict[str, Any]]:
     manifest = _load_manifest()
     root = _catalog_root(manifest)
     entries: list[dict[str, Any]] = []
@@ -86,8 +89,28 @@ def _iter_available_entries() -> list[dict[str, Any]]:
             continue
         entry["_full_pattern"] = full_pattern
         entry["_absolute_path"] = str(path.resolve())
+        entry["_provider"] = "local"
         entries.append(entry)
     return entries
+
+
+def _iter_remote_entries(*, online_only: bool) -> list[dict[str, Any]]:
+    online_tables = remote_worker_registry.online_tables()
+    entries: list[dict[str, Any]] = []
+    for full_pattern, raw_entry in configured_remote_tables().items():
+        online = full_pattern in online_tables
+        if online_only and not online:
+            continue
+        entry = dict(raw_entry)
+        entry["_full_pattern"] = full_pattern
+        entry["_provider"] = "remote"
+        entry["_available"] = online
+        entries.append(entry)
+    return entries
+
+
+def _iter_available_entries() -> list[dict[str, Any]]:
+    return [*_iter_local_entries(), *_iter_remote_entries(online_only=True)]
 
 
 def get_available_tablebases() -> list[dict[str, Any]]:
@@ -108,8 +131,13 @@ def get_available_tablebases() -> list[dict[str, Any]]:
 def get_catalog_version() -> str:
     global _CATALOG_VERSION_CACHE
     now = time.monotonic()
-    expires_at, cached_version = _CATALOG_VERSION_CACHE
-    if cached_version and expires_at > now:
+    remote_epoch = remote_worker_registry.availability_epoch
+    expires_at, cached_version, cached_remote_epoch = _CATALOG_VERSION_CACHE
+    if (
+        cached_version
+        and expires_at > now
+        and cached_remote_epoch == remote_epoch
+    ):
         return cached_version
     manifest_path = _manifest_path()
     version_parts: list[Any] = [get_available_tablebases()]
@@ -117,13 +145,14 @@ def get_catalog_version() -> str:
         version_parts.append(manifest_path.stat().st_mtime_ns)
     except OSError:
         version_parts.append(0)
-    for entry in _iter_available_entries():
+    for entry in _iter_local_entries():
         try:
             version_parts.append(
                 (entry["_full_pattern"], Path(entry["_absolute_path"]).stat().st_mtime_ns)
             )
         except OSError:
             continue
+    version_parts.append(("remote_availability_epoch", remote_epoch))
     encoded = json.dumps(
         version_parts,
         ensure_ascii=True,
@@ -131,7 +160,7 @@ def get_catalog_version() -> str:
         sort_keys=True,
     ).encode("utf-8")
     version = hashlib.sha256(encoded).hexdigest()[:16]
-    _CATALOG_VERSION_CACHE = (now + 5.0, version)
+    _CATALOG_VERSION_CACHE = (now + 5.0, version, remote_epoch)
     return version
 
 
@@ -153,12 +182,36 @@ def resolve_tablebase(
     return None
 
 
+def resolve_configured_tablebase(
+    full_pattern: str,
+    spawn_rate: float | None = None,
+) -> dict[str, Any] | None:
+    entry = resolve_tablebase(full_pattern, spawn_rate)
+    if entry is not None:
+        return entry
+    target_pattern = str(full_pattern or "").strip()
+    for remote_entry in _iter_remote_entries(online_only=False):
+        if remote_entry["_full_pattern"] != target_pattern:
+            continue
+        if spawn_rate is not None and abs(
+            float(remote_entry.get("spawn_rate", 0.1)) - float(spawn_rate)
+        ) > 1e-4:
+            continue
+        return remote_entry
+    return None
+
+
+def tablebase_provider_kind(full_pattern: str) -> str | None:
+    entry = resolve_configured_tablebase(full_pattern)
+    return str(entry.get("_provider")) if entry else None
+
+
 def build_filepath_map_entry(
     full_pattern: str,
     spawn_rate: float | None = None,
 ) -> list[tuple[str, str]]:
     entry = resolve_tablebase(full_pattern, spawn_rate)
-    if not entry:
+    if not entry or entry.get("_provider") != "local":
         return []
     return [(str(entry["_absolute_path"]), str(entry.get("dtype") or "uint32"))]
 

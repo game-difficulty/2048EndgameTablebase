@@ -193,6 +193,7 @@ import { useI18n } from 'vue-i18n';
 import UiSelect from '../../../components/UiSelect.vue';
 import { downloadResponse, pickBrowserFiles, postMultipart } from '../../../services/files/browserFiles';
 import { useAuthState } from '../../../services/auth/authState';
+import { emitTokenBalanceUpdated } from '../../../services/auth/authEvents';
 import { authHeaders } from '../../../services/auth/sessionTokenStore';
 import { getBackendUrl } from '../../../services/runtime/backendUrl';
 import {
@@ -433,6 +434,9 @@ const pickFiles = async () => {
 };
 
 const formatAnalysisError = (error, phase = '') => {
+  if (error?.code === 'REMOTE_TABLEBASE_OFFLINE' || error?.code === 'REMOTE_TABLEBASE_TIMEOUT') {
+    return t('analysis.errors.tablebaseUnavailable');
+  }
   if (error?.code === 'NETWORK_ERROR' || /failed to fetch/i.test(String(error?.message || ''))) {
     if (phase === 'upload') return t('analysis.errors.uploadNetwork');
     if (phase === 'status') return t('analysis.errors.statusNetwork');
@@ -507,6 +511,7 @@ const applyAnalysisJobPayload = (payload = {}) => {
   currentFile.value = payload.current_file || (status === 'finished' ? '' : currentFile.value);
   entries.value = Array.isArray(payload.entries) ? payload.entries : entries.value;
   downloadUrl.value = payload.download_url || downloadUrl.value;
+  if (payload?.token_balance) emitTokenBalanceUpdated(payload.token_balance);
 
   if (status === 'finished') {
     isRunning.value = false;

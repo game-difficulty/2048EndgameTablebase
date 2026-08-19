@@ -817,7 +817,14 @@ export function useTesterSession(activeRef) {
         && String(payload?.board_hex || '').toLowerCase() === currentBoardHex.value
       ) {
         lookupPending.value = false;
-        statusMessage.value = payload?.message || statusMessage.value;
+        statusMessage.value = (
+          payload.code === 'REMOTE_TABLEBASE_OFFLINE'
+          || payload.code === 'REMOTE_TABLEBASE_TIMEOUT'
+        )
+          ? (String(appConfig.value?.language || '').toLowerCase().startsWith('zh')
+            ? '所选定式暂不可用。'
+            : 'The selected tablebase is temporarily unavailable.')
+          : (payload?.message || statusMessage.value);
       }
       return;
     }

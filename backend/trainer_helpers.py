@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import asyncio
 import numpy as np
 
 from engine_core.BoardMover import s_gen_new_num as r_gen_new_num
@@ -11,6 +11,7 @@ from .serialization import sanitize_config
 from .session import safe_hex, u64
 from .quota.errors import InsufficientTokens
 from .quota.service import finalize_reservation, get_token_balance, has_numeric_result, reserve_operation_tokens
+from .remote_workers.registry import remote_worker_registry
 
 
 def replace_largest_tiles(board_encoded, n, target: str):
@@ -115,6 +116,64 @@ def _compute_spawns(session, new_board):
                     if r0 is not None and not isinstance(r0, str):
                         results[(tile_pos, val)] = r0
     return results
+
+
+async def compute_spawns_async(session, new_board):
+    if str(getattr(session, "tablebase_provider_kind", "") or "local") != "remote":
+        return await asyncio.to_thread(_compute_spawns, session, new_board)
+
+    pattern = str(session.pattern_settings[0])
+    target = str(session.pattern_settings[1])
+    n_large_tiles = pattern_32k_tiles_map.get(pattern, [0])[0]
+    lookup_board = np.uint64(
+        u64(
+            replace_board_for_lookup(
+                np.uint64(u64(new_board)),
+                pattern,
+                n_large_tiles,
+                target,
+                session.use_variant,
+            )
+        )
+    )
+    candidates: list[tuple[int, int, str]] = []
+    for val in (1, 2):
+        for tile_pos in range(16):
+            packed_pos = 15 - tile_pos
+            if (
+                (lookup_board >> np.uint64(4 * packed_pos)) & np.uint64(0xF)
+            ) != np.uint64(0):
+                continue
+            test_board = lookup_board | (
+                np.uint64(val) << np.uint64(4 * packed_pos)
+            )
+            candidates.append((tile_pos, val, safe_hex(test_board)))
+    if not candidates:
+        return {}
+    response = await remote_worker_registry.lookup_batch(
+        full_pattern=session.current_pattern,
+        pattern=pattern,
+        target=target,
+        boards=[item[2] for item in candidates],
+        use_variant=session.use_variant,
+        board_is_lookup=True,
+    )
+    items = response.get("items")
+    if not isinstance(items, list):
+        items = response.get("results")
+    if not isinstance(items, list):
+        return {}
+    spawn_results = {}
+    for candidate, item in zip(candidates, items):
+        if not isinstance(item, dict):
+            continue
+        values = item.get("results", item)
+        if not isinstance(values, dict) or not values:
+            continue
+        first_value = next(iter(values.values()))
+        if isinstance(first_value, (int, float, np.integer, np.floating)):
+            spawn_results[(candidate[0], candidate[1])] = float(first_value)
+    return spawn_results
 
 
 async def send_trainer_results(session, websocket, request_id=None):

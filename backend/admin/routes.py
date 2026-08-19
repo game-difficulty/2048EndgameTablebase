@@ -10,11 +10,21 @@ from backend.auth.db import auth_db
 from backend.auth.dependencies import require_user
 from backend.auth.service import iso, normalize_email, utcnow
 from backend.quota.service import adjust_paid_tokens_for_admin
+from backend.remote_workers.registry import remote_worker_registry
 
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 DEFAULT_ALLOWED_IDENTITIES = ("user0", "assweeass@163.com")
+
+
+@router.get("/tablebase-workers")
+async def admin_tablebase_workers(request: Request):
+    _require_admin(request)
+    return {
+        "availability_epoch": remote_worker_registry.availability_epoch,
+        "workers": remote_worker_registry.status(),
+    }
 
 
 def _allowed_identities() -> set[str]:

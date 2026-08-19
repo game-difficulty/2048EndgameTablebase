@@ -17,6 +17,7 @@ from engine_core.VBoardMover import decode_board
 
 from .session import safe_hex, u64
 from .trainer_helpers import replace_board_for_lookup
+from .remote_workers.registry import remote_worker_registry
 
 
 QUERY_WORKERS = 4
@@ -56,6 +57,7 @@ class TablebaseLookupSpec:
     full_pattern: str
     use_variant: bool
     book_reader: Any = field(compare=False, repr=False)
+    provider_kind: str = "local"
     catalog_version: str = ""
 
     @property
@@ -201,6 +203,31 @@ def execute_tablebase_lookup(spec: TablebaseLookupSpec) -> TablebaseLookupResult
         full_pattern=spec.full_pattern,
         results=results,
         dtype=str(dtype or "?"),
+        best_move=_best_move(results),
+    )
+
+
+async def execute_tablebase_lookup_async(
+    spec: TablebaseLookupSpec,
+    *,
+    loop: asyncio.AbstractEventLoop,
+    executor: ThreadPoolExecutor,
+) -> TablebaseLookupResult:
+    if spec.provider_kind != "remote":
+        return await loop.run_in_executor(executor, execute_tablebase_lookup, spec)
+    response = await remote_worker_registry.lookup(
+        full_pattern=spec.full_pattern,
+        pattern=spec.pattern,
+        target=spec.target,
+        board=safe_hex(spec.board_encoded),
+        use_variant=spec.use_variant,
+    )
+    results = _sanitize_results(response.get("results"))
+    return TablebaseLookupResult(
+        board_encoded=u64(spec.board_encoded),
+        full_pattern=spec.full_pattern,
+        results=results,
+        dtype=str(response.get("dtype") or "?"),
         best_move=_best_move(results),
     )
 
@@ -469,10 +496,10 @@ class TablebaseQueryScheduler:
 
             started = time.monotonic()
             try:
-                result = await self._loop.run_in_executor(
-                    self._executor,
-                    execute_tablebase_lookup,
+                result = await execute_tablebase_lookup_async(
                     job.spec,
+                    loop=self._loop,
+                    executor=self._executor,
                 )
                 self._cache_set(job.spec.query_key, result)
                 if not job.future.done():

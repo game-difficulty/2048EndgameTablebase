@@ -53,8 +53,13 @@ from backend.cloud_safety import (
     is_cloud_mode,
 )
 from backend.quota.errors import InsufficientTokens
-from backend.quota.service import consume_operation_tokens, get_token_balance
+from backend.quota.service import (
+    cancel_reservation,
+    get_token_balance,
+    reserve_operation_tokens,
+)
 from backend.replay_routes import router as replay_router
+from backend.remote_workers import remote_worker_registry
 CLOUD_MODE = is_cloud_mode()
 
 from backend.handlers.analysis import handle_analysis_action
@@ -69,7 +74,11 @@ from backend.handlers.tablebase_query import (
 from backend.preload import start_preload_thread
 from backend.resource_paths import get_resource_path
 from backend.state import ConnectionManager, save_game_state
-from backend.tablebase_catalog import get_available_tablebases, get_catalog_version
+from backend.tablebase_catalog import (
+    get_available_tablebases,
+    get_catalog_version,
+    resolve_configured_tablebase,
+)
 from backend.tablebase_query_service import tablebase_query_scheduler
 from Config import SingletonConfig
 from error_bridge import publish_frontend_exception
@@ -137,9 +146,11 @@ async def app_lifespan(_app: FastAPI):
     cleanup_expired_uploads()
     cleanup_expired_jobs()
     start_preload_thread()
+    await remote_worker_registry.start()
     try:
         yield
     finally:
+        await remote_worker_registry.close()
         await tablebase_query_scheduler.close()
         await drain_tablebase_query_tasks()
 
@@ -513,6 +524,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
             _release_websocket_slot(ws_ip)
 
 
+@app.websocket("/worker-ws/tablebase")
+async def tablebase_worker_endpoint(websocket: WebSocket):  # type: ignore
+    await remote_worker_registry.handle_connection(websocket)
+
+
 def _usage_for_ws_action(action: str | None) -> tuple[str, str] | None:
     return None
 
@@ -653,7 +669,25 @@ async def create_analysis_job_route(
     user: dict = Depends(require_user),
 ):
     uploads = []
+    reservations = []
+    job_started = False
     try:
+        normalized_pattern = str(pattern or "").strip()
+        normalized_target = str(target or "").strip()
+        full_pattern = f"{normalized_pattern}_{normalized_target}"
+        descriptor = resolve_configured_tablebase(full_pattern)
+        if descriptor is None:
+            raise ValueError("The selected tablebase is not available.")
+        if descriptor.get("_provider") == "remote" and not descriptor.get(
+            "_available", False
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "REMOTE_TABLEBASE_OFFLINE",
+                    "message": "The selected tablebase is temporarily unavailable.",
+                },
+            )
         for upload in files:
             saved = await save_upload_file(
                 upload,
@@ -668,21 +702,24 @@ async def create_analysis_job_route(
                     session_id=int(user["session_id"]),
                 )
             )
-        consume_operation_tokens(
-            user_id=int(user["id"]),
-            session_id=int(user["session_id"]),
-            operation_key="analysis_per_replay",
-            full_pattern=f"{str(pattern or '').strip()}_{str(target or '').strip()}",
-            quantity=len(uploads),
-            metadata={"pattern": pattern, "target": target, "total": len(uploads)},
-        )
+        for record in uploads:
+            reservations.append(
+                reserve_operation_tokens(
+                    user_id=int(user["id"]),
+                    session_id=int(user["session_id"]),
+                    operation_key="analysis_per_replay",
+                    full_pattern=full_pattern,
+                )
+            )
         job = create_analysis_job(
             uploads=uploads,
-            pattern=str(pattern or "").strip(),
-            target=str(target or "").strip(),
+            pattern=normalized_pattern,
+            target=normalized_target,
             user_id=int(user["id"]),
             session_id=int(user["session_id"]),
+            quota_reservations=reservations,
         )
+        job_started = True
         record_usage(
             user_id=int(user["id"]),
             session_id=int(user["session_id"]),
@@ -693,9 +730,18 @@ async def create_analysis_job_route(
             ip_address=client_ip(request),
         )
     except InsufficientTokens as exc:
+        for reservation in reservations:
+            cancel_reservation(reservation, reason="analysis_job_not_created")
         raise HTTPException(status_code=402, detail=exc.payload) from exc
     except ValueError as exc:
+        for reservation in reservations:
+            cancel_reservation(reservation, reason="analysis_job_not_created")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        if not job_started:
+            for reservation in reservations:
+                cancel_reservation(reservation, reason="analysis_job_not_created")
+        raise
     return {
         "job_id": job.job_id,
         "total": job.total,

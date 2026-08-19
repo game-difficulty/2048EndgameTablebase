@@ -13,6 +13,7 @@ from .cloud_safety import is_cloud_mode
 from .serialization import sanitize_config
 from .session import GameSession, normalize_gamer_special_tiles, np_u64, safe_hex, u64
 from .trainer_helpers import _get_current_record_results
+from .remote_workers.registry import remote_worker_registry
 
 
 def _env_int(name: str, default: int, minimum: int = 0) -> int:
@@ -150,7 +151,19 @@ class ConnectionManager:
         if session.client_id.startswith("trainer_"):
             tablebase_full_pattern = str(getattr(session, "current_pattern", "") or "")
             if tablebase_full_pattern:
-                tablebase_status = "loaded"
+                provider_kind = str(
+                    getattr(session, "tablebase_provider_kind", "") or "local"
+                )
+                if provider_kind == "remote" and not remote_worker_registry.is_table_online(
+                    tablebase_full_pattern
+                ):
+                    tablebase_status = "temporarily_unavailable"
+                elif provider_kind == "remote":
+                    tablebase_status = "loaded"
+                else:
+                    tablebase_status = str(
+                        getattr(session, "tablebase_status", "loaded") or "loaded"
+                    )
                 tablebase_dtype = str(getattr(session, "success_rate_dtype", "") or "")
         record_results, record_results_dtype = _get_current_record_results(session)
 

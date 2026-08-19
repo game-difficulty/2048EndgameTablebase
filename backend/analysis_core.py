@@ -25,7 +25,8 @@ from engine_core.performance_evaluation import (
     evaluation_of_performance as shared_evaluation_of_performance,
     markdown_label,
 )
-from .tablebase_catalog import build_filepath_map_entry
+from .remote_workers.analysis_proxy import RemoteAnalysisBookReader
+from .tablebase_catalog import build_filepath_map_entry, resolve_configured_tablebase
 
 
 logger = Config.logger
@@ -460,10 +461,22 @@ class Analyzer:
         self.bm = bm
         self.vbm = vbm
         self.variant_wall_mask = self._build_variant_wall_mask()
-        self.book_reader: BookReaderDispatcher = BookReaderDispatcher()
         spawn_rate4 = float(SingletonConfig().config.get("4_spawn_rate", 0.1))
-        bookfile_path_list = build_filepath_map_entry(full_pattern, spawn_rate4)
-        self.book_reader.dispatch(bookfile_path_list, pattern, target)
+        descriptor = resolve_configured_tablebase(full_pattern, spawn_rate4)
+        self.tablebase_provider_kind = (
+            str(descriptor.get("_provider")) if descriptor else "local"
+        )
+        if self.tablebase_provider_kind == "remote":
+            self.book_reader = RemoteAnalysisBookReader(
+                full_pattern=full_pattern,
+                pattern=pattern,
+                target=str(2**target),
+                use_variant=pattern in category_info.get("variant", []),
+            )
+        else:
+            self.book_reader = BookReaderDispatcher()
+            bookfile_path_list = build_filepath_map_entry(full_pattern, spawn_rate4)
+            self.book_reader.dispatch(bookfile_path_list, pattern, target)
 
         self.filepath = file_path
         self.source_stem = self._safe_report_stem(source_filename or Path(file_path).name)
@@ -555,6 +568,7 @@ class Analyzer:
         return board
 
     def generate_reports(self) -> None:
+        self._preload_remote_analysis()
         for i in range(len(self.record_list)):
             is_endgame, large_tile_changed = self.analyze_one_step(i)
             if is_endgame is None:
@@ -573,6 +587,27 @@ class Analyzer:
             self.write_analysis(len(self.record_list))
         self.save_rec_to_file(len(self.record_list))
         self.clear_analysis()
+
+    def _preload_remote_analysis(self) -> None:
+        preload = getattr(self.book_reader, "preload", None)
+        if not callable(preload):
+            return
+        boards: list[int] = []
+        seen: set[int] = set()
+        for record in self.record_list:
+            board_encoded = np.uint64(record[0])
+            board = self.bm.decode_board(board_encoded)
+            if self.pattern in category_info.get("variant", []):
+                masked_board = self.mask_variant_large_tiles(board.copy())
+            elif self.check_nth_largest(board_encoded):
+                masked_board = self.mask_large_tiles(board.copy())
+            else:
+                continue
+            encoded = int(self.bm.encode_board(masked_board))
+            if encoded not in seen:
+                seen.add(encoded)
+                boards.append(encoded)
+        preload(boards)
 
     def print_board(self, board: np.typing.NDArray) -> None:
         rows = {"2x4": (1, 3), "3x3": (0, 3), "3x4": (0, 3)}.get(

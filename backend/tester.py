@@ -25,7 +25,7 @@ from engine_core.performance_evaluation import (
 
 from .serialization import sanitize_config
 from .session import np_u64, safe_hex, u64
-from .tablebase_catalog import build_filepath_map_entry
+from .tablebase_catalog import build_filepath_map_entry, resolve_configured_tablebase
 from .trainer_helpers import replace_board_for_lookup
 from .quota.errors import InsufficientTokens
 from .quota.service import finalize_reservation, get_token_balance, has_numeric_result, reserve_operation_tokens
@@ -332,14 +332,31 @@ def _tester_prepare_selection(session, pattern, target):
         return False, []
 
     spawn_rate4 = float(SingletonConfig().config.get("4_spawn_rate", 0.1))
+    descriptor = resolve_configured_tablebase(session.tester_full_pattern, spawn_rate4)
+    provider_kind = str(descriptor.get("_provider")) if descriptor else ""
+    session.tester_tablebase_provider_kind = provider_kind
     path_list = build_filepath_map_entry(session.tester_full_pattern, spawn_rate4)
-    session.tester_table_found = bool(path_list)
-    if session.tester_table_found and path_list:
+    session.tester_table_found = bool(
+        descriptor
+        and (
+            provider_kind == "local"
+            or bool(descriptor.get("_available", False))
+        )
+    )
+    if session.tester_table_found and provider_kind == "local" and path_list:
         session.ensure_book_reader().dispatch(path_list, pattern, target)
         session.tester_status = f"Loaded {session.tester_full_pattern}"
         return True, path_list
 
-    session.tester_status = "Table file path not found."
+    if session.tester_table_found and provider_kind == "remote":
+        session.tester_status = f"Loaded {session.tester_full_pattern}"
+        return True, []
+
+    session.tester_status = (
+        "The selected tablebase is temporarily unavailable."
+        if provider_kind == "remote"
+        else "Tablebase not found."
+    )
     return False, path_list
 
 

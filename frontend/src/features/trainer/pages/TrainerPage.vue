@@ -6,6 +6,12 @@
         <span :class="['badge-base', wsStatus === 'connected' ? 'badge-connection-connected' : 'badge-connection-disconnected']">
           {{ $t(`status.${wsStatus}`) }}
         </span>
+        <span
+          v-if="tablebasePath === 'temporarily_unavailable'"
+          class="badge-base badge-connection-disconnected"
+        >
+          {{ $t('status.tablebaseUnavailable') }}
+        </span>
       </div>
 
       <div class="relative z-[130] top-menu-shell">

@@ -21,6 +21,8 @@ from .cloud_files import (
     register_download_path,
     sanitize_download_filename,
 )
+from .quota.service import cancel_reservation, finalize_reservation, get_token_balance
+from .remote_workers.errors import RemoteTablebaseError
 
 
 @dataclass
@@ -46,6 +48,7 @@ class AnalysisJob:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     zip_path: Path | None = None
+    quota_reservations: list[Any] = field(default_factory=list, repr=False)
 
 
 JOBS: dict[str, AnalysisJob] = {}
@@ -150,15 +153,49 @@ def _run_job(job_id: str) -> None:
         job.updated_at = time.time()
 
     try:
-        for path in list(job.input_paths):
+        processed_reservations = 0
+        for index, path in enumerate(list(job.input_paths)):
+            reservation = (
+                job.quota_reservations[index]
+                if index < len(job.quota_reservations)
+                else None
+            )
             try:
                 entry = _run_one_file(job, path)
+                finalize_reservation(
+                    reservation,
+                    actual_operation_key="analysis_per_replay",
+                    metadata={"job_id": job.job_id, "filename": path.name},
+                )
                 done_increment = 1
                 failed_increment = 0
+            except RemoteTablebaseError as exc:
+                cancel_reservation(
+                    reservation,
+                    reason=exc.code.lower(),
+                    metadata={"job_id": job.job_id, "filename": path.name},
+                )
+                entry = _public_entry(
+                    path,
+                    "failed",
+                    "The selected tablebase is temporarily unavailable.",
+                )
+                done_increment = 0
+                failed_increment = 1
             except Exception as exc:
+                finalize_reservation(
+                    reservation,
+                    actual_operation_key="analysis_per_replay",
+                    metadata={
+                        "job_id": job.job_id,
+                        "filename": path.name,
+                        "error": type(exc).__name__,
+                    },
+                )
                 entry = _public_entry(path, "failed", str(exc))
                 done_increment = 0
                 failed_increment = 1
+            processed_reservations = index + 1
             with JOB_LOCK:
                 job.completed += 1
                 job.done += done_increment
@@ -174,6 +211,12 @@ def _run_job(job_id: str) -> None:
             job.updated_at = time.time()
             _persist_job(job)
     except Exception as exc:
+        for reservation in job.quota_reservations[processed_reservations:]:
+            cancel_reservation(
+                reservation,
+                reason="analysis_job_failed",
+                metadata={"job_id": job.job_id, "error": type(exc).__name__},
+            )
         with JOB_LOCK:
             job.status = "failed"
             job.error = str(exc)
@@ -188,6 +231,7 @@ def create_analysis_job(
     target: str,
     user_id: int,
     session_id: int | None = None,
+    quota_reservations: list[Any] | None = None,
 ) -> AnalysisJob:
     cleanup_expired_jobs(max_age_seconds=get_analysis_result_ttl_seconds())
     target_tile, target_value, numeric_target = normalize_target_value(target)
@@ -207,6 +251,7 @@ def create_analysis_job(
         input_names={str(record.path): record.filename for record in uploads},
         output_dir=output_dir,
         total=len(uploads),
+        quota_reservations=list(quota_reservations or []),
     )
     with JOB_LOCK:
         JOBS[job_id] = job
@@ -231,7 +276,7 @@ def analysis_job_payload(job: AnalysisJob) -> dict[str, Any]:
         if job.status == "finished" and job.zip_path is not None
         else ""
     )
-    return {
+    payload = {
         "job_id": job.job_id,
         "pattern": job.pattern,
         "target": job.target,
@@ -245,6 +290,9 @@ def analysis_job_payload(job: AnalysisJob) -> dict[str, Any]:
         "message": job.error,
         "download_url": download_url,
     }
+    if job.status in {"finished", "failed"}:
+        payload["token_balance"] = get_token_balance(job.user_id)
+    return payload
 
 
 def cleanup_expired_jobs(

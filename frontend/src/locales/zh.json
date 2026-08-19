@@ -414,6 +414,7 @@
       "downloadNetwork": "结果下载失败。请稍后重试；如果结果已过期，需要重新运行分析。",
       "authRequired": "请重新登录后再运行分析。",
       "insufficientTokens": "当前 token 余额不足，无法运行这次分析。",
+      "tablebaseUnavailable": "所选定式暂不可用，请稍后重试。此请求不会扣除 token。",
       "expired": "分析结果已过期，或服务刚刚重启。请重新运行分析。",
       "notReady": "分析任务尚未完成，请稍后再下载。",
       "generic": "分析失败，请重试。"
@@ -558,6 +559,7 @@
   "status": {
     "connecting": "连接中...",
     "connected": "已连接",
-    "disconnected": "已断开"
+    "disconnected": "已断开",
+    "tablebaseUnavailable": "定式暂不可用"
   }
 }

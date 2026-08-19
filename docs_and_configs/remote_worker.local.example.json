@@ -1,0 +1,57 @@
+{
+  "server_url": "wss://2048tables.online/worker-ws/tablebase",
+  "worker_id": "home-main",
+  "auth_token_env": "TABLEBASE_WORKER_TOKEN",
+  "heartbeat_seconds": 10,
+  "hello_timeout_seconds": 15,
+  "connect_timeout_seconds": 15,
+  "max_batch_size": 1024,
+  "reconnect_initial_seconds": 1,
+  "reconnect_max_seconds": 60,
+  "log": {
+    "path": "tools/tablebase_worker/logs/worker.log",
+    "max_bytes": 5242880,
+    "backup_count": 3,
+    "level": "INFO"
+  },
+  "resource_groups": {
+    "disk-d": {
+      "concurrency": 1
+    },
+    "disk-f": {
+      "concurrency": 1
+    }
+  },
+  "tables": [
+    {
+      "table_id": "free11_512",
+      "pattern": "free11",
+      "target": "512",
+      "path": "D:/free11-512",
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-d",
+      "concurrency": 1
+    },
+    {
+      "table_id": "free11_1024",
+      "pattern": "free11",
+      "target": "1024",
+      "path": "D:/free11-1k",
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-d",
+      "concurrency": 1
+    },
+    {
+      "table_id": "4442f_2048",
+      "pattern": "4442f",
+      "target": "2048",
+      "path": "F:/4442f-2k",
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-f",
+      "concurrency": 1
+    }
+  ]
+}

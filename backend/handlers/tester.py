@@ -12,6 +12,8 @@ from engine_core.BoardMover import s_move_board as r_move_board
 from engine_core.replay_utils import replay_sentinel
 
 from ..actions import Action, Message
+from ..remote_workers.errors import RemoteTablebaseError
+from ..remote_workers.registry import remote_worker_registry
 from ..session import GameSession
 from ..session import np_u64, u64
 from ..tester import (
@@ -35,6 +37,24 @@ from ..tester import (
     send_tester_move_accepted,
     send_tester_state,
 )
+
+
+async def _tester_get_random_state(session: GameSession, path_list) -> int:
+    if session.tester_tablebase_provider_kind == "remote":
+        response = await remote_worker_registry.random_state(
+            full_pattern=session.tester_full_pattern,
+            pattern=str(session.tester_pattern[0]),
+            target=str(session.tester_pattern[1]),
+        )
+        board = response.get("board") or response.get("board_hex")
+        if not isinstance(board, (str, int)):
+            raise RuntimeError("Remote tablebase returned an invalid random state.")
+        return int(board, 16) if isinstance(board, str) else int(board)
+    return int(
+        session.ensure_book_reader().get_random_state(
+            path_list, session.tester_full_pattern
+        )
+    )
 
 
 async def handle_tester_action(
@@ -80,11 +100,9 @@ async def handle_tester_action(
         session.tester_lookup_pending = False
         _tester_reset_last_step(session)
 
-        if found and path_list:
+        if found:
             try:
-                random_board = session.ensure_book_reader().get_random_state(
-                    path_list, session.tester_full_pattern
-                )
+                random_board = await _tester_get_random_state(session, path_list)
                 random_board = _tester_random_rotate(random_board, pattern)
                 _tester_start_practice(
                     session,
@@ -92,8 +110,12 @@ async def handle_tester_action(
                     "We'll start from:",
                     compute_results=False,
                 )
-            except Exception as e:
-                session.tester_status = f"Failed to initialize board: {e}"
+            except Exception as exc:
+                if isinstance(exc, RemoteTablebaseError):
+                    session.tester_table_found = False
+                    session.tester_status = "The selected tablebase is temporarily unavailable."
+                else:
+                    session.tester_status = "Failed to initialize the selected tablebase."
                 session.tester_logs = [
                     f"Selected pattern: {session.tester_full_pattern}",
                     session.tester_status,
@@ -111,11 +133,9 @@ async def handle_tester_action(
         pattern = session.tester_pattern[0]
         target = session.tester_pattern[1]
         found, path_list = _tester_prepare_selection(session, pattern, target)
-        if found and path_list:
+        if found:
             try:
-                random_board = session.ensure_book_reader().get_random_state(
-                    path_list, session.tester_full_pattern
-                )
+                random_board = await _tester_get_random_state(session, path_list)
                 random_board = _tester_random_rotate(random_board, pattern)
                 _tester_start_practice(
                     session,
@@ -123,8 +143,12 @@ async def handle_tester_action(
                     "We'll start from:",
                     compute_results=False,
                 )
-            except Exception as e:
-                session.tester_status = f"Failed to initialize board: {e}"
+            except Exception as exc:
+                if isinstance(exc, RemoteTablebaseError):
+                    session.tester_table_found = False
+                    session.tester_status = "The selected tablebase is temporarily unavailable."
+                else:
+                    session.tester_status = "Failed to initialize the selected tablebase."
                 session.tester_logs = [
                     f"Selected pattern: {session.tester_full_pattern}",
                     session.tester_status,

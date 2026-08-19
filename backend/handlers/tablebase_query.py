@@ -17,6 +17,7 @@ from ..quota.service import (
     has_numeric_result,
     reserve_operation_tokens,
 )
+from ..remote_workers.errors import RemoteTablebaseError
 from ..serialization import sanitize_config
 from ..session import GameSession, np_u64, safe_hex, u64
 from ..tablebase_catalog import get_catalog_version
@@ -61,10 +62,20 @@ def _session_query_context(session: GameSession, page: str) -> dict[str, Any] | 
     if page == "trainer":
         full_pattern = str(session.current_pattern or "")
         pattern, target = [str(value) for value in session.pattern_settings[:2]]
-        table_available = bool(full_pattern and session.book_reader is not None)
+        provider_kind = str(getattr(session, "tablebase_provider_kind", "") or "local")
+        table_available = bool(
+            full_pattern
+            and (
+                provider_kind == "remote"
+                or (provider_kind == "local" and session.book_reader is not None)
+            )
+        )
     elif page == "tester":
         full_pattern = str(session.tester_full_pattern or "")
         pattern, target = [str(value) for value in session.tester_pattern[:2]]
+        provider_kind = str(
+            getattr(session, "tester_tablebase_provider_kind", "") or "local"
+        )
         table_available = bool(session.tester_table_found and full_pattern)
     else:
         return None
@@ -75,7 +86,10 @@ def _session_query_context(session: GameSession, page: str) -> dict[str, Any] | 
         "pattern": pattern,
         "target": target,
         "use_variant": bool(session.use_variant),
-        "book_reader": session.ensure_book_reader(),
+        "book_reader": (
+            session.ensure_book_reader() if provider_kind == "local" else None
+        ),
+        "provider_kind": provider_kind,
     }
 
 
@@ -209,6 +223,7 @@ async def _run_prefetch(
             full_pattern=parent_spec.full_pattern,
             use_variant=parent_spec.use_variant,
             book_reader=parent_spec.book_reader,
+            provider_kind=parent_spec.provider_kind,
             catalog_version=catalog_version,
         )
         handle = await tablebase_query_scheduler.submit(
@@ -282,6 +297,38 @@ async def _finish_query(
             reason="superseded_before_result",
             metadata={"page": page, "query_id": query_id},
         )
+        return
+    except RemoteTablebaseError as exc:
+        cancel_reservation(
+            reservation,
+            reason=exc.code.lower(),
+            metadata={"page": page, "query_id": query_id},
+        )
+        if handle.is_current:
+            try:
+                await websocket.send_json(
+                    {
+                        "action": Message.TABLEBASE_QUERY_RESULT,
+                        "data": {
+                            "page": page,
+                            "query_id": query_id,
+                            "catalog_version": get_catalog_version(),
+                            "full_pattern": spec.full_pattern,
+                            "board_hex": safe_hex(spec.board_encoded),
+                            "results": {},
+                            "dtype": "?",
+                            "found": False,
+                            **exc.payload,
+                            "token_balance": (
+                                get_token_balance(session.user_id)
+                                if session.user_id is not None
+                                else None
+                            ),
+                        },
+                    }
+                )
+            except Exception:
+                pass
         return
     except Exception as exc:
         finalize_reservation(
@@ -449,6 +496,7 @@ async def handle_tablebase_query_action(
         full_pattern=context["full_pattern"],
         use_variant=context["use_variant"],
         book_reader=context["book_reader"],
+        provider_kind=context["provider_kind"],
         catalog_version=catalog_version,
     )
     supporter = _session_is_supporter(session)

@@ -746,6 +746,14 @@ export function useTrainerSession(activeRef) {
         pendingResultsRequests.delete(requestId);
       }
       if (data.data?.code) {
+        if (
+          data.data.code === 'REMOTE_TABLEBASE_OFFLINE'
+          || data.data.code === 'REMOTE_TABLEBASE_TIMEOUT'
+        ) {
+          tablebasePath.value = 'temporarily_unavailable';
+          clearTablebaseResultCache();
+          invalidateResults({ clearDisplay: true });
+        }
         if (resultBoardHex === currentBoardHex.value) finishResultsRefresh();
         return;
       }
@@ -1224,6 +1232,7 @@ export function useTrainerSession(activeRef) {
     currentPatternDisplay,
     isVariant,
     wsStatus,
+    tablebasePath,
     togglePatternMenu,
     selectPattern,
     patternType,

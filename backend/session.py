@@ -86,6 +86,8 @@ class GameSession:
         self.ai_fallback_logic = None
 
         self.book_reader = None
+        self.tablebase_provider_kind = ""
+        self.tablebase_status = "not_selected"
         self.current_pattern = ""
         self.pattern_settings = ["", ""]
         self.spawn_mode = 0
@@ -125,6 +127,7 @@ class GameSession:
         self.tester_performance_stats = build_performance_stats()
         self.tester_ready = False
         self.tester_table_found = False
+        self.tester_tablebase_provider_kind = ""
         self.tester_status = ""
         self.tester_lookup_pending = False
         self.tester_lookup_task = None
