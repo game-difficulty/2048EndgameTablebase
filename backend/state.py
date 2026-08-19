@@ -128,7 +128,7 @@ class ConnectionManager:
             self.detached_sessions.pop(key, None)
 
     async def broadcast(self, message: str) -> None:
-        for connection in self.active_connections:
+        for connection in list(self.active_connections):
             try:
                 await connection.send_text(message)
             except Exception:

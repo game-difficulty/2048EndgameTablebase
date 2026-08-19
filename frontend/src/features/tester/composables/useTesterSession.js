@@ -441,9 +441,18 @@ export function useTesterSession(activeRef) {
     targets.includes(DEFAULT_TABLEBASE_TARGET) ? DEFAULT_TABLEBASE_TARGET : (targets[0] || '')
   );
 
-  const ensureDefaultSelection = () => {
+  const ensureDefaultSelection = ({ preserveSelection = false } = {}) => {
     const groups = patternGroups.value;
     if (!groups.length) return;
+    if (
+      preserveSelection
+      && selectedPattern.value
+      && selectedTarget.value
+      && !getCatalogTargetsForPattern(catalogTables.value, selectedPattern.value).includes(selectedTarget.value)
+    ) {
+      syncCategoryFromPattern(selectedPattern.value);
+      return;
+    }
     selectedPattern.value = flatPatterns.value.includes(selectedPattern.value)
       ? selectedPattern.value
       : (
@@ -458,7 +467,7 @@ export function useTesterSession(activeRef) {
     syncCategoryFromPattern(selectedPattern.value);
   };
 
-  const loadCatalog = async () => {
+  const loadCatalog = async ({ preserveSelection = false } = {}) => {
     try {
       const tables = await fetchTablebaseCatalog();
       catalogTables.value = tables;
@@ -467,7 +476,7 @@ export function useTesterSession(activeRef) {
       if (Object.values(nextCategories).some((patterns) => patterns.length)) {
         patternCategories.value = nextCategories;
         availableTargets.value = getCatalogTargets(tables);
-        ensureDefaultSelection();
+        ensureDefaultSelection({ preserveSelection });
         maybeApplyInitialPatternSelection();
         if (
           ready.value
@@ -886,6 +895,9 @@ export function useTesterSession(activeRef) {
     else if (message.action === 'TESTER_RESULTS') handleTesterResults(message.data);
     else if (message.action === 'TABLEBASE_QUERY_RESULT') handleTablebaseQueryResult(message.data);
     else if (message.action === 'TABLEBASE_PREFETCH') handleTablebasePrefetch(message.data);
+    else if (message.action === 'TABLEBASE_CATALOG_UPDATED') {
+      loadCatalog({ preserveSelection: true });
+    }
     else if (message.action === 'TABLEBASE_BUSY' && message.data?.page === 'tester') {
       const retryBoard = currentBoardHex.value;
       const retryPattern = currentPatternDisplay.value;
@@ -941,7 +953,7 @@ export function useTesterSession(activeRef) {
         wsStatus.value = 'connected';
         bootstrapSelectionSent = false;
         initialStateSeen = false;
-        loadCatalog();
+        loadCatalog({ preserveSelection: true });
         triggerAction('TESTER_GET_INIT');
       },
       onMessage: handleWSMessage,

@@ -94,6 +94,15 @@ class RemoteWorkerRegistryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.registry.availability_epoch, epoch + 1)
         self.assertFalse(self.registry.is_table_online("free11_512"))
 
+    async def test_availability_listener_receives_connect_and_disconnect(self):
+        epochs: list[int] = []
+        self.registry.add_availability_listener(epochs.append)
+        _websocket, worker = await self._connect()
+        self.assertEqual(epochs, [1])
+        await self.registry._remove_worker(worker, RemoteTablebaseOffline())
+        self.assertEqual(epochs, [1, 2])
+        self.registry.remove_availability_listener(epochs.append)
+
     async def test_unknown_or_offline_table_is_rejected(self):
         await self._connect()
         with self.assertRaises(RemoteTablebaseOffline):

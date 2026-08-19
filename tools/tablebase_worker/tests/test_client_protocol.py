@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock
 
 from tools.tablebase_worker.client import WorkerClient
 from tools.tablebase_worker.protocol import Request
@@ -13,6 +15,9 @@ class FakeWebSocket:
 
     async def send(self, payload):
         self.messages.append(json.loads(payload))
+
+    async def close(self):
+        pass
 
 
 class FakeReaderPool:
@@ -97,6 +102,32 @@ class ClientProtocolTests(unittest.IsolatedAsyncioTestCase):
                 "board": "0000000000001234",
             },
         )
+
+    async def test_established_connection_failure_returns_connection_duration(self):
+        client = WorkerClient(
+            SimpleNamespace(
+                worker_id="home-main",
+                auth_token="secret",
+                hello_timeout_seconds=5,
+            ),
+            SimpleNamespace(hello_tables=lambda: []),
+        )
+        websocket = FakeWebSocket()
+        websocket.recv = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "type": "HELLO_ACK",
+                    "protocol_version": 1,
+                    "worker_id": "home-main",
+                    "tables": [],
+                }
+            )
+        )
+        client._connect = AsyncMock(return_value=websocket)
+        client._receive_loop = AsyncMock(side_effect=ConnectionResetError())
+        client._heartbeat_loop = AsyncMock()
+        connected_seconds = await client._run_connection()
+        self.assertGreaterEqual(connected_seconds, 0.0)
 
 
 if __name__ == "__main__":

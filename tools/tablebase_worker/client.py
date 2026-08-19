@@ -50,8 +50,10 @@ class WorkerClient:
                 break
             if connected_seconds >= self.config.heartbeat_seconds * 3:
                 delay = self.config.reconnect_initial_seconds
-            sleep_for = min(delay, self.config.reconnect_max_seconds)
-            sleep_for *= random.uniform(0.85, 1.15)
+            sleep_for = min(
+                self.config.reconnect_max_seconds,
+                delay * random.uniform(0.85, 1.15),
+            )
             logger.info("Reconnecting in %.1f seconds", sleep_for)
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=sleep_for)
@@ -112,6 +114,10 @@ class WorkerClient:
             for task in done:
                 if task is not stopper:
                     task.result()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Worker connection failed: %s", type(exc).__name__)
         finally:
             await self._cancel_requests(wait=False)
             with contextlib.suppress(Exception):

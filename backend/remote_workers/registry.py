@@ -8,7 +8,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect
@@ -67,10 +67,25 @@ class RemoteWorkerRegistry:
         self._monitor_task: asyncio.Task | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._availability_epoch = 0
+        self._availability_listeners: set[Callable[[int], None]] = set()
 
     @property
     def availability_epoch(self) -> int:
         return self._availability_epoch
+
+    def add_availability_listener(self, listener: Callable[[int], None]) -> None:
+        self._availability_listeners.add(listener)
+
+    def remove_availability_listener(self, listener: Callable[[int], None]) -> None:
+        self._availability_listeners.discard(listener)
+
+    def _mark_availability_changed(self) -> None:
+        self._availability_epoch += 1
+        for listener in tuple(self._availability_listeners):
+            try:
+                listener(self._availability_epoch)
+            except Exception:
+                pass
 
     def _ensure_lock(self) -> asyncio.Lock:
         if self._lock is None:
@@ -92,7 +107,7 @@ class RemoteWorkerRegistry:
         workers = list(self._workers.values())
         self._workers.clear()
         if workers:
-            self._availability_epoch += 1
+            self._mark_availability_changed()
         self._fail_all(RemoteTablebaseOffline())
         for worker in workers:
             try:
@@ -231,8 +246,9 @@ class RemoteWorkerRegistry:
             previous = self._workers.get(worker_id)
             previous_tables = previous.tables if previous else frozenset()
             self._workers[worker_id] = worker
-            if previous is None or previous_tables != worker.tables:
-                self._availability_epoch += 1
+            availability_changed = previous is None or previous_tables != worker.tables
+        if availability_changed:
+            self._mark_availability_changed()
         if previous is not None and previous.websocket is not websocket:
             self._fail_worker(worker_id, RemoteTablebaseOffline())
             try:
@@ -271,7 +287,7 @@ class RemoteWorkerRegistry:
                 if next_tables != worker.tables:
                     removed_tables = worker.tables - next_tables
                     worker.tables = next_tables
-                    self._availability_epoch += 1
+                    self._mark_availability_changed()
                     for full_pattern in removed_tables:
                         self._fail_table(worker.worker_id, full_pattern)
             return
@@ -431,9 +447,9 @@ class RemoteWorkerRegistry:
         async with lock:
             if self._workers.get(worker.worker_id) is worker:
                 self._workers.pop(worker.worker_id, None)
-                self._availability_epoch += 1
                 removed = True
         if removed:
+            self._mark_availability_changed()
             self._fail_worker(worker.worker_id, error)
             logger.info("Remote tablebase worker disconnected: %s.", worker.worker_id)
 

@@ -385,8 +385,10 @@ export function useTrainerSession(activeRef) {
     return true;
   };
 
-  const loadCatalog = async () => {
+  const loadCatalog = async ({ preserveSelection = false } = {}) => {
     try {
+      const selectedPattern = patternType.value;
+      const selectedTarget = targetValue.value;
       const tables = await fetchTablebaseCatalog();
       catalogTables.value = tables;
       catalogVersion.value = tables.catalogVersion || getCatalogVersion();
@@ -395,12 +397,22 @@ export function useTrainerSession(activeRef) {
       if (patterns.length) {
         patternCategories.value = nextCategories;
         availableTargets.value = getCatalogTargets(tables);
-        if (!patternType.value || !patterns.includes(patternType.value)) {
+        if (!patternType.value || (!preserveSelection && !patterns.includes(patternType.value))) {
           const defaults = chooseDefaultCatalogSelection(patterns);
           patternType.value = defaults.pattern;
           targetValue.value = defaults.target;
         }
-        ensureTargetForCurrentPattern();
+        if (
+          preserveSelection
+          && selectedPattern
+          && selectedTarget
+          && !getCatalogTargetsForPattern(tables, selectedPattern).includes(selectedTarget)
+        ) {
+          patternType.value = selectedPattern;
+          targetValue.value = selectedTarget;
+        } else {
+          ensureTargetForCurrentPattern();
+        }
         if (loadedTablebaseFullPattern.value) {
           syncSelectionFromFullPattern(loadedTablebaseFullPattern.value);
         }
@@ -859,6 +871,11 @@ export function useTrainerSession(activeRef) {
       return;
     }
 
+    if (data.action === 'TABLEBASE_CATALOG_UPDATED') {
+      loadCatalog({ preserveSelection: true });
+      return;
+    }
+
   };
 
   const connect = () => {
@@ -871,7 +888,7 @@ export function useTrainerSession(activeRef) {
         wsStatus.value = 'connected';
         initialStateSeen = false;
         defaultTablebaseAutoApplyAttempted = false;
-        loadCatalog();
+        loadCatalog({ preserveSelection: true });
         triggerAction('GET_STATE');
         applyTrainerJump();
       },

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import asyncio
 from collections import Counter, defaultdict, deque
 from contextlib import asynccontextmanager
 import json
@@ -128,6 +129,21 @@ _WS_CLOSED_ERROR_MARKERS = (
 )
 
 
+def _broadcast_tablebase_catalog_update(_epoch: int) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(
+        manager.broadcast(
+            json.dumps(
+                {"action": "TABLEBASE_CATALOG_UPDATED", "data": {}},
+                separators=(",", ":"),
+            )
+        )
+    )
+
+
 class CacheControlledStaticFiles(StaticFiles):
     def __init__(self, *args, cache_control: str = "", **kwargs):
         super().__init__(*args, **kwargs)
@@ -147,10 +163,16 @@ async def app_lifespan(_app: FastAPI):
     cleanup_expired_uploads()
     cleanup_expired_jobs()
     start_preload_thread()
+    remote_worker_registry.add_availability_listener(
+        _broadcast_tablebase_catalog_update
+    )
     await remote_worker_registry.start()
     try:
         yield
     finally:
+        remote_worker_registry.remove_availability_listener(
+            _broadcast_tablebase_catalog_update
+        )
         await remote_worker_registry.close()
         await tablebase_query_scheduler.close()
         await drain_tablebase_query_tasks()
