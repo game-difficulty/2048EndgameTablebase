@@ -431,7 +431,50 @@
     "manualTitle": "Manual confirmation",
     "weeklyBenefit": "Supporter accounts receive 32,768 free tokens every week.",
     "manualNote": "This version does not credit tokens automatically. Please wait for admin confirmation after payment; your balance will not change before that.",
-    "remarkNote": "Your payment note must include your registered email or username. Recommended exact note: {identity}. Without a note, the payment may not be credited manually."
+    "remarkNote": "Your payment note must include your registered email or username. Recommended exact note: {identity}. Without a note, the payment may not be credited manually.",
+    "quotaGuide": {
+      "open": "Token Guide",
+      "kicker": "Token Rules",
+      "title": "Free Allowance and Usage",
+      "subtitle": "Tokens cover the compute and storage access used by tablebase queries and replay analysis. These are the rules currently in effect.",
+      "loading": "Loading token rules...",
+      "loadFailed": "Token rules are temporarily unavailable. Please try again.",
+      "weekly": {
+        "title": "Weekly Free Allowance",
+        "note": "Checked and replenished every {days} days. Bonus tokens are capped at the allowance for your account type.",
+        "tiers": {
+          "public": {
+            "label": "Standard Account",
+            "detail": "Registered without an invite code"
+          },
+          "invited": {
+            "label": "Invited Account",
+            "detail": "Registered with a valid invite code"
+          },
+          "supporter": {
+            "label": "Supporter",
+            "detail": "Sponsorship confirmed by the administrator"
+          }
+        }
+      },
+      "costs": {
+        "title": "Tablebase and Feature Costs",
+        "note": "Trainer and Tester queries use the same rates. Values in the table are tokens charged per operation.",
+        "tablebase": "Tablebase",
+        "multiplier": "Multiplier",
+        "lookupHit": "Result found",
+        "lookupMiss": "No result",
+        "analysis": "Analysis / file",
+        "replay": "Load an .rpl replay (not affected by tablebase multiplier)"
+      },
+      "rules": {
+        "title": "Charging Notes",
+        "balanceOrder": "Bonus tokens are spent before paid tokens.",
+        "analysisCharge": "Analysis is charged per selected file, whether or not a report is generated.",
+        "replayCharge": "Replay loading is charged after authorization; parsing failures are not refunded.",
+        "offline": "No charge is made when a tablebase is offline or the server rejects a request before execution; reservations are refunded."
+      }
+    }
   },
   "admin": {
     "open": "Admin",
@@ -546,6 +589,7 @@
     "updating": "Updating",
     "apply": "Apply",
     "copy": "Copy",
+    "retry": "Retry",
     "close": "Close"
   },
   "appError": {

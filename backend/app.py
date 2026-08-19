@@ -53,6 +53,7 @@ from backend.cloud_safety import (
     is_cloud_mode,
 )
 from backend.quota.errors import InsufficientTokens
+from backend.quota.routes import router as quota_router
 from backend.quota.service import (
     cancel_reservation,
     get_token_balance,
@@ -159,6 +160,7 @@ app = FastAPI(lifespan=app_lifespan)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(replay_router)
+app.include_router(quota_router)
 
 
 @app.middleware("http")

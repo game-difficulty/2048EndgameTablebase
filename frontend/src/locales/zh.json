@@ -431,7 +431,50 @@
     "manualTitle": "人工确认到账",
     "weeklyBenefit": "赞助者用户每周免费额度提升为 32,768 token。",
     "manualNote": "当前版本不会自动到账。付款后请等待站长人工确认；确认前账号余额不会变化。",
-    "remarkNote": "付款备注务必填写注册邮箱或用户名，推荐直接填写：{identity}。未备注可能无法人工确认到账。"
+    "remarkNote": "付款备注务必填写注册邮箱或用户名，推荐直接填写：{identity}。未备注可能无法人工确认到账。",
+    "quotaGuide": {
+      "open": "额度说明",
+      "kicker": "额度规则",
+      "title": "免费额度与用量",
+      "subtitle": "Token 用于承担定式查询和回放分析产生的计算与读取成本。这里列出当前生效的赠送与消费规则。",
+      "loading": "正在读取额度规则...",
+      "loadFailed": "额度规则暂时无法读取，请稍后重试。",
+      "weekly": {
+        "title": "每周免费额度",
+        "note": "每 {days} 天检查并补充一次，赠送余额最多保留到对应层级上限。",
+        "tiers": {
+          "public": {
+            "label": "普通账号",
+            "detail": "未使用邀请码注册"
+          },
+          "invited": {
+            "label": "邀请码账号",
+            "detail": "使用有效邀请码注册"
+          },
+          "supporter": {
+            "label": "赞助者",
+            "detail": "完成赞助并由站长确认"
+          }
+        }
+      },
+      "costs": {
+        "title": "定式与功能消耗",
+        "note": "训练与测试查表使用相同标准；表内数字均为单次 token 消耗。",
+        "tablebase": "定式",
+        "multiplier": "倍率",
+        "lookupHit": "查到成功率",
+        "lookupMiss": "未查到",
+        "analysis": "分析 / 文件",
+        "replay": "载入 .rpl 回放（不受定式倍率影响）"
+      },
+      "rules": {
+        "title": "计费说明",
+        "balanceOrder": "消费时先使用赠送 token，再使用充值 token。",
+        "analysisCharge": "分析按所选文件数计费，无论是否生成报告。",
+        "replayCharge": "回放在载入授权后计费，文件解析失败不退还。",
+        "offline": "定式离线或请求在执行前被服务器拒绝时不扣费；已预扣额度会退回。"
+      }
+    }
   },
   "admin": {
     "open": "站长页",
@@ -546,6 +589,7 @@
     "updating": "更新中",
     "apply": "应用",
     "copy": "复制",
+    "retry": "重试",
     "close": "关闭"
   },
   "appError": {

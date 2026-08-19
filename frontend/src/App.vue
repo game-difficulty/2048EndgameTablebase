@@ -98,6 +98,13 @@
       <button
         type="button"
         class="action-btn-small mt-4 w-full justify-center"
+        @click="openQuotaGuideDialog"
+      >
+        {{ $t('billing.quotaGuide.open') }}
+      </button>
+      <button
+        type="button"
+        class="action-btn-small mt-2 w-full justify-center"
         @click="openSponsorDialog"
       >
         {{ $t('billing.open') }}
@@ -217,6 +224,11 @@
       @close="closeSponsorDialog"
     />
 
+    <QuotaGuideDialog
+      :open="quotaGuideDialogOpen"
+      @close="closeQuotaGuideDialog"
+    />
+
     <div
       v-if="authDialogOpen"
       class="absolute inset-0 z-[115] flex items-center justify-center p-6"
@@ -330,6 +342,7 @@ const ReplayReviewView = defineAsyncComponent(() => import('./features/replay/pa
 const SettingsView = defineAsyncComponent(() => import('./features/settings/pages/SettingsPage.vue'));
 const HelpView = defineAsyncComponent(() => import('./features/help/pages/HelpPage.vue'));
 const AdminView = defineAsyncComponent(() => import('./features/admin/pages/AdminPage.vue'));
+const QuotaGuideDialog = defineAsyncComponent(() => import('./features/billing/QuotaGuideDialog.vue'));
 
 const { t } = useI18n();
 const {
@@ -354,6 +367,7 @@ const globalErrorQueue = [];
 const globalErrorCopied = ref(false);
 const accountMenuOpen = ref(false);
 const sponsorDialogOpen = ref(false);
+const quotaGuideDialogOpen = ref(false);
 const accountSecurityDialog = ref({
   open: false,
   mode: 'changePassword',
@@ -732,6 +746,15 @@ const openSponsorDialog = () => {
 
 const closeSponsorDialog = () => {
   sponsorDialogOpen.value = false;
+};
+
+const openQuotaGuideDialog = () => {
+  accountMenuOpen.value = false;
+  quotaGuideDialogOpen.value = true;
+};
+
+const closeQuotaGuideDialog = () => {
+  quotaGuideDialogOpen.value = false;
 };
 
 const openAccountSecurity = (mode) => {
