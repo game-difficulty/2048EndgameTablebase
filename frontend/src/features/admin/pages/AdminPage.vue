@@ -2,7 +2,7 @@
   <div class="page-root overflow-y-auto p-5">
     <div class="mx-auto flex w-full max-w-6xl flex-col gap-4">
       <header class="rounded-2xl border border-border-main bg-bg-card/88 p-5 shadow-sm backdrop-blur-md">
-        <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div class="flex flex-row items-end justify-between gap-4">
           <div>
             <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('admin.kicker') }}</div>
             <h1 class="mt-1 ui-metric font-black text-text-main">{{ $t('admin.title') }}</h1>
@@ -18,7 +18,7 @@
         {{ error }}
       </div>
 
-      <section class="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+      <section class="grid grid-cols-6 gap-3">
         <div v-for="card in summaryCards" :key="card.key" class="admin-card">
           <div class="ui-caption font-black uppercase text-text-secondary">{{ card.label }}</div>
           <div class="mt-2 text-2xl font-black text-text-main">{{ card.value }}</div>
@@ -161,7 +161,7 @@
       <section class="admin-panel">
         <div class="admin-panel-head">
           <h2>{{ $t('admin.users.title') }}</h2>
-          <div class="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[28rem] sm:flex-row sm:items-center">
+          <div class="flex w-auto min-w-[28rem] flex-row items-center gap-2">
             <div class="admin-segmented" role="group" :aria-label="$t('admin.users.tierFilter')">
               <button
                 v-for="option in tierFilterOptions"
@@ -1293,51 +1293,4 @@ watch(() => props.active, (active) => {
   color: var(--success);
 }
 
-@media (max-width: 760px) {
-  .admin-traffic-row {
-    grid-template-columns: 3rem 1fr 2.7rem;
-  }
-
-  .admin-row-note {
-    grid-column: 1 / -1;
-  }
-
-  .admin-panel-head {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .admin-chart-legend {
-    justify-content: flex-start;
-  }
-
-  .admin-pagination {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 0.65rem;
-  }
-
-  .admin-pagination-controls {
-    justify-content: center;
-  }
-
-  .admin-page-btn,
-  .admin-page-ellipsis {
-    min-width: 2rem;
-    min-height: 2rem;
-  }
-
-  .admin-page-nav-btn {
-    min-width: 2.4rem;
-    min-height: 2.4rem;
-  }
-
-  .admin-modal {
-    padding: 0.7rem;
-  }
-
-  .admin-modal-panel {
-    border-radius: 1rem;
-    padding: 1rem;
-  }
-}
 </style>

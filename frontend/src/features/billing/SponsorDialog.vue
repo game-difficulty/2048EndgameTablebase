@@ -13,7 +13,7 @@
         </button>
       </div>
 
-      <div class="mt-5 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+      <div class="mt-5 grid grid-cols-[0.9fr_1.1fr] gap-4">
         <div class="sponsor-qr-card">
           <img class="sponsor-qr" src="/payments/wechat-sponsor-qr.png" :alt="$t('billing.qrAlt')" />
           <div class="mt-3 text-center ui-caption font-black uppercase text-text-secondary">
@@ -140,14 +140,4 @@ const formatTokens = (value) => Number(value || 0).toLocaleString();
   color: var(--accent);
 }
 
-@media (max-width: 520px) {
-  .sponsor-overlay {
-    padding: 0.75rem;
-  }
-
-  .sponsor-panel {
-    border-radius: 1.1rem;
-    padding: 1rem;
-  }
-}
 </style>

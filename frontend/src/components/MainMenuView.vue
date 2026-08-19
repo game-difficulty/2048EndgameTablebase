@@ -10,7 +10,7 @@
     </div>
 
     <!-- Menu Grid -->
-    <div class="grid w-full grid-cols-1 gap-6 px-4 md:grid-cols-3 md:auto-rows-fr">
+    <div class="grid w-full grid-cols-3 auto-rows-fr gap-6 px-4">
       <!-- Play Game Card -->
       <button @click="$emit('selectTab', 'GamerView')"
         class="menu-card menu-card-primary h-full min-h-[220px] rounded-2xl p-6 transition-all duration-300 transform hover:-translate-y-2 flex flex-col items-center text-center group border backdrop-blur-sm">
@@ -324,23 +324,21 @@ onUnmounted(() => {
   letter-spacing: 0.15em;
 }
 
-@media (min-width: 960px) {
-  .menu-bottom-row {
-    min-height: 7.5rem;
-  }
+.menu-bottom-row {
+  min-height: 7.5rem;
+}
 
-  .menu-bottom-row-with-tools {
-    padding-inline: 13rem;
-  }
+.menu-bottom-row-with-tools {
+  padding-inline: 13rem;
+}
 
-  .menu-utility-actions {
-    position: absolute;
-    right: 1rem;
-    top: 50%;
-    flex-direction: column;
-    align-items: stretch;
-    margin: 0;
-    transform: translateY(-50%);
-  }
+.menu-utility-actions {
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  flex-direction: column;
+  align-items: stretch;
+  margin: 0;
+  transform: translateY(-50%);
 }
 </style>

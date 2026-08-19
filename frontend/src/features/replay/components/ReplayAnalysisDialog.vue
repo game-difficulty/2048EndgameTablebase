@@ -22,7 +22,7 @@
           </div>
         </div>
 
-        <div class="analysis-dialog-body grid gap-5 p-6 lg:grid-cols-[minmax(340px,0.95fr)_minmax(0,1.05fr)]">
+        <div class="analysis-dialog-body grid grid-cols-[minmax(340px,0.95fr)_minmax(0,1.05fr)] gap-5 p-6">
           <section class="rounded-[24px] border border-border-main/70 bg-bg-main/65 p-5 shadow-inner">
             <div class="ui-control font-black uppercase tracking-[0.24em] text-text-secondary">{{ $t('analysis.input.title') }}</div>
             <div class="mt-4 space-y-4">

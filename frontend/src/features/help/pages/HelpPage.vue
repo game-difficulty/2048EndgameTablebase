@@ -1,7 +1,7 @@
 <template>
   <div class="page-root">
-    <div class="flex h-full min-h-0 w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-border-main bg-bg-main shadow-2xl transition-colors duration-300 md:flex-row">
-      <div class="flex h-1/3 w-full flex-col border-b border-border-main bg-bg-card md:h-full md:w-72 md:border-b-0 md:border-r">
+    <div class="flex h-full min-h-0 w-full max-w-6xl flex-row overflow-hidden rounded-2xl border border-border-main bg-bg-main shadow-2xl transition-colors duration-300">
+      <div class="flex h-full w-72 flex-col border-r border-border-main bg-bg-card">
         <div class="border-b border-border-main bg-btn-bg/5 p-6">
           <div class="flex items-center justify-between gap-3">
             <h2 class="ui-metric flex min-w-0 items-center gap-2 font-black uppercase tracking-tighter text-text-main">
@@ -89,10 +89,10 @@
         </div>
       </div>
 
-      <div class="relative flex h-2/3 flex-1 flex-col overflow-hidden bg-bg-main md:h-full">
+      <div class="relative flex h-full flex-1 flex-col overflow-hidden bg-bg-main">
         <div
           v-if="searchOpen"
-          class="absolute left-6 right-6 top-5 z-20 rounded-2xl border border-border-main bg-bg-card/92 p-3 shadow-[0_18px_45px_rgba(15,23,42,0.18)] backdrop-blur-md md:left-auto md:right-8 md:w-[min(520px,calc(100%-4rem))]"
+          class="absolute right-8 top-5 z-20 w-[min(520px,calc(100%-4rem))] rounded-2xl border border-border-main bg-bg-card/92 p-3 shadow-[0_18px_45px_rgba(15,23,42,0.18)] backdrop-blur-md"
         >
           <div class="flex items-center gap-2">
             <div class="pointer-events-none flex h-10 w-10 min-w-[2.5rem] shrink-0 items-center justify-center rounded-xl border border-border-main/70 bg-bg-main/80 text-text-secondary">
@@ -138,7 +138,7 @@
           </div>
         </div>
 
-        <div ref="contentArea" class="custom-scrollbar flex-1 overflow-y-auto scroll-smooth bg-bg-main p-8 md:p-12">
+        <div ref="contentArea" class="custom-scrollbar flex-1 overflow-y-auto scroll-smooth bg-bg-main p-12">
           <article ref="articleRef" class="markdown-body prose prose-slate max-w-none" v-html="htmlContent"></article>
         </div>
       </div>

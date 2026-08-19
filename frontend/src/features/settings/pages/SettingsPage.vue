@@ -125,7 +125,7 @@
 
             <div class="border-t border-border-main pt-6">
               <label class="ui-control font-bold text-text-main mb-4 block uppercase tracking-wider">{{ $t('settings.theme.colors') }}</label>
-              <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-3">
+              <div class="grid grid-cols-8 gap-3">
                 <div v-for="index in 16" :key="index" class="flex flex-col items-center gap-1">
                   <span class="ui-kicker font-bold text-text-main">{{ 2 ** index }}</span>
                   <div class="relative w-10 h-10 rounded-lg shadow-sm border border-white/20 overflow-hidden group">

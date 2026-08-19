@@ -379,21 +379,4 @@ onUnmounted(() => {
   color: #ef4444;
 }
 
-@media (max-width: 520px) {
-  .security-dialog {
-    width: min(100%, calc(100vw - 1.5rem));
-    border-radius: 18px;
-    padding: 1.2rem;
-  }
-
-  .security-dialog-header {
-    grid-template-columns: 1fr;
-    gap: 0.75rem;
-  }
-
-  .security-close-button {
-    width: 100%;
-    justify-content: center;
-  }
-}
 </style>

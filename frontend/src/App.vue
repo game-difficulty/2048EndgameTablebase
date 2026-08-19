@@ -1,5 +1,7 @@
 <template>
-  <div class="app-shell h-screen w-screen flex flex-col overflow-hidden">
+  <div ref="fixedViewport" class="fixed-layout-viewport">
+    <div class="fixed-layout-frame" :style="fixedLayoutFrameStyle">
+      <div class="app-shell flex flex-col overflow-hidden" :style="fixedLayoutSurfaceStyle">
     <div class="flex items-center gap-2 overflow-x-auto bg-bg-main/80 p-2 shadow-sm z-50 border-b border-border-main backdrop-blur-md transition-colors duration-300">
       <div
         v-for="tab in openTabDefinitions"
@@ -50,7 +52,7 @@
             <span :class="['account-avatar', hasSupporterPresentation ? 'supporter' : '']">
               {{ accountInitials }}
             </span>
-            <span class="hidden max-w-[9rem] truncate sm:inline">{{ accountDisplayName }}</span>
+            <span class="inline max-w-[9rem] truncate">{{ accountDisplayName }}</span>
           </button>
         </template>
         <template v-else>
@@ -301,6 +303,8 @@
         </div>
       </div>
     </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -359,6 +363,11 @@ const tokenRequiredDialog = ref({
   required_tokens: 0,
   balance_tokens: 0,
 });
+const FIXED_LAYOUT_WIDTH = 1280;
+const FIXED_LAYOUT_HEIGHT = 800;
+const fixedViewport = ref(null);
+const fixedLayoutScale = ref(1);
+let fixedViewportObserver = null;
 const AUTH_REFRESH_CHECK_KEY = '2048tables:last-auth-refresh-check';
 const AUTH_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 let scheduledAuthRefreshTimer = null;
@@ -374,6 +383,28 @@ const {
 } = useTabManager();
 const draggedTabId = ref(null);
 const dragTargetTabId = ref(null);
+
+const fixedLayoutFrameStyle = computed(() => ({
+  width: `${FIXED_LAYOUT_WIDTH * fixedLayoutScale.value}px`,
+  height: `${FIXED_LAYOUT_HEIGHT * fixedLayoutScale.value}px`,
+}));
+
+const fixedLayoutSurfaceStyle = computed(() => ({
+  transform: `scale(${fixedLayoutScale.value})`,
+}));
+
+const updateFixedLayoutScale = () => {
+  const viewport = fixedViewport.value;
+  if (!viewport) return;
+  const width = viewport.clientWidth;
+  const height = viewport.clientHeight;
+  if (width <= 0 || height <= 0) return;
+  fixedLayoutScale.value = Math.min(
+    1,
+    width / FIXED_LAYOUT_WIDTH,
+    height / FIXED_LAYOUT_HEIGHT,
+  );
+};
 
 const getTabLabel = (tab) => (tab.titleKey ? t(tab.titleKey) : tab.title);
 const accountDisplayName = computed(() => authUser.value?.display_name || authUser.value?.email || '');
@@ -771,6 +802,13 @@ const handleAccountMenuPointerDown = (event) => {
 };
 
 onMounted(async () => {
+  updateFixedLayoutScale();
+  if (typeof ResizeObserver === 'function') {
+    fixedViewportObserver = new ResizeObserver(updateFixedLayoutScale);
+    fixedViewportObserver.observe(fixedViewport.value);
+  } else {
+    window.addEventListener('resize', updateFixedLayoutScale);
+  }
   startAppSettings();
   refreshAuth().then((nextUser) => {
     if (nextUser) {
@@ -792,6 +830,12 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  if (fixedViewportObserver) {
+    fixedViewportObserver.disconnect();
+    fixedViewportObserver = null;
+  } else {
+    window.removeEventListener('resize', updateFixedLayoutScale);
+  }
   window.removeEventListener('app-global-error', handleGlobalErrorEvent);
   window.removeEventListener('auth-required', handleAuthRequired);
   window.removeEventListener('token-required', handleTokenRequired);
@@ -808,7 +852,31 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.fixed-layout-viewport {
+  position: fixed;
+  inset:
+    env(safe-area-inset-top, 0px)
+    env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px)
+    env(safe-area-inset-left, 0px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background-color: var(--bg-main);
+  background-image: var(--bg-main-gradient);
+}
+
+.fixed-layout-frame {
+  position: relative;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
 .app-shell {
+  width: 1280px;
+  height: 800px;
+  transform-origin: top left;
   background-color: var(--bg-main);
   background-image: var(--bg-main-gradient);
 }

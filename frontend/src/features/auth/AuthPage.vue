@@ -550,24 +550,4 @@ onUnmounted(() => {
   color: #ef4444;
 }
 
-@media (max-width: 520px) {
-  .auth-panel {
-    max-height: calc(100vh - 1.5rem);
-    border-radius: 18px;
-    padding: 1.2rem;
-  }
-
-  .auth-heading h1 {
-    font-size: 1.5rem;
-  }
-
-  .auth-email-row {
-    grid-template-columns: 1fr;
-    gap: 0.6rem;
-  }
-
-  .auth-send-code {
-    width: 100%;
-  }
-}
 </style>
