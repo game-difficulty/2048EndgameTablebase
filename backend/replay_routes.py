@@ -13,7 +13,10 @@ from backend.cloud_files import build_bytes_download_response, get_max_upload_by
 from backend.quota.config import MULTIPLIER_UNIT
 from backend.quota.errors import InsufficientTokens
 from backend.quota.service import consume_operation_tokens_once, get_token_balance
-from backend.tester import get_latest_tester_replay_for_identity
+from backend.tester import (
+    get_latest_tester_replay_for_identity,
+    tester_replay_filename,
+)
 from engine_core.replay_utils import REPLAY_DTYPE, replay_sentinel
 
 
@@ -128,7 +131,10 @@ async def load_latest_tester_replay(
             },
         )
     pattern = str(latest.get("pattern") or "")
-    filename = f"{pattern or 'tester'}_latest.rpl"
+    filename = tester_replay_filename(
+        pattern,
+        latest.get("goodness_of_fit", 1.0),
+    )
 
     consumed = _consume_replay_load(
         request_id=request_id,

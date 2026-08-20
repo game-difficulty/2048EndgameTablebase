@@ -10,6 +10,10 @@ import { resultValueFontSize } from '../../../utils/successRate';
 import { PERFORMANCE_LABELS } from '../engine/replayAnalysis';
 import { ReplayController } from '../engine/replayController';
 import { parseReplayAsync } from '../engine/replayLoader';
+import {
+  normalizeReplayMarkerThreshold,
+  replayMarkerIndices,
+} from '../engine/replayMarkers';
 import { MAX_RPL_BYTES } from '../engine/rplParser';
 import {
   authorizeLocalReplayLoad,
@@ -237,20 +241,7 @@ export function useReplaySession(activeRef, emit) {
   }));
 
   const markerIndices = computed(() => {
-    const values = Array.isArray(losses.value) ? losses.value.map(Number).filter(Number.isFinite) : [];
-    if (!values.length) return [];
-    const sorted = [...values].sort((left, right) => left - right);
-    const position = (sorted.length - 1) * 0.1;
-    const lower = Math.floor(position);
-    const upper = Math.ceil(position);
-    const quantile = lower === upper
-      ? sorted[lower]
-      : sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
-    const threshold = Math.min(quantile, Number(sliderThreshold.value) || 1);
-    return values
-      .map((item, index) => ({ item, index }))
-      .filter(({ item }) => item < 1 && item < threshold)
-      .map(({ index }) => index);
+    return replayMarkerIndices(losses.value, sliderThreshold.value);
   });
   const hasNextPoint = computed(() => markerIndices.value.some((point) => point > currentStep.value));
   const resultFontSize = computed(() => resultValueFontSize(displayedResults.value.map((item) => item.display)));
@@ -451,8 +442,9 @@ export function useReplaySession(activeRef, emit) {
     persistPositionSoon();
   };
   const updateSliderThreshold = (value) => {
-    sliderThreshold.value = value;
-    saveSetting('record_player_slider_threshold', value);
+    const normalized = normalizeReplayMarkerThreshold(value);
+    sliderThreshold.value = normalized;
+    saveSetting('record_player_slider_threshold', normalized);
   };
   const nextInaccuracy = () => {
     const point = markerIndices.value.find((item) => item > currentStep.value);
@@ -526,8 +518,7 @@ export function useReplaySession(activeRef, emit) {
   watch(() => appConfig.value.language, (value) => { currentLanguage.value = value || 'en'; }, { immediate: true });
   watch(() => appConfig.value.demo_speed, (value) => { demoSpeed.value = Number(value) || 40; }, { immediate: true });
   watch(() => appConfig.value.record_player_slider_threshold, (value) => {
-    const parsed = Number(value);
-    sliderThreshold.value = Number.isFinite(parsed) ? parsed : 1;
+    sliderThreshold.value = normalizeReplayMarkerThreshold(value);
   }, { immediate: true });
   watch(activeRef, (isActive) => {
     if (isActive && consumePendingLatestReplayLoad()) requestLatestReplayLoad();

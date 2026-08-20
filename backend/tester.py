@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
+import math
 import random
+import re
 from typing import Any
 
 import numpy as np
@@ -46,6 +48,7 @@ LATEST_TESTER_REPLAY = {
     "source": "",
     "use_variant": False,
     "terminal_board": None,
+    "goodness_of_fit": 1.0,
 }
 LATEST_TESTER_REPLAY_BY_SCOPE = OrderedDict()
 MAX_SCOPED_LATEST_TESTER_REPLAYS = 512
@@ -69,7 +72,21 @@ def _empty_latest_tester_replay():
         "source": "",
         "use_variant": False,
         "terminal_board": None,
+        "goodness_of_fit": 1.0,
     }
+
+
+def tester_replay_filename(pattern: str, goodness_of_fit: float) -> str:
+    safe_pattern = re.sub(r"[^A-Za-z0-9_-]+", "_", str(pattern or "tester"))
+    safe_pattern = safe_pattern.strip("_-") or "tester"
+    try:
+        goodness = float(goodness_of_fit)
+    except (TypeError, ValueError):
+        goodness = 1.0
+    if not math.isfinite(goodness):
+        goodness = 1.0
+    goodness = min(1.0, max(0.0, goodness))
+    return f"{safe_pattern}_{goodness:.4f}.rpl"
 
 
 def _latest_tester_replay_scope_key(session):
@@ -154,6 +171,7 @@ def _cache_tester_replay(session):
         "source": "Tester session",
         "use_variant": bool(session.use_variant),
         "terminal_board": terminal_board,
+        "goodness_of_fit": float(session.tester_goodness_of_fit),
     }
     session.latest_tester_replay = latest_replay
     key = _latest_tester_replay_scope_key(session)
@@ -176,6 +194,9 @@ def _cache_tester_replay(session):
     LATEST_TESTER_REPLAY["source"] = "Tester session"
     LATEST_TESTER_REPLAY["use_variant"] = bool(session.use_variant)
     LATEST_TESTER_REPLAY["terminal_board"] = terminal_board
+    LATEST_TESTER_REPLAY["goodness_of_fit"] = float(
+        session.tester_goodness_of_fit
+    )
 
 
 def _tester_reset_history(session, board_encoded, score=0):

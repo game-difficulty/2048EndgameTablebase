@@ -119,6 +119,7 @@ class ReplayQuotaIdempotencyTests(unittest.TestCase):
             "source": "Tester session",
             "use_variant": False,
             "terminal_board": np.uint64(0x1021003129AB4CDE),
+            "goodness_of_fit": 0.98765,
         }
         latest = client.post(
             "/api/replay/latest",
@@ -127,6 +128,10 @@ class ReplayQuotaIdempotencyTests(unittest.TestCase):
         self.assertEqual(latest.status_code, 200)
         self.assertEqual(len(latest.content), REPLAY_DTYPE.itemsize * 2)
         self.assertEqual(latest.headers["x-replay-pattern"], "L3_256")
+        self.assertIn(
+            'filename="L3_256_0.9877.rpl"',
+            latest.headers["content-disposition"],
+        )
         self.assertEqual(latest.headers["x-token-total"], "4.0")
 
         LATEST_TESTER_REPLAY_BY_SCOPE.clear()

@@ -6,6 +6,7 @@ import {
   PERFORMANCE_EVALUATIONS,
   analyzeReplay,
 } from '../src/features/replay/engine/replayAnalysis.js';
+import { replayMarkerIndices } from '../src/features/replay/engine/replayMarkers.js';
 import { ReplayController } from '../src/features/replay/engine/replayController.js';
 import {
   ReplayFormatError,
@@ -78,6 +79,25 @@ test('analysis preserves forced moves without scoring them', () => {
   assert.equal(analysis.summary.total_moves, 1);
   assert.equal(analysis.summary.final_gof, 0.75);
   assert.equal(analysis.summary.counts['Blunder!'], 1);
+});
+
+test('marker threshold zero disables both markers and next-point candidates', () => {
+  const losses = [0.25, 0.5, 0.75, 1];
+  assert.deepEqual(replayMarkerIndices(losses, 0), []);
+});
+
+test('analysis and replay controls share the same marker calculation', () => {
+  const replay = parseRplArrayBuffer(buildReplayBuffer([
+    { board: 1n, change: change(0, 0, 1), rates: [10, 100, 0, 0] },
+    { board: 2n, change: change(0, 1, 1), rates: [20, 100, 0, 0] },
+    { board: 3n, change: change(0, 2, 1), rates: [30, 100, 0, 0] },
+    { board: 4n, change: change(0, 3, 1), rates: [40, 100, 0, 0] },
+  ]));
+  const analysis = analyzeReplay(replay, 0.35);
+  assert.deepEqual(
+    Array.from(analysis.pointsRank),
+    replayMarkerIndices(analysis.losses, 0.35),
+  );
 });
 
 test('continuous steps animate while discontinuities use snapshots', () => {

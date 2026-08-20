@@ -1,3 +1,5 @@
+import { replayMarkerIndices } from './replayMarkers.js';
+
 export const PERFORMANCE_PERFECT_LABEL = 'Perfect!';
 export const PERFORMANCE_EVALUATIONS = Object.freeze([
   { label: 'Excellent!', threshold: 0.999 },
@@ -17,17 +19,6 @@ export function evaluationOfPerformance(loss) {
   if (numericLoss > 1 - 3e-10) return PERFORMANCE_PERFECT_LABEL;
   return PERFORMANCE_EVALUATIONS.find((item) => numericLoss >= item.threshold)?.label
     || PERFORMANCE_EVALUATIONS[PERFORMANCE_EVALUATIONS.length - 1].label;
-}
-
-function quantile(values, fraction) {
-  if (!values.length) return 0;
-  const sorted = Array.from(values).sort((left, right) => left - right);
-  const position = (sorted.length - 1) * fraction;
-  const lower = Math.floor(position);
-  const upper = Math.ceil(position);
-  if (lower === upper) return sorted[lower];
-  const ratio = position - lower;
-  return sorted[lower] + (sorted[upper] - sorted[lower]) * ratio;
 }
 
 export function analyzeReplay(replay, markerThreshold = 1) {
@@ -65,13 +56,7 @@ export function analyzeReplay(replay, markerThreshold = 1) {
     combo[index] = comboCount;
   }
 
-  const threshold = count
-    ? Math.min(quantile(losses, 0.1), Number(markerThreshold) || 1)
-    : Number(markerThreshold) || 1;
-  const pointList = [];
-  for (let index = 0; index < count; index += 1) {
-    if (losses[index] < threshold && losses[index] < 1) pointList.push(index);
-  }
+  const pointList = replayMarkerIndices(losses, markerThreshold);
 
   return {
     losses,

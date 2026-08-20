@@ -36,6 +36,7 @@ from ..tester import (
     _tester_start_practice,
     send_tester_move_accepted,
     send_tester_state,
+    tester_replay_filename,
 )
 
 
@@ -420,7 +421,10 @@ async def handle_tester_action(
                 {
                     "action": Action.TESTER_EXPORT_REPLAY,
                     "data": {
-                        "filename": f"tester_replay_{int(time.time())}.rpl",
+                        "filename": tester_replay_filename(
+                            session.tester_full_pattern,
+                            session.tester_goodness_of_fit,
+                        ),
                         "mime": "application/octet-stream",
                         "base64": base64.b64encode(replay.tobytes()).decode("ascii"),
                     },
