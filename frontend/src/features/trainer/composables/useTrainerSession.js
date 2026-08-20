@@ -19,6 +19,12 @@ import { getStableWsClientId } from '../../../services/ws/clientIds';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
 import {
+  boardHex,
+  buildOptimisticMoveOnlyTransition,
+  buildOptimisticMoveTransition,
+  encodeBoard,
+} from '../../replay/engine/replayTransition';
+import {
   restoreSuccessRate,
   formatSuccessRate,
   successRateSortValue,
@@ -91,6 +97,8 @@ export function useTrainerSession(activeRef) {
   let resultsStaleTimer = null;
   let resultsPlaceholderTimer = null;
   let tablebaseRetryTimer = null;
+  let pendingOptimisticMoveBoardHex = '';
+  let pendingServerStateQuery = null;
   const resultsRefreshPhase = ref('idle');
 
   const recordStep = ref(0);
@@ -377,11 +385,30 @@ export function useTrainerSession(activeRef) {
     'UNDO',
   ]);
 
+  const attachServerStateQuery = (action, payload) => {
+    const shouldQueryMove = action === 'TRAINER_MOVE' && [1, 2].includes(Number(spawnMode.value));
+    if (
+      recordOpen.value
+      || !isAuthenticated.value
+      || !shouldQueryMove
+      || (!showResults.value && payload?.query_reason !== 'step')
+    ) {
+      return payload;
+    }
+    const queryId = `${clientId}_${++nextResultsRequestId}`;
+    const reason = payload?.query_reason
+      || (queuedStepCount.value > 0 || demoActive.value ? 'step' : 'auto');
+    pendingServerStateQuery = { queryId, reason };
+    startResultsRefresh();
+    return { ...payload, query_id: queryId };
+  };
+
   const triggerAction = (action, payload = {}) => {
     if (protectedActions.has(action) && !requireAuth()) {
       return false;
     }
-    client?.send(action, payload);
+    const nextPayload = attachServerStateQuery(action, payload);
+    client?.send(action, nextPayload);
     return true;
   };
 
@@ -573,17 +600,7 @@ export function useTrainerSession(activeRef) {
     }, Math.max(1, delayMs));
   };
 
-  const queryResults = (reason = 'manual') => {
-    if (recordOpen.value || (reason !== 'step' && !showResults.value) || awaitingSpawn.value) return null;
-    const boardHex = currentBoardHex.value || hexInput.value;
-    if (!boardHex) return null;
-    if (hasPendingResultsForBoard(boardHex)) return null;
-    if (!isAuthenticated.value) {
-      if (reason === 'auto') return null;
-      if (!requireAuth()) return null;
-    }
-
-    const requestId = `${clientId}_${++nextResultsRequestId}`;
+  const trackResultsRequest = (requestId, boardHex, reason) => {
     if (tablebaseRetryTimer) {
       window.clearTimeout(tablebaseRetryTimer);
       tablebaseRetryTimer = null;
@@ -608,19 +625,95 @@ export function useTrainerSession(activeRef) {
     } else {
       startResultsRefresh();
     }
+    return { fullPattern, version };
+  };
+
+  const prepareResultsRequest = (boardHex, reason = 'manual') => {
+    if (recordOpen.value || (reason !== 'step' && !showResults.value) || awaitingSpawn.value) return null;
+    if (!boardHex) return null;
+    if (hasPendingResultsForBoard(boardHex)) return null;
+    if (!isAuthenticated.value) {
+      if (reason === 'auto') return null;
+      if (!requireAuth()) return null;
+    }
+
+    const requestId = `${clientId}_${++nextResultsRequestId}`;
+    const { fullPattern, version } = trackResultsRequest(requestId, boardHex, reason);
+    return { requestId, fullPattern, version };
+  };
+
+  const queryResults = (reason = 'manual') => {
+    const boardHex = currentBoardHex.value || hexInput.value;
+    const prepared = prepareResultsRequest(boardHex, reason);
+    if (!prepared) return null;
     triggerAction('TABLEBASE_QUERY', {
       page: 'trainer',
-      query_id: requestId,
-      catalog_version: version,
-      full_pattern: fullPattern,
+      query_id: prepared.requestId,
+      catalog_version: prepared.version,
+      full_pattern: prepared.fullPattern,
       board_hex: boardHex,
     });
-    return requestId;
+    return prepared.requestId;
   };
 
   const clearStepQueue = () => {
     queuedStepCount.value = 0;
     stepExecutionPending.value = false;
+  };
+
+  const executeTrainerMove = (direction) => {
+    const normalized = String(direction || '').toLowerCase();
+    if (
+      !['up', 'down', 'left', 'right'].includes(normalized)
+      || awaitingSpawn.value
+      || !!pendingOptimisticMoveBoardHex
+      || wsStatus.value !== 'connected'
+      || !requireAuth()
+    ) {
+      return false;
+    }
+
+    const fromBoardHex = currentBoardHex.value || hexInput.value;
+    const currentSpawnMode = Number(spawnMode.value) || 0;
+    const transition = currentSpawnMode === 0
+      ? buildOptimisticMoveTransition(
+        board.value,
+        normalized,
+        isVariant.value,
+        Number(appConfig.value['4_spawn_rate'] ?? 0.1),
+      )
+      : buildOptimisticMoveOnlyTransition(board.value, normalized, isVariant.value);
+    if (!transition || !fromBoardHex) {
+      stepExecutionPending.value = false;
+      return false;
+    }
+
+    board.value = transition.board;
+    metadata.value = transition.metadata;
+    currentBoardHex.value = transition.hex;
+    hexInput.value = transition.hex;
+    pendingOptimisticMoveBoardHex = transition.hex;
+    invalidateResults();
+    if (currentSpawnMode === 3) {
+      awaitingSpawn.value = true;
+    }
+
+    const queryReason = queuedStepCount.value > 0 || demoActive.value ? 'step' : 'auto';
+    const preparedQuery = currentSpawnMode === 0
+      ? prepareResultsRequest(transition.hex, queryReason)
+      : null;
+
+    triggerAction('TRAINER_MOVE', {
+      dir: normalized,
+      client_optimistic: true,
+      from_board_hex: fromBoardHex,
+      board_hex: transition.hex,
+      spawn_index: transition.spawnIndex,
+      spawn_value: transition.spawnValue,
+      query_id: preparedQuery?.requestId,
+      query_reason: queryReason,
+    });
+    return true;
   };
 
   const pumpQueuedSteps = () => {
@@ -643,7 +736,7 @@ export function useTrainerSession(activeRef) {
 
     queuedStepCount.value -= 1;
     stepExecutionPending.value = true;
-    triggerAction('TRAINER_MOVE', { dir: move });
+    executeTrainerMove(move);
   };
 
   const handleMessage = async (data) => {
@@ -652,6 +745,8 @@ export function useTrainerSession(activeRef) {
       && pendingResultsRequests.size > 0
     ) {
       pendingResultsRequests.clear();
+      pendingOptimisticMoveBoardHex = '';
+      pendingServerStateQuery = null;
       clearTablebaseResultCache();
       invalidateResults({ clearDisplay: true });
       finishResultsRefresh();
@@ -677,8 +772,6 @@ export function useTrainerSession(activeRef) {
     }
 
     if (data.action === 'UPDATE_STATE') {
-      metadata.value = data.data.animation;
-      board.value = data.data.board;
       initialStateSeen = true;
       if (typeof data.data.tablebase_status === 'string') {
         tablebasePath.value = data.data.tablebase_status;
@@ -689,6 +782,19 @@ export function useTrainerSession(activeRef) {
       }
       const nextBoardHex = data.data.hex_str || hexInput.value;
       const boardChanged = !!nextBoardHex && nextBoardHex !== currentBoardHex.value;
+      const optimisticMoveAccepted = !!nextBoardHex
+        && nextBoardHex === pendingOptimisticMoveBoardHex;
+      const serverAnimation = data.data.animation || {};
+      const keepLocalOptimisticAnimation = optimisticMoveAccepted
+        && Object.keys(serverAnimation).length === 0;
+      if (!keepLocalOptimisticAnimation) {
+        metadata.value = serverAnimation;
+        board.value = data.data.board;
+      }
+      if (pendingOptimisticMoveBoardHex) {
+        pendingOptimisticMoveBoardHex = '';
+        stepExecutionPending.value = false;
+      }
       if (nextBoardHex) {
         currentBoardHex.value = nextBoardHex;
         hexInput.value = nextBoardHex;
@@ -706,6 +812,17 @@ export function useTrainerSession(activeRef) {
         spawnMode.value = nextSpawnMode;
       }
       awaitingSpawn.value = !!data.data.awaiting_spawn;
+      const serverStateQuery = pendingServerStateQuery;
+      pendingServerStateQuery = null;
+      let serverStateQueryAdopted = false;
+      if (serverStateQuery && nextBoardHex && !awaitingSpawn.value && !recordOpen.value) {
+        trackResultsRequest(
+          serverStateQuery.queryId,
+          nextBoardHex,
+          serverStateQuery.reason,
+        );
+        serverStateQueryAdopted = true;
+      }
       if (recordOpen.value) {
         pendingResultsRequests.clear();
         finishResultsRefresh();
@@ -741,9 +858,15 @@ export function useTrainerSession(activeRef) {
         demoActive.value = false;
         clearDemoTimer();
         clearStepQueue();
-      } else if (boardChanged) {
+      } else if (boardChanged && !serverStateQueryAdopted) {
         stepExecutionPending.value = false;
         queryResults(queuedStepCount.value > 0 || demoActive.value ? 'step' : 'auto');
+      } else if (
+        optimisticMoveAccepted
+        && demoActive.value
+        && !pendingResultsRequests.size
+      ) {
+        queryResults('step');
       }
       maybeAutoApplyDefaultTablebase();
       return;
@@ -752,7 +875,7 @@ export function useTrainerSession(activeRef) {
     if (data.action === 'TRAINER_RESULTS' || (
       data.action === 'TABLEBASE_QUERY_RESULT' && data.data?.page === 'trainer'
     )) {
-      const requestId = data.data.request_id;
+      const requestId = data.data.query_id || data.data.request_id;
       const resultBoardHex = data.data.board_hex || currentBoardHex.value;
       if (requestId && pendingResultsRequests.has(requestId)) {
         pendingResultsRequests.delete(requestId);
@@ -820,7 +943,7 @@ export function useTrainerSession(activeRef) {
     if (data.action === 'DO_AI_MOVE_CMD') {
       if (data.data.dir) {
         stepExecutionPending.value = true;
-        triggerAction('TRAINER_MOVE', { dir: data.data.dir });
+        executeTrainerMove(data.data.dir);
       }
       return;
     }
@@ -911,6 +1034,8 @@ export function useTrainerSession(activeRef) {
     clearDemoTimer();
     finishResultsRefresh();
     pendingResultsRequests.clear();
+    pendingOptimisticMoveBoardHex = '';
+    pendingServerStateQuery = null;
     clearStepQueue();
     if (tablebaseRetryTimer) {
       window.clearTimeout(tablebaseRetryTimer);
@@ -946,11 +1071,31 @@ export function useTrainerSession(activeRef) {
       const cellVal = board.value[row * 4 + col];
       if (cellVal === 0) {
         const spawnVal = (btn === 2) ? 4 : 2;
+        const fromBoardHex = currentBoardHex.value || hexInput.value;
+        const nextBoard = board.value.slice();
+        const spawnIndex = row * 4 + col;
+        nextBoard[spawnIndex] = spawnVal;
+        const nextBoardHex = boardHex(encodeBoard(nextBoard));
+        board.value = nextBoard;
+        metadata.value = { appear_tile: { index: spawnIndex, value: spawnVal } };
+        currentBoardHex.value = nextBoardHex;
+        hexInput.value = nextBoardHex;
+        pendingOptimisticMoveBoardHex = nextBoardHex;
         awaitingSpawn.value = false;
         demoActive.value = false;
         clearDemoTimer();
         clearStepQueue();
-        triggerAction('TRAINER_MANUAL_SPAWN', { row, col, val: spawnVal });
+        invalidateResults();
+        const preparedQuery = prepareResultsRequest(nextBoardHex, 'auto');
+        triggerAction('TRAINER_MANUAL_SPAWN', {
+          row,
+          col,
+          val: spawnVal,
+          client_optimistic: true,
+          from_board_hex: fromBoardHex,
+          board_hex: nextBoardHex,
+          query_id: preparedQuery?.requestId,
+        });
       }
       return;
     }
@@ -1086,7 +1231,7 @@ export function useTrainerSession(activeRef) {
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
-    triggerAction('TRAINER_MOVE', { dir: normalized });
+    executeTrainerMove(normalized);
   };
 
   const handleKeydown = (event) => {

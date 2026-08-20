@@ -194,12 +194,10 @@ function animationMetadata(board, direction, useVariant, spawnIndex, spawnValue)
   };
 }
 
-export function buildOptimisticMoveTransition(
+export function buildOptimisticMoveOnlyTransition(
   board,
   direction,
   useVariant = false,
-  spawnRate4 = 0.1,
-  randomSource = Math.random,
 ) {
   if (!Array.isArray(board) || board.length < 16 || !REPLAY_DIRECTIONS.includes(direction)) {
     return null;
@@ -210,6 +208,39 @@ export function buildOptimisticMoveTransition(
     : prepareClassic32kMerge(originalBoard, direction);
   const movedBoard = moveBoard(boardForMove, direction, useVariant);
   if (encodeBoard(movedBoard) === encodeBoard(boardForMove)) return null;
+  const encoded = encodeBoard(movedBoard);
+  const metadata = animationMetadata(
+    useVariant ? originalBoard : boardForMove,
+    direction,
+    useVariant,
+    -1,
+    0,
+  );
+  delete metadata.appear_tile;
+  return {
+    board: movedBoard,
+    boardEncoded: encoded,
+    hex: boardHex(encoded),
+    spawnIndex: -1,
+    spawnValue: 0,
+    metadata,
+  };
+}
+
+export function buildOptimisticMoveTransition(
+  board,
+  direction,
+  useVariant = false,
+  spawnRate4 = 0.1,
+  randomSource = Math.random,
+) {
+  const moveOnly = buildOptimisticMoveOnlyTransition(board, direction, useVariant);
+  if (!moveOnly) return null;
+  const originalBoard = board.slice(0, 16).map((value) => Number(value) || 0);
+  const boardForMove = useVariant
+    ? originalBoard.slice()
+    : prepareClassic32kMerge(originalBoard, direction);
+  const movedBoard = moveOnly.board;
 
   const emptyIndices = movedBoard.reduce((indices, value, index) => {
     if (value === 0) indices.push(index);

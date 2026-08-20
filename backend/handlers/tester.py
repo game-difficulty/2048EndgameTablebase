@@ -58,6 +58,29 @@ async def _tester_get_random_state(session: GameSession, path_list) -> int:
     )
 
 
+async def _start_requested_tablebase_query(
+    payload: dict[str, Any],
+    session: GameSession,
+    websocket: WebSocket,
+) -> None:
+    query_id = str(payload.get("query_id") or "").strip()[:160]
+    if not query_id or session.user_id is None:
+        return
+    from .tablebase_query import handle_tablebase_query_action
+
+    await handle_tablebase_query_action(
+        Action.TABLEBASE_QUERY,
+        {
+            "page": "tester",
+            "query_id": query_id,
+            "full_pattern": session.tester_full_pattern,
+            "board_hex": f"{int(session.board_encoded):016x}",
+        },
+        session,
+        websocket,
+    )
+
+
 async def handle_tester_action(
     action: str,
     payload: dict[str, Any],
@@ -397,6 +420,7 @@ async def handle_tester_action(
             session.board_encoded,
             logs_since=logs_since,
         )
+        await _start_requested_tablebase_query(payload, session, websocket)
         return True
 
     if action == Action.TESTER_EXPORT_LOG:

@@ -672,8 +672,6 @@ async def send_tester_move_accepted(websocket, session, expected_board, logs_sin
         },
         "record": {"length": session.tester_step_count},
     }
-    if session.user_id is not None:
-        data["token_balance"] = get_token_balance(session.user_id)
     if logs_since is not None:
         start = max(0, int(logs_since))
         data["logs_delta"] = session.tester_logs[start:]

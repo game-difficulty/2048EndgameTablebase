@@ -14,6 +14,7 @@ import {
 } from '../src/features/replay/engine/rplParser.js';
 import {
   buildOptimisticMoveTransition,
+  buildOptimisticMoveOnlyTransition,
   buildStepTransition,
   decodeBoard,
   encodeBoard,
@@ -183,6 +184,20 @@ test('optimistic tester move applies movement, spawn and animation locally', () 
   assert.equal(transition.spawnValue, 2);
   assert.equal(transition.metadata.direction, 'left');
   assert.deepEqual(transition.metadata.appear_tile, { index: 1, value: 2 });
+});
+
+test('optimistic trainer move can animate before server-selected spawn', () => {
+  const transition = buildOptimisticMoveOnlyTransition(
+    [0, 2, 2, 0, ...new Array(12).fill(0)],
+    'left',
+    false,
+  );
+  assert.deepEqual(transition.board.slice(0, 4), [4, 0, 0, 0]);
+  assert.equal(transition.hex, '2000000000000000');
+  assert.equal(transition.spawnIndex, -1);
+  assert.equal(transition.spawnValue, 0);
+  assert.equal(transition.metadata.direction, 'left');
+  assert.equal('appear_tile' in transition.metadata, false);
 });
 
 test('optimistic tester move keeps variant walls and non-merging 16k tiles', () => {

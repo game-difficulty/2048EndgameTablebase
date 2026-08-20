@@ -66,6 +66,29 @@ async def _set_random_trainer_board(session: GameSession, path_list) -> None:
     _clear_trainer_results(session)
 
 
+async def _start_requested_tablebase_query(
+    payload: dict[str, Any],
+    session: GameSession,
+    websocket: WebSocket,
+) -> None:
+    query_id = str(payload.get("query_id") or "").strip()[:160]
+    if not query_id or session.user_id is None or session.moved == 1:
+        return
+    from .tablebase_query import handle_tablebase_query_action
+
+    await handle_tablebase_query_action(
+        Action.TABLEBASE_QUERY,
+        {
+            "page": "trainer",
+            "query_id": query_id,
+            "full_pattern": session.current_pattern,
+            "board_hex": f"{int(session.board_encoded):016x}",
+        },
+        session,
+        websocket,
+    )
+
+
 async def handle_trainer_action(
     action: str,
     payload: dict[str, Any],
@@ -185,31 +208,77 @@ async def handle_trainer_action(
         if new_board == old_board_encoded:
             return True
 
-        session.score += int(move_score)
-        if session.score > session.best_score:
-            session.best_score = session.score
+        client_optimistic = bool(payload.get("client_optimistic"))
+        client_board_encoded = None
+        if client_optimistic:
+            try:
+                from_board_encoded = np_u64(
+                    int(str(payload.get("from_board_hex") or ""), 16)
+                )
+                client_board_encoded = np_u64(
+                    int(str(payload.get("board_hex") or ""), 16)
+                )
+            except (TypeError, ValueError):
+                await manager.send_state(websocket)
+                return True
+            if from_board_encoded != old_board_encoded:
+                await manager.send_state(websocket)
+                return True
+
+        next_score = int(session.score) + int(move_score)
 
         num_pos_1d, val_exp = -1, 0
         if session.spawn_mode == 0:
             session.moved = 0
-            gen_fn = v_gen_new_num if session.use_variant else r_gen_new_num
-            new_board, _, num_pos_1d, val_exp = gen_fn(new_board, spawn_rate4)
-            new_board = np_u64(new_board)
+            if client_optimistic:
+                try:
+                    num_pos_1d = int(payload.get("spawn_index"))
+                    spawn_value = int(payload.get("spawn_value"))
+                except (TypeError, ValueError):
+                    await manager.send_state(websocket)
+                    return True
+                if not 0 <= num_pos_1d < 16 or spawn_value not in (2, 4):
+                    await manager.send_state(websocket)
+                    return True
+                moved_array = decode_board(new_board).copy()
+                spawn_row, spawn_col = divmod(num_pos_1d, 4)
+                if int(moved_array[spawn_row, spawn_col]) != 0:
+                    await manager.send_state(websocket)
+                    return True
+                moved_array[spawn_row, spawn_col] = spawn_value
+                validated_board = np_u64(encode_board(moved_array))
+                if validated_board != client_board_encoded:
+                    await manager.send_state(websocket)
+                    return True
+                new_board = validated_board
+                val_exp = 1 if spawn_value == 2 else 2
+            else:
+                gen_fn = v_gen_new_num if session.use_variant else r_gen_new_num
+                new_board, _, num_pos_1d, val_exp = gen_fn(new_board, spawn_rate4)
+                new_board = np_u64(new_board)
         elif session.spawn_mode == 3:
+            if client_optimistic and client_board_encoded != new_board:
+                await manager.send_state(websocket)
+                return True
             session.moved = 1
         elif session.spawn_mode in (1, 2):
+            if client_optimistic and client_board_encoded != new_board:
+                await manager.send_state(websocket)
+                return True
             session.moved = 0
             try:
                 spawns = await compute_spawns_async(session, new_board)
             except RemoteTablebaseError as exc:
                 session.tablebase_status = "temporarily_unavailable"
+                await manager.send_state(websocket)
                 await websocket.send_json(
                     {
                         "action": Message.TABLEBASE_QUERY_RESULT,
                         "data": {
                             "page": "trainer",
+                            "query_id": str(payload.get("query_id") or "")[:160],
                             "full_pattern": session.current_pattern,
-                            "board_hex": format(int(new_board), "016x"),
+                            "board_hex": format(int(old_board_encoded), "016x"),
                             "results": {},
                             "dtype": "?",
                             **exc.payload,
@@ -233,23 +302,39 @@ async def handle_trainer_action(
                 new_board, _, num_pos_1d, val_exp = gen_fn(new_board, spawn_rate4)
                 new_board = np_u64(new_board)
 
+        session.score = next_score
+        if session.score > session.best_score:
+            session.best_score = session.score
         session.board_encoded = np_u64(new_board)
         _clear_trainer_results(session)
         session.history.append((session.board_encoded, session.score))
         session.move_history.append(direction_str)
         session.played_length = len(session.history) - 1
 
-        metadata = build_move_animation_metadata(
-            direction_str,
-            board_encoded=old_board_encoded,
-            use_variant=session.use_variant,
-            spawn_index=num_pos_1d,
-            spawn_value=2**val_exp if val_exp > 0 else 0,
-        )
+        if client_optimistic:
+            metadata = (
+                {
+                    "appear_tile": {
+                        "index": num_pos_1d,
+                        "value": 2**val_exp,
+                    }
+                }
+                if session.spawn_mode in (1, 2) and val_exp > 0
+                else {}
+            )
+        else:
+            metadata = build_move_animation_metadata(
+                direction_str,
+                board_encoded=old_board_encoded,
+                use_variant=session.use_variant,
+                spawn_index=num_pos_1d,
+                spawn_value=2**val_exp if val_exp > 0 else 0,
+            )
         if session.recording_state:
             _record_state(session, direction_str, num_pos_1d, val_exp)
 
         await manager.send_state(websocket, metadata)
+        await _start_requested_tablebase_query(payload, session, websocket)
         return True
 
     if action == Action.TRAINER_DEFAULT:
@@ -283,14 +368,40 @@ async def handle_trainer_action(
     if action == Action.TRAINER_MANUAL_SPAWN:
         if session.spawn_mode == 3 and session.moved == 1:
             _clear_record_replay(session)
-            row = payload.get("row", 0)
-            col = payload.get("col", 0)
-            val = payload.get("val", 2)
+            try:
+                row = int(payload.get("row", 0))
+                col = int(payload.get("col", 0))
+                val = int(payload.get("val", 2))
+            except (TypeError, ValueError):
+                await manager.send_state(websocket)
+                return True
+            if not 0 <= row < 4 or not 0 <= col < 4 or val not in (2, 4):
+                await manager.send_state(websocket)
+                return True
 
             board_2d = decode_board(np.uint64(u64(session.board_encoded)))
             if board_2d[row, col] == 0:
                 board_2d[row, col] = val
-                session.board_encoded = np_u64(encode_board(board_2d))
+                next_board_encoded = np_u64(encode_board(board_2d))
+                client_optimistic = bool(payload.get("client_optimistic"))
+                if client_optimistic:
+                    try:
+                        from_board_encoded = np_u64(
+                            int(str(payload.get("from_board_hex") or ""), 16)
+                        )
+                        client_board_encoded = np_u64(
+                            int(str(payload.get("board_hex") or ""), 16)
+                        )
+                    except (TypeError, ValueError):
+                        await manager.send_state(websocket)
+                        return True
+                    if (
+                        from_board_encoded != session.board_encoded
+                        or client_board_encoded != next_board_encoded
+                    ):
+                        await manager.send_state(websocket)
+                        return True
+                session.board_encoded = next_board_encoded
                 _clear_trainer_results(session)
                 session.moved = 0
                 session.history.append((session.board_encoded, session.score))
@@ -298,8 +409,15 @@ async def handle_trainer_action(
                 session.played_length = len(session.history) - 1
 
                 num_pos_1d = row * 4 + col
-                metadata = {"appear_tile": {"index": num_pos_1d, "value": val}}
+                metadata = (
+                    {}
+                    if client_optimistic
+                    else {"appear_tile": {"index": num_pos_1d, "value": val}}
+                )
                 await manager.send_state(websocket, metadata)
+                await _start_requested_tablebase_query(payload, session, websocket)
+            else:
+                await manager.send_state(websocket)
         return True
 
     if action == Action.SET_BOARD:

@@ -299,7 +299,7 @@ async def _finish_query(
         )
         return
     except RemoteTablebaseError as exc:
-        cancel_reservation(
+        token_balance = cancel_reservation(
             reservation,
             reason=exc.code.lower(),
             metadata={"page": page, "query_id": query_id},
@@ -319,11 +319,7 @@ async def _finish_query(
                             "dtype": "?",
                             "found": False,
                             **exc.payload,
-                            "token_balance": (
-                                get_token_balance(session.user_id)
-                                if session.user_id is not None
-                                else None
-                            ),
+                            "token_balance": token_balance,
                         },
                     }
                 )
@@ -331,7 +327,7 @@ async def _finish_query(
                 pass
         return
     except Exception as exc:
-        finalize_reservation(
+        token_balance = finalize_reservation(
             reservation,
             actual_operation_key=f"{page}_lookup_miss",
             metadata={
@@ -355,11 +351,7 @@ async def _finish_query(
                             "dtype": "?",
                             "found": False,
                             "code": "TABLEBASE_QUERY_FAILED",
-                            "token_balance": (
-                                get_token_balance(session.user_id)
-                                if session.user_id is not None
-                                else None
-                            ),
+                            "token_balance": token_balance,
                         },
                     }
                 )
@@ -367,26 +359,17 @@ async def _finish_query(
                 pass
         return
 
-    finalize_reservation(
-        reservation,
-        actual_operation_key=(
-            f"{page}_lookup_hit" if has_numeric_result(result.results) else f"{page}_lookup_miss"
-        ),
-        metadata={
-            "board_hex": result.board_hex,
-            "query_id": query_id,
-            "source": "tablebase_query_service",
-        },
-    )
     if not handle.is_current:
         return
-    extra_data = None
-    if _session_matches(
+    session_matches = _session_matches(
         session,
         page=page,
         board_encoded=result.board_encoded,
         full_pattern=result.full_pattern,
-    ):
+    )
+    token_balance = None
+    extra_data = None
+    if session_matches:
         _apply_session_result(session, page=page, result=result)
         if page == "tester":
             context = getattr(session, "tester_post_lookup_context", None)
@@ -402,26 +385,34 @@ async def _finish_query(
                     "logs_total": len(session.tester_logs),
                 }
     try:
+        token_balance = finalize_reservation(
+            reservation,
+            actual_operation_key=(
+                f"{page}_lookup_hit"
+                if has_numeric_result(result.results)
+                else f"{page}_lookup_miss"
+            ),
+            metadata={
+                "board_hex": result.board_hex,
+                "query_id": query_id,
+                "source": "tablebase_query_service",
+            },
+        )
+        if token_balance is None and session.user_id is not None:
+            token_balance = get_token_balance(session.user_id)
         await _send_query_result(
             websocket,
             page=page,
             query_id=query_id,
             catalog_version=catalog_version,
             result=result,
-            token_balance=(
-                get_token_balance(session.user_id) if session.user_id is not None else None
-            ),
+            token_balance=token_balance,
             extra_data=extra_data,
         )
     except Exception:
         return
 
-    if not _session_matches(
-        session,
-        page=page,
-        board_encoded=result.board_encoded,
-        full_pattern=result.full_pattern,
-    ):
+    if not session_matches:
         return
     await _run_prefetch(
         session,

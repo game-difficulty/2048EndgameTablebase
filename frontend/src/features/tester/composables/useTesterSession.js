@@ -586,7 +586,7 @@ export function useTesterSession(activeRef) {
     return true;
   };
 
-  const queryTablebase = (boardHex, { useCache = true } = {}) => {
+  const prepareTablebaseQuery = (boardHex, { useCache = true } = {}) => {
     const normalizedBoard = String(boardHex || '').trim().toLowerCase();
     if (
       !normalizedBoard
@@ -615,14 +615,20 @@ export function useTesterSession(activeRef) {
       boardHex: normalizedBoard,
       fullPattern: currentPatternDisplay.value,
     };
+    return { queryId, normalizedBoard, cacheHit };
+  };
+
+  const queryTablebase = (boardHex, { useCache = true } = {}) => {
+    const prepared = prepareTablebaseQuery(boardHex, { useCache });
+    if (!prepared) return false;
     client?.send('TABLEBASE_QUERY', {
       page: 'tester',
-      query_id: queryId,
+      query_id: prepared.queryId,
       catalog_version: catalogVersion.value,
       full_pattern: currentPatternDisplay.value,
-      board_hex: normalizedBoard,
+      board_hex: prepared.normalizedBoard,
     });
-    return cacheHit;
+    return prepared.cacheHit;
   };
 
   const move = (dir) => {
@@ -640,14 +646,15 @@ export function useTesterSession(activeRef) {
     metadata.value = transition.metadata;
     currentBoardHex.value = transition.hex;
     hexInput.value = transition.hex;
+    const preparedQuery = prepareTablebaseQuery(transition.hex);
     client?.send('TESTER_MOVE', {
       dir,
       from_board_hex: fromBoardHex,
       board_hex: transition.hex,
       spawn_index: transition.spawnIndex,
       spawn_value: transition.spawnValue,
+      query_id: preparedQuery?.queryId,
     });
-    queryTablebase(transition.hex);
     return true;
   };
 
@@ -709,6 +716,9 @@ export function useTesterSession(activeRef) {
     metadata.value = payload?.animation || {};
     currentBoardHex.value = payload?.hex_str || currentBoardHex.value;
     hexInput.value = currentBoardHex.value;
+    if (activeQuery && activeQuery.boardHex !== currentBoardHex.value) {
+      activeQuery = null;
+    }
     resultDtype.value = payload?.dtype || '?';
     results.value = payload?.results || {};
     if (Array.isArray(payload?.logs)) {

@@ -574,9 +574,14 @@ def reserve_operation_tokens(
     )
 
 
-def finalize_reservation(reservation: TokenReservation | None, *, actual_operation_key: str, metadata: dict[str, Any] | None = None) -> None:
+def finalize_reservation(
+    reservation: TokenReservation | None,
+    *,
+    actual_operation_key: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     if reservation is None:
-        return
+        return None
     actual_base_units = operation_cost_units(actual_operation_key)
     actual_units = min(
         reservation.reserved_units,
@@ -620,6 +625,8 @@ def finalize_reservation(reservation: TokenReservation | None, *, actual_operati
                 **(metadata or {}),
             },
         )
+        balance = _public_balance(after)
+    return balance
 
 
 def cancel_reservation(
@@ -627,9 +634,9 @@ def cancel_reservation(
     *,
     reason: str,
     metadata: dict[str, Any] | None = None,
-) -> None:
+) -> dict[str, Any] | None:
     if reservation is None:
-        return
+        return None
     with auth_db() as db:
         before = _ensure_token_account(db, reservation.user_id)
         db.execute(
@@ -669,6 +676,8 @@ def cancel_reservation(
                 **(metadata or {}),
             },
         )
+        balance = _public_balance(after)
+    return balance
 
 
 def consume_operation_tokens(

@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import numpy as np
 
@@ -50,8 +50,9 @@ class TesterQueryProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(session.tester_lookup_task)
         self.assertEqual(session.tester_results, {})
 
-    async def test_move_uses_authorized_session_result_and_does_not_query_inline(self):
+    async def test_move_uses_authorized_result_and_starts_requested_query(self):
         session = self.make_session()
+        session.user_id = 1
         websocket = RecordingWebSocket()
         session.board_encoded = np_u64(0x11)
         session.history = [(session.board_encoded, 0)]
@@ -74,7 +75,14 @@ class TesterQueryProtocolTests(unittest.IsolatedAsyncioTestCase):
         session.tester_best_move = "left"
         session.tester_results_board = np_u64(session.board_encoded)
 
-        with patch("backend.handlers.tester.r_move_board", return_value=(moved_board, 4)):
+        with (
+            patch("backend.handlers.tester.r_move_board", return_value=(moved_board, 4)),
+            patch(
+                "backend.handlers.tablebase_query.handle_tablebase_query_action",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as query,
+        ):
             await handle_tester_action(
                 Action.TESTER_MOVE,
                 {
@@ -83,6 +91,7 @@ class TesterQueryProtocolTests(unittest.IsolatedAsyncioTestCase):
                     "board_hex": safe_hex(next_board),
                     "spawn_index": 1,
                     "spawn_value": 2,
+                    "query_id": "tester-move-query",
                 },
                 session,
                 websocket,
@@ -95,6 +104,10 @@ class TesterQueryProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.tester_step_count, 1)
         self.assertEqual(session.tester_results, {})
         self.assertIsNone(session.tester_lookup_task)
+        query.assert_awaited_once()
+        query_payload = query.await_args.args[1]
+        self.assertEqual(query_payload["query_id"], "tester-move-query")
+        self.assertEqual(query_payload["board_hex"], safe_hex(next_board))
 
     async def test_move_without_authoritative_result_resyncs(self):
         session = self.make_session()
@@ -119,6 +132,7 @@ class TesterQueryProtocolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_move_rejects_invalid_client_spawn_and_resyncs(self):
         session = self.make_session()
+        session.user_id = 1
         websocket = RecordingWebSocket()
         session.board_encoded = np_u64(0x11)
         moved_array = np.zeros((4, 4), dtype=np.int32)
@@ -131,6 +145,15 @@ class TesterQueryProtocolTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("backend.handlers.tester.r_move_board", return_value=(moved_board, 4)),
+            patch(
+                "backend.tester.get_token_balance",
+                return_value={"bonus": 100, "paid": 0, "total": 100},
+            ),
+            patch(
+                "backend.handlers.tablebase_query.handle_tablebase_query_action",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as query,
         ):
             await handle_tester_action(
                 Action.TESTER_MOVE,
@@ -140,6 +163,7 @@ class TesterQueryProtocolTests(unittest.IsolatedAsyncioTestCase):
                     "board_hex": safe_hex(moved_board),
                     "spawn_index": 0,
                     "spawn_value": 2,
+                    "query_id": "forged-tester-query",
                 },
                 session,
                 websocket,
@@ -150,6 +174,7 @@ class TesterQueryProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(websocket.messages[0]["data"]["hex_str"], "0000000000000011")
         self.assertEqual(int(session.board_encoded), 0x11)
         self.assertEqual(session.tester_step_count, 0)
+        query.assert_not_awaited()
 
 
 if __name__ == "__main__":
