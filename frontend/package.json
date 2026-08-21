@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:replay": "node --test tests/replayEngine.test.js",
-    "test:tablebase-cache": "node --test tests/tablebaseResultCache.test.js"
+    "test:tablebase-cache": "node --test tests/tablebaseResultCache.test.js",
+    "test:trainer-state": "node --test tests/trainerBoardState.test.js"
   },
   "dependencies": {
     "vue": "^3.5.30",

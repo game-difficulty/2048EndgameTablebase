@@ -22,6 +22,7 @@ import {
   boardHex,
   buildOptimisticMoveOnlyTransition,
   buildOptimisticMoveTransition,
+  decodeBoard,
   encodeBoard,
 } from '../../replay/engine/replayTransition';
 import {
@@ -31,6 +32,11 @@ import {
   successRateRelativeLoss,
   resultValueFontSize,
 } from '../../../utils/successRate';
+import {
+  buildTrainerBoardEdit,
+  normalizeTrainerBoardHex,
+  previousDistinctTrainerHistoryState,
+} from '../engine/trainerBoardState.js';
 
 export function useTrainerSession(activeRef) {
   const RESULT_REFRESH_GRACE_MS = 180;
@@ -600,32 +606,49 @@ export function useTrainerSession(activeRef) {
     }, Math.max(1, delayMs));
   };
 
-  const trackResultsRequest = (requestId, boardHex, reason) => {
-    if (tablebaseRetryTimer) {
-      window.clearTimeout(tablebaseRetryTimer);
-      tablebaseRetryTimer = null;
-    }
-    pendingResultsRequests.clear();
-    pendingResultsRequests.set(requestId, { boardHex, reason });
+  const applyCachedResultsForBoard = (targetBoardHex, { clearOnMiss = false } = {}) => {
     const fullPattern = loadedTablebaseFullPattern.value || currentPatternDisplay.value;
     const version = catalogVersion.value || getCatalogVersion();
     const cached = version && fullPattern
-      ? getCachedTablebaseResult({ catalogVersion: version, fullPattern, boardHex })
+      ? getCachedTablebaseResult({
+        catalogVersion: version,
+        fullPattern,
+        boardHex: targetBoardHex,
+      })
       : null;
     if (cached) {
       tableResult.value = {
         dtype: cached.dtype || '?',
         results: cached.results || {},
       };
-      resultsBoardHex.value = boardHex;
+      resultsBoardHex.value = targetBoardHex;
       finishResultsRefresh();
       if (queuedStepCount.value > 0 || demoActive.value) {
         window.queueMicrotask(pumpQueuedSteps);
       }
-    } else {
+      return true;
+    }
+    if (clearOnMiss) {
+      invalidateResults({ clearDisplay: true });
+      finishResultsRefresh();
+    }
+    return false;
+  };
+
+  const trackResultsRequest = (requestId, targetBoardHex, reason) => {
+    if (tablebaseRetryTimer) {
+      window.clearTimeout(tablebaseRetryTimer);
+      tablebaseRetryTimer = null;
+    }
+    pendingResultsRequests.clear();
+    pendingResultsRequests.set(requestId, { boardHex: targetBoardHex, reason });
+    const fullPattern = loadedTablebaseFullPattern.value || currentPatternDisplay.value;
+    const version = catalogVersion.value || getCatalogVersion();
+    const cacheHit = applyCachedResultsForBoard(targetBoardHex);
+    if (!cacheHit) {
       startResultsRefresh();
     }
-    return { fullPattern, version };
+    return { fullPattern, version, cacheHit };
   };
 
   const prepareResultsRequest = (boardHex, reason = 'manual') => {
@@ -768,6 +791,10 @@ export function useTrainerSession(activeRef) {
     if (data.action === 'RECORDING_STOPPED') {
       recordingState.value = false;
       recordingLength.value = data.data?.recording_length ?? 0;
+      return;
+    }
+
+    if (data.action === 'TRAINER_BOARD_SYNCED') {
       return;
     }
 
@@ -1046,13 +1073,49 @@ export function useTrainerSession(activeRef) {
     wsStatus.value = 'disconnected';
   };
 
+  const applyLocalBoardSnapshot = (
+    nextBoardHex,
+    {
+      nextHistory = [nextBoardHex],
+      nextMoves = [null],
+      nextAwaitingSpawn = false,
+      clearOnCacheMiss = true,
+    } = {},
+  ) => {
+    const normalized = normalizeTrainerBoardHex(nextBoardHex);
+    if (!normalized) return false;
+
+    board.value = decodeBoard(BigInt(`0x${normalized}`));
+    metadata.value = {};
+    currentBoardHex.value = normalized;
+    hexInput.value = normalized;
+    fullHistory.value = nextHistory.slice();
+    fullMoves.value = nextMoves.slice();
+    awaitingSpawn.value = !!nextAwaitingSpawn;
+    replayResultsActive.value = false;
+    pendingResultsRequests.clear();
+    pendingOptimisticMoveBoardHex = '';
+    pendingServerStateQuery = null;
+    stepExecutionPending.value = false;
+
+    if (nextAwaitingSpawn) {
+      invalidateResults({ clearDisplay: true });
+      finishResultsRefresh();
+      return false;
+    }
+    return applyCachedResultsForBoard(normalized, { clearOnMiss: clearOnCacheMiss });
+  };
+
   const setBoard = () => {
-    if (!hexInput.value) return;
+    const normalized = normalizeTrainerBoardHex(hexInput.value);
+    if (!normalized || !requireAuth()) return;
     demoActive.value = false;
     clearDemoTimer();
     finishResultsRefresh();
     clearStepQueue();
-    triggerAction('SET_BOARD', { hex_str: hexInput.value });
+    applyLocalBoardSnapshot(normalized);
+    triggerAction('SET_BOARD', { hex_str: normalized, client_optimistic: true });
+    queryResults('set-board');
   };
 
   const TILE_SEQUENCE = [0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768];
@@ -1104,26 +1167,25 @@ export function useTrainerSession(activeRef) {
       return;
     }
 
-    if (btn === 0) {
-      demoActive.value = false;
-      clearDemoTimer();
-      clearStepQueue();
-      triggerAction('SET_CELL', { row, col, val: currentPaletteValue.value });
-    } else if (btn === 2) {
-      const cellVal = board.value[row * 4 + col];
-      const nextVal = getCycledTileValue(cellVal, 1);
-      demoActive.value = false;
-      clearDemoTimer();
-      clearStepQueue();
-      triggerAction('SET_CELL', { row, col, val: nextVal });
-    } else {
-      const cellVal = board.value[row * 4 + col];
-      const prevVal = getCycledTileValue(cellVal, -1);
-      demoActive.value = false;
-      clearDemoTimer();
-      clearStepQueue();
-      triggerAction('SET_CELL', { row, col, val: prevVal });
-    }
+    if (!requireAuth()) return;
+    const cellIndex = row * 4 + col;
+    const cellVal = board.value[cellIndex];
+    const nextVal = btn === 0
+      ? currentPaletteValue.value
+      : getCycledTileValue(cellVal, btn === 2 ? 1 : -1);
+    if (nextVal === cellVal) return;
+
+    demoActive.value = false;
+    clearDemoTimer();
+    clearStepQueue();
+    const edit = buildTrainerBoardEdit(board.value, row, col, nextVal);
+    if (!edit) return;
+    applyLocalBoardSnapshot(edit.boardHex);
+    triggerAction('SET_BOARD', {
+      hex_str: edit.boardHex,
+      client_optimistic: true,
+      edit_source: 'palette',
+    });
   };
 
   const onPatternChange = () => {
@@ -1180,7 +1242,35 @@ export function useTrainerSession(activeRef) {
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
-    triggerAction('UNDO');
+    if (!requireAuth()) return;
+
+    const previous = recordOpen.value
+      ? null
+      : previousDistinctTrainerHistoryState(
+        fullHistory.value,
+        fullMoves.value,
+        currentBoardHex.value,
+      );
+    if (!previous) {
+      triggerAction('UNDO');
+      return;
+    }
+
+    const nextAwaitingSpawn = Number(spawnMode.value) === 3
+      && previous.lastMove !== null
+      && previous.lastMove !== 'spawn';
+    const cacheHit = applyLocalBoardSnapshot(previous.boardHex, {
+      nextHistory: previous.history,
+      nextMoves: previous.moves,
+      nextAwaitingSpawn,
+    });
+    triggerAction('UNDO', {
+      client_optimistic: true,
+      expected_board_hex: previous.boardHex,
+    });
+    if (!cacheHit && !nextAwaitingSpawn) {
+      queryResults('undo');
+    }
   };
 
   const trainerDefault = () => {
@@ -1270,10 +1360,7 @@ export function useTrainerSession(activeRef) {
       moveBoard(map[event.code]);
     } else if (event.code === 'Backspace' || event.code === 'Delete') {
       event.preventDefault();
-      demoActive.value = false;
-      clearDemoTimer();
-      clearStepQueue();
-      triggerAction('UNDO');
+      trainerUndo();
     } else if (event.code === 'KeyE') {
       event.preventDefault();
       togglePalette(0);

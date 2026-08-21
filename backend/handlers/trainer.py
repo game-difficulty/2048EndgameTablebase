@@ -436,7 +436,18 @@ async def handle_trainer_action(
         session.history = [(session.board_encoded, session.score)]
         session.move_history = [None]
         session.played_length = 0
-        await manager.send_state(websocket)
+        if bool(payload.get("client_optimistic")):
+            await websocket.send_json(
+                {
+                    "action": Message.TRAINER_BOARD_SYNCED,
+                    "data": {
+                        "board_hex": f"{int(session.board_encoded):016x}",
+                        "edit_source": str(payload.get("edit_source") or "")[:32],
+                    },
+                }
+            )
+        else:
+            await manager.send_state(websocket)
         return True
 
     if action == Action.UNDO:

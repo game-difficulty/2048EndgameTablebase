@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 import numpy as np
 
-from backend.actions import Action
+from backend.actions import Action, Message
 from backend.handlers.trainer import handle_trainer_action
 from backend.remote_workers.errors import RemoteTablebaseOffline
 from backend.session import GameSession, np_u64
@@ -32,6 +32,43 @@ def encoded(values):
 
 
 class TrainerOptimisticMoveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_optimistic_board_edit_uses_lightweight_ack(self):
+        session = GameSession("trainer_optimistic_board_edit")
+        session.board_encoded = encoded([0] * 16)
+        session.history = [(session.board_encoded, 0)]
+        session.move_history = [None]
+        target = encoded([2, 4, 8, 16, *([0] * 12)])
+        manager = RecordingManager()
+        websocket = RecordingWebSocket()
+
+        handled = await handle_trainer_action(
+            Action.SET_BOARD,
+            {
+                "hex_str": f"{int(target):016x}",
+                "client_optimistic": True,
+                "edit_source": "palette",
+            },
+            session,
+            websocket,
+            manager,
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(session.board_encoded, target)
+        self.assertEqual(manager.states, [])
+        self.assertEqual(
+            websocket.messages,
+            [
+                {
+                    "action": Message.TRAINER_BOARD_SYNCED,
+                    "data": {
+                        "board_hex": f"{int(target):016x}",
+                        "edit_source": "palette",
+                    },
+                }
+            ],
+        )
+
     async def test_random_spawn_submission_is_validated_and_accepted(self):
         session = GameSession("trainer_optimistic_random")
         session.user_id = 1

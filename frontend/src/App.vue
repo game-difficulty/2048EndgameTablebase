@@ -377,9 +377,11 @@ const tokenRequiredDialog = ref({
   required_tokens: 0,
   balance_tokens: 0,
 });
-const FIXED_LAYOUT_WIDTH = 1280;
+const FIXED_LAYOUT_MIN_WIDTH = 1280;
+const FIXED_LAYOUT_MAX_WIDTH = 1600;
 const FIXED_LAYOUT_HEIGHT = 800;
 const fixedViewport = ref(null);
+const fixedLayoutWidth = ref(FIXED_LAYOUT_MIN_WIDTH);
 const fixedLayoutScale = ref(1);
 let fixedViewportObserver = null;
 const AUTH_REFRESH_CHECK_KEY = '2048tables:last-auth-refresh-check';
@@ -399,11 +401,13 @@ const draggedTabId = ref(null);
 const dragTargetTabId = ref(null);
 
 const fixedLayoutFrameStyle = computed(() => ({
-  width: `${FIXED_LAYOUT_WIDTH * fixedLayoutScale.value}px`,
+  width: `${fixedLayoutWidth.value * fixedLayoutScale.value}px`,
   height: `${FIXED_LAYOUT_HEIGHT * fixedLayoutScale.value}px`,
 }));
 
 const fixedLayoutSurfaceStyle = computed(() => ({
+  width: `${fixedLayoutWidth.value}px`,
+  height: `${FIXED_LAYOUT_HEIGHT}px`,
   transform: `scale(${fixedLayoutScale.value})`,
 }));
 
@@ -413,10 +417,15 @@ const updateFixedLayoutScale = () => {
   const width = viewport.clientWidth;
   const height = viewport.clientHeight;
   if (width <= 0 || height <= 0) return;
-  fixedLayoutScale.value = Math.min(
+  const nextScale = Math.min(
     1,
-    width / FIXED_LAYOUT_WIDTH,
+    width / FIXED_LAYOUT_MIN_WIDTH,
     height / FIXED_LAYOUT_HEIGHT,
+  );
+  fixedLayoutScale.value = nextScale;
+  fixedLayoutWidth.value = Math.min(
+    FIXED_LAYOUT_MAX_WIDTH,
+    Math.max(FIXED_LAYOUT_MIN_WIDTH, width / nextScale),
   );
 };
 
@@ -897,8 +906,6 @@ onUnmounted(() => {
 }
 
 .app-shell {
-  width: 1280px;
-  height: 800px;
   transform-origin: top left;
   background-color: var(--bg-main);
   background-image: var(--bg-main-gradient);

@@ -59,7 +59,7 @@
       </div>
     </div>
 
-    <div class="tool-page-layout relative z-0 grid w-full max-w-6xl grid-cols-[clamp(260px,58vh,442px)_minmax(0,1fr)] items-start gap-6">
+    <div class="tool-page-layout tester-layout relative z-0 grid w-full max-w-6xl grid-cols-[442px_minmax(0,1fr)] items-start gap-6">
       <section class="tool-page-board-column flex min-w-0 flex-col">
         <div class="mb-4 flex gap-2">
           <input

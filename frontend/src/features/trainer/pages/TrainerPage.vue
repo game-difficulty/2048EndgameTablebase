@@ -86,7 +86,7 @@
       </div>
     </div>
 
-    <div class="tool-page-layout relative z-0 w-full max-w-6xl flex flex-row gap-6 items-start">
+    <div class="tool-page-layout trainer-layout relative z-0 w-full max-w-6xl flex flex-row gap-6 items-start">
       <div class="tool-page-board-column flex flex-col items-center">
         <div class="w-full flex gap-2 mb-3">
           <input
@@ -115,7 +115,7 @@
             <span class="ui-kicker font-black text-text-secondary uppercase tracking-widest leading-none">{{ $t('labels.tilePalette') }}</span>
             <div class="flex items-center gap-3">
               <label class="flex items-center gap-1 ui-kicker text-text-secondary cursor-pointer select-none font-bold uppercase tracking-tighter">
-                <input type="checkbox" v-model="dis32k" @change="onDis32kChange" class="cursor-pointer accent-accent" />
+                <input type="checkbox" v-model="dis32k" @change="handleDis32kChange" class="cursor-pointer accent-accent" />
                 {{ $t('trainer.board.hide32k') }}
               </label>
               <span
@@ -164,7 +164,7 @@
                 {{ $t('common.updating') }}
               </span>
               <label class="flex items-center gap-1 ui-kicker text-text-secondary cursor-pointer select-none font-bold uppercase tracking-tighter">
-                <input type="checkbox" v-model="showResults" class="cursor-pointer accent-accent" />
+                <input type="checkbox" v-model="showResults" @change="focusBoardHotkeys" class="cursor-pointer accent-accent" />
                 {{ $t('trainer.results.auto') }}
               </label>
               <button @click="queryResults" class="ui-kicker !bg-btn-bg !text-white border border-btn-bg hover:bg-btn-hover px-2.5 py-1 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm">
@@ -273,6 +273,7 @@ const {
   currentPatternDisplay,
   isVariant,
   wsStatus,
+  tablebasePath,
   togglePatternMenu,
   selectPattern,
   patternType,
@@ -337,6 +338,11 @@ const handlePatternSelect = (pattern, event) => {
 
 const handleTargetChange = (event) => {
   onPatternChange();
+  focusBoardHotkeys(event);
+};
+
+const handleDis32kChange = (event) => {
+  onDis32kChange();
   focusBoardHotkeys(event);
 };
 </script>

@@ -655,9 +655,18 @@ body {
   min-width: 0;
 }
 
-.tool-page-layout.flex .tool-page-board-column {
-  width: min(100%, 442px);
-  flex: 0 1 442px;
+.tool-page-layout,
+.tool-page-header {
+  max-width: min(100%, 1400px) !important;
+}
+
+.trainer-layout .tool-page-board-column {
+  width: 442px;
+  flex: 0 0 442px;
+}
+
+.tester-layout {
+  grid-template-columns: 442px minmax(0, 1fr) !important;
 }
 
 .tool-page-side-column {
