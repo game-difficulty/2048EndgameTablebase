@@ -84,6 +84,16 @@
       "concurrency": 1
     },
     {
+      "table_id": "4431_1024",
+      "pattern": "4431",
+      "target": "1024",
+      "path": "C:/2048_tables/4431-1k",
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-c",
+      "concurrency": 1
+    },
+    {
       "table_id": "444_1024",
       "pattern": "444",
       "target": "1024",
