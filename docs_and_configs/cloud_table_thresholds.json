@@ -6,7 +6,7 @@
     "L3_1024": { "threshold": 0.2, "mode": "relative" },
     "442t_128": { "threshold": 0.6, "mode": "absolute" },
     "442t_256": { "threshold": 0.4, "mode": "absolute" },
-    "442t_512": { "threshold": null, "mode": null },
+    "442t_512": { "threshold": 0.25, "mode": "absolute" },
     "2x4_512": { "threshold": 0.01, "mode": "relative" },
     "3x3_1024": { "threshold": 0.01, "mode": "relative" },
     "3x4free9_512": { "threshold": 0.35, "mode": "absolute" },
