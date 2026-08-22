@@ -9,9 +9,9 @@
       content="带连续秒表、单步用时和节点用时的 2048Verse 回放查看器"
     />
     <title>2048Verse 回放计时器</title>
-    <link rel="stylesheet" href="styles.css" />
-    <script src="replay-core.js" defer></script>
-    <script src="app.js" defer></script>
+    <link rel="stylesheet" href="styles.css?v=20260823-2" />
+    <script src="replay-core.js?v=20260823-2" defer></script>
+    <script src="app.js?v=20260823-2" defer></script>
   </head>
   <body>
     <main id="app" class="app-shell">
@@ -50,20 +50,6 @@
         </article>
       </section>
 
-      <section class="board-code-row" aria-label="当前局面编码">
-        <label for="board-hex-value">当前局面编码</label>
-        <input
-          id="board-hex-value"
-          type="text"
-          value=""
-          placeholder="—"
-          readonly
-          spellcheck="false"
-          autocomplete="off"
-          autocapitalize="off"
-        />
-      </section>
-
       <section class="viewer-layout">
         <div class="board-column">
           <div id="board-placeholder" class="board-placeholder">
@@ -86,8 +72,19 @@
       </section>
 
       <section class="replay-control" aria-label="回放控制">
-        <div class="progress-labels" aria-hidden="true">
+        <div class="progress-labels">
           <span id="progress-current">0</span>
+          <input
+            id="board-hex-value"
+            class="board-code-inline"
+            type="text"
+            value=""
+            readonly
+            spellcheck="false"
+            autocomplete="off"
+            autocapitalize="off"
+            aria-label="当前局面编码"
+          />
           <span id="progress-total">0</span>
         </div>
         <div class="progress-wrap">
