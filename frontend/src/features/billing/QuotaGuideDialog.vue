@@ -90,6 +90,31 @@
           </div>
         </section>
 
+        <section class="quota-guide-section">
+          <div class="section-heading">
+            <h3>{{ $t('billing.quotaGuide.thresholds.title') }}</h3>
+            <p>{{ $t('billing.quotaGuide.thresholds.note') }}</p>
+          </div>
+          <div class="quota-table-wrap">
+            <table class="quota-table threshold-table">
+              <thead>
+                <tr>
+                  <th>{{ $t('billing.quotaGuide.thresholds.tablebase') }}</th>
+                  <th>{{ $t('billing.quotaGuide.thresholds.threshold') }}</th>
+                  <th>{{ $t('billing.quotaGuide.thresholds.mode') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in thresholdRows" :key="row.full_pattern">
+                  <td class="patterns">{{ row.full_pattern }}</td>
+                  <td>{{ formatThreshold(row.threshold) }}</td>
+                  <td>{{ formatThresholdMode(row.mode) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
         <section class="quota-guide-section quota-notes">
           <h3>{{ $t('billing.quotaGuide.rules.title') }}</h3>
           <p>{{ $t('billing.quotaGuide.rules.balanceOrder') }}</p>
@@ -114,7 +139,7 @@ const props = defineProps({
 
 defineEmits(['close']);
 
-const { locale } = useI18n();
+const { locale, t } = useI18n();
 const rules = ref(null);
 const loading = ref(false);
 const loadError = ref(false);
@@ -139,11 +164,32 @@ const costRows = computed(() => {
   }));
 });
 
+const thresholdRows = computed(() => (
+  Array.isArray(rules.value?.tablebase_thresholds)
+    ? rules.value.tablebase_thresholds
+    : []
+));
+
 const formatTokens = (value) => new Intl.NumberFormat(locale.value, {
   maximumFractionDigits: 1,
 }).format(Number(value || 0));
 
 const formatMultiplier = (value) => `${formatTokens(value)}x`;
+
+const formatThreshold = (value) => {
+  if (value === null || value === undefined) {
+    return t('billing.quotaGuide.thresholds.notRecorded');
+  }
+  const percentage = Number(value) * 100;
+  return `${new Intl.NumberFormat(locale.value, { maximumFractionDigits: 2 }).format(percentage)}%`;
+};
+
+const formatThresholdMode = (mode) => {
+  if (mode === 'absolute' || mode === 'relative') {
+    return t(`billing.quotaGuide.thresholds.modes.${mode}`);
+  }
+  return t('billing.quotaGuide.thresholds.notRecorded');
+};
 
 const loadRules = async () => {
   loading.value = true;
@@ -306,6 +352,10 @@ watch(
 
 .quota-table .patterns {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.threshold-table {
+  table-layout: fixed;
 }
 
 .replay-cost-row {

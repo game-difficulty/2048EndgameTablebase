@@ -467,6 +467,18 @@
         "analysis": "分析 / 文件",
         "replay": "载入 .rpl 回放（不受定式倍率影响）"
       },
+      "thresholds": {
+        "title": "定式剪枝阈值",
+        "note": "数据提取自各定式目录的 *_config.txt；低于阈值的成功率记录可能已被剪枝，因此查询时可能没有结果。",
+        "tablebase": "定式",
+        "threshold": "阈值",
+        "mode": "模式",
+        "notRecorded": "未记录",
+        "modes": {
+          "absolute": "绝对成功率",
+          "relative": "相对层最大值"
+        }
+      },
       "rules": {
         "title": "计费说明",
         "balanceOrder": "消费时先使用赠送 token，再使用充值 token。",

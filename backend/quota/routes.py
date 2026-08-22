@@ -9,6 +9,7 @@ from .config import (
     MULTIPLIER_UNIT,
     TOKEN_UNIT,
     table_multiplier_config,
+    table_threshold_config,
     token_cost_config,
 )
 from .service import (
@@ -34,6 +35,7 @@ def _multiplier(units: int) -> int | float:
 
 def public_quota_rules() -> dict[str, Any]:
     multiplier_config = table_multiplier_config()
+    threshold_config = table_threshold_config()
     grouped_rules: OrderedDict[int, list[str]] = OrderedDict()
     for rule in multiplier_config.get("rules", []):
         prefix = str(rule.get("prefix") or "").strip()
@@ -52,6 +54,19 @@ def public_quota_rules() -> dict[str, Any]:
         for multiplier_units, patterns in grouped_rules.items()
     ]
     costs = token_cost_config()
+    tablebase_thresholds = []
+    for full_pattern, raw_threshold in threshold_config.get("tables", {}).items():
+        if not isinstance(raw_threshold, dict):
+            continue
+        threshold = raw_threshold.get("threshold")
+        mode = raw_threshold.get("mode")
+        tablebase_thresholds.append(
+            {
+                "full_pattern": str(full_pattern),
+                "threshold": None if threshold is None else float(threshold),
+                "mode": str(mode) if mode in {"absolute", "relative"} else None,
+            }
+        )
 
     return {
         "weekly_grants": {
@@ -69,6 +84,7 @@ def public_quota_rules() -> dict[str, Any]:
             "replay_load": float(costs.get("replay_load", 0)),
         },
         "table_groups": table_groups,
+        "tablebase_thresholds": tablebase_thresholds,
         "default_multiplier": float(
             multiplier_config.get("default_multiplier", 1)
         ),

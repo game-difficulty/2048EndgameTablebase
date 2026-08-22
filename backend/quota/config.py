@@ -9,6 +9,7 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MULTIPLIERS_PATH = PROJECT_ROOT / "docs_and_configs" / "cloud_table_multipliers.json"
+DEFAULT_THRESHOLDS_PATH = PROJECT_ROOT / "docs_and_configs" / "cloud_table_thresholds.json"
 DEFAULT_COSTS_PATH = PROJECT_ROOT / "docs_and_configs" / "cloud_token_costs.json"
 TOKEN_UNIT = 1000
 MULTIPLIER_UNIT = 1000
@@ -46,6 +47,12 @@ def table_multiplier_config() -> dict[str, Any]:
             ],
         },
     )
+
+
+@lru_cache(maxsize=1)
+def table_threshold_config() -> dict[str, Any]:
+    path = Path(os.getenv("CLOUD_TABLE_THRESHOLDS") or DEFAULT_THRESHOLDS_PATH)
+    return _load_json(path, {"tables": {}})
 
 
 @lru_cache(maxsize=1)

@@ -467,6 +467,18 @@
         "analysis": "Analysis / file",
         "replay": "Load an .rpl replay (not affected by tablebase multiplier)"
       },
+      "thresholds": {
+        "title": "Tablebase Pruning Thresholds",
+        "note": "Values are taken from each tablebase's *_config.txt. Success-rate records below the threshold may have been pruned and can therefore return no result.",
+        "tablebase": "Tablebase",
+        "threshold": "Threshold",
+        "mode": "Mode",
+        "notRecorded": "Not recorded",
+        "modes": {
+          "absolute": "Absolute success rate",
+          "relative": "Relative to layer maximum"
+        }
+      },
       "rules": {
         "title": "Charging Notes",
         "balanceOrder": "Bonus tokens are spent before paid tokens.",

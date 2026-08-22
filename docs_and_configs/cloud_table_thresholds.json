@@ -1,0 +1,24 @@
+{
+  "tables": {
+    "L3_128": { "threshold": 0.4, "mode": "absolute" },
+    "L3_256": { "threshold": 0.3, "mode": "absolute" },
+    "L3_512": { "threshold": 0.25, "mode": "absolute" },
+    "L3_1024": { "threshold": 0.2, "mode": "relative" },
+    "442t_128": { "threshold": 0.6, "mode": "absolute" },
+    "442t_256": { "threshold": 0.4, "mode": "absolute" },
+    "442t_512": { "threshold": null, "mode": null },
+    "2x4_512": { "threshold": 0.01, "mode": "relative" },
+    "3x3_1024": { "threshold": 0.01, "mode": "relative" },
+    "3x4free9_512": { "threshold": 0.35, "mode": "absolute" },
+    "3x3free8_512": { "threshold": 0.0, "mode": "absolute" },
+    "free10_128": { "threshold": 0.5, "mode": "absolute" },
+    "free10_256": { "threshold": 0.3, "mode": "absolute" },
+    "free10_512": { "threshold": 0.1, "mode": "absolute" },
+    "free11_512": { "threshold": 0.1, "mode": "absolute" },
+    "free11_1024": { "threshold": 0.1, "mode": "absolute" },
+    "4421_1024": { "threshold": 0.05, "mode": "absolute" },
+    "444_1024": { "threshold": 0.7, "mode": "absolute" },
+    "444_2048": { "threshold": 0.5, "mode": "absolute" },
+    "LL_1024": { "threshold": 0.2, "mode": "absolute" }
+  }
+}
