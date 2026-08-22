@@ -104,6 +104,19 @@
     </div>
 
     <div class="menu-bottom-row menu-bottom-row-with-tools">
+      <div class="menu-utility-actions menu-utility-actions-left">
+        <button
+          type="button"
+          class="menu-utility-btn"
+          @click="$emit('selectTab', 'LeaderboardsView')"
+        >
+          <svg class="menu-utility-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8 4h8v3.5c0 3.2-1.5 5.4-4 6.5-2.5-1.1-4-3.3-4-6.5V4Z" fill="currentColor" opacity="0.22"/>
+            <path d="M8 6H5.5v1.5c0 2.3 1.4 3.8 3.8 4.1M16 6h2.5v1.5c0 2.3-1.4 3.8-3.8 4.1M12 14v3M8.5 20h7M10 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+          {{ $t('menu.openLeaderboards') }}
+        </button>
+      </div>
       <div class="menu-footer text-center shadow-sm px-5 py-4 rounded-[1.75rem] bg-bg-card backdrop-blur-md border border-border-main">
         <p class="text-text-secondary font-black ui-control uppercase tracking-widest flex items-center gap-2 justify-center">
         {{ $t('menu.githubNote') }}
@@ -122,7 +135,7 @@
         </p>
       </div>
 
-      <div class="menu-utility-actions">
+      <div class="menu-utility-actions menu-utility-actions-right">
         <a
           class="menu-utility-btn"
           href="/verse-replay/"
@@ -226,6 +239,13 @@ onUnmounted(() => {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
   transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
   text-decoration: none;
+  gap: 0.55rem;
+}
+
+.menu-utility-icon {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: 0 0 auto;
 }
 
 .menu-utility-btn:hover {
@@ -334,11 +354,13 @@ onUnmounted(() => {
 
 .menu-utility-actions {
   position: absolute;
-  right: 1rem;
   top: 50%;
   flex-direction: column;
   align-items: stretch;
   margin: 0;
   transform: translateY(-50%);
 }
+
+.menu-utility-actions-left { left: 1rem; }
+.menu-utility-actions-right { right: 1rem; }
 </style>

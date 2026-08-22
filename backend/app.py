@@ -73,6 +73,8 @@ from backend.handlers.tablebase_query import (
     drain_tablebase_query_tasks,
     handle_tablebase_query_action,
 )
+from backend.leaderboards.routes import router as leaderboard_router
+from backend.leaderboards.service import refresh_due_leaderboards
 from backend.preload import start_preload_thread
 from backend.resource_paths import get_resource_path
 from backend.state import ConnectionManager, save_game_state
@@ -156,6 +158,18 @@ class CacheControlledStaticFiles(StaticFiles):
         return response
 
 
+async def _leaderboard_refresh_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(refresh_due_leaderboards)
+        except Exception as exc:
+            _rate_limited_log(
+                "leaderboard-refresh",
+                f"Leaderboard refresh failed: {type(exc).__name__}: {exc}",
+            )
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI):
     SingletonConfig()
@@ -167,9 +181,15 @@ async def app_lifespan(_app: FastAPI):
         _broadcast_tablebase_catalog_update
     )
     await remote_worker_registry.start()
+    leaderboard_refresh_task = asyncio.create_task(_leaderboard_refresh_loop())
     try:
         yield
     finally:
+        leaderboard_refresh_task.cancel()
+        try:
+            await leaderboard_refresh_task
+        except asyncio.CancelledError:
+            pass
         remote_worker_registry.remove_availability_listener(
             _broadcast_tablebase_catalog_update
         )
@@ -183,6 +203,7 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(replay_router)
 app.include_router(quota_router)
+app.include_router(leaderboard_router)
 
 
 @app.middleware("http")

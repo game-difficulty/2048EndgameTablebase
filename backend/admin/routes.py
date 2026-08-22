@@ -71,7 +71,9 @@ def _daily_token_activity(db, days: int) -> list[dict[str, Any]]:
               SUM(final_cost_units) AS units,
               COUNT(DISTINCT user_id) AS spending_users
             FROM token_ledger
-            WHERE created_at >= ? AND final_cost_units > 0
+            WHERE created_at >= ?
+              AND final_cost_units > 0
+              AND event_type IN ('finalize', 'consume')
             GROUP BY day
             """,
             (cutoff,),
@@ -280,7 +282,13 @@ async def admin_overview(
             "tokens_spent_24h": _token_value(
                 _scalar(
                     db,
-                    "SELECT COALESCE(SUM(final_cost_units), 0) FROM token_ledger WHERE final_cost_units > 0 AND created_at >= ?",
+                    """
+                    SELECT COALESCE(SUM(final_cost_units), 0)
+                    FROM token_ledger
+                    WHERE final_cost_units > 0
+                      AND event_type IN ('finalize', 'consume')
+                      AND created_at >= ?
+                    """,
                     (cutoff_24h,),
                 )
             ),

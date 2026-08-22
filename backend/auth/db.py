@@ -259,6 +259,28 @@ def init_auth_db() -> None:
               FOREIGN KEY(session_id) REFERENCES sessions(id)
             );
 
+            CREATE TABLE IF NOT EXISTS leaderboard_snapshots (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              board_key TEXT NOT NULL,
+              period_start TEXT,
+              period_end TEXT NOT NULL,
+              generated_at TEXT NOT NULL,
+              entry_count INTEGER NOT NULL DEFAULT 0,
+              UNIQUE(board_key, period_end)
+            );
+
+            CREATE TABLE IF NOT EXISTS leaderboard_entries (
+              snapshot_id INTEGER NOT NULL,
+              user_id INTEGER NOT NULL,
+              rank INTEGER NOT NULL,
+              score_units INTEGER NOT NULL DEFAULT 0,
+              display_name TEXT NOT NULL,
+              is_supporter INTEGER NOT NULL DEFAULT 0,
+              PRIMARY KEY(snapshot_id, user_id),
+              FOREIGN KEY(snapshot_id) REFERENCES leaderboard_snapshots(id) ON DELETE CASCADE,
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_events(user_id, created_at);
@@ -268,6 +290,10 @@ def init_auth_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_uploads_user ON uploads(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_analysis_jobs_user ON analysis_jobs(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_verification_codes(email, purpose);
+            CREATE INDEX IF NOT EXISTS idx_leaderboard_snapshots_key_generated
+              ON leaderboard_snapshots(board_key, generated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_leaderboard_entries_rank
+              ON leaderboard_entries(snapshot_id, rank);
             """
         )
         existing_user_columns = {

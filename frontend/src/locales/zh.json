@@ -5,6 +5,7 @@
     "trainer": "训练",
     "tester": "测试",
     "minigames": "小游戏",
+    "leaderboards": "排行榜",
     "replay": "回放",
     "notebook": "错题本",
     "settings": "设置",
@@ -566,6 +567,7 @@
     "help": "帮助",
     "openBrowserMode": "在浏览器中打开",
     "openVerseReplay": "Verse 回放播放器",
+    "openLeaderboards": "排行榜",
     "descriptions": {
       "play": "当前最强的 2048 AI 以及困难模式",
       "practice": "查看定式推演，学习残局最优解",
@@ -577,6 +579,35 @@
     "githubNote": "欢迎在 GitHub 上点个 Star 支持本项目",
     "sponsorNotePrefix": "本项目由",
     "sponsorNoteSuffix": "赞助"
+  },
+  "leaderboards": {
+    "kicker": "社区记录",
+    "title": "排行榜",
+    "subtitle": "记录支持项目运行与持续探索定式的用户。",
+    "updated": "数据更新",
+    "rank": "名次",
+    "player": "用户名",
+    "tokenUsage": "Token 消耗",
+    "empty": "当前榜单暂无记录。",
+    "loadFailed": "排行榜加载失败。",
+    "cadence": {
+      "daily": "每日更新",
+      "weekly": "每周更新"
+    },
+    "boards": {
+      "supporters": {
+        "title": "投喂榜",
+        "description": "感谢每一位支持项目持续运行的用户。"
+      },
+      "token_lifetime": {
+        "title": "累计 Token 榜",
+        "description": "按历史实际 Token 消耗量排列，每日更新。"
+      },
+      "token_last_week": {
+        "title": "上周 Token 榜",
+        "description": "统计上一完整自然周的实际 Token 消耗量。"
+      }
+    }
   },
   "labels": {
     "score": "分数",

@@ -171,6 +171,13 @@
         <MinigamesView :active="activeTab === TAB_IDS.MINIGAMES" />
       </div>
       <div
+        v-if="isTabOpen(TAB_IDS.LEADERBOARDS)"
+        class="absolute inset-0"
+        v-show="activeTab === TAB_IDS.LEADERBOARDS"
+      >
+        <LeaderboardsView :active="activeTab === TAB_IDS.LEADERBOARDS" />
+      </div>
+      <div
         v-if="isTabOpen(TAB_IDS.REPLAY)"
         class="absolute inset-0"
         v-show="activeTab === TAB_IDS.REPLAY"
@@ -338,6 +345,7 @@ const GamerView = defineAsyncComponent(() => import('./features/gamer/pages/Game
 const TrainerView = defineAsyncComponent(() => import('./features/trainer/pages/TrainerPage.vue'));
 const TesterView = defineAsyncComponent(() => import('./features/tester/pages/TesterPage.vue'));
 const MinigamesView = defineAsyncComponent(() => import('./features/minigames/pages/MinigamesPage.vue'));
+const LeaderboardsView = defineAsyncComponent(() => import('./features/leaderboards/pages/LeaderboardPage.vue'));
 const ReplayReviewView = defineAsyncComponent(() => import('./features/replay/pages/ReplayPage.vue'));
 const SettingsView = defineAsyncComponent(() => import('./features/settings/pages/SettingsPage.vue'));
 const HelpView = defineAsyncComponent(() => import('./features/help/pages/HelpPage.vue'));

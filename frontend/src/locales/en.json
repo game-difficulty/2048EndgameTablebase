@@ -5,6 +5,7 @@
     "trainer": "Trainer",
     "tester": "Tester",
     "minigames": "Minigames",
+    "leaderboards": "Leaderboards",
     "replay": "Replay",
     "notebook": "Notebook",
     "settings": "Settings",
@@ -566,6 +567,7 @@
     "help": "Help & About",
     "openBrowserMode": "Open In Browser",
     "openVerseReplay": "Verse Replay Viewer",
+    "openLeaderboards": "Leaderboards",
     "descriptions": {
       "play": "The Strongest 2048 AI & Evil Mode.",
       "practice": "Inspect Table Lines and Learn Optimal Moves for Endgame Positions.",
@@ -577,6 +579,35 @@
     "githubNote": "Support this project by giving it a star on GitHub",
     "sponsorNotePrefix": "This project is sponsored by ",
     "sponsorNoteSuffix": "."
+  },
+  "leaderboards": {
+    "kicker": "Community records",
+    "title": "Leaderboards",
+    "subtitle": "Recognising the people who support the project and keep exploring its tablebases.",
+    "updated": "Updated",
+    "rank": "Rank",
+    "player": "Username",
+    "tokenUsage": "Token usage",
+    "empty": "No entries are available for this leaderboard yet.",
+    "loadFailed": "Failed to load the leaderboard.",
+    "cadence": {
+      "daily": "Updated daily",
+      "weekly": "Updated weekly"
+    },
+    "boards": {
+      "supporters": {
+        "title": "Supporters",
+        "description": "Thank you to everyone helping keep the project running."
+      },
+      "token_lifetime": {
+        "title": "All-time Token Usage",
+        "description": "Ranked by finalised lifetime Token usage and refreshed daily."
+      },
+      "token_last_week": {
+        "title": "Last Week Token Usage",
+        "description": "Finalised Token usage during the previous complete calendar week."
+      }
+    }
   },
   "labels": {
     "score": "SCORE",
