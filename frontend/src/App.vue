@@ -418,7 +418,6 @@ const updateFixedLayoutScale = () => {
   const height = viewport.clientHeight;
   if (width <= 0 || height <= 0) return;
   const nextScale = Math.min(
-    1,
     width / FIXED_LAYOUT_MIN_WIDTH,
     height / FIXED_LAYOUT_HEIGHT,
   );
