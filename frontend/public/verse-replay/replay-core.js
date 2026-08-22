@@ -424,7 +424,8 @@
     let encoded = 0n;
     for (let index = 0; index < board.length; index += 1) {
       const shift = BigInt((board.length - 1 - index) * 4);
-      encoded |= BigInt(board[index]) << shift;
+      const exponent = Math.max(0, Math.min(15, Number(board[index]) || 0));
+      encoded |= BigInt(exponent) << shift;
     }
     return encoded.toString(16).padStart(board.length, '0');
   }

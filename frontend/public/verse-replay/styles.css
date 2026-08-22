@@ -187,6 +187,44 @@ h2 {
   color: rgba(255, 255, 255, 0.8);
 }
 
+.board-code-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  min-height: 44px;
+  margin-bottom: 13px;
+  padding: 7px 10px 7px 13px;
+  border-radius: 5px;
+  background: #eee4da;
+}
+
+.board-code-row label {
+  color: #a08f7f;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.board-code-row input {
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(119, 110, 101, 0.18);
+  border-radius: 4px;
+  color: #665d54;
+  background: rgba(255, 253, 248, 0.72);
+  font: 700 14px/1 Consolas, "Courier New", monospace;
+  letter-spacing: 0.04em;
+  text-align: right;
+  user-select: text;
+}
+
+.board-code-row input::placeholder {
+  color: #aa9a8b;
+}
+
 .viewer-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 242px;
@@ -798,6 +836,15 @@ textarea {
 
   .control-buttons .play-button {
     width: 58px;
+  }
+
+  .board-code-row {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
+  .board-code-row input {
+    text-align: left;
   }
 }
 

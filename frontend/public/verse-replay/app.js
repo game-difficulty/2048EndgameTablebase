@@ -11,11 +11,13 @@
     planMoveTransitions,
     progressAtPlaybackTimeline,
     replayTimeAtPlaybackTimeline,
+    snapshotToHex,
   } = window.ReplayCore;
 
   const elements = {
     app: document.querySelector('#app'),
     board: document.querySelector('#board'),
+    boardHexValue: document.querySelector('#board-hex-value'),
     boardPlaceholder: document.querySelector('#board-placeholder'),
     dropHint: document.querySelector('#drop-hint'),
     error: document.querySelector('#error-message'),
@@ -282,6 +284,7 @@
     if (!state.replay) {
       elements.score.textContent = '0';
       elements.nextTime.textContent = '—';
+      elements.boardHexValue.value = '';
       renderElapsedTime(0);
       elements.step.textContent = '0 / 0';
       elements.progressCurrent.textContent = '0';
@@ -292,6 +295,10 @@
 
     const replay = state.replay;
     const nextStep = state.progress < replay.moveCount ? replay.steps[state.progress] : null;
+    const boardHex = snapshotToHex(replay.getBoardAt(state.progress));
+    if (elements.boardHexValue.value !== boardHex) {
+      elements.boardHexValue.value = boardHex;
+    }
     elements.score.textContent = Math.round(replay.scores[state.progress]).toLocaleString('zh-CN');
     elements.nextTime.textContent = formatStepTime(nextStep);
     renderElapsedTime(replayTimeMs);
@@ -310,6 +317,10 @@
     renderTimeline();
     renderStats(replayTimeMs);
     renderControls();
+  }
+
+  function selectBoardHex() {
+    elements.boardHexValue.select();
   }
 
   function playbackRate() {
@@ -562,6 +573,9 @@
     closeDialog(elements.speedDialog);
     renderAll();
   });
+
+  elements.boardHexValue.addEventListener('focus', selectBoardHex);
+  elements.boardHexValue.addEventListener('click', selectBoardHex);
 
   elements.backTen.addEventListener('click', () => setProgress(state.progress - 10));
   elements.backOne.addEventListener('click', () => setProgress(state.progress - 1));
