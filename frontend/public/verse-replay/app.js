@@ -585,10 +585,16 @@
   elements.progress.addEventListener('input', () => setProgress(Number(elements.progress.value)));
 
   document.addEventListener('keydown', (event) => {
-    if (event.target.closest('input, textarea, dialog')) return;
+    if (event.target.closest('textarea, dialog, input:not([readonly])')) return;
     if (event.code === 'Space') {
       event.preventDefault();
       play();
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      setProgress(state.progress + 1, true, true);
+    } else if (event.key === 'Backspace') {
+      event.preventDefault();
+      setProgress(state.progress - 1);
     } else if (event.key === 'ArrowLeft') {
       event.preventDefault();
       setProgress(state.progress - (event.shiftKey ? 10 : 1));
