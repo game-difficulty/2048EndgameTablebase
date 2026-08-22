@@ -30,6 +30,13 @@
       "spawn_rate": 0.1
     },
     {
+      "pattern": "t",
+      "target": "1024",
+      "relative_path": "t_1024",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    },
+    {
       "pattern": "free9",
       "target": "128",
       "relative_path": "free9_128",

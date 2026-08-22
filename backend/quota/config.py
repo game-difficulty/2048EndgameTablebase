@@ -33,6 +33,7 @@ def table_multiplier_config() -> dict[str, Any]:
             "default_multiplier": 1,
             "rules": [
                 {"prefix": "L3", "multiplier": 1},
+                {"prefix": "t", "multiplier": 1},
                 {"prefix": "442t", "multiplier": 1},
                 {"prefix": "2x4", "multiplier": 1},
                 {"prefix": "3x3free8", "multiplier": 1},

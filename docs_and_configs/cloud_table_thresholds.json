@@ -4,6 +4,7 @@
     "L3_256": { "threshold": 0.3, "mode": "absolute" },
     "L3_512": { "threshold": 0.25, "mode": "absolute" },
     "L3_1024": { "threshold": 0.2, "mode": "relative" },
+    "t_1024": { "threshold": 0.02, "mode": "relative" },
     "442t_128": { "threshold": 0.6, "mode": "absolute" },
     "442t_256": { "threshold": 0.4, "mode": "absolute" },
     "442t_512": { "threshold": 0.25, "mode": "absolute" },
