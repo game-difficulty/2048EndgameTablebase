@@ -18,7 +18,7 @@
     "disk-d": {
       "concurrency": 1
     },
-    "disk-f": {
+    "disk-c": {
       "concurrency": 1
     }
   },
@@ -44,13 +44,73 @@
       "concurrency": 1
     },
     {
-      "table_id": "4442f_2048",
-      "pattern": "4442f",
-      "target": "2048",
-      "path": "F:/4442f-2k",
+      "table_id": "free10_128",
+      "pattern": "free10",
+      "target": "128",
+      "path": "C:/2048_tables/free10-128",
       "dtype": "uint32",
       "spawn_rate": 0.1,
-      "resource_group": "disk-f",
+      "resource_group": "disk-c",
+      "concurrency": 1
+    },
+    {
+      "table_id": "free10_256",
+      "pattern": "free10",
+      "target": "256",
+      "path": "C:/2048_tables/free10-256",
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-c",
+      "concurrency": 1
+    },
+    {
+      "table_id": "free10_512",
+      "pattern": "free10",
+      "target": "512",
+      "path": "C:/2048_tables/free10-512",
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-c",
+      "concurrency": 1
+    },
+    {
+      "table_id": "4421_1024",
+      "pattern": "4421",
+      "target": "1024",
+      "path": "C:/2048_tables/4421",
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-c",
+      "concurrency": 1
+    },
+    {
+      "table_id": "444_1024",
+      "pattern": "444",
+      "target": "1024",
+      "path": "C:/2048_tables/444-1k",
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-c",
+      "concurrency": 1
+    },
+    {
+      "table_id": "444_2048",
+      "pattern": "444",
+      "target": "2048",
+      "path": "C:/2048_tables/444-2k",
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-c",
+      "concurrency": 1
+    },
+    {
+      "table_id": "LL_1024",
+      "pattern": "LL",
+      "target": "1024",
+      "path": "C:/2048_tables/LL-1k",
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-c",
       "concurrency": 1
     }
   ]

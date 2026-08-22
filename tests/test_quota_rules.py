@@ -33,9 +33,13 @@ class PublicQuotaRulesTests(unittest.TestCase):
             for pattern in group["patterns"]
         }
         self.assertEqual(groups["L3"], 1)
-        self.assertEqual(groups["free10"], 5)
+        self.assertEqual(groups["3x3free8"], 1)
+        self.assertEqual(groups["free10"], 8)
         self.assertEqual(groups["free11"], 50)
-        self.assertEqual(groups["4442f"], 50)
+        self.assertEqual(groups["4421"], 5)
+        self.assertEqual(groups["444"], 5)
+        self.assertEqual(groups["LL"], 8)
+        self.assertNotIn("4442f", groups)
         self.assertEqual(rules["operation_costs"]["analysis_per_replay"], 100)
         self.assertEqual(rules["operation_costs"]["replay_load"], 3)
 

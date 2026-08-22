@@ -830,7 +830,7 @@ AI能够使用任意已计算的定式。
         "valid pattern": [],
         "target pos": "0xfff0fff0fff00000",
         "canonical mode": "min33",
-        "seed boards": ["0x000f000f00afffff"],
+        "seed boards": ["0x000f000f00efffff"],
         "extra steps": 30
       }
     }

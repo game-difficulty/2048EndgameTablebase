@@ -140,6 +140,24 @@ class RemoteCatalogTests(unittest.TestCase):
         ]
         self.assertEqual(len(all_tables), len(set(all_tables)))
 
+    def test_manifest_exposes_the_expected_home_worker_tables(self):
+        tables = configured_workers()["home-main"]["tables"]
+        self.assertEqual(
+            set(tables),
+            {
+                "free11_512",
+                "free11_1024",
+                "free10_128",
+                "free10_256",
+                "free10_512",
+                "4421_1024",
+                "444_1024",
+                "444_2048",
+                "LL_1024",
+            },
+        )
+        self.assertNotIn("4442f_2048", tables)
+
 
 class RemoteQuotaFailureTests(unittest.IsolatedAsyncioTestCase):
     async def test_offline_query_refunds_reservation(self):

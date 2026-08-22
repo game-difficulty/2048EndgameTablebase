@@ -37,20 +37,6 @@
       "spawn_rate": 0.1
     },
     {
-      "pattern": "free10",
-      "target": "256",
-      "relative_path": "free10_256",
-      "dtype": "uint32",
-      "spawn_rate": 0.1
-    },
-    {
-      "pattern": "free10",
-      "target": "512",
-      "relative_path": "free10_512",
-      "dtype": "uint32",
-      "spawn_rate": 0.1
-    },
-    {
       "pattern": "442t",
       "target": "128",
       "relative_path": "442t_128",
@@ -79,9 +65,9 @@
       "spawn_rate": 0.1
     },
     {
-      "pattern": "3x4441",
+      "pattern": "3x4free9",
       "target": "512",
-      "relative_path": "3x4441_512",
+      "relative_path": "3x4free9_512",
       "dtype": "uint32",
       "spawn_rate": 0.1
     },
@@ -89,6 +75,13 @@
       "pattern": "2x4",
       "target": "512",
       "relative_path": "2x4_512",
+      "dtype": "uint32",
+      "spawn_rate": 0.1
+    },
+    {
+      "pattern": "3x3free8",
+      "target": "512",
+      "relative_path": "3x3free8_512",
       "dtype": "uint32",
       "spawn_rate": 0.1
     }

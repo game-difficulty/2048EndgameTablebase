@@ -20,12 +20,60 @@
           "resource_group": "hdd-free11"
         },
         {
-          "pattern": "4442f",
-          "target": "2048",
-          "full_pattern": "4442f_2048",
+          "pattern": "free10",
+          "target": "128",
+          "full_pattern": "free10_128",
           "dtype": "uint32",
           "spawn_rate": 0.1,
-          "resource_group": "ssd-4442f"
+          "resource_group": "disk-c"
+        },
+        {
+          "pattern": "free10",
+          "target": "256",
+          "full_pattern": "free10_256",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-c"
+        },
+        {
+          "pattern": "free10",
+          "target": "512",
+          "full_pattern": "free10_512",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-c"
+        },
+        {
+          "pattern": "4421",
+          "target": "1024",
+          "full_pattern": "4421_1024",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-c"
+        },
+        {
+          "pattern": "444",
+          "target": "1024",
+          "full_pattern": "444_1024",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-c"
+        },
+        {
+          "pattern": "444",
+          "target": "2048",
+          "full_pattern": "444_2048",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-c"
+        },
+        {
+          "pattern": "LL",
+          "target": "1024",
+          "full_pattern": "LL_1024",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-c"
         }
       ]
     }

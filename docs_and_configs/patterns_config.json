@@ -335,13 +335,23 @@
     ],
     "extra steps": 60
   },
-  "3x4441": {
+  "3x4free9": {
     "category": "variant",
     "valid pattern": [],
     "target pos": "0xffffffffffff0000",
     "canonical mode": "min34",
     "seed boards": [
       "0x000000000eeeffff"
+    ],
+    "extra steps": 30
+  },
+  "3x3free8": {
+    "category": "variant",
+    "valid pattern": [],
+    "target pos": "0xfff0fff0fff00000",
+    "canonical mode": "min33",
+    "seed boards": [
+      "0x000f000f00efffff"
     ],
     "extra steps": 30
   }

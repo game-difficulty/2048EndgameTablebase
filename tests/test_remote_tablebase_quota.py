@@ -17,10 +17,16 @@ class RemoteTablebaseQuotaTests(unittest.TestCase):
     def tearDown(self) -> None:
         table_multiplier_config.cache_clear()
 
-    def test_remote_tables_use_fifty_times_multiplier(self) -> None:
+    def test_remote_tables_use_configured_multipliers(self) -> None:
         self.assertEqual(table_multiplier_units("free11_512"), 50_000)
         self.assertEqual(table_multiplier_units("free11_1024"), 50_000)
-        self.assertEqual(table_multiplier_units("4442f_2048"), 50_000)
+        self.assertEqual(table_multiplier_units("free10_128"), 8_000)
+        self.assertEqual(table_multiplier_units("free10_256"), 8_000)
+        self.assertEqual(table_multiplier_units("free10_512"), 8_000)
+        self.assertEqual(table_multiplier_units("4421_1024"), 5_000)
+        self.assertEqual(table_multiplier_units("444_1024"), 5_000)
+        self.assertEqual(table_multiplier_units("444_2048"), 5_000)
+        self.assertEqual(table_multiplier_units("LL_1024"), 8_000)
 
     def test_remote_lookup_and_analysis_costs(self) -> None:
         multiplier = table_multiplier_units("free11_512")

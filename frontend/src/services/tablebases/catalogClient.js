@@ -1,7 +1,7 @@
 import { getBackendUrl } from '../runtime/backendUrl.js';
 import { tablebaseResultCache } from './tablebaseResultCache.js';
 
-const VARIANT_PATTERNS = new Set(['2x4', '3x3', '3x4', '3x4441']);
+const VARIANT_PATTERNS = new Set(['2x4', '3x3', '3x4', '3x4free9', '3x3free8']);
 const CATEGORY_ORDER = ['4x4', 'variant'];
 let currentCatalogVersion = '';
 
