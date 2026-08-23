@@ -75,6 +75,7 @@ from backend.handlers.tablebase_query import (
 )
 from backend.leaderboards.routes import router as leaderboard_router
 from backend.leaderboards.service import refresh_due_leaderboards
+from backend.profile.routes import router as profile_router
 from backend.preload import start_preload_thread
 from backend.resource_paths import get_resource_path
 from backend.state import ConnectionManager, save_game_state
@@ -204,6 +205,7 @@ app.include_router(admin_router)
 app.include_router(replay_router)
 app.include_router(quota_router)
 app.include_router(leaderboard_router)
+app.include_router(profile_router)
 
 
 @app.middleware("http")

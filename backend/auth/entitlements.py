@@ -62,7 +62,7 @@ def public_entitlements(row: sqlite3.Row | dict[str, Any] | None) -> dict[str, A
         "supporter_since": _row_value(row, "supporter_since"),
         "supporter_until": _row_value(row, "supporter_until"),
         "show_supporter_badge": bool(_row_value(row, "show_supporter_badge", 1)),
-        "can_upload_avatar": bool(_row_value(row, "can_upload_avatar", 0)),
+        "can_upload_avatar": bool(_row_value(row, "can_upload_avatar", 1)),
     }
 
 
@@ -78,7 +78,7 @@ def ensure_user_entitlements(
         """
         INSERT OR IGNORE INTO user_entitlements
         (user_id, tier, show_supporter_badge, can_upload_avatar, created_at, updated_at)
-        VALUES (?, ?, 1, 0, ?, ?)
+        VALUES (?, ?, 1, 1, ?, ?)
         """,
         (int(user_id), normalized_tier, now, now),
     )

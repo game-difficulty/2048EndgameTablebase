@@ -13,21 +13,25 @@ if str(PROJECT_ROOT) not in sys.path:
 from backend.auth.db import auth_db, init_auth_db
 from backend.auth.security import hash_password, hash_token, new_token
 from backend.auth.service import canonical_email_identity, create_default_quotas, iso, normalize_email, utcnow
+from backend.profile.validation import canonical_display_name_key, normalize_display_name
 
 
 def create_admin(args: argparse.Namespace) -> None:
     email = normalize_email(args.email)
     email_identity = canonical_email_identity(email)
     password_hash = hash_password(args.password)
+    display_name = normalize_display_name(args.display_name or "Admin")
+    display_name_key = canonical_display_name_key(display_name)
     with auth_db() as db:
         cursor = db.execute(
             """
-            INSERT INTO users (email, email_identity, password_hash, display_name, role, status, email_verified_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'admin', 'active', ?, ?, ?)
+            INSERT INTO users (email, email_identity, password_hash, display_name, display_name_key, role, status, email_verified_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'admin', 'active', ?, ?, ?)
             ON CONFLICT(email) DO UPDATE SET
               email_identity = COALESCE(users.email_identity, excluded.email_identity),
               password_hash = excluded.password_hash,
               display_name = excluded.display_name,
+              display_name_key = excluded.display_name_key,
               role = 'admin',
               status = 'active',
               email_verified_at = COALESCE(users.email_verified_at, excluded.email_verified_at),
@@ -38,7 +42,8 @@ def create_admin(args: argparse.Namespace) -> None:
                 email,
                 email_identity,
                 password_hash,
-                args.display_name or "Admin",
+                display_name,
+                display_name_key,
                 iso(),
                 iso(),
                 iso(),

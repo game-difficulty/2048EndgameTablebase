@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+from backend.profile.validation import canonical_display_name_key
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_AUTH_DB = PROJECT_ROOT / "docs_and_configs" / "cloud_runtime" / "auth.sqlite3"
@@ -60,6 +62,9 @@ def auth_db() -> Iterator[sqlite3.Connection]:
 
 def init_auth_db() -> None:
     with auth_db() as db:
+        profile_table_existed = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user_profiles'"
+        ).fetchone() is not None
         db.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -69,6 +74,7 @@ def init_auth_db() -> None:
               email_verified_at TEXT,
               password_hash TEXT NOT NULL,
               display_name TEXT,
+              display_name_key TEXT,
               registered_with_invite INTEGER NOT NULL DEFAULT 1,
               invite_code_id INTEGER,
               role TEXT NOT NULL DEFAULT 'user',
@@ -186,11 +192,34 @@ def init_auth_db() -> None:
               supporter_since TEXT,
               supporter_until TEXT,
               show_supporter_badge INTEGER NOT NULL DEFAULT 1,
-              can_upload_avatar INTEGER NOT NULL DEFAULT 0,
+              can_upload_avatar INTEGER NOT NULL DEFAULT 1,
               notes TEXT,
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL,
               FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS user_profiles (
+              user_id INTEGER PRIMARY KEY,
+              avatar_key TEXT,
+              avatar_sha256 TEXT,
+              avatar_changed_at TEXT,
+              display_name_changed_at TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS user_profile_change_events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL,
+              change_type TEXT NOT NULL,
+              old_value TEXT,
+              new_value TEXT,
+              ip_address TEXT,
+              user_agent TEXT,
+              created_at TEXT NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS token_ledger (
@@ -287,6 +316,8 @@ def init_auth_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_token_ledger_user_created ON token_ledger(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_token_operation_requests_user_created ON token_operation_requests(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_user_entitlements_tier ON user_entitlements(tier);
+            CREATE INDEX IF NOT EXISTS idx_profile_changes_user_created
+              ON user_profile_change_events(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_uploads_user ON uploads(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_analysis_jobs_user ON analysis_jobs(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_verification_codes(email, purpose);
@@ -309,6 +340,8 @@ def init_auth_db() -> None:
             db.execute("ALTER TABLE users ADD COLUMN registered_with_invite INTEGER NOT NULL DEFAULT 1")
         if "invite_code_id" not in existing_user_columns:
             db.execute("ALTER TABLE users ADD COLUMN invite_code_id INTEGER REFERENCES invite_codes(id)")
+        if "display_name_key" not in existing_user_columns:
+            db.execute("ALTER TABLE users ADD COLUMN display_name_key TEXT")
 
         used_identities = {
             row["email_identity"]
@@ -337,6 +370,33 @@ def init_auth_db() -> None:
             """
         )
 
+        used_display_names = {
+            row["display_name_key"]
+            for row in db.execute(
+                "SELECT display_name_key FROM users WHERE display_name_key IS NOT NULL AND display_name_key != ''"
+            ).fetchall()
+        }
+        for row in db.execute(
+            "SELECT id, display_name FROM users WHERE display_name_key IS NULL OR display_name_key = '' ORDER BY id"
+        ).fetchall():
+            name_key = canonical_display_name_key(row["display_name"] or "") or f"user-{row['id']}"
+            stored_key = name_key
+            if stored_key in used_display_names:
+                stored_key = f"legacy-conflict:{row['id']}:{name_key}"
+            used_display_names.add(stored_key)
+            db.execute(
+                "UPDATE users SET display_name_key = ? WHERE id = ?",
+                (stored_key, int(row["id"])),
+            )
+
+        db.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_display_name_key
+            ON users(display_name_key)
+            WHERE display_name_key IS NOT NULL
+            """
+        )
+
         now = _iso_now()
         db.execute(
             """
@@ -347,13 +407,26 @@ def init_auth_db() -> None:
               CASE WHEN COALESCE(token_accounts.paid_balance_units, 0) > 0 THEN 'supporter' ELSE 'free' END,
               CASE WHEN COALESCE(token_accounts.paid_balance_units, 0) > 0 THEN ? ELSE NULL END,
               1,
-              0,
+              1,
               ?,
               ?
             FROM users
             LEFT JOIN token_accounts ON token_accounts.user_id = users.id
             """,
             (now, now, now),
+        )
+        if not profile_table_existed:
+            db.execute(
+                "UPDATE user_entitlements SET can_upload_avatar = 1, updated_at = ?",
+                (now,),
+            )
+        db.execute(
+            """
+            INSERT OR IGNORE INTO user_profiles
+            (user_id, display_name_changed_at, created_at, updated_at)
+            SELECT id, created_at, ?, ? FROM users
+            """,
+            (now, now),
         )
         db.execute(
             """

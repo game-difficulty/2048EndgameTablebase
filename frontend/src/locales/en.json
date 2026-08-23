@@ -39,7 +39,7 @@
       "emailCode": "6-digit code",
       "password": "At least 8 characters",
       "currentPassword": "Current password",
-      "displayName": "Required"
+      "displayName": "2 to 24 characters"
     },
     "actions": {
       "login": "Login",
@@ -66,6 +66,7 @@
     },
     "hints": {
       "usernameRequiredForCode": "Enter a username before sending the verification code.",
+      "usernameInvalidForCode": "The username must contain 2 to 24 characters.",
       "emailRequiredForCode": "Enter a valid email address before sending the verification code.",
       "supportedEmailDomains": "Supported email domains: {domains}.",
       "unsupportedEmailDomain": "This email domain is not supported. Use one of: {domains}."
@@ -88,6 +89,44 @@
       "insufficientMessage": "This action requires {required_tokens} tokens. Your current balance is {balance_tokens} tokens.",
       "rechargeHint": "You can sponsor / recharge to get more tokens. Payments are credited after manual admin confirmation.",
       "rechargeAction": "Sponsor / Recharge"
+    }
+  },
+  "profile": {
+    "title": "Account Profile",
+    "cooldown": {
+      "title": "Change cooldown",
+      "displayName": "Your username can be changed once every 30 days. Next available: {date}.",
+      "avatar": "Your avatar can be changed once every 30 days. Next available: {date}."
+    },
+    "displayName": {
+      "title": "Change Username",
+      "label": "New username",
+      "placeholder": "2 to 24 characters",
+      "rules": "Letters, numbers, spaces, underscores, and hyphens are supported. You cannot change it again for 30 days after saving.",
+      "change": "Change username",
+      "save": "Save Username"
+    },
+    "avatar": {
+      "title": "Change Avatar",
+      "change": "Change avatar",
+      "choose": "Choose Image",
+      "chooseAnother": "Choose Another",
+      "chooseHint": "Choose an image, then drag and zoom to adjust the crop.",
+      "zoom": "Zoom",
+      "save": "Save Avatar",
+      "remove": "Remove Avatar",
+      "removeConfirm": "Remove your current avatar? You will not be able to upload another one for 30 days.",
+      "disabledTitle": "Avatar upload unavailable",
+      "disabled": "Avatar uploads are currently disabled for this account."
+    },
+    "errors": {
+      "nameTaken": "That username is already in use. Choose another one.",
+      "invalidName": "The username format is invalid. Follow the rules shown below the field.",
+      "cooldown": "The next profile change time has not been reached.",
+      "rateLimit": "Too many attempts. Please try again later.",
+      "invalidAvatar": "This image could not be read. Choose a JPEG, PNG, or WebP image.",
+      "sourceTooLarge": "The source image must not exceed 16 MB.",
+      "encodeFailed": "Your browser could not process this image. Try another image."
     }
   },
   "settings": {

@@ -3,6 +3,7 @@ fastapi>=0.100.0
 uvicorn>=0.22.0
 websockets>=10.4
 python-multipart>=0.0.9
+Pillow>=10.0.0
 pywebview>=4.0.0
 markdown>=3.4.0
 

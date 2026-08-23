@@ -9,6 +9,8 @@ from typing import Any
 
 from .db import auth_db
 from .entitlements import get_user_entitlements
+from backend.profile.service import public_profile
+from backend.profile.validation import validate_display_name
 from .mailer import send_verification_email
 from .security import constant_time_equal, hash_password, hash_token, new_token, verify_password
 from backend.quota.service import get_token_balance, grant_weekly_tokens_if_due
@@ -135,6 +137,7 @@ def public_user(
         "email_verified": bool(row["email_verified_at"]),
         "token_balance": get_token_balance(user_id, db=db),
         "entitlements": get_user_entitlements(user_id, db=db),
+        "profile": public_profile(user_id, db=db),
     }
 
 
@@ -225,12 +228,7 @@ def _validate_password(password: str) -> None:
 
 
 def _validate_display_name(display_name: str) -> str:
-    value = str(display_name or "").strip()
-    if not value:
-        raise ValueError("Username is required.")
-    if len(value) > 80:
-        raise ValueError("Username must contain at most 80 characters.")
-    return value
+    return validate_display_name(display_name)[0]
 
 
 def _check_email_code_rate_limit(
@@ -511,7 +509,7 @@ def register_user(
 ) -> dict[str, Any]:
     normalized, email_identity = validate_registration_email(email)
     _validate_password(password)
-    display_name_value = _validate_display_name(display_name)
+    display_name_value, display_name_key = validate_display_name(display_name)
 
     with auth_db() as db:
         invite_code_value = str(invite_code or "").strip()
@@ -522,6 +520,12 @@ def register_user(
         ).fetchone()
         if existing_user is not None:
             raise ValueError("Email is already registered.")
+        existing_name = db.execute(
+            "SELECT id FROM users WHERE display_name_key = ?",
+            (display_name_key,),
+        ).fetchone()
+        if existing_name is not None:
+            raise ValueError("Username is already in use.")
         _consume_email_code(
             db,
             email=normalized,
@@ -534,8 +538,9 @@ def register_user(
                 """
                 INSERT INTO users
                 (email, email_identity, email_verified_at, password_hash, display_name,
+                 display_name_key,
                  registered_with_invite, invite_code_id, role, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'user', 'active', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'user', 'active', ?, ?)
                 """,
                 (
                     normalized,
@@ -543,6 +548,7 @@ def register_user(
                     now,
                     hash_password(password),
                     display_name_value,
+                    display_name_key,
                     1 if invite is not None else 0,
                     int(invite["id"]) if invite is not None else None,
                     now,
@@ -550,6 +556,11 @@ def register_user(
                 ),
             )
         except sqlite3.IntegrityError as exc:
+            if db.execute(
+                "SELECT 1 FROM users WHERE display_name_key = ?",
+                (display_name_key,),
+            ).fetchone() is not None:
+                raise ValueError("Username is already in use.") from exc
             raise ValueError("Email is already registered.") from exc
         user_id = int(cursor.lastrowid)
         if invite is not None:

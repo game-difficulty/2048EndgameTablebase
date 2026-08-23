@@ -49,9 +49,7 @@
             :aria-expanded="accountMenuOpen ? 'true' : 'false'"
             @click="accountMenuOpen = !accountMenuOpen"
           >
-            <span :class="['account-avatar', hasSupporterPresentation ? 'supporter' : '']">
-              {{ accountInitials }}
-            </span>
+            <AccountAvatar :user="authUser" :supporter="hasSupporterPresentation" />
             <span class="inline max-w-[9rem] truncate">{{ accountDisplayName }}</span>
           </button>
         </template>
@@ -72,12 +70,24 @@
       data-account-menu
     >
       <div class="account-menu-head">
-        <span :class="['account-avatar large', hasSupporterPresentation ? 'supporter' : '']">
-          {{ accountInitials }}
-        </span>
+        <AccountAvatar
+          :user="authUser"
+          :supporter="hasSupporterPresentation"
+          size="large"
+          editable
+          @edit="openAvatarEditor"
+        />
         <div class="min-w-0">
           <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('auth.account.title') }}</div>
-          <div class="mt-1 truncate ui-body font-black">{{ accountDisplayName }}</div>
+          <button
+            type="button"
+            class="account-name-button mt-1"
+            :title="$t('profile.displayName.change')"
+            @click="openDisplayNameEditor"
+          >
+            <span class="truncate">{{ accountDisplayName }}</span>
+            <span class="account-name-edit" aria-hidden="true">✎</span>
+          </button>
           <div class="truncate text-[0.72rem] font-bold text-text-secondary">{{ authUser.email }}</div>
         </div>
       </div>
@@ -225,6 +235,21 @@
       @deactivated="handleAccountDeactivated"
     />
 
+    <AvatarEditorDialog
+      :open="avatarEditorOpen"
+      :user="authUser"
+      :supporter="hasSupporterPresentation"
+      @close="avatarEditorOpen = false"
+      @saved="handleProfileSaved"
+    />
+
+    <DisplayNameEditorDialog
+      :open="displayNameEditorOpen"
+      :user="authUser"
+      @close="displayNameEditorOpen = false"
+      @saved="handleProfileSaved"
+    />
+
     <SponsorDialog
       :open="sponsorDialogOpen"
       :user="authUser"
@@ -335,6 +360,7 @@ import { useAppSettingsStore } from './app/useAppSettings';
 import { TAB_IDS } from './app/tabRegistry';
 import { useTabManager } from './app/useTabManager';
 import MainMenuView from './components/MainMenuView.vue';
+import AccountAvatar from './features/auth/AccountAvatar.vue';
 import AccountSecurityDialog from './features/auth/AccountSecurityDialog.vue';
 import AuthPage from './features/auth/AuthPage.vue';
 import SponsorDialog from './features/billing/SponsorDialog.vue';
@@ -351,6 +377,8 @@ const SettingsView = defineAsyncComponent(() => import('./features/settings/page
 const HelpView = defineAsyncComponent(() => import('./features/help/pages/HelpPage.vue'));
 const AdminView = defineAsyncComponent(() => import('./features/admin/pages/AdminPage.vue'));
 const QuotaGuideDialog = defineAsyncComponent(() => import('./features/billing/QuotaGuideDialog.vue'));
+const AvatarEditorDialog = defineAsyncComponent(() => import('./features/auth/AvatarEditorDialog.vue'));
+const DisplayNameEditorDialog = defineAsyncComponent(() => import('./features/auth/DisplayNameEditorDialog.vue'));
 
 const { t } = useI18n();
 const {
@@ -374,6 +402,8 @@ const globalErrorExpanded = ref(false);
 const globalErrorQueue = [];
 const globalErrorCopied = ref(false);
 const accountMenuOpen = ref(false);
+const avatarEditorOpen = ref(false);
+const displayNameEditorOpen = ref(false);
 const sponsorDialogOpen = ref(false);
 const quotaGuideDialogOpen = ref(false);
 const accountSecurityDialog = ref({
@@ -446,11 +476,6 @@ const canOpenAdmin = computed(() => {
 const hasSupporterPresentation = computed(() => (
   authUser.value?.entitlements?.tier === 'supporter' || canOpenAdmin.value
 ));
-const accountInitials = computed(() => {
-  const name = accountDisplayName.value.trim();
-  if (!name) return '?';
-  return name.slice(0, 2).toUpperCase();
-});
 const formatTokens = (value) => {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return '0';
@@ -781,6 +806,24 @@ const openAccountSecurity = (mode) => {
   };
 };
 
+const openAvatarEditor = () => {
+  accountMenuOpen.value = false;
+  avatarEditorOpen.value = true;
+};
+
+const openDisplayNameEditor = () => {
+  accountMenuOpen.value = false;
+  displayNameEditorOpen.value = true;
+};
+
+const handleProfileSaved = (updatedUser) => {
+  if (updatedUser) {
+    setAuthenticatedUser(updatedUser);
+  }
+  avatarEditorOpen.value = false;
+  displayNameEditorOpen.value = false;
+};
+
 const closeAccountSecurity = () => {
   accountSecurityDialog.value = {
     open: false,
@@ -923,84 +966,39 @@ onUnmounted(() => {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
-.account-avatar {
-  display: inline-flex;
-  position: relative;
-  width: 1.5rem;
-  height: 1.5rem;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
-  font-size: 0.72rem;
-  font-weight: 950;
-  line-height: 1;
-}
-
-.account-avatar.large {
-  width: 2.25rem;
-  height: 2.25rem;
-  font-size: 0.82rem;
-}
-
-.account-avatar.supporter {
-  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-main));
-  background:
-    linear-gradient(135deg,
-      color-mix(in srgb, var(--accent) 26%, transparent),
-      color-mix(in srgb, var(--success) 16%, transparent));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-.account-avatar.supporter::before {
-  content: "";
-  position: absolute;
-  right: -0.03rem;
-  bottom: -0.01rem;
-  z-index: 2;
-  width: 0.38rem;
-  height: 0.38rem;
-  background: var(--bg-card);
-  clip-path: polygon(50% 0, 62% 34%, 100% 50%, 62% 66%, 50% 100%, 38% 66%, 0 50%, 38% 34%);
-  pointer-events: none;
-}
-
-.account-avatar.supporter::after {
-  content: "";
-  position: absolute;
-  right: -0.16rem;
-  bottom: -0.14rem;
-  z-index: 1;
-  width: 0.7rem;
-  height: 0.7rem;
-  border: 2px solid color-mix(in srgb, var(--bg-card) 94%, white);
-  border-radius: 999px;
-  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--success) 72%, var(--accent)));
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent),
-    0 2px 4px rgba(15, 23, 42, 0.24);
-}
-
-.account-avatar.large.supporter::before {
-  right: 0.02rem;
-  bottom: 0.03rem;
-  width: 0.45rem;
-  height: 0.45rem;
-}
-
-.account-avatar.large.supporter::after {
-  right: -0.12rem;
-  bottom: -0.12rem;
-  width: 0.82rem;
-  height: 0.82rem;
-}
-
 .account-menu-head {
   display: flex;
   align-items: flex-start;
   gap: 0.75rem;
+}
+
+.account-menu-head > div {
+  flex: 1 1 auto;
+}
+
+.account-name-button {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-main);
+  font-size: 0.9rem;
+  font-weight: 900;
+  line-height: 1.2;
+  text-align: left;
+}
+
+.account-name-button:hover,
+.account-name-button:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
+.account-name-edit {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  opacity: 0.7;
 }
 </style>

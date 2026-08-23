@@ -39,7 +39,7 @@
       "emailCode": "6 位验证码",
       "password": "至少 8 个字符",
       "currentPassword": "当前密码",
-      "displayName": "必填"
+      "displayName": "2 至 24 个字符"
     },
     "actions": {
       "login": "登录",
@@ -85,9 +85,48 @@
     },
     "hints": {
       "usernameRequiredForCode": "请先填写用户名，然后再发送验证码。",
+      "usernameInvalidForCode": "用户名需为 2 至 24 个字符。",
       "emailRequiredForCode": "请填写有效邮箱地址，然后再发送验证码。",
       "supportedEmailDomains": "支持的邮箱后缀：{domains}。",
       "unsupportedEmailDomain": "当前邮箱后缀暂不支持。请使用：{domains}。"
+    }
+  },
+  "profile": {
+    "title": "账号资料",
+    "cooldown": {
+      "title": "修改冷却中",
+      "displayName": "用户名每 30 天可修改一次，下次可修改时间：{date}。",
+      "avatar": "头像每 30 天可更换一次，下次可更换时间：{date}。"
+    },
+    "displayName": {
+      "title": "修改用户名",
+      "label": "新用户名",
+      "placeholder": "2 至 24 个字符",
+      "rules": "支持中英文、数字、空格、下划线和连字符；保存后 30 天内不能再次修改。",
+      "change": "修改用户名",
+      "save": "保存用户名"
+    },
+    "avatar": {
+      "title": "更换头像",
+      "change": "更换头像",
+      "choose": "选择图片",
+      "chooseAnother": "重新选择",
+      "chooseHint": "选择图片后可拖动和缩放裁剪区域。",
+      "zoom": "缩放",
+      "save": "保存头像",
+      "remove": "移除头像",
+      "removeConfirm": "确定移除当前头像吗？移除后 30 天内不能再次上传。",
+      "disabledTitle": "头像上传不可用",
+      "disabled": "当前账号暂时不能上传头像。"
+    },
+    "errors": {
+      "nameTaken": "该用户名已被使用，请选择其他名称。",
+      "invalidName": "用户名格式无效，请按输入框下方的规则填写。",
+      "cooldown": "尚未到下一次可修改时间。",
+      "rateLimit": "尝试次数过多，请稍后再试。",
+      "invalidAvatar": "无法读取这张图片，请选择 JPEG、PNG 或 WebP 图片。",
+      "sourceTooLarge": "原始图片不能超过 16 MB。",
+      "encodeFailed": "浏览器无法处理这张图片，请尝试其他图片。"
     }
   },
   "settings": {

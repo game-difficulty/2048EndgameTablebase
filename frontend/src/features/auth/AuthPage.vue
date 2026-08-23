@@ -24,7 +24,7 @@
       <form class="auth-form" @submit.prevent="submit">
         <label v-if="mode === 'register'">
           <span>{{ $t('auth.fields.displayName') }}</span>
-          <input v-model="displayName" autocomplete="username" :placeholder="$t('auth.placeholders.displayName')" maxlength="80" required />
+          <input v-model="displayName" autocomplete="username" :placeholder="$t('auth.placeholders.displayName')" minlength="2" maxlength="24" required />
         </label>
 
         <div v-if="mode === 'register'" class="auth-email-row">
@@ -214,11 +214,21 @@ const emailDomainUnsupported = computed(() => (
   && registrationEmailDomain.value
   && !SUPPORTED_EMAIL_DOMAINS.includes(registrationEmailDomain.value)
 ));
-const displayNameMissing = computed(() => mode.value === 'register' && !String(displayName.value || '').trim());
+const normalizedDisplayName = computed(() => String(displayName.value || '')
+  .normalize('NFKC')
+  .trim()
+  .replace(/\s+/g, ' '));
+const displayNameMissing = computed(() => mode.value === 'register' && !normalizedDisplayName.value);
+const displayNameInvalid = computed(() => {
+  if (mode.value !== 'register' || displayNameMissing.value) return false;
+  const characters = Array.from(normalizedDisplayName.value);
+  return characters.length < 2 || characters.length > 24;
+});
 const emailMissing = computed(() => mode.value === 'register' && !email.value);
 const emailDomainMissing = computed(() => mode.value === 'register' && email.value && !registrationEmailDomain.value);
 const sendCodeHintIsError = computed(() => (
   displayNameMissing.value
+  || displayNameInvalid.value
   || emailMissing.value
   || emailDomainMissing.value
   || emailDomainUnsupported.value
@@ -226,6 +236,9 @@ const sendCodeHintIsError = computed(() => (
 const emailDomainHint = computed(() => {
   if (displayNameMissing.value) {
     return t('auth.hints.usernameRequiredForCode');
+  }
+  if (displayNameInvalid.value) {
+    return t('auth.hints.usernameInvalidForCode');
   }
   if (emailMissing.value || emailDomainMissing.value) {
     return t('auth.hints.emailRequiredForCode');
@@ -239,6 +252,7 @@ const sendCodeDisabledReason = computed(() => (sendCodeDisabled.value ? emailDom
 const sendCodeDisabled = computed(() => (
   sendingCode.value
   || displayNameMissing.value
+  || displayNameInvalid.value
   || emailMissing.value
   || emailDomainMissing.value
   || emailDomainUnsupported.value
@@ -248,7 +262,8 @@ const submitDisabled = computed(() => (
   submitting.value
   || (mode.value === 'forgot' && resetCooldownRemaining.value > 0)
   || (mode.value === 'register' && emailDomainUnsupported.value)
-  || (mode.value === 'register' && !String(displayName.value || '').trim())
+  || displayNameMissing.value
+  || displayNameInvalid.value
 ));
 
 const applyServerCooldown = (error, purpose) => {
