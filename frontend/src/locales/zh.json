@@ -245,18 +245,18 @@
       },
       "status": {
         "unranked": "非排位对局",
-        "starting": "正在创建排位对局...",
-        "ranked_unavailable": "排位服务暂不可用",
-        "ranked": "排位中：{mode}",
-        "ineligible": "本局已失去排名资格",
-        "submitting": "正在提交成绩...",
-        "pending": "等待验证",
-        "validating": "正在验证成绩...",
+        "starting": "准备排位",
+        "ranked_unavailable": "排位不可用",
+        "ranked": "排位中",
+        "ineligible": "不计入榜",
+        "submitting": "提交中",
+        "pending": "待验证",
+        "validating": "验证中",
         "verified": "成绩已验证并更新榜单",
         "no_improvement": "验证通过，未刷新最高分",
         "rejected": "成绩验证未通过",
         "expired": "排位对局已过期",
-        "submission_failed": "提交失败，点击重试"
+        "submission_failed": "提交失败，重试"
       }
     },
     "leaderboard": {

@@ -9,19 +9,14 @@
             <span :class="['badge-base', wsStatus === 'connected' ? 'badge-connection-connected' : 'badge-connection-pending']">
               {{ $t(`status.${wsStatus.toLowerCase().replace('...', '')}`) }}
             </span>
-            <span class="badge-base badge-link inline-flex items-center justify-center px-2.5 py-1">
-              {{ aiWorkerReady ? 'WASM' : 'WASM...' }}
-            </span>
             <button
-              v-if="rankedStatus !== 'legacy_unranked'"
+              v-if="showRankedStatus"
               type="button"
               :class="['gamer-ranked-badge', `status-${rankedStatus}`]"
               :disabled="rankedStatus !== 'submission_failed'"
               @click="retryRankedSubmission"
             >
-              {{ $t(`gamer.ranked.status.${rankedStatus}`, {
-                mode: $t(`gamer.ranked.mode.${rankedMode}`),
-              }) }}
+              {{ $t(`gamer.ranked.status.${rankedStatus}`) }}
             </button>
           </div>
         </div>
@@ -147,7 +142,6 @@ const {
   aiWorkerReady,
   rankedParticipationEnabled,
   rankedStatus,
-  rankedMode,
   triggerAction,
   toggleAI,
   updateSettings,
@@ -156,6 +150,18 @@ const {
   setRankedParticipationEnabled,
   retryRankedSubmission,
 } = useGamerSession(toRef(props, 'active'));
+
+const visibleRankedStatuses = new Set([
+  'starting',
+  'ranked_unavailable',
+  'ranked',
+  'ineligible',
+  'submitting',
+  'pending',
+  'validating',
+  'submission_failed',
+]);
+const showRankedStatus = computed(() => visibleRankedStatuses.has(rankedStatus.value));
 
 const matchOptions = computed(() => ([
   {
@@ -219,6 +225,7 @@ const handleBoardSwipe = (direction) => {
   font-size: var(--font-ui-xs);
   font-weight: 900;
   line-height: 1.15;
+  white-space: nowrap;
 }
 
 .gamer-ranked-badge.status-ranked,

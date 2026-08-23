@@ -245,18 +245,18 @@
       },
       "status": {
         "unranked": "Unranked",
-        "starting": "Starting ranked run...",
-        "ranked_unavailable": "Ranked service unavailable",
-        "ranked": "Ranked: {mode}",
-        "ineligible": "Not rank eligible",
-        "submitting": "Submitting score...",
-        "pending": "Awaiting verification",
-        "validating": "Verifying score...",
+        "starting": "Preparing",
+        "ranked_unavailable": "Ranked unavailable",
+        "ranked": "Ranked",
+        "ineligible": "Not ranked",
+        "submitting": "Submitting",
+        "pending": "Pending",
+        "validating": "Verifying",
         "verified": "Score verified and rankings updated",
         "no_improvement": "Verified, below personal best",
         "rejected": "Score verification failed",
         "expired": "Ranked run expired",
-        "submission_failed": "Submission failed - retry"
+        "submission_failed": "Retry submission"
       }
     },
     "leaderboard": {
