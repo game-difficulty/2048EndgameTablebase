@@ -2,7 +2,6 @@
   <section class="gamer-leaderboard-panel" :aria-label="$t('gamer.leaderboard.title')">
     <header class="gamer-leaderboard-head">
       <div>
-        <span class="gamer-leaderboard-kicker">{{ $t('gamer.leaderboard.kicker') }}</span>
         <h2>{{ $t('gamer.leaderboard.title') }}</h2>
       </div>
       <button
@@ -209,16 +208,7 @@ onMounted(() => {
   border-bottom: 1px solid var(--border-main);
 }
 
-.gamer-leaderboard-kicker {
-  display: block;
-  color: var(--text-secondary);
-  font-size: var(--font-ui-2xs);
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
 .gamer-leaderboard-head h2 {
-  margin-top: 0.18rem;
   color: var(--text-main);
   font-size: var(--font-ui-lg);
   font-weight: 950;
