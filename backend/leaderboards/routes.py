@@ -26,6 +26,10 @@ def _set_public_cache(
     response.headers["Cache-Control"] = cache_control
 
 
+def _set_live_cache(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-store"
+
+
 @router.get("")
 def get_leaderboard_catalog(response: Response):
     _set_public_cache(response, stale_while_revalidate=None)
@@ -42,10 +46,9 @@ def get_leaderboard(
         payload = leaderboard_payload(board_key, limit=limit)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Leaderboard not found.") from exc
-    is_gamer_board = board_key.startswith("gamer_")
-    _set_public_cache(
-        response,
-        max_age=60 if is_gamer_board else 300,
-        stale_while_revalidate=None if is_gamer_board else 3600,
-    )
+    is_event_driven = board_key == "supporters" or board_key.startswith("gamer_")
+    if is_event_driven:
+        _set_live_cache(response)
+    else:
+        _set_public_cache(response)
     return payload

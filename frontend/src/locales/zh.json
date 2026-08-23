@@ -245,7 +245,6 @@
       },
       "status": {
         "unranked": "非排位对局",
-        "legacy_unranked": "旧存档不参与排名",
         "starting": "正在创建排位对局...",
         "ranked_unavailable": "排位服务暂不可用",
         "ranked": "排位中：{mode}",

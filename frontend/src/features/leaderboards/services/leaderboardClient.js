@@ -16,6 +16,7 @@ export const fetchLeaderboardCatalog = async () => {
 export const fetchLeaderboard = async (boardKey) => {
   const response = await fetch(`/api/leaderboards/${encodeURIComponent(boardKey)}`, {
     headers: { Accept: 'application/json' },
+    cache: 'no-store',
   });
   return readJson(response);
 };

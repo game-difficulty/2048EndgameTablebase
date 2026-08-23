@@ -245,7 +245,6 @@
       },
       "status": {
         "unranked": "Unranked",
-        "legacy_unranked": "Unranked restored game",
         "starting": "Starting ranked run...",
         "ranked_unavailable": "Ranked service unavailable",
         "ranked": "Ranked: {mode}",

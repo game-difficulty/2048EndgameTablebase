@@ -224,7 +224,10 @@ const loadBoard = async (key) => {
 };
 
 const selectBoard = (key) => {
-  if (key === selectedKey.value && boardData.value) return;
+  if (key === selectedKey.value && boardData.value) {
+    loadBoard(key);
+    return;
+  }
   selectedKey.value = key;
   loadBoard(key);
 };
@@ -253,7 +256,9 @@ const initialize = async () => {
 
 onMounted(initialize);
 watch(() => props.active, (active) => {
-  if (active && !boardData.value && !loading.value) initialize();
+  if (!active || loading.value) return;
+  if (boards.value.length) loadBoard(selectedKey.value);
+  else initialize();
 });
 </script>
 

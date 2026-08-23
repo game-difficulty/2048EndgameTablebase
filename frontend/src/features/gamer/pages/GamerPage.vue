@@ -12,6 +12,7 @@
               {{ aiWorkerReady ? 'WASM' : 'WASM...' }}
             </span>
             <button
+              v-if="rankedStatus !== 'legacy_unranked'"
               type="button"
               :class="['gamer-ranked-badge', `status-${rankedStatus}`]"
               :disabled="rankedStatus !== 'submission_failed'"

@@ -6,7 +6,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from fastapi import Response
+
 from backend.auth.db import auth_db, init_auth_db
+from backend.leaderboards.routes import get_leaderboard
 from backend.leaderboards.service import (
     SUPPORTERS_BOARD,
     TOKEN_LAST_WEEK_BOARD,
@@ -15,6 +18,7 @@ from backend.leaderboards.service import (
     leaderboard_payload,
     refresh_due_leaderboards,
 )
+from backend.quota.service import adjust_paid_tokens_for_admin
 
 
 class LeaderboardTests(unittest.TestCase):
@@ -162,6 +166,56 @@ class LeaderboardTests(unittest.TestCase):
             [(entry["display_name"], entry["score"]) for entry in weekly["entries"]],
             [("user0", 0.5), ("Bob", 0.3), ("Alice", 0.2)],
         )
+
+    def test_admin_token_adjustment_refreshes_existing_supporter_snapshot(self) -> None:
+        with auth_db() as db:
+            admin = self._add_user(
+                db,
+                email="admin@example.com",
+                name="user0",
+                role="admin",
+            )
+            self._add_user(
+                db,
+                email="alice@example.com",
+                name="Alice",
+                supporter=True,
+                paid_units=2_000_000,
+            )
+            bob = self._add_user(
+                db,
+                email="bob@example.com",
+                name="Bob",
+                supporter=True,
+                paid_units=1_000_000,
+            )
+
+        refresh_due_leaderboards(force=True)
+        self.assertEqual(
+            [entry["display_name"] for entry in leaderboard_payload(SUPPORTERS_BOARD)["entries"]],
+            ["Alice", "Bob"],
+        )
+
+        adjust_paid_tokens_for_admin(
+            target_user_id=bob,
+            admin_user={
+                "id": admin,
+                "email": "admin@example.com",
+                "display_name": "user0",
+            },
+            mode="add_paid",
+            tokens=2_000,
+            reason="Leaderboard event refresh test",
+        )
+
+        self.assertEqual(
+            [entry["display_name"] for entry in leaderboard_payload(SUPPORTERS_BOARD)["entries"]],
+            ["Bob", "Alice"],
+        )
+
+        response = Response()
+        get_leaderboard(SUPPORTERS_BOARD, response, limit=100)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
 
 
 if __name__ == "__main__":

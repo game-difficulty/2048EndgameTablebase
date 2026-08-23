@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sqlite3
 from dataclasses import dataclass
@@ -18,6 +19,9 @@ from .config import (
     token_to_units,
 )
 from .errors import InsufficientTokens
+
+
+logger = logging.getLogger(__name__)
 
 
 INVITED_WEEKLY_GRANT_UNITS = token_to_units(4096)
@@ -263,7 +267,7 @@ def adjust_paid_tokens_for_admin(
                 },
             )
         final_row = _ensure_token_account(db, int(target_user_id))
-        return {
+        result = {
             "ledger_id": ledger_id,
             "token_balance": _public_balance(final_row),
             "paid_delta": paid_delta_units / TOKEN_UNIT,
@@ -272,6 +276,20 @@ def adjust_paid_tokens_for_admin(
             "entitlements": entitlements,
             "bonus_reset": bonus_reset,
         }
+
+    # The adjustment is committed before the derived leaderboard snapshot is
+    # rebuilt. A refresh failure must not make a successful payment look failed.
+    try:
+        from backend.leaderboards.service import SUPPORTERS_BOARD, refresh_leaderboard
+
+        refresh_leaderboard(SUPPORTERS_BOARD, force=True)
+    except Exception as exc:
+        logger.warning(
+            "Supporter leaderboard refresh failed after token adjustment: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+    return result
 
 
 def _weekly_grant_for_user(db: sqlite3.Connection, user_id: int) -> tuple[int, str]:
