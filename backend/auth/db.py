@@ -310,6 +310,48 @@ def init_auth_db() -> None:
               FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS gamer_ranked_runs (
+              run_id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              request_id TEXT NOT NULL,
+              seed_hex TEXT NOT NULL,
+              rules_version INTEGER NOT NULL,
+              status TEXT NOT NULL,
+              started_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              validation_started_at TEXT,
+              submitted_at TEXT,
+              completed_at TEXT,
+              pending_record TEXT,
+              claimed_score INTEGER,
+              claimed_final_board TEXT,
+              start_ip TEXT,
+              submit_ip TEXT,
+              error_code TEXT,
+              board_key TEXT,
+              new_personal_best INTEGER NOT NULL DEFAULT 0,
+              UNIQUE(user_id, request_id),
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS gamer_high_scores (
+              user_id INTEGER NOT NULL,
+              board_key TEXT NOT NULL,
+              score INTEGER NOT NULL,
+              max_tile INTEGER NOT NULL,
+              move_count INTEGER NOT NULL,
+              used_ai INTEGER NOT NULL DEFAULT 0,
+              final_board TEXT NOT NULL,
+              record_blob TEXT NOT NULL,
+              replay_id TEXT NOT NULL UNIQUE,
+              run_id TEXT NOT NULL UNIQUE,
+              achieved_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY(user_id, board_key),
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+              FOREIGN KEY(run_id) REFERENCES gamer_ranked_runs(run_id) ON DELETE CASCADE
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_events(user_id, created_at);
@@ -325,6 +367,16 @@ def init_auth_db() -> None:
               ON leaderboard_snapshots(board_key, generated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_leaderboard_entries_rank
               ON leaderboard_entries(snapshot_id, rank);
+            CREATE INDEX IF NOT EXISTS idx_gamer_runs_user_status
+              ON gamer_ranked_runs(user_id, status, submitted_at);
+            CREATE INDEX IF NOT EXISTS idx_gamer_runs_pending
+              ON gamer_ranked_runs(status, submitted_at);
+            CREATE INDEX IF NOT EXISTS idx_gamer_runs_start_ip
+              ON gamer_ranked_runs(start_ip, started_at);
+            CREATE INDEX IF NOT EXISTS idx_gamer_runs_submit_ip
+              ON gamer_ranked_runs(submit_ip, submitted_at);
+            CREATE INDEX IF NOT EXISTS idx_gamer_scores_board_score
+              ON gamer_high_scores(board_key, score DESC, achieved_at ASC);
             """
         )
         existing_user_columns = {

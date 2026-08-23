@@ -237,6 +237,28 @@
   "gamer": {
     "browserAi": {
       "title": "在本地浏览器中打开网页版 AI"
+    },
+    "ranked": {
+      "mode": {
+        "general": "普通高分榜",
+        "adversarial": "对抗模式榜"
+      },
+      "status": {
+        "unranked": "非排位对局",
+        "legacy_unranked": "旧存档不参与排名",
+        "starting": "正在创建排位对局...",
+        "ranked_unavailable": "排位服务暂不可用",
+        "ranked": "排位中：{mode}",
+        "ineligible": "本局已失去排名资格",
+        "submitting": "正在提交成绩...",
+        "pending": "等待验证",
+        "validating": "正在验证成绩...",
+        "verified": "个人最高分已验证",
+        "no_improvement": "验证通过，未刷新最高分",
+        "rejected": "成绩验证未通过",
+        "expired": "排位对局已过期",
+        "submission_failed": "提交失败，点击重试"
+      }
     }
   },
   "notebook": {
@@ -627,11 +649,17 @@
     "rank": "名次",
     "player": "用户名",
     "tokenUsage": "Token 消耗",
+    "gameScore": "游戏分数",
+    "points": "分",
+    "maxTile": "最大棋块",
+    "aiUsed": "使用 AI",
+    "viewGame": "查看对局",
     "empty": "当前榜单暂无记录。",
     "loadFailed": "排行榜加载失败。",
     "cadence": {
       "daily": "每日更新",
-      "weekly": "每周更新"
+      "weekly": "每周更新",
+      "live": "验证后更新"
     },
     "boards": {
       "supporters": {
@@ -645,6 +673,14 @@
       "token_last_week": {
         "title": "上周 Token 榜",
         "description": "统计上一完整自然周的实际 Token 消耗量。"
+      },
+      "gamer_high_score": {
+        "title": "高分榜",
+        "description": "经服务端重放验证、且至少一步难度低于 100 的自然终局最高分。"
+      },
+      "gamer_adversarial": {
+        "title": "对抗模式高分榜",
+        "description": "经服务端重放验证、每一步均使用难度 100 出数的最高分。"
       }
     }
   },

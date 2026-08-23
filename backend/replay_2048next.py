@@ -18,6 +18,16 @@ RECORD_EXT = 131
 RECORD_END = 132
 RECORD_MOVE8 = 133
 
+# Extension type 2 is the existing UTF-8 ruleset marker (normally ``pow2``).
+# Ranked Gamer records reserve a separate range so older decoders can continue
+# ignoring extensions that they do not understand.
+EXT_RULESET = 2
+EXT_RANKED_METADATA = 100
+EXT_DIFFICULTY_CHANGE = 101
+EXT_AI_USED = 102
+RANKED_RULES_VERSION = 1
+RANKED_METADATA_SIZE = 17
+
 
 class Replay2048NextError(ValueError):
     pass
@@ -75,6 +85,17 @@ class Replay2048Next:
                     return record.payload.decode("utf-8")
                 except UnicodeDecodeError:
                     return None
+        return None
+
+    def ranked_metadata(self) -> tuple[int, str] | None:
+        for record in self.records:
+            if (
+                isinstance(record, ExtensionRecord)
+                and record.extension_type == EXT_RANKED_METADATA
+            ):
+                if len(record.payload) != RANKED_METADATA_SIZE:
+                    raise Replay2048NextError("Invalid ranked replay metadata")
+                return record.payload[0], record.payload[1:].hex()
         return None
 
 

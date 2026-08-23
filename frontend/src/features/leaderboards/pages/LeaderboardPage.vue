@@ -68,16 +68,30 @@
               </div>
               <strong class="podium-name">{{ entry.display_name }}</strong>
               <span v-if="boardData.score_visible" class="podium-score">
-                {{ formatScore(entry.score) }}
+                {{ formatScore(entry.score, boardData.unit) }}
               </span>
+              <div v-if="isGamerBoard" class="game-entry-meta">
+                <span>{{ $t('leaderboards.maxTile') }} {{ formatInteger(entry.max_tile) }}</span>
+                <span v-if="entry.used_ai">{{ $t('leaderboards.aiUsed') }}</span>
+              </div>
+              <button
+                v-if="isGamerBoard && entry.replay_id"
+                type="button"
+                class="replay-link"
+                @click="openReplay(entry.replay_id)"
+              >
+                {{ $t('leaderboards.viewGame') }}
+              </button>
             </article>
           </section>
 
-          <section :class="['leaderboard-list', !boardData.score_visible ? 'score-hidden' : '']">
+          <section :class="['leaderboard-list', !boardData.score_visible ? 'score-hidden' : '', isGamerBoard ? 'game-board' : '']">
             <div class="leaderboard-list-head">
               <span>{{ $t('leaderboards.rank') }}</span>
               <span>{{ $t('leaderboards.player') }}</span>
-              <span v-if="boardData.score_visible">{{ $t('leaderboards.tokenUsage') }}</span>
+              <span v-if="boardData.score_visible">
+                {{ isGamerBoard ? $t('leaderboards.gameScore') : $t('leaderboards.tokenUsage') }}
+              </span>
             </div>
             <div
               v-for="entry in listEntries"
@@ -95,7 +109,19 @@
                 <strong>{{ entry.display_name }}</strong>
               </span>
               <strong v-if="boardData.score_visible" class="row-score">
-                {{ formatScore(entry.score) }}
+                <span>{{ formatScore(entry.score, boardData.unit) }}</span>
+                <small v-if="isGamerBoard">
+                  {{ $t('leaderboards.maxTile') }} {{ formatInteger(entry.max_tile) }}
+                  <span v-if="entry.used_ai"> · {{ $t('leaderboards.aiUsed') }}</span>
+                </small>
+                <button
+                  v-if="isGamerBoard && entry.replay_id"
+                  type="button"
+                  class="replay-link"
+                  @click="openReplay(entry.replay_id)"
+                >
+                  {{ $t('leaderboards.viewGame') }}
+                </button>
               </strong>
             </div>
           </section>
@@ -122,6 +148,7 @@ const error = ref('');
 let requestSerial = 0;
 
 const entries = computed(() => boardData.value?.entries || []);
+const isGamerBoard = computed(() => String(boardData.value?.key || '').startsWith('gamer_'));
 const podiumEntries = computed(() => {
   const top = entries.value.filter((entry) => entry.rank <= 3);
   const order = { 2: 0, 1: 1, 3: 2 };
@@ -135,6 +162,7 @@ const periodLabel = computed(() => {
     const end = formatDate(boardData.value.period?.end);
     return start && end ? `${start} - ${end}` : '';
   }
+  if (boardData.value.cadence === 'live') return t('leaderboards.cadence.live');
   return boardData.value.cadence === 'daily'
     ? t('leaderboards.cadence.daily')
     : t('leaderboards.cadence.weekly');
@@ -161,9 +189,20 @@ const formatDateTime = (value) => {
     minute: '2-digit',
   }).format(date);
 };
-const formatScore = (value) => `${new Intl.NumberFormat(localeName(), {
-  maximumFractionDigits: 3,
-}).format(Number(value || 0))} Token`;
+const formatInteger = (value) => new Intl.NumberFormat(localeName(), {
+  maximumFractionDigits: 0,
+}).format(Number(value || 0));
+const formatScore = (value, unit) => {
+  const formatted = new Intl.NumberFormat(localeName(), {
+    maximumFractionDigits: unit === 'points' ? 0 : 3,
+  }).format(Number(value || 0));
+  return unit === 'points'
+    ? `${formatted} ${t('leaderboards.points')}`
+    : `${formatted} Token`;
+};
+const openReplay = (replayId) => {
+  window.open(`/verse-replay/?ranked=${encodeURIComponent(replayId)}`, '_blank', 'noopener');
+};
 const leaderboardUser = (entry) => ({
   display_name: entry?.display_name || '',
   profile: { avatar_url: entry?.avatar_url || null },
@@ -413,6 +452,31 @@ watch(() => props.active, (active) => {
   font-weight: 900;
 }
 
+.game-entry-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  color: var(--text-secondary);
+  font-size: var(--font-ui-xs);
+  font-weight: 800;
+}
+
+.replay-link {
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--border-main);
+  border-radius: 0.45rem;
+  color: var(--text-main);
+  background: var(--bg-card);
+  font-size: var(--font-ui-xs);
+  font-weight: 900;
+}
+
+.replay-link:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .leaderboard-list {
   overflow: hidden;
   border-radius: 1rem;
@@ -430,6 +494,11 @@ watch(() => props.active, (active) => {
 .leaderboard-list.score-hidden .leaderboard-list-head,
 .leaderboard-list.score-hidden .leaderboard-row {
   grid-template-columns: 5rem minmax(0, 1fr);
+}
+
+.leaderboard-list.game-board .leaderboard-list-head,
+.leaderboard-list.game-board .leaderboard-row {
+  grid-template-columns: 5rem minmax(0, 1fr) minmax(24rem, 32rem);
 }
 
 .leaderboard-list-head {
@@ -475,9 +544,19 @@ watch(() => props.active, (active) => {
 }
 
 .row-score {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.65rem;
   color: var(--accent);
   font-size: var(--font-ui-sm);
   text-align: right;
+}
+
+.row-score small {
+  color: var(--text-secondary);
+  font-size: var(--font-ui-xs);
+  font-weight: 800;
 }
 
 .leaderboard-empty,

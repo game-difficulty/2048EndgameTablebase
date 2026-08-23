@@ -505,6 +505,26 @@
     }
   }
 
+  async function loadRankedReplayFromUrl() {
+    const replayId = new URLSearchParams(window.location.search).get('ranked');
+    if (!replayId) return;
+    elements.fileName.textContent = '正在载入已验证对局…';
+    try {
+      const response = await fetch(`/api/gamer/replays/${encodeURIComponent(replayId)}`, {
+        headers: { Accept: 'application/json' },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.record_encoding) {
+        throw new Error(payload?.detail || `HTTP ${response.status}`);
+      }
+      const source = `${payload.display_name || '排行榜对局'} · ${Number(payload.score || 0).toLocaleString('zh-CN')} 分`;
+      await installReplay(() => decodeReplayText(payload.record_encoding), source);
+    } catch (error) {
+      showError(`无法载入排行榜对局：${error?.message || '网络请求失败'}`);
+      elements.fileName.textContent = '排行榜对局载入失败';
+    }
+  }
+
   function openDialog(dialog) {
     if (typeof dialog.showModal === 'function') dialog.showModal();
     else dialog.setAttribute('open', '');
@@ -626,4 +646,5 @@
   renderSpeedButton();
   renderStats();
   renderControls();
+  loadRankedReplayFromUrl();
 })();

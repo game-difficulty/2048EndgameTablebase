@@ -13,6 +13,8 @@ from backend.auth.db import auth_db
 SUPPORTERS_BOARD = "supporters"
 TOKEN_LIFETIME_BOARD = "token_lifetime"
 TOKEN_LAST_WEEK_BOARD = "token_last_week"
+GAMER_HIGH_SCORE_BOARD = "gamer_high_score"
+GAMER_ADVERSARIAL_BOARD = "gamer_adversarial"
 LEADERBOARD_LIMIT = 100
 DEFAULT_ADMIN_IDENTITIES = ("user0", "assweeass@163.com")
 _REFRESH_LOCK = threading.Lock()
@@ -25,12 +27,15 @@ class BoardDefinition:
     score_visible: bool
     unit: str | None
     retained_snapshots: int
+    score_divisor: int = 1000
 
 
 BOARD_DEFINITIONS: tuple[BoardDefinition, ...] = (
     BoardDefinition(SUPPORTERS_BOARD, "daily", False, None, 31),
     BoardDefinition(TOKEN_LIFETIME_BOARD, "daily", True, "token", 31),
     BoardDefinition(TOKEN_LAST_WEEK_BOARD, "weekly", True, "token", 104),
+    BoardDefinition(GAMER_HIGH_SCORE_BOARD, "live", True, "points", 31, 1),
+    BoardDefinition(GAMER_ADVERSARIAL_BOARD, "live", True, "points", 31, 1),
 )
 BOARD_BY_KEY = {board.key: board for board in BOARD_DEFINITIONS}
 
@@ -123,6 +128,30 @@ def _token_rows(
     return [dict(row) for row in db.execute(query, params).fetchall()]
 
 
+def _gamer_rows(db, board_key: str) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in db.execute(
+            """
+            SELECT
+              u.id AS user_id,
+              TRIM(u.display_name) AS display_name,
+              ghs.score AS score_units,
+              CASE WHEN ue.tier = 'supporter' THEN 1 ELSE 0 END AS is_supporter
+            FROM gamer_high_scores ghs
+            JOIN users u ON u.id = ghs.user_id
+            LEFT JOIN user_entitlements ue ON ue.user_id = u.id
+            WHERE ghs.board_key = ?
+              AND u.status = 'active'
+              AND TRIM(COALESCE(u.display_name, '')) <> ''
+            ORDER BY ghs.score DESC, ghs.achieved_at ASC, u.id ASC
+            LIMIT ?
+            """,
+            (board_key, LEADERBOARD_LIMIT),
+        ).fetchall()
+    ]
+
+
 def _rank_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{**row, "rank": index} for index, row in enumerate(rows, start=1)]
 
@@ -130,6 +159,8 @@ def _rank_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _build_rows(db, board_key: str, period_start: str | None, period_end: str) -> list[dict[str, Any]]:
     if board_key == SUPPORTERS_BOARD:
         return _rank_rows(_supporter_rows(db))
+    if board_key in {GAMER_HIGH_SCORE_BOARD, GAMER_ADVERSARIAL_BOARD}:
+        return _rank_rows(_gamer_rows(db, board_key))
     return _rank_rows(
         _token_rows(db, period_start=period_start, period_end=period_end)
     )
@@ -152,51 +183,66 @@ def _prune_snapshots(db, definition: BoardDefinition) -> None:
     db.execute(f"DELETE FROM leaderboard_snapshots WHERE id IN ({placeholders})", ids)
 
 
-def refresh_due_leaderboards(*, force: bool = False, now: datetime | None = None) -> dict[str, int]:
+def _refresh_definition(db, definition: BoardDefinition, *, force: bool, now: datetime | None) -> int | None:
     generated_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+    period_start, period_end = _period_for(definition.key, now)
+    existing = db.execute(
+        "SELECT id FROM leaderboard_snapshots WHERE board_key = ? AND period_end = ?",
+        (definition.key, period_end),
+    ).fetchone()
+    if existing is not None and not force:
+        return None
+    if existing is not None:
+        db.execute("DELETE FROM leaderboard_snapshots WHERE id = ?", (int(existing["id"]),))
+    rows = _build_rows(db, definition.key, period_start, period_end)
+    cursor = db.execute(
+        """
+        INSERT INTO leaderboard_snapshots
+        (board_key, period_start, period_end, generated_at, entry_count)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (definition.key, period_start, period_end, generated_at, len(rows)),
+    )
+    snapshot_id = int(cursor.lastrowid)
+    db.executemany(
+        """
+        INSERT INTO leaderboard_entries
+        (snapshot_id, user_id, rank, score_units, display_name, is_supporter)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                snapshot_id,
+                int(row["user_id"]),
+                int(row["rank"]),
+                int(row["score_units"]),
+                str(row["display_name"]),
+                int(row.get("is_supporter") or 0),
+            )
+            for row in rows
+        ],
+    )
+    _prune_snapshots(db, definition)
+    return len(rows)
+
+
+def refresh_leaderboard(board_key: str, *, force: bool = False, now: datetime | None = None) -> int | None:
+    definition = BOARD_BY_KEY.get(str(board_key or ""))
+    if definition is None:
+        raise KeyError(board_key)
+    with _REFRESH_LOCK:
+        with auth_db() as db:
+            return _refresh_definition(db, definition, force=force, now=now)
+
+
+def refresh_due_leaderboards(*, force: bool = False, now: datetime | None = None) -> dict[str, int]:
     refreshed: dict[str, int] = {}
     with _REFRESH_LOCK:
         with auth_db() as db:
             for definition in BOARD_DEFINITIONS:
-                period_start, period_end = _period_for(definition.key, now)
-                existing = db.execute(
-                    "SELECT id FROM leaderboard_snapshots WHERE board_key = ? AND period_end = ?",
-                    (definition.key, period_end),
-                ).fetchone()
-                if existing is not None and not force:
-                    continue
-                if existing is not None:
-                    db.execute("DELETE FROM leaderboard_snapshots WHERE id = ?", (int(existing["id"]),))
-                rows = _build_rows(db, definition.key, period_start, period_end)
-                cursor = db.execute(
-                    """
-                    INSERT INTO leaderboard_snapshots
-                    (board_key, period_start, period_end, generated_at, entry_count)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (definition.key, period_start, period_end, generated_at, len(rows)),
-                )
-                snapshot_id = int(cursor.lastrowid)
-                db.executemany(
-                    """
-                    INSERT INTO leaderboard_entries
-                    (snapshot_id, user_id, rank, score_units, display_name, is_supporter)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        (
-                            snapshot_id,
-                            int(row["user_id"]),
-                            int(row["rank"]),
-                            int(row["score_units"]),
-                            str(row["display_name"]),
-                            int(row.get("is_supporter") or 0),
-                        )
-                        for row in rows
-                    ],
-                )
-                _prune_snapshots(db, definition)
-                refreshed[definition.key] = len(rows)
+                count = _refresh_definition(db, definition, force=force, now=now)
+                if count is not None:
+                    refreshed[definition.key] = count
     return refreshed
 
 
@@ -238,16 +284,23 @@ def leaderboard_payload(board_key: str, *, limit: int = LEADERBOARD_LIMIT) -> di
               leaderboard_entries.score_units,
               leaderboard_entries.display_name,
               leaderboard_entries.is_supporter,
-              user_profiles.avatar_key
+              user_profiles.avatar_key,
+              gamer_high_scores.max_tile,
+              gamer_high_scores.move_count,
+              gamer_high_scores.used_ai,
+              gamer_high_scores.replay_id
             FROM leaderboard_entries
             LEFT JOIN user_profiles ON user_profiles.user_id = leaderboard_entries.user_id
+            LEFT JOIN gamer_high_scores
+              ON gamer_high_scores.user_id = leaderboard_entries.user_id
+             AND gamer_high_scores.board_key = ?
             WHERE leaderboard_entries.snapshot_id = ?
             ORDER BY leaderboard_entries.rank ASC,
                      leaderboard_entries.score_units DESC,
                      leaderboard_entries.user_id ASC
             LIMIT ?
             """,
-            (int(snapshot["id"]), max(1, min(int(limit), LEADERBOARD_LIMIT))),
+            (definition.key, int(snapshot["id"]), max(1, min(int(limit), LEADERBOARD_LIMIT))),
         ).fetchall()
 
     entries = []
@@ -264,7 +317,16 @@ def leaderboard_payload(board_key: str, *, limit: int = LEADERBOARD_LIMIT) -> di
             ),
         }
         if definition.score_visible:
-            entry["score"] = round(int(row["score_units"]) / 1000, 3)
+            entry["score"] = round(int(row["score_units"]) / definition.score_divisor, 3)
+        if definition.key in {GAMER_HIGH_SCORE_BOARD, GAMER_ADVERSARIAL_BOARD}:
+            entry.update(
+                {
+                    "max_tile": int(row["max_tile"] or 0),
+                    "move_count": int(row["move_count"] or 0),
+                    "used_ai": bool(row["used_ai"]),
+                    "replay_id": row["replay_id"],
+                }
+            )
         entries.append(entry)
     return {
         "key": definition.key,

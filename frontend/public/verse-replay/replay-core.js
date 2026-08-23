@@ -22,6 +22,8 @@
     [12288, 4186606],
   ];
   const UNKNOWN_TIMING_FALLBACK_MS = 100;
+  const NEXT_REPLAY_PREFIX = 'REPLAY_v1RPL_B64_';
+  const NEXT_DIRECTIONS = ['up', 'right', 'down', 'left'];
 
   // Each row records the first move that creates that power-of-two tile.
   const DEFAULT_MILESTONES = [
@@ -285,6 +287,9 @@
 
   function buildDecodedReplay(text) {
     const replayText = String(text).replace(/^\uFEFF/, '').trim();
+    if (replayText.startsWith(NEXT_REPLAY_PREFIX)) {
+      return buildDecodedRankedReplay(replayText);
+    }
     const header = replayText.match(/^(\d+)x(\d+)-([^_]*)_/);
     if (!header) {
       throw new ReplayFormatError('不支持的回放头；应类似 4x4-1_。');
@@ -420,6 +425,167 @@
     };
   }
 
+  function decodeUleb128(bytes, state, limit) {
+    let value = 0;
+    let multiplier = 1;
+    while (state.offset < limit) {
+      const byte = bytes[state.offset];
+      state.offset += 1;
+      value += (byte & 0x7f) * multiplier;
+      if (!(byte & 0x80)) return value;
+      multiplier *= 128;
+      if (multiplier > Number.MAX_SAFE_INTEGER) throw new ReplayFormatError('ULEB128 数值过大。');
+    }
+    throw new ReplayFormatError('回放在 ULEB128 中途结束。');
+  }
+
+  function crc32(bytes) {
+    let value = 0xffffffff;
+    for (const byte of bytes) {
+      value ^= byte;
+      for (let bit = 0; bit < 8; bit += 1) {
+        value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+      }
+    }
+    return (value ^ 0xffffffff) >>> 0;
+  }
+
+  function rankedBytes(replayText) {
+    const encoded = replayText.slice(NEXT_REPLAY_PREFIX.length).replace(/\s+/gu, '');
+    let binary;
+    try {
+      binary = atob(encoded);
+    } catch (_error) {
+      throw new ReplayFormatError('2048next Base64 数据无效。');
+    }
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  }
+
+  function buildDecodedRankedReplay(replayText) {
+    const bytes = rankedBytes(replayText);
+    if (bytes.length < 11 || String.fromCharCode(...bytes.subarray(0, 4)) !== 'RPL1') {
+      throw new ReplayFormatError('2048next 回放头无效。');
+    }
+    const payloadEnd = bytes.length - 4;
+    const expectedCrc = (
+      bytes[payloadEnd]
+      | (bytes[payloadEnd + 1] << 8)
+      | (bytes[payloadEnd + 2] << 16)
+      | (bytes[payloadEnd + 3] << 24)
+    ) >>> 0;
+    if (crc32(bytes.subarray(0, payloadEnd)) !== expectedCrc) {
+      throw new ReplayFormatError('2048next 回放 CRC32 校验失败。');
+    }
+    const dimensions = bytes[4];
+    const width = dimensions & 0x0f;
+    const height = dimensions >>> 4;
+    if (width !== 4 || height !== 4) throw new ReplayFormatError('排位回放仅支持 4×4 棋盘。');
+    const flags = bytes[5];
+    if (flags !== 0) throw new ReplayFormatError('排位回放含有不支持的头标志。');
+    const initialCount = bytes[6];
+    if (initialCount !== 2) throw new ReplayFormatError('排位回放必须包含两个初始棋块。');
+    const state = { offset: 7 };
+    let board = new Uint8Array(16);
+    for (let index = 0; index < initialCount; index += 1) {
+      const packed = bytes[state.offset];
+      state.offset += 1;
+      const cell = packed & 0x0f;
+      const exponent = ((packed >>> 4) & 1) + 1;
+      if (board[cell]) throw new ReplayFormatError('排位回放初始棋块位置重复。');
+      board[cell] = exponent;
+    }
+
+    const rawMoves = [];
+    let ended = false;
+    while (state.offset < payloadEnd) {
+      const type = bytes[state.offset];
+      state.offset += 1;
+      if (ended) throw new ReplayFormatError('End 记录后仍有数据。');
+      if (type < 128) {
+        rawMoves.push({
+          direction: NEXT_DIRECTIONS[type & 3],
+          spawnIndex: (type >>> 2) & 0x0f,
+          spawnExponent: ((type >>> 6) & 1) + 1,
+          deltaMs: decodeUleb128(bytes, state, payloadEnd),
+        });
+      } else if (type === 131) {
+        decodeUleb128(bytes, state, payloadEnd);
+        const length = decodeUleb128(bytes, state, payloadEnd);
+        state.offset += length;
+        if (state.offset > payloadEnd) throw new ReplayFormatError('扩展记录越界。');
+      } else if (type === 132) {
+        ended = true;
+      } else {
+        throw new ReplayFormatError(`排位回放含有不支持的记录 ${type}。`);
+      }
+    }
+    if (!ended || !rawMoves.length) throw new ReplayFormatError('排位回放没有完整自然终局。');
+
+    const moveCount = rawMoves.length;
+    const snapshots = new Uint8Array((moveCount + 1) * 16);
+    const scores = new Float64Array(moveCount + 1);
+    const cumulativeMs = new Float64Array(moveCount + 1);
+    const knownCumulativeMs = new Float64Array(moveCount + 1);
+    const unknownCumulative = new Uint32Array(moveCount + 1);
+    const steps = new Array(moveCount);
+    const milestones = DEFAULT_MILESTONES.map((milestone) => ({
+      ...milestone,
+      reachedStep: null,
+      timeMs: null,
+    }));
+    snapshots.set(board, 0);
+    let score = 0;
+    rawMoves.forEach((record, index) => {
+      const moveNumber = index + 1;
+      const moved = moveBoard(board, 4, 4, record.direction);
+      if (!moved.moved) throw new ReplayFormatError(`第 ${moveNumber} 步没有改变棋盘。`);
+      board = moved.board;
+      score += moved.addedScore;
+      if (board[record.spawnIndex]) throw new ReplayFormatError(`第 ${moveNumber} 步出生位置不为空。`);
+      board[record.spawnIndex] = record.spawnExponent;
+      cumulativeMs[moveNumber] = cumulativeMs[index] + record.deltaMs;
+      knownCumulativeMs[moveNumber] = cumulativeMs[moveNumber];
+      scores[moveNumber] = score;
+      snapshots.set(board, moveNumber * 16);
+      steps[index] = {
+        number: moveNumber,
+        direction: record.direction,
+        deltaMs: record.deltaMs,
+        playbackDeltaMs: record.deltaMs,
+        spawnValue: 2 ** record.spawnExponent,
+        spawnX: record.spawnIndex % 4,
+        spawnY: Math.floor(record.spawnIndex / 4),
+      };
+      for (const milestone of milestones) {
+        if (milestone.reachedStep === null && boardReachesRequirements(board, milestone.requirements)) {
+          milestone.reachedStep = moveNumber;
+          milestone.timeMs = cumulativeMs[moveNumber];
+        }
+      }
+    });
+    return {
+      width: 4,
+      height: 4,
+      mode: 'ranked',
+      moveCount,
+      steps,
+      snapshots,
+      scores,
+      cumulativeMs,
+      knownCumulativeMs,
+      unknownCumulative,
+      knownTimeMs: cumulativeMs[moveCount],
+      unknownTimings: 0,
+      playbackTimeMs: cumulativeMs[moveCount],
+      milestones,
+      cellCount: 16,
+      getBoardAt(progress) {
+        const bounded = Math.max(0, Math.min(moveCount, Number(progress) || 0));
+        return snapshots.subarray(bounded * 16, bounded * 16 + 16);
+      },
+    };
+  }
+
   function snapshotToHex(board) {
     let encoded = 0n;
     for (let index = 0; index < board.length; index += 1) {
@@ -507,6 +673,7 @@
     UNKNOWN_TIMING_FALLBACK_MS,
     decodeReplayBytes: (bytes) => buildDecodedReplay(bytesToLatin1(bytes)),
     decodeReplayText: buildDecodedReplay,
+    decodeRankedReplayText: buildDecodedRankedReplay,
     decodeTiming,
     moveBoard,
     planMoveTransitions,

@@ -11,6 +11,16 @@
             <span class="badge-base badge-link inline-flex items-center justify-center px-2.5 py-1">
               {{ aiWorkerReady ? 'WASM' : 'WASM...' }}
             </span>
+            <button
+              type="button"
+              :class="['gamer-ranked-badge', `status-${rankedStatus}`]"
+              :disabled="rankedStatus !== 'submission_failed'"
+              @click="retryRankedSubmission"
+            >
+              {{ $t(`gamer.ranked.status.${rankedStatus}`, {
+                mode: $t(`gamer.ranked.mode.${rankedMode}`),
+              }) }}
+            </button>
           </div>
         </div>
         <div class="flex space-x-2">
@@ -117,11 +127,14 @@ const {
   hexInput,
   scoreAnimations,
   aiWorkerReady,
+  rankedStatus,
+  rankedMode,
   triggerAction,
   toggleAI,
   updateSettings,
   setBoard,
   writeCurrentBoardToHex,
+  retryRankedSubmission,
 } = useGamerSession(toRef(props, 'active'));
 
 const handleUpdateSettings = (event) => {
@@ -133,3 +146,36 @@ const handleBoardSwipe = (direction) => {
   triggerAction('USER_MOVE', { dir: direction });
 };
 </script>
+
+<style scoped>
+.gamer-ranked-badge {
+  min-height: 1.45rem;
+  padding: 0.18rem 0.55rem;
+  border: 1px solid var(--border-main);
+  border-radius: 0.35rem;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-card) 88%, transparent);
+  font-size: var(--font-ui-xs);
+  font-weight: 900;
+  line-height: 1.15;
+}
+
+.gamer-ranked-badge.status-ranked,
+.gamer-ranked-badge.status-pending,
+.gamer-ranked-badge.status-validating,
+.gamer-ranked-badge.status-verified {
+  color: #16864b;
+  border-color: color-mix(in srgb, #22a95f 45%, var(--border-main));
+}
+
+.gamer-ranked-badge.status-submission_failed,
+.gamer-ranked-badge.status-rejected,
+.gamer-ranked-badge.status-ineligible {
+  color: #d14a45;
+  border-color: color-mix(in srgb, #d14a45 45%, var(--border-main));
+}
+
+.gamer-ranked-badge.status-submission_failed {
+  cursor: pointer;
+}
+</style>

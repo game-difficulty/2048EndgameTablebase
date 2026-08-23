@@ -237,6 +237,28 @@
   "gamer": {
     "browserAi": {
       "title": "Open the browser AI version"
+    },
+    "ranked": {
+      "mode": {
+        "general": "High Score",
+        "adversarial": "Adversarial"
+      },
+      "status": {
+        "unranked": "Unranked",
+        "legacy_unranked": "Unranked restored game",
+        "starting": "Starting ranked run...",
+        "ranked_unavailable": "Ranked service unavailable",
+        "ranked": "Ranked: {mode}",
+        "ineligible": "Not rank eligible",
+        "submitting": "Submitting score...",
+        "pending": "Awaiting verification",
+        "validating": "Verifying score...",
+        "verified": "Personal best verified",
+        "no_improvement": "Verified, below personal best",
+        "rejected": "Score verification failed",
+        "expired": "Ranked run expired",
+        "submission_failed": "Submission failed - retry"
+      }
     }
   },
   "notebook": {
@@ -627,11 +649,17 @@
     "rank": "Rank",
     "player": "Username",
     "tokenUsage": "Token usage",
+    "gameScore": "Score",
+    "points": "points",
+    "maxTile": "Max tile",
+    "aiUsed": "AI used",
+    "viewGame": "View game",
     "empty": "No entries are available for this leaderboard yet.",
     "loadFailed": "Failed to load the leaderboard.",
     "cadence": {
       "daily": "Updated daily",
-      "weekly": "Updated weekly"
+      "weekly": "Updated weekly",
+      "live": "Verified records"
     },
     "boards": {
       "supporters": {
@@ -645,6 +673,14 @@
       "token_last_week": {
         "title": "Last Week Token Usage",
         "description": "Finalised Token usage during the previous complete calendar week."
+      },
+      "gamer_high_score": {
+        "title": "High Scores",
+        "description": "Verified natural game-over scores from games that used any difficulty below 100."
+      },
+      "gamer_adversarial": {
+        "title": "Adversarial High Scores",
+        "description": "Verified scores where every valid move used difficulty 100."
       }
     }
   },
