@@ -60,8 +60,11 @@
             >
               <div class="podium-rank">{{ entry.rank }}</div>
               <div class="leader-avatar large">
-                {{ initials(entry.display_name) }}
-                <span v-if="entry.is_supporter" class="supporter-mark" aria-hidden="true">◆</span>
+                <AccountAvatar
+                  :user="leaderboardUser(entry)"
+                  :supporter="entry.is_supporter"
+                  size="large"
+                />
               </div>
               <strong class="podium-name">{{ entry.display_name }}</strong>
               <span v-if="boardData.score_visible" class="podium-score">
@@ -84,8 +87,10 @@
               <span class="row-rank">{{ entry.rank }}</span>
               <span class="row-player">
                 <span class="leader-avatar">
-                  {{ initials(entry.display_name) }}
-                  <span v-if="entry.is_supporter" class="supporter-mark" aria-hidden="true">◆</span>
+                  <AccountAvatar
+                    :user="leaderboardUser(entry)"
+                    :supporter="entry.is_supporter"
+                  />
                 </span>
                 <strong>{{ entry.display_name }}</strong>
               </span>
@@ -104,6 +109,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
+import AccountAvatar from '../../auth/AccountAvatar.vue';
 import { fetchLeaderboard, fetchLeaderboardCatalog } from '../services/leaderboardClient';
 
 const props = defineProps({ active: Boolean });
@@ -158,7 +164,10 @@ const formatDateTime = (value) => {
 const formatScore = (value) => `${new Intl.NumberFormat(localeName(), {
   maximumFractionDigits: 3,
 }).format(Number(value || 0))} Token`;
-const initials = (name) => String(name || '?').trim().slice(0, 2).toUpperCase();
+const leaderboardUser = (entry) => ({
+  display_name: entry?.display_name || '',
+  profile: { avatar_url: entry?.avatar_url || null },
+});
 
 const loadBoard = async (key) => {
   if (!key) return;
@@ -374,14 +383,8 @@ watch(() => props.active, (active) => {
   flex: 0 0 auto;
   width: 2.25rem;
   height: 2.25rem;
-  border: 1px solid color-mix(in srgb, var(--accent) 46%, var(--border-main));
-  border-radius: 50%;
   display: grid;
   place-items: center;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--bg-card) 82%, var(--accent) 18%);
-  font-size: var(--font-ui-xs);
-  font-weight: 900;
 }
 
 .leader-avatar.large {
@@ -390,14 +393,9 @@ watch(() => props.active, (active) => {
   font-size: var(--font-ui-md);
 }
 
-.supporter-mark {
-  position: absolute;
-  right: -0.2rem;
-  bottom: -0.1rem;
-  color: #d6aa45;
-  font-size: 0.8rem;
-  line-height: 1;
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.24));
+.leader-avatar :deep(.account-avatar-shell) {
+  width: 100%;
+  height: 100%;
 }
 
 .podium-name {

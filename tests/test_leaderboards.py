@@ -113,6 +113,14 @@ class LeaderboardTests(unittest.TestCase):
                 supporter=True,
                 paid_units=2_000_000,
             )
+            db.execute(
+                """
+                INSERT INTO user_profiles
+                (user_id, avatar_key, created_at, updated_at)
+                VALUES (?, ?, '2026-07-01T00:00:00+00:00', '2026-07-01T00:00:00+00:00')
+                """,
+                (alice, f"{alice}/alice-avatar.webp"),
+            )
             bob = self._add_user(
                 db,
                 email="bob@example.com",
@@ -138,6 +146,11 @@ class LeaderboardTests(unittest.TestCase):
         supporters = leaderboard_payload(SUPPORTERS_BOARD)
         self.assertEqual([entry["display_name"] for entry in supporters["entries"]], ["Alice", "Bob"])
         self.assertTrue(all("score" not in entry for entry in supporters["entries"]))
+        self.assertEqual(
+            supporters["entries"][0]["avatar_url"],
+            f"/media/avatars/{alice}/alice-avatar.webp",
+        )
+        self.assertIsNone(supporters["entries"][1]["avatar_url"])
 
         lifetime = leaderboard_payload(TOKEN_LIFETIME_BOARD)
         self.assertEqual(

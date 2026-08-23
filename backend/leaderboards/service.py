@@ -232,10 +232,19 @@ def leaderboard_payload(board_key: str, *, limit: int = LEADERBOARD_LIMIT) -> di
             raise RuntimeError("Leaderboard snapshot is unavailable.")
         rows = db.execute(
             """
-            SELECT user_id, rank, score_units, display_name, is_supporter
+            SELECT
+              leaderboard_entries.user_id,
+              leaderboard_entries.rank,
+              leaderboard_entries.score_units,
+              leaderboard_entries.display_name,
+              leaderboard_entries.is_supporter,
+              user_profiles.avatar_key
             FROM leaderboard_entries
-            WHERE snapshot_id = ?
-            ORDER BY rank ASC, score_units DESC, user_id ASC
+            LEFT JOIN user_profiles ON user_profiles.user_id = leaderboard_entries.user_id
+            WHERE leaderboard_entries.snapshot_id = ?
+            ORDER BY leaderboard_entries.rank ASC,
+                     leaderboard_entries.score_units DESC,
+                     leaderboard_entries.user_id ASC
             LIMIT ?
             """,
             (int(snapshot["id"]), max(1, min(int(limit), LEADERBOARD_LIMIT))),
@@ -250,6 +259,9 @@ def leaderboard_payload(board_key: str, *, limit: int = LEADERBOARD_LIMIT) -> di
             "rank": int(row["rank"]),
             "display_name": str(row["display_name"]),
             "is_supporter": bool(row["is_supporter"]),
+            "avatar_url": (
+                f"/media/avatars/{row['avatar_key']}" if row["avatar_key"] else None
+            ),
         }
         if definition.score_visible:
             entry["score"] = round(int(row["score_units"]) / 1000, 3)
