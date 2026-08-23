@@ -25,12 +25,15 @@
         type="button"
         :disabled="!isEntryEnabled(entry.key)"
         :class="[
-          'action-btn-small',
+          'action-btn-small powerup-action',
           powerups?.activeMode === entry.key ? 'btn-prominent' : ''
         ]"
+        :title="entry.label"
+        :aria-label="`${entry.label}: ${entry.count}`"
         @click="$emit('use', entry.key)"
       >
-        <span class="mr-2">{{ entry.label }}</span>
+        <img :src="entry.icon" alt="" class="powerup-action-icon" draggable="false" />
+        <span class="sr-only">{{ entry.label }}</span>
         <span class="pill-badge">{{ entry.count }}</span>
       </button>
     </div>
@@ -40,6 +43,7 @@
 <script setup>
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { getMinigameAssetUrl } from '../../../services/runtime/backendUrl';
 
 const props = defineProps({
   powerups: {
@@ -65,9 +69,9 @@ defineEmits(['use', 'cancel']);
 const { t } = useI18n();
 
 const entries = computed(() => [
-  { key: 'bomb', label: t('minigames.powerups.bomb'), count: props.powerups?.counts?.bomb ?? 0 },
-  { key: 'glove', label: t('minigames.powerups.glove'), count: props.powerups?.counts?.glove ?? 0 },
-  { key: 'twist', label: t('minigames.powerups.twist'), count: props.powerups?.counts?.twist ?? 0 },
+  { key: 'bomb', label: t('minigames.powerups.bomb'), icon: getMinigameAssetUrl('bomb2.png'), count: props.powerups?.counts?.bomb ?? 0 },
+  { key: 'glove', label: t('minigames.powerups.glove'), icon: getMinigameAssetUrl('glove.png'), count: props.powerups?.counts?.glove ?? 0 },
+  { key: 'twist', label: t('minigames.powerups.twist'), icon: getMinigameAssetUrl('twist.png'), count: props.powerups?.counts?.twist ?? 0 },
 ]);
 
 const hintText = computed(() => {
@@ -144,5 +148,25 @@ const isEntryEnabled = (key) => {
   border-color: var(--accent);
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, var(--bg-main));
+}
+
+.powerup-action {
+  min-height: 3.1rem;
+  position: relative;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+.powerup-action-icon {
+  width: 2rem;
+  height: 2rem;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.powerup-action .pill-badge {
+  min-width: 1.45rem;
+  justify-content: center;
 }
 </style>

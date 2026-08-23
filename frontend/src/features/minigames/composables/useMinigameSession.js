@@ -1,9 +1,11 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 
+import { useAuthState } from '../../../services/auth/authState';
 import { createLocalStorageStore } from '../../../services/storage/localStorageStore';
 import { MinigameController } from '../engine/controller';
 import { createEmptyMinigameMenu, createEmptyMinigameState } from '../model/minigameViewState';
+import { submitMinigameScore } from '../services/minigameRankingClient';
 
 const isTextEntryElement = (element) => {
   if (!(element instanceof HTMLElement)) {
@@ -59,6 +61,7 @@ const snapshotKey = (gameId, difficulty) => `${gameId || ''}:${Number(difficulty
 
 export function useMinigameSession(activeRef) {
   const { t } = useI18n();
+  const { user: authUser } = useAuthState();
 
   const storedState = ref(normalizeStoredState());
   const menuData = ref({
@@ -81,6 +84,51 @@ export function useMinigameSession(activeRef) {
   let controller = null;
   let toastTimer = null;
   let inputLockTimer = null;
+  const submittedFinals = new Set();
+
+  const submitFinishedGame = async (state) => {
+    const snapshot = state?.snapshot;
+    const engine = snapshot?.engine;
+    if (!authUser.value || !snapshot?.gameId || !engine?.isOver) return;
+    const board = Array.isArray(state.board) ? state.board.map((value) => Number(value)) : [];
+    const rows = Number(state.shape?.rows || 0);
+    const cols = Number(state.shape?.cols || 0);
+    if (!board.length || rows * cols !== board.length) return;
+    const fingerprint = [
+      authUser.value.id,
+      snapshot.gameId,
+      Number(snapshot.difficulty) ? 1 : 0,
+      Number(state.score || 0),
+      Number(engine.isPassed || 0),
+      board.join(','),
+    ].join(':');
+    if (submittedFinals.has(fingerprint)) return;
+    submittedFinals.add(fingerprint);
+    try {
+      const result = await submitMinigameScore({
+        game_id: snapshot.gameId,
+        difficulty: Number(snapshot.difficulty) ? 1 : 0,
+        score: Math.max(0, Math.trunc(Number(state.score || 0))),
+        trophy_tier: Math.max(0, Math.min(4, Math.trunc(Number(engine.isPassed || 0)))),
+        highest_tile_exp: Math.max(0, Math.min(63, Math.trunc(Number(engine.highestTileExp || engine.maxNum || 0)))),
+        final_board: board.map((value) => Math.trunc(value)),
+        board_rows: rows,
+        board_cols: cols,
+      });
+      window.dispatchEvent(new CustomEvent('minigame-score-updated', {
+        detail: {
+          gameId: snapshot.gameId,
+          difficulty: Number(snapshot.difficulty) ? 1 : 0,
+          result,
+        },
+      }));
+    } catch (error) {
+      if (error?.status !== 401) {
+        submittedFinals.delete(fingerprint);
+        console.warn('Minigame score submission failed.', error);
+      }
+    }
+  };
 
   const hasActiveGame = computed(() => Boolean(gameState.value?.gameId));
   const currentView = computed(() => (hasActiveGame.value ? 'play' : 'menu'));
@@ -201,6 +249,7 @@ export function useMinigameSession(activeRef) {
       messages: payload?.messages || {},
     };
     gameState.value = nextState;
+    void submitFinishedGame(nextState);
     const snapshot = nextState.snapshot;
     if (snapshot?.gameId) {
       const key = snapshotKey(snapshot.gameId, snapshot.difficulty ?? difficulty.value);

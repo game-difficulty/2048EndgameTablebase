@@ -459,6 +459,21 @@
         "gloveTarget": "Click an empty tile to place the selected tile.",
         "twist": "Click the hotspot between four tiles to rotate that 2×2 block clockwise."
       }
+    },
+    "leaderboard": {
+      "title": "Minigame Rankings",
+      "board": "Leaderboard",
+      "overall": "Trophy Standings",
+      "overallDescription": "Ranks Grand, Gold, Silver, then Bronze trophy counts at the selected difficulty. Earlier achievement wins an exact tie.",
+      "gameDescription": "Only each player's personal best for this minigame and difficulty is retained.",
+      "trophies": "Trophies",
+      "highestTile": "Max tile",
+      "refresh": "Refresh leaderboard",
+      "viewAll": "View all minigame rankings",
+      "empty": "No scores are available for this leaderboard yet.",
+      "loading": "Loading minigame rankings...",
+      "loadFailed": "Failed to load the minigame leaderboard.",
+      "loginHint": "Natural game overs are submitted automatically after you log in."
     }
   },
   "analysis": {
@@ -711,6 +726,10 @@
       "gamer_adversarial_weekly": {
         "title": "Weekly Adversarial High Scores",
         "description": "Each player's best verified all-difficulty-100 score during the current calendar week."
+      },
+      "minigames": {
+        "title": "Minigames",
+        "description": "Browse individual high scores and the combined trophy standings."
       }
     }
   },

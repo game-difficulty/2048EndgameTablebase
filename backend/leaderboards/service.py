@@ -278,7 +278,7 @@ def refresh_due_leaderboards(*, force: bool = False, now: datetime | None = None
 
 
 def leaderboard_catalog() -> list[dict[str, Any]]:
-    return [
+    boards = [
         {
             "key": definition.key,
             "cadence": definition.cadence,
@@ -287,6 +287,15 @@ def leaderboard_catalog() -> list[dict[str, Any]]:
         }
         for definition in BOARD_DEFINITIONS
     ]
+    boards.append(
+        {
+            "key": "minigames",
+            "cadence": "live",
+            "score_visible": False,
+            "unit": None,
+        }
+    )
+    return boards
 
 
 def leaderboard_payload(board_key: str, *, limit: int = LEADERBOARD_LIMIT) -> dict[str, Any]:

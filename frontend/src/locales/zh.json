@@ -459,6 +459,21 @@
         "gloveTarget": "点击一个空格以放下当前选中的方块。",
         "twist": "点击四个方块中间的热点，使周围的 2×2 区块顺时针旋转。"
       }
+    },
+    "leaderboard": {
+      "title": "小游戏排行",
+      "board": "榜单",
+      "overall": "奖杯总榜",
+      "overallDescription": "按同一难度下获得的 Grand、金、银、铜奖杯数量依次排序；完全相同时，较早达成者优先。",
+      "gameDescription": "每名玩家仅保留该小游戏、该难度下的个人最高分。",
+      "trophies": "奖杯",
+      "highestTile": "最高方块",
+      "refresh": "刷新榜单",
+      "viewAll": "查看完整小游戏榜单",
+      "empty": "当前榜单暂无成绩。",
+      "loading": "正在读取小游戏榜单...",
+      "loadFailed": "小游戏榜单加载失败。",
+      "loginHint": "登录后的自然终局会自动提交个人最高分。"
     }
   },
   "analysis": {
@@ -711,6 +726,10 @@
       "gamer_adversarial_weekly": {
         "title": "本周对抗模式高分榜",
         "description": "本自然周内经服务端重放验证的全程难度 100 个人最高分。"
+      },
+      "minigames": {
+        "title": "小游戏榜",
+        "description": "查看各个小游戏的最高分与全项目奖杯总榜。"
       }
     }
   },

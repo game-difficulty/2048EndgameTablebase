@@ -12,6 +12,7 @@
     :state="gameState"
     :overlay="overlay"
     :toast-message="toastMessage"
+    :active="active"
     @back-menu="backToMenu"
     @new-game="newGame"
     @info="requestInfo"
@@ -21,6 +22,7 @@
     @cell-click="handleBoardCellClick"
     @swipe="move"
     @close-overlay="closeOverlay"
+    @navigate-tab="forwardNavigateTab"
   />
 </template>
 
@@ -34,6 +36,8 @@ import MinigamePlayPage from './MinigamePlayPage.vue';
 const props = defineProps({
   active: { type: Boolean, default: false },
 });
+const emit = defineEmits(['navigate-tab']);
+const forwardNavigateTab = (tabId, detail) => emit('navigate-tab', tabId, detail);
 
 const {
   menuSections,

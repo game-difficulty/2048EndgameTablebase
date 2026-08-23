@@ -80,6 +80,7 @@ from backend.gamer_ranked.service import (
     process_one_pending_run,
 )
 from backend.leaderboards.routes import router as leaderboard_router
+from backend.minigame_rankings.routes import router as minigame_rankings_router
 from backend.leaderboards.service import refresh_due_leaderboards
 from backend.profile.routes import router as profile_router
 from backend.preload import start_preload_thread
@@ -228,6 +229,7 @@ app.include_router(admin_router)
 app.include_router(replay_router)
 app.include_router(quota_router)
 app.include_router(leaderboard_router)
+app.include_router(minigame_rankings_router)
 app.include_router(profile_router)
 app.include_router(gamer_ranked_router)
 

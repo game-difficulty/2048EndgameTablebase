@@ -371,6 +371,23 @@ def init_auth_db() -> None:
               FOREIGN KEY(run_id) REFERENCES gamer_ranked_runs(run_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS minigame_high_scores (
+              user_id INTEGER NOT NULL,
+              game_id TEXT NOT NULL,
+              difficulty INTEGER NOT NULL,
+              best_score INTEGER NOT NULL DEFAULT 0,
+              trophy_tier INTEGER NOT NULL DEFAULT 0,
+              highest_tile_exp INTEGER NOT NULL DEFAULT 0,
+              final_board_json TEXT NOT NULL,
+              board_rows INTEGER NOT NULL DEFAULT 4,
+              board_cols INTEGER NOT NULL DEFAULT 4,
+              score_achieved_at TEXT NOT NULL,
+              trophy_achieved_at TEXT,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY(user_id, game_id, difficulty),
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_events(user_id, created_at);
@@ -399,6 +416,14 @@ def init_auth_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_gamer_weekly_scores_period
               ON gamer_weekly_high_scores(
                 board_key, week_start, score DESC, achieved_at ASC
+              );
+            CREATE INDEX IF NOT EXISTS idx_minigame_scores_game
+              ON minigame_high_scores(
+                game_id, difficulty, best_score DESC, score_achieved_at ASC
+              );
+            CREATE INDEX IF NOT EXISTS idx_minigame_scores_trophies
+              ON minigame_high_scores(
+                difficulty, trophy_tier DESC, trophy_achieved_at ASC
               );
             """
         )

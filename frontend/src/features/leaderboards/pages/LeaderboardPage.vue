@@ -7,7 +7,7 @@
           <h1 class="mt-1 ui-metric font-black text-text-main">{{ $t('leaderboards.title') }}</h1>
           <p class="mt-2 ui-body text-text-secondary">{{ $t('leaderboards.subtitle') }}</p>
         </div>
-        <div v-if="boardData" class="leaderboard-updated">
+        <div v-if="boardData && selectedKey !== 'minigames'" class="leaderboard-updated">
           <span>{{ $t('leaderboards.updated') }}</span>
           <strong>{{ formatDateTime(boardData.generated_at) }}</strong>
         </div>
@@ -26,7 +26,15 @@
         </button>
       </nav>
 
-      <div v-if="error" class="leaderboard-error">
+      <MinigameLeaderboardView
+        v-if="selectedKey === 'minigames'"
+        :active="active"
+        :requested-game-id="requestedGameId"
+        :requested-difficulty="requestedDifficulty"
+        :request-serial="requestSerial"
+      />
+
+      <div v-else-if="error" class="leaderboard-error">
         <span>{{ error }}</span>
         <button type="button" class="action-btn-small" @click="loadBoard(selectedKey)">
           {{ $t('common.retry') }}
@@ -136,12 +144,15 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import AccountAvatar from '../../auth/AccountAvatar.vue';
+import MinigameLeaderboardView from '../../minigames/components/MinigameLeaderboardView.vue';
 import { fetchLeaderboard, fetchLeaderboardCatalog } from '../services/leaderboardClient';
 
 const props = defineProps({
   active: Boolean,
   requestedKey: { type: String, default: '' },
   requestSerial: { type: Number, default: 0 },
+  requestedGameId: { type: String, default: '' },
+  requestedDifficulty: { type: Number, default: 1 },
 });
 const { locale, t } = useI18n();
 const boards = ref([]);
@@ -233,6 +244,12 @@ const loadBoard = async (key) => {
 };
 
 const selectBoard = (key) => {
+  if (key === 'minigames') {
+    selectedKey.value = key;
+    boardData.value = null;
+    error.value = '';
+    return;
+  }
   if (key === selectedKey.value && boardData.value) {
     loadBoard(key);
     return;
@@ -260,12 +277,13 @@ const initialize = async () => {
     return;
   }
   loading.value = false;
-  await loadBoard(selectedKey.value);
+  if (selectedKey.value !== 'minigames') await loadBoard(selectedKey.value);
 };
 
 onMounted(initialize);
 watch(() => props.active, (active) => {
   if (!active || loading.value) return;
+  if (selectedKey.value === 'minigames') return;
   if (boards.value.length) loadBoard(selectedKey.value);
   else initialize();
 });
@@ -273,7 +291,7 @@ watch(() => [props.requestedKey, props.requestSerial], ([boardKey]) => {
   const normalized = String(boardKey || '');
   if (!normalized) return;
   selectedKey.value = normalized;
-  if (props.active) loadBoard(normalized);
+  if (props.active && normalized !== 'minigames') loadBoard(normalized);
 });
 </script>
 

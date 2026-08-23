@@ -181,7 +181,10 @@
         class="absolute inset-0"
         v-show="activeTab === TAB_IDS.MINIGAMES"
       >
-        <MinigamesView :active="activeTab === TAB_IDS.MINIGAMES" />
+        <MinigamesView
+          :active="activeTab === TAB_IDS.MINIGAMES"
+          @navigate-tab="handleNavigateTab"
+        />
       </div>
       <div
         v-if="isTabOpen(TAB_IDS.LEADERBOARDS)"
@@ -192,6 +195,8 @@
           :active="activeTab === TAB_IDS.LEADERBOARDS"
           :requested-key="leaderboardRequestedKey"
           :request-serial="leaderboardRequestSerial"
+          :requested-game-id="leaderboardRequestedGameId"
+          :requested-difficulty="leaderboardRequestedDifficulty"
         />
       </div>
       <div
@@ -428,6 +433,8 @@ const FIXED_LAYOUT_HEIGHT = 800;
 const fixedViewport = ref(null);
 const fixedLayoutWidth = ref(FIXED_LAYOUT_MIN_WIDTH);
 const leaderboardRequestedKey = ref('');
+const leaderboardRequestedGameId = ref('');
+const leaderboardRequestedDifficulty = ref(1);
 const leaderboardRequestSerial = ref(0);
 const fixedLayoutScale = ref(1);
 let fixedViewportObserver = null;
@@ -498,6 +505,8 @@ const handleNavigateTab = (tabId, detail = null) => {
   openTab(tabId);
   if (tabId === TAB_IDS.LEADERBOARDS && detail?.boardKey) {
     leaderboardRequestedKey.value = String(detail.boardKey);
+    leaderboardRequestedGameId.value = String(detail.gameId || '');
+    leaderboardRequestedDifficulty.value = Number(detail.difficulty) ? 1 : 0;
     leaderboardRequestSerial.value += 1;
     return;
   }

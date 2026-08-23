@@ -1,6 +1,7 @@
 <template>
-  <div class="page-root pt-6">
-    <div ref="playRootRef" class="relative w-full max-w-lg flex flex-col items-center">
+  <div class="page-root minigame-play-root pt-6">
+    <div class="minigame-workspace">
+    <main ref="playRootRef" class="minigame-main relative w-full max-w-lg flex flex-col items-center">
       <div v-if="pageEffects.length" class="minigame-page-effects-layer">
         <img
           v-for="effect in pageEffects"
@@ -83,6 +84,15 @@
         @new-game="$emit('new-game')"
         @back-menu="$emit('back-menu')"
       />
+    </main>
+    <aside class="minigame-sidebar">
+      <MinigameLeaderboardPanel
+        :active="active"
+        :game-id="state.gameId"
+        :difficulty="state.difficulty"
+        @navigate-tab="(tabId, detail) => $emit('navigate-tab', tabId, detail)"
+      />
+    </aside>
     </div>
   </div>
 </template>
@@ -92,6 +102,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 
 import MinigameBoard from '../components/MinigameBoard.vue';
 import MinigameHud from '../components/MinigameHud.vue';
+import MinigameLeaderboardPanel from '../components/MinigameLeaderboardPanel.vue';
 import MinigameOverlay from '../components/MinigameOverlay.vue';
 import PowerUpBar from '../components/PowerUpBar.vue';
 import { getMinigameAssetUrl } from '../../../services/runtime/backendUrl';
@@ -109,6 +120,7 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  active: { type: Boolean, default: true },
 });
 
 defineEmits([
@@ -121,6 +133,7 @@ defineEmits([
   'swipe',
   'custom-action',
   'close-overlay',
+  'navigate-tab',
 ]);
 
 const hasHudPanels = computed(() =>
@@ -216,6 +229,18 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.minigame-play-root { align-items: center; }
+.minigame-workspace {
+  width: min(100%, 52rem);
+  display: grid;
+  grid-template-columns: minmax(0, 32rem) 19rem;
+  align-items: stretch;
+  gap: 1rem;
+}
+.minigame-main,
+.minigame-sidebar { min-width: 0; }
+.minigame-sidebar { display: flex; flex-direction: column; align-self: stretch; }
+
 .minigame-title {
   display: -webkit-box;
   -webkit-box-orient: vertical;
