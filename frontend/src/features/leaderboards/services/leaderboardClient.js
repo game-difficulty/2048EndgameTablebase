@@ -13,8 +13,11 @@ export const fetchLeaderboardCatalog = async () => {
   return readJson(response);
 };
 
-export const fetchLeaderboard = async (boardKey) => {
-  const response = await fetch(`/api/leaderboards/${encodeURIComponent(boardKey)}`, {
+export const fetchLeaderboard = async (boardKey, { limit } = {}) => {
+  const query = Number.isInteger(limit) && limit > 0
+    ? `?limit=${encodeURIComponent(limit)}`
+    : '';
+  const response = await fetch(`/api/leaderboards/${encodeURIComponent(boardKey)}${query}`, {
     headers: { Accept: 'application/json' },
     cache: 'no-store',
   });

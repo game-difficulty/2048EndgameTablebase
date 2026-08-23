@@ -153,7 +153,10 @@
         class="absolute inset-0"
         v-show="activeTab === TAB_IDS.GAMER"
       >
-        <GamerView :active="activeTab === TAB_IDS.GAMER" />
+        <GamerView
+          :active="activeTab === TAB_IDS.GAMER"
+          @navigate-tab="handleNavigateTab"
+        />
       </div>
       <div
         v-if="isTabOpen(TAB_IDS.TRAINER)"
@@ -185,7 +188,11 @@
         class="absolute inset-0"
         v-show="activeTab === TAB_IDS.LEADERBOARDS"
       >
-        <LeaderboardsView :active="activeTab === TAB_IDS.LEADERBOARDS" />
+        <LeaderboardsView
+          :active="activeTab === TAB_IDS.LEADERBOARDS"
+          :requested-key="leaderboardRequestedKey"
+          :request-serial="leaderboardRequestSerial"
+        />
       </div>
       <div
         v-if="isTabOpen(TAB_IDS.REPLAY)"
@@ -420,6 +427,8 @@ const FIXED_LAYOUT_MAX_WIDTH = 1600;
 const FIXED_LAYOUT_HEIGHT = 800;
 const fixedViewport = ref(null);
 const fixedLayoutWidth = ref(FIXED_LAYOUT_MIN_WIDTH);
+const leaderboardRequestedKey = ref('');
+const leaderboardRequestSerial = ref(0);
 const fixedLayoutScale = ref(1);
 let fixedViewportObserver = null;
 const AUTH_REFRESH_CHECK_KEY = '2048tables:last-auth-refresh-check';
@@ -487,6 +496,11 @@ const formatTokens = (value) => {
 
 const handleNavigateTab = (tabId, detail = null) => {
   openTab(tabId);
+  if (tabId === TAB_IDS.LEADERBOARDS && detail?.boardKey) {
+    leaderboardRequestedKey.value = String(detail.boardKey);
+    leaderboardRequestSerial.value += 1;
+    return;
+  }
   if (tabId !== TAB_IDS.TRAINER || !detail?.hex) {
     return;
   }

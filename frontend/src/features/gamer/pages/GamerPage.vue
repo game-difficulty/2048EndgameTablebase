@@ -1,6 +1,7 @@
 <template>
-  <div class="page-root pt-6">
-    <div class="w-full max-w-lg flex flex-col items-center">
+  <div class="page-root gamer-page-root pt-6">
+    <div class="gamer-workspace">
+      <main class="gamer-main w-full max-w-lg flex flex-col items-center">
       <div class="flex justify-between w-full mb-6 items-center">
         <div class="flex items-center gap-4">
           <h1 class="text-6xl font-bold text-text-main leading-none">2048</h1>
@@ -100,20 +101,36 @@
           </div>
         </div>
       </div>
+      </main>
+      <aside class="gamer-sidebar">
+        <GamerLeaderboardPanel
+          :active="active"
+          :ranked-status="rankedStatus"
+          @navigate-tab="forwardNavigateTab"
+        />
+        <GamerMatchOptionsPanel
+          :options="matchOptions"
+          @change="handleMatchOptionChange"
+        />
+      </aside>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, toRef } from 'vue';
+import { computed, ref, toRef } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
+import GamerLeaderboardPanel from '../components/GamerLeaderboardPanel.vue';
+import GamerMatchOptionsPanel from '../components/GamerMatchOptionsPanel.vue';
 import { useGamerSession } from '../composables/useGamerSession';
 
 const props = defineProps({
   active: { type: Boolean, default: true },
 });
+
+const emit = defineEmits(['navigate-tab']);
 
 const boardHotkeyTarget = ref(null);
 
@@ -128,6 +145,7 @@ const {
   hexInput,
   scoreAnimations,
   aiWorkerReady,
+  rankedParticipationEnabled,
   rankedStatus,
   rankedMode,
   triggerAction,
@@ -135,8 +153,26 @@ const {
   updateSettings,
   setBoard,
   writeCurrentBoardToHex,
+  setRankedParticipationEnabled,
   retryRankedSubmission,
 } = useGamerSession(toRef(props, 'active'));
+
+const matchOptions = computed(() => ([
+  {
+    key: 'rankedParticipation',
+    labelKey: 'gamer.matchOptions.rankedParticipation',
+    enabled: rankedParticipationEnabled.value,
+    disabled: false,
+  },
+]));
+
+const forwardNavigateTab = (tabId, detail) => {
+  emit('navigate-tab', tabId, detail);
+};
+
+const handleMatchOptionChange = (key, enabled) => {
+  if (key === 'rankedParticipation') setRankedParticipationEnabled(enabled);
+};
 
 const handleUpdateSettings = (event) => {
   updateSettings();
@@ -149,6 +185,30 @@ const handleBoardSwipe = (direction) => {
 </script>
 
 <style scoped>
+.gamer-page-root {
+  align-items: center;
+}
+
+.gamer-workspace {
+  width: min(100%, 52rem);
+  display: grid;
+  grid-template-columns: minmax(0, 32rem) 19rem;
+  align-items: stretch;
+  gap: 1rem;
+}
+
+.gamer-main,
+.gamer-sidebar {
+  min-width: 0;
+}
+
+.gamer-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-self: stretch;
+}
+
 .gamer-ranked-badge {
   min-height: 1.45rem;
   padding: 0.18rem 0.55rem;

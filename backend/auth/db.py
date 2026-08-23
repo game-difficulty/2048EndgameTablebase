@@ -352,6 +352,25 @@ def init_auth_db() -> None:
               FOREIGN KEY(run_id) REFERENCES gamer_ranked_runs(run_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS gamer_weekly_high_scores (
+              user_id INTEGER NOT NULL,
+              board_key TEXT NOT NULL,
+              week_start TEXT NOT NULL,
+              score INTEGER NOT NULL,
+              max_tile INTEGER NOT NULL,
+              move_count INTEGER NOT NULL,
+              used_ai INTEGER NOT NULL DEFAULT 0,
+              final_board TEXT NOT NULL,
+              record_blob TEXT NOT NULL,
+              replay_id TEXT NOT NULL UNIQUE,
+              run_id TEXT NOT NULL UNIQUE,
+              achieved_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY(user_id, board_key, week_start),
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+              FOREIGN KEY(run_id) REFERENCES gamer_ranked_runs(run_id) ON DELETE CASCADE
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_events(user_id, created_at);
@@ -377,6 +396,10 @@ def init_auth_db() -> None:
               ON gamer_ranked_runs(submit_ip, submitted_at);
             CREATE INDEX IF NOT EXISTS idx_gamer_scores_board_score
               ON gamer_high_scores(board_key, score DESC, achieved_at ASC);
+            CREATE INDEX IF NOT EXISTS idx_gamer_weekly_scores_period
+              ON gamer_weekly_high_scores(
+                board_key, week_start, score DESC, achieved_at ASC
+              );
             """
         )
         existing_user_columns = {

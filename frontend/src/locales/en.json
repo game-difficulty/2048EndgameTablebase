@@ -252,12 +252,35 @@
         "submitting": "Submitting score...",
         "pending": "Awaiting verification",
         "validating": "Verifying score...",
-        "verified": "Personal best verified",
+        "verified": "Score verified and rankings updated",
         "no_improvement": "Verified, below personal best",
         "rejected": "Score verification failed",
         "expired": "Ranked run expired",
         "submission_failed": "Submission failed - retry"
       }
+    },
+    "leaderboard": {
+      "kicker": "Verified games",
+      "title": "Leaderboard",
+      "refresh": "Refresh leaderboard",
+      "modeLabel": "Leaderboard mode",
+      "periodLabel": "Leaderboard period",
+      "modes": {
+        "general": "High Scores",
+        "adversarial": "Adversarial"
+      },
+      "periods": {
+        "all": "All Time",
+        "week": "This Week"
+      },
+      "empty": "No verified scores are available for this leaderboard.",
+      "loadFailed": "Failed to load the leaderboard.",
+      "viewReplay": "View verified game",
+      "viewAll": "View full leaderboard"
+    },
+    "matchOptions": {
+      "title": "Game options",
+      "rankedParticipation": "Join leaderboard"
     }
   },
   "notebook": {
@@ -680,6 +703,14 @@
       "gamer_adversarial": {
         "title": "Adversarial High Scores",
         "description": "Verified scores where every valid move used difficulty 100."
+      },
+      "gamer_high_score_weekly": {
+        "title": "Weekly High Scores",
+        "description": "Each player's best verified general-mode score during the current calendar week."
+      },
+      "gamer_adversarial_weekly": {
+        "title": "Weekly Adversarial High Scores",
+        "description": "Each player's best verified all-difficulty-100 score during the current calendar week."
       }
     }
   },

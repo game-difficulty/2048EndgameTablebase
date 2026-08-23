@@ -272,6 +272,7 @@ export function useGamerSession(activeRef) {
   const aiEnabled = ref(false);
   const difficulty = ref(0);
   const aiSpeed = ref(100);
+  const rankedParticipationEnabled = ref(true);
   const hexInput = ref('');
   const currentHex = ref('0000000000000000');
   const specialTiles = ref([]);
@@ -310,6 +311,7 @@ export function useGamerSession(activeRef) {
       score: score.value,
       difficulty: difficulty.value,
       aiSpeed: aiSpeed.value,
+      rankedParticipationEnabled: rankedParticipationEnabled.value,
       currentHex: currentHex.value,
       specialTiles: specialTiles.value,
       ranked: {
@@ -767,7 +769,7 @@ export function useGamerSession(activeRef) {
     const serial = ++rankedStartSerial;
     clearRankedPollTimer();
     stopAI();
-    if (!authUser.value?.id) {
+    if (!authUser.value?.id || !rankedParticipationEnabled.value) {
       applyNewGameBoard(initializeOrdinaryGame());
       return;
     }
@@ -926,10 +928,16 @@ export function useGamerSession(activeRef) {
     hexInput.value = boardToHex(board.value);
   };
 
+  const setRankedParticipationEnabled = (enabled) => {
+    rankedParticipationEnabled.value = Boolean(enabled);
+    persistState({ immediate: true });
+  };
+
   const openBrowserAi = () => false;
 
   const loadSavedState = () => {
     const saved = gamerStore.read();
+    rankedParticipationEnabled.value = saved?.rankedParticipationEnabled !== false;
     if (!saved?.board || !Array.isArray(saved.board) || saved.board.length !== 16) {
       newGame();
       return;
@@ -1126,6 +1134,7 @@ export function useGamerSession(activeRef) {
     hexInput,
     scoreAnimations,
     aiWorkerReady,
+    rankedParticipationEnabled,
     rankedStatus,
     rankedMode,
     ranked,
@@ -1134,6 +1143,7 @@ export function useGamerSession(activeRef) {
     updateSettings,
     setBoard,
     writeCurrentBoardToHex,
+    setRankedParticipationEnabled,
     retryRankedSubmission,
     openBrowserAi,
   };

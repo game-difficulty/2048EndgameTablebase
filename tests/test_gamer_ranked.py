@@ -232,6 +232,57 @@ class GamerRankedServiceTests(unittest.TestCase):
         self.assertEqual(board["unit"], "points")
         self.assertEqual(board["entries"][0]["score"], score)
         self.assertEqual(board["entries"][0]["replay_id"], score_row["replay_id"])
+        weekly = leaderboard_payload("gamer_high_score_weekly")
+        self.assertEqual(weekly["entries"][0]["score"], score)
+        self.assertEqual(weekly["entries"][0]["replay_id"], score_row["replay_id"])
+
+    def test_weekly_best_is_kept_without_beating_all_time_best(self):
+        now = datetime.now(timezone.utc).isoformat()
+        with auth_db() as db:
+            db.execute(
+                """
+                INSERT INTO gamer_ranked_runs
+                (run_id, user_id, request_id, seed_hex, rules_version, status,
+                 started_at, expires_at, completed_at)
+                VALUES ('old-all-time-run', ?, 'old-all-time', ?, 1, 'verified', ?, ?, ?)
+                """,
+                (self.user_id, SEED, now, now, now),
+            )
+            db.execute(
+                """
+                INSERT INTO gamer_high_scores
+                (user_id, board_key, score, max_tile, move_count, used_ai,
+                 final_board, record_blob, replay_id, run_id, achieved_at, updated_at)
+                VALUES (?, 'gamer_high_score', 999999, 4096, 1000, 0,
+                        '[]', 'old-record', 'old-replay', 'old-all-time-run', ?, ?)
+                """,
+                (self.user_id, now, now),
+            )
+
+        run = create_ranked_run(
+            user_id=self.user_id,
+            request_id="weekly-lower-than-all-time",
+            ip_address="127.0.0.1",
+        )
+        record, score, final_board = _completed_random_game(run["seed_hex"])
+        submit_ranked_run(
+            run_id=run["run_id"],
+            user_id=self.user_id,
+            score=score,
+            final_board_codes=final_board,
+            record_encoding=record,
+            ip_address="127.0.0.1",
+        )
+        self.assertTrue(process_one_pending_run())
+        verified = get_ranked_run(run_id=run["run_id"], user_id=self.user_id)
+        self.assertEqual(verified["status"], "verified")
+        self.assertFalse(verified["new_personal_best"])
+
+        all_time = leaderboard_payload("gamer_high_score")
+        weekly = leaderboard_payload("gamer_high_score_weekly")
+        self.assertEqual(all_time["entries"][0]["score"], 999999)
+        self.assertEqual(weekly["entries"][0]["score"], score)
+        self.assertEqual(public_replay(weekly["entries"][0]["replay_id"])["record_blob"], record)
 
     def test_replay_retention_keeps_only_the_highest_scores_per_board(self):
         now = datetime.now(timezone.utc).isoformat()

@@ -25,6 +25,11 @@ MAX_ACTIVE_RUNS_USER = 20
 DEFAULT_REPLAY_RETENTION_PER_BOARD = 100
 REPLAY_RETENTION_ENV = "GAMER_REPLAY_RETENTION_PER_BOARD"
 RANKED_BOARD_KEYS = ("gamer_high_score", "gamer_adversarial")
+WEEKLY_BOARD_KEYS = {
+    "gamer_high_score": "gamer_high_score_weekly",
+    "gamer_adversarial": "gamer_adversarial_weekly",
+}
+RANKING_TIMEZONE = timezone(timedelta(hours=8), name="UTC+08:00")
 
 
 def _utc_now() -> datetime:
@@ -33,6 +38,21 @@ def _utc_now() -> datetime:
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
+
+
+def _week_start_iso(value: datetime | str | None = None) -> str:
+    if isinstance(value, str):
+        current = datetime.fromisoformat(value)
+    else:
+        current = value or _utc_now()
+    local = current.astimezone(RANKING_TIMEZONE)
+    monday = (local - timedelta(days=local.weekday())).replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    return monday.isoformat()
 
 
 def _seed_hex() -> str:
@@ -255,6 +275,7 @@ def cleanup_stale_ranked_runs() -> int:
             """
             DELETE FROM gamer_ranked_runs
             WHERE run_id NOT IN (SELECT run_id FROM gamer_high_scores)
+              AND run_id NOT IN (SELECT run_id FROM gamer_weekly_high_scores)
               AND (
                 (completed_at IS NOT NULL AND completed_at < ?)
                 OR (status = 'active' AND started_at < ?)
@@ -279,7 +300,11 @@ def prune_ranked_replays(
 ) -> int:
     limit = _configured_replay_retention() if per_board_limit is None else max(1, int(per_board_limit))
     removed = 0
-    changed_boards: list[str] = []
+    changed_boards: set[str] = set()
+    current_week = _week_start_iso()
+    previous_week = (
+        datetime.fromisoformat(current_week) - timedelta(days=7)
+    ).isoformat()
     with auth_db() as db:
         for board_key in RANKED_BOARD_KEYS:
             stale = db.execute(
@@ -300,11 +325,43 @@ def prune_ranked_replays(
                 f"DELETE FROM gamer_high_scores WHERE board_key = ? AND user_id IN ({placeholders})",
                 (board_key, *user_ids),
             ).rowcount
-            changed_boards.append(board_key)
+            changed_boards.add(board_key)
+
+        removed += db.execute(
+            "DELETE FROM gamer_weekly_high_scores WHERE week_start < ?",
+            (previous_week,),
+        ).rowcount
+        periods = db.execute(
+            """
+            SELECT DISTINCT board_key, week_start
+            FROM gamer_weekly_high_scores
+            """
+        ).fetchall()
+        for period in periods:
+            stale = db.execute(
+                """
+                SELECT rowid
+                FROM gamer_weekly_high_scores
+                WHERE board_key = ? AND week_start = ?
+                ORDER BY score DESC, achieved_at ASC, user_id ASC
+                LIMIT -1 OFFSET ?
+                """,
+                (period["board_key"], period["week_start"], limit),
+            ).fetchall()
+            if not stale:
+                continue
+            row_ids = [int(row["rowid"]) for row in stale]
+            placeholders = ",".join("?" for _ in row_ids)
+            removed += db.execute(
+                f"DELETE FROM gamer_weekly_high_scores WHERE rowid IN ({placeholders})",
+                row_ids,
+            ).rowcount
+            if str(period["week_start"]) == current_week:
+                changed_boards.add(WEEKLY_BOARD_KEYS[str(period["board_key"])])
     if refresh_leaderboards and changed_boards:
         from backend.leaderboards.service import refresh_leaderboard
 
-        for board_key in changed_boards:
+        for board_key in sorted(changed_boards):
             refresh_leaderboard(board_key, force=True)
     return removed
 
@@ -353,7 +410,10 @@ def _store_validated(run: dict[str, Any], game: ValidatedGame) -> bool:
     now = _iso(_utc_now())
     replay_id = str(uuid.uuid4())
     final_board = json.dumps(game.final_board_codes, separators=(",", ":"))
-    improved = False
+    achieved_at = str(run["submitted_at"] or now)
+    week_start = _week_start_iso(achieved_at)
+    improved_all_time = False
+    improved_weekly = False
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
         existing = db.execute(
@@ -383,10 +443,48 @@ def _store_validated(run: dict[str, Any], game: ValidatedGame) -> bool:
                     int(run["user_id"]), game.board_key, game.score, game.max_tile,
                     game.move_count, int(game.used_ai), final_board,
                     str(run["pending_record"]), replay_id, str(run["run_id"]),
-                    str(run["submitted_at"] or now), now,
+                    achieved_at, now,
                 ),
             )
-            improved = True
+            improved_all_time = True
+
+        weekly_existing = db.execute(
+            """
+            SELECT score
+            FROM gamer_weekly_high_scores
+            WHERE user_id = ? AND board_key = ? AND week_start = ?
+            """,
+            (int(run["user_id"]), game.board_key, week_start),
+        ).fetchone()
+        if weekly_existing is None or game.score > int(weekly_existing["score"]):
+            db.execute(
+                """
+                INSERT INTO gamer_weekly_high_scores
+                (user_id, board_key, week_start, score, max_tile, move_count, used_ai,
+                 final_board, record_blob, replay_id, run_id, achieved_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, board_key, week_start) DO UPDATE SET
+                  score = excluded.score,
+                  max_tile = excluded.max_tile,
+                  move_count = excluded.move_count,
+                  used_ai = excluded.used_ai,
+                  final_board = excluded.final_board,
+                  record_blob = excluded.record_blob,
+                  replay_id = excluded.replay_id,
+                  run_id = excluded.run_id,
+                  achieved_at = excluded.achieved_at,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    int(run["user_id"]), game.board_key, week_start, game.score,
+                    game.max_tile, game.move_count, int(game.used_ai), final_board,
+                    str(run["pending_record"]), replay_id, str(run["run_id"]),
+                    achieved_at, now,
+                ),
+            )
+            improved_weekly = True
+
+        improved = improved_all_time or improved_weekly
         db.execute(
             """
             UPDATE gamer_ranked_runs
@@ -398,7 +496,7 @@ def _store_validated(run: dict[str, Any], game: ValidatedGame) -> bool:
                 "verified" if improved else "no_improvement",
                 now,
                 game.board_key,
-                int(improved),
+                int(improved_all_time),
                 str(run["run_id"]),
             ),
         )
@@ -406,7 +504,10 @@ def _store_validated(run: dict[str, Any], game: ValidatedGame) -> bool:
         from backend.leaderboards.service import refresh_leaderboard
 
         prune_ranked_replays()
-        refresh_leaderboard(game.board_key, force=True)
+        if improved_all_time:
+            refresh_leaderboard(game.board_key, force=True)
+        if improved_weekly:
+            refresh_leaderboard(WEEKLY_BOARD_KEYS[game.board_key], force=True)
     return improved
 
 
@@ -439,8 +540,15 @@ def public_replay(replay_id: str) -> dict[str, Any]:
             FROM gamer_high_scores ghs
             JOIN users u ON u.id = ghs.user_id
             WHERE ghs.replay_id = ? AND u.status = 'active'
+            UNION ALL
+            SELECT gws.record_blob, gws.score, gws.max_tile, gws.move_count,
+                   gws.used_ai, gws.board_key, u.display_name
+            FROM gamer_weekly_high_scores gws
+            JOIN users u ON u.id = gws.user_id
+            WHERE gws.replay_id = ? AND u.status = 'active'
+            LIMIT 1
             """,
-            (replay_id,),
+            (replay_id, replay_id),
         ).fetchone()
     if row is None:
         raise LookupError("replay_not_found")

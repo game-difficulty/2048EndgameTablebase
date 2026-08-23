@@ -252,12 +252,35 @@
         "submitting": "正在提交成绩...",
         "pending": "等待验证",
         "validating": "正在验证成绩...",
-        "verified": "个人最高分已验证",
+        "verified": "成绩已验证并更新榜单",
         "no_improvement": "验证通过，未刷新最高分",
         "rejected": "成绩验证未通过",
         "expired": "排位对局已过期",
         "submission_failed": "提交失败，点击重试"
       }
+    },
+    "leaderboard": {
+      "kicker": "已验证对局",
+      "title": "排行榜",
+      "refresh": "刷新排行榜",
+      "modeLabel": "排行榜模式",
+      "periodLabel": "排行榜时间范围",
+      "modes": {
+        "general": "高分榜",
+        "adversarial": "对抗榜"
+      },
+      "periods": {
+        "all": "总榜",
+        "week": "本周榜"
+      },
+      "empty": "当前榜单暂无有效成绩。",
+      "loadFailed": "排行榜加载失败。",
+      "viewReplay": "查看已验证对局",
+      "viewAll": "查看完整排行榜"
+    },
+    "matchOptions": {
+      "title": "对局选项",
+      "rankedParticipation": "参加排行榜"
     }
   },
   "notebook": {
@@ -680,6 +703,14 @@
       "gamer_adversarial": {
         "title": "对抗模式高分榜",
         "description": "经服务端重放验证、每一步均使用难度 100 出数的最高分。"
+      },
+      "gamer_high_score_weekly": {
+        "title": "本周高分榜",
+        "description": "本自然周内经服务端重放验证的普通模式个人最高分。"
+      },
+      "gamer_adversarial_weekly": {
+        "title": "本周对抗模式高分榜",
+        "description": "本自然周内经服务端重放验证的全程难度 100 个人最高分。"
       }
     }
   },

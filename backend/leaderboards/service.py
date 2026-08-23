@@ -15,6 +15,18 @@ TOKEN_LIFETIME_BOARD = "token_lifetime"
 TOKEN_LAST_WEEK_BOARD = "token_last_week"
 GAMER_HIGH_SCORE_BOARD = "gamer_high_score"
 GAMER_ADVERSARIAL_BOARD = "gamer_adversarial"
+GAMER_HIGH_SCORE_WEEKLY_BOARD = "gamer_high_score_weekly"
+GAMER_ADVERSARIAL_WEEKLY_BOARD = "gamer_adversarial_weekly"
+GAMER_BOARD_BASE = {
+    GAMER_HIGH_SCORE_BOARD: GAMER_HIGH_SCORE_BOARD,
+    GAMER_ADVERSARIAL_BOARD: GAMER_ADVERSARIAL_BOARD,
+    GAMER_HIGH_SCORE_WEEKLY_BOARD: GAMER_HIGH_SCORE_BOARD,
+    GAMER_ADVERSARIAL_WEEKLY_BOARD: GAMER_ADVERSARIAL_BOARD,
+}
+GAMER_WEEKLY_BOARDS = {
+    GAMER_HIGH_SCORE_WEEKLY_BOARD,
+    GAMER_ADVERSARIAL_WEEKLY_BOARD,
+}
 LEADERBOARD_LIMIT = 100
 DEFAULT_ADMIN_IDENTITIES = ("user0", "assweeass@163.com")
 _REFRESH_LOCK = threading.Lock()
@@ -36,6 +48,8 @@ BOARD_DEFINITIONS: tuple[BoardDefinition, ...] = (
     BoardDefinition(TOKEN_LAST_WEEK_BOARD, "weekly", True, "token", 104),
     BoardDefinition(GAMER_HIGH_SCORE_BOARD, "live", True, "points", 31, 1),
     BoardDefinition(GAMER_ADVERSARIAL_BOARD, "live", True, "points", 31, 1),
+    BoardDefinition(GAMER_HIGH_SCORE_WEEKLY_BOARD, "live", True, "points", 8, 1),
+    BoardDefinition(GAMER_ADVERSARIAL_WEEKLY_BOARD, "live", True, "points", 8, 1),
 )
 BOARD_BY_KEY = {board.key: board for board in BOARD_DEFINITIONS}
 
@@ -62,6 +76,10 @@ def _period_for(board_key: str, now: datetime | None = None) -> tuple[str | None
         this_monday = today - timedelta(days=today.weekday())
         last_monday = this_monday - timedelta(days=7)
         return last_monday.isoformat(), this_monday.isoformat()
+    if board_key in GAMER_WEEKLY_BOARDS:
+        this_monday = today - timedelta(days=today.weekday())
+        next_monday = this_monday + timedelta(days=7)
+        return this_monday.isoformat(), next_monday.isoformat()
     return None, today.isoformat()
 
 
@@ -128,26 +146,39 @@ def _token_rows(
     return [dict(row) for row in db.execute(query, params).fetchall()]
 
 
-def _gamer_rows(db, board_key: str) -> list[dict[str, Any]]:
+def _gamer_rows(
+    db,
+    board_key: str,
+    *,
+    period_start: str | None,
+) -> list[dict[str, Any]]:
+    source_table = "gamer_weekly_high_scores" if board_key in GAMER_WEEKLY_BOARDS else "gamer_high_scores"
+    base_board_key = GAMER_BOARD_BASE[board_key]
+    period_clause = "AND ghs.week_start = ?" if board_key in GAMER_WEEKLY_BOARDS else ""
+    params: list[Any] = [base_board_key]
+    if board_key in GAMER_WEEKLY_BOARDS:
+        params.append(str(period_start or ""))
+    params.append(LEADERBOARD_LIMIT)
     return [
         dict(row)
         for row in db.execute(
-            """
+            f"""
             SELECT
               u.id AS user_id,
               TRIM(u.display_name) AS display_name,
               ghs.score AS score_units,
               CASE WHEN ue.tier = 'supporter' THEN 1 ELSE 0 END AS is_supporter
-            FROM gamer_high_scores ghs
+            FROM {source_table} ghs
             JOIN users u ON u.id = ghs.user_id
             LEFT JOIN user_entitlements ue ON ue.user_id = u.id
             WHERE ghs.board_key = ?
+              {period_clause}
               AND u.status = 'active'
               AND TRIM(COALESCE(u.display_name, '')) <> ''
             ORDER BY ghs.score DESC, ghs.achieved_at ASC, u.id ASC
             LIMIT ?
             """,
-            (board_key, LEADERBOARD_LIMIT),
+            params,
         ).fetchall()
     ]
 
@@ -159,8 +190,8 @@ def _rank_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _build_rows(db, board_key: str, period_start: str | None, period_end: str) -> list[dict[str, Any]]:
     if board_key == SUPPORTERS_BOARD:
         return _rank_rows(_supporter_rows(db))
-    if board_key in {GAMER_HIGH_SCORE_BOARD, GAMER_ADVERSARIAL_BOARD}:
-        return _rank_rows(_gamer_rows(db, board_key))
+    if board_key in GAMER_BOARD_BASE:
+        return _rank_rows(_gamer_rows(db, board_key, period_start=period_start))
     return _rank_rows(
         _token_rows(db, period_start=period_start, period_end=period_end)
     )
@@ -276,32 +307,75 @@ def leaderboard_payload(board_key: str, *, limit: int = LEADERBOARD_LIMIT) -> di
         ).fetchone()
         if snapshot is None:
             raise RuntimeError("Leaderboard snapshot is unavailable.")
-        rows = db.execute(
-            """
-            SELECT
-              leaderboard_entries.user_id,
-              leaderboard_entries.rank,
-              leaderboard_entries.score_units,
-              leaderboard_entries.display_name,
-              leaderboard_entries.is_supporter,
-              user_profiles.avatar_key,
-              gamer_high_scores.max_tile,
-              gamer_high_scores.move_count,
-              gamer_high_scores.used_ai,
-              gamer_high_scores.replay_id
-            FROM leaderboard_entries
-            LEFT JOIN user_profiles ON user_profiles.user_id = leaderboard_entries.user_id
-            LEFT JOIN gamer_high_scores
-              ON gamer_high_scores.user_id = leaderboard_entries.user_id
-             AND gamer_high_scores.board_key = ?
-            WHERE leaderboard_entries.snapshot_id = ?
-            ORDER BY leaderboard_entries.rank ASC,
-                     leaderboard_entries.score_units DESC,
-                     leaderboard_entries.user_id ASC
-            LIMIT ?
-            """,
-            (definition.key, int(snapshot["id"]), max(1, min(int(limit), LEADERBOARD_LIMIT))),
-        ).fetchall()
+        row_limit = max(1, min(int(limit), LEADERBOARD_LIMIT))
+        if definition.key in GAMER_BOARD_BASE:
+            source_table = (
+                "gamer_weekly_high_scores"
+                if definition.key in GAMER_WEEKLY_BOARDS
+                else "gamer_high_scores"
+            )
+            period_join = (
+                "AND gamer_scores.week_start = ?"
+                if definition.key in GAMER_WEEKLY_BOARDS
+                else ""
+            )
+            params: list[Any] = [GAMER_BOARD_BASE[definition.key]]
+            if definition.key in GAMER_WEEKLY_BOARDS:
+                params.append(str(snapshot["period_start"] or ""))
+            params.extend((int(snapshot["id"]), row_limit))
+            rows = db.execute(
+                f"""
+                SELECT
+                  leaderboard_entries.user_id,
+                  leaderboard_entries.rank,
+                  leaderboard_entries.score_units,
+                  leaderboard_entries.display_name,
+                  leaderboard_entries.is_supporter,
+                  user_profiles.avatar_key,
+                  gamer_scores.max_tile,
+                  gamer_scores.move_count,
+                  gamer_scores.used_ai,
+                  gamer_scores.replay_id
+                FROM leaderboard_entries
+                LEFT JOIN user_profiles
+                  ON user_profiles.user_id = leaderboard_entries.user_id
+                LEFT JOIN {source_table} AS gamer_scores
+                  ON gamer_scores.user_id = leaderboard_entries.user_id
+                 AND gamer_scores.board_key = ?
+                 {period_join}
+                WHERE leaderboard_entries.snapshot_id = ?
+                ORDER BY leaderboard_entries.rank ASC,
+                         leaderboard_entries.score_units DESC,
+                         leaderboard_entries.user_id ASC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        else:
+            rows = db.execute(
+                """
+                SELECT
+                  leaderboard_entries.user_id,
+                  leaderboard_entries.rank,
+                  leaderboard_entries.score_units,
+                  leaderboard_entries.display_name,
+                  leaderboard_entries.is_supporter,
+                  user_profiles.avatar_key,
+                  NULL AS max_tile,
+                  NULL AS move_count,
+                  NULL AS used_ai,
+                  NULL AS replay_id
+                FROM leaderboard_entries
+                LEFT JOIN user_profiles
+                  ON user_profiles.user_id = leaderboard_entries.user_id
+                WHERE leaderboard_entries.snapshot_id = ?
+                ORDER BY leaderboard_entries.rank ASC,
+                         leaderboard_entries.score_units DESC,
+                         leaderboard_entries.user_id ASC
+                LIMIT ?
+                """,
+                (int(snapshot["id"]), row_limit),
+            ).fetchall()
 
     entries = []
     for row in rows:
@@ -318,7 +392,7 @@ def leaderboard_payload(board_key: str, *, limit: int = LEADERBOARD_LIMIT) -> di
         }
         if definition.score_visible:
             entry["score"] = round(int(row["score_units"]) / definition.score_divisor, 3)
-        if definition.key in {GAMER_HIGH_SCORE_BOARD, GAMER_ADVERSARIAL_BOARD}:
+        if definition.key in GAMER_BOARD_BASE:
             entry.update(
                 {
                     "max_tile": int(row["max_tile"] or 0),

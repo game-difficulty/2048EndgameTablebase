@@ -138,10 +138,14 @@ import { useI18n } from 'vue-i18n';
 import AccountAvatar from '../../auth/AccountAvatar.vue';
 import { fetchLeaderboard, fetchLeaderboardCatalog } from '../services/leaderboardClient';
 
-const props = defineProps({ active: Boolean });
+const props = defineProps({
+  active: Boolean,
+  requestedKey: { type: String, default: '' },
+  requestSerial: { type: Number, default: 0 },
+});
 const { locale, t } = useI18n();
 const boards = ref([]);
-const selectedKey = ref('supporters');
+const selectedKey = ref(props.requestedKey || 'supporters');
 const boardData = ref(null);
 const loading = ref(false);
 const error = ref('');
@@ -158,6 +162,11 @@ const listEntries = computed(() => entries.value.filter((entry) => entry.rank > 
 const periodLabel = computed(() => {
   if (!boardData.value) return '';
   if (boardData.value.key === 'token_last_week') {
+    const start = formatDate(boardData.value.period?.start);
+    const end = formatDate(boardData.value.period?.end);
+    return start && end ? `${start} - ${end}` : '';
+  }
+  if (String(boardData.value.key).endsWith('_weekly')) {
     const start = formatDate(boardData.value.period?.start);
     const end = formatDate(boardData.value.period?.end);
     return start && end ? `${start} - ${end}` : '';
@@ -259,6 +268,12 @@ watch(() => props.active, (active) => {
   if (!active || loading.value) return;
   if (boards.value.length) loadBoard(selectedKey.value);
   else initialize();
+});
+watch(() => [props.requestedKey, props.requestSerial], ([boardKey]) => {
+  const normalized = String(boardKey || '');
+  if (!normalized) return;
+  selectedKey.value = normalized;
+  if (props.active) loadBoard(normalized);
 });
 </script>
 
