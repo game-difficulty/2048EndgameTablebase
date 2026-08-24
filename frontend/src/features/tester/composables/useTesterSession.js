@@ -23,6 +23,7 @@ import {
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { getStableWsClientId } from '../../../services/ws/clientIds';
 import { buildOptimisticMoveTransition } from '../../replay/engine/replayTransition';
+import { buildOptimisticTesterLastStep } from '../engine/testerOptimisticFeedback';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
 import {
@@ -173,7 +174,6 @@ export function useTesterSession(activeRef) {
     ready.value
     && tableFound.value
     && !lookupPending.value
-    && !queryInFlight.value
     && Object.values(results.value).some((value) => typeof value === 'number')
     && wsStatus.value === 'connected'
   ));
@@ -404,6 +404,9 @@ export function useTesterSession(activeRef) {
   });
 
   const resultConsoleTiles = computed(() => {
+    if (Array.isArray(lastStep.value?.board) && lastStep.value.board.length === 16) {
+      return flatBoardToTiles(lastStep.value.board);
+    }
     if (resultConsoleBoardLines.value.length === 4) {
       return resultConsoleBoardLines.value.flatMap((line, rowIndex) => {
         const tokens = String(line || '').trim().split(/\s+/u).slice(0, 4);
@@ -685,6 +688,13 @@ export function useTesterSession(activeRef) {
     }
     queuedMoveDirection.value = '';
     const fromBoardHex = currentBoardHex.value;
+    const optimisticLastStep = buildOptimisticTesterLastStep({
+      board: board.value,
+      results: results.value,
+      dtype: resultDtype.value,
+      direction: normalizedDirection,
+      goodnessOfFit: metrics.value.goodness_of_fit,
+    });
     const prefetchStateBeforeMove = {
       state: [...testerPrefetchState.state],
       turn: testerPrefetchState.turn,
@@ -698,6 +708,8 @@ export function useTesterSession(activeRef) {
       deterministicSpawn.randomSource,
     );
     if (!transition) return false;
+
+    if (optimisticLastStep) lastStep.value = optimisticLastStep;
 
     testerPrefetchState = deterministicSpawn.nextState();
     pendingMovePrefetch = {

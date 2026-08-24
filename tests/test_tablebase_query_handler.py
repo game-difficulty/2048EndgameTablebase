@@ -139,6 +139,20 @@ class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(child_rng.state, (12295, 1029, 1029, 25165824))
         self.assertEqual(child_rng.turn, 8)
 
+    def test_deterministic_prefetch_prioritizes_best_move(self):
+        result = query_handler.TablebaseLookupResult(
+            board_encoded=0x11,
+            full_pattern="L3_256",
+            results={"left": 0.7, "right": 0.9, "down": 0.8, "up": 0.6},
+            dtype="float64",
+            best_move="right",
+        )
+
+        self.assertEqual(
+            query_handler._direction_order(result),
+            ["right", "left", "down", "up"],
+        )
+
     async def test_tester_prefetch_streams_eight_complete_board_results(self):
         scheduler = TablebaseQueryScheduler(worker_count=4)
         session = GameSession("tester_deterministic_prefetch_test")

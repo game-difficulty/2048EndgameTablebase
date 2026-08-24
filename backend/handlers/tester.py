@@ -259,6 +259,13 @@ async def handle_tester_action(
             np_u64(getattr(session, "tester_results_board", 0)) != old_board_encoded
             or not session.tester_results
         ):
+            from .tablebase_query import wait_for_tester_query_result
+
+            await wait_for_tester_query_result(session)
+        if (
+            np_u64(getattr(session, "tester_results_board", 0)) != old_board_encoded
+            or not session.tester_results
+        ):
             await send_tester_state(websocket, session)
             return True
         post_lookup_context = getattr(session, "tester_post_lookup_context", None)

@@ -225,11 +225,38 @@ def _parse_prefetch_rng(
 
 def _direction_order(result: TablebaseLookupResult) -> list[str]:
     directions = []
-    for direction in (*result.results.keys(), *_DIRECTION_MAP.keys()):
+    for direction in (
+        result.best_move,
+        *result.results.keys(),
+        *_DIRECTION_MAP.keys(),
+    ):
         normalized = str(direction).lower()
         if normalized in _DIRECTION_MAP and normalized not in directions:
             directions.append(normalized)
     return directions
+
+
+async def wait_for_tester_query_result(session: GameSession) -> bool:
+    board_encoded = np_u64(session.board_encoded)
+    if (
+        np_u64(getattr(session, "tester_results_board", 0)) == board_encoded
+        and bool(session.tester_results)
+    ):
+        return True
+
+    task = getattr(session, "tester_query_task", None)
+    if task is None:
+        return False
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        return False
+    except Exception:
+        return False
+    return (
+        np_u64(getattr(session, "tester_results_board", 0)) == board_encoded
+        and bool(session.tester_results)
+    )
 
 
 def _deterministic_prefetch_child(
@@ -700,18 +727,22 @@ async def _finish_query(
 
     if not session_matches:
         return
-    await _run_prefetch(
-        session,
-        websocket,
-        page=page,
-        query_id=query_id,
-        stream_key=stream_key,
-        generation=handle.generation,
-        catalog_version=catalog_version,
-        parent_spec=spec,
-        parent_result=result,
-        supporter=supporter,
-        prefetch_rng=prefetch_rng,
+    _track_task(
+        asyncio.create_task(
+            _run_prefetch(
+                session,
+                websocket,
+                page=page,
+                query_id=query_id,
+                stream_key=stream_key,
+                generation=handle.generation,
+                catalog_version=catalog_version,
+                parent_spec=spec,
+                parent_result=result,
+                supporter=supporter,
+                prefetch_rng=prefetch_rng,
+            )
+        )
     )
 
 
@@ -821,7 +852,7 @@ async def handle_tablebase_query_action(
         session.tester_query_handle = handle
     else:
         session.trainer_query_handle = handle
-    _track_task(
+    query_task = _track_task(
         asyncio.create_task(
             _finish_query(
                 session,
@@ -838,4 +869,6 @@ async def handle_tablebase_query_action(
             )
         )
     )
+    if page == "tester":
+        session.tester_query_task = query_task
     return True

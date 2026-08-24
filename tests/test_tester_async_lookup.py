@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -129,6 +130,66 @@ class TesterQueryProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(websocket.messages[0]["action"], "TESTER_STATE")
         self.assertEqual(int(session.board_encoded), 0x11)
         self.assertEqual(session.tester_step_count, 0)
+
+    async def test_prefetched_move_waits_for_in_process_query_result(self):
+        session = self.make_session()
+        session.user_id = 1
+        websocket = RecordingWebSocket()
+        session.board_encoded = np_u64(0x11)
+        session.history = [(session.board_encoded, 0)]
+        session.move_history = [None]
+        session.tester_logs = []
+        _tester_reset_record(session)
+
+        moved_array = np.zeros((4, 4), dtype=np.int32)
+        moved_array[0, 0] = 2
+        moved_board = np_u64(encode_board(moved_array))
+        next_array = moved_array.copy()
+        next_array[0, 1] = 2
+        next_board = np_u64(encode_board(next_array))
+
+        async def complete_current_query():
+            await asyncio.sleep(0)
+            session.tester_results = {
+                "left": 0.9,
+                "right": 0.8,
+                "down": 0.7,
+                "up": 0.6,
+            }
+            session.tester_result_dtype = "float64"
+            session.tester_best_move = "left"
+            session.tester_results_board = np_u64(session.board_encoded)
+
+        session.tester_query_task = asyncio.create_task(
+            complete_current_query()
+        )
+
+        with (
+            patch("backend.handlers.tester.r_move_board", return_value=(moved_board, 4)),
+            patch(
+                "backend.handlers.tablebase_query.handle_tablebase_query_action",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as query,
+        ):
+            await handle_tester_action(
+                Action.TESTER_MOVE,
+                {
+                    "dir": "left",
+                    "from_board_hex": safe_hex(session.board_encoded),
+                    "board_hex": safe_hex(next_board),
+                    "spawn_index": 1,
+                    "spawn_value": 2,
+                    "query_id": "pipelined-tester-query",
+                },
+                session,
+                websocket,
+            )
+
+        self.assertEqual(websocket.messages[0]["action"], "TESTER_MOVE_ACCEPTED")
+        self.assertEqual(websocket.messages[0]["data"]["board_hex"], safe_hex(next_board))
+        self.assertEqual(session.tester_step_count, 1)
+        query.assert_awaited_once()
 
     async def test_move_rejects_invalid_client_spawn_and_resyncs(self):
         session = self.make_session()

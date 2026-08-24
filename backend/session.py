@@ -132,6 +132,7 @@ class GameSession:
         self.tester_lookup_pending = False
         self.tester_lookup_task = None
         self.tester_query_handle = None
+        self.tester_query_task = None
         self.tester_post_lookup_context = None
         self.tester_record = np.zeros(
             4000, dtype="uint64,uint8,uint32,uint32,uint32,uint32"
