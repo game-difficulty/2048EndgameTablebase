@@ -323,8 +323,14 @@ class TablebaseQueryScheduler:
             for item in job.subscribers.values()
         )
 
-    def _discard_unsubscribed_pending_jobs(self) -> None:
+    def _discard_unsubscribed_pending_jobs(
+        self,
+        *,
+        preserve_key: tuple[str, str, int] | None = None,
+    ) -> None:
         for key, job in list(self._jobs.items()):
+            if key == preserve_key:
+                continue
             if job.status != "pending" or self._job_has_current_subscriber(job):
                 continue
             job.status = "done"
@@ -397,7 +403,7 @@ class TablebaseQueryScheduler:
         if supersede:
             generation = self.current_generation(normalized_stream) + 1
             self._latest_generation[normalized_stream] = generation
-            self._discard_unsubscribed_pending_jobs()
+            self._discard_unsubscribed_pending_jobs(preserve_key=spec.query_key)
         elif generation is None:
             generation = self.current_generation(normalized_stream)
         generation = int(generation or 0)

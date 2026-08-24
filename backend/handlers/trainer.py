@@ -19,7 +19,7 @@ from engine_core.BoardMover import s_gen_new_num as r_gen_new_num, s_move_board 
 from ..actions import Action, EventType, Message
 from ..animation import build_move_animation_metadata
 from ..session import GameSession
-from ..session import np_u64, u64
+from ..session import np_u64, safe_hex, u64
 from ..state import ConnectionManager
 from ..remote_workers.errors import RemoteTablebaseError
 from ..remote_workers.registry import remote_worker_registry
@@ -83,9 +83,36 @@ async def _start_requested_tablebase_query(
             "query_id": query_id,
             "full_pattern": session.current_pattern,
             "board_hex": f"{int(session.board_encoded):016x}",
+            "prefetch_rng": payload.get("prefetch_rng"),
         },
         session,
         websocket,
+    )
+
+
+async def _send_trainer_move_accepted(
+    websocket: WebSocket,
+    session: GameSession,
+    *,
+    move_seq: int,
+    query_pending: bool,
+) -> None:
+    await websocket.send_json(
+        {
+            "action": Message.TRAINER_MOVE_ACCEPTED,
+            "data": {
+                "move_seq": int(move_seq),
+                "board_hex": safe_hex(session.board_encoded),
+                "score": {
+                    "current": int(session.score),
+                    "best": int(session.best_score),
+                },
+                "record_step": int(session.played_length),
+                "record_max": len(session.history),
+                "recording_length": int(session.record_length),
+                "query_pending": bool(query_pending),
+            },
+        }
     )
 
 
@@ -193,6 +220,22 @@ async def handle_trainer_action(
         direction_map = {"left": 1, "right": 2, "up": 3, "down": 4}
         if direction_str not in direction_map:
             return True
+        client_optimistic = bool(payload.get("client_optimistic"))
+        move_seq = None
+        if client_optimistic and payload.get("move_seq") is not None:
+            try:
+                move_seq = int(payload.get("move_seq"))
+            except (TypeError, ValueError):
+                await manager.send_state(websocket)
+                return True
+            expected_move_seq = int(getattr(session, "trainer_move_seq", 0)) + 1
+            if move_seq != expected_move_seq:
+                await manager.send_state(websocket)
+                return True
+
+            from .tablebase_query import wait_for_trainer_query_result
+
+            await wait_for_trainer_query_result(session)
         _clear_record_replay(session)
 
         if session.spawn_mode == 3 and session.moved == 1:
@@ -208,7 +251,6 @@ async def handle_trainer_action(
         if new_board == old_board_encoded:
             return True
 
-        client_optimistic = bool(payload.get("client_optimistic"))
         client_board_encoded = None
         if client_optimistic:
             try:
@@ -310,6 +352,8 @@ async def handle_trainer_action(
         session.history.append((session.board_encoded, session.score))
         session.move_history.append(direction_str)
         session.played_length = len(session.history) - 1
+        if move_seq is not None:
+            session.trainer_move_seq = move_seq
 
         if client_optimistic:
             metadata = (
@@ -333,7 +377,15 @@ async def handle_trainer_action(
         if session.recording_state:
             _record_state(session, direction_str, num_pos_1d, val_exp)
 
-        await manager.send_state(websocket, metadata)
+        if move_seq is not None and session.spawn_mode == 0:
+            await _send_trainer_move_accepted(
+                websocket,
+                session,
+                move_seq=move_seq,
+                query_pending=bool(str(payload.get("query_id") or "").strip()),
+            )
+        else:
+            await manager.send_state(websocket, metadata)
         await _start_requested_tablebase_query(payload, session, websocket)
         return True
 

@@ -188,7 +188,7 @@ def _parse_prefetch_rng(
     payload: dict[str, Any],
     page: str,
 ) -> _PrefetchRngContext | None:
-    if page != "tester":
+    if page not in {"tester", "trainer"}:
         return None
     raw = payload.get("prefetch_rng")
     if not isinstance(raw, dict) or raw.get("version") != _PREFETCH_RNG_VERSION:
@@ -256,6 +256,29 @@ async def wait_for_tester_query_result(session: GameSession) -> bool:
     return (
         np_u64(getattr(session, "tester_results_board", 0)) == board_encoded
         and bool(session.tester_results)
+    )
+
+
+async def wait_for_trainer_query_result(session: GameSession) -> bool:
+    board_encoded = np_u64(session.board_encoded)
+    if (
+        np_u64(getattr(session, "trainer_results_board", 0)) == board_encoded
+        and bool(session.trainer_results)
+    ):
+        return True
+
+    task = getattr(session, "trainer_query_task", None)
+    if task is None:
+        return False
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        return False
+    except Exception:
+        return False
+    return (
+        np_u64(getattr(session, "trainer_results_board", 0)) == board_encoded
+        and bool(session.trainer_results)
     )
 
 
@@ -378,9 +401,7 @@ async def _run_prefetch(
     supporter: bool,
     prefetch_rng: _PrefetchRngContext | None,
 ) -> None:
-    if page == "tester":
-        if prefetch_rng is None:
-            return
+    if prefetch_rng is not None:
         await _run_deterministic_prefetch(
             websocket,
             page=page,
@@ -697,6 +718,27 @@ async def _finish_query(
                     "logs_delta": session.tester_logs[logs_since:],
                     "logs_total": len(session.tester_logs),
                 }
+    if session_matches:
+        _track_task(
+            asyncio.create_task(
+                _run_prefetch(
+                    session,
+                    websocket,
+                    page=page,
+                    query_id=query_id,
+                    stream_key=stream_key,
+                    generation=handle.generation,
+                    catalog_version=catalog_version,
+                    parent_spec=spec,
+                    parent_result=result,
+                    supporter=supporter,
+                    prefetch_rng=prefetch_rng,
+                )
+            )
+        )
+        # Let the best child enter the scheduler before the client can submit it
+        # as the next foreground query.
+        await asyncio.sleep(0)
     try:
         token_balance = finalize_reservation(
             reservation,
@@ -724,26 +766,6 @@ async def _finish_query(
         )
     except Exception:
         return
-
-    if not session_matches:
-        return
-    _track_task(
-        asyncio.create_task(
-            _run_prefetch(
-                session,
-                websocket,
-                page=page,
-                query_id=query_id,
-                stream_key=stream_key,
-                generation=handle.generation,
-                catalog_version=catalog_version,
-                parent_spec=spec,
-                parent_result=result,
-                supporter=supporter,
-                prefetch_rng=prefetch_rng,
-            )
-        )
-    )
 
 
 async def handle_tablebase_query_action(
@@ -871,4 +893,6 @@ async def handle_tablebase_query_action(
     )
     if page == "tester":
         session.tester_query_task = query_task
+    else:
+        session.trainer_query_task = query_task
     return True

@@ -14,6 +14,11 @@ import {
   getCachedTablebaseResult,
   setCachedTablebaseResult,
 } from '../../../services/tablebases/tablebaseResultCache';
+import {
+  buildTesterPrefetchPayload as buildTrainerPrefetchPayload,
+  createTesterPrefetchState as createTrainerPrefetchState,
+  createTesterSpawnRandomSource as createTrainerSpawnRandomSource,
+} from '../../../services/tablebases/testerPrefetchRng';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { getStableWsClientId } from '../../../services/ws/clientIds';
 import { isVariantPattern } from '../../../utils/patternCategories';
@@ -39,6 +44,7 @@ import {
 } from '../engine/trainerBoardState.js';
 
 export function useTrainerSession(activeRef) {
+  const MAX_PIPELINED_RANDOM_MOVES = 16;
   const RESULT_REFRESH_GRACE_MS = 180;
   const RESULT_REFRESH_PLACEHOLDER_MS = 1400;
   const DEFAULT_TABLEBASE_PATTERN = '442t';
@@ -106,6 +112,11 @@ export function useTrainerSession(activeRef) {
   let paletteSyncTimer = null;
   let paletteEditDirty = false;
   let pendingOptimisticMoveBoardHex = '';
+  let pendingRandomMoves = new Map();
+  let nextTrainerMoveSeq = 0;
+  let lastTrainerMoveAckSeq = 0;
+  let trainerPrefetchState = createTrainerPrefetchState();
+  let trainerResyncPending = false;
   let pendingServerStateQuery = null;
   const resultsRefreshPhase = ref('idle');
 
@@ -118,6 +129,24 @@ export function useTrainerSession(activeRef) {
   let client = null;
   let initialStateSeen = false;
   let defaultTablebaseAutoApplyAttempted = false;
+
+  const spawnRate4 = () => Math.max(
+    0,
+    Math.min(1, Number(appConfig.value['4_spawn_rate'] ?? 0.1) || 0),
+  );
+
+  const resetTrainerPrefetchState = () => {
+    trainerPrefetchState = createTrainerPrefetchState();
+  };
+
+  const clearRandomMovePipeline = ({ serverMoveSeq } = {}) => {
+    pendingRandomMoves.clear();
+    resetTrainerPrefetchState();
+    if (Number.isInteger(serverMoveSeq) && serverMoveSeq >= 0) {
+      nextTrainerMoveSeq = serverMoveSeq;
+      lastTrainerMoveAckSeq = serverMoveSeq;
+    }
+  };
 
   const currentPatternDisplay = computed(() =>
     patternType.value && targetValue.value ? `${patternType.value}_${targetValue.value}` : ''
@@ -428,9 +457,17 @@ export function useTrainerSession(activeRef) {
     try {
       const selectedPattern = patternType.value;
       const selectedTarget = targetValue.value;
+      const previousCatalogVersion = catalogVersion.value;
       const tables = await fetchTablebaseCatalog();
       catalogTables.value = tables;
       catalogVersion.value = tables.catalogVersion || getCatalogVersion();
+      if (
+        previousCatalogVersion
+        && catalogVersion.value
+        && previousCatalogVersion !== catalogVersion.value
+      ) {
+        clearTablebaseResultCache();
+      }
       const nextCategories = groupTablebasePatternsByCategory(tables);
       const patterns = Object.values(nextCategories).flat();
       if (patterns.length) {
@@ -667,8 +704,11 @@ export function useTrainerSession(activeRef) {
     }
 
     const requestId = `${clientId}_${++nextResultsRequestId}`;
-    const { fullPattern, version } = trackResultsRequest(requestId, boardHex, reason);
-    return { requestId, fullPattern, version };
+    const { fullPattern, version, cacheHit } = trackResultsRequest(requestId, boardHex, reason);
+    const prefetchRng = Number(spawnMode.value) === 0
+      ? buildTrainerPrefetchPayload(trainerPrefetchState, spawnRate4())
+      : null;
+    return { requestId, fullPattern, version, cacheHit, prefetchRng };
   };
 
   const queryResults = (reason = 'manual') => {
@@ -681,6 +721,7 @@ export function useTrainerSession(activeRef) {
       catalog_version: prepared.version,
       full_pattern: prepared.fullPattern,
       board_hex: boardHex,
+      prefetch_rng: prepared.prefetchRng,
     });
     return prepared.requestId;
   };
@@ -692,24 +733,36 @@ export function useTrainerSession(activeRef) {
 
   const executeTrainerMove = (direction) => {
     const normalized = String(direction || '').toLowerCase();
+    const currentSpawnMode = Number(spawnMode.value) || 0;
+    const currentHex = currentBoardHex.value || hexInput.value;
+    const randomResultsPending = currentSpawnMode === 0
+      && showResults.value
+      && tablebasePath.value === 'loaded'
+      && resultsBoardHex.value !== currentHex;
     if (
       !['up', 'down', 'left', 'right'].includes(normalized)
       || awaitingSpawn.value
-      || !!pendingOptimisticMoveBoardHex
+      || (currentSpawnMode !== 0 && !!pendingOptimisticMoveBoardHex)
+      || randomResultsPending
+      || pendingRandomMoves.size >= MAX_PIPELINED_RANDOM_MOVES
+      || trainerResyncPending
       || wsStatus.value !== 'connected'
       || !requireAuth()
     ) {
       return false;
     }
 
-    const fromBoardHex = currentBoardHex.value || hexInput.value;
-    const currentSpawnMode = Number(spawnMode.value) || 0;
+    const fromBoardHex = currentHex;
+    const deterministicSpawn = currentSpawnMode === 0
+      ? createTrainerSpawnRandomSource(trainerPrefetchState)
+      : null;
     const transition = currentSpawnMode === 0
       ? buildOptimisticMoveTransition(
         board.value,
         normalized,
         isVariant.value,
-        Number(appConfig.value['4_spawn_rate'] ?? 0.1),
+        spawnRate4(),
+        deterministicSpawn.randomSource,
       )
       : buildOptimisticMoveOnlyTransition(board.value, normalized, isVariant.value);
     if (!transition || !fromBoardHex) {
@@ -721,7 +774,21 @@ export function useTrainerSession(activeRef) {
     metadata.value = transition.metadata;
     currentBoardHex.value = transition.hex;
     hexInput.value = transition.hex;
-    pendingOptimisticMoveBoardHex = transition.hex;
+    let moveSeq = null;
+    if (currentSpawnMode === 0) {
+      trainerPrefetchState = deterministicSpawn.nextState();
+      moveSeq = ++nextTrainerMoveSeq;
+      pendingRandomMoves.set(moveSeq, {
+        boardHex: transition.hex,
+        fromBoardHex,
+      });
+      fullHistory.value = [...fullHistory.value, transition.hex];
+      fullMoves.value = [...fullMoves.value, normalized];
+      recordStep.value = Math.max(0, fullHistory.value.length - 1);
+      recordMax.value = fullHistory.value.length;
+    } else {
+      pendingOptimisticMoveBoardHex = transition.hex;
+    }
     invalidateResults();
     if (currentSpawnMode === 3) {
       awaitingSpawn.value = true;
@@ -739,9 +806,19 @@ export function useTrainerSession(activeRef) {
       board_hex: transition.hex,
       spawn_index: transition.spawnIndex,
       spawn_value: transition.spawnValue,
+      move_seq: moveSeq,
       query_id: preparedQuery?.requestId,
       query_reason: queryReason,
+      prefetch_rng: preparedQuery?.prefetchRng,
     });
+    if (currentSpawnMode === 0 && preparedQuery?.cacheHit) {
+      stepExecutionPending.value = false;
+      if (demoActive.value) {
+        scheduleDemoStep();
+      } else if (queuedStepCount.value > 0) {
+        window.queueMicrotask(pumpQueuedSteps);
+      }
+    }
     return true;
   };
 
@@ -775,6 +852,7 @@ export function useTrainerSession(activeRef) {
     ) {
       pendingResultsRequests.clear();
       pendingOptimisticMoveBoardHex = '';
+      clearRandomMovePipeline();
       pendingServerStateQuery = null;
       clearTablebaseResultCache();
       invalidateResults({ clearDisplay: true });
@@ -804,8 +882,55 @@ export function useTrainerSession(activeRef) {
       return;
     }
 
+    if (data.action === 'TRAINER_MOVE_ACCEPTED') {
+      const moveSeq = Number(data.data?.move_seq);
+      const acceptedBoardHex = String(data.data?.board_hex || '').toLowerCase();
+      if (Number.isInteger(moveSeq) && moveSeq <= lastTrainerMoveAckSeq) return;
+      const pendingMove = pendingRandomMoves.get(moveSeq);
+      if (
+        !Number.isInteger(moveSeq)
+        || !pendingMove
+        || pendingMove.boardHex !== acceptedBoardHex
+      ) {
+        clearRandomMovePipeline();
+        pendingResultsRequests.clear();
+        trainerResyncPending = true;
+        triggerAction('GET_STATE');
+        return;
+      }
+      for (const pendingSeq of [...pendingRandomMoves.keys()]) {
+        if (pendingSeq <= moveSeq) pendingRandomMoves.delete(pendingSeq);
+      }
+      lastTrainerMoveAckSeq = moveSeq;
+      recordStep.value = Math.max(
+        recordStep.value,
+        Number(data.data?.record_step ?? 0),
+      );
+      recordMax.value = Math.max(
+        recordMax.value,
+        Number(data.data?.record_max ?? 0),
+      );
+      recordingLength.value = Math.max(
+        recordingLength.value,
+        Number(data.data?.recording_length ?? 0),
+      );
+      stepExecutionPending.value = false;
+      if (resultsBoardHex.value === currentBoardHex.value) {
+        if (demoActive.value && !demoTimer) scheduleDemoStep();
+        else if (queuedStepCount.value > 0) window.queueMicrotask(pumpQueuedSteps);
+      }
+      return;
+    }
+
     if (data.action === 'UPDATE_STATE') {
       initialStateSeen = true;
+      trainerResyncPending = false;
+      const serverMoveSeq = Number(data.data?.trainer_move_seq);
+      clearRandomMovePipeline({
+        serverMoveSeq: Number.isInteger(serverMoveSeq) && serverMoveSeq >= 0
+          ? serverMoveSeq
+          : undefined,
+      });
       if (typeof data.data.tablebase_status === 'string') {
         tablebasePath.value = data.data.tablebase_status;
       }
@@ -964,7 +1089,12 @@ export function useTrainerSession(activeRef) {
         clearStepQueue();
         return;
       }
-      if (demoActive.value && !queuedStepCount.value && !stepExecutionPending.value) {
+      if (
+        demoActive.value
+        && !queuedStepCount.value
+        && !stepExecutionPending.value
+        && !demoTimer
+      ) {
         scheduleDemoStep();
       }
       if (!stepExecutionPending.value || queuedStepCount.value > 0) {
@@ -1043,6 +1173,7 @@ export function useTrainerSession(activeRef) {
       onOpen: () => {
         wsStatus.value = 'connected';
         initialStateSeen = false;
+        trainerResyncPending = true;
         defaultTablebaseAutoApplyAttempted = false;
         loadCatalog({ preserveSelection: true });
         triggerAction('GET_STATE');
@@ -1051,6 +1182,8 @@ export function useTrainerSession(activeRef) {
       onMessage: handleMessage,
       onClose: () => {
         wsStatus.value = 'disconnected';
+        trainerResyncPending = false;
+        clearRandomMovePipeline();
         demoActive.value = false;
         clearDemoTimer();
         finishResultsRefresh();
@@ -1068,6 +1201,8 @@ export function useTrainerSession(activeRef) {
     finishResultsRefresh();
     pendingResultsRequests.clear();
     pendingOptimisticMoveBoardHex = '';
+    trainerResyncPending = false;
+    clearRandomMovePipeline();
     pendingServerStateQuery = null;
     clearStepQueue();
     if (tablebaseRetryTimer) {
@@ -1101,6 +1236,8 @@ export function useTrainerSession(activeRef) {
     replayResultsActive.value = false;
     pendingResultsRequests.clear();
     pendingOptimisticMoveBoardHex = '';
+    trainerResyncPending = false;
+    clearRandomMovePipeline();
     pendingServerStateQuery = null;
     stepExecutionPending.value = false;
 
@@ -1246,17 +1383,20 @@ export function useTrainerSession(activeRef) {
   const applyTablebase = ({ loadDefault = false } = {}) => {
     if (!patternType.value || !targetValue.value) return;
     const fullPattern = `${patternType.value}_${targetValue.value}`;
+    clearRandomMovePipeline();
+    trainerResyncPending = true;
     clearTablebaseResultCache();
     recordPlaybackLoaded.value = false;
     replayResultsActive.value = false;
     pendingResultsRequests.clear();
     invalidateResults({ clearDisplay: true });
     startResultsRefresh();
-    triggerAction('TRAINER_SET_FILEPATH', {
+    const sent = triggerAction('TRAINER_SET_FILEPATH', {
       pattern: fullPattern,
       target: targetValue.value,
       load_default: loadDefault,
     });
+    if (!sent) trainerResyncPending = false;
   };
 
   const trainerStep = () => {
@@ -1322,7 +1462,9 @@ export function useTrainerSession(activeRef) {
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
-    triggerAction('TRAINER_DEFAULT');
+    clearRandomMovePipeline();
+    trainerResyncPending = true;
+    if (!triggerAction('TRAINER_DEFAULT')) trainerResyncPending = false;
   };
 
   const toggleDemo = () => {
@@ -1342,8 +1484,10 @@ export function useTrainerSession(activeRef) {
   };
 
   const setSpawnMode = (mode) => {
+    clearRandomMovePipeline();
     spawnMode.value = mode;
-    triggerAction('SET_SPAWN_MODE', { mode });
+    trainerResyncPending = true;
+    if (!triggerAction('SET_SPAWN_MODE', { mode })) trainerResyncPending = false;
   };
 
   const manageRecord = async (cmd) => {

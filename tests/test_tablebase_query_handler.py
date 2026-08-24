@@ -215,6 +215,62 @@ class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await scheduler.close()
 
+    async def test_trainer_prefetch_uses_the_deterministic_rng_contract(self):
+        scheduler = TablebaseQueryScheduler(worker_count=4)
+        session = GameSession("trainer_deterministic_prefetch_test")
+        session.user_id = 1
+        session.auth_session_id = 2
+        session.current_pattern = "L3_256"
+        session.pattern_settings = ["L3", "256"]
+        session.use_variant = False
+        session.book_reader = ConstantReader()
+        board = np.zeros((4, 4), dtype=np.int32)
+        board[0, :2] = 2
+        session.board_encoded = np_u64(encode_board(board))
+        websocket = RecordingWebSocket()
+
+        try:
+            with (
+                patch.object(query_handler, "tablebase_query_scheduler", scheduler),
+                patch.object(query_handler, "get_catalog_version", return_value="catalog-test"),
+                patch.object(query_handler, "reserve_operation_tokens", return_value=object()),
+                patch.object(query_handler, "finalize_reservation"),
+                patch.object(query_handler, "get_token_balance", return_value={"total": 100}),
+            ):
+                await query_handler.handle_tablebase_query_action(
+                    Action.TABLEBASE_QUERY,
+                    {
+                        "page": "trainer",
+                        "query_id": "trainer-deterministic",
+                        "full_pattern": "L3_256",
+                        "board_hex": f"{int(session.board_encoded):016x}",
+                        "prefetch_rng": {
+                            "version": 1,
+                            "state": [1, 2, 3, 4],
+                            "turn": 0,
+                            "spawn_rate_4": 0.1,
+                        },
+                    },
+                    session,
+                    websocket,
+                )
+                while query_handler._TABLEBASE_QUERY_TASKS:
+                    await asyncio.gather(
+                        *list(query_handler._TABLEBASE_QUERY_TASKS),
+                        return_exceptions=True,
+                    )
+
+            prefetch_messages = [
+                message for message in websocket.messages
+                if message["action"] == "TABLEBASE_PREFETCH"
+            ]
+            self.assertEqual(len(prefetch_messages), 8)
+            depths = [message["data"]["entries"][0]["depth"] for message in prefetch_messages]
+            self.assertEqual(depths.count(1), 3)
+            self.assertGreater(max(depths), 1)
+        finally:
+            await scheduler.close()
+
     async def test_current_result_is_sent_before_eight_two_tile_prefetches(self):
         scheduler = TablebaseQueryScheduler(worker_count=4)
         session = GameSession("trainer_handler_test")

@@ -195,6 +195,93 @@ class TrainerOptimisticMoveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query_payload["query_id"], "trainer-move-query")
         self.assertEqual(query_payload["board_hex"], f"{int(target):016x}")
 
+    async def test_sequenced_random_move_uses_lightweight_ack_and_forwards_rng(self):
+        session = GameSession("trainer_sequenced_random")
+        session.user_id = 1
+        session.current_pattern = "L3_256"
+        session.pattern_settings = ["L3", "256"]
+        session.board_encoded = encoded([0, 2, 2, 0, *([0] * 12)])
+        session.history = [(session.board_encoded, 0)]
+        session.move_history = [None]
+        session.spawn_mode = 0
+        target = encoded([4, 2, 0, 0, *([0] * 12)])
+        manager = RecordingManager()
+        websocket = RecordingWebSocket()
+        prefetch_rng = {
+            "version": 1,
+            "state": [1, 2, 3, 4],
+            "turn": 1,
+            "spawn_rate_4": 0.1,
+        }
+
+        with (
+            patch(
+                "backend.handlers.tablebase_query.wait_for_trainer_query_result",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as wait_for_query,
+            patch(
+                "backend.handlers.tablebase_query.handle_tablebase_query_action",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as query,
+        ):
+            await handle_trainer_action(
+                Action.TRAINER_MOVE,
+                {
+                    "dir": "left",
+                    "client_optimistic": True,
+                    "from_board_hex": f"{int(session.board_encoded):016x}",
+                    "board_hex": f"{int(target):016x}",
+                    "spawn_index": 1,
+                    "spawn_value": 2,
+                    "move_seq": 1,
+                    "query_id": "trainer-sequenced-query",
+                    "prefetch_rng": prefetch_rng,
+                },
+                session,
+                websocket,
+                manager,
+            )
+
+        wait_for_query.assert_awaited_once_with(session)
+        self.assertEqual(manager.states, [])
+        self.assertEqual(session.trainer_move_seq, 1)
+        self.assertEqual(websocket.messages[0]["action"], Message.TRAINER_MOVE_ACCEPTED)
+        self.assertEqual(websocket.messages[0]["data"]["move_seq"], 1)
+        self.assertEqual(websocket.messages[0]["data"]["board_hex"], f"{int(target):016x}")
+        query.assert_awaited_once()
+        self.assertEqual(query.await_args.args[1]["prefetch_rng"], prefetch_rng)
+
+    async def test_out_of_sequence_random_move_resyncs_without_mutation(self):
+        original = encoded([0, 2, 2, 0, *([0] * 12)])
+        session = GameSession("trainer_sequence_mismatch")
+        session.board_encoded = original
+        session.history = [(original, 0)]
+        session.move_history = [None]
+        session.spawn_mode = 0
+        manager = RecordingManager()
+
+        await handle_trainer_action(
+            Action.TRAINER_MOVE,
+            {
+                "dir": "left",
+                "client_optimistic": True,
+                "from_board_hex": f"{int(original):016x}",
+                "board_hex": f"{int(encoded([4, 2, 0, 0, *([0] * 12)])):016x}",
+                "spawn_index": 1,
+                "spawn_value": 2,
+                "move_seq": 2,
+            },
+            session,
+            object(),
+            manager,
+        )
+
+        self.assertEqual(session.board_encoded, original)
+        self.assertEqual(session.trainer_move_seq, 0)
+        self.assertEqual(manager.states, [{}])
+
     async def test_forged_random_board_does_not_mutate_session(self):
         session = GameSession("trainer_optimistic_rejected")
         session.user_id = 1

@@ -118,6 +118,43 @@ class TablebaseQuerySchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(old_board, reader.calls)
         self.assertIn(new_board, reader.calls)
 
+    async def test_foreground_request_promotes_same_pending_prefetch_job(self):
+        scheduler = self.scheduler()
+        blocker_board = board_with_tile(0, 2)
+        target_board = board_with_tile(1, 4)
+        reader = RecordingReader(blocked_board=blocker_board)
+
+        blocker = await scheduler.submit(
+            make_spec(reader, blocker_board),
+            stream_key="blocker",
+            supporter=False,
+        )
+        self.assertTrue(await asyncio.to_thread(reader.started.wait, 1))
+        prefetch = await scheduler.submit(
+            make_spec(reader, target_board),
+            stream_key="same-user:trainer",
+            supporter=False,
+            lane="prefetch",
+            supersede=False,
+            generation=scheduler.current_generation("same-user:trainer"),
+            allow_overload=True,
+        )
+        foreground = await scheduler.submit(
+            make_spec(reader, target_board),
+            stream_key="same-user:trainer",
+            supporter=False,
+            lane="foreground",
+            supersede=True,
+        )
+
+        reader.release.set()
+        await blocker.wait()
+        with self.assertRaises(TablebaseQuerySuperseded):
+            await prefetch.wait()
+        result = await foreground.wait()
+        self.assertEqual(result.board_encoded, target_board)
+        self.assertEqual(reader.calls.count(target_board), 1)
+
     async def test_supporter_foreground_query_precedes_regular_query(self):
         scheduler = self.scheduler()
         blocker_board = board_with_tile(0, 2)

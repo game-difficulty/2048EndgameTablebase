@@ -98,6 +98,8 @@ class GameSession:
         self.trainer_results = {}
         self.trainer_results_board = np_u64(0)
         self.trainer_query_handle = None
+        self.trainer_query_task = None
+        self.trainer_move_seq = 0
         self.use_variant = False
 
         self.recording_state = False
