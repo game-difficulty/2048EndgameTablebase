@@ -164,7 +164,10 @@ const openReplay = (replayId) => {
   window.open(`/verse-replay/?ranked=${encodeURIComponent(replayId)}`, '_blank', 'noopener');
 };
 const openFullLeaderboard = () => {
-  emit('navigate-tab', 'LeaderboardsView', { boardKey: selectedBoardKey.value });
+  const boardKey = selectedMode.value === 'adversarial'
+    ? 'gamer_adversarial'
+    : 'gamer_high_score';
+  emit('navigate-tab', 'LeaderboardsView', { boardKey });
 };
 
 watch(selectedBoardKey, () => {

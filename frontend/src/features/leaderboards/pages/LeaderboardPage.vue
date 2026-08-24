@@ -155,8 +155,18 @@ const props = defineProps({
   requestedDifficulty: { type: Number, default: 1 },
 });
 const { locale, t } = useI18n();
+const hiddenPageBoards = new Set([
+  'gamer_high_score_weekly',
+  'gamer_adversarial_weekly',
+]);
+const normalizePageBoardKey = (key) => {
+  const normalized = String(key || '');
+  if (normalized === 'gamer_high_score_weekly') return 'gamer_high_score';
+  if (normalized === 'gamer_adversarial_weekly') return 'gamer_adversarial';
+  return normalized;
+};
 const boards = ref([]);
-const selectedKey = ref(props.requestedKey || 'supporters');
+const selectedKey = ref(normalizePageBoardKey(props.requestedKey) || 'supporters');
 const boardData = ref(null);
 const loading = ref(false);
 const error = ref('');
@@ -267,7 +277,9 @@ const initialize = async () => {
   error.value = '';
   try {
     const payload = await fetchLeaderboardCatalog();
-    boards.value = Array.isArray(payload?.boards) ? payload.boards : [];
+    boards.value = Array.isArray(payload?.boards)
+      ? payload.boards.filter((board) => !hiddenPageBoards.has(board.key))
+      : [];
     if (!boards.value.some((board) => board.key === selectedKey.value)) {
       selectedKey.value = boards.value[0]?.key || 'supporters';
     }
@@ -288,7 +300,7 @@ watch(() => props.active, (active) => {
   else initialize();
 });
 watch(() => [props.requestedKey, props.requestSerial], ([boardKey]) => {
-  const normalized = String(boardKey || '');
+  const normalized = normalizePageBoardKey(boardKey);
   if (!normalized) return;
   selectedKey.value = normalized;
   if (props.active && normalized !== 'minigames') loadBoard(normalized);
