@@ -487,6 +487,7 @@ class SingletonConfig:
             cls._instance = super(SingletonConfig, cls).__new__(cls)
             # 初始化配置数据
             cls._instance.config = cls.load_config()
+            cls.clean_pattern_paths()
             cls.tile_font_colors()
         return cls._instance
 
@@ -714,49 +715,127 @@ class SingletonConfig:
         return (pattern, target_sr4)
 
     @classmethod
+    def clean_pattern_paths(cls, pattern=None, spawn_rate4=None, persist=True):
+        if not cls._instance:
+            return False
+        config = cls._instance.config
+        filepath_map = config.get("filepath_map", {})
+        if not isinstance(filepath_map, dict):
+            config["filepath_map"] = {}
+            if persist:
+                cls.save_config(config)
+            return False
+
+        if pattern is None:
+            pattern_keys = list(filepath_map.keys())
+        else:
+            if spawn_rate4 is None:
+                spawn_rate4 = config.get("4_spawn_rate", 0.1)
+            pattern_keys = [cls.get_pattern_key(pattern, float(spawn_rate4))]
+
+        valid_paths_found = False
+        changed = False
+        table_suffixes = (
+            ".book",
+            ".z",
+            "b",
+            ".zbook",
+            ".exzbook",
+            ".exadbook",
+            ".exadzbook",
+            ".bccmp",
+        )
+
+        for pattern_key in pattern_keys:
+            try:
+                pattern_name = str(pattern_key[0])
+            except (TypeError, IndexError):
+                continue
+
+            original_paths = filepath_map.get(pattern_key, [])
+            path_entries = (
+                original_paths if isinstance(original_paths, (list, tuple)) else []
+            )
+            valid_paths = []
+            prefix = f"{pattern_name}_"
+
+            for entry in path_entries:
+                try:
+                    file_path, success_rate_dtype = entry
+                    file_path = os.fspath(file_path)
+                except (TypeError, ValueError):
+                    continue
+
+                if not isinstance(file_path, str) or not file_path:
+                    continue
+
+                try:
+                    if not os.path.isdir(file_path):
+                        continue
+                    with os.scandir(file_path) as items:
+                        has_table_file = any(
+                            item.name.startswith(prefix)
+                            and item.name.endswith(table_suffixes)
+                            for item in items
+                        )
+                except OSError as exc:
+                    logger.warning(f"Unable to inspect table path {file_path}: {exc}")
+                    continue
+
+                if has_table_file:
+                    valid_paths.append((file_path, success_rate_dtype))
+
+            if valid_paths:
+                valid_paths_found = True
+            if valid_paths != original_paths:
+                filepath_map[pattern_key] = valid_paths
+                changed = True
+
+        if changed and persist:
+            cls.save_config(config)
+
+        return valid_paths_found
+
+    @classmethod
     def check_pattern_file(cls, pattern):
         if not cls._instance:
             return False
-        spawn_rate4 = SingletonConfig().config["4_spawn_rate"]
-        filepath_map = cls._instance.config["filepath_map"]
-        pattern_key = cls.get_pattern_key(pattern, float(spawn_rate4))
-        file_path_list: list | None = filepath_map.get(pattern_key, None)
-        prefix = f"{pattern}_"
-        if not file_path_list:
-            return False
+        spawn_rate4 = cls._instance.config.get("4_spawn_rate", 0.1)
+        return cls.clean_pattern_paths(pattern, spawn_rate4)
 
-        for file_path, success_rate_dtype in file_path_list:
-            # 检查文件夹是否存在
-            if (
-                not file_path
-                or not os.path.exists(file_path)
-                or not os.path.isdir(file_path)
-            ):
-                file_path_list.remove((file_path, success_rate_dtype))
+    @classmethod
+    def get_available_pattern_targets(cls):
+        if not cls._instance:
+            return {}
+
+        config = cls._instance.config
+        current_spawn_rate4 = float(config.get("4_spawn_rate", 0.1))
+        available_targets = {}
+        for pattern_key, path_list in config.get("filepath_map", {}).items():
+            try:
+                full_pattern, table_spawn_rate4 = pattern_key
+                table_spawn_rate4 = float(table_spawn_rate4)
+            except (TypeError, ValueError):
                 continue
 
-            # 遍历文件夹中的所有项
-            for item in os.listdir(file_path):
-                if not item.startswith(prefix):
-                    continue
-                if item.endswith(
-                    (
-                        ".book",
-                        ".z",
-                        "b",
-                        ".zbook",
-                        ".exzbook",
-                        ".exadbook",
-                        ".exadzbook",
-                        ".bccmp",
-                    )
-                ):
-                    return True
+            if not path_list or abs(table_spawn_rate4 - current_spawn_rate4) > 1e-4:
+                continue
 
-            file_path_list.remove((file_path, success_rate_dtype))
-        SingletonConfig().save_config(SingletonConfig().config)
+            pattern_name, separator, target = str(full_pattern).rpartition("_")
+            if not separator or not pattern_name or not target:
+                continue
+            available_targets.setdefault(pattern_name, set()).add(target)
 
-        return False
+        def target_sort_key(value):
+            try:
+                return (0, int(value))
+            except ValueError:
+                return (1, value)
+
+        return {
+            pattern_name: sorted(targets, key=target_sort_key)
+            for pattern_name, targets in available_targets.items()
+        }
 
     @staticmethod
     def read_success_rate_dtype(folder_path, pattern):

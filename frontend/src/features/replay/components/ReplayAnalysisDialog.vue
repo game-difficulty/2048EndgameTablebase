@@ -61,10 +61,15 @@
                         v-for="pattern in activePatternOptions"
                         :key="pattern"
                         type="button"
+                        :disabled="!isPatternAvailable(pattern)"
                         @click.stop="selectPattern(pattern)"
                         :class="[
                           'rounded-lg px-3 py-2 text-left ui-control font-black transition-colors',
-                          selectedPattern === pattern ? 'surface-prominent text-white' : 'bg-bg-main text-text-main hover:bg-btn-bg/10'
+                          !isPatternAvailable(pattern)
+                            ? 'cursor-not-allowed bg-bg-main text-text-secondary/45 opacity-60'
+                            : selectedPattern === pattern
+                              ? 'surface-prominent text-white'
+                              : 'bg-bg-main text-text-main hover:bg-btn-bg/10'
                         ]"
                       >
                         {{ pattern }}
@@ -196,6 +201,7 @@ const { t } = useI18n();
 const wsStatus = ref('disconnected');
 const categories = ref({});
 const targetTiles = ref(['64', '128', '256', '512', '1024', '2048', '4096', '8192', '16384']);
+const availableTables = ref({});
 const selectedPattern = ref('');
 const selectedTarget = ref('2048');
 const pathsInput = ref('');
@@ -229,10 +235,21 @@ const activePatternOptions = computed(() => {
   return group?.items || [];
 });
 
+const isPatternAvailable = (pattern) => (
+  Array.isArray(availableTables.value?.[pattern])
+  && availableTables.value[pattern].length > 0
+);
+
+const isTargetAvailable = (target, pattern = selectedPattern.value) => (
+  isPatternAvailable(pattern)
+  && availableTables.value[pattern].map(String).includes(String(target))
+);
+
 const targetOptions = computed(() =>
   targetTiles.value.map((target) => ({
     value: target,
     label: target,
+    disabled: !isTargetAvailable(target),
   }))
 );
 
@@ -241,7 +258,12 @@ const progressPercent = computed(() => {
   if (totalCount.value <= 0) return 0;
   return Math.max(0, Math.min(100, (completedCount.value / totalCount.value) * 100));
 });
-const canAnalyze = computed(() => Boolean(selectedPattern.value && selectedTarget.value && pathsInput.value.trim()));
+const canAnalyze = computed(() => Boolean(
+  selectedPattern.value
+  && selectedTarget.value
+  && isTargetAvailable(selectedTarget.value)
+  && pathsInput.value.trim()
+));
 const normalizedEntries = computed(() =>
   entries.value.map((entry, index) => ({
     key: `${entry.path}-${entry.status}-${index}`,
@@ -299,20 +321,47 @@ const getEntryStatusLabel = (status) => {
 };
 
 const selectPattern = (pattern) => {
+  if (!isPatternAvailable(pattern)) return;
   selectedPattern.value = pattern;
+  if (!isTargetAvailable(selectedTarget.value, pattern)) {
+    selectedTarget.value = targetTiles.value.find(
+      (target) => isTargetAvailable(target, pattern)
+    ) || '';
+  }
   patternMenuOpen.value = false;
+};
+
+const ensureAvailableSelection = () => {
+  if (!isPatternAvailable(selectedPattern.value)) {
+    selectedPattern.value = patternGroups.value
+      .flatMap((group) => group.items)
+      .find(isPatternAvailable) || '';
+  }
+  if (!isTargetAvailable(selectedTarget.value)) {
+    selectedTarget.value = targetTiles.value.find(
+      (target) => isTargetAvailable(target)
+    ) || '';
+  }
+  const matchedGroup = patternGroups.value.find(
+    (group) => group.items.includes(selectedPattern.value)
+  );
+  activePatternCategory.value = matchedGroup?.category || patternGroups.value[0]?.category || '';
 };
 
 const applyContext = (context) => {
   const nextPattern = String(context?.pattern || '').trim();
   const nextTarget = String(context?.target || '').trim();
-  if (nextPattern) {
+  if (nextPattern && isPatternAvailable(nextPattern)) {
     selectedPattern.value = nextPattern;
     const matchedGroup = patternGroups.value.find((group) => group.items.includes(nextPattern));
     if (matchedGroup) activePatternCategory.value = matchedGroup.category;
   }
-  if (nextTarget && targetTiles.value.includes(nextTarget)) {
+  if (nextTarget && targetTiles.value.includes(nextTarget) && isTargetAvailable(nextTarget)) {
     selectedTarget.value = nextTarget;
+  } else if (!isTargetAvailable(selectedTarget.value)) {
+    selectedTarget.value = targetTiles.value.find(
+      (target) => isTargetAvailable(target)
+    ) || '';
   }
 };
 
@@ -377,12 +426,8 @@ const handleMessage = (message) => {
     targetTiles.value = Array.isArray(message.payload?.target_tiles) && message.payload.target_tiles.length
       ? message.payload.target_tiles.map(String)
       : targetTiles.value;
-    if (!activePatternCategory.value && patternGroups.value.length) {
-      activePatternCategory.value = patternGroups.value[0].category;
-    }
-    if (!selectedPattern.value && activePatternOptions.value.length) {
-      selectedPattern.value = activePatternOptions.value[0];
-    }
+    availableTables.value = message.payload?.available_tables || {};
+    ensureAvailableSelection();
     applyContext(props.context);
     return;
   }
@@ -472,12 +517,7 @@ watch(
 );
 
 watch(patternGroups, (groups) => {
-  if (!activePatternCategory.value && groups.length) {
-    activePatternCategory.value = groups[0].category;
-  }
-  if (!selectedPattern.value && activePatternOptions.value.length) {
-    selectedPattern.value = activePatternOptions.value[0];
-  }
+  if (groups.length) ensureAvailableSelection();
 });
 
 watch(

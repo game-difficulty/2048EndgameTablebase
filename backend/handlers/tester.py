@@ -57,6 +57,7 @@ async def handle_tester_action(
                 "data": {
                     "categories": category_info,
                     "target_tiles": [2**i for i in range(6, 15)],
+                    "available_tables": SingletonConfig.get_available_pattern_targets(),
                     "settings": {
                         "colors": SingletonConfig().config.get("colors", []),
                         "dis_32k": SingletonConfig().config.get("dis_32k", False),

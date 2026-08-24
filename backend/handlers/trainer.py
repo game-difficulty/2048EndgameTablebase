@@ -70,13 +70,11 @@ async def handle_trainer_action(
         config = SingletonConfig().config
         filepath_map = config["filepath_map"]
         pattern_key = SingletonConfig.get_pattern_key(pattern, spawn_rate4)
+        original_path_list = list(filepath_map.get(pattern_key, []))
+        SingletonConfig.clean_pattern_paths(pattern, spawn_rate4, persist=False)
         current_path_list = list(filepath_map.get(pattern_key, []))
-        normalized_path_list = [
-            (path, success_rate_dtype)
-            for path, success_rate_dtype in current_path_list
-            if path and os.path.exists(path)
-        ]
-        updated_config = normalized_path_list != current_path_list
+        normalized_path_list = current_path_list
+        updated_config = current_path_list != original_path_list
 
         if filepath:
             success_rate_dtype = SingletonConfig.read_success_rate_dtype(filepath, pattern)
@@ -84,12 +82,17 @@ async def handle_trainer_action(
             table_4sr = table_4sr if table_4sr is not None else spawn_rate4
             pattern_key = SingletonConfig.get_pattern_key(pattern, table_4sr)
             current_path_list = list(filepath_map.get(pattern_key, []))
+            SingletonConfig.clean_pattern_paths(pattern, table_4sr, persist=False)
+            current_path_list = list(filepath_map.get(pattern_key, []))
             normalized_path_list = [
                 (path, dtype)
                 for path, dtype in current_path_list
-                if path and os.path.exists(path) and path != filepath
+                if path != filepath
             ]
             normalized_path_list.append((filepath, success_rate_dtype))
+            filepath_map[pattern_key] = normalized_path_list
+            SingletonConfig.clean_pattern_paths(pattern, table_4sr, persist=False)
+            normalized_path_list = list(filepath_map.get(pattern_key, []))
             updated_config = True
 
         filepath_map[pattern_key] = normalized_path_list

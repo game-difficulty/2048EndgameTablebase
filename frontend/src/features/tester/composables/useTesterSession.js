@@ -66,6 +66,7 @@ export function useTesterSession(activeRef) {
   const showInsights = ref(true);
   const patternCategories = ref(fallbackPatternCategories);
   const availableTargets = ref(['64', '128', '256', '512', '1024', '2048', '4096', '8192', '16384']);
+  const availableTables = ref({});
   const selectedPattern = ref('L3');
   const selectedTarget = ref('512');
   const activePatternCategory = ref(Object.keys(fallbackPatternCategories)[0] || '');
@@ -113,6 +114,14 @@ export function useTesterSession(activeRef) {
   );
   const flatPatterns = computed(() => patternGroups.value.flatMap((group) => group.patterns));
   const activePatternOptions = computed(() => patternCategories.value[activePatternCategory.value] || []);
+  const isPatternAvailable = (pattern) => (
+    Array.isArray(availableTables.value?.[pattern])
+    && availableTables.value[pattern].length > 0
+  );
+  const isTargetAvailable = (target, pattern = selectedPattern.value) => (
+    isPatternAvailable(pattern)
+    && availableTables.value[pattern].map(String).includes(String(target))
+  );
   const currentPatternDisplay = computed(() => (
     selectedPattern.value && selectedTarget.value ? `${selectedPattern.value}_${selectedTarget.value}` : 'Select Pattern'
   ));
@@ -401,12 +410,12 @@ export function useTesterSession(activeRef) {
   const ensureDefaultSelection = () => {
     const groups = patternGroups.value;
     if (!groups.length) return;
-    selectedPattern.value = flatPatterns.value.includes(selectedPattern.value)
+    selectedPattern.value = isPatternAvailable(selectedPattern.value)
       ? selectedPattern.value
-      : (groups[0].patterns[0] || '');
-    selectedTarget.value = availableTargets.value.includes(selectedTarget.value)
+      : (flatPatterns.value.find(isPatternAvailable) || '');
+    selectedTarget.value = isTargetAvailable(selectedTarget.value)
       ? selectedTarget.value
-      : (availableTargets.value.includes('512') ? '512' : (availableTargets.value[0] || ''));
+      : (availableTargets.value.find((target) => isTargetAvailable(target)) || '');
     syncCategoryFromPattern(selectedPattern.value);
   };
 
@@ -420,7 +429,13 @@ export function useTesterSession(activeRef) {
   };
 
   const selectPattern = (pattern) => {
+    if (!isPatternAvailable(pattern)) return;
     selectedPattern.value = pattern;
+    if (!isTargetAvailable(selectedTarget.value, pattern)) {
+      selectedTarget.value = availableTargets.value.find(
+        (target) => isTargetAvailable(target, pattern)
+      ) || '';
+    }
     syncCategoryFromPattern(pattern);
     patternMenuOpen.value = false;
     applyPatternSelection();
@@ -432,7 +447,7 @@ export function useTesterSession(activeRef) {
   };
 
   const applyPatternSelection = () => {
-    if (!selectedPattern.value || !selectedTarget.value) return;
+    if (!selectedPattern.value || !selectedTarget.value || !isTargetAvailable(selectedTarget.value)) return;
     syncCategoryFromPattern(selectedPattern.value);
     triggerAction('TESTER_SELECT_PATTERN', { pattern: selectedPattern.value, target: selectedTarget.value });
   };
@@ -488,6 +503,7 @@ export function useTesterSession(activeRef) {
   const handleTesterBootstrap = (payload) => {
     patternCategories.value = payload?.categories || fallbackPatternCategories;
     availableTargets.value = (payload?.target_tiles || []).map(String);
+    availableTables.value = payload?.available_tables || {};
     ensureDefaultSelection();
     if (!bootstrapSelectionSent && selectedPattern.value && selectedTarget.value) {
       bootstrapSelectionSent = true;
@@ -652,12 +668,15 @@ export function useTesterSession(activeRef) {
     activePatternCategory,
     patternMenuOpen,
     hexInput,
+    currentBoardHex,
     logs,
     recordLength,
     metrics,
     patternMenuRoot,
     patternGroups,
     activePatternOptions,
+    isPatternAvailable,
+    isTargetAvailable,
     currentPatternDisplay,
     isVariant,
     displayedResultDtype,

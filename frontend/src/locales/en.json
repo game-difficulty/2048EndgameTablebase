@@ -104,6 +104,7 @@
       "focusMode": "Focus Mode",
       "showInfo": "Show Info",
       "goToReplay": "Go To Replay",
+      "goToTrainer": "Go To Trainer",
       "goToNotebook": "Go To Notebook",
       "openAnalysis": "Open Analysis"
     },

@@ -4,7 +4,7 @@ import asyncio
 import threading
 from typing import Any
 
-from Config import category_info
+from Config import SingletonConfig, category_info
 from fastapi import WebSocket
 
 from ..actions import Action, EventType
@@ -26,6 +26,7 @@ async def handle_analysis_action(
                 "payload": {
                     "categories": category_info,
                     "target_tiles": [str(2**i) for i in range(6, 15)],
+                    "available_tables": SingletonConfig.get_available_pattern_targets(),
                 },
             }
         )

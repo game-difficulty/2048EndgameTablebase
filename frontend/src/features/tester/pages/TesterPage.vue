@@ -34,10 +34,15 @@
                 v-for="pattern in activePatternOptions"
                 :key="pattern"
                 type="button"
+                :disabled="!isPatternAvailable(pattern)"
                 @click.stop="handlePatternSelect(pattern, $event)"
                 :class="[
                   'rounded-lg px-3 py-2 text-left ui-control font-black transition-colors',
-                  selectedPattern === pattern ? 'surface-prominent text-white' : 'bg-bg-main text-text-main hover:bg-btn-bg/10'
+                  !isPatternAvailable(pattern)
+                    ? 'cursor-not-allowed bg-bg-main text-text-secondary/45 opacity-60'
+                    : selectedPattern === pattern
+                      ? 'surface-prominent text-white'
+                      : 'bg-bg-main text-text-main hover:bg-btn-bg/10'
                 ]"
               >
                 {{ pattern }}
@@ -69,6 +74,7 @@
             data-tester-text-input="true"
             class="flex-1 rounded-lg border border-border-main bg-bg-main px-3 py-2 font-[Consolas,Monaco,monospace] ui-body font-black tracking-[0.06em] text-text-main outline-none transition-colors placeholder:opacity-50 hover:border-accent/40 focus:border-accent"
             placeholder="0000000000000000"
+            @click="selectTextInputContents"
           />
           <button class="action-btn min-w-[58px]" :disabled="!hexInput.trim()" @click="applyManualBoard">{{ $t('tester.controls.set') }}</button>
           <button class="action-btn min-w-[72px]" :disabled="!selectedPattern || !selectedTarget" @click="resetRandom">{{ $t('tester.controls.random') }}</button>
@@ -86,8 +92,9 @@
       </section>
 
       <section class="flex min-w-0 flex-col gap-3">
-        <div class="grid grid-cols-3 gap-2">
+        <div class="grid grid-cols-4 gap-2">
           <button class="action-btn" @click="openReplayView">{{ $t('tester.controls.goToReplay') }}</button>
+          <button class="action-btn" :disabled="!currentBoardHex || !selectedPattern || !selectedTarget" @click="openTrainerView">{{ $t('tester.controls.goToTrainer') }}</button>
           <button class="action-btn" @click="$emit('navigate-tab', 'NotebookView')">{{ $t('tester.controls.goToNotebook') }}</button>
           <button
             class="action-btn tester-btn-accent btn-prominent"
@@ -202,6 +209,7 @@ import { computed, ref, toRef } from 'vue';
 import BaseBoard from '../../../components/BaseBoard.vue';
 import UiSelect from '../../../components/UiSelect.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
+import { selectTextInputContents } from '../../../utils/textInputSelection';
 import { useTesterSession } from '../composables/useTesterSession';
 
 const props = defineProps({
@@ -236,6 +244,14 @@ const openReplayView = () => {
   emit('navigate-tab', 'ReplayReviewView');
 };
 
+const openTrainerView = () => {
+  if (!currentBoardHex.value || !currentPatternDisplay.value) return;
+  emit('navigate-tab', 'TrainerView', {
+    fullPattern: currentPatternDisplay.value,
+    hex: currentBoardHex.value,
+  });
+};
+
 const {
   wsStatus,
   board,
@@ -248,12 +264,15 @@ const {
   activePatternCategory,
   patternMenuOpen,
   hexInput,
+  currentBoardHex,
   logs,
   recordLength,
   metrics,
   patternMenuRoot,
   patternGroups,
   activePatternOptions,
+  isPatternAvailable,
+  isTargetAvailable,
   currentPatternDisplay,
   isVariant,
   displayedResultDtype,
@@ -293,6 +312,7 @@ const targetOptions = computed(() =>
   availableTargets.value.map((target) => ({
     value: target,
     label: target,
+    disabled: !isTargetAvailable(target),
   }))
 );
 

@@ -64,7 +64,7 @@
       </div>
 
       <div class="w-full flex space-x-2 mb-4">
-        <input type="text" v-model="hexInput" :placeholder="$t('inputs.hexPlaceholder')" class="flex-1 px-3 py-2 bg-bg-main border border-border-main rounded ui-body text-text-main font-mono tracking-widest outline-none focus:border-accent transition-all" />
+        <input type="text" v-model="hexInput" :placeholder="$t('inputs.hexPlaceholder')" class="flex-1 px-3 py-2 bg-bg-main border border-border-main rounded ui-body text-text-main font-mono tracking-widest outline-none focus:border-accent transition-all" @click="selectTextInputContents" />
         <button @click="setBoard" class="bg-btn-bg text-white font-bold py-1 px-5 rounded hover:bg-btn-hover ui-body shadow-sm transition-all active:scale-95">
           {{ $t('buttons.set') }}
         </button>
@@ -103,6 +103,7 @@ import { ref, toRef } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
+import { selectTextInputContents } from '../../../utils/textInputSelection';
 import { useGamerSession } from '../composables/useGamerSession';
 
 const props = defineProps({

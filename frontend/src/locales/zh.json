@@ -104,6 +104,7 @@
       "focusMode": "专注模式",
       "showInfo": "显示信息",
       "goToReplay": "跳转到回放",
+      "goToTrainer": "跳转到训练",
       "goToNotebook": "跳转到错题本",
       "openAnalysis": "打开分析"
     },
