@@ -21,6 +21,13 @@ PLUS_ALIAS_DOMAINS = {
 }
 
 
+def _sqlite_timeout_seconds() -> float:
+    try:
+        return max(1.0, float(os.getenv("CLOUD_SQLITE_BUSY_TIMEOUT_SECONDS", "8")))
+    except ValueError:
+        return 8.0
+
+
 def _canonical_email_identity(email: str) -> str:
     value = str(email or "").strip().lower()
     local, separator, domain = value.rpartition("@")
@@ -47,9 +54,12 @@ def _iso_now() -> str:
 def auth_db() -> Iterator[sqlite3.Connection]:
     path = get_auth_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
+    timeout_seconds = _sqlite_timeout_seconds()
+    connection = sqlite3.connect(path, timeout=timeout_seconds)
     connection.row_factory = sqlite3.Row
+    connection.execute(f"PRAGMA busy_timeout = {int(timeout_seconds * 1000)}")
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA synchronous = NORMAL")
     try:
         yield connection
         connection.commit()
@@ -61,6 +71,17 @@ def auth_db() -> Iterator[sqlite3.Connection]:
 
 
 def init_auth_db() -> None:
+    path = get_auth_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    timeout_seconds = _sqlite_timeout_seconds()
+    setup = sqlite3.connect(path, timeout=timeout_seconds)
+    try:
+        setup.execute(f"PRAGMA busy_timeout = {int(timeout_seconds * 1000)}")
+        setup.execute("PRAGMA journal_mode = WAL")
+        setup.execute("PRAGMA synchronous = NORMAL")
+        setup.commit()
+    finally:
+        setup.close()
     with auth_db() as db:
         profile_table_existed = db.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user_profiles'"

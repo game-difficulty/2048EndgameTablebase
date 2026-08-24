@@ -69,6 +69,7 @@
             data-tester-text-input="true"
             class="flex-1 rounded-lg border border-border-main bg-bg-main px-3 py-2 font-[Consolas,Monaco,monospace] ui-body font-black tracking-[0.06em] text-text-main outline-none transition-colors placeholder:opacity-50 hover:border-accent/40 focus:border-accent"
             placeholder="0000000000000000"
+            @click="selectTextInputContents"
           />
           <button class="action-btn min-w-[58px]" :disabled="!hexInput.trim()" @click="handleApplyManualBoard">{{ $t('tester.controls.set') }}</button>
           <button class="action-btn min-w-[72px]" :disabled="!selectedPattern || !selectedTarget" @click="handleResetRandom">{{ $t('tester.controls.random') }}</button>
@@ -86,8 +87,15 @@
       </section>
 
       <section class="tool-page-side-column flex min-w-0 flex-col gap-3">
-        <div class="tool-action-grid-2 grid grid-cols-2 gap-2">
+        <div class="grid grid-cols-3 gap-2">
           <button class="action-btn" @click="openReplayView">{{ $t('tester.controls.goToReplay') }}</button>
+          <button
+            class="action-btn"
+            :disabled="!currentBoardHex || !selectedPattern || !selectedTarget"
+            @click="openTrainerView"
+          >
+            {{ $t('tester.controls.goToTrainer') }}
+          </button>
           <button
             class="action-btn tester-btn-accent btn-prominent"
             @click="$emit('open-analysis', { pattern: selectedPattern, target: selectedTarget })"
@@ -201,6 +209,7 @@ import { computed, nextTick, ref, toRef, watch } from 'vue';
 import BaseBoard from '../../../components/BaseBoard.vue';
 import UiSelect from '../../../components/UiSelect.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
+import { selectTextInputContents } from '../../../utils/textInputSelection';
 import { useTesterSession } from '../composables/useTesterSession';
 
 const props = defineProps({
@@ -235,6 +244,14 @@ const openReplayView = () => {
   emit('navigate-tab', 'ReplayReviewView');
 };
 
+const openTrainerView = () => {
+  if (!currentBoardHex.value || !currentPatternDisplay.value) return;
+  emit('navigate-tab', 'TrainerView', {
+    fullPattern: currentPatternDisplay.value,
+    hex: currentBoardHex.value,
+  });
+};
+
 const {
   wsStatus,
   board,
@@ -247,6 +264,7 @@ const {
   activePatternCategory,
   patternMenuOpen,
   hexInput,
+  currentBoardHex,
   logs,
   recordLength,
   metrics,

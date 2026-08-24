@@ -448,6 +448,7 @@ async def handle_trainer_action(
             )
         else:
             await manager.send_state(websocket)
+        await _start_requested_tablebase_query(payload, session, websocket)
         return True
 
     if action == Action.UNDO:
@@ -480,7 +481,27 @@ async def handle_trainer_action(
             if session.spawn_mode == 3 and last_move not in (None, "spawn")
             else 0
         )
-        await manager.send_state(websocket)
+        client_optimistic = bool(payload.get("client_optimistic"))
+        expected_board = None
+        if client_optimistic:
+            try:
+                expected_board = np_u64(
+                    int(str(payload.get("expected_board_hex") or ""), 16)
+                )
+            except (TypeError, ValueError):
+                expected_board = None
+        if client_optimistic and expected_board == session.board_encoded:
+            await websocket.send_json(
+                {
+                    "action": Message.TRAINER_BOARD_SYNCED,
+                    "data": {
+                        "board_hex": f"{int(session.board_encoded):016x}",
+                        "edit_source": "undo",
+                    },
+                }
+            )
+        else:
+            await manager.send_state(websocket)
         return True
 
     if action == Action.SET_CELL:

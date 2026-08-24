@@ -46,7 +46,7 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick } from 'vue';
+import { ref, watch, nextTick, onUnmounted } from 'vue';
 
 const emit = defineEmits(['cell-click', 'swipe']);
 
@@ -76,6 +76,7 @@ const activeTiles = ref([]);
 let animTimeout = null;
 let revealMergeTimeout = null;
 let revealAppearTimeout = null;
+let animationEpoch = 0;
 const MERGE_GLOW_MIN_VALUE = 2048;
 const MERGE_GLOW_STEPS = 5;
 const SWIPE_THRESHOLD_PX = 28;
@@ -251,11 +252,13 @@ const revealAppearingTiles = () => {
 
 const syncToBoardRaw = () => {
     fastForwardAnimations(true);
-    activeTiles.value = [];
+    const nextTiles = [];
     for(let i=0; i<16; i++) {
         if (shouldRenderAsActiveTile(props.board[i])) {
-            activeTiles.value.push(withGlowDefaults({
-                id: `tile-${tileIdCounter++}`,
+            nextTiles.push(withGlowDefaults({
+                // Snapshot updates use cell-stable keys so undo/seek does not
+                // destroy and recreate every visible tile.
+                id: `snapshot-${i}`,
                 row: Math.floor(i / 4),
                 col: i % 4,
                 value: props.board[i],
@@ -267,9 +270,11 @@ const syncToBoardRaw = () => {
             }));
         }
     }
+    activeTiles.value = nextTiles;
 };
 
-watch(() => [props.board, props.isVariant], async ([newBoard]) => {
+watch(() => [props.board, props.metadata, props.isVariant], async ([newBoard]) => {
+    const epoch = ++animationEpoch;
     if (!hasMoveAnimationMetadata(props.metadata)) {
         // Init or resync without animation
         clearAnimationTimers();
@@ -287,6 +292,7 @@ watch(() => [props.board, props.isVariant], async ([newBoard]) => {
     // Force snap to DOM to prevent diagonal sliding
     activeTiles.value.forEach(t => t.isInterrupting = true);
     await nextTick();
+    if (epoch !== animationEpoch) return;
     // Force browser reflow
     void document.body.offsetHeight;
     
@@ -362,16 +368,19 @@ watch(() => [props.board, props.isVariant], async ([newBoard]) => {
     activeTiles.value = newActive;
     
     revealMergeTimeout = setTimeout(() => {
+        if (epoch !== animationEpoch) return;
         revealMergedTiles();
         revealMergeTimeout = null;
     }, 100);
 
     revealAppearTimeout = setTimeout(() => {
+        if (epoch !== animationEpoch) return;
         revealAppearingTiles();
         revealAppearTimeout = null;
     }, 125);
 
     animTimeout = setTimeout(() => {
+        if (epoch !== animationEpoch) return;
         fastForwardAnimations(false);
         animTimeout = null;
     }, 300);
@@ -380,6 +389,11 @@ watch(() => [props.board, props.isVariant], async ([newBoard]) => {
 
 // Initial setup render
 syncToBoardRaw();
+
+onUnmounted(() => {
+    animationEpoch += 1;
+    clearAnimationTimers();
+});
 
 const getTilePosStyle = (tile) => {
   return {

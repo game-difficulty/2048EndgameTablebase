@@ -86,6 +86,13 @@ class ReplayQuotaIdempotencyTests(unittest.TestCase):
             ).fetchone()["count"]
         self.assertEqual(count, 1)
 
+    def test_auth_database_uses_wal_mode(self):
+        with auth_db() as db:
+            journal_mode = db.execute("PRAGMA journal_mode").fetchone()[0]
+            busy_timeout = db.execute("PRAGMA busy_timeout").fetchone()[0]
+        self.assertEqual(str(journal_mode).lower(), "wal")
+        self.assertGreaterEqual(int(busy_timeout), 1_000)
+
     def test_http_routes_charge_once_and_return_latest_binary(self):
         app = FastAPI()
         app.include_router(replay_router)

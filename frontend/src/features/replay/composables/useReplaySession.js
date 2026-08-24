@@ -80,6 +80,8 @@ export function useReplaySession(activeRef, emit) {
   let controller = null;
   let demoTimer = null;
   let positionTimer = null;
+  let sourcePersistenceHandle = null;
+  let sourcePersistenceUsesIdleCallback = false;
   let restoreStarted = false;
 
   const isZh = () => String(currentLanguage.value || 'en').startsWith('zh');
@@ -269,6 +271,31 @@ export function useReplaySession(activeRef, emit) {
     }, 250);
   };
 
+  const cancelSourcePersistence = () => {
+    if (sourcePersistenceHandle === null) return;
+    if (sourcePersistenceUsesIdleCallback && typeof window.cancelIdleCallback === 'function') {
+      window.cancelIdleCallback(sourcePersistenceHandle);
+    } else {
+      window.clearTimeout(sourcePersistenceHandle);
+    }
+    sourcePersistenceHandle = null;
+  };
+
+  const persistReplaySourceLater = (buffer, replayMetadata) => {
+    cancelSourcePersistence();
+    const persistSource = () => {
+      sourcePersistenceHandle = null;
+      saveReplaySource(buffer, replayMetadata);
+    };
+    if (typeof window.requestIdleCallback === 'function') {
+      sourcePersistenceUsesIdleCallback = true;
+      sourcePersistenceHandle = window.requestIdleCallback(persistSource, { timeout: 1_000 });
+    } else {
+      sourcePersistenceUsesIdleCallback = false;
+      sourcePersistenceHandle = window.setTimeout(persistSource, 0);
+    }
+  };
+
   const applyState = (state) => {
     board.value = state.board;
     metadata.value = state.animation || {};
@@ -303,8 +330,8 @@ export function useReplaySession(activeRef, emit) {
     performanceLabels.value = [...PERFORMANCE_LABELS];
     applyState(controller.setStep(step));
     if (persist) {
-      saveReplaySource(parsed.rawBuffer, replayMetadata);
       saveReplayPosition(currentStep.value);
+      persistReplaySourceLater(parsed.rawBuffer, replayMetadata);
     }
   };
 
@@ -316,7 +343,10 @@ export function useReplaySession(activeRef, emit) {
       return t('replay.status.noLatest');
     }
     if (error?.code === 'REPLAY_TOO_LARGE') return t('replay.status.tooLarge');
-    if (error?.code === 'NETWORK_ERROR' || /failed to fetch|network/iu.test(String(error?.message || ''))) {
+    if (
+      ['NETWORK_ERROR', 'NETWORK_TIMEOUT'].includes(error?.code)
+      || /failed to fetch|network/iu.test(String(error?.message || ''))
+    ) {
       return t('replay.status.networkError');
     }
     return t('replay.status.invalidFile');
@@ -508,6 +538,7 @@ export function useReplaySession(activeRef, emit) {
     document.removeEventListener('click', closeMenuOnClick);
     stopDemo();
     if (positionTimer) window.clearTimeout(positionTimer);
+    cancelSourcePersistence();
     if (loaded.value) saveReplayPosition(currentStep.value);
   });
 

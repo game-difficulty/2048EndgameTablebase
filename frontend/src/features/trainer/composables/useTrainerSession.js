@@ -103,6 +103,8 @@ export function useTrainerSession(activeRef) {
   let resultsStaleTimer = null;
   let resultsPlaceholderTimer = null;
   let tablebaseRetryTimer = null;
+  let paletteSyncTimer = null;
+  let paletteEditDirty = false;
   let pendingOptimisticMoveBoardHex = '';
   let pendingServerStateQuery = null;
   const resultsRefreshPhase = ref('idle');
@@ -169,7 +171,11 @@ export function useTrainerSession(activeRef) {
   });
 
   const togglePalette = (val) => {
-    currentPaletteValue.value = currentPaletteValue.value === val ? null : val;
+    const previousValue = currentPaletteValue.value;
+    currentPaletteValue.value = previousValue === val ? null : val;
+    if (previousValue !== null && currentPaletteValue.value === null) {
+      finishPaletteEditing();
+    }
   };
 
   const resultPrecision = computed(() => {
@@ -1106,6 +1112,42 @@ export function useTrainerSession(activeRef) {
     return applyCachedResultsForBoard(normalized, { clearOnMiss: clearOnCacheMiss });
   };
 
+  const clearPaletteSyncTimer = () => {
+    if (paletteSyncTimer) {
+      window.clearTimeout(paletteSyncTimer);
+      paletteSyncTimer = null;
+    }
+  };
+
+  const sendPaletteBoardSync = ({ query = false } = {}) => {
+    clearPaletteSyncTimer();
+    if (!paletteEditDirty || !currentBoardHex.value || wsStatus.value !== 'connected') return false;
+    const prepared = query
+      ? prepareResultsRequest(currentBoardHex.value, 'palette-exit')
+      : null;
+    triggerAction('SET_BOARD', {
+      hex_str: currentBoardHex.value,
+      client_optimistic: true,
+      edit_source: query ? 'palette-commit' : 'palette',
+      query_id: prepared?.requestId,
+    });
+    if (query) paletteEditDirty = false;
+    return true;
+  };
+
+  const schedulePaletteBoardSync = () => {
+    clearPaletteSyncTimer();
+    paletteSyncTimer = window.setTimeout(() => {
+      paletteSyncTimer = null;
+      sendPaletteBoardSync();
+    }, 150);
+  };
+
+  function finishPaletteEditing({ query = true } = {}) {
+    if (!paletteEditDirty) return false;
+    return sendPaletteBoardSync({ query });
+  }
+
   const setBoard = () => {
     const normalized = normalizeTrainerBoardHex(hexInput.value);
     if (!normalized || !requireAuth()) return;
@@ -1113,6 +1155,9 @@ export function useTrainerSession(activeRef) {
     clearDemoTimer();
     finishResultsRefresh();
     clearStepQueue();
+    clearPaletteSyncTimer();
+    paletteEditDirty = false;
+    currentPaletteValue.value = null;
     applyLocalBoardSnapshot(normalized);
     triggerAction('SET_BOARD', { hex_str: normalized, client_optimistic: true });
     queryResults('set-board');
@@ -1181,17 +1226,17 @@ export function useTrainerSession(activeRef) {
     const edit = buildTrainerBoardEdit(board.value, row, col, nextVal);
     if (!edit) return;
     applyLocalBoardSnapshot(edit.boardHex);
-    triggerAction('SET_BOARD', {
-      hex_str: edit.boardHex,
-      client_optimistic: true,
-      edit_source: 'palette',
-    });
+    paletteEditDirty = true;
+    schedulePaletteBoardSync();
   };
 
   const onPatternChange = () => {
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
+    finishPaletteEditing({ query: false });
+    paletteEditDirty = false;
+    currentPaletteValue.value = null;
     if (!patternType.value || !targetValue.value) return;
     applyTablebase({ loadDefault: true });
   };
@@ -1470,6 +1515,8 @@ export function useTrainerSession(activeRef) {
   });
 
   onUnmounted(() => {
+    finishPaletteEditing({ query: false });
+    clearPaletteSyncTimer();
     window.removeEventListener('keydown', handleKeydown);
     window.removeEventListener('trainer-practice-jump', handleTrainerPracticeJump);
     document.removeEventListener('click', closePatternMenuOnClick);

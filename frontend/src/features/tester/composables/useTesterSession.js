@@ -97,6 +97,8 @@ export function useTesterSession(activeRef) {
   const tableFound = ref(false);
   const ready = ref(false);
   const lookupPending = ref(false);
+  const queryInFlight = ref(false);
+  const queuedMoveDirection = ref('');
   const statusMessage = ref('');
   const recordLength = ref(0);
   const pendingPracticeJump = ref(null);
@@ -154,6 +156,7 @@ export function useTesterSession(activeRef) {
     ready.value
     && tableFound.value
     && !lookupPending.value
+    && !queryInFlight.value
     && Object.values(results.value).some((value) => typeof value === 'number')
     && wsStatus.value === 'connected'
   ));
@@ -615,6 +618,7 @@ export function useTesterSession(activeRef) {
       boardHex: normalizedBoard,
       fullPattern: currentPatternDisplay.value,
     };
+    queryInFlight.value = true;
     return { queryId, normalizedBoard, cacheHit };
   };
 
@@ -632,11 +636,27 @@ export function useTesterSession(activeRef) {
   };
 
   const move = (dir) => {
-    if (!canMove.value || !requireAuth()) return false;
+    const normalizedDirection = String(dir || '').toLowerCase();
+    if (!['up', 'down', 'left', 'right'].includes(normalizedDirection) || !requireAuth()) {
+      return false;
+    }
+    if (!canMove.value) {
+      if (
+        ready.value
+        && tableFound.value
+        && wsStatus.value === 'connected'
+        && (lookupPending.value || queryInFlight.value)
+      ) {
+        queuedMoveDirection.value = normalizedDirection;
+        return true;
+      }
+      return false;
+    }
+    queuedMoveDirection.value = '';
     const fromBoardHex = currentBoardHex.value;
     const transition = buildOptimisticMoveTransition(
       board.value,
-      dir,
+      normalizedDirection,
       isVariant.value,
       Number(appConfig.value['4_spawn_rate'] ?? 0.1),
     );
@@ -648,7 +668,7 @@ export function useTesterSession(activeRef) {
     hexInput.value = transition.hex;
     const preparedQuery = prepareTablebaseQuery(transition.hex);
     client?.send('TESTER_MOVE', {
-      dir,
+      dir: normalizedDirection,
       from_board_hex: fromBoardHex,
       board_hex: transition.hex,
       spawn_index: transition.spawnIndex,
@@ -656,6 +676,17 @@ export function useTesterSession(activeRef) {
       query_id: preparedQuery?.queryId,
     });
     return true;
+  };
+
+  const flushQueuedMove = () => {
+    const direction = queuedMoveDirection.value;
+    if (!direction || !canMove.value) return;
+    queuedMoveDirection.value = '';
+    window.queueMicrotask(() => {
+      if (!move(direction) && (lookupPending.value || queryInFlight.value)) {
+        queuedMoveDirection.value = direction;
+      }
+    });
   };
 
   const saveLog = () => {
@@ -718,6 +749,7 @@ export function useTesterSession(activeRef) {
     hexInput.value = currentBoardHex.value;
     if (activeQuery && activeQuery.boardHex !== currentBoardHex.value) {
       activeQuery = null;
+      queryInFlight.value = false;
     }
     resultDtype.value = payload?.dtype || '?';
     results.value = payload?.results || {};
@@ -781,6 +813,8 @@ export function useTesterSession(activeRef) {
         results: results.value,
       });
       lookupPending.value = false;
+      queryInFlight.value = false;
+      flushQueuedMove();
     } else if (
       ready.value
       && tableFound.value
@@ -800,6 +834,10 @@ export function useTesterSession(activeRef) {
     resultDtype.value = payload?.dtype || '?';
     results.value = payload?.results || {};
     lookupPending.value = !!payload?.lookup_pending;
+    if (!lookupPending.value) {
+      queryInFlight.value = false;
+      flushQueuedMove();
+    }
     if (Array.isArray(payload?.logs_delta)) {
       logs.value = [...logs.value, ...payload.logs_delta];
     }
@@ -830,6 +868,7 @@ export function useTesterSession(activeRef) {
     if (payload?.code) {
       if (payload?.query_id && payload.query_id === activeQuery?.queryId) {
         activeQuery = null;
+        queryInFlight.value = false;
       }
       if (
         payload.code !== 'STALE_TABLEBASE_QUERY'
@@ -869,6 +908,7 @@ export function useTesterSession(activeRef) {
     resultDtype.value = payload?.dtype || '?';
     results.value = payload?.results || {};
     lookupPending.value = false;
+    queryInFlight.value = false;
     if (!payload?.query_id || payload.query_id === activeQuery?.queryId) {
       activeQuery = null;
     }
@@ -876,6 +916,7 @@ export function useTesterSession(activeRef) {
     if (Array.isArray(payload?.logs_delta)) {
       logs.value = [...logs.value, ...payload.logs_delta];
     }
+    flushQueuedMove();
   };
 
   const handleTablebasePrefetch = (payload) => {
@@ -926,6 +967,7 @@ export function useTesterSession(activeRef) {
     }
     else if (message.action === 'TOKEN_REQUIRED' && activeQuery) {
       activeQuery = null;
+      queryInFlight.value = false;
       clearTablebaseResultCache();
       resultDtype.value = '?';
       results.value = {};
@@ -940,6 +982,7 @@ export function useTesterSession(activeRef) {
       && ['AUTH_REQUIRED', 'TOKEN_REQUIRED', 'ERROR'].includes(message.action)
     ) {
       activeQuery = null;
+      queryInFlight.value = false;
       client?.send('TESTER_GET_INIT');
     }
     else if (message.action === 'TESTER_EXPORT_LOG') {
@@ -981,6 +1024,8 @@ export function useTesterSession(activeRef) {
       queryRetryTimer = null;
     }
     activeQuery = null;
+    queryInFlight.value = false;
+    queuedMoveDirection.value = '';
     client?.disconnect();
     client = null;
     wsStatus.value = 'disconnected';
@@ -1080,6 +1125,7 @@ export function useTesterSession(activeRef) {
     activePatternCategory,
     patternMenuOpen,
     hexInput,
+    currentBoardHex,
     logs,
     recordLength,
     metrics,

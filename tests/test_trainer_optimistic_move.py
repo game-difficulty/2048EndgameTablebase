@@ -69,6 +69,90 @@ class TrainerOptimisticMoveTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_optimistic_board_commit_starts_query_after_ack(self):
+        session = GameSession("trainer_optimistic_board_commit")
+        session.user_id = 1
+        session.current_pattern = "L3_256"
+        session.pattern_settings = ["L3", "256"]
+        session.board_encoded = encoded([0] * 16)
+        session.history = [(session.board_encoded, 0)]
+        session.move_history = [None]
+        target = encoded([2, 4, 8, 16, *([0] * 12)])
+        manager = RecordingManager()
+        websocket = RecordingWebSocket()
+
+        with patch(
+            "backend.handlers.tablebase_query.handle_tablebase_query_action",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as query:
+            await handle_trainer_action(
+                Action.SET_BOARD,
+                {
+                    "hex_str": f"{int(target):016x}",
+                    "client_optimistic": True,
+                    "edit_source": "palette-commit",
+                    "query_id": "palette-final-query",
+                },
+                session,
+                websocket,
+                manager,
+            )
+
+        self.assertEqual(manager.states, [])
+        self.assertEqual(websocket.messages[0]["action"], Message.TRAINER_BOARD_SYNCED)
+        query.assert_awaited_once()
+        self.assertEqual(query.await_args.args[1]["board_hex"], f"{int(target):016x}")
+
+    async def test_optimistic_undo_uses_lightweight_ack_when_boards_match(self):
+        first = encoded([2, 0, 0, 0, *([0] * 12)])
+        second = encoded([2, 2, 0, 0, *([0] * 12)])
+        session = GameSession("trainer_optimistic_undo")
+        session.board_encoded = second
+        session.history = [(first, 0), (second, 0)]
+        session.move_history = [None, "spawn"]
+        manager = RecordingManager()
+        websocket = RecordingWebSocket()
+
+        await handle_trainer_action(
+            Action.UNDO,
+            {
+                "client_optimistic": True,
+                "expected_board_hex": f"{int(first):016x}",
+            },
+            session,
+            websocket,
+            manager,
+        )
+
+        self.assertEqual(session.board_encoded, first)
+        self.assertEqual(manager.states, [])
+        self.assertEqual(websocket.messages[0]["action"], Message.TRAINER_BOARD_SYNCED)
+        self.assertEqual(websocket.messages[0]["data"]["edit_source"], "undo")
+
+    async def test_optimistic_undo_resyncs_when_expected_board_is_wrong(self):
+        first = encoded([2, 0, 0, 0, *([0] * 12)])
+        second = encoded([2, 2, 0, 0, *([0] * 12)])
+        session = GameSession("trainer_optimistic_undo_mismatch")
+        session.board_encoded = second
+        session.history = [(first, 0), (second, 0)]
+        session.move_history = [None, "spawn"]
+        manager = RecordingManager()
+
+        await handle_trainer_action(
+            Action.UNDO,
+            {
+                "client_optimistic": True,
+                "expected_board_hex": "ffffffffffffffff",
+            },
+            session,
+            object(),
+            manager,
+        )
+
+        self.assertEqual(session.board_encoded, first)
+        self.assertEqual(manager.states, [{}])
+
     async def test_random_spawn_submission_is_validated_and_accepted(self):
         session = GameSession("trainer_optimistic_random")
         session.user_id = 1

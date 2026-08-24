@@ -15,19 +15,25 @@ export function createReplayRequestId() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+const REPLAY_REQUEST_TIMEOUT_MS = 8_000;
+
 async function requestWithTransportRetry(url, init, handleResponse) {
   let lastError = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), REPLAY_REQUEST_TIMEOUT_MS);
     try {
-      const response = await fetch(url, init);
+      const response = await fetch(url, { ...init, signal: controller.signal });
       return await handleResponse(response);
     } catch (error) {
       if (error?.status) throw error;
       lastError = error;
+    } finally {
+      window.clearTimeout(timeout);
     }
   }
   const error = new Error(lastError?.message || 'Network request failed.');
-  error.code = 'NETWORK_ERROR';
+  error.code = lastError?.name === 'AbortError' ? 'NETWORK_TIMEOUT' : 'NETWORK_ERROR';
   throw error;
 }
 
