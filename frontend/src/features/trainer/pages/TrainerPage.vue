@@ -95,7 +95,7 @@
             data-trainer-hex-input="true"
             :placeholder="$t('trainer.board.hexPlaceholder')"
             class="flex-1 px-3 py-2 bg-bg-main border border-border-main rounded ui-body font-mono text-text-main outline-none focus:border-accent transition-all placeholder:opacity-50"
-            @click="selectTextInputContents"
+            @focus="selectTextInputContentsOnFocus"
           />
           <button @click="setBoard" class="action-btn ui-control px-4 !bg-btn-bg !text-white border-btn-bg hover:bg-btn-hover font-black uppercase shadow-sm">{{ $t('trainer.board.set') }}</button>
         </div>
@@ -279,7 +279,7 @@ import { computed, ref, toRef } from 'vue';
 import BaseBoard from '../../../components/BaseBoard.vue';
 import UiSelect from '../../../components/UiSelect.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
-import { selectTextInputContents } from '../../../utils/textInputSelection';
+import { selectTextInputContentsOnFocus } from '../../../utils/textInputSelection';
 import { useTrainerSession } from '../composables/useTrainerSession';
 
 const props = defineProps({

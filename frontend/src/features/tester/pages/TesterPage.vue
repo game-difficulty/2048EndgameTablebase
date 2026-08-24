@@ -74,7 +74,7 @@
             data-tester-text-input="true"
             class="flex-1 rounded-lg border border-border-main bg-bg-main px-3 py-2 font-[Consolas,Monaco,monospace] ui-body font-black tracking-[0.06em] text-text-main outline-none transition-colors placeholder:opacity-50 hover:border-accent/40 focus:border-accent"
             placeholder="0000000000000000"
-            @click="selectTextInputContents"
+            @focus="selectTextInputContentsOnFocus"
           />
           <button class="action-btn min-w-[58px]" :disabled="!hexInput.trim()" @click="applyManualBoard">{{ $t('tester.controls.set') }}</button>
           <button class="action-btn min-w-[72px]" :disabled="!selectedPattern || !selectedTarget" @click="resetRandom">{{ $t('tester.controls.random') }}</button>
@@ -209,7 +209,7 @@ import { computed, ref, toRef } from 'vue';
 import BaseBoard from '../../../components/BaseBoard.vue';
 import UiSelect from '../../../components/UiSelect.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
-import { selectTextInputContents } from '../../../utils/textInputSelection';
+import { selectTextInputContentsOnFocus } from '../../../utils/textInputSelection';
 import { useTesterSession } from '../composables/useTesterSession';
 
 const props = defineProps({
