@@ -116,6 +116,91 @@ class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(spawned_values[:empty_count], [2] * empty_count)
         self.assertEqual(spawned_values[empty_count:], [4] * empty_count)
 
+    def test_deterministic_prefetch_matches_frontend_rng_contract(self):
+        board = np.zeros((4, 4), dtype=np.int32)
+        board[0, :2] = 2
+        child = query_handler._deterministic_prefetch_child(
+            np_u64(encode_board(board)),
+            direction="left",
+            use_variant=False,
+            rng_context=query_handler._PrefetchRngContext(
+                state=(1, 2, 3, 4),
+                turn=7,
+                spawn_rate_4=0.1,
+            ),
+        )
+
+        self.assertIsNotNone(child)
+        child_board, child_rng = child
+        self.assertEqual(
+            decode_board(np_u64(child_board))[0].tolist(),
+            [4, 4, 0, 0],
+        )
+        self.assertEqual(child_rng.state, (12295, 1029, 1029, 25165824))
+        self.assertEqual(child_rng.turn, 8)
+
+    async def test_tester_prefetch_streams_eight_complete_board_results(self):
+        scheduler = TablebaseQueryScheduler(worker_count=4)
+        session = GameSession("tester_deterministic_prefetch_test")
+        session.user_id = 1
+        session.auth_session_id = 2
+        session.tester_full_pattern = "L3_256"
+        session.tester_pattern = ["L3", "256"]
+        session.tester_table_found = True
+        session.tester_tablebase_provider_kind = "local"
+        session.book_reader = ConstantReader()
+        board = np.zeros((4, 4), dtype=np.int32)
+        board[0, :2] = 2
+        session.board_encoded = np_u64(encode_board(board))
+        websocket = RecordingWebSocket()
+
+        try:
+            with (
+                patch.object(query_handler, "tablebase_query_scheduler", scheduler),
+                patch.object(query_handler, "get_catalog_version", return_value="catalog-test"),
+                patch.object(query_handler, "reserve_operation_tokens", return_value=object()),
+                patch.object(query_handler, "finalize_reservation"),
+                patch.object(query_handler, "get_token_balance", return_value={"total": 100}),
+            ):
+                await query_handler.handle_tablebase_query_action(
+                    Action.TABLEBASE_QUERY,
+                    {
+                        "page": "tester",
+                        "query_id": "query-deterministic",
+                        "full_pattern": "L3_256",
+                        "board_hex": f"{int(session.board_encoded):016x}",
+                        "prefetch_rng": {
+                            "version": 1,
+                            "state": [1, 2, 3, 4],
+                            "turn": 0,
+                            "spawn_rate_4": 0.1,
+                        },
+                    },
+                    session,
+                    websocket,
+                )
+                while query_handler._TABLEBASE_QUERY_TASKS:
+                    await asyncio.gather(
+                        *list(query_handler._TABLEBASE_QUERY_TASKS),
+                        return_exceptions=True,
+                    )
+
+            self.assertEqual(websocket.messages[0]["action"], "TABLEBASE_QUERY_RESULT")
+            prefetch_messages = [
+                message for message in websocket.messages
+                if message["action"] == "TABLEBASE_PREFETCH"
+            ]
+            self.assertEqual(len(prefetch_messages), 8)
+            self.assertTrue(
+                all(len(message["data"]["entries"]) == 1 for message in prefetch_messages)
+            )
+            self.assertEqual(len(session.book_reader.calls), 9)
+            depths = [message["data"]["entries"][0]["depth"] for message in prefetch_messages]
+            self.assertEqual(depths.count(1), 3)
+            self.assertGreater(max(depths), 1)
+        finally:
+            await scheduler.close()
+
     async def test_current_result_is_sent_before_eight_two_tile_prefetches(self):
         scheduler = TablebaseQueryScheduler(worker_count=4)
         session = GameSession("trainer_handler_test")

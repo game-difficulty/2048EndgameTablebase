@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import math
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -9,6 +11,7 @@ from engine_core.BoardMover import s_move_board as r_move_board
 from engine_core.VBoardMover import decode_board, encode_board, s_move_board as v_move_board
 
 from ..actions import Action, Message
+from ..gamer_ranked.prng import Xoshiro128StarStar
 from ..quota.errors import InsufficientTokens
 from ..quota.service import (
     cancel_reservation,
@@ -34,6 +37,23 @@ from ..tester import _tester_append_post_lookup_logs
 
 _TABLEBASE_QUERY_TASKS: set[asyncio.Task] = set()
 _DIRECTION_MAP = {"left": 1, "right": 2, "up": 3, "down": 4}
+_PREFETCH_RNG_VERSION = 1
+
+
+@dataclass(frozen=True)
+class _PrefetchRngContext:
+    state: tuple[int, int, int, int]
+    turn: int
+    spawn_rate_4: float
+
+
+@dataclass(frozen=True)
+class _PrefetchNode:
+    board_encoded: int
+    rng: _PrefetchRngContext
+    depth: int
+    direction: str
+    order: int
 
 
 def _track_task(task: asyncio.Task) -> asyncio.Task:
@@ -164,6 +184,129 @@ def _prefetch_boards(
     return children
 
 
+def _parse_prefetch_rng(
+    payload: dict[str, Any],
+    page: str,
+) -> _PrefetchRngContext | None:
+    if page != "tester":
+        return None
+    raw = payload.get("prefetch_rng")
+    if not isinstance(raw, dict) or raw.get("version") != _PREFETCH_RNG_VERSION:
+        return None
+    raw_state = raw.get("state")
+    if not isinstance(raw_state, list) or len(raw_state) != 4:
+        return None
+    state = []
+    for value in raw_state:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value <= 0xFFFFFFFF
+        ):
+            return None
+        state.append(value)
+    if not any(state):
+        return None
+    try:
+        turn = int(raw.get("turn", 0))
+        spawn_rate_4 = float(raw.get("spawn_rate_4", 0.1))
+    except (TypeError, ValueError):
+        return None
+    if not 0 <= turn <= 1_000_000 or not math.isfinite(spawn_rate_4):
+        return None
+    if not 0.0 <= spawn_rate_4 <= 1.0:
+        return None
+    return _PrefetchRngContext(
+        state=tuple(state),
+        turn=turn,
+        spawn_rate_4=spawn_rate_4,
+    )
+
+
+def _direction_order(result: TablebaseLookupResult) -> list[str]:
+    directions = []
+    for direction in (*result.results.keys(), *_DIRECTION_MAP.keys()):
+        normalized = str(direction).lower()
+        if normalized in _DIRECTION_MAP and normalized not in directions:
+            directions.append(normalized)
+    return directions
+
+
+def _deterministic_prefetch_child(
+    board_encoded: int,
+    *,
+    direction: str,
+    use_variant: bool,
+    rng_context: _PrefetchRngContext,
+) -> tuple[int, _PrefetchRngContext] | None:
+    direction_code = _DIRECTION_MAP.get(str(direction or "").lower())
+    if direction_code is None:
+        return None
+    move_fn = v_move_board if use_variant else r_move_board
+    moved_board, _score = move_fn(np_u64(board_encoded), direction_code)
+    moved_board = np_u64(moved_board)
+    if moved_board == np_u64(board_encoded):
+        return None
+
+    board = decode_board(moved_board).copy()
+    empty_positions = [
+        index for index, value in enumerate(board.reshape(-1).tolist()) if int(value) == 0
+    ]
+    if not empty_positions:
+        return None
+    rng = Xoshiro128StarStar(list(rng_context.state))
+    position_roll = rng.next_float()
+    spawn_index = empty_positions[
+        min(len(empty_positions) - 1, int(position_roll * len(empty_positions)))
+    ]
+    spawn_value = 4 if rng.next_float() < rng_context.spawn_rate_4 else 2
+    row, col = divmod(spawn_index, 4)
+    board[row, col] = spawn_value
+    return (
+        u64(encode_board(board)),
+        _PrefetchRngContext(
+            state=tuple(rng.state),
+            turn=rng_context.turn + 1,
+            spawn_rate_4=rng_context.spawn_rate_4,
+        ),
+    )
+
+
+def _deterministic_prefetch_nodes(
+    board_encoded: int,
+    *,
+    directions: list[str],
+    use_variant: bool,
+    rng_context: _PrefetchRngContext,
+    depth: int,
+    seen_boards: set[int],
+) -> list[_PrefetchNode]:
+    nodes = []
+    for order, direction in enumerate(directions):
+        child = _deterministic_prefetch_child(
+            board_encoded,
+            direction=direction,
+            use_variant=use_variant,
+            rng_context=rng_context,
+        )
+        if child is None:
+            continue
+        child_board, child_rng = child
+        if child_board in seen_boards:
+            continue
+        seen_boards.add(child_board)
+        nodes.append(
+            _PrefetchNode(
+                board_encoded=child_board,
+                rng=child_rng,
+                depth=depth,
+                direction=direction,
+                order=order,
+            )
+        )
+    return nodes
+
+
 async def _send_query_result(
     websocket: WebSocket,
     *,
@@ -206,7 +349,25 @@ async def _run_prefetch(
     parent_spec: TablebaseLookupSpec,
     parent_result: TablebaseLookupResult,
     supporter: bool,
+    prefetch_rng: _PrefetchRngContext | None,
 ) -> None:
+    if page == "tester":
+        if prefetch_rng is None:
+            return
+        await _run_deterministic_prefetch(
+            websocket,
+            page=page,
+            query_id=query_id,
+            stream_key=stream_key,
+            generation=generation,
+            catalog_version=catalog_version,
+            parent_spec=parent_spec,
+            parent_result=parent_result,
+            supporter=supporter,
+            prefetch_rng=prefetch_rng,
+        )
+        return
+
     child_boards = _prefetch_boards(
         parent_spec.board_encoded,
         best_move=parent_result.best_move,
@@ -276,6 +437,130 @@ async def _run_prefetch(
         return
 
 
+async def _run_deterministic_prefetch(
+    websocket: WebSocket,
+    *,
+    page: str,
+    query_id: str,
+    stream_key: str,
+    generation: int,
+    catalog_version: str,
+    parent_spec: TablebaseLookupSpec,
+    parent_result: TablebaseLookupResult,
+    supporter: bool,
+    prefetch_rng: _PrefetchRngContext,
+) -> None:
+    seen_boards = {u64(parent_spec.board_encoded)}
+    frontier = _deterministic_prefetch_nodes(
+        parent_spec.board_encoded,
+        directions=_direction_order(parent_result),
+        use_variant=parent_spec.use_variant,
+        rng_context=prefetch_rng,
+        depth=1,
+        seen_boards=seen_boards,
+    )
+    scheduled_count = 0
+
+    async def wait_for_node(handle, node):
+        return node, await handle.wait()
+
+    while frontier and scheduled_count < MAX_PREFETCH_CHILDREN:
+        wave = frontier[: MAX_PREFETCH_CHILDREN - scheduled_count]
+        scheduled_count += len(wave)
+        waiters = []
+        handles = []
+        for node in wave:
+            child_spec = TablebaseLookupSpec(
+                board_encoded=node.board_encoded,
+                pattern=parent_spec.pattern,
+                target=parent_spec.target,
+                full_pattern=parent_spec.full_pattern,
+                use_variant=parent_spec.use_variant,
+                book_reader=parent_spec.book_reader,
+                provider_kind=parent_spec.provider_kind,
+                catalog_version=catalog_version,
+            )
+            handle = await tablebase_query_scheduler.submit(
+                child_spec,
+                stream_key=stream_key,
+                supporter=supporter,
+                lane="prefetch",
+                supersede=False,
+                generation=generation,
+                allow_overload=True,
+            )
+            handles.append(handle)
+            waiters.append(asyncio.create_task(wait_for_node(handle, node)))
+
+        completed = []
+        superseded = False
+        for waiter in asyncio.as_completed(waiters):
+            try:
+                node, result = await waiter
+            except TablebaseQuerySuperseded:
+                superseded = True
+                break
+            except Exception:
+                continue
+            completed.append((node, result))
+            if tablebase_query_scheduler.current_generation(stream_key) != generation:
+                superseded = True
+                break
+            try:
+                await websocket.send_json(
+                    {
+                        "action": Message.TABLEBASE_PREFETCH,
+                        "data": {
+                            "page": page,
+                            "query_id": query_id,
+                            "catalog_version": catalog_version,
+                            "full_pattern": parent_spec.full_pattern,
+                            "parent_board_hex": safe_hex(parent_spec.board_encoded),
+                            "entries": [
+                                {
+                                    "board_hex": result.board_hex,
+                                    "results": sanitize_config(result.results),
+                                    "dtype": result.dtype,
+                                    "best_move": result.best_move,
+                                    "found": result.found,
+                                    "depth": node.depth,
+                                    "via_direction": node.direction,
+                                }
+                            ],
+                        },
+                    }
+                )
+            except Exception:
+                superseded = True
+                break
+
+        if superseded:
+            for handle in handles:
+                handle.cancel()
+            for waiter in waiters:
+                waiter.cancel()
+            await asyncio.gather(*waiters, return_exceptions=True)
+            return
+        await asyncio.gather(*waiters, return_exceptions=True)
+
+        frontier = []
+        for node, result in sorted(completed, key=lambda item: item[0].order):
+            if scheduled_count + len(frontier) >= MAX_PREFETCH_CHILDREN:
+                break
+            if not result.best_move:
+                continue
+            frontier.extend(
+                _deterministic_prefetch_nodes(
+                    result.board_encoded,
+                    directions=[result.best_move],
+                    use_variant=parent_spec.use_variant,
+                    rng_context=node.rng,
+                    depth=node.depth + 1,
+                    seen_boards=seen_boards,
+                )
+            )
+
+
 async def _finish_query(
     session: GameSession,
     websocket: WebSocket,
@@ -288,6 +573,7 @@ async def _finish_query(
     handle,
     reservation,
     supporter: bool,
+    prefetch_rng: _PrefetchRngContext | None = None,
 ) -> None:
     try:
         result = await handle.wait()
@@ -425,6 +711,7 @@ async def _finish_query(
         parent_spec=spec,
         parent_result=result,
         supporter=supporter,
+        prefetch_rng=prefetch_rng,
     )
 
 
@@ -491,6 +778,7 @@ async def handle_tablebase_query_action(
         catalog_version=catalog_version,
     )
     supporter = _session_is_supporter(session)
+    prefetch_rng = _parse_prefetch_rng(payload, page)
     stream_key = f"{session.user_id}:{session.client_id}:{page}"
     try:
         handle = await tablebase_query_scheduler.submit(
@@ -546,6 +834,7 @@ async def handle_tablebase_query_action(
                 handle=handle,
                 reservation=reservation,
                 supporter=supporter,
+                prefetch_rng=prefetch_rng,
             )
         )
     )

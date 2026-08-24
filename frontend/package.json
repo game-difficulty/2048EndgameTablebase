@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test:replay": "node --test tests/replayEngine.test.js",
     "test:tablebase-cache": "node --test tests/tablebaseResultCache.test.js",
+    "test:tester-prefetch": "node --test tests/testerPrefetchRng.test.js",
     "test:trainer-state": "node --test tests/trainerBoardState.test.js",
     "test:gamer-ranked": "node --test tests/rankedGamerEngine.test.js"
   },

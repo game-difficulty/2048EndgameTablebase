@@ -15,6 +15,11 @@ import {
   getCachedTablebaseResult,
   setCachedTablebaseResult,
 } from '../../../services/tablebases/tablebaseResultCache';
+import {
+  buildTesterPrefetchPayload,
+  createTesterPrefetchState,
+  createTesterSpawnRandomSource,
+} from '../../../services/tablebases/testerPrefetchRng';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { getStableWsClientId } from '../../../services/ws/clientIds';
 import { buildOptimisticMoveTransition } from '../../replay/engine/replayTransition';
@@ -133,6 +138,18 @@ export function useTesterSession(activeRef) {
   let lastQueryScope = '';
   let activeQuery = null;
   let queryRetryTimer = null;
+  let testerPrefetchState = createTesterPrefetchState();
+  let pendingMovePrefetch = null;
+
+  const spawnRate4 = () => Math.max(
+    0,
+    Math.min(1, Number(appConfig.value['4_spawn_rate'] ?? 0.1) || 0),
+  );
+
+  const resetTesterPrefetchState = () => {
+    testerPrefetchState = createTesterPrefetchState();
+    pendingMovePrefetch = null;
+  };
 
   const patternGroups = computed(() =>
     Object.entries(patternCategories.value || {}).map(([category, patterns]) => ({
@@ -534,6 +551,7 @@ export function useTesterSession(activeRef) {
   const applyPatternSelection = () => {
     if (!selectedPattern.value || !selectedTarget.value) return;
     clearTablebaseResultCache();
+    resetTesterPrefetchState();
     lastQueryScope = '';
     activeQuery = null;
     syncCategoryFromPattern(selectedPattern.value);
@@ -565,9 +583,13 @@ export function useTesterSession(activeRef) {
     applyPatternSelection();
   };
 
-  const resetRandom = () => triggerAction('TESTER_RESET_RANDOM');
+  const resetRandom = () => {
+    resetTesterPrefetchState();
+    return triggerAction('TESTER_RESET_RANDOM');
+  };
   const applyManualBoard = () => {
     if (hexInput.value.trim()) {
+      resetTesterPrefetchState();
       triggerAction('TESTER_SET_BOARD', { hex_str: hexInput.value.trim() });
     }
   };
@@ -619,7 +641,15 @@ export function useTesterSession(activeRef) {
       fullPattern: currentPatternDisplay.value,
     };
     queryInFlight.value = true;
-    return { queryId, normalizedBoard, cacheHit };
+    return {
+      queryId,
+      normalizedBoard,
+      cacheHit,
+      prefetchRng: buildTesterPrefetchPayload(
+        testerPrefetchState,
+        spawnRate4(),
+      ),
+    };
   };
 
   const queryTablebase = (boardHex, { useCache = true } = {}) => {
@@ -631,6 +661,7 @@ export function useTesterSession(activeRef) {
       catalog_version: catalogVersion.value,
       full_pattern: currentPatternDisplay.value,
       board_hex: prepared.normalizedBoard,
+      prefetch_rng: prepared.prefetchRng,
     });
     return prepared.cacheHit;
   };
@@ -654,14 +685,25 @@ export function useTesterSession(activeRef) {
     }
     queuedMoveDirection.value = '';
     const fromBoardHex = currentBoardHex.value;
+    const prefetchStateBeforeMove = {
+      state: [...testerPrefetchState.state],
+      turn: testerPrefetchState.turn,
+    };
+    const deterministicSpawn = createTesterSpawnRandomSource(testerPrefetchState);
     const transition = buildOptimisticMoveTransition(
       board.value,
       normalizedDirection,
       isVariant.value,
-      Number(appConfig.value['4_spawn_rate'] ?? 0.1),
+      spawnRate4(),
+      deterministicSpawn.randomSource,
     );
     if (!transition) return false;
 
+    testerPrefetchState = deterministicSpawn.nextState();
+    pendingMovePrefetch = {
+      boardHex: transition.hex,
+      previousState: prefetchStateBeforeMove,
+    };
     board.value = transition.board;
     metadata.value = transition.metadata;
     currentBoardHex.value = transition.hex;
@@ -674,6 +716,7 @@ export function useTesterSession(activeRef) {
       spawn_index: transition.spawnIndex,
       spawn_value: transition.spawnValue,
       query_id: preparedQuery?.queryId,
+      prefetch_rng: preparedQuery?.prefetchRng,
     });
     return true;
   };
@@ -720,6 +763,7 @@ export function useTesterSession(activeRef) {
       target: selectedTarget.value,
       hex,
     };
+    resetTesterPrefetchState();
     if (wsStatus.value === 'connected') {
       triggerAction('TESTER_SELECT_PATTERN', {
         pattern: selectedPattern.value,
@@ -739,13 +783,22 @@ export function useTesterSession(activeRef) {
 
   const handleTesterState = (payload) => {
     const previousBoardHex = currentBoardHex.value;
+    const incomingBoardHex = String(payload?.hex_str || currentBoardHex.value).toLowerCase();
+    if (pendingMovePrefetch) {
+      if (incomingBoardHex !== pendingMovePrefetch.boardHex) {
+        testerPrefetchState = pendingMovePrefetch.previousState;
+      }
+      pendingMovePrefetch = null;
+    } else if (incomingBoardHex && incomingBoardHex !== previousBoardHex) {
+      resetTesterPrefetchState();
+    }
     const incomingLabels = payload?.metrics?.performance_labels;
     performanceLabels.value = Array.isArray(incomingLabels) && incomingLabels.length
       ? [...incomingLabels]
       : [...fallbackPerformanceLabels];
     board.value = Array.isArray(payload?.board) ? payload.board : new Array(16).fill(0);
     metadata.value = payload?.animation || {};
-    currentBoardHex.value = payload?.hex_str || currentBoardHex.value;
+    currentBoardHex.value = incomingBoardHex;
     hexInput.value = currentBoardHex.value;
     if (activeQuery && activeQuery.boardHex !== currentBoardHex.value) {
       activeQuery = null;
@@ -846,6 +899,9 @@ export function useTesterSession(activeRef) {
   const handleTesterMoveAccepted = (payload) => {
     const acceptedBoardHex = String(payload?.board_hex || '');
     if (!acceptedBoardHex || acceptedBoardHex !== currentBoardHex.value) return;
+    if (pendingMovePrefetch?.boardHex === acceptedBoardHex) {
+      pendingMovePrefetch = null;
+    }
     lastStep.value = payload?.last_step || lastStep.value;
     lookupPending.value = !!payload?.lookup_pending
       && !Object.values(results.value).some((value) => typeof value === 'number');
@@ -1026,6 +1082,10 @@ export function useTesterSession(activeRef) {
     activeQuery = null;
     queryInFlight.value = false;
     queuedMoveDirection.value = '';
+    if (pendingMovePrefetch) {
+      testerPrefetchState = pendingMovePrefetch.previousState;
+      pendingMovePrefetch = null;
+    }
     client?.disconnect();
     client = null;
     wsStatus.value = 'disconnected';

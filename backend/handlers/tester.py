@@ -75,6 +75,7 @@ async def _start_requested_tablebase_query(
             "query_id": query_id,
             "full_pattern": session.tester_full_pattern,
             "board_hex": f"{int(session.board_encoded):016x}",
+            "prefetch_rng": payload.get("prefetch_rng"),
         },
         session,
         websocket,
