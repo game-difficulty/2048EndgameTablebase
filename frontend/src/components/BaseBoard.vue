@@ -391,7 +391,10 @@ const getTilePosStyle = (tile) => {
 
 const getTileDisplayValue = (value) => {
   if (!value) return '';
-  if (value === 32768 && (props.dis32k || isVariantWallValue(value))) return '';
+  if (
+    isVariantWallValue(value)
+    || (props.dis32k && (Number(value) === 32768 || isVariantNonMergingValue(value)))
+  ) return '';
   return value;
 };
 
