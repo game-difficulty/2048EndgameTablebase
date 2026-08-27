@@ -257,7 +257,8 @@
         "no_improvement": "验证通过，未刷新最高分",
         "rejected": "成绩验证未通过",
         "expired": "排位对局已过期",
-        "submission_failed": "提交失败，重试"
+        "submission_failed": "提交失败，重试",
+        "submission_limited": "普通成绩24小时提交额度已用完"
       }
     },
     "leaderboard": {
@@ -449,6 +450,12 @@
       "trophyTitle": "达成成就",
       "gameOverTitle": "游戏结束",
       "gameOverMessage": "已没有可用移动。"
+    },
+    "ranked": {
+      "active": "排位中",
+      "verifying": "验证中",
+      "verified": "已验证",
+      "unranked": "不参与排名"
     },
     "powerups": {
       "bomb": "炸弹",

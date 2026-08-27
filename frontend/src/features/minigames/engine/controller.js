@@ -10,9 +10,11 @@ import {
   defaultPowerupCounts,
   maybeAwardRandomPowerup,
 } from './powerups.js';
+import { createMinigameRuntime, restoreMinigameRuntime } from './runtime.js';
+import { verificationState } from './rankedRecorder.js';
 
 export class MinigameController {
-  constructor({ difficulty = 1, summaries = {}, snapshotKey } = {}) {
+  constructor({ difficulty = 1, summaries = {}, snapshotKey, runtime = null, onOperation = null } = {}) {
     this.difficulty = Number(difficulty) ? 1 : 0;
     this.currentGameId = '';
     this.engine = null;
@@ -22,6 +24,25 @@ export class MinigameController {
     this.selectionCache = null;
     this.summaries = summaries || {};
     this.snapshotKey = snapshotKey;
+    this.runtime = runtime || createMinigameRuntime();
+    this.onOperation = typeof onOperation === 'function' ? onOperation : null;
+    this.lastOperationAccepted = false;
+  }
+
+  setRuntime(runtime) {
+    this.runtime = runtime || createMinigameRuntime();
+  }
+
+  setOperationListener(listener) {
+    this.onOperation = typeof listener === 'function' ? listener : null;
+  }
+
+  emitOperation(operation) {
+    this.onOperation?.({
+      operation: { ...operation },
+      atMs: this.runtime.now(),
+      state: verificationState(this),
+    });
   }
 
   setSummaries(summaries) {
@@ -39,7 +60,7 @@ export class MinigameController {
     };
   }
 
-  async startGame(gameId, snapshot = null) {
+  async startGame(gameId, snapshot = null, runtime = null) {
     const definition = MINIGAME_BY_ID[String(gameId || '')];
     if (!definition) {
       throw new Error('Unknown minigame');
@@ -48,7 +69,14 @@ export class MinigameController {
       throw new Error(`Minigame '${definition.title}' is not implemented yet.`);
     }
     const engineSnapshot = snapshot?.engine && typeof snapshot.engine === 'object' ? snapshot.engine : null;
-    this.engine = createEngine(definition, this.difficulty, engineSnapshot);
+    const baseRuntime = runtime || this.runtime;
+    this.runtime = runtime || (snapshot?.runtime
+      ? restoreMinigameRuntime(snapshot.runtime, {
+        clock: baseRuntime?.clock,
+        evilSpawn: baseRuntime?.evilSpawn,
+      })
+      : baseRuntime || createMinigameRuntime());
+    this.engine = createEngine(definition, this.difficulty, engineSnapshot, this.runtime);
     this.currentGameId = definition.id;
     this.activeMode = null;
     this.interactionPhase = 0;
@@ -91,10 +119,12 @@ export class MinigameController {
     }
     const previousScore = Number(this.engine.score) || 0;
     await this.engine.doMove(direction);
+    this.lastOperationAccepted = true;
     const awarded = maybeAwardRandomPowerup(this, (Number(this.engine.score) || 0) - previousScore);
     if (awarded) {
       this.engine.queueMessage('toast', `+1 ${awarded.charAt(0).toUpperCase()}${awarded.slice(1)}`);
     }
+    this.emitOperation({ type: 'move', direction: String(direction || '').toLowerCase() });
     return this.statePayload();
   }
 
@@ -110,7 +140,11 @@ export class MinigameController {
     if (!this.engine) {
       throw new Error('No active minigame');
     }
-    this.engine.handleCustomAction(String(key || ''), String(phase || 'trigger'));
+    const actionKey = String(key || '').toLowerCase();
+    const actionPhase = String(phase || 'trigger').toLowerCase();
+    const changed = this.engine.handleCustomAction(actionKey, actionPhase);
+    this.lastOperationAccepted = Boolean(changed);
+    if (changed) this.emitOperation({ type: 'custom', key: actionKey, phase: actionPhase });
     return this.statePayload();
   }
 
@@ -118,7 +152,7 @@ export class MinigameController {
     if (!this.engine) {
       throw new Error('No active minigame');
     }
-    activatePowerup(this, mode);
+    this.lastOperationAccepted = Boolean(activatePowerup(this, mode));
     return this.statePayload();
   }
 
@@ -131,7 +165,22 @@ export class MinigameController {
     if (!this.engine) {
       throw new Error('No active minigame');
     }
-    applyTargetAction(this, Number(index));
+    const mode = this.activeMode;
+    const source = Number(this.selectionCache?.sourceIndex ?? -1);
+    const target = Number(index);
+    const changed = applyTargetAction(this, target);
+    this.lastOperationAccepted = Boolean(changed);
+    if (changed && mode === 'bomb') this.emitOperation({ type: 'bomb', index: target });
+    if (changed && mode === 'twist') this.emitOperation({ type: 'twist', index: target });
+    if (changed && mode === 'glove') this.emitOperation({ type: 'glove', source, target });
+    return this.statePayload();
+  }
+
+  tick() {
+    if (!this.engine) throw new Error('No active minigame');
+    this.engine.checkGameOver();
+    this.lastOperationAccepted = Boolean(this.engine.isOver);
+    this.emitOperation({ type: 'tick' });
     return this.statePayload();
   }
 
@@ -146,6 +195,7 @@ export class MinigameController {
       schemaVersion: 2,
       gameId: this.currentGameId,
       difficulty: this.difficulty,
+      runtime: this.runtime.exportSnapshot(),
       engine: this.engine.exportSnapshot(),
       powerupCounts: { ...this.powerupCounts },
     };

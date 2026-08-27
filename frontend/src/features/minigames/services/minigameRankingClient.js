@@ -10,12 +10,58 @@ async function readJson(response, { authenticated = false } = {}) {
       emitAuthRequired();
     }
     const detail = payload?.detail;
-    const error = new Error(typeof detail === 'string' ? detail : `HTTP ${response.status}`);
+    const error = new Error(
+      typeof detail === 'string' ? detail : String(detail?.message || detail?.code || `HTTP ${response.status}`)
+    );
     error.status = response.status;
+    error.code = typeof detail === 'string' ? detail : String(detail?.code || '');
     throw error;
   }
   return payload;
 }
+
+export function createMinigameRequestId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (typeof globalThis.crypto?.getRandomValues === 'function') globalThis.crypto.getRandomValues(bytes);
+  else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+async function rankedRequest(path, { method = 'GET', body } = {}) {
+  const response = await fetch(getBackendUrl(path), {
+    method,
+    credentials: 'include',
+    headers: authHeaders({
+      Accept: 'application/json',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    }),
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return readJson(response, { authenticated: true });
+}
+
+export const createMinigameRankedRun = ({ requestId, gameId, difficulty }) => rankedRequest(
+  '/api/minigame-rankings/runs',
+  {
+    method: 'POST',
+    body: { request_id: requestId, game_id: gameId, difficulty: Number(difficulty) ? 1 : 0 },
+  }
+);
+
+export const qualifyMinigameRankedRun = (runId, payload) => rankedRequest(
+  `/api/minigame-rankings/runs/${encodeURIComponent(runId)}/qualify`,
+  { method: 'POST', body: payload }
+);
+
+export const submitMinigameRankedRun = (runId, payload) => rankedRequest(
+  `/api/minigame-rankings/runs/${encodeURIComponent(runId)}/submit`,
+  { method: 'POST', body: payload }
+);
+
+export const fetchMinigameRankedRun = (runId) => rankedRequest(
+  `/api/minigame-rankings/runs/${encodeURIComponent(runId)}`
+);
 
 export async function fetchMinigameCatalog() {
   const response = await fetch(getBackendUrl('/api/minigame-rankings/catalog'), {
@@ -46,17 +92,4 @@ export async function fetchMinigameTrophyLeaderboard({ difficulty = 1, limit = 1
     { headers: { Accept: 'application/json' }, cache: 'no-store' }
   );
   return readJson(response);
-}
-
-export async function submitMinigameScore(payload) {
-  const response = await fetch(getBackendUrl('/api/minigame-rankings/scores'), {
-    method: 'POST',
-    credentials: 'include',
-    headers: authHeaders({
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    }),
-    body: JSON.stringify(payload),
-  });
-  return readJson(response, { authenticated: true });
 }

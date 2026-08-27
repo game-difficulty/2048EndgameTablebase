@@ -117,14 +117,15 @@ export function moveBoard(board, directionOrCode) {
   };
 }
 
-export function genNewNum(board, spawnRate = SPAWN_RATE4) {
+export function genNewNum(board, spawnRate = SPAWN_RATE4, rng = null) {
   const next = cloneBoard(board);
   const positions = emptyPositions(next);
   if (!positions.length) {
     return { board: next, emptyCount: 0, index: -1, value: -1 };
   }
-  const [row, col] = randomChoice(positions);
-  const value = Math.random() < Number(spawnRate || 0) ? 2 : 1;
+  const [row, col] = randomChoice(positions, rng);
+  const roll = rng && typeof rng.nextFloat === 'function' ? rng.nextFloat() : Math.random();
+  const value = roll < Number(spawnRate || 0) ? 2 : 1;
   next[row][col] = value;
   return {
     board: next,

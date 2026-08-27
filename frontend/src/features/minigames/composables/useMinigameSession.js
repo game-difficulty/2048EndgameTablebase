@@ -1,11 +1,19 @@
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { useAuthState } from '../../../services/auth/authState';
 import { createLocalStorageStore } from '../../../services/storage/localStorageStore';
 import { MinigameController } from '../engine/controller';
+import { MinigameRankedRecorder } from '../engine/rankedRecorder';
+import { createMinigameRuntime, restoreMinigameRuntime } from '../engine/runtime';
 import { createEmptyMinigameMenu, createEmptyMinigameState } from '../model/minigameViewState';
-import { submitMinigameScore } from '../services/minigameRankingClient';
+import {
+  createMinigameRankedRun,
+  createMinigameRequestId,
+  fetchMinigameRankedRun,
+  qualifyMinigameRankedRun,
+  submitMinigameRankedRun,
+} from '../services/minigameRankingClient';
 
 const isTextEntryElement = (element) => {
   if (!(element instanceof HTMLElement)) {
@@ -37,7 +45,7 @@ const defaultMinigameState = () => ({
 
 const minigameStore = createLocalStorageStore({
   key: 'minigames',
-  version: 2,
+  version: 3,
   defaultValue: defaultMinigameState(),
   migrate(value) {
     const previous = value && typeof value === 'object' ? value : {};
@@ -80,41 +88,81 @@ export function useMinigameSession(activeRef) {
     level: '',
   });
   const pendingOverlay = ref(null);
+  const rankedStatus = ref('unranked');
 
   let controller = null;
+  let activeRecorder = null;
   let toastTimer = null;
   let inputLockTimer = null;
+  let rankedPollTimer = null;
+  let timedTickTimer = null;
+  let timedTickInFlight = false;
   const submittedFinals = new Set();
 
   const submitFinishedGame = async (state) => {
     const snapshot = state?.snapshot;
     const engine = snapshot?.engine;
-    if (!authUser.value || !snapshot?.gameId || !engine?.isOver) return;
+    const recorder = activeRecorder;
+    if (!authUser.value || !snapshot?.gameId || !engine?.isOver || !recorder?.ended) return;
+    if (Number(recorder.userId) !== Number(authUser.value.id)) return;
+    if (['invalid', 'too_large', 'not_candidate', 'pending', 'verified', 'no_improvement'].includes(recorder.submissionState)) return;
     const board = Array.isArray(state.board) ? state.board.map((value) => Number(value)) : [];
     const rows = Number(state.shape?.rows || 0);
     const cols = Number(state.shape?.cols || 0);
     if (!board.length || rows * cols !== board.length) return;
-    const fingerprint = [
-      authUser.value.id,
-      snapshot.gameId,
-      Number(snapshot.difficulty) ? 1 : 0,
-      Number(state.score || 0),
-      Number(engine.isPassed || 0),
-      board.join(','),
-    ].join(':');
+    const fingerprint = recorder.runId;
     if (submittedFinals.has(fingerprint)) return;
     submittedFinals.add(fingerprint);
     try {
-      const result = await submitMinigameScore({
-        game_id: snapshot.gameId,
-        difficulty: Number(snapshot.difficulty) ? 1 : 0,
+      recorder.submissionState = 'qualifying';
+      rankedStatus.value = 'qualifying';
+      persistRecorderState();
+      const qualification = await qualifyMinigameRankedRun(recorder.runId, {
+        run_token: recorder.runToken,
         score: Math.max(0, Math.trunc(Number(state.score || 0))),
         trophy_tier: Math.max(0, Math.min(4, Math.trunc(Number(engine.isPassed || 0)))),
         highest_tile_exp: Math.max(0, Math.min(63, Math.trunc(Number(engine.highestTileExp || engine.maxNum || 0)))),
         final_board: board.map((value) => Math.trunc(value)),
         board_rows: rows,
         board_cols: cols,
+        action_count: recorder.mutableActionCount,
+        elapsed_ms: recorder.elapsedMs,
       });
+      if (!qualification?.candidate) {
+        recorder.submissionState = 'not_candidate';
+        rankedStatus.value = 'not_candidate';
+        persistRecorderState();
+        return;
+      }
+      if (!qualification?.submission_token) {
+        const recoveredStatus = String(qualification?.status || 'submit_failed');
+        recorder.submissionState = recoveredStatus;
+        rankedStatus.value = recoveredStatus;
+        persistRecorderState();
+        if (['pending', 'validating'].includes(recoveredStatus)) {
+          scheduleRankedStatusPoll(recorder.runId);
+        } else if (recoveredStatus === 'verified') {
+          window.dispatchEvent(new CustomEvent('minigame-score-updated', {
+            detail: {
+              gameId: snapshot.gameId,
+              difficulty: Number(snapshot.difficulty) ? 1 : 0,
+              result: qualification,
+            },
+          }));
+        }
+        return;
+      }
+      recorder.submissionState = 'submitting';
+      rankedStatus.value = 'submitting';
+      persistRecorderState();
+      const result = await submitMinigameRankedRun(recorder.runId, {
+        submission_token: qualification.submission_token,
+        record_encoding: recorder.encode(),
+      });
+      recorder.submissionState = String(result?.status || 'pending');
+      rankedStatus.value = recorder.submissionState;
+      persistRecorderState();
+      scheduleRankedStatusPoll(recorder.runId);
       window.dispatchEvent(new CustomEvent('minigame-score-updated', {
         detail: {
           gameId: snapshot.gameId,
@@ -125,7 +173,10 @@ export function useMinigameSession(activeRef) {
     } catch (error) {
       if (error?.status !== 401) {
         submittedFinals.delete(fingerprint);
-        console.warn('Minigame score submission failed.', error);
+        recorder.submissionState = 'submit_failed';
+        rankedStatus.value = 'submit_failed';
+        persistRecorderState();
+        console.warn('Ranked minigame submission failed.', error);
       }
     }
   };
@@ -134,12 +185,31 @@ export function useMinigameSession(activeRef) {
   const currentView = computed(() => (hasActiveGame.value ? 'play' : 'menu'));
   const menuSections = computed(() => menuData.value.sections || []);
   const difficulty = computed(() => Number(menuData.value.difficulty ?? 1));
+  const recordOperation = ({ operation, atMs, state }) => {
+    if (!activeRecorder || activeRecorder.ended) return;
+    try {
+      const recorded = activeRecorder.record(operation, atMs, state);
+      if (!recorded) {
+        rankedStatus.value = activeRecorder.submissionState;
+        return;
+      }
+      if (state?.engine?.isOver) {
+        const finished = activeRecorder.finish(atMs, state);
+        rankedStatus.value = finished ? 'finished' : activeRecorder.submissionState;
+      }
+    } catch (error) {
+      activeRecorder.submissionState = 'invalid';
+      rankedStatus.value = 'invalid';
+      console.warn('Ranked minigame recording stopped.', error);
+    }
+  };
   const ensureController = () => {
     if (!controller) {
       controller = new MinigameController({
         difficulty: Number(storedState.value.difficulty) ? 1 : 0,
         summaries: storedState.value.summaries || {},
         snapshotKey,
+        onOperation: recordOperation,
       });
     }
     controller.setDifficulty(Number(storedState.value.difficulty) ? 1 : 0);
@@ -220,33 +290,92 @@ export function useMinigameSession(activeRef) {
     refreshMenu();
   };
 
+  const persistRecorderState = () => {
+    const gameId = String(gameState.value?.gameId || '');
+    if (!gameId || !activeRecorder) return;
+    const key = snapshotKey(gameId, gameState.value?.snapshot?.difficulty ?? difficulty.value);
+    storedState.value = minigameStore.update((current) => {
+      const existing = current?.activeGameSnapshots?.[key];
+      if (!existing) return current;
+      return {
+        ...current,
+        activeGameSnapshots: {
+          ...(current.activeGameSnapshots || {}),
+          [key]: {
+            ...existing,
+            rankedRun: activeRecorder.exportSnapshot(),
+          },
+        },
+      };
+    });
+  };
+
+  const scheduleRankedStatusPoll = (runId, attempt = 0) => {
+    if (rankedPollTimer) window.clearTimeout(rankedPollTimer);
+    if (!runId || attempt >= 30) return;
+    rankedPollTimer = window.setTimeout(async () => {
+      rankedPollTimer = null;
+      try {
+        const result = await fetchMinigameRankedRun(runId);
+        const status = String(result?.status || '');
+        if (activeRecorder?.runId === runId) {
+          activeRecorder.submissionState = status || activeRecorder.submissionState;
+          rankedStatus.value = activeRecorder.submissionState;
+          persistRecorderState();
+        }
+        if (['pending', 'validating'].includes(status)) {
+          scheduleRankedStatusPoll(runId, attempt + 1);
+        } else if (status === 'verified') {
+          window.dispatchEvent(new CustomEvent('minigame-score-updated', {
+            detail: {
+              gameId: gameState.value?.gameId,
+              difficulty: Number(gameState.value?.snapshot?.difficulty) ? 1 : 0,
+              result,
+            },
+          }));
+        }
+      } catch (error) {
+        if (error?.status !== 401) scheduleRankedStatusPoll(runId, attempt + 1);
+      }
+    }, Math.min(10_000, 1500 + attempt * 500));
+  };
+
   const handleStateData = (payload) => {
+    const effectivePayload = payload?.snapshot
+      ? {
+        ...payload,
+        snapshot: {
+          ...payload.snapshot,
+          rankedRun: activeRecorder?.exportSnapshot?.() || null,
+        },
+      }
+      : payload;
     const previousStatus = String(gameState.value?.status || '');
     const receivedAt = Date.now();
     const nextState = {
       ...createEmptyMinigameState(),
-      ...(payload || {}),
+      ...(effectivePayload || {}),
       shape: {
         ...createEmptyMinigameState().shape,
-        ...(payload?.shape || {}),
+        ...(effectivePayload?.shape || {}),
       },
       view: {
         ...createEmptyMinigameState().view,
-        ...(payload?.view || {}),
+        ...(effectivePayload?.view || {}),
       },
       hud: {
         ...createEmptyMinigameState().hud,
-        ...normalizeHudPanels(payload?.hud || {}, receivedAt),
+        ...normalizeHudPanels(effectivePayload?.hud || {}, receivedAt),
       },
       powerups: {
         ...createEmptyMinigameState().powerups,
-        ...(payload?.powerups || {}),
+        ...(effectivePayload?.powerups || {}),
       },
       interaction: {
         ...createEmptyMinigameState().interaction,
-        ...(payload?.interaction || {}),
+        ...(effectivePayload?.interaction || {}),
       },
-      messages: payload?.messages || {},
+      messages: effectivePayload?.messages || {},
     };
     gameState.value = nextState;
     void submitFinishedGame(nextState);
@@ -385,18 +514,92 @@ export function useMinigameSession(activeRef) {
     refreshMenu();
   };
 
+  const restoreRankedRecorder = (snapshot, gameId, selectedDifficulty) => {
+    const restored = MinigameRankedRecorder.restore(snapshot?.rankedRun);
+    const expiresAtMs = Date.parse(String(restored?.expiresAt || ''));
+    if (
+      !restored
+      || !authUser.value
+      || Number(restored.userId) !== Number(authUser.value.id)
+      || restored.gameId !== gameId
+      || restored.difficulty !== (Number(selectedDifficulty) ? 1 : 0)
+      || (Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now())
+    ) {
+      return null;
+    }
+    if (!restored.ended) restored.lastActionAtMs = Date.now();
+    return restored;
+  };
+
+  const markRankedRunInvalid = () => {
+    if (!activeRecorder?.ended) {
+      activeRecorder.submissionState = 'invalid';
+      rankedStatus.value = 'invalid';
+      persistRecorderState();
+    }
+  };
+
+  const createRankedContext = async (gameId, selectedDifficulty) => {
+    activeRecorder = null;
+    rankedStatus.value = 'unranked';
+    if (!authUser.value) return createMinigameRuntime();
+    try {
+      const run = await createMinigameRankedRun({
+        requestId: createMinigameRequestId(),
+        gameId,
+        difficulty: selectedDifficulty,
+      });
+      const runtime = createMinigameRuntime({
+        seedHex: run.seed_hex,
+        onDeterminismFailure: markRankedRunInvalid,
+      });
+      activeRecorder = new MinigameRankedRecorder({
+        runId: run.run_id,
+        userId: authUser.value.id,
+        gameId,
+        difficulty: selectedDifficulty,
+        seedHex: run.seed_hex,
+        rulesVersion: run.rules_version,
+        runToken: run.run_token,
+        expiresAt: run.expires_at,
+        startedAtMs: Date.now(),
+      });
+      rankedStatus.value = 'active';
+      return runtime;
+    } catch (error) {
+      if (error?.status !== 401) console.warn('Unable to create ranked minigame run.', error);
+      return createMinigameRuntime();
+    }
+  };
+
   const startGame = async (gameId) => {
     lastMenuFocusGameId.value = String(gameId || '');
     closeOverlay();
     const key = snapshotKey(gameId, difficulty.value);
     const snapshot = storedState.value.activeGameSnapshots?.[key] || null;
-    await runLocalAction((localController) => localController.startGame(gameId, snapshot));
+    activeRecorder = restoreRankedRecorder(snapshot, String(gameId || ''), difficulty.value);
+    rankedStatus.value = activeRecorder?.submissionState || 'unranked';
+    let runtime = null;
+    if (!snapshot) runtime = await createRankedContext(String(gameId || ''), difficulty.value);
+    else if (activeRecorder && snapshot?.runtime) {
+      runtime = restoreMinigameRuntime(snapshot.runtime, {
+        onDeterminismFailure: markRankedRunInvalid,
+      });
+    }
+    await runLocalAction((localController) => localController.startGame(gameId, snapshot, runtime));
+    if (['pending', 'validating'].includes(activeRecorder?.submissionState)) {
+      scheduleRankedStatusPoll(activeRecorder.runId);
+    } else if (activeRecorder?.ended) {
+      void submitFinishedGame(gameState.value);
+    }
   };
 
   const backToMenu = () => {
     lastMenuFocusGameId.value = String(gameState.value?.gameId || lastMenuFocusGameId.value || '');
     closeOverlay();
     ensureController().backToMenu();
+    activeRecorder = null;
+    rankedStatus.value = 'unranked';
     gameState.value = createEmptyMinigameState();
     refreshMenu();
   };
@@ -414,7 +617,10 @@ export function useMinigameSession(activeRef) {
         };
       });
     }
-    await runLocalAction((localController) => localController.newGame());
+    const gameId = String(gameState.value?.gameId || '');
+    if (!gameId) return;
+    const runtime = await createRankedContext(gameId, difficulty.value);
+    await runLocalAction((localController) => localController.startGame(gameId, null, runtime));
   };
 
   const requestInfo = () => {
@@ -474,14 +680,40 @@ export function useMinigameSession(activeRef) {
     move(direction);
   };
 
+  watch(
+    () => authUser.value?.id ?? null,
+    (userId) => {
+      if (activeRecorder && Number(activeRecorder.userId) !== Number(userId)) {
+        activeRecorder = null;
+        rankedStatus.value = 'unranked';
+      }
+    }
+  );
+
   onMounted(() => {
     refreshMenu();
     window.addEventListener('keydown', handleKeydown, true);
+    timedTickTimer = window.setInterval(async () => {
+      if (timedTickInFlight || gameState.value?.gameId !== 'blitzkrieg') return;
+      if (gameState.value?.status === 'game_over') return;
+      const panel = (gameState.value?.hud?.customPanels || []).find((item) => item?.type === 'countdown');
+      if (!panel?.running) return;
+      const remaining = Number(panel.remainingMs || 0) - Math.max(0, Date.now() - Number(panel.syncedAt || Date.now()));
+      if (remaining > 0) return;
+      timedTickInFlight = true;
+      try {
+        await runLocalAction((localController) => localController.tick());
+      } finally {
+        timedTickInFlight = false;
+      }
+    }, 250);
   });
 
   onUnmounted(() => {
     if (toastTimer) window.clearTimeout(toastTimer);
     if (inputLockTimer) window.clearTimeout(inputLockTimer);
+    if (rankedPollTimer) window.clearTimeout(rankedPollTimer);
+    if (timedTickTimer) window.clearInterval(timedTickTimer);
     window.removeEventListener('keydown', handleKeydown, true);
     controller?.close();
     controller = null;
@@ -497,6 +729,7 @@ export function useMinigameSession(activeRef) {
     lastMenuFocusGameId,
     toastMessage,
     overlay,
+    rankedStatus,
     closeOverlay,
     setDifficulty,
     startGame,

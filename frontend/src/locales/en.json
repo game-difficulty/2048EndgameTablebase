@@ -257,7 +257,8 @@
         "no_improvement": "Verified, below personal best",
         "rejected": "Score verification failed",
         "expired": "Ranked run expired",
-        "submission_failed": "Retry submission"
+        "submission_failed": "Retry submission",
+        "submission_limited": "24-hour standard submission limit reached"
       }
     },
     "leaderboard": {
@@ -449,6 +450,12 @@
       "trophyTitle": "Challenge Clear",
       "gameOverTitle": "Game Over",
       "gameOverMessage": "No more moves remain."
+    },
+    "ranked": {
+      "active": "Ranked",
+      "verifying": "Verifying",
+      "verified": "Verified",
+      "unranked": "Not ranked"
     },
     "powerups": {
       "bomb": "Bomb",

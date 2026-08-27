@@ -1,6 +1,6 @@
 # 2048 Endgame Tablebase 云化迁移计划
 
-更新时间：2026-07-03
+更新时间：2026-08-27
 
 本目录记录 `C:/Apps/2048endgameTablebase/src - cloud` 副本的云化迁移设计、代码位置、风险判断、基础模块和下一步工作计划。后续开始实现前，优先阅读本目录，避免重复全量阅读代码。
 
@@ -20,6 +20,7 @@
 2. `code_map.md`：按功能页查关键代码位置和改动方向。
 3. `foundation_modules.md`：查看已经新增的云化基础模块和后续接入点。
 4. `next_work_plan.md`：按顺序执行后续开发任务。
+5. `minigame_ranked_records.md`：小游戏排位的确定性运行时、紧凑记录和验证边界。
 
 ## v1 范围边界
 

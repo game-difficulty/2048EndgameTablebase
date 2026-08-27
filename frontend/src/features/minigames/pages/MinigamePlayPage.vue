@@ -19,6 +19,9 @@
             <h1 class="minigame-title text-text-main font-bold leading-[0.94] font-[Cambria,serif]">
               {{ state.title }}
             </h1>
+            <div v-if="rankedStatusLabel" class="mt-2 badge-state badge-state-running inline-flex">
+              {{ rankedStatusLabel }}
+            </div>
           </div>
         </div>
         <div class="flex space-x-2">
@@ -99,6 +102,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 
 import MinigameBoard from '../components/MinigameBoard.vue';
 import MinigameHud from '../components/MinigameHud.vue';
@@ -120,8 +124,10 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  rankedStatus: { type: String, default: 'unranked' },
   active: { type: Boolean, default: true },
 });
+const { t } = useI18n();
 
 defineEmits([
   'back-menu',
@@ -141,6 +147,17 @@ const hasHudPanels = computed(() =>
     (panel) => panel?.type !== 'patternText' && panel?.type !== 'targetPattern'
   )
 );
+const rankedStatusLabel = computed(() => {
+  if (props.rankedStatus === 'active') return t('minigames.ranked.active');
+  if (['finished', 'qualifying', 'submitting', 'pending', 'validating'].includes(props.rankedStatus)) {
+    return t('minigames.ranked.verifying');
+  }
+  if (props.rankedStatus === 'verified') return t('minigames.ranked.verified');
+  if (['invalid', 'too_large', 'submit_failed', 'rejected'].includes(props.rankedStatus)) {
+    return t('minigames.ranked.unranked');
+  }
+  return '';
+});
 
 const playRootRef = ref(null);
 const pageEffects = ref([]);

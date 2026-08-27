@@ -81,11 +81,11 @@ function findMergePositions(board, direction) {
   return result;
 }
 
-function weightedExponentChoice() {
+function weightedExponentChoice(rng = null) {
   const exponents = [2, 3, 4, 5, 6, 7, 8, 9, 10];
   const weights = exponents.map((exponent) => 1 / (exponent ** 1.5));
   const total = weights.reduce((sum, weight) => sum + weight, 0);
-  let roll = Math.random() * total;
+  let roll = (rng?.nextFloat?.() ?? Math.random()) * total;
   for (let index = 0; index < exponents.length; index += 1) {
     roll -= weights[index];
     if (roll <= 0) return exponents[index];
@@ -94,8 +94,8 @@ function weightedExponentChoice() {
 }
 
 export class DesignMasterEngine extends BaseMinigameEngine {
-  constructor(definition, difficulty, snapshot = null) {
-    super(definition, difficulty, snapshot, { deferSetup: true });
+  constructor(definition, difficulty, snapshot = null, runtime = null) {
+    super(definition, difficulty, snapshot, { deferSetup: true, runtime });
     this.pattern = DESIGN_MASTER_PATTERNS[definition.legacyName].map((row) => row.slice());
     this.initialize(snapshot);
     this.currentMaxNum = Math.max(Number(this.maxNum) || 0, 7);
@@ -178,8 +178,8 @@ export class DesignMasterEngine extends BaseMinigameEngine {
 }
 
 export class GravityTwistEngine extends BaseMinigameEngine {
-  constructor(definition, difficulty, snapshot = null) {
-    super(definition, difficulty, snapshot, { deferSetup: true });
+  constructor(definition, difficulty, snapshot = null, runtime = null) {
+    super(definition, difficulty, snapshot, { deferSetup: true, runtime });
     this.variant = definition.legacyName.endsWith('2') ? 2 : 1;
     this.initialize(snapshot);
   }
@@ -259,8 +259,8 @@ export class GravityTwistEngine extends BaseMinigameEngine {
 }
 
 export class ColumnChaosEngine extends BaseMinigameEngine {
-  constructor(definition, difficulty, snapshot = null) {
-    super(definition, difficulty, snapshot, { deferSetup: true });
+  constructor(definition, difficulty, snapshot = null, runtime = null) {
+    super(definition, difficulty, snapshot, { deferSetup: true, runtime });
     this.countDown = 40 - 10 * this.difficulty;
     this.initialize(snapshot);
   }
@@ -282,7 +282,7 @@ export class ColumnChaosEngine extends BaseMinigameEngine {
     this.countDown -= 1;
     if (this.countDown > 0) return;
     this.countDown = 40 - 10 * this.difficulty;
-    const [col1, col2] = randomSample(Array.from({ length: this.cols }, (_value, index) => index), 2);
+    const [col1, col2] = randomSample(Array.from({ length: this.cols }, (_value, index) => index), 2, this.runtime.rng);
     const effects = [];
     for (let row = 0; row < this.rows; row += 1) {
       const leftValue = this.board[row][col1];
@@ -309,8 +309,8 @@ export class ColumnChaosEngine extends BaseMinigameEngine {
 }
 
 export class FerrisWheelEngine extends ColumnChaosEngine {
-  constructor(definition, difficulty, snapshot = null) {
-    super(definition, difficulty, snapshot);
+  constructor(definition, difficulty, snapshot = null, runtime = null) {
+    super(definition, difficulty, snapshot, runtime);
     this.countDown = Number(this.countDown) || 40 - 10 * this.difficulty;
   }
 
@@ -358,8 +358,8 @@ export class FerrisWheelEngine extends ColumnChaosEngine {
 }
 
 export class MysteryMergeEngine extends BaseMinigameEngine {
-  constructor(definition, difficulty, snapshot = null) {
-    super(definition, difficulty, snapshot, { deferSetup: true });
+  constructor(definition, difficulty, snapshot = null, runtime = null) {
+    super(definition, difficulty, snapshot, { deferSetup: true, runtime });
     this.variant = definition.legacyName.endsWith('2') ? 2 : 1;
     this.peekCount = 0;
     this.peekActive = false;
@@ -534,8 +534,8 @@ export class MysteryMergeEngine extends BaseMinigameEngine {
 }
 
 export class IceAgeEngine extends BaseMinigameEngine {
-  constructor(definition, difficulty, snapshot = null) {
-    super(definition, difficulty, snapshot, { deferSetup: true });
+  constructor(definition, difficulty, snapshot = null, runtime = null) {
+    super(definition, difficulty, snapshot, { deferSetup: true, runtime });
     this.frozenStep = 80 + this.difficulty * 20;
     this.countDown = createBoard(4, 4, 0);
     this.movementTrack = createBoard(4, 4, false);
@@ -699,8 +699,8 @@ export class IsolatedIslandEngine extends BaseMinigameEngine {
   async genNewNum() {
     const spawnChance = 0.04 - countCells(this.board, (value) => value === -3) * 0.02 + this.difficulty * 0.01;
     const positions = emptyPositions(this.board);
-    if (positions.length && Math.random() < spawnChance) {
-      const [row, col] = randomChoice(positions);
+    if (positions.length && this.runtime.random() < spawnChance) {
+      const [row, col] = randomChoice(positions, this.runtime.rng);
       this.board[row][col] = -3;
       this.newtilePos = row * this.cols + col;
       this.newtile = -3;
@@ -730,8 +730,8 @@ export class IsolatedIslandEngine extends BaseMinigameEngine {
 }
 
 export class ShapeShifterEngine extends BaseMinigameEngine {
-  constructor(definition, difficulty, snapshot = null) {
-    super(definition, difficulty, snapshot, { deferSetup: true });
+  constructor(definition, difficulty, snapshot = null, runtime = null) {
+    super(definition, difficulty, snapshot, { deferSetup: true, runtime });
     this.n = 12;
     this.initialize(snapshot);
   }
@@ -749,11 +749,15 @@ export class ShapeShifterEngine extends BaseMinigameEngine {
     const key = (row, col) => `${row},${col}`;
     const visited = new Set();
     const remaining = new Set();
-    const neighbors = (row, col) => randomSample([[row - 1, col], [row + 1, col], [row, col - 1], [row, col + 1]], 4);
-    let stack = [[Math.floor(Math.random() * n), Math.floor(Math.random() * n)]];
+    const neighbors = (row, col) => randomSample(
+      [[row - 1, col], [row + 1, col], [row, col - 1], [row, col + 1]],
+      4,
+      this.runtime.rng
+    );
+    let stack = [[this.runtime.randomIndex(n), this.runtime.randomIndex(n)]];
     while (visited.size < m) {
       if (!stack.length) {
-        const next = randomChoice(Array.from(remaining));
+        const next = randomChoice(Array.from(remaining), this.runtime.rng);
         remaining.delete(next);
         stack = [next.split(',').map(Number)];
       }
@@ -763,7 +767,7 @@ export class ShapeShifterEngine extends BaseMinigameEngine {
       board[row][col] = 0;
       for (const [nextRow, nextCol] of neighbors(row, col)) {
         if (nextRow < 0 || nextRow >= n || nextCol < 0 || nextCol >= n || visited.has(key(nextRow, nextCol))) continue;
-        if (Math.random() > 0.5) stack.push([nextRow, nextCol]);
+        if (this.runtime.random() > 0.5) stack.push([nextRow, nextCol]);
         else remaining.add(key(nextRow, nextCol));
       }
     }
@@ -833,8 +837,8 @@ export class ShapeShifterEngine extends BaseMinigameEngine {
     if (board[0].length < board.length) board = this.transpose(board);
     this.rows = board.length;
     this.cols = board[0].length;
-    let spawn = genNewNum(board, SPAWN_RATE4);
-    spawn = genNewNum(spawn.board, SPAWN_RATE4);
+    let spawn = genNewNum(board, SPAWN_RATE4, this.runtime.rng);
+    spawn = genNewNum(spawn.board, SPAWN_RATE4, this.runtime.rng);
     this.board = spawn.board;
     this.newtilePos = spawn.index;
     this.newtile = spawn.value;
@@ -857,8 +861,8 @@ export class ShapeShifterEngine extends BaseMinigameEngine {
 }
 
 export class BlitzkriegEngine extends BaseMinigameEngine {
-  constructor(definition, difficulty, snapshot = null) {
-    super(definition, difficulty, snapshot, { deferSetup: true });
+  constructor(definition, difficulty, snapshot = null, runtime = null) {
+    super(definition, difficulty, snapshot, { deferSetup: true, runtime });
     this.remainingMs = 180000;
     this.timerRunning = false;
     this.timerAnchorMs = null;
@@ -870,11 +874,13 @@ export class BlitzkriegEngine extends BaseMinigameEngine {
 
   loadLegacyExtra(extra) {
     if (extra?.length) this.remainingMs = Math.max(0, Number(extra[0]) * 60 * 1000);
+    this.timerRunning = Boolean(extra?.[1]) && this.remainingMs > 0;
+    this.timerAnchorMs = this.timerRunning ? this.runtime.now() : null;
   }
 
   exportLegacyExtra() {
     this.syncTimer();
-    return [this.remainingMs / (60 * 1000)];
+    return [this.remainingMs / (60 * 1000), this.timerRunning];
   }
 
   setupNewGame() {
@@ -889,7 +895,7 @@ export class BlitzkriegEngine extends BaseMinigameEngine {
 
   syncTimer() {
     if (!this.timerRunning || this.timerAnchorMs == null || this.isOver) return;
-    const now = Date.now();
+    const now = this.runtime.now();
     const elapsed = Math.max(0, now - this.timerAnchorMs);
     this.remainingMs = Math.max(0, this.remainingMs - elapsed);
     this.timerAnchorMs = now;
@@ -905,7 +911,7 @@ export class BlitzkriegEngine extends BaseMinigameEngine {
     if (this.isOver) return;
     if (!this.timerRunning) {
       this.timerRunning = true;
-      this.timerAnchorMs = Date.now();
+      this.timerAnchorMs = this.runtime.now();
     }
     const previousCount = countCells(this.board, (value) => value === 10);
     await super.doMove(direction);
@@ -917,7 +923,7 @@ export class BlitzkriegEngine extends BaseMinigameEngine {
       const gained = Math.trunc((currentCount - previousCount) * bonusMinutes * 60 * 1000);
       this.remainingMs += gained;
       this.pendingBonusMs = gained;
-      if (this.timerRunning) this.timerAnchorMs = Date.now();
+      if (this.timerRunning) this.timerAnchorMs = this.runtime.now();
     }
     this.count1k = currentCount;
     if (this.isOver) this.timerRunning = false;
@@ -953,7 +959,7 @@ export class BlitzkriegEngine extends BaseMinigameEngine {
       title: 'Countdown',
       remainingMs: Math.trunc(this.remainingMs),
       running: Boolean(this.timerRunning && !this.isOver),
-      syncedAt: Date.now(),
+      syncedAt: this.runtime.now(),
     };
     if (this.pendingBonusMs > 0) countdown.bonusMs = this.pendingBonusMs;
     hud.customPanels = [countdown];
@@ -971,25 +977,37 @@ export class BlitzkriegEngine extends BaseMinigameEngine {
 }
 
 export class TrickyTilesEngine extends BaseMinigameEngine {
-  constructor(definition, difficulty, snapshot = null) {
-    super(definition, difficulty, snapshot, { deferSetup: true });
-    this.evilGenProb = 0.33 + Math.random() / 12 + this.difficulty * 0.1;
+  constructor(definition, difficulty, snapshot = null, runtime = null) {
+    super(definition, difficulty, snapshot, { deferSetup: true, runtime });
+    this.evilGenProb = 0.33 + this.difficulty * 0.1;
     this.initialize(snapshot);
+  }
+
+  loadLegacyExtra(extra) {
+    const savedProbability = Number(extra?.[0]);
+    if (Number.isFinite(savedProbability) && savedProbability > 0 && savedProbability < 1) {
+      this.evilGenProb = savedProbability;
+    }
+  }
+
+  exportLegacyExtra() {
+    return [this.evilGenProb];
   }
 
   setupNewGame() {
     super.setupNewGame();
-    this.evilGenProb = 0.33 + Math.random() / 12 + this.difficulty * 0.1;
+    this.evilGenProb = 0.33 + this.runtime.random() / 12 + this.difficulty * 0.1;
   }
 
   async genNewNum() {
-    if (Math.random() > this.evilGenProb) {
+    if (this.runtime.random() > this.evilGenProb) {
       await super.genNewNum();
       return;
     }
     const emptyCount = countCells(this.board, (value) => value === 0);
-    const spawn = await generateEvilSpawn(this.board, emptyCount < 6 ? 5 : 4);
+    const spawn = await (this.runtime.evilSpawn || generateEvilSpawn)(this.board, emptyCount < 6 ? 5 : 4);
     if (!spawn || this.board[Math.floor(spawn.index / this.cols)]?.[spawn.index % this.cols] !== 0) {
+      this.runtime.markDeterminismFailure?.('evil_spawn_unavailable');
       await super.genNewNum();
       return;
     }
@@ -1004,8 +1022,8 @@ export class TrickyTilesEngine extends BaseMinigameEngine {
 }
 
 export class EndlessFamilyEngine extends BaseMinigameEngine {
-  constructor(definition, difficulty, snapshot = null) {
-    super(definition, difficulty, snapshot, { deferSetup: true });
+  constructor(definition, difficulty, snapshot = null, runtime = null) {
+    super(definition, difficulty, snapshot, { deferSetup: true, runtime });
     this.variant = this.detectVariant(definition.legacyName);
     this.bombPos = null;
     this.currentLevel = 0;
@@ -1061,13 +1079,13 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
     this.bombPos = null;
     this.targetPos = null;
     this.countDown = createBoard(this.rows, this.cols, 0);
-    if (this.variant === 'hybrid') this.bombType = Math.floor(Math.random() * 3);
+    if (this.variant === 'hybrid') this.bombType = this.runtime.randomIndex(3);
     super.setupNewGame();
     if (this.variant === 'airraid') {
       this.targetPos = null;
       this.countDown = createBoard(this.rows, this.cols, 0);
     } else {
-      this.bombPos = randomChoice(emptyPositions(this.board));
+      this.bombPos = randomChoice(emptyPositions(this.board), this.runtime.rng);
     }
   }
 
@@ -1106,8 +1124,8 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
   placeRandomBomb() {
     const positions = emptyPositions(this.board);
     if (!positions.length) return false;
-    this.bombPos = randomChoice(positions);
-    if (this.variant === 'hybrid') this.bombType = Math.floor(Math.random() * 3);
+    this.bombPos = randomChoice(positions, this.runtime.rng);
+    if (this.variant === 'hybrid') this.bombType = this.runtime.randomIndex(3);
     return true;
   }
 
@@ -1197,7 +1215,7 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
       if (positions.length) {
         const [row, col] = positions[0];
         let value = original;
-        while (value === original) value = weightedExponentChoice();
+        while (value === original) value = weightedExponentChoice(this.runtime.rng);
         this.board[row][col] = value;
         this.queueMoveEffects([{ type: 'giftbox_burst', index: row * this.cols + col, delayMs: 100, durationMs: 620, animDurationMs: 500, hideIndices: [row * this.cols + col] }]);
       }
@@ -1214,7 +1232,7 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
       }
     } else if (positions.length >= 2) {
       const [[row0, col0], [row1, col1]] = positions;
-      const factor1 = 1 + Math.floor(Math.random() * Math.max(original - 1, 1));
+      const factor1 = 1 + this.runtime.randomIndex(Math.max(original - 1, 1));
       const factor0 = original - factor1;
       this.board[row0][col0] = factor0;
       this.board[row1][col1] = factor1;
@@ -1255,18 +1273,18 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
 
   async genNewNum() {
     if (this.variant === 'airraid') {
-      const spawn = genNewNum(this.board, SPAWN_RATE4);
+      const spawn = genNewNum(this.board, SPAWN_RATE4, this.runtime.rng);
       this.board = spawn.board;
       this.newtilePos = spawn.index;
       this.newtile = spawn.value;
       const probability = Math.max(0.08 - countCells(this.countDown, (value) => value > 0) / 40, 0.01);
-      if (spawn.emptyCount > 1 && !this.targetPos && Math.random() < probability) {
+      if (spawn.emptyCount > 1 && !this.targetPos && this.runtime.random() < probability) {
         const positions = emptyPositions(this.board);
-        if (positions.length) this.targetPos = randomChoice(positions);
+        if (positions.length) this.targetPos = randomChoice(positions, this.runtime.rng);
       }
       return;
     }
-    if (!this.bombPos && Math.random() < this.bombGenRate) {
+    if (!this.bombPos && this.runtime.random() < this.bombGenRate) {
       if (this.placeRandomBomb()) {
         this.newtilePos = this.bombPos[0] * this.cols + this.bombPos[1];
         this.newtile = 0;
@@ -1275,13 +1293,13 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
     }
     let boardForSpawn = cloneBoard(this.board);
     if (this.bombPos) boardForSpawn[this.bombPos[0]][this.bombPos[1]] = 1;
-    const spawn = genNewNum(boardForSpawn, SPAWN_RATE4);
+    const spawn = genNewNum(boardForSpawn, SPAWN_RATE4, this.runtime.rng);
     if (this.bombPos) spawn.board[this.bombPos[0]][this.bombPos[1]] = 0;
     if (this.variant === 'hybrid') {
       const chance = 0.03 - countCells(spawn.board, (value) => value === -3) * 0.02 + this.difficulty * 0.015;
       const positions = emptyPositions(spawn.board);
-      if (positions.length && Math.random() < chance) {
-        const [row, col] = randomChoice(positions);
+      if (positions.length && this.runtime.random() < chance) {
+        const [row, col] = randomChoice(positions, this.runtime.rng);
         spawn.board[row][col] = -3;
         this.newtilePos = row * this.cols + col;
         this.newtile = -3;
@@ -1399,10 +1417,10 @@ export const ENGINE_BY_MODULE = {
   tricky_tiles: TrickyTilesEngine,
 };
 
-export function createEngine(definition, difficulty, snapshot = null) {
+export function createEngine(definition, difficulty, snapshot = null, runtime = null) {
   const Engine = ENGINE_BY_MODULE[definition.moduleKey];
   if (!Engine) {
     throw new Error(`Minigame '${definition.title}' is not implemented yet.`);
   }
-  return new Engine(definition, difficulty, snapshot);
+  return new Engine(definition, difficulty, snapshot, runtime);
 }

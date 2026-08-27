@@ -40,6 +40,79 @@ class ValidatedGame:
     final_board_codes: tuple[int, ...]
 
 
+def classify_ranked_candidate(
+    *,
+    seed_hex: str,
+    rules_version: int,
+    record_encoding: str,
+) -> str:
+    """Classify a structurally valid ranked record without replaying the game."""
+    try:
+        replay = decode_2048next_replay(record_encoding)
+    except ValueError as exc:
+        raise RankedValidationError("invalid_record") from exc
+    if replay.width != 4 or replay.height != 4:
+        raise RankedValidationError("invalid_board_size")
+    try:
+        metadata = replay.ranked_metadata()
+    except ValueError as exc:
+        raise RankedValidationError("invalid_record") from exc
+    if metadata != (rules_version, seed_hex.lower()):
+        raise RankedValidationError("seed_mismatch")
+    if rules_version != RANKED_RULES_VERSION:
+        raise RankedValidationError("unsupported_rules")
+
+    current_difficulty: int | None = None
+    metadata_count = 0
+    ruleset_count = 0
+    ai_count = 0
+    move_count = 0
+    all_adversarial = True
+    ended = False
+    for position, record in enumerate(replay.records):
+        if ended:
+            raise RankedValidationError("data_after_end")
+        if isinstance(record, (UndoRecord, CheckpointRecord)):
+            raise RankedValidationError("disallowed_record")
+        if isinstance(record, EndRecord):
+            if position != len(replay.records) - 1:
+                raise RankedValidationError("data_after_end")
+            ended = True
+            continue
+        if isinstance(record, ExtensionRecord):
+            if record.extension_type == EXT_RANKED_METADATA:
+                metadata_count += 1
+                if metadata_count != 1 or move_count:
+                    raise RankedValidationError("invalid_metadata_order")
+            elif record.extension_type == EXT_RULESET:
+                ruleset_count += 1
+                if ruleset_count != 1 or record.payload != b"pow2" or move_count:
+                    raise RankedValidationError("invalid_ruleset")
+            elif record.extension_type == EXT_DIFFICULTY_CHANGE:
+                if len(record.payload) != 1 or record.payload[0] > 100:
+                    raise RankedValidationError("invalid_difficulty")
+                current_difficulty = int(record.payload[0])
+            elif record.extension_type == EXT_AI_USED:
+                ai_count += 1
+                if ai_count != 1 or record.payload:
+                    raise RankedValidationError("invalid_ai_marker")
+            else:
+                raise RankedValidationError("unknown_extension")
+            continue
+        if not isinstance(record, MoveRecord):
+            raise RankedValidationError("unknown_record")
+        if current_difficulty is None:
+            raise RankedValidationError("missing_difficulty")
+        move_count += 1
+        if move_count > MAX_RANKED_MOVES:
+            raise RankedValidationError("too_many_moves")
+        all_adversarial = all_adversarial and current_difficulty == 100
+
+    if metadata_count != 1 or ruleset_count != 1 or not ended or move_count < 1:
+        raise RankedValidationError("incomplete_record")
+    return GAMER_ADVERSARIAL_BOARD if all_adversarial else GAMER_HIGH_SCORE_BOARD
+
+
 def validate_ranked_game(
     *,
     seed_hex: str,

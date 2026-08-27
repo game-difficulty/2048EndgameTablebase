@@ -13,7 +13,12 @@ from typing import Any
 from backend.auth.db import auth_db
 from backend.replay_2048next import RANKED_RULES_VERSION, REPLAY_PREFIX
 
-from .validator import RankedValidationError, ValidatedGame, validate_ranked_game
+from .validator import (
+    RankedValidationError,
+    ValidatedGame,
+    classify_ranked_candidate,
+    validate_ranked_game,
+)
 
 
 RUN_LIFETIME = timedelta(days=30)
@@ -143,6 +148,61 @@ def _decoded_record_size(record_encoding: str) -> int:
         raise ValueError("invalid_record") from exc
 
 
+def _top_100_cutoff(
+    db: sqlite3.Connection,
+    *,
+    board_key: str,
+    week_start: str | None = None,
+) -> int | None:
+    source_table = "gamer_weekly_high_scores" if week_start is not None else "gamer_high_scores"
+    period_clause = "AND scores.week_start = ?" if week_start is not None else ""
+    params: list[Any] = [board_key]
+    if week_start is not None:
+        params.append(week_start)
+    row = db.execute(
+        f"""
+        SELECT scores.score
+        FROM {source_table} scores
+        JOIN users u ON u.id = scores.user_id
+        WHERE scores.board_key = ?
+          {period_clause}
+          AND u.status = 'active'
+          AND TRIM(COALESCE(u.display_name, '')) <> ''
+        ORDER BY scores.score DESC, scores.achieved_at ASC, scores.user_id ASC
+        LIMIT 1 OFFSET 99
+        """,
+        params,
+    ).fetchone()
+    return None if row is None else int(row["score"])
+
+
+def _qualifies_for_priority_submission(
+    db: sqlite3.Connection,
+    *,
+    user_id: int,
+    board_key: str,
+    score: int,
+    submitted_at: datetime,
+) -> bool:
+    personal_best = db.execute(
+        "SELECT score FROM gamer_high_scores WHERE user_id = ? AND board_key = ?",
+        (user_id, board_key),
+    ).fetchone()
+    if personal_best is None or score > int(personal_best["score"]):
+        return True
+
+    all_time_cutoff = _top_100_cutoff(db, board_key=board_key)
+    if all_time_cutoff is None or score > all_time_cutoff:
+        return True
+
+    weekly_cutoff = _top_100_cutoff(
+        db,
+        board_key=board_key,
+        week_start=_week_start_iso(submitted_at),
+    )
+    return weekly_cutoff is None or score > weekly_cutoff
+
+
 def submit_ranked_run(
     *,
     run_id: str,
@@ -183,6 +243,21 @@ def submit_ranked_run(
             )
             row = db.execute("SELECT * FROM gamer_ranked_runs WHERE run_id = ?", (run_id,)).fetchone()
             return _public_run(row)
+        try:
+            candidate_board_key = classify_ranked_candidate(
+                seed_hex=str(row["seed_hex"]),
+                rules_version=int(row["rules_version"]),
+                record_encoding=record_encoding,
+            )
+        except RankedValidationError:
+            candidate_board_key = ""
+        priority_submission = bool(candidate_board_key) and _qualifies_for_priority_submission(
+            db,
+            user_id=user_id,
+            board_key=candidate_board_key,
+            score=score,
+            submitted_at=now,
+        )
         user_pending = db.execute(
             """
             SELECT COUNT(*) AS count FROM gamer_ranked_runs
@@ -205,10 +280,11 @@ def submit_ranked_run(
             "SELECT COUNT(*) AS count FROM gamer_ranked_runs WHERE submit_ip = ? AND submitted_at >= ?",
             (ip_address, cutoff),
         ).fetchone()["count"]
-        if int(user_daily) >= MAX_DAILY_SUBMISSIONS_USER:
-            raise RuntimeError("user_daily_limit")
-        if ip_address and int(ip_daily) >= MAX_DAILY_SUBMISSIONS_IP:
-            raise RuntimeError("ip_daily_limit")
+        if not priority_submission:
+            if int(user_daily) >= MAX_DAILY_SUBMISSIONS_USER:
+                raise RuntimeError("user_daily_limit")
+            if ip_address and int(ip_daily) >= MAX_DAILY_SUBMISSIONS_IP:
+                raise RuntimeError("ip_daily_limit")
         db.execute(
             """
             UPDATE gamer_ranked_runs

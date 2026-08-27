@@ -13,10 +13,12 @@ from backend.gamer_ranked.validator import (
     GAMER_ADVERSARIAL_BOARD,
     GAMER_HIGH_SCORE_BOARD,
     RankedValidationError,
+    classify_ranked_candidate,
     validate_ranked_game,
 )
 from backend.auth.db import auth_db, init_auth_db
 from backend.gamer_ranked.service import (
+    _week_start_iso,
     create_ranked_run,
     get_ranked_run,
     process_one_pending_run,
@@ -138,6 +140,14 @@ class GamerRankedContractTests(unittest.TestCase):
 
     def test_validator_replays_random_game_and_rejects_claimed_score_tampering(self):
         record, score, final_board = _completed_random_game()
+        self.assertEqual(
+            classify_ranked_candidate(
+                seed_hex=SEED,
+                rules_version=1,
+                record_encoding=record,
+            ),
+            GAMER_HIGH_SCORE_BOARD,
+        )
         validated = validate_ranked_game(
             seed_hex=SEED,
             rules_version=1,
@@ -158,6 +168,14 @@ class GamerRankedContractTests(unittest.TestCase):
 
     def test_validator_accepts_ai_and_classifies_all_difficulty_100_separately(self):
         record, score, final_board = _completed_adversarial_game()
+        self.assertEqual(
+            classify_ranked_candidate(
+                seed_hex=SEED,
+                rules_version=1,
+                record_encoding=record,
+            ),
+            GAMER_ADVERSARIAL_BOARD,
+        )
 
         def first_empty_spawn(board, *, depth=5):
             self.assertEqual(depth, 5)
@@ -202,6 +220,118 @@ class GamerRankedServiceTests(unittest.TestCase):
             os.environ["CLOUD_AUTH_DB"] = self.previous_db
         self.temporary.cleanup()
 
+    def _insert_recent_submissions(self, count: int = 5, ip_address: str = "127.0.0.1"):
+        now = datetime.now(timezone.utc).isoformat()
+        with auth_db() as db:
+            for index in range(count):
+                db.execute(
+                    """
+                    INSERT INTO gamer_ranked_runs
+                    (run_id, user_id, request_id, seed_hex, rules_version, status,
+                     started_at, expires_at, submitted_at, completed_at, submit_ip)
+                    VALUES (?, ?, ?, ?, 1, 'no_improvement', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"limited-run-{index}",
+                        self.user_id,
+                        f"limited-request-{index}",
+                        SEED,
+                        now,
+                        now,
+                        now,
+                        now,
+                        ip_address,
+                    ),
+                )
+
+    def _insert_personal_best(self, score: int):
+        now = datetime.now(timezone.utc).isoformat()
+        with auth_db() as db:
+            db.execute(
+                """
+                INSERT INTO gamer_ranked_runs
+                (run_id, user_id, request_id, seed_hex, rules_version, status,
+                 started_at, expires_at, completed_at)
+                VALUES ('personal-best-run', ?, 'personal-best-request', ?, 1,
+                        'verified', ?, ?, ?)
+                """,
+                (self.user_id, SEED, now, now, now),
+            )
+            db.execute(
+                """
+                INSERT INTO gamer_high_scores
+                (user_id, board_key, score, max_tile, move_count, used_ai,
+                 final_board, record_blob, replay_id, run_id, achieved_at, updated_at)
+                VALUES (?, 'gamer_high_score', ?, 128, 10, 0,
+                        '[]', 'personal-best-record', 'personal-best-replay',
+                        'personal-best-run', ?, ?)
+                """,
+                (self.user_id, score, now, now),
+            )
+
+    def _fill_board_top_100(self, *, all_time_cutoff: int, weekly_cutoff: int):
+        now = datetime.now(timezone.utc).isoformat()
+        week_start = _week_start_iso()
+        with auth_db() as db:
+            for index in range(100):
+                cursor = db.execute(
+                    """
+                    INSERT INTO users
+                    (email, email_identity, password_hash, display_name, display_name_key,
+                     status, created_at, updated_at)
+                    VALUES (?, ?, 'x', ?, ?, 'active', ?, ?)
+                    """,
+                    (
+                        f"top-100-{index}@example.com",
+                        f"top-100-{index}@example.com",
+                        f"Top 100 {index}",
+                        f"top 100 {index}",
+                        now,
+                        now,
+                    ),
+                )
+                user_id = int(cursor.lastrowid)
+                run_id = f"top-100-run-{index}"
+                replay_id = f"top-100-replay-{index}"
+                db.execute(
+                    """
+                    INSERT INTO gamer_ranked_runs
+                    (run_id, user_id, request_id, seed_hex, rules_version, status,
+                     started_at, expires_at, completed_at)
+                    VALUES (?, ?, ?, ?, 1, 'verified', ?, ?, ?)
+                    """,
+                    (run_id, user_id, f"top-100-request-{index}", SEED, now, now, now),
+                )
+                common = (
+                    user_id,
+                    128,
+                    10,
+                    "[]",
+                    f"top-100-record-{index}",
+                    replay_id,
+                    run_id,
+                    now,
+                    now,
+                )
+                db.execute(
+                    """
+                    INSERT INTO gamer_high_scores
+                    (user_id, board_key, score, max_tile, move_count, used_ai,
+                     final_board, record_blob, replay_id, run_id, achieved_at, updated_at)
+                    VALUES (?, 'gamer_high_score', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (common[0], all_time_cutoff + index, *common[1:]),
+                )
+                db.execute(
+                    """
+                    INSERT INTO gamer_weekly_high_scores
+                    (user_id, board_key, week_start, score, max_tile, move_count, used_ai,
+                     final_board, record_blob, replay_id, run_id, achieved_at, updated_at)
+                    VALUES (?, 'gamer_high_score', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (common[0], week_start, weekly_cutoff + index, *common[1:]),
+                )
+
     def test_pending_run_is_verified_and_published(self):
         run = create_ranked_run(
             user_id=self.user_id,
@@ -235,6 +365,70 @@ class GamerRankedServiceTests(unittest.TestCase):
         weekly = leaderboard_payload("gamer_high_score_weekly")
         self.assertEqual(weekly["entries"][0]["score"], score)
         self.assertEqual(weekly["entries"][0]["replay_id"], score_row["replay_id"])
+
+    def test_personal_best_candidate_bypasses_rolling_submission_limit(self):
+        self._insert_recent_submissions()
+        run = create_ranked_run(
+            user_id=self.user_id,
+            request_id="priority-personal-best",
+            ip_address="127.0.0.1",
+        )
+        record, score, final_board = _completed_random_game(run["seed_hex"])
+        submitted = submit_ranked_run(
+            run_id=run["run_id"],
+            user_id=self.user_id,
+            score=score,
+            final_board_codes=final_board,
+            record_encoding=record,
+            ip_address="127.0.0.1",
+        )
+        self.assertEqual(submitted["status"], "pending")
+
+    def test_top_100_candidate_bypasses_limit_without_beating_personal_best(self):
+        self._insert_recent_submissions()
+        run = create_ranked_run(
+            user_id=self.user_id,
+            request_id="priority-top-100",
+            ip_address="127.0.0.1",
+        )
+        record, score, final_board = _completed_random_game(run["seed_hex"])
+        self._insert_personal_best(score + 1000)
+        self._fill_board_top_100(
+            all_time_cutoff=score - 2,
+            weekly_cutoff=score + 1000,
+        )
+        submitted = submit_ranked_run(
+            run_id=run["run_id"],
+            user_id=self.user_id,
+            score=score,
+            final_board_codes=final_board,
+            record_encoding=record,
+            ip_address="127.0.0.1",
+        )
+        self.assertEqual(submitted["status"], "pending")
+
+    def test_ordinary_submission_is_blocked_after_rolling_limit(self):
+        self._insert_recent_submissions()
+        run = create_ranked_run(
+            user_id=self.user_id,
+            request_id="ordinary-over-limit",
+            ip_address="127.0.0.1",
+        )
+        record, score, final_board = _completed_random_game(run["seed_hex"])
+        self._insert_personal_best(score + 3000)
+        self._fill_board_top_100(
+            all_time_cutoff=score + 1000,
+            weekly_cutoff=score + 2000,
+        )
+        with self.assertRaisesRegex(RuntimeError, "user_daily_limit"):
+            submit_ranked_run(
+                run_id=run["run_id"],
+                user_id=self.user_id,
+                score=score,
+                final_board_codes=final_board,
+                record_encoding=record,
+                ip_address="127.0.0.1",
+            )
 
     def test_weekly_best_is_kept_without_beating_all_time_best(self):
         now = datetime.now(timezone.utc).isoformat()

@@ -11,6 +11,7 @@ import {
   sanitizeExtra,
   SPAWN_RATE4,
 } from './utils.js';
+import { createMinigameRuntime } from './runtime.js';
 
 export class AnimationState {
   constructor({
@@ -64,12 +65,16 @@ export class AnimationState {
 }
 
 export class BaseMinigameEngine {
-  constructor(definition, difficulty, snapshot = null, { deferSetup = false } = {}) {
+  constructor(definition, difficulty, snapshot = null, options = {}) {
+    const directRuntime = options?.rng && options?.clock ? options : null;
+    const deferSetup = directRuntime ? false : Boolean(options?.deferSetup);
+    const runtime = directRuntime || options?.runtime || null;
     this.definition = definition;
     this.gameId = definition.id;
     this.title = definition.title;
     this.legacyName = definition.legacyName;
     this.difficulty = Number(difficulty) ? 1 : 0;
+    this.runtime = runtime || createMinigameRuntime();
 
     const [rows, cols] = this.getInitialShape(snapshot);
     this.rows = rows;
@@ -117,9 +122,9 @@ export class BaseMinigameEngine {
 
   setupNewGame() {
     let next = createBoard(this.rows, this.cols);
-    let spawn = genNewNum(next, SPAWN_RATE4);
+    let spawn = genNewNum(next, SPAWN_RATE4, this.runtime.rng);
     next = spawn.board;
-    spawn = genNewNum(next, SPAWN_RATE4);
+    spawn = genNewNum(next, SPAWN_RATE4, this.runtime.rng);
     this.board = cloneBoard(spawn.board);
     this.score = 0;
     this.newtilePos = spawn.index;
@@ -209,7 +214,7 @@ export class BaseMinigameEngine {
   }
 
   async genNewNum() {
-    const spawn = genNewNum(this.board, SPAWN_RATE4);
+    const spawn = genNewNum(this.board, SPAWN_RATE4, this.runtime.rng);
     this.board = cloneBoard(spawn.board);
     this.newtilePos = spawn.index;
     this.newtile = spawn.value;
@@ -344,7 +349,7 @@ export class BaseMinigameEngine {
     this.checkGameOver();
 
     this.lastValidMove = true;
-    this.lastMoveAtMs = Date.now();
+    this.lastMoveAtMs = this.runtime.now();
     const animationMetadata = buildMoveAnimationMetadata(
       boardBefore,
       directionKey,

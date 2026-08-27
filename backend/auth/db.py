@@ -404,8 +404,46 @@ def init_auth_db() -> None:
               board_cols INTEGER NOT NULL DEFAULT 4,
               score_achieved_at TEXT NOT NULL,
               trophy_achieved_at TEXT,
+              score_run_id TEXT,
+              trophy_run_id TEXT,
+              verification_level TEXT NOT NULL DEFAULT 'legacy',
+              score_verified_at TEXT,
+              trophy_verified_at TEXT,
+              record_hash TEXT,
+              record_blob TEXT,
               updated_at TEXT NOT NULL,
               PRIMARY KEY(user_id, game_id, difficulty),
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS minigame_ranked_runs (
+              run_id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              request_id TEXT NOT NULL,
+              game_id TEXT NOT NULL,
+              difficulty INTEGER NOT NULL,
+              rules_version INTEGER NOT NULL,
+              seed_salt_hex TEXT NOT NULL,
+              seed_hex TEXT NOT NULL,
+              status TEXT NOT NULL,
+              started_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              start_ip TEXT,
+              qualified_at TEXT,
+              qualification_expires_at TEXT,
+              submission_token_hash TEXT,
+              submission_token_consumed_at TEXT,
+              claimed_summary_json TEXT,
+              pending_record TEXT,
+              record_hash TEXT,
+              action_count INTEGER,
+              submitted_at TEXT,
+              submit_ip TEXT,
+              validation_started_at TEXT,
+              completed_at TEXT,
+              verified_summary_json TEXT,
+              error_code TEXT,
+              UNIQUE(user_id, request_id),
               FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
@@ -446,6 +484,12 @@ def init_auth_db() -> None:
               ON minigame_high_scores(
                 difficulty, trophy_tier DESC, trophy_achieved_at ASC
               );
+            CREATE INDEX IF NOT EXISTS idx_minigame_runs_user_status
+              ON minigame_ranked_runs(user_id, status, started_at);
+            CREATE INDEX IF NOT EXISTS idx_minigame_runs_pending
+              ON minigame_ranked_runs(status, submitted_at);
+            CREATE INDEX IF NOT EXISTS idx_minigame_runs_start_ip
+              ON minigame_ranked_runs(start_ip, started_at);
             """
         )
         existing_user_columns = {
@@ -463,6 +507,25 @@ def init_auth_db() -> None:
             db.execute("ALTER TABLE users ADD COLUMN invite_code_id INTEGER REFERENCES invite_codes(id)")
         if "display_name_key" not in existing_user_columns:
             db.execute("ALTER TABLE users ADD COLUMN display_name_key TEXT")
+
+        existing_minigame_score_columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(minigame_high_scores)").fetchall()
+        }
+        minigame_score_migrations = (
+            ("score_run_id", "TEXT"),
+            ("trophy_run_id", "TEXT"),
+            ("verification_level", "TEXT NOT NULL DEFAULT 'legacy'"),
+            ("score_verified_at", "TEXT"),
+            ("trophy_verified_at", "TEXT"),
+            ("record_hash", "TEXT"),
+            ("record_blob", "TEXT"),
+        )
+        for column_name, column_type in minigame_score_migrations:
+            if column_name not in existing_minigame_score_columns:
+                db.execute(
+                    f"ALTER TABLE minigame_high_scores ADD COLUMN {column_name} {column_type}"
+                )
 
         used_identities = {
             row["email_identity"]

@@ -5,17 +5,40 @@ from pathlib import Path
 import re
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
+import base64
+import binascii
+import uuid
+from unittest.mock import patch
 
 from backend.auth.db import auth_db, init_auth_db
-from backend.minigame_rankings.service import game_leaderboard, submit_score, trophy_leaderboard
+from backend.minigame_rankings.service import (
+    MGO_RECORD_PREFIX,
+    RunTokenError,
+    RunTokenExpired,
+    _derive_seed_hex,
+    claim_pending,
+    create_ranked_run,
+    finish_rejected,
+    finish_verified,
+    get_ranked_run,
+    game_leaderboard,
+    qualify_ranked_run,
+    submit_ranked_run,
+    submit_score,
+    trophy_leaderboard,
+)
 from backend.minigame_rankings.catalog import MINIGAME_BY_ID
+from backend.minigame_rankings import verifier as minigame_verifier
 
 
 class MinigameRankingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.old_db = os.environ.get("CLOUD_AUTH_DB")
+        self.old_secret = os.environ.get("MINIGAME_RANKING_SECRET")
         os.environ["CLOUD_AUTH_DB"] = str(Path(self.tempdir.name) / "auth.sqlite3")
+        os.environ["MINIGAME_RANKING_SECRET"] = "minigame-ranking-test-secret"
         init_auth_db()
 
     def tearDown(self) -> None:
@@ -23,6 +46,10 @@ class MinigameRankingTests(unittest.TestCase):
             os.environ.pop("CLOUD_AUTH_DB", None)
         else:
             os.environ["CLOUD_AUTH_DB"] = self.old_db
+        if self.old_secret is None:
+            os.environ.pop("MINIGAME_RANKING_SECRET", None)
+        else:
+            os.environ["MINIGAME_RANKING_SECRET"] = self.old_secret
         self.tempdir.cleanup()
 
     def _add_user(self, email: str, name: str, supporter: bool = False) -> int:
@@ -56,7 +83,7 @@ class MinigameRankingTests(unittest.TestCase):
 
     @staticmethod
     def _submit(user_id: int, game_id: str, score: int, trophy: int, difficulty: int = 1):
-        return submit_score(
+        result = submit_score(
             user_id=user_id,
             game_id=game_id,
             difficulty=difficulty,
@@ -67,6 +94,16 @@ class MinigameRankingTests(unittest.TestCase):
             board_rows=4,
             board_cols=4,
         )
+        with auth_db() as db:
+            db.execute(
+                """
+                UPDATE minigame_high_scores
+                SET verification_level = 'verified'
+                WHERE user_id = ? AND game_id = ? AND difficulty = ?
+                """,
+                (int(user_id), str(game_id), int(difficulty)),
+            )
+        return result
 
     def test_keeps_one_row_and_updates_score_and_trophy_independently(self) -> None:
         user_id = self._add_user("alice@example.com", "Alice")
@@ -153,6 +190,454 @@ class MinigameRankingTests(unittest.TestCase):
         source = registry_path.read_text(encoding="utf-8")
         frontend_ids = set(re.findall(r"\bid:\s*'([^']+)'", source))
         self.assertEqual(frontend_ids, set(MINIGAME_BY_ID))
+
+    @staticmethod
+    def _summary(score: int = 1_000, trophy: int = 1) -> dict:
+        return {
+            "score": score,
+            "trophy_tier": trophy,
+            "highest_tile_exp": 10,
+            "final_board": [0, 1, 2, 3] * 4,
+            "board_rows": 4,
+            "board_cols": 4,
+            "action_count": 120,
+            "elapsed_ms": 60_000,
+        }
+
+    @staticmethod
+    def _record(run: dict, summary: dict | None = None, *, end_reason: int = 0) -> str:
+        claimed = summary or MinigameRankingTests._summary()
+
+        def uleb(value: int) -> bytes:
+            result = bytearray()
+            remaining = int(value)
+            while True:
+                byte = remaining & 0x7F
+                remaining >>= 7
+                result.append(byte | (0x80 if remaining else 0))
+                if not remaining:
+                    return bytes(result)
+
+        content = bytearray(b"MGO1\x01")
+        content.extend(uleb(int(run["rules_version"])))
+        content.extend((3, int(run["difficulty"]), 0))
+        content.extend(uuid.UUID(str(run["run_id"])).bytes)
+        content.extend(bytes.fromhex(str(run["seed_hex"])))
+        action_count = int(claimed["action_count"])
+        elapsed_ms = int(claimed["elapsed_ms"])
+        for index in range(action_count):
+            content.append(index % 4)
+            content.extend(uleb(elapsed_ms if index == 0 else 0))
+        content.extend((0x7F, 0, int(end_reason) & 0xFF))
+        content.extend((binascii.crc32(content) & 0xFFFFFFFF).to_bytes(4, "little"))
+        return MGO_RECORD_PREFIX + base64.b64encode(content).decode("ascii")
+
+    def _run(
+        self,
+        user_id: int,
+        request_id: str = "run-request",
+        *,
+        now: datetime | None = None,
+    ) -> dict:
+        return create_ranked_run(
+            user_id=user_id,
+            request_id=request_id,
+            game_id="column-chaos",
+            difficulty=1,
+            ip_address="203.0.113.10",
+            now=now,
+        )
+
+    def _qualify(self, run: dict, user_id: int, **summary) -> dict:
+        return qualify_ranked_run(
+            run_id=run["run_id"],
+            user_id=user_id,
+            run_token=run["run_token"],
+            **(summary or self._summary()),
+        )
+
+    def test_run_creation_is_idempotent_and_seed_is_hmac_derived(self) -> None:
+        user_id = self._add_user("seed@example.com", "Seed")
+        fixed_salt = "0123456789abcdef0123456789abcdef"
+        with patch("backend.minigame_rankings.service.secrets.token_hex", return_value=fixed_salt):
+            first = self._run(user_id, "same-request")
+        second = self._run(user_id, "same-request")
+        self.assertEqual(first["run_id"], second["run_id"])
+        self.assertEqual(first["run_token"], second["run_token"])
+        self.assertEqual(first["seed_hex"], second["seed_hex"])
+        self.assertEqual(
+            first["seed_hex"],
+            _derive_seed_hex(
+                run_id=first["run_id"],
+                user_id=user_id,
+                game_id="column-chaos",
+                difficulty=1,
+                rules_version=1,
+                salt_hex=fixed_salt,
+                started_at=first["started_at"],
+                ip_address="203.0.113.10",
+            ),
+        )
+        self.assertEqual(len(first["seed_hex"]), 32)
+        self.assertNotEqual(
+            first["seed_hex"],
+            _derive_seed_hex(
+                run_id=first["run_id"],
+                user_id=user_id,
+                game_id="column-chaos",
+                difficulty=1,
+                rules_version=1,
+                salt_hex=fixed_salt,
+                started_at=first["started_at"],
+                ip_address="198.51.100.20",
+            ),
+        )
+        with auth_db() as db:
+            row = db.execute(
+                "SELECT seed_salt_hex, start_ip FROM minigame_ranked_runs WHERE run_id = ?",
+                (first["run_id"],),
+            ).fetchone()
+        self.assertEqual(row["seed_salt_hex"], fixed_salt)
+        self.assertEqual(row["start_ip"], "203.0.113.10")
+
+    def test_run_ownership_and_run_token_tamper_and_expiry(self) -> None:
+        owner = self._add_user("owner@example.com", "Owner")
+        stranger = self._add_user("stranger@example.com", "Stranger")
+        run = self._run(owner)
+        with self.assertRaises(PermissionError):
+            self._qualify(run, stranger)
+
+        tampered = dict(run)
+        tampered["run_token"] = run["run_token"][:-1] + ("A" if run["run_token"][-1] != "A" else "B")
+        with self.assertRaises(RunTokenError):
+            self._qualify(tampered, owner)
+
+        old_start = datetime.now(timezone.utc) - timedelta(days=2)
+        expired = self._run(owner, "expired-run", now=old_start)
+        with self.assertRaises(RunTokenExpired):
+            self._qualify(expired, owner)
+
+    def test_candidate_filter_requires_pb_trophy_or_strict_top_100(self) -> None:
+        user_id = self._add_user("candidate@example.com", "Candidate")
+        self._submit(user_id, "column-chaos", 2_000, 2)
+        for index in range(99):
+            other = self._add_user(f"top-{index}@example.com", f"Top {index}")
+            self._submit(other, "column-chaos", 1_000 + index, 1)
+
+        not_candidate_run = self._run(user_id, "not-candidate")
+        not_candidate = self._qualify(
+            not_candidate_run,
+            user_id,
+            **self._summary(score=1_000, trophy=2),
+        )
+        self.assertFalse(not_candidate["candidate"])
+        self.assertEqual(not_candidate["status"], "not_candidate")
+
+        pb_run = self._run(user_id, "pb-candidate")
+        pb = self._qualify(pb_run, user_id, **self._summary(score=2_001, trophy=2))
+        self.assertTrue(pb["candidate"])
+        self.assertIn("personal_best", pb["reasons"])
+
+        trophy_run = self._run(user_id, "trophy-candidate")
+        trophy = self._qualify(trophy_run, user_id, **self._summary(score=999, trophy=3))
+        self.assertTrue(trophy["candidate"])
+        self.assertIn("trophy_improvement", trophy["reasons"])
+
+        top_user = self._add_user("top-candidate@example.com", "Top Candidate")
+        top_run = self._run(top_user, "top-candidate")
+        top = self._qualify(top_run, top_user, **self._summary(score=1_001, trophy=2))
+        self.assertTrue(top["candidate"])
+        self.assertIn("personal_best", top["reasons"])
+        self.assertIn("top_100", top["reasons"])
+
+    def test_submission_token_is_one_time_and_pending_claim_is_atomic(self) -> None:
+        user_id = self._add_user("submit@example.com", "Submit")
+        run = self._run(user_id)
+        qualified = self._qualify(run, user_id)
+        record = self._record(run)
+        submitted = submit_ranked_run(
+            run_id=run["run_id"],
+            user_id=user_id,
+            submission_token=qualified["submission_token"],
+            record_encoding=record,
+            ip_address="203.0.113.11",
+        )
+        self.assertEqual(submitted["status"], "pending")
+
+        repeated = submit_ranked_run(
+            run_id=run["run_id"],
+            user_id=user_id,
+            submission_token=qualified["submission_token"],
+            record_encoding=record,
+            ip_address="203.0.113.11",
+        )
+        self.assertEqual(repeated["status"], "pending")
+        with self.assertRaisesRegex(ValueError, "submission_already_used"):
+            submit_ranked_run(
+                run_id=run["run_id"],
+                user_id=user_id,
+                submission_token=qualified["submission_token"],
+                record_encoding=self._record(run, end_reason=1),
+                ip_address="203.0.113.11",
+            )
+
+        claimed = claim_pending()
+        self.assertEqual(claimed["run_id"], run["run_id"])
+        self.assertEqual(claimed["game_id"], "column-chaos")
+        self.assertEqual(claimed["difficulty"], 1)
+        self.assertEqual(claimed["claimed_summary"]["score"], 1_000)
+        self.assertIsNone(claim_pending())
+        rejected = finish_rejected(run["run_id"], "fixture_rejected")
+        self.assertEqual(rejected["status"], "rejected")
+        with auth_db() as db:
+            row = db.execute(
+                "SELECT pending_record, submission_token_consumed_at FROM minigame_ranked_runs WHERE run_id = ?",
+                (run["run_id"],),
+            ).fetchone()
+        self.assertIsNone(row["pending_record"])
+        self.assertIsNotNone(row["submission_token_consumed_at"])
+
+    def test_verifier_outage_requeues_without_rejecting_the_run(self) -> None:
+        user_id = self._add_user("outage@example.com", "Outage")
+        run = self._run(user_id, "outage-run")
+        qualified = self._qualify(run, user_id)
+        submit_ranked_run(
+            run_id=run["run_id"],
+            user_id=user_id,
+            submission_token=qualified["submission_token"],
+            record_encoding=self._record(run),
+            ip_address="203.0.113.11",
+        )
+        minigame_verifier._retry_after_monotonic = 0.0
+        try:
+            with patch.object(
+                minigame_verifier,
+                "verify_ranked_run",
+                side_effect=minigame_verifier.MinigameVerifierUnavailable("offline"),
+            ):
+                self.assertFalse(minigame_verifier.process_one_pending_run())
+        finally:
+            minigame_verifier._retry_after_monotonic = 0.0
+        with auth_db() as db:
+            saved = db.execute(
+                "SELECT status, error_code FROM minigame_ranked_runs WHERE run_id = ?",
+                (run["run_id"],),
+            ).fetchone()
+        self.assertEqual(saved["status"], "pending")
+        self.assertIsNone(saved["error_code"])
+
+    def test_finish_verified_updates_verified_pb_and_discards_pending_payload(self) -> None:
+        user_id = self._add_user("verified@example.com", "Verified")
+        run = self._run(user_id)
+        summary = self._summary(score=3_000, trophy=3)
+        qualified = self._qualify(run, user_id, **summary)
+        submit_ranked_run(
+            run_id=run["run_id"],
+            user_id=user_id,
+            submission_token=qualified["submission_token"],
+            record_encoding=self._record(run, summary),
+            ip_address="203.0.113.12",
+        )
+        self.assertIsNotNone(claim_pending())
+        result = finish_verified(run["run_id"], **summary)
+        self.assertEqual(result["status"], "verified")
+        self.assertTrue(result["score_updated"])
+        self.assertTrue(result["trophy_updated"])
+        with auth_db() as db:
+            run_row = db.execute(
+                "SELECT pending_record, verified_summary_json FROM minigame_ranked_runs WHERE run_id = ?",
+                (run["run_id"],),
+            ).fetchone()
+            score_row = db.execute(
+                """
+                SELECT score_run_id, trophy_run_id, verification_level,
+                       score_verified_at, trophy_verified_at, record_blob
+                FROM minigame_high_scores
+                WHERE user_id = ? AND game_id = 'column-chaos' AND difficulty = 1
+                """,
+                (user_id,),
+            ).fetchone()
+        self.assertIsNone(run_row["pending_record"])
+        self.assertIsNotNone(run_row["verified_summary_json"])
+        self.assertEqual(score_row["score_run_id"], run["run_id"])
+        self.assertEqual(score_row["trophy_run_id"], run["run_id"])
+        self.assertEqual(score_row["verification_level"], "verified")
+        self.assertIsNotNone(score_row["score_verified_at"])
+        self.assertIsNotNone(score_row["trophy_verified_at"])
+        self.assertTrue(str(score_row["record_blob"]).startswith(MGO_RECORD_PREFIX))
+
+    def test_first_verified_result_replaces_a_higher_legacy_score(self) -> None:
+        user_id = self._add_user("legacy@example.com", "Legacy")
+        self._submit(user_id, "column-chaos", 99_999, 4)
+        with auth_db() as db:
+            db.execute(
+                """
+                UPDATE minigame_high_scores
+                SET verification_level = 'legacy'
+                WHERE user_id = ? AND game_id = 'column-chaos' AND difficulty = 1
+                """,
+                (user_id,),
+            )
+
+        run = self._run(user_id, "replace-legacy")
+        summary = self._summary(score=1_500, trophy=1)
+        qualified = self._qualify(run, user_id, **summary)
+        self.assertTrue(qualified["candidate"])
+        submit_ranked_run(
+            run_id=run["run_id"],
+            user_id=user_id,
+            submission_token=qualified["submission_token"],
+            record_encoding=self._record(run, summary),
+            ip_address="203.0.113.12",
+        )
+        self.assertIsNotNone(claim_pending())
+        finish_verified(run["run_id"], **summary)
+        with auth_db() as db:
+            score = db.execute(
+                """
+                SELECT best_score, trophy_tier, verification_level
+                FROM minigame_high_scores
+                WHERE user_id = ? AND game_id = 'column-chaos' AND difficulty = 1
+                """,
+                (user_id,),
+            ).fetchone()
+        self.assertEqual(int(score["best_score"]), 1_500)
+        self.assertEqual(int(score["trophy_tier"]), 1)
+        self.assertEqual(score["verification_level"], "verified")
+
+    def test_submission_token_tamper_and_expiry_are_rejected(self) -> None:
+        user_id = self._add_user("token@example.com", "Token")
+        run = self._run(user_id)
+        qualified = self._qualify(run, user_id)
+        token = qualified["submission_token"]
+        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        with self.assertRaises(RunTokenError):
+            submit_ranked_run(
+                run_id=run["run_id"], user_id=user_id,
+                submission_token=tampered, record_encoding=self._record(run),
+                ip_address="203.0.113.11",
+            )
+        future = datetime.now(timezone.utc) + timedelta(minutes=11)
+        with self.assertRaises(RunTokenExpired):
+            submit_ranked_run(
+                run_id=run["run_id"], user_id=user_id,
+                submission_token=token, record_encoding=self._record(run),
+                ip_address="203.0.113.11", now=future,
+            )
+
+    def test_pending_limits_and_record_size_are_enforced_before_consumption(self) -> None:
+        user_id = self._add_user("limited@example.com", "Limited")
+        first = self._run(user_id, "pending-first")
+        first_qualified = self._qualify(first, user_id)
+        submit_ranked_run(
+            run_id=first["run_id"], user_id=user_id,
+            submission_token=first_qualified["submission_token"],
+            record_encoding=self._record(first), ip_address="203.0.113.13",
+        )
+
+        second = self._run(user_id, "pending-second")
+        second_qualified = self._qualify(second, user_id)
+        with self.assertRaisesRegex(RuntimeError, "user_pending_limit"):
+            submit_ranked_run(
+                run_id=second["run_id"], user_id=user_id,
+                submission_token=second_qualified["submission_token"],
+                record_encoding=self._record(second), ip_address="203.0.113.13",
+            )
+        with auth_db() as db:
+            second_row = db.execute(
+                "SELECT status, submission_token_consumed_at FROM minigame_ranked_runs WHERE run_id = ?",
+                (second["run_id"],),
+            ).fetchone()
+        self.assertEqual(second_row["status"], "qualified")
+        self.assertIsNone(second_row["submission_token_consumed_at"])
+
+        oversized_user = self._add_user("oversized@example.com", "Oversized")
+        oversized = self._run(oversized_user, "oversized")
+        oversized_qualified = self._qualify(oversized, oversized_user)
+        oversized_record = MGO_RECORD_PREFIX + base64.b64encode(b"x" * (256 * 1024 + 1)).decode("ascii")
+        with self.assertRaisesRegex(ValueError, "record_too_large"):
+            submit_ranked_run(
+                run_id=oversized["run_id"], user_id=oversized_user,
+                submission_token=oversized_qualified["submission_token"],
+                record_encoding=oversized_record, ip_address="203.0.113.14",
+            )
+
+    def test_existing_score_table_is_safely_extended_by_migration(self) -> None:
+        with auth_db() as db:
+            db.execute("DROP TABLE minigame_high_scores")
+            db.execute(
+                """
+                CREATE TABLE minigame_high_scores (
+                  user_id INTEGER NOT NULL,
+                  game_id TEXT NOT NULL,
+                  difficulty INTEGER NOT NULL,
+                  best_score INTEGER NOT NULL DEFAULT 0,
+                  trophy_tier INTEGER NOT NULL DEFAULT 0,
+                  highest_tile_exp INTEGER NOT NULL DEFAULT 0,
+                  final_board_json TEXT NOT NULL,
+                  board_rows INTEGER NOT NULL DEFAULT 4,
+                  board_cols INTEGER NOT NULL DEFAULT 4,
+                  score_achieved_at TEXT NOT NULL,
+                  trophy_achieved_at TEXT,
+                  updated_at TEXT NOT NULL,
+                  PRIMARY KEY(user_id, game_id, difficulty)
+                )
+                """
+            )
+        init_auth_db()
+        with auth_db() as db:
+            columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(minigame_high_scores)")
+            }
+            run_table = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'minigame_ranked_runs'"
+            ).fetchone()
+        self.assertTrue(
+            {
+                "score_run_id", "trophy_run_id", "verification_level",
+                "score_verified_at", "trophy_verified_at", "record_hash", "record_blob",
+            }.issubset(columns)
+        )
+        self.assertIsNotNone(run_table)
+
+    def test_global_pending_queue_is_capped_at_32(self) -> None:
+        user_id = self._add_user("queue-target@example.com", "Queue Target")
+        filler_id = self._add_user("queue-filler@example.com", "Queue Filler")
+        run = self._run(user_id, "queue-target")
+        qualified = self._qualify(run, user_id)
+        now = datetime.now(timezone.utc)
+        with auth_db() as db:
+            for index in range(32):
+                db.execute(
+                    """
+                    INSERT INTO minigame_ranked_runs
+                    (run_id, user_id, request_id, game_id, difficulty, rules_version,
+                     seed_salt_hex, seed_hex, status, started_at, expires_at,
+                     submitted_at, pending_record, record_hash)
+                    VALUES (?, ?, ?, 'column-chaos', 1, 1, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"filler-run-{index}", filler_id, f"filler-request-{index}",
+                        "00" * 16, "11" * 16, now.isoformat(),
+                        (now + timedelta(days=1)).isoformat(), now.isoformat(),
+                        self._record(run), f"hash-{index}",
+                    ),
+                )
+        with self.assertRaisesRegex(RuntimeError, "queue_full"):
+            submit_ranked_run(
+                run_id=run["run_id"], user_id=user_id,
+                submission_token=qualified["submission_token"],
+                record_encoding=self._record(run), ip_address="203.0.113.15",
+            )
+
+    def test_get_run_does_not_expose_salt_or_pending_record(self) -> None:
+        user_id = self._add_user("get@example.com", "Get")
+        run = self._run(user_id)
+        public = get_ranked_run(run_id=run["run_id"], user_id=user_id)
+        self.assertNotIn("seed_salt_hex", public)
+        self.assertNotIn("pending_record", public)
+        self.assertNotIn("run_token", public)
+
 
 
 if __name__ == "__main__":

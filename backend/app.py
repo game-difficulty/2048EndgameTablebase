@@ -76,11 +76,17 @@ from backend.handlers.tablebase_query import (
 from backend.gamer_ranked.routes import router as gamer_ranked_router
 from backend.gamer_ranked.service import (
     cleanup_stale_ranked_runs,
-    prepare_validation_queue,
+    prepare_validation_queue as prepare_gamer_validation_queue,
     process_one_pending_run,
 )
 from backend.leaderboards.routes import router as leaderboard_router
 from backend.minigame_rankings.routes import router as minigame_rankings_router
+from backend.minigame_rankings.verifier import (
+    cleanup_stale_ranked_runs as cleanup_stale_minigame_ranked_runs,
+    close_verifier as close_minigame_verifier,
+    prepare_validation_queue as prepare_minigame_validation_queue,
+    process_one_pending_run as process_one_pending_minigame_run,
+)
 from backend.leaderboards.service import refresh_due_leaderboards
 from backend.profile.routes import router as profile_router
 from backend.preload import start_preload_thread
@@ -188,11 +194,22 @@ async def _gamer_validation_loop() -> None:
         await asyncio.sleep(0.05 if processed else 1.0)
 
 
+async def _minigame_validation_loop() -> None:
+    next_cleanup = 0.0
+    while True:
+        if time.monotonic() >= next_cleanup:
+            await asyncio.to_thread(cleanup_stale_minigame_ranked_runs)
+            next_cleanup = time.monotonic() + 3600
+        processed = await asyncio.to_thread(process_one_pending_minigame_run)
+        await asyncio.sleep(0.05 if processed else 1.0)
+
+
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI):
     SingletonConfig()
     init_auth_db()
-    prepare_validation_queue()
+    prepare_gamer_validation_queue()
+    prepare_minigame_validation_queue()
     cleanup_expired_uploads()
     cleanup_expired_jobs()
     start_preload_thread()
@@ -202,11 +219,13 @@ async def app_lifespan(_app: FastAPI):
     await remote_worker_registry.start()
     leaderboard_refresh_task = asyncio.create_task(_leaderboard_refresh_loop())
     gamer_validation_task = asyncio.create_task(_gamer_validation_loop())
+    minigame_validation_task = asyncio.create_task(_minigame_validation_loop())
     try:
         yield
     finally:
         leaderboard_refresh_task.cancel()
         gamer_validation_task.cancel()
+        minigame_validation_task.cancel()
         try:
             await leaderboard_refresh_task
         except asyncio.CancelledError:
@@ -215,6 +234,11 @@ async def app_lifespan(_app: FastAPI):
             await gamer_validation_task
         except asyncio.CancelledError:
             pass
+        try:
+            await minigame_validation_task
+        except asyncio.CancelledError:
+            pass
+        await asyncio.to_thread(close_minigame_verifier)
         remote_worker_registry.remove_availability_listener(
             _broadcast_tablebase_catalog_update
         )

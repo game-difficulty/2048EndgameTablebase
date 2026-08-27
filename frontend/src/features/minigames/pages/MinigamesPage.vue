@@ -12,6 +12,7 @@
     :state="gameState"
     :overlay="overlay"
     :toast-message="toastMessage"
+    :ranked-status="rankedStatus"
     :active="active"
     @back-menu="backToMenu"
     @new-game="newGame"
@@ -47,6 +48,7 @@ const {
   lastMenuFocusGameId,
   toastMessage,
   overlay,
+  rankedStatus,
   closeOverlay,
   setDifficulty,
   startGame,

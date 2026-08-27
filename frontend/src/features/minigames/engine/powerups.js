@@ -313,10 +313,14 @@ export function maybeAwardRandomPowerup(state, scoreDelta) {
     return null;
   }
   const probability = Number(state.difficulty) === 1 ? 0.05 : 0.25;
-  if (Math.random() >= probability) {
+  const runtime = state.engine?.runtime;
+  const roll = runtime?.random?.() ?? Math.random();
+  if (roll >= probability) {
     return null;
   }
-  const awarded = POWERUP_KEYS[Math.floor(Math.random() * POWERUP_KEYS.length)];
+  const awarded = POWERUP_KEYS[
+    runtime?.randomIndex?.(POWERUP_KEYS.length) ?? Math.floor(Math.random() * POWERUP_KEYS.length)
+  ];
   state.powerupCounts[awarded] = Number(state.powerupCounts?.[awarded] || 0) + 1;
   return awarded;
 }

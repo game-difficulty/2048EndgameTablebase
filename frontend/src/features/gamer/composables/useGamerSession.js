@@ -651,7 +651,11 @@ export function useGamerSession(activeRef) {
       if (['pending', 'validating'].includes(String(payload.status))) pollRankedRun();
     } catch (error) {
       if (ranked.value.runId) {
-        updateRanked({ status: 'submission_failed', errorCode: error?.code || 'submit_failed' });
+        const errorCode = error?.code || 'submit_failed';
+        const status = ['user_daily_limit', 'ip_daily_limit'].includes(errorCode)
+          ? 'submission_limited'
+          : 'submission_failed';
+        updateRanked({ status, errorCode });
       }
     }
   };

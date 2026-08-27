@@ -161,6 +161,7 @@ const visibleRankedStatuses = new Set([
   'pending',
   'validating',
   'submission_failed',
+  'submission_limited',
 ]);
 const showRankedStatus = computed(() => visibleRankedStatuses.has(rankedStatus.value));
 
@@ -238,6 +239,7 @@ const handleBoardSwipe = (direction) => {
 }
 
 .gamer-ranked-badge.status-submission_failed,
+.gamer-ranked-badge.status-submission_limited,
 .gamer-ranked-badge.status-rejected,
 .gamer-ranked-badge.status-ineligible {
   color: #d14a45;

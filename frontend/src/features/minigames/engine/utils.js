@@ -70,18 +70,26 @@ export function emptyPositions(board) {
   return positions;
 }
 
-export function randomChoice(items) {
+const randomIndex = (count, rng = null) => {
+  if (rng && typeof rng.chooseIndex === 'function') return rng.chooseIndex(count);
+  if (rng && typeof rng.randomIndex === 'function') return rng.randomIndex(count);
+  if (rng && typeof rng.nextFloat === 'function') return Math.floor(rng.nextFloat() * count);
+  if (rng && typeof rng.random === 'function') return Math.floor(rng.random() * count);
+  return Math.floor(Math.random() * count);
+};
+
+export function randomChoice(items, rng = null) {
   if (!Array.isArray(items) || items.length === 0) {
     return null;
   }
-  return items[Math.floor(Math.random() * items.length)];
+  return items[randomIndex(items.length, rng)];
 }
 
-export function randomSample(items, count) {
+export function randomSample(items, count, rng = null) {
   const pool = Array.isArray(items) ? items.slice() : [];
   const result = [];
   while (pool.length > 0 && result.length < count) {
-    const index = Math.floor(Math.random() * pool.length);
+    const index = randomIndex(pool.length, rng);
     result.push(pool.splice(index, 1)[0]);
   }
   return result;
