@@ -5,8 +5,8 @@ function resolveUrl(value, baseUrl) {
   return new URL(value, new URL(baseUrl, pageUrl)).toString();
 }
 
-async function fetchJson(url, fetchImpl) {
-  const response = await fetchImpl(url, { cache: 'force-cache' });
+async function fetchJson(url, fetchImpl, cache = 'force-cache') {
+  const response = await fetchImpl(url, { cache });
   if (!response.ok) {
     throw new Error(`Guide request failed with HTTP ${response.status}.`);
   }
@@ -21,7 +21,7 @@ export async function loadGuideIndex(fetchImpl = globalThis.fetch, indexUrl = DE
     throw new Error('Fetch is unavailable.');
   }
 
-  const { data, responseUrl } = await fetchJson(indexUrl, fetchImpl);
+  const { data, responseUrl } = await fetchJson(indexUrl, fetchImpl, 'no-cache');
   const documents = Array.isArray(data?.documents) ? data.documents : [];
 
   return documents

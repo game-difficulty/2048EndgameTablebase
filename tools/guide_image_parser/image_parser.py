@@ -202,6 +202,115 @@ def _tile_rect_bboxes(rgb: np.ndarray) -> list[list[int]]:
     return sorted(filtered, key=lambda bbox: (bbox[1], bbox[0]))
 
 
+def _sequence_strip_board_candidates(rgb: np.ndarray) -> list[BoardCandidate]:
+    """Detect diagrams made of spatially separated 1x4 board states.
+
+    Thin arrows and highlight frames connect adjacent tile masks in these
+    diagrams. An extra erosion removes those strokes while preserving the
+    substantially larger tile interiors.
+    """
+    cv = _require_cv2()
+    image_height, image_width = rgb.shape[:2]
+    if image_width / max(1, image_height) < 2.5:
+        return []
+
+    mask = _tile_palette_mask(rgb)
+    separated = cv.erode(
+        mask,
+        cv.getStructuringElement(cv.MORPH_RECT, (3, 3)),
+        iterations=1,
+    )
+    separated = cv.morphologyEx(
+        separated,
+        cv.MORPH_CLOSE,
+        cv.getStructuringElement(cv.MORPH_RECT, (3, 9)),
+        iterations=1,
+    )
+    raw_boxes: list[list[int]] = []
+    for bbox in _contour_bboxes(separated):
+        x, y, w, h = bbox
+        if w < 12 or h < 12:
+            continue
+        ratio = w / max(1, h)
+        if not 0.72 <= ratio <= 1.38:
+            continue
+        component = separated[y : y + h, x : x + w]
+        fill_ratio = float((component > 0).sum()) / max(1, component.size)
+        if fill_ratio >= 0.52:
+            raw_boxes.append([int(x), int(y), int(w), int(h)])
+    if len(raw_boxes) < 4:
+        return []
+
+    median_side = float(np.median([min(box[2], box[3]) for box in raw_boxes]))
+    tile_boxes = [
+        box
+        for box in raw_boxes
+        if median_side * 0.76 <= min(box[2], box[3]) <= median_side * 1.24
+        and max(box[2], box[3]) <= median_side * 1.34
+    ]
+    if len(tile_boxes) < 4:
+        return []
+
+    y_positions = _cluster_positions([float(box[1]) for box in tile_boxes], median_side * 0.32)
+    if not y_positions:
+        return []
+    y_gaps = np.diff(sorted(y_positions))
+    if len(y_gaps) and float(np.min(y_gaps)) <= median_side * 1.46:
+        return []
+
+    median_w = float(np.median([box[2] for box in tile_boxes]))
+    median_h = float(np.median([box[3] for box in tile_boxes]))
+    expand = max(1, round(median_side * 0.055))
+    candidates: list[BoardCandidate] = []
+    for y_pos in y_positions:
+        row_boxes = [box for box in tile_boxes if abs(box[1] - y_pos) <= median_side * 0.36]
+        x_positions = _cluster_positions([float(box[0]) for box in row_boxes], median_side * 0.32)
+        for x_group in _x_grid_groups(x_positions, median_side * 1.22):
+            if len(x_group) != 4:
+                continue
+            evidence = sum(
+                any(abs(box[0] - x_pos) <= median_side * 0.36 for box in row_boxes)
+                for x_pos in x_group
+            )
+            if evidence < 3:
+                continue
+            cell_boxes = [
+                (
+                    0,
+                    col,
+                    [
+                        max(0, round(x_pos) - expand),
+                        max(0, round(y_pos) - expand),
+                        max(1, round(median_w) + expand * 2),
+                        max(1, round(median_h) + expand * 2),
+                    ],
+                )
+                for col, x_pos in enumerate(x_group)
+            ]
+            xs = [cell[2][0] for cell in cell_boxes]
+            ys = [cell[2][1] for cell in cell_boxes]
+            rights = [cell[2][0] + cell[2][2] for cell in cell_boxes]
+            bottoms = [cell[2][1] + cell[2][3] for cell in cell_boxes]
+            bbox = [min(xs), min(ys), max(rights) - min(xs), max(bottoms) - min(ys)]
+            if bbox[0] + bbox[2] > image_width or bbox[1] + bbox[3] > image_height:
+                continue
+            flags = ["partial_board_bottom_f_padding"]
+            if evidence < 4:
+                flags.append("sequence_strip_inferred_cell")
+            candidates.append(
+                BoardCandidate(
+                    bbox=bbox,
+                    visible_rows=1,
+                    visible_cols=4,
+                    fit_confidence=0.94 if evidence == 4 else 0.88,
+                    cell_boxes=cell_boxes,
+                    flags=flags,
+                    source="sequence_strip",
+                )
+            )
+    return _sort_board_candidates_spatial(candidates)
+
+
 def _colored_cell_bboxes(rgb: np.ndarray) -> list[list[int]]:
     mask = _colored_mask(rgb)
     raw: list[list[int]] = []
@@ -506,8 +615,8 @@ def _cell_grid_board_candidates(rgb: np.ndarray) -> list[BoardCandidate]:
             continue
         for y_group in y_groups:
             candidate_y_group = list(y_group)
-            if len(candidate_y_group) == 2:
-                step_y = candidate_y_group[1] - candidate_y_group[0]
+            if len(candidate_y_group) in (2, 3):
+                step_y = float(np.median(np.diff(candidate_y_group)))
                 inferred_top_y = candidate_y_group[0] - step_y
                 if inferred_top_y >= -median_side * 0.35:
                     nearby_foreign_row = any(
@@ -1193,7 +1302,30 @@ def _prefer_full_tile_over_split_regions(
     return kept_regions, promoted_tiles + tile_candidates
 
 
+def _filter_undersized_board_candidates(
+    rgb: np.ndarray,
+    candidates: list[BoardCandidate],
+) -> list[BoardCandidate]:
+    tile_boxes = _tile_rect_bboxes(rgb)
+    if len(tile_boxes) < 4:
+        return candidates
+    median_tile_side = float(np.median([min(box[2], box[3]) for box in tile_boxes]))
+    minimum_cell_side = median_tile_side * 0.25
+    return [
+        candidate
+        for candidate in candidates
+        if min(
+            candidate.bbox[2] / max(1, candidate.visible_cols),
+            candidate.bbox[3] / max(1, candidate.visible_rows),
+        )
+        >= minimum_cell_side
+    ]
+
+
 def _find_board_candidates(rgb: np.ndarray) -> list[BoardCandidate]:
+    sequence_strip_candidates = _sequence_strip_board_candidates(rgb)
+    if sequence_strip_candidates:
+        return sequence_strip_candidates
     cell_grid_candidates = _repair_edge_shifted_cell_grids(
         rgb,
         _cell_grid_board_candidates(rgb),
@@ -1230,8 +1362,11 @@ def _find_board_candidates(rgb: np.ndarray) -> list[BoardCandidate]:
     )
     all_candidates = occupied_candidates + mask_lattice_candidates
     if all_candidates:
-        return _dedupe_board_candidates(all_candidates)
-    return rough_candidates
+        return _filter_undersized_board_candidates(
+            rgb,
+            _dedupe_board_candidates(all_candidates),
+        )
+    return _filter_undersized_board_candidates(rgb, rough_candidates)
 
 
 def _find_board_bboxes(rgb: np.ndarray) -> list[tuple[list[int], int, float, list[str]]]:

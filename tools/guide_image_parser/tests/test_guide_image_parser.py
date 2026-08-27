@@ -23,6 +23,8 @@ from tools.guide_image_parser.image_parser import (
     _repair_edge_shifted_cell_grids,
     parse_manifest,
 )
+from tools.guide_image_parser.pdf_guide_document import _included_pages
+from tools.guide_image_parser.pdf_media import extract_pdf_media_from_xml
 from tools.guide_image_parser.qa_report import render_qa_report
 from tools.guide_image_parser.validate_gold_samples import validate_gold_samples
 
@@ -361,6 +363,78 @@ class GuideImageParserTests(unittest.TestCase):
             parsed = parse_manifest(manifest, tmp / "parsed_images.jsonl")
             self.assertEqual(parsed[0]["boards"][0]["visible_rows"], 3)
             self.assertEqual(parsed[0]["boards"][0]["hex"], "112102349854ffff")
+
+    def test_sequence_strip_is_split_into_one_row_boards(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            states = [
+                [[1, 1, 0, 0]],
+                [[2, 1, 0, 0]],
+                [[0, 1, 2, 1]],
+                [[1, 2, 1, 1]],
+                [[1, 2, 2, 1]],
+                [[1, 3, 1, 1]],
+            ]
+            boards = [draw_board(state, cell=50, gap=8, pad=4) for state in states]
+            gap_x = 54
+            gap_y = 54
+            canvas = Image.new(
+                "RGB",
+                (boards[0].width * 3 + gap_x * 2, boards[0].height * 2 + gap_y),
+                "white",
+            )
+            for index, board in enumerate(boards):
+                row, col = divmod(index, 3)
+                canvas.paste(board, (col * (board.width + gap_x), row * (board.height + gap_y)))
+            draw = ImageDraw.Draw(canvas)
+            draw.rectangle((boards[0].width + gap_x + 2, 2, boards[0].width * 2 + gap_x - 2, 56), outline="#ed0000", width=3)
+
+            manifest = make_manifest(tmp, [canvas])
+            parsed = parse_manifest(manifest, tmp / "parsed_images.jsonl")
+
+            self.assertEqual([board["visible_rows"] for board in parsed[0]["boards"]], [1] * 6)
+            self.assertEqual(
+                [board["hex"] for board in parsed[0]["boards"]],
+                [
+                    "1100ffffffffffff",
+                    "2100ffffffffffff",
+                    "0121ffffffffffff",
+                    "1211ffffffffffff",
+                    "1221ffffffffffff",
+                    "1311ffffffffffff",
+                ],
+            )
+
+    def test_pdf_font_definitions_are_reused_across_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            xml_path = tmp / "source.xml"
+            xml_path.write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<pdf2xml>
+  <page number="1" width="100" height="100">
+    <fontspec id="0" size="24" color="#0e4660" />
+    <fontspec id="1" size="24" color="#000000" />
+    <fontspec id="2" size="36" color="#0e4660" />
+    <text top="10" left="10" width="50" height="20" font="0">目录</text>
+  </page>
+  <page number="2" width="100" height="100">
+    <text top="10" left="10" width="80" height="20" font="1">一、正文..........1</text>
+  </page>
+  <page number="3" width="100" height="100">
+    <text top="10" left="10" width="80" height="20" font="2">一、正文</text>
+  </page>
+</pdf2xml>
+""",
+                encoding="utf-8",
+            )
+
+            extract_pdf_media_from_xml(tmp / "guide.pdf", xml_path, tmp / "out")
+            content = json.loads((tmp / "out" / "pdf_content.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(content["pages"][2]["lines"][0]["size"], 36)
+            self.assertEqual(content["pages"][2]["lines"][0]["color"], "#0e4660")
+            self.assertEqual(_included_pages(content["pages"]), {3})
 
     def test_multi_board_and_connector(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

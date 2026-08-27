@@ -6,6 +6,13 @@
       "source": "32768-dream-v3/document.json",
       "title": "32768不是梦（第3版）",
       "type": "guide"
+    },
+    {
+      "id": "l3-256-guide-2603",
+      "language": "zh",
+      "source": "l3-256-guide-2603/document.json",
+      "title": "L3-256 攻略（2603版）",
+      "type": "guide"
     }
   ],
   "version": 1

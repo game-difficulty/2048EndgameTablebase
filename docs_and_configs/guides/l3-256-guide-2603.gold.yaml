@@ -1,0 +1,114 @@
+samples:
+  - image_id: img_0002
+    note: six one-row states with arrows and highlights
+    board_count: 6
+    boards:
+      - {visible_rows: 1, hex: "1100ffffffffffff"}
+      - {visible_rows: 1, hex: "2100ffffffffffff"}
+      - {visible_rows: 1, hex: "0121ffffffffffff"}
+      - {visible_rows: 1, hex: "1211ffffffffffff"}
+      - {visible_rows: 1, hex: "1221ffffffffffff"}
+      - {visible_rows: 1, hex: "1311ffffffffffff"}
+
+  - image_id: img_0003
+    note: four one-row states with arrows and highlights
+    board_count: 4
+    boards:
+      - {visible_rows: 1, hex: "1110ffffffffffff"}
+      - {visible_rows: 1, hex: "2110ffffffffffff"}
+      - {visible_rows: 1, hex: "0122ffffffffffff"}
+      - {visible_rows: 1, hex: "1310ffffffffffff"}
+
+  - image_id: img_0004
+    note: six one-row states with arrows and highlights
+    board_count: 6
+    boards:
+      - {visible_rows: 1, hex: "1100ffffffffffff"}
+      - {visible_rows: 1, hex: "2100ffffffffffff"}
+      - {visible_rows: 1, hex: "0121ffffffffffff"}
+      - {visible_rows: 1, hex: "1211ffffffffffff"}
+      - {visible_rows: 1, hex: "1122ffffffffffff"}
+      - {visible_rows: 1, hex: "2310ffffffffffff"}
+
+  - image_id: img_0005
+    note: five one-row states with arrows and highlights
+    board_count: 5
+    boards:
+      - {visible_rows: 1, hex: "1110ffffffffffff"}
+      - {visible_rows: 1, hex: "2110ffffffffffff"}
+      - {visible_rows: 1, hex: "0122ffffffffffff"}
+      - {visible_rows: 1, hex: "0113ffffffffffff"}
+      - {visible_rows: 1, hex: "2310ffffffffffff"}
+
+  - image_id: img_0006
+    note: seven one-row states over three rows
+    board_count: 7
+    boards:
+      - {visible_rows: 1, hex: "1100ffffffffffff"}
+      - {visible_rows: 1, hex: "0012ffffffffffff"}
+      - {visible_rows: 1, hex: "1210ffffffffffff"}
+      - {visible_rows: 1, hex: "1121ffffffffffff"}
+      - {visible_rows: 1, hex: "1221ffffffffffff"}
+      - {visible_rows: 1, hex: "1131ffffffffffff"}
+      - {visible_rows: 1, hex: "2311ffffffffffff"}
+
+  - image_id: img_0007
+    note: five one-row states with arrows and highlights
+    board_count: 5
+    boards:
+      - {visible_rows: 1, hex: "1110ffffffffffff"}
+      - {visible_rows: 1, hex: "0112ffffffffffff"}
+      - {visible_rows: 1, hex: "0122ffffffffffff"}
+      - {visible_rows: 1, hex: "0113ffffffffffff"}
+      - {visible_rows: 1, hex: "2310ffffffffffff"}
+
+  - image_id: img_0014
+    note: six full boards with arrows, red frames, and blank 32768 tiles
+    board_count: 6
+    boards:
+      - {hex: "42126320fff2fff1"}
+      - {hex: "42106321fff3fff1"}
+      - {hex: "42116323fff1fff1"}
+      - {hex: "42116323fff2fff1"}
+      - {hex: "42216323fff2fff1"}
+      - {hex: "42116333fff2fff1"}
+
+  - image_id: img_0027
+    note: five full boards whose top rows are crossed by arrows and highlights
+    board_count: 5
+    boards:
+      - {bbox: [65, 35, 300, 300], bbox_tolerance: 2, hex: "11106532fff3fff1"}
+      - {bbox: [435, 35, 300, 300], bbox_tolerance: 2, hex: "21106532fff3fff1"}
+      - {bbox: [805, 35, 300, 300], bbox_tolerance: 2, hex: "22106532fff3fff1"}
+      - {bbox: [435, 375, 300, 300], bbox_tolerance: 2, hex: "10316532fff3fff1"}
+      - {bbox: [805, 375, 300, 300], bbox_tolerance: 2, hex: "11016542fff3fff1"}
+
+  - image_id: img_0050
+    note: ordinary full board with blank 32768 tiles
+    board_count: 1
+    boards:
+      - {hex: "43307541fff1fff1"}
+
+  - image_id: img_0068
+    note: three full boards with labels between boards
+    board_count: 3
+    boards:
+      - {bbox: [65, 35, 300, 300], bbox_tolerance: 2, hex: "13117632fff4fff4"}
+      - {bbox: [435, 35, 300, 300], bbox_tolerance: 2, hex: "11327632fff4fff4"}
+      - {bbox: [805, 35, 300, 300], bbox_tolerance: 2, hex: "11007641fff3fff5"}
+
+  - image_id: img_0082
+    note: labels between boards must not become tiny empty boards
+    board_count: 3
+    boards:
+      - {bbox: [65, 35, 300, 300], bbox_tolerance: 2, hex: "52207551fff1fff0"}
+      - {bbox: [435, 35, 300, 300], bbox_tolerance: 2, hex: "52227551fff0fff0"}
+      - {bbox: [805, 35, 300, 300], bbox_tolerance: 2, hex: "53227610fff1fff0"}
+
+  - image_id: img_0083
+    note: alphanumeric labels between boards must not become board candidates
+    board_count: 3
+    boards:
+      - {bbox: [65, 35, 300, 300], bbox_tolerance: 2, hex: "52227551fff0fff0"}
+      - {bbox: [435, 35, 300, 300], bbox_tolerance: 2, hex: "53227611fff0fff0"}
+      - {bbox: [805, 35, 300, 300], bbox_tolerance: 2, hex: "53337621fff0fff1"}

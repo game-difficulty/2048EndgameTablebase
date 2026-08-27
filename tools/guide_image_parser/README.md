@@ -12,6 +12,12 @@ python tools/guide_image_parser/parse_guide_images.py --manifest tmp/guide_media
 python tools/guide_image_parser/validate_gold_samples.py --parsed tmp/guide_media/parsed_images.jsonl --gold tools/guide_image_parser/gold_samples.yaml
 python tools/guide_image_parser/render_qa_report.py --parsed tmp/guide_media/parsed_images.jsonl --out tmp/guide_media/qa.html
 python tools/guide_image_parser/build_guide_document.py --docx "C:\path\guide.docx" --manifest tmp/guide_media/media_manifest.jsonl --parsed tmp/guide_media/parsed_images.jsonl --out frontend/public/guides/my-guide --document-id my-guide --title "My Guide" --index frontend/public/guides/index.json
+
+# PDF input (requires Poppler's pdftohtml command)
+python tools/guide_image_parser/extract_pdf_media.py --pdf "C:\path\guide.pdf" --out tmp/pdf_guide_media
+python tools/guide_image_parser/parse_guide_images.py --manifest tmp/pdf_guide_media/media_manifest.jsonl --out tmp/pdf_guide_media/parsed_images.jsonl --qa-dir tmp/pdf_guide_media/qa
+python tools/guide_image_parser/validate_gold_samples.py --parsed tmp/pdf_guide_media/parsed_images.jsonl --gold docs_and_configs/guides/my-pdf-guide.gold.yaml
+python tools/guide_image_parser/build_pdf_guide_document.py --pdf "C:\path\guide.pdf" --content tmp/pdf_guide_media/pdf_content.json --manifest tmp/pdf_guide_media/media_manifest.jsonl --parsed tmp/pdf_guide_media/parsed_images.jsonl --out frontend/public/guides/my-pdf-guide --document-id my-pdf-guide --title "My PDF Guide" --index frontend/public/guides/index.json
 ```
 
 `parse_guide_images.py` accepts `--overrides tools/guide_image_parser/overrides.yaml`
@@ -29,6 +35,7 @@ with `board_id`/`board_index`. Targeted entries can independently check `hex`,
 ## Output Contract
 
 - `media_manifest.jsonl`: one line per image occurrence in document order.
+- `pdf_content.json`: PDF text lines and image placements in page reading order.
 - `parsed_images.jsonl`: one line per image with detected boards, annotations,
   status, and QA flags.
 - `guide_boards.json`: compact summary of accepted/review boards for later

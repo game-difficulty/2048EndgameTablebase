@@ -17,6 +17,7 @@ try {
         --exclude frontend/.vite `
         --exclude native_core/build-* `
         --exclude native_core/x86simdsort/x86-simd-sort/builddir `
+        --exclude docs_and_configs/guides/sources `
         --exclude __pycache__ `
         --exclude '*.pyc' `
         --exclude cloud_server.log `
@@ -27,4 +28,3 @@ try {
 } finally {
     Pop-Location
 }
-
