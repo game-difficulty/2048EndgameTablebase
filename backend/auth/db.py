@@ -429,6 +429,10 @@ def init_auth_db() -> None:
               rules_version INTEGER NOT NULL,
               seed_salt_hex TEXT NOT NULL,
               seed_hex TEXT NOT NULL,
+              lease_token_hash TEXT,
+              lease_expires_at TEXT,
+              lease_last_seen_at TEXT,
+              lease_generation INTEGER NOT NULL DEFAULT 1,
               status TEXT NOT NULL,
               started_at TEXT NOT NULL,
               expires_at TEXT NOT NULL,
@@ -490,6 +494,8 @@ def init_auth_db() -> None:
               );
             CREATE INDEX IF NOT EXISTS idx_minigame_runs_user_status
               ON minigame_ranked_runs(user_id, status, started_at);
+            CREATE INDEX IF NOT EXISTS idx_minigame_runs_active_game
+              ON minigame_ranked_runs(user_id, game_id, difficulty, status);
             CREATE INDEX IF NOT EXISTS idx_minigame_runs_pending
               ON minigame_ranked_runs(status, submitted_at);
             CREATE INDEX IF NOT EXISTS idx_minigame_runs_start_ip
@@ -561,6 +567,33 @@ def init_auth_db() -> None:
                 db.execute(
                     f"ALTER TABLE minigame_high_scores ADD COLUMN {column_name} {column_type}"
                 )
+
+        existing_minigame_run_columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(minigame_ranked_runs)").fetchall()
+        }
+        minigame_run_migrations = (
+            ("lease_token_hash", "TEXT"),
+            ("lease_expires_at", "TEXT"),
+            ("lease_last_seen_at", "TEXT"),
+            ("lease_generation", "INTEGER NOT NULL DEFAULT 1"),
+        )
+        for column_name, column_type in minigame_run_migrations:
+            if column_name not in existing_minigame_run_columns:
+                db.execute(
+                    f"ALTER TABLE minigame_ranked_runs ADD COLUMN {column_name} {column_type}"
+                )
+        db.execute(
+            """
+            UPDATE minigame_ranked_runs
+            SET status = 'expired',
+                completed_at = COALESCE(completed_at, ?),
+                error_code = COALESCE(error_code, 'lease_required')
+            WHERE status IN ('active', 'qualified')
+              AND (lease_token_hash IS NULL OR lease_token_hash = '')
+            """,
+            (_iso_now(),),
+        )
 
         used_identities = {
             row["email_identity"]

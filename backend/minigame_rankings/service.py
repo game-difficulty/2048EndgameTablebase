@@ -21,6 +21,7 @@ LEADERBOARD_LIMIT = 100
 RANKED_RULES_VERSION = 1
 RUN_LIFETIME = timedelta(hours=24)
 SUBMISSION_TOKEN_LIFETIME = timedelta(minutes=10)
+LEASE_LIFETIME = timedelta(seconds=60)
 MAX_PENDING_RECORD_BYTES = 256 * 1024
 MAX_PENDING_GLOBAL = 32
 MGO_RECORD_PREFIX = "MINIGAME_v1MGO_B64_"
@@ -142,6 +143,44 @@ def _summary_hash(summary: dict[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _lease_hash(token: str) -> str:
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def _lease_matches(row: sqlite3.Row | dict[str, Any], token: str) -> bool:
+    expected = str(row["lease_token_hash"] or "")
+    supplied = _lease_hash(token)
+    return bool(expected) and secrets.compare_digest(expected, supplied)
+
+
+def _new_lease(now: datetime, token: str) -> tuple[str, str, str]:
+    normalized = str(token or "").strip()
+    if len(normalized) < 16 or len(normalized) > 256:
+        raise ValueError("invalid_lease_token")
+    return normalized, _lease_hash(normalized), _iso(now + LEASE_LIFETIME)
+
+
+def _lease_expired(row: sqlite3.Row | dict[str, Any], now: datetime) -> bool:
+    raw_expiry = row["lease_expires_at"]
+    if not raw_expiry:
+        return True
+    try:
+        return datetime.fromisoformat(str(raw_expiry)) <= now
+    except ValueError:
+        return True
+
+
+def _assert_live_lease(
+    row: sqlite3.Row | dict[str, Any],
+    lease_token: str,
+    now: datetime,
+) -> None:
+    if not _lease_matches(row, lease_token):
+        raise PermissionError("lease_mismatch")
+    if _lease_expired(row, now):
+        raise PermissionError("lease_expired")
+
+
 def _entry_key(kind: str, user_id: int, game_id: str, difficulty: int) -> str:
     raw = f"minigame:{kind}:{user_id}:{game_id}:{difficulty}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
@@ -183,6 +222,8 @@ def _public_run(
         "submitted_at": row["submitted_at"],
         "completed_at": row["completed_at"],
         "error_code": row["error_code"],
+        "lease_expires_at": row["lease_expires_at"],
+        "lease_generation": int(row["lease_generation"] or 1),
     }
     if include_run_token:
         payload["run_token"] = _run_token_for(row)
@@ -254,6 +295,9 @@ def create_ranked_run(
     game_id: str,
     difficulty: int,
     ip_address: str,
+    lease_token: str,
+    replace_run_id: str | None = None,
+    replace_lease_token: str | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     normalized_request = str(request_id or "").strip()
@@ -262,6 +306,7 @@ def create_ranked_run(
     normalized_game_id, normalized_difficulty = _normalize_game(game_id, difficulty)
     current = now or _utc_now()
     expires = current + RUN_LIFETIME
+    lease_token, lease_hash, lease_expires_at = _new_lease(current, lease_token)
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
         existing = db.execute(
@@ -274,7 +319,70 @@ def create_ranked_run(
                 or int(existing["difficulty"]) != normalized_difficulty
             ):
                 raise ValueError("request_id_conflict")
-            return _public_run(existing, include_run_token=True)
+            if str(existing["status"]) not in {"active", "qualified"}:
+                return _public_run(existing)
+            if not _lease_matches(existing, lease_token):
+                raise RuntimeError("active_run_exists")
+            db.execute(
+                """
+                UPDATE minigame_ranked_runs
+                SET lease_expires_at = ?, lease_last_seen_at = ?
+                WHERE run_id = ? AND status IN ('active', 'qualified')
+                """,
+                (lease_expires_at, _iso(current), str(existing["run_id"])),
+            )
+            existing = db.execute(
+                "SELECT * FROM minigame_ranked_runs WHERE run_id = ?",
+                (str(existing["run_id"]),),
+            ).fetchone()
+            payload = _public_run(existing, include_run_token=True)
+            payload["lease_token"] = lease_token
+            return payload
+
+        active_rows = db.execute(
+            """
+            SELECT * FROM minigame_ranked_runs
+            WHERE user_id = ? AND game_id = ? AND difficulty = ?
+              AND status IN ('active', 'qualified')
+            ORDER BY started_at ASC
+            """,
+            (int(user_id), normalized_game_id, normalized_difficulty),
+        ).fetchall()
+        for active in active_rows:
+            if _lease_expired(active, current):
+                db.execute(
+                    """
+                    UPDATE minigame_ranked_runs
+                    SET status = 'expired', completed_at = ?, error_code = 'lease_expired',
+                        lease_token_hash = NULL, lease_expires_at = NULL
+                    WHERE run_id = ? AND status IN ('active', 'qualified')
+                    """,
+                    (_iso(current), str(active["run_id"])),
+                )
+        active_rows = db.execute(
+            """
+            SELECT * FROM minigame_ranked_runs
+            WHERE user_id = ? AND game_id = ? AND difficulty = ?
+              AND status IN ('active', 'qualified')
+            ORDER BY started_at ASC
+            """,
+            (int(user_id), normalized_game_id, normalized_difficulty),
+        ).fetchall()
+        if active_rows:
+            active = active_rows[0]
+            if str(replace_run_id or "") != str(active["run_id"]):
+                raise RuntimeError("active_run_exists")
+            if not _lease_matches(active, str(replace_lease_token or "")):
+                raise PermissionError("lease_mismatch")
+            db.execute(
+                """
+                UPDATE minigame_ranked_runs
+                SET status = 'expired', completed_at = ?, error_code = 'replaced',
+                    lease_token_hash = NULL, lease_expires_at = NULL
+                WHERE run_id = ? AND status IN ('active', 'qualified')
+                """,
+                (_iso(current), str(active["run_id"])),
+            )
 
         run_id = str(uuid.uuid4())
         salt_hex = secrets.token_hex(16)
@@ -294,8 +402,9 @@ def create_ranked_run(
             """
             INSERT INTO minigame_ranked_runs
             (run_id, user_id, request_id, game_id, difficulty, rules_version,
-             seed_salt_hex, seed_hex, status, started_at, expires_at, start_ip)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+             seed_salt_hex, seed_hex, lease_token_hash, lease_expires_at,
+             lease_last_seen_at, lease_generation, status, started_at, expires_at, start_ip)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', ?, ?, ?)
             """,
             (
                 run_id,
@@ -306,6 +415,9 @@ def create_ranked_run(
                 RANKED_RULES_VERSION,
                 salt_hex,
                 seed_hex,
+                lease_hash,
+                lease_expires_at,
+                _iso(current),
                 started_at,
                 _iso(expires),
                 start_ip,
@@ -315,7 +427,143 @@ def create_ranked_run(
             "SELECT * FROM minigame_ranked_runs WHERE run_id = ?",
             (run_id,),
         ).fetchone()
-    return _public_run(row, include_run_token=True)
+    payload = _public_run(row, include_run_token=True)
+    payload["lease_token"] = lease_token
+    return payload
+
+
+def heartbeat_ranked_run(
+    *,
+    run_id: str,
+    user_id: int,
+    lease_token: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = now or _utc_now()
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT * FROM minigame_ranked_runs WHERE run_id = ?",
+            (str(run_id),),
+        ).fetchone()
+        if row is None:
+            raise LookupError("run_not_found")
+        if int(row["user_id"]) != int(user_id):
+            raise PermissionError("run_owner_mismatch")
+        if str(row["status"]) not in {"active", "qualified"}:
+            raise RuntimeError("run_not_active")
+        if not _lease_matches(row, lease_token):
+            raise PermissionError("lease_mismatch")
+        if datetime.fromisoformat(str(row["expires_at"])) <= current:
+            db.execute(
+                """
+                UPDATE minigame_ranked_runs
+                SET status = 'expired', completed_at = ?, error_code = 'run_expired',
+                    lease_token_hash = NULL, lease_expires_at = NULL
+                WHERE run_id = ? AND status IN ('active', 'qualified')
+                """,
+                (_iso(current), str(run_id)),
+            )
+            raise RunTokenExpired("run_expired")
+        lease_expires_at = _iso(current + LEASE_LIFETIME)
+        db.execute(
+            """
+            UPDATE minigame_ranked_runs
+            SET lease_expires_at = ?, lease_last_seen_at = ?
+            WHERE run_id = ? AND status IN ('active', 'qualified')
+            """,
+            (lease_expires_at, _iso(current), str(run_id)),
+        )
+        saved = db.execute(
+            "SELECT * FROM minigame_ranked_runs WHERE run_id = ?",
+            (str(run_id),),
+        ).fetchone()
+    return _public_run(saved)
+
+
+def claim_ranked_run(
+    *,
+    run_id: str,
+    user_id: int,
+    lease_token: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = now or _utc_now()
+    lease_token, lease_hash, lease_expires_at = _new_lease(current, lease_token)
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT * FROM minigame_ranked_runs WHERE run_id = ?",
+            (str(run_id),),
+        ).fetchone()
+        if row is None:
+            raise LookupError("run_not_found")
+        if int(row["user_id"]) != int(user_id):
+            raise PermissionError("run_owner_mismatch")
+        if str(row["status"]) not in {"active", "qualified"}:
+            raise RuntimeError("run_not_active")
+        if datetime.fromisoformat(str(row["expires_at"])) <= current:
+            raise RunTokenExpired("run_expired")
+        if not _lease_expired(row, current):
+            if not _lease_matches(row, lease_token):
+                raise RuntimeError("lease_active")
+            next_generation = int(row["lease_generation"] or 1)
+        else:
+            next_generation = int(row["lease_generation"] or 1) + 1
+        db.execute(
+            """
+            UPDATE minigame_ranked_runs
+            SET lease_token_hash = ?, lease_expires_at = ?, lease_last_seen_at = ?,
+                lease_generation = ?
+            WHERE run_id = ? AND status IN ('active', 'qualified')
+            """,
+            (lease_hash, lease_expires_at, _iso(current), next_generation, str(run_id)),
+        )
+        saved = db.execute(
+            "SELECT * FROM minigame_ranked_runs WHERE run_id = ?",
+            (str(run_id),),
+        ).fetchone()
+    payload = _public_run(saved, include_run_token=True)
+    payload["lease_token"] = lease_token
+    return payload
+
+
+def abandon_ranked_run(
+    *,
+    run_id: str,
+    user_id: int,
+    lease_token: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = now or _utc_now()
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT * FROM minigame_ranked_runs WHERE run_id = ?",
+            (str(run_id),),
+        ).fetchone()
+        if row is None:
+            raise LookupError("run_not_found")
+        if int(row["user_id"]) != int(user_id):
+            raise PermissionError("run_owner_mismatch")
+        if str(row["status"]) not in {"active", "qualified"}:
+            return _public_run(row)
+        if not _lease_matches(row, lease_token):
+            raise PermissionError("lease_mismatch")
+        db.execute(
+            """
+            UPDATE minigame_ranked_runs
+            SET status = 'expired', completed_at = ?, error_code = 'abandoned',
+                lease_token_hash = NULL, lease_expires_at = NULL
+            WHERE run_id = ? AND status IN ('active', 'qualified')
+            """,
+            (_iso(current), str(run_id)),
+        )
+        saved = db.execute(
+            "SELECT * FROM minigame_ranked_runs WHERE run_id = ?",
+            (str(run_id),),
+        ).fetchone()
+    return _public_run(saved)
 
 
 def _assert_token_claims(
@@ -331,6 +579,32 @@ def _assert_token_claims(
     }
     if any(payload.get(key) != value for key, value in expected.items()):
         raise RunTokenError("token_claim_mismatch")
+
+
+def _submission_token_for(
+    row: sqlite3.Row | dict[str, Any],
+    summary: dict[str, Any],
+    expires_at: datetime,
+) -> str:
+    summary_digest = _summary_hash(summary)
+    token_id = hmac.new(
+        _token_secret(),
+        f"minigame-submission-v1|{row['run_id']}|{summary_digest}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:32]
+    return _sign_token(
+        "submission",
+        {
+            "rid": str(row["run_id"]),
+            "uid": int(row["user_id"]),
+            "game": str(row["game_id"]),
+            "difficulty": int(row["difficulty"]),
+            "rules": int(row["rules_version"]),
+            "jti": token_id,
+            "summary": summary_digest,
+        },
+        expires_at,
+    )
 
 
 def _top_100_cutoff(
@@ -362,6 +636,7 @@ def qualify_ranked_run(
     run_id: str,
     user_id: int,
     run_token: str,
+    lease_token: str,
     score: int,
     trophy_tier: int,
     highest_tile_exp: int,
@@ -382,6 +657,7 @@ def qualify_ranked_run(
         action_count=action_count,
         elapsed_ms=elapsed_ms,
     )
+    summary_json = json.dumps(summary, separators=(",", ":"), sort_keys=True)
     current = now or _utc_now()
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
@@ -406,9 +682,30 @@ def qualify_ranked_run(
             )
             raise RunTokenExpired("run_expired")
         if str(row["status"]) == "not_candidate":
+            if str(row["claimed_summary_json"] or "") != summary_json:
+                raise ValueError("qualification_conflict")
             return {"candidate": False, **_public_run(row)}
         if str(row["status"]) not in {"active", "qualified"}:
             return {"candidate": True, **_public_run(row)}
+        _assert_live_lease(row, lease_token, current)
+        if str(row["status"]) == "qualified":
+            if str(row["claimed_summary_json"] or "") != summary_json:
+                raise ValueError("qualification_conflict")
+            token_expires = datetime.fromisoformat(str(row["qualification_expires_at"]))
+            if token_expires <= current:
+                raise RunTokenExpired("submission_token_expired")
+            submission_token = _submission_token_for(row, summary, token_expires)
+            stored_hash = str(row["submission_token_hash"] or "")
+            supplied_hash = hashlib.sha256(submission_token.encode("utf-8")).hexdigest()
+            if not stored_hash or not hmac.compare_digest(stored_hash, supplied_hash):
+                raise RunTokenError("submission_token_replaced")
+            return {
+                "candidate": True,
+                "reasons": [],
+                "submission_token": submission_token,
+                "submission_expires_at": _iso(token_expires),
+                **_public_run(row),
+            }
 
         personal_best = db.execute(
             """
@@ -442,13 +739,13 @@ def qualify_ranked_run(
         if improves_personal_best and (cutoff is None or summary["score"] > cutoff):
             reasons.append("top_100")
 
-        summary_json = json.dumps(summary, separators=(",", ":"), sort_keys=True)
         if not reasons:
             db.execute(
                 """
                 UPDATE minigame_ranked_runs
                 SET status = 'not_candidate', claimed_summary_json = ?,
-                    qualified_at = ?, completed_at = ?, error_code = NULL
+                    qualified_at = ?, completed_at = ?, error_code = NULL,
+                    lease_token_hash = NULL, lease_expires_at = NULL
                 WHERE run_id = ?
                 """,
                 (summary_json, _iso(current), _iso(current), str(run_id)),
@@ -460,20 +757,7 @@ def qualify_ranked_run(
             return {"candidate": False, "reasons": [], **_public_run(saved)}
 
         token_expires = min(current + SUBMISSION_TOKEN_LIFETIME, datetime.fromisoformat(str(row["expires_at"])))
-        token_id = secrets.token_hex(16)
-        submission_token = _sign_token(
-            "submission",
-            {
-                "rid": str(row["run_id"]),
-                "uid": int(row["user_id"]),
-                "game": str(row["game_id"]),
-                "difficulty": int(row["difficulty"]),
-                "rules": int(row["rules_version"]),
-                "jti": token_id,
-                "summary": _summary_hash(summary),
-            },
-            token_expires,
-        )
+        submission_token = _submission_token_for(row, summary, token_expires)
         db.execute(
             """
             UPDATE minigame_ranked_runs
@@ -508,6 +792,7 @@ def submit_ranked_run(
     run_id: str,
     user_id: int,
     submission_token: str,
+    lease_token: str,
     record_encoding: str,
     ip_address: str,
     now: datetime | None = None,
@@ -549,6 +834,7 @@ def submit_ranked_run(
         _assert_token_claims(token_payload, row)
         if token_payload.get("summary") != _summary_hash(summary):
             raise RunTokenError("summary_claim_mismatch")
+        _assert_live_lease(row, lease_token, current)
         stored_token_hash = str(row["submission_token_hash"] or "")
         supplied_token_hash = hashlib.sha256(str(submission_token).encode("utf-8")).hexdigest()
         if not stored_token_hash or not hmac.compare_digest(stored_token_hash, supplied_token_hash):
@@ -583,7 +869,8 @@ def submit_ranked_run(
             UPDATE minigame_ranked_runs
             SET status = 'pending', pending_record = ?, record_hash = ?,
                 action_count = ?, submitted_at = ?, submit_ip = ?,
-                submission_token_consumed_at = ?, error_code = NULL
+                submission_token_consumed_at = ?, error_code = NULL,
+                lease_token_hash = NULL, lease_expires_at = NULL
             WHERE run_id = ? AND status = 'qualified'
               AND submission_token_consumed_at IS NULL
             """,

@@ -6,7 +6,7 @@ import { MINIGAME_REGISTRY } from '../src/features/minigames/engine/registry.js'
 import { createMinigameRuntime } from '../src/features/minigames/engine/runtime.js';
 import { MinigameRankedRecorder } from '../src/features/minigames/engine/rankedRecorder.js';
 import { replayMgo1 } from '../src/features/minigames/engine/rankedReplay.js';
-import { encodeMgo1 } from '../src/features/minigames/protocol/index.js';
+import { encodeMgo1, MGO1_END_REASON } from '../src/features/minigames/protocol/index.js';
 import { flattenBoard } from '../src/features/minigames/engine/utils.js';
 
 const SEED = '0123456789abcdeffedcba9876543210';
@@ -155,6 +155,52 @@ test('a deterministic operation stream replays to the claimed terminal state', a
   assert.equal(replayed.score, controller.engine.score);
   assert.equal(replayed.trophyTier, controller.engine.isPassed);
   assert.deepEqual(replayed.finalBoard, flattenBoard(controller.engine.board));
+});
+
+test('a retired ranked stream verifies before natural game over', async () => {
+  const runtime = makeRuntime();
+  let recorder;
+  const controller = new MinigameController({
+    difficulty: 1,
+    runtime,
+    onOperation({ operation, atMs, state }) {
+      recorder.record(operation, atMs, state);
+    },
+  });
+  recorder = new MinigameRankedRecorder({
+    runId: '123e4567-e89b-42d3-a456-426614174000',
+    gameId: 'column-chaos',
+    difficulty: 1,
+    seedHex: SEED,
+    startedAtMs: CLOCK.now(),
+  });
+  await controller.startGame('column-chaos', null, runtime);
+  await controller.move('left');
+  assert.equal(controller.engine.isOver, false);
+  assert.equal(recorder.finish(CLOCK.now(), null, MGO1_END_REASON.RETIRED), true);
+
+  const replayed = await replayMgo1(recorder.encode(), { evilSpawn: deterministicEvilSpawn });
+  assert.equal(replayed.endReason, MGO1_END_REASON.RETIRED);
+  assert.equal(replayed.score, controller.engine.score);
+  assert.deepEqual(replayed.finalBoard, flattenBoard(controller.engine.board));
+});
+
+test('a premature game-over end remains invalid', async () => {
+  const runtime = makeRuntime();
+  const controller = new MinigameController({ difficulty: 1, runtime });
+  const recorder = new MinigameRankedRecorder({
+    runId: '123e4567-e89b-42d3-a456-426614174000',
+    gameId: 'column-chaos',
+    difficulty: 1,
+    seedHex: SEED,
+    startedAtMs: CLOCK.now(),
+  });
+  await controller.startGame('column-chaos', null, runtime);
+  recorder.finish(CLOCK.now(), null, MGO1_END_REASON.GAME_OVER);
+  await assert.rejects(
+    replayMgo1(recorder.encode(), { evilSpawn: deterministicEvilSpawn }),
+    /premature_end/u,
+  );
 });
 
 test('all 20 minigames replay the same deterministic move prefix', async () => {

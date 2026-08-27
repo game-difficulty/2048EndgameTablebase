@@ -41,12 +41,41 @@ async function rankedRequest(path, { method = 'GET', body } = {}) {
   return readJson(response, { authenticated: true });
 }
 
-export const createMinigameRankedRun = ({ requestId, gameId, difficulty }) => rankedRequest(
+export const createMinigameRankedRun = ({
+  requestId,
+  gameId,
+  difficulty,
+  leaseToken,
+  replaceRunId = null,
+  replaceLeaseToken = null,
+}) => rankedRequest(
   '/api/minigame-rankings/runs',
   {
     method: 'POST',
-    body: { request_id: requestId, game_id: gameId, difficulty: Number(difficulty) ? 1 : 0 },
+    body: {
+      request_id: requestId,
+      game_id: gameId,
+      difficulty: Number(difficulty) ? 1 : 0,
+      lease_token: leaseToken,
+      replace_run_id: replaceRunId,
+      replace_lease_token: replaceLeaseToken,
+    },
   }
+);
+
+export const heartbeatMinigameRankedRun = (runId, leaseToken) => rankedRequest(
+  `/api/minigame-rankings/runs/${encodeURIComponent(runId)}/heartbeat`,
+  { method: 'POST', body: { lease_token: leaseToken } }
+);
+
+export const claimMinigameRankedRun = (runId, leaseToken) => rankedRequest(
+  `/api/minigame-rankings/runs/${encodeURIComponent(runId)}/claim`,
+  { method: 'POST', body: { lease_token: leaseToken } }
+);
+
+export const abandonMinigameRankedRun = (runId, leaseToken) => rankedRequest(
+  `/api/minigame-rankings/runs/${encodeURIComponent(runId)}/abandon`,
+  { method: 'POST', body: { lease_token: leaseToken } }
 );
 
 export const qualifyMinigameRankedRun = (runId, payload) => rankedRequest(

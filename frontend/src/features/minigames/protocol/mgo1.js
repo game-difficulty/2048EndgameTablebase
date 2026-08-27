@@ -25,6 +25,11 @@ export const MGO1_TAG = Object.freeze({
   END: 0x7f,
 });
 
+export const MGO1_END_REASON = Object.freeze({
+  GAME_OVER: 0,
+  RETIRED: 1,
+});
+
 export const MOVE_DIRECTION_TO_TAG = Object.freeze({
   up: MGO1_TAG.MOVE_UP,
   right: MGO1_TAG.MOVE_RIGHT,

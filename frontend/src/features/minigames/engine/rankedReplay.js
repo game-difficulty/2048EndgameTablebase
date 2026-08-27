@@ -1,4 +1,4 @@
-import { decodeMgo1, canonicalStateDigest } from '../protocol/index.js';
+import { decodeMgo1, canonicalStateDigest, MGO1_END_REASON } from '../protocol/index.js';
 import { MinigameController } from './controller.js';
 import {
   CUSTOM_ACTION_KEY,
@@ -35,6 +35,7 @@ export async function replayMgo1(recordEncoding, { evilSpawn = null, requireEnd 
   await controller.startGame(decoded.gameId, null, runtime);
 
   let ended = false;
+  let endReason = null;
   let actionCount = 0;
   let elapsedMs = 0;
   for (const action of decoded.actions) {
@@ -93,9 +94,16 @@ export async function replayMgo1(recordEncoding, { evilSpawn = null, requireEnd 
       continue;
     }
     if (action.type === 'end') {
-      controller.engine.checkGameOver();
-      if (!controller.engine.isOver) throw new MinigameReplayError('premature_end');
+      const reason = Number(action.reason);
+      if (![MGO1_END_REASON.GAME_OVER, MGO1_END_REASON.RETIRED].includes(reason)) {
+        throw new MinigameReplayError('invalid_end_reason');
+      }
+      if (reason === MGO1_END_REASON.GAME_OVER) {
+        controller.engine.checkGameOver();
+        if (!controller.engine.isOver) throw new MinigameReplayError('premature_end');
+      }
       ended = true;
+      endReason = reason;
       continue;
     }
     throw new MinigameReplayError('unsupported_action');
@@ -118,6 +126,7 @@ export async function replayMgo1(recordEncoding, { evilSpawn = null, requireEnd 
     boardCols: Number(engine.cols),
     actionCount,
     elapsedMs,
+    endReason,
     runtimeState: runtime.exportSnapshot(),
   };
 }

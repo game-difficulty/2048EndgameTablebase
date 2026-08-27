@@ -2,18 +2,28 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { useAuthState } from '../../../services/auth/authState';
+import { createExclusiveRunLock } from '../../../services/concurrency/exclusiveRunLock';
 import { createLocalStorageStore } from '../../../services/storage/localStorageStore';
 import { MinigameController } from '../engine/controller';
 import { MinigameRankedRecorder } from '../engine/rankedRecorder';
 import { createMinigameRuntime, restoreMinigameRuntime } from '../engine/runtime';
+import { MGO1_END_REASON } from '../protocol';
 import { createEmptyMinigameMenu, createEmptyMinigameState } from '../model/minigameViewState';
 import {
+  abandonMinigameRankedRun,
+  claimMinigameRankedRun,
   createMinigameRankedRun,
   createMinigameRequestId,
   fetchMinigameRankedRun,
+  heartbeatMinigameRankedRun,
   qualifyMinigameRankedRun,
   submitMinigameRankedRun,
 } from '../services/minigameRankingClient';
+import {
+  readMinigameLease,
+  removeMinigameLease,
+  writeMinigameLease,
+} from '../services/minigameLeaseStore';
 
 const isTextEntryElement = (element) => {
   if (!(element instanceof HTMLElement)) {
@@ -66,6 +76,9 @@ const normalizeStoredState = () => ({
 });
 
 const snapshotKey = (gameId, difficulty) => `${gameId || ''}:${Number(difficulty) ? 1 : 0}`;
+const LEASE_FREE_RANKED_STATES = new Set([
+  'pending', 'validating', 'verified', 'no_improvement', 'not_candidate', 'rejected', 'expired',
+]);
 
 export function useMinigameSession(activeRef) {
   const { t } = useI18n();
@@ -95,15 +108,88 @@ export function useMinigameSession(activeRef) {
   let toastTimer = null;
   let inputLockTimer = null;
   let rankedPollTimer = null;
+  let rankedHeartbeatTimer = null;
+  let rankedHeartbeatInFlight = false;
+  let activeLeaseToken = '';
+  let rankedPersistenceBlocked = false;
   let timedTickTimer = null;
   let timedTickInFlight = false;
   const submittedFinals = new Set();
+
+  const hasRankedOwnership = () => Boolean(
+    activeRecorder
+    && activeLeaseToken
+    && rankedRunLock.isHeld(activeRecorder.runId)
+  );
+
+  const stopRankedHeartbeat = () => {
+    if (rankedHeartbeatTimer) window.clearInterval(rankedHeartbeatTimer);
+    rankedHeartbeatTimer = null;
+    rankedHeartbeatInFlight = false;
+  };
+
+  const releaseRankedOwnership = ({ forgetLease = false } = {}) => {
+    const runId = activeRecorder?.runId || null;
+    stopRankedHeartbeat();
+    const releasedRunId = rankedRunLock.release();
+    activeLeaseToken = '';
+    if (forgetLease && (runId || releasedRunId)) removeMinigameLease(runId || releasedRunId);
+  };
+
+  const loseRankedOwnership = (runId) => {
+    if (runId) removeMinigameLease(runId);
+    if (activeRecorder?.runId !== runId) return;
+    stopRankedHeartbeat();
+    activeLeaseToken = '';
+    rankedPersistenceBlocked = true;
+    if (activeRecorder?.runId === runId) {
+      activeRecorder.submissionState = 'invalid';
+      activeRecorder = null;
+      rankedStatus.value = 'invalid';
+    }
+  };
+
+  const rankedRunLock = createExclusiveRunLock({
+    namespace: 'minigame-ranked',
+    onLost: loseRankedOwnership,
+  });
+
+  const heartbeatActiveRankedRun = async () => {
+    if (!hasRankedOwnership() || rankedHeartbeatInFlight) return false;
+    const recorder = activeRecorder;
+    const leaseToken = activeLeaseToken;
+    rankedHeartbeatInFlight = true;
+    try {
+      const result = await heartbeatMinigameRankedRun(recorder.runId, leaseToken);
+      writeMinigameLease(recorder.runId, {
+        leaseToken,
+        expiresAt: result?.lease_expires_at,
+        userId: recorder.userId,
+      });
+      return true;
+    } catch (error) {
+      if ([403, 404, 409, 410].includes(Number(error?.status))) {
+        loseRankedOwnership(recorder.runId);
+      }
+      return false;
+    } finally {
+      rankedHeartbeatInFlight = false;
+    }
+  };
+
+  const startRankedHeartbeat = () => {
+    stopRankedHeartbeat();
+    rankedHeartbeatTimer = window.setInterval(() => {
+      void heartbeatActiveRankedRun();
+    }, 15_000);
+  };
 
   const submitFinishedGame = async (state) => {
     const snapshot = state?.snapshot;
     const engine = snapshot?.engine;
     const recorder = activeRecorder;
-    if (!authUser.value || !snapshot?.gameId || !engine?.isOver || !recorder?.ended) return;
+    if (!authUser.value || !snapshot?.gameId || !engine || !recorder?.ended) return;
+    if (!hasRankedOwnership()) return;
     if (Number(recorder.userId) !== Number(authUser.value.id)) return;
     if (['invalid', 'too_large', 'not_candidate', 'pending', 'verified', 'no_improvement'].includes(recorder.submissionState)) return;
     const board = Array.isArray(state.board) ? state.board.map((value) => Number(value)) : [];
@@ -119,6 +205,7 @@ export function useMinigameSession(activeRef) {
       persistRecorderState();
       const qualification = await qualifyMinigameRankedRun(recorder.runId, {
         run_token: recorder.runToken,
+        lease_token: activeLeaseToken,
         score: Math.max(0, Math.trunc(Number(state.score || 0))),
         trophy_tier: Math.max(0, Math.min(4, Math.trunc(Number(engine.isPassed || 0)))),
         highest_tile_exp: Math.max(0, Math.min(63, Math.trunc(Number(engine.highestTileExp || engine.maxNum || 0)))),
@@ -132,6 +219,7 @@ export function useMinigameSession(activeRef) {
         recorder.submissionState = 'not_candidate';
         rankedStatus.value = 'not_candidate';
         persistRecorderState();
+        releaseRankedOwnership({ forgetLease: true });
         return;
       }
       if (!qualification?.submission_token) {
@@ -140,8 +228,10 @@ export function useMinigameSession(activeRef) {
         rankedStatus.value = recoveredStatus;
         persistRecorderState();
         if (['pending', 'validating'].includes(recoveredStatus)) {
+          releaseRankedOwnership({ forgetLease: true });
           scheduleRankedStatusPoll(recorder.runId);
         } else if (recoveredStatus === 'verified') {
+          releaseRankedOwnership({ forgetLease: true });
           window.dispatchEvent(new CustomEvent('minigame-score-updated', {
             detail: {
               gameId: snapshot.gameId,
@@ -157,11 +247,13 @@ export function useMinigameSession(activeRef) {
       persistRecorderState();
       const result = await submitMinigameRankedRun(recorder.runId, {
         submission_token: qualification.submission_token,
+        lease_token: activeLeaseToken,
         record_encoding: recorder.encode(),
       });
       recorder.submissionState = String(result?.status || 'pending');
       rankedStatus.value = recorder.submissionState;
       persistRecorderState();
+      releaseRankedOwnership({ forgetLease: true });
       scheduleRankedStatusPoll(recorder.runId);
       window.dispatchEvent(new CustomEvent('minigame-score-updated', {
         detail: {
@@ -176,6 +268,9 @@ export function useMinigameSession(activeRef) {
         recorder.submissionState = 'submit_failed';
         rankedStatus.value = 'submit_failed';
         persistRecorderState();
+        if ([403, 404, 409, 410].includes(Number(error?.status))) {
+          loseRankedOwnership(recorder.runId);
+        }
         console.warn('Ranked minigame submission failed.', error);
       }
     }
@@ -186,7 +281,7 @@ export function useMinigameSession(activeRef) {
   const menuSections = computed(() => menuData.value.sections || []);
   const difficulty = computed(() => Number(menuData.value.difficulty ?? 1));
   const recordOperation = ({ operation, atMs, state }) => {
-    if (!activeRecorder || activeRecorder.ended) return;
+    if (!activeRecorder || activeRecorder.ended || !hasRankedOwnership()) return;
     try {
       const recorded = activeRecorder.record(operation, atMs, state);
       if (!recorded) {
@@ -293,6 +388,8 @@ export function useMinigameSession(activeRef) {
   const persistRecorderState = () => {
     const gameId = String(gameState.value?.gameId || '');
     if (!gameId || !activeRecorder) return;
+    if (rankedPersistenceBlocked) return;
+    if (!hasRankedOwnership() && !LEASE_FREE_RANKED_STATES.has(activeRecorder.submissionState)) return;
     const key = snapshotKey(gameId, gameState.value?.snapshot?.difficulty ?? difficulty.value);
     storedState.value = minigameStore.update((current) => {
       const existing = current?.activeGameSnapshots?.[key];
@@ -310,9 +407,13 @@ export function useMinigameSession(activeRef) {
     });
   };
 
-  const scheduleRankedStatusPoll = (runId, attempt = 0) => {
+  const scheduleRankedStatusPoll = (runId, attempt = 0, eventContext = null) => {
     if (rankedPollTimer) window.clearTimeout(rankedPollTimer);
     if (!runId || attempt >= 30) return;
+    const context = eventContext || {
+      gameId: gameState.value?.gameId,
+      difficulty: Number(gameState.value?.snapshot?.difficulty) ? 1 : 0,
+    };
     rankedPollTimer = window.setTimeout(async () => {
       rankedPollTimer = null;
       try {
@@ -324,29 +425,34 @@ export function useMinigameSession(activeRef) {
           persistRecorderState();
         }
         if (['pending', 'validating'].includes(status)) {
-          scheduleRankedStatusPoll(runId, attempt + 1);
+          scheduleRankedStatusPoll(runId, attempt + 1, context);
         } else if (status === 'verified') {
           window.dispatchEvent(new CustomEvent('minigame-score-updated', {
             detail: {
-              gameId: gameState.value?.gameId,
-              difficulty: Number(gameState.value?.snapshot?.difficulty) ? 1 : 0,
+              gameId: context.gameId,
+              difficulty: context.difficulty,
               result,
             },
           }));
         }
       } catch (error) {
-        if (error?.status !== 401) scheduleRankedStatusPoll(runId, attempt + 1);
+        if (error?.status !== 401) scheduleRankedStatusPoll(runId, attempt + 1, context);
       }
     }, Math.min(10_000, 1500 + attempt * 500));
   };
 
   const handleStateData = (payload) => {
+    const recorderSnapshot = activeRecorder
+      && !rankedPersistenceBlocked
+      && (hasRankedOwnership() || LEASE_FREE_RANKED_STATES.has(activeRecorder.submissionState))
+      ? activeRecorder.exportSnapshot()
+      : null;
     const effectivePayload = payload?.snapshot
       ? {
         ...payload,
         snapshot: {
           ...payload.snapshot,
-          rankedRun: activeRecorder?.exportSnapshot?.() || null,
+          rankedRun: recorderSnapshot,
         },
       }
       : payload;
@@ -403,13 +509,9 @@ export function useMinigameSession(activeRef) {
           Number(previousSummary.trophy || 0),
           Number(snapshot?.engine?.isPassed || 0)
         );
-        return {
+        const nextStoredState = {
           ...current,
           difficulty: Number(snapshot.difficulty) ? 1 : 0,
-          activeGameSnapshots: {
-            ...(current.activeGameSnapshots || {}),
-            [key]: snapshot,
-          },
           summaries: {
             ...(current.summaries || {}),
             [key]: {
@@ -418,6 +520,14 @@ export function useMinigameSession(activeRef) {
               highestExp: summaryHighestExp,
               trophy,
             },
+          },
+        };
+        if (rankedPersistenceBlocked) return nextStoredState;
+        return {
+          ...nextStoredState,
+          activeGameSnapshots: {
+            ...(current.activeGameSnapshots || {}),
+            [key]: snapshot,
           },
         };
       });
@@ -533,27 +643,95 @@ export function useMinigameSession(activeRef) {
 
   const markRankedRunInvalid = () => {
     if (!activeRecorder?.ended) {
+      const runId = activeRecorder.runId;
+      const leaseToken = activeLeaseToken;
       activeRecorder.submissionState = 'invalid';
       rankedStatus.value = 'invalid';
       persistRecorderState();
+      if (runId && leaseToken) {
+        void abandonMinigameRankedRun(runId, leaseToken).catch(() => {});
+      }
+      releaseRankedOwnership({ forgetLease: true });
+    }
+  };
+
+  const activateRankedRecorder = (recorder, leaseToken, leaseExpiresAt = '') => {
+    activeRecorder = recorder;
+    activeLeaseToken = String(leaseToken || '');
+    rankedPersistenceBlocked = false;
+    rankedStatus.value = recorder.submissionState || 'active';
+    writeMinigameLease(recorder.runId, {
+      leaseToken: activeLeaseToken,
+      expiresAt: leaseExpiresAt,
+      userId: recorder.userId,
+    });
+    startRankedHeartbeat();
+  };
+
+  const restoreRankedOwnership = async (recorder) => {
+    if (!recorder) return null;
+    if (LEASE_FREE_RANKED_STATES.has(recorder.submissionState)) {
+      activeRecorder = recorder;
+      rankedPersistenceBlocked = false;
+      rankedStatus.value = recorder.submissionState;
+      return recorder;
+    }
+    if (!await rankedRunLock.acquire(recorder.runId)) {
+      rankedPersistenceBlocked = true;
+      rankedStatus.value = 'unranked';
+      return null;
+    }
+    const storedLease = readMinigameLease(recorder.runId);
+    let leaseToken = Number(storedLease?.userId) === Number(recorder.userId)
+      ? String(storedLease?.leaseToken || '')
+      : '';
+    try {
+      let result;
+      if (leaseToken) {
+        result = await heartbeatMinigameRankedRun(recorder.runId, leaseToken);
+      } else {
+        leaseToken = createMinigameRequestId();
+        result = await claimMinigameRankedRun(recorder.runId, leaseToken);
+        if (result?.run_token) recorder.runToken = result.run_token;
+      }
+      activateRankedRecorder(recorder, leaseToken, result?.lease_expires_at);
+      return recorder;
+    } catch (error) {
+      rankedRunLock.release();
+      removeMinigameLease(recorder.runId);
+      rankedPersistenceBlocked = true;
+      rankedStatus.value = 'unranked';
+      if (![401, 403, 404, 409, 410].includes(Number(error?.status))) {
+        console.warn('Unable to restore ranked minigame ownership.', error);
+      }
+      return null;
     }
   };
 
   const createRankedContext = async (gameId, selectedDifficulty) => {
+    releaseRankedOwnership();
     activeRecorder = null;
     rankedStatus.value = 'unranked';
+    rankedPersistenceBlocked = false;
     if (!authUser.value) return createMinigameRuntime();
+    const leaseToken = createMinigameRequestId();
     try {
       const run = await createMinigameRankedRun({
         requestId: createMinigameRequestId(),
         gameId,
         difficulty: selectedDifficulty,
+        leaseToken,
       });
+      if (!await rankedRunLock.acquire(run.run_id)) {
+        await abandonMinigameRankedRun(run.run_id, leaseToken).catch(() => {});
+        rankedPersistenceBlocked = true;
+        return createMinigameRuntime();
+      }
       const runtime = createMinigameRuntime({
         seedHex: run.seed_hex,
         onDeterminismFailure: markRankedRunInvalid,
       });
-      activeRecorder = new MinigameRankedRecorder({
+      const recorder = new MinigameRankedRecorder({
         runId: run.run_id,
         userId: authUser.value.id,
         gameId,
@@ -564,9 +742,11 @@ export function useMinigameSession(activeRef) {
         expiresAt: run.expires_at,
         startedAtMs: Date.now(),
       });
-      rankedStatus.value = 'active';
+      activateRankedRecorder(recorder, leaseToken, run.lease_expires_at);
       return runtime;
     } catch (error) {
+      rankedRunLock.release();
+      if (Number(error?.status) === 409) rankedPersistenceBlocked = true;
       if (error?.status !== 401) console.warn('Unable to create ranked minigame run.', error);
       return createMinigameRuntime();
     }
@@ -577,8 +757,11 @@ export function useMinigameSession(activeRef) {
     closeOverlay();
     const key = snapshotKey(gameId, difficulty.value);
     const snapshot = storedState.value.activeGameSnapshots?.[key] || null;
-    activeRecorder = restoreRankedRecorder(snapshot, String(gameId || ''), difficulty.value);
-    rankedStatus.value = activeRecorder?.submissionState || 'unranked';
+    releaseRankedOwnership();
+    activeRecorder = null;
+    rankedPersistenceBlocked = false;
+    const restoredRecorder = restoreRankedRecorder(snapshot, String(gameId || ''), difficulty.value);
+    await restoreRankedOwnership(restoredRecorder);
     let runtime = null;
     if (!snapshot) runtime = await createRankedContext(String(gameId || ''), difficulty.value);
     else if (activeRecorder && snapshot?.runtime) {
@@ -594,10 +777,26 @@ export function useMinigameSession(activeRef) {
     }
   };
 
-  const backToMenu = () => {
+  const backToMenu = async () => {
     lastMenuFocusGameId.value = String(gameState.value?.gameId || lastMenuFocusGameId.value || '');
     closeOverlay();
+    const recorder = activeRecorder;
+    const leaseToken = activeLeaseToken;
+    const finalState = gameState.value;
+    const trophyTier = Math.max(
+      0,
+      Math.min(4, Math.trunc(Number(finalState?.snapshot?.engine?.isPassed || 0))),
+    );
+    if (recorder && !recorder.ended && hasRankedOwnership() && trophyTier > 0) {
+      const finished = recorder.finish(Date.now(), null, MGO1_END_REASON.RETIRED);
+      rankedStatus.value = finished ? 'finished' : recorder.submissionState;
+      persistRecorderState();
+      if (finished) await submitFinishedGame(finalState);
+    } else if (recorder?.runId && leaseToken && hasRankedOwnership()) {
+      await abandonMinigameRankedRun(recorder.runId, leaseToken).catch(() => {});
+    }
     ensureController().backToMenu();
+    releaseRankedOwnership();
     activeRecorder = null;
     rankedStatus.value = 'unranked';
     gameState.value = createEmptyMinigameState();
@@ -606,16 +805,25 @@ export function useMinigameSession(activeRef) {
 
   const newGame = async () => {
     closeOverlay();
+    const previousRunId = activeRecorder?.runId || '';
+    const previousLeaseToken = activeLeaseToken;
+    const ownedPreviousRun = hasRankedOwnership();
+    if (ownedPreviousRun && previousRunId && previousLeaseToken) {
+      await abandonMinigameRankedRun(previousRunId, previousLeaseToken).catch(() => {});
+    }
+    releaseRankedOwnership({ forgetLease: ownedPreviousRun });
     if (gameState.value?.gameId) {
       const key = snapshotKey(gameState.value.gameId, difficulty.value);
-      persistState((current) => {
-        const activeGameSnapshots = { ...(current.activeGameSnapshots || {}) };
-        delete activeGameSnapshots[key];
-        return {
-          ...current,
-          activeGameSnapshots,
-        };
-      });
+      if (!rankedPersistenceBlocked) {
+        persistState((current) => {
+          const activeGameSnapshots = { ...(current.activeGameSnapshots || {}) };
+          delete activeGameSnapshots[key];
+          return {
+            ...current,
+            activeGameSnapshots,
+          };
+        });
+      }
     }
     const gameId = String(gameState.value?.gameId || '');
     if (!gameId) return;
@@ -680,11 +888,19 @@ export function useMinigameSession(activeRef) {
     move(direction);
   };
 
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible') {
+      void heartbeatActiveRankedRun();
+    }
+  };
+
   watch(
     () => authUser.value?.id ?? null,
     (userId) => {
       if (activeRecorder && Number(activeRecorder.userId) !== Number(userId)) {
+        releaseRankedOwnership({ forgetLease: true });
         activeRecorder = null;
+        rankedPersistenceBlocked = true;
         rankedStatus.value = 'unranked';
       }
     }
@@ -693,6 +909,7 @@ export function useMinigameSession(activeRef) {
   onMounted(() => {
     refreshMenu();
     window.addEventListener('keydown', handleKeydown, true);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     timedTickTimer = window.setInterval(async () => {
       if (timedTickInFlight || gameState.value?.gameId !== 'blitzkrieg') return;
       if (gameState.value?.status === 'game_over') return;
@@ -713,8 +930,11 @@ export function useMinigameSession(activeRef) {
     if (toastTimer) window.clearTimeout(toastTimer);
     if (inputLockTimer) window.clearTimeout(inputLockTimer);
     if (rankedPollTimer) window.clearTimeout(rankedPollTimer);
+    stopRankedHeartbeat();
     if (timedTickTimer) window.clearInterval(timedTickTimer);
     window.removeEventListener('keydown', handleKeydown, true);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
+    rankedRunLock.release();
     controller?.close();
     controller = null;
   });

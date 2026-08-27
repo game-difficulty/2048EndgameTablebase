@@ -11,18 +11,24 @@ import binascii
 import uuid
 from unittest.mock import patch
 
+from fastapi import Response
+
 from backend.auth.db import auth_db, init_auth_db
+from backend.minigame_rankings import routes as minigame_routes
 from backend.minigame_rankings.service import (
     MGO_RECORD_PREFIX,
     RunTokenError,
     RunTokenExpired,
     _derive_seed_hex,
+    abandon_ranked_run,
+    claim_ranked_run,
     claim_pending,
     create_ranked_run,
     finish_rejected,
     finish_verified,
     get_ranked_run,
     game_leaderboard,
+    heartbeat_ranked_run,
     qualify_ranked_run,
     submit_ranked_run,
     submit_score,
@@ -245,6 +251,7 @@ class MinigameRankingTests(unittest.TestCase):
             game_id="column-chaos",
             difficulty=1,
             ip_address="203.0.113.10",
+            lease_token=f"lease-{request_id}-0123456789abcdef",
             now=now,
         )
 
@@ -253,6 +260,7 @@ class MinigameRankingTests(unittest.TestCase):
             run_id=run["run_id"],
             user_id=user_id,
             run_token=run["run_token"],
+            lease_token=run["lease_token"],
             **(summary or self._summary()),
         )
 
@@ -300,6 +308,102 @@ class MinigameRankingTests(unittest.TestCase):
         self.assertEqual(row["seed_salt_hex"], fixed_salt)
         self.assertEqual(row["start_ip"], "203.0.113.10")
 
+    def test_active_run_is_exclusive_and_explicit_replacement_requires_lease(self) -> None:
+        user_id = self._add_user("exclusive@example.com", "Exclusive")
+        first = self._run(user_id, "exclusive-first")
+        with self.assertRaisesRegex(RuntimeError, "active_run_exists"):
+            self._run(user_id, "exclusive-second")
+        with self.assertRaisesRegex(PermissionError, "lease_mismatch"):
+            create_ranked_run(
+                user_id=user_id,
+                request_id="exclusive-second",
+                game_id="column-chaos",
+                difficulty=1,
+                ip_address="203.0.113.10",
+                lease_token="lease-exclusive-second-0123456789",
+                replace_run_id=first["run_id"],
+                replace_lease_token="wrong-lease-token-0123456789",
+            )
+        replacement = create_ranked_run(
+            user_id=user_id,
+            request_id="exclusive-second",
+            game_id="column-chaos",
+            difficulty=1,
+            ip_address="203.0.113.10",
+            lease_token="lease-exclusive-second-0123456789",
+            replace_run_id=first["run_id"],
+            replace_lease_token=first["lease_token"],
+        )
+        self.assertNotEqual(replacement["run_id"], first["run_id"])
+
+    def test_submit_route_forwards_the_lease_token(self) -> None:
+        payload = minigame_routes.SubmitRankedRunRequest(
+            submission_token="submission-token-0123456789",
+            lease_token="lease-token-0123456789",
+            record_encoding="MINIGAME_v1MGO_B64_AAAA",
+        )
+        with (
+            patch.object(minigame_routes, "require_user", return_value={"id": 7}),
+            patch.object(minigame_routes, "client_ip", return_value="203.0.113.20"),
+            patch.object(minigame_routes, "_check_submit_rate"),
+            patch.object(
+                minigame_routes,
+                "submit_ranked_run",
+                return_value={"status": "pending"},
+            ) as submit,
+        ):
+            result = minigame_routes.submit_run(
+                "run-1",
+                payload,
+                object(),
+                Response(),
+            )
+        self.assertEqual(result["status"], "pending")
+        submit.assert_called_once_with(
+            run_id="run-1",
+            user_id=7,
+            submission_token="submission-token-0123456789",
+            lease_token="lease-token-0123456789",
+            record_encoding="MINIGAME_v1MGO_B64_AAAA",
+            ip_address="203.0.113.20",
+        )
+
+    def test_lease_heartbeat_and_expired_claim_rotate_generation(self) -> None:
+        user_id = self._add_user("lease@example.com", "Lease")
+        started = datetime.now(timezone.utc)
+        run = self._run(user_id, "lease-run", now=started)
+        heartbeat = heartbeat_ranked_run(
+            run_id=run["run_id"], user_id=user_id,
+            lease_token=run["lease_token"], now=started + timedelta(seconds=15),
+        )
+        self.assertEqual(heartbeat["lease_generation"], 1)
+        with self.assertRaisesRegex(RuntimeError, "lease_active"):
+            claim_ranked_run(
+                run_id=run["run_id"], user_id=user_id,
+                lease_token="replacement-lease-token-0123456789",
+                now=started + timedelta(seconds=30),
+            )
+        claimed = claim_ranked_run(
+            run_id=run["run_id"], user_id=user_id,
+            lease_token="replacement-lease-token-0123456789",
+            now=started + timedelta(seconds=76),
+        )
+        self.assertEqual(claimed["lease_generation"], 2)
+        with self.assertRaisesRegex(PermissionError, "lease_mismatch"):
+            heartbeat_ranked_run(
+                run_id=run["run_id"], user_id=user_id,
+                lease_token=run["lease_token"], now=started + timedelta(seconds=77),
+            )
+
+    def test_qualification_is_frozen_and_same_summary_retry_is_idempotent(self) -> None:
+        user_id = self._add_user("freeze@example.com", "Freeze")
+        run = self._run(user_id, "freeze-run")
+        first = self._qualify(run, user_id, **self._summary(score=2_000, trophy=2))
+        repeated = self._qualify(run, user_id, **self._summary(score=2_000, trophy=2))
+        self.assertEqual(repeated["submission_token"], first["submission_token"])
+        with self.assertRaisesRegex(ValueError, "qualification_conflict"):
+            self._qualify(run, user_id, **self._summary(score=2_001, trophy=2))
+
     def test_run_ownership_and_run_token_tamper_and_expiry(self) -> None:
         owner = self._add_user("owner@example.com", "Owner")
         stranger = self._add_user("stranger@example.com", "Stranger")
@@ -311,6 +415,9 @@ class MinigameRankingTests(unittest.TestCase):
         tampered["run_token"] = run["run_token"][:-1] + ("A" if run["run_token"][-1] != "A" else "B")
         with self.assertRaises(RunTokenError):
             self._qualify(tampered, owner)
+        abandon_ranked_run(
+            run_id=run["run_id"], user_id=owner, lease_token=run["lease_token"]
+        )
 
         old_start = datetime.now(timezone.utc) - timedelta(days=2)
         expired = self._run(owner, "expired-run", now=old_start)
@@ -337,6 +444,10 @@ class MinigameRankingTests(unittest.TestCase):
         pb = self._qualify(pb_run, user_id, **self._summary(score=2_001, trophy=2))
         self.assertTrue(pb["candidate"])
         self.assertIn("personal_best", pb["reasons"])
+        abandon_ranked_run(
+            run_id=pb_run["run_id"], user_id=user_id,
+            lease_token=pb_run["lease_token"],
+        )
 
         trophy_run = self._run(user_id, "trophy-candidate")
         trophy = self._qualify(trophy_run, user_id, **self._summary(score=999, trophy=3))
@@ -359,6 +470,7 @@ class MinigameRankingTests(unittest.TestCase):
             run_id=run["run_id"],
             user_id=user_id,
             submission_token=qualified["submission_token"],
+            lease_token=run["lease_token"],
             record_encoding=record,
             ip_address="203.0.113.11",
         )
@@ -368,6 +480,7 @@ class MinigameRankingTests(unittest.TestCase):
             run_id=run["run_id"],
             user_id=user_id,
             submission_token=qualified["submission_token"],
+            lease_token=run["lease_token"],
             record_encoding=record,
             ip_address="203.0.113.11",
         )
@@ -377,6 +490,7 @@ class MinigameRankingTests(unittest.TestCase):
                 run_id=run["run_id"],
                 user_id=user_id,
                 submission_token=qualified["submission_token"],
+                lease_token=run["lease_token"],
                 record_encoding=self._record(run, end_reason=1),
                 ip_address="203.0.113.11",
             )
@@ -405,6 +519,7 @@ class MinigameRankingTests(unittest.TestCase):
             run_id=run["run_id"],
             user_id=user_id,
             submission_token=qualified["submission_token"],
+            lease_token=run["lease_token"],
             record_encoding=self._record(run),
             ip_address="203.0.113.11",
         )
@@ -435,6 +550,7 @@ class MinigameRankingTests(unittest.TestCase):
             run_id=run["run_id"],
             user_id=user_id,
             submission_token=qualified["submission_token"],
+            lease_token=run["lease_token"],
             record_encoding=self._record(run, summary),
             ip_address="203.0.113.12",
         )
@@ -487,6 +603,7 @@ class MinigameRankingTests(unittest.TestCase):
             run_id=run["run_id"],
             user_id=user_id,
             submission_token=qualified["submission_token"],
+            lease_token=run["lease_token"],
             record_encoding=self._record(run, summary),
             ip_address="203.0.113.12",
         )
@@ -514,14 +631,16 @@ class MinigameRankingTests(unittest.TestCase):
         with self.assertRaises(RunTokenError):
             submit_ranked_run(
                 run_id=run["run_id"], user_id=user_id,
-                submission_token=tampered, record_encoding=self._record(run),
+                submission_token=tampered, lease_token=run["lease_token"],
+                record_encoding=self._record(run),
                 ip_address="203.0.113.11",
             )
         future = datetime.now(timezone.utc) + timedelta(minutes=11)
         with self.assertRaises(RunTokenExpired):
             submit_ranked_run(
                 run_id=run["run_id"], user_id=user_id,
-                submission_token=token, record_encoding=self._record(run),
+                submission_token=token, lease_token=run["lease_token"],
+                record_encoding=self._record(run),
                 ip_address="203.0.113.11", now=future,
             )
 
@@ -532,6 +651,7 @@ class MinigameRankingTests(unittest.TestCase):
         submit_ranked_run(
             run_id=first["run_id"], user_id=user_id,
             submission_token=first_qualified["submission_token"],
+            lease_token=first["lease_token"],
             record_encoding=self._record(first), ip_address="203.0.113.13",
         )
 
@@ -541,6 +661,7 @@ class MinigameRankingTests(unittest.TestCase):
             submit_ranked_run(
                 run_id=second["run_id"], user_id=user_id,
                 submission_token=second_qualified["submission_token"],
+                lease_token=second["lease_token"],
                 record_encoding=self._record(second), ip_address="203.0.113.13",
             )
         with auth_db() as db:
@@ -559,12 +680,15 @@ class MinigameRankingTests(unittest.TestCase):
             submit_ranked_run(
                 run_id=oversized["run_id"], user_id=oversized_user,
                 submission_token=oversized_qualified["submission_token"],
+                lease_token=oversized["lease_token"],
                 record_encoding=oversized_record, ip_address="203.0.113.14",
             )
 
     def test_existing_score_table_is_safely_extended_by_migration(self) -> None:
+        user_id = self._add_user("migration@example.com", "Migration")
         with auth_db() as db:
             db.execute("DROP TABLE minigame_high_scores")
+            db.execute("DROP TABLE minigame_ranked_runs")
             db.execute(
                 """
                 CREATE TABLE minigame_high_scores (
@@ -584,6 +708,55 @@ class MinigameRankingTests(unittest.TestCase):
                 )
                 """
             )
+            db.execute(
+                """
+                CREATE TABLE minigame_ranked_runs (
+                  run_id TEXT PRIMARY KEY,
+                  user_id INTEGER NOT NULL,
+                  request_id TEXT NOT NULL,
+                  game_id TEXT NOT NULL,
+                  difficulty INTEGER NOT NULL,
+                  rules_version INTEGER NOT NULL,
+                  seed_salt_hex TEXT NOT NULL,
+                  seed_hex TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  started_at TEXT NOT NULL,
+                  expires_at TEXT NOT NULL,
+                  start_ip TEXT,
+                  qualified_at TEXT,
+                  qualification_expires_at TEXT,
+                  submission_token_hash TEXT,
+                  submission_token_consumed_at TEXT,
+                  claimed_summary_json TEXT,
+                  pending_record TEXT,
+                  record_hash TEXT,
+                  action_count INTEGER,
+                  submitted_at TEXT,
+                  submit_ip TEXT,
+                  validation_started_at TEXT,
+                  completed_at TEXT,
+                  verified_summary_json TEXT,
+                  error_code TEXT,
+                  UNIQUE(user_id, request_id)
+                )
+                """
+            )
+            db.execute(
+                """
+                INSERT INTO minigame_ranked_runs
+                (run_id, user_id, request_id, game_id, difficulty, rules_version,
+                 seed_salt_hex, seed_hex, status, started_at, expires_at)
+                VALUES ('legacy-active', ?, 'legacy-request', 'column-chaos', 1, 1,
+                        ?, ?, 'active', ?, ?)
+                """,
+                (
+                    user_id,
+                    "00" * 16,
+                    "11" * 16,
+                    "2026-08-01T00:00:00+00:00",
+                    "2026-09-01T00:00:00+00:00",
+                ),
+            )
         init_auth_db()
         with auth_db() as db:
             columns = {
@@ -592,6 +765,12 @@ class MinigameRankingTests(unittest.TestCase):
             run_table = db.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'minigame_ranked_runs'"
             ).fetchone()
+            run_columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(minigame_ranked_runs)")
+            }
+            migrated_run = db.execute(
+                "SELECT status, error_code FROM minigame_ranked_runs WHERE run_id = 'legacy-active'"
+            ).fetchone()
         self.assertTrue(
             {
                 "score_run_id", "trophy_run_id", "verification_level",
@@ -599,6 +778,13 @@ class MinigameRankingTests(unittest.TestCase):
             }.issubset(columns)
         )
         self.assertIsNotNone(run_table)
+        self.assertTrue(
+            {
+                "lease_token_hash", "lease_expires_at", "lease_last_seen_at", "lease_generation",
+            }.issubset(run_columns)
+        )
+        self.assertEqual(migrated_run["status"], "expired")
+        self.assertEqual(migrated_run["error_code"], "lease_required")
 
     def test_global_pending_queue_is_capped_at_32(self) -> None:
         user_id = self._add_user("queue-target@example.com", "Queue Target")
@@ -627,6 +813,7 @@ class MinigameRankingTests(unittest.TestCase):
             submit_ranked_run(
                 run_id=run["run_id"], user_id=user_id,
                 submission_token=qualified["submission_token"],
+                lease_token=run["lease_token"],
                 record_encoding=self._record(run), ip_address="203.0.113.15",
             )
 

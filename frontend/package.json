@@ -13,7 +13,7 @@
     "test:trainer-state": "node --test tests/trainerBoardState.test.js",
     "test:gamer-ranked": "node --test tests/rankedGamerEngine.test.js tests/rankedRunLock.test.js",
     "test:minigame-determinism": "node --test tests/minigameDeterminism.test.js",
-    "test:minigame-ranked": "node --test tests/minigameProtocol.test.js tests/minigameDeterminism.test.js tests/minigameVerifier.test.js"
+    "test:minigame-ranked": "node --test tests/minigameProtocol.test.js tests/minigameDeterminism.test.js tests/minigameVerifier.test.js tests/exclusiveRunLock.test.js"
   },
   "dependencies": {
     "vue": "^3.5.30",
