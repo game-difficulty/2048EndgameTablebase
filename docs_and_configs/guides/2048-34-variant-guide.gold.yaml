@@ -1,0 +1,104 @@
+samples:
+  - image_id: img_0000
+    note: cover board, all common high-value colors
+    board_count: 1
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "2367148915abffff"}
+
+  - image_id: img_0001
+    note: coordinate legend is not a playable board
+    board_count: 0
+
+  - image_id: img_0002
+    note: ordinary 3x4 board with many empty cells
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "0000000000abffff"}
+
+  - image_id: img_0012
+    note: formation relationship diagram is not a playable board
+    board_count: 0
+
+  - image_id: img_0019
+    note: 3x3 board, right e and bottom f padding
+    boards:
+      - {visible_rows: 3, visible_cols: 3, hex: "235e038e02aeffff"}
+
+  - image_id: img_0020
+    note: 3x3 board with a bottom-right 2
+    boards:
+      - {visible_rows: 3, visible_cols: 3, hex: "235e038e01aeffff"}
+
+  - image_id: img_0021
+    note: 3x3 board with a top-left 2
+    boards:
+      - {visible_rows: 3, visible_cols: 3, hex: "135e038e02aeffff"}
+
+  - image_id: img_0022
+    note: 3x3 board with two lightly colored 2 tiles
+    boards:
+      - {visible_rows: 3, visible_cols: 3, hex: "135e038e01aeffff"}
+
+  - image_id: img_0028
+    note: two vertical arrows cross 2, 8, and 4 glyphs
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "1357128900abffff"}
+
+  - image_id: img_0032
+    note: vertical arrows point through three 2 tiles
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "3457148911abffff"}
+
+  - image_id: img_0054
+    note: vertical arrows cross 4, 32, and 2 glyphs
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "2556027910abffff"}
+
+  - image_id: img_0085
+    note: three full-width horizontal arrows cross every row
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "2337228911abffff"}
+
+  - image_id: img_0101
+    note: a vertical arrow crosses two 2 tiles
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "0147018911abffff"}
+
+  - image_id: img_0121
+    note: two vertical arrows cross four 2 tiles
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "0147118912abffff"}
+
+  - image_id: img_0146
+    note: vertical arrows cross 2, 8, and 4 while empty cells remain empty
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "1366028900abffff"}
+
+  - image_id: img_0150
+    note: two horizontal arrows with crossed 2 tiles
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "1137238a119bffff"}
+
+  - image_id: img_0171
+    note: a horizontal arrow nearly hides the top-left 2
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "1011347935abffff"}
+
+  - image_id: img_0202
+    note: a horizontal arrow crosses three adjacent 2 tiles
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "0111347936abffff"}
+
+  - image_id: img_0213
+    note: horizontal arrow plus 32 and 64 color separation
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "0111357936abffff"}
+
+  - image_id: img_0233
+    note: vertical arrow crosses three 8 tiles
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "3201368937abffff"}
+
+  - image_id: img_0238
+    note: personal-record screenshot uses a separate theme and a reviewed override
+    boards:
+      - {visible_rows: 3, visible_cols: 4, hex: "1267248a15bcffff"}

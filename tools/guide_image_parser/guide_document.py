@@ -19,12 +19,31 @@ SECTION_RE = re.compile(r"^第\s*\d+\s*节")
 CAPTION_RE = re.compile(r"^图\s*\d+(?:\s*[-－]\s*\d+)?(?:\s|$)")
 
 
-def _normalized_guide_hex(value: Any, visible_rows: int, visible_cols: int = 4) -> str:
+def _padding_digit(value: Any, fallback: str) -> str:
+    text = str(value or "").strip().lower()
+    return text if len(text) == 1 and text in "0123456789abcdef" else fallback
+
+
+def _normalized_guide_hex(
+    value: Any,
+    visible_rows: int,
+    visible_cols: int = 4,
+    *,
+    right_padding: str = "f",
+    bottom_padding: str = "f",
+) -> str:
     text = str(value or "").strip().lower().removeprefix("0x")
     text = "".join(char for char in text if char in "0123456789abcdef")
     visible_digits = max(0, min(16, int(visible_rows) * int(visible_cols)))
     if len(text) == visible_digits and visible_digits < 16:
-        text = text + "f" * (16 - visible_digits)
+        right = _padding_digit(right_padding, "f")
+        bottom = _padding_digit(bottom_padding, "f")
+        source_rows = [
+            text[row * visible_cols : (row + 1) * visible_cols]
+            for row in range(max(0, min(4, int(visible_rows))))
+        ]
+        text = "".join(row.ljust(4, right)[:4] for row in source_rows)
+        text = text.ljust(16, bottom)
     if len(text) < 16:
         text = text.ljust(16, "f")
     return text[:16]
@@ -49,6 +68,9 @@ def _board_payload(
 ) -> dict[str, Any]:
     visible_rows = int(board.get("visible_rows") or 4)
     visible_cols = int(board.get("visible_cols") or 4)
+    padding = board.get("padding") if isinstance(board.get("padding"), dict) else {}
+    right_padding = _padding_digit(padding.get("right"), "f")
+    bottom_padding = _padding_digit(padding.get("bottom"), "f")
     raw_bbox = [int(value) for value in (board.get("bbox") or [0, 0, 0, 0])]
     raw_bbox = (raw_bbox + [0, 0, 0, 0])[:4]
     x = max(0, min(raw_bbox[0], image_width))
@@ -60,7 +82,17 @@ def _board_payload(
         "bbox": [x, y, width, height],
         "visible_rows": visible_rows,
         "visible_cols": visible_cols,
-        "hex": _normalized_guide_hex(board.get("hex"), visible_rows, visible_cols),
+        "padding": {
+            "right": right_padding,
+            "bottom": bottom_padding,
+        },
+        "hex": _normalized_guide_hex(
+            board.get("hex"),
+            visible_rows,
+            visible_cols,
+            right_padding=right_padding,
+            bottom_padding=bottom_padding,
+        ),
         "confidence": round(float(board.get("confidence") or 0.0), 4),
         "flags": list(board.get("flags") or []),
     }

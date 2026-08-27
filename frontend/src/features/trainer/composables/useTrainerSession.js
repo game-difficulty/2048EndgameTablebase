@@ -330,7 +330,13 @@ export function useTrainerSession(activeRef) {
 
   const syncActivePatternCategory = () => {
     const matchedGroup = patternGroups.value.find((group) => group.patterns.includes(patternType.value));
-    activePatternCategory.value = matchedGroup?.category || patternGroups.value[0]?.category || '';
+    const variantGroup = isVariantPattern(patternType.value, patternCategories.value)
+      ? patternGroups.value.find((group) => group.category === 'variant')
+      : null;
+    activePatternCategory.value = matchedGroup?.category
+      || variantGroup?.category
+      || patternGroups.value[0]?.category
+      || '';
   };
 
   const preferredTargetFrom = (targets) => (
@@ -373,13 +379,16 @@ export function useTrainerSession(activeRef) {
 
   const syncSelectionFromFullPattern = (fullPattern) => {
     const parsed = parseFullPattern(fullPattern);
-    if (!parsed || !flatPatterns.value.includes(parsed.pattern)) {
+    if (!parsed) {
       return false;
     }
+    const catalogHasPattern = flatPatterns.value.includes(parsed.pattern);
+    const isKnownVariant = isVariantPattern(parsed.pattern, appCategories.value);
+    if (!catalogHasPattern && !isKnownVariant) return false;
     const targets = catalogTables.value.length
       ? getCatalogTargetsForPattern(catalogTables.value, parsed.pattern)
       : availableTargets.value;
-    if (!targets.includes(parsed.target)) {
+    if (catalogHasPattern && !targets.includes(parsed.target)) {
       return false;
     }
     patternType.value = parsed.pattern;
@@ -514,29 +523,27 @@ export function useTrainerSession(activeRef) {
     const pending = pendingTrainerJump.value;
     if (!pending || wsStatus.value !== 'connected') return;
 
-    hexInput.value = pending.hex;
-    currentBoardHex.value = pending.hex;
-    if (!triggerAction('SET_BOARD', { hex_str: pending.hex })) {
-      return;
-    }
-
     const parsed = parseFullPattern(pending.fullPattern);
-    if (
-      parsed &&
-      flatPatterns.value.includes(parsed.pattern) &&
-      (
-        catalogTables.value.length
-          ? getCatalogTargetsForPattern(catalogTables.value, parsed.pattern).includes(parsed.target)
-          : availableTargets.value.includes(parsed.target)
-      )
-    ) {
+    if (parsed) {
       const shouldSwitchPattern = currentPatternDisplay.value !== pending.fullPattern;
       if (shouldSwitchPattern) {
         patternType.value = parsed.pattern;
         targetValue.value = parsed.target;
         syncActivePatternCategory();
-        applyTablebase({ loadDefault: false });
+        if (!triggerAction('TRAINER_SET_FILEPATH', {
+          pattern: pending.fullPattern,
+          target: parsed.target,
+          load_default: false,
+        })) {
+          return;
+        }
       }
+    }
+
+    hexInput.value = pending.hex;
+    currentBoardHex.value = pending.hex;
+    if (!triggerAction('SET_BOARD', { hex_str: pending.hex })) {
+      return;
     }
 
     pendingTrainerJump.value = null;

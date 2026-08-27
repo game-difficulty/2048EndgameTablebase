@@ -1,0 +1,14 @@
+8ea407de8369e29fd6d85d06266f03cdc2b6e68ac8edb10717a5d66e8bb18c75:
+  status: accepted
+  board_overrides:
+    - board_index: 0
+      hex: "1267248a15bcffff"
+      visible_rows: 3
+      visible_cols: 4
+      padding:
+        right: e
+        bottom: f
+      confidence: 1.0
+      flags:
+        - manual_value_override
+  annotations: []

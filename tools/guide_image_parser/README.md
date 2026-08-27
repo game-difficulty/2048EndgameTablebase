@@ -20,6 +20,20 @@ python tools/guide_image_parser/validate_gold_samples.py --parsed tmp/pdf_guide_
 python tools/guide_image_parser/build_pdf_guide_document.py --pdf "C:\path\guide.pdf" --content tmp/pdf_guide_media/pdf_content.json --manifest tmp/pdf_guide_media/media_manifest.jsonl --parsed tmp/pdf_guide_media/parsed_images.jsonl --out frontend/public/guides/my-pdf-guide --document-id my-pdf-guide --title "My PDF Guide" --index frontend/public/guides/index.json
 ```
 
+Variant guides can select the deterministic 3x4 parser profile. It accepts
+3x4 and 3x3 source boards, fills a missing right column with `e`, and fills
+the missing bottom row with `f`:
+
+```powershell
+python tools/guide_image_parser/parse_guide_images.py --manifest tmp/pdf_guide_media/media_manifest.jsonl --out tmp/pdf_guide_media/parsed_images.jsonl --qa-dir tmp/pdf_guide_media/qa --profile variant-3x4 --overrides docs_and_configs/guides/my-variant-guide.overrides.yaml
+python tools/guide_image_parser/validate_gold_samples.py --parsed tmp/pdf_guide_media/parsed_images.jsonl --gold docs_and_configs/guides/my-variant-guide.gold.yaml
+python tools/guide_image_parser/build_pdf_guide_document.py --pdf "C:\path\guide.pdf" --content tmp/pdf_guide_media/pdf_content.json --manifest tmp/pdf_guide_media/media_manifest.jsonl --parsed tmp/pdf_guide_media/parsed_images.jsonl --out frontend/public/guides/my-variant-guide --document-id my-variant-guide --title "My Variant Guide" --trainer-full-pattern 3x4_4096 --index frontend/public/guides/index.json
+```
+
+The parser stores the padding contract on every board. Browser documents keep
+that metadata, and `--trainer-full-pattern` makes guide jumps switch Trainer to
+variant movement and rendering rules before setting the board.
+
 `parse_guide_images.py` accepts `--overrides tools/guide_image_parser/overrides.yaml`
 for manual corrections keyed by `image_id` or `sha256`.
 

@@ -22,6 +22,12 @@ def _heading_level(line: dict[str, Any]) -> int | None:
     color = str(line.get("color") or "").lower()
     size = int(line.get("size") or 0)
     is_teal = color in {"#0e4660", "#0e465f"}
+    if size >= 26 and (CHAPTER_RE.match(text) or text in {"前言＆基本术语", "附录"}):
+        return 1
+    if size >= 20 and SECTION_RE.match(text):
+        return 2
+    if size >= 18 and SUBSECTION_RE.match(text):
+        return 3
     if text in {"定义", "前言"} and is_teal and size >= 30:
         return 1
     if CHAPTER_RE.match(text) and is_teal and size >= 33:
@@ -50,7 +56,10 @@ def _included_pages(pages: list[dict[str, Any]]) -> set[int]:
         (
             page["number"]
             for page in pages
-            if any(str(line.get("text") or "").strip() == "目录" for line in page.get("lines", []))
+            if any(
+                re.sub(r"\s+", "", str(line.get("text") or "")) == "目录"
+                for line in page.get("lines", [])
+            )
         ),
         None,
     )
@@ -93,6 +102,7 @@ def build_pdf_guide_document(
     title: str,
     language: str = "zh",
     index_path: Path | None = None,
+    trainer_full_pattern: str = "",
 ) -> dict[str, Any]:
     content = json.loads(content_path.read_text(encoding="utf-8"))
     pages = list(content.get("pages") or [])
@@ -187,7 +197,7 @@ def build_pdf_guide_document(
                 continue
 
             text = str(event.get("text") or "").strip()
-            if not text or text == "目录":
+            if not text or re.sub(r"\s+", "", text) == "目录":
                 continue
             level = _heading_level(event)
             if level is not None:
@@ -255,6 +265,9 @@ def build_pdf_guide_document(
             "boards": board_count,
         },
     }
+    normalized_trainer_pattern = str(trainer_full_pattern or "").strip()
+    if normalized_trainer_pattern:
+        payload["trainer"] = {"full_pattern": normalized_trainer_pattern}
     document_path = out_dir / "document.json"
     write_json(document_path, payload)
     if index_path is not None:
@@ -279,6 +292,7 @@ def main() -> None:
     parser.add_argument("--title", required=True)
     parser.add_argument("--language", default="zh")
     parser.add_argument("--index", type=Path)
+    parser.add_argument("--trainer-full-pattern", default="")
     args = parser.parse_args()
     result = build_pdf_guide_document(
         pdf_path=args.pdf,
@@ -290,6 +304,7 @@ def main() -> None:
         title=args.title,
         language=args.language,
         index_path=args.index,
+        trainer_full_pattern=args.trainer_full_pattern,
     )
     print(json.dumps(result["stats"], ensure_ascii=False))
 

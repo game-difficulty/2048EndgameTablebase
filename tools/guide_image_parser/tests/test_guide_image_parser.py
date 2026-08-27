@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from tools.guide_image_parser.common import read_jsonl
 from tools.guide_image_parser.docx_media import extract_docx_media
-from tools.guide_image_parser.guide_document import build_guide_document
+from tools.guide_image_parser.guide_document import _normalized_guide_hex, build_guide_document
 from tools.guide_image_parser.image_parser import (
     BoardCandidate,
     CellProbe,
@@ -77,12 +77,13 @@ def _draw_centered_text(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int
 
 def draw_board(exponents: list[list[int]], cell: int = 38, gap: int = 4, pad: int = 3) -> Image.Image:
     rows = len(exponents)
-    width = pad * 2 + 4 * cell + 3 * gap
+    cols = len(exponents[0])
+    width = pad * 2 + cols * cell + (cols - 1) * gap
     height = pad * 2 + rows * cell + (rows - 1) * gap
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
     for row in range(rows):
-        for col in range(4):
+        for col in range(cols):
             exponent = exponents[row][col]
             x0 = pad + col * (cell + gap)
             y0 = pad + row * (cell + gap)
@@ -130,6 +131,18 @@ def make_manifest(tmp: Path, images: list[Image.Image]) -> Path:
 
 
 class GuideImageParserTests(unittest.TestCase):
+    def test_guide_document_normalizes_variant_3x3_padding(self) -> None:
+        self.assertEqual(
+            _normalized_guide_hex(
+                "123456789",
+                3,
+                3,
+                right_padding="e",
+                bottom_padding="f",
+            ),
+            "123e456e789effff",
+        )
+
     def test_build_guide_document_preserves_toc_images_and_partial_hex(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             tmp = Path(temp)
@@ -363,6 +376,45 @@ class GuideImageParserTests(unittest.TestCase):
             parsed = parse_manifest(manifest, tmp / "parsed_images.jsonl")
             self.assertEqual(parsed[0]["boards"][0]["visible_rows"], 3)
             self.assertEqual(parsed[0]["boards"][0]["hex"], "112102349854ffff")
+
+    def test_variant_3x4_profile_pads_bottom_with_f(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            exponents = [
+                [1, 2, 3, 4],
+                [5, 6, 7, 8],
+                [9, 10, 11, 12],
+            ]
+            manifest = make_manifest(tmp, [draw_board(exponents, cell=64, gap=10, pad=10)])
+            parsed = parse_manifest(
+                manifest,
+                tmp / "parsed_images.jsonl",
+                profile="variant-3x4",
+            )
+
+            board = parsed[0]["boards"][0]
+            self.assertEqual((board["visible_rows"], board["visible_cols"]), (3, 4))
+            self.assertEqual(board["hex"], "123456789abcffff")
+            self.assertEqual(board["padding"], {"right": "e", "bottom": "f"})
+
+    def test_variant_3x4_profile_pads_3x3_right_with_e(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            exponents = [
+                [1, 2, 3],
+                [4, 5, 6],
+                [7, 8, 9],
+            ]
+            manifest = make_manifest(tmp, [draw_board(exponents, cell=64, gap=10, pad=10)])
+            parsed = parse_manifest(
+                manifest,
+                tmp / "parsed_images.jsonl",
+                profile="variant-3x4",
+            )
+
+            board = parsed[0]["boards"][0]
+            self.assertEqual((board["visible_rows"], board["visible_cols"]), (3, 3))
+            self.assertEqual(board["hex"], "123e456e789effff")
 
     def test_sequence_strip_is_split_into_one_row_boards(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -965,6 +1017,37 @@ img_0000:
             parsed = parse_manifest(manifest, tmp / "parsed_images.jsonl", overrides_path=overrides)
             self.assertEqual(parsed[0]["status"], "accepted")
             self.assertEqual(parsed[0]["boards"][0]["hex"], "11110000ffff2222")
+            self.assertTrue(parsed[0]["quality"]["used_override"])
+
+    def test_targeted_board_override_preserves_detected_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            manifest = make_manifest(
+                tmp,
+                [draw_board([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]])],
+            )
+            overrides = tmp / "overrides.yaml"
+            overrides.write_text(
+                """
+img_0000:
+  board_overrides:
+    - board_index: 0
+      hex: "123456789abcffff"
+      confidence: 1.0
+""",
+                encoding="utf-8",
+            )
+
+            parsed = parse_manifest(
+                manifest,
+                tmp / "parsed_images.jsonl",
+                overrides_path=overrides,
+            )
+
+            board = parsed[0]["boards"][0]
+            self.assertEqual(board["hex"], "123456789abcffff")
+            self.assertEqual(board["visible_rows"], 3)
+            self.assertTrue(board["cells"])
             self.assertTrue(parsed[0]["quality"]["used_override"])
 
     def test_extract_docx_media_minimal(self) -> None:

@@ -24,6 +24,13 @@ test('keeps complete guide boards unchanged', () => {
   );
 });
 
+test('pads 3x3 variant guide boards with e on the right and f at the bottom', () => {
+  assert.equal(
+    normalizeGuideBoardHex('123456789', 3, 3, { right: 'e', bottom: 'f' }),
+    '123e456e789effff',
+  );
+});
+
 test('creates a Trainer jump without changing the current pattern', () => {
   const detail = createGuideTrainerJumpDetail({
     board_id: 'img_0230_b00',
@@ -38,6 +45,23 @@ test('creates a Trainer jump without changing the current pattern', () => {
     sourceDocumentId: '32768-dream-v3',
   });
   assert.equal(Object.hasOwn(detail, 'fullPattern'), false);
+});
+
+test('creates a pattern-aware Trainer jump for variant guides', () => {
+  const detail = createGuideTrainerJumpDetail({
+    board_id: 'img_0019_b00',
+    hex: '23503802a',
+    visible_rows: 3,
+    visible_cols: 3,
+    padding: { right: 'e', bottom: 'f' },
+  }, '2048-34-variant-guide', { full_pattern: '3x4_4096' });
+
+  assert.deepEqual(detail, {
+    hex: '235e038e02aeffff',
+    boardId: 'img_0019_b00',
+    sourceDocumentId: '2048-34-variant-guide',
+    fullPattern: '3x4_4096',
+  });
 });
 
 test('rejects malformed or structurally inconsistent guide boards', () => {

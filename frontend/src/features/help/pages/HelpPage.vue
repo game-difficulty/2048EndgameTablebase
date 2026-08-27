@@ -333,8 +333,8 @@ const showSelectedDocument = async (documentId) => {
   }
 };
 
-const handleOpenBoard = (board, documentId) => {
-  const detail = createGuideTrainerJumpDetail(board, documentId);
+const handleOpenBoard = (board, documentId, trainerContext) => {
+  const detail = createGuideTrainerJumpDetail(board, documentId, trainerContext);
   if (detail) {
     emit('navigate-tab', TAB_IDS.TRAINER, detail);
   }

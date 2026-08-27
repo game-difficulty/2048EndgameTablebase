@@ -33,6 +33,9 @@ TEXT_ACCEPT_THRESHOLD = 0.60
 COLOR_ACCEPT_THRESHOLD = 0.72
 BOARD_ACCEPT_THRESHOLD = 0.78
 ANNOTATION_REVIEW_THRESHOLD = 0.72
+DEFAULT_PARSER_PROFILE = "standard"
+VARIANT_3X4_PARSER_PROFILE = "variant-3x4"
+PARSER_PROFILES = (DEFAULT_PARSER_PROFILE, VARIANT_3X4_PARSER_PROFILE)
 
 # The Word guide uses a fixed screenshot palette which is close to, but not
 # exactly the app theme. Empty cells and "2" cells intentionally share almost
@@ -93,6 +96,18 @@ class BoardCandidate:
     cell_boxes: list[tuple[int, int, list[int]]]
     flags: list[str]
     source: str = "unknown"
+
+
+@dataclass(frozen=True)
+class BoardPadding:
+    right: str = "f"
+    bottom: str = "f"
+
+
+def _padding_for_profile(profile: str) -> BoardPadding:
+    if profile == VARIANT_3X4_PARSER_PROFILE:
+        return BoardPadding(right="e", bottom="f")
+    return BoardPadding()
 
 
 def _require_cv2():
@@ -1322,7 +1337,68 @@ def _filter_undersized_board_candidates(
     ]
 
 
-def _find_board_candidates(rgb: np.ndarray) -> list[BoardCandidate]:
+def _variant_3x4_board_candidates(rgb: np.ndarray) -> list[BoardCandidate]:
+    """Detect this guide's isolated 3x4 and 3x3 screenshot media.
+
+    The PDF stores every state as a separate, consistently framed raster. The
+    explicit profile therefore uses the media aspect ratio as structural
+    evidence and only accepts images with enough cells from the guide palette.
+    This deliberately excludes coordinate legends and relationship diagrams.
+    """
+    image_height, image_width = rgb.shape[:2]
+    visible_rows = 3
+    visible_cols = 4 if image_width / max(1, image_height) >= 1.15 else 3
+    expected_cells = visible_rows * visible_cols
+    tile_boxes = _tile_rect_bboxes(rgb)
+    if len(tile_boxes) < math.ceil(expected_cells * 0.5):
+        return []
+
+    palette = np.array(
+        list({tuple(value) for value in DEFAULT_GUIDE_PALETTE.values()}),
+        dtype=np.float32,
+    )
+    matching_tiles = 0
+    for tile_bbox in tile_boxes:
+        tile_rgb = _crop(rgb, tile_bbox)
+        if tile_rgb.size == 0:
+            continue
+        background = np.array(_cell_background(tile_rgb), dtype=np.float32)
+        if float(np.linalg.norm(palette - background, axis=1).min()) <= 48.0:
+            matching_tiles += 1
+    if matching_tiles < math.ceil(expected_cells * 0.5):
+        return []
+
+    # These screenshots use a narrow white frame. Deriving the grid from the
+    # complete media frame remains stable when arrows obscure a cell edge.
+    inset_x = max(1, round(image_width * 0.016))
+    inset_y = max(1, round(image_height * 0.02))
+    bbox = [
+        inset_x,
+        inset_y,
+        max(1, image_width - inset_x * 2),
+        max(1, image_height - inset_y * 2),
+    ]
+    evidence_ratio = min(1.0, matching_tiles / max(1, expected_cells))
+    fit_confidence = min(0.96, 0.82 + evidence_ratio * 0.14)
+    return [
+        BoardCandidate(
+            bbox=bbox,
+            visible_rows=visible_rows,
+            visible_cols=visible_cols,
+            fit_confidence=fit_confidence,
+            cell_boxes=_cell_boxes(bbox, visible_rows, visible_cols),
+            flags=[],
+            source=VARIANT_3X4_PARSER_PROFILE,
+        )
+    ]
+
+
+def _find_board_candidates(
+    rgb: np.ndarray,
+    profile: str = DEFAULT_PARSER_PROFILE,
+) -> list[BoardCandidate]:
+    if profile == VARIANT_3X4_PARSER_PROFILE:
+        return _variant_3x4_board_candidates(rgb)
     sequence_strip_candidates = _sequence_strip_board_candidates(rgb)
     if sequence_strip_candidates:
         return sequence_strip_candidates
@@ -1753,9 +1829,14 @@ class TemplateMatcher:
         )
 
 
-def _probe_boards(image_id: str, rgb: np.ndarray, matcher: TemplateMatcher) -> list[BoardProbe]:
+def _probe_boards(
+    image_id: str,
+    rgb: np.ndarray,
+    matcher: TemplateMatcher,
+    profile: str = DEFAULT_PARSER_PROFILE,
+) -> list[BoardProbe]:
     probes: list[BoardProbe] = []
-    for board_index, candidate in enumerate(_find_board_candidates(rgb)):
+    for board_index, candidate in enumerate(_find_board_candidates(rgb, profile)):
         board_id = f"{image_id}_b{board_index:02d}"
         cells: list[CellProbe] = []
         for row, col, cell_bbox in candidate.cell_boxes:
@@ -1807,7 +1888,7 @@ def _probe_boards(image_id: str, rgb: np.ndarray, matcher: TemplateMatcher) -> l
                     text_area_ratio=text_match.area_ratio,
                 )
             )
-        if len(cells) >= candidate.visible_rows * 4:
+        if len(cells) >= candidate.visible_rows * candidate.visible_cols:
             probes.append(
                 BoardProbe(
                     board_id,
@@ -1980,7 +2061,26 @@ def _cell_record(cell: CellProbe, palette: dict[int, list[int]]) -> tuple[dict[s
     )
 
 
-def _finalize_board(board: BoardProbe, palette: dict[int, list[int]]) -> tuple[dict[str, Any], bool]:
+def _padding_cell(row: int, col: int, digit: str, edge: str) -> dict[str, Any]:
+    exponent = int(digit, 16)
+    return {
+        "row": row,
+        "col": col,
+        "bbox": None,
+        "exponent": exponent,
+        "value": exponent_to_value(exponent),
+        "hex_digit": digit,
+        "confidence": 1.0,
+        "background_rgb": None,
+        "flags": [f"padding_{edge}_{digit}"],
+    }
+
+
+def _finalize_board(
+    board: BoardProbe,
+    palette: dict[int, list[int]],
+    profile: str = DEFAULT_PARSER_PROFILE,
+) -> tuple[dict[str, Any], bool]:
     cells_by_position: dict[tuple[int, int], dict[str, Any]] = {}
     cell_records: list[dict[str, Any]] = []
     needs_review = board.fit_confidence < 0.74
@@ -1994,10 +2094,11 @@ def _finalize_board(board: BoardProbe, palette: dict[int, list[int]]) -> tuple[d
         needs_review = needs_review or cell_needs_review
         min_confidence = min(min_confidence, float(record["confidence"]))
 
+    padding = _padding_for_profile(profile)
     digits: list[str] = []
     for row in range(4):
         for col in range(4):
-            if row < board.visible_rows:
+            if row < board.visible_rows and col < board.visible_cols:
                 record = cells_by_position.get((row, col))
                 if record is None:
                     digits.append("0")
@@ -2005,21 +2106,12 @@ def _finalize_board(board: BoardProbe, palette: dict[int, list[int]]) -> tuple[d
                     needs_review = True
                 else:
                     digits.append(str(record["hex_digit"]))
+            elif row < board.visible_rows:
+                digits.append(padding.right)
+                cell_records.append(_padding_cell(row, col, padding.right, "right"))
             else:
-                digits.append("f")
-                cell_records.append(
-                    {
-                        "row": row,
-                        "col": col,
-                        "bbox": None,
-                        "exponent": 15,
-                        "value": exponent_to_value(15),
-                        "hex_digit": "f",
-                        "confidence": 1.0,
-                        "background_rgb": None,
-                        "flags": ["padding_f"],
-                    }
-                )
+                digits.append(padding.bottom)
+                cell_records.append(_padding_cell(row, col, padding.bottom, "bottom"))
 
     if min_confidence < BOARD_ACCEPT_THRESHOLD:
         needs_review = True
@@ -2031,6 +2123,10 @@ def _finalize_board(board: BoardProbe, palette: dict[int, list[int]]) -> tuple[d
             "bbox": board.bbox,
             "visible_rows": board.visible_rows,
             "visible_cols": board.visible_cols,
+            "padding": {
+                "right": padding.right,
+                "bottom": padding.bottom,
+            },
             "hex": normalize_hex_16("".join(digits)),
             "cells": sorted(cell_records, key=lambda item: (item["row"], item["col"])),
             "confidence": round(float(min_confidence), 4),
@@ -3452,6 +3548,35 @@ def _apply_override(record: dict[str, Any], overrides: dict[str, Any]) -> dict[s
     for key in ("status", "boards", "annotations"):
         if key in override:
             next_record[key] = override[key]
+    board_overrides = override.get("board_overrides")
+    if isinstance(board_overrides, list) and "boards" not in override:
+        next_boards = [dict(board) for board in next_record.get("boards", [])]
+        for board_override in board_overrides:
+            if not isinstance(board_override, dict):
+                continue
+            board_index = board_override.get("board_index")
+            board_id = str(board_override.get("board_id") or "")
+            matched_index: int | None = None
+            if isinstance(board_index, int) and 0 <= board_index < len(next_boards):
+                matched_index = board_index
+            elif board_id:
+                matched_index = next(
+                    (
+                        index
+                        for index, board in enumerate(next_boards)
+                        if str(board.get("board_id") or "") == board_id
+                    ),
+                    None,
+                )
+            if matched_index is None:
+                continue
+            patch = {
+                key: value
+                for key, value in board_override.items()
+                if key not in {"board_id", "board_index"}
+            }
+            next_boards[matched_index] = {**next_boards[matched_index], **patch}
+        next_record["boards"] = next_boards
     if "quality" not in next_record or not isinstance(next_record["quality"], dict):
         next_record["quality"] = {}
     next_record["quality"] = dict(next_record["quality"])
@@ -3471,7 +3596,8 @@ def _status_for(boards: list[dict[str, Any]], annotations: list[dict[str, Any]],
         if board.get("flags") or float(board.get("confidence", 0.0)) < BOARD_ACCEPT_THRESHOLD:
             return "review"
         for cell in board.get("cells", []):
-            if cell.get("flags") and cell.get("flags") != ["padding_f"]:
+            cell_flags = set(cell.get("flags") or [])
+            if cell_flags and not all(flag.startswith("padding_") for flag in cell_flags):
                 return "review"
     for annotation in annotations:
         if annotation.get("flags") or float(annotation.get("confidence", 0.0)) < ANNOTATION_REVIEW_THRESHOLD:
@@ -3484,13 +3610,14 @@ def _parse_entry(
     probes: list[BoardProbe],
     palette: dict[int, list[int]],
     overrides: dict[str, Any],
+    profile: str = DEFAULT_PARSER_PROFILE,
 ) -> dict[str, Any]:
     image_path = Path(manifest_entry["path"])
     rgb = _load_rgb(image_path)
     boards: list[dict[str, Any]] = []
     quality_flags: list[str] = []
     for probe in probes:
-        board, needs_review = _finalize_board(probe, palette)
+        board, needs_review = _finalize_board(probe, palette, profile)
         boards.append(board)
         if needs_review:
             quality_flags.append(f"{board['board_id']}:review")
@@ -3519,6 +3646,7 @@ def _parse_entry(
         "boards": boards,
         "annotations": annotations,
         "quality": {
+            "parser_profile": profile,
             "min_board_confidence": round(min_board_confidence, 4),
             "palette_size": len(palette),
             "flags": sorted(set(quality_flags)),
@@ -3535,7 +3663,10 @@ def parse_manifest(
     qa_dir: Path | None = None,
     overrides_path: Path | None = None,
     limit: int | None = None,
+    profile: str = DEFAULT_PARSER_PROFILE,
 ) -> list[dict[str, Any]]:
+    if profile not in PARSER_PROFILES:
+        raise ValueError(f"Unknown parser profile: {profile}")
     manifest = read_jsonl(manifest_path)
     if limit is not None:
         manifest = manifest[:limit]
@@ -3546,14 +3677,20 @@ def parse_manifest(
     for entry in manifest:
         image_path = Path(entry["path"])
         rgb = _load_rgb(image_path)
-        probes = _probe_boards(entry["image_id"], rgb, matcher)
+        probes = _probe_boards(entry["image_id"], rgb, matcher, profile)
         all_probes_by_image[entry["image_id"]] = probes
         all_boards.extend(probes)
 
     palette = _build_palette(all_boards)
     overrides = _load_overrides(overrides_path)
     parsed = [
-        _parse_entry(entry, all_probes_by_image.get(entry["image_id"], []), palette, overrides)
+        _parse_entry(
+            entry,
+            all_probes_by_image.get(entry["image_id"], []),
+            palette,
+            overrides,
+            profile,
+        )
         for entry in manifest
     ]
 
@@ -3571,6 +3708,7 @@ def parse_manifest(
                     "hex": board["hex"],
                     "visible_rows": board["visible_rows"],
                     "visible_cols": board["visible_cols"],
+                    "padding": board.get("padding"),
                     "confidence": board["confidence"],
                     "flags": board["flags"],
                     "doc_index": record.get("doc_index"),
@@ -3593,6 +3731,7 @@ def main() -> None:
     parser.add_argument("--qa-dir", type=Path, default=None)
     parser.add_argument("--overrides", type=Path, default=None)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--profile", choices=PARSER_PROFILES, default=DEFAULT_PARSER_PROFILE)
     args = parser.parse_args()
 
     parsed = parse_manifest(
@@ -3601,6 +3740,7 @@ def main() -> None:
         qa_dir=args.qa_dir,
         overrides_path=args.overrides,
         limit=args.limit,
+        profile=args.profile,
     )
     counts: dict[str, int] = {}
     for record in parsed:

@@ -94,7 +94,7 @@ const hotspotStyle = (board, figure) => {
 };
 
 const openBoard = (board) => {
-  emit('open-board', board, props.document.id);
+  emit('open-board', board, props.document.id, props.document.trainer);
 };
 
 const openSingleBoard = (figure) => {
