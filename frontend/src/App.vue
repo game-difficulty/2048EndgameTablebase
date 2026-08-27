@@ -1,7 +1,12 @@
 <template>
   <div ref="fixedViewport" class="fixed-layout-viewport">
     <div class="fixed-layout-frame" :style="fixedLayoutFrameStyle">
-      <div class="app-shell flex flex-col overflow-hidden" :style="fixedLayoutSurfaceStyle">
+      <div
+        class="app-shell flex flex-col overflow-hidden"
+        :style="fixedLayoutSurfaceStyle"
+        @pointerdown.capture="handleWorkspaceFocus"
+        @focusin.capture="handleWorkspaceFocus"
+      >
     <div class="flex items-center gap-2 overflow-x-auto bg-bg-main/80 p-2 shadow-sm z-50 border-b border-border-main backdrop-blur-md transition-colors duration-300">
       <div
         v-for="tab in openTabDefinitions"
@@ -13,7 +18,7 @@
           dragTargetTabId === tab.id && draggedTabId && draggedTabId !== tab.id
             ? 'ring-2 ring-accent/50 bg-accent/8'
             : '',
-          activeTab === tab.id
+          isTabPresented(tab.id)
             ? 'surface-prominent text-white scale-[1.02]'
             : 'border-transparent bg-transparent text-text-secondary hover:bg-btn-bg/10 hover:text-text-main'
         ]"
@@ -140,99 +145,149 @@
       </button>
     </div>
 
-    <div class="flex-1 relative overflow-hidden">
-      <div
-        v-if="isTabOpen(TAB_IDS.MAIN_MENU)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.MAIN_MENU"
-      >
-        <MainMenuView :active="activeTab === TAB_IDS.MAIN_MENU" @selectTab="openTab" />
+    <div :class="['app-workspace', trainerWorkspaceClass]">
+      <div class="app-primary-pane" data-primary-pane>
+        <div
+          v-if="isTabOpen(TAB_IDS.MAIN_MENU)"
+          class="absolute inset-0"
+          v-show="activeTab === TAB_IDS.MAIN_MENU"
+        >
+          <MainMenuView :active="activeTab === TAB_IDS.MAIN_MENU" @selectTab="openTab" />
+        </div>
+        <div
+          v-if="isTabOpen(TAB_IDS.GAMER)"
+          class="absolute inset-0"
+          v-show="activeTab === TAB_IDS.GAMER"
+        >
+          <GamerView
+            :active="activeTab === TAB_IDS.GAMER"
+            @navigate-tab="handleNavigateTab"
+          />
+        </div>
+        <div
+          v-if="isTabOpen(TAB_IDS.TESTER)"
+          class="absolute inset-0"
+          v-show="activeTab === TAB_IDS.TESTER"
+        >
+          <TesterView
+            :active="activeTab === TAB_IDS.TESTER"
+            @navigate-tab="handleNavigateTab"
+            @open-analysis="openAnalysisDialog"
+          />
+        </div>
+        <div
+          v-if="isTabOpen(TAB_IDS.MINIGAMES)"
+          class="absolute inset-0"
+          v-show="activeTab === TAB_IDS.MINIGAMES"
+        >
+          <MinigamesView
+            :active="activeTab === TAB_IDS.MINIGAMES"
+            @navigate-tab="handleNavigateTab"
+          />
+        </div>
+        <div
+          v-if="isTabOpen(TAB_IDS.LEADERBOARDS)"
+          class="absolute inset-0"
+          v-show="activeTab === TAB_IDS.LEADERBOARDS"
+        >
+          <LeaderboardsView
+            :active="activeTab === TAB_IDS.LEADERBOARDS"
+            :requested-key="leaderboardRequestedKey"
+            :request-serial="leaderboardRequestSerial"
+            :requested-game-id="leaderboardRequestedGameId"
+            :requested-difficulty="leaderboardRequestedDifficulty"
+          />
+        </div>
+        <div
+          v-if="isTabOpen(TAB_IDS.REPLAY)"
+          class="absolute inset-0"
+          v-show="activeTab === TAB_IDS.REPLAY"
+        >
+          <ReplayReviewView
+            :active="activeTab === TAB_IDS.REPLAY"
+            @navigate-tab="handleNavigateTab"
+            @open-analysis="openAnalysisDialog"
+          />
+        </div>
+        <div
+          v-if="isTabOpen(TAB_IDS.SETTINGS)"
+          class="absolute inset-0"
+          v-show="activeTab === TAB_IDS.SETTINGS"
+        >
+          <SettingsView :active="activeTab === TAB_IDS.SETTINGS" />
+        </div>
+        <div
+          v-if="isTabOpen(TAB_IDS.HELP)"
+          class="absolute inset-0"
+          v-show="activeTab === TAB_IDS.HELP"
+        >
+          <HelpView
+            :active="activeTab === TAB_IDS.HELP"
+            @navigate-tab="handleNavigateTab"
+          />
+        </div>
+        <div
+          v-if="isTabOpen(TAB_IDS.ADMIN)"
+          class="absolute inset-0"
+          v-show="activeTab === TAB_IDS.ADMIN"
+        >
+          <AdminView :active="activeTab === TAB_IDS.ADMIN" />
+        </div>
       </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.GAMER)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.GAMER"
-      >
-        <GamerView
-          :active="activeTab === TAB_IDS.GAMER"
-          @navigate-tab="handleNavigateTab"
-        />
-      </div>
+
       <div
         v-if="isTabOpen(TAB_IDS.TRAINER)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.TRAINER"
+        v-show="trainerVisible"
+        :class="['app-trainer-pane', trainerPaneClass]"
+        data-trainer-pane
       >
-        <TrainerView :active="activeTab === TAB_IDS.TRAINER" />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.TESTER)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.TESTER"
-      >
-        <TesterView
-          :active="activeTab === TAB_IDS.TESTER"
-          @navigate-tab="handleNavigateTab"
-          @open-analysis="openAnalysisDialog"
+        <TrainerView
+          :active="trainerSessionActive"
+          :hotkeys-enabled="trainerHotkeysEnabled"
+          :dock-placement="trainerEffectiveDockPlacement"
         />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.MINIGAMES)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.MINIGAMES"
-      >
-        <MinigamesView
-          :active="activeTab === TAB_IDS.MINIGAMES"
-          @navigate-tab="handleNavigateTab"
-        />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.LEADERBOARDS)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.LEADERBOARDS"
-      >
-        <LeaderboardsView
-          :active="activeTab === TAB_IDS.LEADERBOARDS"
-          :requested-key="leaderboardRequestedKey"
-          :request-serial="leaderboardRequestSerial"
-          :requested-game-id="leaderboardRequestedGameId"
-          :requested-difficulty="leaderboardRequestedDifficulty"
-        />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.REPLAY)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.REPLAY"
-      >
-        <ReplayReviewView
-          :active="activeTab === TAB_IDS.REPLAY"
-          @navigate-tab="handleNavigateTab"
-          @open-analysis="openAnalysisDialog"
-        />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.SETTINGS)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.SETTINGS"
-      >
-        <SettingsView :active="activeTab === TAB_IDS.SETTINGS" />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.HELP)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.HELP"
-      >
-        <HelpView
-          :active="activeTab === TAB_IDS.HELP"
-          @navigate-tab="handleNavigateTab"
-        />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.ADMIN)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.ADMIN"
-      >
-        <AdminView :active="activeTab === TAB_IDS.ADMIN" />
+        <div
+          v-if="trainerDockAvailable"
+          class="trainer-dock-toolbar"
+          role="toolbar"
+          :aria-label="$t('trainer.dock.toolbar')"
+        >
+          <button
+            type="button"
+            class="trainer-dock-button"
+            :class="{ 'trainer-dock-button--active': trainerEffectiveDockPlacement === TRAINER_DOCK_PLACEMENTS.RIGHT }"
+            :title="$t('trainer.dock.right')"
+            :aria-label="$t('trainer.dock.right')"
+            :aria-pressed="trainerEffectiveDockPlacement === TRAINER_DOCK_PLACEMENTS.RIGHT"
+            data-trainer-dock="right"
+            @click="handleTrainerDockChange(TRAINER_DOCK_PLACEMENTS.RIGHT)"
+          >
+            <span aria-hidden="true">◧</span>
+          </button>
+          <button
+            type="button"
+            class="trainer-dock-button"
+            :class="{ 'trainer-dock-button--active': trainerEffectiveDockPlacement === TRAINER_DOCK_PLACEMENTS.BOTTOM }"
+            :title="$t('trainer.dock.bottom')"
+            :aria-label="$t('trainer.dock.bottom')"
+            :aria-pressed="trainerEffectiveDockPlacement === TRAINER_DOCK_PLACEMENTS.BOTTOM"
+            data-trainer-dock="bottom"
+            @click="handleTrainerDockChange(TRAINER_DOCK_PLACEMENTS.BOTTOM)"
+          >
+            <span aria-hidden="true">⬒</span>
+          </button>
+          <button
+            v-if="trainerDockActive"
+            type="button"
+            class="trainer-dock-button"
+            :title="$t('trainer.dock.full')"
+            :aria-label="$t('trainer.dock.full')"
+            data-trainer-dock="none"
+            @click="handleTrainerDockChange(TRAINER_DOCK_PLACEMENTS.NONE)"
+          >
+            <span aria-hidden="true">□</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -368,11 +423,17 @@
 </template>
 
 <script setup>
-import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref } from 'vue';
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { useAppSettingsStore } from './app/useAppSettings';
 import { TAB_IDS } from './app/tabRegistry';
+import {
+  TRAINER_DOCK_PLACEMENTS,
+  isTrainerDocked,
+  normalizeTrainerDockPlacement,
+  resolveTrainerJumpDockPlacement,
+} from './app/trainerDock';
 import { useTabManager } from './app/useTabManager';
 import MainMenuView from './components/MainMenuView.vue';
 import AccountAvatar from './features/auth/AccountAvatar.vue';
@@ -441,22 +502,68 @@ const leaderboardRequestedGameId = ref('');
 const leaderboardRequestedDifficulty = ref(1);
 const leaderboardRequestSerial = ref(0);
 const fixedLayoutScale = ref(1);
+const viewportWidth = ref(0);
+const viewportHeight = ref(0);
 let fixedViewportObserver = null;
 const AUTH_REFRESH_CHECK_KEY = '2048tables:last-auth-refresh-check';
 const AUTH_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const TRAINER_DOCK_PREFERENCE_KEY = '2048tables:trainer-dock-placement';
 let scheduledAuthRefreshTimer = null;
 const { start: startAppSettings, stop: stopAppSettings } = useAppSettingsStore();
 const {
   activeTab,
+  openTabs,
   openTabDefinitions,
   activateTab,
   closeTab,
   isTabOpen,
   moveTabRelative,
   openTab,
+  openTabInBackground,
 } = useTabManager();
 const draggedTabId = ref(null);
 const dragTargetTabId = ref(null);
+const trainerDockPlacement = ref(TRAINER_DOCK_PLACEMENTS.NONE);
+const trainerDockFocused = ref(false);
+const lastPrimaryTab = ref(TAB_IDS.MAIN_MENU);
+
+const readTrainerDockPreference = () => {
+  try {
+    const placement = normalizeTrainerDockPlacement(
+      window.localStorage.getItem(TRAINER_DOCK_PREFERENCE_KEY),
+    );
+    return isTrainerDocked(placement) ? placement : TRAINER_DOCK_PLACEMENTS.RIGHT;
+  } catch (error) {
+    return TRAINER_DOCK_PLACEMENTS.RIGHT;
+  }
+};
+
+const trainerDockPreference = ref(readTrainerDockPreference());
+const trainerDockAvailable = computed(() => viewportWidth.value >= 900 && viewportHeight.value >= 600);
+const trainerDockActive = computed(() => (
+  trainerDockAvailable.value
+  && isTrainerDocked(trainerDockPlacement.value)
+  && isTabOpen(TAB_IDS.TRAINER)
+));
+const trainerEffectiveDockPlacement = computed(() => (
+  trainerDockActive.value
+    ? trainerDockPlacement.value
+    : TRAINER_DOCK_PLACEMENTS.NONE
+));
+const trainerSessionActive = computed(() => (
+  activeTab.value === TAB_IDS.TRAINER || trainerDockActive.value
+));
+const trainerVisible = computed(() => trainerSessionActive.value);
+const trainerHotkeysEnabled = computed(() => (
+  activeTab.value === TAB_IDS.TRAINER
+  || (trainerDockActive.value && trainerDockFocused.value)
+));
+const trainerWorkspaceClass = computed(() => (
+  trainerDockActive.value ? `app-workspace--dock-${trainerDockPlacement.value}` : ''
+));
+const trainerPaneClass = computed(() => (
+  trainerDockActive.value ? `app-trainer-pane--dock-${trainerDockPlacement.value}` : 'app-trainer-pane--full'
+));
 
 const fixedLayoutFrameStyle = computed(() => ({
   width: `${fixedLayoutWidth.value * fixedLayoutScale.value}px`,
@@ -475,6 +582,8 @@ const updateFixedLayoutScale = () => {
   const width = viewport.clientWidth;
   const height = viewport.clientHeight;
   if (width <= 0 || height <= 0) return;
+  viewportWidth.value = width;
+  viewportHeight.value = height;
   const nextScale = Math.min(
     width / FIXED_LAYOUT_MIN_WIDTH,
     height / FIXED_LAYOUT_HEIGHT,
@@ -487,6 +596,9 @@ const updateFixedLayoutScale = () => {
 };
 
 const getTabLabel = (tab) => (tab.titleKey ? t(tab.titleKey) : tab.title);
+const isTabPresented = (tabId) => (
+  activeTab.value === tabId || (tabId === TAB_IDS.TRAINER && trainerDockActive.value)
+);
 const accountDisplayName = computed(() => authUser.value?.display_name || authUser.value?.email || '');
 const canOpenAdmin = computed(() => {
   const email = String(authUser.value?.email || '').trim().toLowerCase();
@@ -508,7 +620,23 @@ const formatTokens = (value) => {
 const handleNavigateTab = (tabId, detail = null) => {
   if (tabId === TAB_IDS.TRAINER && detail?.hex) {
     queueTrainerPracticeJump(detail);
-    openTab(tabId);
+    const requestedDockPlacement = resolveTrainerJumpDockPlacement({
+      placement: trainerDockActive.value
+        ? trainerDockPlacement.value
+        : activeTab.value === TAB_IDS.HELP
+          ? trainerDockPreference.value
+          : TRAINER_DOCK_PLACEMENTS.NONE,
+      dockAvailable: trainerDockAvailable.value,
+      sourceIsHelp: activeTab.value === TAB_IDS.HELP,
+    });
+    if (isTrainerDocked(requestedDockPlacement)) {
+      openTabInBackground(tabId);
+      trainerDockPlacement.value = requestedDockPlacement;
+      trainerDockFocused.value = false;
+    } else {
+      trainerDockPlacement.value = TRAINER_DOCK_PLACEMENTS.NONE;
+      openTab(tabId);
+    }
     return;
   }
 
@@ -723,14 +851,74 @@ const handleGlobalBoardHotkeyFocus = (event) => {
 };
 
 const handleActivateTab = (tabId, event) => {
+  if (tabId === TAB_IDS.TRAINER && isTrainerDocked(trainerDockPlacement.value)) {
+    trainerDockPlacement.value = TRAINER_DOCK_PLACEMENTS.NONE;
+  }
   activateTab(tabId);
   blurButtonTarget(event);
 };
 
 const handleCloseTab = (tabId, event) => {
+  if (tabId === TAB_IDS.TRAINER) {
+    trainerDockPlacement.value = TRAINER_DOCK_PLACEMENTS.NONE;
+    trainerDockFocused.value = false;
+  }
   closeTab(tabId);
+  if (trainerDockActive.value && activeTab.value === TAB_IDS.TRAINER) {
+    activateTab(getTrainerCompanionTab());
+  }
   blurButtonTarget(event);
 };
+
+const writeTrainerDockPreference = (placement) => {
+  try {
+    window.localStorage.setItem(TRAINER_DOCK_PREFERENCE_KEY, placement);
+  } catch (error) {
+    // A stored preference is optional; docking remains available for this session.
+  }
+};
+
+const getTrainerCompanionTab = () => {
+  if (lastPrimaryTab.value !== TAB_IDS.TRAINER && isTabOpen(lastPrimaryTab.value)) {
+    return lastPrimaryTab.value;
+  }
+  return openTabs.value.find((tabId) => tabId !== TAB_IDS.TRAINER) || TAB_IDS.MAIN_MENU;
+};
+
+const handleTrainerDockChange = (placement) => {
+  const normalized = normalizeTrainerDockPlacement(placement);
+  if (!isTrainerDocked(normalized)) {
+    trainerDockPlacement.value = TRAINER_DOCK_PLACEMENTS.NONE;
+    activateTab(TAB_IDS.TRAINER);
+    trainerDockFocused.value = true;
+    return;
+  }
+  if (!trainerDockAvailable.value) {
+    return;
+  }
+  openTabInBackground(TAB_IDS.TRAINER);
+  trainerDockPlacement.value = normalized;
+  trainerDockPreference.value = normalized;
+  writeTrainerDockPreference(normalized);
+  if (activeTab.value === TAB_IDS.TRAINER) {
+    activateTab(getTrainerCompanionTab());
+  }
+  trainerDockFocused.value = true;
+};
+
+const handleWorkspaceFocus = (event) => {
+  if (!trainerDockActive.value) {
+    return;
+  }
+  const target = event?.target;
+  trainerDockFocused.value = target instanceof Element && !!target.closest('[data-trainer-pane]');
+};
+
+watch(activeTab, (tabId) => {
+  if (tabId !== TAB_IDS.TRAINER) {
+    lastPrimaryTab.value = tabId;
+  }
+});
 
 const clearTabDragState = () => {
   draggedTabId.value = null;
@@ -986,6 +1174,93 @@ onUnmounted(() => {
   transform-origin: top left;
   background-color: var(--bg-main);
   background-image: var(--bg-main-gradient);
+}
+
+.app-workspace {
+  position: relative;
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.app-primary-pane,
+.app-trainer-pane {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-trainer-pane {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.app-primary-pane,
+.app-trainer-pane--full {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.app-workspace--dock-right {
+  grid-template-columns: minmax(0, 1fr) 500px;
+}
+
+.app-trainer-pane--dock-right {
+  grid-column: 2;
+  grid-row: 1;
+  border-left: 1px solid var(--border-main);
+}
+
+.app-workspace--dock-bottom {
+  grid-template-rows: minmax(0, 1fr) minmax(320px, 0.95fr);
+}
+
+.app-trainer-pane--dock-bottom {
+  grid-column: 1;
+  grid-row: 2;
+  border-top: 1px solid var(--border-main);
+}
+
+.trainer-dock-toolbar {
+  z-index: 190;
+  display: flex;
+  grid-row: 2;
+  justify-self: end;
+  gap: 0.25rem;
+  margin: 0.4rem 0.75rem 0.6rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border-main);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(8px);
+}
+
+.trainer-dock-button {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+  font-weight: 900;
+  line-height: 1;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.trainer-dock-button:hover,
+.trainer-dock-button:focus-visible,
+.trainer-dock-button--active {
+  background: var(--btn-bg);
+  color: white;
+  outline: none;
 }
 
 .account-trigger.supporter {

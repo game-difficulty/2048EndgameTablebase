@@ -42,9 +42,17 @@ import {
   normalizeTrainerBoardHex,
   previousDistinctTrainerHistoryState,
 } from '../engine/trainerBoardState.js';
+import {
+  EMPTY_PATTERN_CATEGORY,
+  EMPTY_PATTERN_ID,
+  isEmptyTrainerPattern,
+  shouldDeferTrainerBoardSync,
+  stripTrainerQueryPayload,
+  withEmptyPatternGroup,
+} from '../engine/trainerEmptyPattern.js';
 import { registerTrainerPracticeJumpConsumer } from '../services/trainerPracticeJump';
 
-export function useTrainerSession(activeRef) {
+export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   const MAX_PIPELINED_RANDOM_MOVES = 16;
   const RESULT_REFRESH_GRACE_MS = 180;
   const RESULT_REFRESH_PLACEHOLDER_MS = 1400;
@@ -150,19 +158,27 @@ export function useTrainerSession(activeRef) {
     }
   };
 
-  const currentPatternDisplay = computed(() =>
-    patternType.value && targetValue.value ? `${patternType.value}_${targetValue.value}` : ''
-  );
+  const isEmptyPattern = computed(() => isEmptyTrainerPattern(patternType.value));
+  const currentPatternDisplay = computed(() => {
+    if (isEmptyPattern.value) return EMPTY_PATTERN_ID;
+    return patternType.value && targetValue.value ? `${patternType.value}_${targetValue.value}` : '';
+  });
   const isVariant = computed(() => isVariantPattern(patternType.value, patternCategories.value));
-  const patternGroups = computed(() =>
+  const catalogPatternGroups = computed(() =>
     Object.entries(patternCategories.value || {}).map(([category, patterns]) => ({
       category,
       patterns: Array.isArray(patterns) ? patterns : [],
     }))
   );
-  const flatPatterns = computed(() => patternGroups.value.flatMap((group) => group.patterns));
-  const activePatternOptions = computed(() => patternCategories.value[activePatternCategory.value] || []);
+  const patternGroups = computed(() => withEmptyPatternGroup(catalogPatternGroups.value));
+  const flatPatterns = computed(() => catalogPatternGroups.value.flatMap((group) => group.patterns));
+  const activePatternOptions = computed(() => (
+    activePatternCategory.value === EMPTY_PATTERN_CATEGORY
+      ? [EMPTY_PATTERN_ID]
+      : (patternCategories.value[activePatternCategory.value] || [])
+  ));
   const availableTargetsForPattern = computed(() => {
+    if (isEmptyPattern.value) return [];
     if (!catalogTables.value.length) {
       return availableTargets.value;
     }
@@ -357,6 +373,10 @@ export function useTrainerSession(activeRef) {
   };
 
   const ensureTargetForCurrentPattern = () => {
+    if (isEmptyPattern.value) {
+      targetValue.value = '';
+      return;
+    }
     const targets = availableTargetsForPattern.value;
     if (!targets.length) {
       targetValue.value = '';
@@ -398,7 +418,12 @@ export function useTrainerSession(activeRef) {
   };
 
   const selectedTablebaseExists = () => {
-    if (!patternType.value || !targetValue.value || !flatPatterns.value.includes(patternType.value)) {
+    if (
+      isEmptyPattern.value
+      || !patternType.value
+      || !targetValue.value
+      || !flatPatterns.value.includes(patternType.value)
+    ) {
       return false;
     }
     const targets = catalogTables.value.length
@@ -415,6 +440,7 @@ export function useTrainerSession(activeRef) {
       !initialStateSeen ||
       defaultTablebaseAutoApplyAttempted ||
       pendingTrainerJump.value ||
+      isEmptyPattern.value ||
       tablebasePath.value === 'loaded' ||
       !selectedTablebaseExists()
     ) {
@@ -426,6 +452,7 @@ export function useTrainerSession(activeRef) {
 
   const protectedActions = new Set([
     'TRAINER_SET_FILEPATH',
+    'TRAINER_SET_EMPTY_PATTERN',
     'TRAINER_GET_RESULTS',
     'TABLEBASE_QUERY',
     'TRAINER_DEFAULT',
@@ -438,6 +465,9 @@ export function useTrainerSession(activeRef) {
   ]);
 
   const attachServerStateQuery = (action, payload) => {
+    if (isEmptyPattern.value) {
+      return stripTrainerQueryPayload(payload);
+    }
     const shouldQueryMove = action === 'TRAINER_MOVE' && [1, 2].includes(Number(spawnMode.value));
     if (
       recordOpen.value
@@ -484,7 +514,10 @@ export function useTrainerSession(activeRef) {
       if (patterns.length) {
         patternCategories.value = nextCategories;
         availableTargets.value = getCatalogTargets(tables);
-        if (!patternType.value || (!preserveSelection && !patterns.includes(patternType.value))) {
+        if (
+          !patternType.value
+          || (!preserveSelection && !patterns.includes(patternType.value) && !isEmptyPattern.value)
+        ) {
           const defaults = chooseDefaultCatalogSelection(patterns);
           patternType.value = defaults.pattern;
           targetValue.value = defaults.target;
@@ -498,7 +531,7 @@ export function useTrainerSession(activeRef) {
           patternType.value = selectedPattern;
           targetValue.value = selectedTarget;
         } else {
-          ensureTargetForCurrentPattern();
+          if (!isEmptyPattern.value) ensureTargetForCurrentPattern();
         }
         if (loadedTablebaseFullPattern.value) {
           syncSelectionFromFullPattern(loadedTablebaseFullPattern.value);
@@ -560,6 +593,35 @@ export function useTrainerSession(activeRef) {
     applyTrainerJump();
   };
 
+  const activateEmptyPattern = () => {
+    const alreadyEmpty = isEmptyPattern.value;
+    demoActive.value = false;
+    clearDemoTimer();
+    clearStepQueue();
+    finishPaletteEditing({ query: false });
+    clearPaletteSyncTimer();
+    if (!alreadyEmpty) paletteEditDirty = false;
+    currentPaletteValue.value = null;
+    clearRandomMovePipeline();
+    pendingResultsRequests.clear();
+    pendingServerStateQuery = null;
+    loadedTablebaseFullPattern.value = '';
+    tablebasePath.value = 'not_selected';
+    patternType.value = EMPTY_PATTERN_ID;
+    targetValue.value = '';
+    activePatternCategory.value = EMPTY_PATTERN_CATEGORY;
+    patternMenuOpen.value = false;
+    if ([1, 2].includes(Number(spawnMode.value))) {
+      spawnMode.value = 0;
+    }
+    invalidateResults({ clearDisplay: true });
+    finishResultsRefresh();
+    trainerResyncPending = true;
+    if (!triggerAction('TRAINER_SET_EMPTY_PATTERN')) {
+      trainerResyncPending = false;
+    }
+  };
+
   const togglePatternMenu = () => {
     syncActivePatternCategory();
     patternMenuOpen.value = !patternMenuOpen.value;
@@ -568,6 +630,10 @@ export function useTrainerSession(activeRef) {
   const selectPattern = (pattern) => {
     if (patternType.value === pattern) {
       patternMenuOpen.value = false;
+      return;
+    }
+    if (isEmptyTrainerPattern(pattern)) {
+      activateEmptyPattern();
       return;
     }
     patternType.value = pattern;
@@ -706,6 +772,7 @@ export function useTrainerSession(activeRef) {
   };
 
   const prepareResultsRequest = (boardHex, reason = 'manual') => {
+    if (isEmptyPattern.value) return null;
     if (recordOpen.value || (reason !== 'step' && !showResults.value) || awaitingSpawn.value) return null;
     if (!boardHex) return null;
     if (hasPendingResultsForBoard(boardHex)) return null;
@@ -723,6 +790,7 @@ export function useTrainerSession(activeRef) {
   };
 
   const queryResults = (reason = 'manual') => {
+    if (isEmptyPattern.value) return null;
     const boardHex = currentBoardHex.value || hexInput.value;
     const prepared = prepareResultsRequest(boardHex, reason);
     if (!prepared) return null;
@@ -762,6 +830,7 @@ export function useTrainerSession(activeRef) {
     ) {
       return false;
     }
+    if (!syncPendingEmptyPatternBoard()) return false;
 
     const fromBoardHex = currentHex;
     const deterministicSpawn = currentSpawnMode === 0
@@ -946,7 +1015,7 @@ export function useTrainerSession(activeRef) {
         tablebasePath.value = data.data.tablebase_status;
       }
       loadedTablebaseFullPattern.value = data.data.tablebase_full_pattern || '';
-      if (loadedTablebaseFullPattern.value) {
+      if (loadedTablebaseFullPattern.value && !isEmptyPattern.value) {
         syncSelectionFromFullPattern(loadedTablebaseFullPattern.value);
       }
       const nextBoardHex = data.data.hex_str || hexInput.value;
@@ -1044,6 +1113,7 @@ export function useTrainerSession(activeRef) {
     if (data.action === 'TRAINER_RESULTS' || (
       data.action === 'TABLEBASE_QUERY_RESULT' && data.data?.page === 'trainer'
     )) {
+      if (isEmptyPattern.value) return;
       const requestId = data.data.query_id || data.data.request_id;
       const resultBoardHex = data.data.board_hex || currentBoardHex.value;
       if (requestId && pendingResultsRequests.has(requestId)) {
@@ -1267,20 +1337,21 @@ export function useTrainerSession(activeRef) {
     }
   };
 
-  const sendPaletteBoardSync = ({ query = false } = {}) => {
+  const sendPaletteBoardSync = ({ query = false, force = false } = {}) => {
     clearPaletteSyncTimer();
     if (!paletteEditDirty || !currentBoardHex.value || wsStatus.value !== 'connected') return false;
+    if (isEmptyPattern.value && !force) return false;
     const prepared = query
       ? prepareResultsRequest(currentBoardHex.value, 'palette-exit')
       : null;
-    triggerAction('SET_BOARD', {
+    const sent = triggerAction('SET_BOARD', {
       hex_str: currentBoardHex.value,
       client_optimistic: true,
-      edit_source: query ? 'palette-commit' : 'palette',
+      edit_source: force ? 'sandbox-sync' : (query ? 'palette-commit' : 'palette'),
       query_id: prepared?.requestId,
     });
-    if (query) paletteEditDirty = false;
-    return true;
+    if (sent && (query || force)) paletteEditDirty = false;
+    return sent;
   };
 
   const schedulePaletteBoardSync = () => {
@@ -1293,7 +1364,16 @@ export function useTrainerSession(activeRef) {
 
   function finishPaletteEditing({ query = true } = {}) {
     if (!paletteEditDirty) return false;
+    if (shouldDeferTrainerBoardSync(patternType.value)) {
+      clearPaletteSyncTimer();
+      return false;
+    }
     return sendPaletteBoardSync({ query });
+  }
+
+  function syncPendingEmptyPatternBoard() {
+    if (!isEmptyPattern.value || !paletteEditDirty) return true;
+    return sendPaletteBoardSync({ force: true });
   }
 
   const setBoard = () => {
@@ -1307,6 +1387,10 @@ export function useTrainerSession(activeRef) {
     paletteEditDirty = false;
     currentPaletteValue.value = null;
     applyLocalBoardSnapshot(normalized);
+    if (isEmptyPattern.value) {
+      paletteEditDirty = true;
+      return;
+    }
     triggerAction('SET_BOARD', { hex_str: normalized, client_optimistic: true });
     queryResults('set-board');
   };
@@ -1375,7 +1459,7 @@ export function useTrainerSession(activeRef) {
     if (!edit) return;
     applyLocalBoardSnapshot(edit.boardHex);
     paletteEditDirty = true;
-    schedulePaletteBoardSync();
+    if (!shouldDeferTrainerBoardSync(patternType.value)) schedulePaletteBoardSync();
   };
 
   const onPatternChange = () => {
@@ -1385,6 +1469,10 @@ export function useTrainerSession(activeRef) {
     finishPaletteEditing({ query: false });
     paletteEditDirty = false;
     currentPaletteValue.value = null;
+    if (isEmptyPattern.value) {
+      activateEmptyPattern();
+      return;
+    }
     if (!patternType.value || !targetValue.value) return;
     applyTablebase({ loadDefault: true });
   };
@@ -1392,7 +1480,7 @@ export function useTrainerSession(activeRef) {
   const selectFolder = () => applyTablebase({ loadDefault: true });
 
   const applyTablebase = ({ loadDefault = false } = {}) => {
-    if (!patternType.value || !targetValue.value) return;
+    if (isEmptyPattern.value || !patternType.value || !targetValue.value) return;
     const fullPattern = `${patternType.value}_${targetValue.value}`;
     clearRandomMovePipeline();
     trainerResyncPending = true;
@@ -1411,6 +1499,7 @@ export function useTrainerSession(activeRef) {
   };
 
   const trainerStep = () => {
+    if (isEmptyPattern.value) return;
     if (recordPlaybackActive.value) {
       playRecordStep(1);
       return;
@@ -1439,6 +1528,7 @@ export function useTrainerSession(activeRef) {
     clearDemoTimer();
     clearStepQueue();
     if (!requireAuth()) return;
+    if (!syncPendingEmptyPatternBoard()) return;
 
     const previous = recordOpen.value
       ? null
@@ -1470,6 +1560,7 @@ export function useTrainerSession(activeRef) {
   };
 
   const trainerDefault = () => {
+    if (isEmptyPattern.value) return;
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
@@ -1479,6 +1570,7 @@ export function useTrainerSession(activeRef) {
   };
 
   const toggleDemo = () => {
+    if (isEmptyPattern.value) return;
     demoActive.value = !demoActive.value;
     if (demoActive.value) {
       if (recordPlaybackActive.value) {
@@ -1495,10 +1587,16 @@ export function useTrainerSession(activeRef) {
   };
 
   const setSpawnMode = (mode) => {
+    if (isEmptyPattern.value && [1, 2].includes(Number(mode))) return;
     clearRandomMovePipeline();
     spawnMode.value = mode;
     trainerResyncPending = true;
     if (!triggerAction('SET_SPAWN_MODE', { mode })) trainerResyncPending = false;
+  };
+
+  const transformBoard = (type) => {
+    if (!syncPendingEmptyPatternBoard()) return false;
+    return triggerAction('ROTATE', { type });
   };
 
   const manageRecord = async (cmd) => {
@@ -1525,7 +1623,7 @@ export function useTrainerSession(activeRef) {
   };
 
   const handleKeydown = (event) => {
-    if (!activeRef?.value) return;
+    if (!hotkeysEnabledRef?.value) return;
     if (event.code === 'Escape' && patternMenuOpen.value) {
       patternMenuOpen.value = false;
       return;
@@ -1585,7 +1683,7 @@ export function useTrainerSession(activeRef) {
   };
 
   watch(showResults, (enabled) => {
-    if (enabled) {
+    if (enabled && !isEmptyPattern.value) {
       queryResults('visibility');
     }
   });
@@ -1597,7 +1695,11 @@ export function useTrainerSession(activeRef) {
       patternCategories.value = Object.keys(nextCategories || {}).length > 0
         ? nextCategories
         : fallbackPatternCategories;
-      if (patternType.value && !flatPatterns.value.includes(patternType.value)) {
+      if (
+        patternType.value
+        && !isEmptyPattern.value
+        && !flatPatterns.value.includes(patternType.value)
+      ) {
         patternType.value = '';
       }
       syncActivePatternCategory();
@@ -1668,6 +1770,7 @@ export function useTrainerSession(activeRef) {
 
   watch(isAuthenticated, (authenticated) => {
     if (authenticated) {
+      if (isEmptyPattern.value) activateEmptyPattern();
       applyTrainerJump();
       maybeAutoApplyDefaultTablebase();
     }
@@ -1687,6 +1790,9 @@ export function useTrainerSession(activeRef) {
 
   return {
     currentPatternDisplay,
+    isEmptyPattern,
+    emptyPatternId: EMPTY_PATTERN_ID,
+    emptyPatternCategory: EMPTY_PATTERN_CATEGORY,
     isVariant,
     wsStatus,
     tablebasePath,
@@ -1733,6 +1839,7 @@ export function useTrainerSession(activeRef) {
     spawnModes,
     spawnMode,
     setSpawnMode,
+    transformBoard,
     triggerAction,
     recordStep,
     recordMax,

@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue';
 
-import { MAIN_TAB_ID, TAB_ORDER, TAB_REGISTRY } from './tabRegistry';
+import { MAIN_TAB_ID, TAB_ORDER, TAB_REGISTRY } from './tabRegistry.js';
 
 export function useTabManager() {
   const openTabs = ref([MAIN_TAB_ID]);
@@ -22,6 +22,8 @@ export function useTabManager() {
   const openTab = (tabId) => {
     activeTab.value = ensureTabOpen(tabId);
   };
+
+  const openTabInBackground = (tabId) => ensureTabOpen(tabId);
 
   const activateTab = (tabId) => {
     if (isTabOpen(tabId)) {
@@ -96,5 +98,6 @@ export function useTabManager() {
     isTabOpen,
     moveTabRelative,
     openTab,
+    openTabInBackground,
   };
 }

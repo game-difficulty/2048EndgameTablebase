@@ -1,8 +1,16 @@
 <template>
-  <div class="page-root">
+  <div
+    :class="[
+      'page-root trainer-page',
+      dockPlacement === 'right' ? 'trainer-page--dock-right' : '',
+      dockPlacement === 'bottom' ? 'trainer-page--dock-bottom' : '',
+    ]"
+  >
     <div class="tool-page-header relative z-[120] w-full max-w-6xl flex items-center justify-between mb-4">
       <div class="tool-page-title-row flex items-center gap-3">
-        <span class="tool-page-title text-3xl font-extrabold tracking-tight text-text-main font-[Cambria,serif]">{{ currentPatternDisplay || '\u00a0' }}</span>
+        <span class="tool-page-title text-3xl font-extrabold tracking-tight text-text-main font-[Cambria,serif]">
+          {{ isEmptyPattern ? $t('trainer.emptyPattern.label') : (currentPatternDisplay || '\u00a0') }}
+        </span>
         <span :class="['badge-base', wsStatus === 'connected' ? 'badge-connection-connected' : 'badge-connection-disconnected']">
           {{ $t(`status.${wsStatus}`) }}
         </span>
@@ -21,7 +29,7 @@
             type="button"
             class="top-menu-trigger cursor-pointer"
           >
-            <span>{{ patternType || $t('trainer.top.selectPattern') }}</span>
+            <span>{{ isEmptyPattern ? $t('trainer.emptyPattern.label') : (patternType || $t('trainer.top.selectPattern')) }}</span>
             <span class="ui-kicker opacity-60">{{ patternMenuOpen ? '▲' : '▼' }}</span>
           </button>
           <div
@@ -43,7 +51,7 @@
                     : 'text-text-main hover:bg-btn-bg/10'
                 ]"
               >
-                {{ group.category }}
+                {{ group.category === emptyPatternCategory ? $t('trainer.emptyPattern.category') : group.category }}
               </button>
             </div>
             <div class="grid max-h-[320px] min-w-[220px] grid-cols-2 content-start gap-1.5 overflow-y-auto p-2">
@@ -59,30 +67,32 @@
                     : 'bg-bg-main text-text-main hover:bg-btn-bg/10'
                 ]"
               >
-                {{ pattern }}
+                {{ pattern === emptyPatternId ? $t('trainer.emptyPattern.label') : pattern }}
               </button>
             </div>
           </div>
         </div>
-        <span class="text-text-secondary font-bold opacity-30 truncate">|</span>
-        <UiSelect
-          v-model="targetValue"
-          class="min-w-[5.5rem]"
-          :options="targetOptions"
-          :placeholder="$t('trainer.top.selectTarget')"
-          aria-label="Trainer target"
-          align="right"
-          trigger-class="top-menu-select"
-          option-class="ui-control font-black"
-          menu-class="z-[160]"
-          @change="handleTargetChange"
-        />
-        <button
-          @click="applyTablebase"
-          class="btn-prominent ui-kicker px-2.5 py-1.5 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm"
-        >
-          {{ $t('trainer.top.load') }}
-        </button>
+        <template v-if="!isEmptyPattern">
+          <span class="text-text-secondary font-bold opacity-30 truncate">|</span>
+          <UiSelect
+            v-model="targetValue"
+            class="min-w-[5.5rem]"
+            :options="targetOptions"
+            :placeholder="$t('trainer.top.selectTarget')"
+            aria-label="Trainer target"
+            align="right"
+            trigger-class="top-menu-select"
+            option-class="ui-control font-black"
+            menu-class="z-[160]"
+            @change="handleTargetChange"
+          />
+          <button
+            @click="applyTablebase"
+            class="btn-prominent ui-kicker px-2.5 py-1.5 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm"
+          >
+            {{ $t('trainer.top.load') }}
+          </button>
+        </template>
       </div>
     </div>
 
@@ -165,16 +175,26 @@
                 {{ $t('common.updating') }}
               </span>
               <label class="flex items-center gap-1 ui-kicker text-text-secondary cursor-pointer select-none font-bold uppercase tracking-tighter">
-                <input type="checkbox" v-model="showResults" @change="focusBoardHotkeys" class="cursor-pointer accent-accent" />
+                <input
+                  type="checkbox"
+                  v-model="showResults"
+                  :disabled="isEmptyPattern"
+                  @change="focusBoardHotkeys"
+                  class="cursor-pointer accent-accent disabled:cursor-not-allowed disabled:opacity-45"
+                />
                 {{ $t('trainer.results.auto') }}
               </label>
-              <button @click="queryResults" class="ui-kicker !bg-btn-bg !text-white border border-btn-bg hover:bg-btn-hover px-2.5 py-1 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm">
+              <button
+                @click="queryResults"
+                :disabled="isEmptyPattern"
+                class="ui-kicker !bg-btn-bg !text-white border border-btn-bg hover:bg-btn-hover px-2.5 py-1 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm disabled:cursor-not-allowed disabled:opacity-45"
+              >
                 {{ $t('trainer.results.refresh') }}
               </button>
             </div>
           </div>
           <div class="trainer-results-body">
-            <template v-if="showResults && !awaitingSpawn">
+            <template v-if="showResults && !awaitingSpawn && !isEmptyPattern">
               <div class="mt-2 flex flex-col gap-1 transition-opacity" :class="resultsUpdatingVisible ? 'opacity-70' : 'opacity-100'">
                 <div
                   v-for="item in displayedResults"
@@ -206,7 +226,11 @@
               class="absolute inset-0 flex items-center justify-center px-4 text-center ui-kicker text-text-secondary italic opacity-60"
               role="status"
             >
-              {{ awaitingSpawn ? $t('trainer.results.awaitingManualSpawn') : $t('trainer.results.hidden') }}
+              {{ awaitingSpawn
+                ? $t('trainer.results.awaitingManualSpawn')
+                : isEmptyPattern
+                  ? $t('trainer.results.emptyPattern')
+                  : $t('trainer.results.hidden') }}
             </div>
           </div>
         </div>
@@ -214,12 +238,12 @@
         <div class="console-card">
           <div class="console-card-header"><span>{{ $t('trainer.actions.title') }}</span></div>
           <div class="tool-action-grid-4 grid grid-cols-4 gap-2 mt-2">
-            <button @click="toggleDemo" :class="['action-btn', demoActive ? 'bg-red-500 hover:bg-red-600 text-white' : '']">
+            <button @click="toggleDemo" :disabled="isEmptyPattern" :class="['action-btn', demoActive ? 'bg-red-500 hover:bg-red-600 text-white' : '']">
               {{ demoActive ? $t('trainer.actions.stop') : $t('trainer.actions.demo') }}
             </button>
-            <button @click="trainerStep" class="action-btn">{{ $t('trainer.actions.step') }}</button>
+            <button @click="trainerStep" :disabled="isEmptyPattern" class="action-btn">{{ $t('trainer.actions.step') }}</button>
             <button @click="trainerUndo" class="action-btn">{{ $t('trainer.actions.undo') }}</button>
-            <button @click="trainerDefault" class="action-btn">{{ $t('trainer.actions.default') }}</button>
+            <button @click="trainerDefault" :disabled="isEmptyPattern" class="action-btn">{{ $t('trainer.actions.default') }}</button>
           </div>
         </div>
 
@@ -230,10 +254,12 @@
               v-for="(_, idx) in spawnModes"
               :key="idx"
               @click="setSpawnMode(idx)"
+              :disabled="isEmptyPattern && (idx === 1 || idx === 2)"
               :class="['flex-1 py-2 ui-control font-black uppercase tracking-tighter transition-all',
                 spawnMode === idx
                   ? 'bg-btn-bg text-white shadow-inner'
-                  : 'bg-bg-main text-text-secondary hover:bg-btn-bg/10']"
+                  : 'bg-bg-main text-text-secondary hover:bg-btn-bg/10',
+                'disabled:cursor-not-allowed disabled:opacity-45']"
             >
               {{ $t(`trainer.spawnMode.options.${spawnModeLabelKeys[idx]}`) }}
             </button>
@@ -243,10 +269,10 @@
         <div class="console-card">
           <div class="console-card-header"><span>{{ $t('trainer.transform.title') }}</span></div>
           <div class="tool-action-grid-4 grid grid-cols-4 gap-2 mt-2">
-            <button @click="triggerAction('ROTATE', { type: 'UD' })" class="action-btn">{{ $t('trainer.transform.vFlip') }}</button>
-            <button @click="triggerAction('ROTATE', { type: 'LR' })" class="action-btn">{{ $t('trainer.transform.hFlip') }}</button>
-            <button @click="triggerAction('ROTATE', { type: 'R90' })" class="action-btn">{{ $t('trainer.transform.r90') }}</button>
-            <button @click="triggerAction('ROTATE', { type: 'L90' })" class="action-btn">{{ $t('trainer.transform.l90') }}</button>
+            <button @click="transformBoard('UD')" class="action-btn">{{ $t('trainer.transform.vFlip') }}</button>
+            <button @click="transformBoard('LR')" class="action-btn">{{ $t('trainer.transform.hFlip') }}</button>
+            <button @click="transformBoard('R90')" class="action-btn">{{ $t('trainer.transform.r90') }}</button>
+            <button @click="transformBoard('L90')" class="action-btn">{{ $t('trainer.transform.l90') }}</button>
           </div>
         </div>
 
@@ -266,6 +292,8 @@ import { useTrainerSession } from '../composables/useTrainerSession';
 
 const props = defineProps({
   active: { type: Boolean, default: true },
+  hotkeysEnabled: { type: Boolean, default: true },
+  dockPlacement: { type: String, default: 'none' },
 });
 
 const spawnModeLabelKeys = ['random', 'best', 'worst', 'manual'];
@@ -273,6 +301,9 @@ const boardHotkeyTarget = ref(null);
 
 const {
   currentPatternDisplay,
+  isEmptyPattern,
+  emptyPatternId,
+  emptyPatternCategory,
   isVariant,
   wsStatus,
   tablebasePath,
@@ -317,10 +348,11 @@ const {
   spawnModes,
   spawnMode,
   setSpawnMode,
+  transformBoard,
   triggerAction,
   onDis32kChange,
   patternMenuRoot,
-} = useTrainerSession(toRef(props, 'active'));
+} = useTrainerSession(toRef(props, 'active'), toRef(props, 'hotkeysEnabled'));
 
 const targetOptions = computed(() =>
   availableTargetsForPattern.value.map((target) => ({
@@ -350,9 +382,100 @@ const handleDis32kChange = (event) => {
 </script>
 
 <style scoped>
+.trainer-page {
+  padding-bottom: 1rem;
+}
+
 .trainer-results-body {
   position: relative;
   height: 13rem;
+}
+
+.trainer-page--dock-right {
+  align-items: stretch;
+  padding: 0.75rem;
+}
+
+.trainer-page--dock-right .tool-page-header {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.65rem;
+  margin-bottom: 0.75rem;
+}
+
+.trainer-page--dock-right .tool-page-title-row {
+  min-width: 0;
+  justify-content: space-between;
+}
+
+.trainer-page--dock-right .tool-page-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 1.35rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trainer-page--dock-right .top-menu-shell {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.trainer-page--dock-right .top-menu-shell > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.trainer-page--dock-right .top-menu-trigger {
+  width: 100%;
+  min-width: 0;
+}
+
+.trainer-page--dock-right .tool-pattern-menu {
+  right: auto;
+  left: 0;
+  min-width: min(440px, calc(100vw - 3rem));
+}
+
+.trainer-page--dock-right .trainer-layout {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.75rem;
+}
+
+.trainer-page--dock-right .tool-page-board-column {
+  width: min(100%, 360px);
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.trainer-page--dock-right .tool-page-side-column {
+  width: 100%;
+  flex: 0 0 auto;
+  gap: 0.65rem;
+}
+
+.trainer-page--dock-right .trainer-results-body {
+  height: 11rem;
+}
+
+.trainer-page--dock-right .trainer-result-row {
+  grid-template-columns: 1.25rem minmax(0, 8.5rem) minmax(0, 1fr);
+  gap: 0.55rem;
+  padding-right: 0.55rem;
+  padding-left: 0.55rem;
+}
+
+.trainer-page--dock-right .console-card {
+  padding: 0.75rem;
+}
+
+.trainer-page--dock-bottom {
+  align-items: center;
 }
 
 .palette-btn {

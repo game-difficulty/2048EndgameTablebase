@@ -343,6 +343,16 @@
     }
   },
   "trainer": {
+    "emptyPattern": {
+      "category": "空定式",
+      "label": "空定式"
+    },
+    "dock": {
+      "toolbar": "训练页面布局",
+      "right": "固定到右侧",
+      "bottom": "固定到下方",
+      "full": "恢复完整训练页面"
+    },
     "top": {
       "path": "路径",
       "load": "载入",
@@ -365,6 +375,7 @@
       "refresh": "刷新",
       "dtype": "数据类型",
       "awaitingManualSpawn": "点击空格放置新块：左键=2，右键=4",
+      "emptyPattern": "空定式不查询结果",
       "hidden": "结果已隐藏"
     },
     "actions": {

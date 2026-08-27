@@ -343,6 +343,16 @@
     }
   },
   "trainer": {
+    "emptyPattern": {
+      "category": "Sandbox",
+      "label": "Empty pattern"
+    },
+    "dock": {
+      "toolbar": "Trainer layout",
+      "right": "Dock Trainer to the right",
+      "bottom": "Dock Trainer to the bottom",
+      "full": "Restore full Trainer"
+    },
     "top": {
       "path": "Path",
       "load": "Load",
@@ -365,6 +375,7 @@
       "refresh": "Refresh",
       "dtype": "dtype",
       "awaitingManualSpawn": "Click empty cell: Left=2, Right=4",
+      "emptyPattern": "No results are queried in the empty pattern",
       "hidden": "Results hidden"
     },
     "actions": {
