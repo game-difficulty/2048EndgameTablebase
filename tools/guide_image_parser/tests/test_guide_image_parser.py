@@ -6,12 +6,25 @@ import unittest
 import zipfile
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from tools.guide_image_parser.common import read_jsonl
 from tools.guide_image_parser.docx_media import extract_docx_media
-from tools.guide_image_parser.image_parser import _dedupe_line_annotations, parse_manifest
+from tools.guide_image_parser.guide_document import build_guide_document
+from tools.guide_image_parser.image_parser import (
+    BoardCandidate,
+    CellProbe,
+    DEFAULT_GUIDE_PALETTE,
+    TextMatch,
+    _cell_record,
+    _dedupe_line_annotations,
+    _mask_lattice_board_candidates,
+    _repair_edge_shifted_cell_grids,
+    parse_manifest,
+)
 from tools.guide_image_parser.qa_report import render_qa_report
+from tools.guide_image_parser.validate_gold_samples import validate_gold_samples
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -115,6 +128,138 @@ def make_manifest(tmp: Path, images: list[Image.Image]) -> Path:
 
 
 class GuideImageParserTests(unittest.TestCase):
+    def test_build_guide_document_preserves_toc_images_and_partial_hex(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            docx_path = tmp / "guide.docx"
+            document_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Front matter</w:t></w:r></w:p>
+    <w:p><w:r><w:t>第一章 测试章节</w:t></w:r></w:p>
+    <w:p><w:r><w:t>第 1 节 测试小节</w:t></w:r></w:p>
+    <w:p />
+    <w:p><w:r><w:t>图 1-1</w:t></w:r></w:p>
+    <w:p><w:r><w:t>正文内容</w:t></w:r></w:p>
+    <w:sectPr />
+  </w:body>
+</w:document>
+"""
+            with zipfile.ZipFile(docx_path, "w") as archive:
+                archive.writestr("word/document.xml", document_xml)
+
+            image_path = tmp / "img_0000.png"
+            image_path.write_bytes(b"original-image-bytes")
+            manifest_path = tmp / "manifest.jsonl"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "image_id": "img_0000",
+                        "path": str(image_path),
+                        "relative_path": image_path.name,
+                        "paragraph_index": 3,
+                        "width": 100,
+                        "height": 80,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            parsed_path = tmp / "parsed.jsonl"
+            parsed_path.write_text(
+                json.dumps(
+                    {
+                        "image_id": "img_0000",
+                        "boards": [
+                            {
+                                "board_id": "img_0000_b00",
+                                "bbox": [10, 10, 95, 75],
+                                "visible_rows": 3,
+                                "visible_cols": 4,
+                                "hex": "001064127ff5",
+                                "confidence": 0.9,
+                                "flags": [],
+                            }
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            out_dir = tmp / "public" / "guides" / "test-guide"
+            index_path = out_dir.parent / "index.json"
+
+            result = build_guide_document(
+                docx_path=docx_path,
+                manifest_path=manifest_path,
+                parsed_path=parsed_path,
+                out_dir=out_dir,
+                document_id="test-guide",
+                title="Test Guide",
+                index_path=index_path,
+            )
+
+            self.assertEqual(result["stats"], {"chapters": 1, "sections": 1, "images": 1, "boards": 1})
+            self.assertEqual([item["level"] for item in result["toc"]], [1, 2])
+            figure = next(block for block in result["blocks"] if block["type"] == "figure")
+            self.assertEqual(figure["caption"], "图 1-1")
+            self.assertEqual(figure["boards"][0]["bbox"], [10, 10, 90, 70])
+            self.assertEqual(figure["boards"][0]["hex"], "001064127ff5ffff")
+            self.assertEqual((out_dir / figure["src"]).read_bytes(), b"original-image-bytes")
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            self.assertEqual(index["documents"][0]["source"], "test-guide/document.json")
+
+    def test_gold_validation_supports_targeted_board_corrections(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            parsed_path = tmp / "parsed.jsonl"
+            parsed_path.write_text(
+                json.dumps(
+                    {
+                        "image_id": "img_test",
+                        "boards": [
+                            {
+                                "board_id": "img_test_b00",
+                                "bbox": [10, 10, 120, 60],
+                                "visible_rows": 2,
+                                "visible_cols": 4,
+                                "hex": "12345678ffffffff",
+                            },
+                            {
+                                "board_id": "img_test_b01",
+                                "bbox": [160, 10, 120, 60],
+                                "visible_rows": 2,
+                                "visible_cols": 4,
+                                "hex": "87654321ffffffff",
+                            },
+                        ],
+                        "annotations": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            gold_path = tmp / "gold.yaml"
+            gold_path.write_text(
+                """samples:
+  - image_id: img_test
+    board_count: 2
+    boards:
+      - board_id: img_test_b01
+        bbox: [161, 10, 120, 60]
+        bbox_tolerance: 1
+        visible_rows: 2
+        hex: \"87654321ffffffff\"
+""",
+                encoding="utf-8",
+            )
+
+            result = validate_gold_samples(parsed_path, gold_path)
+
+            self.assertEqual(result["failures"], [])
+            self.assertEqual(result["boards"], {"passed": 1, "total": 1})
+            self.assertEqual(result["board_counts"], {"passed": 1, "total": 1})
+
     def test_full_board_hex(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             tmp = Path(temp)
@@ -164,6 +309,45 @@ class GuideImageParserTests(unittest.TestCase):
             manifest = make_manifest(tmp, [image])
             parsed = parse_manifest(manifest, tmp / "parsed_images.jsonl")
             self.assertEqual(parsed[0]["boards"][0]["hex"][:8], "00100124")
+
+    def test_twos_are_reconstructed_after_straight_arrow_removal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            cell = 30
+            gap = 4
+            pad = 3
+            image = draw_board([[1, 0, 0, 1], [5, 4, 3, 2]], cell=cell, gap=gap, pad=pad)
+            draw = ImageDraw.Draw(image)
+            y = pad + cell // 2
+            draw.line((pad, y, image.width - pad, y), fill="#9d74c8", width=4)
+            draw.polygon(
+                [(image.width - pad, y), (image.width - pad - 8, y - 6), (image.width - pad - 8, y + 6)],
+                fill="#9d74c8",
+            )
+            manifest = make_manifest(tmp, [image])
+            parsed = parse_manifest(manifest, tmp / "parsed_images.jsonl")
+
+            self.assertEqual(parsed[0]["boards"][0]["hex"][:4], "1001")
+
+    def test_reconstructed_two_cannot_override_confident_four_color(self) -> None:
+        cell = CellProbe(
+            row=0,
+            col=0,
+            bbox=[0, 0, 30, 30],
+            background_rgb=list(DEFAULT_GUIDE_PALETTE[2]),
+            text_match=TextMatch(
+                exponent=1,
+                value=2,
+                score=0.59,
+                runner_up_score=0.525,
+                area_ratio=0.04,
+            ),
+            text_area_ratio=0.04,
+        )
+
+        record, _needs_review = _cell_record(cell, DEFAULT_GUIDE_PALETTE)
+
+        self.assertEqual(record["exponent"], 2)
 
     def test_partial_board_bottom_padding(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -417,6 +601,147 @@ class GuideImageParserTests(unittest.TestCase):
             parsed = parse_manifest(manifest, tmp / "parsed_images.jsonl")
             self.assertEqual(len(parsed[0]["boards"]), 4)
             self.assertTrue(all(board["visible_rows"] == 2 for board in parsed[0]["boards"]))
+
+    def test_color_lattice_recovers_arrow_occluded_board(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            exponents = [[2, 1, 2, 1], [5, 4, 2, 2], [9, 8, 4, 6]]
+            boards = [draw_board(exponents, cell=30, gap=0, pad=0) for _ in range(5)]
+            board_width, board_height = boards[0].size
+            x_gap = 28
+            y_gap = 18
+            positions = [
+                (0, 0),
+                (board_width + x_gap, 0),
+                (2 * (board_width + x_gap), 0),
+                (0, board_height + y_gap),
+                (board_width + x_gap, board_height + y_gap),
+            ]
+            canvas = Image.new(
+                "RGB",
+                (3 * board_width + 2 * x_gap, 2 * board_height + y_gap),
+                "white",
+            )
+            for board, position in zip(boards, positions):
+                canvas.paste(board, position)
+
+            draw = ImageDraw.Draw(canvas)
+            lower_left_y = board_height + y_gap
+            for row in (0, 1):
+                y = lower_left_y + row * 30 + 15
+                draw.line((0, y, board_width - 1, y), fill="#9d74c8", width=17)
+                draw.polygon([(board_width - 1, y), (board_width - 14, y - 12), (board_width - 14, y + 12)], fill="#9d74c8")
+
+            manifest = make_manifest(tmp, [canvas])
+            parsed = parse_manifest(manifest, tmp / "parsed_images.jsonl")
+            detected = parsed[0]["boards"]
+
+            self.assertEqual(len(detected), 5)
+            lower_left = min(
+                (board for board in detected if board["bbox"][1] > board_height),
+                key=lambda board: board["bbox"][0],
+            )
+            self.assertLess(lower_left["bbox"][0], board_width // 2)
+            self.assertEqual(lower_left["visible_rows"], 3)
+
+    def test_color_lattice_fills_missing_connected_component_candidate(self) -> None:
+        cell = 30
+        gap = 4
+        pad = 3
+        exponents = [[2, 1, 2, 1], [5, 4, 2, 2], [9, 8, 4, 6]]
+        board_images = [draw_board(exponents, cell=cell, gap=gap, pad=pad) for _ in range(5)]
+        board_width, board_height = board_images[0].size
+        x_gap = 28
+        y_gap = 18
+        positions = [
+            (0, 0),
+            (board_width + x_gap, 0),
+            (2 * (board_width + x_gap), 0),
+            (0, board_height + y_gap),
+            (board_width + x_gap, board_height + y_gap),
+        ]
+        canvas = Image.new(
+            "RGB",
+            (3 * board_width + 2 * x_gap, 2 * board_height + y_gap),
+            "white",
+        )
+        for board, position in zip(board_images, positions):
+            canvas.paste(board, position)
+
+        def seed_at(x: int, y: int) -> BoardCandidate:
+            cell_boxes = [
+                (
+                    row,
+                    col,
+                    [x + pad + col * (cell + gap), y + pad + row * (cell + gap), cell, cell],
+                )
+                for row in range(3)
+                for col in range(4)
+            ]
+            return BoardCandidate(
+                bbox=[x + pad, y + pad, 4 * cell + 3 * gap, 3 * cell + 2 * gap],
+                visible_rows=3,
+                visible_cols=4,
+                fit_confidence=0.95,
+                cell_boxes=cell_boxes,
+                flags=["partial_board_bottom_f_padding"],
+                source="cell_grid",
+            )
+
+        seeds = [seed_at(*positions[index]) for index in (0, 1, 2, 4)]
+        inferred = _mask_lattice_board_candidates(np.asarray(canvas), seeds)
+
+        self.assertEqual(len(inferred), 1)
+        self.assertEqual(inferred[0].bbox, seed_at(*positions[3]).bbox)
+        self.assertIn("mask_lattice_inferred", inferred[0].flags)
+
+        occupied = seeds + [
+            BoardCandidate(
+                **{
+                    **seed_at(*positions[3]).__dict__,
+                    "source": "rough",
+                }
+            )
+        ]
+        self.assertEqual(
+            _mask_lattice_board_candidates(np.asarray(canvas), seeds, occupied),
+            [],
+        )
+
+    def test_palette_support_repairs_one_column_board_shift(self) -> None:
+        cell = 30
+        gap = 4
+        pad = 3
+        board = draw_board([[1, 2, 3, 4], [5, 6, 7, 8]], cell=cell, gap=gap, pad=pad)
+        canvas = Image.new("RGB", (board.width + cell + gap + 4, board.height), "white")
+        canvas.paste(board, (0, 0))
+        correct_boxes = [
+            (
+                row,
+                col,
+                [pad + col * (cell + gap), pad + row * (cell + gap), cell, cell],
+            )
+            for row in range(2)
+            for col in range(4)
+        ]
+        shifted = BoardCandidate(
+            bbox=[pad + cell + gap, pad, 4 * cell + 3 * gap, 2 * cell + gap],
+            visible_rows=2,
+            visible_cols=4,
+            fit_confidence=0.76,
+            cell_boxes=[
+                (row, col, [bbox[0] + cell + gap, bbox[1], bbox[2], bbox[3]])
+                for row, col, bbox in correct_boxes
+            ],
+            flags=["partial_board_bottom_f_padding"],
+            source="cell_grid",
+        )
+
+        repaired = _repair_edge_shifted_cell_grids(np.asarray(canvas), [shifted])
+
+        self.assertEqual(repaired[0].bbox[0], pad)
+        self.assertEqual(repaired[0].cell_boxes, correct_boxes)
+        self.assertIn("edge_column_shift_recovered", repaired[0].flags)
 
     def test_connector_and_internal_arrow_are_distinct(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

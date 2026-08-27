@@ -606,6 +606,197 @@ def _cell_grid_board_candidates(rgb: np.ndarray) -> list[BoardCandidate]:
     return _dedupe_board_candidates(candidates)
 
 
+def _slot_mask_fill_ratios(mask: np.ndarray, cell_boxes: list[tuple[int, int, list[int]]]) -> list[float]:
+    height, width = mask.shape[:2]
+    ratios: list[float] = []
+    for _row, _col, bbox in cell_boxes:
+        x, y, w, h = bbox
+        x0 = max(0, int(x))
+        y0 = max(0, int(y))
+        x1 = min(width, int(x + w))
+        y1 = min(height, int(y + h))
+        if x1 <= x0 or y1 <= y0:
+            ratios.append(0.0)
+            continue
+        slot = mask[y0:y1, x0:x1]
+        ratios.append(float((slot > 0).sum()) / max(1, slot.size))
+    return ratios
+
+
+def _repair_edge_shifted_cell_grids(
+    rgb: np.ndarray,
+    candidates: list[BoardCandidate],
+) -> list[BoardCandidate]:
+    tile_mask = _tile_palette_mask(rgb)
+    repaired: list[BoardCandidate] = []
+    for candidate in candidates:
+        ratios = _slot_mask_fill_ratios(tile_mask, candidate.cell_boxes)
+        rows = candidate.visible_rows
+        if len(ratios) != rows * 4 or rows < 2:
+            repaired.append(candidate)
+            continue
+
+        ratios_by_col = [ratios[col::4] for col in range(4)]
+        left_missing = all(ratio < 0.18 for ratio in ratios_by_col[0])
+        right_missing = all(ratio < 0.18 for ratio in ratios_by_col[3])
+        if left_missing == right_missing:
+            repaired.append(candidate)
+            continue
+
+        x_positions = sorted({bbox[0] for _row, _col, bbox in candidate.cell_boxes})
+        if len(x_positions) != 4:
+            repaired.append(candidate)
+            continue
+        pitch = int(round(float(np.median(np.diff(x_positions)))))
+        if pitch <= 0:
+            repaired.append(candidate)
+            continue
+
+        dx = pitch if left_missing else -pitch
+        shifted_boxes = [
+            (row, col, [bbox[0] + dx, bbox[1], bbox[2], bbox[3]])
+            for row, col, bbox in candidate.cell_boxes
+        ]
+        shifted_bbox = [
+            candidate.bbox[0] + dx,
+            candidate.bbox[1],
+            candidate.bbox[2],
+            candidate.bbox[3],
+        ]
+        if shifted_bbox[0] < 0 or shifted_bbox[0] + shifted_bbox[2] > rgb.shape[1]:
+            repaired.append(candidate)
+            continue
+
+        shifted_ratios = _slot_mask_fill_ratios(tile_mask, shifted_boxes)
+        original_support = sum(ratio >= 0.30 for ratio in ratios)
+        shifted_support = sum(ratio >= 0.30 for ratio in shifted_ratios)
+        if shifted_support < rows * 4 or shifted_support < original_support + rows:
+            repaired.append(candidate)
+            continue
+        if min(shifted_ratios, default=0.0) < 0.30:
+            repaired.append(candidate)
+            continue
+
+        median_fill = float(np.median(shifted_ratios))
+        repaired.append(
+            BoardCandidate(
+                bbox=shifted_bbox,
+                visible_rows=candidate.visible_rows,
+                visible_cols=candidate.visible_cols,
+                fit_confidence=max(candidate.fit_confidence, min(0.92, 0.76 + median_fill * 0.22)),
+                cell_boxes=shifted_boxes,
+                flags=list(candidate.flags) + ["edge_column_shift_recovered"],
+                source=candidate.source,
+            )
+        )
+    return repaired
+
+
+def _mask_lattice_board_candidates(
+    rgb: np.ndarray,
+    seed_candidates: list[BoardCandidate],
+    occupied_candidates: list[BoardCandidate] | None = None,
+) -> list[BoardCandidate]:
+    seeds = [candidate for candidate in seed_candidates if candidate.source == "cell_grid"]
+    if len(seeds) < 3:
+        return []
+    occupied = occupied_candidates if occupied_candidates is not None else seed_candidates
+
+    median_cell = float(
+        np.median(
+            [
+                min(cell_bbox[2], cell_bbox[3])
+                for candidate in seeds
+                for _row, _col, cell_bbox in candidate.cell_boxes
+            ]
+        )
+    )
+    x_anchors = _cluster_positions([float(candidate.bbox[0]) for candidate in seeds], median_cell * 0.55)
+    y_anchors = _cluster_positions([float(candidate.bbox[1]) for candidate in seeds], median_cell * 0.55)
+    if len(x_anchors) < 2 or len(y_anchors) < 2:
+        return []
+
+    tile_mask = _tile_palette_mask(rgb)
+    inferred: list[BoardCandidate] = []
+    for y_anchor in y_anchors:
+        row_seeds = [
+            candidate
+            for candidate in seeds
+            if abs(candidate.bbox[1] - y_anchor) <= median_cell * 0.55
+        ]
+        if not row_seeds:
+            continue
+        row_template = max(row_seeds, key=lambda candidate: (candidate.fit_confidence, -candidate.bbox[0]))
+        for x_anchor in x_anchors:
+            column_support = any(
+                abs(candidate.bbox[0] - x_anchor) <= median_cell * 0.55
+                and abs(candidate.bbox[1] - y_anchor) > median_cell * 0.55
+                for candidate in seeds
+            )
+            if not column_support:
+                continue
+            if any(
+                abs(candidate.bbox[0] - x_anchor) <= median_cell * 0.55
+                and abs(candidate.bbox[1] - y_anchor) <= median_cell * 0.55
+                for candidate in seeds
+            ):
+                continue
+
+            dx = int(round(x_anchor - row_template.bbox[0]))
+            dy = int(round(y_anchor - row_template.bbox[1]))
+            cell_boxes = [
+                (row, col, [bbox[0] + dx, bbox[1] + dy, bbox[2], bbox[3]])
+                for row, col, bbox in row_template.cell_boxes
+            ]
+            bbox = [
+                row_template.bbox[0] + dx,
+                row_template.bbox[1] + dy,
+                row_template.bbox[2],
+                row_template.bbox[3],
+            ]
+            if bbox[0] < 0 or bbox[1] < 0 or bbox[0] + bbox[2] > rgb.shape[1] or bbox[1] + bbox[3] > rgb.shape[0]:
+                continue
+            if any(
+                _bbox_intersection(bbox, candidate.bbox)
+                / max(1, min(_bbox_area(bbox), _bbox_area(candidate.bbox)))
+                >= 0.25
+                for candidate in occupied
+            ):
+                continue
+
+            fill_ratios = _slot_mask_fill_ratios(tile_mask, cell_boxes)
+            rows = row_template.visible_rows
+            if len(fill_ratios) != rows * 4:
+                continue
+            row_support = [
+                sum(ratio >= 0.30 for ratio in fill_ratios[row * 4 : (row + 1) * 4])
+                for row in range(rows)
+            ]
+            if min(row_support, default=0) < 3:
+                continue
+            median_fill = float(np.median(fill_ratios))
+            if median_fill < 0.42 or sum(ratio >= 0.30 for ratio in fill_ratios) < rows * 4 - 1:
+                continue
+
+            flags = ["mask_lattice_inferred"]
+            if rows < 4:
+                flags.append("partial_board_bottom_f_padding")
+            fit_confidence = max(0.74, min(0.94, 0.62 + median_fill * 0.42))
+            inferred.append(
+                BoardCandidate(
+                    bbox=bbox,
+                    visible_rows=rows,
+                    visible_cols=4,
+                    fit_confidence=fit_confidence,
+                    cell_boxes=cell_boxes,
+                    flags=flags,
+                    source="mask_lattice",
+                )
+            )
+
+    return _dedupe_board_candidates(inferred)
+
+
 def _tile_region_cell_boxes(
     board_bbox: list[int],
     visible_rows: int,
@@ -844,9 +1035,10 @@ def _sort_board_candidates_spatial(candidates: list[BoardCandidate]) -> list[Boa
 def _dedupe_board_candidates(candidates: list[BoardCandidate]) -> list[BoardCandidate]:
     source_priority = {
         "cell_grid": 0,
-        "tile_region": 1,
-        "tile": 2,
-        "rough": 3,
+        "mask_lattice": 1,
+        "tile_region": 2,
+        "tile": 3,
+        "rough": 4,
     }
     candidates = sorted(
         candidates,
@@ -1002,7 +1194,10 @@ def _prefer_full_tile_over_split_regions(
 
 
 def _find_board_candidates(rgb: np.ndarray) -> list[BoardCandidate]:
-    cell_grid_candidates = _cell_grid_board_candidates(rgb)
+    cell_grid_candidates = _repair_edge_shifted_cell_grids(
+        rgb,
+        _cell_grid_board_candidates(rgb),
+    )
     tile_region_candidates = _tile_region_board_candidates(rgb)
     tile_candidates = _tile_board_candidates(rgb)
     tile_region_candidates, tile_candidates = _prefer_full_tile_over_split_regions(
@@ -1022,7 +1217,18 @@ def _find_board_candidates(rgb: np.ndarray) -> list[BoardCandidate]:
             filtered_tile_candidates.append(candidate)
         tile_candidates = filtered_tile_candidates
     rough_candidates = _rough_board_candidates(rgb)
-    all_candidates = cell_grid_candidates + tile_region_candidates + tile_candidates + rough_candidates
+    occupied_candidates = _dedupe_board_candidates(
+        cell_grid_candidates
+        + tile_region_candidates
+        + tile_candidates
+        + rough_candidates
+    )
+    mask_lattice_candidates = _mask_lattice_board_candidates(
+        rgb,
+        cell_grid_candidates,
+        occupied_candidates,
+    )
+    all_candidates = occupied_candidates + mask_lattice_candidates
     if all_candidates:
         return _dedupe_board_candidates(all_candidates)
     return rough_candidates
@@ -1117,6 +1323,81 @@ def _raw_text_mask(cell_rgb: np.ndarray, background_rgb: list[int]) -> np.ndarra
     mask = ((diff > 22) & (gray < 248)).astype(np.uint8) * 255
     kernel = cv.getStructuringElement(cv.MORPH_RECT, (2, 2))
     return cv.morphologyEx(mask, cv.MORPH_OPEN, kernel, iterations=1)
+
+
+def _straight_stroke_core(mask: np.ndarray) -> np.ndarray:
+    cv = _require_cv2()
+    height, width = mask.shape[:2]
+    horizontal = cv.getStructuringElement(
+        cv.MORPH_RECT,
+        (max(7, int(round(width * 0.42))), 1),
+    )
+    vertical = cv.getStructuringElement(
+        cv.MORPH_RECT,
+        (1, max(7, int(round(height * 0.42)))),
+    )
+    horizontal_core = cv.morphologyEx(mask, cv.MORPH_OPEN, horizontal)
+    vertical_core = cv.morphologyEx(mask, cv.MORPH_OPEN, vertical)
+    core = cv.bitwise_or(horizontal_core, vertical_core)
+    return cv.dilate(core, np.ones((3, 3), dtype=np.uint8), iterations=1)
+
+
+def _looks_like_line_occluded_two(
+    cell_rgb: np.ndarray,
+    background_rgb: list[int],
+) -> tuple[bool, float, float]:
+    height, width = cell_rgb.shape[:2]
+    if height < 18 or width < 18:
+        return False, 0.0, 0.0
+
+    background = np.array(background_rgb, dtype=np.float32)
+    pale_distance = min(
+        float(np.linalg.norm(background - np.array(DEFAULT_GUIDE_PALETTE[0], dtype=np.float32))),
+        float(np.linalg.norm(background - np.array(DEFAULT_GUIDE_PALETTE[1], dtype=np.float32))),
+    )
+    if pale_distance > 28:
+        return False, 0.0, 0.0
+
+    raw = _raw_text_mask(cell_rgb, background_rgb)
+    line_features = _line_feature_mask(cell_rgb)
+    red = _red_mask(cell_rgb)
+    annotation_ratio = float(((line_features > 0) | (red > 0)).sum()) / max(1, raw.size)
+    if annotation_ratio < 0.005:
+        return False, 0.0, 0.0
+
+    straight_core = _straight_stroke_core(raw)
+    straight_core = np.maximum(straight_core, _straight_stroke_core(line_features))
+    residual = raw.copy()
+    residual[(straight_core > 0) | (red > 0)] = 0
+    residual = _clean_text_mask(residual)
+
+    residual_area = int((residual > 0).sum())
+    residual_ratio = residual_area / max(1, residual.size)
+    bbox = _mask_bbox(residual)
+    if bbox is None or residual_ratio < 0.012:
+        return False, 0.0, residual_ratio
+
+    x, y, w, h = bbox
+    center_x = x + w / 2.0
+    center_y = y + h / 2.0
+    centered = width * 0.30 <= center_x <= width * 0.72 and height * 0.25 <= center_y <= height * 0.78
+    digit_sized = w >= width * 0.16 and h >= height * 0.28
+    central_pixels = int(
+        (
+            residual[
+                int(round(height * 0.22)) : int(round(height * 0.82)),
+                int(round(width * 0.24)) : int(round(width * 0.76)),
+            ]
+            > 0
+        ).sum()
+    )
+    if not centered or not digit_sized or central_pixels < max(5, int(round(residual.size * 0.008))):
+        return False, 0.0, residual_ratio
+
+    # Keep reconstructed glyphs below the general text-confidence threshold so
+    # they must also pass the pale 2/empty color compatibility gate.
+    score = max(0.56, min(0.59, 0.54 + residual_ratio * 2.2))
+    return True, score, max(0.0, score - 0.065)
 
 
 def _looks_like_occluded_two(cell_rgb: np.ndarray, background_rgb: list[int]) -> tuple[bool, float, float]:
@@ -1350,13 +1631,25 @@ def _probe_boards(image_id: str, rgb: np.ndarray, matcher: TemplateMatcher) -> l
             background = _cell_background(cell_rgb)
             mask = _text_mask(cell_rgb, background)
             text_match = matcher.match(mask, cell_rgb.shape[0] * cell_rgb.shape[1])
-            marked_two, marked_score, marked_runner_up = _looks_like_marked_two(cell_rgb, background)
-            if marked_two and (text_match.exponent != 1 or text_match.score < marked_score):
+            line_occluded_two, marked_score, marked_runner_up = _looks_like_line_occluded_two(
+                cell_rgb,
+                background,
+            )
+            marked_two, fallback_score, fallback_runner_up = _looks_like_marked_two(cell_rgb, background)
+            if line_occluded_two:
                 text_match = TextMatch(
                     exponent=1,
                     value=2,
                     score=marked_score,
                     runner_up_score=marked_runner_up,
+                    area_ratio=max(text_match.area_ratio, 0.04),
+                )
+            elif marked_two and (text_match.exponent != 1 or text_match.score < fallback_score):
+                text_match = TextMatch(
+                    exponent=1,
+                    value=2,
+                    score=fallback_score,
+                    runner_up_score=fallback_runner_up,
                     area_ratio=max(text_match.area_ratio, 0.04),
                 )
             elif text_match.exponent != 1:
@@ -1472,7 +1765,7 @@ def _cell_record(cell: CellProbe, palette: dict[int, list[int]]) -> tuple[dict[s
         and color_confidence < 0.25
     )
     color_confident = color_exp > 1 and color_confidence >= COLOR_ACCEPT_THRESHOLD and (
-        color_margin >= 0.05 or color_confidence >= 0.92
+        color_margin >= 0.035 or color_confidence >= 0.92
     )
     empty_confident = text.area_ratio < 0.0035 and (
         not palette or color_exp in (0, 1) or color_confidence < 0.58
@@ -2899,7 +3192,8 @@ def _detect_lines(rgb: np.ndarray, boards: list[dict[str, Any]]) -> list[dict[st
             min_cell,
         )
 
-    lines = _dedupe_lines([tuple(map(int, line[0])) for line in raw_lines])
+    normalized_lines = np.asarray(raw_lines).reshape(-1, 4)
+    lines = _dedupe_lines([tuple(map(int, line)) for line in normalized_lines])
     for index, (x1, y1, x2, y2) in enumerate(lines):
         length = math.hypot(x2 - x1, y2 - y1)
         if length < min_cell * 0.35:

@@ -222,7 +222,10 @@
         class="absolute inset-0"
         v-show="activeTab === TAB_IDS.HELP"
       >
-        <HelpView :active="activeTab === TAB_IDS.HELP" />
+        <HelpView
+          :active="activeTab === TAB_IDS.HELP"
+          @navigate-tab="handleNavigateTab"
+        />
       </div>
       <div
         v-if="isTabOpen(TAB_IDS.ADMIN)"
@@ -377,6 +380,7 @@ import AccountSecurityDialog from './features/auth/AccountSecurityDialog.vue';
 import AuthPage from './features/auth/AuthPage.vue';
 import SponsorDialog from './features/billing/SponsorDialog.vue';
 import ReplayAnalysisDialog from './features/replay/components/ReplayAnalysisDialog.vue';
+import { queueTrainerPracticeJump } from './features/trainer/services/trainerPracticeJump';
 import { useAuthState } from './services/auth/authState';
 
 const GamerView = defineAsyncComponent(() => import('./features/gamer/pages/GamerPage.vue'));
@@ -502,6 +506,12 @@ const formatTokens = (value) => {
 };
 
 const handleNavigateTab = (tabId, detail = null) => {
+  if (tabId === TAB_IDS.TRAINER && detail?.hex) {
+    queueTrainerPracticeJump(detail);
+    openTab(tabId);
+    return;
+  }
+
   openTab(tabId);
   if (tabId === TAB_IDS.LEADERBOARDS && detail?.boardKey) {
     leaderboardRequestedKey.value = String(detail.boardKey);
@@ -510,12 +520,6 @@ const handleNavigateTab = (tabId, detail = null) => {
     leaderboardRequestSerial.value += 1;
     return;
   }
-  if (tabId !== TAB_IDS.TRAINER || !detail?.hex) {
-    return;
-  }
-  nextTick(() => {
-    window.dispatchEvent(new CustomEvent('trainer-practice-jump', { detail }));
-  });
 };
 
 const readLastScheduledAuthRefresh = () => {

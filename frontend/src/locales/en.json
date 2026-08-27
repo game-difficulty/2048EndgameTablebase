@@ -202,7 +202,19 @@
   "help": {
     "toc": {
       "expandAll": "Expand",
-      "collapseAll": "Collapse"
+      "collapseAll": "Collapse",
+      "label": "Document contents",
+      "empty": "No sections found"
+    },
+    "documents": {
+      "select": "Select help document",
+      "manual": "User Manual",
+      "loading": "Loading document...",
+      "loadError": "Document failed to load",
+      "notFound": "The selected document was not found."
+    },
+    "guide": {
+      "openBoard": "Open board in Trainer"
     },
     "search": {
       "open": "Find in Help",

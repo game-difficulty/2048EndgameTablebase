@@ -460,5 +460,7 @@ export function useHelpSession(activeRef) {
     closeSearch,
     nextMatch,
     previousMatch,
+    refreshSearch: scheduleSearchRefresh,
+    typesetMath,
   };
 }

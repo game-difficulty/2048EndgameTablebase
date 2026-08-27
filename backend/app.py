@@ -117,6 +117,7 @@ minigame_assets_path = pic_path
 frontend_dist_path = get_resource_path(os.path.join("frontend", "dist"))
 frontend_assets_path = os.path.join(frontend_dist_path, "assets")
 frontend_wasm_path = os.path.join(frontend_dist_path, "wasm")
+frontend_guides_path = os.path.join(frontend_dist_path, "guides")
 
 WS_MAX_ACTIVE_CONNECTIONS = int(os.getenv("WS_MAX_ACTIVE_CONNECTIONS", "1024"))
 WS_MAX_ACTIVE_CONNECTIONS_PER_IP = int(
@@ -908,6 +909,16 @@ if os.path.exists(frontend_wasm_path):
             cache_control="public, max-age=31536000, immutable",
         ),
         name="frontend-wasm",
+    )
+
+if os.path.exists(frontend_guides_path):
+    app.mount(
+        "/guides",
+        CacheControlledStaticFiles(
+            directory=frontend_guides_path,
+            cache_control="public, max-age=86400",
+        ),
+        name="frontend-guides",
     )
 
 if os.path.exists(frontend_dist_path):

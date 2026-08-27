@@ -42,6 +42,7 @@ import {
   normalizeTrainerBoardHex,
   previousDistinctTrainerHistoryState,
 } from '../engine/trainerBoardState.js';
+import { registerTrainerPracticeJumpConsumer } from '../services/trainerPracticeJump';
 
 export function useTrainerSession(activeRef) {
   const MAX_PIPELINED_RANDOM_MOVES = 16;
@@ -118,6 +119,7 @@ export function useTrainerSession(activeRef) {
   let trainerPrefetchState = createTrainerPrefetchState();
   let trainerResyncPending = false;
   let pendingServerStateQuery = null;
+  let unregisterTrainerPracticeJumpConsumer = null;
   const resultsRefreshPhase = ref('idle');
 
   const recordStep = ref(0);
@@ -514,7 +516,9 @@ export function useTrainerSession(activeRef) {
 
     hexInput.value = pending.hex;
     currentBoardHex.value = pending.hex;
-    triggerAction('SET_BOARD', { hex_str: pending.hex });
+    if (!triggerAction('SET_BOARD', { hex_str: pending.hex })) {
+      return;
+    }
 
     const parsed = parseFullPattern(pending.fullPattern);
     if (
@@ -1635,6 +1639,9 @@ export function useTrainerSession(activeRef) {
     syncActivePatternCategory();
     window.addEventListener('keydown', handleKeydown);
     window.addEventListener('trainer-practice-jump', handleTrainerPracticeJump);
+    unregisterTrainerPracticeJumpConsumer = registerTrainerPracticeJumpConsumer(
+      (detail) => handleTrainerPracticeJump({ detail }),
+    );
     document.addEventListener('click', closePatternMenuOnClick);
     document.addEventListener('contextmenu', preventCtx);
   });
@@ -1654,11 +1661,14 @@ export function useTrainerSession(activeRef) {
 
   watch(isAuthenticated, (authenticated) => {
     if (authenticated) {
+      applyTrainerJump();
       maybeAutoApplyDefaultTablebase();
     }
   });
 
   onUnmounted(() => {
+    unregisterTrainerPracticeJumpConsumer?.();
+    unregisterTrainerPracticeJumpConsumer = null;
     finishPaletteEditing({ query: false });
     clearPaletteSyncTimer();
     window.removeEventListener('keydown', handleKeydown);

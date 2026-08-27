@@ -11,6 +11,7 @@ python tools/guide_image_parser/extract_docx_media.py --docx "C:\path\guide.docx
 python tools/guide_image_parser/parse_guide_images.py --manifest tmp/guide_media/media_manifest.jsonl --out tmp/guide_media/parsed_images.jsonl --qa-dir tmp/guide_media/qa
 python tools/guide_image_parser/validate_gold_samples.py --parsed tmp/guide_media/parsed_images.jsonl --gold tools/guide_image_parser/gold_samples.yaml
 python tools/guide_image_parser/render_qa_report.py --parsed tmp/guide_media/parsed_images.jsonl --out tmp/guide_media/qa.html
+python tools/guide_image_parser/build_guide_document.py --docx "C:\path\guide.docx" --manifest tmp/guide_media/media_manifest.jsonl --parsed tmp/guide_media/parsed_images.jsonl --out frontend/public/guides/my-guide --document-id my-guide --title "My Guide" --index frontend/public/guides/index.json
 ```
 
 `parse_guide_images.py` accepts `--overrides tools/guide_image_parser/overrides.yaml`
@@ -19,6 +20,11 @@ for manual corrections keyed by `image_id` or `sha256`.
 Run `validate_gold_samples.py` before asking for manual review. The gold file is
 a small set of manually checked real guide images that catches obvious parser
 regressions in board values and highlight mapping.
+
+Gold samples may either list every board in spatial order, or target corrections
+with `board_id`/`board_index`. Targeted entries can independently check `hex`,
+`bbox` with an optional `bbox_tolerance`, and visible dimensions. Use
+`board_count` when only the number of boards is known.
 
 ## Output Contract
 
@@ -29,6 +35,9 @@ regressions in board values and highlight mapping.
   guide rendering.
 - `qa.html`: original image plus parser overlay, expanded by default for review
   entries.
+- `document.json`: browser-ready headings, paragraphs, original-image references,
+  and clickable board hotspots. The optional guide index makes additional
+  documents appear in the Help document selector.
 
 v1 prioritizes correctness over automatic acceptance. Low-confidence cells,
 color/text conflicts, unmatched annotation residue, or uncertain layout produce

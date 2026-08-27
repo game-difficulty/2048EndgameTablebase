@@ -50,3 +50,49 @@ samples:
         cells: [[0, 2]]
       - board_index: 3
         cells: [[0, 2]]
+
+  - image_id: img_0213
+    note: targeted corrections for 2 versus empty cells
+    boards:
+      - board_id: img_0213_b01
+        hex: "210065327ff4ffff"
+      - board_id: img_0213_b03
+        hex: "121165327ff4ffff"
+
+  - image_id: img_0215
+    note: targeted correction for copied 2 cells
+    boards:
+      - board_id: img_0215_b04
+        hex: "121165327ff4ffff"
+
+  - image_id: img_0279
+    note: targeted corrections for missed 2 cells and the shifted third board
+    boards:
+      - board_id: img_0279_b00
+        hex: "13315431ffffffff"
+      - board_id: img_0279_b01
+        hex: "13015442ffffffff"
+      - board_id: img_0279_b02
+        bbox: [324, 14, 122, 61]
+        bbox_tolerance: 2
+        hex: "13105521ffffffff"
+      - board_id: img_0279_b03
+        hex: "13115520ffffffff"
+
+  - image_id: img_0330
+    note: left column was omitted by a one-cell right shift
+    boards:
+      - board_id: img_0330_b00
+        bbox: [26, 14, 122, 61]
+        bbox_tolerance: 2
+        hex: "32103560ffffffff"
+
+  - image_id: img_0369
+    note: five-board layout with the arrow-occluded lower-left board restored
+    board_count: 5
+    boards:
+      - board_id: img_0369_b03
+        bbox: [26, 122, 122, 92]
+        bbox_tolerance: 2
+        visible_rows: 3
+        visible_cols: 4

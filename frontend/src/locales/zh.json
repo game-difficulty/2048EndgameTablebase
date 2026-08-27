@@ -202,7 +202,19 @@
   "help": {
     "toc": {
       "expandAll": "展开",
-      "collapseAll": "收起"
+      "collapseAll": "收起",
+      "label": "文档目录",
+      "empty": "没有可用目录"
+    },
+    "documents": {
+      "select": "选择帮助文档",
+      "manual": "使用手册",
+      "loading": "正在加载文档...",
+      "loadError": "文档加载失败",
+      "notFound": "找不到所选文档。"
+    },
+    "guide": {
+      "openBoard": "在训练模块中打开局面"
     },
     "search": {
       "open": "在帮助中搜索",
