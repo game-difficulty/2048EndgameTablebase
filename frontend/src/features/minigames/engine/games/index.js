@@ -1,5 +1,9 @@
 import { buildMoveAnimationMetadata, genNewNum, moveBoard } from '../boardMover.js';
-import { BaseMinigameEngine } from '../baseEngine.js';
+import {
+  BaseMinigameEngine,
+  trophyLevelForExponent,
+  trophyLevelName,
+} from '../baseEngine.js';
 import { generateEvilSpawn } from '../evilGenAdapter.js';
 import {
   boardsEqual,
@@ -160,18 +164,17 @@ export class DesignMasterEngine extends BaseMinigameEngine {
       return;
     }
     this.currentMaxNum = patternLevel;
-    const level = { 10: 'gold', 9: 'silver', 8: 'bronze' }[this.currentMaxNum] || 'gold';
     if (this.currentMaxNum > this.maxNum) {
+      const previousTrophyLevel = Number(this.isPassed) || 0;
       this.maxNum = this.currentMaxNum;
-      this.isPassed = { 10: 3, 9: 2, 8: 1 }[this.maxNum] || 4;
+      const trophyLevel = trophyLevelForExponent(this.maxNum, 10);
+      this.isPassed = Math.max(previousTrophyLevel, trophyLevel);
+      const level = trophyLevelName(trophyLevel);
       this.queueMessage('trophy', {
         level,
-        message: `You achieved ${2 ** this.maxNum}! You get a ${level} trophy!`,
-      });
-    } else {
-      this.queueMessage('trophy', {
-        level,
-        message: `You achieved ${2 ** this.currentMaxNum}! Take it further!`,
+        message: trophyLevel > previousTrophyLevel
+          ? `You achieved ${2 ** this.maxNum}! You get a ${level} trophy!`
+          : `You achieved ${2 ** this.currentMaxNum}! Take it further!`,
       });
     }
   }
@@ -934,9 +937,11 @@ export class BlitzkriegEngine extends BaseMinigameEngine {
     this.currentMaxNum = Math.max(this.currentMaxNum, positiveMax(this.board));
     this.maxNum = Math.max(this.maxNum, this.currentMaxNum);
     if (!this.isOver) return;
-    if (this.maxNum > 9) this.isPassed = { 12: 3, 11: 2, 10: 1 }[this.maxNum] || 4;
+    if (this.maxNum > 9) {
+      this.isPassed = Math.max(this.isPassed, trophyLevelForExponent(this.maxNum, 12));
+    }
     if (this.currentMaxNum <= 9) return;
-    const level = { 12: 'gold', 11: 'silver', 10: 'bronze' }[this.currentMaxNum] || 'gold';
+    const level = trophyLevelName(trophyLevelForExponent(this.currentMaxNum, 12));
     const message = this.score === this.maxScore
       ? `You achieved ${this.score} score! You get a ${level} trophy!`
       : `You achieved ${this.score} score! Nice game!`;
@@ -1034,8 +1039,8 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
     this.pendingResolutionKind = null;
     this.pendingResolutionPositions = [];
     this.levels = this.variant === 'hybrid'
-      ? [[150000, 4, null], [100000, 3, 'gold'], [50000, 2, 'silver'], [20000, 1, 'bronze']]
-      : [[300000, 4, null], [200000, 3, 'gold'], [100000, 2, 'silver'], [40000, 1, 'bronze']];
+      ? [[150000, 4], [100000, 3], [50000, 2], [20000, 1]]
+      : [[300000, 4], [200000, 3], [100000, 2], [40000, 1]];
     this.bombGenRate = this.variant === 'hybrid' ? 0.05 : 0.03;
     this.initialize(snapshot);
   }
@@ -1090,16 +1095,17 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
   }
 
   queueScoreTrophy() {
-    let levelName = null;
-    for (const [threshold, level, trophy] of this.levels) {
+    let earnedLevel = 0;
+    for (const [threshold, level] of this.levels) {
       if (this.score >= threshold && this.currentLevel < level) {
         this.isPassed = Math.max(this.isPassed, level);
         this.currentLevel = level;
-        levelName = trophy;
+        earnedLevel = level;
         break;
       }
     }
-    if (!levelName) return;
+    if (!earnedLevel) return;
+    const levelName = trophyLevelName(earnedLevel);
     const scoreText = `${Math.floor(this.maxScore / 1000)}k`;
     this.queueMessage('trophy', {
       level: levelName,

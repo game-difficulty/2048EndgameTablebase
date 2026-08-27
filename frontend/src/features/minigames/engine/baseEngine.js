@@ -13,6 +13,28 @@ import {
 } from './utils.js';
 import { createMinigameRuntime } from './runtime.js';
 
+export const TROPHY_LEVEL_NAMES = Object.freeze({
+  1: 'bronze',
+  2: 'silver',
+  3: 'gold',
+  4: 'grand',
+});
+
+export function trophyLevelForExponent(exponent, goldExponent) {
+  const normalizedExponent = Math.trunc(Number(exponent) || 0);
+  const normalizedGoldExponent = Math.trunc(Number(goldExponent) || 0);
+  if (normalizedExponent > normalizedGoldExponent) return 4;
+  return {
+    [normalizedGoldExponent]: 3,
+    [normalizedGoldExponent - 1]: 2,
+    [normalizedGoldExponent - 2]: 1,
+  }[normalizedExponent] || 0;
+}
+
+export function trophyLevelName(level) {
+  return TROPHY_LEVEL_NAMES[Math.trunc(Number(level) || 0)] || '';
+}
+
 export class AnimationState {
   constructor({
     appearIndex = null,
@@ -258,19 +280,19 @@ export class BaseMinigameEngine {
     this.maxNum = Math.max(this.maxNum, this.currentMaxNum);
     if (this.currentMaxNum <= 9) return;
     if (this.currentMaxNum > previousPeak) {
-      const level = { 12: 'gold', 11: 'silver', 10: 'bronze' }[this.currentMaxNum] || 'gold';
+      const trophyLevel = trophyLevelForExponent(this.currentMaxNum, 12);
+      const previousTrophyLevel = Number(this.isPassed) || 0;
+      this.isPassed = Math.max(previousTrophyLevel, trophyLevel);
+      const level = trophyLevelName(trophyLevel);
+      let message;
       if (this.currentMaxNum > previousBest) {
-        this.isPassed = { 12: 3, 11: 2, 10: 1 }[this.maxNum] || 4;
-        this.queueMessage('trophy', {
-          level,
-          message: `You achieved ${2 ** this.maxNum}! You get a ${level} trophy!`,
-        });
+        message = trophyLevel > previousTrophyLevel
+          ? `You achieved ${2 ** this.maxNum}! You get a ${level} trophy!`
+          : `You achieved ${2 ** this.currentMaxNum}! Take it further!`;
       } else {
-        this.queueMessage('trophy', {
-          level,
-          message: `You achieved ${2 ** this.currentMaxNum}! Take it further!`,
-        });
+        message = `You achieved ${2 ** this.currentMaxNum}! Take it further!`;
       }
+      this.queueMessage('trophy', { level, message });
     }
   }
 
