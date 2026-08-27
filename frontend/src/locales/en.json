@@ -259,6 +259,13 @@
         "expired": "Ranked run expired",
         "submission_failed": "Retry submission",
         "submission_limited": "24-hour standard submission limit reached"
+      },
+      "reasons": {
+        "spawnRateOutOfRange": "Leaderboard games require a 4-spawn chance from 10% to 80%.",
+        "duplicateTab": "Another tab owns this ranked run. This tab is no longer rank eligible.",
+        "activeRunExists": "This account already has an active ranked run in another tab.",
+        "leaseLost": "This tab lost its ranked-run lease. This game is no longer rank eligible.",
+        "userChanged": "The signed-in account changed. This game is no longer rank eligible."
       }
     },
     "leaderboard": {

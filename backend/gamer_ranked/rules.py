@@ -65,21 +65,31 @@ def legal_moves(board: list[int]) -> list[str]:
     ]
 
 
-def random_spawn(board: list[int], rng: Xoshiro128StarStar) -> tuple[int, int]:
+def random_spawn(
+    board: list[int],
+    rng: Xoshiro128StarStar,
+    spawn_rate4: float = SPAWN_RATE4,
+) -> tuple[int, int]:
     empty = [index for index, value in enumerate(board) if value == 0]
     if not empty:
         raise ValueError("Cannot spawn on a full board.")
+    rate4 = float(spawn_rate4)
+    if not math.isfinite(rate4) or not 0.0 <= rate4 <= 1.0:
+        raise ValueError("Invalid 4-spawn rate.")
     index = empty[rng.choose_index(len(empty))]
-    exponent = 2 if rng.next_float() < SPAWN_RATE4 else 1
+    exponent = 2 if rng.next_float() < rate4 else 1
     return index, exponent
 
 
-def initial_board(seed_hex: str) -> tuple[list[int], tuple[tuple[int, int], ...], Xoshiro128StarStar]:
+def initial_board(
+    seed_hex: str,
+    spawn_rate4: float = SPAWN_RATE4,
+) -> tuple[list[int], tuple[tuple[int, int], ...], Xoshiro128StarStar]:
     rng = Xoshiro128StarStar.from_seed_hex(seed_hex)
     board = [0] * 16
     initial_tiles: list[tuple[int, int]] = []
     for _ in range(2):
-        index, exponent = random_spawn(board, rng)
+        index, exponent = random_spawn(board, rng, spawn_rate4)
         board[index] = 2**exponent
         initial_tiles.append((index, exponent - 1))
     return board, tuple(initial_tiles), rng

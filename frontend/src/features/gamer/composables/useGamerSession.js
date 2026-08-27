@@ -1,7 +1,9 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
+import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { useAuthState } from '../../../services/auth/authState';
 import { createLocalStorageStore } from '../../../services/storage/localStorageStore';
+import { createSessionStorageStore } from '../../../services/storage/sessionStorageStore';
 import { getEvilCore } from '../../../services/wasm/aiCoreClient';
 import {
   createRankedInitialBoard,
@@ -16,11 +18,15 @@ import {
   RANKED_RECORD,
 } from '../engine/rankedReplayEncoder';
 import {
+  abandonRankedRun,
+  createRankedLeaseToken,
   createRankedRequestId,
   createRankedRun,
   fetchRankedRun,
+  heartbeatRankedRun,
   submitRankedRun,
 } from '../services/rankedRunClient';
+import { createRankedRunLock } from '../services/rankedRunLock';
 
 const VALID_DIRECTIONS = new Set(['left', 'right', 'up', 'down']);
 const DIRECTION_BY_CODE = {
@@ -30,15 +36,29 @@ const DIRECTION_BY_CODE = {
   4: 'down',
 };
 const SPAWN_RATE4 = 0.1;
+const MIN_RANKED_SPAWN_RATE4 = 0.1;
+const MAX_RANKED_SPAWN_RATE4 = 0.8;
 const GAMER_TOP_TILE = 32768;
 const MAX_HISTORY_LENGTH = 1000;
 const AI_WORKER_VERSION = 'worker-614a4af-20260706';
 
-const gamerStore = createLocalStorageStore({
+const legacyGamerStore = createLocalStorageStore({
   key: 'gamer',
   version: 2,
   defaultValue: null,
   migrate: (value) => (value ? { ...value, ranked: null } : null),
+});
+
+const gamerPreferencesStore = createLocalStorageStore({
+  key: 'gamer-preferences',
+  version: 1,
+  defaultValue: null,
+});
+
+const gamerSessionStore = createSessionStorageStore({
+  key: 'gamer-session',
+  version: 1,
+  defaultValue: null,
 });
 
 const emptyRankedState = (overrides = {}) => ({
@@ -59,6 +79,9 @@ const emptyRankedState = (overrides = {}) => ({
   status: 'unranked',
   errorCode: '',
   userId: null,
+  spawnRate4: null,
+  leaseToken: '',
+  leaseExpiresAt: null,
   ...overrides,
 });
 
@@ -234,7 +257,7 @@ function legalMoves(values) {
   ));
 }
 
-function randomSpawn(values) {
+function randomSpawn(values, spawnRate4 = SPAWN_RATE4) {
   const emptyIndices = values
     .map((value, index) => (Number(value) === 0 ? index : null))
     .filter((index) => index !== null);
@@ -242,7 +265,7 @@ function randomSpawn(values) {
     return null;
   }
   const index = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
-  const exponent = Math.random() < SPAWN_RATE4 ? 2 : 1;
+  const exponent = Math.random() < spawnRate4 ? 2 : 1;
   return {
     index,
     value: exponentToValue(exponent),
@@ -264,6 +287,7 @@ function historyEntry(values, currentScore, specialTiles) {
 }
 
 export function useGamerSession(activeRef) {
+  const { config: appConfig } = useAppSettingsStore();
   const { ready: authReady, user: authUser } = useAuthState();
   const board = ref(new Array(16).fill(0));
   const metadata = ref(null);
@@ -299,19 +323,33 @@ export function useGamerSession(activeRef) {
   let rankedRng = null;
   let rankedStartSerial = 0;
   let rankedPollTimer = null;
+  let rankedHeartbeatTimer = null;
+  let rankedRunLock = null;
   let moveRunning = false;
   let gameGeneration = 0;
   let wasmPrewarmed = false;
   const history = [];
 
+  const configuredSpawnRate4 = () => {
+    const value = Number(appConfig.value?.['4_spawn_rate']);
+    return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : SPAWN_RATE4;
+  };
+
+  const rankedSpawnRateAllowed = (value) => (
+    Number(value) >= MIN_RANKED_SPAWN_RATE4 && Number(value) <= MAX_RANKED_SPAWN_RATE4
+  );
+
   const writePersistedState = () => {
-    gamerStore.write({
-      board: board.value.slice(0, 16),
-      metadata: null,
-      score: score.value,
+    gamerPreferencesStore.write({
       difficulty: difficulty.value,
       aiSpeed: aiSpeed.value,
       rankedParticipationEnabled: rankedParticipationEnabled.value,
+      bestScore: Number(score.value.best) || 0,
+    });
+    gamerSessionStore.write({
+      board: board.value.slice(0, 16),
+      metadata: null,
+      score: score.value,
       currentHex: currentHex.value,
       specialTiles: specialTiles.value,
       ranked: {
@@ -355,6 +393,13 @@ export function useGamerSession(activeRef) {
     }
   };
 
+  const clearRankedHeartbeatTimer = () => {
+    if (rankedHeartbeatTimer !== null) {
+      window.clearTimeout(rankedHeartbeatTimer);
+      rankedHeartbeatTimer = null;
+    }
+  };
+
   const updateRanked = (changes, { persist = true } = {}) => {
     ranked.value = { ...ranked.value, ...changes };
     if (persist) persistState({ immediate: !aiEnabled.value });
@@ -363,6 +408,59 @@ export function useGamerSession(activeRef) {
   const disqualifyRanked = (reason) => {
     if (!ranked.value.runId || !ranked.value.eligible) return;
     updateRanked({ eligible: false, status: 'ineligible', errorCode: reason || '' });
+  };
+
+  const loseRankedOwnership = (reason = 'lease_lost') => {
+    clearRankedHeartbeatTimer();
+    rankedRunLock?.release();
+    if (!ranked.value.runId) return;
+    rankedRng = null;
+    updateRanked({
+      eligible: false,
+      status: 'ineligible',
+      errorCode: reason,
+      leaseToken: '',
+      leaseExpiresAt: null,
+    });
+  };
+
+  rankedRunLock = createRankedRunLock({
+    onLost: () => loseRankedOwnership('duplicate_tab'),
+  });
+
+  const hasRankedOwnership = () => Boolean(
+    ranked.value.runId
+    && ranked.value.leaseToken
+    && rankedRunLock?.isHeld(ranked.value.runId)
+  );
+
+  const heartbeatCurrentRankedRun = async ({ immediateRetry = false } = {}) => {
+    clearRankedHeartbeatTimer();
+    const runId = ranked.value.runId;
+    const leaseToken = ranked.value.leaseToken;
+    if (!runId || !leaseToken || !rankedRunLock?.isHeld(runId)) return false;
+    try {
+      const payload = await heartbeatRankedRun(runId, leaseToken);
+      if (runId !== ranked.value.runId || leaseToken !== ranked.value.leaseToken) return false;
+      if (String(payload.status) !== 'active') {
+        loseRankedOwnership(payload.error_code || 'lease_lost');
+        return false;
+      }
+      updateRanked({ leaseExpiresAt: payload.lease_expires_at || null });
+      rankedHeartbeatTimer = window.setTimeout(heartbeatCurrentRankedRun, 15000);
+      return true;
+    } catch (error) {
+      if (runId !== ranked.value.runId || leaseToken !== ranked.value.leaseToken) return false;
+      if ([401, 403, 404, 409].includes(Number(error?.status))) {
+        loseRankedOwnership(error?.code || 'lease_lost');
+        return false;
+      }
+      rankedHeartbeatTimer = window.setTimeout(
+        heartbeatCurrentRankedRun,
+        immediateRetry ? 2000 : 5000,
+      );
+      return true;
+    }
   };
 
   const cancelRankedStart = () => {
@@ -427,8 +525,8 @@ export function useGamerSession(activeRef) {
     }, delay);
   };
 
-  const spawnEvil = async (values, { strict = false } = {}) => {
-    const fallback = () => randomSpawn(values);
+  const spawnEvil = async (values, { strict = false, spawnRate4 = configuredSpawnRate4() } = {}) => {
+    const fallback = () => randomSpawn(values, spawnRate4);
     try {
       const module = evilCoreModule || await getEvilCore();
       evilCoreModule = module;
@@ -630,6 +728,10 @@ export function useGamerSession(activeRef) {
 
   const submitCompletedRankedRun = async () => {
     if (!ranked.value.runId || !ranked.value.eligible) return;
+    if (!hasRankedOwnership()) {
+      loseRankedOwnership('lease_lost');
+      return;
+    }
     if (!ranked.value.records.some((record) => record?.[0] === RANKED_RECORD.END)) {
       appendRankedRecord([RANKED_RECORD.END], 1);
     }
@@ -646,11 +748,21 @@ export function useGamerSession(activeRef) {
         score: Math.floor(Number(score.value.current) || 0),
         final_board_codes: exactBoardCodes(board.value),
         record_encoding: recordEncoding,
+        lease_token: ranked.value.leaseToken,
       });
       applyRankedServerStatus(payload);
-      if (['pending', 'validating'].includes(String(payload.status))) pollRankedRun();
+      if (['pending', 'validating'].includes(String(payload.status))) {
+        clearRankedHeartbeatTimer();
+        rankedRunLock?.release();
+        updateRanked({ leaseToken: '', leaseExpiresAt: null });
+        pollRankedRun();
+      }
     } catch (error) {
       if (ranked.value.runId) {
+        if ([401, 403, 404, 409].includes(Number(error?.status))) {
+          loseRankedOwnership(error?.code || 'lease_lost');
+          return;
+        }
         const errorCode = error?.code || 'submit_failed';
         const status = ['user_daily_limit', 'ip_daily_limit'].includes(errorCode)
           ? 'submission_limited'
@@ -669,6 +781,9 @@ export function useGamerSession(activeRef) {
       return false;
     }
     cancelRankedStart();
+    if (ranked.value.runId && ranked.value.eligible && !hasRankedOwnership()) {
+      loseRankedOwnership('lease_lost');
+    }
     const moveGeneration = gameGeneration;
 
     const before = board.value.slice(0, 16);
@@ -684,24 +799,26 @@ export function useGamerSession(activeRef) {
     let spawn = null;
     if (ranked.value.runId && ranked.value.eligible && rankedRng) {
       const currentDifficulty = Math.max(0, Math.min(100, Number(difficulty.value) || 0));
+      const runSpawnRate4 = Number(ranked.value.spawnRate4 ?? SPAWN_RATE4);
       const branch = rankedRng.nextFloat();
       const useEvil = currentDifficulty >= 100
         || (currentDifficulty > 0 && branch < currentDifficulty / 100);
       if (useEvil) {
         try {
-          spawn = await spawnEvil(simulated.board, { strict: true });
+          spawn = await spawnEvil(simulated.board, { strict: true, spawnRate4: runSpawnRate4 });
         } catch (error) {
           console.error('Ranked EvilGen failed; this game is no longer rank eligible.', error);
           disqualifyRanked('evilgen_failed');
-          spawn = randomSpawnWithRng(simulated.board, rankedRng, SPAWN_RATE4);
+          spawn = randomSpawnWithRng(simulated.board, rankedRng, runSpawnRate4);
         }
       } else {
-        spawn = randomSpawnWithRng(simulated.board, rankedRng, SPAWN_RATE4);
+        spawn = randomSpawnWithRng(simulated.board, rankedRng, runSpawnRate4);
       }
     } else {
+      const spawnRate4 = configuredSpawnRate4();
       spawn = Math.random() > (Number(difficulty.value) || 0) / 100
-        ? randomSpawn(simulated.board)
-        : await spawnEvil(simulated.board);
+        ? randomSpawn(simulated.board, spawnRate4)
+        : await spawnEvil(simulated.board, { spawnRate4 });
     }
     if (moveGeneration !== gameGeneration) return false;
     const nextBoard = simulated.board.slice(0, 16);
@@ -733,7 +850,7 @@ export function useGamerSession(activeRef) {
   };
 
   const moveBoard = async (direction, source = 'manual') => {
-    if (moveRunning) return false;
+    if (moveRunning || ranked.value.status === 'starting') return false;
     moveRunning = true;
     try {
       return await performMoveBoard(direction, source);
@@ -746,9 +863,10 @@ export function useGamerSession(activeRef) {
     rankedRng = null;
     ranked.value = emptyRankedState({ status, errorCode, userId: authUser.value?.id || null });
     const nextBoard = new Array(16).fill(0);
-    const first = randomSpawn(nextBoard);
+    const spawnRate4 = configuredSpawnRate4();
+    const first = randomSpawn(nextBoard, spawnRate4);
     if (first) nextBoard[first.index] = first.value;
-    const second = randomSpawn(nextBoard);
+    const second = randomSpawn(nextBoard, spawnRate4);
     if (second) nextBoard[second.index] = second.value;
     return nextBoard;
   };
@@ -773,16 +891,56 @@ export function useGamerSession(activeRef) {
     const serial = ++rankedStartSerial;
     clearRankedPollTimer();
     stopAI();
+    const replacement = ranked.value.runId && ranked.value.leaseToken
+      ? { runId: ranked.value.runId, leaseToken: ranked.value.leaseToken }
+      : {};
     if (!authUser.value?.id || !rankedParticipationEnabled.value) {
+      clearRankedHeartbeatTimer();
+      rankedRunLock?.release();
+      if (replacement.runId) {
+        abandonRankedRun(replacement.runId, replacement.leaseToken).catch(() => {});
+      }
       applyNewGameBoard(initializeOrdinaryGame());
+      return;
+    }
+    const requestedSpawnRate4 = configuredSpawnRate4();
+    if (!rankedSpawnRateAllowed(requestedSpawnRate4)) {
+      applyNewGameBoard(initializeOrdinaryGame('ineligible', 'spawn_rate_out_of_range'));
       return;
     }
     ranked.value = emptyRankedState({ status: 'starting', userId: authUser.value.id });
     persistState({ immediate: true });
+    const leaseToken = createRankedLeaseToken();
+    let issuedRunId = '';
     try {
-      const run = await createRankedRun(createRankedRequestId());
-      if (serial !== rankedStartSerial) return;
-      const initialized = createRankedInitialBoard(run.seed_hex);
+      const run = await createRankedRun(
+        createRankedRequestId(),
+        requestedSpawnRate4,
+        leaseToken,
+        replacement,
+      );
+      issuedRunId = String(run.run_id || '');
+      if (serial !== rankedStartSerial) {
+        abandonRankedRun(run.run_id, leaseToken).catch(() => {});
+        return;
+      }
+      if (String(run.status) !== 'active' || run.lease_token !== leaseToken) {
+        throw Object.assign(new Error('Ranked lease was not issued.'), { code: 'lease_lost' });
+      }
+      const lockAcquired = await rankedRunLock.acquire(run.run_id);
+      if (serial !== rankedStartSerial) {
+        if (lockAcquired) rankedRunLock.release();
+        abandonRankedRun(run.run_id, leaseToken).catch(() => {});
+        return;
+      }
+      if (!lockAcquired) {
+        abandonRankedRun(run.run_id, leaseToken).catch(() => {});
+        applyNewGameBoard(initializeOrdinaryGame('ineligible', 'duplicate_tab'));
+        return;
+      }
+      const runSpawnRate4 = Number(run.spawn_rate4);
+      if (!rankedSpawnRateAllowed(runSpawnRate4)) throw new Error('Invalid ranked spawn rate.');
+      const initialized = createRankedInitialBoard(run.seed_hex, runSpawnRate4);
       rankedRng = initialized.rng;
       ranked.value = emptyRankedState({
         runId: run.run_id,
@@ -795,11 +953,18 @@ export function useGamerSession(activeRef) {
         startedAt: run.started_at,
         expiresAt: run.expires_at,
         userId: authUser.value.id,
+        spawnRate4: runSpawnRate4,
+        leaseToken,
+        leaseExpiresAt: run.lease_expires_at || null,
         byteEstimate: 40,
       });
       applyNewGameBoard(initialized.board);
+      rankedHeartbeatTimer = window.setTimeout(heartbeatCurrentRankedRun, 15000);
     } catch (error) {
       if (serial !== rankedStartSerial) return;
+      clearRankedHeartbeatTimer();
+      rankedRunLock?.release();
+      if (issuedRunId) abandonRankedRun(issuedRunId, leaseToken).catch(() => {});
       applyNewGameBoard(initializeOrdinaryGame('ranked_unavailable', error?.code || 'start_failed'));
     }
   };
@@ -939,21 +1104,34 @@ export function useGamerSession(activeRef) {
 
   const openBrowserAi = () => false;
 
-  const loadSavedState = () => {
-    const saved = gamerStore.read();
-    rankedParticipationEnabled.value = saved?.rankedParticipationEnabled !== false;
+  const loadSavedState = async () => {
+    const legacy = legacyGamerStore.read();
+    let preferences = gamerPreferencesStore.read();
+    if (!preferences && legacy) {
+      preferences = {
+        difficulty: legacy.difficulty,
+        aiSpeed: legacy.aiSpeed,
+        rankedParticipationEnabled: legacy.rankedParticipationEnabled,
+        bestScore: legacy.score?.best,
+      };
+      gamerPreferencesStore.write(preferences);
+    }
+    legacyGamerStore.remove();
+    rankedParticipationEnabled.value = preferences?.rankedParticipationEnabled !== false;
+    difficulty.value = Math.max(0, Math.min(100, Number(preferences?.difficulty) || 0));
+    aiSpeed.value = Math.max(0, Math.min(200, Number(preferences?.aiSpeed) || 100));
+
+    const saved = gamerSessionStore.read();
     if (!saved?.board || !Array.isArray(saved.board) || saved.board.length !== 16) {
-      newGame();
+      await newGame();
       return;
     }
-    difficulty.value = Math.max(0, Math.min(100, Number(saved.difficulty) || 0));
-    aiSpeed.value = Math.max(0, Math.min(200, Number(saved.aiSpeed) || 100));
     specialTiles.value = Array.isArray(saved.specialTiles) ? saved.specialTiles : [];
     board.value = applySpecialTiles(saved.board, specialTiles.value);
     metadata.value = null;
     score.value = {
       current: Number(saved.score?.current) || 0,
-      best: Number(saved.score?.best) || 0,
+      best: Math.max(Number(saved.score?.best) || 0, Number(preferences?.bestScore) || 0),
     };
     syncDerivedState();
     history.length = 0;
@@ -969,26 +1147,55 @@ export function useGamerSession(activeRef) {
       return;
     }
     try {
-      rankedRng = new Xoshiro128StarStar(savedRanked.rngState);
-      ranked.value = emptyRankedState({
+      const restoredRanked = emptyRankedState({
         ...savedRanked,
+        spawnRate4: Number(savedRanked.spawnRate4 ?? SPAWN_RATE4),
         records: savedRanked.records.map((record) => [...record]),
         initialTiles: savedRanked.initialTiles.map((tile) => [...tile]),
       });
+      rankedRng = new Xoshiro128StarStar(restoredRanked.rngState);
+      ranked.value = restoredRanked;
       if (
         authReady.value
         && Number(ranked.value.userId) !== Number(authUser.value?.id || 0)
         && ranked.value.eligible
         && ranked.value.status === 'ranked'
       ) {
-        disqualifyRanked('user_changed');
+        loseRankedOwnership('user_changed');
+        return;
       }
       if (['pending', 'validating'].includes(ranked.value.status)) pollRankedRun();
-      if (ranked.value.status === 'submitting') {
-        ranked.value.status = 'submission_failed';
-        window.setTimeout(submitCompletedRankedRun, 0);
+      const needsLease = ['ranked', 'ineligible', 'submitting', 'submission_failed']
+        .includes(ranked.value.status);
+      if (needsLease) {
+        if (!ranked.value.leaseToken) {
+          applyNewGameBoard(initializeOrdinaryGame('ineligible', 'lease_required'));
+          return;
+        }
+        const originalStatus = ranked.value.status === 'submitting'
+          ? 'submission_failed'
+          : ranked.value.status;
+        const originalEligible = ranked.value.eligible;
+        const restoringRunId = ranked.value.runId;
+        updateRanked({ status: 'starting', eligible: false });
+        const acquired = await rankedRunLock.acquire(restoringRunId);
+        if (ranked.value.runId !== restoringRunId) {
+          if (acquired) rankedRunLock.release();
+          return;
+        }
+        if (!acquired) {
+          applyNewGameBoard(initializeOrdinaryGame('ineligible', 'duplicate_tab'));
+          return;
+        }
+        updateRanked({ status: originalStatus, eligible: originalEligible });
+        if (!await heartbeatCurrentRankedRun({ immediateRetry: true })) return;
+        if (originalStatus === 'submission_failed') {
+          window.setTimeout(submitCompletedRankedRun, 0);
+        }
       }
     } catch (_error) {
+      clearRankedHeartbeatTimer();
+      rankedRunLock?.release();
       rankedRng = null;
       ranked.value = emptyRankedState({ status: 'legacy_unranked' });
     }
@@ -1065,7 +1272,11 @@ export function useGamerSession(activeRef) {
   };
 
   const handleVisibilityChange = () => {
-    if (document.hidden) flushPersistState();
+    if (document.hidden) {
+      flushPersistState();
+    } else if (hasRankedOwnership()) {
+      void heartbeatCurrentRankedRun({ immediateRetry: true });
+    }
   };
 
   watch(() => score.value.current, (newVal, oldVal) => {
@@ -1099,12 +1310,12 @@ export function useGamerSession(activeRef) {
     [authReady, () => authUser.value?.id],
     ([ready, userId]) => {
       if (!ready || !ranked.value.runId || !ranked.value.eligible || ranked.value.status !== 'ranked') return;
-      if (Number(ranked.value.userId) !== Number(userId || 0)) disqualifyRanked('user_changed');
+      if (Number(ranked.value.userId) !== Number(userId || 0)) loseRankedOwnership('user_changed');
     },
   );
 
   onMounted(() => {
-    loadSavedState();
+    void loadSavedState();
     if (activeRef?.value) {
       ensureWasmPrewarmed();
     }
@@ -1118,6 +1329,8 @@ export function useGamerSession(activeRef) {
     window.removeEventListener('beforeunload', handleBeforeUnload);
     document.removeEventListener('visibilitychange', handleVisibilityChange);
     clearRankedPollTimer();
+    clearRankedHeartbeatTimer();
+    rankedRunLock?.release();
     stopAI();
     disposeAiWorker();
     if (evilGen?.delete) {

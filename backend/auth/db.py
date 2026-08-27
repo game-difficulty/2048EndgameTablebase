@@ -337,6 +337,10 @@ def init_auth_db() -> None:
               request_id TEXT NOT NULL,
               seed_hex TEXT NOT NULL,
               rules_version INTEGER NOT NULL,
+              spawn_rate4_millis INTEGER NOT NULL DEFAULT 100,
+              lease_token_hash TEXT,
+              lease_expires_at TEXT,
+              lease_last_seen_at TEXT,
               status TEXT NOT NULL,
               started_at TEXT NOT NULL,
               expires_at TEXT NOT NULL,
@@ -507,6 +511,37 @@ def init_auth_db() -> None:
             db.execute("ALTER TABLE users ADD COLUMN invite_code_id INTEGER REFERENCES invite_codes(id)")
         if "display_name_key" not in existing_user_columns:
             db.execute("ALTER TABLE users ADD COLUMN display_name_key TEXT")
+
+        existing_gamer_run_columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(gamer_ranked_runs)").fetchall()
+        }
+        if "spawn_rate4_millis" not in existing_gamer_run_columns:
+            db.execute(
+                "ALTER TABLE gamer_ranked_runs "
+                "ADD COLUMN spawn_rate4_millis INTEGER NOT NULL DEFAULT 100"
+            )
+        gamer_run_migrations = (
+            ("lease_token_hash", "TEXT"),
+            ("lease_expires_at", "TEXT"),
+            ("lease_last_seen_at", "TEXT"),
+        )
+        for column_name, column_type in gamer_run_migrations:
+            if column_name not in existing_gamer_run_columns:
+                db.execute(
+                    f"ALTER TABLE gamer_ranked_runs ADD COLUMN {column_name} {column_type}"
+                )
+        db.execute(
+            """
+            UPDATE gamer_ranked_runs
+            SET status = 'expired',
+                completed_at = COALESCE(completed_at, ?),
+                error_code = COALESCE(error_code, 'lease_required')
+            WHERE status = 'active'
+              AND (lease_token_hash IS NULL OR lease_token_hash = '')
+            """,
+            (_iso_now(),),
+        )
 
         existing_minigame_score_columns = {
             row["name"]

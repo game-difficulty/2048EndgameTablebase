@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 import binascii
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
+import math
 import os
 import secrets
 import sqlite3
@@ -26,7 +28,6 @@ MAX_RECORD_BYTES = 500 * 1024
 MAX_PENDING_GLOBAL = 32
 MAX_DAILY_SUBMISSIONS_USER = 5
 MAX_DAILY_SUBMISSIONS_IP = 20
-MAX_ACTIVE_RUNS_USER = 20
 DEFAULT_REPLAY_RETENTION_PER_BOARD = 100
 REPLAY_RETENTION_ENV = "GAMER_REPLAY_RETENTION_PER_BOARD"
 RANKED_BOARD_KEYS = ("gamer_high_score", "gamer_adversarial")
@@ -35,6 +36,9 @@ WEEKLY_BOARD_KEYS = {
     "gamer_adversarial": "gamer_adversarial_weekly",
 }
 RANKING_TIMEZONE = timezone(timedelta(hours=8), name="UTC+08:00")
+MIN_RANKED_SPAWN_RATE4_MILLIS = 100
+MAX_RANKED_SPAWN_RATE4_MILLIS = 800
+LEASE_LIFETIME = timedelta(seconds=60)
 
 
 def _utc_now() -> datetime:
@@ -67,11 +71,57 @@ def _seed_hex() -> str:
             return "".join(f"{word:08x}" for word in words)
 
 
-def _public_run(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
-    return {
+def _spawn_rate4_millis(value: float) -> int:
+    rate4 = float(value)
+    if (
+        not math.isfinite(rate4)
+        or rate4 < MIN_RANKED_SPAWN_RATE4_MILLIS / 1000.0
+        or rate4 > MAX_RANKED_SPAWN_RATE4_MILLIS / 1000.0
+    ):
+        raise ValueError("spawn_rate_out_of_range")
+    millis = round(rate4 * 1000)
+    if not MIN_RANKED_SPAWN_RATE4_MILLIS <= millis <= MAX_RANKED_SPAWN_RATE4_MILLIS:
+        raise ValueError("spawn_rate_out_of_range")
+    return millis
+
+
+def _lease_hash(token: str) -> str:
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def _lease_matches(row: sqlite3.Row | dict[str, Any], token: str) -> bool:
+    expected = str(row["lease_token_hash"] or "")
+    supplied = _lease_hash(token)
+    return bool(expected) and secrets.compare_digest(expected, supplied)
+
+
+def _new_lease(now: datetime, token: str | None = None) -> tuple[str, str, str]:
+    token = str(token or secrets.token_urlsafe(32))
+    if len(token) < 16 or len(token) > 256:
+        raise ValueError("invalid_lease_token")
+    return token, _lease_hash(token), _iso(now + LEASE_LIFETIME)
+
+
+def _lease_expired(row: sqlite3.Row | dict[str, Any], now: datetime) -> bool:
+    raw_expiry = row["lease_expires_at"]
+    if not raw_expiry:
+        return True
+    try:
+        return datetime.fromisoformat(str(raw_expiry)) <= now
+    except ValueError:
+        return True
+
+
+def _public_run(
+    row: sqlite3.Row | dict[str, Any],
+    *,
+    lease_token: str | None = None,
+) -> dict[str, Any]:
+    payload = {
         "run_id": str(row["run_id"]),
         "status": str(row["status"]),
         "rules_version": int(row["rules_version"]),
+        "spawn_rate4": int(row["spawn_rate4_millis"]) / 1000.0,
         "seed_hex": str(row["seed_hex"]),
         "started_at": row["started_at"],
         "expires_at": row["expires_at"],
@@ -80,45 +130,100 @@ def _public_run(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         "board_key": row["board_key"],
         "new_personal_best": bool(row["new_personal_best"]),
         "error_code": row["error_code"],
+        "lease_expires_at": row["lease_expires_at"],
     }
+    if lease_token:
+        payload["lease_token"] = lease_token
+    return payload
 
 
-def create_ranked_run(*, user_id: int, request_id: str, ip_address: str) -> dict[str, Any]:
+def create_ranked_run(
+    *,
+    user_id: int,
+    request_id: str,
+    ip_address: str,
+    spawn_rate4: float = 0.1,
+    lease_token: str,
+    replace_run_id: str | None = None,
+    replace_lease_token: str | None = None,
+) -> dict[str, Any]:
     normalized_request = str(request_id or "").strip()
     if not normalized_request or len(normalized_request) > 128:
         raise ValueError("invalid_request_id")
+    spawn_rate4_millis = _spawn_rate4_millis(spawn_rate4)
     now = _utc_now()
     expires = now + RUN_LIFETIME
     with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
         existing = db.execute(
             "SELECT * FROM gamer_ranked_runs WHERE user_id = ? AND request_id = ?",
             (user_id, normalized_request),
         ).fetchone()
         if existing is not None:
-            return _public_run(existing)
+            if existing["status"] != "active":
+                return _public_run(existing)
+            if not _lease_matches(existing, lease_token):
+                raise RuntimeError("active_run_exists")
+            lease_token, lease_hash, lease_expires_at = _new_lease(now, lease_token)
+            db.execute(
+                """
+                UPDATE gamer_ranked_runs
+                SET lease_token_hash = ?, lease_expires_at = ?, lease_last_seen_at = ?
+                WHERE run_id = ? AND status = 'active'
+                """,
+                (lease_hash, lease_expires_at, _iso(now), existing["run_id"]),
+            )
+            existing = db.execute(
+                "SELECT * FROM gamer_ranked_runs WHERE run_id = ?", (existing["run_id"],)
+            ).fetchone()
+            return _public_run(existing, lease_token=lease_token)
         active_rows = db.execute(
             """
-            SELECT run_id FROM gamer_ranked_runs
+            SELECT * FROM gamer_ranked_runs
             WHERE user_id = ? AND status = 'active'
             ORDER BY started_at ASC
             """,
             (user_id,),
         ).fetchall()
-        if len(active_rows) >= MAX_ACTIVE_RUNS_USER:
-            stale_ids = [row["run_id"] for row in active_rows[: len(active_rows) - MAX_ACTIVE_RUNS_USER + 1]]
-            placeholders = ",".join("?" for _ in stale_ids)
+        for active in active_rows:
+            if _lease_expired(active, now):
+                db.execute(
+                    """
+                    UPDATE gamer_ranked_runs
+                    SET status = 'expired', completed_at = ?, error_code = 'lease_expired',
+                        lease_token_hash = NULL, lease_expires_at = NULL
+                    WHERE run_id = ? AND status = 'active'
+                    """,
+                    (_iso(now), active["run_id"]),
+                )
+        active_rows = db.execute(
+            "SELECT * FROM gamer_ranked_runs WHERE user_id = ? AND status = 'active'",
+            (user_id,),
+        ).fetchall()
+        if active_rows:
+            active = active_rows[0]
+            if str(replace_run_id or "") != str(active["run_id"]):
+                raise RuntimeError("active_run_exists")
+            if not _lease_matches(active, str(replace_lease_token or "")):
+                raise PermissionError("lease_mismatch")
             db.execute(
-                f"UPDATE gamer_ranked_runs SET status = 'expired', completed_at = ? WHERE run_id IN ({placeholders})",
-                (_iso(now), *stale_ids),
+                """
+                UPDATE gamer_ranked_runs
+                SET status = 'expired', completed_at = ?, error_code = 'replaced',
+                    lease_token_hash = NULL, lease_expires_at = NULL
+                WHERE run_id = ? AND status = 'active'
+                """,
+                (_iso(now), active["run_id"]),
             )
         run_id = str(uuid.uuid4())
         seed_hex = _seed_hex()
+        lease_token, lease_hash, lease_expires_at = _new_lease(now, lease_token)
         db.execute(
             """
             INSERT INTO gamer_ranked_runs
-            (run_id, user_id, request_id, seed_hex, rules_version, status,
-             started_at, expires_at, start_ip)
-            VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+            (run_id, user_id, request_id, seed_hex, rules_version,
+             spawn_rate4_millis, status, started_at, expires_at, start_ip)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
             """,
             (
                 run_id,
@@ -126,10 +231,93 @@ def create_ranked_run(*, user_id: int, request_id: str, ip_address: str) -> dict
                 normalized_request,
                 seed_hex,
                 RANKED_RULES_VERSION,
+                spawn_rate4_millis,
                 _iso(now),
                 _iso(expires),
                 ip_address,
             ),
+        )
+        db.execute(
+            """
+            UPDATE gamer_ranked_runs
+            SET lease_token_hash = ?, lease_expires_at = ?, lease_last_seen_at = ?
+            WHERE run_id = ?
+            """,
+            (lease_hash, lease_expires_at, _iso(now), run_id),
+        )
+        row = db.execute(
+            "SELECT * FROM gamer_ranked_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+    return _public_run(row, lease_token=lease_token)
+
+
+def heartbeat_ranked_run(*, run_id: str, user_id: int, lease_token: str) -> dict[str, Any]:
+    now = _utc_now()
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT * FROM gamer_ranked_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            raise LookupError("run_not_found")
+        if int(row["user_id"]) != user_id:
+            raise PermissionError("run_owner_mismatch")
+        if row["status"] != "active":
+            raise RuntimeError("run_not_active")
+        if not _lease_matches(row, lease_token):
+            raise PermissionError("lease_mismatch")
+        lease_expires_at = _iso(now + LEASE_LIFETIME)
+        db.execute(
+            """
+            UPDATE gamer_ranked_runs
+            SET lease_expires_at = ?, lease_last_seen_at = ?
+            WHERE run_id = ? AND status = 'active'
+            """,
+            (lease_expires_at, _iso(now), run_id),
+        )
+        row = db.execute(
+            "SELECT * FROM gamer_ranked_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+    return _public_run(row)
+
+
+def abandon_ranked_run(*, run_id: str, user_id: int, lease_token: str) -> dict[str, Any]:
+    now = _utc_now()
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT * FROM gamer_ranked_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            raise LookupError("run_not_found")
+        if int(row["user_id"]) != user_id:
+            raise PermissionError("run_owner_mismatch")
+        if row["status"] != "active":
+            return _public_run(row)
+        if not _lease_matches(row, lease_token):
+            raise PermissionError("lease_mismatch")
+        if _lease_expired(row, now):
+            db.execute(
+                """
+                UPDATE gamer_ranked_runs
+                SET status = 'expired', completed_at = ?, error_code = 'lease_expired',
+                    lease_token_hash = NULL, lease_expires_at = NULL
+                WHERE run_id = ? AND status = 'active'
+                """,
+                (_iso(now), run_id),
+            )
+            row = db.execute(
+                "SELECT * FROM gamer_ranked_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            return _public_run(row)
+        db.execute(
+            """
+            UPDATE gamer_ranked_runs
+            SET status = 'expired', completed_at = ?, error_code = 'abandoned',
+                lease_token_hash = NULL, lease_expires_at = NULL
+            WHERE run_id = ? AND status = 'active'
+            """,
+            (_iso(now), run_id),
         )
         row = db.execute(
             "SELECT * FROM gamer_ranked_runs WHERE run_id = ?", (run_id,)
@@ -211,6 +399,7 @@ def submit_ranked_run(
     final_board_codes: list[int],
     record_encoding: str,
     ip_address: str,
+    lease_token: str,
 ) -> dict[str, Any]:
     if not isinstance(score, int) or score < 0 or score > 2**63 - 1:
         raise ValueError("invalid_score")
@@ -236,6 +425,8 @@ def submit_ranked_run(
             raise PermissionError("run_owner_mismatch")
         if row["status"] != "active":
             return _public_run(row)
+        if not _lease_matches(row, lease_token):
+            raise PermissionError("lease_mismatch")
         if datetime.fromisoformat(str(row["expires_at"])) <= now:
             db.execute(
                 "UPDATE gamer_ranked_runs SET status = 'expired', completed_at = ? WHERE run_id = ?",
@@ -289,7 +480,8 @@ def submit_ranked_run(
             """
             UPDATE gamer_ranked_runs
             SET status = 'pending', submitted_at = ?, pending_record = ?,
-                claimed_score = ?, claimed_final_board = ?, submit_ip = ?, error_code = NULL
+                claimed_score = ?, claimed_final_board = ?, submit_ip = ?, error_code = NULL,
+                lease_token_hash = NULL, lease_expires_at = NULL
             WHERE run_id = ? AND status = 'active'
             """,
             (
@@ -598,6 +790,7 @@ def process_one_pending_run() -> bool:
             record_encoding=str(run["pending_record"] or ""),
             claimed_score=int(run["claimed_score"]),
             claimed_final_board=json.loads(str(run["claimed_final_board"])),
+            spawn_rate4=int(run["spawn_rate4_millis"]) / 1000.0,
         )
         _store_validated(run, game)
     except RankedValidationError as exc:

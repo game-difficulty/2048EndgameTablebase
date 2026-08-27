@@ -13,12 +13,12 @@ export function randomSpawnWithRng(values, rng, spawnRate4 = 0.1) {
   };
 }
 
-export function createRankedInitialBoard(seedHex) {
+export function createRankedInitialBoard(seedHex, spawnRate4 = 0.1) {
   const rng = Xoshiro128StarStar.fromSeedHex(seedHex);
   const board = new Array(16).fill(0);
   const initialTiles = [];
   for (let index = 0; index < 2; index += 1) {
-    const spawn = randomSpawnWithRng(board, rng);
+    const spawn = randomSpawnWithRng(board, rng, spawnRate4);
     board[spawn.index] = spawn.value;
     initialTiles.push([spawn.index, spawn.value === 4 ? 1 : 0]);
   }

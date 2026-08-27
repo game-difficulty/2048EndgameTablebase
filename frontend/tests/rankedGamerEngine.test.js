@@ -33,6 +33,13 @@ test('ranked initial tiles consume the deterministic RNG', () => {
   assert.deepEqual(initial.board.slice(0, 4), [4, 4, 0, 0]);
 });
 
+test('ranked initial tiles use the run-bound 4-spawn rate', () => {
+  const allTwos = createRankedInitialBoard(SEED, 0);
+  const allFours = createRankedInitialBoard(SEED, 1);
+  assert.deepEqual(allTwos.initialTiles.map((tile) => tile[1]), [0, 0]);
+  assert.deepEqual(allFours.initialTiles.map((tile) => tile[1]), [1, 1]);
+});
+
 test('ranked encoder emits the cross-language fixture', () => {
   const encoded = encodeRankedReplay({
     seedHex: SEED,

@@ -19,8 +19,10 @@ from backend.gamer_ranked.validator import (
 from backend.auth.db import auth_db, init_auth_db
 from backend.gamer_ranked.service import (
     _week_start_iso,
+    abandon_ranked_run,
     create_ranked_run,
     get_ranked_run,
+    heartbeat_ranked_run,
     process_one_pending_run,
     prune_ranked_replays,
     public_replay,
@@ -40,6 +42,7 @@ from backend.replay_2048next import (
 
 
 SEED = "00000001000000020000000300000004"
+LEASE_TOKEN = "ranked-test-lease-token-0001"
 JS_FIXTURE = (
     "REPLAY_v1RPL_B64_"
     "UlBMMUQAAhARg2QRAQAAAAEAAAACAAAAAwAAAASDAgRwb3cyg2UBAAt7g2YAhMwwCkc="
@@ -62,8 +65,11 @@ def _extension(extension_type: int, payload: bytes) -> bytes:
     return bytes((131,)) + _uleb(extension_type) + _uleb(len(payload)) + payload
 
 
-def _completed_random_game(seed: str = SEED) -> tuple[str, int, list[int]]:
-    board, initial_tiles, rng = initial_board(seed)
+def _completed_random_game(
+    seed: str = SEED,
+    spawn_rate4: float = 0.1,
+) -> tuple[str, int, list[int]]:
+    board, initial_tiles, rng = initial_board(seed, spawn_rate4)
     payload = bytearray(b"RPL1")
     payload.extend((0x44, 0, 2))
     for index, value_bit in initial_tiles:
@@ -76,7 +82,7 @@ def _completed_random_game(seed: str = SEED) -> tuple[str, int, list[int]]:
         direction = legal_moves(board)[0]
         moved, delta = simulate_move(board, direction)
         rng.next_float()  # Every ranked move consumes the branch draw.
-        spawn_index, spawn_exponent = random_spawn(moved, rng)
+        spawn_index, spawn_exponent = random_spawn(moved, rng, spawn_rate4)
         moved[spawn_index] = 2**spawn_exponent
         payload.append(
             DIRECTION_CODES[direction]
@@ -164,6 +170,27 @@ class GamerRankedContractTests(unittest.TestCase):
                 record_encoding=record,
                 claimed_score=score + 4,
                 claimed_final_board=final_board,
+            )
+
+    def test_validator_replays_with_the_run_spawn_rate(self):
+        record, score, final_board = _completed_random_game(spawn_rate4=0.8)
+        validated = validate_ranked_game(
+            seed_hex=SEED,
+            rules_version=1,
+            record_encoding=record,
+            claimed_score=score,
+            claimed_final_board=final_board,
+            spawn_rate4=0.8,
+        )
+        self.assertEqual(validated.score, score)
+        with self.assertRaisesRegex(RankedValidationError, "initial_tiles_mismatch|spawn_mismatch"):
+            validate_ranked_game(
+                seed_hex=SEED,
+                rules_version=1,
+                record_encoding=record,
+                claimed_score=score,
+                claimed_final_board=final_board,
+                spawn_rate4=0.1,
             )
 
     def test_validator_accepts_ai_and_classifies_all_difficulty_100_separately(self):
@@ -332,11 +359,146 @@ class GamerRankedServiceTests(unittest.TestCase):
                     (common[0], week_start, weekly_cutoff + index, *common[1:]),
                 )
 
+    def test_run_binds_spawn_rate_and_rejects_rates_outside_ranked_range(self):
+        for rate4 in (0.0999, 0.8001, float("nan"), float("inf")):
+            with self.subTest(rate4=rate4):
+                with self.assertRaisesRegex(ValueError, "spawn_rate_out_of_range"):
+                    create_ranked_run(
+                        user_id=self.user_id,
+                        request_id=f"invalid-rate-{rate4}",
+                        ip_address="127.0.0.1",
+                        spawn_rate4=rate4,
+                        lease_token=LEASE_TOKEN,
+                    )
+
+        lower = create_ranked_run(
+            user_id=self.user_id,
+            request_id="lower-spawn-rate-boundary",
+            ip_address="127.0.0.1",
+            spawn_rate4=0.1,
+            lease_token=LEASE_TOKEN,
+        )
+        upper = create_ranked_run(
+            user_id=self.user_id,
+            request_id="upper-spawn-rate-boundary",
+            ip_address="127.0.0.1",
+            spawn_rate4=0.8,
+            lease_token="ranked-test-lease-token-0002",
+            replace_run_id=lower["run_id"],
+            replace_lease_token=lower["lease_token"],
+        )
+        self.assertEqual(lower["spawn_rate4"], 0.1)
+        self.assertEqual(upper["spawn_rate4"], 0.8)
+        with auth_db() as db:
+            stored = db.execute(
+                "SELECT spawn_rate4_millis FROM gamer_ranked_runs WHERE run_id = ?",
+                (upper["run_id"],),
+            ).fetchone()
+        self.assertEqual(int(stored["spawn_rate4_millis"]), 800)
+
+    def test_ranked_run_lease_is_exclusive_and_replaceable(self):
+        first = create_ranked_run(
+            user_id=self.user_id,
+            request_id="lease-first",
+            ip_address="127.0.0.1",
+            lease_token=LEASE_TOKEN,
+        )
+        retried = create_ranked_run(
+            user_id=self.user_id,
+            request_id="lease-first",
+            ip_address="127.0.0.1",
+            lease_token=LEASE_TOKEN,
+        )
+        self.assertEqual(retried["run_id"], first["run_id"])
+        self.assertEqual(retried["lease_token"], LEASE_TOKEN)
+
+        with self.assertRaisesRegex(RuntimeError, "active_run_exists"):
+            create_ranked_run(
+                user_id=self.user_id,
+                request_id="lease-second",
+                ip_address="127.0.0.1",
+                lease_token="ranked-test-lease-token-0002",
+            )
+        with self.assertRaisesRegex(PermissionError, "lease_mismatch"):
+            heartbeat_ranked_run(
+                run_id=first["run_id"],
+                user_id=self.user_id,
+                lease_token="ranked-test-lease-token-wrong",
+            )
+        heartbeat = heartbeat_ranked_run(
+            run_id=first["run_id"],
+            user_id=self.user_id,
+            lease_token=LEASE_TOKEN,
+        )
+        self.assertEqual(heartbeat["status"], "active")
+        self.assertTrue(heartbeat["lease_expires_at"])
+
+        replacement = create_ranked_run(
+            user_id=self.user_id,
+            request_id="lease-replacement",
+            ip_address="127.0.0.1",
+            lease_token="ranked-test-lease-token-0002",
+            replace_run_id=first["run_id"],
+            replace_lease_token=LEASE_TOKEN,
+        )
+        self.assertEqual(get_ranked_run(
+            run_id=first["run_id"], user_id=self.user_id,
+        )["status"], "expired")
+        abandoned = abandon_ranked_run(
+            run_id=replacement["run_id"],
+            user_id=self.user_id,
+            lease_token=replacement["lease_token"],
+        )
+        self.assertEqual(abandoned["status"], "expired")
+
+    def test_ranked_submit_rejects_the_wrong_lease(self):
+        run = create_ranked_run(
+            user_id=self.user_id,
+            request_id="wrong-submit-lease",
+            ip_address="127.0.0.1",
+            lease_token=LEASE_TOKEN,
+        )
+        record, score, final_board = _completed_random_game(run["seed_hex"])
+        with self.assertRaisesRegex(PermissionError, "lease_mismatch"):
+            submit_ranked_run(
+                run_id=run["run_id"],
+                user_id=self.user_id,
+                score=score,
+                final_board_codes=final_board,
+                record_encoding=record,
+                ip_address="127.0.0.1",
+                lease_token="ranked-test-lease-token-wrong",
+            )
+
+    def test_expired_lease_allows_a_new_run_without_replacement_token(self):
+        first = create_ranked_run(
+            user_id=self.user_id,
+            request_id="expired-lease-first",
+            ip_address="127.0.0.1",
+            lease_token=LEASE_TOKEN,
+        )
+        with auth_db() as db:
+            db.execute(
+                "UPDATE gamer_ranked_runs SET lease_expires_at = ? WHERE run_id = ?",
+                ("2000-01-01T00:00:00+00:00", first["run_id"]),
+            )
+        second = create_ranked_run(
+            user_id=self.user_id,
+            request_id="expired-lease-second",
+            ip_address="127.0.0.1",
+            lease_token="ranked-test-lease-token-0002",
+        )
+        self.assertNotEqual(second["run_id"], first["run_id"])
+        expired = get_ranked_run(run_id=first["run_id"], user_id=self.user_id)
+        self.assertEqual(expired["status"], "expired")
+        self.assertEqual(expired["error_code"], "lease_expired")
+
     def test_pending_run_is_verified_and_published(self):
         run = create_ranked_run(
             user_id=self.user_id,
             request_id="request-1",
             ip_address="127.0.0.1",
+            lease_token=LEASE_TOKEN,
         )
         record, score, final_board = _completed_random_game(run["seed_hex"])
         submitted = submit_ranked_run(
@@ -346,6 +508,7 @@ class GamerRankedServiceTests(unittest.TestCase):
             final_board_codes=final_board,
             record_encoding=record,
             ip_address="127.0.0.1",
+            lease_token=run["lease_token"],
         )
         self.assertEqual(submitted["status"], "pending")
         self.assertTrue(process_one_pending_run())
@@ -372,6 +535,7 @@ class GamerRankedServiceTests(unittest.TestCase):
             user_id=self.user_id,
             request_id="priority-personal-best",
             ip_address="127.0.0.1",
+            lease_token=LEASE_TOKEN,
         )
         record, score, final_board = _completed_random_game(run["seed_hex"])
         submitted = submit_ranked_run(
@@ -381,6 +545,7 @@ class GamerRankedServiceTests(unittest.TestCase):
             final_board_codes=final_board,
             record_encoding=record,
             ip_address="127.0.0.1",
+            lease_token=run["lease_token"],
         )
         self.assertEqual(submitted["status"], "pending")
 
@@ -390,6 +555,7 @@ class GamerRankedServiceTests(unittest.TestCase):
             user_id=self.user_id,
             request_id="priority-top-100",
             ip_address="127.0.0.1",
+            lease_token=LEASE_TOKEN,
         )
         record, score, final_board = _completed_random_game(run["seed_hex"])
         self._insert_personal_best(score + 1000)
@@ -404,6 +570,7 @@ class GamerRankedServiceTests(unittest.TestCase):
             final_board_codes=final_board,
             record_encoding=record,
             ip_address="127.0.0.1",
+            lease_token=run["lease_token"],
         )
         self.assertEqual(submitted["status"], "pending")
 
@@ -413,6 +580,7 @@ class GamerRankedServiceTests(unittest.TestCase):
             user_id=self.user_id,
             request_id="ordinary-over-limit",
             ip_address="127.0.0.1",
+            lease_token=LEASE_TOKEN,
         )
         record, score, final_board = _completed_random_game(run["seed_hex"])
         self._insert_personal_best(score + 3000)
@@ -428,6 +596,7 @@ class GamerRankedServiceTests(unittest.TestCase):
                 final_board_codes=final_board,
                 record_encoding=record,
                 ip_address="127.0.0.1",
+                lease_token=run["lease_token"],
             )
 
     def test_weekly_best_is_kept_without_beating_all_time_best(self):
@@ -457,6 +626,7 @@ class GamerRankedServiceTests(unittest.TestCase):
             user_id=self.user_id,
             request_id="weekly-lower-than-all-time",
             ip_address="127.0.0.1",
+            lease_token=LEASE_TOKEN,
         )
         record, score, final_board = _completed_random_game(run["seed_hex"])
         submit_ranked_run(
@@ -466,6 +636,7 @@ class GamerRankedServiceTests(unittest.TestCase):
             final_board_codes=final_board,
             record_encoding=record,
             ip_address="127.0.0.1",
+            lease_token=run["lease_token"],
         )
         self.assertTrue(process_one_pending_run())
         verified = get_ranked_run(run_id=run["run_id"], user_id=self.user_id)

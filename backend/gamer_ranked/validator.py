@@ -16,7 +16,7 @@ from backend.replay_2048next import (
     decode_2048next_replay,
 )
 
-from .rules import DIRECTIONS, board_codes, evil_spawn, initial_board, legal_moves, random_spawn, simulate_move
+from .rules import DIRECTIONS, SPAWN_RATE4, board_codes, evil_spawn, initial_board, legal_moves, random_spawn, simulate_move
 
 
 MAX_RANKED_MOVES = 100_000
@@ -120,6 +120,7 @@ def validate_ranked_game(
     record_encoding: str,
     claimed_score: int,
     claimed_final_board: list[int],
+    spawn_rate4: float = SPAWN_RATE4,
 ) -> ValidatedGame:
     try:
         replay = decode_2048next_replay(record_encoding)
@@ -136,7 +137,10 @@ def validate_ranked_game(
     if rules_version != RANKED_RULES_VERSION:
         raise RankedValidationError("unsupported_rules")
 
-    board, expected_initial, rng = initial_board(seed_hex)
+    rate4 = float(spawn_rate4)
+    if not 0.1 <= rate4 <= 0.8:
+        raise RankedValidationError("spawn_rate_out_of_range")
+    board, expected_initial, rng = initial_board(seed_hex, rate4)
     if replay.initial_tiles != expected_initial:
         raise RankedValidationError("initial_tiles_mismatch")
 
@@ -203,7 +207,7 @@ def validate_ranked_game(
             expected_index, expected_exponent = (
                 evil_spawn(moved_board, depth=5)
                 if use_evil
-                else random_spawn(moved_board, rng)
+                else random_spawn(moved_board, rng, rate4)
             )
         except Exception as exc:
             raise RankedValidationError("spawn_validation_failed") from exc

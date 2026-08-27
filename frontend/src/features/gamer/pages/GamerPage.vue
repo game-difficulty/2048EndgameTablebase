@@ -14,6 +14,7 @@
               type="button"
               :class="['gamer-ranked-badge', `status-${rankedStatus}`]"
               :disabled="rankedStatus !== 'submission_failed'"
+              :title="rankedReasonKey ? $t(rankedReasonKey) : undefined"
               @click="retryRankedSubmission"
             >
               {{ $t(`gamer.ranked.status.${rankedStatus}`) }}
@@ -143,6 +144,7 @@ const {
   aiWorkerReady,
   rankedParticipationEnabled,
   rankedStatus,
+  ranked,
   triggerAction,
   toggleAI,
   updateSettings,
@@ -164,6 +166,15 @@ const visibleRankedStatuses = new Set([
   'submission_limited',
 ]);
 const showRankedStatus = computed(() => visibleRankedStatuses.has(rankedStatus.value));
+const rankedReasonKey = computed(() => ({
+  spawn_rate_out_of_range: 'gamer.ranked.reasons.spawnRateOutOfRange',
+  duplicate_tab: 'gamer.ranked.reasons.duplicateTab',
+  active_run_exists: 'gamer.ranked.reasons.activeRunExists',
+  lease_lost: 'gamer.ranked.reasons.leaseLost',
+  lease_required: 'gamer.ranked.reasons.leaseLost',
+  lease_mismatch: 'gamer.ranked.reasons.leaseLost',
+  user_changed: 'gamer.ranked.reasons.userChanged',
+}[ranked.value.errorCode] || ''));
 
 const matchOptions = computed(() => ([
   {
