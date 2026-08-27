@@ -4,7 +4,11 @@ from typing import Any
 
 import numpy as np
 
-from ..engine.base import BaseMinigameEngine
+from ..engine.base import (
+    BaseMinigameEngine,
+    trophy_level_for_exponent,
+    trophy_level_name,
+)
 
 
 PATTERNS: dict[str, np.ndarray] = {
@@ -101,19 +105,19 @@ class DesignMasterEngine(BaseMinigameEngine):
             return
         self.current_max_num = int(pattern_level)
         if self.current_max_num > self.max_num:
+            previous_trophy_level = int(self.is_passed)
             self.max_num = self.current_max_num
-            self.is_passed = {10: 3, 9: 2, 8: 1}.get(self.max_num, 4)
-            level = {10: "gold", 9: "silver", 8: "bronze"}.get(self.max_num, "gold")
+            trophy_level = trophy_level_for_exponent(self.max_num, 10)
+            self.is_passed = max(previous_trophy_level, trophy_level)
+            level = trophy_level_name(trophy_level)
+            if trophy_level > previous_trophy_level:
+                message = (
+                    f"You achieved {2 ** self.max_num}! "
+                    f"You get a {level} trophy!"
+                )
+            else:
+                message = f"You achieved {2 ** self.current_max_num}! Take it further!"
             self.queue_message(
                 "trophy",
-                {"level": level, "message": f"You achieved {2 ** self.max_num}! You get a {level} trophy!"},
-            )
-        else:
-            level = {10: "gold", 9: "silver", 8: "bronze"}.get(self.current_max_num, "gold")
-            self.queue_message(
-                "trophy",
-                {
-                    "level": level,
-                    "message": f"You achieved {2 ** self.current_max_num}! Take it further!",
-                },
+                {"level": level, "message": message},
             )

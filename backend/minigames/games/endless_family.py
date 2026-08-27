@@ -8,7 +8,7 @@ import numpy as np
 from engine_core.Calculator import count_zeros
 from Config import SingletonConfig
 
-from ..engine.base import BaseMinigameEngine
+from ..engine.base import BaseMinigameEngine, trophy_level_name
 
 
 class EndlessFamilyEngine(BaseMinigameEngine):
@@ -37,10 +37,10 @@ class EndlessFamilyEngine(BaseMinigameEngine):
         }
         return mapping.get(legacy_name, "explosions")
 
-    def _levels_for_variant(self) -> list[tuple[int, int, str | None]]:
+    def _levels_for_variant(self) -> list[tuple[int, int]]:
         if self.variant == "hybrid":
-            return [(150000, 4, None), (100000, 3, "gold"), (50000, 2, "silver"), (20000, 1, "bronze")]
-        return [(300000, 4, None), (200000, 3, "gold"), (100000, 2, "silver"), (40000, 1, "bronze")]
+            return [(150000, 4), (100000, 3), (50000, 2), (20000, 1)]
+        return [(300000, 4), (200000, 3), (100000, 2), (40000, 1)]
 
     def load_legacy_extra(self, extra_state: list[Any]) -> None:
         if self.variant == "airraid":
@@ -80,15 +80,16 @@ class EndlessFamilyEngine(BaseMinigameEngine):
         self.save_to_config()
 
     def _queue_score_trophy(self) -> None:
-        level_name = None
-        for score_threshold, level_number, trophy_name in self.levels:
+        earned_level = 0
+        for score_threshold, level_number in self.levels:
             if self.score >= score_threshold and self.current_level < level_number:
                 self.is_passed = max(self.is_passed, level_number)
                 self.current_level = level_number
-                level_name = trophy_name
+                earned_level = level_number
                 break
-        if not level_name:
+        if not earned_level:
             return
+        level_name = trophy_level_name(earned_level)
         score_text = f"{self.max_score // 1000}k"
         message = (
             f"You achieved {score_text} score! You get a {level_name} trophy!"

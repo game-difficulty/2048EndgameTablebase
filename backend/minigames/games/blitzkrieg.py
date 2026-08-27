@@ -5,7 +5,11 @@ from typing import Any
 
 import numpy as np
 
-from ..engine.base import BaseMinigameEngine
+from ..engine.base import (
+    BaseMinigameEngine,
+    trophy_level_for_exponent,
+    trophy_level_name,
+)
 
 
 class BlitzkriegEngine(BaseMinigameEngine):
@@ -82,11 +86,14 @@ class BlitzkriegEngine(BaseMinigameEngine):
         if not self.is_over:
             return
         if self.max_num > 9:
-            self.is_passed = {12: 3, 11: 2, 10: 1}.get(self.max_num, 4)
+            self.is_passed = max(
+                self.is_passed,
+                trophy_level_for_exponent(self.max_num, 12),
+            )
         if self.current_max_num <= 9:
             return
-        level = {12: "gold", 11: "silver", 10: "bronze"}.get(
-            self.current_max_num, "gold"
+        level = trophy_level_name(
+            trophy_level_for_exponent(self.current_max_num, 12)
         )
         if self.score == self.max_score:
             message = f"You achieved {self.score} score! You get a {level} trophy!"

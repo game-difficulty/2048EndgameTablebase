@@ -21,6 +21,29 @@ DirectionMap = {
 }
 
 
+TROPHY_LEVEL_NAMES = {
+    1: "bronze",
+    2: "silver",
+    3: "gold",
+    4: "grand",
+}
+
+
+def trophy_level_for_exponent(exponent: int, gold_exponent: int) -> int:
+    exponent = int(exponent)
+    if exponent > gold_exponent:
+        return 4
+    return {
+        gold_exponent: 3,
+        gold_exponent - 1: 2,
+        gold_exponent - 2: 1,
+    }.get(exponent, 0)
+
+
+def trophy_level_name(level: int) -> str:
+    return TROPHY_LEVEL_NAMES.get(int(level), "")
+
+
 @dataclass
 class AnimationState:
     appear_index: int | None = None
@@ -237,29 +260,21 @@ class BaseMinigameEngine:
         if self.current_max_num <= 9:
             return
         if self.current_max_num > previous_peak:
+            trophy_level = trophy_level_for_exponent(self.current_max_num, 12)
+            previous_trophy_level = int(self.is_passed)
+            self.is_passed = max(previous_trophy_level, trophy_level)
+            level = trophy_level_name(trophy_level)
             if self.current_max_num > previous_best:
-                self.is_passed = {12: 3, 11: 2, 10: 1}.get(self.max_num, 4)
-                level = {12: "gold", 11: "silver", 10: "bronze"}.get(
-                    self.current_max_num, "gold"
-                )
-                self.queue_message(
-                    "trophy",
-                    {
-                        "level": level,
-                        "message": f"You achieved {2**self.max_num}! You get a {level} trophy!",
-                    },
-                )
+                if trophy_level > previous_trophy_level:
+                    message = (
+                        f"You achieved {2**self.max_num}! "
+                        f"You get a {level} trophy!"
+                    )
+                else:
+                    message = f"You achieved {2**self.current_max_num}! Take it further!"
             else:
-                level = {12: "gold", 11: "silver", 10: "bronze"}.get(
-                    self.current_max_num, "gold"
-                )
-                self.queue_message(
-                    "trophy",
-                    {
-                        "level": level,
-                        "message": f"You achieved {2**self.current_max_num}! Take it further!",
-                    },
-                )
+                message = f"You achieved {2**self.current_max_num}! Take it further!"
+            self.queue_message("trophy", {"level": level, "message": message})
 
     def check_game_over(self) -> None:
         was_over = bool(self.is_over)
