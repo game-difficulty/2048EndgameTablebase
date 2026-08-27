@@ -32,6 +32,81 @@ def encoded(values):
 
 
 class TrainerOptimisticMoveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_pattern_resets_tablebase_state_without_resetting_board(self):
+        session = GameSession("trainer_empty_pattern")
+        session.board_encoded = encoded([2, 4, 8, 16, *([0] * 12)])
+        session.score = 128
+        session.current_pattern = "3x4_4096"
+        session.pattern_settings = ["3x4", "4096"]
+        session.use_variant = True
+        session.tablebase_provider_kind = "remote"
+        session.tablebase_status = "loaded"
+        session.success_rate_dtype = "uint32"
+        session.spawn_mode = 2
+        session.trainer_results = {"left": 1}
+        session.trainer_results_board = session.board_encoded
+        query_handle = unittest.mock.Mock()
+        session.trainer_query_handle = query_handle
+        session.trainer_query_task = object()
+        manager = RecordingManager()
+
+        handled = await handle_trainer_action(
+            Action.TRAINER_SET_EMPTY_PATTERN,
+            {},
+            session,
+            object(),
+            manager,
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(session.board_encoded, encoded([2, 4, 8, 16, *([0] * 12)]))
+        self.assertEqual(session.score, 128)
+        self.assertEqual(session.current_pattern, "")
+        self.assertEqual(session.pattern_settings, ["", ""])
+        self.assertFalse(session.use_variant)
+        self.assertEqual(session.tablebase_provider_kind, "")
+        self.assertEqual(session.tablebase_status, "not_selected")
+        self.assertEqual(session.success_rate_dtype, "?")
+        self.assertEqual(session.spawn_mode, 0)
+        self.assertEqual(session.trainer_results, {})
+        self.assertIsNone(session.trainer_query_handle)
+        self.assertIsNone(session.trainer_query_task)
+        query_handle.cancel.assert_called_once_with()
+        self.assertEqual(manager.states, [{}])
+
+    async def test_empty_pattern_board_edit_does_not_start_tablebase_query(self):
+        session = GameSession("trainer_empty_pattern_board_edit")
+        session.user_id = 1
+        manager = RecordingManager()
+        websocket = RecordingWebSocket()
+        target = encoded([2, 4, 8, 16, *([0] * 12)])
+
+        await handle_trainer_action(
+            Action.TRAINER_SET_EMPTY_PATTERN,
+            {},
+            session,
+            websocket,
+            manager,
+        )
+        with patch(
+            "backend.handlers.tablebase_query.handle_tablebase_query_action",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as query:
+            await handle_trainer_action(
+                Action.SET_BOARD,
+                {
+                    "hex_str": f"{int(target):016x}",
+                    "client_optimistic": True,
+                    "query_id": "must-not-run",
+                },
+                session,
+                websocket,
+                manager,
+            )
+
+        query.assert_not_awaited()
+
     async def test_optimistic_board_edit_uses_lightweight_ack(self):
         session = GameSession("trainer_optimistic_board_edit")
         session.board_encoded = encoded([0] * 16)

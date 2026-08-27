@@ -634,6 +634,7 @@ def _usage_for_ws_action(action: str | None) -> tuple[str, str] | None:
 def _action_requires_auth(action: str | None) -> bool:
     return action in {
         Action.TRAINER_SET_FILEPATH,
+        Action.TRAINER_SET_EMPTY_PATTERN,
         Action.TRAINER_GET_RESULTS,
         Action.TRAINER_DEFAULT,
         Action.TRAINER_MOVE,

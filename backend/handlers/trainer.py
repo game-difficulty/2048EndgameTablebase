@@ -72,7 +72,12 @@ async def _start_requested_tablebase_query(
     websocket: WebSocket,
 ) -> None:
     query_id = str(payload.get("query_id") or "").strip()[:160]
-    if not query_id or session.user_id is None or session.moved == 1:
+    if (
+        not query_id
+        or not session.current_pattern
+        or session.user_id is None
+        or session.moved == 1
+    ):
         return
     from .tablebase_query import handle_tablebase_query_action
 
@@ -124,6 +129,33 @@ async def handle_trainer_action(
     manager: ConnectionManager,
 ) -> bool:
     spawn_rate4 = float(SingletonConfig().config.get("4_spawn_rate", 0.1))
+
+    if action == Action.TRAINER_SET_EMPTY_PATTERN:
+        current_board = np_u64(session.board_encoded)
+        current_score = int(session.score)
+        query_handle = getattr(session, "trainer_query_handle", None)
+        if query_handle is not None:
+            query_handle.cancel()
+        session.trainer_query_handle = None
+        session.trainer_query_task = None
+        _clear_record_replay(session)
+        session.board_encoded = current_board
+        session.score = current_score
+        session.history = [(session.board_encoded, session.score)]
+        session.move_history = [None]
+        session.played_length = 0
+        session.moved = 0
+        session.current_pattern = ""
+        session.pattern_settings = ["", ""]
+        session.use_variant = False
+        session.tablebase_provider_kind = ""
+        session.tablebase_status = "not_selected"
+        session.success_rate_dtype = "?"
+        if session.spawn_mode in (1, 2):
+            session.spawn_mode = 0
+        _clear_trainer_results(session)
+        await manager.send_state(websocket)
+        return True
 
     if action == Action.TRAINER_SET_FILEPATH:
         pattern = str(payload.get("pattern", "L3")).strip()
