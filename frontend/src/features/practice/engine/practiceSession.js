@@ -96,6 +96,17 @@ const resolveNextContext = (nextContext, fallback) => (
     : (nextContext ?? fallback)
 );
 
+const replaceLastHistoryContext = (history, context) => {
+  if (!Array.isArray(history) || history.length === 0) return history;
+  return [
+    ...history.slice(0, -1),
+    {
+      ...history.at(-1),
+      context: cloneContext(context),
+    },
+  ];
+};
+
 export function selectRandomSpawn(board, spawnRate4 = 0.1, randomSource = Math.random) {
   const empty = cloneBoard(board)
     .map((value, index) => (value === 0 ? index : -1))
@@ -247,22 +258,24 @@ export function reducePracticeSession(state, command = {}) {
     case 'UNDO': {
       if (state.phase === 'awaiting_spawn') {
         const current = state.history.at(-1);
+        const context = resolveNextContext(command.nextContext, current.context);
         return accept(nextState(state, {
           board: current.board,
           score: current.score,
-          context: current.context,
-          history: state.history,
+          context,
+          history: replaceLastHistoryContext(state.history, context),
           transitionKind: 'snapshot',
         }));
       }
       if (state.history.length <= 1) return reject(state, 'history_empty');
       const history = state.history.slice(0, -1);
       const previous = history.at(-1);
+      const context = resolveNextContext(command.nextContext, previous.context);
       return accept(nextState(state, {
         board: previous.board,
         score: previous.score,
-        context: previous.context,
-        history,
+        context,
+        history: replaceLastHistoryContext(history, context),
         transitionKind: 'snapshot',
       }));
     }

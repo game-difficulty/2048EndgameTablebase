@@ -23,6 +23,10 @@ import {
   RANKED_RECORD,
 } from '../engine/rankedReplayEncoder';
 import {
+  GAMER_SPAWN_POLICY,
+  resolveGamerSpawnPolicy,
+} from '../engine/spawnPolicy.js';
+import {
   abandonRankedRun,
   createRankedLeaseToken,
   createRankedRequestId,
@@ -333,6 +337,7 @@ export function useGamerSession(activeRef) {
   let rankedRunLock = null;
   let moveRunning = false;
   let gameGeneration = 0;
+  let randomAfterUndo = false;
   let wasmPrewarmed = false;
   const history = [];
 
@@ -358,6 +363,7 @@ export function useGamerSession(activeRef) {
       score: score.value,
       currentHex: currentHex.value,
       specialTiles: specialTiles.value,
+      randomAfterUndo,
       ranked: {
         ...ranked.value,
         rngState: rankedRng?.exportState?.() || ranked.value.rngState || null,
@@ -414,6 +420,23 @@ export function useGamerSession(activeRef) {
   const disqualifyRanked = (reason) => {
     if (!ranked.value.runId || !ranked.value.eligible) return;
     updateRanked({ eligible: false, status: 'ineligible', errorCode: reason || '' });
+  };
+
+  const leaveRankedRunAfterUndo = () => {
+    const runId = ranked.value.runId;
+    const leaseToken = ranked.value.leaseToken;
+    if (!runId) return false;
+    clearRankedHeartbeatTimer();
+    rankedRunLock?.release();
+    if (leaseToken) abandonRankedRun(runId, leaseToken).catch(() => {});
+    rankedRng = null;
+    ranked.value = emptyRankedState({
+      status: 'ineligible',
+      errorCode: 'undo_used',
+      usedUndo: true,
+      userId: authUser.value?.id || null,
+    });
+    return true;
   };
 
   const loseRankedOwnership = (reason = 'lease_lost') => {
@@ -818,7 +841,14 @@ export function useGamerSession(activeRef) {
 
     const nextScore = score.value.current + simulated.scoreDelta;
     let spawn = null;
-    if (ranked.value.runId && ranked.value.eligible && rankedRng) {
+    const spawnPolicy = resolveGamerSpawnPolicy({
+      randomAfterUndo,
+      rankedEligible: Boolean(ranked.value.runId && ranked.value.eligible),
+      hasRankedRng: Boolean(rankedRng),
+    });
+    if (spawnPolicy === GAMER_SPAWN_POLICY.RANDOM) {
+      spawn = randomSpawn(simulated.board, configuredSpawnRate4());
+    } else if (spawnPolicy === GAMER_SPAWN_POLICY.RANKED) {
       const currentDifficulty = Math.max(0, Math.min(100, Number(difficulty.value) || 0));
       const runSpawnRate4 = Number(ranked.value.spawnRate4 ?? SPAWN_RATE4);
       const branch = rankedRng.nextFloat();
@@ -842,6 +872,7 @@ export function useGamerSession(activeRef) {
         : await spawnEvil(simulated.board, { spawnRate4 });
     }
     if (moveGeneration !== gameGeneration) return false;
+    randomAfterUndo = false;
     const nextBoard = simulated.board.slice(0, 16);
     if (spawn) {
       nextBoard[spawn.index] = spawn.value;
@@ -894,6 +925,7 @@ export function useGamerSession(activeRef) {
 
   const applyNewGameBoard = (nextBoard) => {
     stopAI();
+    randomAfterUndo = false;
     specialTiles.value = [];
     applyBoardSnapshot(nextBoard);
     score.value = {
@@ -997,12 +1029,8 @@ export function useGamerSession(activeRef) {
     gameGeneration += 1;
     stopAI();
     history.pop();
-    if (ranked.value.runId && ranked.value.eligible) {
-      const delta = rankedDeltaMs();
-      appendRankedRecord([RANKED_RECORD.UNDO, 1, delta], 1 + ulebLength(delta));
-      updateRanked({ usedUndo: true });
-      disqualifyRanked('undo_used');
-    }
+    leaveRankedRunAfterUndo();
+    randomAfterUndo = true;
     const previous = history[history.length - 1];
     specialTiles.value = previous.specialTiles;
     applyBoardSnapshot(applySpecialTiles(previous.board, previous.specialTiles));
@@ -1027,6 +1055,7 @@ export function useGamerSession(activeRef) {
       updateRanked({ usedSetBoard: true });
       disqualifyRanked('set_board_used');
     }
+    randomAfterUndo = false;
     specialTiles.value = [];
     applyBoardSnapshot(boardFromHex(normalized));
     score.value = {
@@ -1145,6 +1174,7 @@ export function useGamerSession(activeRef) {
       return;
     }
     specialTiles.value = Array.isArray(saved.specialTiles) ? saved.specialTiles : [];
+    randomAfterUndo = Boolean(saved.randomAfterUndo);
     applyBoardSnapshot(applySpecialTiles(saved.board, specialTiles.value));
     score.value = {
       current: Number(saved.score?.current) || 0,
@@ -1172,6 +1202,7 @@ export function useGamerSession(activeRef) {
       });
       rankedRng = new Xoshiro128StarStar(restoredRanked.rngState);
       ranked.value = restoredRanked;
+      if (ranked.value.eligible) randomAfterUndo = false;
       if (
         authReady.value
         && Number(ranked.value.userId) !== Number(authUser.value?.id || 0)

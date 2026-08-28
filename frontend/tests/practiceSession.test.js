@@ -41,6 +41,28 @@ test('move and undo are local monotonic state transitions', () => {
   assert.equal(undone.state.transition.kind, 'snapshot');
 });
 
+test('undo can preserve a live random cursor while restoring the board', () => {
+  const initial = createPracticeSession({
+    board: [2, 2, ...new Array(14).fill(0)],
+    context: { state: [1, 2, 3, 4], turn: 0 },
+  });
+  const moved = reducePracticeSession(initial, {
+    type: 'MOVE_RANDOM',
+    direction: 'left',
+    randomSource: rolls(0, 0),
+    nextContext: { state: [5, 6, 7, 8], turn: 1 },
+  }).state;
+  const liveCursor = { state: [9, 10, 11, 12], turn: 2 };
+  const undone = reducePracticeSession(moved, {
+    type: 'UNDO',
+    nextContext: liveCursor,
+  }).state;
+
+  assert.deepEqual(undone.board, initial.board);
+  assert.deepEqual(undone.context, liveCursor);
+  assert.deepEqual(undone.history.at(-1).context, liveCursor);
+});
+
 test('late spawn responses cannot mutate a newer revision', () => {
   const initial = createPracticeSession({
     board: [2, 2, ...new Array(14).fill(0)],

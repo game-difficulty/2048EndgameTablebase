@@ -1518,7 +1518,12 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     clearQueuedMoveDirections();
     if (!requireAuth()) return;
     pendingSpawnQuery = null;
-    const reduced = reducePracticeSession(localPracticeSession, { type: 'UNDO' });
+    const reduced = reducePracticeSession(localPracticeSession, {
+      type: 'UNDO',
+      // Board history is undoable; the random stream is not. Replaying the
+      // same move consumes the next spawn while remaining prefetchable.
+      nextContext: trainerPrefetchState,
+    });
     if (!reduced.accepted) return;
     localPracticeSession = reduced.state;
     syncLocalPracticeSession({ animate: false });
