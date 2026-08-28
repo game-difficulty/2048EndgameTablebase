@@ -76,7 +76,7 @@
         </div>
 
         <div ref="boardHotkeyTarget" tabindex="-1" class="tester-board-shell mx-auto w-full outline-none focus:outline-none">
-          <BaseBoard :board="board" :metadata="metadata" :transition="transition" :dis32k="dis32k" :is-variant="isVariant" @swipe="handleMove" />
+          <BaseBoard :frame="boardFrame" :dis32k="dis32k" :is-variant="isVariant" @swipe="handleMove" />
         </div>
 
         <div class="mt-4 grid grid-cols-3 gap-2">
@@ -255,8 +255,7 @@ const openTrainerView = () => {
 const {
   wsStatus,
   board,
-  metadata,
-  transition,
+  boardFrame,
   dis32k,
   showInsights,
   availableTargetsForPattern,

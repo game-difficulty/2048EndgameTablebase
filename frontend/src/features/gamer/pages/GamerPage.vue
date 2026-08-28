@@ -82,7 +82,7 @@
       </div>
 
       <div ref="boardHotkeyTarget" tabindex="-1" class="w-full outline-none focus:outline-none">
-        <BaseBoard :board="board" :metadata="metadata" :transition="transition" @swipe="handleBoardSwipe" />
+        <BaseBoard :frame="boardFrame" @swipe="handleBoardSwipe" />
       </div>
 
       <div class="w-full mt-6 bg-ctrl-bg rounded-md p-4 flex flex-col space-y-4 shadow-sm">
@@ -133,8 +133,7 @@ const boardHotkeyTarget = ref(null);
 
 const {
   board,
-  metadata,
-  transition,
+  boardFrame,
   score,
   wsStatus,
   aiEnabled,

@@ -1,6 +1,10 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import { useAppSettingsStore } from '../../../app/useAppSettings';
+import {
+  createSnapshotBoardFrame,
+  createTransitionBoardFrame,
+} from '../../../components/boardFrame.js';
 import { useAuthState } from '../../../services/auth/authState';
 import {
   fetchTablebaseCatalog,
@@ -71,8 +75,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   const clientId = getStableWsClientId('trainer');
 
   const board = ref([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-  const metadata = ref(null);
-  const transition = ref(null);
+  const boardFrame = ref(createSnapshotBoardFrame(0, board.value));
   const hexInput = ref('');
   const cellPalette = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768];
   const currentPaletteValue = ref(null);
@@ -138,6 +141,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   const fullMoves = ref([]);
 
   let client = null;
+  let boardFrameRevision = 0;
   let initialStateSeen = false;
   let defaultTablebaseAutoApplyAttempted = false;
 
@@ -176,8 +180,14 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   const syncLocalPracticeSession = ({ animate = true } = {}) => {
     board.value = [...localPracticeSession.board];
-    metadata.value = animate ? (localPracticeSession.transition?.metadata || {}) : {};
-    transition.value = animate ? (localPracticeSession.transition || null) : null;
+    boardFrameRevision += 1;
+    boardFrame.value = animate
+      ? createTransitionBoardFrame(
+        boardFrameRevision,
+        localPracticeSession.transition,
+        localPracticeSession.board,
+      )
+      : createSnapshotBoardFrame(boardFrameRevision, localPracticeSession.board);
     currentBoardHex.value = localPracticeSession.boardHex;
     hexInput.value = localPracticeSession.boardHex;
     awaitingSpawn.value = localPracticeSession.phase === 'awaiting_spawn';
@@ -1807,8 +1817,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     hexInput,
     setBoard,
     board,
-    metadata,
-    transition,
+    boardFrame,
     dis32k,
     handleCellClick,
     awaitingSpawn,

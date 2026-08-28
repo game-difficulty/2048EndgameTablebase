@@ -2,6 +2,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwnership';
 import { useAppSettingsStore } from '../../../app/useAppSettings';
+import { createBoardFrame, createSnapshotBoardFrame } from '../../../components/boardFrame.js';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 
@@ -32,7 +33,7 @@ export function useNotebookSession(activeRef) {
   const wsStatus = ref('connecting');
   const dis32k = ref(false);
   const board = ref([...DEFAULT_BOARD]);
-  const metadata = ref({});
+  const boardFrame = ref(createSnapshotBoardFrame(0, board.value));
   const availablePatterns = ref([]);
   const selectedPattern = ref('');
   const patternMenuOpen = ref(false);
@@ -53,6 +54,7 @@ export function useNotebookSession(activeRef) {
   const backendReady = ref(false);
 
   let client = null;
+  let boardFrameRevision = 0;
   let nextCountdownTimer = null;
 
   const currentPatternDisplay = computed(() => selectedPattern.value || '--');
@@ -109,10 +111,20 @@ export function useNotebookSession(activeRef) {
     }, 50);
   };
 
-  const syncBoard = (rawBoard) => {
-    board.value = Array.isArray(rawBoard) && rawBoard.length === 16
+  const syncBoard = (rawBoard, animation = null) => {
+    const fromBoard = board.value.slice(0, 16);
+    const toBoard = Array.isArray(rawBoard) && rawBoard.length === 16
       ? rawBoard.map((value) => Number(value) || 0)
       : [...DEFAULT_BOARD];
+    board.value = toBoard;
+    boardFrameRevision += 1;
+    boardFrame.value = createBoardFrame({
+      revision: boardFrameRevision,
+      kind: 'move',
+      fromBoard,
+      toBoard,
+      metadata: animation,
+    });
   };
 
   const syncNotebookThreshold = (rawThreshold) => {
@@ -147,8 +159,7 @@ export function useNotebookSession(activeRef) {
     } else if (selectedPattern.value && !availablePatterns.value.includes(selectedPattern.value)) {
       selectedPattern.value = availablePatterns.value[0] || '';
     }
-    syncBoard(payload?.board);
-    metadata.value = payload?.animation || {};
+    syncBoard(payload?.board, payload?.animation || null);
     currentHex.value = typeof payload?.hex_str === 'string' ? payload.hex_str : currentHex.value;
     combo.value = Number(payload?.feedback?.combo ?? payload?.combo ?? combo.value) || 0;
     remaining.value = Number(payload?.feedback?.remaining ?? payload?.remaining ?? remaining.value) || 0;
@@ -348,7 +359,7 @@ export function useNotebookSession(activeRef) {
   return {
     wsStatus,
     board,
-    metadata,
+    boardFrame,
     dis32k,
     availablePatterns,
     selectedPattern,

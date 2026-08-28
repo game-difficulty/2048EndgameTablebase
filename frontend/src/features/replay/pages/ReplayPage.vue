@@ -48,7 +48,7 @@
         </div>
 
         <div class="replay-board-shell mx-auto w-full">
-          <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @swipe="handleBoardSwipe" />
+          <BaseBoard :frame="boardFrame" :dis32k="dis32k" :is-variant="isVariant" @swipe="handleBoardSwipe" />
         </div>
       </section>
 
@@ -206,7 +206,7 @@ const handleBoardSwipe = (direction) => {
 
 const {
   board,
-  metadata,
+  boardFrame,
   currentHex,
   loaded,
   currentStep,

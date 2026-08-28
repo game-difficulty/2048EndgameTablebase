@@ -112,9 +112,7 @@
 
         <div ref="boardHotkeyTarget" tabindex="-1" class="w-full outline-none focus:outline-none">
           <BaseBoard
-            :board="board"
-            :metadata="metadata"
-            :transition="transition"
+            :frame="boardFrame"
             :dis32k="dis32k"
             :is-variant="isVariant"
             @cell-click="handleCellClick"
@@ -322,8 +320,7 @@ const {
   hexInput,
   setBoard,
   board,
-  metadata,
-  transition,
+  boardFrame,
   dis32k,
   handleCellClick,
   awaitingSpawn,

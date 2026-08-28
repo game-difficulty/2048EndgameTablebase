@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n';
 
 import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwnership';
 import { useAppSettingsStore } from '../../../app/useAppSettings';
+import { createBoardFrame, createSnapshotBoardFrame } from '../../../components/boardFrame.js';
 import { useAuthState } from '../../../services/auth/authState';
 import { pickSingleBrowserFile, readFileAsArrayBuffer } from '../../../services/files/browserFiles';
 import { isVariantPattern } from '../../../utils/patternCategories';
@@ -50,7 +51,7 @@ export function useReplaySession(activeRef, emit) {
   const evaluationColorPalette = ['#2e7d32', '#7cb342', '#c0ca33', '#fb8c00', '#f4511e', '#e53935', '#b71c1c'];
 
   const board = ref(new Array(16).fill(0));
-  const metadata = ref({});
+  const boardFrame = ref(createSnapshotBoardFrame(0, board.value));
   const currentHex = ref('0000000000000000');
   const loaded = ref(false);
   const replayStatus = ref('');
@@ -80,6 +81,7 @@ export function useReplaySession(activeRef, emit) {
   const loadError = ref('');
 
   let controller = null;
+  let boardFrameRevision = 0;
   let demoTimer = null;
   let positionTimer = null;
   let sourcePersistenceHandle = null;
@@ -299,8 +301,17 @@ export function useReplaySession(activeRef, emit) {
   };
 
   const applyState = (state) => {
-    board.value = state.board;
-    metadata.value = state.animation || {};
+    const fromBoard = board.value.slice(0, 16);
+    const toBoard = Array.isArray(state.board) ? state.board.slice(0, 16) : new Array(16).fill(0);
+    board.value = toBoard;
+    boardFrameRevision += 1;
+    boardFrame.value = createBoardFrame({
+      revision: boardFrameRevision,
+      kind: 'move',
+      fromBoard,
+      toBoard,
+      metadata: state.animation || null,
+    });
     currentHex.value = state.hex_str;
     loaded.value = !!state.loaded;
     replayStatus.value = state.status || '';
@@ -567,7 +578,7 @@ export function useReplaySession(activeRef, emit) {
 
   return {
     board,
-    metadata,
+    boardFrame,
     currentHex,
     loaded,
     replayStatus,

@@ -48,21 +48,17 @@
 <script setup>
 import { ref, watch, nextTick, onUnmounted } from 'vue';
 
+import {
+  boardFrameRenderMode,
+  cloneBoard,
+} from './boardFrame.js';
+
 const emit = defineEmits(['cell-click', 'swipe']);
 
 const props = defineProps({
-  board: {
-    type: Array,
-    required: true,
-    default: () => new Array(16).fill(0)
-  },
-  metadata: {
+  frame: {
     type: Object,
-    default: null
-  },
-  transition: {
-    type: Object,
-    default: null
+    required: true
   },
   dis32k: {
     type: Boolean,
@@ -81,7 +77,8 @@ let animTimeout = null;
 let revealMergeTimeout = null;
 let revealAppearTimeout = null;
 let animationEpoch = 0;
-let lastConsumedTransitionId = null;
+let lastConsumedFrameRevision = null;
+let settledBoard = cloneBoard(props.frame?.toBoard);
 const MERGE_GLOW_MIN_VALUE = 2048;
 const MERGE_GLOW_STEPS = 5;
 const SWIPE_THRESHOLD_PX = 28;
@@ -97,23 +94,6 @@ function isVariantNonMergingValue(value) {
 
 function shouldRenderAsActiveTile(value) {
   return Number(value) > 0 && !isVariantWallValue(value);
-}
-
-function hasMoveAnimationMetadata(metadata) {
-  if (!metadata || typeof metadata !== 'object') return false;
-  const appearTile = metadata.appear_tile;
-  const hasAppearTile = !!appearTile
-    && Number.isInteger(Number(appearTile.index))
-    && Number(appearTile.index) >= 0
-    && Number(appearTile.index) < 16
-    && Number(appearTile.value) > 0;
-  const { direction, slide_distances: slideDistances, pop_positions: popPositions } = metadata;
-  const hasDirectionalAnimation = ['left', 'right', 'up', 'down'].includes(direction)
-    && Array.isArray(slideDistances)
-    && slideDistances.length === 16
-    && Array.isArray(popPositions)
-    && popPositions.length === 16;
-  return hasDirectionalAnimation || hasAppearTile;
 }
 
 const clearTouchGesture = () => {
@@ -255,60 +235,50 @@ const revealAppearingTiles = () => {
     });
 };
 
-const syncToBoardRaw = (sourceBoard = props.board) => {
+const syncToBoardRaw = (sourceBoard = props.frame?.toBoard) => {
     fastForwardAnimations(true);
+    const normalizedBoard = cloneBoard(sourceBoard);
     const nextTiles = [];
     for(let i=0; i<16; i++) {
-        if (shouldRenderAsActiveTile(sourceBoard[i])) {
+        if (shouldRenderAsActiveTile(normalizedBoard[i])) {
             nextTiles.push(withGlowDefaults({
                 // Snapshot updates use cell-stable keys so undo/seek does not
                 // destroy and recreate every visible tile.
                 id: `snapshot-${i}`,
                 row: Math.floor(i / 4),
                 col: i % 4,
-                value: sourceBoard[i],
+                value: normalizedBoard[i],
                 isDying: false,
                 isMerged: false,
                 isNew: false,
                 isHidden: false,
-                isInterrupting: false
+                isInterrupting: true
             }));
         }
     }
     activeTiles.value = nextTiles;
+    settledBoard = normalizedBoard;
 };
 
-watch(() => [props.transition?.id ?? null, props.board, props.metadata, props.isVariant], async () => {
-    const explicitTransition = props.transition && props.transition.id != null
-      ? props.transition
-      : null;
-    if (explicitTransition) {
-        const transitionId = String(explicitTransition.id);
-        if (transitionId === lastConsumedTransitionId) return;
-        lastConsumedTransitionId = transitionId;
-    } else {
-        lastConsumedTransitionId = null;
-    }
+watch(() => [props.frame?.revision ?? null, props.isVariant], async ([revision, variant], previous = []) => {
+    const frame = props.frame;
+    if (!frame) return;
+    const frameRevision = String(revision ?? '');
+    const variantChanged = previous.length > 0 && variant !== previous[1];
+    if (!variantChanged && frameRevision === lastConsumedFrameRevision) return;
+    lastConsumedFrameRevision = frameRevision;
 
     const epoch = ++animationEpoch;
-    const animationMetadata = explicitTransition?.metadata || props.metadata;
-    const newBoard = Array.isArray(explicitTransition?.toBoard)
-      ? explicitTransition.toBoard
-      : props.board;
-    if (!hasMoveAnimationMetadata(animationMetadata)) {
-        // Init or resync without animation
-        clearAnimationTimers();
+    clearAnimationTimers();
+    fastForwardAnimations(true);
+
+    const newBoard = cloneBoard(frame.toBoard);
+    if (variantChanged || boardFrameRenderMode(settledBoard, frame) !== 'animate') {
         syncToBoardRaw(newBoard);
         return;
     }
-    
-    // Flush old animations logically
-    clearAnimationTimers();
-    if (Array.isArray(explicitTransition?.fromBoard)) {
-        syncToBoardRaw(explicitTransition.fromBoard);
-    } else {
-        fastForwardAnimations(true);
-    }
+
+    const animationMetadata = frame.metadata;
     activeTiles.value.forEach(tile => {
         tile.glowStepsRemaining = decayGlowSteps(tile);
     });
@@ -390,6 +360,7 @@ watch(() => [props.transition?.id ?? null, props.board, props.metadata, props.is
     }
     
     activeTiles.value = newActive;
+    settledBoard = newBoard;
     
     revealMergeTimeout = setTimeout(() => {
         if (epoch !== animationEpoch) return;
@@ -409,7 +380,7 @@ watch(() => [props.transition?.id ?? null, props.board, props.metadata, props.is
         animTimeout = null;
     }, 300);
 
-}, { deep: true });
+});
 
 // Initial setup render
 syncToBoardRaw();
@@ -433,7 +404,7 @@ const getTileDisplayValue = (value) => {
 };
 
 const getBackgroundCellStyle = (index) => (
-  isVariantWallValue(props.board[index])
+  isVariantWallValue(props.frame?.toBoard?.[index])
     ? { backgroundColor: 'var(--color-board-bg)' }
     : null
 );

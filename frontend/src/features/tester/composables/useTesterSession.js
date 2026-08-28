@@ -2,6 +2,10 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwnership';
 import { useAppSettingsStore } from '../../../app/useAppSettings';
+import {
+  createSnapshotBoardFrame,
+  createTransitionBoardFrame,
+} from '../../../components/boardFrame.js';
 import { useAuthState } from '../../../services/auth/authState';
 import { downloadBlob, downloadText } from '../../../services/files/browserFiles';
 import {
@@ -95,8 +99,7 @@ export function useTesterSession(activeRef) {
   const wsStatus = ref('connecting');
   const clientId = getStableWsClientId('tester');
   const board = ref(new Array(16).fill(0));
-  const metadata = ref({});
-  const transition = ref(null);
+  const boardFrame = ref(createSnapshotBoardFrame(0, board.value));
   const dis32k = ref(false);
   const currentLanguage = ref('en');
   const showInsights = ref(true);
@@ -144,6 +147,7 @@ export function useTesterSession(activeRef) {
   const catalogVersion = ref('');
 
   let client = null;
+  let boardFrameRevision = 0;
   let bootstrapSelectionSent = false;
   let initialStateSeen = false;
   let nextQueryId = 0;
@@ -196,8 +200,10 @@ export function useTesterSession(activeRef) {
     if (!localTesterSession?.practice) return false;
     const practice = localTesterSession.practice;
     board.value = [...practice.board];
-    metadata.value = animate ? (practice.transition?.metadata || {}) : {};
-    transition.value = animate ? (practice.transition || null) : null;
+    boardFrameRevision += 1;
+    boardFrame.value = animate
+      ? createTransitionBoardFrame(boardFrameRevision, practice.transition, practice.board)
+      : createSnapshotBoardFrame(boardFrameRevision, practice.board);
     currentBoardHex.value = practice.boardHex;
     hexInput.value = practice.boardHex;
     lastStep.value = localTesterSession.lastStep;
@@ -1269,8 +1275,8 @@ export function useTesterSession(activeRef) {
       localTesterSession = null;
       pendingBoardLoad = null;
       board.value = new Array(16).fill(0);
-      metadata.value = {};
-      transition.value = null;
+      boardFrameRevision += 1;
+      boardFrame.value = createSnapshotBoardFrame(boardFrameRevision, board.value);
       currentBoardHex.value = '0000000000000000';
       hexInput.value = currentBoardHex.value;
       results.value = {};
@@ -1298,8 +1304,7 @@ export function useTesterSession(activeRef) {
   return {
     wsStatus,
     board,
-    metadata,
-    transition,
+    boardFrame,
     dis32k,
     showInsights,
     availableTargets,

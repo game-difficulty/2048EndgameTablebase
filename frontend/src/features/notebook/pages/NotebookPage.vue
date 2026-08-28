@@ -50,7 +50,7 @@
     <div class="grid w-full max-w-6xl grid-cols-[clamp(260px,60vh,556px)_minmax(0,1fr)] items-start gap-6">
       <section class="flex min-w-0 flex-col">
         <div class="notebook-board-shell mx-auto w-full">
-          <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @swipe="handleBoardSwipe" />
+          <BaseBoard :frame="boardFrame" :dis32k="dis32k" :is-variant="isVariant" @swipe="handleBoardSwipe" />
         </div>
       </section>
 
@@ -200,7 +200,7 @@ const handleBoardSwipe = (direction) => {
 const {
   wsStatus,
   board,
-  metadata,
+  boardFrame,
   dis32k,
   availablePatterns,
   selectedPattern,
