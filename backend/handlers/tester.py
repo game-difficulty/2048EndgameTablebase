@@ -15,7 +15,7 @@ from ..actions import Action, Message
 from ..remote_workers.errors import RemoteTablebaseError
 from ..remote_workers.registry import remote_worker_registry
 from ..session import GameSession
-from ..session import np_u64, u64
+from ..session import np_u64, safe_hex, u64
 from ..tester import (
     PERFORMANCE_PERFECT_LABEL,
     _cache_tester_replay,
@@ -55,6 +55,70 @@ async def _tester_get_random_state(session: GameSession, path_list) -> int:
         session.ensure_book_reader().get_random_state(
             path_list, session.tester_full_pattern
         )
+    )
+
+
+def _client_revision(payload: dict[str, Any]) -> int | None:
+    try:
+        revision = int(payload.get("client_revision"))
+    except (TypeError, ValueError):
+        return None
+    return revision if revision >= 0 else None
+
+
+async def _send_tester_board_seed(
+    websocket: WebSocket,
+    session: GameSession,
+    *,
+    request_id: str,
+    client_revision: int | None,
+    board_encoded: int | None,
+) -> None:
+    ready = bool(session.tester_table_found and board_encoded is not None)
+    encoded = np_u64(board_encoded or 0)
+    logs = [f"Selected pattern: {session.tester_full_pattern or '?'}"]
+    logs.append("We'll start from:" if ready else session.tester_status)
+    await websocket.send_json(
+        {
+            "action": Message.TESTER_BOARD_SEED,
+            "data": {
+                "load_request_id": str(request_id or "")[:160],
+                "client_revision": client_revision,
+                "board": decode_board(encoded).flatten().tolist(),
+                "hex_str": safe_hex(encoded),
+                "pattern": session.tester_pattern[0],
+                "target": session.tester_pattern[1],
+                "full_pattern": session.tester_full_pattern,
+                "ready": ready,
+                "table_found": bool(session.tester_table_found),
+                "status": session.tester_status,
+                "use_variant": bool(session.use_variant),
+                "logs": logs,
+            },
+        }
+    )
+
+
+async def _send_tester_tablebase_ready(
+    websocket: WebSocket,
+    session: GameSession,
+    *,
+    request_id: str,
+) -> None:
+    await websocket.send_json(
+        {
+            "action": Message.TESTER_TABLEBASE_READY,
+            "data": {
+                "request_id": str(request_id or "")[:160],
+                "pattern": session.tester_pattern[0],
+                "target": session.tester_pattern[1],
+                "full_pattern": session.tester_full_pattern,
+                "ready": bool(session.tester_table_found),
+                "table_found": bool(session.tester_table_found),
+                "status": session.tester_status,
+                "use_variant": bool(session.use_variant),
+            },
+        }
     )
 
 
@@ -107,13 +171,48 @@ async def handle_tester_action(
                 },
             }
         )
-        await send_tester_state(websocket, session)
+        if not bool(payload.get("client_local_board")):
+            await send_tester_state(websocket, session)
         return True
 
     if action == Action.TESTER_SELECT_PATTERN:
         pattern = str(payload.get("pattern") or "")
         target = str(payload.get("target") or "")
-        found, path_list = _tester_prepare_selection(session, pattern, target)
+        client_local_board = bool(payload.get("client_local_board"))
+        found, path_list = _tester_prepare_selection(
+            session,
+            pattern,
+            target,
+            reset_board=not client_local_board,
+        )
+        if client_local_board:
+            if bool(payload.get("preserve_client_board")):
+                await _send_tester_tablebase_ready(
+                    websocket,
+                    session,
+                    request_id=str(payload.get("request_id") or ""),
+                )
+                return True
+            random_board = None
+            if found:
+                try:
+                    random_board = await _tester_get_random_state(session, path_list)
+                    random_board = _tester_random_rotate(random_board, pattern)
+                except Exception as exc:
+                    if isinstance(exc, RemoteTablebaseError):
+                        session.tester_table_found = False
+                        session.tester_status = "The selected tablebase is temporarily unavailable."
+                    else:
+                        session.tester_status = "Failed to initialize the selected tablebase."
+            await _send_tester_board_seed(
+                websocket,
+                session,
+                request_id=str(payload.get("request_id") or ""),
+                client_revision=_client_revision(payload),
+                board_encoded=random_board,
+            )
+            return True
+
         _tester_reset_history(session, session.board_encoded, 0)
         _tester_reset_record(session)
         _tester_reset_metrics(session)
@@ -151,13 +250,44 @@ async def handle_tester_action(
                 session.tester_status,
             ]
 
-        await send_tester_state(websocket, session)
+        await send_tester_state(
+            websocket,
+            session,
+            load_request_id=str(payload.get("request_id") or "")[:160],
+        )
         return True
 
     if action == Action.TESTER_RESET_RANDOM:
         pattern = session.tester_pattern[0]
         target = session.tester_pattern[1]
-        found, path_list = _tester_prepare_selection(session, pattern, target)
+        client_local_board = bool(payload.get("client_local_board"))
+        found, path_list = _tester_prepare_selection(
+            session,
+            pattern,
+            target,
+            reset_board=not client_local_board,
+        )
+        if client_local_board:
+            random_board = None
+            if found:
+                try:
+                    random_board = await _tester_get_random_state(session, path_list)
+                    random_board = _tester_random_rotate(random_board, pattern)
+                except Exception as exc:
+                    if isinstance(exc, RemoteTablebaseError):
+                        session.tester_table_found = False
+                        session.tester_status = "The selected tablebase is temporarily unavailable."
+                    else:
+                        session.tester_status = "Failed to initialize the selected tablebase."
+            await _send_tester_board_seed(
+                websocket,
+                session,
+                request_id=str(payload.get("request_id") or ""),
+                client_revision=_client_revision(payload),
+                board_encoded=random_board,
+            )
+            return True
+
         if found:
             try:
                 random_board = await _tester_get_random_state(session, path_list)
@@ -192,7 +322,11 @@ async def handle_tester_action(
                 f"Selected pattern: {session.tester_full_pattern or '?'}",
                 session.tester_status,
             ]
-        await send_tester_state(websocket, session)
+        await send_tester_state(
+            websocket,
+            session,
+            load_request_id=str(payload.get("request_id") or "")[:160],
+        )
         return True
 
     if action == Action.TESTER_SET_BOARD:

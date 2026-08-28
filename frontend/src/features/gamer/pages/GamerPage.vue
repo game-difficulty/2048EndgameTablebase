@@ -2,10 +2,10 @@
   <div class="page-root gamer-page-root pt-6">
     <div class="gamer-workspace">
       <main class="gamer-main w-full max-w-lg flex flex-col items-center">
-      <div class="flex justify-between w-full mb-6 items-center">
-        <div class="flex items-center gap-4">
-          <h1 class="text-6xl font-bold text-text-main leading-none">2048</h1>
-          <div class="flex flex-col gap-1.5">
+      <div class="flex justify-between w-full mb-6 items-center gap-3">
+        <div class="flex min-w-0 items-center gap-4">
+          <h1 class="shrink-0 text-6xl font-bold text-text-main leading-none">2048</h1>
+          <div class="flex min-w-0 flex-col gap-1.5">
             <span :class="['badge-base', wsStatus === 'connected' ? 'badge-connection-connected' : 'badge-connection-pending']">
               {{ $t(`status.${wsStatus.toLowerCase().replace('...', '')}`) }}
             </span>
@@ -14,14 +14,14 @@
               type="button"
               :class="['gamer-ranked-badge', `status-${rankedStatus}`]"
               :disabled="rankedStatus !== 'submission_failed'"
-              :title="rankedReasonKey ? $t(rankedReasonKey) : undefined"
+              :title="rankedReasonKey ? $t(rankedReasonKey) : $t(`gamer.ranked.status.${rankedStatus}`)"
               @click="retryRankedSubmission"
             >
               {{ $t(`gamer.ranked.status.${rankedStatus}`) }}
             </button>
           </div>
         </div>
-        <div class="flex space-x-2">
+        <div class="flex shrink-0 space-x-2">
           <div class="bg-board-bg w-[122px] h-[56px] flex flex-col items-center justify-center rounded-md relative shadow-sm transition-all duration-300">
             <span class="text-text-secondary ui-caption font-black uppercase leading-none mb-1 tracking-tight">{{ $t('labels.score') }}</span>
             <span class="font-black text-white leading-none tabular-nums" style="font-size: calc(22px * var(--ui-scale));">{{ score.current }}</span>
@@ -82,7 +82,7 @@
       </div>
 
       <div ref="boardHotkeyTarget" tabindex="-1" class="w-full outline-none focus:outline-none">
-        <BaseBoard :board="board" :metadata="metadata" @swipe="handleBoardSwipe" />
+        <BaseBoard :board="board" :metadata="metadata" :transition="transition" @swipe="handleBoardSwipe" />
       </div>
 
       <div class="w-full mt-6 bg-ctrl-bg rounded-md p-4 flex flex-col space-y-4 shadow-sm">
@@ -134,6 +134,7 @@ const boardHotkeyTarget = ref(null);
 const {
   board,
   metadata,
+  transition,
   score,
   wsStatus,
   aiEnabled,
@@ -174,6 +175,8 @@ const rankedReasonKey = computed(() => ({
   lease_required: 'gamer.ranked.reasons.leaseLost',
   lease_mismatch: 'gamer.ranked.reasons.leaseLost',
   user_changed: 'gamer.ranked.reasons.userChanged',
+  user_daily_limit: 'gamer.ranked.reasons.userDailyLimit',
+  ip_daily_limit: 'gamer.ranked.reasons.ipDailyLimit',
 }[ranked.value.errorCode] || ''));
 
 const matchOptions = computed(() => ([
@@ -229,6 +232,10 @@ const handleBoardSwipe = (direction) => {
 }
 
 .gamer-ranked-badge {
+  display: block;
+  min-width: 0;
+  max-width: min(100%, 11rem);
+  overflow: hidden;
   min-height: 1.45rem;
   padding: 0.18rem 0.55rem;
   border: 1px solid var(--border-main);
@@ -238,6 +245,7 @@ const handleBoardSwipe = (direction) => {
   font-size: var(--font-ui-xs);
   font-weight: 900;
   line-height: 1.15;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

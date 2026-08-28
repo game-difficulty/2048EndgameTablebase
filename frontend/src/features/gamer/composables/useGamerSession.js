@@ -292,6 +292,7 @@ export function useGamerSession(activeRef) {
   const { ready: authReady, user: authUser } = useAuthState();
   const board = ref(new Array(16).fill(0));
   const metadata = ref(null);
+  const transition = ref(null);
   const score = ref({ current: 0, best: 0 });
   const wsStatus = ref('connected');
   const aiEnabled = ref(false);
@@ -313,6 +314,7 @@ export function useGamerSession(activeRef) {
   });
 
   let animIdCounter = 0;
+  let transitionRevision = 0;
   let aiContinuationTimer = null;
   let aiRunning = false;
   let evilCoreModule = null;
@@ -487,8 +489,19 @@ export function useGamerSession(activeRef) {
   };
 
   const applyBoardState = (values, animation = null, nextScore = score.value.current) => {
-    board.value = applySpecialTiles(values, specialTiles.value);
+    const fromBoard = board.value.slice(0, 16);
+    const toBoard = applySpecialTiles(values, specialTiles.value);
+    board.value = toBoard;
     metadata.value = animation;
+    transitionRevision += 1;
+    transition.value = {
+      id: transitionRevision,
+      revision: transitionRevision,
+      kind: animation ? 'move' : 'snapshot',
+      fromBoard,
+      toBoard: toBoard.slice(0, 16),
+      metadata: animation,
+    };
     score.value = {
       current: Number(nextScore) || 0,
       best: Math.max(Number(score.value.best) || 0, Number(nextScore) || 0),
@@ -877,6 +890,7 @@ export function useGamerSession(activeRef) {
     specialTiles.value = [];
     board.value = nextBoard;
     metadata.value = null;
+    transition.value = null;
     score.value = {
       current: 0,
       best: Number(score.value.best) || 0,
@@ -988,6 +1002,7 @@ export function useGamerSession(activeRef) {
     specialTiles.value = previous.specialTiles;
     board.value = applySpecialTiles(previous.board, previous.specialTiles);
     metadata.value = null;
+    transition.value = null;
     score.value = {
       current: Number(previous.score) || 0,
       best: Number(score.value.best) || 0,
@@ -1012,6 +1027,7 @@ export function useGamerSession(activeRef) {
     specialTiles.value = [];
     board.value = boardFromHex(normalized);
     metadata.value = null;
+    transition.value = null;
     score.value = {
       current: 0,
       best: Number(score.value.best) || 0,
@@ -1130,6 +1146,7 @@ export function useGamerSession(activeRef) {
     specialTiles.value = Array.isArray(saved.specialTiles) ? saved.specialTiles : [];
     board.value = applySpecialTiles(saved.board, specialTiles.value);
     metadata.value = null;
+    transition.value = null;
     score.value = {
       current: Number(saved.score?.current) || 0,
       best: Math.max(Number(saved.score?.best) || 0, Number(preferences?.bestScore) || 0),
@@ -1344,6 +1361,7 @@ export function useGamerSession(activeRef) {
   return {
     board,
     metadata,
+    transition,
     score,
     wsStatus,
     aiEnabled,

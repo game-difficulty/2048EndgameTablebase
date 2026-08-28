@@ -60,6 +60,10 @@ const props = defineProps({
     type: Object,
     default: null
   },
+  transition: {
+    type: Object,
+    default: null
+  },
   dis32k: {
     type: Boolean,
     default: false
@@ -77,6 +81,7 @@ let animTimeout = null;
 let revealMergeTimeout = null;
 let revealAppearTimeout = null;
 let animationEpoch = 0;
+let lastConsumedTransitionId = null;
 const MERGE_GLOW_MIN_VALUE = 2048;
 const MERGE_GLOW_STEPS = 5;
 const SWIPE_THRESHOLD_PX = 28;
@@ -250,18 +255,18 @@ const revealAppearingTiles = () => {
     });
 };
 
-const syncToBoardRaw = () => {
+const syncToBoardRaw = (sourceBoard = props.board) => {
     fastForwardAnimations(true);
     const nextTiles = [];
     for(let i=0; i<16; i++) {
-        if (shouldRenderAsActiveTile(props.board[i])) {
+        if (shouldRenderAsActiveTile(sourceBoard[i])) {
             nextTiles.push(withGlowDefaults({
                 // Snapshot updates use cell-stable keys so undo/seek does not
                 // destroy and recreate every visible tile.
                 id: `snapshot-${i}`,
                 row: Math.floor(i / 4),
                 col: i % 4,
-                value: props.board[i],
+                value: sourceBoard[i],
                 isDying: false,
                 isMerged: false,
                 isNew: false,
@@ -273,18 +278,37 @@ const syncToBoardRaw = () => {
     activeTiles.value = nextTiles;
 };
 
-watch(() => [props.board, props.metadata, props.isVariant], async ([newBoard]) => {
+watch(() => [props.transition?.id ?? null, props.board, props.metadata, props.isVariant], async () => {
+    const explicitTransition = props.transition && props.transition.id != null
+      ? props.transition
+      : null;
+    if (explicitTransition) {
+        const transitionId = String(explicitTransition.id);
+        if (transitionId === lastConsumedTransitionId) return;
+        lastConsumedTransitionId = transitionId;
+    } else {
+        lastConsumedTransitionId = null;
+    }
+
     const epoch = ++animationEpoch;
-    if (!hasMoveAnimationMetadata(props.metadata)) {
+    const animationMetadata = explicitTransition?.metadata || props.metadata;
+    const newBoard = Array.isArray(explicitTransition?.toBoard)
+      ? explicitTransition.toBoard
+      : props.board;
+    if (!hasMoveAnimationMetadata(animationMetadata)) {
         // Init or resync without animation
         clearAnimationTimers();
-        syncToBoardRaw();
+        syncToBoardRaw(newBoard);
         return;
     }
     
     // Flush old animations logically
     clearAnimationTimers();
-    fastForwardAnimations(true);
+    if (Array.isArray(explicitTransition?.fromBoard)) {
+        syncToBoardRaw(explicitTransition.fromBoard);
+    } else {
+        fastForwardAnimations(true);
+    }
     activeTiles.value.forEach(tile => {
         tile.glowStepsRemaining = decayGlowSteps(tile);
     });
@@ -301,7 +325,7 @@ watch(() => [props.board, props.metadata, props.isVariant], async ([newBoard]) =
         slide_distances = [], 
         pop_positions = [], 
         appear_tile = null 
-    } = props.metadata || {};
+    } = animationMetadata || {};
     const vectors = {
         'left': { x: -1, y: 0 },
         'right': { x: 1, y: 0 },

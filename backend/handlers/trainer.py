@@ -42,7 +42,7 @@ def _clear_trainer_results(session: GameSession) -> None:
     session.trainer_results_board = np_u64(0)
 
 
-async def _set_random_trainer_board(session: GameSession, path_list) -> None:
+async def _get_random_trainer_board(session: GameSession, path_list) -> int:
     if session.tablebase_provider_kind == "remote":
         response = await remote_worker_registry.random_state(
             full_pattern=session.current_pattern,
@@ -57,6 +57,19 @@ async def _set_random_trainer_board(session: GameSession, path_list) -> None:
         random_board = session.ensure_book_reader().get_random_state(
             path_list, session.current_pattern
         )
+    return int(random_board)
+
+
+def _client_revision(payload: dict[str, Any]) -> int | None:
+    try:
+        revision = int(payload.get("client_revision"))
+    except (TypeError, ValueError):
+        return None
+    return revision if revision >= 0 else None
+
+
+async def _set_random_trainer_board(session: GameSession, path_list) -> None:
+    random_board = await _get_random_trainer_board(session, path_list)
     session.board_encoded = np_u64(random_board)
     session.score = 0
     session.history = [(session.board_encoded, session.score)]
@@ -64,6 +77,30 @@ async def _set_random_trainer_board(session: GameSession, path_list) -> None:
     session.moved = 0
     session.played_length = 0
     _clear_trainer_results(session)
+
+
+async def _send_trainer_tablebase_ready(
+    websocket: WebSocket,
+    session: GameSession,
+    *,
+    request_id: str,
+    client_revision: int | None = None,
+    board_encoded: int | None = None,
+) -> None:
+    data = {
+        "request_id": str(request_id or "")[:160],
+        "tablebase_status": session.tablebase_status,
+        "tablebase_full_pattern": session.current_pattern,
+        "tablebase_dtype": session.success_rate_dtype,
+        "use_variant": bool(session.use_variant),
+    }
+    if client_revision is not None:
+        data["client_revision"] = int(client_revision)
+    if board_encoded is not None:
+        data["board_hex"] = safe_hex(np_u64(board_encoded))
+    await websocket.send_json(
+        {"action": Message.TRAINER_TABLEBASE_READY, "data": data}
+    )
 
 
 async def _start_requested_tablebase_query(
@@ -131,6 +168,21 @@ async def handle_trainer_action(
     spawn_rate4 = float(SingletonConfig().config.get("4_spawn_rate", 0.1))
 
     if action == Action.TRAINER_SET_EMPTY_PATTERN:
+        client_local_board = bool(payload.get("client_local_board"))
+        if client_local_board:
+            session.current_pattern = ""
+            session.pattern_settings = ["", ""]
+            session.use_variant = False
+            session.tablebase_provider_kind = ""
+            session.tablebase_status = "not_selected"
+            session.success_rate_dtype = "?"
+            await _send_trainer_tablebase_ready(
+                websocket,
+                session,
+                request_id=str(payload.get("request_id") or ""),
+                client_revision=_client_revision(payload),
+            )
+            return True
         current_board = np_u64(session.board_encoded)
         current_score = int(session.score)
         query_handle = getattr(session, "trainer_query_handle", None)
@@ -162,16 +214,18 @@ async def handle_trainer_action(
         target = payload.get("target", "32768")
         full_pattern = pattern if "_" in pattern else f"{pattern}_{target}"
         base_pattern = full_pattern.split("_")[0]
-        current_board = np_u64(session.board_encoded)
-        current_score = int(session.score)
-        _clear_record_replay(session)
-        session.board_encoded = current_board
-        session.score = current_score
-        session.history = [(session.board_encoded, session.score)]
-        session.move_history = [None]
-        session.played_length = 0
-        session.moved = 0
-        _clear_trainer_results(session)
+        client_local_board = bool(payload.get("client_local_board"))
+        if not client_local_board:
+            current_board = np_u64(session.board_encoded)
+            current_score = int(session.score)
+            _clear_record_replay(session)
+            session.board_encoded = current_board
+            session.score = current_score
+            session.history = [(session.board_encoded, session.score)]
+            session.move_history = [None]
+            session.played_length = 0
+            session.moved = 0
+            _clear_trainer_results(session)
         descriptor = resolve_configured_tablebase(full_pattern, spawn_rate4)
         provider_kind = (
             str(descriptor.get("_provider")) if descriptor else "unavailable"
@@ -198,15 +252,28 @@ async def handle_trainer_action(
             else "not_found"
         )
 
+        client_board_seed = None
         if payload.get("load_default") and session.tablebase_status == "loaded":
             try:
-                await _set_random_trainer_board(session, path_list)
+                if client_local_board:
+                    client_board_seed = await _get_random_trainer_board(session, path_list)
+                else:
+                    await _set_random_trainer_board(session, path_list)
             except RemoteTablebaseError:
                 session.tablebase_status = "temporarily_unavailable"
             except Exception:
                 session.tablebase_status = "not_found"
 
-        await manager.send_state(websocket)
+        if client_local_board:
+            await _send_trainer_tablebase_ready(
+                websocket,
+                session,
+                request_id=str(payload.get("request_id") or ""),
+                client_revision=_client_revision(payload),
+                board_encoded=client_board_seed,
+            )
+        else:
+            await manager.send_state(websocket)
         return True
 
     if action == Action.TRAINER_GET_RESULTS:
@@ -225,6 +292,53 @@ async def handle_trainer_action(
         session.spawn_mode = next_mode
         session.moved = 0
         await manager.send_state(websocket)
+        return True
+
+    if action == Action.TRAINER_SPAWN_QUERY:
+        request_id = str(payload.get("request_id") or "")[:160]
+        try:
+            revision = int(payload.get("revision"))
+            moved_board = np_u64(int(str(payload.get("board_hex") or ""), 16))
+            mode = int(payload.get("mode"))
+        except (TypeError, ValueError):
+            revision = -1
+            moved_board = np_u64(0)
+            mode = -1
+        data = {
+            "request_id": request_id,
+            "revision": revision,
+            "board_hex": safe_hex(moved_board),
+            "found": False,
+        }
+        if (
+            request_id
+            and revision >= 0
+            and mode in (1, 2)
+            and session.current_pattern
+            and str(payload.get("full_pattern") or "") == session.current_pattern
+        ):
+            try:
+                spawns = await compute_spawns_async(session, moved_board)
+                if spawns:
+                    pos, val_exp = (
+                        max(spawns, key=spawns.get)
+                        if mode == 1
+                        else min(spawns, key=spawns.get)
+                    )
+                    data.update(
+                        {
+                            "found": True,
+                            "index": int(pos),
+                            "value": int(2**val_exp),
+                        }
+                    )
+            except RemoteTablebaseError as exc:
+                data.update(exc.payload)
+            except Exception:
+                data["code"] = "TRAINER_SPAWN_QUERY_FAILED"
+        await websocket.send_json(
+            {"action": Message.TRAINER_SPAWN_RESULT, "data": data}
+        )
         return True
 
     if action == Action.TRAINER_STEP:
@@ -422,6 +536,25 @@ async def handle_trainer_action(
         return True
 
     if action == Action.TRAINER_DEFAULT:
+        if bool(payload.get("client_local_board")):
+            board_seed = None
+            path_list = build_filepath_map_entry(session.current_pattern, spawn_rate4)
+            if session.tablebase_provider_kind == "remote" or path_list:
+                try:
+                    board_seed = await _get_random_trainer_board(session, path_list)
+                    session.tablebase_status = "loaded"
+                except RemoteTablebaseError:
+                    session.tablebase_status = "temporarily_unavailable"
+                except Exception:
+                    session.tablebase_status = "not_found"
+            await _send_trainer_tablebase_ready(
+                websocket,
+                session,
+                request_id=str(payload.get("request_id") or ""),
+                client_revision=_client_revision(payload),
+                board_encoded=board_seed,
+            )
+            return True
         _clear_record_replay(session)
         path_list = build_filepath_map_entry(session.current_pattern, spawn_rate4)
         if session.tablebase_provider_kind == "remote" or path_list:

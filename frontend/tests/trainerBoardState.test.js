@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildTrainerBoardEdit,
   normalizeTrainerBoardHex,
+  transformTrainerBoard,
   previousDistinctTrainerHistoryState,
 } from '../src/features/trainer/engine/trainerBoardState.js';
 
@@ -11,6 +12,15 @@ test('normalizes editable trainer board hex without losing leading zeroes', () =
   assert.equal(normalizeTrainerBoardHex('0x123a'), '000000000000123a');
   assert.equal(normalizeTrainerBoardHex('xyz'), null);
   assert.equal(normalizeTrainerBoardHex('1'.repeat(17)), null);
+});
+
+test('trainer board transforms operate on visual rows and columns', () => {
+  const board = Array.from({ length: 16 }, (_value, index) => index + 1);
+  assert.deepEqual(transformTrainerBoard(board, 'UD').slice(0, 4), [13, 14, 15, 16]);
+  assert.deepEqual(transformTrainerBoard(board, 'LR').slice(0, 4), [4, 3, 2, 1]);
+  assert.deepEqual(transformTrainerBoard(board, 'R90').slice(0, 4), [13, 9, 5, 1]);
+  assert.deepEqual(transformTrainerBoard(board, 'L90').slice(0, 4), [4, 8, 12, 16]);
+  assert.equal(transformTrainerBoard(board, 'bad'), null);
 });
 
 test('builds palette edits locally without mutating the current board', () => {

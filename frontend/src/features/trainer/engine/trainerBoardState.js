@@ -30,6 +30,30 @@ export function buildTrainerBoardEdit(board, row, col, nextValue) {
   };
 }
 
+export function transformTrainerBoard(board, type) {
+  if (!Array.isArray(board) || board.length < 16) return null;
+  const normalizedType = String(type || '').toUpperCase();
+  if (!['UD', 'LR', 'RL', 'R90', 'L90'].includes(normalizedType)) return null;
+  const transformed = new Array(16).fill(0);
+  for (let row = 0; row < 4; row += 1) {
+    for (let col = 0; col < 4; col += 1) {
+      let sourceRow = row;
+      let sourceCol = col;
+      if (normalizedType === 'UD') sourceRow = 3 - row;
+      else if (normalizedType === 'LR' || normalizedType === 'RL') sourceCol = 3 - col;
+      else if (normalizedType === 'R90') {
+        sourceRow = 3 - col;
+        sourceCol = row;
+      } else {
+        sourceRow = col;
+        sourceCol = 3 - row;
+      }
+      transformed[row * 4 + col] = Number(board[sourceRow * 4 + sourceCol]) || 0;
+    }
+  }
+  return transformed;
+}
+
 export function previousDistinctTrainerHistoryState(history, moves, currentBoardHex) {
   if (!Array.isArray(history) || history.length <= 1) return null;
   const normalizedHistory = history.map(normalizeTrainerBoardHex);

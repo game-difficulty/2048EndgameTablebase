@@ -215,6 +215,90 @@ class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await scheduler.close()
 
+    async def test_client_local_query_uses_requested_board_without_session_mutation(self):
+        scheduler = TablebaseQueryScheduler(worker_count=1)
+        session = GameSession("tester_client_owned_board_test")
+        session.user_id = 1
+        session.auth_session_id = 2
+        session.tester_full_pattern = "L3_256"
+        session.tester_pattern = ["L3", "256"]
+        session.tester_table_found = True
+        session.tester_tablebase_provider_kind = "local"
+        session.book_reader = ConstantReader()
+        session.board_encoded = np_u64(0x11)
+        session.tester_results = {}
+        requested = np.zeros((4, 4), dtype=np.int32)
+        requested[0, :2] = 2
+        requested_board = np_u64(encode_board(requested))
+        websocket = RecordingWebSocket()
+
+        try:
+            with (
+                patch.object(query_handler, "tablebase_query_scheduler", scheduler),
+                patch.object(query_handler, "get_catalog_version", return_value="catalog-test"),
+                patch.object(query_handler, "reserve_operation_tokens", return_value=object()),
+                patch.object(query_handler, "finalize_reservation"),
+                patch.object(query_handler, "get_token_balance", return_value={"total": 100}),
+            ):
+                await query_handler.handle_tablebase_query_action(
+                    Action.TABLEBASE_QUERY,
+                    {
+                        "page": "tester",
+                        "query_id": "client-board-query",
+                        "full_pattern": "L3_256",
+                        "board_hex": f"{int(requested_board):016x}",
+                        "client_local_board": True,
+                    },
+                    session,
+                    websocket,
+                )
+                while query_handler._TABLEBASE_QUERY_TASKS:
+                    await asyncio.gather(
+                        *list(query_handler._TABLEBASE_QUERY_TASKS),
+                        return_exceptions=True,
+                    )
+
+            self.assertEqual(websocket.messages[0]["action"], "TABLEBASE_QUERY_RESULT")
+            self.assertEqual(
+                websocket.messages[0]["data"]["board_hex"],
+                f"{int(requested_board):016x}",
+            )
+            self.assertEqual(int(session.board_encoded), 0x11)
+            self.assertEqual(session.tester_results, {})
+            self.assertFalse(session.tester_lookup_pending)
+        finally:
+            await scheduler.close()
+
+    async def test_stale_client_local_query_echoes_client_board_not_session_board(self):
+        session = GameSession("tester_stale_client_board_test")
+        session.user_id = 1
+        session.tester_full_pattern = "L3_256"
+        session.tester_pattern = ["L3", "256"]
+        session.tester_table_found = True
+        session.tester_tablebase_provider_kind = "local"
+        session.book_reader = ConstantReader()
+        session.board_encoded = np_u64(0x11)
+        requested_board = np_u64(0x2233)
+        websocket = RecordingWebSocket()
+
+        await query_handler.handle_tablebase_query_action(
+            Action.TABLEBASE_QUERY,
+            {
+                "page": "tester",
+                "query_id": "stale-client-board-query",
+                "full_pattern": "L3_512",
+                "board_hex": f"{int(requested_board):016x}",
+                "client_local_board": True,
+            },
+            session,
+            websocket,
+        )
+
+        response = websocket.messages[0]["data"]
+        self.assertEqual(response["code"], "STALE_TABLEBASE_QUERY")
+        self.assertEqual(response["board_hex"], f"{int(requested_board):016x}")
+        self.assertEqual(int(session.board_encoded), 0x11)
+
     async def test_trainer_prefetch_uses_the_deterministic_rng_contract(self):
         scheduler = TablebaseQueryScheduler(worker_count=4)
         session = GameSession("trainer_deterministic_prefetch_test")

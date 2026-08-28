@@ -32,6 +32,67 @@ def encoded(values):
 
 
 class TrainerOptimisticMoveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_client_local_empty_pattern_does_not_mutate_board_or_history(self):
+        session = GameSession("trainer_local_empty")
+        original = encoded([2, 4, 8, 16, *([0] * 12)])
+        session.board_encoded = original
+        session.history = [(original, 77)]
+        session.move_history = ["left"]
+        websocket = RecordingWebSocket()
+
+        await handle_trainer_action(
+            Action.TRAINER_SET_EMPTY_PATTERN,
+            {
+                "request_id": "empty-local-1",
+                "client_revision": 23,
+                "client_local_board": True,
+            },
+            session,
+            websocket,
+            RecordingManager(),
+        )
+
+        self.assertEqual(session.board_encoded, original)
+        self.assertEqual(session.history, [(original, 77)])
+        self.assertEqual(session.move_history, ["left"])
+        self.assertEqual(websocket.messages[0]["action"], Message.TRAINER_TABLEBASE_READY)
+        self.assertEqual(websocket.messages[0]["data"]["request_id"], "empty-local-1")
+        self.assertEqual(websocket.messages[0]["data"]["client_revision"], 23)
+
+    async def test_client_local_spawn_query_is_stateless_and_echoes_revision(self):
+        session = GameSession("trainer_local_spawn")
+        original = encoded([2, 4, 8, 16, *([0] * 12)])
+        moved = encoded([4, 8, 16, *([0] * 13)])
+        session.board_encoded = original
+        session.current_pattern = "L3_256"
+        websocket = RecordingWebSocket()
+
+        with patch(
+            "backend.handlers.trainer.compute_spawns_async",
+            new_callable=AsyncMock,
+            return_value={(7, 1): 0.2, (9, 2): 0.8},
+        ):
+            await handle_trainer_action(
+                Action.TRAINER_SPAWN_QUERY,
+                {
+                    "request_id": "spawn-local-1",
+                    "revision": 42,
+                    "board_hex": f"{int(moved):016x}",
+                    "full_pattern": "L3_256",
+                    "mode": 1,
+                },
+                session,
+                websocket,
+                RecordingManager(),
+            )
+
+        self.assertEqual(session.board_encoded, original)
+        message = websocket.messages[0]
+        self.assertEqual(message["action"], Message.TRAINER_SPAWN_RESULT)
+        self.assertEqual(message["data"]["revision"], 42)
+        self.assertEqual(message["data"]["index"], 9)
+        self.assertEqual(message["data"]["value"], 4)
+
     async def test_empty_pattern_resets_tablebase_state_without_resetting_board(self):
         session = GameSession("trainer_empty_pattern")
         session.board_encoded = encoded([2, 4, 8, 16, *([0] * 12)])

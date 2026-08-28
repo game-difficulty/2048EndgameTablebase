@@ -21,6 +21,7 @@
 3. `foundation_modules.md`：查看已经新增的云化基础模块和后续接入点。
 4. `next_work_plan.md`：按顺序执行后续开发任务。
 5. `minigame_ranked_records.md`：小游戏排位的确定性运行时、紧凑记录和验证边界。
+6. `frontend_board_ownership.md`：盘面、异步查询与动画的状态所有权约束。
 
 ## v1 范围边界
 

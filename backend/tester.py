@@ -331,7 +331,7 @@ def _tester_random_rotate(board_encoded, pattern):
     return np.uint64(u64(encode_board(rotated)))
 
 
-def _tester_prepare_selection(session, pattern, target):
+def _tester_prepare_selection(session, pattern, target, *, reset_board=True):
     session.tester_pattern = [str(pattern or "?"), str(target or "?")]
     session.tester_full_pattern = (
         f"{session.tester_pattern[0]}_{session.tester_pattern[1]}"
@@ -342,11 +342,12 @@ def _tester_prepare_selection(session, pattern, target):
     session.pattern_settings = session.tester_pattern.copy()
     session.use_variant = pattern in category_info.get("variant", [])
 
-    if session.use_variant and pattern in formation_info:
-        session.board_encoded = np_u64(formation_info[pattern][4][0])
-    else:
-        session.board_encoded = np_u64(0)
-    session.score = 0
+    if reset_board:
+        if session.use_variant and pattern in formation_info:
+            session.board_encoded = np_u64(formation_info[pattern][4][0])
+        else:
+            session.board_encoded = np_u64(0)
+        session.score = 0
 
     if not session.tester_full_pattern:
         session.tester_table_found = False
@@ -577,7 +578,9 @@ def _tester_append_summary(session):
     )
 
 
-async def send_tester_state(websocket, session, metadata=None, logs_since=None):
+async def send_tester_state(
+    websocket, session, metadata=None, logs_since=None, load_request_id=None
+):
     board_encoded = np_u64(session.board_encoded)
     board_array = decode_board(board_encoded)
     config = SingletonConfig().config
@@ -615,6 +618,8 @@ async def send_tester_state(websocket, session, metadata=None, logs_since=None):
             "language": config.get("language", "en"),
         },
     }
+    if load_request_id:
+        data["load_request_id"] = str(load_request_id)[:160]
     if session.user_id is not None:
         data["token_balance"] = get_token_balance(session.user_id)
 

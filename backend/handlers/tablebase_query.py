@@ -622,6 +622,7 @@ async def _finish_query(
     reservation,
     supporter: bool,
     prefetch_rng: _PrefetchRngContext | None = None,
+    client_local_board: bool = False,
 ) -> None:
     try:
         result = await handle.wait()
@@ -695,15 +696,22 @@ async def _finish_query(
 
     if not handle.is_current:
         return
-    session_matches = _session_matches(
-        session,
-        page=page,
-        board_encoded=result.board_encoded,
-        full_pattern=result.full_pattern,
+    selected_pattern = (
+        session.current_pattern if page == "trainer" else session.tester_full_pattern
+    )
+    selection_matches = str(selected_pattern or "") == str(result.full_pattern)
+    session_matches = selection_matches and (
+        client_local_board
+        or _session_matches(
+            session,
+            page=page,
+            board_encoded=result.board_encoded,
+            full_pattern=result.full_pattern,
+        )
     )
     token_balance = None
     extra_data = None
-    if session_matches:
+    if session_matches and not client_local_board:
         _apply_session_result(session, page=page, result=result)
         if page == "tester":
             context = getattr(session, "tester_post_lookup_context", None)
@@ -794,13 +802,17 @@ async def handle_tablebase_query_action(
         return True
 
     requested_pattern = str(payload.get("full_pattern") or "").strip()
+    client_local_board = bool(payload.get("client_local_board"))
     try:
         requested_board = np_u64(int(str(payload.get("board_hex") or ""), 16))
     except (TypeError, ValueError):
         requested_board = np_u64(0)
     if (
         requested_pattern != context["full_pattern"]
-        or requested_board != np_u64(session.board_encoded)
+        or (
+            not client_local_board
+            and requested_board != np_u64(session.board_encoded)
+        )
     ):
         await websocket.send_json(
             {
@@ -810,7 +822,9 @@ async def handle_tablebase_query_action(
                     "query_id": str(payload.get("query_id") or ""),
                     "code": "STALE_TABLEBASE_QUERY",
                     "full_pattern": context["full_pattern"],
-                    "board_hex": safe_hex(session.board_encoded),
+                    "board_hex": safe_hex(
+                        requested_board if client_local_board else session.board_encoded
+                    ),
                     "results": {},
                     "dtype": "?",
                 },
@@ -869,11 +883,12 @@ async def handle_tablebase_query_action(
         raise
     await handle.activate()
 
-    if page == "tester":
-        session.tester_lookup_pending = True
-        session.tester_query_handle = handle
-    else:
-        session.trainer_query_handle = handle
+    if not client_local_board:
+        if page == "tester":
+            session.tester_lookup_pending = True
+            session.tester_query_handle = handle
+        else:
+            session.trainer_query_handle = handle
     query_task = _track_task(
         asyncio.create_task(
             _finish_query(
@@ -888,11 +903,13 @@ async def handle_tablebase_query_action(
                 reservation=reservation,
                 supporter=supporter,
                 prefetch_rng=prefetch_rng,
+                client_local_board=client_local_board,
             )
         )
     )
-    if page == "tester":
-        session.tester_query_task = query_task
-    else:
-        session.trainer_query_task = query_task
+    if not client_local_board:
+        if page == "tester":
+            session.tester_query_task = query_task
+        else:
+            session.trainer_query_task = query_task
     return True

@@ -51,6 +51,91 @@ class TesterQueryProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(session.tester_lookup_task)
         self.assertEqual(session.tester_results, {})
 
+    async def test_client_local_selection_returns_seed_without_mutating_session_board(self):
+        session = self.make_session()
+        session.board_encoded = np_u64(0x1234)
+        websocket = RecordingWebSocket()
+        random_board = np_u64(0x2200)
+
+        with (
+            patch(
+                "backend.handlers.tester._tester_prepare_selection",
+                return_value=(True, [("unused", "float64")]),
+            ) as prepare,
+            patch(
+                "backend.handlers.tester._tester_get_random_state",
+                new_callable=AsyncMock,
+                return_value=random_board,
+            ),
+            patch(
+                "backend.handlers.tester._tester_random_rotate",
+                return_value=random_board,
+            ),
+        ):
+            await handle_tester_action(
+                Action.TESTER_SELECT_PATTERN,
+                {
+                    "pattern": "L3",
+                    "target": "256",
+                    "request_id": "local-seed-1",
+                    "client_revision": 17,
+                    "client_local_board": True,
+                },
+                session,
+                websocket,
+            )
+
+        prepare.assert_called_once_with(
+            session,
+            "L3",
+            "256",
+            reset_board=False,
+        )
+        self.assertEqual(int(session.board_encoded), 0x1234)
+        self.assertEqual(websocket.messages[0]["action"], "TESTER_BOARD_SEED")
+        self.assertEqual(websocket.messages[0]["data"]["hex_str"], safe_hex(random_board))
+        self.assertEqual(websocket.messages[0]["data"]["load_request_id"], "local-seed-1")
+        self.assertEqual(websocket.messages[0]["data"]["client_revision"], 17)
+
+    async def test_client_reconnect_attaches_tablebase_without_requesting_a_new_board(self):
+        session = self.make_session()
+        session.board_encoded = np_u64(0x4321)
+        websocket = RecordingWebSocket()
+
+        with (
+            patch(
+                "backend.handlers.tester._tester_prepare_selection",
+                return_value=(True, [("unused", "float64")]),
+            ) as prepare,
+            patch(
+                "backend.handlers.tester._tester_get_random_state",
+                new_callable=AsyncMock,
+            ) as random_state,
+        ):
+            await handle_tester_action(
+                Action.TESTER_SELECT_PATTERN,
+                {
+                    "pattern": "L3",
+                    "target": "256",
+                    "request_id": "reattach-1",
+                    "client_local_board": True,
+                    "preserve_client_board": True,
+                },
+                session,
+                websocket,
+            )
+
+        prepare.assert_called_once_with(
+            session,
+            "L3",
+            "256",
+            reset_board=False,
+        )
+        random_state.assert_not_awaited()
+        self.assertEqual(int(session.board_encoded), 0x4321)
+        self.assertEqual(websocket.messages[0]["action"], "TESTER_TABLEBASE_READY")
+        self.assertEqual(websocket.messages[0]["data"]["request_id"], "reattach-1")
+
     async def test_move_uses_authorized_result_and_starts_requested_query(self):
         session = self.make_session()
         session.user_id = 1

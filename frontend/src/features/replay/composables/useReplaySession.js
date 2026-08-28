@@ -21,6 +21,7 @@ import {
   createReplayRequestId,
   fetchLatestReplay,
 } from '../services/replayClient';
+import { restoreLocalTesterReplay } from '../services/localTesterReplayStore';
 import {
   restoreReplaySession,
   saveReplayPosition,
@@ -412,7 +413,15 @@ export function useReplaySession(activeRef, emit) {
     loadingReplay.value = true;
     replayStatus.value = t('replay.status.loading');
     try {
-      const latest = await fetchLatestReplay({ requestId: createReplayRequestId() });
+      const localLatest = restoreLocalTesterReplay();
+      const latest = localLatest || await fetchLatestReplay({ requestId: createReplayRequestId() });
+      if (localLatest) {
+        await authorizeLocalReplayLoad({
+          requestId: createReplayRequestId(),
+          filename: latest.filename,
+          size: latest.buffer.byteLength,
+        });
+      }
       await installReplay(latest.buffer, {
         filename: latest.filename,
         source: latest.source,

@@ -114,6 +114,7 @@
           <BaseBoard
             :board="board"
             :metadata="metadata"
+            :transition="transition"
             :dis32k="dis32k"
             :is-variant="isVariant"
             @cell-click="handleCellClick"
@@ -322,6 +323,7 @@ const {
   setBoard,
   board,
   metadata,
+  transition,
   dis32k,
   handleCellClick,
   awaitingSpawn,

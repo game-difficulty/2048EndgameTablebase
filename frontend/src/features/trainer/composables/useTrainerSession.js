@@ -24,12 +24,11 @@ import { getStableWsClientId } from '../../../services/ws/clientIds';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
 import {
-  boardHex,
-  buildOptimisticMoveOnlyTransition,
-  buildOptimisticMoveTransition,
-  decodeBoard,
-  encodeBoard,
-} from '../../replay/engine/replayTransition';
+  canApplyPracticeSeed,
+  createPracticeSession,
+  reducePracticeSession,
+  selectRandomSpawn,
+} from '../../practice/engine/practiceSession.js';
 import {
   restoreSuccessRate,
   formatSuccessRate,
@@ -40,20 +39,23 @@ import {
 import {
   buildTrainerBoardEdit,
   normalizeTrainerBoardHex,
-  previousDistinctTrainerHistoryState,
+  transformTrainerBoard,
 } from '../engine/trainerBoardState.js';
 import {
   EMPTY_PATTERN_CATEGORY,
   EMPTY_PATTERN_ID,
   isEmptyTrainerPattern,
-  shouldDeferTrainerBoardSync,
   stripTrainerQueryPayload,
   withEmptyPatternGroup,
 } from '../engine/trainerEmptyPattern.js';
 import { registerTrainerPracticeJumpConsumer } from '../services/trainerPracticeJump';
+import {
+  clearTrainerPracticeState,
+  restoreTrainerPracticeState,
+  saveTrainerPracticeState,
+} from '../services/trainerPracticeStore.js';
 
 export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
-  const MAX_PIPELINED_RANDOM_MOVES = 16;
   const RESULT_REFRESH_GRACE_MS = 180;
   const RESULT_REFRESH_PLACEHOLDER_MS = 1400;
   const DEFAULT_TABLEBASE_PATTERN = '442t';
@@ -65,7 +67,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     refreshSettings,
     saveSetting,
   } = useAppSettingsStore();
-  const { isAuthenticated, requireAuth } = useAuthState();
+  const { isAuthenticated, requireAuth, user: authUser } = useAuthState();
 
   const fallbackPatternCategories = {
     basic: ['L3', 'L4', 'I3', 'I4', 'LL', 'free8', 'free9', 'free10', '444'],
@@ -75,6 +77,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   const board = ref([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
   const metadata = ref(null);
+  const transition = ref(null);
   const hexInput = ref('');
   const cellPalette = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768];
   const currentPaletteValue = ref(null);
@@ -118,15 +121,18 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   let resultsStaleTimer = null;
   let resultsPlaceholderTimer = null;
   let tablebaseRetryTimer = null;
-  let paletteSyncTimer = null;
   let paletteEditDirty = false;
-  let pendingOptimisticMoveBoardHex = '';
-  let pendingRandomMoves = new Map();
-  let nextTrainerMoveSeq = 0;
-  let lastTrainerMoveAckSeq = 0;
   let trainerPrefetchState = createTrainerPrefetchState();
-  let trainerResyncPending = false;
-  let pendingServerStateQuery = null;
+  let localPracticeSession = createPracticeSession();
+  let nextTablebaseRequestId = 0;
+  let pendingTablebaseRequestId = '';
+  let pendingTablebaseBoardRevision = null;
+  let nextSpawnRequestId = 0;
+  let pendingSpawnQuery = null;
+  let tablebaseReadyForConnection = false;
+  const queuedMoveDirections = [];
+  let persistPracticeTimer = null;
+  let practiceRestoreAttempted = false;
   let unregisterTrainerPracticeJumpConsumer = null;
   const resultsRefreshPhase = ref('idle');
 
@@ -149,13 +155,75 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     trainerPrefetchState = createTrainerPrefetchState();
   };
 
-  const clearRandomMovePipeline = ({ serverMoveSeq } = {}) => {
-    pendingRandomMoves.clear();
-    resetTrainerPrefetchState();
-    if (Number.isInteger(serverMoveSeq) && serverMoveSeq >= 0) {
-      nextTrainerMoveSeq = serverMoveSeq;
-      lastTrainerMoveAckSeq = serverMoveSeq;
+  const persistTrainerPractice = () => {
+    if (!isAuthenticated.value || !authUser.value?.id || !localPracticeSession) return false;
+    return saveTrainerPracticeState({
+      userId: Number(authUser.value.id),
+      pattern: patternType.value,
+      target: targetValue.value,
+      loadedFullPattern: loadedTablebaseFullPattern.value,
+      tablebaseStatus: tablebasePath.value,
+      spawnMode: spawnMode.value,
+      prefetchState: trainerPrefetchState,
+      result: tableResult.value,
+      resultsBoardHex: resultsBoardHex.value,
+      practice: localPracticeSession,
+    });
+  };
+
+  const persistTrainerPracticeSoon = () => {
+    if (persistPracticeTimer) window.clearTimeout(persistPracticeTimer);
+    persistPracticeTimer = window.setTimeout(() => {
+      persistPracticeTimer = null;
+      persistTrainerPractice();
+    }, 50);
+  };
+
+  const syncLocalPracticeSession = ({ animate = true } = {}) => {
+    board.value = [...localPracticeSession.board];
+    metadata.value = animate ? (localPracticeSession.transition?.metadata || {}) : {};
+    transition.value = animate ? (localPracticeSession.transition || null) : null;
+    currentBoardHex.value = localPracticeSession.boardHex;
+    hexInput.value = localPracticeSession.boardHex;
+    awaitingSpawn.value = localPracticeSession.phase === 'awaiting_spawn';
+    fullHistory.value = localPracticeSession.history.map((entry) => entry.boardHex);
+    fullMoves.value = localPracticeSession.history.map((entry) => entry.lastMove);
+    recordStep.value = Math.max(0, localPracticeSession.history.length - 1);
+    recordMax.value = localPracticeSession.history.length;
+    if (localPracticeSession.context?.state) {
+      trainerPrefetchState = localPracticeSession.context;
     }
+    persistTrainerPracticeSoon();
+  };
+
+  const createLocalPracticeSession = (
+    boardValue,
+    { animate = false, useVariant = isVariant.value } = {},
+  ) => {
+    localPracticeSession = createPracticeSession({
+      boardHex: normalizeTrainerBoardHex(boardValue) || '0000000000000000',
+      useVariant: Boolean(useVariant),
+      context: trainerPrefetchState,
+    });
+    syncLocalPracticeSession({ animate });
+  };
+
+  const cancelPendingLocalTurn = () => {
+    if (localPracticeSession.phase !== 'awaiting_spawn') return false;
+    pendingSpawnQuery = null;
+    const reduced = reducePracticeSession(localPracticeSession, { type: 'UNDO' });
+    if (!reduced.accepted) return false;
+    localPracticeSession = reduced.state;
+    syncLocalPracticeSession({ animate: false });
+    return true;
+  };
+
+  const resetLocalRandomState = () => {
+    resetTrainerPrefetchState();
+    localPracticeSession = {
+      ...localPracticeSession,
+      context: trainerPrefetchState,
+    };
   };
 
   const isEmptyPattern = computed(() => isEmptyTrainerPattern(patternType.value));
@@ -164,6 +232,35 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     return patternType.value && targetValue.value ? `${patternType.value}_${targetValue.value}` : '';
   });
   const isVariant = computed(() => isVariantPattern(patternType.value, patternCategories.value));
+
+  const restoreTrainerPractice = () => {
+    if (practiceRestoreAttempted || !authUser.value?.id) return false;
+    practiceRestoreAttempted = true;
+    const restored = restoreTrainerPracticeState();
+    if (!restored || Number(restored.userId) !== Number(authUser.value.id)) {
+      if (restored) clearTrainerPracticeState();
+      return false;
+    }
+    patternType.value = String(restored.pattern || patternType.value);
+    targetValue.value = String(restored.target || targetValue.value);
+    loadedTablebaseFullPattern.value = String(restored.loadedFullPattern || '');
+    tablebasePath.value = String(restored.tablebaseStatus || 'not_selected');
+    spawnMode.value = Math.max(0, Math.min(3, Math.trunc(Number(restored.spawnMode) || 0)));
+    trainerPrefetchState = restored.prefetchState || createTrainerPrefetchState();
+    localPracticeSession = restored.practice;
+    localPracticeSession = {
+      ...localPracticeSession,
+      useVariant: Boolean(restored.practice.useVariant),
+      transition: null,
+    };
+    tableResult.value = restored.result && typeof restored.result === 'object'
+      ? restored.result
+      : { dtype: '?', results: {} };
+    resultsBoardHex.value = String(restored.resultsBoardHex || '');
+    syncActivePatternCategory();
+    syncLocalPracticeSession({ animate: false });
+    return true;
+  };
   const catalogPatternGroups = computed(() =>
     Object.entries(patternCategories.value || {}).map(([category, patterns]) => ({
       category,
@@ -440,14 +537,16 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       !initialStateSeen ||
       defaultTablebaseAutoApplyAttempted ||
       pendingTrainerJump.value ||
+      pendingTablebaseRequestId ||
       isEmptyPattern.value ||
       tablebasePath.value === 'loaded' ||
       !selectedTablebaseExists()
     ) {
       return;
     }
-    defaultTablebaseAutoApplyAttempted = true;
-    applyTablebase({ loadDefault: true });
+    if (applyTablebase({ loadDefault: true })) {
+      defaultTablebaseAutoApplyAttempted = true;
+    }
   };
 
   const protectedActions = new Set([
@@ -456,41 +555,15 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     'TRAINER_GET_RESULTS',
     'TABLEBASE_QUERY',
     'TRAINER_DEFAULT',
-    'TRAINER_MOVE',
-    'TRAINER_MANUAL_SPAWN',
+    'TRAINER_SPAWN_QUERY',
     'TRAINER_STEP',
-    'SET_BOARD',
-    'SET_CELL',
-    'UNDO',
   ]);
-
-  const attachServerStateQuery = (action, payload) => {
-    if (isEmptyPattern.value) {
-      return stripTrainerQueryPayload(payload);
-    }
-    const shouldQueryMove = action === 'TRAINER_MOVE' && [1, 2].includes(Number(spawnMode.value));
-    if (
-      recordOpen.value
-      || !isAuthenticated.value
-      || !shouldQueryMove
-      || (!showResults.value && payload?.query_reason !== 'step')
-    ) {
-      return payload;
-    }
-    const queryId = `${clientId}_${++nextResultsRequestId}`;
-    const reason = payload?.query_reason
-      || (queuedStepCount.value > 0 || demoActive.value ? 'step' : 'auto');
-    pendingServerStateQuery = { queryId, reason };
-    startResultsRefresh();
-    return { ...payload, query_id: queryId };
-  };
 
   const triggerAction = (action, payload = {}) => {
     if (protectedActions.has(action) && !requireAuth()) {
       return false;
     }
-    const nextPayload = attachServerStateQuery(action, payload);
-    client?.send(action, nextPayload);
+    client?.send(action, isEmptyPattern.value ? stripTrainerQueryPayload(payload) : payload);
     return true;
   };
 
@@ -540,7 +613,17 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
         applyTrainerJump();
         maybeAutoApplyDefaultTablebase();
         if (
-          tablebasePath.value === 'loaded'
+          wsStatus.value === 'connected'
+          && tablebasePath.value === 'loaded'
+          && selectedTablebaseExists()
+          && !tablebaseReadyForConnection
+          && !pendingTablebaseRequestId
+        ) {
+          applyTablebase({ loadDefault: false, preserveLocalState: true });
+        }
+        if (
+          tablebaseReadyForConnection
+          && tablebasePath.value === 'loaded'
           && currentBoardHex.value
           && resultsBoardHex.value !== currentBoardHex.value
         ) {
@@ -554,32 +637,41 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   const applyTrainerJump = () => {
     const pending = pendingTrainerJump.value;
-    if (!pending || wsStatus.value !== 'connected') return;
+    if (!pending || pending.requestId || wsStatus.value !== 'connected') return;
 
     const parsed = parseFullPattern(pending.fullPattern);
+    clearQueuedMoveDirections();
     if (parsed) {
-      const shouldSwitchPattern = currentPatternDisplay.value !== pending.fullPattern;
-      if (shouldSwitchPattern) {
-        patternType.value = parsed.pattern;
-        targetValue.value = parsed.target;
-        syncActivePatternCategory();
-        if (!triggerAction('TRAINER_SET_FILEPATH', {
-          pattern: pending.fullPattern,
-          target: parsed.target,
-          load_default: false,
-        })) {
-          return;
-        }
+      const requestId = `${clientId}_table_${++nextTablebaseRequestId}`;
+      patternType.value = parsed.pattern;
+      targetValue.value = parsed.target;
+      syncActivePatternCategory();
+      pending.requestId = requestId;
+      pendingTablebaseRequestId = requestId;
+      pendingTablebaseBoardRevision = null;
+      tablebaseReadyForConnection = false;
+      if (!triggerAction('TRAINER_SET_FILEPATH', {
+        request_id: requestId,
+        pattern: pending.fullPattern,
+        target: parsed.target,
+        load_default: false,
+        client_local_board: true,
+        preserve_client_board: true,
+        client_revision: localPracticeSession.revision,
+      })) {
+        pending.requestId = '';
+        pendingTablebaseRequestId = '';
+        return;
       }
     }
 
-    hexInput.value = pending.hex;
-    currentBoardHex.value = pending.hex;
-    if (!triggerAction('SET_BOARD', { hex_str: pending.hex })) {
-      return;
+    createLocalPracticeSession(pending.hex);
+    invalidateResults({ clearDisplay: true });
+    if (!parsed) {
+      pendingTrainerJump.value = null;
+      defaultTablebaseAutoApplyAttempted = true;
+      queryResults('practice-jump');
     }
-
-    pendingTrainerJump.value = null;
   };
 
   const handleTrainerPracticeJump = (event) => {
@@ -598,15 +690,17 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
+    clearQueuedMoveDirections();
     finishPaletteEditing({ query: false });
     clearPaletteSyncTimer();
     if (!alreadyEmpty) paletteEditDirty = false;
     currentPaletteValue.value = null;
-    clearRandomMovePipeline();
+    cancelPendingLocalTurn();
+    resetLocalRandomState();
     pendingResultsRequests.clear();
-    pendingServerStateQuery = null;
     loadedTablebaseFullPattern.value = '';
     tablebasePath.value = 'not_selected';
+    localPracticeSession = { ...localPracticeSession, useVariant: false };
     patternType.value = EMPTY_PATTERN_ID;
     targetValue.value = '';
     activePatternCategory.value = EMPTY_PATTERN_CATEGORY;
@@ -616,10 +710,15 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     }
     invalidateResults({ clearDisplay: true });
     finishResultsRefresh();
-    trainerResyncPending = true;
-    if (!triggerAction('TRAINER_SET_EMPTY_PATTERN')) {
-      trainerResyncPending = false;
-    }
+    const requestId = `${clientId}_table_${++nextTablebaseRequestId}`;
+    pendingTablebaseRequestId = requestId;
+    pendingTablebaseBoardRevision = null;
+    tablebaseReadyForConnection = false;
+    if (!triggerAction('TRAINER_SET_EMPTY_PATTERN', {
+      request_id: requestId,
+      client_local_board: true,
+      client_revision: localPracticeSession.revision,
+    })) pendingTablebaseRequestId = '';
   };
 
   const togglePatternMenu = () => {
@@ -774,6 +873,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   const prepareResultsRequest = (boardHex, reason = 'manual') => {
     if (isEmptyPattern.value) return null;
     if (recordOpen.value || (reason !== 'step' && !showResults.value) || awaitingSpawn.value) return null;
+    if (wsStatus.value !== 'connected' || !tablebaseReadyForConnection) return null;
     if (!boardHex) return null;
     if (hasPendingResultsForBoard(boardHex)) return null;
     if (!isAuthenticated.value) {
@@ -796,6 +896,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     if (!prepared) return null;
     triggerAction('TABLEBASE_QUERY', {
       page: 'trainer',
+      client_local_board: true,
       query_id: prepared.requestId,
       catalog_version: prepared.version,
       full_pattern: prepared.fullPattern,
@@ -810,87 +911,73 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     stepExecutionPending.value = false;
   };
 
+  const clearQueuedMoveDirections = () => {
+    queuedMoveDirections.length = 0;
+  };
+
+  const requestSpawnForCurrentBoard = (mode = Number(spawnMode.value)) => {
+    if (![1, 2].includes(Number(mode)) || localPracticeSession.phase !== 'awaiting_spawn') return false;
+    const requestId = `${clientId}_spawn_${++nextSpawnRequestId}`;
+    pendingSpawnQuery = {
+      requestId,
+      revision: localPracticeSession.revision,
+    };
+    const sent = triggerAction('TRAINER_SPAWN_QUERY', {
+      request_id: requestId,
+      revision: localPracticeSession.revision,
+      board_hex: localPracticeSession.boardHex,
+      full_pattern: loadedTablebaseFullPattern.value || currentPatternDisplay.value,
+      mode: Number(mode),
+    });
+    if (!sent) pendingSpawnQuery = null;
+    return sent;
+  };
+
   const executeTrainerMove = (direction) => {
     const normalized = String(direction || '').toLowerCase();
     const currentSpawnMode = Number(spawnMode.value) || 0;
     const currentHex = currentBoardHex.value || hexInput.value;
-    const randomResultsPending = currentSpawnMode === 0
-      && showResults.value
-      && tablebasePath.value === 'loaded'
-      && resultsBoardHex.value !== currentHex;
     if (
       !['up', 'down', 'left', 'right'].includes(normalized)
       || awaitingSpawn.value
-      || (currentSpawnMode !== 0 && !!pendingOptimisticMoveBoardHex)
-      || randomResultsPending
-      || pendingRandomMoves.size >= MAX_PIPELINED_RANDOM_MOVES
-      || trainerResyncPending
-      || wsStatus.value !== 'connected'
+      || (currentSpawnMode !== 0 && currentSpawnMode !== 3 && wsStatus.value !== 'connected')
       || !requireAuth()
     ) {
       return false;
     }
-    if (!syncPendingEmptyPatternBoard()) return false;
-
-    const fromBoardHex = currentHex;
     const deterministicSpawn = currentSpawnMode === 0
       ? createTrainerSpawnRandomSource(trainerPrefetchState)
       : null;
-    const transition = currentSpawnMode === 0
-      ? buildOptimisticMoveTransition(
-        board.value,
-        normalized,
-        isVariant.value,
-        spawnRate4(),
-        deterministicSpawn.randomSource,
-      )
-      : buildOptimisticMoveOnlyTransition(board.value, normalized, isVariant.value);
-    if (!transition || !fromBoardHex) {
+    const reduced = reducePracticeSession(localPracticeSession, {
+      type: currentSpawnMode === 0 ? 'MOVE_RANDOM' : 'MOVE_ONLY',
+      direction: normalized,
+      spawnRate4: spawnRate4(),
+      randomSource: deterministicSpawn?.randomSource,
+      nextContext: deterministicSpawn?.nextState,
+    });
+    if (!reduced.accepted || !currentHex) {
       stepExecutionPending.value = false;
       return false;
     }
-
-    board.value = transition.board;
-    metadata.value = transition.metadata;
-    currentBoardHex.value = transition.hex;
-    hexInput.value = transition.hex;
-    let moveSeq = null;
-    if (currentSpawnMode === 0) {
-      trainerPrefetchState = deterministicSpawn.nextState();
-      moveSeq = ++nextTrainerMoveSeq;
-      pendingRandomMoves.set(moveSeq, {
-        boardHex: transition.hex,
-        fromBoardHex,
-      });
-      fullHistory.value = [...fullHistory.value, transition.hex];
-      fullMoves.value = [...fullMoves.value, normalized];
-      recordStep.value = Math.max(0, fullHistory.value.length - 1);
-      recordMax.value = fullHistory.value.length;
-    } else {
-      pendingOptimisticMoveBoardHex = transition.hex;
-    }
+    localPracticeSession = reduced.state;
+    syncLocalPracticeSession();
     invalidateResults();
-    if (currentSpawnMode === 3) {
-      awaitingSpawn.value = true;
-    }
 
     const queryReason = queuedStepCount.value > 0 || demoActive.value ? 'step' : 'auto';
     const preparedQuery = currentSpawnMode === 0
-      ? prepareResultsRequest(transition.hex, queryReason)
+      ? prepareResultsRequest(currentBoardHex.value, queryReason)
       : null;
-
-    triggerAction('TRAINER_MOVE', {
-      dir: normalized,
-      client_optimistic: true,
-      from_board_hex: fromBoardHex,
-      board_hex: transition.hex,
-      spawn_index: transition.spawnIndex,
-      spawn_value: transition.spawnValue,
-      move_seq: moveSeq,
-      query_id: preparedQuery?.requestId,
-      query_reason: queryReason,
-      prefetch_rng: preparedQuery?.prefetchRng,
-    });
+    if (preparedQuery) {
+      triggerAction('TABLEBASE_QUERY', {
+        page: 'trainer',
+        client_local_board: true,
+        query_id: preparedQuery.requestId,
+        catalog_version: preparedQuery.version,
+        full_pattern: preparedQuery.fullPattern,
+        board_hex: currentBoardHex.value,
+        prefetch_rng: preparedQuery.prefetchRng,
+      });
+    } else if (currentSpawnMode === 1 || currentSpawnMode === 2) requestSpawnForCurrentBoard(currentSpawnMode);
     if (currentSpawnMode === 0 && preparedQuery?.cacheHit) {
       stepExecutionPending.value = false;
       if (demoActive.value) {
@@ -931,9 +1018,6 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       && pendingResultsRequests.size > 0
     ) {
       pendingResultsRequests.clear();
-      pendingOptimisticMoveBoardHex = '';
-      clearRandomMovePipeline();
-      pendingServerStateQuery = null;
       clearTablebaseResultCache();
       invalidateResults({ clearDisplay: true });
       finishResultsRefresh();
@@ -958,155 +1042,91 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       return;
     }
 
-    if (data.action === 'TRAINER_BOARD_SYNCED') {
-      return;
-    }
+    if (data.action === 'TRAINER_BOARD_SYNCED' || data.action === 'TRAINER_MOVE_ACCEPTED') return;
 
-    if (data.action === 'TRAINER_MOVE_ACCEPTED') {
-      const moveSeq = Number(data.data?.move_seq);
-      const acceptedBoardHex = String(data.data?.board_hex || '').toLowerCase();
-      if (Number.isInteger(moveSeq) && moveSeq <= lastTrainerMoveAckSeq) return;
-      const pendingMove = pendingRandomMoves.get(moveSeq);
+    if (data.action === 'TRAINER_TABLEBASE_READY') {
+      const response = data.data || {};
+      const requestId = String(response.request_id || '');
+      if (requestId && requestId !== pendingTablebaseRequestId) return;
+      const completedJump = !!requestId
+        && pendingTrainerJump.value?.requestId === requestId;
+      const requestedBoardRevision = pendingTablebaseBoardRevision;
+      pendingTablebaseRequestId = '';
+      pendingTablebaseBoardRevision = null;
+      tablebaseReadyForConnection = true;
+      tablebasePath.value = String(response.tablebase_status || 'not_selected');
+      loadedTablebaseFullPattern.value = String(response.tablebase_full_pattern || '');
+      if (loadedTablebaseFullPattern.value) syncSelectionFromFullPattern(loadedTablebaseFullPattern.value);
+      localPracticeSession = {
+        ...localPracticeSession,
+        useVariant: Boolean(response.use_variant),
+      };
       if (
-        !Number.isInteger(moveSeq)
-        || !pendingMove
-        || pendingMove.boardHex !== acceptedBoardHex
+        response.board_hex
+        && requestedBoardRevision != null
+        && canApplyPracticeSeed(
+          localPracticeSession,
+          requestedBoardRevision,
+          response.client_revision,
+        )
       ) {
-        clearRandomMovePipeline();
-        pendingResultsRequests.clear();
-        trainerResyncPending = true;
-        triggerAction('GET_STATE');
-        return;
+        resetTrainerPrefetchState();
+        createLocalPracticeSession(String(response.board_hex), {
+          useVariant: Boolean(response.use_variant),
+        });
       }
-      for (const pendingSeq of [...pendingRandomMoves.keys()]) {
-        if (pendingSeq <= moveSeq) pendingRandomMoves.delete(pendingSeq);
+      if (completedJump) {
+        pendingTrainerJump.value = null;
+        defaultTablebaseAutoApplyAttempted = true;
       }
-      lastTrainerMoveAckSeq = moveSeq;
-      recordStep.value = Math.max(
-        recordStep.value,
-        Number(data.data?.record_step ?? 0),
-      );
-      recordMax.value = Math.max(
-        recordMax.value,
-        Number(data.data?.record_max ?? 0),
-      );
-      recordingLength.value = Math.max(
-        recordingLength.value,
-        Number(data.data?.recording_length ?? 0),
-      );
-      stepExecutionPending.value = false;
-      if (resultsBoardHex.value === currentBoardHex.value) {
-        if (demoActive.value && !demoTimer) scheduleDemoStep();
-        else if (queuedStepCount.value > 0) window.queueMicrotask(pumpQueuedSteps);
-      }
+      finishResultsRefresh();
+      persistTrainerPracticeSoon();
+      if (
+        tablebasePath.value === 'loaded'
+        && localPracticeSession.phase === 'awaiting_spawn'
+        && [1, 2].includes(Number(spawnMode.value))
+      ) requestSpawnForCurrentBoard();
+      else if (tablebasePath.value === 'loaded' && currentBoardHex.value) queryResults('tablebase-ready');
+      else invalidateResults({ clearDisplay: true });
+      maybeAutoApplyDefaultTablebase();
       return;
     }
 
-    if (data.action === 'UPDATE_STATE') {
-      initialStateSeen = true;
-      trainerResyncPending = false;
-      const serverMoveSeq = Number(data.data?.trainer_move_seq);
-      clearRandomMovePipeline({
-        serverMoveSeq: Number.isInteger(serverMoveSeq) && serverMoveSeq >= 0
-          ? serverMoveSeq
-          : undefined,
-      });
-      if (typeof data.data.tablebase_status === 'string') {
-        tablebasePath.value = data.data.tablebase_status;
-      }
-      loadedTablebaseFullPattern.value = data.data.tablebase_full_pattern || '';
-      if (loadedTablebaseFullPattern.value && !isEmptyPattern.value) {
-        syncSelectionFromFullPattern(loadedTablebaseFullPattern.value);
-      }
-      const nextBoardHex = data.data.hex_str || hexInput.value;
-      const boardChanged = !!nextBoardHex && nextBoardHex !== currentBoardHex.value;
-      const optimisticMoveAccepted = !!nextBoardHex
-        && nextBoardHex === pendingOptimisticMoveBoardHex;
-      const serverAnimation = data.data.animation || {};
-      const keepLocalOptimisticAnimation = optimisticMoveAccepted
-        && Object.keys(serverAnimation).length === 0;
-      if (!keepLocalOptimisticAnimation) {
-        metadata.value = serverAnimation;
-        board.value = data.data.board;
-      }
-      if (pendingOptimisticMoveBoardHex) {
-        pendingOptimisticMoveBoardHex = '';
-        stepExecutionPending.value = false;
-      }
-      if (nextBoardHex) {
-        currentBoardHex.value = nextBoardHex;
-        hexInput.value = nextBoardHex;
-      }
-      if (data.data.record_step !== undefined) {
-        recordStep.value = data.data.record_step || 0;
-        recordMax.value = data.data.record_max || 0;
-        recordingLength.value = data.data.recording_length || 0;
-        recordPlaybackLoaded.value = !!data.data.record_playback_loaded;
-        fullHistory.value = data.data.history || [];
-        fullMoves.value = data.data.moves || [];
-      }
-      const nextSpawnMode = Number(data.data.spawn_mode);
-      if (Number.isInteger(nextSpawnMode) && nextSpawnMode >= 0 && nextSpawnMode < spawnModes.length) {
-        spawnMode.value = nextSpawnMode;
-      }
-      awaitingSpawn.value = !!data.data.awaiting_spawn;
-      const serverStateQuery = pendingServerStateQuery;
-      pendingServerStateQuery = null;
-      let serverStateQueryAdopted = false;
-      if (serverStateQuery && nextBoardHex && !awaitingSpawn.value && !recordOpen.value) {
-        trackResultsRequest(
-          serverStateQuery.queryId,
-          nextBoardHex,
-          serverStateQuery.reason,
-        );
-        serverStateQueryAdopted = true;
-      }
-      if (recordOpen.value) {
-        pendingResultsRequests.clear();
-        finishResultsRefresh();
-        clearStepQueue();
-        replayResultsActive.value = true;
-        tableResult.value = {
-          dtype: data.data.record_results_dtype || 'recorded',
-          results: data.data.record_results_mode === 'embedded'
-            ? (data.data.record_results || {})
-            : {},
-        };
-        resultsBoardHex.value = currentBoardHex.value;
-        if (awaitingSpawn.value) {
-          demoActive.value = false;
-          clearDemoTimer();
-        } else if (demoActive.value) {
-          if (recordPlaybackAtEnd.value) {
-            demoActive.value = false;
-            clearDemoTimer();
-          } else {
-            scheduleDemoStep();
-          }
-        }
-        return;
-      }
+    if (data.action === 'TRAINER_SPAWN_RESULT') {
+      const response = data.data || {};
+      const pending = pendingSpawnQuery;
+      if (
+        !pending
+        || String(response.request_id || '') !== pending.requestId
+        || Number(response.revision) !== pending.revision
+        || String(response.board_hex || '').toLowerCase() !== localPracticeSession.boardHex
+        || localPracticeSession.revision !== pending.revision
+      ) return;
 
-      replayResultsActive.value = false;
-      if (boardChanged) {
-        invalidateResults();
+      pendingSpawnQuery = null;
+      let spawn = response.found
+        ? { index: Number(response.index), value: Number(response.value) }
+        : null;
+      let nextContext = localPracticeSession.context;
+      if (!spawn) {
+        const randomSpawn = createTrainerSpawnRandomSource(localPracticeSession.context || trainerPrefetchState);
+        spawn = selectRandomSpawn(localPracticeSession.board, spawnRate4(), randomSpawn.randomSource);
+        nextContext = randomSpawn.nextState();
       }
-      if (awaitingSpawn.value) {
-        finishResultsRefresh();
-        demoActive.value = false;
-        clearDemoTimer();
-        clearStepQueue();
-      } else if (boardChanged && !serverStateQueryAdopted) {
-        stepExecutionPending.value = false;
-        queryResults(queuedStepCount.value > 0 || demoActive.value ? 'step' : 'auto');
-      } else if (
-        optimisticMoveAccepted
-        && demoActive.value
-        && !pendingResultsRequests.size
-      ) {
-        queryResults('step');
-      }
-      maybeAutoApplyDefaultTablebase();
+      if (!spawn) return;
+      const reduced = reducePracticeSession(localPracticeSession, {
+        type: 'SPAWN',
+        expectedRevision: pending.revision,
+        index: spawn.index,
+        value: spawn.value,
+        nextContext,
+      });
+      if (!reduced.accepted) return;
+      localPracticeSession = reduced.state;
+      syncLocalPracticeSession();
+      invalidateResults();
+      queryResults(queuedStepCount.value > 0 || demoActive.value ? 'step' : 'auto');
+      window.queueMicrotask(flushQueuedTrainerMove);
       return;
     }
 
@@ -1128,7 +1148,10 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
           clearTablebaseResultCache();
           invalidateResults({ clearDisplay: true });
         }
-        if (resultBoardHex === currentBoardHex.value) finishResultsRefresh();
+        if (resultBoardHex === currentBoardHex.value) {
+          stepExecutionPending.value = false;
+          finishResultsRefresh();
+        }
         return;
       }
       if (resultBoardHex !== currentBoardHex.value) {
@@ -1164,6 +1187,8 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
         results: data.data.results || {},
       };
       resultsBoardHex.value = resultBoardHex;
+      stepExecutionPending.value = false;
+      persistTrainerPracticeSoon();
       if (!hasPlayableResults.value && !recordPlaybackActive.value) {
         demoActive.value = false;
         clearDemoTimer();
@@ -1253,23 +1278,35 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       clientId,
       onOpen: () => {
         wsStatus.value = 'connected';
-        initialStateSeen = false;
-        trainerResyncPending = true;
+        tablebaseReadyForConnection = false;
+        initialStateSeen = true;
         defaultTablebaseAutoApplyAttempted = false;
         loadCatalog({ preserveSelection: true });
-        triggerAction('GET_STATE');
+        const reattachingTablebase = !isEmptyPattern.value
+          && selectedTablebaseExists()
+          && tablebasePath.value === 'loaded';
+        if (reattachingTablebase) {
+          applyTablebase({ loadDefault: false, preserveLocalState: true });
+        } else {
+          maybeAutoApplyDefaultTablebase();
+        }
         applyTrainerJump();
       },
       onMessage: handleMessage,
       onClose: () => {
         wsStatus.value = 'disconnected';
-        trainerResyncPending = false;
-        clearRandomMovePipeline();
+        tablebaseReadyForConnection = false;
+        pendingTablebaseRequestId = '';
+        pendingTablebaseBoardRevision = null;
+        if (pendingTrainerJump.value) {
+          pendingTrainerJump.value.requestId = '';
+        }
         demoActive.value = false;
         clearDemoTimer();
         finishResultsRefresh();
         pendingResultsRequests.clear();
         clearStepQueue();
+        clearQueuedMoveDirections();
       },
     });
     wsStatus.value = 'connecting';
@@ -1281,11 +1318,9 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     clearDemoTimer();
     finishResultsRefresh();
     pendingResultsRequests.clear();
-    pendingOptimisticMoveBoardHex = '';
-    trainerResyncPending = false;
-    clearRandomMovePipeline();
-    pendingServerStateQuery = null;
+    pendingSpawnQuery = null;
     clearStepQueue();
+    clearQueuedMoveDirections();
     if (tablebaseRetryTimer) {
       window.clearTimeout(tablebaseRetryTimer);
       tablebaseRetryTimer = null;
@@ -1295,86 +1330,34 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     wsStatus.value = 'disconnected';
   };
 
-  const applyLocalBoardSnapshot = (
-    nextBoardHex,
-    {
-      nextHistory = [nextBoardHex],
-      nextMoves = [null],
-      nextAwaitingSpawn = false,
-      clearOnCacheMiss = true,
-    } = {},
-  ) => {
+  const applyLocalBoardSnapshot = (nextBoardHex, { clearOnCacheMiss = true } = {}) => {
     const normalized = normalizeTrainerBoardHex(nextBoardHex);
     if (!normalized) return false;
-
-    board.value = decodeBoard(BigInt(`0x${normalized}`));
-    metadata.value = {};
-    currentBoardHex.value = normalized;
-    hexInput.value = normalized;
-    fullHistory.value = nextHistory.slice();
-    fullMoves.value = nextMoves.slice();
-    awaitingSpawn.value = !!nextAwaitingSpawn;
+    const reduced = reducePracticeSession(localPracticeSession, {
+      type: 'SET_BOARD',
+      boardHex: normalized,
+      nextContext: trainerPrefetchState,
+    });
+    if (!reduced.accepted) return false;
+    localPracticeSession = reduced.state;
+    syncLocalPracticeSession({ animate: false });
     replayResultsActive.value = false;
     pendingResultsRequests.clear();
-    pendingOptimisticMoveBoardHex = '';
-    trainerResyncPending = false;
-    clearRandomMovePipeline();
-    pendingServerStateQuery = null;
+    pendingSpawnQuery = null;
     stepExecutionPending.value = false;
-
-    if (nextAwaitingSpawn) {
-      invalidateResults({ clearDisplay: true });
-      finishResultsRefresh();
-      return false;
-    }
     return applyCachedResultsForBoard(normalized, { clearOnMiss: clearOnCacheMiss });
   };
 
-  const clearPaletteSyncTimer = () => {
-    if (paletteSyncTimer) {
-      window.clearTimeout(paletteSyncTimer);
-      paletteSyncTimer = null;
-    }
-  };
-
-  const sendPaletteBoardSync = ({ query = false, force = false } = {}) => {
-    clearPaletteSyncTimer();
-    if (!paletteEditDirty || !currentBoardHex.value || wsStatus.value !== 'connected') return false;
-    if (isEmptyPattern.value && !force) return false;
-    const prepared = query
-      ? prepareResultsRequest(currentBoardHex.value, 'palette-exit')
-      : null;
-    const sent = triggerAction('SET_BOARD', {
-      hex_str: currentBoardHex.value,
-      client_optimistic: true,
-      edit_source: force ? 'sandbox-sync' : (query ? 'palette-commit' : 'palette'),
-      query_id: prepared?.requestId,
-    });
-    if (sent && (query || force)) paletteEditDirty = false;
-    return sent;
-  };
-
-  const schedulePaletteBoardSync = () => {
-    clearPaletteSyncTimer();
-    paletteSyncTimer = window.setTimeout(() => {
-      paletteSyncTimer = null;
-      sendPaletteBoardSync();
-    }, 150);
-  };
+  const clearPaletteSyncTimer = () => {};
 
   function finishPaletteEditing({ query = true } = {}) {
     if (!paletteEditDirty) return false;
-    if (shouldDeferTrainerBoardSync(patternType.value)) {
-      clearPaletteSyncTimer();
-      return false;
-    }
-    return sendPaletteBoardSync({ query });
+    paletteEditDirty = false;
+    if (query && !isEmptyPattern.value) queryResults('palette-exit');
+    return true;
   }
 
-  function syncPendingEmptyPatternBoard() {
-    if (!isEmptyPattern.value || !paletteEditDirty) return true;
-    return sendPaletteBoardSync({ force: true });
-  }
+  const syncPendingEmptyPatternBoard = () => true;
 
   const setBoard = () => {
     const normalized = normalizeTrainerBoardHex(hexInput.value);
@@ -1383,6 +1366,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     clearDemoTimer();
     finishResultsRefresh();
     clearStepQueue();
+    clearQueuedMoveDirections();
     clearPaletteSyncTimer();
     paletteEditDirty = false;
     currentPaletteValue.value = null;
@@ -1391,7 +1375,6 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       paletteEditDirty = true;
       return;
     }
-    triggerAction('SET_BOARD', { hex_str: normalized, client_optimistic: true });
     queryResults('set-board');
   };
 
@@ -1411,31 +1394,23 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       const cellVal = board.value[row * 4 + col];
       if (cellVal === 0) {
         const spawnVal = (btn === 2) ? 4 : 2;
-        const fromBoardHex = currentBoardHex.value || hexInput.value;
-        const nextBoard = board.value.slice();
         const spawnIndex = row * 4 + col;
-        nextBoard[spawnIndex] = spawnVal;
-        const nextBoardHex = boardHex(encodeBoard(nextBoard));
-        board.value = nextBoard;
-        metadata.value = { appear_tile: { index: spawnIndex, value: spawnVal } };
-        currentBoardHex.value = nextBoardHex;
-        hexInput.value = nextBoardHex;
-        pendingOptimisticMoveBoardHex = nextBoardHex;
-        awaitingSpawn.value = false;
         demoActive.value = false;
         clearDemoTimer();
         clearStepQueue();
-        invalidateResults();
-        const preparedQuery = prepareResultsRequest(nextBoardHex, 'auto');
-        triggerAction('TRAINER_MANUAL_SPAWN', {
-          row,
-          col,
-          val: spawnVal,
-          client_optimistic: true,
-          from_board_hex: fromBoardHex,
-          board_hex: nextBoardHex,
-          query_id: preparedQuery?.requestId,
+        clearQueuedMoveDirections();
+        pendingSpawnQuery = null;
+        const reduced = reducePracticeSession(localPracticeSession, {
+          type: 'SPAWN',
+          expectedRevision: localPracticeSession.revision,
+          index: spawnIndex,
+          value: spawnVal,
         });
+        if (!reduced.accepted) return;
+        localPracticeSession = reduced.state;
+        syncLocalPracticeSession();
+        invalidateResults();
+        queryResults('auto');
       }
       return;
     }
@@ -1455,11 +1430,12 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
+    clearQueuedMoveDirections();
     const edit = buildTrainerBoardEdit(board.value, row, col, nextVal);
     if (!edit) return;
     applyLocalBoardSnapshot(edit.boardHex);
     paletteEditDirty = true;
-    if (!shouldDeferTrainerBoardSync(patternType.value)) schedulePaletteBoardSync();
+    invalidateResults();
   };
 
   const onPatternChange = () => {
@@ -1479,23 +1455,41 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   const selectFolder = () => applyTablebase({ loadDefault: true });
 
-  const applyTablebase = ({ loadDefault = false } = {}) => {
+  const applyTablebase = ({ loadDefault = false, preserveLocalState = false } = {}) => {
     if (isEmptyPattern.value || !patternType.value || !targetValue.value) return;
     const fullPattern = `${patternType.value}_${targetValue.value}`;
-    clearRandomMovePipeline();
-    trainerResyncPending = true;
-    clearTablebaseResultCache();
+    if (!preserveLocalState) {
+      clearQueuedMoveDirections();
+      cancelPendingLocalTurn();
+      resetLocalRandomState();
+      createLocalPracticeSession(currentBoardHex.value || '0000000000000000');
+      clearTablebaseResultCache();
+    }
     recordPlaybackLoaded.value = false;
     replayResultsActive.value = false;
     pendingResultsRequests.clear();
-    invalidateResults({ clearDisplay: true });
-    startResultsRefresh();
+    if (!preserveLocalState) {
+      invalidateResults({ clearDisplay: true });
+      startResultsRefresh();
+    }
+    const requestId = `${clientId}_table_${++nextTablebaseRequestId}`;
+    pendingTablebaseRequestId = requestId;
+    pendingTablebaseBoardRevision = loadDefault ? localPracticeSession.revision : null;
+    tablebaseReadyForConnection = false;
     const sent = triggerAction('TRAINER_SET_FILEPATH', {
+      request_id: requestId,
       pattern: fullPattern,
       target: targetValue.value,
       load_default: loadDefault,
+      client_local_board: true,
+      preserve_client_board: !loadDefault,
+      client_revision: localPracticeSession.revision,
     });
-    if (!sent) trainerResyncPending = false;
+    if (!sent) {
+      pendingTablebaseRequestId = '';
+      pendingTablebaseBoardRevision = null;
+    }
+    return sent;
   };
 
   const trainerStep = () => {
@@ -1527,36 +1521,15 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
+    clearQueuedMoveDirections();
     if (!requireAuth()) return;
-    if (!syncPendingEmptyPatternBoard()) return;
-
-    const previous = recordOpen.value
-      ? null
-      : previousDistinctTrainerHistoryState(
-        fullHistory.value,
-        fullMoves.value,
-        currentBoardHex.value,
-      );
-    if (!previous) {
-      triggerAction('UNDO');
-      return;
-    }
-
-    const nextAwaitingSpawn = Number(spawnMode.value) === 3
-      && previous.lastMove !== null
-      && previous.lastMove !== 'spawn';
-    const cacheHit = applyLocalBoardSnapshot(previous.boardHex, {
-      nextHistory: previous.history,
-      nextMoves: previous.moves,
-      nextAwaitingSpawn,
-    });
-    triggerAction('UNDO', {
-      client_optimistic: true,
-      expected_board_hex: previous.boardHex,
-    });
-    if (!cacheHit && !nextAwaitingSpawn) {
-      queryResults('undo');
-    }
+    pendingSpawnQuery = null;
+    const reduced = reducePracticeSession(localPracticeSession, { type: 'UNDO' });
+    if (!reduced.accepted) return;
+    localPracticeSession = reduced.state;
+    syncLocalPracticeSession({ animate: false });
+    invalidateResults();
+    if (!isEmptyPattern.value) queryResults('undo');
   };
 
   const trainerDefault = () => {
@@ -1564,9 +1537,19 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
-    clearRandomMovePipeline();
-    trainerResyncPending = true;
-    if (!triggerAction('TRAINER_DEFAULT')) trainerResyncPending = false;
+    clearQueuedMoveDirections();
+    resetLocalRandomState();
+    const requestId = `${clientId}_table_${++nextTablebaseRequestId}`;
+    pendingTablebaseRequestId = requestId;
+    pendingTablebaseBoardRevision = localPracticeSession.revision;
+    if (!triggerAction('TRAINER_DEFAULT', {
+      request_id: requestId,
+      client_local_board: true,
+      client_revision: localPracticeSession.revision,
+    })) {
+      pendingTablebaseRequestId = '';
+      pendingTablebaseBoardRevision = null;
+    }
   };
 
   const toggleDemo = () => {
@@ -1588,15 +1571,44 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   const setSpawnMode = (mode) => {
     if (isEmptyPattern.value && [1, 2].includes(Number(mode))) return;
-    clearRandomMovePipeline();
-    spawnMode.value = mode;
-    trainerResyncPending = true;
-    if (!triggerAction('SET_SPAWN_MODE', { mode })) trainerResyncPending = false;
+    const normalizedMode = Math.max(0, Math.min(3, Math.trunc(Number(mode) || 0)));
+    clearQueuedMoveDirections();
+    spawnMode.value = normalizedMode;
+    persistTrainerPracticeSoon();
+    if (localPracticeSession.phase !== 'awaiting_spawn') return;
+    pendingSpawnQuery = null;
+    if (normalizedMode === 0) {
+      const randomSpawn = createTrainerSpawnRandomSource(localPracticeSession.context || trainerPrefetchState);
+      const spawn = selectRandomSpawn(localPracticeSession.board, spawnRate4(), randomSpawn.randomSource);
+      if (!spawn) return;
+      const reduced = reducePracticeSession(localPracticeSession, {
+        type: 'SPAWN',
+        index: spawn.index,
+        value: spawn.value,
+        nextContext: randomSpawn.nextState(),
+      });
+      if (!reduced.accepted) return;
+      localPracticeSession = reduced.state;
+      syncLocalPracticeSession();
+      queryResults('auto');
+    } else if (normalizedMode === 1 || normalizedMode === 2) {
+      requestSpawnForCurrentBoard(normalizedMode);
+    }
   };
 
   const transformBoard = (type) => {
-    if (!syncPendingEmptyPatternBoard()) return false;
-    return triggerAction('ROTATE', { type });
+    const transformed = transformTrainerBoard(localPracticeSession.board, type);
+    if (!transformed) return false;
+    const reduced = reducePracticeSession(localPracticeSession, {
+      type: 'SET_BOARD',
+      board: transformed,
+    });
+    if (!reduced.accepted) return false;
+    localPracticeSession = reduced.state;
+    syncLocalPracticeSession({ animate: false });
+    invalidateResults();
+    if (!isEmptyPattern.value) queryResults('transform');
+    return true;
   };
 
   const manageRecord = async (cmd) => {
@@ -1615,12 +1627,27 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   const moveBoard = (dir) => {
     const normalized = String(dir || '').toLowerCase();
-    if (!['up', 'down', 'left', 'right'].includes(normalized) || awaitingSpawn.value) return;
+    if (!['up', 'down', 'left', 'right'].includes(normalized)) return false;
+    if (awaitingSpawn.value) {
+      if ([1, 2].includes(Number(spawnMode.value)) && queuedMoveDirections.length < 4) {
+        queuedMoveDirections.push(normalized);
+        return true;
+      }
+      return false;
+    }
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
-    executeTrainerMove(normalized);
+    return executeTrainerMove(normalized);
   };
+
+  function flushQueuedTrainerMove() {
+    if (awaitingSpawn.value || !queuedMoveDirections.length) return;
+    const direction = queuedMoveDirections.shift();
+    window.queueMicrotask(() => {
+      if (!executeTrainerMove(direction)) flushQueuedTrainerMove();
+    });
+  }
 
   const handleKeydown = (event) => {
     if (!hotkeysEnabledRef?.value) return;
@@ -1745,6 +1772,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   });
 
   onMounted(() => {
+    restoreTrainerPractice();
     syncActivePatternCategory();
     window.addEventListener('keydown', handleKeydown);
     window.addEventListener('trainer-practice-jump', handleTrainerPracticeJump);
@@ -1770,13 +1798,30 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   watch(isAuthenticated, (authenticated) => {
     if (authenticated) {
+      restoreTrainerPractice();
       if (isEmptyPattern.value) activateEmptyPattern();
       applyTrainerJump();
       maybeAutoApplyDefaultTablebase();
+    } else {
+      if (persistPracticeTimer) {
+        window.clearTimeout(persistPracticeTimer);
+        persistPracticeTimer = null;
+      }
+      practiceRestoreAttempted = false;
+      clearTrainerPracticeState();
+      resetTrainerPrefetchState();
+      localPracticeSession = createPracticeSession({ context: trainerPrefetchState });
+      syncLocalPracticeSession({ animate: false });
+      invalidateResults({ clearDisplay: true });
     }
   });
 
   onUnmounted(() => {
+    if (persistPracticeTimer) {
+      window.clearTimeout(persistPracticeTimer);
+      persistPracticeTimer = null;
+    }
+    persistTrainerPractice();
     unregisterTrainerPracticeJumpConsumer?.();
     unregisterTrainerPracticeJumpConsumer = null;
     finishPaletteEditing({ query: false });
@@ -1813,6 +1858,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     setBoard,
     board,
     metadata,
+    transition,
     dis32k,
     handleCellClick,
     awaitingSpawn,

@@ -23,8 +23,20 @@ import {
 } from '../../../services/tablebases/testerPrefetchRng';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { getStableWsClientId } from '../../../services/ws/clientIds';
-import { buildOptimisticMoveTransition } from '../../replay/engine/replayTransition';
-import { buildOptimisticTesterLastStep } from '../engine/testerOptimisticFeedback';
+import { saveLocalTesterReplay } from '../../replay/services/localTesterReplayStore';
+import { canApplyPracticeSeed } from '../../practice/engine/practiceSession.js';
+import {
+  clearTesterPracticeState,
+  restoreTesterPracticeState,
+  saveTesterPracticeState,
+} from '../services/testerPracticeStore';
+import {
+  applyTesterLocalMove,
+  createTesterLocalSession,
+  encodeTesterReplay,
+  replaceTesterLocalBoard,
+  testerReplayFilename,
+} from '../engine/testerLocalSession';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
 import {
@@ -39,7 +51,7 @@ export function useTesterSession(activeRef) {
   const DEFAULT_TABLEBASE_PATTERN = '442t';
   const DEFAULT_TABLEBASE_TARGET = '512';
   const { config: appConfig } = useAppSettingsStore();
-  const { isAuthenticated, requireAuth } = useAuthState();
+  const { isAuthenticated, requireAuth, user: authUser } = useAuthState();
 
   const fallbackPatternCategories = {
     basic: ['L3', 'LL', 'free8', 'free9', 'free10', '444'],
@@ -87,6 +99,7 @@ export function useTesterSession(activeRef) {
   const clientId = getStableWsClientId('tester');
   const board = ref(new Array(16).fill(0));
   const metadata = ref({});
+  const transition = ref(null);
   const dis32k = ref(false);
   const currentLanguage = ref('en');
   const showInsights = ref(true);
@@ -105,7 +118,7 @@ export function useTesterSession(activeRef) {
   const ready = ref(false);
   const lookupPending = ref(false);
   const queryInFlight = ref(false);
-  const queuedMoveDirection = ref('');
+  const queuedMoveDirections = [];
   const statusMessage = ref('');
   const recordLength = ref(0);
   const pendingPracticeJump = ref(null);
@@ -141,7 +154,13 @@ export function useTesterSession(activeRef) {
   let activeQuery = null;
   let queryRetryTimer = null;
   let testerPrefetchState = createTesterPrefetchState();
-  let pendingMovePrefetch = null;
+  let localTesterSession = null;
+  let nextBoardLoadId = 0;
+  let pendingBoardLoad = null;
+  let nextTablebaseAttachId = 0;
+  let pendingTablebaseAttachId = '';
+  let persistPracticeTimer = null;
+  let practiceRestoreAttempted = false;
 
   const spawnRate4 = () => Math.max(
     0,
@@ -150,7 +169,58 @@ export function useTesterSession(activeRef) {
 
   const resetTesterPrefetchState = () => {
     testerPrefetchState = createTesterPrefetchState();
-    pendingMovePrefetch = null;
+  };
+
+  const persistTesterPractice = () => {
+    if (!localTesterSession || !authUser.value?.id) return false;
+    return saveTesterPracticeState({
+      userId: Number(authUser.value.id),
+      pattern: selectedPattern.value,
+      target: selectedTarget.value,
+      ready: ready.value,
+      tableFound: tableFound.value,
+      statusMessage: statusMessage.value,
+      resultDtype: resultDtype.value,
+      results: results.value,
+      prefetchState: testerPrefetchState,
+      session: localTesterSession,
+    });
+  };
+
+  const persistTesterPracticeSoon = () => {
+    if (persistPracticeTimer) window.clearTimeout(persistPracticeTimer);
+    persistPracticeTimer = window.setTimeout(() => {
+      persistPracticeTimer = null;
+      persistTesterPractice();
+    }, 50);
+  };
+
+  const syncLocalTesterSession = ({ animate = true } = {}) => {
+    if (!localTesterSession?.practice) return false;
+    const practice = localTesterSession.practice;
+    board.value = [...practice.board];
+    metadata.value = animate ? (practice.transition?.metadata || {}) : {};
+    transition.value = animate ? (practice.transition || null) : null;
+    currentBoardHex.value = practice.boardHex;
+    hexInput.value = practice.boardHex;
+    lastStep.value = localTesterSession.lastStep;
+    metrics.value = { ...localTesterSession.metrics };
+    logs.value = [...localTesterSession.logs];
+    recordLength.value = localTesterSession.records.length;
+    persistTesterPracticeSoon();
+    return true;
+  };
+
+  const beginLocalTesterSession = ({ board: nextBoard, boardHex, openingLogs = [] } = {}) => {
+    localTesterSession = createTesterLocalSession({
+      board: nextBoard,
+      boardHex,
+      useVariant: isVariant.value,
+      context: testerPrefetchState,
+      performanceLabels: performanceLabels.value,
+      openingLogs,
+    });
+    syncLocalTesterSession({ animate: false });
   };
 
   const patternGroups = computed(() =>
@@ -171,6 +241,31 @@ export function useTesterSession(activeRef) {
     selectedPattern.value && selectedTarget.value ? `${selectedPattern.value}_${selectedTarget.value}` : 'Select Pattern'
   ));
   const isVariant = computed(() => isVariantPattern(selectedPattern.value, patternCategories.value));
+
+  const restoreTesterPractice = () => {
+    if (practiceRestoreAttempted || !authUser.value?.id) return false;
+    practiceRestoreAttempted = true;
+    const restored = restoreTesterPracticeState();
+    if (!restored || Number(restored.userId) !== Number(authUser.value.id)) {
+      if (restored) clearTesterPracticeState();
+      return false;
+    }
+    selectedPattern.value = String(restored.pattern || selectedPattern.value);
+    selectedTarget.value = String(restored.target || selectedTarget.value);
+    testerPrefetchState = restored.prefetchState || createTesterPrefetchState();
+    localTesterSession = restored.session;
+    ready.value = Boolean(restored.ready);
+    tableFound.value = Boolean(restored.tableFound);
+    statusMessage.value = String(restored.statusMessage || '');
+    resultDtype.value = String(restored.resultDtype || '?');
+    results.value = restored.results && typeof restored.results === 'object'
+      ? restored.results
+      : {};
+    syncCategoryFromPattern(selectedPattern.value);
+    syncLocalTesterSession({ animate: false });
+    lookupPending.value = false;
+    return true;
+  };
   const canMove = computed(() => (
     ready.value
     && tableFound.value
@@ -524,10 +619,6 @@ export function useTesterSession(activeRef) {
   const protectedActions = new Set([
     'TESTER_SELECT_PATTERN',
     'TESTER_RESET_RANDOM',
-    'TESTER_MOVE',
-    'TESTER_SET_BOARD',
-    'TESTER_EXPORT_LOG',
-    'TESTER_EXPORT_REPLAY',
     'TABLEBASE_QUERY',
   ]);
 
@@ -536,6 +627,47 @@ export function useTesterSession(activeRef) {
       return false;
     }
     client?.send(action, payload);
+    return true;
+  };
+
+  const requestTesterBoard = (action, payload = {}) => {
+    const requestId = `${clientId}_board_${++nextBoardLoadId}`;
+    const clientRevision = Number(localTesterSession?.practice?.revision || 0);
+    pendingBoardLoad = { requestId, clientRevision };
+    queuedMoveDirections.length = 0;
+    results.value = {};
+    resultDtype.value = '?';
+    lookupPending.value = true;
+    ready.value = false;
+    if (!triggerAction(action, {
+      ...payload,
+      request_id: requestId,
+      client_revision: clientRevision,
+      client_local_board: true,
+    })) {
+      pendingBoardLoad = null;
+      lookupPending.value = false;
+      return false;
+    }
+    return true;
+  };
+
+  const reattachTesterTablebase = () => {
+    if (!selectedPattern.value || !selectedTarget.value || wsStatus.value !== 'connected') {
+      return false;
+    }
+    const requestId = `${clientId}_attach_${++nextTablebaseAttachId}`;
+    pendingTablebaseAttachId = requestId;
+    if (!triggerAction('TESTER_SELECT_PATTERN', {
+      pattern: selectedPattern.value,
+      target: selectedTarget.value,
+      request_id: requestId,
+      client_local_board: true,
+      preserve_client_board: true,
+    })) {
+      pendingTablebaseAttachId = '';
+      return false;
+    }
     return true;
   };
 
@@ -559,7 +691,10 @@ export function useTesterSession(activeRef) {
     lastQueryScope = '';
     activeQuery = null;
     syncCategoryFromPattern(selectedPattern.value);
-    triggerAction('TESTER_SELECT_PATTERN', { pattern: selectedPattern.value, target: selectedTarget.value });
+    requestTesterBoard('TESTER_SELECT_PATTERN', {
+      pattern: selectedPattern.value,
+      target: selectedTarget.value,
+    });
   };
 
   const hasLocalPracticeState = () => (
@@ -578,24 +713,38 @@ export function useTesterSession(activeRef) {
       !initialStateSeen ||
       bootstrapSelectionSent ||
       !selectedPattern.value ||
-      !selectedTarget.value ||
-      hasLocalPracticeState()
+      !selectedTarget.value
     ) {
       return;
     }
     bootstrapSelectionSent = true;
-    applyPatternSelection();
+    if (hasLocalPracticeState()) reattachTesterTablebase();
+    else applyPatternSelection();
   };
 
   const resetRandom = () => {
     resetTesterPrefetchState();
-    return triggerAction('TESTER_RESET_RANDOM');
+    return requestTesterBoard('TESTER_RESET_RANDOM');
   };
   const applyManualBoard = () => {
-    if (hexInput.value.trim()) {
-      resetTesterPrefetchState();
-      triggerAction('TESTER_SET_BOARD', { hex_str: hexInput.value.trim() });
+    const normalized = String(hexInput.value || '').trim().replace(/^0x/iu, '').toLowerCase();
+    if (!/^[0-9a-f]{1,16}$/u.test(normalized) || !requireAuth()) return false;
+    resetTesterPrefetchState();
+    if (!localTesterSession) {
+      beginLocalTesterSession({ boardHex: normalized.padStart(16, '0') });
+    } else {
+      localTesterSession = replaceTesterLocalBoard(localTesterSession, {
+        boardHex: normalized.padStart(16, '0'),
+        context: testerPrefetchState,
+      });
+      syncLocalTesterSession({ animate: false });
     }
+    results.value = {};
+    resultDtype.value = '?';
+    lookupPending.value = true;
+    const cacheHit = queryTablebase(currentBoardHex.value);
+    if (cacheHit && queuedMoveDirections.length) window.queueMicrotask(flushQueuedMove);
+    return true;
   };
   const toggleInsights = () => { showInsights.value = !showInsights.value; };
 
@@ -621,6 +770,7 @@ export function useTesterSession(activeRef) {
       !normalizedBoard
       || !catalogVersion.value
       || !currentPatternDisplay.value
+      || !ready.value
       || !tableFound.value
       || wsStatus.value !== 'connected'
       || !isAuthenticated.value
@@ -661,6 +811,7 @@ export function useTesterSession(activeRef) {
     if (!prepared) return false;
     client?.send('TABLEBASE_QUERY', {
       page: 'tester',
+      client_local_board: true,
       query_id: prepared.queryId,
       catalog_version: catalogVersion.value,
       full_pattern: currentPatternDisplay.value,
@@ -682,77 +833,77 @@ export function useTesterSession(activeRef) {
         && wsStatus.value === 'connected'
         && (lookupPending.value || queryInFlight.value)
       ) {
-        queuedMoveDirection.value = normalizedDirection;
+        if (queuedMoveDirections.length < 4) queuedMoveDirections.push(normalizedDirection);
         return true;
       }
       return false;
     }
-    queuedMoveDirection.value = '';
-    const fromBoardHex = currentBoardHex.value;
-    const optimisticLastStep = buildOptimisticTesterLastStep({
-      board: board.value,
+    if (!localTesterSession) return false;
+    const deterministicSpawn = createTesterSpawnRandomSource(testerPrefetchState);
+    const moved = applyTesterLocalMove(localTesterSession, {
+      direction: normalizedDirection,
       results: results.value,
       dtype: resultDtype.value,
-      direction: normalizedDirection,
-      goodnessOfFit: metrics.value.goodness_of_fit,
+      spawnRate4: spawnRate4(),
+      randomSource: deterministicSpawn.randomSource,
+      nextContext: deterministicSpawn.nextState,
     });
-    const prefetchStateBeforeMove = {
-      state: [...testerPrefetchState.state],
-      turn: testerPrefetchState.turn,
-    };
-    const deterministicSpawn = createTesterSpawnRandomSource(testerPrefetchState);
-    const transition = buildOptimisticMoveTransition(
-      board.value,
-      normalizedDirection,
-      isVariant.value,
-      spawnRate4(),
-      deterministicSpawn.randomSource,
-    );
-    if (!transition) return false;
-
-    if (optimisticLastStep) lastStep.value = optimisticLastStep;
-
+    if (!moved.accepted) return false;
     testerPrefetchState = deterministicSpawn.nextState();
-    pendingMovePrefetch = {
-      boardHex: transition.hex,
-      previousState: prefetchStateBeforeMove,
-    };
-    board.value = transition.board;
-    metadata.value = transition.metadata;
-    currentBoardHex.value = transition.hex;
-    hexInput.value = transition.hex;
-    const preparedQuery = prepareTablebaseQuery(transition.hex);
-    client?.send('TESTER_MOVE', {
-      dir: normalizedDirection,
-      from_board_hex: fromBoardHex,
-      board_hex: transition.hex,
-      spawn_index: transition.spawnIndex,
-      spawn_value: transition.spawnValue,
-      query_id: preparedQuery?.queryId,
-      prefetch_rng: preparedQuery?.prefetchRng,
-    });
+    localTesterSession = moved.session;
+    syncLocalTesterSession();
+    results.value = {};
+    resultDtype.value = '?';
+    lookupPending.value = true;
+    const cacheHit = queryTablebase(currentBoardHex.value);
+    persistLatestReplay();
+    if (cacheHit && queuedMoveDirections.length) window.queueMicrotask(flushQueuedMove);
     return true;
   };
 
   const flushQueuedMove = () => {
-    const direction = queuedMoveDirection.value;
+    const direction = queuedMoveDirections.shift();
     if (!direction || !canMove.value) return;
-    queuedMoveDirection.value = '';
     window.queueMicrotask(() => {
       if (!move(direction) && (lookupPending.value || queryInFlight.value)) {
-        queuedMoveDirection.value = direction;
+        queuedMoveDirections.unshift(direction);
       }
     });
   };
 
   const saveLog = () => {
-    if (!logs.value.length) return;
-    triggerAction('TESTER_EXPORT_LOG');
+    if (!logs.value.length || !requireAuth()) return;
+    downloadText(
+      logs.value.join('\n'),
+      `tester_log_${Math.floor(Date.now() / 1000)}.txt`,
+      'text/plain;charset=utf-8',
+    );
+  };
+
+  const persistLatestReplay = () => {
+    if (recordLength.value < 1 || !localTesterSession || !requireAuth()) return;
+    const replay = encodeTesterReplay(localTesterSession);
+    if (!replay) return;
+    const filename = testerReplayFilename(
+      currentPatternDisplay.value,
+      metrics.value.goodness_of_fit,
+    );
+    saveLocalTesterReplay({
+      buffer: replay,
+      filename,
+      pattern: currentPatternDisplay.value,
+      useVariant: isVariant.value,
+    });
+    return { replay, filename };
   };
 
   const saveReplay = () => {
-    if (recordLength.value < 1) return;
-    triggerAction('TESTER_EXPORT_REPLAY');
+    const latest = persistLatestReplay();
+    if (!latest) return;
+    downloadBlob(
+      new Blob([latest.replay], { type: 'application/octet-stream' }),
+      latest.filename,
+    );
   };
 
   const handlePracticeJump = (event) => {
@@ -771,17 +922,16 @@ export function useTesterSession(activeRef) {
       : selectedTarget.value;
     ensureDefaultSelection();
     syncCategoryFromPattern(parsed.pattern);
-    pendingPracticeJump.value = {
-      pattern: selectedPattern.value,
-      target: selectedTarget.value,
-      hex,
-    };
+    pendingPracticeJump.value = null;
     resetTesterPrefetchState();
+    beginLocalTesterSession({ boardHex: hex, openingLogs: [] });
+    results.value = {};
+    resultDtype.value = '?';
+    ready.value = false;
+    tableFound.value = false;
+    lookupPending.value = false;
     if (wsStatus.value === 'connected') {
-      triggerAction('TESTER_SELECT_PATTERN', {
-        pattern: selectedPattern.value,
-        target: selectedTarget.value,
-      });
+      reattachTesterTablebase();
     }
   };
 
@@ -790,65 +940,34 @@ export function useTesterSession(activeRef) {
       patternCategories.value = payload?.categories || fallbackPatternCategories;
       availableTargets.value = (payload?.target_tiles || []).map(String);
     }
+    initialStateSeen = true;
     ensureDefaultSelection();
     maybeApplyInitialPatternSelection();
   };
 
-  const handleTesterState = (payload) => {
-    const previousBoardHex = currentBoardHex.value;
-    const incomingBoardHex = String(payload?.hex_str || currentBoardHex.value).toLowerCase();
-    if (pendingMovePrefetch) {
-      if (incomingBoardHex !== pendingMovePrefetch.boardHex) {
-        testerPrefetchState = pendingMovePrefetch.previousState;
-      }
-      pendingMovePrefetch = null;
-    } else if (incomingBoardHex && incomingBoardHex !== previousBoardHex) {
-      resetTesterPrefetchState();
-    }
+  const handleTesterBoardSeed = (payload) => {
+    const loadRequestId = String(payload?.load_request_id || '');
+    const pending = pendingBoardLoad;
+    if (!pending || loadRequestId !== pending.requestId) return;
+    pendingBoardLoad = null;
+    const seedIsCurrent = localTesterSession?.practice
+      ? canApplyPracticeSeed(
+        localTesterSession.practice,
+        pending.clientRevision,
+        payload?.client_revision,
+      )
+      : (
+        Number.isInteger(payload?.client_revision)
+        && payload.client_revision === pending.clientRevision
+      );
+    const incomingBoardHex = String(payload?.hex_str || '0000000000000000').toLowerCase();
     const incomingLabels = payload?.metrics?.performance_labels;
     performanceLabels.value = Array.isArray(incomingLabels) && incomingLabels.length
       ? [...incomingLabels]
       : [...fallbackPerformanceLabels];
-    board.value = Array.isArray(payload?.board) ? payload.board : new Array(16).fill(0);
-    metadata.value = payload?.animation || {};
-    currentBoardHex.value = incomingBoardHex;
-    hexInput.value = currentBoardHex.value;
-    if (activeQuery && activeQuery.boardHex !== currentBoardHex.value) {
-      activeQuery = null;
-      queryInFlight.value = false;
-    }
-    resultDtype.value = payload?.dtype || '?';
-    results.value = payload?.results || {};
-    if (Array.isArray(payload?.logs)) {
-      logs.value = payload.logs;
-    } else if (Array.isArray(payload?.logs_delta)) {
-      logs.value = [...logs.value, ...payload.logs_delta];
-    }
-    lastStep.value = payload?.last_step || {
-      board_lines: [],
-      result_lines: [],
-      results: {},
-      dtype: '?',
-      message_lines: [],
-      evaluation: '',
-      direction: null,
-      best_move: null,
-      loss: null,
-      goodness_of_fit: null,
-    };
     ready.value = !!payload?.ready;
-    lookupPending.value = !!payload?.lookup_pending;
     tableFound.value = !!payload?.table_found;
     statusMessage.value = payload?.status || '';
-    recordLength.value = payload?.record?.length || 0;
-    metrics.value = {
-      combo: payload?.metrics?.combo ?? 0,
-      max_combo: payload?.metrics?.max_combo ?? 0,
-      goodness_of_fit: payload?.metrics?.goodness_of_fit ?? 1,
-      performance_stats: payload?.metrics?.performance_stats || {},
-      score: payload?.metrics?.score ?? 0,
-      best_score: payload?.metrics?.best_score ?? 0,
-    };
     if (payload?.pattern && payload.pattern !== '?' && flatPatterns.value.includes(payload.pattern)) {
       selectedPattern.value = payload.pattern;
       syncCategoryFromPattern(payload.pattern);
@@ -860,36 +979,41 @@ export function useTesterSession(activeRef) {
     ) {
       selectedTarget.value = String(payload.target);
     }
-    if (
-      pendingPracticeJump.value &&
-      payload?.pattern === pendingPracticeJump.value.pattern &&
-      String(payload?.target) === pendingPracticeJump.value.target
-    ) {
-      const { hex } = pendingPracticeJump.value;
-      pendingPracticeJump.value = null;
-      triggerAction('TESTER_SET_BOARD', { hex_str: hex });
-    }
-    initialStateSeen = true;
-    maybeApplyInitialPatternSelection();
-    const hasServerResults = Object.values(results.value).some((value) => typeof value === 'number');
-    if (hasServerResults && catalogVersion.value && currentPatternDisplay.value) {
-      setCachedTablebaseResult(tablebaseCacheKey(currentBoardHex.value), {
-        found: true,
-        dtype: resultDtype.value,
-        results: results.value,
+    const jumpHex = (
+      pendingPracticeJump.value
+      && payload?.pattern === pendingPracticeJump.value.pattern
+      && String(payload?.target) === pendingPracticeJump.value.target
+    ) ? String(pendingPracticeJump.value.hex || '') : '';
+    pendingPracticeJump.value = null;
+    activeQuery = null;
+    queryInFlight.value = false;
+    queuedMoveDirections.length = 0;
+    results.value = {};
+    resultDtype.value = '?';
+    if (seedIsCurrent) {
+      beginLocalTesterSession({
+        board: jumpHex ? undefined : payload?.board,
+        boardHex: jumpHex || incomingBoardHex,
+        openingLogs: Array.isArray(payload?.logs) ? payload.logs : [],
       });
-      lookupPending.value = false;
-      queryInFlight.value = false;
-      flushQueuedMove();
-    } else if (
-      ready.value
-      && tableFound.value
-      && currentBoardHex.value !== '0000000000000000'
-      && (
-        previousBoardHex !== currentBoardHex.value
-        || lastQueryScope !== `${currentPatternDisplay.value}:${currentBoardHex.value}`
-      )
-    ) {
+    }
+    lookupPending.value = ready.value && tableFound.value;
+    if (lookupPending.value && currentBoardHex.value !== '0000000000000000') {
+      queryTablebase(currentBoardHex.value);
+    }
+  };
+
+  const handleTesterTablebaseReady = (payload) => {
+    const requestId = String(payload?.request_id || '');
+    if (!pendingTablebaseAttachId || requestId !== pendingTablebaseAttachId) return;
+    pendingTablebaseAttachId = '';
+    ready.value = !!payload?.ready;
+    tableFound.value = !!payload?.table_found;
+    statusMessage.value = payload?.status || '';
+    if (ready.value && tableFound.value && localTesterSession) {
+      results.value = {};
+      resultDtype.value = '?';
+      lookupPending.value = true;
       queryTablebase(currentBoardHex.value);
     }
   };
@@ -904,29 +1028,6 @@ export function useTesterSession(activeRef) {
       queryInFlight.value = false;
       flushQueuedMove();
     }
-    if (Array.isArray(payload?.logs_delta)) {
-      logs.value = [...logs.value, ...payload.logs_delta];
-    }
-  };
-
-  const handleTesterMoveAccepted = (payload) => {
-    const acceptedBoardHex = String(payload?.board_hex || '');
-    if (!acceptedBoardHex || acceptedBoardHex !== currentBoardHex.value) return;
-    if (pendingMovePrefetch?.boardHex === acceptedBoardHex) {
-      pendingMovePrefetch = null;
-    }
-    lastStep.value = payload?.last_step || lastStep.value;
-    lookupPending.value = !!payload?.lookup_pending
-      && !Object.values(results.value).some((value) => typeof value === 'number');
-    recordLength.value = payload?.record?.length ?? recordLength.value;
-    metrics.value = {
-      combo: payload?.metrics?.combo ?? metrics.value.combo,
-      max_combo: payload?.metrics?.max_combo ?? metrics.value.max_combo,
-      goodness_of_fit: payload?.metrics?.goodness_of_fit ?? metrics.value.goodness_of_fit,
-      performance_stats: payload?.metrics?.performance_stats || metrics.value.performance_stats,
-      score: payload?.metrics?.score ?? metrics.value.score,
-      best_score: payload?.metrics?.best_score ?? metrics.value.best_score,
-    };
     if (Array.isArray(payload?.logs_delta)) {
       logs.value = [...logs.value, ...payload.logs_delta];
     }
@@ -982,6 +1083,7 @@ export function useTesterSession(activeRef) {
       activeQuery = null;
     }
     statusMessage.value = '';
+    persistTesterPracticeSoon();
     if (Array.isArray(payload?.logs_delta)) {
       logs.value = [...logs.value, ...payload.logs_delta];
     }
@@ -1010,8 +1112,8 @@ export function useTesterSession(activeRef) {
 
   const handleWSMessage = (message) => {
     if (message.action === 'TESTER_BOOTSTRAP') handleTesterBootstrap(message.data);
-    else if (message.action === 'TESTER_STATE') handleTesterState(message.data);
-    else if (message.action === 'TESTER_MOVE_ACCEPTED') handleTesterMoveAccepted(message.data);
+    else if (message.action === 'TESTER_BOARD_SEED') handleTesterBoardSeed(message.data);
+    else if (message.action === 'TESTER_TABLEBASE_READY') handleTesterTablebaseReady(message.data);
     else if (message.action === 'TESTER_RESULTS') handleTesterResults(message.data);
     else if (message.action === 'TABLEBASE_QUERY_RESULT') handleTablebaseQueryResult(message.data);
     else if (message.action === 'TABLEBASE_PREFETCH') handleTablebasePrefetch(message.data);
@@ -1052,16 +1154,7 @@ export function useTesterSession(activeRef) {
     ) {
       activeQuery = null;
       queryInFlight.value = false;
-      client?.send('TESTER_GET_INIT');
-    }
-    else if (message.action === 'TESTER_EXPORT_LOG') {
-      const payload = message.data || {};
-      downloadText(payload.text || '', payload.filename || 'tester_log.txt', payload.mime || 'text/plain;charset=utf-8');
-    } else if (message.action === 'TESTER_EXPORT_REPLAY') {
-      const payload = message.data || {};
-      const binary = atob(payload.base64 || '');
-      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-      downloadBlob(new Blob([bytes], { type: payload.mime || 'application/octet-stream' }), payload.filename || 'tester_replay.rpl');
+      lookupPending.value = false;
     }
   };
 
@@ -1076,7 +1169,7 @@ export function useTesterSession(activeRef) {
         bootstrapSelectionSent = false;
         initialStateSeen = false;
         loadCatalog({ preserveSelection: true });
-        triggerAction('TESTER_GET_INIT');
+        triggerAction('TESTER_GET_INIT', { client_local_board: true });
       },
       onMessage: handleWSMessage,
       onClose: () => {
@@ -1094,11 +1187,9 @@ export function useTesterSession(activeRef) {
     }
     activeQuery = null;
     queryInFlight.value = false;
-    queuedMoveDirection.value = '';
-    if (pendingMovePrefetch) {
-      testerPrefetchState = pendingMovePrefetch.previousState;
-      pendingMovePrefetch = null;
-    }
+    pendingBoardLoad = null;
+    pendingTablebaseAttachId = '';
+    queuedMoveDirections.length = 0;
     client?.disconnect();
     client = null;
     wsStatus.value = 'disconnected';
@@ -1138,6 +1229,7 @@ export function useTesterSession(activeRef) {
   };
 
   onMounted(() => {
+    restoreTesterPractice();
     syncCategoryFromPattern(selectedPattern.value);
     loadCatalog();
     window.addEventListener('keydown', handleKeyDown, true);
@@ -1174,11 +1266,38 @@ export function useTesterSession(activeRef) {
 
   watch(isAuthenticated, (authenticated) => {
     if (authenticated) {
+      restoreTesterPractice();
       maybeApplyInitialPatternSelection();
+    } else {
+      if (persistPracticeTimer) {
+        window.clearTimeout(persistPracticeTimer);
+        persistPracticeTimer = null;
+      }
+      practiceRestoreAttempted = false;
+      clearTesterPracticeState();
+      localTesterSession = null;
+      pendingBoardLoad = null;
+      board.value = new Array(16).fill(0);
+      metadata.value = {};
+      transition.value = null;
+      currentBoardHex.value = '0000000000000000';
+      hexInput.value = currentBoardHex.value;
+      results.value = {};
+      resultDtype.value = '?';
+      logs.value = [];
+      recordLength.value = 0;
+      ready.value = false;
+      tableFound.value = false;
+      lookupPending.value = false;
     }
   });
 
   onUnmounted(() => {
+    if (persistPracticeTimer) {
+      window.clearTimeout(persistPracticeTimer);
+      persistPracticeTimer = null;
+      persistTesterPractice();
+    }
     window.removeEventListener('keydown', handleKeyDown, true);
     window.removeEventListener('tester-practice-jump', handlePracticeJump);
     document.removeEventListener('click', closePatternMenuOnClick);
@@ -1189,6 +1308,7 @@ export function useTesterSession(activeRef) {
     wsStatus,
     board,
     metadata,
+    transition,
     dis32k,
     showInsights,
     availableTargets,

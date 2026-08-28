@@ -50,6 +50,7 @@ from backend.cloud_files import (
 )
 from backend.cloud_safety import (
     cloud_disabled_message,
+    cloud_payload_error,
     is_cloud_action_blocked,
     is_cloud_mode,
 )
@@ -523,6 +524,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
                     )
                     continue
 
+                payload_error = cloud_payload_error(action, payload)
+                if payload_error is not None:
+                    await _send_ws_error(websocket, payload_error)
+                    continue
+
                 if action == Action.AUTH_SESSION:
                     session = await _handle_auth_session(websocket, session, payload)
                     continue
@@ -639,6 +645,7 @@ def _action_requires_auth(action: str | None) -> bool:
         Action.TRAINER_DEFAULT,
         Action.TRAINER_MOVE,
         Action.TRAINER_MANUAL_SPAWN,
+        Action.TRAINER_SPAWN_QUERY,
         Action.TRAINER_STEP,
         Action.SET_BOARD,
         Action.SET_CELL,
