@@ -83,7 +83,19 @@
   "help": {
     "toc": {
       "expandAll": "Expand",
-      "collapseAll": "Collapse"
+      "collapseAll": "Collapse",
+      "empty": "No sections found",
+      "label": "Document contents"
+    },
+    "documents": {
+      "select": "Select help document",
+      "manual": "Application Help",
+      "loading": "Loading document...",
+      "loadError": "Unable to load this guide",
+      "notFound": "The selected guide is unavailable."
+    },
+    "guide": {
+      "openBoard": "Open in Trainer"
     },
     "search": {
       "open": "Find in Help",
@@ -160,6 +172,12 @@
     }
   },
   "trainer": {
+    "dock": {
+      "title": "Trainer layout",
+      "right": "Right",
+      "bottom": "Bottom",
+      "full": "Full"
+    },
     "top": {
       "path": "Path",
       "load": "Load",

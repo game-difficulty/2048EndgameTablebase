@@ -23,6 +23,8 @@ export function useTabManager() {
     activeTab.value = ensureTabOpen(tabId);
   };
 
+  const openTabInBackground = (tabId) => ensureTabOpen(tabId);
+
   const activateTab = (tabId) => {
     if (isTabOpen(tabId)) {
       activeTab.value = tabId;
@@ -96,5 +98,6 @@ export function useTabManager() {
     isTabOpen,
     moveTabRelative,
     openTab,
+    openTabInBackground,
   };
 }

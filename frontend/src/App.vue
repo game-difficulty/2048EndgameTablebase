@@ -1,6 +1,10 @@
 <template>
-  <div class="app-shell h-screen w-screen flex flex-col overflow-hidden">
-    <div class="flex items-center gap-2 overflow-x-auto bg-bg-main/80 p-2 shadow-sm z-50 border-b border-border-main backdrop-blur-md transition-colors duration-300">
+  <div
+    class="app-shell h-screen w-screen flex flex-col overflow-hidden"
+    @pointerdown.capture="handleWorkspaceFocus"
+    @focusin.capture="handleWorkspaceFocus"
+  >
+    <div class="flex items-center gap-2 overflow-x-auto overflow-y-hidden bg-bg-main/80 p-2 shadow-sm z-50 border-b border-border-main backdrop-blur-md transition-colors duration-300">
       <div
         v-for="tab in openTabDefinitions"
         :key="tab.id"
@@ -11,7 +15,7 @@
           dragTargetTabId === tab.id && draggedTabId && draggedTabId !== tab.id
             ? 'ring-2 ring-accent/50 bg-accent/8'
             : '',
-          activeTab === tab.id
+          isTabPresented(tab.id)
             ? 'surface-prominent text-white scale-[1.02]'
             : 'border-transparent bg-transparent text-text-secondary hover:bg-btn-bg/10 hover:text-text-main'
         ]"
@@ -41,81 +45,75 @@
       </div>
     </div>
 
-    <div class="flex-1 relative overflow-hidden">
-      <div
-        v-if="isTabOpen(TAB_IDS.MAIN_MENU)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.MAIN_MENU"
-      >
-        <MainMenuView :active="activeTab === TAB_IDS.MAIN_MENU" @selectTab="openTab" />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.GAMER)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.GAMER"
-      >
-        <GamerView :active="activeTab === TAB_IDS.GAMER" />
-      </div>
-      <div
+    <div :class="['app-workspace', trainerWorkspaceClass]">
+      <main class="app-primary-pane" data-primary-pane>
+        <div v-if="isTabOpen(TAB_IDS.MAIN_MENU)" class="absolute inset-0" v-show="activeTab === TAB_IDS.MAIN_MENU">
+          <MainMenuView :active="activeTab === TAB_IDS.MAIN_MENU" @selectTab="handleNavigateTab" />
+        </div>
+        <div v-if="isTabOpen(TAB_IDS.GAMER)" class="absolute inset-0" v-show="activeTab === TAB_IDS.GAMER">
+          <GamerView :active="activeTab === TAB_IDS.GAMER" />
+        </div>
+        <div v-if="isTabOpen(TAB_IDS.TESTER)" class="absolute inset-0" v-show="activeTab === TAB_IDS.TESTER">
+          <TesterView
+            :active="activeTab === TAB_IDS.TESTER"
+            @navigate-tab="handleNavigateTab"
+            @open-analysis="openAnalysisDialog"
+          />
+        </div>
+        <div v-if="isTabOpen(TAB_IDS.MINIGAMES)" class="absolute inset-0" v-show="activeTab === TAB_IDS.MINIGAMES">
+          <MinigamesView :active="activeTab === TAB_IDS.MINIGAMES" />
+        </div>
+        <div v-if="isTabOpen(TAB_IDS.REPLAY)" class="absolute inset-0" v-show="activeTab === TAB_IDS.REPLAY">
+          <ReplayReviewView
+            :active="activeTab === TAB_IDS.REPLAY"
+            @navigate-tab="handleNavigateTab"
+            @open-analysis="openAnalysisDialog"
+          />
+        </div>
+        <div v-if="isTabOpen(TAB_IDS.NOTEBOOK)" class="absolute inset-0" v-show="activeTab === TAB_IDS.NOTEBOOK">
+          <NotebookView :active="activeTab === TAB_IDS.NOTEBOOK" @navigate-tab="handleNavigateTab" />
+        </div>
+        <div v-if="isTabOpen(TAB_IDS.SETTINGS)" class="absolute inset-0" v-show="activeTab === TAB_IDS.SETTINGS">
+          <SettingsView :active="activeTab === TAB_IDS.SETTINGS" />
+        </div>
+        <div v-if="isTabOpen(TAB_IDS.HELP)" class="absolute inset-0" v-show="activeTab === TAB_IDS.HELP">
+          <HelpView :active="activeTab === TAB_IDS.HELP" @navigate-tab="handleNavigateTab" />
+        </div>
+      </main>
+
+      <section
         v-if="isTabOpen(TAB_IDS.TRAINER)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.TRAINER"
+        v-show="trainerVisible"
+        :class="['app-trainer-pane', trainerPaneActive ? 'app-pane--keyboard-active' : '']"
+        data-trainer-pane
       >
-        <TrainerView :active="activeTab === TAB_IDS.TRAINER" />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.TESTER)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.TESTER"
-      >
-        <TesterView
-          :active="activeTab === TAB_IDS.TESTER"
-          @navigate-tab="handleNavigateTab"
-          @open-analysis="openAnalysisDialog"
+        <div v-if="trainerDocked" class="trainer-dock-toolbar" role="toolbar" :aria-label="$t('trainer.dock.title')">
+          <button
+            type="button"
+            :class="['trainer-dock-button', trainerDockPlacement === TRAINER_DOCK_PLACEMENTS.RIGHT ? 'is-active' : '']"
+            :title="$t('trainer.dock.right')"
+            @click="setTrainerDockPlacement(TRAINER_DOCK_PLACEMENTS.RIGHT)"
+          >
+            {{ $t('trainer.dock.right') }}
+          </button>
+          <button
+            type="button"
+            :class="['trainer-dock-button', trainerDockPlacement === TRAINER_DOCK_PLACEMENTS.BOTTOM ? 'is-active' : '']"
+            :title="$t('trainer.dock.bottom')"
+            @click="setTrainerDockPlacement(TRAINER_DOCK_PLACEMENTS.BOTTOM)"
+          >
+            {{ $t('trainer.dock.bottom') }}
+          </button>
+          <button type="button" class="trainer-dock-button" :title="$t('trainer.dock.full')" @click="showTrainerFullPage">
+            {{ $t('trainer.dock.full') }}
+          </button>
+        </div>
+        <TrainerView
+          :active="trainerSessionActive"
+          :hotkeys-enabled="trainerHotkeysEnabled"
+          :dock-placement="trainerDockPlacement"
         />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.MINIGAMES)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.MINIGAMES"
-      >
-        <MinigamesView :active="activeTab === TAB_IDS.MINIGAMES" />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.REPLAY)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.REPLAY"
-      >
-        <ReplayReviewView
-          :active="activeTab === TAB_IDS.REPLAY"
-          @navigate-tab="handleNavigateTab"
-          @open-analysis="openAnalysisDialog"
-        />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.NOTEBOOK)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.NOTEBOOK"
-      >
-        <NotebookView
-          :active="activeTab === TAB_IDS.NOTEBOOK"
-          @navigate-tab="handleNavigateTab"
-        />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.SETTINGS)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.SETTINGS"
-      >
-        <SettingsView :active="activeTab === TAB_IDS.SETTINGS" />
-      </div>
-      <div
-        v-if="isTabOpen(TAB_IDS.HELP)"
-        class="absolute inset-0"
-        v-show="activeTab === TAB_IDS.HELP"
-      >
-        <HelpView :active="activeTab === TAB_IDS.HELP" />
-      </div>
+      </section>
     </div>
 
     <ReplayAnalysisDialog
@@ -178,11 +176,25 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { useAppSettingsStore } from './app/useAppSettings';
+import {
+  KEYBOARD_OWNERS,
+  keyboardOwner,
+  resetKeyboardOwnership,
+  setKeyboardOwner,
+  setSplitKeyboardMode,
+} from './app/keyboardOwnership';
 import { TAB_IDS } from './app/tabRegistry';
+import {
+  TRAINER_DOCK_PLACEMENTS,
+  isTrainerDocked,
+  normalizeTrainerDockPlacement,
+  resolveTrainerJumpDockPlacement,
+  trainerDockAvailable,
+} from './app/trainerDock';
 import { useTabManager } from './app/useTabManager';
 import MainMenuView from './components/MainMenuView.vue';
 import GamerView from './features/gamer/pages/GamerPage.vue';
@@ -194,6 +206,7 @@ import ReplayReviewView from './features/replay/pages/ReplayPage.vue';
 import SettingsView from './features/settings/pages/SettingsPage.vue';
 import TesterView from './features/tester/pages/TesterPage.vue';
 import TrainerView from './features/trainer/pages/TrainerPage.vue';
+import { queueTrainerPracticeJump } from './features/trainer/services/trainerPracticeJump';
 
 const { t } = useI18n();
 const analysisDialogOpen = ref(false);
@@ -215,9 +228,94 @@ const {
   isTabOpen,
   moveTabRelative,
   openTab,
+  openTabInBackground,
 } = useTabManager();
 const draggedTabId = ref(null);
 const dragTargetTabId = ref(null);
+const viewportWidth = ref(window.innerWidth);
+const viewportHeight = ref(window.innerHeight);
+const lastPrimaryTab = ref(TAB_IDS.MAIN_MENU);
+const trainerDockPreference = ref(normalizeTrainerDockPlacement(
+  window.localStorage.getItem('2048tables:trainer-dock-placement'),
+));
+
+const dockAvailable = computed(() => trainerDockAvailable(
+  viewportWidth.value,
+  viewportHeight.value,
+));
+const trainerDockPlacement = computed(() => (
+  dockAvailable.value
+    ? trainerDockPreference.value
+    : TRAINER_DOCK_PLACEMENTS.NONE
+));
+const trainerDocked = computed(() => isTrainerDocked(trainerDockPlacement.value));
+const trainerVisible = computed(() => (
+  isTabOpen(TAB_IDS.TRAINER)
+  && (trainerDocked.value || activeTab.value === TAB_IDS.TRAINER)
+));
+const trainerSessionActive = computed(() => trainerVisible.value);
+const trainerHotkeysEnabled = computed(() => (
+  activeTab.value === TAB_IDS.TRAINER
+  || (trainerDocked.value && keyboardOwner.value === KEYBOARD_OWNERS.TRAINER)
+));
+const trainerPaneActive = computed(() => trainerVisible.value && trainerHotkeysEnabled.value);
+const trainerWorkspaceClass = computed(() => {
+  if (trainerDockPlacement.value === TRAINER_DOCK_PLACEMENTS.RIGHT) {
+    return 'app-workspace--trainer-right';
+  }
+  if (trainerDockPlacement.value === TRAINER_DOCK_PLACEMENTS.BOTTOM) {
+    return 'app-workspace--trainer-bottom';
+  }
+  return 'app-workspace--single';
+});
+
+watch(activeTab, (tabId) => {
+  if (tabId !== TAB_IDS.TRAINER) {
+    lastPrimaryTab.value = tabId;
+  }
+});
+
+watch(trainerDocked, (docked) => {
+  setSplitKeyboardMode(docked && isTabOpen(TAB_IDS.TRAINER));
+  if (!docked) {
+    setKeyboardOwner(
+      activeTab.value === TAB_IDS.TRAINER
+        ? KEYBOARD_OWNERS.TRAINER
+        : KEYBOARD_OWNERS.PRIMARY,
+    );
+  }
+}, { immediate: true });
+
+const persistTrainerDockPreference = (placement) => {
+  trainerDockPreference.value = normalizeTrainerDockPlacement(placement);
+  window.localStorage.setItem(
+    '2048tables:trainer-dock-placement',
+    trainerDockPreference.value,
+  );
+};
+
+const setTrainerDockPlacement = (placement) => {
+  const normalized = normalizeTrainerDockPlacement(placement);
+  if (normalized !== TRAINER_DOCK_PLACEMENTS.NONE && !dockAvailable.value) return;
+  persistTrainerDockPreference(normalized);
+  if (isTrainerDocked(normalized) && activeTab.value === TAB_IDS.TRAINER) {
+    activateTab(lastPrimaryTab.value);
+  }
+  setSplitKeyboardMode(isTrainerDocked(normalized) && isTabOpen(TAB_IDS.TRAINER));
+  setKeyboardOwner(isTrainerDocked(normalized) ? KEYBOARD_OWNERS.TRAINER : KEYBOARD_OWNERS.PRIMARY);
+};
+
+const showTrainerFullPage = () => {
+  persistTrainerDockPreference(TRAINER_DOCK_PLACEMENTS.NONE);
+  activateTab(TAB_IDS.TRAINER);
+  setSplitKeyboardMode(false);
+  setKeyboardOwner(KEYBOARD_OWNERS.TRAINER);
+};
+
+const isTabPresented = (tabId) => (
+  activeTab.value === tabId
+  || (tabId === TAB_IDS.TRAINER && trainerDocked.value && isTabOpen(tabId))
+);
 
 const getTabLabel = (tab) => (tab.titleKey ? t(tab.titleKey) : tab.title);
 const openAnalysisDialog = (context = {}) => {
@@ -231,13 +329,30 @@ const closeAnalysisDialog = () => {
 };
 
 const handleNavigateTab = (tabId, detail = null) => {
-  openTab(tabId);
-  if (tabId !== TAB_IDS.TRAINER || !detail?.hex) {
+  if (tabId === TAB_IDS.TRAINER && detail?.hex) {
+    queueTrainerPracticeJump(detail);
+    const requestedPlacement = resolveTrainerJumpDockPlacement({
+      placement: trainerDockPreference.value,
+      dockAvailable: dockAvailable.value,
+      sourceIsHelp: Boolean(detail.sourceDocumentId),
+    });
+    if (isTrainerDocked(requestedPlacement)) {
+      openTabInBackground(tabId);
+      persistTrainerDockPreference(requestedPlacement);
+      setSplitKeyboardMode(true);
+    } else {
+      persistTrainerDockPreference(TRAINER_DOCK_PLACEMENTS.NONE);
+      openTab(tabId);
+    }
+    setKeyboardOwner(KEYBOARD_OWNERS.TRAINER);
+    nextTick(() => setKeyboardOwner(KEYBOARD_OWNERS.TRAINER));
     return;
   }
-  nextTick(() => {
-    window.dispatchEvent(new CustomEvent('trainer-practice-jump', { detail }));
-  });
+  if (tabId === TAB_IDS.TRAINER) {
+    persistTrainerDockPreference(TRAINER_DOCK_PLACEMENTS.NONE);
+    setKeyboardOwner(KEYBOARD_OWNERS.TRAINER);
+  }
+  openTab(tabId);
 };
 
 const globalErrorSummary = computed(() => {
@@ -377,6 +492,9 @@ const handleGlobalPointerUp = (event) => {
 };
 
 const handleGlobalBoardHotkeyFocus = (event) => {
+  if (event.key === 'Escape' && trainerDocked.value) {
+    setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
+  }
   if (!BOARD_HOTKEYS.has(event.key)) {
     return;
   }
@@ -393,13 +511,39 @@ const handleGlobalBoardHotkeyFocus = (event) => {
 };
 
 const handleActivateTab = (tabId, event) => {
+  if (tabId === TAB_IDS.TRAINER && trainerDocked.value) {
+    setKeyboardOwner(KEYBOARD_OWNERS.TRAINER);
+    blurButtonTarget(event);
+    return;
+  }
   activateTab(tabId);
+  setKeyboardOwner(
+    tabId === TAB_IDS.TRAINER ? KEYBOARD_OWNERS.TRAINER : KEYBOARD_OWNERS.PRIMARY,
+  );
   blurButtonTarget(event);
 };
 
 const handleCloseTab = (tabId, event) => {
   closeTab(tabId);
+  if (tabId === TAB_IDS.TRAINER) {
+    persistTrainerDockPreference(TRAINER_DOCK_PLACEMENTS.NONE);
+    resetKeyboardOwnership();
+  }
   blurButtonTarget(event);
+};
+
+const handleWorkspaceFocus = (event) => {
+  if (!trainerDocked.value || !(event.target instanceof Element)) return;
+  setKeyboardOwner(
+    event.target.closest('[data-trainer-pane]')
+      ? KEYBOARD_OWNERS.TRAINER
+      : KEYBOARD_OWNERS.PRIMARY,
+  );
+};
+
+const updateViewportSize = () => {
+  viewportWidth.value = window.innerWidth;
+  viewportHeight.value = window.innerHeight;
 };
 
 const clearTabDragState = () => {
@@ -463,14 +607,17 @@ onMounted(() => {
     enqueueGlobalError(payload);
   }
   window.addEventListener('app-global-error', handleGlobalErrorEvent);
+  window.addEventListener('resize', updateViewportSize);
   document.addEventListener('pointerup', handleGlobalPointerUp, true);
   document.addEventListener('keydown', handleGlobalBoardHotkeyFocus, true);
 });
 
 onUnmounted(() => {
   window.removeEventListener('app-global-error', handleGlobalErrorEvent);
+  window.removeEventListener('resize', updateViewportSize);
   document.removeEventListener('pointerup', handleGlobalPointerUp, true);
   document.removeEventListener('keydown', handleGlobalBoardHotkeyFocus, true);
+  resetKeyboardOwnership();
   stopAppSettings();
 });
 </script>
@@ -479,5 +626,93 @@ onUnmounted(() => {
 .app-shell {
   background-color: var(--bg-main);
   background-image: var(--bg-main-gradient);
+}
+
+.app-workspace {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-primary-pane,
+.app-trainer-pane {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-workspace--single .app-primary-pane {
+  width: 100%;
+  height: 100%;
+}
+
+.app-workspace--single .app-trainer-pane {
+  position: absolute;
+  inset: 0;
+}
+
+.app-workspace--trainer-right {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 450px;
+}
+
+.app-workspace--trainer-right .app-trainer-pane {
+  border-left: 1px solid var(--border-main);
+}
+
+.app-workspace--trainer-bottom {
+  overflow-y: auto;
+}
+
+.app-workspace--trainer-bottom .app-primary-pane,
+.app-workspace--trainer-bottom .app-trainer-pane {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+}
+
+.app-workspace--trainer-bottom .app-trainer-pane {
+  border-top: 1px solid var(--border-main);
+}
+
+.app-trainer-pane {
+  background: var(--bg-main);
+  box-shadow: inset 0 0 0 2px transparent;
+  transition: box-shadow 120ms ease;
+}
+
+.app-pane--keyboard-active {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.trainer-dock-toolbar {
+  position: absolute;
+  top: 0.65rem;
+  right: 0.65rem;
+  z-index: 140;
+  display: flex;
+  gap: 0.3rem;
+  border: 1px solid var(--border-main);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  padding: 0.25rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.trainer-dock-button {
+  border-radius: 4px;
+  padding: 0.3rem 0.5rem;
+  color: var(--text-secondary);
+  font-size: calc(0.7rem * var(--ui-scale));
+  font-weight: 800;
+}
+
+.trainer-dock-button:hover,
+.trainer-dock-button.is-active {
+  background: var(--btn-bg);
+  color: white;
 }
 </style>

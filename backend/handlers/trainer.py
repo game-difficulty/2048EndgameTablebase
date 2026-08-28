@@ -44,6 +44,53 @@ def _set_random_trainer_board(session: GameSession, path_list) -> None:
     session.trainer_results = {}
 
 
+def _configure_trainer_tablebase(
+    session: GameSession,
+    pattern: str,
+    target: str,
+    filepath: str | None,
+    spawn_rate4: float,
+):
+    config = SingletonConfig().config
+    filepath_map = config["filepath_map"]
+    pattern_key = SingletonConfig.get_pattern_key(pattern, spawn_rate4)
+    original_path_list = list(filepath_map.get(pattern_key, []))
+    SingletonConfig.clean_pattern_paths(pattern, spawn_rate4, persist=False)
+    current_path_list = list(filepath_map.get(pattern_key, []))
+    normalized_path_list = current_path_list
+    updated_config = current_path_list != original_path_list
+
+    if filepath:
+        success_rate_dtype = SingletonConfig.read_success_rate_dtype(filepath, pattern)
+        table_4sr = SingletonConfig.read_4sr(filepath, pattern)
+        table_4sr = table_4sr if table_4sr is not None else spawn_rate4
+        pattern_key = SingletonConfig.get_pattern_key(pattern, table_4sr)
+        SingletonConfig.clean_pattern_paths(pattern, table_4sr, persist=False)
+        current_path_list = list(filepath_map.get(pattern_key, []))
+        normalized_path_list = [
+            (path, dtype)
+            for path, dtype in current_path_list
+            if path != filepath
+        ]
+        normalized_path_list.append((filepath, success_rate_dtype))
+        filepath_map[pattern_key] = normalized_path_list
+        SingletonConfig.clean_pattern_paths(pattern, table_4sr, persist=False)
+        normalized_path_list = list(filepath_map.get(pattern_key, []))
+        updated_config = True
+
+    filepath_map[pattern_key] = normalized_path_list
+    if updated_config:
+        SingletonConfig().save_config(config)
+
+    path_list = list(filepath_map.get(pattern_key, []))
+    pattern_name = pattern.rsplit("_", 1)[0]
+    session.ensure_book_reader().dispatch(path_list, pattern_name, target)
+    session.current_pattern = pattern
+    session.pattern_settings = [pattern_name, target]
+    session.use_variant = pattern_name in category_info.get("variant", [])
+    return path_list
+
+
 async def handle_trainer_action(
     action: str,
     payload: dict[str, Any],
@@ -67,43 +114,9 @@ async def handle_trainer_action(
         session.played_length = 0
         session.moved = 0
         session.trainer_results = {}
-        config = SingletonConfig().config
-        filepath_map = config["filepath_map"]
-        pattern_key = SingletonConfig.get_pattern_key(pattern, spawn_rate4)
-        original_path_list = list(filepath_map.get(pattern_key, []))
-        SingletonConfig.clean_pattern_paths(pattern, spawn_rate4, persist=False)
-        current_path_list = list(filepath_map.get(pattern_key, []))
-        normalized_path_list = current_path_list
-        updated_config = current_path_list != original_path_list
-
-        if filepath:
-            success_rate_dtype = SingletonConfig.read_success_rate_dtype(filepath, pattern)
-            table_4sr = SingletonConfig.read_4sr(filepath, pattern)
-            table_4sr = table_4sr if table_4sr is not None else spawn_rate4
-            pattern_key = SingletonConfig.get_pattern_key(pattern, table_4sr)
-            current_path_list = list(filepath_map.get(pattern_key, []))
-            SingletonConfig.clean_pattern_paths(pattern, table_4sr, persist=False)
-            current_path_list = list(filepath_map.get(pattern_key, []))
-            normalized_path_list = [
-                (path, dtype)
-                for path, dtype in current_path_list
-                if path != filepath
-            ]
-            normalized_path_list.append((filepath, success_rate_dtype))
-            filepath_map[pattern_key] = normalized_path_list
-            SingletonConfig.clean_pattern_paths(pattern, table_4sr, persist=False)
-            normalized_path_list = list(filepath_map.get(pattern_key, []))
-            updated_config = True
-
-        filepath_map[pattern_key] = normalized_path_list
-        if updated_config:
-            SingletonConfig().save_config(config)
-
-        path_list = list(filepath_map.get(pattern_key, []))
-        session.ensure_book_reader().dispatch(path_list, pattern.split("_")[0], target)
-        session.current_pattern = pattern
-        session.pattern_settings = [pattern.split("_")[0], target]
-        session.use_variant = pattern.split("_")[0] in category_info.get("variant", [])
+        path_list = _configure_trainer_tablebase(
+            session, str(pattern), str(target), filepath, spawn_rate4
+        )
 
         if payload.get("load_default") and path_list:
             try:
@@ -113,6 +126,61 @@ async def handle_trainer_action(
 
         await manager.send_state(websocket)
         await send_trainer_results(session, websocket)
+        return True
+
+    if action == Action.TRAINER_LOAD_POSITION:
+        request_id = str(payload.get("request_id") or "")[:160]
+        hex_str = str(payload.get("hex_str") or "").strip()
+        try:
+            board_encoded = np_u64(int(hex_str, 16))
+        except (TypeError, ValueError, OverflowError):
+            await websocket.send_json(
+                {
+                    "action": Message.TRAINER_POSITION_LOADED,
+                    "data": {"request_id": request_id, "success": False},
+                }
+            )
+            return True
+
+        full_pattern = str(payload.get("full_pattern") or "").strip()
+        if full_pattern:
+            pattern_parts = full_pattern.rsplit("_", 1)
+            if len(pattern_parts) != 2 or not all(pattern_parts):
+                await websocket.send_json(
+                    {
+                        "action": Message.TRAINER_POSITION_LOADED,
+                        "data": {"request_id": request_id, "success": False},
+                    }
+                )
+                return True
+            _configure_trainer_tablebase(
+                session,
+                full_pattern,
+                pattern_parts[1],
+                None,
+                spawn_rate4,
+            )
+
+        _clear_record_replay(session)
+        session.board_encoded = board_encoded
+        session.score = 0
+        session.history = [(session.board_encoded, session.score)]
+        session.move_history = [None]
+        session.played_length = 0
+        session.moved = 0
+        session.trainer_results = {}
+        await manager.send_state(websocket)
+        await send_trainer_results(session, websocket)
+        await websocket.send_json(
+            {
+                "action": Message.TRAINER_POSITION_LOADED,
+                "data": {
+                    "request_id": request_id,
+                    "success": True,
+                    "full_pattern": session.current_pattern,
+                },
+            }
+        )
         return True
 
     if action == Action.TRAINER_GET_RESULTS:

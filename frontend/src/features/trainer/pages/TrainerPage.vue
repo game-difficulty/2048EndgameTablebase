@@ -1,8 +1,8 @@
 <template>
-  <div class="page-root">
-    <div class="relative z-[120] w-full max-w-6xl flex items-center justify-between mb-4">
-      <div class="flex items-center gap-3">
-        <span class="text-3xl font-extrabold tracking-tight text-text-main font-[Cambria,serif]">{{ currentPatternDisplay || '\u00a0' }}</span>
+  <div :class="['page-root trainer-page', `trainer-page--${dockPlacement}`]">
+    <div class="trainer-header relative z-[120] w-full max-w-6xl flex items-center justify-between mb-4">
+      <div class="trainer-title-row flex items-center gap-3">
+        <span class="trainer-title text-3xl font-extrabold tracking-tight text-text-main font-[Cambria,serif]">{{ currentPatternDisplay || '\u00a0' }}</span>
         <span :class="['badge-base', wsStatus === 'connected' ? 'badge-connection-connected' : 'badge-connection-disconnected']">
           {{ $t(`status.${wsStatus}`) }}
         </span>
@@ -86,9 +86,9 @@
       </div>
     </div>
 
-    <div class="relative z-0 w-full max-w-6xl flex flex-row gap-6 items-start">
-      <div class="flex flex-col items-center" style="width: 442px; min-width: 240px;">
-        <div class="w-full flex gap-2 mb-3">
+    <div class="trainer-layout relative z-0 w-full max-w-6xl flex flex-row gap-6 items-start">
+      <div class="trainer-board-column flex flex-col items-center" style="width: 442px; min-width: 240px;">
+        <div class="trainer-board-input-row w-full flex gap-2 mb-3">
           <input
             type="text"
             v-model="hexInput"
@@ -111,7 +111,7 @@
           />
         </div>
 
-        <div class="w-full mt-4 bg-bg-card border border-border-main rounded-lg p-3 shadow-sm">
+        <div class="trainer-palette-card w-full mt-4 bg-bg-card border border-border-main rounded-lg p-3 shadow-sm">
           <div class="flex justify-between items-center mb-2">
             <span class="ui-kicker font-black text-text-secondary uppercase tracking-widest leading-none">{{ $t('labels.tilePalette') }}</span>
             <div class="flex items-center gap-3">
@@ -129,7 +129,7 @@
               </span>
             </div>
           </div>
-          <div class="grid grid-cols-8 gap-1.5">
+          <div class="trainer-palette-grid grid grid-cols-8 gap-1.5">
             <button
               @click="togglePalette(0)"
               :class="['palette-btn', currentPaletteValue === 0 ? 'ring-2 ring-accent shadow-lg scale-110' : '']"
@@ -150,8 +150,8 @@
         </div>
       </div>
 
-      <div class="flex-1 min-w-[340px] flex flex-col gap-3">
-        <div class="console-card">
+      <div class="trainer-side-column flex-1 min-w-[340px] flex flex-col gap-3">
+        <div class="console-card trainer-results-card">
           <div class="console-card-header border-b border-border-main/20 pb-2 mb-2">
             <span>{{ $t('trainer.results.title') }}</span>
             <div class="flex items-center gap-2">
@@ -175,11 +175,11 @@
           </div>
           <div class="trainer-results-body">
             <template v-if="showResults && !awaitingSpawn">
-              <div class="mt-2 flex flex-col gap-1 transition-opacity" :class="resultsUpdatingVisible ? 'opacity-70' : 'opacity-100'">
+              <div class="trainer-results-list mt-2 flex flex-col gap-1 transition-opacity" :class="resultsUpdatingVisible ? 'opacity-70' : 'opacity-100'">
                 <div
                   v-for="item in displayedResults"
                   :key="item.dir"
-                  class="grid grid-cols-[1.25rem_23ch_minmax(0,1fr)] items-center gap-3 px-3 py-2 rounded-lg border border-border-main/20 bg-bg-main/30 group hover:bg-bg-main/50 transition-colors"
+                  class="trainer-result-row grid grid-cols-[1.25rem_23ch_minmax(0,1fr)] items-center gap-3 px-3 py-2 rounded-lg border border-border-main/20 bg-bg-main/30 group hover:bg-bg-main/50 transition-colors"
                   :style="getResultRowStyle(item)"
                 >
                   <span class="text-[16px] font-black w-5 text-center text-text-secondary group-hover:text-text-main">{{ dirLabels[item.dir] }}</span>
@@ -284,6 +284,8 @@ import { useTrainerSession } from '../composables/useTrainerSession';
 
 const props = defineProps({
   active: { type: Boolean, default: true },
+  hotkeysEnabled: { type: Boolean, default: true },
+  dockPlacement: { type: String, default: 'none' },
 });
 
 const spawnModeLabelKeys = ['random', 'best', 'worst', 'manual'];
@@ -342,7 +344,7 @@ const {
   manageRecord,
   onDis32kChange,
   patternMenuRoot,
-} = useTrainerSession(toRef(props, 'active'));
+} = useTrainerSession(toRef(props, 'active'), toRef(props, 'hotkeysEnabled'));
 
 const targetOptions = computed(() =>
   availableTargets.value.map((target) => ({
@@ -370,6 +372,109 @@ const handleTargetChange = (event) => {
 .trainer-results-body {
   position: relative;
   height: 13rem;
+}
+
+.trainer-page--right {
+  align-items: stretch;
+  overflow-y: auto;
+  padding: 3.1rem 0.55rem 0.55rem;
+}
+
+.trainer-page--right .trainer-header {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.35rem;
+  margin-bottom: 0.4rem;
+}
+
+.trainer-page--right .trainer-title-row {
+  min-width: 0;
+}
+
+.trainer-page--right .trainer-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 1.2rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trainer-page--right .top-menu-shell {
+  width: 100%;
+  min-width: 0;
+  gap: 0.3rem;
+}
+
+.trainer-page--right .top-menu-shell > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.trainer-page--right .top-menu-trigger {
+  width: 100%;
+}
+
+.trainer-page--right .trainer-layout {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.45rem;
+}
+
+.trainer-page--right .trainer-board-column {
+  width: min(100%, 324px) !important;
+  min-width: 0 !important;
+  align-self: center;
+}
+
+.trainer-page--right .trainer-side-column {
+  width: 100%;
+  min-width: 0;
+  gap: 0.45rem;
+}
+
+.trainer-page--right .trainer-board-input-row {
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.trainer-page--right .trainer-palette-card {
+  margin-top: 0.4rem;
+  padding: 0.45rem;
+}
+
+.trainer-page--right .trainer-palette-grid {
+  gap: 0.2rem;
+}
+
+.trainer-page--right .palette-btn {
+  height: 1.45rem;
+  aspect-ratio: auto;
+  border-radius: 0.3rem;
+  font-size: calc(0.58rem * var(--ui-scale));
+}
+
+.trainer-page--right .console-card {
+  padding: 0.5rem 0.6rem;
+}
+
+.trainer-page--right .trainer-results-body {
+  height: 7.4rem;
+}
+
+.trainer-page--right .trainer-results-list {
+  gap: 0.1rem;
+  margin-top: 0.15rem;
+}
+
+.trainer-page--right .trainer-result-row {
+  grid-template-columns: 1.25rem minmax(0, 8.5rem) minmax(0, 1fr);
+  height: 1.5rem;
+  gap: 0.4rem;
+  padding: 0 0.55rem;
+}
+
+.trainer-page--bottom {
+  align-items: center;
 }
 
 .palette-btn {

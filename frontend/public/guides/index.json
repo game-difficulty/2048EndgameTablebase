@@ -1,0 +1,26 @@
+{
+  "documents": [
+    {
+      "id": "32768-dream-v3",
+      "language": "zh",
+      "source": "32768-dream-v3/document.json",
+      "title": "32768不是梦（第3版）",
+      "type": "guide"
+    },
+    {
+      "id": "l3-256-guide-2603",
+      "language": "zh",
+      "source": "l3-256-guide-2603/document.json",
+      "title": "L3-256 攻略（2603版）",
+      "type": "guide"
+    },
+    {
+      "id": "2048-34-variant-guide",
+      "language": "zh",
+      "source": "2048-34-variant-guide/document.json",
+      "title": "2048 3x4 模式攻略",
+      "type": "guide"
+    }
+  ],
+  "version": 1
+}

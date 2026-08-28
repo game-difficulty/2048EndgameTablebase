@@ -83,7 +83,19 @@
   "help": {
     "toc": {
       "expandAll": "展开",
-      "collapseAll": "收起"
+      "collapseAll": "收起",
+      "empty": "暂无目录",
+      "label": "文档目录"
+    },
+    "documents": {
+      "select": "选择帮助文档",
+      "manual": "程序帮助",
+      "loading": "正在加载文档...",
+      "loadError": "无法加载该攻略",
+      "notFound": "所选攻略不可用。"
+    },
+    "guide": {
+      "openBoard": "在训练页面打开"
     },
     "search": {
       "open": "在帮助中搜索",
@@ -160,6 +172,12 @@
     }
   },
   "trainer": {
+    "dock": {
+      "title": "训练页面布局",
+      "right": "右侧",
+      "bottom": "下方",
+      "full": "全页"
+    },
     "top": {
       "path": "路径",
       "load": "载入",

@@ -1,6 +1,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
+import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwnership';
 import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
 import { createWsClient } from '../../../services/ws/createWsClient';
@@ -482,7 +483,7 @@ export function useReplaySession(activeRef, emit) {
   };
 
   const handleKeyDown = (event) => {
-    if (!activeRef?.value) return;
+    if (!activeRef?.value || !keyboardInputAllowed(KEYBOARD_OWNERS.PRIMARY)) return;
     const target = event.target;
     if (target instanceof HTMLElement) {
       const isReplaySliderRange = target.matches('[data-replay-slider-range="true"]');

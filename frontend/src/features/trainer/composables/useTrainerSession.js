@@ -6,6 +6,7 @@ import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
 import { resultBarPresentation } from '../../../utils/performanceConfig';
+import { registerTrainerPracticeJumpConsumer } from '../services/trainerPracticeJump';
 import {
   restoreSuccessRate,
   formatSuccessRate,
@@ -14,7 +15,7 @@ import {
   resultValueFontSize,
 } from '../../../utils/successRate';
 
-export function useTrainerSession(activeRef) {
+export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   const RESULT_REFRESH_GRACE_MS = 180;
   const RESULT_REFRESH_PLACEHOLDER_MS = 1400;
   const {
@@ -73,6 +74,8 @@ export function useTrainerSession(activeRef) {
   let demoTimer = null;
   let resultsStaleTimer = null;
   let resultsPlaceholderTimer = null;
+  let nextTrainerJumpId = 0;
+  let unregisterTrainerJumpConsumer = null;
   const resultsRefreshPhase = ref('idle');
 
   const recordStep = ref(0);
@@ -234,7 +237,9 @@ export function useTrainerSession(activeRef) {
   };
 
   const triggerAction = (action, payload = {}) => {
-    client?.send(action, payload);
+    if (!client) return false;
+    client.send(action, payload);
+    return true;
   };
 
   const selectPathWithDesktopDialog = async (dialogId) => {
@@ -266,33 +271,44 @@ export function useTrainerSession(activeRef) {
 
   const applyTrainerJump = () => {
     const pending = pendingTrainerJump.value;
-    if (!pending || wsStatus.value !== 'connected') return;
+    if (!pending || pending.sent || wsStatus.value !== 'connected') return;
+
+    const parsed = parseFullPattern(pending.fullPattern);
+    if (pending.fullPattern && (
+      !parsed
+      || !flatPatterns.value.includes(parsed.pattern)
+      || !availableTargets.value.includes(parsed.target)
+    )) {
+      return;
+    }
+    if (parsed) {
+      patternType.value = parsed.pattern;
+      targetValue.value = parsed.target;
+      syncActivePatternCategory();
+    }
 
     hexInput.value = pending.hex;
     currentBoardHex.value = pending.hex;
-    triggerAction('SET_BOARD', { hex_str: pending.hex });
-
-    const parsed = parseFullPattern(pending.fullPattern);
-    if (parsed && flatPatterns.value.includes(parsed.pattern) && availableTargets.value.includes(parsed.target)) {
-      const shouldSwitchPattern = currentPatternDisplay.value !== pending.fullPattern;
-      if (shouldSwitchPattern) {
-        patternType.value = parsed.pattern;
-        targetValue.value = parsed.target;
-        syncActivePatternCategory();
-        applyTablebase(null);
-      }
+    pending.sent = true;
+    const sent = triggerAction('TRAINER_LOAD_POSITION', {
+      request_id: pending.requestId,
+      full_pattern: pending.fullPattern,
+      hex_str: pending.hex,
+    });
+    if (!sent) {
+      pending.sent = false;
     }
-
-    pendingTrainerJump.value = null;
   };
 
-  const handleTrainerPracticeJump = (event) => {
-    const detail = event?.detail || {};
-    const hex = String(detail.hex || '').trim();
-    if (!hex) return;
+  const handleTrainerPracticeJump = (detail = {}) => {
+    const hex = String(detail.hex || '').trim().replace(/^0x/i, '').toLowerCase();
+    if (!/^[0-9a-f]{1,16}$/.test(hex)) return;
+    nextTrainerJumpId += 1;
     pendingTrainerJump.value = {
+      requestId: `trainer_jump_${Date.now()}_${nextTrainerJumpId}`,
       fullPattern: String(detail.fullPattern || '').trim(),
-      hex,
+      hex: hex.padStart(16, '0'),
+      sent: false,
     };
     applyTrainerJump();
   };
@@ -469,6 +485,8 @@ export function useTrainerSession(activeRef) {
       }
       const nextBoardHex = data.data.hex_str || hexInput.value;
       const boardChanged = !!nextBoardHex && nextBoardHex !== currentBoardHex.value;
+      const jumpStatePending = !!pendingTrainerJump.value?.sent
+        && nextBoardHex === pendingTrainerJump.value.hex;
       if (nextBoardHex) {
         currentBoardHex.value = nextBoardHex;
         hexInput.value = nextBoardHex;
@@ -517,10 +535,22 @@ export function useTrainerSession(activeRef) {
         demoActive.value = false;
         clearDemoTimer();
         clearStepQueue();
-      } else if (boardChanged) {
+      } else if (boardChanged && !jumpStatePending) {
         stepExecutionPending.value = false;
         queryResults(queuedStepCount.value > 0 || demoActive.value ? 'step' : 'auto');
       }
+      return;
+    }
+
+    if (data.action === 'TRAINER_POSITION_LOADED') {
+      const pending = pendingTrainerJump.value;
+      if (!pending || data.data?.request_id !== pending.requestId) {
+        return;
+      }
+      if (!data.data?.success) {
+        console.error('Trainer position jump was rejected.');
+      }
+      pendingTrainerJump.value = null;
       return;
     }
 
@@ -597,6 +627,9 @@ export function useTrainerSession(activeRef) {
       onMessage: handleMessage,
       onClose: () => {
         wsStatus.value = 'disconnected';
+        if (pendingTrainerJump.value) {
+          pendingTrainerJump.value.sent = false;
+        }
         demoActive.value = false;
         clearDemoTimer();
         finishResultsRefresh();
@@ -809,7 +842,7 @@ export function useTrainerSession(activeRef) {
   };
 
   const handleKeydown = (event) => {
-    if (!activeRef?.value) return;
+    if (!hotkeysEnabledRef?.value) return;
     if (event.code === 'Escape' && patternMenuOpen.value) {
       patternMenuOpen.value = false;
       return;
@@ -932,7 +965,9 @@ export function useTrainerSession(activeRef) {
   onMounted(() => {
     syncActivePatternCategory();
     window.addEventListener('keydown', handleKeydown);
-    window.addEventListener('trainer-practice-jump', handleTrainerPracticeJump);
+    unregisterTrainerJumpConsumer = registerTrainerPracticeJumpConsumer(
+      handleTrainerPracticeJump,
+    );
     document.addEventListener('click', closePatternMenuOnClick);
     document.addEventListener('contextmenu', preventCtx);
   });
@@ -950,7 +985,8 @@ export function useTrainerSession(activeRef) {
 
   onUnmounted(() => {
     window.removeEventListener('keydown', handleKeydown);
-    window.removeEventListener('trainer-practice-jump', handleTrainerPracticeJump);
+    unregisterTrainerJumpConsumer?.();
+    unregisterTrainerJumpConsumer = null;
     document.removeEventListener('click', closePatternMenuOnClick);
     document.removeEventListener('contextmenu', preventCtx);
     disconnect();
