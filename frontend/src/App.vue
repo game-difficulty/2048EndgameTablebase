@@ -663,6 +663,15 @@ const formatTokens = (value) => {
   });
 };
 
+const claimTrainerKeyboardForBoardJump = () => {
+  setKeyboardOwner(KEYBOARD_OWNERS.TRAINER);
+  nextTick(() => {
+    if (trainerSessionActive.value) {
+      setKeyboardOwner(KEYBOARD_OWNERS.TRAINER);
+    }
+  });
+};
+
 const handleNavigateTab = (tabId, detail = null) => {
   if (tabId === TAB_IDS.TRAINER && detail?.hex) {
     queueTrainerPracticeJump(detail);
@@ -678,11 +687,11 @@ const handleNavigateTab = (tabId, detail = null) => {
     if (isTrainerDocked(requestedDockPlacement)) {
       openTabInBackground(tabId);
       trainerDockPlacement.value = requestedDockPlacement;
-      setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
     } else {
       trainerDockPlacement.value = TRAINER_DOCK_PLACEMENTS.NONE;
       openTab(tabId);
     }
+    claimTrainerKeyboardForBoardJump();
     return;
   }
 
