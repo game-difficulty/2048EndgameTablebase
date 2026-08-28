@@ -157,6 +157,39 @@ test('a deterministic operation stream replays to the claimed terminal state', a
   assert.deepEqual(replayed.finalBoard, flattenBoard(controller.engine.board));
 });
 
+test('column chaos hard mode records a verifiable natural game over', async () => {
+  const runtime = makeRuntime();
+  let recorder = null;
+  const controller = new MinigameController({
+    difficulty: 1,
+    runtime,
+    onOperation({ operation, atMs, state }) {
+      recorder.record(operation, atMs, state);
+      if (state.engine?.isOver) recorder.finish(atMs, state);
+    },
+  });
+  recorder = new MinigameRankedRecorder({
+    runId: '123e4567-e89b-42d3-a456-426614174000',
+    gameId: 'column-chaos',
+    difficulty: 1,
+    seedHex: SEED,
+    startedAtMs: CLOCK.now(),
+  });
+  await controller.startGame('column-chaos', null, runtime);
+  const directions = ['left', 'down', 'right', 'up'];
+  for (let index = 0; !controller.engine.isOver && index < 20_000; index += 1) {
+    await controller.move(directions[index % directions.length]);
+  }
+  assert.equal(controller.engine.isOver, true);
+  assert.equal(recorder.ended, true);
+  assert.equal(recorder.actions.at(-1)?.reason, MGO1_END_REASON.GAME_OVER);
+
+  const replayed = await replayMgo1(recorder.encode(), { evilSpawn: deterministicEvilSpawn });
+  assert.equal(replayed.score, controller.engine.score);
+  assert.equal(replayed.trophyTier, controller.engine.isPassed);
+  assert.deepEqual(replayed.finalBoard, flattenBoard(controller.engine.board));
+});
+
 test('a retired ranked stream verifies before natural game over', async () => {
   const runtime = makeRuntime();
   let recorder;

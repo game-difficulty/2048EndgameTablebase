@@ -24,7 +24,8 @@
       </div>
       <span
         v-if="item.summary?.trophy"
-        :class="['pill-badge shrink-0', trophyClass]"
+        :class="['pill-badge max-w-[42%]', trophyClass]"
+        :title="trophyMeta.label"
       >
         {{ trophyMeta.label }}
       </span>

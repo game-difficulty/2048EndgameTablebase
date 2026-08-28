@@ -529,11 +529,16 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   border-radius: 999px;
   padding: 0.125rem 0.5rem;
   font-size: var(--font-ui-sm);
   font-weight: 700;
   line-height: 1.2;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -587,12 +592,31 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   border-radius: 999px;
   padding: 0.25rem 0.625rem;
   font-size: var(--font-ui-xs);
   font-weight: 900;
+  line-height: 1.2;
+  text-overflow: ellipsis;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  white-space: nowrap;
+  letter-spacing: 0;
+}
+
+.badge-state-compact {
+  max-width: min(100%, 12rem);
+}
+
+.badge-state-message {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+  text-overflow: clip;
 }
 
 .badge-state-running {
@@ -619,12 +643,19 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   border-radius: 999px;
   padding: 0.125rem 0.5rem;
   font-size: var(--font-ui-2xs);
   font-weight: 900;
+  line-height: 1.2;
+  text-overflow: ellipsis;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  white-space: nowrap;
+  letter-spacing: 0;
 }
 
 .pill-badge-accent {

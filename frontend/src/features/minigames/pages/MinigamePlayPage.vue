@@ -14,17 +14,21 @@
         />
       </div>
       <div class="flex justify-between w-full mb-6 items-center gap-4">
-        <div class="flex items-center gap-4 min-w-0">
+        <div class="flex min-w-0 items-center gap-4">
           <div class="min-w-0">
             <h1 class="minigame-title text-text-main font-bold leading-[0.94] font-[Cambria,serif]">
               {{ state.title }}
             </h1>
-            <div v-if="rankedStatusLabel" class="mt-2 badge-state badge-state-running inline-flex">
+            <div
+              v-if="rankedStatusLabel"
+              class="mt-2 badge-state badge-state-running badge-state-compact inline-flex"
+              :title="rankedStatusLabel"
+            >
               {{ rankedStatusLabel }}
             </div>
           </div>
         </div>
-        <div class="flex space-x-2">
+        <div class="flex shrink-0 space-x-2">
           <div class="bg-board-bg w-[122px] h-[56px] flex flex-col items-center justify-center rounded-md relative shadow-sm transition-all duration-300">
             <span class="text-text-secondary ui-caption font-black uppercase leading-none mb-1 tracking-tight">{{ $t('labels.score') }}</span>
             <span class="font-black text-white leading-none tabular-nums" style="font-size: calc(22px * var(--ui-scale));">{{ state.score }}</span>
@@ -76,7 +80,7 @@
       </div>
 
       <div v-if="toastMessage" class="w-full mt-3">
-        <div class="badge-state badge-state-running w-full justify-center">
+        <div class="badge-state badge-state-running badge-state-message w-full justify-center">
           {{ toastMessage }}
         </div>
       </div>

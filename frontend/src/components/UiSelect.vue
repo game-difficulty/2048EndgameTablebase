@@ -111,8 +111,9 @@
             </span>
             <span
               v-if="option.badge"
+              :title="option.badge"
               :class="[
-                'shrink-0 rounded-full border border-accent/28 bg-accent/12 px-1.5 py-0.5 text-[10px] font-black uppercase leading-none tracking-normal text-accent',
+                'min-w-0 max-w-[40%] shrink rounded-full border border-accent/28 bg-accent/12 px-1.5 py-0.5 text-[10px] font-black uppercase leading-none tracking-normal text-accent truncate',
                 option.badgeClass
               ]"
             >

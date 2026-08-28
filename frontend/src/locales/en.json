@@ -259,25 +259,27 @@
       "status": {
         "unranked": "Unranked",
         "starting": "Preparing",
-        "ranked_unavailable": "Ranked unavailable",
+        "ranked_unavailable": "Unavailable",
         "ranked": "Ranked",
-        "ineligible": "Not ranked",
+        "ineligible": "Unranked",
         "submitting": "Submitting",
         "pending": "Pending",
         "validating": "Verifying",
-        "verified": "Score verified and rankings updated",
-        "no_improvement": "Verified, below personal best",
-        "rejected": "Score verification failed",
-        "expired": "Ranked run expired",
-        "submission_failed": "Retry submission",
-        "submission_limited": "24-hour standard submission limit reached"
+        "verified": "Verified",
+        "no_improvement": "No improvement",
+        "rejected": "Rejected",
+        "expired": "Expired",
+        "submission_failed": "Retry",
+        "submission_limited": "Limit reached"
       },
       "reasons": {
         "spawnRateOutOfRange": "Leaderboard games require a 4-spawn chance from 10% to 80%.",
         "duplicateTab": "Another tab owns this ranked run. This tab is no longer rank eligible.",
         "activeRunExists": "This account already has an active ranked run in another tab.",
         "leaseLost": "This tab lost its ranked-run lease. This game is no longer rank eligible.",
-        "userChanged": "The signed-in account changed. This game is no longer rank eligible."
+        "userChanged": "The signed-in account changed. This game is no longer rank eligible.",
+        "userDailyLimit": "This account reached its rolling 24-hour standard submission limit.",
+        "ipDailyLimit": "This network reached its rolling 24-hour standard submission limit."
       }
     },
     "leaderboard": {
@@ -542,7 +544,7 @@
       "doneState": "Done",
       "failedState": "Failed",
       "completedState": "Completed",
-      "completedWithErrors": "Completed With Errors"
+      "completedWithErrors": "With errors"
     },
     "errors": {
       "network": "Network request failed. Please try again later.",

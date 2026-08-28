@@ -277,7 +277,9 @@
         "duplicateTab": "该排位对局已由另一个标签页占用，本页不再参与排名。",
         "activeRunExists": "该账号已有其他标签页正在进行排位对局。",
         "leaseLost": "本页已失去排位对局租约，本局不再参与排名。",
-        "userChanged": "登录账号发生变化，本局不再参与排名。"
+        "userChanged": "登录账号发生变化，本局不再参与排名。",
+        "userDailyLimit": "该账号已达到滚动 24 小时普通成绩提交上限。",
+        "ipDailyLimit": "当前网络已达到滚动 24 小时普通成绩提交上限。"
       }
     },
     "leaderboard": {

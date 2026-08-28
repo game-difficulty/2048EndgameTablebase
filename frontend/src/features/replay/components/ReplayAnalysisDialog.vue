@@ -7,12 +7,12 @@
     >
       <div class="analysis-dialog-shell w-full max-w-5xl overflow-hidden rounded-[30px] border border-border-main bg-bg-card shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
         <div class="analysis-dialog-header flex items-center justify-between border-b border-border-main/60 px-6 py-4">
-          <div>
+          <div class="min-w-0">
             <div class="ui-control font-black uppercase tracking-[0.24em] text-text-secondary">{{ $t('analysis.windowTag') }}</div>
             <div class="mt-1 text-2xl font-black text-text-main">{{ $t('analysis.title') }}</div>
           </div>
-          <div class="flex items-center gap-3">
-            <span :class="statusBadgeClass">{{ statusBadgeText }}</span>
+          <div class="flex min-w-0 items-center gap-3">
+            <span :class="[statusBadgeClass, 'badge-state-compact']" :title="statusBadgeText">{{ statusBadgeText }}</span>
             <button
               class="rounded-full border border-border-main bg-bg-main/80 px-3 py-1.5 ui-control font-black uppercase tracking-wider text-text-main transition-colors hover:border-accent/40 hover:text-accent"
               @click="$emit('close')"
@@ -124,7 +124,7 @@
           <section class="rounded-[24px] border border-border-main/70 bg-bg-main/65 p-5 shadow-inner">
             <div class="flex items-center justify-between">
               <div class="ui-control font-black uppercase tracking-[0.24em] text-text-secondary">{{ $t('analysis.progress.title') }}</div>
-              <span :class="statusBadgeClass">{{ statusBadgeText }}</span>
+              <span :class="[statusBadgeClass, 'badge-state-compact']" :title="statusBadgeText">{{ statusBadgeText }}</span>
             </div>
 
             <div class="mt-4 rounded-2xl border border-border-main bg-bg-card/85 p-4">
