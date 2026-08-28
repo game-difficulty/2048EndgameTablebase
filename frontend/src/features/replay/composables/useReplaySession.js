@@ -6,32 +6,28 @@ import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
+import {
+  evaluationColor,
+  resultBarPresentation,
+} from '../../../utils/performanceConfig';
 import { resultValueFontSize } from '../../../utils/successRate';
 
 export function useReplaySession(activeRef, emit) {
   const RESULT_REFRESH_GRACE_MS = 1200;
   const RESULT_REFRESH_PLACEHOLDER_MS = 2400;
-  const { config: appConfig, categories: appCategories, saveSetting } = useAppSettingsStore();
+  const {
+    config: appConfig,
+    categories: appCategories,
+    performanceConfig,
+    saveSetting,
+  } = useAppSettingsStore();
   const { t } = useI18n();
 
-  const COLOR_GREEN = '#2e7d32';
-  const COLOR_YG = '#8bc34a';
-  const COLOR_ORANGE = '#ff9800';
-  const COLOR_RED = '#f44336';
   const dirLabels = computed(() => (
     isZh()
       ? { left: '左', right: '右', up: '上', down: '下' }
       : { left: 'L', right: 'R', up: 'U', down: 'D' }
   ));
-  const evaluationColors = {
-    'Perfect!': '#2e7d32',
-    'Excellent!': '#7cb342',
-    'Nice try!': '#c0ca33',
-    'Not bad!': '#fb8c00',
-    'Mistake!': '#f4511e',
-    'Blunder!': '#e53935',
-    'Terrible!': '#b71c1c',
-  };
   const fallbackPerformanceLabels = ['Perfect!', 'Excellent!', 'Nice try!', 'Not bad!', 'Mistake!', 'Blunder!', 'Terrible!'];
   const performanceLabels = ref([...fallbackPerformanceLabels]);
   const zhEvaluationLabels = {
@@ -43,15 +39,6 @@ export function useReplaySession(activeRef, emit) {
     'Blunder!': 'Blunder!',
     'Terrible!': 'Terrible!',
   };
-  const evaluationColorPalette = [
-    '#2e7d32',
-    '#7cb342',
-    '#c0ca33',
-    '#fb8c00',
-    '#f4511e',
-    '#e53935',
-    '#b71c1c',
-  ];
 
   const wsStatus = ref('connecting');
   const board = ref(new Array(16).fill(0));
@@ -72,6 +59,7 @@ export function useReplaySession(activeRef, emit) {
   const combo = ref(0);
   const summary = ref({ total_moves: 0, final_gof: 0, max_combo: 0, counts: {} });
   const losses = ref([]);
+  const replayEvaluations = ref([]);
   const sliderThreshold = ref(1);
   const demoSpeed = ref(40);
   const dis32k = ref(false);
@@ -99,23 +87,10 @@ export function useReplaySession(activeRef, emit) {
   const isZh = () => String(currentLanguage.value || 'en').startsWith('zh');
   const getEvaluationLabel = (label) => (isZh() ? (zhEvaluationLabels[label] || label) : label);
   const perfectLabel = computed(() => performanceLabels.value[0] || fallbackPerformanceLabels[0]);
-  const getEvaluationColor = (label) => {
-    if (evaluationColors[label]) return evaluationColors[label];
-    const index = performanceLabels.value.indexOf(label);
-    if (index >= 0) return evaluationColorPalette[index % evaluationColorPalette.length];
-    return 'var(--accent)';
-  };
+  const getEvaluationColor = (label) => evaluationColor(label, performanceConfig.value);
   const trimTrailingZeros = (value) =>
     value.replace(/(\.\d*?[1-9])0+$/u, '$1').replace(/\.0+$/u, '').replace(/\.$/u, '');
   const formatReplayRate = (value) => trimTrailingZeros(Number(value || 0).toFixed(9));
-
-  const lerpColor = (c1, c2, ratio) => {
-    const parseRgbColor = (color) => color.slice(1).match(/.{2}/g).map(part => parseInt(part, 16));
-    const mix = (a, b) => Math.round(a + (b - a) * ratio);
-    const [r1, g1, b1] = parseRgbColor(c1);
-    const [r2, g2, b2] = parseRgbColor(c2);
-    return `rgb(${mix(r1, r2)}, ${mix(g1, g2)}, ${mix(b1, b2)})`;
-  };
 
   const fileDisplay = computed(() => {
     if (replaySource.value) {
@@ -132,7 +107,9 @@ export function useReplaySession(activeRef, emit) {
     return t('replay.status.noReplayLoaded');
   });
 
-  const goodnessDisplay = computed(() => Number(goodnessOfFit.value ?? 0).toFixed(4));
+  const goodnessDisplay = computed(() => Number(goodnessOfFit.value ?? 0).toFixed(
+    performanceConfig.value.report_decimal_places
+  ));
   const summaryMaxCombo = computed(() => Number(summary.value?.max_combo ?? 0));
 
   const sortedResults = computed(() => {
@@ -153,21 +130,11 @@ export function useReplaySession(activeRef, emit) {
       let color = 'var(--border-main)';
       if (item.val != null && bestVal > 0) {
         const relLoss = 1 - item.val / bestVal;
-        if (index === 0) {
-          pct = 100;
-          color = COLOR_GREEN;
-        } else if (relLoss <= 0.10) {
-          pct = (1 - relLoss / 0.10) * 100;
-          color = relLoss <= 0.001
-            ? COLOR_GREEN
-            : (relLoss <= 0.01
-              ? lerpColor(COLOR_GREEN, COLOR_YG, (relLoss - 0.001) / 0.009)
-              : (relLoss <= 0.03
-                ? lerpColor(COLOR_YG, COLOR_ORANGE, (relLoss - 0.01) / 0.02)
-                : lerpColor(COLOR_ORANGE, COLOR_RED, (relLoss - 0.03) / 0.07)));
-        } else {
-          color = COLOR_RED;
-        }
+        ({ pct, color } = resultBarPresentation(
+          relLoss,
+          index === 0,
+          performanceConfig.value
+        ));
       }
       return {
         ...item,
@@ -244,7 +211,9 @@ export function useReplaySession(activeRef, emit) {
       : 'var(--text-secondary)',
   }));
   const feedbackBestMoveStyle = computed(() => ({
-    color: loaded.value && currentStep.value < totalSteps.value ? COLOR_GREEN : 'var(--text-secondary)',
+    color: loaded.value && currentStep.value < totalSteps.value
+      ? performanceConfig.value.perfect.color
+      : 'var(--text-secondary)',
   }));
 
   const evaluationTotal = computed(() => Number(summary.value?.total_moves || 0));
@@ -474,6 +443,7 @@ export function useReplaySession(activeRef, emit) {
     combo.value = Number(payload?.combo || 0);
     summary.value = payload?.summary || { total_moves: 0, final_gof: 0, max_combo: 0, counts: {} };
     losses.value = Array.isArray(payload?.losses) ? payload.losses : [];
+    replayEvaluations.value = Array.isArray(payload?.evaluations) ? payload.evaluations : [];
     if (demoActive.value) scheduleDemo();
   };
 
@@ -610,7 +580,9 @@ export function useReplaySession(activeRef, emit) {
     currentStep,
     totalSteps,
     losses,
+    replayEvaluations,
     sliderThreshold,
+    performanceConfig,
     dis32k,
     menuOpen,
     menuRoot,

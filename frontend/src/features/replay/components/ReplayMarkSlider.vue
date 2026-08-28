@@ -76,11 +76,17 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import {
+  evaluationColor,
+  evaluationColorForRatio,
+} from '../../../utils/performanceConfig';
 
 const props = defineProps({
   losses: { type: Array, default: () => [] },
+  evaluations: { type: Array, default: () => [] },
   currentStep: { type: Number, default: 0 },
   threshold: { type: Number, default: 1 },
+  performanceConfig: { type: Object, default: () => ({}) },
 });
 
 const emit = defineEmits(['update-step', 'update-threshold']);
@@ -98,14 +104,11 @@ const progressPercent = computed(() => {
   return (sliderValue.value / sliderMax.value) * 100;
 });
 
-const colorForLoss = (loss) => {
-  if (loss >= 1 - 3e-10) return 'rgba(127, 255, 127, 0.9)';
-  if (loss >= 0.999) return 'rgba(128, 255, 0, 0.8)';
-  if (loss >= 0.99) return 'rgba(0, 255, 0, 0.78)';
-  if (loss >= 0.975) return 'rgba(255, 245, 0, 0.82)';
-  if (loss >= 0.9) return 'rgba(255, 165, 0, 0.84)';
-  if (loss >= 0.75) return 'rgba(255, 0, 127, 0.82)';
-  return 'rgba(255, 0, 0, 0.82)';
+const colorForLoss = (loss, index) => {
+  const label = props.evaluations?.[index];
+  return label
+    ? evaluationColor(label, props.performanceConfig)
+    : evaluationColorForRatio(loss, props.performanceConfig);
 };
 
 const markers = computed(() => {
@@ -122,7 +125,7 @@ const markers = computed(() => {
     .map(({ loss, index }) => ({
       index,
       left: sliderMax.value > 0 ? (index / sliderMax.value) * 100 : 0,
-      color: colorForLoss(loss),
+      color: colorForLoss(loss, index),
     }));
 });
 

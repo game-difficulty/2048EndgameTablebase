@@ -773,11 +773,22 @@ class SingletonConfig:
                     if not os.path.isdir(file_path):
                         continue
                     with os.scandir(file_path) as items:
-                        has_table_file = any(
-                            item.name.startswith(prefix)
-                            and item.name.endswith(table_suffixes)
-                            for item in items
-                        )
+                        table_files = [
+                            item.name for item in items if item.name.startswith(prefix)
+                        ]
+                    bc_positions = {
+                        name[:-len(".bcpos")]
+                        for name in table_files
+                        if name.endswith(".bcpos")
+                    }
+                    bc_successes = {
+                        name[:-len(".bcsuc")]
+                        for name in table_files
+                        if name.endswith(".bcsuc")
+                    }
+                    has_table_file = any(
+                        name.endswith(table_suffixes) for name in table_files
+                    ) or bool(bc_positions.intersection(bc_successes))
                 except OSError as exc:
                     logger.warning(f"Unable to inspect table path {file_path}: {exc}")
                     continue

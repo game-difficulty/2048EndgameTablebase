@@ -106,6 +106,8 @@ media/texts/
 .VSCodeCounter/
 .codex/
 *.spec
+!2048EndgameTablebase.spec
+!2048EndgameTablebase-linux.spec
 tmp_vec_report*.txt
 tmp_*
 tmp/

@@ -20,9 +20,13 @@ from engine_core.BookReader import BookReaderDispatcher
 from engine_core.replay_utils import build_step_transition, replay_sentinel
 from Config import DTYPE_CONFIG, SingletonConfig, category_info, pattern_catalog
 from engine_core.performance_evaluation import (
+    ANALYSIS_START_STEP,
     PERFORMANCE_PERFECT_LABEL,
+    REPORT_DECIMAL_PLACES,
+    REPORT_MIN_TEXT_LINES,
     build_performance_stats,
     evaluation_of_performance as shared_evaluation_of_performance,
+    is_perfect_result,
     markdown_label,
 )
 
@@ -550,12 +554,12 @@ class Analyzer:
                 )
                 break
             if large_tile_changed:
-                if len(self.text_list) > 100:
+                if len(self.text_list) >= REPORT_MIN_TEXT_LINES:
                     self.write_analysis(i)
                 self.save_rec_to_file(i)
                 self.clear_analysis()
 
-        if len(self.text_list) > 100:
+        if len(self.text_list) >= REPORT_MIN_TEXT_LINES:
             self.write_analysis(len(self.record_list))
         self.save_rec_to_file(len(self.record_list))
         self.clear_analysis()
@@ -631,11 +635,11 @@ class Analyzer:
 
         self.record_replay(board, move, new_tile, spawn_position)
         self.step_count += 1
-        if self.step_count < 5:
+        if self.step_count < ANALYSIS_START_STEP:
             return True
 
         move_result = self.result[move.lower()]
-        if move_result is not None and best_result - move_result <= 3e-10:
+        if move_result is not None and is_perfect_result(move_result, best_result):
             self.combo += 1
             self.max_combo = max(self.max_combo, self.combo)
             self.performance_stats[ANALYSIS_PERFECT_LABEL] += 1
@@ -645,14 +649,14 @@ class Analyzer:
                     f"你走的是 {direction_map[move[0].lower()]}，最优解正是 **{direction_map[best_move[0].lower()]}**"
                 )
                 self.text_list.append(
-                    f"吻合度: {self.goodness_of_fit:.4f}, 游戏难度: {self.log_difficulty:.4f}"
+                    f"吻合度: {self.goodness_of_fit:.{REPORT_DECIMAL_PLACES}f}, 游戏难度: {self.log_difficulty:.{REPORT_DECIMAL_PLACES}f}"
                 )
             else:
                 self.text_list.append(
                     f"You pressed {move}. And the best move is **{best_move.capitalize()}**"
                 )
                 self.text_list.append(
-                    f"total goodness of fit: {self.goodness_of_fit:.4f}, game difficulty: {self.log_difficulty:.4f}"
+                    f"total goodness of fit: {self.goodness_of_fit:.{REPORT_DECIMAL_PLACES}f}, game difficulty: {self.log_difficulty:.{REPORT_DECIMAL_PLACES}f}"
                 )
         else:
             self.combo = 0
@@ -675,20 +679,20 @@ class Analyzer:
                     f"你走的是 {direction_map[move[0].lower()]}，但最优解是 **{direction_map[best_move[0].lower()]}**"
                 )
                 self.text_list.append(
-                    f"单步相对损失: {1 - loss:.4f}, 单步绝对损失: {loss_abs:.4f}pt"
+                    f"单步相对损失: {1 - loss:.{REPORT_DECIMAL_PLACES}f}, 单步绝对损失: {loss_abs:.{REPORT_DECIMAL_PLACES}f}pt"
                 )
                 self.text_list.append(
-                    f"吻合度: {self.goodness_of_fit:.4f}, 游戏难度: {self.log_difficulty:.4f}"
+                    f"吻合度: {self.goodness_of_fit:.{REPORT_DECIMAL_PLACES}f}, 游戏难度: {self.log_difficulty:.{REPORT_DECIMAL_PLACES}f}"
                 )
             else:
                 self.text_list.append(
                     f"You pressed {move}. But the best move is **{best_move.capitalize()}**"
                 )
                 self.text_list.append(
-                    f"relative one-step loss: {1 - loss:.4f}, absolute one-step loss: {loss_abs:.4f}pt"
+                    f"relative one-step loss: {1 - loss:.{REPORT_DECIMAL_PLACES}f}, absolute one-step loss: {loss_abs:.{REPORT_DECIMAL_PLACES}f}pt"
                 )
                 self.text_list.append(
-                    f"total goodness of fit: {self.goodness_of_fit:.4f}, game difficulty: {self.log_difficulty:.4f}"
+                    f"total goodness of fit: {self.goodness_of_fit:.{REPORT_DECIMAL_PLACES}f}, game difficulty: {self.log_difficulty:.{REPORT_DECIMAL_PLACES}f}"
                 )
 
         self.text_list.append("--------------------------------------------------")
@@ -730,7 +734,7 @@ class Analyzer:
             + Path(self.filepath).stem
             + "_"
             + str(step)
-            + f"_{self.goodness_of_fit:.4f}.txt"
+            + f"_{self.goodness_of_fit:.{REPORT_DECIMAL_PLACES}f}.txt"
         )
         target_file_path = os.path.join(self.target_path, filename)
         with open(target_file_path, "w", encoding="utf-8") as file:
@@ -748,17 +752,20 @@ class Analyzer:
             )
             file.write(
                 self.tr("Total Goodness of Fit: ")
-                + f"{self.goodness_of_fit:.4f}\n"
+                + f"{self.goodness_of_fit:.{REPORT_DECIMAL_PLACES}f}\n"
             )
-            file.write(self.tr("Game Difficulty: ") + f"{self.log_difficulty:.4f}\n")
+            file.write(
+                self.tr("Game Difficulty: ")
+                + f"{self.log_difficulty:.{REPORT_DECIMAL_PLACES}f}\n"
+            )
             file.write(self.tr("Maximum Combo: ") + str(self.max_combo) + "\n")
             file.write(
                 self.tr("Maximum Single Step Loss (Relative, %): ")
-                + f"{self.maximum_single_step_loss_relative:.4f}\n"
+                + f"{self.maximum_single_step_loss_relative:.{REPORT_DECIMAL_PLACES}f}\n"
             )
             file.write(
                 self.tr("Maximum Single Step Loss (Absolute, pt): ")
-                + f"{self.maximum_single_step_loss_absolute:.4f}\n"
+                + f"{self.maximum_single_step_loss_absolute:.{REPORT_DECIMAL_PLACES}f}\n"
             )
             for evaluation, count in self.performance_stats.items():
                 file.write(f"{evaluation}: {count}\n")
@@ -771,7 +778,7 @@ class Analyzer:
     def record_replay(
         self, board, direction: str, new_tile: int, spawn_position: int
     ) -> None:
-        if self.step_count < 5:
+        if self.step_count < ANALYSIS_START_STEP:
             return
 
         rec_step_count = self.rec_step_count
@@ -806,7 +813,7 @@ class Analyzer:
             + Path(self.filepath).stem
             + "_"
             + str(step)
-            + f"_{self.goodness_of_fit:.4f}.rpl"
+            + f"_{self.goodness_of_fit:.{REPORT_DECIMAL_PLACES}f}.rpl"
         )
         target_file_path = os.path.join(self.target_path, filename)
         terminal_board = 0

@@ -4,6 +4,10 @@ import i18n from './i18n';
 import { createWsClient } from '../services/ws/createWsClient';
 import { normalizeBCFamilyModulus } from '../utils/bcFamilyModulus';
 import { applyTileColors } from '../utils/tileColors';
+import {
+  DEFAULT_PERFORMANCE_CONFIG,
+  normalizePerformanceConfig,
+} from '../utils/performanceConfig';
 
 const EMPTY_COLOR_SET = Array(36).fill('#000000');
 const INITIAL_DARK_MODE = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -44,6 +48,7 @@ const config = ref({ ...DEFAULT_CONFIG });
 const categories = ref({});
 const themeMap = ref({});
 const targetTiles = ref([]);
+const performanceConfig = ref(normalizePerformanceConfig(DEFAULT_PERFORMANCE_CONFIG));
 const buildProgressCurrent = ref(0);
 const buildProgressTotal = ref(0);
 const isBuilding = ref(false);
@@ -193,6 +198,7 @@ const handleSettingsData = (payload = {}) => {
   categories.value = payload.categories || {};
   themeMap.value = payload.theme_map || {};
   targetTiles.value = payload.target_tiles || [];
+  performanceConfig.value = normalizePerformanceConfig(payload.performance_config);
   mergeConfig(payload.config || {});
   if (Object.prototype.hasOwnProperty.call(payload, 'build_state')) {
     applyBuildState(payload.build_state || {});
@@ -374,6 +380,7 @@ export function useAppSettingsStore() {
     categories,
     themeMap,
     targetTiles,
+    performanceConfig,
     buildProgressCurrent,
     buildProgressTotal,
     isBuilding,

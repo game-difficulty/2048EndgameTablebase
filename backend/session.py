@@ -147,10 +147,12 @@ class GameSession:
         self.replay_current_move = None
         self.replay_best_move = None
         self.replay_loss = None
+        self.replay_evaluation = None
         self.replay_gof = None
         self.replay_combo = 0
         self.replay_points_rank = []
         self.replay_losses = []
+        self.replay_evaluations = []
         self.replay_forced_steps = []
         self.replay_summary = {
             "total_moves": 0,

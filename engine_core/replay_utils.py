@@ -8,6 +8,7 @@ from engine_core.Calculator import find_merge_positions, slide_distance
 from engine_core.performance_evaluation import (
     PERFORMANCE_PERFECT_LABEL,
     evaluation_of_performance as shared_evaluation_of_performance,
+    is_perfect_result,
 )
 
 REPLAY_DTYPE = np.dtype("uint64,uint8,uint32,uint32,uint32,uint32")
@@ -102,8 +103,10 @@ def current_results(record, step):
     return dict(sorted(zip(keys, values), key=lambda item: item[1], reverse=True))
 
 
-def evaluation_of_performance(loss):
-    if loss > 1 - 3e-10:
+def evaluation_of_performance(loss, selected_rate=None, best_rate=None):
+    selected = loss if selected_rate is None else selected_rate
+    best = 1.0 if best_rate is None else best_rate
+    if is_perfect_result(selected, best):
         return PERFORMANCE_PERFECT_LABEL
     return shared_evaluation_of_performance(loss)
 
@@ -116,6 +119,7 @@ def analyze_replay(record, marker_threshold=1.0):
             "goodness_of_fit": np.empty(0, dtype=float),
             "combo": np.empty(0, dtype=np.uint16),
             "forced": np.empty(0, dtype=bool),
+            "evaluations": [],
             "points_rank": np.empty(0, dtype=int),
             "summary": {
                 "total_moves": 0,
@@ -145,7 +149,7 @@ def analyze_replay(record, marker_threshold=1.0):
     for index, loss in enumerate(losses):
         if forced[index]:
             pass
-        elif loss > 1 - 3e-10:
+        elif is_perfect_result(player[index], optimal[index]):
             count += 1
         else:
             count = 0
@@ -155,10 +159,15 @@ def analyze_replay(record, marker_threshold=1.0):
     points_rank = np.where((losses < threshold) & (losses < 1))[0]
 
     counts = {}
+    evaluations = []
     for index, loss in enumerate(losses):
         if forced[index]:
+            evaluations.append(None)
             continue
-        label = evaluation_of_performance(float(loss))
+        label = evaluation_of_performance(
+            float(loss), float(player[index]), float(optimal[index])
+        )
+        evaluations.append(label)
         counts[label] = counts.get(label, 0) + 1
 
     return {
@@ -167,6 +176,7 @@ def analyze_replay(record, marker_threshold=1.0):
         "goodness_of_fit": goodness_of_fit,
         "combo": combo,
         "forced": forced,
+        "evaluations": evaluations,
         "points_rank": points_rank,
         "summary": {
             "total_moves": int(np.count_nonzero(~forced)),

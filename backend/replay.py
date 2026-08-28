@@ -10,7 +10,6 @@ from engine_core.replay_utils import (
     current_results as replay_current_results,
     decode_replay_change,
     empty_replay,
-    evaluation_of_performance as replay_evaluation_of_performance,
     replay_transition_matches_next_snapshot,
 )
 
@@ -37,6 +36,7 @@ def _replay_reset(session, status=""):
     session.replay_combo = 0
     session.replay_points_rank = []
     session.replay_losses = []
+    session.replay_evaluations = []
     session.replay_forced_steps = []
     session.replay_summary = {
         "total_moves": 0,
@@ -67,6 +67,7 @@ def _replay_sync_step(session, step, animate=False, previous_step=None):
     session.replay_current_move = None
     session.replay_best_move = None
     session.replay_loss = None
+    session.replay_evaluation = None
     session.replay_gof = None
     session.replay_combo = 0
     metadata = {}
@@ -82,6 +83,8 @@ def _replay_sync_step(session, step, animate=False, previous_step=None):
             and session.replay_forced_steps[step]
         ):
             session.replay_loss = float(session.replay_losses[step])
+            if step < len(session.replay_evaluations):
+                session.replay_evaluation = session.replay_evaluations[step]
         analysis = analyze_replay(session.replay_record)
         gof_values = analysis["goodness_of_fit"]
         combo_values = analysis["combo"]
@@ -143,6 +146,7 @@ def _replay_load_record(
     marker_threshold = SingletonConfig().config.get("record_player_slider_threshold", 1)
     analysis = analyze_replay(session.replay_record, marker_threshold)
     session.replay_losses = [float(item) for item in analysis["losses"].tolist()]
+    session.replay_evaluations = list(analysis["evaluations"])
     session.replay_forced_steps = [bool(item) for item in analysis["forced"].tolist()]
     session.replay_points_rank = [int(item) for item in analysis["points_rank"].tolist()]
 
@@ -181,13 +185,10 @@ async def send_replay_state(websocket, session, metadata=None):
                 "loss": session.replay_loss,
                 "goodness_of_fit": session.replay_gof,
                 "combo": session.replay_combo,
-                "evaluation": (
-                    replay_evaluation_of_performance(session.replay_loss)
-                    if session.replay_loss is not None
-                    else None
-                ),
+                "evaluation": session.replay_evaluation,
                 "points_rank": session.replay_points_rank,
                 "losses": session.replay_losses,
+                "evaluations": session.replay_evaluations,
                 "summary": summary,
                 "performance_labels": list(TESTER_PERFORMANCE_ORDER),
                 "settings": {

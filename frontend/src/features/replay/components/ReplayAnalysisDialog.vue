@@ -508,6 +508,7 @@ watch(
   (isOpen) => {
     if (isOpen) {
       document.addEventListener('click', closePatternMenuOnClick);
+      client?.send('ANALYSIS_GET_INIT');
     } else {
       patternMenuOpen.value = false;
       document.removeEventListener('click', closePatternMenuOnClick);

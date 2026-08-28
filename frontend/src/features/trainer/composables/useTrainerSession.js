@@ -5,6 +5,7 @@ import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
+import { resultBarPresentation } from '../../../utils/performanceConfig';
 import {
   restoreSuccessRate,
   formatSuccessRate,
@@ -20,6 +21,7 @@ export function useTrainerSession(activeRef) {
     config: appConfig,
     categories: appCategories,
     targetTiles: appTargetTiles,
+    performanceConfig,
     refreshSettings,
     saveSetting,
   } = useAppSettingsStore();
@@ -135,14 +137,6 @@ export function useTrainerSession(activeRef) {
     return d.includes('64') ? 15 : 8;
   });
 
-  const lerpColor = (c1, c2, r) => {
-    const f = (x, y) => Math.round(x + (y - x) * r);
-    const parse = (c) => c.slice(1).match(/.{2}/g).map((x) => parseInt(x, 16));
-    const [r1, g1, b1] = parse(c1);
-    const [r2, g2, b2] = parse(c2);
-    return `rgb(${f(r1, r2)}, ${f(g1, g2)}, ${f(b1, b2)})`;
-  };
-
   const sortedResults = computed(() => {
     const dirs = ['left', 'right', 'down', 'up'];
     const r = tableResult.value.results || {};
@@ -168,37 +162,12 @@ export function useTrainerSession(activeRef) {
     const bestVal = bestItem?.val || 0;
     const prec = resultPrecision.value;
 
-    const COLOR_GREEN = '#4caf50';
-    const COLOR_YG = '#8bc34a';
-    const COLOR_ORANGE = '#ff9800';
-    const COLOR_RED = '#f44336';
-
     return items.map((item, idx) => {
       let pct = 0;
       let color = 'var(--border-main)';
       if (item.val != null && bestVal > 0) {
         const loss = successRateRelativeLoss(item.rawVal, bestItem?.rawVal, dtype);
-        if (idx === 0) {
-          pct = 100;
-          color = COLOR_GREEN;
-        } else if (loss == null || loss > 0.10) {
-          pct = 0;
-          color = COLOR_RED;
-        } else {
-          pct = (1 - loss / 0.10) * 100;
-          if (loss <= 0.001) {
-            color = COLOR_GREEN;
-          } else if (loss <= 0.01) {
-            const ratio = (loss - 0.001) / (0.01 - 0.001);
-            color = lerpColor(COLOR_GREEN, COLOR_YG, ratio);
-          } else if (loss <= 0.03) {
-            const ratio = (loss - 0.01) / (0.03 - 0.01);
-            color = lerpColor(COLOR_YG, COLOR_ORANGE, ratio);
-          } else if (loss <= 0.10) {
-            const ratio = (loss - 0.03) / (0.10 - 0.03);
-            color = lerpColor(COLOR_ORANGE, COLOR_RED, ratio);
-          }
-        }
+        ({ pct, color } = resultBarPresentation(loss, idx === 0, performanceConfig.value));
       }
       return {
         dir: item.dir,

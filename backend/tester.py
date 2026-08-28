@@ -16,6 +16,7 @@ from engine_core.replay_utils import empty_replay, replay_sentinel, strip_replay
 from engine_core.performance_evaluation import (
     PERFORMANCE_LABELS,
     PERFORMANCE_PERFECT_LABEL,
+    REPORT_DECIMAL_PLACES,
     build_performance_stats,
     evaluation_of_performance,
 )
@@ -170,12 +171,12 @@ def _tester_feedback_lines(
     if lang == "zh":
         return [
             display_evaluation,
-            f"单步损失: {1 - loss:.4f}，GOF: {goodness_of_fit:.4f}",
+            f"单步损失: {1 - loss:.{REPORT_DECIMAL_PLACES}f}，GOF: {goodness_of_fit:.{REPORT_DECIMAL_PLACES}f}",
             f"你走的是 {pressed_label}，但最优解是 {best_label}",
         ]
     return [
         display_evaluation,
-        f"one-step loss: {1 - loss:.4f}, goodness of fit: {goodness_of_fit:.4f}",
+        f"one-step loss: {1 - loss:.{REPORT_DECIMAL_PLACES}f}, goodness of fit: {goodness_of_fit:.{REPORT_DECIMAL_PLACES}f}",
         f"You pressed {pressed_label}. But the best move is {best_label}.",
     ]
 
@@ -356,7 +357,7 @@ def _tester_append_summary(session):
         )
     _tester_append_log(
         session,
-        f"Total Goodness of Fit: {session.tester_goodness_of_fit:.4f}",
+        f"Total Goodness of Fit: {session.tester_goodness_of_fit:.{REPORT_DECIMAL_PLACES}f}",
         f"Maximum Combo: {session.tester_max_combo}",
     )
 

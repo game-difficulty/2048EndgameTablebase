@@ -22,8 +22,10 @@
       <section class="flex min-w-0 flex-col">
         <ReplayMarkSlider
           :losses="losses"
+          :evaluations="replayEvaluations"
           :current-step="currentStep"
           :threshold="sliderThreshold"
+          :performance-config="performanceConfig"
           @update-step="handleSliderStep"
           @update-threshold="updateSliderThreshold"
         />
@@ -204,7 +206,9 @@ const {
   currentStep,
   totalSteps,
   losses,
+  replayEvaluations,
   sliderThreshold,
+  performanceConfig,
   dis32k,
   isVariant,
   menuOpen,

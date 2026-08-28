@@ -6,6 +6,10 @@ import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
 import { createResultBarGradient } from '../../../utils/resultBars';
 import {
+  evaluationColor,
+  resultBarPresentation,
+} from '../../../utils/performanceConfig';
+import {
   restoreSuccessRate,
   formatSuccessRate,
   successRateSortValue,
@@ -14,7 +18,7 @@ import {
 } from '../../../utils/successRate';
 
 export function useTesterSession(activeRef) {
-  const { config: appConfig } = useAppSettingsStore();
+  const { config: appConfig, performanceConfig } = useAppSettingsStore();
 
   const fallbackPatternCategories = {
     basic: ['L3', 'LL', 'free8', 'free9', 'free10', '444'],
@@ -26,19 +30,6 @@ export function useTesterSession(activeRef) {
       ? { left: '左', right: '右', down: '下', up: '上' }
       : { left: 'L', right: 'R', down: 'D', up: 'U' }
   ));
-  const COLOR_GREEN = '#2e7d32';
-  const COLOR_YG = '#8bc34a';
-  const COLOR_ORANGE = '#ff9800';
-  const COLOR_RED = '#f44336';
-  const evaluationColors = {
-    'Perfect!': '#2e7d32',
-    'Excellent!': '#7cb342',
-    'Nice try!': '#c0ca33',
-    'Not bad!': '#fb8c00',
-    'Mistake!': '#f4511e',
-    'Blunder!': '#e53935',
-    'Terrible!': '#b71c1c',
-  };
   const zhEvaluationLabels = {
     'Perfect!': 'Perfect!',
     'Excellent!': 'Excellent!',
@@ -48,15 +39,6 @@ export function useTesterSession(activeRef) {
     'Blunder!': 'Blunder!',
     'Terrible!': 'Terrible!',
   };
-  const evaluationColorPalette = [
-    '#2e7d32',
-    '#7cb342',
-    '#c0ca33',
-    '#fb8c00',
-    '#f4511e',
-    '#e53935',
-    '#b71c1c',
-  ];
 
   const wsStatus = ref('connecting');
   const board = ref(new Array(16).fill(0));
@@ -127,7 +109,9 @@ export function useTesterSession(activeRef) {
   ));
   const isVariant = computed(() => isVariantPattern(selectedPattern.value, patternCategories.value));
   const canMove = computed(() => ready.value && tableFound.value && wsStatus.value === 'connected');
-  const goodnessDisplay = computed(() => Number(metrics.value.goodness_of_fit ?? 1).toFixed(4));
+  const goodnessDisplay = computed(() => Number(metrics.value.goodness_of_fit ?? 1).toFixed(
+    performanceConfig.value.report_decimal_places
+  ));
   const resultPrecision = computed(() => String(resultDtype.value || '').includes('64') ? 15 : 8);
   const displayedResultDtype = computed(() => (
     insightsActive.value ? (lastStep.value?.dtype || resultDtype.value || '?') : (resultDtype.value || '?')
@@ -140,12 +124,7 @@ export function useTesterSession(activeRef) {
   const hasLastStep = computed(() => !!(lastStep.value?.direction && lastStep.value?.best_move));
   const insightsActive = computed(() => showInsights.value && hasLastStep.value);
   const perfectLabel = computed(() => performanceLabels.value[0] || fallbackPerformanceLabels[0]);
-  const getEvaluationColor = (label) => {
-    if (evaluationColors[label]) return evaluationColors[label];
-    const index = performanceLabels.value.indexOf(label);
-    if (index >= 0) return evaluationColorPalette[index % evaluationColorPalette.length];
-    return 'var(--accent)';
-  };
+  const getEvaluationColor = (label) => evaluationColor(label, performanceConfig.value);
   const evaluationTotal = computed(() => performanceLabels.value.reduce((sum, label) => sum + Number(metrics.value.performance_stats?.[label] || 0), 0));
 
   const isZh = () => String(currentLanguage.value || 'en').startsWith('zh');
@@ -217,17 +196,11 @@ export function useTesterSession(activeRef) {
     return { color };
   });
   const feedbackBestMoveStyle = computed(() => {
-    const color = insightsActive.value ? COLOR_GREEN : 'var(--text-secondary)';
+    const color = insightsActive.value
+      ? performanceConfig.value.perfect.color
+      : 'var(--text-secondary)';
     return { color };
   });
-
-  const lerpColor = (c1, c2, ratio) => {
-    const parseRgbColor = (color) => color.slice(1).match(/.{2}/g).map((part) => parseInt(part, 16));
-    const mix = (a, b) => Math.round(a + (b - a) * ratio);
-    const [r1, g1, b1] = parseRgbColor(c1);
-    const [r2, g2, b2] = parseRgbColor(c2);
-    return `rgb(${mix(r1, r2)}, ${mix(g1, g2)}, ${mix(b1, b2)})`;
-  };
 
   const resultSource = computed(() => (
     insightsActive.value ? (lastStep.value?.results || {}) : results.value
@@ -260,21 +233,11 @@ export function useTesterSession(activeRef) {
       let color = 'var(--border-main)';
       if (item.val != null && bestVal > 0) {
         const loss = successRateRelativeLoss(item.rawVal, bestItem?.rawVal, displayedResultDtype.value || '');
-        if (index === 0) {
-          pct = 100;
-          color = COLOR_GREEN;
-        } else if (loss != null && loss <= 0.10) {
-          pct = (1 - loss / 0.10) * 100;
-          color = loss <= 0.001
-            ? COLOR_GREEN
-            : (loss <= 0.01
-              ? lerpColor(COLOR_GREEN, COLOR_YG, (loss - 0.001) / 0.009)
-              : (loss <= 0.03
-                ? lerpColor(COLOR_YG, COLOR_ORANGE, (loss - 0.01) / 0.02)
-                : lerpColor(COLOR_ORANGE, COLOR_RED, (loss - 0.03) / 0.07)));
-        } else {
-          color = COLOR_RED;
-        }
+        ({ pct, color } = resultBarPresentation(
+          loss,
+          index === 0,
+          performanceConfig.value
+        ));
       }
 
       return {

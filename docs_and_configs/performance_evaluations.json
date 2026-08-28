@@ -1,29 +1,66 @@
 {
-  "perfect_label": "Perfect!",
+  "_comment": "Loaded once at startup. perfect.comparison accepts absolute_difference or relative_ratio.",
+  "report_decimal_places": 4,
+  "perfect": {
+    "label": "Perfect!",
+    "comparison": "absolute_difference",
+    "tolerance": 3e-10,
+    "color": "#2e7d32"
+  },
   "evaluations": [
     {
       "label": "Excellent!",
-      "threshold": 0.999
+      "threshold": 0.999,
+      "color": "#7cb342"
     },
     {
       "label": "Nice try!",
-      "threshold": 0.99
+      "threshold": 0.99,
+      "color": "#c0ca33"
     },
     {
       "label": "Not bad!",
-      "threshold": 0.975
+      "threshold": 0.975,
+      "color": "#fb8c00"
     },
     {
       "label": "Mistake!",
-      "threshold": 0.9
+      "threshold": 0.9,
+      "color": "#f4511e"
     },
     {
       "label": "Blunder!",
-      "threshold": 0.75
+      "threshold": 0.75,
+      "color": "#e53935"
     },
     {
       "label": "Terrible!",
-      "threshold": -1.0
+      "threshold": -1.0,
+      "color": "#b71c1c"
     }
-  ]
+  ],
+  "result_bar": {
+    "stops": [
+      {
+        "max_loss": 0.001,
+        "color": "#2e7d32"
+      },
+      {
+        "max_loss": 0.01,
+        "color": "#8bc34a"
+      },
+      {
+        "max_loss": 0.03,
+        "color": "#ff9800"
+      },
+      {
+        "max_loss": 0.1,
+        "color": "#f44336"
+      }
+    ]
+  },
+  "analysis": {
+    "start_step": 5,
+    "report_min_text_lines": 101
+  }
 }

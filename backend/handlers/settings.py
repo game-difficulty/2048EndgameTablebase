@@ -20,6 +20,7 @@ from Config import (
     write_runtime_deletion_threshold_signal,
 )
 from engine_core import BookBuilder
+from engine_core.performance_evaluation import public_performance_config
 from engine_core.StoragePathPlan import (
     StoragePathPlan,
     normalize_build_folder_paths,
@@ -97,6 +98,9 @@ async def handle_settings_action(
                     "categories": sanitize_config(category_info),
                     "theme_map": sanitize_config(theme_map),
                     "target_tiles": [2**i for i in range(6, 15)],
+                    "performance_config": sanitize_config(
+                        public_performance_config()
+                    ),
                     "build_state": sanitize_config(get_build_state_snapshot()),
                 },
             }
