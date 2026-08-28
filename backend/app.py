@@ -17,6 +17,7 @@ from fastapi import (
     Form,
     HTTPException,
     Request,
+    Response,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -692,7 +693,8 @@ async def favicon():
 
 
 @app.get("/api/tablebases")
-async def tablebases():
+async def tablebases(response: Response):
+    response.headers["Cache-Control"] = "no-store"
     return {
         "catalog_version": get_catalog_version(),
         "tables": get_available_tablebases(),

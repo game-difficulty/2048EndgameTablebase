@@ -62,16 +62,11 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   const DEFAULT_TABLEBASE_TARGET = '512';
   const {
     config: appConfig,
-    categories: appCategories,
-    targetTiles: appTargetTiles,
     refreshSettings,
     saveSetting,
   } = useAppSettingsStore();
   const { isAuthenticated, requireAuth, user: authUser } = useAuthState();
 
-  const fallbackPatternCategories = {
-    basic: ['L3', 'L4', 'I3', 'I4', 'LL', 'free8', 'free9', 'free10', '444'],
-  };
   const wsStatus = ref('connecting');
   const clientId = getStableWsClientId('trainer');
 
@@ -91,12 +86,12 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   const tableResult = ref({ dtype: '?', results: {} });
   const currentBoardHex = ref('');
   const resultsBoardHex = ref('');
-  const patternCategories = ref(fallbackPatternCategories);
-  const availableTargets = ref(['64', '128', '256', '512', '1024', '2048', '4096', '8192']);
+  const patternCategories = ref({});
+  const availableTargets = ref([]);
   const catalogTables = ref([]);
   const catalogVersion = ref('');
   const patternMenuOpen = ref(false);
-  const activePatternCategory = ref(Object.keys(fallbackPatternCategories)[0] || '');
+  const activePatternCategory = ref(EMPTY_PATTERN_CATEGORY);
   const patternMenuRoot = ref(null);
   const dirLabels = computed(() => (
     String(appConfig.value?.language || 'en').startsWith('zh')
@@ -500,12 +495,9 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       return false;
     }
     const catalogHasPattern = flatPatterns.value.includes(parsed.pattern);
-    const isKnownVariant = isVariantPattern(parsed.pattern, appCategories.value);
-    if (!catalogHasPattern && !isKnownVariant) return false;
-    const targets = catalogTables.value.length
-      ? getCatalogTargetsForPattern(catalogTables.value, parsed.pattern)
-      : availableTargets.value;
-    if (catalogHasPattern && !targets.includes(parsed.target)) {
+    if (!catalogHasPattern) return false;
+    const targets = getCatalogTargetsForPattern(catalogTables.value, parsed.pattern);
+    if (!targets.includes(parsed.target)) {
       return false;
     }
     patternType.value = parsed.pattern;
@@ -567,10 +559,8 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     return true;
   };
 
-  const loadCatalog = async ({ preserveSelection = false } = {}) => {
+  const loadCatalog = async () => {
     try {
-      const selectedPattern = patternType.value;
-      const selectedTarget = targetValue.value;
       const previousCatalogVersion = catalogVersion.value;
       const tables = await fetchTablebaseCatalog();
       catalogTables.value = tables;
@@ -584,28 +574,18 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       }
       const nextCategories = groupTablebasePatternsByCategory(tables);
       const patterns = Object.values(nextCategories).flat();
+      patternCategories.value = nextCategories;
+      availableTargets.value = getCatalogTargets(tables);
       if (patterns.length) {
-        patternCategories.value = nextCategories;
-        availableTargets.value = getCatalogTargets(tables);
         if (
           !patternType.value
-          || (!preserveSelection && !patterns.includes(patternType.value) && !isEmptyPattern.value)
+          || (!patterns.includes(patternType.value) && !isEmptyPattern.value)
         ) {
           const defaults = chooseDefaultCatalogSelection(patterns);
           patternType.value = defaults.pattern;
           targetValue.value = defaults.target;
         }
-        if (
-          preserveSelection
-          && selectedPattern
-          && selectedTarget
-          && !getCatalogTargetsForPattern(tables, selectedPattern).includes(selectedTarget)
-        ) {
-          patternType.value = selectedPattern;
-          targetValue.value = selectedTarget;
-        } else {
-          if (!isEmptyPattern.value) ensureTargetForCurrentPattern();
-        }
+        if (!isEmptyPattern.value) ensureTargetForCurrentPattern();
         if (loadedTablebaseFullPattern.value) {
           syncSelectionFromFullPattern(loadedTablebaseFullPattern.value);
         }
@@ -629,6 +609,10 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
         ) {
           queryResults('auto');
         }
+      } else if (!isEmptyPattern.value) {
+        patternType.value = '';
+        targetValue.value = '';
+        syncActivePatternCategory();
       }
     } catch (error) {
       console.error(error);
@@ -1264,7 +1248,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     }
 
     if (data.action === 'TABLEBASE_CATALOG_UPDATED') {
-      loadCatalog({ preserveSelection: true });
+      loadCatalog();
       return;
     }
 
@@ -1281,7 +1265,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
         tablebaseReadyForConnection = false;
         initialStateSeen = true;
         defaultTablebaseAutoApplyAttempted = false;
-        loadCatalog({ preserveSelection: true });
+        loadCatalog();
         const reattachingTablebase = !isEmptyPattern.value
           && selectedTablebaseExists()
           && tablebasePath.value === 'loaded';
@@ -1714,40 +1698,6 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       queryResults('visibility');
     }
   });
-
-  watch(
-    appCategories,
-    (nextCategories) => {
-      if (catalogTables.value.length) return;
-      patternCategories.value = Object.keys(nextCategories || {}).length > 0
-        ? nextCategories
-        : fallbackPatternCategories;
-      if (
-        patternType.value
-        && !isEmptyPattern.value
-        && !flatPatterns.value.includes(patternType.value)
-      ) {
-        patternType.value = '';
-      }
-      syncActivePatternCategory();
-      applyTrainerJump();
-    },
-    { immediate: true, deep: true }
-  );
-
-  watch(
-    appTargetTiles,
-    (nextTargets) => {
-      if (catalogTables.value.length) return;
-      const normalizedTargets = (nextTargets || []).map(String);
-      if (normalizedTargets.length > 0) {
-        availableTargets.value = normalizedTargets;
-      }
-      ensureTargetForCurrentPattern();
-      applyTrainerJump();
-    },
-    { immediate: true, deep: true }
-  );
 
   watch(
     () => appConfig.value.dis_32k,

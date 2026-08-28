@@ -53,9 +53,6 @@ export function useTesterSession(activeRef) {
   const { config: appConfig } = useAppSettingsStore();
   const { isAuthenticated, requireAuth, user: authUser } = useAuthState();
 
-  const fallbackPatternCategories = {
-    basic: ['L3', 'LL', 'free8', 'free9', 'free10', '444'],
-  };
   const fallbackPerformanceLabels = ['Perfect!', 'Excellent!', 'Nice try!', 'Not bad!', 'Mistake!', 'Blunder!', 'Terrible!'];
   const performanceLabels = ref([...fallbackPerformanceLabels]);
   const dirLabels = computed(() => (
@@ -103,11 +100,11 @@ export function useTesterSession(activeRef) {
   const dis32k = ref(false);
   const currentLanguage = ref('en');
   const showInsights = ref(true);
-  const patternCategories = ref(fallbackPatternCategories);
-  const availableTargets = ref(['64', '128', '256', '512', '1024', '2048', '4096', '8192', '16384']);
-  const selectedPattern = ref(DEFAULT_TABLEBASE_PATTERN);
-  const selectedTarget = ref(DEFAULT_TABLEBASE_TARGET);
-  const activePatternCategory = ref(Object.keys(fallbackPatternCategories)[0] || '');
+  const patternCategories = ref({});
+  const availableTargets = ref([]);
+  const selectedPattern = ref('');
+  const selectedTarget = ref('');
+  const activePatternCategory = ref('');
   const patternMenuOpen = ref(false);
   const currentBoardHex = ref('0000000000000000');
   const hexInput = ref('0000000000000000');
@@ -233,7 +230,7 @@ export function useTesterSession(activeRef) {
   const activePatternOptions = computed(() => patternCategories.value[activePatternCategory.value] || []);
   const availableTargetsForPattern = computed(() => {
     if (!catalogTables.value.length) {
-      return availableTargets.value;
+      return [];
     }
     return getCatalogTargetsForPattern(catalogTables.value, selectedPattern.value);
   });
@@ -560,16 +557,12 @@ export function useTesterSession(activeRef) {
     targets.includes(DEFAULT_TABLEBASE_TARGET) ? DEFAULT_TABLEBASE_TARGET : (targets[0] || '')
   );
 
-  const ensureDefaultSelection = ({ preserveSelection = false } = {}) => {
+  const ensureDefaultSelection = () => {
     const groups = patternGroups.value;
-    if (!groups.length) return;
-    if (
-      preserveSelection
-      && selectedPattern.value
-      && selectedTarget.value
-      && !getCatalogTargetsForPattern(catalogTables.value, selectedPattern.value).includes(selectedTarget.value)
-    ) {
-      syncCategoryFromPattern(selectedPattern.value);
+    if (!groups.length) {
+      selectedPattern.value = '';
+      selectedTarget.value = '';
+      activePatternCategory.value = '';
       return;
     }
     selectedPattern.value = flatPatterns.value.includes(selectedPattern.value)
@@ -586,16 +579,16 @@ export function useTesterSession(activeRef) {
     syncCategoryFromPattern(selectedPattern.value);
   };
 
-  const loadCatalog = async ({ preserveSelection = false } = {}) => {
+  const loadCatalog = async () => {
     try {
       const tables = await fetchTablebaseCatalog();
       catalogTables.value = tables;
       catalogVersion.value = tables.catalogVersion || getCatalogVersion();
       const nextCategories = groupTablebasePatternsByCategory(tables);
+      patternCategories.value = nextCategories;
+      availableTargets.value = getCatalogTargets(tables);
       if (Object.values(nextCategories).some((patterns) => patterns.length)) {
-        patternCategories.value = nextCategories;
-        availableTargets.value = getCatalogTargets(tables);
-        ensureDefaultSelection({ preserveSelection });
+        ensureDefaultSelection();
         maybeApplyInitialPatternSelection();
         if (
           ready.value
@@ -605,6 +598,8 @@ export function useTesterSession(activeRef) {
         ) {
           queryTablebase(currentBoardHex.value);
         }
+      } else {
+        ensureDefaultSelection();
       }
     } catch (error) {
       console.error(error);
@@ -936,10 +931,6 @@ export function useTesterSession(activeRef) {
   };
 
   const handleTesterBootstrap = (payload) => {
-    if (!catalogTables.value.length) {
-      patternCategories.value = payload?.categories || fallbackPatternCategories;
-      availableTargets.value = (payload?.target_tiles || []).map(String);
-    }
     initialStateSeen = true;
     ensureDefaultSelection();
     maybeApplyInitialPatternSelection();
@@ -1118,7 +1109,7 @@ export function useTesterSession(activeRef) {
     else if (message.action === 'TABLEBASE_QUERY_RESULT') handleTablebaseQueryResult(message.data);
     else if (message.action === 'TABLEBASE_PREFETCH') handleTablebasePrefetch(message.data);
     else if (message.action === 'TABLEBASE_CATALOG_UPDATED') {
-      loadCatalog({ preserveSelection: true });
+      loadCatalog();
     }
     else if (message.action === 'TABLEBASE_BUSY' && message.data?.page === 'tester') {
       const retryBoard = currentBoardHex.value;
@@ -1168,7 +1159,7 @@ export function useTesterSession(activeRef) {
         wsStatus.value = 'connected';
         bootstrapSelectionSent = false;
         initialStateSeen = false;
-        loadCatalog({ preserveSelection: true });
+        loadCatalog();
         triggerAction('TESTER_GET_INIT', { client_local_board: true });
       },
       onMessage: handleWSMessage,

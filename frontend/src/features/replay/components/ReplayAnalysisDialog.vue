@@ -219,7 +219,7 @@ const { requireAuth } = useAuthState();
 
 const wsStatus = ref('disconnected');
 const categories = ref({});
-const targetTiles = ref(['64', '128', '256', '512', '1024', '2048', '4096', '8192', '16384']);
+const targetTiles = ref([]);
 const catalogTables = ref([]);
 const selectedPattern = ref('');
 const selectedTarget = ref('2048');
@@ -266,7 +266,7 @@ const activePatternOptions = computed(() => {
 
 const availableTargetsForPattern = computed(() => {
   if (!catalogTables.value.length) {
-    return targetTiles.value;
+    return [];
   }
   return getCatalogTargetsForPattern(catalogTables.value, selectedPattern.value);
 });
@@ -398,13 +398,17 @@ const loadCatalog = async () => {
     catalogTables.value = tables;
     const nextCategories = groupTablebasePatternsByCategory(tables);
     const patterns = Object.values(nextCategories).flat();
+    categories.value = nextCategories;
+    targetTiles.value = getCatalogTargets(tables);
     if (patterns.length) {
-      categories.value = nextCategories;
-      targetTiles.value = getCatalogTargets(tables);
       ensureValidSelection();
       if (!userSelectionTouched.value) {
         applyContext(props.context);
       }
+    } else {
+      selectedPattern.value = '';
+      selectedTarget.value = '';
+      activePatternCategory.value = '';
     }
   } catch (error) {
     console.error(error);
@@ -716,12 +720,6 @@ const downloadResults = async () => {
 
 const handleMessage = (message) => {
   if (message.type === 'ANALYSIS_BOOTSTRAP') {
-    if (!catalogTables.value.length) {
-      categories.value = message.payload?.categories || {};
-      targetTiles.value = Array.isArray(message.payload?.target_tiles) && message.payload.target_tiles.length
-        ? message.payload.target_tiles.map(String)
-        : targetTiles.value;
-    }
     ensureValidSelection();
     if (!userSelectionTouched.value) {
       applyContext(props.context);
