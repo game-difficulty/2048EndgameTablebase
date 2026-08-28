@@ -1,6 +1,9 @@
 #pragma once
 
+#include "BCDynamicCapacity.h"
+
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -19,6 +22,16 @@ struct BCFamilyRouteInputs {
     uint64_t source2_size = 0U;
     uint64_t source4_size = 0U;
     bool has_source4 = false;
+    uint64_t source2_bucket_count = 0U;
+    uint64_t source2_rank_payload_bytes = 0U;
+    uint64_t source4_bucket_count = 0U;
+    uint64_t source4_rank_payload_bytes = 0U;
+    double resident_dynamic_reserve_factor = 1.0;
+    double single_dynamic_reserve_factor = 1.0;
+    bool has_resident_carry = false;
+    bool has_single_carry = false;
+    bool has_secondary = true;
+    bool evaluate_dynamic_address_space = false;
     uint64_t available_memory_bytes = 0U;
     uint64_t total_memory_bytes = 0U;
     uint32_t fixed_modulus = 0U;
@@ -37,11 +50,108 @@ struct BCFamilyRouteDecision {
     uint64_t resident_estimated_peak_bytes = 0U;
     uint64_t single_estimated_peak_bytes = 0U;
     uint64_t family_estimated_peak_bytes = 0U;
+    uint64_t resident_dynamic_bitmap_words = 0U;
+    uint64_t resident_dynamic_hash_capacity = 0U;
+    uint64_t single_dynamic_bitmap_words = 0U;
+    uint64_t single_dynamic_hash_capacity = 0U;
+    uint64_t route_dynamic_bitmap_words = 0U;
+    uint64_t route_dynamic_hash_capacity = 0U;
+    bool resident_addressable = true;
+    bool single_addressable = true;
+    bool route_addressable = true;
+    bool dynamic_address_limited = false;
+    bool automatic_route = false;
     uint32_t resident_upgrade_streak = 0U;
     uint32_t single_upgrade_streak = 0U;
 };
 
 inline constexpr uint64_t kBCFamilyRouteGiB = 1024ULL * 1024ULL * 1024ULL;
+
+struct BCFamilyDynamicRouteEstimate {
+    uint64_t bitmap_words = 0U;
+    uint64_t hash_capacity = 0U;
+    bool addressable = true;
+    BCDynamicAddressLimit limit = BCDynamicAddressLimit::None;
+};
+
+[[nodiscard]] inline double bc_family_carry_reserve_factor(
+    double reserve_factor,
+    uint64_t source2_size,
+    uint64_t source4_size
+) {
+    if (source4_size == 0U) {
+        return reserve_factor;
+    }
+    const double combined_ratio =
+        1.0 + static_cast<double>(source2_size) / static_cast<double>(source4_size);
+    const double combined_factor = reserve_factor * combined_ratio;
+    return std::isfinite(combined_factor)
+        ? std::max(reserve_factor, combined_factor)
+        : std::numeric_limits<double>::infinity();
+}
+
+[[nodiscard]] inline uint64_t bc_family_rank_payload_word_estimate(uint64_t bytes) {
+    return bytes / sizeof(uint64_t) + 1U;
+}
+
+[[nodiscard]] inline BCFamilyDynamicRouteEstimate bc_family_dynamic_route_estimate(
+    const BCFamilyRouteInputs &inputs,
+    double reserve_factor,
+    bool has_carry
+) {
+    BCFamilyDynamicRouteEstimate route;
+    if (!inputs.evaluate_dynamic_address_space) {
+        return route;
+    }
+
+    auto include_state = [&](uint64_t source_buckets, uint64_t source_bitmap_words, double factor) {
+        const uint64_t bucket_estimate = bc_dynamic_scaled_estimate(
+            source_buckets,
+            factor,
+            kBCDynamicBucketPadding);
+        const uint64_t bitmap_estimate = bc_dynamic_scaled_estimate(
+            source_bitmap_words,
+            factor,
+            kBCDynamicBitmapWordPadding);
+        const BCDynamicCapacityEstimate capacity =
+            bc_estimate_dynamic_capacity(bucket_estimate, bitmap_estimate);
+        route.bitmap_words = std::max(route.bitmap_words, capacity.bitmap_word_estimate);
+        route.hash_capacity = std::max(route.hash_capacity, capacity.hash_capacity);
+        if (!capacity.addressable()) {
+            route.addressable = false;
+            if (route.limit == BCDynamicAddressLimit::None) {
+                route.limit = capacity.limit;
+            } else if (route.limit != capacity.limit) {
+                route.limit = BCDynamicAddressLimit::HashAndBitmap;
+            }
+        }
+    };
+
+    if (!has_carry) {
+        if (inputs.has_source4) {
+            const double carry_factor = bc_family_carry_reserve_factor(
+                reserve_factor,
+                inputs.source2_size,
+                inputs.source4_size);
+            include_state(
+                inputs.source4_bucket_count,
+                bc_family_rank_payload_word_estimate(inputs.source4_rank_payload_bytes),
+                carry_factor);
+        } else {
+            include_state(
+                inputs.source2_bucket_count,
+                bc_family_rank_payload_word_estimate(inputs.source2_rank_payload_bytes),
+                reserve_factor);
+        }
+    }
+    if (inputs.has_secondary) {
+        include_state(
+            inputs.source2_bucket_count,
+            bc_family_rank_payload_word_estimate(inputs.source2_rank_payload_bytes),
+            reserve_factor * 2.0);
+    }
+    return route;
+}
 
 [[nodiscard]] inline const char *bc_family_route_name(BCFamilyGenerationRoute route) {
     switch (route) {
@@ -160,19 +270,46 @@ inline constexpr uint64_t kBCFamilyRouteGiB = 1024ULL * 1024ULL * 1024ULL;
     decision.family_estimated_peak_bytes =
         bc_family_estimate_for_modulus(largest, decision.target_modulus);
 
+    const BCFamilyDynamicRouteEstimate resident_dynamic =
+        bc_family_dynamic_route_estimate(
+            inputs,
+            inputs.resident_dynamic_reserve_factor,
+            inputs.has_resident_carry);
+    const BCFamilyDynamicRouteEstimate single_dynamic =
+        bc_family_dynamic_route_estimate(
+            inputs,
+            inputs.single_dynamic_reserve_factor,
+            inputs.has_single_carry);
+    decision.resident_dynamic_bitmap_words = resident_dynamic.bitmap_words;
+    decision.resident_dynamic_hash_capacity = resident_dynamic.hash_capacity;
+    decision.single_dynamic_bitmap_words = single_dynamic.bitmap_words;
+    decision.single_dynamic_hash_capacity = single_dynamic.hash_capacity;
+    decision.resident_addressable = resident_dynamic.addressable;
+    decision.single_addressable = single_dynamic.addressable;
+    decision.automatic_route = requested_route == BCFamilyGenerationRoute::Auto;
+
     auto set_route = [&](BCFamilyGenerationRoute route) {
         decision.route = route;
         switch (route) {
         case BCFamilyGenerationRoute::Resident:
             decision.route_estimated_peak_bytes = decision.resident_estimated_peak_bytes;
+            decision.route_dynamic_bitmap_words = decision.resident_dynamic_bitmap_words;
+            decision.route_dynamic_hash_capacity = decision.resident_dynamic_hash_capacity;
+            decision.route_addressable = decision.resident_addressable;
             break;
         case BCFamilyGenerationRoute::Single:
             decision.route_estimated_peak_bytes = decision.single_estimated_peak_bytes;
+            decision.route_dynamic_bitmap_words = decision.single_dynamic_bitmap_words;
+            decision.route_dynamic_hash_capacity = decision.single_dynamic_hash_capacity;
+            decision.route_addressable = decision.single_addressable;
             break;
         case BCFamilyGenerationRoute::Family:
         case BCFamilyGenerationRoute::Auto:
             decision.route = BCFamilyGenerationRoute::Family;
             decision.route_estimated_peak_bytes = decision.family_estimated_peak_bytes;
+            decision.route_dynamic_bitmap_words = 0U;
+            decision.route_dynamic_hash_capacity = 0U;
+            decision.route_addressable = true;
             break;
         }
     };
@@ -182,13 +319,21 @@ inline constexpr uint64_t kBCFamilyRouteGiB = 1024ULL * 1024ULL * 1024ULL;
         return decision;
     }
 
-    const bool resident_fits = decision.resident_estimated_peak_bytes <= budget;
-    const bool single_fits = decision.single_estimated_peak_bytes <= budget;
+    const bool resident_memory_fits = decision.resident_estimated_peak_bytes <= budget;
+    const bool single_memory_fits = decision.single_estimated_peak_bytes <= budget;
     BCFamilyGenerationRoute selected = BCFamilyGenerationRoute::Family;
-    if (resident_fits) {
-        selected = BCFamilyGenerationRoute::Resident;
-    } else if (single_fits) {
-        selected = BCFamilyGenerationRoute::Single;
+    if (resident_memory_fits) {
+        if (decision.resident_addressable) {
+            selected = BCFamilyGenerationRoute::Resident;
+        } else {
+            decision.dynamic_address_limited = true;
+        }
+    } else if (single_memory_fits) {
+        if (decision.single_addressable) {
+            selected = BCFamilyGenerationRoute::Single;
+        } else {
+            decision.dynamic_address_limited = true;
+        }
     }
 
     BCFamilyGenerationRoute previous = inputs.previous_route == BCFamilyGenerationRoute::Auto
@@ -221,11 +366,21 @@ inline constexpr uint64_t kBCFamilyRouteGiB = 1024ULL * 1024ULL * 1024ULL;
 
     if (selected == BCFamilyGenerationRoute::Resident &&
         decision.resident_estimated_peak_bytes > budget) {
-        selected = single_fits ? BCFamilyGenerationRoute::Single : BCFamilyGenerationRoute::Family;
+        selected = single_memory_fits && decision.single_addressable
+            ? BCFamilyGenerationRoute::Single
+            : BCFamilyGenerationRoute::Family;
     }
     if (selected == BCFamilyGenerationRoute::Single &&
         decision.single_estimated_peak_bytes > budget) {
         selected = BCFamilyGenerationRoute::Family;
+    }
+    if (selected == BCFamilyGenerationRoute::Resident && !decision.resident_addressable) {
+        selected = BCFamilyGenerationRoute::Family;
+        decision.dynamic_address_limited = true;
+    }
+    if (selected == BCFamilyGenerationRoute::Single && !decision.single_addressable) {
+        selected = BCFamilyGenerationRoute::Family;
+        decision.dynamic_address_limited = true;
     }
     set_route(selected);
     return decision;

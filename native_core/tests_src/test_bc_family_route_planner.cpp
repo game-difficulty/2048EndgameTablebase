@@ -129,6 +129,123 @@ void test_auto_route_transitions_cover_three_routes() {
     check(down_to_family.route == BC::BCFamilyGenerationRoute::Family, "single to family downgrade should be immediate");
 }
 
+void test_dynamic_capacity_uint32_boundaries() {
+    const BC::BCDynamicCapacityEstimate bitmap_at_limit =
+        BC::bc_estimate_dynamic_capacity(1U, BC::kBCDynamicBitmapWordLimit);
+    check(bitmap_at_limit.addressable(), "bitmap word limit should be addressable");
+    const BC::BCDynamicCapacityEstimate bitmap_over_limit =
+        BC::bc_estimate_dynamic_capacity(1U, BC::kBCDynamicBitmapWordLimit + 1U);
+    check(!bitmap_over_limit.bitmap_addressable, "bitmap word limit + 1 should be rejected");
+
+    const BC::BCDynamicCapacityEstimate hash_at_limit =
+        BC::bc_estimate_dynamic_capacity(BC::kBCDynamicBucketEstimateLimit, 1U);
+    check(hash_at_limit.addressable(), "maximum hash bucket estimate should be addressable");
+    check(
+        hash_at_limit.hash_capacity == BC::kBCDynamicHashCapacityLimit,
+        "maximum hash bucket estimate should select the uint32 power-of-two limit"
+    );
+    const BC::BCDynamicCapacityEstimate hash_over_limit =
+        BC::bc_estimate_dynamic_capacity(BC::kBCDynamicBucketEstimateLimit + 1U, 1U);
+    check(!hash_over_limit.hash_addressable, "hash bucket estimate over limit should be rejected");
+}
+
+void test_auto_generation_address_limit_routes_directly_to_family() {
+    BC::BCFamilyRouteInputs inputs = base_inputs();
+    inputs.previous_route = BC::BCFamilyGenerationRoute::Resident;
+    inputs.evaluate_dynamic_address_space = true;
+    inputs.has_resident_carry = true;
+    inputs.has_single_carry = true;
+    inputs.has_secondary = true;
+    inputs.source2_bucket_count = 1000U;
+    inputs.source2_rank_payload_bytes =
+        (BC::kBCDynamicBitmapWordLimit / 2U) * sizeof(uint64_t);
+    inputs.source4_bucket_count = inputs.source2_bucket_count;
+    inputs.source4_rank_payload_bytes = inputs.source2_rank_payload_bytes;
+    inputs.resident_dynamic_reserve_factor = 2.0;
+    inputs.single_dynamic_reserve_factor = 2.0;
+
+    const BC::BCFamilyRouteDecision decision =
+        BC::bc_plan_family_generation_route(inputs, BC::BCFamilyGenerationRoute::Auto);
+    check(decision.route == BC::BCFamilyGenerationRoute::Family,
+          "auto route should fall directly back to family on uint32 overflow");
+    check(decision.dynamic_address_limited,
+          "address-limited auto route should report its fallback reason");
+    check(!decision.resident_addressable, "resident address estimate should fail");
+    check(!decision.single_addressable, "single address estimate should fail");
+}
+
+void test_forced_dynamic_route_reports_address_limit_without_silent_reroute() {
+    BC::BCFamilyRouteInputs inputs = base_inputs();
+    inputs.evaluate_dynamic_address_space = true;
+    inputs.has_resident_carry = true;
+    inputs.has_secondary = true;
+    inputs.source2_rank_payload_bytes =
+        (BC::kBCDynamicBitmapWordLimit / 2U) * sizeof(uint64_t);
+    inputs.resident_dynamic_reserve_factor = 2.0;
+    const BC::BCFamilyRouteDecision decision =
+        BC::bc_plan_family_generation_route(inputs, BC::BCFamilyGenerationRoute::Resident);
+    check(decision.route == BC::BCFamilyGenerationRoute::Resident,
+          "forced resident route should not be changed silently");
+    check(!decision.route_addressable,
+          "forced resident route should expose the addressability failure");
+}
+
+void test_continuous_single_address_limit_routes_to_family() {
+    BC::BCFamilyRouteInputs inputs = base_inputs();
+    inputs.available_memory_bytes = 3U * GiB;
+    inputs.previous_route = BC::BCFamilyGenerationRoute::Single;
+    inputs.evaluate_dynamic_address_space = true;
+    inputs.has_resident_carry = true;
+    inputs.has_single_carry = true;
+    inputs.has_secondary = true;
+    inputs.source2_bucket_count = 1000U;
+    inputs.source2_rank_payload_bytes =
+        (BC::kBCDynamicBitmapWordLimit / 2U) * sizeof(uint64_t);
+    inputs.resident_dynamic_reserve_factor = 2.0;
+    inputs.single_dynamic_reserve_factor = 2.0;
+    const BC::BCFamilyRouteDecision decision =
+        BC::bc_plan_family_generation_route(inputs, BC::BCFamilyGenerationRoute::Auto);
+    check(decision.route == BC::BCFamilyGenerationRoute::Family,
+          "continuous single next-carry overflow should route to family");
+    check(decision.dynamic_address_limited,
+          "continuous single overflow should report address limitation");
+}
+
+void test_resume_learned_factor_keeps_realistic_transition_addressable() {
+    BC::BCFamilyRouteInputs inputs = base_inputs();
+    inputs.evaluate_dynamic_address_space = true;
+    inputs.previous_route = BC::BCFamilyGenerationRoute::Resident;
+    inputs.source4_size = 14746107904ULL;
+    inputs.source2_size = 13913313280ULL;
+    inputs.source4_rank_payload_bytes = 13935851480ULL;
+    inputs.source2_rank_payload_bytes = 13141761568ULL;
+    inputs.source4_bucket_count = 1000000U;
+    inputs.source2_bucket_count = 1000000U;
+    inputs.available_memory_bytes = 128U * GiB;
+    inputs.resident_dynamic_reserve_factor = 2.0;
+    inputs.single_dynamic_reserve_factor = 2.0;
+    const BC::BCFamilyRouteDecision bootstrap =
+        BC::bc_plan_family_generation_route(inputs, BC::BCFamilyGenerationRoute::Auto);
+    check(!bootstrap.resident_addressable,
+          "default resume factor should reproduce the representative uint32 overflow");
+    check(bootstrap.route == BC::BCFamilyGenerationRoute::Family,
+          "unlearned representative resume should fall back to family");
+
+    inputs.resident_dynamic_reserve_factor = 1.08;
+    inputs.single_dynamic_reserve_factor = 1.08;
+    inputs.has_resident_carry = false;
+    inputs.has_single_carry = false;
+    inputs.has_secondary = true;
+    const BC::BCFamilyRouteDecision decision =
+        BC::bc_plan_family_generation_route(inputs, BC::BCFamilyGenerationRoute::Auto);
+    check(decision.resident_addressable,
+          "learned resume factor should keep the representative carry bitmap addressable");
+    check(decision.resident_dynamic_bitmap_words <= BC::kBCDynamicBitmapWordLimit,
+          "learned resume factor bitmap estimate should stay within uint32 words");
+    check(decision.route == BC::BCFamilyGenerationRoute::Resident,
+          "learned representative resume should remain on resident route");
+}
+
 BC::BCSolveRouteInputs base_solve_inputs() {
     BC::BCSolveRouteInputs inputs;
     inputs.current_rows = 100U;
@@ -192,6 +309,11 @@ int main() {
         test_auto_upgrade_requires_two_layers();
         test_auto_downgrade_is_immediate();
         test_auto_route_transitions_cover_three_routes();
+        test_dynamic_capacity_uint32_boundaries();
+        test_auto_generation_address_limit_routes_directly_to_family();
+        test_forced_dynamic_route_reports_address_limit_without_silent_reroute();
+        test_continuous_single_address_limit_routes_to_family();
+        test_resume_learned_factor_keeps_realistic_transition_addressable();
         test_solve_route_thresholds();
         test_solve_route_forced_selection_keeps_estimates();
         std::cout << "bc_family_route_planner_test passed\n";

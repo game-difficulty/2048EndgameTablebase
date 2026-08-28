@@ -851,6 +851,9 @@ public:
             uint64_t bytes = 0U;
             std::vector<uint8_t> data;
         };
+        const uint64_t max_coalesced_range_bytes = reader_->mode() == BCFileIOMode::Direct
+            ? 64ULL * 1024ULL * 1024ULL
+            : 4ULL * 1024ULL * 1024ULL;
         std::vector<Range> ranges;
         for (size_t request_index : request_order) {
             const Request &request = requests[request_index];
@@ -866,7 +869,11 @@ public:
                     last.bytes,
                     "BC file generation blob coalesced range end overflow"
                 );
-                if (request.ref.offset >= last.offset && request.ref.offset <= last_end) {
+                if (bc_file_extents_can_coalesce(
+                        BCFileExtent{last.offset, last.bytes},
+                        BCFileExtent{request.ref.offset, request.ref.bytes},
+                        0U,
+                        max_coalesced_range_bytes)) {
                     if (end > last_end) {
                         last.bytes = end - last.offset;
                     }
@@ -1185,11 +1192,11 @@ public:
                     last.bytes,
                     "BC file generation blob whole restore range end overflow"
                 );
-                const uint64_t gap = request.ref.offset > last_end ? request.ref.offset - last_end : 0U;
-                if (request.ref.offset >= last.offset &&
-                    (request.ref.offset <= last_end ||
-                     (gap <= kBufferedWholeRestoreMaxGapBytes &&
-                      end - last.offset <= kBufferedWholeRestoreMaxRangeBytes))) {
+                if (bc_file_extents_can_coalesce(
+                        BCFileExtent{last.offset, last.bytes},
+                        BCFileExtent{request.ref.offset, request.ref.bytes},
+                        kBufferedWholeRestoreMaxGapBytes,
+                        kBufferedWholeRestoreMaxRangeBytes)) {
                     if (end > last_end) {
                         last.bytes = end - last.offset;
                     }

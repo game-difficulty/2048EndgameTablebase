@@ -10,6 +10,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -382,7 +383,9 @@ void test_direct_batch_io() {
     std::copy(third.begin(), third.end(), expected.begin() + 8188U);
 
     {
-        BC::BCDirectFileWriter writer(path);
+        BC::BCDirectFileIOOptions write_options;
+        write_options.max_transfer_bytes = 4096U;
+        BC::BCDirectFileWriter writer(path, write_options);
         writer.resize(expected.size());
         BC::BCFileIOStats stats;
         writer.write_many(
@@ -397,7 +400,7 @@ void test_direct_batch_io() {
         check(stats.request_count == 3U, "direct write_many request count mismatch");
         check(stats.requested_bytes == first.size() + second.size() + third.size(),
             "direct write_many requested bytes mismatch");
-        check(stats.backend_io_count >= 1U, "direct write_many should report backend ops");
+        check(stats.backend_io_count >= 3U, "direct write_many should split by transfer limit");
         check(stats.backend_bytes >= 4096U, "direct write_many should report aligned backend bytes");
     }
 
@@ -409,6 +412,7 @@ void test_direct_batch_io() {
     read_options.logical_size = expected.size();
     read_options.overlapped = false;
     read_options.queue_depth = 2U;
+    read_options.max_transfer_bytes = 4096U;
     BC::BCDirectFileReader reader(path, read_options);
     check(reader.size() == expected.size(), "direct reader should report logical size");
     std::vector<uint8_t> actual(expected.size(), 0U);
@@ -432,7 +436,7 @@ void test_direct_batch_io() {
     }
     check(stats.request_count == 3U, "direct read_many request count mismatch");
     check(stats.requested_bytes == 16U + 24U + third.size(), "direct read_many requested bytes mismatch");
-    check(stats.backend_io_count > 0U, "direct read_many backend ops should be reported");
+    check(stats.backend_io_count >= 3U, "direct read_many should split by transfer limit");
     check(stats.backend_bytes >= 4096U, "direct read_many backend bytes should be aligned");
 #endif
 }
@@ -440,18 +444,33 @@ void test_direct_batch_io() {
 void test_windows_direct_io_chunk_limits() {
 #if defined(_WIN32)
     constexpr uint32_t kAlignment = 4096U;
-    const uint64_t max_chunk = BC::detail::windows_max_io_chunk_bytes(kAlignment);
+    constexpr uint64_t kConfiguredChunk = 8ULL * 1024ULL * 1024ULL;
+    const uint64_t max_chunk =
+        BC::detail::windows_max_io_chunk_bytes(kAlignment, kConfiguredChunk);
     check(max_chunk != 0U, "Windows direct max chunk should be non-zero");
+    check(max_chunk == kConfiguredChunk, "Windows direct max chunk should honor configured limit");
+    check(
+        BC::detail::windows_max_io_chunk_bytes(
+            kAlignment,
+            std::numeric_limits<uint64_t>::max()) == BC::kBCDirectHardMaxTransferBytes,
+        "Windows direct max chunk should enforce hard safety limit"
+    );
     check(max_chunk <= 0xFFFFFFFFULL, "Windows direct max chunk should fit DWORD");
     check((max_chunk % kAlignment) == 0U, "Windows direct max chunk should be aligned");
     check(
-        BC::detail::windows_io_chunk_count(max_chunk + kAlignment, kAlignment) == 2U,
-        "Windows direct chunk count should split over-DWORD requests"
+        BC::detail::windows_io_chunk_count(
+            max_chunk + kAlignment,
+            kAlignment,
+            kConfiguredChunk) == 2U,
+        "Windows direct chunk count should split over configured requests"
     );
 
     std::vector<BC::detail::BCPhysicalRange> ranges;
     ranges.push_back(BC::detail::BCPhysicalRange{0U, max_chunk + 2U * kAlignment, {}});
-    BC::detail::split_physical_ranges_for_windows_io(ranges, kAlignment);
+    BC::detail::split_physical_ranges_for_windows_io(
+        ranges,
+        kAlignment,
+        kConfiguredChunk);
     check(ranges.size() == 2U, "Windows direct physical range should split");
     check(ranges[0].bytes == max_chunk, "Windows direct first split chunk mismatch");
     check(ranges[1].bytes == 2U * kAlignment, "Windows direct second split chunk mismatch");
@@ -460,6 +479,49 @@ void test_windows_direct_io_chunk_limits() {
         check((range.bytes % kAlignment) == 0U, "Windows direct split chunk should be aligned");
     }
 #endif
+}
+
+void test_direct_io_option_transfer_limit_normalization() {
+#if defined(_WIN32) || defined(__linux__)
+    BC::BCDirectFileIOOptions options;
+    options.max_transfer_bytes = std::numeric_limits<uint64_t>::max();
+    const BC::BCDirectFileIOOptions hard_limited = BC::detail::normalize_direct_options(options);
+    check(
+        hard_limited.max_transfer_bytes == BC::kBCDirectHardMaxTransferBytes,
+        "direct IO option should enforce hard transfer limit"
+    );
+    options.max_transfer_bytes = 4097U;
+    const BC::BCDirectFileIOOptions aligned = BC::detail::normalize_direct_options(options);
+    check(aligned.max_transfer_bytes == 4096U, "direct IO transfer limit should align down");
+    options.max_transfer_bytes = 0U;
+    expect_throws(
+        [&]() { (void)BC::detail::normalize_direct_options(options); },
+        "zero direct IO transfer limit should be rejected"
+    );
+#endif
+}
+
+void test_contiguous_extent_coalescing_has_hard_limit() {
+    constexpr uint64_t kCellBytes = 10ULL * 1024ULL * 1024ULL;
+    constexpr uint64_t kMaxCoalescedBytes = 64ULL * 1024ULL * 1024ULL;
+    constexpr uint64_t kStartOffset = 0x304B8000ULL;
+    std::vector<BC::BCFileExtent> ranges;
+    for (uint64_t cid = 0U; cid < 512U; ++cid) {
+        const BC::BCFileExtent next{kStartOffset + cid * kCellBytes, kCellBytes};
+        if (!ranges.empty() && BC::bc_file_extents_can_coalesce(
+                ranges.back(), next, 64ULL * 1024ULL, kMaxCoalescedBytes)) {
+            ranges.back().bytes = next.offset + next.bytes - ranges.back().offset;
+        } else {
+            ranges.push_back(next);
+        }
+    }
+    check(ranges.size() == 86U, "512 contiguous cells should be split into bounded ranges");
+    uint64_t total = 0U;
+    for (const BC::BCFileExtent &range : ranges) {
+        check(range.bytes <= kMaxCoalescedBytes, "coalesced range exceeds hard limit");
+        total += range.bytes;
+    }
+    check(total == 512U * kCellBytes, "bounded coalescing should preserve total bytes");
 }
 
 void test_position_file_path_roundtrip() {
@@ -523,6 +585,10 @@ int main() {
         test_direct_batch_io();
         std::cerr << "test_windows_direct_io_chunk_limits\n";
         test_windows_direct_io_chunk_limits();
+        std::cerr << "test_direct_io_option_transfer_limit_normalization\n";
+        test_direct_io_option_transfer_limit_normalization();
+        std::cerr << "test_contiguous_extent_coalescing_has_hard_limit\n";
+        test_contiguous_extent_coalescing_has_hard_limit();
         std::cerr << "test_position_file_path_roundtrip\n";
         test_position_file_path_roundtrip();
         std::cerr << "test_success_file_path_roundtrip\n";

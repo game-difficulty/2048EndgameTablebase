@@ -1,5 +1,6 @@
 #include "BCResidentGeneration.h"
 
+#include "BCDynamicCapacity.h"
 #include "BCResidentGenerationInternal.h"
 #include "BCBoardOps.h"
 #include "BCCellMatrix.h"
@@ -327,26 +328,6 @@ static void validate_resident_generation_source(
     return out;
 }
 
-[[nodiscard]] static uint32_t bc_next_power_of_two_u32(uint64_t value) {
-    if (value > (1ULL << 31U)) {
-        throw std::overflow_error("BC resident dynamic hash capacity exceeds uint32 power-of-two range");
-    }
-    uint32_t out = 1U;
-    while (out < value) {
-        out <<= 1U;
-    }
-    return std::max<uint32_t>(1024U, out);
-}
-
-[[nodiscard]] static uint32_t choose_bc_dynamic_capacity(uint64_t bucket_estimate) {
-    constexpr uint64_t kLoadNumerator = 75U;
-    constexpr uint64_t kLoadDenominator = 100U;
-    const uint64_t required =
-        (std::max<uint64_t>(bucket_estimate, 1U) * kLoadDenominator + (kLoadNumerator - 1U)) /
-        kLoadNumerator;
-    return bc_next_power_of_two_u32(required);
-}
-
 [[nodiscard]] static uint32_t bc_dynamic_home_slot(CellId cid, uint64_t key, uint32_t capacity) {
     const uint64_t value = key ^ (static_cast<uint64_t>(cid) * 0x9e3779b97f4a7c15ULL);
     const uint64_t mixed = value * 11400714819323198485ULL;
@@ -376,7 +357,8 @@ static void validate_resident_generation_source(
         }
     }
     if (count > std::numeric_limits<uint32_t>::max()) {
-        throw std::overflow_error("BC resident generation source bucket count exceeds uint32");
+        throw BCDynamicAddressabilityOverflow(
+            "BC resident generation source bucket count exceeds uint32");
     }
     return static_cast<uint32_t>(count);
 }
@@ -544,14 +526,20 @@ BCDynamicState make_bc_dynamic_state(
     uint64_t bitmap_word_estimate,
     int thread_count
 ) {
-    constexpr uint64_t kMinBitmapWords = 512U * 64U;
+    const BCDynamicCapacityEstimate capacity =
+        bc_estimate_dynamic_capacity(bucket_estimate, bitmap_word_estimate);
+    if (!capacity.hash_addressable) {
+        throw BCDynamicAddressabilityOverflow(
+            "BC resident dynamic hash capacity exceeds uint32 power-of-two range");
+    }
+    if (!capacity.bitmap_addressable) {
+        throw BCDynamicAddressabilityOverflow(
+            "BC resident dynamic bitmap arena exceeds uint32 words");
+    }
     BCDynamicState state;
     state.cell_count = cell_count;
-    state.hash_capacity = choose_bc_dynamic_capacity(bucket_estimate);
-    state.reserved_bitmap_words = std::max<uint64_t>(bitmap_word_estimate, kMinBitmapWords);
-    if (state.reserved_bitmap_words > std::numeric_limits<uint32_t>::max()) {
-        throw std::overflow_error("BC resident dynamic bitmap arena exceeds uint32 words");
-    }
+    state.hash_capacity = static_cast<uint32_t>(capacity.hash_capacity);
+    state.reserved_bitmap_words = capacity.bitmap_word_estimate;
     state.cell_array = std::unique_ptr<std::atomic<uint32_t>[]>(
         new std::atomic<uint32_t>[state.hash_capacity]
     );

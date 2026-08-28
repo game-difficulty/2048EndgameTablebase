@@ -39,6 +39,7 @@ struct BCFamilyGenerationRunOptions {
     uint32_t family_modulus = 29U;
     BCFamilyGenerationRoute family_route = BCFamilyGenerationRoute::Auto;
     uint32_t direct_queue_depth = 8U;
+    uint32_t direct_io_chunk_mib = 8U;
     std::filesystem::path output_dir;
     std::vector<std::filesystem::path> output_dirs;
     std::filesystem::path stats_csv;

@@ -34,6 +34,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -336,6 +337,7 @@ struct Args {
     BC::BCFamilyGenerationRoute family_route = BC::BCFamilyGenerationRoute::Auto;
     std::filesystem::path family_route_script;
     uint32_t direct_queue_depth = 8U;
+    uint32_t direct_io_chunk_mib = 8U;
     std::filesystem::path output_dir =
         std::filesystem::path("tmp") / "bc_family_free";
     std::vector<std::filesystem::path> output_dirs;
@@ -345,6 +347,10 @@ struct Args {
     std::filesystem::path single_source2_file;
     std::filesystem::path single_source4_file;
 };
+
+[[nodiscard]] uint64_t direct_max_transfer_bytes(const Args &args) {
+    return static_cast<uint64_t>(args.direct_io_chunk_mib) * 1024ULL * 1024ULL;
+}
 
 struct LayerFile {
     uint32_t layer_sum = 0U;
@@ -603,10 +609,15 @@ struct FamilyRoutePlannerState {
 [[nodiscard]] BC::BCFamilyRouteDecision decide_family_route_for_layer(
     const Args &args,
     const FamilyRouteScript &script,
-    FamilyRoutePlannerState &state,
+    const FamilyRoutePlannerState &state,
     uint32_t layer_sum,
     const LayerFile &source2_layer,
-    const LayerFile *source4_layer
+    const LayerFile *source4_layer,
+    double resident_dynamic_reserve_factor,
+    double single_dynamic_reserve_factor,
+    bool has_resident_carry,
+    bool has_single_carry,
+    bool has_secondary
 ) {
     const SystemMemorySnapshot memory = system_memory_snapshot();
     uint64_t available = memory.available_bytes;
@@ -624,6 +635,17 @@ struct FamilyRoutePlannerState {
         ? inputs.source2_size
         : (source4_layer->physical_size != 0U ? source4_layer->physical_size : source4_layer->logical_size);
     inputs.has_source4 = source4_layer != nullptr;
+    inputs.source2_bucket_count = source2_layer.bucket_count;
+    inputs.source2_rank_payload_bytes = source2_layer.rank_payload_bytes;
+    inputs.source4_bucket_count = source4_layer == nullptr ? 0U : source4_layer->bucket_count;
+    inputs.source4_rank_payload_bytes =
+        source4_layer == nullptr ? 0U : source4_layer->rank_payload_bytes;
+    inputs.resident_dynamic_reserve_factor = resident_dynamic_reserve_factor;
+    inputs.single_dynamic_reserve_factor = single_dynamic_reserve_factor;
+    inputs.has_resident_carry = has_resident_carry;
+    inputs.has_single_carry = has_single_carry;
+    inputs.has_secondary = has_secondary;
+    inputs.evaluate_dynamic_address_space = true;
     inputs.available_memory_bytes = available;
     inputs.total_memory_bytes = memory.total_bytes;
     inputs.fixed_modulus = args.family_modulus;
@@ -644,11 +666,17 @@ struct FamilyRoutePlannerState {
             );
         }
     }
+    return decision;
+}
+
+void commit_family_route_decision(
+    FamilyRoutePlannerState &state,
+    const BC::BCFamilyRouteDecision &decision
+) {
     state.previous_route = decision.route;
     state.previous_modulus = decision.target_modulus;
     state.resident_upgrade_streak = decision.resident_upgrade_streak;
     state.single_upgrade_streak = decision.single_upgrade_streak;
-    return decision;
 }
 
 [[nodiscard]] uint64_t parse_u64_field(
@@ -1261,6 +1289,7 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
     if (args.family_blob == "direct") {
         BC::BCDirectFileIOOptions options;
         options.queue_depth = args.direct_queue_depth;
+        options.max_transfer_bytes = direct_max_transfer_bytes(args);
         options.overlapped = args.direct_queue_depth > 1U;
         options.preserve_unwritten_bytes = false;
         return std::make_unique<BC::BCDirectFileWriter>(path, options);
@@ -1275,6 +1304,7 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
     if (args.family_blob == "direct") {
         BC::BCDirectFileIOOptions options;
         options.queue_depth = args.direct_queue_depth;
+        options.max_transfer_bytes = direct_max_transfer_bytes(args);
         options.overlapped = args.direct_queue_depth > 1U;
         return std::make_unique<BC::BCDirectFileReader>(path, options);
     }
@@ -1288,6 +1318,7 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
     if (args.family_position_io == "direct-rank-first") {
         BC::BCDirectFileIOOptions options;
         options.queue_depth = args.direct_queue_depth;
+        options.max_transfer_bytes = direct_max_transfer_bytes(args);
         options.overlapped = args.direct_queue_depth > 1U;
         options.preserve_unwritten_bytes = false;
         return std::make_unique<BC::BCDirectFileWriter>(path, options);
@@ -1302,6 +1333,7 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
     if (args.family_position_io == "direct-rank-first") {
         BC::BCDirectFileIOOptions options;
         options.queue_depth = args.direct_queue_depth;
+        options.max_transfer_bytes = direct_max_transfer_bytes(args);
         options.overlapped = args.direct_queue_depth > 1U;
         options.preserve_unwritten_bytes = false;
         return std::make_unique<BC::BCDirectFileWriter>(path, options);
@@ -1317,6 +1349,7 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
     if (args.family_position_io == "direct-rank-first") {
         BC::BCDirectFileIOOptions options;
         options.queue_depth = args.direct_queue_depth;
+        options.max_transfer_bytes = direct_max_transfer_bytes(args);
         options.overlapped = args.direct_queue_depth > 1U;
         options.logical_size = logical_size;
         return std::make_unique<BC::BCDirectFileReader>(path, options);
@@ -1792,6 +1825,7 @@ private:
     if (args.family_position_io == "direct-rank-first") {
         BC::BCDirectFileIOOptions options;
         options.queue_depth = args.direct_queue_depth;
+        options.max_transfer_bytes = direct_max_transfer_bytes(args);
         options.overlapped = args.direct_queue_depth > 1U;
         options.logical_size = logical_size;
         BC::BCDirectFileReader reader(path, options);
@@ -1823,7 +1857,8 @@ void fill_writer_stats_from_resident_result(
 [[nodiscard]] std::unique_ptr<BCPositionStreamingReader> open_position_reader(
     const Args &args,
     const LayerFile &layer,
-    const BCLut &lut
+    const BCLut &lut,
+    bool preload_cell_compressed = false
 ) {
     std::unique_ptr<BC::BCReadableFile> file;
     if (is_position_archive_path(layer.path)) {
@@ -1837,7 +1872,9 @@ void fill_writer_stats_from_resident_result(
         return reader;
     }
     if (is_cell_compressed_position_path(layer.path)) {
-        file = std::make_unique<BC::BCCellCompressedPositionReadableFile>(layer.path);
+        file = std::make_unique<BC::BCCellCompressedPositionReadableFile>(
+            layer.path,
+            preload_cell_compressed);
         auto reader = std::make_unique<BCPositionStreamingReader>(std::move(file), lut);
         reader->set_validate_loaded_cells(false);
         return reader;
@@ -1847,6 +1884,7 @@ void fill_writer_stats_from_resident_result(
         if (layer.physical_size >= required_physical) {
             BC::BCDirectFileIOOptions options;
             options.queue_depth = args.direct_queue_depth;
+            options.max_transfer_bytes = direct_max_transfer_bytes(args);
             options.overlapped = args.direct_queue_depth > 1U;
             options.logical_size = layer.logical_size;
             file = std::make_unique<BC::BCDirectFileReader>(layer.path, options);
@@ -1862,6 +1900,65 @@ void fill_writer_stats_from_resident_result(
     auto reader = std::make_unique<BCPositionStreamingReader>(std::move(file), lut);
     reader->set_validate_loaded_cells(false);
     return reader;
+}
+
+[[nodiscard]] bool should_preload_cell_compressed_family_sources(
+    const Args &args,
+    const LayerFile &source2_layer,
+    const LayerFile *source4_layer
+) {
+    uint64_t preload_bytes = 0U;
+    uint64_t memory_source_bytes = 0U;
+    auto add_source_bytes = [&](const LayerFile &layer) {
+        if (is_cell_compressed_position_path(layer.path)) {
+            preload_bytes = BC::bc_checked_add_u64(
+                preload_bytes,
+                layer.logical_size,
+                "BC cell-compressed preload byte estimate overflow");
+        }
+        if (is_cell_compressed_position_path(layer.path) || is_position_archive_path(layer.path)) {
+            memory_source_bytes = BC::bc_checked_add_u64(
+                memory_source_bytes,
+                layer.logical_size,
+                "BC in-memory source byte estimate overflow");
+        }
+    };
+    add_source_bytes(source2_layer);
+    if (source4_layer != nullptr) {
+        add_source_bytes(*source4_layer);
+    }
+    if (preload_bytes == 0U) {
+        return false;
+    }
+
+    const SystemMemorySnapshot memory = system_memory_snapshot();
+    constexpr uint64_t kMinimumSystemReserve = 16ULL * 1024ULL * 1024ULL * 1024ULL;
+    const uint64_t proportional_reserve =
+        BC::bc_route_mul_div_ceil_u64(memory.total_bytes, 15U, 100U);
+    const uint64_t system_reserve = std::max(kMinimumSystemReserve, proportional_reserve);
+    const uint64_t largest_source = std::max(
+        source2_layer.logical_size,
+        source4_layer == nullptr ? source2_layer.logical_size : source4_layer->logical_size);
+    const uint64_t family_working_bytes =
+        BC::bc_family_estimate_for_modulus(largest_source, args.family_modulus);
+    const uint64_t required = BC::bc_checked_add_u64(
+        BC::bc_checked_add_u64(
+            memory_source_bytes,
+            family_working_bytes,
+            "BC cell-compressed preload working estimate overflow"),
+        system_reserve,
+        "BC cell-compressed preload reserve estimate overflow");
+    const bool enabled = required <= memory.available_bytes;
+    std::cerr
+        << "BC_CELLCOMPRESSED_PRELOAD"
+        << " enabled=" << (enabled ? 1 : 0)
+        << " preload_bytes=" << preload_bytes
+        << " memory_source_bytes=" << memory_source_bytes
+        << " family_working_bytes=" << family_working_bytes
+        << " system_reserve_bytes=" << system_reserve
+        << " available_bytes=" << memory.available_bytes
+        << '\n';
+    return enabled;
 }
 
 [[nodiscard]] BC::BCPositionFileReader open_position_file_reader(
@@ -1887,7 +1984,8 @@ void fill_writer_stats_from_resident_result(
         layer.path,
         lut,
         args.direct_queue_depth,
-        args.direct_queue_depth > 1U);
+        args.direct_queue_depth > 1U,
+        direct_max_transfer_bytes(args));
 }
 
 [[nodiscard]] LayerFile inspect_layer_file(
@@ -1945,7 +2043,8 @@ void fill_writer_stats_from_resident_result(
             lut);
         reader_ptr = cell_compressed_reader.get();
     } else {
-        raw_reader = BCPositionStreamingReader::open_direct_auto(path, lut, 8U, true);
+        // Resume discovery only needs metadata; keep it off the overlapped direct-I/O path.
+        raw_reader = BCPositionStreamingReader::open_buffered(path, lut);
         reader_ptr = &raw_reader;
     }
     BCPositionStreamingReader &reader = *reader_ptr;
@@ -2789,13 +2888,10 @@ void apply_route_decision_to_result(
     options.keep_only_success_generated_boards = terminal;
     const uint64_t source4_bytes = layer_storage_size_bytes(source4_layer);
     const uint64_t current_bytes = layer_storage_size_bytes(current_layer);
-    if (source4_bytes != 0U) {
-        const double combined_ratio =
-            static_cast<double>(source4_bytes + current_bytes) /
-            static_cast<double>(source4_bytes);
-        options.dynamic_reserve_factor =
-            std::max(options.dynamic_reserve_factor, options.dynamic_reserve_factor * combined_ratio);
-    }
+    options.dynamic_reserve_factor = BC::bc_family_carry_reserve_factor(
+        options.dynamic_reserve_factor,
+        current_bytes,
+        source4_bytes);
     BC::BCResidentMutableGenerationResult carry =
         BC::generate_resident_mutable_layer_from_streaming_source(
             lut,
@@ -3313,11 +3409,13 @@ void apply_route_decision_to_result(
         return result;
     }
 
+    const bool preload_cell_compressed =
+        should_preload_cell_compressed_family_sources(args, source2_layer, source4_layer);
     std::unique_ptr<BCPositionStreamingReader> source2_reader =
-        open_position_reader(args, source2_layer, lut);
+        open_position_reader(args, source2_layer, lut, preload_cell_compressed);
     std::unique_ptr<BCPositionStreamingReader> source4_reader;
     if (source4_layer != nullptr) {
-        source4_reader = open_position_reader(args, *source4_layer, lut);
+        source4_reader = open_position_reader(args, *source4_layer, lut, preload_cell_compressed);
     }
     return generate_family_layer_to_file(
         args,
@@ -3787,6 +3885,40 @@ int run_bc_chain(const Args &args, std::ostream &out) {
     uint32_t single_carry_layer_sum = 0U;
     std::vector<double> resident_reserve_need_history;
     std::vector<double> single_reserve_need_history;
+    if (existing_prefix_count >= 2U) {
+        for (auto current_it = layers.begin(); current_it != layers.end(); ++current_it) {
+            const auto next_it = std::next(current_it);
+            if (next_it == layers.end()) {
+                break;
+            }
+            if (next_it->first != current_it->first + 2U) {
+                continue;
+            }
+            const double restored_need =
+                bc_transition_reserve_need(current_it->second, next_it->second);
+            if (restored_need > 0.0) {
+                resident_reserve_need_history.push_back(restored_need);
+                single_reserve_need_history.push_back(restored_need);
+            }
+        }
+    }
+    if (!resident_reserve_need_history.empty()) {
+        std::cerr
+            << "BC_RESERVE_HISTORY_RESTORED"
+            << " observations=" << resident_reserve_need_history.size()
+            << " last_need=" << resident_reserve_need_history.back()
+            << " resident_learned_factor="
+            << bc_regular_reserve_factor(
+                   resident_reserve_need_history,
+                   0.0,
+                   kBCResidentReserveHistoryWindow)
+            << " single_learned_factor="
+            << bc_regular_reserve_factor(
+                   single_reserve_need_history,
+                   0.0,
+                   kBCSingleReserveHistoryWindow)
+            << '\n';
+    }
     double resident_retry_guard_factor = 0.0;
     double single_retry_guard_factor = 0.0;
     std::map<uint32_t, std::shared_ptr<BC::BCPositionLayerReader>> resident_memory_layers;
@@ -3812,14 +3944,47 @@ int run_bc_chain(const Args &args, std::ostream &out) {
             }
             source4_layer = &source4_it->second;
         }
+        const double resident_dynamic_reserve_factor = bc_reserve_factor_for_step(
+            current_step,
+            resident_reserve_need_history,
+            resident_retry_guard_factor,
+            kBCResidentReserveHistoryWindow
+        );
+        const double single_dynamic_reserve_factor = bc_reserve_factor_for_step(
+            current_step,
+            single_reserve_need_history,
+            single_retry_guard_factor,
+            kBCSingleReserveHistoryWindow
+        );
+        const bool has_secondary = layer_sum + 2U <= final_primary_sum;
         BC::BCFamilyRouteDecision route_decision = decide_family_route_for_layer(
             args,
             route_script,
             route_state,
             layer_sum,
             source2_it->second,
-            source4_layer
+            source4_layer,
+            resident_dynamic_reserve_factor,
+            single_dynamic_reserve_factor,
+            resident_carry && resident_carry_layer_sum == layer_sum,
+            single_carry && single_carry_layer_sum == layer_sum,
+            has_secondary
         );
+        if (route_decision.dynamic_address_limited) {
+            std::cerr
+                << "BC_ROUTE_ADDRESS_FALLBACK"
+                << " layer_sum=" << layer_sum
+                << " resident_bitmap_words=" << route_decision.resident_dynamic_bitmap_words
+                << " resident_hash_capacity=" << route_decision.resident_dynamic_hash_capacity
+                << " single_bitmap_words=" << route_decision.single_dynamic_bitmap_words
+                << " single_hash_capacity=" << route_decision.single_dynamic_hash_capacity
+                << " resident_reserve_factor=" << resident_dynamic_reserve_factor
+                << " single_reserve_factor=" << single_dynamic_reserve_factor
+                << " bitmap_limit=" << BC::kBCDynamicBitmapWordLimit
+                << " hash_limit=" << BC::kBCDynamicHashCapacityLimit
+                << " route=" << BC::bc_family_route_name(route_decision.route)
+                << '\n';
+        }
         const BCFamilyTable target_axis =
             make_target_axis_for_route(
                 route_decision.route,
@@ -3830,26 +3995,21 @@ int run_bc_chain(const Args &args, std::ostream &out) {
 
         double dynamic_reserve_factor = kBCDefaultReserveFactor;
         if (route_decision.route == BC::BCFamilyGenerationRoute::Resident) {
-            dynamic_reserve_factor = bc_reserve_factor_for_step(
-                current_step,
-                resident_reserve_need_history,
-                resident_retry_guard_factor,
-                kBCResidentReserveHistoryWindow
-            );
-            resident_retry_guard_factor = 0.0;
+            dynamic_reserve_factor = resident_dynamic_reserve_factor;
         } else if (route_decision.route == BC::BCFamilyGenerationRoute::Single) {
-            dynamic_reserve_factor = bc_reserve_factor_for_step(
-                current_step,
-                single_reserve_need_history,
-                single_retry_guard_factor,
-                kBCSingleReserveHistoryWindow
-            );
-            single_retry_guard_factor = 0.0;
+            dynamic_reserve_factor = single_dynamic_reserve_factor;
         }
 
         const uint64_t input_live = source2_it->second.rows;
         const std::filesystem::path final_path = layer_path(args, seed_sum, layer_sum);
         FamilyLayerResult result;
+        try {
+        if ((route_decision.route == BC::BCFamilyGenerationRoute::Resident ||
+             route_decision.route == BC::BCFamilyGenerationRoute::Single) &&
+            !route_decision.route_addressable) {
+            throw BC::BCDynamicAddressabilityOverflow(
+                "forced BC dynamic generation route exceeds uint32 address space");
+        }
         if (route_decision.route == BC::BCFamilyGenerationRoute::Resident) {
             single_carry.reset();
             single_carry_layer_sum = 0U;
@@ -4049,6 +4209,66 @@ int run_bc_chain(const Args &args, std::ostream &out) {
                 final_path
             );
         }
+        } catch (const BC::BCDynamicAddressabilityOverflow &ex) {
+            if (!route_decision.automatic_route ||
+                route_decision.route == BC::BCFamilyGenerationRoute::Family) {
+                throw;
+            }
+            std::cerr
+                << "BC_ROUTE_RUNTIME_ADDRESS_FALLBACK"
+                << " layer_sum=" << layer_sum
+                << " failed_route=" << BC::bc_family_route_name(route_decision.route)
+                << " reason=" << ex.what()
+                << " fallback=family\n";
+            resident_carry.reset();
+            resident_carry_layer_sum = 0U;
+            single_carry.reset();
+            single_carry_layer_sum = 0U;
+            async_position_writes.wait_for_layer(layer_sum - 2U);
+            if (source4_layer != nullptr) {
+                async_position_writes.wait_for_layer(layer_sum - 4U);
+            }
+            resident_memory_layers.clear();
+            cleanup_temp_file(final_path);
+            cleanup_temp_file(final_path.string() + ".tmp");
+            cleanup_temp_file(layer_archive_path(final_path));
+            cleanup_temp_file(layer_archive_path(final_path).string() + ".tmp");
+            cleanup_temp_file(layer_cell_compressed_path(final_path));
+            cleanup_temp_file(layer_cell_compressed_path(final_path).string() + ".tmp");
+            cleanup_temp_file(final_path.string() + ".resident_current.tmp");
+            cleanup_temp_file(final_path.string() + ".resident_source4.tmp");
+            cleanup_temp_file(final_path.string() + ".single_current.tmp");
+            cleanup_temp_file(final_path.string() + ".single_source4.tmp");
+
+            route_decision.route = BC::BCFamilyGenerationRoute::Family;
+            route_decision.route_estimated_peak_bytes =
+                route_decision.family_estimated_peak_bytes;
+            route_decision.route_dynamic_bitmap_words = 0U;
+            route_decision.route_dynamic_hash_capacity = 0U;
+            route_decision.route_addressable = true;
+            route_decision.dynamic_address_limited = true;
+            route_decision.resident_upgrade_streak = 0U;
+            route_decision.single_upgrade_streak = 0U;
+            const BCFamilyTable family_target_axis = make_target_axis_for_route(
+                BC::BCFamilyGenerationRoute::Family,
+                layer_sum,
+                possible_8tile_sums,
+                route_decision.target_modulus);
+            result = generate_layer_to_file_for_route(
+                args,
+                lut,
+                BC::BCFamilyGenerationRoute::Family,
+                family_target_axis,
+                source4_layer,
+                source2_it->second,
+                tile_sums,
+                possible_8tile_sums,
+                success_shifts,
+                success_check_min_source_layer_sum,
+                terminal,
+                final_path
+            );
+        }
         apply_route_decision_to_result(result, route_decision);
 
         if (args.output_inspect) {
@@ -4068,7 +4288,9 @@ int run_bc_chain(const Args &args, std::ostream &out) {
                       result.output_bucket_count,
                       result.output_rank_payload_bytes);
         result.output_rows = generated_layer.rows;
+        commit_family_route_decision(route_state, route_decision);
         if (route_decision.route == BC::BCFamilyGenerationRoute::Resident) {
+            resident_retry_guard_factor = 0.0;
             const double observed_reserve_need =
                 bc_observed_reserve_need(source2_it->second, result);
             if (observed_reserve_need > 0.0) {
@@ -4079,6 +4301,7 @@ int run_bc_chain(const Args &args, std::ostream &out) {
                     std::min(kBCMaxReserveFactor, dynamic_reserve_factor * kBCLearnedReserveRetryGuard);
             }
         } else if (route_decision.route == BC::BCFamilyGenerationRoute::Single) {
+            single_retry_guard_factor = 0.0;
             const double observed_reserve_need =
                 bc_observed_reserve_need(source2_it->second, result);
             if (observed_reserve_need > 0.0) {
@@ -4168,7 +4391,8 @@ BCFamilyGenerationRunResult bc_family_generation_full_run(
         options.family_work_schedule_chunk == 0U ||
         options.family_source_words_per_item == 0U ||
         options.family_modulus == 0U ||
-        options.direct_queue_depth == 0U) {
+        options.direct_queue_depth == 0U ||
+        options.direct_io_chunk_mib == 0U) {
         throw std::invalid_argument("BC family generation numeric options must be non-zero");
     }
     if (options.family_modulus > BC::kBCMaxFamilyModulusForPackedCellId) {
@@ -4204,6 +4428,7 @@ BCFamilyGenerationRunResult bc_family_generation_full_run(
     args.family_modulus = options.family_modulus;
     args.family_route = options.family_route;
     args.direct_queue_depth = options.direct_queue_depth;
+    args.direct_io_chunk_mib = options.direct_io_chunk_mib;
     args.output_dir = options.output_dir;
     args.output_dirs = options.output_dirs;
     args.stats_csv = options.stats_csv;

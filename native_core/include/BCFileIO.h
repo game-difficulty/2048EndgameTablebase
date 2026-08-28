@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -23,6 +24,25 @@ struct BCFileExtent {
     uint64_t offset = 0U;
     uint64_t bytes = 0U;
 };
+
+[[nodiscard]] inline bool bc_file_extents_can_coalesce(
+    const BCFileExtent &current,
+    const BCFileExtent &next,
+    uint64_t max_gap_bytes,
+    uint64_t max_coalesced_bytes
+) {
+    if (max_coalesced_bytes == 0U || next.offset < current.offset ||
+        current.bytes > std::numeric_limits<uint64_t>::max() - current.offset ||
+        next.bytes > std::numeric_limits<uint64_t>::max() - next.offset) {
+        return false;
+    }
+    const uint64_t current_end = current.offset + current.bytes;
+    const uint64_t next_end = next.offset + next.bytes;
+    const uint64_t gap = next.offset > current_end ? next.offset - current_end : 0U;
+    const uint64_t merged_end = std::max(current_end, next_end);
+    return gap <= max_gap_bytes &&
+           merged_end - current.offset <= max_coalesced_bytes;
+}
 
 struct BCFileReadRequest {
     uint64_t offset = 0U;

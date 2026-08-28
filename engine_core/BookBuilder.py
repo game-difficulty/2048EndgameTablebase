@@ -553,6 +553,7 @@ def _build_bc_runtime_options(
         "family_modulus": int(modulus),
         "threads": int(max(4, min(32, os.cpu_count() or 2))),
         "direct_queue_depth": int(config.get("direct_io_queue_depth", 16)),
+        "direct_io_chunk_mib": int(config.get("direct_io_chunk_mib", 8)),
         "spawn_rate4": float(spawn_rate4),
         "family_route": "auto",
         "solve_route": "auto",

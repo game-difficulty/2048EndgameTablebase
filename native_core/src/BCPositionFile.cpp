@@ -346,7 +346,8 @@ BCPositionFileReader BCPositionFileReader::open_direct_auto(
     const std::filesystem::path &path,
     const BCLut &lut,
     uint32_t queue_depth,
-    bool overlapped
+    bool overlapped,
+    uint64_t max_transfer_bytes
 ) {
     BCBufferedFileReader probe(path);
     std::vector<uint8_t> header_bytes(kBCPositionHeaderBytes);
@@ -355,6 +356,7 @@ BCPositionFileReader BCPositionFileReader::open_direct_auto(
     const uint64_t logical_size = bc_position_logical_size_from_header(header);
     BCDirectFileIOOptions options;
     options.queue_depth = queue_depth;
+    options.max_transfer_bytes = max_transfer_bytes;
     options.overlapped = overlapped || queue_depth > 1U;
     options.logical_size = logical_size;
     const uint64_t required_physical = bc_direct_align_up(logical_size, options.alignment);

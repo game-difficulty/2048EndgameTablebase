@@ -12,11 +12,14 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -304,31 +307,26 @@ public:
         raw.reserve(static_cast<size_t>(raw_bytes_u64));
         raw.insert(raw.end(), bucket_bytes.begin(), bucket_bytes.end());
         raw.insert(raw.end(), rank_payload.begin(), rank_payload.end());
-
-        std::vector<uint8_t> stored;
-        uint32_t flags = 0U;
-        if (!raw.empty()) {
-            stored = compress_xz_block_native(raw.data(), raw.size(), 1);
+        pending_cells_.push_back(PendingCell{
+            cid,
+            raw_bytes_u64,
+            std::async(
+                std::launch::async,
+                [raw = std::move(raw)]() mutable {
+                    EncodedCell encoded;
+                    if (!raw.empty()) {
+                        encoded.stored = compress_xz_block_native(raw.data(), raw.size(), 1);
+                    }
+                    if (encoded.stored.empty() || encoded.stored.size() >= raw.size()) {
+                        encoded.stored = std::move(raw);
+                        encoded.flags |= kBCCellCompressedPositionCellFlagRaw;
+                    }
+                    return encoded;
+                })
+        });
+        if (pending_cells_.size() >= compression_parallelism()) {
+            publish_front_cell();
         }
-        if (stored.empty() || stored.size() >= raw.size()) {
-            stored = std::move(raw);
-            flags |= kBCCellCompressedPositionCellFlagRaw;
-        }
-
-        BCCellCompressedPositionIndexEntry entry;
-        entry.stored_offset = cursor_;
-        entry.stored_bytes = static_cast<uint64_t>(stored.size());
-        entry.raw_bytes = raw_bytes_u64;
-        entry.flags = flags;
-        entries_[static_cast<size_t>(cid)] = entry;
-        if (!stored.empty()) {
-            write_bytes(stored.data(), stored.size());
-        }
-        cursor_ = bc_checked_add_u64(
-            cursor_,
-            stored.size(),
-            "BC cell-compressed position writer cursor overflow"
-        );
     }
 
     [[nodiscard]] uint64_t finish(
@@ -340,6 +338,7 @@ public:
         if (!opened_) {
             throw std::logic_error("BC cell-compressed position writer is not open");
         }
+        publish_pending_cells();
         if (entries_.size() != descriptors.size()) {
             throw std::logic_error("BC cell-compressed position index/descriptor count mismatch");
         }
@@ -404,6 +403,7 @@ public:
 
     void flush() {
         if (opened_) {
+            publish_pending_cells();
             file_.flush();
         }
     }
@@ -412,6 +412,7 @@ public:
         if (!opened_) {
             return;
         }
+        pending_cells_.clear();
         file_.close();
         std::error_code ec;
         NativePath::remove(temp_path_, ec);
@@ -419,6 +420,55 @@ public:
     }
 
 private:
+    struct EncodedCell {
+        std::vector<uint8_t> stored;
+        uint32_t flags = 0U;
+    };
+
+    struct PendingCell {
+        CellId cid = 0U;
+        uint64_t raw_bytes = 0U;
+        std::future<EncodedCell> encoded;
+    };
+
+    [[nodiscard]] static size_t compression_parallelism() {
+        const unsigned hardware = std::thread::hardware_concurrency();
+        const size_t useful = hardware == 0U
+            ? 4U
+            : std::max<size_t>(2U, static_cast<size_t>(hardware) / 2U);
+        return std::min<size_t>(8U, useful);
+    }
+
+    void publish_front_cell() {
+        if (pending_cells_.empty()) {
+            return;
+        }
+        PendingCell pending = std::move(pending_cells_.front());
+        pending_cells_.pop_front();
+        EncodedCell encoded = pending.encoded.get();
+
+        BCCellCompressedPositionIndexEntry entry;
+        entry.stored_offset = cursor_;
+        entry.stored_bytes = static_cast<uint64_t>(encoded.stored.size());
+        entry.raw_bytes = pending.raw_bytes;
+        entry.flags = encoded.flags;
+        entries_[static_cast<size_t>(pending.cid)] = entry;
+        if (!encoded.stored.empty()) {
+            write_bytes(encoded.stored.data(), encoded.stored.size());
+        }
+        cursor_ = bc_checked_add_u64(
+            cursor_,
+            encoded.stored.size(),
+            "BC cell-compressed position writer cursor overflow"
+        );
+    }
+
+    void publish_pending_cells() {
+        while (!pending_cells_.empty()) {
+            publish_front_cell();
+        }
+    }
+
     void require_cell(CellId cid) const {
         if (!opened_) {
             throw std::logic_error("BC cell-compressed position writer is not open");
@@ -442,6 +492,7 @@ private:
     std::string final_path_;
     std::string temp_path_;
     std::vector<BCCellCompressedPositionIndexEntry> entries_;
+    std::deque<PendingCell> pending_cells_;
     uint64_t payload_begin_ = 0U;
     uint64_t cursor_ = 0U;
     bool opened_ = false;
@@ -449,8 +500,12 @@ private:
 
 class BCCellCompressedPositionReadableFile final : public BCReadableFile {
 public:
-    explicit BCCellCompressedPositionReadableFile(const std::filesystem::path &path)
-        : path_(NativePath::to_utf8_string(path)) {
+    explicit BCCellCompressedPositionReadableFile(
+        const std::filesystem::path &path,
+        bool preload_cells = false
+    )
+        : path_(NativePath::to_utf8_string(path)),
+          preload_cells_(preload_cells) {
         open();
     }
 
@@ -533,6 +588,9 @@ public:
     ) const override {
         if (stats != nullptr) {
             *stats = {};
+        }
+        if (preload_cells_ && !preloaded_) {
+            preload_all_cells();
         }
         for (const BCFileReadRequest &request : requests) {
             read_at(request.offset, request.data, request.bytes);
@@ -747,6 +805,9 @@ private:
     }
 
     const std::vector<uint8_t> &cached_cell_payload(CellId cid) const {
+        if (preloaded_) {
+            return preloaded_payloads_[static_cast<size_t>(cid)];
+        }
         const auto found = cache_.find(cid);
         if (found != cache_.end()) {
             return found->second;
@@ -773,6 +834,72 @@ private:
             }
         }
         return inserted.first->second;
+    }
+
+    void preload_all_cells() const {
+        if (preloaded_) {
+            return;
+        }
+        preloaded_payloads_.clear();
+        preloaded_payloads_.resize(entries_.size());
+        constexpr size_t kDecodeBatchCells = 64U;
+        for (size_t batch_begin = 0U; batch_begin < entries_.size(); batch_begin += kDecodeBatchCells) {
+            const size_t batch_end = std::min(entries_.size(), batch_begin + kDecodeBatchCells);
+            std::vector<std::vector<uint8_t>> stored(batch_end - batch_begin);
+            for (size_t cid = batch_begin; cid < batch_end; ++cid) {
+                const BCCellCompressedPositionIndexEntry &entry = entries_[cid];
+                if (entry.empty()) {
+                    continue;
+                }
+                if (entry.stored_bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+                    throw std::overflow_error("BC cell-compressed stored cell exceeds size_t");
+                }
+                stored[cid - batch_begin].resize(static_cast<size_t>(entry.stored_bytes));
+                read_physical(
+                    entry.stored_offset,
+                    stored[cid - batch_begin].data(),
+                    stored[cid - batch_begin].size());
+            }
+
+            std::exception_ptr decode_error;
+            #pragma omp parallel for schedule(dynamic, 1)
+            for (int64_t cid_i = static_cast<int64_t>(batch_begin);
+                 cid_i < static_cast<int64_t>(batch_end);
+                 ++cid_i) {
+                try {
+                    const size_t cid = static_cast<size_t>(cid_i);
+                    const BCCellCompressedPositionIndexEntry &entry = entries_[cid];
+                    if (entry.empty()) {
+                        continue;
+                    }
+                    const std::vector<uint8_t> &encoded = stored[cid - batch_begin];
+                    std::vector<uint8_t> decoded;
+                    if (entry.raw()) {
+                        decoded = encoded;
+                    } else {
+                        decoded = decompress_xz_block_native(encoded.data(), encoded.size());
+                    }
+                    if (decoded.size() != entry.raw_bytes) {
+                        throw std::runtime_error("BC cell-compressed decoded cell size mismatch");
+                    }
+                    preloaded_payloads_[cid] = std::move(decoded);
+                } catch (...) {
+                    #pragma omp critical(bc_cell_preload_error)
+                    {
+                        if (!decode_error) {
+                            decode_error = std::current_exception();
+                        }
+                    }
+                }
+            }
+            if (decode_error) {
+                std::rethrow_exception(decode_error);
+            }
+        }
+        cache_.clear();
+        cache_order_.clear();
+        cache_bytes_ = 0U;
+        preloaded_ = true;
     }
 
     [[nodiscard]] std::vector<uint8_t> decode_cell_payload(CellId cid) const {
@@ -812,6 +939,9 @@ private:
     mutable std::unordered_map<CellId, std::vector<uint8_t>> cache_;
     mutable std::deque<CellId> cache_order_;
     mutable uint64_t cache_bytes_ = 0U;
+    bool preload_cells_ = false;
+    mutable bool preloaded_ = false;
+    mutable std::vector<std::vector<uint8_t>> preloaded_payloads_;
 };
 
 } // namespace BC

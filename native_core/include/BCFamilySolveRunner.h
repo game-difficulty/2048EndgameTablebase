@@ -70,6 +70,7 @@ struct BCFamilySolveRunOptions {
     uint64_t final_pending_value_memory_cap_bytes = 0U;
     BCSuccessDTypeMode success_dtype = BCSuccessDTypeMode::UInt32;
     uint32_t direct_queue_depth = 16U;
+    uint32_t direct_io_chunk_mib = 8U;
     std::optional<uint32_t> start_ordinal;
     std::optional<uint32_t> min_ordinal;
     bool direct_io = false;
@@ -556,7 +557,8 @@ bc_family_runner_discover_archive_compressed_layers(const BCFamilySolveRunOption
               path,
               lut,
               options.direct_queue_depth,
-              options.direct_queue_depth > 1U)
+              options.direct_queue_depth > 1U,
+              static_cast<uint64_t>(options.direct_io_chunk_mib) * 1024ULL * 1024ULL)
         : BCPositionStreamingReader::open_buffered(path, lut);
     reader.set_validate_loaded_cells(false);
     return reader;
@@ -586,7 +588,8 @@ bc_family_runner_discover_archive_compressed_layers(const BCFamilySolveRunOption
               path,
               lut,
               options.direct_queue_depth,
-              options.direct_queue_depth > 1U)
+              options.direct_queue_depth > 1U,
+              static_cast<uint64_t>(options.direct_io_chunk_mib) * 1024ULL * 1024ULL)
         : BCPositionFileReader::open_buffered(path, lut);
 }
 
@@ -602,7 +605,8 @@ template <class PositionReader>
               position,
               1U,
               options.direct_queue_depth,
-              options.direct_queue_depth > 1U)
+              options.direct_queue_depth > 1U,
+              static_cast<uint64_t>(options.direct_io_chunk_mib) * 1024ULL * 1024ULL)
         : BCSuccessStreamingReader::open_buffered(path, position, 1U);
 }
 
@@ -683,6 +687,8 @@ template <typename StorageT>
     if (options.direct_io) {
         BCDirectFileIOOptions io_options;
         io_options.queue_depth = options.direct_queue_depth;
+        io_options.max_transfer_bytes =
+            static_cast<uint64_t>(options.direct_io_chunk_mib) * 1024ULL * 1024ULL;
         io_options.overlapped = options.direct_queue_depth > 1U;
         io_options.logical_size = logical_size;
         return std::make_unique<BCDirectFileWriter>(path, io_options);
@@ -2406,7 +2412,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
         options.family_modulus > kBCMaxFamilyModulusForPackedCellId) {
         throw std::invalid_argument("BC family runner family_modulus is outside 1..256");
     }
-    if (options.direct_queue_depth == 0U ||
+    if (options.direct_queue_depth == 0U || options.direct_io_chunk_mib == 0U ||
         options.future_reuse_max_families == 0U || options.source_words_per_item == 0U ||
         options.work_schedule_chunk == 0U) {
         throw std::invalid_argument("BC family runner numeric options must be non-zero");

@@ -96,10 +96,12 @@ public:
         const std::filesystem::path &path,
         const BCLut &lut,
         uint32_t queue_depth = 8U,
-        bool overlapped = true
+        bool overlapped = true,
+        uint64_t max_transfer_bytes = kBCDirectDefaultMaxTransferBytes
     ) {
         BCDirectFileIOOptions options;
         options.queue_depth = queue_depth;
+        options.max_transfer_bytes = max_transfer_bytes;
         options.overlapped = overlapped || queue_depth > 1U;
         std::error_code ec;
         const uint64_t physical_size = std::filesystem::file_size(path, ec);
@@ -369,12 +371,13 @@ public:
                 "BC streaming position loaded request end overflow"
             );
             while (range_index < ranges.size()) {
-                const uint64_t range_end = bc_checked_add_u64(
-                    ranges[range_index].offset,
-                    ranges[range_index].size(),
+                const LoadedRange &candidate = ranges[range_index];
+                const uint64_t candidate_end = bc_checked_add_u64(
+                    candidate.offset,
+                    candidate.size(),
                     "BC streaming position loaded range end overflow"
                 );
-                if (range_end > request.offset) {
+                if (request.offset >= candidate.offset && request_end <= candidate_end) {
                     break;
                 }
                 ++range_index;
@@ -698,11 +701,11 @@ private:
                 const uint64_t max_coalesced_extent_bytes = direct_aligned
                     ? 64ULL * 1024ULL * 1024ULL
                     : 4ULL * 1024ULL * 1024ULL;
-                const uint64_t gap = request.offset > last_end ? request.offset - last_end : 0U;
-                if (request.offset >= last.offset &&
-                    (request.offset <= last_end ||
-                     (gap <= kMaxCoalesceGapBytes &&
-                      end - last.offset <= max_coalesced_extent_bytes))) {
+                if (bc_file_extents_can_coalesce(
+                        last,
+                        BCFileExtent{request.offset, request.bytes},
+                        kMaxCoalesceGapBytes,
+                        max_coalesced_extent_bytes)) {
                     if (end > last_end) {
                         last.bytes = end - last.offset;
                     }

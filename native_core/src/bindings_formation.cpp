@@ -132,6 +132,10 @@ BC::BCFamilyGenerationRunOptions bc_generation_options_from_dict(const nb::dict 
         options,
         "direct_queue_depth",
         run.direct_queue_depth);
+    run.direct_io_chunk_mib = dict_get_or<uint32_t>(
+        options,
+        "direct_io_chunk_mib",
+        run.direct_io_chunk_mib);
     run.batch_size = dict_get_or<uint32_t>(options, "batch_size", run.batch_size);
     run.pending_buffer = dict_get_or<uint32_t>(options, "pending_buffer", run.pending_buffer);
     run.family_work_schedule_chunk = dict_get_or<uint32_t>(
@@ -204,6 +208,10 @@ BC::BCFamilySolveRunOptions bc_solve_options_from_dict(const nb::dict &options) 
         options,
         "direct_queue_depth",
         run.direct_queue_depth);
+    run.direct_io_chunk_mib = dict_get_or<uint32_t>(
+        options,
+        "direct_io_chunk_mib",
+        run.direct_io_chunk_mib);
     run.direct_io = dict_get_or<bool>(options, "direct_io", run.direct_io);
     run.keep_direct_padding = dict_get_or<bool>(options, "keep_direct_padding", false);
     run.success_dtype = parse_bc_success_dtype_binding(

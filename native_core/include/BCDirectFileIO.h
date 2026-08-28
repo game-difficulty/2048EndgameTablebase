@@ -38,9 +38,15 @@
 
 namespace BC {
 
+inline constexpr uint64_t kBCDirectDefaultMaxTransferBytes = 8ULL * 1024ULL * 1024ULL;
+inline constexpr uint64_t kBCDirectHardMaxTransferBytes = 64ULL * 1024ULL * 1024ULL;
+
 struct BCDirectFileIOOptions {
     uint32_t alignment = 4096U;
     uint32_t queue_depth = 1U;
+    // Operational limit for one kernel read/write request.  OS API integer
+    // limits are only type limits and are not safe transfer sizes.
+    uint64_t max_transfer_bytes = kBCDirectDefaultMaxTransferBytes;
     // Enables the reusable high-QD positioned IO path for read_many/write_many.
     // The direct writer only uses this path for planned writes that do not need
     // read-modify-write preservation of untouched bytes inside aligned blocks.
@@ -234,8 +240,10 @@ private:
     BCDirectFileIOOptions options;
     options.alignment = input.alignment;
     options.queue_depth = input.queue_depth;
+    options.max_transfer_bytes = input.max_transfer_bytes;
     options.overlapped = input.overlapped;
     options.logical_size = input.logical_size;
+    options.physical_size = input.physical_size;
     options.preserve_unwritten_bytes = input.preserve_unwritten_bytes;
     if (options.alignment == 0U || (options.alignment & (options.alignment - 1U)) != 0U) {
         throw std::invalid_argument("BC direct IO alignment must be a non-zero power of two");
@@ -245,6 +253,15 @@ private:
     }
     if (options.queue_depth > MAXIMUM_WAIT_OBJECTS) {
         options.queue_depth = MAXIMUM_WAIT_OBJECTS;
+    }
+    if (options.max_transfer_bytes == 0U) {
+        throw std::invalid_argument("BC direct IO max transfer bytes must be non-zero");
+    }
+    options.max_transfer_bytes = bc_direct_align_down(
+        std::min(options.max_transfer_bytes, kBCDirectHardMaxTransferBytes),
+        options.alignment);
+    if (options.max_transfer_bytes == 0U) {
+        throw std::invalid_argument("BC direct IO max transfer bytes is smaller than alignment");
     }
     return options;
 }
@@ -287,8 +304,18 @@ inline void set_direct_file_size(HANDLE handle, uint64_t bytes) {
     }
 }
 
-[[nodiscard]] inline uint64_t windows_max_io_chunk_bytes(uint32_t alignment) {
+[[nodiscard]] inline uint64_t windows_max_io_chunk_bytes(
+    uint32_t alignment,
+    uint64_t max_transfer_bytes = kBCDirectDefaultMaxTransferBytes
+) {
+    if (max_transfer_bytes == 0U) {
+        throw std::invalid_argument("BC direct IO max transfer bytes must be non-zero");
+    }
     uint64_t max_bytes = static_cast<uint64_t>(std::numeric_limits<DWORD>::max());
+    max_bytes = std::min({
+        max_bytes,
+        max_transfer_bytes,
+        kBCDirectHardMaxTransferBytes});
     if (alignment > 1U) {
         max_bytes = bc_direct_align_down(max_bytes, alignment);
     }
@@ -298,11 +325,15 @@ inline void set_direct_file_size(HANDLE handle, uint64_t bytes) {
     return max_bytes;
 }
 
-[[nodiscard]] inline uint64_t windows_io_chunk_count(uint64_t bytes, uint32_t alignment) {
+[[nodiscard]] inline uint64_t windows_io_chunk_count(
+    uint64_t bytes,
+    uint32_t alignment,
+    uint64_t max_transfer_bytes = kBCDirectDefaultMaxTransferBytes
+) {
     if (bytes == 0U) {
         return 0U;
     }
-    const uint64_t chunk_bytes = windows_max_io_chunk_bytes(alignment);
+    const uint64_t chunk_bytes = windows_max_io_chunk_bytes(alignment, max_transfer_bytes);
     return 1U + ((bytes - 1U) / chunk_bytes);
 }
 
@@ -311,12 +342,13 @@ inline void direct_read_sync(
     uint64_t offset,
     void *data,
     uint64_t bytes,
-    uint32_t alignment
+    uint32_t alignment,
+    uint64_t max_transfer_bytes
 ) {
     uint8_t *cursor = static_cast<uint8_t *>(data);
     uint64_t remaining = bytes;
     uint64_t physical_offset = offset;
-    const uint64_t max_chunk = windows_max_io_chunk_bytes(alignment);
+    const uint64_t max_chunk = windows_max_io_chunk_bytes(alignment, max_transfer_bytes);
     while (remaining != 0U) {
         const uint64_t take = std::min<uint64_t>(remaining, max_chunk);
         LARGE_INTEGER pos;
@@ -340,12 +372,13 @@ inline void direct_write_sync(
     uint64_t offset,
     const void *data,
     uint64_t bytes,
-    uint32_t alignment
+    uint32_t alignment,
+    uint64_t max_transfer_bytes
 ) {
     const uint8_t *cursor = static_cast<const uint8_t *>(data);
     uint64_t remaining = bytes;
     uint64_t physical_offset = offset;
-    const uint64_t max_chunk = windows_max_io_chunk_bytes(alignment);
+    const uint64_t max_chunk = windows_max_io_chunk_bytes(alignment, max_transfer_bytes);
     while (remaining != 0U) {
         const uint64_t take = std::min<uint64_t>(remaining, max_chunk);
         LARGE_INTEGER pos;
@@ -388,9 +421,10 @@ inline void add_backend_stats(BCFileIOStats *stats, uint64_t io_count, uint64_t 
 
 inline void split_physical_ranges_for_windows_io(
     std::vector<BCPhysicalRange> &ranges,
-    uint32_t alignment
+    uint32_t alignment,
+    uint64_t max_transfer_bytes = kBCDirectDefaultMaxTransferBytes
 ) {
-    const uint64_t max_chunk = windows_max_io_chunk_bytes(alignment);
+    const uint64_t max_chunk = windows_max_io_chunk_bytes(alignment, max_transfer_bytes);
     std::vector<BCPhysicalRange> split;
     split.reserve(ranges.size());
     for (const BCPhysicalRange &range : ranges) {
@@ -563,7 +597,10 @@ public:
             const uint64_t end = std::max(last.end(), range.end());
             last.bytes = end - last.offset;
         }
-        detail::split_physical_ranges_for_windows_io(merged, options_.alignment);
+        detail::split_physical_ranges_for_windows_io(
+            merged,
+            options_.alignment,
+            options_.max_transfer_bytes);
 
         for (detail::BCPhysicalRange &range : merged) {
             range.buffer.reset(range.bytes, options_.alignment);
@@ -616,12 +653,16 @@ private:
                     range.offset,
                     range.buffer.data(),
                     range.bytes,
-                    options_.alignment
+                    options_.alignment,
+                    options_.max_transfer_bytes
                 );
             }
             uint64_t io_count = 0U;
             for (const detail::BCPhysicalRange &range : ranges) {
-                io_count += detail::windows_io_chunk_count(range.bytes, options_.alignment);
+                io_count += detail::windows_io_chunk_count(
+                    range.bytes,
+                    options_.alignment,
+                    options_.max_transfer_bytes);
             }
             detail::add_backend_stats(stats, io_count, bytes_sum);
             if (stats != nullptr) {
@@ -685,7 +726,8 @@ private:
                 request.offset,
                 request.data,
                 request.bytes,
-                options_.alignment
+                options_.alignment,
+                options_.max_transfer_bytes
             );
         }
         if (stats != nullptr) {
@@ -699,7 +741,10 @@ private:
             for (const BCFileReadRequest &request : requests) {
                 if (request.bytes != 0U) {
                     const uint64_t chunks =
-                        detail::windows_io_chunk_count(request.bytes, options_.alignment);
+                        detail::windows_io_chunk_count(
+                            request.bytes,
+                            options_.alignment,
+                            options_.max_transfer_bytes);
                     if (io_count > std::numeric_limits<uint64_t>::max() - chunks) {
                         throw std::overflow_error("BC direct aligned read backend IO count overflow");
                     }
@@ -820,7 +865,9 @@ private:
         std::vector<DirectLogicalRead> reads;
         reads.reserve(requests.size());
         uint64_t backend_bytes = 0U;
-        const uint64_t max_io_chunk = detail::windows_max_io_chunk_bytes(options_.alignment);
+        const uint64_t max_io_chunk = detail::windows_max_io_chunk_bytes(
+            options_.alignment,
+            options_.max_transfer_bytes);
         for (const BCFileReadRequest &request : requests) {
             if (stats != nullptr) {
                 ++stats->request_count;
@@ -903,6 +950,9 @@ private:
         std::vector<uint8_t> active(queue_depth, 0U);
         auto submit_slot = [&](uint32_t slot, size_t read_index) {
             const DirectLogicalRead &read = reads[read_index];
+            if (read.physical_bytes > max_io_chunk) {
+                throw std::logic_error("BC direct overlapped read exceeds transfer limit");
+            }
             PendingRead &request = pending[slot];
             if (!read.direct_to_target) {
                 request.buffer.ensure_at_least(read.physical_bytes, options_.alignment);
@@ -1019,6 +1069,11 @@ private:
             for (uint32_t i = 0U; i < batch; ++i) {
                 PendingRead &request = pending[i];
                 detail::BCPhysicalRange &range = ranges[cursor + i];
+                if (range.bytes > detail::windows_max_io_chunk_bytes(
+                        options_.alignment,
+                        options_.max_transfer_bytes)) {
+                    throw std::logic_error("BC direct range read exceeds transfer limit");
+                }
                 ResetEvent(request.event.get());
                 request.ov = {};
                 request.ov.Offset = static_cast<DWORD>(range.offset & 0xFFFFFFFFULL);
@@ -1318,7 +1373,10 @@ public:
             const uint64_t end = std::max(last.end(), range.end());
             last.bytes = end - last.offset;
         }
-        detail::split_physical_ranges_for_windows_io(merged, options_.alignment);
+        detail::split_physical_ranges_for_windows_io(
+            merged,
+            options_.alignment,
+            options_.max_transfer_bytes);
 
         const uint64_t old_physical_size = physical_size_;
         uint64_t max_physical_end = physical_size_;
@@ -1340,7 +1398,8 @@ public:
                         range.offset,
                         range.buffer.data(),
                         readable,
-                        options_.alignment
+                        options_.alignment,
+                        options_.max_transfer_bytes
                     );
                 }
                 if (readable < range.bytes) {
@@ -1365,11 +1424,15 @@ public:
                 range.offset,
                 range.buffer.data(),
                 range.bytes,
-                options_.alignment
+                options_.alignment,
+                options_.max_transfer_bytes
             );
             detail::add_backend_stats(
                 stats,
-                detail::windows_io_chunk_count(range.bytes, options_.alignment),
+                detail::windows_io_chunk_count(
+                    range.bytes,
+                    options_.alignment,
+                    options_.max_transfer_bytes),
                 range.bytes
             );
         }
@@ -1419,7 +1482,9 @@ private:
         writes.reserve(requests.size());
         uint64_t backend_bytes = 0U;
         uint64_t max_physical_end = physical_size_;
-        const uint64_t max_io_chunk = detail::windows_max_io_chunk_bytes(options_.alignment);
+        const uint64_t max_io_chunk = detail::windows_max_io_chunk_bytes(
+            options_.alignment,
+            options_.max_transfer_bytes);
         for (const BCFileWriteRequest &request : requests) {
             if (stats != nullptr) {
                 ++stats->request_count;
@@ -1495,6 +1560,9 @@ private:
 
         auto submit_slot = [&](uint32_t slot, size_t write_index) {
             const DirectLogicalWrite &write = writes[write_index];
+            if (write.physical_bytes > max_io_chunk) {
+                throw std::logic_error("BC direct overlapped write exceeds transfer limit");
+            }
             PendingWrite &request = pending[slot];
             if (write.use_external_buffer) {
                 request.external_data = write.data;
@@ -1776,6 +1844,25 @@ struct BCPhysicalRange {
     }
 };
 
+inline void split_physical_ranges_for_max_transfer(
+    std::vector<BCPhysicalRange> &ranges,
+    uint64_t max_transfer_bytes
+) {
+    std::vector<BCPhysicalRange> split;
+    split.reserve(ranges.size());
+    for (const BCPhysicalRange &range : ranges) {
+        uint64_t offset = range.offset;
+        uint64_t remaining = range.bytes;
+        while (remaining != 0U) {
+            const uint64_t take = std::min<uint64_t>(remaining, max_transfer_bytes);
+            split.push_back(BCPhysicalRange{offset, take, {}});
+            offset += take;
+            remaining -= take;
+        }
+    }
+    ranges.swap(split);
+}
+
 [[nodiscard]] inline BCDirectFileIOOptions normalize_direct_options(const BCDirectFileIOOptions &input) {
     BCDirectFileIOOptions options = input;
     if (options.alignment == 0U || (options.alignment & (options.alignment - 1U)) != 0U) {
@@ -1786,6 +1873,15 @@ struct BCPhysicalRange {
     }
     if (options.queue_depth == 0U) {
         options.queue_depth = 1U;
+    }
+    if (options.max_transfer_bytes == 0U) {
+        throw std::invalid_argument("BC direct IO max transfer bytes must be non-zero");
+    }
+    options.max_transfer_bytes = bc_direct_align_down(
+        std::min(options.max_transfer_bytes, kBCDirectHardMaxTransferBytes),
+        options.alignment);
+    if (options.max_transfer_bytes == 0U) {
+        throw std::invalid_argument("BC direct IO max transfer bytes is smaller than alignment");
     }
     return options;
 }
@@ -1834,13 +1930,21 @@ inline void set_direct_file_size(int fd, uint64_t bytes) {
     }
 }
 
-inline void pread_full(int fd, uint64_t offset, void *data, uint64_t bytes) {
+inline void pread_full(
+    int fd,
+    uint64_t offset,
+    void *data,
+    uint64_t bytes,
+    uint64_t max_transfer_bytes
+) {
     (void)checked_posix_offset(offset, "BC direct IO read offset exceeds off_t");
     uint8_t *cursor = static_cast<uint8_t *>(data);
     uint64_t remaining = bytes;
     uint64_t file_offset = offset;
     while (remaining != 0U) {
-        const uint64_t max_chunk = static_cast<uint64_t>(std::numeric_limits<ssize_t>::max());
+        const uint64_t max_chunk = std::min<uint64_t>(
+            static_cast<uint64_t>(std::numeric_limits<ssize_t>::max()),
+            max_transfer_bytes);
         const size_t chunk = checked_size_t(std::min<uint64_t>(remaining, max_chunk),
             "BC direct IO read chunk exceeds size_t");
         const ssize_t got = ::pread(fd, cursor, chunk, static_cast<off_t>(file_offset));
@@ -1859,13 +1963,21 @@ inline void pread_full(int fd, uint64_t offset, void *data, uint64_t bytes) {
     }
 }
 
-inline void pwrite_full(int fd, uint64_t offset, const void *data, uint64_t bytes) {
+inline void pwrite_full(
+    int fd,
+    uint64_t offset,
+    const void *data,
+    uint64_t bytes,
+    uint64_t max_transfer_bytes
+) {
     (void)checked_posix_offset(offset, "BC direct IO write offset exceeds off_t");
     const uint8_t *cursor = static_cast<const uint8_t *>(data);
     uint64_t remaining = bytes;
     uint64_t file_offset = offset;
     while (remaining != 0U) {
-        const uint64_t max_chunk = static_cast<uint64_t>(std::numeric_limits<ssize_t>::max());
+        const uint64_t max_chunk = std::min<uint64_t>(
+            static_cast<uint64_t>(std::numeric_limits<ssize_t>::max()),
+            max_transfer_bytes);
         const size_t chunk = checked_size_t(std::min<uint64_t>(remaining, max_chunk),
             "BC direct IO write chunk exceeds size_t");
         const ssize_t written = ::pwrite(fd, cursor, chunk, static_cast<off_t>(file_offset));
@@ -2059,7 +2171,12 @@ public:
         detail::run_parallel_jobs(reads.size(), options_.queue_depth, [&](size_t index) {
             DirectLogicalRead &read = reads[index];
             void *target = read.direct_to_target ? read.target : read.buffer.data();
-            detail::pread_full(fd_.get(), read.physical_offset, target, read.physical_bytes);
+            detail::pread_full(
+                fd_.get(),
+                read.physical_offset,
+                target,
+                read.physical_bytes,
+                options_.max_transfer_bytes);
         });
 
         for (DirectLogicalRead &read : reads) {
@@ -2237,7 +2354,12 @@ public:
             }
             detail::run_parallel_jobs(pending.size(), options_.queue_depth, [&](size_t index) {
                 const PendingWriteView &request = pending[index];
-                detail::pwrite_full(fd_.get(), request.offset, request.data, request.bytes);
+                detail::pwrite_full(
+                    fd_.get(),
+                    request.offset,
+                    request.data,
+                    request.bytes,
+                    options_.max_transfer_bytes);
             });
             logical_size_ = max_logical_end;
             detail::add_backend_stats(stats, pending.size(), direct_backend_bytes);
@@ -2272,6 +2394,9 @@ public:
                 ranges.back().bytes = plan.end - ranges.back().offset;
             }
         }
+        detail::split_physical_ranges_for_max_transfer(
+            ranges,
+            options_.max_transfer_bytes);
 
         uint64_t backend_bytes = 0U;
         for (detail::BCPhysicalRange &range : ranges) {
@@ -2292,7 +2417,12 @@ public:
         for (detail::BCPhysicalRange &range : ranges) {
             if (options_.preserve_unwritten_bytes && range.offset < old_physical_size) {
                 const uint64_t readable = std::min<uint64_t>(range.bytes, old_physical_size - range.offset);
-                detail::pread_full(fd_.get(), range.offset, range.buffer.data(), readable);
+                detail::pread_full(
+                    fd_.get(),
+                    range.offset,
+                    range.buffer.data(),
+                    readable,
+                    options_.max_transfer_bytes);
                 if (readable < range.bytes) {
                     std::memset(
                         range.buffer.data() + static_cast<size_t>(readable),
@@ -2315,7 +2445,12 @@ public:
 
         detail::run_parallel_jobs(ranges.size(), options_.queue_depth, [&](size_t index) {
             const detail::BCPhysicalRange &range = ranges[index];
-            detail::pwrite_full(fd_.get(), range.offset, range.buffer.data(), range.bytes);
+            detail::pwrite_full(
+                fd_.get(),
+                range.offset,
+                range.buffer.data(),
+                range.bytes,
+                options_.max_transfer_bytes);
         });
 
         logical_size_ = max_logical_end;

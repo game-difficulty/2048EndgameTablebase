@@ -215,6 +215,8 @@ def write_runtime_deletion_threshold_signal(value, relative_value=0.0, mode=None
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(tmp_path, "w", encoding="ascii") as file:
         file.write(f"{absolute_threshold:.12g} {relative_threshold:.12g}\n")
+        file.flush()
+        os.fsync(file.fileno())
     os.replace(tmp_path, path)
     return threshold
 
@@ -654,8 +656,12 @@ class SingletonConfig:
         if filename is None:
             filename = cls.config_file_path
 
-        with open(filename, "wb") as file:
+        tmp_filename = os.fspath(filename) + ".tmp"
+        with open(tmp_filename, "wb") as file:
             pickle.dump(config, file)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(tmp_filename, filename)
         if "deletion_threshold" in config or "deletion_threshold_mode" in config:
             try:
                 write_runtime_deletion_threshold_signal(

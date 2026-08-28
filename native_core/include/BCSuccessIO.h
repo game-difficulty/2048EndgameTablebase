@@ -1539,10 +1539,12 @@ public:
         const PositionReader &position,
         uint32_t expected_row_width,
         uint32_t queue_depth = 8U,
-        bool overlapped = true
+        bool overlapped = true,
+        uint64_t max_transfer_bytes = kBCDirectDefaultMaxTransferBytes
     ) {
         BCDirectFileIOOptions options;
         options.queue_depth = queue_depth;
+        options.max_transfer_bytes = max_transfer_bytes;
         options.overlapped = overlapped || queue_depth > 1U;
         std::error_code ec;
         const uint64_t physical_size = std::filesystem::file_size(path, ec);
@@ -2225,6 +2227,9 @@ private:
             }
         );
 
+        const uint64_t max_coalesced_extent_bytes = file_->mode() == BCFileIOMode::Direct
+            ? 64ULL * 1024ULL * 1024ULL
+            : 4ULL * 1024ULL * 1024ULL;
         std::vector<BCFileExtent> extents;
         for (const ExtentRequest &request : requests) {
             const uint64_t end = bc_checked_add_u64(
@@ -2239,7 +2244,11 @@ private:
                     last.bytes,
                     "BC success streaming coalesced extent end overflow"
                 );
-                if (request.offset <= last_end) {
+                if (bc_file_extents_can_coalesce(
+                        last,
+                        BCFileExtent{request.offset, request.bytes},
+                        0U,
+                        max_coalesced_extent_bytes)) {
                     if (end > last_end) {
                         last.bytes = end - last.offset;
                     }

@@ -787,7 +787,8 @@ public:
         const std::filesystem::path &path,
         const BCLut &lut,
         uint32_t queue_depth = 8U,
-        bool overlapped = true
+        bool overlapped = true,
+        uint64_t max_transfer_bytes = 8ULL * 1024ULL * 1024ULL
     );
 
     void open(std::unique_ptr<BCReadableFile> file, const BCLut &lut);
