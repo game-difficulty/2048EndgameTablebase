@@ -13,7 +13,7 @@
         @pointerdown.capture="handleWorkspaceFocus"
         @focusin.capture="handleWorkspaceFocus"
       >
-    <div ref="appTopBar" class="flex items-center gap-2 overflow-x-auto bg-bg-main/80 p-2 shadow-sm z-50 border-b border-border-main backdrop-blur-md transition-colors duration-300">
+    <div ref="appTopBar" class="flex items-center gap-2 overflow-x-auto overflow-y-hidden bg-bg-main/80 p-2 shadow-sm z-50 border-b border-border-main backdrop-blur-md transition-colors duration-300">
       <div
         v-for="tab in openTabDefinitions"
         :key="tab.id"
