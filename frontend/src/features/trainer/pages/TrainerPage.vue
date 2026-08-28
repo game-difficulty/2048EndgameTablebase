@@ -98,7 +98,7 @@
 
     <div class="tool-page-layout trainer-layout relative z-0 w-full max-w-6xl flex flex-row gap-6 items-start">
       <div class="tool-page-board-column flex flex-col items-center">
-        <div class="w-full flex gap-2 mb-3">
+        <div class="trainer-board-input-row w-full flex gap-2 mb-3">
           <input
             type="text"
             v-model="hexInput"
@@ -121,7 +121,7 @@
           />
         </div>
 
-        <div class="w-full mt-4 bg-bg-card border border-border-main rounded-lg p-3 shadow-sm">
+        <div class="trainer-palette-card w-full mt-4 bg-bg-card border border-border-main rounded-lg p-3 shadow-sm">
           <div class="flex justify-between items-center mb-2">
             <span class="ui-kicker font-black text-text-secondary uppercase tracking-widest leading-none">{{ $t('labels.tilePalette') }}</span>
             <div class="flex items-center gap-3">
@@ -161,7 +161,7 @@
       </div>
 
       <div class="tool-page-side-column flex-1 flex flex-col gap-3">
-        <div class="console-card">
+        <div class="console-card trainer-results-card">
           <div class="console-card-header border-b border-border-main/20 pb-2 mb-2">
             <span>{{ $t('trainer.results.title') }}</span>
             <div class="flex items-center gap-2">
@@ -195,7 +195,7 @@
           </div>
           <div class="trainer-results-body">
             <template v-if="showResults && !awaitingSpawn && !isEmptyPattern">
-              <div class="mt-2 flex flex-col gap-1 transition-opacity" :class="resultsUpdatingVisible ? 'opacity-70' : 'opacity-100'">
+              <div class="trainer-results-list mt-2 flex flex-col gap-1 transition-opacity" :class="resultsUpdatingVisible ? 'opacity-70' : 'opacity-100'">
                 <div
                   v-for="item in displayedResults"
                   :key="item.dir"
@@ -219,7 +219,7 @@
                   </div>
                 </div>
               </div>
-              <div class="mt-1.5 ui-kicker text-text-secondary opacity-50 font-mono">{{ $t('trainer.results.dtype') }}: {{ tableResult.dtype }}</div>
+              <div class="trainer-results-dtype mt-1.5 ui-kicker text-text-secondary opacity-50 font-mono">{{ $t('trainer.results.dtype') }}: {{ tableResult.dtype }}</div>
             </template>
             <div
               v-else
@@ -393,14 +393,14 @@ const handleDis32kChange = (event) => {
 
 .trainer-page--dock-right {
   align-items: stretch;
-  padding: 0.75rem;
+  padding: 0.55rem;
 }
 
 .trainer-page--dock-right .tool-page-header {
   flex-direction: column;
   align-items: stretch;
-  gap: 0.65rem;
-  margin-bottom: 0.75rem;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
 }
 
 .trainer-page--dock-right .tool-page-title-row {
@@ -411,7 +411,7 @@ const handleDis32kChange = (event) => {
 .trainer-page--dock-right .tool-page-title {
   min-width: 0;
   overflow: hidden;
-  font-size: 1.35rem;
+  font-size: 1.2rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -422,7 +422,7 @@ const handleDis32kChange = (event) => {
   min-width: 0;
   align-items: center;
   justify-content: flex-end;
-  gap: 0.45rem;
+  gap: 0.3rem;
 }
 
 .trainer-page--dock-right .top-menu-shell > div:first-child {
@@ -444,11 +444,11 @@ const handleDis32kChange = (event) => {
 .trainer-page--dock-right .trainer-layout {
   flex-direction: column;
   align-items: stretch;
-  gap: 0.75rem;
+  gap: 0.4rem;
 }
 
 .trainer-page--dock-right .tool-page-board-column {
-  width: min(100%, 360px);
+  width: min(100%, var(--trainer-dock-right-board-width, 324px));
   flex: 0 0 auto;
   align-self: center;
 }
@@ -456,22 +456,72 @@ const handleDis32kChange = (event) => {
 .trainer-page--dock-right .tool-page-side-column {
   width: 100%;
   flex: 0 0 auto;
-  gap: 0.65rem;
+  gap: 0.45rem;
 }
 
 .trainer-page--dock-right .trainer-results-body {
-  height: 11rem;
+  height: 6.9rem;
 }
 
 .trainer-page--dock-right .trainer-result-row {
   grid-template-columns: 1.25rem minmax(0, 8.5rem) minmax(0, 1fr);
-  gap: 0.55rem;
+  height: 1.4rem;
+  gap: 0.4rem;
+  padding-top: 0;
+  padding-bottom: 0;
   padding-right: 0.55rem;
   padding-left: 0.55rem;
 }
 
 .trainer-page--dock-right .console-card {
-  padding: 0.75rem;
+  padding: 0.45rem 0.55rem;
+}
+
+.trainer-page--dock-right .trainer-board-input-row {
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.trainer-page--dock-right .trainer-board-input-row input {
+  padding: 0.35rem 0.55rem;
+}
+
+.trainer-page--dock-right .trainer-board-input-row button {
+  padding: 0.35rem 0.7rem;
+}
+
+.trainer-page--dock-right .trainer-palette-card {
+  margin-top: 0.4rem;
+  padding: 0.4rem;
+}
+
+.trainer-page--dock-right .trainer-palette-card > div:first-child {
+  margin-bottom: 0.2rem;
+}
+
+.trainer-page--dock-right .tool-palette-grid {
+  gap: 0.2rem;
+}
+
+.trainer-page--dock-right .palette-btn {
+  height: 1.45rem;
+  aspect-ratio: auto;
+  border-radius: 0.3rem;
+  font-size: calc(0.58rem * var(--ui-scale));
+}
+
+.trainer-page--dock-right .trainer-results-card .console-card-header {
+  margin-bottom: 0.25rem;
+  padding-bottom: 0.25rem;
+}
+
+.trainer-page--dock-right .trainer-results-list {
+  gap: 0.1rem;
+  margin-top: 0.15rem;
+}
+
+.trainer-page--dock-right .trainer-results-dtype {
+  margin-top: 0.15rem;
 }
 
 .trainer-page--dock-bottom {

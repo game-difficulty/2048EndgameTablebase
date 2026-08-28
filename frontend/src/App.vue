@@ -1,5 +1,11 @@
 <template>
-  <div ref="fixedViewport" class="fixed-layout-viewport">
+  <div
+    ref="fixedViewport"
+    :class="[
+      'fixed-layout-viewport',
+      trainerBottomDockActive ? 'fixed-layout-viewport--dock-bottom' : '',
+    ]"
+  >
     <div class="fixed-layout-frame" :style="fixedLayoutFrameStyle">
       <div
         class="app-shell flex flex-col overflow-hidden"
@@ -7,7 +13,7 @@
         @pointerdown.capture="handleWorkspaceFocus"
         @focusin.capture="handleWorkspaceFocus"
       >
-    <div class="flex items-center gap-2 overflow-x-auto bg-bg-main/80 p-2 shadow-sm z-50 border-b border-border-main backdrop-blur-md transition-colors duration-300">
+    <div ref="appTopBar" class="flex items-center gap-2 overflow-x-auto bg-bg-main/80 p-2 shadow-sm z-50 border-b border-border-main backdrop-blur-md transition-colors duration-300">
       <div
         v-for="tab in openTabDefinitions"
         :key="tab.id"
@@ -429,10 +435,12 @@ import { useI18n } from 'vue-i18n';
 import { useAppSettingsStore } from './app/useAppSettings';
 import { TAB_IDS } from './app/tabRegistry';
 import {
+  TRAINER_DOCK_LAYOUT,
   TRAINER_DOCK_PLACEMENTS,
   isTrainerDocked,
   normalizeTrainerDockPlacement,
   resolveTrainerJumpDockPlacement,
+  resolveTrainerDockSurfaceHeight,
 } from './app/trainerDock';
 import { useTabManager } from './app/useTabManager';
 import MainMenuView from './components/MainMenuView.vue';
@@ -496,6 +504,8 @@ const FIXED_LAYOUT_MIN_WIDTH = 1280;
 const FIXED_LAYOUT_MAX_WIDTH = 1600;
 const FIXED_LAYOUT_HEIGHT = 800;
 const fixedViewport = ref(null);
+const appTopBar = ref(null);
+const appTopBarHeight = ref(0);
 const fixedLayoutWidth = ref(FIXED_LAYOUT_MIN_WIDTH);
 const leaderboardRequestedKey = ref('');
 const leaderboardRequestedGameId = ref('');
@@ -545,6 +555,10 @@ const trainerDockActive = computed(() => (
   && isTrainerDocked(trainerDockPlacement.value)
   && isTabOpen(TAB_IDS.TRAINER)
 ));
+const trainerBottomDockActive = computed(() => (
+  trainerDockActive.value
+  && trainerDockPlacement.value === TRAINER_DOCK_PLACEMENTS.BOTTOM
+));
 const trainerEffectiveDockPlacement = computed(() => (
   trainerDockActive.value
     ? trainerDockPlacement.value
@@ -565,15 +579,23 @@ const trainerPaneClass = computed(() => (
   trainerDockActive.value ? `app-trainer-pane--dock-${trainerDockPlacement.value}` : 'app-trainer-pane--full'
 ));
 
+const fixedLayoutSurfaceHeight = computed(() => resolveTrainerDockSurfaceHeight({
+  placement: trainerEffectiveDockPlacement.value,
+  baseHeight: FIXED_LAYOUT_HEIGHT,
+  topBarHeight: appTopBarHeight.value,
+}));
+
 const fixedLayoutFrameStyle = computed(() => ({
   width: `${fixedLayoutWidth.value * fixedLayoutScale.value}px`,
-  height: `${FIXED_LAYOUT_HEIGHT * fixedLayoutScale.value}px`,
+  height: `${fixedLayoutSurfaceHeight.value * fixedLayoutScale.value}px`,
 }));
 
 const fixedLayoutSurfaceStyle = computed(() => ({
   width: `${fixedLayoutWidth.value}px`,
-  height: `${FIXED_LAYOUT_HEIGHT}px`,
+  height: `${fixedLayoutSurfaceHeight.value}px`,
   transform: `scale(${fixedLayoutScale.value})`,
+  '--trainer-dock-right-width': `${TRAINER_DOCK_LAYOUT.RIGHT_WIDTH_PX}px`,
+  '--trainer-dock-right-board-width': `${TRAINER_DOCK_LAYOUT.RIGHT_BOARD_WIDTH_PX}px`,
 }));
 
 const updateFixedLayoutScale = () => {
@@ -584,6 +606,7 @@ const updateFixedLayoutScale = () => {
   if (width <= 0 || height <= 0) return;
   viewportWidth.value = width;
   viewportHeight.value = height;
+  appTopBarHeight.value = appTopBar.value?.offsetHeight || 0;
   const nextScale = Math.min(
     width / FIXED_LAYOUT_MIN_WIDTH,
     height / FIXED_LAYOUT_HEIGHT,
@@ -1103,6 +1126,7 @@ onMounted(async () => {
   if (typeof ResizeObserver === 'function') {
     fixedViewportObserver = new ResizeObserver(updateFixedLayoutScale);
     fixedViewportObserver.observe(fixedViewport.value);
+    fixedViewportObserver.observe(appTopBar.value);
   } else {
     window.addEventListener('resize', updateFixedLayoutScale);
   }
@@ -1164,6 +1188,12 @@ onUnmounted(() => {
   background-image: var(--bg-main-gradient);
 }
 
+.fixed-layout-viewport--dock-bottom {
+  align-items: flex-start;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 .fixed-layout-frame {
   position: relative;
   flex: 0 0 auto;
@@ -1207,7 +1237,7 @@ onUnmounted(() => {
 }
 
 .app-workspace--dock-right {
-  grid-template-columns: minmax(0, 1fr) 500px;
+  grid-template-columns: minmax(0, 1fr) var(--trainer-dock-right-width, 450px);
 }
 
 .app-trainer-pane--dock-right {
@@ -1217,7 +1247,7 @@ onUnmounted(() => {
 }
 
 .app-workspace--dock-bottom {
-  grid-template-rows: minmax(0, 1fr) minmax(320px, 0.95fr);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
 }
 
 .app-trainer-pane--dock-bottom {
@@ -1261,6 +1291,18 @@ onUnmounted(() => {
   background: var(--btn-bg);
   color: white;
   outline: none;
+}
+
+.app-trainer-pane--dock-right .trainer-dock-toolbar {
+  gap: 0.2rem;
+  margin: 0.2rem 0.55rem 0.4rem;
+  padding: 0.15rem;
+}
+
+.app-trainer-pane--dock-right .trainer-dock-button {
+  width: 1.7rem;
+  height: 1.7rem;
+  font-size: 1rem;
 }
 
 .account-trigger.supporter {

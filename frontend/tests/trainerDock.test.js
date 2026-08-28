@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  TRAINER_DOCK_LAYOUT,
   TRAINER_DOCK_PLACEMENTS,
   isTrainerDocked,
   normalizeTrainerDockPlacement,
   resolveTrainerJumpDockPlacement,
+  resolveTrainerDockSurfaceHeight,
 } from '../src/app/trainerDock.js';
 import { TAB_IDS } from '../src/app/tabRegistry.js';
 import { useTabManager } from '../src/app/useTabManager.js';
@@ -43,4 +45,22 @@ test('opening Trainer in the background preserves the companion tab', () => {
 
   assert.equal(tabs.activeTab.value, TAB_IDS.HELP);
   assert.equal(tabs.isTabOpen(TAB_IDS.TRAINER), true);
+});
+
+test('bottom docking adds a second full-height content page', () => {
+  assert.equal(resolveTrainerDockSurfaceHeight({
+    placement: TRAINER_DOCK_PLACEMENTS.BOTTOM,
+    baseHeight: 800,
+    topBarHeight: 48,
+  }), 1552);
+  assert.equal(resolveTrainerDockSurfaceHeight({
+    placement: TRAINER_DOCK_PLACEMENTS.RIGHT,
+    baseHeight: 800,
+    topBarHeight: 48,
+  }), 800);
+});
+
+test('right docking uses the ten-percent narrower layout dimensions', () => {
+  assert.equal(TRAINER_DOCK_LAYOUT.RIGHT_WIDTH_PX, 450);
+  assert.equal(TRAINER_DOCK_LAYOUT.RIGHT_BOARD_WIDTH_PX, 324);
 });
