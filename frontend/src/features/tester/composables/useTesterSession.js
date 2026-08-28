@@ -1,5 +1,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
+import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwnership';
 import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { useAuthState } from '../../../services/auth/authState';
 import { downloadBlob, downloadText } from '../../../services/files/browserFiles';
@@ -1104,7 +1105,7 @@ export function useTesterSession(activeRef) {
   };
 
   const handleKeyDown = (event) => {
-    if (!activeRef?.value) return;
+    if (!activeRef?.value || !keyboardInputAllowed(KEYBOARD_OWNERS.PRIMARY)) return;
     if (event.key === 'Escape' && patternMenuOpen.value) {
       patternMenuOpen.value = false;
       return;

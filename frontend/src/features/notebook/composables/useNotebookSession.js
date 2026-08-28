@@ -1,5 +1,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
+import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwnership';
 import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { createWsClient } from '../../../services/ws/createWsClient';
 import { isVariantPattern } from '../../../utils/patternCategories';
@@ -263,7 +264,7 @@ export function useNotebookSession(activeRef) {
   };
 
   const handleKeyDown = (event) => {
-    if (!activeRef?.value) return;
+    if (!activeRef?.value || !keyboardInputAllowed(KEYBOARD_OWNERS.PRIMARY)) return;
     const target = event.target;
     if (target instanceof HTMLElement) {
       const tag = target.tagName;

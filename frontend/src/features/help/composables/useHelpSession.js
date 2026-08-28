@@ -1,5 +1,6 @@
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
+import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwnership';
 import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { createWsClient } from '../../../services/ws/createWsClient';
 
@@ -303,7 +304,7 @@ export function useHelpSession(activeRef) {
   };
 
   const handleGlobalKeydown = (event) => {
-    if (!activeRef?.value) {
+    if (!activeRef?.value || !keyboardInputAllowed(KEYBOARD_OWNERS.PRIMARY)) {
       return;
     }
 

@@ -10,8 +10,9 @@
       <div
         class="app-shell flex flex-col overflow-hidden"
         :style="fixedLayoutSurfaceStyle"
-        @pointerdown.capture="handleWorkspaceFocus"
-        @focusin.capture="handleWorkspaceFocus"
+        @pointerdown.capture="handleKeyboardOwnerInteraction"
+        @focusin.capture="handleKeyboardOwnerInteraction"
+        @wheel.capture="handleWorkspaceWheel"
       >
     <div ref="appTopBar" class="flex items-center gap-2 overflow-x-auto overflow-y-hidden bg-bg-main/80 p-2 shadow-sm z-50 border-b border-border-main backdrop-blur-md transition-colors duration-300">
       <div
@@ -151,8 +152,14 @@
       </button>
     </div>
 
-    <div :class="['app-workspace', trainerWorkspaceClass]">
-      <div class="app-primary-pane" data-primary-pane>
+    <div
+      :class="['app-workspace', trainerWorkspaceClass]"
+      :data-keyboard-owner="trainerDockActive ? keyboardOwner : undefined"
+    >
+      <div
+        :class="['app-primary-pane', primaryPaneKeyboardClass]"
+        data-primary-pane
+      >
         <div
           v-if="isTabOpen(TAB_IDS.MAIN_MENU)"
           class="absolute inset-0"
@@ -244,7 +251,7 @@
       <div
         v-if="isTabOpen(TAB_IDS.TRAINER)"
         v-show="trainerVisible"
-        :class="['app-trainer-pane', trainerPaneClass]"
+        :class="['app-trainer-pane', trainerPaneClass, trainerPaneKeyboardClass]"
         data-trainer-pane
       >
         <TrainerView
@@ -432,6 +439,13 @@
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
+import {
+  KEYBOARD_OWNERS,
+  keyboardInputAllowed,
+  keyboardOwner,
+  setKeyboardOwner,
+  setSplitKeyboardMode,
+} from './app/keyboardOwnership';
 import { useAppSettingsStore } from './app/useAppSettings';
 import { TAB_IDS } from './app/tabRegistry';
 import {
@@ -534,7 +548,6 @@ const {
 const draggedTabId = ref(null);
 const dragTargetTabId = ref(null);
 const trainerDockPlacement = ref(TRAINER_DOCK_PLACEMENTS.NONE);
-const trainerDockFocused = ref(false);
 const lastPrimaryTab = ref(TAB_IDS.MAIN_MENU);
 
 const readTrainerDockPreference = () => {
@@ -570,13 +583,23 @@ const trainerSessionActive = computed(() => (
 const trainerVisible = computed(() => trainerSessionActive.value);
 const trainerHotkeysEnabled = computed(() => (
   activeTab.value === TAB_IDS.TRAINER
-  || (trainerDockActive.value && trainerDockFocused.value)
+  || (trainerDockActive.value && keyboardInputAllowed(KEYBOARD_OWNERS.TRAINER))
 ));
 const trainerWorkspaceClass = computed(() => (
   trainerDockActive.value ? `app-workspace--dock-${trainerDockPlacement.value}` : ''
 ));
 const trainerPaneClass = computed(() => (
   trainerDockActive.value ? `app-trainer-pane--dock-${trainerDockPlacement.value}` : 'app-trainer-pane--full'
+));
+const primaryPaneKeyboardClass = computed(() => (
+  trainerDockActive.value && keyboardOwner.value === KEYBOARD_OWNERS.PRIMARY
+    ? 'app-pane--keyboard-active'
+    : ''
+));
+const trainerPaneKeyboardClass = computed(() => (
+  trainerDockActive.value && keyboardOwner.value === KEYBOARD_OWNERS.TRAINER
+    ? 'app-pane--keyboard-active'
+    : ''
 ));
 
 const fixedLayoutSurfaceHeight = computed(() => resolveTrainerDockSurfaceHeight({
@@ -655,7 +678,7 @@ const handleNavigateTab = (tabId, detail = null) => {
     if (isTrainerDocked(requestedDockPlacement)) {
       openTabInBackground(tabId);
       trainerDockPlacement.value = requestedDockPlacement;
-      trainerDockFocused.value = false;
+      setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
     } else {
       trainerDockPlacement.value = TRAINER_DOCK_PLACEMENTS.NONE;
       openTab(tabId);
@@ -708,6 +731,8 @@ const runScheduledAuthRefresh = async () => {
 const handleAuthVisibilityChange = () => {
   if (document.visibilityState === 'visible') {
     runScheduledAuthRefresh();
+  } else if (trainerDockActive.value) {
+    setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
   }
 };
 
@@ -858,7 +883,7 @@ const handleGlobalPointerUp = (event) => {
 };
 
 const handleGlobalBoardHotkeyFocus = (event) => {
-  if (!BOARD_HOTKEYS.has(event.key)) {
+  if (!trainerHotkeysEnabled.value || !BOARD_HOTKEYS.has(event.key)) {
     return;
   }
 
@@ -877,6 +902,9 @@ const handleActivateTab = (tabId, event) => {
   if (tabId === TAB_IDS.TRAINER && isTrainerDocked(trainerDockPlacement.value)) {
     trainerDockPlacement.value = TRAINER_DOCK_PLACEMENTS.NONE;
   }
+  setKeyboardOwner(
+    tabId === TAB_IDS.TRAINER ? KEYBOARD_OWNERS.TRAINER : KEYBOARD_OWNERS.PRIMARY,
+  );
   activateTab(tabId);
   blurButtonTarget(event);
 };
@@ -884,7 +912,7 @@ const handleActivateTab = (tabId, event) => {
 const handleCloseTab = (tabId, event) => {
   if (tabId === TAB_IDS.TRAINER) {
     trainerDockPlacement.value = TRAINER_DOCK_PLACEMENTS.NONE;
-    trainerDockFocused.value = false;
+    setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
   }
   closeTab(tabId);
   if (trainerDockActive.value && activeTab.value === TAB_IDS.TRAINER) {
@@ -913,7 +941,7 @@ const handleTrainerDockChange = (placement) => {
   if (!isTrainerDocked(normalized)) {
     trainerDockPlacement.value = TRAINER_DOCK_PLACEMENTS.NONE;
     activateTab(TAB_IDS.TRAINER);
-    trainerDockFocused.value = true;
+    setKeyboardOwner(KEYBOARD_OWNERS.TRAINER);
     return;
   }
   if (!trainerDockAvailable.value) {
@@ -926,15 +954,44 @@ const handleTrainerDockChange = (placement) => {
   if (activeTab.value === TAB_IDS.TRAINER) {
     activateTab(getTrainerCompanionTab());
   }
-  trainerDockFocused.value = true;
+  setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
 };
 
-const handleWorkspaceFocus = (event) => {
+const handleKeyboardOwnerInteraction = (event) => {
   if (!trainerDockActive.value) {
     return;
   }
   const target = event?.target;
-  trainerDockFocused.value = target instanceof Element && !!target.closest('[data-trainer-pane]');
+  const nextOwner = target instanceof Element && target.closest('[data-trainer-pane]')
+    ? KEYBOARD_OWNERS.TRAINER
+    : KEYBOARD_OWNERS.PRIMARY;
+  setKeyboardOwner(nextOwner);
+};
+
+const handleWorkspaceWheel = (event) => {
+  if (!trainerDockActive.value) {
+    return;
+  }
+  const target = event?.target;
+  if (!(target instanceof Element) || !target.closest('[data-trainer-pane]')) {
+    setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
+  }
+};
+
+const handleKeyboardOwnerKeyup = (event) => {
+  if (
+    event.code === 'Escape'
+    && trainerDockActive.value
+    && keyboardOwner.value === KEYBOARD_OWNERS.TRAINER
+  ) {
+    setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
+  }
+};
+
+const releaseDockedTrainerKeyboard = () => {
+  if (trainerDockActive.value) {
+    setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
+  }
 };
 
 watch(activeTab, (tabId) => {
@@ -942,6 +999,17 @@ watch(activeTab, (tabId) => {
     lastPrimaryTab.value = tabId;
   }
 });
+
+watch(
+  trainerDockActive,
+  (isActive) => {
+    setSplitKeyboardMode(isActive);
+    if (isActive) {
+      setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
+    }
+  },
+  { immediate: true },
+);
 
 const clearTabDragState = () => {
   draggedTabId.value = null;
@@ -1148,6 +1216,8 @@ onMounted(async () => {
   document.addEventListener('pointerdown', handleAccountMenuPointerDown, true);
   document.addEventListener('pointerup', handleGlobalPointerUp, true);
   document.addEventListener('keydown', handleGlobalBoardHotkeyFocus, true);
+  document.addEventListener('keyup', handleKeyboardOwnerKeyup, true);
+  window.addEventListener('blur', releaseDockedTrainerKeyboard);
 });
 
 onUnmounted(() => {
@@ -1164,6 +1234,9 @@ onUnmounted(() => {
   document.removeEventListener('pointerdown', handleAccountMenuPointerDown, true);
   document.removeEventListener('pointerup', handleGlobalPointerUp, true);
   document.removeEventListener('keydown', handleGlobalBoardHotkeyFocus, true);
+  document.removeEventListener('keyup', handleKeyboardOwnerKeyup, true);
+  window.removeEventListener('blur', releaseDockedTrainerKeyboard);
+  setSplitKeyboardMode(false);
   if (scheduledAuthRefreshTimer !== null) {
     window.clearInterval(scheduledAuthRefreshTimer);
     scheduledAuthRefreshTimer = null;
@@ -1223,6 +1296,15 @@ onUnmounted(() => {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+.app-pane--keyboard-active::after {
+  position: absolute;
+  z-index: 185;
+  inset: 0;
+  border: 2px solid color-mix(in srgb, var(--accent) 72%, transparent);
+  content: '';
+  pointer-events: none;
 }
 
 .app-trainer-pane {

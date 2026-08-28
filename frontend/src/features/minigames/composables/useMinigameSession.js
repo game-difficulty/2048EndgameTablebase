@@ -1,6 +1,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
+import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwnership';
 import { useAuthState } from '../../../services/auth/authState';
 import { createExclusiveRunLock } from '../../../services/concurrency/exclusiveRunLock';
 import { createLocalStorageStore } from '../../../services/storage/localStorageStore';
@@ -866,7 +867,11 @@ export function useMinigameSession(activeRef) {
   };
 
   const handleKeydown = (event) => {
-    if (!activeRef.value || currentView.value !== 'play') return;
+    if (
+      !activeRef.value
+      || !keyboardInputAllowed(KEYBOARD_OWNERS.PRIMARY)
+      || currentView.value !== 'play'
+    ) return;
     if (isTextEntryElement(event.target)) return;
     const map = {
       ArrowUp: 'up',

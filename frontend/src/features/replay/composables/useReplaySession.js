@@ -1,6 +1,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
+import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwnership';
 import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { useAuthState } from '../../../services/auth/authState';
 import { pickSingleBrowserFile, readFileAsArrayBuffer } from '../../../services/files/browserFiles';
@@ -491,7 +492,7 @@ export function useReplaySession(activeRef, emit) {
     if (menuOpen.value && menuRoot.value && !menuRoot.value.contains(event.target)) menuOpen.value = false;
   };
   const handleKeyDown = (event) => {
-    if (!activeRef?.value) return;
+    if (!activeRef?.value || !keyboardInputAllowed(KEYBOARD_OWNERS.PRIMARY)) return;
     const target = event.target;
     if (target instanceof HTMLElement) {
       const slider = target.matches('[data-replay-slider-range="true"]');
