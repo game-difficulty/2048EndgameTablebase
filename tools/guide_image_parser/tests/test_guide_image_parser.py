@@ -19,7 +19,9 @@ from tools.guide_image_parser.image_parser import (
     TextMatch,
     _cell_record,
     _dedupe_line_annotations,
+    _looks_like_occluded_two,
     _mask_lattice_board_candidates,
+    _prefer_full_tile_over_split_regions,
     _repair_edge_shifted_cell_grids,
     parse_manifest,
 )
@@ -324,6 +326,44 @@ class GuideImageParserTests(unittest.TestCase):
             manifest = make_manifest(tmp, [image])
             parsed = parse_manifest(manifest, tmp / "parsed_images.jsonl")
             self.assertEqual(parsed[0]["boards"][0]["hex"][:8], "00100124")
+
+    def test_horizontal_annotation_residue_does_not_create_two(self) -> None:
+        cell = np.full((29, 29, 3), [252, 227, 226], dtype=np.uint8)
+        cell[0, :] = [220, 180, 180]
+        cell[14, :] = [157, 116, 200]
+        cell[15:17, :] = [220, 180, 180]
+
+        detected, _score, _runner_up = _looks_like_occluded_two(
+            cell,
+            [252, 227, 226],
+        )
+
+        self.assertFalse(detected)
+
+    def test_disjoint_2x4_regions_are_not_promoted_to_one_4x4_board(self) -> None:
+        regions = [
+            BoardCandidate([0, 0, 120, 62], 2, 4, 0.9, [], [], "tile_region"),
+            BoardCandidate([0, 65, 120, 62], 2, 4, 0.9, [], [], "tile_region"),
+        ]
+        tiles = [BoardCandidate([0, 0, 120, 127], 4, 4, 0.7, [], [], "tile")]
+
+        kept_regions, kept_tiles = _prefer_full_tile_over_split_regions(regions, tiles)
+
+        self.assertEqual(kept_regions, regions)
+        self.assertEqual(kept_tiles, [])
+
+    def test_overlapping_regions_can_still_restore_one_4x4_board(self) -> None:
+        regions = [
+            BoardCandidate([3, 4, 181, 89], 2, 4, 0.91, [], [], "tile_region"),
+            BoardCandidate([48, 49, 139, 89], 2, 4, 0.88, [], [], "tile_region"),
+        ]
+        tiles = [BoardCandidate([4, 4, 179, 179], 4, 4, 0.88, [], [], "tile")]
+
+        kept_regions, kept_tiles = _prefer_full_tile_over_split_regions(regions, tiles)
+
+        self.assertEqual(kept_regions, [])
+        self.assertEqual(len(kept_tiles), 1)
+        self.assertIn("merged_split_tile_regions", kept_tiles[0].flags)
 
     def test_twos_are_reconstructed_after_straight_arrow_removal(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

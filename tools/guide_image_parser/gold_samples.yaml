@@ -51,6 +51,30 @@ samples:
       - board_index: 3
         cells: [[0, 2]]
 
+  - image_id: img_0140
+    note: aligned 2x4 diagrams must remain nine separate boards
+    board_count: 9
+    boards:
+      - board_id: img_0140_b03
+        bbox: [26, 89, 125, 69]
+        bbox_tolerance: 2
+        visible_rows: 2
+        visible_cols: 4
+      - board_id: img_0140_b04
+        bbox: [176, 89, 121, 66]
+        bbox_tolerance: 2
+        visible_rows: 2
+        visible_cols: 4
+      - board_id: img_0140_b05
+        hex: "10311352ffffffff"
+      - board_id: img_0140_b06
+        bbox: [26, 168, 121, 61]
+        bbox_tolerance: 2
+        visible_rows: 2
+        visible_cols: 4
+      - board_id: img_0140_b08
+        hex: "12221352ffffffff"
+
   - image_id: img_0213
     note: targeted corrections for 2 versus empty cells
     boards:
@@ -86,6 +110,12 @@ samples:
         bbox: [26, 14, 122, 61]
         bbox_tolerance: 2
         hex: "32103560ffffffff"
+
+  - image_id: img_0345
+    note: horizontal arrow residue must not create a 2 in an empty cell
+    boards:
+      - board_id: img_0345_b01
+        hex: "300112567654ffff"
 
   - image_id: img_0369
     note: five-board layout with the arrow-occluded lower-left board restored

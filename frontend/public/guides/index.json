@@ -3,7 +3,7 @@
     {
       "id": "32768-dream-v3",
       "language": "zh",
-      "source": "32768-dream-v3/document.json",
+      "source": "32768-dream-v3/document.json?v=84678d62",
       "title": "32768不是梦（第3版）",
       "type": "guide"
     },
@@ -22,5 +22,5 @@
       "type": "guide"
     }
   ],
-  "version": 1
+  "version": 2
 }

@@ -1283,8 +1283,10 @@ def _prefer_full_tile_over_split_regions(
         return tile_region_candidates, tile_candidates
     kept_regions = list(tile_region_candidates)
     promoted_tiles: list[BoardCandidate] = []
+    kept_tiles: list[BoardCandidate] = []
     for tile in tile_candidates:
         if tile.visible_rows != 4:
+            kept_tiles.append(tile)
             continue
         covered_regions = []
         for region in kept_regions:
@@ -1296,13 +1298,28 @@ def _prefer_full_tile_over_split_regions(
             if horizontal_overlap >= 0.72 and region_overlap >= 0.72:
                 covered_regions.append(region)
         if len(covered_regions) < 2:
+            kept_tiles.append(tile)
             continue
         rows_total = sum(region.visible_rows for region in covered_regions)
         if rows_total != 4:
+            kept_tiles.append(tile)
             continue
         union = _union_bbox([region.bbox for region in covered_regions])
         if _bbox_intersection(tile.bbox, union) / max(1, _bbox_area(union)) < 0.90:
+            kept_tiles.append(tile)
             continue
+
+        regions_by_y = sorted(covered_regions, key=lambda region: region.bbox[1])
+        separate_row_bands = all(
+            upper.bbox[1] + upper.bbox[3] <= lower.bbox[1]
+            for upper, lower in zip(regions_by_y, regions_by_y[1:])
+        )
+        if separate_row_bands:
+            # Two complete, disjoint 2x4 diagrams can line up closely enough
+            # for the broader tile detector to span both. Preserve those
+            # regions and discard the ambiguous 4x4 candidate.
+            continue
+
         promoted = BoardCandidate(
             bbox=tile.bbox,
             visible_rows=tile.visible_rows,
@@ -1314,7 +1331,7 @@ def _prefer_full_tile_over_split_regions(
         )
         promoted_tiles.append(promoted)
         kept_regions = [region for region in kept_regions if region not in covered_regions]
-    return kept_regions, promoted_tiles + tile_candidates
+    return kept_regions, promoted_tiles + kept_tiles
 
 
 def _filter_undersized_board_candidates(
@@ -1640,6 +1657,10 @@ def _looks_like_occluded_two(cell_rgb: np.ndarray, background_rgb: list[int]) ->
 
     split = raw.copy()
     split[annotation_mask > 0] = 0
+    # Anti-aliased annotation edges can fall outside the color mask. They are
+    # still long straight strokes, not digit evidence, so remove them before
+    # reconstructing a 2 from the remaining components.
+    split[_straight_stroke_core(split) > 0] = 0
     component_count, labels, stats, _centroids = cv.connectedComponentsWithStats(split, 8)
     kept = np.zeros_like(split)
     kept_components = 0

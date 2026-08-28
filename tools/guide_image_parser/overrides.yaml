@@ -17,3 +17,11 @@
 #       cells: []
 #   annotations: []
 
+img_0140:
+  board_overrides:
+    - board_id: img_0140_b05
+      hex: "10311352ffffffff"
+      flags: ["partial_board_bottom_f_padding", "manual_value_override"]
+    - board_id: img_0140_b08
+      hex: "12221352ffffffff"
+      flags: ["low_grid_evidence", "partial_board_bottom_f_padding", "manual_value_override"]
