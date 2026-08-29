@@ -702,7 +702,7 @@
     "minigames": "小游戏",
     "test": "测试",
     "settings": "设置",
-    "help": "帮助",
+    "help": "攻略教程",
     "openBrowserMode": "在浏览器中打开",
     "openVerseReplay": "Verse 回放播放器",
     "openLeaderboards": "排行榜",
@@ -712,7 +712,7 @@
       "test": "训练走法判断，使用回放、错题本和分析工具",
       "minigames": "体验带有独特方块、规则与挑战玩法的 2048 变体",
       "settings": "定式计算与外观设置",
-      "help": "查看文档、技术指南和项目说明"
+      "help": "学习 2048 技巧、定式思路和进阶打法"
     },
     "githubNote": "欢迎在 GitHub 上点个 Star 支持本项目",
     "sponsorNotePrefix": "本项目由",
