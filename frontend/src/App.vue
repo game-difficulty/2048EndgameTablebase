@@ -205,6 +205,7 @@
         >
           <BattleView
             :active="activeTab === TAB_IDS.BATTLE"
+            :hotkeys-enabled="activeTab === TAB_IDS.BATTLE && keyboardInputAllowed(KEYBOARD_OWNERS.PRIMARY)"
             :auth-user="authUser"
             @navigate-tab="handleNavigateTab"
           />

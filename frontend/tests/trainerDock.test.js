@@ -9,8 +9,17 @@ import {
   resolveTrainerJumpDockPlacement,
   resolveTrainerDockSurfaceHeight,
 } from '../src/app/trainerDock.js';
+import {
+  KEYBOARD_OWNERS,
+  keyboardInputAllowed,
+  resetKeyboardOwnership,
+  setKeyboardOwner,
+  setSplitKeyboardMode,
+} from '../src/app/keyboardOwnership.js';
 import { TAB_IDS } from '../src/app/tabRegistry.js';
 import { useTabManager } from '../src/app/useTabManager.js';
+
+test.afterEach(() => resetKeyboardOwnership());
 
 test('normalizes Trainer dock placements deterministically', () => {
   assert.equal(normalizeTrainerDockPlacement('right'), TRAINER_DOCK_PLACEMENTS.RIGHT);
@@ -71,4 +80,15 @@ test('bottom docking adds a second full-height content page', () => {
 test('right docking uses the ten-percent narrower layout dimensions', () => {
   assert.equal(TRAINER_DOCK_LAYOUT.RIGHT_WIDTH_PX, 450);
   assert.equal(TRAINER_DOCK_LAYOUT.RIGHT_BOARD_WIDTH_PX, 324);
+});
+
+test('docked Trainer and primary page never share keyboard ownership', () => {
+  setSplitKeyboardMode(true);
+  setKeyboardOwner(KEYBOARD_OWNERS.TRAINER);
+  assert.equal(keyboardInputAllowed(KEYBOARD_OWNERS.TRAINER), true);
+  assert.equal(keyboardInputAllowed(KEYBOARD_OWNERS.PRIMARY), false);
+
+  setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
+  assert.equal(keyboardInputAllowed(KEYBOARD_OWNERS.TRAINER), false);
+  assert.equal(keyboardInputAllowed(KEYBOARD_OWNERS.PRIMARY), true);
 });

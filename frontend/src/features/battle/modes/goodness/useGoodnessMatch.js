@@ -43,7 +43,12 @@ function transitionFrame(transition) {
   };
 }
 
-export function useGoodnessMatch(roomSession, activeRef, authUserRef) {
+export function useGoodnessMatch(
+  roomSession,
+  activeRef,
+  authUserRef,
+  hotkeysEnabledRef = activeRef,
+) {
   const {
     room,
     error,
@@ -311,7 +316,7 @@ export function useGoodnessMatch(roomSession, activeRef, authUserRef) {
   };
 
   const handleKeydown = (event) => {
-    if (!activeRef.value || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (!hotkeysEnabledRef.value || event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.target?.matches?.('input, textarea, select, [contenteditable="true"]')) return;
     if (event.key === 'Enter' && continueCorrection()) {
       event.preventDefault();

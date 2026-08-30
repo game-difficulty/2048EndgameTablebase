@@ -129,6 +129,7 @@ import { useBattleSession } from '../composables/useBattleSession.js';
 
 const props = defineProps({
   active: { type: Boolean, default: true },
+  hotkeysEnabled: { type: Boolean, default: true },
   authUser: { type: Object, default: null },
 });
 const emit = defineEmits(['navigate-tab']);
@@ -172,7 +173,11 @@ const {
   openResults,
   dismissResults,
   sendChatMessage,
-} = useBattleSession(toRef(props, 'active'), toRef(props, 'authUser'));
+} = useBattleSession(
+  toRef(props, 'active'),
+  toRef(props, 'authUser'),
+  toRef(props, 'hotkeysEnabled'),
+);
 
 const modeHallProps = computed(() => unref(modeSession.value?.hallProps) || {});
 const dis32k = computed(() => Boolean(appConfig.value.dis_32k));

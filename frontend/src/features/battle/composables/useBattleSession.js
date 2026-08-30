@@ -7,7 +7,7 @@ import {
 } from '../core/modeRegistry.js';
 
 
-export function useBattleSession(activeRef, authUserRef) {
+export function useBattleSession(activeRef, authUserRef, hotkeysEnabledRef = activeRef) {
   const roomSession = useBattleRoomSession(activeRef, authUserRef);
   const defaultDefinition = getBattleModeDefinition('goodness');
   const modeDefinitions = listBattleModeDefinitions();
@@ -15,7 +15,7 @@ export function useBattleSession(activeRef, authUserRef) {
   const sessions = new Map(
     modeDefinitions.map((definition) => [
       definition.key,
-      definition.createSession(roomSession, activeRef, authUserRef),
+      definition.createSession(roomSession, activeRef, authUserRef, hotkeysEnabledRef),
     ]),
   );
   const modeDefinition = computed(() => getBattleModeDefinition(
