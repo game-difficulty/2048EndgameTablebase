@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import logging
 import random
@@ -10,6 +11,7 @@ from typing import Any
 from .config import WorkerConfig
 from .protocol import (
     PROTOCOL_VERSION,
+    WORKER_CAPABILITIES,
     ProtocolError,
     Request,
     decode_message,
@@ -19,7 +21,7 @@ from .protocol import (
     validate_hello_ack,
     validate_request,
 )
-from .reader_pool import ReaderPool, TableUnavailable
+from .reader_pool import BattleRouteGenerationError, ReaderPool, TableUnavailable
 
 
 logger = logging.getLogger("tablebase_worker.client")
@@ -92,6 +94,7 @@ class WorkerClient:
                     worker_id=self.config.worker_id,
                     auth_token=self.config.auth_token,
                     tables=self.reader_pool.hello_tables(),
+                    capabilities=list(WORKER_CAPABILITIES),
                 ),
             )
             raw_ack = await asyncio.wait_for(
@@ -221,12 +224,31 @@ class WorkerClient:
                     request_id=request.request_id,
                     items=items,
                 )
-            else:
+            elif request.message_type == "RANDOM_STATE":
                 board = await self.reader_pool.random_state(request.full_pattern or "")
                 payload = encode_message(
                     "RANDOM_STATE_RESULT",
                     request_id=request.request_id,
                     board=f"{board:016x}",
+                )
+            else:
+                route = await self.reader_pool.generate_battle_route(
+                    request.full_pattern or "",
+                    initial_board=request.initial_board,
+                    max_steps=request.max_steps,
+                    min_steps=request.min_steps,
+                    spawn_rate=request.spawn_rate,
+                    seed_hex=request.seed_hex,
+                )
+                payload = encode_message(
+                    "BATTLE_ROUTE_RESULT",
+                    request_id=request.request_id,
+                    route_blob_base64=base64.b64encode(route.route_blob).decode("ascii"),
+                    step_count=route.step_count,
+                    certainty_step=route.certainty_step,
+                    termination_reason=route.termination_reason,
+                    initial_board=f"{route.initial_board:016x}",
+                    available_layers=route.available_layers,
                 )
             await self._send(websocket, payload)
             logger.debug(
@@ -240,6 +262,9 @@ class WorkerClient:
             raise
         except TableUnavailable as exc:
             error = ProtocolError("TABLE_UNAVAILABLE", str(exc), request.request_id)
+            await self._send(websocket, error_message(error))
+        except BattleRouteGenerationError as exc:
+            error = ProtocolError(exc.code, str(exc), request.request_id)
             await self._send(websocket, error_message(error))
         except Exception as exc:
             logger.exception(

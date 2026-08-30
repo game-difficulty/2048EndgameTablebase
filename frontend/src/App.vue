@@ -199,6 +199,16 @@
           />
         </div>
         <div
+          v-if="isTabOpen(TAB_IDS.BATTLE)"
+          class="absolute inset-0"
+          v-show="activeTab === TAB_IDS.BATTLE"
+        >
+          <BattleView
+            :active="activeTab === TAB_IDS.BATTLE"
+            :auth-user="authUser"
+          />
+        </div>
+        <div
           v-if="isTabOpen(TAB_IDS.LEADERBOARDS)"
           class="absolute inset-0"
           v-show="activeTab === TAB_IDS.LEADERBOARDS"
@@ -470,6 +480,7 @@ const GamerView = defineAsyncComponent(() => import('./features/gamer/pages/Game
 const TrainerView = defineAsyncComponent(() => import('./features/trainer/pages/TrainerPage.vue'));
 const TesterView = defineAsyncComponent(() => import('./features/tester/pages/TesterPage.vue'));
 const MinigamesView = defineAsyncComponent(() => import('./features/minigames/pages/MinigamesPage.vue'));
+const BattleView = defineAsyncComponent(() => import('./features/battle/pages/BattlePage.vue'));
 const LeaderboardsView = defineAsyncComponent(() => import('./features/leaderboards/pages/LeaderboardPage.vue'));
 const ReplayReviewView = defineAsyncComponent(() => import('./features/replay/pages/ReplayPage.vue'));
 const SettingsView = defineAsyncComponent(() => import('./features/settings/pages/SettingsPage.vue'));
@@ -1208,6 +1219,10 @@ onMounted(async () => {
     window.addEventListener('resize', updateFixedLayoutScale);
   }
   startAppSettings();
+  const initialParams = new URLSearchParams(window.location.search);
+  if (initialParams.get('tab') === 'battle' || initialParams.has('room')) {
+    openTab(TAB_IDS.BATTLE);
+  }
   refreshAuth().then((nextUser) => {
     if (nextUser) {
       writeLastScheduledAuthRefresh();

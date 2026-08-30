@@ -275,6 +275,16 @@ def init_auth_db() -> None:
               FOREIGN KEY(ledger_id) REFERENCES token_ledger(id)
             );
 
+            CREATE TABLE IF NOT EXISTS token_reservation_settlements (
+              reservation_ledger_id INTEGER PRIMARY KEY,
+              settlement_type TEXT NOT NULL,
+              settlement_ledger_id INTEGER,
+              created_at TEXT NOT NULL,
+              FOREIGN KEY(reservation_ledger_id) REFERENCES token_ledger(id),
+              FOREIGN KEY(settlement_ledger_id) REFERENCES token_ledger(id),
+              CHECK(settlement_type IN ('finalize', 'cancel'))
+            );
+
             CREATE TABLE IF NOT EXISTS uploads (
               upload_id TEXT PRIMARY KEY,
               user_id INTEGER NOT NULL,

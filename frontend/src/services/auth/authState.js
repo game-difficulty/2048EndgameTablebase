@@ -2,7 +2,7 @@ import { computed, ref } from 'vue';
 
 import { authClient } from './authClient';
 import { emitAuthChanged } from './authEvents';
-import { clearDeviceSession } from './sessionTokenStore';
+import { clearDeviceSession, DEVICE_SESSION_STORAGE_KEY } from './sessionTokenStore';
 
 const ready = ref(false);
 const user = ref(null);
@@ -10,6 +10,7 @@ const dialogOpen = ref(false);
 const dialogMode = ref('login');
 let authGeneration = 0;
 let latestRefreshId = 0;
+let storageListenerInstalled = false;
 
 const isAuthenticated = computed(() => !!user.value);
 
@@ -68,6 +69,16 @@ export function useAuthState() {
       }
     }
   };
+
+  if (typeof window !== 'undefined' && !storageListenerInstalled) {
+    storageListenerInstalled = true;
+    window.addEventListener('storage', (event) => {
+      if (event.key !== DEVICE_SESSION_STORAGE_KEY) return;
+      authGeneration += 1;
+      latestRefreshId += 1;
+      void refreshAuth();
+    });
+  }
 
   const openAuthDialog = (mode = 'login') => {
     dialogMode.value = ['login', 'register', 'forgot', 'reset'].includes(mode) ? mode : 'login';

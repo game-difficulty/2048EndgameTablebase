@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import unittest
 from unittest.mock import patch
 
 from backend.remote_workers.config import configured_workers, load_remote_manifest
-from backend.remote_workers.errors import RemoteTablebaseOffline
+from backend.remote_workers.errors import (
+    RemoteTablebaseOffline,
+    RemoteTablebaseProtocolError,
+)
 from backend.remote_workers.registry import RemoteWorkerRegistry
 from backend.handlers import tablebase_query as query_handler
 from backend.session import GameSession
@@ -40,18 +44,21 @@ class RemoteWorkerRegistryTests(unittest.IsolatedAsyncioTestCase):
         self.secret_patch.stop()
         await self.registry.close()
 
-    async def _connect(self, tables=None):
+    async def _connect(self, tables=None, capabilities=None):
         websocket = FakeWebSocket()
+        hello = {
+            "type": "HELLO",
+            "protocol_version": 1,
+            "worker_id": "home-main",
+            "auth_token": "test-secret",
+            "tables": tables
+            or [{"full_pattern": "free11_512", "ready": True}],
+        }
+        if capabilities is not None:
+            hello["capabilities"] = capabilities
         worker = await self.registry._accept_hello(
             websocket,
-            {
-                "type": "HELLO",
-                "protocol_version": 1,
-                "worker_id": "home-main",
-                "auth_token": "test-secret",
-                "tables": tables
-                or [{"full_pattern": "free11_512", "ready": True}],
-            },
+            hello,
         )
         return websocket, worker
 
@@ -114,6 +121,58 @@ class RemoteWorkerRegistryTests(unittest.IsolatedAsyncioTestCase):
                 use_variant=False,
             )
 
+    async def test_old_worker_remains_online_but_cannot_generate_routes(self):
+        await self._connect()
+        self.assertTrue(self.registry.is_table_online("free11_512"))
+        with self.assertRaises(RemoteTablebaseProtocolError):
+            await self.registry.generate_battle_route(
+                full_pattern="free11_512",
+                pattern="free11",
+                target="512",
+                initial_board=None,
+                max_steps=None,
+                min_steps=64,
+                spawn_rate=0.1,
+                seed_hex="1" * 32,
+            )
+
+    async def test_battle_route_round_trip_requires_advertised_capability(self):
+        websocket, worker = await self._connect(capabilities=["battle_route_v1"])
+        task = asyncio.create_task(
+            self.registry.generate_battle_route(
+                full_pattern="free11_512",
+                pattern="free11",
+                target="512",
+                initial_board="0000000000001234",
+                max_steps=1,
+                min_steps=1,
+                spawn_rate=0.1,
+                seed_hex="0123456789abcdef0123456789abcdef",
+            )
+        )
+        await asyncio.sleep(0)
+        request = websocket.sent[-1]
+        self.assertEqual(request["type"], "GENERATE_BATTLE_ROUTE")
+        self.assertNotIn("path", request)
+        self.assertEqual(request["initial_board"], "0000000000001234")
+        route_blob = b"\x00" * 34
+        await self.registry._handle_message(
+            worker,
+            {
+                "type": "BATTLE_ROUTE_RESULT",
+                "request_id": request["request_id"],
+                "route_blob_base64": base64.b64encode(route_blob).decode("ascii"),
+                "step_count": 1,
+                "certainty_step": 0,
+                "termination_reason": "target_reached",
+                "initial_board": "0000000000001234",
+                "available_layers": 256,
+            },
+        )
+        response = await task
+        self.assertEqual(response["step_count"], 1)
+        self.assertEqual(response["available_layers"], 256)
+
 
 class RemoteCatalogTests(unittest.TestCase):
     def test_online_remote_tables_are_safe_public_catalog_entries(self):
@@ -151,6 +210,7 @@ class RemoteCatalogTests(unittest.TestCase):
                 "free10_256",
                 "free10_512",
                 "4421_1024",
+                "4431_1024",
                 "444_1024",
                 "444_2048",
                 "LL_1024",

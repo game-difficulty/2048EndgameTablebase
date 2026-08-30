@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hmac
 import json
 import logging
+import math
 import os
+import struct
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -22,17 +26,23 @@ from .errors import (
 
 
 PROTOCOL_VERSION = 1
+CAPABILITY_BATTLE_ROUTE_V1 = "battle_route_v1"
 HEARTBEAT_TIMEOUT_SECONDS = float(
     os.getenv("REMOTE_TABLEBASE_HEARTBEAT_TIMEOUT_SECONDS", "30")
 )
 REQUEST_TIMEOUT_SECONDS = float(
     os.getenv("REMOTE_TABLEBASE_REQUEST_TIMEOUT_SECONDS", "30")
 )
+BATTLE_ROUTE_TIMEOUT_SECONDS = float(
+    os.getenv("REMOTE_TABLEBASE_BATTLE_ROUTE_TIMEOUT_SECONDS", "600")
+)
 HELLO_TIMEOUT_SECONDS = float(os.getenv("REMOTE_TABLEBASE_HELLO_TIMEOUT_SECONDS", "10"))
 MAX_WORKER_MESSAGE_BYTES = int(
     os.getenv("REMOTE_TABLEBASE_MAX_MESSAGE_BYTES", str(2 * 1024 * 1024))
 )
 logger = logging.getLogger("2048tables.remote_worker")
+TRAINER_ROUTE_RECORD = struct.Struct("<B4I")
+TRAINER_ROUTE_RATE_SCALE = 4_000_000_000
 
 
 @dataclass
@@ -40,6 +50,7 @@ class WorkerConnection:
     worker_id: str
     websocket: WebSocket
     tables: frozenset[str]
+    capabilities: frozenset[str] = field(default_factory=frozenset)
     connected_at: float = field(default_factory=time.monotonic)
     last_seen: float = field(default_factory=time.monotonic)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -49,6 +60,7 @@ class WorkerConnection:
 class PendingRequest:
     worker_id: str
     full_pattern: str
+    request_type: str
     future: asyncio.Future
 
 
@@ -57,6 +69,35 @@ def _valid_board_hex(value: Any) -> str:
     if len(board) != 16 or any(char not in "0123456789abcdef" for char in board):
         raise RemoteTablebaseProtocolError("Invalid remote tablebase board.")
     return board
+
+
+def _valid_route_int(
+    value: Any,
+    field_name: str,
+    *,
+    minimum: int,
+    allow_none: bool = False,
+) -> int | None:
+    if value is None and allow_none:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RemoteTablebaseProtocolError(f"Invalid {field_name}.")
+    parsed = int(value)
+    if parsed < minimum or parsed > 9_999:
+        raise RemoteTablebaseProtocolError(f"Invalid {field_name}.")
+    return parsed
+
+
+def _validate_trainer_route_blob(route_blob: bytes, step_count: int) -> None:
+    if len(route_blob) != (step_count + 1) * TRAINER_ROUTE_RECORD.size:
+        raise RemoteTablebaseProtocolError("Battle route length does not match metadata.")
+    header = TRAINER_ROUTE_RECORD.unpack_from(route_blob)
+    if header[0] != 0 or any(part > 0xFFFF for part in header[1:]):
+        raise RemoteTablebaseProtocolError("Invalid battle route header.")
+    for offset in range(TRAINER_ROUTE_RECORD.size, len(route_blob), TRAINER_ROUTE_RECORD.size):
+        change, *rates = TRAINER_ROUTE_RECORD.unpack_from(route_blob, offset)
+        if change & 0x80 or any(rate > TRAINER_ROUTE_RATE_SCALE for rate in rates):
+            raise RemoteTablebaseProtocolError("Invalid battle route record.")
 
 
 class RemoteWorkerRegistry:
@@ -155,6 +196,9 @@ class RemoteWorkerRegistry:
                         max(0.0, now - worker.last_seen) if worker else None
                     ),
                     "tables": sorted(worker.tables if online and worker else ()),
+                    "capabilities": sorted(
+                        worker.capabilities if online and worker else ()
+                    ),
                     "configured_tables": sorted(configured["tables"]),
                 }
             )
@@ -240,7 +284,22 @@ class RemoteWorkerRegistry:
             if ready and full_pattern in configured[worker_id]["tables"]:
                 advertised.add(full_pattern)
 
-        worker = WorkerConnection(worker_id, websocket, frozenset(advertised))
+        advertised_capabilities = frozenset(
+            capability
+            for capability in (
+                str(item or "").strip().lower()
+                for item in hello.get("capabilities", [])
+                if isinstance(item, str)
+            )
+            if capability == CAPABILITY_BATTLE_ROUTE_V1
+        )
+
+        worker = WorkerConnection(
+            worker_id,
+            websocket,
+            frozenset(advertised),
+            capabilities=advertised_capabilities,
+        )
         lock = self._ensure_lock()
         async with lock:
             previous = self._workers.get(worker_id)
@@ -295,6 +354,7 @@ class RemoteWorkerRegistry:
             "LOOKUP_RESULT",
             "LOOKUP_BATCH_RESULT",
             "RANDOM_STATE_RESULT",
+            "BATTLE_ROUTE_RESULT",
             "ERROR",
         }:
             raise RemoteTablebaseProtocolError("Unsupported worker response.")
@@ -308,7 +368,13 @@ class RemoteWorkerRegistry:
                 worker.worker_id,
                 str(message.get("code") or "WORKER_ERROR")[:64],
             )
-            error = RemoteTablebaseOffline()
+            error = (
+                RemoteTablebaseProtocolError(
+                    str(message.get("code") or "WORKER_ERROR")[:64]
+                )
+                if pending.request_type == "GENERATE_BATTLE_ROUTE"
+                else RemoteTablebaseOffline()
+            )
             if not pending.future.done():
                 pending.future.set_exception(error)
             return
@@ -319,7 +385,12 @@ class RemoteWorkerRegistry:
         async with worker.send_lock:
             await worker.websocket.send_json(payload)
 
-    def _worker_for_table(self, full_pattern: str) -> WorkerConnection:
+    def _worker_for_table(
+        self,
+        full_pattern: str,
+        *,
+        required_capability: str | None = None,
+    ) -> WorkerConnection:
         configured = configured_workers()
         target_worker_id = ""
         for worker_id, worker in configured.items():
@@ -333,6 +404,10 @@ class RemoteWorkerRegistry:
             or time.monotonic() - worker.last_seen > HEARTBEAT_TIMEOUT_SECONDS
         ):
             raise RemoteTablebaseOffline()
+        if required_capability and required_capability not in worker.capabilities:
+            raise RemoteTablebaseProtocolError(
+                "Remote tablebase worker does not support this operation."
+            )
         return worker
 
     async def request(
@@ -342,12 +417,16 @@ class RemoteWorkerRegistry:
         payload: dict[str, Any],
         *,
         timeout: float | None = None,
+        required_capability: str | None = None,
     ) -> dict[str, Any]:
-        worker = self._worker_for_table(full_pattern)
+        worker = self._worker_for_table(
+            full_pattern,
+            required_capability=required_capability,
+        )
         request_id = uuid.uuid4().hex
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = PendingRequest(
-            worker.worker_id, full_pattern, future
+            worker.worker_id, full_pattern, request_type, future
         )
         message = {
             "type": request_type,
@@ -438,6 +517,98 @@ class RemoteWorkerRegistry:
             full_pattern,
             {"pattern": pattern, "target": str(target)},
         )
+
+    async def generate_battle_route(
+        self,
+        *,
+        full_pattern: str,
+        pattern: str,
+        target: str,
+        initial_board: str | None,
+        max_steps: int | None,
+        min_steps: int,
+        spawn_rate: float,
+        seed_hex: str,
+    ) -> dict[str, Any]:
+        parsed_max_steps = _valid_route_int(
+            max_steps, "max_steps", minimum=1, allow_none=True
+        )
+        parsed_min_steps = _valid_route_int(min_steps, "min_steps", minimum=0)
+        if parsed_max_steps is not None and parsed_min_steps > parsed_max_steps:
+            raise RemoteTablebaseProtocolError("min_steps exceeds max_steps.")
+        if isinstance(spawn_rate, bool):
+            raise RemoteTablebaseProtocolError("Invalid spawn_rate.")
+        try:
+            parsed_spawn_rate = float(spawn_rate)
+        except (TypeError, ValueError) as exc:
+            raise RemoteTablebaseProtocolError("Invalid spawn_rate.") from exc
+        if not math.isfinite(parsed_spawn_rate) or not 0 <= parsed_spawn_rate <= 1:
+            raise RemoteTablebaseProtocolError("Invalid spawn_rate.")
+        normalized_seed = str(seed_hex or "").strip().lower()
+        if len(normalized_seed) != 32 or any(
+            char not in "0123456789abcdef" for char in normalized_seed
+        ):
+            raise RemoteTablebaseProtocolError("Invalid seed_hex.")
+
+        response = await self.request(
+            "GENERATE_BATTLE_ROUTE",
+            full_pattern,
+            {
+                "pattern": str(pattern),
+                "target": str(target),
+                "initial_board": (
+                    None if initial_board is None else _valid_board_hex(initial_board)
+                ),
+                "max_steps": parsed_max_steps,
+                "min_steps": parsed_min_steps,
+                "spawn_rate": parsed_spawn_rate,
+                "seed_hex": normalized_seed,
+            },
+            timeout=BATTLE_ROUTE_TIMEOUT_SECONDS,
+            required_capability=CAPABILITY_BATTLE_ROUTE_V1,
+        )
+        try:
+            route_blob = base64.b64decode(
+                str(response.get("route_blob_base64") or ""),
+                validate=True,
+            )
+        except (binascii.Error, ValueError) as exc:
+            raise RemoteTablebaseProtocolError("Invalid battle route payload.") from exc
+        step_count = _valid_route_int(
+            response.get("step_count"), "step_count", minimum=0
+        )
+        _validate_trainer_route_blob(route_blob, step_count)
+        certainty_step = _valid_route_int(
+            response.get("certainty_step"),
+            "certainty_step",
+            minimum=0,
+            allow_none=True,
+        )
+        if certainty_step is not None and certainty_step > step_count:
+            raise RemoteTablebaseProtocolError("Invalid certainty_step.")
+        available_layers = _valid_route_int(
+            response.get("available_layers"), "available_layers", minimum=0
+        )
+        termination_reason = str(response.get("termination_reason") or "")
+        if termination_reason not in {
+            "target_reached",
+            "no_legal_move",
+            "zero_success",
+            "max_steps",
+        }:
+            raise RemoteTablebaseProtocolError("Invalid battle route termination reason.")
+        normalized = dict(response)
+        normalized.update(
+            {
+                "step_count": step_count,
+                "certainty_step": certainty_step,
+                "termination_reason": termination_reason,
+                "initial_board": _valid_board_hex(response.get("initial_board")),
+                "available_layers": available_layers,
+                "route_blob": route_blob,
+            }
+        )
+        return normalized
 
     async def _remove_worker(
         self, worker: WorkerConnection, error: Exception

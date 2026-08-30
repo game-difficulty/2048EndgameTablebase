@@ -82,6 +82,7 @@ def public_quota_rules() -> dict[str, Any]:
             "tester_lookup_miss": float(costs.get("tester_lookup_miss", 0)),
             "analysis_per_replay": float(costs.get("analysis_per_replay", 0)),
             "replay_load": float(costs.get("replay_load", 0)),
+            "battle_route_generation": float(costs.get("battle_route_generation", 0)),
         },
         "table_groups": table_groups,
         "tablebase_thresholds": tablebase_thresholds,

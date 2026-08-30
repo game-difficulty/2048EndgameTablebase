@@ -5,6 +5,7 @@
     "trainer": "Trainer",
     "tester": "Tester",
     "minigames": "Minigames",
+    "battle": "GOF Battle",
     "leaderboards": "Leaderboards",
     "replay": "Replay",
     "notebook": "Notebook",
@@ -604,6 +605,7 @@
         "lookupHit": "Result found",
         "lookupMiss": "No result",
         "analysis": "Analysis / file",
+        "battleRoom": "Create Battle room",
         "replay": "Load an .rpl replay (not affected by tablebase multiplier)"
       },
       "thresholds": {
@@ -622,6 +624,7 @@
         "title": "Charging Notes",
         "balanceOrder": "Bonus tokens are spent before paid tokens.",
         "analysisCharge": "Analysis is charged per selected file, whether or not a report is generated.",
+        "battleCharge": "Creating a Goodness Battle room charges route generation by the selected tablebase multiplier; the reservation is refunded if route generation fails.",
         "replayCharge": "Replay loading is charged after authorization; parsing failures are not refunded.",
         "offline": "No charge is made when a tablebase is offline or the server rejects a request before execution; reservations are refunded."
       }
@@ -700,6 +703,8 @@
     "play": "Start Game",
     "practice": "Practise",
     "minigames": "Minigames",
+    "battle": "Battle",
+    "leaderboards": "Leaderboards",
     "test": "Test",
     "settings": "Settings",
     "help": "Help & About",
@@ -711,12 +716,167 @@
       "practice": "Inspect Table Lines and Learn Optimal Moves for Endgame Positions.",
       "test": "Train Move Judgement, Replay Workflows, Notebook Drills, and Analysis Tools.",
       "minigames": "Explore 2048 Variants with Unique Tiles, Rules, and Challenge Modes.",
+      "battle": "Compete on one shared tablebase line and compare move goodness.",
+      "leaderboards": "Explore community scores, Token usage, and supporter rankings.",
       "settings": "Tablebase Building & Appearance Settings.",
       "help": "Documentation, Technique Guides, and Project Information."
     },
     "githubNote": "Support this project by giving it a star on GitHub",
     "sponsorNotePrefix": "This project is sponsored by ",
     "sponsorNoteSuffix": "."
+  },
+  "battle": {
+    "title": "Goodness Battle",
+    "errors": {
+      "ROOM_NOT_FOUND": "This room does not exist or has closed.",
+      "ROOM_CLOSED": "The room has closed.",
+      "ROOM_EXPIRED": "The waiting room expired and was closed.",
+      "USER_ALREADY_IN_ROOM": "You are already in another room.",
+      "TABLE_UNAVAILABLE": "This tablebase is currently unavailable.",
+      "ROUTE_GENERATION_FAILED": "Route generation failed. The reserved Tokens were refunded.",
+      "ROUTE_TOO_SHORT": "No sufficiently long route could be generated. The reserved Tokens were refunded.",
+      "NOT_ENOUGH_PLAYERS": "At least two players are required.",
+      "PLAYERS_NOT_READY": "All players must be ready before starting.",
+      "SPECTATORS_DISABLED": "Spectating is disabled for this room.",
+      "PLAYER_SLOTS_FULL": "All player seats are occupied.",
+      "KICKED_FROM_ROOM": "The host removed you from this room.",
+      "PROGRESS_CONFLICT": "Local and server progress differed and were resynchronized."
+    },
+    "auth": {
+      "title": "Sign in to battle",
+      "body": "Creating, joining, and spectating Battle rooms requires an account."
+    },
+    "hall": {
+      "kicker": "Battle Hall",
+      "publicRooms": "Public Rooms",
+      "emptyTitle": "No rooms are open",
+      "emptyBody": "Join with a room code or create a new room.",
+      "joinByCode": "Enter Room Code",
+      "joinByCodeHint": "Room codes contain six letters and digits.",
+      "roomCode": "6-digit code",
+      "createRoom": "Create Room",
+      "createHint": "The room opens after its route has been generated."
+    },
+    "room": {
+      "host": "Host",
+      "tablebase": "Tablebase",
+      "players": "Players",
+      "status": "Status",
+      "unknownHost": "Unknown"
+    },
+    "form": {
+      "pattern": "Pattern",
+      "target": "Target",
+      "initialBoard": "Initial Board",
+      "randomBoard": "Leave blank for a random default board",
+      "maxPlayers": "Player Limit",
+      "stepTimeout": "Move Time",
+      "maxSteps": "Step Limit",
+      "unlimited": "Unlimited",
+      "publicRoom": "Public Room",
+      "publicRoomHint": "List this room in the Battle Hall",
+      "allowSpectators": "Allow Spectators",
+      "allowSpectatorsHint": "Allow link joins after the match starts",
+      "chatRoles": "Who Can Chat",
+      "chatRolesHint": "Choose which member roles may chat before and during the match",
+      "chatRolesNone": "Chat disabled",
+      "routeCost": "Route Cost",
+      "balance": "Balance"
+    },
+    "actions": {
+      "join": "Join",
+      "spectate": "Watch",
+      "create": "Create & Generate",
+      "copyInvite": "Copy Invite",
+      "kick": "Remove",
+      "ready": "Ready",
+      "cancelReady": "Cancel Ready",
+      "start": "Start",
+      "leave": "Leave",
+      "closeRoom": "Close Room",
+      "increase": "Increase value",
+      "decrease": "Decrease value"
+    },
+    "roles": {
+      "player": "Player",
+      "spectator": "Watch",
+      "host": "Host"
+    },
+    "status": {
+      "preparing": "Generating",
+      "preparingInitialBoard": "Generating",
+      "waiting": "Waiting",
+      "running": "Playing",
+      "closed": "Closed",
+      "expired": "Expired",
+      "ready": "Ready",
+      "not_ready": "Not Ready",
+      "online": "Online",
+      "offline": "Offline"
+    },
+    "lobby": {
+      "kicker": "Room",
+      "players": "Battle Seats",
+      "openSeat": "Waiting",
+      "settings": "Match Settings",
+      "settingsLocked": "Locked before start",
+      "spectators": "Spectators",
+      "noSpectators": "No spectators",
+      "inviteText": "{tablebase} Goodness Battle room: {url}"
+    },
+    "match": {
+      "kicker": "Live Battle",
+      "stepTime": "Move Time",
+      "goodness": "Goodness",
+      "progress": "Progress",
+      "status": "Status",
+      "correcting": "Move Correction",
+      "yourMove": "Your Move",
+      "standardMove": "Optimal Move",
+      "goodnessDrop": "Goodness lost this step: {value}",
+      "inputHint": "Use arrow keys, WASD, or swipe to submit a move",
+      "live": "Live Data",
+      "opponents": "Player Progress"
+    },
+    "playerStatus": {
+      "playing": "Playing",
+      "completed": "Finished",
+      "timed_out": "Timed Out",
+      "disconnected": "Offline",
+      "disqualified": "Finished"
+    },
+    "result": {
+      "kicker": "Round Result",
+      "title": "Battle Complete",
+      "draw": "Draw",
+      "steps": "steps",
+      "backToRoom": "Return to Room"
+    },
+    "chat": {
+      "kicker": "ROOM CHAT",
+      "title": "Room Chat",
+      "messageLimit": "Latest {count}",
+      "messagesLabel": "Room chat messages",
+      "empty": "No messages yet.",
+      "inputLabel": "Chat message",
+      "placeholder": "Message (20 characters max)",
+      "send": "Send",
+      "retryIn": "{seconds}s",
+      "newMessages": "New messages",
+      "unknownUser": "Unknown user",
+      "errors": {
+        "CHAT_RATE_LIMITED": "Too many messages. Try again in {seconds}s.",
+        "CHAT_EMPTY": "Enter a message first.",
+        "CHAT_TOO_LONG": "Messages cannot exceed 20 characters.",
+        "CHAT_TOO_LARGE": "This message is too large.",
+        "CHAT_INVALID_CONTENT": "This message contains unsupported characters.",
+        "CHAT_NOT_IN_ROOM": "You are not currently in this room.",
+        "CHAT_NOT_ALLOWED": "Chat is not available in this room.",
+        "CHAT_ROLE_NOT_ALLOWED": "The host has not allowed your current role to chat.",
+        "CHAT_DISCONNECTED": "Chat is disconnected. Wait for it to reconnect.",
+        "CHAT_REJECTED": "The message could not be sent. Try again."
+      }
+    }
   },
   "leaderboards": {
     "kicker": "Community records",
@@ -793,6 +953,11 @@
     "hexPlaceholder": "Hex Code (e.g., 0123456789abcdef)"
   },
   "common": {
+    "loading": "Loading",
+    "refresh": "Refresh",
+    "copied": "Copied",
+    "yes": "Yes",
+    "no": "No",
     "updating": "Updating",
     "apply": "Apply",
     "copy": "Copy",

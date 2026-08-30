@@ -610,6 +610,17 @@ def finalize_reservation(
     refund_bonus = reservation.reserved_bonus_units - actual_bonus
     refund_paid = reservation.reserved_paid_units - actual_paid
     with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        claimed = db.execute(
+            """
+            INSERT OR IGNORE INTO token_reservation_settlements
+            (reservation_ledger_id, settlement_type, created_at)
+            VALUES (?, 'finalize', ?)
+            """,
+            (reservation.ledger_id, iso()),
+        )
+        if claimed.rowcount == 0:
+            return _public_balance(_ensure_token_account(db, reservation.user_id))
         before = _ensure_token_account(db, reservation.user_id)
         if refund_bonus or refund_paid:
             db.execute(
@@ -623,7 +634,7 @@ def finalize_reservation(
                 (refund_bonus, refund_paid, iso(), reservation.user_id),
             )
         after = _ensure_token_account(db, reservation.user_id)
-        _insert_ledger(
+        settlement_ledger_id = _insert_ledger(
             db,
             user_id=reservation.user_id,
             session_id=reservation.session_id,
@@ -643,6 +654,10 @@ def finalize_reservation(
                 **(metadata or {}),
             },
         )
+        db.execute(
+            "UPDATE token_reservation_settlements SET settlement_ledger_id = ? WHERE reservation_ledger_id = ?",
+            (settlement_ledger_id, reservation.ledger_id),
+        )
         balance = _public_balance(after)
     return balance
 
@@ -656,6 +671,17 @@ def cancel_reservation(
     if reservation is None:
         return None
     with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        claimed = db.execute(
+            """
+            INSERT OR IGNORE INTO token_reservation_settlements
+            (reservation_ledger_id, settlement_type, created_at)
+            VALUES (?, 'cancel', ?)
+            """,
+            (reservation.ledger_id, iso()),
+        )
+        if claimed.rowcount == 0:
+            return _public_balance(_ensure_token_account(db, reservation.user_id))
         before = _ensure_token_account(db, reservation.user_id)
         db.execute(
             """
@@ -673,7 +699,7 @@ def cancel_reservation(
             ),
         )
         after = _ensure_token_account(db, reservation.user_id)
-        _insert_ledger(
+        settlement_ledger_id = _insert_ledger(
             db,
             user_id=reservation.user_id,
             session_id=reservation.session_id,
@@ -693,6 +719,10 @@ def cancel_reservation(
                 "reason": str(reason or "cancelled")[:120],
                 **(metadata or {}),
             },
+        )
+        db.execute(
+            "UPDATE token_reservation_settlements SET settlement_ledger_id = ? WHERE reservation_ledger_id = ?",
+            (settlement_ledger_id, reservation.ledger_id),
         )
         balance = _public_balance(after)
     return balance

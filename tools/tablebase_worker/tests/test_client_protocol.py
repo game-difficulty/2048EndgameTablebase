@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from types import SimpleNamespace
 import unittest
@@ -7,6 +8,7 @@ from unittest.mock import AsyncMock
 
 from tools.tablebase_worker.client import WorkerClient
 from tools.tablebase_worker.protocol import Request
+from tools.tablebase_worker.reader_pool import BattleRouteResult
 
 
 class FakeWebSocket:
@@ -29,6 +31,16 @@ class FakeReaderPool:
 
     async def random_state(self, table_id):
         return 0x1234
+
+    async def generate_battle_route(self, table_id, **kwargs):
+        return BattleRouteResult(
+            route_blob=b"\x00" * 34,
+            step_count=1,
+            certainty_step=0,
+            termination_reason="target_reached",
+            initial_board=0x1234,
+            available_layers=256,
+        )
 
 
 class ClientProtocolTests(unittest.IsolatedAsyncioTestCase):
@@ -102,6 +114,30 @@ class ClientProtocolTests(unittest.IsolatedAsyncioTestCase):
                 "board": "0000000000001234",
             },
         )
+
+    async def test_battle_route_result_is_flat(self):
+        websocket = FakeWebSocket()
+        await self.client()._execute_request(
+            websocket,
+            Request(
+                message_type="GENERATE_BATTLE_ROUTE",
+                request_id="battle-1",
+                full_pattern="free11_512",
+                pattern="free11",
+                target="512",
+                min_steps=1,
+                spawn_rate=0.1,
+                seed_hex="1" * 32,
+            ),
+        )
+        response = websocket.messages[0]
+        self.assertEqual(response["type"], "BATTLE_ROUTE_RESULT")
+        self.assertEqual(
+            response["route_blob_base64"], base64.b64encode(b"\x00" * 34).decode()
+        )
+        self.assertEqual(response["step_count"], 1)
+        self.assertEqual(response["initial_board"], "0000000000001234")
+        self.assertEqual(response["available_layers"], 256)
 
     async def test_established_connection_failure_returns_connection_duration(self):
         client = WorkerClient(

@@ -1,4 +1,5 @@
 const STORAGE_KEY = '2048tables:device-session-token';
+export const DEVICE_SESSION_STORAGE_KEY = STORAGE_KEY;
 const FALLBACK_COOKIE_NAME = 'tb_device_session_fallback';
 
 function storage(kind) {

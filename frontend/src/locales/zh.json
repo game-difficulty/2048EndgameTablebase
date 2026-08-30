@@ -5,6 +5,7 @@
     "trainer": "训练",
     "tester": "测试",
     "minigames": "小游戏",
+    "battle": "吻合度对战",
     "leaderboards": "排行榜",
     "replay": "回放",
     "notebook": "错题本",
@@ -604,6 +605,7 @@
         "lookupHit": "查到成功率",
         "lookupMiss": "未查到",
         "analysis": "分析 / 文件",
+        "battleRoom": "创建对战房间",
         "replay": "载入 .rpl 回放（不受定式倍率影响）"
       },
       "thresholds": {
@@ -622,6 +624,7 @@
         "title": "计费说明",
         "balanceOrder": "消费时先使用赠送 token，再使用充值 token。",
         "analysisCharge": "分析按所选文件数计费，无论是否生成报告。",
+        "battleCharge": "创建吻合度对战房间时按所选定式倍率收取路线生成费用；路线生成失败会退回预扣额度。",
         "replayCharge": "回放在载入授权后计费，文件解析失败不退还。",
         "offline": "定式离线或请求在执行前被服务器拒绝时不扣费；已预扣额度会退回。"
       }
@@ -700,6 +703,8 @@
     "play": "开始游戏",
     "practice": "训练与定式",
     "minigames": "小游戏",
+    "battle": "对战",
+    "leaderboards": "排行榜",
     "test": "测试",
     "settings": "设置",
     "help": "攻略教程",
@@ -711,12 +716,167 @@
       "practice": "查看定式推演，学习残局最优解",
       "test": "训练走法判断，使用回放、错题本和分析工具",
       "minigames": "体验带有独特方块、规则与挑战玩法的 2048 变体",
+      "battle": "多人使用同一条定式路线，比较走法吻合度",
+      "leaderboards": "查看社区高分、Token 消耗与赞助榜单",
       "settings": "定式计算与外观设置",
       "help": "学习 2048 技巧、定式思路和进阶打法"
     },
     "githubNote": "欢迎在 GitHub 上点个 Star 支持本项目",
     "sponsorNotePrefix": "本项目由",
     "sponsorNoteSuffix": "赞助"
+  },
+  "battle": {
+    "title": "吻合度对战",
+    "errors": {
+      "ROOM_NOT_FOUND": "房间不存在或已经关闭。",
+      "ROOM_CLOSED": "房间已关闭。",
+      "ROOM_EXPIRED": "房间等待超时，已自动关闭。",
+      "USER_ALREADY_IN_ROOM": "你已经在另一个房间中。",
+      "TABLE_UNAVAILABLE": "该定式当前不可用。",
+      "ROUTE_GENERATION_FAILED": "定式路线生成失败，预扣 Token 已退回。",
+      "ROUTE_TOO_SHORT": "未能生成足够长的定式路线，预扣 Token 已退回。",
+      "NOT_ENOUGH_PLAYERS": "至少需要两名玩家。",
+      "PLAYERS_NOT_READY": "所有玩家准备后才能开始。",
+      "SPECTATORS_DISABLED": "该房间不允许观战。",
+      "PLAYER_SLOTS_FULL": "玩家席位已满。",
+      "KICKED_FROM_ROOM": "你已被房主移出该房间。",
+      "PROGRESS_CONFLICT": "本地进度与服务器不一致，已重新同步。"
+    },
+    "auth": {
+      "title": "登录后进入对战",
+      "body": "创建房间、加入对局和观战均需要登录。"
+    },
+    "hall": {
+      "kicker": "对战大厅",
+      "publicRooms": "公开房间",
+      "emptyTitle": "暂无可加入的房间",
+      "emptyBody": "可以使用房间码加入，或创建一间新房。",
+      "joinByCode": "输入房间码",
+      "joinByCodeHint": "房间码由 6 位字母和数字组成。",
+      "roomCode": "6 位房间码",
+      "createRoom": "创建房间",
+      "createHint": "路线生成成功后，房间才会进入等待状态。"
+    },
+    "room": {
+      "host": "房主",
+      "tablebase": "定式",
+      "players": "玩家",
+      "status": "状态",
+      "unknownHost": "未知用户"
+    },
+    "form": {
+      "pattern": "定式 Pattern",
+      "target": "目标数字",
+      "initialBoard": "初始盘面",
+      "randomBoard": "留空则使用随机默认局面",
+      "maxPlayers": "玩家上限",
+      "stepTimeout": "单步时限",
+      "maxSteps": "最大步数",
+      "unlimited": "不限制",
+      "publicRoom": "公开房间",
+      "publicRoomHint": "显示在对战大厅的房间列表中",
+      "allowSpectators": "允许观战",
+      "allowSpectatorsHint": "对局开始后仍允许通过链接加入",
+      "chatRoles": "可发言身份",
+      "chatRolesHint": "选择可以在房间和对局中发言的成员身份",
+      "chatRolesNone": "全部禁言",
+      "routeCost": "本局路线费用",
+      "balance": "当前余额"
+    },
+    "actions": {
+      "join": "加入",
+      "spectate": "观战",
+      "create": "创建并生成路线",
+      "copyInvite": "复制邀请链接",
+      "kick": "移出房间",
+      "ready": "准备",
+      "cancelReady": "取消准备",
+      "start": "开始对战",
+      "leave": "离开房间",
+      "closeRoom": "关闭房间",
+      "increase": "增加数值",
+      "decrease": "减少数值"
+    },
+    "roles": {
+      "player": "玩家",
+      "spectator": "观战",
+      "host": "房主"
+    },
+    "status": {
+      "preparing": "生成路线中",
+      "preparingInitialBoard": "生成中",
+      "waiting": "等待中",
+      "running": "对战中",
+      "closed": "已关闭",
+      "expired": "已过期",
+      "ready": "已准备",
+      "not_ready": "未准备",
+      "online": "在线",
+      "offline": "离线"
+    },
+    "lobby": {
+      "kicker": "房间",
+      "players": "对战席位",
+      "openSeat": "等待玩家",
+      "settings": "本局设置",
+      "settingsLocked": "开始前固定",
+      "spectators": "观战者",
+      "noSpectators": "暂无观战者",
+      "inviteText": "{tablebase} 吻合度对战房间：{url}"
+    },
+    "match": {
+      "kicker": "实时对战",
+      "stepTime": "本步剩余",
+      "goodness": "吻合度",
+      "progress": "进度",
+      "status": "状态",
+      "correcting": "走法纠正",
+      "yourMove": "你的走法",
+      "standardMove": "标准走法",
+      "goodnessDrop": "本步吻合度损失 {value}",
+      "inputHint": "使用方向键、WASD 或滑屏输入走法",
+      "live": "实时数据",
+      "opponents": "玩家进度"
+    },
+    "playerStatus": {
+      "playing": "进行中",
+      "completed": "已完成",
+      "timed_out": "已超时",
+      "disconnected": "已离线",
+      "disqualified": "已结束"
+    },
+    "result": {
+      "kicker": "本局结果",
+      "title": "对战结束",
+      "draw": "本局平局",
+      "steps": "步",
+      "backToRoom": "返回原房间"
+    },
+    "chat": {
+      "kicker": "ROOM CHAT",
+      "title": "房间聊天",
+      "messageLimit": "最近 {count} 条",
+      "messagesLabel": "房间聊天消息",
+      "empty": "暂无消息。",
+      "inputLabel": "聊天内容",
+      "placeholder": "输入消息（最多 20 字符）",
+      "send": "发送",
+      "retryIn": "{seconds} 秒",
+      "newMessages": "有新消息",
+      "unknownUser": "未知用户",
+      "errors": {
+        "CHAT_RATE_LIMITED": "发言过于频繁，请在 {seconds} 秒后重试。",
+        "CHAT_EMPTY": "请输入消息内容。",
+        "CHAT_TOO_LONG": "消息不能超过 20 个字符。",
+        "CHAT_TOO_LARGE": "消息内容过大。",
+        "CHAT_INVALID_CONTENT": "消息包含不支持的字符。",
+        "CHAT_NOT_IN_ROOM": "你当前不在这个房间中。",
+        "CHAT_NOT_ALLOWED": "当前无法在此房间发言。",
+        "CHAT_ROLE_NOT_ALLOWED": "房主未允许你的当前身份发言。",
+        "CHAT_DISCONNECTED": "聊天连接已断开，请等待重新连接。",
+        "CHAT_REJECTED": "消息发送失败，请重试。"
+      }
+    }
   },
   "leaderboards": {
     "kicker": "社区记录",
@@ -793,6 +953,11 @@
     "hexPlaceholder": "十六进制代码 (例如. 0123456789abcdef)"
   },
   "common": {
+    "loading": "加载中",
+    "refresh": "刷新",
+    "copied": "已复制",
+    "yes": "是",
+    "no": "否",
     "updating": "更新中",
     "apply": "应用",
     "copy": "复制",

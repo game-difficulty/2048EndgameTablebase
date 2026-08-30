@@ -9,9 +9,19 @@ from typing import Any, Iterable
 
 
 PROTOCOL_VERSION = 1
+CAPABILITY_BATTLE_ROUTE_V1 = "battle_route_v1"
+WORKER_CAPABILITIES = (CAPABILITY_BATTLE_ROUTE_V1,)
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 BOARD_RE = re.compile(r"^[0-9a-fA-F]{16}$")
-REQUEST_TYPES = {"LOOKUP", "LOOKUP_BATCH", "RANDOM_STATE", "CANCEL"}
+SEED_RE = re.compile(r"^[0-9a-fA-F]{32}$")
+REQUEST_TYPES = {
+    "LOOKUP",
+    "LOOKUP_BATCH",
+    "RANDOM_STATE",
+    "GENERATE_BATTLE_ROUTE",
+    "CANCEL",
+}
+MAX_BATTLE_ROUTE_STEPS = 9_999
 
 
 class ProtocolError(ValueError):
@@ -31,6 +41,11 @@ class Request:
     boards: tuple[int, ...] = ()
     use_variant: bool = False
     board_is_lookup: bool = False
+    initial_board: int | None = None
+    max_steps: int | None = None
+    min_steps: int = 0
+    spawn_rate: float = 0.1
+    seed_hex: str = ""
 
 
 def encode_message(message_type: str, **fields: Any) -> str:
@@ -102,6 +117,36 @@ def _require_bool(value: Any, field: str, request_id: str) -> bool:
     return value
 
 
+def _bounded_int(
+    value: Any,
+    field: str,
+    request_id: str,
+    *,
+    minimum: int,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+        raise ProtocolError("INVALID_REQUEST", f"{field} must be an integer", request_id)
+    parsed = int(value)
+    if parsed < minimum or parsed > MAX_BATTLE_ROUTE_STEPS:
+        raise ProtocolError(
+            "INVALID_REQUEST",
+            f"{field} must be between {minimum} and {MAX_BATTLE_ROUTE_STEPS}",
+            request_id,
+        )
+    return parsed
+
+
+def _spawn_rate(value: Any, request_id: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise ProtocolError("INVALID_REQUEST", "spawn_rate must be numeric", request_id)
+    parsed = float(value)
+    if not math.isfinite(parsed) or not 0 <= parsed <= 1:
+        raise ProtocolError(
+            "INVALID_REQUEST", "spawn_rate must be between 0 and 1", request_id
+        )
+    return parsed
+
+
 def validate_request(
     message: dict[str, Any],
     *,
@@ -126,6 +171,14 @@ def validate_request(
         "LOOKUP": common | {"board", "use_variant", "board_is_lookup"},
         "LOOKUP_BATCH": common | {"boards", "use_variant", "board_is_lookup"},
         "RANDOM_STATE": common,
+        "GENERATE_BATTLE_ROUTE": common
+        | {
+            "initial_board",
+            "max_steps",
+            "min_steps",
+            "spawn_rate",
+            "seed_hex",
+        },
     }[message_type]
     if set(message) != allowed_fields:
         raise ProtocolError(
@@ -154,6 +207,54 @@ def validate_request(
             full_pattern=full_pattern,
             pattern=pattern,
             target=target,
+        )
+
+    if message_type == "GENERATE_BATTLE_ROUTE":
+        raw_initial_board = message.get("initial_board")
+        initial_board = (
+            None if raw_initial_board is None else _board(raw_initial_board, request_id)
+        )
+        raw_max_steps = message.get("max_steps")
+        max_steps = (
+            None
+            if raw_max_steps is None
+            else _bounded_int(
+                raw_max_steps,
+                "max_steps",
+                request_id,
+                minimum=1,
+            )
+        )
+        min_steps = _bounded_int(
+            message.get("min_steps"),
+            "min_steps",
+            request_id,
+            minimum=0,
+        )
+        if max_steps is not None and min_steps > max_steps:
+            raise ProtocolError(
+                "INVALID_REQUEST",
+                "min_steps cannot exceed max_steps",
+                request_id,
+            )
+        seed_hex = str(message.get("seed_hex") or "").lower()
+        if not SEED_RE.fullmatch(seed_hex):
+            raise ProtocolError(
+                "INVALID_REQUEST",
+                "seed_hex must contain exactly 32 hexadecimal digits",
+                request_id,
+            )
+        return Request(
+            message_type=message_type,
+            request_id=request_id,
+            full_pattern=full_pattern,
+            pattern=pattern,
+            target=target,
+            initial_board=initial_board,
+            max_steps=max_steps,
+            min_steps=min_steps,
+            spawn_rate=_spawn_rate(message.get("spawn_rate"), request_id),
+            seed_hex=seed_hex,
         )
 
     use_variant = _require_bool(message.get("use_variant"), "use_variant", request_id)

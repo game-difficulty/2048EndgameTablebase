@@ -1,6 +1,6 @@
 <template>
   <div class="page-root pt-6">
-    <div class="main-menu-container w-full max-w-5xl mx-auto p-6 flex flex-col items-center">
+    <div class="main-menu-container w-full max-w-7xl mx-auto p-6 flex flex-col items-center">
     <!-- Hero Header -->
     <div class="text-center mb-7 animate-fade-in">
       <h1 class="text-7xl font-black text-text-main tracking-tighter mb-2 italic drop-shadow-md">2048</h1>
@@ -10,7 +10,7 @@
     </div>
 
     <!-- Menu Grid -->
-    <div class="grid w-full grid-cols-3 auto-rows-fr gap-6 px-4">
+    <div class="grid w-full grid-cols-4 auto-rows-fr gap-5 px-4">
       <!-- Play Game Card -->
       <button @click="$emit('selectTab', 'GamerView')"
         class="menu-card menu-card-primary h-full min-h-[220px] rounded-2xl p-6 transition-all duration-300 transform hover:-translate-y-2 flex flex-col items-center text-center group border backdrop-blur-sm">
@@ -59,6 +59,21 @@
         <p class="menu-card-copy ui-body text-text-secondary opacity-70">{{ $t('menu.descriptions.test') }}</p>
       </button>
 
+      <!-- Battle -->
+      <button @click="$emit('selectTab', 'BattleView')"
+        class="menu-card menu-card-primary h-full min-h-[220px] rounded-2xl p-6 transition-all duration-300 transform hover:-translate-y-2 flex flex-col items-center text-center group border backdrop-blur-sm">
+        <div class="menu-card-icon-shell menu-card-icon-primary mb-4 group-hover:scale-110 transition-transform duration-500">
+          <svg class="menu-card-icon-svg" viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M13 19h16v26H13zM35 19h16v26H35z" fill="currentColor" opacity="0.18"/>
+            <path d="M18 26h6M18 32h6M18 38h6M40 26h6M40 32h6M40 38h6" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>
+            <path d="M28 32h8" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+            <circle cx="32" cy="32" r="3.2" fill="currentColor"/>
+          </svg>
+        </div>
+        <h3 class="text-[1.45rem] font-black text-text-main mb-2 tracking-tight">{{ $t('menu.battle') }}</h3>
+        <p class="menu-card-copy ui-body text-text-secondary opacity-70">{{ $t('menu.descriptions.battle') }}</p>
+      </button>
+
       <!-- Minigames -->
       <button @click="$emit('selectTab', 'MinigamesView')"
         class="menu-card menu-card-minigames h-full min-h-[220px] rounded-2xl p-6 transition-all duration-300 transform hover:-translate-y-2 flex flex-col items-center text-center group border backdrop-blur-sm">
@@ -73,6 +88,19 @@
         </div>
         <h3 class="text-[1.45rem] font-black text-text-main mb-2 tracking-tight">{{ $t('menu.minigames') }}</h3>
         <p class="menu-card-copy ui-body text-text-secondary opacity-70">{{ $t('menu.descriptions.minigames') }}</p>
+      </button>
+
+      <!-- Leaderboards -->
+      <button @click="$emit('selectTab', 'LeaderboardsView')"
+        class="menu-card menu-card-secondary h-full min-h-[220px] rounded-2xl p-6 transition-all duration-300 transform hover:-translate-y-2 flex flex-col items-center text-center group border backdrop-blur-sm">
+        <div class="menu-card-icon-shell menu-card-icon-secondary mb-4 group-hover:scale-110 transition-transform duration-500">
+          <svg class="menu-card-icon-svg" viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M22 13h20v10c0 8-3.8 13.5-10 16.2C25.8 36.5 22 31 22 23V13Z" fill="currentColor" opacity="0.2"/>
+            <path d="M22 18h-7v4c0 6.2 3.8 10.2 10 11M42 18h7v4c0 6.2-3.8 10.2-10 11M32 39v8M22 52h20M27 47h10" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+        </div>
+        <h3 class="text-[1.45rem] font-black text-text-main mb-2 tracking-tight">{{ $t('menu.leaderboards') }}</h3>
+        <p class="menu-card-copy ui-body text-text-secondary opacity-70">{{ $t('menu.descriptions.leaderboards') }}</p>
       </button>
 
       <!-- Settings -->
@@ -104,19 +132,6 @@
     </div>
 
     <div class="menu-bottom-row menu-bottom-row-with-tools">
-      <div class="menu-utility-actions menu-utility-actions-left">
-        <button
-          type="button"
-          class="menu-utility-btn"
-          @click="$emit('selectTab', 'LeaderboardsView')"
-        >
-          <svg class="menu-utility-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M8 4h8v3.5c0 3.2-1.5 5.4-4 6.5-2.5-1.1-4-3.3-4-6.5V4Z" fill="currentColor" opacity="0.22"/>
-            <path d="M8 6H5.5v1.5c0 2.3 1.4 3.8 3.8 4.1M16 6h2.5v1.5c0 2.3-1.4 3.8-3.8 4.1M12 14v3M8.5 20h7M10 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-          </svg>
-          {{ $t('menu.openLeaderboards') }}
-        </button>
-      </div>
       <div class="menu-footer text-center shadow-sm px-5 py-4 rounded-[1.75rem] bg-bg-card backdrop-blur-md border border-border-main">
         <p class="text-text-secondary font-black ui-control uppercase tracking-widest flex items-center gap-2 justify-center">
         {{ $t('menu.githubNote') }}

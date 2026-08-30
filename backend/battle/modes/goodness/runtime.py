@@ -1,0 +1,954 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import secrets
+import sqlite3
+import sys
+import uuid
+from collections import defaultdict
+from datetime import timedelta
+from typing import Any
+
+import numpy as np
+
+from Config import category_info
+from engine_core.BoardMover import s_move_board as classic_move_board
+from engine_core.VBoardMover import decode_board, encode_board, s_move_board as variant_move_board
+
+from backend.auth.db import auth_db
+from backend.quota.config import operation_cost_units, table_multiplier_units
+from backend.quota.service import (
+    TokenReservation,
+    cancel_reservation,
+    finalize_reservation,
+    get_token_balance,
+    reserve_operation_tokens,
+)
+from backend.tablebase_catalog import resolve_tablebase
+
+from ... import repository
+from .route_codec import DIRECTION_CODES, decode_changes, decode_route, route_sha256
+from .route_generator import BattleRouteGenerationError, generate_battle_route
+from .scoring import score_recorded_choice
+from ...core.contracts import BattleModeError
+from ...core.errors import BattleServiceError
+from ...core.lifecycle import (
+    assert_member as _assert_member,
+    broadcast_room,
+    current_room,
+    iso,
+    join_room,
+    kick,
+    leave_room,
+    list_rooms,
+    parse_iso,
+    room_by_user as _room_by_user,
+    room_snapshot,
+    set_broadcast_callback,
+    set_ready,
+    set_role,
+    utcnow,
+)
+from ...core.registry import get_battle_mode, register_battle_mode
+from .mode import GoodnessBattleMode
+
+
+ROUND_LIFETIME = timedelta(minutes=60)
+WAITING_LIFETIME = timedelta(minutes=30)
+MAX_SPECTATORS = 64
+VALID_STEP_TIMEOUTS = set(range(5, 121, 5))
+
+
+_route_tasks: dict[str, asyncio.Task] = {}
+_cleanup_task: asyncio.Task | None = None
+_recovery_task: asyncio.Task | None = None
+_goodness_mode = register_battle_mode(GoodnessBattleMode(), replace=True)
+_broadcast = broadcast_room
+
+
+def _reservation_payload(reservation: TokenReservation) -> dict[str, int]:
+    return {
+        "ledger_id": reservation.ledger_id,
+        "reserved_bonus_units": reservation.reserved_bonus_units,
+        "reserved_paid_units": reservation.reserved_paid_units,
+        "reserved_units": reservation.reserved_units,
+    }
+
+
+def _restore_reservation(round_row: sqlite3.Row, room_row: sqlite3.Row) -> TokenReservation | None:
+    ledger_id = round_row["reservation_ledger_id"]
+    if ledger_id is None:
+        return None
+    multiplier = table_multiplier_units(str(room_row["full_pattern"]))
+    return TokenReservation(
+        ledger_id=int(ledger_id),
+        user_id=int(room_row["host_user_id"]),
+        session_id=None,
+        operation_key="battle_route_generation",
+        table_pattern=str(room_row["full_pattern"]),
+        table_multiplier_units=multiplier,
+        base_cost_units=operation_cost_units("battle_route_generation"),
+        reserved_units=int(round_row["reserved_bonus_units"] or 0)
+        + int(round_row["reserved_paid_units"] or 0),
+        reserved_bonus_units=int(round_row["reserved_bonus_units"] or 0),
+        reserved_paid_units=int(round_row["reserved_paid_units"] or 0),
+    )
+
+
+def _insert_round(
+    *,
+    room_id: str,
+    round_number: int,
+    seed_hex: str,
+    reservation: TokenReservation,
+    auto_start_after_generation: bool = False,
+) -> str:
+    round_id = str(uuid.uuid4())
+    now = iso()
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        if auto_start_after_generation:
+            room = repository._find_room(db, room_id)
+            previous_round = db.execute(
+                "SELECT status FROM battle_rounds WHERE room_id = ? ORDER BY round_number DESC LIMIT 1",
+                (room_id,),
+            ).fetchone()
+            players = db.execute(
+                "SELECT ready FROM battle_members WHERE room_id = ? AND status = 'active' AND role = 'player'",
+                (room_id,),
+            ).fetchall()
+            if room["status"] != "waiting" or previous_round is None or previous_round["status"] != "completed":
+                raise BattleServiceError("ROOM_NOT_READY", "The previous round is not complete.", 409)
+            if len(players) < 2:
+                raise BattleServiceError("NOT_ENOUGH_PLAYERS", "At least two players are required.", 409)
+            if any(not bool(player["ready"]) for player in players):
+                raise BattleServiceError("PLAYERS_NOT_READY", "All players must be ready.", 409)
+        db.execute(
+            """
+            INSERT INTO battle_rounds
+            (round_id, room_id, round_number, status, token_reservation_id,
+             token_cost_units, created_at, updated_at, reservation_ledger_id,
+             reserved_bonus_units, reserved_paid_units, route_seed,
+             reservation_status, auto_start_after_generation, artifact_kind)
+            VALUES (?, ?, ?, 'preparing', ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
+            """,
+            (
+                round_id,
+                room_id,
+                int(round_number),
+                str(reservation.ledger_id),
+                reservation.reserved_units,
+                now,
+                now,
+                reservation.ledger_id,
+                reservation.reserved_bonus_units,
+                reservation.reserved_paid_units,
+                seed_hex,
+                1 if auto_start_after_generation else 0,
+                _goodness_mode.artifact_kind,
+            ),
+        )
+        db.execute(
+            """
+            UPDATE battle_rooms
+            SET current_round_number = ?, status = 'preparing', generation_error = NULL,
+                revision = revision + 1, updated_at = ?
+            WHERE room_id = ?
+            """,
+            (int(round_number), now, room_id),
+        )
+    return round_id
+
+
+def _settle_round_reservation(
+    round_id: str,
+    reservation: TokenReservation | None,
+    *,
+    settlement: str,
+    reason: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    if reservation is None:
+        return
+    with auth_db() as db:
+        row = db.execute(
+            "SELECT reservation_status FROM battle_rounds WHERE round_id = ?",
+            (round_id,),
+        ).fetchone()
+    if row is None or str(row["reservation_status"] or "reserved") != "reserved":
+        return
+    if settlement == "finalized":
+        finalize_reservation(
+            reservation,
+            actual_operation_key="battle_route_generation",
+            metadata=metadata,
+        )
+    elif settlement == "cancelled":
+        cancel_reservation(
+            reservation,
+            reason=reason or "battle_route_cancelled",
+            metadata=metadata,
+        )
+    else:
+        raise ValueError("invalid battle reservation settlement")
+    with auth_db() as db:
+        db.execute(
+            "UPDATE battle_rounds SET reservation_status = ?, updated_at = ? WHERE round_id = ? AND reservation_status = 'reserved'",
+            (settlement, iso(), round_id),
+        )
+
+
+async def create_room_for_mode(
+    *,
+    user_id: int,
+    session_id: int | None,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if _room_by_user(user_id) is not None:
+        raise BattleServiceError("USER_ALREADY_IN_ROOM", "Leave the current room first.", 409)
+    try:
+        settings = _goodness_mode.validate_settings(payload)
+    except ValueError as exc:
+        code = str(exc).upper()
+        messages = {
+            "TABLE_UNAVAILABLE": "The selected tablebase is unavailable.",
+            "INVALID_BOARD": "Initial board must contain 16 hexadecimal digits.",
+            "INVALID_MAX_STEPS": "Maximum steps must be between 1 and 9999.",
+            "INVALID_STEP_TIMEOUT": "Unsupported step timeout.",
+            "INVALID_MAX_PLAYERS": "Player count must be between 2 and 8.",
+            "INVALID_CHAT_ROLES": "Unsupported chat role selection.",
+        }
+        raise BattleServiceError(code, messages.get(code, str(exc).replace("_", " ")), 409) from exc
+    full_pattern = str(settings["full_pattern"])
+
+    reservation = reserve_operation_tokens(
+        user_id=user_id,
+        session_id=session_id,
+        operation_key="battle_route_generation",
+        full_pattern=full_pattern,
+    )
+    if reservation is None:
+        raise BattleServiceError("TOKEN_CONFIGURATION_ERROR", "Battle token cost is not configured.", 500)
+    try:
+        room = repository.create_room(
+            host_user_id=user_id,
+            pattern=str(settings["pattern"]),
+            target=int(settings["target"]),
+            full_pattern=full_pattern,
+            visibility=str(settings["visibility"]),
+            allow_spectators=bool(settings["allow_spectators"]),
+            max_players=int(settings["max_players"]),
+            initial_board=settings["initial_board"],
+            max_steps=settings["max_steps"],
+            step_timeout_seconds=int(settings["step_timeout_seconds"]),
+            mode_key=_goodness_mode.key,
+            mode_version=_goodness_mode.version,
+            chat_roles=settings["chat_roles"],
+            settings=_goodness_mode.public_settings({
+                "settings": {key: value for key, value in settings.items() if key != "chat_roles"}
+            }),
+            status="preparing",
+        )
+        seed_hex = secrets.token_hex(16)
+        round_id = _insert_round(
+            room_id=str(room["room_id"]),
+            round_number=1,
+            seed_hex=seed_hex,
+            reservation=reservation,
+            auto_start_after_generation=False,
+        )
+    except Exception:
+        cancel_reservation(reservation, reason="battle_room_not_created")
+        raise
+    _schedule_route(round_id, reservation=reservation, auto_start=False)
+    snapshot = room_snapshot(str(room["room_id"]), user_id=user_id)
+    return {"room": snapshot, "token_balance": get_token_balance(user_id)}
+
+
+def _schedule_route(
+    round_id: str,
+    *,
+    reservation: TokenReservation | None = None,
+    auto_start: bool,
+) -> None:
+    previous = _route_tasks.get(round_id)
+    if previous is not None and not previous.done():
+        return
+    task = asyncio.create_task(
+        _prepare_route(round_id, reservation=reservation, auto_start=auto_start)
+    )
+    _route_tasks[round_id] = task
+    task.add_done_callback(lambda _task, key=round_id: _route_tasks.pop(key, None))
+
+
+async def _prepare_route(
+    round_id: str,
+    *,
+    reservation: TokenReservation | None,
+    auto_start: bool,
+) -> None:
+    with auth_db() as db:
+        round_row = db.execute(
+            "SELECT * FROM battle_rounds WHERE round_id = ?", (round_id,)
+        ).fetchone()
+        if round_row is None or round_row["status"] != "preparing":
+            return
+        room_row = db.execute(
+            "SELECT * FROM battle_rooms WHERE room_id = ?", (round_row["room_id"],)
+        ).fetchone()
+        if room_row is None:
+            return
+        if reservation is None:
+            reservation = _restore_reservation(round_row, room_row)
+        room = dict(room_row)
+        route_seed = str(round_row["route_seed"] or secrets.token_hex(16))
+        auto_start = bool(round_row["auto_start_after_generation"])
+    try:
+        generated = await generate_battle_route(
+            pattern=str(room["pattern"]),
+            target=int(room["target"]),
+            full_pattern=str(room["full_pattern"]),
+            initial_board=(
+                None if not room.get("initial_board") else int(str(room["initial_board"]), 16)
+            ),
+            max_steps=(None if room.get("max_steps") is None else int(room["max_steps"])),
+            seed_hex=route_seed,
+        )
+    except Exception as exc:
+        code = exc.code if isinstance(exc, BattleRouteGenerationError) else "ROUTE_GENERATION_FAILED"
+        now = iso()
+        with auth_db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            current = db.execute(
+                "SELECT status FROM battle_rounds WHERE round_id = ?", (round_id,)
+            ).fetchone()
+            if current is None or current["status"] != "preparing":
+                return
+            db.execute(
+                "UPDATE battle_rounds SET status = 'failed', error_code = ?, updated_at = ? WHERE round_id = ?",
+                (code, now, round_id),
+            )
+            db.execute(
+                """
+                UPDATE battle_rooms SET status = 'closed', generation_error = ?,
+                    closed_at = ?, updated_at = ?, revision = revision + 1
+                WHERE room_id = ?
+                """,
+                (code, now, now, room["room_id"]),
+            )
+            db.execute(
+                "UPDATE battle_members SET status = 'left', ready = 0, left_at = ?, updated_at = ? WHERE room_id = ? AND status = 'active'",
+                (now, now, room["room_id"]),
+            )
+        _settle_round_reservation(
+            round_id,
+            reservation,
+            settlement="cancelled",
+            reason="battle_route_generation_failed",
+            metadata={"room_id": room["room_id"], "round_id": round_id, "code": code},
+        )
+        await _broadcast(str(room["room_id"]))
+        return
+
+    now = iso()
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        current = db.execute(
+            "SELECT status FROM battle_rounds WHERE round_id = ?", (round_id,)
+        ).fetchone()
+        if current is None or current["status"] != "preparing":
+            return
+        db.execute(
+            """
+            INSERT OR REPLACE INTO battle_routes
+            (route_id, round_id, full_pattern, target, initial_board, step_count,
+             certainty_step, termination_reason, route_hash, route_blob, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                round_id,
+                room["full_pattern"],
+                room["target"],
+                f"{generated.initial_board:016x}",
+                generated.step_count,
+                generated.certainty_step,
+                generated.termination_reason,
+                route_sha256(generated.route_blob),
+                generated.route_blob,
+                now,
+            ),
+        )
+        db.execute(
+            """
+            UPDATE battle_rounds
+            SET status = 'ready', updated_at = ?, error_code = NULL,
+                artifact_kind = ?, artifact_hash = ?
+            WHERE round_id = ?
+            """,
+            (
+                now,
+                _goodness_mode.artifact_kind,
+                route_sha256(generated.route_blob),
+                round_id,
+            ),
+        )
+        db.execute(
+            """
+            UPDATE battle_rooms
+            SET status = 'waiting', generation_error = NULL, expires_at = ?,
+                revision = revision + 1, updated_at = ?
+            WHERE room_id = ?
+            """,
+            (iso(utcnow() + WAITING_LIFETIME), now, room["room_id"]),
+        )
+    try:
+        _settle_round_reservation(
+            round_id,
+            reservation,
+            settlement="finalized",
+            metadata={"room_id": room["room_id"], "round_id": round_id},
+        )
+    except Exception:
+        # The durable recovery loop retries settlement without discarding a valid route.
+        await _broadcast(str(room["room_id"]))
+        return
+    if auto_start:
+        try:
+            _start_ready_round(str(room["room_id"]), host_user_id=int(room["host_user_id"]))
+        except BattleServiceError:
+            pass
+    await _broadcast(str(room["room_id"]))
+
+
+def cancel_preparing_round_for_mode(room_id: str, *, reason: str) -> None:
+    reservation: TokenReservation | None = None
+    round_id = ""
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        round_row = db.execute(
+            "SELECT * FROM battle_rounds WHERE room_id = ? ORDER BY round_number DESC LIMIT 1",
+            (room_id,),
+        ).fetchone()
+        room_row = db.execute(
+            "SELECT * FROM battle_rooms WHERE room_id = ?",
+            (room_id,),
+        ).fetchone()
+        if round_row is None or room_row is None or round_row["status"] != "preparing":
+            return
+        round_id = str(round_row["round_id"])
+        reservation = _restore_reservation(round_row, room_row)
+        db.execute(
+            "UPDATE battle_rounds SET status = 'cancelled', error_code = ?, updated_at = ? WHERE round_id = ? AND status = 'preparing'",
+            (reason[:120], iso(), round_id),
+        )
+    _settle_round_reservation(
+        round_id,
+        reservation,
+        settlement="cancelled",
+        reason=reason,
+        metadata={"room_id": room_id, "round_id": round_id},
+    )
+
+
+def _start_ready_round(room_ref: str, *, host_user_id: int) -> dict[str, Any]:
+    now = utcnow()
+    now_text = iso(now)
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        room = repository._find_room(db, room_ref)
+        if int(room["host_user_id"]) != int(host_user_id):
+            raise BattleServiceError("HOST_REQUIRED", "Only the host can start.", 403)
+        if room["status"] != "waiting":
+            raise BattleServiceError("ROOM_NOT_READY", "Room is not ready to start.", 409)
+        round_row = db.execute(
+            "SELECT * FROM battle_rounds WHERE room_id = ? ORDER BY round_number DESC LIMIT 1",
+            (room["room_id"],),
+        ).fetchone()
+        if round_row is None or round_row["status"] != "ready":
+            raise BattleServiceError("ROUTE_NOT_READY", "Battle route is not ready.", 409)
+        players = db.execute(
+            "SELECT * FROM battle_members WHERE room_id = ? AND status = 'active' AND role = 'player' ORDER BY seat_index",
+            (room["room_id"],),
+        ).fetchall()
+        if len(players) < 2:
+            raise BattleServiceError("NOT_ENOUGH_PLAYERS", "At least two players are required.", 409)
+        if any(not bool(player["ready"]) for player in players):
+            raise BattleServiceError("PLAYERS_NOT_READY", "All players must be ready.", 409)
+        route = db.execute(
+            "SELECT * FROM battle_routes WHERE round_id = ?", (round_row["round_id"],)
+        ).fetchone()
+        if route is None:
+            raise BattleServiceError("ROUTE_NOT_READY", "Battle route is not ready.", 409)
+        deadline = iso(now + timedelta(seconds=int(room["step_timeout_seconds"])))
+        for player in players:
+            initial_status = (
+                "completed"
+                if route["certainty_step"] is not None and int(route["certainty_step"]) == 0
+                else "playing"
+            )
+            route_index = int(route["step_count"]) if initial_status == "completed" else 0
+            db.execute(
+                """
+                INSERT OR REPLACE INTO battle_player_results
+                (result_id, round_id, user_id, status, route_index, last_sequence,
+                 goodness_of_fit, choice_blob, finished_at, timeout_at, created_at, updated_at,
+                 board_state)
+                VALUES (
+                  (SELECT result_id FROM battle_player_results WHERE round_id = ? AND user_id = ?),
+                  ?, ?, ?, ?, 0, 1.0, X'', ?, ?, ?, ?, ?
+                )
+                """,
+                (
+                    round_row["round_id"],
+                    player["user_id"],
+                    round_row["round_id"],
+                    player["user_id"],
+                    initial_status,
+                    route_index,
+                    now_text if initial_status == "completed" else None,
+                    None if initial_status == "completed" else deadline,
+                    now_text,
+                    now_text,
+                    str(route["initial_board"]),
+                ),
+            )
+        all_completed = all(
+            route["certainty_step"] is not None and int(route["certainty_step"]) == 0
+            for _player in players
+        )
+        db.execute(
+            "UPDATE battle_rounds SET status = 'running', started_at = ?, expires_at = ?, updated_at = ? WHERE round_id = ?",
+            (now_text, iso(now + ROUND_LIFETIME), now_text, round_row["round_id"]),
+        )
+        db.execute(
+            "UPDATE battle_rooms SET status = 'running', expires_at = ?, revision = revision + 1, updated_at = ? WHERE room_id = ?",
+            (iso(now + ROUND_LIFETIME), now_text, room["room_id"]),
+        )
+        if all_completed:
+            _complete_round_if_done(
+                db,
+                room_id=str(room["room_id"]),
+                round_id=str(round_row["round_id"]),
+                now_text=now_text,
+            )
+    return repository.get_room(str(room["room_id"]))
+
+
+async def start_room_for_mode(
+    room_code: str,
+    *,
+    user_id: int,
+    session_id: int | None,
+) -> dict[str, Any]:
+    room = repository.get_room(room_code)
+    if int(room["host_user_id"]) != int(user_id):
+        raise BattleServiceError("HOST_REQUIRED", "Only the host can start.", 403)
+    current_round = room.get("round") or {}
+    if current_round.get("status") == "completed":
+        reservation = reserve_operation_tokens(
+            user_id=user_id,
+            session_id=session_id,
+            operation_key="battle_route_generation",
+            full_pattern=str(room["full_pattern"]),
+        )
+        if reservation is None:
+            raise BattleServiceError("TOKEN_CONFIGURATION_ERROR", "Battle token cost is not configured.", 500)
+        round_number = int(room.get("current_round_number") or 0) + 1
+        try:
+            round_id = _insert_round(
+                room_id=str(room["room_id"]),
+                round_number=round_number,
+                seed_hex=secrets.token_hex(16),
+                reservation=reservation,
+                auto_start_after_generation=True,
+            )
+        except Exception:
+            cancel_reservation(reservation, reason="battle_next_round_not_created")
+            raise
+        _schedule_route(round_id, reservation=reservation, auto_start=True)
+        return room_snapshot(room_code, user_id=user_id)
+    _start_ready_round(room_code, host_user_id=user_id)
+    await _broadcast(str(room["room_id"]))
+    return room_snapshot(room_code, user_id=user_id)
+
+
+def artifact_payload_for_mode(room_code: str, round_id: str, *, user_id: int) -> tuple[bytes, dict[str, Any]]:
+    room = repository.get_room(room_code)
+    _assert_member(room, user_id)
+    with auth_db() as db:
+        row = db.execute(
+            """
+            SELECT route.* FROM battle_routes AS route
+            JOIN battle_rounds AS round ON round.round_id = route.round_id
+            WHERE route.round_id = ? AND round.room_id = ?
+            """,
+            (str(round_id), room["room_id"]),
+        ).fetchone()
+    if row is None:
+        raise BattleServiceError("ROUTE_NOT_FOUND", "Battle route is not available.", 404)
+    return bytes(row["route_blob"]), dict(row)
+
+
+def _apply_route_step(board: int, step, *, use_variant: bool) -> int:
+    move_board = variant_move_board if use_variant else classic_move_board
+    decoded = decode_changes(step.changes)
+    moved, _score = move_board(np.uint64(board), MOVE_CODE_BY_DIRECTION[decoded.direction])
+    if int(moved) == int(board):
+        raise BattleServiceError("ROUTE_CORRUPT", "Stored battle route is invalid.", 500)
+    array = decode_board(np.uint64(moved)).copy()
+    row, column = divmod(decoded.spawn_index, 4)
+    if int(array[row, column]) != 0:
+        raise BattleServiceError("ROUTE_CORRUPT", "Stored battle route is invalid.", 500)
+    array[row, column] = decoded.spawn_value
+    return int(encode_board(array))
+
+
+def _board_at(route_blob: bytes, index: int, *, use_variant: bool) -> int:
+    route = decode_route(route_blob)
+    board = int(route.initial_board)
+    for step in route.steps[: int(index)]:
+        board = _apply_route_step(board, step, use_variant=use_variant)
+    return board
+
+
+MOVE_CODE_BY_DIRECTION = {"left": 1, "right": 2, "up": 3, "down": 4}
+
+
+def _record_choice_goodness(
+    room_code: str,
+    *,
+    user_id: int,
+    round_id: str,
+    sequence: int,
+    route_index: int,
+    direction: str,
+) -> dict[str, Any]:
+    direction = str(direction or "").lower()
+    if direction not in DIRECTION_CODES:
+        raise BattleServiceError("INVALID_DIRECTION", "Invalid direction.")
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        room = repository._find_room(db, room_code)
+        if room["status"] != "running":
+            raise BattleServiceError("ROUND_NOT_RUNNING", "Round is not running.", 409)
+        round_row = db.execute(
+            "SELECT * FROM battle_rounds WHERE round_id = ? AND room_id = ?",
+            (str(round_id), room["room_id"]),
+        ).fetchone()
+        result = db.execute(
+            "SELECT * FROM battle_player_results WHERE round_id = ? AND user_id = ?",
+            (str(round_id), int(user_id)),
+        ).fetchone()
+        route_row = db.execute(
+            "SELECT * FROM battle_routes WHERE round_id = ?", (str(round_id),)
+        ).fetchone()
+        if round_row is None or result is None or route_row is None:
+            raise BattleServiceError("ROUND_NOT_FOUND", "Round state is unavailable.", 404)
+        if result["status"] != "playing":
+            raise BattleServiceError("PLAYER_FINISHED", "This player has already finished.", 409)
+        expected_sequence = int(result["last_sequence"]) + 1
+        expected_index = int(result["route_index"])
+        if int(sequence) != expected_sequence or int(route_index) != expected_index:
+            raise BattleServiceError("PROGRESS_CONFLICT", "Battle progress is out of date.", 409)
+        route = decode_route(bytes(route_row["route_blob"]))
+        if expected_index >= len(route.steps):
+            raise BattleServiceError("ROUTE_COMPLETE", "Battle route is complete.", 409)
+        use_variant = str(room["pattern"]) in category_info.get("variant", [])
+        board = (
+            int(str(result["board_state"]), 16)
+            if result["board_state"]
+            else _board_at(bytes(route_row["route_blob"]), expected_index, use_variant=use_variant)
+        )
+        move_fn = variant_move_board if use_variant else classic_move_board
+        selected_board, _score = move_fn(
+            np.uint64(board), MOVE_CODE_BY_DIRECTION[direction]
+        )
+        if int(selected_board) == int(board):
+            raise BattleServiceError("ILLEGAL_DIRECTION", "Illegal directions do not advance the route.", 409)
+        step = route.steps[expected_index]
+        next_board = _apply_route_step(board, step, use_variant=use_variant)
+        score = score_recorded_choice(
+            step.rates,
+            direction,
+            current_goodness=float(result["goodness_of_fit"]),
+        )
+        next_index = expected_index + 1
+        complete = next_index >= len(route.steps) or (
+            route_row["certainty_step"] is not None
+            and next_index >= int(route_row["certainty_step"])
+        )
+        status = "completed" if complete else "playing"
+        stored_index = len(route.steps) if complete else next_index
+        timeout_at = (
+            None
+            if complete
+            else iso(utcnow() + timedelta(seconds=int(room["step_timeout_seconds"])))
+        )
+        choices = bytes(result["choice_blob"] or b"") + bytes([DIRECTION_CODES[direction]])
+        now = iso()
+        db.execute(
+            """
+            UPDATE battle_player_results
+            SET status = ?, route_index = ?, last_sequence = ?, goodness_of_fit = ?,
+                choice_blob = ?, finished_at = ?, timeout_at = ?, updated_at = ?,
+                board_state = ?, progress = ?, primary_score = ?
+            WHERE result_id = ?
+            """,
+            (
+                status,
+                stored_index,
+                expected_sequence,
+                score.goodness_of_fit,
+                choices,
+                now if complete else None,
+                timeout_at,
+                now,
+                f"{next_board:016x}",
+                stored_index,
+                score.goodness_of_fit,
+                result["result_id"],
+            ),
+        )
+        db.execute(
+            "UPDATE battle_rooms SET revision = revision + 1, updated_at = ? WHERE room_id = ?",
+            (now, room["room_id"]),
+        )
+        _complete_round_if_done(db, room_id=str(room["room_id"]), round_id=str(round_id), now_text=now)
+    return {
+        "round_id": str(round_id),
+        "sequence": expected_sequence,
+        "route_index": stored_index,
+        "goodness_of_fit": score.goodness_of_fit,
+        "step_ratio": score.step_ratio,
+        "goodness_drop": score.goodness_drop,
+        "selected_direction": direction,
+        "standard_direction": decode_changes(step.changes).direction,
+        "wrong": direction != decode_changes(step.changes).direction,
+        "complete": complete,
+    }
+
+
+def handle_action_for_mode(
+    room_code: str,
+    *,
+    user_id: int,
+    action: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if str(action or "").lower() != "move":
+        raise BattleServiceError("MODE_ACTION_UNSUPPORTED", "Unsupported Battle action.", 400)
+    return _record_choice_goodness(
+        room_code,
+        user_id=user_id,
+        round_id=str(payload.get("round_id") or ""),
+        sequence=int(payload.get("sequence")),
+        route_index=int(payload.get("route_index")),
+        direction=str(payload.get("direction") or ""),
+    )
+
+
+def _complete_round_if_done(
+    db: sqlite3.Connection,
+    *,
+    room_id: str,
+    round_id: str,
+    now_text: str,
+) -> bool:
+    remaining = db.execute(
+        "SELECT COUNT(*) AS count FROM battle_player_results WHERE round_id = ? AND status IN ('playing', 'disconnected')",
+        (round_id,),
+    ).fetchone()
+    if int(remaining["count"] or 0) > 0:
+        return False
+    db.execute(
+        "UPDATE battle_rounds SET status = 'completed', ended_at = ?, updated_at = ? WHERE round_id = ?",
+        (now_text, now_text, round_id),
+    )
+    db.execute(
+        "UPDATE battle_members SET ready = 0, updated_at = ? WHERE room_id = ? AND status = 'active'",
+        (now_text, room_id),
+    )
+    db.execute(
+        """
+        UPDATE battle_rooms SET status = 'waiting', expires_at = ?,
+            revision = revision + 1, updated_at = ? WHERE room_id = ?
+        """,
+        (iso(utcnow() + WAITING_LIFETIME), now_text, room_id),
+    )
+    return True
+
+
+def mark_timeouts() -> set[str]:
+    changed_rooms: set[str] = set()
+    cancelled_reservations: list[tuple[str, TokenReservation | None]] = []
+    now = utcnow()
+    now_text = iso(now)
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        expired = db.execute(
+            """
+            SELECT result.result_id, result.round_id, round.room_id
+            FROM battle_player_results AS result
+            JOIN battle_rounds AS round ON round.round_id = result.round_id
+            WHERE result.status = 'playing' AND result.timeout_at IS NOT NULL
+              AND result.timeout_at <= ?
+            """,
+            (now_text,),
+        ).fetchall()
+        for row in expired:
+            db.execute(
+                "UPDATE battle_player_results SET status = 'timed_out', finished_at = ?, timeout_at = NULL, updated_at = ? WHERE result_id = ?",
+                (now_text, now_text, row["result_id"]),
+            )
+            changed_rooms.add(str(row["room_id"]))
+            db.execute(
+                "UPDATE battle_rooms SET revision = revision + 1, updated_at = ? WHERE room_id = ?",
+                (now_text, row["room_id"]),
+            )
+        for room_id in tuple(changed_rooms):
+            round_id = next(str(row["round_id"]) for row in expired if str(row["room_id"]) == room_id)
+            _complete_round_if_done(db, room_id=room_id, round_id=round_id, now_text=now_text)
+
+        expired_rounds = db.execute(
+            """
+            SELECT round.round_id, round.room_id
+            FROM battle_rounds AS round
+            WHERE round.status = 'running' AND round.expires_at IS NOT NULL
+              AND round.expires_at <= ?
+            """,
+            (now_text,),
+        ).fetchall()
+        for row in expired_rounds:
+            db.execute(
+                """
+                UPDATE battle_player_results
+                SET status = 'timed_out', finished_at = ?, timeout_at = NULL, updated_at = ?
+                WHERE round_id = ? AND status IN ('playing', 'disconnected')
+                """,
+                (now_text, now_text, row["round_id"]),
+            )
+            _complete_round_if_done(
+                db,
+                room_id=str(row["room_id"]),
+                round_id=str(row["round_id"]),
+                now_text=now_text,
+            )
+            changed_rooms.add(str(row["room_id"]))
+
+        stale_rooms = db.execute(
+            "SELECT * FROM battle_rooms WHERE status IN ('preparing', 'waiting') AND expires_at <= ?",
+            (now_text,),
+        ).fetchall()
+        for row in stale_rooms:
+            room_id = str(row["room_id"])
+            if row["status"] == "preparing":
+                round_row = db.execute(
+                    "SELECT * FROM battle_rounds WHERE room_id = ? ORDER BY round_number DESC LIMIT 1",
+                    (room_id,),
+                ).fetchone()
+                if round_row is not None and round_row["status"] == "preparing":
+                    db.execute(
+                        "UPDATE battle_rounds SET status = 'cancelled', error_code = 'ROOM_EXPIRED', updated_at = ? WHERE round_id = ?",
+                        (now_text, round_row["round_id"]),
+                    )
+                    cancelled_reservations.append(
+                        (str(round_row["round_id"]), _restore_reservation(round_row, row))
+                    )
+            db.execute(
+                "UPDATE battle_rooms SET status = 'expired', closed_at = ?, updated_at = ?, revision = revision + 1 WHERE room_id = ?",
+                (now_text, now_text, room_id),
+            )
+            db.execute(
+                "UPDATE battle_members SET status = 'left', ready = 0, left_at = ?, updated_at = ? WHERE room_id = ? AND status = 'active'",
+                (now_text, now_text, room_id),
+            )
+            changed_rooms.add(room_id)
+    for round_id, reservation in cancelled_reservations:
+        _settle_round_reservation(
+            round_id,
+            reservation,
+            settlement="cancelled",
+            reason="battle_room_expired",
+        )
+    return changed_rooms
+
+
+async def _cleanup_loop() -> None:
+    while True:
+        await asyncio.sleep(1.0)
+        for room_id in await asyncio.to_thread(mark_timeouts):
+            await _broadcast(room_id)
+
+
+async def startup() -> None:
+    global _cleanup_task, _recovery_task
+    repository.init_battle_db()
+    async def recover() -> None:
+        await asyncio.sleep(15.0)
+        with auth_db() as db:
+            pending = db.execute(
+                """
+                SELECT round.*, room.*
+                FROM battle_rounds AS round
+                JOIN battle_rooms AS room ON room.room_id = round.room_id
+                WHERE round.reservation_status = 'reserved'
+                ORDER BY round.created_at
+                """
+            ).fetchall()
+        for row in pending:
+            status = str(row["status"])
+            round_id = str(row["round_id"])
+            if status == "preparing":
+                _schedule_route(
+                    round_id,
+                    reservation=None,
+                    auto_start=bool(row["auto_start_after_generation"]),
+                )
+                continue
+            reservation = _restore_reservation(row, row)
+            if status in {"ready", "running", "completed"}:
+                _settle_round_reservation(
+                    round_id,
+                    reservation,
+                    settlement="finalized",
+                    metadata={"room_id": row["room_id"], "round_id": round_id, "recovered": True},
+                )
+                if status == "ready" and bool(row["auto_start_after_generation"]):
+                    try:
+                        _start_ready_round(str(row["room_id"]), host_user_id=int(row["host_user_id"]))
+                    except BattleServiceError:
+                        pass
+            elif status in {"failed", "cancelled"}:
+                _settle_round_reservation(
+                    round_id,
+                    reservation,
+                    settlement="cancelled",
+                    reason="battle_reservation_recovery",
+                )
+
+    _recovery_task = asyncio.create_task(recover())
+    if _cleanup_task is None or _cleanup_task.done():
+        _cleanup_task = asyncio.create_task(_cleanup_loop())
+
+
+async def shutdown() -> None:
+    global _cleanup_task, _recovery_task
+    if _recovery_task is not None:
+        _recovery_task.cancel()
+        await asyncio.gather(_recovery_task, return_exceptions=True)
+        _recovery_task = None
+    if _cleanup_task is not None:
+        _cleanup_task.cancel()
+        await asyncio.gather(_cleanup_task, return_exceptions=True)
+        _cleanup_task = None
+    tasks = list(_route_tasks.values())
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _route_tasks.clear()
+
+
+_goodness_mode.bind_runtime(sys.modules[__name__])

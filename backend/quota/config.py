@@ -69,6 +69,7 @@ def token_cost_config() -> dict[str, Any]:
             "tester_lookup_miss": 0.2,
             "analysis_per_replay": 100,
             "replay_load": 3,
+            "battle_route_generation": 5,
         },
     )
 

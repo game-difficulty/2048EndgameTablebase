@@ -71,6 +71,7 @@
                   <th>{{ $t('billing.quotaGuide.costs.lookupHit') }}</th>
                   <th>{{ $t('billing.quotaGuide.costs.lookupMiss') }}</th>
                   <th>{{ $t('billing.quotaGuide.costs.analysis') }}</th>
+                  <th>{{ $t('billing.quotaGuide.costs.battleRoom') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -80,6 +81,7 @@
                   <td>{{ formatTokens(group.lookupHit) }}</td>
                   <td>{{ formatTokens(group.lookupMiss) }}</td>
                   <td>{{ formatTokens(group.analysis) }}</td>
+                  <td>{{ formatTokens(group.battleRoom) }}</td>
                 </tr>
               </tbody>
             </table>
@@ -119,6 +121,7 @@
           <h3>{{ $t('billing.quotaGuide.rules.title') }}</h3>
           <p>{{ $t('billing.quotaGuide.rules.balanceOrder') }}</p>
           <p>{{ $t('billing.quotaGuide.rules.analysisCharge') }}</p>
+          <p>{{ $t('billing.quotaGuide.rules.battleCharge') }}</p>
           <p>{{ $t('billing.quotaGuide.rules.replayCharge') }}</p>
           <p>{{ $t('billing.quotaGuide.rules.offline') }}</p>
         </section>
@@ -161,6 +164,7 @@ const costRows = computed(() => {
     lookupHit: costs.trainer_lookup_hit * group.multiplier,
     lookupMiss: costs.trainer_lookup_miss * group.multiplier,
     analysis: costs.analysis_per_replay * group.multiplier,
+    battleRoom: costs.battle_route_generation * group.multiplier,
   }));
 });
 

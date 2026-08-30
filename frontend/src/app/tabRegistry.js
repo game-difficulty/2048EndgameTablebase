@@ -4,6 +4,7 @@ export const TAB_IDS = {
   TRAINER: 'TrainerView',
   TESTER: 'TesterView',
   MINIGAMES: 'MinigamesView',
+  BATTLE: 'BattleView',
   LEADERBOARDS: 'LeaderboardsView',
   REPLAY: 'ReplayReviewView',
   SETTINGS: 'SettingsView',
@@ -19,6 +20,7 @@ export const TAB_ORDER = [
   TAB_IDS.TRAINER,
   TAB_IDS.TESTER,
   TAB_IDS.MINIGAMES,
+  TAB_IDS.BATTLE,
   TAB_IDS.LEADERBOARDS,
   TAB_IDS.REPLAY,
   TAB_IDS.SETTINGS,
@@ -50,6 +52,11 @@ export const TAB_REGISTRY = {
   [TAB_IDS.MINIGAMES]: {
     id: TAB_IDS.MINIGAMES,
     titleKey: 'tabs.minigames',
+    closable: true,
+  },
+  [TAB_IDS.BATTLE]: {
+    id: TAB_IDS.BATTLE,
+    titleKey: 'tabs.battle',
     closable: true,
   },
   [TAB_IDS.LEADERBOARDS]: {

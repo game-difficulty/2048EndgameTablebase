@@ -32,6 +32,11 @@ from backend.auth.db import init_auth_db
 from backend.auth.dependencies import client_ip, current_user_from_websocket, require_user
 from backend.auth.routes import router as auth_router
 from backend.auth.service import authenticate_session_token, record_usage
+from backend.battle.realtime import disconnect as disconnect_battle_socket
+from backend.battle.realtime import handle_battle_action
+from backend.battle.routes import router as battle_router
+from backend.battle.service import shutdown as shutdown_battle_service
+from backend.battle.service import startup as startup_battle_service
 from backend.cloud_analysis_jobs import (
     analysis_job_payload,
     cleanup_expired_jobs,
@@ -211,6 +216,7 @@ async def _minigame_validation_loop() -> None:
 async def app_lifespan(_app: FastAPI):
     SingletonConfig()
     init_auth_db()
+    await startup_battle_service()
     prepare_gamer_validation_queue()
     prepare_minigame_validation_queue()
     cleanup_expired_uploads()
@@ -226,6 +232,7 @@ async def app_lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        await shutdown_battle_service()
         leaderboard_refresh_task.cancel()
         gamer_validation_task.cancel()
         minigame_validation_task.cancel()
@@ -259,6 +266,7 @@ app.include_router(leaderboard_router)
 app.include_router(minigame_rankings_router)
 app.include_router(profile_router)
 app.include_router(gamer_ranked_router)
+app.include_router(battle_router)
 
 
 @app.middleware("http")
@@ -558,6 +566,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
                 ):
                     continue
 
+                elif await handle_battle_action(
+                    action, payload, session, websocket
+                ):
+                    continue
+
                 elif await handle_tester_action(action, payload, session, websocket):
                     continue
 
@@ -622,6 +635,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
             )
             publish_frontend_exception("WebSocket Connection Error", exc)
     finally:
+        await disconnect_battle_socket(websocket)
         if session is not None:
             save_game_state(session)
         manager.disconnect(websocket)
@@ -661,6 +675,11 @@ def _action_requires_auth(action: str | None) -> bool:
         Action.REPLAY_LOAD_LATEST,
         Action.ANALYSIS_SUBSCRIBE,
         Action.TABLEBASE_QUERY,
+        Action.BATTLE_SUBSCRIBE,
+        Action.BATTLE_ACTION,
+        Action.BATTLE_PROGRESS,
+        Action.BATTLE_HEARTBEAT,
+        Action.BATTLE_CHAT_SEND,
     }
 
 

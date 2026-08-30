@@ -47,11 +47,13 @@ class WorkerProtocolTests(unittest.TestCase):
             worker_id="home-main",
             auth_token="secret",
             tables=[{"full_pattern": "free11_512", "ready": True}],
+            capabilities=["battle_route_v1"],
         )
         message = json.loads(encoded)
         self.assertNotIn("data", message)
         self.assertEqual(message["type"], "HELLO")
         self.assertTrue(message["tables"][0]["ready"])
+        self.assertEqual(message["capabilities"], ["battle_route_v1"])
 
     def test_accepts_exact_server_hello_ack(self):
         ack = encode_message(
@@ -96,6 +98,59 @@ class WorkerProtocolTests(unittest.TestCase):
             }
         )
         self.assertEqual(parsed.message_type, "RANDOM_STATE")
+
+    def test_battle_route_schema(self):
+        parsed = self.validate(
+            {
+                "type": "GENERATE_BATTLE_ROUTE",
+                "request_id": "battle-1",
+                "full_pattern": "free11_512",
+                "pattern": "free11",
+                "target": "512",
+                "initial_board": None,
+                "max_steps": None,
+                "min_steps": 120,
+                "spawn_rate": 0.1,
+                "seed_hex": "0123456789abcdef0123456789abcdef",
+            }
+        )
+        self.assertEqual(parsed.message_type, "GENERATE_BATTLE_ROUTE")
+        self.assertIsNone(parsed.initial_board)
+        self.assertEqual(parsed.min_steps, 120)
+        self.assertEqual(parsed.seed_hex, "0123456789abcdef0123456789abcdef")
+
+    def test_battle_route_accepts_explicit_board(self):
+        message = {
+            "type": "GENERATE_BATTLE_ROUTE",
+            "request_id": "battle-2",
+            "full_pattern": "free11_512",
+            "pattern": "free11",
+            "target": "512",
+            "initial_board": "0000000000001234",
+            "max_steps": 256,
+            "min_steps": 64,
+            "spawn_rate": 0.25,
+            "seed_hex": "f" * 32,
+        }
+        parsed = self.validate(message)
+        self.assertEqual(parsed.initial_board, 0x1234)
+        self.assertEqual(parsed.max_steps, 256)
+
+    def test_battle_route_rejects_invalid_limits_and_seed(self):
+        message = {
+            "type": "GENERATE_BATTLE_ROUTE",
+            "request_id": "battle-3",
+            "full_pattern": "free11_512",
+            "pattern": "free11",
+            "target": "512",
+            "initial_board": None,
+            "max_steps": 10,
+            "min_steps": 11,
+            "spawn_rate": 0.1,
+            "seed_hex": "short",
+        }
+        with self.assertRaises(ProtocolError):
+            self.validate(message)
 
     def test_cancel_schema(self):
         parsed = self.validate({"type": "CANCEL", "request_id": "request-1"})
