@@ -23,6 +23,7 @@
           <span>{{ $t('battle.room.host') }}</span>
           <span>{{ $t('battle.room.tablebase') }}</span>
           <span>{{ $t('battle.room.players') }}</span>
+          <span>{{ $t('battle.room.moveTime') }}</span>
           <span>{{ $t('battle.room.status') }}</span>
           <span aria-hidden="true"></span>
         </div>
@@ -34,6 +35,7 @@
           </div>
           <strong class="battle-room-pattern">{{ room.full_pattern }}</strong>
           <span class="tabular-nums">{{ room.player_count }}/{{ room.max_players }}</span>
+          <span class="tabular-nums">{{ room.step_timeout_seconds }}s</span>
           <span :class="['battle-status-dot-label', `status-${room.status}`]">
             <i aria-hidden="true"></i>{{ $t(`battle.status.${room.status}`) }}
           </span>
@@ -331,7 +333,7 @@ watch(patternOptions, (options) => {
 .battle-room-table-head,
 .battle-room-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1.1fr) minmax(120px, 1fr) 82px 118px 84px;
+  grid-template-columns: minmax(130px, 1.1fr) minmax(112px, 1fr) 68px 66px 108px 80px;
   align-items: center;
   gap: 12px;
 }

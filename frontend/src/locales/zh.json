@@ -791,6 +791,7 @@
       "host": "房主",
       "tablebase": "定式",
       "players": "玩家",
+      "moveTime": "步时",
       "status": "状态",
       "unknownHost": "未知用户"
     },

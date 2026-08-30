@@ -791,6 +791,7 @@
       "host": "Host",
       "tablebase": "Tablebase",
       "players": "Players",
+      "moveTime": "Move Time",
       "status": "Status",
       "unknownHost": "Unknown"
     },
