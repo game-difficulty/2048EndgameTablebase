@@ -791,6 +791,9 @@
       "INITIAL_BOARD_UNUSABLE": "That starting board cannot continue. Choose another board.",
       "INVALID_RANKING_MIN_STEPS": "Minimum ranked steps must be an integer from 1 to half of the target tile.",
       "ROUND_STATE_CHANGED": "The room changed. Ready up again before starting.",
+      "BATTLE_REPLAY_NOT_FOUND": "No replay is available for this round yet.",
+      "BATTLE_REPLAY_INVALID": "This Battle replay cannot be opened right now.",
+      "BATTLE_REPLAY_LOAD_FAILED": "Could not load the replay. Please try again.",
       "battle_forfeit_failed": "Could not exit the Battle. Please try again."
     },
     "auth": {
@@ -909,6 +912,10 @@
       "viewResults": "View Results",
       "exitBattle": "Exit Battle",
       "exited": "Exited"
+    },
+    "replay": {
+      "save": "Save Replay",
+      "review": "Review Replay"
     },
     "playerStatus": {
       "playing": "Playing",

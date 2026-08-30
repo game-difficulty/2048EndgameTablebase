@@ -19,6 +19,7 @@ from .service import (
     kick,
     leave_room,
     list_rooms,
+    player_replay_payload,
     room_snapshot,
     route_payload,
     set_ready,
@@ -202,6 +203,35 @@ async def forfeit_battle_round(
     except Exception as exc:
         _raise_service_error(exc)
         raise
+
+
+@router.get("/rooms/{room_code}/rounds/{round_id}/replay")
+async def download_own_battle_replay(
+    room_code: str,
+    round_id: str,
+    user: dict = Depends(require_user),
+) -> Response:
+    try:
+        blob, metadata = player_replay_payload(
+            room_code,
+            round_id,
+            user_id=int(user["id"]),
+        )
+    except Exception as exc:
+        _raise_service_error(exc)
+        raise
+    return Response(
+        blob,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": f'attachment; filename="{metadata["filename"]}"',
+            "X-Replay-Pattern": str(metadata["full_pattern"]),
+            "X-Replay-Variant": "1" if metadata["use_variant"] else "0",
+            "X-Replay-Source": "Battle",
+            "X-Replay-Moves": str(metadata["move_count"]),
+        },
+    )
 
 
 def _artifact_response(blob: bytes, metadata: dict[str, Any]) -> Response:

@@ -26,6 +26,18 @@
           {{ $t(roundCompleted ? 'battle.match.viewResults' : 'battle.match.liveRanking') }}
         </button>
         <button
+          v-if="replayAvailable"
+          type="button"
+          :disabled="replayBusy"
+          @click="$emit('save-replay')"
+        >{{ $t('battle.replay.save') }}</button>
+        <button
+          v-if="replayAvailable"
+          type="button"
+          :disabled="replayBusy"
+          @click="$emit('open-replay')"
+        >{{ $t('battle.replay.review') }}</button>
+        <button
           v-if="roundCompleted"
           type="button"
           class="primary"
@@ -143,6 +155,8 @@ const props = defineProps({
   wsStatus: { type: String, default: 'disconnected' },
   dis32k: { type: Boolean, default: false },
   isVariant: { type: Boolean, default: false },
+  replayAvailable: { type: Boolean, default: false },
+  replayBusy: { type: Boolean, default: false },
 });
 
 defineEmits([
@@ -153,6 +167,8 @@ defineEmits([
   'forfeit',
   'leave-room',
   'return-lobby',
+  'save-replay',
+  'open-replay',
 ]);
 const now = ref(Date.now());
 let timer = null;

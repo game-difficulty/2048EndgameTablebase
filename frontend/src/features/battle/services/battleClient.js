@@ -1,6 +1,7 @@
 import { emitAuthRequired, emitTokenBalanceUpdated, emitTokenRequired } from '../../../services/auth/authEvents.js';
 import { authHeaders, clearDeviceSession } from '../../../services/auth/sessionTokenStore.js';
 import { getBackendUrl } from '../../../services/runtime/backendUrl.js';
+import { handleProtectedResponseError } from '../../../services/files/browserFiles.js';
 
 async function request(path, { method = 'GET', body, signal } = {}) {
   const response = await fetch(getBackendUrl(path), {
@@ -31,6 +32,19 @@ async function request(path, { method = 'GET', body, signal } = {}) {
     emitTokenBalanceUpdated(payload.token_balance);
   }
   return payload;
+}
+
+function filenameFromHeaders(headers, fallback) {
+  const disposition = headers.get('content-disposition') || '';
+  const utf8 = /filename\*=UTF-8''([^;]+)/iu.exec(disposition);
+  if (utf8?.[1]) {
+    try {
+      return decodeURIComponent(utf8[1]);
+    } catch (_error) {
+      return utf8[1];
+    }
+  }
+  return /filename="?([^";]+)"?/iu.exec(disposition)?.[1] || fallback;
 }
 
 export const battleClient = {
@@ -92,6 +106,27 @@ export const battleClient = {
       stepCount: Number(response.headers.get('x-battle-route-steps') || 0),
       certaintyStep: Number(response.headers.get('x-battle-certainty-step') || -1),
       terminationReason: response.headers.get('x-battle-termination') || '',
+    };
+  },
+  replay: async (roomCode, roundId, { signal } = {}) => {
+    const response = await fetch(getBackendUrl(
+      `/api/battle/rooms/${encodeURIComponent(roomCode)}/rounds/${encodeURIComponent(roundId)}/replay`,
+    ), {
+      method: 'GET',
+      credentials: 'include',
+      headers: authHeaders({ Accept: 'application/octet-stream' }),
+      signal,
+    });
+    if (!response.ok) {
+      await handleProtectedResponseError(response, 'Battle replay download failed');
+    }
+    return {
+      buffer: await response.arrayBuffer(),
+      filename: filenameFromHeaders(response.headers, 'battle_replay.rpl'),
+      pattern: response.headers.get('x-replay-pattern') || '',
+      source: response.headers.get('x-replay-source') || 'Battle',
+      useVariant: response.headers.get('x-replay-variant') === '1',
+      moveCount: Number(response.headers.get('x-replay-moves') || 0),
     };
   },
 };

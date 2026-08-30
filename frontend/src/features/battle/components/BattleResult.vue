@@ -19,6 +19,18 @@
         </article>
       </div>
       <div class="battle-result-actions">
+        <button
+          v-if="replayAvailable"
+          type="button"
+          :disabled="replayBusy"
+          @click="$emit('save-replay')"
+        >{{ $t('battle.replay.save') }}</button>
+        <button
+          v-if="replayAvailable"
+          type="button"
+          :disabled="replayBusy"
+          @click="$emit('open-replay')"
+        >{{ $t('battle.replay.review') }}</button>
         <button type="button" @click="$emit('close')">{{ $t(mode === 'live' ? 'battle.result.closeLive' : 'battle.result.stayOnMatch') }}</button>
         <button v-if="mode === 'final'" type="button" class="primary" @click="$emit('return-room')">{{ $t('battle.result.backToRoom') }}</button>
       </div>
@@ -35,8 +47,10 @@ import { isBattleResultDraw, rankBattleResults } from '../core/battleResultRanki
 const props = defineProps({
   room: { type: Object, required: true },
   mode: { type: String, default: 'final' },
+  replayAvailable: { type: Boolean, default: false },
+  replayBusy: { type: Boolean, default: false },
 });
-defineEmits(['close', 'return-room']);
+defineEmits(['close', 'return-room', 'save-replay', 'open-replay']);
 const { t, te } = useI18n();
 const rankedResults = computed(() => rankBattleResults(
   props.room.results || [],
@@ -76,8 +90,8 @@ const statusLabel = (player) => {
 .battle-result-avatar span { display: grid; place-items: center; border: 1px solid var(--border-main); color: var(--accent); font-size: 10px; font-weight: 900; }
 .battle-result-row > span:nth-of-type(2) { color: var(--text-secondary); font-size: var(--font-ui-xs); }
 .battle-result-row b { color: var(--accent); font: 900 15px/1 var(--font-mono, monospace); text-align: right; }
-.battle-result-actions { display: flex; justify-content: flex-end; gap: 9px; }
+.battle-result-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
 .battle-result-actions button { min-height: 43px; border: 1px solid var(--border-main); border-radius: 7px; background: var(--bg-card); color: var(--text-main); font-weight: 900; }
-.battle-result-actions button { min-width: 180px; }
+.battle-result-actions button { min-width: 140px; }
 .battle-result-actions button.primary { border-color: var(--btn-bg); background: var(--btn-bg); color: white; }
 </style>

@@ -791,6 +791,9 @@
       "INITIAL_BOARD_UNUSABLE": "该初始局面无法继续，请更换后重试。",
       "INVALID_RANKING_MIN_STEPS": "最低排名步数必须是 1 到目标数字一半之间的整数。",
       "ROUND_STATE_CHANGED": "房间状态已经变化，请重新准备后开始。",
+      "BATTLE_REPLAY_NOT_FOUND": "这局还没有可保存的回放。",
+      "BATTLE_REPLAY_INVALID": "这局回放暂时无法打开。",
+      "BATTLE_REPLAY_LOAD_FAILED": "回放获取失败，请稍后重试。",
       "battle_forfeit_failed": "退出对战失败，请重试。"
     },
     "auth": {
@@ -909,6 +912,10 @@
       "viewResults": "查看结算",
       "exitBattle": "退出对战",
       "exited": "已退出"
+    },
+    "replay": {
+      "save": "保存回放",
+      "review": "打开复盘"
     },
     "playerStatus": {
       "playing": "进行中",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import struct
 import sys
 import tempfile
 import types
@@ -308,6 +309,27 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(host_choice["complete"])
         self.assertTrue(player_choice["complete"])
         self.assertLess(player_choice["goodness_of_fit"], host_choice["goodness_of_fit"])
+
+        host_replay, replay_metadata = service.player_replay_payload(
+            room["room_code"], round_id, user_id=self.host_id
+        )
+        self.assertEqual(len(host_replay), 50)
+        board, change, left, right, up, down = struct.unpack(
+            "<QB4I", host_replay[:25]
+        )
+        self.assertEqual(board, 0x11)
+        self.assertEqual((change >> 5) & 0b11, 0)
+        self.assertEqual(
+            (left, right, up, down),
+            (4_000_000_000, 3_000_000_000, 1_000_000_000, 2_000_000_000),
+        )
+        self.assertEqual(replay_metadata["full_pattern"], "L3_128")
+        self.assertEqual(replay_metadata["move_count"], 1)
+        with self.assertRaises(service.BattleServiceError) as replay_error:
+            service.player_replay_payload(
+                room["room_code"], round_id, user_id=self.player_id + 10_000
+            )
+        self.assertEqual(replay_error.exception.code, "BATTLE_REPLAY_NOT_FOUND")
 
         finished = repository.get_room(room["room_code"])
         self.assertEqual(finished["status"], "waiting")

@@ -197,8 +197,14 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     "SELECT state_status, timeout_at FROM battle_free_player_states WHERE round_id = ? AND user_id = ?",
                     (started["round"]["round_id"], self.host_id),
                 ).fetchone()
+                replay = db.execute(
+                    "SELECT replay_blob, replay_move_count FROM battle_player_results WHERE round_id = ? AND user_id = ?",
+                    (started["round"]["round_id"], self.host_id),
+                ).fetchone()
             self.assertEqual(awaiting["state_status"], "awaiting_ack")
             self.assertIsNone(awaiting["timeout_at"])
+            self.assertEqual(int(replay["replay_move_count"]), 1)
+            self.assertEqual(len(bytes(replay["replay_blob"])), 25)
             host_view = runtime.room_snapshot(room["room_code"], user_id=self.host_id)
             player_view = runtime.room_snapshot(room["room_code"], user_id=self.player_id)
             host_result = next(

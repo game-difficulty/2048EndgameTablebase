@@ -3,6 +3,10 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from Config import category_info
+
+from backend.auth.db import auth_db
+
 from . import repository
 from .core.contracts import BattleModeError
 from .core import chat
@@ -22,6 +26,11 @@ from .core.lifecycle import (
 from .core.registry import get_battle_mode, list_battle_modes
 from .modes.goodness import runtime as goodness_runtime
 from .modes.free_goodness import runtime as free_goodness_runtime  # noqa: F401
+from .replay_records import (
+    BattleReplayError,
+    battle_replay_filename,
+    finalize_replay,
+)
 
 
 VALID_STEP_TIMEOUTS = goodness_runtime.VALID_STEP_TIMEOUTS
@@ -90,6 +99,57 @@ def route_payload(
     payload.setdefault("artifact_kind", mode.artifact_kind)
     payload.setdefault("artifact_hash", hashlib.sha256(blob).hexdigest())
     return blob, payload
+
+
+def player_replay_payload(
+    room_code: str,
+    round_id: str,
+    *,
+    user_id: int,
+) -> tuple[bytes, dict[str, Any]]:
+    with auth_db() as db:
+        row = db.execute(
+            """
+            SELECT result.replay_blob, result.replay_move_count,
+                   result.board_state, result.goodness_of_fit,
+                   room.mode_key, room.pattern, room.full_pattern
+            FROM battle_player_results AS result
+            JOIN battle_rounds AS round ON round.round_id = result.round_id
+            JOIN battle_rooms AS room ON room.room_id = round.room_id
+            WHERE result.round_id = ? AND result.user_id = ?
+              AND (room.room_id = ? OR room.room_code = ? COLLATE NOCASE)
+            """,
+            (str(round_id), int(user_id), str(room_code), str(room_code)),
+        ).fetchone()
+    if row is None or int(row["replay_move_count"] or 0) <= 0:
+        raise BattleServiceError(
+            "BATTLE_REPLAY_NOT_FOUND",
+            "No replay is available for this Battle result.",
+            404,
+        )
+    try:
+        payload = finalize_replay(
+            bytes(row["replay_blob"] or b""),
+            terminal_board=int(str(row["board_state"] or "0"), 16),
+        )
+    except (BattleReplayError, TypeError, ValueError) as exc:
+        raise BattleServiceError(
+            "BATTLE_REPLAY_INVALID",
+            "This Battle replay is unavailable.",
+            409,
+        ) from exc
+    full_pattern = str(row["full_pattern"] or "")
+    return payload, {
+        "filename": battle_replay_filename(
+            mode_key=str(row["mode_key"] or "battle"),
+            full_pattern=full_pattern,
+            goodness_of_fit=float(row["goodness_of_fit"] or 0.0),
+        ),
+        "full_pattern": full_pattern,
+        "use_variant": str(row["pattern"] or "")
+        in category_info.get("variant", []),
+        "move_count": int(row["replay_move_count"] or 0),
+    }
 
 
 def record_choice(

@@ -177,6 +177,8 @@ def init_battle_db() -> None:
               progress INTEGER NOT NULL DEFAULT 0,
               mode_data_json TEXT NOT NULL DEFAULT '{}',
               choice_blob BLOB,
+              replay_blob BLOB NOT NULL DEFAULT X'',
+              replay_move_count INTEGER NOT NULL DEFAULT 0,
               finished_at TEXT,
               timeout_at TEXT,
               created_at TEXT NOT NULL,
@@ -187,6 +189,7 @@ def init_battle_db() -> None:
               CHECK(status IN ('playing', 'completed', 'timed_out', 'disconnected', 'disqualified')),
               CHECK(route_index >= 0),
               CHECK(last_sequence >= 0),
+              CHECK(replay_move_count >= 0),
               CHECK(goodness_of_fit >= 0.0 AND goodness_of_fit <= 1.0)
             );
 
@@ -302,6 +305,8 @@ def init_battle_db() -> None:
             "secondary_score": "REAL",
             "progress": "INTEGER NOT NULL DEFAULT 0",
             "mode_data_json": "TEXT NOT NULL DEFAULT '{}'",
+            "replay_blob": "BLOB NOT NULL DEFAULT X''",
+            "replay_move_count": "INTEGER NOT NULL DEFAULT 0",
         }.items():
             if name not in result_columns:
                 db.execute(f"ALTER TABLE battle_player_results ADD COLUMN {name} {declaration}")
@@ -457,6 +462,7 @@ def _room_payload(db: sqlite3.Connection, room: sqlite3.Row) -> dict[str, Any]:
             )
             item.pop("avatar_key", None)
             item.pop("choice_blob", None)
+            item.pop("replay_blob", None)
             item.pop("board_state", None)
             raw_mode_data = item.pop("mode_data_json", None)
             try:

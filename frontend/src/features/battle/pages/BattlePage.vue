@@ -63,6 +63,8 @@
         :current-user-id="Number(room.viewer?.user_id || authUser.id)"
         :ws-status="wsStatus"
         :dis32k="dis32k"
+        :replay-available="replayAvailable"
+        :replay-busy="replayBusy"
         v-bind="modeMatchProps"
         v-on="modeMatchListeners"
         @open-trainer="openTrainer"
@@ -70,6 +72,8 @@
         @forfeit="forfeitDialogOpen = true"
         @leave-room="leave"
         @return-lobby="returnToLobby"
+        @save-replay="saveOwnReplay"
+        @open-replay="openOwnReplay"
       />
 
       <BattleLobby
@@ -101,8 +105,12 @@
         v-if="room && showResults"
         :room="room"
         :mode="resultMode"
+        :replay-available="replayAvailable"
+        :replay-busy="replayBusy"
         @close="dismissResults"
         @return-room="returnToLobby"
+        @save-replay="saveOwnReplay"
+        @open-replay="openOwnReplay"
       />
 
       <BattleExitDialog
@@ -119,14 +127,22 @@
 import { computed, onMounted, onUnmounted, ref, toRef, unref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
+import { TAB_IDS } from '../../../app/tabRegistry.js';
 import { useAppSettingsStore } from '../../../app/useAppSettings.js';
 import { emitAuthRequired } from '../../../services/auth/authEvents.js';
+import { downloadBlob } from '../../../services/files/browserFiles.js';
+import {
+  authorizeLocalReplayLoad,
+  createReplayRequestId,
+} from '../../replay/services/replayClient.js';
+import { queueReplayTransfer } from '../../replay/services/replayTransferStore.js';
 import { clearTrainerPracticeContext } from '../../trainer/services/trainerPracticeJump.js';
 import BattleLobby from '../components/BattleLobby.vue';
 import BattleExitDialog from '../components/BattleExitDialog.vue';
 import BattleRoomChat from '../components/BattleRoomChat.vue';
 import BattleRulesDialog from '../components/BattleRulesDialog.vue';
 import { useBattleSession } from '../composables/useBattleSession.js';
+import { battleClient } from '../services/battleClient.js';
 
 const props = defineProps({
   active: { type: Boolean, default: true },
@@ -138,6 +154,7 @@ const emit = defineEmits(['navigate-tab']);
 const now = ref(Date.now());
 const rulesOpen = ref(false);
 const forfeitDialogOpen = ref(false);
+const replayBusy = ref(false);
 const { t, te } = useI18n();
 const { config: appConfig } = useAppSettingsStore();
 let clockTimer = null;
@@ -193,6 +210,13 @@ const localizedError = computed(() => {
   const key = `battle.errors.${String(error.value || '')}`;
   return te(key) ? t(key) : String(error.value || '');
 });
+const ownResult = computed(() => room.value?.results?.find(
+  (item) => Number(item.user_id) === Number(room.value?.viewer?.user_id || props.authUser?.id),
+) || null);
+const replayAvailable = computed(() => (
+  Number(ownResult.value?.replay_move_count || 0) > 0
+  && ownResult.value?.status !== 'playing'
+));
 const requestLogin = () => emitAuthRequired();
 const openTrainer = () => {
   const detail = modeSession.value?.createPracticeJump?.();
@@ -201,6 +225,47 @@ const openTrainer = () => {
 };
 const confirmForfeit = async () => {
   if (await forfeit()) forfeitDialogOpen.value = false;
+};
+const fetchOwnReplay = async () => {
+  const roomCode = String(room.value?.room_code || '');
+  const roundId = String(room.value?.round?.round_id || '');
+  if (!roomCode || !roundId || !replayAvailable.value) return null;
+  return battleClient.replay(roomCode, roundId);
+};
+const saveOwnReplay = async () => {
+  if (replayBusy.value) return;
+  replayBusy.value = true;
+  try {
+    const replay = await fetchOwnReplay();
+    if (!replay) return;
+    downloadBlob(
+      new Blob([replay.buffer], { type: 'application/octet-stream' }),
+      replay.filename,
+    );
+  } catch (replayError) {
+    error.value = replayError?.code || 'BATTLE_REPLAY_LOAD_FAILED';
+  } finally {
+    replayBusy.value = false;
+  }
+};
+const openOwnReplay = async () => {
+  if (replayBusy.value) return;
+  replayBusy.value = true;
+  try {
+    const replay = await fetchOwnReplay();
+    if (!replay) return;
+    await authorizeLocalReplayLoad({
+      requestId: createReplayRequestId(),
+      filename: replay.filename,
+      size: replay.buffer.byteLength,
+    });
+    queueReplayTransfer(replay);
+    emit('navigate-tab', TAB_IDS.REPLAY);
+  } catch (replayError) {
+    error.value = replayError?.code || 'BATTLE_REPLAY_LOAD_FAILED';
+  } finally {
+    replayBusy.value = false;
+  }
 };
 
 watch([() => props.active, () => props.authUser, loading, room], ([active, user, busy, currentRoom]) => {

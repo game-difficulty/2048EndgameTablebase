@@ -28,7 +28,13 @@ from backend.quota.service import (
 from backend.tablebase_catalog import resolve_tablebase
 
 from ... import repository
-from .route_codec import DIRECTION_CODES, decode_changes, decode_route, route_sha256
+from .route_codec import (
+    DIRECTION_CODES,
+    DIRECTION_NAMES,
+    decode_changes,
+    decode_route,
+    route_sha256,
+)
 from .route_generator import BattleRouteGenerationError, generate_battle_route
 from .scoring import score_recorded_choice
 from ...core.contracts import BattleModeError
@@ -51,6 +57,7 @@ from ...core.lifecycle import (
     utcnow,
 )
 from ...core.registry import get_battle_mode, register_battle_mode
+from ...replay_records import append_replay_step, encode_replay_step
 from .mode import GoodnessBattleMode
 
 
@@ -765,13 +772,14 @@ def _record_choice_goodness(
         if int(selected_board) == int(board):
             raise BattleServiceError("ILLEGAL_DIRECTION", "Illegal directions do not advance the route.", 409)
         step = route.steps[expected_index]
+        decoded_step = decode_changes(step.changes)
         next_board = _apply_route_step(board, step, use_variant=use_variant)
         score = score_recorded_choice(
             step.rates,
             direction,
             current_goodness=float(result["goodness_of_fit"]),
         )
-        standard_direction = decode_changes(step.changes).direction
+        standard_direction = decoded_step.direction
         wrong = direction != standard_direction
         next_index = expected_index + 1
         complete = next_index >= len(route.steps) or (
@@ -794,13 +802,28 @@ def _record_choice_goodness(
             )
         )
         choices = bytes(result["choice_blob"] or b"") + bytes([DIRECTION_CODES[direction]])
+        replay_step = encode_replay_step(
+            board=board,
+            selected_direction=direction,
+            spawn_index=decoded_step.spawn_index,
+            spawn_value=decoded_step.spawn_value,
+            rates=dict(zip(DIRECTION_NAMES, step.rates)),
+            rates_already_scaled=True,
+        )
+        replay_blob, replay_recorded = append_replay_step(
+            result["replay_blob"], replay_step
+        )
+        replay_move_count = int(result["replay_move_count"] or 0) + int(
+            replay_recorded
+        )
         now = iso()
         db.execute(
             """
             UPDATE battle_player_results
             SET status = ?, route_index = ?, last_sequence = ?, goodness_of_fit = ?,
                 choice_blob = ?, finished_at = ?, timeout_at = ?, updated_at = ?,
-                board_state = ?, progress = ?, primary_score = ?
+                board_state = ?, progress = ?, primary_score = ?,
+                replay_blob = ?, replay_move_count = ?
             WHERE result_id = ?
             """,
             (
@@ -815,6 +838,8 @@ def _record_choice_goodness(
                 f"{next_board:016x}",
                 stored_index,
                 score.goodness_of_fit,
+                replay_blob,
+                replay_move_count,
                 result["result_id"],
             ),
         )

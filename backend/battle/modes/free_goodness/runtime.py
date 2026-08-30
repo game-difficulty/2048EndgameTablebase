@@ -56,6 +56,7 @@ from ...core.lifecycle import (
     utcnow,
 )
 from ...core.registry import register_battle_mode
+from ...replay_records import append_replay_step, encode_replay_step
 from ..goodness.runtime import _ready_players_for_start
 from .mode import FreeGoodnessBattleMode
 from .rules import (
@@ -1456,6 +1457,20 @@ async def _resolve_move(
         spawn_value=spawn_value,
         goodness=decision.goodness,
     )
+    replay_blob = bytes(result_row["replay_blob"] or b"")
+    replay_move_count = int(result_row["replay_move_count"] or 0)
+    if 0 <= spawn_index <= 15 and spawn_value in (2, 4):
+        replay_step = encode_replay_step(
+            board=board,
+            selected_direction=direction,
+            spawn_index=spawn_index,
+            spawn_value=spawn_value,
+            rates=results,
+        )
+        replay_blob, replay_recorded = append_replay_step(
+            replay_blob, replay_step
+        )
+        replay_move_count += int(replay_recorded)
     round_completed = False
     try:
         with auth_db() as db:
@@ -1517,13 +1532,15 @@ async def _resolve_move(
                 UPDATE battle_player_results SET status = ?, route_index = ?, last_sequence = ?,
                     goodness_of_fit = ?, primary_score = ?, secondary_score = ?, progress = ?,
                     mode_data_json = ?, board_state = ?, choice_blob = ?, finished_at = ?,
-                    timeout_at = NULL, updated_at = ? WHERE round_id = ? AND user_id = ?
+                    replay_blob = ?, replay_move_count = ?, timeout_at = NULL,
+                    updated_at = ? WHERE round_id = ? AND user_id = ?
                 """,
                 (
                     next_status, next_step, requested_sequence,
                     cumulative_goodness, cumulative_goodness, next_step, next_step,
                     json.dumps(mode_data, separators=(",", ":")), f"{next_board:016x}",
-                    operation_blob, iso() if finish_reason else None, iso(),
+                    operation_blob, iso() if finish_reason else None,
+                    replay_blob, replay_move_count, iso(),
                     round_data["round_id"], int(user_id),
                 ),
             )

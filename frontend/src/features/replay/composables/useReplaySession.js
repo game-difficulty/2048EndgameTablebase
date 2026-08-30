@@ -28,6 +28,7 @@ import {
   saveReplayPosition,
   saveReplaySource,
 } from '../services/replaySessionStore';
+import { REPLAY_TRANSFER_EVENT } from '../services/replayTransferStore.js';
 
 export function useReplaySession(activeRef, emit) {
   const { config: appConfig, categories: appCategories, saveSetting } = useAppSettingsStore();
@@ -348,6 +349,23 @@ export function useReplaySession(activeRef, emit) {
     }
   };
 
+  const handleReplayTransfer = async (event) => {
+    const replay = event?.detail;
+    if (!(replay?.buffer instanceof ArrayBuffer) || replay.buffer.byteLength < 1) return;
+    stopDemo();
+    loadError.value = '';
+    loadingReplay.value = true;
+    replayStatus.value = t('replay.status.loading');
+    try {
+      await installReplay(replay.buffer, replay, { step: 0, persist: false });
+    } catch (error) {
+      console.error('Failed to open transferred replay', error);
+      loadError.value = formatLoadError(error);
+    } finally {
+      loadingReplay.value = false;
+    }
+  };
+
   const formatLoadError = (error) => {
     if (error?.status === 401 || error?.status === 402 || error?.code === 'INSUFFICIENT_TOKENS') {
       return '';
@@ -549,6 +567,7 @@ export function useReplaySession(activeRef, emit) {
 
   onMounted(async () => {
     window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener(REPLAY_TRANSFER_EVENT, handleReplayTransfer);
     document.addEventListener('click', closeMenuOnClick);
     const loadLatest = activeRef?.value && consumePendingLatestReplayLoad();
     await restorePreviousReplay();
@@ -556,6 +575,7 @@ export function useReplaySession(activeRef, emit) {
   });
   onUnmounted(() => {
     window.removeEventListener('keydown', handleKeyDown, true);
+    window.removeEventListener(REPLAY_TRANSFER_EVENT, handleReplayTransfer);
     document.removeEventListener('click', closeMenuOnClick);
     stopDemo();
     if (positionTimer) window.clearTimeout(positionTimer);
