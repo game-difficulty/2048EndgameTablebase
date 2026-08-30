@@ -4,29 +4,26 @@ const isLiveRanked = (result) => (
 );
 const goodness = (result) => Number(result?.goodness_of_fit ?? 0);
 
-const freeFinishClass = (result, mode) => {
-  if (mode === 'live' && ['playing', 'completed', 'disconnected'].includes(String(result?.status || ''))) {
-    return result?.mode_data?.finish_class === 'natural' ? 1 : 2;
-  }
-  if (String(result?.status || '') !== 'completed') return 0;
-  return result?.mode_data?.finish_class === 'natural' ? 1 : 2;
-};
+const freeRankingEligible = (result, mode) => (
+  Boolean(result?.mode_data?.ranking_eligible)
+  && (
+    mode === 'live'
+      ? ['playing', 'completed', 'disconnected'].includes(String(result?.status || ''))
+      : String(result?.status || '') === 'completed'
+  )
+);
 
 function rankFreeGoodness(results, { mode }) {
   const ordered = (results || []).map((result, originalIndex) => ({
     ...result,
     originalIndex,
-    rankClass: freeFinishClass(result, mode),
-  })).sort((left, right) => (
-    right.rankClass - left.rankClass
-    || (
-      left.rankClass === 1
-        ? Number(right.progress || right.route_index || 0) - Number(left.progress || left.route_index || 0)
-        : 0
-    )
-    || goodness(right) - goodness(left)
-    || left.originalIndex - right.originalIndex
-  ));
+    rankClass: Number(freeRankingEligible(result, mode)),
+  })).sort((left, right) => {
+    const eligibilityOrder = right.rankClass - left.rankClass;
+    if (eligibilityOrder) return eligibilityOrder;
+    if (!left.rankClass) return left.originalIndex - right.originalIndex;
+    return goodness(right) - goodness(left) || left.originalIndex - right.originalIndex;
+  });
   let rankedCount = 0;
   let previousKey = '';
   let previousRank = null;
@@ -34,9 +31,7 @@ function rankFreeGoodness(results, { mode }) {
     let rank = null;
     if (result.rankClass > 0) {
       rankedCount += 1;
-      const key = result.rankClass === 1
-        ? `${result.rankClass}:${Number(result.progress || result.route_index || 0)}:${goodness(result)}`
-        : `${result.rankClass}:${goodness(result)}`;
+      const key = `${result.rankClass}:${goodness(result)}`;
       rank = key === previousKey ? previousRank : rankedCount;
       previousKey = key;
       previousRank = rank;

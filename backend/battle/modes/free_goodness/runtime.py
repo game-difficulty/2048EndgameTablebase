@@ -64,6 +64,7 @@ from .rules import (
     SPAWN_DRAWDOWN_LIMIT,
     SPAWN_RISK_LIMIT,
     SpawnRiskState,
+    accumulate_goodness,
     best_direction,
     clamp_probability,
     decide_move,
@@ -79,7 +80,6 @@ ACK_GRACE_SECONDS = 5
 CORRECTION_WINDOW_SECONDS = 15
 MAX_RANDOM_BOARD_ATTEMPTS = 16
 MAX_PREPARED_STATES = 2048
-GOODNESS_SCALE = 1_000_000_000
 MOVE_CODES = {"left": 1, "right": 2, "up": 3, "down": 4}
 MOVE_CODE_BITS = {"left": 0, "right": 1, "up": 2, "down": 3}
 
@@ -280,6 +280,7 @@ def _insert_round(
     seed_hex: str,
     initial_board: int,
     score_step_limit: int,
+    ranking_min_steps: int,
     reservation: TokenReservation,
 ) -> str:
     round_id = str(uuid.uuid4())
@@ -287,6 +288,7 @@ def _insert_round(
     mode_state = {
         "initial_board": f"{int(initial_board):016x}",
         "score_step_limit": int(score_step_limit),
+        "ranking_min_steps": int(ranking_min_steps),
         "lookup_hit_steps": 0,
         "lookup_miss_steps": 0,
         "rules_version": _free_mode.version,
@@ -439,6 +441,7 @@ async def create_room_for_mode(
             seed_hex=secrets.token_hex(32),
             initial_board=initial_board,
             score_step_limit=int(settings["score_step_limit"]),
+            ranking_min_steps=int(settings["ranking_min_steps"]),
             reservation=reservation,
         )
     except Exception:
@@ -766,6 +769,7 @@ async def _initialize_players(
     seed_hex = str(round_row["route_seed"])
     mode_state = json.loads(round_row["mode_state_json"] or "{}")
     step_limit = int(mode_state.get("score_step_limit") or int(room["target"]) // 2)
+    ranking_min_steps = int(mode_state.get("ranking_min_steps") or step_limit)
     initial_finish = _finish_reason(
         board=board,
         target=int(room["target"]),
@@ -798,13 +802,19 @@ async def _initialize_players(
     now_text = iso(now)
     result_status = "completed" if initial_finish else "playing"
     state_status = "finished" if initial_finish else "input"
+    initial_ranking_eligible = _ranking_eligible(
+        result_status=result_status,
+        finish_reason=initial_finish,
+        progress=0,
+        ranking_min_steps=ranking_min_steps,
+    )
     result_mode_data = json.dumps(
         {
             "finish_reason": initial_finish,
-            "finish_class": _public_finish_class(initial_finish),
-        }
-        if initial_finish
-        else {},
+            "finish_class": _public_finish_class(initial_ranking_eligible),
+            "ranking_min_steps": ranking_min_steps,
+            "ranking_eligible": initial_ranking_eligible,
+        },
         separators=(",", ":"),
     )
     with auth_db() as db:
@@ -839,10 +849,10 @@ async def _initialize_players(
                 """
                 INSERT OR REPLACE INTO battle_free_player_states
                 (round_id, user_id, board_state, step_index, sequence,
-                 goodness_sum_units, goodness_count, spawn_log_index,
-                 spawn_log_floor, rng_step, state_status, finish_reason, timeout_at,
+                 spawn_log_index, spawn_log_floor, rng_step,
+                 state_status, finish_reason, timeout_at,
                  current_results_json, operation_blob, created_at, updated_at)
-                VALUES (?, ?, ?, 0, 0, 0, 0, 0.0, 0.0, 0, ?, ?, ?, ?, X'', ?, ?)
+                VALUES (?, ?, ?, 0, 0, 0.0, 0.0, 0, ?, ?, ?, ?, X'', ?, ?)
                 """,
                 (
                     round_row["round_id"], player["user_id"], f"{board:016x}",
@@ -898,6 +908,11 @@ async def _new_round(
             seed_hex=secrets.token_hex(32),
             initial_board=initial,
             score_step_limit=int(settings.get("score_step_limit") or int(room["target"]) // 2),
+            ranking_min_steps=int(
+                settings.get("ranking_min_steps")
+                or settings.get("score_step_limit")
+                or int(room["target"]) // 2
+            ),
             reservation=reservation,
         )
     except Exception:
@@ -945,12 +960,22 @@ async def start_room_for_mode(
     return room_snapshot(room_code, user_id=user_id)
 
 
-def _public_finish_class(reason: str | None) -> str:
-    if reason in {"step_limit", "target_reached", "certainty"}:
-        return "completed"
-    if reason in {"no_legal_move", "zero_success", "risk_boundary"}:
-        return "natural"
-    return "unranked"
+def _ranking_eligible(
+    *,
+    result_status: str,
+    finish_reason: str | None,
+    progress: int,
+    ranking_min_steps: int,
+) -> bool:
+    if result_status not in {"playing", "completed", "disconnected"}:
+        return False
+    if finish_reason in {"timed_out", "forfeit", "room_closed"}:
+        return False
+    return int(progress) >= max(1, int(ranking_min_steps))
+
+
+def _public_finish_class(ranking_eligible: bool) -> str:
+    return "completed" if ranking_eligible else "unranked"
 
 
 def sanitize_snapshot_for_mode(
@@ -960,9 +985,11 @@ def sanitize_snapshot_for_mode(
     round_id = str(round_payload.get("round_id") or "")
     mode_state = dict(round_payload.get("mode_state") or {})
     step_limit = int(mode_state.get("score_step_limit") or payload.get("max_steps") or 0)
+    ranking_min_steps = int(mode_state.get("ranking_min_steps") or step_limit)
     payload["route"] = {
         "initial_board": str(mode_state.get("initial_board") or payload.get("initial_board") or ""),
         "step_count": step_limit,
+        "ranking_min_steps": ranking_min_steps,
         "termination_reason": "fixed_steps",
     }
     if not round_id:
@@ -986,12 +1013,21 @@ def sanitize_snapshot_for_mode(
         if not state:
             continue
         mode_data = dict(result.get("mode_data") or {})
+        progress = int(state["step_index"])
+        ranking_eligible = _ranking_eligible(
+            result_status=str(result.get("status") or ""),
+            finish_reason=state.get("finish_reason"),
+            progress=progress,
+            ranking_min_steps=ranking_min_steps,
+        )
         mode_data.update(
             {
                 "finish_reason": state.get("finish_reason"),
-                "finish_class": _public_finish_class(state.get("finish_reason")),
+                "finish_class": _public_finish_class(ranking_eligible),
                 "state_status": state.get("state_status"),
                 "score_step_limit": step_limit,
+                "ranking_min_steps": ranking_min_steps,
+                "ranking_eligible": ranking_eligible,
             }
         )
         if reveal_all or int(result["user_id"]) == int(viewer_user_id):
@@ -999,8 +1035,8 @@ def sanitize_snapshot_for_mode(
         else:
             mode_data.pop("last_step", None)
         result["mode_data"] = mode_data
-        result["route_index"] = int(state["step_index"])
-        result["progress"] = int(state["step_index"])
+        result["route_index"] = progress
+        result["progress"] = progress
         result["timeout_at"] = state.get("timeout_at")
     return payload
 
@@ -1018,6 +1054,7 @@ def artifact_payload_for_mode(
             "rules_version": _free_mode.version,
             "initial_board": mode_state.get("initial_board"),
             "score_step_limit": mode_state.get("score_step_limit"),
+            "ranking_min_steps": mode_state.get("ranking_min_steps"),
         },
         separators=(",", ":"),
     ).encode("utf-8")
@@ -1042,6 +1079,18 @@ def _append_operation(
     spawn = 0xFF if spawn_index < 0 else ((spawn_index & 0xF) | ((1 if spawn_value == 4 else 0) << 4))
     goodness_units = max(0, min(65535, round(float(goodness) * 65535)))
     return bytes(blob or b"") + struct.pack("<BBH", flags, spawn, goodness_units)
+
+
+def _legacy_goodness_product(blob: bytes) -> float:
+    """Recover Tester-style scoring for rounds created before rules version 2."""
+
+    payload = bytes(blob or b"")
+    if len(payload) % 4:
+        raise BattleServiceError("ROUND_STATE_CHANGED", "Battle scoring data is invalid.", 409)
+    goodness = 1.0
+    for _flags, _spawn, goodness_units in struct.iter_unpack("<BBH", payload):
+        goodness = accumulate_goodness(goodness, goodness_units / 65535.0)
+    return goodness
 
 
 def _settle_round(round_id: str, *, cancelled: bool = False, reason: str = "") -> None:
@@ -1349,6 +1398,7 @@ async def _resolve_move(
     next_step = int(state_data["step_index"]) + 1
     mode_state = json.loads(round_data["mode_state_json"] or "{}")
     step_limit = int(mode_state.get("score_step_limit") or int(room["target"]) // 2)
+    ranking_min_steps = int(mode_state.get("ranking_min_steps") or step_limit)
     finish_reason = "risk_boundary" if risk_boundary else _finish_reason(
         board=next_board,
         target=int(room["target"]),
@@ -1389,10 +1439,12 @@ async def _resolve_move(
             )
             raise
     corrected = executed_direction != direction or bool(correction_reason and correction_reason != "risk_boundary")
-    goodness_units = max(0, min(GOODNESS_SCALE, round(decision.goodness * GOODNESS_SCALE)))
-    goodness_sum = int(state_data["goodness_sum_units"]) + goodness_units
-    goodness_count = int(state_data["goodness_count"]) + 1
-    average = goodness_sum / (GOODNESS_SCALE * goodness_count)
+    current_goodness = (
+        float(result_row["goodness_of_fit"])
+        if int(room.get("mode_version") or 1) >= 2
+        else _legacy_goodness_product(bytes(state_data["operation_blob"] or b""))
+    )
+    cumulative_goodness = accumulate_goodness(current_goodness, decision.goodness)
     ack_grace = ACK_GRACE_SECONDS + (CORRECTION_WINDOW_SECONDS if corrected else 0)
     ack_deadline = iso(utcnow() + timedelta(seconds=ack_grace))
     operation_blob = _append_operation(
@@ -1418,8 +1470,8 @@ async def _resolve_move(
             db.execute(
                 """
                 UPDATE battle_free_player_states SET board_state = ?, step_index = ?, sequence = ?,
-                    goodness_sum_units = ?, goodness_count = ?, spawn_log_index = ?,
-                    spawn_log_floor = ?, rng_step = ?, state_status = ?, finish_reason = ?,
+                    spawn_log_index = ?, spawn_log_floor = ?, rng_step = ?,
+                    state_status = ?, finish_reason = ?,
                     resolution_request_id = NULL, resolution_started_at = NULL,
                     ack_deadline_at = ?, timeout_at = NULL,
                     current_results_json = ?, operation_blob = ?, updated_at = ?
@@ -1427,16 +1479,25 @@ async def _resolve_move(
                 """,
                 (
                     f"{next_board:016x}", next_step, requested_sequence,
-                    goodness_sum, goodness_count, next_risk.log_index, next_risk.log_floor,
+                    next_risk.log_index, next_risk.log_floor,
                     next_step, next_state_status, finish_reason,
                     None if finish_reason else ack_deadline,
                     json.dumps(next_results, separators=(",", ":")), operation_blob, iso(),
                     round_data["round_id"], int(user_id),
                 ),
             )
+            next_status = "completed" if finish_reason else "playing"
+            ranking_eligible = _ranking_eligible(
+                result_status=next_status,
+                finish_reason=finish_reason,
+                progress=next_step,
+                ranking_min_steps=ranking_min_steps,
+            )
             mode_data = {
                 "finish_reason": finish_reason,
-                "finish_class": _public_finish_class(finish_reason),
+                "finish_class": _public_finish_class(ranking_eligible),
+                "ranking_min_steps": ranking_min_steps,
+                "ranking_eligible": ranking_eligible,
                 "corrected_steps": None,
                 "last_step": {
                     "sequence": requested_sequence,
@@ -1459,8 +1520,8 @@ async def _resolve_move(
                     timeout_at = NULL, updated_at = ? WHERE round_id = ? AND user_id = ?
                 """,
                 (
-                    "completed" if finish_reason else "playing", next_step, requested_sequence,
-                    average, average, next_step, next_step,
+                    next_status, next_step, requested_sequence,
+                    cumulative_goodness, cumulative_goodness, next_step, next_step,
                     json.dumps(mode_data, separators=(",", ":")), f"{next_board:016x}",
                     operation_blob, iso() if finish_reason else None, iso(),
                     round_data["round_id"], int(user_id),
@@ -1508,7 +1569,7 @@ async def _resolve_move(
         "corrected": corrected,
         "correction_reason": correction_reason,
         "step_goodness": decision.goodness,
-        "goodness_of_fit": average,
+        "goodness_of_fit": cumulative_goodness,
         "spawn_index": spawn_index,
         "spawn_value": spawn_value,
         "complete": bool(finish_reason),
@@ -1744,9 +1805,62 @@ async def _cleanup_loop() -> None:
             await broadcast_room(room_id)
 
 
+def _migrate_legacy_goodness_scores() -> None:
+    with auth_db() as db:
+        rooms = db.execute(
+            "SELECT room_id, settings_json FROM battle_rooms "
+            "WHERE mode_key = 'free_goodness' AND mode_version < ?",
+            (_free_mode.version,),
+        ).fetchall()
+        for room in rooms:
+            states = db.execute(
+                """
+                SELECT state.round_id, state.user_id, state.operation_blob
+                FROM battle_free_player_states AS state
+                JOIN battle_rounds AS round ON round.round_id = state.round_id
+                WHERE round.room_id = ?
+                """,
+                (room["room_id"],),
+            ).fetchall()
+            try:
+                scores = [
+                    (
+                        _legacy_goodness_product(bytes(state["operation_blob"] or b"")),
+                        state["round_id"],
+                        state["user_id"],
+                    )
+                    for state in states
+                ]
+            except BattleServiceError:
+                continue
+            for score, round_id, user_id in scores:
+                db.execute(
+                    """
+                    UPDATE battle_player_results
+                    SET goodness_of_fit = ?, primary_score = ?
+                    WHERE round_id = ? AND user_id = ?
+                    """,
+                    (score, score, round_id, user_id),
+                )
+            try:
+                settings = json.loads(room["settings_json"] or "{}")
+            except (TypeError, ValueError):
+                settings = {}
+            settings["rules_version"] = _free_mode.version
+            db.execute(
+                "UPDATE battle_rooms SET mode_version = ?, settings_json = ? WHERE room_id = ?",
+                (
+                    _free_mode.version,
+                    json.dumps(settings, separators=(",", ":"), sort_keys=True),
+                    room["room_id"],
+                ),
+            )
+
+
 async def startup() -> None:
     global _cleanup_task
     repository.init_battle_db()
+    _migrate_legacy_goodness_scores()
     with auth_db() as db:
         pending = db.execute(
             """

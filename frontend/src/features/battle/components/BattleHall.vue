@@ -25,9 +25,18 @@
           <span>{{ $t('battle.room.players') }}</span>
           <span>{{ $t('battle.room.moveTime') }}</span>
           <span>{{ $t('battle.room.status') }}</span>
-          <span aria-hidden="true"></span>
         </div>
-        <article v-for="room in visibleRooms" :key="room.room_code" class="battle-room-row">
+        <article
+          v-for="room in visibleRooms"
+          :key="room.room_code"
+          class="battle-room-row"
+          role="button"
+          tabindex="0"
+          :aria-label="`${room.status === 'running' ? $t('battle.actions.spectate') : $t('battle.actions.join')} ${room.full_pattern}`"
+          @click="joinRoom(room)"
+          @keydown.enter="joinRoom(room)"
+          @keydown.space.prevent="joinRoom(room)"
+        >
           <div class="battle-room-host">
             <img v-if="room.host?.avatar_url" :src="room.host.avatar_url" alt="" />
             <span v-else class="battle-avatar-fallback">{{ initials(room.host?.display_name) }}</span>
@@ -39,9 +48,6 @@
           <span :class="['battle-status-dot-label', `status-${room.status}`]">
             <i aria-hidden="true"></i>{{ $t(`battle.status.${room.status}`) }}
           </span>
-          <button type="button" class="battle-command-btn" @click="$emit('join', room.room_code, room.player_count >= room.max_players ? 'spectator' : 'auto')">
-            {{ room.status === 'running' ? $t('battle.actions.spectate') : $t('battle.actions.join') }}
-          </button>
         </article>
       </div>
     </section>
@@ -128,6 +134,17 @@
             <span>{{ $t('battle.form.maxSteps') }}</span>
             <BattleNumberInput v-model="form.max_steps" :min="1" :max="9999" :step="1" :placeholder="$t('battle.form.unlimited')" allow-empty />
           </label>
+          <label v-if="showRankingMinSteps" class="battle-field battle-field-wide">
+            <span>{{ $t('battle.form.rankingMinSteps') }}</span>
+            <BattleNumberInput
+              v-model="form.ranking_min_steps"
+              :min="1"
+              :max="rankingStepCap"
+              :step="1"
+              :placeholder="$t('battle.form.rankingMinStepsDefault', { count: rankingStepCap })"
+              allow-empty
+            />
+          </label>
         </div>
 
         <div class="battle-toggle-list">
@@ -181,6 +198,7 @@ const props = defineProps({
   routeBaseCost: { type: Number, default: 5 },
   calculateCost: { type: Function, default: null },
   showMaxSteps: { type: Boolean, default: true },
+  showRankingMinSteps: { type: Boolean, default: false },
   costLabelKey: { type: String, default: 'battle.form.routeCost' },
   refundPolicyKey: { type: String, default: 'battle.form.refundPolicy' },
   createLabelKey: { type: String, default: 'battle.actions.create' },
@@ -197,6 +215,7 @@ const form = reactive({
   initial_board: '',
   max_players: 2,
   max_steps: '',
+  ranking_min_steps: '',
   step_timeout_seconds: 90,
   is_public: true,
   allow_spectators: true,
@@ -232,10 +251,24 @@ const validInitialBoard = computed(() => !form.initial_board || /^[0-9a-fA-F]{16
 const validMaxPlayers = computed(() => Number.isInteger(Number(form.max_players)) && Number(form.max_players) >= 2 && Number(form.max_players) <= 8);
 const validStepTimeout = computed(() => Number.isInteger(Number(form.step_timeout_seconds)) && Number(form.step_timeout_seconds) >= 5 && Number(form.step_timeout_seconds) <= 600 && Number(form.step_timeout_seconds) % 5 === 0);
 const validMaxSteps = computed(() => form.max_steps === '' || (Number.isInteger(Number(form.max_steps)) && Number(form.max_steps) >= 1 && Number(form.max_steps) <= 9999));
-const canCreate = computed(() => Boolean(validMode.value && form.pattern && form.target && validInitialBoard.value && validMaxPlayers.value && validStepTimeout.value && validMaxSteps.value));
+const rankingStepCap = computed(() => Math.max(1, Math.floor((Number(form.target) || 0) / 2)));
+const validRankingMinSteps = computed(() => (
+  !props.showRankingMinSteps
+  || form.ranking_min_steps === ''
+  || (
+    Number.isInteger(Number(form.ranking_min_steps))
+    && Number(form.ranking_min_steps) >= 1
+    && Number(form.ranking_min_steps) <= rankingStepCap.value
+  )
+));
+const canCreate = computed(() => Boolean(validMode.value && form.pattern && form.target && validInitialBoard.value && validMaxPlayers.value && validStepTimeout.value && validMaxSteps.value && validRankingMinSteps.value));
 
 const initials = (name) => String(name || '?').trim().slice(0, 2).toUpperCase();
 const changeMode = (modeKey) => emit('mode-change', modeKey);
+const joinRoom = (room) => {
+  if (!room || props.loading) return;
+  emit('join', room.room_code, room.player_count >= room.max_players ? 'spectator' : 'auto');
+};
 const normalizeCode = () => {
   joinCode.value = joinCode.value.toUpperCase().replace(/[^2-9A-HJ-NP-Z]/g, '').slice(0, 6);
 };
@@ -254,6 +287,7 @@ const submitCreate = () => {
     full_pattern: selectedFullPattern.value,
     initial_board: form.initial_board || null,
     max_steps: form.max_steps === '' ? null : Number(form.max_steps),
+    ranking_min_steps: form.ranking_min_steps === '' ? null : Number(form.ranking_min_steps),
   };
   emit('create', props.buildCreatePayload
     ? props.buildCreatePayload({ ...defaultPayload })
@@ -264,6 +298,11 @@ watch(patternOptions, (options) => {
   if (!options.includes(form.pattern)) form.pattern = options[0] || '';
   syncTarget();
 }, { immediate: true });
+watch(rankingStepCap, (cap) => {
+  if (form.ranking_min_steps !== '' && Number(form.ranking_min_steps) > cap) {
+    form.ranking_min_steps = cap;
+  }
+});
 </script>
 
 <style scoped>
@@ -342,7 +381,7 @@ watch(patternOptions, (options) => {
 .battle-room-table-head,
 .battle-room-row {
   display: grid;
-  grid-template-columns: minmax(130px, 1.1fr) minmax(112px, 1fr) 68px 66px 108px 80px;
+  grid-template-columns: minmax(130px, 1.1fr) minmax(112px, 1fr) 68px 66px 108px;
   align-items: center;
   gap: 12px;
 }
@@ -361,9 +400,17 @@ watch(patternOptions, (options) => {
   border-top: 1px solid color-mix(in srgb, var(--border-main) 76%, transparent);
   color: var(--text-main);
   font-size: var(--font-ui-sm);
+  cursor: pointer;
+  outline: none;
 }
 
-.battle-room-row:hover { background: color-mix(in srgb, var(--bg-main) 65%, transparent); }
+.battle-room-row:hover,
+.battle-room-row:focus-visible {
+  background: color-mix(in srgb, var(--bg-main) 65%, transparent);
+}
+.battle-room-row:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 72%, transparent);
+}
 .battle-room-host { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .battle-room-host img, .battle-avatar-fallback { width: 34px; height: 34px; border-radius: 50%; flex: 0 0 auto; }
 .battle-room-host img { object-fit: cover; }

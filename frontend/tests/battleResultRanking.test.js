@@ -53,41 +53,41 @@ test('live ranking includes active and completed players but leaves forfeits unr
   assert.deepEqual(ranked.map((result) => result.rank), [1, 2, 3, null, null]);
 });
 
-test('open-route ranking puts fixed-step finishes before natural finishes and failures', () => {
+test('open-route ranking includes only players who reached the room threshold', () => {
   const ranked = rankBattleResults([
     {
       user_id: 1, status: 'completed', goodness_of_fit: 0.99, progress: 31,
-      mode_data: { finish_class: 'natural' },
+      mode_data: { ranking_eligible: false },
     },
     {
       user_id: 2, status: 'completed', goodness_of_fit: 0.80, progress: 64,
-      mode_data: { finish_class: 'completed' },
+      mode_data: { ranking_eligible: true },
     },
     {
       user_id: 3, status: 'completed', goodness_of_fit: 0.70, progress: 40,
-      mode_data: { finish_class: 'natural' },
+      mode_data: { ranking_eligible: true },
     },
     {
       user_id: 4, status: 'timed_out', goodness_of_fit: 1, progress: 63,
-      mode_data: { finish_class: 'unranked' },
+      mode_data: { ranking_eligible: false },
     },
   ], { battleMode: 'free_goodness' });
 
   assert.deepEqual(ranked.map((result) => result.user_id), [2, 3, 1, 4]);
-  assert.deepEqual(ranked.map((result) => result.rank), [1, 2, 3, null]);
+  assert.deepEqual(ranked.map((result) => result.rank), [1, 2, null, null]);
 });
 
-test('open-route natural finishes compare progress before average goodness', () => {
+test('open-route eligible results compare cumulative goodness only', () => {
   const ranked = rankBattleResults([
     {
       user_id: 1, status: 'completed', goodness_of_fit: 0.95, progress: 20,
-      mode_data: { finish_class: 'natural' },
+      mode_data: { ranking_eligible: true },
     },
     {
       user_id: 2, status: 'completed', goodness_of_fit: 0.70, progress: 21,
-      mode_data: { finish_class: 'natural' },
+      mode_data: { ranking_eligible: true },
     },
   ], { battleMode: 'free_goodness' });
 
-  assert.deepEqual(ranked.map((result) => result.user_id), [2, 1]);
+  assert.deepEqual(ranked.map((result) => result.user_id), [1, 2]);
 });

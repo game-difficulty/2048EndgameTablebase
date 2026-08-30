@@ -752,12 +752,12 @@
       "freeGoodness": {
         "name": "Open-Route Goodness Battle",
         "shortName": "Open Route",
-        "summary": "Start together, then develop your own board. The best average goodness wins.",
+        "summary": "Start together, then develop your own board. The best cumulative goodness wins.",
         "rules": {
           "independentBoards": "Everyone shares the starting board and random seed, but each board follows its player's choices.",
           "riskCorrection": "A move with a sharply higher death risk is corrected to the best move after its goodness is scored.",
           "safeSpawns": "Spawns are deterministic and rerolled only when their death-risk increase exceeds the safety limits.",
-          "scoring": "Reach the fixed step target and rank by average goodness. Natural early finishes rank below completed players.",
+          "scoring": "Goodness accumulates across moves. A result ranks only after reaching the host's minimum step count.",
           "timeout": "The timer pauses while the server resolves a move. Query and network time do not use your move time.",
           "billing": "The host covers one normal lookup fee for each scored player step. Unused reserved Tokens are returned after the round."
         }
@@ -789,6 +789,7 @@
       "POSITION_FINISHED": "This position has already finished.",
       "TABLEBASE_BUSY": "The tablebase is busy. Please retry this move shortly.",
       "INITIAL_BOARD_UNUSABLE": "That starting board cannot continue. Choose another board.",
+      "INVALID_RANKING_MIN_STEPS": "Minimum ranked steps must be an integer from 1 to half of the target tile.",
       "ROUND_STATE_CHANGED": "The room changed. Ready up again before starting.",
       "battle_forfeit_failed": "Could not exit the Battle. Please try again."
     },
@@ -827,6 +828,8 @@
       "stepTimeout": "Move Time",
       "maxSteps": "Step Limit",
       "scoredSteps": "Scored Steps",
+      "rankingMinSteps": "Minimum Ranked Steps",
+      "rankingMinStepsDefault": "Default: {count} steps",
       "unlimited": "Unlimited",
       "publicRoom": "Public Room",
       "publicRoomHint": "Other players can find it in the hall",

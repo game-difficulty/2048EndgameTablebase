@@ -752,12 +752,12 @@
       "freeGoodness": {
         "name": "自由路线吻合度对战",
         "shortName": "自由路线",
-        "summary": "从相同盘面出发，各自选择路线，以平均吻合度决胜。",
+        "summary": "从相同盘面出发，各自选择路线，以累计吻合度决胜。",
         "rules": {
           "independentBoards": "所有玩家共享初始盘面和随机种子，之后盘面会随各自选择独立发展。",
           "riskCorrection": "走法令死亡风险明显上升时，本步照常计分，随后按最优方向继续。",
           "safeSpawns": "出数由种子确定；只有死亡风险增幅超过安全线时才会重新抽取。",
-          "scoring": "完成固定步数后按平均吻合度排名；自然提前结束排在完成人员之后。",
+          "scoring": "每步吻合度会逐步累积；达到房主设定的最低步数后，成绩才会进入排名。",
           "timeout": "服务器处理走法时暂停计时，查表和网络等待不会占用你的操作时间。",
           "billing": "每个计分步骤按正常查表价格从房主预留额度结算，未使用额度在本轮结束后全部退回。"
         }
@@ -789,6 +789,7 @@
       "POSITION_FINISHED": "当前局面已经结束。",
       "TABLEBASE_BUSY": "当前查询较多，请稍候再走这一步。",
       "INITIAL_BOARD_UNUSABLE": "该初始局面无法继续，请更换后重试。",
+      "INVALID_RANKING_MIN_STEPS": "最低排名步数必须是 1 到目标数字一半之间的整数。",
       "ROUND_STATE_CHANGED": "房间状态已经变化，请重新准备后开始。",
       "battle_forfeit_failed": "退出对战失败，请重试。"
     },
@@ -827,6 +828,8 @@
       "stepTimeout": "单步时限",
       "maxSteps": "最大步数",
       "scoredSteps": "计分步数",
+      "rankingMinSteps": "最低排名步数",
+      "rankingMinStepsDefault": "默认 {count} 步",
       "unlimited": "不限制",
       "publicRoom": "公开房间",
       "publicRoomHint": "其他玩家可在大厅中找到它",

@@ -12,7 +12,7 @@ from .rules import MOVE_RISK_LIMIT, SPAWN_DRAWDOWN_LIMIT, SPAWN_RISK_LIMIT
 
 class FreeGoodnessBattleMode(BattleMode):
     key = "free_goodness"
-    version = 1
+    version = 2
     artifact_kind = "free_goodness_state_v1"
     token_operation_key = "tester_lookup_hit"
 
@@ -36,6 +36,19 @@ class FreeGoodnessBattleMode(BattleMode):
         target = int(entry.get("target") or 0)
         if target < 2:
             raise ValueError("invalid_target")
+        score_step_limit = target // 2
+        raw_ranking_min_steps = payload.get("ranking_min_steps")
+        if raw_ranking_min_steps in (None, ""):
+            ranking_min_steps = score_step_limit
+        else:
+            if isinstance(raw_ranking_min_steps, bool):
+                raise ValueError("invalid_ranking_min_steps")
+            ranking_text = str(raw_ranking_min_steps).strip()
+            if not ranking_text.isdigit():
+                raise ValueError("invalid_ranking_min_steps")
+            ranking_min_steps = int(ranking_text)
+            if not 1 <= ranking_min_steps <= score_step_limit:
+                raise ValueError("invalid_ranking_min_steps")
         timeout = int(payload.get("step_timeout_seconds") or 90)
         if timeout not in VALID_STEP_TIMEOUTS:
             raise ValueError("invalid_step_timeout")
@@ -48,7 +61,8 @@ class FreeGoodnessBattleMode(BattleMode):
             "pattern": str(entry.get("pattern") or ""),
             "target": target,
             "initial_board": None if initial_board is None else f"{initial_board:016x}",
-            "score_step_limit": target // 2,
+            "score_step_limit": score_step_limit,
+            "ranking_min_steps": ranking_min_steps,
             "step_timeout_seconds": timeout,
             "max_players": max_players,
             "visibility": "public" if bool(payload.get("is_public", True)) else "private",
@@ -77,6 +91,7 @@ class FreeGoodnessBattleMode(BattleMode):
             "target": room.get("target"),
             "initial_board": room.get("initial_board"),
             "score_step_limit": int(room.get("max_steps") or 0),
+            "ranking_min_steps": int(room.get("max_steps") or 0),
             "step_timeout_seconds": room.get("step_timeout_seconds"),
             "move_risk_limit": MOVE_RISK_LIMIT,
             "spawn_risk_limit": SPAWN_RISK_LIMIT,

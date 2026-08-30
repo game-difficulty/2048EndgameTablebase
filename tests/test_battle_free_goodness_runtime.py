@@ -19,6 +19,17 @@ from engine_core.VBoardMover import encode_board
 
 
 class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    def test_legacy_operation_stream_recovers_cumulative_product(self) -> None:
+        blob = runtime._append_operation(
+            b"", selected="left", executed="left", corrected=False,
+            spawn_index=3, spawn_value=2, goodness=0.8,
+        )
+        blob = runtime._append_operation(
+            blob, selected="right", executed="right", corrected=False,
+            spawn_index=4, spawn_value=4, goodness=0.5,
+        )
+        self.assertAlmostEqual(runtime._legacy_goodness_product(blob), 0.4, places=4)
+
     async def asyncSetUp(self) -> None:
         self._old_db = os.environ.get("CLOUD_AUTH_DB")
         self._tmp = tempfile.TemporaryDirectory()
@@ -80,6 +91,58 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
             os.environ["CLOUD_AUTH_DB"] = self._old_db
         self._tmp.cleanup()
 
+    def test_ranking_min_steps_defaults_and_validates_against_target(self) -> None:
+        with patch(
+            "backend.battle.modes.free_goodness.mode.resolve_tablebase",
+            return_value=self.entry,
+        ):
+            defaults = runtime._free_mode.validate_settings({
+                "full_pattern": "L3_128",
+                "max_players": 2,
+                "step_timeout_seconds": 90,
+            })
+            selected = runtime._free_mode.validate_settings({
+                "full_pattern": "L3_128",
+                "max_players": 2,
+                "step_timeout_seconds": 90,
+                "ranking_min_steps": 32,
+            })
+            self.assertEqual(defaults["ranking_min_steps"], 64)
+            self.assertEqual(selected["ranking_min_steps"], 32)
+            with self.assertRaisesRegex(ValueError, "invalid_ranking_min_steps"):
+                runtime._free_mode.validate_settings({
+                    "full_pattern": "L3_128",
+                    "max_players": 2,
+                    "step_timeout_seconds": 90,
+                    "ranking_min_steps": 65,
+                })
+
+    def test_ranking_eligibility_requires_threshold_and_valid_finish(self) -> None:
+        self.assertTrue(runtime._ranking_eligible(
+            result_status="playing",
+            finish_reason=None,
+            progress=12,
+            ranking_min_steps=12,
+        ))
+        self.assertTrue(runtime._ranking_eligible(
+            result_status="completed",
+            finish_reason="no_legal_move",
+            progress=20,
+            ranking_min_steps=12,
+        ))
+        self.assertFalse(runtime._ranking_eligible(
+            result_status="completed",
+            finish_reason="no_legal_move",
+            progress=11,
+            ranking_min_steps=12,
+        ))
+        self.assertFalse(runtime._ranking_eligible(
+            result_status="timed_out",
+            finish_reason="timed_out",
+            progress=20,
+            ranking_min_steps=12,
+        ))
+
     async def test_create_start_move_and_ack_use_independent_state(self) -> None:
         with (
             patch("backend.battle.modes.free_goodness.mode.resolve_tablebase", return_value=self.entry),
@@ -93,6 +156,7 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     "full_pattern": "L3_128",
                     "initial_board": f"{self.board:016x}",
                     "max_players": 2,
+                    "ranking_min_steps": 12,
                     "step_timeout_seconds": 90,
                     "is_public": True,
                     "allow_spectators": True,
@@ -100,6 +164,7 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
             room = created["room"]
+            self.assertEqual(room["mode_settings"]["ranking_min_steps"], 12)
             repository.join_room(room["room_code"], user_id=self.player_id)
             repository.set_member_ready(room["room_code"], user_id=self.host_id, ready=True)
             repository.set_member_ready(room["room_code"], user_id=self.player_id, ready=True)
@@ -110,6 +175,8 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(started["results"]), 2)
             own = next(item for item in started["results"] if item["user_id"] == self.host_id)
             self.assertEqual(own["mode_data"]["board_hex"], f"{self.board:016x}")
+            self.assertEqual(own["mode_data"]["ranking_min_steps"], 12)
+            self.assertFalse(own["mode_data"]["ranking_eligible"])
 
             accepted = await runtime.handle_action_for_mode(
                 room["room_code"],
@@ -166,6 +233,12 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state["step_index"], 1)
             self.assertEqual(len(bytes(state["operation_blob"])), 4)
             self.assertIn('"lookup_hit_steps":1', round_row["mode_state_json"])
+
+            host_view = runtime.room_snapshot(room["room_code"], user_id=self.host_id)
+            host_result = next(
+                item for item in host_view["results"] if item["user_id"] == self.host_id
+            )
+            self.assertFalse(host_result["mode_data"]["ranking_eligible"])
 
             player_move = await runtime.handle_action_for_mode(
                 room["room_code"],

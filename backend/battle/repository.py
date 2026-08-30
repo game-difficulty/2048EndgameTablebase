@@ -244,8 +244,6 @@ def init_battle_db() -> None:
               board_state TEXT NOT NULL,
               step_index INTEGER NOT NULL DEFAULT 0,
               sequence INTEGER NOT NULL DEFAULT 0,
-              goodness_sum_units INTEGER NOT NULL DEFAULT 0,
-              goodness_count INTEGER NOT NULL DEFAULT 0,
               spawn_log_index REAL NOT NULL DEFAULT 0.0,
               spawn_log_floor REAL NOT NULL DEFAULT 0.0,
               rng_step INTEGER NOT NULL DEFAULT 0,

@@ -309,6 +309,7 @@ export function useFreeGoodnessMatch(
     multiplierForPattern,
     calculateCost,
     showMaxSteps: false,
+    showRankingMinSteps: true,
     costLabelKey: 'battle.form.freeModeBudget',
     refundPolicyKey: 'battle.form.freeModeRefundPolicy',
     createLabelKey: 'battle.actions.createFree',

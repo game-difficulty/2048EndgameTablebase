@@ -64,6 +64,7 @@
               <div><dt>{{ $t('battle.form.pattern') }}</dt><dd>{{ room.full_pattern }}</dd></div>
               <div><dt>{{ $t('battle.form.initialBoard') }}</dt><dd class="font-mono">{{ displayedInitialBoard }}</dd></div>
               <div><dt>{{ $t(stepsLabelKey) }}</dt><dd>{{ room.max_steps || $t('battle.form.unlimited') }}</dd></div>
+              <div v-if="room.mode_settings?.ranking_min_steps"><dt>{{ $t('battle.form.rankingMinSteps') }}</dt><dd>{{ room.mode_settings.ranking_min_steps }}</dd></div>
               <div><dt>{{ $t('battle.form.stepTimeout') }}</dt><dd>{{ room.step_timeout_seconds }}s</dd></div>
               <div><dt>{{ $t('battle.form.publicRoom') }}</dt><dd>{{ room.visibility === 'public' ? $t('common.yes') : $t('common.no') }}</dd></div>
               <div><dt>{{ $t('battle.form.allowSpectators') }}</dt><dd>{{ room.allow_spectators ? $t('common.yes') : $t('common.no') }}</dd></div>

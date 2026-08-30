@@ -62,6 +62,12 @@ def step_goodness(best_success: object, selected_success: object) -> float:
     return max(0.0, min(1.0, selected / best))
 
 
+def accumulate_goodness(current_goodness: object, step_ratio: object) -> float:
+    """Apply Tester's cumulative product semantics."""
+
+    return clamp_probability(current_goodness) * clamp_probability(step_ratio)
+
+
 @dataclass(frozen=True, slots=True)
 class MoveDecision:
     selected_direction: str

@@ -5,6 +5,7 @@ import unittest
 
 from backend.battle.modes.free_goodness.rules import (
     SpawnRiskState,
+    accumulate_goodness,
     decide_move,
     deterministic_spawn_choice,
     evaluate_spawn,
@@ -13,6 +14,14 @@ from backend.battle.modes.free_goodness.rules import (
 
 
 class FreeGoodnessRuleTests(unittest.TestCase):
+    def test_goodness_uses_tester_cumulative_product(self) -> None:
+        goodness = accumulate_goodness(1.0, 0.8)
+        self.assertAlmostEqual(goodness, 0.8)
+        goodness = accumulate_goodness(goodness, 1.0)
+        self.assertAlmostEqual(goodness, 0.8)
+        goodness = accumulate_goodness(goodness, 0.5)
+        self.assertAlmostEqual(goodness, 0.4)
+
     def test_death_risk_uses_multiplicative_change(self) -> None:
         self.assertAlmostEqual(risk_multiplier(0.99, 0.98), 2.0)
         self.assertAlmostEqual(risk_multiplier(0.10, 0.0), 1.0 / 0.9)

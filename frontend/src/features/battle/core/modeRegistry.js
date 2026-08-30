@@ -49,7 +49,7 @@ registerBattleMode({
 
 registerBattleMode({
   key: 'free_goodness',
-  version: 1,
+  version: 2,
   labelKey: 'battle.modes.freeGoodness.name',
   shortLabelKey: 'battle.modes.freeGoodness.shortName',
   summaryKey: 'battle.modes.freeGoodness.summary',
