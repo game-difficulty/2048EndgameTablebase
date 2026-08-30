@@ -870,7 +870,7 @@
       "yourMove": "你的走法",
       "standardMove": "标准走法",
       "goodnessDrop": "本步吻合度 -{value}",
-      "continueHint": "按 Enter 继续",
+      "continueHint": "按 Enter 或点击任意位置继续",
       "inputHint": "方向键、WASD 或滑屏操作",
       "live": "实时数据",
       "opponents": "玩家进度",

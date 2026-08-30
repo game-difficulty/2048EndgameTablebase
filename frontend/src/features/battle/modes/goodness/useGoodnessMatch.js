@@ -354,7 +354,10 @@ export function useGoodnessMatch(
     ownFinished: ownFinished.value,
     isVariant: useVariant.value,
   }));
-  const matchListeners = Object.freeze({ move: submitMove });
+  const matchListeners = Object.freeze({
+    move: submitMove,
+    'continue-correction': continueCorrection,
+  });
   const createPracticeJump = () => {
     const state = controllerState.value;
     if (!state?.boardHex || !room.value?.full_pattern) return null;

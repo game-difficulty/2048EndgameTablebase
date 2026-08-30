@@ -68,6 +68,7 @@
         @open-trainer="openTrainer"
         @show-results="openResults"
         @forfeit="forfeitDialogOpen = true"
+        @leave-room="leave"
         @return-lobby="returnToLobby"
       />
 

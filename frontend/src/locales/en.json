@@ -870,7 +870,7 @@
       "yourMove": "Your Move",
       "standardMove": "Optimal Move",
       "goodnessDrop": "Goodness -{value}",
-      "continueHint": "Press Enter to continue",
+      "continueHint": "Press Enter or tap anywhere to continue",
       "inputHint": "Use arrow keys, WASD, or swipe",
       "live": "Live Data",
       "opponents": "Player Progress",

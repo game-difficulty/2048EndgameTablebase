@@ -37,6 +37,12 @@
           class="danger"
           @click="$emit('forfeit')"
         >{{ $t('battle.match.exitBattle') }}</button>
+        <button
+          v-else-if="spectator"
+          type="button"
+          class="danger"
+          @click="$emit('leave-room')"
+        >{{ $t('battle.actions.leave') }}</button>
         <button v-else-if="ownForfeited" type="button" disabled>{{ $t('battle.match.exited') }}</button>
       </div>
     </header>
@@ -68,7 +74,15 @@
         <div :class="['battle-board-shell', { urgent: countdownState.urgent }]">
           <BaseBoard :frame="boardFrame" :dis32k="dis32k" :is-variant="isVariant" @swipe="$emit('move', $event)" />
           <Transition name="battle-correction">
-            <div v-if="wrongOverlay" class="battle-wrong-overlay" role="status" aria-live="assertive">
+            <div
+              v-if="wrongOverlay"
+              class="battle-wrong-overlay"
+              role="button"
+              tabindex="0"
+              aria-live="assertive"
+              @click.stop="$emit('continue-correction')"
+              @keydown.space.prevent="$emit('continue-correction')"
+            >
               <span class="battle-wrong-kicker">{{ $t('battle.match.correcting') }}</span>
               <div class="battle-direction-correction">
                 <div><small>{{ $t('battle.match.yourMove') }}</small><strong class="wrong">{{ directionLabel(wrongOverlay.selectedDirection) }}</strong></div>
@@ -130,7 +144,15 @@ const props = defineProps({
   isVariant: { type: Boolean, default: false },
 });
 
-defineEmits(['move', 'open-trainer', 'show-results', 'forfeit', 'return-lobby']);
+defineEmits([
+  'move',
+  'continue-correction',
+  'open-trainer',
+  'show-results',
+  'forfeit',
+  'leave-room',
+  'return-lobby',
+]);
 const now = ref(Date.now());
 let timer = null;
 const totalSteps = computed(() => Number(props.room.route?.step_count || 0));
@@ -208,7 +230,9 @@ onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
 .battle-board-shell::after { position: absolute; inset: -5px; z-index: 70; border: 2px solid transparent; border-radius: 14px; content: ''; pointer-events: none; }
 .battle-board-shell.urgent::after { animation: battle-board-urgent .72s ease-out 1; }
 .battle-input-hint { margin: 9px 0 0; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 700; text-align: center; }
-.battle-wrong-overlay { position: absolute; inset: 0; z-index: 60; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 12px; background: color-mix(in srgb, var(--bg-card) 91%, transparent); backdrop-filter: blur(5px); color: var(--text-main); text-align: center; }
+.battle-wrong-overlay { position: absolute; inset: 0; z-index: 60; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 0; border-radius: 12px; background: color-mix(in srgb, var(--bg-card) 91%, transparent); backdrop-filter: blur(5px); color: var(--text-main); text-align: center; cursor: pointer; touch-action: manipulation; user-select: none; -webkit-tap-highlight-color: transparent; }
+.battle-wrong-overlay:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: -5px; }
+.battle-wrong-overlay:active { background: color-mix(in srgb, var(--bg-card) 84%, var(--accent)); }
 .battle-wrong-kicker { color: var(--text-secondary); font-size: 11px; font-weight: 900; text-transform: uppercase; }
 .battle-direction-correction { display: flex; align-items: center; gap: 22px; margin: 17px 0 11px; }
 .battle-direction-correction div { display: flex; flex-direction: column; gap: 4px; }
