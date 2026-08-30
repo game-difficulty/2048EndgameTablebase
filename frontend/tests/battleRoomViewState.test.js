@@ -65,3 +65,17 @@ test('a new running round clears the previous completed view choice', () => {
     resultRoundId: '',
   });
 });
+
+test('live results remain open across snapshots of the same running round', () => {
+  const state = createBattleRoomViewState();
+  const running = room({ roomStatus: 'running', roundStatus: 'running' });
+  state.apply(null, running);
+  assert.deepEqual(state.openResults(running), {
+    heldRoundId: '',
+    resultRoundId: 'round-1',
+  });
+  assert.deepEqual(state.apply(running, { ...running, revision: 2 }), {
+    heldRoundId: '',
+    resultRoundId: 'round-1',
+  });
+});

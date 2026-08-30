@@ -20,6 +20,7 @@ export function useBattleRoomSession(activeRef, authUserRef) {
   const wsStatus = ref('disconnected');
   const completedRoundView = ref('');
   const resultVisibleRound = ref('');
+  const forfeitPending = ref(false);
   const chat = createBattleChatState();
   const roomViewState = createBattleRoomViewState();
   const modeAdapters = new Map();
@@ -56,8 +57,11 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     || ['completed', 'timed_out', 'disqualified'].includes(ownResult.value?.status)
   ));
   const showResults = computed(() => (
-    room.value?.round?.status === 'completed'
+    Boolean(room.value?.round?.round_id)
     && resultVisibleRound.value === room.value?.round?.round_id
+  ));
+  const resultMode = computed(() => (
+    room.value?.round?.status === 'completed' ? 'final' : 'live'
   ));
   const chatCanSpeak = computed(() => viewerCanChat(room.value, viewer.value));
 
@@ -324,6 +328,31 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     }
   };
 
+  const forfeit = async () => {
+    if (
+      forfeitPending.value
+      || !room.value?.room_code
+      || !room.value?.round?.round_id
+      || !['playing', 'disconnected'].includes(String(ownResult.value?.status || ''))
+    ) return false;
+    forfeitPending.value = true;
+    error.value = '';
+    try {
+      const response = await battleClient.forfeit(
+        room.value.room_code,
+        room.value.round.round_id,
+        battleRequestId('forfeit'),
+      );
+      await applyRoom(response.room);
+      return true;
+    } catch (requestError) {
+      error.value = errorKey(requestError, 'battle_forfeit_failed');
+      return false;
+    } finally {
+      forfeitPending.value = false;
+    }
+  };
+
   const kickMember = async (userId) => {
     try {
       const response = await battleClient.kick(
@@ -415,6 +444,8 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     spectatorMode,
     ownFinished,
     showResults,
+    resultMode,
+    forfeitPending,
     activeModeKey: computed(() => modeKeyFor()),
     registerModeAdapter,
     setModeAdapter: registerModeAdapter,
@@ -432,6 +463,7 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     leave,
     toggleReady,
     start,
+    forfeit,
     kickMember,
     setRole,
     returnToLobby,

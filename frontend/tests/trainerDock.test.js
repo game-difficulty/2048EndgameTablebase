@@ -38,6 +38,14 @@ test('guide jumps reuse a valid dock preference and narrow layouts fall back to 
   }), TRAINER_DOCK_PLACEMENTS.NONE);
 });
 
+test('battle practice jumps prefer the Trainer dock without taking a full tab', () => {
+  assert.equal(resolveTrainerJumpDockPlacement({
+    placement: TRAINER_DOCK_PLACEMENTS.NONE,
+    dockAvailable: true,
+    preferDock: true,
+  }), TRAINER_DOCK_PLACEMENTS.RIGHT);
+});
+
 test('opening Trainer in the background preserves the companion tab', () => {
   const tabs = useTabManager();
   tabs.openTab(TAB_IDS.HELP);

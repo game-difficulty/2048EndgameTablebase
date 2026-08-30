@@ -1,0 +1,54 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  isBattleResultDraw,
+  rankBattleResults,
+} from '../src/features/battle/core/battleResultRanking.js';
+
+test('completed players rank before unfinished players by goodness', () => {
+  const ranked = rankBattleResults([
+    { user_id: 1, status: 'timed_out', goodness_of_fit: 0.99 },
+    { user_id: 2, status: 'completed', goodness_of_fit: 0.75 },
+    { user_id: 3, status: 'completed', goodness_of_fit: 0.90 },
+    { user_id: 4, status: 'disqualified', goodness_of_fit: 1 },
+  ]);
+
+  assert.deepEqual(ranked.map((result) => result.user_id), [3, 2, 1, 4]);
+  assert.deepEqual(ranked.map((result) => result.rank), [1, 2, null, null]);
+});
+
+test('completed ties share rank while unfinished players never receive one', () => {
+  const ranked = rankBattleResults([
+    { user_id: 1, status: 'completed', goodness_of_fit: 0.8 },
+    { user_id: 2, status: 'timed_out', goodness_of_fit: 0.9 },
+    { user_id: 3, status: 'completed', goodness_of_fit: 0.8 },
+    { user_id: 4, status: 'completed', goodness_of_fit: 0.6 },
+  ]);
+
+  assert.deepEqual(ranked.map((result) => result.rank), [1, 1, 3, null]);
+  assert.equal(isBattleResultDraw(ranked), true);
+});
+
+test('unfinished players alone do not produce a draw or ranks', () => {
+  const ranked = rankBattleResults([
+    { user_id: 1, status: 'timed_out', goodness_of_fit: 0.5 },
+    { user_id: 2, status: 'disqualified', goodness_of_fit: 0.5 },
+  ]);
+
+  assert.deepEqual(ranked.map((result) => result.rank), [null, null]);
+  assert.equal(isBattleResultDraw(ranked), false);
+});
+
+test('live ranking includes active and completed players but leaves forfeits unranked', () => {
+  const ranked = rankBattleResults([
+    { user_id: 1, status: 'playing', goodness_of_fit: 0.70 },
+    { user_id: 2, status: 'completed', goodness_of_fit: 0.90 },
+    { user_id: 3, status: 'disconnected', goodness_of_fit: 0.80 },
+    { user_id: 4, status: 'timed_out', goodness_of_fit: 1.00 },
+    { user_id: 5, status: 'disqualified', goodness_of_fit: 0.95 },
+  ], { mode: 'live' });
+
+  assert.deepEqual(ranked.map((result) => result.user_id), [2, 3, 1, 4, 5]);
+  assert.deepEqual(ranked.map((result) => result.rank), [1, 2, 3, null, null]);
+});

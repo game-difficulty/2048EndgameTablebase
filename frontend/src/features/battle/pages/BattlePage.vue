@@ -62,9 +62,12 @@
         :room="room"
         :current-user-id="Number(room.viewer?.user_id || authUser.id)"
         :ws-status="wsStatus"
+        :dis32k="dis32k"
         v-bind="modeMatchProps"
         v-on="modeMatchListeners"
+        @open-trainer="openTrainer"
         @show-results="openResults"
+        @forfeit="forfeitDialogOpen = true"
         @return-lobby="returnToLobby"
       />
 
@@ -96,8 +99,16 @@
         :is="modeDefinition.ResultView"
         v-if="room && showResults"
         :room="room"
+        :mode="resultMode"
         @close="dismissResults"
         @return-room="returnToLobby"
+      />
+
+      <BattleExitDialog
+        v-if="forfeitDialogOpen"
+        :pending="forfeitPending"
+        @cancel="forfeitDialogOpen = false"
+        @confirm="confirmForfeit"
       />
     </div>
   </div>
@@ -107,8 +118,11 @@
 import { computed, onMounted, onUnmounted, ref, toRef, unref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
+import { useAppSettingsStore } from '../../../app/useAppSettings.js';
 import { emitAuthRequired } from '../../../services/auth/authEvents.js';
+import { clearTrainerPracticeContext } from '../../trainer/services/trainerPracticeJump.js';
 import BattleLobby from '../components/BattleLobby.vue';
+import BattleExitDialog from '../components/BattleExitDialog.vue';
 import BattleRoomChat from '../components/BattleRoomChat.vue';
 import BattleRulesDialog from '../components/BattleRulesDialog.vue';
 import { useBattleSession } from '../composables/useBattleSession.js';
@@ -117,10 +131,13 @@ const props = defineProps({
   active: { type: Boolean, default: true },
   authUser: { type: Object, default: null },
 });
+const emit = defineEmits(['navigate-tab']);
 
 const now = ref(Date.now());
 const rulesOpen = ref(false);
+const forfeitDialogOpen = ref(false);
 const { t, te } = useI18n();
+const { config: appConfig } = useAppSettingsStore();
 let clockTimer = null;
 let inviteAttempted = false;
 
@@ -132,6 +149,8 @@ const {
   wsStatus,
   matchActive,
   showResults,
+  resultMode,
+  forfeitPending,
   chatMessages,
   chatNotice,
   chatCooldownSeconds,
@@ -146,6 +165,7 @@ const {
   leave,
   toggleReady,
   start,
+  forfeit,
   kickMember,
   setRole,
   returnToLobby,
@@ -155,6 +175,7 @@ const {
 } = useBattleSession(toRef(props, 'active'), toRef(props, 'authUser'));
 
 const modeHallProps = computed(() => unref(modeSession.value?.hallProps) || {});
+const dis32k = computed(() => Boolean(appConfig.value.dis_32k));
 const modeOptions = computed(() => modeDefinitions.map((definition) => ({
   value: definition.key,
   label: t(definition.labelKey),
@@ -167,6 +188,14 @@ const localizedError = computed(() => {
   return te(key) ? t(key) : String(error.value || '');
 });
 const requestLogin = () => emitAuthRequired();
+const openTrainer = () => {
+  const detail = modeSession.value?.createPracticeJump?.();
+  if (!detail?.hex) return;
+  emit('navigate-tab', 'TrainerView', detail);
+};
+const confirmForfeit = async () => {
+  if (await forfeit()) forfeitDialogOpen.value = false;
+};
 
 watch([() => props.active, () => props.authUser, loading, room], ([active, user, busy, currentRoom]) => {
   if (!active || !user || busy || currentRoom || inviteAttempted) return;
@@ -175,9 +204,16 @@ watch([() => props.active, () => props.authUser, loading, room], ([active, user,
   inviteAttempted = true;
   join(inviteCode, 'auto');
 });
+watch(() => room.value?.round?.round_id, () => { forfeitDialogOpen.value = false; });
+watch(matchActive, (active) => {
+  if (!active) clearTrainerPracticeContext('battle');
+});
 
 onMounted(() => { clockTimer = window.setInterval(() => { now.value = Date.now(); }, 1000); });
-onUnmounted(() => { if (clockTimer != null) window.clearInterval(clockTimer); });
+onUnmounted(() => {
+  if (clockTimer != null) window.clearInterval(clockTimer);
+  clearTrainerPracticeContext('battle');
+});
 </script>
 
 <style scoped>

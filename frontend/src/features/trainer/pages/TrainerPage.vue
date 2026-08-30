@@ -177,7 +177,7 @@
                 <input
                   type="checkbox"
                   v-model="showResults"
-                  :disabled="isEmptyPattern"
+                  :disabled="isEmptyPattern || battlePracticeMismatch"
                   @change="focusBoardHotkeys"
                   class="cursor-pointer accent-accent disabled:cursor-not-allowed disabled:opacity-45"
                 />
@@ -185,7 +185,7 @@
               </label>
               <button
                 @click="queryResults"
-                :disabled="isEmptyPattern"
+                :disabled="isEmptyPattern || battlePracticeMismatch"
                 class="ui-kicker !bg-btn-bg !text-white border border-btn-bg hover:bg-btn-hover px-2.5 py-1 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm disabled:cursor-not-allowed disabled:opacity-45"
               >
                 {{ $t('trainer.results.refresh') }}
@@ -193,7 +193,7 @@
             </div>
           </div>
           <div class="trainer-results-body">
-            <template v-if="showResults && !awaitingSpawn && !isEmptyPattern">
+            <template v-if="showResults && !awaitingSpawn && !isEmptyPattern && !battlePracticeMismatch">
               <div class="trainer-results-list mt-2 flex flex-col gap-1 transition-opacity" :class="resultsUpdatingVisible ? 'opacity-70' : 'opacity-100'">
                 <div
                   v-for="item in displayedResults"
@@ -227,6 +227,8 @@
             >
               {{ awaitingSpawn
                 ? $t('trainer.results.awaitingManualSpawn')
+                : battlePracticeMismatch
+                  ? $t('trainer.results.battlePatternMismatch')
                 : isEmptyPattern
                   ? $t('trainer.results.emptyPattern')
                   : $t('trainer.results.hidden') }}
@@ -237,12 +239,12 @@
         <div class="console-card">
           <div class="console-card-header"><span>{{ $t('trainer.actions.title') }}</span></div>
           <div class="tool-action-grid-4 grid grid-cols-4 gap-2 mt-2">
-            <button @click="toggleDemo" :disabled="isEmptyPattern" :class="['action-btn', demoActive ? 'bg-red-500 hover:bg-red-600 text-white' : '']">
+            <button @click="toggleDemo" :disabled="isEmptyPattern || battlePracticeMismatch" :class="['action-btn', demoActive ? 'bg-red-500 hover:bg-red-600 text-white' : '']">
               {{ demoActive ? $t('trainer.actions.stop') : $t('trainer.actions.demo') }}
             </button>
-            <button @click="trainerStep" :disabled="isEmptyPattern" class="action-btn">{{ $t('trainer.actions.step') }}</button>
+            <button @click="trainerStep" :disabled="isEmptyPattern || battlePracticeMismatch" class="action-btn">{{ $t('trainer.actions.step') }}</button>
             <button @click="trainerUndo" class="action-btn">{{ $t('trainer.actions.undo') }}</button>
-            <button @click="trainerDefault" :disabled="isEmptyPattern" class="action-btn">{{ $t('trainer.actions.default') }}</button>
+            <button @click="trainerDefault" :disabled="isEmptyPattern || battlePracticeMismatch" class="action-btn">{{ $t('trainer.actions.default') }}</button>
           </div>
         </div>
 
@@ -253,7 +255,7 @@
               v-for="(_, idx) in spawnModes"
               :key="idx"
               @click="setSpawnMode(idx)"
-              :disabled="isEmptyPattern && (idx === 1 || idx === 2)"
+              :disabled="(isEmptyPattern || battlePracticeMismatch) && (idx === 1 || idx === 2)"
               :class="['flex-1 py-2 ui-control font-black uppercase tracking-tighter transition-all',
                 spawnMode === idx
                   ? 'bg-btn-bg text-white shadow-inner'
@@ -300,6 +302,7 @@ const boardHotkeyTarget = ref(null);
 
 const {
   currentPatternDisplay,
+  battlePracticeMismatch,
   isEmptyPattern,
   emptyPatternId,
   emptyPatternCategory,

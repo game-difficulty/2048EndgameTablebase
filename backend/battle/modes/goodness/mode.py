@@ -8,7 +8,7 @@ from ...core.chat_policy import normalize_chat_roles
 from ...core.contracts import BattleMode
 
 
-VALID_STEP_TIMEOUTS = frozenset(range(5, 121, 5))
+VALID_STEP_TIMEOUTS = frozenset(range(5, 601, 5))
 
 
 def _normalize_board(value: Any) -> int | None:
@@ -55,7 +55,7 @@ class GoodnessBattleMode(BattleMode):
             max_steps = int(max_steps)
             if not 1 <= max_steps <= 9_999:
                 raise ValueError("invalid_max_steps")
-        timeout = int(payload.get("step_timeout_seconds") or 30)
+        timeout = int(payload.get("step_timeout_seconds") or 90)
         if timeout not in VALID_STEP_TIMEOUTS:
             raise ValueError("invalid_step_timeout")
         max_players = int(payload.get("max_players") or 2)
@@ -119,6 +119,19 @@ class GoodnessBattleMode(BattleMode):
 
     def settle_unstarted_round(self, room_id: str, *, reason: str) -> None:
         self.runtime.settle_unstarted_round_for_mode(room_id, reason=reason)
+
+    def forfeit_round(
+        self,
+        room_code: str,
+        *,
+        user_id: int,
+        round_id: str,
+    ) -> dict[str, Any]:
+        return self.runtime.forfeit_round_for_mode(
+            room_code,
+            user_id=user_id,
+            round_id=round_id,
+        )
 
     async def startup(self) -> None:
         await self.runtime.startup()

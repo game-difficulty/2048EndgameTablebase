@@ -206,6 +206,7 @@
           <BattleView
             :active="activeTab === TAB_IDS.BATTLE"
             :auth-user="authUser"
+            @navigate-tab="handleNavigateTab"
           />
         </div>
         <div
@@ -689,11 +690,12 @@ const handleNavigateTab = (tabId, detail = null) => {
     const requestedDockPlacement = resolveTrainerJumpDockPlacement({
       placement: trainerDockActive.value
         ? trainerDockPlacement.value
-        : activeTab.value === TAB_IDS.HELP
+        : (activeTab.value === TAB_IDS.HELP || detail?.preferDock)
           ? trainerDockPreference.value
           : TRAINER_DOCK_PLACEMENTS.NONE,
       dockAvailable: trainerDockAvailable.value,
       sourceIsHelp: activeTab.value === TAB_IDS.HELP,
+      preferDock: Boolean(detail?.preferDock),
     });
     if (isTrainerDocked(requestedDockPlacement)) {
       openTabInBackground(tabId);
@@ -702,7 +704,11 @@ const handleNavigateTab = (tabId, detail = null) => {
       trainerDockPlacement.value = TRAINER_DOCK_PLACEMENTS.NONE;
       openTab(tabId);
     }
-    claimTrainerKeyboardForBoardJump();
+    if (detail?.claimKeyboard === false) {
+      setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
+    } else {
+      claimTrainerKeyboardForBoardJump();
+    }
     return;
   }
 

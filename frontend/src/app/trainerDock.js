@@ -42,11 +42,12 @@ export const resolveTrainerJumpDockPlacement = ({
   placement,
   dockAvailable,
   sourceIsHelp,
+  preferDock,
 } = {}) => {
   if (!dockAvailable) return TRAINER_DOCK_PLACEMENTS.NONE;
   const normalized = normalizeTrainerDockPlacement(placement);
   if (isTrainerDocked(normalized)) return normalized;
-  return sourceIsHelp
+  return sourceIsHelp || preferDock
     ? TRAINER_DOCK_PLACEMENTS.RIGHT
     : TRAINER_DOCK_PLACEMENTS.NONE;
 };

@@ -57,9 +57,10 @@ from .mode import GoodnessBattleMode
 ROUND_LIFETIME = timedelta(minutes=60)
 WAITING_LIFETIME = timedelta(minutes=30)
 MAX_SPECTATORS = 64
-VALID_STEP_TIMEOUTS = set(range(5, 121, 5))
+VALID_STEP_TIMEOUTS = set(range(5, 601, 5))
 UNSTARTED_ROOM_REFUND_PERCENT = 80
 UNSTARTED_ROOM_CHARGE_PERCENT = 100 - UNSTARTED_ROOM_REFUND_PERCENT
+CORRECTION_WINDOW_SECONDS = 15
 
 
 def _ready_players_for_start(
@@ -770,6 +771,8 @@ def _record_choice_goodness(
             direction,
             current_goodness=float(result["goodness_of_fit"]),
         )
+        standard_direction = decode_changes(step.changes).direction
+        wrong = direction != standard_direction
         next_index = expected_index + 1
         complete = next_index >= len(route.steps) or (
             route_row["certainty_step"] is not None
@@ -780,7 +783,15 @@ def _record_choice_goodness(
         timeout_at = (
             None
             if complete
-            else iso(utcnow() + timedelta(seconds=int(room["step_timeout_seconds"])))
+            else iso(
+                utcnow()
+                + timedelta(
+                    seconds=(
+                        int(room["step_timeout_seconds"])
+                        + (CORRECTION_WINDOW_SECONDS if wrong else 0)
+                    )
+                )
+            )
         )
         choices = bytes(result["choice_blob"] or b"") + bytes([DIRECTION_CODES[direction]])
         now = iso()
@@ -820,9 +831,71 @@ def _record_choice_goodness(
         "step_ratio": score.step_ratio,
         "goodness_drop": score.goodness_drop,
         "selected_direction": direction,
-        "standard_direction": decode_changes(step.changes).direction,
-        "wrong": direction != decode_changes(step.changes).direction,
+        "standard_direction": standard_direction,
+        "wrong": wrong,
+        "correction_seconds": CORRECTION_WINDOW_SECONDS if wrong else 0,
         "complete": complete,
+    }
+
+
+def _complete_correction_goodness(
+    room_code: str,
+    *,
+    user_id: int,
+    round_id: str,
+    sequence: int,
+    route_index: int,
+) -> dict[str, Any]:
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        room = repository._find_room(db, room_code)
+        if room["status"] != "running":
+            raise BattleServiceError("ROUND_NOT_RUNNING", "Round is not running.", 409)
+        result = db.execute(
+            "SELECT * FROM battle_player_results WHERE round_id = ? AND user_id = ?",
+            (str(round_id), int(user_id)),
+        ).fetchone()
+        route_row = db.execute(
+            "SELECT * FROM battle_routes WHERE round_id = ?", (str(round_id),)
+        ).fetchone()
+        if result is None or route_row is None:
+            raise BattleServiceError("ROUND_NOT_FOUND", "Round state is unavailable.", 404)
+        if result["status"] != "playing":
+            raise BattleServiceError("PLAYER_FINISHED", "This player has already finished.", 409)
+        current_index = int(result["route_index"])
+        current_sequence = int(result["last_sequence"])
+        if int(sequence) != current_sequence or int(route_index) != current_index:
+            raise BattleServiceError("PROGRESS_CONFLICT", "Battle progress is out of date.", 409)
+        choices = bytes(result["choice_blob"] or b"")
+        route = decode_route(bytes(route_row["route_blob"]))
+        if current_index <= 0 or current_index > len(route.steps) or not choices:
+            raise BattleServiceError("NO_CORRECTION_PENDING", "No correction is pending.", 409)
+        standard_direction = decode_changes(route.steps[current_index - 1].changes).direction
+        if int(choices[-1]) == int(DIRECTION_CODES[standard_direction]):
+            raise BattleServiceError("NO_CORRECTION_PENDING", "No correction is pending.", 409)
+
+        current_deadline = parse_iso(result["timeout_at"])
+        if current_deadline is None:
+            raise BattleServiceError("NO_CORRECTION_PENDING", "No correction is pending.", 409)
+        resumed_deadline = utcnow() + timedelta(seconds=int(room["step_timeout_seconds"]))
+        timeout_at = iso(min(current_deadline, resumed_deadline))
+        now = iso()
+        db.execute(
+            "UPDATE battle_player_results SET timeout_at = ?, updated_at = ? WHERE result_id = ?",
+            (timeout_at, now, result["result_id"]),
+        )
+        db.execute(
+            "UPDATE battle_rooms SET revision = revision + 1, updated_at = ? WHERE room_id = ?",
+            (now, room["room_id"]),
+        )
+    return {
+        "kind": "correction_complete",
+        "round_id": str(round_id),
+        "sequence": current_sequence,
+        "route_index": current_index,
+        "goodness_of_fit": float(result["goodness_of_fit"]),
+        "timeout_at": timeout_at,
+        "complete": False,
     }
 
 
@@ -833,16 +906,25 @@ def handle_action_for_mode(
     action: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    if str(action or "").lower() != "move":
-        raise BattleServiceError("MODE_ACTION_UNSUPPORTED", "Unsupported Battle action.", 400)
-    return _record_choice_goodness(
-        room_code,
-        user_id=user_id,
-        round_id=str(payload.get("round_id") or ""),
-        sequence=int(payload.get("sequence")),
-        route_index=int(payload.get("route_index")),
-        direction=str(payload.get("direction") or ""),
-    )
+    normalized_action = str(action or "").lower()
+    if normalized_action == "move":
+        return _record_choice_goodness(
+            room_code,
+            user_id=user_id,
+            round_id=str(payload.get("round_id") or ""),
+            sequence=int(payload.get("sequence")),
+            route_index=int(payload.get("route_index")),
+            direction=str(payload.get("direction") or ""),
+        )
+    if normalized_action == "correction_complete":
+        return _complete_correction_goodness(
+            room_code,
+            user_id=user_id,
+            round_id=str(payload.get("round_id") or ""),
+            sequence=int(payload.get("sequence")),
+            route_index=int(payload.get("route_index")),
+        )
+    raise BattleServiceError("MODE_ACTION_UNSUPPORTED", "Unsupported Battle action.", 400)
 
 
 def _complete_round_if_done(
@@ -874,6 +956,67 @@ def _complete_round_if_done(
         (iso(utcnow() + WAITING_LIFETIME), now_text, room_id),
     )
     return True
+
+
+def forfeit_round_for_mode(
+    room_code: str,
+    *,
+    user_id: int,
+    round_id: str,
+) -> dict[str, Any]:
+    normalized_round_id = str(round_id or "")
+    if not normalized_round_id:
+        raise BattleServiceError("ROUND_NOT_FOUND", "Round state is unavailable.", 404)
+
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        room = repository._find_room(db, room_code)
+        if room["status"] != "running":
+            raise BattleServiceError("ROUND_NOT_RUNNING", "Round is not running.", 409)
+        member = db.execute(
+            "SELECT * FROM battle_members WHERE room_id = ? AND user_id = ? AND status = 'active'",
+            (room["room_id"], int(user_id)),
+        ).fetchone()
+        if member is None or member["role"] != "player":
+            raise BattleServiceError("PLAYER_NOT_ACTIVE", "You are not an active player.", 409)
+        result = db.execute(
+            "SELECT * FROM battle_player_results WHERE round_id = ? AND user_id = ?",
+            (normalized_round_id, int(user_id)),
+        ).fetchone()
+        if result is None:
+            raise BattleServiceError("ROUND_NOT_FOUND", "Round state is unavailable.", 404)
+
+        try:
+            mode_data = json.loads(result["mode_data_json"] or "{}")
+        except (TypeError, ValueError):
+            mode_data = {}
+        if result["status"] == "disqualified" and mode_data.get("finish_reason") == "forfeit":
+            return room_snapshot(room_code, user_id=user_id)
+        if result["status"] not in {"playing", "disconnected"}:
+            raise BattleServiceError("PLAYER_FINISHED", "This player has already finished.", 409)
+
+        now = iso()
+        mode_data["finish_reason"] = "forfeit"
+        db.execute(
+            """
+            UPDATE battle_player_results
+            SET status = 'disqualified', mode_data_json = ?, finished_at = ?,
+                timeout_at = NULL, updated_at = ?
+            WHERE result_id = ?
+            """,
+            (json.dumps(mode_data, separators=(",", ":")), now, now, result["result_id"]),
+        )
+        db.execute(
+            "UPDATE battle_rooms SET revision = revision + 1, updated_at = ? WHERE room_id = ?",
+            (now, room["room_id"]),
+        )
+        _complete_round_if_done(
+            db,
+            room_id=str(room["room_id"]),
+            round_id=normalized_round_id,
+            now_text=now,
+        )
+    return room_snapshot(room_code, user_id=user_id)
 
 
 def mark_timeouts() -> set[str]:

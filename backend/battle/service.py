@@ -128,6 +128,19 @@ def handle_mode_action(
     )
 
 
+def forfeit_round(
+    room_code: str,
+    *,
+    user_id: int,
+    round_id: str,
+) -> dict[str, Any]:
+    return _mode_for_room(room_code).forfeit_round(
+        room_code,
+        user_id=user_id,
+        round_id=round_id,
+    )
+
+
 async def startup() -> None:
     repository.init_battle_db()
     await chat.startup()

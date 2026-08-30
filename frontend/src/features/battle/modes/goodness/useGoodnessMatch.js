@@ -122,6 +122,13 @@ export function useGoodnessMatch(roomSession, activeRef, authUserRef) {
     const result = correctionResult;
     correctionResult = null;
     wrongOverlay.value = null;
+    if (result.state.mode === 'input') {
+      roomSession.sendModeAction('correction_complete', {
+        round_id: room.value.round.round_id,
+        sequence: localSequence,
+        route_index: result.state.index,
+      });
+    }
     animateTransition(result, 'wrong-correction');
     if (result.state.mode === 'auto') runAutoPlayback();
     return true;
@@ -240,6 +247,7 @@ export function useGoodnessMatch(roomSession, activeRef, authUserRef) {
         confirmedResult.goodness_of_fit = Number(
           accepted.goodness_of_fit ?? confirmedResult.goodness_of_fit,
         );
+        if (accepted.timeout_at) confirmedResult.timeout_at = accepted.timeout_at;
         if (accepted.complete) confirmedResult.status = 'completed';
       }
       syncControllerToServer();
@@ -342,6 +350,24 @@ export function useGoodnessMatch(roomSession, activeRef, authUserRef) {
     isVariant: useVariant.value,
   }));
   const matchListeners = Object.freeze({ move: submitMove });
+  const createPracticeJump = () => {
+    const state = controllerState.value;
+    if (!state?.boardHex || !room.value?.full_pattern) return null;
+    return {
+      source: 'battle',
+      fullPattern: String(room.value.full_pattern),
+      hex: String(state.boardHex),
+      preferDock: true,
+      claimKeyboard: false,
+      queryPolicy: 'same-table-only',
+      context: {
+        kind: 'battle',
+        roomId: String(room.value.room_id || ''),
+        roundId: String(room.value.round?.round_id || ''),
+        fullPattern: String(room.value.full_pattern),
+      },
+    };
+  };
 
   return {
     catalog,
@@ -355,6 +381,7 @@ export function useGoodnessMatch(roomSession, activeRef, authUserRef) {
     matchProps,
     matchListeners,
     createRoom,
+    createPracticeJump,
     submitMove,
   };
 }

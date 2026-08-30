@@ -77,6 +77,16 @@ class BattleMode(ABC):
     def settle_unstarted_round(self, room_id: str, *, reason: str) -> None:
         raise NotImplementedError
 
+    def forfeit_round(
+        self,
+        room_code: str,
+        *,
+        user_id: int,
+        round_id: str,
+    ) -> dict[str, Any]:
+        """End one participant's current round without removing room membership."""
+        raise NotImplementedError
+
     async def startup(self) -> None:
         """Start optional background work owned by this ruleset."""
 

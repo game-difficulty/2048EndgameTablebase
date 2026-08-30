@@ -379,6 +379,7 @@
       "dtype": "dtype",
       "awaitingManualSpawn": "Click empty cell: Left=2, Right=4",
       "emptyPattern": "No results are queried in the empty pattern",
+      "battlePatternMismatch": "Trainer is using a different tablebase. The board is synced; switch to the Battle tablebase to view results.",
       "hidden": "Results hidden"
     },
     "actions": {
@@ -460,7 +461,7 @@
   },
   "minigames": {
     "menu": {
-      "subtitle": "A unified home for the experimental 2048 rule variants.",
+      "subtitle": "Choose a game and try a different take on 2048.",
       "difficulty": "Difficulty",
       "easy": "Casual",
       "hard": "Hard",
@@ -505,7 +506,7 @@
       "title": "Minigame Rankings",
       "board": "Leaderboard",
       "overall": "Trophy Standings",
-      "overallDescription": "Ranks Grand, Gold, Silver, then Bronze trophy counts at the selected difficulty. Earlier achievement wins an exact tie.",
+      "overallDescription": "Ranked by trophy level and count. Earlier achievements win ties.",
       "gameDescription": "Only each player's personal best for this minigame and difficulty is retained.",
       "trophies": "Trophies",
       "highestTile": "Max tile",
@@ -514,14 +515,14 @@
       "empty": "No scores are available for this leaderboard yet.",
       "loading": "Loading minigame rankings...",
       "loadFailed": "Failed to load the minigame leaderboard.",
-      "loginHint": "Natural game overs are submitted automatically after you log in."
+      "loginHint": "Completed games submit your personal best automatically after login."
     }
   },
   "analysis": {
     "windowTag": "Utility Window",
     "title": "Replay Analysis",
     "close": "Close",
-    "notes": "*Reports are saved to the same folder as each replay file. You can also paste folder paths, one per line.",
+    "notes": "Select one or more .txt or .vrs replay files to analyze.",
     "input": {
       "title": "Input",
       "selectPattern": "Select Formation",
@@ -576,12 +577,12 @@
       "open": "Token Guide",
       "kicker": "Token Rules",
       "title": "Free Allowance and Usage",
-      "subtitle": "Tokens cover the compute and storage access used by tablebase queries and replay analysis. These are the rules currently in effect.",
+      "subtitle": "See your weekly allowance and the Token cost of each feature.",
       "loading": "Loading token rules...",
       "loadFailed": "Token rules are temporarily unavailable. Please try again.",
       "weekly": {
         "title": "Weekly Free Allowance",
-        "note": "Checked and replenished every {days} days. Bonus tokens are capped at the allowance for your account type.",
+        "note": "Replenished every {days} days, up to your account's bonus limit.",
         "tiers": {
           "public": {
             "label": "Standard Account",
@@ -599,7 +600,7 @@
       },
       "costs": {
         "title": "Tablebase and Feature Costs",
-        "note": "Trainer and Tester queries use the same rates. Values in the table are tokens charged per operation.",
+        "note": "Trainer and Tester use the same prices. Values are per operation.",
         "tablebase": "Tablebase",
         "multiplier": "Multiplier",
         "lookupHit": "Result found",
@@ -610,7 +611,7 @@
       },
       "thresholds": {
         "title": "Tablebase Pruning Thresholds",
-        "note": "Values are taken from each tablebase's *_config.txt. Success-rate records below the threshold may have been pruned and can therefore return no result.",
+        "note": "Records below the threshold may have been removed and can return no result.",
         "tablebase": "Tablebase",
         "threshold": "Threshold",
         "mode": "Mode",
@@ -624,9 +625,9 @@
         "title": "Charging Notes",
         "balanceOrder": "Bonus tokens are spent before paid tokens.",
         "analysisCharge": "Analysis is charged per selected file, whether or not a report is generated.",
-        "battleCharge": "Creating a Battle room reserves the route cost at the selected tablebase multiplier. Route generation failure gives a full refund; closing or expiring an unstarted room refunds 80%. Each user may create one room every 30 seconds.",
+        "battleCharge": "The route fee is charged when you create a room. Generation failures receive a full refund; unplayed rooms receive 80% when closed or expired. One room can be created every 30 seconds.",
         "replayCharge": "Replay loading is charged after authorization; parsing failures are not refunded.",
-        "offline": "No charge is made when a tablebase is offline or the server rejects a request before execution; reservations are refunded."
+        "offline": "No Tokens are charged when a tablebase is offline or a request does not run. Any charge is refunded automatically."
       }
     }
   },
@@ -716,7 +717,7 @@
       "practice": "Inspect Table Lines and Learn Optimal Moves for Endgame Positions.",
       "test": "Train Move Judgement, Replay Workflows, Notebook Drills, and Analysis Tools.",
       "minigames": "Explore 2048 Variants with Unique Tiles, Rules, and Challenge Modes.",
-      "battle": "Compete on one shared tablebase line and compare move goodness.",
+      "battle": "Choose moves together and compare goodness.",
       "leaderboards": "Explore community scores, Token usage, and supporter rankings.",
       "settings": "Tablebase Building & Appearance Settings.",
       "help": "Documentation, Technique Guides, and Project Information."
@@ -729,23 +730,23 @@
     "title": "Battle",
     "rules": {
       "kicker": "BATTLE RULES",
-      "title": "Battle Mode Rules",
-      "subtitle": "Each mode has its own controls and scoring rules. Review the selected mode before creating a room.",
-      "open": "View battle mode rules",
+      "title": "Battle Rules",
+      "subtitle": "Choose a mode, invite players, and start.",
+      "open": "View Battle Rules",
       "close": "Close Rules"
     },
     "modes": {
       "goodness": {
         "name": "Goodness Battle",
         "shortName": "Goodness",
-        "summary": "All players answer along the same tablebase route; cumulative goodness determines the result.",
+        "summary": "Choose moves from the same positions. The best goodness wins.",
         "rules": {
-          "sharedRoute": "Every player receives the same starting board, optimal moves, and spawn sequence generated from the host's selected tablebase.",
-          "moveCorrection": "Illegal directions neither score nor advance. A legal non-optimal move records its loss, then the system performs the standard move after the correction prompt.",
-          "scoring": "Goodness uses the same calculation as Tester. The highest cumulative goodness wins; equal scores draw, and completion speed is not a tiebreaker.",
-          "certainty": "When the current position reaches 100% success, the player's answers are complete and the remaining optimal route plays automatically.",
-          "timeout": "Each move must be entered within the room's time limit. A move timeout ends that player's round.",
-          "spectating": "Spectators can view every player. Competitors may view unfinished opponents' boards only after completing their own route."
+          "sharedRoute": "Everyone receives the same positions and spawns.",
+          "moveCorrection": "A non-optimal move lowers your goodness, then play continues with the optimal move.",
+          "scoring": "Highest goodness wins. Equal scores draw; speed does not matter.",
+          "certainty": "At 100% success, the remaining route completes automatically.",
+          "timeout": "Choose each move before the timer ends. A timeout ends your round.",
+          "spectating": "Spectators see every board. Players can watch opponents after finishing."
         }
       }
     },
@@ -756,19 +757,22 @@
       "USER_ALREADY_IN_ROOM": "You are already in another room.",
       "ROOM_CREATE_COOLDOWN": "Rooms are being created too quickly. Each user may create one new room every 30 seconds.",
       "TABLE_UNAVAILABLE": "This tablebase is currently unavailable.",
-      "ROUTE_GENERATION_FAILED": "Route generation failed. The reserved Tokens were refunded.",
-      "ROUTE_TOO_SHORT": "No sufficiently long route could be generated. The reserved Tokens were refunded.",
+      "ROUTE_GENERATION_FAILED": "The route could not be created. Your Tokens were refunded.",
+      "ROUTE_TOO_SHORT": "No suitable route was found. Your Tokens were refunded.",
       "NOT_ENOUGH_PLAYERS": "At least two ready players are required to start.",
       "HOST_NOT_READY": "The host must be ready before starting.",
       "PLAYERS_NOT_READY": "At least two players must be ready before starting.",
       "SPECTATORS_DISABLED": "Spectating is disabled for this room.",
       "PLAYER_SLOTS_FULL": "All player seats are occupied.",
       "KICKED_FROM_ROOM": "The host removed you from this room.",
-      "PROGRESS_CONFLICT": "Local and server progress differed and were resynchronized."
+      "PROGRESS_CONFLICT": "Local and server progress differed and were resynchronized.",
+      "PLAYER_FINISHED": "You have already finished this Battle round.",
+      "ROUND_NOT_RUNNING": "This Battle round has already ended.",
+      "battle_forfeit_failed": "Could not exit the Battle. Please try again."
     },
     "auth": {
       "title": "Sign in to battle",
-      "body": "Creating, joining, and spectating Battle rooms requires an account."
+      "body": "Sign in to create, join, or watch a Battle."
     },
     "hall": {
       "kicker": "Battle Hall",
@@ -776,12 +780,12 @@
       "modeRooms": "{mode} Rooms",
       "modeKicker": "Select Mode",
       "emptyTitle": "No rooms are open",
-      "emptyBody": "Join with a room code or create a new room.",
+      "emptyBody": "Enter a room code or create a room.",
       "joinByCode": "Enter Room Code",
-      "joinByCodeHint": "Room codes contain six letters and digits.",
+      "joinByCodeHint": "Enter the 6-character room code.",
       "roomCode": "6-digit code",
       "createRoom": "Create Room",
-      "createHint": "The room opens after its route has been generated."
+      "createHint": "Invite other players once the room is ready."
     },
     "room": {
       "host": "Host",
@@ -795,21 +799,21 @@
       "pattern": "Pattern",
       "target": "Target",
       "initialBoard": "Initial Board",
-      "randomBoard": "Leave blank for a random default board",
+      "randomBoard": "Leave blank for a random board",
       "maxPlayers": "Player Limit",
       "stepTimeout": "Move Time",
       "maxSteps": "Step Limit",
       "unlimited": "Unlimited",
       "publicRoom": "Public Room",
-      "publicRoomHint": "List this room in the Battle Hall",
+      "publicRoomHint": "Other players can find it in the hall",
       "allowSpectators": "Allow Spectators",
-      "allowSpectatorsHint": "Allow link joins after the match starts",
+      "allowSpectatorsHint": "Let others join as spectators at any time",
       "chatRoles": "Who Can Chat",
-      "chatRolesHint": "Choose which member roles may chat before and during the match",
+      "chatRolesHint": "Choose who may send messages",
       "chatRolesNone": "Chat disabled",
       "routeCost": "Route Cost",
       "balance": "Balance",
-      "refundPolicy": "Closing or expiring the room before a match starts refunds 80% of this route cost. One room may be created every 30 seconds."
+      "refundPolicy": "Closing or expiring an unplayed room refunds 80% of the fee. One room can be created every 30 seconds."
     },
     "actions": {
       "join": "Join",
@@ -822,6 +826,8 @@
       "start": "Start",
       "leave": "Leave",
       "closeRoom": "Close Room",
+      "cancel": "Cancel",
+      "processing": "Processing",
       "increase": "Increase value",
       "decrease": "Decrease value"
     },
@@ -851,8 +857,8 @@
       "spectators": "Spectators",
       "noSpectators": "No spectators",
       "inviteText": "{tablebase} Goodness Battle room: {url}",
-      "startRuleSpectators": "Two ready players can start. Unready players become spectators when the match begins.",
-      "startRuleNoSpectators": "Two ready players can start. Unready players are removed when the match begins."
+      "startRuleSpectators": "Two ready players can start. Unready players will spectate.",
+      "startRuleNoSpectators": "Two ready players can start. Unready players will leave the room."
     },
     "match": {
       "kicker": "Live Battle",
@@ -863,29 +869,41 @@
       "correcting": "Move Correction",
       "yourMove": "Your Move",
       "standardMove": "Optimal Move",
-      "goodnessDrop": "Goodness lost this step: {value}",
+      "goodnessDrop": "Goodness -{value}",
       "continueHint": "Press Enter to continue",
-      "inputHint": "Use arrow keys, WASD, or swipe to submit a move",
+      "inputHint": "Use arrow keys, WASD, or swipe",
       "live": "Live Data",
       "opponents": "Player Progress",
-      "completeTitle": "This Battle Is Complete",
-      "completeHint": "Review the result or remain on the final board. Returning to the room leaves you not ready.",
-      "viewResults": "View Results"
+      "openTrainer": "Open Trainer",
+      "liveRanking": "Live Ranking",
+      "viewResults": "View Results",
+      "exitBattle": "Exit Battle",
+      "exited": "Exited"
     },
     "playerStatus": {
       "playing": "Playing",
       "completed": "Finished",
       "timed_out": "Timed Out",
       "disconnected": "Offline",
-      "disqualified": "Finished"
+      "disqualified": "Finished",
+      "forfeited": "Exited"
     },
     "result": {
       "kicker": "Round Result",
+      "liveKicker": "Live Data",
+      "liveTitle": "Current Ranking",
       "title": "Battle Complete",
       "draw": "Draw",
       "steps": "steps",
       "backToRoom": "Return to Room",
-      "stayOnMatch": "Stay on Final Board"
+      "stayOnMatch": "Stay on Final Board",
+      "closeLive": "Close Ranking"
+    },
+    "forfeit": {
+      "kicker": "EXIT ROUND",
+      "title": "Exit this Battle?",
+      "body": "Exiting removes you from the ranking and cannot be undone. You can stay and watch.",
+      "confirm": "Exit Battle"
     },
     "chat": {
       "kicker": "ROOM CHAT",
@@ -916,7 +934,7 @@
   "leaderboards": {
     "kicker": "Community records",
     "title": "Leaderboards",
-    "subtitle": "Recognising the people who support the project and keep exploring its tablebases.",
+    "subtitle": "View community records and personal bests.",
     "updated": "Updated",
     "rank": "Rank",
     "player": "Username",
@@ -940,27 +958,27 @@
       },
       "token_lifetime": {
         "title": "All-time Token Usage",
-        "description": "Ranked by finalised lifetime Token usage and refreshed daily."
+        "description": "Ranked by all-time Token usage and updated daily."
       },
       "token_last_week": {
         "title": "Last Week Token Usage",
-        "description": "Finalised Token usage during the previous complete calendar week."
+        "description": "Ranked by Token usage during the previous calendar week."
       },
       "gamer_high_score": {
         "title": "High Scores",
-        "description": "Verified natural game-over scores from games that used any difficulty below 100."
+        "description": "Personal bests with at least one move below difficulty 100."
       },
       "gamer_adversarial": {
         "title": "Adversarial High Scores",
-        "description": "Verified scores where every valid move used difficulty 100."
+        "description": "Personal bests played entirely at difficulty 100."
       },
       "gamer_high_score_weekly": {
         "title": "Weekly High Scores",
-        "description": "Each player's best verified general-mode score during the current calendar week."
+        "description": "This week's personal bests in general mode."
       },
       "gamer_adversarial_weekly": {
         "title": "Weekly Adversarial High Scores",
-        "description": "Each player's best verified all-difficulty-100 score during the current calendar week."
+        "description": "This week's personal bests played entirely at difficulty 100."
       },
       "minigames": {
         "title": "Minigames",

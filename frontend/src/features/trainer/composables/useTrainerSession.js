@@ -52,7 +52,10 @@ import {
   stripTrainerQueryPayload,
   withEmptyPatternGroup,
 } from '../engine/trainerEmptyPattern.js';
-import { registerTrainerPracticeJumpConsumer } from '../services/trainerPracticeJump';
+import {
+  registerTrainerPracticeContextConsumer,
+  registerTrainerPracticeJumpConsumer,
+} from '../services/trainerPracticeJump';
 import {
   clearTrainerPracticeState,
   restoreTrainerPracticeState,
@@ -115,6 +118,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   let nextResultsRequestId = 0;
   const pendingResultsRequests = new Map();
   const pendingTrainerJump = ref(null);
+  const trainerPracticeContext = ref(null);
   let demoTimer = null;
   let resultsStaleTimer = null;
   let resultsPlaceholderTimer = null;
@@ -132,6 +136,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   let persistPracticeTimer = null;
   let practiceRestoreAttempted = false;
   let unregisterTrainerPracticeJumpConsumer = null;
+  let unregisterTrainerPracticeContextConsumer = null;
   const resultsRefreshPhase = ref('idle');
 
   const recordStep = ref(0);
@@ -236,6 +241,13 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     if (isEmptyPattern.value) return EMPTY_PATTERN_ID;
     return patternType.value && targetValue.value ? `${patternType.value}_${targetValue.value}` : '';
   });
+  const battlePracticeMismatch = computed(() => {
+    const context = trainerPracticeContext.value;
+    return context?.kind === 'battle'
+      && Boolean(context.fullPattern)
+      && currentPatternDisplay.value !== String(context.fullPattern);
+  });
+  const tablebaseQueryAllowed = () => !battlePracticeMismatch.value;
   const isVariant = computed(() => isVariantPattern(patternType.value, patternCategories.value));
 
   const restoreTrainerPractice = () => {
@@ -634,7 +646,36 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     if (!pending || pending.requestId || wsStatus.value !== 'connected') return;
 
     const parsed = parseFullPattern(pending.fullPattern);
+    if (pending.queryPolicy === 'same-table-only' && parsed && !catalogTables.value.length) return;
     clearQueuedMoveDirections();
+    if (
+      pending.queryPolicy === 'same-table-only'
+      && parsed
+      && currentPatternDisplay.value
+      && currentPatternDisplay.value !== pending.fullPattern
+    ) {
+      createLocalPracticeSession(pending.hex);
+      pendingTrainerJump.value = null;
+      defaultTablebaseAutoApplyAttempted = true;
+      invalidateResults({ clearDisplay: true });
+      finishResultsRefresh();
+      persistTrainerPracticeSoon();
+      return;
+    }
+    if (
+      parsed
+      && tablebaseReadyForConnection
+      && tablebasePath.value === 'loaded'
+      && loadedTablebaseFullPattern.value === pending.fullPattern
+    ) {
+      createLocalPracticeSession(pending.hex);
+      pendingTrainerJump.value = null;
+      defaultTablebaseAutoApplyAttempted = true;
+      invalidateResults({ clearDisplay: true });
+      queryResults('practice-jump');
+      persistTrainerPracticeSoon();
+      return;
+    }
     if (parsed) {
       const requestId = `${clientId}_table_${++nextTablebaseRequestId}`;
       patternType.value = parsed.pattern;
@@ -675,6 +716,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     pendingTrainerJump.value = {
       fullPattern: String(detail.fullPattern || '').trim(),
       hex,
+      queryPolicy: String(detail.queryPolicy || '').trim(),
     };
     applyTrainerJump();
   };
@@ -865,7 +907,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   };
 
   const prepareResultsRequest = (boardHex, reason = 'manual') => {
-    if (isEmptyPattern.value) return null;
+    if (isEmptyPattern.value || !tablebaseQueryAllowed()) return null;
     if (recordOpen.value || (reason !== 'step' && !showResults.value) || awaitingSpawn.value) return null;
     if (wsStatus.value !== 'connected' || !tablebaseReadyForConnection) return null;
     if (!boardHex) return null;
@@ -910,7 +952,11 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   };
 
   const requestSpawnForCurrentBoard = (mode = Number(spawnMode.value)) => {
-    if (![1, 2].includes(Number(mode)) || localPracticeSession.phase !== 'awaiting_spawn') return false;
+    if (
+      !tablebaseQueryAllowed()
+      || ![1, 2].includes(Number(mode))
+      || localPracticeSession.phase !== 'awaiting_spawn'
+    ) return false;
     const requestId = `${clientId}_spawn_${++nextSpawnRequestId}`;
     pendingSpawnQuery = {
       requestId,
@@ -934,6 +980,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     if (
       !['up', 'down', 'left', 'right'].includes(normalized)
       || awaitingSpawn.value
+      || (battlePracticeMismatch.value && [1, 2].includes(currentSpawnMode))
       || (currentSpawnMode !== 0 && currentSpawnMode !== 3 && wsStatus.value !== 'connected')
       || !requireAuth()
     ) {
@@ -1127,7 +1174,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     if (data.action === 'TRAINER_RESULTS' || (
       data.action === 'TABLEBASE_QUERY_RESULT' && data.data?.page === 'trainer'
     )) {
-      if (isEmptyPattern.value) return;
+      if (isEmptyPattern.value || !tablebaseQueryAllowed()) return;
       const requestId = data.data.query_id || data.data.request_id;
       const resultBoardHex = data.data.board_hex || currentBoardHex.value;
       if (requestId && pendingResultsRequests.has(requestId)) {
@@ -1444,6 +1491,11 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       return;
     }
     if (!patternType.value || !targetValue.value) return;
+    if (battlePracticeMismatch.value) {
+      invalidateResults({ clearDisplay: true });
+      finishResultsRefresh();
+      return;
+    }
     applyTablebase({ loadDefault: true });
   };
 
@@ -1744,6 +1796,16 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     unregisterTrainerPracticeJumpConsumer = registerTrainerPracticeJumpConsumer(
       (detail) => handleTrainerPracticeJump({ detail }),
     );
+    unregisterTrainerPracticeContextConsumer = registerTrainerPracticeContextConsumer(
+      (context) => {
+        trainerPracticeContext.value = context;
+        if (battlePracticeMismatch.value) {
+          pendingResultsRequests.clear();
+          invalidateResults({ clearDisplay: true });
+          finishResultsRefresh();
+        }
+      },
+    );
     document.addEventListener('click', closePatternMenuOnClick);
     document.addEventListener('contextmenu', preventCtx);
   });
@@ -1789,6 +1851,8 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     persistTrainerPractice();
     unregisterTrainerPracticeJumpConsumer?.();
     unregisterTrainerPracticeJumpConsumer = null;
+    unregisterTrainerPracticeContextConsumer?.();
+    unregisterTrainerPracticeContextConsumer = null;
     finishPaletteEditing({ query: false });
     clearPaletteSyncTimer();
     window.removeEventListener('keydown', handleKeydown);
@@ -1800,6 +1864,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   return {
     currentPatternDisplay,
+    battlePracticeMismatch,
     isEmptyPattern,
     emptyPatternId: EMPTY_PATTERN_ID,
     emptyPatternCategory: EMPTY_PATTERN_CATEGORY,

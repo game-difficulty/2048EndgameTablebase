@@ -85,16 +85,16 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
             )
 
     @staticmethod
-    def _generated_route() -> GeneratedBattleRoute:
+    def _generated_route(step_count: int = 1) -> GeneratedBattleRoute:
         initial_board = 0x11
         rates = (RATE_SCALE // 4, RATE_SCALE // 2, RATE_SCALE, RATE_SCALE * 3 // 4)
         blob = encode_route(
             initial_board,
-            [RouteStep(encode_changes("left", 0, 2), rates)],
+            [RouteStep(encode_changes("left", 0, 2), rates)] * int(step_count),
         )
         return GeneratedBattleRoute(
             route_blob=blob,
-            step_count=1,
+            step_count=int(step_count),
             certainty_step=None,
             termination_reason="max_steps",
             initial_board=initial_board,
@@ -104,9 +104,10 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
     async def _create_ready_room(
         self,
         *,
-        step_timeout_seconds: int = 30,
+        step_timeout_seconds: int = 90,
         max_players: int = 2,
         allow_spectators: bool = True,
+        generated_route: GeneratedBattleRoute | None = None,
     ) -> dict:
         with (
             patch.object(
@@ -117,7 +118,7 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 goodness_runtime,
                 "generate_battle_route",
-                new=AsyncMock(return_value=self._generated_route()),
+                new=AsyncMock(return_value=generated_route or self._generated_route()),
             ),
         ):
             created = await service.create_room(
@@ -141,11 +142,107 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
         service.leave_room(room["room_code"], user_id=self.host_id)
         self._expire_creation_cooldown()
 
-        room = await self._create_ready_room(step_timeout_seconds=120)
-        self.assertEqual(room["step_timeout_seconds"], 120)
+        room = await self._create_ready_room(step_timeout_seconds=600)
+        self.assertEqual(room["step_timeout_seconds"], 600)
         service.leave_room(room["room_code"], user_id=self.host_id)
 
         self.assertNotIn(6, service.VALID_STEP_TIMEOUTS)
+        self.assertNotIn(605, service.VALID_STEP_TIMEOUTS)
+
+    async def test_wrong_move_correction_does_not_consume_next_step_timeout(self) -> None:
+        room = await self._create_ready_room(
+            step_timeout_seconds=30,
+            generated_route=self._generated_route(step_count=2),
+        )
+        service.join_room(room["room_code"], user_id=self.player_id, role="player")
+        service.set_ready(room["room_code"], user_id=self.host_id, ready=True)
+        service.set_ready(room["room_code"], user_id=self.player_id, ready=True)
+        started = await service.start_room(
+            room["room_code"], user_id=self.host_id, session_id=None
+        )
+        round_id = str(started["round"]["round_id"])
+
+        choice = service.record_choice(
+            room["room_code"],
+            user_id=self.host_id,
+            round_id=round_id,
+            sequence=1,
+            route_index=0,
+            direction="right",
+        )
+        self.assertTrue(choice["wrong"])
+        self.assertEqual(choice["correction_seconds"], 15)
+        self.assertFalse(choice["complete"])
+        before = repository.get_room(room["room_code"])
+        before_result = next(
+            result for result in before["results"] if int(result["user_id"]) == self.host_id
+        )
+        extended_deadline = datetime.fromisoformat(before_result["timeout_at"])
+        self.assertGreaterEqual(
+            (extended_deadline - datetime.now(timezone.utc)).total_seconds(),
+            44,
+        )
+
+        resumed = service.handle_mode_action(
+            room["room_code"],
+            user_id=self.host_id,
+            action="correction_complete",
+            payload={
+                "round_id": round_id,
+                "sequence": 1,
+                "route_index": 1,
+            },
+        )
+        resumed_deadline = datetime.fromisoformat(resumed["timeout_at"])
+        remaining = (resumed_deadline - datetime.now(timezone.utc)).total_seconds()
+        self.assertGreaterEqual(remaining, 29)
+        self.assertLessEqual(remaining, 30)
+
+        repeated = service.handle_mode_action(
+            room["room_code"],
+            user_id=self.host_id,
+            action="correction_complete",
+            payload={
+                "round_id": round_id,
+                "sequence": 1,
+                "route_index": 1,
+            },
+        )
+        self.assertEqual(repeated["timeout_at"], resumed["timeout_at"])
+
+    async def test_forfeit_ends_only_the_players_round_and_keeps_membership(self) -> None:
+        room = await self._create_ready_room(
+            generated_route=self._generated_route(step_count=2),
+        )
+        service.join_room(room["room_code"], user_id=self.player_id, role="player")
+        service.set_ready(room["room_code"], user_id=self.host_id, ready=True)
+        service.set_ready(room["room_code"], user_id=self.player_id, ready=True)
+        started = await service.start_room(
+            room["room_code"], user_id=self.host_id, session_id=None
+        )
+        round_id = str(started["round"]["round_id"])
+
+        first = service.forfeit_round(
+            room["room_code"], user_id=self.host_id, round_id=round_id
+        )
+        host_result = next(
+            item for item in first["results"] if int(item["user_id"]) == self.host_id
+        )
+        self.assertEqual(first["status"], "running")
+        self.assertEqual(host_result["status"], "disqualified")
+        self.assertEqual(host_result["mode_data"]["finish_reason"], "forfeit")
+        self.assertTrue(any(int(item["user_id"]) == self.host_id for item in first["members"]))
+
+        repeated = service.forfeit_round(
+            room["room_code"], user_id=self.host_id, round_id=round_id
+        )
+        self.assertEqual(repeated["revision"], first["revision"])
+
+        completed = service.forfeit_round(
+            room["room_code"], user_id=self.player_id, round_id=round_id
+        )
+        self.assertEqual(completed["status"], "waiting")
+        self.assertEqual(completed["round"]["status"], "completed")
 
     async def test_full_round_returns_to_same_lobby_and_resets_ready(self) -> None:
         room = await self._create_ready_room()

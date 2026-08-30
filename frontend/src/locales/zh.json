@@ -379,6 +379,7 @@
       "dtype": "数据类型",
       "awaitingManualSpawn": "点击空格放置新块：左键=2，右键=4",
       "emptyPattern": "空定式不查询结果",
+      "battlePatternMismatch": "训练页当前选择了其他定式。棋盘已同步，切换到对战定式后可查看成功率。",
       "hidden": "结果已隐藏"
     },
     "actions": {
@@ -460,7 +461,7 @@
   },
   "minigames": {
     "menu": {
-      "subtitle": "统一入口放置各种规则改编版 2048 小游戏。",
+      "subtitle": "选择一种玩法，体验不同规则的 2048。",
       "difficulty": "难度",
       "easy": "休闲",
       "hard": "困难",
@@ -505,7 +506,7 @@
       "title": "小游戏排行",
       "board": "榜单",
       "overall": "奖杯总榜",
-      "overallDescription": "按同一难度下获得的 Grand、金、银、铜奖杯数量依次排序；完全相同时，较早达成者优先。",
+      "overallDescription": "按奖杯等级和数量排名，同分时较早达成者优先。",
       "gameDescription": "每名玩家仅保留该小游戏、该难度下的个人最高分。",
       "trophies": "奖杯",
       "highestTile": "最高方块",
@@ -514,14 +515,14 @@
       "empty": "当前榜单暂无成绩。",
       "loading": "正在读取小游戏榜单...",
       "loadFailed": "小游戏榜单加载失败。",
-      "loginHint": "登录后的自然终局会自动提交个人最高分。"
+      "loginHint": "登录后完成的对局会自动提交个人最高分。"
     }
   },
   "analysis": {
     "windowTag": "工具窗口",
     "title": "回放批量分析",
     "close": "关闭",
-    "notes": "*分析报告会保存到每个回放文件所在目录。也可以直接粘贴文件夹路径，每行一条。",
+    "notes": "选择 .txt 或 .vrs 回放文件，可一次分析多个。",
     "input": {
       "title": "输入",
       "selectPattern": "选择定式",
@@ -576,12 +577,12 @@
       "open": "额度说明",
       "kicker": "额度规则",
       "title": "免费额度与用量",
-      "subtitle": "Token 用于承担定式查询和回放分析产生的计算与读取成本。这里列出当前生效的赠送与消费规则。",
+      "subtitle": "查看每周免费额度和各项功能的 Token 消耗。",
       "loading": "正在读取额度规则...",
       "loadFailed": "额度规则暂时无法读取，请稍后重试。",
       "weekly": {
         "title": "每周免费额度",
-        "note": "每 {days} 天检查并补充一次，赠送余额最多保留到对应层级上限。",
+        "note": "每 {days} 天补充一次，赠送余额不超过当前账号上限。",
         "tiers": {
           "public": {
             "label": "普通账号",
@@ -599,7 +600,7 @@
       },
       "costs": {
         "title": "定式与功能消耗",
-        "note": "训练与测试查表使用相同标准；表内数字均为单次 token 消耗。",
+        "note": "训练与测试采用相同价格，表内为单次消耗。",
         "tablebase": "定式",
         "multiplier": "倍率",
         "lookupHit": "查到成功率",
@@ -610,7 +611,7 @@
       },
       "thresholds": {
         "title": "定式剪枝阈值",
-        "note": "数据提取自各定式目录的 *_config.txt；低于阈值的成功率记录可能已被剪枝，因此查询时可能没有结果。",
+        "note": "低于阈值的记录可能已被移除，因此查询时可能没有结果。",
         "tablebase": "定式",
         "threshold": "阈值",
         "mode": "模式",
@@ -624,9 +625,9 @@
         "title": "计费说明",
         "balanceOrder": "消费时先使用赠送 token，再使用充值 token。",
         "analysisCharge": "分析按所选文件数计费，无论是否生成报告。",
-        "battleCharge": "创建对战房间时按所选定式倍率预扣路线费用；路线生成失败全额退回，房间未开始对局便关闭或过期时退回80%。每名用户每30秒最多创建一个房间。",
+        "battleCharge": "创建房间时先扣除路线费用。生成失败全额退回；未开局便关闭或过期时退回 80%。每 30 秒可创建一个房间。",
         "replayCharge": "回放在载入授权后计费，文件解析失败不退还。",
-        "offline": "定式离线或请求在执行前被服务器拒绝时不扣费；已预扣额度会退回。"
+        "offline": "定式离线或请求未执行时不扣费；已扣额度会自动退回。"
       }
     }
   },
@@ -716,7 +717,7 @@
       "practice": "查看定式推演，学习残局最优解",
       "test": "训练走法判断，使用回放、错题本和分析工具",
       "minigames": "体验带有独特方块、规则与挑战玩法的 2048 变体",
-      "battle": "多人使用同一条定式路线，比较走法吻合度",
+      "battle": "多人同场选择走法，比较吻合度",
       "leaderboards": "查看社区高分、Token 消耗与赞助榜单",
       "settings": "定式计算与外观设置",
       "help": "学习 2048 技巧、定式思路和进阶打法"
@@ -729,23 +730,23 @@
     "title": "对战",
     "rules": {
       "kicker": "BATTLE RULES",
-      "title": "对战模式规则",
-      "subtitle": "不同模式拥有独立的计分和操作规则。创建房间前请先确认所选模式。",
-      "open": "查看对战模式规则",
+      "title": "对战规则",
+      "subtitle": "选择模式，邀请玩家，一起开始。",
+      "open": "查看对战规则",
       "close": "关闭规则"
     },
     "modes": {
       "goodness": {
         "name": "吻合度对战",
         "shortName": "吻合度",
-        "summary": "所有玩家沿同一条定式路线作答，以累计吻合度决定胜负。",
+        "summary": "在相同局面中选择走法，吻合度更高者获胜。",
         "rules": {
-          "sharedRoute": "所有玩家使用相同的起始盘面、标准走法和出数序列，路线由房主选择的定式生成。",
-          "moveCorrection": "非法方向不计分也不推进；合法但非最优的方向会计入损失，提示后由系统自动执行标准方向。",
-          "scoring": "吻合度沿用测试页面的计算语义。路线结束后累计吻合度更高者获胜，相同则为平局，速度不参与排名。",
-          "certainty": "当当前局面的成功率达到 100% 时，玩家完成作答，剩余路线由系统按最优解自动播放。",
-          "timeout": "每一步必须在房间设置的时限内完成；单步超时后该玩家本局结束。",
-          "spectating": "观战者可查看所有玩家；参赛玩家完成自己的路线后，才可查看尚未完成玩家的盘面。"
+          "sharedRoute": "所有玩家面对相同的局面和出数。",
+          "moveCorrection": "走法不是最优时会扣除吻合度，随后按最优走法继续。",
+          "scoring": "吻合度最高者获胜；相同则平局，不比速度。",
+          "certainty": "局面胜率达到 100% 后，剩余路线会自动完成。",
+          "timeout": "请在单步时限内作答，超时即结束本局。",
+          "spectating": "观战者可查看所有盘面；玩家完成后也可查看对手。"
         }
       }
     },
@@ -756,19 +757,22 @@
       "USER_ALREADY_IN_ROOM": "你已经在另一个房间中。",
       "ROOM_CREATE_COOLDOWN": "创建房间过于频繁，每30秒只能创建一个新房间。",
       "TABLE_UNAVAILABLE": "该定式当前不可用。",
-      "ROUTE_GENERATION_FAILED": "定式路线生成失败，预扣 Token 已退回。",
-      "ROUTE_TOO_SHORT": "未能生成足够长的定式路线，预扣 Token 已退回。",
+      "ROUTE_GENERATION_FAILED": "路线生成失败，Token 已退还。",
+      "ROUTE_TOO_SHORT": "未找到合适路线，Token 已退还。",
       "NOT_ENOUGH_PLAYERS": "至少需要两名已准备玩家才能开始。",
       "HOST_NOT_READY": "房主准备后才能开始。",
       "PLAYERS_NOT_READY": "至少需要两名玩家准备后才能开始。",
       "SPECTATORS_DISABLED": "该房间不允许观战。",
       "PLAYER_SLOTS_FULL": "玩家席位已满。",
       "KICKED_FROM_ROOM": "你已被房主移出该房间。",
-      "PROGRESS_CONFLICT": "本地进度与服务器不一致，已重新同步。"
+      "PROGRESS_CONFLICT": "本地进度与服务器不一致，已重新同步。",
+      "PLAYER_FINISHED": "你已经结束本轮对战。",
+      "ROUND_NOT_RUNNING": "本轮对战已经结束。",
+      "battle_forfeit_failed": "退出对战失败，请重试。"
     },
     "auth": {
       "title": "登录后进入对战",
-      "body": "创建房间、加入对局和观战均需要登录。"
+      "body": "登录后即可创建、加入或观看对战。"
     },
     "hall": {
       "kicker": "对战大厅",
@@ -776,12 +780,12 @@
       "modeRooms": "{mode}房间",
       "modeKicker": "选择模式",
       "emptyTitle": "暂无可加入的房间",
-      "emptyBody": "可以使用房间码加入，或创建一间新房。",
+      "emptyBody": "输入房间码加入，或创建一个房间。",
       "joinByCode": "输入房间码",
-      "joinByCodeHint": "房间码由 6 位字母和数字组成。",
+      "joinByCodeHint": "输入 6 位房间码。",
       "roomCode": "6 位房间码",
       "createRoom": "创建房间",
-      "createHint": "路线生成成功后，房间才会进入等待状态。"
+      "createHint": "创建后即可邀请其他玩家。"
     },
     "room": {
       "host": "房主",
@@ -795,21 +799,21 @@
       "pattern": "定式 Pattern",
       "target": "目标数字",
       "initialBoard": "初始盘面",
-      "randomBoard": "留空则使用随机默认局面",
+      "randomBoard": "留空则随机生成",
       "maxPlayers": "玩家上限",
       "stepTimeout": "单步时限",
       "maxSteps": "最大步数",
       "unlimited": "不限制",
       "publicRoom": "公开房间",
-      "publicRoomHint": "显示在对战大厅的房间列表中",
+      "publicRoomHint": "其他玩家可在大厅中找到它",
       "allowSpectators": "允许观战",
-      "allowSpectatorsHint": "对局开始后仍允许通过链接加入",
+      "allowSpectatorsHint": "允许其他人随时进入观战",
       "chatRoles": "可发言身份",
-      "chatRolesHint": "选择可以在房间和对局中发言的成员身份",
+      "chatRolesHint": "选择允许发言的成员",
       "chatRolesNone": "全部禁言",
       "routeCost": "本局路线费用",
       "balance": "当前余额",
-      "refundPolicy": "未开始对局便关闭或过期，将退回本次路线费用的80%；每30秒最多创建一个房间。"
+      "refundPolicy": "未开局时关闭或过期，将退还 80% 费用。每 30 秒可创建一个房间。"
     },
     "actions": {
       "join": "加入",
@@ -822,6 +826,8 @@
       "start": "开始对战",
       "leave": "离开房间",
       "closeRoom": "关闭房间",
+      "cancel": "取消",
+      "processing": "处理中",
       "increase": "增加数值",
       "decrease": "减少数值"
     },
@@ -851,8 +857,8 @@
       "spectators": "观战者",
       "noSpectators": "暂无观战者",
       "inviteText": "{tablebase} 吻合度对战房间：{url}",
-      "startRuleSpectators": "至少两名玩家准备即可开始；未准备玩家将在开局时转为观战者。",
-      "startRuleNoSpectators": "至少两名玩家准备即可开始；未准备玩家将在开局时被移出房间。"
+      "startRuleSpectators": "两人准备即可开始，未准备玩家将进入观战。",
+      "startRuleNoSpectators": "两人准备即可开始，未准备玩家将离开房间。"
     },
     "match": {
       "kicker": "实时对战",
@@ -863,29 +869,41 @@
       "correcting": "走法纠正",
       "yourMove": "你的走法",
       "standardMove": "标准走法",
-      "goodnessDrop": "本步吻合度损失 {value}",
-      "continueHint": "按下 Enter 键继续",
-      "inputHint": "使用方向键、WASD 或滑屏输入走法",
+      "goodnessDrop": "本步吻合度 -{value}",
+      "continueHint": "按 Enter 继续",
+      "inputHint": "方向键、WASD 或滑屏操作",
       "live": "实时数据",
       "opponents": "玩家进度",
-      "completeTitle": "本轮对战已结束",
-      "completeHint": "你可以查看本局结算，或继续停留在终盘；返回房间后当前状态为未准备。",
-      "viewResults": "查看结算"
+      "openTrainer": "跳转训练",
+      "liveRanking": "实时排名",
+      "viewResults": "查看结算",
+      "exitBattle": "退出对战",
+      "exited": "已退出"
     },
     "playerStatus": {
       "playing": "进行中",
       "completed": "已完成",
       "timed_out": "已超时",
       "disconnected": "已离线",
-      "disqualified": "已结束"
+      "disqualified": "已结束",
+      "forfeited": "已退出"
     },
     "result": {
       "kicker": "本局结果",
+      "liveKicker": "实时数据",
+      "liveTitle": "当前实时排名",
       "title": "对战结束",
       "draw": "本局平局",
       "steps": "步",
       "backToRoom": "返回原房间",
-      "stayOnMatch": "继续查看终盘"
+      "stayOnMatch": "继续查看终盘",
+      "closeLive": "关闭排名"
+    },
+    "forfeit": {
+      "kicker": "退出本轮",
+      "title": "确认退出对战？",
+      "body": "退出后本局不计名次，也无法继续。你仍可留在这里观战。",
+      "confirm": "确认退出"
     },
     "chat": {
       "kicker": "ROOM CHAT",
@@ -916,7 +934,7 @@
   "leaderboards": {
     "kicker": "社区记录",
     "title": "排行榜",
-    "subtitle": "记录支持项目运行与持续探索定式的用户。",
+    "subtitle": "查看社区记录与个人成绩。",
     "updated": "数据更新",
     "rank": "名次",
     "player": "用户名",
@@ -940,27 +958,27 @@
       },
       "token_lifetime": {
         "title": "累计 Token 榜",
-        "description": "按历史实际 Token 消耗量排列，每日更新。"
+        "description": "按累计 Token 消耗排名，每日更新。"
       },
       "token_last_week": {
         "title": "上周 Token 榜",
-        "description": "统计上一完整自然周的实际 Token 消耗量。"
+        "description": "按上一自然周的 Token 消耗排名。"
       },
       "gamer_high_score": {
         "title": "高分榜",
-        "description": "经服务端重放验证、且至少一步难度低于 100 的自然终局最高分。"
+        "description": "至少一步使用低于 100 难度的个人最高分。"
       },
       "gamer_adversarial": {
         "title": "对抗模式高分榜",
-        "description": "经服务端重放验证、每一步均使用难度 100 出数的最高分。"
+        "description": "全程使用难度 100 的个人最高分。"
       },
       "gamer_high_score_weekly": {
         "title": "本周高分榜",
-        "description": "本自然周内经服务端重放验证的普通模式个人最高分。"
+        "description": "本周普通模式个人最高分。"
       },
       "gamer_adversarial_weekly": {
         "title": "本周对抗模式高分榜",
-        "description": "本自然周内经服务端重放验证的全程难度 100 个人最高分。"
+        "description": "本周全程难度 100 的个人最高分。"
       },
       "minigames": {
         "title": "小游戏榜",

@@ -2,13 +2,30 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  clearTrainerPracticeContext,
   queueTrainerPracticeJump,
+  registerTrainerPracticeContextConsumer,
   registerTrainerPracticeJumpConsumer,
   resetTrainerPracticeJumpQueue,
 } from '../src/features/trainer/services/trainerPracticeJump.js';
 
 test.afterEach(() => {
   resetTrainerPracticeJumpQueue();
+});
+
+test('publishes and clears the Battle practice context independently of the jump', () => {
+  const received = [];
+  queueTrainerPracticeJump({
+    fullPattern: 'L3_128',
+    hex: '0000000000000011',
+    context: { kind: 'battle', roomId: 'room-1', fullPattern: 'L3_128' },
+  });
+  registerTrainerPracticeContextConsumer((context) => received.push(context));
+  clearTrainerPracticeContext('battle');
+  assert.deepEqual(received, [
+    { kind: 'battle', roomId: 'room-1', fullPattern: 'L3_128' },
+    null,
+  ]);
 });
 
 test('delivers a queued jump when Trainer mounts later', () => {

@@ -14,6 +14,7 @@ from .service import (
     broadcast_room,
     create_room,
     current_room,
+    forfeit_round,
     join_room,
     kick,
     leave_room,
@@ -179,6 +180,25 @@ async def start_battle_room(
             session_id=(int(user["session_id"]) if user.get("session_id") else None),
         )
         return {"room": room, "token_balance": get_token_balance(int(user["id"]))}
+    except Exception as exc:
+        _raise_service_error(exc)
+        raise
+
+
+@router.post("/rooms/{room_code}/rounds/{round_id}/forfeit")
+async def forfeit_battle_round(
+    room_code: str,
+    round_id: str,
+    user: dict = Depends(require_user),
+) -> dict[str, Any]:
+    try:
+        room = forfeit_round(
+            room_code,
+            user_id=int(user["id"]),
+            round_id=round_id,
+        )
+        await broadcast_room(str(room["room_id"]))
+        return {"room": room}
     except Exception as exc:
         _raise_service_error(exc)
         raise

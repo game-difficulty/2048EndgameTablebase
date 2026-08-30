@@ -37,10 +37,10 @@ export function createBattleRoomViewState() {
       && roundId(previousRoom) === nextRoundId
     );
     if (nextRoom.status === 'running' && nextRoundId) {
+      if (activeRoundId && activeRoundId !== nextRoundId) resultRoundId = '';
       activeRoundId = nextRoundId;
       heldRoundId = '';
       returnedRoundId = '';
-      resultRoundId = '';
       return snapshot();
     }
     if (isCompleted(nextRoom)) {
@@ -69,7 +69,13 @@ export function createBattleRoomViewState() {
 
   const openResults = (room) => {
     const currentRoundId = roundId(room);
-    if (currentRoundId && currentRoundId === heldRoundId) {
+    if (
+      currentRoundId
+      && (
+        currentRoundId === heldRoundId
+        || (room?.status === 'running' && room?.round?.status === 'running')
+      )
+    ) {
       resultRoundId = currentRoundId;
     }
     return snapshot();

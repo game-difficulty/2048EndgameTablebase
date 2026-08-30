@@ -1,7 +1,7 @@
 <template>
   <div
     ref="boardRef"
-    class="board relative bg-board-bg rounded-xl aspect-square w-full max-w-[600px] mx-auto touch-none"
+    :class="['board relative bg-board-bg rounded-xl aspect-square w-full max-w-[600px] mx-auto touch-none', { 'board-compact': compact }]"
     @pointermove="handleBoardPointerMove"
     @pointerup="handleBoardPointerUp"
     @pointercancel="clearTouchGesture"
@@ -61,6 +61,10 @@ const props = defineProps({
     required: true
   },
   dis32k: {
+    type: Boolean,
+    default: false
+  },
+  compact: {
     type: Boolean,
     default: false
   },
@@ -467,6 +471,10 @@ const getTileLabelStyle = (tile) => {
   --padding: 2.5%;
   --grid-gap: 2.5%;
   --tile-size: calc((100% - var(--padding) * 2 - var(--grid-gap) * 3) / 4);
+}
+
+.board-compact {
+  --tile-font-scale: 0.45;
 }
 
 @supports (container-type: size) {

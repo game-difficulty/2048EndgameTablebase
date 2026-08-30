@@ -120,7 +120,7 @@
           </label>
           <label class="battle-field">
             <span>{{ $t('battle.form.stepTimeout') }}</span>
-            <BattleNumberInput v-model="form.step_timeout_seconds" :min="5" :max="120" :step="5" />
+            <BattleNumberInput v-model="form.step_timeout_seconds" :min="5" :max="600" :step="5" />
           </label>
           <label class="battle-field battle-field-wide">
             <span>{{ $t('battle.form.maxSteps') }}</span>
@@ -190,7 +190,7 @@ const form = reactive({
   initial_board: '',
   max_players: 2,
   max_steps: '',
-  step_timeout_seconds: 30,
+  step_timeout_seconds: 90,
   is_public: true,
   allow_spectators: true,
   chat_roles: ['host', 'player', 'spectator'],
@@ -219,7 +219,7 @@ const formattedCost = computed(() => routeCost.value.toLocaleString());
 const formattedBalance = computed(() => Number(props.tokenBalance || 0).toLocaleString(undefined, { maximumFractionDigits: 1 }));
 const validInitialBoard = computed(() => !form.initial_board || /^[0-9a-fA-F]{16}$/.test(form.initial_board));
 const validMaxPlayers = computed(() => Number.isInteger(Number(form.max_players)) && Number(form.max_players) >= 2 && Number(form.max_players) <= 8);
-const validStepTimeout = computed(() => Number.isInteger(Number(form.step_timeout_seconds)) && Number(form.step_timeout_seconds) >= 5 && Number(form.step_timeout_seconds) <= 120 && Number(form.step_timeout_seconds) % 5 === 0);
+const validStepTimeout = computed(() => Number.isInteger(Number(form.step_timeout_seconds)) && Number(form.step_timeout_seconds) >= 5 && Number(form.step_timeout_seconds) <= 600 && Number(form.step_timeout_seconds) % 5 === 0);
 const validMaxSteps = computed(() => form.max_steps === '' || (Number.isInteger(Number(form.max_steps)) && Number(form.max_steps) >= 1 && Number(form.max_steps) <= 9999));
 const canCreate = computed(() => Boolean(validMode.value && form.pattern && form.target && validInitialBoard.value && validMaxPlayers.value && validStepTimeout.value && validMaxSteps.value));
 

@@ -54,6 +54,13 @@ export const battleClient = {
     method: 'POST',
     body: { request_id: requestId },
   }),
+  forfeit: (roomCode, roundId, requestId) => request(
+    `/api/battle/rooms/${encodeURIComponent(roomCode)}/rounds/${encodeURIComponent(roundId)}/forfeit`,
+    {
+      method: 'POST',
+      body: { request_id: requestId },
+    },
+  ),
   kick: (roomCode, userId, requestId) => request(`/api/battle/rooms/${encodeURIComponent(roomCode)}/kick`, {
     method: 'POST',
     body: { user_id: Number(userId), request_id: requestId },

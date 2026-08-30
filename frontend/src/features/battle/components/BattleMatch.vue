@@ -1,7 +1,7 @@
 <template>
   <div class="battle-match">
     <header class="battle-match-header">
-      <div>
+      <div class="battle-match-identity">
         <span class="ui-caption font-black uppercase text-text-secondary">{{ $t('battle.match.kicker') }}</span>
         <div class="battle-match-title-line">
           <h2>{{ room.full_pattern }}</h2>
@@ -12,6 +12,25 @@
       <div class="battle-match-clock">
         <span>{{ $t('battle.match.stepTime') }}</span>
         <strong>{{ countdown }}</strong>
+      </div>
+      <div class="battle-match-actions">
+        <button type="button" @click="$emit('open-trainer')">{{ $t('battle.match.openTrainer') }}</button>
+        <button type="button" @click="$emit('show-results')">
+          {{ $t(roundCompleted ? 'battle.match.viewResults' : 'battle.match.liveRanking') }}
+        </button>
+        <button
+          v-if="roundCompleted"
+          type="button"
+          class="primary"
+          @click="$emit('return-lobby')"
+        >{{ $t('battle.result.backToRoom') }}</button>
+        <button
+          v-else-if="canForfeit"
+          type="button"
+          class="danger"
+          @click="$emit('forfeit')"
+        >{{ $t('battle.match.exitBattle') }}</button>
+        <button v-else-if="ownForfeited" type="button" disabled>{{ $t('battle.match.exited') }}</button>
       </div>
     </header>
 
@@ -28,7 +47,7 @@
             <span>{{ player.route_index }}/{{ totalSteps }}</span>
           </div>
         </div>
-        <BaseBoard v-if="opponentBoards[player.user_id]" :frame="opponentBoards[player.user_id]" :is-variant="isVariant" />
+        <BaseBoard v-if="opponentBoards[player.user_id]" :frame="opponentBoards[player.user_id]" :dis32k="dis32k" :is-variant="isVariant" />
       </article>
     </div>
 
@@ -37,10 +56,10 @@
         <div class="battle-own-metrics">
           <div><span>{{ $t('battle.match.goodness') }}</span><strong>{{ percent(ownResult?.goodness_of_fit) }}</strong></div>
           <div><span>{{ $t('battle.match.progress') }}</span><strong>{{ ownResult?.route_index || 0 }}/{{ totalSteps }}</strong></div>
-          <div><span>{{ $t('battle.match.status') }}</span><strong>{{ $t(`battle.playerStatus.${ownResult?.status || 'playing'}`) }}</strong></div>
+          <div><span>{{ $t('battle.match.status') }}</span><strong>{{ $t(playerStatusKey(ownResult)) }}</strong></div>
         </div>
         <div class="battle-board-shell">
-          <BaseBoard :frame="boardFrame" :is-variant="isVariant" @swipe="$emit('move', $event)" />
+          <BaseBoard :frame="boardFrame" :dis32k="dis32k" :is-variant="isVariant" @swipe="$emit('move', $event)" />
           <Transition name="battle-correction">
             <div v-if="wrongOverlay" class="battle-wrong-overlay" role="status" aria-live="assertive">
               <span class="battle-wrong-kicker">{{ $t('battle.match.correcting') }}</span>
@@ -73,26 +92,15 @@
               <strong class="battle-opponent-gof">{{ percent(player.goodness_of_fit) }}</strong>
             </div>
             <div class="battle-progress-track"><i :style="{ width: progressPercent(player.route_index) }"></i></div>
-            <div class="battle-opponent-footer"><span>{{ player.route_index }}/{{ totalSteps }}</span><span>{{ $t(`battle.playerStatus.${player.status}`) }}</span></div>
+            <div class="battle-opponent-footer"><span>{{ player.route_index }}/{{ totalSteps }}</span><span>{{ $t(playerStatusKey(player)) }}</span></div>
             <div v-if="canSeeBoard(player) && opponentBoards[player.user_id]" class="battle-revealed-board">
-              <BaseBoard :frame="opponentBoards[player.user_id]" :is-variant="isVariant" />
+              <BaseBoard compact :frame="opponentBoards[player.user_id]" :dis32k="dis32k" :is-variant="isVariant" />
             </div>
           </article>
         </div>
       </aside>
     </div>
 
-    <section v-if="roundCompleted" class="battle-match-complete">
-      <div>
-        <span class="ui-caption font-black uppercase text-text-secondary">{{ $t('battle.result.kicker') }}</span>
-        <h3>{{ $t('battle.match.completeTitle') }}</h3>
-        <p>{{ $t('battle.match.completeHint') }}</p>
-      </div>
-      <div class="battle-match-complete-actions">
-        <button type="button" @click="$emit('show-results')">{{ $t('battle.match.viewResults') }}</button>
-        <button type="button" class="primary" @click="$emit('return-lobby')">{{ $t('battle.result.backToRoom') }}</button>
-      </div>
-    </section>
   </div>
 </template>
 
@@ -110,20 +118,29 @@ const props = defineProps({
   spectator: { type: Boolean, default: false },
   ownFinished: { type: Boolean, default: false },
   wsStatus: { type: String, default: 'disconnected' },
+  dis32k: { type: Boolean, default: false },
   isVariant: { type: Boolean, default: false },
 });
 
-defineEmits(['move', 'show-results', 'return-lobby']);
+defineEmits(['move', 'open-trainer', 'show-results', 'forfeit', 'return-lobby']);
 const now = ref(Date.now());
 let timer = null;
 const totalSteps = computed(() => Number(props.room.route?.step_count || 0));
 const roundCompleted = computed(() => props.room.round?.status === 'completed');
 const ownResult = computed(() => props.room.results?.find((item) => Number(item.user_id) === Number(props.currentUserId)) || null);
+const canForfeit = computed(() => !props.spectator && ownResult.value?.status === 'playing');
+const ownForfeited = computed(() => (
+  ownResult.value?.status === 'disqualified'
+  && ownResult.value?.mode_data?.finish_reason === 'forfeit'
+));
 const playerRows = computed(() => (props.room.results || []).map((result) => {
   const member = props.room.members?.find((item) => Number(item.user_id) === Number(result.user_id)) || {};
   return { ...member, ...result };
 }));
 const countdown = computed(() => {
+  if (props.wrongOverlay && ownResult.value?.status === 'playing') {
+    return `${Number(props.room.step_timeout_seconds || 90)}s`;
+  }
   const deadline = ownResult.value?.timeout_at;
   if (!deadline || ownResult.value?.status !== 'playing') return '--';
   return `${Math.max(0, Math.ceil((Date.parse(deadline) - now.value) / 1000))}s`;
@@ -133,6 +150,11 @@ const dropPercent = (value) => `${(Math.max(0, Number(value || 0)) * 100).toFixe
 const progressPercent = (index) => `${Math.min(100, totalSteps.value ? Number(index || 0) / totalSteps.value * 100 : 0)}%`;
 const initials = (value) => String(value || '?').trim().slice(0, 2).toUpperCase();
 const onlineStatusKey = (player) => (player?.online ? 'battle.status.online' : 'battle.status.offline');
+const playerStatusKey = (player) => (
+  player?.status === 'disqualified' && player?.mode_data?.finish_reason === 'forfeit'
+    ? 'battle.playerStatus.forfeited'
+    : `battle.playerStatus.${player?.status || 'playing'}`
+);
 const directionLabel = (direction) => ({ left: '←', right: '→', up: '↑', down: '↓' }[direction] || '?');
 const canSeeBoard = (player) => (
   Number(player.user_id) !== Number(props.currentUserId)
@@ -145,15 +167,22 @@ onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
 
 <style scoped>
 .battle-match { display: flex; flex-direction: column; gap: 14px; }
-.battle-match-header { min-height: 78px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 18px; border: 1px solid var(--border-main); border-radius: 8px; background: var(--bg-card); box-shadow: 0 12px 30px rgba(0,0,0,.06); }
+.battle-match-header { min-height: 60px; display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 14px; padding: 9px 12px 9px 16px; border: 1px solid var(--border-main); border-radius: 8px; background: var(--bg-card); box-shadow: 0 12px 30px rgba(0,0,0,.06); }
+.battle-match-identity { min-width: 0; }
 .battle-match-title-line { display: flex; align-items: center; gap: 10px; margin-top: 3px; }
-.battle-match-title-line h2 { margin: 0; color: var(--text-main); font-size: 25px; font-weight: 900; }
+.battle-match-title-line h2 { min-width: 0; margin: 0; overflow: hidden; color: var(--text-main); font-size: 21px; font-weight: 900; text-overflow: ellipsis; white-space: nowrap; }
 .battle-room-code, .battle-live-badge { border: 1px solid var(--border-main); border-radius: 999px; padding: 4px 8px; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 900; }
 .battle-live-badge.online { color: #278354; border-color: color-mix(in srgb, #37a667 45%, var(--border-main)); }
 .battle-live-badge.offline { color: #c24d4d; }
-.battle-match-clock { min-width: 104px; text-align: right; }
+.battle-match-clock { min-width: 84px; padding-right: 4px; text-align: right; }
 .battle-match-clock span { display: block; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 800; }
-.battle-match-clock strong { color: var(--text-main); font: 900 24px/1.2 var(--font-mono, monospace); }
+.battle-match-clock strong { color: var(--text-main); font: 900 20px/1.2 var(--font-mono, monospace); }
+.battle-match-actions { display: flex; align-items: center; gap: 7px; }
+.battle-match-actions button { min-width: 92px; min-height: 38px; padding: 0 11px; border: 1px solid var(--border-main); border-radius: 7px; background: var(--bg-card); color: var(--text-main); font-size: var(--font-ui-xs); font-weight: 900; white-space: nowrap; }
+.battle-match-actions button:hover:not(:disabled), .battle-match-actions button:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+.battle-match-actions button.primary { border-color: var(--btn-bg); background: var(--btn-bg); color: white; }
+.battle-match-actions button.danger { border-color: color-mix(in srgb, #d94f56 66%, var(--border-main)); color: #d94f56; }
+.battle-match-actions button:disabled { cursor: default; opacity: .55; }
 .battle-match-grid { display: grid; grid-template-columns: 442px minmax(0, 1fr); gap: 16px; align-items: stretch; }
 .battle-own-stage, .battle-opponents-panel { border: 1px solid var(--border-main); border-radius: 8px; background: var(--bg-card); box-shadow: 0 14px 32px rgba(0,0,0,.06); }
 .battle-own-stage { padding: 14px; }
@@ -203,10 +232,4 @@ onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
 .battle-mini-stats { text-align: right; }
 .battle-mini-stats strong, .battle-mini-stats span { display: block; color: var(--text-main); font-size: 10px; font-weight: 900; }
 .battle-mini-stats span { color: var(--text-secondary); }
-.battle-match-complete { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 18px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border-main)); border-radius: 8px; background: color-mix(in srgb, var(--accent) 7%, var(--bg-card)); box-shadow: 0 12px 30px rgba(0,0,0,.06); }
-.battle-match-complete h3 { margin: 3px 0 2px; color: var(--text-main); font-size: var(--font-ui-lg); font-weight: 900; }
-.battle-match-complete p { margin: 0; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 700; }
-.battle-match-complete-actions { display: flex; flex: 0 0 auto; gap: 8px; }
-.battle-match-complete-actions button { min-width: 112px; min-height: 40px; border: 1px solid var(--border-main); border-radius: 7px; background: var(--bg-card); color: var(--text-main); font-size: var(--font-ui-xs); font-weight: 900; }
-.battle-match-complete-actions button.primary { border-color: var(--btn-bg); background: var(--btn-bg); color: white; }
 </style>
