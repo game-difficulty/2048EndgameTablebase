@@ -9,9 +9,16 @@
           <span :class="['battle-live-badge', wsStatus === 'connected' ? 'online' : 'offline']">{{ $t(`status.${wsStatus}`) }}</span>
         </div>
       </div>
-      <div class="battle-match-clock">
+      <div
+        :class="[
+          'battle-match-clock',
+          { urgent: countdownState.urgent, critical: countdownState.critical },
+        ]"
+        role="timer"
+        :aria-label="`${$t('battle.match.stepTime')} ${countdown}`"
+      >
         <span>{{ $t('battle.match.stepTime') }}</span>
-        <strong>{{ countdown }}</strong>
+        <strong :key="countdownState.seconds">{{ countdown }}</strong>
       </div>
       <div class="battle-match-actions">
         <button type="button" @click="$emit('open-trainer')">{{ $t('battle.match.openTrainer') }}</button>
@@ -58,7 +65,7 @@
           <div><span>{{ $t('battle.match.progress') }}</span><strong>{{ ownResult?.route_index || 0 }}/{{ totalSteps }}</strong></div>
           <div><span>{{ $t('battle.match.status') }}</span><strong>{{ $t(playerStatusKey(ownResult)) }}</strong></div>
         </div>
-        <div class="battle-board-shell">
+        <div :class="['battle-board-shell', { urgent: countdownState.urgent }]">
           <BaseBoard :frame="boardFrame" :dis32k="dis32k" :is-variant="isVariant" @swipe="$emit('move', $event)" />
           <Transition name="battle-correction">
             <div v-if="wrongOverlay" class="battle-wrong-overlay" role="status" aria-live="assertive">
@@ -108,6 +115,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
+import { battleCountdownState } from '../core/battleCountdown.js';
 
 const props = defineProps({
   room: { type: Object, required: true },
@@ -137,14 +145,16 @@ const playerRows = computed(() => (props.room.results || []).map((result) => {
   const member = props.room.members?.find((item) => Number(item.user_id) === Number(result.user_id)) || {};
   return { ...member, ...result };
 }));
-const countdown = computed(() => {
-  if (props.wrongOverlay && ownResult.value?.status === 'playing') {
-    return `${Number(props.room.step_timeout_seconds || 90)}s`;
-  }
-  const deadline = ownResult.value?.timeout_at;
-  if (!deadline || ownResult.value?.status !== 'playing') return '--';
-  return `${Math.max(0, Math.ceil((Date.parse(deadline) - now.value) / 1000))}s`;
-});
+const countdownState = computed(() => battleCountdownState({
+  deadline: ownResult.value?.timeout_at,
+  now: now.value,
+  status: ownResult.value?.status,
+  correcting: Boolean(props.wrongOverlay),
+  pausedSeconds: props.room.step_timeout_seconds || 90,
+}));
+const countdown = computed(() => (
+  countdownState.value.seconds == null ? '--' : `${countdownState.value.seconds}s`
+));
 const percent = (value) => `${(Math.max(0, Math.min(1, Number(value ?? 1))) * 100).toFixed(2)}%`;
 const dropPercent = (value) => `${(Math.max(0, Number(value || 0)) * 100).toFixed(2)}%`;
 const progressPercent = (index) => `${Math.min(100, totalSteps.value ? Number(index || 0) / totalSteps.value * 100 : 0)}%`;
@@ -174,9 +184,13 @@ onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
 .battle-room-code, .battle-live-badge { border: 1px solid var(--border-main); border-radius: 999px; padding: 4px 8px; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 900; }
 .battle-live-badge.online { color: #278354; border-color: color-mix(in srgb, #37a667 45%, var(--border-main)); }
 .battle-live-badge.offline { color: #c24d4d; }
-.battle-match-clock { min-width: 84px; padding-right: 4px; text-align: right; }
+.battle-match-clock { min-width: 92px; padding: 6px 9px; border: 1px solid transparent; border-radius: 7px; text-align: right; transition: border-color .18s ease, background-color .18s ease, box-shadow .18s ease; }
 .battle-match-clock span { display: block; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 800; }
-.battle-match-clock strong { color: var(--text-main); font: 900 20px/1.2 var(--font-mono, monospace); }
+.battle-match-clock strong { display: block; min-width: 3ch; color: var(--text-main); font: 900 20px/1.2 var(--font-mono, monospace); transform-origin: right center; }
+.battle-match-clock.urgent { border-color: color-mix(in srgb, #d94f56 68%, var(--border-main)); background: color-mix(in srgb, #d94f56 10%, var(--bg-card)); box-shadow: 0 0 0 2px color-mix(in srgb, #d94f56 10%, transparent); }
+.battle-match-clock.urgent span, .battle-match-clock.urgent strong { color: #d94f56; }
+.battle-match-clock.urgent strong { font-size: 23px; animation: battle-clock-step .18s ease-out; }
+.battle-match-clock.critical { animation: battle-clock-critical 1s ease-in-out infinite; }
 .battle-match-actions { display: flex; align-items: center; gap: 7px; }
 .battle-match-actions button { min-width: 92px; min-height: 38px; padding: 0 11px; border: 1px solid var(--border-main); border-radius: 7px; background: var(--bg-card); color: var(--text-main); font-size: var(--font-ui-xs); font-weight: 900; white-space: nowrap; }
 .battle-match-actions button:hover:not(:disabled), .battle-match-actions button:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
@@ -191,6 +205,8 @@ onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
 .battle-own-metrics span { display: block; color: var(--text-secondary); font-size: 10px; font-weight: 900; text-transform: uppercase; }
 .battle-own-metrics strong { display: block; overflow: hidden; text-overflow: ellipsis; color: var(--text-main); font-size: 13px; font-weight: 900; white-space: nowrap; }
 .battle-board-shell { position: relative; width: 100%; }
+.battle-board-shell::after { position: absolute; inset: -5px; z-index: 70; border: 2px solid transparent; border-radius: 14px; content: ''; pointer-events: none; }
+.battle-board-shell.urgent::after { animation: battle-board-urgent .72s ease-out 1; }
 .battle-input-hint { margin: 9px 0 0; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 700; text-align: center; }
 .battle-wrong-overlay { position: absolute; inset: 0; z-index: 60; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 12px; background: color-mix(in srgb, var(--bg-card) 91%, transparent); backdrop-filter: blur(5px); color: var(--text-main); text-align: center; }
 .battle-wrong-kicker { color: var(--text-secondary); font-size: 11px; font-weight: 900; text-transform: uppercase; }
@@ -232,4 +248,25 @@ onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
 .battle-mini-stats { text-align: right; }
 .battle-mini-stats strong, .battle-mini-stats span { display: block; color: var(--text-main); font-size: 10px; font-weight: 900; }
 .battle-mini-stats span { color: var(--text-secondary); }
+
+@keyframes battle-clock-step {
+  0% { transform: scale(.84); opacity: .72; }
+  65% { transform: scale(1.1); }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes battle-clock-critical {
+  0%, 100% { background: color-mix(in srgb, #d94f56 10%, var(--bg-card)); }
+  50% { background: color-mix(in srgb, #d94f56 22%, var(--bg-card)); }
+}
+@keyframes battle-board-urgent {
+  0% { border-color: transparent; box-shadow: 0 0 0 0 transparent; }
+  35% { border-color: color-mix(in srgb, #d94f56 80%, white); box-shadow: 0 0 20px color-mix(in srgb, #d94f56 38%, transparent); }
+  100% { border-color: transparent; box-shadow: 0 0 0 8px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .battle-match-clock.urgent strong,
+  .battle-match-clock.critical,
+  .battle-board-shell.urgent::after { animation: none; }
+  .battle-board-shell.urgent::after { border-color: color-mix(in srgb, #d94f56 62%, transparent); }
+}
 </style>
