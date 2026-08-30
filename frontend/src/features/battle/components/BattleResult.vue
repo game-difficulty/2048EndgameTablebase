@@ -40,9 +40,12 @@ defineEmits(['close', 'return-room']);
 const { t, te } = useI18n();
 const rankedResults = computed(() => rankBattleResults(
   props.room.results || [],
-  { mode: props.mode },
+  { mode: props.mode, battleMode: props.room.mode_key },
 ));
-const isDraw = computed(() => isBattleResultDraw(rankedResults.value, { mode: props.mode }));
+const isDraw = computed(() => isBattleResultDraw(rankedResults.value, {
+  mode: props.mode,
+  battleMode: props.room.mode_key,
+}));
 const resultTitleKey = computed(() => {
   if (props.mode === 'live') return 'battle.result.liveTitle';
   return isDraw.value ? 'battle.result.draw' : 'battle.result.title';

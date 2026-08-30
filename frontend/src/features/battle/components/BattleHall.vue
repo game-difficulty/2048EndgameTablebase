@@ -124,7 +124,7 @@
             <span>{{ $t('battle.form.stepTimeout') }}</span>
             <BattleNumberInput v-model="form.step_timeout_seconds" :min="5" :max="600" :step="5" />
           </label>
-          <label class="battle-field battle-field-wide">
+          <label v-if="showMaxSteps" class="battle-field battle-field-wide">
             <span>{{ $t('battle.form.maxSteps') }}</span>
             <BattleNumberInput v-model="form.max_steps" :min="1" :max="9999" :step="1" :placeholder="$t('battle.form.unlimited')" allow-empty />
           </label>
@@ -152,12 +152,12 @@
         </div>
 
         <div class="battle-cost-row">
-          <div><span>{{ $t('battle.form.routeCost') }}</span><strong>{{ formattedCost }} Token</strong></div>
+          <div><span>{{ $t(costLabelKey) }}</span><strong>{{ formattedCost }} Token</strong></div>
           <div><span>{{ $t('battle.form.balance') }}</span><strong>{{ formattedBalance }}</strong></div>
         </div>
-        <p class="battle-refund-policy">{{ $t('battle.form.refundPolicy') }}</p>
+        <p class="battle-refund-policy">{{ $t(refundPolicyKey) }}</p>
         <button type="button" class="battle-create-btn" :disabled="creating || !canCreate" @click="submitCreate">
-          {{ creating ? $t('battle.status.preparing_route') : $t('battle.actions.create') }}
+          {{ creating ? $t('battle.status.preparing') : $t(createLabelKey) }}
         </button>
       </section>
     </aside>
@@ -179,6 +179,11 @@ const props = defineProps({
   tokenBalance: { type: Number, default: 0 },
   multiplierForPattern: { type: Function, required: true },
   routeBaseCost: { type: Number, default: 5 },
+  calculateCost: { type: Function, default: null },
+  showMaxSteps: { type: Boolean, default: true },
+  costLabelKey: { type: String, default: 'battle.form.routeCost' },
+  refundPolicyKey: { type: String, default: 'battle.form.refundPolicy' },
+  createLabelKey: { type: String, default: 'battle.actions.create' },
   modeKey: { type: String, default: 'goodness' },
   modeOptions: { type: Array, default: () => [] },
   buildCreatePayload: { type: Function, default: null },
@@ -216,7 +221,11 @@ const selectedModeLabel = computed(() => (
   || props.modeKey
 ));
 const validMode = computed(() => Boolean(selectedModeOption.value));
-const routeCost = computed(() => props.routeBaseCost * props.multiplierForPattern(selectedFullPattern.value));
+const routeCost = computed(() => (
+  props.calculateCost
+    ? props.calculateCost({ ...form, full_pattern: selectedFullPattern.value })
+    : props.routeBaseCost * props.multiplierForPattern(selectedFullPattern.value)
+));
 const formattedCost = computed(() => routeCost.value.toLocaleString());
 const formattedBalance = computed(() => Number(props.tokenBalance || 0).toLocaleString(undefined, { maximumFractionDigits: 1 }));
 const validInitialBoard = computed(() => !form.initial_board || /^[0-9a-fA-F]{16}$/.test(form.initial_board));

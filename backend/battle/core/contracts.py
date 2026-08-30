@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import asyncio
 from typing import Any
 
 
@@ -73,6 +74,33 @@ class BattleMode(ABC):
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         raise NotImplementedError
+
+    async def handle_action_async(
+        self,
+        room_code: str,
+        *,
+        user_id: int,
+        action: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Resolve a potentially blocking mode action without blocking the event loop."""
+        return await asyncio.to_thread(
+            self.handle_action,
+            room_code,
+            user_id=user_id,
+            action=action,
+            payload=payload,
+        )
+
+    def sanitize_snapshot(
+        self,
+        payload: dict[str, Any],
+        *,
+        viewer_user_id: int,
+    ) -> dict[str, Any]:
+        """Attach viewer-safe mode state to a generic room snapshot."""
+        del viewer_user_id
+        return payload
 
     def settle_unstarted_round(self, room_id: str, *, reason: str) -> None:
         raise NotImplementedError

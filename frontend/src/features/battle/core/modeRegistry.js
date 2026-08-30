@@ -2,6 +2,7 @@ import BattleHall from '../components/BattleHall.vue';
 import BattleMatch from '../components/BattleMatch.vue';
 import BattleResult from '../components/BattleResult.vue';
 import { useGoodnessMatch } from '../modes/goodness/useGoodnessMatch.js';
+import { useFreeGoodnessMatch } from '../modes/freeGoodness/useFreeGoodnessMatch.js';
 
 
 const definitions = new Map();
@@ -44,4 +45,24 @@ registerBattleMode({
   MatchView: BattleMatch,
   ResultView: BattleResult,
   createSession: useGoodnessMatch,
+});
+
+registerBattleMode({
+  key: 'free_goodness',
+  version: 1,
+  labelKey: 'battle.modes.freeGoodness.name',
+  shortLabelKey: 'battle.modes.freeGoodness.shortName',
+  summaryKey: 'battle.modes.freeGoodness.summary',
+  ruleKeys: Object.freeze([
+    'battle.modes.freeGoodness.rules.independentBoards',
+    'battle.modes.freeGoodness.rules.riskCorrection',
+    'battle.modes.freeGoodness.rules.safeSpawns',
+    'battle.modes.freeGoodness.rules.scoring',
+    'battle.modes.freeGoodness.rules.timeout',
+    'battle.modes.freeGoodness.rules.billing',
+  ]),
+  HallView: BattleHall,
+  MatchView: BattleMatch,
+  ResultView: BattleResult,
+  createSession: useFreeGoodnessMatch,
 });

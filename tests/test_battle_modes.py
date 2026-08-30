@@ -153,8 +153,8 @@ class BattleModeArchitectureTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch.object(
                     realtime,
-                    "handle_mode_action",
-                    return_value={"sequence": 8, "accepted": True},
+                    "handle_mode_action_async",
+                    new=AsyncMock(return_value={"sequence": 8, "accepted": True}),
                 ) as handler,
                 patch.object(realtime, "broadcast_room", new=AsyncMock()) as broadcast,
             ):
@@ -170,11 +170,11 @@ class BattleModeArchitectureTests(unittest.IsolatedAsyncioTestCase):
                     websocket,
                 )
             self.assertTrue(handled)
-            handler.assert_called_once_with(
+            handler.assert_awaited_once_with(
                 "ART234",
                 user_id=self.user_id,
                 action="move",
-                payload={"direction": "left", "sequence": 8},
+                payload={"direction": "left", "sequence": 8, "request_id": "req-8"},
             )
             broadcast.assert_awaited_once_with("room-1")
             self.assertEqual(websocket.messages[-1]["action"], Message.BATTLE_ACTION_ACCEPTED)

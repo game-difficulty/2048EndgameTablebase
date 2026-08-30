@@ -72,6 +72,7 @@ def assert_member(room: dict[str, Any], user_id: int) -> dict[str, Any]:
 def sanitize_snapshot(room: dict[str, Any], *, viewer_user_id: int) -> dict[str, Any]:
     payload = dict(room)
     member = assert_member(payload, viewer_user_id)
+    mode = None
     try:
         mode = get_battle_mode(str(payload.get("mode_key") or "goodness"))
         payload["mode_settings"] = mode.public_settings(payload)
@@ -95,7 +96,11 @@ def sanitize_snapshot(room: dict[str, Any], *, viewer_user_id: int) -> dict[str,
     payload["round"] = round_payload or None
     for item in payload.get("members", []):
         item.pop("member_id", None)
-    return payload
+    return (
+        mode.sanitize_snapshot(payload, viewer_user_id=int(viewer_user_id))
+        if mode is not None
+        else payload
+    )
 
 
 def room_snapshot(room_ref: str, *, user_id: int) -> dict[str, Any]:

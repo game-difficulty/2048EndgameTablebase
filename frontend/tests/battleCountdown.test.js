@@ -25,3 +25,11 @@ test('correction pauses urgency and finished players have no countdown', () => {
   });
   assert.equal(battleCountdownState({ status: 'completed' }).seconds, null);
 });
+
+test('server resolution hides the stale local deadline until the next step is ready', () => {
+  assert.deepEqual(battleCountdownState({
+    deadline: deadline(1), now: 1_000_000, status: 'playing', resolving: true,
+  }), {
+    seconds: null, urgent: false, critical: false, paused: true,
+  });
+});

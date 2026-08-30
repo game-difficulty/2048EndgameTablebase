@@ -28,6 +28,7 @@ export function useBattleSession(activeRef, authUserRef, hotkeysEnabledRef = act
     const requested = String(modeKey || '').trim().toLowerCase();
     if (modeDefinitions.some((definition) => definition.key === requested)) {
       selectedModeKey.value = requested;
+      void roomSession.bootstrapMode(requested);
     }
   };
 

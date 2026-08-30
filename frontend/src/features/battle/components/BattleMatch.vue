@@ -137,6 +137,7 @@ const props = defineProps({
   boardFrame: { type: Object, required: true },
   opponentBoards: { type: Object, default: () => ({}) },
   wrongOverlay: { type: Object, default: null },
+  resolving: { type: Boolean, default: false },
   spectator: { type: Boolean, default: false },
   ownFinished: { type: Boolean, default: false },
   wsStatus: { type: String, default: 'disconnected' },
@@ -172,6 +173,7 @@ const countdownState = computed(() => battleCountdownState({
   now: now.value,
   status: ownResult.value?.status,
   correcting: Boolean(props.wrongOverlay),
+  resolving: props.resolving,
   pausedSeconds: props.room.step_timeout_seconds || 90,
 }));
 const countdown = computed(() => (

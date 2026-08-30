@@ -87,6 +87,7 @@ export function useGoodnessMatch(
   };
   const inputEnabled = computed(() => (
     Boolean(activeRef.value)
+    && String(room.value?.mode_key || 'goodness') === 'goodness'
     && matchActive.value
     && !spectatorMode.value
     && ownResult.value?.status === 'playing'
@@ -316,7 +317,13 @@ export function useGoodnessMatch(
   };
 
   const handleKeydown = (event) => {
-    if (!hotkeysEnabledRef.value || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (
+      !hotkeysEnabledRef.value
+      || String(room.value?.mode_key || 'goodness') !== 'goodness'
+      || event.ctrlKey
+      || event.metaKey
+      || event.altKey
+    ) return;
     if (event.target?.matches?.('input, textarea, select, [contenteditable="true"]')) return;
     if (event.key === 'Enter' && continueCorrection()) {
       event.preventDefault();

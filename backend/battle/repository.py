@@ -237,6 +237,35 @@ def init_battle_db() -> None:
 
             CREATE INDEX IF NOT EXISTS ix_battle_chat_rate
               ON battle_chat_messages(room_id, user_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS battle_free_player_states (
+              round_id TEXT NOT NULL,
+              user_id INTEGER NOT NULL,
+              board_state TEXT NOT NULL,
+              step_index INTEGER NOT NULL DEFAULT 0,
+              sequence INTEGER NOT NULL DEFAULT 0,
+              goodness_sum_units INTEGER NOT NULL DEFAULT 0,
+              goodness_count INTEGER NOT NULL DEFAULT 0,
+              spawn_log_index REAL NOT NULL DEFAULT 0.0,
+              spawn_log_floor REAL NOT NULL DEFAULT 0.0,
+              rng_step INTEGER NOT NULL DEFAULT 0,
+              state_status TEXT NOT NULL DEFAULT 'input',
+              finish_reason TEXT,
+              resolution_request_id TEXT,
+              resolution_started_at TEXT,
+              ack_deadline_at TEXT,
+              timeout_at TEXT,
+              current_results_json TEXT NOT NULL DEFAULT '{}',
+              operation_blob BLOB NOT NULL DEFAULT X'',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (round_id, user_id),
+              FOREIGN KEY(round_id) REFERENCES battle_rounds(round_id) ON DELETE CASCADE,
+              FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_battle_free_states_timeout
+              ON battle_free_player_states(state_status, timeout_at);
             """
         )
         room_columns = {row["name"] for row in db.execute("PRAGMA table_info(battle_rooms)")}

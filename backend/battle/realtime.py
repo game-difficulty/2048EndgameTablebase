@@ -15,7 +15,7 @@ from .core import chat
 from .service import (
     BattleServiceError,
     current_room,
-    handle_mode_action,
+    handle_mode_action_async,
     record_choice,
     room_snapshot,
     set_broadcast_callback,
@@ -238,12 +238,11 @@ async def handle_battle_action(
         mode_payload = {}
     try:
         if generic_action:
-            accepted = await asyncio.to_thread(
-                handle_mode_action,
+            accepted = await handle_mode_action_async(
                 str(payload.get("room_code") or room_id or ""),
                 user_id=int(session.user_id),
                 action=str(payload.get("mode_action") or ""),
-                payload=mode_payload,
+                payload={**mode_payload, "request_id": request_id},
             )
         else:
             accepted = await asyncio.to_thread(

@@ -21,6 +21,7 @@ from .core.lifecycle import (
 )
 from .core.registry import get_battle_mode, list_battle_modes
 from .modes.goodness import runtime as goodness_runtime
+from .modes.free_goodness import runtime as free_goodness_runtime  # noqa: F401
 
 
 VALID_STEP_TIMEOUTS = goodness_runtime.VALID_STEP_TIMEOUTS
@@ -100,7 +101,14 @@ def record_choice(
     route_index: int,
     direction: str,
 ) -> dict[str, Any]:
-    return handle_mode_action(
+    mode = _mode_for_room(room_code)
+    if mode.key != "goodness":
+        raise BattleServiceError(
+            "BATTLE_ACTION_UNSUPPORTED",
+            "This Battle mode requires the current action protocol.",
+            409,
+        )
+    return mode.handle_action(
         room_code,
         user_id=user_id,
         action="move",
@@ -121,6 +129,21 @@ def handle_mode_action(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     return _mode_for_room(room_code).handle_action(
+        room_code,
+        user_id=user_id,
+        action=action,
+        payload=payload,
+    )
+
+
+async def handle_mode_action_async(
+    room_code: str,
+    *,
+    user_id: int,
+    action: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    return await _mode_for_room(room_code).handle_action_async(
         room_code,
         user_id=user_id,
         action=action,

@@ -52,3 +52,42 @@ test('live ranking includes active and completed players but leaves forfeits unr
   assert.deepEqual(ranked.map((result) => result.user_id), [2, 3, 1, 4, 5]);
   assert.deepEqual(ranked.map((result) => result.rank), [1, 2, 3, null, null]);
 });
+
+test('open-route ranking puts fixed-step finishes before natural finishes and failures', () => {
+  const ranked = rankBattleResults([
+    {
+      user_id: 1, status: 'completed', goodness_of_fit: 0.99, progress: 31,
+      mode_data: { finish_class: 'natural' },
+    },
+    {
+      user_id: 2, status: 'completed', goodness_of_fit: 0.80, progress: 64,
+      mode_data: { finish_class: 'completed' },
+    },
+    {
+      user_id: 3, status: 'completed', goodness_of_fit: 0.70, progress: 40,
+      mode_data: { finish_class: 'natural' },
+    },
+    {
+      user_id: 4, status: 'timed_out', goodness_of_fit: 1, progress: 63,
+      mode_data: { finish_class: 'unranked' },
+    },
+  ], { battleMode: 'free_goodness' });
+
+  assert.deepEqual(ranked.map((result) => result.user_id), [2, 3, 1, 4]);
+  assert.deepEqual(ranked.map((result) => result.rank), [1, 2, 3, null]);
+});
+
+test('open-route natural finishes compare progress before average goodness', () => {
+  const ranked = rankBattleResults([
+    {
+      user_id: 1, status: 'completed', goodness_of_fit: 0.95, progress: 20,
+      mode_data: { finish_class: 'natural' },
+    },
+    {
+      user_id: 2, status: 'completed', goodness_of_fit: 0.70, progress: 21,
+      mode_data: { finish_class: 'natural' },
+    },
+  ], { battleMode: 'free_goodness' });
+
+  assert.deepEqual(ranked.map((result) => result.user_id), [2, 1]);
+});

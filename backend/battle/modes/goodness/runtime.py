@@ -1031,8 +1031,10 @@ def mark_timeouts() -> set[str]:
             SELECT result.result_id, result.round_id, round.room_id
             FROM battle_player_results AS result
             JOIN battle_rounds AS round ON round.round_id = result.round_id
+            JOIN battle_rooms AS room ON room.room_id = round.room_id
             WHERE result.status = 'playing' AND result.timeout_at IS NOT NULL
               AND result.timeout_at <= ?
+              AND room.mode_key = 'goodness'
             """,
             (now_text,),
         ).fetchall()
@@ -1054,8 +1056,10 @@ def mark_timeouts() -> set[str]:
             """
             SELECT round.round_id, round.room_id
             FROM battle_rounds AS round
+            JOIN battle_rooms AS room ON room.room_id = round.room_id
             WHERE round.status = 'running' AND round.expires_at IS NOT NULL
               AND round.expires_at <= ?
+              AND room.mode_key = 'goodness'
             """,
             (now_text,),
         ).fetchall()
@@ -1077,7 +1081,7 @@ def mark_timeouts() -> set[str]:
             changed_rooms.add(str(row["room_id"]))
 
         stale_rooms = db.execute(
-            "SELECT * FROM battle_rooms WHERE status IN ('preparing', 'waiting') AND expires_at <= ?",
+            "SELECT * FROM battle_rooms WHERE mode_key = 'goodness' AND status IN ('preparing', 'waiting') AND expires_at <= ?",
             (now_text,),
         ).fetchall()
         for row in stale_rooms:
@@ -1138,6 +1142,7 @@ async def startup() -> None:
                 FROM battle_rounds AS round
                 JOIN battle_rooms AS room ON room.room_id = round.room_id
                 WHERE round.reservation_status = 'reserved'
+                  AND room.mode_key = 'goodness'
                 ORDER BY round.created_at
                 """
             ).fetchall()

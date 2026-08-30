@@ -748,6 +748,19 @@
           "timeout": "Choose each move before the timer ends. A timeout ends your round.",
           "spectating": "Spectators see every board. Players can watch opponents after finishing."
         }
+      },
+      "freeGoodness": {
+        "name": "Open-Route Goodness Battle",
+        "shortName": "Open Route",
+        "summary": "Start together, then develop your own board. The best average goodness wins.",
+        "rules": {
+          "independentBoards": "Everyone shares the starting board and random seed, but each board follows its player's choices.",
+          "riskCorrection": "A move with a sharply higher death risk is corrected to the best move after its goodness is scored.",
+          "safeSpawns": "Spawns are deterministic and rerolled only when their death-risk increase exceeds the safety limits.",
+          "scoring": "Reach the fixed step target and rank by average goodness. Natural early finishes rank below completed players.",
+          "timeout": "The timer pauses while the server resolves a move. Query and network time do not use your move time.",
+          "billing": "The host covers one normal lookup fee for each scored player step. Unused reserved Tokens are returned after the round."
+        }
       }
     },
     "errors": {
@@ -768,6 +781,15 @@
       "PROGRESS_CONFLICT": "Local and server progress differed and were resynchronized.",
       "PLAYER_FINISHED": "You have already finished this Battle round.",
       "ROUND_NOT_RUNNING": "This Battle round has already ended.",
+      "ROUND_CONFLICT": "The Battle round changed. The page will resynchronize.",
+      "PLAYER_NOT_ACTIVE": "You are not an active player in this round.",
+      "STEP_RESOLVING": "The previous move is still resolving.",
+      "STEP_TIMEOUT": "The move timer expired and your round has ended.",
+      "ILLEGAL_DIRECTION": "That direction does not move the board.",
+      "POSITION_FINISHED": "This position has already finished.",
+      "TABLEBASE_BUSY": "The tablebase is busy. Please retry this move shortly.",
+      "INITIAL_BOARD_UNUSABLE": "That starting board cannot continue. Choose another board.",
+      "ROUND_STATE_CHANGED": "The room changed. Ready up again before starting.",
       "battle_forfeit_failed": "Could not exit the Battle. Please try again."
     },
     "auth": {
@@ -804,6 +826,7 @@
       "maxPlayers": "Player Limit",
       "stepTimeout": "Move Time",
       "maxSteps": "Step Limit",
+      "scoredSteps": "Scored Steps",
       "unlimited": "Unlimited",
       "publicRoom": "Public Room",
       "publicRoomHint": "Other players can find it in the hall",
@@ -813,13 +836,16 @@
       "chatRolesHint": "Choose who may send messages",
       "chatRolesNone": "Chat disabled",
       "routeCost": "Route Cost",
+      "freeModeBudget": "Maximum Round Reserve",
       "balance": "Balance",
-      "refundPolicy": "Closing or expiring an unplayed room refunds 80% of the fee. One room can be created every 30 seconds."
+      "refundPolicy": "Closing or expiring an unplayed room refunds 80% of the fee. One room can be created every 30 seconds.",
+      "freeModeRefundPolicy": "This amount is reserved, not charged upfront. Scored steps are settled after the round and every unused Token is returned. An unplayed room releases the full reserve."
     },
     "actions": {
       "join": "Join",
       "spectate": "Watch",
       "create": "Create & Generate",
+      "createFree": "Create & Reserve",
       "copyInvite": "Copy Invite",
       "kick": "Remove",
       "ready": "Ready",
@@ -838,7 +864,7 @@
       "host": "Host"
     },
     "status": {
-      "preparing": "Generating",
+      "preparing": "Preparing",
       "preparingInitialBoard": "Generating",
       "waiting": "Waiting",
       "running": "Playing",

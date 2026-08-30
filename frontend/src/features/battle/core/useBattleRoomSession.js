@@ -78,6 +78,10 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     modeAdapters.set(key, adapter);
     return adapter;
   };
+  const bootstrapMode = async (modeKey) => {
+    const key = String(modeKey || '').trim().toLowerCase();
+    return modeAdapters.get(key)?.bootstrap?.();
+  };
 
   const applyRoom = async (nextRoom) => {
     if (
@@ -113,6 +117,9 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     room.value = nextRoom || null;
     roomStateEpoch += 1;
     try {
+      if (nextRoom && previousAdapter !== nextAdapter) {
+        await nextAdapter?.bootstrap?.();
+      }
       await nextAdapter?.onRoomApplied?.(room.value, previousRoom);
     } catch (modeError) {
       error.value = errorKey(modeError, 'battle_mode_load_failed');
@@ -448,6 +455,7 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     forfeitPending,
     activeModeKey: computed(() => modeKeyFor()),
     registerModeAdapter,
+    bootstrapMode,
     setModeAdapter: registerModeAdapter,
     applyRoom,
     sendModeAction,

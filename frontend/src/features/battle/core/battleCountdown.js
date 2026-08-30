@@ -3,8 +3,12 @@ export function battleCountdownState({
   now = Date.now(),
   status = '',
   correcting = false,
+  resolving = false,
   pausedSeconds = 90,
 } = {}) {
+  if (resolving && status === 'playing' && !correcting) {
+    return { seconds: null, urgent: false, critical: false, paused: true };
+  }
   if (correcting && status === 'playing') {
     return {
       seconds: Math.max(0, Number(pausedSeconds) || 0),

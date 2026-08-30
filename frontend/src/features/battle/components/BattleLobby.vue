@@ -63,7 +63,7 @@
             <dl>
               <div><dt>{{ $t('battle.form.pattern') }}</dt><dd>{{ room.full_pattern }}</dd></div>
               <div><dt>{{ $t('battle.form.initialBoard') }}</dt><dd class="font-mono">{{ displayedInitialBoard }}</dd></div>
-              <div><dt>{{ $t('battle.form.maxSteps') }}</dt><dd>{{ room.max_steps || $t('battle.form.unlimited') }}</dd></div>
+              <div><dt>{{ $t(stepsLabelKey) }}</dt><dd>{{ room.max_steps || $t('battle.form.unlimited') }}</dd></div>
               <div><dt>{{ $t('battle.form.stepTimeout') }}</dt><dd>{{ room.step_timeout_seconds }}s</dd></div>
               <div><dt>{{ $t('battle.form.publicRoom') }}</dt><dd>{{ room.visibility === 'public' ? $t('common.yes') : $t('common.no') }}</dd></div>
               <div><dt>{{ $t('battle.form.allowSpectators') }}</dt><dd>{{ room.allow_spectators ? $t('common.yes') : $t('common.no') }}</dd></div>
@@ -113,6 +113,11 @@ const displayedInitialBoard = computed(() => (
   props.room.route?.initial_board
   || props.room.initial_board
   || t('battle.status.preparingInitialBoard')
+));
+const stepsLabelKey = computed(() => (
+  props.room.mode_settings?.score_step_limit
+    ? 'battle.form.scoredSteps'
+    : 'battle.form.maxSteps'
 ));
 const chatRolesLabel = computed(() => {
   const roles = Array.isArray(props.room.chat_roles)

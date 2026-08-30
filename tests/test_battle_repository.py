@@ -105,6 +105,7 @@ class BattleRepositoryTests(unittest.TestCase):
                 "battle_player_results",
                 "battle_request_ids",
                 "battle_chat_messages",
+                "battle_free_player_states",
             },
         )
         self.assertIn("WHERE status = 'active'", index["sql"])

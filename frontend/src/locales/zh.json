@@ -748,6 +748,19 @@
           "timeout": "请在单步时限内作答，超时即结束本局。",
           "spectating": "观战者可查看所有盘面；玩家完成后也可查看对手。"
         }
+      },
+      "freeGoodness": {
+        "name": "自由路线吻合度对战",
+        "shortName": "自由路线",
+        "summary": "从相同盘面出发，各自选择路线，以平均吻合度决胜。",
+        "rules": {
+          "independentBoards": "所有玩家共享初始盘面和随机种子，之后盘面会随各自选择独立发展。",
+          "riskCorrection": "走法令死亡风险明显上升时，本步照常计分，随后按最优方向继续。",
+          "safeSpawns": "出数由种子确定；只有死亡风险增幅超过安全线时才会重新抽取。",
+          "scoring": "完成固定步数后按平均吻合度排名；自然提前结束排在完成人员之后。",
+          "timeout": "服务器处理走法时暂停计时，查表和网络等待不会占用你的操作时间。",
+          "billing": "每个计分步骤按正常查表价格从房主预留额度结算，未使用额度在本轮结束后全部退回。"
+        }
       }
     },
     "errors": {
@@ -768,6 +781,15 @@
       "PROGRESS_CONFLICT": "本地进度与服务器不一致，已重新同步。",
       "PLAYER_FINISHED": "你已经结束本轮对战。",
       "ROUND_NOT_RUNNING": "本轮对战已经结束。",
+      "ROUND_CONFLICT": "对战轮次已经变化，页面将重新同步。",
+      "PLAYER_NOT_ACTIVE": "你当前不在本轮玩家席位中。",
+      "STEP_RESOLVING": "上一手仍在处理中，请稍候。",
+      "STEP_TIMEOUT": "本步已超时，本轮已结束。",
+      "ILLEGAL_DIRECTION": "这个方向无法移动，请选择其他方向。",
+      "POSITION_FINISHED": "当前局面已经结束。",
+      "TABLEBASE_BUSY": "当前查询较多，请稍候再走这一步。",
+      "INITIAL_BOARD_UNUSABLE": "该初始局面无法继续，请更换后重试。",
+      "ROUND_STATE_CHANGED": "房间状态已经变化，请重新准备后开始。",
       "battle_forfeit_failed": "退出对战失败，请重试。"
     },
     "auth": {
@@ -804,6 +826,7 @@
       "maxPlayers": "玩家上限",
       "stepTimeout": "单步时限",
       "maxSteps": "最大步数",
+      "scoredSteps": "计分步数",
       "unlimited": "不限制",
       "publicRoom": "公开房间",
       "publicRoomHint": "其他玩家可在大厅中找到它",
@@ -813,13 +836,16 @@
       "chatRolesHint": "选择允许发言的成员",
       "chatRolesNone": "全部禁言",
       "routeCost": "本局路线费用",
+      "freeModeBudget": "本轮最高预留额度",
       "balance": "当前余额",
-      "refundPolicy": "未开局时关闭或过期，将退还 80% 费用。每 30 秒可创建一个房间。"
+      "refundPolicy": "未开局时关闭或过期，将退还 80% 费用。每 30 秒可创建一个房间。",
+      "freeModeRefundPolicy": "这里只是预留上限，并非立即消费。对局结束后按实际计分步骤结算，未使用额度全部退回；未开局则全额释放。"
     },
     "actions": {
       "join": "加入",
       "spectate": "观战",
       "create": "创建并生成路线",
+      "createFree": "创建并预留额度",
       "copyInvite": "复制邀请链接",
       "kick": "移出房间",
       "ready": "准备",
@@ -838,7 +864,7 @@
       "host": "房主"
     },
     "status": {
-      "preparing": "生成路线中",
+      "preparing": "准备中",
       "preparingInitialBoard": "生成中",
       "waiting": "等待中",
       "running": "对战中",

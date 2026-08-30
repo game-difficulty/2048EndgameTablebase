@@ -548,10 +548,11 @@ def reserve_operation_tokens(
     session_id: int | None,
     operation_key: str,
     full_pattern: str | None = "",
+    quantity: int = 1,
 ) -> TokenReservation | None:
     if user_id is None:
         return None
-    base_units = operation_cost_units(operation_key)
+    base_units = operation_cost_units(operation_key) * max(1, int(quantity))
     multiplier_units = table_multiplier_units(full_pattern)
     reserve_units = apply_multiplier(base_units, multiplier_units)
     if reserve_units <= 0:
