@@ -50,10 +50,11 @@
                 <div><small>{{ $t('battle.match.standardMove') }}</small><strong class="correct">{{ directionLabel(wrongOverlay.standardDirection) }}</strong></div>
               </div>
               <p>{{ $t('battle.match.goodnessDrop', { value: dropPercent(wrongOverlay.drop) }) }}</p>
+              <small class="battle-correction-hint">{{ $t('battle.match.continueHint') }}</small>
             </div>
           </Transition>
         </div>
-        <p class="battle-input-hint">{{ $t('battle.match.inputHint') }}</p>
+        <p v-if="!roundCompleted" class="battle-input-hint">{{ $t('battle.match.inputHint') }}</p>
       </section>
 
       <aside class="battle-opponents-panel">
@@ -80,6 +81,18 @@
         </div>
       </aside>
     </div>
+
+    <section v-if="roundCompleted" class="battle-match-complete">
+      <div>
+        <span class="ui-caption font-black uppercase text-text-secondary">{{ $t('battle.result.kicker') }}</span>
+        <h3>{{ $t('battle.match.completeTitle') }}</h3>
+        <p>{{ $t('battle.match.completeHint') }}</p>
+      </div>
+      <div class="battle-match-complete-actions">
+        <button type="button" @click="$emit('show-results')">{{ $t('battle.match.viewResults') }}</button>
+        <button type="button" class="primary" @click="$emit('return-lobby')">{{ $t('battle.result.backToRoom') }}</button>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -100,10 +113,11 @@ const props = defineProps({
   isVariant: { type: Boolean, default: false },
 });
 
-defineEmits(['move']);
+defineEmits(['move', 'show-results', 'return-lobby']);
 const now = ref(Date.now());
 let timer = null;
 const totalSteps = computed(() => Number(props.room.route?.step_count || 0));
+const roundCompleted = computed(() => props.room.round?.status === 'completed');
 const ownResult = computed(() => props.room.results?.find((item) => Number(item.user_id) === Number(props.currentUserId)) || null);
 const playerRows = computed(() => (props.room.results || []).map((result) => {
   const member = props.room.members?.find((item) => Number(item.user_id) === Number(result.user_id)) || {};
@@ -159,6 +173,7 @@ onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
 .battle-direction-correction .correct { color: #2f9c65; }
 .battle-correction-arrow { color: var(--text-secondary); font-size: 22px; }
 .battle-wrong-overlay p { margin: 0; color: var(--text-main); font-size: var(--font-ui-sm); font-weight: 900; }
+.battle-correction-hint { margin-top: 10px; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 800; }
 .battle-correction-enter-active, .battle-correction-leave-active { transition: opacity .16s ease; }
 .battle-correction-enter-from, .battle-correction-leave-to { opacity: 0; }
 .battle-opponents-panel { min-width: 0; padding: 15px; }
@@ -188,4 +203,10 @@ onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
 .battle-mini-stats { text-align: right; }
 .battle-mini-stats strong, .battle-mini-stats span { display: block; color: var(--text-main); font-size: 10px; font-weight: 900; }
 .battle-mini-stats span { color: var(--text-secondary); }
+.battle-match-complete { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 18px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border-main)); border-radius: 8px; background: color-mix(in srgb, var(--accent) 7%, var(--bg-card)); box-shadow: 0 12px 30px rgba(0,0,0,.06); }
+.battle-match-complete h3 { margin: 3px 0 2px; color: var(--text-main); font-size: var(--font-ui-lg); font-weight: 900; }
+.battle-match-complete p { margin: 0; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 700; }
+.battle-match-complete-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+.battle-match-complete-actions button { min-width: 112px; min-height: 40px; border: 1px solid var(--border-main); border-radius: 7px; background: var(--bg-card); color: var(--text-main); font-size: var(--font-ui-xs); font-weight: 900; }
+.battle-match-complete-actions button.primary { border-color: var(--btn-bg); background: var(--btn-bg); color: white; }
 </style>

@@ -5,7 +5,7 @@
     "trainer": "训练",
     "tester": "测试",
     "minigames": "小游戏",
-    "battle": "吻合度对战",
+    "battle": "对战",
     "leaderboards": "排行榜",
     "replay": "回放",
     "notebook": "错题本",
@@ -624,7 +624,7 @@
         "title": "计费说明",
         "balanceOrder": "消费时先使用赠送 token，再使用充值 token。",
         "analysisCharge": "分析按所选文件数计费，无论是否生成报告。",
-        "battleCharge": "创建吻合度对战房间时按所选定式倍率收取路线生成费用；路线生成失败会退回预扣额度。",
+        "battleCharge": "创建对战房间时按所选定式倍率预扣路线费用；路线生成失败全额退回，房间未开始对局便关闭或过期时退回80%。每名用户每30秒最多创建一个房间。",
         "replayCharge": "回放在载入授权后计费，文件解析失败不退还。",
         "offline": "定式离线或请求在执行前被服务器拒绝时不扣费；已预扣额度会退回。"
       }
@@ -726,17 +726,41 @@
     "sponsorNoteSuffix": "赞助"
   },
   "battle": {
-    "title": "吻合度对战",
+    "title": "对战",
+    "rules": {
+      "kicker": "BATTLE RULES",
+      "title": "对战模式规则",
+      "subtitle": "不同模式拥有独立的计分和操作规则。创建房间前请先确认所选模式。",
+      "open": "查看对战模式规则",
+      "close": "关闭规则"
+    },
+    "modes": {
+      "goodness": {
+        "name": "吻合度对战",
+        "shortName": "吻合度",
+        "summary": "所有玩家沿同一条定式路线作答，以累计吻合度决定胜负。",
+        "rules": {
+          "sharedRoute": "所有玩家使用相同的起始盘面、标准走法和出数序列，路线由房主选择的定式生成。",
+          "moveCorrection": "非法方向不计分也不推进；合法但非最优的方向会计入损失，提示后由系统自动执行标准方向。",
+          "scoring": "吻合度沿用测试页面的计算语义。路线结束后累计吻合度更高者获胜，相同则为平局，速度不参与排名。",
+          "certainty": "当当前局面的成功率达到 100% 时，玩家完成作答，剩余路线由系统按最优解自动播放。",
+          "timeout": "每一步必须在房间设置的时限内完成；单步超时后该玩家本局结束。",
+          "spectating": "观战者可查看所有玩家；参赛玩家完成自己的路线后，才可查看尚未完成玩家的盘面。"
+        }
+      }
+    },
     "errors": {
       "ROOM_NOT_FOUND": "房间不存在或已经关闭。",
       "ROOM_CLOSED": "房间已关闭。",
       "ROOM_EXPIRED": "房间等待超时，已自动关闭。",
       "USER_ALREADY_IN_ROOM": "你已经在另一个房间中。",
+      "ROOM_CREATE_COOLDOWN": "创建房间过于频繁，每30秒只能创建一个新房间。",
       "TABLE_UNAVAILABLE": "该定式当前不可用。",
       "ROUTE_GENERATION_FAILED": "定式路线生成失败，预扣 Token 已退回。",
       "ROUTE_TOO_SHORT": "未能生成足够长的定式路线，预扣 Token 已退回。",
-      "NOT_ENOUGH_PLAYERS": "至少需要两名玩家。",
-      "PLAYERS_NOT_READY": "所有玩家准备后才能开始。",
+      "NOT_ENOUGH_PLAYERS": "至少需要两名已准备玩家才能开始。",
+      "HOST_NOT_READY": "房主准备后才能开始。",
+      "PLAYERS_NOT_READY": "至少需要两名玩家准备后才能开始。",
       "SPECTATORS_DISABLED": "该房间不允许观战。",
       "PLAYER_SLOTS_FULL": "玩家席位已满。",
       "KICKED_FROM_ROOM": "你已被房主移出该房间。",
@@ -749,6 +773,8 @@
     "hall": {
       "kicker": "对战大厅",
       "publicRooms": "公开房间",
+      "modeRooms": "{mode}房间",
+      "modeKicker": "选择模式",
       "emptyTitle": "暂无可加入的房间",
       "emptyBody": "可以使用房间码加入，或创建一间新房。",
       "joinByCode": "输入房间码",
@@ -765,6 +791,7 @@
       "unknownHost": "未知用户"
     },
     "form": {
+      "mode": "对战模式",
       "pattern": "定式 Pattern",
       "target": "目标数字",
       "initialBoard": "初始盘面",
@@ -781,7 +808,8 @@
       "chatRolesHint": "选择可以在房间和对局中发言的成员身份",
       "chatRolesNone": "全部禁言",
       "routeCost": "本局路线费用",
-      "balance": "当前余额"
+      "balance": "当前余额",
+      "refundPolicy": "未开始对局便关闭或过期，将退回本次路线费用的80%；每30秒最多创建一个房间。"
     },
     "actions": {
       "join": "加入",
@@ -822,7 +850,9 @@
       "settingsLocked": "开始前固定",
       "spectators": "观战者",
       "noSpectators": "暂无观战者",
-      "inviteText": "{tablebase} 吻合度对战房间：{url}"
+      "inviteText": "{tablebase} 吻合度对战房间：{url}",
+      "startRuleSpectators": "至少两名玩家准备即可开始；未准备玩家将在开局时转为观战者。",
+      "startRuleNoSpectators": "至少两名玩家准备即可开始；未准备玩家将在开局时被移出房间。"
     },
     "match": {
       "kicker": "实时对战",
@@ -834,9 +864,13 @@
       "yourMove": "你的走法",
       "standardMove": "标准走法",
       "goodnessDrop": "本步吻合度损失 {value}",
+      "continueHint": "按下 Enter 键继续",
       "inputHint": "使用方向键、WASD 或滑屏输入走法",
       "live": "实时数据",
-      "opponents": "玩家进度"
+      "opponents": "玩家进度",
+      "completeTitle": "本轮对战已结束",
+      "completeHint": "你可以查看本局结算，或继续停留在终盘；返回房间后当前状态为未准备。",
+      "viewResults": "查看结算"
     },
     "playerStatus": {
       "playing": "进行中",
@@ -850,7 +884,8 @@
       "title": "对战结束",
       "draw": "本局平局",
       "steps": "步",
-      "backToRoom": "返回原房间"
+      "backToRoom": "返回原房间",
+      "stayOnMatch": "继续查看终盘"
     },
     "chat": {
       "kicker": "ROOM CHAT",

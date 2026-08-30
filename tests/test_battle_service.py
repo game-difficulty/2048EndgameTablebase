@@ -6,7 +6,7 @@ import sys
 import tempfile
 import types
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 if "cpuinfo" not in sys.modules:
@@ -76,6 +76,14 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
             )
         return user_id
 
+    def _expire_creation_cooldown(self) -> None:
+        old = (datetime.now(timezone.utc) - timedelta(seconds=31)).isoformat()
+        with auth_db() as db:
+            db.execute(
+                "UPDATE battle_rooms SET created_at = ? WHERE host_user_id = ?",
+                (old, self.host_id),
+            )
+
     @staticmethod
     def _generated_route() -> GeneratedBattleRoute:
         initial_board = 0x11
@@ -93,7 +101,13 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
             available_layers=8,
         )
 
-    async def _create_ready_room(self, *, step_timeout_seconds: int = 30) -> dict:
+    async def _create_ready_room(
+        self,
+        *,
+        step_timeout_seconds: int = 30,
+        max_players: int = 2,
+        allow_spectators: bool = True,
+    ) -> dict:
         with (
             patch.object(
                 goodness_runtime,
@@ -111,9 +125,10 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
                 session_id=None,
                 payload={
                     "full_pattern": "L3_128",
-                    "max_players": 2,
+                    "max_players": max_players,
                     "step_timeout_seconds": step_timeout_seconds,
                     "is_public": True,
+                    "allow_spectators": allow_spectators,
                 },
             )
             round_id = str(created["room"]["round"]["round_id"])
@@ -124,6 +139,7 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
         room = await self._create_ready_room(step_timeout_seconds=5)
         self.assertEqual(room["step_timeout_seconds"], 5)
         service.leave_room(room["room_code"], user_id=self.host_id)
+        self._expire_creation_cooldown()
 
         room = await self._create_ready_room(step_timeout_seconds=120)
         self.assertEqual(room["step_timeout_seconds"], 120)
@@ -143,6 +159,26 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
             room["room_code"], user_id=self.host_id, session_id=None
         )
         self.assertEqual(started["status"], "running")
+        player_snapshot = service.room_snapshot(
+            room["room_code"], user_id=self.player_id
+        )
+        self.assertEqual(player_snapshot["status"], "running")
+        self.assertEqual(player_snapshot["viewer"]["role"], "player")
+        self.assertIsNotNone(player_snapshot["route"])
+        self.assertIsNotNone(
+            next(
+                result
+                for result in player_snapshot["results"]
+                if int(result["user_id"]) == self.player_id
+            )
+        )
+        self.assertEqual(get_token_balance(self.host_id)["total"], 995)
+        with auth_db() as db:
+            reservation_status = db.execute(
+                "SELECT reservation_status FROM battle_rounds WHERE round_id = ?",
+                (started["round"]["round_id"],),
+            ).fetchone()["reservation_status"]
+        self.assertEqual(reservation_status, "finalized")
         started_revision = int(started["revision"])
 
         round_id = str(started["round"]["round_id"])
@@ -182,6 +218,60 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(not member["ready"] for member in finished["members"]))
         self.assertEqual(finished["room_code"], room["room_code"])
 
+    async def test_two_ready_players_can_start_and_unready_players_become_spectators(self) -> None:
+        room = await self._create_ready_room(max_players=8)
+        service.join_room(room["room_code"], user_id=self.player_id, role="player")
+        extra_ids = [
+            self._create_user(f"battle-extra-{index}@example.com", 1_000_000)
+            for index in range(2)
+        ]
+        for user_id in extra_ids:
+            service.join_room(room["room_code"], user_id=user_id, role="player")
+        service.set_ready(room["room_code"], user_id=self.host_id, ready=True)
+        service.set_ready(room["room_code"], user_id=self.player_id, ready=True)
+        started = await service.start_room(
+            room["room_code"], user_id=self.host_id, session_id=None
+        )
+        self.assertEqual(started["status"], "running")
+        self.assertEqual(len(started["results"]), 2)
+        roles = {int(member["user_id"]): member["role"] for member in started["members"]}
+        self.assertEqual(roles[self.host_id], "player")
+        self.assertEqual(roles[self.player_id], "player")
+        self.assertTrue(all(roles[user_id] == "spectator" for user_id in extra_ids))
+
+    async def test_unready_players_are_kicked_when_spectating_is_disabled(self) -> None:
+        room = await self._create_ready_room(max_players=4, allow_spectators=False)
+        extra_id = self._create_user("battle-unready@example.com", 1_000_000)
+        service.join_room(room["room_code"], user_id=self.player_id, role="player")
+        service.join_room(room["room_code"], user_id=extra_id, role="player")
+        service.set_ready(room["room_code"], user_id=self.host_id, ready=True)
+        service.set_ready(room["room_code"], user_id=self.player_id, ready=True)
+
+        started = await service.start_room(
+            room["room_code"], user_id=self.host_id, session_id=None
+        )
+        self.assertEqual(len(started["results"]), 2)
+        self.assertNotIn(extra_id, {int(member["user_id"]) for member in started["members"]})
+        with auth_db() as db:
+            status = db.execute(
+                "SELECT status FROM battle_members WHERE room_id = ? AND user_id = ?",
+                (room["room_id"], extra_id),
+            ).fetchone()["status"]
+        self.assertEqual(status, "kicked")
+
+    async def test_host_must_be_one_of_the_ready_players(self) -> None:
+        room = await self._create_ready_room(max_players=8)
+        service.join_room(room["room_code"], user_id=self.player_id, role="player")
+        extra_id = self._create_user("battle-ready-extra@example.com", 1_000_000)
+        service.join_room(room["room_code"], user_id=extra_id, role="player")
+        service.set_ready(room["room_code"], user_id=self.player_id, ready=True)
+        service.set_ready(room["room_code"], user_id=extra_id, ready=True)
+        with self.assertRaisesRegex(service.BattleServiceError, "host must be ready") as rejected:
+            await service.start_room(
+                room["room_code"], user_id=self.host_id, session_id=None
+            )
+        self.assertEqual(rejected.exception.code, "HOST_NOT_READY")
+
     async def test_host_leaving_during_generation_refunds_reservation_once(self) -> None:
         gate = asyncio.Event()
 
@@ -211,12 +301,96 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
             gate.set()
             await asyncio.gather(*list(service._route_tasks.values()), return_exceptions=True)
 
-        self.assertEqual(get_token_balance(self.host_id)["total"], 1000)
+        self.assertEqual(get_token_balance(self.host_id)["total"], 999)
         with auth_db() as db:
             settlements = db.execute(
                 "SELECT settlement_type FROM token_reservation_settlements"
             ).fetchall()
-        self.assertEqual([row["settlement_type"] for row in settlements], ["cancel"])
+            final_cost = db.execute(
+                "SELECT final_cost_units FROM token_ledger WHERE event_type = 'finalize' ORDER BY id DESC LIMIT 1"
+            ).fetchone()["final_cost_units"]
+        self.assertEqual([row["settlement_type"] for row in settlements], ["finalize"])
+        self.assertEqual(final_cost, 1_000)
+
+    async def test_creation_cooldown_rejects_before_a_second_reservation(self) -> None:
+        room = await self._create_ready_room()
+        service.leave_room(room["room_code"], user_id=self.host_id)
+        with auth_db() as db:
+            reserves_before = db.execute(
+                "SELECT COUNT(*) AS count FROM token_ledger WHERE event_type = 'reserve'"
+            ).fetchone()["count"]
+
+        with self.assertRaises(service.BattleServiceError) as raised:
+            await service.create_room(
+                user_id=self.host_id,
+                session_id=None,
+                payload={"full_pattern": "L3_128", "max_players": 2},
+            )
+
+        self.assertEqual(raised.exception.code, "ROOM_CREATE_COOLDOWN")
+        self.assertEqual(raised.exception.status_code, 429)
+        with auth_db() as db:
+            reserves_after = db.execute(
+                "SELECT COUNT(*) AS count FROM token_ledger WHERE event_type = 'reserve'"
+            ).fetchone()["count"]
+        self.assertEqual(reserves_after, reserves_before)
+        self.assertEqual(get_token_balance(self.host_id)["total"], 999)
+
+    async def test_waiting_room_expiry_refunds_eighty_percent(self) -> None:
+        room = await self._create_ready_room()
+        round_id = str(room["round"]["round_id"])
+        with auth_db() as db:
+            self.assertEqual(
+                db.execute(
+                    "SELECT reservation_status FROM battle_rounds WHERE round_id = ?",
+                    (round_id,),
+                ).fetchone()["reservation_status"],
+                "reserved",
+            )
+            db.execute(
+                "UPDATE battle_rooms SET expires_at = ? WHERE room_id = ?",
+                ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), room["room_id"]),
+            )
+
+        changed = goodness_runtime.mark_timeouts()
+
+        self.assertIn(room["room_id"], changed)
+        self.assertEqual(repository.get_room(room["room_id"])["status"], "expired")
+        self.assertEqual(get_token_balance(self.host_id)["total"], 999)
+        with auth_db() as db:
+            status = db.execute(
+                "SELECT reservation_status FROM battle_rounds WHERE round_id = ?",
+                (round_id,),
+            ).fetchone()["reservation_status"]
+        self.assertEqual(status, "unstarted_refunded")
+
+    async def test_route_generation_failure_still_refunds_the_full_reservation(self) -> None:
+        with (
+            patch.object(
+                goodness_runtime,
+                "resolve_tablebase",
+                return_value={"pattern": "L3", "target": 128, "full_pattern": "L3_128"},
+            ),
+            patch.object(
+                goodness_runtime,
+                "generate_battle_route",
+                new=AsyncMock(side_effect=RuntimeError("generation failed")),
+            ),
+        ):
+            created = await service.create_room(
+                user_id=self.host_id,
+                session_id=None,
+                payload={"full_pattern": "L3_128", "max_players": 2},
+            )
+            round_id = str(created["room"]["round"]["round_id"])
+            await service._route_tasks[round_id]
+
+        self.assertEqual(get_token_balance(self.host_id)["total"], 1000)
+        with auth_db() as db:
+            settlement = db.execute(
+                "SELECT settlement_type FROM token_reservation_settlements"
+            ).fetchone()["settlement_type"]
+        self.assertEqual(settlement, "cancel")
 
     async def test_reservation_settlement_is_globally_idempotent(self) -> None:
         reservation = reserve_operation_tokens(

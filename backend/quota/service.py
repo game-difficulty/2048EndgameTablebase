@@ -596,11 +596,15 @@ def finalize_reservation(
     reservation: TokenReservation | None,
     *,
     actual_operation_key: str,
+    actual_base_units: int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if reservation is None:
         return None
-    actual_base_units = operation_cost_units(actual_operation_key)
+    if actual_base_units is None:
+        actual_base_units = operation_cost_units(actual_operation_key)
+    else:
+        actual_base_units = max(0, int(actual_base_units))
     actual_units = min(
         reservation.reserved_units,
         apply_multiplier(actual_base_units, reservation.table_multiplier_units),

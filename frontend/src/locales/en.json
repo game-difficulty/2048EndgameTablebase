@@ -5,7 +5,7 @@
     "trainer": "Trainer",
     "tester": "Tester",
     "minigames": "Minigames",
-    "battle": "GOF Battle",
+    "battle": "Battle",
     "leaderboards": "Leaderboards",
     "replay": "Replay",
     "notebook": "Notebook",
@@ -624,7 +624,7 @@
         "title": "Charging Notes",
         "balanceOrder": "Bonus tokens are spent before paid tokens.",
         "analysisCharge": "Analysis is charged per selected file, whether or not a report is generated.",
-        "battleCharge": "Creating a Goodness Battle room charges route generation by the selected tablebase multiplier; the reservation is refunded if route generation fails.",
+        "battleCharge": "Creating a Battle room reserves the route cost at the selected tablebase multiplier. Route generation failure gives a full refund; closing or expiring an unstarted room refunds 80%. Each user may create one room every 30 seconds.",
         "replayCharge": "Replay loading is charged after authorization; parsing failures are not refunded.",
         "offline": "No charge is made when a tablebase is offline or the server rejects a request before execution; reservations are refunded."
       }
@@ -726,17 +726,41 @@
     "sponsorNoteSuffix": "."
   },
   "battle": {
-    "title": "Goodness Battle",
+    "title": "Battle",
+    "rules": {
+      "kicker": "BATTLE RULES",
+      "title": "Battle Mode Rules",
+      "subtitle": "Each mode has its own controls and scoring rules. Review the selected mode before creating a room.",
+      "open": "View battle mode rules",
+      "close": "Close Rules"
+    },
+    "modes": {
+      "goodness": {
+        "name": "Goodness Battle",
+        "shortName": "Goodness",
+        "summary": "All players answer along the same tablebase route; cumulative goodness determines the result.",
+        "rules": {
+          "sharedRoute": "Every player receives the same starting board, optimal moves, and spawn sequence generated from the host's selected tablebase.",
+          "moveCorrection": "Illegal directions neither score nor advance. A legal non-optimal move records its loss, then the system performs the standard move after the correction prompt.",
+          "scoring": "Goodness uses the same calculation as Tester. The highest cumulative goodness wins; equal scores draw, and completion speed is not a tiebreaker.",
+          "certainty": "When the current position reaches 100% success, the player's answers are complete and the remaining optimal route plays automatically.",
+          "timeout": "Each move must be entered within the room's time limit. A move timeout ends that player's round.",
+          "spectating": "Spectators can view every player. Competitors may view unfinished opponents' boards only after completing their own route."
+        }
+      }
+    },
     "errors": {
       "ROOM_NOT_FOUND": "This room does not exist or has closed.",
       "ROOM_CLOSED": "The room has closed.",
       "ROOM_EXPIRED": "The waiting room expired and was closed.",
       "USER_ALREADY_IN_ROOM": "You are already in another room.",
+      "ROOM_CREATE_COOLDOWN": "Rooms are being created too quickly. Each user may create one new room every 30 seconds.",
       "TABLE_UNAVAILABLE": "This tablebase is currently unavailable.",
       "ROUTE_GENERATION_FAILED": "Route generation failed. The reserved Tokens were refunded.",
       "ROUTE_TOO_SHORT": "No sufficiently long route could be generated. The reserved Tokens were refunded.",
-      "NOT_ENOUGH_PLAYERS": "At least two players are required.",
-      "PLAYERS_NOT_READY": "All players must be ready before starting.",
+      "NOT_ENOUGH_PLAYERS": "At least two ready players are required to start.",
+      "HOST_NOT_READY": "The host must be ready before starting.",
+      "PLAYERS_NOT_READY": "At least two players must be ready before starting.",
       "SPECTATORS_DISABLED": "Spectating is disabled for this room.",
       "PLAYER_SLOTS_FULL": "All player seats are occupied.",
       "KICKED_FROM_ROOM": "The host removed you from this room.",
@@ -749,6 +773,8 @@
     "hall": {
       "kicker": "Battle Hall",
       "publicRooms": "Public Rooms",
+      "modeRooms": "{mode} Rooms",
+      "modeKicker": "Select Mode",
       "emptyTitle": "No rooms are open",
       "emptyBody": "Join with a room code or create a new room.",
       "joinByCode": "Enter Room Code",
@@ -765,6 +791,7 @@
       "unknownHost": "Unknown"
     },
     "form": {
+      "mode": "Battle Mode",
       "pattern": "Pattern",
       "target": "Target",
       "initialBoard": "Initial Board",
@@ -781,7 +808,8 @@
       "chatRolesHint": "Choose which member roles may chat before and during the match",
       "chatRolesNone": "Chat disabled",
       "routeCost": "Route Cost",
-      "balance": "Balance"
+      "balance": "Balance",
+      "refundPolicy": "Closing or expiring the room before a match starts refunds 80% of this route cost. One room may be created every 30 seconds."
     },
     "actions": {
       "join": "Join",
@@ -822,7 +850,9 @@
       "settingsLocked": "Locked before start",
       "spectators": "Spectators",
       "noSpectators": "No spectators",
-      "inviteText": "{tablebase} Goodness Battle room: {url}"
+      "inviteText": "{tablebase} Goodness Battle room: {url}",
+      "startRuleSpectators": "Two ready players can start. Unready players become spectators when the match begins.",
+      "startRuleNoSpectators": "Two ready players can start. Unready players are removed when the match begins."
     },
     "match": {
       "kicker": "Live Battle",
@@ -834,9 +864,13 @@
       "yourMove": "Your Move",
       "standardMove": "Optimal Move",
       "goodnessDrop": "Goodness lost this step: {value}",
+      "continueHint": "Press Enter to continue",
       "inputHint": "Use arrow keys, WASD, or swipe to submit a move",
       "live": "Live Data",
-      "opponents": "Player Progress"
+      "opponents": "Player Progress",
+      "completeTitle": "This Battle Is Complete",
+      "completeHint": "Review the result or remain on the final board. Returning to the room leaves you not ready.",
+      "viewResults": "View Results"
     },
     "playerStatus": {
       "playing": "Playing",
@@ -850,7 +884,8 @@
       "title": "Battle Complete",
       "draw": "Draw",
       "steps": "steps",
-      "backToRoom": "Return to Room"
+      "backToRoom": "Return to Room",
+      "stayOnMatch": "Stay on Final Board"
     },
     "chat": {
       "kicker": "ROOM CHAT",

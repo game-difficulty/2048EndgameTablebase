@@ -29,6 +29,17 @@ export function listBattleModeDefinitions() {
 registerBattleMode({
   key: 'goodness',
   version: 1,
+  labelKey: 'battle.modes.goodness.name',
+  shortLabelKey: 'battle.modes.goodness.shortName',
+  summaryKey: 'battle.modes.goodness.summary',
+  ruleKeys: Object.freeze([
+    'battle.modes.goodness.rules.sharedRoute',
+    'battle.modes.goodness.rules.moveCorrection',
+    'battle.modes.goodness.rules.scoring',
+    'battle.modes.goodness.rules.certainty',
+    'battle.modes.goodness.rules.timeout',
+    'battle.modes.goodness.rules.spectating',
+  ]),
   HallView: BattleHall,
   MatchView: BattleMatch,
   ResultView: BattleResult,

@@ -117,8 +117,8 @@ class GoodnessBattleMode(BattleMode):
             payload=payload,
         )
 
-    def cancel_preparing_round(self, room_id: str, *, reason: str) -> None:
-        self.runtime.cancel_preparing_round_for_mode(room_id, reason=reason)
+    def settle_unstarted_round(self, room_id: str, *, reason: str) -> None:
+        self.runtime.settle_unstarted_round_for_mode(room_id, reason=reason)
 
     async def startup(self) -> None:
         await self.runtime.startup()

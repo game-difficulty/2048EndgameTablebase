@@ -53,6 +53,7 @@
           <button v-if="isHost" type="button" class="battle-start-btn" :disabled="!canStart" @click="$emit('start')">{{ $t('battle.actions.start') }}</button>
           <button type="button" class="battle-leave-btn" @click="$emit('leave')">{{ isHost ? $t('battle.actions.closeRoom') : $t('battle.actions.leave') }}</button>
         </div>
+        <p class="battle-start-rule">{{ $t(room.allow_spectators ? 'battle.lobby.startRuleSpectators' : 'battle.lobby.startRuleNoSpectators') }}</p>
       </section>
 
       <aside class="battle-room-sidebar">
@@ -100,7 +101,13 @@ const players = computed(() => props.members.filter((member) => member.role === 
 const spectators = computed(() => props.members.filter((member) => member.role === 'spectator' && member.status === 'active'));
 const selfMember = computed(() => props.members.find((member) => Number(member.user_id) === Number(props.currentUserId)) || null);
 const isHost = computed(() => Number(props.room.host_user_id) === Number(props.currentUserId));
-const canStart = computed(() => isHost.value && players.value.length >= 2 && players.value.every((member) => member.ready) && props.room.status === 'waiting');
+const readyPlayers = computed(() => players.value.filter((member) => member.ready));
+const canStart = computed(() => (
+  isHost.value
+  && Boolean(selfMember.value?.ready)
+  && readyPlayers.value.length >= 2
+  && props.room.status === 'waiting'
+));
 const seatRows = computed(() => Array.from({ length: Number(props.room.max_players || 2) }, (_unused, index) => ({ index, member: players.value[index] || null })));
 const displayedInitialBoard = computed(() => (
   props.room.route?.initial_board
@@ -176,6 +183,7 @@ const copyInvite = async () => {
 .battle-ready-btn, .battle-start-btn, .battle-leave-btn { min-height: 42px; border: 1px solid var(--border-main); border-radius: 7px; font-size: var(--font-ui-sm); font-weight: 900; }
 .battle-ready-btn { background: var(--bg-main); color: var(--text-main); }
 .battle-ready-btn.ready { border-color: #3ba86b; color: #258453; }
+.battle-start-rule { margin: 8px 0 0; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 700; }
 .battle-start-btn { background: var(--btn-bg); border-color: var(--btn-bg); color: white; }
 .battle-start-btn:disabled { opacity: .38; cursor: not-allowed; }
 .battle-leave-btn { padding: 0 18px; background: transparent; color: var(--text-secondary); }

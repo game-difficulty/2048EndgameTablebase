@@ -32,6 +32,7 @@ const KEY_DIRECTIONS = Object.freeze({
   W: 'up',
   S: 'down',
 });
+const CORRECTION_TIMEOUT_MS = 15_000;
 
 function transitionFrame(transition) {
   if (!transition) return null;
@@ -64,6 +65,7 @@ export function useGoodnessMatch(roomSession, activeRef, authUserRef) {
   let routeRoundId = '';
   let frameRevision = 0;
   let overlayTimer = null;
+  let correctionResult = null;
   let autoTimer = null;
   let localSequence = 0;
 
@@ -110,6 +112,19 @@ export function useGoodnessMatch(roomSession, activeRef, authUserRef) {
     if (autoTimer != null) window.clearTimeout(autoTimer);
     overlayTimer = null;
     autoTimer = null;
+    correctionResult = null;
+    wrongOverlay.value = null;
+  };
+  const continueCorrection = () => {
+    if (!wrongOverlay.value || !correctionResult) return false;
+    if (overlayTimer != null) window.clearTimeout(overlayTimer);
+    overlayTimer = null;
+    const result = correctionResult;
+    correctionResult = null;
+    wrongOverlay.value = null;
+    animateTransition(result, 'wrong-correction');
+    if (result.state.mode === 'auto') runAutoPlayback();
+    return true;
   };
   const runAutoPlayback = () => {
     if (!controller || controller.getState().mode !== 'auto') return;
@@ -270,16 +285,16 @@ export function useGoodnessMatch(roomSession, activeRef, authUserRef) {
       direction: result.selectedDirection,
     }, { requestId });
     if (result.wrong) {
+      if (overlayTimer != null) window.clearTimeout(overlayTimer);
+      correctionResult = result;
       wrongOverlay.value = {
         selectedDirection: result.selectedDirection,
         standardDirection: result.standardDirection,
         drop: result.scoring.goodnessDrop,
       };
       overlayTimer = window.setTimeout(() => {
-        wrongOverlay.value = null;
-        animateTransition(result, 'wrong-correction');
-        if (result.state.mode === 'auto') runAutoPlayback();
-      }, 900);
+        continueCorrection();
+      }, CORRECTION_TIMEOUT_MS);
     } else {
       animateTransition(result, 'move');
       if (result.state.mode === 'auto') runAutoPlayback();
@@ -289,9 +304,13 @@ export function useGoodnessMatch(roomSession, activeRef, authUserRef) {
 
   const handleKeydown = (event) => {
     if (!activeRef.value || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.target?.matches?.('input, textarea, select, [contenteditable="true"]')) return;
+    if (event.key === 'Enter' && continueCorrection()) {
+      event.preventDefault();
+      return;
+    }
     const direction = KEY_DIRECTIONS[event.key];
     if (!direction) return;
-    if (event.target?.matches?.('input, textarea, select, [contenteditable="true"]')) return;
     if (submitMove(direction)) event.preventDefault();
   };
   const dispose = () => clearPlaybackTimers();

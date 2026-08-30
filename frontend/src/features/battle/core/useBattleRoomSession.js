@@ -9,6 +9,7 @@ import {
 import { emitAuthRequired } from '../../../services/auth/authEvents.js';
 import { createWsClient } from '../../../services/ws/createWsClient.js';
 import { battleClient, battleRequestId } from '../services/battleClient.js';
+import { createBattleRoomViewState } from './battleRoomViewState.js';
 import { createBattleChatState, validateChatContent, viewerCanChat } from './chatState.js';
 
 export function useBattleRoomSession(activeRef, authUserRef) {
@@ -17,12 +18,15 @@ export function useBattleRoomSession(activeRef, authUserRef) {
   const loading = ref(false);
   const error = ref('');
   const wsStatus = ref('disconnected');
-  const resultDismissedRound = ref('');
+  const completedRoundView = ref('');
+  const resultVisibleRound = ref('');
   const chat = createBattleChatState();
+  const roomViewState = createBattleRoomViewState();
   const modeAdapters = new Map();
   let heartbeatTimer = null;
   let roomListTimer = null;
   let roomsRefreshPromise = null;
+  let roomStateEpoch = 0;
 
   const errorKey = (requestError, fallback) => (
     requestError?.code || requestError?.message || fallback
@@ -39,7 +43,13 @@ export function useBattleRoomSession(activeRef, authUserRef) {
   const spectators = computed(() => (
     room.value?.members?.filter((member) => member.role === 'spectator') || []
   ));
-  const matchActive = computed(() => room.value?.status === 'running');
+  const matchActive = computed(() => (
+    room.value?.status === 'running'
+    || (
+      room.value?.round?.status === 'completed'
+      && completedRoundView.value === room.value?.round?.round_id
+    )
+  ));
   const spectatorMode = computed(() => viewer.value?.role === 'spectator');
   const ownFinished = computed(() => (
     spectatorMode.value
@@ -47,7 +57,7 @@ export function useBattleRoomSession(activeRef, authUserRef) {
   ));
   const showResults = computed(() => (
     room.value?.round?.status === 'completed'
-    && resultDismissedRound.value !== room.value?.round?.round_id
+    && resultVisibleRound.value === room.value?.round?.round_id
   ));
   const chatCanSpeak = computed(() => viewerCanChat(room.value, viewer.value));
 
@@ -85,6 +95,9 @@ export function useBattleRoomSession(activeRef, authUserRef) {
       }));
     }
     const previousRoom = room.value;
+    const viewState = roomViewState.apply(previousRoom, nextRoom);
+    completedRoundView.value = viewState.heldRoundId;
+    resultVisibleRound.value = viewState.resultRoundId;
     if (String(previousRoom?.room_id || '') !== String(nextRoom?.room_id || '')) {
       chat.clear();
     }
@@ -94,6 +107,7 @@ export function useBattleRoomSession(activeRef, authUserRef) {
       await previousAdapter.onRoomApplied?.(null, previousRoom);
     }
     room.value = nextRoom || null;
+    roomStateEpoch += 1;
     try {
       await nextAdapter?.onRoomApplied?.(room.value, previousRoom);
     } catch (modeError) {
@@ -113,10 +127,18 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     onClose: () => { wsStatus.value = 'disconnected'; },
     onMessage: async (message) => {
       if (message?.action === 'BATTLE_ROOM_STATE') {
-        if (!message?.data?.room && message?.data?.code) {
-          error.value = String(message.data.code);
+        const data = message?.data || {};
+        if (data.room) {
+          await applyRoom(data.room);
+          return;
         }
-        await applyRoom(message?.data?.room || null);
+        if (!data.closed) return;
+        const closedRoomId = String(data.room_id || '');
+        if (closedRoomId && room.value && closedRoomId !== String(room.value.room_id || '')) {
+          return;
+        }
+        if (data.code) error.value = String(data.code);
+        await applyRoom(null);
         return;
       }
       if (chat.handleWsMessage(message, room.value?.viewer?.user_id, room.value)) return;
@@ -198,7 +220,9 @@ export function useBattleRoomSession(activeRef, authUserRef) {
       await applyRoom(null);
       return;
     }
+    const requestEpoch = roomStateEpoch;
     const payload = await battleClient.current();
+    if (!payload.room && requestEpoch !== roomStateEpoch) return;
     await applyRoom(payload.room || null);
     if (payload.room) ensureSocket();
   };
@@ -326,9 +350,13 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     }
   };
 
-  const dismissResults = () => {
-    resultDismissedRound.value = String(room.value?.round?.round_id || '');
+  const syncRoomViewState = (viewState) => {
+    completedRoundView.value = viewState.heldRoundId;
+    resultVisibleRound.value = viewState.resultRoundId;
   };
+  const returnToLobby = () => syncRoomViewState(roomViewState.returnToLobby(room.value));
+  const openResults = () => syncRoomViewState(roomViewState.openResults(room.value));
+  const dismissResults = () => syncRoomViewState(roomViewState.closeResults());
 
   watch(activeRef, (active) => {
     if (!active) return;
@@ -406,6 +434,8 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     start,
     kickMember,
     setRole,
+    returnToLobby,
+    openResults,
     dismissResults,
   };
 }

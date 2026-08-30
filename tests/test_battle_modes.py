@@ -66,7 +66,7 @@ class FakeBattleMode(BattleMode):
         self.actions.append(accepted)
         return accepted
 
-    def cancel_preparing_round(self, room_id: str, *, reason: str) -> None:
+    def settle_unstarted_round(self, room_id: str, *, reason: str) -> None:
         self.cancelled.append((room_id, reason))
 
     async def startup(self) -> None:
@@ -182,6 +182,61 @@ class BattleModeArchitectureTests(unittest.IsolatedAsyncioTestCase):
         finally:
             realtime._socket_room.pop(websocket, None)
             realtime._socket_user.pop(websocket, None)
+
+    async def test_temporary_snapshot_failure_does_not_close_active_room(self) -> None:
+        room = repository.create_room(
+            host_user_id=self.user_id,
+            pattern="test",
+            target=1,
+            full_pattern="test_1",
+            room_code="TMP234",
+            mode_key=self.mode.key,
+            mode_version=self.mode.version,
+            settings={"rounds": 1},
+        )
+        websocket = FakeWebSocket()
+        realtime._socket_room[websocket] = room["room_id"]
+        realtime._socket_user[websocket] = self.user_id
+        realtime._room_sockets[room["room_id"]].add(websocket)
+        try:
+            with patch.object(
+                realtime,
+                "room_snapshot",
+                side_effect=service.BattleServiceError(
+                    "BATTLE_MODE_UNAVAILABLE", "Temporary mode failure.", 409
+                ),
+            ):
+                await realtime.broadcast_room(room["room_id"])
+            self.assertEqual(websocket.messages, [])
+            self.assertEqual(realtime._socket_room.get(websocket), room["room_id"])
+        finally:
+            await realtime._detach(websocket)
+
+    async def test_authoritative_room_close_identifies_the_closed_room(self) -> None:
+        room = repository.create_room(
+            host_user_id=self.user_id,
+            pattern="test",
+            target=1,
+            full_pattern="test_1",
+            room_code="CLS234",
+            mode_key=self.mode.key,
+            mode_version=self.mode.version,
+            settings={"rounds": 1},
+        )
+        websocket = FakeWebSocket()
+        realtime._socket_room[websocket] = room["room_id"]
+        realtime._socket_user[websocket] = self.user_id
+        realtime._room_sockets[room["room_id"]].add(websocket)
+        repository.close_room(room["room_id"], host_user_id=self.user_id)
+        try:
+            await realtime.broadcast_room(room["room_id"])
+            message = websocket.messages[-1]
+            self.assertEqual(message["action"], Message.BATTLE_ROOM_STATE)
+            self.assertTrue(message["data"]["closed"])
+            self.assertEqual(message["data"]["room_id"], room["room_id"])
+            self.assertEqual(message["data"]["code"], "ROOM_CLOSED")
+        finally:
+            await realtime._detach(websocket)
 
     async def test_repository_round_trips_mode_settings_and_core_closes_room(self) -> None:
         room = repository.create_room(

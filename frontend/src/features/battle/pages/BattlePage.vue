@@ -6,11 +6,26 @@
           <span class="ui-caption font-black uppercase text-text-secondary">2048 Endgame Tablebase</span>
           <h1>{{ $t('battle.title') }}</h1>
         </div>
-        <div v-if="room" class="battle-title-room-state">
-          <span>{{ room.room_code }}</span>
-          <strong>{{ $t(`battle.status.${room.status}`) }}</strong>
+        <div class="battle-title-actions">
+          <div v-if="room" class="battle-title-room-state">
+            <span>{{ room.room_code }}</span>
+            <strong>{{ $t(`battle.status.${room.status}`) }}</strong>
+          </div>
+          <button
+            type="button"
+            class="battle-rules-button"
+            :title="$t('battle.rules.open')"
+            :aria-label="$t('battle.rules.open')"
+            @click="rulesOpen = true"
+          >?</button>
         </div>
       </header>
+
+      <BattleRulesDialog
+        v-if="rulesOpen"
+        :modes="modeDefinitions"
+        @close="rulesOpen = false"
+      />
 
       <div v-if="error" class="battle-error-banner" role="alert">
         <span>{{ localizedError }}</span>
@@ -32,11 +47,13 @@
         :creating="loading"
         :token-balance="Number(authUser.token_balance?.total || 0)"
         :mode-key="modeDefinition.key"
+        :mode-options="modeOptions"
         :build-create-payload="modeDefinition.buildCreatePayload"
         v-bind="modeHallProps"
         @refresh="refreshRooms"
         @join="join"
         @create="createRoom"
+        @mode-change="selectMode"
       />
 
       <component
@@ -47,6 +64,8 @@
         :ws-status="wsStatus"
         v-bind="modeMatchProps"
         v-on="modeMatchListeners"
+        @show-results="openResults"
+        @return-lobby="returnToLobby"
       />
 
       <BattleLobby
@@ -78,6 +97,7 @@
         v-if="room && showResults"
         :room="room"
         @close="dismissResults"
+        @return-room="returnToLobby"
       />
     </div>
   </div>
@@ -90,6 +110,7 @@ import { useI18n } from 'vue-i18n';
 import { emitAuthRequired } from '../../../services/auth/authEvents.js';
 import BattleLobby from '../components/BattleLobby.vue';
 import BattleRoomChat from '../components/BattleRoomChat.vue';
+import BattleRulesDialog from '../components/BattleRulesDialog.vue';
 import { useBattleSession } from '../composables/useBattleSession.js';
 
 const props = defineProps({
@@ -98,6 +119,7 @@ const props = defineProps({
 });
 
 const now = ref(Date.now());
+const rulesOpen = ref(false);
 const { t, te } = useI18n();
 let clockTimer = null;
 let inviteAttempted = false;
@@ -114,8 +136,10 @@ const {
   chatNotice,
   chatCooldownSeconds,
   chatCanSpeak,
+  modeDefinitions,
   modeDefinition,
   modeSession,
+  selectMode,
   refreshRooms,
   createRoom,
   join,
@@ -124,11 +148,18 @@ const {
   start,
   kickMember,
   setRole,
+  returnToLobby,
+  openResults,
   dismissResults,
   sendChatMessage,
 } = useBattleSession(toRef(props, 'active'), toRef(props, 'authUser'));
 
 const modeHallProps = computed(() => unref(modeSession.value?.hallProps) || {});
+const modeOptions = computed(() => modeDefinitions.map((definition) => ({
+  value: definition.key,
+  label: t(definition.labelKey),
+  shortLabel: t(definition.shortLabelKey || definition.labelKey),
+})));
 const modeMatchProps = computed(() => unref(modeSession.value?.matchProps) || {});
 const modeMatchListeners = computed(() => modeSession.value?.matchListeners || {});
 const localizedError = computed(() => {
@@ -154,9 +185,12 @@ onUnmounted(() => { if (clockTimer != null) window.clearInterval(clockTimer); })
 .battle-page-shell { position: relative; width: min(100%, 1220px); min-height: 690px; margin: 0 auto; }
 .battle-page-titlebar { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 13px; }
 .battle-page-titlebar h1 { margin: 3px 0 0; color: var(--text-main); font: 900 31px/1.05 Cambria, serif; letter-spacing: 0; }
+.battle-title-actions { display: flex; align-items: center; gap: 10px; }
 .battle-title-room-state { display: flex; align-items: center; gap: 9px; }
 .battle-title-room-state span, .battle-title-room-state strong { border: 1px solid var(--border-main); border-radius: 999px; padding: 6px 10px; color: var(--text-secondary); font: 900 11px/1 var(--font-mono, monospace); }
 .battle-title-room-state strong { color: var(--accent); font-family: inherit; }
+.battle-rules-button { width: 36px; height: 36px; display: grid; flex: 0 0 auto; place-items: center; padding: 0; border: 2px solid var(--text-secondary); border-radius: 50%; background: transparent; color: var(--text-secondary); font: 900 18px/1 Georgia, serif; }
+.battle-rules-button:hover, .battle-rules-button:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
 .battle-error-banner { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 8px 12px; border: 1px solid color-mix(in srgb, #dc4c4c 52%, var(--border-main)); border-radius: 7px; background: color-mix(in srgb, #dc4c4c 8%, var(--bg-card)); color: #c84848; font-size: var(--font-ui-sm); font-weight: 800; }
 .battle-error-banner button { width: 26px; height: 26px; border: 0; background: transparent; color: inherit; font-size: 19px; }
 .battle-login-required { min-height: 560px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid var(--border-main); border-radius: 8px; background: var(--bg-card); text-align: center; }

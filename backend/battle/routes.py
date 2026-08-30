@@ -109,7 +109,10 @@ async def leave_battle_room(
         room = repository.get_room(room_code)
         leave_room(room_code, user_id=int(user["id"]))
         await broadcast_room(str(room["room_id"]))
-        return {"left": True}
+        return {
+            "left": True,
+            "token_balance": get_token_balance(int(user["id"])),
+        }
     except Exception as exc:
         _raise_service_error(exc)
         raise

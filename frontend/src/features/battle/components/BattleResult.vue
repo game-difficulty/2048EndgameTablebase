@@ -18,7 +18,10 @@
           <b>{{ percent(player.goodness_of_fit) }}</b>
         </article>
       </div>
-      <button type="button" class="battle-result-close" @click="$emit('close')">{{ $t('battle.result.backToRoom') }}</button>
+      <div class="battle-result-actions">
+        <button type="button" @click="$emit('close')">{{ $t('battle.result.stayOnMatch') }}</button>
+        <button type="button" class="primary" @click="$emit('return-room')">{{ $t('battle.result.backToRoom') }}</button>
+      </div>
     </section>
   </div>
 </template>
@@ -28,7 +31,7 @@ import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 const props = defineProps({ room: { type: Object, required: true } });
-defineEmits(['close']);
+defineEmits(['close', 'return-room']);
 const { t } = useI18n();
 const rankedResults = computed(() => [...(props.room.results || [])].sort((left, right) => {
   const leftTimeout = left.status === 'timed_out' ? 1 : 0;
@@ -70,5 +73,7 @@ const statusLabel = (player) => player.status === 'timed_out' ? t('battle.player
 .battle-result-avatar span { display: grid; place-items: center; border: 1px solid var(--border-main); color: var(--accent); font-size: 10px; font-weight: 900; }
 .battle-result-row > span:nth-of-type(2) { color: var(--text-secondary); font-size: var(--font-ui-xs); }
 .battle-result-row b { color: var(--accent); font: 900 15px/1 var(--font-mono, monospace); text-align: right; }
-.battle-result-close { width: 100%; min-height: 43px; border: 1px solid var(--btn-bg); border-radius: 7px; background: var(--btn-bg); color: white; font-weight: 900; }
+.battle-result-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.battle-result-actions button { min-height: 43px; border: 1px solid var(--border-main); border-radius: 7px; background: var(--bg-card); color: var(--text-main); font-weight: 900; }
+.battle-result-actions button.primary { border-color: var(--btn-bg); background: var(--btn-bg); color: white; }
 </style>

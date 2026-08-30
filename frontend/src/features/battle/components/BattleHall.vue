@@ -4,7 +4,7 @@
       <header class="battle-section-header">
         <div>
           <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('battle.hall.kicker') }}</div>
-          <h2 id="battle-room-list-title">{{ $t('battle.hall.publicRooms') }}</h2>
+          <h2 id="battle-room-list-title">{{ $t('battle.hall.modeRooms', { mode: selectedModeLabel }) }}</h2>
         </div>
         <button type="button" class="battle-icon-btn" :title="$t('common.refresh')" @click="$emit('refresh')">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -14,7 +14,7 @@
       </header>
 
       <div v-if="loading" class="battle-empty-state">{{ $t('common.loading') }}</div>
-      <div v-else-if="!rooms.length" class="battle-empty-state">
+      <div v-else-if="!visibleRooms.length" class="battle-empty-state">
         <strong>{{ $t('battle.hall.emptyTitle') }}</strong>
         <span>{{ $t('battle.hall.emptyBody') }}</span>
       </div>
@@ -26,7 +26,7 @@
           <span>{{ $t('battle.room.status') }}</span>
           <span aria-hidden="true"></span>
         </div>
-        <article v-for="room in rooms" :key="room.room_code" class="battle-room-row">
+        <article v-for="room in visibleRooms" :key="room.room_code" class="battle-room-row">
           <div class="battle-room-host">
             <img v-if="room.host?.avatar_url" :src="room.host.avatar_url" alt="" />
             <span v-else class="battle-avatar-fallback">{{ initials(room.host?.display_name) }}</span>
@@ -45,6 +45,20 @@
     </section>
 
     <aside class="battle-hall-tools">
+      <section class="battle-mode-switcher" aria-labelledby="battle-mode-switcher-title">
+        <div>
+          <span class="ui-caption font-black uppercase text-text-secondary">{{ $t('battle.hall.modeKicker') }}</span>
+          <strong id="battle-mode-switcher-title">{{ $t('battle.form.mode') }}</strong>
+        </div>
+        <UiSelect
+          :model-value="modeKey"
+          :options="modeOptions"
+          trigger-class="battle-mode-select-trigger"
+          align="right"
+          @change="changeMode"
+        />
+      </section>
+
       <section class="battle-tool-section">
         <div class="battle-tool-heading">
           <span class="battle-tool-index">01</span>
@@ -139,6 +153,7 @@
           <div><span>{{ $t('battle.form.routeCost') }}</span><strong>{{ formattedCost }} Token</strong></div>
           <div><span>{{ $t('battle.form.balance') }}</span><strong>{{ formattedBalance }}</strong></div>
         </div>
+        <p class="battle-refund-policy">{{ $t('battle.form.refundPolicy') }}</p>
         <button type="button" class="battle-create-btn" :disabled="creating || !canCreate" @click="submitCreate">
           {{ creating ? $t('battle.status.preparing_route') : $t('battle.actions.create') }}
         </button>
@@ -163,10 +178,11 @@ const props = defineProps({
   multiplierForPattern: { type: Function, required: true },
   routeBaseCost: { type: Number, default: 5 },
   modeKey: { type: String, default: 'goodness' },
+  modeOptions: { type: Array, default: () => [] },
   buildCreatePayload: { type: Function, default: null },
 });
 
-const emit = defineEmits(['refresh', 'join', 'create']);
+const emit = defineEmits(['refresh', 'join', 'create', 'mode-change']);
 const joinCode = ref('');
 const form = reactive({
   pattern: '',
@@ -185,6 +201,19 @@ const chatRoleOptions = ['host', 'player', 'spectator'];
 const patternOptions = computed(() => [...new Set(props.tables.map((table) => table.pattern).filter(Boolean))]);
 const targetOptions = computed(() => getCatalogTargetsForPattern(props.tables, form.pattern));
 const selectedFullPattern = computed(() => `${form.pattern}_${form.target}`);
+const normalizedModeKey = (modeKey) => String(modeKey || 'goodness').trim().toLowerCase();
+const visibleRooms = computed(() => props.rooms.filter(
+  (room) => normalizedModeKey(room.mode_key) === normalizedModeKey(props.modeKey),
+));
+const selectedModeOption = computed(() => props.modeOptions.find(
+  (option) => option.value === props.modeKey,
+));
+const selectedModeLabel = computed(() => (
+  selectedModeOption.value?.label
+  || selectedModeOption.value?.shortLabel
+  || props.modeKey
+));
+const validMode = computed(() => Boolean(selectedModeOption.value));
 const routeCost = computed(() => props.routeBaseCost * props.multiplierForPattern(selectedFullPattern.value));
 const formattedCost = computed(() => routeCost.value.toLocaleString());
 const formattedBalance = computed(() => Number(props.tokenBalance || 0).toLocaleString(undefined, { maximumFractionDigits: 1 }));
@@ -192,9 +221,10 @@ const validInitialBoard = computed(() => !form.initial_board || /^[0-9a-fA-F]{16
 const validMaxPlayers = computed(() => Number.isInteger(Number(form.max_players)) && Number(form.max_players) >= 2 && Number(form.max_players) <= 8);
 const validStepTimeout = computed(() => Number.isInteger(Number(form.step_timeout_seconds)) && Number(form.step_timeout_seconds) >= 5 && Number(form.step_timeout_seconds) <= 120 && Number(form.step_timeout_seconds) % 5 === 0);
 const validMaxSteps = computed(() => form.max_steps === '' || (Number.isInteger(Number(form.max_steps)) && Number(form.max_steps) >= 1 && Number(form.max_steps) <= 9999));
-const canCreate = computed(() => Boolean(form.pattern && form.target && validInitialBoard.value && validMaxPlayers.value && validStepTimeout.value && validMaxSteps.value));
+const canCreate = computed(() => Boolean(validMode.value && form.pattern && form.target && validInitialBoard.value && validMaxPlayers.value && validStepTimeout.value && validMaxSteps.value));
 
 const initials = (name) => String(name || '?').trim().slice(0, 2).toUpperCase();
+const changeMode = (modeKey) => emit('mode-change', modeKey);
 const normalizeCode = () => {
   joinCode.value = joinCode.value.toUpperCase().replace(/[^2-9A-HJ-NP-Z]/g, '').slice(0, 6);
 };
@@ -239,6 +269,7 @@ watch(patternOptions, (options) => {
 }
 
 .battle-hall-list,
+.battle-mode-switcher,
 .battle-tool-section {
   border: 1px solid var(--border-main);
   background: color-mix(in srgb, var(--bg-card) 95%, transparent);
@@ -327,7 +358,6 @@ watch(patternOptions, (options) => {
 .battle-room-host img { object-fit: cover; }
 .battle-avatar-fallback { display: grid; place-items: center; border: 1px solid var(--border-main); color: var(--accent); font-size: 11px; font-weight: 900; }
 .battle-room-host strong, .battle-room-pattern { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
 .battle-status-dot-label { display: inline-flex; align-items: center; gap: 7px; color: var(--text-secondary); font-weight: 800; }
 .battle-status-dot-label i { width: 7px; height: 7px; border-radius: 50%; background: #8e98a7; }
 .battle-status-dot-label.status-waiting i { background: #37a667; }
@@ -351,6 +381,10 @@ watch(patternOptions, (options) => {
 .battle-command-btn:disabled, .battle-create-btn:disabled { opacity: 0.42; cursor: not-allowed; }
 
 .battle-hall-tools { display: flex; flex-direction: column; gap: 14px; }
+.battle-mode-switcher { min-height: 70px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 0.9fr); align-items: center; gap: 14px; padding: 13px 16px; border-radius: 8px; }
+.battle-mode-switcher > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.battle-mode-switcher strong { color: var(--text-main); font-size: var(--font-ui-sm); font-weight: 900; }
+:deep(.battle-mode-select-trigger) { min-height: 40px; padding: 8px 10px; border: 1px solid var(--border-main); border-radius: 7px; background: var(--bg-main); color: var(--text-main); font-size: var(--font-ui-sm); font-weight: 900; }
 .battle-tool-section { border-radius: 8px; padding: 18px; }
 .battle-create-section { flex: 1; }
 .battle-tool-heading { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 16px; }
@@ -391,6 +425,7 @@ watch(patternOptions, (options) => {
 .battle-cost-row div { display: flex; flex-direction: column; gap: 3px; padding: 10px; border: 1px solid var(--border-main); border-radius: 7px; background: color-mix(in srgb, var(--bg-main) 70%, transparent); }
 .battle-cost-row span { color: var(--text-secondary); font-size: var(--font-ui-xs); }
 .battle-cost-row strong { color: var(--text-main); font-size: var(--font-ui-sm); }
+.battle-refund-policy { margin: 8px 2px 0; color: var(--text-secondary); font-size: var(--font-ui-xs); line-height: 1.45; }
 .battle-create-btn { width: 100%; min-height: 42px; margin-top: 12px; }
 
 @media (max-width: 1100px) {

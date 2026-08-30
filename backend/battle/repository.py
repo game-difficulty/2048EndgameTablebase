@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
+import math
 import secrets
 import sqlite3
 import uuid
-import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -13,6 +14,7 @@ from .core.chat_policy import decode_chat_roles, normalize_chat_roles
 
 
 WAITING_ROOM_LIFETIME = timedelta(minutes=30)
+ROOM_CREATION_COOLDOWN_SECONDS = 30
 ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 ROOM_STATUSES = {"preparing", "waiting", "running", "closed", "expired"}
 ROOM_VISIBILITIES = {"public", "private"}
@@ -280,6 +282,10 @@ def init_battle_db() -> None:
             "CREATE INDEX IF NOT EXISTS ix_battle_rooms_mode_lobby "
             "ON battle_rooms(mode_key, visibility, status, created_at DESC)"
         )
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_battle_rooms_host_created "
+            "ON battle_rooms(host_user_id, created_at DESC)"
+        )
 
 
 def _active_user(db: sqlite3.Connection, user_id: int) -> sqlite3.Row:
@@ -310,6 +316,37 @@ def _active_membership(db: sqlite3.Connection, user_id: int) -> sqlite3.Row | No
         "SELECT * FROM battle_members WHERE user_id = ? AND status = 'active'",
         (int(user_id),),
     ).fetchone()
+
+
+def _room_creation_retry_after(
+    db: sqlite3.Connection,
+    user_id: int,
+    *,
+    now: datetime,
+) -> int:
+    row = db.execute(
+        "SELECT created_at FROM battle_rooms WHERE host_user_id = ? ORDER BY created_at DESC LIMIT 1",
+        (int(user_id),),
+    ).fetchone()
+    if row is None:
+        return 0
+    try:
+        created_at = datetime.fromisoformat(str(row["created_at"]))
+    except (TypeError, ValueError):
+        return 0
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    elapsed = (now.astimezone(timezone.utc) - created_at.astimezone(timezone.utc)).total_seconds()
+    return max(0, int(math.ceil(ROOM_CREATION_COOLDOWN_SECONDS - elapsed)))
+
+
+def room_creation_retry_after(user_id: int, *, now: datetime | None = None) -> int:
+    with auth_db() as db:
+        return _room_creation_retry_after(
+            db,
+            int(user_id),
+            now=(now or _utc_now()),
+        )
 
 
 def _next_seat(db: sqlite3.Connection, room_id: str, max_players: int) -> int | None:
@@ -464,6 +501,8 @@ def create_room(
             _active_user(db, host_user_id)
             if _active_membership(db, host_user_id) is not None:
                 raise BattleConflictError("user_already_in_room")
+            if _room_creation_retry_after(db, host_user_id, now=now) > 0:
+                raise BattleConflictError("room_create_cooldown")
 
             selected_code = requested_code
             for attempt in range(16):
@@ -527,6 +566,32 @@ def create_room(
 def get_room(room_ref: str) -> dict[str, Any]:
     with auth_db() as db:
         return _room_payload(db, _find_room(db, room_ref))
+
+
+def room_unavailable_reason(room_ref: str, *, user_id: int) -> str | None:
+    """Return a close reason only when room access is definitively gone."""
+    with auth_db() as db:
+        try:
+            room = _find_room(db, room_ref)
+        except BattleNotFoundError:
+            return "ROOM_NOT_FOUND"
+        status = str(room["status"] or "")
+        if status not in ACTIVE_ROOM_STATUSES:
+            if room["generation_error"]:
+                return str(room["generation_error"])
+            return "ROOM_EXPIRED" if status == "expired" else "ROOM_CLOSED"
+        member = db.execute(
+            "SELECT status FROM battle_members WHERE room_id = ? AND user_id = ?",
+            (str(room["room_id"]), int(user_id)),
+        ).fetchone()
+        if member is None:
+            return "ROOM_MEMBERSHIP_REQUIRED"
+        member_status = str(member["status"] or "")
+        if member_status == "active":
+            return None
+        if member_status == "kicked":
+            return "KICKED_FROM_ROOM"
+        return "ROOM_MEMBERSHIP_REQUIRED"
 
 
 def list_public_rooms(*, limit: int = 50, now: datetime | None = None) -> list[dict[str, Any]]:

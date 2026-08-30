@@ -134,7 +134,7 @@ def leave_room(room_code: str, *, user_id: int) -> None:
             raise BattleServiceError(
                 "BATTLE_MODE_UNAVAILABLE", "This Battle mode is unavailable.", 409
             ) from exc
-        mode.cancel_preparing_round(
+        mode.settle_unstarted_round(
             str(room["room_id"]), reason="battle_host_closed_room"
         )
         repository.close_room(room_code, host_user_id=user_id)

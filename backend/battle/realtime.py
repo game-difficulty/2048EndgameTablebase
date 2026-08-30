@@ -8,6 +8,7 @@ from fastapi import WebSocket
 from starlette.websockets import WebSocketState
 
 from backend.actions import Action, Message
+from backend.quota.service import get_token_balance
 
 from . import repository
 from .core import chat
@@ -120,18 +121,25 @@ async def broadcast_room(room_id: str) -> None:
             )
         except BattleServiceError:
             try:
-                closed_room = repository.get_room(str(room_id))
-                close_code = str(
-                    closed_room.get("generation_error")
-                    or ("ROOM_EXPIRED" if closed_room.get("status") == "expired" else "ROOM_CLOSED")
+                close_code = repository.room_unavailable_reason(
+                    str(room_id), user_id=int(user_id)
                 )
-            except repository.BattleRepositoryError:
-                close_code = "ROOM_CLOSED"
+            except Exception:
+                close_code = None
+            if close_code is None:
+                # Temporary snapshot failures are retried by heartbeat/reconnect.
+                continue
             sent = await _send(
                 websocket,
                 {
                     "action": Message.BATTLE_ROOM_STATE,
-                    "data": {"room": None, "closed": True, "code": close_code},
+                    "data": {
+                        "room": None,
+                        "closed": True,
+                        "room_id": str(room_id),
+                        "code": close_code,
+                        "token_balance": get_token_balance(int(user_id)),
+                    },
                 },
             )
         if not sent:

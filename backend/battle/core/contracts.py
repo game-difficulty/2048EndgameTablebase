@@ -74,7 +74,7 @@ class BattleMode(ABC):
     ) -> dict[str, Any]:
         raise NotImplementedError
 
-    def cancel_preparing_round(self, room_id: str, *, reason: str) -> None:
+    def settle_unstarted_round(self, room_id: str, *, reason: str) -> None:
         raise NotImplementedError
 
     async def startup(self) -> None:

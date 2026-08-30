@@ -17,6 +17,7 @@ from backend.battle.repository import (
     join_room,
     kick_member,
     list_public_rooms,
+    room_unavailable_reason,
     set_member_ready,
 )
 
@@ -71,6 +72,14 @@ class BattleRepositoryTests(unittest.TestCase):
         values.update(overrides)
         return create_room(**values)
 
+    def _expire_creation_cooldown(self, user_id: int | None = None) -> None:
+        old = (datetime.now(timezone.utc) - timedelta(seconds=31)).isoformat()
+        with auth_db() as db:
+            db.execute(
+                "UPDATE battle_rooms SET created_at = ? WHERE host_user_id = ?",
+                (old, int(user_id or self.host_id)),
+            )
+
     def test_init_creates_all_tables_and_partial_unique_index(self) -> None:
         init_battle_db()
         with auth_db() as db:
@@ -100,6 +109,23 @@ class BattleRepositoryTests(unittest.TestCase):
         )
         self.assertIn("WHERE status = 'active'", index["sql"])
 
+    def test_room_unavailable_reason_only_reports_authoritative_loss(self) -> None:
+        room = self._create_room()
+        self.assertIsNone(
+            room_unavailable_reason(room["room_id"], user_id=self.host_id)
+        )
+        join_room(room["room_id"], user_id=self.player_id)
+        kick_member(room["room_id"], host_user_id=self.host_id, target_user_id=self.player_id)
+        self.assertEqual(
+            room_unavailable_reason(room["room_id"], user_id=self.player_id),
+            "KICKED_FROM_ROOM",
+        )
+        close_room(room["room_id"], host_user_id=self.host_id)
+        self.assertEqual(
+            room_unavailable_reason(room["room_id"], user_id=self.host_id),
+            "ROOM_CLOSED",
+        )
+
     def test_create_room_is_atomic_and_adds_host_as_first_player(self) -> None:
         room = self._create_room()
 
@@ -126,6 +152,17 @@ class BattleRepositoryTests(unittest.TestCase):
         with auth_db() as db:
             count = db.execute("SELECT COUNT(*) AS n FROM battle_rooms").fetchone()["n"]
         self.assertEqual(count, 1)
+
+    def test_room_creation_is_limited_to_once_per_thirty_seconds(self) -> None:
+        first = self._create_room()
+        close_room(first["room_id"], host_user_id=self.host_id)
+
+        with self.assertRaisesRegex(BattleConflictError, "room_create_cooldown"):
+            self._create_room(room_code="DEF234")
+
+        self._expire_creation_cooldown()
+        second = self._create_room(room_code="DEF234")
+        self.assertEqual(second["room_code"], "DEF234")
 
     def test_public_list_includes_spectatable_running_rooms(self) -> None:
         visible = self._create_room()
@@ -184,6 +221,7 @@ class BattleRepositoryTests(unittest.TestCase):
         first = self._create_room()
         join_room(first["room_id"], user_id=self.player_id)
         close_room(first["room_id"], host_user_id=self.host_id)
+        self._expire_creation_cooldown()
         second = self._create_room(room_code="DEF234")
 
         # Re-open a conflicting active membership directly to exercise the DB invariant.
@@ -241,6 +279,7 @@ class BattleRepositoryTests(unittest.TestCase):
             join_room(room["room_id"], user_id=self.third_id)
 
         close_room(room["room_id"], host_user_id=self.host_id)
+        self._expire_creation_cooldown()
         room = self._create_room(room_code="DEF234", allow_spectators=True)
         spectator = join_room(
             room["room_id"], user_id=self.third_id, preferred_role="spectator"
