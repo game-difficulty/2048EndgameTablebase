@@ -191,7 +191,7 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runtime._contains_target(final_board, 128))
         lookup.assert_not_awaited()
 
-    async def test_create_start_move_and_ack_use_independent_state(self) -> None:
+    async def test_create_start_and_normal_moves_use_independent_state(self) -> None:
         with (
             patch("backend.battle.modes.free_goodness.mode.resolve_tablebase", return_value=self.entry),
             patch.object(runtime, "resolve_tablebase", return_value=self.entry),
@@ -239,7 +239,8 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(accepted["sequence"], 1)
             self.assertEqual(accepted["selected_direction"], "left")
             self.assertFalse(accepted["corrected"])
-            self.assertTrue(accepted["awaiting_ack"])
+            self.assertFalse(accepted["awaiting_ack"])
+            self.assertTrue(accepted["timeout_at"])
             with auth_db() as db:
                 awaiting = db.execute(
                     "SELECT state_status, timeout_at FROM battle_free_player_states WHERE round_id = ? AND user_id = ?",
@@ -249,8 +250,8 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     "SELECT replay_blob, replay_move_count FROM battle_player_results WHERE round_id = ? AND user_id = ?",
                     (started["round"]["round_id"], self.host_id),
                 ).fetchone()
-            self.assertEqual(awaiting["state_status"], "awaiting_ack")
-            self.assertIsNone(awaiting["timeout_at"])
+            self.assertEqual(awaiting["state_status"], "input")
+            self.assertTrue(awaiting["timeout_at"])
             self.assertEqual(int(replay["replay_move_count"]), 1)
             self.assertEqual(len(bytes(replay["replay_blob"])), 25)
             host_view = runtime.room_snapshot(room["room_code"], user_id=self.host_id)
@@ -264,16 +265,6 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(host_result["mode_data"]["last_step"]["sequence"], 1)
             self.assertNotIn("last_step", hidden_result["mode_data"])
 
-            acknowledged = await runtime.handle_action_for_mode(
-                room["room_code"],
-                user_id=self.host_id,
-                action="step_ready_ack",
-                payload={
-                    "round_id": started["round"]["round_id"],
-                    "sequence": 1,
-                },
-            )
-            self.assertTrue(acknowledged["timeout_at"])
             with auth_db() as db:
                 state = db.execute(
                     "SELECT * FROM battle_free_player_states WHERE round_id = ? AND user_id = ?",
@@ -328,6 +319,66 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     (self.host_id,),
                 ).fetchone()
             self.assertEqual(int(settlements["count"]), 1)
+
+    async def test_corrected_move_still_waits_for_ack_before_next_input(self) -> None:
+        with (
+            patch("backend.battle.modes.free_goodness.mode.resolve_tablebase", return_value=self.entry),
+            patch.object(runtime, "resolve_tablebase", return_value=self.entry),
+            patch.object(runtime, "_lookup", new=AsyncMock(return_value=self.lookup)),
+        ):
+            created = await runtime.create_room_for_mode(
+                user_id=self.host_id,
+                session_id=None,
+                payload={
+                    "full_pattern": "L3_128",
+                    "initial_board": f"{self.board:016x}",
+                    "max_players": 2,
+                    "step_timeout_seconds": 90,
+                },
+            )
+            room = created["room"]
+            repository.set_member_ready(
+                room["room_code"], user_id=self.host_id, ready=True
+            )
+            started = await runtime.start_room_for_mode(
+                room["room_code"], user_id=self.host_id, session_id=None
+            )
+            accepted = await runtime.handle_action_for_mode(
+                room["room_code"],
+                user_id=self.host_id,
+                action="move",
+                payload={
+                    "round_id": started["round"]["round_id"],
+                    "sequence": 1,
+                    "direction": "down",
+                },
+            )
+            self.assertTrue(accepted["corrected"])
+            self.assertTrue(accepted["awaiting_ack"])
+            self.assertIsNone(accepted["timeout_at"])
+            with auth_db() as db:
+                waiting = db.execute(
+                    "SELECT state_status, timeout_at FROM battle_free_player_states WHERE round_id = ? AND user_id = ?",
+                    (started["round"]["round_id"], self.host_id),
+                ).fetchone()
+            self.assertEqual(waiting["state_status"], "awaiting_ack")
+            self.assertIsNone(waiting["timeout_at"])
+
+            acknowledged = await runtime.handle_action_for_mode(
+                room["room_code"],
+                user_id=self.host_id,
+                action="step_ready_ack",
+                payload={
+                    "round_id": started["round"]["round_id"],
+                    "sequence": 1,
+                },
+            )
+            self.assertTrue(acknowledged["timeout_at"])
+            runtime.forfeit_round_for_mode(
+                room["room_code"],
+                user_id=self.host_id,
+                round_id=started["round"]["round_id"],
+            )
 
     async def test_ready_host_can_start_a_solo_free_round(self) -> None:
         with (
@@ -839,14 +890,14 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                         "SELECT state_status, timeout_at FROM battle_free_player_states WHERE round_id = ? AND user_id = ?",
                         (started["round"]["round_id"], self.host_id),
                     ).fetchone()
-                self.assertEqual(state["state_status"], "awaiting_ack")
-                self.assertIsNone(state["timeout_at"])
+                self.assertEqual(state["state_status"], "input")
+                self.assertTrue(state["timeout_at"])
                 release_prefetch.set()
                 tasks = list(runtime._prepare_state_tasks.values())
                 if tasks:
                     await asyncio.wait_for(asyncio.gather(*tasks), timeout=1)
 
-        self.assertTrue(accepted["awaiting_ack"])
+        self.assertFalse(accepted["awaiting_ack"])
         runtime.settle_unstarted_round_for_mode(
             room["room_id"], reason="battle_test_cleanup"
         )

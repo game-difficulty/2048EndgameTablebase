@@ -1722,8 +1722,17 @@ async def _resolve_move(
         else _legacy_goodness_product(bytes(state_data["operation_blob"] or b""))
     )
     cumulative_goodness = accumulate_goodness(current_goodness, decision.goodness)
-    ack_grace = ACK_GRACE_SECONDS + (CORRECTION_WINDOW_SECONDS if corrected else 0)
-    ack_deadline = iso(utcnow() + timedelta(seconds=ack_grace))
+    requires_ack = bool(corrected and not finish_reason)
+    ack_deadline = (
+        iso(utcnow() + timedelta(seconds=ACK_GRACE_SECONDS + CORRECTION_WINDOW_SECONDS))
+        if requires_ack
+        else None
+    )
+    next_timeout = (
+        iso(utcnow() + timedelta(seconds=int(room["step_timeout_seconds"])))
+        if not finish_reason and not requires_ack
+        else None
+    )
     operation_blob = _append_operation(
         bytes(state_data["operation_blob"] or b""),
         selected=direction,
@@ -1766,14 +1775,18 @@ async def _resolve_move(
             ).fetchone()
             if current is None or current["state_status"] != "resolving" or current["resolution_request_id"] != request_id:
                 raise BattleServiceError("PROGRESS_CONFLICT", "Progress changed while resolving.", 409)
-            next_state_status = "finished" if finish_reason else "awaiting_ack"
+            next_state_status = (
+                "finished"
+                if finish_reason
+                else "awaiting_ack" if requires_ack else "input"
+            )
             db.execute(
                 """
                 UPDATE battle_free_player_states SET board_state = ?, step_index = ?, sequence = ?,
                     spawn_log_index = ?, spawn_log_floor = ?, rng_step = ?,
                     state_status = ?, finish_reason = ?,
                     resolution_request_id = NULL, resolution_started_at = NULL,
-                    ack_deadline_at = ?, timeout_at = NULL,
+                    ack_deadline_at = ?, timeout_at = ?,
                     current_results_json = ?, operation_blob = ?, updated_at = ?
                 WHERE round_id = ? AND user_id = ?
                 """,
@@ -1781,7 +1794,7 @@ async def _resolve_move(
                     f"{persisted_board:016x}", next_step, requested_sequence,
                     next_risk.log_index, next_risk.log_floor,
                     next_step, next_state_status, finish_reason,
-                    None if finish_reason else ack_deadline,
+                    ack_deadline, next_timeout,
                     json.dumps(persisted_results, separators=(",", ":")), operation_blob, iso(),
                     round_data["round_id"], int(user_id),
                 ),
@@ -1826,7 +1839,7 @@ async def _resolve_move(
                 UPDATE battle_player_results SET status = ?, route_index = ?, last_sequence = ?,
                     goodness_of_fit = ?, primary_score = ?, secondary_score = ?, progress = ?,
                     mode_data_json = ?, board_state = ?, choice_blob = ?, finished_at = ?,
-                    replay_blob = ?, replay_move_count = ?, timeout_at = NULL,
+                    replay_blob = ?, replay_move_count = ?, timeout_at = ?,
                     updated_at = ? WHERE round_id = ? AND user_id = ?
                 """,
                 (
@@ -1834,7 +1847,7 @@ async def _resolve_move(
                     cumulative_goodness, cumulative_goodness, next_step, next_step,
                     json.dumps(mode_data, separators=(",", ":")), f"{persisted_board:016x}",
                     operation_blob, iso() if finish_reason else None,
-                    replay_blob, replay_move_count, iso(),
+                    replay_blob, replay_move_count, next_timeout, iso(),
                     round_data["round_id"], int(user_id),
                 ),
             )
@@ -1897,7 +1910,8 @@ async def _resolve_move(
         "spawn_value": spawn_value,
         "complete": bool(finish_reason),
         "finish_reason": finish_reason,
-        "awaiting_ack": not bool(finish_reason),
+        "awaiting_ack": requires_ack,
+        "timeout_at": next_timeout,
         "auto_steps": certainty_payload,
         "auto_playback_key": auto_playback_key or None,
         "auto_final_board_hex": (

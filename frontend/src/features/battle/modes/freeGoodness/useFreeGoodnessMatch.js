@@ -71,6 +71,8 @@ export function useFreeGoodnessMatch(
   const wrongOverlay = ref(null);
   const pendingRequest = ref('');
   let currentBoardHex = '';
+  let localRoundId = '';
+  let localSequence = 0;
   let frameRevision = 0;
   let correctionResponse = null;
   let correctionTimer = null;
@@ -254,12 +256,21 @@ export function useFreeGoodnessMatch(
       seenAutoPlaybackKeys.clear();
       pendingRequest.value = '';
       currentBoardHex = '';
+      localRoundId = '';
+      localSequence = 0;
       opponentBoards.value = {};
       return;
     }
     const own = nextRoom.results?.find(
       (item) => Number(item.user_id) === Number(authUserRef.value?.id),
     );
+    const nextRoundId = String(nextRoom.round?.round_id || '');
+    if (nextRoundId !== localRoundId) {
+      localRoundId = nextRoundId;
+      localSequence = Number(own?.last_sequence || 0);
+    } else {
+      localSequence = Math.max(localSequence, Number(own?.last_sequence || 0));
+    }
     const stateStatus = String(own?.mode_data?.state_status || '');
     if (['input', 'finished'].includes(stateStatus) && !autoPlaybackActive && !correctionResponse) {
       pendingRequest.value = '';
@@ -301,6 +312,7 @@ export function useFreeGoodnessMatch(
   const handleMessage = async (message) => {
     if (message?.action === 'BATTLE_ACTION_ACCEPTED') {
       const response = message.data || {};
+      localSequence = Math.max(localSequence, Number(response.sequence || 0));
       if (response.board_hex) {
         if (response.corrected) showCorrection(response);
         else applyResolvedStep(response);
@@ -336,7 +348,10 @@ export function useFreeGoodnessMatch(
     pendingRequest.value = requestId;
     roomSession.sendModeAction('move', {
       round_id: room.value.round?.round_id,
-      sequence: Number(ownResult.value?.last_sequence || 0) + 1,
+      sequence: Math.max(
+        localSequence,
+        Number(ownResult.value?.last_sequence || 0),
+      ) + 1,
       direction,
     }, { requestId });
     return true;
