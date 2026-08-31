@@ -180,6 +180,7 @@ import {
   formatBoardTileNumber,
   getBoardCellStyle,
 } from '../model/minigameMappers';
+import { clientPointToElementSpace } from '../model/pointerCoordinates';
 
 const props = defineProps({
   board: {
@@ -368,10 +369,9 @@ const handlePointerMove = (event) => {
     cursorPreview.value.visible = false;
     return;
   }
-  const rect = boardRef.value.getBoundingClientRect();
+  const point = clientPointToElementSpace(boardRef.value, event.clientX, event.clientY);
   cursorPreview.value = {
-    x: event.clientX - rect.left,
-    y: event.clientY - rect.top,
+    ...point,
     visible: true,
   };
 };
