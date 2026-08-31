@@ -350,7 +350,7 @@ export function useGoodnessMatch(
     tables: catalog.value,
     multiplierForPattern,
     routeBaseCost: Number(
-      quotaRules.value?.operation_costs?.battle_route_generation ?? 5,
+      quotaRules.value?.operation_costs?.battle_route_generation ?? 100,
     ),
   }));
   const matchProps = computed(() => ({

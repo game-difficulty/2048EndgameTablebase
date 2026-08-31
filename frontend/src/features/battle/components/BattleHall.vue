@@ -195,7 +195,7 @@ const props = defineProps({
   creating: { type: Boolean, default: false },
   tokenBalance: { type: Number, default: 0 },
   multiplierForPattern: { type: Function, required: true },
-  routeBaseCost: { type: Number, default: 5 },
+  routeBaseCost: { type: Number, default: 100 },
   calculateCost: { type: Function, default: null },
   showMaxSteps: { type: Boolean, default: true },
   showRankingMinSteps: { type: Boolean, default: false },

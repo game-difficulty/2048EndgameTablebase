@@ -248,7 +248,7 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_full_round_returns_to_same_lobby_and_resets_ready(self) -> None:
         room = await self._create_ready_room()
         self.assertEqual(room["status"], "waiting")
-        self.assertEqual(get_token_balance(self.host_id)["total"], 995)
+        self.assertEqual(get_token_balance(self.host_id)["total"], 900)
 
         service.join_room(room["room_code"], user_id=self.player_id, role="player")
         service.set_ready(room["room_code"], user_id=self.host_id, ready=True)
@@ -270,7 +270,7 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
                 if int(result["user_id"]) == self.player_id
             )
         )
-        self.assertEqual(get_token_balance(self.host_id)["total"], 995)
+        self.assertEqual(get_token_balance(self.host_id)["total"], 900)
         with auth_db() as db:
             reservation_status = db.execute(
                 "SELECT reservation_status FROM battle_rounds WHERE round_id = ?",
@@ -439,12 +439,12 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
                 session_id=None,
                 payload={"full_pattern": "L3_128", "max_players": 2},
             )
-            self.assertEqual(get_token_balance(self.host_id)["total"], 995)
+            self.assertEqual(get_token_balance(self.host_id)["total"], 900)
             service.leave_room(created["room"]["room_code"], user_id=self.host_id)
             gate.set()
             await asyncio.gather(*list(service._route_tasks.values()), return_exceptions=True)
 
-        self.assertEqual(get_token_balance(self.host_id)["total"], 999)
+        self.assertEqual(get_token_balance(self.host_id)["total"], 980)
         with auth_db() as db:
             settlements = db.execute(
                 "SELECT settlement_type FROM token_reservation_settlements"
@@ -453,7 +453,7 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
                 "SELECT final_cost_units FROM token_ledger WHERE event_type = 'finalize' ORDER BY id DESC LIMIT 1"
             ).fetchone()["final_cost_units"]
         self.assertEqual([row["settlement_type"] for row in settlements], ["finalize"])
-        self.assertEqual(final_cost, 1_000)
+        self.assertEqual(final_cost, 20_000)
 
     async def test_creation_cooldown_rejects_before_a_second_reservation(self) -> None:
         room = await self._create_ready_room()
@@ -477,7 +477,7 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
                 "SELECT COUNT(*) AS count FROM token_ledger WHERE event_type = 'reserve'"
             ).fetchone()["count"]
         self.assertEqual(reserves_after, reserves_before)
-        self.assertEqual(get_token_balance(self.host_id)["total"], 999)
+        self.assertEqual(get_token_balance(self.host_id)["total"], 980)
 
     async def test_waiting_room_expiry_refunds_eighty_percent(self) -> None:
         room = await self._create_ready_room()
@@ -499,7 +499,7 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn(room["room_id"], changed)
         self.assertEqual(repository.get_room(room["room_id"])["status"], "expired")
-        self.assertEqual(get_token_balance(self.host_id)["total"], 999)
+        self.assertEqual(get_token_balance(self.host_id)["total"], 980)
         with auth_db() as db:
             status = db.execute(
                 "SELECT reservation_status FROM battle_rounds WHERE round_id = ?",
@@ -543,7 +543,7 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
             full_pattern="L3_128",
         )
         self.assertIsNotNone(reservation)
-        self.assertEqual(get_token_balance(self.host_id)["total"], 995)
+        self.assertEqual(get_token_balance(self.host_id)["total"], 900)
 
         cancel_reservation(reservation, reason="test")
         cancel_reservation(reservation, reason="test-again")

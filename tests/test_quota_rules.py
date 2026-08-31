@@ -48,7 +48,7 @@ class PublicQuotaRulesTests(unittest.TestCase):
         self.assertNotIn("4442f", groups)
         self.assertEqual(rules["operation_costs"]["analysis_per_replay"], 100)
         self.assertEqual(rules["operation_costs"]["replay_load"], 3)
-        self.assertEqual(rules["operation_costs"]["battle_route_generation"], 5)
+        self.assertEqual(rules["operation_costs"]["battle_route_generation"], 100)
         thresholds = {
             row["full_pattern"]: row
             for row in rules["tablebase_thresholds"]
