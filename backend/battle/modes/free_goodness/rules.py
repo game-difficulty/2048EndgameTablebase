@@ -8,6 +8,7 @@ from typing import Iterable, Mapping
 
 
 MOVE_RISK_LIMIT = 1.15
+MOVE_RISK_MIN_ABSOLUTE_INCREASE = 0.002
 SPAWN_RISK_LIMIT = 1.15
 SPAWN_DRAWDOWN_LIMIT = 1.20
 RISK_EPSILON = 1e-12
@@ -87,6 +88,7 @@ def decide_move(
     results: Mapping[str, object],
     legal_directions: Iterable[str],
     move_risk_limit: float = MOVE_RISK_LIMIT,
+    move_risk_min_absolute_increase: float = MOVE_RISK_MIN_ABSOLUTE_INCREASE,
 ) -> MoveDecision | None:
     selected = str(selected_direction or "").lower()
     legal = set(legal_directions)
@@ -98,10 +100,18 @@ def decide_move(
     selected_success = clamp_probability(results.get(selected))
     goodness = step_goodness(best_success, selected_success)
     multiplier = risk_multiplier(best_success, selected_success)
+    absolute_risk_increase = max(
+        0.0,
+        death_risk(selected_success) - death_risk(best_success),
+    )
     reason = None
     if selected_success <= RISK_EPSILON:
         reason = "zero_success"
-    elif multiplier > float(move_risk_limit) + RISK_EPSILON:
+    elif (
+        multiplier > float(move_risk_limit) + RISK_EPSILON
+        and absolute_risk_increase + RISK_EPSILON
+        >= float(move_risk_min_absolute_increase)
+    ):
         reason = "risk_limit"
     return MoveDecision(
         selected_direction=selected,

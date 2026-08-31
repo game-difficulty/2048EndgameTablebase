@@ -374,6 +374,10 @@ export function useBattleRoomSession(activeRef, authUserRef) {
   };
 
   const setRole = async (role) => {
+    if (
+      role === 'spectator'
+      && Number(room.value?.host_user_id) === Number(room.value?.viewer?.user_id)
+    ) return;
     try {
       const response = await battleClient.role(
         room.value.room_code,

@@ -180,6 +180,12 @@ def set_role(room_code: str, *, user_id: int, role: str) -> dict[str, Any]:
         ).fetchone()
         if member is None:
             raise BattleServiceError("MEMBER_NOT_FOUND", "Room member not found.", 404)
+        if role == "spectator" and int(room["host_user_id"]) == int(user_id):
+            raise BattleServiceError(
+                "HOST_CANNOT_SPECTATE",
+                "The room host must remain in a player seat.",
+                409,
+            )
         if role == "spectator":
             if not bool(room["allow_spectators"]):
                 raise BattleServiceError("SPECTATORS_DISABLED", "Spectating is disabled.", 409)

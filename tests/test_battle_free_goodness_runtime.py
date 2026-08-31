@@ -82,9 +82,17 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
             best_move="left",
         )
         runtime._prepared.clear()
+        runtime._prepared_complete.clear()
 
     async def asyncTearDown(self) -> None:
+        tasks = list(runtime._prepare_state_tasks.values())
+        runtime._prepare_state_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         runtime._prepared.clear()
+        runtime._prepared_complete.clear()
         if self._old_db is None:
             os.environ.pop("CLOUD_AUTH_DB", None)
         else:
@@ -107,8 +115,16 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 "step_timeout_seconds": 90,
                 "ranking_min_steps": 32,
             })
+            public = runtime._free_mode.public_settings({
+                "settings": {
+                    **defaults,
+                    "move_risk_min_absolute_increase": 0.002,
+                },
+            })
             self.assertEqual(defaults["ranking_min_steps"], 64)
             self.assertEqual(selected["ranking_min_steps"], 32)
+            self.assertNotIn("move_risk_min_absolute_increase", defaults)
+            self.assertNotIn("move_risk_min_absolute_increase", public)
             with self.assertRaisesRegex(ValueError, "invalid_ranking_min_steps"):
                 runtime._free_mode.validate_settings({
                     "full_pattern": "L3_128",
@@ -142,6 +158,38 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
             progress=20,
             ranking_min_steps=12,
         ))
+
+    async def test_certainty_tail_stops_after_the_target_merge_without_terminal_lookup(self) -> None:
+        near_target = int(encode_board(np.array([
+            [64, 64, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ], dtype=np.int32)))
+        with (
+            patch.object(runtime, "resolve_tablebase", return_value=self.entry),
+            patch.object(runtime, "_lookup", new=AsyncMock()) as lookup,
+        ):
+            steps, final_board = await runtime._generate_certainty_tail(
+                room={
+                    "room_id": "room",
+                    "host_user_id": self.host_id,
+                    "full_pattern": "L3_128",
+                    "pattern": "L3",
+                    "target": 128,
+                },
+                round_id="round",
+                user_id=self.host_id,
+                board=near_target,
+                results={"left": 1.0, "right": 1.0, "down": 0.0, "up": 0.0},
+                seed_hex="11" * 32,
+                sequence=3,
+                risk_state=runtime.SpawnRiskState(),
+            )
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0].direction, "left")
+        self.assertTrue(runtime._contains_target(final_board, 128))
+        lookup.assert_not_awaited()
 
     async def test_create_start_move_and_ack_use_independent_state(self) -> None:
         with (
@@ -360,10 +408,24 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
             dtype="uint32",
             best_move="left",
         )
+        target_board = 7
+        certainty_tail = [runtime.CertaintyTailStep(
+            previous_board=self.board,
+            next_board=target_board,
+            direction="left",
+            spawn_index=3,
+            spawn_value=2,
+            rates={"left": 1.0, "right": 0.9, "up": 0.7, "down": 0.8},
+        )]
         with (
             patch("backend.battle.modes.free_goodness.mode.resolve_tablebase", return_value=self.entry),
             patch.object(runtime, "resolve_tablebase", return_value=self.entry),
             patch.object(runtime, "_lookup", new=AsyncMock(return_value=certain)),
+            patch.object(
+                runtime,
+                "_generate_certainty_tail",
+                new=AsyncMock(return_value=(certainty_tail, target_board)),
+            ),
         ):
             created = await runtime.create_room_for_mode(
                 user_id=self.host_id,
@@ -389,27 +451,128 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(started["round"]["status"], "completed")
         self.assertTrue(all(item["status"] == "completed" for item in started["results"]))
         self.assertTrue(
-            all(item["mode_data"]["finish_reason"] == "certainty" for item in started["results"])
+            all(item["mode_data"]["finish_reason"] == "target_reached" for item in started["results"])
         )
+        self.assertTrue(all(item["route_index"] == 0 for item in started["results"]))
+        self.assertEqual(started["results"][0]["mode_data"]["board_hex"], f"{target_board:016x}")
+        self.assertEqual(len(started["results"][0]["mode_data"]["auto_steps"]), 1)
         self.assertEqual(get_token_balance(self.host_id)["total"], 1_000_000)
 
-    async def test_exact_prefetch_uses_four_first_candidates_then_eight_item_wave(self) -> None:
+    async def test_move_certainty_plays_to_target_without_charging_tail(self) -> None:
+        with (
+            patch("backend.battle.modes.free_goodness.mode.resolve_tablebase", return_value=self.entry),
+            patch.object(runtime, "resolve_tablebase", return_value=self.entry),
+            patch.object(runtime, "_lookup", new=AsyncMock(return_value=self.lookup)),
+        ):
+            created = await runtime.create_room_for_mode(
+                user_id=self.host_id,
+                session_id=None,
+                payload={
+                    "full_pattern": "L3_128",
+                    "initial_board": f"{self.board:016x}",
+                    "max_players": 2,
+                    "step_timeout_seconds": 90,
+                },
+            )
+            room = created["room"]
+            repository.set_member_ready(room["room_code"], user_id=self.host_id, ready=True)
+            started = await runtime.start_room_for_mode(
+                room["room_code"], user_id=self.host_id, session_id=None
+            )
+            moved_board = runtime._moved_boards(self.board, use_variant=False)["left"]
+            spawn_index = runtime._empty_indices(moved_board)[0]
+            certain_board = runtime._spawn_board(moved_board, spawn_index, 2)
+            certain_results = {"left": 1.0, "right": 0.9, "down": 0.8, "up": 0.7}
+            candidate = runtime.PreparedSpawn(
+                executed_direction="left",
+                moved_board=moved_board,
+                next_board=certain_board,
+                spawn_index=spawn_index,
+                spawn_value=2,
+                attempt_index=0,
+                next_results=certain_results,
+                next_dtype="uint32",
+                next_best_success=1.0,
+                risk_multiplier=1.0,
+                risk_state=runtime.SpawnRiskState(),
+            )
+            target_board = 7
+            tail = [runtime.CertaintyTailStep(
+                previous_board=certain_board,
+                next_board=target_board,
+                direction="left",
+                spawn_index=3,
+                spawn_value=2,
+                rates=certain_results,
+            )]
+            with (
+                patch.object(
+                    runtime,
+                    "_select_prepared_spawn",
+                    new=AsyncMock(return_value=(candidate, "left", None)),
+                ),
+                patch.object(
+                    runtime,
+                    "_generate_certainty_tail",
+                    new=AsyncMock(return_value=(tail, target_board)),
+                ),
+            ):
+                accepted = await runtime.handle_action_for_mode(
+                    room["room_code"],
+                    user_id=self.host_id,
+                    action="move",
+                    payload={
+                        "round_id": started["round"]["round_id"],
+                        "sequence": 1,
+                        "direction": "left",
+                    },
+                )
+
+        self.assertTrue(accepted["complete"])
+        self.assertEqual(accepted["finish_reason"], "target_reached")
+        self.assertEqual(accepted["board_hex"], f"{certain_board:016x}")
+        self.assertEqual(accepted["auto_final_board_hex"], f"{target_board:016x}")
+        self.assertEqual(len(accepted["auto_steps"]), 1)
+        with auth_db() as db:
+            state = db.execute(
+                "SELECT board_state, step_index, operation_blob FROM battle_free_player_states WHERE round_id = ? AND user_id = ?",
+                (started["round"]["round_id"], self.host_id),
+            ).fetchone()
+            result = db.execute(
+                "SELECT route_index, replay_move_count FROM battle_player_results WHERE round_id = ? AND user_id = ?",
+                (started["round"]["round_id"], self.host_id),
+            ).fetchone()
+            round_row = db.execute(
+                "SELECT mode_state_json FROM battle_rounds WHERE round_id = ?",
+                (started["round"]["round_id"],),
+            ).fetchone()
+        self.assertEqual(state["board_state"], f"{target_board:016x}")
+        self.assertEqual(int(state["step_index"]), 1)
+        self.assertEqual(len(bytes(state["operation_blob"])), 4)
+        self.assertEqual(int(result["route_index"]), 1)
+        self.assertEqual(int(result["replay_move_count"]), 2)
+        self.assertIn('"lookup_hit_steps":1', round_row["mode_state_json"])
+        self.assertEqual(get_token_balance(self.host_id)["total"], 999_999)
+
+    async def test_prefetch_stops_each_direction_after_first_accepted_candidate(self) -> None:
         calls = []
-        first_wave_ready = asyncio.Event()
-        second_wave_ready = asyncio.Event()
-        release_first = asyncio.Event()
-        release_second = asyncio.Event()
 
         async def fake_candidate(**kwargs):
             calls.append((kwargs["direction"], kwargs["attempt"]))
-            if len(calls) <= 4:
-                if len(calls) == 4:
-                    first_wave_ready.set()
-                await release_first.wait()
-            else:
-                if len(calls) == 12:
-                    second_wave_ready.set()
-                await release_second.wait()
+            if kwargs["direction"] == "left" and kwargs["attempt"] == 0:
+                return runtime.PreparedSpawn(
+                    executed_direction="left",
+                    moved_board=self.board,
+                    next_board=self.board,
+                    spawn_index=0,
+                    spawn_value=2,
+                    attempt_index=0,
+                    next_results={"left": 0.9},
+                    next_dtype="uint32",
+                    next_best_success=0.9,
+                    risk_multiplier=1.0,
+                    risk_state=runtime.SpawnRiskState(),
+                )
             return None
 
         choices = [(0, 0, 2), (1, 1, 2), (2, 2, 4)]
@@ -422,7 +585,7 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(runtime, "_evaluate_spawn_candidate", new=fake_candidate),
         ):
-            task = asyncio.create_task(runtime._prepare_directions(
+            prepared = await runtime._prepare_directions(
                 room={
                     "full_pattern": "L3_128",
                     "pattern": "L3",
@@ -441,18 +604,101 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 risk_state=runtime.SpawnRiskState(),
                 seed_hex="11" * 32,
                 lane="prefetch",
+            )
+        self.assertIn("left", prepared)
+        self.assertEqual(
+            [attempt for direction, attempt in calls if direction == "left"],
+            [0],
+        )
+        for direction in ("right", "down", "up"):
+            self.assertEqual(
+                [attempt for item_direction, attempt in calls if item_direction == direction],
+                [0, 1, 2],
+            )
+
+    async def test_prefetch_publishes_each_direction_before_the_batch_finishes(self) -> None:
+        release_others = asyncio.Event()
+        left_candidate = runtime.PreparedSpawn(
+            executed_direction="left",
+            moved_board=self.board,
+            next_board=self.board,
+            spawn_index=0,
+            spawn_value=2,
+            attempt_index=0,
+            next_results={"left": 0.9},
+            next_dtype="uint32",
+            next_best_success=0.9,
+            risk_multiplier=1.0,
+            risk_state=runtime.SpawnRiskState(),
+        )
+
+        async def fake_direction(**kwargs):
+            if kwargs["direction"] == "left":
+                return left_candidate
+            await release_others.wait()
+            return None
+
+        key = runtime._candidate_key("round", self.host_id, 0, self.board)
+        with patch.object(runtime, "_prepare_direction", new=fake_direction):
+            task = asyncio.create_task(runtime._prepare_directions(
+                room={
+                    "full_pattern": "L3_128",
+                    "pattern": "L3",
+                    "target": 128,
+                    "host_user_id": self.host_id,
+                },
+                round_id="round",
+                user_id=self.host_id,
+                sequence=0,
+                direction_states={
+                    "left": (self.board, 0.9),
+                    "right": (self.board, 0.8),
+                },
+                risk_state=runtime.SpawnRiskState(),
+                seed_hex="11" * 32,
+                lane="prefetch",
+                prepared_key=key,
             ))
-            await asyncio.wait_for(first_wave_ready.wait(), timeout=1)
-            self.assertEqual(len(calls), 4)
-            self.assertEqual({direction for direction, _attempt in calls}, {
-                "left", "right", "down", "up",
-            })
-            release_first.set()
-            await asyncio.wait_for(second_wave_ready.wait(), timeout=1)
-            self.assertEqual(len(calls), 12)
-            release_second.set()
-            prepared = await asyncio.wait_for(task, timeout=1)
-        self.assertEqual(prepared, {})
+            for _attempt in range(10):
+                if "left" in runtime._prepared.get(key, {}):
+                    break
+                await asyncio.sleep(0)
+            self.assertIs(runtime._prepared[key]["left"], left_candidate)
+            self.assertFalse(task.done())
+            release_others.set()
+            await asyncio.wait_for(task, timeout=1)
+
+    async def test_prefetch_includes_direction_below_absolute_move_risk_floor(self) -> None:
+        captured = {}
+
+        async def capture_directions(**kwargs):
+            captured.update(kwargs["direction_states"])
+            return {}
+
+        with patch.object(runtime, "_prepare_directions", new=capture_directions):
+            await runtime._prepare_state(
+                room={
+                    "full_pattern": "L3_128",
+                    "pattern": "L3",
+                    "target": 128,
+                    "host_user_id": self.host_id,
+                },
+                round_id="risk-floor-round",
+                user_id=self.host_id,
+                sequence=0,
+                board=self.board,
+                results={
+                    "left": 0.999,
+                    "right": 0.9988,
+                    "down": 0.5,
+                    "up": 0.0,
+                },
+                risk_state=runtime.SpawnRiskState(),
+                seed_hex="22" * 32,
+            )
+
+        self.assertIn("left", captured)
+        self.assertIn("right", captured)
 
     async def test_host_closing_running_room_settles_consumed_steps(self) -> None:
         with (
@@ -544,7 +790,7 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
         repository.close_room(room["room_code"], host_user_id=self.host_id)
         await runtime.shutdown()
 
-    async def test_step_ready_waits_for_next_step_prefetch(self) -> None:
+    async def test_step_ready_does_not_wait_for_next_step_prefetch(self) -> None:
         with (
             patch("backend.battle.modes.free_goodness.mode.resolve_tablebase", return_value=self.entry),
             patch.object(runtime, "resolve_tablebase", return_value=self.entry),
@@ -577,7 +823,7 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 return {}
 
             with patch.object(runtime, "_prepare_state", new=delayed_prefetch):
-                move_task = asyncio.create_task(runtime.handle_action_for_mode(
+                accepted = await runtime.handle_action_for_mode(
                     room["room_code"],
                     user_id=self.host_id,
                     action="move",
@@ -586,18 +832,19 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                         "sequence": 1,
                         "direction": "left",
                     },
-                ))
+                )
                 await asyncio.wait_for(prefetch_started.wait(), timeout=1)
-                self.assertFalse(move_task.done())
                 with auth_db() as db:
                     state = db.execute(
                         "SELECT state_status, timeout_at FROM battle_free_player_states WHERE round_id = ? AND user_id = ?",
                         (started["round"]["round_id"], self.host_id),
                     ).fetchone()
-                self.assertEqual(state["state_status"], "resolving")
+                self.assertEqual(state["state_status"], "awaiting_ack")
                 self.assertIsNone(state["timeout_at"])
                 release_prefetch.set()
-                accepted = await asyncio.wait_for(move_task, timeout=1)
+                tasks = list(runtime._prepare_state_tasks.values())
+                if tasks:
+                    await asyncio.wait_for(asyncio.gather(*tasks), timeout=1)
 
         self.assertTrue(accepted["awaiting_ack"])
         runtime.settle_unstarted_round_for_mode(

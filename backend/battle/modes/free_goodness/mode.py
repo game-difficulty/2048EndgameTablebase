@@ -7,7 +7,11 @@ from backend.tablebase_catalog import resolve_tablebase
 from ...core.chat_policy import normalize_chat_roles
 from ...core.contracts import BattleMode
 from ..goodness.mode import VALID_STEP_TIMEOUTS, _normalize_board
-from .rules import MOVE_RISK_LIMIT, SPAWN_DRAWDOWN_LIMIT, SPAWN_RISK_LIMIT
+from .rules import (
+    MOVE_RISK_LIMIT,
+    SPAWN_DRAWDOWN_LIMIT,
+    SPAWN_RISK_LIMIT,
+)
 
 
 class FreeGoodnessBattleMode(BattleMode):
@@ -83,6 +87,7 @@ class FreeGoodnessBattleMode(BattleMode):
     def public_settings(self, room: dict[str, Any]) -> dict[str, Any]:
         settings = dict(room.get("settings") or {})
         if settings:
+            settings.pop("move_risk_min_absolute_increase", None)
             settings["initial_board"] = room.get("initial_board")
             return settings
         return {

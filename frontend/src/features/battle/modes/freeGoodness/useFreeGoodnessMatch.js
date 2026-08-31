@@ -38,6 +38,7 @@ const KEY_DIRECTIONS = Object.freeze({
   S: 'down',
 });
 const CORRECTION_TIMEOUT_MS = 15_000;
+const AUTO_PLAYBACK_STEP_MS = 150;
 
 const normalizeHex = (value) => {
   const text = String(value || '').trim().replace(/^0x/iu, '').toLowerCase();
@@ -73,6 +74,11 @@ export function useFreeGoodnessMatch(
   let frameRevision = 0;
   let correctionResponse = null;
   let correctionTimer = null;
+  let autoPlaybackTimer = null;
+  let autoPlaybackActive = false;
+  let autoPlaybackFinalHex = '';
+  let autoPlaybackSteps = [];
+  const seenAutoPlaybackKeys = new Set();
 
   const catalogGroups = computed(() => groupTablebasesByPattern(catalog.value));
   const useVariant = computed(() => isVariantPattern(room.value?.pattern, {
@@ -141,16 +147,64 @@ export function useFreeGoodnessMatch(
       sequence: response.sequence,
     });
   };
-  const applyResolvedStep = (response, key = 'free-step') => {
+  const renderResolvedStep = (response, key = 'free-step') => {
     const normalized = normalizeHex(response?.board_hex);
-    if (!normalized) return;
+    if (!normalized) return false;
     const transition = responseTransition(response);
     currentBoardHex = normalized;
     frameRevision += 1;
     boardFrame.value = transition
       ? createTransitionBoardFrame(`${key}-${frameRevision}`, transition, transition.toBoard)
       : createSnapshotBoardFrame(`${key}-${frameRevision}`, boardFromHex(normalized));
-    acknowledge(response);
+    return true;
+  };
+  const clearAutoPlayback = () => {
+    if (autoPlaybackTimer != null) window.clearTimeout(autoPlaybackTimer);
+    autoPlaybackTimer = null;
+    autoPlaybackActive = false;
+    autoPlaybackFinalHex = '';
+    autoPlaybackSteps = [];
+  };
+  const playNextAutoStep = () => {
+    if (!autoPlaybackActive) return;
+    const step = autoPlaybackSteps.shift();
+    if (!step) {
+      const finalHex = autoPlaybackFinalHex;
+      clearAutoPlayback();
+      if (finalHex) setSnapshot(finalHex, 'free-certainty-final');
+      pendingRequest.value = '';
+      return;
+    }
+    renderResolvedStep(step, 'free-certainty-auto');
+    autoPlaybackTimer = window.setTimeout(playNextAutoStep, AUTO_PLAYBACK_STEP_MS);
+  };
+  const startAutoPlayback = (response, { syncStart = false } = {}) => {
+    const steps = Array.isArray(response?.auto_steps)
+      ? response.auto_steps.filter((step) => normalizeHex(step?.board_hex))
+      : [];
+    if (!steps.length) return false;
+    const key = String(response?.auto_playback_key || '');
+    if (key && seenAutoPlaybackKeys.has(key)) return false;
+    if (key) seenAutoPlaybackKeys.add(key);
+    clearAutoPlayback();
+    autoPlaybackActive = true;
+    autoPlaybackSteps = [...steps];
+    autoPlaybackFinalHex = normalizeHex(
+      response?.auto_final_board_hex || steps[steps.length - 1]?.board_hex,
+    );
+    pendingRequest.value = pendingRequest.value || 'certainty-auto';
+    if (syncStart) {
+      setSnapshot(
+        response?.auto_start_board_hex || steps[0]?.previous_board_hex,
+        'free-certainty-start',
+      );
+    }
+    autoPlaybackTimer = window.setTimeout(playNextAutoStep, AUTO_PLAYBACK_STEP_MS);
+    return true;
+  };
+  const applyResolvedStep = (response, key = 'free-step') => {
+    if (!renderResolvedStep(response, key)) return;
+    if (!startAutoPlayback(response)) acknowledge(response);
   };
   const clearCorrection = () => {
     if (correctionTimer != null) window.clearTimeout(correctionTimer);
@@ -196,6 +250,8 @@ export function useFreeGoodnessMatch(
   const onRoomApplied = async (nextRoom) => {
     if (!nextRoom) {
       clearCorrection();
+      clearAutoPlayback();
+      seenAutoPlaybackKeys.clear();
       pendingRequest.value = '';
       currentBoardHex = '';
       opponentBoards.value = {};
@@ -205,7 +261,7 @@ export function useFreeGoodnessMatch(
       (item) => Number(item.user_id) === Number(authUserRef.value?.id),
     );
     const stateStatus = String(own?.mode_data?.state_status || '');
-    if (['input', 'finished'].includes(stateStatus)) {
+    if (['input', 'finished'].includes(stateStatus) && !autoPlaybackActive && !correctionResponse) {
       pendingRequest.value = '';
     }
     const lastStep = own?.mode_data?.last_step;
@@ -213,6 +269,13 @@ export function useFreeGoodnessMatch(
       stateStatus === 'awaiting_ack'
       && Boolean(lastStep?.corrected)
       && !correctionResponse
+    );
+    const recoverAutoPlayback = (
+      !correctionResponse
+      && !autoPlaybackActive
+      && Array.isArray(own?.mode_data?.auto_steps)
+      && own.mode_data.auto_steps.length > 0
+      && !seenAutoPlaybackKeys.has(String(own.mode_data.auto_playback_key || ''))
     );
     if (recoverCorrection) {
       pendingRequest.value = pendingRequest.value || 'recovered-correction';
@@ -222,7 +285,9 @@ export function useFreeGoodnessMatch(
         sequence: Number(lastStep.sequence || own?.last_sequence || 0),
         awaiting_ack: true,
       });
-    } else if (!correctionResponse) {
+    } else if (recoverAutoPlayback) {
+      startAutoPlayback(own.mode_data, { syncStart: true });
+    } else if (!correctionResponse && !autoPlaybackActive) {
       setSnapshot(own?.mode_data?.board_hex, 'free-room');
     }
     updateOpponentBoards();
@@ -292,7 +357,10 @@ export function useFreeGoodnessMatch(
     const direction = KEY_DIRECTIONS[event.key];
     if (direction && submitMove(direction)) event.preventDefault();
   };
-  const dispose = () => clearCorrection();
+  const dispose = () => {
+    clearCorrection();
+    clearAutoPlayback();
+  };
 
   roomSession.registerModeAdapter({
     key: 'free_goodness',

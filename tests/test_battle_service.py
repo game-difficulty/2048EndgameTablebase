@@ -150,6 +150,34 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(6, service.VALID_STEP_TIMEOUTS)
         self.assertNotIn(605, service.VALID_STEP_TIMEOUTS)
 
+    async def test_host_cannot_enter_spectator_seat(self) -> None:
+        room = await self._create_ready_room(allow_spectators=True)
+        with self.assertRaises(service.BattleServiceError) as raised:
+            service.set_role(
+                room["room_code"], user_id=self.host_id, role="spectator"
+            )
+        self.assertEqual(raised.exception.code, "HOST_CANNOT_SPECTATE")
+
+        host_view = repository.get_room(room["room_code"])
+        host_member = next(
+            member
+            for member in host_view["members"]
+            if int(member["user_id"]) == self.host_id
+        )
+        self.assertEqual(host_member["role"], "player")
+
+        service.join_room(room["room_code"], user_id=self.player_id, role="player")
+        switched = service.set_role(
+            room["room_code"], user_id=self.player_id, role="spectator"
+        )
+        player_member = next(
+            member
+            for member in switched["members"]
+            if int(member["user_id"]) == self.player_id
+        )
+        self.assertEqual(player_member["role"], "spectator")
+        service.leave_room(room["room_code"], user_id=self.host_id)
+
     async def test_wrong_move_correction_does_not_consume_next_step_timeout(self) -> None:
         room = await self._create_ready_room(
             step_timeout_seconds=30,

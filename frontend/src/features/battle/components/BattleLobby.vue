@@ -21,7 +21,8 @@
           <div><h3>{{ $t('battle.lobby.players') }}</h3><p>{{ players.length }}/{{ room.max_players }}</p></div>
           <div v-if="selfMember && ['preparing', 'waiting'].includes(room.status)" class="battle-role-segment">
             <button type="button" :class="selfMember.role === 'player' ? 'active' : ''" :disabled="players.length >= room.max_players && selfMember.role !== 'player'" @click="$emit('role', 'player')">{{ $t('battle.roles.player') }}</button>
-            <button type="button" :class="selfMember.role === 'spectator' ? 'active' : ''" :disabled="!room.allow_spectators" @click="$emit('role', 'spectator')">{{ $t('battle.roles.spectator') }}</button>
+            <button v-if="isHost" type="button" @click="viewSpectators">{{ $t('battle.roles.spectator') }}</button>
+            <button v-else type="button" :class="selfMember.role === 'spectator' ? 'active' : ''" :disabled="!room.allow_spectators" @click="$emit('role', 'spectator')">{{ $t('battle.roles.spectator') }}</button>
           </div>
         </div>
 
@@ -72,7 +73,7 @@
             </dl>
           </slot>
         </section>
-        <section class="battle-spectator-list">
+        <section ref="spectatorList" class="battle-spectator-list" tabindex="-1">
           <div class="battle-panel-title"><div><h3>{{ $t('battle.lobby.spectators') }}</h3><p>{{ spectators.length }}</p></div></div>
           <div v-if="!spectators.length" class="battle-sidebar-empty">{{ $t('battle.lobby.noSpectators') }}</div>
           <div v-else class="battle-spectator-chips">
@@ -98,6 +99,7 @@ const props = defineProps({
 defineEmits(['ready', 'start', 'kick', 'leave', 'role']);
 const { t } = useI18n();
 const copied = ref(false);
+const spectatorList = ref(null);
 const players = computed(() => props.members.filter((member) => member.role === 'player' && member.status === 'active'));
 const spectators = computed(() => props.members.filter((member) => member.role === 'spectator' && member.status === 'active'));
 const selfMember = computed(() => props.members.find((member) => Number(member.user_id) === Number(props.currentUserId)) || null);
@@ -133,6 +135,10 @@ const remainingLabel = computed(() => {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 });
 const initials = (name) => String(name || '?').trim().slice(0, 2).toUpperCase();
+const viewSpectators = () => {
+  spectatorList.value?.focus?.({ preventScroll: true });
+  spectatorList.value?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+};
 const copyInvite = async () => {
   const url = `${window.location.origin}${window.location.pathname}?tab=battle&room=${props.room.room_code}`;
   const invite = t('battle.lobby.inviteText', {
@@ -160,6 +166,7 @@ const copyInvite = async () => {
 .battle-seats-panel { padding: 18px; }
 .battle-room-sidebar { display: flex; flex-direction: column; gap: 16px; }
 .battle-settings-summary, .battle-spectator-list { padding: 17px; }
+.battle-spectator-list:focus { outline: 2px solid color-mix(in srgb, var(--accent) 58%, transparent); outline-offset: 2px; }
 .battle-panel-title { display: flex; align-items: center; justify-content: space-between; min-height: 40px; margin-bottom: 13px; }
 .battle-panel-title > div:first-child { display: flex; align-items: baseline; gap: 9px; }
 .battle-panel-title h3 { margin: 0; color: var(--text-main); font-size: var(--font-ui-base); font-weight: 900; }

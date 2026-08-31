@@ -38,6 +38,27 @@ class FreeGoodnessRuleTests(unittest.TestCase):
         self.assertEqual(decision.executed_direction, "left")
         self.assertEqual(decision.goodness, 0.0)
 
+    def test_move_correction_requires_relative_and_absolute_risk_increase(self) -> None:
+        tiny_absolute_change = decide_move(
+            selected_direction="right",
+            results={"left": 0.999, "right": 0.9988},
+            legal_directions={"left", "right"},
+        )
+        self.assertIsNotNone(tiny_absolute_change)
+        self.assertGreater(tiny_absolute_change.risk_multiplier, 1.15)
+        self.assertFalse(tiny_absolute_change.corrected)
+        self.assertEqual(tiny_absolute_change.executed_direction, "right")
+
+        material_change = decide_move(
+            selected_direction="right",
+            results={"left": 0.99, "right": 0.988},
+            legal_directions={"left", "right"},
+        )
+        self.assertIsNotNone(material_change)
+        self.assertTrue(material_change.corrected)
+        self.assertEqual(material_change.executed_direction, "left")
+        self.assertEqual(material_change.correction_reason, "risk_limit")
+
     def test_spawn_to_zero_can_be_accepted_from_low_success(self) -> None:
         accepted, multiplier, state = evaluate_spawn(
             executed_success=0.10,

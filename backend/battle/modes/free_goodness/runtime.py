@@ -38,7 +38,6 @@ from backend.tablebase_catalog import (
     resolve_tablebase,
 )
 from backend.tablebase_query_service import (
-    MAX_PREFETCH_CHILDREN,
     TablebaseLookupResult,
     TablebaseLookupSpec,
     TablebaseQueryOverloaded,
@@ -62,6 +61,7 @@ from .mode import FreeGoodnessBattleMode
 from .rules import (
     DIRECTIONS,
     MOVE_RISK_LIMIT,
+    RISK_EPSILON,
     SPAWN_DRAWDOWN_LIMIT,
     SPAWN_RISK_LIMIT,
     SpawnRiskState,
@@ -81,6 +81,7 @@ ACK_GRACE_SECONDS = 5
 CORRECTION_WINDOW_SECONDS = 15
 MAX_RANDOM_BOARD_ATTEMPTS = 16
 MAX_PREPARED_STATES = 2048
+MAX_CERTAINTY_TAIL_STEPS = 4096
 MOVE_CODES = {"left": 1, "right": 2, "up": 3, "down": 4}
 MOVE_CODE_BITS = {"left": 0, "right": 1, "up": 2, "down": 3}
 
@@ -100,13 +101,36 @@ class PreparedSpawn:
     risk_state: SpawnRiskState
 
 
+@dataclass(frozen=True, slots=True)
+class CertaintyTailStep:
+    previous_board: int
+    next_board: int
+    direction: str
+    spawn_index: int
+    spawn_value: int
+    rates: dict[str, float]
+
+    def public_payload(self) -> dict[str, Any]:
+        return {
+            "previous_board_hex": f"{self.previous_board:016x}",
+            "board_hex": f"{self.next_board:016x}",
+            "executed_direction": self.direction,
+            "spawn_index": self.spawn_index,
+            "spawn_value": self.spawn_value,
+        }
+
+
 _free_mode = register_battle_mode(FreeGoodnessBattleMode(), replace=True)
 _free_mode.bind_runtime(__import__(__name__, fromlist=["*"]))
 _reader_cache: dict[tuple[str, str], BookReaderDispatcher] = {}
 _reader_lock = asyncio.Lock()
 _prepared: OrderedDict[
-    tuple[str, int, int, int, str], dict[str, PreparedSpawn]
+    tuple[str, int, int, int, str], dict[str, PreparedSpawn | None]
 ] = OrderedDict()
+_prepared_complete: set[tuple[str, int, int, int, str]] = set()
+_prepare_state_tasks: dict[
+    tuple[str, int, int, int, str], asyncio.Task[dict[str, PreparedSpawn]]
+] = {}
 _cleanup_task: asyncio.Task | None = None
 
 
@@ -220,7 +244,11 @@ async def _lookup(
         supersede=False,
         allow_overload=lane != "foreground",
     )
-    return await handle.wait()
+    try:
+        return await handle.wait()
+    except asyncio.CancelledError:
+        handle.cancel()
+        raise
 
 
 async def _random_board(room: dict[str, Any]) -> int:
@@ -469,11 +497,40 @@ def _candidate_key(round_id: str, user_id: int, sequence: int, board: int):
     )
 
 
-def _store_prepared(key, prepared: dict[str, PreparedSpawn]) -> None:
-    _prepared[key] = prepared
+def _touch_prepared(key) -> dict[str, PreparedSpawn | None]:
+    prepared = _prepared.setdefault(key, {})
     _prepared.move_to_end(key)
     while len(_prepared) > MAX_PREPARED_STATES:
-        _prepared.popitem(last=False)
+        expired_key, _expired = _prepared.popitem(last=False)
+        _prepared_complete.discard(expired_key)
+        task = _prepare_state_tasks.pop(expired_key, None)
+        if task is not None and not task.done():
+            task.cancel()
+    return prepared
+
+
+def _store_prepared(key, prepared: dict[str, PreparedSpawn | None]) -> None:
+    current = _touch_prepared(key)
+    current.update(prepared)
+
+
+def _store_prepared_direction(
+    key,
+    direction: str,
+    candidate: PreparedSpawn | None,
+) -> None:
+    _touch_prepared(key)[str(direction)] = candidate
+
+
+def _prepared_candidates(key) -> dict[str, PreparedSpawn]:
+    prepared = _prepared.get(key) or {}
+    if key in _prepared:
+        _prepared.move_to_end(key)
+    return {
+        direction: candidate
+        for direction, candidate in prepared.items()
+        if isinstance(candidate, PreparedSpawn)
+    }
 
 
 def _candidate_choices(
@@ -507,6 +564,136 @@ def _candidate_choices(
         attempt += 1
 
 
+async def _generate_certainty_tail(
+    *,
+    room: dict[str, Any],
+    round_id: str,
+    user_id: int,
+    board: int,
+    results: dict[str, float],
+    seed_hex: str,
+    sequence: int,
+    risk_state: SpawnRiskState,
+) -> tuple[list[CertaintyTailStep], int]:
+    """Finish a proven position locally without adding scored Battle steps."""
+
+    target = int(room["target"])
+    use_variant = _use_variant(str(room["pattern"]))
+    entry = resolve_tablebase(str(room["full_pattern"])) or {}
+    spawn_rate = float(entry.get("spawn_rate", 0.1))
+    supporter = _is_supporter(int(room["host_user_id"]))
+    current_board = int(board)
+    current_results = dict(results)
+    current_risk = risk_state
+    steps: list[CertaintyTailStep] = []
+    limit = min(MAX_CERTAINTY_TAIL_STEPS, max(16, target // 2 + 16))
+
+    for offset in range(limit):
+        if _contains_target(current_board, target):
+            return steps, current_board
+        moved = _moved_boards(current_board, use_variant=use_variant)
+        direction, best_success = best_direction(current_results, moved)
+        if direction is None or best_success < 1.0 - RISK_EPSILON:
+            raise BattleServiceError(
+                "CERTAINTY_TAIL_UNAVAILABLE",
+                "The guaranteed continuation could not be completed.",
+                503,
+            )
+        moved_board = moved[direction]
+        selected: tuple[int, int, int, dict[str, float], SpawnRiskState] | None = None
+        for attempt, spawn_index, spawn_value in _candidate_choices(
+            seed_hex,
+            int(sequence) + offset,
+            moved_board,
+            spawn_rate,
+        ):
+            next_board = _spawn_board(moved_board, spawn_index, spawn_value)
+            if _contains_target(next_board, target):
+                selected = (
+                    next_board,
+                    spawn_index,
+                    spawn_value,
+                    {},
+                    current_risk,
+                )
+                break
+            lookup = await _lookup(
+                room,
+                next_board,
+                stream_key=(
+                    f"battle-free-certainty:{round_id}:{user_id}:"
+                    f"{int(sequence) + offset}:{attempt}"
+                ),
+                supporter=supporter,
+                lane="foreground",
+            )
+            if not lookup.found:
+                continue
+            next_results = _normalize_results(lookup)
+            legal = _moved_boards(next_board, use_variant=use_variant)
+            _next_direction, next_best = best_direction(next_results, legal)
+            accepted, _multiplier, next_risk = evaluate_spawn(
+                executed_success=best_success,
+                next_success=next_best,
+                risk_state=current_risk,
+            )
+            if accepted:
+                selected = (
+                    next_board,
+                    spawn_index,
+                    spawn_value,
+                    next_results,
+                    next_risk,
+                )
+                break
+        if selected is None:
+            raise BattleServiceError(
+                "CERTAINTY_TAIL_UNAVAILABLE",
+                "The guaranteed continuation could not be completed.",
+                503,
+            )
+        next_board, spawn_index, spawn_value, next_results, next_risk = selected
+        steps.append(
+            CertaintyTailStep(
+                previous_board=current_board,
+                next_board=next_board,
+                direction=direction,
+                spawn_index=spawn_index,
+                spawn_value=spawn_value,
+                rates=current_results,
+            )
+        )
+        current_board = next_board
+        current_results = next_results
+        current_risk = next_risk
+
+    raise BattleServiceError(
+        "CERTAINTY_TAIL_TOO_LONG",
+        "The guaranteed continuation exceeded its safety limit.",
+        503,
+    )
+
+
+def _append_certainty_replay_steps(
+    replay_blob: bytes,
+    replay_move_count: int,
+    steps: list[CertaintyTailStep],
+) -> tuple[bytes, int]:
+    payload = bytes(replay_blob or b"")
+    count = int(replay_move_count)
+    for step in steps:
+        encoded = encode_replay_step(
+            board=step.previous_board,
+            selected_direction=step.direction,
+            spawn_index=step.spawn_index,
+            spawn_value=step.spawn_value,
+            rates=step.rates,
+        )
+        payload, recorded = append_replay_step(payload, encoded)
+        count += int(recorded)
+    return payload, count
+
+
 async def _prepare_direction(
     *,
     room: dict[str, Any],
@@ -520,19 +707,33 @@ async def _prepare_direction(
     seed_hex: str,
     lane: str,
 ) -> PreparedSpawn | None:
-    prepared = await _prepare_directions(
-        room=room,
-        round_id=round_id,
-        user_id=user_id,
-        sequence=sequence,
-        direction_states={
-            direction: (moved_board, executed_success),
-        },
-        risk_state=risk_state,
-        seed_hex=seed_hex,
-        lane=lane,
-    )
-    return prepared.get(direction)
+    entry = resolve_tablebase(str(room["full_pattern"])) or {}
+    spawn_rate = float(entry.get("spawn_rate", 0.1))
+    supporter = _is_supporter(int(room["host_user_id"]))
+    for attempt, spawn_index, spawn_value in _candidate_choices(
+        seed_hex,
+        sequence,
+        moved_board,
+        spawn_rate,
+    ):
+        candidate = await _evaluate_spawn_candidate(
+            room=room,
+            round_id=round_id,
+            user_id=user_id,
+            sequence=sequence,
+            direction=direction,
+            moved_board=moved_board,
+            executed_success=executed_success,
+            risk_state=risk_state,
+            attempt=attempt,
+            spawn_index=spawn_index,
+            spawn_value=spawn_value,
+            supporter=supporter,
+            lane=lane,
+        )
+        if candidate is not None:
+            return candidate
+    return None
 
 
 async def _evaluate_spawn_candidate(
@@ -601,77 +802,53 @@ async def _prepare_directions(
     risk_state: SpawnRiskState,
     seed_hex: str,
     lane: str,
+    prepared_key=None,
 ) -> dict[str, PreparedSpawn]:
-    entry = resolve_tablebase(str(room["full_pattern"])) or {}
-    spawn_rate = float(entry.get("spawn_rate", 0.1))
-    supporter = _is_supporter(int(room["host_user_id"]))
-    choices = {
-        direction: list(
-            _candidate_choices(seed_hex, sequence, moved_board, spawn_rate)
-        )
-        for direction, (moved_board, _success) in direction_states.items()
-    }
-    cursors = {direction: 0 for direction in direction_states}
-    prepared: dict[str, PreparedSpawn] = {}
-    first_wave = True
-    while True:
-        active = [
-            direction
-            for direction in direction_states
-            if direction not in prepared and cursors[direction] < len(choices[direction])
-        ]
-        if not active:
-            break
-        wave: list[tuple[str, int, int, int]] = []
-        wave_limit = len(active) if first_wave else MAX_PREFETCH_CHILDREN
-        while active and len(wave) < wave_limit:
-            next_active: list[str] = []
-            for direction in active:
-                cursor = cursors[direction]
-                if cursor >= len(choices[direction]):
-                    continue
-                wave.append((direction, *choices[direction][cursor]))
-                cursors[direction] = cursor + 1
-                if cursors[direction] < len(choices[direction]):
-                    next_active.append(direction)
-                if len(wave) >= wave_limit:
-                    next_active.extend(
-                        item for item in active[active.index(direction) + 1 :]
-                        if cursors[item] < len(choices[item])
-                    )
-                    break
-            active = next_active
-        first_wave = False
-        tasks = [
-            _evaluate_spawn_candidate(
+    async def prepare_one(
+        direction: str,
+        moved_board: int,
+        executed_success: float,
+    ) -> tuple[str, PreparedSpawn | None, bool]:
+        try:
+            candidate = await _prepare_direction(
                 room=room,
                 round_id=round_id,
                 user_id=user_id,
                 sequence=sequence,
                 direction=direction,
-                moved_board=direction_states[direction][0],
-                executed_success=direction_states[direction][1],
+                moved_board=moved_board,
+                executed_success=executed_success,
                 risk_state=risk_state,
-                attempt=attempt,
-                spawn_index=spawn_index,
-                spawn_value=spawn_value,
-                supporter=supporter,
+                seed_hex=seed_hex,
                 lane=lane,
             )
-            for direction, attempt, spawn_index, spawn_value in wave
-        ]
-        values = await asyncio.gather(*tasks, return_exceptions=True)
-        for (direction, _attempt, _index, _value), result in zip(wave, values):
-            if isinstance(result, TablebaseQueryOverloaded):
-                if lane == "foreground":
-                    raise result
-                continue
-            if isinstance(result, Exception):
-                if lane == "foreground":
-                    raise result
-                continue
-            if isinstance(result, PreparedSpawn) and direction not in prepared:
-                prepared[direction] = result
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if lane == "foreground":
+                raise
+            return direction, None, False
+        if prepared_key is not None:
+            _store_prepared_direction(prepared_key, direction, candidate)
+        return direction, candidate, True
+
+    tasks = [
+        asyncio.create_task(prepare_one(direction, moved_board, executed_success))
+        for direction, (moved_board, executed_success) in direction_states.items()
+    ]
+    if not tasks:
+        return {}
+    prepared: dict[str, PreparedSpawn] = {}
+    try:
+        for completed in asyncio.as_completed(tasks):
+            direction, candidate, _resolved = await completed
+            if isinstance(candidate, PreparedSpawn):
+                prepared[direction] = candidate
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
     return prepared
 
 
@@ -688,14 +865,13 @@ async def _prepare_state(
     lane: str = "prefetch",
 ) -> dict[str, PreparedSpawn]:
     key = _candidate_key(round_id, user_id, sequence, board)
-    existing = _prepared.get(key)
-    if existing is not None:
-        _prepared.move_to_end(key)
-        return existing
+    if key in _prepared_complete:
+        return _prepared_candidates(key)
     moved = _moved_boards(board, use_variant=_use_variant(str(room["pattern"])))
     optimal, best_success = best_direction(results, moved)
     if optimal is None or best_success <= 0:
         _store_prepared(key, {})
+        _prepared_complete.add(key)
         return {}
     directions: list[str] = []
     for direction in sorted(
@@ -709,7 +885,9 @@ async def _prepare_state(
         )
         if direction == optimal or (decision and not decision.corrected):
             directions.append(direction)
-    prepared = await _prepare_directions(
+    cached = _prepared.get(key) or {}
+    missing_directions = [direction for direction in directions if direction not in cached]
+    await _prepare_directions(
         room=room,
         round_id=round_id,
         user_id=user_id,
@@ -719,21 +897,57 @@ async def _prepare_state(
                 moved[direction],
                 clamp_probability(results.get(direction)),
             )
-            for direction in directions
+            for direction in missing_directions
         },
         risk_state=risk_state,
         seed_hex=seed_hex,
         lane=lane,
+        prepared_key=key,
     )
-    _store_prepared(key, prepared)
-    return prepared
+    current = _prepared.get(key) or {}
+    if all(direction in current for direction in directions):
+        _prepared_complete.add(key)
+    return _prepared_candidates(key)
+
+
+def _schedule_prepare_state(**kwargs) -> asyncio.Task[dict[str, PreparedSpawn]]:
+    key = _candidate_key(
+        kwargs["round_id"],
+        kwargs["user_id"],
+        kwargs["sequence"],
+        kwargs["board"],
+    )
+    existing = _prepare_state_tasks.get(key)
+    if existing is not None and not existing.done():
+        return existing
+    task = asyncio.create_task(_prepare_state(**kwargs))
+    _prepare_state_tasks[key] = task
+
+    def completed(done: asyncio.Task) -> None:
+        if _prepare_state_tasks.get(key) is done:
+            _prepare_state_tasks.pop(key, None)
+        if not done.cancelled():
+            done.exception()
+
+    task.add_done_callback(completed)
+    return task
+
+
+def _cancel_state_prefetch(key) -> None:
+    task = _prepare_state_tasks.pop(key, None)
+    if task is not None and not task.done():
+        task.cancel()
 
 
 def _discard_round_prefetch(round_id: str) -> None:
     normalized = str(round_id)
+    for key in list(_prepare_state_tasks):
+        if key[0] == normalized:
+            _cancel_state_prefetch(key)
     for key in list(_prepared):
         if key[0] == normalized:
             _prepared.pop(key, None)
+            _prepared_complete.discard(key)
 
 
 def _load_round_context(db: sqlite3.Connection, room_ref: str, user_id: int):
@@ -779,6 +993,21 @@ async def _initialize_players(
         next_best=best_success,
         use_variant=_use_variant(str(room["pattern"])),
     )
+    initial_board = board
+    certainty_steps: list[CertaintyTailStep] = []
+    if initial_finish == "certainty":
+        certainty_steps, board = await _generate_certainty_tail(
+            room=room,
+            round_id=str(round_row["round_id"]),
+            user_id=int(room["host_user_id"]),
+            board=initial_board,
+            results=results,
+            seed_hex=seed_hex,
+            sequence=0,
+            risk_state=SpawnRiskState(),
+        )
+        initial_finish = "target_reached"
+        results = {}
     if initial_finish is None:
         await asyncio.gather(*[
             _prepare_state(
@@ -809,14 +1038,9 @@ async def _initialize_players(
         progress=0,
         ranking_min_steps=ranking_min_steps,
     )
-    result_mode_data = json.dumps(
-        {
-            "finish_reason": initial_finish,
-            "finish_class": _public_finish_class(initial_ranking_eligible),
-            "ranking_min_steps": ranking_min_steps,
-            "ranking_eligible": initial_ranking_eligible,
-        },
-        separators=(",", ":"),
+    certainty_payload = [step.public_payload() for step in certainty_steps]
+    certainty_replay, certainty_replay_count = _append_certainty_replay_steps(
+        b"", 0, certainty_steps
     )
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
@@ -826,6 +1050,23 @@ async def _initialize_players(
         if fresh_round is None or fresh_round["status"] != "ready":
             raise BattleServiceError("ROUND_STATE_CHANGED", "Round state changed.", 409)
         for player in players:
+            player_mode_data = {
+                "finish_reason": initial_finish,
+                "finish_class": _public_finish_class(initial_ranking_eligible),
+                "ranking_min_steps": ranking_min_steps,
+                "ranking_eligible": initial_ranking_eligible,
+            }
+            if certainty_payload:
+                player_mode_data.update(
+                    {
+                        "auto_steps": certainty_payload,
+                        "auto_playback_key": (
+                            f"{round_row['round_id']}:{int(player['user_id'])}:0:certainty"
+                        ),
+                        "auto_start_board_hex": f"{initial_board:016x}",
+                        "auto_final_board_hex": f"{board:016x}",
+                    }
+                )
             db.execute(
                 """
                 INSERT OR REPLACE INTO battle_player_results
@@ -841,11 +1082,21 @@ async def _initialize_players(
                 (
                     round_row["round_id"], player["user_id"],
                     round_row["round_id"], player["user_id"],
-                    result_status, result_mode_data,
+                    result_status, json.dumps(player_mode_data, separators=(",", ":")),
                     now_text if initial_finish else None,
                     deadline, now_text, now_text, f"{board:016x}",
                 ),
             )
+            if certainty_replay_count:
+                db.execute(
+                    "UPDATE battle_player_results SET replay_blob = ?, replay_move_count = ? WHERE round_id = ? AND user_id = ?",
+                    (
+                        certainty_replay,
+                        certainty_replay_count,
+                        round_row["round_id"],
+                        player["user_id"],
+                    ),
+                )
             db.execute(
                 """
                 INSERT OR REPLACE INTO battle_free_player_states
@@ -1035,6 +1286,11 @@ def sanitize_snapshot_for_mode(
             mode_data["board_hex"] = state["board_state"]
         else:
             mode_data.pop("last_step", None)
+        if int(result["user_id"]) != int(viewer_user_id):
+            mode_data.pop("auto_steps", None)
+            mode_data.pop("auto_playback_key", None)
+            mode_data.pop("auto_start_board_hex", None)
+            mode_data.pop("auto_final_board_hex", None)
         result["mode_data"] = mode_data
         result["route_index"] = progress
         result["progress"] = progress
@@ -1247,10 +1503,13 @@ async def _select_prepared_spawn(
         round_data["round_id"], user_id, int(state_data["sequence"]), board
     )
     prepared = _prepared.get(key) or {}
+    if key in _prepared:
+        _prepared.move_to_end(key)
     executed_direction = decision.executed_direction
     correction_reason = decision.correction_reason
+    direction_ready = executed_direction in prepared
     candidate = prepared.get(executed_direction)
-    if candidate is None:
+    if not direction_ready:
         candidate = await _prepare_direction(
             room=room,
             round_id=str(round_data["round_id"]),
@@ -1263,21 +1522,27 @@ async def _select_prepared_spawn(
             seed_hex=str(round_data["route_seed"]),
             lane="foreground",
         )
+        _store_prepared_direction(key, executed_direction, candidate)
     if candidate is None and executed_direction != decision.best_direction:
         executed_direction = decision.best_direction
         correction_reason = "spawn_risk"
-        candidate = prepared.get(executed_direction) or await _prepare_direction(
-            room=room,
-            round_id=str(round_data["round_id"]),
-            user_id=user_id,
-            sequence=int(state_data["sequence"]),
-            direction=executed_direction,
-            moved_board=moved[executed_direction],
-            executed_success=clamp_probability(results.get(executed_direction)),
-            risk_state=risk_state,
-            seed_hex=str(round_data["route_seed"]),
-            lane="foreground",
-        )
+        direction_ready = executed_direction in prepared
+        candidate = prepared.get(executed_direction)
+        if not direction_ready:
+            candidate = await _prepare_direction(
+                room=room,
+                round_id=str(round_data["round_id"]),
+                user_id=user_id,
+                sequence=int(state_data["sequence"]),
+                direction=executed_direction,
+                moved_board=moved[executed_direction],
+                executed_success=clamp_probability(results.get(executed_direction)),
+                risk_state=risk_state,
+                seed_hex=str(round_data["route_seed"]),
+                lane="foreground",
+            )
+            _store_prepared_direction(key, executed_direction, candidate)
+    _cancel_state_prefetch(key)
     return candidate, executed_direction, correction_reason
 
 
@@ -1408,19 +1673,23 @@ async def _resolve_move(
         next_best=next_best,
         use_variant=_use_variant(str(room["pattern"])),
     )
-    if not finish_reason:
+    certainty_steps: list[CertaintyTailStep] = []
+    persisted_board = next_board
+    persisted_results = next_results
+    if finish_reason == "certainty":
         try:
-            await _prepare_state(
+            certainty_steps, persisted_board = await _generate_certainty_tail(
                 room=room,
                 round_id=str(round_data["round_id"]),
                 user_id=user_id,
-                sequence=next_step,
                 board=next_board,
                 results=next_results,
-                risk_state=next_risk,
                 seed_hex=str(round_data["route_seed"]),
-                lane="prefetch",
+                sequence=next_step,
+                risk_state=next_risk,
             )
+            persisted_results = {}
+            finish_reason = "target_reached"
         except asyncio.CancelledError:
             _resume_after_resolution_error(
                 round_id=str(round_data["round_id"]),
@@ -1430,7 +1699,7 @@ async def _resolve_move(
                 resolution_started_at=now_text,
             )
             raise
-        except Exception:
+        except Exception as exc:
             _resume_after_resolution_error(
                 round_id=str(round_data["round_id"]),
                 user_id=user_id,
@@ -1438,6 +1707,13 @@ async def _resolve_move(
                 original_timeout=state_data.get("timeout_at"),
                 resolution_started_at=now_text,
             )
+            if isinstance(exc, TablebaseQueryOverloaded):
+                raise BattleServiceError(
+                    "TABLEBASE_BUSY",
+                    "Tablebase service is busy. Please retry shortly.",
+                    503,
+                    extra=exc.payload,
+                ) from exc
             raise
     corrected = executed_direction != direction or bool(correction_reason and correction_reason != "risk_boundary")
     current_goodness = (
@@ -1471,6 +1747,15 @@ async def _resolve_move(
             replay_blob, replay_step
         )
         replay_move_count += int(replay_recorded)
+    replay_blob, replay_move_count = _append_certainty_replay_steps(
+        replay_blob, replay_move_count, certainty_steps
+    )
+    certainty_payload = [step.public_payload() for step in certainty_steps]
+    auto_playback_key = (
+        f"{round_data['round_id']}:{int(user_id)}:{requested_sequence}:certainty"
+        if certainty_payload
+        else ""
+    )
     round_completed = False
     try:
         with auth_db() as db:
@@ -1493,11 +1778,11 @@ async def _resolve_move(
                 WHERE round_id = ? AND user_id = ?
                 """,
                 (
-                    f"{next_board:016x}", next_step, requested_sequence,
+                    f"{persisted_board:016x}", next_step, requested_sequence,
                     next_risk.log_index, next_risk.log_floor,
                     next_step, next_state_status, finish_reason,
                     None if finish_reason else ack_deadline,
-                    json.dumps(next_results, separators=(",", ":")), operation_blob, iso(),
+                    json.dumps(persisted_results, separators=(",", ":")), operation_blob, iso(),
                     round_data["round_id"], int(user_id),
                 ),
             )
@@ -1527,6 +1812,15 @@ async def _resolve_move(
                     "spawn_value": spawn_value,
                 },
             }
+            if certainty_payload:
+                mode_data.update(
+                    {
+                        "auto_steps": certainty_payload,
+                        "auto_playback_key": auto_playback_key,
+                        "auto_start_board_hex": f"{next_board:016x}",
+                        "auto_final_board_hex": f"{persisted_board:016x}",
+                    }
+                )
             db.execute(
                 """
                 UPDATE battle_player_results SET status = ?, route_index = ?, last_sequence = ?,
@@ -1538,7 +1832,7 @@ async def _resolve_move(
                 (
                     next_status, next_step, requested_sequence,
                     cumulative_goodness, cumulative_goodness, next_step, next_step,
-                    json.dumps(mode_data, separators=(",", ":")), f"{next_board:016x}",
+                    json.dumps(mode_data, separators=(",", ":")), f"{persisted_board:016x}",
                     operation_blob, iso() if finish_reason else None,
                     replay_blob, replay_move_count, iso(),
                     round_data["round_id"], int(user_id),
@@ -1572,6 +1866,18 @@ async def _resolve_move(
             resolution_started_at=now_text,
         )
         raise
+    if not finish_reason:
+        _schedule_prepare_state(
+            room=room,
+            round_id=str(round_data["round_id"]),
+            user_id=user_id,
+            sequence=next_step,
+            board=next_board,
+            results=next_results,
+            risk_state=next_risk,
+            seed_hex=str(round_data["route_seed"]),
+            lane="prefetch",
+        )
     if round_completed:
         _settle_round(str(round_data["round_id"]))
     return {
@@ -1592,6 +1898,11 @@ async def _resolve_move(
         "complete": bool(finish_reason),
         "finish_reason": finish_reason,
         "awaiting_ack": not bool(finish_reason),
+        "auto_steps": certainty_payload,
+        "auto_playback_key": auto_playback_key or None,
+        "auto_final_board_hex": (
+            f"{persisted_board:016x}" if certainty_payload else None
+        ),
     }
 
 
@@ -1948,8 +2259,11 @@ async def shutdown() -> None:
     if _cleanup_task is not None:
         tasks.append(_cleanup_task)
         _cleanup_task = None
+    tasks.extend(_prepare_state_tasks.values())
+    _prepare_state_tasks.clear()
     for task in tasks:
         task.cancel()
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
     _prepared.clear()
+    _prepared_complete.clear()
