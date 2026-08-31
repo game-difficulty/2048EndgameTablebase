@@ -191,6 +191,49 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runtime._contains_target(final_board, 128))
         lookup.assert_not_awaited()
 
+    async def test_spawn_reaching_certainty_remains_a_valid_candidate(self) -> None:
+        moved_board = runtime._moved_boards(self.board, use_variant=False)["left"]
+        spawn_index = runtime._empty_indices(moved_board)[0]
+        next_board = runtime._spawn_board(moved_board, spawn_index, 2)
+        certain = TablebaseLookupResult(
+            board_encoded=next_board,
+            full_pattern="L3_128",
+            results={"left": 1.0, "right": 1.0, "down": 1.0, "up": 1.0},
+            dtype="uint32",
+            best_move="left",
+        )
+        with patch.object(runtime, "_lookup", new=AsyncMock(return_value=certain)):
+            candidate = await runtime._evaluate_spawn_candidate(
+                room={
+                    "room_id": "room",
+                    "host_user_id": self.host_id,
+                    "full_pattern": "L3_128",
+                    "pattern": "L3",
+                    "target": 128,
+                },
+                round_id="round",
+                user_id=self.host_id,
+                sequence=108,
+                direction="left",
+                moved_board=moved_board,
+                executed_success=0.999993678,
+                risk_state=runtime.SpawnRiskState(
+                    log_index=-8.637161503024732,
+                    log_floor=-8.637161503024732,
+                ),
+                attempt=0,
+                spawn_index=spawn_index,
+                spawn_value=2,
+                supporter=False,
+                lane="foreground",
+            )
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate.next_board, next_board)
+        self.assertEqual(candidate.next_best_success, 1.0)
+        self.assertEqual(candidate.risk_multiplier, 0.0)
+        self.assertEqual(candidate.risk_state.drawdown, 1.0)
+
     async def test_create_start_and_normal_moves_use_independent_state(self) -> None:
         with (
             patch("backend.battle.modes.free_goodness.mode.resolve_tablebase", return_value=self.entry),

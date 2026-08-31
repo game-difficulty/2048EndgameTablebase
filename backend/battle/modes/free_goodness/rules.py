@@ -133,10 +133,17 @@ class SpawnRiskState:
 
     @property
     def drawdown(self) -> float:
-        return math.exp(min(700.0, self.log_index - self.log_floor))
+        if self.log_index == self.log_floor and math.isinf(self.log_index):
+            return 1.0
+        delta = self.log_index - self.log_floor
+        if math.isnan(delta):
+            return math.inf
+        return math.exp(min(700.0, delta))
 
     def apply(self, multiplier: float) -> "SpawnRiskState":
-        if multiplier <= 0 or not math.isfinite(multiplier):
+        if multiplier == 0:
+            return SpawnRiskState()
+        elif multiplier < 0 or not math.isfinite(multiplier):
             next_index = math.inf
         else:
             next_index = self.log_index + math.log(multiplier)

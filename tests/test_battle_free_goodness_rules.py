@@ -69,6 +69,31 @@ class FreeGoodnessRuleTests(unittest.TestCase):
         self.assertAlmostEqual(multiplier, 1.0 / 0.9)
         self.assertLessEqual(state.drawdown, 1.20)
 
+    def test_spawn_that_eliminates_death_risk_is_accepted(self) -> None:
+        previous = SpawnRiskState(
+            log_index=-8.637161503024732,
+            log_floor=-8.637161503024732,
+        )
+        accepted, multiplier, state = evaluate_spawn(
+            executed_success=0.999993678,
+            next_success=1.0,
+            risk_state=previous,
+        )
+        self.assertTrue(accepted)
+        self.assertEqual(multiplier, 0.0)
+        self.assertEqual(state.log_index, 0.0)
+        self.assertEqual(state.log_floor, 0.0)
+        self.assertEqual(state.drawdown, 1.0)
+
+        accepted, multiplier, state = evaluate_spawn(
+            executed_success=1.0,
+            next_success=0.99999,
+            risk_state=state,
+        )
+        self.assertFalse(accepted)
+        self.assertTrue(math.isinf(multiplier))
+        self.assertGreater(state.drawdown, 1.20)
+
     def test_cumulative_spawn_drawdown_is_multiplicative(self) -> None:
         state = SpawnRiskState()
         accepted, _multiplier, state = evaluate_spawn(
