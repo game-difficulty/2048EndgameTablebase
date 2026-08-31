@@ -772,9 +772,9 @@
       "TABLE_UNAVAILABLE": "This tablebase is currently unavailable.",
       "ROUTE_GENERATION_FAILED": "The route could not be created. Your Tokens were refunded.",
       "ROUTE_TOO_SHORT": "No suitable route was found. Your Tokens were refunded.",
-      "NOT_ENOUGH_PLAYERS": "At least two ready players are required to start.",
+      "NOT_ENOUGH_PLAYERS": "At least one ready player is required to start.",
       "HOST_NOT_READY": "The host must be ready before starting.",
-      "PLAYERS_NOT_READY": "At least two players must be ready before starting.",
+      "PLAYERS_NOT_READY": "The host can start when ready.",
       "SPECTATORS_DISABLED": "Spectating is disabled for this room.",
       "PLAYER_SLOTS_FULL": "All player seats are occupied.",
       "KICKED_FROM_ROOM": "The host removed you from this room.",
@@ -890,8 +890,8 @@
       "spectators": "Spectators",
       "noSpectators": "No spectators",
       "inviteText": "{tablebase} Goodness Battle room: {url}",
-      "startRuleSpectators": "Two ready players can start. Unready players will spectate.",
-      "startRuleNoSpectators": "Two ready players can start. Unready players will leave the room."
+      "startRuleSpectators": "The host can start when ready. Other ready players join the Battle; unready players spectate.",
+      "startRuleNoSpectators": "The host can start when ready. Other ready players join the Battle; unready players leave the room."
     },
     "match": {
       "kicker": "Live Battle",

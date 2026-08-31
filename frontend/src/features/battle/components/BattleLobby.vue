@@ -102,11 +102,9 @@ const players = computed(() => props.members.filter((member) => member.role === 
 const spectators = computed(() => props.members.filter((member) => member.role === 'spectator' && member.status === 'active'));
 const selfMember = computed(() => props.members.find((member) => Number(member.user_id) === Number(props.currentUserId)) || null);
 const isHost = computed(() => Number(props.room.host_user_id) === Number(props.currentUserId));
-const readyPlayers = computed(() => players.value.filter((member) => member.ready));
 const canStart = computed(() => (
   isHost.value
   && Boolean(selfMember.value?.ready)
-  && readyPlayers.value.length >= 2
   && props.room.status === 'waiting'
 ));
 const seatRows = computed(() => Array.from({ length: Number(props.room.max_players || 2) }, (_unused, index) => ({ index, member: players.value[index] || null })));

@@ -772,9 +772,9 @@
       "TABLE_UNAVAILABLE": "该定式当前不可用。",
       "ROUTE_GENERATION_FAILED": "路线生成失败，Token 已退还。",
       "ROUTE_TOO_SHORT": "未找到合适路线，Token 已退还。",
-      "NOT_ENOUGH_PLAYERS": "至少需要两名已准备玩家才能开始。",
+      "NOT_ENOUGH_PLAYERS": "至少需要一名已准备玩家才能开始。",
       "HOST_NOT_READY": "房主准备后才能开始。",
-      "PLAYERS_NOT_READY": "至少需要两名玩家准备后才能开始。",
+      "PLAYERS_NOT_READY": "房主准备后即可开始。",
       "SPECTATORS_DISABLED": "该房间不允许观战。",
       "PLAYER_SLOTS_FULL": "玩家席位已满。",
       "KICKED_FROM_ROOM": "你已被房主移出该房间。",
@@ -890,8 +890,8 @@
       "spectators": "观战者",
       "noSpectators": "暂无观战者",
       "inviteText": "{tablebase} 吻合度对战房间：{url}",
-      "startRuleSpectators": "两人准备即可开始，未准备玩家将进入观战。",
-      "startRuleNoSpectators": "两人准备即可开始，未准备玩家将离开房间。"
+      "startRuleSpectators": "房主准备后即可开始；其他已准备玩家参赛，未准备玩家进入观战。",
+      "startRuleNoSpectators": "房主准备后即可开始；其他已准备玩家参赛，未准备玩家离开房间。"
     },
     "match": {
       "kicker": "实时对战",

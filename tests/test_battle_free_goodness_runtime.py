@@ -281,6 +281,44 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 ).fetchone()
             self.assertEqual(int(settlements["count"]), 1)
 
+    async def test_ready_host_can_start_a_solo_free_round(self) -> None:
+        with (
+            patch("backend.battle.modes.free_goodness.mode.resolve_tablebase", return_value=self.entry),
+            patch.object(runtime, "resolve_tablebase", return_value=self.entry),
+            patch.object(runtime, "_lookup", new=AsyncMock(return_value=self.lookup)),
+        ):
+            created = await runtime.create_room_for_mode(
+                user_id=self.host_id,
+                session_id=None,
+                payload={
+                    "full_pattern": "L3_128",
+                    "initial_board": f"{self.board:016x}",
+                    "max_players": 2,
+                    "ranking_min_steps": 12,
+                    "step_timeout_seconds": 90,
+                    "is_public": True,
+                    "allow_spectators": True,
+                    "chat_roles": ["host", "player", "spectator"],
+                },
+            )
+            room = created["room"]
+            repository.set_member_ready(
+                room["room_code"], user_id=self.host_id, ready=True
+            )
+
+            started = await runtime.start_room_for_mode(
+                room["room_code"], user_id=self.host_id, session_id=None
+            )
+            self.assertEqual(started["round"]["status"], "running")
+            self.assertEqual(len(started["results"]), 1)
+            self.assertEqual(int(started["results"][0]["user_id"]), self.host_id)
+            with auth_db() as db:
+                states = db.execute(
+                    "SELECT user_id FROM battle_free_player_states WHERE round_id = ?",
+                    (started["round"]["round_id"],),
+                ).fetchall()
+            self.assertEqual([int(state["user_id"]) for state in states], [self.host_id])
+
     async def test_explicit_unplayable_board_is_rejected_and_reservation_refunded(self) -> None:
         unavailable = TablebaseLookupResult(
             board_encoded=self.board,

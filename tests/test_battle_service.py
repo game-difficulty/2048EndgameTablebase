@@ -358,6 +358,30 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(roles[self.player_id], "player")
         self.assertTrue(all(roles[user_id] == "spectator" for user_id in extra_ids))
 
+    async def test_ready_host_can_start_and_finish_a_solo_round(self) -> None:
+        room = await self._create_ready_room(max_players=2)
+        service.set_ready(room["room_code"], user_id=self.host_id, ready=True)
+
+        started = await service.start_room(
+            room["room_code"], user_id=self.host_id, session_id=None
+        )
+        self.assertEqual(started["status"], "running")
+        self.assertEqual(len(started["results"]), 1)
+        self.assertEqual(int(started["results"][0]["user_id"]), self.host_id)
+
+        completed = service.record_choice(
+            room["room_code"],
+            user_id=self.host_id,
+            round_id=str(started["round"]["round_id"]),
+            sequence=1,
+            route_index=0,
+            direction="left",
+        )
+        self.assertTrue(completed["complete"])
+        finished = repository.get_room(room["room_code"])
+        self.assertEqual(finished["status"], "waiting")
+        self.assertEqual(finished["round"]["status"], "completed")
+
     async def test_unready_players_are_kicked_when_spectating_is_disabled(self) -> None:
         room = await self._create_ready_room(max_players=4, allow_spectators=False)
         extra_id = self._create_user("battle-unready@example.com", 1_000_000)

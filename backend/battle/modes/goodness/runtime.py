@@ -87,12 +87,12 @@ def _ready_players_for_start(
     if host is None or not bool(host["ready"]):
         raise BattleServiceError("HOST_NOT_READY", "The host must be ready to start.", 409)
     ready_players = [player for player in players if bool(player["ready"])]
-    if len(ready_players) < 2:
+    if len(ready_players) < 1:
         raise BattleServiceError(
             "NOT_ENOUGH_PLAYERS",
-            "At least two ready players are required.",
+            "At least one ready player is required.",
             409,
-            extra={"required_players": 2},
+            extra={"required_players": 1},
         )
     unready_players = [player for player in players if not bool(player["ready"])]
     if unready_players:
