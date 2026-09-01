@@ -19,6 +19,7 @@ export class MinigameController {
     this.currentGameId = '';
     this.engine = null;
     this.powerupCounts = { bomb: 0, glove: 0, twist: 0 };
+    this.randomPowerupAwards = { bomb: 0 };
     this.activeMode = null;
     this.interactionPhase = 0;
     this.selectionCache = null;
@@ -82,6 +83,9 @@ export class MinigameController {
     this.interactionPhase = 0;
     this.selectionCache = null;
     this.powerupCounts = clonePowerupCounts(snapshot?.powerupCounts, defaultPowerupCounts(this));
+    this.randomPowerupAwards = {
+      bomb: Math.max(0, Math.min(3, Math.trunc(Number(snapshot?.randomPowerupAwards?.bomb) || 0))),
+    };
     return this.statePayload();
   }
 
@@ -92,6 +96,7 @@ export class MinigameController {
     this.engine.setupNewRound();
     cancelPowerupInteraction(this, { clearAnimation: false });
     this.powerupCounts = defaultPowerupCounts(this);
+    this.randomPowerupAwards = { bomb: 0 };
     return this.statePayload();
   }
 
@@ -108,6 +113,7 @@ export class MinigameController {
     this.currentGameId = '';
     this.engine = null;
     this.powerupCounts = { bomb: 0, glove: 0, twist: 0 };
+    this.randomPowerupAwards = { bomb: 0 };
     this.activeMode = null;
     this.interactionPhase = 0;
     this.selectionCache = null;
@@ -198,6 +204,7 @@ export class MinigameController {
       runtime: this.runtime.exportSnapshot(),
       engine: this.engine.exportSnapshot(),
       powerupCounts: { ...this.powerupCounts },
+      randomPowerupAwards: { ...this.randomPowerupAwards },
     };
     return payload;
   }

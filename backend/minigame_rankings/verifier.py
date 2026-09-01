@@ -186,17 +186,29 @@ def _error_code(error: BaseException) -> str:
 def process_one_pending_run() -> bool:
     global _retry_after_monotonic
 
-    from .service import claim_pending, finish_rejected, finish_verified
+    from .service import (
+        claim_pending,
+        claim_pending_checkpoint,
+        finish_checkpoint_rejected,
+        finish_checkpoint_verified,
+        finish_rejected,
+        finish_verified,
+    )
 
     if time.monotonic() < _retry_after_monotonic:
         return False
-    run = claim_pending()
+    run = claim_pending_checkpoint()
+    is_checkpoint = run is not None
+    if run is None:
+        run = claim_pending()
     if run is None:
         return False
     try:
         result = verify_ranked_run(run)
-        finish_verified(
-            str(run["run_id"]),
+        finish = finish_checkpoint_verified if is_checkpoint else finish_verified
+        target_id = int(run["checkpoint_id"]) if is_checkpoint else str(run["run_id"])
+        finish(
+            target_id,
             score=int(result["score"]),
             trophy_tier=int(result["trophy_tier"]),
             highest_tile_exp=int(result["highest_tile_exp"]),
@@ -209,28 +221,51 @@ def process_one_pending_run() -> bool:
     except MinigameVerifierUnavailable:
         _retry_after_monotonic = time.monotonic() + VERIFY_RETRY_DELAY_SECONDS
         with auth_db() as db:
-            db.execute(
-                """
-                UPDATE minigame_ranked_runs
-                SET status = 'pending', validation_started_at = NULL
-                WHERE run_id = ? AND status = 'validating'
-                """,
-                (str(run["run_id"]),),
-            )
+            if is_checkpoint:
+                db.execute(
+                    """
+                    UPDATE minigame_ranked_checkpoints
+                    SET status = 'pending', validation_started_at = NULL
+                    WHERE id = ? AND status = 'validating'
+                    """,
+                    (int(run["checkpoint_id"]),),
+                )
+            else:
+                db.execute(
+                    """
+                    UPDATE minigame_ranked_runs
+                    SET status = 'pending', validation_started_at = NULL
+                    WHERE run_id = ? AND status = 'validating'
+                    """,
+                    (str(run["run_id"]),),
+                )
         return False
     except MinigameVerifierError as exc:
-        finish_rejected(str(run["run_id"]), _error_code(exc))
+        if is_checkpoint:
+            finish_checkpoint_rejected(int(run["checkpoint_id"]), _error_code(exc))
+        else:
+            finish_rejected(str(run["run_id"]), _error_code(exc))
     except Exception:
         _retry_after_monotonic = time.monotonic() + VERIFY_RETRY_DELAY_SECONDS
         with auth_db() as db:
-            db.execute(
-                """
-                UPDATE minigame_ranked_runs
-                SET status = 'pending', validation_started_at = NULL
-                WHERE run_id = ? AND status = 'validating'
-                """,
-                (str(run["run_id"]),),
-            )
+            if is_checkpoint:
+                db.execute(
+                    """
+                    UPDATE minigame_ranked_checkpoints
+                    SET status = 'pending', validation_started_at = NULL
+                    WHERE id = ? AND status = 'validating'
+                    """,
+                    (int(run["checkpoint_id"]),),
+                )
+            else:
+                db.execute(
+                    """
+                    UPDATE minigame_ranked_runs
+                    SET status = 'pending', validation_started_at = NULL
+                    WHERE run_id = ? AND status = 'validating'
+                    """,
+                    (str(run["run_id"]),),
+                )
         return False
     _retry_after_monotonic = 0.0
     return True
@@ -256,6 +291,14 @@ def cleanup_stale_ranked_runs() -> None:
             """,
             (cutoff,),
         )
+        db.execute(
+            """
+            DELETE FROM minigame_ranked_checkpoints
+            WHERE status IN ('verified', 'rejected', 'superseded')
+              AND COALESCE(completed_at, submitted_at) < ?
+            """,
+            (cutoff,),
+        )
 
 
 def prepare_validation_queue() -> None:
@@ -263,6 +306,13 @@ def prepare_validation_queue() -> None:
         db.execute(
             """
             UPDATE minigame_ranked_runs
+            SET status = 'pending', validation_started_at = NULL
+            WHERE status = 'validating'
+            """
+        )
+        db.execute(
+            """
+            UPDATE minigame_ranked_checkpoints
             SET status = 'pending', validation_started_at = NULL
             WHERE status = 'validating'
             """

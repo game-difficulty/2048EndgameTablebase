@@ -24,6 +24,8 @@ SUBMISSION_TOKEN_LIFETIME = timedelta(minutes=10)
 LEASE_LIFETIME = timedelta(seconds=60)
 MAX_PENDING_RECORD_BYTES = 256 * 1024
 MAX_PENDING_GLOBAL = 32
+MAX_PENDING_PER_USER = 4
+MAX_CHECKPOINTS_PER_RUN = 64
 MGO_RECORD_PREFIX = "MINIGAME_v1MGO_B64_"
 
 
@@ -228,6 +230,19 @@ def _public_run(
     if include_run_token:
         payload["run_token"] = _run_token_for(row)
     return payload
+
+
+def _public_checkpoint(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    return {
+        "checkpoint_id": int(row["id"]),
+        "run_id": str(row["run_id"]),
+        "revision": int(row["revision"]),
+        "status": str(row["status"]),
+        "action_count": int(row["action_count"] or 0),
+        "submitted_at": str(row["submitted_at"]),
+        "completed_at": row["completed_at"],
+        "error_code": row["error_code"],
+    }
 
 
 def _normalize_game(game_id: str, difficulty: int) -> tuple[str, int]:
@@ -631,6 +646,172 @@ def _top_100_cutoff(
     return None if row is None else int(row["best_score"])
 
 
+def submit_ranked_checkpoint(
+    *,
+    run_id: str,
+    user_id: int,
+    run_token: str,
+    lease_token: str,
+    revision: int,
+    score: int,
+    trophy_tier: int,
+    highest_tile_exp: int,
+    final_board: list[int],
+    board_rows: int,
+    board_cols: int,
+    action_count: int,
+    elapsed_ms: int,
+    record_encoding: str,
+    ip_address: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    normalized_revision = int(revision)
+    if normalized_revision < 1 or normalized_revision > MAX_CHECKPOINTS_PER_RUN:
+        raise ValueError("invalid_checkpoint_revision")
+    summary = _normalize_summary(
+        score=score,
+        trophy_tier=trophy_tier,
+        highest_tile_exp=highest_tile_exp,
+        final_board=final_board,
+        board_rows=board_rows,
+        board_cols=board_cols,
+        action_count=action_count,
+        elapsed_ms=elapsed_ms,
+    )
+    summary_json = json.dumps(summary, separators=(",", ":"), sort_keys=True)
+    envelope = parse_mgo1_envelope(record_encoding)
+    normalized_record = str(record_encoding).strip()
+    record_hash = hashlib.sha256(normalized_record.encode("utf-8")).hexdigest()
+    current = now or _utc_now()
+
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        run = db.execute(
+            "SELECT * FROM minigame_ranked_runs WHERE run_id = ?",
+            (str(run_id),),
+        ).fetchone()
+        if run is None:
+            raise LookupError("run_not_found")
+        if int(run["user_id"]) != int(user_id):
+            raise PermissionError("run_owner_mismatch")
+        if str(run["status"]) != "active":
+            raise ValueError("run_not_active")
+        token_payload = _verify_token(run_token, kind="run", now=current)
+        _assert_token_claims(token_payload, run)
+        if datetime.fromisoformat(str(run["expires_at"])) <= current:
+            raise RunTokenExpired("run_expired")
+        _assert_live_lease(run, lease_token, current)
+
+        if (
+            envelope.run_id != str(run["run_id"])
+            or envelope.game_id != str(run["game_id"])
+            or envelope.difficulty != int(run["difficulty"])
+            or envelope.rules_version != int(run["rules_version"])
+            or not hmac.compare_digest(envelope.seed_hex, str(run["seed_hex"]))
+            or envelope.action_count != summary["action_count"]
+            or envelope.elapsed_ms != summary["elapsed_ms"]
+        ):
+            raise ValueError("record_claim_mismatch")
+
+        duplicate = db.execute(
+            "SELECT * FROM minigame_ranked_checkpoints WHERE run_id = ? AND record_hash = ?",
+            (str(run_id), record_hash),
+        ).fetchone()
+        if duplicate is not None:
+            return _public_checkpoint(duplicate)
+        same_revision = db.execute(
+            "SELECT * FROM minigame_ranked_checkpoints WHERE run_id = ? AND revision = ?",
+            (str(run_id), normalized_revision),
+        ).fetchone()
+        if same_revision is not None:
+            raise ValueError("checkpoint_revision_conflict")
+        latest_revision = int(
+            db.execute(
+                "SELECT COALESCE(MAX(revision), 0) AS revision FROM minigame_ranked_checkpoints WHERE run_id = ?",
+                (str(run_id),),
+            ).fetchone()["revision"]
+        )
+        if normalized_revision != latest_revision + 1:
+            raise ValueError("checkpoint_revision_gap")
+
+        user_pending = int(
+            db.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM minigame_ranked_checkpoints AS checkpoint
+                JOIN minigame_ranked_runs AS parent ON parent.run_id = checkpoint.run_id
+                WHERE parent.user_id = ? AND checkpoint.status IN ('pending', 'validating')
+                """,
+                (int(user_id),),
+            ).fetchone()["count"]
+        )
+        global_pending = int(
+            db.execute(
+                """
+                SELECT
+                  (SELECT COUNT(*) FROM minigame_ranked_checkpoints WHERE status IN ('pending', 'validating'))
+                  + (SELECT COUNT(*) FROM minigame_ranked_runs WHERE status IN ('pending', 'validating'))
+                  AS count
+                """
+            ).fetchone()["count"]
+        )
+        if user_pending >= MAX_PENDING_PER_USER:
+            raise RuntimeError("user_pending_limit")
+        if global_pending >= MAX_PENDING_GLOBAL:
+            raise RuntimeError("queue_full")
+
+        # A newer cumulative checkpoint makes older queued copies redundant.
+        db.execute(
+            """
+            UPDATE minigame_ranked_checkpoints
+            SET status = 'superseded', pending_record = NULL, completed_at = ?
+            WHERE run_id = ? AND status = 'pending'
+            """,
+            (_iso(current), str(run_id)),
+        )
+        cursor = db.execute(
+            """
+            INSERT INTO minigame_ranked_checkpoints
+            (run_id, revision, status, claimed_summary_json, pending_record,
+             record_hash, action_count, submitted_at, submit_ip)
+            VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(run_id),
+                normalized_revision,
+                summary_json,
+                normalized_record,
+                record_hash,
+                summary["action_count"],
+                _iso(current),
+                str(ip_address or "")[:128],
+            ),
+        )
+        saved = db.execute(
+            "SELECT * FROM minigame_ranked_checkpoints WHERE id = ?",
+            (int(cursor.lastrowid),),
+        ).fetchone()
+    return _public_checkpoint(saved)
+
+
+def get_ranked_checkpoint(
+    *, run_id: str, revision: int, user_id: int
+) -> dict[str, Any]:
+    with auth_db() as db:
+        row = db.execute(
+            """
+            SELECT checkpoint.*
+            FROM minigame_ranked_checkpoints AS checkpoint
+            JOIN minigame_ranked_runs AS parent ON parent.run_id = checkpoint.run_id
+            WHERE checkpoint.run_id = ? AND checkpoint.revision = ? AND parent.user_id = ?
+            """,
+            (str(run_id), int(revision), int(user_id)),
+        ).fetchone()
+    if row is None:
+        raise LookupError("checkpoint_not_found")
+    return _public_checkpoint(row)
+
+
 def qualify_ranked_run(
     *,
     run_id: str,
@@ -920,6 +1101,154 @@ def get_ranked_run(*, run_id: str, user_id: int, now: datetime | None = None) ->
     return _public_run(row)
 
 
+def claim_pending_checkpoint() -> dict[str, Any] | None:
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        checkpoint = db.execute(
+            """
+            SELECT * FROM minigame_ranked_checkpoints
+            WHERE status = 'pending'
+            ORDER BY submitted_at ASC, id ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        if checkpoint is None:
+            return None
+        claimed_at = _iso(_utc_now())
+        changed = db.execute(
+            """
+            UPDATE minigame_ranked_checkpoints
+            SET status = 'validating', validation_started_at = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (claimed_at, int(checkpoint["id"])),
+        ).rowcount
+        if changed != 1:
+            return None
+        claimed = db.execute(
+            "SELECT * FROM minigame_ranked_checkpoints WHERE id = ?",
+            (int(checkpoint["id"]),),
+        ).fetchone()
+        run = db.execute(
+            "SELECT * FROM minigame_ranked_runs WHERE run_id = ?",
+            (str(claimed["run_id"]),),
+        ).fetchone()
+        if run is None:
+            db.execute(
+                "UPDATE minigame_ranked_checkpoints SET status = 'rejected', error_code = 'run_not_found' WHERE id = ?",
+                (int(claimed["id"]),),
+            )
+            return None
+    payload = dict(run)
+    payload.update({
+        "checkpoint_id": int(claimed["id"]),
+        "revision": int(claimed["revision"]),
+        "pending_record": str(claimed["pending_record"] or ""),
+        "record_hash": str(claimed["record_hash"] or ""),
+        "claimed_summary": json.loads(str(claimed["claimed_summary_json"] or "{}")),
+    })
+    return payload
+
+
+def finish_checkpoint_rejected(checkpoint_id: int, error_code: str) -> dict[str, Any]:
+    now = _iso(_utc_now())
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT * FROM minigame_ranked_checkpoints WHERE id = ?",
+            (int(checkpoint_id),),
+        ).fetchone()
+        if row is None:
+            raise LookupError("checkpoint_not_found")
+        if str(row["status"]) == "rejected":
+            return _public_checkpoint(row)
+        if str(row["status"]) != "validating":
+            raise ValueError("checkpoint_not_validating")
+        db.execute(
+            """
+            UPDATE minigame_ranked_checkpoints
+            SET status = 'rejected', error_code = ?, completed_at = ?, pending_record = NULL
+            WHERE id = ? AND status = 'validating'
+            """,
+            (str(error_code or "validation_failed")[:64], now, int(checkpoint_id)),
+        )
+        saved = db.execute(
+            "SELECT * FROM minigame_ranked_checkpoints WHERE id = ?",
+            (int(checkpoint_id),),
+        ).fetchone()
+    return _public_checkpoint(saved)
+
+
+def finish_checkpoint_verified(
+    checkpoint_id: int,
+    *,
+    score: int,
+    trophy_tier: int,
+    highest_tile_exp: int,
+    final_board: list[int],
+    board_rows: int,
+    board_cols: int,
+    action_count: int,
+    elapsed_ms: int,
+) -> dict[str, Any]:
+    verified = _normalize_summary(
+        score=score,
+        trophy_tier=trophy_tier,
+        highest_tile_exp=highest_tile_exp,
+        final_board=final_board,
+        board_rows=board_rows,
+        board_cols=board_cols,
+        action_count=action_count,
+        elapsed_ms=elapsed_ms,
+    )
+    now = _iso(_utc_now())
+    verified_json = json.dumps(verified, sort_keys=True, separators=(",", ":"))
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        checkpoint = db.execute(
+            "SELECT * FROM minigame_ranked_checkpoints WHERE id = ?",
+            (int(checkpoint_id),),
+        ).fetchone()
+        if checkpoint is None:
+            raise LookupError("checkpoint_not_found")
+        if str(checkpoint["status"]) == "verified":
+            return _public_checkpoint(checkpoint)
+        if str(checkpoint["status"]) != "validating":
+            raise ValueError("checkpoint_not_validating")
+        run = db.execute(
+            "SELECT * FROM minigame_ranked_runs WHERE run_id = ?",
+            (str(checkpoint["run_id"]),),
+        ).fetchone()
+        if run is None:
+            raise LookupError("run_not_found")
+        score_updated, trophy_updated = _apply_verified_result(
+            db,
+            run=run,
+            verified=verified,
+            record_hash=str(checkpoint["record_hash"] or ""),
+            record_blob=str(checkpoint["pending_record"] or ""),
+            verified_at=now,
+        )
+        db.execute(
+            """
+            UPDATE minigame_ranked_checkpoints
+            SET status = 'verified', completed_at = ?, verified_summary_json = ?,
+                pending_record = NULL, error_code = NULL
+            WHERE id = ? AND status = 'validating'
+            """,
+            (now, verified_json, int(checkpoint_id)),
+        )
+        saved = db.execute(
+            "SELECT * FROM minigame_ranked_checkpoints WHERE id = ?",
+            (int(checkpoint_id),),
+        ).fetchone()
+    return {
+        **_public_checkpoint(saved),
+        "score_updated": score_updated,
+        "trophy_updated": trophy_updated,
+    }
+
+
 def claim_pending() -> dict[str, Any] | None:
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
@@ -983,6 +1312,104 @@ def finish_rejected(run_id: str, error_code: str) -> dict[str, Any]:
     return _public_run(saved)
 
 
+def _apply_verified_result(
+    db: sqlite3.Connection,
+    *,
+    run: sqlite3.Row | dict[str, Any],
+    verified: dict[str, Any],
+    record_hash: str,
+    record_blob: str,
+    verified_at: str,
+) -> tuple[bool, bool]:
+    board_json = json.dumps(verified["final_board"], separators=(",", ":"))
+    existing = db.execute(
+        """
+        SELECT best_score, trophy_tier, verification_level
+        FROM minigame_high_scores
+        WHERE user_id = ? AND game_id = ? AND difficulty = ?
+        """,
+        (int(run["user_id"]), str(run["game_id"]), int(run["difficulty"])),
+    ).fetchone()
+    existing_is_verified = (
+        existing is not None and str(existing["verification_level"]) == "verified"
+    )
+    score_updated = (
+        not existing_is_verified or verified["score"] > int(existing["best_score"])
+    )
+    trophy_updated = (
+        verified["trophy_tier"] > 0
+        and (
+            not existing_is_verified
+            or verified["trophy_tier"] > int(existing["trophy_tier"])
+        )
+    )
+
+    if existing is None:
+        db.execute(
+            """
+            INSERT INTO minigame_high_scores
+            (user_id, game_id, difficulty, best_score, trophy_tier,
+             highest_tile_exp, final_board_json, board_rows, board_cols,
+             score_achieved_at, trophy_achieved_at, score_run_id, trophy_run_id,
+             verification_level, score_verified_at, trophy_verified_at,
+             record_hash, record_blob, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified', ?, ?, ?, ?, ?)
+            """,
+            (
+                int(run["user_id"]), str(run["game_id"]), int(run["difficulty"]),
+                verified["score"], verified["trophy_tier"], verified["highest_tile_exp"],
+                board_json, verified["board_rows"], verified["board_cols"], verified_at,
+                verified_at if verified["trophy_tier"] > 0 else None,
+                str(run["run_id"]), str(run["run_id"]) if verified["trophy_tier"] > 0 else None,
+                verified_at, verified_at if verified["trophy_tier"] > 0 else None,
+                str(record_hash or ""), str(record_blob or ""), verified_at,
+            ),
+        )
+    elif score_updated or trophy_updated:
+        db.execute(
+            """
+            UPDATE minigame_high_scores
+            SET best_score = CASE WHEN ? THEN ? ELSE best_score END,
+                highest_tile_exp = CASE WHEN ? THEN ? ELSE highest_tile_exp END,
+                final_board_json = CASE WHEN ? THEN ? ELSE final_board_json END,
+                board_rows = CASE WHEN ? THEN ? ELSE board_rows END,
+                board_cols = CASE WHEN ? THEN ? ELSE board_cols END,
+                score_achieved_at = CASE WHEN ? THEN ? ELSE score_achieved_at END,
+                score_run_id = CASE WHEN ? THEN ? ELSE score_run_id END,
+                verification_level = CASE WHEN ? THEN 'verified' ELSE verification_level END,
+                score_verified_at = CASE WHEN ? THEN ? ELSE score_verified_at END,
+                record_hash = CASE WHEN ? THEN ? ELSE record_hash END,
+                record_blob = CASE WHEN ? THEN ? ELSE record_blob END,
+                trophy_tier = CASE WHEN ? THEN ? ELSE trophy_tier END,
+                trophy_achieved_at = CASE WHEN ? THEN ? ELSE trophy_achieved_at END,
+                trophy_run_id = CASE WHEN ? THEN ? ELSE trophy_run_id END,
+                trophy_verified_at = CASE WHEN ? THEN ? ELSE trophy_verified_at END,
+                updated_at = ?
+            WHERE user_id = ? AND game_id = ? AND difficulty = ?
+            """,
+            (
+                score_updated, verified["score"],
+                score_updated, verified["highest_tile_exp"],
+                score_updated, board_json,
+                score_updated, verified["board_rows"],
+                score_updated, verified["board_cols"],
+                score_updated, verified_at,
+                score_updated, str(run["run_id"]),
+                score_updated,
+                score_updated, verified_at,
+                score_updated, str(record_hash or ""),
+                score_updated, str(record_blob or ""),
+                trophy_updated, verified["trophy_tier"],
+                trophy_updated, verified_at,
+                trophy_updated, str(run["run_id"]),
+                trophy_updated, verified_at,
+                verified_at,
+                int(run["user_id"]), str(run["game_id"]), int(run["difficulty"]),
+            ),
+        )
+    return bool(score_updated), bool(trophy_updated)
+
+
 def finish_verified(
     run_id: str,
     *,
@@ -1006,7 +1433,6 @@ def finish_verified(
         elapsed_ms=elapsed_ms,
     )
     now = _iso(_utc_now())
-    board_json = json.dumps(verified["final_board"], separators=(",", ":"))
     verified_json = json.dumps(verified, sort_keys=True, separators=(",", ":"))
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
@@ -1021,104 +1447,14 @@ def finish_verified(
         if str(run["status"]) != "validating":
             raise ValueError("run_not_validating")
 
-        existing = db.execute(
-            """
-            SELECT best_score, trophy_tier, verification_level
-            FROM minigame_high_scores
-            WHERE user_id = ? AND game_id = ? AND difficulty = ?
-            """,
-            (int(run["user_id"]), str(run["game_id"]), int(run["difficulty"])),
-        ).fetchone()
-        existing_is_verified = (
-            existing is not None
-            and str(existing["verification_level"]) == "verified"
+        score_updated, trophy_updated = _apply_verified_result(
+            db,
+            run=run,
+            verified=verified,
+            record_hash=str(run["record_hash"] or ""),
+            record_blob=str(run["pending_record"] or ""),
+            verified_at=now,
         )
-        score_updated = (
-            not existing_is_verified
-            or verified["score"] > int(existing["best_score"])
-        )
-        trophy_updated = (
-            verified["trophy_tier"] > 0
-            and (
-                not existing_is_verified
-                or verified["trophy_tier"] > int(existing["trophy_tier"])
-            )
-        )
-
-        if existing is None:
-            db.execute(
-                """
-                INSERT INTO minigame_high_scores
-                (user_id, game_id, difficulty, best_score, trophy_tier,
-                 highest_tile_exp, final_board_json, board_rows, board_cols,
-                 score_achieved_at, trophy_achieved_at, score_run_id, trophy_run_id,
-                 verification_level, score_verified_at, trophy_verified_at,
-                 record_hash, record_blob, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified', ?, ?, ?, ?, ?)
-                """,
-                (
-                    int(run["user_id"]),
-                    str(run["game_id"]),
-                    int(run["difficulty"]),
-                    verified["score"],
-                    verified["trophy_tier"],
-                    verified["highest_tile_exp"],
-                    board_json,
-                    verified["board_rows"],
-                    verified["board_cols"],
-                    now,
-                    now if verified["trophy_tier"] > 0 else None,
-                    str(run_id),
-                    str(run_id) if verified["trophy_tier"] > 0 else None,
-                    now,
-                    now if verified["trophy_tier"] > 0 else None,
-                    str(run["record_hash"] or ""),
-                    str(run["pending_record"] or ""),
-                    now,
-                ),
-            )
-        elif score_updated or trophy_updated:
-            db.execute(
-                """
-                UPDATE minigame_high_scores
-                SET best_score = CASE WHEN ? THEN ? ELSE best_score END,
-                    highest_tile_exp = CASE WHEN ? THEN ? ELSE highest_tile_exp END,
-                    final_board_json = CASE WHEN ? THEN ? ELSE final_board_json END,
-                    board_rows = CASE WHEN ? THEN ? ELSE board_rows END,
-                    board_cols = CASE WHEN ? THEN ? ELSE board_cols END,
-                    score_achieved_at = CASE WHEN ? THEN ? ELSE score_achieved_at END,
-                    score_run_id = CASE WHEN ? THEN ? ELSE score_run_id END,
-                    verification_level = CASE WHEN ? THEN 'verified' ELSE verification_level END,
-                    score_verified_at = CASE WHEN ? THEN ? ELSE score_verified_at END,
-                    record_hash = CASE WHEN ? THEN ? ELSE record_hash END,
-                    record_blob = CASE WHEN ? THEN ? ELSE record_blob END,
-                    trophy_tier = CASE WHEN ? THEN ? ELSE trophy_tier END,
-                    trophy_achieved_at = CASE WHEN ? THEN ? ELSE trophy_achieved_at END,
-                    trophy_run_id = CASE WHEN ? THEN ? ELSE trophy_run_id END,
-                    trophy_verified_at = CASE WHEN ? THEN ? ELSE trophy_verified_at END,
-                    updated_at = ?
-                WHERE user_id = ? AND game_id = ? AND difficulty = ?
-                """,
-                (
-                    score_updated, verified["score"],
-                    score_updated, verified["highest_tile_exp"],
-                    score_updated, board_json,
-                    score_updated, verified["board_rows"],
-                    score_updated, verified["board_cols"],
-                    score_updated, now,
-                    score_updated, str(run_id),
-                    score_updated,
-                    score_updated, now,
-                    score_updated, str(run["record_hash"] or ""),
-                    score_updated, str(run["pending_record"] or ""),
-                    trophy_updated, verified["trophy_tier"],
-                    trophy_updated, now,
-                    trophy_updated, str(run_id),
-                    trophy_updated, now,
-                    now,
-                    int(run["user_id"]), str(run["game_id"]), int(run["difficulty"]),
-                ),
-            )
 
         db.execute(
             """
@@ -1386,14 +1722,19 @@ __all__ = [
     "RunTokenError",
     "RunTokenExpired",
     "claim_pending",
+    "claim_pending_checkpoint",
     "create_ranked_run",
+    "finish_checkpoint_rejected",
+    "finish_checkpoint_verified",
     "finish_rejected",
     "finish_verified",
     "game_leaderboard",
     "get_ranked_run",
+    "get_ranked_checkpoint",
     "minigame_catalog",
     "qualify_ranked_run",
     "submit_score",
     "submit_ranked_run",
+    "submit_ranked_checkpoint",
     "trophy_leaderboard",
 ]

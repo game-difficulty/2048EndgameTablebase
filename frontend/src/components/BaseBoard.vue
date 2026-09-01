@@ -2,9 +2,11 @@
   <div
     ref="boardRef"
     :class="['board relative bg-board-bg rounded-xl aspect-square w-full max-w-[600px] mx-auto touch-none', { 'board-compact': compact }]"
+    @pointerdown.prevent="handleBoardPointerDown"
     @pointermove="handleBoardPointerMove"
     @pointerup="handleBoardPointerUp"
     @pointercancel="clearTouchGesture"
+    @contextmenu.prevent
   >
     
     <!-- Grid Cells (Background) -->
@@ -13,9 +15,8 @@
         v-for="i in 16" 
         :key="`bg-${i}`" 
         class="bg-cell pointer-events-auto"
+        :data-board-cell-index="i - 1"
         :style="getBackgroundCellStyle(i - 1)"
-        @pointerdown.prevent="handleBackgroundPointerDown(i - 1, $event)"
-        @contextmenu.prevent
       ></div>
     </div>
 
@@ -52,6 +53,7 @@ import {
   boardFrameRenderMode,
   cloneBoard,
 } from './boardFrame.js';
+import { boardSwipeDirection } from './boardPointerGesture.js';
 
 const emit = defineEmits(['cell-click', 'swipe']);
 
@@ -85,7 +87,6 @@ let lastConsumedFrameRevision = null;
 let settledBoard = cloneBoard(props.frame?.toBoard);
 const MERGE_GLOW_MIN_VALUE = 2048;
 const MERGE_GLOW_STEPS = 5;
-const SWIPE_THRESHOLD_PX = 28;
 let touchGesture = null;
 
 function isVariantWallValue(value) {
@@ -111,23 +112,19 @@ const clearTouchGesture = () => {
   touchGesture = null;
 };
 
-const getSwipeDirection = (dx, dy) => {
-  const absX = Math.abs(dx);
-  const absY = Math.abs(dy);
-  if (Math.max(absX, absY) < SWIPE_THRESHOLD_PX) {
-    return null;
-  }
-  if (absX >= absY) {
-    return dx >= 0 ? 'right' : 'left';
-  }
-  return dy >= 0 ? 'down' : 'up';
+const eventCellIndex = (event) => {
+  const cell = event.target?.closest?.('[data-board-cell-index]');
+  if (!cell || !boardRef.value?.contains(cell)) return null;
+  const index = Number(cell.dataset.boardCellIndex);
+  return Number.isInteger(index) && index >= 0 && index < 16 ? index : null;
 };
 
-const handleBackgroundPointerDown = (index, event) => {
-  const row = Math.floor(index / 4);
-  const col = index % 4;
+const handleBoardPointerDown = (event) => {
+  const index = eventCellIndex(event);
   if (event.pointerType === 'mouse') {
-    emit('cell-click', row, col, event.button);
+    if (index != null) {
+      emit('cell-click', Math.floor(index / 4), index % 4, event.button);
+    }
     return;
   }
 
@@ -137,8 +134,7 @@ const handleBackgroundPointerDown = (index, event) => {
     startY: event.clientY,
     lastX: event.clientX,
     lastY: event.clientY,
-    row,
-    col,
+    cellIndex: index,
     button: event.button,
   };
 
@@ -168,8 +164,10 @@ const handleBoardPointerUp = (event) => {
   touchGesture.lastY = event.clientY;
   const dx = touchGesture.lastX - touchGesture.startX;
   const dy = touchGesture.lastY - touchGesture.startY;
-  const direction = getSwipeDirection(dx, dy);
-  const { row, col, button } = touchGesture;
+  const boardBounds = boardRef.value?.getBoundingClientRect?.();
+  const displaySize = Math.min(Number(boardBounds?.width) || 0, Number(boardBounds?.height) || 0);
+  const direction = boardSwipeDirection(dx, dy, displaySize);
+  const { cellIndex, button } = touchGesture;
   clearTouchGesture();
 
   if (direction) {
@@ -177,7 +175,9 @@ const handleBoardPointerUp = (event) => {
     return;
   }
 
-  emit('cell-click', row, col, button);
+  if (cellIndex != null) {
+    emit('cell-click', Math.floor(cellIndex / 4), cellIndex % 4, button);
+  }
 };
 
 const decayGlowSteps = (tile) => {

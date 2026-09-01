@@ -88,6 +88,15 @@ export const submitMinigameRankedRun = (runId, payload) => rankedRequest(
   { method: 'POST', body: payload }
 );
 
+export const submitMinigameRankedCheckpoint = (runId, payload) => rankedRequest(
+  `/api/minigame-rankings/runs/${encodeURIComponent(runId)}/checkpoints`,
+  { method: 'POST', body: payload }
+);
+
+export const fetchMinigameRankedCheckpoint = (runId, revision) => rankedRequest(
+  `/api/minigame-rankings/runs/${encodeURIComponent(runId)}/checkpoints/${encodeURIComponent(revision)}`
+);
+
 export const fetchMinigameRankedRun = (runId) => rankedRequest(
   `/api/minigame-rankings/runs/${encodeURIComponent(runId)}`
 );

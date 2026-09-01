@@ -8,6 +8,10 @@ import { MinigameRankedRecorder } from '../src/features/minigames/engine/rankedR
 import { replayMgo1 } from '../src/features/minigames/engine/rankedReplay.js';
 import { encodeMgo1, MGO1_END_REASON } from '../src/features/minigames/protocol/index.js';
 import { flattenBoard } from '../src/features/minigames/engine/utils.js';
+import {
+  MAX_RANDOM_BOMB_AWARDS,
+  maybeAwardRandomPowerup,
+} from '../src/features/minigames/engine/powerups.js';
 
 const SEED = '0123456789abcdeffedcba9876543210';
 const CLOCK = { now: () => 1_000_000 };
@@ -55,6 +59,38 @@ test('runtime state survives a snapshot roundtrip', async () => {
   const nextFirst = await first.move('down');
   const nextRestored = await restored.move('down');
   assert.deepEqual(comparableState(nextFirst), comparableState(nextRestored));
+});
+
+test('a game can receive at most three random bomb awards', () => {
+  const state = {
+    difficulty: 0,
+    powerupCounts: { bomb: 0, glove: 0, twist: 0 },
+    randomPowerupAwards: { bomb: 0 },
+    engine: {
+      runtime: {
+        random: () => 0,
+        randomIndex: () => 0,
+      },
+    },
+  };
+
+  for (let index = 0; index < MAX_RANDOM_BOMB_AWARDS; index += 1) {
+    assert.equal(maybeAwardRandomPowerup(state, 300), 'bomb');
+  }
+  assert.equal(maybeAwardRandomPowerup(state, 300), null);
+  assert.equal(state.powerupCounts.bomb, MAX_RANDOM_BOMB_AWARDS);
+  assert.equal(state.randomPowerupAwards.bomb, MAX_RANDOM_BOMB_AWARDS);
+});
+
+test('random bomb award count survives a snapshot roundtrip', async () => {
+  const first = new MinigameController({ difficulty: 1, runtime: makeRuntime() });
+  await first.startGame('column-chaos');
+  first.randomPowerupAwards.bomb = 2;
+
+  const restored = new MinigameController({ difficulty: 1, runtime: makeRuntime() });
+  await restored.startGame('column-chaos', first.statePayload().snapshot);
+
+  assert.equal(restored.randomPowerupAwards.bomb, 2);
 });
 
 test('all registered minigames continue deterministically after refresh', async () => {

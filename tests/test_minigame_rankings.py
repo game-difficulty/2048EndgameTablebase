@@ -23,14 +23,17 @@ from backend.minigame_rankings.service import (
     abandon_ranked_run,
     claim_ranked_run,
     claim_pending,
+    claim_pending_checkpoint,
     create_ranked_run,
     finish_rejected,
+    finish_checkpoint_verified,
     finish_verified,
     get_ranked_run,
     game_leaderboard,
     heartbeat_ranked_run,
     qualify_ranked_run,
     submit_ranked_run,
+    submit_ranked_checkpoint,
     submit_score,
     trophy_leaderboard,
 )
@@ -307,6 +310,95 @@ class MinigameRankingTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(row["seed_salt_hex"], fixed_salt)
         self.assertEqual(row["start_ip"], "203.0.113.10")
+
+    def test_death_checkpoints_keep_parent_run_active_and_update_one_pb_row(self) -> None:
+        user_id = self._add_user("checkpoint@example.com", "Checkpoint")
+        run = self._run(user_id, "checkpoint-run")
+        first_summary = self._summary(score=1_000, trophy=1)
+        first_record = self._record(run, first_summary)
+        first = submit_ranked_checkpoint(
+            run_id=run["run_id"],
+            user_id=user_id,
+            run_token=run["run_token"],
+            lease_token=run["lease_token"],
+            revision=1,
+            record_encoding=first_record,
+            ip_address="203.0.113.10",
+            **first_summary,
+        )
+        duplicate = submit_ranked_checkpoint(
+            run_id=run["run_id"],
+            user_id=user_id,
+            run_token=run["run_token"],
+            lease_token=run["lease_token"],
+            revision=1,
+            record_encoding=first_record,
+            ip_address="203.0.113.10",
+            **first_summary,
+        )
+        self.assertEqual(first["checkpoint_id"], duplicate["checkpoint_id"])
+
+        claimed = claim_pending_checkpoint()
+        self.assertEqual(claimed["checkpoint_id"], first["checkpoint_id"])
+        finish_checkpoint_verified(claimed["checkpoint_id"], **first_summary)
+        self.assertEqual(get_ranked_run(run_id=run["run_id"], user_id=user_id)["status"], "active")
+
+        second_summary = self._summary(score=1_500, trophy=2)
+        second_summary["action_count"] = 121
+        second_record = self._record(run, second_summary)
+        second = submit_ranked_checkpoint(
+            run_id=run["run_id"],
+            user_id=user_id,
+            run_token=run["run_token"],
+            lease_token=run["lease_token"],
+            revision=2,
+            record_encoding=second_record,
+            ip_address="203.0.113.10",
+            **second_summary,
+        )
+        claimed = claim_pending_checkpoint()
+        self.assertEqual(claimed["checkpoint_id"], second["checkpoint_id"])
+        finish_checkpoint_verified(claimed["checkpoint_id"], **second_summary)
+
+        with auth_db() as db:
+            rows = db.execute(
+                "SELECT best_score, trophy_tier, score_run_id, trophy_run_id FROM minigame_high_scores"
+            ).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(int(rows[0]["best_score"]), 1_500)
+        self.assertEqual(int(rows[0]["trophy_tier"]), 2)
+        self.assertEqual(rows[0]["score_run_id"], run["run_id"])
+        self.assertEqual(rows[0]["trophy_run_id"], run["run_id"])
+
+    def test_checkpoint_verifier_queue_does_not_close_the_parent_run(self) -> None:
+        user_id = self._add_user("checkpoint-worker@example.com", "Checkpoint Worker")
+        run = self._run(user_id, "checkpoint-worker-run")
+        summary = self._summary(score=2_000, trophy=3)
+        checkpoint = submit_ranked_checkpoint(
+            run_id=run["run_id"],
+            user_id=user_id,
+            run_token=run["run_token"],
+            lease_token=run["lease_token"],
+            revision=1,
+            record_encoding=self._record(run, summary),
+            ip_address="203.0.113.10",
+            **summary,
+        )
+        with patch.object(minigame_verifier, "verify_ranked_run", return_value=summary):
+            self.assertTrue(minigame_verifier.process_one_pending_run())
+        with auth_db() as db:
+            saved_checkpoint = db.execute(
+                "SELECT status, pending_record FROM minigame_ranked_checkpoints WHERE id = ?",
+                (checkpoint["checkpoint_id"],),
+            ).fetchone()
+            saved_run = db.execute(
+                "SELECT status, lease_token_hash FROM minigame_ranked_runs WHERE run_id = ?",
+                (run["run_id"],),
+            ).fetchone()
+        self.assertEqual(saved_checkpoint["status"], "verified")
+        self.assertIsNone(saved_checkpoint["pending_record"])
+        self.assertEqual(saved_run["status"], "active")
+        self.assertTrue(saved_run["lease_token_hash"])
 
     def test_active_run_is_exclusive_and_explicit_replacement_requires_lease(self) -> None:
         user_id = self._add_user("exclusive@example.com", "Exclusive")

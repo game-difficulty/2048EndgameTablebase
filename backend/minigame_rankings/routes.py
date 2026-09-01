@@ -17,11 +17,13 @@ from .service import (
     claim_ranked_run,
     create_ranked_run,
     game_leaderboard,
+    get_ranked_checkpoint,
     get_ranked_run,
     heartbeat_ranked_run,
     minigame_catalog,
     qualify_ranked_run,
     submit_ranked_run,
+    submit_ranked_checkpoint,
     trophy_leaderboard,
 )
 
@@ -74,6 +76,21 @@ class QualifyRankedRunRequest(BaseModel):
 class SubmitRankedRunRequest(BaseModel):
     submission_token: str = Field(min_length=16, max_length=2048)
     lease_token: str = Field(min_length=16, max_length=256)
+    record_encoding: str = Field(min_length=1, max_length=400_000)
+
+
+class SubmitRankedCheckpointRequest(BaseModel):
+    run_token: str = Field(min_length=16, max_length=2048)
+    lease_token: str = Field(min_length=16, max_length=256)
+    revision: int = Field(ge=1, le=64)
+    score: int = Field(ge=0, le=2**63 - 1)
+    trophy_tier: int = Field(ge=0, le=4)
+    highest_tile_exp: int = Field(ge=0, le=63)
+    final_board: list[int] = Field(min_length=1, max_length=64)
+    board_rows: int = Field(ge=1, le=8)
+    board_cols: int = Field(ge=1, le=8)
+    action_count: int = Field(ge=0, le=50_000)
+    elapsed_ms: int = Field(ge=0, le=7 * 24 * 60 * 60 * 1000)
     record_encoding: str = Field(min_length=1, max_length=400_000)
 
 
@@ -296,6 +313,58 @@ def submit_run(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _no_store(response)
+    return result
+
+
+@router.post("/runs/{run_id}/checkpoints", status_code=202)
+def submit_checkpoint(
+    run_id: str,
+    payload: SubmitRankedCheckpointRequest,
+    request: Request,
+    response: Response,
+):
+    user = require_user(request)
+    _check_submit_rate(int(user["id"]), client_ip(request))
+    try:
+        result = submit_ranked_checkpoint(
+            run_id=run_id,
+            user_id=int(user["id"]),
+            ip_address=client_ip(request),
+            **payload.model_dump(),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Ranked run not found.") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RunTokenExpired as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    except RunTokenError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _no_store(response)
+    return result
+
+
+@router.get("/runs/{run_id}/checkpoints/{revision}")
+def get_checkpoint(
+    run_id: str,
+    revision: int,
+    request: Request,
+    response: Response,
+):
+    user = require_user(request)
+    try:
+        result = get_ranked_checkpoint(
+            run_id=run_id,
+            revision=revision,
+            user_id=int(user["id"]),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Ranked checkpoint not found.") from exc
     _no_store(response)
     return result
 

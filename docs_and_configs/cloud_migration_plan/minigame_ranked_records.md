@@ -1,6 +1,6 @@
 # 小游戏排位记录与验证
 
-更新时间：2026-08-27
+更新时间：2026-09-01
 
 本文描述 `src - cloud` 中小游戏排位记录 v1。目标是在不逐步联网、不保存全部普通对局的前提下，对可能刷新个人纪录或榜单的成绩进行可复算验证。
 
@@ -10,10 +10,10 @@
 2. 服务端创建一次性 `run_id`，绑定 `user_id`、小游戏、难度、开始时间和开始 IP。
 3. 服务端生成 128 位随机 salt，并用服务端密钥执行 HMAC，派生 128 位 xoshiro 种子。
 4. 浏览器使用该种子运行纯前端小游戏，同时只记录语义操作，不记录每帧或完整棋盘。
-5. 游戏自然结束后，浏览器先提交分数、奖杯、终盘和动作摘要到 `qualify`。
-6. 服务端只在成绩可能刷新已验证个人 PB、奖杯纪录或 TOP100 时签发一次性提交 token。
-7. 浏览器编码并上传 MGO1 操作流。服务端先做廉价结构校验，再进入单 worker 重放队列。
-8. Node 重放器使用同一 JS 规则和 RNG 从头复算。结果一致时更新 PB；否则拒绝。
+5. 棋盘暂时无路可走时，浏览器从当前累计操作流生成只读检查点，在编码副本末尾追加 `END` 后上传；活跃记录本身不封口。
+6. 玩家使用 Powerup 复活后继续在同一 `run_id` 和同一操作流中追加操作；再次死亡时上传递增 revision 的累计检查点。
+7. 服务端按 `(run_id, revision)` 接收检查点，并按 `(run_id, record_hash)` 幂等去重。较新的累计检查点会替代尚未验证的旧排队副本。
+8. Node 重放器使用同一 JS 规则和 RNG 从头复算。结果一致时更新同一条个人 PB/奖杯记录；否则只拒绝该 revision，不结束父 run。
 
 匿名用户、旧 localStorage 对局、run 创建失败的对局仍可正常游玩，但不参与排名。
 
@@ -73,6 +73,8 @@ crc32             4 bytes   little-endian
 
 ```text
 POST /api/minigame-rankings/runs
+POST /api/minigame-rankings/runs/{run_id}/checkpoints
+GET  /api/minigame-rankings/runs/{run_id}/checkpoints/{revision}
 POST /api/minigame-rankings/runs/{run_id}/qualify
 POST /api/minigame-rankings/runs/{run_id}/submit
 GET  /api/minigame-rankings/runs/{run_id}
@@ -80,11 +82,13 @@ GET  /api/minigame-rankings/runs/{run_id}
 
 旧的 `POST /api/minigame-rankings/scores` 返回 410，不再接受浏览器直接声明的成绩。
 
-run token 和 submission token 都由 HMAC 签名。submission token 绑定终局摘要、有效期 10 分钟且只能消费一次。重复网络请求只有在 record hash 相同时才按幂等处理。
+新前端使用 run token + 当前租约直接提交检查点。旧版 `qualify/submit` 两段式接口暂时保留兼容；重复网络请求只有在 record hash 相同时才按幂等处理。
 
 ## 数据库存储
 
-`minigame_ranked_runs` 保存短期 run 状态、salt、seed、声明摘要和待验证记录。单用户最多一个 pending/validating，全局最多 32 个。
+`minigame_ranked_runs` 保存整局的身份、salt、seed 和租约，Powerup 复活期间始终保持 active。
+
+`minigame_ranked_checkpoints` 保存各次死亡/退出检查点。每局最多 64 个 revision，同一用户最多 4 个 pending/validating，全局新旧队列合计最多 32 个。
 
 `minigame_high_scores` 仍以 `(user_id, game_id, difficulty)` 为主键，只保留每用户每榜一行。只有刷新分数 PB 时保存已验证紧凑记录；低分候选验证后立即清除上传内容。
 
@@ -94,9 +98,9 @@ run token 和 submission token 都由 HMAC 签名。submission token 绑定终�
 
 ## 成本与故障边界
 
-- `qualify` 只做 SQLite 查询和整数比较，不上传记录。
-- `submit` 先在 Python 校验 Base64、大小、CRC、header、run/seed、动作数、时长和 END。
-- 只有通过预筛的候选进入单个常驻 Node verifier，避免并发占满 CPU。
+- `checkpoints` 先在 Python 校验 Base64、大小、CRC、header、run/seed、动作数、时长和 END。
+- 同一 run 的新累计检查点会把仍处于 pending 的旧检查点标记为 superseded，避免重复重放占用 CPU。
+- 合法检查点进入单个常驻 Node verifier，避免并发占满 CPU。
 - Node 不可用或协议响应损坏时任务退回队列，并有 30 秒进程级退避；不把基础设施故障记为作弊。
 - 明确的规则重放不一致才标记 `rejected`。
 - verifier stderr 丢弃，不写逐步日志，避免磁盘增长。

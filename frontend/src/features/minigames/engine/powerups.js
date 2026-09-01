@@ -1,5 +1,7 @@
 import { flattenBoard, POWERUP_KEYS } from './utils.js';
 
+export const MAX_RANDOM_BOMB_AWARDS = 3;
+
 export function defaultPowerupCounts(state) {
   if (state.engine?.legacyName === 'Blitzkrieg') {
     return { bomb: 10, glove: 10, twist: 10 };
@@ -321,6 +323,16 @@ export function maybeAwardRandomPowerup(state, scoreDelta) {
   const awarded = POWERUP_KEYS[
     runtime?.randomIndex?.(POWERUP_KEYS.length) ?? Math.floor(Math.random() * POWERUP_KEYS.length)
   ];
+  if (awarded === 'bomb') {
+    const awardedBombs = Math.max(0, Number(state.randomPowerupAwards?.bomb || 0));
+    if (awardedBombs >= MAX_RANDOM_BOMB_AWARDS) {
+      return null;
+    }
+    state.randomPowerupAwards = {
+      ...(state.randomPowerupAwards || {}),
+      bomb: awardedBombs + 1,
+    };
+  }
   state.powerupCounts[awarded] = Number(state.powerupCounts?.[awarded] || 0) + 1;
   return awarded;
 }

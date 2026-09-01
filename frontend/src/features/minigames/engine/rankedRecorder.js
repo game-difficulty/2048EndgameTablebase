@@ -39,6 +39,7 @@ export class MinigameRankedRecorder {
     startedAtMs = Date.now(),
     lastActionAtMs = null,
     mutableActionCount = 0,
+    checkpointRevision = 0,
     ended = false,
   }) {
     this.runId = String(runId || '');
@@ -56,6 +57,7 @@ export class MinigameRankedRecorder {
       ? this.startedAtMs
       : Math.max(0, Math.trunc(Number(lastActionAtMs) || this.startedAtMs));
     this.mutableActionCount = Math.max(0, Math.trunc(Number(mutableActionCount) || 0));
+    this.checkpointRevision = Math.max(0, Math.trunc(Number(checkpointRevision) || 0));
     this.ended = Boolean(ended || this.actions.at(-1)?.type === 'end');
   }
 
@@ -104,6 +106,30 @@ export class MinigameRankedRecorder {
     return true;
   }
 
+  encodeCheckpoint(reason = 0) {
+    if (this.ended) return this.encode();
+    if (this.actions.length + 1 > MAX_MGO1_ACTIONS) {
+      this.submissionState = 'too_large';
+      throw new Error('Ranked minigame record is too large.');
+    }
+    return encodeMgo1({
+      rulesVersion: this.rulesVersion,
+      gameId: this.gameId,
+      difficulty: this.difficulty,
+      runId: this.runId,
+      userId: this.userId,
+      seedHex: this.seedHex,
+      actions: [
+        ...this.actions.map((action) => ({ ...action })),
+        {
+          type: 'end',
+          reason: Math.max(0, Math.min(255, Number(reason) || 0)),
+          deltaMs: 0,
+        },
+      ],
+    });
+  }
+
   encode() {
     if (!this.ended) throw new Error('Ranked minigame record is not finished.');
     return encodeMgo1({
@@ -140,6 +166,7 @@ export class MinigameRankedRecorder {
       startedAtMs: this.startedAtMs,
       lastActionAtMs: this.lastActionAtMs,
       mutableActionCount: this.mutableActionCount,
+      checkpointRevision: this.checkpointRevision,
       ended: this.ended,
     };
   }

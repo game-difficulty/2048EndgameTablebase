@@ -465,6 +465,26 @@ def init_auth_db() -> None:
               FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS minigame_ranked_checkpoints (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              run_id TEXT NOT NULL,
+              revision INTEGER NOT NULL,
+              status TEXT NOT NULL,
+              claimed_summary_json TEXT NOT NULL,
+              pending_record TEXT,
+              record_hash TEXT NOT NULL,
+              action_count INTEGER NOT NULL,
+              submitted_at TEXT NOT NULL,
+              submit_ip TEXT,
+              validation_started_at TEXT,
+              completed_at TEXT,
+              verified_summary_json TEXT,
+              error_code TEXT,
+              UNIQUE(run_id, revision),
+              UNIQUE(run_id, record_hash),
+              FOREIGN KEY(run_id) REFERENCES minigame_ranked_runs(run_id) ON DELETE CASCADE
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_events(user_id, created_at);
@@ -510,6 +530,10 @@ def init_auth_db() -> None:
               ON minigame_ranked_runs(status, submitted_at);
             CREATE INDEX IF NOT EXISTS idx_minigame_runs_start_ip
               ON minigame_ranked_runs(start_ip, started_at);
+            CREATE INDEX IF NOT EXISTS idx_minigame_checkpoints_pending
+              ON minigame_ranked_checkpoints(status, submitted_at);
+            CREATE INDEX IF NOT EXISTS idx_minigame_checkpoints_run_revision
+              ON minigame_ranked_checkpoints(run_id, revision DESC);
             """
         )
         existing_user_columns = {

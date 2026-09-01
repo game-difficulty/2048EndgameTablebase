@@ -132,6 +132,63 @@ test('Node verifier accepts a retired trophy checkpoint stream', async () => {
   assert.equal(response.result.score, expected.score);
 });
 
+test('a powerup can continue the same ranked record after a death checkpoint', async () => {
+  const runtime = createMinigameRuntime({ seedHex: SEED, clock: { now: () => 1000 } });
+  let recorder;
+  const controller = new MinigameController({
+    difficulty: 1,
+    runtime,
+    onOperation({ operation, atMs, state }) {
+      recorder.record(operation, atMs, state);
+    },
+  });
+  recorder = new MinigameRankedRecorder({
+    runId: RUN_ID,
+    gameId: 'design-master-1',
+    difficulty: 1,
+    seedHex: SEED,
+    startedAtMs: 1000,
+  });
+  await controller.startGame('design-master-1', null, runtime);
+  const directions = ['left', 'down', 'right', 'up'];
+  for (let index = 0; !controller.engine.isOver && index < 20000; index += 1) {
+    await controller.move(directions[index % directions.length]);
+  }
+  assert.equal(controller.engine.isOver, true);
+  const firstCheckpoint = decodeMgo1(recorder.encodeCheckpoint());
+  assert.equal(firstCheckpoint.actions.at(-1).type, 'end');
+  assert.equal(recorder.ended, false);
+
+  const occupiedIndex = flattenBoard(controller.engine.board).findIndex((value) => Number(value) > 0);
+  controller.usePowerup('bomb');
+  controller.targetAction(occupiedIndex);
+  assert.equal(controller.lastOperationAccepted, true);
+  assert.equal(controller.engine.isOver, false);
+  assert.equal(recorder.actions.at(-1).type, 'bomb');
+
+  const expected = {
+    run_id: RUN_ID,
+    seed_hex: SEED,
+    rules_version: 1,
+    game_id: 'design-master-1',
+    difficulty: 1,
+    score: controller.engine.score,
+    trophy_tier: controller.engine.isPassed,
+    highest_tile_exp: controller.engine.highestTileExp,
+    final_board: flattenBoard(controller.engine.board),
+    board_rows: controller.engine.rows,
+    board_cols: controller.engine.cols,
+    action_count: recorder.mutableActionCount,
+    elapsed_ms: recorder.elapsedMs,
+  };
+  const response = await runVerifier({
+    request_id: 'test-powerup-continuation',
+    record_encoding: recorder.encodeCheckpoint(MGO1_END_REASON.RETIRED),
+    expected,
+  });
+  assert.equal(response.ok, true);
+});
+
 test('Node verifier rejects a forged claimed score', async () => {
   const { record, expected } = await completedRecord();
   const response = await runVerifier({
