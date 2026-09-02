@@ -27,6 +27,17 @@ from .reader_pool import BattleRouteGenerationError, ReaderPool, TableUnavailabl
 logger = logging.getLogger("tablebase_worker.client")
 
 
+def connection_error_summary(exc: Exception) -> str:
+    """Return a compact handshake error without logging response headers."""
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None:
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+    if status_code is None:
+        return type(exc).__name__
+    return f"{type(exc).__name__} (HTTP {status_code})"
+
+
 class WorkerClient:
     def __init__(self, config: WorkerConfig, reader_pool: ReaderPool):
         self.config = config
@@ -47,7 +58,9 @@ class WorkerClient:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning("Worker connection failed: %s", type(exc).__name__)
+                logger.warning(
+                    "Worker connection failed: %s", connection_error_summary(exc)
+                )
             if self._stop.is_set():
                 break
             if connected_seconds >= self.config.heartbeat_seconds * 3:
@@ -120,7 +133,9 @@ class WorkerClient:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("Worker connection failed: %s", type(exc).__name__)
+            logger.warning(
+                "Worker connection failed: %s", connection_error_summary(exc)
+            )
         finally:
             await self._cancel_requests(wait=False)
             with contextlib.suppress(Exception):

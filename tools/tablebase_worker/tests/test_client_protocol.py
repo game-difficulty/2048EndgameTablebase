@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
 
-from tools.tablebase_worker.client import WorkerClient
+from tools.tablebase_worker.client import WorkerClient, connection_error_summary
 from tools.tablebase_worker.protocol import Request
 from tools.tablebase_worker.reader_pool import BattleRouteResult
 
@@ -44,6 +44,14 @@ class FakeReaderPool:
 
 
 class ClientProtocolTests(unittest.IsolatedAsyncioTestCase):
+    def test_connection_error_summary_includes_http_status(self):
+        exc = RuntimeError("response details must not be logged")
+        exc.response = SimpleNamespace(status_code=429)
+        self.assertEqual(
+            connection_error_summary(exc),
+            "RuntimeError (HTTP 429)",
+        )
+
     def client(self):
         return WorkerClient(object(), FakeReaderPool())
 
