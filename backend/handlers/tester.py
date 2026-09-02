@@ -8,7 +8,7 @@ from Config import SingletonConfig, category_info
 from fastapi import WebSocket
 from engine_core.VBoardMover import s_gen_new_num as v_gen_new_num, s_move_board as v_move_board
 from engine_core.BoardMover import s_gen_new_num as r_gen_new_num, s_move_board as r_move_board
-from engine_core.replay_utils import replay_sentinel
+from engine_core.replay_utils import replay_sentinel, replay_step_goodness_ratio
 from engine_core.performance_evaluation import REPORT_DECIMAL_PLACES, is_perfect_result
 
 from ..actions import Action, Message
@@ -240,8 +240,8 @@ async def handle_tester_action(
             structured_result_lines.append(f"{label}: {display}")
 
         evaluation = PERFORMANCE_PERFECT_LABEL
-        loss = 1.0
-        if is_perfect_result(selected_rate, best_rate):
+        loss = replay_step_goodness_ratio(selected_rate, best_rate)
+        if loss == 1.0:
             session.tester_combo += 1
             session.tester_max_combo = max(
                 session.tester_max_combo, session.tester_combo
@@ -255,7 +255,6 @@ async def handle_tester_action(
             )
         else:
             session.tester_combo = 0
-            loss = selected_rate / best_rate if best_rate > 0 else 1.0
             session.tester_goodness_of_fit *= loss
             evaluation = _tester_evaluation_of_performance(loss)
             session.tester_performance_stats[evaluation] += 1

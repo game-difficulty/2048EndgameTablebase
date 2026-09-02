@@ -17,7 +17,12 @@ from backend.replay_2048next import (
     is_2048next_replay,
 )
 from engine_core.BookReader import BookReaderDispatcher
-from engine_core.replay_utils import build_step_transition, replay_sentinel
+from engine_core.replay_utils import (
+    REPLAY_FORCED_FLAG,
+    build_step_transition,
+    replay_sentinel,
+    replay_step_goodness_ratio,
+)
 from Config import DTYPE_CONFIG, SingletonConfig, category_info, pattern_catalog
 from engine_core.performance_evaluation import (
     ANALYSIS_START_STEP,
@@ -609,7 +614,9 @@ class Analyzer:
         if not best_result or best_result == "?":
             return False
         if best_result == 1:
-            self.record_replay(board, move, new_tile, spawn_position)
+            self.record_replay(
+                board, move, new_tile, spawn_position, forced=True
+            )
             return False
 
         if self.prev_expected_success_rate:
@@ -660,7 +667,7 @@ class Analyzer:
                 )
         else:
             self.combo = 0
-            loss = move_result / best_result
+            loss = replay_step_goodness_ratio(move_result, best_result)
             self.maximum_single_step_loss_relative = max(
                 self.maximum_single_step_loss_relative, 1 - loss
             )
@@ -668,8 +675,7 @@ class Analyzer:
             self.maximum_single_step_loss_absolute = max(
                 self.maximum_single_step_loss_absolute, loss_abs
             )
-            if loss != 0:
-                self.goodness_of_fit *= loss
+            self.goodness_of_fit *= loss
             evaluation = self.evaluation_of_performance(loss)
             self.performance_stats[evaluation] += 1
 
@@ -776,14 +782,20 @@ class Analyzer:
         return shared_evaluation_of_performance(loss, markdown=True)
 
     def record_replay(
-        self, board, direction: str, new_tile: int, spawn_position: int
+        self,
+        board,
+        direction: str,
+        new_tile: int,
+        spawn_position: int,
+        *,
+        forced: bool = False,
     ) -> None:
         if self.step_count < ANALYSIS_START_STEP:
             return
 
         rec_step_count = self.rec_step_count
         direct = {"Left": 0, "Right": 1, "Up": 2, "Down": 3}[direction.capitalize()]
-        encoded = self.encode(direct, spawn_position, new_tile - 1)
+        encoded = self.encode(direct, spawn_position, new_tile - 1, forced=forced)
         success_rates = []
         for direction_key in ("left", "right", "up", "down"):
             rate = self.result.get(direction_key, None)
@@ -799,8 +811,9 @@ class Analyzer:
         self.rec_step_count += 1
 
     @staticmethod
-    def encode(a, b, c):
-        return np.uint8(((a << 5) | (b << 1) | c) & 0xFF)
+    def encode(a, b, c, *, forced=False):
+        flags = int(REPLAY_FORCED_FLAG) if forced else 0
+        return np.uint8((flags | (a << 5) | (b << 1) | c) & 0xFF)
 
     def save_rec_to_file(self, step: int) -> None:
         rec_step_count = self.rec_step_count

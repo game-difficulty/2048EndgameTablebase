@@ -12,6 +12,7 @@ from engine_core.performance_evaluation import (
 )
 
 REPLAY_DTYPE = np.dtype("uint64,uint8,uint32,uint32,uint32,uint32")
+REPLAY_FORCED_FLAG = np.uint8(0x80)
 REPLAY_SENTINEL = (
     np.uint64(0),
     np.uint8(88),
@@ -57,6 +58,18 @@ def decode_replay_change(encoded):
     spawn_pos = (encoded_int >> 1) & 0b1111
     spawn_exp = (encoded_int & 0b1) + 1
     return replay_move_bits_to_dir(move_bits), int(spawn_pos), int(spawn_exp)
+
+
+def replay_change_is_forced(encoded):
+    return bool(int(encoded) & int(REPLAY_FORCED_FLAG))
+
+
+def replay_step_goodness_ratio(selected_rate, best_rate):
+    selected = float(selected_rate)
+    best = float(best_rate)
+    if is_perfect_result(selected, best):
+        return 1.0
+    return selected / best if best > 0 else 1.0
 
 
 def replay_spawn_pos_to_board_pos(spawn_pos):
@@ -133,15 +146,17 @@ def analyze_replay(record, marker_threshold=1.0):
     arr_rates_raw = np.vstack(
         (record["f2"], record["f3"], record["f4"], record["f5"])
     ).T
-    forced = np.max(arr_rates_raw, axis=1) == np.uint32(4_000_000_000)
+    forced = (record["f1"] & REPLAY_FORCED_FLAG) != 0
     arr_rates = arr_rates_raw.astype(float) / 4e9
     optimal = np.max(arr_rates, axis=1)
-    optimal[optimal <= 0] = 1
     player = arr_rates[np.arange(len(moves)), moves]
 
-    losses = player / optimal
-    losses[losses == 0] = 1
-    losses[forced] = 1
+    losses = np.ones(len(moves), dtype=float)
+    for index in range(len(moves)):
+        if not forced[index]:
+            losses[index] = replay_step_goodness_ratio(
+                player[index], optimal[index]
+            )
     goodness_of_fit = np.cumprod(losses)
 
     combo = np.empty(len(losses), dtype=np.uint16)
