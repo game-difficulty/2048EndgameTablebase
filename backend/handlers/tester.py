@@ -9,7 +9,7 @@ from Config import SingletonConfig, category_info
 from fastapi import WebSocket
 from engine_core.VBoardMover import decode_board, encode_board, s_move_board as v_move_board
 from engine_core.BoardMover import s_move_board as r_move_board
-from engine_core.replay_utils import replay_sentinel
+from engine_core.replay_utils import replay_sentinel, replay_step_goodness_ratio
 
 from ..actions import Action, Message
 from ..remote_workers.errors import RemoteTablebaseError
@@ -484,8 +484,8 @@ async def handle_tester_action(
             structured_result_lines.append(f"{label}: {display}")
 
         evaluation = PERFORMANCE_PERFECT_LABEL
-        loss = 1.0
-        if abs(best_rate - selected_rate) <= 3e-10:
+        loss = replay_step_goodness_ratio(selected_rate, best_rate)
+        if loss == 1.0:
             session.tester_combo += 1
             session.tester_max_combo = max(
                 session.tester_max_combo, session.tester_combo
@@ -499,7 +499,6 @@ async def handle_tester_action(
             )
         else:
             session.tester_combo = 0
-            loss = selected_rate / best_rate if best_rate > 0 else 1.0
             session.tester_goodness_of_fit *= loss
             evaluation = _tester_evaluation_of_performance(loss)
             session.tester_performance_stats[evaluation] += 1

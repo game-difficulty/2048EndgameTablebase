@@ -1,3 +1,7 @@
+import {
+  replayChangeIsForced,
+  replayStepGoodnessRatio,
+} from './replayGoodness.js';
 import { replayMarkerIndices } from './replayMarkers.js';
 
 export const PERFORMANCE_PERFECT_LABEL = 'Perfect!';
@@ -38,12 +42,11 @@ export function analyzeReplay(replay, markerThreshold = 1) {
     for (let direction = 0; direction < 4; direction += 1) {
       maximum = Math.max(maximum, replay.rates[offset + direction]);
     }
-    const isForced = maximum === 4_000_000_000;
+    const isForced = replayChangeIsForced(replay.changes[index]);
     forced[index] = isForced ? 1 : 0;
     const move = (replay.changes[index] >> 5) & 0b11;
     const player = replay.rates[offset + move];
-    let stepLoss = maximum > 0 ? player / maximum : 0;
-    if (stepLoss === 0 || isForced) stepLoss = 1;
+    const stepLoss = isForced ? 1 : replayStepGoodnessRatio(player, maximum);
     losses[index] = stepLoss;
     cumulative *= stepLoss;
     goodnessOfFit[index] = cumulative;

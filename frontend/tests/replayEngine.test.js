@@ -49,8 +49,11 @@ function buildReplayBuffer(records, terminalBoard = 0n) {
   return buffer;
 }
 
-function change(move, spawnIndex, spawnExponent) {
-  return ((move & 0b11) << 5) | ((spawnIndex & 0b1111) << 1) | ((spawnExponent - 1) & 1);
+function change(move, spawnIndex, spawnExponent, forced = false) {
+  return (forced ? 0x80 : 0)
+    | ((move & 0b11) << 5)
+    | ((spawnIndex & 0b1111) << 1)
+    | ((spawnExponent - 1) & 1);
 }
 
 test('parses the fixed binary format and terminal board', () => {
@@ -72,7 +75,7 @@ test('rejects missing sentinel and malformed record sizes', () => {
 test('analysis preserves forced moves without scoring them', () => {
   const replay = parseRplArrayBuffer(buildReplayBuffer([
     { board: 1n, change: change(1, 0, 1), rates: [3_000_000_000, 2_250_000_000, 0, 0] },
-    { board: 2n, change: change(0, 1, 1), rates: [4_000_000_000, 0, 0, 0] },
+    { board: 2n, change: change(0, 1, 1, true), rates: [4_000_000_000, 0, 0, 0] },
   ]));
   const analysis = analyzeReplay(replay);
   assert.deepEqual(Array.from(analysis.losses), [0.75, 1]);
@@ -80,6 +83,19 @@ test('analysis preserves forced moves without scoring them', () => {
   assert.equal(analysis.summary.total_moves, 1);
   assert.equal(analysis.summary.final_gof, 0.75);
   assert.equal(analysis.summary.counts['Blunder!'], 1);
+});
+
+test('analysis scores zero moves and unflagged 100 percent positions like Tester', () => {
+  const replay = parseRplArrayBuffer(buildReplayBuffer([
+    { board: 1n, change: change(1, 0, 1), rates: [2_000_000_000, 0, 0, 0] },
+    { board: 2n, change: change(1, 1, 1), rates: [4_000_000_000, 2_000_000_000, 0, 0] },
+  ]));
+  const analysis = analyzeReplay(replay);
+
+  assert.deepEqual(Array.from(analysis.losses), [0, 0.5]);
+  assert.deepEqual(Array.from(analysis.forced), [0, 0]);
+  assert.equal(analysis.summary.final_gof, 0);
+  assert.equal(analysis.summary.total_moves, 2);
 });
 
 test('marker threshold zero disables both markers and next-point candidates', () => {

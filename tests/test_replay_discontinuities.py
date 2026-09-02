@@ -19,9 +19,10 @@ from engine_core.replay_utils import (
 )
 
 
-def _change(move_bits, spawn_pos, spawn_exp):
+def _change(move_bits, spawn_pos, spawn_exp, *, forced=False):
     return np.uint8(
-        ((move_bits & 0b11) << 5)
+        (0x80 if forced else 0)
+        | ((move_bits & 0b11) << 5)
         | ((spawn_pos & 0b1111) << 1)
         | ((spawn_exp - 1) & 0b1)
     )
@@ -31,7 +32,7 @@ class ReplayDiscontinuityTests(unittest.TestCase):
     def test_forced_replay_steps_are_preserved_but_not_scored(self):
         record = np.zeros(2, dtype=REPLAY_DTYPE)
         record[0]["f0"] = np.uint64(0x0210030129AB4CDE)
-        record[0]["f1"] = _change(0, 0, 1)
+        record[0]["f1"] = _change(0, 0, 1, forced=True)
         record[0]["f2"] = np.uint32(4_000_000_000)
         record[1]["f0"] = np.uint64(0x1021003129AB4CDE)
         record[1]["f1"] = _change(1, 1, 1)

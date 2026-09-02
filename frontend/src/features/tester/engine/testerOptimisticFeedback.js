@@ -1,5 +1,6 @@
 import { restoreSuccessRate } from '../../../utils/successRate.js';
 import { evaluationOfPerformance } from '../../replay/engine/replayAnalysis.js';
+import { replayStepGoodnessRatio } from '../../replay/engine/replayGoodness.js';
 
 export function buildOptimisticTesterLastStep({
   board,
@@ -15,9 +16,7 @@ export function buildOptimisticTesterLastStep({
   const bestRate = restoreSuccessRate(snapshotResults[bestMove], dtype);
   if (!bestMove || selectedRate == null || bestRate == null) return null;
 
-  const ratio = Math.abs(bestRate - selectedRate) <= 3e-10
-    ? 1
-    : (bestRate > 0 ? selectedRate / bestRate : 1);
+  const ratio = replayStepGoodnessRatio(selectedRate, bestRate);
   return {
     board: Array.isArray(board) ? [...board] : [],
     board_lines: [],
