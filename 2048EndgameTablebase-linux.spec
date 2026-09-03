@@ -4,6 +4,28 @@ from PyInstaller.utils.hooks import collect_submodules
 from pathlib import Path
 
 
+repo_root = Path(SPECPATH)
+native_dir = repo_root / "native_core"
+release_native_dir = native_dir / "build-formation"
+
+
+def require_file(path, label):
+    path = Path(path)
+    if not path.is_file():
+        raise SystemExit(f"Missing required {label}: {path}")
+    return path
+
+
+def require_single_file(directory, pattern, label):
+    matches = sorted(Path(directory).glob(pattern))
+    if len(matches) != 1:
+        rendered = ", ".join(str(path) for path in matches) or "none"
+        raise SystemExit(
+            f"Expected exactly one {label} matching {pattern} in {directory}; found: {rendered}"
+        )
+    return matches[0]
+
+
 hiddenimports = collect_submodules("webview")
 hiddenimports += [
     "gi",
@@ -15,23 +37,34 @@ hiddenimports += [
     "webview.platforms.gtk",
 ]
 
-optional_native_binaries = []
-for helper_name in ("bc_family_generation_full", "bc_family_solve_full"):
-    for helper_path in (
-        Path("native_core") / helper_name,
-        Path("native_core/build-formation") / helper_name,
-    ):
-        if helper_path.exists():
-            optional_native_binaries.append((str(helper_path), "native_core"))
-            break
+required_native_binaries = [
+    (
+        str(require_single_file(native_dir, "ai_core*.so", "ai_core extension")),
+        "native_core",
+    ),
+    (
+        str(require_single_file(native_dir, "mover_core*.so", "mover_core extension")),
+        "native_core",
+    ),
+    (
+        str(require_single_file(native_dir, "formation_core*.so", "formation_core extension")),
+        "native_core",
+    ),
+    (str(require_file(native_dir / "bookgen_native.so", "bookgen native library")), "native_core"),
+    (
+        str(require_file(release_native_dir / "bc_family_generation_full", "BC generation helper")),
+        "native_core",
+    ),
+    (
+        str(require_file(release_native_dir / "bc_family_solve_full", "BC solve helper")),
+        "native_core",
+    ),
+]
 
 a = Analysis(
     ["backend_server.py"],
     pathex=[],
-    binaries=[
-        ("native_core/bookgen_native.so", "native_core"),
-        *optional_native_binaries,
-    ],
+    binaries=required_native_binaries,
     datas=[
         ("docs_and_configs/default_patterns.json", "docs_and_configs"),
         ("docs_and_configs/patterns_config.json", "docs_and_configs"),

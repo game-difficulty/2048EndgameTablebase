@@ -96,7 +96,7 @@ npm ci
 npm run build
 ```
 
-Windows 原生代码有变化时，重新构建发布目标：
+每次发布都必须执行 Windows 原生发布目标构建，不能根据提交内容判断后跳过：
 
 ```powershell
 cd $Source
@@ -108,8 +108,17 @@ cmake --build .\native_core\build-formation --config Release --target `
 ```
 
 打包前确认 `native_core/` 中有 `ai_core*.pyd`、`mover_core*.pyd`、
-`formation_core*.pyd`、`bookgen_native.dll` 和三个 MinGW 运行库；BC 发布还必须有
-`bc_family_generation_full.exe` 与 `bc_family_solve_full.exe`。缺少任一必要文件时停止打包。
+`formation_core*.pyd`、`bookgen_native.dll` 和三个 MinGW 运行库；
+`native_core/build-formation/` 中还必须有 `bc_family_generation_full.exe` 与
+`bc_family_solve_full.exe`。缺少任一必要文件时停止打包。
+
+Windows 的发布来源是固定的：三个 `.pyd`、`bookgen_native.dll` 和 MinGW 运行库只从
+`native_core/` 收集，两个 BC helper 只从 `native_core/build-formation/` 收集。不得从
+`build-bc-release`、`build-bc-relwithdeb` 或其他历史构建目录回退。spec 会在文件缺失、
+或同一模块存在多个 ABI 文件时直接终止，不能临时修改搜索顺序绕过检查。
+
+Linux 同样只使用本次容器内构建产生的 `native_core/` 模块和
+`native_core/build-formation/` BC helper，不复用宿主机 Windows 产物。
 
 ## 4. Windows 打包
 
@@ -125,6 +134,71 @@ python -m venv $WinVenv
 & "$WinVenv\Scripts\python.exe" -m pip install -r .\requirements.txt pyinstaller
 & "$WinVenv\Scripts\python.exe" -m PyInstaller --noconfirm --clean `
   --workpath $WinBuild --distpath $WinDist .\2048EndgameTablebase.spec
+```
+
+PyInstaller 完成后，必须逐项确认源模块与包内模块完全一致。模块没有可靠的语义化版本字段，
+因此以完整 SHA-256 作为发布版本标识：
+
+```powershell
+$BundleRoot = "$WinDist\2048EndgameTablebase\_internal"
+
+function Get-SingleFile([string]$Directory, [string]$Filter) {
+    $Items = @(Get-ChildItem -LiteralPath $Directory -Filter $Filter -File)
+    if ($Items.Count -ne 1) {
+        throw "Expected one $Filter in $Directory, found $($Items.Count)"
+    }
+    return $Items[0]
+}
+
+$ModulePairs = @(
+    @{ Source = (Get-SingleFile "$Source\native_core" "ai_core*.pyd").FullName; Bundle = (Get-SingleFile "$BundleRoot\native_core" "ai_core*.pyd").FullName },
+    @{ Source = (Get-SingleFile "$Source\native_core" "mover_core*.pyd").FullName; Bundle = (Get-SingleFile "$BundleRoot\native_core" "mover_core*.pyd").FullName },
+    @{ Source = (Get-SingleFile "$Source\native_core" "formation_core*.pyd").FullName; Bundle = (Get-SingleFile "$BundleRoot\native_core" "formation_core*.pyd").FullName },
+    @{ Source = "$Source\native_core\bookgen_native.dll"; Bundle = "$BundleRoot\native_core\bookgen_native.dll" },
+    @{ Source = "$Source\native_core\libgcc_s_seh-1.dll"; Bundle = "$BundleRoot\native_core\libgcc_s_seh-1.dll" },
+    @{ Source = "$Source\native_core\libgomp-1.dll"; Bundle = "$BundleRoot\native_core\libgomp-1.dll" },
+    @{ Source = "$Source\native_core\libwinpthread-1.dll"; Bundle = "$BundleRoot\native_core\libwinpthread-1.dll" },
+    @{ Source = "$Source\native_core\libgcc_s_seh-1.dll"; Bundle = "$BundleRoot\libgcc_s_seh-1.dll" },
+    @{ Source = "$Source\native_core\libgomp-1.dll"; Bundle = "$BundleRoot\libgomp-1.dll" },
+    @{ Source = "$Source\native_core\libwinpthread-1.dll"; Bundle = "$BundleRoot\libwinpthread-1.dll" },
+    @{ Source = "$Source\native_core\build-formation\bc_family_generation_full.exe"; Bundle = "$BundleRoot\native_core\bc_family_generation_full.exe" },
+    @{ Source = "$Source\native_core\build-formation\bc_family_solve_full.exe"; Bundle = "$BundleRoot\native_core\bc_family_solve_full.exe" }
+)
+
+$ModuleVersions = foreach ($Pair in $ModulePairs) {
+    if (-not (Test-Path -LiteralPath $Pair.Source) -or -not (Test-Path -LiteralPath $Pair.Bundle)) {
+        throw "Missing module pair: $($Pair.Source) / $($Pair.Bundle)"
+    }
+    $SourceHash = (Get-FileHash -LiteralPath $Pair.Source -Algorithm SHA256).Hash
+    $BundleHash = (Get-FileHash -LiteralPath $Pair.Bundle -Algorithm SHA256).Hash
+    if ($SourceHash -ne $BundleHash) {
+        throw "Packaged module mismatch: $($Pair.Bundle)"
+    }
+    [pscustomobject]@{
+        BundlePath = $Pair.Bundle
+        SHA256    = $BundleHash
+    }
+}
+$ModuleVersions | Format-Table -AutoSize
+```
+
+前端也必须逐文件比对，防止 `frontend/dist` 没有同步最新源码：
+
+```powershell
+function Get-TreeHashes([string]$RootPath) {
+    @(Get-ChildItem -LiteralPath $RootPath -Recurse -File | Sort-Object FullName | ForEach-Object {
+        $Relative = $_.FullName.Substring($RootPath.TrimEnd('\').Length + 1)
+        "$Relative`t$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+    })
+}
+
+$FrontendDiff = Compare-Object `
+    (Get-TreeHashes "$Source\frontend\dist") `
+    (Get-TreeHashes "$BundleRoot\frontend\dist")
+if ($FrontendDiff) {
+    $FrontendDiff | Format-Table -AutoSize
+    throw "Packaged frontend does not match frontend/dist"
+}
 ```
 
 先从 `$WinDist\2048EndgameTablebase` 启动程序做基本冒烟验证，再压缩整个 onedir
@@ -189,6 +263,14 @@ Get-FileHash $WinArchive, $LinuxArchive -Algorithm SHA256 |
   原生运行库。
 - 包内不含根目录 `tests/`、源码缓存、日志、本地配置、tablebase 或回放样本。
 - 两个文件名中的版本号与 Git tag 完全一致。
+- Windows 包内 `.pyd`、`bookgen_native`、BC helper 和 MinGW DLL 的 SHA-256 与本次构建
+  源文件逐项一致；根目录和 `native_core/` 下的同名 MinGW DLL 都要检查，不得仅比较文件
+  大小或修改时间。
+- 启动 Windows 包的 backend child 做冒烟测试时，检查进程已加载的 `formation_core`、
+  `libgcc_s_seh-1.dll`、`libgomp-1.dll` 和 `libwinpthread-1.dll` 均来自包内
+  `_internal/native_core/`，不能来自 Anaconda、PATH 或旧的解压目录。
+- Linux manifest 中必须包含 `ai_core`、`mover_core`、`formation_core`、
+  `bookgen_native` 和两个 BC helper，并记录各自 SHA-256。
 
 ## 7. Release Note 规范
 
@@ -256,3 +338,13 @@ gh release create $Version `
 - 文件名、Release 标题、Release Note 和 tag 使用同一个版本号。
 - Release Note 为英文，包含最终两个文件的 SHA-256。
 - `main` 和 tag 已推送，GitHub Release 已发布且只附带两个正式包。
+
+执行发布的 Agent 在结束前必须明确报告以下信息，不能只写“构建成功”：
+
+- 用于打包的 Git HEAD/tag，以及工作区是否干净。
+- Windows 模块版本表：三个 `.pyd`、`bookgen_native.dll`、两个 BC helper、三个 MinGW
+  DLL 的包内路径和完整 SHA-256，并确认与源文件一致。
+- Windows 冒烟进程实际加载的 native 模块/DLL 路径。
+- Linux manifest 中对应六个 native 文件的完整 SHA-256。
+- `frontend/dist` 与 Windows 包逐文件一致，Linux manifest 中前端入口资源名属于本次构建。
+- 最终两个归档的文件名、大小和 SHA-256。

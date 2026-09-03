@@ -1,34 +1,77 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
-import glob
 import importlib.util
 
 
+repo_root = Path(SPECPATH)
+native_dir = repo_root / "native_core"
+release_native_dir = native_dir / "build-formation"
+
+
+def require_file(path, label):
+    path = Path(path)
+    if not path.is_file():
+        raise SystemExit(f"Missing required {label}: {path}")
+    return path
+
+
+def require_single_file(directory, pattern, label):
+    matches = sorted(Path(directory).glob(pattern))
+    if len(matches) != 1:
+        rendered = ", ".join(str(path) for path in matches) or "none"
+        raise SystemExit(
+            f"Expected exactly one {label} matching {pattern} in {directory}; found: {rendered}"
+        )
+    return matches[0]
+
+
+required_native_binaries = [
+    (
+        str(require_single_file(native_dir, "ai_core*.pyd", "ai_core extension")),
+        "native_core",
+    ),
+    (
+        str(require_single_file(native_dir, "mover_core*.pyd", "mover_core extension")),
+        "native_core",
+    ),
+    (
+        str(require_single_file(native_dir, "formation_core*.pyd", "formation_core extension")),
+        "native_core",
+    ),
+    (str(require_file(native_dir / "libgcc_s_seh-1.dll", "MinGW runtime")), "native_core"),
+    (str(require_file(native_dir / "libgomp-1.dll", "OpenMP runtime")), "native_core"),
+    (str(require_file(native_dir / "libwinpthread-1.dll", "MinGW threading runtime")), "native_core"),
+    (str(require_file(native_dir / "bookgen_native.dll", "bookgen native library")), "native_core"),
+    (
+        str(require_file(release_native_dir / "bc_family_generation_full.exe", "BC generation helper")),
+        "native_core",
+    ),
+    (
+        str(require_file(release_native_dir / "bc_family_solve_full.exe", "BC solve helper")),
+        "native_core",
+    ),
+]
+
+canonical_runtime_dlls = {
+    name.lower(): str(require_file(native_dir / name, "MinGW runtime"))
+    for name in ("libgcc_s_seh-1.dll", "libgomp-1.dll", "libwinpthread-1.dll")
+}
+
 optional_native_binaries = []
-for helper_path in [Path("native_core/share_pinhole_helper.exe"), *Path("native_core").glob("miniupnpc-*.dll")]:
+for helper_path in [native_dir / "share_pinhole_helper.exe", *native_dir.glob("miniupnpc-*.dll")]:
     if helper_path.exists():
         optional_native_binaries.append((str(helper_path), "native_core"))
-for helper_name in ("bc_family_generation_full.exe", "bc_family_solve_full.exe"):
-    for helper_path in (
-        Path("native_core") / helper_name,
-        Path("native_core/build-bc-release") / helper_name,
-        Path("native_core/build-bc-relwithdeb") / helper_name,
-        Path("native_core/build-formation") / helper_name,
-    ):
-        if helper_path.exists():
-            optional_native_binaries.append((str(helper_path), "native_core"))
-            break
 if not any(Path(path).name.startswith("miniupnpc-") for path, _ in optional_native_binaries):
     miniupnpc_spec = importlib.util.find_spec("miniupnpc")
     if miniupnpc_spec and miniupnpc_spec.origin:
-        for dll_path in glob.glob(str(Path(miniupnpc_spec.origin).resolve().parent / "miniupnpc-*.dll")):
-            optional_native_binaries.append((dll_path, "native_core"))
+        for dll_path in Path(miniupnpc_spec.origin).resolve().parent.glob("miniupnpc-*.dll"):
+            optional_native_binaries.append((str(dll_path), "native_core"))
 
 a = Analysis(
     ['backend_server.py'],
     pathex=[],
-    binaries=[('native_core/libgcc_s_seh-1.dll', 'native_core'), ('native_core/libgomp-1.dll', 'native_core'), ('native_core/libwinpthread-1.dll', 'native_core'), ('native_core/bookgen_native.dll', 'native_core'), *optional_native_binaries],
+    binaries=[*required_native_binaries, *optional_native_binaries],
     datas=[('docs_and_configs/default_patterns.json', 'docs_and_configs'), ('docs_and_configs/patterns_config.json', 'docs_and_configs'), ('docs_and_configs/performance_evaluations.json', 'docs_and_configs'), ('docs_and_configs/runtime_deletion_threshold.txt', 'docs_and_configs'), ('docs_and_configs/themes.json', 'docs_and_configs'), ('docs_and_configs/help', 'docs_and_configs/help'), ('pic', 'pic'), ('favicon.ico', '.'), ('mathjax', 'mathjax'), ('frontend/dist', 'frontend/dist'), ('7zip/7z.dll', '.'), ('7zip/7z.exe', '.')],
     hiddenimports=[],
     hookspath=[],
@@ -38,6 +81,19 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# PyInstaller may discover another MinGW runtime through the build environment.
+# Keep root-level dependency copies identical to the native_core release copies.
+a.binaries = [
+    (
+        destination,
+        canonical_runtime_dlls.get(Path(destination).name.lower(), source)
+        if Path(destination).parent == Path(".")
+        else source,
+        typecode,
+    )
+    for destination, source, typecode in a.binaries
+]
 pyz = PYZ(a.pure)
 
 exe = EXE(
