@@ -13,8 +13,9 @@ from backend.auth.entitlements import DEFAULT_TIER, SUPPORTER_TIER, mark_user_su
 
 from .config import (
     TOKEN_UNIT,
-    apply_multiplier,
+    apply_pricing_multipliers,
     operation_cost_units,
+    resolve_pricing_snapshot,
     table_multiplier_units,
     token_to_units,
 )
@@ -39,6 +40,8 @@ class TokenReservation:
     operation_key: str
     table_pattern: str
     table_multiplier_units: int
+    global_multiplier_units: int
+    pricing_policy_key: str
     base_cost_units: int
     reserved_units: int
     reserved_bonus_units: int
@@ -224,6 +227,8 @@ def adjust_paid_tokens_for_admin(
             operation_key=normalized_mode,
             table_pattern="",
             table_multiplier_units=1000,
+            global_multiplier_units=1000,
+            pricing_policy_key="standard",
             base_cost_units=-paid_delta_units if paid_delta_units > 0 else 0,
             final_cost_units=-paid_delta_units if paid_delta_units > 0 else 0,
             bonus_delta_units=0,
@@ -353,6 +358,8 @@ def grant_weekly_tokens_if_due(user_id: int, *, db: sqlite3.Connection | None = 
             operation_key="weekly_grant",
             table_pattern="",
             table_multiplier_units=1000,
+            global_multiplier_units=1000,
+            pricing_policy_key="standard",
             base_cost_units=-grant_units,
             final_cost_units=-grant_units,
             bonus_delta_units=grant_units,
@@ -404,6 +411,8 @@ def reset_bonus_to_weekly_cap(
                 operation_key="bonus_cap_reset",
                 table_pattern="",
                 table_multiplier_units=1000,
+                global_multiplier_units=1000,
+                pricing_policy_key="standard",
                 base_cost_units=-bonus_delta_units if bonus_delta_units > 0 else 0,
                 final_cost_units=-bonus_delta_units if bonus_delta_units > 0 else 0,
                 bonus_delta_units=bonus_delta_units,
@@ -472,6 +481,8 @@ def _insert_ledger(
     operation_key: str,
     table_pattern: str,
     table_multiplier_units: int,
+    global_multiplier_units: int,
+    pricing_policy_key: str,
     base_cost_units: int,
     final_cost_units: int,
     bonus_delta_units: int,
@@ -484,10 +495,11 @@ def _insert_ledger(
         """
         INSERT INTO token_ledger
         (user_id, session_id, event_type, operation_key, table_pattern,
-         table_multiplier_units, base_cost_units, final_cost_units,
+         table_multiplier_units, global_multiplier_units, pricing_policy_key,
+         base_cost_units, final_cost_units,
          bonus_delta_units, paid_delta_units, balance_before_units,
          balance_after_units, metadata_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(user_id),
@@ -496,6 +508,8 @@ def _insert_ledger(
             operation_key,
             table_pattern,
             int(table_multiplier_units),
+            int(global_multiplier_units),
+            str(pricing_policy_key or "standard")[:64],
             int(base_cost_units),
             int(final_cost_units),
             int(bonus_delta_units),
@@ -507,6 +521,38 @@ def _insert_ledger(
         ),
     )
     return int(cursor.lastrowid)
+
+
+def load_token_reservation(ledger_id: int | None) -> TokenReservation | None:
+    """Restore the immutable pricing snapshot captured by a reserve ledger row."""
+    if ledger_id is None:
+        return None
+    with auth_db() as db:
+        row = db.execute(
+            "SELECT * FROM token_ledger WHERE id = ? AND event_type = 'reserve'",
+            (int(ledger_id),),
+        ).fetchone()
+    if row is None:
+        return None
+    reserved_units = max(0, int(row["final_cost_units"] or 0))
+    reserved_bonus_units = max(0, -int(row["bonus_delta_units"] or 0))
+    reserved_paid_units = max(0, -int(row["paid_delta_units"] or 0))
+    if reserved_bonus_units + reserved_paid_units != reserved_units:
+        raise ValueError("reservation ledger balance deltas do not match reserved cost")
+    return TokenReservation(
+        ledger_id=int(row["id"]),
+        user_id=int(row["user_id"]),
+        session_id=int(row["session_id"]) if row["session_id"] is not None else None,
+        operation_key=str(row["operation_key"] or ""),
+        table_pattern=str(row["table_pattern"] or ""),
+        table_multiplier_units=max(0, int(row["table_multiplier_units"] or 0)),
+        global_multiplier_units=max(0, int(row["global_multiplier_units"] or 0)),
+        pricing_policy_key=str(row["pricing_policy_key"] or "standard"),
+        base_cost_units=max(0, int(row["base_cost_units"] or 0)),
+        reserved_units=reserved_units,
+        reserved_bonus_units=reserved_bonus_units,
+        reserved_paid_units=reserved_paid_units,
+    )
 
 
 def _subtract_from_account(
@@ -554,7 +600,12 @@ def reserve_operation_tokens(
         return None
     base_units = operation_cost_units(operation_key) * max(1, int(quantity))
     multiplier_units = table_multiplier_units(full_pattern)
-    reserve_units = apply_multiplier(base_units, multiplier_units)
+    pricing = resolve_pricing_snapshot()
+    reserve_units = apply_pricing_multipliers(
+        base_units,
+        multiplier_units,
+        pricing.global_multiplier_units,
+    )
     if reserve_units <= 0:
         return None
     with auth_db() as db:
@@ -571,6 +622,8 @@ def reserve_operation_tokens(
             operation_key=operation_key,
             table_pattern=str(full_pattern or ""),
             table_multiplier_units=multiplier_units,
+            global_multiplier_units=pricing.global_multiplier_units,
+            pricing_policy_key=pricing.policy_key,
             base_cost_units=base_units,
             final_cost_units=reserve_units,
             bonus_delta_units=-bonus_spent,
@@ -586,6 +639,8 @@ def reserve_operation_tokens(
         operation_key=operation_key,
         table_pattern=str(full_pattern or ""),
         table_multiplier_units=multiplier_units,
+        global_multiplier_units=pricing.global_multiplier_units,
+        pricing_policy_key=pricing.policy_key,
         base_cost_units=base_units,
         reserved_units=reserve_units,
         reserved_bonus_units=bonus_spent,
@@ -608,7 +663,11 @@ def finalize_reservation(
         actual_base_units = max(0, int(actual_base_units))
     actual_units = min(
         reservation.reserved_units,
-        apply_multiplier(actual_base_units, reservation.table_multiplier_units),
+        apply_pricing_multipliers(
+            actual_base_units,
+            reservation.table_multiplier_units,
+            reservation.global_multiplier_units,
+        ),
     )
     actual_bonus = min(reservation.reserved_bonus_units, actual_units)
     actual_paid = min(reservation.reserved_paid_units, actual_units - actual_bonus)
@@ -647,6 +706,8 @@ def finalize_reservation(
             operation_key=actual_operation_key,
             table_pattern=reservation.table_pattern,
             table_multiplier_units=reservation.table_multiplier_units,
+            global_multiplier_units=reservation.global_multiplier_units,
+            pricing_policy_key=reservation.pricing_policy_key,
             base_cost_units=actual_base_units,
             final_cost_units=actual_units,
             bonus_delta_units=refund_bonus,
@@ -712,6 +773,8 @@ def cancel_reservation(
             operation_key=reservation.operation_key,
             table_pattern=reservation.table_pattern,
             table_multiplier_units=reservation.table_multiplier_units,
+            global_multiplier_units=reservation.global_multiplier_units,
+            pricing_policy_key=reservation.pricing_policy_key,
             base_cost_units=0,
             final_cost_units=0,
             bonus_delta_units=reservation.reserved_bonus_units,
@@ -751,7 +814,12 @@ def consume_operation_tokens(
         if multiplier_override_units is not None
         else table_multiplier_units(full_pattern)
     )
-    cost_units = apply_multiplier(base_units, multiplier_units)
+    pricing = resolve_pricing_snapshot()
+    cost_units = apply_pricing_multipliers(
+        base_units,
+        multiplier_units,
+        pricing.global_multiplier_units,
+    )
     if cost_units <= 0:
         return
     with auth_db() as db:
@@ -768,6 +836,8 @@ def consume_operation_tokens(
             operation_key=operation_key,
             table_pattern=str(full_pattern or ""),
             table_multiplier_units=multiplier_units,
+            global_multiplier_units=pricing.global_multiplier_units,
+            pricing_policy_key=pricing.policy_key,
             base_cost_units=base_units,
             final_cost_units=cost_units,
             bonus_delta_units=-bonus_spent,
@@ -803,7 +873,12 @@ def consume_operation_tokens_once(
         if multiplier_override_units is not None
         else table_multiplier_units(full_pattern)
     )
-    cost_units = apply_multiplier(base_units, multiplier_units)
+    pricing = resolve_pricing_snapshot()
+    cost_units = apply_pricing_multipliers(
+        base_units,
+        multiplier_units,
+        pricing.global_multiplier_units,
+    )
     request_scope = str(idempotency_scope or operation_key)
 
     with auth_db() as db:
@@ -853,6 +928,8 @@ def consume_operation_tokens_once(
                 operation_key=operation_key,
                 table_pattern=str(full_pattern or ""),
                 table_multiplier_units=multiplier_units,
+                global_multiplier_units=pricing.global_multiplier_units,
+                pricing_policy_key=pricing.policy_key,
                 base_cost_units=base_units,
                 final_cost_units=cost_units,
                 bonus_delta_units=-bonus_spent,

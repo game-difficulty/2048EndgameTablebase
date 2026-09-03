@@ -100,6 +100,7 @@ export function useFreeGoodnessMatch(
     Number(maxPlayers || 2)
     * (Math.trunc(Number(target) || 0) / 2 + 10)
     * multiplierForPattern(fullPattern)
+    * Number(quotaRules.value?.global_multiplier ?? 1)
   );
   const inputEnabled = computed(() => (
     Boolean(activeRef.value)

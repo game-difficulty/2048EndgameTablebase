@@ -23,12 +23,13 @@ from engine_core.VBoardMover import (
 )
 
 from backend.auth.db import auth_db
-from backend.quota.config import operation_cost_units, table_multiplier_units
+from backend.quota.config import operation_cost_units
 from backend.quota.service import (
     TokenReservation,
     cancel_reservation,
     finalize_reservation,
     get_token_balance,
+    load_token_reservation,
     reserve_operation_tokens,
 )
 from backend.remote_workers.registry import remote_worker_registry
@@ -290,26 +291,8 @@ def _reservation_payload(reservation: TokenReservation) -> dict[str, int]:
     }
 
 
-def _restore_reservation(round_row: sqlite3.Row, room_row: sqlite3.Row) -> TokenReservation | None:
-    ledger_id = round_row["reservation_ledger_id"]
-    if ledger_id is None:
-        return None
-    multiplier = table_multiplier_units(str(room_row["full_pattern"]))
-    reserved = int(round_row["reserved_bonus_units"] or 0) + int(
-        round_row["reserved_paid_units"] or 0
-    )
-    return TokenReservation(
-        ledger_id=int(ledger_id),
-        user_id=int(room_row["host_user_id"]),
-        session_id=None,
-        operation_key="tester_lookup_hit",
-        table_pattern=str(room_row["full_pattern"]),
-        table_multiplier_units=multiplier,
-        base_cost_units=(reserved * 1000 // max(1, multiplier)),
-        reserved_units=reserved,
-        reserved_bonus_units=int(round_row["reserved_bonus_units"] or 0),
-        reserved_paid_units=int(round_row["reserved_paid_units"] or 0),
-    )
+def _restore_reservation(round_row: sqlite3.Row, _room_row: sqlite3.Row) -> TokenReservation | None:
+    return load_token_reservation(round_row["reservation_ledger_id"])
 
 
 def _insert_round(

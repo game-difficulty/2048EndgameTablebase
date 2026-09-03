@@ -17,12 +17,12 @@ from engine_core.BoardMover import s_move_board as classic_move_board
 from engine_core.VBoardMover import decode_board, encode_board, s_move_board as variant_move_board
 
 from backend.auth.db import auth_db
-from backend.quota.config import operation_cost_units, table_multiplier_units
 from backend.quota.service import (
     TokenReservation,
     cancel_reservation,
     finalize_reservation,
     get_token_balance,
+    load_token_reservation,
     reserve_operation_tokens,
 )
 from backend.tablebase_catalog import resolve_tablebase
@@ -130,24 +130,8 @@ def _reservation_payload(reservation: TokenReservation) -> dict[str, int]:
     }
 
 
-def _restore_reservation(round_row: sqlite3.Row, room_row: sqlite3.Row) -> TokenReservation | None:
-    ledger_id = round_row["reservation_ledger_id"]
-    if ledger_id is None:
-        return None
-    multiplier = table_multiplier_units(str(room_row["full_pattern"]))
-    return TokenReservation(
-        ledger_id=int(ledger_id),
-        user_id=int(room_row["host_user_id"]),
-        session_id=None,
-        operation_key="battle_route_generation",
-        table_pattern=str(room_row["full_pattern"]),
-        table_multiplier_units=multiplier,
-        base_cost_units=operation_cost_units("battle_route_generation"),
-        reserved_units=int(round_row["reserved_bonus_units"] or 0)
-        + int(round_row["reserved_paid_units"] or 0),
-        reserved_bonus_units=int(round_row["reserved_bonus_units"] or 0),
-        reserved_paid_units=int(round_row["reserved_paid_units"] or 0),
-    )
+def _restore_reservation(round_row: sqlite3.Row, _room_row: sqlite3.Row) -> TokenReservation | None:
+    return load_token_reservation(round_row["reservation_ledger_id"])
 
 
 def _insert_round(

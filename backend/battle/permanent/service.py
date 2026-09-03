@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 _policy = HostPolicy()
 _sweep_task: asyncio.Task | None = None
 _reconcile_task: asyncio.Task | None = None
+SOLO_RESTART_COOLDOWN_SECONDS = 60.0
 
 
 def _utcnow() -> datetime:
@@ -58,6 +59,9 @@ def init_permanent_db() -> None:
               host_last_action_at TEXT,
               host_last_seen_at TEXT,
               host_idle_expires_at TEXT,
+              solo_cooldown_actor_key TEXT,
+              solo_cooldown_remaining_seconds REAL NOT NULL DEFAULT 0,
+              solo_cooldown_expires_at TEXT,
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL,
               FOREIGN KEY(room_id) REFERENCES battle_rooms(room_id) ON DELETE CASCADE
@@ -75,6 +79,27 @@ def init_permanent_db() -> None:
               ON battle_permanent_presence(last_seen_at);
             """
         )
+        columns = {
+            row["name"]
+            for row in db.execute(
+                "PRAGMA table_info(battle_permanent_room_state)"
+            ).fetchall()
+        }
+        if "solo_cooldown_actor_key" not in columns:
+            db.execute(
+                "ALTER TABLE battle_permanent_room_state "
+                "ADD COLUMN solo_cooldown_actor_key TEXT"
+            )
+        if "solo_cooldown_remaining_seconds" not in columns:
+            db.execute(
+                "ALTER TABLE battle_permanent_room_state "
+                "ADD COLUMN solo_cooldown_remaining_seconds REAL NOT NULL DEFAULT 0"
+            )
+        if "solo_cooldown_expires_at" not in columns:
+            db.execute(
+                "ALTER TABLE battle_permanent_room_state "
+                "ADD COLUMN solo_cooldown_expires_at TEXT"
+            )
 
 
 def register_definition(
@@ -142,6 +167,65 @@ def _active_players(db, room_id: str) -> list[Any]:
     ).fetchall()
 
 
+def _cooldown_remaining(state: Any | None, *, now: datetime) -> float:
+    if state is None or not str(state["solo_cooldown_actor_key"] or ""):
+        return 0.0
+    expires_at = _parse_iso(state["solo_cooldown_expires_at"])
+    if expires_at is not None:
+        return max(0.0, (expires_at - now).total_seconds())
+    try:
+        return max(0.0, float(state["solo_cooldown_remaining_seconds"] or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _clear_solo_cooldown_in_db(db, room_id: str, *, now_text: str) -> None:
+    db.execute(
+        """
+        UPDATE battle_permanent_room_state
+        SET solo_cooldown_actor_key = NULL,
+            solo_cooldown_remaining_seconds = 0,
+            solo_cooldown_expires_at = NULL,
+            updated_at = ?
+        WHERE room_id = ?
+        """,
+        (now_text, str(room_id)),
+    )
+
+
+def _begin_solo_cooldown_in_db(
+    db,
+    room_id: str,
+    actor_key: str,
+    *,
+    now: datetime,
+) -> None:
+    room = repository._find_room(db, str(room_id))
+    current_host = str(room["host_actor_key"] or "")
+    expires_at = (
+        None
+        if current_host and current_host != str(actor_key)
+        else _iso(now + timedelta(seconds=SOLO_RESTART_COOLDOWN_SECONDS))
+    )
+    db.execute(
+        """
+        UPDATE battle_permanent_room_state
+        SET solo_cooldown_actor_key = ?,
+            solo_cooldown_remaining_seconds = ?,
+            solo_cooldown_expires_at = ?,
+            updated_at = ?
+        WHERE room_id = ?
+        """,
+        (
+            str(actor_key),
+            SOLO_RESTART_COOLDOWN_SECONDS,
+            expires_at,
+            _iso(now),
+            str(room_id),
+        ),
+    )
+
+
 def _set_host_in_db(
     db,
     room: Any,
@@ -163,6 +247,23 @@ def _set_host_in_db(
         ).fetchone()
         if member is None:
             normalized = None
+    state = db.execute(
+        "SELECT * FROM battle_permanent_room_state WHERE room_id = ?",
+        (room["room_id"],),
+    ).fetchone()
+    cooldown_actor = (
+        str(state["solo_cooldown_actor_key"] or "") if state is not None else ""
+    )
+    cooldown_remaining = _cooldown_remaining(state, now=current)
+    if cooldown_actor and cooldown_remaining <= 0:
+        cooldown_actor = ""
+        cooldown_remaining = 0.0
+    cooldown_expires_at = None
+    if cooldown_actor:
+        if normalized == cooldown_actor or normalized is None:
+            cooldown_expires_at = _iso(
+                current + timedelta(seconds=cooldown_remaining)
+            )
     db.execute(
         """
         UPDATE battle_rooms
@@ -182,7 +283,9 @@ def _set_host_in_db(
         UPDATE battle_permanent_room_state
         SET host_generation = host_generation + 1,
             host_assigned_at = ?, host_last_action_at = ?, host_last_seen_at = ?,
-            host_idle_expires_at = ?, updated_at = ?
+            host_idle_expires_at = ?, solo_cooldown_actor_key = ?,
+            solo_cooldown_remaining_seconds = ?, solo_cooldown_expires_at = ?,
+            updated_at = ?
         WHERE room_id = ?
         """,
         (
@@ -192,6 +295,9 @@ def _set_host_in_db(
             _iso(current + timedelta(seconds=_policy.idle_timeout_seconds))
             if normalized
             else None,
+            cooldown_actor or None,
+            cooldown_remaining,
+            cooldown_expires_at,
             now_text,
             room["room_id"],
         ),
@@ -302,8 +408,6 @@ def claim_host_if_vacant(room_ref: str, actor: Any) -> bool:
         room = repository._find_room(db, str(room_ref))
         if str(room["lifecycle_kind"] or "normal") != "permanent":
             return False
-        if room["host_actor_key"]:
-            return False
         member = db.execute(
             """
             SELECT 1 FROM battle_members
@@ -313,8 +417,65 @@ def claim_host_if_vacant(room_ref: str, actor: Any) -> bool:
         ).fetchone()
         if member is None:
             return False
+        current_host = str(room["host_actor_key"] or "")
+        state = db.execute(
+            "SELECT * FROM battle_permanent_room_state WHERE room_id = ?",
+            (room["room_id"],),
+        ).fetchone()
+        cooldown_actor = (
+            str(state["solo_cooldown_actor_key"] or "") if state is not None else ""
+        )
+        remaining = _cooldown_remaining(state, now=now)
+        if cooldown_actor and remaining <= 0:
+            _clear_solo_cooldown_in_db(db, str(room["room_id"]), now_text=_iso(now))
+            cooldown_actor = ""
+        if current_host:
+            if (
+                cooldown_actor
+                and current_host == cooldown_actor
+                and identity.actor_key != cooldown_actor
+            ):
+                _set_host_in_db(db, room, identity.actor_key, now=now)
+                return True
+            return False
         _set_host_in_db(db, room, identity.actor_key, now=now)
         return True
+
+
+def assert_start_allowed(room_ref: str, actor: Any) -> None:
+    identity = coerce_actor(actor)
+    room = repository.get_room(str(room_ref))
+    if not is_permanent_room(room):
+        return
+    now = _utcnow()
+    now_text = _iso(now)
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        room = repository._find_room(db, str(room_ref))
+        if str(room["lifecycle_kind"] or "normal") != "permanent":
+            return
+        state = db.execute(
+            "SELECT * FROM battle_permanent_room_state WHERE room_id = ?",
+            (room["room_id"],),
+        ).fetchone()
+        cooldown_actor = (
+            str(state["solo_cooldown_actor_key"] or "") if state is not None else ""
+        )
+        if (
+            cooldown_actor != identity.actor_key
+            or str(room["host_actor_key"] or "") != identity.actor_key
+        ):
+            return
+        remaining = _cooldown_remaining(state, now=now)
+        if remaining <= 0:
+            _clear_solo_cooldown_in_db(db, str(room["room_id"]), now_text=now_text)
+            return
+        raise BattleServiceError(
+            "PERMANENT_SOLO_COOLDOWN",
+            "Please wait before starting another solo round.",
+            409,
+            extra={"retry_after_seconds": max(1, int(remaining + 0.999))},
+        )
 
 
 def note_presence(room_ref: str, actor: Any) -> None:
@@ -452,12 +613,32 @@ def rotate_after_round_in_db(db, room_id: str, *, now_text: str) -> bool:
     if str(room["lifecycle_kind"] or "normal") != "permanent":
         return False
     old = str(room["host_actor_key"] or "") or None
+    latest_round = db.execute(
+        "SELECT round_id FROM battle_rounds WHERE room_id = ? ORDER BY round_number DESC LIMIT 1",
+        (room["room_id"],),
+    ).fetchone()
+    participants = []
+    if latest_round is not None:
+        participants = db.execute(
+            "SELECT actor_key FROM battle_player_results WHERE round_id = ?",
+            (latest_round["round_id"],),
+        ).fetchall()
+    completed_solo_as_host = bool(
+        old
+        and len(participants) == 1
+        and str(participants[0]["actor_key"] or "") == old
+    )
+    now = _parse_iso(now_text) or _utcnow()
     _set_host_in_db(
         db,
         room,
         _next_host_key(db, room, after_actor_key=old),
-        now=_parse_iso(now_text) or _utcnow(),
+        now=now,
     )
+    if completed_solo_as_host:
+        _begin_solo_cooldown_in_db(db, str(room["room_id"]), old, now=now)
+    else:
+        _clear_solo_cooldown_in_db(db, str(room["room_id"]), now_text=now_text)
     _reset_empty_room_in_db(db, room, now_text=now_text)
     return True
 

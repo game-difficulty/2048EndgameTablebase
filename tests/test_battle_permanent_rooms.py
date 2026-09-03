@@ -10,6 +10,7 @@ from backend.auth.db import auth_db, init_auth_db
 from backend.battle import repository
 from backend.battle.actors import BattleActor
 from backend.battle.core import lifecycle
+from backend.battle.core.errors import BattleServiceError
 from backend.battle.modes.goodness import runtime as goodness_runtime
 from backend.battle.modes.free_goodness import runtime as free_goodness_runtime
 from backend.battle.permanent import service as permanent_service
@@ -175,6 +176,87 @@ class PermanentBattleRoomTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["reservation_status"], "not_required")
         self.assertIsNone(row["reservation_ledger_id"])
         self.assertEqual(row["token_cost_units"], 0)
+
+    def test_solo_round_blocks_restart_and_handoffs_until_cooldown_resumes(self) -> None:
+        lifecycle.join_room(self.room["room_code"], user_id=self.user_id, role="player")
+        actor_key = f"u:{self.user_id}"
+        now = permanent_service._iso()
+        with auth_db() as db:
+            db.execute(
+                """
+                INSERT INTO battle_rounds
+                  (round_id, room_id, round_number, status, created_at, updated_at)
+                VALUES ('solo-round', ?, 1, 'completed', ?, ?)
+                """,
+                (self.room["room_id"], now, now),
+            )
+            db.execute(
+                """
+                INSERT INTO battle_player_results
+                  (round_id, actor_key, user_id, display_name_snapshot, status,
+                   created_at, updated_at)
+                VALUES ('solo-round', ?, ?, 'Host', 'completed', ?, ?)
+                """,
+                (actor_key, self.user_id, now, now),
+            )
+            permanent_service.rotate_after_round_in_db(
+                db, self.room["room_id"], now_text=now
+            )
+
+        with self.assertRaises(BattleServiceError) as blocked:
+            permanent_service.assert_start_allowed(self.room["room_code"], actor_key)
+        self.assertEqual(blocked.exception.code, "PERMANENT_SOLO_COOLDOWN")
+
+        guest = self._guest()
+        joined = lifecycle.join_room(
+            self.room["room_code"], actor=guest, role="player", ip_address="203.0.113.1"
+        )
+        self.assertEqual(joined["host_actor_key"], guest.actor_key)
+        with auth_db() as db:
+            paused = db.execute(
+                "SELECT * FROM battle_permanent_room_state WHERE room_id = ?",
+                (self.room["room_id"],),
+            ).fetchone()
+        self.assertEqual(paused["solo_cooldown_actor_key"], actor_key)
+        self.assertIsNone(paused["solo_cooldown_expires_at"])
+        self.assertGreater(float(paused["solo_cooldown_remaining_seconds"]), 0)
+
+        lifecycle.leave_room(self.room["room_code"], actor=guest)
+        resumed = lifecycle.room_snapshot(self.room["room_code"], user_id=self.user_id)
+        self.assertEqual(resumed["host_actor_key"], actor_key)
+        with auth_db() as db:
+            active = db.execute(
+                "SELECT * FROM battle_permanent_room_state WHERE room_id = ?",
+                (self.room["room_id"],),
+            ).fetchone()
+        self.assertIsNotNone(active["solo_cooldown_expires_at"])
+        with self.assertRaises(BattleServiceError):
+            permanent_service.assert_start_allowed(self.room["room_code"], actor_key)
+
+    def test_expired_solo_cooldown_is_cleared_on_start_check(self) -> None:
+        lifecycle.join_room(self.room["room_code"], user_id=self.user_id, role="player")
+        actor_key = f"u:{self.user_id}"
+        with auth_db() as db:
+            db.execute(
+                """
+                UPDATE battle_permanent_room_state
+                SET solo_cooldown_actor_key = ?,
+                    solo_cooldown_remaining_seconds = 60,
+                    solo_cooldown_expires_at = '2020-01-01T00:00:00+00:00'
+                WHERE room_id = ?
+                """,
+                (actor_key, self.room["room_id"]),
+            )
+
+        permanent_service.assert_start_allowed(self.room["room_code"], actor_key)
+
+        with auth_db() as db:
+            state = db.execute(
+                "SELECT * FROM battle_permanent_room_state WHERE room_id = ?",
+                (self.room["room_id"],),
+            ).fetchone()
+        self.assertIsNone(state["solo_cooldown_actor_key"])
+        self.assertEqual(float(state["solo_cooldown_remaining_seconds"]), 0)
 
     def test_empty_free_room_restores_template_and_ready_round(self) -> None:
         definition = PermanentRoomDefinition(

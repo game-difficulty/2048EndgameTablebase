@@ -351,7 +351,7 @@ export function useGoodnessMatch(
     multiplierForPattern,
     routeBaseCost: Number(
       quotaRules.value?.operation_costs?.battle_route_generation ?? 100,
-    ),
+    ) * Number(quotaRules.value?.global_multiplier ?? 1),
   }));
   const matchProps = computed(() => ({
     boardFrame: boardFrame.value,

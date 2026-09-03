@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from .config import (
     MULTIPLIER_UNIT,
     TOKEN_UNIT,
+    resolve_pricing_snapshot,
     table_multiplier_config,
     table_threshold_config,
     token_cost_config,
@@ -34,6 +35,7 @@ def _multiplier(units: int) -> int | float:
 
 
 def public_quota_rules() -> dict[str, Any]:
+    pricing = resolve_pricing_snapshot()
     multiplier_config = table_multiplier_config()
     threshold_config = table_threshold_config()
     grouped_rules: OrderedDict[int, list[str]] = OrderedDict()
@@ -89,6 +91,8 @@ def public_quota_rules() -> dict[str, Any]:
         "default_multiplier": float(
             multiplier_config.get("default_multiplier", 1)
         ),
+        "global_multiplier": _multiplier(pricing.global_multiplier_units),
+        "pricing_policy_key": pricing.policy_key,
     }
 
 

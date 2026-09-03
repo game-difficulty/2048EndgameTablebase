@@ -80,6 +80,9 @@ async def start_room(
     session_id: int | None = None,
 ) -> dict[str, Any]:
     identity = coerce_actor(actor, user_id=user_id)
+    from .permanent.service import assert_start_allowed
+
+    assert_start_allowed(room_code, identity)
     return await _mode_for_room(room_code).start_room(
         room_code,
         actor_key=identity.actor_key,

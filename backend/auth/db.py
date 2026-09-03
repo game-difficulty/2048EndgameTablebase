@@ -277,6 +277,8 @@ def init_auth_db() -> None:
               operation_key TEXT,
               table_pattern TEXT,
               table_multiplier_units INTEGER NOT NULL DEFAULT 1000,
+              global_multiplier_units INTEGER NOT NULL DEFAULT 1000,
+              pricing_policy_key TEXT NOT NULL DEFAULT 'standard',
               base_cost_units INTEGER NOT NULL DEFAULT 0,
               final_cost_units INTEGER NOT NULL DEFAULT 0,
               bonus_delta_units INTEGER NOT NULL DEFAULT 0,
@@ -585,6 +587,20 @@ def init_auth_db() -> None:
             db.execute("ALTER TABLE users ADD COLUMN invite_code_id INTEGER REFERENCES invite_codes(id)")
         if "display_name_key" not in existing_user_columns:
             db.execute("ALTER TABLE users ADD COLUMN display_name_key TEXT")
+
+        existing_token_ledger_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(token_ledger)").fetchall()
+        }
+        if "global_multiplier_units" not in existing_token_ledger_columns:
+            db.execute(
+                "ALTER TABLE token_ledger "
+                "ADD COLUMN global_multiplier_units INTEGER NOT NULL DEFAULT 1000"
+            )
+        if "pricing_policy_key" not in existing_token_ledger_columns:
+            db.execute(
+                "ALTER TABLE token_ledger "
+                "ADD COLUMN pricing_policy_key TEXT NOT NULL DEFAULT 'standard'"
+            )
 
         existing_gamer_run_columns = {
             row["name"]

@@ -49,6 +49,8 @@ class PublicQuotaRulesTests(unittest.TestCase):
         self.assertEqual(rules["operation_costs"]["analysis_per_replay"], 100)
         self.assertEqual(rules["operation_costs"]["replay_load"], 3)
         self.assertEqual(rules["operation_costs"]["battle_route_generation"], 100)
+        self.assertEqual(rules["global_multiplier"], 1)
+        self.assertEqual(rules["pricing_policy_key"], "standard")
         thresholds = {
             row["full_pattern"]: row
             for row in rules["tablebase_thresholds"]
