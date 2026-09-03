@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable
 from backend.auth.db import auth_db
 
 from .. import repository
+from ..actors import BattleActor, coerce_actor, user_actor
 from .contracts import BattleModeError
 from .errors import BattleServiceError
 from .registry import get_battle_mode
@@ -44,24 +45,38 @@ async def broadcast_room(room_id: str) -> None:
         await _broadcast_callback(str(room_id))
 
 
-def room_by_user(user_id: int) -> dict[str, Any] | None:
+def room_by_actor(
+    actor: Any | None = None, *, user_id: int | None = None
+) -> dict[str, Any] | None:
+    identity = coerce_actor(actor, user_id=user_id)
     with auth_db() as db:
         row = db.execute(
             """
             SELECT r.room_id FROM battle_members AS m
             JOIN battle_rooms AS r ON r.room_id = m.room_id
-            WHERE m.user_id = ? AND m.status = 'active'
+            WHERE m.actor_key = ? AND m.status = 'active'
               AND r.status IN ('preparing', 'waiting', 'running')
             LIMIT 1
             """,
-            (int(user_id),),
+            (identity.actor_key,),
         ).fetchone()
     return repository.get_room(str(row["room_id"])) if row is not None else None
 
 
-def assert_member(room: dict[str, Any], user_id: int) -> dict[str, Any]:
+def room_by_user(user_id: int) -> dict[str, Any] | None:
+    return room_by_actor(user_id=user_id)
+
+
+def assert_member(
+    room: dict[str, Any],
+    actor: Any | None = None,
+    *,
+    actor_key: str | None = None,
+    user_id: int | None = None,
+) -> dict[str, Any]:
+    identity = coerce_actor(actor or actor_key, user_id=user_id)
     member = next(
-        (item for item in room.get("members", []) if int(item["user_id"]) == int(user_id)),
+        (item for item in room.get("members", []) if item["actor_key"] == identity.actor_key),
         None,
     )
     if member is None:
@@ -69,9 +84,15 @@ def assert_member(room: dict[str, Any], user_id: int) -> dict[str, Any]:
     return member
 
 
-def sanitize_snapshot(room: dict[str, Any], *, viewer_user_id: int) -> dict[str, Any]:
+def sanitize_snapshot(
+    room: dict[str, Any],
+    *,
+    actor: Any | None = None,
+    viewer_user_id: int | None = None,
+) -> dict[str, Any]:
+    identity = coerce_actor(actor, user_id=viewer_user_id)
     payload = dict(room)
-    member = assert_member(payload, viewer_user_id)
+    member = assert_member(payload, identity)
     mode = None
     try:
         mode = get_battle_mode(str(payload.get("mode_key") or "goodness"))
@@ -79,9 +100,14 @@ def sanitize_snapshot(room: dict[str, Any], *, viewer_user_id: int) -> dict[str,
     except BattleModeError:
         payload["mode_settings"] = dict(payload.get("settings") or {})
     payload["viewer"] = {
-        "user_id": int(viewer_user_id),
+        "actor_key": identity.actor_key,
+        "actor_kind": identity.kind,
+        "is_guest": identity.is_guest,
+        "user_id": identity.user_id,
+        "guest_id": identity.guest_id,
         "role": member["role"],
-        "is_host": int(payload["host_user_id"]) == int(viewer_user_id),
+        "is_host": identity.is_user
+        and int(payload["host_user_id"]) == int(identity.user_id),
     }
     round_payload = dict(payload.get("round") or {})
     for field in (
@@ -97,42 +123,78 @@ def sanitize_snapshot(room: dict[str, Any], *, viewer_user_id: int) -> dict[str,
     for item in payload.get("members", []):
         item.pop("member_id", None)
     return (
-        mode.sanitize_snapshot(payload, viewer_user_id=int(viewer_user_id))
+        mode.sanitize_snapshot(
+            payload,
+            viewer_actor_key=identity.actor_key,
+            viewer_user_id=identity.user_id,
+        )
         if mode is not None
         else payload
     )
 
 
-def room_snapshot(room_ref: str, *, user_id: int) -> dict[str, Any]:
+def room_snapshot(
+    room_ref: str,
+    *,
+    actor: Any | None = None,
+    actor_key: str | None = None,
+    user_id: int | None = None,
+) -> dict[str, Any]:
     try:
         room = repository.get_room(room_ref)
     except repository.BattleNotFoundError as exc:
         raise BattleServiceError("ROOM_NOT_FOUND", "Room not found.", 404) from exc
-    return sanitize_snapshot(room, viewer_user_id=user_id)
+    return sanitize_snapshot(room, actor=actor or actor_key, viewer_user_id=user_id)
 
 
-def current_room(*, user_id: int) -> dict[str, Any] | None:
-    room = room_by_user(user_id)
-    return None if room is None else sanitize_snapshot(room, viewer_user_id=user_id)
+def current_room(
+    *, actor: Any | None = None, user_id: int | None = None
+) -> dict[str, Any] | None:
+    identity = coerce_actor(actor, user_id=user_id)
+    room = room_by_actor(identity)
+    return None if room is None else sanitize_snapshot(room, actor=identity)
 
 
-def list_rooms(*, user_id: int) -> list[dict[str, Any]]:
+def list_rooms(*, user_id: int | None = None) -> list[dict[str, Any]]:
     del user_id
     return repository.list_public_rooms(limit=50)
 
 
-def join_room(room_code: str, *, user_id: int, role: str | None) -> dict[str, Any]:
+def join_room(
+    room_code: str,
+    *,
+    actor: Any | None = None,
+    user_id: int | None = None,
+    role: str | None,
+    ip_address: str = "",
+) -> dict[str, Any]:
+    identity = coerce_actor(actor, user_id=user_id)
     try:
-        repository.join_room(room_code, user_id=user_id, preferred_role=role)
-        return room_snapshot(room_code, user_id=user_id)
+        repository.join_room(
+            room_code,
+            actor=identity,
+            preferred_role=role,
+            ip_address=ip_address,
+        )
+        return room_snapshot(room_code, actor=identity)
+    except repository.BattleRateLimitError as exc:
+        raise BattleServiceError(
+            exc.code,
+            "Too many Battle rooms have been joined. Try again later.",
+            429,
+            extra={"retry_after_seconds": exc.retry_after_seconds},
+        ) from exc
     except repository.BattleRepositoryError as exc:
         raise BattleServiceError(str(exc).upper(), str(exc).replace("_", " "), 409) from exc
 
 
-def leave_room(room_code: str, *, user_id: int) -> None:
+def leave_room(
+    room_code: str, *, actor: Any | None = None, user_id: int | None = None
+) -> None:
+    identity = coerce_actor(actor, user_id=user_id)
     room = repository.get_room(room_code)
-    assert_member(room, user_id)
-    if int(room["host_user_id"]) == int(user_id):
+    assert_member(room, identity)
+    if identity.is_user and int(room["host_user_id"]) == int(identity.user_id):
         try:
             mode = get_battle_mode(str(room.get("mode_key") or "goodness"))
         except BattleModeError as exc:
@@ -142,14 +204,14 @@ def leave_room(room_code: str, *, user_id: int) -> None:
         mode.settle_unstarted_round(
             str(room["room_id"]), reason="battle_host_closed_room"
         )
-        repository.close_room(room_code, host_user_id=user_id)
+        repository.close_room(room_code, host_user_id=int(identity.user_id))
         return
     now = iso()
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
         db.execute(
-            "UPDATE battle_members SET status = 'left', ready = 0, left_at = ?, updated_at = ? WHERE room_id = ? AND user_id = ? AND status = 'active'",
-            (now, now, room["room_id"], int(user_id)),
+            "UPDATE battle_members SET status = 'left', ready = 0, left_at = ?, updated_at = ? WHERE room_id = ? AND actor_key = ? AND status = 'active'",
+            (now, now, room["room_id"], identity.actor_key),
         )
         db.execute(
             "UPDATE battle_rooms SET revision = revision + 1, updated_at = ? WHERE room_id = ?",
@@ -157,15 +219,29 @@ def leave_room(room_code: str, *, user_id: int) -> None:
         )
 
 
-def set_ready(room_code: str, *, user_id: int, ready: bool) -> dict[str, Any]:
+def set_ready(
+    room_code: str,
+    *,
+    actor: Any | None = None,
+    user_id: int | None = None,
+    ready: bool,
+) -> dict[str, Any]:
+    identity = coerce_actor(actor, user_id=user_id)
     try:
-        repository.set_member_ready(room_code, user_id=user_id, ready=ready)
+        repository.set_member_ready(room_code, actor=identity, ready=ready)
     except repository.BattleRepositoryError as exc:
         raise BattleServiceError(str(exc).upper(), str(exc).replace("_", " "), 409) from exc
-    return room_snapshot(room_code, user_id=user_id)
+    return room_snapshot(room_code, actor=identity)
 
 
-def set_role(room_code: str, *, user_id: int, role: str) -> dict[str, Any]:
+def set_role(
+    room_code: str,
+    *,
+    actor: Any | None = None,
+    user_id: int | None = None,
+    role: str,
+) -> dict[str, Any]:
+    identity = coerce_actor(actor, user_id=user_id)
     if role not in {"player", "spectator"}:
         raise BattleServiceError("INVALID_ROLE", "Role must be player or spectator.")
     now = iso()
@@ -175,12 +251,12 @@ def set_role(room_code: str, *, user_id: int, role: str) -> dict[str, Any]:
         if room["status"] not in {"preparing", "waiting"}:
             raise BattleServiceError("ROOM_ALREADY_STARTED", "Role cannot change after start.", 409)
         member = db.execute(
-            "SELECT * FROM battle_members WHERE room_id = ? AND user_id = ? AND status = 'active'",
-            (room["room_id"], int(user_id)),
+            "SELECT * FROM battle_members WHERE room_id = ? AND actor_key = ? AND status = 'active'",
+            (room["room_id"], identity.actor_key),
         ).fetchone()
         if member is None:
             raise BattleServiceError("MEMBER_NOT_FOUND", "Room member not found.", 404)
-        if role == "spectator" and int(room["host_user_id"]) == int(user_id):
+        if role == "spectator" and identity.is_user and int(room["host_user_id"]) == int(identity.user_id):
             raise BattleServiceError(
                 "HOST_CANNOT_SPECTATE",
                 "The room host must remain in a player seat.",
@@ -204,13 +280,22 @@ def set_role(room_code: str, *, user_id: int, role: str) -> dict[str, Any]:
             "UPDATE battle_rooms SET revision = revision + 1, updated_at = ? WHERE room_id = ?",
             (now, room["room_id"]),
         )
-    return room_snapshot(room_code, user_id=user_id)
+    return room_snapshot(room_code, actor=identity)
 
 
-def kick(room_code: str, *, host_user_id: int, target_user_id: int) -> dict[str, Any]:
+def kick(
+    room_code: str,
+    *,
+    host_user_id: int,
+    target_actor_key: str | None = None,
+    target_user_id: int | None = None,
+) -> dict[str, Any]:
     try:
         repository.kick_member(
-            room_code, host_user_id=host_user_id, target_user_id=target_user_id
+            room_code,
+            host_user_id=host_user_id,
+            target_actor_key=target_actor_key,
+            target_user_id=target_user_id,
         )
     except repository.BattleRepositoryError as exc:
         raise BattleServiceError(str(exc).upper(), str(exc).replace("_", " "), 409) from exc

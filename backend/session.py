@@ -59,7 +59,14 @@ class GameSession:
         self.client_id = client_id
         self.user_id = None
         self.auth_session_id = None
+        self.actor_kind = "anonymous"
+        self.actor_key = ""
+        self.guest_id = None
+        self.guest_display_name = ""
+        self.guest_ip_address = ""
+        self.guest_query_reservation_ids = {}
         self.user_email = ""
+        self.user_display_name = ""
         self.user_role = ""
         self.user_entitlement_tier = "free"
         if client_id.startswith("gamer_"):

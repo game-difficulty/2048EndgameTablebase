@@ -92,7 +92,7 @@ class BattleRepositoryTests(unittest.TestCase):
             index = db.execute(
                 """
                 SELECT sql FROM sqlite_master
-                WHERE type = 'index' AND name = 'uq_battle_members_active_user'
+                WHERE type = 'index' AND name = 'uq_battle_members_active_actor'
                 """
             ).fetchone()
         self.assertEqual(
@@ -104,11 +104,21 @@ class BattleRepositoryTests(unittest.TestCase):
                 "battle_routes",
                 "battle_player_results",
                 "battle_request_ids",
+                "battle_guest_join_events",
                 "battle_chat_messages",
                 "battle_free_player_states",
             },
         )
         self.assertIn("WHERE status = 'active'", index["sql"])
+        self.assertIn("actor_key", index["sql"])
+
+    def test_repeated_init_does_not_rewrite_stable_schema(self) -> None:
+        with auth_db() as db:
+            before = int(db.execute("PRAGMA schema_version").fetchone()[0])
+        init_battle_db()
+        with auth_db() as db:
+            after = int(db.execute("PRAGMA schema_version").fetchone()[0])
+        self.assertEqual(after, before)
 
     def test_room_unavailable_reason_only_reports_authoritative_loss(self) -> None:
         room = self._create_room()

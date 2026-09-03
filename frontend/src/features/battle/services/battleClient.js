@@ -1,7 +1,26 @@
 import { emitAuthRequired, emitTokenBalanceUpdated, emitTokenRequired } from '../../../services/auth/authEvents.js';
-import { authHeaders, clearDeviceSession } from '../../../services/auth/sessionTokenStore.js';
+import {
+  authHeaders,
+  clearDeviceSession,
+  getDeviceSessionToken,
+} from '../../../services/auth/sessionTokenStore.js';
+import {
+  clearGuestSession,
+  getGuestSessionToken,
+} from '../../../services/auth/guestSessionStore.js';
 import { getBackendUrl } from '../../../services/runtime/backendUrl.js';
 import { handleProtectedResponseError } from '../../../services/files/browserFiles.js';
+import { buildBattleKickPayload } from '../core/battleActor.js';
+
+function handleBattleUnauthorized() {
+  if (!getDeviceSessionToken() && getGuestSessionToken()) {
+    clearGuestSession();
+    window.dispatchEvent(new CustomEvent('guest-session-invalidated'));
+    return;
+  }
+  clearDeviceSession();
+  emitAuthRequired();
+}
 
 async function request(path, { method = 'GET', body, signal } = {}) {
   const response = await fetch(getBackendUrl(path), {
@@ -14,8 +33,7 @@ async function request(path, { method = 'GET', body, signal } = {}) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401) {
-      clearDeviceSession();
-      emitAuthRequired();
+      handleBattleUnauthorized();
     }
     if (response.status === 402 && payload?.detail?.code === 'INSUFFICIENT_TOKENS') {
       emitTokenRequired(payload.detail);
@@ -75,10 +93,12 @@ export const battleClient = {
       body: { request_id: requestId },
     },
   ),
-  kick: (roomCode, userId, requestId) => request(`/api/battle/rooms/${encodeURIComponent(roomCode)}/kick`, {
-    method: 'POST',
-    body: { user_id: Number(userId), request_id: requestId },
-  }),
+  kick: (roomCode, actor, requestId) => {
+    return request(`/api/battle/rooms/${encodeURIComponent(roomCode)}/kick`, {
+      method: 'POST',
+      body: buildBattleKickPayload(actor, requestId),
+    });
+  },
   role: (roomCode, role, requestId) => request(`/api/battle/rooms/${encodeURIComponent(roomCode)}/role`, {
     method: 'POST',
     body: { role, request_id: requestId },
@@ -94,8 +114,7 @@ export const battleClient = {
     });
     if (!response.ok) {
       if (response.status === 401) {
-        clearDeviceSession();
-        emitAuthRequired();
+        handleBattleUnauthorized();
       }
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload?.detail?.message || payload?.detail || `Route download failed: ${response.status}`);
@@ -118,6 +137,12 @@ export const battleClient = {
       signal,
     });
     if (!response.ok) {
+      if (response.status === 401) {
+        handleBattleUnauthorized();
+        const error = new Error('Battle replay session expired.');
+        error.status = 401;
+        throw error;
+      }
       await handleProtectedResponseError(response, 'Battle replay download failed');
     }
     return {

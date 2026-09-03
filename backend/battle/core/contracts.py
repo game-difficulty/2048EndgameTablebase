@@ -61,7 +61,7 @@ class BattleMode(ABC):
         room_code: str,
         round_id: str,
         *,
-        user_id: int,
+        actor_key: str,
     ) -> tuple[bytes, dict[str, Any]]:
         raise NotImplementedError
 
@@ -69,7 +69,7 @@ class BattleMode(ABC):
         self,
         room_code: str,
         *,
-        user_id: int,
+        actor_key: str,
         action: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
@@ -79,7 +79,7 @@ class BattleMode(ABC):
         self,
         room_code: str,
         *,
-        user_id: int,
+        actor_key: str,
         action: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
@@ -87,7 +87,7 @@ class BattleMode(ABC):
         return await asyncio.to_thread(
             self.handle_action,
             room_code,
-            user_id=user_id,
+            actor_key=actor_key,
             action=action,
             payload=payload,
         )
@@ -96,10 +96,11 @@ class BattleMode(ABC):
         self,
         payload: dict[str, Any],
         *,
-        viewer_user_id: int,
+        viewer_actor_key: str,
+        viewer_user_id: int | None,
     ) -> dict[str, Any]:
         """Attach viewer-safe mode state to a generic room snapshot."""
-        del viewer_user_id
+        del viewer_actor_key, viewer_user_id
         return payload
 
     def settle_unstarted_round(self, room_id: str, *, reason: str) -> None:
@@ -109,7 +110,7 @@ class BattleMode(ABC):
         self,
         room_code: str,
         *,
-        user_id: int,
+        actor_key: str,
         round_id: str,
     ) -> dict[str, Any]:
         """End one participant's current round without removing room membership."""

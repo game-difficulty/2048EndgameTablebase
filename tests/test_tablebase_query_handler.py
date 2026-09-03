@@ -1,10 +1,12 @@
 import asyncio
+import time
 import unittest
 from unittest.mock import patch
 
 import numpy as np
 
 from backend.actions import Action
+from backend.auth.guest_service import GuestQueryReservation
 from backend.handlers import tablebase_query as query_handler
 from backend.quota.errors import InsufficientTokens
 from backend.session import GameSession, np_u64
@@ -38,6 +40,150 @@ class ConstantReader:
 
 
 class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_guest_trainer_query_consumes_once_without_prefetch(self):
+        scheduler = TablebaseQueryScheduler(worker_count=4)
+        session = GameSession("guest_trainer_query_test")
+        session.guest_id = "guest-query-test"
+        session.actor_key = "g:guest-query-test"
+        session.guest_ip_address = "203.0.113.8"
+        session.current_pattern = "L3_256"
+        session.pattern_settings = ["L3", "256"]
+        session.use_variant = False
+        session.book_reader = ConstantReader()
+        board = np.zeros((4, 4), dtype=np.int32)
+        board[0, :2] = 2
+        session.board_encoded = np_u64(encode_board(board))
+        websocket = RecordingWebSocket()
+        reservation = GuestQueryReservation(
+            event_id=1,
+            guest_id=session.guest_id,
+            request_id="guest-query-1",
+            remaining=4,
+        )
+
+        try:
+            with (
+                patch.object(query_handler, "tablebase_query_scheduler", scheduler),
+                patch.object(query_handler, "get_catalog_version", return_value="catalog-test"),
+                patch.object(query_handler, "is_guest_tablebase_available", return_value=True),
+                patch.object(query_handler, "reserve_guest_query", return_value=reservation) as reserve,
+                patch.object(
+                    query_handler,
+                    "finalize_guest_query",
+                    return_value={"limit": 5, "used": 1, "remaining": 4},
+                ) as finalize,
+                patch.object(query_handler, "reserve_operation_tokens") as reserve_tokens,
+            ):
+                handled = await query_handler.handle_tablebase_query_action(
+                    Action.TABLEBASE_QUERY,
+                    {
+                        "page": "trainer",
+                        "query_id": "guest-query-1",
+                        "full_pattern": "L3_256",
+                        "board_hex": f"{int(session.board_encoded):016x}",
+                        "prefetch_rng": {
+                            "version": 1,
+                            "state": [1, 2, 3, 4],
+                            "turn": 0,
+                            "spawn_rate_4": 0.1,
+                        },
+                    },
+                    session,
+                    websocket,
+                )
+                self.assertTrue(handled)
+                while query_handler._TABLEBASE_QUERY_TASKS:
+                    await asyncio.gather(
+                        *list(query_handler._TABLEBASE_QUERY_TASKS),
+                        return_exceptions=True,
+                    )
+
+            reserve.assert_called_once_with(
+                guest_id="guest-query-test",
+                request_id="guest-query-1",
+                full_pattern="L3_256",
+                ip_address="203.0.113.8",
+            )
+            finalize.assert_called_once_with(reservation, consume=True)
+            reserve_tokens.assert_not_called()
+            self.assertEqual(len(session.book_reader.calls), 1)
+            self.assertEqual(
+                [message["action"] for message in websocket.messages],
+                ["TABLEBASE_QUERY_RESULT"],
+            )
+            self.assertEqual(
+                websocket.messages[0]["data"]["guest_allowance"],
+                {"limit": 5, "used": 1, "remaining": 4},
+            )
+        finally:
+            await scheduler.close()
+
+    async def test_concurrent_guest_retry_keeps_shared_reservation_until_latest_result(self):
+        class SlowReader(ConstantReader):
+            def move_on_dic(self, board, pattern, target, full_pattern):
+                time.sleep(0.05)
+                return super().move_on_dic(board, pattern, target, full_pattern)
+
+        scheduler = TablebaseQueryScheduler(worker_count=1)
+        session = GameSession("guest_query_retry_test")
+        session.guest_id = "guest-query-retry"
+        session.actor_key = "g:guest-query-retry"
+        session.guest_ip_address = "203.0.113.9"
+        session.current_pattern = "L3_256"
+        session.pattern_settings = ["L3", "256"]
+        session.book_reader = SlowReader()
+        board = np.zeros((4, 4), dtype=np.int32)
+        board[0, :2] = 2
+        session.board_encoded = np_u64(encode_board(board))
+        websocket = RecordingWebSocket()
+        reservation = GuestQueryReservation(
+            event_id=2,
+            guest_id=session.guest_id,
+            request_id="guest-retry-1",
+            remaining=4,
+        )
+        payload = {
+            "page": "trainer",
+            "query_id": "guest-retry-1",
+            "full_pattern": "L3_256",
+            "board_hex": f"{int(session.board_encoded):016x}",
+        }
+
+        try:
+            with (
+                patch.object(query_handler, "tablebase_query_scheduler", scheduler),
+                patch.object(query_handler, "get_catalog_version", return_value="catalog-test"),
+                patch.object(query_handler, "is_guest_tablebase_available", return_value=True),
+                patch.object(query_handler, "reserve_guest_query", return_value=reservation) as reserve,
+                patch.object(
+                    query_handler,
+                    "finalize_guest_query",
+                    return_value={"limit": 5, "used": 1, "remaining": 4},
+                ) as finalize,
+            ):
+                await query_handler.handle_tablebase_query_action(
+                    Action.TABLEBASE_QUERY, payload, session, websocket
+                )
+                await query_handler.handle_tablebase_query_action(
+                    Action.TABLEBASE_QUERY, payload, session, websocket
+                )
+                while query_handler._TABLEBASE_QUERY_TASKS:
+                    await asyncio.gather(
+                        *list(query_handler._TABLEBASE_QUERY_TASKS),
+                        return_exceptions=True,
+                    )
+
+            self.assertEqual(reserve.call_count, 2)
+            finalize.assert_called_once_with(reservation, consume=True)
+            self.assertEqual(len(session.book_reader.calls), 1)
+            self.assertEqual(
+                [message["action"] for message in websocket.messages],
+                ["TABLEBASE_QUERY_RESULT"],
+            )
+            self.assertEqual(session.guest_query_reservation_ids, {})
+        finally:
+            await scheduler.close()
+
     async def test_superseded_query_refunds_its_reservation(self):
         class SupersededHandle:
             generation = 1

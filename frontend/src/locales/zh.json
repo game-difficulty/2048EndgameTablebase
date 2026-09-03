@@ -346,6 +346,15 @@
     }
   },
   "trainer": {
+    "guest": {
+      "attemptsRemaining": "游客体验 {remaining}/{total}",
+      "locked": "该定式需要登录后使用",
+      "lockedShort": "登录",
+      "exhausted": "游客体验次数已用完。登录或注册后可继续查询。",
+      "lockedNotice": "该定式暂不提供游客体验，登录后即可使用。",
+      "unavailable": "暂时无法建立游客体验会话，请稍后重试。",
+      "session": "暂时无法建立游客体验会话，请稍后重试，或登录后继续。"
+    },
     "emptyPattern": {
       "category": "空定式",
       "label": "空定式"
@@ -549,6 +558,8 @@
       "completedWithErrors": "已完成（含错误）"
     },
     "errors": {
+      "BATTLE_GUEST_SESSION_UNAVAILABLE": "暂时无法建立游客身份，请稍后重试。",
+      "BATTLE_LOGIN_REQUIRED": "创建和管理房间需要登录。",
       "network": "网络请求失败。请稍后重试。",
       "uploadNetwork": "文件上传未完成，可能是浏览器、网络或文件选择器中断了上传。请重新选择文件后重试。",
       "statusNetwork": "分析任务已提交，但状态同步暂时失败。页面会继续重试，也可以稍后重新打开分析窗口查看结果。",
@@ -838,6 +849,8 @@
       "publicRoomHint": "其他玩家可在大厅中找到它",
       "allowSpectators": "允许观战",
       "allowSpectatorsHint": "允许其他人随时进入观战",
+      "allowGuestChat": "允许游客发言",
+      "allowGuestChatHint": "开启后，游客仍需符合上方选择的发言身份",
       "chatRoles": "可发言身份",
       "chatRolesHint": "选择允许发言的成员",
       "chatRolesNone": "全部禁言",
@@ -868,6 +881,10 @@
       "player": "玩家",
       "spectator": "观战",
       "host": "房主"
+    },
+    "guest": {
+      "marker": "游客",
+      "createRequiresLogin": "登录后才能创建对战房间。"
     },
     "status": {
       "preparing": "准备中",
@@ -954,6 +971,7 @@
       "retryIn": "{seconds} 秒",
       "newMessages": "有新消息",
       "unknownUser": "未知用户",
+      "guestForbidden": "房主未开放游客发言。",
       "errors": {
         "CHAT_RATE_LIMITED": "发言过于频繁，请在 {seconds} 秒后重试。",
         "CHAT_EMPTY": "请输入消息内容。",

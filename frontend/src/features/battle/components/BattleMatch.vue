@@ -32,7 +32,7 @@
           @click="$emit('save-replay')"
         >{{ $t('battle.replay.save') }}</button>
         <button
-          v-if="replayAvailable"
+          v-if="replayReviewAvailable"
           type="button"
           :disabled="replayBusy"
           @click="$emit('open-replay')"
@@ -60,19 +60,19 @@
     </header>
 
     <div v-if="spectator" class="battle-spectator-stage">
-      <article v-for="player in playerRows" :key="player.user_id" class="battle-spectator-board">
+      <article v-for="player in playerRows" :key="battleActorRenderKey(player)" class="battle-spectator-board">
         <div class="battle-mini-head">
           <div class="battle-player-identity">
-            <img v-if="player.avatar_url" :src="player.avatar_url" alt="" />
+            <img v-if="player.avatar_url && !isBattleGuest(player)" :src="player.avatar_url" alt="" />
             <span v-else>{{ initials(player.display_name) }}</span>
-            <strong>{{ player.display_name }}</strong>
+            <strong>{{ player.display_name }} <small v-if="isBattleGuest(player)" class="battle-player-guest-marker">{{ $t('battle.guest.marker') }}</small></strong>
           </div>
           <div class="battle-mini-stats">
             <strong>{{ percent(player.goodness_of_fit) }}</strong>
             <span>{{ player.route_index }}/{{ totalSteps }}</span>
           </div>
         </div>
-        <BaseBoard v-if="opponentBoards[player.user_id]" :frame="opponentBoards[player.user_id]" :dis32k="dis32k" :is-variant="isVariant" />
+        <BaseBoard v-if="opponentBoards[battleActorRenderKey(player)]" :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant" />
       </article>
     </div>
 
@@ -115,19 +115,19 @@
           <strong>{{ playerRows.length }}</strong>
         </div>
         <div class="battle-opponent-list">
-          <article v-for="player in playerRows" :key="player.user_id" :class="['battle-opponent-row', Number(player.user_id) === Number(currentUserId) ? 'self' : '']">
+          <article v-for="player in playerRows" :key="battleActorRenderKey(player)" :class="['battle-opponent-row', isCurrentActor(player) ? 'self' : '']">
             <div class="battle-opponent-topline">
               <div class="battle-player-identity">
-                <img v-if="player.avatar_url" :src="player.avatar_url" alt="" />
+                <img v-if="player.avatar_url && !isBattleGuest(player)" :src="player.avatar_url" alt="" />
                 <span v-else>{{ initials(player.display_name) }}</span>
-                <div><strong>{{ player.display_name }}</strong><small :class="player.online ? 'online' : 'offline'">{{ $t(onlineStatusKey(player)) }}</small></div>
+                <div><strong>{{ player.display_name }} <small v-if="isBattleGuest(player)" class="battle-player-guest-marker">{{ $t('battle.guest.marker') }}</small></strong><small :class="player.online ? 'online' : 'offline'">{{ $t(onlineStatusKey(player)) }}</small></div>
               </div>
               <strong class="battle-opponent-gof">{{ percent(player.goodness_of_fit) }}</strong>
             </div>
             <div class="battle-progress-track"><i :style="{ width: progressPercent(player.route_index) }"></i></div>
             <div class="battle-opponent-footer"><span>{{ player.route_index }}/{{ totalSteps }}</span><span>{{ $t(playerStatusKey(player)) }}</span></div>
-            <div v-if="canSeeBoard(player) && opponentBoards[player.user_id]" class="battle-revealed-board">
-              <BaseBoard compact :frame="opponentBoards[player.user_id]" :dis32k="dis32k" :is-variant="isVariant" />
+            <div v-if="canSeeBoard(player) && opponentBoards[battleActorRenderKey(player)]" class="battle-revealed-board">
+              <BaseBoard compact :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant" />
             </div>
           </article>
         </div>
@@ -141,11 +141,17 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
+import {
+  battleActorRenderKey,
+  isBattleGuest,
+  sameBattleActor,
+} from '../core/battleActor.js';
 import { battleCountdownState } from '../core/battleCountdown.js';
 
 const props = defineProps({
   room: { type: Object, required: true },
   currentUserId: { type: Number, default: 0 },
+  currentActorKey: { type: String, default: '' },
   boardFrame: { type: Object, required: true },
   opponentBoards: { type: Object, default: () => ({}) },
   wrongOverlay: { type: Object, default: null },
@@ -156,6 +162,7 @@ const props = defineProps({
   dis32k: { type: Boolean, default: false },
   isVariant: { type: Boolean, default: false },
   replayAvailable: { type: Boolean, default: false },
+  replayReviewAvailable: { type: Boolean, default: false },
   replayBusy: { type: Boolean, default: false },
 });
 
@@ -174,14 +181,19 @@ const now = ref(Date.now());
 let timer = null;
 const totalSteps = computed(() => Number(props.room.route?.step_count || 0));
 const roundCompleted = computed(() => props.room.round?.status === 'completed');
-const ownResult = computed(() => props.room.results?.find((item) => Number(item.user_id) === Number(props.currentUserId)) || null);
+const currentIdentity = computed(() => (
+  props.room.viewer
+  || (props.currentActorKey ? { actor_key: props.currentActorKey } : { user_id: props.currentUserId })
+));
+const isCurrentActor = (candidate) => sameBattleActor(candidate, currentIdentity.value);
+const ownResult = computed(() => props.room.results?.find(isCurrentActor) || null);
 const canForfeit = computed(() => !props.spectator && ownResult.value?.status === 'playing');
 const ownForfeited = computed(() => (
   ownResult.value?.status === 'disqualified'
   && ownResult.value?.mode_data?.finish_reason === 'forfeit'
 ));
 const playerRows = computed(() => (props.room.results || []).map((result) => {
-  const member = props.room.members?.find((item) => Number(item.user_id) === Number(result.user_id)) || {};
+  const member = props.room.members?.find((item) => sameBattleActor(item, result)) || {};
   return { ...member, ...result };
 }));
 const countdownState = computed(() => battleCountdownState({
@@ -207,7 +219,7 @@ const playerStatusKey = (player) => (
 );
 const directionLabel = (direction) => ({ left: '←', right: '→', up: '↑', down: '↓' }[direction] || '?');
 const canSeeBoard = (player) => (
-  Number(player.user_id) !== Number(props.currentUserId)
+  !isCurrentActor(player)
   && (props.spectator || props.ownFinished)
 );
 
@@ -277,6 +289,7 @@ onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
 .battle-player-identity > span { display: grid; place-items: center; border: 1px solid var(--border-main); color: var(--accent); font-size: 10px; font-weight: 900; }
 .battle-player-identity div { min-width: 0; display: flex; flex-direction: column; }
 .battle-player-identity strong { overflow: hidden; text-overflow: ellipsis; color: var(--text-main); font-size: var(--font-ui-xs); white-space: nowrap; }
+.battle-player-guest-marker { margin-left: 3px; color: var(--accent); font-size: 8px; font-weight: 900; }
 .battle-player-identity small { color: var(--text-secondary); font-size: 9px; }
 .battle-player-identity small.online { color: #278354; }
 .battle-opponent-gof { color: var(--text-main); font: 900 13px/1 var(--font-mono, monospace); }

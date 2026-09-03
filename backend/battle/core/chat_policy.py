@@ -27,7 +27,9 @@ def decode_chat_roles(value: Any) -> list[str]:
         return list(DEFAULT_CHAT_ROLES)
 
 
-def effective_chat_role(*, room: Any, member: Any, user_id: int) -> str:
-    if int(room["host_user_id"]) == int(user_id):
+def effective_chat_role(
+    *, room: Any, member: Any, user_id: int | None = None
+) -> str:
+    if user_id is not None and int(room["host_user_id"]) == int(user_id):
         return "host"
     return str(member["role"] or "").strip().lower()

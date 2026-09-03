@@ -46,20 +46,20 @@ class FakeBattleMode(BattleMode):
     async def start_room(self, room_code: str, **kwargs):
         return {"room_code": room_code, "started": True}
 
-    def artifact_payload(self, room_code: str, round_id: str, *, user_id: int):
-        return b"test", {"room_code": room_code, "round_id": round_id, "user_id": user_id}
+    def artifact_payload(self, room_code: str, round_id: str, *, actor_key: str):
+        return b"test", {"room_code": room_code, "round_id": round_id, "actor_key": actor_key}
 
     def handle_action(
         self,
         room_code: str,
         *,
-        user_id: int,
+        actor_key: str,
         action: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         accepted = {
             "room_code": room_code,
-            "user_id": user_id,
+            "actor_key": actor_key,
             "action": action,
             "payload": payload,
         }
@@ -172,7 +172,7 @@ class BattleModeArchitectureTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(handled)
             handler.assert_awaited_once_with(
                 "ART234",
-                user_id=self.user_id,
+                actor=realtime.user_actor(self.user_id),
                 action="move",
                 payload={"direction": "left", "sequence": 8, "request_id": "req-8"},
             )

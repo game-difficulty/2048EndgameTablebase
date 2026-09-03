@@ -25,6 +25,7 @@ from ..remote_workers.errors import RemoteTablebaseError
 from ..remote_workers.registry import remote_worker_registry
 from ..tablebase_catalog import (
     build_filepath_map_entry,
+    is_guest_tablebase_available,
     resolve_configured_tablebase,
 )
 from ..trainer_helpers import (
@@ -112,7 +113,7 @@ async def _start_requested_tablebase_query(
     if (
         not query_id
         or not session.current_pattern
-        or session.user_id is None
+        or (session.user_id is None and not getattr(session, "guest_id", None))
         or session.moved == 1
     ):
         return
@@ -213,6 +214,23 @@ async def handle_trainer_action(
         pattern = str(payload.get("pattern", "L3")).strip()
         target = payload.get("target", "32768")
         full_pattern = pattern if "_" in pattern else f"{pattern}_{target}"
+        if (
+            session.user_id is None
+            and getattr(session, "guest_id", None)
+            and not is_guest_tablebase_available(full_pattern)
+        ):
+            await websocket.send_json(
+                {
+                    "action": Message.TRAINER_TABLEBASE_READY,
+                    "data": {
+                        "request_id": str(payload.get("request_id") or "")[:160],
+                        "tablebase_status": "guest_locked",
+                        "tablebase_full_pattern": full_pattern,
+                        "code": "GUEST_TABLE_LOGIN_REQUIRED",
+                    },
+                }
+            )
+            return True
         base_pattern = full_pattern.split("_")[0]
         client_local_board = bool(payload.get("client_local_board"))
         if not client_local_board:
@@ -288,6 +306,8 @@ async def handle_trainer_action(
         except (TypeError, ValueError):
             next_mode = 0
         if next_mode not in (0, 1, 2, 3):
+            next_mode = 0
+        if session.user_id is None and getattr(session, "guest_id", None) and next_mode in (1, 2):
             next_mode = 0
         session.spawn_mode = next_mode
         session.moved = 0

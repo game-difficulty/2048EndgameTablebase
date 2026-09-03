@@ -7,8 +7,19 @@ import {
 } from '../core/modeRegistry.js';
 
 
-export function useBattleSession(activeRef, authUserRef, hotkeysEnabledRef = activeRef) {
-  const roomSession = useBattleRoomSession(activeRef, authUserRef);
+export function useBattleSession(
+  activeRef,
+  authUserRef,
+  hotkeysEnabledRef = activeRef,
+  actorRef = authUserRef,
+  ensureGuestSession = null,
+) {
+  const roomSession = useBattleRoomSession(
+    activeRef,
+    authUserRef,
+    actorRef,
+    ensureGuestSession,
+  );
   const defaultDefinition = getBattleModeDefinition('goodness');
   const modeDefinitions = listBattleModeDefinitions();
   const selectedModeKey = ref(defaultDefinition.key);

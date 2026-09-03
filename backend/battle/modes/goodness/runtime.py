@@ -325,6 +325,7 @@ async def create_room_for_mode(
             full_pattern=full_pattern,
             visibility=str(settings["visibility"]),
             allow_spectators=bool(settings["allow_spectators"]),
+            allow_guest_chat=bool(settings["allow_guest_chat"]),
             max_players=int(settings["max_players"]),
             initial_board=settings["initial_board"],
             max_steps=settings["max_steps"],
@@ -580,19 +581,23 @@ def _start_ready_round(room_ref: str, *, host_user_id: int) -> dict[str, Any]:
             db.execute(
                 """
                 INSERT OR REPLACE INTO battle_player_results
-                (result_id, round_id, user_id, status, route_index, last_sequence,
+                (result_id, round_id, actor_key, user_id, guest_id,
+                 display_name_snapshot, status, route_index, last_sequence,
                  goodness_of_fit, choice_blob, finished_at, timeout_at, created_at, updated_at,
                  board_state)
                 VALUES (
-                  (SELECT result_id FROM battle_player_results WHERE round_id = ? AND user_id = ?),
-                  ?, ?, ?, ?, 0, 1.0, X'', ?, ?, ?, ?, ?
+                  (SELECT result_id FROM battle_player_results WHERE round_id = ? AND actor_key = ?),
+                  ?, ?, ?, ?, ?, ?, ?, 0, 1.0, X'', ?, ?, ?, ?, ?
                 )
                 """,
                 (
                     round_row["round_id"],
-                    player["user_id"],
+                    player["actor_key"],
                     round_row["round_id"],
+                    player["actor_key"],
                     player["user_id"],
+                    player["guest_id"],
+                    player["display_name_snapshot"],
                     initial_status,
                     route_index,
                     now_text if initial_status == "completed" else None,
@@ -678,9 +683,11 @@ async def start_room_for_mode(
     return room_snapshot(room_code, user_id=user_id)
 
 
-def artifact_payload_for_mode(room_code: str, round_id: str, *, user_id: int) -> tuple[bytes, dict[str, Any]]:
+def artifact_payload_for_mode(
+    room_code: str, round_id: str, *, actor_key: str
+) -> tuple[bytes, dict[str, Any]]:
     room = repository.get_room(room_code)
-    _assert_member(room, user_id)
+    _assert_member(room, actor_key=actor_key)
     with auth_db() as db:
         row = db.execute(
             """
@@ -723,7 +730,7 @@ MOVE_CODE_BY_DIRECTION = {"left": 1, "right": 2, "up": 3, "down": 4}
 def _record_choice_goodness(
     room_code: str,
     *,
-    user_id: int,
+    actor_key: str,
     round_id: str,
     sequence: int,
     route_index: int,
@@ -742,8 +749,8 @@ def _record_choice_goodness(
             (str(round_id), room["room_id"]),
         ).fetchone()
         result = db.execute(
-            "SELECT * FROM battle_player_results WHERE round_id = ? AND user_id = ?",
-            (str(round_id), int(user_id)),
+            "SELECT * FROM battle_player_results WHERE round_id = ? AND actor_key = ?",
+            (str(round_id), actor_key),
         ).fetchone()
         route_row = db.execute(
             "SELECT * FROM battle_routes WHERE round_id = ?", (str(round_id),)
@@ -866,7 +873,7 @@ def _record_choice_goodness(
 def _complete_correction_goodness(
     room_code: str,
     *,
-    user_id: int,
+    actor_key: str,
     round_id: str,
     sequence: int,
     route_index: int,
@@ -877,8 +884,8 @@ def _complete_correction_goodness(
         if room["status"] != "running":
             raise BattleServiceError("ROUND_NOT_RUNNING", "Round is not running.", 409)
         result = db.execute(
-            "SELECT * FROM battle_player_results WHERE round_id = ? AND user_id = ?",
-            (str(round_id), int(user_id)),
+            "SELECT * FROM battle_player_results WHERE round_id = ? AND actor_key = ?",
+            (str(round_id), actor_key),
         ).fetchone()
         route_row = db.execute(
             "SELECT * FROM battle_routes WHERE round_id = ?", (str(round_id),)
@@ -927,7 +934,7 @@ def _complete_correction_goodness(
 def handle_action_for_mode(
     room_code: str,
     *,
-    user_id: int,
+    actor_key: str,
     action: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
@@ -935,7 +942,7 @@ def handle_action_for_mode(
     if normalized_action == "move":
         return _record_choice_goodness(
             room_code,
-            user_id=user_id,
+            actor_key=actor_key,
             round_id=str(payload.get("round_id") or ""),
             sequence=int(payload.get("sequence")),
             route_index=int(payload.get("route_index")),
@@ -944,7 +951,7 @@ def handle_action_for_mode(
     if normalized_action == "correction_complete":
         return _complete_correction_goodness(
             room_code,
-            user_id=user_id,
+            actor_key=actor_key,
             round_id=str(payload.get("round_id") or ""),
             sequence=int(payload.get("sequence")),
             route_index=int(payload.get("route_index")),
@@ -986,7 +993,7 @@ def _complete_round_if_done(
 def forfeit_round_for_mode(
     room_code: str,
     *,
-    user_id: int,
+    actor_key: str,
     round_id: str,
 ) -> dict[str, Any]:
     normalized_round_id = str(round_id or "")
@@ -999,14 +1006,14 @@ def forfeit_round_for_mode(
         if room["status"] != "running":
             raise BattleServiceError("ROUND_NOT_RUNNING", "Round is not running.", 409)
         member = db.execute(
-            "SELECT * FROM battle_members WHERE room_id = ? AND user_id = ? AND status = 'active'",
-            (room["room_id"], int(user_id)),
+            "SELECT * FROM battle_members WHERE room_id = ? AND actor_key = ? AND status = 'active'",
+            (room["room_id"], actor_key),
         ).fetchone()
         if member is None or member["role"] != "player":
             raise BattleServiceError("PLAYER_NOT_ACTIVE", "You are not an active player.", 409)
         result = db.execute(
-            "SELECT * FROM battle_player_results WHERE round_id = ? AND user_id = ?",
-            (normalized_round_id, int(user_id)),
+            "SELECT * FROM battle_player_results WHERE round_id = ? AND actor_key = ?",
+            (normalized_round_id, actor_key),
         ).fetchone()
         if result is None:
             raise BattleServiceError("ROUND_NOT_FOUND", "Round state is unavailable.", 404)
@@ -1016,7 +1023,7 @@ def forfeit_round_for_mode(
         except (TypeError, ValueError):
             mode_data = {}
         if result["status"] == "disqualified" and mode_data.get("finish_reason") == "forfeit":
-            return room_snapshot(room_code, user_id=user_id)
+            return room_snapshot(room_code, actor_key=actor_key)
         if result["status"] not in {"playing", "disconnected"}:
             raise BattleServiceError("PLAYER_FINISHED", "This player has already finished.", 409)
 
@@ -1041,7 +1048,7 @@ def forfeit_round_for_mode(
             round_id=normalized_round_id,
             now_text=now,
         )
-    return room_snapshot(room_code, user_id=user_id)
+    return room_snapshot(room_code, actor_key=actor_key)
 
 
 def mark_timeouts() -> set[str]:

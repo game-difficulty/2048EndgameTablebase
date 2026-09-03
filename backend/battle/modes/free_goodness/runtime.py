@@ -451,6 +451,7 @@ async def create_room_for_mode(
             full_pattern=str(settings["full_pattern"]),
             visibility=str(settings["visibility"]),
             allow_spectators=bool(settings["allow_spectators"]),
+            allow_guest_chat=bool(settings["allow_guest_chat"]),
             max_players=int(settings["max_players"]),
             initial_board=settings["initial_board"],
             max_steps=int(settings["score_step_limit"]),
@@ -487,10 +488,19 @@ async def create_room_for_mode(
     }
 
 
-def _candidate_key(round_id: str, user_id: int, sequence: int, board: int):
+def _identity_key(actor_key: str | int | None = None, user_id: int | None = None) -> str:
+    if actor_key is None:
+        if user_id is None:
+            raise ValueError("actor_required")
+        return f"u:{int(user_id)}"
+    value = str(actor_key)
+    return f"u:{value}" if value.isdigit() else value
+
+
+def _candidate_key(round_id: str, actor_key: str | int, sequence: int, board: int):
     return (
         str(round_id),
-        int(user_id),
+        _identity_key(actor_key),
         int(sequence),
         int(board),
         get_catalog_version(),
@@ -568,15 +578,17 @@ async def _generate_certainty_tail(
     *,
     room: dict[str, Any],
     round_id: str,
-    user_id: int,
+    actor_key: str | None = None,
     board: int,
     results: dict[str, float],
     seed_hex: str,
     sequence: int,
     risk_state: SpawnRiskState,
+    user_id: int | None = None,
 ) -> tuple[list[CertaintyTailStep], int]:
     """Finish a proven position locally without adding scored Battle steps."""
 
+    actor_key = _identity_key(actor_key, user_id)
     target = int(room["target"])
     use_variant = _use_variant(str(room["pattern"]))
     entry = resolve_tablebase(str(room["full_pattern"])) or {}
@@ -621,7 +633,7 @@ async def _generate_certainty_tail(
                 room,
                 next_board,
                 stream_key=(
-                    f"battle-free-certainty:{round_id}:{user_id}:"
+                    f"battle-free-certainty:{round_id}:{actor_key}:"
                     f"{int(sequence) + offset}:{attempt}"
                 ),
                 supporter=supporter,
@@ -698,7 +710,7 @@ async def _prepare_direction(
     *,
     room: dict[str, Any],
     round_id: str,
-    user_id: int,
+    actor_key: str,
     sequence: int,
     direction: str,
     moved_board: int,
@@ -719,7 +731,7 @@ async def _prepare_direction(
         candidate = await _evaluate_spawn_candidate(
             room=room,
             round_id=round_id,
-            user_id=user_id,
+            actor_key=actor_key,
             sequence=sequence,
             direction=direction,
             moved_board=moved_board,
@@ -740,7 +752,7 @@ async def _evaluate_spawn_candidate(
     *,
     room: dict[str, Any],
     round_id: str,
-    user_id: int,
+    actor_key: str | None = None,
     sequence: int,
     direction: str,
     moved_board: int,
@@ -751,13 +763,15 @@ async def _evaluate_spawn_candidate(
     spawn_value: int,
     supporter: bool,
     lane: str,
+    user_id: int | None = None,
 ) -> PreparedSpawn | None:
+    actor_key = _identity_key(actor_key, user_id)
     next_board = _spawn_board(moved_board, spawn_index, spawn_value)
     lookup = await _lookup(
         room,
         next_board,
         stream_key=(
-            f"battle-free:{round_id}:{user_id}:{sequence}:{direction}:{attempt}"
+            f"battle-free:{round_id}:{actor_key}:{sequence}:{direction}:{attempt}"
         ),
         supporter=supporter,
         lane=lane,
@@ -796,14 +810,16 @@ async def _prepare_directions(
     *,
     room: dict[str, Any],
     round_id: str,
-    user_id: int,
+    actor_key: str | None = None,
     sequence: int,
     direction_states: dict[str, tuple[int, float]],
     risk_state: SpawnRiskState,
     seed_hex: str,
     lane: str,
     prepared_key=None,
+    user_id: int | None = None,
 ) -> dict[str, PreparedSpawn]:
+    actor_key = _identity_key(actor_key, user_id)
     async def prepare_one(
         direction: str,
         moved_board: int,
@@ -813,7 +829,7 @@ async def _prepare_directions(
             candidate = await _prepare_direction(
                 room=room,
                 round_id=round_id,
-                user_id=user_id,
+                actor_key=actor_key,
                 sequence=sequence,
                 direction=direction,
                 moved_board=moved_board,
@@ -856,15 +872,17 @@ async def _prepare_state(
     *,
     room: dict[str, Any],
     round_id: str,
-    user_id: int,
+    actor_key: str | None = None,
     sequence: int,
     board: int,
     results: dict[str, float],
     risk_state: SpawnRiskState,
     seed_hex: str,
     lane: str = "prefetch",
+    user_id: int | None = None,
 ) -> dict[str, PreparedSpawn]:
-    key = _candidate_key(round_id, user_id, sequence, board)
+    actor_key = _identity_key(actor_key, user_id)
+    key = _candidate_key(round_id, actor_key, sequence, board)
     if key in _prepared_complete:
         return _prepared_candidates(key)
     moved = _moved_boards(board, use_variant=_use_variant(str(room["pattern"])))
@@ -890,7 +908,7 @@ async def _prepare_state(
     await _prepare_directions(
         room=room,
         round_id=round_id,
-        user_id=user_id,
+        actor_key=actor_key,
         sequence=sequence,
         direction_states={
             direction: (
@@ -913,7 +931,7 @@ async def _prepare_state(
 def _schedule_prepare_state(**kwargs) -> asyncio.Task[dict[str, PreparedSpawn]]:
     key = _candidate_key(
         kwargs["round_id"],
-        kwargs["user_id"],
+        kwargs["actor_key"],
         kwargs["sequence"],
         kwargs["board"],
     )
@@ -950,11 +968,11 @@ def _discard_round_prefetch(round_id: str) -> None:
             _prepared_complete.discard(key)
 
 
-def _load_round_context(db: sqlite3.Connection, room_ref: str, user_id: int):
+def _load_round_context(db: sqlite3.Connection, room_ref: str, actor_key: str):
     room = repository._find_room(db, room_ref)
     member = db.execute(
-        "SELECT * FROM battle_members WHERE room_id = ? AND user_id = ? AND status = 'active'",
-        (room["room_id"], int(user_id)),
+        "SELECT * FROM battle_members WHERE room_id = ? AND actor_key = ? AND status = 'active'",
+        (room["room_id"], actor_key),
     ).fetchone()
     if member is None:
         raise BattleServiceError("ROOM_MEMBERSHIP_REQUIRED", "You are not in this room.", 403)
@@ -999,7 +1017,7 @@ async def _initialize_players(
         certainty_steps, board = await _generate_certainty_tail(
             room=room,
             round_id=str(round_row["round_id"]),
-            user_id=int(room["host_user_id"]),
+            actor_key=f"u:{int(room['host_user_id'])}",
             board=initial_board,
             results=results,
             seed_hex=seed_hex,
@@ -1013,7 +1031,7 @@ async def _initialize_players(
             _prepare_state(
                 room=room,
                 round_id=str(round_row["round_id"]),
-                user_id=int(player["user_id"]),
+                actor_key=str(player["actor_key"]),
                 sequence=0,
                 board=board,
                 results=results,
@@ -1061,7 +1079,7 @@ async def _initialize_players(
                     {
                         "auto_steps": certainty_payload,
                         "auto_playback_key": (
-                            f"{round_row['round_id']}:{int(player['user_id'])}:0:certainty"
+                            f"{round_row['round_id']}:{player['actor_key']}:0:certainty"
                         ),
                         "auto_start_board_hex": f"{initial_board:016x}",
                         "auto_final_board_hex": f"{board:016x}",
@@ -1070,18 +1088,21 @@ async def _initialize_players(
             db.execute(
                 """
                 INSERT OR REPLACE INTO battle_player_results
-                (result_id, round_id, user_id, status, route_index, last_sequence,
+                (result_id, round_id, actor_key, user_id, guest_id,
+                 display_name_snapshot, status, route_index, last_sequence,
                  goodness_of_fit, primary_score, secondary_score, progress,
                  mode_data_json, choice_blob, finished_at, timeout_at,
                  created_at, updated_at, board_state)
                 VALUES (
-                  (SELECT result_id FROM battle_player_results WHERE round_id = ? AND user_id = ?),
-                  ?, ?, ?, 0, 0, 1.0, 1.0, 0, 0, ?, X'', ?, ?, ?, ?, ?
+                  (SELECT result_id FROM battle_player_results WHERE round_id = ? AND actor_key = ?),
+                  ?, ?, ?, ?, ?, ?, 0, 0, 1.0, 1.0, 0, 0, ?, X'', ?, ?, ?, ?, ?
                 )
                 """,
                 (
-                    round_row["round_id"], player["user_id"],
-                    round_row["round_id"], player["user_id"],
+                    round_row["round_id"], player["actor_key"],
+                    round_row["round_id"], player["actor_key"],
+                    player["user_id"], player["guest_id"],
+                    player["display_name_snapshot"],
                     result_status, json.dumps(player_mode_data, separators=(",", ":")),
                     now_text if initial_finish else None,
                     deadline, now_text, now_text, f"{board:016x}",
@@ -1089,25 +1110,26 @@ async def _initialize_players(
             )
             if certainty_replay_count:
                 db.execute(
-                    "UPDATE battle_player_results SET replay_blob = ?, replay_move_count = ? WHERE round_id = ? AND user_id = ?",
+                    "UPDATE battle_player_results SET replay_blob = ?, replay_move_count = ? WHERE round_id = ? AND actor_key = ?",
                     (
                         certainty_replay,
                         certainty_replay_count,
                         round_row["round_id"],
-                        player["user_id"],
+                        player["actor_key"],
                     ),
                 )
             db.execute(
                 """
                 INSERT OR REPLACE INTO battle_free_player_states
-                (round_id, user_id, board_state, step_index, sequence,
+                (round_id, actor_key, user_id, guest_id, board_state, step_index, sequence,
                  spawn_log_index, spawn_log_floor, rng_step,
                  state_status, finish_reason, timeout_at,
                  current_results_json, operation_blob, created_at, updated_at)
-                VALUES (?, ?, ?, 0, 0, 0.0, 0.0, 0, ?, ?, ?, ?, X'', ?, ?)
+                VALUES (?, ?, ?, ?, ?, 0, 0, 0.0, 0.0, 0, ?, ?, ?, ?, X'', ?, ?)
                 """,
                 (
-                    round_row["round_id"], player["user_id"], f"{board:016x}",
+                    round_row["round_id"], player["actor_key"],
+                    player["user_id"], player["guest_id"], f"{board:016x}",
                     state_status, initial_finish, deadline,
                     json.dumps(results, separators=(",", ":")), now_text, now_text,
                 ),
@@ -1231,7 +1253,7 @@ def _public_finish_class(ranking_eligible: bool) -> str:
 
 
 def sanitize_snapshot_for_mode(
-    payload: dict[str, Any], *, viewer_user_id: int
+    payload: dict[str, Any], *, viewer_actor_key: str, viewer_user_id: int | None
 ) -> dict[str, Any]:
     round_payload = payload.get("round") or {}
     round_id = str(round_payload.get("round_id") or "")
@@ -1251,17 +1273,17 @@ def sanitize_snapshot_for_mode(
             "SELECT * FROM battle_free_player_states WHERE round_id = ?",
             (round_id,),
         ).fetchall()
-    by_user = {int(row["user_id"]): dict(row) for row in states}
-    viewer = by_user.get(int(viewer_user_id))
+    by_actor = {str(row["actor_key"]): dict(row) for row in states}
+    viewer = by_actor.get(viewer_actor_key)
     viewer_member = next(
-        (item for item in payload.get("members", []) if int(item["user_id"]) == int(viewer_user_id)),
+        (item for item in payload.get("members", []) if item["actor_key"] == viewer_actor_key),
         {},
     )
     reveal_all = viewer_member.get("role") == "spectator" or (
         viewer is not None and str(viewer.get("state_status")) == "finished"
     )
     for result in payload.get("results", []):
-        state = by_user.get(int(result["user_id"]))
+        state = by_actor.get(str(result["actor_key"]))
         if not state:
             continue
         mode_data = dict(result.get("mode_data") or {})
@@ -1282,11 +1304,11 @@ def sanitize_snapshot_for_mode(
                 "ranking_eligible": ranking_eligible,
             }
         )
-        if reveal_all or int(result["user_id"]) == int(viewer_user_id):
+        if reveal_all or result["actor_key"] == viewer_actor_key:
             mode_data["board_hex"] = state["board_state"]
         else:
             mode_data.pop("last_step", None)
-        if int(result["user_id"]) != int(viewer_user_id):
+        if result["actor_key"] != viewer_actor_key:
             mode_data.pop("auto_steps", None)
             mode_data.pop("auto_playback_key", None)
             mode_data.pop("auto_start_board_hex", None)
@@ -1299,10 +1321,10 @@ def sanitize_snapshot_for_mode(
 
 
 def artifact_payload_for_mode(
-    room_code: str, round_id: str, *, user_id: int
+    room_code: str, round_id: str, *, actor_key: str
 ) -> tuple[bytes, dict[str, Any]]:
     room = repository.get_room(room_code)
-    assert_member(room, user_id)
+    assert_member(room, actor_key=actor_key)
     if str((room.get("round") or {}).get("round_id") or "") != str(round_id):
         raise BattleServiceError("ROUND_NOT_FOUND", "Round not found.", 404)
     mode_state = (room.get("round") or {}).get("mode_state") or {}
@@ -1446,7 +1468,7 @@ def _finish_reason(
 def _resume_after_resolution_error(
     *,
     round_id: str,
-    user_id: int,
+    actor_key: str,
     request_id: str,
     original_timeout: str | None,
     resolution_started_at: str,
@@ -1472,15 +1494,15 @@ def _resume_after_resolution_error(
             UPDATE battle_free_player_states
             SET state_status = 'input', resolution_request_id = NULL,
                 resolution_started_at = NULL, timeout_at = ?, updated_at = ?
-            WHERE round_id = ? AND user_id = ? AND state_status = 'resolving'
+            WHERE round_id = ? AND actor_key = ? AND state_status = 'resolving'
               AND resolution_request_id = ?
             """,
-            (deadline, iso(now), round_id, int(user_id), request_id),
+            (deadline, iso(now), round_id, actor_key, request_id),
         )
         if restored.rowcount:
             db.execute(
-                "UPDATE battle_player_results SET timeout_at = ?, updated_at = ? WHERE round_id = ? AND user_id = ? AND status = 'playing'",
-                (deadline, iso(now), round_id, int(user_id)),
+                "UPDATE battle_player_results SET timeout_at = ?, updated_at = ? WHERE round_id = ? AND actor_key = ? AND status = 'playing'",
+                (deadline, iso(now), round_id, actor_key),
             )
 
 
@@ -1489,7 +1511,7 @@ async def _select_prepared_spawn(
     room: dict[str, Any],
     round_data: dict[str, Any],
     state_data: dict[str, Any],
-    user_id: int,
+    actor_key: str,
     board: int,
     moved: dict[str, int],
     results: dict[str, float],
@@ -1500,7 +1522,7 @@ async def _select_prepared_spawn(
         float(state_data["spawn_log_floor"] or 0.0),
     )
     key = _candidate_key(
-        round_data["round_id"], user_id, int(state_data["sequence"]), board
+        round_data["round_id"], actor_key, int(state_data["sequence"]), board
     )
     prepared = _prepared.get(key) or {}
     if key in _prepared:
@@ -1513,7 +1535,7 @@ async def _select_prepared_spawn(
         candidate = await _prepare_direction(
             room=room,
             round_id=str(round_data["round_id"]),
-            user_id=user_id,
+            actor_key=actor_key,
             sequence=int(state_data["sequence"]),
             direction=executed_direction,
             moved_board=moved[executed_direction],
@@ -1532,7 +1554,7 @@ async def _select_prepared_spawn(
             candidate = await _prepare_direction(
                 room=room,
                 round_id=str(round_data["round_id"]),
-                user_id=user_id,
+                actor_key=actor_key,
                 sequence=int(state_data["sequence"]),
                 direction=executed_direction,
                 moved_board=moved[executed_direction],
@@ -1547,7 +1569,7 @@ async def _select_prepared_spawn(
 
 
 async def _resolve_move(
-    room_code: str, *, user_id: int, payload: dict[str, Any]
+    room_code: str, *, actor_key: str, payload: dict[str, Any]
 ) -> dict[str, Any]:
     direction = str(payload.get("direction") or "").lower()
     request_id = str(payload.get("request_id") or payload.get("resolution_request_id") or uuid.uuid4().hex)[:160]
@@ -1557,18 +1579,18 @@ async def _resolve_move(
     now_text = iso(now)
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
-        room_row, member, round_row = _load_round_context(db, room_code, user_id)
+        room_row, member, round_row = _load_round_context(db, room_code, actor_key)
         if member["role"] != "player" or round_row is None or round_row["status"] != "running":
             raise BattleServiceError("ROUND_NOT_RUNNING", "Round is not running.", 409)
         if requested_round and requested_round != str(round_row["round_id"]):
             raise BattleServiceError("ROUND_CONFLICT", "Round changed.", 409)
         state = db.execute(
-            "SELECT * FROM battle_free_player_states WHERE round_id = ? AND user_id = ?",
-            (round_row["round_id"], int(user_id)),
+            "SELECT * FROM battle_free_player_states WHERE round_id = ? AND actor_key = ?",
+            (round_row["round_id"], actor_key),
         ).fetchone()
         result_row = db.execute(
-            "SELECT * FROM battle_player_results WHERE round_id = ? AND user_id = ?",
-            (round_row["round_id"], int(user_id)),
+            "SELECT * FROM battle_player_results WHERE round_id = ? AND actor_key = ?",
+            (round_row["round_id"], actor_key),
         ).fetchone()
         if state is None or result_row is None or result_row["status"] != "playing":
             raise BattleServiceError("PLAYER_NOT_ACTIVE", "Player is not active.", 409)
@@ -1594,13 +1616,13 @@ async def _resolve_move(
             """
             UPDATE battle_free_player_states SET state_status = 'resolving', timeout_at = NULL,
                 resolution_request_id = ?, resolution_started_at = ?, updated_at = ?
-            WHERE round_id = ? AND user_id = ? AND state_status = 'input'
+            WHERE round_id = ? AND actor_key = ? AND state_status = 'input'
             """,
-            (request_id, now_text, now_text, round_row["round_id"], int(user_id)),
+            (request_id, now_text, now_text, round_row["round_id"], actor_key),
         )
         db.execute(
-            "UPDATE battle_player_results SET timeout_at = NULL, updated_at = ? WHERE round_id = ? AND user_id = ?",
-            (now_text, round_row["round_id"], int(user_id)),
+            "UPDATE battle_player_results SET timeout_at = NULL, updated_at = ? WHERE round_id = ? AND actor_key = ?",
+            (now_text, round_row["round_id"], actor_key),
         )
         room = dict(room_row)
         round_data = dict(round_row)
@@ -1614,7 +1636,7 @@ async def _resolve_move(
             room=room,
             round_data=round_data,
             state_data=state_data,
-            user_id=user_id,
+            actor_key=actor_key,
             board=board,
             moved=moved,
             results=results,
@@ -1623,7 +1645,7 @@ async def _resolve_move(
     except asyncio.CancelledError:
         _resume_after_resolution_error(
             round_id=str(round_data["round_id"]),
-            user_id=user_id,
+            actor_key=actor_key,
             request_id=request_id,
             original_timeout=state_data.get("timeout_at"),
             resolution_started_at=now_text,
@@ -1632,7 +1654,7 @@ async def _resolve_move(
     except Exception as exc:
         _resume_after_resolution_error(
             round_id=str(round_data["round_id"]),
-            user_id=user_id,
+            actor_key=actor_key,
             request_id=request_id,
             original_timeout=state_data.get("timeout_at"),
             resolution_started_at=now_text,
@@ -1681,7 +1703,7 @@ async def _resolve_move(
             certainty_steps, persisted_board = await _generate_certainty_tail(
                 room=room,
                 round_id=str(round_data["round_id"]),
-                user_id=user_id,
+                actor_key=actor_key,
                 board=next_board,
                 results=next_results,
                 seed_hex=str(round_data["route_seed"]),
@@ -1693,7 +1715,7 @@ async def _resolve_move(
         except asyncio.CancelledError:
             _resume_after_resolution_error(
                 round_id=str(round_data["round_id"]),
-                user_id=user_id,
+                actor_key=actor_key,
                 request_id=request_id,
                 original_timeout=state_data.get("timeout_at"),
                 resolution_started_at=now_text,
@@ -1702,7 +1724,7 @@ async def _resolve_move(
         except Exception as exc:
             _resume_after_resolution_error(
                 round_id=str(round_data["round_id"]),
-                user_id=user_id,
+                actor_key=actor_key,
                 request_id=request_id,
                 original_timeout=state_data.get("timeout_at"),
                 resolution_started_at=now_text,
@@ -1761,7 +1783,7 @@ async def _resolve_move(
     )
     certainty_payload = [step.public_payload() for step in certainty_steps]
     auto_playback_key = (
-        f"{round_data['round_id']}:{int(user_id)}:{requested_sequence}:certainty"
+        f"{round_data['round_id']}:{actor_key}:{requested_sequence}:certainty"
         if certainty_payload
         else ""
     )
@@ -1770,8 +1792,8 @@ async def _resolve_move(
         with auth_db() as db:
             db.execute("BEGIN IMMEDIATE")
             current = db.execute(
-                "SELECT state_status, resolution_request_id FROM battle_free_player_states WHERE round_id = ? AND user_id = ?",
-                (round_data["round_id"], int(user_id)),
+                "SELECT state_status, resolution_request_id FROM battle_free_player_states WHERE round_id = ? AND actor_key = ?",
+                (round_data["round_id"], actor_key),
             ).fetchone()
             if current is None or current["state_status"] != "resolving" or current["resolution_request_id"] != request_id:
                 raise BattleServiceError("PROGRESS_CONFLICT", "Progress changed while resolving.", 409)
@@ -1788,7 +1810,7 @@ async def _resolve_move(
                     resolution_request_id = NULL, resolution_started_at = NULL,
                     ack_deadline_at = ?, timeout_at = ?,
                     current_results_json = ?, operation_blob = ?, updated_at = ?
-                WHERE round_id = ? AND user_id = ?
+                WHERE round_id = ? AND actor_key = ?
                 """,
                 (
                     f"{persisted_board:016x}", next_step, requested_sequence,
@@ -1796,7 +1818,7 @@ async def _resolve_move(
                     next_step, next_state_status, finish_reason,
                     ack_deadline, next_timeout,
                     json.dumps(persisted_results, separators=(",", ":")), operation_blob, iso(),
-                    round_data["round_id"], int(user_id),
+                    round_data["round_id"], actor_key,
                 ),
             )
             next_status = "completed" if finish_reason else "playing"
@@ -1840,7 +1862,7 @@ async def _resolve_move(
                     goodness_of_fit = ?, primary_score = ?, secondary_score = ?, progress = ?,
                     mode_data_json = ?, board_state = ?, choice_blob = ?, finished_at = ?,
                     replay_blob = ?, replay_move_count = ?, timeout_at = ?,
-                    updated_at = ? WHERE round_id = ? AND user_id = ?
+                    updated_at = ? WHERE round_id = ? AND actor_key = ?
                 """,
                 (
                     next_status, next_step, requested_sequence,
@@ -1848,7 +1870,7 @@ async def _resolve_move(
                     json.dumps(mode_data, separators=(",", ":")), f"{persisted_board:016x}",
                     operation_blob, iso() if finish_reason else None,
                     replay_blob, replay_move_count, next_timeout, iso(),
-                    round_data["round_id"], int(user_id),
+                    round_data["round_id"], actor_key,
                 ),
             )
             fresh_round = db.execute(
@@ -1873,7 +1895,7 @@ async def _resolve_move(
     except Exception:
         _resume_after_resolution_error(
             round_id=str(round_data["round_id"]),
-            user_id=user_id,
+            actor_key=actor_key,
             request_id=request_id,
             original_timeout=state_data.get("timeout_at"),
             resolution_started_at=now_text,
@@ -1883,7 +1905,7 @@ async def _resolve_move(
         _schedule_prepare_state(
             room=room,
             round_id=str(round_data["round_id"]),
-            user_id=user_id,
+            actor_key=actor_key,
             sequence=next_step,
             board=next_board,
             results=next_results,
@@ -1920,18 +1942,18 @@ async def _resolve_move(
     }
 
 
-def _ack_step(room_code: str, *, user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+def _ack_step(room_code: str, *, actor_key: str, payload: dict[str, Any]) -> dict[str, Any]:
     requested_round = str(payload.get("round_id") or "")
     sequence = int(payload.get("sequence") or 0)
     now = utcnow()
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
-        room, _member, round_row = _load_round_context(db, room_code, user_id)
+        room, _member, round_row = _load_round_context(db, room_code, actor_key)
         if round_row is None or str(round_row["round_id"]) != requested_round:
             raise BattleServiceError("ROUND_CONFLICT", "Round changed.", 409)
         state = db.execute(
-            "SELECT * FROM battle_free_player_states WHERE round_id = ? AND user_id = ?",
-            (requested_round, int(user_id)),
+            "SELECT * FROM battle_free_player_states WHERE round_id = ? AND actor_key = ?",
+            (requested_round, actor_key),
         ).fetchone()
         if state is None or int(state["sequence"]) != sequence:
             raise BattleServiceError("PROGRESS_CONFLICT", "Progress changed.", 409)
@@ -1941,12 +1963,12 @@ def _ack_step(room_code: str, *, user_id: int, payload: dict[str, Any]) -> dict[
             return {"round_id": requested_round, "sequence": sequence, "complete": True}
         deadline = iso(now + timedelta(seconds=int(room["step_timeout_seconds"])))
         db.execute(
-            "UPDATE battle_free_player_states SET state_status = 'input', ack_deadline_at = NULL, timeout_at = ?, updated_at = ? WHERE round_id = ? AND user_id = ?",
-            (deadline, iso(now), requested_round, int(user_id)),
+            "UPDATE battle_free_player_states SET state_status = 'input', ack_deadline_at = NULL, timeout_at = ?, updated_at = ? WHERE round_id = ? AND actor_key = ?",
+            (deadline, iso(now), requested_round, actor_key),
         )
         db.execute(
-            "UPDATE battle_player_results SET timeout_at = ?, updated_at = ? WHERE round_id = ? AND user_id = ?",
-            (deadline, iso(now), requested_round, int(user_id)),
+            "UPDATE battle_player_results SET timeout_at = ?, updated_at = ? WHERE round_id = ? AND actor_key = ?",
+            (deadline, iso(now), requested_round, actor_key),
         )
         db.execute(
             "UPDATE battle_rooms SET revision = revision + 1, updated_at = ? WHERE room_id = ?",
@@ -1956,12 +1978,18 @@ def _ack_step(room_code: str, *, user_id: int, payload: dict[str, Any]) -> dict[
 
 
 async def handle_action_for_mode(
-    room_code: str, *, user_id: int, action: str, payload: dict[str, Any]
+    room_code: str,
+    *,
+    actor_key: str | None = None,
+    user_id: int | None = None,
+    action: str,
+    payload: dict[str, Any],
 ) -> dict[str, Any]:
+    actor_key = _identity_key(actor_key, user_id)
     if action == "move":
-        return await _resolve_move(room_code, user_id=user_id, payload=payload)
+        return await _resolve_move(room_code, actor_key=actor_key, payload=payload)
     if action == "step_ready_ack":
-        return _ack_step(room_code, user_id=user_id, payload=payload)
+        return _ack_step(room_code, actor_key=actor_key, payload=payload)
     raise BattleServiceError("BATTLE_ACTION_UNSUPPORTED", "Unsupported Battle action.", 409)
 
 
@@ -2012,27 +2040,32 @@ def settle_unstarted_round_for_mode(room_id: str, *, reason: str) -> None:
 
 
 def forfeit_round_for_mode(
-    room_code: str, *, user_id: int, round_id: str
+    room_code: str,
+    *,
+    actor_key: str | None = None,
+    user_id: int | None = None,
+    round_id: str,
 ) -> dict[str, Any]:
+    actor_key = _identity_key(actor_key, user_id)
     completed = False
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
-        room, member, round_row = _load_round_context(db, room_code, user_id)
+        room, member, round_row = _load_round_context(db, room_code, actor_key)
         if member["role"] != "player" or round_row is None or str(round_row["round_id"]) != str(round_id):
             raise BattleServiceError("ROUND_CONFLICT", "Round changed.", 409)
         now = iso()
         db.execute(
-            "UPDATE battle_free_player_states SET state_status = 'finished', finish_reason = 'forfeit', timeout_at = NULL, ack_deadline_at = NULL, updated_at = ? WHERE round_id = ? AND user_id = ?",
-            (now, round_id, int(user_id)),
+            "UPDATE battle_free_player_states SET state_status = 'finished', finish_reason = 'forfeit', timeout_at = NULL, ack_deadline_at = NULL, updated_at = ? WHERE round_id = ? AND actor_key = ?",
+            (now, round_id, actor_key),
         )
         db.execute(
-            "UPDATE battle_player_results SET status = 'disqualified', mode_data_json = ?, timeout_at = NULL, finished_at = ?, updated_at = ? WHERE round_id = ? AND user_id = ? AND status = 'playing'",
-            (json.dumps({"finish_reason": "forfeit", "finish_class": "unranked"}), now, now, round_id, int(user_id)),
+            "UPDATE battle_player_results SET status = 'disqualified', mode_data_json = ?, timeout_at = NULL, finished_at = ?, updated_at = ? WHERE round_id = ? AND actor_key = ? AND status = 'playing'",
+            (json.dumps({"finish_reason": "forfeit", "finish_class": "unranked"}), now, now, round_id, actor_key),
         )
         completed = _complete_round_if_done(db, str(room["room_id"]), round_id, now)
     if completed:
         _settle_round(round_id)
-    return room_snapshot(room_code, user_id=user_id)
+    return room_snapshot(room_code, actor_key=actor_key)
 
 
 def _mark_timeouts() -> set[str]:
@@ -2056,12 +2089,12 @@ def _mark_timeouts() -> set[str]:
         for row in ack_rows:
             deadline = iso(now + timedelta(seconds=int(row["step_timeout_seconds"])))
             db.execute(
-                "UPDATE battle_free_player_states SET state_status = 'input', ack_deadline_at = NULL, timeout_at = ?, updated_at = ? WHERE round_id = ? AND user_id = ? AND state_status = 'awaiting_ack'",
-                (deadline, now_text, row["round_id"], row["user_id"]),
+                "UPDATE battle_free_player_states SET state_status = 'input', ack_deadline_at = NULL, timeout_at = ?, updated_at = ? WHERE round_id = ? AND actor_key = ? AND state_status = 'awaiting_ack'",
+                (deadline, now_text, row["round_id"], row["actor_key"]),
             )
             db.execute(
-                "UPDATE battle_player_results SET timeout_at = ?, updated_at = ? WHERE round_id = ? AND user_id = ? AND status = 'playing'",
-                (deadline, now_text, row["round_id"], row["user_id"]),
+                "UPDATE battle_player_results SET timeout_at = ?, updated_at = ? WHERE round_id = ? AND actor_key = ? AND status = 'playing'",
+                (deadline, now_text, row["round_id"], row["actor_key"]),
             )
             changed.add(str(row["room_id"]))
         timeout_rows = db.execute(
@@ -2075,12 +2108,12 @@ def _mark_timeouts() -> set[str]:
         touched_rounds: set[tuple[str, str]] = set()
         for row in timeout_rows:
             db.execute(
-                "UPDATE battle_free_player_states SET state_status = 'finished', finish_reason = 'timed_out', timeout_at = NULL, updated_at = ? WHERE round_id = ? AND user_id = ? AND state_status = 'input'",
-                (now_text, row["round_id"], row["user_id"]),
+                "UPDATE battle_free_player_states SET state_status = 'finished', finish_reason = 'timed_out', timeout_at = NULL, updated_at = ? WHERE round_id = ? AND actor_key = ? AND state_status = 'input'",
+                (now_text, row["round_id"], row["actor_key"]),
             )
             db.execute(
-                "UPDATE battle_player_results SET status = 'timed_out', mode_data_json = ?, timeout_at = NULL, finished_at = ?, updated_at = ? WHERE round_id = ? AND user_id = ? AND status = 'playing'",
-                (json.dumps({"finish_reason": "timed_out", "finish_class": "unranked"}), now_text, now_text, row["round_id"], row["user_id"]),
+                "UPDATE battle_player_results SET status = 'timed_out', mode_data_json = ?, timeout_at = NULL, finished_at = ?, updated_at = ? WHERE round_id = ? AND actor_key = ? AND status = 'playing'",
+                (json.dumps({"finish_reason": "timed_out", "finish_class": "unranked"}), now_text, now_text, row["round_id"], row["actor_key"]),
             )
             touched_rounds.add((str(row["room_id"]), str(row["round_id"])))
             changed.add(str(row["room_id"]))
@@ -2157,7 +2190,7 @@ def _migrate_legacy_goodness_scores() -> None:
         for room in rooms:
             states = db.execute(
                 """
-                SELECT state.round_id, state.user_id, state.operation_blob
+                SELECT state.round_id, state.actor_key, state.operation_blob
                 FROM battle_free_player_states AS state
                 JOIN battle_rounds AS round ON round.round_id = state.round_id
                 WHERE round.room_id = ?
@@ -2169,20 +2202,20 @@ def _migrate_legacy_goodness_scores() -> None:
                     (
                         _legacy_goodness_product(bytes(state["operation_blob"] or b"")),
                         state["round_id"],
-                        state["user_id"],
+                        state["actor_key"],
                     )
                     for state in states
                 ]
             except BattleServiceError:
                 continue
-            for score, round_id, user_id in scores:
+            for score, round_id, actor_key in scores:
                 db.execute(
                     """
                     UPDATE battle_player_results
                     SET goodness_of_fit = ?, primary_score = ?
-                    WHERE round_id = ? AND user_id = ?
+                    WHERE round_id = ? AND actor_key = ?
                     """,
-                    (score, score, round_id, user_id),
+                    (score, score, round_id, actor_key),
                 )
             try:
                 settings = json.loads(room["settings_json"] or "{}")
@@ -2216,7 +2249,7 @@ async def startup() -> None:
         ).fetchall()
         interrupted = db.execute(
             """
-            SELECT state.round_id, state.user_id, room.step_timeout_seconds
+            SELECT state.round_id, state.actor_key, room.step_timeout_seconds
             FROM battle_free_player_states AS state
             JOIN battle_rounds AS round ON round.round_id = state.round_id
             JOIN battle_rooms AS room ON room.room_id = round.room_id
@@ -2236,17 +2269,17 @@ async def startup() -> None:
                 SET state_status = 'input', resolution_request_id = NULL,
                     resolution_started_at = NULL, ack_deadline_at = NULL,
                     timeout_at = ?, updated_at = ?
-                WHERE round_id = ? AND user_id = ?
+                WHERE round_id = ? AND actor_key = ?
                   AND state_status IN ('resolving', 'awaiting_ack')
                 """,
-                (deadline, now_text, state["round_id"], state["user_id"]),
+                (deadline, now_text, state["round_id"], state["actor_key"]),
             )
             db.execute(
                 """
                 UPDATE battle_player_results SET timeout_at = ?, updated_at = ?
-                WHERE round_id = ? AND user_id = ? AND status = 'playing'
+                WHERE round_id = ? AND actor_key = ? AND status = 'playing'
                 """,
-                (deadline, now_text, state["round_id"], state["user_id"]),
+                (deadline, now_text, state["round_id"], state["actor_key"]),
             )
     for row in pending:
         if row["round_status"] == "cancelled" or (

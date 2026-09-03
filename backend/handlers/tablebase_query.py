@@ -13,6 +13,13 @@ from engine_core.VBoardMover import decode_board, encode_board, s_move_board as 
 from ..actions import Action, Message
 from ..gamer_ranked.prng import Xoshiro128StarStar
 from ..quota.errors import InsufficientTokens
+from ..auth.guest_service import (
+    GuestLimitError,
+    GuestQueryReservation,
+    finalize_guest_query,
+    guest_query_allowance,
+    reserve_guest_query,
+)
 from ..quota.service import (
     cancel_reservation,
     finalize_reservation,
@@ -23,7 +30,7 @@ from ..quota.service import (
 from ..remote_workers.errors import RemoteTablebaseError
 from ..serialization import sanitize_config
 from ..session import GameSession, np_u64, safe_hex, u64
-from ..tablebase_catalog import get_catalog_version
+from ..tablebase_catalog import get_catalog_version, is_guest_tablebase_available
 from ..tablebase_query_service import (
     MAX_PREFETCH_CHILDREN,
     TablebaseLookupResult,
@@ -624,21 +631,45 @@ async def _finish_query(
     prefetch_rng: _PrefetchRngContext | None = None,
     client_local_board: bool = False,
 ) -> None:
+    guest_reservation = isinstance(reservation, GuestQueryReservation)
+
+    def guest_reservation_is_latest() -> bool:
+        current = getattr(session, "guest_query_reservation_ids", {}).get(page)
+        return current == reservation.event_id
+
+    def clear_guest_reservation() -> None:
+        reservations = getattr(session, "guest_query_reservation_ids", {})
+        if reservations.get(page) == reservation.event_id:
+            reservations.pop(page, None)
+
     try:
         result = await handle.wait()
     except TablebaseQuerySuperseded:
-        cancel_reservation(
-            reservation,
-            reason="superseded_before_result",
-            metadata={"page": page, "query_id": query_id},
-        )
+        if guest_reservation:
+            # A retry with the same request_id shares this reservation. The
+            # newest handle owns finalization; only refund when another query
+            # has replaced the reservation entirely.
+            if not guest_reservation_is_latest():
+                finalize_guest_query(reservation, consume=False)
+        else:
+            cancel_reservation(
+                reservation,
+                reason="superseded_before_result",
+                metadata={"page": page, "query_id": query_id},
+            )
         return
     except RemoteTablebaseError as exc:
-        token_balance = cancel_reservation(
-            reservation,
-            reason=exc.code.lower(),
-            metadata={"page": page, "query_id": query_id},
-        )
+        guest_allowance = None
+        if guest_reservation:
+            guest_allowance = finalize_guest_query(reservation, consume=False)
+            clear_guest_reservation()
+            token_balance = None
+        else:
+            token_balance = cancel_reservation(
+                reservation,
+                reason=exc.code.lower(),
+                metadata={"page": page, "query_id": query_id},
+            )
         if handle.is_current:
             try:
                 await websocket.send_json(
@@ -655,6 +686,7 @@ async def _finish_query(
                             "found": False,
                             **exc.payload,
                             "token_balance": token_balance,
+                            "guest_allowance": guest_allowance,
                         },
                     }
                 )
@@ -662,15 +694,21 @@ async def _finish_query(
                 pass
         return
     except Exception as exc:
-        token_balance = finalize_reservation(
-            reservation,
-            actual_operation_key=f"{page}_lookup_miss",
-            metadata={
-                "board_hex": safe_hex(spec.board_encoded),
-                "query_id": query_id,
-                "error": type(exc).__name__,
-            },
-        )
+        guest_allowance = None
+        if guest_reservation:
+            guest_allowance = finalize_guest_query(reservation, consume=False)
+            clear_guest_reservation()
+            token_balance = None
+        else:
+            token_balance = finalize_reservation(
+                reservation,
+                actual_operation_key=f"{page}_lookup_miss",
+                metadata={
+                    "board_hex": safe_hex(spec.board_encoded),
+                    "query_id": query_id,
+                    "error": type(exc).__name__,
+                },
+            )
         if handle.is_current:
             try:
                 await websocket.send_json(
@@ -687,6 +725,7 @@ async def _finish_query(
                             "found": False,
                             "code": "TABLEBASE_QUERY_FAILED",
                             "token_balance": token_balance,
+                            "guest_allowance": guest_allowance,
                         },
                     }
                 )
@@ -695,6 +734,9 @@ async def _finish_query(
         return
 
     if not handle.is_current:
+        if guest_reservation:
+            if not guest_reservation_is_latest():
+                finalize_guest_query(reservation, consume=False)
         return
     selected_pattern = (
         session.current_pattern if page == "trainer" else session.tester_full_pattern
@@ -726,7 +768,7 @@ async def _finish_query(
                     "logs_delta": session.tester_logs[logs_since:],
                     "logs_total": len(session.tester_logs),
                 }
-    if session_matches:
+    if session_matches and not guest_reservation:
         _track_task(
             asyncio.create_task(
                 _run_prefetch(
@@ -748,21 +790,27 @@ async def _finish_query(
         # as the next foreground query.
         await asyncio.sleep(0)
     try:
-        token_balance = finalize_reservation(
-            reservation,
-            actual_operation_key=(
-                f"{page}_lookup_hit"
-                if has_numeric_result(result.results)
-                else f"{page}_lookup_miss"
-            ),
-            metadata={
-                "board_hex": result.board_hex,
-                "query_id": query_id,
-                "source": "tablebase_query_service",
-            },
-        )
-        if token_balance is None and session.user_id is not None:
-            token_balance = get_token_balance(session.user_id)
+        if guest_reservation:
+            guest_allowance = finalize_guest_query(reservation, consume=True)
+            clear_guest_reservation()
+            token_balance = None
+            extra_data = {**(extra_data or {}), "guest_allowance": guest_allowance}
+        else:
+            token_balance = finalize_reservation(
+                reservation,
+                actual_operation_key=(
+                    f"{page}_lookup_hit"
+                    if has_numeric_result(result.results)
+                    else f"{page}_lookup_miss"
+                ),
+                metadata={
+                    "board_hex": result.board_hex,
+                    "query_id": query_id,
+                    "source": "tablebase_query_service",
+                },
+            )
+            if token_balance is None and session.user_id is not None:
+                token_balance = get_token_balance(session.user_id)
         await _send_query_result(
             websocket,
             page=page,
@@ -785,6 +833,18 @@ async def handle_tablebase_query_action(
     if action != Action.TABLEBASE_QUERY:
         return False
     page = str(payload.get("page") or "").strip().lower()
+    is_guest = session.user_id is None and bool(getattr(session, "guest_id", None))
+    if is_guest and page != "trainer":
+        await websocket.send_json(
+            {
+                "action": Message.AUTH_REQUIRED,
+                "data": {
+                    "code": "AUTH_REQUIRED",
+                    "message": "Sign in to use this feature.",
+                },
+            }
+        )
+        return True
     context = _session_query_context(session, page)
     if context is None:
         await websocket.send_json(
@@ -833,6 +893,24 @@ async def handle_tablebase_query_action(
         return True
 
     query_id = str(payload.get("query_id") or "")[:160]
+    if is_guest and not is_guest_tablebase_available(context["full_pattern"]):
+        await websocket.send_json(
+            {
+                "action": Message.TABLEBASE_QUERY_RESULT,
+                "data": {
+                    "page": page,
+                    "query_id": query_id,
+                    "full_pattern": context["full_pattern"],
+                    "board_hex": safe_hex(requested_board),
+                    "results": {},
+                    "dtype": "?",
+                    "found": False,
+                    "code": "GUEST_TABLE_LOGIN_REQUIRED",
+                    "guest_allowance": guest_query_allowance(str(session.guest_id)),
+                },
+            }
+        )
+        return True
     catalog_version = get_catalog_version()
     spec = TablebaseLookupSpec(
         board_encoded=u64(requested_board),
@@ -846,7 +924,7 @@ async def handle_tablebase_query_action(
     )
     supporter = _session_is_supporter(session)
     prefetch_rng = _parse_prefetch_rng(payload, page)
-    stream_key = f"{session.user_id}:{session.client_id}:{page}"
+    stream_key = f"{session.actor_key or session.user_id}:{session.client_id}:{page}"
     try:
         handle = await tablebase_query_scheduler.submit(
             spec,
@@ -872,12 +950,41 @@ async def handle_tablebase_query_action(
         return True
 
     try:
-        reservation = reserve_operation_tokens(
-            user_id=session.user_id,
-            session_id=session.auth_session_id,
-            operation_key=f"{page}_lookup_hit",
-            full_pattern=context["full_pattern"],
+        if is_guest:
+            reservation = reserve_guest_query(
+                guest_id=str(session.guest_id),
+                request_id=query_id,
+                full_pattern=context["full_pattern"],
+                ip_address=str(getattr(session, "guest_ip_address", "")),
+            )
+            session.guest_query_reservation_ids[page] = reservation.event_id
+        else:
+            reservation = reserve_operation_tokens(
+                user_id=session.user_id,
+                session_id=session.auth_session_id,
+                operation_key=f"{page}_lookup_hit",
+                full_pattern=context["full_pattern"],
+            )
+    except GuestLimitError as exc:
+        handle.cancel()
+        await websocket.send_json(
+            {
+                "action": Message.TABLEBASE_QUERY_RESULT,
+                "data": {
+                    "page": page,
+                    "query_id": query_id,
+                    "full_pattern": context["full_pattern"],
+                    "board_hex": safe_hex(requested_board),
+                    "results": {},
+                    "dtype": "?",
+                    "found": False,
+                    "code": exc.code,
+                    "message": str(exc),
+                    "guest_allowance": guest_query_allowance(str(session.guest_id)),
+                },
+            }
         )
+        return True
     except InsufficientTokens:
         handle.cancel()
         raise

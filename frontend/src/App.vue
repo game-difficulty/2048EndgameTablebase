@@ -207,6 +207,8 @@
             :active="activeTab === TAB_IDS.BATTLE"
             :hotkeys-enabled="activeTab === TAB_IDS.BATTLE && keyboardInputAllowed(KEYBOARD_OWNERS.PRIMARY)"
             :auth-user="authUser"
+            :current-actor="currentActor"
+            :ensure-guest-session="ensureGuestSession"
             @navigate-tab="handleNavigateTab"
           />
         </div>
@@ -495,12 +497,14 @@ const DisplayNameEditorDialog = defineAsyncComponent(() => import('./features/au
 const { t } = useI18n();
 const {
   user: authUser,
+  currentActor,
   dialogOpen: authDialogOpen,
   dialogMode: authDialogMode,
   refreshAuth,
   openAuthDialog,
   closeAuthDialog,
   setAuthenticatedUser,
+  ensureGuestSession,
   logout,
 } = useAuthState();
 const analysisDialogOpen = ref(false);

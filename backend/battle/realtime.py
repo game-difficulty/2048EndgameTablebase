@@ -11,6 +11,7 @@ from backend.actions import Action, Message
 from backend.quota.service import get_token_balance
 
 from . import repository
+from .actors import BattleActor, actor_from_session, coerce_actor, user_actor
 from .core import chat
 from .service import (
     BattleServiceError,
@@ -25,6 +26,7 @@ from .service import (
 _room_sockets: dict[str, set[WebSocket]] = defaultdict(set)
 _socket_room: dict[WebSocket, str] = {}
 _socket_user: dict[WebSocket, int] = {}
+_socket_actor: dict[WebSocket, BattleActor] = {}
 _lock = asyncio.Lock()
 
 
@@ -45,6 +47,7 @@ async def _detach(websocket: WebSocket) -> str | None:
     async with _lock:
         room_id = _socket_room.pop(websocket, None)
         _socket_user.pop(websocket, None)
+        _socket_actor.pop(websocket, None)
         if room_id is not None:
             sockets = _room_sockets.get(room_id)
             if sockets is not None:
@@ -54,28 +57,43 @@ async def _detach(websocket: WebSocket) -> str | None:
         return room_id
 
 
-def _online_user_ids(room_id: str) -> set[int]:
+def _actor_for_socket(websocket: WebSocket) -> BattleActor | None:
+    actor = _socket_actor.get(websocket)
+    if actor is not None:
+        return actor
+    user_id = _socket_user.get(websocket)
+    return user_actor(user_id) if user_id is not None else None
+
+
+def _online_actor_keys(room_id: str) -> set[str]:
     return {
-        int(_socket_user[socket])
+        actor.actor_key
         for socket in tuple(_room_sockets.get(room_id, ()))
-        if socket in _socket_user
+        if (actor := _actor_for_socket(socket)) is not None
     }
 
 
 def _with_presence(snapshot: dict[str, Any]) -> dict[str, Any]:
-    online = _online_user_ids(str(snapshot["room_id"]))
+    online = _online_actor_keys(str(snapshot["room_id"]))
     for member in snapshot.get("members", []):
-        member["online"] = int(member["user_id"]) in online
+        member["online"] = member["actor_key"] in online
     for result in snapshot.get("results", []):
-        result["online"] = int(result["user_id"]) in online
+        result["online"] = result["actor_key"] in online
     return snapshot
 
 
-async def subscribe(websocket: WebSocket, *, user_id: int, room_ref: str | None) -> None:
+async def subscribe(
+    websocket: WebSocket,
+    *,
+    actor: Any | None = None,
+    user_id: int | None = None,
+    room_ref: str | None,
+) -> None:
+    identity = coerce_actor(actor, user_id=user_id)
     snapshot = (
-        room_snapshot(str(room_ref), user_id=user_id)
+        room_snapshot(str(room_ref), actor=identity)
         if room_ref
-        else current_room(user_id=user_id)
+        else current_room(actor=identity)
     )
     if snapshot is None:
         raise BattleServiceError("ROOM_NOT_FOUND", "No active Battle room was found.", 404)
@@ -83,7 +101,9 @@ async def subscribe(websocket: WebSocket, *, user_id: int, room_ref: str | None)
     async with _lock:
         room_id = str(snapshot["room_id"])
         _socket_room[websocket] = room_id
-        _socket_user[websocket] = int(user_id)
+        _socket_actor[websocket] = identity
+        if identity.user_id is not None:
+            _socket_user[websocket] = int(identity.user_id)
         _room_sockets[room_id].add(websocket)
     if previous and previous != str(snapshot["room_id"]):
         await broadcast_room(previous)
@@ -91,7 +111,7 @@ async def subscribe(websocket: WebSocket, *, user_id: int, room_ref: str | None)
     messages = await asyncio.to_thread(
         chat.recent_messages,
         str(snapshot["room_id"]),
-        user_id=int(user_id),
+        actor=identity,
     )
     await _send(
         websocket,
@@ -109,12 +129,12 @@ async def broadcast_room(room_id: str) -> None:
     sockets = tuple(_room_sockets.get(str(room_id), ()))
     stale: list[WebSocket] = []
     for websocket in sockets:
-        user_id = _socket_user.get(websocket)
-        if user_id is None:
+        actor = _actor_for_socket(websocket)
+        if actor is None:
             stale.append(websocket)
             continue
         try:
-            snapshot = _with_presence(room_snapshot(str(room_id), user_id=user_id))
+            snapshot = _with_presence(room_snapshot(str(room_id), actor=actor))
             sent = await _send(
                 websocket,
                 {"action": Message.BATTLE_ROOM_STATE, "data": {"room": snapshot}},
@@ -122,7 +142,7 @@ async def broadcast_room(room_id: str) -> None:
         except BattleServiceError:
             try:
                 close_code = repository.room_unavailable_reason(
-                    str(room_id), user_id=int(user_id)
+                    str(room_id), actor=actor
                 )
             except Exception:
                 close_code = None
@@ -138,7 +158,11 @@ async def broadcast_room(room_id: str) -> None:
                         "closed": True,
                         "room_id": str(room_id),
                         "code": close_code,
-                        "token_balance": get_token_balance(int(user_id)),
+                        **(
+                            {"token_balance": get_token_balance(int(actor.user_id))}
+                            if actor.is_user
+                            else {}
+                        ),
                     },
                 },
             )
@@ -175,18 +199,20 @@ async def handle_battle_action(
         Action.BATTLE_CHAT_SEND,
     }:
         return False
-    if session.user_id is None:
+    try:
+        actor = actor_from_session(session)
+    except ValueError:
         raise BattleServiceError("AUTH_REQUIRED", "Authentication required.", 401)
     if action == Action.BATTLE_SUBSCRIBE:
         await subscribe(
             websocket,
-            user_id=int(session.user_id),
+            actor=actor,
             room_ref=(str(payload.get("room_code")) if payload.get("room_code") else None),
         )
         return True
     room_id = _socket_room.get(websocket)
     if room_id is None:
-        await subscribe(websocket, user_id=int(session.user_id), room_ref=None)
+        await subscribe(websocket, actor=actor, room_ref=None)
         room_id = _socket_room.get(websocket)
     if action == Action.BATTLE_HEARTBEAT:
         if room_id is not None:
@@ -198,7 +224,7 @@ async def handle_battle_action(
             result = await asyncio.to_thread(
                 chat.post_message,
                 str(room_id or ""),
-                user_id=int(session.user_id),
+                actor=actor,
                 request_id=request_id,
                 content=payload.get("content"),
             )
@@ -240,7 +266,7 @@ async def handle_battle_action(
         if generic_action:
             accepted = await handle_mode_action_async(
                 str(payload.get("room_code") or room_id or ""),
-                user_id=int(session.user_id),
+                actor=actor,
                 action=str(payload.get("mode_action") or ""),
                 payload={**mode_payload, "request_id": request_id},
             )
@@ -248,7 +274,7 @@ async def handle_battle_action(
             accepted = await asyncio.to_thread(
                 record_choice,
                 str(payload.get("room_code") or room_id or ""),
-                user_id=int(session.user_id),
+                actor=actor,
                 round_id=str(payload.get("round_id") or ""),
                 sequence=int(payload.get("sequence")),
                 route_index=int(payload.get("route_index")),

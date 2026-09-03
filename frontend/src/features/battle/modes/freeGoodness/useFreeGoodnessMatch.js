@@ -22,6 +22,7 @@ import {
   encodeBoard,
 } from '../../../replay/engine/replayTransition.js';
 import { battleRequestId } from '../../services/battleClient.js';
+import { battleActorRenderKey } from '../../core/battleActor.js';
 
 const KEY_DIRECTIONS = Object.freeze({
   ArrowLeft: 'left',
@@ -240,10 +241,11 @@ export function useFreeGoodnessMatch(
       if (
         !spectatorMode.value
         && !ownFinished.value
-        && Number(result.user_id) !== Number(authUserRef.value?.id)
+        && !roomSession.isOwnActor(result)
       ) continue;
-      frames[result.user_id] = createSnapshotBoardFrame(
-        `free-opponent-${result.user_id}-${result.route_index}`,
+      const actorKey = battleActorRenderKey(result);
+      frames[actorKey] = createSnapshotBoardFrame(
+        `free-opponent-${actorKey}-${result.route_index}`,
         boardFromHex(hex),
       );
     }
@@ -261,9 +263,7 @@ export function useFreeGoodnessMatch(
       opponentBoards.value = {};
       return;
     }
-    const own = nextRoom.results?.find(
-      (item) => Number(item.user_id) === Number(authUserRef.value?.id),
-    );
+    const own = nextRoom.results?.find(roomSession.isOwnActor);
     const nextRoundId = String(nextRoom.round?.round_id || '');
     if (nextRoundId !== localRoundId) {
       localRoundId = nextRoundId;

@@ -1,6 +1,7 @@
 import { getBackendUrl } from '../runtime/backendUrl';
 import { emitAuthRequired, emitTokenBalanceUpdated, emitTokenRequired } from './authEvents';
 import { authHeaders, clearDeviceSession, storeDeviceSession } from './sessionTokenStore';
+import { clearGuestSession, storeGuestSession } from './guestSessionStore';
 
 async function requestJson(path, { method = 'GET', body } = {}) {
   const response = await fetch(getBackendUrl(path), {
@@ -33,6 +34,7 @@ async function requestJson(path, { method = 'GET', body } = {}) {
     clearDeviceSession();
   }
   storeDeviceSession(payload);
+  storeGuestSession(payload);
   return payload;
 }
 
@@ -47,4 +49,13 @@ export const authClient = {
   requestDeactivationCode: () => requestJson('/api/auth/request-deactivation-code', { method: 'POST' }),
   deactivate: (payload) => requestJson('/api/auth/deactivate', { method: 'POST', body: payload }),
   logout: () => requestJson('/api/auth/logout', { method: 'POST' }),
+  guestMe: () => requestJson('/api/guest/me'),
+  createGuestSession: () => requestJson('/api/guest/session', { method: 'POST' }),
+  logoutGuest: async () => {
+    try {
+      return await requestJson('/api/guest/logout', { method: 'POST' });
+    } finally {
+      clearGuestSession();
+    }
+  },
 };

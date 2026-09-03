@@ -166,6 +166,10 @@
             <span><strong>{{ $t('battle.form.allowSpectators') }}</strong><small>{{ $t('battle.form.allowSpectatorsHint') }}</small></span>
             <input v-model="form.allow_spectators" type="checkbox" />
           </label>
+          <label v-if="canCreateRoom" class="battle-toggle-row">
+            <span><strong>{{ $t('battle.form.allowGuestChat') }}</strong><small>{{ $t('battle.form.allowGuestChatHint') }}</small></span>
+            <input v-model="form.allow_guest_chat" type="checkbox" />
+          </label>
         </div>
 
         <div class="battle-cost-row">
@@ -173,9 +177,10 @@
           <div><span>{{ $t('battle.form.balance') }}</span><strong>{{ formattedBalance }}</strong></div>
         </div>
         <p class="battle-refund-policy">{{ $t(refundPolicyKey) }}</p>
-        <button type="button" class="battle-create-btn" :disabled="creating || !canCreate" @click="submitCreate">
+        <button type="button" class="battle-create-btn" :disabled="creating || (canCreateRoom && !canCreate)" @click="submitCreate">
           {{ creating ? $t('battle.status.preparing') : $t(createLabelKey) }}
         </button>
+        <p v-if="!canCreateRoom" class="battle-guest-create-note">{{ $t('battle.guest.createRequiresLogin') }}</p>
       </section>
     </aside>
   </div>
@@ -205,9 +210,10 @@ const props = defineProps({
   modeKey: { type: String, default: 'goodness' },
   modeOptions: { type: Array, default: () => [] },
   buildCreatePayload: { type: Function, default: null },
+  canCreateRoom: { type: Boolean, default: true },
 });
 
-const emit = defineEmits(['refresh', 'join', 'create', 'mode-change']);
+const emit = defineEmits(['refresh', 'join', 'create', 'mode-change', 'login-required']);
 const joinCode = ref('');
 const form = reactive({
   pattern: '',
@@ -219,6 +225,7 @@ const form = reactive({
   step_timeout_seconds: 90,
   is_public: true,
   allow_spectators: true,
+  allow_guest_chat: false,
   chat_roles: ['host', 'player', 'spectator'],
 });
 
@@ -280,6 +287,10 @@ const submitJoin = () => {
   if (joinCode.value.length === 6) emit('join', joinCode.value, 'auto');
 };
 const submitCreate = () => {
+  if (!props.canCreateRoom) {
+    emit('login-required');
+    return;
+  }
   if (!canCreate.value) return;
   const defaultPayload = {
     ...form,
@@ -485,6 +496,7 @@ watch(rankingStepCap, (cap) => {
 .battle-cost-row strong { color: var(--text-main); font-size: var(--font-ui-sm); }
 .battle-refund-policy { margin: 8px 2px 0; color: var(--text-secondary); font-size: var(--font-ui-xs); line-height: 1.45; }
 .battle-create-btn { width: 100%; min-height: 42px; margin-top: 12px; }
+.battle-guest-create-note { margin: 8px 0 0; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 700; text-align: center; }
 
 @media (max-width: 1100px) {
   .battle-hall-grid { grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.8fr); }

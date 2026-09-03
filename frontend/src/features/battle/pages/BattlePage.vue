@@ -7,6 +7,11 @@
           <h1>{{ $t('battle.title') }}</h1>
         </div>
         <div class="battle-title-actions">
+          <div v-if="isGuestActor" class="battle-guest-identity">
+            <span aria-hidden="true">G</span>
+            <strong>{{ battleActor.display_name }}</strong>
+            <small>{{ $t('battle.guest.marker') }}</small>
+          </div>
           <div v-if="room" class="battle-title-room-state">
             <span>{{ room.room_code }}</span>
             <strong>{{ $t(`battle.status.${room.status}`) }}</strong>
@@ -32,27 +37,22 @@
         <button type="button" aria-label="Close" @click="error = ''">×</button>
       </div>
 
-      <section v-if="!authUser" class="battle-login-required">
-        <div class="battle-login-mark" aria-hidden="true">VS</div>
-        <h2>{{ $t('battle.auth.title') }}</h2>
-        <p>{{ $t('battle.auth.body') }}</p>
-        <button type="button" @click="requestLogin">{{ $t('auth.actions.login') }}</button>
-      </section>
-
       <component
         :is="modeDefinition.HallView"
-        v-else-if="!room"
+        v-if="!room"
         :rooms="rooms"
         :loading="loading"
         :creating="loading"
-        :token-balance="Number(authUser.token_balance?.total || 0)"
+        :token-balance="Number(authUser?.token_balance?.total || 0)"
+        :can-create-room="isRegisteredActor"
         :mode-key="modeDefinition.key"
         :mode-options="modeOptions"
         :build-create-payload="modeDefinition.buildCreatePayload"
         v-bind="modeHallProps"
         @refresh="refreshRooms"
         @join="join"
-        @create="createRoom"
+        @create="requestCreateRoom"
+        @login-required="requestLogin"
         @mode-change="selectMode"
       />
 
@@ -60,10 +60,12 @@
         :is="modeDefinition.MatchView"
         v-else-if="matchActive"
         :room="room"
-        :current-user-id="Number(room.viewer?.user_id || authUser.id)"
+        :current-actor-key="currentActorKey"
+        :current-user-id="Number(room.viewer?.user_id || authUser?.id || 0)"
         :ws-status="wsStatus"
         :dis32k="dis32k"
         :replay-available="replayAvailable"
+        :replay-review-available="replayReviewAvailable"
         :replay-busy="replayBusy"
         v-bind="modeMatchProps"
         v-on="modeMatchListeners"
@@ -80,7 +82,8 @@
         v-else
         :room="room"
         :members="room.members || []"
-        :current-user-id="Number(room.viewer?.user_id || authUser.id)"
+        :current-actor-key="currentActorKey"
+        :current-user-id="Number(room.viewer?.user_id || authUser?.id || 0)"
         :now="now"
         @ready="toggleReady"
         @start="start"
@@ -96,6 +99,7 @@
         :cooldown-seconds="chatCooldownSeconds"
         :connected="wsStatus === 'connected'"
         :can-speak="chatCanSpeak"
+        :disabled-code="chatDisabledCode"
         :compact="matchActive"
         @send="sendChatMessage"
       />
@@ -106,6 +110,7 @@
         :room="room"
         :mode="resultMode"
         :replay-available="replayAvailable"
+        :replay-review-available="replayReviewAvailable"
         :replay-busy="replayBusy"
         @close="dismissResults"
         @return-room="returnToLobby"
@@ -129,6 +134,7 @@ import { useI18n } from 'vue-i18n';
 
 import { TAB_IDS } from '../../../app/tabRegistry.js';
 import { useAppSettingsStore } from '../../../app/useAppSettings.js';
+import { useAuthState } from '../../../services/auth/authState.js';
 import { emitAuthRequired } from '../../../services/auth/authEvents.js';
 import { downloadBlob } from '../../../services/files/browserFiles.js';
 import {
@@ -142,12 +148,18 @@ import BattleExitDialog from '../components/BattleExitDialog.vue';
 import BattleRoomChat from '../components/BattleRoomChat.vue';
 import BattleRulesDialog from '../components/BattleRulesDialog.vue';
 import { useBattleSession } from '../composables/useBattleSession.js';
+import {
+  isBattleGuest,
+  normalizeBattleActor,
+} from '../core/battleActor.js';
 import { battleClient } from '../services/battleClient.js';
 
 const props = defineProps({
   active: { type: Boolean, default: true },
   hotkeysEnabled: { type: Boolean, default: true },
   authUser: { type: Object, default: null },
+  currentActor: { type: Object, default: null },
+  ensureGuestSession: { type: Function, default: null },
 });
 const emit = defineEmits(['navigate-tab']);
 
@@ -155,10 +167,39 @@ const now = ref(Date.now());
 const rulesOpen = ref(false);
 const forfeitDialogOpen = ref(false);
 const replayBusy = ref(false);
+const ensuredGuestActor = ref(null);
 const { t, te } = useI18n();
 const { config: appConfig } = useAppSettingsStore();
+const sharedAuth = useAuthState();
 let clockTimer = null;
 let inviteAttempted = false;
+
+const battleActor = computed(() => normalizeBattleActor(
+  props.authUser
+  || props.currentActor
+  || unref(sharedAuth.currentActor)
+  || ensuredGuestActor.value,
+));
+const isGuestActor = computed(() => isBattleGuest(battleActor.value));
+const isRegisteredActor = computed(() => battleActor.value?.kind === 'user');
+const ensureGuestViaEvent = async () => {
+  if (typeof window === 'undefined') return null;
+  const detail = { promise: null };
+  window.dispatchEvent(new CustomEvent('battle-guest-session-required', { detail }));
+  return detail.promise ? detail.promise : null;
+};
+const ensureBattleGuestSession = async () => {
+  if (battleActor.value) return battleActor.value;
+  const ensure = props.ensureGuestSession || sharedAuth.ensureGuestSession;
+  const response = typeof ensure === 'function'
+    ? await ensure()
+    : await ensureGuestViaEvent();
+  const actor = normalizeBattleActor(
+    response?.actor || response?.guest || response || unref(sharedAuth.currentActor),
+  );
+  if (actor) ensuredGuestActor.value = actor;
+  return actor;
+};
 
 const {
   rooms,
@@ -174,6 +215,9 @@ const {
   chatNotice,
   chatCooldownSeconds,
   chatCanSpeak,
+  chatDisabledCode,
+  currentActorKey,
+  ownResult,
   modeDefinitions,
   modeDefinition,
   modeSession,
@@ -195,6 +239,8 @@ const {
   toRef(props, 'active'),
   toRef(props, 'authUser'),
   toRef(props, 'hotkeysEnabled'),
+  battleActor,
+  ensureBattleGuestSession,
 );
 
 const modeHallProps = computed(() => unref(modeSession.value?.hallProps) || {});
@@ -210,14 +256,19 @@ const localizedError = computed(() => {
   const key = `battle.errors.${String(error.value || '')}`;
   return te(key) ? t(key) : String(error.value || '');
 });
-const ownResult = computed(() => room.value?.results?.find(
-  (item) => Number(item.user_id) === Number(room.value?.viewer?.user_id || props.authUser?.id),
-) || null);
 const replayAvailable = computed(() => (
   Number(ownResult.value?.replay_move_count || 0) > 0
   && ownResult.value?.status !== 'playing'
 ));
+const replayReviewAvailable = computed(() => replayAvailable.value && isRegisteredActor.value);
 const requestLogin = () => emitAuthRequired();
+const requestCreateRoom = (payload) => {
+  if (!isRegisteredActor.value) {
+    requestLogin();
+    return;
+  }
+  void createRoom(payload);
+};
 const openTrainer = () => {
   const detail = modeSession.value?.createPracticeJump?.();
   if (!detail?.hex) return;
@@ -249,7 +300,7 @@ const saveOwnReplay = async () => {
   }
 };
 const openOwnReplay = async () => {
-  if (replayBusy.value) return;
+  if (replayBusy.value || !isRegisteredActor.value) return;
   replayBusy.value = true;
   try {
     const replay = await fetchOwnReplay();
@@ -268,8 +319,8 @@ const openOwnReplay = async () => {
   }
 };
 
-watch([() => props.active, () => props.authUser, loading, room], ([active, user, busy, currentRoom]) => {
-  if (!active || !user || busy || currentRoom || inviteAttempted) return;
+watch([() => props.active, loading, room], ([active, busy, currentRoom]) => {
+  if (!active || busy || currentRoom || inviteAttempted) return;
   const inviteCode = new URLSearchParams(window.location.search).get('room');
   if (!inviteCode) return;
   inviteAttempted = true;
@@ -293,6 +344,10 @@ onUnmounted(() => {
 .battle-page-titlebar { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 13px; }
 .battle-page-titlebar h1 { margin: 3px 0 0; color: var(--text-main); font: 900 31px/1.05 Cambria, serif; letter-spacing: 0; }
 .battle-title-actions { display: flex; align-items: center; gap: 10px; }
+.battle-guest-identity { min-width: 0; display: grid; grid-template-columns: 24px auto; grid-template-rows: auto auto; column-gap: 7px; align-items: center; padding: 5px 9px; border: 1px solid var(--border-main); border-radius: 7px; background: var(--bg-card); }
+.battle-guest-identity > span { grid-row: 1 / 3; width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--accent); border-radius: 50%; color: var(--accent); font: 900 10px/1 var(--font-mono, monospace); }
+.battle-guest-identity strong { max-width: 132px; overflow: hidden; color: var(--text-main); font-size: 11px; font-weight: 900; text-overflow: ellipsis; white-space: nowrap; }
+.battle-guest-identity small { color: var(--text-secondary); font-size: 9px; font-weight: 800; }
 .battle-title-room-state { display: flex; align-items: center; gap: 9px; }
 .battle-title-room-state span, .battle-title-room-state strong { border: 1px solid var(--border-main); border-radius: 999px; padding: 6px 10px; color: var(--text-secondary); font: 900 11px/1 var(--font-mono, monospace); }
 .battle-title-room-state strong { color: var(--accent); font-family: inherit; }
@@ -300,9 +355,4 @@ onUnmounted(() => {
 .battle-rules-button:hover, .battle-rules-button:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
 .battle-error-banner { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 8px 12px; border: 1px solid color-mix(in srgb, #dc4c4c 52%, var(--border-main)); border-radius: 7px; background: color-mix(in srgb, #dc4c4c 8%, var(--bg-card)); color: #c84848; font-size: var(--font-ui-sm); font-weight: 800; }
 .battle-error-banner button { width: 26px; height: 26px; border: 0; background: transparent; color: inherit; font-size: 19px; }
-.battle-login-required { min-height: 560px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid var(--border-main); border-radius: 8px; background: var(--bg-card); text-align: center; }
-.battle-login-mark { width: 64px; height: 64px; display: grid; place-items: center; border: 2px solid var(--accent); border-radius: 50%; color: var(--accent); font: 900 18px/1 var(--font-mono, monospace); }
-.battle-login-required h2 { margin: 17px 0 6px; color: var(--text-main); font-size: 24px; font-weight: 900; }
-.battle-login-required p { max-width: 440px; margin: 0 0 18px; color: var(--text-secondary); font-size: var(--font-ui-sm); }
-.battle-login-required button { min-width: 150px; min-height: 42px; border: 1px solid var(--btn-bg); border-radius: 7px; background: var(--btn-bg); color: white; font-weight: 900; }
 </style>

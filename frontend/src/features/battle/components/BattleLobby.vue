@@ -30,15 +30,15 @@
           <article v-for="seat in seatRows" :key="seat.index" :class="['battle-seat', seat.member ? 'occupied' : 'empty']">
             <template v-if="seat.member">
               <div class="battle-seat-avatar">
-                <img v-if="seat.member.avatar_url" :src="seat.member.avatar_url" alt="" />
+                <img v-if="seat.member.avatar_url && !isBattleGuest(seat.member)" :src="seat.member.avatar_url" alt="" />
                 <span v-else>{{ initials(seat.member.display_name) }}</span>
                 <i :class="seat.member.online ? 'online' : 'offline'" aria-hidden="true"></i>
               </div>
               <div class="battle-seat-identity">
-                <strong>{{ seat.member.display_name }}</strong>
+                <strong>{{ seat.member.display_name }} <small v-if="isBattleGuest(seat.member)" class="battle-guest-marker">{{ $t('battle.guest.marker') }}</small></strong>
                 <span>{{ seat.member.user_id === room.host_user_id ? $t('battle.roles.host') : (seat.member.ready ? $t('battle.status.ready') : $t('battle.status.not_ready')) }}</span>
               </div>
-              <button v-if="isHost && seat.member.user_id !== selfMember?.user_id && ['preparing', 'waiting'].includes(room.status)" type="button" class="battle-kick-btn" :title="$t('battle.actions.kick')" @click="$emit('kick', seat.member.user_id)">×</button>
+              <button v-if="isHost && !sameBattleActor(seat.member, selfMember) && ['preparing', 'waiting'].includes(room.status)" type="button" class="battle-kick-btn" :title="$t('battle.actions.kick')" @click="$emit('kick', seat.member)">×</button>
             </template>
             <template v-else>
               <span class="battle-empty-seat-number">{{ String(seat.index + 1).padStart(2, '0') }}</span>
@@ -69,6 +69,7 @@
               <div><dt>{{ $t('battle.form.stepTimeout') }}</dt><dd>{{ room.step_timeout_seconds }}s</dd></div>
               <div><dt>{{ $t('battle.form.publicRoom') }}</dt><dd>{{ room.visibility === 'public' ? $t('common.yes') : $t('common.no') }}</dd></div>
               <div><dt>{{ $t('battle.form.allowSpectators') }}</dt><dd>{{ room.allow_spectators ? $t('common.yes') : $t('common.no') }}</dd></div>
+              <div><dt>{{ $t('battle.form.allowGuestChat') }}</dt><dd>{{ room.allow_guest_chat ? $t('common.yes') : $t('common.no') }}</dd></div>
               <div><dt>{{ $t('battle.form.chatRoles') }}</dt><dd>{{ chatRolesLabel }}</dd></div>
             </dl>
           </slot>
@@ -77,7 +78,7 @@
           <div class="battle-panel-title"><div><h3>{{ $t('battle.lobby.spectators') }}</h3><p>{{ spectators.length }}</p></div></div>
           <div v-if="!spectators.length" class="battle-sidebar-empty">{{ $t('battle.lobby.noSpectators') }}</div>
           <div v-else class="battle-spectator-chips">
-            <span v-for="member in spectators" :key="member.user_id">{{ member.display_name }}</span>
+            <span v-for="member in spectators" :key="battleActorRenderKey(member)">{{ member.display_name }}<small v-if="isBattleGuest(member)" class="battle-guest-marker">{{ $t('battle.guest.marker') }}</small></span>
           </div>
         </section>
       </aside>
@@ -89,10 +90,17 @@
 import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 
+import {
+  battleActorRenderKey,
+  isBattleGuest,
+  sameBattleActor,
+} from '../core/battleActor.js';
+
 const props = defineProps({
   room: { type: Object, required: true },
   members: { type: Array, default: () => [] },
   currentUserId: { type: Number, default: 0 },
+  currentActorKey: { type: String, default: '' },
   now: { type: Number, default: () => Date.now() },
 });
 
@@ -102,8 +110,14 @@ const copied = ref(false);
 const spectatorList = ref(null);
 const players = computed(() => props.members.filter((member) => member.role === 'player' && member.status === 'active'));
 const spectators = computed(() => props.members.filter((member) => member.role === 'spectator' && member.status === 'active'));
-const selfMember = computed(() => props.members.find((member) => Number(member.user_id) === Number(props.currentUserId)) || null);
-const isHost = computed(() => Number(props.room.host_user_id) === Number(props.currentUserId));
+const selfMember = computed(() => props.members.find((member) => (
+  (props.currentActorKey && battleActorRenderKey(member) === props.currentActorKey)
+  || (!props.currentActorKey && Number(member.user_id) === Number(props.currentUserId))
+)) || null);
+const isHost = computed(() => Boolean(
+  props.room.viewer?.is_host
+  || Number(props.room.host_user_id) === Number(props.currentUserId),
+));
 const canStart = computed(() => (
   isHost.value
   && Boolean(selfMember.value?.ready)
@@ -188,6 +202,7 @@ const copyInvite = async () => {
 .battle-seat-avatar i.online { background: #35a96b; }
 .battle-seat-identity { min-width: 0; display: flex; flex: 1; flex-direction: column; gap: 4px; }
 .battle-seat-identity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-main); font-size: var(--font-ui-sm); }
+.battle-guest-marker { display: inline-block; margin-left: 4px; color: var(--accent); font-size: 8px; font-weight: 900; vertical-align: 1px; }
 .battle-seat-identity span { color: var(--text-secondary); font-size: var(--font-ui-xs); }
 .battle-kick-btn { width: 28px; height: 28px; padding: 0; color: #dc4c4c; }
 .battle-lobby-actions { display: grid; grid-template-columns: 1fr 1fr auto; gap: 9px; margin-top: 15px; }

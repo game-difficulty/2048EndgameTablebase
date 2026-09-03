@@ -9,6 +9,7 @@ from typing import Any
 
 from .remote_workers.config import configured_remote_tables
 from .remote_workers.registry import remote_worker_registry
+from .quota.config import MULTIPLIER_UNIT, table_multiplier_units
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -123,9 +124,37 @@ def get_available_tablebases() -> list[dict[str, Any]]:
                 "full_pattern": str(entry["_full_pattern"]),
                 "dtype": str(entry.get("dtype") or "uint32"),
                 "spawn_rate": float(entry.get("spawn_rate", 0.1)),
+                "guest_available": _entry_guest_available(entry),
             }
         )
     return tables
+
+
+def _guest_max_multiplier_units() -> int:
+    try:
+        multiplier = float(os.getenv("GUEST_MAX_TABLE_MULTIPLIER", "5"))
+    except ValueError:
+        multiplier = 5.0
+    return max(0, int(round(multiplier * MULTIPLIER_UNIT)))
+
+
+def _entry_guest_available(entry: dict[str, Any]) -> bool:
+    return (
+        entry.get("_provider") == "local"
+        and table_multiplier_units(str(entry.get("_full_pattern") or ""))
+        <= _guest_max_multiplier_units()
+    )
+
+
+def is_guest_tablebase_available(full_pattern: str) -> bool:
+    target = str(full_pattern or "").strip()
+    if not target:
+        return False
+    return any(
+        str(entry.get("_full_pattern") or "") == target
+        and _entry_guest_available(entry)
+        for entry in _iter_local_entries()
+    )
 
 
 def get_catalog_version() -> str:

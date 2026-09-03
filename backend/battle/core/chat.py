@@ -10,6 +10,7 @@ from typing import Any
 from backend.auth.db import auth_db
 
 from .. import repository
+from ..actors import coerce_actor
 from .chat_policy import decode_chat_roles, effective_chat_role
 from .errors import BattleServiceError
 
@@ -84,11 +85,13 @@ def normalize_chat_content(value: Any) -> str:
 def _message_payload(db, message_id: int) -> dict[str, Any]:
     row = db.execute(
         """
-        SELECT message.message_id, message.room_id, message.user_id,
+        SELECT message.message_id, message.room_id, message.actor_key,
+               message.user_id, message.guest_id,
                message.content, message.created_at,
-               user.display_name, profile.avatar_key
+               COALESCE(user.display_name, message.display_name_snapshot) AS display_name,
+               profile.avatar_key
         FROM battle_chat_messages AS message
-        JOIN users AS user ON user.id = message.user_id
+        LEFT JOIN users AS user ON user.id = message.user_id
         LEFT JOIN user_profiles AS profile ON profile.user_id = message.user_id
         WHERE message.message_id = ?
         """,
@@ -99,16 +102,18 @@ def _message_payload(db, message_id: int) -> dict[str, Any]:
     payload = dict(row)
     avatar_key = payload.pop("avatar_key", None)
     payload["avatar_url"] = f"/media/avatars/{avatar_key}" if avatar_key else None
+    payload["actor_kind"] = "guest" if payload.get("guest_id") else "user"
+    payload["is_guest"] = bool(payload.get("guest_id"))
     return payload
 
 
-def _assert_active_member(db, room_id: str, user_id: int):
+def _assert_active_member(db, room_id: str, actor_key: str):
     member = db.execute(
         """
         SELECT role FROM battle_members
-        WHERE room_id = ? AND user_id = ? AND status = 'active'
+        WHERE room_id = ? AND actor_key = ? AND status = 'active'
         """,
-        (str(room_id), int(user_id)),
+        (str(room_id), str(actor_key)),
     ).fetchone()
     if member is None:
         raise BattleServiceError(
@@ -122,20 +127,24 @@ def _assert_active_member(db, room_id: str, user_id: int):
 def recent_messages(
     room_ref: str,
     *,
-    user_id: int,
+    actor: Any | None = None,
+    user_id: int | None = None,
     limit: int = CHAT_HISTORY_LIMIT,
 ) -> list[dict[str, Any]]:
+    identity = coerce_actor(actor, user_id=user_id)
     limit = max(1, min(int(limit), CHAT_HISTORY_LIMIT))
     with auth_db() as db:
         room = repository._find_room(db, str(room_ref))
-        _assert_active_member(db, str(room["room_id"]), int(user_id))
+        _assert_active_member(db, str(room["room_id"]), identity.actor_key)
         rows = db.execute(
             """
-            SELECT message.message_id, message.room_id, message.user_id,
+            SELECT message.message_id, message.room_id, message.actor_key,
+                   message.user_id, message.guest_id,
                    message.content, message.created_at,
-                   user.display_name, profile.avatar_key
+                   COALESCE(user.display_name, message.display_name_snapshot) AS display_name,
+                   profile.avatar_key
             FROM battle_chat_messages AS message
-            JOIN users AS user ON user.id = message.user_id
+            LEFT JOIN users AS user ON user.id = message.user_id
             LEFT JOIN user_profiles AS profile ON profile.user_id = message.user_id
             WHERE message.room_id = ?
             ORDER BY message.message_id DESC
@@ -148,6 +157,8 @@ def recent_messages(
         payload = dict(row)
         avatar_key = payload.pop("avatar_key", None)
         payload["avatar_url"] = f"/media/avatars/{avatar_key}" if avatar_key else None
+        payload["actor_kind"] = "guest" if payload.get("guest_id") else "user"
+        payload["is_guest"] = bool(payload.get("guest_id"))
         messages.append(payload)
     return messages
 
@@ -155,11 +166,13 @@ def recent_messages(
 def post_message(
     room_ref: str,
     *,
-    user_id: int,
+    actor: Any | None = None,
+    user_id: int | None = None,
     request_id: str,
     content: Any,
     now: datetime | None = None,
 ) -> ChatInsertResult:
+    identity = coerce_actor(actor, user_id=user_id)
     normalized_request_id = str(request_id or "").strip()[:160]
     if not normalized_request_id:
         raise BattleServiceError("CHAT_REQUEST_ID_REQUIRED", "Chat request id is required.")
@@ -173,8 +186,14 @@ def post_message(
         room_id = str(room["room_id"])
         if str(room["status"]) not in CHAT_ACTIVE_ROOM_STATUSES:
             raise BattleServiceError("CHAT_NOT_ALLOWED", "Chat is unavailable for this room.", 409)
-        member = _assert_active_member(db, room_id, int(user_id))
-        role = effective_chat_role(room=room, member=member, user_id=int(user_id))
+        member = _assert_active_member(db, room_id, identity.actor_key)
+        if identity.is_guest and not bool(room["allow_guest_chat"]):
+            raise BattleServiceError(
+                "CHAT_GUEST_NOT_ALLOWED",
+                "Guest chat is disabled for this room.",
+                403,
+            )
+        role = effective_chat_role(room=room, member=member, user_id=identity.user_id)
         if role not in decode_chat_roles(room["chat_roles_json"]):
             raise BattleServiceError(
                 "CHAT_ROLE_NOT_ALLOWED",
@@ -185,9 +204,9 @@ def post_message(
         existing = db.execute(
             """
             SELECT message_id FROM battle_chat_messages
-            WHERE room_id = ? AND user_id = ? AND request_id = ?
+            WHERE room_id = ? AND actor_key = ? AND request_id = ?
             """,
-            (room_id, int(user_id), normalized_request_id),
+            (room_id, identity.actor_key, normalized_request_id),
         ).fetchone()
         if existing is not None:
             return ChatInsertResult(
@@ -198,10 +217,10 @@ def post_message(
         recent = db.execute(
             """
             SELECT created_at FROM battle_chat_messages
-            WHERE room_id = ? AND user_id = ? AND created_at >= ?
+            WHERE room_id = ? AND actor_key = ? AND created_at >= ?
             ORDER BY created_at ASC
             """,
-            (room_id, int(user_id), _iso(cutoff)),
+            (room_id, identity.actor_key, _iso(cutoff)),
         ).fetchall()
         if len(recent) >= CHAT_RATE_LIMIT:
             retry_at = _parse_iso(str(recent[0]["created_at"])) + CHAT_RATE_WINDOW
@@ -211,12 +230,16 @@ def post_message(
         cursor = db.execute(
             """
             INSERT INTO battle_chat_messages
-            (room_id, user_id, request_id, content, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            (room_id, actor_key, user_id, guest_id, display_name_snapshot,
+             request_id, content, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 room_id,
-                int(user_id),
+                identity.actor_key,
+                identity.user_id,
+                identity.guest_id,
+                identity.display_name,
                 normalized_request_id,
                 normalized_content,
                 _iso(current),

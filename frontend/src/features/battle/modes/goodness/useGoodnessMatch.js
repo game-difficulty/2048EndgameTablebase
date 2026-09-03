@@ -17,6 +17,7 @@ import {
 import { isVariantPattern } from '../../../../utils/patternCategories.js';
 import { createBattleController } from './engine/battleController.js';
 import { battleClient, battleRequestId } from '../../services/battleClient.js';
+import { battleActorRenderKey } from '../../core/battleActor.js';
 
 const KEY_DIRECTIONS = Object.freeze({
   ArrowLeft: 'left',
@@ -158,7 +159,7 @@ export function useGoodnessMatch(
       if (
         !spectatorMode.value
         && !ownFinished.value
-        && Number(result.user_id) !== Number(authUserRef.value?.id)
+        && !roomSession.isOwnActor(result)
       ) continue;
       const copy = createBattleController({
         route: controller.route,
@@ -168,8 +169,9 @@ export function useGoodnessMatch(
       const state = copy.seek(Number(result.route_index || 0), {
         goodnessOfFit: Number(result.goodness_of_fit ?? 1),
       });
-      frames[result.user_id] = createSnapshotBoardFrame(
-        `opponent-${result.user_id}-${result.route_index}`,
+      const actorKey = battleActorRenderKey(result);
+      frames[actorKey] = createSnapshotBoardFrame(
+        `opponent-${actorKey}-${result.route_index}`,
         state.board,
       );
     }
@@ -240,9 +242,7 @@ export function useGoodnessMatch(
     ) {
       const accepted = message?.data || {};
       pendingInputs.delete(String(accepted.request_id || ''));
-      const confirmedResult = room.value?.results?.find(
-        (item) => Number(item.user_id) === Number(authUserRef.value?.id),
-      );
+      const confirmedResult = room.value?.results?.find(roomSession.isOwnActor);
       if (confirmedResult) {
         confirmedResult.last_sequence = Number(
           accepted.sequence ?? confirmedResult.last_sequence,

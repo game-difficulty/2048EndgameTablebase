@@ -8,6 +8,7 @@ from Config import category_info
 from backend.auth.db import auth_db
 
 from . import repository
+from .actors import coerce_actor
 from .core.contracts import BattleModeError
 from .core import chat
 from .core.errors import BattleServiceError
@@ -87,13 +88,15 @@ def route_payload(
     room_code: str,
     round_id: str,
     *,
-    user_id: int,
+    actor: Any | None = None,
+    user_id: int | None = None,
 ) -> tuple[bytes, dict[str, Any]]:
+    identity = coerce_actor(actor, user_id=user_id)
     mode = _mode_for_room(room_code)
     blob, metadata = mode.artifact_payload(
         room_code,
         round_id,
-        user_id=user_id,
+        actor_key=identity.actor_key,
     )
     payload = dict(metadata or {})
     payload.setdefault("artifact_kind", mode.artifact_kind)
@@ -105,8 +108,10 @@ def player_replay_payload(
     room_code: str,
     round_id: str,
     *,
-    user_id: int,
+    actor: Any | None = None,
+    user_id: int | None = None,
 ) -> tuple[bytes, dict[str, Any]]:
+    identity = coerce_actor(actor, user_id=user_id)
     with auth_db() as db:
         row = db.execute(
             """
@@ -116,10 +121,10 @@ def player_replay_payload(
             FROM battle_player_results AS result
             JOIN battle_rounds AS round ON round.round_id = result.round_id
             JOIN battle_rooms AS room ON room.room_id = round.room_id
-            WHERE result.round_id = ? AND result.user_id = ?
+            WHERE result.round_id = ? AND result.actor_key = ?
               AND (room.room_id = ? OR room.room_code = ? COLLATE NOCASE)
             """,
-            (str(round_id), int(user_id), str(room_code), str(room_code)),
+            (str(round_id), identity.actor_key, str(room_code), str(room_code)),
         ).fetchone()
     if row is None or int(row["replay_move_count"] or 0) <= 0:
         raise BattleServiceError(
@@ -155,12 +160,14 @@ def player_replay_payload(
 def record_choice(
     room_code: str,
     *,
-    user_id: int,
+    actor: Any | None = None,
+    user_id: int | None = None,
     round_id: str,
     sequence: int,
     route_index: int,
     direction: str,
 ) -> dict[str, Any]:
+    identity = coerce_actor(actor, user_id=user_id)
     mode = _mode_for_room(room_code)
     if mode.key != "goodness":
         raise BattleServiceError(
@@ -170,7 +177,7 @@ def record_choice(
         )
     return mode.handle_action(
         room_code,
-        user_id=user_id,
+        actor_key=identity.actor_key,
         action="move",
         payload={
             "round_id": round_id,
@@ -184,13 +191,15 @@ def record_choice(
 def handle_mode_action(
     room_code: str,
     *,
-    user_id: int,
+    actor: Any | None = None,
+    user_id: int | None = None,
     action: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    identity = coerce_actor(actor, user_id=user_id)
     return _mode_for_room(room_code).handle_action(
         room_code,
-        user_id=user_id,
+        actor_key=identity.actor_key,
         action=action,
         payload=payload,
     )
@@ -199,13 +208,15 @@ def handle_mode_action(
 async def handle_mode_action_async(
     room_code: str,
     *,
-    user_id: int,
+    actor: Any | None = None,
+    user_id: int | None = None,
     action: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    identity = coerce_actor(actor, user_id=user_id)
     return await _mode_for_room(room_code).handle_action_async(
         room_code,
-        user_id=user_id,
+        actor_key=identity.actor_key,
         action=action,
         payload=payload,
     )
@@ -214,12 +225,14 @@ async def handle_mode_action_async(
 def forfeit_round(
     room_code: str,
     *,
-    user_id: int,
+    actor: Any | None = None,
+    user_id: int | None = None,
     round_id: str,
 ) -> dict[str, Any]:
+    identity = coerce_actor(actor, user_id=user_id)
     return _mode_for_room(room_code).forfeit_round(
         room_code,
-        user_id=user_id,
+        actor_key=identity.actor_key,
         round_id=round_id,
     )
 

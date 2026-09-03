@@ -7,13 +7,13 @@
         <p>{{ room.full_pattern }} · {{ room.route?.step_count || 0 }} {{ $t('battle.result.steps') }}</p>
       </header>
       <div class="battle-result-list">
-        <article v-for="player in rankedResults" :key="player.user_id" :class="['battle-result-row', player.rank === 1 ? 'winner' : '', player.rank == null ? 'unranked' : '']">
+        <article v-for="player in rankedResults" :key="battleActorRenderKey(player)" :class="['battle-result-row', player.rank === 1 ? 'winner' : '', player.rank == null ? 'unranked' : '']">
           <span class="battle-result-rank">{{ player.rank ?? '-' }}</span>
           <div class="battle-result-avatar">
-            <img v-if="player.avatar_url" :src="player.avatar_url" alt="" />
+            <img v-if="player.avatar_url && !isBattleGuest(player)" :src="player.avatar_url" alt="" />
             <span v-else>{{ initials(player.display_name) }}</span>
           </div>
-          <strong>{{ player.display_name }}</strong>
+          <strong>{{ player.display_name }} <small v-if="isBattleGuest(player)" class="battle-result-guest-marker">{{ $t('battle.guest.marker') }}</small></strong>
           <span>{{ statusLabel(player) }}</span>
           <b>{{ percent(player.goodness_of_fit) }}</b>
         </article>
@@ -26,7 +26,7 @@
           @click="$emit('save-replay')"
         >{{ $t('battle.replay.save') }}</button>
         <button
-          v-if="replayAvailable"
+          v-if="replayReviewAvailable"
           type="button"
           :disabled="replayBusy"
           @click="$emit('open-replay')"
@@ -43,11 +43,13 @@ import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { isBattleResultDraw, rankBattleResults } from '../core/battleResultRanking.js';
+import { battleActorRenderKey, isBattleGuest } from '../core/battleActor.js';
 
 const props = defineProps({
   room: { type: Object, required: true },
   mode: { type: String, default: 'final' },
   replayAvailable: { type: Boolean, default: false },
+  replayReviewAvailable: { type: Boolean, default: false },
   replayBusy: { type: Boolean, default: false },
 });
 defineEmits(['close', 'return-room', 'save-replay', 'open-replay']);
@@ -89,6 +91,7 @@ const statusLabel = (player) => {
 .battle-result-avatar img { object-fit: cover; }
 .battle-result-avatar span { display: grid; place-items: center; border: 1px solid var(--border-main); color: var(--accent); font-size: 10px; font-weight: 900; }
 .battle-result-row > span:nth-of-type(2) { color: var(--text-secondary); font-size: var(--font-ui-xs); }
+.battle-result-guest-marker { margin-left: 3px; color: var(--accent); font-size: 8px; font-weight: 900; }
 .battle-result-row b { color: var(--accent); font: 900 15px/1 var(--font-mono, monospace); text-align: right; }
 .battle-result-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
 .battle-result-actions button { min-height: 43px; border: 1px solid var(--border-main); border-radius: 7px; background: var(--bg-card); color: var(--text-main); font-weight: 900; }

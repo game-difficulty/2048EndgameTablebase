@@ -4,11 +4,12 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 
-from backend.auth.dependencies import require_user
+from backend.auth.dependencies import client_ip, require_actor, require_user
 from backend.quota.errors import InsufficientTokens
 from backend.quota.service import get_token_balance
 
 from . import repository
+from .actors import coerce_actor
 from .service import (
     BattleServiceError,
     broadcast_room,
@@ -46,13 +47,13 @@ def _raise_service_error(exc: Exception) -> None:
 
 
 @router.get("/me")
-async def get_current_battle(user: dict = Depends(require_user)) -> dict[str, Any]:
-    return {"room": current_room(user_id=int(user["id"]))}
+async def get_current_battle(actor=Depends(require_actor)) -> dict[str, Any]:
+    return {"room": current_room(actor=actor)}
 
 
 @router.get("/rooms")
-async def get_public_rooms(user: dict = Depends(require_user)) -> dict[str, Any]:
-    return {"rooms": list_rooms(user_id=int(user["id"]))}
+async def get_public_rooms() -> dict[str, Any]:
+    return {"rooms": list_rooms()}
 
 
 @router.post("/rooms")
@@ -74,10 +75,10 @@ async def create_battle_room(
 @router.get("/rooms/{room_code}")
 async def get_battle_room(
     room_code: str,
-    user: dict = Depends(require_user),
+    actor=Depends(require_actor),
 ) -> dict[str, Any]:
     try:
-        return {"room": room_snapshot(room_code, user_id=int(user["id"]))}
+        return {"room": room_snapshot(room_code, actor=actor)}
     except Exception as exc:
         _raise_service_error(exc)
         raise
@@ -86,14 +87,16 @@ async def get_battle_room(
 @router.post("/rooms/{room_code}/join")
 async def join_battle_room(
     room_code: str,
+    request: Request,
     payload: dict = Body(default={}),
-    user: dict = Depends(require_user),
+    actor=Depends(require_actor),
 ) -> dict[str, Any]:
     try:
         room = join_room(
             room_code,
-            user_id=int(user["id"]),
+            actor=actor,
             role=(str(payload.get("role")) if payload.get("role") else None),
+            ip_address=client_ip(request),
         )
         await broadcast_room(str(room["room_id"]))
         return {"room": room}
@@ -105,15 +108,20 @@ async def join_battle_room(
 @router.post("/rooms/{room_code}/leave")
 async def leave_battle_room(
     room_code: str,
-    user: dict = Depends(require_user),
+    actor=Depends(require_actor),
 ) -> dict[str, Any]:
     try:
         room = repository.get_room(room_code)
-        leave_room(room_code, user_id=int(user["id"]))
+        identity = coerce_actor(actor)
+        leave_room(room_code, actor=identity)
         await broadcast_room(str(room["room_id"]))
         return {
             "left": True,
-            "token_balance": get_token_balance(int(user["id"])),
+            **(
+                {"token_balance": get_token_balance(int(identity.user_id))}
+                if identity.is_user
+                else {}
+            ),
         }
     except Exception as exc:
         _raise_service_error(exc)
@@ -124,10 +132,10 @@ async def leave_battle_room(
 async def ready_battle_room(
     room_code: str,
     payload: dict = Body(...),
-    user: dict = Depends(require_user),
+    actor=Depends(require_actor),
 ) -> dict[str, Any]:
     try:
-        room = set_ready(room_code, user_id=int(user["id"]), ready=bool(payload.get("ready")))
+        room = set_ready(room_code, actor=actor, ready=bool(payload.get("ready")))
         await broadcast_room(str(room["room_id"]))
         return {"room": room}
     except Exception as exc:
@@ -139,10 +147,10 @@ async def ready_battle_room(
 async def role_battle_room(
     room_code: str,
     payload: dict = Body(...),
-    user: dict = Depends(require_user),
+    actor=Depends(require_actor),
 ) -> dict[str, Any]:
     try:
-        room = set_role(room_code, user_id=int(user["id"]), role=str(payload.get("role") or ""))
+        room = set_role(room_code, actor=actor, role=str(payload.get("role") or ""))
         await broadcast_room(str(room["room_id"]))
         return {"room": room}
     except Exception as exc:
@@ -160,7 +168,8 @@ async def kick_battle_member(
         room = kick(
             room_code,
             host_user_id=int(user["id"]),
-            target_user_id=int(payload.get("user_id")),
+            target_actor_key=(str(payload.get("actor_key")) if payload.get("actor_key") else None),
+            target_user_id=(int(payload["user_id"]) if payload.get("user_id") is not None else None),
         )
         await broadcast_room(str(room["room_id"]))
         return {"room": room}
@@ -190,12 +199,12 @@ async def start_battle_room(
 async def forfeit_battle_round(
     room_code: str,
     round_id: str,
-    user: dict = Depends(require_user),
+    actor=Depends(require_actor),
 ) -> dict[str, Any]:
     try:
         room = forfeit_round(
             room_code,
-            user_id=int(user["id"]),
+            actor=actor,
             round_id=round_id,
         )
         await broadcast_room(str(room["room_id"]))
@@ -209,13 +218,13 @@ async def forfeit_battle_round(
 async def download_own_battle_replay(
     room_code: str,
     round_id: str,
-    user: dict = Depends(require_user),
+    actor=Depends(require_actor),
 ) -> Response:
     try:
         blob, metadata = player_replay_payload(
             room_code,
             round_id,
-            user_id=int(user["id"]),
+            actor=actor,
         )
     except Exception as exc:
         _raise_service_error(exc)
@@ -258,11 +267,11 @@ def _artifact_response(blob: bytes, metadata: dict[str, Any]) -> Response:
 async def _download_battle_artifact(
     room_code: str,
     round_id: str,
-    user: dict,
+    actor,
 ) -> Response:
     try:
         blob, metadata = route_payload(
-            room_code, round_id, user_id=int(user["id"])
+            room_code, round_id, actor=actor
         )
     except Exception as exc:
         _raise_service_error(exc)
@@ -274,16 +283,16 @@ async def _download_battle_artifact(
 async def download_battle_artifact(
     room_code: str,
     round_id: str,
-    user: dict = Depends(require_user),
+    actor=Depends(require_actor),
 ) -> Response:
-    return await _download_battle_artifact(room_code, round_id, user)
+    return await _download_battle_artifact(room_code, round_id, actor)
 
 
 @router.get("/rooms/{room_code}/rounds/{round_id}/route")
 async def download_battle_route(
     room_code: str,
     round_id: str,
-    user: dict = Depends(require_user),
+    actor=Depends(require_actor),
 ) -> Response:
     """Compatibility alias for the original goodness route endpoint."""
-    return await _download_battle_artifact(room_code, round_id, user)
+    return await _download_battle_artifact(room_code, round_id, actor)

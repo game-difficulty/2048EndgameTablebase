@@ -12,6 +12,7 @@ function normalizeTable(rawTable = {}) {
     fullPattern: String(rawTable.full_pattern || rawTable.fullPattern || ''),
     dtype: String(rawTable.dtype || ''),
     spawnRate: Number(rawTable.spawn_rate ?? rawTable.spawnRate ?? 0.1),
+    guestAvailable: Boolean(rawTable.guest_available ?? rawTable.guestAvailable),
   };
 }
 
@@ -20,6 +21,7 @@ function deriveCatalogVersion(tables) {
     table.fullPattern,
     table.dtype,
     table.spawnRate,
+    table.guestAvailable,
   ]));
   let hash = 0x811c9dc5;
   for (let index = 0; index < serialized.length; index += 1) {

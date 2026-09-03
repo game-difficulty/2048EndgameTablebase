@@ -1,5 +1,7 @@
 import { ref } from 'vue';
 
+import { battleActorKey, isBattleGuest } from './battleActor.js';
+
 export const BATTLE_CHAT_MAX_MESSAGES = 50;
 export const BATTLE_CHAT_MAX_CODE_POINTS = 20;
 
@@ -27,6 +29,7 @@ export function validateChatContent(value) {
 
 export function viewerCanChat(room, viewer) {
   if (!room || !viewer) return false;
+  if (isBattleGuest(viewer) && !room.allow_guest_chat) return false;
   const allowedRoles = Array.isArray(room.chat_roles)
     ? room.chat_roles
     : ['host', 'player', 'spectator'];
@@ -43,6 +46,9 @@ function normalizeMessage(candidate) {
     ...candidate,
     message_id: messageId,
     user_id: candidate?.user_id ?? null,
+    guest_id: candidate?.guest_id ?? null,
+    actor_kind: candidate?.actor_kind || candidate?.kind || '',
+    actor_key: battleActorKey(candidate),
     display_name: String(
       candidate?.display_name
       || candidate?.username
@@ -54,9 +60,15 @@ function normalizeMessage(candidate) {
   };
 }
 
-function sameUser(left, right) {
-  if (left === undefined || left === null || right === undefined || right === null) return true;
-  return String(left) === String(right);
+function sameRecipient(data, viewer) {
+  const addressedActorKey = battleActorKey(data);
+  const viewerActorKey = battleActorKey(viewer);
+  if (addressedActorKey && viewerActorKey) return addressedActorKey === viewerActorKey;
+  const addressedUserId = data?.user_id;
+  const viewerUserId = typeof viewer === 'object' ? viewer?.user_id : viewer;
+  if (addressedUserId === undefined || addressedUserId === null) return true;
+  if (viewerUserId === undefined || viewerUserId === null) return false;
+  return String(addressedUserId) === String(viewerUserId);
 }
 
 function messageBelongsToRoom(data, roomIdentity) {
@@ -153,7 +165,7 @@ export function createBattleChatState({ now = () => Date.now() } = {}) {
     setNotice(data.code || 'CHAT_REJECTED', data);
   };
 
-  const handleWsMessage = (message, viewerUserId = null, roomIdentity = null) => {
+  const handleWsMessage = (message, viewerIdentity = null, roomIdentity = null) => {
     const action = String(message?.action || '');
     const data = message?.data || {};
     if (action.startsWith('BATTLE_CHAT_') && !messageBelongsToRoom(data, roomIdentity)) {
@@ -168,11 +180,11 @@ export function createBattleChatState({ now = () => Date.now() } = {}) {
       return true;
     }
     if (action === 'BATTLE_CHAT_RATE_LIMITED') {
-      if (sameUser(data.user_id, viewerUserId)) setRateLimit(data);
+      if (sameRecipient(data, viewerIdentity)) setRateLimit(data);
       return true;
     }
     if (action === 'BATTLE_CHAT_REJECTED') {
-      if (sameUser(data.user_id, viewerUserId)) reject(data);
+      if (sameRecipient(data, viewerIdentity)) reject(data);
       return true;
     }
     return false;

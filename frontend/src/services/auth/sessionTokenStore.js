@@ -1,3 +1,5 @@
+import { getGuestSessionToken } from './guestSessionStore';
+
 const STORAGE_KEY = '2048tables:device-session-token';
 export const DEVICE_SESSION_STORAGE_KEY = STORAGE_KEY;
 const FALLBACK_COOKIE_NAME = 'tb_device_session_fallback';
@@ -137,11 +139,12 @@ export function storeDeviceSession(payload) {
 
 export function authHeaders(headers = {}) {
   const token = getDeviceSessionToken();
-  if (!token) {
-    return headers;
+  if (token) {
+    return {
+      ...headers,
+      Authorization: `Bearer ${token}`,
+    };
   }
-  return {
-    ...headers,
-    Authorization: `Bearer ${token}`,
-  };
+  const guestToken = getGuestSessionToken();
+  return guestToken ? { ...headers, 'X-Guest-Token': guestToken } : headers;
 }

@@ -1,6 +1,7 @@
 import { getBackendWebSocketUrl } from '../runtime/backendUrl';
 import { emitAuthRequired, emitTokenBalanceUpdated, emitTokenRequired } from '../auth/authEvents';
 import { clearDeviceSession, getDeviceSessionToken } from '../auth/sessionTokenStore';
+import { clearGuestSession, getGuestSessionToken } from '../auth/guestSessionStore';
 
 export function createWsClient({
   clientId,
@@ -45,6 +46,15 @@ export function createWsClient({
           action: 'AUTH_SESSION',
           data: { token },
         }));
+      } else {
+        const guestToken = getGuestSessionToken();
+        if (guestToken && socket?.readyState === WebSocket.OPEN) {
+          authTokenSent = guestToken;
+          socket.send(JSON.stringify({
+            action: 'AUTH_GUEST_SESSION',
+            data: { token: guestToken },
+          }));
+        }
       }
       while (pendingPayloads.length > 0 && socket?.readyState === WebSocket.OPEN) {
         socket.send(pendingPayloads.shift());
@@ -65,6 +75,12 @@ export function createWsClient({
           clearDeviceSession();
         }
         emitAuthRequired();
+      }
+      if (message?.action === 'GUEST_SESSION_REQUIRED' || message?.data?.code === 'GUEST_SESSION_REQUIRED') {
+        if (authTokenSent && getGuestSessionToken() === authTokenSent) {
+          clearGuestSession();
+          window.dispatchEvent(new CustomEvent('guest-session-invalidated'));
+        }
       }
       if (message?.action === 'TOKEN_REQUIRED' || message?.data?.code === 'INSUFFICIENT_TOKENS') {
         emitTokenRequired(message?.data || {});

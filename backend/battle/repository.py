@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import secrets
 import sqlite3
 import uuid
@@ -9,7 +10,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from backend.auth.db import auth_db
+from backend.auth.guest_service import hash_ip_bucket
 
+from .actors import BattleActor, coerce_actor, user_actor
 from .core.chat_policy import decode_chat_roles, normalize_chat_roles
 
 
@@ -19,6 +22,9 @@ ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 ROOM_STATUSES = {"preparing", "waiting", "running", "closed", "expired"}
 ROOM_VISIBILITIES = {"public", "private"}
 ACTIVE_ROOM_STATUSES = {"preparing", "waiting", "running"}
+GUEST_JOIN_WINDOW = timedelta(hours=1)
+DEFAULT_GUEST_JOIN_LIMIT = 10
+DEFAULT_GUEST_JOIN_IP_LIMIT = 30
 
 
 class BattleRepositoryError(RuntimeError):
@@ -35,6 +41,13 @@ class BattleConflictError(BattleRepositoryError):
 
 class BattlePermissionError(BattleRepositoryError):
     pass
+
+
+class BattleRateLimitError(BattleRepositoryError):
+    def __init__(self, code: str, *, retry_after_seconds: int):
+        self.code = str(code)
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+        super().__init__(self.code.lower())
 
 
 def _utc_now() -> datetime:
@@ -57,10 +70,292 @@ def _row_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
     payload = dict(row)
-    for field in ("allow_spectators", "ready"):
+    for field in ("allow_spectators", "allow_guest_chat", "ready"):
         if field in payload:
             payload[field] = bool(payload[field])
     return payload
+
+
+def _table_columns(db: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row["name"]) for row in db.execute(f"PRAGMA table_info({table})")}
+
+
+def _env_limit(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+def _guest_join_retry_after(db: sqlite3.Connection, where: str, value: str, now: datetime) -> int:
+    row = db.execute(
+        f"SELECT MIN(created_at) AS oldest FROM battle_guest_join_events WHERE {where} = ? AND created_at >= ?",
+        (value, _iso(now - GUEST_JOIN_WINDOW)),
+    ).fetchone()
+    if row is None or not row["oldest"]:
+        return int(GUEST_JOIN_WINDOW.total_seconds())
+    try:
+        oldest = datetime.fromisoformat(str(row["oldest"]))
+        if oldest.tzinfo is None:
+            oldest = oldest.replace(tzinfo=timezone.utc)
+        return max(1, math.ceil((oldest + GUEST_JOIN_WINDOW - now).total_seconds()))
+    except ValueError:
+        return int(GUEST_JOIN_WINDOW.total_seconds())
+
+
+def _reserve_guest_join(
+    db: sqlite3.Connection,
+    *,
+    identity: BattleActor,
+    room_id: str,
+    ip_address: str,
+    now: datetime,
+) -> None:
+    """Count a guest's first successful join attempt for a room exactly once."""
+    if not identity.is_guest:
+        return
+    guest_id = str(identity.guest_id)
+    existing = db.execute(
+        "SELECT 1 FROM battle_guest_join_events WHERE guest_id = ? AND room_id = ?",
+        (guest_id, room_id),
+    ).fetchone()
+    if existing is not None:
+        return
+
+    cutoff = _iso(now - GUEST_JOIN_WINDOW)
+    guest_count = int(
+        db.execute(
+            "SELECT COUNT(*) AS count FROM battle_guest_join_events WHERE guest_id = ? AND created_at >= ?",
+            (guest_id, cutoff),
+        ).fetchone()["count"]
+    )
+    if guest_count >= _env_limit("BATTLE_GUEST_JOIN_LIMIT_PER_HOUR", DEFAULT_GUEST_JOIN_LIMIT):
+        raise BattleRateLimitError(
+            "GUEST_JOIN_RATE_LIMITED",
+            retry_after_seconds=_guest_join_retry_after(db, "guest_id", guest_id, now),
+        )
+
+    ip_hash = hash_ip_bucket(ip_address)
+    ip_count = int(
+        db.execute(
+            "SELECT COUNT(*) AS count FROM battle_guest_join_events WHERE ip_hash = ? AND created_at >= ?",
+            (ip_hash, cutoff),
+        ).fetchone()["count"]
+    )
+    if ip_count >= _env_limit("BATTLE_GUEST_JOIN_IP_LIMIT_PER_HOUR", DEFAULT_GUEST_JOIN_IP_LIMIT):
+        raise BattleRateLimitError(
+            "GUEST_NETWORK_JOIN_RATE_LIMITED",
+            retry_after_seconds=_guest_join_retry_after(db, "ip_hash", ip_hash, now),
+        )
+    db.execute(
+        "DELETE FROM battle_guest_join_events WHERE created_at < ?",
+        (_iso(now - timedelta(days=1)),),
+    )
+    db.execute(
+        "INSERT INTO battle_guest_join_events (guest_id, room_id, ip_hash, created_at) VALUES (?, ?, ?, ?)",
+        (guest_id, room_id, ip_hash, _iso(now)),
+    )
+
+
+def _migrate_actor_identity_tables(db: sqlite3.Connection) -> None:
+    """Rebuild legacy user-only Battle tables without losing active rooms."""
+    migration_scripts: list[str] = []
+    if "actor_key" not in _table_columns(db, "battle_members"):
+        migration_scripts.append(
+            """
+            ALTER TABLE battle_members RENAME TO battle_members_actor_legacy;
+            CREATE TABLE battle_members (
+              member_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              room_id TEXT NOT NULL,
+              actor_key TEXT NOT NULL,
+              user_id INTEGER,
+              guest_id TEXT,
+              display_name_snapshot TEXT NOT NULL DEFAULT '',
+              role TEXT NOT NULL,
+              seat_index INTEGER,
+              ready INTEGER NOT NULL DEFAULT 0,
+              status TEXT NOT NULL DEFAULT 'active',
+              joined_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              left_at TEXT,
+              FOREIGN KEY(room_id) REFERENCES battle_rooms(room_id) ON DELETE CASCADE,
+              FOREIGN KEY(user_id) REFERENCES users(id),
+              UNIQUE(room_id, actor_key),
+              CHECK((user_id IS NOT NULL AND guest_id IS NULL) OR
+                    (user_id IS NULL AND guest_id IS NOT NULL)),
+              CHECK(role IN ('player', 'spectator')),
+              CHECK(status IN ('active', 'left', 'kicked')),
+              CHECK(ready IN (0, 1)),
+              CHECK((role = 'player' AND seat_index IS NOT NULL AND seat_index >= 0)
+                    OR (role = 'spectator' AND seat_index IS NULL))
+            );
+            INSERT INTO battle_members
+              (member_id, room_id, actor_key, user_id, guest_id,
+               display_name_snapshot, role, seat_index, ready, status,
+               joined_at, updated_at, left_at)
+            SELECT legacy.member_id, legacy.room_id, 'u:' || legacy.user_id,
+                   legacy.user_id, NULL, COALESCE(users.display_name, ''),
+                   legacy.role, legacy.seat_index, legacy.ready, legacy.status,
+                   legacy.joined_at, legacy.updated_at, legacy.left_at
+            FROM battle_members_actor_legacy AS legacy
+            LEFT JOIN users ON users.id = legacy.user_id;
+            DROP TABLE battle_members_actor_legacy;
+            """
+        )
+    if "actor_key" not in _table_columns(db, "battle_player_results"):
+        migration_scripts.append(
+            """
+            ALTER TABLE battle_player_results
+              RENAME TO battle_player_results_actor_legacy;
+            CREATE TABLE battle_player_results (
+              result_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              round_id TEXT NOT NULL,
+              actor_key TEXT NOT NULL,
+              user_id INTEGER,
+              guest_id TEXT,
+              display_name_snapshot TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL DEFAULT 'playing',
+              route_index INTEGER NOT NULL DEFAULT 0,
+              last_sequence INTEGER NOT NULL DEFAULT 0,
+              goodness_of_fit REAL NOT NULL DEFAULT 1.0,
+              primary_score REAL, secondary_score REAL,
+              progress INTEGER NOT NULL DEFAULT 0,
+              mode_data_json TEXT NOT NULL DEFAULT '{}',
+              choice_blob BLOB, board_state TEXT,
+              replay_blob BLOB NOT NULL DEFAULT X'',
+              replay_move_count INTEGER NOT NULL DEFAULT 0,
+              finished_at TEXT, timeout_at TEXT,
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+              FOREIGN KEY(round_id) REFERENCES battle_rounds(round_id) ON DELETE CASCADE,
+              FOREIGN KEY(user_id) REFERENCES users(id),
+              UNIQUE(round_id, actor_key),
+              CHECK((user_id IS NOT NULL AND guest_id IS NULL) OR
+                    (user_id IS NULL AND guest_id IS NOT NULL)),
+              CHECK(status IN ('playing', 'completed', 'timed_out', 'disconnected', 'disqualified')),
+              CHECK(route_index >= 0), CHECK(last_sequence >= 0),
+              CHECK(replay_move_count >= 0),
+              CHECK(goodness_of_fit >= 0.0 AND goodness_of_fit <= 1.0)
+            );
+            INSERT INTO battle_player_results
+              (result_id, round_id, actor_key, user_id, guest_id,
+               display_name_snapshot, status, route_index, last_sequence,
+               goodness_of_fit, primary_score, secondary_score, progress,
+               mode_data_json, choice_blob, board_state, replay_blob,
+               replay_move_count, finished_at, timeout_at, created_at, updated_at)
+            SELECT legacy.result_id, legacy.round_id, 'u:' || legacy.user_id,
+                   legacy.user_id, NULL, COALESCE(users.display_name, ''),
+                   legacy.status, legacy.route_index, legacy.last_sequence,
+                   legacy.goodness_of_fit, legacy.primary_score,
+                   legacy.secondary_score, legacy.progress,
+                   legacy.mode_data_json, legacy.choice_blob,
+                   legacy.board_state, legacy.replay_blob,
+                   legacy.replay_move_count, legacy.finished_at,
+                   legacy.timeout_at, legacy.created_at, legacy.updated_at
+            FROM battle_player_results_actor_legacy AS legacy
+            LEFT JOIN users ON users.id = legacy.user_id;
+            DROP TABLE battle_player_results_actor_legacy;
+            """
+        )
+    if "actor_key" not in _table_columns(db, "battle_chat_messages"):
+        migration_scripts.append(
+            """
+            ALTER TABLE battle_chat_messages
+              RENAME TO battle_chat_messages_actor_legacy;
+            CREATE TABLE battle_chat_messages (
+              message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              room_id TEXT NOT NULL,
+              actor_key TEXT NOT NULL,
+              user_id INTEGER,
+              guest_id TEXT,
+              display_name_snapshot TEXT NOT NULL DEFAULT '',
+              request_id TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL,
+              FOREIGN KEY(room_id) REFERENCES battle_rooms(room_id) ON DELETE CASCADE,
+              FOREIGN KEY(user_id) REFERENCES users(id),
+              UNIQUE(room_id, actor_key, request_id),
+              CHECK((user_id IS NOT NULL AND guest_id IS NULL) OR
+                    (user_id IS NULL AND guest_id IS NOT NULL))
+            );
+            INSERT INTO battle_chat_messages
+              (message_id, room_id, actor_key, user_id, guest_id,
+               display_name_snapshot, request_id, content, created_at)
+            SELECT legacy.message_id, legacy.room_id, 'u:' || legacy.user_id,
+                   legacy.user_id, NULL, COALESCE(users.display_name, ''),
+                   legacy.request_id, legacy.content, legacy.created_at
+            FROM battle_chat_messages_actor_legacy AS legacy
+            LEFT JOIN users ON users.id = legacy.user_id;
+            DROP TABLE battle_chat_messages_actor_legacy;
+            """
+        )
+    if "actor_key" not in _table_columns(db, "battle_free_player_states"):
+        migration_scripts.append(
+            """
+            ALTER TABLE battle_free_player_states
+              RENAME TO battle_free_player_states_actor_legacy;
+            CREATE TABLE battle_free_player_states (
+              round_id TEXT NOT NULL, actor_key TEXT NOT NULL,
+              user_id INTEGER, guest_id TEXT,
+              board_state TEXT NOT NULL, step_index INTEGER NOT NULL DEFAULT 0,
+              sequence INTEGER NOT NULL DEFAULT 0,
+              spawn_log_index REAL NOT NULL DEFAULT 0.0,
+              spawn_log_floor REAL NOT NULL DEFAULT 0.0,
+              rng_step INTEGER NOT NULL DEFAULT 0,
+              state_status TEXT NOT NULL DEFAULT 'input', finish_reason TEXT,
+              resolution_request_id TEXT, resolution_started_at TEXT,
+              ack_deadline_at TEXT, timeout_at TEXT,
+              current_results_json TEXT NOT NULL DEFAULT '{}',
+              operation_blob BLOB NOT NULL DEFAULT X'',
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+              PRIMARY KEY(round_id, actor_key),
+              FOREIGN KEY(round_id) REFERENCES battle_rounds(round_id) ON DELETE CASCADE,
+              FOREIGN KEY(user_id) REFERENCES users(id),
+              CHECK((user_id IS NOT NULL AND guest_id IS NULL) OR
+                    (user_id IS NULL AND guest_id IS NOT NULL))
+            );
+            INSERT INTO battle_free_player_states
+              (round_id, actor_key, user_id, guest_id, board_state, step_index,
+               sequence, spawn_log_index, spawn_log_floor, rng_step,
+               state_status, finish_reason, resolution_request_id,
+               resolution_started_at, ack_deadline_at, timeout_at,
+               current_results_json, operation_blob, created_at, updated_at)
+            SELECT legacy.round_id, 'u:' || legacy.user_id, legacy.user_id, NULL,
+                   legacy.board_state, legacy.step_index, legacy.sequence,
+                   legacy.spawn_log_index, legacy.spawn_log_floor, legacy.rng_step,
+                   legacy.state_status, legacy.finish_reason,
+                   legacy.resolution_request_id, legacy.resolution_started_at,
+                   legacy.ack_deadline_at, legacy.timeout_at,
+                   legacy.current_results_json, legacy.operation_blob,
+                   legacy.created_at, legacy.updated_at
+            FROM battle_free_player_states_actor_legacy AS legacy;
+            DROP TABLE battle_free_player_states_actor_legacy;
+            """
+        )
+    if migration_scripts:
+        db.executescript(
+            "BEGIN IMMEDIATE;\n"
+            + "\n".join(migration_scripts)
+            + "\nCOMMIT;"
+        )
+    db.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_battle_members_active_actor
+          ON battle_members(actor_key) WHERE status = 'active';
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_battle_members_active_player_seat
+          ON battle_members(room_id, seat_index)
+          WHERE status = 'active' AND role = 'player';
+        CREATE INDEX IF NOT EXISTS ix_battle_members_room_active
+          ON battle_members(room_id, status, role, seat_index);
+        CREATE INDEX IF NOT EXISTS ix_battle_chat_room
+          ON battle_chat_messages(room_id, message_id DESC);
+        CREATE INDEX IF NOT EXISTS ix_battle_chat_rate
+          ON battle_chat_messages(room_id, actor_key, created_at DESC);
+        CREATE INDEX IF NOT EXISTS ix_battle_free_states_timeout
+          ON battle_free_player_states(state_status, timeout_at);
+        CREATE INDEX IF NOT EXISTS ix_battle_guest_joins_guest_time
+          ON battle_guest_join_events(guest_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS ix_battle_guest_joins_ip_time
+          ON battle_guest_join_events(ip_hash, created_at DESC);
+        """
+    )
 
 
 def init_battle_db() -> None:
@@ -75,6 +370,7 @@ def init_battle_db() -> None:
               status TEXT NOT NULL DEFAULT 'preparing',
               visibility TEXT NOT NULL DEFAULT 'public',
               allow_spectators INTEGER NOT NULL DEFAULT 1,
+              allow_guest_chat INTEGER NOT NULL DEFAULT 0,
               max_players INTEGER NOT NULL DEFAULT 2,
               mode_key TEXT NOT NULL DEFAULT 'goodness',
               mode_version INTEGER NOT NULL DEFAULT 1,
@@ -104,7 +400,10 @@ def init_battle_db() -> None:
             CREATE TABLE IF NOT EXISTS battle_members (
               member_id INTEGER PRIMARY KEY AUTOINCREMENT,
               room_id TEXT NOT NULL,
-              user_id INTEGER NOT NULL,
+              actor_key TEXT NOT NULL,
+              user_id INTEGER,
+              guest_id TEXT,
+              display_name_snapshot TEXT NOT NULL DEFAULT '',
               role TEXT NOT NULL,
               seat_index INTEGER,
               ready INTEGER NOT NULL DEFAULT 0,
@@ -114,7 +413,9 @@ def init_battle_db() -> None:
               left_at TEXT,
               FOREIGN KEY(room_id) REFERENCES battle_rooms(room_id) ON DELETE CASCADE,
               FOREIGN KEY(user_id) REFERENCES users(id),
-              UNIQUE(room_id, user_id),
+              UNIQUE(room_id, actor_key),
+              CHECK((user_id IS NOT NULL AND guest_id IS NULL) OR
+                    (user_id IS NULL AND guest_id IS NOT NULL)),
               CHECK(role IN ('player', 'spectator')),
               CHECK(status IN ('active', 'left', 'kicked')),
               CHECK(ready IN (0, 1)),
@@ -167,7 +468,10 @@ def init_battle_db() -> None:
             CREATE TABLE IF NOT EXISTS battle_player_results (
               result_id INTEGER PRIMARY KEY AUTOINCREMENT,
               round_id TEXT NOT NULL,
-              user_id INTEGER NOT NULL,
+              actor_key TEXT NOT NULL,
+              user_id INTEGER,
+              guest_id TEXT,
+              display_name_snapshot TEXT NOT NULL DEFAULT '',
               status TEXT NOT NULL DEFAULT 'playing',
               route_index INTEGER NOT NULL DEFAULT 0,
               last_sequence INTEGER NOT NULL DEFAULT 0,
@@ -185,7 +489,9 @@ def init_battle_db() -> None:
               updated_at TEXT NOT NULL,
               FOREIGN KEY(round_id) REFERENCES battle_rounds(round_id) ON DELETE CASCADE,
               FOREIGN KEY(user_id) REFERENCES users(id),
-              UNIQUE(round_id, user_id),
+              UNIQUE(round_id, actor_key),
+              CHECK((user_id IS NOT NULL AND guest_id IS NULL) OR
+                    (user_id IS NULL AND guest_id IS NOT NULL)),
               CHECK(status IN ('playing', 'completed', 'timed_out', 'disconnected', 'disqualified')),
               CHECK(route_index >= 0),
               CHECK(last_sequence >= 0),
@@ -193,19 +499,8 @@ def init_battle_db() -> None:
               CHECK(goodness_of_fit >= 0.0 AND goodness_of_fit <= 1.0)
             );
 
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_battle_members_active_user
-              ON battle_members(user_id)
-              WHERE status = 'active';
-
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_battle_members_active_player_seat
-              ON battle_members(room_id, seat_index)
-              WHERE status = 'active' AND role = 'player';
-
             CREATE INDEX IF NOT EXISTS ix_battle_rooms_public_lobby
               ON battle_rooms(visibility, status, created_at DESC);
-
-            CREATE INDEX IF NOT EXISTS ix_battle_members_room_active
-              ON battle_members(room_id, status, role, seat_index);
 
             CREATE INDEX IF NOT EXISTS ix_battle_rounds_room
               ON battle_rounds(room_id, round_number DESC);
@@ -223,27 +518,38 @@ def init_battle_db() -> None:
               FOREIGN KEY(user_id) REFERENCES users(id)
             );
 
+            CREATE TABLE IF NOT EXISTS battle_guest_join_events (
+              event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              guest_id TEXT NOT NULL,
+              room_id TEXT NOT NULL,
+              ip_hash TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              UNIQUE(guest_id, room_id),
+              FOREIGN KEY(room_id) REFERENCES battle_rooms(room_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS battle_chat_messages (
               message_id INTEGER PRIMARY KEY AUTOINCREMENT,
               room_id TEXT NOT NULL,
-              user_id INTEGER NOT NULL,
+              actor_key TEXT NOT NULL,
+              user_id INTEGER,
+              guest_id TEXT,
+              display_name_snapshot TEXT NOT NULL DEFAULT '',
               request_id TEXT NOT NULL,
               content TEXT NOT NULL,
               created_at TEXT NOT NULL,
               FOREIGN KEY(room_id) REFERENCES battle_rooms(room_id) ON DELETE CASCADE,
               FOREIGN KEY(user_id) REFERENCES users(id),
-              UNIQUE(room_id, user_id, request_id)
+              UNIQUE(room_id, actor_key, request_id),
+              CHECK((user_id IS NOT NULL AND guest_id IS NULL) OR
+                    (user_id IS NULL AND guest_id IS NOT NULL))
             );
-
-            CREATE INDEX IF NOT EXISTS ix_battle_chat_room
-              ON battle_chat_messages(room_id, message_id DESC);
-
-            CREATE INDEX IF NOT EXISTS ix_battle_chat_rate
-              ON battle_chat_messages(room_id, user_id, created_at DESC);
 
             CREATE TABLE IF NOT EXISTS battle_free_player_states (
               round_id TEXT NOT NULL,
-              user_id INTEGER NOT NULL,
+              actor_key TEXT NOT NULL,
+              user_id INTEGER,
+              guest_id TEXT,
               board_state TEXT NOT NULL,
               step_index INTEGER NOT NULL DEFAULT 0,
               sequence INTEGER NOT NULL DEFAULT 0,
@@ -260,13 +566,13 @@ def init_battle_db() -> None:
               operation_blob BLOB NOT NULL DEFAULT X'',
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL,
-              PRIMARY KEY (round_id, user_id),
+              PRIMARY KEY (round_id, actor_key),
               FOREIGN KEY(round_id) REFERENCES battle_rounds(round_id) ON DELETE CASCADE,
-              FOREIGN KEY(user_id) REFERENCES users(id)
+              FOREIGN KEY(user_id) REFERENCES users(id),
+              CHECK((user_id IS NOT NULL AND guest_id IS NULL) OR
+                    (user_id IS NULL AND guest_id IS NOT NULL))
             );
 
-            CREATE INDEX IF NOT EXISTS ix_battle_free_states_timeout
-              ON battle_free_player_states(state_status, timeout_at);
             """
         )
         room_columns = {row["name"] for row in db.execute("PRAGMA table_info(battle_rooms)")}
@@ -278,6 +584,7 @@ def init_battle_db() -> None:
             "mode_version": "INTEGER NOT NULL DEFAULT 1",
             "settings_json": "TEXT NOT NULL DEFAULT '{}'",
             "chat_roles_json": "TEXT NOT NULL DEFAULT '[\"host\",\"player\",\"spectator\"]'",
+            "allow_guest_chat": "INTEGER NOT NULL DEFAULT 0",
         }.items():
             if name not in room_columns:
                 db.execute(f"ALTER TABLE battle_rooms ADD COLUMN {name} {declaration}")
@@ -310,6 +617,7 @@ def init_battle_db() -> None:
         }.items():
             if name not in result_columns:
                 db.execute(f"ALTER TABLE battle_player_results ADD COLUMN {name} {declaration}")
+        _migrate_actor_identity_tables(db)
         db.execute(
             "CREATE INDEX IF NOT EXISTS ix_battle_rooms_mode_lobby "
             "ON battle_rooms(mode_key, visibility, status, created_at DESC)"
@@ -343,10 +651,10 @@ def _find_room(db: sqlite3.Connection, room_ref: str) -> sqlite3.Row:
     return row
 
 
-def _active_membership(db: sqlite3.Connection, user_id: int) -> sqlite3.Row | None:
+def _active_membership(db: sqlite3.Connection, actor: BattleActor) -> sqlite3.Row | None:
     return db.execute(
-        "SELECT * FROM battle_members WHERE user_id = ? AND status = 'active'",
-        (int(user_id),),
+        "SELECT * FROM battle_members WHERE actor_key = ? AND status = 'active'",
+        (actor.actor_key,),
     ).fetchone()
 
 
@@ -406,10 +714,11 @@ def _room_payload(db: sqlite3.Connection, room: sqlite3.Row) -> dict[str, Any]:
     payload["chat_roles"] = decode_chat_roles(raw_chat_roles)
     members = db.execute(
         """
-        SELECT m.*, u.display_name, p.avatar_key,
+        SELECT m.*, COALESCE(u.display_name, m.display_name_snapshot) AS display_name,
+               p.avatar_key,
                COALESCE(e.tier, 'free') AS entitlement_tier
         FROM battle_members AS m
-        JOIN users AS u ON u.id = m.user_id
+        LEFT JOIN users AS u ON u.id = m.user_id
         LEFT JOIN user_profiles AS p ON p.user_id = m.user_id
         LEFT JOIN user_entitlements AS e ON e.user_id = m.user_id
         WHERE m.room_id = ? AND m.status = 'active'
@@ -424,6 +733,8 @@ def _room_payload(db: sqlite3.Connection, room: sqlite3.Row) -> dict[str, Any]:
             f"/media/avatars/{item['avatar_key']}" if item.get("avatar_key") else None
         )
         item.pop("avatar_key", None)
+        item["actor_kind"] = "guest" if item.get("guest_id") else "user"
+        item["is_guest"] = bool(item.get("guest_id"))
         payload["members"].append(item)
     payload["player_count"] = sum(member["role"] == "player" for member in members)
     payload["spectator_count"] = sum(member["role"] == "spectator" for member in members)
@@ -446,11 +757,12 @@ def _room_payload(db: sqlite3.Connection, room: sqlite3.Row) -> dict[str, Any]:
         payload["route"] = _row_dict(route)
         results = db.execute(
             """
-            SELECT r.*, u.display_name, p.avatar_key
+            SELECT r.*, COALESCE(u.display_name, r.display_name_snapshot) AS display_name,
+                   p.avatar_key
             FROM battle_player_results AS r
-            JOIN users AS u ON u.id = r.user_id
+            LEFT JOIN users AS u ON u.id = r.user_id
             LEFT JOIN user_profiles AS p ON p.user_id = r.user_id
-            WHERE r.round_id = ? ORDER BY r.goodness_of_fit DESC, r.finished_at, r.user_id
+            WHERE r.round_id = ? ORDER BY r.goodness_of_fit DESC, r.finished_at, r.actor_key
             """,
             (round_row["round_id"],),
         ).fetchall()
@@ -461,6 +773,8 @@ def _room_payload(db: sqlite3.Connection, room: sqlite3.Row) -> dict[str, Any]:
                 f"/media/avatars/{item['avatar_key']}" if item.get("avatar_key") else None
             )
             item.pop("avatar_key", None)
+            item["actor_kind"] = "guest" if item.get("guest_id") else "user"
+            item["is_guest"] = bool(item.get("guest_id"))
             item.pop("choice_blob", None)
             item.pop("replay_blob", None)
             item.pop("board_state", None)
@@ -485,6 +799,7 @@ def create_room(
     room_code: str | None = None,
     visibility: str = "public",
     allow_spectators: bool = True,
+    allow_guest_chat: bool = False,
     max_players: int = 2,
     initial_board: str | None = None,
     max_steps: int | None = None,
@@ -532,7 +847,8 @@ def create_room(
         with auth_db() as db:
             db.execute("BEGIN IMMEDIATE")
             _active_user(db, host_user_id)
-            if _active_membership(db, host_user_id) is not None:
+            host_actor = user_actor(host_user_id)
+            if _active_membership(db, host_actor) is not None:
                 raise BattleConflictError("user_already_in_room")
             if _room_creation_retry_after(db, host_user_id, now=now) > 0:
                 raise BattleConflictError("room_create_cooldown")
@@ -545,11 +861,11 @@ def create_room(
                         """
                         INSERT INTO battle_rooms
                         (room_id, room_code, host_user_id, status, visibility,
-                         allow_spectators, max_players, mode_key, mode_version,
+                         allow_spectators, allow_guest_chat, max_players, mode_key, mode_version,
                          settings_json, chat_roles_json, pattern, target, full_pattern,
                          initial_board, max_steps, step_timeout_seconds,
                          created_at, updated_at, expires_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             room_id,
@@ -558,6 +874,7 @@ def create_room(
                             status,
                             visibility,
                             1 if allow_spectators else 0,
+                            1 if allow_guest_chat else 0,
                             max_players,
                             mode_key,
                             mode_version,
@@ -585,11 +902,20 @@ def create_room(
             db.execute(
                 """
                 INSERT INTO battle_members
-                (room_id, user_id, role, seat_index, ready, status,
-                 joined_at, updated_at)
-                VALUES (?, ?, 'player', 0, 0, 'active', ?, ?)
+                (room_id, actor_key, user_id, guest_id, display_name_snapshot,
+                 role, seat_index, ready, status, joined_at, updated_at)
+                SELECT ?, ?, ?, NULL, COALESCE(display_name, ''),
+                       'player', 0, 0, 'active', ?, ?
+                FROM users WHERE id = ?
                 """,
-                (room_id, int(host_user_id), _iso(now), _iso(now)),
+                (
+                    room_id,
+                    host_actor.actor_key,
+                    int(host_user_id),
+                    _iso(now),
+                    _iso(now),
+                    int(host_user_id),
+                ),
             )
             return _room_payload(db, _find_room(db, room_id))
     except sqlite3.IntegrityError as exc:
@@ -601,7 +927,12 @@ def get_room(room_ref: str) -> dict[str, Any]:
         return _room_payload(db, _find_room(db, room_ref))
 
 
-def room_unavailable_reason(room_ref: str, *, user_id: int) -> str | None:
+def room_unavailable_reason(
+    room_ref: str,
+    *,
+    actor: Any | None = None,
+    user_id: int | None = None,
+) -> str | None:
     """Return a close reason only when room access is definitively gone."""
     with auth_db() as db:
         try:
@@ -613,9 +944,10 @@ def room_unavailable_reason(room_ref: str, *, user_id: int) -> str | None:
             if room["generation_error"]:
                 return str(room["generation_error"])
             return "ROOM_EXPIRED" if status == "expired" else "ROOM_CLOSED"
+        identity = coerce_actor(actor, user_id=user_id)
         member = db.execute(
-            "SELECT status FROM battle_members WHERE room_id = ? AND user_id = ?",
-            (str(room["room_id"]), int(user_id)),
+            "SELECT status FROM battle_members WHERE room_id = ? AND actor_key = ?",
+            (str(room["room_id"]), identity.actor_key),
         ).fetchone()
         if member is None:
             return "ROOM_MEMBERSHIP_REQUIRED"
@@ -674,17 +1006,21 @@ def list_public_rooms(*, limit: int = 50, now: datetime | None = None) -> list[d
 def join_room(
     room_ref: str,
     *,
-    user_id: int,
+    actor: Any | None = None,
+    user_id: int | None = None,
     preferred_role: str | None = None,
+    ip_address: str = "",
 ) -> dict[str, Any]:
     if preferred_role not in (None, "player", "spectator"):
         raise ValueError("invalid_member_role")
+    identity = coerce_actor(actor, user_id=user_id)
     now = _utc_now()
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
-        _active_user(db, user_id)
+        if identity.is_user:
+            _active_user(db, int(identity.user_id))
         room = _find_room(db, room_ref)
-        existing_active = _active_membership(db, user_id)
+        existing_active = _active_membership(db, identity)
         if existing_active is not None:
             if existing_active["room_id"] == room["room_id"]:
                 return _row_dict(existing_active) or {}
@@ -709,22 +1045,32 @@ def join_room(
             raise BattleConflictError("player_slots_full")
 
         existing = db.execute(
-            "SELECT member_id, status FROM battle_members WHERE room_id = ? AND user_id = ?",
-            (room["room_id"], int(user_id)),
+            "SELECT member_id, status FROM battle_members WHERE room_id = ? AND actor_key = ?",
+            (room["room_id"], identity.actor_key),
         ).fetchone()
         if existing is not None and existing["status"] == "kicked":
             raise BattleConflictError("kicked_from_room")
+        _reserve_guest_join(
+            db,
+            identity=identity,
+            room_id=str(room["room_id"]),
+            ip_address=ip_address,
+            now=now,
+        )
         if existing is None:
             cursor = db.execute(
                 """
                 INSERT INTO battle_members
-                (room_id, user_id, role, seat_index, ready, status,
-                 joined_at, updated_at, left_at)
-                VALUES (?, ?, ?, ?, 0, 'active', ?, ?, NULL)
+                (room_id, actor_key, user_id, guest_id, display_name_snapshot,
+                 role, seat_index, ready, status, joined_at, updated_at, left_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, ?, NULL)
                 """,
                 (
                     room["room_id"],
-                    int(user_id),
+                    identity.actor_key,
+                    identity.user_id,
+                    identity.guest_id,
+                    identity.display_name,
                     role,
                     seat if role == "player" else None,
                     _iso(now),
@@ -738,12 +1084,13 @@ def join_room(
                 """
                 UPDATE battle_members
                 SET role = ?, seat_index = ?, ready = 0, status = 'active',
-                    joined_at = ?, updated_at = ?, left_at = NULL
+                    display_name_snapshot = ?, joined_at = ?, updated_at = ?, left_at = NULL
                 WHERE member_id = ?
                 """,
                 (
                     role,
                     seat if role == "player" else None,
+                    identity.display_name,
                     _iso(now),
                     _iso(now),
                     member_id,
@@ -759,7 +1106,14 @@ def join_room(
         return _row_dict(member) or {}
 
 
-def set_member_ready(room_ref: str, *, user_id: int, ready: bool) -> dict[str, Any]:
+def set_member_ready(
+    room_ref: str,
+    *,
+    actor: Any | None = None,
+    user_id: int | None = None,
+    ready: bool,
+) -> dict[str, Any]:
+    identity = coerce_actor(actor, user_id=user_id)
     now = _utc_now()
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
@@ -769,9 +1123,9 @@ def set_member_ready(room_ref: str, *, user_id: int, ready: bool) -> dict[str, A
         member = db.execute(
             """
             SELECT * FROM battle_members
-            WHERE room_id = ? AND user_id = ? AND status = 'active'
+            WHERE room_id = ? AND actor_key = ? AND status = 'active'
             """,
-            (room["room_id"], int(user_id)),
+            (room["room_id"], identity.actor_key),
         ).fetchone()
         if member is None:
             raise BattleNotFoundError("member_not_found")
@@ -795,24 +1149,26 @@ def kick_member(
     room_ref: str,
     *,
     host_user_id: int,
-    target_user_id: int,
+    target_actor_key: str | None = None,
+    target_user_id: int | None = None,
 ) -> dict[str, Any]:
+    target_key = str(target_actor_key or "") or user_actor(int(target_user_id)).actor_key
     now = _utc_now()
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
         room = _find_room(db, room_ref)
         if int(room["host_user_id"]) != int(host_user_id):
             raise BattlePermissionError("host_required")
-        if int(target_user_id) == int(host_user_id):
+        if target_key == user_actor(host_user_id).actor_key:
             raise BattleConflictError("host_cannot_be_kicked")
         if room["status"] not in {"preparing", "waiting"}:
             raise BattleConflictError("room_already_started")
         member = db.execute(
             """
             SELECT * FROM battle_members
-            WHERE room_id = ? AND user_id = ? AND status = 'active'
+            WHERE room_id = ? AND actor_key = ? AND status = 'active'
             """,
-            (room["room_id"], int(target_user_id)),
+            (room["room_id"], target_key),
         ).fetchone()
         if member is None:
             raise BattleNotFoundError("member_not_found")

@@ -72,6 +72,7 @@ class GoodnessBattleMode(BattleMode):
             "max_players": max_players,
             "visibility": "public" if bool(payload.get("is_public", True)) else "private",
             "allow_spectators": bool(payload.get("allow_spectators", True)),
+            "allow_guest_chat": bool(payload.get("allow_guest_chat", False)),
             "chat_roles": normalize_chat_roles(payload.get("chat_roles")),
         }
 
@@ -97,22 +98,22 @@ class GoodnessBattleMode(BattleMode):
     async def start_room(self, room_code: str, **kwargs):
         return await self.runtime.start_room_for_mode(room_code, **kwargs)
 
-    def artifact_payload(self, room_code: str, round_id: str, *, user_id: int):
+    def artifact_payload(self, room_code: str, round_id: str, *, actor_key: str):
         return self.runtime.artifact_payload_for_mode(
-            room_code, round_id, user_id=user_id
+            room_code, round_id, actor_key=actor_key
         )
 
     def handle_action(
         self,
         room_code: str,
         *,
-        user_id: int,
+        actor_key: str,
         action: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         return self.runtime.handle_action_for_mode(
             room_code,
-            user_id=user_id,
+            actor_key=actor_key,
             action=action,
             payload=payload,
         )
@@ -124,12 +125,12 @@ class GoodnessBattleMode(BattleMode):
         self,
         room_code: str,
         *,
-        user_id: int,
+        actor_key: str,
         round_id: str,
     ) -> dict[str, Any]:
         return self.runtime.forfeit_round_for_mode(
             room_code,
-            user_id=user_id,
+            actor_key=actor_key,
             round_id=round_id,
         )
 

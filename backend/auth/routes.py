@@ -11,6 +11,7 @@ from .dependencies import (
     auth_tokens_from_request,
     client_ip,
     cookie_secure,
+    current_guest_from_request,
     current_user_from_request,
     require_user,
 )
@@ -30,6 +31,7 @@ from .service import (
     send_register_email_code,
 )
 from .security import new_token
+from .principal import ActorRef
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -103,7 +105,19 @@ async def me(request: Request):
     if user is not None:
         token_balance = grant_weekly_tokens_if_due(int(user["id"]))
         user = {**user, "token_balance": token_balance}
-    return {"authenticated": user is not None, "user": user}
+        return {
+            "authenticated": True,
+            "user": user,
+            "guest": None,
+            "actor": ActorRef.from_user(user).public_dict(),
+        }
+    guest = current_guest_from_request(request)
+    return {
+        "authenticated": False,
+        "user": None,
+        "guest": guest,
+        "actor": ActorRef.from_guest(guest).public_dict() if guest else None,
+    }
 
 
 @router.post("/send-email-code")

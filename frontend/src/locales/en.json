@@ -346,6 +346,15 @@
     }
   },
   "trainer": {
+    "guest": {
+      "attemptsRemaining": "Guest trial {remaining}/{total}",
+      "locked": "Sign in to use this tablebase",
+      "lockedShort": "Sign in",
+      "exhausted": "Your guest trial queries are used up. Sign in or register to continue.",
+      "lockedNotice": "This tablebase is not available in the guest trial. Sign in to use it.",
+      "unavailable": "A guest trial session could not be created. Please try again.",
+      "session": "Unable to start a guest session. Try again later or sign in to continue."
+    },
     "emptyPattern": {
       "category": "Sandbox",
       "label": "Empty pattern"
@@ -549,6 +558,8 @@
       "completedWithErrors": "With errors"
     },
     "errors": {
+      "BATTLE_GUEST_SESSION_UNAVAILABLE": "A guest session could not be created. Please try again.",
+      "BATTLE_LOGIN_REQUIRED": "Sign in to create or manage a room.",
       "network": "Network request failed. Please try again later.",
       "uploadNetwork": "The file upload did not finish. The browser, network, or file picker may have interrupted it. Please select the files again and retry.",
       "statusNetwork": "The analysis job was submitted, but status sync temporarily failed. This page will keep retrying; you can also reopen the analysis window later to check the result.",
@@ -838,6 +849,8 @@
       "publicRoomHint": "Other players can find it in the hall",
       "allowSpectators": "Allow Spectators",
       "allowSpectatorsHint": "Let others join as spectators at any time",
+      "allowGuestChat": "Allow Guest Chat",
+      "allowGuestChatHint": "Guests must also have one of the chat roles selected above",
       "chatRoles": "Who Can Chat",
       "chatRolesHint": "Choose who may send messages",
       "chatRolesNone": "Chat disabled",
@@ -868,6 +881,10 @@
       "player": "Player",
       "spectator": "Watch",
       "host": "Host"
+    },
+    "guest": {
+      "marker": "Guest",
+      "createRequiresLogin": "Sign in to create a Battle room."
     },
     "status": {
       "preparing": "Preparing",
@@ -954,6 +971,7 @@
       "retryIn": "{seconds}s",
       "newMessages": "New messages",
       "unknownUser": "Unknown user",
+      "guestForbidden": "The host has not enabled guest chat.",
       "errors": {
         "CHAT_RATE_LIMITED": "Too many messages. Try again in {seconds}s.",
         "CHAT_EMPTY": "Enter a message first.",

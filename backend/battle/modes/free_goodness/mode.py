@@ -71,6 +71,7 @@ class FreeGoodnessBattleMode(BattleMode):
             "max_players": max_players,
             "visibility": "public" if bool(payload.get("is_public", True)) else "private",
             "allow_spectators": bool(payload.get("allow_spectators", True)),
+            "allow_guest_chat": bool(payload.get("allow_guest_chat", False)),
             "chat_roles": normalize_chat_roles(payload.get("chat_roles")),
             "move_risk_limit": MOVE_RISK_LIMIT,
             "spawn_risk_limit": SPAWN_RISK_LIMIT,
@@ -110,34 +111,42 @@ class FreeGoodnessBattleMode(BattleMode):
     async def start_room(self, room_code: str, **kwargs):
         return await self.runtime.start_room_for_mode(room_code, **kwargs)
 
-    def artifact_payload(self, room_code: str, round_id: str, *, user_id: int):
+    def artifact_payload(self, room_code: str, round_id: str, *, actor_key: str):
         return self.runtime.artifact_payload_for_mode(
-            room_code, round_id, user_id=user_id
+            room_code, round_id, actor_key=actor_key
         )
 
-    def handle_action(self, room_code: str, *, user_id: int, action: str, payload):
+    def handle_action(self, room_code: str, *, actor_key: str, action: str, payload):
         return self.runtime.handle_action_for_mode(
-            room_code, user_id=user_id, action=action, payload=payload
+            room_code, actor_key=actor_key, action=action, payload=payload
         )
 
     async def handle_action_async(
-        self, room_code: str, *, user_id: int, action: str, payload
+        self, room_code: str, *, actor_key: str, action: str, payload
     ):
         return await self.runtime.handle_action_for_mode(
-            room_code, user_id=user_id, action=action, payload=payload
+            room_code, actor_key=actor_key, action=action, payload=payload
         )
 
-    def sanitize_snapshot(self, payload: dict[str, Any], *, viewer_user_id: int):
+    def sanitize_snapshot(
+        self,
+        payload: dict[str, Any],
+        *,
+        viewer_actor_key: str,
+        viewer_user_id: int | None,
+    ):
         return self.runtime.sanitize_snapshot_for_mode(
-            payload, viewer_user_id=viewer_user_id
+            payload,
+            viewer_actor_key=viewer_actor_key,
+            viewer_user_id=viewer_user_id,
         )
 
     def settle_unstarted_round(self, room_id: str, *, reason: str) -> None:
         self.runtime.settle_unstarted_round_for_mode(room_id, reason=reason)
 
-    def forfeit_round(self, room_code: str, *, user_id: int, round_id: str):
+    def forfeit_round(self, room_code: str, *, actor_key: str, round_id: str):
         return self.runtime.forfeit_round_for_mode(
-            room_code, user_id=user_id, round_id=round_id
+            room_code, actor_key=actor_key, round_id=round_id
         )
 
     async def startup(self) -> None:

@@ -7,6 +7,7 @@ import sys
 import tempfile
 import types
 import unittest
+import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -14,6 +15,7 @@ if "cpuinfo" not in sys.modules:
     sys.modules["cpuinfo"] = types.SimpleNamespace(get_cpu_info=lambda: {"flags": []})
 
 from backend.auth.db import auth_db, init_auth_db
+from backend.auth.principal import ActorRef
 from backend.battle import repository, service
 from backend.battle.modes.goodness import runtime as goodness_runtime
 from backend.battle.route_codec import RATE_SCALE, RouteStep, encode_changes, encode_route
@@ -177,6 +179,51 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(player_member["role"], "spectator")
         service.leave_room(room["room_code"], user_id=self.host_id)
+
+    async def test_registered_host_can_start_and_finish_with_guest_player(self) -> None:
+        room = await self._create_ready_room(
+            generated_route=self._generated_route(step_count=2),
+        )
+        guest_id = str(uuid.uuid4())
+        guest = ActorRef(
+            kind="guest",
+            actor_key=f"g:{guest_id}",
+            guest_id=guest_id,
+            display_name="Guest-PLAY",
+        )
+        service.join_room(
+            room["room_code"],
+            actor=guest,
+            role="player",
+            ip_address="203.0.113.24",
+        )
+        service.set_ready(room["room_code"], user_id=self.host_id, ready=True)
+        service.set_ready(room["room_code"], actor=guest, ready=True)
+
+        started = await service.start_room(
+            room["room_code"], user_id=self.host_id, session_id=None
+        )
+        guest_result = next(
+            item
+            for item in started["results"]
+            if item["actor_key"] == guest.actor_key
+        )
+        self.assertIsNone(guest_result["user_id"])
+        self.assertEqual(guest_result["guest_id"], guest_id)
+        self.assertEqual(guest_result["display_name"], "Guest-PLAY")
+        self.assertEqual(guest_result["status"], "playing")
+
+        finished = service.forfeit_round(
+            room["room_code"],
+            actor=guest,
+            round_id=str(started["round"]["round_id"]),
+        )
+        finished_guest = next(
+            item
+            for item in finished["results"]
+            if item["actor_key"] == guest.actor_key
+        )
+        self.assertEqual(finished_guest["status"], "disqualified")
 
     async def test_wrong_move_correction_does_not_consume_next_step_timeout(self) -> None:
         room = await self._create_ready_room(

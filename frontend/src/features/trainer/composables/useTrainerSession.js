@@ -53,6 +53,16 @@ import {
   withEmptyPatternGroup,
 } from '../engine/trainerEmptyPattern.js';
 import {
+  buildTrainerQueryPayloadForActor,
+  createTrainerLookupAccessCoordinator,
+  isGuestTrainerActor,
+  isRegisteredTrainerActor,
+  isTrainerPatternGuestAvailable,
+  isTrainerTableGuestAvailable,
+  normalizeTrainerGuestAllowance,
+  trainerGuestErrorNotice,
+} from '../engine/trainerGuestDemo.js';
+import {
   registerTrainerPracticeContextConsumer,
   registerTrainerPracticeJumpConsumer,
 } from '../services/trainerPracticeJump';
@@ -72,7 +82,15 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     refreshSettings,
     saveSetting,
   } = useAppSettingsStore();
-  const { isAuthenticated, requireAuth, user: authUser } = useAuthState();
+  const authState = useAuthState();
+  const {
+    isAuthenticated,
+    user: authUser,
+    openAuthDialog,
+  } = authState;
+  const currentActorSource = authState.currentActor;
+  const authGuestSource = authState.guest;
+  const ensureGuestSession = authState.ensureGuestSession;
 
   const wsStatus = ref('connecting');
   const clientId = getStableWsClientId('trainer');
@@ -138,6 +156,8 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   let unregisterTrainerPracticeJumpConsumer = null;
   let unregisterTrainerPracticeContextConsumer = null;
   const resultsRefreshPhase = ref('idle');
+  const guestAllowance = ref(null);
+  const guestNotice = ref('');
 
   const recordStep = ref(0);
   const recordMax = ref(0);
@@ -149,6 +169,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   let boardFrameRevision = 0;
   let initialStateSeen = false;
   let defaultTablebaseAutoApplyAttempted = false;
+  let guestExhaustionPromptShown = false;
 
   const spawnRate4 = () => Math.max(
     0,
@@ -241,6 +262,129 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     if (isEmptyPattern.value) return EMPTY_PATTERN_ID;
     return patternType.value && targetValue.value ? `${patternType.value}_${targetValue.value}` : '';
   });
+  const readRefLike = (source) => (
+    source && typeof source === 'object' && 'value' in source ? source.value : source
+  );
+  const currentActor = computed(() => {
+    const actor = readRefLike(currentActorSource);
+    if (actor?.kind) return actor;
+    if (authUser.value) return { kind: 'user', user: authUser.value };
+    const guest = readRefLike(authGuestSource);
+    return guest ? { kind: 'guest', guest } : null;
+  });
+  const guestRecord = computed(() => {
+    if (!isGuestTrainerActor(currentActor.value)) return null;
+    return currentActor.value.guest || readRefLike(authGuestSource) || currentActor.value;
+  });
+  const guestDemoActive = computed(() => isGuestTrainerActor(currentActor.value));
+  const guestAttemptsRemaining = computed(() => guestAllowance.value?.remaining ?? null);
+  const guestAttemptsTotal = computed(() => guestAllowance.value?.total ?? null);
+  const guestQueryExhausted = computed(() => (
+    guestDemoActive.value
+    && guestAllowance.value != null
+    && guestAllowance.value.remaining <= 0
+  ));
+  const selectedTableGuestAvailable = computed(() => (
+    isEmptyPattern.value
+    || isTrainerTableGuestAvailable(catalogTables.value, currentPatternDisplay.value)
+  ));
+  const selectedTableGuestLocked = computed(() => (
+    !isRegisteredTrainerActor(currentActor.value)
+    && !isEmptyPattern.value
+    && Boolean(currentPatternDisplay.value)
+    && !selectedTableGuestAvailable.value
+  ));
+  const patternGuestLocked = (pattern) => (
+    !isRegisteredTrainerActor(currentActor.value)
+    && !isEmptyTrainerPattern(pattern)
+    && !isTrainerPatternGuestAvailable(catalogTables.value, pattern)
+  );
+  const targetGuestLocked = (target) => (
+    !isRegisteredTrainerActor(currentActor.value)
+    && !isTrainerTableGuestAvailable(catalogTables.value, `${patternType.value}_${target}`)
+  );
+
+  const syncGuestAllowance = (rawAllowance) => {
+    const normalized = normalizeTrainerGuestAllowance(rawAllowance, guestAllowance.value);
+    if (normalized) {
+      guestAllowance.value = normalized;
+      if (normalized.remaining > 0) guestExhaustionPromptShown = false;
+    }
+    return normalized;
+  };
+
+  const requestGuestLogin = (mode = 'login') => {
+    openAuthDialog?.(mode);
+  };
+
+  const stopGuestAutomation = () => {
+    demoActive.value = false;
+    clearDemoTimer();
+    clearStepQueue();
+  };
+
+  const showGuestNotice = (notice, { openPrompt = true } = {}) => {
+    guestNotice.value = notice;
+    if (notice === 'exhausted') stopGuestAutomation();
+    if (openPrompt) requestGuestLogin(notice === 'exhausted' ? 'register' : 'login');
+  };
+
+  const dismissGuestNotice = () => {
+    guestNotice.value = '';
+  };
+
+  const resolveEnsuredActor = (result) => {
+    const liveActor = currentActor.value;
+    if (liveActor?.kind) return liveActor;
+    if (result?.currentActor?.kind) return result.currentActor;
+    if (result?.actor?.kind) return result.actor;
+    if (result?.kind) return result;
+    if (result?.guest) return { kind: 'guest', guest: result.guest };
+    return null;
+  };
+
+  const actorAllowance = (actor) => (
+    actor?.guest?.query_allowance
+    || actor?.query_allowance
+    || guestRecord.value?.query_allowance
+  );
+
+  const validateLookupAccess = (actor, fullPattern, { openPrompt = true } = {}) => {
+    if (isRegisteredTrainerActor(actor)) return true;
+    if (!isTrainerTableGuestAvailable(catalogTables.value, fullPattern)) {
+      showGuestNotice('locked', { openPrompt });
+      return false;
+    }
+    syncGuestAllowance(actorAllowance(actor));
+    if (isGuestTrainerActor(actor) && guestAllowance.value?.remaining <= 0) {
+      showGuestNotice('exhausted', { openPrompt });
+      return false;
+    }
+    return isGuestTrainerActor(actor);
+  };
+
+  const lookupAccessCoordinator = createTrainerLookupAccessCoordinator({
+    getActor: () => currentActor.value,
+    ensureGuestSession,
+    resolveEnsuredActor,
+    validateActor: (actor, context) => validateLookupAccess(actor, context.fullPattern),
+    onFailure: () => showGuestNotice('session'),
+  });
+
+  const requestLookupAccess = (key, callback, fullPattern = currentPatternDisplay.value) => {
+    if (
+      !currentActor.value
+      && !isTrainerTableGuestAvailable(catalogTables.value, fullPattern)
+    ) {
+      showGuestNotice('locked');
+      return false;
+    }
+    return lookupAccessCoordinator.request(key, (actor) => {
+      syncGuestAllowance(actorAllowance(actor));
+      guestNotice.value = '';
+      callback(actor);
+    }, { fullPattern });
+  };
   const battlePracticeMismatch = computed(() => {
     const context = trainerPracticeContext.value;
     return context?.kind === 'battle'
@@ -565,7 +709,6 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   const protectedActions = new Set([
     'TRAINER_SET_FILEPATH',
-    'TRAINER_SET_EMPTY_PATTERN',
     'TRAINER_GET_RESULTS',
     'TABLEBASE_QUERY',
     'TRAINER_DEFAULT',
@@ -573,12 +716,22 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     'TRAINER_STEP',
   ]);
 
-  const triggerAction = (action, payload = {}) => {
-    if (protectedActions.has(action) && !requireAuth()) {
-      return false;
-    }
-    client?.send(action, isEmptyPattern.value ? stripTrainerQueryPayload(payload) : payload);
+  const sendTrainerAction = (action, payload = {}, actor = currentActor.value) => {
+    const strippedPayload = isEmptyPattern.value ? stripTrainerQueryPayload(payload) : payload;
+    const actionPayload = action === 'TABLEBASE_QUERY'
+      ? buildTrainerQueryPayloadForActor(strippedPayload, actor)
+      : strippedPayload;
+    client?.send(action, actionPayload);
     return true;
+  };
+
+  const triggerAction = (action, payload = {}) => {
+    if (protectedActions.has(action)) {
+      const actor = currentActor.value;
+      if (!actor || !validateLookupAccess(actor, currentPatternDisplay.value)) return false;
+      return sendTrainerAction(action, payload, actor);
+    }
+    return sendTrainerAction(action, payload);
   };
 
   const loadCatalog = async () => {
@@ -641,19 +794,19 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     }
   };
 
-  const applyTrainerJump = () => {
+  const applyTrainerJump = (lookupActor = null) => {
     const pending = pendingTrainerJump.value;
     if (!pending || pending.requestId || wsStatus.value !== 'connected') return;
 
     const parsed = parseFullPattern(pending.fullPattern);
     if (pending.queryPolicy === 'same-table-only' && parsed && !catalogTables.value.length) return;
-    clearQueuedMoveDirections();
     if (
       pending.queryPolicy === 'same-table-only'
       && parsed
       && currentPatternDisplay.value
       && currentPatternDisplay.value !== pending.fullPattern
     ) {
+      clearQueuedMoveDirections();
       createLocalPracticeSession(pending.hex);
       pendingTrainerJump.value = null;
       defaultTablebaseAutoApplyAttempted = true;
@@ -662,6 +815,15 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       persistTrainerPracticeSoon();
       return;
     }
+    if (parsed && !lookupActor) {
+      requestLookupAccess(
+        'practice-jump',
+        (actor) => applyTrainerJump(actor),
+        pending.fullPattern,
+      );
+      return;
+    }
+    clearQueuedMoveDirections();
     if (
       parsed
       && tablebaseReadyForConnection
@@ -685,7 +847,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       pendingTablebaseRequestId = requestId;
       pendingTablebaseBoardRevision = null;
       tablebaseReadyForConnection = false;
-      if (!triggerAction('TRAINER_SET_FILEPATH', {
+      if (!sendTrainerAction('TRAINER_SET_FILEPATH', {
         request_id: requestId,
         pattern: pending.fullPattern,
         target: parsed.target,
@@ -693,7 +855,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
         client_local_board: true,
         preserve_client_board: true,
         client_revision: localPracticeSession.revision,
-      })) {
+      }, lookupActor)) {
         pending.requestId = '';
         pendingTablebaseRequestId = '';
         return;
@@ -906,31 +1068,38 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     return { fullPattern, version, cacheHit };
   };
 
-  const prepareResultsRequest = (boardHex, reason = 'manual') => {
+  const prepareResultsRequest = (boardHex, reason = 'manual', actor = currentActor.value) => {
     if (isEmptyPattern.value || !tablebaseQueryAllowed()) return null;
     if (recordOpen.value || (reason !== 'step' && !showResults.value) || awaitingSpawn.value) return null;
     if (wsStatus.value !== 'connected' || !tablebaseReadyForConnection) return null;
     if (!boardHex) return null;
     if (hasPendingResultsForBoard(boardHex)) return null;
-    if (!isAuthenticated.value) {
-      if (reason === 'auto') return null;
-      if (!requireAuth()) return null;
-    }
+    if (isGuestTrainerActor(actor) && pendingResultsRequests.size > 0) return null;
 
     const requestId = `${clientId}_${++nextResultsRequestId}`;
     const { fullPattern, version, cacheHit } = trackResultsRequest(requestId, boardHex, reason);
-    const prefetchRng = Number(spawnMode.value) === 0
+    const prefetchRng = isRegisteredTrainerActor(actor) && Number(spawnMode.value) === 0
       ? buildTrainerPrefetchPayload(trainerPrefetchState, spawnRate4())
       : null;
-    return { requestId, fullPattern, version, cacheHit, prefetchRng };
+    return { requestId, fullPattern, version, cacheHit, prefetchRng, actor };
   };
 
-  const queryResults = (reason = 'manual') => {
+  const queryResults = (reason = 'manual', lookupActor = null) => {
     if (isEmptyPattern.value) return null;
     const boardHex = currentBoardHex.value || hexInput.value;
-    const prepared = prepareResultsRequest(boardHex, reason);
+    const fullPattern = loadedTablebaseFullPattern.value || currentPatternDisplay.value;
+    if (!lookupActor) {
+      const accepted = requestLookupAccess('foreground-query', (actor) => {
+        if (
+          boardHex === (currentBoardHex.value || hexInput.value)
+          && fullPattern === (loadedTablebaseFullPattern.value || currentPatternDisplay.value)
+        ) queryResults(reason, actor);
+      }, fullPattern);
+      return accepted ? 'guest-access-pending' : null;
+    }
+    const prepared = prepareResultsRequest(boardHex, reason, lookupActor);
     if (!prepared) return null;
-    triggerAction('TABLEBASE_QUERY', {
+    sendTrainerAction('TABLEBASE_QUERY', {
       page: 'trainer',
       client_local_board: true,
       query_id: prepared.requestId,
@@ -938,7 +1107,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       full_pattern: prepared.fullPattern,
       board_hex: boardHex,
       prefetch_rng: prepared.prefetchRng,
-    });
+    }, lookupActor);
     return prepared.requestId;
   };
 
@@ -951,24 +1120,34 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     queuedMoveDirections.length = 0;
   };
 
-  const requestSpawnForCurrentBoard = (mode = Number(spawnMode.value)) => {
+  const requestSpawnForCurrentBoard = (mode = Number(spawnMode.value), lookupActor = null) => {
     if (
       !tablebaseQueryAllowed()
       || ![1, 2].includes(Number(mode))
       || localPracticeSession.phase !== 'awaiting_spawn'
     ) return false;
+    const fullPattern = loadedTablebaseFullPattern.value || currentPatternDisplay.value;
+    const expectedRevision = localPracticeSession.revision;
+    if (!lookupActor) {
+      return requestLookupAccess('spawn-query', (actor) => {
+        if (
+          localPracticeSession.phase === 'awaiting_spawn'
+          && localPracticeSession.revision === expectedRevision
+        ) requestSpawnForCurrentBoard(mode, actor);
+      }, fullPattern);
+    }
     const requestId = `${clientId}_spawn_${++nextSpawnRequestId}`;
     pendingSpawnQuery = {
       requestId,
       revision: localPracticeSession.revision,
     };
-    const sent = triggerAction('TRAINER_SPAWN_QUERY', {
+    const sent = sendTrainerAction('TRAINER_SPAWN_QUERY', {
       request_id: requestId,
       revision: localPracticeSession.revision,
       board_hex: localPracticeSession.boardHex,
       full_pattern: loadedTablebaseFullPattern.value || currentPatternDisplay.value,
       mode: Number(mode),
-    });
+    }, lookupActor);
     if (!sent) pendingSpawnQuery = null;
     return sent;
   };
@@ -982,7 +1161,6 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       || awaitingSpawn.value
       || (battlePracticeMismatch.value && [1, 2].includes(currentSpawnMode))
       || (currentSpawnMode !== 0 && currentSpawnMode !== 3 && wsStatus.value !== 'connected')
-      || !requireAuth()
     ) {
       return false;
     }
@@ -1005,11 +1183,12 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     invalidateResults();
 
     const queryReason = queuedStepCount.value > 0 || demoActive.value ? 'step' : 'auto';
-    const preparedQuery = currentSpawnMode === 0
-      ? prepareResultsRequest(currentBoardHex.value, queryReason)
+    const actor = currentActor.value;
+    const preparedQuery = currentSpawnMode === 0 && actor
+      ? prepareResultsRequest(currentBoardHex.value, queryReason, actor)
       : null;
     if (preparedQuery) {
-      triggerAction('TABLEBASE_QUERY', {
+      sendTrainerAction('TABLEBASE_QUERY', {
         page: 'trainer',
         client_local_board: true,
         query_id: preparedQuery.requestId,
@@ -1017,7 +1196,9 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
         full_pattern: preparedQuery.fullPattern,
         board_hex: currentBoardHex.value,
         prefetch_rng: preparedQuery.prefetchRng,
-      });
+      }, actor);
+    } else if (currentSpawnMode === 0) {
+      queryResults(queryReason);
     } else if (currentSpawnMode === 1 || currentSpawnMode === 2) requestSpawnForCurrentBoard(currentSpawnMode);
     if (currentSpawnMode === 0 && preparedQuery?.cacheHit) {
       stepExecutionPending.value = false;
@@ -1054,11 +1235,38 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   };
 
   const handleMessage = async (data) => {
+    const responseGuestAllowance = syncGuestAllowance(data.data?.guest_allowance);
+    const guestError = trainerGuestErrorNotice(data.data?.code);
+    if (guestError) {
+      pendingResultsRequests.clear();
+      pendingSpawnQuery = null;
+      pendingTablebaseRequestId = '';
+      pendingTablebaseBoardRevision = null;
+      finishResultsRefresh();
+      showGuestNotice(guestError);
+      return;
+    }
+    if (
+      responseGuestAllowance?.remaining <= 0
+      && !guestExhaustionPromptShown
+      && (
+        data.action === 'TRAINER_RESULTS'
+        || (data.action === 'TABLEBASE_QUERY_RESULT' && data.data?.page === 'trainer')
+      )
+    ) {
+      guestExhaustionPromptShown = true;
+      showGuestNotice('exhausted');
+    }
     if (
       ['TOKEN_REQUIRED', 'AUTH_REQUIRED'].includes(data.action)
       && pendingResultsRequests.size > 0
     ) {
       pendingResultsRequests.clear();
+      if (guestDemoActive.value) {
+        finishResultsRefresh();
+        showGuestNotice('session');
+        return;
+      }
       clearTablebaseResultCache();
       invalidateResults({ clearDisplay: true });
       finishResultsRefresh();
@@ -1265,6 +1473,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     }
 
     if (data.action === 'TABLEBASE_PREFETCH' && data.data?.page === 'trainer') {
+      if (guestDemoActive.value) return;
       const resultCatalogVersion = String(data.data.catalog_version || '');
       const resultFullPattern = String(data.data.full_pattern || '');
       const activeFullPattern = loadedTablebaseFullPattern.value || currentPatternDisplay.value;
@@ -1362,6 +1571,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     pendingSpawnQuery = null;
     clearStepQueue();
     clearQueuedMoveDirections();
+    lookupAccessCoordinator.clear();
     if (tablebaseRetryTimer) {
       window.clearTimeout(tablebaseRetryTimer);
       tablebaseRetryTimer = null;
@@ -1402,7 +1612,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   const setBoard = () => {
     const normalized = normalizeTrainerBoardHex(hexInput.value);
-    if (!normalized || !requireAuth()) return;
+    if (!normalized) return;
     demoActive.value = false;
     clearDemoTimer();
     finishResultsRefresh();
@@ -1460,7 +1670,6 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       return;
     }
 
-    if (!requireAuth()) return;
     const cellIndex = row * 4 + col;
     const cellVal = board.value[cellIndex];
     const nextVal = btn === 0
@@ -1501,9 +1710,19 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   const selectFolder = () => applyTablebase({ loadDefault: true });
 
-  const applyTablebase = ({ loadDefault = false, preserveLocalState = false } = {}) => {
+  const applyTablebase = (
+    { loadDefault = false, preserveLocalState = false } = {},
+    lookupActor = null,
+  ) => {
     if (isEmptyPattern.value || !patternType.value || !targetValue.value) return;
     const fullPattern = `${patternType.value}_${targetValue.value}`;
+    if (!lookupActor) {
+      return requestLookupAccess('load-tablebase', (actor) => {
+        if (fullPattern === currentPatternDisplay.value) {
+          applyTablebase({ loadDefault, preserveLocalState }, actor);
+        }
+      }, fullPattern);
+    }
     if (!preserveLocalState) {
       clearQueuedMoveDirections();
       cancelPendingLocalTurn();
@@ -1522,7 +1741,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     pendingTablebaseRequestId = requestId;
     pendingTablebaseBoardRevision = loadDefault ? localPracticeSession.revision : null;
     tablebaseReadyForConnection = false;
-    const sent = triggerAction('TRAINER_SET_FILEPATH', {
+    const sent = sendTrainerAction('TRAINER_SET_FILEPATH', {
       request_id: requestId,
       pattern: fullPattern,
       target: targetValue.value,
@@ -1530,7 +1749,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       client_local_board: true,
       preserve_client_board: !loadDefault,
       client_revision: localPracticeSession.revision,
-    });
+    }, lookupActor);
     if (!sent) {
       pendingTablebaseRequestId = '';
       pendingTablebaseBoardRevision = null;
@@ -1538,15 +1757,24 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     return sent;
   };
 
-  const trainerStep = () => {
+  const trainerStep = (lookupActor = null) => {
     if (isEmptyPattern.value) return;
     if (recordPlaybackActive.value) {
       playRecordStep(1);
       return;
     }
+    if (!lookupActor) {
+      const fullPattern = loadedTablebaseFullPattern.value || currentPatternDisplay.value;
+      return requestLookupAccess(
+        'trainer-step',
+        (actor) => trainerStep(actor),
+        fullPattern,
+      );
+    }
 
     queuedStepCount.value += 1;
     pumpQueuedSteps();
+    return true;
   };
 
   const playRecordStep = (delta, { fromDemo = false } = {}) => {
@@ -1568,7 +1796,6 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     clearDemoTimer();
     clearStepQueue();
     clearQueuedMoveDirections();
-    if (!requireAuth()) return;
     pendingSpawnQuery = null;
     const reduced = reducePracticeSession(localPracticeSession, {
       type: 'UNDO',
@@ -1583,8 +1810,16 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     if (!isEmptyPattern.value) queryResults('undo');
   };
 
-  const trainerDefault = () => {
+  const trainerDefault = (lookupActor = null) => {
     if (isEmptyPattern.value) return;
+    const fullPattern = loadedTablebaseFullPattern.value || currentPatternDisplay.value;
+    if (!lookupActor) {
+      return requestLookupAccess(
+        'trainer-default',
+        (actor) => trainerDefault(actor),
+        fullPattern,
+      );
+    }
     demoActive.value = false;
     clearDemoTimer();
     clearStepQueue();
@@ -1593,19 +1828,34 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     const requestId = `${clientId}_table_${++nextTablebaseRequestId}`;
     pendingTablebaseRequestId = requestId;
     pendingTablebaseBoardRevision = localPracticeSession.revision;
-    if (!triggerAction('TRAINER_DEFAULT', {
+    if (!sendTrainerAction('TRAINER_DEFAULT', {
       request_id: requestId,
       client_local_board: true,
       client_revision: localPracticeSession.revision,
-    })) {
+    }, lookupActor)) {
       pendingTablebaseRequestId = '';
       pendingTablebaseBoardRevision = null;
     }
+    return true;
   };
 
-  const toggleDemo = () => {
+  const toggleDemo = (lookupActor = null) => {
     if (isEmptyPattern.value) return;
-    demoActive.value = !demoActive.value;
+    if (demoActive.value) {
+      demoActive.value = false;
+      clearDemoTimer();
+      clearStepQueue();
+      return true;
+    }
+    if (!recordPlaybackActive.value && !lookupActor) {
+      const fullPattern = loadedTablebaseFullPattern.value || currentPatternDisplay.value;
+      return requestLookupAccess(
+        'trainer-demo',
+        (actor) => toggleDemo(actor),
+        fullPattern,
+      );
+    }
+    demoActive.value = true;
     if (demoActive.value) {
       if (recordPlaybackActive.value) {
         scheduleDemoStep();
@@ -1614,10 +1864,8 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       } else {
         queryResults('step');
       }
-    } else {
-      clearDemoTimer();
-      clearStepQueue();
     }
+    return true;
   };
 
   const setSpawnMode = (mode) => {
@@ -1843,6 +2091,20 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     }
   });
 
+  watch(
+    guestRecord,
+    (guest) => {
+      if (guest) {
+        syncGuestAllowance(guest.query_allowance);
+        return;
+      }
+      guestAllowance.value = null;
+      guestExhaustionPromptShown = false;
+      if (isAuthenticated.value) guestNotice.value = '';
+    },
+    { immediate: true, deep: true },
+  );
+
   onUnmounted(() => {
     if (persistPracticeTimer) {
       window.clearTimeout(persistPracticeTimer);
@@ -1864,6 +2126,16 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   return {
     currentPatternDisplay,
+    guestDemoActive,
+    guestAttemptsRemaining,
+    guestAttemptsTotal,
+    guestQueryExhausted,
+    guestNotice,
+    selectedTableGuestLocked,
+    patternGuestLocked,
+    targetGuestLocked,
+    requestGuestLogin,
+    dismissGuestNotice,
     battlePracticeMismatch,
     isEmptyPattern,
     emptyPatternId: EMPTY_PATTERN_ID,

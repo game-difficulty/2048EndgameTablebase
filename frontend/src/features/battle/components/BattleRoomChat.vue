@@ -22,7 +22,7 @@
       <ol v-else>
         <li v-for="message in messages" :key="String(message.message_id)" class="battle-chat-message">
           <div class="battle-chat-message-meta">
-            <strong>{{ speakerName(message) }}</strong>
+            <strong>{{ speakerName(message) }} <small v-if="isBattleGuest(message)" class="battle-chat-guest-marker">{{ $t('battle.guest.marker') }}</small></strong>
             <time :datetime="message.created_at">{{ formatTime(message.created_at) }}</time>
           </div>
           <p>{{ message.content }}</p>
@@ -82,6 +82,7 @@ import {
   truncateChatContent,
   validateChatContent,
 } from '../core/chatState.js';
+import { isBattleGuest } from '../core/battleActor.js';
 
 const props = defineProps({
   messages: { type: Array, default: () => [] },
@@ -89,6 +90,7 @@ const props = defineProps({
   cooldownSeconds: { type: Number, default: 0 },
   connected: { type: Boolean, default: false },
   canSpeak: { type: Boolean, default: true },
+  disabledCode: { type: String, default: 'CHAT_ROLE_NOT_ALLOWED' },
   compact: { type: Boolean, default: false },
 });
 const emit = defineEmits(['send']);
@@ -110,7 +112,14 @@ const canSend = computed(() => (
 ));
 const noticeText = computed(() => {
   const code = String(props.notice?.code || '');
-  if (!code) return props.canSpeak ? '' : t('battle.chat.errors.CHAT_ROLE_NOT_ALLOWED');
+  if (!code) {
+    if (props.canSpeak) return '';
+    const disabledKey = props.disabledCode === 'CHAT_GUEST_NOT_ALLOWED'
+      ? 'battle.chat.guestForbidden'
+      : 'battle.chat.errors.CHAT_ROLE_NOT_ALLOWED';
+    return t(disabledKey);
+  }
+  if (code === 'CHAT_GUEST_NOT_ALLOWED') return t('battle.chat.guestForbidden');
   if (code === 'CHAT_RATE_LIMITED') {
     return t('battle.chat.errors.CHAT_RATE_LIMITED', {
       seconds: props.cooldownSeconds || props.notice?.retry_after_seconds || 1,
@@ -246,6 +255,7 @@ watch(
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.battle-chat-guest-marker { margin-left: 3px; color: var(--accent); font-size: 8px; font-weight: 900; }
 .battle-chat-message-meta time {
   flex: 0 0 auto;
   color: var(--text-secondary);

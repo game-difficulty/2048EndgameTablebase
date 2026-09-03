@@ -118,6 +118,32 @@ def init_auth_db() -> None:
               FOREIGN KEY(user_id) REFERENCES users(id)
             );
 
+            CREATE TABLE IF NOT EXISTS guest_sessions (
+              guest_id TEXT PRIMARY KEY,
+              token_hash TEXT NOT NULL UNIQUE,
+              display_name TEXT NOT NULL,
+              created_ip_hash TEXT NOT NULL,
+              last_ip_hash TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              last_seen_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              revoked_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS guest_query_events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              guest_id TEXT NOT NULL,
+              request_id TEXT NOT NULL,
+              full_pattern TEXT NOT NULL,
+              ip_bucket_hash TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'reserved',
+              created_at TEXT NOT NULL,
+              finalized_at TEXT,
+              UNIQUE(guest_id, request_id),
+              FOREIGN KEY(guest_id) REFERENCES guest_sessions(guest_id) ON DELETE CASCADE,
+              CHECK(status IN ('reserved', 'consumed', 'cancelled'))
+            );
+
             CREATE TABLE IF NOT EXISTS refresh_tokens (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               user_id INTEGER NOT NULL,
@@ -487,6 +513,14 @@ def init_auth_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_guest_sessions_expires
+              ON guest_sessions(expires_at, revoked_at);
+            CREATE INDEX IF NOT EXISTS idx_guest_sessions_created_ip
+              ON guest_sessions(created_ip_hash, created_at);
+            CREATE INDEX IF NOT EXISTS idx_guest_query_events_guest
+              ON guest_query_events(guest_id, status, created_at);
+            CREATE INDEX IF NOT EXISTS idx_guest_query_events_ip
+              ON guest_query_events(ip_bucket_hash, status, created_at);
             CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_events(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_token_ledger_user_created ON token_ledger(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_token_operation_requests_user_created ON token_operation_requests(user_id, created_at);

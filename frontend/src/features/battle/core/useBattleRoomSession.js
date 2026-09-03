@@ -6,13 +6,23 @@ import {
   watch,
 } from 'vue';
 
-import { emitAuthRequired } from '../../../services/auth/authEvents.js';
 import { createWsClient } from '../../../services/ws/createWsClient.js';
 import { battleClient, battleRequestId } from '../services/battleClient.js';
+import {
+  battleActorKey,
+  battleActorKind,
+  isBattleGuest,
+  sameBattleActor,
+} from './battleActor.js';
 import { createBattleRoomViewState } from './battleRoomViewState.js';
 import { createBattleChatState, validateChatContent, viewerCanChat } from './chatState.js';
 
-export function useBattleRoomSession(activeRef, authUserRef) {
+export function useBattleRoomSession(
+  activeRef,
+  authUserRef,
+  actorRef = authUserRef,
+  ensureGuestSession = null,
+) {
   const rooms = ref([]);
   const room = ref(null);
   const loading = ref(false);
@@ -33,10 +43,18 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     requestError?.code || requestError?.message || fallback
   );
   const viewer = computed(() => room.value?.viewer || null);
+  const currentActor = computed(() => actorRef?.value || authUserRef.value || null);
+  const currentActorKey = computed(() => (
+    battleActorKey(viewer.value) || battleActorKey(currentActor.value)
+  ));
+  const isRegisteredUser = computed(() => (
+    battleActorKind(currentActor.value) === 'user' || Boolean(authUserRef.value)
+  ));
+  const isOwnActor = (candidate) => (
+    sameBattleActor(candidate, viewer.value || currentActor.value)
+  );
   const ownResult = computed(() => (
-    room.value?.results?.find(
-      (item) => Number(item.user_id) === Number(room.value?.viewer?.user_id),
-    ) || null
+    room.value?.results?.find(isOwnActor) || null
   ));
   const players = computed(() => (
     room.value?.members?.filter((member) => member.role === 'player') || []
@@ -64,6 +82,11 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     room.value?.round?.status === 'completed' ? 'final' : 'live'
   ));
   const chatCanSpeak = computed(() => viewerCanChat(room.value, viewer.value));
+  const chatDisabledCode = computed(() => (
+    isBattleGuest(viewer.value) && !room.value?.allow_guest_chat
+      ? 'CHAT_GUEST_NOT_ALLOWED'
+      : 'CHAT_ROLE_NOT_ALLOWED'
+  ));
 
   const modeKeyFor = (candidate = room.value) => (
     String(candidate?.mode_key || 'goodness').trim().toLowerCase()
@@ -90,16 +113,16 @@ export function useBattleRoomSession(activeRef, authUserRef) {
       && Number(nextRoom.revision || 0) < Number(room.value.revision || 0)
     ) return;
     if (nextRoom && room.value?.room_id === nextRoom.room_id) {
-      const onlineByUser = new Map(
-        (room.value.members || []).map((member) => [Number(member.user_id), member.online]),
+      const onlineByActor = new Map(
+        (room.value.members || []).map((member) => [battleActorKey(member), member.online]),
       );
       nextRoom.members = (nextRoom.members || []).map((member) => ({
         ...member,
-        online: member.online ?? onlineByUser.get(Number(member.user_id)) ?? false,
+        online: member.online ?? onlineByActor.get(battleActorKey(member)) ?? false,
       }));
       nextRoom.results = (nextRoom.results || []).map((result) => ({
         ...result,
-        online: result.online ?? onlineByUser.get(Number(result.user_id)) ?? false,
+        online: result.online ?? onlineByActor.get(battleActorKey(result)) ?? false,
       }));
     }
     const previousRoom = room.value;
@@ -152,7 +175,7 @@ export function useBattleRoomSession(activeRef, authUserRef) {
         await applyRoom(null);
         return;
       }
-      if (chat.handleWsMessage(message, room.value?.viewer?.user_id, room.value)) return;
+      if (chat.handleWsMessage(message, viewer.value, room.value)) return;
       await modeAdapterFor()?.handleMessage?.(message);
     },
   });
@@ -201,7 +224,6 @@ export function useBattleRoomSession(activeRef, authUserRef) {
   };
 
   const refreshRooms = async ({ silent = false } = {}) => {
-    if (!authUserRef.value) return rooms.value;
     if (!roomsRefreshPromise) {
       roomsRefreshPromise = battleClient.rooms()
         .then((payload) => {
@@ -215,7 +237,6 @@ export function useBattleRoomSession(activeRef, authUserRef) {
 
   const shouldAutoRefreshRooms = () => (
     Boolean(activeRef.value)
-    && Boolean(authUserRef.value)
     && !room.value
     && (typeof document === 'undefined' || document.visibilityState === 'visible')
   );
@@ -227,7 +248,7 @@ export function useBattleRoomSession(activeRef, authUserRef) {
   };
 
   const refreshCurrent = async () => {
-    if (!authUserRef.value) {
+    if (!currentActor.value) {
       await applyRoom(null);
       return;
     }
@@ -239,13 +260,13 @@ export function useBattleRoomSession(activeRef, authUserRef) {
   };
 
   const bootstrap = async () => {
-    if (!authUserRef.value || loading.value) return;
+    if (loading.value) return;
     loading.value = true;
     error.value = '';
     try {
+      await refreshRooms();
       await Promise.all([
         modeAdapterFor()?.bootstrap?.(),
-        refreshRooms(),
         refreshCurrent(),
       ]);
     } catch (bootstrapError) {
@@ -256,6 +277,10 @@ export function useBattleRoomSession(activeRef, authUserRef) {
   };
 
   const createRoom = async (payload) => {
+    if (!isRegisteredUser.value) {
+      error.value = 'BATTLE_LOGIN_REQUIRED';
+      return null;
+    }
     loading.value = true;
     error.value = '';
     try {
@@ -279,6 +304,14 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     loading.value = true;
     error.value = '';
     try {
+      if (!currentActor.value) {
+        const actor = await ensureGuestSession?.();
+        if (!actor && !currentActor.value) {
+          const unavailable = new Error('Guest session is unavailable.');
+          unavailable.code = 'BATTLE_GUEST_SESSION_UNAVAILABLE';
+          throw unavailable;
+        }
+      }
       const response = await battleClient.join(roomCode, {
         role: role === 'auto' ? undefined : role,
         request_id: battleRequestId('join'),
@@ -309,7 +342,7 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     if (!room.value || !viewer.value) return;
     try {
       const member = room.value.members.find(
-        (item) => Number(item.user_id) === Number(viewer.value.user_id),
+        isOwnActor,
       );
       const response = await battleClient.ready(
         room.value.room_code,
@@ -360,11 +393,11 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     }
   };
 
-  const kickMember = async (userId) => {
+  const kickMember = async (member) => {
     try {
       const response = await battleClient.kick(
         room.value.room_code,
-        userId,
+        member,
         battleRequestId('kick'),
       );
       await applyRoom(response.room);
@@ -376,7 +409,7 @@ export function useBattleRoomSession(activeRef, authUserRef) {
   const setRole = async (role) => {
     if (
       role === 'spectator'
-      && Number(room.value?.host_user_id) === Number(room.value?.viewer?.user_id)
+      && Boolean(viewer.value?.is_host)
     ) return;
     try {
       const response = await battleClient.role(
@@ -400,17 +433,14 @@ export function useBattleRoomSession(activeRef, authUserRef) {
 
   watch(activeRef, (active) => {
     if (!active) return;
-    if (!authUserRef.value) {
-      emitAuthRequired();
-      return;
-    }
     void bootstrap();
   });
-  watch(authUserRef, (user) => {
-    if (!user) {
+  watch(currentActor, (actor, previousActor) => {
+    if (battleActorKey(actor) === battleActorKey(previousActor)) return;
+    if (!actor) {
       client.disconnect();
       void applyRoom(null);
-      rooms.value = [];
+      if (activeRef.value) void refreshRooms({ silent: true });
       return;
     }
     if (activeRef.value) void bootstrap();
@@ -429,7 +459,7 @@ export function useBattleRoomSession(activeRef, authUserRef) {
       }
     }, 15_000);
     roomListTimer = window.setInterval(autoRefreshRooms, 10_000);
-    if (activeRef.value && authUserRef.value) void bootstrap();
+    if (activeRef.value) void bootstrap();
   });
 
   onUnmounted(() => {
@@ -448,6 +478,10 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     error,
     wsStatus,
     viewer,
+    currentActor,
+    currentActorKey,
+    isRegisteredUser,
+    isOwnActor,
     players,
     spectators,
     ownResult,
@@ -467,6 +501,7 @@ export function useBattleRoomSession(activeRef, authUserRef) {
     chatNotice: chat.notice,
     chatCooldownSeconds: chat.cooldownSeconds,
     chatCanSpeak,
+    chatDisabledCode,
     sendChatMessage,
     refreshRooms,
     refreshCurrent,

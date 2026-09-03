@@ -4,12 +4,14 @@ import asyncio
 import os
 import tempfile
 import unittest
+import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import numpy as np
 
 from backend.auth.db import auth_db, init_auth_db
+from backend.auth.principal import ActorRef
 from backend.battle import repository
 from backend.battle.core.errors import BattleServiceError
 from backend.battle.modes.free_goodness import runtime
@@ -233,6 +235,66 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(candidate.next_best_success, 1.0)
         self.assertEqual(candidate.risk_multiplier, 0.0)
         self.assertEqual(candidate.risk_state.drawdown, 1.0)
+
+    async def test_registered_host_can_start_free_round_with_guest_player(self) -> None:
+        guest_id = str(uuid.uuid4())
+        guest = ActorRef(
+            kind="guest",
+            actor_key=f"g:{guest_id}",
+            guest_id=guest_id,
+            display_name="Guest-FREE",
+        )
+        with (
+            patch("backend.battle.modes.free_goodness.mode.resolve_tablebase", return_value=self.entry),
+            patch.object(runtime, "resolve_tablebase", return_value=self.entry),
+            patch.object(runtime, "_lookup", new=AsyncMock(return_value=self.lookup)),
+        ):
+            created = await runtime.create_room_for_mode(
+                user_id=self.host_id,
+                session_id=None,
+                payload={
+                    "full_pattern": "L3_128",
+                    "initial_board": f"{self.board:016x}",
+                    "max_players": 2,
+                    "ranking_min_steps": 12,
+                    "step_timeout_seconds": 90,
+                    "is_public": True,
+                    "allow_spectators": True,
+                },
+            )
+            room = created["room"]
+            repository.join_room(
+                room["room_code"],
+                actor=guest,
+                preferred_role="player",
+                ip_address="198.51.100.17",
+            )
+            repository.set_member_ready(
+                room["room_code"], user_id=self.host_id, ready=True
+            )
+            repository.set_member_ready(room["room_code"], actor=guest, ready=True)
+            started = await runtime.start_room_for_mode(
+                room["room_code"], user_id=self.host_id, session_id=None
+            )
+
+        guest_result = next(
+            item
+            for item in started["results"]
+            if item["actor_key"] == guest.actor_key
+        )
+        guest_view = runtime.room_snapshot(room["room_code"], actor=guest)
+        guest_own_result = next(
+            item
+            for item in guest_view["results"]
+            if item["actor_key"] == guest.actor_key
+        )
+        self.assertEqual(started["round"]["status"], "running")
+        self.assertIsNone(guest_result["user_id"])
+        self.assertEqual(guest_result["guest_id"], guest_id)
+        self.assertEqual(guest_result["display_name"], "Guest-FREE")
+        self.assertEqual(
+            guest_own_result["mode_data"]["board_hex"], f"{self.board:016x}"
+        )
 
     async def test_create_start_and_normal_moves_use_independent_state(self) -> None:
         with (

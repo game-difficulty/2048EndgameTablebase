@@ -20,6 +20,12 @@
         >
           {{ $t('status.tablebaseUnavailable') }}
         </span>
+        <span v-if="guestDemoActive" class="pill-badge pill-badge-soft">
+          {{ $t('trainer.guest.attemptsRemaining', {
+            remaining: guestAttemptsRemaining ?? 0,
+            total: guestAttemptsTotal ?? 0,
+          }) }}
+        </span>
       </div>
 
       <div class="relative z-[130] top-menu-shell">
@@ -59,15 +65,22 @@
                 v-for="pattern in activePatternOptions"
                 :key="pattern"
                 type="button"
+                :title="patternGuestLocked(pattern) ? $t('trainer.guest.locked') : pattern"
                 @click.stop="handlePatternSelect(pattern, $event)"
                 :class="[
-                  'rounded-lg px-3 py-2 text-left ui-control font-black transition-colors',
+                  'flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-left ui-control font-black transition-colors',
                   patternType === pattern
                     ? 'surface-prominent text-white'
                     : 'bg-bg-main text-text-main hover:bg-btn-bg/10'
                 ]"
               >
-                {{ pattern === emptyPatternId ? $t('trainer.emptyPattern.label') : pattern }}
+                <span>{{ pattern === emptyPatternId ? $t('trainer.emptyPattern.label') : pattern }}</span>
+                <span
+                  v-if="patternGuestLocked(pattern)"
+                  class="rounded-full border border-border-main/70 px-1.5 py-0.5 text-[10px] font-black uppercase text-text-secondary"
+                >
+                  {{ $t('trainer.guest.lockedShort') }}
+                </span>
               </button>
             </div>
           </div>
@@ -88,11 +101,35 @@
           />
           <button
             @click="applyTablebase"
-            class="btn-prominent ui-kicker px-2.5 py-1.5 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm"
+            :class="[
+              'btn-prominent ui-kicker px-2.5 py-1.5 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm',
+              selectedTableGuestLocked ? 'ring-1 ring-danger/50' : '',
+            ]"
           >
             {{ $t('trainer.top.load') }}
           </button>
         </template>
+      </div>
+    </div>
+
+    <div
+      v-if="guestNotice"
+      class="trainer-guest-notice mb-4 w-full max-w-6xl"
+      role="alert"
+    >
+      <p class="min-w-0 flex-1 ui-body font-bold text-text-main">
+        {{ $t(`trainer.guest.${guestNotice}`) }}
+      </p>
+      <div class="flex shrink-0 items-center gap-2">
+        <button type="button" class="action-btn-small" @click="requestGuestLogin('login')">
+          {{ $t('auth.tabs.login') }}
+        </button>
+        <button type="button" class="btn-prominent ui-control rounded px-3 py-1.5 font-black" @click="requestGuestLogin('register')">
+          {{ $t('auth.tabs.register') }}
+        </button>
+        <button type="button" class="trainer-guest-notice-close" :aria-label="$t('common.close')" @click="dismissGuestNotice">
+          &times;
+        </button>
       </div>
     </div>
 
@@ -284,6 +321,7 @@
 
 <script setup>
 import { computed, ref, toRef } from 'vue';
+import { useI18n } from 'vue-i18n';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
 import UiSelect from '../../../components/UiSelect.vue';
@@ -299,9 +337,19 @@ const props = defineProps({
 
 const spawnModeLabelKeys = ['random', 'best', 'worst', 'manual'];
 const boardHotkeyTarget = ref(null);
+const { t } = useI18n();
 
 const {
   currentPatternDisplay,
+  guestDemoActive,
+  guestAttemptsRemaining,
+  guestAttemptsTotal,
+  guestNotice,
+  selectedTableGuestLocked,
+  patternGuestLocked,
+  targetGuestLocked,
+  requestGuestLogin,
+  dismissGuestNotice,
   battlePracticeMismatch,
   isEmptyPattern,
   emptyPatternId,
@@ -360,6 +408,8 @@ const targetOptions = computed(() =>
   availableTargetsForPattern.value.map((target) => ({
     value: target,
     label: target,
+    badge: targetGuestLocked(target) ? t('trainer.guest.lockedShort') : '',
+    title: targetGuestLocked(target) ? t('trainer.guest.locked') : target,
   }))
 );
 
@@ -391,6 +441,31 @@ const handleDis32kChange = (event) => {
 .trainer-results-body {
   position: relative;
   height: 13rem;
+}
+
+.trainer-guest-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: space-between;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border-main));
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-card));
+  padding: 0.65rem 0.8rem;
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.trainer-guest-notice-close {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-main);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  font-size: 1.25rem;
+  line-height: 1;
 }
 
 .trainer-page--dock-right {

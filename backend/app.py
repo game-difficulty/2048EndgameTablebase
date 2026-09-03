@@ -28,8 +28,17 @@ from starlette.websockets import WebSocketState
 
 from backend.actions import Action, Message
 from backend.admin.routes import router as admin_router
+from backend.auth.access_policy import AccessLevel, actor_satisfies, websocket_access_level
 from backend.auth.db import init_auth_db
-from backend.auth.dependencies import client_ip, current_user_from_websocket, require_user
+from backend.auth.dependencies import (
+    client_ip,
+    current_guest_from_websocket,
+    current_user_from_websocket,
+    require_user,
+)
+from backend.auth.guest_routes import router as guest_router
+from backend.auth.guest_service import authenticate_guest_token
+from backend.auth.principal import ActorRef
 from backend.auth.routes import router as auth_router
 from backend.auth.service import authenticate_session_token, record_usage
 from backend.battle.realtime import disconnect as disconnect_battle_socket
@@ -259,6 +268,7 @@ async def app_lifespan(_app: FastAPI):
 
 app = FastAPI(lifespan=app_lifespan)
 app.include_router(auth_router)
+app.include_router(guest_router)
 app.include_router(admin_router)
 app.include_router(replay_router)
 app.include_router(quota_router)
@@ -437,15 +447,61 @@ def _release_websocket_slot(ip_address: str) -> None:
 
 
 def _bind_auth_user(session, auth_user: dict) -> None:
+    session.actor_kind = "user"
+    session.actor_key = f"u:{int(auth_user['id'])}"
+    session.guest_id = None
+    session.guest_display_name = ""
     session.user_id = int(auth_user["id"])
     session.auth_session_id = (
         int(auth_user["session_id"]) if auth_user.get("session_id") else None
     )
     session.user_email = str(auth_user["email"])
+    session.user_display_name = str(
+        auth_user.get("display_name") or auth_user.get("email") or ""
+    )
     session.user_role = str(auth_user["role"])
     session.user_entitlement_tier = str(
         (auth_user.get("entitlements") or {}).get("tier") or "free"
     )
+
+
+def _bind_auth_guest(session, guest: dict, *, ip_address: str = "") -> None:
+    session.actor_kind = "guest"
+    session.actor_key = f"g:{guest['guest_id']}"
+    session.guest_id = str(guest["guest_id"])
+    session.guest_display_name = str(guest.get("display_name") or "Guest")
+    session.guest_ip_address = str(ip_address or "")
+    session.user_id = None
+    session.auth_session_id = None
+    session.user_email = ""
+    session.user_display_name = ""
+    session.user_role = "guest"
+    session.user_entitlement_tier = "free"
+
+
+def _session_actor(session) -> ActorRef | None:
+    if session.user_id is not None:
+        return ActorRef(
+            kind="user",
+            actor_key=f"u:{int(session.user_id)}",
+            user_id=int(session.user_id),
+            session_id=session.auth_session_id,
+            display_name=str(
+                session.user_display_name
+                or session.user_email
+                or f"User {session.user_id}"
+            ),
+            role=str(session.user_role or "user"),
+        )
+    if getattr(session, "guest_id", None):
+        return ActorRef(
+            kind="guest",
+            actor_key=f"g:{session.guest_id}",
+            guest_id=str(session.guest_id),
+            display_name=str(session.guest_display_name or "Guest"),
+            role="guest",
+        )
+    return None
 
 
 def _bind_or_restore_auth_user(
@@ -492,6 +548,49 @@ async def _handle_auth_session(websocket: WebSocket, session, payload: dict):
     return session
 
 
+async def _handle_guest_auth_session(websocket: WebSocket, session, payload: dict):
+    if session.user_id is not None:
+        await _safe_send_json(
+            websocket,
+            {
+                "action": Action.AUTH_GUEST_SESSION,
+                "data": {"authenticated": True, "actor": _session_actor(session).public_dict()},
+            },
+            log_key="send_guest_auth_session",
+        )
+        return session
+    token = str((payload or {}).get("token") or "").strip()
+    guest = authenticate_guest_token(token, ip_address=_websocket_client_ip(websocket))
+    if guest is None:
+        await _safe_send_json(
+            websocket,
+            {
+                "action": Message.GUEST_SESSION_REQUIRED,
+                "data": {
+                    "code": "GUEST_SESSION_REQUIRED",
+                    "message": "A guest session is required.",
+                },
+            },
+            log_key="send_guest_session_required",
+        )
+        return session
+    _bind_auth_guest(session, guest, ip_address=_websocket_client_ip(websocket))
+    await _safe_send_json(
+        websocket,
+        {
+            "action": Action.AUTH_GUEST_SESSION,
+            "data": {
+                "authenticated": True,
+                "guest": guest,
+                "actor": ActorRef.from_guest(guest).public_dict(),
+                "guest_allowance": guest.get("query_allowance"),
+            },
+        },
+        log_key="send_guest_auth_session",
+    )
+    return session
+
+
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ignore
     ws_ip = _websocket_client_ip(websocket)
@@ -510,10 +609,13 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
 
     try:
         auth_user = current_user_from_websocket(websocket)
+        auth_guest = None if auth_user is not None else current_guest_from_websocket(websocket)
         await manager.connect(websocket, client_id)
         session = manager.active_connections[websocket]
         if auth_user is not None:
             session = _bind_or_restore_auth_user(websocket, session, auth_user)
+        elif auth_guest is not None:
+            _bind_auth_guest(session, auth_guest, ip_address=ws_ip)
 
         while True:
             try:
@@ -542,8 +644,27 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
                     session = await _handle_auth_session(websocket, session, payload)
                     continue
 
-                if _action_requires_auth(action) and session.user_id is None:
-                    await _send_auth_required(websocket)
+                if action == Action.AUTH_GUEST_SESSION:
+                    session = await _handle_guest_auth_session(websocket, session, payload)
+                    continue
+
+                access_level = websocket_access_level(action)
+                actor = _session_actor(session)
+                if not actor_satisfies(access_level, actor):
+                    if access_level == AccessLevel.GUEST_OR_USER:
+                        await _safe_send_json(
+                            websocket,
+                            {
+                                "action": Message.GUEST_SESSION_REQUIRED,
+                                "data": {
+                                    "code": "GUEST_SESSION_REQUIRED",
+                                    "message": "A guest session or sign-in is required.",
+                                },
+                            },
+                            log_key="send_guest_session_required",
+                        )
+                    else:
+                        await _send_auth_required(websocket)
                     continue
 
                 usage = _usage_for_ws_action(action)
@@ -650,37 +771,6 @@ async def tablebase_worker_endpoint(websocket: WebSocket):  # type: ignore
 
 def _usage_for_ws_action(action: str | None) -> tuple[str, str] | None:
     return None
-
-
-def _action_requires_auth(action: str | None) -> bool:
-    return action in {
-        Action.TRAINER_SET_FILEPATH,
-        Action.TRAINER_SET_EMPTY_PATTERN,
-        Action.TRAINER_GET_RESULTS,
-        Action.TRAINER_DEFAULT,
-        Action.TRAINER_MOVE,
-        Action.TRAINER_MANUAL_SPAWN,
-        Action.TRAINER_SPAWN_QUERY,
-        Action.TRAINER_STEP,
-        Action.SET_BOARD,
-        Action.SET_CELL,
-        Action.UNDO,
-        Action.TESTER_SELECT_PATTERN,
-        Action.TESTER_RESET_RANDOM,
-        Action.TESTER_MOVE,
-        Action.TESTER_SET_BOARD,
-        Action.TESTER_EXPORT_LOG,
-        Action.TESTER_EXPORT_REPLAY,
-        Action.REPLAY_LOAD_UPLOAD,
-        Action.REPLAY_LOAD_LATEST,
-        Action.ANALYSIS_SUBSCRIBE,
-        Action.TABLEBASE_QUERY,
-        Action.BATTLE_SUBSCRIBE,
-        Action.BATTLE_ACTION,
-        Action.BATTLE_PROGRESS,
-        Action.BATTLE_HEARTBEAT,
-        Action.BATTLE_CHAT_SEND,
-    }
 
 
 @app.get("/", include_in_schema=False)
