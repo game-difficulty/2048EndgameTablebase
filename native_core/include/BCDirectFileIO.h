@@ -93,16 +93,16 @@ namespace detail {
 }
 
 [[nodiscard]] inline std::string bc_direct_win_error(const char *label, DWORD error = GetLastError()) {
-    LPSTR message = nullptr;
+    LPWSTR message = nullptr;
     const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER |
         FORMAT_MESSAGE_FROM_SYSTEM |
         FORMAT_MESSAGE_IGNORE_INSERTS;
-    const DWORD len = FormatMessageA(
+    const DWORD len = FormatMessageW(
         flags,
         nullptr,
         error,
         MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        reinterpret_cast<LPSTR>(&message),
+        reinterpret_cast<LPWSTR>(&message),
         0,
         nullptr
     );
@@ -112,7 +112,28 @@ namespace detail {
     out += ")";
     if (len != 0U && message != nullptr) {
         out += ": ";
-        out += message;
+        const int utf8_bytes = WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            message,
+            static_cast<int>(len),
+            nullptr,
+            0,
+            nullptr,
+            nullptr);
+        if (utf8_bytes > 0) {
+            const size_t offset = out.size();
+            out.resize(offset + static_cast<size_t>(utf8_bytes));
+            WideCharToMultiByte(
+                CP_UTF8,
+                0,
+                message,
+                static_cast<int>(len),
+                out.data() + offset,
+                utf8_bytes,
+                nullptr,
+                nullptr);
+        }
     }
     if (message != nullptr) {
         LocalFree(message);

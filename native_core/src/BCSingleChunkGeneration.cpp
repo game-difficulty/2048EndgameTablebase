@@ -193,7 +193,9 @@ BCSingleChunkGenerationStepResult generate_single_chunk_position_layer_strict_to
         BCResidentGenerationOptions carry_options = options;
         carry_options.keep_only_success_generated_boards =
             options.keep_only_success_secondary_generated_boards;
-        carry_options.dynamic_reserve_factor = options.dynamic_reserve_factor * 2.0;
+        carry_options.dynamic_reserve_factor = options.dynamic_secondary_reserve_factor > 0.0
+            ? options.dynamic_secondary_reserve_factor
+            : options.dynamic_reserve_factor * 2.0;
         carry_options.collect_mutable_output_stats = false;
         carry_options.collect_dynamic_state_stats = false;
         BCResidentStreamingGenerationSource source4{

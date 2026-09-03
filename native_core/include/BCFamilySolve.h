@@ -13,6 +13,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -127,6 +128,7 @@ struct BCFamilySolveOptions {
     bool compress_temp_files = false;
     uint32_t temp_direct_queue_depth = 16U;
     uint64_t final_pending_value_memory_cap_bytes = 0U;
+    uint64_t temp_hot_cache_max_bytes = 0U;
 };
 
 struct BCFamilySolveFileResult {
@@ -774,102 +776,138 @@ public:
         const std::filesystem::path &dir,
         uint32_t cell_count,
         bool direct_io = false,
-        uint32_t direct_queue_depth = 16U
+        uint32_t direct_queue_depth = 16U,
+        uint64_t hot_cache_max_bytes = 0U
     ) {
-        open(dir, cell_count, direct_io, direct_queue_depth);
+        open(dir, cell_count, direct_io, direct_queue_depth, hot_cache_max_bytes);
     }
 
     void open(
         const std::filesystem::path &dir,
         uint32_t cell_count,
         bool direct_io = false,
-        uint32_t direct_queue_depth = 16U
+        uint32_t direct_queue_depth = 16U,
+        uint64_t hot_cache_max_bytes = 0U
     ) {
         dir_ = dir;
+        hot_cache_max_bytes_ = hot_cache_max_bytes;
+        hot_cache_bytes_ = 0U;
         std::filesystem::create_directories(dir_);
         partial4_records_.assign(cell_count, {});
         partial2_records_.assign(cell_count, {});
         scratch4_records_.assign(cell_count, {});
+        partial4_hot_.assign(cell_count, {});
+        partial2_hot_.assign(cell_count, {});
+        scratch4_hot_.assign(cell_count, {});
+        partial4_hot_present_.assign(cell_count, 0U);
+        partial2_hot_present_.assign(cell_count, 0U);
+        scratch4_hot_present_.assign(cell_count, 0U);
         partial4_.open(dir_ / "family_partial4.bcfstmp", 1U, direct_io, direct_queue_depth);
         partial2_.open(dir_ / "family_partial2.bcfstmp", 2U, direct_io, direct_queue_depth);
         scratch4_.open(dir_ / "family_scratch4.bcfstmp", 3U, direct_io, direct_queue_depth);
     }
 
-    void write_partial4(CellId cid, const BCFamilyValueVector<StorageT> &values, BCFamilySolveStats &stats) {
+    void write_partial4(CellId cid, BCFamilyValueVector<StorageT> &values, BCFamilySolveStats &stats) {
         wait_partial4_write(stats);
         write_record(cid, values, partial4_, partial4_records_, stats);
+        retain_hot(cid, values, partial4_hot_, partial4_hot_present_);
         ++stats.partial4_cells_written;
     }
 
-    void write_partial2(CellId cid, const BCFamilyValueVector<StorageT> &values, BCFamilySolveStats &stats) {
+    void write_partial2(CellId cid, BCFamilyValueVector<StorageT> &values, BCFamilySolveStats &stats) {
         wait_partial2_write(stats);
         write_record(cid, values, partial2_, partial2_records_, stats);
+        retain_hot(cid, values, partial2_hot_, partial2_hot_present_);
         ++stats.partial2_cells_written;
     }
 
-    void write_scratch4(CellId cid, const BCFamilyValueVector<StorageT> &values, BCFamilySolveStats &stats) {
+    void write_scratch4(CellId cid, BCFamilyValueVector<StorageT> &values, BCFamilySolveStats &stats) {
         wait_scratch4_write(stats);
         write_record(cid, values, scratch4_, scratch4_records_, stats);
+        retain_hot(cid, values, scratch4_hot_, scratch4_hot_present_);
         ++stats.scratch4_cells_written;
     }
 
     void write_partial4_batch(
         const std::vector<CellId> &cids,
-        const std::vector<BCFamilyValueVector<StorageT>> &values,
+        std::vector<BCFamilyValueVector<StorageT>> &values,
         BCFamilySolveStats &stats
     ) {
         wait_partial4_write(stats);
         write_records_batch(cids, values, partial4_, partial4_records_, stats);
+        retain_hot_batch(cids, values, partial4_hot_, partial4_hot_present_);
         stats.partial4_cells_written += cids.size();
     }
 
     void write_partial2_batch(
         const std::vector<CellId> &cids,
-        const std::vector<BCFamilyValueVector<StorageT>> &values,
+        std::vector<BCFamilyValueVector<StorageT>> &values,
         BCFamilySolveStats &stats
     ) {
         wait_partial2_write(stats);
         write_records_batch(cids, values, partial2_, partial2_records_, stats);
+        retain_hot_batch(cids, values, partial2_hot_, partial2_hot_present_);
         stats.partial2_cells_written += cids.size();
     }
 
     void write_scratch4_batch(
         const std::vector<CellId> &cids,
-        const std::vector<BCFamilyValueVector<StorageT>> &values,
+        std::vector<BCFamilyValueVector<StorageT>> &values,
         BCFamilySolveStats &stats
     ) {
         wait_scratch4_write(stats);
         write_records_batch(cids, values, scratch4_, scratch4_records_, stats);
+        retain_hot_batch(cids, values, scratch4_hot_, scratch4_hot_present_);
         stats.scratch4_cells_written += cids.size();
     }
 
     [[nodiscard]] BCFamilyValueVector<StorageT> read_partial4(CellId cid, uint64_t expected_count, BCFamilySolveStats &stats) {
         wait_partial4_write(stats);
         ++stats.partial4_cells_read;
+        BCFamilyValueVector<StorageT> cached;
+        if (take_hot(cid, expected_count, partial4_hot_, partial4_hot_present_, cached, stats)) {
+            return cached;
+        }
         return read_record(cid, expected_count, partial4_, partial4_records_, stats);
     }
 
     [[nodiscard]] BCFamilyValueVector<StorageT> read_partial4_any(CellId cid, BCFamilySolveStats &stats) {
         wait_partial4_write(stats);
         ++stats.partial4_cells_read;
+        BCFamilyValueVector<StorageT> cached;
+        if (take_hot_any(cid, partial4_hot_, partial4_hot_present_, cached, stats)) {
+            return cached;
+        }
         return read_record_any(cid, partial4_, partial4_records_, stats);
     }
 
     [[nodiscard]] BCFamilyValueVector<StorageT> read_partial2(CellId cid, uint64_t expected_count, BCFamilySolveStats &stats) {
         wait_partial2_write(stats);
         ++stats.partial2_cells_read;
+        BCFamilyValueVector<StorageT> cached;
+        if (take_hot(cid, expected_count, partial2_hot_, partial2_hot_present_, cached, stats)) {
+            return cached;
+        }
         return read_record(cid, expected_count, partial2_, partial2_records_, stats);
     }
 
     [[nodiscard]] BCFamilyValueVector<StorageT> read_partial2_any(CellId cid, BCFamilySolveStats &stats) {
         wait_partial2_write(stats);
         ++stats.partial2_cells_read;
+        BCFamilyValueVector<StorageT> cached;
+        if (take_hot_any(cid, partial2_hot_, partial2_hot_present_, cached, stats)) {
+            return cached;
+        }
         return read_record_any(cid, partial2_, partial2_records_, stats);
     }
 
     [[nodiscard]] BCFamilyValueVector<StorageT> read_scratch4(CellId cid, uint64_t expected_count, BCFamilySolveStats &stats) {
         wait_scratch4_write(stats);
         ++stats.scratch4_cells_read;
+        BCFamilyValueVector<StorageT> cached;
+        if (take_hot(cid, expected_count, scratch4_hot_, scratch4_hot_present_, cached, stats)) {
+            return cached;
+        }
         return read_record(cid, expected_count, scratch4_, scratch4_records_, stats);
     }
 
@@ -879,7 +917,8 @@ public:
         BCFamilySolveStats &stats
     ) {
         wait_partial4_write(stats);
-        partial4_.read_many_records(partial4_records_, cids, out, &stats);
+        read_records_batch_cached(
+            cids, out, partial4_, partial4_records_, partial4_hot_, partial4_hot_present_, stats);
         stats.partial4_cells_read += cids.size();
     }
 
@@ -889,7 +928,8 @@ public:
         BCFamilySolveStats &stats
     ) {
         wait_partial2_write(stats);
-        partial2_.read_many_records(partial2_records_, cids, out, &stats);
+        read_records_batch_cached(
+            cids, out, partial2_, partial2_records_, partial2_hot_, partial2_hot_present_, stats);
         stats.partial2_cells_read += cids.size();
     }
 
@@ -899,7 +939,8 @@ public:
         BCFamilySolveStats &stats
     ) {
         wait_scratch4_write(stats);
-        scratch4_.read_many_records(scratch4_records_, cids, out, &stats);
+        read_records_batch_cached(
+            cids, out, scratch4_, scratch4_records_, scratch4_hot_, scratch4_hot_present_, stats);
         stats.scratch4_cells_read += cids.size();
     }
 
@@ -911,6 +952,7 @@ public:
         partial4_.close();
         partial2_.close();
         scratch4_.close();
+        release_hot_cache();
     }
 
     void cleanup() {
@@ -1023,7 +1065,7 @@ private:
 
     static void write_records_batch(
         const std::vector<CellId> &cids,
-        const std::vector<BCFamilyValueVector<StorageT>> &values,
+        std::vector<BCFamilyValueVector<StorageT>> &values,
         TempFile &file,
         std::vector<BCFamilySolveTempRecord> &records,
         BCFamilySolveStats &stats
@@ -1085,6 +1127,153 @@ private:
         return file.read(record.value_offset, record.value_count, &stats);
     }
 
+    [[nodiscard]] static uint64_t hot_value_bytes(
+        const BCFamilyValueVector<StorageT> &values
+    ) {
+        if (values.size() > static_cast<size_t>(
+                std::numeric_limits<uint64_t>::max() / sizeof(StorageT))) {
+            throw std::overflow_error("BC family temp hot cache byte count overflow");
+        }
+        return static_cast<uint64_t>(values.size()) * sizeof(StorageT);
+    }
+
+    [[nodiscard]] static uint64_t hot_resident_bytes(
+        const BCFamilyValueVector<StorageT> &values
+    ) {
+        if (values.capacity() > static_cast<size_t>(
+                std::numeric_limits<uint64_t>::max() / sizeof(StorageT))) {
+            throw std::overflow_error("BC family temp hot resident byte count overflow");
+        }
+        return static_cast<uint64_t>(values.capacity()) * sizeof(StorageT);
+    }
+
+    void retain_hot(
+        CellId cid,
+        BCFamilyValueVector<StorageT> &values,
+        std::vector<BCFamilyValueVector<StorageT>> &hot,
+        std::vector<uint8_t> &present
+    ) {
+        if (hot_cache_max_bytes_ == 0U || values.empty()) {
+            return;
+        }
+        require_cid(cid, partial4_records_);
+        const uint64_t bytes = hot_resident_bytes(values);
+        if (bytes > hot_cache_max_bytes_ - std::min(hot_cache_bytes_, hot_cache_max_bytes_)) {
+            return;
+        }
+        hot[static_cast<size_t>(cid)] = std::move(values);
+        present[static_cast<size_t>(cid)] = 1U;
+        hot_cache_bytes_ += bytes;
+    }
+
+    void retain_hot_batch(
+        const std::vector<CellId> &cids,
+        std::vector<BCFamilyValueVector<StorageT>> &values,
+        std::vector<BCFamilyValueVector<StorageT>> &hot,
+        std::vector<uint8_t> &present
+    ) {
+        for (size_t i = 0U; i < cids.size(); ++i) {
+            retain_hot(cids[i], values[i], hot, present);
+        }
+    }
+
+    void account_hot_read(
+        const BCFamilyValueVector<StorageT> &values,
+        BCFamilySolveStats &stats
+    ) {
+        const uint64_t bytes = hot_value_bytes(values);
+        stats.temp_values_read = bc_checked_add_u64(
+            stats.temp_values_read,
+            values.size(),
+            "BC family temp hot value read stats overflow");
+        stats.temp_bytes_read = bc_checked_add_u64(
+            stats.temp_bytes_read,
+            bytes,
+            "BC family temp hot byte read stats overflow");
+        stats.single.partial_read_bytes = bc_checked_add_u64(
+            stats.single.partial_read_bytes,
+            bytes,
+            "BC family temp hot partial read stats overflow");
+    }
+
+    bool take_hot_any(
+        CellId cid,
+        std::vector<BCFamilyValueVector<StorageT>> &hot,
+        std::vector<uint8_t> &present,
+        BCFamilyValueVector<StorageT> &out,
+        BCFamilySolveStats &stats
+    ) {
+        require_cid(cid, partial4_records_);
+        if (present[static_cast<size_t>(cid)] == 0U) {
+            return false;
+        }
+        BCFamilyValueVector<StorageT> &cached = hot[static_cast<size_t>(cid)];
+        const uint64_t bytes = hot_resident_bytes(cached);
+        out = std::move(cached);
+        present[static_cast<size_t>(cid)] = 0U;
+        hot_cache_bytes_ -= bytes;
+        account_hot_read(out, stats);
+        return true;
+    }
+
+    bool take_hot(
+        CellId cid,
+        uint64_t expected_count,
+        std::vector<BCFamilyValueVector<StorageT>> &hot,
+        std::vector<uint8_t> &present,
+        BCFamilyValueVector<StorageT> &out,
+        BCFamilySolveStats &stats
+    ) {
+        if (!take_hot_any(cid, hot, present, out, stats)) {
+            return false;
+        }
+        if (out.size() != expected_count) {
+            throw std::runtime_error("BC family temp hot value count mismatch");
+        }
+        return true;
+    }
+
+    void read_records_batch_cached(
+        const std::vector<CellId> &cids,
+        std::vector<BCFamilyValueVector<StorageT>> &out,
+        TempFile &file,
+        const std::vector<BCFamilySolveTempRecord> &records,
+        std::vector<BCFamilyValueVector<StorageT>> &hot,
+        std::vector<uint8_t> &present,
+        BCFamilySolveStats &stats
+    ) {
+        out.clear();
+        out.resize(cids.size());
+        std::vector<CellId> misses;
+        std::vector<size_t> miss_indices;
+        misses.reserve(cids.size());
+        miss_indices.reserve(cids.size());
+        for (size_t i = 0U; i < cids.size(); ++i) {
+            if (!take_hot_any(cids[i], hot, present, out[i], stats)) {
+                misses.push_back(cids[i]);
+                miss_indices.push_back(i);
+            }
+        }
+        if (misses.empty()) {
+            return;
+        }
+        std::vector<BCFamilyValueVector<StorageT>> loaded;
+        file.read_many_records(records, misses, loaded, &stats);
+        for (size_t i = 0U; i < loaded.size(); ++i) {
+            out[miss_indices[i]] = std::move(loaded[i]);
+        }
+    }
+
+    void release_hot_cache() {
+        std::vector<BCFamilyValueVector<StorageT>>().swap(partial4_hot_);
+        std::vector<BCFamilyValueVector<StorageT>>().swap(partial2_hot_);
+        std::vector<BCFamilyValueVector<StorageT>>().swap(scratch4_hot_);
+        std::vector<uint8_t>().swap(partial4_hot_present_);
+        std::vector<uint8_t>().swap(partial2_hot_present_);
+        std::vector<uint8_t>().swap(scratch4_hot_present_);
+        hot_cache_bytes_ = 0U;
+    }
+
     std::filesystem::path dir_;
     TempFile partial4_;
     TempFile partial2_;
@@ -1092,6 +1281,14 @@ private:
     std::vector<BCFamilySolveTempRecord> partial4_records_;
     std::vector<BCFamilySolveTempRecord> partial2_records_;
     std::vector<BCFamilySolveTempRecord> scratch4_records_;
+    std::vector<BCFamilyValueVector<StorageT>> partial4_hot_;
+    std::vector<BCFamilyValueVector<StorageT>> partial2_hot_;
+    std::vector<BCFamilyValueVector<StorageT>> scratch4_hot_;
+    std::vector<uint8_t> partial4_hot_present_;
+    std::vector<uint8_t> partial2_hot_present_;
+    std::vector<uint8_t> scratch4_hot_present_;
+    uint64_t hot_cache_max_bytes_ = 0U;
+    uint64_t hot_cache_bytes_ = 0U;
 
     static void wait_partial4_write(BCFamilySolveStats &stats) {
         (void)stats;
@@ -4994,10 +5191,11 @@ inline void bc_family_add_pass_families_unbounded(
 }
 
 inline void bc_family_add_future_window_stats(
-    BCSingleChunkSolveStats &dst,
+    BCFamilySolveStats &family,
     const BCFutureFamilyWindowStats &src,
     bool spawn4
 ) {
+    BCSingleChunkSolveStats &dst = family.single;
     BCCellLoadStats &position = spawn4 ? dst.future4_position_load : dst.future2_position_load;
     BCSuccessLoadStats &success = spawn4 ? dst.future4_success_load : dst.future2_success_load;
     uint64_t &batch_loads = spawn4 ? dst.future4_batch_loads : dst.future2_batch_loads;
@@ -5028,6 +5226,37 @@ inline void bc_family_add_future_window_stats(
 
     position_seconds += src.position_read_seconds;
     success_seconds += src.success_read_seconds;
+    double &prepare_normalize = spawn4
+        ? family.future4_prepare_normalize_seconds
+        : family.future2_prepare_normalize_seconds;
+    double &prepare_select = spawn4
+        ? family.future4_prepare_select_seconds
+        : family.future2_prepare_select_seconds;
+    double &prepare_index_build = spawn4
+        ? family.future4_prepare_index_build_seconds
+        : family.future2_prepare_index_build_seconds;
+    double &prepare_insert_sort = spawn4
+        ? family.future4_prepare_insert_sort_seconds
+        : family.future2_prepare_insert_sort_seconds;
+    prepare_normalize += src.prepare_normalize_seconds;
+    prepare_select += src.prepare_select_seconds;
+    prepare_index_build += src.prepare_index_build_seconds;
+    prepare_insert_sort += src.prepare_insert_sort_seconds;
+    family.future_release_all_calls += 1U;
+    family.future_release_except_calls += spawn4
+        ? family.spawn4_passes
+        : family.spawn2_passes;
+    family.future_release_all_clear_seconds += src.release_all_clear_seconds;
+    family.future_release_except_normalize_seconds += src.release_except_normalize_seconds;
+    family.future_release_except_filter_seconds += src.release_except_filter_seconds;
+    family.future_release_except_erase_seconds += src.release_except_erase_seconds;
+    family.future_release_except_ids_seconds += src.release_except_ids_seconds;
+    family.future_release_all_seconds += src.release_all_clear_seconds;
+    family.future_release_except_seconds +=
+        src.release_except_normalize_seconds +
+        src.release_except_filter_seconds +
+        src.release_except_erase_seconds +
+        src.release_except_ids_seconds;
 }
 
 template <typename StorageT>
@@ -5650,7 +5879,8 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
         temp_dir,
         current_position.cell_count(),
         temp_direct_io,
-        options.temp_direct_queue_depth
+        options.temp_direct_queue_depth,
+        options.temp_hot_cache_max_bytes
     );
     stats.temp_open_seconds += bc_single_chunk_now_seconds() - temp_open_t0;
     std::vector<detail::BCFamilyPendingOutputCell<StorageT>> pending(current_position.cell_count());
@@ -5661,12 +5891,30 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
         options.future_index_recycle_max_bytes;
     future_window_options.release_threads =
         static_cast<uint32_t>(bc_resident_solve_effective_threads(options.solve.num_threads));
+    const int workspace_release_threads = static_cast<int>(future_window_options.release_threads);
     BCFutureFamilyWindow<StorageT> future4_window(
         future4_position,
         future4_success,
         future_window_options
     );
-    for (const BCFamilySolveCachedPass &cached : spawn4_cached) {
+    auto start_current_prefetch = [&](const std::vector<CellId> &cids) {
+        return std::async(
+            std::launch::async,
+            [&current_position, cids]() {
+                detail::BCFamilyCurrentCellLoadResult result;
+                const double current_t0 = bc_single_chunk_now_seconds();
+                result.cells = current_position.load_cells(cids, &result.load_stats);
+                result.seconds = bc_single_chunk_now_seconds() - current_t0;
+                return result;
+            });
+    };
+    std::future<detail::BCFamilyCurrentCellLoadResult> spawn4_current_prefetch;
+    if (!spawn4_cached.empty()) {
+        spawn4_current_prefetch = start_current_prefetch(spawn4_cached.front().current_cids);
+    }
+    const double spawn4_phase_t0 = bc_single_chunk_now_seconds();
+    for (size_t pass_index = 0U; pass_index < spawn4_cached.size(); ++pass_index) {
+        const BCFamilySolveCachedPass &cached = spawn4_cached[pass_index];
         const BCFamilySolvePassPlan &pass = cached.pass;
         ++stats.spawn4_passes;
 
@@ -5687,12 +5935,11 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
         }
         std::vector<BCFamilyValueVector<StorageT>> spawn4_partial_values;
         temp.read_partial4_batch(spawn4_second_cids, spawn4_partial_values, stats);
-        detail::BCFamilyCurrentCellLoadResult spawn4_current_result;
-        {
-            const double current_t0 = bc_single_chunk_now_seconds();
-            spawn4_current_result.cells =
-                current_position.load_cells(cached.current_cids, &spawn4_current_result.load_stats);
-            spawn4_current_result.seconds = bc_single_chunk_now_seconds() - current_t0;
+        detail::BCFamilyCurrentCellLoadResult spawn4_current_result =
+            spawn4_current_prefetch.get();
+        if (pass_index + 1U < spawn4_cached.size()) {
+            spawn4_current_prefetch = start_current_prefetch(
+                spawn4_cached[pass_index + 1U].current_cids);
         }
 
         BCFutureSuccessLookupView<StorageT> lookup =
@@ -5979,7 +6226,12 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
                 );
             }
         }
-        std::vector<BCFamilyValueVector<StorageT>>().swap(spawn4_partial_values);
+        double workspace_release_t0 = bc_single_chunk_now_seconds();
+        detail::bc_family_release_value_vectors(
+            spawn4_partial_values,
+            workspace_release_threads);
+        stats.workspace_release_spawn4_temp_values_seconds +=
+            bc_single_chunk_now_seconds() - workspace_release_t0;
         std::vector<int64_t>().swap(spawn4_prefetch_index);
         temp.write_partial4_batch(
             spawn4_partial_write_cids,
@@ -5992,17 +6244,37 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
             stats
         );
         std::vector<CellId>().swap(spawn4_partial_write_cids);
-        std::vector<BCFamilyValueVector<StorageT>>().swap(spawn4_partial_write_values);
         std::vector<CellId>().swap(spawn4_scratch_write_cids);
-        std::vector<BCFamilyValueVector<StorageT>>().swap(spawn4_scratch_write_values);
+        workspace_release_t0 = bc_single_chunk_now_seconds();
+        detail::bc_family_release_value_vectors(
+            spawn4_partial_write_values,
+            workspace_release_threads);
+        detail::bc_family_release_value_vectors(
+            spawn4_scratch_write_values,
+            workspace_release_threads);
+        stats.workspace_release_spawn4_temp_values_seconds +=
+            bc_single_chunk_now_seconds() - workspace_release_t0;
+        workspace_release_t0 = bc_single_chunk_now_seconds();
+        detail::bc_family_release_partial_buffers(
+            spawn4_group_partials,
+            workspace_release_threads);
+        stats.workspace_release_spawn4_partial_seconds +=
+            bc_single_chunk_now_seconds() - workspace_release_t0;
+        workspace_release_t0 = bc_single_chunk_now_seconds();
+        detail::bc_family_release_success_scratch(
+            spawn4_group_scratch,
+            workspace_release_threads);
+        stats.workspace_release_spawn4_scratch_seconds +=
+            bc_single_chunk_now_seconds() - workspace_release_t0;
         const double release_t0 = bc_single_chunk_now_seconds();
         future4_window.release_except(cached.keep_cids);
         stats.single.future_release_seconds += bc_single_chunk_now_seconds() - release_t0;
     }
-    bc_family_add_future_window_stats(stats.single, future4_window.stats(), true);
     const double future4_release_all_t0 = bc_single_chunk_now_seconds();
     future4_window.release_all();
     stats.single.future_release_seconds += bc_single_chunk_now_seconds() - future4_release_all_t0;
+    bc_family_add_future_window_stats(stats, future4_window.stats(), true);
+    stats.spawn4_phase_wall_seconds += bc_single_chunk_now_seconds() - spawn4_phase_t0;
 
     const double output_streamer_t0 = bc_single_chunk_now_seconds();
     const double position_write_before = stats.single.position_write_seconds;
@@ -6039,7 +6311,13 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
         future2_success,
         future_window_options
     );
-    for (const BCFamilySolveCachedPass &cached : spawn2_cached) {
+    std::future<detail::BCFamilyCurrentCellLoadResult> spawn2_current_prefetch;
+    if (!spawn2_cached.empty()) {
+        spawn2_current_prefetch = start_current_prefetch(spawn2_cached.front().current_cids);
+    }
+    const double spawn2_phase_t0 = bc_single_chunk_now_seconds();
+    for (size_t pass_index = 0U; pass_index < spawn2_cached.size(); ++pass_index) {
+        const BCFamilySolveCachedPass &cached = spawn2_cached[pass_index];
         const BCFamilySolvePassPlan &pass = cached.pass;
         ++stats.spawn2_passes;
 
@@ -6069,12 +6347,11 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
         std::vector<BCFamilyValueVector<StorageT>> spawn2_scratch_values;
         temp.read_partial2_batch(spawn2_partial_cids, spawn2_partial_values, stats);
         temp.read_scratch4_batch(spawn2_scratch_cids, spawn2_scratch_values, stats);
-        detail::BCFamilyCurrentCellLoadResult spawn2_current_result;
-        {
-            const double current_t0 = bc_single_chunk_now_seconds();
-            spawn2_current_result.cells =
-                current_position.load_cells(cached.current_cids, &spawn2_current_result.load_stats);
-            spawn2_current_result.seconds = bc_single_chunk_now_seconds() - current_t0;
+        detail::BCFamilyCurrentCellLoadResult spawn2_current_result =
+            spawn2_current_prefetch.get();
+        if (pass_index + 1U < spawn2_cached.size()) {
+            spawn2_current_prefetch = start_current_prefetch(
+                spawn2_cached[pass_index + 1U].current_cids);
         }
 
         BCFutureSuccessLookupView<StorageT> lookup =
@@ -6466,9 +6743,16 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
             }
         }
         flush_dense_batch();
-        std::vector<BCFamilyValueVector<StorageT>>().swap(spawn2_partial_values);
+        double workspace_release_t0 = bc_single_chunk_now_seconds();
+        detail::bc_family_release_value_vectors(
+            spawn2_partial_values,
+            workspace_release_threads);
         std::vector<int64_t>().swap(spawn2_partial_prefetch_index);
-        std::vector<BCFamilyValueVector<StorageT>>().swap(spawn2_scratch_values);
+        detail::bc_family_release_value_vectors(
+            spawn2_scratch_values,
+            workspace_release_threads);
+        stats.workspace_release_spawn2_prefetch_seconds +=
+            bc_single_chunk_now_seconds() - workspace_release_t0;
         std::vector<int64_t>().swap(spawn2_scratch_prefetch_index);
         temp.write_partial2_batch(
             spawn2_partial_write_cids,
@@ -6476,15 +6760,30 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
             stats
         );
         std::vector<CellId>().swap(spawn2_partial_write_cids);
-        std::vector<BCFamilyValueVector<StorageT>>().swap(spawn2_partial_write_values);
+        workspace_release_t0 = bc_single_chunk_now_seconds();
+        detail::bc_family_release_value_vectors(
+            spawn2_partial_write_values,
+            workspace_release_threads);
+        stats.workspace_release_spawn2_temp_values_seconds +=
+            bc_single_chunk_now_seconds() - workspace_release_t0;
+        workspace_release_t0 = bc_single_chunk_now_seconds();
+        detail::bc_family_release_partial_buffers(
+            spawn2_group_partials,
+            workspace_release_threads);
+        detail::bc_family_release_success_scratch(
+            spawn2_group_final_values,
+            workspace_release_threads);
+        stats.workspace_release_spawn2_dense_seconds +=
+            bc_single_chunk_now_seconds() - workspace_release_t0;
         const double release_t0 = bc_single_chunk_now_seconds();
         future2_window.release_except(cached.keep_cids);
         stats.single.future_release_seconds += bc_single_chunk_now_seconds() - release_t0;
     }
-    bc_family_add_future_window_stats(stats.single, future2_window.stats(), false);
     const double future2_release_all_t0 = bc_single_chunk_now_seconds();
     future2_window.release_all();
     stats.single.future_release_seconds += bc_single_chunk_now_seconds() - future2_release_all_t0;
+    bc_family_add_future_window_stats(stats, future2_window.stats(), false);
+    stats.spawn2_phase_wall_seconds += bc_single_chunk_now_seconds() - spawn2_phase_t0;
 
     if (next_output_cid != current_position.cell_count()) {
         detail::bc_family_flush_ready_outputs(

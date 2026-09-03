@@ -17,6 +17,14 @@ inline constexpr uint64_t kBCDynamicHashLoadDenominator = 100U;
 inline constexpr uint64_t kBCDynamicBucketEstimateLimit =
     (kBCDynamicHashCapacityLimit * kBCDynamicHashLoadNumerator) /
     kBCDynamicHashLoadDenominator;
+inline constexpr uint64_t kBCDynamicAddressAdmissionNumerator = 92U;
+inline constexpr uint64_t kBCDynamicAddressAdmissionDenominator = 100U;
+inline constexpr uint64_t kBCDynamicBitmapWordAdmissionLimit =
+    (kBCDynamicBitmapWordLimit * kBCDynamicAddressAdmissionNumerator) /
+    kBCDynamicAddressAdmissionDenominator;
+inline constexpr uint64_t kBCDynamicBucketEstimateAdmissionLimit =
+    (kBCDynamicBucketEstimateLimit * kBCDynamicAddressAdmissionNumerator) /
+    kBCDynamicAddressAdmissionDenominator;
 inline constexpr uint64_t kBCDynamicBucketPadding = 4096ULL;
 inline constexpr uint64_t kBCDynamicBitmapWordPadding = 512ULL * 64ULL;
 

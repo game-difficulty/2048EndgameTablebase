@@ -3863,6 +3863,10 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair_impl(
     if (!(options.dynamic_reserve_factor > 0.0)) {
         throw std::invalid_argument("BC resident pair generation dynamic_reserve_factor must be positive");
     }
+    if (options.dynamic_secondary_reserve_factor < 0.0) {
+        throw std::invalid_argument(
+            "BC resident pair generation dynamic_secondary_reserve_factor must be non-negative");
+    }
 
     const BCFamilyTable &primary_axis = primary_layout.serialization_axis();
     const BCFamilyTable *secondary_axis =
@@ -3914,6 +3918,9 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair_impl(
     BCDynamicState secondary_state;
     constexpr uint32_t kMaxGenerationRetries = 6U;
     double reserve_factor = options.dynamic_reserve_factor;
+    double secondary_reserve_factor = options.dynamic_secondary_reserve_factor > 0.0
+        ? options.dynamic_secondary_reserve_factor
+        : reserve_factor;
     double prepare_seconds = 0.0;
     double work_seconds = 0.0;
     bool generated = false;
@@ -3960,8 +3967,8 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair_impl(
         if (has_secondary) {
             secondary_state = make_bc_dynamic_state(
                 secondary_matrix.cell_count(),
-                static_cast<uint64_t>(static_cast<double>(current_buckets) * reserve_factor) + 4096ULL,
-                static_cast<uint64_t>(static_cast<double>(current_bitmap_words) * reserve_factor) +
+                static_cast<uint64_t>(static_cast<double>(current_buckets) * secondary_reserve_factor) + 4096ULL,
+                static_cast<uint64_t>(static_cast<double>(current_bitmap_words) * secondary_reserve_factor) +
                     512ULL * 64ULL,
                 thread_count
             );
@@ -4003,9 +4010,11 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair_impl(
             break;
         }
         reserve_factor *= 2.0;
+        secondary_reserve_factor *= 2.0;
     }
     if (!generated) {
-        throw std::runtime_error("BC resident pair generation dynamic state exceeded retry limit");
+        throw BCDynamicAddressabilityOverflow(
+            "BC resident pair generation dynamic state exceeded retry limit");
     }
 
     const double generation_seconds = bc_now_seconds() - generation_begin;
@@ -4201,6 +4210,10 @@ static BCResidentGenerationPairResult generate_resident_position_layer_pair_with
     if (!(options.dynamic_reserve_factor > 0.0)) {
         throw std::invalid_argument("BC resident mutable pair generation dynamic_reserve_factor must be positive");
     }
+    if (options.dynamic_secondary_reserve_factor < 0.0) {
+        throw std::invalid_argument(
+            "BC resident mutable pair generation dynamic_secondary_reserve_factor must be non-negative");
+    }
     if (secondary_layout == nullptr && terminal_secondary_output_file != nullptr) {
         throw std::invalid_argument("BC resident mutable pair got secondary file without secondary axis");
     }
@@ -4256,6 +4269,9 @@ static BCResidentGenerationPairResult generate_resident_position_layer_pair_with
     BCDynamicState secondary_state;
     constexpr uint32_t kMaxGenerationRetries = 6U;
     double reserve_factor = options.dynamic_reserve_factor;
+    double secondary_reserve_factor = options.dynamic_secondary_reserve_factor > 0.0
+        ? options.dynamic_secondary_reserve_factor
+        : reserve_factor * 2.0;
     double prepare_seconds = 0.0;
     double work_seconds = 0.0;
     bool generated = false;
@@ -4306,9 +4322,9 @@ static BCResidentGenerationPairResult generate_resident_position_layer_pair_with
 
         if (has_secondary) {
             const uint64_t future_bucket_estimate =
-                static_cast<uint64_t>(static_cast<double>(current_buckets) * reserve_factor * 2.0) + 4096ULL;
+                static_cast<uint64_t>(static_cast<double>(current_buckets) * secondary_reserve_factor) + 4096ULL;
             const uint64_t future_bitmap_estimate =
-                static_cast<uint64_t>(static_cast<double>(current_bitmap_words) * reserve_factor * 2.0) +
+                static_cast<uint64_t>(static_cast<double>(current_bitmap_words) * secondary_reserve_factor) +
                 512ULL * 64ULL;
             secondary_state = make_bc_dynamic_state(
                 secondary_matrix.cell_count(),
@@ -4344,14 +4360,16 @@ static BCResidentGenerationPairResult generate_resident_position_layer_pair_with
             break;
         }
         if (has_mutable_carry) {
-            throw std::runtime_error(
+            throw BCDynamicAddressabilityOverflow(
                 "BC resident mutable carry generation overflowed; increase dynamic_reserve_factor"
             );
         }
         reserve_factor *= 2.0;
+        secondary_reserve_factor *= 2.0;
     }
     if (!generated) {
-        throw std::runtime_error("BC resident mutable pair generation dynamic state exceeded retry limit");
+        throw BCDynamicAddressabilityOverflow(
+            "BC resident mutable pair generation dynamic state exceeded retry limit");
     }
 
     const double generation_seconds = bc_now_seconds() - generation_begin;
@@ -4578,6 +4596,10 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair_from_stream
     if (!(options.dynamic_reserve_factor > 0.0)) {
         throw std::invalid_argument("BC SingleChunk pair generation dynamic_reserve_factor must be positive");
     }
+    if (options.dynamic_secondary_reserve_factor < 0.0) {
+        throw std::invalid_argument(
+            "BC SingleChunk pair generation dynamic_secondary_reserve_factor must be non-negative");
+    }
 
     const BCFamilyTable &primary_axis = primary_layout.serialization_axis();
     const BCFamilyTable *secondary_axis =
@@ -4632,6 +4654,9 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair_from_stream
     BCDynamicState secondary_state;
     constexpr uint32_t kMaxGenerationRetries = 6U;
     double reserve_factor = options.dynamic_reserve_factor;
+    double secondary_reserve_factor = options.dynamic_secondary_reserve_factor > 0.0
+        ? options.dynamic_secondary_reserve_factor
+        : reserve_factor * 2.0;
     double prepare_seconds = 0.0;
     double work_seconds = 0.0;
     BCCellLoadStats successful_load_stats;
@@ -4685,8 +4710,8 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair_from_stream
         if (has_secondary) {
             secondary_state = make_bc_dynamic_state(
                 secondary_matrix.cell_count(),
-                static_cast<uint64_t>(static_cast<double>(current_buckets) * reserve_factor * 2.0) + 4096ULL,
-                static_cast<uint64_t>(static_cast<double>(current_bitmap_words) * reserve_factor * 2.0) +
+                static_cast<uint64_t>(static_cast<double>(current_buckets) * secondary_reserve_factor) + 4096ULL,
+                static_cast<uint64_t>(static_cast<double>(current_bitmap_words) * secondary_reserve_factor) +
                     512ULL * 64ULL,
                 thread_count
             );
@@ -4725,14 +4750,16 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair_from_stream
             break;
         }
         if (has_mutable_carry) {
-            throw std::runtime_error(
+            throw BCDynamicAddressabilityOverflow(
                 "BC SingleChunk mutable carry generation overflowed; increase dynamic_reserve_factor"
             );
         }
         reserve_factor *= 2.0;
+        secondary_reserve_factor *= 2.0;
     }
     if (!generated) {
-        throw std::runtime_error("BC SingleChunk pair generation dynamic state exceeded retry limit");
+        throw BCDynamicAddressabilityOverflow(
+            "BC SingleChunk pair generation dynamic state exceeded retry limit");
     }
 
     const double generation_seconds = bc_now_seconds() - generation_begin;
@@ -4930,14 +4957,15 @@ BCResidentMutableGenerationResult generate_resident_mutable_layer_from_streaming
             break;
         }
         if (has_initial_mutable) {
-            throw std::runtime_error(
+            throw BCDynamicAddressabilityOverflow(
                 "BC mutable streaming generation overflowed existing mutable state; increase carry reserve"
             );
         }
         reserve_factor *= 2.0;
     }
     if (!generated) {
-        throw std::runtime_error("BC mutable streaming generation dynamic state exceeded retry limit");
+        throw BCDynamicAddressabilityOverflow(
+            "BC mutable streaming generation dynamic state exceeded retry limit");
     }
 
     const double generation_seconds = bc_now_seconds() - generation_begin;

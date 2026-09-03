@@ -60,6 +60,9 @@ struct BCResidentGenerationOptions {
     uint32_t canonical_batch_size = 8192U;
     uint32_t pending_insert_buffer_size = 1024U;
     double dynamic_reserve_factor = 1.0;
+    // Zero preserves the legacy per-call secondary reserve policy. The BC
+    // family runner supplies an explicit learned factor.
+    double dynamic_secondary_reserve_factor = 0.0;
     int canonical_symm_mode = static_cast<int>(SymmMode::Full);
     bool collect_timing = false;
     BCCellFinalizeOptions finalize_options = {};

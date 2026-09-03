@@ -268,19 +268,13 @@ int main(int argc, char **argv) {
         if (!args.stats_csv.parent_path().empty()) {
             std::filesystem::create_directories(args.stats_csv.parent_path());
         }
-        std::ofstream stats(args.stats_csv);
-        if (!stats) {
-            throw std::runtime_error("failed to open stats CSV: " + args.stats_csv.string());
-        }
-        stats << std::setprecision(12);
-        BC::write_bc_solve_stats_header(stats);
+        BC::ensure_bc_solve_stats_csv_file(args.stats_csv);
 
         const double begin = BC::detail::bc_family_solve_runner_now_seconds();
         BC::BCFamilySolveRunResult result = BC::bc_family_solve_full_run(
             args.run,
             [&](const BC::BCFamilySolveRunLayerMetric &metric) {
-                BC::write_bc_solve_stats_row(stats, metric);
-                stats.flush();
+                BC::append_bc_solve_stats_csv_row(args.stats_csv, metric);
                 std::cout << std::setprecision(9)
                     << "kind=" << metric.kind
                     << " ordinal=" << metric.ordinal
@@ -293,8 +287,7 @@ int main(int argc, char **argv) {
                     << '\n';
             });
         const double wall_seconds = BC::detail::bc_family_solve_runner_now_seconds() - begin;
-        BC::write_bc_solve_stats_total_row(stats, result);
-        stats.flush();
+        BC::append_bc_solve_stats_csv_total_row(args.stats_csv, result);
         write_summary(args, result, wall_seconds);
         std::cout << std::setprecision(12)
             << "summary"

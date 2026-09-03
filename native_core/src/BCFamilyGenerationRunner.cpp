@@ -43,6 +43,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -172,6 +173,22 @@ double bc_reserve_factor_for_step(
         return kBCEarlyLayerReserveFactor;
     }
     return bc_regular_reserve_factor(history, retry_guard_factor, history_window);
+}
+
+double bc_secondary_reserve_factor_for_step(
+    uint32_t current_step,
+    const std::vector<double> &history,
+    double retry_guard_factor,
+    size_t history_window
+) {
+    if (history.empty()) {
+        return kBCMaxReserveFactor;
+    }
+    return bc_reserve_factor_for_step(
+        current_step,
+        history,
+        retry_guard_factor,
+        history_window);
 }
 
 [[nodiscard]] uint64_t align_up_u64(uint64_t value, uint64_t alignment) {
@@ -614,7 +631,9 @@ struct FamilyRoutePlannerState {
     const LayerFile &source2_layer,
     const LayerFile *source4_layer,
     double resident_dynamic_reserve_factor,
+    double resident_secondary_dynamic_reserve_factor,
     double single_dynamic_reserve_factor,
+    double single_secondary_dynamic_reserve_factor,
     bool has_resident_carry,
     bool has_single_carry,
     bool has_secondary
@@ -641,7 +660,11 @@ struct FamilyRoutePlannerState {
     inputs.source4_rank_payload_bytes =
         source4_layer == nullptr ? 0U : source4_layer->rank_payload_bytes;
     inputs.resident_dynamic_reserve_factor = resident_dynamic_reserve_factor;
+    inputs.resident_secondary_dynamic_reserve_factor =
+        resident_secondary_dynamic_reserve_factor;
     inputs.single_dynamic_reserve_factor = single_dynamic_reserve_factor;
+    inputs.single_secondary_dynamic_reserve_factor =
+        single_secondary_dynamic_reserve_factor;
     inputs.has_resident_carry = has_resident_carry;
     inputs.has_single_carry = has_single_carry;
     inputs.has_secondary = has_secondary;
@@ -2310,10 +2333,6 @@ void cleanup_temp_file(const std::filesystem::path &path) {
     std::filesystem::remove(path, ec);
 }
 
-[[nodiscard]] uint64_t layer_storage_size_bytes(const LayerFile &layer) {
-    return layer.physical_size != 0U ? layer.physical_size : layer.logical_size;
-}
-
 [[nodiscard]] BC::BCFamilyGenerationOptions family_options_from_args(
     const Args &args,
     uint32_t target_modulus,
@@ -2616,6 +2635,7 @@ void apply_route_decision_to_result(
     const std::vector<uint8_t> &success_shifts,
     BC::LayerSum success_check_min_source_layer_sum,
     double dynamic_reserve_factor,
+    double dynamic_secondary_reserve_factor,
     bool primary_terminal,
     bool secondary_terminal,
     const std::filesystem::path &output_path,
@@ -2645,6 +2665,7 @@ void apply_route_decision_to_result(
         kResidentRoutePendingBuffer
     );
     options.dynamic_reserve_factor = dynamic_reserve_factor;
+    options.dynamic_secondary_reserve_factor = dynamic_secondary_reserve_factor;
     options.keep_only_success_generated_boards = primary_terminal;
     options.keep_only_success_secondary_generated_boards = secondary_terminal;
     options.collect_mutable_output_stats = false;
@@ -2745,6 +2766,7 @@ void apply_route_decision_to_result(
     const std::vector<uint8_t> &success_shifts,
     BC::LayerSum success_check_min_source_layer_sum,
     double dynamic_reserve_factor,
+    double dynamic_secondary_reserve_factor,
     bool primary_terminal,
     bool secondary_terminal,
     std::unique_ptr<BC::BCResidentGenerationMutableLayer> &next_carry,
@@ -2774,6 +2796,7 @@ void apply_route_decision_to_result(
         kResidentRoutePendingBuffer
     );
     options.dynamic_reserve_factor = dynamic_reserve_factor;
+    options.dynamic_secondary_reserve_factor = dynamic_secondary_reserve_factor;
     options.keep_only_success_generated_boards = primary_terminal;
     options.keep_only_success_secondary_generated_boards = secondary_terminal;
     options.collect_mutable_output_stats = false;
@@ -2864,7 +2887,7 @@ void apply_route_decision_to_result(
     const std::vector<BC::LayerSum> &possible_8tile_sums,
     const std::vector<uint8_t> &success_shifts,
     BC::LayerSum success_check_min_source_layer_sum,
-    double dynamic_reserve_factor,
+    double dynamic_secondary_reserve_factor,
     uint32_t route_default_pending_buffer,
     bool terminal
 ) {
@@ -2882,16 +2905,11 @@ void apply_route_decision_to_result(
         success_check_min_source_layer_sum,
         route_default_pending_buffer
     );
-    options.dynamic_reserve_factor = dynamic_reserve_factor;
+    options.dynamic_reserve_factor = dynamic_secondary_reserve_factor;
     options.collect_mutable_output_stats = false;
     options.collect_dynamic_state_stats = false;
     options.keep_only_success_generated_boards = terminal;
-    const uint64_t source4_bytes = layer_storage_size_bytes(source4_layer);
-    const uint64_t current_bytes = layer_storage_size_bytes(current_layer);
-    options.dynamic_reserve_factor = BC::bc_family_carry_reserve_factor(
-        options.dynamic_reserve_factor,
-        current_bytes,
-        source4_bytes);
+    (void)current_layer;
     BC::BCResidentMutableGenerationResult carry =
         BC::generate_resident_mutable_layer_from_streaming_source(
             lut,
@@ -2921,6 +2939,7 @@ void apply_route_decision_to_result(
     const std::vector<uint8_t> &success_shifts,
     BC::LayerSum success_check_min_source_layer_sum,
     double dynamic_reserve_factor,
+    double dynamic_secondary_reserve_factor,
     bool primary_terminal,
     bool secondary_terminal,
     const std::filesystem::path &output_path,
@@ -2947,6 +2966,7 @@ void apply_route_decision_to_result(
         kSingleRoutePendingBuffer
     );
     options.dynamic_reserve_factor = dynamic_reserve_factor;
+    options.dynamic_secondary_reserve_factor = dynamic_secondary_reserve_factor;
     options.keep_only_success_generated_boards = primary_terminal;
     options.keep_only_success_secondary_generated_boards = secondary_terminal;
     options.collect_mutable_output_stats = false;
@@ -3455,6 +3475,58 @@ void print_header(std::ostream &out) {
         << "output_path\n";
 }
 
+void ensure_generation_stats_csv(const Args &args) {
+    if (args.stats_csv.empty()) {
+        return;
+    }
+    if (!args.stats_csv.parent_path().empty()) {
+        std::filesystem::create_directories(args.stats_csv.parent_path());
+    }
+    std::error_code ec;
+    const bool exists = std::filesystem::exists(args.stats_csv, ec);
+    if (ec) {
+        throw std::runtime_error(
+            "failed to inspect BC family generation stats CSV: " + ec.message());
+    }
+    uint64_t size = 0U;
+    if (exists) {
+        size = static_cast<uint64_t>(std::filesystem::file_size(args.stats_csv, ec));
+        if (ec) {
+            throw std::runtime_error(
+                "failed to inspect BC family generation stats CSV: " + ec.message());
+        }
+    }
+    if (exists && size != 0U) {
+        return;
+    }
+    std::ofstream out(args.stats_csv, std::ios::out | std::ios::app);
+    if (!out) {
+        throw std::runtime_error("failed to open BC family generation stats CSV header");
+    }
+    print_header(out);
+    out.flush();
+    if (!out) {
+        throw std::runtime_error("failed to write BC family generation stats CSV header");
+    }
+}
+
+template <class WriteRecord>
+void append_generation_stats_record(const Args &args, WriteRecord &&write_record) {
+    if (args.stats_csv.empty()) {
+        return;
+    }
+    ensure_generation_stats_csv(args);
+    std::ofstream out(args.stats_csv, std::ios::out | std::ios::app);
+    if (!out) {
+        throw std::runtime_error("failed to append BC family generation stats CSV");
+    }
+    write_record(out);
+    out.flush();
+    if (!out) {
+        throw std::runtime_error("failed to write BC family generation stats CSV record");
+    }
+}
+
 void print_layer_row(
     std::ostream &out,
     uint32_t layer_sum,
@@ -3684,49 +3756,34 @@ void write_memory_checkpoint_rows(
         return;
     }
     const std::filesystem::path path = memory_checkpoint_csv_path(args);
-    std::ofstream out(path);
+    if (!path.parent_path().empty()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+    std::error_code ec;
+    const bool exists = std::filesystem::exists(path, ec);
+    if (ec) {
+        throw std::runtime_error("failed to inspect memory checkpoint CSV: " + ec.message());
+    }
+    uint64_t size = 0U;
+    if (exists) {
+        size = static_cast<uint64_t>(std::filesystem::file_size(path, ec));
+        if (ec) {
+            throw std::runtime_error("failed to inspect memory checkpoint CSV: " + ec.message());
+        }
+    }
+    std::ofstream out(path, std::ios::out | std::ios::app);
     if (!out) {
         throw std::runtime_error("failed to open memory checkpoint CSV: " + path.string());
     }
-    write_memory_checkpoint_header(out);
+    if (!exists || size == 0U) {
+        write_memory_checkpoint_header(out);
+    }
     for (size_t i = 0; i < checkpoints.size(); ++i) {
         write_memory_checkpoint_row(out, layer_sum, i, checkpoints[i]);
     }
-}
-
-struct MemoryCheckpointLayerRows {
-    uint32_t layer_sum = 0U;
-    std::vector<BC::BCFamilyMemoryCheckpoint> checkpoints;
-};
-
-void write_memory_checkpoint_rows(
-    const Args &args,
-    const std::vector<MemoryCheckpointLayerRows> &layers
-) {
-    if (!args.family_memory_checkpoints || layers.empty()) {
-        return;
-    }
-    bool has_checkpoints = false;
-    for (const MemoryCheckpointLayerRows &layer : layers) {
-        if (!layer.checkpoints.empty()) {
-            has_checkpoints = true;
-            break;
-        }
-    }
-    if (!has_checkpoints) {
-        return;
-    }
-
-    const std::filesystem::path path = memory_checkpoint_csv_path(args);
-    std::ofstream out(path);
+    out.flush();
     if (!out) {
-        throw std::runtime_error("failed to open memory checkpoint CSV: " + path.string());
-    }
-    write_memory_checkpoint_header(out);
-    for (const MemoryCheckpointLayerRows &layer : layers) {
-        for (size_t i = 0; i < layer.checkpoints.size(); ++i) {
-            write_memory_checkpoint_row(out, layer.layer_sum, i, layer.checkpoints[i]);
-        }
+        throw std::runtime_error("failed to write memory checkpoint CSV rows");
     }
 }
 
@@ -3734,8 +3791,9 @@ void write_memory_checkpoint_rows(
     return pattern.rfind("free", 0U) == 0U;
 }
 
-int run_bc_chain(const Args &args, std::ostream &out) {
+int run_bc_chain(const Args &args) {
     std::filesystem::create_directories(args.output_dir);
+    ensure_generation_stats_csv(args);
     const std::array<uint32_t, 16U> tile_sums = free_semantic_tile_sums();
     const std::vector<uint8_t> legal_tiles = make_bc_legal_tiles(args.target_rank);
     const std::vector<BC::LayerSum> possible_8tile_sums =
@@ -3836,7 +3894,6 @@ int run_bc_chain(const Args &args, std::ostream &out) {
         layers.emplace(seed_sum, std::move(seed_layer));
         first_generation_ordinal = 1U;
     } else if (existing_prefix_count > final_primary_ordinal) {
-        print_header(out);
         return 0;
     } else {
         const uint32_t highest_existing_ordinal = existing_prefix_count - 1U;
@@ -3874,7 +3931,6 @@ int run_bc_chain(const Args &args, std::ostream &out) {
     (void)process_baseline_working_set;
     AggregateStats aggregate;
     AggregateStats warm;
-    std::vector<MemoryCheckpointLayerRows> memory_checkpoint_layers;
     const FamilyRouteScript route_script = load_family_route_script(args.family_route_script);
     FamilyRoutePlannerState route_state;
     route_state.previous_modulus = args.family_modulus;
@@ -3883,38 +3939,66 @@ int run_bc_chain(const Args &args, std::ostream &out) {
     uint32_t resident_carry_layer_sum = 0U;
     std::unique_ptr<BC::BCResidentGenerationMutableLayer> single_carry;
     uint32_t single_carry_layer_sum = 0U;
-    std::vector<double> resident_reserve_need_history;
-    std::vector<double> single_reserve_need_history;
+    std::vector<double> resident_primary_reserve_need_history;
+    std::vector<double> resident_secondary_reserve_need_history;
+    std::vector<double> single_primary_reserve_need_history;
+    std::vector<double> single_secondary_reserve_need_history;
     if (existing_prefix_count >= 2U) {
         for (auto current_it = layers.begin(); current_it != layers.end(); ++current_it) {
-            const auto next_it = std::next(current_it);
-            if (next_it == layers.end()) {
-                break;
+            if (current_it->first <= std::numeric_limits<uint32_t>::max() - 2U) {
+                const auto primary_it = layers.find(current_it->first + 2U);
+                if (primary_it != layers.end()) {
+                    const double restored_need =
+                        bc_transition_reserve_need(current_it->second, primary_it->second);
+                    if (restored_need > 0.0) {
+                        resident_primary_reserve_need_history.push_back(restored_need);
+                        single_primary_reserve_need_history.push_back(restored_need);
+                    }
+                }
             }
-            if (next_it->first != current_it->first + 2U) {
-                continue;
-            }
-            const double restored_need =
-                bc_transition_reserve_need(current_it->second, next_it->second);
-            if (restored_need > 0.0) {
-                resident_reserve_need_history.push_back(restored_need);
-                single_reserve_need_history.push_back(restored_need);
+            if (current_it->first <= std::numeric_limits<uint32_t>::max() - 4U) {
+                const auto secondary_it = layers.find(current_it->first + 4U);
+                if (secondary_it != layers.end()) {
+                    const double restored_need =
+                        bc_transition_reserve_need(current_it->second, secondary_it->second);
+                    if (restored_need > 0.0) {
+                        resident_secondary_reserve_need_history.push_back(restored_need);
+                        single_secondary_reserve_need_history.push_back(restored_need);
+                    }
+                }
             }
         }
     }
-    if (!resident_reserve_need_history.empty()) {
+    if (!resident_primary_reserve_need_history.empty()) {
         std::cerr
             << "BC_RESERVE_HISTORY_RESTORED"
-            << " observations=" << resident_reserve_need_history.size()
-            << " last_need=" << resident_reserve_need_history.back()
-            << " resident_learned_factor="
+            << " primary_observations=" << resident_primary_reserve_need_history.size()
+            << " secondary_observations=" << resident_secondary_reserve_need_history.size()
+            << " last_primary_need=" << resident_primary_reserve_need_history.back()
+            << " last_secondary_need="
+            << (resident_secondary_reserve_need_history.empty()
+                    ? 0.0
+                    : resident_secondary_reserve_need_history.back())
+            << " resident_primary_factor="
             << bc_regular_reserve_factor(
-                   resident_reserve_need_history,
+                   resident_primary_reserve_need_history,
                    0.0,
                    kBCResidentReserveHistoryWindow)
-            << " single_learned_factor="
+            << " resident_secondary_factor="
+            << bc_secondary_reserve_factor_for_step(
+                   kBCEarlyLayerReserveFactorSteps,
+                   resident_secondary_reserve_need_history,
+                   0.0,
+                   kBCResidentReserveHistoryWindow)
+            << " single_primary_factor="
             << bc_regular_reserve_factor(
-                   single_reserve_need_history,
+                   single_primary_reserve_need_history,
+                   0.0,
+                   kBCSingleReserveHistoryWindow)
+            << " single_secondary_factor="
+            << bc_secondary_reserve_factor_for_step(
+                   kBCEarlyLayerReserveFactorSteps,
+                   single_secondary_reserve_need_history,
                    0.0,
                    kBCSingleReserveHistoryWindow)
             << '\n';
@@ -3923,8 +4007,6 @@ int run_bc_chain(const Args &args, std::ostream &out) {
     double single_retry_guard_factor = 0.0;
     std::map<uint32_t, std::shared_ptr<BC::BCPositionLayerReader>> resident_memory_layers;
     BCAsyncPositionWriteQueue async_position_writes;
-    print_header(out);
-
     for (uint32_t layer_sum = seed_sum + first_generation_ordinal * 2U;
          layer_sum <= final_primary_sum;
          layer_sum += 2U) {
@@ -3944,18 +4026,34 @@ int run_bc_chain(const Args &args, std::ostream &out) {
             }
             source4_layer = &source4_it->second;
         }
+        const double resident_retry_guard_for_layer =
+            std::exchange(resident_retry_guard_factor, 0.0);
+        const double single_retry_guard_for_layer =
+            std::exchange(single_retry_guard_factor, 0.0);
         const double resident_dynamic_reserve_factor = bc_reserve_factor_for_step(
             current_step,
-            resident_reserve_need_history,
-            resident_retry_guard_factor,
+            resident_primary_reserve_need_history,
+            resident_retry_guard_for_layer,
             kBCResidentReserveHistoryWindow
         );
+        const double resident_secondary_dynamic_reserve_factor =
+            bc_secondary_reserve_factor_for_step(
+                current_step,
+                resident_secondary_reserve_need_history,
+                resident_retry_guard_for_layer,
+                kBCResidentReserveHistoryWindow);
         const double single_dynamic_reserve_factor = bc_reserve_factor_for_step(
             current_step,
-            single_reserve_need_history,
-            single_retry_guard_factor,
+            single_primary_reserve_need_history,
+            single_retry_guard_for_layer,
             kBCSingleReserveHistoryWindow
         );
+        const double single_secondary_dynamic_reserve_factor =
+            bc_secondary_reserve_factor_for_step(
+                current_step,
+                single_secondary_reserve_need_history,
+                single_retry_guard_for_layer,
+                kBCSingleReserveHistoryWindow);
         const bool has_secondary = layer_sum + 2U <= final_primary_sum;
         BC::BCFamilyRouteDecision route_decision = decide_family_route_for_layer(
             args,
@@ -3965,7 +4063,9 @@ int run_bc_chain(const Args &args, std::ostream &out) {
             source2_it->second,
             source4_layer,
             resident_dynamic_reserve_factor,
+            resident_secondary_dynamic_reserve_factor,
             single_dynamic_reserve_factor,
+            single_secondary_dynamic_reserve_factor,
             resident_carry && resident_carry_layer_sum == layer_sum,
             single_carry && single_carry_layer_sum == layer_sum,
             has_secondary
@@ -3978,10 +4078,14 @@ int run_bc_chain(const Args &args, std::ostream &out) {
                 << " resident_hash_capacity=" << route_decision.resident_dynamic_hash_capacity
                 << " single_bitmap_words=" << route_decision.single_dynamic_bitmap_words
                 << " single_hash_capacity=" << route_decision.single_dynamic_hash_capacity
-                << " resident_reserve_factor=" << resident_dynamic_reserve_factor
-                << " single_reserve_factor=" << single_dynamic_reserve_factor
-                << " bitmap_limit=" << BC::kBCDynamicBitmapWordLimit
-                << " hash_limit=" << BC::kBCDynamicHashCapacityLimit
+                << " resident_primary_factor=" << resident_dynamic_reserve_factor
+                << " resident_secondary_factor=" << resident_secondary_dynamic_reserve_factor
+                << " single_primary_factor=" << single_dynamic_reserve_factor
+                << " single_secondary_factor=" << single_secondary_dynamic_reserve_factor
+                << " bitmap_admission_limit=" << BC::kBCDynamicBitmapWordAdmissionLimit
+                << " bucket_admission_limit=" << BC::kBCDynamicBucketEstimateAdmissionLimit
+                << " bitmap_hard_limit=" << BC::kBCDynamicBitmapWordLimit
+                << " hash_hard_limit=" << BC::kBCDynamicHashCapacityLimit
                 << " route=" << BC::bc_family_route_name(route_decision.route)
                 << '\n';
         }
@@ -3994,10 +4098,13 @@ int run_bc_chain(const Args &args, std::ostream &out) {
             );
 
         double dynamic_reserve_factor = kBCDefaultReserveFactor;
+        double dynamic_secondary_reserve_factor = kBCMaxReserveFactor;
         if (route_decision.route == BC::BCFamilyGenerationRoute::Resident) {
             dynamic_reserve_factor = resident_dynamic_reserve_factor;
+            dynamic_secondary_reserve_factor = resident_secondary_dynamic_reserve_factor;
         } else if (route_decision.route == BC::BCFamilyGenerationRoute::Single) {
             dynamic_reserve_factor = single_dynamic_reserve_factor;
+            dynamic_secondary_reserve_factor = single_secondary_dynamic_reserve_factor;
         }
 
         const uint64_t input_live = source2_it->second.rows;
@@ -4063,7 +4170,7 @@ int run_bc_chain(const Args &args, std::ostream &out) {
                     possible_8tile_sums,
                     success_shifts,
                     success_check_min_source_layer_sum,
-                    dynamic_reserve_factor,
+                    dynamic_secondary_reserve_factor,
                     kResidentRoutePendingBuffer,
                     terminal
                 );
@@ -4092,6 +4199,7 @@ int run_bc_chain(const Args &args, std::ostream &out) {
                 success_shifts,
                 success_check_min_source_layer_sum,
                 dynamic_reserve_factor,
+                dynamic_secondary_reserve_factor,
                 terminal,
                 secondary_terminal,
                 resident_carry,
@@ -4148,7 +4256,7 @@ int run_bc_chain(const Args &args, std::ostream &out) {
                     possible_8tile_sums,
                     success_shifts,
                     success_check_min_source_layer_sum,
-                    dynamic_reserve_factor,
+                    dynamic_secondary_reserve_factor,
                     kSingleRoutePendingBuffer,
                     terminal
                 );
@@ -4176,6 +4284,7 @@ int run_bc_chain(const Args &args, std::ostream &out) {
                 success_shifts,
                 success_check_min_source_layer_sum,
                 dynamic_reserve_factor,
+                dynamic_secondary_reserve_factor,
                 terminal,
                 secondary_terminal,
                 final_path,
@@ -4289,29 +4398,53 @@ int run_bc_chain(const Args &args, std::ostream &out) {
                       result.output_rank_payload_bytes);
         result.output_rows = generated_layer.rows;
         commit_family_route_decision(route_state, route_decision);
+        const double primary_structural_need =
+            bc_transition_reserve_need(source2_it->second, generated_layer);
+        const double secondary_structural_need = source4_layer == nullptr
+            ? primary_structural_need
+            : bc_transition_reserve_need(*source4_layer, generated_layer);
+        double resident_primary_need = primary_structural_need;
+        double resident_secondary_need = secondary_structural_need;
+        double single_primary_need = primary_structural_need;
+        double single_secondary_need = secondary_structural_need;
         if (route_decision.route == BC::BCFamilyGenerationRoute::Resident) {
-            resident_retry_guard_factor = 0.0;
             const double observed_reserve_need =
                 bc_observed_reserve_need(source2_it->second, result);
             if (observed_reserve_need > 0.0) {
-                resident_reserve_need_history.push_back(observed_reserve_need);
+                resident_primary_need = std::max(resident_primary_need, observed_reserve_need);
+                resident_secondary_need = std::max(resident_secondary_need, observed_reserve_need);
             }
             if (result.retries != 0U) {
                 resident_retry_guard_factor =
-                    std::min(kBCMaxReserveFactor, dynamic_reserve_factor * kBCLearnedReserveRetryGuard);
+                    std::min(
+                        kBCMaxReserveFactor,
+                        std::max(dynamic_reserve_factor, dynamic_secondary_reserve_factor) *
+                            kBCLearnedReserveRetryGuard);
             }
         } else if (route_decision.route == BC::BCFamilyGenerationRoute::Single) {
-            single_retry_guard_factor = 0.0;
             const double observed_reserve_need =
                 bc_observed_reserve_need(source2_it->second, result);
             if (observed_reserve_need > 0.0) {
-                single_reserve_need_history.push_back(observed_reserve_need);
+                single_primary_need = std::max(single_primary_need, observed_reserve_need);
+                single_secondary_need = std::max(single_secondary_need, observed_reserve_need);
             }
             if (result.retries != 0U) {
                 single_retry_guard_factor =
-                    std::min(kBCMaxReserveFactor, dynamic_reserve_factor * kBCLearnedReserveRetryGuard);
+                    std::min(
+                        kBCMaxReserveFactor,
+                        std::max(dynamic_reserve_factor, dynamic_secondary_reserve_factor) *
+                            kBCLearnedReserveRetryGuard);
             }
         }
+        auto append_reserve_need = [](std::vector<double> &history, double need) {
+            if (need > 0.0) {
+                history.push_back(need);
+            }
+        };
+        append_reserve_need(resident_primary_reserve_need_history, resident_primary_need);
+        append_reserve_need(resident_secondary_reserve_need_history, resident_secondary_need);
+        append_reserve_need(single_primary_reserve_need_history, single_primary_need);
+        append_reserve_need(single_secondary_reserve_need_history, single_secondary_need);
 
         uint64_t ex_input_live = 0U;
         uint64_t ex_primary_live = 0U;
@@ -4332,17 +4465,19 @@ int run_bc_chain(const Args &args, std::ostream &out) {
             ex_match = input_live == ex_input_live && result.output_rows == ex_primary_live ? 1U : 0U;
         }
 
-        print_layer_row(
-            out,
-            layer_sum,
-            input_live,
-            ex_input_live,
-            ex_primary_live,
-            ex_match,
-            result,
-            final_artifact_path
-        );
-        out.flush();
+        append_generation_stats_record(
+            args,
+            [&](std::ostream &out) {
+                print_layer_row(
+                    out,
+                    layer_sum,
+                    input_live,
+                    ex_input_live,
+                    ex_primary_live,
+                    ex_match,
+                    result,
+                    final_artifact_path);
+            });
         emit_generation_layer_metric(
             layer_ordinal_for_sum(seed_sum, layer_sum),
             layer_sum,
@@ -4355,10 +4490,7 @@ int run_bc_chain(const Args &args, std::ostream &out) {
             accumulate(warm, result, input_live);
         }
         if (args.family_memory_checkpoints && !result.memory_checkpoints.empty()) {
-            MemoryCheckpointLayerRows checkpoint_rows;
-            checkpoint_rows.layer_sum = layer_sum;
-            checkpoint_rows.checkpoints = std::move(result.memory_checkpoints);
-            memory_checkpoint_layers.push_back(std::move(checkpoint_rows));
+            write_memory_checkpoint_rows(args, layer_sum, result.memory_checkpoints);
         }
         resident_memory_layers.clear();
         if (result.resident_memory_layer) {
@@ -4368,11 +4500,14 @@ int run_bc_chain(const Args &args, std::ostream &out) {
     }
 
     async_position_writes.wait_all();
-    print_summary_row(out, "total", aggregate);
-    if (warm.layers != 0U) {
-        print_summary_row(out, "warm", warm);
-    }
-    write_memory_checkpoint_rows(args, memory_checkpoint_layers);
+    append_generation_stats_record(
+        args,
+        [&](std::ostream &out) {
+            print_summary_row(out, "total", aggregate);
+            if (warm.layers != 0U) {
+                print_summary_row(out, "warm", warm);
+            }
+        });
     return 0;
 }
 
@@ -4448,19 +4583,7 @@ BCFamilyGenerationRunResult bc_family_generation_full_run(
     } guard{previous_result, previous_callback};
 
     configure_global_threads(args.num_threads);
-    if (!args.stats_csv.empty()) {
-        if (!args.stats_csv.parent_path().empty()) {
-            std::filesystem::create_directories(args.stats_csv.parent_path());
-        }
-        std::ofstream out(args.stats_csv);
-        if (!out) {
-            throw std::runtime_error("failed to open BC family generation stats CSV");
-        }
-        run_bc_chain(args, out);
-    } else {
-        std::ostringstream sink;
-        run_bc_chain(args, sink);
-    }
+    run_bc_chain(args);
     result.completed = true;
     return result;
 }

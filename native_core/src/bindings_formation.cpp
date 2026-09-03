@@ -610,26 +610,14 @@ NB_MODULE(formation_core, m) {
                         });
                 }
 
-                std::unique_ptr<std::ofstream> solve_stats;
                 if (!solve_stats_csv.empty()) {
-                    if (!solve_stats_csv.parent_path().empty()) {
-                        std::filesystem::create_directories(solve_stats_csv.parent_path());
-                    }
-                    solve_stats = std::make_unique<std::ofstream>(solve_stats_csv);
-                    if (!*solve_stats) {
-                        throw std::runtime_error("failed to open BC solve stats CSV");
-                    }
-                    *solve_stats << std::setprecision(12);
-                    BC::write_bc_solve_stats_header(*solve_stats);
+                    BC::ensure_bc_solve_stats_csv_file(solve_stats_csv);
                 }
 
                 solve_result = BC::bc_family_solve_full_run(
                     solve_options,
                     [&](const BC::BCFamilySolveRunLayerMetric &metric) {
-                        if (solve_stats) {
-                            BC::write_bc_solve_stats_row(*solve_stats, metric);
-                            solve_stats->flush();
-                        }
+                        BC::append_bc_solve_stats_csv_row(solve_stats_csv, metric);
                         const bool metric_finishes_archive_layer =
                             metric.kind == "archive" &&
                             (expected_layers == 0U || metric.ordinal < expected_layers);
@@ -645,10 +633,7 @@ NB_MODULE(formation_core, m) {
                                 progress_total);
                         }
                     });
-                if (solve_stats) {
-                    BC::write_bc_solve_stats_total_row(*solve_stats, solve_result);
-                    solve_stats->flush();
-                }
+                BC::append_bc_solve_stats_csv_total_row(solve_stats_csv, solve_result);
 
                 if (!solve_summary_csv.empty()) {
                     if (!solve_summary_csv.parent_path().empty()) {

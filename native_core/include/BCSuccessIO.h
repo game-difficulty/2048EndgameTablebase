@@ -1558,15 +1558,21 @@ public:
             std::vector<uint8_t> header_bytes(kBCSuccessHeaderBytes);
             direct->read_at(0U, header_bytes.data(), header_bytes.size());
             const BCSuccessHeader header = bc_read_success_header(header_bytes);
-            const uint64_t logical_size = bc_success_logical_size(header);
-            const uint64_t required_physical = bc_direct_align_up(logical_size, options.alignment);
-            if (physical_size >= required_physical) {
-                direct->set_logical_size(logical_size);
-                return BCSuccessStreamingReader(
-                    std::move(direct),
-                    position,
-                    expected_row_width
-                );
+            if (header.magic == kBCSuccessMagic &&
+                header.format_version == kBCSuccessFormatVersion &&
+                header.header_bytes == kBCSuccessHeaderBytes) {
+                const uint64_t logical_size = bc_success_logical_size(header);
+                const uint64_t required_physical =
+                    bc_direct_align_up(logical_size, options.alignment);
+                if (logical_size >= kBCSuccessHeaderBytes &&
+                    physical_size >= required_physical) {
+                    direct->set_logical_size(logical_size);
+                    return BCSuccessStreamingReader(
+                        std::move(direct),
+                        position,
+                        expected_row_width
+                    );
+                }
             }
         }
         return open_buffered(path, position, expected_row_width);

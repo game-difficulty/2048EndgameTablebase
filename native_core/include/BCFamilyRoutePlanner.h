@@ -3,7 +3,6 @@
 #include "BCDynamicCapacity.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -27,7 +26,9 @@ struct BCFamilyRouteInputs {
     uint64_t source4_bucket_count = 0U;
     uint64_t source4_rank_payload_bytes = 0U;
     double resident_dynamic_reserve_factor = 1.0;
+    double resident_secondary_dynamic_reserve_factor = 0.0;
     double single_dynamic_reserve_factor = 1.0;
+    double single_secondary_dynamic_reserve_factor = 0.0;
     bool has_resident_carry = false;
     bool has_single_carry = false;
     bool has_secondary = true;
@@ -58,6 +59,8 @@ struct BCFamilyRouteDecision {
     uint64_t route_dynamic_hash_capacity = 0U;
     bool resident_addressable = true;
     bool single_addressable = true;
+    bool resident_admission_addressable = true;
+    bool single_admission_addressable = true;
     bool route_addressable = true;
     bool dynamic_address_limited = false;
     bool automatic_route = false;
@@ -71,24 +74,9 @@ struct BCFamilyDynamicRouteEstimate {
     uint64_t bitmap_words = 0U;
     uint64_t hash_capacity = 0U;
     bool addressable = true;
+    bool admission_addressable = true;
     BCDynamicAddressLimit limit = BCDynamicAddressLimit::None;
 };
-
-[[nodiscard]] inline double bc_family_carry_reserve_factor(
-    double reserve_factor,
-    uint64_t source2_size,
-    uint64_t source4_size
-) {
-    if (source4_size == 0U) {
-        return reserve_factor;
-    }
-    const double combined_ratio =
-        1.0 + static_cast<double>(source2_size) / static_cast<double>(source4_size);
-    const double combined_factor = reserve_factor * combined_ratio;
-    return std::isfinite(combined_factor)
-        ? std::max(reserve_factor, combined_factor)
-        : std::numeric_limits<double>::infinity();
-}
 
 [[nodiscard]] inline uint64_t bc_family_rank_payload_word_estimate(uint64_t bytes) {
     return bytes / sizeof(uint64_t) + 1U;
@@ -96,7 +84,8 @@ struct BCFamilyDynamicRouteEstimate {
 
 [[nodiscard]] inline BCFamilyDynamicRouteEstimate bc_family_dynamic_route_estimate(
     const BCFamilyRouteInputs &inputs,
-    double reserve_factor,
+    double primary_reserve_factor,
+    double secondary_reserve_factor,
     bool has_carry
 ) {
     BCFamilyDynamicRouteEstimate route;
@@ -117,6 +106,10 @@ struct BCFamilyDynamicRouteEstimate {
             bc_estimate_dynamic_capacity(bucket_estimate, bitmap_estimate);
         route.bitmap_words = std::max(route.bitmap_words, capacity.bitmap_word_estimate);
         route.hash_capacity = std::max(route.hash_capacity, capacity.hash_capacity);
+        if (capacity.bucket_estimate > kBCDynamicBucketEstimateAdmissionLimit ||
+            capacity.bitmap_word_estimate > kBCDynamicBitmapWordAdmissionLimit) {
+            route.admission_addressable = false;
+        }
         if (!capacity.addressable()) {
             route.addressable = false;
             if (route.limit == BCDynamicAddressLimit::None) {
@@ -129,26 +122,22 @@ struct BCFamilyDynamicRouteEstimate {
 
     if (!has_carry) {
         if (inputs.has_source4) {
-            const double carry_factor = bc_family_carry_reserve_factor(
-                reserve_factor,
-                inputs.source2_size,
-                inputs.source4_size);
             include_state(
                 inputs.source4_bucket_count,
                 bc_family_rank_payload_word_estimate(inputs.source4_rank_payload_bytes),
-                carry_factor);
+                secondary_reserve_factor);
         } else {
             include_state(
                 inputs.source2_bucket_count,
                 bc_family_rank_payload_word_estimate(inputs.source2_rank_payload_bytes),
-                reserve_factor);
+                primary_reserve_factor);
         }
     }
     if (inputs.has_secondary) {
         include_state(
             inputs.source2_bucket_count,
             bc_family_rank_payload_word_estimate(inputs.source2_rank_payload_bytes),
-            reserve_factor * 2.0);
+            secondary_reserve_factor);
     }
     return route;
 }
@@ -274,11 +263,17 @@ struct BCFamilyDynamicRouteEstimate {
         bc_family_dynamic_route_estimate(
             inputs,
             inputs.resident_dynamic_reserve_factor,
+            inputs.resident_secondary_dynamic_reserve_factor > 0.0
+                ? inputs.resident_secondary_dynamic_reserve_factor
+                : inputs.resident_dynamic_reserve_factor * 2.0,
             inputs.has_resident_carry);
     const BCFamilyDynamicRouteEstimate single_dynamic =
         bc_family_dynamic_route_estimate(
             inputs,
             inputs.single_dynamic_reserve_factor,
+            inputs.single_secondary_dynamic_reserve_factor > 0.0
+                ? inputs.single_secondary_dynamic_reserve_factor
+                : inputs.single_dynamic_reserve_factor * 2.0,
             inputs.has_single_carry);
     decision.resident_dynamic_bitmap_words = resident_dynamic.bitmap_words;
     decision.resident_dynamic_hash_capacity = resident_dynamic.hash_capacity;
@@ -286,6 +281,8 @@ struct BCFamilyDynamicRouteEstimate {
     decision.single_dynamic_hash_capacity = single_dynamic.hash_capacity;
     decision.resident_addressable = resident_dynamic.addressable;
     decision.single_addressable = single_dynamic.addressable;
+    decision.resident_admission_addressable = resident_dynamic.admission_addressable;
+    decision.single_admission_addressable = single_dynamic.admission_addressable;
     decision.automatic_route = requested_route == BCFamilyGenerationRoute::Auto;
 
     auto set_route = [&](BCFamilyGenerationRoute route) {
@@ -323,13 +320,13 @@ struct BCFamilyDynamicRouteEstimate {
     const bool single_memory_fits = decision.single_estimated_peak_bytes <= budget;
     BCFamilyGenerationRoute selected = BCFamilyGenerationRoute::Family;
     if (resident_memory_fits) {
-        if (decision.resident_addressable) {
+        if (decision.resident_admission_addressable) {
             selected = BCFamilyGenerationRoute::Resident;
         } else {
             decision.dynamic_address_limited = true;
         }
     } else if (single_memory_fits) {
-        if (decision.single_addressable) {
+        if (decision.single_admission_addressable) {
             selected = BCFamilyGenerationRoute::Single;
         } else {
             decision.dynamic_address_limited = true;
@@ -366,7 +363,7 @@ struct BCFamilyDynamicRouteEstimate {
 
     if (selected == BCFamilyGenerationRoute::Resident &&
         decision.resident_estimated_peak_bytes > budget) {
-        selected = single_memory_fits && decision.single_addressable
+        selected = single_memory_fits && decision.single_admission_addressable
             ? BCFamilyGenerationRoute::Single
             : BCFamilyGenerationRoute::Family;
     }
@@ -374,11 +371,11 @@ struct BCFamilyDynamicRouteEstimate {
         decision.single_estimated_peak_bytes > budget) {
         selected = BCFamilyGenerationRoute::Family;
     }
-    if (selected == BCFamilyGenerationRoute::Resident && !decision.resident_addressable) {
+    if (selected == BCFamilyGenerationRoute::Resident && !decision.resident_admission_addressable) {
         selected = BCFamilyGenerationRoute::Family;
         decision.dynamic_address_limited = true;
     }
-    if (selected == BCFamilyGenerationRoute::Single && !decision.single_addressable) {
+    if (selected == BCFamilyGenerationRoute::Single && !decision.single_admission_addressable) {
         selected = BCFamilyGenerationRoute::Family;
         decision.dynamic_address_limited = true;
     }

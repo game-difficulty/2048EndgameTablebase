@@ -21,6 +21,7 @@
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
@@ -29,6 +30,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -355,6 +357,131 @@ namespace detail {
         options.archive_output_dirs);
 }
 
+[[nodiscard]] inline uint64_t bc_family_runner_cell_compressed_cache_bytes(
+    const BCFamilySolveRunOptions &options
+) {
+    constexpr uint64_t kMinCache = 256ULL * 1024ULL * 1024ULL;
+    constexpr uint64_t kPreferredMinCache = 512ULL * 1024ULL * 1024ULL;
+    constexpr uint64_t kMaxCache = 4ULL * 1024ULL * 1024ULL * 1024ULL;
+    uint64_t available = bc_family_runner_available_memory_bytes();
+    if (options.available_memory_override_bytes != 0U) {
+        available = available == 0U
+            ? options.available_memory_override_bytes
+            : std::min(available, options.available_memory_override_bytes);
+    }
+    if (available == 0U) {
+        return kPreferredMinCache;
+    }
+    const uint64_t proportional = available / 32U;
+    const uint64_t preferred = std::clamp(
+        proportional,
+        kPreferredMinCache,
+        kMaxCache);
+    return std::min(preferred, std::max(kMinCache, available / 16U));
+}
+
+[[nodiscard]] inline uint32_t bc_family_runner_cell_decode_threads(
+    const BCFamilySolveRunOptions &options
+) {
+    const uint32_t configured = options.num_threads > 0
+        ? static_cast<uint32_t>(options.num_threads)
+        : std::max<uint32_t>(1U, std::thread::hardware_concurrency());
+    return std::clamp<uint32_t>(configured, 1U, 4U);
+}
+
+struct BCFamilySolveDiskEstimate {
+    uint64_t recent_layer_bytes = 0U;
+    uint64_t required_bytes = 0U;
+    uint64_t safety_margin_bytes = 0U;
+};
+
+[[nodiscard]] inline BCFamilySolveDiskEstimate bc_family_runner_estimate_solve_disk(
+    BCSolveRoute route,
+    uint64_t current_position_bytes,
+    uint64_t current_success_upper_bytes,
+    uint64_t future2_layer_bytes,
+    uint64_t future4_layer_bytes
+) {
+    const uint64_t current_layer_bytes = StoragePaths::saturating_add(
+        current_position_bytes,
+        current_success_upper_bytes);
+    const uint64_t recent_layer_bytes = std::max(
+        current_layer_bytes,
+        std::max(future2_layer_bytes, future4_layer_bytes));
+    uint64_t workspace_layers = 1U;
+    switch (route) {
+        case BCSolveRoute::Resident:
+            workspace_layers = 1U;
+            break;
+        case BCSolveRoute::Single:
+            // One output layer plus one temporary partial layer.
+            workspace_layers = 2U;
+            break;
+        case BCSolveRoute::Family:
+            // One output layer plus the three Family temporary streams.
+            workspace_layers = 4U;
+            break;
+        case BCSolveRoute::Auto:
+            throw std::logic_error("BC solve disk estimate received unresolved auto route");
+    }
+    BCFamilySolveDiskEstimate estimate;
+    estimate.recent_layer_bytes = recent_layer_bytes;
+    estimate.required_bytes = StoragePaths::scale_ratio(
+        recent_layer_bytes,
+        workspace_layers,
+        1U);
+    constexpr uint64_t kMinimumHotReserve = 16ULL * 1024ULL * 1024ULL * 1024ULL;
+    // Keep another recent-sized layer free so the selected volume remains usable
+    // when the next solve/checkpoint/archive operation begins.
+    estimate.safety_margin_bytes = std::max(kMinimumHotReserve, recent_layer_bytes);
+    return estimate;
+}
+
+[[nodiscard]] inline StoragePaths::ReservedWritePath
+bc_family_runner_reserve_solve_output(
+    const BCFamilySolveRunOptions &options,
+    uint32_t ordinal,
+    const BCFamilySolveDiskEstimate &estimate
+) {
+    std::vector<std::string> reasons;
+    for (const std::filesystem::path &dir : bc_family_runner_solved_dirs(options)) {
+        std::error_code create_ec;
+        std::filesystem::create_directories(dir, create_ec);
+        if (create_ec) {
+            reasons.push_back(
+                "create directory failed for " + NativePath::to_utf8_string(dir) +
+                ": " + create_ec.message());
+            continue;
+        }
+        const std::filesystem::path candidate =
+            bc_family_runner_position_path(dir, options.prefix, ordinal);
+        const std::string candidate_utf8 = NativePath::to_utf8_string(candidate);
+        std::string reason;
+        if (StoragePaths::try_reserve_for_path(
+                candidate_utf8,
+                estimate.required_bytes,
+                estimate.safety_margin_bytes,
+                &reason)) {
+            return StoragePaths::ReservedWritePath(
+                candidate_utf8,
+                estimate.required_bytes,
+                true);
+        }
+        reasons.push_back(std::move(reason));
+    }
+    std::string message =
+        "BC solve has no work path with enough free space (recent_layer=" +
+        std::to_string(estimate.recent_layer_bytes) +
+        ", required=" + std::to_string(estimate.required_bytes) +
+        ", margin=" + std::to_string(estimate.safety_margin_bytes) + ")";
+    for (const std::string &reason : reasons) {
+        if (!reason.empty()) {
+            message += "\n" + reason;
+        }
+    }
+    throw std::runtime_error(message);
+}
+
 [[nodiscard]] inline std::map<uint32_t, BCFamilySolveRunLayerFile>
 bc_family_runner_discover_layers_impl(
     const BCFamilySolveRunOptions &options,
@@ -547,7 +674,14 @@ bc_family_runner_discover_archive_compressed_layers(const BCFamilySolveRunOption
     }
     if (bc_family_runner_is_cell_compressed_position_path(path)) {
         BCPositionStreamingReader reader(
-            std::make_unique<BCCellCompressedPositionReadableFile>(path),
+            std::make_unique<BCCellCompressedPositionReadableFile>(
+                path,
+                false,
+                options.direct_io,
+                options.direct_queue_depth,
+                static_cast<uint64_t>(options.direct_io_chunk_mib) * 1024ULL * 1024ULL,
+                bc_family_runner_cell_compressed_cache_bytes(options),
+                bc_family_runner_cell_decode_threads(options)),
             lut);
         reader.set_validate_loaded_cells(false);
         return reader;
@@ -580,7 +714,14 @@ bc_family_runner_discover_archive_compressed_layers(const BCFamilySolveRunOption
     }
     if (bc_family_runner_is_cell_compressed_position_path(path)) {
         return BCPositionFileReader(
-            std::make_unique<BCCellCompressedPositionReadableFile>(path),
+            std::make_unique<BCCellCompressedPositionReadableFile>(
+                path,
+                false,
+                options.direct_io,
+                options.direct_queue_depth,
+                static_cast<uint64_t>(options.direct_io_chunk_mib) * 1024ULL * 1024ULL,
+                bc_family_runner_cell_compressed_cache_bytes(options),
+                bc_family_runner_cell_decode_threads(options)),
             lut);
     }
     return options.direct_io
@@ -669,11 +810,42 @@ template <typename StorageT>
     const BCLut &lut,
     bool remove_invalid = false
 ) {
-    (void)lut;
-    (void)remove_invalid;
-    // Resume/checkpoint decisions intentionally only inspect filenames. File
-    // contents are opened later only when the layer is actually used.
-    return bc_family_runner_find_exact_layer_paths(options, ordinal).has_value();
+    for (const std::filesystem::path &dir : bc_family_runner_solved_dirs(options)) {
+        const std::filesystem::path position_path =
+            bc_family_runner_position_path(dir, options.prefix, ordinal);
+        const std::filesystem::path success_path =
+            bc_family_runner_success_path(dir, options.prefix, ordinal);
+        std::error_code ec;
+        const bool has_position = std::filesystem::exists(position_path, ec) && !ec;
+        ec.clear();
+        const bool has_success = std::filesystem::exists(success_path, ec) && !ec;
+        if (!has_position && !has_success) {
+            continue;
+        }
+        try {
+            if (!has_position || !has_success) {
+                throw std::runtime_error("BC exact layer file pair is incomplete");
+            }
+            // Resume validation is deliberately buffered: it reads only the
+            // headers and metadata tables and never enters Direct I/O.
+            BCPositionStreamingReader position =
+                BCPositionStreamingReader::open_buffered(position_path, lut);
+            position.set_validate_loaded_cells(false);
+            BCSuccessStreamingReader success =
+                BCSuccessStreamingReader::open_buffered(success_path, position, 1U);
+            if (success.dtype_mode() != options.success_dtype ||
+                !bc_success_dtype_matches_type<StorageT>(success.dtype_mode())) {
+                throw std::runtime_error("BC exact layer success dtype mismatch");
+            }
+            return true;
+        } catch (const std::exception &) {
+            if (remove_invalid) {
+                bc_family_runner_remove_file_quiet(position_path);
+                bc_family_runner_remove_file_quiet(success_path);
+            }
+        }
+    }
+    return false;
 }
 
 [[nodiscard]] inline std::unique_ptr<BCWritableFile> bc_family_runner_make_writer(
@@ -983,6 +1155,33 @@ inline void bc_family_runner_cleanup_archive_tmp_layers(
                 bc_family_runner_remove_file_quiet(position_target);
                 bc_family_runner_remove_file_quiet(success_target);
             }
+        }
+    }
+}
+
+inline void bc_family_runner_cleanup_solve_tmp_layers(
+    const BCFamilySolveRunOptions &options
+) {
+    const std::regex pattern(
+        "^" + options.prefix + "[0-9]+_(single|family)_tmp$");
+    for (const std::filesystem::path &dir : bc_family_runner_solved_dirs(options)) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(dir, ec) || ec) {
+            continue;
+        }
+        std::vector<std::filesystem::path> stale_dirs;
+        for (const std::filesystem::directory_entry &entry :
+             std::filesystem::directory_iterator(dir)) {
+            if (!entry.is_directory()) {
+                continue;
+            }
+            if (std::regex_match(entry.path().filename().string(), pattern)) {
+                stale_dirs.push_back(entry.path());
+            }
+        }
+        for (const std::filesystem::path &stale_dir : stale_dirs) {
+            std::filesystem::remove_all(stale_dir, ec);
+            ec.clear();
         }
     }
 }
@@ -2425,6 +2624,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
 
     BCFamilySolveRunResult run_result;
     bc_family_runner_cleanup_archive_tmp_layers(options);
+    bc_family_runner_cleanup_solve_tmp_layers(options);
     const std::vector<uint8_t> legal_tiles =
         bc_family_runner_legal_tiles(options.target_rank);
     const BCLut lut(legal_tiles);
@@ -2725,14 +2925,57 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
             bc_family_runner_decide_solve_route(options, descriptor_row_count, future2, future4);
         bc_family_runner_apply_route_metric(metric, route_decision);
 
+        const uint64_t current_success_payload_bytes = StoragePaths::scale_ratio(
+            descriptor_row_count,
+            bc_success_dtype_value_size(options.success_dtype),
+            1U);
+        const uint64_t current_success_upper_bytes = StoragePaths::saturating_add(
+            StoragePaths::saturating_add(
+                kBCSuccessHeaderBytes,
+                bc_success_cell_value_offsets_bytes(current.cell_count())),
+            current_success_payload_bytes);
+        const BCFamilySolveDiskEstimate disk_estimate =
+            bc_family_runner_estimate_solve_disk(
+                route_decision.route,
+                current.file_size(),
+                current_success_upper_bytes,
+                StoragePaths::saturating_add(
+                    future2.position.file_size(),
+                    future2.success.file_size()),
+                StoragePaths::saturating_add(
+                    future4.position.file_size(),
+                    future4.success.file_size()));
+        StoragePaths::ReservedWritePath work_reservation =
+            bc_family_runner_reserve_solve_output(options, ordinal, disk_estimate);
+        const std::filesystem::path work_dir =
+            NativePath::from_utf8(work_reservation.path()).parent_path();
+        BCFamilySolveRunOptions layer_options = options;
+        layer_options.solved_output_dir = work_dir;
+        if (!bc_family_runner_same_path(work_dir, options.solved_output_dir)) {
+            std::cerr
+                << "BC_SOLVE_STORAGE_FALLBACK"
+                << " ordinal=" << ordinal
+                << " route=" << bc_solve_route_name(route_decision.route)
+                << " recent_layer=" << disk_estimate.recent_layer_bytes
+                << " required=" << disk_estimate.required_bytes
+                << " margin=" << disk_estimate.safety_margin_bytes
+                << " selected=" << NativePath::to_utf8_string(work_dir)
+                << '\n';
+        }
+
         const std::filesystem::path output_position =
-            bc_family_runner_position_path(options.solved_output_dir, options.prefix, ordinal);
+            bc_family_runner_position_path(work_dir, options.prefix, ordinal);
         const std::filesystem::path output_success =
-            bc_family_runner_success_path(options.solved_output_dir, options.prefix, ordinal);
+            bc_family_runner_success_path(work_dir, options.prefix, ordinal);
+        const std::filesystem::path single_temp_dir =
+            work_dir / (options.prefix + std::to_string(ordinal) + "_single_tmp");
+        const std::filesystem::path family_temp_dir =
+            work_dir / (options.prefix + std::to_string(ordinal) + "_family_tmp");
 
         std::unique_ptr<BCResidentSolvedLayer<StorageT>> produced_resident_cache;
         std::unique_ptr<BCSingleChunkFrontierLayer<StorageT>> produced_single_future4_cache;
 
+        try {
         switch (route_decision.route) {
         case BCSolveRoute::Resident: {
             future2.single_frontier_cache.reset();
@@ -2789,7 +3032,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
 
             BCFamilySolveRunLayerMetric write_metric =
                 bc_family_runner_write_resident_layer<StorageT>(
-                    options,
+                    layer_options,
                     ordinal,
                     resident_result.layer,
                     "solve");
@@ -2828,9 +3071,9 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
 
             t0 = bc_family_solve_runner_now_seconds();
             std::unique_ptr<BCWritableFile> position_writer =
-                bc_family_runner_make_writer(options, output_position);
+                bc_family_runner_make_writer(layer_options, output_position);
             std::unique_ptr<BCWritableFile> success_writer =
-                bc_family_runner_make_writer(options, output_success);
+                bc_family_runner_make_writer(layer_options, output_success);
             metric.writer_open_seconds = bc_family_solve_runner_now_seconds() - t0;
 
             const double solve_t0 = bc_family_solve_runner_now_seconds();
@@ -2845,8 +3088,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                         options),
                     *position_writer,
                     *success_writer,
-                    options.solved_output_dir /
-                        (options.prefix + std::to_string(ordinal) + "_single_tmp"),
+                    single_temp_dir,
                     solve_options,
                     &single_workspace);
             metric.solve_call_seconds = bc_family_solve_runner_now_seconds() - solve_t0;
@@ -2863,6 +3105,10 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                 std::filesystem::resize_file(output_position, solve_result.position_bytes);
                 std::filesystem::resize_file(output_success, solve_result.success_bytes);
                 metric.post_resize_seconds = bc_family_solve_runner_now_seconds() - t0;
+            }
+            {
+                std::error_code cleanup_ec;
+                std::filesystem::remove_all(single_temp_dir, cleanup_ec);
             }
             const BCSingleChunkSolveStats &single_stats = solve_result.stats;
             metric.current_rows = single_stats.current_rows != 0U
@@ -2938,14 +3184,19 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                 options.final_pending_value_memory_cap_bytes;
             solve_options.temp_direct_io = options.direct_io;
             solve_options.force_temp_buffered_io = false;
-            solve_options.keep_temp_files = options.compress_temp_files;
-            solve_options.compress_temp_files = options.compress_temp_files;
+            // Family temp streams are not a resumable checkpoint. Retaining
+            // raw files (and their archives) only consumes the next layer's
+            // workspace, so successful layers always clean them up.
+            solve_options.keep_temp_files = false;
+            solve_options.compress_temp_files = false;
             solve_options.temp_direct_queue_depth = options.direct_queue_depth;
+            solve_options.temp_hot_cache_max_bytes =
+                bc_family_runner_cell_compressed_cache_bytes(options) / 2U;
             t0 = bc_family_solve_runner_now_seconds();
             std::unique_ptr<BCWritableFile> position_writer =
-                bc_family_runner_make_writer(options, output_position);
+                bc_family_runner_make_writer(layer_options, output_position);
             std::unique_ptr<BCWritableFile> success_writer =
-                bc_family_runner_make_writer(options, output_success);
+                bc_family_runner_make_writer(layer_options, output_success);
             metric.writer_open_seconds = bc_family_solve_runner_now_seconds() - t0;
 
             const double solve_t0 = bc_family_solve_runner_now_seconds();
@@ -2961,8 +3212,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                     future4.partition,
                     *position_writer,
                     *success_writer,
-                    options.solved_output_dir /
-                        (options.prefix + std::to_string(ordinal) + "_family_tmp"),
+                    family_temp_dir,
                     solve_options,
                     &workspace);
             metric.solve_call_seconds = bc_family_solve_runner_now_seconds() - solve_t0;
@@ -2999,6 +3249,17 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
         }
         case BCSolveRoute::Auto:
             throw std::logic_error("BC family runner received unresolved auto solve route");
+        }
+        } catch (...) {
+            // Exact outputs are a pair. A failed preallocation/write must not
+            // leave filenames that a later resume could mistake for a layer.
+            bc_family_runner_remove_file_quiet(output_position);
+            bc_family_runner_remove_file_quiet(output_success);
+            std::error_code cleanup_ec;
+            std::filesystem::remove_all(single_temp_dir, cleanup_ec);
+            cleanup_ec.clear();
+            std::filesystem::remove_all(family_temp_dir, cleanup_ec);
+            throw;
         }
         current = BCPositionStreamingReader();
 

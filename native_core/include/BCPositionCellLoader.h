@@ -115,11 +115,17 @@ public:
             std::vector<uint8_t> header_bytes(kBCPositionHeaderBytes);
             direct->read_at(0U, header_bytes.data(), header_bytes.size());
             const BCPositionHeader header = bc_read_header(header_bytes);
-            const uint64_t logical_size = bc_position_logical_size_from_header(header);
-            const uint64_t required_physical = bc_direct_align_up(logical_size, options.alignment);
-            if (physical_size >= required_physical) {
-                direct->set_logical_size(logical_size);
-                return BCPositionStreamingReader(std::move(direct), lut);
+            if (header.magic == kBCPositionMagic &&
+                header.format_version == kBCPositionFormatVersion &&
+                header.header_bytes == kBCPositionHeaderBytes) {
+                const uint64_t logical_size = bc_position_logical_size_from_header(header);
+                const uint64_t required_physical =
+                    bc_direct_align_up(logical_size, options.alignment);
+                if (logical_size >= kBCPositionHeaderBytes &&
+                    physical_size >= required_physical) {
+                    direct->set_logical_size(logical_size);
+                    return BCPositionStreamingReader(std::move(direct), lut);
+                }
             }
         }
         return open_buffered(path, lut);

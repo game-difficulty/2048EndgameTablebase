@@ -353,7 +353,15 @@ BCPositionFileReader BCPositionFileReader::open_direct_auto(
     std::vector<uint8_t> header_bytes(kBCPositionHeaderBytes);
     probe.read_at_cached_size(0U, header_bytes.data(), header_bytes.size());
     const BCPositionHeader header = bc_read_header(header_bytes);
+    if (header.magic != kBCPositionMagic ||
+        header.format_version != kBCPositionFormatVersion ||
+        header.header_bytes != kBCPositionHeaderBytes) {
+        return BCPositionFileReader(std::make_unique<BCBufferedFileReader>(path), lut);
+    }
     const uint64_t logical_size = bc_position_logical_size_from_header(header);
+    if (logical_size < kBCPositionHeaderBytes) {
+        return BCPositionFileReader(std::make_unique<BCBufferedFileReader>(path), lut);
+    }
     BCDirectFileIOOptions options;
     options.queue_depth = queue_depth;
     options.max_transfer_bytes = max_transfer_bytes;
