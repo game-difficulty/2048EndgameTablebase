@@ -20,7 +20,7 @@
           </button>
           <div
             v-if="patternMenuOpen"
-            class="absolute right-0 top-full z-[150] mt-2 flex min-w-[360px] overflow-hidden rounded-xl border border-border-main bg-bg-card shadow-xl"
+            class="pattern-menu-panel absolute right-0 top-full z-[150] mt-2 flex min-w-[360px] overflow-hidden rounded-xl border border-border-main bg-bg-card shadow-xl"
           >
             <div class="max-h-[320px] w-[132px] overflow-y-auto border-r border-border-main/60 bg-bg-main/60 p-1.5">
               <button
@@ -412,6 +412,11 @@ const handleTargetChange = (event) => {
 
 .trainer-page--right .top-menu-trigger {
   width: 100%;
+}
+
+.trainer-page--right .pattern-menu-panel {
+  right: auto;
+  left: 0;
 }
 
 .trainer-page--right .trainer-layout {
