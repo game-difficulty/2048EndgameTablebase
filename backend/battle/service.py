@@ -23,6 +23,7 @@ from .core.lifecycle import (
     set_broadcast_callback,
     set_ready,
     set_role,
+    update_room_settings,
 )
 from .core.registry import get_battle_mode, list_battle_modes
 from .modes.goodness import runtime as goodness_runtime
@@ -74,13 +75,20 @@ async def create_room(
 async def start_room(
     room_code: str,
     *,
-    user_id: int,
-    session_id: int | None,
+    actor: Any | None = None,
+    user_id: int | None = None,
+    session_id: int | None = None,
 ) -> dict[str, Any]:
+    identity = coerce_actor(actor, user_id=user_id)
     return await _mode_for_room(room_code).start_room(
         room_code,
-        user_id=user_id,
-        session_id=session_id,
+        actor_key=identity.actor_key,
+        user_id=identity.user_id,
+        session_id=session_id if session_id is not None else (
+            int(getattr(actor, "session_id"))
+            if actor is not None and getattr(actor, "session_id", None) is not None
+            else None
+        ),
     )
 
 
@@ -242,9 +250,15 @@ async def startup() -> None:
     await chat.startup()
     for mode in list_battle_modes().values():
         await mode.startup()
+    from .permanent import startup as startup_permanent_rooms
+
+    await startup_permanent_rooms()
 
 
 async def shutdown() -> None:
+    from .permanent import shutdown as shutdown_permanent_rooms
+
+    await shutdown_permanent_rooms()
     for mode in reversed(tuple(list_battle_modes().values())):
         await mode.shutdown()
     await chat.shutdown()

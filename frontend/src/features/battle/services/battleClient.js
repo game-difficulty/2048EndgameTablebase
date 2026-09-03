@@ -103,6 +103,14 @@ export const battleClient = {
     method: 'POST',
     body: { role, request_id: requestId },
   }),
+  updateSettings: (roomCode, payload) => request(
+    `/api/battle/rooms/${encodeURIComponent(roomCode)}/settings`,
+    { method: 'PATCH', body: payload },
+  ),
+  renewHost: (roomCode, requestId) => request(
+    `/api/battle/rooms/${encodeURIComponent(roomCode)}/host/renew`,
+    { method: 'POST', body: { request_id: requestId } },
+  ),
   route: async (roomCode, roundId, { signal } = {}) => {
     const response = await fetch(getBackendUrl(
       `/api/battle/rooms/${encodeURIComponent(roomCode)}/rounds/${encodeURIComponent(roundId)}/artifact`,

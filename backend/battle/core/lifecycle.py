@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import secrets
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
@@ -9,6 +11,7 @@ from .. import repository
 from ..actors import BattleActor, coerce_actor, user_actor
 from .contracts import BattleModeError
 from .errors import BattleServiceError
+from .hosting import is_permanent_room, is_room_host
 from .registry import get_battle_mode
 
 
@@ -106,8 +109,7 @@ def sanitize_snapshot(
         "user_id": identity.user_id,
         "guest_id": identity.guest_id,
         "role": member["role"],
-        "is_host": identity.is_user
-        and int(payload["host_user_id"]) == int(identity.user_id),
+        "is_host": is_room_host(payload, identity.actor_key),
     }
     round_payload = dict(payload.get("round") or {})
     for field in (
@@ -176,6 +178,10 @@ def join_room(
             preferred_role=role,
             ip_address=ip_address,
         )
+        from ..permanent.service import claim_host_if_vacant, note_activity
+
+        claim_host_if_vacant(room_code, identity)
+        note_activity(room_code, identity)
         return room_snapshot(room_code, actor=identity)
     except repository.BattleRateLimitError as exc:
         raise BattleServiceError(
@@ -194,7 +200,12 @@ def leave_room(
     identity = coerce_actor(actor, user_id=user_id)
     room = repository.get_room(room_code)
     assert_member(room, identity)
-    if identity.is_user and int(room["host_user_id"]) == int(identity.user_id):
+    if is_permanent_room(room):
+        from ..permanent.service import leave_permanent_room
+
+        leave_permanent_room(room_code, identity)
+        return
+    if is_room_host(room, identity.actor_key):
         try:
             mode = get_battle_mode(str(room.get("mode_key") or "goodness"))
         except BattleModeError as exc:
@@ -229,6 +240,9 @@ def set_ready(
     identity = coerce_actor(actor, user_id=user_id)
     try:
         repository.set_member_ready(room_code, actor=identity, ready=ready)
+        from ..permanent.service import note_activity
+
+        note_activity(room_code, identity)
     except repository.BattleRepositoryError as exc:
         raise BattleServiceError(str(exc).upper(), str(exc).replace("_", " "), 409) from exc
     return room_snapshot(room_code, actor=identity)
@@ -256,7 +270,7 @@ def set_role(
         ).fetchone()
         if member is None:
             raise BattleServiceError("MEMBER_NOT_FOUND", "Room member not found.", 404)
-        if role == "spectator" and identity.is_user and int(room["host_user_id"]) == int(identity.user_id):
+        if role == "spectator" and str(room["host_actor_key"] or f"u:{room['host_user_id']}") == identity.actor_key:
             raise BattleServiceError(
                 "HOST_CANNOT_SPECTATE",
                 "The room host must remain in a player seat.",
@@ -280,23 +294,134 @@ def set_role(
             "UPDATE battle_rooms SET revision = revision + 1, updated_at = ? WHERE room_id = ?",
             (now, room["room_id"]),
         )
+    from ..permanent.service import claim_host_if_vacant, note_activity
+
+    claim_host_if_vacant(room_code, identity)
+    note_activity(room_code, identity)
     return room_snapshot(room_code, actor=identity)
 
 
 def kick(
     room_code: str,
     *,
-    host_user_id: int,
+    actor: Any,
     target_actor_key: str | None = None,
     target_user_id: int | None = None,
 ) -> dict[str, Any]:
+    identity = coerce_actor(actor)
     try:
         repository.kick_member(
             room_code,
-            host_user_id=host_user_id,
+            host_actor_key=identity.actor_key,
             target_actor_key=target_actor_key,
             target_user_id=target_user_id,
         )
     except repository.BattleRepositoryError as exc:
         raise BattleServiceError(str(exc).upper(), str(exc).replace("_", " "), 409) from exc
-    return room_snapshot(room_code, user_id=host_user_id)
+    from ..permanent.service import note_activity
+
+    note_activity(room_code, identity)
+    return room_snapshot(room_code, actor=identity)
+
+
+async def update_room_settings(
+    room_code: str,
+    *,
+    actor: Any,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    identity = coerce_actor(actor)
+    room = repository.get_room(room_code)
+    if not is_room_host(room, identity.actor_key):
+        raise BattleServiceError("HOST_REQUIRED", "Only the current host can edit settings.", 403)
+    if str(room.get("status") or "") not in {"preparing", "waiting"}:
+        raise BattleServiceError("ROOM_ALREADY_STARTED", "Settings cannot change during a round.", 409)
+    try:
+        expected_revision = int(payload.get("expected_revision"))
+    except (TypeError, ValueError) as exc:
+        raise BattleServiceError("REVISION_REQUIRED", "Room revision is required.", 409) from exc
+    mode = get_battle_mode(str(room.get("mode_key") or "goodness"))
+    try:
+        normalized = await mode.normalize_lobby_settings_patch(room, payload)
+    except ValueError as exc:
+        raise BattleServiceError(str(exc).upper(), str(exc).replace("_", " "), 409) from exc
+
+    now = iso()
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        current = repository._find_room(db, room_code)
+        current_host = str(current["host_actor_key"] or f"u:{current['host_user_id']}")
+        if current_host != identity.actor_key:
+            raise BattleServiceError("HOST_REQUIRED", "Only the current host can edit settings.", 403)
+        if str(current["status"]) not in {"preparing", "waiting"}:
+            raise BattleServiceError("ROOM_ALREADY_STARTED", "Settings cannot change during a round.", 409)
+        if int(current["settings_revision"] or 0) != expected_revision:
+            raise BattleServiceError(
+                "ROOM_REVISION_CONFLICT",
+                "Room settings changed. Try again.",
+                409,
+            )
+        try:
+            settings = json.loads(current["settings_json"] or "{}")
+        except (TypeError, ValueError):
+            settings = {}
+        settings.update(normalized)
+        initial_board = normalized.get("initial_board", current["initial_board"])
+        max_steps = (
+            int(normalized["score_step_limit"])
+            if "score_step_limit" in normalized
+            else current["max_steps"]
+        )
+        db.execute(
+            """
+            UPDATE battle_rooms
+            SET settings_json = ?, settings_revision = settings_revision + 1,
+                initial_board = ?, max_steps = ?, step_timeout_seconds = ?,
+                revision = revision + 1, updated_at = ?
+            WHERE room_id = ?
+            """,
+            (
+                json.dumps(settings, separators=(",", ":"), sort_keys=True),
+                initial_board,
+                max_steps,
+                int(normalized["step_timeout_seconds"]),
+                now,
+                current["room_id"],
+            ),
+        )
+        if str(current["mode_key"]) == "free_goodness":
+            latest = db.execute(
+                "SELECT * FROM battle_rounds WHERE room_id = ? ORDER BY round_number DESC LIMIT 1",
+                (current["room_id"],),
+            ).fetchone()
+            if latest is not None and str(latest["status"]) == "ready":
+                try:
+                    mode_state = json.loads(latest["mode_state_json"] or "{}")
+                except (TypeError, ValueError):
+                    mode_state = {}
+                mode_state.update(
+                    {
+                        "initial_board": str(initial_board),
+                        "score_step_limit": int(normalized["score_step_limit"]),
+                        "ranking_min_steps": int(normalized["ranking_min_steps"]),
+                        "lookup_hit_steps": 0,
+                        "lookup_miss_steps": 0,
+                    }
+                )
+                db.execute(
+                    """
+                    UPDATE battle_rounds
+                    SET mode_state_json = ?, route_seed = ?, updated_at = ?
+                    WHERE round_id = ?
+                    """,
+                    (
+                        json.dumps(mode_state, separators=(",", ":"), sort_keys=True),
+                        secrets.token_hex(32),
+                        now,
+                        latest["round_id"],
+                    ),
+                )
+    from ..permanent.service import note_activity
+
+    note_activity(room_code, identity)
+    return room_snapshot(room_code, actor=identity)

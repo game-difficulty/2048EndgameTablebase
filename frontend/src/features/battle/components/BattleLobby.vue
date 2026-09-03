@@ -5,13 +5,14 @@
         <span class="ui-caption font-black uppercase text-text-secondary">{{ $t('battle.lobby.kicker') }}</span>
         <div class="battle-room-code-line">
           <h2>{{ room.room_code }}</h2>
+          <span v-if="permanentRoom" class="battle-lobby-permanent">{{ $t('battle.room.permanent') }}</span>
           <button type="button" class="battle-copy-btn" @click="copyInvite">{{ copied ? $t('common.copied') : $t('battle.actions.copyInvite') }}</button>
         </div>
       </div>
       <div class="battle-lobby-summary">
         <strong>{{ room.full_pattern }}</strong>
         <span>{{ $t(`battle.status.${room.status}`) }}</span>
-        <time v-if="room.expires_at">{{ remainingLabel }}</time>
+        <time v-if="room.expires_at && !permanentRoom">{{ remainingLabel }}</time>
       </div>
     </header>
 
@@ -36,7 +37,7 @@
               </div>
               <div class="battle-seat-identity">
                 <strong>{{ seat.member.display_name }} <small v-if="isBattleGuest(seat.member)" class="battle-guest-marker">{{ $t('battle.guest.marker') }}</small></strong>
-                <span>{{ seat.member.user_id === room.host_user_id ? $t('battle.roles.host') : (seat.member.ready ? $t('battle.status.ready') : $t('battle.status.not_ready')) }}</span>
+                <span>{{ memberIsHost(seat.member) ? $t('battle.roles.host') : (seat.member.ready ? $t('battle.status.ready') : $t('battle.status.not_ready')) }}</span>
               </div>
               <button v-if="isHost && !sameBattleActor(seat.member, selfMember) && ['preparing', 'waiting'].includes(room.status)" type="button" class="battle-kick-btn" :title="$t('battle.actions.kick')" @click="$emit('kick', seat.member)">×</button>
             </template>
@@ -52,20 +53,68 @@
             {{ selfMember.ready ? $t('battle.actions.cancelReady') : $t('battle.actions.ready') }}
           </button>
           <button v-if="isHost" type="button" class="battle-start-btn" :disabled="!canStart" @click="$emit('start')">{{ $t('battle.actions.start') }}</button>
-          <button type="button" class="battle-leave-btn" @click="$emit('leave')">{{ isHost ? $t('battle.actions.closeRoom') : $t('battle.actions.leave') }}</button>
+          <button type="button" class="battle-leave-btn" @click="$emit('leave')">{{ isHost && !permanentRoom ? $t('battle.actions.closeRoom') : $t('battle.actions.leave') }}</button>
         </div>
         <p class="battle-start-rule">{{ $t(room.allow_spectators ? 'battle.lobby.startRuleSpectators' : 'battle.lobby.startRuleNoSpectators') }}</p>
       </section>
 
       <aside class="battle-room-sidebar">
         <section class="battle-settings-summary">
-          <div class="battle-panel-title"><div><h3>{{ $t('battle.lobby.settings') }}</h3><p>{{ $t('battle.lobby.settingsLocked') }}</p></div></div>
-          <slot name="settings-summary" :room="room">
+          <div class="battle-panel-title">
+            <div><h3>{{ $t('battle.lobby.settings') }}</h3><p>{{ settingsHint }}</p></div>
+            <button v-if="canEditSettings && !editingSettings" type="button" class="battle-settings-edit" @click="beginSettingsEdit">{{ $t('battle.actions.edit') }}</button>
+          </div>
+
+          <div v-if="permanentRoom" :class="['battle-host-lease', { warning: hostLeaseWarning }]">
+            <div>
+              <span>{{ $t('battle.lobby.currentHost') }}</span>
+              <strong>{{ room.host?.display_name || $t('battle.room.waitingHost') }}</strong>
+            </div>
+            <div v-if="room.host && room.host_idle_expires_at">
+              <span>{{ $t('battle.lobby.hostIdleTime') }}</span>
+              <strong class="tabular-nums">{{ hostIdleLabel }}</strong>
+            </div>
+            <p v-if="hostLeaseWarning" class="battle-host-warning">{{ $t('battle.lobby.hostIdleWarning') }}</p>
+            <button
+              v-if="isHost && hostLeaseWarning"
+              type="button"
+              :disabled="hostRenewPending"
+              @click="$emit('renew-host')"
+            >{{ $t(hostRenewPending ? 'battle.actions.processing' : 'battle.actions.continueHosting') }}</button>
+          </div>
+
+          <form v-if="editingSettings" class="battle-settings-form" @submit.prevent="saveSettings">
+            <label class="battle-settings-field">
+              <span>{{ $t('battle.form.stepTimeout') }}</span>
+              <BattleNumberInput v-model="settingsDraft.step_timeout_seconds" :min="5" :max="600" :step="5" />
+            </label>
+            <template v-if="freeGoodnessRoom">
+              <label class="battle-settings-field battle-settings-wide">
+                <span>{{ $t('battle.form.initialBoard') }}</span>
+                <input v-model.trim="settingsDraft.initial_board" maxlength="16" class="battle-settings-input font-mono" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="battle-settings-field">
+                <span>{{ $t('battle.form.scoredSteps') }}</span>
+                <BattleNumberInput v-model="settingsDraft.score_step_limit" :min="1" :max="targetStepCap" :step="1" />
+              </label>
+              <label class="battle-settings-field">
+                <span>{{ $t('battle.form.rankingMinSteps') }}</span>
+                <BattleNumberInput v-model="settingsDraft.ranking_min_steps" :min="1" :max="Math.max(1, Number(settingsDraft.score_step_limit) || 1)" :step="1" />
+              </label>
+            </template>
+            <p v-if="settingsValidationError" class="battle-settings-error">{{ $t(`battle.settingsValidation.${settingsValidationError}`) }}</p>
+            <div class="battle-settings-actions">
+              <button type="button" :disabled="settingsPending" @click="cancelSettingsEdit">{{ $t('battle.actions.cancel') }}</button>
+              <button type="submit" class="primary" :disabled="settingsPending">{{ $t(settingsPending ? 'battle.actions.processing' : 'battle.actions.save') }}</button>
+            </div>
+          </form>
+
+          <slot v-else name="settings-summary" :room="room">
             <dl>
               <div><dt>{{ $t('battle.form.pattern') }}</dt><dd>{{ room.full_pattern }}</dd></div>
               <div><dt>{{ $t('battle.form.initialBoard') }}</dt><dd class="font-mono">{{ displayedInitialBoard }}</dd></div>
-              <div><dt>{{ $t(stepsLabelKey) }}</dt><dd>{{ room.max_steps || $t('battle.form.unlimited') }}</dd></div>
-              <div v-if="room.mode_settings?.ranking_min_steps"><dt>{{ $t('battle.form.rankingMinSteps') }}</dt><dd>{{ room.mode_settings.ranking_min_steps }}</dd></div>
+              <div><dt>{{ $t(stepsLabelKey) }}</dt><dd>{{ displayedStepLimit }}</dd></div>
+              <div v-if="freeGoodnessRoom"><dt>{{ $t('battle.form.rankingMinSteps') }}</dt><dd>{{ displayedRankingMinSteps }}</dd></div>
               <div><dt>{{ $t('battle.form.stepTimeout') }}</dt><dd>{{ room.step_timeout_seconds }}s</dd></div>
               <div><dt>{{ $t('battle.form.publicRoom') }}</dt><dd>{{ room.visibility === 'public' ? $t('common.yes') : $t('common.no') }}</dd></div>
               <div><dt>{{ $t('battle.form.allowSpectators') }}</dt><dd>{{ room.allow_spectators ? $t('common.yes') : $t('common.no') }}</dd></div>
@@ -87,7 +136,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import {
@@ -95,6 +144,13 @@ import {
   isBattleGuest,
   sameBattleActor,
 } from '../core/battleActor.js';
+import {
+  battleRoomSettingsDraft,
+  buildBattleRoomSettingsPayload,
+  isPermanentBattleRoom,
+  validateBattleRoomSettings,
+} from '../core/battleRoomSettings.js';
+import BattleNumberInput from './BattleNumberInput.vue';
 
 const props = defineProps({
   room: { type: Object, required: true },
@@ -102,21 +158,30 @@ const props = defineProps({
   currentUserId: { type: Number, default: 0 },
   currentActorKey: { type: String, default: '' },
   now: { type: Number, default: () => Date.now() },
+  settingsPending: { type: Boolean, default: false },
+  hostRenewPending: { type: Boolean, default: false },
 });
 
-defineEmits(['ready', 'start', 'kick', 'leave', 'role']);
+const emit = defineEmits(['ready', 'start', 'kick', 'leave', 'role', 'save-settings', 'renew-host']);
 const { t } = useI18n();
 const copied = ref(false);
 const spectatorList = ref(null);
+const editingSettings = ref(false);
+const settingsValidationError = ref('');
+const settingsRevision = ref(0);
+const settingsSubmitted = ref(false);
+const settingsDraft = reactive(battleRoomSettingsDraft(props.room));
 const players = computed(() => props.members.filter((member) => member.role === 'player' && member.status === 'active'));
 const spectators = computed(() => props.members.filter((member) => member.role === 'spectator' && member.status === 'active'));
 const selfMember = computed(() => props.members.find((member) => (
   (props.currentActorKey && battleActorRenderKey(member) === props.currentActorKey)
   || (!props.currentActorKey && Number(member.user_id) === Number(props.currentUserId))
 )) || null);
-const isHost = computed(() => Boolean(
-  props.room.viewer?.is_host
-  || Number(props.room.host_user_id) === Number(props.currentUserId),
+const isHost = computed(() => Boolean(props.room.viewer?.is_host));
+const permanentRoom = computed(() => isPermanentBattleRoom(props.room));
+const freeGoodnessRoom = computed(() => String(props.room.mode_key || '') === 'free_goodness');
+const canEditSettings = computed(() => (
+  isHost.value && ['preparing', 'waiting'].includes(String(props.room.status || ''))
 ));
 const canStart = computed(() => (
   isHost.value
@@ -125,14 +190,23 @@ const canStart = computed(() => (
 ));
 const seatRows = computed(() => Array.from({ length: Number(props.room.max_players || 2) }, (_unused, index) => ({ index, member: players.value[index] || null })));
 const displayedInitialBoard = computed(() => (
-  props.room.route?.initial_board
-  || props.room.initial_board
+  battleRoomSettingsDraft(props.room).initial_board
   || t('battle.status.preparingInitialBoard')
 ));
 const stepsLabelKey = computed(() => (
-  props.room.mode_settings?.score_step_limit
+  freeGoodnessRoom.value
     ? 'battle.form.scoredSteps'
     : 'battle.form.maxSteps'
+));
+const displayedStepLimit = computed(() => (
+  freeGoodnessRoom.value
+    ? battleRoomSettingsDraft(props.room).score_step_limit
+    : (props.room.max_steps || t('battle.form.unlimited'))
+));
+const displayedRankingMinSteps = computed(() => battleRoomSettingsDraft(props.room).ranking_min_steps);
+const targetStepCap = computed(() => Math.max(1, Math.floor(Number(props.room.target || 0) / 2)));
+const settingsHint = computed(() => (
+  canEditSettings.value ? t('battle.lobby.settingsEditable') : t('battle.lobby.settingsReadOnly')
 ));
 const chatRolesLabel = computed(() => {
   const roles = Array.isArray(props.room.chat_roles)
@@ -148,7 +222,54 @@ const remainingLabel = computed(() => {
   const seconds = Math.floor((remaining % 60000) / 1000);
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 });
+const hostIdleRemaining = computed(() => Math.max(
+  0,
+  Date.parse(props.room.host_idle_expires_at || '') - Number(props.now),
+));
+const hostLeaseWarning = computed(() => (
+  Boolean(props.room.host_idle_expires_at) && hostIdleRemaining.value <= 30_000
+));
+const hostIdleLabel = computed(() => {
+  const totalSeconds = Math.ceil(hostIdleRemaining.value / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+});
 const initials = (name) => String(name || '?').trim().slice(0, 2).toUpperCase();
+const memberIsHost = (member) => (
+  Boolean(props.room.host_actor_key)
+  && battleActorRenderKey(member) === String(props.room.host_actor_key)
+);
+const syncSettingsDraft = () => Object.assign(settingsDraft, battleRoomSettingsDraft(props.room));
+const beginSettingsEdit = () => {
+  if (!canEditSettings.value) return;
+  syncSettingsDraft();
+  settingsRevision.value = Number(props.room.settings_revision || 0);
+  settingsValidationError.value = '';
+  settingsSubmitted.value = false;
+  editingSettings.value = true;
+};
+const cancelSettingsEdit = () => {
+  editingSettings.value = false;
+  settingsValidationError.value = '';
+  settingsSubmitted.value = false;
+  syncSettingsDraft();
+};
+const saveSettings = () => {
+  if (!canEditSettings.value || props.settingsPending) return;
+  const validation = validateBattleRoomSettings(props.room, settingsDraft);
+  if (!validation.ok) {
+    settingsValidationError.value = validation.code;
+    return;
+  }
+  settingsValidationError.value = '';
+  settingsSubmitted.value = true;
+  emit('save-settings', buildBattleRoomSettingsPayload(
+    props.room,
+    settingsDraft,
+    settingsRevision.value,
+  ));
+};
 const viewSpectators = () => {
   spectatorList.value?.focus?.({ preventScroll: true });
   spectatorList.value?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
@@ -163,6 +284,18 @@ const copyInvite = async () => {
   copied.value = true;
   window.setTimeout(() => { copied.value = false; }, 1600);
 };
+
+watch(() => props.room.settings_revision, (revision) => {
+  if (settingsSubmitted.value && Number(revision) !== settingsRevision.value) {
+    cancelSettingsEdit();
+    return;
+  }
+  if (!editingSettings.value) syncSettingsDraft();
+});
+watch(() => props.room.room_id, () => cancelSettingsEdit());
+watch(canEditSettings, (editable) => {
+  if (!editable && editingSettings.value) cancelSettingsEdit();
+});
 </script>
 
 <style scoped>
@@ -170,6 +303,7 @@ const copyInvite = async () => {
 .battle-lobby-banner { min-height: 92px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 17px 20px; border: 1px solid var(--border-main); border-radius: 8px; background: var(--bg-card); box-shadow: 0 14px 32px rgba(0,0,0,.07); }
 .battle-room-code-line { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
 .battle-room-code-line h2 { margin: 0; color: var(--text-main); font: 900 28px/1 var(--font-mono, monospace); letter-spacing: .08em; }
+.battle-lobby-permanent { padding: 4px 6px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border-main)); border-radius: 4px; color: var(--accent); font-size: 9px; font-weight: 900; line-height: 1; }
 .battle-copy-btn, .battle-kick-btn { border: 1px solid var(--border-main); border-radius: 7px; background: var(--bg-main); color: var(--text-main); font-size: var(--font-ui-xs); font-weight: 900; padding: 6px 10px; }
 .battle-lobby-summary { display: grid; grid-template-columns: auto auto auto; align-items: center; gap: 12px; }
 .battle-lobby-summary strong, .battle-lobby-summary span, .battle-lobby-summary time { border-left: 1px solid var(--border-main); padding-left: 12px; color: var(--text-main); font-size: var(--font-ui-sm); }
@@ -185,6 +319,27 @@ const copyInvite = async () => {
 .battle-panel-title > div:first-child { display: flex; align-items: baseline; gap: 9px; }
 .battle-panel-title h3 { margin: 0; color: var(--text-main); font-size: var(--font-ui-base); font-weight: 900; }
 .battle-panel-title p { margin: 0; color: var(--text-secondary); font-size: var(--font-ui-xs); }
+.battle-settings-edit { min-height: 30px; padding: 5px 10px; border: 1px solid var(--border-main); border-radius: 6px; background: var(--bg-main); color: var(--text-main); font-size: var(--font-ui-xs); font-weight: 900; }
+.battle-settings-edit:hover { border-color: var(--accent); color: var(--accent); }
+.battle-host-lease { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; margin-bottom: 12px; padding: 10px; border: 1px solid var(--border-main); border-radius: 7px; background: color-mix(in srgb, var(--bg-main) 72%, transparent); }
+.battle-host-lease.warning { border-color: color-mix(in srgb, #dc8c32 62%, var(--border-main)); background: color-mix(in srgb, #dc8c32 8%, var(--bg-main)); }
+.battle-host-lease > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.battle-host-lease span { color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 800; }
+.battle-host-lease strong { overflow: hidden; color: var(--text-main); font-size: var(--font-ui-sm); text-overflow: ellipsis; white-space: nowrap; }
+.battle-host-warning { grid-column: 1 / -1; margin: 0; color: #b66e1f; font-size: var(--font-ui-xs); font-weight: 900; }
+.battle-host-lease button { grid-column: 1 / -1; min-height: 32px; border: 1px solid color-mix(in srgb, #dc8c32 62%, var(--border-main)); border-radius: 6px; background: transparent; color: #b66e1f; font-size: var(--font-ui-xs); font-weight: 900; }
+.battle-host-lease button:disabled { opacity: .45; }
+.battle-settings-form { display: grid; grid-template-columns: 1fr 1fr; gap: 11px 9px; }
+.battle-settings-field { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.battle-settings-field > span { color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 900; }
+.battle-settings-wide { grid-column: 1 / -1; }
+.battle-settings-input { width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; border: 1px solid var(--border-main); border-radius: 7px; background: var(--bg-main); color: var(--text-main); font-size: var(--font-ui-sm); font-weight: 900; outline: none; }
+.battle-settings-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
+.battle-settings-error { grid-column: 1 / -1; margin: 0; color: #c84848; font-size: var(--font-ui-xs); font-weight: 800; }
+.battle-settings-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding-top: 2px; }
+.battle-settings-actions button { min-height: 36px; border: 1px solid var(--border-main); border-radius: 7px; background: var(--bg-main); color: var(--text-main); font-size: var(--font-ui-xs); font-weight: 900; }
+.battle-settings-actions button.primary { border-color: var(--btn-bg); background: var(--btn-bg); color: white; }
+.battle-settings-actions button:disabled { opacity: .42; }
 .battle-role-segment { display: flex; border: 1px solid var(--border-main); border-radius: 7px; overflow: hidden; }
 .battle-role-segment button { min-width: 80px; padding: 7px 10px; border: 0; background: var(--bg-main); color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 900; }
 .battle-role-segment button.active { background: var(--btn-bg); color: white; }

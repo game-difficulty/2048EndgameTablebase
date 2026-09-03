@@ -805,7 +805,10 @@
       "BATTLE_REPLAY_NOT_FOUND": "这局还没有可保存的回放。",
       "BATTLE_REPLAY_INVALID": "这局回放暂时无法打开。",
       "BATTLE_REPLAY_LOAD_FAILED": "回放获取失败，请稍后重试。",
-      "battle_forfeit_failed": "退出对战失败，请重试。"
+      "ROOM_REVISION_CONFLICT": "房间设置已经变化，请重新修改。",
+      "battle_forfeit_failed": "退出对战失败，请重试。",
+      "battle_settings_update_failed": "设置保存失败，请稍后重试。",
+      "battle_host_renew_failed": "主持状态续期失败，请稍后重试。"
     },
     "auth": {
       "title": "登录后进入对战",
@@ -830,7 +833,9 @@
       "players": "玩家",
       "moveTime": "步时",
       "status": "状态",
-      "unknownHost": "未知用户"
+      "unknownHost": "未知用户",
+      "waitingHost": "等待主持",
+      "permanent": "常驻"
     },
     "form": {
       "mode": "对战模式",
@@ -874,6 +879,9 @@
       "closeRoom": "关闭房间",
       "cancel": "取消",
       "processing": "处理中",
+      "edit": "修改",
+      "save": "保存",
+      "continueHosting": "继续主持",
       "increase": "增加数值",
       "decrease": "减少数值"
     },
@@ -904,11 +912,22 @@
       "openSeat": "等待玩家",
       "settings": "本局设置",
       "settingsLocked": "开始前固定",
+      "settingsEditable": "开始前可调整",
+      "settingsReadOnly": "当前不可修改",
+      "currentHost": "当前房主",
+      "hostIdleTime": "空闲轮换",
+      "hostIdleWarning": "即将轮换房主",
       "spectators": "观战者",
       "noSpectators": "暂无观战者",
       "inviteText": "{tablebase} 吻合度对战房间：{url}",
       "startRuleSpectators": "房主准备后即可开始；其他已准备玩家参赛，未准备玩家进入观战。",
       "startRuleNoSpectators": "房主准备后即可开始；其他已准备玩家参赛，未准备玩家离开房间。"
+    },
+    "settingsValidation": {
+      "stepTimeout": "单步时限应为 5 到 600 秒，并以 5 秒调整。",
+      "initialBoard": "请输入 16 位十六进制初始盘面。",
+      "scoreStepLimit": "计分步数应在 1 到目标数字一半之间。",
+      "rankingMinSteps": "最低排名步数不能超过计分步数。"
     },
     "match": {
       "kicker": "实时对战",

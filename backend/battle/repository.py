@@ -25,6 +25,7 @@ ACTIVE_ROOM_STATUSES = {"preparing", "waiting", "running"}
 GUEST_JOIN_WINDOW = timedelta(hours=1)
 DEFAULT_GUEST_JOIN_LIMIT = 10
 DEFAULT_GUEST_JOIN_IP_LIMIT = 30
+PERMANENT_ROOM_EXPIRES_AT = "9999-12-31T23:59:59+00:00"
 
 
 class BattleRepositoryError(RuntimeError):
@@ -78,6 +79,94 @@ def _row_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
 
 def _table_columns(db: sqlite3.Connection, table: str) -> set[str]:
     return {str(row["name"]) for row in db.execute(f"PRAGMA table_info({table})")}
+
+
+def _table_exists(db: sqlite3.Connection, table: str) -> bool:
+    return db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (str(table),),
+    ).fetchone() is not None
+
+
+def _migrate_room_lifecycle_schema(db: sqlite3.Connection) -> None:
+    """Make room ownership distinct from the currently assigned host actor."""
+    columns = _table_columns(db, "battle_rooms")
+    if "lifecycle_kind" in columns:
+        return
+    db.commit()
+    db.execute("PRAGMA foreign_keys = OFF")
+    try:
+        db.executescript(
+            """
+            BEGIN IMMEDIATE;
+            CREATE TABLE battle_rooms_lifecycle_new (
+              room_id TEXT PRIMARY KEY,
+              room_code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+              host_user_id INTEGER,
+              host_actor_key TEXT,
+              lifecycle_kind TEXT NOT NULL DEFAULT 'normal',
+              billing_policy TEXT NOT NULL DEFAULT 'user',
+              template_key TEXT UNIQUE,
+              status TEXT NOT NULL DEFAULT 'preparing',
+              visibility TEXT NOT NULL DEFAULT 'public',
+              allow_spectators INTEGER NOT NULL DEFAULT 1,
+              allow_guest_chat INTEGER NOT NULL DEFAULT 0,
+              max_players INTEGER NOT NULL DEFAULT 2,
+              mode_key TEXT NOT NULL DEFAULT 'goodness',
+              mode_version INTEGER NOT NULL DEFAULT 1,
+              settings_json TEXT NOT NULL DEFAULT '{}',
+              settings_revision INTEGER NOT NULL DEFAULT 1,
+              chat_roles_json TEXT NOT NULL DEFAULT '["host","player","spectator"]',
+              pattern TEXT NOT NULL,
+              target INTEGER NOT NULL,
+              full_pattern TEXT NOT NULL,
+              initial_board TEXT,
+              max_steps INTEGER,
+              step_timeout_seconds INTEGER NOT NULL DEFAULT 90,
+              current_round_number INTEGER NOT NULL DEFAULT 0,
+              revision INTEGER NOT NULL DEFAULT 1,
+              generation_error TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              closed_at TEXT,
+              FOREIGN KEY(host_user_id) REFERENCES users(id),
+              CHECK(lifecycle_kind IN ('normal', 'permanent')),
+              CHECK(billing_policy IN ('user', 'platform')),
+              CHECK(status IN ('preparing', 'waiting', 'running', 'closed', 'expired')),
+              CHECK(visibility IN ('public', 'private')),
+              CHECK(allow_spectators IN (0, 1)),
+              CHECK(allow_guest_chat IN (0, 1)),
+              CHECK(max_players BETWEEN 2 AND 8),
+              CHECK(target > 0),
+              CHECK(max_steps IS NULL OR max_steps > 0),
+              CHECK(step_timeout_seconds > 0)
+            );
+            INSERT INTO battle_rooms_lifecycle_new
+              (room_id, room_code, host_user_id, host_actor_key, lifecycle_kind,
+               billing_policy, template_key, status, visibility, allow_spectators,
+               allow_guest_chat, max_players, mode_key, mode_version, settings_json,
+               settings_revision, chat_roles_json, pattern, target, full_pattern,
+               initial_board, max_steps, step_timeout_seconds, current_round_number,
+               revision, generation_error, created_at, updated_at, expires_at, closed_at)
+            SELECT room_id, room_code, host_user_id, 'u:' || host_user_id, 'normal',
+                   'user', NULL, status, visibility, allow_spectators,
+                   COALESCE(allow_guest_chat, 0), max_players,
+                   COALESCE(mode_key, 'goodness'), COALESCE(mode_version, 1),
+                   COALESCE(settings_json, '{}'), 1,
+                   COALESCE(chat_roles_json, '["host","player","spectator"]'),
+                   pattern, target, full_pattern, initial_board, max_steps,
+                   step_timeout_seconds, current_round_number,
+                   COALESCE(revision, 1), generation_error,
+                   created_at, updated_at, expires_at, closed_at
+            FROM battle_rooms;
+            DROP TABLE battle_rooms;
+            ALTER TABLE battle_rooms_lifecycle_new RENAME TO battle_rooms;
+            COMMIT;
+            """
+        )
+    finally:
+        db.execute("PRAGMA foreign_keys = ON")
 
 
 def _env_limit(name: str, default: int) -> int:
@@ -366,7 +455,11 @@ def init_battle_db() -> None:
             CREATE TABLE IF NOT EXISTS battle_rooms (
               room_id TEXT PRIMARY KEY,
               room_code TEXT NOT NULL UNIQUE COLLATE NOCASE,
-              host_user_id INTEGER NOT NULL,
+              host_user_id INTEGER,
+              host_actor_key TEXT,
+              lifecycle_kind TEXT NOT NULL DEFAULT 'normal',
+              billing_policy TEXT NOT NULL DEFAULT 'user',
+              template_key TEXT UNIQUE,
               status TEXT NOT NULL DEFAULT 'preparing',
               visibility TEXT NOT NULL DEFAULT 'public',
               allow_spectators INTEGER NOT NULL DEFAULT 1,
@@ -375,6 +468,7 @@ def init_battle_db() -> None:
               mode_key TEXT NOT NULL DEFAULT 'goodness',
               mode_version INTEGER NOT NULL DEFAULT 1,
               settings_json TEXT NOT NULL DEFAULT '{}',
+              settings_revision INTEGER NOT NULL DEFAULT 1,
               chat_roles_json TEXT NOT NULL DEFAULT '["host","player","spectator"]',
               pattern TEXT NOT NULL,
               target INTEGER NOT NULL,
@@ -388,9 +482,12 @@ def init_battle_db() -> None:
               expires_at TEXT NOT NULL,
               closed_at TEXT,
               FOREIGN KEY(host_user_id) REFERENCES users(id),
+              CHECK(lifecycle_kind IN ('normal', 'permanent')),
+              CHECK(billing_policy IN ('user', 'platform')),
               CHECK(status IN ('preparing', 'waiting', 'running', 'closed', 'expired')),
               CHECK(visibility IN ('public', 'private')),
               CHECK(allow_spectators IN (0, 1)),
+              CHECK(allow_guest_chat IN (0, 1)),
               CHECK(max_players BETWEEN 2 AND 8),
               CHECK(target > 0),
               CHECK(max_steps IS NULL OR max_steps > 0),
@@ -576,7 +673,6 @@ def init_battle_db() -> None:
             """
         )
         room_columns = {row["name"] for row in db.execute("PRAGMA table_info(battle_rooms)")}
-        round_columns = {row["name"] for row in db.execute("PRAGMA table_info(battle_rounds)")}
         for name, declaration in {
             "revision": "INTEGER NOT NULL DEFAULT 1",
             "generation_error": "TEXT",
@@ -588,6 +684,9 @@ def init_battle_db() -> None:
         }.items():
             if name not in room_columns:
                 db.execute(f"ALTER TABLE battle_rooms ADD COLUMN {name} {declaration}")
+        _migrate_room_lifecycle_schema(db)
+        room_columns = {row["name"] for row in db.execute("PRAGMA table_info(battle_rooms)")}
+        round_columns = {row["name"] for row in db.execute("PRAGMA table_info(battle_rounds)")}
         for name, declaration in {
             "reservation_ledger_id": "INTEGER",
             "reserved_bonus_units": "INTEGER NOT NULL DEFAULT 0",
@@ -619,12 +718,20 @@ def init_battle_db() -> None:
                 db.execute(f"ALTER TABLE battle_player_results ADD COLUMN {name} {declaration}")
         _migrate_actor_identity_tables(db)
         db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_battle_rooms_public_lobby "
+            "ON battle_rooms(visibility, status, created_at DESC)"
+        )
+        db.execute(
             "CREATE INDEX IF NOT EXISTS ix_battle_rooms_mode_lobby "
             "ON battle_rooms(mode_key, visibility, status, created_at DESC)"
         )
         db.execute(
             "CREATE INDEX IF NOT EXISTS ix_battle_rooms_host_created "
             "ON battle_rooms(host_user_id, created_at DESC)"
+        )
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_battle_rooms_lifecycle_lobby "
+            "ON battle_rooms(lifecycle_kind, mode_key, visibility, status)"
         )
 
 
@@ -705,6 +812,12 @@ def _next_seat(db: sqlite3.Connection, room_id: str, max_players: int) -> int | 
 
 def _room_payload(db: sqlite3.Connection, room: sqlite3.Row) -> dict[str, Any]:
     payload = _row_dict(room) or {}
+    payload["lifecycle_kind"] = str(payload.get("lifecycle_kind") or "normal")
+    payload["is_permanent"] = payload["lifecycle_kind"] == "permanent"
+    payload["host_actor_key"] = str(
+        payload.get("host_actor_key")
+        or (f"u:{payload['host_user_id']}" if payload.get("host_user_id") is not None else "")
+    ) or None
     raw_settings = payload.pop("settings_json", None)
     raw_chat_roles = payload.pop("chat_roles_json", None)
     try:
@@ -738,6 +851,28 @@ def _room_payload(db: sqlite3.Connection, room: sqlite3.Row) -> dict[str, Any]:
         payload["members"].append(item)
     payload["player_count"] = sum(member["role"] == "player" for member in members)
     payload["spectator_count"] = sum(member["role"] == "spectator" for member in members)
+    host = next(
+        (item for item in payload["members"] if item["actor_key"] == payload["host_actor_key"]),
+        None,
+    )
+    payload["host"] = (
+        {
+            "actor_key": host["actor_key"],
+            "display_name": host.get("display_name") or "",
+            "avatar_url": host.get("avatar_url"),
+            "actor_kind": host.get("actor_kind"),
+        }
+        if host is not None
+        else None
+    )
+    payload["host_idle_expires_at"] = None
+    if payload["is_permanent"] and _table_exists(db, "battle_permanent_room_state"):
+        permanent = db.execute(
+            "SELECT host_idle_expires_at FROM battle_permanent_room_state WHERE room_id = ?",
+            (room["room_id"],),
+        ).fetchone()
+        if permanent is not None:
+            payload["host_idle_expires_at"] = permanent["host_idle_expires_at"]
     round_row = db.execute(
         "SELECT * FROM battle_rounds WHERE room_id = ? ORDER BY round_number DESC LIMIT 1",
         (room["room_id"],),
@@ -860,17 +995,21 @@ def create_room(
                     db.execute(
                         """
                         INSERT INTO battle_rooms
-                        (room_id, room_code, host_user_id, status, visibility,
+                        (room_id, room_code, host_user_id, host_actor_key,
+                         lifecycle_kind, billing_policy, status, visibility,
                          allow_spectators, allow_guest_chat, max_players, mode_key, mode_version,
                          settings_json, chat_roles_json, pattern, target, full_pattern,
                          initial_board, max_steps, step_timeout_seconds,
                          created_at, updated_at, expires_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             room_id,
                             selected_code,
                             int(host_user_id),
+                            host_actor.actor_key,
+                            "normal",
+                            "user",
                             status,
                             visibility,
                             1 if allow_spectators else 0,
@@ -922,6 +1061,123 @@ def create_room(
         raise BattleConflictError("room_create_conflict") from exc
 
 
+def create_permanent_room(
+    *,
+    template_key: str,
+    pattern: str,
+    target: int,
+    full_pattern: str,
+    mode_key: str,
+    mode_version: int,
+    initial_board: str,
+    max_steps: int | None,
+    step_timeout_seconds: int,
+    max_players: int,
+    settings: dict[str, Any],
+    status: str,
+) -> dict[str, Any]:
+    """Create one platform-owned room without inventing a user owner."""
+    now = _utc_now()
+    room_id = str(uuid.uuid4())
+    normalized_template = str(template_key or "").strip()
+    if not normalized_template:
+        raise ValueError("invalid_template_key")
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        existing = db.execute(
+            "SELECT * FROM battle_rooms WHERE template_key = ?",
+            (normalized_template,),
+        ).fetchone()
+        if existing is not None:
+            db.execute(
+                """
+                UPDATE battle_rooms
+                SET lifecycle_kind = 'permanent', billing_policy = 'platform',
+                    visibility = 'public', allow_spectators = 1,
+                    allow_guest_chat = 1,
+                    chat_roles_json = '["host","player","spectator"]',
+                    max_players = ?, expires_at = ?, closed_at = NULL,
+                    status = CASE WHEN status IN ('closed', 'expired')
+                                  THEN 'waiting' ELSE status END,
+                    updated_at = ?
+                WHERE room_id = ?
+                """,
+                (
+                    int(max_players),
+                    PERMANENT_ROOM_EXPIRES_AT,
+                    _iso(now),
+                    existing["room_id"],
+                ),
+            )
+            active_host = db.execute(
+                """
+                SELECT 1 FROM battle_members
+                WHERE room_id = ? AND actor_key = ?
+                  AND status = 'active' AND role = 'player'
+                """,
+                (existing["room_id"], existing["host_actor_key"]),
+            ).fetchone()
+            if active_host is None:
+                db.execute(
+                    "UPDATE battle_rooms SET host_actor_key = NULL, host_user_id = NULL WHERE room_id = ?",
+                    (existing["room_id"],),
+                )
+            return _room_payload(db, _find_room(db, str(existing["room_id"])))
+        selected_code = None
+        for _attempt in range(16):
+            candidate = _room_code()
+            try:
+                db.execute(
+                    """
+                    INSERT INTO battle_rooms
+                    (room_id, room_code, host_user_id, host_actor_key,
+                     lifecycle_kind, billing_policy, template_key, status, visibility,
+                     allow_spectators, allow_guest_chat, max_players, mode_key,
+                     mode_version, settings_json, settings_revision, chat_roles_json,
+                     pattern, target, full_pattern, initial_board, max_steps,
+                     step_timeout_seconds, created_at, updated_at, expires_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        room_id,
+                        candidate,
+                        None,
+                        None,
+                        "permanent",
+                        "platform",
+                        normalized_template,
+                        str(status),
+                        "public",
+                        1,
+                        1,
+                        int(max_players),
+                        str(mode_key),
+                        int(mode_version),
+                        json.dumps(settings, separators=(",", ":"), sort_keys=True),
+                        1,
+                        '["host","player","spectator"]',
+                        str(pattern),
+                        int(target),
+                        str(full_pattern),
+                        str(initial_board),
+                        int(max_steps) if max_steps is not None else None,
+                        int(step_timeout_seconds),
+                        _iso(now),
+                        _iso(now),
+                        PERMANENT_ROOM_EXPIRES_AT,
+                    ),
+                )
+                selected_code = candidate
+                break
+            except sqlite3.IntegrityError as exc:
+                if "battle_rooms.room_code" not in str(exc):
+                    raise
+        if selected_code is None:
+            raise BattleConflictError("room_code_generation_failed")
+        return _room_payload(db, _find_room(db, room_id))
+
+
 def get_room(room_ref: str) -> dict[str, Any]:
     with auth_db() as db:
         return _room_payload(db, _find_room(db, room_ref))
@@ -965,22 +1221,28 @@ def list_public_rooms(*, limit: int = 50, now: datetime | None = None) -> list[d
     with auth_db() as db:
         rows = db.execute(
             """
-            SELECT r.*, host.display_name AS host_display_name,
+            SELECT r.*, COALESCE(host.display_name, host_member.display_name_snapshot) AS host_display_name,
                    profile.avatar_key AS host_avatar_key,
+                   host_member.actor_key AS resolved_host_actor_key,
                    SUM(CASE WHEN m.status = 'active' AND m.role = 'player' THEN 1 ELSE 0 END) AS player_count,
                    SUM(CASE WHEN m.status = 'active' AND m.role = 'spectator' THEN 1 ELSE 0 END) AS spectator_count
             FROM battle_rooms AS r
-            JOIN users AS host ON host.id = r.host_user_id
-            LEFT JOIN user_profiles AS profile ON profile.user_id = r.host_user_id
+            LEFT JOIN battle_members AS host_member
+              ON host_member.room_id = r.room_id
+             AND host_member.actor_key = r.host_actor_key
+             AND host_member.status = 'active'
+            LEFT JOIN users AS host ON host.id = host_member.user_id
+            LEFT JOIN user_profiles AS profile ON profile.user_id = host_member.user_id
             LEFT JOIN battle_members AS m ON m.room_id = r.room_id
             WHERE r.visibility = 'public'
               AND (
                 r.status IN ('preparing', 'waiting')
                 OR (r.status = 'running' AND r.allow_spectators = 1)
               )
-              AND r.expires_at > ?
+              AND (r.lifecycle_kind = 'permanent' OR r.expires_at > ?)
             GROUP BY r.room_id
-            ORDER BY r.created_at DESC
+            ORDER BY CASE r.lifecycle_kind WHEN 'permanent' THEN 0 ELSE 1 END,
+                     r.created_at DESC
             LIMIT ?
             """,
             (current, limit),
@@ -990,14 +1252,25 @@ def list_public_rooms(*, limit: int = 50, now: datetime | None = None) -> list[d
             payload = _row_dict(row) or {}
             payload["player_count"] = int(payload.get("player_count") or 0)
             payload["spectator_count"] = int(payload.get("spectator_count") or 0)
-            payload["host"] = {
-                "display_name": str(payload.pop("host_display_name", "") or ""),
-                "avatar_url": (
-                    f"/media/avatars/{payload['host_avatar_key']}"
-                    if payload.get("host_avatar_key")
-                    else None
-                ),
-            }
+            payload["lifecycle_kind"] = str(payload.get("lifecycle_kind") or "normal")
+            payload["is_permanent"] = payload["lifecycle_kind"] == "permanent"
+            resolved_host = str(payload.pop("resolved_host_actor_key", "") or "")
+            payload["host_actor_key"] = resolved_host or payload.get("host_actor_key") or None
+            payload["host_idle_expires_at"] = None
+            payload["host"] = (
+                {
+                    "actor_key": payload["host_actor_key"],
+                    "display_name": str(payload.pop("host_display_name", "") or ""),
+                    "avatar_url": (
+                        f"/media/avatars/{payload['host_avatar_key']}"
+                        if payload.get("host_avatar_key")
+                        else None
+                    ),
+                }
+                if payload["host_actor_key"]
+                else None
+            )
+            payload.pop("host_display_name", None)
             payload.pop("host_avatar_key", None)
             payloads.append(payload)
         return payloads
@@ -1027,7 +1300,11 @@ def join_room(
             raise BattleConflictError("user_already_in_room")
         if room["status"] not in ACTIVE_ROOM_STATUSES:
             raise BattleConflictError("room_not_joinable")
-        if datetime.fromisoformat(str(room["expires_at"])) <= now and room["status"] != "running":
+        if (
+            str(room["lifecycle_kind"] or "normal") != "permanent"
+            and datetime.fromisoformat(str(room["expires_at"])) <= now
+            and room["status"] != "running"
+        ):
             raise BattleConflictError("room_expired")
 
         seat = _next_seat(db, str(room["room_id"]), int(room["max_players"]))
@@ -1148,18 +1425,21 @@ def set_member_ready(
 def kick_member(
     room_ref: str,
     *,
-    host_user_id: int,
+    host_user_id: int | None = None,
+    host_actor_key: str | None = None,
     target_actor_key: str | None = None,
     target_user_id: int | None = None,
 ) -> dict[str, Any]:
     target_key = str(target_actor_key or "") or user_actor(int(target_user_id)).actor_key
+    owner_key = str(host_actor_key or "") or user_actor(int(host_user_id)).actor_key
     now = _utc_now()
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
         room = _find_room(db, room_ref)
-        if int(room["host_user_id"]) != int(host_user_id):
+        actual_host = str(room["host_actor_key"] or f"u:{room['host_user_id']}")
+        if actual_host != owner_key:
             raise BattlePermissionError("host_required")
-        if target_key == user_actor(host_user_id).actor_key:
+        if target_key == owner_key:
             raise BattleConflictError("host_cannot_be_kicked")
         if room["status"] not in {"preparing", "waiting"}:
             raise BattleConflictError("room_already_started")

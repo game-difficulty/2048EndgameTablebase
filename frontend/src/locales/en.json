@@ -805,7 +805,10 @@
       "BATTLE_REPLAY_NOT_FOUND": "No replay is available for this round yet.",
       "BATTLE_REPLAY_INVALID": "This Battle replay cannot be opened right now.",
       "BATTLE_REPLAY_LOAD_FAILED": "Could not load the replay. Please try again.",
-      "battle_forfeit_failed": "Could not exit the Battle. Please try again."
+      "ROOM_REVISION_CONFLICT": "Room settings changed. Please review them and try again.",
+      "battle_forfeit_failed": "Could not exit the Battle. Please try again.",
+      "battle_settings_update_failed": "Could not save the settings. Please try again.",
+      "battle_host_renew_failed": "Could not renew hosting. Please try again."
     },
     "auth": {
       "title": "Sign in to battle",
@@ -830,7 +833,9 @@
       "players": "Players",
       "moveTime": "Move Time",
       "status": "Status",
-      "unknownHost": "Unknown"
+      "unknownHost": "Unknown",
+      "waitingHost": "Waiting for host",
+      "permanent": "Permanent"
     },
     "form": {
       "mode": "Battle Mode",
@@ -874,6 +879,9 @@
       "closeRoom": "Close Room",
       "cancel": "Cancel",
       "processing": "Processing",
+      "edit": "Edit",
+      "save": "Save",
+      "continueHosting": "Continue Hosting",
       "increase": "Increase value",
       "decrease": "Decrease value"
     },
@@ -904,11 +912,22 @@
       "openSeat": "Waiting",
       "settings": "Match Settings",
       "settingsLocked": "Locked before start",
+      "settingsEditable": "Editable before start",
+      "settingsReadOnly": "Read only right now",
+      "currentHost": "Current Host",
+      "hostIdleTime": "Idle Rotation",
+      "hostIdleWarning": "Host rotation is imminent",
       "spectators": "Spectators",
       "noSpectators": "No spectators",
       "inviteText": "{tablebase} Goodness Battle room: {url}",
       "startRuleSpectators": "The host can start when ready. Other ready players join the Battle; unready players spectate.",
       "startRuleNoSpectators": "The host can start when ready. Other ready players join the Battle; unready players leave the room."
+    },
+    "settingsValidation": {
+      "stepTimeout": "Move time must be 5–600 seconds in 5-second steps.",
+      "initialBoard": "Enter a 16-digit hexadecimal starting board.",
+      "scoreStepLimit": "Scored steps must be between 1 and half the target tile.",
+      "rankingMinSteps": "Minimum ranked steps cannot exceed scored steps."
     },
     "match": {
       "kicker": "Live Battle",

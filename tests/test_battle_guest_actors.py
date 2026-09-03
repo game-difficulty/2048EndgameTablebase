@@ -204,18 +204,15 @@ class BattleGuestActorTests(unittest.TestCase):
             ("/api/battle/rooms/{room_code}/leave", "POST"),
             ("/api/battle/rooms/{room_code}/ready", "POST"),
             ("/api/battle/rooms/{room_code}/role", "POST"),
+            ("/api/battle/rooms/{room_code}/kick", "POST"),
+            ("/api/battle/rooms/{room_code}/start", "POST"),
+            ("/api/battle/rooms/{room_code}/settings", "PATCH"),
+            ("/api/battle/rooms/{room_code}/host/renew", "POST"),
             ("/api/battle/rooms/{room_code}/rounds/{round_id}/forfeit", "POST"),
             ("/api/battle/rooms/{room_code}/rounds/{round_id}/artifact", "GET"),
             ("/api/battle/rooms/{room_code}/rounds/{round_id}/route", "GET"),
             ("/api/battle/rooms/{room_code}/rounds/{round_id}/replay", "GET"),
         ):
             self.assertIn(require_actor, dependencies(path, method), (path, method))
-        for path in (
-            "/api/battle/rooms/{room_code}/kick",
-            "/api/battle/rooms/{room_code}/start",
-        ):
-            self.assertIn(require_user, dependencies(path, "POST"), path)
-
-
 if __name__ == "__main__":
     unittest.main()

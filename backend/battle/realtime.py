@@ -105,6 +105,9 @@ async def subscribe(
         if identity.user_id is not None:
             _socket_user[websocket] = int(identity.user_id)
         _room_sockets[room_id].add(websocket)
+    from .permanent.service import note_presence
+
+    await asyncio.to_thread(note_presence, str(snapshot["room_id"]), identity)
     if previous and previous != str(snapshot["room_id"]):
         await broadcast_room(previous)
     await broadcast_room(str(snapshot["room_id"]))
@@ -216,6 +219,9 @@ async def handle_battle_action(
         room_id = _socket_room.get(websocket)
     if action == Action.BATTLE_HEARTBEAT:
         if room_id is not None:
+            from .permanent.service import note_presence
+
+            await asyncio.to_thread(note_presence, room_id, actor)
             await broadcast_room(room_id)
         return True
     if action == Action.BATTLE_CHAT_SEND:
@@ -247,6 +253,9 @@ async def handle_battle_action(
             )
             return True
         if result.created:
+            from .permanent.service import note_activity
+
+            await asyncio.to_thread(note_activity, str(result.message["room_id"]), actor)
             await broadcast_chat_message(str(result.message["room_id"]), result.message)
         else:
             await _send(
@@ -305,6 +314,9 @@ async def handle_battle_action(
         },
     )
     if room_id is not None:
+        from .permanent.service import note_activity
+
+        await asyncio.to_thread(note_activity, room_id, actor)
         await broadcast_room(room_id)
     return True
 

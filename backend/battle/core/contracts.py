@@ -56,6 +56,16 @@ class BattleMode(ABC):
     ) -> dict[str, Any]:
         raise NotImplementedError
 
+    async def ensure_permanent_room(self, definition) -> dict[str, Any]:
+        """Create or recover one configured platform-sponsored room."""
+        raise NotImplementedError
+
+    async def normalize_lobby_settings_patch(
+        self, room: dict[str, Any], payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Validate settings that may change before a round starts."""
+        raise NotImplementedError
+
     def artifact_payload(
         self,
         room_code: str,

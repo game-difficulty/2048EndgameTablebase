@@ -29,7 +29,7 @@
         <article
           v-for="room in visibleRooms"
           :key="room.room_code"
-          class="battle-room-row"
+          :class="['battle-room-row', { 'is-permanent': isPermanentBattleRoom(room) }]"
           role="button"
           tabindex="0"
           :aria-label="`${room.status === 'running' ? $t('battle.actions.spectate') : $t('battle.actions.join')} ${room.full_pattern}`"
@@ -39,8 +39,11 @@
         >
           <div class="battle-room-host">
             <img v-if="room.host?.avatar_url" :src="room.host.avatar_url" alt="" />
-            <span v-else class="battle-avatar-fallback">{{ initials(room.host?.display_name) }}</span>
-            <strong>{{ room.host?.display_name || $t('battle.room.unknownHost') }}</strong>
+            <span v-else class="battle-avatar-fallback">{{ room.host ? initials(room.host.display_name) : '·' }}</span>
+            <div class="battle-room-host-copy">
+              <strong>{{ room.host?.display_name || $t('battle.room.waitingHost') }}</strong>
+              <small v-if="isPermanentBattleRoom(room)" class="battle-permanent-badge">{{ $t('battle.room.permanent') }}</small>
+            </div>
           </div>
           <strong class="battle-room-pattern">{{ room.full_pattern }}</strong>
           <span class="tabular-nums">{{ room.player_count }}/{{ room.max_players }}</span>
@@ -191,6 +194,10 @@ import { computed, reactive, ref, watch } from 'vue';
 
 import UiSelect from '../../../components/UiSelect.vue';
 import { getCatalogTargetsForPattern } from '../../../services/tablebases/catalogClient.js';
+import {
+  compareBattleRooms,
+  isPermanentBattleRoom,
+} from '../core/battleRoomSettings.js';
 import BattleNumberInput from './BattleNumberInput.vue';
 
 const props = defineProps({
@@ -235,9 +242,9 @@ const patternOptions = computed(() => [...new Set(props.tables.map((table) => ta
 const targetOptions = computed(() => getCatalogTargetsForPattern(props.tables, form.pattern));
 const selectedFullPattern = computed(() => `${form.pattern}_${form.target}`);
 const normalizedModeKey = (modeKey) => String(modeKey || 'goodness').trim().toLowerCase();
-const visibleRooms = computed(() => props.rooms.filter(
-  (room) => normalizedModeKey(room.mode_key) === normalizedModeKey(props.modeKey),
-));
+const visibleRooms = computed(() => props.rooms
+  .filter((room) => normalizedModeKey(room.mode_key) === normalizedModeKey(props.modeKey))
+  .sort(compareBattleRooms));
 const selectedModeOption = computed(() => props.modeOptions.find(
   (option) => option.value === props.modeKey,
 ));
@@ -419,14 +426,18 @@ watch(rankingStepCap, (cap) => {
 .battle-room-row:focus-visible {
   background: color-mix(in srgb, var(--bg-main) 65%, transparent);
 }
+.battle-room-row.is-permanent { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 78%, transparent); }
 .battle-room-row:focus-visible {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 72%, transparent);
 }
 .battle-room-host { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.battle-room-host-copy { min-width: 0; display: flex; align-items: center; gap: 6px; }
 .battle-room-host img, .battle-avatar-fallback { width: 34px; height: 34px; border-radius: 50%; flex: 0 0 auto; }
 .battle-room-host img { object-fit: cover; }
 .battle-avatar-fallback { display: grid; place-items: center; border: 1px solid var(--border-main); color: var(--accent); font-size: 11px; font-weight: 900; }
 .battle-room-host strong, .battle-room-pattern { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.battle-room-host-copy strong { min-width: 0; }
+.battle-permanent-badge { flex: 0 0 auto; padding: 3px 5px; border: 1px solid color-mix(in srgb, var(--accent) 52%, var(--border-main)); border-radius: 4px; color: var(--accent); font-size: 8px; font-weight: 900; line-height: 1; }
 .battle-status-dot-label { display: inline-flex; align-items: center; gap: 7px; color: var(--text-secondary); font-weight: 800; }
 .battle-status-dot-label i { width: 7px; height: 7px; border-radius: 50%; background: #8e98a7; }
 .battle-status-dot-label.status-waiting i { background: #37a667; }

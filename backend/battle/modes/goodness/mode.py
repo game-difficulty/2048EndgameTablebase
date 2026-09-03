@@ -98,6 +98,16 @@ class GoodnessBattleMode(BattleMode):
     async def start_room(self, room_code: str, **kwargs):
         return await self.runtime.start_room_for_mode(room_code, **kwargs)
 
+    async def ensure_permanent_room(self, definition):
+        return await self.runtime.ensure_permanent_room(definition)
+
+    async def normalize_lobby_settings_patch(self, room, payload):
+        del room
+        timeout = int(payload.get("step_timeout_seconds") or 0)
+        if timeout not in VALID_STEP_TIMEOUTS:
+            raise ValueError("invalid_step_timeout")
+        return {"step_timeout_seconds": timeout}
+
     def artifact_payload(self, room_code: str, round_id: str, *, actor_key: str):
         return self.runtime.artifact_payload_for_mode(
             room_code, round_id, actor_key=actor_key

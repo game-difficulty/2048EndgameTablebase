@@ -111,6 +111,31 @@ class FreeGoodnessBattleMode(BattleMode):
     async def start_room(self, room_code: str, **kwargs):
         return await self.runtime.start_room_for_mode(room_code, **kwargs)
 
+    async def ensure_permanent_room(self, definition):
+        return await self.runtime.ensure_permanent_room(definition)
+
+    async def normalize_lobby_settings_patch(self, room, payload):
+        timeout = int(payload.get("step_timeout_seconds") or 0)
+        if timeout not in VALID_STEP_TIMEOUTS:
+            raise ValueError("invalid_step_timeout")
+        target_cap = max(1, int(room.get("target") or 0) // 2)
+        score_steps = int(payload.get("score_step_limit") or 0)
+        ranking_steps = int(payload.get("ranking_min_steps") or 0)
+        if not 1 <= score_steps <= target_cap:
+            raise ValueError("invalid_score_step_limit")
+        if not 1 <= ranking_steps <= score_steps:
+            raise ValueError("invalid_ranking_min_steps")
+        board = _normalize_board(payload.get("initial_board"))
+        if board is None:
+            raise ValueError("invalid_board")
+        board_hex = await self.runtime.validate_lobby_initial_board(room, board)
+        return {
+            "step_timeout_seconds": timeout,
+            "initial_board": board_hex,
+            "score_step_limit": score_steps,
+            "ranking_min_steps": ranking_steps,
+        }
+
     def artifact_payload(self, room_code: str, round_id: str, *, actor_key: str):
         return self.runtime.artifact_payload_for_mode(
             room_code, round_id, actor_key=actor_key

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "host_policy": {
+    "offline_grace_seconds": 45,
+    "idle_timeout_seconds": 180,
+    "member_offline_grace_seconds": 120,
+    "sweep_interval_seconds": 10
+  },
+  "defaults": {
+    "max_players": 8,
+    "step_timeout_seconds": 90
+  },
+  "rooms": [
+    {"template_key": "goodness:L3_256", "mode_key": "goodness", "full_pattern": "L3_256", "initial_board": "011112221fff3fff"},
+    {"template_key": "goodness:L3_512", "mode_key": "goodness", "full_pattern": "L3_512", "initial_board": "011112221fff3fff"},
+    {"template_key": "goodness:442t_256", "mode_key": "goodness", "full_pattern": "442t_256", "initial_board": "0001012213ffffff"},
+    {"template_key": "goodness:442t_512", "mode_key": "goodness", "full_pattern": "442t_512", "initial_board": "0001012213ffffff"},
+    {"template_key": "goodness:3x3_1024", "mode_key": "goodness", "full_pattern": "3x3_1024", "initial_board": "100f101f213fffff"},
+    {"template_key": "goodness:2x4_512", "mode_key": "goodness", "full_pattern": "2x4_512", "initial_board": "ffff00101021ffff"},
+    {"template_key": "goodness:3x4free9_512", "mode_key": "goodness", "full_pattern": "3x4free9_512", "initial_board": "1230e210ee11ffff"},
+    {"template_key": "free_goodness:L3_256", "mode_key": "free_goodness", "full_pattern": "L3_256", "initial_board": "011112221fff3fff"},
+    {"template_key": "free_goodness:L3_512", "mode_key": "free_goodness", "full_pattern": "L3_512", "initial_board": "011112221fff3fff"},
+    {"template_key": "free_goodness:442t_256", "mode_key": "free_goodness", "full_pattern": "442t_256", "initial_board": "0001012213ffffff"},
+    {"template_key": "free_goodness:442t_512", "mode_key": "free_goodness", "full_pattern": "442t_512", "initial_board": "0001012213ffffff"},
+    {"template_key": "free_goodness:3x3_1024", "mode_key": "free_goodness", "full_pattern": "3x3_1024", "initial_board": "100f101f213fffff"},
+    {"template_key": "free_goodness:2x4_512", "mode_key": "free_goodness", "full_pattern": "2x4_512", "initial_board": "ffff00101021ffff"},
+    {"template_key": "free_goodness:3x4free9_512", "mode_key": "free_goodness", "full_pattern": "3x4free9_512", "initial_board": "1230e210ee11ffff"}
+  ]
+}

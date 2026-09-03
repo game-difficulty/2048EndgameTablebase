@@ -85,11 +85,15 @@
         :current-actor-key="currentActorKey"
         :current-user-id="Number(room.viewer?.user_id || authUser?.id || 0)"
         :now="now"
+        :settings-pending="settingsPending"
+        :host-renew-pending="hostRenewPending"
         @ready="toggleReady"
         @start="start"
         @kick="kickMember"
         @leave="leave"
         @role="setRole"
+        @save-settings="updateRoomSettings"
+        @renew-host="renewHosting"
       />
 
       <BattleRoomChat
@@ -211,6 +215,8 @@ const {
   showResults,
   resultMode,
   forfeitPending,
+  settingsPending,
+  hostRenewPending,
   chatMessages,
   chatNotice,
   chatCooldownSeconds,
@@ -231,6 +237,8 @@ const {
   forfeit,
   kickMember,
   setRole,
+  updateRoomSettings,
+  renewHosting,
   returnToLobby,
   openResults,
   dismissResults,

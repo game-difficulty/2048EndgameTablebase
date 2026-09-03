@@ -194,6 +194,16 @@ def _is_supporter(user_id: int) -> bool:
     return row is not None and str(row["tier"] or "free") == "supporter"
 
 
+def _room_supporter(room: Any) -> bool:
+    try:
+        if str(room["billing_policy"] or "user") == "platform":
+            return False
+        user_id = room["host_user_id"]
+    except (KeyError, TypeError, IndexError):
+        return False
+    return user_id is not None and _is_supporter(int(user_id))
+
+
 async def _book_reader(full_pattern: str, pattern: str, target: int):
     entry = resolve_tablebase(full_pattern)
     if entry is None:
@@ -310,7 +320,7 @@ def _insert_round(
     initial_board: int,
     score_step_limit: int,
     ranking_min_steps: int,
-    reservation: TokenReservation,
+    reservation: TokenReservation | None,
 ) -> str:
     round_id = str(uuid.uuid4())
     now = iso()
@@ -324,6 +334,7 @@ def _insert_round(
     }
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
+        room = repository._find_room(db, room_id)
         db.execute(
             """
             INSERT INTO battle_rounds
@@ -331,20 +342,21 @@ def _insert_round(
              token_cost_units, created_at, updated_at, reservation_ledger_id,
              reserved_bonus_units, reserved_paid_units, route_seed,
              reservation_status, artifact_kind, mode_state_json)
-            VALUES (?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
+            VALUES (?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 round_id,
                 room_id,
                 int(round_number),
-                str(reservation.ledger_id),
-                reservation.reserved_units,
+                str(reservation.ledger_id) if reservation is not None else None,
+                reservation.reserved_units if reservation is not None else 0,
                 now,
                 now,
-                reservation.ledger_id,
-                reservation.reserved_bonus_units,
-                reservation.reserved_paid_units,
+                reservation.ledger_id if reservation is not None else None,
+                reservation.reserved_bonus_units if reservation is not None else 0,
+                reservation.reserved_paid_units if reservation is not None else 0,
                 seed_hex,
+                "reserved" if reservation is not None else "not_required",
                 _free_mode.artifact_kind,
                 json.dumps(mode_state, separators=(",", ":"), sort_keys=True),
             ),
@@ -358,7 +370,9 @@ def _insert_round(
             (
                 int(round_number),
                 f"{int(initial_board):016x}",
-                iso(utcnow() + WAITING_LIFETIME),
+                repository.PERMANENT_ROOM_EXPIRES_AT
+                if str(room["lifecycle_kind"] or "normal") == "permanent"
+                else iso(utcnow() + WAITING_LIFETIME),
                 now,
                 room_id,
             ),
@@ -389,7 +403,7 @@ def _reserve_round_budget(
 
 async def _select_initial_board(room: dict[str, Any], requested: str | None) -> tuple[int, dict[str, float], str]:
     attempts = 1 if requested else MAX_RANDOM_BOARD_ATTEMPTS
-    supporter = _is_supporter(int(room["host_user_id"]))
+    supporter = _room_supporter(room)
     last_board = int(requested, 16) if requested else 0
     for attempt in range(attempts):
         board = int(requested, 16) if requested else await _random_board(room)
@@ -412,6 +426,11 @@ async def _select_initial_board(room: dict[str, Any], requested: str | None) -> 
         409,
         extra={"board_hex": f"{last_board:016x}"},
     )
+
+
+async def validate_lobby_initial_board(room: dict[str, Any], board: int) -> str:
+    selected, _results, _dtype = await _select_initial_board(room, f"{int(board):016x}")
+    return f"{selected:016x}"
 
 
 async def create_room_for_mode(
@@ -593,7 +612,7 @@ async def _generate_certainty_tail(
     use_variant = _use_variant(str(room["pattern"]))
     entry = resolve_tablebase(str(room["full_pattern"])) or {}
     spawn_rate = float(entry.get("spawn_rate", 0.1))
-    supporter = _is_supporter(int(room["host_user_id"]))
+    supporter = _room_supporter(room)
     current_board = int(board)
     current_results = dict(results)
     current_risk = risk_state
@@ -721,7 +740,7 @@ async def _prepare_direction(
 ) -> PreparedSpawn | None:
     entry = resolve_tablebase(str(room["full_pattern"])) or {}
     spawn_rate = float(entry.get("spawn_rate", 0.1))
-    supporter = _is_supporter(int(room["host_user_id"]))
+    supporter = _room_supporter(room)
     for attempt, spawn_index, spawn_value in _candidate_choices(
         seed_hex,
         sequence,
@@ -991,7 +1010,7 @@ async def _initialize_players(
         room,
         board,
         stream_key=f"battle-free-round:{round_row['round_id']}:initial",
-        supporter=_is_supporter(int(room["host_user_id"])),
+        supporter=_room_supporter(room),
         lane="foreground",
     )
     results = _normalize_results(query)
@@ -1017,7 +1036,7 @@ async def _initialize_players(
         certainty_steps, board = await _generate_certainty_tail(
             room=room,
             round_id=str(round_row["round_id"]),
-            actor_key=f"u:{int(room['host_user_id'])}",
+            actor_key=str(room.get("host_actor_key") or "platform"),
             board=initial_board,
             results=results,
             seed_hex=seed_hex,
@@ -1163,15 +1182,19 @@ async def _initialize_players(
 
 
 async def _new_round(
-    room: dict[str, Any], *, user_id: int, session_id: int | None
+    room: dict[str, Any], *, user_id: int | None, session_id: int | None
 ) -> dict[str, Any]:
-    reservation = _reserve_round_budget(
-        user_id=user_id,
-        session_id=session_id,
-        full_pattern=str(room["full_pattern"]),
-        max_players=int(room["max_players"]),
-        target=int(room["target"]),
-    )
+    reservation = None
+    if str(room.get("billing_policy") or "user") != "platform":
+        if user_id is None:
+            raise BattleServiceError("AUTH_REQUIRED", "Authentication required.", 401)
+        reservation = _reserve_round_budget(
+            user_id=user_id,
+            session_id=session_id,
+            full_pattern=str(room["full_pattern"]),
+            max_players=int(room["max_players"]),
+            target=int(room["target"]),
+        )
     try:
         settings = dict(room.get("settings") or {})
         requested = settings.get("initial_board")
@@ -1190,7 +1213,8 @@ async def _new_round(
             reservation=reservation,
         )
     except Exception:
-        cancel_reservation(reservation, reason="battle_free_next_round_not_created")
+        if reservation is not None:
+            cancel_reservation(reservation, reason="battle_free_next_round_not_created")
         raise
     return repository.get_room(str(room["room_id"]))
 
@@ -1198,11 +1222,13 @@ async def _new_round(
 async def start_room_for_mode(
     room_code: str,
     *,
-    user_id: int,
-    session_id: int | None,
+    actor_key: str | None = None,
+    user_id: int | None = None,
+    session_id: int | None = None,
 ) -> dict[str, Any]:
+    actor_key = str(actor_key or (f"u:{user_id}" if user_id is not None else ""))
     room = repository.get_room(room_code)
-    if int(room["host_user_id"]) != int(user_id):
+    if str(room.get("host_actor_key") or f"u:{room.get('host_user_id')}") != str(actor_key):
         raise BattleServiceError("HOST_REQUIRED", "Only the host can start.", 403)
     if (room.get("round") or {}).get("status") == "completed":
         room = await _new_round(room, user_id=user_id, session_id=session_id)
@@ -1231,7 +1257,53 @@ async def start_room_for_mode(
     if completed_immediately:
         _settle_round(str(round_data["round_id"]))
     await broadcast_room(str(room_data["room_id"]))
-    return room_snapshot(room_code, user_id=user_id)
+    return room_snapshot(room_code, actor_key=actor_key)
+
+
+async def ensure_permanent_room(definition) -> dict[str, Any]:
+    settings = _free_mode.validate_settings(
+        {
+            "full_pattern": definition.full_pattern,
+            "initial_board": definition.initial_board,
+            "max_players": definition.max_players,
+            "step_timeout_seconds": definition.step_timeout_seconds,
+            "ranking_min_steps": None,
+            "is_public": True,
+            "allow_spectators": True,
+            "allow_guest_chat": True,
+            "chat_roles": ["host", "player", "spectator"],
+        }
+    )
+    public_settings = {key: value for key, value in settings.items() if key != "chat_roles"}
+    room = repository.create_permanent_room(
+        template_key=definition.template_key,
+        pattern=str(settings["pattern"]),
+        target=int(settings["target"]),
+        full_pattern=str(settings["full_pattern"]),
+        mode_key=_free_mode.key,
+        mode_version=_free_mode.version,
+        initial_board=str(definition.initial_board),
+        max_steps=int(settings["score_step_limit"]),
+        step_timeout_seconds=int(settings["step_timeout_seconds"]),
+        max_players=int(settings["max_players"]),
+        settings=public_settings,
+        status="preparing",
+    )
+    current = room.get("round") or {}
+    if not current or current.get("status") in {"failed", "cancelled"}:
+        initial, _results, _dtype = await _select_initial_board(
+            room, str(definition.initial_board)
+        )
+        _insert_round(
+            room_id=str(room["room_id"]),
+            round_number=int(room.get("current_round_number") or 0) + 1,
+            seed_hex=secrets.token_hex(32),
+            initial_board=initial,
+            score_step_limit=int(settings["score_step_limit"]),
+            ranking_min_steps=int(settings["ranking_min_steps"]),
+            reservation=None,
+        )
+    return repository.get_room(str(room["room_id"]))
 
 
 def _ranking_eligible(
@@ -1433,12 +1505,21 @@ def _complete_round_if_done(db: sqlite3.Connection, room_id: str, round_id: str,
     )
     db.execute(
         "UPDATE battle_rooms SET status = 'waiting', expires_at = ?, revision = revision + 1, updated_at = ? WHERE room_id = ?",
-        (iso(utcnow() + WAITING_LIFETIME), now_text, room_id),
+        (
+            repository.PERMANENT_ROOM_EXPIRES_AT
+            if str(repository._find_room(db, room_id)["lifecycle_kind"] or "normal") == "permanent"
+            else iso(utcnow() + WAITING_LIFETIME),
+            now_text,
+            room_id,
+        ),
     )
     db.execute(
         "UPDATE battle_members SET ready = 0, updated_at = ? WHERE room_id = ? AND status = 'active'",
         (now_text, room_id),
     )
+    from ...permanent.service import rotate_after_round_in_db
+
+    rotate_after_round_in_db(db, room_id, now_text=now_text)
     return True
 
 
@@ -2143,7 +2224,7 @@ def _mark_timeouts() -> set[str]:
                 completed_rounds.append(str(row["round_id"]))
             changed.add(str(row["room_id"]))
         stale_rooms = db.execute(
-            "SELECT * FROM battle_rooms WHERE mode_key = 'free_goodness' AND status IN ('preparing', 'waiting') AND expires_at <= ?",
+            "SELECT * FROM battle_rooms WHERE mode_key = 'free_goodness' AND lifecycle_kind = 'normal' AND status IN ('preparing', 'waiting') AND expires_at <= ?",
             (now_text,),
         ).fetchall()
         for room in stale_rooms:

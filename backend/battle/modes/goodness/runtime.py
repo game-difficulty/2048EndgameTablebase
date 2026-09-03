@@ -80,10 +80,8 @@ def _ready_players_for_start(
         "SELECT * FROM battle_members WHERE room_id = ? AND status = 'active' AND role = 'player' ORDER BY seat_index",
         (room["room_id"],),
     ).fetchall()
-    host = next(
-        (player for player in players if int(player["user_id"]) == int(room["host_user_id"])),
-        None,
-    )
+    host_key = str(room["host_actor_key"] or f"u:{room['host_user_id']}")
+    host = next((player for player in players if player["actor_key"] == host_key), None)
     if host is None or not bool(host["ready"]):
         raise BattleServiceError("HOST_NOT_READY", "The host must be ready to start.", 409)
     ready_players = [player for player in players if bool(player["ready"])]
@@ -116,6 +114,7 @@ def _ready_players_for_start(
 
 
 _route_tasks: dict[str, asyncio.Task] = {}
+_permanent_route_semaphore = asyncio.Semaphore(1)
 _cleanup_task: asyncio.Task | None = None
 _recovery_task: asyncio.Task | None = None
 _goodness_mode = register_battle_mode(GoodnessBattleMode(), replace=True)
@@ -156,7 +155,7 @@ def _insert_round(
     room_id: str,
     round_number: int,
     seed_hex: str,
-    reservation: TokenReservation,
+    reservation: TokenReservation | None,
     auto_start_after_generation: bool = False,
 ) -> str:
     round_id = str(uuid.uuid4())
@@ -179,20 +178,21 @@ def _insert_round(
              token_cost_units, created_at, updated_at, reservation_ledger_id,
              reserved_bonus_units, reserved_paid_units, route_seed,
              reservation_status, auto_start_after_generation, artifact_kind)
-            VALUES (?, ?, ?, 'preparing', ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
+            VALUES (?, ?, ?, 'preparing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 round_id,
                 room_id,
                 int(round_number),
-                str(reservation.ledger_id),
-                reservation.reserved_units,
+                str(reservation.ledger_id) if reservation is not None else None,
+                reservation.reserved_units if reservation is not None else 0,
                 now,
                 now,
-                reservation.ledger_id,
-                reservation.reserved_bonus_units,
-                reservation.reserved_paid_units,
+                reservation.ledger_id if reservation is not None else None,
+                reservation.reserved_bonus_units if reservation is not None else 0,
+                reservation.reserved_paid_units if reservation is not None else 0,
                 seed_hex,
+                "reserved" if reservation is not None else "not_required",
                 1 if auto_start_after_generation else 0,
                 _goodness_mode.artifact_kind,
             ),
@@ -407,16 +407,25 @@ async def _prepare_route(
         route_seed = str(round_row["route_seed"] or secrets.token_hex(16))
         auto_start = bool(round_row["auto_start_after_generation"])
     try:
-        generated = await generate_battle_route(
-            pattern=str(room["pattern"]),
-            target=int(room["target"]),
-            full_pattern=str(room["full_pattern"]),
-            initial_board=(
-                None if not room.get("initial_board") else int(str(room["initial_board"]), 16)
+        generation_args = {
+            "pattern": str(room["pattern"]),
+            "target": int(room["target"]),
+            "full_pattern": str(room["full_pattern"]),
+            "initial_board": (
+                None
+                if not room.get("initial_board")
+                else int(str(room["initial_board"]), 16)
             ),
-            max_steps=(None if room.get("max_steps") is None else int(room["max_steps"])),
-            seed_hex=route_seed,
-        )
+            "max_steps": (
+                None if room.get("max_steps") is None else int(room["max_steps"])
+            ),
+            "seed_hex": route_seed,
+        }
+        if str(room.get("billing_policy") or "user") == "platform":
+            async with _permanent_route_semaphore:
+                generated = await generate_battle_route(**generation_args)
+        else:
+            generated = await generate_battle_route(**generation_args)
     except Exception as exc:
         code = exc.code if isinstance(exc, BattleRouteGenerationError) else "ROUTE_GENERATION_FAILED"
         now = iso()
@@ -431,18 +440,28 @@ async def _prepare_route(
                 "UPDATE battle_rounds SET status = 'failed', error_code = ?, updated_at = ? WHERE round_id = ?",
                 (code, now, round_id),
             )
-            db.execute(
-                """
-                UPDATE battle_rooms SET status = 'closed', generation_error = ?,
-                    closed_at = ?, updated_at = ?, revision = revision + 1
-                WHERE room_id = ?
-                """,
-                (code, now, now, room["room_id"]),
-            )
-            db.execute(
-                "UPDATE battle_members SET status = 'left', ready = 0, left_at = ?, updated_at = ? WHERE room_id = ? AND status = 'active'",
-                (now, now, room["room_id"]),
-            )
+            if str(room.get("lifecycle_kind") or "normal") == "permanent":
+                db.execute(
+                    """
+                    UPDATE battle_rooms SET status = 'waiting', generation_error = ?,
+                        expires_at = ?, updated_at = ?, revision = revision + 1
+                    WHERE room_id = ?
+                    """,
+                    (code, repository.PERMANENT_ROOM_EXPIRES_AT, now, room["room_id"]),
+                )
+            else:
+                db.execute(
+                    """
+                    UPDATE battle_rooms SET status = 'closed', generation_error = ?,
+                        closed_at = ?, updated_at = ?, revision = revision + 1
+                    WHERE room_id = ?
+                    """,
+                    (code, now, now, room["room_id"]),
+                )
+                db.execute(
+                    "UPDATE battle_members SET status = 'left', ready = 0, left_at = ?, updated_at = ? WHERE room_id = ? AND status = 'active'",
+                    (now, now, room["room_id"]),
+                )
         _settle_round_reservation(
             round_id,
             reservation,
@@ -503,11 +522,19 @@ async def _prepare_route(
                 revision = revision + 1, updated_at = ?
             WHERE room_id = ?
             """,
-            (iso(utcnow() + WAITING_LIFETIME), now, room["room_id"]),
+            (
+                repository.PERMANENT_ROOM_EXPIRES_AT
+                if str(room.get("lifecycle_kind") or "normal") == "permanent"
+                else iso(utcnow() + WAITING_LIFETIME),
+                now,
+                room["room_id"],
+            ),
         )
     if auto_start:
         try:
-            _start_ready_round(str(room["room_id"]), host_user_id=int(room["host_user_id"]))
+            host_key = str(room.get("host_actor_key") or "")
+            if host_key:
+                _start_ready_round(str(room["room_id"]), host_actor_key=host_key)
         except BattleServiceError:
             pass
     await _broadcast(str(room["room_id"]))
@@ -547,13 +574,13 @@ def settle_unstarted_round_for_mode(room_id: str, *, reason: str) -> None:
     )
 
 
-def _start_ready_round(room_ref: str, *, host_user_id: int) -> dict[str, Any]:
+def _start_ready_round(room_ref: str, *, host_actor_key: str) -> dict[str, Any]:
     now = utcnow()
     now_text = iso(now)
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
         room = repository._find_room(db, room_ref)
-        if int(room["host_user_id"]) != int(host_user_id):
+        if str(room["host_actor_key"] or f"u:{room['host_user_id']}") != str(host_actor_key):
             raise BattleServiceError("HOST_REQUIRED", "Only the host can start.", 403)
         if room["status"] != "waiting":
             raise BattleServiceError("ROOM_NOT_READY", "Room is not ready to start.", 409)
@@ -646,22 +673,28 @@ def _start_ready_round(room_ref: str, *, host_user_id: int) -> dict[str, Any]:
 async def start_room_for_mode(
     room_code: str,
     *,
-    user_id: int,
-    session_id: int | None,
+    actor_key: str | None = None,
+    user_id: int | None = None,
+    session_id: int | None = None,
 ) -> dict[str, Any]:
+    actor_key = str(actor_key or (f"u:{user_id}" if user_id is not None else ""))
     room = repository.get_room(room_code)
-    if int(room["host_user_id"]) != int(user_id):
+    if str(room.get("host_actor_key") or f"u:{room.get('host_user_id')}") != str(actor_key):
         raise BattleServiceError("HOST_REQUIRED", "Only the host can start.", 403)
     current_round = room.get("round") or {}
-    if current_round.get("status") == "completed":
-        reservation = reserve_operation_tokens(
-            user_id=user_id,
-            session_id=session_id,
-            operation_key="battle_route_generation",
-            full_pattern=str(room["full_pattern"]),
-        )
-        if reservation is None:
-            raise BattleServiceError("TOKEN_CONFIGURATION_ERROR", "Battle token cost is not configured.", 500)
+    if current_round.get("status") in {"completed", "failed", "cancelled"}:
+        reservation = None
+        if str(room.get("billing_policy") or "user") != "platform":
+            if user_id is None:
+                raise BattleServiceError("AUTH_REQUIRED", "Authentication required.", 401)
+            reservation = reserve_operation_tokens(
+                user_id=user_id,
+                session_id=session_id,
+                operation_key="battle_route_generation",
+                full_pattern=str(room["full_pattern"]),
+            )
+            if reservation is None:
+                raise BattleServiceError("TOKEN_CONFIGURATION_ERROR", "Battle token cost is not configured.", 500)
         round_number = int(room.get("current_round_number") or 0) + 1
         try:
             round_id = _insert_round(
@@ -672,15 +705,58 @@ async def start_room_for_mode(
                 auto_start_after_generation=True,
             )
         except Exception:
-            cancel_reservation(reservation, reason="battle_next_round_not_created")
+            if reservation is not None:
+                cancel_reservation(reservation, reason="battle_next_round_not_created")
             raise
         _schedule_route(round_id, reservation=reservation, auto_start=True)
-        snapshot = room_snapshot(room_code, user_id=user_id)
+        snapshot = room_snapshot(room_code, actor_key=actor_key)
         await _broadcast(str(room["room_id"]))
         return snapshot
-    _start_ready_round(room_code, host_user_id=user_id)
+    _start_ready_round(room_code, host_actor_key=actor_key)
     await _broadcast(str(room["room_id"]))
-    return room_snapshot(room_code, user_id=user_id)
+    return room_snapshot(room_code, actor_key=actor_key)
+
+
+async def ensure_permanent_room(definition) -> dict[str, Any]:
+    settings = _goodness_mode.validate_settings(
+        {
+            "full_pattern": definition.full_pattern,
+            "initial_board": definition.initial_board,
+            "max_players": definition.max_players,
+            "step_timeout_seconds": definition.step_timeout_seconds,
+            "is_public": True,
+            "allow_spectators": True,
+            "allow_guest_chat": True,
+            "chat_roles": ["host", "player", "spectator"],
+        }
+    )
+    public_settings = {key: value for key, value in settings.items() if key != "chat_roles"}
+    room = repository.create_permanent_room(
+        template_key=definition.template_key,
+        pattern=str(settings["pattern"]),
+        target=int(settings["target"]),
+        full_pattern=str(settings["full_pattern"]),
+        mode_key=_goodness_mode.key,
+        mode_version=_goodness_mode.version,
+        initial_board=str(definition.initial_board),
+        max_steps=None,
+        step_timeout_seconds=int(settings["step_timeout_seconds"]),
+        max_players=int(settings["max_players"]),
+        settings=public_settings,
+        status="preparing",
+    )
+    current = room.get("round") or {}
+    if not current or current.get("status") in {"failed", "cancelled"}:
+        round_id = _insert_round(
+            room_id=str(room["room_id"]),
+            round_number=int(room.get("current_round_number") or 0) + 1,
+            seed_hex=secrets.token_hex(16),
+            reservation=None,
+        )
+        _schedule_route(round_id, reservation=None, auto_start=False)
+    elif current.get("status") == "preparing":
+        _schedule_route(str(current["round_id"]), reservation=None, auto_start=False)
+    return repository.get_room(str(room["room_id"]))
 
 
 def artifact_payload_for_mode(
@@ -985,8 +1061,17 @@ def _complete_round_if_done(
         UPDATE battle_rooms SET status = 'waiting', expires_at = ?,
             revision = revision + 1, updated_at = ? WHERE room_id = ?
         """,
-        (iso(utcnow() + WAITING_LIFETIME), now_text, room_id),
+        (
+            repository.PERMANENT_ROOM_EXPIRES_AT
+            if str(repository._find_room(db, room_id)["lifecycle_kind"] or "normal") == "permanent"
+            else iso(utcnow() + WAITING_LIFETIME),
+            now_text,
+            room_id,
+        ),
     )
+    from ...permanent.service import rotate_after_round_in_db
+
+    rotate_after_round_in_db(db, room_id, now_text=now_text)
     return True
 
 
@@ -1113,7 +1198,7 @@ def mark_timeouts() -> set[str]:
             changed_rooms.add(str(row["room_id"]))
 
         stale_rooms = db.execute(
-            "SELECT * FROM battle_rooms WHERE mode_key = 'goodness' AND status IN ('preparing', 'waiting') AND expires_at <= ?",
+            "SELECT * FROM battle_rooms WHERE mode_key = 'goodness' AND lifecycle_kind = 'normal' AND status IN ('preparing', 'waiting') AND expires_at <= ?",
             (now_text,),
         ).fetchall()
         for row in stale_rooms:
@@ -1208,7 +1293,10 @@ async def startup() -> None:
                     )
                 elif bool(row["auto_start_after_generation"]):
                     try:
-                        _start_ready_round(str(row["room_id"]), host_user_id=int(row["host_user_id"]))
+                        _start_ready_round(
+                            str(row["room_id"]),
+                            host_actor_key=str(row["host_actor_key"] or f"u:{row['host_user_id']}"),
+                        )
                     except BattleServiceError:
                         pass
             elif status in {"running", "completed"}:

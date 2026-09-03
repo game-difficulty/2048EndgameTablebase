@@ -193,7 +193,12 @@ def post_message(
                 "Guest chat is disabled for this room.",
                 403,
             )
-        role = effective_chat_role(room=room, member=member, user_id=identity.user_id)
+        role = effective_chat_role(
+            room=room,
+            member=member,
+            user_id=identity.user_id,
+            actor_key=identity.actor_key,
+        )
         if role not in decode_chat_roles(room["chat_roles_json"]):
             raise BattleServiceError(
                 "CHAT_ROLE_NOT_ALLOWED",

@@ -26,6 +26,7 @@ from .service import (
     set_ready,
     set_role,
     start_room,
+    update_room_settings,
 )
 
 
@@ -162,12 +163,12 @@ async def role_battle_room(
 async def kick_battle_member(
     room_code: str,
     payload: dict = Body(...),
-    user: dict = Depends(require_user),
+    actor=Depends(require_actor),
 ) -> dict[str, Any]:
     try:
         room = kick(
             room_code,
-            host_user_id=int(user["id"]),
+            actor=actor,
             target_actor_key=(str(payload.get("actor_key")) if payload.get("actor_key") else None),
             target_user_id=(int(payload["user_id"]) if payload.get("user_id") is not None else None),
         )
@@ -181,15 +182,54 @@ async def kick_battle_member(
 @router.post("/rooms/{room_code}/start")
 async def start_battle_room(
     room_code: str,
-    user: dict = Depends(require_user),
+    actor=Depends(require_actor),
 ) -> dict[str, Any]:
     try:
         room = await start_room(
             room_code,
-            user_id=int(user["id"]),
-            session_id=(int(user["session_id"]) if user.get("session_id") else None),
+            actor=actor,
         )
-        return {"room": room, "token_balance": get_token_balance(int(user["id"]))}
+        identity = coerce_actor(actor)
+        return {
+            "room": room,
+            **(
+                {"token_balance": get_token_balance(int(identity.user_id))}
+                if identity.is_user
+                else {}
+            ),
+        }
+    except Exception as exc:
+        _raise_service_error(exc)
+        raise
+
+
+@router.patch("/rooms/{room_code}/settings")
+async def patch_battle_room_settings(
+    room_code: str,
+    payload: dict = Body(...),
+    actor=Depends(require_actor),
+) -> dict[str, Any]:
+    try:
+        room = await update_room_settings(room_code, actor=actor, payload=payload)
+        await broadcast_room(str(room["room_id"]))
+        return {"room": room}
+    except Exception as exc:
+        _raise_service_error(exc)
+        raise
+
+
+@router.post("/rooms/{room_code}/host/renew")
+async def renew_battle_room_host(
+    room_code: str,
+    actor=Depends(require_actor),
+) -> dict[str, Any]:
+    try:
+        from .permanent.service import renew_host
+
+        room = renew_host(room_code, actor)
+        snapshot = room_snapshot(room_code, actor=actor)
+        await broadcast_room(str(room["room_id"]))
+        return {"room": snapshot}
     except Exception as exc:
         _raise_service_error(exc)
         raise

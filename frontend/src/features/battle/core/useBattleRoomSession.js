@@ -31,6 +31,8 @@ export function useBattleRoomSession(
   const completedRoundView = ref('');
   const resultVisibleRound = ref('');
   const forfeitPending = ref(false);
+  const settingsPending = ref(false);
+  const hostRenewPending = ref(false);
   const chat = createBattleChatState();
   const roomViewState = createBattleRoomViewState();
   const modeAdapters = new Map();
@@ -423,6 +425,41 @@ export function useBattleRoomSession(
     }
   };
 
+  const updateRoomSettings = async (settings) => {
+    if (!room.value?.room_code || !viewer.value?.is_host || settingsPending.value) return false;
+    settingsPending.value = true;
+    error.value = '';
+    try {
+      const response = await battleClient.updateSettings(room.value.room_code, settings);
+      await applyRoom(response.room);
+      return true;
+    } catch (requestError) {
+      error.value = errorKey(requestError, 'battle_settings_update_failed');
+      return false;
+    } finally {
+      settingsPending.value = false;
+    }
+  };
+
+  const renewHosting = async () => {
+    if (!room.value?.room_code || !viewer.value?.is_host || hostRenewPending.value) return false;
+    hostRenewPending.value = true;
+    error.value = '';
+    try {
+      const response = await battleClient.renewHost(
+        room.value.room_code,
+        battleRequestId('host-renew'),
+      );
+      await applyRoom(response.room);
+      return true;
+    } catch (requestError) {
+      error.value = errorKey(requestError, 'battle_host_renew_failed');
+      return false;
+    } finally {
+      hostRenewPending.value = false;
+    }
+  };
+
   const syncRoomViewState = (viewState) => {
     completedRoundView.value = viewState.heldRoundId;
     resultVisibleRound.value = viewState.resultRoundId;
@@ -491,6 +528,8 @@ export function useBattleRoomSession(
     showResults,
     resultMode,
     forfeitPending,
+    settingsPending,
+    hostRenewPending,
     activeModeKey: computed(() => modeKeyFor()),
     registerModeAdapter,
     bootstrapMode,
@@ -513,6 +552,8 @@ export function useBattleRoomSession(
     forfeit,
     kickMember,
     setRole,
+    updateRoomSettings,
+    renewHosting,
     returnToLobby,
     openResults,
     dismissResults,

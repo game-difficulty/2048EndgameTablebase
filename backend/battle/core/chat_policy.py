@@ -28,8 +28,10 @@ def decode_chat_roles(value: Any) -> list[str]:
 
 
 def effective_chat_role(
-    *, room: Any, member: Any, user_id: int | None = None
+    *, room: Any, member: Any, user_id: int | None = None, actor_key: str | None = None
 ) -> str:
-    if user_id is not None and int(room["host_user_id"]) == int(user_id):
+    identity_key = str(actor_key or "") or (f"u:{int(user_id)}" if user_id is not None else "")
+    room_host = str(room["host_actor_key"] or f"u:{room['host_user_id']}")
+    if identity_key and room_host == identity_key:
         return "host"
     return str(member["role"] or "").strip().lower()
