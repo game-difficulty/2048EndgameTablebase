@@ -884,13 +884,29 @@ def _record_choice_goodness(
             replay_recorded
         )
         now = iso()
+        try:
+            mode_data = json.loads(result["mode_data_json"] or "{}")
+        except (TypeError, ValueError):
+            mode_data = {}
+        if wrong:
+            mode_data["correction"] = {
+                "selected_direction": direction,
+                "standard_direction": standard_direction,
+                "goodness_drop": score.goodness_drop,
+                "previous_route_index": expected_index,
+                "visible_until": iso(
+                    utcnow() + timedelta(seconds=CORRECTION_WINDOW_SECONDS)
+                ),
+            }
+        else:
+            mode_data.pop("correction", None)
         db.execute(
             """
             UPDATE battle_player_results
             SET status = ?, route_index = ?, last_sequence = ?, goodness_of_fit = ?,
                 choice_blob = ?, finished_at = ?, timeout_at = ?, updated_at = ?,
                 board_state = ?, progress = ?, primary_score = ?,
-                replay_blob = ?, replay_move_count = ?
+                replay_blob = ?, replay_move_count = ?, mode_data_json = ?
             WHERE result_id = ?
             """,
             (
@@ -907,6 +923,7 @@ def _record_choice_goodness(
                 score.goodness_of_fit,
                 replay_blob,
                 replay_move_count,
+                json.dumps(mode_data, separators=(",", ":")),
                 result["result_id"],
             ),
         )
@@ -972,9 +989,19 @@ def _complete_correction_goodness(
         resumed_deadline = utcnow() + timedelta(seconds=int(room["step_timeout_seconds"]))
         timeout_at = iso(min(current_deadline, resumed_deadline))
         now = iso()
+        try:
+            mode_data = json.loads(result["mode_data_json"] or "{}")
+        except (TypeError, ValueError):
+            mode_data = {}
+        mode_data.pop("correction", None)
         db.execute(
-            "UPDATE battle_player_results SET timeout_at = ?, updated_at = ? WHERE result_id = ?",
-            (timeout_at, now, result["result_id"]),
+            "UPDATE battle_player_results SET timeout_at = ?, mode_data_json = ?, updated_at = ? WHERE result_id = ?",
+            (
+                timeout_at,
+                json.dumps(mode_data, separators=(",", ":")),
+                now,
+                result["result_id"],
+            ),
         )
         db.execute(
             "UPDATE battle_rooms SET revision = revision + 1, updated_at = ? WHERE room_id = ?",
@@ -1017,6 +1044,40 @@ def handle_action_for_mode(
             route_index=int(payload.get("route_index")),
         )
     raise BattleServiceError("MODE_ACTION_UNSUPPORTED", "Unsupported Battle action.", 400)
+
+
+def sanitize_snapshot_for_mode(
+    payload: dict[str, Any], *, viewer_actor_key: str, viewer_user_id: int | None
+) -> dict[str, Any]:
+    del viewer_user_id
+    viewer_member = next(
+        (
+            item
+            for item in payload.get("members", [])
+            if str(item.get("actor_key") or "") == str(viewer_actor_key)
+        ),
+        {},
+    )
+    viewer_result = next(
+        (
+            item
+            for item in payload.get("results", [])
+            if str(item.get("actor_key") or "") == str(viewer_actor_key)
+        ),
+        {},
+    )
+    reveal_others = viewer_member.get("role") == "spectator" or str(
+        viewer_result.get("status") or ""
+    ) in {"completed", "timed_out", "disqualified"}
+    for result in payload.get("results", []):
+        if str(result.get("actor_key") or "") == str(viewer_actor_key):
+            continue
+        if reveal_others:
+            continue
+        mode_data = dict(result.get("mode_data") or {})
+        mode_data.pop("correction", None)
+        result["mode_data"] = mode_data
+    return payload
 
 
 def _complete_round_if_done(

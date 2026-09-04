@@ -230,7 +230,9 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
             step_timeout_seconds=30,
             generated_route=self._generated_route(step_count=2),
         )
+        spectator_id = self._create_user("battle-correction-viewer@example.com", 1_000_000)
         service.join_room(room["room_code"], user_id=self.player_id, role="player")
+        service.join_room(room["room_code"], user_id=spectator_id, role="spectator")
         service.set_ready(room["room_code"], user_id=self.host_id, ready=True)
         service.set_ready(room["room_code"], user_id=self.player_id, ready=True)
         started = await service.start_room(
@@ -249,6 +251,26 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(choice["wrong"])
         self.assertEqual(choice["correction_seconds"], 15)
         self.assertFalse(choice["complete"])
+        host_view = service.room_snapshot(room["room_code"], user_id=self.host_id)
+        hidden_view = service.room_snapshot(room["room_code"], user_id=self.player_id)
+        spectator_view = service.room_snapshot(room["room_code"], user_id=spectator_id)
+        host_result = next(
+            item for item in host_view["results"] if int(item["user_id"]) == self.host_id
+        )
+        hidden_result = next(
+            item for item in hidden_view["results"] if int(item["user_id"]) == self.host_id
+        )
+        spectator_result = next(
+            item for item in spectator_view["results"] if int(item["user_id"]) == self.host_id
+        )
+        self.assertEqual(
+            host_result["mode_data"]["correction"]["selected_direction"], "right"
+        )
+        self.assertNotIn("correction", hidden_result["mode_data"])
+        self.assertEqual(
+            spectator_result["mode_data"]["correction"]["standard_direction"],
+            "left",
+        )
         before = repository.get_room(room["room_code"])
         before_result = next(
             result for result in before["results"] if int(result["user_id"]) == self.host_id
@@ -273,6 +295,15 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
         remaining = (resumed_deadline - datetime.now(timezone.utc)).total_seconds()
         self.assertGreaterEqual(remaining, 29)
         self.assertLessEqual(remaining, 30)
+        resumed_spectator_view = service.room_snapshot(
+            room["room_code"], user_id=spectator_id
+        )
+        resumed_host = next(
+            item
+            for item in resumed_spectator_view["results"]
+            if int(item["user_id"]) == self.host_id
+        )
+        self.assertNotIn("correction", resumed_host["mode_data"])
 
         repeated = service.handle_mode_action(
             room["room_code"],

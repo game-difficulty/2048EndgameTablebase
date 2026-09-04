@@ -204,6 +204,7 @@
           v-show="activeTab === TAB_IDS.BATTLE"
         >
           <BattleView
+            ref="battleViewRef"
             :active="activeTab === TAB_IDS.BATTLE"
             :hotkeys-enabled="activeTab === TAB_IDS.BATTLE && keyboardInputAllowed(KEYBOARD_OWNERS.PRIMARY)"
             :auth-user="authUser"
@@ -536,6 +537,7 @@ const FIXED_LAYOUT_MAX_WIDTH = 1600;
 const FIXED_LAYOUT_HEIGHT = 800;
 const fixedViewport = ref(null);
 const appTopBar = ref(null);
+const battleViewRef = ref(null);
 const appTopBarHeight = ref(0);
 const fixedLayoutWidth = ref(FIXED_LAYOUT_MIN_WIDTH);
 const leaderboardRequestedKey = ref('');
@@ -940,7 +942,19 @@ const handleActivateTab = (tabId, event) => {
   blurButtonTarget(event);
 };
 
-const handleCloseTab = (tabId, event) => {
+let battleTabClosePending = false;
+const handleCloseTab = async (tabId, event) => {
+  blurButtonTarget(event);
+  if (tabId === TAB_IDS.BATTLE && battleViewRef.value?.beforeTabClose) {
+    if (battleTabClosePending) return;
+    battleTabClosePending = true;
+    try {
+      const canClose = await battleViewRef.value.beforeTabClose();
+      if (!canClose) return;
+    } finally {
+      battleTabClosePending = false;
+    }
+  }
   if (tabId === TAB_IDS.TRAINER) {
     trainerDockPlacement.value = TRAINER_DOCK_PLACEMENTS.NONE;
     setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
@@ -949,7 +963,6 @@ const handleCloseTab = (tabId, event) => {
   if (trainerDockActive.value && activeTab.value === TAB_IDS.TRAINER) {
     activateTab(getTrainerCompanionTab());
   }
-  blurButtonTarget(event);
 };
 
 const writeTrainerDockPreference = (placement) => {

@@ -72,7 +72,14 @@
             <span>{{ player.route_index }}/{{ totalSteps }}</span>
           </div>
         </div>
-        <BaseBoard v-if="opponentBoards[battleActorRenderKey(player)]" :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant" />
+        <div v-if="opponentBoards[battleActorRenderKey(player)]" class="battle-visible-board">
+          <BaseBoard :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant" />
+          <BattleCorrectionOverlay
+            v-if="opponentOverlayFor(player)"
+            :overlay="opponentOverlayFor(player)"
+            compact
+          />
+        </div>
       </article>
     </div>
 
@@ -86,24 +93,12 @@
         <div :class="['battle-board-shell', { urgent: countdownState.urgent }]">
           <BaseBoard :frame="boardFrame" :dis32k="dis32k" :is-variant="isVariant" @swipe="$emit('move', $event)" />
           <Transition name="battle-correction">
-            <div
+            <BattleCorrectionOverlay
               v-if="wrongOverlay"
-              class="battle-wrong-overlay"
-              role="button"
-              tabindex="0"
-              aria-live="assertive"
-              @click.stop="$emit('continue-correction')"
-              @keydown.space.prevent="$emit('continue-correction')"
-            >
-              <span class="battle-wrong-kicker">{{ $t('battle.match.correcting') }}</span>
-              <div class="battle-direction-correction">
-                <div><small>{{ $t('battle.match.yourMove') }}</small><strong class="wrong">{{ directionLabel(wrongOverlay.selectedDirection) }}</strong></div>
-                <span class="battle-correction-arrow">→</span>
-                <div><small>{{ $t('battle.match.standardMove') }}</small><strong class="correct">{{ directionLabel(wrongOverlay.standardDirection) }}</strong></div>
-              </div>
-              <p>{{ $t('battle.match.goodnessDrop', { value: dropPercent(wrongOverlay.drop) }) }}</p>
-              <small class="battle-correction-hint">{{ $t('battle.match.continueHint') }}</small>
-            </div>
+              :overlay="wrongOverlay"
+              interactive
+              @continue="$emit('continue-correction')"
+            />
           </Transition>
         </div>
         <p v-if="!roundCompleted" class="battle-input-hint">{{ $t('battle.match.inputHint') }}</p>
@@ -128,6 +123,11 @@
             <div class="battle-opponent-footer"><span>{{ player.route_index }}/{{ totalSteps }}</span><span>{{ $t(playerStatusKey(player)) }}</span></div>
             <div v-if="canSeeBoard(player) && opponentBoards[battleActorRenderKey(player)]" class="battle-revealed-board">
               <BaseBoard compact :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant" />
+              <BattleCorrectionOverlay
+                v-if="opponentOverlayFor(player)"
+                :overlay="opponentOverlayFor(player)"
+                compact
+              />
             </div>
           </article>
         </div>
@@ -141,6 +141,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
+import BattleCorrectionOverlay from './BattleCorrectionOverlay.vue';
 import {
   battleActorRenderKey,
   isBattleGuest,
@@ -154,6 +155,7 @@ const props = defineProps({
   currentActorKey: { type: String, default: '' },
   boardFrame: { type: Object, required: true },
   opponentBoards: { type: Object, default: () => ({}) },
+  opponentOverlays: { type: Object, default: () => ({}) },
   wrongOverlay: { type: Object, default: null },
   resolving: { type: Boolean, default: false },
   spectator: { type: Boolean, default: false },
@@ -208,7 +210,6 @@ const countdown = computed(() => (
   countdownState.value.seconds == null ? '--' : `${countdownState.value.seconds}s`
 ));
 const percent = (value) => `${(Math.max(0, Math.min(1, Number(value ?? 1))) * 100).toFixed(2)}%`;
-const dropPercent = (value) => `${(Math.max(0, Number(value || 0)) * 100).toFixed(2)}%`;
 const progressPercent = (index) => `${Math.min(100, totalSteps.value ? Number(index || 0) / totalSteps.value * 100 : 0)}%`;
 const initials = (value) => String(value || '?').trim().slice(0, 2).toUpperCase();
 const onlineStatusKey = (player) => (player?.online ? 'battle.status.online' : 'battle.status.offline');
@@ -217,11 +218,16 @@ const playerStatusKey = (player) => (
     ? 'battle.playerStatus.forfeited'
     : `battle.playerStatus.${player?.status || 'playing'}`
 );
-const directionLabel = (direction) => ({ left: '←', right: '→', up: '↑', down: '↓' }[direction] || '?');
 const canSeeBoard = (player) => (
   !isCurrentActor(player)
   && (props.spectator || props.ownFinished)
 );
+const opponentOverlayFor = (player) => {
+  const overlay = props.opponentOverlays[battleActorRenderKey(player)] || null;
+  return overlay && (overlay.visibleUntil == null || overlay.visibleUntil > now.value)
+    ? overlay
+    : null;
+};
 
 onMounted(() => { timer = window.setInterval(() => { now.value = Date.now(); }, 250); });
 onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
@@ -260,19 +266,6 @@ onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
 .battle-board-shell::after { position: absolute; inset: -5px; z-index: 70; border: 2px solid transparent; border-radius: 14px; content: ''; pointer-events: none; }
 .battle-board-shell.urgent::after { animation: battle-board-urgent .72s ease-out 1; }
 .battle-input-hint { margin: 9px 0 0; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 700; text-align: center; }
-.battle-wrong-overlay { position: absolute; inset: 0; z-index: 60; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 0; border-radius: 12px; background: color-mix(in srgb, var(--bg-card) 91%, transparent); backdrop-filter: blur(5px); color: var(--text-main); text-align: center; cursor: pointer; touch-action: manipulation; user-select: none; -webkit-tap-highlight-color: transparent; }
-.battle-wrong-overlay:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: -5px; }
-.battle-wrong-overlay:active { background: color-mix(in srgb, var(--bg-card) 84%, var(--accent)); }
-.battle-wrong-kicker { color: var(--text-secondary); font-size: 11px; font-weight: 900; text-transform: uppercase; }
-.battle-direction-correction { display: flex; align-items: center; gap: 22px; margin: 17px 0 11px; }
-.battle-direction-correction div { display: flex; flex-direction: column; gap: 4px; }
-.battle-direction-correction small { color: var(--text-secondary); font-weight: 800; }
-.battle-direction-correction strong { font-size: 45px; line-height: 1; }
-.battle-direction-correction .wrong { color: #d94f56; }
-.battle-direction-correction .correct { color: #2f9c65; }
-.battle-correction-arrow { color: var(--text-secondary); font-size: 22px; }
-.battle-wrong-overlay p { margin: 0; color: var(--text-main); font-size: var(--font-ui-sm); font-weight: 900; }
-.battle-correction-hint { margin-top: 10px; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 800; }
 .battle-correction-enter-active, .battle-correction-leave-active { transition: opacity .16s ease; }
 .battle-correction-enter-from, .battle-correction-leave-to { opacity: 0; }
 .battle-opponents-panel { min-width: 0; padding: 15px; }
@@ -296,7 +289,8 @@ onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
 .battle-progress-track { height: 5px; margin: 10px 0 6px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--border-main) 68%, transparent); }
 .battle-progress-track i { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
 .battle-opponent-footer { color: var(--text-secondary); font-size: 9px; font-weight: 800; }
-.battle-revealed-board { width: 160px; margin: 10px auto 0; }
+.battle-revealed-board { position: relative; width: 160px; margin: 10px auto 0; }
+.battle-visible-board { position: relative; }
 .battle-spectator-stage { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; }
 .battle-spectator-board { min-width: 0; padding: 10px; border: 1px solid var(--border-main); border-radius: 8px; background: var(--bg-card); }
 .battle-mini-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-bottom: 8px; }

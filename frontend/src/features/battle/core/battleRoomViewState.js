@@ -6,6 +6,10 @@ function isCompleted(room) {
   return Boolean(roundId(room) && room?.round?.status === 'completed');
 }
 
+export function shouldLeaveBattleRoomOnTabClose(room) {
+  return Boolean(room) && String(room.status || '') !== 'running';
+}
+
 export function createBattleRoomViewState() {
   let roomId = '';
   let activeRoundId = '';

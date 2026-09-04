@@ -327,16 +327,18 @@ export function useBattleRoomSession(
     }
   };
 
-  const leave = async () => {
-    if (!room.value) return;
+  const leave = async ({ refreshRoomList = true } = {}) => {
+    if (!room.value) return true;
     try {
       const code = room.value.room_code;
       await battleClient.leave(code, { request_id: battleRequestId('leave') });
       await applyRoom(null);
       client.disconnect();
-      await refreshRooms();
+      if (refreshRoomList) await refreshRooms();
+      return true;
     } catch (requestError) {
       error.value = errorKey(requestError, 'battle_leave_failed');
+      return false;
     }
   };
 

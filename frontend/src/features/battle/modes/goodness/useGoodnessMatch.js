@@ -18,6 +18,7 @@ import { isVariantPattern } from '../../../../utils/patternCategories.js';
 import { createBattleController } from './engine/battleController.js';
 import { battleClient, battleRequestId } from '../../services/battleClient.js';
 import { battleActorRenderKey } from '../../core/battleActor.js';
+import { correctionOverlayForResult } from '../../core/battleCorrection.js';
 
 const KEY_DIRECTIONS = Object.freeze({
   ArrowLeft: 'left',
@@ -66,6 +67,7 @@ export function useGoodnessMatch(
   );
   const controllerState = ref(null);
   const opponentBoards = ref({});
+  const opponentOverlays = ref({});
   const pendingInputs = new Map();
   let controller = null;
   let routeRoundId = '';
@@ -152,9 +154,11 @@ export function useGoodnessMatch(
   const updateOpponentBoards = () => {
     if (!controller || !room.value?.results) {
       opponentBoards.value = {};
+      opponentOverlays.value = {};
       return;
     }
     const frames = {};
+    const overlays = {};
     for (const result of room.value.results) {
       if (
         !spectatorMode.value
@@ -166,7 +170,9 @@ export function useGoodnessMatch(
         certaintyStep: controller.certaintyStep,
         useVariant: controller.useVariant,
       });
-      const state = copy.seek(Number(result.route_index || 0), {
+      const correction = correctionOverlayForResult(result);
+      const visibleIndex = correction?.previousRouteIndex ?? Number(result.route_index || 0);
+      const state = copy.seek(visibleIndex, {
         goodnessOfFit: Number(result.goodness_of_fit ?? 1),
       });
       const actorKey = battleActorRenderKey(result);
@@ -174,8 +180,10 @@ export function useGoodnessMatch(
         `opponent-${actorKey}-${result.route_index}`,
         state.board,
       );
+      if (correction) overlays[actorKey] = correction;
     }
     opponentBoards.value = frames;
+    opponentOverlays.value = overlays;
   };
 
   const syncControllerToServer = () => {
@@ -229,6 +237,7 @@ export function useGoodnessMatch(
       pendingInputs.clear();
       controllerState.value = null;
       opponentBoards.value = {};
+      opponentOverlays.value = {};
       return;
     }
     await loadRoute();
@@ -356,6 +365,7 @@ export function useGoodnessMatch(
   const matchProps = computed(() => ({
     boardFrame: boardFrame.value,
     opponentBoards: opponentBoards.value,
+    opponentOverlays: opponentOverlays.value,
     wrongOverlay: wrongOverlay.value,
     spectator: spectatorMode.value,
     ownFinished: ownFinished.value,
@@ -391,6 +401,7 @@ export function useGoodnessMatch(
     boardFrame,
     controllerState,
     opponentBoards,
+    opponentOverlays,
     wrongOverlay,
     hallProps,
     matchProps,

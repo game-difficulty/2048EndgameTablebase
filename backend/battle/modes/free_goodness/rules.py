@@ -167,10 +167,10 @@ def evaluate_spawn(
     return accepted, multiplier, next_state
 
 
-def deterministic_ticket(seed_hex: str, step_index: int, attempt_index: int) -> bytes:
+def deterministic_ticket(seed_hex: str, board_key: int, attempt_index: int) -> bytes:
     seed = bytes.fromhex(str(seed_hex))
     payload = (
-        int(step_index).to_bytes(8, "big", signed=False)
+        int(board_key).to_bytes(8, "big", signed=False)
         + int(attempt_index).to_bytes(8, "big", signed=False)
     )
     return hmac.new(seed, payload, hashlib.sha256).digest()
@@ -178,7 +178,7 @@ def deterministic_ticket(seed_hex: str, step_index: int, attempt_index: int) -> 
 
 def deterministic_spawn_choice(
     seed_hex: str,
-    step_index: int,
+    board_key: int,
     attempt_index: int,
     empty_indices: Iterable[int],
     *,
@@ -187,7 +187,7 @@ def deterministic_spawn_choice(
     empty = tuple(sorted(int(index) for index in empty_indices))
     if not empty:
         raise ValueError("no_spawn_cell")
-    ticket = deterministic_ticket(seed_hex, step_index, attempt_index)
+    ticket = deterministic_ticket(seed_hex, board_key, attempt_index)
     position_roll = int.from_bytes(ticket[:8], "big")
     value_roll = int.from_bytes(ticket[8:16], "big") / float(1 << 64)
     return empty[position_roll % len(empty)], 4 if value_roll < float(spawn_rate) else 2

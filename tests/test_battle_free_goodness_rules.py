@@ -112,11 +112,12 @@ class FreeGoodnessRuleTests(unittest.TestCase):
 
     def test_deterministic_spawn_is_stable(self) -> None:
         seed = "00112233445566778899aabbccddeeff" * 2
+        moved_board = 0x0011223344556600
         first = deterministic_spawn_choice(
-            seed, 17, 3, [1, 4, 7, 12], spawn_rate=0.1
+            seed, moved_board, 3, [1, 4, 7, 12], spawn_rate=0.1
         )
         second = deterministic_spawn_choice(
-            seed, 17, 3, [1, 4, 7, 12], spawn_rate=0.1
+            seed, moved_board, 3, [1, 4, 7, 12], spawn_rate=0.1
         )
         self.assertEqual(first, second)
         self.assertIn(first[0], {1, 4, 7, 12})

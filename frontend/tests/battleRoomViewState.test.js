@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createBattleRoomViewState } from '../src/features/battle/core/battleRoomViewState.js';
+import {
+  createBattleRoomViewState,
+  shouldLeaveBattleRoomOnTabClose,
+} from '../src/features/battle/core/battleRoomViewState.js';
 
 function room({ roomId = 'room-1', roomStatus, roundId = 'round-1', roundStatus }) {
   return {
@@ -78,4 +81,11 @@ test('live results remain open across snapshots of the same running round', () =
     heldRoundId: '',
     resultRoundId: 'round-1',
   });
+});
+
+test('closing the Battle tab leaves lobbies but not running matches', () => {
+  assert.equal(shouldLeaveBattleRoomOnTabClose(null), false);
+  assert.equal(shouldLeaveBattleRoomOnTabClose({ status: 'preparing' }), true);
+  assert.equal(shouldLeaveBattleRoomOnTabClose({ status: 'waiting' }), true);
+  assert.equal(shouldLeaveBattleRoomOnTabClose({ status: 'running' }), false);
 });

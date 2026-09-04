@@ -23,6 +23,7 @@ import {
 } from '../../../replay/engine/replayTransition.js';
 import { battleRequestId } from '../../services/battleClient.js';
 import { battleActorRenderKey } from '../../core/battleActor.js';
+import { correctionOverlayForResult } from '../../core/battleCorrection.js';
 
 const KEY_DIRECTIONS = Object.freeze({
   ArrowLeft: 'left',
@@ -69,6 +70,7 @@ export function useFreeGoodnessMatch(
   const quotaRules = ref(null);
   const boardFrame = ref(createSnapshotBoardFrame('free-battle-empty', new Array(16).fill(0)));
   const opponentBoards = ref({});
+  const opponentOverlays = ref({});
   const wrongOverlay = ref(null);
   const pendingRequest = ref('');
   let currentBoardHex = '';
@@ -236,8 +238,10 @@ export function useFreeGoodnessMatch(
 
   const updateOpponentBoards = () => {
     const frames = {};
+    const overlays = {};
     for (const result of room.value?.results || []) {
-      const hex = result.mode_data?.board_hex;
+      const correction = correctionOverlayForResult(result);
+      const hex = correction?.previousBoardHex || result.mode_data?.board_hex;
       if (!hex) continue;
       if (
         !spectatorMode.value
@@ -249,8 +253,10 @@ export function useFreeGoodnessMatch(
         `free-opponent-${actorKey}-${result.route_index}`,
         boardFromHex(hex),
       );
+      if (correction) overlays[actorKey] = correction;
     }
     opponentBoards.value = frames;
+    opponentOverlays.value = overlays;
   };
   const onRoomApplied = async (nextRoom) => {
     if (!nextRoom) {
@@ -262,6 +268,7 @@ export function useFreeGoodnessMatch(
       localRoundId = '';
       localSequence = 0;
       opponentBoards.value = {};
+      opponentOverlays.value = {};
       return;
     }
     const own = nextRoom.results?.find(roomSession.isOwnActor);
@@ -401,6 +408,7 @@ export function useFreeGoodnessMatch(
   const matchProps = computed(() => ({
     boardFrame: boardFrame.value,
     opponentBoards: opponentBoards.value,
+    opponentOverlays: opponentOverlays.value,
     wrongOverlay: wrongOverlay.value,
     resolving: Boolean(pendingRequest.value),
     spectator: spectatorMode.value,

@@ -156,6 +156,7 @@ import {
   isBattleGuest,
   normalizeBattleActor,
 } from '../core/battleActor.js';
+import { shouldLeaveBattleRoomOnTabClose } from '../core/battleRoomViewState.js';
 import { battleClient } from '../services/battleClient.js';
 
 const props = defineProps({
@@ -326,6 +327,13 @@ const openOwnReplay = async () => {
     replayBusy.value = false;
   }
 };
+
+const beforeTabClose = async () => {
+  if (!shouldLeaveBattleRoomOnTabClose(room.value)) return true;
+  return leave({ refreshRoomList: false });
+};
+
+defineExpose({ beforeTabClose });
 
 watch([() => props.active, loading, room], ([active, busy, currentRoom]) => {
   if (!active || busy || currentRoom || inviteAttempted) return;

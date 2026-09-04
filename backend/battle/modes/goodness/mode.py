@@ -113,6 +113,19 @@ class GoodnessBattleMode(BattleMode):
             room_code, round_id, actor_key=actor_key
         )
 
+    def sanitize_snapshot(
+        self,
+        payload: dict[str, Any],
+        *,
+        viewer_actor_key: str,
+        viewer_user_id: int | None,
+    ) -> dict[str, Any]:
+        return self.runtime.sanitize_snapshot_for_mode(
+            payload,
+            viewer_actor_key=viewer_actor_key,
+            viewer_user_id=viewer_user_id,
+        )
+
     def handle_action(
         self,
         room_code: str,

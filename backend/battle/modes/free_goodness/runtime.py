@@ -547,7 +547,6 @@ def _prepared_candidates(key) -> dict[str, PreparedSpawn]:
 
 def _candidate_choices(
     seed_hex: str,
-    step_index: int,
     moved_board: int,
     spawn_rate: float,
 ):
@@ -562,13 +561,13 @@ def _candidate_choices(
     while remaining:
         index, value = deterministic_spawn_choice(
             seed_hex,
-            step_index,
+            moved_board,
             attempt,
             empty,
             spawn_rate=spawn_rate,
         )
         if (index, value) not in remaining:
-            ticket = deterministic_ticket(seed_hex, step_index, attempt)
+            ticket = deterministic_ticket(seed_hex, moved_board, attempt)
             ordered = sorted(remaining)
             index, value = ordered[int.from_bytes(ticket[16:24], "big") % len(ordered)]
         remaining.remove((index, value))
@@ -617,7 +616,6 @@ async def _generate_certainty_tail(
         selected: tuple[int, int, int, dict[str, float], SpawnRiskState] | None = None
         for attempt, spawn_index, spawn_value in _candidate_choices(
             seed_hex,
-            int(sequence) + offset,
             moved_board,
             spawn_rate,
         ):
@@ -726,7 +724,6 @@ async def _prepare_direction(
     supporter = _room_supporter(room)
     for attempt, spawn_index, spawn_value in _candidate_choices(
         seed_hex,
-        sequence,
         moved_board,
         spawn_rate,
     ):
@@ -1363,6 +1360,12 @@ def sanitize_snapshot_for_mode(
             mode_data["board_hex"] = state["board_state"]
         else:
             mode_data.pop("last_step", None)
+            mode_data.pop("correction", None)
+        if (
+            state.get("state_status") != "awaiting_ack"
+            and str(result.get("status") or "") == "playing"
+        ):
+            mode_data.pop("correction", None)
         if result["actor_key"] != viewer_actor_key:
             mode_data.pop("auto_steps", None)
             mode_data.pop("auto_playback_key", None)
@@ -1911,6 +1914,16 @@ async def _resolve_move(
                     "spawn_value": spawn_value,
                 },
             }
+            if corrected:
+                mode_data["correction"] = {
+                    "selected_direction": direction,
+                    "standard_direction": executed_direction,
+                    "goodness_drop": max(0.0, 1.0 - float(decision.goodness)),
+                    "previous_board_hex": f"{board:016x}",
+                    "visible_until": iso(
+                        utcnow() + timedelta(seconds=CORRECTION_WINDOW_SECONDS)
+                    ),
+                }
             if certainty_payload:
                 mode_data.update(
                     {

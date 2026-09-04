@@ -442,6 +442,9 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
             room = created["room"]
+            repository.join_room(
+                room["room_code"], user_id=self.player_id, preferred_role="spectator"
+            )
             repository.set_member_ready(
                 room["room_code"], user_id=self.host_id, ready=True
             )
@@ -468,6 +471,22 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 ).fetchone()
             self.assertEqual(waiting["state_status"], "awaiting_ack")
             self.assertIsNone(waiting["timeout_at"])
+            spectator_view = runtime.room_snapshot(
+                room["room_code"], user_id=self.player_id
+            )
+            corrected_result = next(
+                item
+                for item in spectator_view["results"]
+                if item["user_id"] == self.host_id
+            )
+            self.assertEqual(
+                corrected_result["mode_data"]["correction"]["selected_direction"],
+                "down",
+            )
+            self.assertEqual(
+                corrected_result["mode_data"]["correction"]["previous_board_hex"],
+                f"{self.board:016x}",
+            )
 
             acknowledged = await runtime.handle_action_for_mode(
                 room["room_code"],
@@ -479,6 +498,15 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
             self.assertTrue(acknowledged["timeout_at"])
+            resumed_view = runtime.room_snapshot(
+                room["room_code"], user_id=self.player_id
+            )
+            resumed_result = next(
+                item
+                for item in resumed_view["results"]
+                if item["user_id"] == self.host_id
+            )
+            self.assertNotIn("correction", resumed_result["mode_data"])
             runtime.forfeit_round_for_mode(
                 room["room_code"],
                 user_id=self.host_id,
