@@ -193,6 +193,32 @@ def _clear_solo_cooldown_in_db(db, room_id: str, *, now_text: str) -> None:
     )
 
 
+def _release_kicked_members_in_db(db, room_id: str, *, now_text: str) -> int:
+    cursor = db.execute(
+        """
+        UPDATE battle_members
+        SET status = 'left', ready = 0, updated_at = ?
+        WHERE room_id = ? AND status = 'kicked'
+        """,
+        (now_text, str(room_id)),
+    )
+    return max(0, int(cursor.rowcount or 0))
+
+
+def release_kicked_members(room_ref: str) -> int:
+    if not is_permanent_room(repository.get_room(str(room_ref))):
+        return 0
+    now_text = _iso()
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        room = repository._find_room(db, str(room_ref))
+        if str(room["lifecycle_kind"] or "normal") != "permanent":
+            return 0
+        return _release_kicked_members_in_db(
+            db, str(room["room_id"]), now_text=now_text
+        )
+
+
 def _begin_solo_cooldown_in_db(
     db,
     room_id: str,
@@ -235,6 +261,7 @@ def _set_host_in_db(
 ) -> str | None:
     current = now or _utcnow()
     now_text = _iso(current)
+    previous_host = str(room["host_actor_key"] or "")
     member = None
     normalized = str(actor_key or "") or None
     if normalized:
@@ -302,6 +329,10 @@ def _set_host_in_db(
             room["room_id"],
         ),
     )
+    if previous_host != str(normalized or ""):
+        _release_kicked_members_in_db(
+            db, str(room["room_id"]), now_text=now_text
+        )
     return normalized
 
 

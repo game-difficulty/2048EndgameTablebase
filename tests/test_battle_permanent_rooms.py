@@ -4,10 +4,11 @@ import json
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from backend.auth.db import auth_db, init_auth_db
 from backend.battle import repository
+from backend.battle import service as battle_service
 from backend.battle.actors import BattleActor
 from backend.battle.core import lifecycle
 from backend.battle.core.errors import BattleServiceError
@@ -132,7 +133,57 @@ class PermanentBattleRoomTests(unittest.IsolatedAsyncioTestCase):
                 "SELECT status FROM battle_members WHERE room_id = ? AND actor_key = ?",
                 (self.room["room_id"], guest.actor_key),
             ).fetchone()
-        self.assertEqual(kicked["status"], "kicked")
+        self.assertEqual(kicked["status"], "left")
+
+    def test_kicked_member_can_rejoin_after_host_changes(self) -> None:
+        guest = self._guest()
+        lifecycle.join_room(
+            self.room["room_code"], actor=guest, role="player", ip_address="203.0.113.1"
+        )
+        lifecycle.join_room(self.room["room_code"], user_id=self.user_id, role="player")
+        lifecycle.kick(
+            self.room["room_code"],
+            actor=guest,
+            target_actor_key=f"u:{self.user_id}",
+        )
+
+        with self.assertRaises(BattleServiceError):
+            lifecycle.join_room(
+                self.room["room_code"], user_id=self.user_id, role="player"
+            )
+
+        lifecycle.leave_room(self.room["room_code"], actor=guest)
+        rejoined = lifecycle.join_room(
+            self.room["room_code"], user_id=self.user_id, role="player"
+        )
+        self.assertTrue(rejoined["viewer"]["is_host"])
+
+    async def test_kicked_member_can_rejoin_after_next_round_starts(self) -> None:
+        guest = self._guest()
+        lifecycle.join_room(self.room["room_code"], user_id=self.user_id, role="player")
+        lifecycle.join_room(
+            self.room["room_code"], actor=guest, role="player", ip_address="203.0.113.1"
+        )
+        lifecycle.kick(
+            self.room["room_code"],
+            actor=f"u:{self.user_id}",
+            target_actor_key=guest.actor_key,
+        )
+        fake_mode = Mock()
+        fake_mode.start_room = AsyncMock(return_value={"status": "running"})
+
+        with patch.object(battle_service, "_mode_for_room", return_value=fake_mode):
+            await battle_service.start_room(
+                self.room["room_code"], user_id=self.user_id
+            )
+
+        rejoined = lifecycle.join_room(
+            self.room["room_code"],
+            actor=guest,
+            role="player",
+            ip_address="203.0.113.1",
+        )
+        self.assertEqual(rejoined["viewer"]["actor_key"], guest.actor_key)
 
     async def test_settings_use_revision_and_empty_room_stays_open(self) -> None:
         lifecycle.join_room(self.room["room_code"], user_id=self.user_id, role="player")

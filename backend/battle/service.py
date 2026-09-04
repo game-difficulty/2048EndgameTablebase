@@ -83,7 +83,7 @@ async def start_room(
     from .permanent.service import assert_start_allowed
 
     assert_start_allowed(room_code, identity)
-    return await _mode_for_room(room_code).start_room(
+    result = await _mode_for_room(room_code).start_room(
         room_code,
         actor_key=identity.actor_key,
         user_id=identity.user_id,
@@ -93,6 +93,10 @@ async def start_room(
             else None
         ),
     )
+    from .permanent.service import release_kicked_members
+
+    release_kicked_members(room_code)
+    return result
 
 
 def route_payload(
