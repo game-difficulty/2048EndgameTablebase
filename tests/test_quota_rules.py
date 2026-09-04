@@ -42,6 +42,7 @@ class PublicQuotaRulesTests(unittest.TestCase):
         self.assertEqual(groups["3x3free8"], 1)
         self.assertEqual(groups["free10"], 8)
         self.assertEqual(groups["free11"], 50)
+        self.assertEqual(groups["2432t"], 5)
         self.assertEqual(groups["4421"], 5)
         self.assertEqual(groups["444"], 5)
         self.assertEqual(groups["LL"], 8)
@@ -55,7 +56,7 @@ class PublicQuotaRulesTests(unittest.TestCase):
             row["full_pattern"]: row
             for row in rules["tablebase_thresholds"]
         }
-        self.assertEqual(len(thresholds), 22)
+        self.assertEqual(len(thresholds), 24)
         self.assertEqual(
             thresholds["444_1024"],
             {
@@ -67,6 +68,9 @@ class PublicQuotaRulesTests(unittest.TestCase):
         self.assertEqual(thresholds["L3_1024"]["mode"], "relative")
         self.assertEqual(thresholds["3x3free8_512"]["threshold"], 0.0)
         self.assertEqual(thresholds["442t_512"]["threshold"], 0.25)
+        self.assertEqual(thresholds["2432t_2048"]["threshold"], 0.2)
+        self.assertEqual(thresholds["2432t_2048"]["mode"], "relative")
+        self.assertEqual(thresholds["4421_2048"]["threshold"], 0.2)
         self.assertTrue(all("path" not in row for row in thresholds.values()))
 
 

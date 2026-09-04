@@ -52,6 +52,22 @@
           "resource_group": "disk-c"
         },
         {
+          "pattern": "4421",
+          "target": "2048",
+          "full_pattern": "4421_2048",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-c"
+        },
+        {
+          "pattern": "2432t",
+          "target": "2048",
+          "full_pattern": "2432t_2048",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-c"
+        },
+        {
           "pattern": "4431",
           "target": "1024",
           "full_pattern": "4431_1024",

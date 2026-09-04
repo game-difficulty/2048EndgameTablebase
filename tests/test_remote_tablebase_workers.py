@@ -210,6 +210,8 @@ class RemoteCatalogTests(unittest.TestCase):
                 "free10_256",
                 "free10_512",
                 "4421_1024",
+                "4421_2048",
+                "2432t_2048",
                 "4431_1024",
                 "444_1024",
                 "444_2048",

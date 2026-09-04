@@ -84,6 +84,26 @@
       "concurrency": 1
     },
     {
+      "table_id": "4421_2048",
+      "pattern": "4421",
+      "target": "2048",
+      "path": "C:/2048_tables/4421-2k",
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-c",
+      "concurrency": 1
+    },
+    {
+      "table_id": "2432t_2048",
+      "pattern": "2432t",
+      "target": "2048",
+      "path": "C:/2048_tables/2432-2k",
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-c",
+      "concurrency": 1
+    },
+    {
       "table_id": "4431_1024",
       "pattern": "4431",
       "target": "1024",

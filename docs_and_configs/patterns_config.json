@@ -207,6 +207,22 @@
     ],
     "extra steps": 48
   },
+  "2432t": {
+    "category": "others",
+    "valid pattern": [
+      "0xf00ff0ff",
+      "0xf000f00f00ff",
+      "0xf000f000000f00ff"
+    ],
+    "target pos": "0xfff0ff00f00",
+    "canonical mode": "identity",
+    "seed boards": [
+      "0x00100001f23ff1ff",
+      "0x00100001f13ff2ff",
+      "0x00100001f12ff3ff"
+    ],
+    "extra steps": 48
+  },
   "4442": {
     "category": "others",
     "valid pattern": [

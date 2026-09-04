@@ -24,6 +24,8 @@ class RemoteTablebaseQuotaTests(unittest.TestCase):
         self.assertEqual(table_multiplier_units("free10_256"), 8_000)
         self.assertEqual(table_multiplier_units("free10_512"), 8_000)
         self.assertEqual(table_multiplier_units("4421_1024"), 5_000)
+        self.assertEqual(table_multiplier_units("4421_2048"), 5_000)
+        self.assertEqual(table_multiplier_units("2432t_2048"), 5_000)
         self.assertEqual(table_multiplier_units("444_1024"), 5_000)
         self.assertEqual(table_multiplier_units("444_2048"), 5_000)
         self.assertEqual(table_multiplier_units("LL_1024"), 8_000)
