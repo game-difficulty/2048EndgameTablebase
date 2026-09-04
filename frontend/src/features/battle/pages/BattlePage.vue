@@ -263,7 +263,7 @@ const modeMatchProps = computed(() => unref(modeSession.value?.matchProps) || {}
 const modeMatchListeners = computed(() => modeSession.value?.matchListeners || {});
 const localizedError = computed(() => {
   const key = `battle.errors.${String(error.value || '')}`;
-  return te(key) ? t(key) : String(error.value || '');
+  return te(key) ? t(key) : t('battle.errors.UNKNOWN');
 });
 const replayAvailable = computed(() => (
   Number(ownResult.value?.replay_move_count || 0) > 0

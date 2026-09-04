@@ -172,6 +172,9 @@ def join_room(
 ) -> dict[str, Any]:
     identity = coerce_actor(actor, user_id=user_id)
     try:
+        from ..permanent.service import prepare_vacant_room_for_join
+
+        prepare_vacant_room_for_join(room_code)
         repository.join_room(
             room_code,
             actor=identity,

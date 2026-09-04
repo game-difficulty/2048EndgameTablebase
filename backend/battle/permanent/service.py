@@ -358,6 +358,17 @@ def _reset_empty_room_in_db(db, room: Any, *, now_text: str) -> None:
     players = _active_players(db, str(room["room_id"]))
     if players:
         return
+    if str(room["host_actor_key"] or ""):
+        _set_host_in_db(
+            db,
+            room,
+            None,
+            now=_parse_iso(now_text) or _utcnow(),
+        )
+    else:
+        _release_kicked_members_in_db(
+            db, str(room["room_id"]), now_text=now_text
+        )
     state = db.execute(
         "SELECT default_settings_json FROM battle_permanent_room_state WHERE room_id = ?",
         (room["room_id"],),
@@ -429,6 +440,26 @@ def _reset_empty_room_in_db(db, room: Any, *, now_text: str) -> None:
                     latest["round_id"],
                 ),
             )
+
+
+def prepare_vacant_room_for_join(room_ref: str) -> bool:
+    """Expire old kick restrictions before somebody joins an empty permanent room."""
+
+    now_text = _iso()
+    with auth_db() as db:
+        room = repository._find_room(db, str(room_ref))
+        if str(room["lifecycle_kind"] or "normal") != "permanent":
+            return False
+        db.execute("BEGIN IMMEDIATE")
+        room = repository._find_room(db, str(room_ref))
+        active = db.execute(
+            "SELECT 1 FROM battle_members WHERE room_id = ? AND status = 'active' LIMIT 1",
+            (room["room_id"],),
+        ).fetchone()
+        if active is not None:
+            return False
+        _reset_empty_room_in_db(db, room, now_text=now_text)
+        return True
 
 
 def claim_host_if_vacant(room_ref: str, actor: Any) -> bool:

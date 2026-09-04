@@ -83,6 +83,10 @@ CORRECTION_WINDOW_SECONDS = 15
 MAX_RANDOM_BOARD_ATTEMPTS = 16
 MAX_PREPARED_STATES = 2048
 MAX_CERTAINTY_TAIL_STEPS = 4096
+CERTAINTY_TAIL_FALLBACK_CODES = frozenset({
+    "CERTAINTY_TAIL_UNAVAILABLE",
+    "CERTAINTY_TAIL_TOO_LONG",
+})
 MOVE_CODES = {"left": 1, "right": 2, "up": 3, "down": 4}
 MOVE_CODE_BITS = {"left": 0, "right": 1, "up": 2, "down": 3}
 
@@ -686,6 +690,39 @@ async def _generate_certainty_tail(
     )
 
 
+async def _generate_certainty_tail_best_effort(
+    *,
+    room: dict[str, Any],
+    round_id: str,
+    actor_key: str | None = None,
+    board: int,
+    results: dict[str, float],
+    seed_hex: str,
+    sequence: int,
+    risk_state: SpawnRiskState,
+    user_id: int | None = None,
+) -> tuple[list[CertaintyTailStep], int, bool]:
+    """Keep a proven result valid when its optional finish animation cannot be built."""
+
+    try:
+        steps, final_board = await _generate_certainty_tail(
+            room=room,
+            round_id=round_id,
+            actor_key=actor_key,
+            board=board,
+            results=results,
+            seed_hex=seed_hex,
+            sequence=sequence,
+            risk_state=risk_state,
+            user_id=user_id,
+        )
+    except BattleServiceError as exc:
+        if exc.code not in CERTAINTY_TAIL_FALLBACK_CODES:
+            raise
+        return [], int(board), False
+    return steps, final_board, True
+
+
 def _append_certainty_replay_steps(
     replay_blob: bytes,
     replay_move_count: int,
@@ -1013,7 +1050,7 @@ async def _initialize_players(
     initial_board = board
     certainty_steps: list[CertaintyTailStep] = []
     if initial_finish == "certainty":
-        certainty_steps, board = await _generate_certainty_tail(
+        certainty_steps, board, tail_completed = await _generate_certainty_tail_best_effort(
             room=room,
             round_id=str(round_row["round_id"]),
             actor_key=str(room.get("host_actor_key") or "platform"),
@@ -1023,7 +1060,7 @@ async def _initialize_players(
             sequence=0,
             risk_state=SpawnRiskState(),
         )
-        initial_finish = "target_reached"
+        initial_finish = "target_reached" if tail_completed else "certainty"
         results = {}
     if initial_finish is None:
         await asyncio.gather(*[
@@ -1767,7 +1804,7 @@ async def _resolve_move(
     persisted_results = next_results
     if finish_reason == "certainty":
         try:
-            certainty_steps, persisted_board = await _generate_certainty_tail(
+            certainty_steps, persisted_board, tail_completed = await _generate_certainty_tail_best_effort(
                 room=room,
                 round_id=str(round_data["round_id"]),
                 actor_key=actor_key,
@@ -1778,7 +1815,8 @@ async def _resolve_move(
                 risk_state=next_risk,
             )
             persisted_results = {}
-            finish_reason = "target_reached"
+            if tail_completed:
+                finish_reason = "target_reached"
         except asyncio.CancelledError:
             _resume_after_resolution_error(
                 round_id=str(round_data["round_id"]),

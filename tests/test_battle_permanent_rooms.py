@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock, patch
 
 from backend.auth.db import auth_db, init_auth_db
@@ -157,6 +158,41 @@ class PermanentBattleRoomTests(unittest.IsolatedAsyncioTestCase):
             self.room["room_code"], user_id=self.user_id, role="player"
         )
         self.assertTrue(rejoined["viewer"]["is_host"])
+
+    def test_kicked_member_can_rejoin_a_vacant_room(self) -> None:
+        guest = self._guest()
+        lifecycle.join_room(
+            self.room["room_code"], actor=guest, role="player", ip_address="203.0.113.1"
+        )
+        lifecycle.join_room(self.room["room_code"], user_id=self.user_id, role="player")
+        lifecycle.kick(
+            self.room["room_code"],
+            actor=guest,
+            target_actor_key=f"u:{self.user_id}",
+        )
+        now_text = datetime.now(timezone.utc).isoformat()
+        with auth_db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "UPDATE battle_members SET status = 'left', ready = 0, left_at = ?, updated_at = ? WHERE room_id = ? AND actor_key = ?",
+                (now_text, now_text, self.room["room_id"], guest.actor_key),
+            )
+            db.execute(
+                "UPDATE battle_rooms SET host_actor_key = NULL, host_user_id = NULL WHERE room_id = ?",
+                (self.room["room_id"],),
+            )
+
+        rejoined = lifecycle.join_room(
+            self.room["room_code"], user_id=self.user_id, role="player"
+        )
+
+        self.assertTrue(rejoined["viewer"]["is_host"])
+        with auth_db() as db:
+            member = db.execute(
+                "SELECT status FROM battle_members WHERE room_id = ? AND user_id = ?",
+                (self.room["room_id"], self.user_id),
+            ).fetchone()
+        self.assertEqual(member["status"], "active")
 
     async def test_kicked_member_can_rejoin_after_next_round_starts(self) -> None:
         guest = self._guest()

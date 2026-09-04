@@ -799,6 +799,8 @@
       "ILLEGAL_DIRECTION": "That direction does not move the board.",
       "POSITION_FINISHED": "This position has already finished.",
       "TABLEBASE_BUSY": "The tablebase is busy. Please retry this move shortly.",
+      "CERTAINTY_TAIL_UNAVAILABLE": "This position is proven. The round will finish with the current result.",
+      "CERTAINTY_TAIL_TOO_LONG": "This position is proven. The round will finish with the current result.",
       "INITIAL_BOARD_UNUSABLE": "That starting board cannot continue. Choose another board.",
       "INVALID_RANKING_MIN_STEPS": "Minimum ranked steps must be an integer from 1 to half of the target tile.",
       "ROUND_STATE_CHANGED": "The room changed. Ready up again before starting.",
@@ -808,7 +810,8 @@
       "ROOM_REVISION_CONFLICT": "Room settings changed. Please review them and try again.",
       "battle_forfeit_failed": "Could not exit the Battle. Please try again.",
       "battle_settings_update_failed": "Could not save the settings. Please try again.",
-      "battle_host_renew_failed": "Could not renew hosting. Please try again."
+      "battle_host_renew_failed": "Could not renew hosting. Please try again.",
+      "UNKNOWN": "The action could not be completed. Please try again later."
     },
     "auth": {
       "title": "Sign in to battle",

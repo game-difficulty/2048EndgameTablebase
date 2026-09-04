@@ -799,6 +799,8 @@
       "ILLEGAL_DIRECTION": "这个方向无法移动，请选择其他方向。",
       "POSITION_FINISHED": "当前局面已经结束。",
       "TABLEBASE_BUSY": "当前查询较多，请稍候再走这一步。",
+      "CERTAINTY_TAIL_UNAVAILABLE": "已进入必胜阶段，本局将按当前结果正常结算。",
+      "CERTAINTY_TAIL_TOO_LONG": "已进入必胜阶段，本局将按当前结果正常结算。",
       "INITIAL_BOARD_UNUSABLE": "该初始局面无法继续，请更换后重试。",
       "INVALID_RANKING_MIN_STEPS": "最低排名步数必须是 1 到目标数字一半之间的整数。",
       "ROUND_STATE_CHANGED": "房间状态已经变化，请重新准备后开始。",
@@ -808,7 +810,8 @@
       "ROOM_REVISION_CONFLICT": "房间设置已经变化，请重新修改。",
       "battle_forfeit_failed": "退出对战失败，请重试。",
       "battle_settings_update_failed": "设置保存失败，请稍后重试。",
-      "battle_host_renew_failed": "主持状态续期失败，请稍后重试。"
+      "battle_host_renew_failed": "主持状态续期失败，请稍后重试。",
+      "UNKNOWN": "操作暂时未能完成，请稍后重试。"
     },
     "auth": {
       "title": "登录后进入对战",

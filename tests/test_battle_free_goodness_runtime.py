@@ -642,6 +642,62 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(started["results"][0]["mode_data"]["auto_steps"]), 1)
         self.assertEqual(get_token_balance(self.host_id)["total"], 1_000_000)
 
+    async def test_initial_certainty_tail_failure_still_completes_the_round(self) -> None:
+        certain = TablebaseLookupResult(
+            board_encoded=self.board,
+            full_pattern="L3_128",
+            results={"left": 1.0, "right": 0.9, "down": 0.8, "up": 0.7},
+            dtype="uint32",
+            best_move="left",
+        )
+        with (
+            patch("backend.battle.modes.free_goodness.mode.resolve_tablebase", return_value=self.entry),
+            patch.object(runtime, "resolve_tablebase", return_value=self.entry),
+            patch.object(runtime, "_lookup", new=AsyncMock(return_value=certain)),
+            patch.object(
+                runtime,
+                "_generate_certainty_tail",
+                new=AsyncMock(side_effect=BattleServiceError(
+                    "CERTAINTY_TAIL_UNAVAILABLE",
+                    "The guaranteed continuation could not be completed.",
+                    503,
+                )),
+            ),
+        ):
+            created = await runtime.create_room_for_mode(
+                user_id=self.host_id,
+                session_id=None,
+                payload={
+                    "full_pattern": "L3_128",
+                    "initial_board": f"{self.board:016x}",
+                    "max_players": 2,
+                    "step_timeout_seconds": 90,
+                },
+            )
+            repository.join_room(created["room"]["room_code"], user_id=self.player_id)
+            repository.set_member_ready(
+                created["room"]["room_code"], user_id=self.host_id, ready=True
+            )
+            repository.set_member_ready(
+                created["room"]["room_code"], user_id=self.player_id, ready=True
+            )
+            started = await runtime.start_room_for_mode(
+                created["room"]["room_code"], user_id=self.host_id, session_id=None
+            )
+
+        self.assertEqual(started["round"]["status"], "completed")
+        self.assertTrue(all(item["status"] == "completed" for item in started["results"]))
+        self.assertTrue(
+            all(item["mode_data"]["finish_reason"] == "certainty" for item in started["results"])
+        )
+        self.assertTrue(
+            all(item["mode_data"]["state_status"] == "finished" for item in started["results"])
+        )
+        self.assertTrue(
+            all(item["mode_data"]["board_hex"] == f"{self.board:016x}" for item in started["results"])
+        )
+        self.assertEqual(get_token_balance(self.host_id)["total"], 1_000_000)
+
     async def test_move_certainty_plays_to_target_without_charging_tail(self) -> None:
         with (
             patch("backend.battle.modes.free_goodness.mode.resolve_tablebase", return_value=self.entry),
@@ -736,6 +792,85 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(int(result["route_index"]), 1)
         self.assertEqual(int(result["replay_move_count"]), 2)
         self.assertIn('"lookup_hit_steps":1', round_row["mode_state_json"])
+        self.assertEqual(get_token_balance(self.host_id)["total"], 999_999)
+
+    async def test_move_certainty_tail_failure_finishes_without_sticking(self) -> None:
+        with (
+            patch("backend.battle.modes.free_goodness.mode.resolve_tablebase", return_value=self.entry),
+            patch.object(runtime, "resolve_tablebase", return_value=self.entry),
+            patch.object(runtime, "_lookup", new=AsyncMock(return_value=self.lookup)),
+        ):
+            created = await runtime.create_room_for_mode(
+                user_id=self.host_id,
+                session_id=None,
+                payload={
+                    "full_pattern": "L3_128",
+                    "initial_board": f"{self.board:016x}",
+                    "max_players": 2,
+                    "step_timeout_seconds": 90,
+                },
+            )
+            room = created["room"]
+            repository.set_member_ready(room["room_code"], user_id=self.host_id, ready=True)
+            started = await runtime.start_room_for_mode(
+                room["room_code"], user_id=self.host_id, session_id=None
+            )
+            moved_board = runtime._moved_boards(self.board, use_variant=False)["left"]
+            spawn_index = runtime._empty_indices(moved_board)[0]
+            certain_board = runtime._spawn_board(moved_board, spawn_index, 2)
+            candidate = runtime.PreparedSpawn(
+                executed_direction="left",
+                moved_board=moved_board,
+                next_board=certain_board,
+                spawn_index=spawn_index,
+                spawn_value=2,
+                attempt_index=0,
+                next_results={"left": 1.0, "right": 0.9, "down": 0.8, "up": 0.7},
+                next_dtype="uint32",
+                next_best_success=1.0,
+                risk_multiplier=1.0,
+                risk_state=runtime.SpawnRiskState(),
+            )
+            with (
+                patch.object(
+                    runtime,
+                    "_select_prepared_spawn",
+                    new=AsyncMock(return_value=(candidate, "left", None)),
+                ),
+                patch.object(
+                    runtime,
+                    "_generate_certainty_tail",
+                    new=AsyncMock(side_effect=BattleServiceError(
+                        "CERTAINTY_TAIL_UNAVAILABLE",
+                        "The guaranteed continuation could not be completed.",
+                        503,
+                    )),
+                ),
+            ):
+                accepted = await runtime.handle_action_for_mode(
+                    room["room_code"],
+                    user_id=self.host_id,
+                    action="move",
+                    payload={
+                        "round_id": started["round"]["round_id"],
+                        "sequence": 1,
+                        "direction": "left",
+                    },
+                )
+
+        self.assertTrue(accepted["complete"])
+        self.assertEqual(accepted["finish_reason"], "certainty")
+        self.assertEqual(accepted["board_hex"], f"{certain_board:016x}")
+        self.assertEqual(accepted["auto_steps"], [])
+        self.assertIsNone(accepted["auto_final_board_hex"])
+        with auth_db() as db:
+            state = db.execute(
+                "SELECT board_state, state_status, finish_reason FROM battle_free_player_states WHERE round_id = ? AND user_id = ?",
+                (started["round"]["round_id"], self.host_id),
+            ).fetchone()
+        self.assertEqual(state["board_state"], f"{certain_board:016x}")
+        self.assertEqual(state["state_status"], "finished")
+        self.assertEqual(state["finish_reason"], "certainty")
         self.assertEqual(get_token_balance(self.host_id)["total"], 999_999)
 
     async def test_prefetch_stops_each_direction_after_first_accepted_candidate(self) -> None:
