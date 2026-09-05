@@ -19,6 +19,7 @@ from backend.minigame_rankings.service import (
     MGO_RECORD_PREFIX,
     RunTokenError,
     RunTokenExpired,
+    _normalize_summary,
     _derive_seed_hex,
     abandon_ranked_run,
     claim_ranked_run,
@@ -193,6 +194,52 @@ class MinigameRankingTests(unittest.TestCase):
                 board_rows=4,
                 board_cols=4,
             )
+
+    def test_accepts_registered_special_board_cells(self) -> None:
+        summary = self._summary()
+        summary["final_board"] = [-3, -2, -1, 0] * 4
+        normalized = _normalize_summary(**summary)
+        self.assertEqual(normalized["final_board"], summary["final_board"])
+
+        user_id = self._add_user("special-board@example.com", "Special Board")
+        saved = submit_score(
+            user_id=user_id,
+            game_id="isolated-island",
+            difficulty=1,
+            score=100,
+            trophy_tier=0,
+            highest_tile_exp=4,
+            final_board=summary["final_board"],
+            board_rows=4,
+            board_cols=4,
+        )
+        self.assertTrue(saved["score_updated"])
+
+    def test_accepts_shape_shifter_board_dimensions(self) -> None:
+        summary = self._summary()
+        summary.update({
+            "final_board": [-1] * 55,
+            "board_rows": 5,
+            "board_cols": 11,
+        })
+        normalized = _normalize_summary(**summary)
+        self.assertEqual(normalized["board_rows"], 5)
+        self.assertEqual(normalized["board_cols"], 11)
+
+        payload = minigame_routes.SubmitRankedCheckpointRequest.model_validate({
+            "run_token": "r" * 16,
+            "lease_token": "l" * 16,
+            "revision": 1,
+            "record_encoding": "x",
+            **summary,
+        })
+        self.assertEqual(len(payload.final_board), 55)
+
+    def test_rejects_unknown_negative_board_cell(self) -> None:
+        summary = self._summary()
+        summary["final_board"] = [-4, 0, 1, 2] * 4
+        with self.assertRaisesRegex(ValueError, "invalid_board_data"):
+            _normalize_summary(**summary)
 
     def test_backend_catalog_matches_frontend_registry(self) -> None:
         registry_path = Path(__file__).resolve().parents[1] / "frontend" / "src" / "features" / "minigames" / "engine" / "registry.js"

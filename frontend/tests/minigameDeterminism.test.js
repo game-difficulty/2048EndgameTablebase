@@ -312,6 +312,44 @@ test('all 20 minigames replay the same deterministic move prefix', async () => {
   }
 });
 
+test('all 20 minigames produce replayable natural-death checkpoints', async () => {
+  for (const definition of MINIGAME_REGISTRY) {
+    const runtime = createMinigameRuntime({
+      seedHex: '00000000000000000000000000000001',
+      clock: CLOCK,
+      evilSpawn: deterministicEvilSpawn,
+    });
+    let recorder;
+    const controller = new MinigameController({
+      difficulty: 1,
+      runtime,
+      onOperation({ operation, atMs, state }) {
+        recorder.record(operation, atMs, state);
+      },
+    });
+    recorder = new MinigameRankedRecorder({
+      runId: '123e4567-e89b-42d3-a456-426614174000',
+      gameId: definition.id,
+      difficulty: 1,
+      seedHex: '00000000000000000000000000000001',
+      startedAtMs: CLOCK.now(),
+    });
+    await controller.startGame(definition.id, null, runtime);
+    const directions = ['left', 'down', 'right', 'up'];
+    for (let index = 0; !controller.engine.isOver && index < 20_000; index += 1) {
+      await controller.move(directions[index % directions.length]);
+    }
+    assert.equal(controller.engine.isOver, true, definition.id);
+
+    const replayed = await replayMgo1(recorder.encodeCheckpoint(), {
+      evilSpawn: deterministicEvilSpawn,
+    });
+    assert.equal(replayed.score, controller.engine.score, definition.id);
+    assert.equal(replayed.trophyTier, controller.engine.isPassed, definition.id);
+    assert.deepEqual(replayed.finalBoard, flattenBoard(controller.engine.board), definition.id);
+  }
+});
+
 test('powerups and custom actions use compact semantic records', async () => {
   const exercise = async (gameId, action) => {
     const runtime = makeRuntime();

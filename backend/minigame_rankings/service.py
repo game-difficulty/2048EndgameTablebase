@@ -27,6 +27,10 @@ MAX_PENDING_GLOBAL = 32
 MAX_PENDING_PER_USER = 4
 MAX_CHECKPOINTS_PER_RUN = 64
 MGO_RECORD_PREFIX = "MINIGAME_v1MGO_B64_"
+MIN_BOARD_CELL_VALUE = -3
+MAX_BOARD_CELL_VALUE = 63
+MAX_BOARD_SIDE = 12
+MAX_BOARD_CELLS = MAX_BOARD_SIDE * MAX_BOARD_SIDE
 
 
 class RunTokenError(ValueError):
@@ -283,9 +287,18 @@ def _normalize_summary(
         raise ValueError("invalid_trophy_tier")
     if normalized_highest < 0 or normalized_highest > 63:
         raise ValueError("invalid_highest_tile")
-    if rows < 1 or rows > 8 or cols < 1 or cols > 8 or rows * cols != len(board):
+    if (
+        rows < 1
+        or rows > MAX_BOARD_SIDE
+        or cols < 1
+        or cols > MAX_BOARD_SIDE
+        or rows * cols != len(board)
+    ):
         raise ValueError("invalid_board_shape")
-    if len(board) > 64 or any(value < -1 or value > 63 for value in board):
+    if len(board) > MAX_BOARD_CELLS or any(
+        value < MIN_BOARD_CELL_VALUE or value > MAX_BOARD_CELL_VALUE
+        for value in board
+    ):
         raise ValueError("invalid_board_data")
     if actions < 0 or actions > 50_000:
         raise ValueError("invalid_action_count")
@@ -1504,9 +1517,18 @@ def submit_score(
         raise ValueError("Invalid trophy tier.")
     if normalized_highest < 0 or normalized_highest > 63:
         raise ValueError("Invalid highest tile.")
-    if rows < 1 or rows > 8 or cols < 1 or cols > 8 or rows * cols != len(board):
+    if (
+        rows < 1
+        or rows > MAX_BOARD_SIDE
+        or cols < 1
+        or cols > MAX_BOARD_SIDE
+        or rows * cols != len(board)
+    ):
         raise ValueError("Invalid board shape.")
-    if len(board) > 64 or any(value < -1 or value > 63 for value in board):
+    if len(board) > MAX_BOARD_CELLS or any(
+        value < MIN_BOARD_CELL_VALUE or value > MAX_BOARD_CELL_VALUE
+        for value in board
+    ):
         raise ValueError("Invalid board data.")
 
     now = _now_iso()

@@ -11,6 +11,8 @@ from backend.auth.dependencies import client_ip, require_user
 
 from .service import (
     LEADERBOARD_LIMIT,
+    MAX_BOARD_CELLS,
+    MAX_BOARD_SIDE,
     RunTokenError,
     RunTokenExpired,
     abandon_ranked_run,
@@ -42,9 +44,9 @@ class ScoreSubmission(BaseModel):
     score: int = Field(ge=0, le=2_147_483_647)
     trophy_tier: int = Field(ge=0, le=4)
     highest_tile_exp: int = Field(ge=0, le=63)
-    final_board: list[int] = Field(min_length=1, max_length=64)
-    board_rows: int = Field(ge=1, le=8)
-    board_cols: int = Field(ge=1, le=8)
+    final_board: list[int] = Field(min_length=1, max_length=MAX_BOARD_CELLS)
+    board_rows: int = Field(ge=1, le=MAX_BOARD_SIDE)
+    board_cols: int = Field(ge=1, le=MAX_BOARD_SIDE)
 
 
 class CreateRankedRunRequest(BaseModel):
@@ -66,9 +68,9 @@ class QualifyRankedRunRequest(BaseModel):
     score: int = Field(ge=0, le=2**63 - 1)
     trophy_tier: int = Field(ge=0, le=4)
     highest_tile_exp: int = Field(ge=0, le=63)
-    final_board: list[int] = Field(min_length=1, max_length=64)
-    board_rows: int = Field(ge=1, le=8)
-    board_cols: int = Field(ge=1, le=8)
+    final_board: list[int] = Field(min_length=1, max_length=MAX_BOARD_CELLS)
+    board_rows: int = Field(ge=1, le=MAX_BOARD_SIDE)
+    board_cols: int = Field(ge=1, le=MAX_BOARD_SIDE)
     action_count: int = Field(ge=0, le=50_000)
     elapsed_ms: int = Field(ge=0, le=7 * 24 * 60 * 60 * 1000)
 
@@ -86,9 +88,9 @@ class SubmitRankedCheckpointRequest(BaseModel):
     score: int = Field(ge=0, le=2**63 - 1)
     trophy_tier: int = Field(ge=0, le=4)
     highest_tile_exp: int = Field(ge=0, le=63)
-    final_board: list[int] = Field(min_length=1, max_length=64)
-    board_rows: int = Field(ge=1, le=8)
-    board_cols: int = Field(ge=1, le=8)
+    final_board: list[int] = Field(min_length=1, max_length=MAX_BOARD_CELLS)
+    board_rows: int = Field(ge=1, le=MAX_BOARD_SIDE)
+    board_cols: int = Field(ge=1, le=MAX_BOARD_SIDE)
     action_count: int = Field(ge=0, le=50_000)
     elapsed_ms: int = Field(ge=0, le=7 * 24 * 60 * 60 * 1000)
     record_encoding: str = Field(min_length=1, max_length=400_000)
