@@ -1,53 +1,57 @@
 <template>
   <div
-    ref="boardRef"
-    class="board relative bg-board-bg rounded-xl aspect-square w-full max-w-[600px] mx-auto touch-none"
-    style="container-type: size;"
-    @pointermove="handleBoardPointerMove"
-    @pointerup="handleBoardPointerUp"
-    @pointercancel="clearTouchGesture"
+    class="board-stage relative aspect-square w-full max-w-[600px] mx-auto"
   >
-    
-    <!-- Grid Cells (Background) -->
-    <div class="bg-grid">
-      <div 
-        v-for="i in 16" 
-        :key="`bg-${i}`" 
-        class="bg-cell pointer-events-auto"
-        :style="getBackgroundCellStyle(i - 1)"
-        @pointerdown.prevent="handleBackgroundPointerDown(i - 1, $event)"
-        @contextmenu.prevent
-      ></div>
-    </div>
-
-    <!-- Active Tiles -->
-    <div 
-      v-for="tile in activeTiles" 
-      :key="tile.id"
-      class="tile z-10"
-      :class="{'no-transition': tile.isInterrupting}"
-      :style="getTilePosStyle(tile)"
+    <div
+      ref="boardRef"
+      class="board absolute bg-board-bg rounded-xl touch-none"
+      :style="boardViewportStyle"
+      @pointermove="handleBoardPointerMove"
+      @pointerup="handleBoardPointerUp"
+      @pointercancel="clearTouchGesture"
     >
-      <div 
-        class="tile-inner rounded-lg flex items-center justify-center font-bold"
-        :class="{
-          'anim-new': tile.isNew,
-          'anim-merged': tile.isMerged && !tile.isHidden,
-          'opacity-0': tile.isHidden
-        }"
-        :style="getTileInnerStyle(tile)"
+      <!-- Grid Cells (Background) -->
+      <div class="bg-grid">
+        <div
+          v-for="index in boardViewport.visibleIndices"
+          :key="`bg-${index}`"
+          class="bg-cell pointer-events-auto"
+          :style="getBackgroundCellStyle(index)"
+          @pointerdown.prevent="handleBackgroundPointerDown(index, $event)"
+          @contextmenu.prevent
+        ></div>
+      </div>
+
+      <!-- Active Tiles -->
+      <div
+        v-for="tile in activeTiles"
+        :key="tile.id"
+        class="tile z-10"
+        :class="{'no-transition': tile.isInterrupting}"
+        :style="getTilePosStyle(tile)"
       >
-        <span class="tile-label" :style="getTileLabelStyle(tile)">
-          {{ getTileDisplayValue(tile.value) }}
-        </span>
+        <div
+          class="tile-inner rounded-lg flex items-center justify-center font-bold"
+          :class="{
+            'anim-new': tile.isNew,
+            'anim-merged': tile.isMerged && !tile.isHidden,
+            'opacity-0': tile.isHidden
+          }"
+          :style="getTileInnerStyle(tile)"
+        >
+          <span class="tile-label" :style="getTileLabelStyle(tile)">
+            {{ getTileDisplayValue(tile.value) }}
+          </span>
+        </div>
       </div>
     </div>
-
   </div>
 </template>
 
 <script setup>
-import { ref, watch, nextTick } from 'vue';
+import { computed, ref, watch, nextTick } from 'vue';
+
+import { createBoardViewport, logicalIndexToVisual } from '../utils/boardViewport';
 
 const emit = defineEmits(['cell-click', 'swipe']);
 
@@ -74,6 +78,21 @@ const props = defineProps({
 let tileIdCounter = 0;
 const boardRef = ref(null);
 const activeTiles = ref([]);
+const boardViewport = computed(() => createBoardViewport(props.board, props.isVariant));
+const boardViewportStyle = computed(() => {
+  const rows = boardViewport.value.rows;
+  const cols = boardViewport.value.cols;
+  const widthPercent = cols >= rows ? 100 : (cols / rows) * 100;
+  const heightPercent = rows >= cols ? 100 : (rows / cols) * 100;
+  return {
+    width: `${widthPercent}%`,
+    height: `${heightPercent}%`,
+    left: `${(100 - widthPercent) / 2}%`,
+    top: `${(100 - heightPercent) / 2}%`,
+    '--visible-rows': rows,
+    '--visible-cols': cols,
+  };
+});
 let animTimeout = null;
 let revealMergeTimeout = null;
 let revealAppearTimeout = null;
@@ -253,7 +272,7 @@ const revealAppearingTiles = () => {
 const syncToBoardRaw = () => {
     fastForwardAnimations(true);
     activeTiles.value = [];
-    for(let i=0; i<16; i++) {
+    for (const i of boardViewport.value.visibleIndices) {
         if (shouldRenderAsActiveTile(props.board[i])) {
             activeTiles.value.push(withGlowDefaults({
                 id: `tile-${tileIdCounter++}`,
@@ -383,9 +402,13 @@ watch(() => [props.board, props.isVariant], async ([newBoard]) => {
 syncToBoardRaw();
 
 const getTilePosStyle = (tile) => {
+  const visualPosition = logicalIndexToVisual(tile.row * 4 + tile.col, boardViewport.value);
+  if (!visualPosition) {
+    return { display: 'none' };
+  }
   return {
-    '--col': tile.col,
-    '--row': tile.row
+    '--col': visualPosition.col,
+    '--row': visualPosition.row
   };
 };
 
@@ -459,6 +482,7 @@ const getTileLabelStyle = (tile) => {
 
 <style scoped>
 .board {
+  container-type: size;
   /* Proportional: pad and gap as % of board container width via cqw */
   --padding: 2.5cqw;
   --grid-gap: 2.5cqw;
@@ -472,8 +496,8 @@ const getTileLabelStyle = (tile) => {
   right: var(--padding);
   bottom: var(--padding);
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  grid-template-rows: repeat(4, 1fr);
+  grid-template-columns: repeat(var(--visible-cols), 1fr);
+  grid-template-rows: repeat(var(--visible-rows), 1fr);
   gap: var(--grid-gap);
   z-index: 0;
 }
@@ -494,8 +518,8 @@ const getTileLabelStyle = (tile) => {
   z-index: 10;
   
   /* The 100% inside this `calc()` refers to the width of `.board` */
-  width: calc((100% - var(--padding) * 2 - var(--grid-gap) * 3) / 4);
-  height: calc((100% - var(--padding) * 2 - var(--grid-gap) * 3) / 4);
+  width: calc((100% - var(--padding) * 2 - var(--grid-gap) * (var(--visible-cols) - 1)) / var(--visible-cols));
+  height: calc((100% - var(--padding) * 2 - var(--grid-gap) * (var(--visible-rows) - 1)) / var(--visible-rows));
   
   /* The 100% inside `translate` refers to `.tile`'s own width */
   transform: translate(
