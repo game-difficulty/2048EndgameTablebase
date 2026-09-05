@@ -106,6 +106,23 @@ class MysteryMergeEngine(BaseMinigameEngine):
             row, col = divmod(self.newtile_pos, self.cols)
             self.masked_[row, col] = True
 
+    def apply_powerup_twist(self, row: int, col: int) -> list[dict[str, Any]]:
+        sub_mask = np.array(self.masked_[row : row + 2, col : col + 2], copy=True)
+        self.masked_[row : row + 2, col : col + 2] = np.array(
+            [[sub_mask[1, 0], sub_mask[0, 0]], [sub_mask[1, 1], sub_mask[0, 1]]],
+            dtype=bool,
+        )
+        return []
+
+    def apply_powerup_bomb(self, row: int, col: int) -> None:
+        self.masked_[row, col] = False
+
+    def apply_powerup_glove(
+        self, source: tuple[int, int], target: tuple[int, int]
+    ) -> None:
+        self.masked_[target] = self.masked_[source]
+        self.masked_[source] = False
+
     @staticmethod
     def _update_mask_line(line, mask, reverse: bool = False) -> np.ndarray:
         current_line = np.array(line, copy=True)

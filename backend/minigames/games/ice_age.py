@@ -51,6 +51,19 @@ class IceAgeEngine(BaseMinigameEngine):
         if reveal_effects:
             self.queue_move_effects(reveal_effects)
 
+    def apply_powerup_twist(self, row: int, col: int) -> list[dict[str, Any]]:
+        self.count_down[row : row + 2, col : col + 2] = 0
+        return []
+
+    def apply_powerup_bomb(self, row: int, col: int) -> None:
+        self.count_down[row, col] = 0
+
+    def apply_powerup_glove(
+        self, source: tuple[int, int], target: tuple[int, int]
+    ) -> None:
+        self.count_down[source] = 0
+        self.count_down[target] = 0
+
     def _build_stage_reveal(self, row: int, col: int, sprite: str) -> dict[str, Any]:
         return {
             "type": "ice_stage_reveal",

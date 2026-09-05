@@ -292,6 +292,25 @@ class BaseMinigameEngine:
         _ = key, phase
         return False
 
+    def has_powerup_twist_entity(self, row: int, col: int) -> bool:
+        _ = row, col
+        return False
+
+    def apply_powerup_twist(self, row: int, col: int) -> list[dict[str, Any]]:
+        _ = row, col
+        return []
+
+    def apply_powerup_bomb(self, row: int, col: int) -> None:
+        _ = row, col
+
+    def is_powerup_glove_target(self, row: int, col: int) -> bool:
+        return int(self.board[row, col]) == 0
+
+    def apply_powerup_glove(
+        self, source: tuple[int, int], target: tuple[int, int]
+    ) -> None:
+        _ = source, target
+
     def clear_animation(self) -> None:
         self._animation = AnimationState()
         self._queued_follow_up_animation = None
@@ -349,7 +368,7 @@ class BaseMinigameEngine:
             board_before,
             direction_key,
             spawn_index=self.newtile_pos if self.newtile_pos >= 0 else None,
-            spawn_value=self.newtile if self.newtile > 0 else None,
+            spawn_value=self.newtile if self.newtile_pos >= 0 else None,
         )
         self._animation = AnimationState(
             appear_index=animation_metadata.get("appear_tile", {}).get("index"),

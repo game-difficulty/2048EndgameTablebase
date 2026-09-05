@@ -170,6 +170,11 @@ class EndlessFamilyEngine(BaseMinigameEngine):
                         "delayMs": 100,
                         "durationMs": 500,
                         "animDurationMs": 500,
+                        "consumeIndices": [int(row * self.cols + col)],
+                        "consumeDelayMs": 100,
+                        "hideIndices": [int(row * self.cols + col)],
+                        "revealIndices": [int(row * self.cols + col)],
+                        "revealDelayMs": 330,
                     }
                 ]
             )
@@ -203,6 +208,11 @@ class EndlessFamilyEngine(BaseMinigameEngine):
                             "delayMs": 100,
                             "durationMs": 500,
                             "animDurationMs": 500,
+                            "consumeIndices": [int(row * self.cols + col)],
+                            "consumeDelayMs": 100,
+                            "hideIndices": [int(row * self.cols + col)],
+                            "revealIndices": [int(row * self.cols + col)],
+                            "revealDelayMs": 330,
                         }
                     ]
                 )
@@ -239,6 +249,42 @@ class EndlessFamilyEngine(BaseMinigameEngine):
             return "giftbox.png", ""
         return "bomb.png", ""
 
+    @staticmethod
+    def _twisted_position(
+        position: tuple[int, int], row: int, col: int
+    ) -> tuple[int, int]:
+        source_row, source_col = position
+        relative_row = source_row - row
+        relative_col = source_col - col
+        return row + relative_col, col + 1 - relative_row
+
+    def has_powerup_twist_entity(self, row: int, col: int) -> bool:
+        if self.variant == "airraid" or self.bomb_pos is None:
+            return False
+        bomb_row, bomb_col = self.bomb_pos
+        return row <= bomb_row < row + 2 and col <= bomb_col < col + 2
+
+    def is_powerup_glove_target(self, row: int, col: int) -> bool:
+        return int(self.board[row, col]) == 0 and self.bomb_pos != (row, col)
+
+    def apply_powerup_twist(self, row: int, col: int) -> list[dict[str, Any]]:
+        if not self.has_powerup_twist_entity(row, col) or self.bomb_pos is None:
+            return []
+        source = tuple(self.bomb_pos)
+        target = self._twisted_position(source, row, col)
+        self.bomb_pos = target
+        sprite, label_text = self._current_object_visual()
+        return [
+            {
+                "fromIndex": int(source[0] * self.cols + source[1]),
+                "toIndex": int(target[0] * self.cols + target[1]),
+                "value": 0,
+                "kind": "independent_object",
+                "sprite": sprite,
+                "labelText": label_text,
+            }
+        ]
+
     def _object_slide_target(self, direct: int) -> tuple[int, int]:
         if self.bomb_pos is None:
             return -1, -1
@@ -253,21 +299,6 @@ class EndlessFamilyEngine(BaseMinigameEngine):
             return row + int(count_zeros(self.board[row + 1 :, col])), col
         return row, col
 
-    def _current_object_visual(self) -> tuple[str, str]:
-        if self.variant == "explosions":
-            return "bomb.png", ""
-        if self.variant == "giftbox":
-            return "giftbox.png", ""
-        if self.variant == "factorization":
-            return "tilebg.png", ""
-        if self.variant == "hybrid":
-            if self.bomb_type == 0:
-                return "bomb.png", ""
-            if self.bomb_type == 1:
-                return "tilebg.png", ""
-            return "giftbox.png", ""
-        return "bomb.png", ""
-
     def _queue_object_slide(
         self,
         from_pos: tuple[int, int],
@@ -277,7 +308,7 @@ class EndlessFamilyEngine(BaseMinigameEngine):
         fade_out_at_end: bool = False,
         duration_ms: int = 100,
     ) -> None:
-        if from_pos == to_pos and not hide_target:
+        if from_pos == to_pos and not hide_target and not fade_out_at_end:
             return
         sprite, label_text = self._current_object_visual()
         effect = {
@@ -319,9 +350,13 @@ class EndlessFamilyEngine(BaseMinigameEngine):
                         "type": "giftbox_burst",
                         "index": int(row * self.cols + col),
                         "delayMs": 100,
-                        "durationMs": 620,
+                        "durationMs": 500,
                         "animDurationMs": 500,
                         "hideIndices": [int(row * self.cols + col)],
+                        "consumeIndices": [int(row * self.cols + col)],
+                        "consumeDelayMs": 100,
+                        "revealIndices": [int(row * self.cols + col)],
+                        "revealDelayMs": 330,
                     }
                 ]
             )
@@ -340,9 +375,13 @@ class EndlessFamilyEngine(BaseMinigameEngine):
                                 "type": "factorization_burst",
                                 "index": int(row * self.cols + col),
                                 "delayMs": 100,
-                                "durationMs": 620,
+                                "durationMs": 500,
                                 "animDurationMs": 500,
                                 "hideIndices": [int(row * self.cols + col)],
+                                "consumeIndices": [int(row * self.cols + col)],
+                                "consumeDelayMs": 100,
+                                "revealIndices": [int(row * self.cols + col)],
+                                "revealDelayMs": 330,
                             }
                         ]
                     )
@@ -362,17 +401,25 @@ class EndlessFamilyEngine(BaseMinigameEngine):
                             "type": "factorization_burst",
                             "index": int(row0 * self.cols + col0),
                             "delayMs": 100,
-                            "durationMs": 620,
+                            "durationMs": 500,
                             "animDurationMs": 500,
                             "hideIndices": [int(row0 * self.cols + col0)],
+                            "consumeIndices": [int(row0 * self.cols + col0)],
+                            "consumeDelayMs": 100,
+                            "revealIndices": [int(row0 * self.cols + col0)],
+                            "revealDelayMs": 330,
                         },
                         {
                             "type": "factorization_burst",
                             "index": int(row1 * self.cols + col1),
                             "delayMs": 100,
-                            "durationMs": 620,
+                            "durationMs": 500,
                             "animDurationMs": 500,
                             "hideIndices": [int(row1 * self.cols + col1)],
+                            "consumeIndices": [int(row1 * self.cols + col1)],
+                            "consumeDelayMs": 100,
+                            "revealIndices": [int(row1 * self.cols + col1)],
+                            "revealDelayMs": 330,
                         },
                     ]
                 )
@@ -385,7 +432,21 @@ class EndlessFamilyEngine(BaseMinigameEngine):
             mask = self.count_down > 0
             self.count_down[mask] -= 1
             just_zero = (self.count_down == 0) & mask
+            expired_positions = [tuple(pos) for pos in np.argwhere(just_zero).tolist()]
             self.board[just_zero] = 0
+            if expired_positions:
+                self.queue_move_effects(
+                    [
+                        {
+                            "type": "crater_clear",
+                            "index": int(row * self.cols + col),
+                            "sprite": "crater2.png",
+                            "durationMs": 320,
+                            "animDurationMs": 320,
+                        }
+                        for row, col in expired_positions
+                    ]
+                )
             if self.target_pos is not None:
                 if int(self.board[self.target_pos]) != 0:
                     row, col = self.target_pos
@@ -403,8 +464,13 @@ class EndlessFamilyEngine(BaseMinigameEngine):
                                 "type": "airraid_explosion",
                                 "index": int(row * self.cols + col),
                                 "delayMs": 250,
-                                "durationMs": 450,
+                                "durationMs": 200,
                                 "animDurationMs": 200,
+                                "consumeIndices": [int(row * self.cols + col)],
+                                "consumeDelayMs": 250,
+                                "hideIndices": [int(row * self.cols + col)],
+                                "revealIndices": [int(row * self.cols + col)],
+                                "revealDelayMs": 250,
                             },
                         ]
                     )

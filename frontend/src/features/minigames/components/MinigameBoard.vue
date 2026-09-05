@@ -57,7 +57,10 @@
           }"
           :style="getTileInnerStyle(tile)"
         >
-          <div v-if="tile.coverSprites?.length" class="minigame-cover-stack">
+          <div
+            v-if="tile.coverSprites?.length"
+            :class="['minigame-cover-stack', { 'is-clearing': tile.isCoverClearing }]"
+          >
             <img
               v-for="(sprite, spriteIndex) in tile.coverSprites"
               :key="`${tile.id}-cover-${spriteIndex}`"
@@ -94,35 +97,7 @@
         :style="getEffectWrapperStyle(effect)"
       >
         <div
-          :class="[
-            effect.type === 'explosion'
-              ? 'effect-explosion'
-              : effect.type === 'airraid_fire_drop'
-                ? 'effect-airraid-fire-drop'
-                : effect.type === 'airraid_explosion'
-                  ? 'effect-airraid-explosion'
-                  : effect.type === 'object_slide'
-                    ? 'effect-object-slide'
-                    : effect.type === 'giftbox_burst'
-                      ? 'effect-giftbox-burst'
-                      : effect.type === 'factorization_burst'
-                        ? 'effect-factorization-burst'
-                        : effect.type === 'ice_stage_reveal'
-                          ? 'effect-ice-stage-reveal'
-                          : effect.type === 'grab'
-                            ? 'minigame-tile-inner effect-grab'
-                            : effect.type === 'glove_move'
-                              ? 'minigame-tile-inner effect-glove-move'
-                              : effect.type === 'column_swap_move'
-                                ? 'minigame-tile-inner effect-column-swap-move'
-                                : effect.type === 'ring_rotate_move'
-                                  ? 'minigame-tile-inner effect-ring-rotate-move'
-                                  : effect.type === 'gravity_fall_move'
-                                    ? 'minigame-tile-inner effect-gravity-fall-move'
-                                    : effect.type === 'twist_move'
-                                      ? 'minigame-tile-inner effect-twist-move'
-                                      : 'effect-twist',
-          ]"
+          :class="getEffectClass(effect)"
           :style="getEffectInnerStyle(effect)"
         >
           <img
@@ -141,6 +116,16 @@
               alt=""
               draggable="false"
             />
+            <div v-if="effect.coverSprites?.length" class="minigame-cover-stack">
+              <img
+                v-for="(sprite, spriteIndex) in effect.coverSprites"
+                :key="`${effect.id}-cover-${spriteIndex}`"
+                :src="getCoverSpriteSrc(sprite)"
+                :class="getCoverSpriteClass(sprite)"
+                alt=""
+                draggable="false"
+              />
+            </div>
             <span :class="['minigame-cell-label', getTileLabelClass(effect)]" :style="getTileLabelStyle(effect)">
               {{ effect.labelText || effect.displayText }}
             </span>
@@ -224,6 +209,7 @@ let revealTimeout = null;
 let moveCleanupTimeout = null;
 let effectsCleanupTimeout = null;
 let followUpTimeout = null;
+let effectPhaseTimeouts = [];
 let swipeGesture = null;
 let suppressCellClickUntil = 0;
 const SWIPE_THRESHOLD_PX = 28;
@@ -302,9 +288,17 @@ const clearAnimationTimers = () => {
     window.clearTimeout(followUpTimeout);
     followUpTimeout = null;
   }
+  effectPhaseTimeouts.forEach((timeout) => window.clearTimeout(timeout));
+  effectPhaseTimeouts = [];
 };
 
 const clearSpecialEffects = () => {
+  if (effectsCleanupTimeout) {
+    window.clearTimeout(effectsCleanupTimeout);
+    effectsCleanupTimeout = null;
+  }
+  effectPhaseTimeouts.forEach((timeout) => window.clearTimeout(timeout));
+  effectPhaseTimeouts = [];
   specialEffects.value = [];
   effectHiddenIndices.value = new Set();
 };
@@ -428,6 +422,7 @@ const shouldRenderEffectImage = (effect) =>
     'giftbox_burst',
     'factorization_burst',
     'ice_stage_reveal',
+    'crater_clear',
   ].includes(String(effect?.type || ''));
 
 const shouldRenderEffectTile = (effect) =>
@@ -438,6 +433,27 @@ const shouldRenderEffectTile = (effect) =>
     'column_swap_move',
     'ring_rotate_move',
   ].includes(String(effect?.type || ''));
+
+const EFFECT_CLASS_BY_TYPE = {
+  explosion: 'effect-explosion',
+  airraid_fire_drop: 'effect-airraid-fire-drop',
+  airraid_explosion: 'effect-airraid-explosion',
+  object_slide: 'effect-object-slide',
+  giftbox_burst: 'effect-giftbox-burst',
+  factorization_burst: 'effect-factorization-burst',
+  ice_stage_reveal: 'effect-ice-stage-reveal',
+  crater_clear: 'effect-crater-clear',
+  grab: 'minigame-tile-inner effect-grab',
+  glove_move: 'minigame-tile-inner effect-glove-move',
+  column_swap_move: 'minigame-tile-inner effect-column-swap-move',
+  ring_rotate_move: 'minigame-tile-inner effect-ring-rotate-move',
+  gravity_fall_move: 'minigame-tile-inner effect-gravity-fall-move',
+  twist_move: 'minigame-tile-inner effect-twist-move',
+  twist: 'effect-twist',
+};
+
+const getEffectClass = (effect) =>
+  EFFECT_CLASS_BY_TYPE[String(effect?.type || '')] || '';
 
 const getEffectImageClass = (effect) => {
   const type = String(effect?.type || '');
@@ -453,6 +469,7 @@ const getEffectImageClass = (effect) => {
     type === 'giftbox_burst' ? 'effect-giftbox-image' : '',
     type === 'factorization_burst' ? 'effect-factorization-image' : '',
     type === 'ice_stage_reveal' ? 'effect-ice-reveal-image' : '',
+    type === 'crater_clear' ? 'effect-crater-clear-image' : '',
     type === 'object_slide' ? 'effect-object-image' : '',
     ...spriteCoverClasses,
   ].filter(Boolean);
@@ -484,6 +501,10 @@ const getCoverSpriteClass = (sprite) => {
   ].filter(Boolean);
 };
 
+const isIceCoverSprite = (sprite) =>
+  ['crystal1.png', 'crystal2.png', 'crystal3.png', 'ice_overlay.png', 'icetrap0.png', 'icetrap.png']
+    .includes(String(sprite || '').toLowerCase());
+
 const getTileLabelClass = (tile) => {
   const variant = tile?.variant && typeof tile.variant === 'object' ? tile.variant : null;
   return {
@@ -494,7 +515,15 @@ const getTileLabelClass = (tile) => {
 
 const isEffectHidden = (index) => effectHiddenIndices.value.has(index);
 
-const isRenderableTile = (cell) => Boolean(cell && !cell.blocked && cell.rawValue !== 0);
+const isIndependentObjectCell = (cell) =>
+  Boolean(
+    cell &&
+    Number(cell.rawValue) === 0 &&
+    cell.coverSprites?.some((sprite) => ['bomb.png', 'giftbox.png', 'tilebg.png'].includes(sprite))
+  );
+
+const isRenderableTile = (cell) =>
+  Boolean(cell && !cell.blocked && (cell.rawValue !== 0 || isIndependentObjectCell(cell)));
 
 const createTileFromCell = (cell, overrides = {}) => {
   const style = getBoardCellStyle(cell);
@@ -520,6 +549,7 @@ const createTileFromCell = (cell, overrides = {}) => {
     isDying: false,
     isHidden: false,
     isInterrupting: false,
+    isCoverClearing: false,
     ...overrides,
   };
 };
@@ -549,6 +579,35 @@ const createSyntheticTile = (index, rawValue, overrides = {}) => {
     isDying: false,
     isHidden: false,
     isInterrupting: false,
+    isCoverClearing: false,
+    ...overrides,
+  };
+};
+
+const createMovingEffectTile = (fromIndex, toIndex, rawValue, overrides = {}) => {
+  const sourceTile = activeTiles.value.find(
+    (tile) => tile.index === fromIndex && Number(tile.rawValue) === Number(rawValue)
+  );
+  const finalCell = cellMap.value.get(toIndex);
+  const tile = sourceTile
+    ? { ...sourceTile }
+    : finalCell && isRenderableTile(finalCell)
+      ? createTileFromCell(finalCell)
+      : createSyntheticTile(fromIndex, rawValue);
+
+  return {
+    ...tile,
+    id: `minigame-effect-${tileIdCounter++}`,
+    index: fromIndex,
+    row: Math.floor(fromIndex / cols.value),
+    col: fromIndex % cols.value,
+    isNew: false,
+    isMerged: false,
+    isPopActive: false,
+    isDying: false,
+    isHidden: false,
+    isInterrupting: false,
+    isCoverClearing: false,
     ...overrides,
   };
 };
@@ -673,6 +732,41 @@ const syncToBoardRaw = (clearTimers = false) => {
   activeTiles.value = nextSettledTiles;
 };
 
+const removeActiveTilesAt = (indices) => {
+  const removed = new Set(indices.map((index) => Number(index)));
+  activeTiles.value = activeTiles.value.filter((tile) => !removed.has(tile.index));
+  settledTiles.value = settledTiles.value.filter((tile) => !removed.has(tile.index));
+};
+
+const revealBoardCellsAt = (indices, animate = true) => {
+  const revealed = new Set(indices.map((index) => Number(index)));
+  const hidden = new Set(effectHiddenIndices.value);
+  revealed.forEach((index) => hidden.delete(index));
+  effectHiddenIndices.value = hidden;
+
+  activeTiles.value = activeTiles.value.filter((tile) => !revealed.has(tile.index));
+  settledTiles.value = settledTiles.value.filter((tile) => !revealed.has(tile.index));
+  const revealedTiles = cells.value
+    .filter(
+      (cell) => revealed.has(cell.index) && isRenderableTile(cell) && !hidden.has(cell.index)
+    )
+    .map((cell) => createTileFromCell(cell, { isNew: animate }));
+  activeTiles.value.push(...revealedTiles);
+  settledTiles.value.push(...revealedTiles.map((tile) => ({ ...tile })));
+};
+
+const scheduleEffectPhase = (delayMs, callback) => {
+  if (delayMs <= 0) {
+    callback();
+    return;
+  }
+  const timeout = window.setTimeout(() => {
+    effectPhaseTimeouts = effectPhaseTimeouts.filter((candidate) => candidate !== timeout);
+    callback();
+  }, delayMs);
+  effectPhaseTimeouts.push(timeout);
+};
+
 const fastForwardAnimations = () => {
   activeTiles.value = activeTiles.value
     .filter((tile) => !tile.isDying)
@@ -684,6 +778,7 @@ const fastForwardAnimations = () => {
       isHidden: false,
       isDying: false,
       isInterrupting: false,
+      isCoverClearing: false,
     }));
   settledTiles.value = activeTiles.value.map((tile) => ({ ...tile }));
 };
@@ -868,6 +963,8 @@ const runSpecialEffects = async (effects) => {
 
   const transientEffects = [];
   const hiddenTargets = new Set();
+  const hiddenActiveIndices = new Set();
+  const phaseSteps = [];
 
   const addHiddenIndices = (effect) => {
     if (Array.isArray(effect?.hideIndices)) {
@@ -878,12 +975,37 @@ const runSpecialEffects = async (effects) => {
     }
   };
 
+  const addPhaseSteps = (effect) => {
+    if (Array.isArray(effect.consumeIndices) && effect.consumeIndices.length) {
+      phaseSteps.push({
+        type: 'consume',
+        delayMs: Number(effect.consumeDelayMs || 0),
+        indices: effect.consumeIndices,
+      });
+    }
+    if (Array.isArray(effect.revealIndices) && effect.revealIndices.length) {
+      phaseSteps.push({
+        type: 'reveal',
+        delayMs: Number(effect.revealDelayMs || 0),
+        indices: effect.revealIndices,
+      });
+    }
+  };
+
   effects.forEach((effect) => {
     const type = String(effect?.type || '');
     if (!type) return;
     addHiddenIndices(effect);
+    addPhaseSteps(effect);
 
     if (type === 'explosion' && Number.isInteger(effect.index)) {
+      if (!Array.isArray(effect.consumeIndices) || !effect.consumeIndices.length) {
+        phaseSteps.push({
+          type: 'consume',
+          delayMs: Number(effect.delayMs || 0) + 80,
+          indices: [Number(effect.index)],
+        });
+      }
       transientEffects.push({
         id: `effect-${tileIdCounter++}`,
         type,
@@ -898,7 +1020,7 @@ const runSpecialEffects = async (effects) => {
     }
 
     if (
-      ['airraid_fire_drop', 'airraid_explosion', 'giftbox_burst', 'factorization_burst', 'ice_stage_reveal'].includes(type) &&
+      ['airraid_fire_drop', 'airraid_explosion', 'giftbox_burst', 'factorization_burst', 'ice_stage_reveal', 'crater_clear'].includes(type) &&
       Number.isInteger(effect.index)
     ) {
       transientEffects.push({
@@ -916,9 +1038,11 @@ const runSpecialEffects = async (effects) => {
     }
 
     if (type === 'grab' && Number.isInteger(effect.index)) {
+      const index = Number(effect.index);
+      hiddenTargets.add(index);
+      hiddenActiveIndices.add(index);
       transientEffects.push({
-        ...createSyntheticTile(Number(effect.index), Number(effect.value || 0), {
-          id: `effect-${tileIdCounter++}`,
+        ...createMovingEffectTile(index, index, Number(effect.value || 0), {
           type,
           durationMs: Number(effect.durationMs || 280),
           animDurationMs: Number(effect.animDurationMs || effect.durationMs || 280),
@@ -935,10 +1059,10 @@ const runSpecialEffects = async (effects) => {
     ) {
       const fromIndex = Number(effect.fromIndex);
       const toIndex = Number(effect.toIndex);
+      hiddenActiveIndices.add(fromIndex);
       hiddenTargets.add(toIndex);
       transientEffects.push({
-        ...createSyntheticTile(fromIndex, Number(effect.value || 0), {
-          id: `effect-${tileIdCounter++}`,
+        ...createMovingEffectTile(fromIndex, toIndex, Number(effect.value || 0), {
           type,
           fromIndex,
           toIndex,
@@ -975,11 +1099,12 @@ const runSpecialEffects = async (effects) => {
         const fromIndex = Number(tile.fromIndex);
         const toIndex = Number(tile.toIndex);
         const value = Number(tile.value || 0);
-        if (fromIndex < 0 || toIndex < 0 || value <= 0) return;
+        const isIndependentObject = String(tile.kind || '') === 'independent_object';
+        if (fromIndex < 0 || toIndex < 0 || (value === 0 && !isIndependentObject)) return;
+        hiddenActiveIndices.add(fromIndex);
         hiddenTargets.add(toIndex);
         transientEffects.push({
-          ...createSyntheticTile(fromIndex, value, {
-            id: `effect-${tileIdCounter++}`,
+          ...createMovingEffectTile(fromIndex, toIndex, value, {
             type: 'twist_move',
             fromIndex,
             toIndex,
@@ -1004,15 +1129,29 @@ const runSpecialEffects = async (effects) => {
     }
   });
 
+  activeTiles.value = activeTiles.value.filter((tile) => !hiddenActiveIndices.has(tile.index));
+  settledTiles.value = settledTiles.value.filter(
+    (tile) => !hiddenActiveIndices.has(tile.index) && !hiddenTargets.has(tile.index)
+  );
   effectHiddenIndices.value = hiddenTargets;
-  syncToBoardRaw();
   await nextTick();
   specialEffects.value = transientEffects;
+  phaseSteps.forEach((step) => {
+    scheduleEffectPhase(step.delayMs, () => {
+      if (step.type === 'consume') {
+        removeActiveTilesAt(step.indices);
+      } else {
+        revealBoardCellsAt(step.indices);
+      }
+    });
+  });
   const maxDuration = effects.reduce(
     (duration, effect) =>
       Math.max(
         duration,
-        Number(effect?.delayMs || 0) + Number(effect?.durationMs || effect?.animDurationMs || 430)
+        Number(effect?.delayMs || 0) + Number(effect?.durationMs || effect?.animDurationMs || 430),
+        Number(effect?.consumeDelayMs || 0),
+        Number(effect?.revealDelayMs || 0)
       ),
     0
   );
@@ -1024,6 +1163,8 @@ const runConcurrentEffects = async (effects) => {
 
   const transientEffects = [];
   const hiddenTargets = new Set();
+  const hiddenSources = new Set();
+  const phaseSteps = [];
 
   const addHiddenIndices = (effect) => {
     if (Array.isArray(effect?.hideIndices)) {
@@ -1038,9 +1179,23 @@ const runConcurrentEffects = async (effects) => {
     const type = String(effect?.type || '');
     if (!type) return;
     addHiddenIndices(effect);
+    if (Array.isArray(effect.consumeIndices) && effect.consumeIndices.length) {
+      phaseSteps.push({
+        type: 'consume',
+        delayMs: Number(effect.consumeDelayMs || 0),
+        indices: effect.consumeIndices,
+      });
+    }
+    if (Array.isArray(effect.revealIndices) && effect.revealIndices.length) {
+      phaseSteps.push({
+        type: 'reveal',
+        delayMs: Number(effect.revealDelayMs || 0),
+        indices: effect.revealIndices,
+      });
+    }
 
     if (
-      ['explosion', 'airraid_fire_drop', 'airraid_explosion', 'giftbox_burst', 'factorization_burst', 'ice_stage_reveal'].includes(type) &&
+      ['explosion', 'airraid_fire_drop', 'airraid_explosion', 'giftbox_burst', 'factorization_burst', 'ice_stage_reveal', 'crater_clear'].includes(type) &&
       Number.isInteger(effect.index)
     ) {
       transientEffects.push({
@@ -1062,6 +1217,7 @@ const runConcurrentEffects = async (effects) => {
       Number.isInteger(effect.fromIndex) &&
       Number.isInteger(effect.toIndex)
     ) {
+      hiddenSources.add(Number(effect.fromIndex));
       transientEffects.push(
         createObjectEffect({
           ...effect,
@@ -1073,17 +1229,34 @@ const runConcurrentEffects = async (effects) => {
     }
   });
 
+  activeTiles.value = activeTiles.value.filter(
+    (tile) => !hiddenSources.has(tile.index) && !(tile.isNew && hiddenTargets.has(tile.index))
+  );
+  settledTiles.value = settledTiles.value.filter(
+    (tile) => !hiddenSources.has(tile.index) && !hiddenTargets.has(tile.index)
+  );
   effectHiddenIndices.value = hiddenTargets;
   specialEffects.value = transientEffects;
+  phaseSteps.forEach((step) => {
+    scheduleEffectPhase(step.delayMs, () => {
+      if (step.type === 'consume') {
+        removeActiveTilesAt(step.indices);
+      } else {
+        revealBoardCellsAt(step.indices);
+      }
+    });
+  });
   const maxDuration = effects.reduce(
     (duration, effect) =>
       Math.max(
         duration,
-        Number(effect?.delayMs || 0) + Number(effect?.durationMs || effect?.animDurationMs || 430)
+        Number(effect?.delayMs || 0) + Number(effect?.durationMs || effect?.animDurationMs || 430),
+        Number(effect?.consumeDelayMs || 0),
+        Number(effect?.revealDelayMs || 0)
       ),
     0
   );
-  scheduleEffectsCleanup(maxDuration || 430, (maxDuration || 430) > 320);
+  scheduleEffectsCleanup(Math.max(300, maxDuration || 430), true);
 };
 
 const runMoveAnimation = async () => {
@@ -1123,6 +1296,7 @@ const runMoveAnimation = async () => {
       isHidden: false,
       isDying: false,
       isInterrupting: false,
+      isCoverClearing: false,
     }));
   } else {
     fastForwardAnimations();
@@ -1162,6 +1336,16 @@ const runMoveAnimation = async () => {
     }
 
     const targetIndex = nextRow * cols.value + nextCol;
+    const targetCell = cellMap.value.get(targetIndex);
+    const targetSprites = new Set(targetCell?.coverSprites || []);
+    if (
+      distance > 0 &&
+      tile.coverSprites?.some(
+        (sprite) => isIceCoverSprite(sprite) && !targetSprites.has(sprite)
+      )
+    ) {
+      tile.isCoverClearing = true;
+    }
     if (Number(popPositions[targetIndex] || 0) === 1) {
       tile.isDying = true;
       if (!nextTiles.find((candidate) => candidate.index === targetIndex && candidate.isHidden)) {
@@ -1546,6 +1730,10 @@ const getEffectInnerStyle = (effect) => {
   pointer-events: none;
 }
 
+.minigame-cover-stack.is-clearing {
+  animation: ice-cover-clear 0.1s ease-in forwards;
+}
+
 .minigame-cover-sprite {
   position: absolute;
   inset: 0;
@@ -1654,6 +1842,7 @@ const getEffectInnerStyle = (effect) => {
   height: 100%;
   animation: explode-burst calc(var(--effect-duration-ms) * 1ms) ease-out forwards;
   animation-delay: calc(var(--effect-delay-ms) * 1ms);
+  animation-fill-mode: both;
 }
 
 .effect-grab {
@@ -1714,10 +1903,10 @@ const getEffectInnerStyle = (effect) => {
 .effect-airraid-explosion,
 .effect-giftbox-burst,
 .effect-factorization-burst,
-.effect-ice-stage-reveal {
+.effect-ice-stage-reveal,
+.effect-crater-clear {
   width: 100%;
   height: 100%;
-  animation-delay: calc(var(--effect-delay-ms) * 1ms);
 }
 
 .effect-airraid-explosion {
@@ -1731,6 +1920,19 @@ const getEffectInnerStyle = (effect) => {
 
 .effect-ice-stage-reveal {
   animation: ice-reveal calc(var(--effect-duration-ms) * 1ms) ease-out forwards;
+}
+
+.effect-crater-clear {
+  animation: crater-clear calc(var(--effect-duration-ms) * 1ms) ease-out forwards;
+}
+
+.effect-airraid-explosion,
+.effect-giftbox-burst,
+.effect-factorization-burst,
+.effect-ice-stage-reveal,
+.effect-crater-clear {
+  animation-delay: calc(var(--effect-delay-ms) * 1ms);
+  animation-fill-mode: both;
 }
 
 .effect-image:not(.minigame-cover-sprite) {
@@ -1776,6 +1978,10 @@ const getEffectInnerStyle = (effect) => {
   filter: drop-shadow(0 0 10px rgba(191, 219, 254, 0.24));
 }
 
+.effect-crater-clear-image {
+  filter: drop-shadow(0 2px 8px rgba(15, 23, 42, 0.2));
+}
+
 @keyframes appear {
   0% { transform: scale(0); opacity: 0; }
   100% { transform: scale(1); opacity: 1; }
@@ -1790,6 +1996,10 @@ const getEffectInnerStyle = (effect) => {
 @keyframes explode-burst {
   0% {
     transform: scale(0.28);
+    opacity: 0;
+  }
+  8% {
+    transform: scale(0.4);
     opacity: 0.95;
   }
   70% {
@@ -1936,6 +2146,10 @@ const getEffectInnerStyle = (effect) => {
 @keyframes airraid-impact {
   0% {
     transform: scale(0.34);
+    opacity: 0;
+  }
+  10% {
+    transform: scale(0.46);
     opacity: 0.95;
   }
   70% {
@@ -1951,6 +2165,10 @@ const getEffectInnerStyle = (effect) => {
 @keyframes burst-reveal {
   0% {
     transform: scale(0.4);
+    opacity: 0;
+  }
+  8% {
+    transform: scale(0.48);
     opacity: 0.96;
   }
   60% {
@@ -1971,6 +2189,28 @@ const getEffectInnerStyle = (effect) => {
   100% {
     transform: scale(1);
     opacity: 1;
+  }
+}
+
+@keyframes ice-cover-clear {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+}
+
+@keyframes crater-clear {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.86);
+    opacity: 0;
   }
 }
 

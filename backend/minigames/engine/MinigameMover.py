@@ -208,9 +208,6 @@ class MinigameBoardMover:
 
         merged = []
         score = 0
-        skip = False
-        skip2 = False
-
         segments = []
         current_segment = []
 
@@ -230,6 +227,8 @@ class MinigameBoardMover:
             if segment == [-1]:
                 merged.append(-1)
             else:
+                skip = False
+                skip2 = False
                 non_zero = [i for i in segment if i != 0]  # 去掉所有的0
                 temp_merged = []
                 for i in range(len(non_zero)):

@@ -63,7 +63,12 @@ def _valid_glove_sources(engine) -> list[int]:
 
 
 def _valid_glove_targets(engine) -> list[int]:
-    return [index for index, value in enumerate(engine.board.flatten().tolist()) if int(value) == 0]
+    return [
+        row * engine.cols + col
+        for row in range(engine.rows)
+        for col in range(engine.cols)
+        if engine.is_powerup_glove_target(row, col)
+    ]
 
 
 def _valid_twist_targets(engine) -> list[int]:
@@ -71,7 +76,7 @@ def _valid_twist_targets(engine) -> list[int]:
     for row in range(engine.rows - 1):
         for col in range(engine.cols - 1):
             sub_board = np.array(engine.board[row : row + 2, col : col + 2], copy=False)
-            if np.all(sub_board == 0):
+            if np.all(sub_board == 0) and not engine.has_powerup_twist_entity(row, col):
                 continue
             if np.any(sub_board == -1):
                 continue
@@ -209,8 +214,21 @@ def _apply_bomb(state: MinigameSessionState, index: int) -> bool:
     if int(engine.board[row, col]) <= 0:
         engine.clear_animation()
         return False
+    engine.apply_powerup_bomb(row, col)
     engine.board[row, col] = 0
-    engine.set_special_effects([{"type": "explosion", "index": int(index)}])
+    engine.set_special_effects(
+        [
+            {
+                "type": "explosion",
+                "index": int(index),
+                "durationMs": 500,
+                "animDurationMs": 500,
+                "hideIndices": [int(index)],
+                "consumeIndices": [int(index)],
+                "consumeDelayMs": 80,
+            }
+        ]
+    )
     _consume_powerup(state, "bomb")
     _post_powerup_update(state)
     return True
@@ -244,8 +262,9 @@ def _apply_glove_step(state: MinigameSessionState, index: int) -> bool:
 
     source_row, source_col = divmod(source_index, engine.cols)
     source_value = int(engine.board[source_row, source_col])
-    success = int(engine.board[row, col]) == 0 and source_value > 0
+    success = engine.is_powerup_glove_target(row, col) and source_value > 0
     if success:
+        engine.apply_powerup_glove((source_row, source_col), (row, col))
         engine.board[row, col] = source_value
         engine.board[source_row, source_col] = 0
         engine.set_special_effects(
@@ -283,7 +302,7 @@ def _apply_twist(state: MinigameSessionState, index: int) -> bool:
         engine.clear_animation()
         return False
     sub_board = np.array(engine.board[row : row + 2, col : col + 2], copy=False)
-    if np.all(sub_board == 0) or np.any(sub_board == -1):
+    if (np.all(sub_board == 0) and not engine.has_powerup_twist_entity(row, col)) or np.any(sub_board == -1):
         engine.clear_animation()
         return False
     top_left = row * engine.cols + col
@@ -298,7 +317,7 @@ def _apply_twist(state: MinigameSessionState, index: int) -> bool:
         (bottom_right, bottom_left, int(engine.board[row + 1, col + 1])),
     )
     for from_index, to_index, value in twist_mapping:
-        if value > 0:
+        if value != 0:
             twist_tiles.append(
                 {
                     "fromIndex": int(from_index),
@@ -307,6 +326,7 @@ def _apply_twist(state: MinigameSessionState, index: int) -> bool:
                 }
             )
     _rotate_2x2_clockwise(engine.board, row, col)
+    twist_tiles.extend(engine.apply_powerup_twist(row, col))
     engine.set_special_effects(
         [
             {

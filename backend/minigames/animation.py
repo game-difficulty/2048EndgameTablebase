@@ -5,85 +5,56 @@ from typing import Any
 import numpy as np
 
 
-def _simulate_line(line: np.ndarray) -> tuple[list[int], list[int]]:
-    merged: list[int] = []
+def _trace_line_animation(line: np.ndarray) -> tuple[list[int], np.ndarray, list[int]]:
+    """Trace sources to targets using the minigame mover's merge rules."""
+    values = [int(value) for value in line.tolist()]
     new_line: list[int] = []
+    distances = np.zeros_like(line)
+    pops = [0] * len(values)
+    segment_start = 0
 
-    segments: list[list[int]] = []
-    current_segment: list[int] = []
-    for value in line.tolist():
-        if value == -1:
-            if current_segment:
-                segments.append(current_segment)
-            segments.append([-1])
-            current_segment = []
-        else:
-            current_segment.append(int(value))
-    if current_segment:
-        segments.append(current_segment)
-
-    for segment in segments:
-        if segment == [-1]:
+    while segment_start < len(values):
+        if values[segment_start] == -1:
             new_line.append(-1)
-            merged.append(0)
+            segment_start += 1
             continue
-        skip = False
-        skip_special = False
-        non_zero = [value for value in segment if value != 0]
-        temp_merged: list[int] = []
-        local_merge = [0] * len(segment)
-        for idx in range(len(non_zero)):
-            if skip:
-                skip = False
-                continue
-            if skip_special:
-                if non_zero[idx] == -3:
-                    continue
-                skip_special = False
-            if idx + 1 < len(non_zero) and non_zero[idx] == non_zero[idx + 1]:
-                if non_zero[idx] >= 0:
-                    temp_merged.append(non_zero[idx] + 1)
-                    local_merge[len(temp_merged) - 1] = 1
-                    skip = True
-                    continue
-                if non_zero[idx] == -3:
-                    temp_merged.append(non_zero[idx])
-                    local_merge[len(temp_merged) - 1] = 1
-                    skip_special = True
-                    continue
-            temp_merged.append(non_zero[idx])
 
-        temp_merged.extend([0] * (len(segment) - len(temp_merged)))
-        new_line.extend(temp_merged[: len(segment)])
-        merged.extend(local_merge[: len(segment)])
+        segment_end = segment_start
+        while segment_end < len(values) and values[segment_end] != -1:
+            segment_end += 1
 
-    new_line.extend([0] * (len(line) - len(new_line)))
-    merged.extend([0] * (len(line) - len(merged)))
-    return new_line[: len(line)], merged[: len(line)]
+        sources = [
+            (index, values[index])
+            for index in range(segment_start, segment_end)
+            if values[index] != 0
+        ]
+        target = segment_start
+        source_index = 0
+        while source_index < len(sources):
+            value = sources[source_index][1]
+            group_end = source_index + 1
+            result_value = value
 
+            if value == -3:
+                while group_end < len(sources) and sources[group_end][1] == -3:
+                    group_end += 1
+            elif value >= 0 and group_end < len(sources) and sources[group_end][1] == value:
+                group_end += 1
+                result_value = value + 1
 
-def _move_distance_line(line: np.ndarray) -> np.ndarray:
-    moved_distance = 0
-    last_tile = 0
-    move_distance = np.zeros_like(line)
+            for source, _ in sources[source_index:group_end]:
+                distances[source] = source - target
+            if group_end - source_index > 1:
+                pops[target] = 1
 
-    for index, value in enumerate(line):
-        current = int(value)
-        if current == 0:
-            moved_distance += 1
-        elif current == -1:
-            moved_distance = 0
-            last_tile = 0
-        elif current == -2:
-            last_tile = 0
-        elif last_tile == current and current >= 0:
-            move_distance[index] = moved_distance + 1
-            moved_distance += 1
-            last_tile = 0
-        else:
-            move_distance[index] = moved_distance
-            last_tile = current
-    return move_distance
+            new_line.append(result_value)
+            target += 1
+            source_index = group_end
+
+        new_line.extend([0] * (segment_end - target))
+        segment_start = segment_end
+
+    return new_line, distances, pops
 
 
 def compute_minigame_move_animation(
@@ -103,8 +74,7 @@ def compute_minigame_move_animation(
             line = board[:, index]
 
         process_line = line[::-1] if move_direction in {"down", "right"} else line
-        line_distances = _move_distance_line(process_line)
-        _, line_merges = _simulate_line(process_line)
+        _, line_distances, line_merges = _trace_line_animation(process_line)
 
         if move_direction in {"down", "right"}:
             line_distances = line_distances[::-1]
@@ -133,7 +103,7 @@ def build_minigame_move_animation_metadata(
         "slide_distances": slide_distances,
         "pop_positions": pop_positions,
     }
-    if spawn_index is not None and spawn_value is not None and spawn_index >= 0 and spawn_value > 0:
+    if spawn_index is not None and spawn_value is not None and spawn_index >= 0:
         metadata["appear_tile"] = {
             "index": int(spawn_index),
             "value": int(spawn_value),
