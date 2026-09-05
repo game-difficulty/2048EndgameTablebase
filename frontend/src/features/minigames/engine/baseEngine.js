@@ -271,6 +271,22 @@ export class BaseMinigameEngine {
     return false;
   }
 
+  hasPowerupTwistEntity(_row, _col) {
+    return false;
+  }
+
+  applyPowerupTwist(_row, _col) {
+    return [];
+  }
+
+  applyPowerupBomb(_row, _col) {}
+
+  isPowerupGloveTarget(row, col) {
+    return Number(this.board?.[row]?.[col]) === 0;
+  }
+
+  applyPowerupGlove(_source, _target) {}
+
   checkGamePassed() {
     const currentPeak = positiveMax(this.board);
     this.refreshHighestTileExp();
@@ -376,7 +392,7 @@ export class BaseMinigameEngine {
       boardBefore,
       directionKey,
       this.newtilePos >= 0 ? this.newtilePos : null,
-      this.newtile > 0 ? this.newtile : null
+      this.newtilePos >= 0 ? this.newtile : null
     );
     this.animation = new AnimationState({
       appearIndex: animationMetadata.appearTile?.index,

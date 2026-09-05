@@ -32,8 +32,6 @@ export function mergeLine(line, reverse = false) {
   const source = (reverse ? line.slice().reverse() : line.slice()).map((value) => Number(value) || 0);
   const merged = [];
   let score = 0;
-  let skip = false;
-  let skipSpecial = false;
 
   for (const segment of splitSegments(source)) {
     if (segment.length === 1 && segment[0] === -1) {
@@ -43,6 +41,8 @@ export function mergeLine(line, reverse = false) {
 
     const nonZero = segment.filter((value) => value !== 0);
     const nextSegment = [];
+    let skip = false;
+    let skipSpecial = false;
     for (let index = 0; index < nonZero.length; index += 1) {
       if (skip) {
         skip = false;
@@ -135,83 +135,62 @@ export function genNewNum(board, spawnRate = SPAWN_RATE4, rng = null) {
   };
 }
 
-function simulateAnimationLine(line) {
-  const merged = [];
-  const newLine = [];
-  for (const segment of splitSegments(line)) {
-    if (segment.length === 1 && segment[0] === -1) {
-      newLine.push(-1);
-      merged.push(0);
+function traceLineAnimation(line) {
+  const values = line.map((value) => Number(value) || 0);
+  const nextLine = [];
+  const distances = new Array(values.length).fill(0);
+  const pops = new Array(values.length).fill(0);
+  let segmentStart = 0;
+
+  while (segmentStart < values.length) {
+    if (values[segmentStart] === -1) {
+      nextLine.push(-1);
+      segmentStart += 1;
       continue;
     }
-    let skip = false;
-    let skipSpecial = false;
-    const nonZero = segment.filter((value) => value !== 0);
-    const tempMerged = [];
-    const localMerge = new Array(segment.length).fill(0);
-    for (let index = 0; index < nonZero.length; index += 1) {
-      if (skip) {
-        skip = false;
-        continue;
-      }
-      if (skipSpecial) {
-        if (nonZero[index] === -3) {
-          continue;
-        }
-        skipSpecial = false;
-      }
-      if (index + 1 < nonZero.length && nonZero[index] === nonZero[index + 1]) {
-        if (nonZero[index] >= 0) {
-          tempMerged.push(nonZero[index] + 1);
-          localMerge[tempMerged.length - 1] = 1;
-          skip = true;
-          continue;
-        }
-        if (nonZero[index] === -3) {
-          tempMerged.push(-3);
-          localMerge[tempMerged.length - 1] = 1;
-          skipSpecial = true;
-          continue;
-        }
-      }
-      tempMerged.push(nonZero[index]);
-    }
-    while (tempMerged.length < segment.length) {
-      tempMerged.push(0);
-    }
-    newLine.push(...tempMerged.slice(0, segment.length));
-    merged.push(...localMerge.slice(0, segment.length));
-  }
-  while (newLine.length < line.length) {
-    newLine.push(0);
-    merged.push(0);
-  }
-  return { newLine: newLine.slice(0, line.length), merged: merged.slice(0, line.length) };
-}
 
-function moveDistanceLine(line) {
-  let movedDistance = 0;
-  let lastTile = 0;
-  const moveDistance = new Array(line.length).fill(0);
-  for (let index = 0; index < line.length; index += 1) {
-    const current = Number(line[index]) || 0;
-    if (current === 0) {
-      movedDistance += 1;
-    } else if (current === -1) {
-      movedDistance = 0;
-      lastTile = 0;
-    } else if (current === -2) {
-      lastTile = 0;
-    } else if (lastTile === current && current >= 0) {
-      moveDistance[index] = movedDistance + 1;
-      movedDistance += 1;
-      lastTile = 0;
-    } else {
-      moveDistance[index] = movedDistance;
-      lastTile = current;
+    let segmentEnd = segmentStart;
+    while (segmentEnd < values.length && values[segmentEnd] !== -1) {
+      segmentEnd += 1;
     }
+
+    const sources = [];
+    for (let index = segmentStart; index < segmentEnd; index += 1) {
+      if (values[index] !== 0) sources.push([index, values[index]]);
+    }
+
+    let target = segmentStart;
+    let sourceIndex = 0;
+    while (sourceIndex < sources.length) {
+      const value = sources[sourceIndex][1];
+      let groupEnd = sourceIndex + 1;
+      let resultValue = value;
+
+      if (value === -3) {
+        while (groupEnd < sources.length && sources[groupEnd][1] === -3) groupEnd += 1;
+      } else if (value >= 0 && groupEnd < sources.length && sources[groupEnd][1] === value) {
+        groupEnd += 1;
+        resultValue = value + 1;
+      }
+
+      for (let index = sourceIndex; index < groupEnd; index += 1) {
+        distances[sources[index][0]] = sources[index][0] - target;
+      }
+      if (groupEnd - sourceIndex > 1) pops[target] = 1;
+
+      nextLine.push(resultValue);
+      target += 1;
+      sourceIndex = groupEnd;
+    }
+
+    while (target < segmentEnd) {
+      nextLine.push(0);
+      target += 1;
+    }
+    segmentStart = segmentEnd;
   }
-  return moveDistance;
+
+  return { nextLine, distances, pops };
 }
 
 export function computeMoveAnimation(board, direction) {
@@ -227,8 +206,9 @@ export function computeMoveAnimation(board, direction) {
     const line = isHorizontal ? source[index].slice() : source.map((row) => row[index]);
     const reverse = direction === 'down' || direction === 'right';
     const processLine = reverse ? line.slice().reverse() : line;
-    let lineDistances = moveDistanceLine(processLine);
-    let lineMerges = simulateAnimationLine(processLine).merged;
+    const traced = traceLineAnimation(processLine);
+    let lineDistances = traced.distances;
+    let lineMerges = traced.pops;
     if (reverse) {
       lineDistances = lineDistances.reverse();
       lineMerges = lineMerges.reverse();
@@ -255,7 +235,7 @@ export function buildMoveAnimationMetadata(boardBefore, direction, spawnIndex = 
     direction,
     ...computeMoveAnimation(boardBefore, direction),
   };
-  if (spawnIndex != null && spawnIndex >= 0 && spawnValue != null && spawnValue > 0) {
+  if (spawnIndex != null && spawnIndex >= 0 && spawnValue != null) {
     metadata.appearTile = {
       index: Number(spawnIndex),
       value: Number(spawnValue),

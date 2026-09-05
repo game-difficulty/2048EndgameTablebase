@@ -488,6 +488,27 @@ export class MysteryMergeEngine extends BaseMinigameEngine {
     }
   }
 
+  applyPowerupTwist(row, col) {
+    const topLeft = this.masked[row][col];
+    const topRight = this.masked[row][col + 1];
+    const bottomLeft = this.masked[row + 1][col];
+    const bottomRight = this.masked[row + 1][col + 1];
+    this.masked[row][col] = bottomLeft;
+    this.masked[row][col + 1] = topLeft;
+    this.masked[row + 1][col] = bottomRight;
+    this.masked[row + 1][col + 1] = topRight;
+    return [];
+  }
+
+  applyPowerupBomb(row, col) {
+    this.masked[row][col] = false;
+  }
+
+  applyPowerupGlove([sourceRow, sourceCol], [targetRow, targetCol]) {
+    this.masked[targetRow][targetCol] = Boolean(this.masked[sourceRow][sourceCol]);
+    this.masked[sourceRow][sourceCol] = false;
+  }
+
   checkGameOver() {
     if (this.hasPossibleMove()) return;
     this.revealAll = true;
@@ -660,6 +681,24 @@ export class IceAgeEngine extends BaseMinigameEngine {
       }
     }
     if (effects.length) this.queueMoveEffects(effects);
+  }
+
+  applyPowerupTwist(row, col) {
+    for (let currentRow = row; currentRow < row + 2; currentRow += 1) {
+      for (let currentCol = col; currentCol < col + 2; currentCol += 1) {
+        this.countDown[currentRow][currentCol] = 0;
+      }
+    }
+    return [];
+  }
+
+  applyPowerupBomb(row, col) {
+    this.countDown[row][col] = 0;
+  }
+
+  applyPowerupGlove([sourceRow, sourceCol], [targetRow, targetCol]) {
+    this.countDown[sourceRow][sourceCol] = 0;
+    this.countDown[targetRow][targetCol] = 0;
   }
 
   buildViewState() {
@@ -1164,8 +1203,46 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
     return ['bomb.png', ''];
   }
 
+  twistedPosition(position, row, col) {
+    const [sourceRow, sourceCol] = position;
+    const relativeRow = sourceRow - row;
+    const relativeCol = sourceCol - col;
+    return [row + relativeCol, col + 1 - relativeRow];
+  }
+
+  hasPowerupTwistEntity(row, col) {
+    if (this.variant === 'airraid' || !this.bombPos) return false;
+    const [bombRow, bombCol] = this.bombPos;
+    return row <= bombRow && bombRow < row + 2 && col <= bombCol && bombCol < col + 2;
+  }
+
+  isPowerupGloveTarget(row, col) {
+    return Number(this.board[row][col]) === 0 &&
+      (!this.bombPos || this.bombPos[0] !== row || this.bombPos[1] !== col);
+  }
+
+  applyPowerupTwist(row, col) {
+    if (!this.hasPowerupTwistEntity(row, col) || !this.bombPos) return [];
+    const source = this.bombPos.slice();
+    const target = this.twistedPosition(source, row, col);
+    this.bombPos = target;
+    const [sprite, labelText] = this.currentObjectVisual();
+    return [{
+      fromIndex: source[0] * this.cols + source[1],
+      toIndex: target[0] * this.cols + target[1],
+      value: 0,
+      kind: 'independent_object',
+      sprite,
+      labelText,
+    }];
+  }
+
   queueObjectSlide(fromPos, toPos, { hideTarget = false, fadeOutAtEnd = false, durationMs = 100 } = {}) {
-    if (!fromPos || !toPos || (fromPos[0] === toPos[0] && fromPos[1] === toPos[1] && !hideTarget)) return;
+    if (
+      !fromPos ||
+      !toPos ||
+      (fromPos[0] === toPos[0] && fromPos[1] === toPos[1] && !hideTarget && !fadeOutAtEnd)
+    ) return;
     const [sprite, labelText] = this.currentObjectVisual();
     const effect = {
       type: 'object_slide',
@@ -1191,7 +1268,19 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
     };
     if (this.variant === 'explosions' || (this.variant === 'hybrid' && this.bombType === 0)) {
       this.board[row][col] = 0;
-      this.queueMoveEffects([{ type: 'explosion', index: row * this.cols + col, delayMs: 100, durationMs: 500, animDurationMs: 500 }]);
+      const index = row * this.cols + col;
+      this.queueMoveEffects([{
+        type: 'explosion',
+        index,
+        delayMs: 100,
+        durationMs: 500,
+        animDurationMs: 500,
+        consumeIndices: [index],
+        consumeDelayMs: 100,
+        hideIndices: [index],
+        revealIndices: [index],
+        revealDelayMs: 330,
+      }]);
       this.hasJustExploded = false;
       return;
     }
@@ -1223,7 +1312,12 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
         let value = original;
         while (value === original) value = weightedExponentChoice(this.runtime.rng);
         this.board[row][col] = value;
-        this.queueMoveEffects([{ type: 'giftbox_burst', index: row * this.cols + col, delayMs: 100, durationMs: 620, animDurationMs: 500, hideIndices: [row * this.cols + col] }]);
+        const index = row * this.cols + col;
+        this.queueMoveEffects([{
+          type: 'giftbox_burst', index, delayMs: 100, durationMs: 500, animDurationMs: 500,
+          hideIndices: [index], consumeIndices: [index], consumeDelayMs: 100,
+          revealIndices: [index], revealDelayMs: 330,
+        }]);
       }
       this.hasJustExploded = false;
       this.pendingResolutionKind = null;
@@ -1234,7 +1328,12 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
       if (positions.length) {
         const [row, col] = positions[0];
         this.board[row][col] = 0;
-        this.queueMoveEffects([{ type: 'factorization_burst', index: row * this.cols + col, delayMs: 100, durationMs: 620, animDurationMs: 500, hideIndices: [row * this.cols + col] }]);
+        const index = row * this.cols + col;
+        this.queueMoveEffects([{
+          type: 'factorization_burst', index, delayMs: 100, durationMs: 500, animDurationMs: 500,
+          hideIndices: [index], consumeIndices: [index], consumeDelayMs: 100,
+          revealIndices: [index], revealDelayMs: 330,
+        }]);
       }
     } else if (positions.length >= 2) {
       const [[row0, col0], [row1, col1]] = positions;
@@ -1243,8 +1342,16 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
       this.board[row0][col0] = factor0;
       this.board[row1][col1] = factor1;
       this.queueMoveEffects([
-        { type: 'factorization_burst', index: row0 * this.cols + col0, delayMs: 100, durationMs: 620, animDurationMs: 500, hideIndices: [row0 * this.cols + col0] },
-        { type: 'factorization_burst', index: row1 * this.cols + col1, delayMs: 100, durationMs: 620, animDurationMs: 500, hideIndices: [row1 * this.cols + col1] },
+        {
+          type: 'factorization_burst', index: row0 * this.cols + col0, delayMs: 100, durationMs: 500, animDurationMs: 500,
+          hideIndices: [row0 * this.cols + col0], consumeIndices: [row0 * this.cols + col0], consumeDelayMs: 100,
+          revealIndices: [row0 * this.cols + col0], revealDelayMs: 330,
+        },
+        {
+          type: 'factorization_burst', index: row1 * this.cols + col1, delayMs: 100, durationMs: 500, animDurationMs: 500,
+          hideIndices: [row1 * this.cols + col1], consumeIndices: [row1 * this.cols + col1], consumeDelayMs: 100,
+          revealIndices: [row1 * this.cols + col1], revealDelayMs: 330,
+        },
       ]);
     }
     this.hasJustExploded = false;
@@ -1254,13 +1361,26 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
 
   beforeGenNum() {
     if (this.variant === 'airraid') {
+      const expiredPositions = [];
       for (let row = 0; row < this.rows; row += 1) {
         for (let col = 0; col < this.cols; col += 1) {
           if (this.countDown[row][col] > 0) {
             this.countDown[row][col] -= 1;
-            if (this.countDown[row][col] === 0) this.board[row][col] = 0;
+            if (this.countDown[row][col] === 0) {
+              this.board[row][col] = 0;
+              expiredPositions.push([row, col]);
+            }
           }
         }
+      }
+      if (expiredPositions.length) {
+        this.queueMoveEffects(expiredPositions.map(([row, col]) => ({
+          type: 'crater_clear',
+          index: row * this.cols + col,
+          sprite: 'crater2.png',
+          durationMs: 320,
+          animDurationMs: 320,
+        })));
       }
       if (this.targetPos && this.board[this.targetPos[0]][this.targetPos[1]] !== 0) {
         const [row, col] = this.targetPos;
@@ -1268,7 +1388,12 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
         this.countDown[row][col] = 60 + this.difficulty * 40;
         this.queueMoveEffects([
           { type: 'airraid_fire_drop', index: row * this.cols + col, durationMs: 250, animDurationMs: 250 },
-          { type: 'airraid_explosion', index: row * this.cols + col, delayMs: 250, durationMs: 450, animDurationMs: 200 },
+          {
+            type: 'airraid_explosion', index: row * this.cols + col, delayMs: 250,
+            durationMs: 200, animDurationMs: 200,
+            consumeIndices: [row * this.cols + col], consumeDelayMs: 250,
+            hideIndices: [row * this.cols + col], revealIndices: [row * this.cols + col], revealDelayMs: 250,
+          },
         ]);
       }
       this.targetPos = null;

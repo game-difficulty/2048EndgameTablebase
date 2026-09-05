@@ -30,10 +30,13 @@ function validGloveSources(engine) {
 }
 
 function validGloveTargets(engine) {
-  return flattenBoard(engine.board).reduce((targets, value, index) => {
-    if (value === 0) targets.push(index);
-    return targets;
-  }, []);
+  const targets = [];
+  for (let row = 0; row < engine.rows; row += 1) {
+    for (let col = 0; col < engine.cols; col += 1) {
+      if (engine.isPowerupGloveTarget(row, col)) targets.push(row * engine.cols + col);
+    }
+  }
+  return targets;
 }
 
 function validTwistTargets(engine) {
@@ -46,7 +49,7 @@ function validTwistTargets(engine) {
         engine.board[row + 1][col],
         engine.board[row + 1][col + 1],
       ];
-      if (values.every((value) => value === 0)) continue;
+      if (values.every((value) => value === 0) && !engine.hasPowerupTwistEntity(row, col)) continue;
       if (values.some((value) => value === -1)) continue;
       targets.push(row * engine.cols + col);
     }
@@ -180,8 +183,17 @@ function applyBomb(state, index) {
     engine.clearAnimation();
     return false;
   }
+  engine.applyPowerupBomb(row, col);
   engine.board[row][col] = 0;
-  engine.setSpecialEffects([{ type: 'explosion', index: Number(index) }]);
+  engine.setSpecialEffects([{
+    type: 'explosion',
+    index: Number(index),
+    durationMs: 500,
+    animDurationMs: 500,
+    hideIndices: [Number(index)],
+    consumeIndices: [Number(index)],
+    consumeDelayMs: 80,
+  }]);
   consumePowerup(state, 'bomb');
   postPowerupUpdate(state);
   return true;
@@ -217,8 +229,9 @@ function applyGloveStep(state, index) {
   const sourceRow = Math.floor(sourceIndex / engine.cols);
   const sourceCol = sourceIndex % engine.cols;
   const sourceValue = Number(engine.board[sourceRow][sourceCol]) || 0;
-  const success = Number(engine.board[row][col]) === 0 && sourceValue > 0;
+  const success = engine.isPowerupGloveTarget(row, col) && sourceValue > 0;
   if (success) {
+    engine.applyPowerupGlove([sourceRow, sourceCol], [row, col]);
     engine.board[row][col] = sourceValue;
     engine.board[sourceRow][sourceCol] = 0;
     engine.setSpecialEffects([
@@ -264,7 +277,10 @@ function applyTwist(state, index) {
     engine.board[row + 1][col],
     engine.board[row + 1][col + 1],
   ];
-  if (values.every((value) => value === 0) || values.some((value) => value === -1)) {
+  if (
+    (values.every((value) => value === 0) && !engine.hasPowerupTwistEntity(row, col)) ||
+    values.some((value) => value === -1)
+  ) {
     engine.clearAnimation();
     return false;
   }
@@ -279,9 +295,10 @@ function applyTwist(state, index) {
     [bottomRight, bottomLeft, engine.board[row + 1][col + 1]],
   ];
   const twistTiles = mapping
-    .filter(([_from, _to, value]) => Number(value) > 0)
+    .filter(([_from, _to, value]) => Number(value) !== 0)
     .map(([fromIndex, toIndex, value]) => ({ fromIndex, toIndex, value: Number(value) }));
   rotate2x2Clockwise(engine.board, row, col);
+  twistTiles.push(...engine.applyPowerupTwist(row, col));
   engine.setSpecialEffects([{ type: 'twist', index: Number(index), tiles: twistTiles }]);
   consumePowerup(state, 'twist');
   postPowerupUpdate(state);
