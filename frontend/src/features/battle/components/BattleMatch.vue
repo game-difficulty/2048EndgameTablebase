@@ -73,12 +73,15 @@
           </div>
         </div>
         <div v-if="opponentBoards[battleActorRenderKey(player)]" class="battle-visible-board">
-          <BaseBoard :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant" />
-          <BattleCorrectionOverlay
-            v-if="opponentOverlayFor(player)"
-            :overlay="opponentOverlayFor(player)"
-            compact
-          />
+          <BaseBoard :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant">
+            <template #overlay>
+              <BattleCorrectionOverlay
+                v-if="opponentOverlayFor(player)"
+                :overlay="opponentOverlayFor(player)"
+                compact
+              />
+            </template>
+          </BaseBoard>
         </div>
       </article>
     </div>
@@ -91,15 +94,18 @@
           <div><span>{{ $t('battle.match.status') }}</span><strong>{{ $t(playerStatusKey(ownResult)) }}</strong></div>
         </div>
         <div :class="['battle-board-shell', { urgent: countdownState.urgent }]">
-          <BaseBoard :frame="boardFrame" :dis32k="dis32k" :is-variant="isVariant" @swipe="$emit('move', $event)" />
-          <Transition name="battle-correction">
-            <BattleCorrectionOverlay
-              v-if="wrongOverlay"
-              :overlay="wrongOverlay"
-              interactive
-              @continue="$emit('continue-correction')"
-            />
-          </Transition>
+          <BaseBoard :frame="boardFrame" :dis32k="dis32k" :is-variant="isVariant" @swipe="$emit('move', $event)">
+            <template #overlay>
+              <Transition name="battle-correction">
+                <BattleCorrectionOverlay
+                  v-if="wrongOverlay"
+                  :overlay="wrongOverlay"
+                  interactive
+                  @continue="$emit('continue-correction')"
+                />
+              </Transition>
+            </template>
+          </BaseBoard>
         </div>
         <p v-if="!roundCompleted" class="battle-input-hint">{{ $t('battle.match.inputHint') }}</p>
       </section>
@@ -122,12 +128,15 @@
             <div class="battle-progress-track"><i :style="{ width: progressPercent(player.route_index) }"></i></div>
             <div class="battle-opponent-footer"><span>{{ player.route_index }}/{{ totalSteps }}</span><span>{{ $t(playerStatusKey(player)) }}</span></div>
             <div v-if="canSeeBoard(player) && opponentBoards[battleActorRenderKey(player)]" class="battle-revealed-board">
-              <BaseBoard compact :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant" />
-              <BattleCorrectionOverlay
-                v-if="opponentOverlayFor(player)"
-                :overlay="opponentOverlayFor(player)"
-                compact
-              />
+              <BaseBoard compact :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant">
+                <template #overlay>
+                  <BattleCorrectionOverlay
+                    v-if="opponentOverlayFor(player)"
+                    :overlay="opponentOverlayFor(player)"
+                    compact
+                  />
+                </template>
+              </BaseBoard>
             </div>
           </article>
         </div>

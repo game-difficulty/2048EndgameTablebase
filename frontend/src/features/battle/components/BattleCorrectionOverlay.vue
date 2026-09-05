@@ -4,6 +4,7 @@
     :role="interactive ? 'button' : 'status'"
     :tabindex="interactive ? 0 : undefined"
     aria-live="assertive"
+    @pointerdown.stop
     @click.stop="requestContinue"
     @keydown.enter.prevent="requestContinue"
     @keydown.space.prevent="requestContinue"

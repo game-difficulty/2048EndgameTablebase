@@ -1,59 +1,70 @@
 <template>
   <div
     ref="boardRef"
-    :class="['board relative bg-board-bg rounded-xl aspect-square w-full max-w-[600px] mx-auto touch-none', { 'board-compact': compact }]"
+    class="board-stage relative aspect-square w-full max-w-[600px] mx-auto touch-none"
     @pointerdown.prevent="handleBoardPointerDown"
     @pointermove="handleBoardPointerMove"
     @pointerup="handleBoardPointerUp"
     @pointercancel="clearTouchGesture"
     @contextmenu.prevent
   >
-    
-    <!-- Grid Cells (Background) -->
-    <div class="bg-grid">
-      <div 
-        v-for="i in 16" 
-        :key="`bg-${i}`" 
-        class="bg-cell pointer-events-auto"
-        :data-board-cell-index="i - 1"
-        :style="getBackgroundCellStyle(i - 1)"
-      ></div>
-    </div>
-
-    <!-- Active Tiles -->
-    <div 
-      v-for="tile in activeTiles" 
-      :key="tile.id"
-      class="tile z-10"
-      :class="{'no-transition': tile.isInterrupting}"
-      :style="getTilePosStyle(tile)"
+    <div
+      :class="['board absolute bg-board-bg rounded-xl', { 'board-compact': compact }]"
+      :style="boardViewportStyle"
     >
-      <div 
-        class="tile-inner rounded-lg flex items-center justify-center font-bold"
-        :class="{
-          'anim-new': tile.isNew,
-          'anim-merged': tile.isMerged && !tile.isHidden,
-          'opacity-0': tile.isHidden
-        }"
-        :style="getTileInnerStyle(tile)"
-      >
-        <span class="tile-label" :style="getTileLabelStyle(tile)">
-          {{ getTileDisplayValue(tile.value) }}
-        </span>
+      <!-- Grid Cells (Background) -->
+      <div class="bg-grid">
+        <div
+          v-for="index in boardViewport.visibleIndices"
+          :key="`bg-${index}`"
+          class="bg-cell pointer-events-auto"
+          :data-board-cell-index="index"
+          :style="getBackgroundCellStyle(index)"
+        ></div>
       </div>
-    </div>
 
+      <!-- Active Tiles -->
+      <div
+        v-for="tile in activeTiles"
+        :key="tile.id"
+        class="tile z-10"
+        :class="{'no-transition': tile.isInterrupting}"
+        :style="getTilePosStyle(tile)"
+      >
+        <div
+          class="tile-inner rounded-lg flex items-center justify-center font-bold"
+          :class="{
+            'anim-new': tile.isNew,
+            'anim-merged': tile.isMerged && !tile.isHidden,
+            'opacity-0': tile.isHidden
+          }"
+          :style="getTileInnerStyle(tile)"
+        >
+          <span class="tile-label" :style="getTileLabelStyle(tile)">
+            {{ getTileDisplayValue(tile.value) }}
+          </span>
+        </div>
+      </div>
+
+      <slot name="overlay" />
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, watch, nextTick, onUnmounted } from 'vue';
+import { computed, ref, watch, nextTick, onUnmounted } from 'vue';
 
 import {
   boardFrameRenderMode,
   cloneBoard,
 } from './boardFrame.js';
 import { boardSwipeDirection } from './boardPointerGesture.js';
+import {
+  boardViewportSignature,
+  createBoardViewport,
+  createBoardViewportLayout,
+  logicalIndexToVisual,
+} from '../utils/boardViewport.js';
 
 const emit = defineEmits(['cell-click', 'swipe']);
 
@@ -79,6 +90,26 @@ const props = defineProps({
 let tileIdCounter = 0;
 const boardRef = ref(null);
 const activeTiles = ref([]);
+const boardViewport = computed(() => createBoardViewport(props.frame?.toBoard, props.isVariant));
+const viewportLayout = computed(() => createBoardViewportLayout(boardViewport.value));
+const viewportSignature = computed(() => boardViewportSignature(boardViewport.value));
+const boardViewportStyle = computed(() => {
+  const layout = viewportLayout.value;
+  return {
+    width: `${layout.widthPercent}%`,
+    height: `${layout.heightPercent}%`,
+    left: `${layout.leftPercent}%`,
+    top: `${layout.topPercent}%`,
+    '--visible-rows': boardViewport.value.rows,
+    '--visible-cols': boardViewport.value.cols,
+    '--board-padding-x': `${layout.paddingXPercent}%`,
+    '--board-padding-y': `${layout.paddingYPercent}%`,
+    '--grid-gap-x': `${layout.gapXPercent}%`,
+    '--grid-gap-y': `${layout.gapYPercent}%`,
+    '--tile-width': `${layout.tileWidthPercent}%`,
+    '--tile-height': `${layout.tileHeightPercent}%`,
+  };
+});
 let animTimeout = null;
 let revealMergeTimeout = null;
 let revealAppearTimeout = null;
@@ -243,7 +274,7 @@ const syncToBoardRaw = (sourceBoard = props.frame?.toBoard) => {
     fastForwardAnimations(true);
     const normalizedBoard = cloneBoard(sourceBoard);
     const nextTiles = [];
-    for(let i=0; i<16; i++) {
+    for (const i of boardViewport.value.visibleIndices) {
         if (shouldRenderAsActiveTile(normalizedBoard[i])) {
             nextTiles.push(withGlowDefaults({
                 // Snapshot updates use cell-stable keys so undo/seek does not
@@ -264,12 +295,15 @@ const syncToBoardRaw = (sourceBoard = props.frame?.toBoard) => {
     settledBoard = normalizedBoard;
 };
 
-watch(() => [props.frame?.revision ?? null, props.isVariant], async ([revision, variant], previous = []) => {
+watch(
+  () => [props.frame?.revision ?? null, props.isVariant, viewportSignature.value],
+  async ([revision, variant, viewportKey], previous = []) => {
     const frame = props.frame;
     if (!frame) return;
     const frameRevision = String(revision ?? '');
     const variantChanged = previous.length > 0 && variant !== previous[1];
-    if (!variantChanged && frameRevision === lastConsumedFrameRevision) return;
+    const viewportChanged = previous.length > 0 && viewportKey !== previous[2];
+    if (!variantChanged && !viewportChanged && frameRevision === lastConsumedFrameRevision) return;
     lastConsumedFrameRevision = frameRevision;
 
     const epoch = ++animationEpoch;
@@ -277,7 +311,7 @@ watch(() => [props.frame?.revision ?? null, props.isVariant], async ([revision, 
     fastForwardAnimations(true);
 
     const newBoard = cloneBoard(frame.toBoard);
-    if (variantChanged || boardFrameRenderMode(settledBoard, frame) !== 'animate') {
+    if (variantChanged || viewportChanged || boardFrameRenderMode(settledBoard, frame) !== 'animate') {
         syncToBoardRaw(newBoard);
         return;
     }
@@ -383,8 +417,8 @@ watch(() => [props.frame?.revision ?? null, props.isVariant], async ([revision, 
         fastForwardAnimations(false);
         animTimeout = null;
     }, 300);
-
-});
+  },
+);
 
 // Initial setup render
 syncToBoardRaw();
@@ -395,9 +429,14 @@ onUnmounted(() => {
 });
 
 const getTilePosStyle = (tile) => {
+  const visualPosition = logicalIndexToVisual(tile.row * 4 + tile.col, boardViewport.value);
+  if (!visualPosition) {
+    return { display: 'none' };
+  }
+  const layout = viewportLayout.value;
   return {
-    '--col': tile.col,
-    '--row': tile.row
+    left: `${layout.paddingXPercent + visualPosition.col * (layout.tileWidthPercent + layout.gapXPercent)}%`,
+    top: `${layout.paddingYPercent + visualPosition.row * (layout.tileHeightPercent + layout.gapYPercent)}%`,
   };
 };
 
@@ -468,39 +507,32 @@ const getTileLabelStyle = (tile) => {
 
 <style scoped>
 .board {
-  --padding: 2.5%;
-  --grid-gap: 2.5%;
-  --tile-size: calc((100% - var(--padding) * 2 - var(--grid-gap) * 3) / 4);
+  --visible-rows: 4;
+  --visible-cols: 4;
+  --board-padding-x: 2.5%;
+  --board-padding-y: 2.5%;
+  --grid-gap-x: 2.5%;
+  --grid-gap-y: 2.5%;
+  --tile-width: 21.875%;
+  --tile-height: 21.875%;
 }
 
 .board-compact {
   --tile-font-scale: 0.45;
 }
 
-@supports (container-type: size) {
-  .board {
-    container-type: size;
-  }
-}
-
-@supports (width: 1cqw) {
-  .board {
-    --padding: 2.5cqw;
-    --grid-gap: 2.5cqw;
-  }
-}
-
 /* Background Grid aligns strictly to the padding offset */
 .bg-grid {
   position: absolute;
-  top: var(--padding);
-  left: var(--padding);
-  right: var(--padding);
-  bottom: var(--padding);
+  top: var(--board-padding-y);
+  left: var(--board-padding-x);
+  right: var(--board-padding-x);
+  bottom: var(--board-padding-y);
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  grid-template-rows: repeat(4, 1fr);
-  gap: var(--grid-gap);
+  grid-template-columns: repeat(var(--visible-cols), 1fr);
+  grid-template-rows: repeat(var(--visible-rows), 1fr);
+  column-gap: var(--grid-gap-x);
+  row-gap: var(--grid-gap-y);
   z-index: 0;
 }
 
@@ -515,11 +547,9 @@ const getTileLabelStyle = (tile) => {
 .tile {
   pointer-events: none;
   position: absolute;
-  top: calc(var(--padding) + var(--row) * (var(--tile-size) + var(--grid-gap)));
-  left: calc(var(--padding) + var(--col) * (var(--tile-size) + var(--grid-gap)));
   z-index: 10;
-  width: var(--tile-size);
-  height: var(--tile-size);
+  width: var(--tile-width);
+  height: var(--tile-height);
   transition: top 0.1s ease-in-out, left 0.1s ease-in-out;
 }
 
