@@ -7,6 +7,7 @@ import {
   mergeLine,
 } from '../src/features/minigames/engine/boardMover.js';
 import {
+  BlitzkriegEngine,
   EndlessFamilyEngine,
   IceAgeEngine,
   MysteryMergeEngine,
@@ -90,4 +91,53 @@ test('bomb effects consume the tile after the burst starts', () => {
   assert.equal(engine.masked[0][0], false);
   assert.deepEqual(engine.animation.effects[0].consumeIndices, [0]);
   assert.equal(engine.animation.effects[0].consumeDelayMs, 80);
+});
+
+const blockedBoard = () => [
+  [1, 2, 1, 2],
+  [2, 1, 2, 1],
+  [1, 2, 1, 2],
+  [2, 1, 2, 1],
+];
+
+test('Mystery Merge resumes after a powerup restores a legal move', () => {
+  const engine = new MysteryMergeEngine(definition('Mystery Merge2', 'mystery_merge'), 0);
+  engine.board = blockedBoard();
+  engine.masked = Array.from({ length: 4 }, () => new Array(4).fill(false));
+  engine.checkGameOver();
+  assert.equal(engine.isOver, true);
+  assert.equal(engine.revealAll, true);
+
+  const state = powerupState(engine, { bomb: 1, glove: 0, twist: 0 });
+  assert.equal(activatePowerup(state, 'bomb'), true);
+  assert.equal(applyTargetAction(state, 0), true);
+  assert.equal(engine.isOver, false);
+  assert.equal(engine.revealAll, false);
+});
+
+test('Blitzkrieg resumes after a powerup restores a legal move while time remains', () => {
+  const engine = new BlitzkriegEngine(definition('Blitzkrieg', 'blitzkrieg'), 0);
+  engine.board = blockedBoard();
+  engine.remainingMs = 60_000;
+  engine.timerRunning = false;
+  engine.timerAnchorMs = null;
+  engine.checkGameOver();
+  assert.equal(engine.isOver, true);
+
+  const state = powerupState(engine, { bomb: 1, glove: 0, twist: 0 });
+  assert.equal(activatePowerup(state, 'bomb'), true);
+  assert.equal(applyTargetAction(state, 0), true);
+  assert.equal(engine.isOver, false);
+});
+
+test('Blitzkrieg cannot resume after its timer expires', () => {
+  const engine = new BlitzkriegEngine(definition('Blitzkrieg', 'blitzkrieg'), 0);
+  engine.board = blockedBoard();
+  engine.remainingMs = 0;
+  engine.isOver = true;
+
+  const state = powerupState(engine, { bomb: 1, glove: 0, twist: 0 });
+  assert.equal(activatePowerup(state, 'bomb'), true);
+  assert.equal(applyTargetAction(state, 0), true);
+  assert.equal(engine.isOver, true);
 });

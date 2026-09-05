@@ -510,10 +510,13 @@ export class MysteryMergeEngine extends BaseMinigameEngine {
   }
 
   checkGameOver() {
-    if (this.hasPossibleMove()) return;
+    this.isOver = !this.hasPossibleMove();
+    if (!this.isOver) {
+      this.revealAll = false;
+      return;
+    }
     this.revealAll = true;
     this.peekActive = false;
-    this.isOver = true;
   }
 
   buildViewState() {
@@ -989,7 +992,10 @@ export class BlitzkriegEngine extends BaseMinigameEngine {
 
   checkGameOver() {
     this.syncTimer();
-    if (!this.isOver && this.remainingMs > 0 && this.hasPossibleMove()) return;
+    if (this.remainingMs > 0 && this.hasPossibleMove()) {
+      this.isOver = false;
+      return;
+    }
     this.isOver = true;
     this.timerRunning = false;
     this.checkGamePassed();

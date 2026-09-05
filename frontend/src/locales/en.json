@@ -518,6 +518,13 @@
       "overallDescription": "Ranked by trophy level and count. Earlier achievements win ties.",
       "gameDescription": "Only each player's personal best for this minigame and difficulty is retained.",
       "trophies": "Trophies",
+      "trophyLevels": {
+        "none": "No trophy",
+        "bronze": "Bronze",
+        "silver": "Silver",
+        "gold": "Gold",
+        "grand": "Grand"
+      },
       "highestTile": "Max tile",
       "refresh": "Refresh leaderboard",
       "viewAll": "View all minigame rankings",

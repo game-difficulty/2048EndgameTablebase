@@ -40,8 +40,18 @@
           </span>
           <span class="minigame-leaderboard-player">
             <strong>{{ entry.display_name }}</strong>
-            <small v-if="entry.highest_tile">
-              {{ $t('minigames.leaderboard.highestTile') }} {{ formatInteger(entry.highest_tile) }}
+            <small v-if="trophyLevel(entry).src || entry.highest_tile">
+              <span
+                v-if="trophyLevel(entry).src"
+                class="minigame-leaderboard-trophy"
+                :title="trophyLevel(entry).label"
+                :aria-label="trophyLevel(entry).label"
+              >
+                <img :src="trophyLevel(entry).src" alt="" />
+              </span>
+              <span v-if="entry.highest_tile">
+                {{ $t('minigames.leaderboard.highestTile') }} {{ formatInteger(entry.highest_tile) }}
+              </span>
             </small>
           </span>
           <strong class="minigame-leaderboard-score">{{ formatInteger(entry.score) }}</strong>
@@ -65,6 +75,7 @@ import { useI18n } from 'vue-i18n';
 
 import AccountAvatar from '../../auth/AccountAvatar.vue';
 import { useAuthState } from '../../../services/auth/authState';
+import { getMinigameAssetUrl } from '../../../services/runtime/backendUrl';
 import { fetchMinigameLeaderboard } from '../services/minigameRankingClient';
 
 const props = defineProps({
@@ -90,6 +101,14 @@ const leaderboardUser = (entry) => ({
   display_name: entry?.display_name || '',
   profile: { avatar_url: entry?.avatar_url || null },
 });
+const trophyLevel = (entry) => {
+  const tier = Math.max(0, Math.min(4, Number(entry?.trophy_tier) || 0));
+  const key = ['none', 'bronze', 'silver', 'gold', 'grand'][tier];
+  return {
+    label: t(`minigames.leaderboard.trophyLevels.${key}`),
+    src: tier > 0 ? getMinigameAssetUrl(`${key}.png`) : '',
+  };
+};
 
 const loadBoard = async () => {
   if (!props.gameId) return;
@@ -207,7 +226,9 @@ onUnmounted(() => window.removeEventListener('minigame-score-updated', handleSco
 .minigame-leaderboard-player strong,
 .minigame-leaderboard-player small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .minigame-leaderboard-player strong { font-size: var(--font-ui-xs); font-weight: 900; }
-.minigame-leaderboard-player small { color: var(--text-secondary); font-size: var(--font-ui-2xs); font-weight: 750; }
+.minigame-leaderboard-player small { display: flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); font-size: var(--font-ui-2xs); font-weight: 750; }
+.minigame-leaderboard-trophy { display: inline-flex; align-items: center; gap: 0.2rem; }
+.minigame-leaderboard-trophy img { width: 1rem; height: 1rem; flex: 0 0 auto; object-fit: contain; }
 .minigame-leaderboard-score { color: var(--accent); font-size: var(--font-ui-xs); font-variant-numeric: tabular-nums; font-weight: 950; }
 .minigame-leaderboard-message {
   min-height: 20rem;

@@ -62,6 +62,14 @@
             </span>
           </strong>
           <strong v-else class="minigame-podium-score">{{ formatInteger(entry.score) }}</strong>
+          <span
+            v-if="!isOverall && trophyLevel(entry).src"
+            class="minigame-entry-trophy"
+            :title="trophyLevel(entry).label"
+            :aria-label="trophyLevel(entry).label"
+          >
+            <img :src="trophyLevel(entry).src" alt="" />
+          </span>
         </article>
       </div>
 
@@ -83,9 +91,19 @@
             </span>
           </strong>
           <strong v-else class="minigame-row-score">
-            {{ formatInteger(entry.score) }}
-            <small v-if="entry.highest_tile">
-              {{ $t('minigames.leaderboard.highestTile') }} {{ formatInteger(entry.highest_tile) }}
+            <span>{{ formatInteger(entry.score) }}</span>
+            <small v-if="trophyLevel(entry).src || entry.highest_tile">
+              <span
+                v-if="trophyLevel(entry).src"
+                class="minigame-entry-trophy"
+                :title="trophyLevel(entry).label"
+                :aria-label="trophyLevel(entry).label"
+              >
+                <img :src="trophyLevel(entry).src" alt="" />
+              </span>
+              <span v-if="entry.highest_tile">
+                {{ $t('minigames.leaderboard.highestTile') }} {{ formatInteger(entry.highest_tile) }}
+              </span>
             </small>
           </strong>
         </div>
@@ -145,11 +163,20 @@ const leaderboardUser = (entry) => ({
   profile: { avatar_url: entry?.avatar_url || null },
 });
 const trophyStats = (entry) => [
-  { key: 'grand', label: 'Grand', src: getMinigameAssetUrl('grand.png'), value: entry?.trophies?.grand || 0 },
-  { key: 'gold', label: 'Gold', src: getMinigameAssetUrl('gold.png'), value: entry?.trophies?.gold || 0 },
-  { key: 'silver', label: 'Silver', src: getMinigameAssetUrl('silver.png'), value: entry?.trophies?.silver || 0 },
-  { key: 'bronze', label: 'Bronze', src: getMinigameAssetUrl('bronze.png'), value: entry?.trophies?.bronze || 0 },
+  { key: 'grand', label: t('minigames.leaderboard.trophyLevels.grand'), src: getMinigameAssetUrl('grand.png'), value: entry?.trophies?.grand || 0 },
+  { key: 'gold', label: t('minigames.leaderboard.trophyLevels.gold'), src: getMinigameAssetUrl('gold.png'), value: entry?.trophies?.gold || 0 },
+  { key: 'silver', label: t('minigames.leaderboard.trophyLevels.silver'), src: getMinigameAssetUrl('silver.png'), value: entry?.trophies?.silver || 0 },
+  { key: 'bronze', label: t('minigames.leaderboard.trophyLevels.bronze'), src: getMinigameAssetUrl('bronze.png'), value: entry?.trophies?.bronze || 0 },
 ];
+const trophyLevel = (entry) => {
+  const tier = Math.max(0, Math.min(4, Number(entry?.trophy_tier) || 0));
+  const key = ['none', 'bronze', 'silver', 'gold', 'grand'][tier];
+  return {
+    key,
+    label: t(`minigames.leaderboard.trophyLevels.${key}`),
+    src: tier > 0 ? getMinigameAssetUrl(`${key}.png`) : '',
+  };
+};
 
 const loadBoard = async () => {
   const serial = ++loadSerial;
@@ -240,6 +267,9 @@ onMounted(initialize);
 .minigame-podium-rank { position: absolute; top: 0.7rem; left: 0.8rem; font-size: var(--font-ui-xs); font-weight: 950; }
 .minigame-podium-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-main); font-size: var(--font-ui-sm); }
 .minigame-podium-score { color: var(--accent); font-size: var(--font-ui-sm); }
+.minigame-entry-trophy { min-width: 0; display: inline-flex; align-items: center; gap: 0.28rem; color: var(--text-secondary); font-size: var(--font-ui-2xs); font-weight: 850; }
+.minigame-entry-trophy img { width: 1.15rem; height: 1.15rem; flex: 0 0 auto; object-fit: contain; }
+.minigame-podium .minigame-entry-trophy img { width: 1.55rem; height: 1.55rem; }
 .minigame-podium-trophies,
 .minigame-row-trophies { display: flex; align-items: center; justify-content: flex-end; gap: 0.45rem; color: var(--text-main); font-size: var(--font-ui-xs); }
 .minigame-podium-trophies span,
@@ -256,7 +286,7 @@ onMounted(initialize);
 .minigame-row-player { min-width: 0; display: flex; align-items: center; gap: 0.7rem; }
 .minigame-row-player strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-ui-sm); }
 .minigame-row-score { display: grid; justify-items: end; color: var(--accent); font-size: var(--font-ui-sm); }
-.minigame-row-score small { color: var(--text-secondary); font-size: var(--font-ui-2xs); }
+.minigame-row-score small { display: flex; align-items: center; justify-content: flex-end; gap: 0.65rem; color: var(--text-secondary); font-size: var(--font-ui-2xs); }
 .is-spinning { animation: minigame-board-spin .8s linear infinite; }
 @keyframes minigame-board-spin { to { transform: rotate(360deg); } }
 </style>

@@ -518,6 +518,13 @@
       "overallDescription": "按奖杯等级和数量排名，同分时较早达成者优先。",
       "gameDescription": "每名玩家仅保留该小游戏、该难度下的个人最高分。",
       "trophies": "奖杯",
+      "trophyLevels": {
+        "none": "暂无奖杯",
+        "bronze": "铜奖杯",
+        "silver": "银奖杯",
+        "gold": "金奖杯",
+        "grand": "特级奖杯"
+      },
       "highestTile": "最高方块",
       "refresh": "刷新榜单",
       "viewAll": "查看完整小游戏榜单",
