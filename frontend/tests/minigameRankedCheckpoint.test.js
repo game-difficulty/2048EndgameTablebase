@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { MinigameRankedRecorder } from '../src/features/minigames/engine/rankedRecorder.js';
+import { MinigameController } from '../src/features/minigames/engine/controller.js';
 import { decodeMgo1 } from '../src/features/minigames/protocol/index.js';
 
 const RUN_ID = '123e4567-e89b-42d3-a456-426614174000';
@@ -30,3 +31,19 @@ test('death checkpoints do not seal the live operation stream', () => {
   assert.equal(recorder.ended, false);
 });
 
+test('play state displays the persisted best without changing the engine score', async () => {
+  const controller = new MinigameController({
+    difficulty: 1,
+    summaries: {
+      'gravity-twist-1:1': { bestScore: 33392 },
+    },
+    snapshotKey: (gameId, difficulty) => `${gameId}:${difficulty}`,
+  });
+
+  const state = await controller.startGame('gravity-twist-1');
+
+  assert.equal(state.score, 0);
+  assert.equal(state.best, 33392);
+  assert.equal(state.hud.best, 33392);
+  assert.equal(state.snapshot.engine.maxScore, 0);
+});

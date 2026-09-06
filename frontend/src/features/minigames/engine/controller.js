@@ -195,6 +195,16 @@ export class MinigameController {
       throw new Error('No active minigame');
     }
     const payload = this.engine.serializeState();
+    const summaryKey = typeof this.snapshotKey === 'function'
+      ? this.snapshotKey(this.currentGameId, this.difficulty)
+      : `${this.currentGameId}:${this.difficulty}`;
+    const storedBest = Math.max(0, Number(this.summaries?.[summaryKey]?.bestScore) || 0);
+    const displayedBest = Math.max(storedBest, Number(payload.best) || 0, Number(payload.score) || 0);
+    payload.best = displayedBest;
+    payload.hud = {
+      ...(payload.hud || {}),
+      best: displayedBest,
+    };
     payload.powerups = buildPowerupsPayload(this);
     payload.interaction = buildInteractionPayload(this);
     payload.snapshot = {

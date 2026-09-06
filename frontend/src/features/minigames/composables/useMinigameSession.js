@@ -256,6 +256,35 @@ export function useMinigameSession(activeRef) {
     return task;
   };
 
+  const rankedExitReason = (state) => {
+    const engine = state?.snapshot?.engine;
+    if (!engine) return null;
+    if (engine.isOver) return MGO1_END_REASON.GAME_OVER;
+    return Number(engine.isPassed || 0) > 0 ? MGO1_END_REASON.RETIRED : null;
+  };
+
+  const finalizeActiveRankedRun = async (finalState) => {
+    const recorder = activeRecorder;
+    const leaseToken = activeLeaseToken;
+    if (!recorder?.runId || !leaseToken || !hasRankedOwnership()) return;
+
+    const reason = rankedExitReason(finalState);
+    if (!recorder.ended && reason != null) {
+      // Drain an automatic death checkpoint first, then idempotently ensure that
+      // the exact state being left has been submitted before abandoning the run.
+      await rankedCheckpointQueue.catch(() => false);
+      await queueRankedCheckpoint(finalState, { reason });
+    }
+
+    if (
+      activeRecorder?.runId === recorder.runId
+      && activeLeaseToken === leaseToken
+      && hasRankedOwnership()
+    ) {
+      await abandonMinigameRankedRun(recorder.runId, leaseToken).catch(() => {});
+    }
+  };
+
   const hasActiveGame = computed(() => Boolean(gameState.value?.gameId));
   const currentView = computed(() => (hasActiveGame.value ? 'play' : 'menu'));
   const menuSections = computed(() => menuData.value.sections || []);
@@ -793,25 +822,7 @@ export function useMinigameSession(activeRef) {
   const backToMenu = async () => {
     lastMenuFocusGameId.value = String(gameState.value?.gameId || lastMenuFocusGameId.value || '');
     closeOverlay();
-    const recorder = activeRecorder;
-    const leaseToken = activeLeaseToken;
-    const finalState = gameState.value;
-    const trophyTier = Math.max(
-      0,
-      Math.min(4, Math.trunc(Number(finalState?.snapshot?.engine?.isPassed || 0))),
-    );
-    if (recorder && !recorder.ended && hasRankedOwnership() && trophyTier > 0) {
-      if (finalState?.snapshot?.engine?.isOver) {
-        await rankedCheckpointQueue.catch(() => false);
-      } else {
-        await queueRankedCheckpoint(finalState, { reason: MGO1_END_REASON.RETIRED });
-      }
-      if (recorder.runId && activeLeaseToken && hasRankedOwnership()) {
-        await abandonMinigameRankedRun(recorder.runId, activeLeaseToken).catch(() => {});
-      }
-    } else if (recorder?.runId && leaseToken && hasRankedOwnership()) {
-      await abandonMinigameRankedRun(recorder.runId, leaseToken).catch(() => {});
-    }
+    await finalizeActiveRankedRun(gameState.value);
     ensureController().backToMenu();
     releaseRankedOwnership();
     activeRecorder = null;
@@ -822,12 +833,8 @@ export function useMinigameSession(activeRef) {
 
   const newGame = async () => {
     closeOverlay();
-    const previousRunId = activeRecorder?.runId || '';
-    const previousLeaseToken = activeLeaseToken;
     const ownedPreviousRun = hasRankedOwnership();
-    if (ownedPreviousRun && previousRunId && previousLeaseToken) {
-      await abandonMinigameRankedRun(previousRunId, previousLeaseToken).catch(() => {});
-    }
+    await finalizeActiveRankedRun(gameState.value);
     releaseRankedOwnership({ forgetLease: ownedPreviousRun });
     if (gameState.value?.gameId) {
       const key = snapshotKey(gameState.value.gameId, difficulty.value);
