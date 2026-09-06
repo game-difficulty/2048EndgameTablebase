@@ -209,6 +209,7 @@
       state.replay.height,
       step.direction,
       step.number,
+      step.special32k,
     );
     const movingTiles = transition.sources.map((source) => {
       const tile = createMotionTile(source.exponent, source.fromIndex, ' is-moving');
