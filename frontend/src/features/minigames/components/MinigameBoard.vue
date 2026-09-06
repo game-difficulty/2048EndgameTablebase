@@ -210,9 +210,12 @@ let moveCleanupTimeout = null;
 let effectsCleanupTimeout = null;
 let followUpTimeout = null;
 let effectPhaseTimeouts = [];
+let animationRevision = 0;
 let swipeGesture = null;
 let suppressCellClickUntil = 0;
 const SWIPE_THRESHOLD_PX = 28;
+
+const isCurrentAnimation = (revision) => revision === animationRevision;
 
 const rows = computed(() => Number(props.shape?.rows || 4));
 const cols = computed(() => Number(props.shape?.cols || 4));
@@ -755,14 +758,18 @@ const revealBoardCellsAt = (indices, animate = true) => {
   settledTiles.value.push(...revealedTiles.map((tile) => ({ ...tile })));
 };
 
-const scheduleEffectPhase = (delayMs, callback) => {
+const scheduleEffectPhase = (delayMs, callback, revision) => {
   if (delayMs <= 0) {
-    callback();
+    if (isCurrentAnimation(revision)) {
+      callback();
+    }
     return;
   }
   const timeout = window.setTimeout(() => {
     effectPhaseTimeouts = effectPhaseTimeouts.filter((candidate) => candidate !== timeout);
-    callback();
+    if (isCurrentAnimation(revision)) {
+      callback();
+    }
   }, delayMs);
   effectPhaseTimeouts.push(timeout);
 };
@@ -780,7 +787,6 @@ const fastForwardAnimations = () => {
       isInterrupting: false,
       isCoverClearing: false,
     }));
-  settledTiles.value = activeTiles.value.map((tile) => ({ ...tile }));
 };
 
 const revealMergedTiles = () => {
@@ -795,32 +801,47 @@ const revealMergedTiles = () => {
   });
 };
 
-const scheduleEffectsCleanup = (duration = 420, syncBoard = true) => {
+const scheduleEffectsCleanup = (duration = 420, syncBoard = true, revision) => {
   if (effectsCleanupTimeout) {
     window.clearTimeout(effectsCleanupTimeout);
   }
-  effectsCleanupTimeout = window.setTimeout(() => {
+  const timeout = window.setTimeout(() => {
+    if (!isCurrentAnimation(revision)) {
+      return;
+    }
     clearSpecialEffects();
     if (syncBoard) {
       syncToBoardRaw(false);
     }
-    effectsCleanupTimeout = null;
+    if (effectsCleanupTimeout === timeout) {
+      effectsCleanupTimeout = null;
+    }
   }, duration);
+  effectsCleanupTimeout = timeout;
 };
 
-const scheduleMoveTimers = (followUp = null, hasConcurrentEffects = false) => {
+const scheduleMoveTimers = (followUp = null, hasConcurrentEffects = false, revision) => {
   if (revealTimeout) {
     window.clearTimeout(revealTimeout);
   }
-  revealTimeout = window.setTimeout(() => {
+  const nextRevealTimeout = window.setTimeout(() => {
+    if (!isCurrentAnimation(revision)) {
+      return;
+    }
     revealMergedTiles();
-    revealTimeout = null;
+    if (revealTimeout === nextRevealTimeout) {
+      revealTimeout = null;
+    }
   }, 100);
+  revealTimeout = nextRevealTimeout;
 
   if (moveCleanupTimeout) {
     window.clearTimeout(moveCleanupTimeout);
   }
-  moveCleanupTimeout = window.setTimeout(() => {
+  const nextMoveCleanupTimeout = window.setTimeout(() => {
+    if (!isCurrentAnimation(revision)) {
+      return;
+    }
     fastForwardAnimations();
     if (!followUp) {
       if (!hasConcurrentEffects) {
@@ -828,22 +849,34 @@ const scheduleMoveTimers = (followUp = null, hasConcurrentEffects = false) => {
       }
       syncToBoardRaw(false);
     }
-    moveCleanupTimeout = null;
+    if (moveCleanupTimeout === nextMoveCleanupTimeout) {
+      moveCleanupTimeout = null;
+    }
   }, followUp ? Math.max(300, Number(followUp.delayMs || 0)) : 300);
+  moveCleanupTimeout = nextMoveCleanupTimeout;
 
   if (followUp) {
     if (followUpTimeout) {
       window.clearTimeout(followUpTimeout);
     }
     const delayMs = Math.max(300, Number(followUp.delayMs || 0));
-    followUpTimeout = window.setTimeout(() => {
-      void runFollowUpAnimation(followUp);
-      followUpTimeout = null;
+    const nextFollowUpTimeout = window.setTimeout(() => {
+      if (!isCurrentAnimation(revision)) {
+        return;
+      }
+      if (followUpTimeout === nextFollowUpTimeout) {
+        followUpTimeout = null;
+      }
+      void runFollowUpAnimation(followUp, revision);
     }, delayMs);
+    followUpTimeout = nextFollowUpTimeout;
   }
 };
 
-const runFollowUpAnimation = async (followUp) => {
+const runFollowUpAnimation = async (followUp, revision) => {
+  if (!isCurrentAnimation(revision)) {
+    return;
+  }
   const kind = String(followUp?.kind || '');
   if (kind === 'move') {
     const direction = String(followUp.direction || '').toLowerCase();
@@ -863,6 +896,9 @@ const runFollowUpAnimation = async (followUp) => {
     fastForwardAnimations();
     activeTiles.value = activeTiles.value.map((tile) => ({ ...tile, isInterrupting: true }));
     await nextTick();
+    if (!isCurrentAnimation(revision)) {
+      return;
+    }
     void boardRef.value?.offsetHeight;
 
     const vectors = {
@@ -904,7 +940,7 @@ const runFollowUpAnimation = async (followUp) => {
     });
 
     activeTiles.value = nextTiles;
-    scheduleMoveTimers(null, false);
+    scheduleMoveTimers(null, false, revision);
     return;
   }
 
@@ -953,11 +989,17 @@ const runFollowUpAnimation = async (followUp) => {
   );
   effectHiddenIndices.value = hiddenTargets;
   await nextTick();
+  if (!isCurrentAnimation(revision)) {
+    return;
+  }
   specialEffects.value = transientEffects;
-  scheduleEffectsCleanup(Number(followUp.durationMs || 1250));
+  scheduleEffectsCleanup(Number(followUp.durationMs || 1250), true, revision);
 };
 
-const runSpecialEffects = async (effects) => {
+const runSpecialEffects = async (effects, revision) => {
+  if (!isCurrentAnimation(revision)) {
+    return;
+  }
   clearSpecialEffects();
   fastForwardAnimations();
 
@@ -1135,6 +1177,9 @@ const runSpecialEffects = async (effects) => {
   );
   effectHiddenIndices.value = hiddenTargets;
   await nextTick();
+  if (!isCurrentAnimation(revision)) {
+    return;
+  }
   specialEffects.value = transientEffects;
   phaseSteps.forEach((step) => {
     scheduleEffectPhase(step.delayMs, () => {
@@ -1143,7 +1188,7 @@ const runSpecialEffects = async (effects) => {
       } else {
         revealBoardCellsAt(step.indices);
       }
-    });
+    }, revision);
   });
   const maxDuration = effects.reduce(
     (duration, effect) =>
@@ -1155,10 +1200,13 @@ const runSpecialEffects = async (effects) => {
       ),
     0
   );
-  scheduleEffectsCleanup(maxDuration || 430, true);
+  scheduleEffectsCleanup(maxDuration || 430, true, revision);
 };
 
-const runConcurrentEffects = async (effects) => {
+const runConcurrentEffects = async (effects, revision) => {
+  if (!isCurrentAnimation(revision)) {
+    return;
+  }
   clearSpecialEffects();
 
   const transientEffects = [];
@@ -1244,7 +1292,7 @@ const runConcurrentEffects = async (effects) => {
       } else {
         revealBoardCellsAt(step.indices);
       }
-    });
+    }, revision);
   });
   const maxDuration = effects.reduce(
     (duration, effect) =>
@@ -1256,10 +1304,13 @@ const runConcurrentEffects = async (effects) => {
       ),
     0
   );
-  scheduleEffectsCleanup(Math.max(300, maxDuration || 430), true);
+  scheduleEffectsCleanup(Math.max(300, maxDuration || 430), true, revision);
 };
 
-const runMoveAnimation = async () => {
+const runMoveAnimation = async (revision) => {
+  if (!isCurrentAnimation(revision)) {
+    return;
+  }
   const metadata = props.metadata || {};
   const effects = Array.isArray(metadata.effects) ? metadata.effects : [];
   const direction = String(metadata.direction || '').toLowerCase();
@@ -1277,7 +1328,7 @@ const runMoveAnimation = async () => {
     settledTiles.value = cells.value
       .filter((cell) => isRenderableTile(cell) && !effectHiddenIndices.value.has(cell.index))
       .map((cell) => createTileFromCell(cell));
-    await runSpecialEffects(effects);
+    await runSpecialEffects(effects, revision);
     return;
   }
 
@@ -1310,6 +1361,9 @@ const runMoveAnimation = async () => {
     tile.isInterrupting = true;
   });
   await nextTick();
+  if (!isCurrentAnimation(revision)) {
+    return;
+  }
   void boardRef.value?.offsetHeight;
 
   const vectors = {
@@ -1387,20 +1441,26 @@ const runMoveAnimation = async () => {
 
   activeTiles.value = nextTiles;
   if (effects.length) {
-    await runConcurrentEffects(effects);
+    await runConcurrentEffects(effects, revision);
+    if (!isCurrentAnimation(revision)) {
+      return;
+    }
   }
-  scheduleMoveTimers(followUp, effects.length > 0);
+  scheduleMoveTimers(followUp, effects.length > 0, revision);
 };
 
 watch(
   [() => props.board, () => props.metadata, () => props.shape, () => props.view],
   async () => {
-    await runMoveAnimation();
+    const revision = ++animationRevision;
+    clearAnimationTimers();
+    await runMoveAnimation(revision);
   },
   { deep: true, immediate: true }
 );
 
 onBeforeUnmount(() => {
+  animationRevision += 1;
   clearAnimationTimers();
 });
 
