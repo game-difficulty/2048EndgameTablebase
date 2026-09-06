@@ -80,6 +80,8 @@ const snapshotKey = (gameId, difficulty) => `${gameId || ''}:${Number(difficulty
 const LEASE_FREE_RANKED_STATES = new Set([
   'pending', 'validating', 'verified', 'no_improvement', 'not_candidate', 'rejected', 'expired',
 ]);
+const rankedRunIsTerminal = (error) => [404, 410].includes(Number(error?.status))
+  || (Number(error?.status) === 409 && String(error?.code || '') === 'run_not_active');
 
 export function useMinigameSession(activeRef) {
   const { t } = useI18n();
@@ -113,7 +115,9 @@ export function useMinigameSession(activeRef) {
   let rankedHeartbeatInFlight = false;
   let rankedCheckpointQueue = Promise.resolve();
   let activeLeaseToken = '';
-  let rankedPersistenceBlocked = false;
+  // Only block the shared gameplay snapshot when another tab/device may own
+  // the same ranked run. A run becoming unranked must not disable local saves.
+  let snapshotPersistenceBlocked = false;
   let timedTickTimer = null;
   let timedTickInFlight = false;
   const submittedCheckpoints = new Set();
@@ -143,7 +147,7 @@ export function useMinigameSession(activeRef) {
     if (activeRecorder?.runId !== runId) return;
     stopRankedHeartbeat();
     activeLeaseToken = '';
-    rankedPersistenceBlocked = true;
+    snapshotPersistenceBlocked = true;
     if (activeRecorder?.runId === runId) {
       activeRecorder.submissionState = 'invalid';
       activeRecorder = null;
@@ -170,7 +174,14 @@ export function useMinigameSession(activeRef) {
       });
       return true;
     } catch (error) {
-      if ([403, 404, 409, 410].includes(Number(error?.status))) {
+      if (rankedRunIsTerminal(error) && activeRecorder?.runId === recorder.runId) {
+        removeMinigameLease(recorder.runId);
+        stopRankedHeartbeat();
+        activeLeaseToken = '';
+        activeRecorder = null;
+        snapshotPersistenceBlocked = false;
+        rankedStatus.value = 'unranked';
+      } else if ([403, 409].includes(Number(error?.status))) {
         loseRankedOwnership(recorder.runId);
       }
       return false;
@@ -285,6 +296,16 @@ export function useMinigameSession(activeRef) {
     }
   };
 
+  const pauseActiveRankedRun = async () => {
+    // A queued death checkpoint owns the next revision. Persist it before
+    // releasing this tab's lease so a resumed recorder cannot reuse it.
+    await rankedCheckpointQueue.catch(() => false);
+    if (activeRecorder && hasRankedOwnership()) persistRecorderState();
+    releaseRankedOwnership();
+    activeRecorder = null;
+    rankedStatus.value = 'unranked';
+  };
+
   const hasActiveGame = computed(() => Boolean(gameState.value?.gameId));
   const currentView = computed(() => (hasActiveGame.value ? 'play' : 'menu'));
   const menuSections = computed(() => menuData.value.sections || []);
@@ -394,7 +415,7 @@ export function useMinigameSession(activeRef) {
   const persistRecorderState = () => {
     const gameId = String(gameState.value?.gameId || '');
     if (!gameId || !activeRecorder) return;
-    if (rankedPersistenceBlocked) return;
+    if (snapshotPersistenceBlocked) return;
     if (!hasRankedOwnership() && !LEASE_FREE_RANKED_STATES.has(activeRecorder.submissionState)) return;
     const key = snapshotKey(gameId, gameState.value?.snapshot?.difficulty ?? difficulty.value);
     storedState.value = minigameStore.update((current) => {
@@ -485,7 +506,7 @@ export function useMinigameSession(activeRef) {
 
   const handleStateData = (payload) => {
     const recorderSnapshot = activeRecorder
-      && !rankedPersistenceBlocked
+      && !snapshotPersistenceBlocked
       && (hasRankedOwnership() || LEASE_FREE_RANKED_STATES.has(activeRecorder.submissionState))
       ? activeRecorder.exportSnapshot()
       : null;
@@ -566,7 +587,7 @@ export function useMinigameSession(activeRef) {
             },
           },
         };
-        if (rankedPersistenceBlocked) return nextStoredState;
+        if (snapshotPersistenceBlocked) return nextStoredState;
         return {
           ...nextStoredState,
           activeGameSnapshots: {
@@ -702,7 +723,7 @@ export function useMinigameSession(activeRef) {
   const activateRankedRecorder = (recorder, leaseToken, leaseExpiresAt = '') => {
     activeRecorder = recorder;
     activeLeaseToken = String(leaseToken || '');
-    rankedPersistenceBlocked = false;
+    snapshotPersistenceBlocked = false;
     rankedStatus.value = recorder.submissionState || 'active';
     writeMinigameLease(recorder.runId, {
       leaseToken: activeLeaseToken,
@@ -716,12 +737,12 @@ export function useMinigameSession(activeRef) {
     if (!recorder) return null;
     if (LEASE_FREE_RANKED_STATES.has(recorder.submissionState)) {
       activeRecorder = recorder;
-      rankedPersistenceBlocked = false;
+      snapshotPersistenceBlocked = false;
       rankedStatus.value = recorder.submissionState;
       return recorder;
     }
     if (!await rankedRunLock.acquire(recorder.runId)) {
-      rankedPersistenceBlocked = true;
+      snapshotPersistenceBlocked = true;
       rankedStatus.value = 'unranked';
       return null;
     }
@@ -743,7 +764,7 @@ export function useMinigameSession(activeRef) {
     } catch (error) {
       rankedRunLock.release();
       removeMinigameLease(recorder.runId);
-      rankedPersistenceBlocked = true;
+      snapshotPersistenceBlocked = !rankedRunIsTerminal(error);
       rankedStatus.value = 'unranked';
       if (![401, 403, 404, 409, 410].includes(Number(error?.status))) {
         console.warn('Unable to restore ranked minigame ownership.', error);
@@ -756,7 +777,7 @@ export function useMinigameSession(activeRef) {
     releaseRankedOwnership();
     activeRecorder = null;
     rankedStatus.value = 'unranked';
-    rankedPersistenceBlocked = false;
+    snapshotPersistenceBlocked = false;
     if (!authUser.value) return createMinigameRuntime();
     const leaseToken = createMinigameRequestId();
     try {
@@ -768,7 +789,7 @@ export function useMinigameSession(activeRef) {
       });
       if (!await rankedRunLock.acquire(run.run_id)) {
         await abandonMinigameRankedRun(run.run_id, leaseToken).catch(() => {});
-        rankedPersistenceBlocked = true;
+        snapshotPersistenceBlocked = true;
         return createMinigameRuntime();
       }
       const runtime = createMinigameRuntime({
@@ -790,7 +811,7 @@ export function useMinigameSession(activeRef) {
       return runtime;
     } catch (error) {
       rankedRunLock.release();
-      if (Number(error?.status) === 409) rankedPersistenceBlocked = true;
+      if (Number(error?.status) === 409) snapshotPersistenceBlocked = true;
       if (error?.status !== 401) console.warn('Unable to create ranked minigame run.', error);
       return createMinigameRuntime();
     }
@@ -803,7 +824,7 @@ export function useMinigameSession(activeRef) {
     const snapshot = storedState.value.activeGameSnapshots?.[key] || null;
     releaseRankedOwnership();
     activeRecorder = null;
-    rankedPersistenceBlocked = false;
+    snapshotPersistenceBlocked = false;
     const restoredRecorder = restoreRankedRecorder(snapshot, String(gameId || ''), difficulty.value);
     await restoreRankedOwnership(restoredRecorder);
     let runtime = null;
@@ -822,11 +843,8 @@ export function useMinigameSession(activeRef) {
   const backToMenu = async () => {
     lastMenuFocusGameId.value = String(gameState.value?.gameId || lastMenuFocusGameId.value || '');
     closeOverlay();
-    await finalizeActiveRankedRun(gameState.value);
+    await pauseActiveRankedRun();
     ensureController().backToMenu();
-    releaseRankedOwnership();
-    activeRecorder = null;
-    rankedStatus.value = 'unranked';
     gameState.value = createEmptyMinigameState();
     refreshMenu();
   };
@@ -838,7 +856,7 @@ export function useMinigameSession(activeRef) {
     releaseRankedOwnership({ forgetLease: ownedPreviousRun });
     if (gameState.value?.gameId) {
       const key = snapshotKey(gameState.value.gameId, difficulty.value);
-      if (!rankedPersistenceBlocked) {
+      if (!snapshotPersistenceBlocked) {
         persistState((current) => {
           const activeGameSnapshots = { ...(current.activeGameSnapshots || {}) };
           delete activeGameSnapshots[key];
@@ -928,7 +946,7 @@ export function useMinigameSession(activeRef) {
       if (activeRecorder && Number(activeRecorder.userId) !== Number(userId)) {
         releaseRankedOwnership({ forgetLease: true });
         activeRecorder = null;
-        rankedPersistenceBlocked = true;
+        snapshotPersistenceBlocked = true;
         rankedStatus.value = 'unranked';
       }
     }
