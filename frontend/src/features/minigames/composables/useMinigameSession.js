@@ -1,10 +1,12 @@
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwnership';
 import { useAuthState } from '../../../services/auth/authState';
 import { createExclusiveRunLock } from '../../../services/concurrency/exclusiveRunLock';
 import { createLocalStorageStore } from '../../../services/storage/localStorageStore';
+import { createBufferedMinigameStore } from '../services/bufferedMinigameStore';
+import { animationInputLockMs } from '../model/animationInputLock';
 import { MinigameController } from '../engine/controller';
 import { MinigameRankedRecorder } from '../engine/rankedRecorder';
 import { createMinigameRuntime, restoreMinigameRuntime } from '../engine/runtime';
@@ -42,7 +44,7 @@ const normalizeHudPanels = (hud, receivedAt = Date.now()) => {
       if (panel?.type !== 'countdown') return panel;
       return {
         ...panel,
-        syncedAt: receivedAt,
+        syncedAt: Number.isFinite(panel.syncedAt) ? panel.syncedAt : receivedAt,
       };
     }),
   };
@@ -71,11 +73,6 @@ const minigameStore = createLocalStorageStore({
   },
 });
 
-const normalizeStoredState = () => ({
-  ...defaultMinigameState(),
-  ...(minigameStore.read() || {}),
-});
-
 const snapshotKey = (gameId, difficulty) => `${gameId || ''}:${Number(difficulty) ? 1 : 0}`;
 const LEASE_FREE_RANKED_STATES = new Set([
   'pending', 'validating', 'verified', 'no_improvement', 'not_candidate', 'rejected', 'expired',
@@ -87,7 +84,8 @@ export function useMinigameSession(activeRef) {
   const { t } = useI18n();
   const { user: authUser } = useAuthState();
 
-  const storedState = ref(normalizeStoredState());
+  const bufferedStore = createBufferedMinigameStore(minigameStore);
+  const storedState = shallowRef({ ...defaultMinigameState(), ...bufferedStore.read() });
   const menuData = ref({
     ...createEmptyMinigameMenu(),
     difficulty: Number(storedState.value.difficulty) ? 1 : 0,
@@ -135,6 +133,11 @@ export function useMinigameSession(activeRef) {
   };
 
   const releaseRankedOwnership = ({ forgetLease = false } = {}) => {
+    bufferedStore.flush();
+    if (activeRecorder) {
+      // A failed write must not be retried after another tab takes ownership.
+      bufferedStore.discardSnapshot(snapshotKey(activeRecorder.gameId, activeRecorder.difficulty));
+    }
     const runId = activeRecorder?.runId || null;
     stopRankedHeartbeat();
     const releasedRunId = rankedRunLock.release();
@@ -145,6 +148,7 @@ export function useMinigameSession(activeRef) {
   const loseRankedOwnership = (runId) => {
     if (runId) removeMinigameLease(runId);
     if (activeRecorder?.runId !== runId) return;
+    bufferedStore.discardSnapshot(snapshotKey(activeRecorder.gameId, activeRecorder.difficulty));
     stopRankedHeartbeat();
     activeLeaseToken = '';
     snapshotPersistenceBlocked = true;
@@ -402,7 +406,7 @@ export function useMinigameSession(activeRef) {
   };
 
   const persistState = (updater) => {
-    storedState.value = minigameStore.update((current) => {
+    storedState.value = bufferedStore.update((current) => {
       const base = {
         ...defaultMinigameState(),
         ...(current || {}),
@@ -418,7 +422,7 @@ export function useMinigameSession(activeRef) {
     if (snapshotPersistenceBlocked) return;
     if (!hasRankedOwnership() && !LEASE_FREE_RANKED_STATES.has(activeRecorder.submissionState)) return;
     const key = snapshotKey(gameId, gameState.value?.snapshot?.difficulty ?? difficulty.value);
-    storedState.value = minigameStore.update((current) => {
+    storedState.value = bufferedStore.update((current) => {
       const existing = current?.activeGameSnapshots?.[key];
       if (!existing) return current;
       return {
@@ -519,7 +523,7 @@ export function useMinigameSession(activeRef) {
         },
       }
       : payload;
-    const previousStatus = String(gameState.value?.status || '');
+    const wasOver = Boolean(gameState.value?.snapshot?.engine?.isOver);
     const receivedAt = Date.now();
     const nextState = {
       ...createEmptyMinigameState(),
@@ -598,31 +602,10 @@ export function useMinigameSession(activeRef) {
       });
     }
 
-    const animation = gameState.value.animation || {};
-    const followUp = animation.followUp || null;
-    if (followUp) {
-      if (followUp.lockInput !== false) {
-        lockInputFor(Number(followUp.delayMs || 0) + Number(followUp.durationMs || 0));
-      }
-    } else {
-      const effectDurations = []
-        .concat(Array.isArray(animation.effects) ? animation.effects : [])
-        .concat(Array.isArray(animation.pageEffects) ? animation.pageEffects : []);
-      if (effectDurations.length) {
-        const maxEffectDuration = effectDurations.reduce(
-          (duration, effect) =>
-            Math.max(
-              duration,
-              Number(effect?.delayMs || 0) + Number(effect?.durationMs || effect?.animDurationMs || 430)
-            ),
-          430
-        );
-        lockInputFor(maxEffectDuration);
-      }
-    }
+    lockInputFor(animationInputLockMs(gameState.value.animation || {}));
 
     const messages = gameState.value.messages || {};
-    const enteredGameOver = nextState.status === 'game_over' && previousStatus !== 'game_over';
+    const enteredGameOver = Boolean(nextState.snapshot?.engine?.isOver) && !wasOver;
     pendingOverlay.value = null;
     if (messages.toast) {
       showToast(messages.toast);
@@ -901,6 +884,7 @@ export function useMinigameSession(activeRef) {
 
   const move = (direction) => {
     if (currentView.value !== 'play') return;
+    if (gameState.value?.snapshot?.engine?.isOver) return;
     if (overlay.value.open && overlay.value.type === 'gameOver') return;
     if (gameState.value?.interaction?.active) return;
     if (Date.now() < inputLockedUntil.value) return;
@@ -935,6 +919,7 @@ export function useMinigameSession(activeRef) {
   };
 
   const handleVisibilityChange = () => {
+    bufferedStore.flush();
     if (document.visibilityState === 'visible') {
       void heartbeatActiveRankedRun();
     }
@@ -944,6 +929,7 @@ export function useMinigameSession(activeRef) {
     () => authUser.value?.id ?? null,
     (userId) => {
       if (activeRecorder && Number(activeRecorder.userId) !== Number(userId)) {
+        bufferedStore.discardSnapshot(snapshotKey(activeRecorder.gameId, activeRecorder.difficulty));
         releaseRankedOwnership({ forgetLease: true });
         activeRecorder = null;
         snapshotPersistenceBlocked = true;
@@ -956,6 +942,7 @@ export function useMinigameSession(activeRef) {
     refreshMenu();
     window.addEventListener('keydown', handleKeydown, true);
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', bufferedStore.flush);
     timedTickTimer = window.setInterval(async () => {
       if (timedTickInFlight || gameState.value?.gameId !== 'blitzkrieg') return;
       if (gameState.value?.status === 'game_over') return;
@@ -973,6 +960,7 @@ export function useMinigameSession(activeRef) {
   });
 
   onUnmounted(() => {
+    bufferedStore.flush();
     if (toastTimer) window.clearTimeout(toastTimer);
     if (inputLockTimer) window.clearTimeout(inputLockTimer);
     if (rankedPollTimer) window.clearTimeout(rankedPollTimer);
@@ -980,12 +968,15 @@ export function useMinigameSession(activeRef) {
     if (timedTickTimer) window.clearInterval(timedTickTimer);
     window.removeEventListener('keydown', handleKeydown, true);
     document.removeEventListener('visibilitychange', handleVisibilityChange);
+    window.removeEventListener('pagehide', bufferedStore.flush);
     rankedRunLock.release();
     controller?.close();
     controller = null;
   });
 
   refreshMenu();
+
+  watch(activeRef, (active) => { if (!active) bufferedStore.flush(); });
 
   return {
     menuSections,

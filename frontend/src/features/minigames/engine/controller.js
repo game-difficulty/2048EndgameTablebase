@@ -216,6 +216,8 @@ export class MinigameController {
       powerupCounts: { ...this.powerupCounts },
       randomPowerupAwards: { ...this.randomPowerupAwards },
     };
+    // Animation describes one operation, not persistent game state.
+    this.engine.clearAnimation();
     return payload;
   }
 }

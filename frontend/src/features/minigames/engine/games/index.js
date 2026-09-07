@@ -645,7 +645,7 @@ export class IceAgeEngine extends BaseMinigameEngine {
   }
 
   buildStageReveal(row, col, sprite) {
-    return { type: 'ice_stage_reveal', index: row * this.cols + col, sprite, durationMs: 280, animDurationMs: 220 };
+    return { type: 'ice_stage_reveal', index: row * this.cols + col, sprite, durationMs: 280, animDurationMs: 220, lockInput: false };
   }
 
   spriteForThreshold(previous, current) {
@@ -924,7 +924,6 @@ export class BlitzkriegEngine extends BaseMinigameEngine {
   }
 
   exportLegacyExtra() {
-    this.syncTimer();
     return [this.remainingMs / (60 * 1000), this.timerRunning];
   }
 
@@ -952,6 +951,8 @@ export class BlitzkriegEngine extends BaseMinigameEngine {
   }
 
   async doMove(direction) {
+    this.clearAnimation();
+    this.lastValidMove = false;
     this.syncTimer();
     if (this.isOver) return;
     if (!this.timerRunning) {
@@ -1002,14 +1003,13 @@ export class BlitzkriegEngine extends BaseMinigameEngine {
   }
 
   buildHud() {
-    this.syncTimer();
     const hud = super.buildHud();
     const countdown = {
       type: 'countdown',
       title: 'Countdown',
       remainingMs: Math.trunc(this.remainingMs),
       running: Boolean(this.timerRunning && !this.isOver),
-      syncedAt: this.runtime.now(),
+      syncedAt: this.timerRunning ? this.timerAnchorMs : this.runtime.now(),
     };
     if (this.pendingBonusMs > 0) countdown.bonusMs = this.pendingBonusMs;
     hud.customPanels = [countdown];
