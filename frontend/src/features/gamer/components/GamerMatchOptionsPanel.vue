@@ -40,7 +40,8 @@ defineEmits(['change', 'table-mode']);
 .gamer-match-options {
   width: 100%;
   min-height: 5.5rem;
-  padding: 0.75rem 0.8rem;
+  flex-shrink: 0;
+  padding: 0.65rem 0.8rem;
   display: grid;
   gap: 0.45rem;
   border: 1px solid var(--border-main);
@@ -49,14 +50,8 @@ defineEmits(['change', 'table-mode']);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
 }
 
-.gamer-match-options h2 {
-  color: var(--text-main);
-  font-size: var(--font-ui-sm);
-  font-weight: 950;
-}
-
 .gamer-match-option {
-  min-height: 2.45rem;
+  min-height: 2rem;
   display: flex;
   align-items: center;
   justify-content: space-between;

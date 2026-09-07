@@ -550,7 +550,7 @@ export function useGamerSession(activeRef) {
 
   const stopAI = () => {
     decisionGeneration += 1;
-    tableAiCache.clear();
+    tableAiCache.cancelPrefetch();
     aiEnabled.value = false;
     aiRunning = false;
     clearAiContinuationTimer();

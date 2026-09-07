@@ -13,6 +13,7 @@ from backend.quota.service import get_token_balance
 from backend.tablebase_query_service import TablebaseQueryScheduler
 from backend.remote_workers.registry import remote_worker_registry
 from backend.quota.config import clear_token_pricing_cache
+from backend.gamer_tablebase_route import generate_route
 
 
 class Reader:
@@ -62,6 +63,43 @@ class GamerTablebaseTests(unittest.IsolatedAsyncioTestCase):
     async def read(self, request):
         response = await api.route(request,self.user)
         return [json.loads(line) async for line in response.body_iterator]
+
+    async def test_remote_route_uses_one_rpc_and_populates_shared_node_cache(self):
+        descriptor = dict(pattern='L3', target='256', _provider='remote', spawn_rate=.1)
+        def produce(**kwargs):
+            moves = iter(['left', 'right', 'left', 'right'])
+            return generate_route(kwargs['options'], 6, lambda board: ({next(moves): .9}, 'float64'))
+        rpc = AsyncMock(side_effect=produce)
+        with patch.object(api, 'resolve_tablebase', return_value=descriptor), \
+             patch.object(remote_worker_registry, 'supports_gamer_route', return_value=True), \
+             patch.object(remote_worker_registry, 'generate_gamer_route', rpc), \
+             patch.object(remote_worker_registry, 'lookup', AsyncMock(side_effect=AssertionError('unexpected per-step RPC'))):
+            request = self.request(board_codes=[0,1,1,1,1,2,2,2,1,9,10,11,3,12,13,14])
+            nodes = await self.read(request)
+            self.assertEqual(len(nodes), 4)
+            self.assertEqual(len({n['lookup_board'] for n in nodes}), 4)
+            rpc.assert_awaited_once()
+            self.assertEqual(rpc.call_args.kwargs['options']['steps'], 4)
+            for node in nodes:
+                self.assertEqual(node['type'], 'result')
+                self.assertIsNotNone(self.scheduler.get_cached_result(catalog_version='v1',
+                    full_pattern='L3_256', board_encoded=int(node['lookup_board'], 16)))
+            self.assertEqual(get_token_balance(self.user_id)['paid'], 508)
+            await self.read(request)
+            rpc.assert_awaited_once()
+            self.assertEqual(get_token_balance(self.user_id)['paid'], 508)
+
+    async def test_remote_route_budget_limits_speculation(self):
+        with auth_db() as db:
+            db.execute('UPDATE token_accounts SET paid_balance_units=1000,bonus_balance_units=0 WHERE user_id=?', (self.user_id,))
+        rpc = AsyncMock(side_effect=lambda **kw: generate_route(kw['options'], 6,
+            lambda board: ({'left': .9}, 'float64')))
+        with patch.object(api, 'resolve_tablebase', return_value=dict(pattern='L3',target='256',_provider='remote',spawn_rate=.1)), \
+             patch.object(remote_worker_registry, 'supports_gamer_route', return_value=True), \
+             patch.object(remote_worker_registry, 'generate_gamer_route', rpc):
+            nodes = await self.read(self.request())
+            self.assertEqual(rpc.call_args.kwargs['options']['steps'], 1)
+            self.assertEqual(nodes[-1]['status'], 402)
 
     async def test_four_step_route_is_idempotently_charged_at_lookup_rate(self):
         before = get_token_balance(self.user_id)['total']

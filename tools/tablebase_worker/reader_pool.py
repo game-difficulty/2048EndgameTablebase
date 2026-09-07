@@ -494,6 +494,20 @@ class ReaderPool:
     async def random_state(self, table_id: str) -> int:
         return await self._run(table_id, lambda reader: reader.random_state())
 
+    async def generate_gamer_route(self, table_id: str, options: dict):
+        from Config import category_info, pattern_32k_tiles_map
+        from backend.gamer_tablebase_route import generate_route
+        from .protocol import sanitize_results
+        table = self._runtime(table_id).config
+        if table.pattern in category_info.get('variant', []):
+            raise TableUnavailable('Variant is not supported by Gamer')
+        def execute(reader):
+            def lookup(board):
+                results, dtype = reader.lookup(board, use_variant=False, board_is_lookup=False)
+                return sanitize_results(results), str(dtype or '?')
+            return generate_route(options, pattern_32k_tiles_map[table.pattern][0], lookup)
+        return await self._run(table_id, execute)
+
     async def generate_battle_route(
         self,
         table_id: str,

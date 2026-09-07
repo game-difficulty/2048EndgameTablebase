@@ -23,6 +23,9 @@ class FakeWebSocket:
 
 
 class FakeReaderPool:
+    async def generate_gamer_route(self, table_id, options):
+        return [{'board_codes': options['board_codes']}]
+
     async def lookup(self, table_id, board, *, use_variant, board_is_lookup):
         return {"left": 0.75, "right": None}, "uint32"
 
@@ -44,6 +47,14 @@ class FakeReaderPool:
 
 
 class ClientProtocolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_gamer_route_response_is_single_message(self):
+        websocket = FakeWebSocket()
+        await self.client()._execute_request(websocket, Request('GENERATE_GAMER_ROUTE',
+            'gamer-1', 'free11_512', 'free11', '512', gamer_options={'board_codes':[1]*16}))
+        self.assertEqual(len(websocket.messages), 1)
+        self.assertEqual(websocket.messages[0]['type'], 'GAMER_ROUTE_RESULT')
+        self.assertEqual(websocket.messages[0]['items'][0]['board_codes'], [1]*16)
+
     def test_connection_error_summary_includes_http_status(self):
         exc = RuntimeError("response details must not be logged")
         exc.response = SimpleNamespace(status_code=429)

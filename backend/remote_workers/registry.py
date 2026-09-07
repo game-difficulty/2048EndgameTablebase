@@ -27,6 +27,7 @@ from .errors import (
 
 PROTOCOL_VERSION = 1
 CAPABILITY_BATTLE_ROUTE_V1 = "battle_route_v1"
+CAPABILITY_GAMER_ROUTE_V1 = "gamer_route_v1"
 HEARTBEAT_TIMEOUT_SECONDS = float(
     os.getenv("REMOTE_TABLEBASE_HEARTBEAT_TIMEOUT_SECONDS", "30")
 )
@@ -291,7 +292,7 @@ class RemoteWorkerRegistry:
                 for item in hello.get("capabilities", [])
                 if isinstance(item, str)
             )
-            if capability == CAPABILITY_BATTLE_ROUTE_V1
+            if capability in (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_ROUTE_V1)
         )
 
         worker = WorkerConnection(
@@ -355,6 +356,7 @@ class RemoteWorkerRegistry:
             "LOOKUP_BATCH_RESULT",
             "RANDOM_STATE_RESULT",
             "BATTLE_ROUTE_RESULT",
+            "GAMER_ROUTE_RESULT",
             "ERROR",
         }:
             raise RemoteTablebaseProtocolError("Unsupported worker response.")
@@ -478,6 +480,37 @@ class RemoteWorkerRegistry:
             },
         )
         return response
+
+    def supports_gamer_route(self, full_pattern: str) -> bool:
+        try:
+            return CAPABILITY_GAMER_ROUTE_V1 in self._worker_for_table(full_pattern).capabilities
+        except RemoteTablebaseOffline:
+            return False
+
+    async def generate_gamer_route(self, *, full_pattern, pattern, target, options):
+        from backend.gamer_tablebase_route import generate_route, validate_options
+        from Config import pattern_32k_tiles_map
+        validate_options(options)
+        response = await self.request('GENERATE_GAMER_ROUTE', full_pattern,
+            {'pattern': pattern, 'target': str(target), 'options': options},
+            required_capability=CAPABILITY_GAMER_ROUTE_V1)
+        items = response.get('items')
+        if not isinstance(items, list) or not 1 <= len(items) <= options['steps']:
+            raise RemoteTablebaseProtocolError('Invalid Gamer route length')
+        # Reconstruct transitions without additional reads before accepting/cacheing nodes.
+        iterator = iter(items)
+        def lookup(board):
+            item = next(iterator)
+            if item.get('lookup_board') != f'{board:016x}' or not isinstance(item.get('results'), dict):
+                raise ValueError('Invalid route board')
+            return item['results'], str(item['dtype'])
+        try:
+            expected = generate_route(options, pattern_32k_tiles_map[pattern][0], lookup)
+            if expected != items:
+                raise ValueError('Invalid route state')
+        except (KeyError, ValueError, TypeError, StopIteration) as exc:
+            raise RemoteTablebaseProtocolError('Invalid Gamer route') from exc
+        return items
 
     async def lookup_batch(
         self,

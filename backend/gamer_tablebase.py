@@ -5,7 +5,6 @@ import hashlib
 import json
 from collections import Counter
 
-import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, StrictInt
@@ -13,15 +12,15 @@ from pydantic import BaseModel, Field, StrictInt
 from backend.auth.dependencies import require_user
 from backend.auth.db import auth_db
 from backend.gamer_ranked.prng import Xoshiro128StarStar
-from backend.gamer_ranked.rules import simulate_move, random_spawn
+from backend.gamer_tablebase_route import masked_board, predict_next
 from backend.quota.errors import InsufficientTokens
 from backend.quota.config import (apply_pricing_multipliers, operation_cost_units,
                                   resolve_pricing_snapshot, table_multiplier_units, token_to_units)
 from backend.quota.service import consume_operation_tokens_once, get_token_balance, has_numeric_result
 from backend.tablebase_catalog import ai_table_metadata, get_catalog_version, resolve_tablebase
 from backend.tablebase_query_service import TablebaseLookupSpec, tablebase_query_scheduler
+from backend.remote_workers.registry import remote_worker_registry
 from engine_core.BookReader import BookReaderDispatcher
-from engine_core.VBoardMover import encode_board
 
 router = APIRouter(prefix="/api/gamer/tablebase", tags=["gamer"])
 _active_users = Counter()
@@ -38,28 +37,6 @@ class RouteRequest(BaseModel):
     random_only: bool = False
     steps: int = Field(default=4, ge=1, le=4)
     advance_first: bool = False
-
-
-def masked_board(values: list[int], count: int) -> int:
-    board = np.asarray(values, dtype=np.int64).copy()
-    board[np.argpartition(board, -count)[-count:]] = 32768
-    if int(board.sum()) - count * 32768 < 24:
-        board = np.array([32768,32768,32768,32768,0,32768,32768,0,
-                          0,32768,32768,0,32768,32768,32768,32768])
-    return int(encode_board(board.reshape(4, 4)))
-
-
-def predict_next(values, direction, rng, request, *, random_only=None):
-    moved, _ = simulate_move(values, direction)
-    if moved == values or 0 not in moved:
-        return None
-    if not (request.random_only if random_only is None else random_only):
-        branch = rng.next_float()
-        if request.difficulty >= 100 or (request.difficulty > 0 and branch < request.difficulty / 100):
-            return None
-    index, exp = random_spawn(moved, rng, request.spawn_rate4)
-    moved[index] = 2 ** exp
-    return moved
 
 
 def check_query_budget(user_id, request, fingerprint, index):
@@ -112,20 +89,34 @@ async def route(request: RouteRequest, user: dict = Depends(require_user)):
                     descriptor["pattern"], str(descriptor["target"]))
             values = [0 if code == 0 else 2 ** code for code in request.board_codes]
             rng = Xoshiro128StarStar(request.rng_state.copy())
+            batched = descriptor['_provider'] == 'remote' and remote_worker_registry.supports_gamer_route(request.full_pattern)
             for index in range(-int(request.advance_first), request.steps):
                 if index >= 0:
                     check_query_budget(user_id, request, fingerprint, index)
                 lookup_board = masked_board(values, ai_table_metadata(descriptor)["large_tiles"])
-                spec = TablebaseLookupSpec(lookup_board, descriptor["pattern"], str(descriptor["target"]),
-                    request.full_pattern, False, reader, descriptor["_provider"], request.catalog_version)
-                handle = await tablebase_query_scheduler.submit(spec,
-                    stream_key=f"gamer-ai:{user_id}:{request.request_id}",
-                    supporter=user.get("entitlements", {}).get("tier") == "supporter",
-                    lane="foreground" if index == 0 else "prefetch", supersede=False)
-                try:
-                    result = await handle.wait()
-                finally:
-                    handle.cancel()
+                result = tablebase_query_scheduler.get_cached_result(catalog_version=request.catalog_version,
+                    full_pattern=request.full_pattern, board_encoded=lookup_board)
+                if result is None:
+                    options = None
+                    if batched and index >= 0:
+                        # Bound speculative work by available credit; billing stays per delivered node.
+                        required = apply_pricing_multipliers(operation_cost_units('trainer_lookup_hit'),
+                            table_multiplier_units(request.full_pattern), resolve_pricing_snapshot().global_multiplier_units)
+                        affordable = max(1, token_to_units(get_token_balance(user_id)['total']) // max(1, required))
+                        options = dict(board_codes=[0 if v == 0 else v.bit_length()-1 for v in values],
+                            rng_state=rng.state.copy(), steps=min(request.steps-index, affordable),
+                            difficulty=request.difficulty, spawn_rate4=request.spawn_rate4,
+                            random_only=request.random_only and index == 0 and not request.advance_first)
+                    spec = TablebaseLookupSpec(lookup_board, descriptor["pattern"], str(descriptor["target"]),
+                        request.full_pattern, False, reader, descriptor["_provider"], request.catalog_version, options)
+                    handle = await tablebase_query_scheduler.submit(spec,
+                        stream_key=f"gamer-ai:{user_id}:{request.request_id}",
+                        supporter=user.get("entitlements", {}).get("tier") == "supporter",
+                        lane="foreground" if index == 0 else "prefetch", supersede=False)
+                    try:
+                        result = await handle.wait()
+                    finally:
+                        handle.cancel()
                 if index < 0:
                     values = predict_next(values, result.best_move, rng, request) if result.best_move else None
                     if values is None:

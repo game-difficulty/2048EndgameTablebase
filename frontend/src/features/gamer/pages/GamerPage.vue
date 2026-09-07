@@ -99,6 +99,7 @@
       </div>
       </main>
       <aside class="gamer-sidebar">
+        <div class="gamer-sidebar-content">
         <GamerLeaderboardPanel
           :active="active"
           :ranked-status="rankedStatus"
@@ -110,6 +111,7 @@
           @table-mode="setAiTableEnabled"
           @change="handleMatchOptionChange"
         />
+        </div>
       </aside>
     </div>
   </div>
@@ -228,10 +230,17 @@ const handleBoardSwipe = (direction) => {
 }
 
 .gamer-sidebar {
+  position: relative;
+  min-height: 0;
+  align-self: stretch;
+}
+
+.gamer-sidebar-content {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  align-self: stretch;
 }
 
 .gamer-ranked-badge {

@@ -34,12 +34,69 @@ test('current result and subsequent nodes can be consumed before the four-node s
   requests[0].onResult(result(3));
   requests[0].resolve();
   await tick();
-  await cache.lookup(body(0));
-  assert.equal(requests.length, 1, 'three nodes ahead do not trigger another batch');
+  assert.equal(requests.length, 2, 'stream completion refills when only two nodes remain ahead');
   await cache.lookup(body(1));
   assert.equal(requests.length, 2);
   assert.deepEqual(requests[1].request.board_codes, body(3).board_codes);
   assert.equal(requests[1].request.advance_first, true);
+  cache.clear(); await tick();
+});
+
+test('consuming the stream tail refills without waiting for a new cache miss', async () => {
+  const { requests, transport } = controlledTransport();
+  const cache = new TableAiCache({ transport });
+  for (let step = 0; step < 4; step += 1) {
+    const pending = cache.lookup(body(step));
+    requests[0].onResult(result(step));
+    await pending;
+  }
+  requests[0].resolve(); await tick();
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].request.advance_first, true);
+  assert.deepEqual(requests[1].request.board_codes, body(3).board_codes);
+  const next = cache.lookup(body(4));
+  requests[1].onResult(result(4));
+  await next;
+  assert.equal(requests.length, 2);
+  cache.clear(); await tick();
+});
+
+test('pausing cancels speculative work but preserves already purchased results', async () => {
+  const { requests, transport } = controlledTransport();
+  const cache = new TableAiCache({ transport });
+  const pending = cache.lookup(body());
+  requests[0].onResult(result(0)); await pending;
+  cache.cancelPrefetch(); await tick();
+  assert.deepEqual(cache.get(body()), result(0));
+  assert.equal(requests.length, 1);
+  assert.equal(cache.active, null);
+  cache.clear();
+  assert.equal(cache.get(body()), null);
+});
+
+test('negative results and completed lookahead do not produce endless background batches', async () => {
+  const { requests, transport } = controlledTransport();
+  const cache = new TableAiCache({ transport });
+  const pending = cache.lookup(body());
+  requests[0].onResult({ ...result(0), results: { left: null } });
+  requests[0].resolve(); await pending; await tick();
+  assert.equal(requests.length, 1);
+  cache.clear();
+});
+
+test('probing a different candidate retains the previous table route tail', async () => {
+  const { requests, transport } = controlledTransport();
+  const cache = new TableAiCache({ transport });
+  const first = cache.lookup(body());
+  for (let step = 0; step < 4; step += 1) requests[0].onResult(result(step));
+  requests[0].resolve(); await first; await tick();
+  const other = cache.lookup({ ...body(1), full_pattern: 'free11_1024' });
+  requests[1].onResult({ ...result(1), full_pattern: 'free11_1024', results: { left: null } });
+  requests[1].resolve(); await other; await tick();
+  await cache.lookup(body(1));
+  assert.equal(requests.length, 3);
+  assert.deepEqual(requests[2].request.board_codes, body(3).board_codes);
+  assert.equal(requests[2].request.advance_first, true);
   cache.clear(); await tick();
 });
 

@@ -191,8 +191,8 @@ onMounted(() => {
 <style scoped>
 .gamer-leaderboard-panel {
   width: 100%;
-  min-height: 41rem;
-  flex: 1 1 auto;
+  min-height: 0;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -203,6 +203,7 @@ onMounted(() => {
 }
 
 .gamer-leaderboard-head {
+  flex-shrink: 0;
   min-height: 4.5rem;
   padding: 0.85rem 0.9rem;
   display: flex;
@@ -244,6 +245,7 @@ onMounted(() => {
 }
 
 .gamer-leaderboard-filters {
+  flex-shrink: 0;
   padding: 0.65rem;
   display: grid;
   gap: 0.45rem;
@@ -283,6 +285,7 @@ onMounted(() => {
 .gamer-leaderboard-body {
   flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
 }
 
 .gamer-leaderboard-list {
@@ -410,6 +413,7 @@ onMounted(() => {
 }
 
 .gamer-leaderboard-full-link {
+  flex-shrink: 0;
   min-height: 2.8rem;
   padding: 0.55rem 0.85rem;
   display: flex;

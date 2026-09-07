@@ -10,7 +10,8 @@ from typing import Any, Iterable
 
 PROTOCOL_VERSION = 1
 CAPABILITY_BATTLE_ROUTE_V1 = "battle_route_v1"
-WORKER_CAPABILITIES = (CAPABILITY_BATTLE_ROUTE_V1,)
+CAPABILITY_GAMER_ROUTE_V1 = "gamer_route_v1"
+WORKER_CAPABILITIES = (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_ROUTE_V1)
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 BOARD_RE = re.compile(r"^[0-9a-fA-F]{16}$")
 SEED_RE = re.compile(r"^[0-9a-fA-F]{32}$")
@@ -19,6 +20,7 @@ REQUEST_TYPES = {
     "LOOKUP_BATCH",
     "RANDOM_STATE",
     "GENERATE_BATTLE_ROUTE",
+    "GENERATE_GAMER_ROUTE",
     "CANCEL",
 }
 MAX_BATTLE_ROUTE_STEPS = 9_999
@@ -46,6 +48,7 @@ class Request:
     min_steps: int = 0
     spawn_rate: float = 0.1
     seed_hex: str = ""
+    gamer_options: dict | None = None
 
 
 def encode_message(message_type: str, **fields: Any) -> str:
@@ -171,6 +174,7 @@ def validate_request(
         "LOOKUP": common | {"board", "use_variant", "board_is_lookup"},
         "LOOKUP_BATCH": common | {"boards", "use_variant", "board_is_lookup"},
         "RANDOM_STATE": common,
+        "GENERATE_GAMER_ROUTE": common | {"options"},
         "GENERATE_BATTLE_ROUTE": common
         | {
             "initial_board",
@@ -199,6 +203,15 @@ def validate_request(
             "pattern/target do not match the local allowlist",
             request_id,
         )
+
+    if message_type == "GENERATE_GAMER_ROUTE":
+        from backend.gamer_tablebase_route import validate_options
+        try:
+            options = validate_options(message.get('options'))
+        except ValueError as exc:
+            raise ProtocolError('INVALID_REQUEST', str(exc), request_id) from exc
+        return Request(message_type, request_id, full_pattern, pattern, target,
+                       gamer_options=options)
 
     if message_type == "RANDOM_STATE":
         return Request(

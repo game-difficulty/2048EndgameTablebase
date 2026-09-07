@@ -31,6 +31,27 @@ class FakeWebSocket:
 
 
 class RemoteWorkerRegistryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_gamer_route_capability_and_single_round_trip(self):
+        from backend.gamer_tablebase_route import generate_route
+        from Config import pattern_32k_tiles_map
+        websocket, worker = await self._connect(capabilities=['gamer_route_v1'])
+        self.assertTrue(self.registry.supports_gamer_route('free11_512'))
+        options = dict(board_codes=[1,0,2,0,3,0,4,0,5,0,6,0,7,0,8,0],
+            rng_state=[1,2,3,4], steps=4, difficulty=0, spawn_rate4=.1, random_only=False)
+        task = asyncio.create_task(self.registry.generate_gamer_route(full_pattern='free11_512',
+            pattern='free11', target='512', options=options))
+        await asyncio.sleep(0)
+        request = websocket.sent[-1]
+        self.assertEqual(request['type'], 'GENERATE_GAMER_ROUTE')
+        nodes = generate_route(options, pattern_32k_tiles_map['free11'][0], lambda board: ({'left':.9}, 'float64'))
+        await self.registry._handle_message(worker, dict(type='GAMER_ROUTE_RESULT',
+            request_id=request['request_id'], items=nodes))
+        self.assertEqual(await task, nodes)
+
+    async def test_old_worker_has_no_gamer_route_capability(self):
+        await self._connect()
+        self.assertFalse(self.registry.supports_gamer_route('free11_512'))
+
     async def asyncSetUp(self) -> None:
         load_remote_manifest.cache_clear()
         self.registry = RemoteWorkerRegistry()

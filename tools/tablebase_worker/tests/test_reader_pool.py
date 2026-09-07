@@ -93,6 +93,27 @@ def config_fixture(root: Path):
 
 
 class ReaderPoolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_gamer_route_reuses_one_reader_and_stops_before_evil(self):
+        with tempfile.TemporaryDirectory() as temp:
+            created = []
+            def factory(table):
+                created.append(table.table_id)
+                return RouteReader()
+            pool = ReaderPool(config_fixture(Path(temp)), reader_factory=factory,
+                              path_checker=lambda table: (True, None))
+            options = dict(board_codes=[1,0,2,0,3,0,4,0,5,0,6,0,7,0,8,0],
+                           rng_state=[1,2,3,4], steps=4, difficulty=0, spawn_rate4=.1, random_only=False)
+            try:
+                first = await pool.generate_gamer_route('free11_512', options)
+                again = await pool.generate_gamer_route('free11_512', options)
+                self.assertEqual(first, again)
+                self.assertEqual(created, ['free11_512'])
+                evil = await pool.generate_gamer_route('free11_512', {**options, 'difficulty':100})
+                self.assertEqual(len(evil), 1)
+                self.assertEqual(options['rng_state'], [1,2,3,4])
+            finally:
+                await pool.close()
+
     async def test_target_detection_does_not_treat_pattern_f_as_small_target(self):
         self.assertFalse(_board_contains_target(0xF000000000000000, 128))
         self.assertTrue(_board_contains_target(0x7000000000000000, 128))
