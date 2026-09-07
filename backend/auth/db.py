@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -441,6 +442,7 @@ def init_auth_db() -> None:
               best_score INTEGER NOT NULL DEFAULT 0,
               trophy_tier INTEGER NOT NULL DEFAULT 0,
               highest_tile_exp INTEGER NOT NULL DEFAULT 0,
+              best_tile_exp INTEGER NOT NULL DEFAULT 0,
               final_board_json TEXT NOT NULL,
               board_rows INTEGER NOT NULL DEFAULT 4,
               board_cols INTEGER NOT NULL DEFAULT 4,
@@ -638,6 +640,7 @@ def init_auth_db() -> None:
             for row in db.execute("PRAGMA table_info(minigame_high_scores)").fetchall()
         }
         minigame_score_migrations = (
+            ("best_tile_exp", "INTEGER NOT NULL DEFAULT 0"),
             ("score_run_id", "TEXT"),
             ("trophy_run_id", "TEXT"),
             ("verification_level", "TEXT NOT NULL DEFAULT 'legacy'"),
@@ -651,6 +654,33 @@ def init_auth_db() -> None:
                 db.execute(
                     f"ALTER TABLE minigame_high_scores ADD COLUMN {column_name} {column_type}"
                 )
+
+        if "best_tile_exp" not in existing_minigame_score_columns:
+            db.execute("""
+                UPDATE minigame_high_scores SET best_tile_exp = highest_tile_exp
+                WHERE verification_level = 'verified'
+            """)
+            # Only retained verified results can contribute to the backfill.
+            rows = db.execute("""
+                SELECT user_id, game_id, difficulty, verified_summary_json
+                FROM minigame_ranked_runs WHERE status = 'verified'
+                UNION ALL
+                SELECT run.user_id, run.game_id, run.difficulty, checkpoint.verified_summary_json
+                FROM minigame_ranked_checkpoints AS checkpoint
+                JOIN minigame_ranked_runs AS run ON run.run_id = checkpoint.run_id
+                WHERE checkpoint.status = 'verified'
+            """)
+            for row in rows:
+                try:
+                    value = int(json.loads(row["verified_summary_json"] or "{}")["highest_tile_exp"])
+                except (ValueError, TypeError, KeyError):
+                    continue
+                if 0 <= value <= 63:
+                    db.execute("""
+                        UPDATE minigame_high_scores SET best_tile_exp = MAX(best_tile_exp, ?)
+                        WHERE user_id = ? AND game_id = ? AND difficulty = ?
+                          AND verification_level = 'verified'
+                    """, (value, row["user_id"], row["game_id"], row["difficulty"]))
 
         existing_minigame_run_columns = {
             row["name"]

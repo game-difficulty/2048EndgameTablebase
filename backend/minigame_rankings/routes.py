@@ -23,6 +23,7 @@ from .service import (
     get_ranked_run,
     heartbeat_ranked_run,
     minigame_catalog,
+    personal_records,
     qualify_ranked_run,
     submit_ranked_run,
     submit_ranked_checkpoint,
@@ -132,6 +133,13 @@ def get_overall(
 ):
     _no_store(response)
     return trophy_leaderboard(difficulty=difficulty, limit=limit)
+
+
+@router.get("/me/records")
+def get_personal_records(request: Request, response: Response):
+    user = require_user(request)
+    _no_store(response)
+    return personal_records(int(user["id"]))
 
 
 @router.get("/games/{game_id}")

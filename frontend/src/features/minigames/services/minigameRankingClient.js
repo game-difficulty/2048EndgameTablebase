@@ -32,6 +32,7 @@ async function rankedRequest(path, { method = 'GET', body } = {}) {
   const response = await fetch(getBackendUrl(path), {
     method,
     credentials: 'include',
+    cache: 'no-store',
     headers: authHeaders({
       Accept: 'application/json',
       ...(body ? { 'Content-Type': 'application/json' } : {}),
@@ -100,6 +101,14 @@ export const fetchMinigameRankedCheckpoint = (runId, revision) => rankedRequest(
 export const fetchMinigameRankedRun = (runId) => rankedRequest(
   `/api/minigame-rankings/runs/${encodeURIComponent(runId)}`
 );
+
+export async function fetchMinigamePersonalRecords() {
+  const response = await fetch(getBackendUrl('/api/minigame-rankings/me/records'), {
+    credentials: 'include', cache: 'no-store', headers: authHeaders({ Accept: 'application/json' }),
+  });
+  // Background reads must not log out a newer account when an old request fails.
+  return readJson(response);
+}
 
 export async function fetchMinigameCatalog() {
   const response = await fetch(getBackendUrl('/api/minigame-rankings/catalog'), {

@@ -33,7 +33,7 @@
     <div class="minigame-card-metrics mt-4 grid grid-cols-2 gap-2">
       <div class="metric-chip minigame-card-metric-chip">
         <div class="metric-label minigame-card-metric-label">{{ $t('minigames.menu.bestScore') }}</div>
-        <div class="metric-value minigame-card-metric-value">{{ item.summary?.bestScore || 0 }}</div>
+        <div class="metric-value minigame-card-metric-value">{{ item.summary?.bestScore ?? '--' }}</div>
       </div>
       <div class="metric-chip minigame-card-metric-chip">
         <div class="metric-label minigame-card-metric-label">{{ $t('minigames.menu.highestTile') }}</div>

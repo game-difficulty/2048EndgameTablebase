@@ -9,9 +9,10 @@ from datetime import datetime, timedelta, timezone
 import base64
 import binascii
 import uuid
+import json
 from unittest.mock import patch
 
-from fastapi import Response
+from fastapi import Response, Request, HTTPException
 
 from backend.auth.db import auth_db, init_auth_db
 from backend.minigame_rankings import routes as minigame_routes
@@ -21,6 +22,8 @@ from backend.minigame_rankings.service import (
     RunTokenExpired,
     _normalize_summary,
     _derive_seed_hex,
+    _apply_verified_result,
+    personal_records,
     abandon_ranked_run,
     claim_ranked_run,
     claim_pending,
@@ -108,12 +111,92 @@ class MinigameRankingTests(unittest.TestCase):
             db.execute(
                 """
                 UPDATE minigame_high_scores
-                SET verification_level = 'verified'
+                SET verification_level = 'verified', best_tile_exp = MAX(best_tile_exp, highest_tile_exp)
                 WHERE user_id = ? AND game_id = ? AND difficulty = ?
                 """,
                 (int(user_id), str(game_id), int(difficulty)),
             )
         return result
+
+    def test_personal_records_independent_metrics_and_score_replay_metadata(self) -> None:
+        user = self._add_user("records@example.com", "Records")
+        run = {"user_id": user, "game_id": "column-chaos", "difficulty": 1, "run_id": "one"}
+        def apply(score, trophy, tile):
+            result = self._summary(score=score, trophy=trophy)
+            result["highest_tile_exp"] = tile
+            with auth_db() as db:
+                _apply_verified_result(db, run=run, verified=result, record_hash="hash",
+                                       record_blob="record", verified_at="2026-09-07T00:00:00+00:00")
+        apply(1000, 1, 10)
+        apply(500, 3, 14)
+        apply(2000, 2, 11)
+        record = personal_records(user)["records"][0]
+        self.assertEqual((record["best_score"], record["trophy_tier"], record["best_tile_exp"]), (2000, 3, 14))
+        with auth_db() as db:
+            saved = db.execute("SELECT highest_tile_exp FROM minigame_high_scores").fetchone()
+        self.assertEqual(saved["highest_tile_exp"], 11)
+        self.assertEqual(game_leaderboard("column-chaos", difficulty=1, limit=100)["entries"][0]["highest_tile"], 2**14)
+        # Improving only the tile does not require a score or trophy improvement.
+        apply(400, 0, 15)
+        self.assertEqual(personal_records(user)["records"][0]["best_tile_exp"], 15)
+
+    def test_personal_records_require_login_and_are_account_and_difficulty_scoped(self) -> None:
+        alice = self._add_user("records-a@example.com", "A")
+        bob = self._add_user("records-b@example.com", "B")
+        self._submit(alice, "ice-age", 100, 1, difficulty=0)
+        self._submit(alice, "ice-age", 200, 2, difficulty=1)
+        self._submit(bob, "ice-age", 300, 3)
+        request = Request({"type": "http", "headers": []})
+        with self.assertRaises(HTTPException) as error:
+            minigame_routes.get_personal_records(request, Response())
+        self.assertEqual(error.exception.status_code, 401)
+        response = Response()
+        with patch.object(minigame_routes, "require_user", return_value={"id": alice}):
+            result = minigame_routes.get_personal_records(request, response)
+        self.assertEqual(result["user_id"], alice)
+        self.assertEqual([r["best_score"] for r in result["records"]], [100, 200])
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertNotIn("record_blob", result["records"][0])
+
+    def test_legacy_data_cannot_enter_personal_records_or_either_leaderboard(self) -> None:
+        user = self._add_user("legacy-hidden@example.com", "Legacy")
+        self._submit(user, "ice-age", 100000, 4)
+        with auth_db() as db:
+            db.execute("UPDATE minigame_high_scores SET verification_level = 'legacy'")
+        self.assertEqual(personal_records(user)["records"], [])
+        self.assertEqual(game_leaderboard("ice-age", difficulty=1, limit=100)["entries"], [])
+        self.assertEqual(trophy_leaderboard(difficulty=1, limit=100)["entries"], [])
+
+    def test_tile_only_improvement_is_a_submission_candidate(self) -> None:
+        user = self._add_user("tile-only@example.com", "Tile")
+        self._submit(user, "column-chaos", 2000, 4)
+        summary = self._summary(score=500, trophy=1)
+        summary["highest_tile_exp"] = 11
+        run = self._run(user)
+        qualified = self._qualify(run, user, **summary)
+        self.assertTrue(qualified["candidate"])
+        self.assertIn("tile_improvement", qualified["reasons"])
+
+    def test_tile_migration_uses_retained_verified_results_once(self) -> None:
+        user = self._add_user("tile-migration@example.com", "Migration")
+        self._submit(user, "column-chaos", 2000, 3)
+        run = self._run(user)
+        with auth_db() as db:
+            db.execute("UPDATE minigame_ranked_runs SET status='verified', verified_summary_json=? WHERE run_id=?",
+                       (json.dumps({"highest_tile_exp": 12}), run["run_id"]))
+            db.execute("""
+                INSERT INTO minigame_ranked_checkpoints
+                (run_id, revision, status, claimed_summary_json, record_hash, action_count,
+                 submitted_at, verified_summary_json)
+                VALUES (?, 1, 'verified', '{}', 'migration-hash', 1, '2026-09-07', ?)
+            """, (run["run_id"], json.dumps({"highest_tile_exp": 14})))
+            db.execute("ALTER TABLE minigame_high_scores DROP COLUMN best_tile_exp")
+        init_auth_db()
+        self.assertEqual(personal_records(user)["records"][0]["best_tile_exp"], 14)
+        with auth_db() as db:
+            db.execute("UPDATE minigame_high_scores SET best_tile_exp = 11")
+        init_auth_db()
+        self.assertEqual(personal_records(user)["records"][0]["best_tile_exp"], 11)
 
     def test_keeps_one_row_and_updates_score_and_trophy_independently(self) -> None:
         user_id = self._add_user("alice@example.com", "Alice")

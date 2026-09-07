@@ -35,7 +35,7 @@
           </div>
           <div class="bg-board-bg w-[122px] h-[56px] flex flex-col items-center justify-center rounded-md shadow-sm transition-all duration-300">
             <span class="text-text-secondary ui-caption font-black uppercase leading-none mb-1 tracking-tight">{{ $t('labels.best') }}</span>
-            <span class="font-black text-white leading-none tabular-nums" style="font-size: calc(22px * var(--ui-scale));">{{ state.best }}</span>
+            <span class="font-black text-white leading-none tabular-nums" style="font-size: calc(22px * var(--ui-scale));">{{ state.best ?? '--' }}</span>
           </div>
         </div>
       </div>

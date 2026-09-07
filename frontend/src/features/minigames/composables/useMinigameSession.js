@@ -7,6 +7,8 @@ import { createExclusiveRunLock } from '../../../services/concurrency/exclusiveR
 import { createLocalStorageStore } from '../../../services/storage/localStorageStore';
 import { createBufferedMinigameStore } from '../services/bufferedMinigameStore';
 import { animationInputLockMs } from '../model/animationInputLock';
+import { createPersonalRecordsSync } from '../services/personalRecordsSync';
+import { buildMenuPayload } from '../engine/registry';
 import { MinigameController } from '../engine/controller';
 import { MinigameRankedRecorder } from '../engine/rankedRecorder';
 import { createMinigameRuntime, restoreMinigameRuntime } from '../engine/runtime';
@@ -19,6 +21,7 @@ import {
   createMinigameRequestId,
   fetchMinigameRankedCheckpoint,
   fetchMinigameRankedRun,
+  fetchMinigamePersonalRecords,
   heartbeatMinigameRankedRun,
   submitMinigameRankedCheckpoint,
 } from '../services/minigameRankingClient';
@@ -86,6 +89,15 @@ export function useMinigameSession(activeRef) {
 
   const bufferedStore = createBufferedMinigameStore(minigameStore);
   const storedState = shallowRef({ ...defaultMinigameState(), ...bufferedStore.read() });
+  const personalRecords = shallowRef({ userId: null, summaries: {}, loaded: false });
+  const accountId = computed(() => Number(authUser.value?.id) > 0 ? Number(authUser.value.id) : null);
+  const recordCache = (id) => createLocalStorageStore({ key: `minigame-records:v1:${id}`, defaultValue: null });
+  const recordsSync = createPersonalRecordsSync({
+    fetchRecords: fetchMinigamePersonalRecords,
+    readCache: (id) => recordCache(id).read(),
+    writeCache: (id, payload) => recordCache(id).write(payload),
+    onChange: (value) => { personalRecords.value = value; },
+  });
   const menuData = ref({
     ...createEmptyMinigameMenu(),
     difficulty: Number(storedState.value.difficulty) ? 1 : 0,
@@ -314,6 +326,15 @@ export function useMinigameSession(activeRef) {
   const currentView = computed(() => (hasActiveGame.value ? 'play' : 'menu'));
   const menuSections = computed(() => menuData.value.sections || []);
   const difficulty = computed(() => Number(menuData.value.difficulty ?? 1));
+  const displayedGameState = computed(() => {
+    if (!accountId.value) return gameState.value;
+    const state = gameState.value;
+    const records = personalRecords.value;
+    const ready = records.userId === accountId.value && records.loaded;
+    const key = snapshotKey(state.gameId, state.snapshot?.difficulty ?? difficulty.value);
+    const best = ready ? (records.summaries[key]?.bestScore || 0) : null;
+    return { ...state, best, hud: { ...state.hud, best } };
+  });
   const recordOperation = ({ operation, atMs, state }) => {
     if (!activeRecorder || activeRecorder.ended || !hasRankedOwnership()) return;
     try {
@@ -344,9 +365,19 @@ export function useMinigameSession(activeRef) {
   };
 
   const refreshMenu = () => {
+    const records = personalRecords.value;
+    const menu = accountId.value
+      ? buildMenuPayload(Number(storedState.value.difficulty) ? 1 : 0,
+        records.userId === accountId.value ? records.summaries : {}, snapshotKey)
+      : ensureController().menuPayload();
+    if (accountId.value && (!records.loaded || records.userId !== accountId.value)) {
+      for (const section of menu.sections) {
+        for (const item of section.items) item.summary.bestScore = null;
+      }
+    }
     menuData.value = {
       ...createEmptyMinigameMenu(),
-      ...ensureController().menuPayload(),
+      ...menu,
     };
   };
 
@@ -457,7 +488,7 @@ export function useMinigameSession(activeRef) {
         }
         if (['pending', 'validating'].includes(status)) {
           scheduleRankedStatusPoll(runId, attempt + 1, context);
-        } else if (status === 'verified') {
+        } else if (['verified', 'no_improvement', 'not_candidate'].includes(status)) {
           window.dispatchEvent(new CustomEvent('minigame-score-updated', {
             detail: {
               gameId: context.gameId,
@@ -486,7 +517,7 @@ export function useMinigameSession(activeRef) {
         const status = String(result?.status || '');
         if (['pending', 'validating'].includes(status)) {
           scheduleRankedCheckpointPoll(runId, revision, attempt + 1, context);
-        } else if (status === 'verified') {
+        } else if (['verified', 'no_improvement', 'not_candidate'].includes(status)) {
           if (activeRecorder?.runId === runId && gameState.value?.status === 'game_over') {
             rankedStatus.value = 'verified';
           }
@@ -830,6 +861,7 @@ export function useMinigameSession(activeRef) {
     ensureController().backToMenu();
     gameState.value = createEmptyMinigameState();
     refreshMenu();
+    void recordsSync.refresh({ force: true });
   };
 
   const newGame = async () => {
@@ -922,6 +954,7 @@ export function useMinigameSession(activeRef) {
     bufferedStore.flush();
     if (document.visibilityState === 'visible') {
       void heartbeatActiveRankedRun();
+      if (activeRef.value) void recordsSync.refresh();
     }
   };
 
@@ -935,14 +968,23 @@ export function useMinigameSession(activeRef) {
         snapshotPersistenceBlocked = true;
         rankedStatus.value = 'unranked';
       }
-    }
+      recordsSync.setUser(userId);
+      refreshMenu();
+      void recordsSync.refresh({ force: true });
+    },
+    { immediate: true }
   );
+
+  const refreshPersonalRecords = () => { void recordsSync.refresh({ force: true }); };
+  watch(personalRecords, refreshMenu);
 
   onMounted(() => {
     refreshMenu();
     window.addEventListener('keydown', handleKeydown, true);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('pagehide', bufferedStore.flush);
+    window.addEventListener('minigame-score-updated', refreshPersonalRecords);
+    window.addEventListener('minigame-records-refresh', refreshPersonalRecords);
     timedTickTimer = window.setInterval(async () => {
       if (timedTickInFlight || gameState.value?.gameId !== 'blitzkrieg') return;
       if (gameState.value?.status === 'game_over') return;
@@ -969,6 +1011,9 @@ export function useMinigameSession(activeRef) {
     window.removeEventListener('keydown', handleKeydown, true);
     document.removeEventListener('visibilitychange', handleVisibilityChange);
     window.removeEventListener('pagehide', bufferedStore.flush);
+    window.removeEventListener('minigame-score-updated', refreshPersonalRecords);
+    window.removeEventListener('minigame-records-refresh', refreshPersonalRecords);
+    recordsSync.setUser(null);
     rankedRunLock.release();
     controller?.close();
     controller = null;
@@ -976,13 +1021,16 @@ export function useMinigameSession(activeRef) {
 
   refreshMenu();
 
-  watch(activeRef, (active) => { if (!active) bufferedStore.flush(); });
+  watch(activeRef, (active) => {
+    if (!active) bufferedStore.flush();
+    else void recordsSync.refresh({ force: true });
+  });
 
   return {
     menuSections,
     difficulty,
     currentView,
-    gameState,
+    gameState: displayedGameState,
     lastMenuFocusGameId,
     toastMessage,
     overlay,

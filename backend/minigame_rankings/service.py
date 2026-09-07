@@ -903,7 +903,7 @@ def qualify_ranked_run(
 
         personal_best = db.execute(
             """
-            SELECT best_score, trophy_tier, verification_level
+            SELECT best_score, trophy_tier, best_tile_exp, verification_level
             FROM minigame_high_scores
             WHERE user_id = ? AND game_id = ? AND difficulty = ?
             """,
@@ -923,6 +923,8 @@ def qualify_ranked_run(
                 reasons.append("trophy_improvement")
         elif summary["trophy_tier"] > int(personal_best["trophy_tier"]):
             reasons.append("trophy_improvement")
+        if personal_best is None or summary["highest_tile_exp"] > int(personal_best["best_tile_exp"]):
+            reasons.append("tile_improvement")
         cutoff = _top_100_cutoff(
             db,
             game_id=str(row["game_id"]),
@@ -1337,7 +1339,7 @@ def _apply_verified_result(
     board_json = json.dumps(verified["final_board"], separators=(",", ":"))
     existing = db.execute(
         """
-        SELECT best_score, trophy_tier, verification_level
+        SELECT best_score, trophy_tier, best_tile_exp, verification_level
         FROM minigame_high_scores
         WHERE user_id = ? AND game_id = ? AND difficulty = ?
         """,
@@ -1420,6 +1422,16 @@ def _apply_verified_result(
                 int(run["user_id"]), str(run["game_id"]), int(run["difficulty"]),
             ),
         )
+    # Personal tile records are independent of the replay attached to the PB score.
+    best_tile_exp = max(
+        int(existing["best_tile_exp"]) if existing_is_verified else 0,
+        verified["highest_tile_exp"],
+    )
+    db.execute("""
+        UPDATE minigame_high_scores SET best_tile_exp = ?, updated_at = ?
+        WHERE user_id = ? AND game_id = ? AND difficulty = ? AND best_tile_exp <> ?
+    """, (best_tile_exp, verified_at, int(run["user_id"]), str(run["game_id"]),
+          int(run["difficulty"]), best_tile_exp))
     return bool(score_updated), bool(trophy_updated)
 
 
@@ -1633,7 +1645,7 @@ def game_leaderboard(game_id: str, *, difficulty: int, limit: int) -> dict[str, 
               scores.user_id,
               scores.best_score,
               scores.trophy_tier,
-              scores.highest_tile_exp,
+              scores.best_tile_exp AS highest_tile_exp,
               scores.score_achieved_at,
               users.display_name,
               profiles.avatar_key,
@@ -1645,6 +1657,7 @@ def game_leaderboard(game_id: str, *, difficulty: int, limit: int) -> dict[str, 
             WHERE scores.game_id = ?
               AND scores.difficulty = ?
               AND scores.best_score > 0
+              AND scores.verification_level = 'verified'
               AND users.status = 'active'
               AND TRIM(COALESCE(users.display_name, '')) <> ''
             ORDER BY scores.best_score DESC, scores.score_achieved_at ASC, scores.user_id ASC
@@ -1677,6 +1690,20 @@ def game_leaderboard(game_id: str, *, difficulty: int, limit: int) -> dict[str, 
     }
 
 
+def personal_records(user_id: int) -> dict[str, Any]:
+    with auth_db() as db:
+        rows = db.execute("""
+            SELECT game_id, difficulty, best_score, trophy_tier, best_tile_exp, updated_at
+            FROM minigame_high_scores
+            WHERE user_id = ? AND verification_level = 'verified'
+            ORDER BY game_id, difficulty
+        """, (int(user_id),)).fetchall()
+    return {
+        "user_id": int(user_id),
+        "records": [dict(row) for row in rows if row["game_id"] in MINIGAME_BY_ID],
+    }
+
+
 def trophy_leaderboard(*, difficulty: int, limit: int) -> dict[str, Any]:
     normalized_difficulty = 1 if int(difficulty) else 0
     row_limit = max(1, min(int(limit), LEADERBOARD_LIMIT))
@@ -1699,6 +1726,7 @@ def trophy_leaderboard(*, difficulty: int, limit: int) -> dict[str, Any]:
             LEFT JOIN user_entitlements AS entitlements ON entitlements.user_id = scores.user_id
             WHERE scores.difficulty = ?
               AND scores.trophy_tier > 0
+              AND scores.verification_level = 'verified'
               AND users.status = 'active'
               AND TRIM(COALESCE(users.display_name, '')) <> ''
             GROUP BY scores.user_id, users.display_name, profiles.avatar_key, entitlements.tier

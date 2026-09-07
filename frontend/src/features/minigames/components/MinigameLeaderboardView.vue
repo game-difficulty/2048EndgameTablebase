@@ -22,7 +22,7 @@
         :disabled="loading"
         :title="$t('minigames.leaderboard.refresh')"
         :aria-label="$t('minigames.leaderboard.refresh')"
-        @click="loadBoard"
+        @click="refreshBoard"
       >
         <span :class="loading ? 'is-spinning' : ''" aria-hidden="true">&#8635;</span>
       </button>
@@ -38,7 +38,7 @@
 
     <div v-if="error" class="minigame-board-message error">
       <span>{{ error }}</span>
-      <button type="button" @click="loadBoard">{{ $t('common.retry') }}</button>
+      <button type="button" @click="refreshBoard">{{ $t('common.retry') }}</button>
     </div>
     <div v-else-if="loading && !boardData" class="minigame-board-message">
       {{ $t('minigames.leaderboard.loading') }}
@@ -192,6 +192,10 @@ const loadBoard = async () => {
   } finally {
     if (serial === loadSerial) loading.value = false;
   }
+};
+const refreshBoard = () => {
+  window.dispatchEvent(new CustomEvent('minigame-records-refresh'));
+  void loadBoard();
 };
 const initialize = async () => {
   try {
