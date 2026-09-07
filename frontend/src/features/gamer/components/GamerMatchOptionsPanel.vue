@@ -1,6 +1,11 @@
 <template>
   <section v-if="options.length" class="gamer-match-options" :aria-label="$t('gamer.matchOptions.title')">
-    <h2>{{ $t('gamer.matchOptions.title') }}</h2>
+    <div class="gamer-ai-mode" role="group" :aria-label="$t('gamer.matchOptions.aiMode')">
+      <button v-for="enabled in [false, true]" :key="String(enabled)" type="button"
+        :aria-pressed="tableEnabled === enabled" @click="$emit('table-mode', enabled)">
+        {{ $t(enabled ? 'gamer.matchOptions.useTables' : 'gamer.matchOptions.searchOnly') }}
+      </button>
+    </div>
     <div v-for="option in options" :key="option.key" class="gamer-match-option">
       <span>{{ $t(option.labelKey) }}</span>
       <button
@@ -20,12 +25,18 @@
 <script setup>
 defineProps({
   options: { type: Array, default: () => [] },
+  tableEnabled: { type: Boolean, default: false },
 });
 
-defineEmits(['change']);
+defineEmits(['change', 'table-mode']);
 </script>
 
 <style scoped>
+.gamer-ai-mode { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+.gamer-ai-mode button { min-height: 2rem; padding: 4px 8px; border-radius: 4px;
+  color: var(--text-main); font-size: var(--font-ui-xs); font-weight: 850; }
+.gamer-ai-mode button[aria-pressed="true"] { background: var(--accent); color: var(--bg-main); }
+.gamer-ai-mode button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .gamer-match-options {
   width: 100%;
   min-height: 5.5rem;

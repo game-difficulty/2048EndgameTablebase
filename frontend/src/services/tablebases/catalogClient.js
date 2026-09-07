@@ -13,6 +13,7 @@ function normalizeTable(rawTable = {}) {
     dtype: String(rawTable.dtype || ''),
     spawnRate: Number(rawTable.spawn_rate ?? rawTable.spawnRate ?? 0.1),
     guestAvailable: Boolean(rawTable.guest_available ?? rawTable.guestAvailable),
+    ai: rawTable.ai || null,
   };
 }
 

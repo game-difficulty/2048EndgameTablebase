@@ -303,6 +303,9 @@
       "viewAll": "View full leaderboard"
     },
     "matchOptions": {
+      "aiMode": "AI mode",
+      "useTables": "Use tables",
+      "searchOnly": "Search only",
       "title": "Game options",
       "rankedParticipation": "Join leaderboard"
     }

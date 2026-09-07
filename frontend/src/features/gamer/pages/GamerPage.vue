@@ -106,6 +106,8 @@
         />
         <GamerMatchOptionsPanel
           :options="matchOptions"
+          :table-enabled="aiTableEnabled"
+          @table-mode="setAiTableEnabled"
           @change="handleMatchOptionChange"
         />
       </aside>
@@ -143,6 +145,8 @@ const {
   scoreAnimations,
   aiWorkerReady,
   rankedParticipationEnabled,
+  aiTableEnabled,
+  setAiTableEnabled,
   rankedStatus,
   ranked,
   triggerAction,

@@ -6,6 +6,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from Config import category_info, pattern_32k_tiles_map
 
 from .remote_workers.config import configured_remote_tables
 from .remote_workers.registry import remote_worker_registry
@@ -125,9 +126,20 @@ def get_available_tablebases() -> list[dict[str, Any]]:
                 "dtype": str(entry.get("dtype") or "uint32"),
                 "spawn_rate": float(entry.get("spawn_rate", 0.1)),
                 "guest_available": _entry_guest_available(entry),
+                "ai": ai_table_metadata(entry),
             }
         )
     return tables
+
+
+def ai_table_metadata(entry: dict[str, Any]) -> dict[str, Any]:
+    pattern = str(entry.get("pattern") or "")
+    parameters = pattern_32k_tiles_map.get(pattern)
+    compatible = bool(parameters and pattern not in category_info.get("variant", [])
+                      and "_" not in pattern)
+    return {"compatible": compatible, "policy_version": 1,
+            "large_tiles": int(parameters[0]) if parameters else 0,
+            "free_tiles": int(parameters[1]) if parameters else 0}
 
 
 def _guest_max_multiplier_units() -> int:

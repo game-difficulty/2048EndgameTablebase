@@ -10,6 +10,12 @@ import { useAuthState } from '../../../services/auth/authState';
 import { createLocalStorageStore } from '../../../services/storage/localStorageStore';
 import { createSessionStorageStore } from '../../../services/storage/sessionStorageStore';
 import { getEvilCore } from '../../../services/wasm/aiCoreClient';
+import { fetchTablebaseCatalog } from '../../../services/tablebases/catalogClient.js';
+import { emitAuthRequired } from '../../../services/auth/authEvents.js';
+import { TableDispatcher } from '../engine/tableDispatcher.js';
+import { createOrdinaryRng, planGamerSpawn } from '../engine/gamerSpawn.js';
+import { readTableRoute } from '../services/tableAiClient.js';
+import { TableAiCache } from '../services/tableAiCache.js';
 import {
   createRankedInitialBoard,
   randomSpawnWithRng,
@@ -266,21 +272,6 @@ function legalMoves(values) {
   ));
 }
 
-function randomSpawn(values, spawnRate4 = SPAWN_RATE4) {
-  const emptyIndices = values
-    .map((value, index) => (Number(value) === 0 ? index : null))
-    .filter((index) => index !== null);
-  if (!emptyIndices.length) {
-    return null;
-  }
-  const index = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
-  const exponent = Math.random() < spawnRate4 ? 2 : 1;
-  return {
-    index,
-    value: exponentToValue(exponent),
-  };
-}
-
 function aiSpeedRatio(speed) {
   const normalized = Number(speed);
   const clamped = Number.isFinite(normalized) ? Math.max(0, Math.min(200, normalized)) : 100;
@@ -306,6 +297,7 @@ export function useGamerSession(activeRef) {
   const difficulty = ref(0);
   const aiSpeed = ref(100);
   const rankedParticipationEnabled = ref(true);
+  const aiTableEnabled = ref(false);
   const hexInput = ref('');
   const currentHex = ref('0000000000000000');
   const specialTiles = ref([]);
@@ -331,6 +323,14 @@ export function useGamerSession(activeRef) {
   let lastAiSpeedRatio = null;
   let persistTimer = null;
   let rankedRng = null;
+  let ordinaryRng = createOrdinaryRng();
+  const tableAiCache = new TableAiCache({ transport: readTableRoute });
+  const tableDispatcher = new TableDispatcher();
+  let aiCatalogVersion = '';
+  let aiCatalogExpires = 0;
+  let aiCatalogRate = null;
+  let aiTableRetryAfter = 0;
+  let decisionGeneration = 0;
   let rankedStartSerial = 0;
   let rankedPollTimer = null;
   let rankedHeartbeatTimer = null;
@@ -355,6 +355,7 @@ export function useGamerSession(activeRef) {
       difficulty: difficulty.value,
       aiSpeed: aiSpeed.value,
       rankedParticipationEnabled: rankedParticipationEnabled.value,
+      aiTableEnabled: aiTableEnabled.value,
       bestScore: Number(score.value.best) || 0,
     });
     gamerSessionStore.write({
@@ -364,6 +365,7 @@ export function useGamerSession(activeRef) {
       currentHex: currentHex.value,
       specialTiles: specialTiles.value,
       randomAfterUndo,
+      ordinaryRngState: ordinaryRng.exportState(),
       ranked: {
         ...ranked.value,
         rngState: rankedRng?.exportState?.() || ranked.value.rngState || null,
@@ -547,6 +549,8 @@ export function useGamerSession(activeRef) {
   };
 
   const stopAI = () => {
+    decisionGeneration += 1;
+    tableAiCache.clear();
     aiEnabled.value = false;
     aiRunning = false;
     clearAiContinuationTimer();
@@ -570,7 +574,7 @@ export function useGamerSession(activeRef) {
   };
 
   const spawnEvil = async (values, { strict = false, spawnRate4 = configuredSpawnRate4() } = {}) => {
-    const fallback = () => randomSpawn(values, spawnRate4);
+    const fallback = () => randomSpawnWithRng(values, ordinaryRng, spawnRate4);
     try {
       const module = evilCoreModule || await getEvilCore();
       evilCoreModule = module;
@@ -726,7 +730,7 @@ export function useGamerSession(activeRef) {
     });
   });
 
-  const chooseAiMove = async () => {
+  const chooseSearchMove = async () => {
     const moves = legalMoves(board.value);
     if (!moves.length) {
       return null;
@@ -739,6 +743,42 @@ export function useGamerSession(activeRef) {
       console.error('AI worker step failed; using first legal move.', error);
       return moves[0];
     }
+  };
+
+  const chooseAiMove = async (isCurrent) => {
+    if (aiTableEnabled.value && authUser.value?.id && Date.now() >= aiTableRetryAfter) {
+      try {
+        const rate = ranked.value.eligible ? Number(ranked.value.spawnRate4) : configuredSpawnRate4();
+        if (Date.now() >= aiCatalogExpires || rate !== aiCatalogRate) {
+          const tables = await fetchTablebaseCatalog();
+          if (!isCurrent()) return null;
+          if (tables.catalogVersion !== aiCatalogVersion || rate !== aiCatalogRate) {
+            tableAiCache.clear();
+            tableDispatcher.setTables(tables, rate);
+          }
+          aiCatalogVersion = tables.catalogVersion;
+          aiCatalogRate = rate;
+          aiCatalogExpires = Date.now() + 60000;
+        }
+        tableDispatcher.reset(board.value);
+        const direction = await tableDispatcher.choose((candidate) => tableAiCache.lookup({
+          full_pattern: candidate.table.fullPattern, catalog_version: aiCatalogVersion,
+          board_codes: exactBoardCodes(board.value),
+          rng_state: (ranked.value.eligible && rankedRng ? rankedRng : ordinaryRng).exportState(),
+          difficulty: Number(difficulty.value), spawn_rate4: rate, random_only: randomAfterUndo,
+        }), isCurrent);
+        if (!isCurrent()) return null;
+        if (direction && direction !== 'AI' && legalMoves(board.value).includes(direction)) return direction;
+        tableAiCache.cancelPrefetch();
+      } catch (error) {
+        if (!isCurrent()) return null;
+        tableAiCache.clear();
+        if (error.status === 402 || error.status === 401) aiTableEnabled.value = false;
+        aiCatalogExpires = 0;
+        aiTableRetryAfter = Date.now() + 3000;
+      }
+    }
+    return isCurrent() ? chooseSearchMove() : null;
   };
 
   const applyRankedServerStatus = (payload) => {
@@ -840,6 +880,10 @@ export function useGamerSession(activeRef) {
     }
 
     const nextScore = score.value.current + simulated.scoreDelta;
+    if (!String(source).includes('ai')) {
+      decisionGeneration += 1;
+      tableAiCache.cancelPrefetch();
+    }
     let spawn = null;
     const spawnPolicy = resolveGamerSpawnPolicy({
       randomAfterUndo,
@@ -847,14 +891,17 @@ export function useGamerSession(activeRef) {
       hasRankedRng: Boolean(rankedRng),
     });
     if (spawnPolicy === GAMER_SPAWN_POLICY.RANDOM) {
-      spawn = randomSpawn(simulated.board, configuredSpawnRate4());
+      const planned = planGamerSpawn(simulated.board, ordinaryRng,
+        { spawnRate4: configuredSpawnRate4(), randomOnly: true });
+      ordinaryRng = new Xoshiro128StarStar(planned.state);
+      spawn = planned.spawn;
     } else if (spawnPolicy === GAMER_SPAWN_POLICY.RANKED) {
       const currentDifficulty = Math.max(0, Math.min(100, Number(difficulty.value) || 0));
       const runSpawnRate4 = Number(ranked.value.spawnRate4 ?? SPAWN_RATE4);
-      const branch = rankedRng.nextFloat();
-      const useEvil = currentDifficulty >= 100
-        || (currentDifficulty > 0 && branch < currentDifficulty / 100);
-      if (useEvil) {
+      const planned = planGamerSpawn(simulated.board, rankedRng,
+        { difficulty: currentDifficulty, spawnRate4: runSpawnRate4 });
+      rankedRng = new Xoshiro128StarStar(planned.state);
+      if (planned.evil) {
         try {
           spawn = await spawnEvil(simulated.board, { strict: true, spawnRate4: runSpawnRate4 });
         } catch (error) {
@@ -863,13 +910,14 @@ export function useGamerSession(activeRef) {
           spawn = randomSpawnWithRng(simulated.board, rankedRng, runSpawnRate4);
         }
       } else {
-        spawn = randomSpawnWithRng(simulated.board, rankedRng, runSpawnRate4);
+        spawn = planned.spawn;
       }
     } else {
       const spawnRate4 = configuredSpawnRate4();
-      spawn = Math.random() > (Number(difficulty.value) || 0) / 100
-        ? randomSpawn(simulated.board, spawnRate4)
-        : await spawnEvil(simulated.board, { spawnRate4 });
+      const planned = planGamerSpawn(simulated.board, ordinaryRng,
+        { difficulty: Number(difficulty.value), spawnRate4 });
+      ordinaryRng = new Xoshiro128StarStar(planned.state);
+      spawn = planned.evil ? await spawnEvil(simulated.board, { spawnRate4 }) : planned.spawn;
     }
     if (moveGeneration !== gameGeneration) return false;
     randomAfterUndo = false;
@@ -912,13 +960,14 @@ export function useGamerSession(activeRef) {
   };
 
   const initializeOrdinaryGame = (status = 'unranked', errorCode = '') => {
+    ordinaryRng = createOrdinaryRng();
     rankedRng = null;
     ranked.value = emptyRankedState({ status, errorCode, userId: authUser.value?.id || null });
     const nextBoard = new Array(16).fill(0);
     const spawnRate4 = configuredSpawnRate4();
-    const first = randomSpawn(nextBoard, spawnRate4);
+    const first = randomSpawnWithRng(nextBoard, ordinaryRng, spawnRate4);
     if (first) nextBoard[first.index] = first.value;
-    const second = randomSpawn(nextBoard, spawnRate4);
+    const second = randomSpawnWithRng(nextBoard, ordinaryRng, spawnRate4);
     if (second) nextBoard[second.index] = second.value;
     return nextBoard;
   };
@@ -1030,6 +1079,7 @@ export function useGamerSession(activeRef) {
     stopAI();
     history.pop();
     leaveRankedRunAfterUndo();
+    ordinaryRng = createOrdinaryRng();
     randomAfterUndo = true;
     const previous = history[history.length - 1];
     specialTiles.value = previous.specialTiles;
@@ -1075,8 +1125,13 @@ export function useGamerSession(activeRef) {
     }
     aiRunning = true;
     let shouldContinue = false;
+    const generation = decisionGeneration;
+    const boardRevision = boardFrameRevision;
+    const isCurrent = () => generation === decisionGeneration && boardRevision === boardFrameRevision
+      && Boolean(activeRef?.value);
     try {
-      const direction = await chooseAiMove();
+      const direction = await chooseAiMove(isCurrent);
+      if (!isCurrent()) return false;
       if (!direction) {
         stopAI();
         return false;
@@ -1086,7 +1141,7 @@ export function useGamerSession(activeRef) {
       return moved;
     } finally {
       aiRunning = false;
-      if (shouldContinue) {
+      if (shouldContinue || (fromContinuousAI && canContinueAI() && generation !== decisionGeneration)) {
         scheduleAiStep(0);
       }
     }
@@ -1149,6 +1204,16 @@ export function useGamerSession(activeRef) {
     persistState({ immediate: true });
   };
 
+  const setAiTableEnabled = (enabled) => {
+    if (Boolean(enabled) === aiTableEnabled.value) return;
+    if (enabled && !authUser.value?.id) { emitAuthRequired(); return; }
+    stopAI();
+    aiTableEnabled.value = Boolean(enabled);
+    aiCatalogExpires = 0;
+    aiTableRetryAfter = 0;
+    persistState({ immediate: true });
+  };
+
   const openBrowserAi = () => false;
 
   const loadSavedState = async () => {
@@ -1165,6 +1230,7 @@ export function useGamerSession(activeRef) {
     }
     legacyGamerStore.remove();
     rankedParticipationEnabled.value = preferences?.rankedParticipationEnabled !== false;
+    aiTableEnabled.value = Boolean(preferences?.aiTableEnabled);
     difficulty.value = Math.max(0, Math.min(100, Number(preferences?.difficulty) || 0));
     aiSpeed.value = Math.max(0, Math.min(200, Number(preferences?.aiSpeed) || 100));
 
@@ -1175,6 +1241,8 @@ export function useGamerSession(activeRef) {
     }
     specialTiles.value = Array.isArray(saved.specialTiles) ? saved.specialTiles : [];
     randomAfterUndo = Boolean(saved.randomAfterUndo);
+    try { ordinaryRng = new Xoshiro128StarStar(saved.ordinaryRngState); }
+    catch { ordinaryRng = createOrdinaryRng(); }
     applyBoardSnapshot(applySpecialTiles(saved.board, specialTiles.value));
     score.value = {
       current: Number(saved.score?.current) || 0,
@@ -1357,10 +1425,19 @@ export function useGamerSession(activeRef) {
   watch(
     [authReady, () => authUser.value?.id],
     ([ready, userId]) => {
+      tableAiCache.clear();
+      aiCatalogExpires = 0;
+      decisionGeneration += 1;
       if (!ready || !ranked.value.runId || !ranked.value.eligible || ranked.value.status !== 'ranked') return;
       if (Number(ranked.value.userId) !== Number(userId || 0)) loseRankedOwnership('user_changed');
     },
   );
+
+  watch([difficulty, () => appConfig.value?.['4_spawn_rate']], () => {
+    tableAiCache.clear();
+    decisionGeneration += 1;
+    aiCatalogExpires = 0;
+  });
 
   onMounted(() => {
     void loadSavedState();
@@ -1400,6 +1477,8 @@ export function useGamerSession(activeRef) {
     scoreAnimations,
     aiWorkerReady,
     rankedParticipationEnabled,
+    aiTableEnabled,
+    setAiTableEnabled,
     rankedStatus,
     rankedMode,
     ranked,

@@ -303,6 +303,9 @@
       "viewAll": "查看完整排行榜"
     },
     "matchOptions": {
+      "aiMode": "AI 模式",
+      "useTables": "开启查表",
+      "searchOnly": "仅搜索",
       "title": "对局选项",
       "rankedParticipation": "参加排行榜"
     }
