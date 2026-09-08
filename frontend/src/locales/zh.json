@@ -261,6 +261,7 @@
         "unranked": "非排位对局",
         "starting": "准备排位",
         "ranked_unavailable": "排位不可用",
+        "occupied": "该对局被占用",
         "ranked": "排位中",
         "ineligible": "不计入榜",
         "submitting": "提交中",
@@ -276,7 +277,8 @@
       "reasons": {
         "spawnRateOutOfRange": "排行榜仅接受出 4 率处于 10%–80% 的对局。",
         "duplicateTab": "该排位对局已由另一个标签页占用，本页不再参与排名。",
-        "activeRunExists": "该账号已有其他标签页正在进行排位对局。",
+        "activeRunExists": "该对局由其他设备或标签页持有。你可以开始一局独立的新游戏。",
+        "creationRateLimit": "新游戏创建过于频繁，请稍等一分钟再试。",
         "leaseLost": "本页已失去排位对局租约，本局不再参与排名。",
         "userChanged": "登录账号发生变化，本局不再参与排名。",
         "userDailyLimit": "该账号已达到滚动 24 小时普通成绩提交上限。",

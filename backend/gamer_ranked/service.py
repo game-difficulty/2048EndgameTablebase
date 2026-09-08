@@ -39,6 +39,9 @@ RANKING_TIMEZONE = timezone(timedelta(hours=8), name="UTC+08:00")
 MIN_RANKED_SPAWN_RATE4_MILLIS = 100
 MAX_RANKED_SPAWN_RATE4_MILLIS = 800
 LEASE_LIFETIME = timedelta(seconds=60)
+CREATE_RUN_WINDOW = timedelta(seconds=60)
+MAX_RUN_CREATIONS_USER = 30
+MAX_RUN_CREATIONS_IP = 60
 
 
 def _utc_now() -> datetime:
@@ -163,7 +166,7 @@ def create_ranked_run(
             if existing["status"] != "active":
                 return _public_run(existing)
             if not _lease_matches(existing, lease_token):
-                raise RuntimeError("active_run_exists")
+                raise PermissionError("lease_mismatch")
             lease_token, lease_hash, lease_expires_at = _new_lease(now, lease_token)
             db.execute(
                 """
@@ -177,44 +180,37 @@ def create_ranked_run(
                 "SELECT * FROM gamer_ranked_runs WHERE run_id = ?", (existing["run_id"],)
             ).fetchone()
             return _public_run(existing, lease_token=lease_token)
-        active_rows = db.execute(
-            """
-            SELECT * FROM gamer_ranked_runs
-            WHERE user_id = ? AND status = 'active'
-            ORDER BY started_at ASC
-            """,
-            (user_id,),
-        ).fetchall()
-        for active in active_rows:
-            if _lease_expired(active, now):
-                db.execute(
-                    """
-                    UPDATE gamer_ranked_runs
-                    SET status = 'expired', completed_at = ?, error_code = 'lease_expired',
-                        lease_token_hash = NULL, lease_expires_at = NULL
-                    WHERE run_id = ? AND status = 'active'
-                    """,
-                    (_iso(now), active["run_id"]),
-                )
-        active_rows = db.execute(
-            "SELECT * FROM gamer_ranked_runs WHERE user_id = ? AND status = 'active'",
-            (user_id,),
-        ).fetchall()
-        if active_rows:
-            active = active_rows[0]
-            if str(replace_run_id or "") != str(active["run_id"]):
-                raise RuntimeError("active_run_exists")
-            if not _lease_matches(active, str(replace_lease_token or "")):
-                raise PermissionError("lease_mismatch")
-            db.execute(
-                """
-                UPDATE gamer_ranked_runs
-                SET status = 'expired', completed_at = ?, error_code = 'replaced',
-                    lease_token_hash = NULL, lease_expires_at = NULL
-                WHERE run_id = ? AND status = 'active'
-                """,
-                (_iso(now), active["run_id"]),
-            )
+        # Retries above are free; only newly issued seeds count toward the limit.
+        cutoff = _iso(now - CREATE_RUN_WINDOW)
+        for column, value, limit in (
+            ("user_id", user_id, MAX_RUN_CREATIONS_USER),
+            ("start_ip", ip_address, MAX_RUN_CREATIONS_IP),
+        ):
+            count = db.execute(
+                f"SELECT COUNT(*) FROM gamer_ranked_runs WHERE {column} = ? AND started_at > ?",
+                (value, cutoff),
+            ).fetchone()[0]
+            if count >= limit:
+                raise RuntimeError("run_creation_rate_limit")
+        if replace_run_id:
+            active = db.execute(
+                "SELECT * FROM gamer_ranked_runs WHERE run_id = ?", (replace_run_id,),
+            ).fetchone()
+            if active is not None:
+                if int(active["user_id"]) != user_id:
+                    raise PermissionError("run_owner_mismatch")
+                if active["status"] == "active":
+                    if not _lease_matches(active, str(replace_lease_token or "")):
+                        raise PermissionError("lease_mismatch")
+                    db.execute(
+                        """
+                        UPDATE gamer_ranked_runs
+                        SET status = 'expired', completed_at = ?, error_code = 'replaced',
+                            lease_token_hash = NULL, lease_expires_at = NULL
+                        WHERE run_id = ? AND status = 'active'
+                        """,
+                        (_iso(now), active["run_id"]),
+                    )
         run_id = str(uuid.uuid4())
         seed_hex = _seed_hex()
         lease_token, lease_hash, lease_expires_at = _new_lease(now, lease_token)

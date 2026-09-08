@@ -540,6 +540,8 @@ def init_auth_db() -> None:
               ON leaderboard_entries(snapshot_id, rank);
             CREATE INDEX IF NOT EXISTS idx_gamer_runs_user_status
               ON gamer_ranked_runs(user_id, status, submitted_at);
+            CREATE INDEX IF NOT EXISTS idx_gamer_runs_user_started
+              ON gamer_ranked_runs(user_id, started_at);
             CREATE INDEX IF NOT EXISTS idx_gamer_runs_pending
               ON gamer_ranked_runs(status, submitted_at);
             CREATE INDEX IF NOT EXISTS idx_gamer_runs_start_ip

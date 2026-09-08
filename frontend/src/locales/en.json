@@ -261,6 +261,7 @@
         "unranked": "Unranked",
         "starting": "Preparing",
         "ranked_unavailable": "Unavailable",
+        "occupied": "Ranked busy",
         "ranked": "Ranked",
         "ineligible": "Unranked",
         "submitting": "Submitting",
@@ -276,7 +277,8 @@
       "reasons": {
         "spawnRateOutOfRange": "Leaderboard games require a 4-spawn chance from 10% to 80%.",
         "duplicateTab": "Another tab owns this ranked run. This tab is no longer rank eligible.",
-        "activeRunExists": "This account already has an active ranked run in another tab.",
+        "activeRunExists": "Another device or tab owns this run. You can start a separate new game.",
+        "creationRateLimit": "Too many new games. Please wait a minute and try again.",
         "leaseLost": "This tab lost its ranked-run lease. This game is no longer rank eligible.",
         "userChanged": "The signed-in account changed. This game is no longer rank eligible.",
         "userDailyLimit": "This account reached its rolling 24-hour standard submission limit.",

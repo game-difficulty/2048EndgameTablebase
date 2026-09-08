@@ -17,7 +17,7 @@
               :title="rankedReasonKey ? $t(rankedReasonKey) : $t(`gamer.ranked.status.${rankedStatus}`)"
               @click="retryRankedSubmission"
             >
-              {{ $t(`gamer.ranked.status.${rankedStatus}`) }}
+              {{ $t(`gamer.ranked.status.${ranked.errorCode === 'active_run_exists' ? 'occupied' : rankedStatus}`) }}
             </button>
           </div>
         </div>
@@ -176,6 +176,7 @@ const rankedReasonKey = computed(() => ({
   spawn_rate_out_of_range: 'gamer.ranked.reasons.spawnRateOutOfRange',
   duplicate_tab: 'gamer.ranked.reasons.duplicateTab',
   active_run_exists: 'gamer.ranked.reasons.activeRunExists',
+  run_creation_rate_limit: 'gamer.ranked.reasons.creationRateLimit',
   lease_lost: 'gamer.ranked.reasons.leaseLost',
   lease_required: 'gamer.ranked.reasons.leaseLost',
   lease_mismatch: 'gamer.ranked.reasons.leaseLost',

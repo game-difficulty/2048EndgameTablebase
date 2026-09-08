@@ -1,6 +1,7 @@
 import unittest
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import tempfile
@@ -412,10 +413,18 @@ class GamerRankedServiceTests(unittest.TestCase):
         self.assertEqual(retried["run_id"], first["run_id"])
         self.assertEqual(retried["lease_token"], LEASE_TOKEN)
 
-        with self.assertRaisesRegex(RuntimeError, "active_run_exists"):
+        second = create_ranked_run(
+            user_id=self.user_id,
+            request_id="lease-second",
+            ip_address="127.0.0.2",
+            lease_token="ranked-test-lease-token-0002",
+        )
+        self.assertNotEqual(first["run_id"], second["run_id"])
+        self.assertNotEqual(first["seed_hex"], second["seed_hex"])
+        with self.assertRaisesRegex(PermissionError, "lease_mismatch"):
             create_ranked_run(
                 user_id=self.user_id,
-                request_id="lease-second",
+                request_id="lease-first",
                 ip_address="127.0.0.1",
                 lease_token="ranked-test-lease-token-0002",
             )
@@ -444,12 +453,19 @@ class GamerRankedServiceTests(unittest.TestCase):
         self.assertEqual(get_ranked_run(
             run_id=first["run_id"], user_id=self.user_id,
         )["status"], "expired")
+        self.assertEqual(heartbeat_ranked_run(
+            run_id=second["run_id"], user_id=self.user_id,
+            lease_token=second["lease_token"],
+        )["status"], "active")
         abandoned = abandon_ranked_run(
             run_id=replacement["run_id"],
             user_id=self.user_id,
             lease_token=replacement["lease_token"],
         )
         self.assertEqual(abandoned["status"], "expired")
+        self.assertEqual(get_ranked_run(
+            run_id=second["run_id"], user_id=self.user_id,
+        )["status"], "active")
 
     def test_ranked_submit_rejects_the_wrong_lease(self):
         run = create_ranked_run(
@@ -470,6 +486,84 @@ class GamerRankedServiceTests(unittest.TestCase):
                 lease_token="ranked-test-lease-token-wrong",
             )
 
+    def test_parallel_independent_runs_keep_both_leases(self):
+        def create(index):
+            return create_ranked_run(
+                user_id=self.user_id, request_id=f"parallel-{index}",
+                ip_address="127.0.0.1", lease_token=f"parallel-lease-token-{index}",
+            )
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            runs = list(pool.map(create, range(2)))
+        self.assertNotEqual(runs[0]["run_id"], runs[1]["run_id"])
+        for run in runs:
+            self.assertEqual(heartbeat_ranked_run(
+                run_id=run["run_id"], user_id=self.user_id,
+                lease_token=run["lease_token"],
+            )["status"], "active")
+
+    def test_replacement_requires_owner_and_lease(self):
+        first = create_ranked_run(
+            user_id=self.user_id, request_id="protected",
+            ip_address="127.0.0.1", lease_token=LEASE_TOKEN,
+        )
+        for user_id, token, expected in (
+            (self.user_id, "incorrect-replacement-token", "lease_mismatch"),
+            (self.user_id + 1, LEASE_TOKEN, "run_owner_mismatch"),
+        ):
+            with self.subTest(expected=expected):
+                with self.assertRaisesRegex(PermissionError, expected):
+                    create_ranked_run(
+                        user_id=user_id, request_id=f"bad-{expected}",
+                        ip_address="127.0.0.2", lease_token="new-independent-lease",
+                        replace_run_id=first["run_id"], replace_lease_token=token,
+                    )
+        self.assertEqual(heartbeat_ranked_run(
+            run_id=first["run_id"], user_id=self.user_id, lease_token=LEASE_TOKEN,
+        )["status"], "active")
+        with auth_db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM gamer_ranked_runs").fetchone()[0], 1)
+
+    def test_create_rate_limit_preserves_runs_and_allows_idempotent_retry(self):
+        now = datetime.now(timezone.utc)
+        with patch("backend.gamer_ranked.service.MAX_RUN_CREATIONS_USER", 1), patch(
+            "backend.gamer_ranked.service._utc_now", return_value=now,
+        ):
+            first = create_ranked_run(
+                user_id=self.user_id, request_id="rate-first",
+                ip_address="127.0.0.1", lease_token=LEASE_TOKEN,
+            )
+            retried = create_ranked_run(
+                user_id=self.user_id, request_id="rate-first",
+                ip_address="127.0.0.1", lease_token=LEASE_TOKEN,
+            )
+            self.assertEqual(first["run_id"], retried["run_id"])
+            with self.assertRaisesRegex(RuntimeError, "run_creation_rate_limit"):
+                create_ranked_run(
+                    user_id=self.user_id, request_id="rate-next",
+                    ip_address="127.0.0.1", lease_token="next-test-lease-token",
+                    replace_run_id=first["run_id"], replace_lease_token=LEASE_TOKEN,
+                )
+            self.assertEqual(get_ranked_run(
+                run_id=first["run_id"], user_id=self.user_id,
+            )["status"], "active")
+        with patch("backend.gamer_ranked.service._utc_now", return_value=now + timedelta(seconds=60)):
+            self.assertEqual(create_ranked_run(
+                user_id=self.user_id, request_id="after-window",
+                ip_address="127.0.0.1", lease_token="next-test-lease-token",
+            )["status"], "active")
+
+    def test_create_rate_limit_applies_across_users_on_same_ip(self):
+        create_ranked_run(
+            user_id=self.user_id, request_id="ip-first",
+            ip_address="127.0.0.1", lease_token=LEASE_TOKEN,
+        )
+        with patch("backend.gamer_ranked.service.MAX_RUN_CREATIONS_IP", 1):
+            with self.assertRaisesRegex(RuntimeError, "run_creation_rate_limit"):
+                create_ranked_run(
+                    user_id=self.user_id + 1, request_id="ip-second",
+                    ip_address="127.0.0.1", lease_token="other-user-lease-token",
+                )
+
     def test_expired_lease_allows_a_new_run_without_replacement_token(self):
         first = create_ranked_run(
             user_id=self.user_id,
@@ -489,9 +583,10 @@ class GamerRankedServiceTests(unittest.TestCase):
             lease_token="ranked-test-lease-token-0002",
         )
         self.assertNotEqual(second["run_id"], first["run_id"])
-        expired = get_ranked_run(run_id=first["run_id"], user_id=self.user_id)
-        self.assertEqual(expired["status"], "expired")
-        self.assertEqual(expired["error_code"], "lease_expired")
+        # Starting an independent game must not mutate another device's run.
+        self.assertEqual(get_ranked_run(
+            run_id=first["run_id"], user_id=self.user_id,
+        )["status"], "active")
 
     def test_pending_run_is_verified_and_published(self):
         run = create_ranked_run(

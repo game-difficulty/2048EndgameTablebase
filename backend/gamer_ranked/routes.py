@@ -56,6 +56,10 @@ def create_run(payload: CreateRunRequest, request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
+        if str(exc) == "run_creation_rate_limit":
+            raise HTTPException(
+                status_code=429, detail=str(exc), headers={"Retry-After": "60"},
+            ) from exc
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 

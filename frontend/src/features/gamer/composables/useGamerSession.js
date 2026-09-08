@@ -332,6 +332,7 @@ export function useGamerSession(activeRef) {
   let aiTableRetryAfter = 0;
   let decisionGeneration = 0;
   let rankedStartSerial = 0;
+  let rankedStartPending = false;
   let rankedPollTimer = null;
   let rankedHeartbeatTimer = null;
   let rankedRunLock = null;
@@ -988,6 +989,7 @@ export function useGamerSession(activeRef) {
   };
 
   const newGame = async () => {
+    if (rankedStartPending) return;
     gameGeneration += 1;
     const serial = ++rankedStartSerial;
     clearRankedPollTimer();
@@ -1013,6 +1015,7 @@ export function useGamerSession(activeRef) {
     persistState({ immediate: true });
     const leaseToken = createRankedLeaseToken();
     let issuedRunId = '';
+    rankedStartPending = true;
     try {
       const run = await createRankedRun(
         createRankedRequestId(),
@@ -1067,6 +1070,8 @@ export function useGamerSession(activeRef) {
       rankedRunLock?.release();
       if (issuedRunId) abandonRankedRun(issuedRunId, leaseToken).catch(() => {});
       applyNewGameBoard(initializeOrdinaryGame('ranked_unavailable', error?.code || 'start_failed'));
+    } finally {
+      rankedStartPending = false;
     }
   };
 
