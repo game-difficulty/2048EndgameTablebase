@@ -23,6 +23,7 @@ function deriveCatalogVersion(tables) {
     table.dtype,
     table.spawnRate,
     table.guestAvailable,
+    table.ai,
   ]));
   let hash = 0x811c9dc5;
   for (let index = 0; index < serialized.length; index += 1) {

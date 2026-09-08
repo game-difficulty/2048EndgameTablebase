@@ -1,4 +1,6 @@
 // Decision policy ported from engine_core/AIPlayer.py:DispatcherCommon.
+import { compileTableStructure, matchTableStructure } from './tableStructure.js';
+
 export const TABLE_POLICY_VERSION = 1;
 
 export function maskLargeTiles(board, count) {
@@ -28,6 +30,7 @@ export class TableDispatcher {
       && Math.abs(table.spawnRate - spawnRate4) < 0.01
       && !table.pattern.includes('_'))
       .map((table) => ({ ...table, n: table.ai.large_tiles, free: table.ai.free_tiles,
+        structureRules: compileTableStructure(table.ai.structure),
         targetExp: Math.log2(Number(table.target)),
         level: table.ai.large_tiles + Math.log2(Number(table.target)) }));
     this.cooldowns.clear();
@@ -116,6 +119,7 @@ export class TableDispatcher {
   async choose(lookup, isCurrent = () => true) {
     for (const candidate of this.candidates()) {
       const masked = maskLargeTiles(this.board, candidate.table.n);
+      if (matchTableStructure(this.board, masked, candidate.table.n, candidate.table.structureRules) === 'mismatch') continue;
       const payload = await lookup(candidate, packedLookupBoard(masked));
       if (!isCurrent()) return null;
       const result = this.accept(candidate, payload);

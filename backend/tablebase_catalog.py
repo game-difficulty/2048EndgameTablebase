@@ -6,7 +6,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
-from Config import category_info, pattern_32k_tiles_map
+from Config import category_info, pattern_32k_tiles_map, pattern_catalog
 
 from .remote_workers.config import configured_remote_tables
 from .remote_workers.registry import remote_worker_registry
@@ -137,9 +137,19 @@ def ai_table_metadata(entry: dict[str, Any]) -> dict[str, Any]:
     parameters = pattern_32k_tiles_map.get(pattern)
     compatible = bool(parameters and pattern not in category_info.get("variant", [])
                       and "_" not in pattern)
-    return {"compatible": compatible, "policy_version": 1,
-            "large_tiles": int(parameters[0]) if parameters else 0,
-            "free_tiles": int(parameters[1]) if parameters else 0}
+    metadata = {"compatible": compatible, "policy_version": 1,
+                "large_tiles": int(parameters[0]) if parameters else 0,
+                "free_tiles": int(parameters[1]) if parameters else 0}
+    spec = pattern_catalog.get(pattern)
+    if compatible and spec is not None:
+        # ReaderRuntime::operation_sequence tries all eight symmetries for Classic,
+        # including LL. gen_all_mirror's rotation-only LL rule is for random starts.
+        metadata["structure"] = {
+            "version": 1,
+            "transforms": "dihedral8",
+            "pattern_masks": [f"{int(mask):016x}" for mask in spec["pattern_masks"]],
+        }
+    return metadata
 
 
 def _guest_max_multiplier_units() -> int:

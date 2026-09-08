@@ -124,3 +124,24 @@ test('catalog version changes clear cache and preserve array callers', async (co
   assert.equal(getCatalogVersion(), 'catalog-b');
   assert.equal(tablebaseResultCache.get(key('version', 'catalog-a')), null);
 });
+
+test('derived catalog versions include AI structure changes', async (context) => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  });
+  globalThis.window = { location: { href: 'https://2048tables.online/' } };
+  let version = 1;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ tables: [{
+    pattern: 'LL', target: '1024', full_pattern: 'LL_1024',
+    ai: { structure: { version, transforms: 'dihedral8', pattern_masks: ['0000000000ff00ff'] } },
+  }] }) });
+  const first = await fetchTablebaseCatalog();
+  assert.equal(first[0].ai.structure.version, 1);
+  version = 2;
+  const second = await fetchTablebaseCatalog();
+  assert.notEqual(first.catalogVersion, second.catalogVersion);
+});
