@@ -14,7 +14,7 @@
     "test:trainer-dock": "node --test tests/trainerDock.test.js",
     "test:guide": "node --test tests/guideNavigation.test.js tests/guideLibrary.test.js tests/trainerPracticeJump.test.js",
     "test:gamer-ranked": "node --test tests/rankedGamerEngine.test.js tests/rankedRunLock.test.js",
-    "test:gamer-table-ai": "node --test tests/gamerTableAi.test.js tests/tableStructure.test.js",
+    "test:gamer-table-ai": "node --test tests/gamerTableAi.test.js tests/tableStructure.test.js tests/tableAiStreamTransport.test.js",
     "test:minigame-determinism": "node --test tests/minigameDeterminism.test.js",
     "test:minigame-animations": "node --test tests/minigameSpecialAnimations.test.js tests/minigameStateLifecycle.test.js",
     "test:minigame-records": "node --test tests/minigamePersonalRecords.test.js",

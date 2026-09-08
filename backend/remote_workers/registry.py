@@ -28,6 +28,7 @@ from .errors import (
 PROTOCOL_VERSION = 1
 CAPABILITY_BATTLE_ROUTE_V1 = "battle_route_v1"
 CAPABILITY_GAMER_ROUTE_V1 = "gamer_route_v1"
+CAPABILITY_GAMER_STREAM_V1 = "gamer_stream_v1"
 HEARTBEAT_TIMEOUT_SECONDS = float(
     os.getenv("REMOTE_TABLEBASE_HEARTBEAT_TIMEOUT_SECONDS", "30")
 )
@@ -63,6 +64,55 @@ class PendingRequest:
     full_pattern: str
     request_type: str
     future: asyncio.Future
+    stream: Any = None
+
+
+class RemoteGamerStream:
+    def __init__(self, registry, worker, request_id, future, allowed):
+        self.registry, self.worker, self.request_id = registry, worker, request_id
+        self.future = future
+        self.queue = asyncio.Queue(maxsize=32)
+        self.produced = -1
+        self.allowed = allowed
+
+    async def credit(self, consumed, allowed):
+        if self.future.done():
+            return
+        self.allowed = max(self.allowed, allowed)
+        await self.registry._send(self.worker, {'type': 'GAMER_STREAM_CREDIT',
+            'request_id': self.request_id, 'consumed': consumed, 'allow_through': self.allowed})
+
+    async def receive(self):
+        if not self.queue.empty():
+            return self.queue.get_nowait()
+        if self.future.done():
+            self.future.result()
+            return None
+        task = asyncio.create_task(self.queue.get())
+        try:
+            done, _ = await asyncio.wait([task, self.future], timeout=REQUEST_TIMEOUT_SECONDS,
+                                        return_when=asyncio.FIRST_COMPLETED)
+            if task in done:
+                return task.result()
+            if self.future in done:
+                self.future.result()
+                if not self.queue.empty():
+                    return self.queue.get_nowait()
+                return None
+            raise RemoteTablebaseTimeout()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def close(self):
+        self.registry._pending.pop(self.request_id, None)
+        if self.future.done() and not self.future.cancelled():
+            self.future.exception()
+        self.future.cancel()
+        try:
+            await self.registry._send(self.worker, {'type': 'CANCEL', 'request_id': self.request_id})
+        except Exception:
+            pass
 
 
 def _valid_board_hex(value: Any) -> str:
@@ -292,7 +342,7 @@ class RemoteWorkerRegistry:
                 for item in hello.get("capabilities", [])
                 if isinstance(item, str)
             )
-            if capability in (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_ROUTE_V1)
+            if capability in (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_ROUTE_V1, CAPABILITY_GAMER_STREAM_V1)
         )
 
         worker = WorkerConnection(
@@ -357,10 +407,34 @@ class RemoteWorkerRegistry:
             "RANDOM_STATE_RESULT",
             "BATTLE_ROUTE_RESULT",
             "GAMER_ROUTE_RESULT",
+            "GAMER_STREAM_NODE",
+            "GAMER_STREAM_END",
             "ERROR",
         }:
             raise RemoteTablebaseProtocolError("Unsupported worker response.")
         request_id = str(message.get("request_id") or "")
+        pending = self._pending.get(request_id)
+        if pending is not None and pending.stream is not None:
+            if pending.worker_id != worker.worker_id:
+                return
+            stream = pending.stream
+            if message_type == 'GAMER_STREAM_NODE':
+                seq = message.get('seq')
+                if (type(seq) is not int or seq != stream.produced + 1 or seq > stream.allowed
+                        or not isinstance(message.get('item'), dict) or stream.queue.full()):
+                    if not pending.future.done():
+                        pending.future.set_exception(RemoteTablebaseProtocolError('Invalid stream sequence'))
+                elif not pending.future.done():
+                    stream.produced = seq
+                    stream.queue.put_nowait(message['item'])
+                return
+            self._pending.pop(request_id, None)
+            if not pending.future.done():
+                if message_type == 'GAMER_STREAM_END':
+                    pending.future.set_result(None)
+                else:
+                    pending.future.set_exception(RemoteTablebaseOffline())
+            return
         pending = self._pending.pop(request_id, None)
         if pending is None or pending.worker_id != worker.worker_id:
             return
@@ -486,6 +560,31 @@ class RemoteWorkerRegistry:
             return CAPABILITY_GAMER_ROUTE_V1 in self._worker_for_table(full_pattern).capabilities
         except RemoteTablebaseOffline:
             return False
+
+    def supports_gamer_stream(self, full_pattern: str) -> bool:
+        try:
+            return CAPABILITY_GAMER_STREAM_V1 in self._worker_for_table(full_pattern).capabilities
+        except RemoteTablebaseOffline:
+            return False
+
+    async def open_gamer_stream(self, *, full_pattern, pattern, target, options, allow_through):
+        from backend.gamer_tablebase_route import validate_options
+        from backend.gamer_stream_window import StreamWindow
+        validate_options(options)
+        StreamWindow(allow_through)
+        worker = self._worker_for_table(full_pattern, required_capability=CAPABILITY_GAMER_STREAM_V1)
+        request_id = uuid.uuid4().hex
+        future = asyncio.get_running_loop().create_future()
+        stream = RemoteGamerStream(self, worker, request_id, future, allow_through)
+        self._pending[request_id] = PendingRequest(worker.worker_id, full_pattern, 'GAMER_STREAM_OPEN', future, stream)
+        try:
+            await self._send(worker, {'type': 'GAMER_STREAM_OPEN', 'request_id': request_id,
+                'full_pattern': full_pattern, 'pattern': pattern, 'target': str(target),
+                'options': options, 'allow_through': allow_through})
+        except BaseException:
+            await stream.close()
+            raise
+        return stream
 
     async def generate_gamer_route(self, *, full_pattern, pattern, target, options):
         from backend.gamer_tablebase_route import generate_route, validate_options

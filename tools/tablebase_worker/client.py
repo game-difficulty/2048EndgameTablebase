@@ -45,6 +45,7 @@ class WorkerClient:
         self._stop = asyncio.Event()
         self._send_lock = asyncio.Lock()
         self._request_tasks: dict[str, asyncio.Task] = {}
+        self._stream_windows = {}
 
     def stop(self) -> None:
         self._stop.set()
@@ -170,6 +171,14 @@ class WorkerClient:
                 if request.message_type == "CANCEL":
                     self._cancel_request(request.request_id)
                     continue
+                if request.message_type == 'GAMER_STREAM_CREDIT':
+                    window = self._stream_windows.get(request.request_id)
+                    if window is not None:
+                        try:
+                            window.update(request.consumed, request.allow_through)
+                        except ValueError as exc:
+                            raise ProtocolError('INVALID_REQUEST', str(exc), request.request_id) from exc
+                    continue
                 if request.request_id in self._request_tasks:
                     raise ProtocolError(
                         "DUPLICATE_REQUEST", "request_id is already active", request.request_id
@@ -186,6 +195,7 @@ class WorkerClient:
     def _request_done(self, request_id: str, task: asyncio.Task) -> None:
         if self._request_tasks.get(request_id) is task:
             self._request_tasks.pop(request_id, None)
+            self._stream_windows.pop(request_id, None)
         if not task.cancelled():
             with contextlib.suppress(Exception):
                 task.exception()
@@ -205,7 +215,28 @@ class WorkerClient:
     async def _execute_request(self, websocket, request: Request) -> None:
         started = time.monotonic()
         try:
-            if request.message_type == "LOOKUP":
+            if request.message_type == 'GAMER_STREAM_OPEN':
+                from backend.gamer_stream_window import StreamWindow, MAX_STREAM_STEPS
+                from backend.gamer_tablebase_route import GamerRouteCursor
+                from Config import pattern_32k_tiles_map, category_info
+                if request.pattern in category_info.get('variant', []):
+                    raise TableUnavailable('Variant is not supported by Gamer')
+                window = StreamWindow(request.allow_through)
+                self._stream_windows[request.request_id] = window
+                cursor = GamerRouteCursor(request.gamer_options, pattern_32k_tiles_map[request.pattern][0])
+                for seq in range(MAX_STREAM_STEPS):
+                    await window.wait(seq)
+                    results, dtype = await self.reader_pool.lookup(request.full_pattern, cursor.encoded,
+                        use_variant=False, board_is_lookup=False)
+                    results, dtype = sanitize_results(results), str(dtype or '?')
+                    window.produced = seq
+                    await self._send(websocket, encode_message('GAMER_STREAM_NODE',
+                        request_id=request.request_id, seq=seq, item=cursor.node(results, dtype)))
+                    if not cursor.advance(results, dtype):
+                        break
+                await self._send(websocket, encode_message('GAMER_STREAM_END', request_id=request.request_id))
+                return
+            elif request.message_type == "LOOKUP":
                 raw_results, dtype = await self.reader_pool.lookup(
                     request.full_pattern or "",
                     request.boards[0],
@@ -279,6 +310,9 @@ class WorkerClient:
         except asyncio.CancelledError:
             logger.debug("Request cancelled: %s", request.request_id)
             raise
+        except TimeoutError:
+            error = ProtocolError('REQUEST_TIMEOUT', 'Request expired', request.request_id)
+            await self._send(websocket, error_message(error))
         except TableUnavailable as exc:
             error = ProtocolError("TABLE_UNAVAILABLE", str(exc), request.request_id)
             await self._send(websocket, error_message(error))

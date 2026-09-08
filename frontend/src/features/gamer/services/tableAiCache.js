@@ -1,101 +1,81 @@
-import { createRandomXoshiroState, Xoshiro128StarStar } from '../../../utils/xoshiro128.js';
-import { needsEvilSpawn } from '../engine/gamerSpawn.js';
+import { createRandomXoshiroState } from '../../../utils/xoshiro128.js';
 
-// Account-local purchased results and one streaming short route; never persisted.
+const nodeKey = (body) => JSON.stringify([body.board_codes, body.rng_state, Boolean(body.random_only)]);
+
+// Purchased results are a bounded LRU; speculative work is one credit-controlled subscription.
 export class TableAiCache {
   constructor({ transport, now = () => Date.now() } = {}) {
     this.transport = transport;
     this.now = now;
     this.entries = new Map();
-    this.generation = 0;
     this.active = null;
-    this.routes = new Map();
-    this.demand = null;
+    this.generation = 0;
   }
-
   key(body) { return JSON.stringify([body.catalog_version, body.full_pattern, body.board_codes]); }
-  context(body) { return JSON.stringify([body.catalog_version, body.full_pattern,
-    body.difficulty, body.spawn_rate4, body.random_only]); }
+  context(body) { return JSON.stringify([body.catalog_version, body.full_pattern, body.difficulty, body.spawn_rate4]); }
   get(body) {
     const key = this.key(body);
     const entry = this.entries.get(key);
     if (!entry) return null;
     if (this.now() - entry.time >= 300000) { this.entries.delete(key); return null; }
-    this.entries.delete(key);
-    this.entries.set(key, entry);
+    this.entries.delete(key); this.entries.set(key, entry);
     return entry.value;
   }
-
   cancelPrefetch() {
     this.generation += 1;
-    this.active?.abort.abort();
+    const task = this.active;
     this.active = null;
-    this.routes.clear();
-    this.demand = null;
+    if (task) { task.handle.cancel(); task.done = true; task.wake(); }
   }
+  clear() { this.cancelPrefetch(); this.entries.clear(); }
+  close() { this.clear(); this.transport.close(); }
 
-  clear() {
+  start(body, advanceFirst = false) {
     this.cancelPrefetch();
-    this.entries.clear();
-  }
-
-  start(body) {
     const generation = this.generation;
-    const context = this.context(body);
-    let route = this.routes.get(context);
-    if (!route || !body.advance_first) {
-      route = { tail: null, path: [] };
-      this.routes.set(context, route);
-      while (this.routes.size > 16) this.routes.delete(this.routes.keys().next().value);
-    }
-    const task = { abort: new AbortController(), context: this.context(body), changed: null,
-      wake: null, error: null, done: false };
-    const resetWake = () => { task.changed = new Promise((resolve) => { task.wake = resolve; }); };
-    resetWake();
+    const task = { context: this.context(body), nodes: new Map(), done: false, error: null,
+      changed: null, wake: null, consumed: -1, allowed: 7, lastCredit: -1,
+      lastConsume: null, interval: 50, latency: 350, started: this.now() };
+    const wake = () => {
+      task.wake?.();
+      task.changed = new Promise((resolve) => { task.wake = resolve; });
+    };
+    wake();
     this.active = task;
-    task.promise = this.transport({ ...body, request_id: createRandomXoshiroState().map((word) => word.toString(16).padStart(8, '0')).join(''), steps: 4 }, {
-      signal: task.abort.signal,
+    task.handle = this.transport.open({ ...body, advance_first: advanceFirst, steps: 1,
+      request_id: createRandomXoshiroState().map((word) => word.toString(16).padStart(8, '0')).join('') }, {
       onResult: (item) => {
-        if (generation !== this.generation || task.abort.signal.aborted) return;
+        if (generation !== this.generation) return;
         this.entries.set(this.key(item), { time: this.now(), value: item });
         while (this.entries.size > 256) this.entries.delete(this.entries.keys().next().value);
-        route.tail = { ...body, board_codes: item.board_codes, rng_state: item.rng_state,
-          random_only: item.random_only ?? body.random_only, advance_first: true };
-        const node = { key: this.key(item), state: JSON.stringify(item.rng_state) };
-        const duplicate = route.path.findIndex((entry) => entry.key === node.key && entry.state === node.state);
-        if (duplicate < 0) route.path.push(node);
-        if (route.path.length > 12) route.path.shift();
-        task.wake(); resetWake();
+        task.nodes.set(nodeKey(item), item.seq);
+        while (task.nodes.size > 64) task.nodes.delete(task.nodes.keys().next().value);
+        if (item.seq === 0) task.latency = Math.max(50, this.now() - task.started);
+        wake();
       },
-    }).catch((error) => { task.error = error; }).finally(() => {
-      task.done = true; task.wake();
-      if (this.active === task) {
-        this.active = null;
-        if (!task.error && !task.abort.signal.aborted) this.refill();
-      }
+      onLatency: (ms) => { task.latency = Math.max(50, task.latency * .7 + ms * .3); },
+      onEnd: () => { task.done = true; wake(); },
+      onError: (error) => { task.error = error; task.done = true; wake(); },
     });
     return task;
   }
 
-  refill() {
-    const body = this.demand;
-    if (!body || this.active) return;
-    const route = this.routes.get(this.context(body));
-    const position = route?.path.findIndex((node) => node.key === this.key(body)
-      && node.state === JSON.stringify(body.rng_state)) ?? -1;
-    if (position < 0 || route.path.length - position - 1 > 2) return;
-    const tail = route.tail;
-    const value = this.get(tail);
-    const raw = Object.values(value?.results || {})[0];
-    if (typeof raw !== 'number' || !Number.isFinite(raw)
-      || raw + (String(value.dtype).startsWith('1-') ? 1 : 0) <= 0) return;
-    if (!needsEvilSpawn(new Xoshiro128StarStar(tail.rng_state),
-      { difficulty: tail.difficulty, randomOnly: tail.random_only })) this.start(tail);
-  }
-
   consume(body, value) {
-    this.demand = body;
-    this.refill();
+    const task = this.active;
+    const seq = task?.nodes.get(nodeKey(body));
+    if (!task || task.context !== this.context(body) || seq === undefined || seq <= task.consumed || task.done) return value;
+    const now = this.now();
+    if (task.lastConsume !== null) task.interval = Math.max(1, .6 * task.interval + .4 * (now - task.lastConsume));
+    task.lastConsume = now;
+    task.consumed = seq;
+    const cover = Math.ceil(task.latency / task.interval);
+    const window = Math.max(8, Math.min(32, cover + 6));
+    // Include the four-move credit cadence in the refill margin.
+    if (task.allowed - seq <= Math.max(4, cover + 4) && (seq - task.lastCredit >= 4 || task.allowed - seq <= 2)) {
+      task.allowed = Math.max(task.allowed, Math.min(99999, seq + window));
+      task.lastCredit = seq;
+      task.handle.credit(seq, task.allowed);
+    }
     return value;
   }
 
@@ -103,41 +83,40 @@ export class TableAiCache {
     const generation = this.generation;
     let value = this.get(body);
     if (value) {
-      const context = this.context(body);
-      const route = this.routes.get(context);
-      if (!route?.path.some((node) => node.key === this.key(body) && node.state === JSON.stringify(body.rng_state))) {
-        this.routes.set(context, { tail: { ...body, advance_first: true },
-          path: [{ key: this.key(body), state: JSON.stringify(body.rng_state) }] });
-        while (this.routes.size > 16) this.routes.delete(this.routes.keys().next().value);
-      }
+      if (!this.active || this.active.context !== this.context(body)) this.start(body, true);
       return this.consume(body, value);
     }
-    this.demand = null;
     const previous = this.active;
     if (previous && previous.context === this.context(body)) {
       while (!previous.done && generation === this.generation) {
         value = this.get(body);
         if (value) return this.consume(body, value);
-        await previous.changed;
+        await this.waitForChange(previous);
       }
       if (generation !== this.generation) throw new Error('Superseded AI request');
       value = this.get(body);
       if (value) return this.consume(body, value);
       if (previous.error) throw previous.error;
-    } else if (previous) {
-      previous.abort.abort();
-      await previous.promise;
     }
-    if (generation !== this.generation) throw new Error('Superseded AI request');
     const task = this.start(body);
-    while (!task.done && generation === this.generation) {
+    const currentGeneration = this.generation;
+    while (!task.done && currentGeneration === this.generation) {
       value = this.get(body);
       if (value) return this.consume(body, value);
-      await task.changed;
+      await this.waitForChange(task);
     }
+    if (currentGeneration !== this.generation) throw new Error('Superseded AI request');
     value = this.get(body);
-    if (generation !== this.generation) throw new Error('Superseded AI request');
     if (value) return this.consume(body, value);
     throw task.error || new Error('No tablebase result');
+  }
+
+  async waitForChange(task) {
+    let timer;
+    try {
+      await Promise.race([task.changed, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Tablebase stream timeout')), 30000);
+      })]);
+    } finally { clearTimeout(timer); }
   }
 }

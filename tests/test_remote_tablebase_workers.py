@@ -31,6 +31,31 @@ class FakeWebSocket:
 
 
 class RemoteWorkerRegistryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_continuous_gamer_stream_nodes_credit_and_terminal_frame(self):
+        websocket, worker = await self._connect(capabilities=['gamer_stream_v1'])
+        self.assertTrue(self.registry.supports_gamer_stream('free11_512'))
+        remote = await self.registry.open_gamer_stream(full_pattern='free11_512',
+            pattern='free11', target='512', allow_through=7,
+            options=dict(board_codes=[1]+[0]*15, rng_state=[1,2,3,4], steps=1,
+                difficulty=0, spawn_rate4=.1, random_only=False))
+        self.assertEqual(websocket.sent[-1]['type'], 'GAMER_STREAM_OPEN')
+        waiter = asyncio.create_task(remote.receive())
+        await asyncio.sleep(0)
+        for seq in range(8):
+            await self.registry._handle_message(worker, dict(type='GAMER_STREAM_NODE',
+                request_id=remote.request_id, seq=seq, item={'index': seq}))
+        self.assertEqual(await waiter, {'index':0})
+        await remote.credit(4,12)
+        self.assertEqual(websocket.sent[-1]['type'], 'GAMER_STREAM_CREDIT')
+        for seq in range(8,13):
+            await self.registry._handle_message(worker, dict(type='GAMER_STREAM_NODE',
+                request_id=remote.request_id, seq=seq, item={'index': seq}))
+        await self.registry._handle_message(worker, dict(type='GAMER_STREAM_END',request_id=remote.request_id))
+        self.assertEqual([await remote.receive() for _ in range(12)], [{'index':i} for i in range(1,13)])
+        self.assertIsNone(await remote.receive())
+        await remote.close()
+        self.assertNotIn(remote.request_id,self.registry._pending)
+
     async def test_gamer_route_capability_and_single_round_trip(self):
         from backend.gamer_tablebase_route import generate_route
         from Config import pattern_32k_tiles_map
@@ -47,6 +72,26 @@ class RemoteWorkerRegistryTests(unittest.IsolatedAsyncioTestCase):
         await self.registry._handle_message(worker, dict(type='GAMER_ROUTE_RESULT',
             request_id=request['request_id'], items=nodes))
         self.assertEqual(await task, nodes)
+
+    async def test_stream_rejects_unordered_nodes_and_disconnect_releases_waiter(self):
+        websocket, worker = await self._connect(capabilities=['gamer_stream_v1'])
+        options=dict(board_codes=[1]+[0]*15, rng_state=[1,2,3,4], steps=1,
+            difficulty=0, spawn_rate4=.1, random_only=False)
+        remote=await self.registry.open_gamer_stream(full_pattern='free11_512',pattern='free11',
+            target='512',options=options,allow_through=7)
+        await self.registry._handle_message(worker,dict(type='GAMER_STREAM_NODE',
+            request_id=remote.request_id,seq=1,item={}))
+        with self.assertRaises(RemoteTablebaseProtocolError):
+            await remote.receive()
+        await remote.close()
+        remote=await self.registry.open_gamer_stream(full_pattern='free11_512',pattern='free11',
+            target='512',options=options,allow_through=7)
+        waiter=asyncio.create_task(remote.receive())
+        await asyncio.sleep(0)
+        await self.registry._remove_worker(worker,RemoteTablebaseOffline())
+        with self.assertRaises(RemoteTablebaseOffline):
+            await waiter
+        await remote.close()
 
     async def test_old_worker_has_no_gamer_route_capability(self):
         await self._connect()

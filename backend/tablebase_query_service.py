@@ -317,6 +317,12 @@ class TablebaseQueryScheduler:
     def clear_cache(self) -> None:
         self._result_cache.clear()
 
+    def cache_stream_result(self, *, catalog_version, full_pattern, board_encoded, results, dtype):
+        sanitized = _sanitize_results(results)
+        result = TablebaseLookupResult(board_encoded, full_pattern, sanitized, str(dtype), _best_move(sanitized))
+        self._cache_set((catalog_version, full_pattern, u64(board_encoded)), result)
+        return result
+
     def current_generation(self, stream_key: str) -> int:
         return int(self._latest_generation.get(str(stream_key), 0))
 

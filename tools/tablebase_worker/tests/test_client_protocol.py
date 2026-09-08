@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from tools.tablebase_worker.client import WorkerClient, connection_error_summary
 from tools.tablebase_worker.protocol import Request
@@ -47,6 +48,42 @@ class FakeReaderPool:
 
 
 class ClientProtocolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stream_emits_first_node_before_second_query_finishes_and_waits_for_credit(self):
+        client, websocket = self.client(), FakeWebSocket()
+        second_started, release = asyncio.Event(), asyncio.Event()
+        calls = []
+        async def lookup(*args, **kwargs):
+            calls.append(args[1])
+            if len(calls) == 2:
+                second_started.set()
+                await release.wait()
+            return {'left': .9}, 'float64'
+        client.reader_pool.lookup = lookup
+        from backend.gamer_tablebase_route import GamerRouteCursor
+        with patch.object(GamerRouteCursor, 'advance', return_value=True):
+            task = asyncio.create_task(client._execute_request(websocket, Request('GAMER_STREAM_OPEN',
+                'stream-1', 'free11_512', 'free11', '512', allow_through=7,
+                gamer_options=dict(board_codes=[1]+[0]*15, rng_state=[1,2,3,4],
+                    steps=1, difficulty=0, spawn_rate4=.1, random_only=False))))
+            try:
+                await asyncio.wait_for(second_started.wait(), 2)
+                self.assertEqual([x['seq'] for x in websocket.messages], [0])
+                release.set()
+                async with asyncio.timeout(2):
+                    while len(websocket.messages) < 8:
+                        await asyncio.sleep(0)
+                await asyncio.sleep(.01)
+                self.assertEqual(len(calls), 8)
+                client._stream_windows['stream-1'].update(4, 12)
+                async with asyncio.timeout(2):
+                    while len(websocket.messages) < 13:
+                        await asyncio.sleep(0)
+                self.assertEqual([x['seq'] for x in websocket.messages], list(range(13)))
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            self.assertEqual(len(calls), 13)
+
     async def test_gamer_route_response_is_single_message(self):
         websocket = FakeWebSocket()
         await self.client()._execute_request(websocket, Request('GENERATE_GAMER_ROUTE',

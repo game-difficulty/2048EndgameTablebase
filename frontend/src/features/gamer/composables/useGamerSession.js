@@ -14,7 +14,7 @@ import { fetchTablebaseCatalog } from '../../../services/tablebases/catalogClien
 import { emitAuthRequired } from '../../../services/auth/authEvents.js';
 import { TableDispatcher } from '../engine/tableDispatcher.js';
 import { createOrdinaryRng, planGamerSpawn } from '../engine/gamerSpawn.js';
-import { readTableRoute } from '../services/tableAiClient.js';
+import { createTableAiStreamClient } from '../services/tableAiClient.js';
 import { TableAiCache } from '../services/tableAiCache.js';
 import {
   createRankedInitialBoard,
@@ -324,7 +324,7 @@ export function useGamerSession(activeRef) {
   let persistTimer = null;
   let rankedRng = null;
   let ordinaryRng = createOrdinaryRng();
-  const tableAiCache = new TableAiCache({ transport: readTableRoute });
+  const tableAiCache = new TableAiCache({ transport: createTableAiStreamClient() });
   const tableDispatcher = new TableDispatcher();
   let aiCatalogVersion = '';
   let aiCatalogExpires = 0;
@@ -1455,6 +1455,7 @@ export function useGamerSession(activeRef) {
   });
 
   onUnmounted(() => {
+    tableAiCache.close();
     window.removeEventListener('keydown', handleKeydown);
     window.removeEventListener('beforeunload', handleBeforeUnload);
     document.removeEventListener('visibilitychange', handleVisibilityChange);

@@ -56,25 +56,47 @@ def predict_next(values, direction, rng, request, *, random_only=None):
 
 
 def generate_route(options, large_tiles, lookup):
-    request = SimpleNamespace(**validate_options(options))
-    values = [0 if code == 0 else 2 ** code for code in request.board_codes]
-    rng = Xoshiro128StarStar(request.rng_state.copy())
+    cursor = GamerRouteCursor(options, large_tiles)
     nodes = []
-    for index in range(request.steps):
-        encoded = masked_board(values, large_tiles)
+    for index in range(options['steps']):
+        encoded = cursor.encoded
         results, dtype = lookup(encoded)
-        nodes.append({'board_codes': [0 if v == 0 else v.bit_length()-1 for v in values],
-                      'rng_state': rng.state.copy(), 'lookup_board': f'{encoded:016x}',
-                      'random_only': request.random_only and index == 0,
-                      'results': results, 'dtype': dtype})
+        nodes.append(cursor.node(results, dtype))
+        if not cursor.advance(results, dtype):
+            break
+    return nodes
+
+
+class GamerRouteCursor:
+    """One deterministic route, advanced without re-reading its previous node."""
+    def __init__(self, options, large_tiles):
+        self.request = SimpleNamespace(**validate_options(options))
+        self.values = [0 if code == 0 else 2 ** code for code in self.request.board_codes]
+        self.rng = Xoshiro128StarStar(self.request.rng_state.copy())
+        self.large_tiles = large_tiles
+        self.index = 0
+
+    @property
+    def encoded(self):
+        return masked_board(self.values, self.large_tiles)
+
+    def node(self, results, dtype):
+        return {'board_codes': [0 if v == 0 else v.bit_length()-1 for v in self.values],
+                'rng_state': self.rng.state.copy(), 'lookup_board': f'{self.encoded:016x}',
+                'random_only': self.request.random_only and self.index == 0,
+                'results': results, 'dtype': dtype}
+
+    def advance(self, results, dtype):
         direction = next((k for k, v in results.items()
                           if isinstance(v, (int, float)) and math.isfinite(v)), None)
         if direction not in ('up', 'down', 'left', 'right'):
-            break
+            return False
         if results[direction] + (1 if dtype.startswith('1-') else 0) <= 0:
-            break
-        values = predict_next(values, direction, rng, request,
-                              random_only=request.random_only and index == 0)
+            return False
+        values = predict_next(self.values, direction, self.rng, self.request,
+                              random_only=self.request.random_only and self.index == 0)
         if values is None:
-            break
-    return nodes
+            return False
+        self.values = values
+        self.index += 1
+        return True

@@ -91,6 +91,7 @@ from backend.handlers.tablebase_query import (
 )
 from backend.gamer_ranked.routes import router as gamer_ranked_router
 from backend.gamer_tablebase import router as gamer_tablebase_router
+from backend.gamer_tablebase_stream import gamer_stream_service
 from backend.gamer_ranked.service import (
     cleanup_stale_ranked_runs,
     prepare_validation_queue as prepare_gamer_validation_queue,
@@ -262,6 +263,7 @@ async def app_lifespan(_app: FastAPI):
         remote_worker_registry.remove_availability_listener(
             _broadcast_tablebase_catalog_update
         )
+        await gamer_stream_service.close()
         await remote_worker_registry.close()
         await tablebase_query_scheduler.close()
         await drain_tablebase_query_tasks()
@@ -364,6 +366,10 @@ async def _safe_send_json(
                 exc=exc,
             )
         return False
+
+
+async def _send_gamer_stream(websocket: WebSocket, payload: dict) -> bool:
+    return await _safe_send_json(websocket, payload, log_key='send_gamer_stream')
 
 
 async def _send_ws_error(websocket: WebSocket, message: str) -> bool:
@@ -684,6 +690,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
                 if action == Action.GET_STATE:
                     await manager.send_state(websocket)
 
+                elif await gamer_stream_service.handle(action, payload, session, websocket, _send_gamer_stream):
+                    continue
+
                 elif await handle_tablebase_query_action(
                     action, payload, session, websocket
                 ):
@@ -758,6 +767,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
             )
             publish_frontend_exception("WebSocket Connection Error", exc)
     finally:
+        gamer_stream_service.disconnect(websocket)
         await disconnect_battle_socket(websocket)
         if session is not None:
             save_game_state(session)

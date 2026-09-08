@@ -84,18 +84,14 @@ test('catalog replacement recompiles structure rules', async () => {
 test('cached LL route steps are not blocked or aborted by impossible candidate probes', async () => {
   const boards = ['cb10a94173303220', 'cb11a94273303220', 'cb10a94173313222', 'cb10a94174113320'];
   const requests = [];
-  const cache = new TableAiCache({ transport: async (body, { onResult, signal }) => {
+  const cache = new TableAiCache({ transport: { open(body, { onResult }) {
     requests.push(body);
     assert.equal(body.full_pattern, 'LL_1024');
-    signal.addEventListener('abort', () => assert.fail('Valid route was interrupted'), { once: true });
-    if (body.advance_first) {
-      onResult({ ...body, type: 'result', board_codes: Array(16).fill(0), results: {}, dtype: '' });
-      return;
-    }
-    boards.forEach((hex, step) => onResult({ ...body, type: 'result',
+    boards.forEach((hex, step) => onResult({ ...body, type: 'result', seq: step,
       board_codes: [...hex].map((digit) => parseInt(digit, 16)), rng_state: [step + 1, 2, 3, 4],
       results: { up: .994 }, dtype: 'uint32' }));
-  } });
+    return { credit() {}, cancel() {} };
+  }, close() {} } });
   const dispatcher = new TableDispatcher(tables);
   for (let step = 0; step < 3; step += 1) {
     dispatcher.reset(values(boards[step]));
@@ -111,6 +107,6 @@ test('cached LL route steps are not blocked or aborted by impossible candidate p
     assert.deepEqual(probes, ['LL_1024']);
     await new Promise((resolve) => setImmediate(resolve));
   }
-  assert.ok(requests.length <= 2, 'Only the root request and LL tail refill are needed');
+  assert.equal(requests.length, 1, 'The LL subscription remains open across steps');
   cache.clear();
 });

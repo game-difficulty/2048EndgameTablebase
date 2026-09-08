@@ -11,7 +11,8 @@ from typing import Any, Iterable
 PROTOCOL_VERSION = 1
 CAPABILITY_BATTLE_ROUTE_V1 = "battle_route_v1"
 CAPABILITY_GAMER_ROUTE_V1 = "gamer_route_v1"
-WORKER_CAPABILITIES = (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_ROUTE_V1)
+CAPABILITY_GAMER_STREAM_V1 = "gamer_stream_v1"
+WORKER_CAPABILITIES = (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_ROUTE_V1, CAPABILITY_GAMER_STREAM_V1)
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 BOARD_RE = re.compile(r"^[0-9a-fA-F]{16}$")
 SEED_RE = re.compile(r"^[0-9a-fA-F]{32}$")
@@ -21,6 +22,8 @@ REQUEST_TYPES = {
     "RANDOM_STATE",
     "GENERATE_BATTLE_ROUTE",
     "GENERATE_GAMER_ROUTE",
+    "GAMER_STREAM_OPEN",
+    "GAMER_STREAM_CREDIT",
     "CANCEL",
 }
 MAX_BATTLE_ROUTE_STEPS = 9_999
@@ -49,6 +52,8 @@ class Request:
     spawn_rate: float = 0.1
     seed_hex: str = ""
     gamer_options: dict | None = None
+    consumed: int = -1
+    allow_through: int = 7
 
 
 def encode_message(message_type: str, **fields: Any) -> str:
@@ -169,12 +174,23 @@ def validate_request(
             )
         return Request(message_type=message_type, request_id=request_id)
 
+    if message_type == 'GAMER_STREAM_CREDIT':
+        from backend.gamer_stream_window import MAX_WINDOW, MAX_STREAM_STEPS
+        consumed, allowed = message.get('consumed'), message.get('allow_through')
+        if (set(message) != {'type', 'request_id', 'consumed', 'allow_through'}
+                or type(consumed) is not int or type(allowed) is not int
+                or not -1 <= consumed <= allowed < MAX_STREAM_STEPS
+                or allowed - consumed > MAX_WINDOW):
+            raise ProtocolError('INVALID_REQUEST', 'Invalid stream credit', request_id)
+        return Request(message_type, request_id, consumed=consumed, allow_through=allowed)
+
     common = {"type", "request_id", "full_pattern", "pattern", "target"}
     allowed_fields = {
         "LOOKUP": common | {"board", "use_variant", "board_is_lookup"},
         "LOOKUP_BATCH": common | {"boards", "use_variant", "board_is_lookup"},
         "RANDOM_STATE": common,
         "GENERATE_GAMER_ROUTE": common | {"options"},
+        "GAMER_STREAM_OPEN": common | {"options", "allow_through"},
         "GENERATE_BATTLE_ROUTE": common
         | {
             "initial_board",
@@ -204,14 +220,17 @@ def validate_request(
             request_id,
         )
 
-    if message_type == "GENERATE_GAMER_ROUTE":
+    if message_type in {"GENERATE_GAMER_ROUTE", "GAMER_STREAM_OPEN"}:
         from backend.gamer_tablebase_route import validate_options
         try:
             options = validate_options(message.get('options'))
         except ValueError as exc:
             raise ProtocolError('INVALID_REQUEST', str(exc), request_id) from exc
+        allowed = message.get('allow_through', 7)
+        if type(allowed) is not int or not 0 <= allowed < 32:
+            raise ProtocolError('INVALID_REQUEST', 'Invalid stream window', request_id)
         return Request(message_type, request_id, full_pattern, pattern, target,
-                       gamer_options=options)
+                       gamer_options=options, allow_through=allowed)
 
     if message_type == "RANDOM_STATE":
         return Request(
